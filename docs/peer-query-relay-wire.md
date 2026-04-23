@@ -33,6 +33,7 @@ Notes:
 - version: wire schema version, initial value 1.
 - nonce: unique per src_peer_id and session_id for replay protection.
 - auth_tag: integrity tag for envelope fields and payload.
+- All unsigned integer fields use network byte order (big-endian).
 
 ## Message type registry (initial)
 
@@ -250,6 +251,96 @@ Rules:
 - hop_count in route_discovery_response and relay_route_update must be in range 1..8.
 - max_results in peer_query_request should be capped at 256 by receivers.
 - timestamp_ms older than receiver replay window lower bound should be rejected.
+
+## Compact binary examples (annotated hex)
+
+These examples use fixed-size values and repeated byte patterns to keep the layout easy to verify in parser tests.
+
+### Example A: peer_query_request (msg_type 0x01)
+
+```text
+Envelope:
+4f 50 48 46                                  # magic "OPHF"
+01                                           # version
+01                                           # msg_type: peer_query_request
+00 01                                        # flags
+00 00 00 00 00 00 10 01                      # session_id
+aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa
+aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa # src_peer_id (32B)
+bb bb bb bb bb bb bb bb bb bb bb bb bb bb bb bb
+bb bb bb bb bb bb bb bb bb bb bb bb bb bb bb bb # dst_peer_id (32B)
+11 11 11 11 11 11 11 11 11 11 11 11          # nonce (12B)
+00 00 01 96 8f 3a 20 00                      # timestamp_ms
+03                                           # hop_limit
+00                                           # hop_index
+00 11                                        # payload_len = 17
+
+Payload (peer_query_request):
+00 00 00 00 00 00 00 22                      # query_id
+00 00 00 05                                  # capability_mask
+01 2c                                        # min_link_quality (300)
+01                                           # trust_filter: trusted_or_unknown
+00 20                                        # max_results (32)
+
+cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc # auth_tag (16B)
+```
+
+### Example B: relay_hop_ack (msg_type 0x06)
+
+```text
+Envelope (same layout as above, abbreviated values):
+4f 50 48 46 01 06 00 00
+00 00 00 00 00 00 20 02                      # session_id
+aa..aa (32B src) | bb..bb (32B dst)
+22..22 (12B nonce)
+00 00 01 96 8f 3b 10 10                      # timestamp_ms
+04 02                                        # hop_limit, hop_index
+00 31                                        # payload_len = 49
+
+Payload (relay_hop_ack):
+00 00 00 00 00 00 09 99                      # transfer_id
+00 00 00 07                                  # chunk_seq
+dd dd dd dd dd dd dd dd dd dd dd dd dd dd dd dd
+dd dd dd dd dd dd dd dd dd dd dd dd dd dd dd dd # hop_peer_id (32B)
+00                                           # ack_status: ok
+00 00                                        # retry_after_ms
+00 00                                        # reason_code: unspecified
+
+ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee ee # auth_tag (16B)
+```
+
+### Example C: route_discovery_request with TLV extension
+
+This example appends TLV type 0x1006 (pq_algorithm_preference) to the payload.
+
+```text
+Envelope:
+4f 50 48 46 01 03 00 00
+00 00 00 00 00 00 30 03                      # session_id
+aa..aa (32B src) | cc..cc (32B dst)
+33..33 (12B nonce)
+00 00 01 96 8f 3c 00 20                      # timestamp_ms
+06 00                                        # hop_limit, hop_index
+00 35                                        # payload_len = 53
+
+Payload (route_discovery_request + TLV):
+00 00 00 00 00 00 04 44                      # route_query_id
+99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99
+99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 # destination_peer_id (32B)
+05                                           # max_hops
+00 00 00 09                                  # required_capability_mask
+00 03                                        # policy_flags
+10 06 00 02 01 01                            # TLV: type=0x1006, len=2, value=0x0101
+
+ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff # auth_tag (16B)
+```
+
+Validation notes:
+
+- Example A payload_len is 0x0011 = 17 bytes.
+- Example B payload_len is 0x0031 = 49 bytes.
+- Example C payload_len is 0x0035 = 53 bytes, including the TLV bytes.
+- The examples intentionally use patterned bytes (aa, bb, cc, etc.) for visual alignment checks.
 
 ## Telemetry mapping
 

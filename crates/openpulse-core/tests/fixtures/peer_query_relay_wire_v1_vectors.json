@@ -1,0 +1,62 @@
+{
+  "schema": "openpulsehf-peer-query-relay-wire-v1",
+  "byte_order": "big-endian",
+  "notes": "Each vector contains a full envelope including auth_tag. hex_compact is lowercase hex without separators.",
+  "vectors": [
+    {
+      "id": "example-a-peer-query-request",
+      "msg_type": "peer_query_request",
+      "msg_type_code": "0x01",
+      "payload_len": 17,
+      "total_len": 137,
+      "hex_compact": "4f504846010100010000000000001001aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb111111111111111111111111000001968f3a200003000011000000000000002200000005012c010020cccccccccccccccccccccccccccccccc",
+      "expected": {
+        "session_id": "0x0000000000001001",
+        "hop_limit": 3,
+        "hop_index": 0,
+        "query_id": "0x0000000000000022",
+        "trust_filter": "trusted_or_unknown",
+        "max_results": 32
+      }
+    },
+    {
+      "id": "example-b-relay-hop-ack",
+      "msg_type": "relay_hop_ack",
+      "msg_type_code": "0x06",
+      "payload_len": 49,
+      "total_len": 169,
+      "hex_compact": "4f504846010600000000000000002002aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb222222222222222222222222000001968f3b101004020031000000000000099900000007dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd0000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "expected": {
+        "session_id": "0x0000000000002002",
+        "hop_limit": 4,
+        "hop_index": 2,
+        "transfer_id": "0x0000000000000999",
+        "chunk_seq": 7,
+        "ack_status": "ok",
+        "reason_code": "unspecified"
+      }
+    },
+    {
+      "id": "example-c-route-discovery-request-with-tlv",
+      "msg_type": "route_discovery_request",
+      "msg_type_code": "0x03",
+      "payload_len": 53,
+      "total_len": 173,
+      "hex_compact": "4f504846010300000000000000003003aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaacccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc333333333333333333333333000001968f3c0020060000350000000000000444999999999999999999999999999999999999999999999999999999999999999905000000090003100600020101ffffffffffffffffffffffffffffffff",
+      "expected": {
+        "session_id": "0x0000000000003003",
+        "hop_limit": 6,
+        "hop_index": 0,
+        "route_query_id": "0x0000000000000444",
+        "max_hops": 5,
+        "required_capability_mask": "0x00000009",
+        "policy_flags": "0x0003",
+        "tlv": {
+          "type": "0x1006",
+          "length": 2,
+          "value_hex": "0101"
+        }
+      }
+    }
+  ]
+}
