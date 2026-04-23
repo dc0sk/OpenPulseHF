@@ -45,6 +45,61 @@ Notes:
 - 0x07: relay_route_update
 - 0x08: relay_route_reject
 
+## Enum and code registries
+
+### trust_filter
+
+- 0x00: trusted_only
+- 0x01: trusted_or_unknown
+- 0x02: any
+
+### trust_state and trust_decision
+
+- 0x00: trusted
+- 0x01: unknown
+- 0x02: untrusted
+- 0x03: revoked
+
+### ack_status
+
+- 0x00: ok
+- 0x01: retry
+- 0x02: reject
+
+### sig_mode
+
+- 0x00: classical
+- 0x01: pq
+- 0x02: hybrid
+
+### sig_alg
+
+- 0x0001: ed25519
+- 0x0101: ml-dsa-65
+- 0x0201: ed25519+ml-dsa-65-hybrid
+
+### route_change_reason
+
+- 0x0001: link_quality_degraded
+- 0x0002: hop_unreachable
+- 0x0003: trust_policy_change
+- 0x0004: operator_override
+- 0x0005: route_optimization
+
+### reason_code (common)
+
+- 0x0000: unspecified
+- 0x0001: unsupported_version
+- 0x0002: malformed_payload
+- 0x0003: signature_invalid
+- 0x0004: replay_detected
+- 0x0005: hop_limit_exceeded
+- 0x0006: loop_detected
+- 0x0007: trust_policy_reject
+- 0x0008: route_not_found
+- 0x0009: congestion_backoff
+- 0x000A: rate_limited
+
 ## peer_query_request payload
 
 Required fields:
@@ -170,6 +225,31 @@ Supported algorithm families for initial draft:
 - Unknown msg_type values must be ignored with diagnostic logging.
 - Higher version messages are rejected with explicit unsupported_version reason.
 - New payload fields are appended and identified by TLV extension blocks.
+
+## TLV extension block registry (initial)
+
+TLV blocks are encoded as type(u16), length(u16), value(bytes).
+
+- 0x1001: peer_geo_hint
+- 0x1002: peer_hardware_class
+- 0x1003: estimated_energy_budget
+- 0x1004: relay_cost_score
+- 0x1005: operator_policy_tag
+- 0x1006: pq_algorithm_preference
+
+Rules:
+
+- Unknown TLV types are ignored and preserved for forwarding when safe.
+- Duplicate TLV type entries are rejected unless explicitly marked repeatable.
+- TLV total size must not exceed payload_len.
+
+## Field validation constraints
+
+- payload_len must equal the decoded payload byte count.
+- hop_index must be strictly less than hop_limit for forwarded messages.
+- hop_count in route_discovery_response and relay_route_update must be in range 1..8.
+- max_results in peer_query_request should be capped at 256 by receivers.
+- timestamp_ms older than receiver replay window lower bound should be rejected.
 
 ## Telemetry mapping
 
