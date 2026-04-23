@@ -35,17 +35,36 @@ cargo build --release
 - openpulse devices
 - openpulse modes
 
+Planned HPX and trust commands:
+
+- openpulse hpx send <file> --mode <HPX500|HPX2300>
+- openpulse hpx receive --out <dir>
+- openpulse trust init
+- openpulse trust import-key <path>
+- openpulse trust list
+- openpulse trust revoke <key-id>
+- openpulse trust policy set --unknown-signer <reject|warn-allow>
+
 ## Common options
 
 - --backend <BACKEND>: select loopback or hardware backend where supported.
 - --mode <MODE>: select a registered modulation mode.
 - --help: show full command and flag reference.
 
+Planned trust-related options:
+
+- --signing-key <key-id>: select local signing identity for handshake and manifest signing.
+- --trust-store <path>: select trust-store location.
+- --require-signatures: fail transfer if required signatures are missing.
+- --allow-unknown-signer: override default reject policy for unknown signers.
+
 ## Operational notes
 
 - Prefer loopback for deterministic testing and debugging.
 - Use no-default-features CI-like runs to avoid hardware dependencies in automation.
 - Keep command examples aligned with README and release notes.
+- For signed transfers, keep trust-store backups and rotate keys on schedule.
+- Treat unknown-signer allowance as temporary troubleshooting, not steady-state policy.
 
 ## Testing commands
 

@@ -95,6 +95,7 @@ For HPX, keep signal path adaptation logic and trust/signature logic as separate
 - Identity management and trust evaluation are control-plane concerns.
 - Transfer signing and verification are data-plane admission checks.
 - Verification failures must surface clear failure reasons to frontends and logs.
+- Session-state behavior for security and recovery is defined in docs/hpx-session-state-machine.md.
 
 ## Documentation process constraints
 

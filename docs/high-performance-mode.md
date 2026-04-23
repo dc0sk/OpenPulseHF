@@ -67,6 +67,33 @@ Each run must emit:
 - retransmission count and ARQ efficiency
 - estimated spectral efficiency in bit/s/Hz
 
+## Quantitative pass/fail thresholds (M1)
+
+The first milestone uses explicit, testable thresholds. Values can tighten over time, but must never be omitted.
+
+### Throughput and efficiency
+
+- In HF narrow (500 Hz class), HPX goodput must be at least 1.10x the current OpenPulse BPSK baseline at matched channel profile and equal occupied bandwidth.
+- In HF wide (2300-2400 Hz class), HPX goodput must be at least 1.20x the current OpenPulse BPSK baseline under matched conditions.
+- In VHF FM profile, HPX completion rate must be at least 98% for benchmark payload sets up to 64 KiB.
+- Spectral efficiency target for HPX2300 benchmark profile should reach at least 1.5 bit/s/Hz in median runs.
+
+### Reliability
+
+- p95 transfer completion time must not exceed 1.35x median completion time under stable-profile runs.
+- Recovery success rate after a short dropout event (less than or equal to 2 s) must be at least 95%.
+- ARQ retransmission overhead should remain below 25% on nominal-profile runs.
+
+### Startup and adaptation
+
+- Time to first successful payload from cold session start must be less than or equal to 12 s in nominal HF profiles.
+- Profile adaptation decisions must converge within at most 3 adaptation intervals after an SNR step change.
+- Mode flapping protection must keep profile switch frequency below 1 switch per 2 s over 60 s stability windows.
+
+### Competitive evidence rule
+
+- Claims of parity or superiority versus VARA, PACTOR, or ARDOP require published benchmark artifacts with methodology, channel parameters, and raw result files.
+
 ## HPX technical feature set
 
 ### Adaptive modulation and coding
@@ -118,6 +145,13 @@ OpenPulse HPX must support cryptographically signed transfers with an operator-m
 - Identity records include validity windows.
 - Rotation procedure is documented for planned key changes.
 
+### Signed transfer acceptance policy
+
+- A transfer is accepted only when all required signatures verify and trust policy permits the signer chain.
+- Unknown signers are handled per operator policy: reject by default, optionally allow with explicit override.
+- Revoked identities must always be rejected.
+- Verification outcomes must be emitted as structured events for audit and debugging.
+
 ## Engineering constraints
 
 - Keep HPX mode implementation as a plugin with stable trait boundaries.
@@ -130,3 +164,4 @@ OpenPulse HPX must support cryptographically signed transfers with an operator-m
 - HPX meets or exceeds defined baseline targets in at least two channel profiles.
 - Signed transfer handshake and manifest verification pass conformance tests.
 - CLI exposes HPX mode and trust-related options with documented behavior.
+- HPX session state conformance passes against docs/hpx-session-state-machine.md.
