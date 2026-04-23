@@ -28,12 +28,11 @@ jobs:
 
       - name: Stamp changed docs
         run: |
-          chmod +x scripts/stamp-doc-last-updated.sh
-          ./scripts/stamp-doc-last-updated.sh "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}"
+          bash scripts/stamp-doc-last-updated.sh "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}"
 
       - name: Commit and push stamp changes
         run: |
-          if git diff --quiet; then
+          if git diff --quiet -- docs; then
             echo "No stamp changes to commit."
             exit 0
           fi
