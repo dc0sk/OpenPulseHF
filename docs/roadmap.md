@@ -12,6 +12,8 @@ last_updated: 2026-04-23
 - Harden BPSK TX/RX behavior under loopback and real-device paths.
 - Improve modem diagnostics and error clarity in CLI output.
 - Expand integration tests around frame boundaries and timing assumptions.
+- Define HPX benchmark harness inputs, metrics, and reproducible run procedure.
+- Define signed transfer envelope format and trust-store schema.
 
 ## Mid term
 
@@ -19,10 +21,14 @@ last_updated: 2026-04-23
 - Introduce optional forward error correction (for example Reed-Solomon and convolutional coding).
 - Add bandwidth-adaptive rate control hooks in the modem engine.
 - Add ARDOP-compatible mode plugin support.
+- Implement HPX500 and HPX2300 adaptive profiles as plugin modes.
+- Implement signed handshake and signed transfer manifest verification for HPX sessions.
+- Ship CLI trust-store management commands for key import, list, and revoke markers.
 
 ## Long term
 
 - Add optional TUI and GUI frontends on top of stable core APIs.
 - Add stronger observability for live link quality and tuning.
 - Support richer automation flows for repeated test and deployment scenarios.
+- Publish periodic HPX performance reports against maintained benchmark profiles.
 

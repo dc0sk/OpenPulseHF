@@ -12,3 +12,8 @@ last_updated: 2026-04-23
 - Add docs for troubleshooting common ALSA and CPAL setup issues.
 - Document contribution guidelines for adding a new modulation plugin.
 - Add release checklist template for version bumps.
+- Define HPX session state machine as a standalone spec.
+- Add benchmark fixtures for HF fading and burst-noise channels.
+- Add trust-store file format and migration policy.
+- Add conformance tests for signed handshake and manifest verification.
+- Add CLI UX spec for identity and trust diagnostics.

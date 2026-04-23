@@ -14,6 +14,12 @@ last_updated: 2026-04-23
 - Preserve a loopback backend for hardware-free development and testing.
 - Support cross-platform audio through CPAL-backed implementations.
 - Validate frame integrity with versioning, sequence handling, and CRC checks.
+- Define and implement a high-performance plugin mode (HPX) with adaptive modulation and coding.
+- Support occupied bandwidth classes centered on 500 Hz and 2300-2400 Hz operation.
+- Provide deterministic session state handling: discovery, training, active transfer, recovery, teardown.
+- Support selective retransmission for ARQ-capable sessions.
+- Support signed transfer handshake and signed transfer manifests.
+- Support trust-store-based verification for station identities.
 
 ## Platform and dependency requirements
 
@@ -29,6 +35,27 @@ last_updated: 2026-04-23
 - Keep tests runnable without physical audio hardware in default CI workflows.
 - Ensure crate boundaries are clear enough for independent testing.
 - Keep plugin additions from requiring broad refactors across unrelated crates.
+- Define objective benchmark suites and publish method and result artifacts.
+- Track goodput, completion rate, retry efficiency, and completion latency across channel profiles.
+- Require HPX performance claims to be tied to reproducible benchmark runs.
+- Maintain deterministic timeout and retry behavior for session-state transitions.
+
+## Security and trust requirements
+
+- Signed transfers are mandatory for HPX file or object transfer mode.
+- Station identities use asymmetric key pairs with operator-managed trust anchors.
+- Session handshake messages must be signed and verified.
+- Transfer manifests must be signed and verified before final acceptance.
+- Trust status must include trusted, untrusted, revoked, and unknown states.
+- Key lifecycle must include validity windows and revocation handling.
+- Cryptographic defaults should use Ed25519 signatures and SHA-256 or stronger hashing.
+
+## Competitive performance requirements
+
+- HPX must target outcome parity or better versus incumbent modems in benchmarked scenarios.
+- Comparisons must use equal occupied bandwidth classes and published test conditions.
+- Performance evaluation must include at least HF narrow, HF wide, and VHF FM profile families.
+- No claim of proprietary protocol compatibility may be made without defensible public evidence.
 
 ## Compatibility and UX requirements
 
@@ -40,3 +67,4 @@ last_updated: 2026-04-23
 
 - Version bumps require updates to docs/changelog.md and docs/releasenotes.md.
 - Docs files under docs/ must pass frontmatter validation in CI.
+- HPX benchmark assumptions and result summaries must be captured in docs/high-performance-mode.md.

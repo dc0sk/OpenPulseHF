@@ -13,6 +13,7 @@ Canonical documentation lives in the files listed below.
 
 - docs/overview.md: project summary and inspiration context
 - docs/vara-research.md: public-source technical notes on VARA
+- docs/high-performance-mode.md: feature analysis for HPX mode and signed transfer model
 - docs/requirements.md: functional and non-functional requirements
 - docs/steering.md: governance and decision ownership
 - docs/roadmap.md: phased execution plan

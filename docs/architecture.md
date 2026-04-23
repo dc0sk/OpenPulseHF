@@ -23,6 +23,8 @@ last_updated: 2026-04-23
 4. A receive pipeline demodulates, validates frames, and reassembles payload data.
 5. Frontend surfaces status and decoded payloads to users and automation.
 
+For HPX, the pipeline also includes signed session handshake validation and signed transfer manifest verification before delivery completion is acknowledged.
+
 ## Workspace architecture
 
 | Crate/Path | Role |
@@ -43,6 +45,11 @@ Future plugins (for example QPSK or ARDOP-compatible modes) should implement Mod
 | BPSK63 | 62.5 | Higher throughput than BPSK31 |
 | BPSK100 | 100 | Useful for loopback testing |
 | BPSK250 | 250 | Wide-band and faster data paths |
+
+Planned:
+
+- HPX500: adaptive high-resilience profile in 500 Hz class.
+- HPX2300: adaptive higher-throughput profile in 2300-2400 Hz class.
 
 ## Frame format
 
@@ -80,6 +87,14 @@ The payload length range is 0-255 bytes.
 - New modulation families are introduced as plugins implementing shared traits.
 - Plugin APIs must remain stable enough for out-of-tree experimentation.
 - Core crates should remain embeddable for future automation and integrations.
+
+For HPX, keep signal path adaptation logic and trust/signature logic as separate internal components so they can be tested independently.
+
+## Security architecture
+
+- Identity management and trust evaluation are control-plane concerns.
+- Transfer signing and verification are data-plane admission checks.
+- Verification failures must surface clear failure reasons to frontends and logs.
 
 ## Documentation process constraints
 
