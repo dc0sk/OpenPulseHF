@@ -1,5 +1,5 @@
 ---
-project: openpulse
+project: openpulsehf
 doc: docs/roadmap.md
 status: living
 last_updated: 2026-04-23
@@ -18,6 +18,8 @@ last_updated: 2026-04-23
 - Define multithreaded modem pipeline boundaries and scheduling policy.
 - Define GPU offload candidate kernels and CPU/GPU equivalence test strategy.
 - Add Raspberry Pi 4/5 benchmark profile definitions.
+- Define peer cache schema and query protocol envelope.
+- Define relay route scoring and maximum-hop policy defaults.
 
 ## Mid term
 
@@ -32,6 +34,9 @@ last_updated: 2026-04-23
 - Implement multithreaded HPX pipeline execution in production mode.
 - Implement optional GPU acceleration path using open frameworks with CPU fallback.
 - Add ARM64 CI or scheduled validation runs for Raspberry Pi 4/5 compatibility.
+- Implement peer cache and query subsystem with signed descriptor handling.
+- Implement multi-hop relay path selection and forwarding controls.
+- Implement relay trust-policy enforcement and route observability events.
 
 ## Long term
 

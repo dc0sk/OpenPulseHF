@@ -1,5 +1,5 @@
 ---
-project: openpulse
+project: openpulsehf
 doc: docs/cli-guide.md
 status: living
 last_updated: 2026-04-23
@@ -44,6 +44,10 @@ Planned HPX and trust commands:
 - openpulse trust list
 - openpulse trust revoke <key-id>
 - openpulse trust policy set --unknown-signer <reject|warn-allow>
+- openpulse peers list
+- openpulse peers query --mode <MODE> --min-quality <score>
+- openpulse relay route --to <peer-id> --max-hops <n>
+- openpulse hpx send <file> --relay auto --max-hops <n>
 
 ## Common options
 
@@ -57,6 +61,8 @@ Planned trust-related options:
 - --trust-store <path>: select trust-store location.
 - --require-signatures: fail transfer if required signatures are missing.
 - --allow-unknown-signer: override default reject policy for unknown signers.
+- --max-hops <n>: set relay hop limit.
+- --relay <off|auto|required>: control relay usage policy.
 
 ## Operational notes
 

@@ -1,5 +1,5 @@
 ---
-project: openpulse
+project: openpulsehf
 doc: docs/benchmark-harness.md
 status: living
 last_updated: 2026-04-23

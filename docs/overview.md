@@ -1,5 +1,5 @@
 ---
-project: openpulse
+project: openpulsehf
 doc: docs/overview.md
 status: living
 last_updated: 2026-04-23
@@ -7,11 +7,11 @@ last_updated: 2026-04-23
 
 # Overview
 
-OpenPulse is a cross-platform software modem for sending and receiving data over amateur radio (HF and VHF) via a soundcard.
+OpenPulseHF is a cross-platform software modem for sending and receiving data over amateur radio (HF and VHF) via a soundcard.
 
 ## Inspiration
 
-OpenPulse is inspired by established HF digital mode ecosystems including:
+OpenPulseHF is inspired by established HF digital mode ecosystems including:
 
 - VARA
 - PACTOR
@@ -21,7 +21,7 @@ See docs/vara-research.md for a public-source technical summary of VARA-related 
 
 ## Project shape
 
-OpenPulse is implemented as a Cargo workspace with split responsibilities:
+OpenPulseHF is implemented as a Cargo workspace with split responsibilities:
 
 - Core protocol and traits
 - Audio backends

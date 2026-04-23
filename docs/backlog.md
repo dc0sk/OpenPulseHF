@@ -1,5 +1,5 @@
 ---
-project: openpulse
+project: openpulsehf
 doc: docs/backlog.md
 status: living
 last_updated: 2026-04-23
@@ -23,3 +23,7 @@ last_updated: 2026-04-23
 - Add multithreaded pipeline test harness with deterministic timing assertions.
 - Add CPU vs GPU equivalence tests for selected DSP kernels.
 - Add Raspberry Pi 4/5 tuning guide and benchmark result appendix.
+- Add peer cache eviction and conflict-resolution tests.
+- Add query propagation duplicate-suppression tests.
+- Add relay loop-prevention and multi-hop conformance tests.
+- Add relay trust-policy failure-path integration tests.

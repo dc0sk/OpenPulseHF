@@ -1,5 +1,5 @@
 ---
-project: openpulse
+project: openpulsehf
 doc: docs/high-performance-mode.md
 status: living
 last_updated: 2026-04-23
@@ -9,13 +9,13 @@ last_updated: 2026-04-23
 
 ## Scope
 
-This document defines the target characteristics for a new OpenPulse mode family intended to perform as well as, or better than, established amateur-radio data modems in practical operation.
+This document defines the target characteristics for a new OpenPulseHF mode family intended to perform as well as, or better than, established amateur-radio data modems in practical operation.
 
 The scope is first-principles design and public-source-driven engineering. It does not assume proprietary protocol internals.
 
 ## Problem statement
 
-OpenPulse needs a mode that improves usable throughput, link reliability, and operator confidence under variable HF and VHF channel conditions, while preserving open implementation and reproducible testing.
+OpenPulseHF needs a mode that improves usable throughput, link reliability, and operator confidence under variable HF and VHF channel conditions, while preserving open implementation and reproducible testing.
 
 ## Competitive target framing
 
@@ -29,7 +29,7 @@ Primary reference competitors:
 
 ## Performance objectives
 
-OpenPulse HPX mode (working name) must prioritize the following metrics:
+OpenPulseHF HPX mode (working name) must prioritize the following metrics:
 
 - Goodput at equal occupied bandwidth under reproducible channel profiles.
 - Time to first successful payload delivery from cold link start.
@@ -75,8 +75,8 @@ The first milestone uses explicit, testable thresholds. Values can tighten over 
 
 ### Throughput and efficiency
 
-- In HF narrow (500 Hz class), HPX goodput must be at least 1.10x the current OpenPulse BPSK baseline at matched channel profile and equal occupied bandwidth.
-- In HF wide (2300-2400 Hz class), HPX goodput must be at least 1.20x the current OpenPulse BPSK baseline under matched conditions.
+- In HF narrow (500 Hz class), HPX goodput must be at least 1.10x the current OpenPulseHF BPSK baseline at matched channel profile and equal occupied bandwidth.
+- In HF wide (2300-2400 Hz class), HPX goodput must be at least 1.20x the current OpenPulseHF BPSK baseline under matched conditions.
 - In VHF FM profile, HPX completion rate must be at least 98% for benchmark payload sets up to 64 KiB.
 - Spectral efficiency target for HPX2300 benchmark profile should reach at least 1.5 bit/s/Hz in median runs.
 
@@ -124,6 +124,13 @@ The first milestone uses explicit, testable thresholds. Values can tighten over 
 - Include ARQ with selective retransmission capability.
 - Include configurable burst interleaving for fading resistance.
 
+### Peer cache, query, and relay
+
+- HPX should support peer capability caching for faster route and mode selection.
+- HPX should support query-based peer discovery with bounded propagation controls.
+- HPX should support multi-hop relayed transfer when direct link quality is insufficient.
+- Relay path changes should be observable and policy-governed during active transfers.
+
 ### Session model
 
 - Define explicit states: discovery, training, active transfer, recovery, teardown.
@@ -132,7 +139,7 @@ The first milestone uses explicit, testable thresholds. Values can tighten over 
 
 ## Signed transfer and PKI-like trust model
 
-OpenPulse HPX must support cryptographically signed transfers with an operator-manageable trust model.
+OpenPulseHF HPX must support cryptographically signed transfers with an operator-manageable trust model.
 
 ### Identity and trust
 
@@ -166,6 +173,7 @@ OpenPulse HPX must support cryptographically signed transfers with an operator-m
 - Unknown signers are handled per operator policy: reject by default, optionally allow with explicit override.
 - Revoked identities must always be rejected.
 - Verification outcomes must be emitted as structured events for audit and debugging.
+- Relay route admission must fail when any required hop does not satisfy trust policy.
 
 ## Engineering constraints
 

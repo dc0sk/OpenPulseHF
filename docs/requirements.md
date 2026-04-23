@@ -1,5 +1,5 @@
 ---
-project: openpulse
+project: openpulsehf
 doc: docs/requirements.md
 status: living
 last_updated: 2026-04-23
@@ -20,6 +20,10 @@ last_updated: 2026-04-23
 - Support selective retransmission for ARQ-capable sessions.
 - Support signed transfer handshake and signed transfer manifests.
 - Support trust-store-based verification for station identities.
+- Support peer caching of identity, capability, and link-quality metadata.
+- Support local and network query interfaces for peer discovery and filtering.
+- Support relayed transfers across multiple hops with configurable hop limits.
+- Support route selection policies based on trust, reliability, and latency estimates.
 
 ## Platform and dependency requirements
 
@@ -45,6 +49,8 @@ last_updated: 2026-04-23
 - Support optional GPU acceleration for compute-heavy signal-processing stages when it produces measurable benefit.
 - GPU acceleration paths must use open frameworks (for example Vulkan via wgpu, or OpenCL) and provide a CPU fallback.
 - Raspberry Pi 4/5 performance targets must be measured and published in benchmark artifacts.
+- Peer cache lookup and query operations should remain bounded under large peer tables.
+- Multi-hop relay control-plane traffic should include duplicate suppression and loop prevention.
 
 ## Security and trust requirements
 
@@ -60,6 +66,9 @@ last_updated: 2026-04-23
 - Initial post-quantum-safe default should target ML-DSA (FIPS 204) where available.
 - If session key establishment is used, a post-quantum-safe KEM option should be supported, with ML-KEM (FIPS 203) preferred.
 - Trust-store metadata must record algorithm type and hybrid-policy requirements per identity.
+- Relay path admission must enforce trust policy on each intermediate hop.
+- Multi-hop transfers must preserve end-to-end signed integrity and fail closed on trust violations.
+- Route metadata should support post-quantum-capable signing under configured policy.
 
 ## Competitive performance requirements
 

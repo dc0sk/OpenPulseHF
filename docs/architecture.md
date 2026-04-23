@@ -1,5 +1,5 @@
 ---
-project: openpulse
+project: openpulsehf
 doc: docs/architecture.md
 status: living
 last_updated: 2026-04-23
@@ -17,13 +17,14 @@ last_updated: 2026-04-23
 
 ## Core architecture
 
-1. Input payload is framed into OpenPulse packets with sequence and CRC.
+1. Input payload is framed into OpenPulseHF packets with sequence and CRC.
 2. A modulation plugin transforms frames into baseband symbols and samples.
 3. An audio backend transports samples to and from loopback or hardware I/O.
 4. A receive pipeline demodulates, validates frames, and reassembles payload data.
 5. Frontend surfaces status and decoded payloads to users and automation.
 
 For HPX, the pipeline also includes signed session handshake validation and signed transfer manifest verification before delivery completion is acknowledged.
+For relayed operation, the control plane includes peer discovery cache, query handling, and route selection across one or more relay hops.
 
 ## Workspace architecture
 
@@ -53,7 +54,7 @@ Planned:
 
 ## Frame format
 
-OpenPulse frames follow this logical layout:
+OpenPulseHF frames follow this logical layout:
 
 ```text
 magic("OPLS") | version(0x01) | sequence(u16, big-endian) | length(u8) | payload | crc16(ccitt)
@@ -106,6 +107,14 @@ For HPX, keep signal path adaptation logic and trust/signature logic as separate
 - Transfer signing and verification are data-plane admission checks.
 - Verification failures must surface clear failure reasons to frontends and logs.
 - Session-state behavior for security and recovery is defined in docs/hpx-session-state-machine.md.
+- Relay path trust and end-to-end signer trust are evaluated independently.
+
+## Routing and relay architecture
+
+- Peer cache stores signed identity and capability descriptors with aging policy.
+- Query engine supports local filter queries and bounded network query propagation.
+- Route planner selects direct or multi-hop path using trust and link-quality scoring.
+- Relay layer enforces loop prevention, replay protection, and hop-limited forwarding.
 
 ## Documentation process constraints
 

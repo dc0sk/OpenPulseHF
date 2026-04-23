@@ -53,8 +53,8 @@ for file in "${files[@]}"; do
     continue
   fi
 
-  if [[ ${project_line} != 'project: openpulse' ]]; then
-    echo "${file}: project must be 'openpulse'"
+  if [[ ${project_line} != 'project: openpulsehf' ]]; then
+    echo "${file}: project must be 'openpulsehf'"
     status=1
   fi
 
