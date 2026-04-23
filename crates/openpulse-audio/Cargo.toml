@@ -1,0 +1,20 @@
+[package]
+name        = "openpulse-audio"
+description = "Audio backend implementations for the OpenPulse software modem"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+
+[dependencies]
+openpulse-core = { workspace = true }
+tracing        = { workspace = true }
+
+# cpal is optional so the library still compiles in environments without audio
+# headers (CI).  Enable the "cpal-backend" feature for production builds.
+cpal = { version = "0.15", optional = true }
+
+[features]
+default      = ["cpal-backend"]
+cpal-backend = ["dep:cpal"]

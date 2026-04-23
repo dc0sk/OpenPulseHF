@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/openpulse-core",
+    "crates/openpulse-audio",
+    "crates/openpulse-modem",
+    "crates/openpulse-cli",
+    "plugins/bpsk",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+authors = ["OpenPulse Contributors"]
+repository = "https://github.com/dc0sk/OpenPulse"
+
+[workspace.dependencies]
+openpulse-core  = { path = "crates/openpulse-core" }
+openpulse-audio = { path = "crates/openpulse-audio", default-features = false }
+openpulse-modem = { path = "crates/openpulse-modem" }
+bpsk-plugin     = { path = "plugins/bpsk" }
+
+thiserror          = "2.0"
+anyhow             = "1.0"
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde              = { version = "1.0", features = ["derive"] }
+serde_json         = "1.0"
+num-complex        = "0.4"
+clap               = { version = "4.5", features = ["derive"] }
+crossbeam-channel  = "0.5"
