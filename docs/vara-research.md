@@ -1,5 +1,5 @@
 ---
-project: openpulse
+project: openpulsehf
 doc: docs/vara-research.md
 status: living
 last_updated: 2026-04-23
@@ -7,7 +7,7 @@ last_updated: 2026-04-23
 
 # VARA Research
 
-This note captures publicly available technical information about VARA that may be useful as background research for OpenPulse.
+This note captures publicly available technical information about VARA that may be useful as background research for OpenPulseHF.
 
 The goal is not protocol emulation and not legal interpretation. It is a source-graded summary of what can be learned from public-facing material.
 
@@ -119,7 +119,7 @@ Primary index source:
 
 - https://rosmodem.wordpress.com/2011/01/10/ros-2/
 
-## Working conclusions for OpenPulse
+## Working conclusions for OpenPulseHF
 
 - It is reasonable to treat VARA as a practical reference point for product shape and user expectations rather than as a publicly specified protocol.
 - Publicly verifiable material supports studying the following themes:

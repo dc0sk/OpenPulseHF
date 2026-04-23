@@ -1,8 +1,8 @@
-# OpenPulse
+# OpenPulseHF
 
 > Transmit data via HF – a plugin-based software modem written in Rust.
 
-[![CI](https://github.com/dc0sk/OpenPulse/actions/workflows/ci.yml/badge.svg)](https://github.com/dc0sk/OpenPulse/actions/workflows/ci.yml)
+[![CI](https://github.com/dc0sk/OpenPulseHF/actions/workflows/ci.yml/badge.svg)](https://github.com/dc0sk/OpenPulseHF/actions/workflows/ci.yml)
 
 Project details, requirements, usage, and roadmap are maintained in the docs directory.
 

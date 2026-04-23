@@ -1,5 +1,5 @@
 ---
-project: openpulse
+project: openpulsehf
 doc: docs/README.md
 status: living
 last_updated: 2026-04-23
@@ -13,6 +13,11 @@ Canonical documentation lives in the files listed below.
 
 - docs/overview.md: project summary and inspiration context
 - docs/vara-research.md: public-source technical notes on VARA
+- docs/high-performance-mode.md: feature analysis for HPX mode and signed transfer model
+- docs/hpx-session-state-machine.md: normative HPX session lifecycle and conformance cases
+- docs/benchmark-harness.md: benchmark scenarios, result schema, and CI gate rules for HPX
+- docs/peer-caching-relay.md: peer discovery cache, query model, and multi-hop relay behavior
+- docs/peer-query-relay-wire.md: wire-level schema for peer query and relay envelopes
 - docs/requirements.md: functional and non-functional requirements
 - docs/steering.md: governance and decision ownership
 - docs/roadmap.md: phased execution plan

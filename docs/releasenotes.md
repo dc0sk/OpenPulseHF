@@ -1,5 +1,5 @@
 ---
-project: openpulse
+project: openpulsehf
 doc: docs/releasenotes.md
 status: living
 last_updated: 2026-04-23
@@ -15,6 +15,6 @@ last_updated: 2026-04-23
 
 ## v0.1.0
 
-- First public OpenPulse release.
+- First public OpenPulseHF release.
 - Introduced plugin-based modem architecture in a Cargo workspace.
 - Included BPSK mode support and loopback-based testing path.

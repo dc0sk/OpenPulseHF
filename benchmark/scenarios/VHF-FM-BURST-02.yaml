@@ -1,0 +1,10 @@
+scenario_id: VHF-FM-BURST-02
+bandwidth_class_hz: 12500
+family: vhf_fm
+profile: burst_noise
+snr_db_mean: 16.0
+snr_db_jitter: 2.5
+fading_model: minimal
+burst_noise_events_per_min: 12
+burst_noise_duration_ms: 45
+run_duration_limit_s: 180
