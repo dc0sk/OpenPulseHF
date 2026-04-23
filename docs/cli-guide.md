@@ -74,4 +74,7 @@ cargo test --workspace --no-default-features
 
 # Run with full audio support (requires ALSA headers on Linux)
 cargo test --workspace
+
+# Validate benchmark scaffold files and result artifacts
+bash scripts/validate-benchmark-artifacts.sh
 ```

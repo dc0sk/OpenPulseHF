@@ -1,0 +1,12 @@
+scenario_id: HF2300-STRESS-03
+bandwidth_class_hz: 2300
+family: hf
+profile: stress
+snr_db_mean: 8.0
+snr_db_jitter: 5.0
+fading_model: variable_multipath
+snr_step_interval_s: 10
+timing_jitter_ppm: 150
+burst_noise_events_per_min: 6
+doppler_hz: 0.8
+run_duration_limit_s: 240

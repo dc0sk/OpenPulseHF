@@ -1,0 +1,11 @@
+scenario_id: HF500-BURST-03
+bandwidth_class_hz: 500
+family: hf
+profile: burst_noise
+snr_db_mean: 7.0
+snr_db_jitter: 2.0
+fading_model: moderate_selective
+burst_noise_events_per_min: 8
+burst_noise_duration_ms: 80
+doppler_hz: 0.4
+run_duration_limit_s: 180

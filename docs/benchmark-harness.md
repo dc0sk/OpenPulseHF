@@ -139,6 +139,18 @@ Suggested layout under repository root:
 - benchmark/results/aggregate/*.json: aggregated reports.
 - benchmark/reports/*.md: human-readable benchmark summaries.
 
+## Initial bootstrap status
+
+The repository includes initial scenario files under benchmark/scenarios and a validation script at scripts/validate-benchmark-artifacts.sh.
+
+Run validation locally with:
+
+```sh
+bash scripts/validate-benchmark-artifacts.sh
+```
+
+If benchmark result JSON files are present, jq is required for schema-key checks.
+
 ## Signing and trust metrics in benchmarks
 
 Benchmarks that exercise signed transfer must report:

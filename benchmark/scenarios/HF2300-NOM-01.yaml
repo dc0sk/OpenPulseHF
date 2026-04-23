@@ -1,0 +1,10 @@
+scenario_id: HF2300-NOM-01
+bandwidth_class_hz: 2300
+family: hf
+profile: nominal
+snr_db_mean: 12.0
+snr_db_jitter: 1.2
+fading_model: low_multipath
+burst_noise_events_per_min: 0
+doppler_hz: 0.2
+run_duration_limit_s: 120
