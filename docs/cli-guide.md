@@ -77,4 +77,7 @@ cargo test --workspace
 
 # Validate benchmark scaffold files and result artifacts
 bash scripts/validate-benchmark-artifacts.sh
+
+# Compare aggregate benchmark results against stored baselines
+bash scripts/check-benchmark-regressions.sh benchmark/baselines benchmark/results/aggregate
 ```

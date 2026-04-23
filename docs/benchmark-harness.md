@@ -129,6 +129,7 @@ Gate rules:
 - Baselines are versioned artifacts keyed by mode, scenario, and schema version.
 - Baseline update requires explicit approval in pull request review.
 - Baseline changes must include rationale and before/after summary.
+- Regression checks are enforced with scripts/check-benchmark-regressions.sh.
 
 ## Artifact layout
 
@@ -168,3 +169,17 @@ Benchmark harness M1 is complete when:
 - full suite runs manually and on schedule,
 - result schema is stable and consumed by report tooling,
 - benchmark reports are published for review before release decisions.
+
+## Local regression check
+
+Run baseline comparison locally with:
+
+```sh
+bash scripts/check-benchmark-regressions.sh benchmark/baselines benchmark/results/aggregate
+```
+
+Set strict baseline matching with:
+
+```sh
+REQUIRE_BASELINE=1 bash scripts/check-benchmark-regressions.sh benchmark/baselines benchmark/results/aggregate
+```
