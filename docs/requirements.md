@@ -49,6 +49,11 @@ last_updated: 2026-04-23
 - Trust status must include trusted, untrusted, revoked, and unknown states.
 - Key lifecycle must include validity windows and revocation handling.
 - Cryptographic defaults should use Ed25519 signatures and SHA-256 or stronger hashing.
+- A post-quantum-safe signature method must be supported for identity and transfer-signing workflows.
+- The implementation should support a hybrid signature mode (classical + post-quantum) during migration.
+- Initial post-quantum-safe default should target ML-DSA (FIPS 204) where available.
+- If session key establishment is used, a post-quantum-safe KEM option should be supported, with ML-KEM (FIPS 203) preferred.
+- Trust-store metadata must record algorithm type and hybrid-policy requirements per identity.
 
 ## Competitive performance requirements
 
