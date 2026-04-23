@@ -14,6 +14,7 @@ last_updated: 2026-04-23
 - Expand integration tests around frame boundaries and timing assumptions.
 - Define HPX benchmark harness inputs, metrics, and reproducible run procedure.
 - Define signed transfer envelope format and trust-store schema.
+- Implement reduced CI benchmark suite with regression gates for HPX.
 
 ## Mid term
 
@@ -24,6 +25,7 @@ last_updated: 2026-04-23
 - Implement HPX500 and HPX2300 adaptive profiles as plugin modes.
 - Implement signed handshake and signed transfer manifest verification for HPX sessions.
 - Ship CLI trust-store management commands for key import, list, and revoke markers.
+- Implement full benchmark suite execution and artifact publishing for release readiness.
 
 ## Long term
 

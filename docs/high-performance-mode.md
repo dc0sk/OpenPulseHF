@@ -41,6 +41,8 @@ OpenPulse HPX mode (working name) must prioritize the following metrics:
 
 All competitive claims must be backed by repeatable benchmark suites.
 
+Harness details, scenario IDs, and schema contract are defined in docs/benchmark-harness.md.
+
 ### Channel profiles
 
 Minimum profile set:
