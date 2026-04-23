@@ -1,0 +1,14 @@
+[package]
+name        = "openpulse-modem"
+description = "Modem engine for OpenPulse – wires plugins and audio backends together"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+
+[dependencies]
+openpulse-core  = { workspace = true }
+openpulse-audio = { workspace = true }
+bpsk-plugin     = { workspace = true }
+tracing         = { workspace = true }

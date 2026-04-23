@@ -1,0 +1,26 @@
+[package]
+name        = "openpulse-cli"
+description = "Command-line interface for the OpenPulse software modem"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+
+[[bin]]
+name = "openpulse"
+path = "src/main.rs"
+
+[features]
+default      = ["cpal-backend"]
+cpal-backend = ["openpulse-audio/cpal-backend"]
+
+[dependencies]
+openpulse-core  = { workspace = true }
+openpulse-audio = { workspace = true }
+openpulse-modem = { workspace = true }
+bpsk-plugin     = { workspace = true }
+anyhow             = { workspace = true }
+clap               = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }

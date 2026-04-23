@@ -1,0 +1,12 @@
+[package]
+name        = "openpulse-core"
+description = "Core traits, types and frame format for the OpenPulse software modem"
+version.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+authors.workspace     = true
+repository.workspace  = true
+
+[dependencies]
+thiserror = { workspace = true }
+serde     = { workspace = true }
