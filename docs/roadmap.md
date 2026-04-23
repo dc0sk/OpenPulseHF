@@ -15,6 +15,9 @@ last_updated: 2026-04-23
 - Define HPX benchmark harness inputs, metrics, and reproducible run procedure.
 - Define signed transfer envelope format and trust-store schema.
 - Implement reduced CI benchmark suite with regression gates for HPX.
+- Define multithreaded modem pipeline boundaries and scheduling policy.
+- Define GPU offload candidate kernels and CPU/GPU equivalence test strategy.
+- Add Raspberry Pi 4/5 benchmark profile definitions.
 
 ## Mid term
 
@@ -26,6 +29,9 @@ last_updated: 2026-04-23
 - Implement signed handshake and signed transfer manifest verification for HPX sessions.
 - Ship CLI trust-store management commands for key import, list, and revoke markers.
 - Implement full benchmark suite execution and artifact publishing for release readiness.
+- Implement multithreaded HPX pipeline execution in production mode.
+- Implement optional GPU acceleration path using open frameworks with CPU fallback.
+- Add ARM64 CI or scheduled validation runs for Raspberry Pi 4/5 compatibility.
 
 ## Long term
 

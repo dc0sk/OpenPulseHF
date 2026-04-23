@@ -98,6 +98,19 @@ The first milestone uses explicit, testable thresholds. Values can tighten over 
 
 ## HPX technical feature set
 
+### Parallel execution model
+
+- HPX processing should support multithreaded execution across framing, channel estimation, coding, and demodulation stages.
+- Parallelism must preserve deterministic session behavior and reproducible benchmark outcomes.
+- Threaded execution must expose bounded queue and backpressure controls.
+
+### GPU acceleration model
+
+- HPX should support optional GPU acceleration for selected DSP kernels where benchmarks show net throughput or latency gains.
+- GPU acceleration must use open frameworks (preferred: Vulkan via wgpu; optional: OpenCL backends).
+- GPU mode must remain functionally equivalent to CPU mode for protocol behavior and signed-transfer verification outcomes.
+- CPU-only execution remains mandatory on unsupported GPUs or disabled acceleration settings.
+
 ### Adaptive modulation and coding
 
 - Support mode adaptation across modulation/coding combinations during session.
@@ -159,6 +172,7 @@ OpenPulse HPX must support cryptographically signed transfers with an operator-m
 - Keep HPX mode implementation as a plugin with stable trait boundaries.
 - Maintain loopback-test compatibility for baseline CI and local development.
 - Keep control-plane and data-plane logic independently testable.
+- Maintain practical HPX operability on Raspberry Pi 4 and Raspberry Pi 5 with documented profile recommendations.
 
 ## Exit criteria for first HPX milestone
 

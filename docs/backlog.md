@@ -20,3 +20,6 @@ last_updated: 2026-04-23
 - Add trust-store file format and migration policy.
 - Add conformance tests for signed handshake and manifest verification.
 - Add CLI UX spec for identity and trust diagnostics.
+- Add multithreaded pipeline test harness with deterministic timing assertions.
+- Add CPU vs GPU equivalence tests for selected DSP kernels.
+- Add Raspberry Pi 4/5 tuning guide and benchmark result appendix.

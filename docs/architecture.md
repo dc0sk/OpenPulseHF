@@ -81,6 +81,16 @@ The payload length range is 0-255 bytes.
 - Real-time behavior depends on bounded buffering and deterministic frame timing.
 - Loopback and no-default-features test paths remain fast and stable in CI.
 - Optional optimization work should preserve functional parity with baseline paths.
+- Modem execution should separate I/O, framing, and DSP stages so they can run on dedicated worker threads.
+- Thread scheduling strategy should avoid unbounded queues and preserve deterministic latency under load.
+- GPU offload should target compute-intensive DSP components only when benchmarks show net gain.
+- GPU path should use open acceleration stacks (preferred: Vulkan via wgpu; optional: OpenCL) with an always-available CPU path.
+
+## Edge platform support
+
+- Raspberry Pi 4 and Raspberry Pi 5 are supported edge targets for HPX operation.
+- ARM64 builds must preserve feature parity for signed-transfer and trust workflows.
+- Resource-aware execution profiles should be available for Pi-class CPU and memory budgets.
 
 ## Extensibility architecture
 

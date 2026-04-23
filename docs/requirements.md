@@ -26,6 +26,8 @@ last_updated: 2026-04-23
 - Linux support is the primary target and requires ALSA development headers for CPAL builds.
 - macOS support uses CoreAudio through CPAL.
 - Windows support uses WASAPI through CPAL.
+- Raspberry Pi 4 and Raspberry Pi 5 must be supported as first-class Linux deployment targets.
+- ARM64 builds for Raspberry Pi 4/5 must be part of regular compatibility testing.
 - Any development environment must support loopback mode for hardware-free testing.
 - Rust toolchain must build the full workspace and no-default-features variant.
 
@@ -39,6 +41,10 @@ last_updated: 2026-04-23
 - Track goodput, completion rate, retry efficiency, and completion latency across channel profiles.
 - Require HPX performance claims to be tied to reproducible benchmark runs.
 - Maintain deterministic timeout and retry behavior for session-state transitions.
+- Use multithreaded execution for modem pipelines where it improves deterministic real-time behavior.
+- Support optional GPU acceleration for compute-heavy signal-processing stages when it produces measurable benefit.
+- GPU acceleration paths must use open frameworks (for example Vulkan via wgpu, or OpenCL) and provide a CPU fallback.
+- Raspberry Pi 4/5 performance targets must be measured and published in benchmark artifacts.
 
 ## Security and trust requirements
 
