@@ -18,6 +18,8 @@ This document defines OpenPulseHF requirements and design constraints for peer d
 - Route transfers through multiple relay hops when direct links are unavailable or inefficient.
 - Preserve signed-transfer and trust-policy guarantees over relay paths.
 
+Wire-level envelope and message schema details are specified in docs/peer-query-relay-wire.md.
+
 ## Peer cache model
 
 ### Cache entries

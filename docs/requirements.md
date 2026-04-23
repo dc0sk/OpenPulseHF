@@ -24,6 +24,7 @@ last_updated: 2026-04-23
 - Support local and network query interfaces for peer discovery and filtering.
 - Support relayed transfers across multiple hops with configurable hop limits.
 - Support route selection policies based on trust, reliability, and latency estimates.
+- Define versioned wire-level envelopes for peer query, route discovery, and relay transfer control messages.
 
 ## Platform and dependency requirements
 
@@ -69,6 +70,7 @@ last_updated: 2026-04-23
 - Relay path admission must enforce trust policy on each intermediate hop.
 - Multi-hop transfers must preserve end-to-end signed integrity and fail closed on trust violations.
 - Route metadata should support post-quantum-capable signing under configured policy.
+- Relay and query messages must include anti-replay fields and enforce loop-prevention semantics.
 
 ## Competitive performance requirements
 

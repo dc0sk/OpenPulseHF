@@ -48,6 +48,8 @@ Planned HPX and trust commands:
 - openpulse peers query --mode <MODE> --min-quality <score>
 - openpulse relay route --to <peer-id> --max-hops <n>
 - openpulse hpx send <file> --relay auto --max-hops <n>
+- openpulse relay inspect-route --route-id <id>
+- openpulse peers query --trust <trusted|trusted-or-unknown|any> --max-results <n>
 
 ## Common options
 

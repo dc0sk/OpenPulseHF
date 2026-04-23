@@ -17,6 +17,7 @@ Canonical documentation lives in the files listed below.
 - docs/hpx-session-state-machine.md: normative HPX session lifecycle and conformance cases
 - docs/benchmark-harness.md: benchmark scenarios, result schema, and CI gate rules for HPX
 - docs/peer-caching-relay.md: peer discovery cache, query model, and multi-hop relay behavior
+- docs/peer-query-relay-wire.md: wire-level schema for peer query and relay envelopes
 - docs/requirements.md: functional and non-functional requirements
 - docs/steering.md: governance and decision ownership
 - docs/roadmap.md: phased execution plan

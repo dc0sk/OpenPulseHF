@@ -115,6 +115,7 @@ For HPX, keep signal path adaptation logic and trust/signature logic as separate
 - Query engine supports local filter queries and bounded network query propagation.
 - Route planner selects direct or multi-hop path using trust and link-quality scoring.
 - Relay layer enforces loop prevention, replay protection, and hop-limited forwarding.
+- Wire-level relay and query envelopes are defined in docs/peer-query-relay-wire.md.
 
 ## Documentation process constraints
 
