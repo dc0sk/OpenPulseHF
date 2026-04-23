@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/dc0sk/OpenPulse/actions/workflows/ci.yml/badge.svg)](https://github.com/dc0sk/OpenPulse/actions/workflows/ci.yml)
 
-anleitungProject details, requirements, usage, and roadmap are maintained in the docs directory.
+Project details, requirements, usage, and roadmap are maintained in the docs directory.
 
 ## Documentation
 
@@ -20,3 +20,4 @@ anleitungProject details, requirements, usage, and roadmap are maintained in the
 ## License
 
 GNU General Public License v3.0 or later – see [LICENSE](LICENSE).
+

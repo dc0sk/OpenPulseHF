@@ -129,3 +129,4 @@ Primary index source:
   - 500 Hz versus wider-band operating modes in user workflows
 - Publicly verifiable material does not currently provide enough detail here to claim a full open protocol description.
 - Any future interoperability or compatibility work should be based only on legally and technically defensible public documentation or first-principles design work.
+
