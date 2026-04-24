@@ -153,6 +153,18 @@ struct PublishTrustBundleResponse {
     created_at: String,
 }
 
+#[derive(Deserialize)]
+pub struct PromoteTrustBundleRequest {
+    pub reason: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PromoteTrustBundleResponse {
+    bundle_id: String,
+    is_current: bool,
+    promoted_at: String,
+}
+
 pub async fn healthz() -> impl IntoResponse {
     (StatusCode::OK, Json(ApiMessage { status: "ok", detail: "service healthy".to_string() }))
 }
@@ -828,6 +840,23 @@ pub async fn create_revocation(
 ) -> impl IntoResponse {
     let request_id = extract_request_id(&headers);
 
+    if let Some(request_id_str) = request_id.as_deref() {
+        match check_request_tracking(&state.db, request_id_str, "/api/v1/revocations", "POST").await {
+            Ok(Some((status, body))) => return (status, Json(body)).into_response(),
+            Ok(None) => {}
+            Err(err) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiMessage {
+                        status: "db_error",
+                        detail: format!("failed to read request tracking: {err}"),
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    }
+
     // Validation: check required fields
     if req.record_id.trim().is_empty()
         || req.revision_id.trim().is_empty()
@@ -1010,15 +1039,25 @@ pub async fn create_revocation(
         Err(_) => "unknown".to_string(),
     };
 
-    (
-        StatusCode::CREATED,
-        Json(CreateRevocationResponse {
-            revocation_id,
-            effective_at: effective_at_parsed,
-            created_at,
-        }),
-    )
-        .into_response()
+    let response_body = serde_json::json!(CreateRevocationResponse {
+        revocation_id,
+        effective_at: effective_at_parsed,
+        created_at,
+    });
+
+    if let Some(request_id_str) = request_id.as_deref() {
+        let _ = track_request(
+            &state.db,
+            request_id_str,
+            "/api/v1/revocations",
+            "POST",
+            StatusCode::CREATED,
+            &response_body,
+        )
+        .await;
+    }
+
+    (StatusCode::CREATED, Json(response_body)).into_response()
 }
 
 pub async fn publish_trust_bundle(
@@ -1027,6 +1066,23 @@ pub async fn publish_trust_bundle(
     Json(req): Json<PublishTrustBundleRequest>,
 ) -> impl IntoResponse {
     let request_id = extract_request_id(&headers);
+
+    if let Some(request_id_str) = request_id.as_deref() {
+        match check_request_tracking(&state.db, request_id_str, "/api/v1/trust-bundles", "POST").await {
+            Ok(Some((status, body))) => return (status, Json(body)).into_response(),
+            Ok(None) => {}
+            Err(err) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiMessage {
+                        status: "db_error",
+                        detail: format!("failed to read request tracking: {err}"),
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    }
 
     // Validation: check required fields
     if req.schema_version.trim().is_empty()
@@ -1179,15 +1235,219 @@ pub async fn publish_trust_bundle(
         Err(_) => "unknown".to_string(),
     };
 
-    (
-        StatusCode::CREATED,
-        Json(PublishTrustBundleResponse {
-            bundle_id,
-            is_current: false,
-            created_at,
-        }),
+    let response_body = serde_json::json!(PublishTrustBundleResponse {
+        bundle_id,
+        is_current: false,
+        created_at,
+    });
+
+    if let Some(request_id_str) = request_id.as_deref() {
+        let _ = track_request(
+            &state.db,
+            request_id_str,
+            "/api/v1/trust-bundles",
+            "POST",
+            StatusCode::CREATED,
+            &response_body,
+        )
+        .await;
+    }
+
+    (StatusCode::CREATED, Json(response_body)).into_response()
+}
+
+pub async fn promote_trust_bundle(
+    State(state): State<AppState>,
+    Path(bundle_id): Path<String>,
+    headers: HeaderMap,
+    Json(req): Json<PromoteTrustBundleRequest>,
+) -> impl IntoResponse {
+    let request_id = extract_request_id(&headers);
+
+    if let Some(request_id_str) = request_id.as_deref() {
+        match check_request_tracking(
+            &state.db,
+            request_id_str,
+            "/api/v1/trust-bundles/:bundle_id/promote",
+            "PATCH",
+        )
+        .await
+        {
+            Ok(Some((status, body))) => return (status, Json(body)).into_response(),
+            Ok(None) => {}
+            Err(err) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiMessage {
+                        status: "db_error",
+                        detail: format!("failed to read request tracking: {err}"),
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    let mut tx = match state.db.begin().await {
+        Ok(tx) => tx,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiMessage {
+                    status: "db_error",
+                    detail: format!("failed to begin transaction: {err}"),
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    let exists = match sqlx::query("SELECT bundle_id FROM trust_bundles WHERE bundle_id = $1")
+        .bind(&bundle_id)
+        .fetch_optional(&mut *tx)
+        .await
+    {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiMessage {
+                    status: "db_error",
+                    detail: format!("failed to query trust bundle: {err}"),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    if !exists {
+        let body = serde_json::json!({
+            "status": "not_found",
+            "detail": "trust bundle not found"
+        });
+        if let Some(request_id_str) = request_id.as_deref() {
+            let _ = track_request(
+                &state.db,
+                request_id_str,
+                "/api/v1/trust-bundles/:bundle_id/promote",
+                "PATCH",
+                StatusCode::NOT_FOUND,
+                &body,
+            )
+            .await;
+        }
+        return (StatusCode::NOT_FOUND, Json(body)).into_response();
+    }
+
+    if let Err(err) = sqlx::query("UPDATE trust_bundles SET is_current = false WHERE is_current = true")
+        .execute(&mut *tx)
+        .await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiMessage {
+                status: "db_error",
+                detail: format!("failed to clear current trust bundle: {err}"),
+            }),
+        )
+            .into_response();
+    }
+
+    if let Err(err) = sqlx::query("UPDATE trust_bundles SET is_current = true WHERE bundle_id = $1")
+        .bind(&bundle_id)
+        .execute(&mut *tx)
+        .await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiMessage {
+                status: "db_error",
+                detail: format!("failed to promote trust bundle: {err}"),
+            }),
+        )
+            .into_response();
+    }
+
+    let audit_event_id = Uuid::new_v4().to_string();
+    let audit_payload = serde_json::json!({
+        "bundle_id": &bundle_id,
+        "reason": req.reason
+    });
+    let payload_hash = payload_sha256(&audit_payload);
+
+    if let Err(err) = sqlx::query(
+        "INSERT INTO audit_events (
+            event_id,
+            event_type,
+            entity_type,
+            entity_id,
+            actor_identity,
+            request_id,
+            event_payload_hash,
+            event_payload_json
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
-        .into_response()
+    .bind(&audit_event_id)
+    .bind("bundle_promoted")
+    .bind("trust_bundle")
+    .bind(&bundle_id)
+    .bind("system")
+    .bind(&request_id)
+    .bind(&payload_hash)
+    .bind(&audit_payload)
+    .execute(&mut *tx)
+    .await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiMessage {
+                status: "db_error",
+                detail: format!("failed to insert audit event: {err}"),
+            }),
+        )
+            .into_response();
+    }
+
+    if let Err(err) = tx.commit().await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiMessage {
+                status: "db_error",
+                detail: format!("failed to commit transaction: {err}"),
+            }),
+        )
+            .into_response();
+    }
+
+    let promoted_at = match sqlx::query("SELECT created_at FROM trust_bundles WHERE bundle_id = $1")
+        .bind(&bundle_id)
+        .fetch_one(&state.db)
+        .await
+    {
+        Ok(row) => row.get::<String, _>("created_at"),
+        Err(_) => "unknown".to_string(),
+    };
+
+    let response_body = serde_json::json!(PromoteTrustBundleResponse {
+        bundle_id,
+        is_current: true,
+        promoted_at,
+    });
+
+    if let Some(request_id_str) = request_id.as_deref() {
+        let _ = track_request(
+            &state.db,
+            request_id_str,
+            "/api/v1/trust-bundles/:bundle_id/promote",
+            "PATCH",
+            StatusCode::OK,
+            &response_body,
+        )
+        .await;
+    }
+
+    (StatusCode::OK, Json(response_body)).into_response()
 }
 
 fn json_kind(value: &serde_json::Value) -> &'static str {
@@ -1235,4 +1495,78 @@ fn parse_rfc3339_query(
         )
             .into_response()),
     }
+}
+
+async fn check_request_tracking(
+    db: &sqlx::PgPool,
+    request_id: &str,
+    endpoint: &str,
+    method: &str,
+) -> Result<Option<(StatusCode, serde_json::Value)>, sqlx::Error> {
+    let record = sqlx::query(
+        "SELECT endpoint, method, response_status, response_body_json
+         FROM request_tracking
+         WHERE request_id = $1 AND expires_at > NOW()",
+    )
+    .bind(request_id)
+    .fetch_optional(db)
+    .await?;
+
+    let Some(row) = record else {
+        return Ok(None);
+    };
+
+    let existing_endpoint: String = row.get("endpoint");
+    let existing_method: String = row.get("method");
+    if existing_endpoint != endpoint || existing_method != method {
+        return Ok(Some((
+            StatusCode::CONFLICT,
+            serde_json::json!({
+                "status": "validation_error",
+                "detail": "request_id already used for a different endpoint or method"
+            }),
+        )));
+    }
+
+    let status: i32 = row.get("response_status");
+    let body: serde_json::Value = row.get("response_body_json");
+    Ok(Some((
+        StatusCode::from_u16(status as u16).unwrap_or(StatusCode::OK),
+        body,
+    )))
+}
+
+async fn track_request(
+    db: &sqlx::PgPool,
+    request_id: &str,
+    endpoint: &str,
+    method: &str,
+    response_status: StatusCode,
+    response_body: &serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    let status_code = response_status.as_u16() as i32;
+    let body_hash = payload_sha256(response_body);
+
+    sqlx::query(
+        "INSERT INTO request_tracking (
+            request_id,
+            endpoint,
+            method,
+            response_status,
+            response_body_hash,
+            response_body_json,
+            expires_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, NOW() + INTERVAL '24 hours')
+         ON CONFLICT (request_id) DO NOTHING",
+    )
+    .bind(request_id)
+    .bind(endpoint)
+    .bind(method)
+    .bind(status_code)
+    .bind(&body_hash)
+    .bind(response_body)
+    .execute(db)
+    .await?;
+
+    Ok(())
 }
