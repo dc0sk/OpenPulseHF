@@ -53,6 +53,18 @@ last_updated: 2026-04-23
 - Peer cache lookup and query operations should remain bounded under large peer tables.
 - Multi-hop relay control-plane traffic should include duplicate suppression and loop prevention.
 
+## Compression requirements
+
+- All wire payloads eligible for compression must be compressed before encryption and signing.
+- Compression ratio is the primary optimisation target; CPU and memory cost are acceptable tradeoffs.
+- The default compression algorithm must be Brotli at quality level 11 (maximum ratio).
+- LZMA2 (xz) must be supported as a high-ratio alternative for long-block transfer chunks.
+- Zstandard may be used in contexts where streaming decompression is required, configured at the highest compression level.
+- Algorithm selection must be declared in the wire envelope so receivers can decompress without out-of-band negotiation.
+- Uncompressed payloads must remain valid when compression yields no size reduction (for example short frames or pre-compressed data).
+- Compression boundaries and algorithm selection must be included in signed manifests so integrity covers the pre-compression content.
+- Relay nodes must not decompress and recompress payload; compression is applied end-to-end.
+
 ## Security and trust requirements
 
 - Signed transfers are mandatory for HPX file or object transfer mode.

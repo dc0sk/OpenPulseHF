@@ -24,7 +24,7 @@ All control-plane and relay-plane messages use a shared outer envelope:
 ```text
 magic("OPHF") | version(u8) | msg_type(u8) | flags(u16) | session_id(u64) |
 src_peer_id(32B) | dst_peer_id(32B) | nonce(96b) | timestamp_ms(u64) |
-hop_limit(u8) | hop_index(u8) | payload_len(u16) | payload | auth_tag(16B)
+hop_limit(u8) | hop_index(u8) | compression_codec(u8) | payload_len(u16) | payload | auth_tag(16B)
 ```
 
 Notes:
@@ -32,8 +32,22 @@ Notes:
 - magic: OpenPulseHF discriminator.
 - version: wire schema version, initial value 1.
 - nonce: unique per src_peer_id and session_id for replay protection.
-- auth_tag: integrity tag for envelope fields and payload.
+- compression_codec: identifies the algorithm applied to payload before encryption; 0x00 means uncompressed.
+- auth_tag: integrity tag for envelope fields and payload including the compressed form.
 - All unsigned integer fields use network byte order (big-endian).
+
+## Compression codec registry
+
+- 0x00: none (uncompressed)
+- 0x01: brotli-q11 (Brotli quality 11, maximum ratio; default)
+- 0x02: lzma2 (xz format; high-ratio alternative for transfer chunks)
+- 0x03: zstd-max (Zstandard at highest level; streaming-friendly)
+
+Rules:
+
+- Senders must set compression_codec to 0x00 when compression does not reduce payload size.
+- Receivers must reject messages with unknown compression_codec values.
+- Relay nodes must forward payload bytes and compression_codec unchanged; they must not decompress or recompress.
 
 ## Message type registry (initial)
 
