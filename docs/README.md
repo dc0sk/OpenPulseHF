@@ -21,6 +21,7 @@ Canonical documentation lives in the files listed below.
 - docs/pki-tooling-api.md: API surface and export schema for separate PKI tooling
 - docs/pki-tooling-architecture.md: architecture for separate PKI publication, lookup, and trust tooling
 - docs/pki-tooling-data-model.md: canonical entity model, state transitions, and migration policy for PKI tooling
+- docs/pki-tooling-operations-runbook.md: operational procedures, incident playbooks, and backup/restore guidance for PKI tooling
 - docs/pki-tooling-requirements.md: requirements for separate PKI publication, lookup, and trust tooling
 - docs/pki-tooling-rollout-plan.md: phased implementation, quality gates, and release milestones for PKI tooling
 - docs/pki-tooling-trust-policy.md: moderation workflow, trust scoring policy, and decision guardrails for PKI tooling
