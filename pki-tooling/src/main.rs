@@ -1,14 +1,6 @@
-mod api;
-
-use axum::routing::{get, post};
-use axum::Router;
+use pki_tooling::{build_router, AppState};
 use sqlx::postgres::PgPoolOptions;
 use std::env;
-
-#[derive(Clone)]
-pub struct AppState {
-    pub db: sqlx::PgPool,
-}
 
 #[tokio::main]
 async fn main() {
@@ -25,33 +17,7 @@ async fn main() {
 
     let state = AppState { db };
 
-    let app = Router::new()
-        .route("/healthz", get(api::handlers::healthz))
-        .route(
-            "/api/v1/identities/:record_id",
-            get(api::handlers::get_identity),
-        )
-        .route("/api/v1/identities:lookup", get(api::handlers::lookup_identity))
-        .route("/api/v1/revocations", get(api::handlers::list_revocations))
-        .route(
-            "/api/v1/trust-bundles/current",
-            get(api::handlers::get_current_trust_bundle),
-        )
-        .route(
-            "/api/v1/trust-bundles/:bundle_id",
-            get(api::handlers::get_trust_bundle),
-        )
-        .route("/api/v1/submissions", post(api::handlers::create_submission))
-        .route(
-            "/api/v1/submissions/:submission_id",
-            get(api::handlers::get_submission),
-        )
-        .route("/api/v1/moderation/queue", get(api::handlers::get_moderation_queue))
-        .route(
-            "/api/v1/moderation/:submission_id/decision",
-            post(api::handlers::post_moderation_decision),
-        )
-        .with_state(state);
+    let app = build_router(state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:8080")
         .await
