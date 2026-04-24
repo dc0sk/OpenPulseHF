@@ -1,4 +1,5 @@
 /target/
+pki-tooling/target/
 Cargo.lock
 *.swp
 *.bak
