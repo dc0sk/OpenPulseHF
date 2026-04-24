@@ -70,6 +70,8 @@ Validation:
 
 Each run emits one JSON result object conforming to this schema shape:
 
+- `benchmark/schema/raw-result.schema.json`
+
 ```json
 {
   "schema_version": "1.0",
@@ -99,6 +101,8 @@ Each run emits one JSON result object conforming to this schema shape:
 ## Aggregated report schema
 
 Per scenario family and mode, the harness emits an aggregated report containing:
+
+- `benchmark/schema/aggregate-result.schema.json`
 
 - scenario_id
 - mode_under_test
@@ -166,7 +170,10 @@ Run validation locally with:
 bash scripts/validate-benchmark-artifacts.sh
 ```
 
-If benchmark result JSON files are present, jq is required for schema-key checks.
+If benchmark result JSON files are present, jq is required for schema validation against:
+
+- `benchmark/schema/raw-result.schema.json`
+- `benchmark/schema/aggregate-result.schema.json`
 
 ## Signing and trust metrics in benchmarks
 

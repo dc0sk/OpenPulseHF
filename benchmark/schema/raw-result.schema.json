@@ -1,0 +1,116 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OpenPulse Benchmark Raw Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "scenario_id",
+    "mode_under_test",
+    "bandwidth_class_hz",
+    "random_seed",
+    "payload_bytes",
+    "run_duration_s",
+    "success",
+    "raw_throughput_bps",
+    "goodput_bps",
+    "completion_time_ms",
+    "retransmissions",
+    "arq_efficiency",
+    "spectral_efficiency_bphz",
+    "time_to_first_payload_ms",
+    "recovery_success_rate",
+    "profile_switches_per_min",
+    "p95_completion_time_ms",
+    "trust_failures",
+    "signature_failures"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scenario_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mode_under_test": {
+      "type": "string",
+      "minLength": 1
+    },
+    "bandwidth_class_hz": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "random_seed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "payload_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "run_duration_s": {
+      "type": "number",
+      "minimum": 0
+    },
+    "success": {
+      "type": "boolean"
+    },
+    "raw_throughput_bps": {
+      "type": "number",
+      "minimum": 0
+    },
+    "goodput_bps": {
+      "type": "number",
+      "minimum": 0
+    },
+    "completion_time_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "retransmissions": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "arq_efficiency": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "spectral_efficiency_bphz": {
+      "type": "number",
+      "minimum": 0
+    },
+    "time_to_first_payload_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "recovery_success_rate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "profile_switches_per_min": {
+      "type": "number",
+      "minimum": 0
+    },
+    "p95_completion_time_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "trust_failures": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "signature_failures": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

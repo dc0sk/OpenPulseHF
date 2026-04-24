@@ -6,6 +6,9 @@ shopt -s nullglob
 scenario_dir="benchmark/scenarios"
 raw_dir="benchmark/results/raw"
 aggregate_dir="benchmark/results/aggregate"
+schema_dir="benchmark/schema"
+raw_schema="${schema_dir}/raw-result.schema.json"
+aggregate_schema="${schema_dir}/aggregate-result.schema.json"
 
 status=0
 
@@ -19,42 +22,106 @@ required_scenario_keys=(
   "run_duration_limit_s"
 )
 
-required_raw_json_keys=(
-  "schema_version"
-  "run_id"
-  "scenario_id"
-  "mode_under_test"
-  "bandwidth_class_hz"
-  "random_seed"
-  "payload_bytes"
-  "run_duration_s"
-  "success"
-  "raw_throughput_bps"
-  "goodput_bps"
-  "completion_time_ms"
-  "retransmissions"
-  "arq_efficiency"
-  "spectral_efficiency_bphz"
-  "time_to_first_payload_ms"
-  "recovery_success_rate"
-  "profile_switches_per_min"
-  "p95_completion_time_ms"
-  "trust_failures"
-  "signature_failures"
-)
+validate_json_against_schema() {
+  local file="$1"
+  local schema="$2"
 
-required_aggregate_json_keys=(
-  "scenario_id"
-  "mode_under_test"
-  "run_count"
-  "success_rate"
-  "median_goodput_bps"
-  "p95_completion_time_ms"
-  "mean_arq_efficiency"
-  "median_spectral_efficiency_bphz"
-  "mean_time_to_first_payload_ms"
-  "recovery_success_rate"
-)
+  if ! jq empty "${schema}" >/dev/null 2>&1; then
+    echo "${schema}: invalid JSON schema"
+    status=1
+    return
+  fi
+
+  local errors
+  errors="$({
+    jq -rn \
+      --argfile data "${file}" \
+      --argfile schema "${schema}" '
+        def value_type($v):
+          if ($v | type) == "number" and (($v | floor) == $v) then "integer"
+          else ($v | type)
+          end;
+
+        def type_ok($v; $expected):
+          if $expected == "integer" then
+            (($v | type) == "number") and (($v | floor) == $v)
+          elif $expected == "number" then
+            ($v | type) == "number"
+          else
+            ($v | type) == $expected
+          end;
+
+        [
+          (
+            $schema.required[]? as $k
+            | select(($data | has($k)) | not)
+            | "missing required key '\''\($k)'\''"
+          ),
+          (
+            if $schema.additionalProperties == false then
+              $data
+              | keys[]
+              | select(($schema.properties | has(.)) | not)
+              | "unexpected key '\''\(.)'\''"
+            else
+              empty
+            end
+          ),
+          (
+            $schema.properties
+            | to_entries[]
+            | .key as $k
+            | .value as $p
+            | select($data | has($k))
+            | (
+                if ($p.type? and (type_ok($data[$k]; $p.type) | not)) then
+                  "key '\''\($k)'\'' has type '\''\(value_type($data[$k]))'\'', expected '\''\($p.type)'\''"
+                else
+                  empty
+                end
+              ),
+              (
+                if ($p.minLength? and (($data[$k] | type) == "string") and (($data[$k] | length) < $p.minLength)) then
+                  "key '\''\($k)'\'' length \(($data[$k] | length)) is below minLength \($p.minLength)"
+                else
+                  empty
+                end
+              ),
+              (
+                if ($p.pattern? and (($data[$k] | type) == "string") and (($data[$k] | test($p.pattern)) | not)) then
+                  "key '\''\($k)'\'' value does not match pattern '\''\($p.pattern)'\''"
+                else
+                  empty
+                end
+              ),
+              (
+                if ($p.minimum? and (($data[$k] | type) == "number") and ($data[$k] < $p.minimum)) then
+                  "key '\''\($k)'\'' value \($data[$k]) is below minimum \($p.minimum)"
+                else
+                  empty
+                end
+              ),
+              (
+                if ($p.maximum? and (($data[$k] | type) == "number") and ($data[$k] > $p.maximum)) then
+                  "key '\''\($k)'\'' value \($data[$k]) is above maximum \($p.maximum)"
+                else
+                  empty
+                end
+              )
+          )
+        ]
+        | .[]
+      ' 2>/dev/null
+  } || true)"
+
+  if [[ -n "${errors}" ]]; then
+    while IFS= read -r line; do
+      [[ -z "${line}" ]] && continue
+      echo "${file}: ${line}"
+      status=1
+    done <<< "${errors}"
+  fi
+}
 
 scenario_files=("${scenario_dir}"/*.yaml)
 if [[ ${#scenario_files[@]} -eq 0 ]]; then
@@ -106,6 +173,13 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+for schema in "${raw_schema}" "${aggregate_schema}"; do
+  if [[ ! -f "${schema}" ]]; then
+    echo "missing schema file: ${schema}"
+    status=1
+  fi
+done
+
 raw_files=("${raw_dir}"/*.json)
 for file in "${raw_files[@]}"; do
   if ! jq empty "${file}" >/dev/null 2>&1; then
@@ -114,12 +188,7 @@ for file in "${raw_files[@]}"; do
     continue
   fi
 
-  for key in "${required_raw_json_keys[@]}"; do
-    if ! jq -e --arg key "${key}" 'has($key)' "${file}" >/dev/null 2>&1; then
-      echo "${file}: missing required key '${key}'"
-      status=1
-    fi
-  done
+  validate_json_against_schema "${file}" "${raw_schema}"
 done
 
 aggregate_files=("${aggregate_dir}"/*.json)
@@ -130,12 +199,7 @@ for file in "${aggregate_files[@]}"; do
     continue
   fi
 
-  for key in "${required_aggregate_json_keys[@]}"; do
-    if ! jq -e --arg key "${key}" 'has($key)' "${file}" >/dev/null 2>&1; then
-      echo "${file}: missing required key '${key}'"
-      status=1
-    fi
-  done
+  validate_json_against_schema "${file}" "${aggregate_schema}"
 done
 
 if [[ ${status} -eq 0 ]]; then
