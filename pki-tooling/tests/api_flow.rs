@@ -862,6 +862,277 @@ async fn list_revocations_uses_stable_tiebreak_ordering() {
 }
 
 #[tokio::test]
+async fn list_revocations_filters_by_key_fingerprint() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    sqlx::query(
+        "INSERT INTO identity_records (
+            record_id,
+            station_id,
+            callsign,
+            current_revision_id,
+            publication_state
+         ) VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind("record-fp-1")
+    .bind("STN-FP-1")
+    .bind("N0FP1")
+    .bind("rev-fp-1")
+    .bind("published")
+    .execute(&pool)
+    .await
+    .expect("failed to insert fingerprint identity record 1");
+
+    sqlx::query(
+        "INSERT INTO identity_records (
+            record_id,
+            station_id,
+            callsign,
+            current_revision_id,
+            publication_state
+         ) VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind("record-fp-2")
+    .bind("STN-FP-2")
+    .bind("N0FP2")
+    .bind("rev-fp-2")
+    .bind("published")
+    .execute(&pool)
+    .await
+    .expect("failed to insert fingerprint identity record 2");
+
+    sqlx::query(
+        "INSERT INTO identity_revisions (
+            revision_id,
+            record_id,
+            revision_number,
+            valid_from,
+            valid_until,
+            submitted_via,
+            submission_id,
+            algorithms_json
+         ) VALUES ($1, $2, $3, $4::timestamptz, $5, $6, $7, $8)",
+    )
+    .bind("rev-fp-1")
+    .bind("record-fp-1")
+    .bind(1_i32)
+    .bind("2026-01-01T00:00:00Z")
+    .bind(Option::<String>::None)
+    .bind("api")
+    .bind(Option::<String>::None)
+    .bind(json!(["ed25519"]))
+    .execute(&pool)
+    .await
+    .expect("failed to insert revision 1");
+
+    sqlx::query(
+        "INSERT INTO identity_revisions (
+            revision_id,
+            record_id,
+            revision_number,
+            valid_from,
+            valid_until,
+            submitted_via,
+            submission_id,
+            algorithms_json
+         ) VALUES ($1, $2, $3, $4::timestamptz, $5, $6, $7, $8)",
+    )
+    .bind("rev-fp-2")
+    .bind("record-fp-2")
+    .bind(1_i32)
+    .bind("2026-01-01T00:00:00Z")
+    .bind(Option::<String>::None)
+    .bind("api")
+    .bind(Option::<String>::None)
+    .bind(json!(["ed25519"]))
+    .execute(&pool)
+    .await
+    .expect("failed to insert revision 2");
+
+    sqlx::query(
+        "INSERT INTO identity_keys (
+            revision_id,
+            key_id,
+            algorithm,
+            public_key,
+            fingerprint,
+            key_status
+         ) VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind("rev-fp-1")
+    .bind("key-fp-1")
+    .bind("ed25519")
+    .bind("pk-fp-1")
+    .bind("FP:TARGET")
+    .bind("active")
+    .execute(&pool)
+    .await
+    .expect("failed to insert key 1");
+
+    sqlx::query(
+        "INSERT INTO identity_keys (
+            revision_id,
+            key_id,
+            algorithm,
+            public_key,
+            fingerprint,
+            key_status
+         ) VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind("rev-fp-2")
+    .bind("key-fp-2")
+    .bind("ed25519")
+    .bind("pk-fp-2")
+    .bind("FP:OTHER")
+    .bind("active")
+    .execute(&pool)
+    .await
+    .expect("failed to insert key 2");
+
+    sqlx::query(
+        "INSERT INTO revocations (
+            revocation_id,
+            record_id,
+            revision_id,
+            key_id,
+            issuer_identity,
+            reason_code,
+            effective_at
+         ) VALUES
+            ($1, $4, $6, $2, $7, $8, $9::timestamptz),
+            ($3, $5, $10, $11, $7, $8, $12::timestamptz)",
+    )
+    .bind("rev-fp-match")
+    .bind("key-fp-1")
+    .bind("rev-fp-nonmatch")
+    .bind("record-fp-1")
+    .bind("record-fp-2")
+    .bind("rev-fp-1")
+    .bind("issuer-fp")
+    .bind("key_compromise")
+    .bind("2026-01-06T00:00:00Z")
+    .bind("rev-fp-2")
+    .bind("key-fp-2")
+    .bind("2026-01-07T00:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("failed to insert fingerprint revocations");
+
+    let app = build_router(AppState { db: pool.clone() });
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/revocations?fingerprint=FP:TARGET")
+        .body(Body::empty())
+        .expect("failed to build GET /revocations request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let rows: Value = serde_json::from_slice(&body).expect("invalid JSON body");
+    let array = rows.as_array().expect("revocation response must be an array");
+    assert_eq!(array.len(), 1);
+    assert_eq!(
+        array[0]
+            .get("revocation_id")
+            .and_then(Value::as_str)
+            .expect("missing revocation_id"),
+        "rev-fp-match"
+    );
+}
+
+#[tokio::test]
+async fn list_revocations_clamps_limit_boundaries() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    sqlx::query(
+        "INSERT INTO identity_records (
+            record_id,
+            station_id,
+            callsign,
+            publication_state
+         ) VALUES ($1, $2, $3, $4)",
+    )
+    .bind("record-rev-limit")
+    .bind("STN-REV-L")
+    .bind("N0REVL")
+    .bind("published")
+    .execute(&pool)
+    .await
+    .expect("failed to insert limit identity record");
+
+    sqlx::query(
+        "INSERT INTO revocations (
+            revocation_id,
+            record_id,
+            revision_id,
+            key_id,
+            issuer_identity,
+            reason_code,
+            effective_at
+         ) VALUES
+            ($1, $3, NULL, NULL, $4, $5, $6::timestamptz),
+            ($2, $3, NULL, NULL, $4, $5, $7::timestamptz)",
+    )
+    .bind("rev-limit-1")
+    .bind("rev-limit-2")
+    .bind("record-rev-limit")
+    .bind("issuer-limit")
+    .bind("operator_request")
+    .bind("2026-01-08T00:00:00Z")
+    .bind("2026-01-09T00:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("failed to insert limit revocations");
+
+    let app = build_router(AppState { db: pool.clone() });
+
+    let min_req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/revocations?record_id=record-rev-limit&limit=0")
+        .body(Body::empty())
+        .expect("failed to build min limit request");
+    let min_res = app
+        .clone()
+        .oneshot(min_req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(min_res.status(), StatusCode::OK);
+    let min_body = to_bytes(min_res.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let min_rows: Value = serde_json::from_slice(&min_body).expect("invalid JSON body");
+    assert_eq!(min_rows.as_array().expect("expected array").len(), 1);
+
+    let max_req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/revocations?record_id=record-rev-limit&limit=999")
+        .body(Body::empty())
+        .expect("failed to build max limit request");
+    let max_res = app
+        .clone()
+        .oneshot(max_req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(max_res.status(), StatusCode::OK);
+    let max_body = to_bytes(max_res.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let max_rows: Value = serde_json::from_slice(&max_body).expect("invalid JSON body");
+    assert_eq!(max_rows.as_array().expect("expected array").len(), 2);
+}
+
+#[tokio::test]
 async fn trust_bundle_endpoints_return_current_and_specific_bundle() {
     let Some(pool) = setup_pool().await else {
         return;
