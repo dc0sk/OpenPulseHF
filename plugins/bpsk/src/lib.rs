@@ -69,11 +69,7 @@ impl ModulationPlugin for BpskPlugin {
         &self.info
     }
 
-    fn modulate(
-        &self,
-        data: &[u8],
-        config: &ModulationConfig,
-    ) -> Result<Vec<f32>, ModemError> {
+    fn modulate(&self, data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
         modulate::bpsk_modulate(data, config)
     }
 
@@ -93,11 +89,11 @@ pub(crate) fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
     // Strip any leading non-digit characters ("BPSK") then parse the number.
     let digits: String = mode.chars().skip_while(|c| !c.is_ascii_digit()).collect();
     match digits.as_str() {
-        "31"  => Ok(31.25),
-        "63"  => Ok(62.5),
-        other => other.parse::<f32>().map_err(|_| {
-            ModemError::Configuration(format!("unknown baud rate in mode '{mode}'"))
-        }),
+        "31" => Ok(31.25),
+        "63" => Ok(62.5),
+        other => other
+            .parse::<f32>()
+            .map_err(|_| ModemError::Configuration(format!("unknown baud rate in mode '{mode}'"))),
     }
 }
 

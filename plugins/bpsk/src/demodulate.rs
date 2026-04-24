@@ -51,7 +51,9 @@ pub fn bpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
     let (i_syms, q_syms) = demodulate_iq(samples, n, fc, fs, offset);
 
     if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
-        return Err(ModemError::Demodulation("no data symbols after preamble".into()));
+        return Err(ModemError::Demodulation(
+            "no data symbols after preamble".into(),
+        ));
     }
 
     // Differential phase detection (handles absolute-phase ambiguity).
@@ -250,7 +252,9 @@ mod tests {
         // (1,0),(−1,0): dot=−1 → 1
         // (−1,0),(1,0): dot=−1 → 1
         // all 1s
-        let iq: Vec<(f32, f32)> = (0..9).map(|i| (if i % 2 == 0 { 1.0 } else { -1.0 }, 0.0)).collect();
+        let iq: Vec<(f32, f32)> = (0..9)
+            .map(|i| (if i % 2 == 0 { 1.0 } else { -1.0 }, 0.0))
+            .collect();
         let bits = differential_decode(&iq);
         assert!(bits.iter().all(|&b| b));
     }

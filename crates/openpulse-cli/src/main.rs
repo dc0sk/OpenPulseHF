@@ -97,9 +97,7 @@ fn main() -> Result<()> {
         "default" | "cpal" => Box::new(CpalBackend::new()),
         #[cfg(not(feature = "cpal-backend"))]
         "default" => {
-            eprintln!(
-                "note: cpal backend not compiled in; falling back to loopback"
-            );
+            eprintln!("note: cpal backend not compiled in; falling back to loopback");
             Box::new(LoopbackBackend::new())
         }
         name => anyhow::bail!("unknown backend '{name}'"),
@@ -136,7 +134,12 @@ fn main() -> Result<()> {
 
         Commands::Modes => {
             for info in engine.plugins().list() {
-                println!("{}: {} ({})", info.name, info.description, info.supported_modes.join(", "));
+                println!(
+                    "{}: {} ({})",
+                    info.name,
+                    info.description,
+                    info.supported_modes.join(", ")
+                );
             }
         }
     }
@@ -165,7 +168,11 @@ fn list_devices(backend: &str) -> Result<()> {
     println!("{:<40} {:<8} {:<8} Sample rates", "Name", "Input", "Output");
     println!("{}", "-".repeat(80));
     for d in devices {
-        let rates: Vec<String> = d.supported_sample_rates.iter().map(|r| r.to_string()).collect();
+        let rates: Vec<String> = d
+            .supported_sample_rates
+            .iter()
+            .map(|r| r.to_string())
+            .collect();
         println!(
             "{:<40} {:<8} {:<8} {}",
             d.name,

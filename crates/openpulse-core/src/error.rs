@@ -25,7 +25,9 @@ pub enum ModemError {
 /// Errors produced by the plugin layer.
 #[derive(Debug, Error)]
 pub enum PluginError {
-    #[error("plugin '{plugin}' requires trait version {required}, but framework provides {current}")]
+    #[error(
+        "plugin '{plugin}' requires trait version {required}, but framework provides {current}"
+    )]
     IncompatibleTraitVersion {
         plugin: String,
         required: String,

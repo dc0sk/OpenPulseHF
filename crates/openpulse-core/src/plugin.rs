@@ -63,18 +63,11 @@ pub trait ModulationPlugin: Send + Sync {
 
     /// Encode `data` bytes into a vector of normalised audio samples (`-1.0 …
     /// +1.0`).
-    fn modulate(
-        &self,
-        data: &[u8],
-        config: &ModulationConfig,
-    ) -> Result<Vec<f32>, ModemError>;
+    fn modulate(&self, data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, ModemError>;
 
     /// Decode audio samples back to the original bytes.
-    fn demodulate(
-        &self,
-        samples: &[f32],
-        config: &ModulationConfig,
-    ) -> Result<Vec<u8>, ModemError>;
+    fn demodulate(&self, samples: &[f32], config: &ModulationConfig)
+        -> Result<Vec<u8>, ModemError>;
 
     /// Return `true` when this plugin can handle `mode` (case-insensitive).
     fn supports_mode(&self, mode: &str) -> bool {
@@ -124,16 +117,12 @@ impl PluginRegistry {
             ));
         }
 
-        let plugin_major = plugin_parts[0]
-            .parse::<u32>()
-            .map_err(|_| PluginError::InvalidTraitVersionFormat(
-                info.trait_version_required.clone(),
-            ))?;
-        let plugin_minor = plugin_parts[1]
-            .parse::<u32>()
-            .map_err(|_| PluginError::InvalidTraitVersionFormat(
-                info.trait_version_required.clone(),
-            ))?;
+        let plugin_major = plugin_parts[0].parse::<u32>().map_err(|_| {
+            PluginError::InvalidTraitVersionFormat(info.trait_version_required.clone())
+        })?;
+        let plugin_minor = plugin_parts[1].parse::<u32>().map_err(|_| {
+            PluginError::InvalidTraitVersionFormat(info.trait_version_required.clone())
+        })?;
 
         let framework_parts: Vec<&str> = PLUGIN_TRAIT_VERSION.split('.').collect();
         let framework_major = framework_parts[0].parse::<u32>().unwrap();
