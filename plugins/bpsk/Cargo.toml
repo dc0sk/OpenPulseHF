@@ -9,3 +9,8 @@ repository.workspace = true
 
 [dependencies]
 openpulse-core = { workspace = true }
+
+[dev-dependencies]
+bytemuck = { version = "1.16", features = ["derive"] }
+pollster = "0.4"
+wgpu = "0.20"
