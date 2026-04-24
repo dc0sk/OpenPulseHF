@@ -200,3 +200,146 @@ async fn moderation_decision_updates_submission_and_records_events() {
     .expect("failed to query audit_events");
     assert_eq!(audit_count, 1);
 }
+
+#[tokio::test]
+async fn create_submission_rejects_empty_payload_type() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    let app = build_router(AppState { db: pool.clone() });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/submissions")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "payload_type": "   ",
+                "payload": { "station_id": "N0FAIL" },
+                "detached_signature": null
+            })
+            .to_string(),
+        ))
+        .expect("failed to build POST /submissions request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn moderation_rejects_invalid_decision_value() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    let app = build_router(AppState { db: pool.clone() });
+
+    let create_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/submissions")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "payload_type": "identity_bundle",
+                "payload": { "station_id": "K2BAD" },
+                "detached_signature": null
+            })
+            .to_string(),
+        ))
+        .expect("failed to build POST /submissions request");
+
+    let create_res = app
+        .clone()
+        .oneshot(create_req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(create_res.status(), StatusCode::CREATED);
+
+    let create_body = to_bytes(create_res.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let created: Value = serde_json::from_slice(&create_body).expect("invalid JSON body");
+    let submission_id = created
+        .get("submission_id")
+        .and_then(Value::as_str)
+        .expect("missing submission_id")
+        .to_string();
+
+    let moderate_req = Request::builder()
+        .method("POST")
+        .uri(format!("/api/v1/moderation/{submission_id}/decision"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "decision": "maybe",
+                "reason_code": "invalid",
+                "reason_text": "invalid decision"
+            })
+            .to_string(),
+        ))
+        .expect("failed to build moderation request");
+
+    let moderate_res = app
+        .clone()
+        .oneshot(moderate_req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(moderate_res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn moderation_returns_not_found_for_missing_submission() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    let app = build_router(AppState { db: pool.clone() });
+
+    let moderate_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/moderation/non-existent-submission/decision")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "decision": "accept",
+                "reason_code": "manual_review_ok",
+                "reason_text": "attempting to moderate missing submission"
+            })
+            .to_string(),
+        ))
+        .expect("failed to build moderation request");
+
+    let moderate_res = app
+        .clone()
+        .oneshot(moderate_req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(moderate_res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn get_submission_returns_not_found_for_missing_submission() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    let app = build_router(AppState { db: pool.clone() });
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/submissions/non-existent-submission")
+        .body(Body::empty())
+        .expect("failed to build GET /submission request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
