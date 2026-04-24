@@ -2102,3 +2102,213 @@ async fn publish_trust_bundle_rejects_invalid_rfc3339_timestamp() {
         "should mention RFC3339 in error"
     );
 }
+
+#[tokio::test]
+async fn promote_trust_bundle_marks_bundle_current() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    sqlx::query(
+        "INSERT INTO trust_bundles (
+            bundle_id,
+            schema_version,
+            generated_at,
+            issuer_instance_id,
+            signing_algorithms,
+            records,
+            bundle_signature,
+            is_current
+         ) VALUES
+            ($1, $3, $4::timestamptz, $5, $6, $7, $8, $2),
+            ($9, $3, $10::timestamptz, $5, $6, $7, $11, $12)",
+    )
+    .bind("bundle-promote-target")
+    .bind(false)
+    .bind("1.0")
+    .bind("2026-04-01T00:00:00Z")
+    .bind("issuer-promote")
+    .bind(json!(["ed25519"]))
+    .bind(json!({"records": []}))
+    .bind("sig-target")
+    .bind("bundle-promote-current")
+    .bind("2026-04-02T00:00:00Z")
+    .bind("sig-current")
+    .bind(true)
+    .execute(&pool)
+    .await
+    .expect("failed to seed trust bundles");
+
+    let app = build_router(AppState { db: pool.clone() });
+    let req = Request::builder()
+        .method("PATCH")
+        .uri("/api/v1/trust-bundles/bundle-promote-target/promote")
+        .header("content-type", "application/json")
+        .header("x-request-id", "req-promote-001")
+        .body(Body::from(json!({ "reason": "rollout" }).to_string()))
+        .expect("failed to build promote request");
+
+    let response = app.clone().oneshot(req).await.expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let result: Value = serde_json::from_slice(&body).expect("invalid JSON body");
+    assert_eq!(
+        result.get("bundle_id").and_then(Value::as_str),
+        Some("bundle-promote-target")
+    );
+    assert_eq!(result.get("is_current").and_then(Value::as_bool), Some(true));
+
+    let current_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM trust_bundles WHERE is_current = true")
+        .fetch_one(&pool)
+        .await
+        .expect("failed to count current bundles");
+    assert_eq!(current_count, 1);
+}
+
+#[tokio::test]
+async fn promote_trust_bundle_returns_not_found_for_missing_bundle() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    let app = build_router(AppState { db: pool.clone() });
+    let req = Request::builder()
+        .method("PATCH")
+        .uri("/api/v1/trust-bundles/missing-bundle/promote")
+        .header("content-type", "application/json")
+        .header("x-request-id", "req-promote-404")
+        .body(Body::from(json!({ "reason": "none" }).to_string()))
+        .expect("failed to build promote request");
+
+    let response = app.clone().oneshot(req).await.expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn create_revocation_replays_same_response_for_same_request_id() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    sqlx::query(
+        "INSERT INTO identity_records (record_id, station_id, callsign, current_revision_id, publication_state)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind("record-dedup-rev")
+    .bind("STN-DEDUP")
+    .bind("N0DEDUP")
+    .bind("rev-dedup-1")
+    .bind("published")
+    .execute(&pool)
+    .await
+    .expect("failed to seed identity record");
+
+    let app = build_router(AppState { db: pool.clone() });
+    let payload = json!({
+        "record_id": "record-dedup-rev",
+        "revision_id": "rev-dedup-1",
+        "key_id": "key-dedup-1",
+        "issuer_identity": "issuer-dedup",
+        "reason_code": "key_compromise",
+        "effective_at": "2026-04-03T00:00:00Z"
+    })
+    .to_string();
+
+    let req1 = Request::builder()
+        .method("POST")
+        .uri("/api/v1/revocations")
+        .header("content-type", "application/json")
+        .header("x-request-id", "req-dedup-rev-001")
+        .body(Body::from(payload.clone()))
+        .expect("failed to build first request");
+    let res1 = app.clone().oneshot(req1).await.expect("first request should succeed");
+    assert_eq!(res1.status(), StatusCode::CREATED);
+    let body1 = to_bytes(res1.into_body(), usize::MAX)
+        .await
+        .expect("failed reading first response body");
+    let json1: Value = serde_json::from_slice(&body1).expect("invalid first JSON");
+
+    let req2 = Request::builder()
+        .method("POST")
+        .uri("/api/v1/revocations")
+        .header("content-type", "application/json")
+        .header("x-request-id", "req-dedup-rev-001")
+        .body(Body::from(payload))
+        .expect("failed to build second request");
+    let res2 = app.clone().oneshot(req2).await.expect("second request should succeed");
+    assert_eq!(res2.status(), StatusCode::CREATED);
+    let body2 = to_bytes(res2.into_body(), usize::MAX)
+        .await
+        .expect("failed reading second response body");
+    let json2: Value = serde_json::from_slice(&body2).expect("invalid second JSON");
+
+    assert_eq!(json1, json2, "dedup replay should return identical response body");
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM revocations WHERE record_id = $1")
+        .bind("record-dedup-rev")
+        .fetch_one(&pool)
+        .await
+        .expect("failed counting revocations");
+    assert_eq!(count, 1, "dedup should prevent duplicate insert");
+}
+
+#[tokio::test]
+async fn publish_trust_bundle_replays_same_response_for_same_request_id() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    let app = build_router(AppState { db: pool.clone() });
+    let payload = json!({
+        "schema_version": "1.0",
+        "generated_at": "2026-04-03T01:00:00Z",
+        "issuer_instance_id": "issuer-dedup-bundle",
+        "signing_algorithms": ["ed25519"],
+        "records": {"stub": "data"},
+        "bundle_signature": "sig-dedup"
+    })
+    .to_string();
+
+    let req1 = Request::builder()
+        .method("POST")
+        .uri("/api/v1/trust-bundles")
+        .header("content-type", "application/json")
+        .header("x-request-id", "req-dedup-bundle-001")
+        .body(Body::from(payload.clone()))
+        .expect("failed to build first request");
+    let res1 = app.clone().oneshot(req1).await.expect("first request should succeed");
+    assert_eq!(res1.status(), StatusCode::CREATED);
+    let body1 = to_bytes(res1.into_body(), usize::MAX)
+        .await
+        .expect("failed reading first response body");
+    let json1: Value = serde_json::from_slice(&body1).expect("invalid first JSON");
+
+    let req2 = Request::builder()
+        .method("POST")
+        .uri("/api/v1/trust-bundles")
+        .header("content-type", "application/json")
+        .header("x-request-id", "req-dedup-bundle-001")
+        .body(Body::from(payload))
+        .expect("failed to build second request");
+    let res2 = app.clone().oneshot(req2).await.expect("second request should succeed");
+    assert_eq!(res2.status(), StatusCode::CREATED);
+    let body2 = to_bytes(res2.into_body(), usize::MAX)
+        .await
+        .expect("failed reading second response body");
+    let json2: Value = serde_json::from_slice(&body2).expect("invalid second JSON");
+
+    assert_eq!(json1, json2, "dedup replay should return identical response body");
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM trust_bundles WHERE issuer_instance_id = $1 AND bundle_signature = $2",
+    )
+    .bind("issuer-dedup-bundle")
+    .bind("sig-dedup")
+    .fetch_one(&pool)
+    .await
+    .expect("failed counting trust bundles");
+    assert_eq!(count, 1, "dedup should prevent duplicate bundle insert");
+}

@@ -1,6 +1,6 @@
 pub mod api;
 
-use axum::routing::{get, post};
+use axum::routing::{get, post, patch};
 use axum::Router;
 
 #[derive(Clone)]
@@ -31,6 +31,10 @@ pub fn build_router(state: AppState) -> Router {
             get(api::handlers::get_trust_bundle),
         )
         .route("/api/v1/trust-bundles", post(api::handlers::publish_trust_bundle))
+        .route(
+            "/api/v1/trust-bundles/:bundle_id/promote",
+            patch(api::handlers::promote_trust_bundle),
+        )
         .route("/api/v1/submissions", post(api::handlers::create_submission))
         .route(
             "/api/v1/submissions/:submission_id",
