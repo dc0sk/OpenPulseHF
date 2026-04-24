@@ -2,6 +2,8 @@ scenario_id: VHF-FM-BURST-02
 bandwidth_class_hz: 12500
 family: vhf_fm
 profile: burst_noise
+seed_policy: fixed
+random_seed: 125002
 snr_db_mean: 16.0
 snr_db_jitter: 2.5
 fading_model: minimal

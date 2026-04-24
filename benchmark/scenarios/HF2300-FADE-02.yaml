@@ -2,6 +2,8 @@ scenario_id: HF2300-FADE-02
 bandwidth_class_hz: 2300
 family: hf
 profile: fading
+seed_policy: fixed
+random_seed: 230002
 snr_db_mean: 9.0
 snr_db_jitter: 3.5
 fading_model: moderate_multipath
