@@ -6,6 +6,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::{FromRow, Postgres, QueryBuilder};
 use uuid::Uuid;
 
@@ -196,13 +197,30 @@ pub async fn create_submission(
         .detached_signature
         .as_ref()
         .map(|_| format!("inline://submission/{submission_id}/detached-signature"));
+    let payload_type = req.payload_type.clone();
+    let has_detached_signature = req.detached_signature.is_some();
+    let payload_kind = json_kind(&req.payload);
 
     let validation_summary = serde_json::json!({
         "status": "pending_validation",
-        "payload_type": req.payload_type,
-        "payload_kind": json_kind(&req.payload),
-        "has_detached_signature": req.detached_signature.is_some()
+        "payload_type": payload_type,
+        "payload_kind": payload_kind,
+        "has_detached_signature": has_detached_signature
     });
+
+    let mut tx = match state.db.begin().await {
+        Ok(tx) => tx,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiMessage {
+                    status: "db_error",
+                    detail: format!("failed to begin transaction: {err}"),
+                }),
+            )
+                .into_response()
+        }
+    };
 
     let insert = sqlx::query(
         "INSERT INTO submissions (
@@ -220,18 +238,73 @@ pub async fn create_submission(
     .bind(&artifact_uri)
     .bind(detached_signature_uri)
     .bind(validation_summary)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await;
 
     match insert {
-        Ok(_) => (
-            StatusCode::CREATED,
-            Json(SubmissionResponse {
-                submission_id,
-                submission_state: "pending",
-            }),
-        )
-            .into_response(),
+        Ok(_) => {
+            let audit_event_id = Uuid::new_v4().to_string();
+            let payload = serde_json::json!({
+                "submission_id": &submission_id,
+                "payload_type": req.payload_type,
+                "has_detached_signature": req.detached_signature.is_some(),
+            });
+            let payload_hash = payload_sha256(&payload);
+
+            let insert_audit = sqlx::query(
+                "INSERT INTO audit_events (
+                    event_id,
+                    event_type,
+                    entity_type,
+                    entity_id,
+                    actor_identity,
+                    request_id,
+                    event_payload_hash,
+                    event_payload_json
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            )
+            .bind(&audit_event_id)
+            .bind("submission.created")
+            .bind("submission")
+            .bind(&submission_id)
+            .bind("api:anonymous")
+            .bind(Option::<String>::None)
+            .bind(payload_hash)
+            .bind(payload)
+            .execute(&mut *tx)
+            .await;
+
+            if let Err(err) = insert_audit {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiMessage {
+                        status: "db_error",
+                        detail: format!("failed to insert audit event: {err}"),
+                    }),
+                )
+                    .into_response();
+            }
+
+            if let Err(err) = tx.commit().await {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiMessage {
+                        status: "db_error",
+                        detail: format!("failed to commit transaction: {err}"),
+                    }),
+                )
+                    .into_response();
+            }
+
+            (
+                StatusCode::CREATED,
+                Json(SubmissionResponse {
+                    submission_id,
+                    submission_state: "pending",
+                }),
+            )
+                .into_response()
+        }
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
@@ -444,6 +517,48 @@ pub async fn post_moderation_decision(
             .into_response();
     }
 
+    let audit_event_id = Uuid::new_v4().to_string();
+    let audit_payload = serde_json::json!({
+        "submission_id": submission_id,
+        "decision": req.decision,
+        "reason_code": req.reason_code,
+    });
+    let audit_hash = payload_sha256(&audit_payload);
+
+    let insert_audit = sqlx::query(
+        "INSERT INTO audit_events (
+            event_id,
+            event_type,
+            entity_type,
+            entity_id,
+            actor_identity,
+            request_id,
+            event_payload_hash,
+            event_payload_json
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(audit_event_id)
+    .bind("submission.moderated")
+    .bind("submission")
+    .bind(&submission_id)
+    .bind("api:moderator")
+    .bind(Option::<String>::None)
+    .bind(audit_hash)
+    .bind(audit_payload)
+    .execute(&mut *tx)
+    .await;
+
+    if let Err(err) = insert_audit {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiMessage {
+                status: "db_error",
+                detail: format!("failed to insert audit event: {err}"),
+            }),
+        )
+            .into_response();
+    }
+
     if let Err(err) = tx.commit().await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -485,4 +600,10 @@ fn json_kind(value: &serde_json::Value) -> &'static str {
         serde_json::Value::Array(_) => "array",
         serde_json::Value::Object(_) => "object",
     }
+}
+
+fn payload_sha256(payload: &serde_json::Value) -> String {
+    let bytes = payload.to_string().into_bytes();
+    let digest = Sha256::digest(bytes);
+    format!("{digest:x}")
 }
