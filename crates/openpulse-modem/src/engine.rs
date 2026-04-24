@@ -7,6 +7,7 @@ use openpulse_core::error::{ModemError, PluginError};
 use openpulse_core::frame::Frame;
 use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
 use openpulse_core::plugin::{ModulationConfig, PluginRegistry};
+use openpulse_core::trust::PolicyProfile;
 
 /// The modem engine.
 ///
@@ -26,6 +27,7 @@ pub struct ModemEngine {
     plugins: PluginRegistry,
     sequence: u16,
     hpx: HpxSession,
+    trust_policy_profile: PolicyProfile,
 }
 
 impl ModemEngine {
@@ -36,7 +38,18 @@ impl ModemEngine {
             plugins: PluginRegistry::new(),
             sequence: 0,
             hpx: HpxSession::new(),
+            trust_policy_profile: PolicyProfile::Balanced,
         }
+    }
+
+    /// Returns the active trust policy profile used as session default.
+    pub fn trust_policy_profile(&self) -> PolicyProfile {
+        self.trust_policy_profile
+    }
+
+    /// Sets the active trust policy profile used as session default.
+    pub fn set_trust_policy_profile(&mut self, profile: PolicyProfile) {
+        self.trust_policy_profile = profile;
     }
 
     /// Returns the current HPX state for this engine session.
@@ -193,5 +206,18 @@ mod tests {
     fn unknown_mode_returns_error() {
         let mut engine = make_engine();
         assert!(engine.transmit(b"x", "UNKNOWN", None).is_err());
+    }
+
+    #[test]
+    fn default_trust_policy_is_balanced() {
+        let engine = make_engine();
+        assert_eq!(engine.trust_policy_profile(), PolicyProfile::Balanced);
+    }
+
+    #[test]
+    fn trust_policy_profile_can_be_updated() {
+        let mut engine = make_engine();
+        engine.set_trust_policy_profile(PolicyProfile::Strict);
+        assert_eq!(engine.trust_policy_profile(), PolicyProfile::Strict);
     }
 }
