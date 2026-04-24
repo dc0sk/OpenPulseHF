@@ -60,6 +60,13 @@ async fn create_submission_and_read_back_records_audit_event() {
         .await
         .expect("failed to read response body");
     let created: Value = serde_json::from_slice(&body).expect("invalid JSON body");
+    assert_eq!(
+        created
+            .get("submission_state")
+            .and_then(Value::as_str)
+            .expect("missing submission_state"),
+        "pending"
+    );
     let submission_id = created
         .get("submission_id")
         .and_then(Value::as_str)
@@ -78,6 +85,25 @@ async fn create_submission_and_read_back_records_audit_event() {
         .await
         .expect("request should succeed");
     assert_eq!(get_res.status(), StatusCode::OK);
+
+    let get_body = to_bytes(get_res.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let submission: Value = serde_json::from_slice(&get_body).expect("invalid JSON body");
+    assert_eq!(
+        submission
+            .get("submission_id")
+            .and_then(Value::as_str)
+            .expect("missing submission_id"),
+        submission_id
+    );
+    assert_eq!(
+        submission
+            .get("submission_state")
+            .and_then(Value::as_str)
+            .expect("missing submission_state"),
+        "pending"
+    );
 
     let row_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM audit_events WHERE entity_type = 'submission' AND entity_id = $1 AND event_type = 'submission.created'",
@@ -123,6 +149,13 @@ async fn moderation_decision_updates_submission_and_records_events() {
         .await
         .expect("failed to read response body");
     let created: Value = serde_json::from_slice(&create_body).expect("invalid JSON body");
+    assert_eq!(
+        created
+            .get("submission_state")
+            .and_then(Value::as_str)
+            .expect("missing submission_state"),
+        "pending"
+    );
     let submission_id = created
         .get("submission_id")
         .and_then(Value::as_str)
@@ -149,6 +182,33 @@ async fn moderation_decision_updates_submission_and_records_events() {
         .await
         .expect("request should succeed");
     assert_eq!(moderate_res.status(), StatusCode::OK);
+
+    let moderate_body = to_bytes(moderate_res.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let moderated: Value = serde_json::from_slice(&moderate_body).expect("invalid JSON body");
+    assert_eq!(
+        moderated
+            .get("submission_id")
+            .and_then(Value::as_str)
+            .expect("missing submission_id"),
+        submission_id
+    );
+    assert_eq!(
+        moderated
+            .get("submission_state")
+            .and_then(Value::as_str)
+            .expect("missing submission_state"),
+        "accepted"
+    );
+    assert!(
+        moderated
+            .get("moderation_event_id")
+            .and_then(Value::as_str)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false),
+        "missing or empty moderation_event_id"
+    );
 
     let get_req = Request::builder()
         .method("GET")
