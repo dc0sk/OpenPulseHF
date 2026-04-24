@@ -2,12 +2,28 @@ mod api;
 
 use axum::routing::{get, post};
 use axum::Router;
+use sqlx::postgres::PgPoolOptions;
+use std::env;
+
+#[derive(Clone)]
+pub struct AppState {
+    pub db: sqlx::PgPool,
+}
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let db = PgPoolOptions::new()
+        .max_connections(10)
+        .connect(&database_url)
+        .await
+        .expect("failed to connect to database");
+
+    let state = AppState { db };
 
     let app = Router::new()
         .route("/healthz", get(api::handlers::healthz))
@@ -34,7 +50,8 @@ async fn main() {
         .route(
             "/api/v1/moderation/:submission_id/decision",
             post(api::handlers::post_moderation_decision),
-        );
+        )
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:8080")
         .await
