@@ -7,7 +7,6 @@ last_updated: 2026-04-23
 
 # Backlog
 
-- Add release checklist template for version bumps.
 - Define HPX session state machine as a standalone spec.
 - Add benchmark fixtures for HF fading and burst-noise channels.
 - Add benchmark scenario files and seed policy for reproducible runs.
