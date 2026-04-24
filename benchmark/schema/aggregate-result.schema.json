@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OpenPulse Benchmark Aggregate Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "scenario_id",
+    "mode_under_test",
+    "run_count",
+    "success_rate",
+    "median_goodput_bps",
+    "p95_completion_time_ms",
+    "mean_arq_efficiency",
+    "median_spectral_efficiency_bphz",
+    "mean_time_to_first_payload_ms",
+    "recovery_success_rate"
+  ],
+  "properties": {
+    "scenario_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mode_under_test": {
+      "type": "string",
+      "minLength": 1
+    },
+    "run_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "success_rate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "median_goodput_bps": {
+      "type": "number",
+      "minimum": 0
+    },
+    "p95_completion_time_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "mean_arq_efficiency": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "median_spectral_efficiency_bphz": {
+      "type": "number",
+      "minimum": 0
+    },
+    "mean_time_to_first_payload_ms": {
+      "type": "number",
+      "minimum": 0
+    },
+    "recovery_success_rate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    }
+  }
+}
