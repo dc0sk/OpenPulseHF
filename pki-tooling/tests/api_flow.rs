@@ -229,6 +229,25 @@ async fn create_submission_rejects_empty_payload_type() {
         .await
         .expect("request should succeed");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let error: Value = serde_json::from_slice(&body).expect("invalid JSON error body");
+    assert_eq!(
+        error
+            .get("status")
+            .and_then(Value::as_str)
+            .expect("missing status"),
+        "validation_error"
+    );
+    assert_eq!(
+        error
+            .get("detail")
+            .and_then(Value::as_str)
+            .expect("missing detail"),
+        "payload_type must not be empty"
+    );
 }
 
 #[tokio::test]
@@ -290,6 +309,25 @@ async fn moderation_rejects_invalid_decision_value() {
         .await
         .expect("request should succeed");
     assert_eq!(moderate_res.status(), StatusCode::BAD_REQUEST);
+
+    let body = to_bytes(moderate_res.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let error: Value = serde_json::from_slice(&body).expect("invalid JSON error body");
+    assert_eq!(
+        error
+            .get("status")
+            .and_then(Value::as_str)
+            .expect("missing status"),
+        "validation_error"
+    );
+    assert_eq!(
+        error
+            .get("detail")
+            .and_then(Value::as_str)
+            .expect("missing detail"),
+        "decision must be accept, reject, or quarantine"
+    );
 }
 
 #[tokio::test]
@@ -320,6 +358,25 @@ async fn moderation_returns_not_found_for_missing_submission() {
         .await
         .expect("request should succeed");
     assert_eq!(moderate_res.status(), StatusCode::NOT_FOUND);
+
+    let body = to_bytes(moderate_res.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let error: Value = serde_json::from_slice(&body).expect("invalid JSON error body");
+    assert_eq!(
+        error
+            .get("status")
+            .and_then(Value::as_str)
+            .expect("missing status"),
+        "not_found"
+    );
+    assert_eq!(
+        error
+            .get("detail")
+            .and_then(Value::as_str)
+            .expect("missing detail"),
+        "submission not found"
+    );
 }
 
 #[tokio::test]
@@ -342,4 +399,23 @@ async fn get_submission_returns_not_found_for_missing_submission() {
         .await
         .expect("request should succeed");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let error: Value = serde_json::from_slice(&body).expect("invalid JSON error body");
+    assert_eq!(
+        error
+            .get("status")
+            .and_then(Value::as_str)
+            .expect("missing status"),
+        "not_found"
+    );
+    assert_eq!(
+        error
+            .get("detail")
+            .and_then(Value::as_str)
+            .expect("missing detail"),
+        "submission not found"
+    );
 }
