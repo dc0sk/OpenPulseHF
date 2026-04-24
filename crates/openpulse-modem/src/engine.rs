@@ -5,6 +5,7 @@ use tracing::{debug, info};
 use openpulse_core::audio::{AudioBackend, AudioConfig};
 use openpulse_core::error::{ModemError, PluginError};
 use openpulse_core::frame::Frame;
+use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
 use openpulse_core::plugin::{ModulationConfig, PluginRegistry};
 
 /// The modem engine.
@@ -24,6 +25,7 @@ pub struct ModemEngine {
     audio: Box<dyn AudioBackend>,
     plugins: PluginRegistry,
     sequence: u16,
+    hpx: HpxSession,
 }
 
 impl ModemEngine {
@@ -33,7 +35,24 @@ impl ModemEngine {
             audio,
             plugins: PluginRegistry::new(),
             sequence: 0,
+            hpx: HpxSession::new(),
         }
+    }
+
+    /// Returns the current HPX state for this engine session.
+    pub fn hpx_state(&self) -> HpxState {
+        self.hpx.state()
+    }
+
+    /// Apply an HPX state-machine event and return the emitted transition event.
+    pub fn hpx_apply_event(
+        &mut self,
+        event: HpxEvent,
+        timestamp_ms: u64,
+    ) -> Result<HpxTransition, ModemError> {
+        self.hpx
+            .apply_event(event, timestamp_ms)
+            .map_err(|e| ModemError::Configuration(e.to_string()))
     }
 
     /// Register a modulation plugin.
