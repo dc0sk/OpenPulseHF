@@ -18,6 +18,7 @@ Canonical documentation lives in the files listed below.
 - docs/benchmark-harness.md: benchmark scenarios, result schema, and CI gate rules for HPX
 - docs/peer-caching-relay.md: peer discovery cache, query model, and multi-hop relay behavior
 - docs/peer-query-relay-wire.md: wire-level schema for peer query and relay envelopes
+- docs/pki-tooling-api.md: API surface and export schema for separate PKI tooling
 - docs/pki-tooling-architecture.md: architecture for separate PKI publication, lookup, and trust tooling
 - docs/pki-tooling-requirements.md: requirements for separate PKI publication, lookup, and trust tooling
 - docs/requirements.md: functional and non-functional requirements
