@@ -1133,6 +1133,211 @@ async fn list_revocations_clamps_limit_boundaries() {
 }
 
 #[tokio::test]
+async fn list_revocations_defaults_limit_to_100() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    sqlx::query(
+        "INSERT INTO identity_records (
+            record_id,
+            station_id,
+            callsign,
+            publication_state
+         ) VALUES ($1, $2, $3, $4)",
+    )
+    .bind("record-rev-default")
+    .bind("STN-REV-D")
+    .bind("N0REVD")
+    .bind("published")
+    .execute(&pool)
+    .await
+    .expect("failed to insert default-limit identity record");
+
+    sqlx::query(
+        "INSERT INTO revocations (
+            revocation_id,
+            record_id,
+            revision_id,
+            key_id,
+            issuer_identity,
+            reason_code,
+            effective_at
+        )
+        SELECT
+            'rev-default-' || gs::text,
+            $1,
+            NULL,
+            NULL,
+            'issuer-default',
+            'operator_request',
+            TIMESTAMPTZ '2026-02-01T00:00:00Z' + (gs || ' minutes')::interval
+        FROM generate_series(1, 101) AS gs",
+    )
+    .bind("record-rev-default")
+    .execute(&pool)
+    .await
+    .expect("failed to insert default-limit revocations");
+
+    let app = build_router(AppState { db: pool.clone() });
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/revocations?record_id=record-rev-default")
+        .body(Body::empty())
+        .expect("failed to build default-limit request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let rows: Value = serde_json::from_slice(&body).expect("invalid JSON body");
+    let array = rows.as_array().expect("expected array");
+    assert_eq!(array.len(), 100);
+    assert_eq!(
+        array[0]
+            .get("revocation_id")
+            .and_then(Value::as_str)
+            .expect("missing revocation_id"),
+        "rev-default-101"
+    );
+}
+
+#[tokio::test]
+async fn list_revocations_combines_fingerprint_issuer_and_time_filters() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    sqlx::query(
+        "INSERT INTO identity_records (
+            record_id,
+            station_id,
+            callsign,
+            current_revision_id,
+            publication_state
+         ) VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind("record-rev-combined")
+    .bind("STN-REV-C")
+    .bind("N0REVC")
+    .bind("rev-combined-1")
+    .bind("published")
+    .execute(&pool)
+    .await
+    .expect("failed to insert combined-filter identity record");
+
+    sqlx::query(
+        "INSERT INTO identity_revisions (
+            revision_id,
+            record_id,
+            revision_number,
+            valid_from,
+            valid_until,
+            submitted_via,
+            submission_id,
+            algorithms_json
+         ) VALUES ($1, $2, $3, $4::timestamptz, $5, $6, $7, $8)",
+    )
+    .bind("rev-combined-1")
+    .bind("record-rev-combined")
+    .bind(1_i32)
+    .bind("2026-03-01T00:00:00Z")
+    .bind(Option::<String>::None)
+    .bind("api")
+    .bind(Option::<String>::None)
+    .bind(json!(["ed25519"]))
+    .execute(&pool)
+    .await
+    .expect("failed to insert combined-filter revision");
+
+    sqlx::query(
+        "INSERT INTO identity_keys (
+            revision_id,
+            key_id,
+            algorithm,
+            public_key,
+            fingerprint,
+            key_status
+         ) VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind("rev-combined-1")
+    .bind("key-combined-1")
+    .bind("ed25519")
+    .bind("pk-combined-1")
+    .bind("FP:COMBINED")
+    .bind("active")
+    .execute(&pool)
+    .await
+    .expect("failed to insert combined-filter key");
+
+    sqlx::query(
+        "INSERT INTO revocations (
+            revocation_id,
+            record_id,
+            revision_id,
+            key_id,
+            issuer_identity,
+            reason_code,
+            effective_at
+         ) VALUES
+            ($1, $4, $5, $2, $6, $7, $8::timestamptz),
+            ($3, $4, $5, $2, $9, $7, $10::timestamptz),
+            ($11, $4, $5, $2, $6, $7, $12::timestamptz)",
+    )
+    .bind("rev-combined-match")
+    .bind("key-combined-1")
+    .bind("rev-combined-wrong-issuer")
+    .bind("record-rev-combined")
+    .bind("rev-combined-1")
+    .bind("issuer-combined")
+    .bind("key_compromise")
+    .bind("2026-03-02T00:00:00Z")
+    .bind("issuer-other")
+    .bind("2026-03-02T12:00:00Z")
+    .bind("rev-combined-outside-window")
+    .bind("2026-03-05T00:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("failed to insert combined-filter revocations");
+
+    let app = build_router(AppState { db: pool.clone() });
+    let req = Request::builder()
+        .method("GET")
+        .uri(
+            "/api/v1/revocations?fingerprint=FP:COMBINED&issuer_id=issuer-combined&effective_after=2026-03-01T00:00:00Z&effective_before=2026-03-03T00:00:00Z",
+        )
+        .body(Body::empty())
+        .expect("failed to build combined-filter request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let rows: Value = serde_json::from_slice(&body).expect("invalid JSON body");
+    let array = rows.as_array().expect("expected array");
+    assert_eq!(array.len(), 1);
+    assert_eq!(
+        array[0]
+            .get("revocation_id")
+            .and_then(Value::as_str)
+            .expect("missing revocation_id"),
+        "rev-combined-match"
+    );
+}
+
+#[tokio::test]
 async fn trust_bundle_endpoints_return_current_and_specific_bundle() {
     let Some(pool) = setup_pool().await else {
         return;
