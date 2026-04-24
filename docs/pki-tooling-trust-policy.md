@@ -203,7 +203,7 @@ Otherwise, automation must route to quarantine.
 
 ## Connection trust levels and signing modes
 
-> Status: design discussion — not yet finalised. Further review required before implementation.
+Status: finalized policy baseline for implementation.
 
 ### Motivation
 
@@ -291,13 +291,53 @@ Rationale for the air-delivery penalty: over-air certificate delivery cannot rul
 
 Paranoid mode is always permitted regardless of policy profile when explicitly configured by the operator.
 
-### Open sub-questions
+### Finalized implementation decisions
 
-- Whether connection trust level should be recorded in the session audit trail.
-- Whether `reduced`-trust sessions should be allowed to submit identity records or only consume them.
-- Exact key derivation scheme for the symmetric session key (X25519 ECDH + HKDF is the leading candidate).
-- Whether signing mode should be negotiated in-band during handshake or pre-configured per callsign/group.
-- PSK lifecycle: rotation frequency, revocation procedure, and storage requirements (secure enclave vs. config file).
-- Whether a group PSK (shared across multiple stations) should be permitted or only pairwise PSKs.
-- Whether PSK validation failure should fall back to `low` trust or abort the session entirely (fail-closed is safer).
-- Whether some federation peers should be allowed as authoritative for specific evidence classes.
+#### Session key derivation
+
+- Required baseline: X25519 ECDH + HKDF-SHA256.
+- Handshake output derives:
+  - per-session HMAC key
+  - optional key-confirmation tag
+- Handshake transcript hash must include negotiated mode, peer identifiers, and session_id.
+
+#### Signing mode selection
+
+- Default is pre-configured local policy profile.
+- Handshake may advertise supported modes, but final mode must be in the intersection and must not be weaker than local minimum policy.
+- If no acceptable intersection exists, session fails closed.
+
+#### Audit and observability requirements
+
+- Connection trust level must be recorded in session audit events.
+- Audit record must include:
+  - selected signing mode
+  - certificate acquisition path (out-of-band, over-air, psk-validated)
+  - trust decision reason code
+
+#### Reduced-trust publication constraint
+
+- `reduced`, `unverified`, and `low` sessions may consume identity data but must not publish or promote trust-bundle state.
+- Publication or moderation side effects require `psk-verified` or `verified` per profile rules.
+
+#### PSK lifecycle policy
+
+- Pairwise PSKs are the default and recommended model.
+- Rotation baseline: 90-day maximum lifetime unless stricter local policy applies.
+- Revocation must be supported by explicit PSK identifier and immediate deny-list enforcement.
+- Storage requirement: PSKs must be stored in OS keyring, hardware-backed secret store, or encrypted at rest with process-local decryption key; plaintext config storage is disallowed.
+
+#### Group PSK policy
+
+- Group PSKs are permitted only in `permissive` profile and must force connection trust cap at `reduced` unless additional per-peer validation evidence is present.
+- `strict` and `balanced` profiles require pairwise PSKs for `psk-verified` classification.
+
+#### PSK validation failure behavior
+
+- PSK validation failure is fail-closed: session must abort.
+- No automatic downgrade to `low` trust on failed PSK validation.
+
+#### Federation evidence authority
+
+- Federation peers are advisory by default for imported evidence classes.
+- Any authoritative treatment must be explicit allowlist policy per peer and evidence class, with audit logging of authority overrides.
