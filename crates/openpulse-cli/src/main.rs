@@ -260,6 +260,7 @@ fn main() -> Result<()> {
     engine
         .register_plugin(Box::new(BpskPlugin::new()))
         .context("failed to register BPSK plugin")?;
+    engine.set_trust_policy_profile(load_policy_profile_or_default());
 
     // Dispatch.
     let mut exit_code = 0;
@@ -751,6 +752,19 @@ fn load_policy_profile() -> Result<PolicyProfile> {
     };
 
     parse_policy_profile(profile)
+}
+
+fn load_policy_profile_or_default() -> PolicyProfile {
+    match load_policy_profile() {
+        Ok(profile) => profile,
+        Err(err) => {
+            tracing::warn!(
+                "failed to load persisted trust policy profile ({}); defaulting to balanced",
+                err
+            );
+            PolicyProfile::Balanced
+        }
+    }
 }
 
 fn persist_policy_profile(profile: PolicyProfile) -> Result<()> {
