@@ -7,7 +7,6 @@ last_updated: 2026-04-23
 
 # Backlog
 
-- Add integration tests for audio under device hot-plug events.
 - Add docs for troubleshooting common ALSA and CPAL setup issues.
 - Document contribution guidelines for adding a new modulation plugin.
 - Add release checklist template for version bumps.
