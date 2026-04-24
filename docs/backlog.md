@@ -7,8 +7,7 @@ last_updated: 2026-04-24
 
 # Backlog
 
-- Add CPU vs GPU equivalence tests for selected DSP kernels.
-- Add Raspberry Pi 4/5 tuning guide and benchmark result appendix.
+- Add CPU vs GPU equivalence tests for selected DSP kernels (blocked until at least one GPU DSP kernel is implemented in code; current references are design-only).
 - Add peer cache eviction and conflict-resolution tests.
 - Add query propagation duplicate-suppression tests.
 - Add relay loop-prevention and multi-hop conformance tests.
