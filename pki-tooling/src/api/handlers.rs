@@ -1,4 +1,5 @@
 use crate::AppState;
+use axum::http::HeaderMap;
 use axum::extract::State;
 use axum::extract::Query;
 use axum::extract::Path;
@@ -201,6 +202,15 @@ pub async fn list_revocations(
     State(state): State<AppState>,
     Query(query): Query<RevocationQuery>,
 ) -> impl IntoResponse {
+    let effective_before = match parse_rfc3339_query(query.effective_before.as_deref(), "effective_before") {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let effective_after = match parse_rfc3339_query(query.effective_after.as_deref(), "effective_after") {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
     let mut qb = QueryBuilder::<Postgres>::new(
         "SELECT
             revocation_id,
@@ -240,7 +250,7 @@ pub async fn list_revocations(
         qb.push("issuer_identity = ").push_bind(issuer_id);
     }
 
-    if let Some(effective_before) = query.effective_before {
+    if let Some(effective_before) = effective_before {
         qb.push(if has_where { " AND " } else { " WHERE " });
         has_where = true;
         qb.push("effective_at <= ")
@@ -248,7 +258,7 @@ pub async fn list_revocations(
             .push("::timestamptz");
     }
 
-    if let Some(effective_after) = query.effective_after {
+    if let Some(effective_after) = effective_after {
         qb.push(if has_where { " AND " } else { " WHERE " });
         qb.push("effective_at >= ")
             .push_bind(effective_after)
@@ -354,8 +364,11 @@ pub async fn get_trust_bundle(
 
 pub async fn create_submission(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<SubmissionRequest>,
 ) -> impl IntoResponse {
+    let request_id = extract_request_id(&headers);
+
     if req.payload_type.trim().is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -444,7 +457,7 @@ pub async fn create_submission(
             .bind("submission")
             .bind(&submission_id)
             .bind("api:anonymous")
-            .bind(Option::<String>::None)
+            .bind(request_id)
             .bind(payload_hash)
             .bind(payload)
             .execute(&mut *tx)
@@ -581,8 +594,11 @@ pub async fn get_moderation_queue(
 pub async fn post_moderation_decision(
     State(state): State<AppState>,
     Path(submission_id): Path<String>,
+    headers: HeaderMap,
     Json(req): Json<ModerationDecisionRequest>,
 ) -> impl IntoResponse {
+    let request_id = extract_request_id(&headers);
+
     let new_state = match req.decision.as_str() {
         "accept" => "accepted",
         "reject" => "rejected",
@@ -718,7 +734,7 @@ pub async fn post_moderation_decision(
     .bind("submission")
     .bind(&submission_id)
     .bind("api:moderator")
-    .bind(Option::<String>::None)
+    .bind(request_id)
     .bind(audit_hash)
     .bind(audit_payload)
     .execute(&mut *tx)
@@ -772,4 +788,34 @@ fn payload_sha256(payload: &serde_json::Value) -> String {
     let bytes = payload.to_string().into_bytes();
     let digest = Sha256::digest(bytes);
     format!("{digest:x}")
+}
+
+fn extract_request_id(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn parse_rfc3339_query(
+    raw: Option<&str>,
+    field_name: &'static str,
+) -> Result<Option<String>, axum::response::Response> {
+    let Some(value) = raw else {
+        return Ok(None);
+    };
+
+    match chrono::DateTime::parse_from_rfc3339(value) {
+        Ok(parsed) => Ok(Some(parsed.to_rfc3339())),
+        Err(_) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                status: "validation_error",
+                detail: format!("{field_name} must be RFC3339 timestamp"),
+            }),
+        )
+            .into_response()),
+    }
 }

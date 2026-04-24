@@ -13,6 +13,7 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "json", "macros", "migrate"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 sha2 = "0.10"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
