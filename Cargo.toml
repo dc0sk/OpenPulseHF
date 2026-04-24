@@ -6,6 +6,7 @@ members = [
     "crates/openpulse-modem",
     "crates/openpulse-cli",
     "plugins/bpsk",
+    "pki-tooling",
 ]
 
 [workspace.package]
