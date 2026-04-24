@@ -39,6 +39,7 @@ async fn create_submission_and_read_back_records_audit_event() {
         .method("POST")
         .uri("/api/v1/submissions")
         .header("content-type", "application/json")
+        .header("x-request-id", "req-create-001")
         .body(Body::from(
             json!({
                 "payload_type": "identity_bundle",
@@ -114,6 +115,15 @@ async fn create_submission_and_read_back_records_audit_event() {
     .expect("failed to query audit_events");
 
     assert_eq!(row_count, 1);
+
+    let request_id: Option<String> = sqlx::query_scalar(
+        "SELECT request_id FROM audit_events WHERE entity_type = 'submission' AND entity_id = $1 AND event_type = 'submission.created'",
+    )
+    .bind(&submission_id)
+    .fetch_one(&pool)
+    .await
+    .expect("failed to query request_id from audit_events");
+    assert_eq!(request_id.as_deref(), Some("req-create-001"));
 }
 
 #[tokio::test]
@@ -166,6 +176,7 @@ async fn moderation_decision_updates_submission_and_records_events() {
         .method("POST")
         .uri(format!("/api/v1/moderation/{submission_id}/decision"))
         .header("content-type", "application/json")
+        .header("x-request-id", "req-moderation-001")
         .body(Body::from(
             json!({
                 "decision": "accept",
@@ -259,6 +270,15 @@ async fn moderation_decision_updates_submission_and_records_events() {
     .await
     .expect("failed to query audit_events");
     assert_eq!(audit_count, 1);
+
+    let request_id: Option<String> = sqlx::query_scalar(
+        "SELECT request_id FROM audit_events WHERE entity_type = 'submission' AND entity_id = $1 AND event_type = 'submission.moderated'",
+    )
+    .bind(&submission_id)
+    .fetch_one(&pool)
+    .await
+    .expect("failed to query request_id from audit_events");
+    assert_eq!(request_id.as_deref(), Some("req-moderation-001"));
 }
 
 #[tokio::test]
@@ -586,6 +606,46 @@ async fn list_revocations_filters_by_record_id_and_issuer() {
             .and_then(Value::as_str)
             .expect("missing revocation_id"),
         "revocation-a"
+    );
+}
+
+#[tokio::test]
+async fn list_revocations_rejects_invalid_rfc3339_filters() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    let app = build_router(AppState { db: pool.clone() });
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/revocations?effective_before=not-a-date")
+        .body(Body::empty())
+        .expect("failed to build GET /revocations request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let error: Value = serde_json::from_slice(&body).expect("invalid JSON error body");
+    assert_eq!(
+        error
+            .get("status")
+            .and_then(Value::as_str)
+            .expect("missing status"),
+        "validation_error"
+    );
+    assert_eq!(
+        error
+            .get("detail")
+            .and_then(Value::as_str)
+            .expect("missing detail"),
+        "effective_before must be RFC3339 timestamp"
     );
 }
 
