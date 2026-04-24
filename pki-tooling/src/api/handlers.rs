@@ -77,6 +77,13 @@ struct ModerationQueueItem {
     moderation_reason_code: Option<String>,
 }
 
+#[derive(Serialize)]
+struct ModerationDecisionResponse {
+    submission_id: String,
+    submission_state: String,
+    moderation_event_id: String,
+}
+
 pub async fn healthz() -> impl IntoResponse {
     (StatusCode::OK, Json(ApiMessage { status: "ok", detail: "service healthy".to_string() }))
 }
@@ -323,16 +330,140 @@ pub async fn get_moderation_queue(
 }
 
 pub async fn post_moderation_decision(
+    State(state): State<AppState>,
     Path(submission_id): Path<String>,
-    Json(_req): Json<ModerationDecisionRequest>,
+    Json(req): Json<ModerationDecisionRequest>,
 ) -> impl IntoResponse {
-    let detail = format!(
-        "post moderation decision for submission_id={submission_id} decision={} reason_code={} reason_text_len={}",
-        _req.decision,
-        _req.reason_code,
-        _req.reason_text.len(),
-    );
-    not_implemented(&detail)
+    let new_state = match req.decision.as_str() {
+        "accept" => "accepted",
+        "reject" => "rejected",
+        "quarantine" => "quarantined",
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiMessage {
+                    status: "validation_error",
+                    detail: "decision must be accept, reject, or quarantine".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    if req.reason_code.trim().is_empty() || req.reason_text.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                status: "validation_error",
+                detail: "reason_code and reason_text must not be empty".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let mut tx = match state.db.begin().await {
+        Ok(tx) => tx,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiMessage {
+                    status: "db_error",
+                    detail: format!("failed to begin transaction: {err}"),
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    let update = sqlx::query(
+        "UPDATE submissions
+         SET submission_state = $2,
+             moderation_reason_code = $3,
+             updated_at = NOW()
+         WHERE submission_id = $1",
+    )
+    .bind(&submission_id)
+    .bind(new_state)
+    .bind(&req.reason_code)
+    .execute(&mut *tx)
+    .await;
+
+    let updated_rows = match update {
+        Ok(res) => res.rows_affected(),
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiMessage {
+                    status: "db_error",
+                    detail: format!("failed to update submission: {err}"),
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    if updated_rows == 0 {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiMessage {
+                status: "not_found",
+                detail: "submission not found".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let event_id = Uuid::new_v4().to_string();
+    let insert_event = sqlx::query(
+        "INSERT INTO moderation_events (
+            event_id,
+            submission_id,
+            actor_identity,
+            action,
+            reason_code,
+            reason_text
+         ) VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(&event_id)
+    .bind(&submission_id)
+    .bind("api:moderator")
+    .bind(&req.decision)
+    .bind(&req.reason_code)
+    .bind(&req.reason_text)
+    .execute(&mut *tx)
+    .await;
+
+    if let Err(err) = insert_event {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiMessage {
+                status: "db_error",
+                detail: format!("failed to insert moderation event: {err}"),
+            }),
+        )
+            .into_response();
+    }
+
+    if let Err(err) = tx.commit().await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiMessage {
+                status: "db_error",
+                detail: format!("failed to commit transaction: {err}"),
+            }),
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(ModerationDecisionResponse {
+            submission_id,
+            submission_state: new_state.to_string(),
+            moderation_event_id: event_id,
+        }),
+    )
+        .into_response()
 }
 
 fn not_implemented(detail: &str) -> impl IntoResponse {
