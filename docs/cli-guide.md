@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/cli-guide.md
 status: living
-last_updated: 2026-04-23
+last_updated: 2026-04-24
 ---
 
 # CLI Guide - openpulse (v0.1.0)
@@ -36,6 +36,10 @@ cargo build --release
 - openpulse modes
 
 Planned HPX and trust commands:
+
+Detailed UX behavior for identity and trust diagnostics:
+
+- docs/cli-ux-identity-trust-diagnostics.md
 
 - openpulse hpx send <file> --mode <HPX500|HPX2300>
 - openpulse hpx receive --out <dir>

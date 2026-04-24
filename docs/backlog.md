@@ -7,7 +7,6 @@ last_updated: 2026-04-24
 
 # Backlog
 
-- Add CLI UX spec for identity and trust diagnostics.
 - Add multithreaded pipeline test harness with deterministic timing assertions.
 - Add CPU vs GPU equivalence tests for selected DSP kernels.
 - Add Raspberry Pi 4/5 tuning guide and benchmark result appendix.
