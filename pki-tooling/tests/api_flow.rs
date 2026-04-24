@@ -479,3 +479,251 @@ async fn get_submission_returns_not_found_for_missing_submission() {
         "submission not found"
     );
 }
+
+#[tokio::test]
+async fn list_revocations_filters_by_record_id_and_issuer() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    sqlx::query(
+        "INSERT INTO identity_records (
+            record_id,
+            station_id,
+            callsign,
+            publication_state
+         ) VALUES ($1, $2, $3, $4)",
+    )
+    .bind("record-rev-a")
+    .bind("STN-REV-A")
+    .bind("N0REVA")
+    .bind("published")
+    .execute(&pool)
+    .await
+    .expect("failed to insert identity record A");
+
+    sqlx::query(
+        "INSERT INTO identity_records (
+            record_id,
+            station_id,
+            callsign,
+            publication_state
+         ) VALUES ($1, $2, $3, $4)",
+    )
+    .bind("record-rev-b")
+    .bind("STN-REV-B")
+    .bind("N0REVB")
+    .bind("published")
+    .execute(&pool)
+    .await
+    .expect("failed to insert identity record B");
+
+    sqlx::query(
+        "INSERT INTO revocations (
+            revocation_id,
+            record_id,
+            revision_id,
+            key_id,
+            issuer_identity,
+            reason_code,
+            effective_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, NOW() - INTERVAL '1 day')",
+    )
+    .bind("revocation-a")
+    .bind("record-rev-a")
+    .bind(Option::<String>::None)
+    .bind(Option::<String>::None)
+    .bind("issuer-alpha")
+    .bind("key_compromise")
+    .execute(&pool)
+    .await
+    .expect("failed to insert revocation A");
+
+    sqlx::query(
+        "INSERT INTO revocations (
+            revocation_id,
+            record_id,
+            revision_id,
+            key_id,
+            issuer_identity,
+            reason_code,
+            effective_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, NOW())",
+    )
+    .bind("revocation-b")
+    .bind("record-rev-b")
+    .bind(Option::<String>::None)
+    .bind(Option::<String>::None)
+    .bind("issuer-beta")
+    .bind("operator_request")
+    .execute(&pool)
+    .await
+    .expect("failed to insert revocation B");
+
+    let app = build_router(AppState { db: pool.clone() });
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/revocations?record_id=record-rev-a&issuer_id=issuer-alpha")
+        .body(Body::empty())
+        .expect("failed to build GET /revocations request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let rows: Value = serde_json::from_slice(&body).expect("invalid JSON body");
+    let array = rows.as_array().expect("revocation response must be an array");
+    assert_eq!(array.len(), 1);
+    assert_eq!(
+        array[0]
+            .get("revocation_id")
+            .and_then(Value::as_str)
+            .expect("missing revocation_id"),
+        "revocation-a"
+    );
+}
+
+#[tokio::test]
+async fn trust_bundle_endpoints_return_current_and_specific_bundle() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    sqlx::query(
+        "INSERT INTO trust_bundles (
+            bundle_id,
+            schema_version,
+            generated_at,
+            issuer_instance_id,
+            signing_algorithms,
+            records,
+            bundle_signature,
+            is_current
+         ) VALUES ($1, $2, NOW() - INTERVAL '1 hour', $3, $4, $5, $6, $7)",
+    )
+    .bind("bundle-old")
+    .bind("1.0.0")
+    .bind("issuer-node-a")
+    .bind(json!(["ed25519"]))
+    .bind(json!([]))
+    .bind("sig-old")
+    .bind(false)
+    .execute(&pool)
+    .await
+    .expect("failed to insert old trust bundle");
+
+    sqlx::query(
+        "INSERT INTO trust_bundles (
+            bundle_id,
+            schema_version,
+            generated_at,
+            issuer_instance_id,
+            signing_algorithms,
+            records,
+            bundle_signature,
+            is_current
+         ) VALUES ($1, $2, NOW(), $3, $4, $5, $6, $7)",
+    )
+    .bind("bundle-current")
+    .bind("1.0.0")
+    .bind("issuer-node-a")
+    .bind(json!(["ed25519", "dilithium3"]))
+    .bind(json!([
+        {
+            "record_id": "record-1",
+            "station_id": "STN-1",
+            "callsign": "N0CALL",
+            "trust_state": "trusted",
+            "revocation_state": "active",
+            "algorithms": ["ed25519"],
+            "keys": [],
+            "hybrid_policy": "recommended",
+            "valid_from": "2026-01-01T00:00:00Z",
+            "valid_until": null,
+            "evidence_summary": []
+        }
+    ]))
+    .bind("sig-current")
+    .bind(true)
+    .execute(&pool)
+    .await
+    .expect("failed to insert current trust bundle");
+
+    let app = build_router(AppState { db: pool.clone() });
+
+    let current_req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/trust-bundles/current")
+        .body(Body::empty())
+        .expect("failed to build GET /trust-bundles/current request");
+
+    let current_res = app
+        .clone()
+        .oneshot(current_req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(current_res.status(), StatusCode::OK);
+
+    let current_body = to_bytes(current_res.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let current: Value = serde_json::from_slice(&current_body).expect("invalid JSON body");
+    assert_eq!(
+        current
+            .get("bundle_id")
+            .and_then(Value::as_str)
+            .expect("missing bundle_id"),
+        "bundle-current"
+    );
+    assert_eq!(
+        current
+            .get("bundle_signature")
+            .and_then(Value::as_str)
+            .expect("missing bundle_signature"),
+        "sig-current"
+    );
+
+    let by_id_req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/trust-bundles/bundle-old")
+        .body(Body::empty())
+        .expect("failed to build GET /trust-bundles/{bundle_id} request");
+
+    let by_id_res = app
+        .clone()
+        .oneshot(by_id_req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(by_id_res.status(), StatusCode::OK);
+
+    let by_id_body = to_bytes(by_id_res.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let bundle: Value = serde_json::from_slice(&by_id_body).expect("invalid JSON body");
+    assert_eq!(
+        bundle
+            .get("bundle_id")
+            .and_then(Value::as_str)
+            .expect("missing bundle_id"),
+        "bundle-old"
+    );
+
+    let missing_req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/trust-bundles/missing-bundle")
+        .body(Body::empty())
+        .expect("failed to build missing bundle request");
+
+    let missing_res = app
+        .clone()
+        .oneshot(missing_req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(missing_res.status(), StatusCode::NOT_FOUND);
+}

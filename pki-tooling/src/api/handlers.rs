@@ -44,6 +44,16 @@ pub struct ModerationQueueQuery {
     pub limit: Option<u32>,
 }
 
+#[derive(Deserialize)]
+pub struct RevocationQuery {
+    pub record_id: Option<String>,
+    pub fingerprint: Option<String>,
+    pub issuer_id: Option<String>,
+    pub effective_before: Option<String>,
+    pub effective_after: Option<String>,
+    pub limit: Option<u32>,
+}
+
 #[derive(Serialize, FromRow)]
 struct IdentityRecordResponse {
     record_id: String,
@@ -83,6 +93,29 @@ struct ModerationDecisionResponse {
     submission_id: String,
     submission_state: String,
     moderation_event_id: String,
+}
+
+#[derive(Serialize, FromRow)]
+struct RevocationResponse {
+    revocation_id: String,
+    record_id: String,
+    revision_id: Option<String>,
+    key_id: Option<String>,
+    issuer_identity: String,
+    reason_code: String,
+    effective_at: String,
+    created_at: String,
+}
+
+#[derive(Serialize, FromRow)]
+struct TrustBundleResponse {
+    schema_version: String,
+    bundle_id: String,
+    generated_at: String,
+    issuer_instance_id: String,
+    signing_algorithms: serde_json::Value,
+    records: serde_json::Value,
+    bundle_signature: String,
 }
 
 pub async fn healthz() -> impl IntoResponse {
@@ -164,16 +197,159 @@ pub async fn lookup_identity(
     }
 }
 
-pub async fn list_revocations() -> impl IntoResponse {
-    not_implemented("list revocation records")
+pub async fn list_revocations(
+    State(state): State<AppState>,
+    Query(query): Query<RevocationQuery>,
+) -> impl IntoResponse {
+    let mut qb = QueryBuilder::<Postgres>::new(
+        "SELECT
+            revocation_id,
+            record_id,
+            revision_id,
+            key_id,
+            issuer_identity,
+            reason_code,
+            effective_at::text AS effective_at,
+            created_at::text AS created_at
+         FROM revocations",
+    );
+
+    let mut has_where = false;
+    if let Some(record_id) = query.record_id {
+        qb.push(if has_where { " AND " } else { " WHERE " });
+        has_where = true;
+        qb.push("record_id = ").push_bind(record_id);
+    }
+
+    if let Some(fingerprint) = query.fingerprint {
+        qb.push(if has_where { " AND " } else { " WHERE " });
+        has_where = true;
+        qb.push(
+            "EXISTS (
+                SELECT 1 FROM identity_keys keys
+                WHERE keys.key_id = revocations.key_id
+                AND keys.fingerprint = ",
+        )
+        .push_bind(fingerprint)
+        .push(")");
+    }
+
+    if let Some(issuer_id) = query.issuer_id {
+        qb.push(if has_where { " AND " } else { " WHERE " });
+        has_where = true;
+        qb.push("issuer_identity = ").push_bind(issuer_id);
+    }
+
+    if let Some(effective_before) = query.effective_before {
+        qb.push(if has_where { " AND " } else { " WHERE " });
+        has_where = true;
+        qb.push("effective_at <= ")
+            .push_bind(effective_before)
+            .push("::timestamptz");
+    }
+
+    if let Some(effective_after) = query.effective_after {
+        qb.push(if has_where { " AND " } else { " WHERE " });
+        qb.push("effective_at >= ")
+            .push_bind(effective_after)
+            .push("::timestamptz");
+    }
+
+    let limit = query.limit.unwrap_or(100).clamp(1, 500) as i64;
+    qb.push(" ORDER BY effective_at DESC LIMIT ").push_bind(limit);
+
+    let built = qb.build_query_as::<RevocationResponse>();
+    match built.fetch_all(&state.db).await {
+        Ok(records) => (StatusCode::OK, Json(records)).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiMessage {
+                status: "db_error",
+                detail: format!("revocation lookup failed: {err}"),
+            }),
+        )
+            .into_response(),
+    }
 }
 
-pub async fn get_current_trust_bundle() -> impl IntoResponse {
-    not_implemented("fetch current trust bundle")
+pub async fn get_current_trust_bundle(State(state): State<AppState>) -> impl IntoResponse {
+    let result = sqlx::query_as::<_, TrustBundleResponse>(
+        "SELECT
+            schema_version,
+            bundle_id,
+            generated_at::text AS generated_at,
+            issuer_instance_id,
+            signing_algorithms,
+            records,
+            bundle_signature
+         FROM trust_bundles
+         WHERE is_current = TRUE
+         ORDER BY generated_at DESC
+         LIMIT 1",
+    )
+    .fetch_optional(&state.db)
+    .await;
+
+    match result {
+        Ok(Some(bundle)) => (StatusCode::OK, Json(bundle)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiMessage {
+                status: "not_found",
+                detail: "current trust bundle not found".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiMessage {
+                status: "db_error",
+                detail: format!("trust bundle query failed: {err}"),
+            }),
+        )
+            .into_response(),
+    }
 }
 
-pub async fn get_trust_bundle(Path(bundle_id): Path<String>) -> impl IntoResponse {
-    not_implemented(&format!("fetch trust bundle by bundle_id={bundle_id}"))
+pub async fn get_trust_bundle(
+    State(state): State<AppState>,
+    Path(bundle_id): Path<String>,
+) -> impl IntoResponse {
+    let result = sqlx::query_as::<_, TrustBundleResponse>(
+        "SELECT
+            schema_version,
+            bundle_id,
+            generated_at::text AS generated_at,
+            issuer_instance_id,
+            signing_algorithms,
+            records,
+            bundle_signature
+         FROM trust_bundles
+         WHERE bundle_id = $1",
+    )
+    .bind(bundle_id)
+    .fetch_optional(&state.db)
+    .await;
+
+    match result {
+        Ok(Some(bundle)) => (StatusCode::OK, Json(bundle)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiMessage {
+                status: "not_found",
+                detail: "trust bundle not found".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiMessage {
+                status: "db_error",
+                detail: format!("trust bundle query failed: {err}"),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 pub async fn create_submission(
@@ -579,16 +755,6 @@ pub async fn post_moderation_decision(
         }),
     )
         .into_response()
-}
-
-fn not_implemented(detail: &str) -> impl IntoResponse {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(ApiMessage {
-            status: "not_implemented",
-            detail: detail.to_string(),
-        }),
-    )
 }
 
 fn json_kind(value: &serde_json::Value) -> &'static str {
