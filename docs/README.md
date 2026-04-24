@@ -17,6 +17,7 @@ Canonical documentation lives in the files listed below.
 - docs/hpx-session-state-machine.md: normative HPX session lifecycle and conformance cases
 - docs/benchmark-harness.md: benchmark scenarios, result schema, and CI gate rules for HPX
 - docs/cli-ux-identity-trust-diagnostics.md: command taxonomy, outputs, and exit-code semantics for identity/trust diagnostics
+- docs/raspberry-pi-4-5-tuning-and-benchmarks.md: Raspberry Pi performance tuning guidance and benchmark report appendix template
 - docs/peer-caching-relay.md: peer discovery cache, query model, and multi-hop relay behavior
 - docs/peer-query-relay-wire.md: wire-level schema for peer query and relay envelopes
 - docs/pki-tooling-api.md: API surface and export schema for separate PKI tooling
