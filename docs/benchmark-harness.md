@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/benchmark-harness.md
 status: living
-last_updated: 2026-04-23
+last_updated: 2026-04-24
 ---
 
 # HPX Benchmark Harness Specification
@@ -49,6 +49,22 @@ Each scenario run must provide:
 - payload_profile (size distribution and total bytes)
 - channel_profile_parameters
 - run_duration_limit_s
+
+## Scenario seed policy
+
+Each scenario YAML in `benchmark/scenarios/` must include deterministic seed metadata:
+
+- `seed_policy`: one of `fixed` or `sweep`
+- `random_seed`: integer seed used by the harness when `seed_policy: fixed`
+
+Current repository policy:
+
+- CI reduced suite scenarios use `seed_policy: fixed` for strict reproducibility.
+- Multi-seed experiments are allowed in scheduled/manual runs using `seed_policy: sweep` with external seed lists.
+
+Validation:
+
+- `scripts/validate-benchmark-artifacts.sh` enforces presence and basic validity of `seed_policy` and `random_seed` in every scenario file.
 
 ## Result schema (JSON)
 

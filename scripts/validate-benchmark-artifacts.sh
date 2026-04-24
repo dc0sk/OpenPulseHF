@@ -14,6 +14,8 @@ required_scenario_keys=(
   "bandwidth_class_hz"
   "family"
   "profile"
+  "seed_policy"
+  "random_seed"
   "run_duration_limit_s"
 )
 
@@ -76,6 +78,24 @@ for file in "${scenario_files[@]}"; do
     scenario_id="${scenario_id_line#scenario_id: }"
     if [[ "${scenario_id}" != "${expected_id}" ]]; then
       echo "${file}: scenario_id '${scenario_id}' must match filename id '${expected_id}'"
+      status=1
+    fi
+  fi
+
+  seed_policy_line="$(grep -E '^seed_policy:[[:space:]]' "${file}" || true)"
+  if [[ -n "${seed_policy_line}" ]]; then
+    seed_policy="${seed_policy_line#seed_policy: }"
+    if [[ "${seed_policy}" != "fixed" && "${seed_policy}" != "sweep" ]]; then
+      echo "${file}: seed_policy '${seed_policy}' must be one of: fixed, sweep"
+      status=1
+    fi
+  fi
+
+  random_seed_line="$(grep -E '^random_seed:[[:space:]]' "${file}" || true)"
+  if [[ -n "${random_seed_line}" ]]; then
+    random_seed="${random_seed_line#random_seed: }"
+    if ! [[ "${random_seed}" =~ ^[0-9]+$ ]]; then
+      echo "${file}: random_seed '${random_seed}' must be an integer"
       status=1
     fi
   fi

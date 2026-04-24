@@ -2,6 +2,8 @@ scenario_id: HF2300-STRESS-03
 bandwidth_class_hz: 2300
 family: hf
 profile: stress
+seed_policy: fixed
+random_seed: 230003
 snr_db_mean: 8.0
 snr_db_jitter: 5.0
 fading_model: variable_multipath

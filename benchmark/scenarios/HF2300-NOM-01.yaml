@@ -2,6 +2,8 @@ scenario_id: HF2300-NOM-01
 bandwidth_class_hz: 2300
 family: hf
 profile: nominal
+seed_policy: fixed
+random_seed: 230001
 snr_db_mean: 12.0
 snr_db_jitter: 1.2
 fading_model: low_multipath

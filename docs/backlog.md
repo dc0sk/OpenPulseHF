@@ -7,7 +7,6 @@ last_updated: 2026-04-24
 
 # Backlog
 
-- Add benchmark scenario files and seed policy for reproducible runs.
 - Add JSON schema validation for benchmark result artifacts.
 - Add CI baseline-comparison tool for HPX performance regression detection.
 - Add trust-store file format and migration policy.
