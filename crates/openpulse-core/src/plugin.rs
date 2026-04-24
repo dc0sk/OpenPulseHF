@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use crate::error::ModemError;
+use crate::error::{ModemError, PluginError};
+
+/// Current plugin trait version.
+/// Format: "<major>.<minor>.<patch>"
+pub const PLUGIN_TRAIT_VERSION: &str = "1.0.0";
 
 // ── Plugin metadata ───────────────────────────────────────────────────────────
 
@@ -17,6 +21,11 @@ pub struct PluginInfo {
     pub author: String,
     /// List of mode strings this plugin handles, e.g. `["BPSK31", "BPSK100"]`.
     pub supported_modes: Vec<String>,
+    /// Plugin trait version requirement, e.g. `"1.0"` (format: "<major>.<minor>").
+    /// The plugin is compatible with the framework if:
+    /// - framework major version == plugin major version, AND
+    /// - framework minor version >= plugin minor version
+    pub trait_version_required: String,
 }
 
 // ── Modulation configuration ──────────────────────────────────────────────────
@@ -92,10 +101,54 @@ impl PluginRegistry {
         Self::default()
     }
 
-    /// Register a plugin.  Later registrations shadow earlier ones for the same
-    /// mode string.
-    pub fn register(&mut self, plugin: Box<dyn ModulationPlugin>) {
+    /// Register a plugin, validating trait version compatibility.
+    /// Later registrations shadow earlier ones for the same mode string.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the plugin's `trait_version_required` is incompatible
+    /// with the framework's `PLUGIN_TRAIT_VERSION`.
+    pub fn register(&mut self, plugin: Box<dyn ModulationPlugin>) -> Result<(), PluginError> {
+        let info = plugin.info();
+        Self::validate_trait_version(&info)?;
         self.plugins.push(plugin);
+        Ok(())
+    }
+
+    /// Validate that a plugin's trait version is compatible with the framework.
+    fn validate_trait_version(info: &PluginInfo) -> Result<(), PluginError> {
+        let plugin_parts: Vec<&str> = info.trait_version_required.split('.').collect();
+        if plugin_parts.len() != 2 {
+            return Err(PluginError::InvalidTraitVersionFormat(
+                info.trait_version_required.clone(),
+            ));
+        }
+
+        let plugin_major = plugin_parts[0]
+            .parse::<u32>()
+            .map_err(|_| PluginError::InvalidTraitVersionFormat(
+                info.trait_version_required.clone(),
+            ))?;
+        let plugin_minor = plugin_parts[1]
+            .parse::<u32>()
+            .map_err(|_| PluginError::InvalidTraitVersionFormat(
+                info.trait_version_required.clone(),
+            ))?;
+
+        let framework_parts: Vec<&str> = PLUGIN_TRAIT_VERSION.split('.').collect();
+        let framework_major = framework_parts[0].parse::<u32>().unwrap();
+        let framework_minor = framework_parts[1].parse::<u32>().unwrap();
+
+        // Compatible if: framework major == plugin major AND framework minor >= plugin minor
+        if plugin_major != framework_major || framework_minor < plugin_minor {
+            return Err(PluginError::IncompatibleTraitVersion {
+                plugin: info.name.clone(),
+                required: info.trait_version_required.clone(),
+                current: PLUGIN_TRAIT_VERSION.to_string(),
+            });
+        }
+
+        Ok(())
     }
 
     /// Look up the first plugin that supports `mode`.

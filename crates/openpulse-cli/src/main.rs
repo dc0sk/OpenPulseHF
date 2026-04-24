@@ -107,7 +107,9 @@ fn main() -> Result<()> {
 
     // Build engine and register plugins.
     let mut engine = ModemEngine::new(audio);
-    engine.register_plugin(Box::new(BpskPlugin::new()));
+    engine
+        .register_plugin(Box::new(BpskPlugin::new()))
+        .context("failed to register BPSK plugin")?;
 
     // Dispatch.
     match cli.command {
