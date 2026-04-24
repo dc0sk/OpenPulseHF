@@ -136,7 +136,6 @@ pub async fn lookup_identity(
     }
     if let Some(publication_state) = query.publication_state {
         qb.push(if has_where { " AND " } else { " WHERE " });
-        has_where = true;
         qb.push("publication_state = ").push_bind(publication_state);
     }
 
