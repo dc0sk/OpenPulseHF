@@ -449,6 +449,17 @@ pub async fn create_submission(
             .into_response();
     }
 
+    if let Err(detail) = validate_signed_payload_conformance(&req) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                status: "validation_error",
+                detail,
+            }),
+        )
+            .into_response();
+    }
+
     let submission_id = Uuid::new_v4().to_string();
     let artifact_uri = format!("inline://submission/{submission_id}");
     let detached_signature_uri = req
@@ -1473,6 +1484,50 @@ fn json_kind(value: &serde_json::Value) -> &'static str {
         serde_json::Value::Array(_) => "array",
         serde_json::Value::Object(_) => "object",
     }
+}
+
+fn require_object_field(payload: &serde_json::Value, field: &str) -> Result<(), String> {
+    let obj = payload
+        .as_object()
+        .ok_or_else(|| "payload must be a JSON object".to_string())?;
+
+    if !obj.contains_key(field) {
+        return Err(format!("payload is missing required field '{field}'"));
+    }
+
+    Ok(())
+}
+
+fn validate_signed_payload_conformance(req: &SubmissionRequest) -> Result<(), String> {
+    let payload_type = req.payload_type.trim();
+    if payload_type != "signed_handshake" && payload_type != "signed_manifest" {
+        return Ok(());
+    }
+
+    let signature = req.detached_signature.as_ref().ok_or_else(|| {
+        "detached_signature is required for signed_handshake and signed_manifest".to_string()
+    })?;
+
+    if signature.trim().is_empty() {
+        return Err(
+            "detached_signature is required for signed_handshake and signed_manifest".to_string(),
+        );
+    }
+
+    require_object_field(&req.payload, "session_id")?;
+    require_object_field(&req.payload, "signed_at")?;
+
+    if payload_type == "signed_handshake" {
+        require_object_field(&req.payload, "peer_id")?;
+        require_object_field(&req.payload, "handshake_nonce")?;
+    }
+
+    if payload_type == "signed_manifest" {
+        require_object_field(&req.payload, "manifest_hash")?;
+        require_object_field(&req.payload, "chunk_count")?;
+    }
+
+    Ok(())
 }
 
 fn payload_sha256(payload: &serde_json::Value) -> String {
