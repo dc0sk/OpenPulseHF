@@ -12,3 +12,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "json", "macros"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+sha2 = "0.10"
