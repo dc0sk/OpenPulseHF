@@ -1,6 +1,6 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
-use pki_tooling::{build_router, AppState};
+use pki_tooling::{build_router, run_migrations, AppState};
 use serde_json::{json, Value};
 use sqlx::postgres::PgPoolOptions;
 use tower::ServiceExt;
@@ -20,56 +20,9 @@ async fn setup_pool() -> Option<sqlx::PgPool> {
         .await
         .expect("failed to connect to PKI_TEST_DATABASE_URL");
 
-    // Minimal schema setup for endpoint flow tests.
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS submissions (
-            submission_id TEXT PRIMARY KEY,
-            submitter_identity TEXT NOT NULL,
-            submission_state TEXT NOT NULL,
-            received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            artifact_uri TEXT NOT NULL,
-            detached_signature_uri TEXT,
-            validation_summary JSONB NOT NULL,
-            moderation_reason_code TEXT,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )",
-    )
-    .execute(&pool)
-    .await
-    .expect("failed to ensure submissions table");
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS moderation_events (
-            event_id TEXT PRIMARY KEY,
-            submission_id TEXT NOT NULL,
-            actor_identity TEXT NOT NULL,
-            action TEXT NOT NULL,
-            reason_code TEXT NOT NULL,
-            reason_text TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )",
-    )
-    .execute(&pool)
-    .await
-    .expect("failed to ensure moderation_events table");
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS audit_events (
-            event_id TEXT PRIMARY KEY,
-            event_type TEXT NOT NULL,
-            entity_type TEXT NOT NULL,
-            entity_id TEXT NOT NULL,
-            actor_identity TEXT NOT NULL,
-            request_id TEXT,
-            event_payload_hash TEXT NOT NULL,
-            event_payload_json JSONB NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )",
-    )
-    .execute(&pool)
-    .await
-    .expect("failed to ensure audit_events table");
+    run_migrations(&pool)
+        .await
+        .expect("failed to run SQL migrations in integration test setup");
 
     Some(pool)
 }

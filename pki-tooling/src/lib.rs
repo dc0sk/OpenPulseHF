@@ -8,6 +8,10 @@ pub struct AppState {
     pub db: sqlx::PgPool,
 }
 
+pub async fn run_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::migrate::MigrateError> {
+    sqlx::migrate!("./migrations").run(pool).await
+}
+
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(api::handlers::healthz))
