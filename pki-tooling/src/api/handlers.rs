@@ -279,7 +279,8 @@ pub async fn list_revocations(
     }
 
     let limit = query.limit.unwrap_or(100).clamp(1, 500) as i64;
-    qb.push(" ORDER BY effective_at DESC LIMIT ").push_bind(limit);
+    qb.push(" ORDER BY effective_at DESC, created_at DESC, revocation_id ASC LIMIT ")
+        .push_bind(limit);
 
     let built = qb.build_query_as::<RevocationResponse>();
     match built.fetch_all(&state.db).await {
