@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/README.md
 status: living
-last_updated: 2026-04-23
+last_updated: 2026-04-24
 ---
 
 # Documentation Index
@@ -18,6 +18,8 @@ Canonical documentation lives in the files listed below.
 - docs/benchmark-harness.md: benchmark scenarios, result schema, and CI gate rules for HPX
 - docs/peer-caching-relay.md: peer discovery cache, query model, and multi-hop relay behavior
 - docs/peer-query-relay-wire.md: wire-level schema for peer query and relay envelopes
+- docs/pki-tooling-architecture.md: architecture for separate PKI publication, lookup, and trust tooling
+- docs/pki-tooling-requirements.md: requirements for separate PKI publication, lookup, and trust tooling
 - docs/requirements.md: functional and non-functional requirements
 - docs/steering.md: governance and decision ownership
 - docs/roadmap.md: phased execution plan
