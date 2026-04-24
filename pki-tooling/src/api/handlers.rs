@@ -8,7 +8,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::{FromRow, Postgres, QueryBuilder};
+use sqlx::{FromRow, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
 #[derive(Serialize)]
@@ -117,6 +117,40 @@ struct TrustBundleResponse {
     signing_algorithms: serde_json::Value,
     records: serde_json::Value,
     bundle_signature: String,
+}
+
+#[derive(Deserialize)]
+pub struct CreateRevocationRequest {
+    pub record_id: String,
+    pub revision_id: String,
+    pub key_id: String,
+    pub issuer_identity: String,
+    pub reason_code: String,
+    pub effective_at: String,
+}
+
+#[derive(Serialize)]
+struct CreateRevocationResponse {
+    revocation_id: String,
+    effective_at: String,
+    created_at: String,
+}
+
+#[derive(Deserialize)]
+pub struct PublishTrustBundleRequest {
+    pub schema_version: String,
+    pub generated_at: String,
+    pub issuer_instance_id: String,
+    pub signing_algorithms: serde_json::Value,
+    pub records: serde_json::Value,
+    pub bundle_signature: String,
+}
+
+#[derive(Serialize)]
+struct PublishTrustBundleResponse {
+    bundle_id: String,
+    is_current: bool,
+    created_at: String,
 }
 
 pub async fn healthz() -> impl IntoResponse {
@@ -782,6 +816,375 @@ pub async fn post_moderation_decision(
             submission_id,
             submission_state: new_state.to_string(),
             moderation_event_id: event_id,
+        }),
+    )
+        .into_response()
+}
+
+pub async fn create_revocation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateRevocationRequest>,
+) -> impl IntoResponse {
+    let request_id = extract_request_id(&headers);
+
+    // Validation: check required fields
+    if req.record_id.trim().is_empty()
+        || req.revision_id.trim().is_empty()
+        || req.key_id.trim().is_empty()
+        || req.issuer_identity.trim().is_empty()
+        || req.reason_code.trim().is_empty()
+        || req.effective_at.trim().is_empty()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                status: "validation_error",
+                detail: "all fields (record_id, revision_id, key_id, issuer_identity, reason_code, effective_at) are required and non-empty".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    // Validation: check effective_at is RFC3339
+    let effective_at_parsed = match chrono::DateTime::parse_from_rfc3339(req.effective_at.as_str())
+    {
+        Ok(dt) => dt.to_rfc3339(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiMessage {
+                    status: "validation_error",
+                    detail: "effective_at must be RFC3339 timestamp".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    // Validation: verify record exists
+    let record_check = sqlx::query("SELECT record_id FROM identity_records WHERE record_id = $1")
+        .bind(&req.record_id)
+        .fetch_optional(&state.db)
+        .await;
+
+    match record_check {
+        Ok(None) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiMessage {
+                    status: "validation_error",
+                    detail: format!("record_id {} not found", req.record_id),
+                }),
+            )
+                .into_response();
+        }
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiMessage {
+                    status: "db_error",
+                    detail: format!("failed to verify record: {err}"),
+                }),
+            )
+                .into_response();
+        }
+        Ok(Some(_)) => {} // record exists, proceed
+    }
+
+    let revocation_id = Uuid::new_v4().to_string();
+
+    let mut tx = match state.db.begin().await {
+        Ok(tx) => tx,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiMessage {
+                    status: "db_error",
+                    detail: format!("failed to begin transaction: {err}"),
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    // Insert revocation
+    let insert_revocation = sqlx::query(
+        "INSERT INTO revocations (
+            revocation_id,
+            record_id,
+            revision_id,
+            key_id,
+            issuer_identity,
+            reason_code,
+            effective_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz)",
+    )
+    .bind(&revocation_id)
+    .bind(&req.record_id)
+    .bind(&req.revision_id)
+    .bind(&req.key_id)
+    .bind(&req.issuer_identity)
+    .bind(&req.reason_code)
+    .bind(&effective_at_parsed)
+    .execute(&mut *tx)
+    .await;
+
+    if let Err(err) = insert_revocation {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiMessage {
+                status: "db_error",
+                detail: format!("failed to insert revocation: {err}"),
+            }),
+        )
+            .into_response();
+    }
+
+    // Insert audit event
+    let audit_event_id = Uuid::new_v4().to_string();
+    let audit_payload = serde_json::json!({
+        "revocation_id": &revocation_id,
+        "record_id": &req.record_id,
+        "issuer_identity": &req.issuer_identity,
+        "reason_code": &req.reason_code
+    });
+    let payload_hash = payload_sha256(&audit_payload);
+
+    let insert_audit = sqlx::query(
+        "INSERT INTO audit_events (
+            event_id,
+            event_type,
+            entity_type,
+            entity_id,
+            actor_identity,
+            request_id,
+            event_payload_hash,
+            event_payload_json
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(&audit_event_id)
+    .bind("revocation_created")
+    .bind("revocation")
+    .bind(&revocation_id)
+    .bind(&req.issuer_identity)
+    .bind(&request_id)
+    .bind(&payload_hash)
+    .bind(&audit_payload)
+    .execute(&mut *tx)
+    .await;
+
+    if let Err(err) = insert_audit {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiMessage {
+                status: "db_error",
+                detail: format!("failed to insert audit event: {err}"),
+            }),
+        )
+            .into_response();
+    }
+
+    if let Err(err) = tx.commit().await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiMessage {
+                status: "db_error",
+                detail: format!("failed to commit transaction: {err}"),
+            }),
+        )
+            .into_response();
+    }
+
+    // Query back the created_at timestamp
+    let created_record = sqlx::query("SELECT created_at FROM revocations WHERE revocation_id = $1")
+        .bind(&revocation_id)
+        .fetch_one(&state.db)
+        .await;
+
+    let created_at = match created_record {
+        Ok(row) => {
+            let ts: String = row.get("created_at");
+            ts
+        }
+        Err(_) => "unknown".to_string(),
+    };
+
+    (
+        StatusCode::CREATED,
+        Json(CreateRevocationResponse {
+            revocation_id,
+            effective_at: effective_at_parsed,
+            created_at,
+        }),
+    )
+        .into_response()
+}
+
+pub async fn publish_trust_bundle(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PublishTrustBundleRequest>,
+) -> impl IntoResponse {
+    let request_id = extract_request_id(&headers);
+
+    // Validation: check required fields
+    if req.schema_version.trim().is_empty()
+        || req.generated_at.trim().is_empty()
+        || req.issuer_instance_id.trim().is_empty()
+        || req.bundle_signature.trim().is_empty()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                status: "validation_error",
+                detail: "all fields (schema_version, generated_at, issuer_instance_id, signing_algorithms, records, bundle_signature) are required and non-empty".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    // Validation: check generated_at is RFC3339
+    let generated_at_parsed =
+        match chrono::DateTime::parse_from_rfc3339(req.generated_at.as_str()) {
+            Ok(dt) => dt.to_rfc3339(),
+            Err(_) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiMessage {
+                        status: "validation_error",
+                        detail: "generated_at must be RFC3339 timestamp".to_string(),
+                    }),
+                )
+                    .into_response();
+            }
+        };
+
+    let bundle_id = Uuid::new_v4().to_string();
+
+    let mut tx = match state.db.begin().await {
+        Ok(tx) => tx,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiMessage {
+                    status: "db_error",
+                    detail: format!("failed to begin transaction: {err}"),
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    // Insert trust bundle (is_current = false)
+    let insert_bundle = sqlx::query(
+        "INSERT INTO trust_bundles (
+            bundle_id,
+            schema_version,
+            generated_at,
+            issuer_instance_id,
+            signing_algorithms,
+            records,
+            bundle_signature,
+            is_current
+         ) VALUES ($1, $2, $3::timestamptz, $4, $5, $6, $7, $8)",
+    )
+    .bind(&bundle_id)
+    .bind(&req.schema_version)
+    .bind(&generated_at_parsed)
+    .bind(&req.issuer_instance_id)
+    .bind(&req.signing_algorithms)
+    .bind(&req.records)
+    .bind(&req.bundle_signature)
+    .bind(false) // initially not current
+    .execute(&mut *tx)
+    .await;
+
+    if let Err(err) = insert_bundle {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiMessage {
+                status: "db_error",
+                detail: format!("failed to insert trust bundle: {err}"),
+            }),
+        )
+            .into_response();
+    }
+
+    // Insert audit event
+    let audit_event_id = Uuid::new_v4().to_string();
+    let audit_payload = serde_json::json!({
+        "bundle_id": &bundle_id,
+        "schema_version": &req.schema_version,
+        "issuer_instance_id": &req.issuer_instance_id
+    });
+    let payload_hash = payload_sha256(&audit_payload);
+
+    let insert_audit = sqlx::query(
+        "INSERT INTO audit_events (
+            event_id,
+            event_type,
+            entity_type,
+            entity_id,
+            actor_identity,
+            request_id,
+            event_payload_hash,
+            event_payload_json
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(&audit_event_id)
+    .bind("bundle_published")
+    .bind("trust_bundle")
+    .bind(&bundle_id)
+    .bind(&req.issuer_instance_id)
+    .bind(&request_id)
+    .bind(&payload_hash)
+    .bind(&audit_payload)
+    .execute(&mut *tx)
+    .await;
+
+    if let Err(err) = insert_audit {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiMessage {
+                status: "db_error",
+                detail: format!("failed to insert audit event: {err}"),
+            }),
+        )
+            .into_response();
+    }
+
+    if let Err(err) = tx.commit().await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiMessage {
+                status: "db_error",
+                detail: format!("failed to commit transaction: {err}"),
+            }),
+        )
+            .into_response();
+    }
+
+    // Query back the created_at timestamp
+    let created_record = sqlx::query("SELECT created_at FROM trust_bundles WHERE bundle_id = $1")
+        .bind(&bundle_id)
+        .fetch_one(&state.db)
+        .await;
+
+    let created_at = match created_record {
+        Ok(row) => {
+            let ts: String = row.get("created_at");
+            ts
+        }
+        Err(_) => "unknown".to_string(),
+    };
+
+    (
+        StatusCode::CREATED,
+        Json(PublishTrustBundleResponse {
+            bundle_id,
+            is_current: false,
+            created_at,
         }),
     )
         .into_response()
