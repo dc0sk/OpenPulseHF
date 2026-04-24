@@ -1,11 +1,12 @@
 use crate::AppState;
 use axum::extract::State;
+use axum::extract::Query;
 use axum::extract::Path;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
+use sqlx::{FromRow, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 #[derive(Serialize)]
@@ -26,6 +27,20 @@ pub struct ModerationDecisionRequest {
     pub decision: String,
     pub reason_code: String,
     pub reason_text: String,
+}
+
+#[derive(Deserialize)]
+pub struct IdentityLookupQuery {
+    pub station_id: Option<String>,
+    pub callsign: Option<String>,
+    pub publication_state: Option<String>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Deserialize)]
+pub struct ModerationQueueQuery {
+    pub submission_state: Option<String>,
+    pub limit: Option<u32>,
 }
 
 #[derive(Serialize, FromRow)]
@@ -51,6 +66,14 @@ struct SubmissionRecordResponse {
     artifact_uri: String,
     detached_signature_uri: Option<String>,
     validation_summary: serde_json::Value,
+    moderation_reason_code: Option<String>,
+}
+
+#[derive(Serialize, FromRow)]
+struct ModerationQueueItem {
+    submission_id: String,
+    submitter_identity: String,
+    submission_state: String,
     moderation_reason_code: Option<String>,
 }
 
@@ -92,8 +115,46 @@ pub async fn get_identity(
     }
 }
 
-pub async fn lookup_identity() -> impl IntoResponse {
-    not_implemented("identity lookup with filters")
+pub async fn lookup_identity(
+    State(state): State<AppState>,
+    Query(query): Query<IdentityLookupQuery>,
+) -> impl IntoResponse {
+    let mut qb = QueryBuilder::<Postgres>::new(
+        "SELECT record_id, station_id, callsign, publication_state, current_revision_id FROM identity_records",
+    );
+
+    let mut has_where = false;
+    if let Some(station_id) = query.station_id {
+        qb.push(if has_where { " AND " } else { " WHERE " });
+        has_where = true;
+        qb.push("station_id = ").push_bind(station_id);
+    }
+    if let Some(callsign) = query.callsign {
+        qb.push(if has_where { " AND " } else { " WHERE " });
+        has_where = true;
+        qb.push("callsign = ").push_bind(callsign);
+    }
+    if let Some(publication_state) = query.publication_state {
+        qb.push(if has_where { " AND " } else { " WHERE " });
+        has_where = true;
+        qb.push("publication_state = ").push_bind(publication_state);
+    }
+
+    let limit = query.limit.unwrap_or(100).clamp(1, 500) as i64;
+    qb.push(" ORDER BY created_at DESC LIMIT ").push_bind(limit);
+
+    let built = qb.build_query_as::<IdentityRecordResponse>();
+    match built.fetch_all(&state.db).await {
+        Ok(records) => (StatusCode::OK, Json(records)).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiMessage {
+                status: "db_error",
+                detail: format!("identity lookup failed: {err}"),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 pub async fn list_revocations() -> impl IntoResponse {
@@ -217,8 +278,49 @@ pub async fn get_submission(
     }
 }
 
-pub async fn get_moderation_queue() -> impl IntoResponse {
-    not_implemented("get moderation queue")
+pub async fn get_moderation_queue(
+    State(state): State<AppState>,
+    Query(query): Query<ModerationQueueQuery>,
+) -> impl IntoResponse {
+    let allowed_state = query.submission_state.as_deref();
+    if let Some(state_name) = allowed_state {
+        if state_name != "pending" && state_name != "quarantined" {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiMessage {
+                    status: "validation_error",
+                    detail: "submission_state must be pending or quarantined".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    }
+
+    let mut qb = QueryBuilder::<Postgres>::new(
+        "SELECT submission_id, submitter_identity, submission_state, moderation_reason_code FROM submissions",
+    );
+
+    if let Some(state_name) = allowed_state {
+        qb.push(" WHERE submission_state = ").push_bind(state_name.to_string());
+    } else {
+        qb.push(" WHERE submission_state IN ('pending', 'quarantined')");
+    }
+
+    let limit = query.limit.unwrap_or(100).clamp(1, 500) as i64;
+    qb.push(" ORDER BY received_at ASC LIMIT ").push_bind(limit);
+
+    let built = qb.build_query_as::<ModerationQueueItem>();
+    match built.fetch_all(&state.db).await {
+        Ok(queue) => (StatusCode::OK, Json(queue)).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiMessage {
+                status: "db_error",
+                detail: format!("moderation queue query failed: {err}"),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 pub async fn post_moderation_decision(
