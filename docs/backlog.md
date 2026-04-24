@@ -2,12 +2,11 @@
 project: openpulsehf
 doc: docs/backlog.md
 status: living
-last_updated: 2026-04-23
+last_updated: 2026-04-24
 ---
 
 # Backlog
 
-- Define HPX session state machine as a standalone spec.
 - Add benchmark fixtures for HF fading and burst-noise channels.
 - Add benchmark scenario files and seed policy for reproducible runs.
 - Add JSON schema validation for benchmark result artifacts.
