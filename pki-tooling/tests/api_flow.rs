@@ -692,6 +692,176 @@ async fn list_revocations_rejects_inverted_time_window() {
 }
 
 #[tokio::test]
+async fn list_revocations_applies_effective_time_filters() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    sqlx::query(
+        "INSERT INTO identity_records (
+            record_id,
+            station_id,
+            callsign,
+            publication_state
+         ) VALUES ($1, $2, $3, $4)",
+    )
+    .bind("record-rev-filter")
+    .bind("STN-REV-F")
+    .bind("N0REVF")
+    .bind("published")
+    .execute(&pool)
+    .await
+    .expect("failed to insert filter identity record");
+
+    sqlx::query(
+        "INSERT INTO revocations (
+            revocation_id,
+            record_id,
+            revision_id,
+            key_id,
+            issuer_identity,
+            reason_code,
+            effective_at
+         ) VALUES
+            ($1, $4, NULL, NULL, $5, $6, $7::timestamptz),
+            ($2, $4, NULL, NULL, $5, $6, $8::timestamptz),
+            ($3, $4, NULL, NULL, $5, $6, $9::timestamptz)",
+    )
+    .bind("rev-filter-1")
+    .bind("rev-filter-2")
+    .bind("rev-filter-3")
+    .bind("record-rev-filter")
+    .bind("issuer-filter")
+    .bind("operator_request")
+    .bind("2026-01-01T00:00:00Z")
+    .bind("2026-01-02T00:00:00Z")
+    .bind("2026-01-03T00:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("failed to insert filter revocations");
+
+    let app = build_router(AppState { db: pool.clone() });
+    let req = Request::builder()
+        .method("GET")
+        .uri(
+            "/api/v1/revocations?record_id=record-rev-filter&effective_after=2026-01-02T00:00:00Z&effective_before=2026-01-03T00:00:00Z",
+        )
+        .body(Body::empty())
+        .expect("failed to build GET /revocations request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let rows: Value = serde_json::from_slice(&body).expect("invalid JSON body");
+    let array = rows.as_array().expect("revocation response must be an array");
+    assert_eq!(array.len(), 2);
+    assert_eq!(
+        array[0]
+            .get("revocation_id")
+            .and_then(Value::as_str)
+            .expect("missing revocation_id"),
+        "rev-filter-3"
+    );
+    assert_eq!(
+        array[1]
+            .get("revocation_id")
+            .and_then(Value::as_str)
+            .expect("missing revocation_id"),
+        "rev-filter-2"
+    );
+}
+
+#[tokio::test]
+async fn list_revocations_uses_stable_tiebreak_ordering() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    sqlx::query(
+        "INSERT INTO identity_records (
+            record_id,
+            station_id,
+            callsign,
+            publication_state
+         ) VALUES ($1, $2, $3, $4)",
+    )
+    .bind("record-rev-order")
+    .bind("STN-REV-O")
+    .bind("N0REVO")
+    .bind("published")
+    .execute(&pool)
+    .await
+    .expect("failed to insert ordering identity record");
+
+    sqlx::query(
+        "INSERT INTO revocations (
+            revocation_id,
+            record_id,
+            revision_id,
+            key_id,
+            issuer_identity,
+            reason_code,
+            effective_at,
+            created_at
+         ) VALUES
+            ($1, $3, NULL, NULL, $4, $5, $6::timestamptz, $7::timestamptz),
+            ($2, $3, NULL, NULL, $4, $5, $6::timestamptz, $7::timestamptz)",
+    )
+    .bind("rev-order-b")
+    .bind("rev-order-a")
+    .bind("record-rev-order")
+    .bind("issuer-order")
+    .bind("operator_request")
+    .bind("2026-01-04T00:00:00Z")
+    .bind("2026-01-05T00:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("failed to insert ordering revocations");
+
+    let app = build_router(AppState { db: pool.clone() });
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/revocations?record_id=record-rev-order")
+        .body(Body::empty())
+        .expect("failed to build GET /revocations request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let rows: Value = serde_json::from_slice(&body).expect("invalid JSON body");
+    let array = rows.as_array().expect("revocation response must be an array");
+    assert_eq!(array.len(), 2);
+    assert_eq!(
+        array[0]
+            .get("revocation_id")
+            .and_then(Value::as_str)
+            .expect("missing revocation_id"),
+        "rev-order-a"
+    );
+    assert_eq!(
+        array[1]
+            .get("revocation_id")
+            .and_then(Value::as_str)
+            .expect("missing revocation_id"),
+        "rev-order-b"
+    );
+}
+
+#[tokio::test]
 async fn trust_bundle_endpoints_return_current_and_specific_bundle() {
     let Some(pool) = setup_pool().await else {
         return;
