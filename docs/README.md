@@ -26,6 +26,7 @@ Canonical documentation lives in the files listed below.
 - docs/pki-tooling-operations-runbook.md: operational procedures, incident playbooks, and backup/restore guidance for PKI tooling
 - docs/pki-tooling-requirements.md: requirements for separate PKI publication, lookup, and trust tooling
 - docs/pki-tooling-rollout-plan.md: phased implementation, quality gates, and release milestones for PKI tooling
+- docs/pki-tooling-spec-map.md: normative and informative classification and reading order for PKI docs
 - docs/pki-tooling-trust-policy.md: moderation workflow, trust scoring policy, and decision guardrails for PKI tooling
 - docs/requirements.md: functional and non-functional requirements
 - docs/steering.md: governance and decision ownership
