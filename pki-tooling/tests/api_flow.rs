@@ -1726,3 +1726,379 @@ async fn list_revocations_limit_one_returns_deterministic_first_result() {
         "limit=1 with DESC ordering should return newest effective_at first"
     );
 }
+
+#[tokio::test]
+async fn create_revocation_succeeds_with_valid_input() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    sqlx::query(
+        "INSERT INTO identity_records (
+            record_id,
+            station_id,
+            callsign,
+            current_revision_id,
+            publication_state
+         ) VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind("record-create-rev")
+    .bind("STN-CREATE")
+    .bind("N0CREATE")
+    .bind("rev-create-1")
+    .bind("published")
+    .execute(&pool)
+    .await
+    .expect("failed to insert record for create_revocation test");
+
+    let app = build_router(AppState { db: pool.clone() });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/revocations")
+        .header("content-type", "application/json")
+        .header("x-request-id", "req-create-rev-001")
+        .body(Body::from(
+            json!({
+                "record_id": "record-create-rev",
+                "revision_id": "rev-create-1",
+                "key_id": "key-create-1",
+                "issuer_identity": "issuer-create",
+                "reason_code": "key_compromise",
+                "effective_at": "2026-03-02T10:00:00Z"
+            })
+            .to_string(),
+        ))
+        .expect("failed to build create_revocation request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let result: Value = serde_json::from_slice(&body).expect("invalid JSON body");
+
+    assert!(result.get("revocation_id").is_some(), "missing revocation_id");
+    assert_eq!(
+        result
+            .get("effective_at")
+            .and_then(Value::as_str)
+            .expect("missing effective_at"),
+        "2026-03-02T10:00:00+00:00"
+    );
+}
+
+#[tokio::test]
+async fn create_revocation_rejects_empty_fields() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    sqlx::query(
+        "INSERT INTO identity_records (
+            record_id,
+            station_id,
+            callsign,
+            current_revision_id,
+            publication_state
+         ) VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind("record-empty-rev")
+    .bind("STN-EMPTY")
+    .bind("N0EMPTY")
+    .bind("rev-empty-1")
+    .bind("published")
+    .execute(&pool)
+    .await
+    .expect("failed to insert record for empty test");
+
+    let app = build_router(AppState { db: pool.clone() });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/revocations")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "record_id": "record-empty-rev",
+                "revision_id": "rev-empty-1",
+                "key_id": "key-empty-1",
+                "issuer_identity": "",
+                "reason_code": "key_compromise",
+                "effective_at": "2026-03-02T10:00:00Z"
+            })
+            .to_string(),
+        ))
+        .expect("failed to build request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let result: Value = serde_json::from_slice(&body).expect("invalid JSON body");
+    assert_eq!(
+        result
+            .get("status")
+            .and_then(Value::as_str)
+            .expect("missing status"),
+        "validation_error"
+    );
+}
+
+#[tokio::test]
+async fn create_revocation_rejects_invalid_rfc3339_timestamp() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    sqlx::query(
+        "INSERT INTO identity_records (
+            record_id,
+            station_id,
+            callsign,
+            current_revision_id,
+            publication_state
+         ) VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind("record-bad-ts")
+    .bind("STN-BAD-TS")
+    .bind("N0BADTS")
+    .bind("rev-bad-1")
+    .bind("published")
+    .execute(&pool)
+    .await
+    .expect("failed to insert record for timestamp test");
+
+    let app = build_router(AppState { db: pool.clone() });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/revocations")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "record_id": "record-bad-ts",
+                "revision_id": "rev-bad-1",
+                "key_id": "key-bad-1",
+                "issuer_identity": "issuer-bad",
+                "reason_code": "key_compromise",
+                "effective_at": "not-a-timestamp"
+            })
+            .to_string(),
+        ))
+        .expect("failed to build request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let result: Value = serde_json::from_slice(&body).expect("invalid JSON body");
+    assert!(
+        result
+            .get("detail")
+            .and_then(Value::as_str)
+            .expect("missing detail")
+            .contains("RFC3339"),
+        "should mention RFC3339 in error"
+    );
+}
+
+#[tokio::test]
+async fn create_revocation_rejects_missing_record() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    let app = build_router(AppState { db: pool.clone() });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/revocations")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "record_id": "nonexistent-record",
+                "revision_id": "rev-missing-1",
+                "key_id": "key-missing-1",
+                "issuer_identity": "issuer-missing",
+                "reason_code": "key_compromise",
+                "effective_at": "2026-03-02T10:00:00Z"
+            })
+            .to_string(),
+        ))
+        .expect("failed to build request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let result: Value = serde_json::from_slice(&body).expect("invalid JSON body");
+    assert!(
+        result
+            .get("detail")
+            .and_then(Value::as_str)
+            .expect("missing detail")
+            .contains("not found"),
+        "should mention not found in error"
+    );
+}
+
+#[tokio::test]
+async fn publish_trust_bundle_succeeds_with_valid_input() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    let app = build_router(AppState { db: pool.clone() });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/trust-bundles")
+        .header("content-type", "application/json")
+        .header("x-request-id", "req-pub-bundle-001")
+        .body(Body::from(
+            json!({
+                "schema_version": "1.0",
+                "generated_at": "2026-03-02T10:00:00Z",
+                "issuer_instance_id": "issuer-pub-1",
+                "signing_algorithms": ["ed25519"],
+                "records": {"stub": "data"},
+                "bundle_signature": "sig-pub-001"
+            })
+            .to_string(),
+        ))
+        .expect("failed to build publish_trust_bundle request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let result: Value = serde_json::from_slice(&body).expect("invalid JSON body");
+
+    assert!(result.get("bundle_id").is_some(), "missing bundle_id");
+    assert_eq!(
+        result.get("is_current").and_then(Value::as_bool),
+        Some(false),
+        "newly published bundle should not be current"
+    );
+}
+
+#[tokio::test]
+async fn publish_trust_bundle_rejects_empty_fields() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    let app = build_router(AppState { db: pool.clone() });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/trust-bundles")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "schema_version": "",
+                "generated_at": "2026-03-02T10:00:00Z",
+                "issuer_instance_id": "issuer-pub-2",
+                "signing_algorithms": ["ed25519"],
+                "records": {"stub": "data"},
+                "bundle_signature": "sig-pub-002"
+            })
+            .to_string(),
+        ))
+        .expect("failed to build request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let result: Value = serde_json::from_slice(&body).expect("invalid JSON body");
+    assert_eq!(
+        result
+            .get("status")
+            .and_then(Value::as_str)
+            .expect("missing status"),
+        "validation_error"
+    );
+}
+
+#[tokio::test]
+async fn publish_trust_bundle_rejects_invalid_rfc3339_timestamp() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    let app = build_router(AppState { db: pool.clone() });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/trust-bundles")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "schema_version": "1.0",
+                "generated_at": "bad-timestamp",
+                "issuer_instance_id": "issuer-pub-3",
+                "signing_algorithms": ["ed25519"],
+                "records": {"stub": "data"},
+                "bundle_signature": "sig-pub-003"
+            })
+            .to_string(),
+        ))
+        .expect("failed to build request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let result: Value = serde_json::from_slice(&body).expect("invalid JSON body");
+    assert!(
+        result
+            .get("detail")
+            .and_then(Value::as_str)
+            .expect("missing detail")
+            .contains("RFC3339"),
+        "should mention RFC3339 in error"
+    );
+}
