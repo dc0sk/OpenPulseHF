@@ -58,6 +58,7 @@ impl BpskPlugin {
                     "BPSK100".to_string(),
                     "BPSK250".to_string(),
                 ],
+                trait_version_required: "1.0".to_string(),
             },
         }
     }

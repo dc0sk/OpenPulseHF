@@ -22,6 +22,23 @@ pub enum ModemError {
     Audio(String),
 }
 
+/// Errors produced by the plugin layer.
+#[derive(Debug, Error)]
+pub enum PluginError {
+    #[error("plugin '{plugin}' requires trait version {required}, but framework provides {current}")]
+    IncompatibleTraitVersion {
+        plugin: String,
+        required: String,
+        current: String,
+    },
+
+    #[error("invalid trait version format '{0}': expected \"<major>.<minor>\"")]
+    InvalidTraitVersionFormat(String),
+
+    #[error("plugin error: {0}")]
+    Other(String),
+}
+
 /// Errors produced by the audio layer.
 #[derive(Debug, Error)]
 pub enum AudioError {

@@ -3,7 +3,7 @@
 use tracing::{debug, info};
 
 use openpulse_core::audio::{AudioBackend, AudioConfig};
-use openpulse_core::error::ModemError;
+use openpulse_core::error::{ModemError, PluginError};
 use openpulse_core::frame::Frame;
 use openpulse_core::plugin::{ModulationConfig, PluginRegistry};
 
@@ -37,12 +37,18 @@ impl ModemEngine {
     }
 
     /// Register a modulation plugin.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the plugin's trait version is incompatible with the framework.
     pub fn register_plugin(
         &mut self,
         plugin: Box<dyn openpulse_core::plugin::ModulationPlugin>,
-    ) {
-        info!("registered plugin: {}", plugin.info().name);
-        self.plugins.register(plugin);
+    ) -> Result<(), PluginError> {
+        info!("registering plugin: {}", plugin.info().name);
+        self.plugins.register(plugin)?;
+        info!("plugin registered successfully");
+        Ok(())
     }
 
     /// Return the underlying plugin registry (read-only).
@@ -152,7 +158,9 @@ mod tests {
 
     fn make_engine() -> ModemEngine {
         let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
-        engine.register_plugin(Box::new(BpskPlugin::new()));
+        engine
+            .register_plugin(Box::new(BpskPlugin::new()))
+            .expect("failed to register BPSK plugin");
         engine
     }
 
