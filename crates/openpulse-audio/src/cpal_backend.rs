@@ -6,12 +6,12 @@
 //! This module is only compiled when the `cpal-backend` feature is active
 //! (enabled by default).
 
-use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{SampleFormat, Stream, StreamConfig};
+use cpal::{Stream, StreamConfig};
 use tracing::{debug, warn};
 
 use openpulse_core::audio::{
@@ -153,10 +153,18 @@ impl AudioBackend for CpalBackend {
             )
             .map_err(|e| AudioError::Stream(e.to_string()))?;
 
-        stream.play().map_err(|e| AudioError::Stream(e.to_string()))?;
-        debug!("opened cpal input stream on '{}'", dev.name().unwrap_or_default());
+        stream
+            .play()
+            .map_err(|e| AudioError::Stream(e.to_string()))?;
+        debug!(
+            "opened cpal input stream on '{}'",
+            dev.name().unwrap_or_default()
+        );
 
-        Ok(Box::new(CpalInputStream { _stream: stream, buf }))
+        Ok(Box::new(CpalInputStream {
+            _stream: stream,
+            buf,
+        }))
     }
 
     fn open_output(
@@ -206,10 +214,18 @@ impl AudioBackend for CpalBackend {
             )
             .map_err(|e| AudioError::Stream(e.to_string()))?;
 
-        stream.play().map_err(|e| AudioError::Stream(e.to_string()))?;
-        debug!("opened cpal output stream on '{}'", dev.name().unwrap_or_default());
+        stream
+            .play()
+            .map_err(|e| AudioError::Stream(e.to_string()))?;
+        debug!(
+            "opened cpal output stream on '{}'",
+            dev.name().unwrap_or_default()
+        );
 
-        Ok(Box::new(CpalOutputStream { _stream: stream, buf }))
+        Ok(Box::new(CpalOutputStream {
+            _stream: stream,
+            buf,
+        }))
     }
 }
 
@@ -224,7 +240,7 @@ pub struct CpalInputStream {
 impl AudioInputStream for CpalInputStream {
     fn read(&mut self) -> Result<Vec<f32>, AudioError> {
         // Poll the buffer; only sleep when it is empty to avoid unnecessary latency.
-        let guard = self.buf.lock().expect("cpal buffer poisoned");
+        let mut guard = self.buf.lock().expect("cpal buffer poisoned");
         if !guard.is_empty() {
             return Ok(guard.drain(..).collect());
         }

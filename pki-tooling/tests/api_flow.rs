@@ -253,13 +253,12 @@ async fn moderation_decision_updates_submission_and_records_events() {
         "manual_review_ok"
     );
 
-    let moderation_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM moderation_events WHERE submission_id = $1",
-    )
-    .bind(&submission_id)
-    .fetch_one(&pool)
-    .await
-    .expect("failed to query moderation_events");
+    let moderation_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM moderation_events WHERE submission_id = $1")
+            .bind(&submission_id)
+            .fetch_one(&pool)
+            .await
+            .expect("failed to query moderation_events");
     assert_eq!(moderation_count, 1);
 
     let audit_count: i64 = sqlx::query_scalar(
@@ -598,7 +597,9 @@ async fn list_revocations_filters_by_record_id_and_issuer() {
         .await
         .expect("failed to read response body");
     let rows: Value = serde_json::from_slice(&body).expect("invalid JSON body");
-    let array = rows.as_array().expect("revocation response must be an array");
+    let array = rows
+        .as_array()
+        .expect("revocation response must be an array");
     assert_eq!(array.len(), 1);
     assert_eq!(
         array[0]
@@ -760,7 +761,9 @@ async fn list_revocations_applies_effective_time_filters() {
         .await
         .expect("failed to read response body");
     let rows: Value = serde_json::from_slice(&body).expect("invalid JSON body");
-    let array = rows.as_array().expect("revocation response must be an array");
+    let array = rows
+        .as_array()
+        .expect("revocation response must be an array");
     assert_eq!(array.len(), 2);
     assert_eq!(
         array[0]
@@ -843,7 +846,9 @@ async fn list_revocations_uses_stable_tiebreak_ordering() {
         .await
         .expect("failed to read response body");
     let rows: Value = serde_json::from_slice(&body).expect("invalid JSON body");
-    let array = rows.as_array().expect("revocation response must be an array");
+    let array = rows
+        .as_array()
+        .expect("revocation response must be an array");
     assert_eq!(array.len(), 2);
     assert_eq!(
         array[0]
@@ -1038,7 +1043,9 @@ async fn list_revocations_filters_by_key_fingerprint() {
         .await
         .expect("failed to read response body");
     let rows: Value = serde_json::from_slice(&body).expect("invalid JSON body");
-    let array = rows.as_array().expect("revocation response must be an array");
+    let array = rows
+        .as_array()
+        .expect("revocation response must be an array");
     assert_eq!(array.len(), 1);
     assert_eq!(
         array[0]
@@ -1582,14 +1589,22 @@ async fn list_revocations_returns_empty_when_composed_filter_excludes_all() {
         .oneshot(req)
         .await
         .expect("request should succeed");
-    assert_eq!(response.status(), StatusCode::OK, "should return 200 even with no matches");
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "should return 200 even with no matches"
+    );
 
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("failed to read response body");
     let rows: Value = serde_json::from_slice(&body).expect("invalid JSON body");
     let array = rows.as_array().expect("expected array response");
-    assert_eq!(array.len(), 0, "composed filters should exclude all when one filter has no matches");
+    assert_eq!(
+        array.len(),
+        0,
+        "composed filters should exclude all when one filter has no matches"
+    );
 }
 
 #[tokio::test]
@@ -1783,7 +1798,10 @@ async fn create_revocation_succeeds_with_valid_input() {
         .expect("failed to read response body");
     let result: Value = serde_json::from_slice(&body).expect("invalid JSON body");
 
-    assert!(result.get("revocation_id").is_some(), "missing revocation_id");
+    assert!(
+        result.get("revocation_id").is_some(),
+        "missing revocation_id"
+    );
     assert_eq!(
         result
             .get("effective_at")
@@ -2148,7 +2166,11 @@ async fn promote_trust_bundle_marks_bundle_current() {
         .body(Body::from(json!({ "reason": "rollout" }).to_string()))
         .expect("failed to build promote request");
 
-    let response = app.clone().oneshot(req).await.expect("request should succeed");
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = to_bytes(response.into_body(), usize::MAX)
@@ -2159,12 +2181,16 @@ async fn promote_trust_bundle_marks_bundle_current() {
         result.get("bundle_id").and_then(Value::as_str),
         Some("bundle-promote-target")
     );
-    assert_eq!(result.get("is_current").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        result.get("is_current").and_then(Value::as_bool),
+        Some(true)
+    );
 
-    let current_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM trust_bundles WHERE is_current = true")
-        .fetch_one(&pool)
-        .await
-        .expect("failed to count current bundles");
+    let current_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM trust_bundles WHERE is_current = true")
+            .fetch_one(&pool)
+            .await
+            .expect("failed to count current bundles");
     assert_eq!(current_count, 1);
 }
 
@@ -2183,7 +2209,11 @@ async fn promote_trust_bundle_returns_not_found_for_missing_bundle() {
         .body(Body::from(json!({ "reason": "none" }).to_string()))
         .expect("failed to build promote request");
 
-    let response = app.clone().oneshot(req).await.expect("request should succeed");
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
@@ -2224,7 +2254,11 @@ async fn create_revocation_replays_same_response_for_same_request_id() {
         .header("x-request-id", "req-dedup-rev-001")
         .body(Body::from(payload.clone()))
         .expect("failed to build first request");
-    let res1 = app.clone().oneshot(req1).await.expect("first request should succeed");
+    let res1 = app
+        .clone()
+        .oneshot(req1)
+        .await
+        .expect("first request should succeed");
     assert_eq!(res1.status(), StatusCode::CREATED);
     let body1 = to_bytes(res1.into_body(), usize::MAX)
         .await
@@ -2238,14 +2272,21 @@ async fn create_revocation_replays_same_response_for_same_request_id() {
         .header("x-request-id", "req-dedup-rev-001")
         .body(Body::from(payload))
         .expect("failed to build second request");
-    let res2 = app.clone().oneshot(req2).await.expect("second request should succeed");
+    let res2 = app
+        .clone()
+        .oneshot(req2)
+        .await
+        .expect("second request should succeed");
     assert_eq!(res2.status(), StatusCode::CREATED);
     let body2 = to_bytes(res2.into_body(), usize::MAX)
         .await
         .expect("failed reading second response body");
     let json2: Value = serde_json::from_slice(&body2).expect("invalid second JSON");
 
-    assert_eq!(json1, json2, "dedup replay should return identical response body");
+    assert_eq!(
+        json1, json2,
+        "dedup replay should return identical response body"
+    );
 
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM revocations WHERE record_id = $1")
         .bind("record-dedup-rev")
@@ -2279,7 +2320,11 @@ async fn publish_trust_bundle_replays_same_response_for_same_request_id() {
         .header("x-request-id", "req-dedup-bundle-001")
         .body(Body::from(payload.clone()))
         .expect("failed to build first request");
-    let res1 = app.clone().oneshot(req1).await.expect("first request should succeed");
+    let res1 = app
+        .clone()
+        .oneshot(req1)
+        .await
+        .expect("first request should succeed");
     assert_eq!(res1.status(), StatusCode::CREATED);
     let body1 = to_bytes(res1.into_body(), usize::MAX)
         .await
@@ -2293,14 +2338,21 @@ async fn publish_trust_bundle_replays_same_response_for_same_request_id() {
         .header("x-request-id", "req-dedup-bundle-001")
         .body(Body::from(payload))
         .expect("failed to build second request");
-    let res2 = app.clone().oneshot(req2).await.expect("second request should succeed");
+    let res2 = app
+        .clone()
+        .oneshot(req2)
+        .await
+        .expect("second request should succeed");
     assert_eq!(res2.status(), StatusCode::CREATED);
     let body2 = to_bytes(res2.into_body(), usize::MAX)
         .await
         .expect("failed reading second response body");
     let json2: Value = serde_json::from_slice(&body2).expect("invalid second JSON");
 
-    assert_eq!(json1, json2, "dedup replay should return identical response body");
+    assert_eq!(
+        json1, json2,
+        "dedup replay should return identical response body"
+    );
 
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM trust_bundles WHERE issuer_instance_id = $1 AND bundle_signature = $2",

@@ -86,7 +86,9 @@ impl AudioBackend for HotplugBackend {
         } else {
             // If no device specified, use the default.
             if devices.is_empty() || !devices[0].is_input {
-                return Err(AudioError::DeviceNotFound("no default input device".to_string()));
+                return Err(AudioError::DeviceNotFound(
+                    "no default input device".to_string(),
+                ));
             }
         }
 

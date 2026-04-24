@@ -43,7 +43,7 @@ impl Default for AudioConfig {
 // ── Stream traits ─────────────────────────────────────────────────────────────
 
 /// An open audio capture stream.
-pub trait AudioInputStream: Send {
+pub trait AudioInputStream {
     /// Block until at least one sample is available, then return all buffered
     /// samples normalised to `−1.0 … +1.0`.
     fn read(&mut self) -> Result<Vec<f32>, AudioError>;
@@ -53,7 +53,7 @@ pub trait AudioInputStream: Send {
 }
 
 /// An open audio playback stream.
-pub trait AudioOutputStream: Send {
+pub trait AudioOutputStream {
     /// Write `samples` (normalised `−1.0 … +1.0`) to the device.
     fn write(&mut self, samples: &[f32]) -> Result<(), AudioError>;
 

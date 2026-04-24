@@ -66,9 +66,10 @@ impl ModemEngine {
         mode: &str,
         device: Option<&str>,
     ) -> Result<(), ModemError> {
-        let plugin = self.plugins.get(mode).ok_or_else(|| {
-            ModemError::PluginNotFound(mode.to_string())
-        })?;
+        let plugin = self
+            .plugins
+            .get(mode)
+            .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
 
         let frame = Frame::new(self.sequence, data.to_vec());
         self.sequence = self.sequence.wrapping_add(1);
@@ -112,11 +113,7 @@ impl ModemEngine {
     /// `mode`, and return the decoded frame payload.
     ///
     /// Pass `device = None` to use the backend's default input device.
-    pub fn receive(
-        &mut self,
-        mode: &str,
-        device: Option<&str>,
-    ) -> Result<Vec<u8>, ModemError> {
+    pub fn receive(&mut self, mode: &str, device: Option<&str>) -> Result<Vec<u8>, ModemError> {
         let audio_cfg = AudioConfig::default();
         let mut stream = self
             .audio
@@ -129,9 +126,10 @@ impl ModemEngine {
 
         info!("received {} audio samples", samples.len());
 
-        let plugin = self.plugins.get(mode).ok_or_else(|| {
-            ModemError::PluginNotFound(mode.to_string())
-        })?;
+        let plugin = self
+            .plugins
+            .get(mode)
+            .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
 
         let mod_cfg = ModulationConfig {
             mode: mode.to_string(),

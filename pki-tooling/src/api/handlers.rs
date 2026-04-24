@@ -1,8 +1,8 @@
 use crate::AppState;
-use axum::http::HeaderMap;
-use axum::extract::State;
-use axum::extract::Query;
 use axum::extract::Path;
+use axum::extract::Query;
+use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -166,7 +166,13 @@ struct PromoteTrustBundleResponse {
 }
 
 pub async fn healthz() -> impl IntoResponse {
-    (StatusCode::OK, Json(ApiMessage { status: "ok", detail: "service healthy".to_string() }))
+    (
+        StatusCode::OK,
+        Json(ApiMessage {
+            status: "ok",
+            detail: "service healthy".to_string(),
+        }),
+    )
 }
 
 pub async fn get_identity(
@@ -248,14 +254,16 @@ pub async fn list_revocations(
     State(state): State<AppState>,
     Query(query): Query<RevocationQuery>,
 ) -> impl IntoResponse {
-    let effective_before = match parse_rfc3339_query(query.effective_before.as_deref(), "effective_before") {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
-    let effective_after = match parse_rfc3339_query(query.effective_after.as_deref(), "effective_after") {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
+    let effective_before =
+        match parse_rfc3339_query(query.effective_before.as_deref(), "effective_before") {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    let effective_after =
+        match parse_rfc3339_query(query.effective_after.as_deref(), "effective_after") {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
 
     if let (Some(after), Some(before)) = (&effective_after, &effective_before) {
         if after > before {
@@ -263,7 +271,8 @@ pub async fn list_revocations(
                 StatusCode::BAD_REQUEST,
                 Json(ApiMessage {
                     status: "validation_error",
-                    detail: "effective_after must be less than or equal to effective_before".to_string(),
+                    detail: "effective_after must be less than or equal to effective_before"
+                        .to_string(),
                 }),
             )
                 .into_response();
@@ -629,7 +638,8 @@ pub async fn get_moderation_queue(
     );
 
     if let Some(state_name) = allowed_state {
-        qb.push(" WHERE submission_state = ").push_bind(state_name.to_string());
+        qb.push(" WHERE submission_state = ")
+            .push_bind(state_name.to_string());
     } else {
         qb.push(" WHERE submission_state IN ('pending', 'quarantined')");
     }
@@ -841,7 +851,8 @@ pub async fn create_revocation(
     let request_id = extract_request_id(&headers);
 
     if let Some(request_id_str) = request_id.as_deref() {
-        match check_request_tracking(&state.db, request_id_str, "/api/v1/revocations", "POST").await {
+        match check_request_tracking(&state.db, request_id_str, "/api/v1/revocations", "POST").await
+        {
             Ok(Some((status, body))) => return (status, Json(body)).into_response(),
             Ok(None) => {}
             Err(err) => {
@@ -1068,7 +1079,9 @@ pub async fn publish_trust_bundle(
     let request_id = extract_request_id(&headers);
 
     if let Some(request_id_str) = request_id.as_deref() {
-        match check_request_tracking(&state.db, request_id_str, "/api/v1/trust-bundles", "POST").await {
+        match check_request_tracking(&state.db, request_id_str, "/api/v1/trust-bundles", "POST")
+            .await
+        {
             Ok(Some((status, body))) => return (status, Json(body)).into_response(),
             Ok(None) => {}
             Err(err) => {
@@ -1101,20 +1114,20 @@ pub async fn publish_trust_bundle(
     }
 
     // Validation: check generated_at is RFC3339
-    let generated_at_parsed =
-        match chrono::DateTime::parse_from_rfc3339(req.generated_at.as_str()) {
-            Ok(dt) => dt.to_rfc3339(),
-            Err(_) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(ApiMessage {
-                        status: "validation_error",
-                        detail: "generated_at must be RFC3339 timestamp".to_string(),
-                    }),
-                )
-                    .into_response();
-            }
-        };
+    let generated_at_parsed = match chrono::DateTime::parse_from_rfc3339(req.generated_at.as_str())
+    {
+        Ok(dt) => dt.to_rfc3339(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiMessage {
+                    status: "validation_error",
+                    detail: "generated_at must be RFC3339 timestamp".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
 
     let bundle_id = Uuid::new_v4().to_string();
 
@@ -1340,9 +1353,10 @@ pub async fn promote_trust_bundle(
         return (StatusCode::NOT_FOUND, Json(body)).into_response();
     }
 
-    if let Err(err) = sqlx::query("UPDATE trust_bundles SET is_current = false WHERE is_current = true")
-        .execute(&mut *tx)
-        .await
+    if let Err(err) =
+        sqlx::query("UPDATE trust_bundles SET is_current = false WHERE is_current = true")
+            .execute(&mut *tx)
+            .await
     {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
