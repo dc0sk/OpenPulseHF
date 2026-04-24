@@ -1475,3 +1475,254 @@ async fn trust_bundle_endpoints_return_current_and_specific_bundle() {
         .expect("request should succeed");
     assert_eq!(missing_res.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn list_revocations_returns_empty_when_composed_filter_excludes_all() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    sqlx::query(
+        "INSERT INTO identity_records (
+            record_id,
+            station_id,
+            callsign,
+            current_revision_id,
+            publication_state
+         ) VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind("record-empty-filter")
+    .bind("STN-EMPTY-F")
+    .bind("N0EMPTYF")
+    .bind("rev-empty-1")
+    .bind("published")
+    .execute(&pool)
+    .await
+    .expect("failed to insert empty-filter identity record");
+
+    sqlx::query(
+        "INSERT INTO identity_revisions (
+            revision_id,
+            record_id,
+            revision_number,
+            valid_from,
+            valid_until,
+            submitted_via,
+            submission_id,
+            algorithms_json
+         ) VALUES ($1, $2, $3, $4::timestamptz, $5, $6, $7, $8)",
+    )
+    .bind("rev-empty-1")
+    .bind("record-empty-filter")
+    .bind(1_i32)
+    .bind("2026-03-01T00:00:00Z")
+    .bind(Option::<String>::None)
+    .bind("api")
+    .bind(Option::<String>::None)
+    .bind(json!(["ed25519"]))
+    .execute(&pool)
+    .await
+    .expect("failed to insert empty-filter revision");
+
+    sqlx::query(
+        "INSERT INTO identity_keys (
+            revision_id,
+            key_id,
+            algorithm,
+            public_key,
+            fingerprint,
+            key_status
+         ) VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind("rev-empty-1")
+    .bind("key-empty-1")
+    .bind("ed25519")
+    .bind("pk-empty-1")
+    .bind("FP:EMPTY-MATCH")
+    .bind("active")
+    .execute(&pool)
+    .await
+    .expect("failed to insert empty-filter key");
+
+    sqlx::query(
+        "INSERT INTO revocations (
+            revocation_id,
+            record_id,
+            revision_id,
+            key_id,
+            issuer_identity,
+            reason_code,
+            effective_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz)",
+    )
+    .bind("rev-empty-wrong-issuer")
+    .bind("record-empty-filter")
+    .bind("rev-empty-1")
+    .bind("key-empty-1")
+    .bind("issuer-different")
+    .bind("key_compromise")
+    .bind("2026-03-02T00:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("failed to insert empty-filter revocation with wrong issuer");
+
+    let app = build_router(AppState { db: pool.clone() });
+
+    // Query with fingerprint and time window matching, but wrong issuer_id
+    let req = Request::builder()
+        .method("GET")
+        .uri(
+            "/api/v1/revocations?fingerprint=FP:EMPTY-MATCH&issuer_id=issuer-expected&effective_after=2026-03-01T00:00:00Z&effective_before=2026-03-03T00:00:00Z",
+        )
+        .body(Body::empty())
+        .expect("failed to build empty-filter request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK, "should return 200 even with no matches");
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let rows: Value = serde_json::from_slice(&body).expect("invalid JSON body");
+    let array = rows.as_array().expect("expected array response");
+    assert_eq!(array.len(), 0, "composed filters should exclude all when one filter has no matches");
+}
+
+#[tokio::test]
+async fn list_revocations_limit_one_returns_deterministic_first_result() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    sqlx::query(
+        "INSERT INTO identity_records (
+            record_id,
+            station_id,
+            callsign,
+            current_revision_id,
+            publication_state
+         ) VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind("record-limit-one")
+    .bind("STN-LIMIT-1")
+    .bind("N0LIMIT1")
+    .bind("rev-limit-1")
+    .bind("published")
+    .execute(&pool)
+    .await
+    .expect("failed to insert limit-one identity record");
+
+    sqlx::query(
+        "INSERT INTO identity_revisions (
+            revision_id,
+            record_id,
+            revision_number,
+            valid_from,
+            valid_until,
+            submitted_via,
+            submission_id,
+            algorithms_json
+         ) VALUES ($1, $2, $3, $4::timestamptz, $5, $6, $7, $8)",
+    )
+    .bind("rev-limit-1")
+    .bind("record-limit-one")
+    .bind(1_i32)
+    .bind("2026-03-01T00:00:00Z")
+    .bind(Option::<String>::None)
+    .bind("api")
+    .bind(Option::<String>::None)
+    .bind(json!(["ed25519"]))
+    .execute(&pool)
+    .await
+    .expect("failed to insert limit-one revision");
+
+    sqlx::query(
+        "INSERT INTO identity_keys (
+            revision_id,
+            key_id,
+            algorithm,
+            public_key,
+            fingerprint,
+            key_status
+         ) VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind("rev-limit-1")
+    .bind("key-limit-1")
+    .bind("ed25519")
+    .bind("pk-limit-1")
+    .bind("FP:LIMIT-ONE")
+    .bind("active")
+    .execute(&pool)
+    .await
+    .expect("failed to insert limit-one key");
+
+    sqlx::query(
+        "INSERT INTO revocations (
+            revocation_id,
+            record_id,
+            revision_id,
+            key_id,
+            issuer_identity,
+            reason_code,
+            effective_at
+         ) VALUES
+            ($1, $4, $5, $2, $6, $7, $8::timestamptz),
+            ($3, $4, $5, $2, $6, $7, $9::timestamptz),
+            ($10, $4, $5, $2, $6, $7, $11::timestamptz)",
+    )
+    .bind("rev-limit-oldest")
+    .bind("key-limit-1")
+    .bind("rev-limit-middle")
+    .bind("record-limit-one")
+    .bind("rev-limit-1")
+    .bind("issuer-limit-one")
+    .bind("key_compromise")
+    .bind("2026-03-01T08:00:00Z")
+    .bind("2026-03-02T10:00:00Z")
+    .bind("rev-limit-newest")
+    .bind("2026-03-03T12:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("failed to insert limit-one revocations");
+
+    let app = build_router(AppState { db: pool.clone() });
+
+    // Query with limit=1 and composed filters
+    let req = Request::builder()
+        .method("GET")
+        .uri(
+            "/api/v1/revocations?fingerprint=FP:LIMIT-ONE&issuer_id=issuer-limit-one&effective_after=2026-03-01T00:00:00Z&effective_before=2026-03-04T00:00:00Z&limit=1",
+        )
+        .body(Body::empty())
+        .expect("failed to build limit-one request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let rows: Value = serde_json::from_slice(&body).expect("invalid JSON body");
+    let array = rows.as_array().expect("expected array response");
+    assert_eq!(array.len(), 1, "limit=1 should return exactly one result");
+
+    let result = array[0].as_object().expect("expected object");
+    let revocation_id = result
+        .get("revocation_id")
+        .and_then(Value::as_str)
+        .expect("missing revocation_id");
+
+    // Should be the newest (highest effective_at: 2026-03-03T12:00:00Z)
+    assert_eq!(
+        revocation_id, "rev-limit-newest",
+        "limit=1 with DESC ordering should return newest effective_at first"
+    );
+}

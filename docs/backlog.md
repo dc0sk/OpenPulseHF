@@ -27,3 +27,4 @@ last_updated: 2026-04-23
 - Add query propagation duplicate-suppression tests.
 - Add relay loop-prevention and multi-hop conformance tests.
 - Add relay trust-policy failure-path integration tests.
+- Design secure bandwidth optimization for signature sharing (e.g., signature compression, hash-based references, or signature aggregation schemes) to reduce PKI distribution overhead.
