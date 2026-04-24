@@ -330,6 +330,187 @@ async fn create_submission_rejects_empty_payload_type() {
 }
 
 #[tokio::test]
+async fn signed_handshake_requires_detached_signature() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    let app = build_router(AppState { db: pool.clone() });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/submissions")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "payload_type": "signed_handshake",
+                "payload": {
+                    "session_id": "sess-001",
+                    "peer_id": "peer-01",
+                    "handshake_nonce": "nonce-abc",
+                    "signed_at": "2026-04-24T12:00:00Z"
+                },
+                "detached_signature": null
+            })
+            .to_string(),
+        ))
+        .expect("failed to build POST /submissions request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let error: Value = serde_json::from_slice(&body).expect("invalid JSON error body");
+    assert_eq!(
+        error
+            .get("status")
+            .and_then(Value::as_str)
+            .expect("missing status"),
+        "validation_error"
+    );
+    assert_eq!(
+        error
+            .get("detail")
+            .and_then(Value::as_str)
+            .expect("missing detail"),
+        "detached_signature is required for signed_handshake and signed_manifest"
+    );
+}
+
+#[tokio::test]
+async fn signed_handshake_requires_required_payload_fields() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    let app = build_router(AppState { db: pool.clone() });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/submissions")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "payload_type": "signed_handshake",
+                "payload": {
+                    "session_id": "sess-001",
+                    "peer_id": "peer-01",
+                    "signed_at": "2026-04-24T12:00:00Z"
+                },
+                "detached_signature": "sig-abc"
+            })
+            .to_string(),
+        ))
+        .expect("failed to build POST /submissions request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let error: Value = serde_json::from_slice(&body).expect("invalid JSON error body");
+    assert_eq!(
+        error
+            .get("detail")
+            .and_then(Value::as_str)
+            .expect("missing detail"),
+        "payload is missing required field 'handshake_nonce'"
+    );
+}
+
+#[tokio::test]
+async fn signed_manifest_requires_required_payload_fields() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    let app = build_router(AppState { db: pool.clone() });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/submissions")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "payload_type": "signed_manifest",
+                "payload": {
+                    "session_id": "sess-001",
+                    "signed_at": "2026-04-24T12:00:00Z",
+                    "manifest_hash": "abc123"
+                },
+                "detached_signature": "sig-xyz"
+            })
+            .to_string(),
+        ))
+        .expect("failed to build POST /submissions request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let error: Value = serde_json::from_slice(&body).expect("invalid JSON error body");
+    assert_eq!(
+        error
+            .get("detail")
+            .and_then(Value::as_str)
+            .expect("missing detail"),
+        "payload is missing required field 'chunk_count'"
+    );
+}
+
+#[tokio::test]
+async fn signed_manifest_with_required_fields_is_accepted() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    let app = build_router(AppState { db: pool.clone() });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/submissions")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "payload_type": "signed_manifest",
+                "payload": {
+                    "session_id": "sess-001",
+                    "signed_at": "2026-04-24T12:00:00Z",
+                    "manifest_hash": "abc123",
+                    "chunk_count": 42
+                },
+                "detached_signature": "sig-xyz"
+            })
+            .to_string(),
+        ))
+        .expect("failed to build POST /submissions request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+}
+
+#[tokio::test]
 async fn moderation_rejects_invalid_decision_value() {
     let Some(pool) = setup_pool().await else {
         return;
