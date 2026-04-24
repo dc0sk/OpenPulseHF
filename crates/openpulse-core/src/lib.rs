@@ -7,15 +7,19 @@
 pub mod audio;
 pub mod error;
 pub mod frame;
+pub mod hpx;
 pub mod peer_cache;
 pub mod plugin;
 pub mod query_propagation;
 pub mod relay;
+pub mod trust;
 
 pub use audio::*;
 pub use error::*;
 pub use frame::*;
+pub use hpx::*;
 pub use peer_cache::*;
 pub use plugin::*;
 pub use query_propagation::*;
 pub use relay::*;
+pub use trust::*;
