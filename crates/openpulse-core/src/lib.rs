@@ -7,9 +7,11 @@
 pub mod audio;
 pub mod error;
 pub mod frame;
+pub mod peer_cache;
 pub mod plugin;
 
 pub use audio::*;
 pub use error::*;
 pub use frame::*;
+pub use peer_cache::*;
 pub use plugin::*;
