@@ -650,6 +650,48 @@ async fn list_revocations_rejects_invalid_rfc3339_filters() {
 }
 
 #[tokio::test]
+async fn list_revocations_rejects_inverted_time_window() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    let app = build_router(AppState { db: pool.clone() });
+    let req = Request::builder()
+        .method("GET")
+        .uri(
+            "/api/v1/revocations?effective_after=2026-01-03T00:00:00Z&effective_before=2026-01-01T00:00:00Z",
+        )
+        .body(Body::empty())
+        .expect("failed to build GET /revocations request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let error: Value = serde_json::from_slice(&body).expect("invalid JSON error body");
+    assert_eq!(
+        error
+            .get("status")
+            .and_then(Value::as_str)
+            .expect("missing status"),
+        "validation_error"
+    );
+    assert_eq!(
+        error
+            .get("detail")
+            .and_then(Value::as_str)
+            .expect("missing detail"),
+        "effective_after must be less than or equal to effective_before"
+    );
+}
+
+#[tokio::test]
 async fn trust_bundle_endpoints_return_current_and_specific_bundle() {
     let Some(pool) = setup_pool().await else {
         return;

@@ -211,6 +211,19 @@ pub async fn list_revocations(
         Err(response) => return response,
     };
 
+    if let (Some(after), Some(before)) = (&effective_after, &effective_before) {
+        if after > before {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiMessage {
+                    status: "validation_error",
+                    detail: "effective_after must be less than or equal to effective_before".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    }
+
     let mut qb = QueryBuilder::<Postgres>::new(
         "SELECT
             revocation_id,
@@ -254,14 +267,14 @@ pub async fn list_revocations(
         qb.push(if has_where { " AND " } else { " WHERE " });
         has_where = true;
         qb.push("effective_at <= ")
-            .push_bind(effective_before)
+            .push_bind(effective_before.to_rfc3339())
             .push("::timestamptz");
     }
 
     if let Some(effective_after) = effective_after {
         qb.push(if has_where { " AND " } else { " WHERE " });
         qb.push("effective_at >= ")
-            .push_bind(effective_after)
+            .push_bind(effective_after.to_rfc3339())
             .push("::timestamptz");
     }
 
@@ -802,13 +815,13 @@ fn extract_request_id(headers: &HeaderMap) -> Option<String> {
 fn parse_rfc3339_query(
     raw: Option<&str>,
     field_name: &'static str,
-) -> Result<Option<String>, axum::response::Response> {
+) -> Result<Option<chrono::DateTime<chrono::FixedOffset>>, axum::response::Response> {
     let Some(value) = raw else {
         return Ok(None);
     };
 
     match chrono::DateTime::parse_from_rfc3339(value) {
-        Ok(parsed) => Ok(Some(parsed.to_rfc3339())),
+        Ok(parsed) => Ok(Some(parsed)),
         Err(_) => Err((
             StatusCode::BAD_REQUEST,
             Json(ApiMessage {
