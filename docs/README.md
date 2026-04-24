@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/README.md
 status: living
-last_updated: 2026-04-23
+last_updated: 2026-04-24
 ---
 
 # Documentation Index
@@ -18,6 +18,16 @@ Canonical documentation lives in the files listed below.
 - docs/benchmark-harness.md: benchmark scenarios, result schema, and CI gate rules for HPX
 - docs/peer-caching-relay.md: peer discovery cache, query model, and multi-hop relay behavior
 - docs/peer-query-relay-wire.md: wire-level schema for peer query and relay envelopes
+- docs/pki-tooling-api.md: API surface and export schema for separate PKI tooling
+- docs/pki-tooling-architecture.md: architecture for separate PKI publication, lookup, and trust tooling
+- docs/pki-tooling-conformance.md: conformance levels, test categories, and release gates for PKI tooling
+- docs/pki-tooling-data-model.md: canonical entity model, state transitions, and migration policy for PKI tooling
+- docs/pki-tooling-glossary.md: canonical terms and abbreviations for PKI tooling documentation
+- docs/pki-tooling-operations-runbook.md: operational procedures, incident playbooks, and backup/restore guidance for PKI tooling
+- docs/pki-tooling-requirements.md: requirements for separate PKI publication, lookup, and trust tooling
+- docs/pki-tooling-rollout-plan.md: phased implementation, quality gates, and release milestones for PKI tooling
+- docs/pki-tooling-spec-map.md: normative and informative classification and reading order for PKI docs
+- docs/pki-tooling-trust-policy.md: moderation workflow, trust scoring policy, and decision guardrails for PKI tooling
 - docs/requirements.md: functional and non-functional requirements
 - docs/steering.md: governance and decision ownership
 - docs/roadmap.md: phased execution plan
