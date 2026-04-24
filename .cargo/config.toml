@@ -1,0 +1,8 @@
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"
+
+[env]
+# Allow pkg-config to cross-compile; point it at the aarch64 sysroot headers
+# when building for aarch64-unknown-linux-gnu.
+# Override per-target via the environment or by installing aarch64 sysroot libs.
+PKG_CONFIG_ALLOW_CROSS = { value = "1", force = false }
