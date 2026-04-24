@@ -10,6 +10,7 @@ pub mod frame;
 pub mod peer_cache;
 pub mod plugin;
 pub mod query_propagation;
+pub mod relay;
 
 pub use audio::*;
 pub use error::*;
@@ -17,3 +18,4 @@ pub use frame::*;
 pub use peer_cache::*;
 pub use plugin::*;
 pub use query_propagation::*;
+pub use relay::*;
