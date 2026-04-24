@@ -43,6 +43,17 @@ struct SubmissionResponse {
     submission_state: &'static str,
 }
 
+#[derive(Serialize, FromRow)]
+struct SubmissionRecordResponse {
+    submission_id: String,
+    submitter_identity: String,
+    submission_state: String,
+    artifact_uri: String,
+    detached_signature_uri: Option<String>,
+    validation_summary: serde_json::Value,
+    moderation_reason_code: Option<String>,
+}
+
 pub async fn healthz() -> impl IntoResponse {
     (StatusCode::OK, Json(ApiMessage { status: "ok", detail: "service healthy".to_string() }))
 }
@@ -165,8 +176,45 @@ pub async fn create_submission(
     }
 }
 
-pub async fn get_submission(Path(submission_id): Path<String>) -> impl IntoResponse {
-    not_implemented(&format!("get submission by submission_id={submission_id}"))
+pub async fn get_submission(
+    State(state): State<AppState>,
+    Path(submission_id): Path<String>,
+) -> impl IntoResponse {
+    let result = sqlx::query_as::<_, SubmissionRecordResponse>(
+        "SELECT
+            submission_id,
+            submitter_identity,
+            submission_state,
+            artifact_uri,
+            detached_signature_uri,
+            validation_summary,
+            moderation_reason_code
+         FROM submissions
+         WHERE submission_id = $1",
+    )
+    .bind(submission_id)
+    .fetch_optional(&state.db)
+    .await;
+
+    match result {
+        Ok(Some(submission)) => (StatusCode::OK, Json(submission)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiMessage {
+                status: "not_found",
+                detail: "submission not found".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiMessage {
+                status: "db_error",
+                detail: format!("database query failed: {err}"),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 pub async fn get_moderation_queue() -> impl IntoResponse {
