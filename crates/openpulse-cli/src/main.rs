@@ -13,13 +13,15 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::fs;
+use std::path::PathBuf;
 use tracing::Level;
 
 use bpsk_plugin::BpskPlugin;
 use openpulse_audio::LoopbackBackend;
 use openpulse_core::trust::{
-    classify_connection_trust, evaluate_handshake, CertificateSource, ConnectionTrustLevel,
-    PolicyProfile, PublicKeyTrustLevel, SigningMode,
+    allowed_signing_modes, classify_connection_trust, evaluate_handshake, CertificateSource,
+    ConnectionTrustLevel, PolicyProfile, PublicKeyTrustLevel, SigningMode,
 };
 use openpulse_modem::ModemEngine;
 
@@ -412,12 +414,13 @@ fn run_trust(command: TrustCommands) -> Result<i32> {
             station_or_record_id,
             opts,
         } => {
+            let profile = load_policy_profile()?;
             let decision = classify_connection_trust(
                 PublicKeyTrustLevel::Unknown,
                 CertificateSource::OverAir,
                 false,
             );
-            let output = trust_output(station_or_record_id, decision, false);
+            let output = trust_output(station_or_record_id, decision, false, profile);
             emit_output(&opts, &output)?;
             Ok(status_to_exit_code(&output.status))
         }
@@ -425,12 +428,13 @@ fn run_trust(command: TrustCommands) -> Result<i32> {
             station_or_record_id,
             opts,
         } => {
+            let profile = load_policy_profile()?;
             let decision = classify_connection_trust(
                 PublicKeyTrustLevel::Unknown,
                 CertificateSource::OverAir,
                 false,
             );
-            let output = trust_output(station_or_record_id, decision, true);
+            let output = trust_output(station_or_record_id, decision, true, profile);
             emit_output(&opts, &output)?;
             Ok(match output.status.as_str() {
                 "fail" => 2,
@@ -439,14 +443,19 @@ fn run_trust(command: TrustCommands) -> Result<i32> {
         }
         TrustCommands::Policy { command } => match command {
             TrustPolicyCommands::Show { opts } => {
+                let profile = load_policy_profile()?;
                 let output = DiagnosticOutput {
                     status: "ok".to_string(),
-                    decision: "balanced".to_string(),
+                    decision: policy_profile_to_str(profile).to_string(),
                     reason_code: "policy_profile_active".to_string(),
                     details: json!({
-                        "policy_profile": "balanced",
+                        "policy_profile": policy_profile_to_str(profile),
                         "policy_version": "1.0.0",
-                        "allowed_signing_modes": ["normal", "psk", "relaxed"],
+                        "allowed_signing_modes": allowed_signing_modes(profile)
+                            .iter()
+                            .map(|mode| signing_mode_to_str(*mode))
+                            .collect::<Vec<&str>>(),
+                        "config_file": policy_file_path(),
                     }),
                     recommendation: "Use trust policy set to change profile.".to_string(),
                 };
@@ -454,28 +463,28 @@ fn run_trust(command: TrustCommands) -> Result<i32> {
                 Ok(0)
             }
             TrustPolicyCommands::Set { profile, opts } => {
-                let normalized = profile.to_lowercase();
-                let valid = matches!(normalized.as_str(), "strict" | "balanced" | "permissive");
-                let output = if valid {
-                    DiagnosticOutput {
-                        status: "ok".to_string(),
-                        decision: normalized.clone(),
-                        reason_code: "policy_profile_updated".to_string(),
-                        details: json!({
-                            "policy_profile": normalized,
-                            "note": "This CLI currently applies policy profile only for the current command context.",
-                        }),
-                        recommendation: "Persist profile in runtime config in a follow-up change."
-                            .to_string(),
+                let output = match parse_policy_profile(&profile) {
+                    Ok(parsed) => {
+                        persist_policy_profile(parsed)?;
+                        DiagnosticOutput {
+                            status: "ok".to_string(),
+                            decision: policy_profile_to_str(parsed).to_string(),
+                            reason_code: "policy_profile_updated".to_string(),
+                            details: json!({
+                                    "policy_profile": policy_profile_to_str(parsed),
+                                    "config_file": policy_file_path(),
+                            }),
+                            recommendation: "Policy profile persisted for subsequent runs."
+                                .to_string(),
+                        }
                     }
-                } else {
-                    DiagnosticOutput {
+                    Err(_) => DiagnosticOutput {
                         status: "fail".to_string(),
                         decision: "invalid".to_string(),
                         reason_code: "policy_rejected".to_string(),
                         details: json!({"requested_profile": profile}),
                         recommendation: "Choose strict, balanced, or permissive.".to_string(),
-                    }
+                    },
                 };
                 emit_output(&opts, &output)?;
                 Ok(status_to_exit_code(&output.status))
@@ -487,8 +496,9 @@ fn run_trust(command: TrustCommands) -> Result<i32> {
 fn run_diagnose(command: DiagnoseCommands) -> Result<i32> {
     match command {
         DiagnoseCommands::Handshake { peer, opts } => {
+            let profile = load_policy_profile()?;
             let handshake = evaluate_handshake(
-                PolicyProfile::Balanced,
+                profile,
                 SigningMode::Normal,
                 &[SigningMode::Normal, SigningMode::Psk],
                 PublicKeyTrustLevel::Marginal,
@@ -503,7 +513,7 @@ fn run_diagnose(command: DiagnoseCommands) -> Result<i32> {
                     reason_code: h.trust.reason_code.to_string(),
                     details: json!({
                         "peer": peer,
-                        "policy_profile": "balanced",
+                        "policy_profile": policy_profile_to_str(profile),
                         "selected_mode": format!("{:?}", h.selected_mode).to_lowercase(),
                         "certificate_source": "out_of_band",
                     }),
@@ -551,6 +561,7 @@ fn run_diagnose(command: DiagnoseCommands) -> Result<i32> {
                     false,
                 ),
                 false,
+                load_policy_profile()?,
             );
             let handshake = DiagnosticOutput {
                 status: "ok".to_string(),
@@ -586,6 +597,7 @@ fn trust_output(
     peer: String,
     decision: openpulse_core::trust::TrustDecision,
     explain: bool,
+    policy_profile: PolicyProfile,
 ) -> DiagnosticOutput {
     let (status, recommendation) = match decision.decision {
         ConnectionTrustLevel::Verified | ConnectionTrustLevel::PskVerified => (
@@ -605,6 +617,7 @@ fn trust_output(
         "peer": peer,
         "trust_state": format!("{:?}", decision.public_key_trust).to_lowercase(),
         "certificate_source": format!("{:?}", decision.certificate_source).to_lowercase(),
+        "policy_profile": policy_profile_to_str(policy_profile),
         "policy_profile_version": "1.0.0",
         "evidence_classes": ["operator", "gpg", "tqsl", "replication"],
         "effective_revocation_state": "none",
@@ -671,4 +684,88 @@ fn merge_statuses<'a>(statuses: impl IntoIterator<Item = &'a str>) -> String {
         }
     }
     result.to_string()
+}
+
+fn parse_policy_profile(value: &str) -> Result<PolicyProfile> {
+    match value.to_lowercase().as_str() {
+        "strict" => Ok(PolicyProfile::Strict),
+        "balanced" => Ok(PolicyProfile::Balanced),
+        "permissive" => Ok(PolicyProfile::Permissive),
+        _ => anyhow::bail!("invalid policy profile"),
+    }
+}
+
+fn policy_profile_to_str(profile: PolicyProfile) -> &'static str {
+    match profile {
+        PolicyProfile::Strict => "strict",
+        PolicyProfile::Balanced => "balanced",
+        PolicyProfile::Permissive => "permissive",
+    }
+}
+
+fn signing_mode_to_str(mode: SigningMode) -> &'static str {
+    match mode {
+        SigningMode::Normal => "normal",
+        SigningMode::Psk => "psk",
+        SigningMode::Relaxed => "relaxed",
+        SigningMode::Paranoid => "paranoid",
+    }
+}
+
+fn config_dir_path() -> PathBuf {
+    if let Ok(path) = std::env::var("OPENPULSE_CONFIG_DIR") {
+        return PathBuf::from(path);
+    }
+
+    if let Ok(path) = std::env::var("XDG_CONFIG_HOME") {
+        return PathBuf::from(path).join("openpulse");
+    }
+
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".config").join("openpulse");
+    }
+
+    PathBuf::from(".")
+}
+
+fn policy_file_path() -> PathBuf {
+    config_dir_path().join("trust-policy.json")
+}
+
+fn load_policy_profile() -> Result<PolicyProfile> {
+    let path = policy_file_path();
+    if !path.exists() {
+        return Ok(PolicyProfile::Balanced);
+    }
+
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read policy file {}", path.display()))?;
+    let value: Value = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse policy file {}", path.display()))?;
+
+    let Some(profile) = value.get("policy_profile").and_then(Value::as_str) else {
+        anyhow::bail!(
+            "invalid policy file {}: missing policy_profile",
+            path.display()
+        );
+    };
+
+    parse_policy_profile(profile)
+}
+
+fn persist_policy_profile(profile: PolicyProfile) -> Result<()> {
+    let dir = config_dir_path();
+    fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create config directory {}", dir.display()))?;
+
+    let path = policy_file_path();
+    let payload = json!({
+        "policy_profile": policy_profile_to_str(profile),
+        "policy_version": "1.0.0"
+    });
+
+    fs::write(&path, serde_json::to_string_pretty(&payload)?)
+        .with_context(|| format!("failed to write policy file {}", path.display()))?;
+
+    Ok(())
 }
