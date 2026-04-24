@@ -25,6 +25,7 @@ This document defines the PKI tooling specification set, its document roles, and
 | docs/pki-tooling-architecture.md | System and component architecture | Normative |
 | docs/pki-tooling-api.md | API contract and trust-bundle export schema | Normative |
 | docs/pki-tooling-data-model.md | Canonical entities, transitions, and migration policy | Normative |
+| docs/trust-store-file-format.md | On-disk trust-store format and migration/rollback policy | Normative |
 | docs/pki-tooling-trust-policy.md | Moderation and trust-policy decision semantics | Normative |
 | docs/pki-tooling-conformance.md | Conformance gates and test obligations | Normative |
 | docs/pki-tooling-rollout-plan.md | Phased implementation milestones | Informative |
@@ -39,8 +40,9 @@ Recommended implementation reading order:
 2. docs/pki-tooling-architecture.md
 3. docs/pki-tooling-api.md
 4. docs/pki-tooling-data-model.md
-5. docs/pki-tooling-trust-policy.md
-6. docs/pki-tooling-conformance.md
+5. docs/trust-store-file-format.md
+6. docs/pki-tooling-trust-policy.md
+7. docs/pki-tooling-conformance.md
 
 Recommended operational reading order:
 

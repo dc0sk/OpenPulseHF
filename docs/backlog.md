@@ -7,7 +7,6 @@ last_updated: 2026-04-24
 
 # Backlog
 
-- Add trust-store file format and migration policy.
 - Add conformance tests for signed handshake and manifest verification.
 - Add CLI UX spec for identity and trust diagnostics.
 - Add multithreaded pipeline test harness with deterministic timing assertions.
