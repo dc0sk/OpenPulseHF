@@ -198,4 +198,106 @@ Otherwise, automation must route to quarantine.
 ## Open questions
 
 - Whether policy profile inheritance should be supported per station group or tenant.
+
+---
+
+## Connection trust levels and signing modes
+
+> Status: design discussion — not yet finalised. Further review required before implementation.
+
+### Motivation
+
+HF bandwidth is severely constrained (300–2400 baud typical). Transmitting full asymmetric signatures per packet consumes a disproportionate share of available throughput. At the same time, signature-less sessions must carry a measurable trust penalty so that operators and automation can reason about the security posture of a connection.
+
+### Certificate distribution model
+
+- Certificates are **never transmitted over air by default**.
+- Peers resolve certificates asynchronously via an internet-accessible identity database and local cache before or during session establishment.
+- A peer **may** request a certificate over air if out-of-band resolution fails; the responding peer should honour the request but this path carries a trust penalty (see levels below).
+- This mirrors the user's original idea and is compatible with identity-based key derivation schemes (callsign-rooted keys) as a future option.
+
+### Session key establishment
+
+- One asymmetric handshake at session start derives a shared symmetric session key (comparable to TLS 1.3 key schedule).
+- Steady-state packets carry an HMAC tag (~16–32 bytes) over `(packet_content || sequence_number || session_id)`.
+- The sequence number in the HMAC input defeats recording-and-replay / content-substitution attacks — a recorded HMAC cannot be reattached to different content or at a different sequence position.
+- Full asymmetric signature per packet is **not** used in normal mode.
+
+### Public key trust levels (GPG-style)
+
+These levels apply to a peer's public key / identity record, independent of any active connection:
+
+| Level | Meaning |
+|---|---|
+| `full` | Key verified through strong out-of-band evidence (e.g. direct exchange, TQSL corroboration, operator-explicit acceptance) |
+| `marginal` | Key seen from multiple independent sources but not directly verified |
+| `unknown` | Key present but no verification performed |
+| `untrusted` | Key actively flagged as suspect or conflicting |
+| `revoked` | Key revoked; reject all sessions |
+
+### Connection trust levels
+
+These levels apply to an **active session** and are derived from the public key trust level plus the certificate acquisition path:
+
+| Level | Conditions |
+|---|---|
+| `verified` | Key trust is `full`; certificate obtained via out-of-band DB |
+| `psk-verified` | Certificate delivered over air AND validated against a pre-shared secret (PSK); trust level is elevated above plain over-air delivery but below full out-of-band verification |
+| `reduced` | Key trust is `marginal`, OR certificate delivered over air without PSK validation |
+| `unverified` | Key trust is `unknown`; certificate obtained via out-of-band DB |
+| `low` | Key trust is `unknown` AND certificate delivered over air without PSK validation |
+| `rejected` | Key is `untrusted` or `revoked`; session must not proceed |
+
+Rationale for the air-delivery penalty: over-air certificate delivery cannot rule out a man-in-the-middle inserting a fabricated certificate. The receiver has no way to distinguish the legitimate peer's certificate from an injected one at the RF layer.
+
+**PSK exception**: if both peers hold a pre-shared secret, the delivered certificate can be bound to the PSK (e.g. HMAC of the certificate bytes under the PSK is transmitted alongside it). An attacker without the PSK cannot forge a valid binding, so the MitM threat is mitigated. The only remaining out-of-band dependency is the PSK itself — which may be exchanged in person, via a separate secure channel, or pre-provisioned at manufacture/licensing time. This allows air-only operation with elevated trust, independent of internet connectivity.
+
+### Signing modes
+
+#### Normal mode (default)
+- Certificate distribution: out-of-band only.
+- Session auth: one asymmetric handshake → symmetric HMAC for all subsequent packets.
+- Connection trust level: `verified` or `reduced` depending on key trust level.
+- Use case: general data, messaging, beacon, status.
+
+
+#### PSK mode
+- Certificate distribution: certificate delivered over air, bound with a PSK-derived HMAC (see connection trust levels above).
+- Session auth: same as normal mode (asymmetric handshake → symmetric HMAC).
+- Connection trust level: `psk-verified` (independent of internet/OOB, provided PSK is pre-provisioned).
+- Use case: field deployments with no internet access; pre-provisioned station pairs; emergency nets where OOB lookup is not possible but a shared group secret is available.
+- Security note: the PSK is the single remaining trust anchor; its compromise degrades the session to `low` trust retroactively.
+
+#### Relaxed mode
+- Certificate distribution: out-of-band preferred; over-air permitted on request.
+- Session auth: same as normal mode.
+- Connection trust level: `reduced` or `low`.
+- Use case: emergency comms, first contact with unknown station, no internet access.
+
+#### Paranoid mode
+- Certificate distribution: out-of-band only; over-air requests rejected.
+- Session auth: **full asymmetric signature on every transmitted frame** (e.g. Ed25519, 64 bytes per packet).
+- Connection trust level: `verified` only; session is dropped if key trust is not `full`.
+- Use case: remote station control, command transmission, high-value data, automated relay instructions.
+- Bandwidth cost: ~64 bytes overhead per packet (Ed25519); operator must accept this consciously.
+
+### Interaction with policy profiles
+
+| Policy profile | Permitted signing modes | Minimum connection trust for publication acceptance |
+|---|---|---|
+| `strict` | normal, paranoid | `verified` |
+| `balanced` | normal, psk, relaxed | `psk-verified` or better |
+| `permissive` | normal, psk, relaxed | `reduced` or better |
+
+Paranoid mode is always permitted regardless of policy profile when explicitly configured by the operator.
+
+### Open sub-questions
+
+- Whether connection trust level should be recorded in the session audit trail.
+- Whether `reduced`-trust sessions should be allowed to submit identity records or only consume them.
+- Exact key derivation scheme for the symmetric session key (X25519 ECDH + HKDF is the leading candidate).
+- Whether signing mode should be negotiated in-band during handshake or pre-configured per callsign/group.
+- PSK lifecycle: rotation frequency, revocation procedure, and storage requirements (secure enclave vs. config file).
+- Whether a group PSK (shared across multiple stations) should be permitted or only pairwise PSKs.
+- Whether PSK validation failure should fall back to `low` trust or abort the session entirely (fail-closed is safer).
 - Whether some federation peers should be allowed as authoritative for specific evidence classes.
