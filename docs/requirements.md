@@ -13,13 +13,19 @@ last_updated: 2026-04-23
 - Support at least one production modulation plugin (BPSK family).
 - Preserve a loopback backend for hardware-free development and testing.
 - Support cross-platform audio through CPAL-backed implementations.
-- Validate frame integrity with versioning, sequence handling, and CRC checks.
+- Validate frame integrity with versioning, sequence handling, and CRC-16/CCITT checks.
 - Define and implement a high-performance plugin mode (HPX) with adaptive modulation and coding.
-- Support occupied bandwidth classes centered on 500 Hz and 2300-2400 Hz operation.
+- Support occupied bandwidth classes: sub-500 Hz narrow (BPSK31 through BPSK250), 500 Hz class, and 2300–2400 Hz class.
+- Support QPSK modes with higher spectral efficiency as distinct plugin modes.
+- Support optional forward error correction including Reed-Solomon and convolutional coding families.
+- Support bandwidth-adaptive rate control that adjusts modulation and coding based on observed channel conditions.
+- Support ARDOP-compatible mode as an optional plugin.
 - Provide deterministic session state handling: discovery, training, active transfer, recovery, teardown.
+- Define and publish the HPX session state machine as a standalone specification document.
 - Support selective retransmission for ARQ-capable sessions.
 - Support signed transfer handshake and signed transfer manifests.
 - Support trust-store-based verification for station identities.
+- Provide CLI commands for trust-store management: key import, identity listing, and revocation marking.
 - Support peer caching of identity, capability, and link-quality metadata.
 - Support local and network query interfaces for peer discovery and filtering.
 - Support relayed transfers across multiple hops with configurable hop limits.
@@ -35,6 +41,7 @@ last_updated: 2026-04-23
 - ARM64 builds for Raspberry Pi 4/5 must be part of regular compatibility testing.
 - Any development environment must support loopback mode for hardware-free testing.
 - Rust toolchain must build the full workspace and no-default-features variant.
+- A minimum supported Rust version (MSRV) must be declared and enforced; the MSRV must not advance more than one stable release per minor version bump.
 
 ## Non-functional requirements
 
@@ -42,6 +49,7 @@ last_updated: 2026-04-23
 - Keep tests runnable without physical audio hardware in default CI workflows.
 - Ensure crate boundaries are clear enough for independent testing.
 - Keep plugin additions from requiring broad refactors across unrelated crates.
+- Plugin trait versions must be declared and breaking changes must be accompanied by a migration guide in release notes.
 - Define objective benchmark suites and publish method and result artifacts.
 - Track goodput, completion rate, retry efficiency, and completion latency across channel profiles.
 - Require HPX performance claims to be tied to reproducible benchmark runs.
@@ -55,7 +63,8 @@ last_updated: 2026-04-23
 
 ## Compression requirements
 
-- All wire payloads eligible for compression must be compressed before encryption and signing.
+- All wire payloads eligible for compression must be compressed before signing and encryption.
+- Payloads shorter than 64 bytes are not eligible for compression; the codec field must be set to 0x00 for such frames.
 - Compression ratio is the primary optimisation target; CPU and memory cost are acceptable tradeoffs.
 - The default compression algorithm must be Brotli at quality level 11 (maximum ratio).
 - LZMA2 (xz) must be supported as a high-ratio alternative for long-block transfer chunks.
@@ -79,6 +88,7 @@ last_updated: 2026-04-23
 - Initial post-quantum-safe default should target ML-DSA (FIPS 204) where available.
 - If session key establishment is used, a post-quantum-safe KEM option should be supported, with ML-KEM (FIPS 203) preferred.
 - Trust-store metadata must record algorithm type and hybrid-policy requirements per identity.
+- Trust-store file format must be versioned and include a documented migration policy for format upgrades.
 - Relay path admission must enforce trust policy on each intermediate hop.
 - Multi-hop transfers must preserve end-to-end signed integrity and fail closed on trust violations.
 - Route metadata should support post-quantum-capable signing under configured policy.
@@ -101,4 +111,5 @@ last_updated: 2026-04-23
 
 - Version bumps require updates to docs/changelog.md and docs/releasenotes.md.
 - Docs files under docs/ must pass frontmatter validation in CI.
+- HPX session state machine must be documented in docs/hpx-session-state-machine.md before HPX session handling ships.
 - HPX benchmark assumptions and result summaries must be captured in docs/high-performance-mode.md.
