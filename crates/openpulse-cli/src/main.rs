@@ -789,6 +789,7 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
                 );
                 diag.current_state = format!("{hpx_state:?}").to_lowercase();
                 diag.total_transitions = engine.hpx_transitions().len();
+                diag.set_pipeline_metrics(engine.pipeline_metrics_snapshot());
 
                 // Record all transitions into diagnostics
                 for transition in engine.hpx_transitions() {

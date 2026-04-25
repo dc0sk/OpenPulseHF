@@ -27,6 +27,16 @@ impl PipelineStage {
             PipelineStage::OutputEmit => 4,
         }
     }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            PipelineStage::InputCapture => "input_capture",
+            PipelineStage::DemodulateDecode => "demodulate_decode",
+            PipelineStage::HpxStateUpdate => "hpx_state_update",
+            PipelineStage::EncodeModulate => "encode_modulate",
+            PipelineStage::OutputEmit => "output_emit",
+        }
+    }
 }
 
 /// Wire-level payload exchanged between codec/modulator stages.
@@ -59,6 +69,20 @@ pub struct PipelineMetrics {
     pub enqueued: [u64; STAGE_COUNT],
     pub dequeued: [u64; STAGE_COUNT],
     pub dropped: [u64; STAGE_COUNT],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StageMetrics {
+    pub stage: String,
+    pub enqueued: u64,
+    pub dequeued: u64,
+    pub dropped: u64,
+    pub in_flight: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PipelineMetricsSnapshot {
+    pub stages: Vec<StageMetrics>,
 }
 
 impl Default for PipelineMetrics {
@@ -153,6 +177,33 @@ impl PipelineScheduler {
 
     pub fn metrics(&self) -> &PipelineMetrics {
         &self.metrics
+    }
+
+    pub fn metrics_snapshot(&self) -> PipelineMetricsSnapshot {
+        let stages = [
+            PipelineStage::InputCapture,
+            PipelineStage::DemodulateDecode,
+            PipelineStage::HpxStateUpdate,
+            PipelineStage::EncodeModulate,
+            PipelineStage::OutputEmit,
+        ]
+        .into_iter()
+        .map(|stage| {
+            let idx = stage.index();
+            let enqueued = self.metrics.enqueued[idx];
+            let dequeued = self.metrics.dequeued[idx];
+            let dropped = self.metrics.dropped[idx];
+            StageMetrics {
+                stage: stage.as_str().to_string(),
+                enqueued,
+                dequeued,
+                dropped,
+                in_flight: enqueued.saturating_sub(dequeued.saturating_add(dropped)),
+            }
+        })
+        .collect();
+
+        PipelineMetricsSnapshot { stages }
     }
 
     fn route(

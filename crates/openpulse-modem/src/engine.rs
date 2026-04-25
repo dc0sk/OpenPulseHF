@@ -14,7 +14,8 @@ use openpulse_core::trust::{
 };
 
 use crate::pipeline::{
-    AudioSamples, BackpressurePolicy, DecodedFrame, PipelineScheduler, PipelineStage, WirePayload,
+    AudioSamples, BackpressurePolicy, DecodedFrame, PipelineMetricsSnapshot, PipelineScheduler,
+    PipelineStage, WirePayload,
 };
 
 #[derive(Debug, Clone)]
@@ -86,6 +87,11 @@ impl ModemEngine {
     /// Returns emitted HPX transitions for the current session lifecycle.
     pub fn hpx_transitions(&self) -> &[HpxTransition] {
         self.hpx.transitions()
+    }
+
+    /// Returns a snapshot of per-stage pipeline queue metrics.
+    pub fn pipeline_metrics_snapshot(&self) -> PipelineMetricsSnapshot {
+        self.scheduler.metrics_snapshot()
     }
 
     /// Returns the active handshake decision for the secure session, if present.

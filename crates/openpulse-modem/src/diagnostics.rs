@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::pipeline::PipelineMetricsSnapshot;
+
 /// A structured HPX event in the diagnostic log.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiagnosticEvent {
@@ -27,6 +29,7 @@ pub struct SessionDiagnostics {
     pub elapsed_ms: u64,
     pub error_count: usize,
     pub recovery_count: usize,
+    pub pipeline_metrics: Option<PipelineMetricsSnapshot>,
     pub events: Vec<DiagnosticEvent>,
 }
 
@@ -42,8 +45,14 @@ impl SessionDiagnostics {
             elapsed_ms: 0,
             error_count: 0,
             recovery_count: 0,
+            pipeline_metrics: None,
             events: vec![],
         }
+    }
+
+    /// Attach per-stage pipeline metrics snapshot.
+    pub fn set_pipeline_metrics(&mut self, metrics: PipelineMetricsSnapshot) {
+        self.pipeline_metrics = Some(metrics);
     }
 
     /// Add a transition to the event log.
