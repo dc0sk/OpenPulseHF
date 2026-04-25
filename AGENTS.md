@@ -2,6 +2,18 @@
 
 These rules are mandatory for any coding agent operating in this repository.
 
+## Branch Discipline
+
+- Never work directly on `main`.
+- Never commit directly to `main`.
+- Use feature branches and pull requests for all changes.
+
+## Commit Hygiene
+
+- Keep commits small and focused.
+- Prefer one logical change per commit.
+- Avoid bundling unrelated refactors with behavior changes.
+
 ## Destructive Git Commands
 
 Never run destructive cleanup commands unless the user explicitly requests that exact command in the current conversation:
