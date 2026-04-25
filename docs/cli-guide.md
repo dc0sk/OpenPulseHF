@@ -50,6 +50,7 @@ Notes:
 - `session state --diagnostics` emits structured JSON including transition history and pipeline scheduler metrics.
 - `session resume` restores persisted metadata and policy profile snapshot; runtime handshake state must be re-established.
 - `session log --follow` tails the persisted session log for a bounded polling window and is intended for cross-invocation debugging.
+- `session start`, `session resume`, and `session end` update the persisted session log so follow mode can observe lifecycle changes across CLI invocations.
 
 ## Benchmark
 

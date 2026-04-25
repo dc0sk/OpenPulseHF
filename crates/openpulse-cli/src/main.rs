@@ -717,6 +717,7 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
                         policy_profile: policy_profile_to_str(profile).to_string(),
                         updated_at_ms: timestamp_ms,
                     });
+                    let _ = persist_session_log(&session_log_from_transitions(engine.hpx_transitions()));
 
                     DiagnosticOutput {
                         status: "ok".to_string(),
@@ -747,6 +748,9 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
                         Err(()),
                         engine.hpx_transitions(),
                     );
+                    if !engine.hpx_transitions().is_empty() {
+                        let _ = persist_session_log(&session_log_from_transitions(engine.hpx_transitions()));
+                    }
 
                     DiagnosticOutput {
                         status: "fail".to_string(),
@@ -893,6 +897,15 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
                 engine.set_trust_policy_profile(profile);
             }
 
+            let _ = append_session_log_entry(PersistedSessionLogEntry {
+                timestamp_ms: persisted.updated_at_ms,
+                from_state: persisted.hpx_state.clone(),
+                to_state: persisted.hpx_state.clone(),
+                event: "resume".to_string(),
+                reason_code: "session_snapshot_resumed".to_string(),
+                reason_string: "session metadata restored from persisted snapshot".to_string(),
+            });
+
             let output = DiagnosticOutput {
                 status: "ok".to_string(),
                 decision: "resumed".to_string(),
@@ -969,15 +982,34 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
 
+            let persisted_before_end = load_session_state()?;
+
             let session_id = engine
                 .hpx_session_id()
                 .map(ToString::to_string)
+                .or_else(|| {
+                    persisted_before_end
+                        .as_ref()
+                        .map(|state| state.session_id.clone())
+                })
                 .unwrap_or_else(|| format!("sess-{timestamp_ms}"));
 
             let result = engine.end_secure_session(timestamp_ms);
 
             let output = match result {
                 Ok(()) => {
+                    if !engine.hpx_transitions().is_empty() {
+                        let _ = persist_session_log(&session_log_from_transitions(engine.hpx_transitions()));
+                    } else if let Some(state) = &persisted_before_end {
+                        let _ = append_session_log_entry(PersistedSessionLogEntry {
+                            timestamp_ms,
+                            from_state: state.hpx_state.clone(),
+                            to_state: "idle".to_string(),
+                            event: "localcancel".to_string(),
+                            reason_code: "session_ended".to_string(),
+                            reason_string: "session closed from persisted snapshot".to_string(),
+                        });
+                    }
                     let _ = clear_session_state();
                     DiagnosticOutput {
                         status: "ok".to_string(),
@@ -1989,6 +2021,10 @@ fn persist_session_log(entries: &[PersistedSessionLogEntry]) -> Result<()> {
     persist_session_log_at(&session_log_file_path(), entries)
 }
 
+fn append_session_log_entry(entry: PersistedSessionLogEntry) -> Result<()> {
+    append_session_log_entry_at(&session_log_file_path(), entry)
+}
+
 fn load_session_state_at(path: &Path) -> Result<Option<PersistedSessionState>> {
     if !path.exists() {
         return Ok(None);
@@ -2043,6 +2079,12 @@ fn persist_session_log_at(path: &Path, entries: &[PersistedSessionLogEntry]) -> 
     fs::write(path, serde_json::to_string_pretty(entries)?)
         .with_context(|| format!("failed to write session log file {}", path.display()))?;
     Ok(())
+}
+
+fn append_session_log_entry_at(path: &Path, entry: PersistedSessionLogEntry) -> Result<()> {
+    let mut entries = load_session_log_at(path)?.unwrap_or_default();
+    entries.push(entry);
+    persist_session_log_at(path, &entries)
 }
 
 fn session_log_from_transitions(
@@ -2324,5 +2366,53 @@ mod tests {
             CertificateSource::OverAir
         );
         assert!(parse_certificate_source("bogus").is_err());
+    }
+
+    #[test]
+    fn session_log_entries_append_in_order() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "openpulse-cli-session-log-{}-{}",
+            std::process::id(),
+            nonce
+        ));
+        let path = root.join("session-log.json");
+
+        append_session_log_entry_at(
+            &path,
+            PersistedSessionLogEntry {
+                timestamp_ms: 1,
+                from_state: "idle".to_string(),
+                to_state: "discovery".to_string(),
+                event: "startsession".to_string(),
+                reason_code: "success".to_string(),
+                reason_string: "session start".to_string(),
+            },
+        )
+        .expect("append first");
+        append_session_log_entry_at(
+            &path,
+            PersistedSessionLogEntry {
+                timestamp_ms: 2,
+                from_state: "activetransfer".to_string(),
+                to_state: "idle".to_string(),
+                event: "localcancel".to_string(),
+                reason_code: "session_ended".to_string(),
+                reason_string: "session closed".to_string(),
+            },
+        )
+        .expect("append second");
+
+        let loaded = load_session_log_at(&path)
+            .expect("load session log")
+            .expect("entries should exist");
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].event, "startsession");
+        assert_eq!(loaded[1].event, "localcancel");
+
+        let _ = fs::remove_dir_all(root);
     }
 }
