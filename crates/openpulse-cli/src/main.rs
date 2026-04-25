@@ -30,6 +30,7 @@ use openpulse_core::trust::{
 use openpulse_modem::benchmark::{
     assert_benchmark_regression, run_benchmark, standard_corpus, RegressionPolicy,
 };
+use openpulse_modem::diagnostics::SessionDiagnostics;
 use openpulse_modem::engine::SecureSessionParams;
 use openpulse_modem::ModemEngine;
 
@@ -286,6 +287,10 @@ struct DiagnosticOptions {
     /// Include additional detail lines.
     #[arg(long)]
     verbose: bool,
+
+    /// Emit detailed HPX diagnostics (JSON).
+    #[arg(long)]
+    diagnostics: bool,
 
     /// Disable color output.
     #[arg(long)]
@@ -774,6 +779,26 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
                     emit_output(&opts, &output)?;
                     return Ok(0);
                 }
+            }
+
+            // Build diagnostics if requested
+            if opts.diagnostics {
+                let mut diag = SessionDiagnostics::new(
+                    session_id.clone().unwrap_or_else(|| "no-session".to_string()),
+                    "peer", // Placeholder: actual peer info available from handshake context
+                );
+                diag.current_state = format!("{hpx_state:?}").to_lowercase();
+                diag.total_transitions = engine.hpx_transitions().len();
+
+                // Record all transitions into diagnostics
+                for transition in engine.hpx_transitions() {
+                    diag.record_transition(transition);
+                }
+
+                // Output detailed diagnostics as JSON
+                let json_output = diag.to_json_pretty()?;
+                println!("{}", json_output);
+                return Ok(0);
             }
 
             let output = DiagnosticOutput {
@@ -1459,9 +1484,13 @@ fn run_diagnose(command: DiagnoseCommands, pki: &PkiClient) -> Result<i32> {
                 pki,
             )?;
 
-            let composite_status = if identity == 3 || trust_code == 3 || handshake_code == 3 {
-                "fail"
-            } else if identity == 2 || trust_code == 2 || handshake_code == 2 {
+            let composite_status = if identity == 3
+                || trust_code == 3
+                || handshake_code == 3
+                || identity == 2
+                || trust_code == 2
+                || handshake_code == 2
+            {
                 "fail"
             } else {
                 "ok"
@@ -1958,6 +1987,7 @@ mod tests {
         let opts = DiagnosticOptions {
             format: "json".to_string(),
             verbose: false,
+            diagnostics: false,
             no_color: true,
             timeout: 5,
         };
