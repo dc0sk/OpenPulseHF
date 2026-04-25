@@ -10,6 +10,7 @@ repository.workspace  = true
 [dependencies]
 thiserror = { workspace = true }
 serde     = { workspace = true }
+serde_json = { workspace = true }
 hkdf = "0.12"
 sha2 = "0.10"
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }

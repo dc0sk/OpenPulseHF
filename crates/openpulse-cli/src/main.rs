@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::Level;
 
@@ -26,6 +26,9 @@ use openpulse_audio::LoopbackBackend;
 use openpulse_core::trust::{
     allowed_signing_modes, classify_connection_trust, evaluate_handshake, CertificateSource,
     ConnectionTrustLevel, PolicyProfile, PublicKeyTrustLevel, SigningMode,
+};
+use openpulse_modem::benchmark::{
+    assert_benchmark_regression, run_benchmark, standard_corpus, RegressionPolicy,
 };
 use openpulse_modem::engine::SecureSessionParams;
 use openpulse_modem::ModemEngine;
@@ -117,6 +120,25 @@ enum Commands {
         #[command(subcommand)]
         command: SessionCommands,
     },
+
+    /// HPX benchmark harness.
+    Benchmark {
+        #[command(subcommand)]
+        command: BenchmarkCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum BenchmarkCommands {
+    /// Run the standard HPX benchmark corpus and emit a JSON report.
+    Run {
+        /// Minimum required pass rate (0.0–1.0); fails with exit code 2 if not met.
+        #[arg(long, default_value_t = 1.0)]
+        min_pass_rate: f64,
+        /// Maximum allowed mean transition count per scenario.
+        #[arg(long, default_value_t = 20.0)]
+        max_mean_transitions: f64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -178,6 +200,33 @@ enum TrustCommands {
     /// Explain trust decision trace.
     Explain {
         station_or_record_id: String,
+        #[command(flatten)]
+        opts: DiagnosticOptions,
+    },
+    /// Import or update a local trust-store record.
+    Import {
+        #[arg(long)]
+        station_id: String,
+        #[arg(long)]
+        key_id: String,
+        #[arg(long, default_value = "unknown")]
+        trust: String,
+        #[arg(long, default_value = "out_of_band")]
+        source: String,
+        #[command(flatten)]
+        opts: DiagnosticOptions,
+    },
+    /// List local trust-store records.
+    List {
+        #[command(flatten)]
+        opts: DiagnosticOptions,
+    },
+    /// Revoke a local trust-store record by station id or key id.
+    Revoke {
+        #[arg(long)]
+        station_or_key: String,
+        #[arg(long, default_value = "operator_revoked")]
+        reason: String,
         #[command(flatten)]
         opts: DiagnosticOptions,
     },
@@ -294,6 +343,23 @@ struct TrustBundleRecord {
     schema_version: String,
     bundle_id: String,
     records: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct LocalTrustRecord {
+    station_id: String,
+    key_id: String,
+    trust: PublicKeyTrustLevel,
+    source: CertificateSource,
+    status: String,
+    reason: String,
+    updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct LocalTrustStore {
+    schema_version: String,
+    records: Vec<LocalTrustRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -507,6 +573,10 @@ fn main() -> Result<()> {
         Commands::Session { command } => {
             exit_code = run_session(command, &mut engine, &pki)?;
         }
+
+        Commands::Benchmark { command } => {
+            exit_code = run_benchmark_cmd(command)?;
+        }
     }
 
     if exit_code != 0 {
@@ -610,6 +680,18 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
                         engine.hpx_transitions(),
                     );
 
+                    let _ = persist_session_state(&PersistedSessionState {
+                        session_id: session_id.clone(),
+                        peer: peer.clone(),
+                        hpx_state: format!("{:?}", engine.hpx_state()).to_lowercase(),
+                        selected_mode: Some(
+                            format!("{:?}", handshake.selected_mode).to_lowercase(),
+                        ),
+                        trust_level: Some(format!("{:?}", handshake.trust.decision).to_lowercase()),
+                        policy_profile: policy_profile_to_str(profile).to_string(),
+                        updated_at_ms: timestamp_ms,
+                    });
+
                     DiagnosticOutput {
                         status: "ok".to_string(),
                         decision: format!("{:?}", handshake.trust.decision).to_lowercase(),
@@ -664,6 +746,36 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
             let session_id = engine.hpx_session_id().map(ToString::to_string);
             let handshake = engine.active_handshake();
 
+            if hpx_state == openpulse_core::hpx::HpxState::Idle
+                && session_id.is_none()
+                && handshake.is_none()
+            {
+                if let Some(persisted) = load_session_state()? {
+                    let output = DiagnosticOutput {
+                        status: "ok".to_string(),
+                        decision: "persisted".to_string(),
+                        reason_code: "persisted_session_snapshot".to_string(),
+                        details: json!({
+                            "hpx_state": "idle",
+                            "session_id": persisted.session_id,
+                            "peer": persisted.peer,
+                            "persisted_hpx_state": persisted.hpx_state,
+                            "selected_mode": persisted.selected_mode,
+                            "trust_level": persisted.trust_level,
+                            "policy_profile": persisted.policy_profile,
+                            "updated_at_ms": persisted.updated_at_ms,
+                            "session_state_file": session_state_file_path().display().to_string(),
+                        }),
+                        recommendation:
+                            "No active in-memory session. Showing last persisted session snapshot."
+                                .to_string(),
+                    };
+
+                    emit_output(&opts, &output)?;
+                    return Ok(0);
+                }
+            }
+
             let output = DiagnosticOutput {
                 status: "ok".to_string(),
                 decision: format!("{hpx_state:?}").to_lowercase(),
@@ -707,16 +819,19 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
             let result = engine.end_secure_session(timestamp_ms);
 
             let output = match result {
-                Ok(()) => DiagnosticOutput {
-                    status: "ok".to_string(),
-                    decision: "closed".to_string(),
-                    reason_code: "session_ended".to_string(),
-                    details: json!({
-                        "session_id": session_id,
-                        "hpx_state": format!("{:?}", engine.hpx_state()).to_lowercase(),
-                    }),
-                    recommendation: "Session closed. Engine is idle.".to_string(),
-                },
+                Ok(()) => {
+                    let _ = clear_session_state();
+                    DiagnosticOutput {
+                        status: "ok".to_string(),
+                        decision: "closed".to_string(),
+                        reason_code: "session_ended".to_string(),
+                        details: json!({
+                            "session_id": session_id,
+                            "hpx_state": format!("{:?}", engine.hpx_state()).to_lowercase(),
+                        }),
+                        recommendation: "Session closed. Engine is idle.".to_string(),
+                    }
+                }
                 Err(err) => DiagnosticOutput {
                     status: "fail".to_string(),
                     decision: "error".to_string(),
@@ -772,6 +887,31 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
 
             emit_output(&opts, &output)?;
             Ok(0)
+        }
+    }
+}
+
+fn run_benchmark_cmd(command: BenchmarkCommands) -> Result<i32> {
+    match command {
+        BenchmarkCommands::Run {
+            min_pass_rate,
+            max_mean_transitions,
+        } => {
+            let corpus = standard_corpus();
+            let report = run_benchmark(&corpus);
+
+            println!("{}", serde_json::to_string_pretty(&report)?);
+
+            let policy = RegressionPolicy {
+                min_pass_rate,
+                max_mean_transitions,
+            };
+            let gate_ok = std::panic::catch_unwind(|| {
+                assert_benchmark_regression(&report, &policy);
+            })
+            .is_ok();
+
+            Ok(if gate_ok { 0 } else { 2 })
         }
     }
 }
@@ -985,6 +1125,170 @@ fn run_trust(command: TrustCommands, pki: &PkiClient) -> Result<i32> {
                 "fail" => 2,
                 _ => 0,
             })
+        }
+        TrustCommands::Import {
+            station_id,
+            key_id,
+            trust,
+            source,
+            opts,
+        } => {
+            let trust = match parse_public_key_trust_level(&trust) {
+                Ok(v) => v,
+                Err(_) => {
+                    let output = DiagnosticOutput {
+                        status: "fail".to_string(),
+                        decision: "invalid".to_string(),
+                        reason_code: "invalid_trust_level".to_string(),
+                        details: json!({
+                            "requested_trust": trust,
+                        }),
+                        recommendation: "Use one of: full, marginal, unknown, untrusted, revoked."
+                            .to_string(),
+                    };
+                    emit_output(&opts, &output)?;
+                    return Ok(2);
+                }
+            };
+
+            let source = match parse_certificate_source(&source) {
+                Ok(v) => v,
+                Err(_) => {
+                    let output = DiagnosticOutput {
+                        status: "fail".to_string(),
+                        decision: "invalid".to_string(),
+                        reason_code: "invalid_certificate_source".to_string(),
+                        details: json!({
+                            "requested_source": source,
+                        }),
+                        recommendation: "Use one of: out_of_band, over_air.".to_string(),
+                    };
+                    emit_output(&opts, &output)?;
+                    return Ok(2);
+                }
+            };
+
+            let mut store = load_trust_store()?;
+            let updated_at_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+
+            if let Some(existing) = store
+                .records
+                .iter_mut()
+                .find(|r| r.key_id == key_id || r.station_id == station_id)
+            {
+                existing.station_id = station_id.clone();
+                existing.key_id = key_id.clone();
+                existing.trust = trust;
+                existing.source = source;
+                existing.status = "active".to_string();
+                existing.reason = "operator_import".to_string();
+                existing.updated_at_ms = updated_at_ms;
+            } else {
+                store.records.push(LocalTrustRecord {
+                    station_id: station_id.clone(),
+                    key_id: key_id.clone(),
+                    trust,
+                    source,
+                    status: "active".to_string(),
+                    reason: "operator_import".to_string(),
+                    updated_at_ms,
+                });
+            }
+
+            persist_trust_store(&store)?;
+
+            let output = DiagnosticOutput {
+                status: "ok".to_string(),
+                decision: "imported".to_string(),
+                reason_code: "trust_store_updated".to_string(),
+                details: json!({
+                    "station_id": station_id,
+                    "key_id": key_id,
+                    "trust": format!("{:?}", trust).to_lowercase(),
+                    "source": format!("{:?}", source).to_lowercase(),
+                    "status": "active",
+                    "trust_store_file": trust_store_file_path(),
+                }),
+                recommendation: "Trust record imported into local trust store.".to_string(),
+            };
+            emit_output(&opts, &output)?;
+            Ok(0)
+        }
+        TrustCommands::List { opts } => {
+            let store = load_trust_store()?;
+            let record_count = store.records.len();
+            let output = DiagnosticOutput {
+                status: "ok".to_string(),
+                decision: "listed".to_string(),
+                reason_code: "trust_store_list".to_string(),
+                details: json!({
+                    "records": store.records,
+                    "count": record_count,
+                    "schema_version": store.schema_version,
+                    "trust_store_file": trust_store_file_path(),
+                }),
+                recommendation: "Review active/revoked entries before session setup.".to_string(),
+            };
+            emit_output(&opts, &output)?;
+            Ok(0)
+        }
+        TrustCommands::Revoke {
+            station_or_key,
+            reason,
+            opts,
+        } => {
+            let mut store = load_trust_store()?;
+            let updated_at_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+
+            let Some(record) = store
+                .records
+                .iter_mut()
+                .find(|r| r.station_id == station_or_key || r.key_id == station_or_key)
+            else {
+                let output = DiagnosticOutput {
+                    status: "fail".to_string(),
+                    decision: "missing".to_string(),
+                    reason_code: "trust_record_not_found".to_string(),
+                    details: json!({
+                        "station_or_key": station_or_key,
+                    }),
+                    recommendation: "Import the record first, then revoke it.".to_string(),
+                };
+                emit_output(&opts, &output)?;
+                return Ok(2);
+            };
+
+            record.status = "revoked".to_string();
+            record.reason = reason.clone();
+            record.updated_at_ms = updated_at_ms;
+
+            let station_id = record.station_id.clone();
+            let key_id = record.key_id.clone();
+            let status = record.status.clone();
+
+            persist_trust_store(&store)?;
+
+            let output = DiagnosticOutput {
+                status: "ok".to_string(),
+                decision: "revoked".to_string(),
+                reason_code: "trust_record_revoked".to_string(),
+                details: json!({
+                    "station_id": station_id,
+                    "key_id": key_id,
+                    "reason": reason,
+                    "status": status,
+                    "trust_store_file": trust_store_file_path(),
+                }),
+                recommendation: "Record revoked in local trust store.".to_string(),
+            };
+            emit_output(&opts, &output)?;
+            Ok(0)
         }
         TrustCommands::Policy { command } => match command {
             TrustPolicyCommands::Show { opts } => {
@@ -1437,6 +1741,123 @@ fn policy_file_path() -> PathBuf {
     config_dir_path().join("trust-policy.json")
 }
 
+fn trust_store_file_path() -> PathBuf {
+    config_dir_path().join("trust-store.json")
+}
+
+fn session_state_file_path() -> PathBuf {
+    config_dir_path().join("session-state.json")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PersistedSessionState {
+    session_id: String,
+    peer: String,
+    hpx_state: String,
+    selected_mode: Option<String>,
+    trust_level: Option<String>,
+    policy_profile: String,
+    updated_at_ms: u64,
+}
+
+fn load_session_state() -> Result<Option<PersistedSessionState>> {
+    load_session_state_at(&session_state_file_path())
+}
+
+fn persist_session_state(state: &PersistedSessionState) -> Result<()> {
+    persist_session_state_at(&session_state_file_path(), state)
+}
+
+fn clear_session_state() -> Result<()> {
+    clear_session_state_at(&session_state_file_path())
+}
+
+fn load_session_state_at(path: &Path) -> Result<Option<PersistedSessionState>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("failed to read session state file {}", path.display()))?;
+    let state: PersistedSessionState = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse session state file {}", path.display()))?;
+
+    Ok(Some(state))
+}
+
+fn persist_session_state_at(path: &Path, state: &PersistedSessionState) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
+    }
+
+    fs::write(path, serde_json::to_string_pretty(state)?)
+        .with_context(|| format!("failed to write session state file {}", path.display()))?;
+
+    Ok(())
+}
+
+fn clear_session_state_at(path: &Path) -> Result<()> {
+    if path.exists() {
+        fs::remove_file(path)
+            .with_context(|| format!("failed to remove session state file {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn parse_public_key_trust_level(value: &str) -> Result<PublicKeyTrustLevel> {
+    match value.to_lowercase().as_str() {
+        "full" => Ok(PublicKeyTrustLevel::Full),
+        "marginal" => Ok(PublicKeyTrustLevel::Marginal),
+        "unknown" => Ok(PublicKeyTrustLevel::Unknown),
+        "untrusted" => Ok(PublicKeyTrustLevel::Untrusted),
+        "revoked" => Ok(PublicKeyTrustLevel::Revoked),
+        _ => anyhow::bail!("invalid trust level"),
+    }
+}
+
+fn parse_certificate_source(value: &str) -> Result<CertificateSource> {
+    match value.to_lowercase().as_str() {
+        "out_of_band" | "out-of-band" => Ok(CertificateSource::OutOfBand),
+        "over_air" | "over-air" => Ok(CertificateSource::OverAir),
+        _ => anyhow::bail!("invalid certificate source"),
+    }
+}
+
+fn load_trust_store() -> Result<LocalTrustStore> {
+    load_trust_store_at(&trust_store_file_path())
+}
+
+fn persist_trust_store(store: &LocalTrustStore) -> Result<()> {
+    persist_trust_store_at(&trust_store_file_path(), store)
+}
+
+fn load_trust_store_at(path: &Path) -> Result<LocalTrustStore> {
+    if !path.exists() {
+        return Ok(LocalTrustStore {
+            schema_version: "1.0.0".to_string(),
+            records: vec![],
+        });
+    }
+
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("failed to read trust store file {}", path.display()))?;
+    let store: LocalTrustStore = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse trust store file {}", path.display()))?;
+    Ok(store)
+}
+
+fn persist_trust_store_at(path: &Path, store: &LocalTrustStore) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
+    }
+
+    fs::write(path, serde_json::to_string_pretty(store)?)
+        .with_context(|| format!("failed to write trust store file {}", path.display()))?;
+    Ok(())
+}
+
 fn load_policy_profile() -> Result<PolicyProfile> {
     let path = policy_file_path();
     if !path.exists() {
@@ -1543,5 +1964,97 @@ mod tests {
         let code = emit_transport_failure(&opts, anyhow::anyhow!("simulated transport error"))
             .expect("transport failure should still render output");
         assert_eq!(code, 3);
+    }
+
+    #[test]
+    fn persisted_session_state_round_trips() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "openpulse-cli-session-state-{}-{}",
+            std::process::id(),
+            nonce
+        ));
+        let path = root.join("session-state.json");
+
+        let state = PersistedSessionState {
+            session_id: "sess-42".to_string(),
+            peer: "N0CALL".to_string(),
+            hpx_state: "activetransfer".to_string(),
+            selected_mode: Some("normal".to_string()),
+            trust_level: Some("verified".to_string()),
+            policy_profile: "balanced".to_string(),
+            updated_at_ms: 1234,
+        };
+
+        persist_session_state_at(&path, &state).expect("persist session state");
+        let loaded = load_session_state_at(&path)
+            .expect("load session state")
+            .expect("state should exist");
+        assert_eq!(loaded, state);
+
+        clear_session_state_at(&path).expect("clear session state");
+        let none = load_session_state_at(&path).expect("load after clear");
+        assert!(none.is_none());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn trust_store_round_trips() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "openpulse-cli-trust-store-{}-{}",
+            std::process::id(),
+            nonce
+        ));
+        let path = root.join("trust-store.json");
+
+        let store = LocalTrustStore {
+            schema_version: "1.0.0".to_string(),
+            records: vec![LocalTrustRecord {
+                station_id: "N0CALL".to_string(),
+                key_id: "key-42".to_string(),
+                trust: PublicKeyTrustLevel::Full,
+                source: CertificateSource::OutOfBand,
+                status: "active".to_string(),
+                reason: "operator_import".to_string(),
+                updated_at_ms: 42,
+            }],
+        };
+
+        persist_trust_store_at(&path, &store).expect("persist trust store");
+        let loaded = load_trust_store_at(&path).expect("load trust store");
+        assert_eq!(loaded, store);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn trust_and_source_parsers_accept_expected_values() {
+        assert_eq!(
+            parse_public_key_trust_level("full").expect("trust"),
+            PublicKeyTrustLevel::Full
+        );
+        assert_eq!(
+            parse_public_key_trust_level("revoked").expect("trust"),
+            PublicKeyTrustLevel::Revoked
+        );
+        assert!(parse_public_key_trust_level("bogus").is_err());
+
+        assert_eq!(
+            parse_certificate_source("out_of_band").expect("source"),
+            CertificateSource::OutOfBand
+        );
+        assert_eq!(
+            parse_certificate_source("over-air").expect("source"),
+            CertificateSource::OverAir
+        );
+        assert!(parse_certificate_source("bogus").is_err());
     }
 }
