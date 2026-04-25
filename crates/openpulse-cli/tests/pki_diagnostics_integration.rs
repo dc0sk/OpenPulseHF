@@ -1,6 +1,21 @@
 use assert_cmd::Command;
 use mockito::{Matcher, Server};
 use predicates::prelude::*;
+use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn unique_temp_dir(name: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "openpulse-cli-{name}-{}-{}",
+        std::process::id(),
+        nonce
+    ))
+}
 
 #[test]
 fn trust_show_returns_fail_on_revoked_identity() {
@@ -315,7 +330,11 @@ fn session_start_with_unknown_peer_returns_exit_2() {
 
 #[test]
 fn session_state_shows_idle_when_no_session_started() {
+    let config_dir = unique_temp_dir("session-state-idle");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+
     let mut cmd = Command::cargo_bin("openpulse").expect("binary should build");
+    cmd.env("OPENPULSE_CONFIG_DIR", &config_dir);
     cmd.args([
         "--backend",
         "loopback",
@@ -331,11 +350,17 @@ fn session_state_shows_idle_when_no_session_started() {
         .success()
         .code(0)
         .stdout(predicate::str::contains("\"hpx_state\": \"idle\""));
+
+    let _ = fs::remove_dir_all(config_dir);
 }
 
 #[test]
 fn session_log_returns_empty_transitions_when_no_session() {
+    let config_dir = unique_temp_dir("session-log-empty");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+
     let mut cmd = Command::cargo_bin("openpulse").expect("binary should build");
+    cmd.env("OPENPULSE_CONFIG_DIR", &config_dir);
     cmd.args([
         "--backend",
         "loopback",
@@ -351,11 +376,17 @@ fn session_log_returns_empty_transitions_when_no_session() {
         .success()
         .code(0)
         .stdout(predicate::str::contains("\"transition_count\": 0"));
+
+    let _ = fs::remove_dir_all(config_dir);
 }
 
 #[test]
 fn session_end_without_active_session_returns_ok() {
+    let config_dir = unique_temp_dir("session-end-idle");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+
     let mut cmd = Command::cargo_bin("openpulse").expect("binary should build");
+    cmd.env("OPENPULSE_CONFIG_DIR", &config_dir);
     cmd.args([
         "--backend",
         "loopback",
@@ -374,4 +405,6 @@ fn session_end_without_active_session_returns_ok() {
         .stdout(predicate::str::contains(
             "\"reason_code\": \"session_ended\"",
         ));
+
+    let _ = fs::remove_dir_all(config_dir);
 }
