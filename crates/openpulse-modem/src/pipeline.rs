@@ -313,4 +313,56 @@ mod tests {
         assert_eq!(audio_out, audio);
         assert_eq!(frame_out, decoded);
     }
+
+    #[test]
+    fn scheduler_preserves_order_for_decoded_frames() {
+        let mut scheduler = PipelineScheduler::new(1, BackpressurePolicy::Block);
+
+        let first = DecodedFrame {
+            sequence: 1,
+            payload: vec![0x11],
+        };
+        let second = DecodedFrame {
+            sequence: 2,
+            payload: vec![0x22],
+        };
+
+        let first_out = scheduler
+            .route_decoded(PipelineStage::HpxStateUpdate, first.clone())
+            .expect("route first decoded");
+        let second_out = scheduler
+            .route_decoded(PipelineStage::HpxStateUpdate, second.clone())
+            .expect("route second decoded");
+
+        assert_eq!(first_out, first);
+        assert_eq!(second_out, second);
+    }
+
+    #[test]
+    fn metrics_snapshot_reports_zero_in_flight_after_roundtrip() {
+        let mut scheduler = PipelineScheduler::new(4, BackpressurePolicy::Block);
+
+        let _ = scheduler
+            .route_wire(
+                PipelineStage::EncodeModulate,
+                WirePayload {
+                    bytes: vec![0xaa, 0xbb],
+                },
+            )
+            .expect("route wire");
+        let _ = scheduler
+            .route_audio(
+                PipelineStage::OutputEmit,
+                AudioSamples {
+                    samples: vec![0.1, 0.2, 0.3],
+                },
+            )
+            .expect("route audio");
+
+        let snapshot = scheduler.metrics_snapshot();
+        for stage in snapshot.stages {
+            assert_eq!(stage.in_flight, 0, "in_flight should drain to zero");
+            assert!(stage.enqueued >= stage.dequeued);
+        }
+    }
 }
