@@ -60,5 +60,9 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/moderation/:submission_id/decision",
             post(api::handlers::post_moderation_decision),
         )
+        .route(
+            "/api/v1/session-audit-events",
+            post(api::handlers::create_session_audit_event),
+        )
         .with_state(state)
 }

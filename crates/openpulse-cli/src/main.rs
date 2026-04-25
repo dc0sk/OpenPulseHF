@@ -18,6 +18,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::Level;
 
 use bpsk_plugin::BpskPlugin;
@@ -26,6 +27,7 @@ use openpulse_core::trust::{
     allowed_signing_modes, classify_connection_trust, evaluate_handshake, CertificateSource,
     ConnectionTrustLevel, PolicyProfile, PublicKeyTrustLevel, SigningMode,
 };
+use openpulse_modem::engine::SecureSessionParams;
 use openpulse_modem::ModemEngine;
 
 #[cfg(feature = "cpal-backend")]
@@ -108,6 +110,39 @@ enum Commands {
     Diagnose {
         #[command(subcommand)]
         command: DiagnoseCommands,
+    },
+
+    /// HPX session lifecycle management.
+    Session {
+        #[command(subcommand)]
+        command: SessionCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum SessionCommands {
+    /// Start a new secure HPX session with a peer.
+    Start {
+        /// Peer station or callsign to establish session with.
+        #[arg(long)]
+        peer: String,
+        #[command(flatten)]
+        opts: DiagnosticOptions,
+    },
+    /// Show current HPX session state.
+    State {
+        #[command(flatten)]
+        opts: DiagnosticOptions,
+    },
+    /// End the active HPX session gracefully.
+    End {
+        #[command(flatten)]
+        opts: DiagnosticOptions,
+    },
+    /// Show HPX state transition log for the current session.
+    Log {
+        #[command(flatten)]
+        opts: DiagnosticOptions,
     },
 }
 
@@ -367,6 +402,26 @@ impl PkiClient {
         }
         Ok(())
     }
+
+    fn create_session_audit_event(&self, payload: &Value) -> Result<()> {
+        let url = format!("{}/api/v1/session-audit-events", self.base_url);
+        let resp = self
+            .http
+            .post(url)
+            .json(payload)
+            .send()
+            .context("pki session audit request failed")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let detail = resp
+                .text()
+                .unwrap_or_else(|_| "<unreadable body>".to_string());
+            anyhow::bail!("pki session audit insert failed: HTTP {status}: {detail}");
+        }
+
+        Ok(())
+    }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -448,6 +503,10 @@ fn main() -> Result<()> {
         Commands::Diagnose { command } => {
             exit_code = run_diagnose(command, &pki)?;
         }
+
+        Commands::Session { command } => {
+            exit_code = run_session(command, &mut engine, &pki)?;
+        }
     }
 
     if exit_code != 0 {
@@ -492,6 +551,272 @@ fn list_devices(backend: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClient) -> Result<i32> {
+    match command {
+        SessionCommands::Start { peer, opts } => {
+            let profile = load_policy_profile()?;
+
+            let Some((trust_decision, _)) = (match fetch_pki_trust(peer.clone(), pki) {
+                Ok(v) => v,
+                Err(err) => return emit_transport_failure(&opts, err),
+            }) else {
+                let output = DiagnosticOutput {
+                    status: "fail".to_string(),
+                    decision: "missing".to_string(),
+                    reason_code: "identity_not_found".to_string(),
+                    details: json!({"peer": peer}),
+                    recommendation: "Peer identity must exist before session start.".to_string(),
+                };
+                emit_output(&opts, &output)?;
+                return Ok(2);
+            };
+
+            let timestamp_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+
+            let result = engine.begin_secure_session(
+                SecureSessionParams {
+                    local_minimum_mode: SigningMode::Normal,
+                    peer_supported_modes: vec![
+                        SigningMode::Normal,
+                        SigningMode::Psk,
+                        SigningMode::Relaxed,
+                    ],
+                    key_trust: trust_decision.public_key_trust,
+                    certificate_source: trust_decision.certificate_source,
+                    psk_validated: trust_decision.psk_validated,
+                },
+                timestamp_ms,
+            );
+
+            let output = match result {
+                Ok(handshake) => {
+                    let session_id = engine
+                        .hpx_session_id()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| format!("sess-{timestamp_ms}"));
+
+                    let _ = post_session_audit(
+                        pki,
+                        &session_id,
+                        &peer,
+                        profile,
+                        &trust_decision,
+                        Ok(&handshake),
+                        engine.hpx_transitions(),
+                    );
+
+                    DiagnosticOutput {
+                        status: "ok".to_string(),
+                        decision: format!("{:?}", handshake.trust.decision).to_lowercase(),
+                        reason_code: handshake.trust.reason_code.clone(),
+                        details: json!({
+                            "peer": peer,
+                            "session_id": session_id,
+                            "hpx_state": format!("{:?}", engine.hpx_state()).to_lowercase(),
+                            "policy_profile": policy_profile_to_str(profile),
+                            "selected_mode": format!("{:?}", handshake.selected_mode).to_lowercase(),
+                            "trust_level": format!("{:?}", handshake.trust.decision).to_lowercase(),
+                            "certificate_source": format!("{:?}", handshake.trust.certificate_source).to_lowercase(),
+                        }),
+                        recommendation:
+                            "Session active. Use session state to monitor and session end to close."
+                                .to_string(),
+                    }
+                }
+                Err(err) => {
+                    let session_id = format!("sess-{timestamp_ms}");
+                    let _ = post_session_audit(
+                        pki,
+                        &session_id,
+                        &peer,
+                        profile,
+                        &trust_decision,
+                        Err(()),
+                        engine.hpx_transitions(),
+                    );
+
+                    DiagnosticOutput {
+                        status: "fail".to_string(),
+                        decision: "rejected".to_string(),
+                        reason_code: "session_start_failed".to_string(),
+                        details: json!({
+                            "peer": peer,
+                            "hpx_state": format!("{:?}", engine.hpx_state()).to_lowercase(),
+                            "error": err.to_string(),
+                        }),
+                        recommendation: "Check trust policy and peer identity before retrying."
+                            .to_string(),
+                    }
+                }
+            };
+
+            emit_output(&opts, &output)?;
+            Ok(status_to_exit_code(&output.status))
+        }
+
+        SessionCommands::State { opts } => {
+            let hpx_state = engine.hpx_state();
+            let session_id = engine.hpx_session_id().map(ToString::to_string);
+            let handshake = engine.active_handshake();
+
+            let output = DiagnosticOutput {
+                status: "ok".to_string(),
+                decision: format!("{hpx_state:?}").to_lowercase(),
+                reason_code: "hpx_state_snapshot".to_string(),
+                details: json!({
+                    "hpx_state": format!("{hpx_state:?}").to_lowercase(),
+                    "session_id": session_id,
+                    "active_handshake": handshake.map(|h| json!({
+                        "selected_mode": format!("{:?}", h.selected_mode).to_lowercase(),
+                        "trust_level": format!("{:?}", h.trust.decision).to_lowercase(),
+                        "policy_profile": format!("{:?}", h.policy_profile).to_lowercase(),
+                    })),
+                    "transition_count": engine.hpx_transitions().len(),
+                }),
+                recommendation: match hpx_state {
+                    openpulse_core::hpx::HpxState::Idle => "No active session.",
+                    openpulse_core::hpx::HpxState::ActiveTransfer => {
+                        "Session active. Ready for transfer."
+                    }
+                    openpulse_core::hpx::HpxState::Failed => "Session failed. Start a new session.",
+                    _ => "Session in transition.",
+                }
+                .to_string(),
+            };
+
+            emit_output(&opts, &output)?;
+            Ok(0)
+        }
+
+        SessionCommands::End { opts } => {
+            let timestamp_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+
+            let session_id = engine
+                .hpx_session_id()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| format!("sess-{timestamp_ms}"));
+
+            let result = engine.end_secure_session(timestamp_ms);
+
+            let output = match result {
+                Ok(()) => DiagnosticOutput {
+                    status: "ok".to_string(),
+                    decision: "closed".to_string(),
+                    reason_code: "session_ended".to_string(),
+                    details: json!({
+                        "session_id": session_id,
+                        "hpx_state": format!("{:?}", engine.hpx_state()).to_lowercase(),
+                    }),
+                    recommendation: "Session closed. Engine is idle.".to_string(),
+                },
+                Err(err) => DiagnosticOutput {
+                    status: "fail".to_string(),
+                    decision: "error".to_string(),
+                    reason_code: "session_end_failed".to_string(),
+                    details: json!({
+                        "session_id": session_id,
+                        "hpx_state": format!("{:?}", engine.hpx_state()).to_lowercase(),
+                        "error": err.to_string(),
+                    }),
+                    recommendation: "Session end encountered an error.".to_string(),
+                },
+            };
+
+            emit_output(&opts, &output)?;
+            Ok(status_to_exit_code(&output.status))
+        }
+
+        SessionCommands::Log { opts } => {
+            let transitions = engine.hpx_transitions();
+            let session_id = engine.hpx_session_id().map(ToString::to_string);
+
+            let log_entries: Vec<Value> = transitions
+                .iter()
+                .map(|t| {
+                    json!({
+                        "timestamp_ms": t.timestamp_ms,
+                        "from_state": format!("{:?}", t.from_state).to_lowercase(),
+                        "to_state": format!("{:?}", t.to_state).to_lowercase(),
+                        "event": format!("{:?}", t.event).to_lowercase(),
+                        "reason_code": format!("{:?}", t.reason_code).to_lowercase(),
+                        "reason_string": t.reason_string,
+                    })
+                })
+                .collect();
+
+            let output = DiagnosticOutput {
+                status: "ok".to_string(),
+                decision: format!("{:?}", engine.hpx_state()).to_lowercase(),
+                reason_code: "session_log".to_string(),
+                details: json!({
+                    "session_id": session_id,
+                    "hpx_state": format!("{:?}", engine.hpx_state()).to_lowercase(),
+                    "transition_count": transitions.len(),
+                    "transitions": log_entries,
+                }),
+                recommendation: if transitions.is_empty() {
+                    "No transitions recorded for this session."
+                } else {
+                    "Transition log captured."
+                }
+                .to_string(),
+            };
+
+            emit_output(&opts, &output)?;
+            Ok(0)
+        }
+    }
+}
+
+fn post_session_audit(
+    pki: &PkiClient,
+    session_id: &str,
+    peer: &str,
+    profile: PolicyProfile,
+    trust_decision: &openpulse_core::trust::TrustDecision,
+    handshake: Result<&openpulse_core::trust::HandshakeDecision, ()>,
+    transitions: &[openpulse_core::hpx::HpxTransition],
+) -> Result<()> {
+    let selected_mode = handshake
+        .ok()
+        .map(|h| format!("{:?}", h.selected_mode).to_lowercase())
+        .unwrap_or_else(|| "none".to_string());
+
+    let transition_values: Vec<Value> = transitions
+        .iter()
+        .map(|t| {
+            json!({
+                "timestamp_ms": t.timestamp_ms,
+                "from_state": format!("{:?}", t.from_state).to_lowercase(),
+                "to_state": format!("{:?}", t.to_state).to_lowercase(),
+                "event": format!("{:?}", t.event).to_lowercase(),
+                "reason_code": format!("{:?}", t.reason_code).to_lowercase(),
+                "reason_string": t.reason_string,
+            })
+        })
+        .collect();
+
+    let payload = json!({
+        "session_id": session_id,
+        "peer_id": peer,
+        "policy_profile": policy_profile_to_str(profile),
+        "selected_mode": selected_mode,
+        "trust_level": format!("{:?}", trust_decision.decision).to_lowercase(),
+        "certificate_source": format!("{:?}", trust_decision.certificate_source).to_lowercase(),
+        "trust_reason_code": trust_decision.reason_code,
+        "transitions": transition_values,
+        "actor_identity": "openpulse-cli",
+    });
+
+    pki.create_session_audit_event(&payload)
 }
 
 fn run_identity(command: IdentityCommands, pki: &PkiClient) -> Result<i32> {
@@ -742,7 +1067,7 @@ fn run_diagnose(command: DiagnoseCommands, pki: &PkiClient) -> Result<i32> {
                 trust_decision.psk_validated,
             );
 
-            let output = match handshake {
+            let output = match &handshake {
                 Ok(h) => DiagnosticOutput {
                     status: "ok".to_string(),
                     decision: format!("{:?}", h.trust.decision).to_lowercase(),
@@ -764,6 +1089,12 @@ fn run_diagnose(command: DiagnoseCommands, pki: &PkiClient) -> Result<i32> {
                     recommendation: "Adjust local policy or peer capabilities.".to_string(),
                 },
             };
+
+            if let Err(err) =
+                record_handshake_session_audit(pki, &peer, profile, &trust_decision, &handshake)
+            {
+                return emit_transport_failure(&opts, err);
+            }
 
             emit_output(&opts, &output)?;
             Ok(status_to_exit_code(&output.status))
@@ -853,6 +1184,73 @@ fn run_diagnose(command: DiagnoseCommands, pki: &PkiClient) -> Result<i32> {
             Ok(status_to_exit_code(&output.status))
         }
     }
+}
+
+fn record_handshake_session_audit(
+    pki: &PkiClient,
+    peer: &str,
+    profile: PolicyProfile,
+    trust_decision: &openpulse_core::trust::TrustDecision,
+    handshake: &Result<openpulse_core::trust::HandshakeDecision, openpulse_core::trust::TrustError>,
+) -> Result<()> {
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    let mut audit_engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+    audit_engine.set_trust_policy_profile(profile);
+
+    let _ = audit_engine.begin_secure_session(
+        SecureSessionParams {
+            local_minimum_mode: SigningMode::Normal,
+            peer_supported_modes: vec![SigningMode::Normal, SigningMode::Psk, SigningMode::Relaxed],
+            key_trust: trust_decision.public_key_trust,
+            certificate_source: trust_decision.certificate_source,
+            psk_validated: trust_decision.psk_validated,
+        },
+        timestamp_ms,
+    );
+
+    let selected_mode = handshake
+        .as_ref()
+        .ok()
+        .map(|h| format!("{:?}", h.selected_mode).to_lowercase())
+        .unwrap_or_else(|| "none".to_string());
+
+    let transitions = audit_engine
+        .hpx_transitions()
+        .iter()
+        .map(|transition| {
+            json!({
+                "timestamp_ms": transition.timestamp_ms,
+                "from_state": format!("{:?}", transition.from_state).to_lowercase(),
+                "to_state": format!("{:?}", transition.to_state).to_lowercase(),
+                "event": format!("{:?}", transition.event).to_lowercase(),
+                "reason_code": format!("{:?}", transition.reason_code).to_lowercase(),
+                "reason_string": transition.reason_string,
+            })
+        })
+        .collect::<Vec<Value>>();
+
+    let session_id = audit_engine
+        .hpx_session_id()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| format!("diag-{timestamp_ms}"));
+
+    let payload = json!({
+        "session_id": session_id,
+        "peer_id": peer,
+        "policy_profile": policy_profile_to_str(profile),
+        "selected_mode": selected_mode,
+        "trust_level": format!("{:?}", trust_decision.decision).to_lowercase(),
+        "certificate_source": format!("{:?}", trust_decision.certificate_source).to_lowercase(),
+        "trust_reason_code": trust_decision.reason_code,
+        "transitions": transitions,
+        "actor_identity": "openpulse-cli",
+    });
+
+    pki.create_session_audit_event(&payload)
 }
 
 fn trust_output(

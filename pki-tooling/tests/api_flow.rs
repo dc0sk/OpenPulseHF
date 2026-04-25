@@ -3,6 +3,7 @@ use axum::http::{Request, StatusCode};
 use pki_tooling::{build_router, run_migrations, AppState};
 use serde_json::{json, Value};
 use sqlx::postgres::PgPoolOptions;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tower::ServiceExt;
 
 async fn setup_pool() -> Option<sqlx::PgPool> {
@@ -278,6 +279,106 @@ async fn moderation_decision_updates_submission_and_records_events() {
     .await
     .expect("failed to query request_id from audit_events");
     assert_eq!(request_id.as_deref(), Some("req-moderation-001"));
+}
+
+#[tokio::test]
+async fn create_session_audit_event_persists_required_audit_payload() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+
+    let app = build_router(AppState { db: pool.clone() });
+
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after epoch")
+        .as_millis();
+    let session_id = format!("sess-audit-{suffix}");
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/session-audit-events")
+        .header("content-type", "application/json")
+        .header("x-request-id", "req-session-audit-001")
+        .body(Body::from(
+            json!({
+                "session_id": session_id,
+                "peer_id": "W1ABC",
+                "policy_profile": "balanced",
+                "selected_mode": "normal",
+                "trust_level": "verified",
+                "certificate_source": "out_of_band",
+                "trust_reason_code": "verified_out_of_band",
+                "transitions": [
+                    {
+                        "timestamp_ms": 1000,
+                        "from_state": "idle",
+                        "to_state": "discovery",
+                        "event": "start_session",
+                        "reason_code": "success",
+                        "reason_string": "Session started"
+                    },
+                    {
+                        "timestamp_ms": 1001,
+                        "from_state": "discovery",
+                        "to_state": "training",
+                        "event": "discovery_ok",
+                        "reason_code": "success",
+                        "reason_string": "Peer discovered and verified"
+                    }
+                ],
+                "actor_identity": "openpulse-cli"
+            })
+            .to_string(),
+        ))
+        .expect("failed to build POST /session-audit-events request");
+
+    let response = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("failed to read response body");
+    let created: Value = serde_json::from_slice(&body).expect("invalid JSON body");
+    assert_eq!(
+        created
+            .get("event_type")
+            .and_then(Value::as_str)
+            .expect("missing event_type"),
+        "session.audit_recorded"
+    );
+
+    let row_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM audit_events WHERE entity_type = 'session' AND entity_id = $1 AND event_type = 'session.audit_recorded'",
+    )
+    .bind(
+        created
+            .get("session_id")
+            .and_then(Value::as_str)
+            .expect("missing session_id"),
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("failed to query session audit rows");
+    assert_eq!(row_count, 1);
+
+    let request_id: Option<String> = sqlx::query_scalar(
+        "SELECT request_id FROM audit_events WHERE entity_type = 'session' AND entity_id = $1 AND event_type = 'session.audit_recorded'",
+    )
+    .bind(
+        created
+            .get("session_id")
+            .and_then(Value::as_str)
+            .expect("missing session_id"),
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("failed to query request_id from session audit rows");
+    assert_eq!(request_id.as_deref(), Some("req-session-audit-001"));
 }
 
 #[tokio::test]

@@ -71,6 +71,16 @@ impl ModemEngine {
         self.hpx.state()
     }
 
+    /// Returns the active HPX session id when a secure session is in progress.
+    pub fn hpx_session_id(&self) -> Option<&str> {
+        self.hpx.session_id()
+    }
+
+    /// Returns emitted HPX transitions for the current session lifecycle.
+    pub fn hpx_transitions(&self) -> &[HpxTransition] {
+        self.hpx.transitions()
+    }
+
     /// Returns the active handshake decision for the secure session, if present.
     pub fn active_handshake(&self) -> Option<&HandshakeDecision> {
         self.active_handshake.as_ref()
