@@ -7,9 +7,40 @@ last_updated: 2026-04-25
 
 # Backlog
 
+<<<<<<< HEAD
 ## Completed: HPX hardening & observability sprint
 
 All sprint items (1-5) shipped in PR #49. Full test coverage (90+ tests) and CI integration verified on main.
+=======
+## Sprint: BPSK Hardening & Diagnostics & Observability
+
+Sized for one sprint, focusing on modem robustness and CLI debugging experience.
+
+### BPSK Hardening
+- Add loopback fixture tests with SNR sweep (6dB, 9dB, 12dB, 15dB).
+- Add multipath profile tests (fading, frequency offset, timing error).
+- Implement error recovery scenarios (frame loss, timeout, retransmit).
+- Harden real-device path (hardware detection, fallback, graceful degradation).
+- Document BPSK behavior matrix (success/failure conditions).
+
+### Diagnostics & Observability
+- Add structured HPX event logging (JSON format with timestamps, state deltas).
+- Improve CLI error messages (actionable recommendations, error codes).
+- Add `--verbose` flag to CLI commands (emit debug logs to stderr).
+- Add `--diagnostics` JSON output to `session state` (detailed HPX metrics).
+- Add HPX event trace to benchmark report (transition sequence, timing).
+
+## Upcoming Sprint: Session Management
+
+Items for the next sprint after BPSK/Diagnostics.
+
+### Session Management Extensions
+- Add `session resume <session-id>` — re-attach to persisted session.
+- Add `session list` — enumerate all saved sessions with HPX state.
+- Add `session log` streaming (follow new events in real-time).
+
+## Previous Sprint: HPX hardening & observability (PR #49 pending)
+>>>>>>> 79318a4 (Foundation: Add diagnostics module and BPSK hardening test suite)
 
 ### HPX benchmark harness ✅
 - Input signal corpus (SNR sweep, multipath profiles, silence gaps).
