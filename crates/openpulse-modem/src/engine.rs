@@ -13,7 +13,9 @@ use openpulse_core::trust::{
     PublicKeyTrustLevel, SigningMode,
 };
 
-use crate::pipeline::{AudioSamples, DecodedFrame, PipelineStage, WirePayload};
+use crate::pipeline::{
+    AudioSamples, BackpressurePolicy, DecodedFrame, PipelineScheduler, PipelineStage, WirePayload,
+};
 
 #[derive(Debug, Clone)]
 pub struct SecureSessionParams {
@@ -42,6 +44,7 @@ pub struct ModemEngine {
     plugins: PluginRegistry,
     sequence: u16,
     hpx: HpxSession,
+    scheduler: PipelineScheduler,
     trust_policy_profile: PolicyProfile,
     active_handshake: Option<HandshakeDecision>,
 }
@@ -54,6 +57,7 @@ impl ModemEngine {
             plugins: PluginRegistry::new(),
             sequence: 0,
             hpx: HpxSession::new(),
+            scheduler: PipelineScheduler::new(8, BackpressurePolicy::Block),
             trust_policy_profile: PolicyProfile::Balanced,
             active_handshake: None,
         }
@@ -232,11 +236,7 @@ impl ModemEngine {
         }
 
         let outbound = self.stage_encode_frame(data);
-
-        let plugin = self
-            .plugins
-            .get(mode)
-            .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+        let outbound = self.route_wire_stage(PipelineStage::EncodeModulate, outbound)?;
 
         debug!(
             "transmitting {} byte frame (seq={}, mode={mode})",
@@ -244,7 +244,14 @@ impl ModemEngine {
             self.sequence.wrapping_sub(1)
         );
 
-        let samples = self.stage_modulate_payload(plugin, mode, &outbound)?;
+        let samples = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_modulate_payload(plugin, mode, &outbound)?
+        };
+        let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
         info!(
             "modulated {} bytes → {} audio samples",
             outbound.bytes.len(),
@@ -262,18 +269,22 @@ impl ModemEngine {
     /// Pass `device = None` to use the backend's default input device.
     pub fn receive(&mut self, mode: &str, device: Option<&str>) -> Result<Vec<u8>, ModemError> {
         let samples = self.stage_capture_input(device)?;
+        let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         info!("received {} audio samples", samples.samples.len());
 
-        let plugin = self
-            .plugins
-            .get(mode)
-            .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
-
-        let wire = self.stage_demodulate_payload(plugin, mode, &samples)?;
+        let wire = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_demodulate_payload(plugin, mode, &samples)?
+        };
+        let wire = self.route_wire_stage(PipelineStage::DemodulateDecode, wire)?;
         debug!("demodulated {} bytes", wire.bytes.len());
 
         let frame = self.stage_decode_frame(&wire)?;
+        let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         info!("received frame seq={}", frame.sequence);
 
         Ok(frame.payload)
@@ -361,6 +372,36 @@ impl ModemEngine {
             sequence: frame.sequence,
             payload: frame.payload,
         })
+    }
+
+    fn route_wire_stage(
+        &mut self,
+        stage: PipelineStage,
+        payload: WirePayload,
+    ) -> Result<WirePayload, ModemError> {
+        self.scheduler
+            .route_wire(stage, payload)
+            .map_err(|e| ModemError::Configuration(e.to_string()))
+    }
+
+    fn route_audio_stage(
+        &mut self,
+        stage: PipelineStage,
+        payload: AudioSamples,
+    ) -> Result<AudioSamples, ModemError> {
+        self.scheduler
+            .route_audio(stage, payload)
+            .map_err(|e| ModemError::Configuration(e.to_string()))
+    }
+
+    fn route_decoded_stage(
+        &mut self,
+        stage: PipelineStage,
+        payload: DecodedFrame,
+    ) -> Result<DecodedFrame, ModemError> {
+        self.scheduler
+            .route_decoded(stage, payload)
+            .map_err(|e| ModemError::Configuration(e.to_string()))
     }
 }
 
