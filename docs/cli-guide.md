@@ -47,7 +47,8 @@ cargo build --release
 - openpulse session end
 
 Notes:
-- `session state --diagnostics` emits structured JSON including transition history and pipeline scheduler metrics.
+- `session state --diagnostics` emits structured JSON including transition history, per-event `event_source`, `session_id`, `reason_string`, and pipeline scheduler metrics.
+- `session state --diagnostics --format text` emits a concise session summary followed by readable event lines; `--format json` preserves the raw structured diagnostics payload.
 - `session resume` restores persisted metadata and policy profile snapshot; runtime handshake state must be re-established.
 - `session log --follow` tails the persisted session log for a bounded polling window and is intended for cross-invocation debugging.
 - `session start`, `session resume`, and `session end` update the persisted session log so follow mode can observe lifecycle changes across CLI invocations.

@@ -32,7 +32,7 @@ use openpulse_core::trust::{
 use openpulse_modem::benchmark::{
     assert_benchmark_regression, run_benchmark, standard_corpus, RegressionPolicy,
 };
-use openpulse_modem::diagnostics::SessionDiagnostics;
+use openpulse_modem::diagnostics::{DiagnosticFormatter, SessionDiagnostics};
 use openpulse_modem::engine::SecureSessionParams;
 use openpulse_modem::ModemEngine;
 
@@ -812,24 +812,37 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
 
             // Build diagnostics if requested
             if opts.diagnostics {
-                let mut diag = SessionDiagnostics::new(
-                    session_id
-                        .clone()
-                        .unwrap_or_else(|| "no-session".to_string()),
-                    "peer", // Placeholder: actual peer info available from handshake context
-                );
-                diag.current_state = format!("{hpx_state:?}").to_lowercase();
-                diag.total_transitions = engine.hpx_transitions().len();
-                diag.set_pipeline_metrics(engine.pipeline_metrics_snapshot());
+                let persisted = load_session_state()?;
+                let diag = build_session_diagnostics(engine, persisted.as_ref());
+                let format = OutputFormat::from_arg(&opts.format)?;
 
-                // Record all transitions into diagnostics
-                for transition in engine.hpx_transitions() {
-                    diag.record_transition(transition);
+                match format {
+                    OutputFormat::Json => {
+                        println!("{}", diag.to_json_pretty()?);
+                    }
+                    OutputFormat::Text => {
+                        let formatter = DiagnosticFormatter::new(opts.verbose);
+                        println!("{}", formatter.format_summary(&diag));
+
+                        if diag.events.is_empty() {
+                            println!("events: none");
+                        } else {
+                            for event in &diag.events {
+                                println!("{}", formatter.format_event(event));
+                            }
+                        }
+
+                        if opts.verbose {
+                            if let Some(metrics) = &diag.pipeline_metrics {
+                                println!(
+                                    "pipeline_metrics: {}",
+                                    serde_json::to_string(metrics)?
+                                );
+                            }
+                        }
+                    }
                 }
 
-                // Output detailed diagnostics as JSON
-                let json_output = diag.to_json_pretty()?;
-                println!("{}", json_output);
                 return Ok(0);
             }
 
@@ -2246,6 +2259,43 @@ fn persist_policy_profile(profile: PolicyProfile) -> Result<()> {
     Ok(())
 }
 
+fn diagnostics_peer(
+    engine: &ModemEngine,
+    persisted: Option<&PersistedSessionState>,
+) -> String {
+    if let Some(state) = persisted {
+        return state.peer.clone();
+    }
+
+    if engine.hpx_session_id().is_some() {
+        return "live".to_string();
+    }
+
+    "unknown".to_string()
+}
+
+fn build_session_diagnostics(
+    engine: &ModemEngine,
+    persisted: Option<&PersistedSessionState>,
+) -> SessionDiagnostics {
+    let mut diag = SessionDiagnostics::new(
+        engine
+            .hpx_session_id()
+            .map(ToString::to_string)
+            .or_else(|| persisted.map(|state| state.session_id.clone()))
+            .unwrap_or_else(|| "no-session".to_string()),
+        diagnostics_peer(engine, persisted),
+    );
+    diag.current_state = format!("{:?}", engine.hpx_state()).to_lowercase();
+    diag.set_pipeline_metrics(engine.pipeline_metrics_snapshot());
+
+    for transition in engine.hpx_transitions() {
+        diag.record_transition(transition);
+    }
+
+    diag
+}
+
 fn key_trust_from_publication_state(publication_state: &str) -> PublicKeyTrustLevel {
     match publication_state {
         "published" => PublicKeyTrustLevel::Full,
@@ -2514,5 +2564,31 @@ mod tests {
         assert_eq!(loaded[0].event, "startsession");
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn build_session_diagnostics_uses_persisted_peer_and_transition_counts() {
+        let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        engine
+            .hpx_apply_event(openpulse_core::hpx::HpxEvent::StartSession, 100)
+            .expect("start session transition");
+
+        let persisted = PersistedSessionState {
+            session_id: "sess-100".to_string(),
+            peer: "W1ABC".to_string(),
+            hpx_state: "discovery".to_string(),
+            selected_mode: None,
+            trust_level: None,
+            policy_profile: "balanced".to_string(),
+            updated_at_ms: 100,
+        };
+
+        let diag = build_session_diagnostics(&engine, Some(&persisted));
+
+        assert_eq!(diag.peer, "W1ABC");
+        assert_eq!(diag.current_state, "discovery");
+        assert_eq!(diag.total_transitions, 1);
+        assert_eq!(diag.total_events, 1);
+        assert_eq!(diag.events.len(), 1);
     }
 }
