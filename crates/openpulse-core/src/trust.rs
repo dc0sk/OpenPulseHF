@@ -275,6 +275,30 @@ mod tests {
     }
 
     #[test]
+    fn strict_profile_prefers_paranoid_when_available() {
+        let mode = select_signing_mode(
+            PolicyProfile::Strict,
+            SigningMode::Normal,
+            &[SigningMode::Paranoid, SigningMode::Normal],
+        )
+        .unwrap();
+        assert_eq!(mode, SigningMode::Paranoid);
+    }
+
+    #[test]
+    fn evaluate_handshake_rejects_untrusted_keys() {
+        let result = evaluate_handshake(
+            PolicyProfile::Balanced,
+            SigningMode::Normal,
+            &[SigningMode::Normal],
+            PublicKeyTrustLevel::Untrusted,
+            CertificateSource::OutOfBand,
+            false,
+        );
+        assert!(matches!(result, Err(TrustError::RejectedTrustLevel)));
+    }
+
+    #[test]
     fn x25519_hkdf_derivation_is_deterministic() {
         let local_private = [7u8; 32];
         let remote_private = [9u8; 32];
