@@ -11,10 +11,13 @@ use crate::pipeline::PipelineMetricsSnapshot;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiagnosticEvent {
     pub timestamp_ms: u64,
+    pub event_source: String,
     pub event: String,
     pub state_before: String,
     pub state_after: Option<String>,
     pub reason_code: String,
+    pub reason_string: Option<String>,
+    pub session_id: Option<String>,
     pub metadata: HashMap<String, String>,
 }
 
@@ -60,6 +63,7 @@ impl SessionDiagnostics {
         let ts_ms = transition.timestamp_ms;
         self.current_state = format!("{:?}", transition.to_state).to_lowercase();
         self.total_transitions += 1;
+        self.total_events += 1;
 
         // Track state-machine errors (Timeout, Signature failures, exhausted retries)
         match transition.reason_code {
@@ -81,10 +85,13 @@ impl SessionDiagnostics {
 
         self.events.push(DiagnosticEvent {
             timestamp_ms: ts_ms,
+            event_source: "transition".to_string(),
             event: format!("{:?}", transition.event).to_lowercase(),
             state_before: format!("{:?}", transition.from_state).to_lowercase(),
             state_after: Some(self.current_state.clone()),
             reason_code: format!("{:?}", transition.reason_code).to_lowercase(),
+            reason_string: Some(transition.reason_string.clone()),
+            session_id: transition.session_id.clone(),
             metadata: Default::default(),
         });
     }
@@ -104,10 +111,13 @@ impl SessionDiagnostics {
 
         self.events.push(DiagnosticEvent {
             timestamp_ms: ts_ms,
+            event_source: "event".to_string(),
             event: format!("{:?}", event).to_lowercase(),
             state_before: self.current_state.clone(),
             state_after: None,
             reason_code: reason_code.to_string(),
+            reason_string: None,
+            session_id: Some(self.session_id.clone()),
             metadata: metadata.unwrap_or_default(),
         });
     }
@@ -213,10 +223,13 @@ mod tests {
     fn diagnostic_formatter_verbose_mode() {
         let event = DiagnosticEvent {
             timestamp_ms: 1234,
+            event_source: "transition".to_string(),
             event: "discoverytimeout".to_string(),
             state_before: "discovery".to_string(),
             state_after: Some("failed".to_string()),
             reason_code: "timeout".to_string(),
+            reason_string: Some("discovery timeout".to_string()),
+            session_id: Some("sess-1".to_string()),
             metadata: Default::default(),
         };
 
@@ -239,5 +252,39 @@ mod tests {
         assert!(json.contains("sess-2"));
         assert!(json.contains("W1ABC"));
         assert!(json.contains("idle"));
+    }
+
+    #[test]
+    fn session_diagnostics_transition_preserves_structured_fields() {
+        let mut diag = SessionDiagnostics::new("sess-9", "K1TEST");
+
+        let transition = HpxTransition {
+            timestamp_ms: 250,
+            from_state: HpxState::Training,
+            to_state: HpxState::ActiveTransfer,
+            event: HpxEvent::TrainingOk,
+            reason_code: HpxReasonCode::Success,
+            reason_string: "training complete".to_string(),
+            session_id: Some("sess-9".to_string()),
+        };
+
+        diag.record_transition(&transition);
+
+        assert_eq!(diag.total_transitions, 1);
+        assert_eq!(diag.total_events, 1);
+        assert_eq!(diag.events[0].event_source, "transition");
+        assert_eq!(diag.events[0].reason_string.as_deref(), Some("training complete"));
+        assert_eq!(diag.events[0].session_id.as_deref(), Some("sess-9"));
+    }
+
+    #[test]
+    fn session_diagnostics_raw_event_uses_session_context() {
+        let mut diag = SessionDiagnostics::new("sess-10", "K1TEST");
+        diag.record_event(HpxEvent::QualityDrop, "quality_drop", None);
+
+        assert_eq!(diag.total_events, 1);
+        assert_eq!(diag.events[0].event_source, "event");
+        assert_eq!(diag.events[0].session_id.as_deref(), Some("sess-10"));
+        assert!(diag.events[0].reason_string.is_none());
     }
 }

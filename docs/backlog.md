@@ -52,6 +52,7 @@ All sprint items (1-5) shipped and merged.
 
 ### Diagnostics & observability ✅
 - Structured session diagnostics (`SessionDiagnostics`) with transition event capture.
+- Structured HPX event log entries now preserve `event_source`, `session_id`, and `reason_string` for transition and raw-event records.
 - `session state --diagnostics` JSON output.
 - **Status**: Landed in PR #50.
 

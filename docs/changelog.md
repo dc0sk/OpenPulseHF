@@ -14,6 +14,9 @@ last_updated: 2026-04-25
 - Expanded `openpulse-modem` BPSK hardening coverage with a deterministic
   loopback fixture matrix executing 56 scenarios across supported modes and
   payload profiles.
+- Strengthened `openpulse-modem` structured HPX event logging so diagnostic
+  entries preserve `event_source`, `session_id`, and `reason_string`, and
+  transition events are counted consistently in session diagnostics.
 
 ### HPX conformance & session audit (2026-04-25)
 
