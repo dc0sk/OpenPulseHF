@@ -1,6 +1,7 @@
 //! Structured diagnostics and observability for HPX sessions.
 
-use openpulse_core::hpx::{HpxEvent, HpxReasonCode, HpxState, HpxTransition};
+use openpulse_core::hpx::{HpxEvent, HpxReasonCode, HpxTransition};
+use openpulse_core::HpxState;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};

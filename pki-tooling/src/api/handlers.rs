@@ -277,12 +277,12 @@ pub async fn list_revocations(
     let effective_before =
         match parse_rfc3339_query(query.effective_before.as_deref(), "effective_before") {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return response.into_response(),
         };
     let effective_after =
         match parse_rfc3339_query(query.effective_after.as_deref(), "effective_after") {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return response.into_response(),
         };
 
     if let (Some(after), Some(before)) = (&effective_after, &effective_before) {
@@ -1685,7 +1685,10 @@ fn extract_request_id(headers: &HeaderMap) -> Option<String> {
 fn parse_rfc3339_query(
     raw: Option<&str>,
     field_name: &'static str,
-) -> Result<Option<chrono::DateTime<chrono::FixedOffset>>, axum::response::Response> {
+) -> Result<
+    Option<chrono::DateTime<chrono::FixedOffset>>,
+    (StatusCode, Json<ApiMessage>),
+> {
     let Some(value) = raw else {
         return Ok(None);
     };
@@ -1698,8 +1701,7 @@ fn parse_rfc3339_query(
                 status: "validation_error",
                 detail: format!("{field_name} must be RFC3339 timestamp"),
             }),
-        )
-            .into_response()),
+        )),
     }
 }
 

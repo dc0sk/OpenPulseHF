@@ -110,7 +110,7 @@ jobs:
         run: cargo test --workspace --no-default-features
 
       - name: Pi5 benchmark smoke run
-        run: cargo run -p openpulse-cli --no-default-features -- --backend loopback benchmark run >/tmp/openpulse-benchmark.json
+        run: cargo run -p openpulse-cli --no-default-features -- --backend loopback --log error benchmark run >/tmp/openpulse-benchmark.json
 
       - name: Verify benchmark JSON payload
         run: grep -q '"scenarios"' /tmp/openpulse-benchmark.json
