@@ -1484,9 +1484,13 @@ fn run_diagnose(command: DiagnoseCommands, pki: &PkiClient) -> Result<i32> {
                 pki,
             )?;
 
-            let composite_status = if identity == 3 || trust_code == 3 || handshake_code == 3 {
-                "fail"
-            } else if identity == 2 || trust_code == 2 || handshake_code == 2 {
+            let composite_status = if identity == 3
+                || trust_code == 3
+                || handshake_code == 3
+                || identity == 2
+                || trust_code == 2
+                || handshake_code == 2
+            {
                 "fail"
             } else {
                 "ok"
