@@ -11,6 +11,9 @@ last_updated: 2026-04-25
 
 - Added documentation framework with standardized frontmatter.
 - Added docs CI checks and automated last_updated stamping for pull requests.
+- Expanded `openpulse-modem` BPSK hardening coverage with a deterministic
+  loopback fixture matrix executing 56 scenarios across supported modes and
+  payload profiles.
 
 ### HPX conformance & session audit (2026-04-25)
 

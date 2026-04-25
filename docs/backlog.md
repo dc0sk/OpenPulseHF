@@ -46,6 +46,7 @@ All sprint items (1-5) shipped and merged.
 
 ### BPSK hardening ✅
 - 17 loopback fixture tests covering SNR sweep, multipath profiles, and recovery scenarios.
+- Added deterministic loopback fixture matrix with 56 scenarios (4 modes x 14 payload profiles).
 - Behavior matrix coverage for invalid mode, empty payload, large payload boundary, and fallback behavior.
 - **Status**: Landed in PR #50.
 
