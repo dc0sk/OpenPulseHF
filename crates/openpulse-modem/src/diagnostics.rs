@@ -176,6 +176,7 @@ impl DiagnosticFormatter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openpulse_core::HpxState;
 
     #[test]
     fn session_diagnostics_record_transition() {
