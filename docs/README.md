@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/README.md
 status: living
-last_updated: 2026-04-24
+last_updated: 2026-04-25
 ---
 
 # Documentation Index
@@ -43,3 +43,4 @@ Canonical documentation lives in the files listed below.
 - docs/cli-guide.md: CLI usage and option reference
 - docs/sbom.md: software bill of materials policy and process
 - docs/memories.md: lessons learned and operator notes
+- docs/AGENTS.md: agent safeguards, root-cause analysis, and recovery countermeasures
