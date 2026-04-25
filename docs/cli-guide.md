@@ -43,11 +43,13 @@ cargo build --release
 - openpulse session list
 - openpulse session resume
 - openpulse session log
+- openpulse session log --follow --follow-timeout-ms <ms>
 - openpulse session end
 
 Notes:
 - `session state --diagnostics` emits structured JSON including transition history and pipeline scheduler metrics.
 - `session resume` restores persisted metadata and policy profile snapshot; runtime handshake state must be re-established.
+- `session log --follow` tails the persisted session log for a bounded polling window and is intended for cross-invocation debugging.
 
 ## Benchmark
 

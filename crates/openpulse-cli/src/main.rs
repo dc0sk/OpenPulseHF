@@ -18,6 +18,8 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::Level;
 
@@ -174,6 +176,15 @@ enum SessionCommands {
     },
     /// Show HPX state transition log for the current session.
     Log {
+        /// Follow appended session log entries for a bounded time window.
+        #[arg(long)]
+        follow: bool,
+        /// Maximum time to follow for new entries.
+        #[arg(long, default_value_t = 5_000)]
+        follow_timeout_ms: u64,
+        /// Poll interval when following persisted log updates.
+        #[arg(long, default_value_t = 250)]
+        poll_interval_ms: u64,
         #[command(flatten)]
         opts: DiagnosticOptions,
     },
@@ -996,23 +1007,55 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
             Ok(status_to_exit_code(&output.status))
         }
 
-        SessionCommands::Log { opts } => {
+        SessionCommands::Log {
+            follow,
+            follow_timeout_ms,
+            poll_interval_ms,
+            opts,
+        } => {
             let transitions = engine.hpx_transitions();
             let session_id = engine.hpx_session_id().map(ToString::to_string);
 
-            let log_entries: Vec<Value> = transitions
-                .iter()
-                .map(|t| {
-                    json!({
-                        "timestamp_ms": t.timestamp_ms,
-                        "from_state": format!("{:?}", t.from_state).to_lowercase(),
-                        "to_state": format!("{:?}", t.to_state).to_lowercase(),
-                        "event": format!("{:?}", t.event).to_lowercase(),
-                        "reason_code": format!("{:?}", t.reason_code).to_lowercase(),
-                        "reason_string": t.reason_string,
-                    })
-                })
-                .collect();
+            if !transitions.is_empty() {
+                persist_session_log(&session_log_from_transitions(transitions))?;
+            }
+
+            let mut log_entries = load_session_log()?
+                .unwrap_or_default()
+                .into_iter()
+                .map(session_log_entry_to_value)
+                .collect::<Vec<Value>>();
+
+            if follow {
+                let started_ms = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                let deadline_ms = started_ms.saturating_add(follow_timeout_ms);
+                let mut seen_len = log_entries.len();
+
+                loop {
+                    let now_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(deadline_ms);
+                    if now_ms >= deadline_ms {
+                        break;
+                    }
+
+                    let latest = load_session_log()?.unwrap_or_default();
+                    if latest.len() > seen_len {
+                        log_entries = latest
+                            .iter()
+                            .cloned()
+                            .map(session_log_entry_to_value)
+                            .collect();
+                        seen_len = latest.len();
+                    }
+
+                    thread::sleep(Duration::from_millis(poll_interval_ms));
+                }
+            }
 
             let output = DiagnosticOutput {
                 status: "ok".to_string(),
@@ -1021,7 +1064,8 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
                 details: json!({
                     "session_id": session_id,
                     "hpx_state": format!("{:?}", engine.hpx_state()).to_lowercase(),
-                    "transition_count": transitions.len(),
+                    "transition_count": log_entries.len(),
+                    "follow": follow,
                     "transitions": log_entries,
                 }),
                 recommendation: if transitions.is_empty() {
@@ -1900,6 +1944,10 @@ fn session_state_file_path() -> PathBuf {
     config_dir_path().join("session-state.json")
 }
 
+fn session_log_file_path() -> PathBuf {
+    config_dir_path().join("session-log.json")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct PersistedSessionState {
     session_id: String,
@@ -1909,6 +1957,16 @@ struct PersistedSessionState {
     trust_level: Option<String>,
     policy_profile: String,
     updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PersistedSessionLogEntry {
+    timestamp_ms: u64,
+    from_state: String,
+    to_state: String,
+    event: String,
+    reason_code: String,
+    reason_string: String,
 }
 
 fn load_session_state() -> Result<Option<PersistedSessionState>> {
@@ -1921,6 +1979,14 @@ fn persist_session_state(state: &PersistedSessionState) -> Result<()> {
 
 fn clear_session_state() -> Result<()> {
     clear_session_state_at(&session_state_file_path())
+}
+
+fn load_session_log() -> Result<Option<Vec<PersistedSessionLogEntry>>> {
+    load_session_log_at(&session_log_file_path())
+}
+
+fn persist_session_log(entries: &[PersistedSessionLogEntry]) -> Result<()> {
+    persist_session_log_at(&session_log_file_path(), entries)
 }
 
 fn load_session_state_at(path: &Path) -> Result<Option<PersistedSessionState>> {
@@ -1954,6 +2020,56 @@ fn clear_session_state_at(path: &Path) -> Result<()> {
             .with_context(|| format!("failed to remove session state file {}", path.display()))?;
     }
     Ok(())
+}
+
+fn load_session_log_at(path: &Path) -> Result<Option<Vec<PersistedSessionLogEntry>>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("failed to read session log file {}", path.display()))?;
+    let entries: Vec<PersistedSessionLogEntry> = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse session log file {}", path.display()))?;
+    Ok(Some(entries))
+}
+
+fn persist_session_log_at(path: &Path, entries: &[PersistedSessionLogEntry]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
+    }
+
+    fs::write(path, serde_json::to_string_pretty(entries)?)
+        .with_context(|| format!("failed to write session log file {}", path.display()))?;
+    Ok(())
+}
+
+fn session_log_from_transitions(
+    transitions: &[openpulse_core::hpx::HpxTransition],
+) -> Vec<PersistedSessionLogEntry> {
+    transitions
+        .iter()
+        .map(|t| PersistedSessionLogEntry {
+            timestamp_ms: t.timestamp_ms,
+            from_state: format!("{:?}", t.from_state).to_lowercase(),
+            to_state: format!("{:?}", t.to_state).to_lowercase(),
+            event: format!("{:?}", t.event).to_lowercase(),
+            reason_code: format!("{:?}", t.reason_code).to_lowercase(),
+            reason_string: t.reason_string.clone(),
+        })
+        .collect()
+}
+
+fn session_log_entry_to_value(entry: PersistedSessionLogEntry) -> Value {
+    json!({
+        "timestamp_ms": entry.timestamp_ms,
+        "from_state": entry.from_state,
+        "to_state": entry.to_state,
+        "event": entry.event,
+        "reason_code": entry.reason_code,
+        "reason_string": entry.reason_string,
+    })
 }
 
 fn parse_public_key_trust_level(value: &str) -> Result<PublicKeyTrustLevel> {
