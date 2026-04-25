@@ -211,3 +211,52 @@ fn bpsk_recovery_exhaustion_transitions_to_failed() {
     let _ok = !fixture.check_recovery(); // Initially not in recovery
     assert!(_ok);
 }
+
+#[test]
+fn bpsk_loopback_fixture_matrix_56_scenarios() {
+    // 4 supported modes x 14 payload profiles = 56 deterministic scenarios.
+    let modes = ["BPSK31", "BPSK63", "BPSK100", "BPSK250"];
+    let payload_profiles: Vec<Vec<u8>> = vec![
+        vec![0x00],
+        vec![0xFF],
+        vec![0xAA],
+        vec![0x55],
+        b"CQ".to_vec(),
+        b"N0TEST".to_vec(),
+        b"openpulse".to_vec(),
+        (0..8u8).collect(),
+        (0..16u8).rev().collect(),
+        vec![0x42; 24],
+        vec![0x7E; 32],
+        (0..48u8).map(|v| v ^ 0x5A).collect(),
+        (0..64u8).collect(),
+        (0..96u8).map(|v| (v.wrapping_mul(7)) ^ 0x33).collect(),
+    ];
+
+    let expected_scenarios = modes.len() * payload_profiles.len();
+    let mut exercised = 0usize;
+
+    for mode in modes {
+        for (idx, payload) in payload_profiles.iter().enumerate() {
+            let mut fixture = BpskFixture::new(
+                &format!("bpsk-matrix-{mode}-{}", idx),
+                "N0TEST",
+            );
+
+            let result = fixture.transmit(payload, mode);
+            assert!(
+                result.is_ok(),
+                "scenario failed: mode={mode}, payload_profile={idx}, payload_len={}, err={result:?}",
+                payload.len()
+            );
+
+            exercised += 1;
+        }
+    }
+
+    assert_eq!(
+        exercised, expected_scenarios,
+        "matrix execution count mismatch"
+    );
+    assert!(exercised >= 50, "expected at least 50 scenarios");
+}
