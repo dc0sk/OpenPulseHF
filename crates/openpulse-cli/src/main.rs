@@ -974,12 +974,7 @@ fn fetch_pki_trust(
         )));
     }
 
-    let key_trust = match identity.publication_state.as_str() {
-        "published" => PublicKeyTrustLevel::Full,
-        "pending" | "quarantined" => PublicKeyTrustLevel::Unknown,
-        "rejected" | "revoked" => PublicKeyTrustLevel::Untrusted,
-        _ => PublicKeyTrustLevel::Marginal,
-    };
+    let key_trust = key_trust_from_publication_state(&identity.publication_state);
 
     let decision = classify_connection_trust(key_trust, CertificateSource::OutOfBand, false);
     Ok(Some((
@@ -1093,4 +1088,62 @@ fn persist_policy_profile(profile: PolicyProfile) -> Result<()> {
         .with_context(|| format!("failed to write policy file {}", path.display()))?;
 
     Ok(())
+}
+
+fn key_trust_from_publication_state(publication_state: &str) -> PublicKeyTrustLevel {
+    match publication_state {
+        "published" => PublicKeyTrustLevel::Full,
+        "pending" | "quarantined" => PublicKeyTrustLevel::Unknown,
+        "rejected" | "revoked" => PublicKeyTrustLevel::Untrusted,
+        _ => PublicKeyTrustLevel::Marginal,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publication_state_mapping_matches_policy_expectations() {
+        assert_eq!(
+            key_trust_from_publication_state("published"),
+            PublicKeyTrustLevel::Full
+        );
+        assert_eq!(
+            key_trust_from_publication_state("pending"),
+            PublicKeyTrustLevel::Unknown
+        );
+        assert_eq!(
+            key_trust_from_publication_state("quarantined"),
+            PublicKeyTrustLevel::Unknown
+        );
+        assert_eq!(
+            key_trust_from_publication_state("rejected"),
+            PublicKeyTrustLevel::Untrusted
+        );
+        assert_eq!(
+            key_trust_from_publication_state("revoked"),
+            PublicKeyTrustLevel::Untrusted
+        );
+    }
+
+    #[test]
+    fn status_exit_code_conformance() {
+        assert_eq!(status_to_exit_code("ok"), 0);
+        assert_eq!(status_to_exit_code("warn"), 0);
+        assert_eq!(status_to_exit_code("fail"), 2);
+    }
+
+    #[test]
+    fn transport_failure_maps_to_exit_code_3() {
+        let opts = DiagnosticOptions {
+            format: "json".to_string(),
+            verbose: false,
+            no_color: true,
+            timeout: 5,
+        };
+        let code = emit_transport_failure(&opts, anyhow::anyhow!("simulated transport error"))
+            .expect("transport failure should still render output");
+        assert_eq!(code, 3);
+    }
 }

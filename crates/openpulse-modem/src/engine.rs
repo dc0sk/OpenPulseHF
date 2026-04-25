@@ -365,6 +365,28 @@ mod tests {
     }
 
     #[test]
+    fn strict_profile_rejects_psk_verified_but_not_verified() {
+        let mut engine = make_engine();
+        engine.set_trust_policy_profile(PolicyProfile::Strict);
+
+        let err = engine
+            .begin_secure_session(
+                SecureSessionParams {
+                    local_minimum_mode: SigningMode::Normal,
+                    peer_supported_modes: vec![SigningMode::Normal],
+                    key_trust: PublicKeyTrustLevel::Marginal,
+                    certificate_source: CertificateSource::OverAir,
+                    psk_validated: true,
+                },
+                2_500,
+            )
+            .expect_err("strict should reject trust below verified");
+
+        assert!(err.to_string().contains("below required 'verified'"));
+        assert_eq!(engine.hpx_state(), HpxState::Failed);
+    }
+
+    #[test]
     fn transmit_rejected_when_secure_session_not_active_transfer() {
         let mut engine = make_engine();
         engine.hpx_apply_event(HpxEvent::StartSession, 10).unwrap();
