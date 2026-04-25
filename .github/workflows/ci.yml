@@ -75,9 +75,9 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-          targets: aarch64-unknown-linux-gnu
+
+      - name: Install cross
+        run: cargo install cross
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -88,9 +88,9 @@ jobs:
             target
           key: cross-aarch64-cargo-${{ hashFiles('**/Cargo.toml') }}
 
-      # `cargo check` avoids linker requirements while still validating target-specific codegen.
+      # Use `cross` to handle cross-compilation without requiring native aarch64 toolchain.
       - name: Check workspace for aarch64 target
-        run: cargo check --workspace --target aarch64-unknown-linux-gnu --no-default-features
+        run: cross check --workspace --target aarch64-unknown-linux-gnu --no-default-features
 
   pi5-smoke-loopback:
     name: Pi5 smoke profile (loopback)
