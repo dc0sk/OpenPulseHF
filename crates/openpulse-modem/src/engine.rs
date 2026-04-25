@@ -7,6 +7,7 @@ use openpulse_core::error::{ModemError, PluginError};
 use openpulse_core::frame::Frame;
 use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
 use openpulse_core::plugin::{ModulationConfig, PluginRegistry};
+use openpulse_core::signed_envelope::SignedEnvelope;
 use openpulse_core::trust::{
     evaluate_handshake, CertificateSource, ConnectionTrustLevel, HandshakeDecision, PolicyProfile,
     PublicKeyTrustLevel, SigningMode,
@@ -153,6 +154,36 @@ impl ModemEngine {
         self.hpx
             .apply_event(event, timestamp_ms)
             .map_err(|e| ModemError::Configuration(e.to_string()))
+    }
+
+    /// Encode an application payload into a signed envelope wire blob.
+    pub fn encode_signed_envelope(
+        &self,
+        payload: &[u8],
+        signing_mode: SigningMode,
+        signer_id: &str,
+        key_id: &str,
+        signature: &[u8],
+    ) -> Result<Vec<u8>, ModemError> {
+        let session_id = self.hpx_session_id().unwrap_or("unsessioned");
+        SignedEnvelope::new(
+            session_id,
+            self.sequence as u64,
+            signing_mode,
+            payload.to_vec(),
+            signer_id,
+            key_id,
+            signature.to_vec(),
+        )
+        .encode()
+    }
+
+    /// Decode and verify a signed envelope wire blob.
+    pub fn decode_signed_envelope(
+        &self,
+        envelope_bytes: &[u8],
+    ) -> Result<SignedEnvelope, ModemError> {
+        SignedEnvelope::decode(envelope_bytes)
     }
 
     /// Register a modulation plugin.
@@ -426,5 +457,26 @@ mod tests {
             .unwrap();
 
         assert!(engine.transmit(b"payload", "BPSK100", None).is_ok());
+    }
+
+    #[test]
+    fn signed_envelope_round_trip_helpers() {
+        let engine = make_engine();
+        let bytes = engine
+            .encode_signed_envelope(
+                b"payload",
+                SigningMode::Normal,
+                "peer-a",
+                "key-1",
+                &[1, 2, 3, 4],
+            )
+            .expect("encode envelope");
+
+        let decoded = engine
+            .decode_signed_envelope(&bytes)
+            .expect("decode envelope");
+        assert_eq!(decoded.payload, b"payload");
+        assert_eq!(decoded.signature.signer_id, "peer-a");
+        assert_eq!(decoded.signature.key_id, "key-1");
     }
 }

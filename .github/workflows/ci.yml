@@ -1,8 +1,16 @@
 name: CI
 
 on:
-  # Temporarily disabled automatic CI runs.
-  # Trigger manually from the Actions tab when needed.
+  push:
+    branches:
+      - main
+      - develop
+      - 'feat/**'
+  pull_request:
+    branches:
+      - main
+      - develop
+  # Also allow manual triggering via the Actions tab for convenience.
   workflow_dispatch:
 
 env:
@@ -57,3 +65,74 @@ jobs:
 
       - name: Rustfmt check
         run: cargo fmt --all -- --check
+
+  cross-aarch64-linux:
+    name: Cross-check (aarch64-unknown-linux-gnu)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cross-aarch64-cargo-${{ hashFiles('**/Cargo.toml') }}
+
+      # `cargo check` avoids linker requirements while still validating target-specific codegen.
+      - name: Check workspace for aarch64 target
+        run: cargo check --workspace --target aarch64-unknown-linux-gnu --no-default-features
+
+  pi5-smoke-loopback:
+    name: Pi5 smoke profile (loopback)
+    runs-on: ubuntu-latest
+
+    env:
+      OPENPULSE_PI_PROFILE: pi5-smoke
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Keep this profile hardware-independent: loopback backend + no default features.
+      - name: Pi5 smoke tests (loopback only)
+        run: cargo test --workspace --no-default-features
+
+      - name: Pi5 benchmark smoke run
+        run: cargo run -p openpulse-cli --no-default-features -- --backend loopback benchmark run >/tmp/openpulse-benchmark.json
+
+      - name: Verify benchmark JSON payload
+        run: grep -q '"scenarios"' /tmp/openpulse-benchmark.json
+
+      - name: Benchmark regression gate
+        run: |
+          PASSED=$(jq '.passed' /tmp/openpulse-benchmark.json)
+          TOTAL=$(jq '.total' /tmp/openpulse-benchmark.json)
+          MEAN_TRANSITIONS=$(jq '.mean_transitions' /tmp/openpulse-benchmark.json)
+          
+          echo "Benchmark Results: $PASSED/$TOTAL scenarios passed, mean_transitions=$MEAN_TRANSITIONS"
+          
+          # Check all scenarios passed (100% pass rate)
+          if [ "$PASSED" -ne "$TOTAL" ]; then
+            echo "❌ Regression: $((TOTAL - PASSED)) scenarios failed"
+            exit 1
+          fi
+          
+          # Check mean_transitions within policy (max 20.0 per scenario)
+          if (( $(echo "$MEAN_TRANSITIONS > 20.0" | bc -l) )); then
+            echo "❌ Regression: mean_transitions=$MEAN_TRANSITIONS exceeds policy (max 20.0)"
+            exit 1
+          fi
+          
+          echo "✅ Benchmark regression gate passed"

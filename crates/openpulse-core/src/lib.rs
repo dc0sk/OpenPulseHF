@@ -12,6 +12,7 @@ pub mod peer_cache;
 pub mod plugin;
 pub mod query_propagation;
 pub mod relay;
+pub mod signed_envelope;
 pub mod trust;
 
 pub use audio::*;
@@ -22,4 +23,5 @@ pub use peer_cache::*;
 pub use plugin::*;
 pub use query_propagation::*;
 pub use relay::*;
+pub use signed_envelope::*;
 pub use trust::*;
