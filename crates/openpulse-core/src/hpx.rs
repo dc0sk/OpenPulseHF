@@ -314,6 +314,11 @@ impl HpxSession {
                 HpxReasonCode::Success,
                 "Relay transfer complete".to_string(),
             ),
+            (HpxState::RelayActive, HpxEvent::TrainingOk) => (
+                HpxState::ActiveTransfer,
+                HpxReasonCode::Success,
+                "Relay path confirmed, entering active transfer".to_string(),
+            ),
             (HpxState::RelayActive, HpxEvent::TransferError) => (
                 HpxState::Recovery,
                 HpxReasonCode::RetriesExhausted,

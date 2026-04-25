@@ -158,11 +158,31 @@ pub struct PromoteTrustBundleRequest {
     pub reason: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct SessionAuditEventRequest {
+    pub session_id: String,
+    pub peer_id: Option<String>,
+    pub policy_profile: String,
+    pub selected_mode: String,
+    pub trust_level: String,
+    pub certificate_source: String,
+    pub trust_reason_code: Option<String>,
+    pub transitions: serde_json::Value,
+    pub actor_identity: Option<String>,
+}
+
 #[derive(Serialize)]
 struct PromoteTrustBundleResponse {
     bundle_id: String,
     is_current: bool,
     promoted_at: String,
+}
+
+#[derive(Serialize)]
+struct SessionAuditEventResponse {
+    event_id: String,
+    session_id: String,
+    event_type: &'static str,
 }
 
 pub async fn healthz() -> impl IntoResponse {
@@ -1473,6 +1493,123 @@ pub async fn promote_trust_bundle(
     }
 
     (StatusCode::OK, Json(response_body)).into_response()
+}
+
+pub async fn create_session_audit_event(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<SessionAuditEventRequest>,
+) -> impl IntoResponse {
+    let request_id = extract_request_id(&headers);
+
+    if req.session_id.trim().is_empty()
+        || req.policy_profile.trim().is_empty()
+        || req.selected_mode.trim().is_empty()
+        || req.trust_level.trim().is_empty()
+        || req.certificate_source.trim().is_empty()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                status: "validation_error",
+                detail: "session_id, policy_profile, selected_mode, trust_level, and certificate_source must be non-empty"
+                    .to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let Some(transitions) = req.transitions.as_array() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                status: "validation_error",
+                detail: "transitions must be a JSON array".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    if transitions.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                status: "validation_error",
+                detail: "transitions must contain at least one state transition".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let event_id = Uuid::new_v4().to_string();
+    let actor_identity = req
+        .actor_identity
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("openpulse-modem")
+        .to_string();
+    let session_id = req.session_id.clone();
+
+    let payload = serde_json::json!({
+        "session_id": &session_id,
+        "peer_id": req.peer_id,
+        "policy_profile": req.policy_profile,
+        "selected_mode": req.selected_mode,
+        "trust_level": req.trust_level,
+        "certificate_source": req.certificate_source,
+        "trust_reason_code": req.trust_reason_code,
+        "transition_count": transitions.len(),
+        "transitions": req.transitions,
+    });
+    let payload_hash = payload_sha256(&payload);
+    let entity_id = payload["session_id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+
+    let insert = sqlx::query(
+        "INSERT INTO audit_events (
+            event_id,
+            event_type,
+            entity_type,
+            entity_id,
+            actor_identity,
+            request_id,
+            event_payload_hash,
+            event_payload_json
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(&event_id)
+    .bind("session.audit_recorded")
+    .bind("session")
+    .bind(entity_id)
+    .bind(actor_identity)
+    .bind(request_id)
+    .bind(payload_hash)
+    .bind(payload)
+    .execute(&state.db)
+    .await;
+
+    match insert {
+        Ok(_) => (
+            StatusCode::CREATED,
+            Json(SessionAuditEventResponse {
+                event_id,
+                session_id,
+                event_type: "session.audit_recorded",
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiMessage {
+                status: "db_error",
+                detail: format!("failed to insert session audit event: {err}"),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 fn json_kind(value: &serde_json::Value) -> &'static str {
