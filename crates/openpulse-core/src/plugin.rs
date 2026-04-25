@@ -103,7 +103,7 @@ impl PluginRegistry {
     /// with the framework's `PLUGIN_TRAIT_VERSION`.
     pub fn register(&mut self, plugin: Box<dyn ModulationPlugin>) -> Result<(), PluginError> {
         let info = plugin.info();
-        Self::validate_trait_version(&info)?;
+        Self::validate_trait_version(info)?;
         self.plugins.push(plugin);
         Ok(())
     }
