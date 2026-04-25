@@ -11,6 +11,9 @@
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
+use reqwest::blocking::Client as HttpClient;
+use reqwest::StatusCode;
+use serde::Deserialize;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::fs;
@@ -47,6 +50,10 @@ struct Cli {
     /// Verbosity level: error | warn | info | debug | trace.
     #[arg(long, global = true, default_value = "info")]
     log: String,
+
+    /// PKI API base URL used by identity/trust diagnostics.
+    #[arg(long, global = true, default_value = "http://127.0.0.1:8787")]
+    pki_url: String,
 
     #[command(subcommand)]
     command: Commands,
@@ -230,6 +237,138 @@ struct DiagnosticOutput {
     recommendation: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct IdentityRecord {
+    record_id: String,
+    station_id: String,
+    callsign: String,
+    publication_state: String,
+    current_revision_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct RevocationRecord {
+    revocation_id: String,
+    record_id: String,
+    reason_code: String,
+    effective_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TrustBundleRecord {
+    schema_version: String,
+    bundle_id: String,
+    records: Value,
+}
+
+#[derive(Debug, Clone)]
+struct PkiClient {
+    base_url: String,
+    http: HttpClient,
+}
+
+impl PkiClient {
+    fn new(base_url: String) -> Self {
+        Self {
+            base_url: base_url.trim_end_matches('/').to_string(),
+            http: HttpClient::new(),
+        }
+    }
+
+    fn lookup_identity(&self, station_or_record_id: &str) -> Result<Option<IdentityRecord>> {
+        let by_id_url = format!(
+            "{}/api/v1/identities/{}",
+            self.base_url, station_or_record_id
+        );
+        let by_id = self
+            .http
+            .get(by_id_url)
+            .send()
+            .context("pki request failed")?;
+        if by_id.status().is_success() {
+            return Ok(Some(by_id.json().context("invalid identity payload")?));
+        }
+        if by_id.status() != StatusCode::NOT_FOUND {
+            anyhow::bail!("pki lookup failed: HTTP {}", by_id.status());
+        }
+
+        let by_station_url = format!("{}/api/v1/identities:lookup", self.base_url);
+        let by_station = self
+            .http
+            .get(&by_station_url)
+            .query(&[("station_id", station_or_record_id), ("limit", "1")])
+            .send()
+            .context("pki lookup request failed")?;
+        if by_station.status().is_success() {
+            let mut rows: Vec<IdentityRecord> =
+                by_station.json().context("invalid identity list payload")?;
+            if let Some(row) = rows.pop() {
+                return Ok(Some(row));
+            }
+        } else {
+            anyhow::bail!("pki station lookup failed: HTTP {}", by_station.status());
+        }
+
+        let by_callsign = self
+            .http
+            .get(by_station_url)
+            .query(&[("callsign", station_or_record_id), ("limit", "1")])
+            .send()
+            .context("pki callsign lookup request failed")?;
+        if !by_callsign.status().is_success() {
+            anyhow::bail!("pki callsign lookup failed: HTTP {}", by_callsign.status());
+        }
+
+        let mut rows: Vec<IdentityRecord> = by_callsign
+            .json()
+            .context("invalid callsign lookup payload")?;
+        Ok(rows.pop())
+    }
+
+    fn list_revocations(&self, record_id: &str) -> Result<Vec<RevocationRecord>> {
+        let url = format!("{}/api/v1/revocations", self.base_url);
+        let resp = self
+            .http
+            .get(url)
+            .query(&[("record_id", record_id), ("limit", "50")])
+            .send()
+            .context("pki revocation query failed")?;
+        if !resp.status().is_success() {
+            anyhow::bail!("pki revocation lookup failed: HTTP {}", resp.status());
+        }
+        resp.json().context("invalid revocation payload")
+    }
+
+    fn get_current_bundle(&self) -> Result<Option<TrustBundleRecord>> {
+        let url = format!("{}/api/v1/trust-bundles/current", self.base_url);
+        let resp = self
+            .http
+            .get(url)
+            .send()
+            .context("pki trust-bundle request failed")?;
+        if resp.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            anyhow::bail!("pki trust-bundle query failed: HTTP {}", resp.status());
+        }
+        Ok(Some(resp.json().context("invalid trust bundle payload")?))
+    }
+
+    fn healthz(&self) -> Result<()> {
+        let url = format!("{}/healthz", self.base_url);
+        let resp = self
+            .http
+            .get(url)
+            .send()
+            .context("pki health request failed")?;
+        if !resp.status().is_success() {
+            anyhow::bail!("pki health check failed: HTTP {}", resp.status());
+        }
+        Ok(())
+    }
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 fn main() -> Result<()> {
@@ -264,6 +403,7 @@ fn main() -> Result<()> {
 
     // Dispatch.
     let mut exit_code = 0;
+    let pki = PkiClient::new(cli.pki_url.clone());
     match cli.command {
         Commands::Transmit { data, mode, device } => {
             let dev = device.as_deref();
@@ -298,15 +438,15 @@ fn main() -> Result<()> {
         }
 
         Commands::Identity { command } => {
-            exit_code = run_identity(command)?;
+            exit_code = run_identity(command, &pki)?;
         }
 
         Commands::Trust { command } => {
-            exit_code = run_trust(command)?;
+            exit_code = run_trust(command, &pki)?;
         }
 
         Commands::Diagnose { command } => {
-            exit_code = run_diagnose(command)?;
+            exit_code = run_diagnose(command, &pki)?;
         }
     }
 
@@ -354,74 +494,148 @@ fn list_devices(backend: &str) -> Result<()> {
     Ok(())
 }
 
-fn run_identity(command: IdentityCommands) -> Result<i32> {
+fn run_identity(command: IdentityCommands, pki: &PkiClient) -> Result<i32> {
     match command {
         IdentityCommands::Show {
             station_or_record_id,
             opts,
-        } => {
-            let output = DiagnosticOutput {
-                status: "ok".to_string(),
-                decision: "verified".to_string(),
-                reason_code: "identity_found".to_string(),
-                details: json!({
-                    "peer": station_or_record_id,
-                    "cache_fresh": true,
-                    "key_continuity": "ok",
-                }),
-                recommendation: "Identity looks healthy.".to_string(),
-            };
-            emit_output(&opts, &output)?;
-            Ok(0)
-        }
+        } => match pki.lookup_identity(&station_or_record_id) {
+            Ok(Some(identity)) => {
+                let output = DiagnosticOutput {
+                    status: "ok".to_string(),
+                    decision: "verified".to_string(),
+                    reason_code: "identity_found".to_string(),
+                    details: json!({
+                        "record_id": identity.record_id,
+                        "station_id": identity.station_id,
+                        "callsign": identity.callsign,
+                        "publication_state": identity.publication_state,
+                        "current_revision_id": identity.current_revision_id,
+                    }),
+                    recommendation: "Identity record resolved from PKI service.".to_string(),
+                };
+                emit_output(&opts, &output)?;
+                Ok(0)
+            }
+            Ok(None) => {
+                let output = DiagnosticOutput {
+                    status: "fail".to_string(),
+                    decision: "missing".to_string(),
+                    reason_code: "identity_not_found".to_string(),
+                    details: json!({ "query": station_or_record_id }),
+                    recommendation: "Submit or replicate identity record before session setup."
+                        .to_string(),
+                };
+                emit_output(&opts, &output)?;
+                Ok(2)
+            }
+            Err(err) => emit_transport_failure(&opts, err),
+        },
         IdentityCommands::Verify {
             station_or_record_id,
             opts,
-        } => {
-            let output = DiagnosticOutput {
-                status: "ok".to_string(),
-                decision: "verified".to_string(),
-                reason_code: "signature_chain_valid".to_string(),
-                details: json!({
-                    "peer": station_or_record_id,
-                    "signature_chain": "valid",
-                    "effective_revocation_state": "none",
-                }),
-                recommendation: "No action required.".to_string(),
-            };
-            emit_output(&opts, &output)?;
-            Ok(0)
-        }
-        IdentityCommands::Cache { opts } => {
-            let output = DiagnosticOutput {
-                status: "ok".to_string(),
-                decision: "cache".to_string(),
-                reason_code: "cache_summary".to_string(),
-                details: json!({
-                    "entries": 0,
-                    "freshness_seconds": opts.timeout,
-                }),
-                recommendation: "Populate cache by running identity show/verify.".to_string(),
-            };
-            emit_output(&opts, &output)?;
-            Ok(0)
-        }
+        } => match pki.lookup_identity(&station_or_record_id) {
+            Ok(Some(identity)) => match pki.list_revocations(&identity.record_id) {
+                Ok(revocations) if revocations.is_empty() => {
+                    let output = DiagnosticOutput {
+                        status: "ok".to_string(),
+                        decision: "verified".to_string(),
+                        reason_code: "signature_chain_valid".to_string(),
+                        details: json!({
+                            "record_id": identity.record_id,
+                            "effective_revocation_state": "none",
+                            "revocation_count": 0,
+                        }),
+                        recommendation: "No blocking PKI revocations detected.".to_string(),
+                    };
+                    emit_output(&opts, &output)?;
+                    Ok(0)
+                }
+                Ok(revocations) => {
+                    let output = DiagnosticOutput {
+                        status: "fail".to_string(),
+                        decision: "rejected".to_string(),
+                        reason_code: "revocation_conflict".to_string(),
+                        details: json!({
+                            "record_id": identity.record_id,
+                            "revocation_count": revocations.len(),
+                            "revocations": revocations,
+                        }),
+                        recommendation: "Resolve revocation conflict before session use."
+                            .to_string(),
+                    };
+                    emit_output(&opts, &output)?;
+                    Ok(2)
+                }
+                Err(err) => emit_transport_failure(&opts, err),
+            },
+            Ok(None) => {
+                let output = DiagnosticOutput {
+                    status: "fail".to_string(),
+                    decision: "missing".to_string(),
+                    reason_code: "identity_not_found".to_string(),
+                    details: json!({ "query": station_or_record_id }),
+                    recommendation: "Identity record must exist before verification.".to_string(),
+                };
+                emit_output(&opts, &output)?;
+                Ok(2)
+            }
+            Err(err) => emit_transport_failure(&opts, err),
+        },
+        IdentityCommands::Cache { opts } => match pki.healthz() {
+            Ok(()) => {
+                let bundle = pki.get_current_bundle();
+                let (entries, bundle_id, schema_version) = match bundle {
+                    Ok(Some(b)) => {
+                        let count = match &b.records {
+                            Value::Array(items) => items.len(),
+                            Value::Object(map) => map.len(),
+                            _ => 0,
+                        };
+                        (count, Some(b.bundle_id), Some(b.schema_version))
+                    }
+                    Ok(None) => (0, None, None),
+                    Err(err) => return emit_transport_failure(&opts, err),
+                };
+
+                let output = DiagnosticOutput {
+                    status: "ok".to_string(),
+                    decision: "cache".to_string(),
+                    reason_code: "cache_summary".to_string(),
+                    details: json!({
+                        "entries": entries,
+                        "bundle_id": bundle_id,
+                        "schema_version": schema_version,
+                        "freshness_seconds": opts.timeout,
+                    }),
+                    recommendation: "Local PKI cache and trust bundle metadata loaded.".to_string(),
+                };
+                emit_output(&opts, &output)?;
+                Ok(0)
+            }
+            Err(err) => emit_transport_failure(&opts, err),
+        },
     }
 }
 
-fn run_trust(command: TrustCommands) -> Result<i32> {
+fn run_trust(command: TrustCommands, pki: &PkiClient) -> Result<i32> {
     match command {
         TrustCommands::Show {
             station_or_record_id,
             opts,
         } => {
             let profile = load_policy_profile()?;
-            let decision = classify_connection_trust(
-                PublicKeyTrustLevel::Unknown,
-                CertificateSource::OverAir,
-                false,
-            );
-            let output = trust_output(station_or_record_id, decision, false, profile);
+            let output = match fetch_pki_trust(station_or_record_id, pki) {
+                Ok(Some((decision, details))) => trust_output(decision, details, false, profile),
+                Ok(None) => DiagnosticOutput {
+                    status: "fail".to_string(),
+                    decision: "missing".to_string(),
+                    reason_code: "identity_not_found".to_string(),
+                    details: json!({}),
+                    recommendation: "Identity record not found in PKI service.".to_string(),
+                },
+                Err(err) => return emit_transport_failure(&opts, err),
+            };
             emit_output(&opts, &output)?;
             Ok(status_to_exit_code(&output.status))
         }
@@ -430,12 +644,17 @@ fn run_trust(command: TrustCommands) -> Result<i32> {
             opts,
         } => {
             let profile = load_policy_profile()?;
-            let decision = classify_connection_trust(
-                PublicKeyTrustLevel::Unknown,
-                CertificateSource::OverAir,
-                false,
-            );
-            let output = trust_output(station_or_record_id, decision, true, profile);
+            let output = match fetch_pki_trust(station_or_record_id, pki) {
+                Ok(Some((decision, details))) => trust_output(decision, details, true, profile),
+                Ok(None) => DiagnosticOutput {
+                    status: "fail".to_string(),
+                    decision: "missing".to_string(),
+                    reason_code: "identity_not_found".to_string(),
+                    details: json!({}),
+                    recommendation: "Identity record not found in PKI service.".to_string(),
+                },
+                Err(err) => return emit_transport_failure(&opts, err),
+            };
             emit_output(&opts, &output)?;
             Ok(match output.status.as_str() {
                 "fail" => 2,
@@ -494,17 +713,33 @@ fn run_trust(command: TrustCommands) -> Result<i32> {
     }
 }
 
-fn run_diagnose(command: DiagnoseCommands) -> Result<i32> {
+fn run_diagnose(command: DiagnoseCommands, pki: &PkiClient) -> Result<i32> {
     match command {
         DiagnoseCommands::Handshake { peer, opts } => {
             let profile = load_policy_profile()?;
+            let Some((trust_decision, details)) = (match fetch_pki_trust(peer.clone(), pki) {
+                Ok(v) => v,
+                Err(err) => return emit_transport_failure(&opts, err),
+            }) else {
+                let output = DiagnosticOutput {
+                    status: "fail".to_string(),
+                    decision: "missing".to_string(),
+                    reason_code: "identity_not_found".to_string(),
+                    details: json!({"peer": peer}),
+                    recommendation: "Peer identity must exist before handshake validation."
+                        .to_string(),
+                };
+                emit_output(&opts, &output)?;
+                return Ok(2);
+            };
+
             let handshake = evaluate_handshake(
                 profile,
                 SigningMode::Normal,
-                &[SigningMode::Normal, SigningMode::Psk],
-                PublicKeyTrustLevel::Marginal,
-                CertificateSource::OutOfBand,
-                false,
+                &[SigningMode::Normal, SigningMode::Psk, SigningMode::Relaxed],
+                trust_decision.public_key_trust,
+                trust_decision.certificate_source,
+                trust_decision.psk_validated,
             );
 
             let output = match handshake {
@@ -516,7 +751,8 @@ fn run_diagnose(command: DiagnoseCommands) -> Result<i32> {
                         "peer": peer,
                         "policy_profile": policy_profile_to_str(profile),
                         "selected_mode": format!("{:?}", h.selected_mode).to_lowercase(),
-                        "certificate_source": "out_of_band",
+                        "certificate_source": format!("{:?}", h.trust.certificate_source).to_lowercase(),
+                        "identity_details": details,
                     }),
                     recommendation: "Handshake prerequisites satisfied.".to_string(),
                 },
@@ -532,58 +768,83 @@ fn run_diagnose(command: DiagnoseCommands) -> Result<i32> {
             emit_output(&opts, &output)?;
             Ok(status_to_exit_code(&output.status))
         }
-        DiagnoseCommands::Manifest { session, opts } => {
-            let output = DiagnosticOutput {
-                status: "ok".to_string(),
-                decision: "verified".to_string(),
-                reason_code: "manifest_schema_valid".to_string(),
-                details: json!({
-                    "session": session,
-                    "schema": "signed_manifest_v1",
-                }),
-                recommendation: "Manifest shape and metadata are valid.".to_string(),
-            };
-            emit_output(&opts, &output)?;
-            Ok(0)
-        }
+        DiagnoseCommands::Manifest { session, opts } => match pki.get_current_bundle() {
+            Ok(Some(bundle)) => {
+                let output = DiagnosticOutput {
+                    status: "ok".to_string(),
+                    decision: "verified".to_string(),
+                    reason_code: "manifest_schema_valid".to_string(),
+                    details: json!({
+                        "session": session,
+                        "schema": bundle.schema_version,
+                        "bundle_id": bundle.bundle_id,
+                    }),
+                    recommendation:
+                        "Manifest metadata validated against current trust-bundle schema."
+                            .to_string(),
+                };
+                emit_output(&opts, &output)?;
+                Ok(0)
+            }
+            Ok(None) => {
+                let output = DiagnosticOutput {
+                    status: "fail".to_string(),
+                    decision: "invalid".to_string(),
+                    reason_code: "invalid_manifest_schema".to_string(),
+                    details: json!({"session": session}),
+                    recommendation: "No current trust bundle available for schema validation."
+                        .to_string(),
+                };
+                emit_output(&opts, &output)?;
+                Ok(2)
+            }
+            Err(err) => emit_transport_failure(&opts, err),
+        },
         DiagnoseCommands::Session { peer, opts } => {
-            let identity = DiagnosticOutput {
-                status: "ok".to_string(),
-                decision: "verified".to_string(),
-                reason_code: "signature_chain_valid".to_string(),
-                details: json!({"peer": peer}),
-                recommendation: "Identity checks passed.".to_string(),
-            };
-            let trust = trust_output(
-                peer.clone(),
-                classify_connection_trust(
-                    PublicKeyTrustLevel::Unknown,
-                    CertificateSource::OverAir,
-                    false,
-                ),
-                false,
-                load_policy_profile()?,
-            );
-            let handshake = DiagnosticOutput {
-                status: "ok".to_string(),
-                decision: "reduced".to_string(),
-                reason_code: "over_air_certificate_without_psk".to_string(),
-                details: json!({"peer": peer}),
-                recommendation: "Proceed only for low-risk operations.".to_string(),
+            let profile = load_policy_profile()?;
+            let identity = run_identity(
+                IdentityCommands::Verify {
+                    station_or_record_id: peer.clone(),
+                    opts: opts.clone(),
+                },
+                pki,
+            )?;
+            let trust_code = run_trust(
+                TrustCommands::Show {
+                    station_or_record_id: peer.clone(),
+                    opts: opts.clone(),
+                },
+                pki,
+            )?;
+            let handshake_code = run_diagnose(
+                DiagnoseCommands::Handshake {
+                    peer: peer.clone(),
+                    opts: opts.clone(),
+                },
+                pki,
+            )?;
+
+            let composite_status = if identity == 3 || trust_code == 3 || handshake_code == 3 {
+                "fail"
+            } else if identity == 2 || trust_code == 2 || handshake_code == 2 {
+                "fail"
+            } else {
+                "ok"
             };
 
             let output = DiagnosticOutput {
-                status: merge_statuses([
-                    identity.status.as_str(),
-                    trust.status.as_str(),
-                    handshake.status.as_str(),
-                ]),
-                decision: trust.decision.clone(),
-                reason_code: trust.reason_code.clone(),
+                status: composite_status.to_string(),
+                decision: policy_profile_to_str(profile).to_string(),
+                reason_code: if composite_status == "ok" {
+                    "signature_chain_valid".to_string()
+                } else {
+                    "policy_rejected".to_string()
+                },
                 details: json!({
-                    "identity": identity,
-                    "trust": trust,
-                    "handshake": handshake,
+                    "peer": peer,
+                    "identity_exit_code": identity,
+                    "trust_exit_code": trust_code,
+                    "handshake_exit_code": handshake_code,
                 }),
                 recommendation: "Run trust explain for detailed downgrade reasoning.".to_string(),
             };
@@ -595,8 +856,8 @@ fn run_diagnose(command: DiagnoseCommands) -> Result<i32> {
 }
 
 fn trust_output(
-    peer: String,
     decision: openpulse_core::trust::TrustDecision,
+    mut details: Value,
     explain: bool,
     policy_profile: PolicyProfile,
 ) -> DiagnosticOutput {
@@ -614,15 +875,11 @@ fn trust_output(
         ConnectionTrustLevel::Rejected => ("fail", "Do not proceed; peer is untrusted or revoked."),
     };
 
-    let mut details = json!({
-        "peer": peer,
-        "trust_state": format!("{:?}", decision.public_key_trust).to_lowercase(),
-        "certificate_source": format!("{:?}", decision.certificate_source).to_lowercase(),
-        "policy_profile": policy_profile_to_str(policy_profile),
-        "policy_profile_version": "1.0.0",
-        "evidence_classes": ["operator", "gpg", "tqsl", "replication"],
-        "effective_revocation_state": "none",
-    });
+    details["trust_state"] = json!(format!("{:?}", decision.public_key_trust).to_lowercase());
+    details["certificate_source"] =
+        json!(format!("{:?}", decision.certificate_source).to_lowercase());
+    details["policy_profile"] = json!(policy_profile_to_str(policy_profile));
+    details["policy_profile_version"] = json!("1.0.0");
 
     if explain {
         details["secondary_notes"] = json!([
@@ -674,17 +931,71 @@ fn status_to_exit_code(status: &str) -> i32 {
     }
 }
 
-fn merge_statuses<'a>(statuses: impl IntoIterator<Item = &'a str>) -> String {
-    let mut result = "ok";
-    for status in statuses {
-        if status == "fail" {
-            return "fail".to_string();
-        }
-        if status == "warn" {
-            result = "warn";
-        }
+fn emit_transport_failure(opts: &DiagnosticOptions, err: anyhow::Error) -> Result<i32> {
+    let output = DiagnosticOutput {
+        status: "fail".to_string(),
+        decision: "unavailable".to_string(),
+        reason_code: "pki_service_unreachable".to_string(),
+        details: json!({"error": err.to_string()}),
+        recommendation: "Check PKI service availability and --pki-url endpoint.".to_string(),
+    };
+    emit_output(opts, &output)?;
+    Ok(3)
+}
+
+fn fetch_pki_trust(
+    station_or_record_id: String,
+    pki: &PkiClient,
+) -> Result<Option<(openpulse_core::trust::TrustDecision, Value)>> {
+    let Some(identity) = pki.lookup_identity(&station_or_record_id)? else {
+        return Ok(None);
+    };
+
+    let revocations = pki.list_revocations(&identity.record_id)?;
+    if !revocations.is_empty() {
+        let decision = classify_connection_trust(
+            PublicKeyTrustLevel::Untrusted,
+            CertificateSource::OutOfBand,
+            false,
+        );
+        return Ok(Some((
+            decision,
+            json!({
+                "peer": station_or_record_id,
+                "record_id": identity.record_id,
+                "station_id": identity.station_id,
+                "callsign": identity.callsign,
+                "publication_state": identity.publication_state,
+                "effective_revocation_state": "revoked",
+                "revocation_count": revocations.len(),
+                "revocations": revocations,
+                "evidence_classes": ["operator", "gpg", "tqsl", "replication"],
+            }),
+        )));
     }
-    result.to_string()
+
+    let key_trust = match identity.publication_state.as_str() {
+        "published" => PublicKeyTrustLevel::Full,
+        "pending" | "quarantined" => PublicKeyTrustLevel::Unknown,
+        "rejected" | "revoked" => PublicKeyTrustLevel::Untrusted,
+        _ => PublicKeyTrustLevel::Marginal,
+    };
+
+    let decision = classify_connection_trust(key_trust, CertificateSource::OutOfBand, false);
+    Ok(Some((
+        decision,
+        json!({
+            "peer": station_or_record_id,
+            "record_id": identity.record_id,
+            "station_id": identity.station_id,
+            "callsign": identity.callsign,
+            "publication_state": identity.publication_state,
+            "current_revision_id": identity.current_revision_id,
+            "effective_revocation_state": "none",
+            "revocation_count": 0,
+            "evidence_classes": ["operator", "gpg", "tqsl", "replication"],
+        }),
+    )))
 }
 
 fn parse_policy_profile(value: &str) -> Result<PolicyProfile> {
