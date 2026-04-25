@@ -18,6 +18,8 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::Level;
 
@@ -174,6 +176,15 @@ enum SessionCommands {
     },
     /// Show HPX state transition log for the current session.
     Log {
+        /// Follow appended session log entries for a bounded time window.
+        #[arg(long)]
+        follow: bool,
+        /// Maximum time to follow for new entries.
+        #[arg(long, default_value_t = 5_000)]
+        follow_timeout_ms: u64,
+        /// Poll interval when following persisted log updates.
+        #[arg(long, default_value_t = 250)]
+        poll_interval_ms: u64,
         #[command(flatten)]
         opts: DiagnosticOptions,
     },
@@ -706,6 +717,9 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
                         policy_profile: policy_profile_to_str(profile).to_string(),
                         updated_at_ms: timestamp_ms,
                     });
+                    let _ = persist_session_log(&session_log_from_transitions(
+                        engine.hpx_transitions(),
+                    ));
 
                     DiagnosticOutput {
                         status: "ok".to_string(),
@@ -736,6 +750,11 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
                         Err(()),
                         engine.hpx_transitions(),
                     );
+                    if !engine.hpx_transitions().is_empty() {
+                        let _ = persist_session_log(&session_log_from_transitions(
+                            engine.hpx_transitions(),
+                        ));
+                    }
 
                     DiagnosticOutput {
                         status: "fail".to_string(),
@@ -794,7 +813,9 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
             // Build diagnostics if requested
             if opts.diagnostics {
                 let mut diag = SessionDiagnostics::new(
-                    session_id.clone().unwrap_or_else(|| "no-session".to_string()),
+                    session_id
+                        .clone()
+                        .unwrap_or_else(|| "no-session".to_string()),
                     "peer", // Placeholder: actual peer info available from handshake context
                 );
                 diag.current_state = format!("{hpx_state:?}").to_lowercase();
@@ -882,6 +903,15 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
                 engine.set_trust_policy_profile(profile);
             }
 
+            let _ = append_session_log_entry(PersistedSessionLogEntry {
+                timestamp_ms: persisted.updated_at_ms,
+                from_state: persisted.hpx_state.clone(),
+                to_state: persisted.hpx_state.clone(),
+                event: "resume".to_string(),
+                reason_code: "session_snapshot_resumed".to_string(),
+                reason_string: "session metadata restored from persisted snapshot".to_string(),
+            });
+
             let output = DiagnosticOutput {
                 status: "ok".to_string(),
                 decision: "resumed".to_string(),
@@ -958,15 +988,36 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
 
+            let persisted_before_end = load_session_state()?;
+
             let session_id = engine
                 .hpx_session_id()
                 .map(ToString::to_string)
+                .or_else(|| {
+                    persisted_before_end
+                        .as_ref()
+                        .map(|state| state.session_id.clone())
+                })
                 .unwrap_or_else(|| format!("sess-{timestamp_ms}"));
 
             let result = engine.end_secure_session(timestamp_ms);
 
             let output = match result {
                 Ok(()) => {
+                    if !engine.hpx_transitions().is_empty() {
+                        let _ = persist_session_log(&session_log_from_transitions(
+                            engine.hpx_transitions(),
+                        ));
+                    } else if let Some(state) = &persisted_before_end {
+                        let _ = append_session_log_entry(PersistedSessionLogEntry {
+                            timestamp_ms,
+                            from_state: state.hpx_state.clone(),
+                            to_state: "idle".to_string(),
+                            event: "localcancel".to_string(),
+                            reason_code: "session_ended".to_string(),
+                            reason_string: "session closed from persisted snapshot".to_string(),
+                        });
+                    }
                     let _ = clear_session_state();
                     DiagnosticOutput {
                         status: "ok".to_string(),
@@ -996,23 +1047,55 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
             Ok(status_to_exit_code(&output.status))
         }
 
-        SessionCommands::Log { opts } => {
+        SessionCommands::Log {
+            follow,
+            follow_timeout_ms,
+            poll_interval_ms,
+            opts,
+        } => {
             let transitions = engine.hpx_transitions();
             let session_id = engine.hpx_session_id().map(ToString::to_string);
 
-            let log_entries: Vec<Value> = transitions
-                .iter()
-                .map(|t| {
-                    json!({
-                        "timestamp_ms": t.timestamp_ms,
-                        "from_state": format!("{:?}", t.from_state).to_lowercase(),
-                        "to_state": format!("{:?}", t.to_state).to_lowercase(),
-                        "event": format!("{:?}", t.event).to_lowercase(),
-                        "reason_code": format!("{:?}", t.reason_code).to_lowercase(),
-                        "reason_string": t.reason_string,
-                    })
-                })
-                .collect();
+            if !transitions.is_empty() {
+                persist_session_log(&session_log_from_transitions(transitions))?;
+            }
+
+            let mut log_entries = load_session_log()?
+                .unwrap_or_default()
+                .into_iter()
+                .map(session_log_entry_to_value)
+                .collect::<Vec<Value>>();
+
+            if follow {
+                let started_ms = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                let deadline_ms = started_ms.saturating_add(follow_timeout_ms);
+                let mut seen_len = log_entries.len();
+
+                loop {
+                    let now_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(deadline_ms);
+                    if now_ms >= deadline_ms {
+                        break;
+                    }
+
+                    let latest = load_session_log()?.unwrap_or_default();
+                    if latest.len() > seen_len {
+                        log_entries = latest
+                            .iter()
+                            .cloned()
+                            .map(session_log_entry_to_value)
+                            .collect();
+                        seen_len = latest.len();
+                    }
+
+                    thread::sleep(Duration::from_millis(poll_interval_ms));
+                }
+            }
 
             let output = DiagnosticOutput {
                 status: "ok".to_string(),
@@ -1021,7 +1104,9 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
                 details: json!({
                     "session_id": session_id,
                     "hpx_state": format!("{:?}", engine.hpx_state()).to_lowercase(),
-                    "transition_count": transitions.len(),
+                    "schema_version": "1.0.0",
+                    "transition_count": log_entries.len(),
+                    "follow": follow,
                     "transitions": log_entries,
                 }),
                 recommendation: if transitions.is_empty() {
@@ -1900,6 +1985,10 @@ fn session_state_file_path() -> PathBuf {
     config_dir_path().join("session-state.json")
 }
 
+fn session_log_file_path() -> PathBuf {
+    config_dir_path().join("session-log.json")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct PersistedSessionState {
     session_id: String,
@@ -1909,6 +1998,22 @@ struct PersistedSessionState {
     trust_level: Option<String>,
     policy_profile: String,
     updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PersistedSessionLogEntry {
+    timestamp_ms: u64,
+    from_state: String,
+    to_state: String,
+    event: String,
+    reason_code: String,
+    reason_string: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PersistedSessionLog {
+    schema_version: String,
+    entries: Vec<PersistedSessionLogEntry>,
 }
 
 fn load_session_state() -> Result<Option<PersistedSessionState>> {
@@ -1921,6 +2026,18 @@ fn persist_session_state(state: &PersistedSessionState) -> Result<()> {
 
 fn clear_session_state() -> Result<()> {
     clear_session_state_at(&session_state_file_path())
+}
+
+fn load_session_log() -> Result<Option<Vec<PersistedSessionLogEntry>>> {
+    load_session_log_at(&session_log_file_path())
+}
+
+fn persist_session_log(entries: &[PersistedSessionLogEntry]) -> Result<()> {
+    persist_session_log_at(&session_log_file_path(), entries)
+}
+
+fn append_session_log_entry(entry: PersistedSessionLogEntry) -> Result<()> {
+    append_session_log_entry_at(&session_log_file_path(), entry)
 }
 
 fn load_session_state_at(path: &Path) -> Result<Option<PersistedSessionState>> {
@@ -1954,6 +2071,75 @@ fn clear_session_state_at(path: &Path) -> Result<()> {
             .with_context(|| format!("failed to remove session state file {}", path.display()))?;
     }
     Ok(())
+}
+
+fn load_session_log_at(path: &Path) -> Result<Option<Vec<PersistedSessionLogEntry>>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("failed to read session log file {}", path.display()))?;
+
+    // Backward compatibility:
+    // - legacy format: JSON array of entries
+    // - current format: { schema_version, entries }
+    if let Ok(entries) = serde_json::from_str::<Vec<PersistedSessionLogEntry>>(&content) {
+        return Ok(Some(entries));
+    }
+
+    let log: PersistedSessionLog = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse session log file {}", path.display()))?;
+    Ok(Some(log.entries))
+}
+
+fn persist_session_log_at(path: &Path, entries: &[PersistedSessionLogEntry]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
+    }
+
+    let payload = PersistedSessionLog {
+        schema_version: "1.0.0".to_string(),
+        entries: entries.to_vec(),
+    };
+
+    fs::write(path, serde_json::to_string_pretty(&payload)?)
+        .with_context(|| format!("failed to write session log file {}", path.display()))?;
+    Ok(())
+}
+
+fn append_session_log_entry_at(path: &Path, entry: PersistedSessionLogEntry) -> Result<()> {
+    let mut entries = load_session_log_at(path)?.unwrap_or_default();
+    entries.push(entry);
+    persist_session_log_at(path, &entries)
+}
+
+fn session_log_from_transitions(
+    transitions: &[openpulse_core::hpx::HpxTransition],
+) -> Vec<PersistedSessionLogEntry> {
+    transitions
+        .iter()
+        .map(|t| PersistedSessionLogEntry {
+            timestamp_ms: t.timestamp_ms,
+            from_state: format!("{:?}", t.from_state).to_lowercase(),
+            to_state: format!("{:?}", t.to_state).to_lowercase(),
+            event: format!("{:?}", t.event).to_lowercase(),
+            reason_code: format!("{:?}", t.reason_code).to_lowercase(),
+            reason_string: t.reason_string.clone(),
+        })
+        .collect()
+}
+
+fn session_log_entry_to_value(entry: PersistedSessionLogEntry) -> Value {
+    json!({
+        "timestamp_ms": entry.timestamp_ms,
+        "from_state": entry.from_state,
+        "to_state": entry.to_state,
+        "event": entry.event,
+        "reason_code": entry.reason_code,
+        "reason_string": entry.reason_string,
+    })
 }
 
 fn parse_public_key_trust_level(value: &str) -> Result<PublicKeyTrustLevel> {
@@ -2208,5 +2394,125 @@ mod tests {
             CertificateSource::OverAir
         );
         assert!(parse_certificate_source("bogus").is_err());
+    }
+
+    #[test]
+    fn session_log_entries_append_in_order() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "openpulse-cli-session-log-{}-{}",
+            std::process::id(),
+            nonce
+        ));
+        let path = root.join("session-log.json");
+
+        append_session_log_entry_at(
+            &path,
+            PersistedSessionLogEntry {
+                timestamp_ms: 1,
+                from_state: "idle".to_string(),
+                to_state: "discovery".to_string(),
+                event: "startsession".to_string(),
+                reason_code: "success".to_string(),
+                reason_string: "session start".to_string(),
+            },
+        )
+        .expect("append first");
+        append_session_log_entry_at(
+            &path,
+            PersistedSessionLogEntry {
+                timestamp_ms: 2,
+                from_state: "activetransfer".to_string(),
+                to_state: "idle".to_string(),
+                event: "localcancel".to_string(),
+                reason_code: "session_ended".to_string(),
+                reason_string: "session closed".to_string(),
+            },
+        )
+        .expect("append second");
+
+        let loaded = load_session_log_at(&path)
+            .expect("load session log")
+            .expect("entries should exist");
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].event, "startsession");
+        assert_eq!(loaded[1].event, "localcancel");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn session_log_persists_versioned_container_schema() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "openpulse-cli-session-log-schema-{}-{}",
+            std::process::id(),
+            nonce
+        ));
+        let path = root.join("session-log.json");
+
+        persist_session_log_at(
+            &path,
+            &[PersistedSessionLogEntry {
+                timestamp_ms: 10,
+                from_state: "idle".to_string(),
+                to_state: "ready".to_string(),
+                event: "startsession".to_string(),
+                reason_code: "success".to_string(),
+                reason_string: "ok".to_string(),
+            }],
+        )
+        .expect("persist session log");
+
+        let content = fs::read_to_string(&path).expect("read session log file");
+        let payload: serde_json::Value = serde_json::from_str(&content).expect("json");
+        assert_eq!(payload["schema_version"], "1.0.0");
+        assert!(payload["entries"].is_array());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn session_log_loader_accepts_legacy_array_schema() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "openpulse-cli-session-log-legacy-{}-{}",
+            std::process::id(),
+            nonce
+        ));
+        let path = root.join("session-log.json");
+
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(
+            &path,
+            r#"[
+                {
+                    "timestamp_ms": 1,
+                    "from_state": "idle",
+                    "to_state": "discovery",
+                    "event": "startsession",
+                    "reason_code": "success",
+                    "reason_string": "session start"
+                }
+            ]"#,
+        )
+        .expect("write legacy log");
+
+        let loaded = load_session_log_at(&path)
+            .expect("load session log")
+            .expect("entries should exist");
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].event, "startsession");
+
+        let _ = fs::remove_dir_all(root);
     }
 }

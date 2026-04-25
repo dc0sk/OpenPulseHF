@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/cli-ux-identity-trust-diagnostics.md
 status: living
-last_updated: 2026-04-24
+last_updated: 2026-04-26
 ---
 
 # CLI UX Specification for Identity and Trust Diagnostics

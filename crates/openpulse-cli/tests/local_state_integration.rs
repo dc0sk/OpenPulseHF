@@ -189,3 +189,54 @@ fn session_list_and_resume_use_persisted_snapshot() {
 
     let _ = fs::remove_dir_all(config_dir);
 }
+
+#[test]
+fn session_log_reads_persisted_entries_and_supports_follow_flag() {
+        let config_dir = unique_temp_dir("session-log-follow");
+        fs::create_dir_all(&config_dir).expect("create config dir");
+
+        let session_log = r#"[
+    {
+        "timestamp_ms": 1000,
+        "from_state": "idle",
+        "to_state": "discovery",
+        "event": "startsession",
+        "reason_code": "success",
+        "reason_string": "session start"
+    },
+    {
+        "timestamp_ms": 1001,
+        "from_state": "discovery",
+        "to_state": "training",
+        "event": "discoveryok",
+        "reason_code": "success",
+        "reason_string": "discovery ok"
+    }
+]"#;
+        fs::write(config_dir.join("session-log.json"), session_log).expect("write session-log.json");
+
+        let mut log_cmd = Command::cargo_bin("openpulse").expect("binary should build");
+        log_cmd.env("OPENPULSE_CONFIG_DIR", &config_dir);
+        log_cmd.args([
+                "--backend",
+                "loopback",
+                "session",
+                "log",
+                "--follow",
+                "--follow-timeout-ms",
+                "1",
+                "--format",
+                "json",
+        ]);
+
+        log_cmd
+                .assert()
+                .success()
+                .code(0)
+                .stdout(predicate::str::contains("\"reason_code\": \"session_log\""))
+                .stdout(predicate::str::contains("\"follow\": true"))
+                .stdout(predicate::str::contains("\"transition_count\": 2"))
+                .stdout(predicate::str::contains("\"event\": \"startsession\""));
+
+        let _ = fs::remove_dir_all(config_dir);
+}
