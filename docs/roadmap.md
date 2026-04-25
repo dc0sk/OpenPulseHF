@@ -18,17 +18,26 @@ last_updated: 2026-04-25
 - ✅ Pi 5 smoke-test profile (loopback + benchmark).
 - ✅ CI auto-trigger on push and pull requests.
 
+## Completed (shipped in PR #50)
+
+- ✅ Hardened BPSK TX/RX behavior under loopback with expanded scenario tests.
+- ✅ Improved modem diagnostics output with structured session diagnostics.
+- ✅ Added `session state --diagnostics` for detailed JSON metrics.
+
 ## Near term
 
-- Harden BPSK TX/RX behavior under loopback and real-device paths.
-- Improve modem diagnostics and error clarity in CLI output.
 - Expand integration tests around frame boundaries and timing assumptions.
-- Define multithreaded modem pipeline boundaries and scheduling policy.
+- Complete real-device validation path for BPSK hardening.
 - Define GPU offload candidate kernels and CPU/GPU equivalence test strategy.
 - Define peer cache schema and query protocol envelope.
 - Define relay route scoring and maximum-hop policy defaults.
-- Add `session resume` subcommand to re-attach to persisted sessions.
-- Add `session list` subcommand to enumerate saved sessions with HPX state.
+- Add streaming/follow mode for `session log`.
+
+## In progress (current branch)
+
+- Add multithreaded modem pipeline boundaries and scheduling policy.
+- Add scheduler queue metrics to session diagnostics.
+- Add `session resume` and `session list` persistence commands.
 
 ## Mid term
 
