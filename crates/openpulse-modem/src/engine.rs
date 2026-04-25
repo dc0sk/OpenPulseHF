@@ -13,6 +13,11 @@ use openpulse_core::trust::{
     PublicKeyTrustLevel, SigningMode,
 };
 
+use crate::pipeline::{
+    AudioSamples, BackpressurePolicy, DecodedFrame, PipelineMetricsSnapshot, PipelineScheduler,
+    PipelineStage, WirePayload,
+};
+
 #[derive(Debug, Clone)]
 pub struct SecureSessionParams {
     pub local_minimum_mode: SigningMode,
@@ -40,6 +45,7 @@ pub struct ModemEngine {
     plugins: PluginRegistry,
     sequence: u16,
     hpx: HpxSession,
+    scheduler: PipelineScheduler,
     trust_policy_profile: PolicyProfile,
     active_handshake: Option<HandshakeDecision>,
 }
@@ -52,6 +58,7 @@ impl ModemEngine {
             plugins: PluginRegistry::new(),
             sequence: 0,
             hpx: HpxSession::new(),
+            scheduler: PipelineScheduler::new(8, BackpressurePolicy::Block),
             trust_policy_profile: PolicyProfile::Balanced,
             active_handshake: None,
         }
@@ -80,6 +87,11 @@ impl ModemEngine {
     /// Returns emitted HPX transitions for the current session lifecycle.
     pub fn hpx_transitions(&self) -> &[HpxTransition] {
         self.hpx.transitions()
+    }
+
+    /// Returns a snapshot of per-stage pipeline queue metrics.
+    pub fn pipeline_metrics_snapshot(&self) -> PipelineMetricsSnapshot {
+        self.scheduler.metrics_snapshot()
     }
 
     /// Returns the active handshake decision for the secure session, if present.
@@ -229,45 +241,30 @@ impl ModemEngine {
             }
         }
 
-        let plugin = self
-            .plugins
-            .get(mode)
-            .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
-
-        let frame = Frame::new(self.sequence, data.to_vec());
-        self.sequence = self.sequence.wrapping_add(1);
-        let wire_bytes = frame.encode();
+        let outbound = self.stage_encode_frame(data);
+        let outbound = self.route_wire_stage(PipelineStage::EncodeModulate, outbound)?;
 
         debug!(
             "transmitting {} byte frame (seq={}, mode={mode})",
-            wire_bytes.len(),
-            frame.sequence
+            outbound.bytes.len(),
+            self.sequence.wrapping_sub(1)
         );
 
-        let mod_cfg = ModulationConfig {
-            mode: mode.to_string(),
-            ..ModulationConfig::default()
+        let samples = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_modulate_payload(plugin, mode, &outbound)?
         };
-
-        let samples = plugin.modulate(&wire_bytes, &mod_cfg)?;
+        let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
         info!(
             "modulated {} bytes → {} audio samples",
-            wire_bytes.len(),
-            samples.len()
+            outbound.bytes.len(),
+            samples.samples.len()
         );
 
-        let audio_cfg = AudioConfig::default();
-        let mut stream = self
-            .audio
-            .open_output(device, &audio_cfg)
-            .map_err(|e| ModemError::Audio(e.to_string()))?;
-
-        stream
-            .write(&samples)
-            .map_err(|e| ModemError::Audio(e.to_string()))?;
-        stream
-            .flush()
-            .map_err(|e| ModemError::Audio(e.to_string()))?;
+        self.stage_emit_output(device, &samples)?;
 
         Ok(())
     }
@@ -277,6 +274,76 @@ impl ModemEngine {
     ///
     /// Pass `device = None` to use the backend's default input device.
     pub fn receive(&mut self, mode: &str, device: Option<&str>) -> Result<Vec<u8>, ModemError> {
+        let samples = self.stage_capture_input(device)?;
+        let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+
+        info!("received {} audio samples", samples.samples.len());
+
+        let wire = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_demodulate_payload(plugin, mode, &samples)?
+        };
+        let wire = self.route_wire_stage(PipelineStage::DemodulateDecode, wire)?;
+        debug!("demodulated {} bytes", wire.bytes.len());
+
+        let frame = self.stage_decode_frame(&wire)?;
+        let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
+        info!("received frame seq={}", frame.sequence);
+
+        Ok(frame.payload)
+    }
+
+    fn stage_encode_frame(&mut self, data: &[u8]) -> WirePayload {
+        let _stage = PipelineStage::EncodeModulate;
+        let frame = Frame::new(self.sequence, data.to_vec());
+        self.sequence = self.sequence.wrapping_add(1);
+        WirePayload {
+            bytes: frame.encode(),
+        }
+    }
+
+    fn stage_modulate_payload(
+        &self,
+        plugin: &dyn openpulse_core::plugin::ModulationPlugin,
+        mode: &str,
+        wire: &WirePayload,
+    ) -> Result<AudioSamples, ModemError> {
+        let _stage = PipelineStage::EncodeModulate;
+        let mod_cfg = ModulationConfig {
+            mode: mode.to_string(),
+            ..ModulationConfig::default()
+        };
+        let samples = plugin.modulate(&wire.bytes, &mod_cfg)?;
+        Ok(AudioSamples { samples })
+    }
+
+    fn stage_emit_output(
+        &mut self,
+        device: Option<&str>,
+        samples: &AudioSamples,
+    ) -> Result<(), ModemError> {
+        let _stage = PipelineStage::OutputEmit;
+        let audio_cfg = AudioConfig::default();
+        let mut stream = self
+            .audio
+            .open_output(device, &audio_cfg)
+            .map_err(|e| ModemError::Audio(e.to_string()))?;
+
+        stream
+            .write(&samples.samples)
+            .map_err(|e| ModemError::Audio(e.to_string()))?;
+        stream
+            .flush()
+            .map_err(|e| ModemError::Audio(e.to_string()))?;
+
+        Ok(())
+    }
+
+    fn stage_capture_input(&mut self, device: Option<&str>) -> Result<AudioSamples, ModemError> {
+        let _stage = PipelineStage::InputCapture;
         let audio_cfg = AudioConfig::default();
         let mut stream = self
             .audio
@@ -286,26 +353,61 @@ impl ModemEngine {
         let samples = stream
             .read()
             .map_err(|e| ModemError::Audio(e.to_string()))?;
+        Ok(AudioSamples { samples })
+    }
 
-        info!("received {} audio samples", samples.len());
-
-        let plugin = self
-            .plugins
-            .get(mode)
-            .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
-
+    fn stage_demodulate_payload(
+        &self,
+        plugin: &dyn openpulse_core::plugin::ModulationPlugin,
+        mode: &str,
+        samples: &AudioSamples,
+    ) -> Result<WirePayload, ModemError> {
+        let _stage = PipelineStage::DemodulateDecode;
         let mod_cfg = ModulationConfig {
             mode: mode.to_string(),
             ..ModulationConfig::default()
         };
+        let wire_bytes = plugin.demodulate(&samples.samples, &mod_cfg)?;
+        Ok(WirePayload { bytes: wire_bytes })
+    }
 
-        let wire_bytes = plugin.demodulate(&samples, &mod_cfg)?;
-        debug!("demodulated {} bytes", wire_bytes.len());
+    fn stage_decode_frame(&self, wire: &WirePayload) -> Result<DecodedFrame, ModemError> {
+        let _stage = PipelineStage::DemodulateDecode;
+        let frame = Frame::decode(&wire.bytes)?;
+        Ok(DecodedFrame {
+            sequence: frame.sequence,
+            payload: frame.payload,
+        })
+    }
 
-        let frame = Frame::decode(&wire_bytes)?;
-        info!("received frame seq={}", frame.sequence);
+    fn route_wire_stage(
+        &mut self,
+        stage: PipelineStage,
+        payload: WirePayload,
+    ) -> Result<WirePayload, ModemError> {
+        self.scheduler
+            .route_wire(stage, payload)
+            .map_err(|e| ModemError::Configuration(e.to_string()))
+    }
 
-        Ok(frame.payload)
+    fn route_audio_stage(
+        &mut self,
+        stage: PipelineStage,
+        payload: AudioSamples,
+    ) -> Result<AudioSamples, ModemError> {
+        self.scheduler
+            .route_audio(stage, payload)
+            .map_err(|e| ModemError::Configuration(e.to_string()))
+    }
+
+    fn route_decoded_stage(
+        &mut self,
+        stage: PipelineStage,
+        payload: DecodedFrame,
+    ) -> Result<DecodedFrame, ModemError> {
+        self.scheduler
+            .route_decoded(stage, payload)
+            .map_err(|e| ModemError::Configuration(e.to_string()))
     }
 }
 

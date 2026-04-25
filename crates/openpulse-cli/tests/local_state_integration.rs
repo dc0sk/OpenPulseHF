@@ -137,3 +137,55 @@ fn trust_store_import_list_revoke_round_trip() {
 
     let _ = fs::remove_dir_all(config_dir);
 }
+
+#[test]
+fn session_list_and_resume_use_persisted_snapshot() {
+    let config_dir = unique_temp_dir("session-list-resume");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+
+    let session_state = r#"{
+  "session_id": "sess-list-1",
+  "peer": "W1XYZ",
+  "hpx_state": "activetransfer",
+  "selected_mode": "normal",
+  "trust_level": "verified",
+  "policy_profile": "balanced",
+  "updated_at_ms": 22222
+}"#;
+    fs::write(config_dir.join("session-state.json"), session_state)
+        .expect("write session-state.json");
+
+    let mut list_cmd = Command::cargo_bin("openpulse").expect("binary should build");
+    list_cmd.env("OPENPULSE_CONFIG_DIR", &config_dir);
+    list_cmd.args(["--backend", "loopback", "session", "list", "--format", "json"]);
+
+    list_cmd
+        .assert()
+        .success()
+        .code(0)
+        .stdout(predicate::str::contains("\"reason_code\": \"session_list\""))
+        .stdout(predicate::str::contains("\"session_id\": \"sess-list-1\""))
+        .stdout(predicate::str::contains("\"source\": \"persisted\""));
+
+    let mut resume_cmd = Command::cargo_bin("openpulse").expect("binary should build");
+    resume_cmd.env("OPENPULSE_CONFIG_DIR", &config_dir);
+    resume_cmd.args([
+        "--backend",
+        "loopback",
+        "session",
+        "resume",
+        "--format",
+        "json",
+    ]);
+
+    resume_cmd
+        .assert()
+        .success()
+        .code(0)
+        .stdout(predicate::str::contains(
+            "\"reason_code\": \"session_snapshot_resumed\"",
+        ))
+        .stdout(predicate::str::contains("\"session_id\": \"sess-list-1\""));
+
+    let _ = fs::remove_dir_all(config_dir);
+}

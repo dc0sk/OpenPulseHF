@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/cli-guide.md
 status: living
-last_updated: 2026-04-24
+last_updated: 2026-04-25
 ---
 
 # CLI Guide - openpulse (v0.1.0)
@@ -34,6 +34,25 @@ cargo build --release
 - openpulse receive --mode <MODE>
 - openpulse devices
 - openpulse modes
+
+## Session diagnostics and persistence
+
+- openpulse session start --peer <CALLSIGN>
+- openpulse session state
+- openpulse session state --diagnostics
+- openpulse session list
+- openpulse session resume
+- openpulse session log
+- openpulse session end
+
+Notes:
+- `session state --diagnostics` emits structured JSON including transition history and pipeline scheduler metrics.
+- `session resume` restores persisted metadata and policy profile snapshot; runtime handshake state must be re-established.
+
+## Benchmark
+
+- openpulse benchmark run
+- openpulse benchmark run --min-pass-rate <0.0-1.0> --max-mean-transitions <f64>
 
 Planned HPX and trust commands:
 

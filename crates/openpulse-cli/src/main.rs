@@ -157,6 +157,16 @@ enum SessionCommands {
         #[command(flatten)]
         opts: DiagnosticOptions,
     },
+    /// Resume from a persisted session snapshot.
+    Resume {
+        #[command(flatten)]
+        opts: DiagnosticOptions,
+    },
+    /// List available session snapshots.
+    List {
+        #[command(flatten)]
+        opts: DiagnosticOptions,
+    },
     /// End the active HPX session gracefully.
     End {
         #[command(flatten)]
@@ -789,6 +799,7 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
                 );
                 diag.current_state = format!("{hpx_state:?}").to_lowercase();
                 diag.total_transitions = engine.hpx_transitions().len();
+                diag.set_pipeline_metrics(engine.pipeline_metrics_snapshot());
 
                 // Record all transitions into diagnostics
                 for transition in engine.hpx_transitions() {
@@ -824,6 +835,117 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
                     _ => "Session in transition.",
                 }
                 .to_string(),
+            };
+
+            emit_output(&opts, &output)?;
+            Ok(0)
+        }
+
+        SessionCommands::Resume { opts } => {
+            if engine.hpx_state() != openpulse_core::hpx::HpxState::Idle
+                || engine.hpx_session_id().is_some()
+                || engine.active_handshake().is_some()
+            {
+                let output = DiagnosticOutput {
+                    status: "fail".to_string(),
+                    decision: "active".to_string(),
+                    reason_code: "active_session_present".to_string(),
+                    details: json!({
+                        "hpx_state": format!("{:?}", engine.hpx_state()).to_lowercase(),
+                        "session_id": engine.hpx_session_id().map(ToString::to_string),
+                    }),
+                    recommendation:
+                        "End the current session before attempting to resume from snapshot."
+                            .to_string(),
+                };
+                emit_output(&opts, &output)?;
+                return Ok(status_to_exit_code(&output.status));
+            }
+
+            let Some(persisted) = load_session_state()? else {
+                let output = DiagnosticOutput {
+                    status: "fail".to_string(),
+                    decision: "missing".to_string(),
+                    reason_code: "session_snapshot_not_found".to_string(),
+                    details: json!({
+                        "session_state_file": session_state_file_path().display().to_string(),
+                    }),
+                    recommendation:
+                        "Start a session first so a snapshot can be persisted for resume."
+                            .to_string(),
+                };
+                emit_output(&opts, &output)?;
+                return Ok(status_to_exit_code(&output.status));
+            };
+
+            if let Ok(profile) = parse_policy_profile(&persisted.policy_profile) {
+                engine.set_trust_policy_profile(profile);
+            }
+
+            let output = DiagnosticOutput {
+                status: "ok".to_string(),
+                decision: "resumed".to_string(),
+                reason_code: "session_snapshot_resumed".to_string(),
+                details: json!({
+                    "session_id": persisted.session_id,
+                    "peer": persisted.peer,
+                    "persisted_hpx_state": persisted.hpx_state,
+                    "selected_mode": persisted.selected_mode,
+                    "trust_level": persisted.trust_level,
+                    "policy_profile": persisted.policy_profile,
+                    "updated_at_ms": persisted.updated_at_ms,
+                    "resumed_from_snapshot": true,
+                }),
+                recommendation:
+                    "Session metadata restored from snapshot. Start a new secure session handshake to re-attach runtime state."
+                        .to_string(),
+            };
+
+            emit_output(&opts, &output)?;
+            Ok(0)
+        }
+
+        SessionCommands::List { opts } => {
+            let mut sessions: Vec<Value> = vec![];
+
+            if let Some(session_id) = engine.hpx_session_id() {
+                sessions.push(json!({
+                    "session_id": session_id,
+                    "peer": "live",
+                    "hpx_state": format!("{:?}", engine.hpx_state()).to_lowercase(),
+                    "source": "in_memory",
+                }));
+            }
+
+            if let Some(persisted) = load_session_state()? {
+                let persisted_id = persisted.session_id.clone();
+                let already_listed = sessions
+                    .iter()
+                    .any(|s| s["session_id"].as_str() == Some(persisted_id.as_str()));
+                if !already_listed {
+                    sessions.push(json!({
+                        "session_id": persisted.session_id,
+                        "peer": persisted.peer,
+                        "hpx_state": persisted.hpx_state,
+                        "selected_mode": persisted.selected_mode,
+                        "trust_level": persisted.trust_level,
+                        "policy_profile": persisted.policy_profile,
+                        "updated_at_ms": persisted.updated_at_ms,
+                        "source": "persisted",
+                    }));
+                }
+            }
+
+            let output = DiagnosticOutput {
+                status: "ok".to_string(),
+                decision: "listed".to_string(),
+                reason_code: "session_list".to_string(),
+                details: json!({
+                    "sessions": sessions,
+                    "count": sessions.len(),
+                }),
+                recommendation: "Use `session state` or `session resume` for a specific snapshot."
+                    .to_string(),
             };
 
             emit_output(&opts, &output)?;
