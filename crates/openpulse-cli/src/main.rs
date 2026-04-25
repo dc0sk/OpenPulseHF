@@ -717,7 +717,9 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
                         policy_profile: policy_profile_to_str(profile).to_string(),
                         updated_at_ms: timestamp_ms,
                     });
-                    let _ = persist_session_log(&session_log_from_transitions(engine.hpx_transitions()));
+                    let _ = persist_session_log(&session_log_from_transitions(
+                        engine.hpx_transitions(),
+                    ));
 
                     DiagnosticOutput {
                         status: "ok".to_string(),
@@ -749,7 +751,9 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
                         engine.hpx_transitions(),
                     );
                     if !engine.hpx_transitions().is_empty() {
-                        let _ = persist_session_log(&session_log_from_transitions(engine.hpx_transitions()));
+                        let _ = persist_session_log(&session_log_from_transitions(
+                            engine.hpx_transitions(),
+                        ));
                     }
 
                     DiagnosticOutput {
@@ -809,7 +813,9 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
             // Build diagnostics if requested
             if opts.diagnostics {
                 let mut diag = SessionDiagnostics::new(
-                    session_id.clone().unwrap_or_else(|| "no-session".to_string()),
+                    session_id
+                        .clone()
+                        .unwrap_or_else(|| "no-session".to_string()),
                     "peer", // Placeholder: actual peer info available from handshake context
                 );
                 diag.current_state = format!("{hpx_state:?}").to_lowercase();
@@ -999,7 +1005,9 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
             let output = match result {
                 Ok(()) => {
                     if !engine.hpx_transitions().is_empty() {
-                        let _ = persist_session_log(&session_log_from_transitions(engine.hpx_transitions()));
+                        let _ = persist_session_log(&session_log_from_transitions(
+                            engine.hpx_transitions(),
+                        ));
                     } else if let Some(state) = &persisted_before_end {
                         let _ = append_session_log_entry(PersistedSessionLogEntry {
                             timestamp_ms,
@@ -1096,6 +1104,7 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
                 details: json!({
                     "session_id": session_id,
                     "hpx_state": format!("{:?}", engine.hpx_state()).to_lowercase(),
+                    "schema_version": "1.0.0",
                     "transition_count": log_entries.len(),
                     "follow": follow,
                     "transitions": log_entries,
@@ -2001,6 +2010,12 @@ struct PersistedSessionLogEntry {
     reason_string: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PersistedSessionLog {
+    schema_version: String,
+    entries: Vec<PersistedSessionLogEntry>,
+}
+
 fn load_session_state() -> Result<Option<PersistedSessionState>> {
     load_session_state_at(&session_state_file_path())
 }
@@ -2065,9 +2080,17 @@ fn load_session_log_at(path: &Path) -> Result<Option<Vec<PersistedSessionLogEntr
 
     let content = fs::read_to_string(path)
         .with_context(|| format!("failed to read session log file {}", path.display()))?;
-    let entries: Vec<PersistedSessionLogEntry> = serde_json::from_str(&content)
+
+    // Backward compatibility:
+    // - legacy format: JSON array of entries
+    // - current format: { schema_version, entries }
+    if let Ok(entries) = serde_json::from_str::<Vec<PersistedSessionLogEntry>>(&content) {
+        return Ok(Some(entries));
+    }
+
+    let log: PersistedSessionLog = serde_json::from_str(&content)
         .with_context(|| format!("failed to parse session log file {}", path.display()))?;
-    Ok(Some(entries))
+    Ok(Some(log.entries))
 }
 
 fn persist_session_log_at(path: &Path, entries: &[PersistedSessionLogEntry]) -> Result<()> {
@@ -2076,7 +2099,12 @@ fn persist_session_log_at(path: &Path, entries: &[PersistedSessionLogEntry]) -> 
             .with_context(|| format!("failed to create config directory {}", parent.display()))?;
     }
 
-    fs::write(path, serde_json::to_string_pretty(entries)?)
+    let payload = PersistedSessionLog {
+        schema_version: "1.0.0".to_string(),
+        entries: entries.to_vec(),
+    };
+
+    fs::write(path, serde_json::to_string_pretty(&payload)?)
         .with_context(|| format!("failed to write session log file {}", path.display()))?;
     Ok(())
 }
@@ -2412,6 +2440,78 @@ mod tests {
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].event, "startsession");
         assert_eq!(loaded[1].event, "localcancel");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn session_log_persists_versioned_container_schema() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "openpulse-cli-session-log-schema-{}-{}",
+            std::process::id(),
+            nonce
+        ));
+        let path = root.join("session-log.json");
+
+        persist_session_log_at(
+            &path,
+            &[PersistedSessionLogEntry {
+                timestamp_ms: 10,
+                from_state: "idle".to_string(),
+                to_state: "ready".to_string(),
+                event: "startsession".to_string(),
+                reason_code: "success".to_string(),
+                reason_string: "ok".to_string(),
+            }],
+        )
+        .expect("persist session log");
+
+        let content = fs::read_to_string(&path).expect("read session log file");
+        let payload: serde_json::Value = serde_json::from_str(&content).expect("json");
+        assert_eq!(payload["schema_version"], "1.0.0");
+        assert!(payload["entries"].is_array());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn session_log_loader_accepts_legacy_array_schema() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "openpulse-cli-session-log-legacy-{}-{}",
+            std::process::id(),
+            nonce
+        ));
+        let path = root.join("session-log.json");
+
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(
+            &path,
+            r#"[
+                {
+                    "timestamp_ms": 1,
+                    "from_state": "idle",
+                    "to_state": "discovery",
+                    "event": "startsession",
+                    "reason_code": "success",
+                    "reason_string": "session start"
+                }
+            ]"#,
+        )
+        .expect("write legacy log");
+
+        let loaded = load_session_log_at(&path)
+            .expect("load session log")
+            .expect("entries should exist");
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].event, "startsession");
 
         let _ = fs::remove_dir_all(root);
     }

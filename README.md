@@ -6,6 +6,20 @@
 
 Project details, requirements, usage, and roadmap are maintained in the docs directory.
 
+## TUI / CLI Screenshots
+
+Session start:
+
+![Session start screenshot](docs/screenshots/tui-session-start.svg)
+
+Session diagnostics with pipeline metrics:
+
+![Session diagnostics screenshot](docs/screenshots/tui-session-diagnostics.svg)
+
+Session log follow (persisted lifecycle log):
+
+![Session log follow screenshot](docs/screenshots/tui-session-log-follow.svg)
+
 ## Documentation
 
 - overview: [docs/overview.md](docs/overview.md)

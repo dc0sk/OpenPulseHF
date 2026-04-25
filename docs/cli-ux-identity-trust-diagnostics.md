@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/cli-ux-identity-trust-diagnostics.md
 status: living
-last_updated: 2026-04-24
+last_updated: 2026-04-25
 ---
 
 # CLI UX Specification for Identity and Trust Diagnostics
@@ -16,6 +16,20 @@ Goals:
 - make trust posture visible before and during session setup
 - provide deterministic diagnostic output for automation and operators
 - align human-readable and machine-readable output modes
+
+## TUI screenshots
+
+Session start flow:
+
+![Session start](screenshots/tui-session-start.svg)
+
+Session diagnostics output with pipeline metrics:
+
+![Session diagnostics](screenshots/tui-session-diagnostics.svg)
+
+Session log follow output with persisted lifecycle entries:
+
+![Session log follow](screenshots/tui-session-log-follow.svg)
 
 ## Scope
 
