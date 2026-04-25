@@ -17,6 +17,9 @@ last_updated: 2026-04-25
 - Strengthened `openpulse-modem` structured HPX event logging so diagnostic
   entries preserve `event_source`, `session_id`, and `reason_string`, and
   transition events are counted consistently in session diagnostics.
+- Improved `openpulse session state --diagnostics` output so text mode renders
+  a readable summary plus event lines while JSON mode keeps the raw structured
+  diagnostics payload and uses persisted peer context when available.
 
 ### HPX conformance & session audit (2026-04-25)
 
