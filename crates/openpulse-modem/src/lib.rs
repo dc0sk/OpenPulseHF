@@ -7,5 +7,6 @@ pub mod benchmark;
 pub mod diagnostics;
 pub mod engine;
 pub mod envelope_codec;
+pub mod pipeline;
 
 pub use engine::ModemEngine;
