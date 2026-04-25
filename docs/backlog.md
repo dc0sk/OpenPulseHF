@@ -56,7 +56,7 @@ All sprint items (1-5) shipped and merged.
 - `session state --diagnostics` JSON output.
 - **Status**: Landed in PR #50.
 
-## In progress: Multithreaded pipeline + session management (current branch)
+## Completed: Multithreaded pipeline + session management
 
 ### D: Multithreaded pipeline boundaries and scheduling
 - D1 complete: explicit pipeline stage boundaries.
@@ -66,13 +66,16 @@ All sprint items (1-5) shipped and merged.
 
 ### A: Session management extensions
 - A1 complete: `session list` and `session resume` commands.
-- Remaining: session log streaming/follow mode.
+- A2 complete: persisted session log lifecycle tracking and `session log --follow` mode.
+
+## Next sprint candidate
+
+- QPSK mode plugin and spectral efficiency benchmarks.
 
 ## Icebox
 
 Items acknowledged but not yet sprint-scheduled.
 
-- QPSK mode plugin and spectral efficiency benchmarks.
 - Optional Reed-Solomon forward error correction.
 - Bandwidth-adaptive rate control hooks.
 - ARDOP-compatible mode plugin skeleton.
