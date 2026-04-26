@@ -9,6 +9,11 @@ last_updated: 2026-04-25
 
 ## Unreleased
 
+- Added `FecCodec` to `openpulse-core`: Reed-Solomon GF(2^8) codec (ECC_LEN=32, corrects up to 16 byte errors per 255-byte block).
+- Added `ModemError::Fec` variant for FEC-specific error propagation.
+- Added `ModemEngine::transmit_with_fec` and `receive_with_fec` for transparent FEC-protected transmission.
+- Added FEC loopback hardening tests: 20-scenario fixture matrix (2 modes × 10 payloads) plus BER-injection correctness and capacity-exceeded failure tests.
+
 - Added `qpsk-plugin` crate with Gray-mapped QPSK modulation and demodulation.
 - Registered QPSK plugin in CLI engine, exposing modes `QPSK125`, `QPSK250`, and `QPSK500` via `openpulse modes`.
 - Added QPSK loopback fixture matrix (3 modes × 14 payload profiles = 42 scenarios).
