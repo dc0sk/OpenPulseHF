@@ -14,3 +14,6 @@ bpsk-plugin     = { workspace = true }
 tracing         = { workspace = true }
 serde           = { workspace = true, features = ["derive"] }
 serde_json      = { workspace = true }
+
+[dev-dependencies]
+qpsk-plugin = { workspace = true }

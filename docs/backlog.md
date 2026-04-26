@@ -68,9 +68,12 @@ All sprint items (1-5) shipped and merged.
 - A1 complete: `session list` and `session resume` commands.
 - A2 complete: persisted session log lifecycle tracking and `session log --follow` mode.
 
-## Next sprint candidate
+## In progress: QPSK mode plugin and spectral efficiency benchmarks
 
-- QPSK mode plugin and spectral efficiency benchmarks.
+- Q1 complete: `qpsk-plugin` crate with Gray-mapped QPSK modulate/demodulate (merged in PR #56).
+- Q2 complete: CLI plugin registration exposing `QPSK125`, `QPSK250`, `QPSK500`.
+- Q3 complete: loopback fixture matrix (3 modes × 14 payload profiles).
+- Q4 complete: spectral efficiency benchmarks confirming QPSK > BPSK bits/sample at equal baud.
 
 ## Icebox
 
