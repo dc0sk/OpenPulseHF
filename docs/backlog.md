@@ -68,7 +68,14 @@ All sprint items (1-5) shipped and merged.
 - A1 complete: `session list` and `session resume` commands.
 - A2 complete: persisted session log lifecycle tracking and `session log --follow` mode.
 
-## In progress: QPSK mode plugin and spectral efficiency benchmarks
+## In progress: FEC phase 1 (Reed-Solomon)
+
+- F1 complete: `FecCodec` in `openpulse-core` with GF(2^8) RS codec (ECC_LEN=32, corrects up to 16 byte errors per block).
+- F2 complete: `ModemError::Fec` variant.
+- F3 complete: `ModemEngine::transmit_with_fec` and `receive_with_fec`.
+- F4 complete: BER-injection correctness tests and 20-scenario loopback fixture matrix.
+
+## Completed: QPSK mode plugin and spectral efficiency benchmarks
 
 - Q1 complete: `qpsk-plugin` crate with Gray-mapped QPSK modulate/demodulate (merged in PR #56).
 - Q2 complete: CLI plugin registration exposing `QPSK125`, `QPSK250`, `QPSK500`.

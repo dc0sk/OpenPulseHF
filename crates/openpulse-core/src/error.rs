@@ -20,6 +20,9 @@ pub enum ModemError {
 
     #[error("audio error: {0}")]
     Audio(String),
+
+    #[error("FEC error: {0}")]
+    Fec(String),
 }
 
 /// Errors produced by the plugin layer.

@@ -4,6 +4,7 @@ use tracing::{debug, info};
 
 use openpulse_core::audio::{AudioBackend, AudioConfig};
 use openpulse_core::error::{ModemError, PluginError};
+use openpulse_core::fec::FecCodec;
 use openpulse_core::frame::Frame;
 use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
 use openpulse_core::plugin::{ModulationConfig, PluginRegistry};
@@ -292,6 +293,71 @@ impl ModemEngine {
         let frame = self.stage_decode_frame(&wire)?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         info!("received frame seq={}", frame.sequence);
+
+        Ok(frame.payload)
+    }
+
+    /// Like [`transmit`](Self::transmit) but wraps the encoded frame bytes
+    /// with Reed-Solomon FEC before modulation.
+    ///
+    /// On a noisy channel the receiver can use [`receive_with_fec`](Self::receive_with_fec)
+    /// to correct up to **16 byte errors per 255-byte RS block** after
+    /// demodulation.
+    pub fn transmit_with_fec(
+        &mut self,
+        data: &[u8],
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<(), ModemError> {
+        let frame_wire = self.stage_encode_frame(data);
+        let fec_bytes = FecCodec::new().encode(&frame_wire.bytes);
+        let fec_wire = WirePayload { bytes: fec_bytes };
+        let fec_wire = self.route_wire_stage(PipelineStage::EncodeModulate, fec_wire)?;
+
+        debug!(
+            "FEC transmitting {} byte FEC block (seq={}, mode={mode})",
+            fec_wire.bytes.len(),
+            self.sequence.wrapping_sub(1)
+        );
+
+        let samples = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_modulate_payload(plugin, mode, &fec_wire)?
+        };
+        let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
+        self.stage_emit_output(device, &samples)
+    }
+
+    /// Like [`receive`](Self::receive) but applies Reed-Solomon FEC error
+    /// correction after demodulation before decoding the frame.
+    pub fn receive_with_fec(
+        &mut self,
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<Vec<u8>, ModemError> {
+        let samples = self.stage_capture_input(device)?;
+        let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+
+        let raw_wire = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_demodulate_payload(plugin, mode, &samples)?
+        };
+        let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
+
+        let corrected_bytes = FecCodec::new().decode(&raw_wire.bytes)?;
+        let corrected_wire = WirePayload {
+            bytes: corrected_bytes,
+        };
+
+        let frame = self.stage_decode_frame(&corrected_wire)?;
+        let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
+        info!("FEC receive: frame seq={}", frame.sequence);
 
         Ok(frame.payload)
     }

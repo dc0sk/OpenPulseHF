@@ -6,6 +6,7 @@
 
 pub mod audio;
 pub mod error;
+pub mod fec;
 pub mod frame;
 pub mod hpx;
 pub mod peer_cache;
@@ -17,6 +18,7 @@ pub mod trust;
 
 pub use audio::*;
 pub use error::*;
+pub use fec::*;
 pub use frame::*;
 pub use hpx::*;
 pub use peer_cache::*;
