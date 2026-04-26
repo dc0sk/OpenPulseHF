@@ -9,6 +9,11 @@ last_updated: 2026-04-25
 
 ## Unreleased
 
+- Added `qpsk-plugin` crate with Gray-mapped QPSK modulation and demodulation.
+- Registered QPSK plugin in CLI engine, exposing modes `QPSK125`, `QPSK250`, and `QPSK500` via `openpulse modes`.
+- Added QPSK loopback fixture matrix (3 modes × 14 payload profiles = 42 scenarios).
+- Added spectral efficiency benchmarks confirming QPSK250 carries more bits per sample than BPSK250 at equal baud rate.
+
 - Added documentation framework with standardized frontmatter.
 - Added docs CI checks and automated last_updated stamping for pull requests.
 - Expanded `openpulse-modem` BPSK hardening coverage with a deterministic

@@ -167,20 +167,14 @@ impl DiagnosticFormatter {
                 event.timestamp_ms,
                 event.event,
                 event.state_before,
-                event
-                    .state_after
-                    .as_deref()
-                    .unwrap_or("(no transition)"),
+                event.state_after.as_deref().unwrap_or("(no transition)"),
                 event.reason_code
             )
         } else {
             format!(
                 "{} → {} ({})",
                 event.state_before,
-                event
-                    .state_after
-                    .as_deref()
-                    .unwrap_or("(no transition)"),
+                event.state_after.as_deref().unwrap_or("(no transition)"),
                 event.event
             )
         }
@@ -273,7 +267,10 @@ mod tests {
         assert_eq!(diag.total_transitions, 1);
         assert_eq!(diag.total_events, 1);
         assert_eq!(diag.events[0].event_source, "transition");
-        assert_eq!(diag.events[0].reason_string.as_deref(), Some("training complete"));
+        assert_eq!(
+            diag.events[0].reason_string.as_deref(),
+            Some("training complete")
+        );
         assert_eq!(diag.events[0].session_id.as_deref(), Some("sess-9"));
     }
 

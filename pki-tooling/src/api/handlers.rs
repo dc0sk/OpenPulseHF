@@ -1685,10 +1685,7 @@ fn extract_request_id(headers: &HeaderMap) -> Option<String> {
 fn parse_rfc3339_query(
     raw: Option<&str>,
     field_name: &'static str,
-) -> Result<
-    Option<chrono::DateTime<chrono::FixedOffset>>,
-    (StatusCode, Json<ApiMessage>),
-> {
+) -> Result<Option<chrono::DateTime<chrono::FixedOffset>>, (StatusCode, Json<ApiMessage>)> {
     let Some(value) = raw else {
         return Ok(None);
     };

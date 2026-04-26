@@ -35,6 +35,7 @@ use openpulse_modem::benchmark::{
 use openpulse_modem::diagnostics::{DiagnosticFormatter, SessionDiagnostics};
 use openpulse_modem::engine::SecureSessionParams;
 use openpulse_modem::ModemEngine;
+use qpsk_plugin::QpskPlugin;
 
 #[cfg(feature = "cpal-backend")]
 use openpulse_audio::CpalBackend;
@@ -546,6 +547,9 @@ fn main() -> Result<()> {
     engine
         .register_plugin(Box::new(BpskPlugin::new()))
         .context("failed to register BPSK plugin")?;
+    engine
+        .register_plugin(Box::new(QpskPlugin::new()))
+        .context("failed to register QPSK plugin")?;
     engine.set_trust_policy_profile(load_policy_profile_or_default());
 
     // Dispatch.
@@ -834,10 +838,7 @@ fn run_session(command: SessionCommands, engine: &mut ModemEngine, pki: &PkiClie
 
                         if opts.verbose {
                             if let Some(metrics) = &diag.pipeline_metrics {
-                                println!(
-                                    "pipeline_metrics: {}",
-                                    serde_json::to_string(metrics)?
-                                );
+                                println!("pipeline_metrics: {}", serde_json::to_string(metrics)?);
                             }
                         }
                     }
@@ -2259,10 +2260,7 @@ fn persist_policy_profile(profile: PolicyProfile) -> Result<()> {
     Ok(())
 }
 
-fn diagnostics_peer(
-    engine: &ModemEngine,
-    persisted: Option<&PersistedSessionState>,
-) -> String {
+fn diagnostics_peer(engine: &ModemEngine, persisted: Option<&PersistedSessionState>) -> String {
     if let Some(state) = persisted {
         return state.peer.clone();
     }

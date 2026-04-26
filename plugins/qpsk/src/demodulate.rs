@@ -3,9 +3,7 @@ use std::f32::consts::PI;
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::ModulationConfig;
 
-use crate::modulate::{
-    gray_map, preamble_symbols, samples_per_symbol, PREAMBLE_SYMS, TAIL_SYMS,
-};
+use crate::modulate::{gray_map, preamble_symbols, samples_per_symbol, PREAMBLE_SYMS, TAIL_SYMS};
 use crate::parse_baud_rate;
 
 pub fn qpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec<u8>, ModemError> {

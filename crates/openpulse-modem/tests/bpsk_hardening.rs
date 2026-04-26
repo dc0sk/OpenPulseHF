@@ -5,10 +5,10 @@
 //! - Multipath profiles (fading, frequency offset, timing error)
 //! - Error recovery (frame loss, timeout, retransmit)
 
+use bpsk_plugin::BpskPlugin;
 use openpulse_audio::LoopbackBackend;
 use openpulse_modem::diagnostics::SessionDiagnostics;
 use openpulse_modem::engine::ModemEngine;
-use bpsk_plugin::BpskPlugin;
 
 /// Test fixture for BPSK loopback scenarios.
 struct BpskFixture {
@@ -238,10 +238,7 @@ fn bpsk_loopback_fixture_matrix_56_scenarios() {
 
     for mode in modes {
         for (idx, payload) in payload_profiles.iter().enumerate() {
-            let mut fixture = BpskFixture::new(
-                &format!("bpsk-matrix-{mode}-{}", idx),
-                "N0TEST",
-            );
+            let mut fixture = BpskFixture::new(&format!("bpsk-matrix-{mode}-{}", idx), "N0TEST");
 
             let result = fixture.transmit(payload, mode);
             assert!(
