@@ -20,6 +20,7 @@ openpulse-core  = { workspace = true }
 openpulse-audio = { workspace = true }
 openpulse-modem = { workspace = true }
 bpsk-plugin     = { workspace = true }
+qpsk-plugin     = { workspace = true }
 anyhow             = { workspace = true }
 clap               = { workspace = true }
 tracing            = { workspace = true }

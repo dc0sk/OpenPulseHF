@@ -6,6 +6,7 @@ members = [
     "crates/openpulse-modem",
     "crates/openpulse-cli",
     "plugins/bpsk",
+    "plugins/qpsk",
     "pki-tooling",
 ]
 
@@ -21,6 +22,7 @@ openpulse-core  = { path = "crates/openpulse-core" }
 openpulse-audio = { path = "crates/openpulse-audio", default-features = false }
 openpulse-modem = { path = "crates/openpulse-modem" }
 bpsk-plugin     = { path = "plugins/bpsk" }
+qpsk-plugin     = { path = "plugins/qpsk" }
 
 thiserror          = "2.0"
 anyhow             = "1.0"
