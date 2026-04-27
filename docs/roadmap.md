@@ -7,6 +7,11 @@ last_updated: 2026-04-25
 
 # Roadmap
 
+## Scope policy
+
+- Primary goal: build an independent and competing OpenPulse protocol from scratch.
+- External/proprietary compatibility modes (for example VARA and PACTOR-4) are secondary and must not proceed without legal review and explicit approval.
+
 ## Completed (shipped in PR #49)
 
 - ✅ HPX benchmark harness inputs, metrics, and reproducible run procedure.

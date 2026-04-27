@@ -74,10 +74,12 @@ last_updated: 2026-04-23
 
 ## Competitive performance requirements
 
+- Primary strategic goal: develop an independent, first-principles OpenPulse protocol stack that competes on reliability, throughput, and usability.
 - HPX must target outcome parity or better versus incumbent modems in benchmarked scenarios.
 - Comparisons must use equal occupied bandwidth classes and published test conditions.
 - Performance evaluation must include at least HF narrow, HF wide, and VHF FM profile families.
 - No claim of proprietary protocol compatibility may be made without defensible public evidence.
+- Any compatibility mode targeting proprietary systems (including VARA or PACTOR-4) requires explicit legal review and approval before implementation work starts.
 
 ## Compatibility and UX requirements
 

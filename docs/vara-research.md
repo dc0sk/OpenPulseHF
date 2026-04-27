@@ -81,7 +81,7 @@ Source:
 
 Source (local document set):
 
-- docs/VARA Doc/VARA Doc/VARA Specification.pdf
+- docs/VARA Doc/VARA Specification.pdf
 
 ### Local KISS and quick-guide integration details
 
@@ -102,8 +102,8 @@ Sources (local document set):
 
 Sources (local document set):
 
-- docs/VARA Doc/VARA Doc/VARA HF v4.0 Levels.pdf
-- docs/VARA Doc/VARA Doc/VARA FM v3.0.5 Levels.pdf
+- docs/VARA Doc/VARA HF v4.0 Levels.pdf
+- docs/VARA Doc/VARA FM v3.0.5 Levels.pdf
 
 ## Public but lower-confidence observations
 
@@ -136,6 +136,34 @@ Source:
 
 - https://rosmodem.wordpress.com/2017/09/03/vara-hf-modem/
 
+### Historical PACTOR design notes (German-language wiki)
+
+- The OEVSV PACTOR page includes a detailed (historical) description of PACTOR-I style ARQ timing and packet structure, including 1.25 s cycle framing and CRC16 usage.
+- It describes control-signal concepts (`CS1`..`CS4`), direction switching, and link teardown behavior in a way that is useful for understanding legacy HF ARQ design patterns.
+- It also discusses adaptive speed switching (100/200 baud), Huffman compression, and Memory-ARQ concepts.
+- The page appears old (site indicates last edit many years ago), so values there should be treated as historical context, not normative specification for current proprietary PACTOR variants.
+
+Source:
+
+- https://wiki.oevsv.at/wiki/PACTOR
+
+### PACTOR-4 technical document (vendor PDF)
+
+- The SCS document describes PACTOR-4 as an extension of PACTOR-3 using single-carrier modulation for most speed levels, with adaptive equalization and RAKE receiver concepts.
+- It states 10 adaptive speed levels (SL1..SL10), with differing modulation and coding profiles by level.
+- It describes ARQ cycle timing of 1.25 s (short) and 3 x 1.25 s (long), with long-path mode values of 1.4 s and 3 x 1.4 s.
+- It states packet structure as preamble plus symbol data field, with status byte and CRC16 (CCITT) in the bit-layer data structure.
+- It describes robust mode (spread DQPSK), normal mode (coherent PSK/QAM with training sequences), and chirp mode as a special narrowband case.
+- It documents channel coding as concatenated convolutional coding with puncturing options including rate 1/2 and 5/6 patterns.
+
+Source:
+
+- https://www.p4dragon.com/download/PACTOR-4%20Protocol.pdf
+
+Confidence note:
+
+- This is a vendor technical description for PACTOR-4 (2011), not a VARA document. It is useful as historical HF ARQ/modem design reference material, but should not be treated as VARA protocol evidence.
+
 ## Local document set now reviewed
 
 The previously unread MEGA-linked materials were provided locally and reviewed from `docs/VARA Doc/`.
@@ -146,9 +174,9 @@ Reviewed files:
 - docs/VARA Doc/VARA HF Tactical v4.3.0.pdf
 - docs/VARA Doc/VARA KISS Interface.pdf
 - docs/VARA Doc/VARA HUFFMAN COMPRESSION.pdf
-- docs/VARA Doc/VARA Doc/VARA Specification.pdf
-- docs/VARA Doc/VARA Doc/VARA HF v4.0 Levels.pdf
-- docs/VARA Doc/VARA Doc/VARA FM v3.0.5 Levels.pdf
+- docs/VARA Doc/VARA Specification.pdf
+- docs/VARA Doc/VARA HF v4.0 Levels.pdf
+- docs/VARA Doc/VARA FM v3.0.5 Levels.pdf
 
 Notes:
 
@@ -157,6 +185,7 @@ Notes:
 
 ## Working conclusions for OpenPulseHF
 
+- The main product goal is an independent OpenPulse protocol designed from scratch to compete on performance and robustness.
 - It is reasonable to treat VARA as a practical reference point for product shape and user expectations rather than as a publicly specified protocol.
 - The local specification and guide PDFs add useful implementation-oriented context (ARQ model, timing/bandwidth/rate tables, KISS/TCP integration defaults), but they still do not define an open interoperability standard.
 - Publicly verifiable material supports studying the following themes:
@@ -165,5 +194,6 @@ Notes:
   - HF versus FM product variants
   - 500 Hz versus wider-band operating modes in user workflows
 - Publicly available material still does not provide enough rigor for a clean-room, bit-accurate protocol clone claim.
+- Compatibility modes targeting VARA or PACTOR-4 should be treated as optional follow-on work and require legal checks before any implementation begins.
 - Any future interoperability or compatibility work should be based only on legally and technically defensible public documentation or first-principles design work.
 
