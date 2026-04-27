@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/vara-research.md
 status: living
-last_updated: 2026-04-23
+last_updated: 2026-04-27
 ---
 
 # VARA Research
@@ -70,6 +70,41 @@ Source:
 
 - https://www.varac-hamradio.com/
 
+### Claims and parameters from local VARA specification PDF (Rev 2.0.0, 2018-04-05)
+
+- The specification describes VARA HF as a proprietary shareware system.
+- It describes VARA as half-duplex ARQ over HF with adaptive speed levels.
+- It states operation within 2.4 kHz SSB bandwidth and claims net data rates from 60 to 7536 bps.
+- It describes OFDM data frames with cyclic prefix and Turbo-based FEC concepts.
+- It describes ACK bursts as parallel FSK signaling and lists ACK frame types (`START`, `ACK1`, `ACK2`, `ACK3`, `NACK`, `BREAK`, `REQ`, `QRT`).
+- It describes host/software integration over TCP and notes Windows compatibility.
+
+Source (local document set):
+
+- docs/VARA Doc/VARA Doc/VARA Specification.pdf
+
+### Local KISS and quick-guide integration details
+
+- The KISS interface document describes three KISS frame modes keyed by second byte (`0` standard AX.25, `1` 7-char callsign AX.25 variant, `2` generic data).
+- The same KISS document states default KISS port `8100` and says KISS is available in VARA HF, FM, and SAT.
+- The quick guide states default control TCP port `8300` for typical VARA app integration and discusses multiple-folder/multiple-port setups for concurrent VARA applications.
+- The quick guide states three HF bandwidth modes in that release family: 500 Hz (Narrow), 2300 Hz (Standard), and 2750 Hz (Tactical).
+
+Sources (local document set):
+
+- docs/VARA Doc/VARA KISS Interface.pdf
+- docs/VARA Doc/VARA 4.7 quick guide.pdf
+
+### Local speed-level tables (HF/FM)
+
+- The HF levels sheet (v4.0.0) provides modulation/rate tables for VARA HF 2300 and VARA HF 500, including FSK/PSK/QAM progression by level.
+- The FM levels sheet (v3.0.5) provides Wide/Narrow level tables with symbol rate, carrier count, modulation family, and net rate progression.
+
+Sources (local document set):
+
+- docs/VARA Doc/VARA Doc/VARA HF v4.0 Levels.pdf
+- docs/VARA Doc/VARA Doc/VARA FM v3.0.5 Levels.pdf
+
 ## Public but lower-confidence observations
 
 The items below are technically interesting but rely on user comments, third-party interpretation, or indirect evidence rather than stable product documentation.
@@ -101,32 +136,34 @@ Source:
 
 - https://rosmodem.wordpress.com/2017/09/03/vara-hf-modem/
 
-## Linked technical files found but not readable here
+## Local document set now reviewed
 
-ROSModem links to several potentially important technical documents, but their contents were not directly readable through the available fetch path because they are hosted on MEGA and require client-side interaction.
+The previously unread MEGA-linked materials were provided locally and reviewed from `docs/VARA Doc/`.
 
-The unread technical links include:
+Reviewed files:
 
-- VARA TNC Commands 11-01-2026
-- VARA KISS Interface 13-02-2024
-- VARA Documentation
-- VARA Huffman compression
-- VARA HF 4.7 Quick Guide
+- docs/VARA Doc/VARA 4.7 quick guide.pdf
+- docs/VARA Doc/VARA HF Tactical v4.3.0.pdf
+- docs/VARA Doc/VARA KISS Interface.pdf
+- docs/VARA Doc/VARA HUFFMAN COMPRESSION.pdf
+- docs/VARA Doc/VARA Doc/VARA Specification.pdf
+- docs/VARA Doc/VARA Doc/VARA HF v4.0 Levels.pdf
+- docs/VARA Doc/VARA Doc/VARA FM v3.0.5 Levels.pdf
 
-These links are still useful as pointers for manual follow-up research.
+Notes:
 
-Primary index source:
-
-- https://rosmodem.wordpress.com/2011/01/10/ros-2/
+- The included PowerPoint file (`VARA HF Modem.ppt`) did not yield reliable plain-text extraction in this environment.
+- The extracted PDF text is sufficient to capture high-level architecture, interface facts, and published rate/level claims for research context.
 
 ## Working conclusions for OpenPulseHF
 
 - It is reasonable to treat VARA as a practical reference point for product shape and user expectations rather than as a publicly specified protocol.
+- The local specification and guide PDFs add useful implementation-oriented context (ARQ model, timing/bandwidth/rate tables, KISS/TCP integration defaults), but they still do not define an open interoperability standard.
 - Publicly verifiable material supports studying the following themes:
   - adaptive or multi-rate modem operation
   - local TNC-style command/data interfaces
   - HF versus FM product variants
   - 500 Hz versus wider-band operating modes in user workflows
-- Publicly verifiable material does not currently provide enough detail here to claim a full open protocol description.
+- Publicly available material still does not provide enough rigor for a clean-room, bit-accurate protocol clone claim.
 - Any future interoperability or compatibility work should be based only on legally and technically defensible public documentation or first-principles design work.
 
