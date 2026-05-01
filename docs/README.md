@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/README.md
 status: living
-last_updated: 2026-04-25
+last_updated: 2026-05-01
 ---
 
 # Documentation Index
@@ -12,7 +12,10 @@ Canonical documentation lives in the files listed below.
 ## Index
 
 - docs/overview.md: project summary and inspiration context
-- docs/vara-research.md: public-source technical notes on VARA
+- docs/vara-research.md: public-source technical notes on VARA, FEC comparison, single-carrier vs OFDM analysis, PSK31 design principles
+- docs/ardop-research.md: public-source technical notes on ARDOP (open-source HF ARQ baseline for comparison)
+- docs/pactor-research.md: technical history and design pattern analysis for PACTOR-I through PACTOR-4
+- docs/regulatory.md: FCC Part 97, CEPT/EU, UK Ofcom regulatory compliance analysis and release checklist
 - docs/high-performance-mode.md: feature analysis for HPX mode and signed transfer model
 - docs/hpx-session-state-machine.md: normative HPX session lifecycle and conformance cases
 - docs/benchmark-harness.md: benchmark scenarios, result schema, and CI gate rules for HPX

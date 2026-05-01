@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/benchmark-harness.md
 status: living
-last_updated: 2026-04-24
+last_updated: 2026-05-01
 ---
 
 # HPX Benchmark Harness Specification
@@ -18,26 +18,89 @@ This document defines the benchmark execution contract used to validate HPX perf
 - Auditable: raw artifacts are stored and traceable to run metadata.
 - Automatable: reduced profile suite must run in CI; full suite runs in scheduled or manual jobs.
 
+## Channel model specifications
+
+All HF scenarios must use parameterised channel models drawn from standardised references. AWGN-only scenarios are not sufficient for HF performance claims.
+
+### Watterson channel model (ITU-R F.1487 / CCIR 520-2)
+
+The Watterson model is the standard academic HF channel model defined in ITU-R recommendation F.1487 (and the earlier CCIR 520-2). It characterises an HF path as the sum of two ionospheric paths (a two-ray model) with specified Doppler spread and time delay between paths.
+
+Parameters for each path:
+
+| Parameter | Description | Unit |
+|-----------|-------------|------|
+| `doppler_spread_hz` | One-sided Gaussian Doppler spread per ray | Hz |
+| `delay_spread_ms` | Differential delay between the two rays | ms |
+| `snr_db` | Signal-to-noise ratio at receiver input | dB |
+
+Standardised path conditions:
+
+| Condition | Doppler spread | Delay spread | Typical SNR range | Notes |
+|-----------|---------------|-------------|-------------------|-------|
+| AWGN | 0 Hz | 0 ms | 0–30 dB | Baseline; not representative of HF |
+| Good (F1) | 0.1 Hz | 0.5 ms | 15–30 dB | Quiet short-path; best HF conditions |
+| Good (F2) | 0.5 Hz | 1.0 ms | 10–25 dB | Good medium-path |
+| Moderate (M1) | 1.0 Hz | 1.0 ms | 5–20 dB | Typical daytime mid-latitude path |
+| Moderate (M2) | 1.0 Hz | 2.0 ms | 5–15 dB | Moderate long-path or disturbed |
+| Poor (P1) | 1.0 Hz | 2.0 ms | 0–10 dB | Challenging path; deep fades |
+| Poor (P2) | 2.0 Hz | 4.0 ms | −5–5 dB | Severe multipath; near the SNR floor |
+
+Scenarios must state which Watterson condition they implement, with explicit parameter values, rather than vague descriptors such as "light fading."
+
+### Gilbert-Elliott burst error model
+
+The Gilbert-Elliott model is a two-state Markov model for burst error characterisation on fading channels. It is the standard model for evaluating FEC + interleaver performance.
+
+States:
+- **Good state (G):** low bit error probability `p_g` (typically ≈ 0.001).
+- **Bad state (B):** high bit error probability `p_b` (typically ≈ 0.1–0.5).
+
+Transition parameters:
+- `p_gb`: probability of transitioning from Good to Bad per symbol.
+- `p_bg`: probability of transitioning from Bad to Good per symbol.
+
+Mean burst length in the Bad state: `1 / p_bg`.
+Mean time between bursts: `1 / p_gb`.
+
+Representative parameter sets for HF:
+
+| Profile | `p_g` | `p_b` | `p_gb` | `p_bg` | Mean burst (symbols) | Mean gap (symbols) |
+|---------|-------|-------|--------|--------|---------------------|-------------------|
+| Light burst | 0.001 | 0.1 | 0.01 | 0.1 | 10 | 100 |
+| Moderate burst | 0.001 | 0.2 | 0.05 | 0.05 | 20 | 20 |
+| Heavy burst | 0.001 | 0.5 | 0.05 | 0.02 | 50 | 20 |
+| Severe burst | 0.001 | 0.8 | 0.1 | 0.01 | 100 | 10 |
+
+Burst scenarios must be parameterised using the Gilbert-Elliott model with explicit parameter values. The light and moderate profiles are the minimum required for CI; heavy and severe are for full-suite scheduled runs.
+
+### FEC and interleaver validation requirement
+
+Any scenario that exercises FEC must also include a burst-error variant (Gilbert-Elliott) at a burst duration that tests the interleaver boundary. An interleaver of depth D at baud rate B covers D/B seconds of burst. Scenarios should include at least one burst duration at D/B and one at 2×D/B to demonstrate both the protected and unprotected regimes.
+
 ## Scenario catalog
 
-Scenarios are identified by stable IDs.
+Scenarios are identified by stable IDs. Each scenario must reference a channel model by name with explicit parameter values.
 
 ### HF 500 Hz class
 
-- HF500-NOM-01: moderate SNR, light fading.
-- HF500-FADE-02: selective fading with periodic deep fades.
-- HF500-BURST-03: burst-noise events at fixed intervals.
+- HF500-AWGN-00: AWGN baseline, SNR sweep 0–20 dB. Channel: AWGN. Purpose: calibration and sanity check only; not used for HF performance claims.
+- HF500-NOM-01: Watterson Moderate M1 (Doppler 1.0 Hz, delay 1.0 ms), SNR 12 dB. Purpose: nominal HF 500 Hz operation.
+- HF500-FADE-02: Watterson Poor P1 (Doppler 1.0 Hz, delay 2.0 ms), SNR 5 dB with ±3 dB random variation. Purpose: selective fading with periodic deep fades.
+- HF500-BURST-03: Gilbert-Elliott moderate burst (p_gb=0.05, p_bg=0.05, p_b=0.2) on top of Watterson M1. Purpose: burst-noise stress for FEC+interleaver validation.
+- HF500-BURST-04: Gilbert-Elliott heavy burst (p_gb=0.05, p_bg=0.02, p_b=0.5) on top of Watterson M1. Purpose: full-suite; stress FEC beyond interleaver depth.
 
 ### HF 2300-2400 Hz class
 
-- HF2300-NOM-01: moderate SNR, low multipath.
-- HF2300-FADE-02: multipath + variable SNR over time.
-- HF2300-STRESS-03: SNR step changes with timing jitter.
+- HF2300-AWGN-00: AWGN baseline, SNR sweep 0–25 dB. Calibration only.
+- HF2300-NOM-01: Watterson Good F2 (Doppler 0.5 Hz, delay 1.0 ms), SNR 18 dB. Purpose: nominal wide-band HF operation.
+- HF2300-FADE-02: Watterson Moderate M2 (Doppler 1.0 Hz, delay 2.0 ms), SNR 10 dB with ±4 dB random variation. Purpose: multipath + variable SNR.
+- HF2300-STRESS-03: Watterson Poor P2 (Doppler 2.0 Hz, delay 4.0 ms), SNR 3 dB with step changes every 30 s. Purpose: near-floor stress with timing jitter.
 
 ### VHF FM class
 
-- VHF-FM-NOM-01: near-static link, occasional interference.
-- VHF-FM-BURST-02: periodic impulse interference bursts.
+- VHF-FM-NOM-01: AWGN, SNR 25 dB, near-static link. Purpose: FM baseline.
+- VHF-FM-BURST-02: Gilbert-Elliott light burst (p_gb=0.01, p_bg=0.1, p_b=0.1) on top of AWGN, SNR 20 dB. Purpose: periodic impulse interference bursts typical of VHF FM.
 
 ## Required run inputs
 
@@ -47,7 +110,8 @@ Each scenario run must provide:
 - random_seed
 - mode_under_test (for example HPX500, HPX2300, BPSK250 baseline)
 - payload_profile (size distribution and total bytes)
-- channel_profile_parameters
+- channel_model (one of: awgn, watterson, gilbert-elliott, watterson+gilbert-elliott)
+- channel_profile_parameters (full parameter set matching the channel model above)
 - run_duration_limit_s
 
 ## Scenario seed policy
