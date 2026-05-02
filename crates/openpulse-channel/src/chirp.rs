@@ -5,8 +5,10 @@ use crate::{ChannelError, ChannelModel, ChirpConfig};
 /// Linear-chirp interference source.
 pub struct ChirpChannel {
     config: ChirpConfig,
-    /// Persistent phase accumulator (radians).
+    /// Persistent phase accumulator (radians) for sin output.
     phase: f32,
+    /// Total samples emitted; drives sweep position independently of wrapped phase.
+    sample_count: u64,
 }
 
 impl ChirpChannel {
@@ -14,10 +16,22 @@ impl ChirpChannel {
         if config.sample_rate == 0 {
             return Err(ChannelError::InvalidParameter("sample_rate must be > 0".into()));
         }
-        if config.period_s <= 0.0 {
-            return Err(ChannelError::InvalidParameter("period_s must be > 0".into()));
+        if config.period_s <= 0.0 || !config.period_s.is_finite() {
+            return Err(ChannelError::InvalidParameter(
+                "period_s must be a positive finite value".into(),
+            ));
         }
-        Ok(Self { config, phase: 0.0 })
+        if !config.f_start_hz.is_finite() || config.f_start_hz <= 0.0 {
+            return Err(ChannelError::InvalidParameter(
+                "f_start_hz must be a positive finite value".into(),
+            ));
+        }
+        if !config.f_end_hz.is_finite() || config.f_end_hz <= 0.0 {
+            return Err(ChannelError::InvalidParameter(
+                "f_end_hz must be a positive finite value".into(),
+            ));
+        }
+        Ok(Self { config, phase: 0.0, sample_count: 0 })
     }
 }
 
@@ -38,13 +52,17 @@ impl ChannelModel for ChirpChannel {
         input
             .iter()
             .map(|&s| {
-                // Instantaneous frequency: linear interpolation within sweep period.
-                let t_in_period = (self.phase / (2.0 * std::f32::consts::PI * f_start))
-                    .rem_euclid(period_samples)
-                    / period_samples;
-                let f_inst = f_start + (f_end - f_start) * t_in_period;
+                // Sweep position within [0, 1) derived from an explicit sample counter,
+                // not from the wrapped phase (which would give near-zero t_in_period).
+                let t_norm = (self.sample_count as f32 % period_samples) / period_samples;
+                let f_inst = f_start + (f_end - f_start) * t_norm;
                 let phase_step = 2.0 * std::f32::consts::PI * f_inst / sr;
-                self.phase = (self.phase + phase_step) % (2.0 * std::f32::consts::PI);
+                self.phase += phase_step;
+                // Wrap periodically to prevent float precision loss.
+                if self.phase > 1000.0 * std::f32::consts::PI {
+                    self.phase -= 1000.0 * std::f32::consts::PI;
+                }
+                self.sample_count += 1;
                 s + amp * rms * self.phase.sin()
             })
             .collect()
@@ -86,5 +104,40 @@ mod tests {
             sample_rate: 8000,
         })
         .is_err());
+    }
+
+    #[test]
+    fn rejects_non_positive_start_freq() {
+        assert!(ChirpChannel::new(ChirpConfig {
+            f_start_hz: 0.0,
+            f_end_hz: 2000.0,
+            period_s: 1.0,
+            amplitude: 1.0,
+            sample_rate: 8000,
+        })
+        .is_err());
+    }
+
+    /// Verify the sweep actually changes instantaneous frequency over time.
+    #[test]
+    fn sweep_changes_frequency_over_period() {
+        let sr = 8000u32;
+        let mut ch = ChirpChannel::new(ChirpConfig {
+            f_start_hz: 500.0,
+            f_end_hz: 2000.0,
+            period_s: 1.0,
+            amplitude: 1.0,
+            sample_rate: sr,
+        })
+        .unwrap();
+        // Two 256-sample blocks far apart should produce different phase increments.
+        let block = vec![0.0f32; 256];
+        let first = ch.apply(&block);
+        // Skip to near mid-period.
+        let skip = vec![0.0f32; sr as usize / 2 - 256];
+        ch.apply(&skip);
+        let mid = ch.apply(&block);
+        // The two outputs should differ (different instantaneous frequency).
+        assert_ne!(first, mid, "sweep should change output over the period");
     }
 }

@@ -3,7 +3,7 @@
 use rand::SeedableRng;
 use rand_distr::{Distribution, Normal};
 
-use crate::{ChannelError, ChannelModel, QrmConfig};
+use crate::{ChannelError, ChannelModel, QrmConfig, ToneConfig};
 
 /// Phase-coherent CW tone interference with optional background noise.
 pub struct QrmChannel {
@@ -13,10 +13,34 @@ pub struct QrmChannel {
     rng: rand::rngs::StdRng,
 }
 
+fn validate_tone(tone: &ToneConfig) -> Result<(), ChannelError> {
+    if !tone.frequency_hz.is_finite() || tone.frequency_hz <= 0.0 {
+        return Err(ChannelError::InvalidParameter(
+            "tone frequency_hz must be a positive finite value".into(),
+        ));
+    }
+    if !tone.amplitude.is_finite() {
+        return Err(ChannelError::InvalidParameter(
+            "tone amplitude must be finite".into(),
+        ));
+    }
+    Ok(())
+}
+
 impl QrmChannel {
     pub fn new(config: QrmConfig) -> Result<Self, ChannelError> {
         if config.sample_rate == 0 {
             return Err(ChannelError::InvalidParameter("sample_rate must be > 0".into()));
+        }
+        if let Some(snr) = config.noise_floor_snr_db {
+            if !snr.is_finite() {
+                return Err(ChannelError::InvalidParameter(
+                    "noise_floor_snr_db must be finite".into(),
+                ));
+            }
+        }
+        for tone in &config.tones {
+            validate_tone(tone)?;
         }
         let phases = vec![0.0f32; config.tones.len()];
         let rng = match config.seed {
@@ -32,13 +56,13 @@ impl ChannelModel for QrmChannel {
         if input.is_empty() {
             return Vec::new();
         }
-        let n = input.len();
         let sr = self.config.sample_rate as f32;
-        let rms = (input.iter().map(|&s| s * s).sum::<f32>() / n as f32).sqrt();
+        let rms = (input.iter().map(|&s| s * s).sum::<f32>() / input.len() as f32).sqrt();
         let rms = if rms > 0.0 { rms } else { 1e-4 };
 
-        let bg_sigma = self.config.noise_floor_snr_db.map(|snr| {
-            rms / 10f32.powf(snr / 20.0)
+        // Construct background noise distribution once per block, outside the sample loop.
+        let bg_dist = self.config.noise_floor_snr_db.map(|snr| {
+            Normal::new(0.0f32, rms / 10f32.powf(snr / 20.0)).unwrap()
         });
 
         let mut out = input.to_vec();
@@ -48,11 +72,10 @@ impl ChannelModel for QrmChannel {
                 self.phases[t] += phase_step;
                 *sample += tone.amplitude * rms * self.phases[t].sin();
             }
-            if let Some(sigma) = bg_sigma {
-                *sample += Normal::new(0.0f32, sigma).unwrap().sample(&mut self.rng);
+            if let Some(ref dist) = bg_dist {
+                *sample += dist.sample(&mut self.rng);
             }
         }
-        // Wrap phases to avoid float drift.
         for p in &mut self.phases {
             *p %= 2.0 * std::f32::consts::PI;
         }
@@ -60,7 +83,6 @@ impl ChannelModel for QrmChannel {
     }
 
     fn generate_noise(&mut self, length: usize) -> Vec<f32> {
-        // Tones are not additive noise in isolation; return zeros.
         vec![0.0; length]
     }
 }
@@ -91,6 +113,28 @@ mod tests {
             tones: vec![],
             noise_floor_snr_db: None,
             sample_rate: 0,
+            seed: None,
+        });
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn rejects_non_finite_tone_frequency() {
+        let res = QrmChannel::new(QrmConfig {
+            tones: vec![ToneConfig { frequency_hz: f32::NAN, amplitude: 1.0 }],
+            noise_floor_snr_db: None,
+            sample_rate: 8000,
+            seed: None,
+        });
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn rejects_non_finite_noise_snr() {
+        let res = QrmChannel::new(QrmConfig {
+            tones: vec![],
+            noise_floor_snr_db: Some(f32::INFINITY),
+            sample_rate: 8000,
             seed: None,
         });
         assert!(res.is_err());

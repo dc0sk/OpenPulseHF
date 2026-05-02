@@ -46,6 +46,9 @@ impl ChannelModel for GilbertElliottChannel {
         let rms = if rms > 0.0 { rms } else { 1e-4 };
         let sigma_good = self.noise_sigma_for_snr(self.config.snr_good_db, rms);
         let sigma_bad = self.noise_sigma_for_snr(self.config.snr_bad_db, rms);
+        // Construct distributions once per block, not once per sample.
+        let dist_good = Normal::new(0.0f32, sigma_good).unwrap();
+        let dist_bad = Normal::new(0.0f32, sigma_bad).unwrap();
         let uniform = Uniform::new(0.0f32, 1.0);
         input
             .iter()
@@ -58,8 +61,11 @@ impl ChannelModel for GilbertElliottChannel {
                 } else if u < self.config.p_gb {
                     self.in_bad = true;
                 }
-                let sigma = if self.in_bad { sigma_bad } else { sigma_good };
-                let n = Normal::new(0.0f32, sigma).unwrap().sample(&mut self.rng);
+                let n = if self.in_bad {
+                    dist_bad.sample(&mut self.rng)
+                } else {
+                    dist_good.sample(&mut self.rng)
+                };
                 s + n
             })
             .collect()
@@ -68,6 +74,8 @@ impl ChannelModel for GilbertElliottChannel {
     fn generate_noise(&mut self, length: usize) -> Vec<f32> {
         let sigma_good = self.noise_sigma_for_snr(self.config.snr_good_db, 1.0);
         let sigma_bad = self.noise_sigma_for_snr(self.config.snr_bad_db, 1.0);
+        let dist_good = Normal::new(0.0f32, sigma_good).unwrap();
+        let dist_bad = Normal::new(0.0f32, sigma_bad).unwrap();
         let uniform = Uniform::new(0.0f32, 1.0);
         (0..length)
             .map(|_| {
@@ -79,8 +87,11 @@ impl ChannelModel for GilbertElliottChannel {
                 } else if u < self.config.p_gb {
                     self.in_bad = true;
                 }
-                let sigma = if self.in_bad { sigma_bad } else { sigma_good };
-                Normal::new(0.0f32, sigma).unwrap().sample(&mut self.rng)
+                if self.in_bad {
+                    dist_bad.sample(&mut self.rng)
+                } else {
+                    dist_good.sample(&mut self.rng)
+                }
             })
             .collect()
     }
@@ -98,14 +109,15 @@ mod tests {
     #[test]
     fn moderate_burst_mean_within_10_percent() {
         let cfg = GilbertElliottConfig::moderate(Some(42));
-        let expected_mean = 1.0 / cfg.p_bg; // = 20.0
+        let expected_mean = 1.0 / cfg.p_bg;
+        let p_gb = cfg.p_gb;
+        let p_bg = cfg.p_bg;
         let _ch = GilbertElliottChannel::new(cfg).unwrap();
 
         let n = 100_000usize;
         let uniform = rand_distr::Uniform::new(0.0f32, 1.0);
         use rand::SeedableRng;
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        // Re-run just the state machine to count burst lengths.
         let mut in_bad = false;
         let mut burst_start: Option<usize> = None;
         let mut burst_lengths: Vec<usize> = Vec::new();
@@ -114,8 +126,8 @@ mod tests {
             let u = rand_distr::Distribution::sample(&uniform, &mut rng);
             let was_bad = in_bad;
             if in_bad {
-                if u < 0.05 { in_bad = false; }
-            } else if u < 0.02 {
+                if u < p_bg { in_bad = false; }
+            } else if u < p_gb {
                 in_bad = true;
             }
             match (was_bad, in_bad) {

@@ -14,6 +14,11 @@ impl QsbChannel {
         if config.sample_rate == 0 {
             return Err(ChannelError::InvalidParameter("sample_rate must be > 0".into()));
         }
+        if !config.fade_rate_hz.is_finite() || config.fade_rate_hz < 0.0 {
+            return Err(ChannelError::InvalidParameter(
+                "fade_rate_hz must be a non-negative finite value".into(),
+            ));
+        }
         if !(0.0..=1.0).contains(&config.fade_depth) {
             return Err(ChannelError::InvalidParameter(
                 "fade_depth must be in [0, 1]".into(),
@@ -85,5 +90,15 @@ mod tests {
         for (a, b) in out.iter().zip(input.iter()) {
             assert!((a - b).abs() < 1e-5, "expected passthrough with fade_depth=1");
         }
+    }
+
+    #[test]
+    fn rejects_infinite_fade_rate() {
+        assert!(QsbChannel::new(QsbConfig {
+            fade_rate_hz: f32::INFINITY,
+            fade_depth: 0.5,
+            sample_rate: 8000,
+        })
+        .is_err());
     }
 }

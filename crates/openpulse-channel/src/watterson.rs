@@ -48,6 +48,14 @@ impl WattersonChannel {
                 "doppler_spread_hz must be a non-negative finite value".into(),
             ));
         }
+        if !config.snr_db.is_finite() {
+            return Err(ChannelError::InvalidParameter("snr_db must be finite".into()));
+        }
+        if !config.delay_spread_ms.is_finite() || config.delay_spread_ms < 0.0 {
+            return Err(ChannelError::InvalidParameter(
+                "delay_spread_ms must be a non-negative finite value".into(),
+            ));
+        }
         if config.sample_rate == 0 {
             return Err(ChannelError::InvalidParameter("sample_rate must be > 0".into()));
         }

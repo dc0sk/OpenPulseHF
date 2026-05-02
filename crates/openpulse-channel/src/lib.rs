@@ -153,6 +153,8 @@ pub struct QrnConfig {
     pub impulse_amplitude_ratio: f32,
     /// Maximum spike duration in samples.
     pub max_spike_duration_samples: u8,
+    /// Audio sample rate — must match the modem pipeline (8000 Hz).
+    pub sample_rate: u32,
     /// RNG seed. `None` draws from thread entropy.
     pub seed: Option<u64>,
 }
