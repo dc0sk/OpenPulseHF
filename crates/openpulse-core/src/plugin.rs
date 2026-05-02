@@ -76,6 +76,14 @@ pub trait ModulationPlugin: Send + Sync {
             .iter()
             .any(|m| m.eq_ignore_ascii_case(mode))
     }
+
+    /// Estimate the carrier frequency offset in Hz from the given samples.
+    ///
+    /// Returns `None` if the plugin does not support AFC or the buffer is too
+    /// short.  The default implementation returns `None`.
+    fn estimate_afc_hz(&self, _samples: &[f32], _config: &ModulationConfig) -> Option<f32> {
+        None
+    }
 }
 
 // ── Plugin registry ───────────────────────────────────────────────────────────

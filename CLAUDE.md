@@ -101,9 +101,12 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 
 ### Remaining 1.5 integration items
 
-**1.5a — AFC loop in BPSK demodulator**
-- Add frequency-offset tracking (±50 Hz) to the BPSK demodulator in `plugins/bpsk`
-- Expose estimated offset in session diagnostics
+**1.5a — AFC loop in BPSK demodulator** ✅ Done
+- `estimate_frequency_offset()` in `plugins/bpsk/src/demodulate.rs` — IQ-squaring estimator
+- `afc_estimate_hz()` — pure function, called via `ModulationPlugin::estimate_afc_hz()` default override in BPSK plugin
+- `ModemEngine::last_afc_offset_hz()` — getter updated after every receive call
+- `SessionDiagnostics::afc_offset_hz` — `Option<f32>` field, ready for CLI to populate
+- Tracking range: ±baud_rate/4 (BPSK250: ±62.5 Hz; BPSK31: ±7.8 Hz)
 
 **1.5b — PTT CLI wiring**
 - Add `--ptt <none|rts|dtr|vox|rigctld>` and `--rig <address:port>` options to `openpulse-cli`
