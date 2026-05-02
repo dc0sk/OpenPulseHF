@@ -6,6 +6,7 @@
 
 pub mod ack;
 pub mod audio;
+pub mod dcd;
 pub mod error;
 pub mod fec;
 pub mod frame;
@@ -24,6 +25,7 @@ pub mod trust;
 
 pub use ack::*;
 pub use audio::*;
+pub use dcd::*;
 pub use error::*;
 pub use fec::*;
 pub use frame::*;

@@ -114,7 +114,7 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 - `serial` feature added to `openpulse-cli` propagates to `openpulse-radio/serial`
 - Integration tests: `ptt_wiring_integration.rs` — none/default/unknown-backend cases
 
-### Phase 2 — ✅ Partial (2.1, 2.2, 2.3 complete)
+### Phase 2 — ✅ Partial (2.1, 2.2, 2.3, 2.4 complete)
 
 **2.1 — ACK taxonomy and rate adaptation** ✅ Done
 - `crates/openpulse-core/src/ack.rs`: `AckType` (8 variants, `#[repr(u8)]`), `AckFrame` (5-byte codec with CRC-8/SMBUS and FNV-1a session hash), `AckError`
@@ -147,6 +147,13 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 - `crates/openpulse-core/src/manifest.rs`: `TransferManifest` with SHA-256 payload hash, sender ID, Ed25519 signature; `verify_manifest()` and `TransferManifest::sign()`
 - Integration tests: `crates/openpulse-core/tests/handshake_integration.rs` (12 tests); `crates/openpulse-core/tests/manifest_integration.rs` (6 tests)
   - Tests cover: happy path, tampered signature, revoked key, session ID mismatch, no mutual mode, full round-trip
+
+**2.4 — DCD and CSMA channel access** ✅ Done
+- `crates/openpulse-core/src/dcd.rs`: `DcdState` struct — RMS energy threshold, configurable hold window (default 100 ms at 8 kHz), `update(samples)`, `is_busy()`, `energy()`, `force_busy()`
+- `crates/openpulse-core/src/error.rs`: added `ModemError::ChannelBusy` variant
+- `crates/openpulse-modem/src/engine.rs`: DCD update wired into `receive()` after sample capture; 0.3-persistence CSMA check in `stage_emit_output()` (applies to all transmit paths); `enable_csma()`, `disable_csma()`, `is_channel_busy()`, `dcd_energy()` public API; `rand 0.8` added to `[dependencies]`
+- Integration tests: `crates/openpulse-modem/tests/csma_loopback.rs` (4 tests)
+  - DCD detects energy from received signal; CSMA blocks on busy channel; disabled CSMA ignores DCD; two-station deferral scenario
 
 ---
 

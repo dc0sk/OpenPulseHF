@@ -172,7 +172,24 @@ At session teardown, the sender emits a `TransferManifest` with:
 
 The receiver verifies the signature with `verify_manifest()` and also checks that `payload_hash` matches the locally-computed hash of the received data. A mismatch fires `HpxEvent::TransferError` → `HpxReasonCode::ManifestVerificationFailed`.
 
-## Frame format
+## DCD and CSMA channel access (Phase 2.4)
+
+### Data Carrier Detect (DCD)
+
+`DcdState` (`openpulse-core::dcd`) computes the RMS energy of each incoming sample batch and marks the channel busy when energy exceeds a configurable threshold.  A hold window (default 100 ms at 8 kHz = 800 samples) keeps the busy flag set for a short period after the last detection to debounce inter-symbol gaps.
+
+`ModemEngine::receive()` calls `DcdState::update()` after every capture, so the engine always has a current energy estimate.  Callers can poll `engine.is_channel_busy()` or inspect `engine.dcd_energy()`.
+
+### 0.3-persistence CSMA
+
+When enabled via `engine.enable_csma()`, the engine applies 0.3-persistence CSMA before every audio emission (`stage_emit_output`):
+
+1. If DCD reports channel busy → return `ModemError::ChannelBusy` immediately.
+2. If channel is clear → draw a uniform random value in [0, 1).  If value ≥ 0.3 → defer (`ModemError::ChannelBusy`).  Otherwise → transmit.
+
+The caller is responsible for backing off and retrying on `ChannelBusy`.  CSMA is off by default; it is appropriate for broadcast and relay channel access modes where multiple stations share a frequency.
+
+
 
 OpenPulseHF frames follow this logical layout:
 
