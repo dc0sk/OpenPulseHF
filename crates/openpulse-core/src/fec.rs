@@ -90,7 +90,7 @@ impl FecCodec {
     /// - A block has more than `ECC_LEN / 2 = 16` byte errors.
     /// - The embedded length prefix is inconsistent with decoded content.
     pub fn decode(&self, data: &[u8]) -> Result<Vec<u8>, ModemError> {
-        if data.is_empty() || data.len() % BLOCK_TOTAL != 0 {
+        if data.is_empty() || !data.len().is_multiple_of(BLOCK_TOTAL) {
             return Err(ModemError::Fec(format!(
                 "FEC data length {} is not a non-zero multiple of {BLOCK_TOTAL}",
                 data.len()
@@ -131,6 +131,85 @@ impl FecCodec {
 impl Default for FecCodec {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ── Block interleaver ─────────────────────────────────────────────────────────
+
+/// Gilbert-Elliott moderate-burst profile mean burst length (symbols).
+const BURST_DURATION_SYMBOLS: usize = 20;
+
+/// Default interleaver depth: 5 × the expected maximum burst duration in symbols.
+///
+/// At the Gilbert-Elliott moderate-burst profile (mean 20 symbols) this gives
+/// depth 100. With 10 RS blocks of encoded data (2550 bytes), a burst of 100
+/// distributes ≤ ⌈100×255/2550⌉ ≈ 10 errors per block — within the 16-byte
+/// RS correction capacity.
+///
+/// When pairing with a convolutional code of constraint length `k`, depth must
+/// be ≥ 2(k−1) to ensure burst fragments span distinct code constraint windows.
+pub const DEFAULT_INTERLEAVER_DEPTH: usize = 5 * BURST_DURATION_SYMBOLS;
+
+/// Stride-based block interleaver for burst-error dispersion.
+///
+/// Converts a burst of ≤ `depth` consecutive channel byte errors into at most
+/// one error per `depth`-byte stride across the original data, enabling RS to
+/// correct bursts that would otherwise overwhelm a single 255-byte block.
+///
+/// # Algorithm
+///
+/// Derived from the PACTOR-4 stride interleaver: output position `i` draws from
+/// source position `P`, advanced by `depth` each step and reset to a sequential
+/// fill pointer when it wraps past `n`.  The inverse (deinterleave) uses the
+/// same permutation in reverse.
+pub struct Interleaver {
+    depth: usize,
+}
+
+impl Interleaver {
+    /// Create an interleaver with the given stride depth.
+    pub fn new(depth: usize) -> Self {
+        assert!(depth > 0, "interleaver depth must be > 0");
+        Self { depth }
+    }
+
+    /// Create an interleaver with [`DEFAULT_INTERLEAVER_DEPTH`].
+    pub fn default_depth() -> Self {
+        Self::new(DEFAULT_INTERLEAVER_DEPTH)
+    }
+
+    /// Build the forward permutation: `perm[i]` is the source index in the
+    /// original buffer for output position `i`.
+    fn permutation(n: usize, depth: usize) -> Vec<usize> {
+        let mut perm = Vec::with_capacity(n);
+        let mut p = 0usize;
+        let mut s = 1usize;
+        for _ in 0..n {
+            perm.push(p);
+            p += depth;
+            if p >= n {
+                p = s;
+                s += 1;
+            }
+        }
+        perm
+    }
+
+    /// Interleave `data` for transmission: stride-separates originally adjacent
+    /// bytes so channel bursts hit widely-spaced positions in the original.
+    pub fn interleave(&self, data: &[u8]) -> Vec<u8> {
+        let perm = Self::permutation(data.len(), self.depth);
+        perm.iter().map(|&src| data[src]).collect()
+    }
+
+    /// Invert the interleave permutation to restore original byte order.
+    pub fn deinterleave(&self, data: &[u8]) -> Vec<u8> {
+        let perm = Self::permutation(data.len(), self.depth);
+        let mut out = vec![0u8; data.len()];
+        for (i, &src) in perm.iter().enumerate() {
+            out[src] = data[i];
+        }
+        out
     }
 }
 
@@ -224,5 +303,57 @@ mod tests {
         let codec = FecCodec::new();
         assert!(codec.decode(&[0u8; 100]).is_err());
         assert!(codec.decode(&[]).is_err());
+    }
+
+    // ── Interleaver tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn interleaver_round_trip() {
+        let il = Interleaver::new(DEFAULT_INTERLEAVER_DEPTH);
+        let data: Vec<u8> = (0..255).collect();
+        assert_eq!(il.deinterleave(&il.interleave(&data)), data);
+    }
+
+    #[test]
+    fn interleaver_round_trip_non_multiple() {
+        let il = Interleaver::new(DEFAULT_INTERLEAVER_DEPTH);
+        let data: Vec<u8> = (0u16..300).map(|v| (v & 0xFF) as u8).collect();
+        assert_eq!(il.deinterleave(&il.interleave(&data)), data);
+    }
+
+    #[test]
+    fn interleaver_changes_order() {
+        let il = Interleaver::new(7);
+        let data: Vec<u8> = (0..20).collect();
+        let interleaved = il.interleave(&data);
+        // Depth 7 on 20 bytes must actually reorder bytes.
+        assert_ne!(interleaved, data);
+        // And round-trips correctly.
+        assert_eq!(il.deinterleave(&interleaved), data);
+    }
+
+    #[test]
+    fn burst_correctable_through_fec_and_interleaver() {
+        let codec = FecCodec::new();
+        let il = Interleaver::new(DEFAULT_INTERLEAVER_DEPTH);
+        // 10 RS blocks of encoded data (2550 bytes) ensures a burst of
+        // DEFAULT_INTERLEAVER_DEPTH bytes distributes ≤ ⌈100×255/2550⌉ ≈ 10 errors
+        // per block — within the 16-byte RS correction capacity.
+        let payload: Vec<u8> = (0..2190u16).map(|v| (v & 0xFF) as u8).collect();
+
+        let encoded = codec.encode(&payload);
+        assert_eq!(encoded.len(), 2550, "expected 10 RS blocks");
+        let interleaved = il.interleave(&encoded);
+
+        // Inject DEFAULT_INTERLEAVER_DEPTH consecutive byte errors starting at offset 10.
+        let mut corrupted = interleaved.clone();
+        let burst_start = 10;
+        for i in burst_start..burst_start + DEFAULT_INTERLEAVER_DEPTH {
+            corrupted[i] ^= 0xFF;
+        }
+
+        let deinterleaved = il.deinterleave(&corrupted);
+        let recovered = codec.decode(&deinterleaved).unwrap();
+        assert_eq!(recovered, payload);
     }
 }
