@@ -63,7 +63,7 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 
 ## Current phase and execution order
 
-**Active phase: Phase 1 — Protocol Foundation.** See `docs/roadmap.md` for the full gate criteria.
+**Active phase: Phase 2 — ACK Taxonomy and Rate Adaptation.** See `docs/roadmap.md` for the full gate criteria.
 
 Execute Phase 1 tasks in this order. Tasks within the same group are independent and may be parallelised.
 
@@ -113,6 +113,18 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 - `commands/transmit.rs`: wraps transmit with PTT assert/release (release guaranteed on TX error)
 - `serial` feature added to `openpulse-cli` propagates to `openpulse-radio/serial`
 - Integration tests: `ptt_wiring_integration.rs` — none/default/unknown-backend cases
+
+### Phase 2 — ✅ Partial (2.1 complete)
+
+**2.1 — ACK taxonomy and rate adaptation** ✅ Done
+- `crates/openpulse-core/src/ack.rs`: `AckType` (8 variants, `#[repr(u8)]`), `AckFrame` (5-byte codec with CRC-8/SMBUS and FNV-1a session hash), `AckError`
+- `crates/openpulse-core/src/rate.rs`: `SpeedLevel` (SL1–SL11), `RateEvent`, `RateAdapter::apply_ack()` state machine
+  - ACK-DOWN floors at SL2; SL1 only reachable via 3 consecutive NACKs at SL2 (ChirpFallback)
+  - 3 consecutive NACKs at SL3+ → NackDecrement; nack_threshold configurable (default 3)
+- `plugins/fsk4/`: `Fsk4Plugin` implementing `ModulationPlugin` for mode `"FSK4-ACK"`
+  - 4 tones at fc±50 Hz and fc±150 Hz (default fc=1050 Hz), 100 baud, Hann-windowed, Goertzel demodulator
+  - 5 bytes = 20 symbols = 200 ms at 8 kHz
+- Integration tests: `crates/openpulse-core/tests/rate_adaptation.rs` (11 tests); FSK4 loopback in `plugins/fsk4/src/lib.rs` (3 tests)
 
 ---
 

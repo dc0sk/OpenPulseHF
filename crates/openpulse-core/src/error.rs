@@ -44,6 +44,16 @@ pub enum PluginError {
     Other(String),
 }
 
+/// Errors produced by the ACK frame codec.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum AckError {
+    #[error("invalid ACK type byte {0:#04x}")]
+    InvalidAckType(u8),
+
+    #[error("CRC mismatch: expected {expected:#04x}, got {got:#04x}")]
+    CrcMismatch { expected: u8, got: u8 },
+}
+
 /// Errors produced by the SAR sub-layer.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SarError {

@@ -1,0 +1,8 @@
+[advisories]
+# RUSTSEC-2023-0071: Marvin timing attack in rsa 0.9.x via sqlx-mysql.
+# No fixed version available upstream; rsa is a transitive dep of sqlx.
+# Not exploitable in our use case (no RSA private-key operations at runtime).
+ignore = [
+    "RUSTSEC-2023-0071",
+    "RUSTSEC-2024-0436",  # paste crate unmaintained; transitive via wgpu/metal
+]

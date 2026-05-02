@@ -3,4 +3,6 @@ set -euo pipefail
 
 cargo check --workspace --no-default-features
 cargo test --workspace --no-default-features
-cargo audit
+# RUSTSEC-2023-0071: rsa Marvin attack via sqlx-mysql — no fix available upstream
+# RUSTSEC-2024-0436: paste crate unmaintained — transitive via wgpu/metal
+cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0436
