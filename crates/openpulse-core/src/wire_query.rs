@@ -23,13 +23,25 @@ pub enum WireQueryError {
 pub enum WireMsgType {
     PeerQueryRequest = 0x01,
     PeerQueryResponse = 0x02,
+    RouteDiscoveryRequest = 0x03,
+    RouteDiscoveryResponse = 0x04,
+    RelayDataChunk = 0x05,
+    RelayHopAck = 0x06,
+    RelayRouteUpdate = 0x07,
+    RelayRouteReject = 0x08,
 }
 
 impl WireMsgType {
-    fn from_u8(v: u8) -> Option<Self> {
+    pub fn from_u8(v: u8) -> Option<Self> {
         match v {
             0x01 => Some(Self::PeerQueryRequest),
             0x02 => Some(Self::PeerQueryResponse),
+            0x03 => Some(Self::RouteDiscoveryRequest),
+            0x04 => Some(Self::RouteDiscoveryResponse),
+            0x05 => Some(Self::RelayDataChunk),
+            0x06 => Some(Self::RelayHopAck),
+            0x07 => Some(Self::RelayRouteUpdate),
+            0x08 => Some(Self::RelayRouteReject),
             _ => None,
         }
     }
@@ -276,6 +288,151 @@ impl PeerQueryResponse {
             results.push(result);
         }
         Ok(Self { query_id, results })
+    }
+}
+
+// ------------------------------------------------------------------
+// relay_data_chunk payload (msg_type 0x05)
+// ------------------------------------------------------------------
+
+/// Payload for msg_type 0x05 — relay_data_chunk.
+///
+/// Fixed header: transfer_id(8) | chunk_seq(4) | total_chunks(4) |
+///               chunk_len(2) | chunk_hash(32) | e2e_manifest_hash(32) = 82 bytes,
+/// then variable: chunk_signature (u16-prefixed) + chunk_data (remainder).
+///
+/// Relays must not mutate `chunk_hash`, `e2e_manifest_hash`, or `chunk_signature`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayDataChunk {
+    pub transfer_id: u64,
+    pub chunk_seq: u32,
+    pub total_chunks: u32,
+    pub chunk_hash: [u8; 32],
+    pub e2e_manifest_hash: [u8; 32],
+    pub chunk_signature: Vec<u8>,
+    pub chunk_data: Vec<u8>,
+}
+
+impl RelayDataChunk {
+    pub fn encode(&self) -> Result<Vec<u8>, WireQueryError> {
+        let sig_len = self.chunk_signature.len();
+        let data_len = self.chunk_data.len();
+        if sig_len > u16::MAX as usize || data_len > u16::MAX as usize {
+            return Err(WireQueryError::PayloadTooLong);
+        }
+        let mut buf = Vec::with_capacity(82 + 2 + sig_len + 2 + data_len);
+        buf.extend_from_slice(&self.transfer_id.to_be_bytes());
+        buf.extend_from_slice(&self.chunk_seq.to_be_bytes());
+        buf.extend_from_slice(&self.total_chunks.to_be_bytes());
+        buf.extend_from_slice(&(data_len as u16).to_be_bytes());
+        buf.extend_from_slice(&self.chunk_hash);
+        buf.extend_from_slice(&self.e2e_manifest_hash);
+        buf.extend_from_slice(&(sig_len as u16).to_be_bytes());
+        buf.extend_from_slice(&self.chunk_signature);
+        buf.extend_from_slice(&self.chunk_data);
+        Ok(buf)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireQueryError> {
+        // Fixed: 8+4+4+2+32+32 = 82 bytes before sig_len
+        if bytes.len() < 84 {
+            return Err(WireQueryError::MalformedPayload);
+        }
+        let transfer_id = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
+        let chunk_seq = u32::from_be_bytes(bytes[8..12].try_into().unwrap());
+        let total_chunks = u32::from_be_bytes(bytes[12..16].try_into().unwrap());
+        let chunk_len = u16::from_be_bytes([bytes[16], bytes[17]]) as usize;
+        let chunk_hash: [u8; 32] = bytes[18..50].try_into().unwrap();
+        let e2e_manifest_hash: [u8; 32] = bytes[50..82].try_into().unwrap();
+        let sig_len = u16::from_be_bytes([bytes[82], bytes[83]]) as usize;
+        let sig_end = 84 + sig_len;
+        if bytes.len() < sig_end + chunk_len {
+            return Err(WireQueryError::MalformedPayload);
+        }
+        let chunk_signature = bytes[84..sig_end].to_vec();
+        let chunk_data = bytes[sig_end..sig_end + chunk_len].to_vec();
+        Ok(Self {
+            transfer_id,
+            chunk_seq,
+            total_chunks,
+            chunk_hash,
+            e2e_manifest_hash,
+            chunk_signature,
+            chunk_data,
+        })
+    }
+}
+
+// ------------------------------------------------------------------
+// relay_hop_ack payload (msg_type 0x06)
+// ------------------------------------------------------------------
+
+/// ACK status codes for `RelayHopAck`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum AckStatus {
+    Ok = 0x00,
+    Retry = 0x01,
+    Reject = 0x02,
+}
+
+impl AckStatus {
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0x00 => Some(Self::Ok),
+            0x01 => Some(Self::Retry),
+            0x02 => Some(Self::Reject),
+            _ => None,
+        }
+    }
+}
+
+/// Payload for msg_type 0x06 — relay_hop_ack.
+///
+/// Fixed: transfer_id(8) | chunk_seq(4) | hop_peer_id(32) |
+///        ack_status(1) | retry_after_ms(2) | reason_code(2) = 49 bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayHopAck {
+    pub transfer_id: u64,
+    pub chunk_seq: u32,
+    pub hop_peer_id: [u8; 32],
+    pub ack_status: AckStatus,
+    pub retry_after_ms: u16,
+    pub reason_code: u16,
+}
+
+impl RelayHopAck {
+    pub const SIZE: usize = 49;
+
+    pub fn encode(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(Self::SIZE);
+        buf.extend_from_slice(&self.transfer_id.to_be_bytes());
+        buf.extend_from_slice(&self.chunk_seq.to_be_bytes());
+        buf.extend_from_slice(&self.hop_peer_id);
+        buf.push(self.ack_status as u8);
+        buf.extend_from_slice(&self.retry_after_ms.to_be_bytes());
+        buf.extend_from_slice(&self.reason_code.to_be_bytes());
+        buf
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireQueryError> {
+        if bytes.len() < Self::SIZE {
+            return Err(WireQueryError::MalformedPayload);
+        }
+        let transfer_id = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
+        let chunk_seq = u32::from_be_bytes(bytes[8..12].try_into().unwrap());
+        let hop_peer_id: [u8; 32] = bytes[12..44].try_into().unwrap();
+        let ack_status = AckStatus::from_u8(bytes[44]).ok_or(WireQueryError::MalformedPayload)?;
+        let retry_after_ms = u16::from_be_bytes([bytes[45], bytes[46]]);
+        let reason_code = u16::from_be_bytes([bytes[47], bytes[48]]);
+        Ok(Self {
+            transfer_id,
+            chunk_seq,
+            hop_peer_id,
+            ack_status,
+            retry_after_ms,
+            reason_code,
+        })
     }
 }
 

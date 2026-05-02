@@ -321,6 +321,39 @@ Fixed header: 104 bytes.  Fixed auth_tag: 16 bytes.  Total minimum: 120 bytes.
 - Relay layer enforces loop prevention, replay protection, and hop-limited forwarding.
 - Wire-level relay and query envelopes are defined in docs/peer-query-relay-wire.md.
 
+## Multi-hop relay forwarding (Phase 2.6)
+
+### Trust-weighted path scoring
+
+`score_route(route, cache)` computes a bottleneck (minimum) composite score across intermediate relay hops.  Each hop score is `trust_weight × route_quality` where `trust_weight` maps `TrustLevel` to: Verified=4, PskVerified=3, Unknown=2, Reduced=1.  Direct routes (no intermediate hops) receive `u32::MAX` so they are never penalized.  `select_best_scored_route` picks the highest-scoring valid candidate; ties broken by shorter path.
+
+### RelayForwarder
+
+`RelayForwarder` (`openpulse-core::relay`) is a stateful relay node that processes one `WireEnvelope` per call:
+
+1. **Hop-limit enforcement** — if `hop_index >= hop_limit` the envelope is dropped and `RelayForwardError::HopLimitExceeded` returned.
+2. **Duplicate suppression** — `(session_id, nonce)` is checked against a TTL-keyed map; replayed envelopes return `RelayForwardError::DuplicateDetected`.
+3. **Trust policy** — `src_peer_id` (hex-encoded) is checked against `RelayTrustPolicy::denied_relays`; denied originators return `RelayForwardError::PolicyRejected`.
+
+On success the returned envelope has `hop_index` incremented by one, ready for forwarding to the next hop.  Expired replay-suppression entries are evicted at each `forward()` call.
+
+### Relay observability events
+
+`RelayForwarder::drain_events()` returns buffered `RelayEvent` values since the last drain:
+
+| Variant | Emitted when |
+|---------|-------------|
+| `Forwarded { session_id, hop_index_out, hop_limit }` | Envelope successfully forwarded |
+| `HopLimitExceeded { session_id, hop_index }` | Hop budget exhausted |
+| `DuplicateSuppressed { session_id, nonce }` | Replay detected |
+| `PolicyRejected { session_id, src_peer_id }` | Originator denied by trust policy |
+
+### Relay wire payloads
+
+`RelayDataChunk` (msg_type 0x05, `WireEnvelope` payload): 82-byte fixed header carrying `transfer_id`, `chunk_seq`, `total_chunks`, `chunk_hash` (SHA-256), `e2e_manifest_hash` (SHA-256), `sig_len`; followed by variable-length `chunk_signature` and `chunk_data`.
+
+`RelayHopAck` (msg_type 0x06, 49 bytes fixed): `transfer_id` (u64), `chunk_seq` (u32), `hop_peer_id` (32 bytes), `ack_status` (`Ok`/`Retry`/`Reject`), `retry_after_ms` (u16), `reason_code` (u16).
+
 ## Radio interface architecture
 
 The radio interface layer sits between the audio backend and the physical transceiver.

@@ -78,6 +78,11 @@ impl PeerCache {
         self.entries.get(peer_id)
     }
 
+    /// Read-only lookup that does not update LRU or evict expired entries.
+    pub fn peek(&self, peer_id: &str) -> Option<&PeerRecord> {
+        self.entries.get(peer_id)
+    }
+
     /// Return up to `max_results` live peers matching the given filters.
     ///
     /// `capability_mask`: if non-zero, a peer must have all bits set.
