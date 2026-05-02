@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/cli-guide.md
 status: living
-last_updated: 2026-05-03
+last_updated: 2026-05-02
 ---
 
 # CLI Guide - openpulse (v0.1.0)
@@ -99,6 +99,12 @@ Notes:
 - --mode <MODE>: select a registered modulation mode.
 - --pki-url <URL>: PKI service base URL (default: http://localhost:8080).
 - --log <LEVEL>: log level (error, warn, info, debug, trace).
+- --ptt <none|rts|dtr|vox|rigctld>: PTT control method (default: none).
+  - none: no PTT (loopback, testing)
+  - rts / dtr: assert serial RTS or DTR line; --rig specifies the serial port (e.g. /dev/ttyUSB0). Requires the `serial` feature.
+  - vox: software-state only (no external line driven; useful for VOX-enabled rigs)
+  - rigctld: TCP connection to hamlib rigctld; --rig specifies address:port (default: localhost:4532)
+- --rig <path|address:port>: serial port path for rts/dtr PTT, or rigctld address:port.
 - --help: show full command and flag reference.
 
 Output format options (available on most commands):
@@ -108,8 +114,6 @@ Output format options (available on most commands):
 - --no-color: suppress terminal colour codes.
 
 Planned options (not yet implemented):
-- --ptt <none|rts|dtr|vox|rigctld>: select PTT control method.
-- --rig <address:port>: rigctld daemon address for CAT PTT control.
 - --signing-key <key-id>: select local signing identity.
 - --trust-store <path>: override default trust-store location.
 - --require-signatures: fail transfer if required signatures are missing.

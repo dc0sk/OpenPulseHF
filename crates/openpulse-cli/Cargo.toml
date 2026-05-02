@@ -14,11 +14,13 @@ path = "src/main.rs"
 [features]
 default      = ["cpal-backend"]
 cpal-backend = ["openpulse-audio/cpal-backend"]
+serial       = ["openpulse-radio/serial"]
 
 [dependencies]
 openpulse-core  = { workspace = true }
 openpulse-audio = { workspace = true }
 openpulse-modem = { workspace = true }
+openpulse-radio = { workspace = true }
 bpsk-plugin     = { workspace = true }
 qpsk-plugin     = { workspace = true }
 anyhow             = { workspace = true }
