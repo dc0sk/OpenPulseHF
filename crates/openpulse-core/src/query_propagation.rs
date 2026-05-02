@@ -1,5 +1,8 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use crate::relay::RelayTrustPolicy;
+use crate::wire_query::{PeerQueryRequest, WireEnvelope, WireMsgType};
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct QueryKey {
     src_peer_id: String,
@@ -94,6 +97,140 @@ impl QueryPropagationTracker {
         self.query_lru.retain(|k| k != key);
         self.query_lru.push_back(key.clone());
     }
+}
+
+// ------------------------------------------------------------------
+// QueryForwarder
+// ------------------------------------------------------------------
+
+/// Errors returned by `QueryForwarder::propagate`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueryForwardError {
+    HopLimitExceeded { hop_index: u8, hop_limit: u8 },
+    DuplicateDetected,
+    PolicyRejected { src_peer_id: [u8; 32] },
+    MsgTypeNotQuery { got: u8 },
+}
+
+/// Events emitted by `QueryForwarder` for structured logging.
+#[derive(Debug, Clone)]
+pub enum QueryEvent {
+    Propagated {
+        query_id: u64,
+        hop_index_out: u8,
+        hop_limit: u8,
+    },
+    HopLimitReached {
+        query_id: u64,
+        hop_index: u8,
+    },
+    DuplicateSuppressed {
+        query_id: u64,
+    },
+    PolicyRejected {
+        query_id: u64,
+        src_peer_id: [u8; 32],
+    },
+}
+
+/// Stateful query propagation node with hop limiting, duplicate suppression,
+/// and trust-policy enforcement.
+///
+/// Mirrors `RelayForwarder` but operates on `PeerQueryRequest` envelopes
+/// (msg_type 0x01).  On success the returned envelope has `hop_index`
+/// incremented by one, ready to be broadcast to neighbouring peers.
+#[derive(Debug, Clone)]
+pub struct QueryForwarder {
+    tracker: QueryPropagationTracker,
+    policy: RelayTrustPolicy,
+    events: Vec<QueryEvent>,
+}
+
+impl QueryForwarder {
+    pub fn new(ttl_ms: u64, capacity: usize, policy: RelayTrustPolicy) -> Self {
+        Self {
+            tracker: QueryPropagationTracker::new(ttl_ms, capacity),
+            policy,
+            events: Vec::new(),
+        }
+    }
+
+    /// Process one `PeerQueryRequest` envelope for network propagation.
+    ///
+    /// Returns the modified envelope (hop_index incremented) on success.
+    /// The caller is responsible for broadcasting it to neighbouring peers.
+    pub fn propagate(
+        &mut self,
+        envelope: &WireEnvelope,
+        now_ms: u64,
+    ) -> Result<WireEnvelope, QueryForwardError> {
+        // 1. Must be a peer query request
+        if envelope.msg_type != WireMsgType::PeerQueryRequest {
+            return Err(QueryForwardError::MsgTypeNotQuery {
+                got: envelope.msg_type as u8,
+            });
+        }
+
+        let query_id = PeerQueryRequest::decode(&envelope.payload)
+            .map(|r| r.query_id)
+            .unwrap_or(0);
+
+        // 2. Hop-limit enforcement
+        if envelope.hop_index >= envelope.hop_limit {
+            self.events.push(QueryEvent::HopLimitReached {
+                query_id,
+                hop_index: envelope.hop_index,
+            });
+            return Err(QueryForwardError::HopLimitExceeded {
+                hop_index: envelope.hop_index,
+                hop_limit: envelope.hop_limit,
+            });
+        }
+
+        // 3. Trust policy — check originating peer
+        let src_hex = hex_peer_id(&envelope.src_peer_id);
+        if !self.policy.allows(&src_hex) {
+            self.events.push(QueryEvent::PolicyRejected {
+                query_id,
+                src_peer_id: envelope.src_peer_id,
+            });
+            return Err(QueryForwardError::PolicyRejected {
+                src_peer_id: envelope.src_peer_id,
+            });
+        }
+
+        // 4. Duplicate suppression
+        if !self
+            .tracker
+            .should_forward_query(&src_hex, query_id, now_ms)
+        {
+            self.events
+                .push(QueryEvent::DuplicateSuppressed { query_id });
+            return Err(QueryForwardError::DuplicateDetected);
+        }
+
+        let mut out = envelope.clone();
+        out.hop_index += 1;
+        self.events.push(QueryEvent::Propagated {
+            query_id,
+            hop_index_out: out.hop_index,
+            hop_limit: out.hop_limit,
+        });
+        Ok(out)
+    }
+
+    /// Drain and return all buffered query events since the last call.
+    pub fn drain_events(&mut self) -> Vec<QueryEvent> {
+        std::mem::take(&mut self.events)
+    }
+}
+
+fn hex_peer_id(id: &[u8; 32]) -> String {
+    id.iter().fold(String::with_capacity(64), |mut s, b| {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+        s
+    })
 }
 
 #[cfg(test)]
