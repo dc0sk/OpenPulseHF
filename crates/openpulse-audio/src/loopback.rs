@@ -39,6 +39,16 @@ impl LoopbackBackend {
             buf: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
+
+    /// Create a second [`LoopbackBackend`] that shares the same sample buffer.
+    ///
+    /// Audio written by one instance is immediately readable by the other,
+    /// enabling two-engine tests without real audio hardware.
+    pub fn clone_shared(&self) -> Self {
+        Self {
+            buf: Arc::clone(&self.buf),
+        }
+    }
 }
 
 impl AudioBackend for LoopbackBackend {

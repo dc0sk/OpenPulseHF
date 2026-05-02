@@ -12,6 +12,7 @@ openpulse-core  = { workspace = true }
 openpulse-audio = { workspace = true }
 bpsk-plugin     = { workspace = true }
 tracing         = { workspace = true }
+rand            = { workspace = true }
 serde           = { workspace = true, features = ["derive"] }
 serde_json      = { workspace = true }
 

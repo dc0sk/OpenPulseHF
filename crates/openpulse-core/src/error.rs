@@ -23,6 +23,9 @@ pub enum ModemError {
 
     #[error("FEC error: {0}")]
     Fec(String),
+
+    #[error("channel busy: CSMA deferred transmission")]
+    ChannelBusy,
 }
 
 /// Errors produced by the plugin layer.

@@ -1,9 +1,11 @@
 //! The core [`ModemEngine`] struct.
 
+use rand::Rng;
 use tracing::{debug, info};
 
 use openpulse_core::ack::AckType;
 use openpulse_core::audio::{AudioBackend, AudioConfig};
+use openpulse_core::dcd::DcdState;
 use openpulse_core::error::{ModemError, PluginError};
 use openpulse_core::fec::{FecCodec, Interleaver};
 use openpulse_core::frame::Frame;
@@ -56,6 +58,9 @@ pub struct ModemEngine {
     last_afc_offset_hz: Option<f32>,
     rate_adapter: Option<RateAdapter>,
     session_profile: Option<SessionProfile>,
+    dcd: DcdState,
+    csma_enabled: bool,
+    csma_persistence: f32,
 }
 
 impl ModemEngine {
@@ -72,6 +77,9 @@ impl ModemEngine {
             last_afc_offset_hz: None,
             rate_adapter: None,
             session_profile: None,
+            dcd: DcdState::new(0.01, 800), // 100 ms hold at 8 kHz
+            csma_enabled: false,
+            csma_persistence: 0.3,
         }
     }
 
@@ -90,6 +98,49 @@ impl ModemEngine {
     /// if the active plugin does not support AFC.
     pub fn last_afc_offset_hz(&self) -> Option<f32> {
         self.last_afc_offset_hz
+    }
+
+    /// Enable 0.3-persistence CSMA channel access control.
+    ///
+    /// When enabled, [`transmit`](Self::transmit) checks the DCD state before
+    /// emitting audio.  If the channel is busy, or if the random p-persistence
+    /// draw fails (70% of the time on a clear channel), it returns
+    /// [`ModemError::ChannelBusy`] and the caller should back off and retry.
+    pub fn enable_csma(&mut self) {
+        self.csma_enabled = true;
+    }
+
+    /// Disable CSMA channel access control.
+    pub fn disable_csma(&mut self) {
+        self.csma_enabled = false;
+    }
+
+    /// Returns `true` if the DCD detector currently sees a busy channel.
+    pub fn is_channel_busy(&self) -> bool {
+        self.dcd.is_busy()
+    }
+
+    /// Returns the most recent DCD RMS energy estimate.
+    pub fn dcd_energy(&self) -> f32 {
+        self.dcd.energy()
+    }
+
+    /// Check CSMA policy and return `ChannelBusy` if the channel is occupied
+    /// or the p-persistence draw fails.  Called before encoding to avoid
+    /// burning sequence numbers on a deferred transmission.
+    fn csma_check(&self) -> Result<(), ModemError> {
+        if !self.csma_enabled {
+            return Ok(());
+        }
+        if self.dcd.is_busy() {
+            return Err(ModemError::ChannelBusy);
+        }
+        // 0.3-persistence: transmit only with 30% probability on a clear channel
+        let p: f32 = rand::thread_rng().gen();
+        if p >= self.csma_persistence {
+            return Err(ModemError::ChannelBusy);
+        }
+        Ok(())
     }
 
     /// Begin an adaptive-rate session using the given profile.
@@ -293,6 +344,9 @@ impl ModemEngine {
             }
         }
 
+        // CSMA check before encoding so a deferral does not burn a sequence number.
+        self.csma_check()?;
+
         let outbound = self.stage_encode_frame(data);
         let outbound = self.route_wire_stage(PipelineStage::EncodeModulate, outbound)?;
 
@@ -329,6 +383,8 @@ impl ModemEngine {
         let samples = self.stage_capture_input(device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
+        self.dcd.update(&samples.samples);
+
         info!("received {} audio samples", samples.samples.len());
 
         let wire = {
@@ -362,6 +418,8 @@ impl ModemEngine {
         mode: &str,
         device: Option<&str>,
     ) -> Result<(), ModemError> {
+        self.csma_check()?;
+
         let frame_wire = self.stage_encode_frame(data);
         let fec_bytes = FecCodec::new().encode(&frame_wire.bytes);
         let fec_wire = WirePayload { bytes: fec_bytes };
@@ -393,6 +451,8 @@ impl ModemEngine {
     ) -> Result<Vec<u8>, ModemError> {
         let samples = self.stage_capture_input(device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+
+        self.dcd.update(&samples.samples);
 
         let raw_wire = {
             let plugin = self
@@ -427,6 +487,8 @@ impl ModemEngine {
         device: Option<&str>,
         interleaver_depth: usize,
     ) -> Result<(), ModemError> {
+        self.csma_check()?;
+
         let frame_wire = self.stage_encode_frame(data);
         let fec_bytes = FecCodec::new().encode(&frame_wire.bytes);
         let interleaved = Interleaver::new(interleaver_depth).interleave(&fec_bytes);
@@ -454,6 +516,8 @@ impl ModemEngine {
     ) -> Result<Vec<u8>, ModemError> {
         let samples = self.stage_capture_input(device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+
+        self.dcd.update(&samples.samples);
 
         let raw_wire = {
             let plugin = self
@@ -507,6 +571,7 @@ impl ModemEngine {
         samples: &AudioSamples,
     ) -> Result<(), ModemError> {
         let _stage = PipelineStage::OutputEmit;
+
         let audio_cfg = AudioConfig::default();
         let mut stream = self
             .audio
