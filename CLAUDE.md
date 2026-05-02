@@ -114,7 +114,7 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 - `serial` feature added to `openpulse-cli` propagates to `openpulse-radio/serial`
 - Integration tests: `ptt_wiring_integration.rs` — none/default/unknown-backend cases
 
-### Phase 2 — ✅ Partial (2.1, 2.2 complete)
+### Phase 2 — ✅ Partial (2.1, 2.2, 2.3 complete)
 
 **2.1 — ACK taxonomy and rate adaptation** ✅ Done
 - `crates/openpulse-core/src/ack.rs`: `AckType` (8 variants, `#[repr(u8)]`), `AckFrame` (5-byte codec with CRC-8/SMBUS and FNV-1a session hash), `AckError`
@@ -136,6 +136,17 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
   - `SessionProfile::hpx2300()`: SL8=QPSK500, SL9=QPSK1000, SL11=8PSK1000; initial=SL8
 - `crates/openpulse-modem/src/engine.rs`: `start_adaptive_session()`, `apply_ack()`, `current_adaptive_mode()` wired to `RateAdapter`
 - Integration tests: `crates/openpulse-core/tests/session_profile.rs` (4 tests); `crates/openpulse-modem/tests/adaptive_profile_integration.rs` (8 tests); psk8 loopback (5 tests)
+
+**2.3 — Signed handshake and manifest verification** ✅ Done
+- `crates/openpulse-core/Cargo.toml`: added `ed25519-dalek 2.0` (signing/verification); `rand 0.8` in dev-deps
+- `crates/openpulse-core/src/handshake.rs`: `ConReq`, `ConAck` wire frames with Ed25519 sign/verify; `TrustStore` trait; `InMemoryTrustStore`; `verify_conreq()`, `verify_conack()`
+  - CONREQ: MAGIC "HSCQ" + VERSION + LENGTH + JSON; signature covers canonical JSON of body fields
+  - CONACK: MAGIC "HSAK" + VERSION + LENGTH + JSON; echoes CONREQ session_id; signature covers canonical JSON
+  - Trust evaluation wired to existing `evaluate_handshake()` / `classify_connection_trust()` in `trust.rs`
+  - Revoked key → `TrustError::RejectedTrustLevel`; no mutual mode → `TrustError::NoMutualSigningMode`
+- `crates/openpulse-core/src/manifest.rs`: `TransferManifest` with SHA-256 payload hash, sender ID, Ed25519 signature; `verify_manifest()` and `TransferManifest::sign()`
+- Integration tests: `crates/openpulse-core/tests/handshake_integration.rs` (12 tests); `crates/openpulse-core/tests/manifest_integration.rs` (6 tests)
+  - Tests cover: happy path, tampered signature, revoked key, session ID mismatch, no mutual mode, full round-trip
 
 ---
 
