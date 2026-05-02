@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: CLAUDE.md
 status: living
-last_updated: 2026-05-02
+last_updated: 2026-05-03
 ---
 
 # CLAUDE.md — OpenPulseHF Agent Contract
@@ -55,8 +55,8 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 | `bpsk-plugin` | `plugins/bpsk` | BPSK31/63/100/250 modulation plugin |
 | `qpsk-plugin` | `plugins/qpsk` | QPSK125/250/500 modulation plugin |
 | `pki-tooling` | `pki-tooling` | Key management, trust store, signing utilities |
-| `openpulse-channel` | `crates/openpulse-channel` | **Planned — Phase 1.4.** Channel simulation (Watterson, Gilbert-Elliott, QRN/QRM/QSB/Chirp). Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`. |
-| `openpulse-radio` | `crates/openpulse-radio` | **Planned — Phase 1.5.** `PttController` trait + serial RTS/DTR, VOX, rigctld backends. |
+| `openpulse-channel` | `crates/openpulse-channel` | Channel simulation (Watterson, Gilbert-Elliott, QRN/QRM/QSB/Chirp). Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`. |
+| `openpulse-radio` | `crates/openpulse-radio` | `PttController` trait + `NoOpPtt`, `SerialRtsDtrPtt`, `VoxPtt`, `RigctldPtt` backends. |
 | `openpulse-testbench` | `apps/openpulse-testbench` | **Planned — post Phase A.** egui GUI for testing. Full spec in `docs/testbench-design.md`. |
 
 ---
@@ -67,52 +67,30 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 
 Execute Phase 1 tasks in this order. Tasks within the same group are independent and may be parallelised.
 
-### Group 1 — immediate, no design decisions required
+### Group 1 — ✅ Complete
 
-**1.1a — Re-enable multi-platform CI**
-- File: `.github/workflows/ci.yml` line 23
-- Change: remove `if: false` from the `build-and-test` job
-- Verify: push a branch and confirm the Ubuntu and macOS jobs run and pass
-- Done when: both jobs are green and the `if: false` line is gone
+**1.1a — Re-enable multi-platform CI** ✅ Done (PR #67)
 
-**1.1b — Add block interleaver to `openpulse-core`** (Phase 1.3)
-- Add `Interleaver` struct to `crates/openpulse-core/src/fec.rs` alongside `FecCodec`
-- Algorithm: stride-based block interleaver from `docs/pactor-research.md` working conclusions
-- Default depth: 5 × (expected max burst duration in symbols) — document as a named constant, not a magic number
-- Pair depth rule: when used with a convolutional code of constraint length k, depth ≥ 2(k−1); document this in comments
-- Tests: round-trip interleave/deinterleave; verify that a burst of length ≤ depth symbols spread across FEC blocks stays correctable
-- Done when: `cargo test -p openpulse-core` passes and the interleaver depth is an explicit, documented parameter
+**1.1b — Add block interleaver to `openpulse-core`** ✅ Done (PR #68)
 
-**1.1c — Create `openpulse-channel` crate scaffold** (Phase 1.4 setup)
-- Create `crates/openpulse-channel/Cargo.toml` and `src/lib.rs`
-- Add `openpulse-channel` to workspace members in root `Cargo.toml`
-- Add workspace dependency entry for the crate
-- Implement `ChannelModel` trait and `ChannelError` type per `docs/testbench-design.md`
-- No channel models yet — just the trait, error type, and `build_channel` stub
-- Done when: `cargo check -p openpulse-channel` passes
+**1.1c — Create `openpulse-channel` crate scaffold** ✅ Done (PR #69)
 
-### Group 2 — requires Group 1 complete
+**1.1d — Refactor `openpulse-cli/src/main.rs`** ✅ Done
+- `src/commands/` module with one file per subcommand
+- `main.rs` is under 150 lines; all CLI behavior preserved
 
-**1.4 — Implement channel models**
-Full spec in `docs/testbench-design.md` (channel models section) and `docs/benchmark-harness.md`.
+### Group 2 — ✅ Complete
 
-Implement in this order; each is independently testable:
-1. `AwgnChannel` — Gaussian noise at configurable SNR; seeded `StdRng`
-2. `GilbertElliottChannel` — two-state Markov burst model; four named profiles from `docs/benchmark-harness.md`
-3. `WattersonChannel` — ITU-R F.1487 two-ray model; seven named profiles from `docs/benchmark-harness.md`; requires `rustfft` for Doppler envelope shaping
-4. `QrnModel`, `QrmModel`, `QsbModel`, `ChirpModel` — named profiles in `docs/testbench-design.md`
-5. `CompositeChannel` + `build_channel` factory + serde for all config types
-6. `PowerSpectrum` + `WaterfallBuffer` in `src/dsp.rs` — spec in `docs/testbench-design.md` DSP section
+**1.4 — Implement channel models** ✅ Done (PR #71)
+Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 
-New workspace dependencies needed: `rustfft = "6.2"`, `rand = { version = "0.8", features = ["std_rng"] }`, `rand_distr = "0.4"`.
+**1.3 — Wire interleaver into `FecCodec` and `ModemEngine`** ✅ Done (PR #70)
 
-Done when: unit tests pass — AWGN power at SNR=0 dB, Gilbert-Elliott mean burst length within 10% over 100 k symbols, Watterson output has non-trivial fading envelope, FFT of a 1500 Hz tone peaks at bin 192 at 8000 Hz sample rate.
-
-**1.3 — Wire interleaver into `FecCodec` and `ModemEngine`**
-- Add `InterleavedFecCodec` wrapper (or a flag on `FecCodec`) that applies interleave before encode and deinterleave after decode
-- Add `transmit_with_fec_interleaved` and `receive_with_fec_interleaved` to `ModemEngine`
-- Add Gilbert-Elliott burst test scenario to `crates/openpulse-modem/tests/fec_loopback.rs`
-- Done when: fec_loopback tests pass with Gilbert-Elliott moderate burst injection
+**1.5 — Radio interface layer (`openpulse-radio` crate)** ✅ Core done
+- `PttController` trait, `PttError`, `NoOpPtt`, `SerialRtsDtrPtt`, `VoxPtt`, `RigctldPtt` all implemented and tested
+- Pending integration items (tracked separately):
+  - AFC loop: frequency-offset tracking (±50 Hz) in BPSK demodulator; expose in session diagnostics
+  - CLI wiring: `--ptt <none|rts|dtr|vox|rigctld>` and `--rig <address:port>` options in `openpulse-cli`
 
 ### Group 3 — requires resolved design decisions (see below)
 
@@ -121,21 +99,15 @@ Done when: unit tests pass — AWGN power at SNR=0 dB, Gilbert-Elliott mean burs
 - Once confirmed: implement SAR encoder and decoder in `openpulse-core`
 - Integration tests: round-trip 256 bytes → 64 KB; missing fragment injection; reassembly timeout
 
-**1.5 — Radio interface layer (`openpulse-radio` crate)**
-- Create `crates/openpulse-radio/`; add to workspace
-- `PttController` trait with: `fn assert_ptt(&mut self) -> Result<()>`, `fn release_ptt(&mut self) -> Result<()>`, `fn is_asserted(&self) -> bool`
-- Implementations: `NoOpPtt` (loopback), `SerialRtsDtrPtt` (Linux, `serialport` crate), `VoxPtt` (audio-triggered, no external dep), `RigctldPtt` (TCP to hamlib daemon)
-- AFC loop addition: add frequency-offset tracking (±50 Hz) to the BPSK demodulator in `plugins/bpsk`; expose estimated offset in session diagnostics
-- CLI additions: `--ptt <none|rts|dtr|vox|rigctld>` and `--rig <address:port>` options in `openpulse-cli`
-- Done when: `cargo test -p openpulse-radio` passes with NoOpPtt; serial and rigctld backends compile; PTT assert/release round-trips under 50 ms in loopback timing test
+### Remaining 1.5 integration items
 
-**1.1d — Refactor `openpulse-cli/src/main.rs`**
-- Current: 2592-line monolith; not unit-testable
-- Target: `src/commands/` module with one file per subcommand: `transmit.rs`, `receive.rs`, `session.rs`, `benchmark.rs`, `devices.rs`, `modes.rs`, `trust.rs`
-- Each subcommand module exports a `run(args: &Subcommand) -> anyhow::Result<()>` function
-- `main.rs` becomes a thin dispatcher (~100 lines)
-- Do not change any CLI behavior — this is a refactor only
-- Done when: `cargo test -p openpulse-cli` passes and `main.rs` is under 150 lines
+**1.5a — AFC loop in BPSK demodulator**
+- Add frequency-offset tracking (±50 Hz) to the BPSK demodulator in `plugins/bpsk`
+- Expose estimated offset in session diagnostics
+
+**1.5b — PTT CLI wiring**
+- Add `--ptt <none|rts|dtr|vox|rigctld>` and `--rig <address:port>` options to `openpulse-cli`
+- Wire selected `PttController` implementation into `ModemEngine` session path
 
 ---
 
@@ -167,7 +139,7 @@ Two options are on the table per `docs/roadmap.md` section 1.2:
 
 ### `PttController` trait location (blocks Phase 1.5)
 
-Resolved: implement in a new `crates/openpulse-radio` crate. This keeps OS-specific code (serial port, rigctld TCP) out of `openpulse-core`. `openpulse-modem` gains a `PttController` field in `ModemEngine` via a `Box<dyn PttController>` parameter.
+Resolved and implemented: `crates/openpulse-radio` with `NoOpPtt`, `SerialRtsDtrPtt`, `VoxPtt`, `RigctldPtt`.
 
 ---
 
@@ -187,7 +159,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | Gilbert-Elliott mean burst length | `cargo test -p openpulse-channel` (add in `gilbert_elliott.rs`) |
 | Watterson fading envelope non-trivial | `cargo test -p openpulse-channel` (add in `watterson.rs`) |
 | PTT assert/release ≤ 50 ms | `cargo test -p openpulse-radio` (add timing test in `noop.rs`) |
-| CI multi-platform green | All jobs pass on PR (once `if: false` removed) |
+| CI multi-platform green | ✅ Both jobs pass (PR #67 re-enabled) |
 
 For any new Phase 1 feature: write the test first, confirm it fails, implement until it passes. Do not mark a task done if its test does not exist.
 
@@ -228,13 +200,7 @@ For any new Phase 1 feature: write the test first, confirm it fails, implement u
 
 ## Known sharp edges
 
-**CI is disabled.** `.github/workflows/ci.yml` has `if: false` on the `build-and-test` job since PR #50. Only `cross-aarch64-linux` and `pi5-smoke-loopback` jobs run. Re-enabling is the first task (1.1a).
-
-**`openpulse-cli/src/main.rs` is 2592 lines.** Any CLI work before the Phase 1.1d refactor means touching a file that can't be unit-tested. Keep CLI changes minimal until after the refactor.
-
 **`qpsk-plugin` is in `[dev-dependencies]` in `openpulse-modem/Cargo.toml` but in `[dependencies]` in `openpulse-cli/Cargo.toml`.** This is inconsistent but not currently broken because QPSK is only used through the CLI path. Do not add production paths in `openpulse-modem` that depend on `qpsk-plugin` without moving it to `[dependencies]` first.
-
-**`PttController` trait does not exist yet.** Phase 1.5 cannot start until the trait is defined in `openpulse-radio`. The trait definition is unambiguous (see Phase 1.5 description above) and can be stubbed without implementing any backends.
 
 **Watterson Doppler envelope resolution at short block sizes.** For the Good F1 profile (Doppler spread = 0.1 Hz), the Doppler shaping filter is sub-bin at 1024-sample FFT size (7.8 Hz/bin at 8000 Hz). The envelope will be approximately constant-amplitude rather than truly diffuse fading. This is acceptable — document it in the implementation. Moderate and Poor profiles (≥ 1.0 Hz) are correctly represented.
 
