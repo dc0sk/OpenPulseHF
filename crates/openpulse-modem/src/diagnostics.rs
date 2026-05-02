@@ -34,6 +34,9 @@ pub struct SessionDiagnostics {
     pub recovery_count: usize,
     pub pipeline_metrics: Option<PipelineMetricsSnapshot>,
     pub events: Vec<DiagnosticEvent>,
+    /// Carrier frequency offset estimate from the most recent demodulation, in Hz.
+    /// `None` if no demodulation has occurred or the active plugin does not support AFC.
+    pub afc_offset_hz: Option<f32>,
 }
 
 impl SessionDiagnostics {
@@ -50,6 +53,7 @@ impl SessionDiagnostics {
             recovery_count: 0,
             pipeline_metrics: None,
             events: vec![],
+            afc_offset_hz: None,
         }
     }
 

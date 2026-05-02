@@ -80,6 +80,10 @@ impl ModulationPlugin for BpskPlugin {
     ) -> Result<Vec<u8>, ModemError> {
         demodulate::bpsk_demodulate(samples, config)
     }
+
+    fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+        demodulate::afc_estimate_hz(samples, config)
+    }
 }
 
 // ── Helper: parse baud rate from mode string ──────────────────────────────────

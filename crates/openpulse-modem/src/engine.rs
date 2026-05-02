@@ -49,6 +49,8 @@ pub struct ModemEngine {
     scheduler: PipelineScheduler,
     trust_policy_profile: PolicyProfile,
     active_handshake: Option<HandshakeDecision>,
+    /// Carrier frequency offset estimate from the most recent demodulation call.
+    last_afc_offset_hz: Option<f32>,
 }
 
 impl ModemEngine {
@@ -62,6 +64,7 @@ impl ModemEngine {
             scheduler: PipelineScheduler::new(8, BackpressurePolicy::Block),
             trust_policy_profile: PolicyProfile::Balanced,
             active_handshake: None,
+            last_afc_offset_hz: None,
         }
     }
 
@@ -73,6 +76,13 @@ impl ModemEngine {
     /// Sets the active trust policy profile used as session default.
     pub fn set_trust_policy_profile(&mut self, profile: PolicyProfile) {
         self.trust_policy_profile = profile;
+    }
+
+    /// Returns the carrier frequency offset estimate from the most recent
+    /// demodulation call, in Hz.  Returns `None` until the first receive or
+    /// if the active plugin does not support AFC.
+    pub fn last_afc_offset_hz(&self) -> Option<f32> {
+        self.last_afc_offset_hz
     }
 
     /// Returns the current HPX state for this engine session.
@@ -290,6 +300,8 @@ impl ModemEngine {
         let wire = self.route_wire_stage(PipelineStage::DemodulateDecode, wire)?;
         debug!("demodulated {} bytes", wire.bytes.len());
 
+        self.update_afc_estimate(mode, &samples.samples);
+
         let frame = self.stage_decode_frame(&wire)?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         info!("received frame seq={}", frame.sequence);
@@ -350,6 +362,8 @@ impl ModemEngine {
         };
         let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
 
+        self.update_afc_estimate(mode, &samples.samples);
+
         let corrected_bytes = FecCodec::new().decode(&raw_wire.bytes)?;
         let corrected_wire = WirePayload {
             bytes: corrected_bytes,
@@ -408,6 +422,8 @@ impl ModemEngine {
             self.stage_demodulate_payload(plugin, mode, &samples)?
         };
         let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
+
+        self.update_afc_estimate(mode, &samples.samples);
 
         let deinterleaved = Interleaver::new(interleaver_depth).deinterleave(&raw_wire.bytes);
         let corrected_bytes = FecCodec::new().decode(&deinterleaved)?;
@@ -478,6 +494,17 @@ impl ModemEngine {
             .read()
             .map_err(|e| ModemError::Audio(e.to_string()))?;
         Ok(AudioSamples { samples })
+    }
+
+    fn update_afc_estimate(&mut self, mode: &str, samples: &[f32]) {
+        let mod_cfg = ModulationConfig {
+            mode: mode.to_string(),
+            ..ModulationConfig::default()
+        };
+        self.last_afc_offset_hz = self
+            .plugins
+            .get(mode)
+            .and_then(|p| p.estimate_afc_hz(samples, &mod_cfg));
     }
 
     fn stage_demodulate_payload(

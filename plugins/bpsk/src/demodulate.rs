@@ -80,6 +80,67 @@ pub fn bpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
     Ok(bytes)
 }
 
+// ── AFC frequency-offset estimator ───────────────────────────────────────────
+
+/// Estimate the carrier frequency offset in Hz from demodulated IQ symbols.
+///
+/// Uses the IQ-squaring method: squaring each complex symbol removes the DBPSK
+/// data modulation (since `2·φ_data ∈ {0, 2π}`), leaving a phasor that rotates
+/// at `4π·Δf/baud_rate` radians per symbol.  The mean phase of consecutive
+/// squared-symbol products then gives `Δf`.
+///
+/// **Tracking range:** `|Δf| ≤ baud_rate / 4`
+/// - BPSK31:  ±7.8 Hz
+/// - BPSK63:  ±15.6 Hz
+/// - BPSK100: ±25 Hz
+/// - BPSK250: ±62.5 Hz  ← covers the ±50 Hz spec at the widest BPSK mode
+pub fn estimate_frequency_offset(i_syms: &[f32], q_syms: &[f32], baud_rate: f32) -> f32 {
+    if i_syms.len() < 2 {
+        return 0.0;
+    }
+
+    // z²[k] = (I[k]+jQ[k])² = (I²-Q²) + j(2IQ)
+    let re2: Vec<f32> = i_syms
+        .iter()
+        .zip(q_syms.iter())
+        .map(|(&i, &q)| i * i - q * q)
+        .collect();
+    let im2: Vec<f32> = i_syms
+        .iter()
+        .zip(q_syms.iter())
+        .map(|(&i, &q)| 2.0 * i * q)
+        .collect();
+
+    // D[k] = z²[k] * conj(z²[k-1]); accumulate sum
+    let mut re_sum = 0.0f32;
+    let mut im_sum = 0.0f32;
+    for k in 1..re2.len() {
+        re_sum += re2[k] * re2[k - 1] + im2[k] * im2[k - 1];
+        im_sum += im2[k] * re2[k - 1] - re2[k] * im2[k - 1];
+    }
+
+    // Δf = baud_rate * atan2(im, re) / (4π)
+    im_sum.atan2(re_sum) * baud_rate / (4.0 * PI)
+}
+
+/// Run a lightweight demodulation pass to estimate the carrier frequency offset.
+///
+/// Returns `None` if the sample buffer is too short.
+pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+    let baud = crate::parse_baud_rate(&config.mode).ok()?;
+    let fs = config.sample_rate as f32;
+    let fc = config.center_frequency;
+    let n = crate::modulate::samples_per_symbol(fs, baud).ok()?;
+
+    if samples.len() < n * (PREAMBLE_SYMS + 1) {
+        return None;
+    }
+
+    let offset = find_timing_offset(samples, n, fc, fs);
+    let (i_syms, q_syms) = demodulate_iq(samples, n, fc, fs, offset);
+    Some(estimate_frequency_offset(&i_syms, &q_syms, baud))
+}
+
 // ── Timing search ─────────────────────────────────────────────────────────────
 
 /// Try every possible timing offset within one symbol period.  Return the
@@ -271,5 +332,48 @@ mod tests {
         let samples = bpsk_modulate(original, &cfg).unwrap();
         let recovered = bpsk_demodulate(&samples, &cfg).unwrap();
         assert_eq!(&recovered[..original.len()], original);
+    }
+
+    #[test]
+    fn afc_estimate_near_zero_for_matched_carrier() {
+        use crate::modulate::bpsk_modulate;
+        let cfg = ModulationConfig {
+            mode: "BPSK250".to_string(),
+            sample_rate: 8000,
+            center_frequency: 1500.0,
+        };
+        let samples = bpsk_modulate(b"HelloWorld", &cfg).unwrap();
+        // Estimate AFC with the correct carrier — should be near zero.
+        let offset = afc_estimate_hz(&samples, &cfg).expect("afc estimate");
+        assert!(
+            offset.abs() < 5.0,
+            "expected near-zero AFC offset, got {offset:.2} Hz"
+        );
+    }
+
+    #[test]
+    fn afc_estimate_detects_known_offset() {
+        use crate::modulate::bpsk_modulate;
+        // Modulate at 1500 Hz, then estimate AFC with a 20 Hz lower reference.
+        // The estimator should report ≈ +20 Hz (signal is above reference).
+        let true_fc = 1500.0f32;
+        let ref_fc = 1480.0f32;
+        let cfg_tx = ModulationConfig {
+            mode: "BPSK250".to_string(),
+            sample_rate: 8000,
+            center_frequency: true_fc,
+        };
+        let cfg_rx = ModulationConfig {
+            mode: "BPSK250".to_string(),
+            sample_rate: 8000,
+            center_frequency: ref_fc,
+        };
+        let samples = bpsk_modulate(b"HelloWorld", &cfg_tx).unwrap();
+        let offset = afc_estimate_hz(&samples, &cfg_rx).expect("afc estimate");
+        // Allow ±8 Hz tolerance (estimator range is baud/4 = 62.5 Hz for BPSK250).
+        assert!(
+            (offset - 20.0).abs() < 8.0,
+            "expected ≈+20 Hz AFC offset, got {offset:.2} Hz"
+        );
     }
 }
