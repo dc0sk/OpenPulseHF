@@ -333,7 +333,8 @@ impl ModemEngine {
 
     /// Like [`receive`](Self::receive) but applies Reed-Solomon FEC error
     /// correction after demodulation before decoding the frame.
-    pub fn receive_with_fec(        &mut self,
+    pub fn receive_with_fec(
+        &mut self,
         mode: &str,
         device: Option<&str>,
     ) -> Result<Vec<u8>, ModemError> {
