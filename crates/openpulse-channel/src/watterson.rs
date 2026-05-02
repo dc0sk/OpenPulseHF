@@ -19,7 +19,7 @@
 
 use rand::SeedableRng;
 use rand_distr::{Distribution, Normal};
-use rustfft::{FftPlanner, num_complex::Complex};
+use rustfft::{num_complex::Complex, FftPlanner};
 
 type Complex32 = Complex<f32>;
 
@@ -49,7 +49,9 @@ impl WattersonChannel {
             ));
         }
         if !config.snr_db.is_finite() {
-            return Err(ChannelError::InvalidParameter("snr_db must be finite".into()));
+            return Err(ChannelError::InvalidParameter(
+                "snr_db must be finite".into(),
+            ));
         }
         if !config.delay_spread_ms.is_finite() || config.delay_spread_ms < 0.0 {
             return Err(ChannelError::InvalidParameter(
@@ -57,7 +59,9 @@ impl WattersonChannel {
             ));
         }
         if config.sample_rate == 0 {
-            return Err(ChannelError::InvalidParameter("sample_rate must be > 0".into()));
+            return Err(ChannelError::InvalidParameter(
+                "sample_rate must be > 0".into(),
+            ));
         }
 
         let rng = match config.seed {
@@ -92,12 +96,7 @@ impl WattersonChannel {
 
         // Random complex Gaussian spectrum.
         let mut spec: Vec<Complex<f32>> = (0..n)
-            .map(|_| {
-                Complex::new(
-                    normal.sample(&mut self.rng),
-                    normal.sample(&mut self.rng),
-                )
-            })
+            .map(|_| Complex::new(normal.sample(&mut self.rng), normal.sample(&mut self.rng)))
             .collect();
 
         // Apply Gaussian Doppler shaping filter in frequency domain.
@@ -109,13 +108,21 @@ impl WattersonChannel {
 
         let filter_energy: f32 = (0..n)
             .map(|k| {
-                let freq = if k <= n / 2 { k as f32 } else { k as f32 - n as f32 };
+                let freq = if k <= n / 2 {
+                    k as f32
+                } else {
+                    k as f32 - n as f32
+                };
                 (-0.5 * (freq / sigma_bins).powi(2)).exp().powi(2)
             })
             .sum::<f32>();
 
         for (k, s) in spec.iter_mut().enumerate() {
-            let freq = if k <= n / 2 { k as f32 } else { k as f32 - n as f32 };
+            let freq = if k <= n / 2 {
+                k as f32
+            } else {
+                k as f32 - n as f32
+            };
             let h = (-0.5 * (freq / sigma_bins).powi(2)).exp();
             *s *= h;
         }
@@ -128,7 +135,9 @@ impl WattersonChannel {
         // E[|h_ifft(t)|^2] = 2 * filter_energy (rustfft IFFT is unscaled)
         // scale = 1 / sqrt(2 * filter_energy) → E[|h_scaled|^2] = 1
         let scale = 1.0 / (2.0 * filter_energy).sqrt();
-        spec.iter().map(|c| Complex32::new(c.re * scale, c.im * scale)).collect()
+        spec.iter()
+            .map(|c| Complex32::new(c.re * scale, c.im * scale))
+            .collect()
     }
 
     fn fading_coeff(&mut self, sample: usize) -> (Complex32, Complex32) {
@@ -212,8 +221,7 @@ mod tests {
         }
 
         let mean = block_rms.iter().sum::<f32>() / n_blocks as f32;
-        let variance =
-            block_rms.iter().map(|&r| (r - mean).powi(2)).sum::<f32>() / n_blocks as f32;
+        let variance = block_rms.iter().map(|&r| (r - mean).powi(2)).sum::<f32>() / n_blocks as f32;
         let cv = variance.sqrt() / mean; // coefficient of variation
 
         assert!(

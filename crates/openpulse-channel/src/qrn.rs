@@ -29,7 +29,9 @@ impl QrnChannel {
             ));
         }
         if config.sample_rate == 0 {
-            return Err(ChannelError::InvalidParameter("sample_rate must be > 0".into()));
+            return Err(ChannelError::InvalidParameter(
+                "sample_rate must be > 0".into(),
+            ));
         }
         let rng = match config.seed {
             Some(s) => rand::rngs::StdRng::seed_from_u64(s),
@@ -59,8 +61,9 @@ impl ChannelModel for QrnChannel {
         let expected_spikes =
             self.config.impulse_rate_hz * n as f32 / self.config.sample_rate as f32;
         if expected_spikes > 0.0 {
-            let n_spikes =
-                Poisson::new(expected_spikes as f64).unwrap().sample(&mut self.rng) as usize;
+            let n_spikes = Poisson::new(expected_spikes as f64)
+                .unwrap()
+                .sample(&mut self.rng) as usize;
             let pos_dist = Uniform::new(0usize, n);
             let spike_sigma = rms * self.config.impulse_amplitude_ratio;
             let spike_dist = Normal::new(0.0f32, spike_sigma).unwrap();
