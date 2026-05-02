@@ -1,3 +1,10 @@
+---
+project: openpulsehf
+doc: README.md
+status: living
+last_updated: 2026-05-02
+---
+
 # OpenPulseHF
 
 > Transmit data via HF – a plugin-based software modem written in Rust.

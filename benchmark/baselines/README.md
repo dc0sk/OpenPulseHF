@@ -1,3 +1,10 @@
+---
+project: openpulsehf
+doc: benchmark/baselines/README.md
+status: living
+last_updated: 2026-05-02
+---
+
 # Benchmark Baselines
 
 This directory stores baseline aggregate benchmark artifacts used for regression checks.
