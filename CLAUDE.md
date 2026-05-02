@@ -89,12 +89,14 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 **1.5 — Radio interface layer (`openpulse-radio` crate)** ✅ Done
 - `PttController` trait, `PttError`, `NoOpPtt`, `SerialRtsDtrPtt`, `VoxPtt`, `RigctldPtt` all implemented and tested
 
-### Group 3 — requires resolved design decisions (see below)
+### Group 3 — ✅ Complete
 
-**1.2 — SAR (Segmentation and Reassembly)**
-- ⚠️ **Design decision is pending — do not implement until the SAR decision is confirmed by the user.** See "Open design decisions" section below.
-- Once confirmed: implement SAR encoder and decoder in `openpulse-core`
-- Integration tests: round-trip 256 bytes → 64 KB; missing fragment injection; reassembly timeout
+**1.2 — SAR (Segmentation and Reassembly)** ✅ Done (Option B)
+- `crates/openpulse-core/src/sar.rs`: `sar_encode()` and `SarReassembler` with `ingest()` / `expire()`
+- SAR header: `segment_id (u16) | fragment_index (u8) | fragment_total (u8)` — 4 bytes, leaving 251 bytes data per fragment
+- Max transportable segment: 255 × 251 = 64 005 bytes; encoder rejects larger inputs with `SarError::DataTooLarge`
+- Reassembly keyed on `(session_id, segment_id)`; configurable timeout; duplicate fragments are idempotent
+- Integration tests: `tests/sar_roundtrip.rs` — 256-byte, 64 KB, max-size round-trips; missing-fragment; timeout; session isolation
 
 ### Remaining 1.5 integration items
 
@@ -118,27 +120,9 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 
 These must be confirmed by the user before the relevant implementation starts. Do not implement speculatively.
 
-### SAR wire format (blocks Phase 1.2 and Phase 3.1)
+### SAR wire format — Resolved (Option B implemented)
 
-Two options are on the table per `docs/roadmap.md` section 1.2:
-
-**Option A — extend `length` field to `u16`**
-- Frame format version bump to 0x02
-- Payload capacity increases from 255 to 65535 bytes
-- ML-DSA-44 (2420 bytes) and ML-KEM-768 (1184 bytes) both fit in a single frame
-- Simpler implementation; no reassembly state
-- Downside: a 2420-byte frame at BPSK31 takes approximately 620 seconds to transmit — impractical on air; useful only at higher baud rates
-
-**Option B — full SAR sub-layer (recommended)**
-- Keep the current 255-byte frame payload limit
-- Add a SAR header inside the payload: `segment_id (u16) | fragment_index (u8) | fragment_total (u8) | data`
-- Effective maximum data per fragment: 251 bytes
-- Reassembly buffer keyed on `(session_id, segment_id)`; reassembly timeout is configurable
-- ML-DSA-44 (2420 bytes) needs 10 fragments; ML-KEM-768 (1184 bytes) needs 5
-- Enables ARQ per-fragment: only failed fragments are retransmitted
-- Recommended because large frames are impractical at low baud rates regardless of the length field width
-
-**Ask the user to choose before starting Phase 1.2.**
+Option B (full SAR sub-layer) was selected and implemented in `crates/openpulse-core/src/sar.rs`.  See Group 3 task entry for details.  Phase 3.1 (PQ handshake) is unblocked once any other remaining Phase 1 gates are closed.
 
 ### `PttController` trait location (blocks Phase 1.5)
 
@@ -209,7 +193,7 @@ For any new Phase 1 feature: write the test first, confirm it fails, implement u
 
 **FEC with short payloads.** `FecCodec::encode` always produces a full RS block (255 bytes output for any input ≤ 223 bytes). A 16-byte payload produces 255 bytes. At BPSK31 this is ~65 000 samples = ~8 seconds of audio. Use BPSK250 or QPSK modes for any test that iterates FEC-encoded frames at speed.
 
-**SAR is unimplemented.** Any object larger than 255 bytes cannot be transported in a single frame. The HPX session protocol handles multi-frame transfers at the application layer, but there is no SAR sub-layer. Do not implement PQ handshake (Phase 3.1) before SAR is complete (Phase 1.2).
+**SAR is now implemented** (`crates/openpulse-core/src/sar.rs`). Objects up to 64 005 bytes can be segmented into 255-byte frame payloads and reassembled. PQ handshake (Phase 3.1) is unblocked.
 
 ---
 

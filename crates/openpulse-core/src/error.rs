@@ -44,6 +44,22 @@ pub enum PluginError {
     Other(String),
 }
 
+/// Errors produced by the SAR sub-layer.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum SarError {
+    #[error("payload too short for SAR header")]
+    MalformedHeader,
+
+    #[error("fragment index {index} out of range (total {total})")]
+    FragmentIndexOutOfRange { index: u8, total: u8 },
+
+    #[error("fragment_total mismatch: slot expects {expected}, got {got}")]
+    FragmentCountMismatch { expected: u8, got: u8 },
+
+    #[error("data too large: {len} bytes exceeds max {max} bytes for SAR segmentation")]
+    DataTooLarge { len: usize, max: usize },
+}
+
 /// Errors produced by the audio layer.
 #[derive(Debug, Error)]
 pub enum AudioError {
