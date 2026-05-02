@@ -17,6 +17,7 @@ use bpsk_plugin::BpskPlugin;
 use fsk4_plugin::Fsk4Plugin;
 use openpulse_audio::LoopbackBackend;
 use openpulse_modem::ModemEngine;
+use psk8_plugin::Psk8Plugin;
 use qpsk_plugin::QpskPlugin;
 
 #[cfg(feature = "cpal-backend")]
@@ -61,6 +62,9 @@ fn main() -> Result<()> {
     engine
         .register_plugin(Box::new(Fsk4Plugin::new()))
         .context("failed to register FSK4 plugin")?;
+    engine
+        .register_plugin(Box::new(Psk8Plugin::new()))
+        .context("failed to register 8PSK plugin")?;
     engine
         .register_plugin(Box::new(QpskPlugin::new()))
         .context("failed to register QPSK plugin")?;

@@ -9,6 +9,7 @@ members = [
     "crates/openpulse-radio",
     "plugins/bpsk",
     "plugins/fsk4",
+    "plugins/psk8",
     "plugins/qpsk",
     "pki-tooling",
 ]
@@ -28,6 +29,7 @@ openpulse-channel = { path = "crates/openpulse-channel" }
 openpulse-radio   = { path = "crates/openpulse-radio" }
 bpsk-plugin       = { path = "plugins/bpsk" }
 fsk4-plugin       = { path = "plugins/fsk4" }
+psk8-plugin       = { path = "plugins/psk8" }
 qpsk-plugin       = { path = "plugins/qpsk" }
 
 thiserror          = "2.0"
