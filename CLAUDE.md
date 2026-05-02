@@ -169,6 +169,24 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
   - `PeerQueryResponse` (msg_type 0x02): variable-length results with descriptor_signature
 - Integration tests: `tests/peer_descriptor_integration.rs` (9 tests); `tests/wire_query_integration.rs` (9 tests)
 
+**2.6 — Multi-hop relay forwarding** ✅ Done
+- `crates/openpulse-core/src/relay.rs`: extended with `RelayForwarder`, `RelayEvent`, `RelayForwardError`, `score_route`, `select_best_scored_route`
+  - `RelayForwarder`: stateful relay node — hop-limit enforcement, (session_id, nonce) duplicate suppression with TTL eviction, src_peer_id trust-policy check
+  - On success: clones envelope with `hop_index += 1`; emits `RelayEvent::Forwarded`
+  - On failure: returns typed `RelayForwardError`; emits corresponding `RelayEvent` for observability
+  - `drain_events()` returns buffered events (Forwarded, HopLimitExceeded, DuplicateSuppressed, PolicyRejected)
+- Trust-weighted path scoring: `score_route` uses bottleneck (min) hop score = `trust_weight × route_quality`
+  - `trust_weight`: Verified=4, PskVerified=3, Unknown=2, Reduced=1
+  - Direct routes (no intermediate hops) score `u32::MAX` — never penalized
+  - `select_best_scored_route`: highest-score wins; ties broken by shorter path
+- `crates/openpulse-core/src/peer_cache.rs`: added `peek(&self)` — read-only lookup for route scoring (no LRU update)
+- `crates/openpulse-core/src/wire_query.rs`: extended `WireMsgType` (added 0x03–0x08); added `RelayDataChunk` (msg_type 0x05, 82-byte header + variable sig/data), `AckStatus` enum, `RelayHopAck` (msg_type 0x06, 49 bytes fixed)
+- Integration tests: `tests/relay_integration.rs` (12 tests)
+  - Path scoring, bottleneck scoring, best-route selection, policy denial
+  - 3-hop hop_index increment across separate `RelayForwarder` nodes
+  - Hop-limit drop, duplicate suppression, trust-policy rejection at hop
+  - Event drain verification, `RelayDataChunk` round-trip, `RelayHopAck` round-trip
+
 ---
 
 ## Open design decisions
