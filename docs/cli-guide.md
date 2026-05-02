@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/cli-guide.md
 status: living
-last_updated: 2026-04-25
+last_updated: 2026-05-03
 ---
 
 # CLI Guide - openpulse (v0.1.0)
@@ -58,36 +58,60 @@ Notes:
 - openpulse benchmark run
 - openpulse benchmark run --min-pass-rate <0.0-1.0> --max-mean-transitions <f64>
 
-Planned HPX and trust commands:
+## Identity commands
 
-Detailed UX behavior for identity and trust diagnostics:
+- openpulse identity show <STATION_OR_RECORD_ID>
+- openpulse identity verify <STATION_OR_RECORD_ID>
+- openpulse identity cache
 
-- docs/cli-ux-identity-trust-diagnostics.md
+Notes:
+- `identity show` resolves by record_id, station_id, or callsign (tries each in order via PKI service).
+- `identity verify` confirms no active PKI revocations exist for the identity.
+- `identity cache` fetches and summarises the current trust bundle from the PKI service.
 
-- openpulse hpx send <file> --mode <HPX500|HPX2300>
-- openpulse hpx receive --out <dir>
-- openpulse trust init
-- openpulse trust import-key <path>
+## Trust commands
+
+- openpulse trust show <STATION_OR_RECORD_ID>
+- openpulse trust explain <STATION_OR_RECORD_ID>
+- openpulse trust import --station-id <ID> --key-id <ID> --trust <LEVEL> --source <SOURCE>
 - openpulse trust list
-- openpulse trust revoke <key-id>
-- openpulse trust policy set --unknown-signer <reject|warn-allow>
-- openpulse peers list
-- openpulse peers query --mode <MODE> --min-quality <score>
-- openpulse relay route --to <peer-id> --max-hops <n>
-- openpulse hpx send <file> --relay auto --max-hops <n>
-- openpulse relay inspect-route --route-id <id>
-- openpulse peers query --trust <trusted|trusted-or-unknown|any> --max-results <n>
+- openpulse trust revoke <STATION_OR_KEY>
+- openpulse trust policy show
+- openpulse trust policy set <strict|balanced|permissive>
+
+Trust levels: `full`, `marginal`, `unknown`, `untrusted`, `revoked`.
+Certificate sources: `out_of_band`, `over_air`.
+
+Notes:
+- `trust show` and `trust explain` both query PKI; `explain` includes policy recommendation detail in output.
+- `trust import` writes to the local trust store (`~/.config/openpulse/trust-store.json`).
+- `trust policy set` persists the active policy profile across invocations.
+
+## Diagnose commands
+
+- openpulse diagnose handshake <STATION_OR_RECORD_ID>
+- openpulse diagnose manifest
+- openpulse diagnose session
 
 ## Common options
 
 - --backend <BACKEND>: select loopback or hardware backend where supported.
 - --mode <MODE>: select a registered modulation mode.
+- --pki-url <URL>: PKI service base URL (default: http://localhost:8080).
+- --log <LEVEL>: log level (error, warn, info, debug, trace).
 - --help: show full command and flag reference.
 
-Planned trust-related options:
+Output format options (available on most commands):
+- --format <json|text>: output format (default: text).
+- --verbose: include extended detail in output.
+- --diagnostics: emit structured JSON diagnostics payload.
+- --no-color: suppress terminal colour codes.
 
-- --signing-key <key-id>: select local signing identity for handshake and manifest signing.
-- --trust-store <path>: select trust-store location.
+Planned options (not yet implemented):
+- --ptt <none|rts|dtr|vox|rigctld>: select PTT control method.
+- --rig <address:port>: rigctld daemon address for CAT PTT control.
+- --signing-key <key-id>: select local signing identity.
+- --trust-store <path>: override default trust-store location.
 - --require-signatures: fail transfer if required signatures are missing.
 - --allow-unknown-signer: override default reject policy for unknown signers.
 - --max-hops <n>: set relay hop limit.

@@ -12,7 +12,9 @@ pub struct QsbChannel {
 impl QsbChannel {
     pub fn new(config: QsbConfig) -> Result<Self, ChannelError> {
         if config.sample_rate == 0 {
-            return Err(ChannelError::InvalidParameter("sample_rate must be > 0".into()));
+            return Err(ChannelError::InvalidParameter(
+                "sample_rate must be > 0".into(),
+            ));
         }
         if !config.fade_rate_hz.is_finite() || config.fade_rate_hz < 0.0 {
             return Err(ChannelError::InvalidParameter(
@@ -24,7 +26,10 @@ impl QsbChannel {
                 "fade_depth must be in [0, 1]".into(),
             ));
         }
-        Ok(Self { config, sample_idx: 0 })
+        Ok(Self {
+            config,
+            sample_idx: 0,
+        })
     }
 }
 
@@ -73,7 +78,10 @@ mod tests {
         let input = vec![1.0f32; 8000];
         let out = ch.apply(&input);
         let min = out.iter().cloned().fold(f32::INFINITY, f32::min);
-        assert!(min < 0.1, "minimum amplitude {min} should approach 0 with full fade");
+        assert!(
+            min < 0.1,
+            "minimum amplitude {min} should approach 0 with full fade"
+        );
     }
 
     #[test]
@@ -88,7 +96,10 @@ mod tests {
         let out = ch.apply(&input);
         // With fade_depth=1 envelope is always 1.0; output equals input.
         for (a, b) in out.iter().zip(input.iter()) {
-            assert!((a - b).abs() < 1e-5, "expected passthrough with fade_depth=1");
+            assert!(
+                (a - b).abs() < 1e-5,
+                "expected passthrough with fade_depth=1"
+            );
         }
     }
 

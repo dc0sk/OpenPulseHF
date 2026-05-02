@@ -14,7 +14,9 @@ pub struct ChirpChannel {
 impl ChirpChannel {
     pub fn new(config: ChirpConfig) -> Result<Self, ChannelError> {
         if config.sample_rate == 0 {
-            return Err(ChannelError::InvalidParameter("sample_rate must be > 0".into()));
+            return Err(ChannelError::InvalidParameter(
+                "sample_rate must be > 0".into(),
+            ));
         }
         if config.period_s <= 0.0 || !config.period_s.is_finite() {
             return Err(ChannelError::InvalidParameter(
@@ -31,7 +33,11 @@ impl ChirpChannel {
                 "f_end_hz must be a positive finite value".into(),
             ));
         }
-        Ok(Self { config, phase: 0.0, sample_count: 0 })
+        Ok(Self {
+            config,
+            phase: 0.0,
+            sample_count: 0,
+        })
     }
 }
 
@@ -46,7 +52,9 @@ impl ChannelModel for ChirpChannel {
         let rms = if input.is_empty() {
             1.0
         } else {
-            (input.iter().map(|&s| s * s).sum::<f32>() / input.len() as f32).sqrt().max(1e-4)
+            (input.iter().map(|&s| s * s).sum::<f32>() / input.len() as f32)
+                .sqrt()
+                .max(1e-4)
         };
 
         input
