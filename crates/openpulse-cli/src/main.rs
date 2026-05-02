@@ -14,6 +14,7 @@ use clap::Parser;
 use tracing::Level;
 
 use bpsk_plugin::BpskPlugin;
+use fsk4_plugin::Fsk4Plugin;
 use openpulse_audio::LoopbackBackend;
 use openpulse_modem::ModemEngine;
 use qpsk_plugin::QpskPlugin;
@@ -57,6 +58,9 @@ fn main() -> Result<()> {
     engine
         .register_plugin(Box::new(BpskPlugin::new()))
         .context("failed to register BPSK plugin")?;
+    engine
+        .register_plugin(Box::new(Fsk4Plugin::new()))
+        .context("failed to register FSK4 plugin")?;
     engine
         .register_plugin(Box::new(QpskPlugin::new()))
         .context("failed to register QPSK plugin")?;
