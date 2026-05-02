@@ -155,6 +155,20 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 - Integration tests: `crates/openpulse-modem/tests/csma_loopback.rs` (4 tests)
   - DCD detects energy from received signal; CSMA blocks on busy channel; disabled CSMA ignores DCD; two-station deferral scenario
 
+**2.5 — Peer cache and query subsystem** ✅ Done
+- `crates/openpulse-core/src/peer_descriptor.rs`: `PeerDescriptor` self-authenticating signed identity descriptor
+  - `peer_id` IS the Ed25519 verifying-key bytes; `verify_peer_descriptor()` needs no external key store
+  - Signed fields: `peer_id`, `callsign`, `capability_mask`, `timestamp_ms` via canonical JSON (same pattern as CONREQ/CONACK)
+  - `callsign_hash()` returns SHA-256 of callsign bytes for use in query response entries
+- `crates/openpulse-core/src/peer_cache.rs`: extended `PeerRecord` with `capability_mask: u32`
+  - Added `TrustFilter` enum (TrustedOnly, TrustedOrUnknown, Any) — wire codes per peer-query-relay-wire.md
+  - Added `PeerCache::query(capability_mask, min_quality, trust_filter, max_results, now_ms)` — sorted by quality descending
+- `crates/openpulse-core/src/wire_query.rs`: OPHF binary envelope + peer query payloads
+  - `WireEnvelope`: encode/decode per docs/peer-query-relay-wire.md; header 104 B + payload + auth_tag 16 B
+  - `PeerQueryRequest` (msg_type 0x01): 17-byte fixed payload
+  - `PeerQueryResponse` (msg_type 0x02): variable-length results with descriptor_signature
+- Integration tests: `tests/peer_descriptor_integration.rs` (9 tests); `tests/wire_query_integration.rs` (9 tests)
+
 ---
 
 ## Open design decisions

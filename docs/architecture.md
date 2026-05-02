@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/architecture.md
 status: living
-last_updated: 2026-05-01
+last_updated: 2026-05-02
 ---
 
 # Architecture
@@ -277,6 +277,41 @@ For HPX, keep signal path adaptation logic and trust/signature logic as separate
 - Verification failures must surface clear failure reasons to frontends and logs.
 - Session-state behavior for security and recovery is defined in docs/hpx-session-state-machine.md.
 - Relay path trust and end-to-end signer trust are evaluated independently.
+
+## Peer cache and query subsystem (Phase 2.5)
+
+### PeerDescriptor
+
+`PeerDescriptor` (`openpulse-core::peer_descriptor`) is a signed identity advertisement that a peer broadcasts during discovery.  The `peer_id` field IS the Ed25519 verifying-key bytes, so the descriptor is self-authenticating: `verify_peer_descriptor()` takes only the descriptor itself and performs no external key lookup.
+
+Signed fields: `peer_id`, `callsign`, `capability_mask`, `timestamp_ms`.  Signature is Ed25519 over canonical JSON of these fields (same pattern as CONREQ/CONACK/TransferManifest).
+
+### PeerCache query API
+
+`PeerCache::query(capability_mask, min_quality, trust_filter, max_results, now_ms)` returns live peers that match all supplied filters, sorted by `route_quality` descending and truncated to `max_results`.
+
+`TrustFilter` values (wire code per peer-query-relay-wire.md):
+- `TrustedOnly` (0x00) — `PskVerified` or `Verified` only
+- `TrustedOrUnknown` (0x01) — any trust level except `Reduced`
+- `Any` (0x02) — no trust constraint
+
+`PeerRecord` now carries `capability_mask: u32`.
+
+### Wire envelope and peer query payloads
+
+`WireEnvelope` (`openpulse-core::wire_query`) implements the OPHF binary envelope from `docs/peer-query-relay-wire.md`:
+
+```text
+magic("OPHF") | version(u8) | msg_type(u8) | flags(u16) | session_id(u64) |
+src_peer_id(32B) | dst_peer_id(32B) | nonce(12B) | timestamp_ms(u64) |
+hop_limit(u8) | hop_index(u8) | payload_len(u16) | payload | auth_tag(16B)
+```
+
+Fixed header: 104 bytes.  Fixed auth_tag: 16 bytes.  Total minimum: 120 bytes.
+
+`PeerQueryRequest` payload (msg_type 0x01): 17 bytes fixed — query_id(8), capability_mask(4), min_link_quality(2), trust_filter(1), max_results(2).
+
+`PeerQueryResponse` payload (msg_type 0x02): query_id(8) + result_count(2) + variable results.  Each result entry: peer_id(32), callsign_hash(32), capability_mask(4), last_seen_ms(8), trust_state(1), sig_len(2), descriptor_signature(variable).
 
 ## Routing and relay architecture
 
