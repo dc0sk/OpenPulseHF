@@ -1,3 +1,10 @@
+---
+project: openpulsehf
+doc: AGENTS.md
+status: living
+last_updated: 2026-05-02
+---
+
 # Agent Safety Rules
 
 These rules are mandatory for any coding agent operating in this repository.
