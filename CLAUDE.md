@@ -187,6 +187,23 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
   - Hop-limit drop, duplicate suppression, trust-policy rejection at hop
   - Event drain verification, `RelayDataChunk` round-trip, `RelayHopAck` round-trip
 
+**3.2 — Network query propagation** ✅ Done
+- `crates/openpulse-core/src/wire_query.rs`: added remaining wire payload codecs
+  - `WireTrustState` enum (0x00–0x03); `RouteChangeReason` enum (u16, 5 variants); `RouteHop` (37 bytes per hop)
+  - `RouteDiscoveryRequest` (msg_type 0x03, 47 bytes fixed): route_query_id, destination_peer_id, max_hops, required_capability_mask, policy_flags
+  - `RouteDiscoveryResponse` (msg_type 0x04, variable): route_query_id, route_id, hops(Vec<RouteHop>), route_signature
+  - `RelayRouteUpdate` (msg_type 0x07, variable): route_id, previous_hop_count, route_change_reason, replacement_hops, route_update_signature
+  - `RelayRouteReject` (msg_type 0x08, 45 bytes fixed): route_id, reject_hop_peer_id, reason_code, trust_decision, policy_reference
+  - Added `WireQueryError::HopCountExceeded` and `WireQueryError::SignatureTooLarge`
+- `crates/openpulse-core/src/query_propagation.rs`: added `QueryForwarder` and events
+  - `QueryForwarder`: stateful propagation node — msg-type check, hop-limit enforcement, trust-policy check, (src_peer_id, query_id) duplicate suppression via `QueryPropagationTracker`
+  - On success: clones envelope with `hop_index += 1`; emits `QueryEvent::Propagated`
+  - `QueryForwardError` (4 variants) and `QueryEvent` (4 variants) for observability
+- Integration tests: `tests/query_propagation_integration.rs` (12 tests)
+  - Wire codec round-trips: `RouteDiscoveryRequest`, `RouteDiscoveryResponse` (no-hop and multi-hop), `RelayRouteUpdate`, `RelayRouteReject`
+  - `QueryForwarder`: basic propagation, hop-limit, duplicate suppression, trust-policy rejection, event drain
+  - 3-node query chain verifying hop_index increment across separate `QueryForwarder` nodes
+
 ---
 
 ## Open design decisions

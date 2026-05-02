@@ -354,6 +354,33 @@ On success the returned envelope has `hop_index` incremented by one, ready for f
 
 `RelayHopAck` (msg_type 0x06, 49 bytes fixed): `transfer_id` (u64), `chunk_seq` (u32), `hop_peer_id` (32 bytes), `ack_status` (`Ok`/`Retry`/`Reject`), `retry_after_ms` (u16), `reason_code` (u16).
 
+## Network query propagation (Phase 3.2)
+
+### QueryForwarder
+
+`QueryForwarder` (`openpulse-core::query_propagation`) propagates `PeerQueryRequest` envelopes (msg_type 0x01) across the network with the same check sequence as `RelayForwarder`:
+
+1. **Message type check** — only `PeerQueryRequest` envelopes are accepted.
+2. **Hop-limit enforcement** — `hop_index >= hop_limit` drops the envelope.
+3. **Trust policy** — `src_peer_id` (hex) checked against `RelayTrustPolicy::denied_relays`.
+4. **Duplicate suppression** — `(src_peer_id, query_id)` checked via `QueryPropagationTracker`; same query from same originator within TTL is suppressed.
+
+On success: clones envelope with `hop_index += 1`; caller broadcasts to neighbouring peers.  `drain_events()` returns `QueryEvent` values (Propagated, HopLimitReached, DuplicateSuppressed, PolicyRejected).
+
+### QueryPropagationTracker
+
+`QueryPropagationTracker` maintains a bounded, TTL-keyed map of `(src_peer_id, query_id)` tuples seen since last eviction.  A separate `response_seen` map deduplicates responses per responder per query.  Both structures are LRU-evicted when capacity is exceeded.
+
+### Route discovery wire payloads
+
+`RouteDiscoveryRequest` (msg_type 0x03, 47 bytes fixed): `route_query_id` (u64), `destination_peer_id` (32 bytes), `max_hops` (u8), `required_capability_mask` (u32), `policy_flags` (u16).
+
+`RouteDiscoveryResponse` (msg_type 0x04, variable): `route_query_id` (u64), `route_id` (u64), `hop_count` (u8), hops (`RouteHop` × hop_count, 37 bytes each), `sig_len` (u16), `route_signature`.  Each `RouteHop`: `hop_peer_id` (32 bytes), `hop_trust_state` (1 byte, `WireTrustState` code), `estimated_latency_ms` (u16), `estimated_reliability_permille` (u16).
+
+`RelayRouteUpdate` (msg_type 0x07, variable): `route_id` (u64), `previous_hop_count` (u8), `new_hop_count` (u8), `route_change_reason` (u16, `RouteChangeReason` code), replacement hops, `route_update_signature`.
+
+`RelayRouteReject` (msg_type 0x08, 45 bytes fixed): `route_id` (u64), `reject_hop_peer_id` (32 bytes), `reason_code` (u16), `trust_decision` (1 byte, `WireTrustState` code), `policy_reference` (u16).
+
 ## Radio interface architecture
 
 The radio interface layer sits between the audio backend and the physical transceiver.

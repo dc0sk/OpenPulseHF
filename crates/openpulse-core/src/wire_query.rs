@@ -15,6 +15,10 @@ pub enum WireQueryError {
     PayloadTooLong,
     #[error("malformed payload")]
     MalformedPayload,
+    #[error("hop count exceeds maximum")]
+    HopCountExceeded,
+    #[error("signature too large to encode")]
+    SignatureTooLarge,
 }
 
 /// Message type codes for the OPHF wire envelope.
@@ -432,6 +436,315 @@ impl RelayHopAck {
             ack_status,
             retry_after_ms,
             reason_code,
+        })
+    }
+}
+
+// ------------------------------------------------------------------
+// route_discovery_request payload (msg_type 0x03)
+// ------------------------------------------------------------------
+
+/// Trust state codes used in route discovery and route reject payloads.
+/// Distinct from `trust::TrustDecision` which is the policy evaluation result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum WireTrustState {
+    Trusted = 0x00,
+    Unknown = 0x01,
+    Untrusted = 0x02,
+    Revoked = 0x03,
+}
+
+impl WireTrustState {
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0x00 => Some(Self::Trusted),
+            0x01 => Some(Self::Unknown),
+            0x02 => Some(Self::Untrusted),
+            0x03 => Some(Self::Revoked),
+            _ => None,
+        }
+    }
+}
+
+/// Reason codes for route updates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u16)]
+pub enum RouteChangeReason {
+    LinkQualityDegraded = 0x0001,
+    HopUnreachable = 0x0002,
+    TrustPolicyChange = 0x0003,
+    OperatorOverride = 0x0004,
+    RouteOptimization = 0x0005,
+}
+
+/// One hop entry in a route discovery response or route update payload.
+///
+/// Encoded: hop_peer_id(32) | hop_trust_state(1) | estimated_latency_ms(2) |
+///          estimated_reliability_permille(2) = 37 bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteHop {
+    pub hop_peer_id: [u8; 32],
+    /// Wire code per `WireTrustState`.
+    pub hop_trust_state: u8,
+    pub estimated_latency_ms: u16,
+    pub estimated_reliability_permille: u16,
+}
+
+impl RouteHop {
+    pub const SIZE: usize = 37;
+
+    fn encode(&self) -> [u8; Self::SIZE] {
+        let mut buf = [0u8; Self::SIZE];
+        buf[0..32].copy_from_slice(&self.hop_peer_id);
+        buf[32] = self.hop_trust_state;
+        buf[33..35].copy_from_slice(&self.estimated_latency_ms.to_be_bytes());
+        buf[35..37].copy_from_slice(&self.estimated_reliability_permille.to_be_bytes());
+        buf
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, WireQueryError> {
+        if bytes.len() < Self::SIZE {
+            return Err(WireQueryError::MalformedPayload);
+        }
+        Ok(Self {
+            hop_peer_id: bytes[0..32].try_into().unwrap(),
+            hop_trust_state: bytes[32],
+            estimated_latency_ms: u16::from_be_bytes([bytes[33], bytes[34]]),
+            estimated_reliability_permille: u16::from_be_bytes([bytes[35], bytes[36]]),
+        })
+    }
+}
+
+/// Payload for msg_type 0x03 — route_discovery_request.
+///
+/// Fixed: route_query_id(8) | destination_peer_id(32) | max_hops(1) |
+///        required_capability_mask(4) | policy_flags(2) = 47 bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteDiscoveryRequest {
+    pub route_query_id: u64,
+    pub destination_peer_id: [u8; 32],
+    pub max_hops: u8,
+    pub required_capability_mask: u32,
+    pub policy_flags: u16,
+}
+
+impl RouteDiscoveryRequest {
+    pub const SIZE: usize = 47;
+
+    pub fn encode(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(Self::SIZE);
+        buf.extend_from_slice(&self.route_query_id.to_be_bytes());
+        buf.extend_from_slice(&self.destination_peer_id);
+        buf.push(self.max_hops);
+        buf.extend_from_slice(&self.required_capability_mask.to_be_bytes());
+        buf.extend_from_slice(&self.policy_flags.to_be_bytes());
+        buf
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireQueryError> {
+        if bytes.len() < Self::SIZE {
+            return Err(WireQueryError::MalformedPayload);
+        }
+        Ok(Self {
+            route_query_id: u64::from_be_bytes(bytes[0..8].try_into().unwrap()),
+            destination_peer_id: bytes[8..40].try_into().unwrap(),
+            max_hops: bytes[40],
+            required_capability_mask: u32::from_be_bytes(bytes[41..45].try_into().unwrap()),
+            policy_flags: u16::from_be_bytes([bytes[45], bytes[46]]),
+        })
+    }
+}
+
+// ------------------------------------------------------------------
+// route_discovery_response payload (msg_type 0x04)
+// ------------------------------------------------------------------
+
+/// Payload for msg_type 0x04 — route_discovery_response.
+///
+/// Variable: route_query_id(8) | route_id(8) | hop_count(1) |
+///           hops[hop_count × 37] | sig_len(2) | route_signature[sig_len].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteDiscoveryResponse {
+    pub route_query_id: u64,
+    pub route_id: u64,
+    pub hops: Vec<RouteHop>,
+    pub route_signature: Vec<u8>,
+}
+
+impl RouteDiscoveryResponse {
+    pub fn encode(&self) -> Result<Vec<u8>, WireQueryError> {
+        if self.hops.len() > 8 {
+            return Err(WireQueryError::HopCountExceeded);
+        }
+        let sig_len = self.route_signature.len();
+        if sig_len > u16::MAX as usize {
+            return Err(WireQueryError::SignatureTooLarge);
+        }
+        let mut buf = Vec::with_capacity(17 + self.hops.len() * RouteHop::SIZE + 2 + sig_len);
+        buf.extend_from_slice(&self.route_query_id.to_be_bytes());
+        buf.extend_from_slice(&self.route_id.to_be_bytes());
+        buf.push(self.hops.len() as u8);
+        for hop in &self.hops {
+            buf.extend_from_slice(&hop.encode());
+        }
+        buf.extend_from_slice(&(sig_len as u16).to_be_bytes());
+        buf.extend_from_slice(&self.route_signature);
+        Ok(buf)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireQueryError> {
+        // Minimum: 8 + 8 + 1 + 0 hops + 2 sig_len = 19 bytes
+        if bytes.len() < 19 {
+            return Err(WireQueryError::MalformedPayload);
+        }
+        let route_query_id = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
+        let route_id = u64::from_be_bytes(bytes[8..16].try_into().unwrap());
+        let hop_count = bytes[16] as usize;
+
+        let hops_end = 17 + hop_count * RouteHop::SIZE;
+        if bytes.len() < hops_end + 2 {
+            return Err(WireQueryError::MalformedPayload);
+        }
+        let mut hops = Vec::with_capacity(hop_count);
+        for i in 0..hop_count {
+            let offset = 17 + i * RouteHop::SIZE;
+            hops.push(RouteHop::decode(&bytes[offset..])?);
+        }
+
+        let sig_len = u16::from_be_bytes([bytes[hops_end], bytes[hops_end + 1]]) as usize;
+        let sig_end = hops_end + 2 + sig_len;
+        if bytes.len() < sig_end {
+            return Err(WireQueryError::MalformedPayload);
+        }
+        let route_signature = bytes[hops_end + 2..sig_end].to_vec();
+        Ok(Self {
+            route_query_id,
+            route_id,
+            hops,
+            route_signature,
+        })
+    }
+}
+
+// ------------------------------------------------------------------
+// relay_route_update payload (msg_type 0x07)
+// ------------------------------------------------------------------
+
+/// Payload for msg_type 0x07 — relay_route_update.
+///
+/// Variable: route_id(8) | previous_hop_count(1) | new_hop_count(1) |
+///           route_change_reason(2) | replacement_hops[new_hop_count × 37] |
+///           sig_len(2) | route_update_signature[sig_len].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayRouteUpdate {
+    pub route_id: u64,
+    pub previous_hop_count: u8,
+    pub route_change_reason: u16,
+    pub replacement_hops: Vec<RouteHop>,
+    pub route_update_signature: Vec<u8>,
+}
+
+impl RelayRouteUpdate {
+    pub fn encode(&self) -> Result<Vec<u8>, WireQueryError> {
+        if self.replacement_hops.len() > u8::MAX as usize {
+            return Err(WireQueryError::HopCountExceeded);
+        }
+        let sig_len = self.route_update_signature.len();
+        if sig_len > u16::MAX as usize {
+            return Err(WireQueryError::SignatureTooLarge);
+        }
+        let new_hop_count = self.replacement_hops.len();
+        let mut buf = Vec::with_capacity(12 + new_hop_count * RouteHop::SIZE + 2 + sig_len);
+        buf.extend_from_slice(&self.route_id.to_be_bytes());
+        buf.push(self.previous_hop_count);
+        buf.push(new_hop_count as u8);
+        buf.extend_from_slice(&self.route_change_reason.to_be_bytes());
+        for hop in &self.replacement_hops {
+            buf.extend_from_slice(&hop.encode());
+        }
+        buf.extend_from_slice(&(sig_len as u16).to_be_bytes());
+        buf.extend_from_slice(&self.route_update_signature);
+        Ok(buf)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireQueryError> {
+        // Minimum: 8 + 1 + 1 + 2 + 0 hops + 2 sig_len = 14 bytes
+        if bytes.len() < 14 {
+            return Err(WireQueryError::MalformedPayload);
+        }
+        let route_id = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
+        let previous_hop_count = bytes[8];
+        let new_hop_count = bytes[9] as usize;
+        let route_change_reason = u16::from_be_bytes([bytes[10], bytes[11]]);
+
+        let hops_end = 12 + new_hop_count * RouteHop::SIZE;
+        if bytes.len() < hops_end + 2 {
+            return Err(WireQueryError::MalformedPayload);
+        }
+        let mut replacement_hops = Vec::with_capacity(new_hop_count);
+        for i in 0..new_hop_count {
+            let offset = 12 + i * RouteHop::SIZE;
+            replacement_hops.push(RouteHop::decode(&bytes[offset..])?);
+        }
+
+        let sig_len = u16::from_be_bytes([bytes[hops_end], bytes[hops_end + 1]]) as usize;
+        let sig_end = hops_end + 2 + sig_len;
+        if bytes.len() < sig_end {
+            return Err(WireQueryError::MalformedPayload);
+        }
+        let route_update_signature = bytes[hops_end + 2..sig_end].to_vec();
+        Ok(Self {
+            route_id,
+            previous_hop_count,
+            route_change_reason,
+            replacement_hops,
+            route_update_signature,
+        })
+    }
+}
+
+// ------------------------------------------------------------------
+// relay_route_reject payload (msg_type 0x08)
+// ------------------------------------------------------------------
+
+/// Payload for msg_type 0x08 — relay_route_reject.
+///
+/// Fixed: route_id(8) | reject_hop_peer_id(32) | reason_code(2) |
+///        trust_decision(1) | policy_reference(2) = 45 bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayRouteReject {
+    pub route_id: u64,
+    pub reject_hop_peer_id: [u8; 32],
+    pub reason_code: u16,
+    /// Wire code per `WireTrustState`.
+    pub trust_decision: u8,
+    pub policy_reference: u16,
+}
+
+impl RelayRouteReject {
+    pub const SIZE: usize = 45;
+
+    pub fn encode(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(Self::SIZE);
+        buf.extend_from_slice(&self.route_id.to_be_bytes());
+        buf.extend_from_slice(&self.reject_hop_peer_id);
+        buf.extend_from_slice(&self.reason_code.to_be_bytes());
+        buf.push(self.trust_decision);
+        buf.extend_from_slice(&self.policy_reference.to_be_bytes());
+        buf
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireQueryError> {
+        if bytes.len() < Self::SIZE {
+            return Err(WireQueryError::MalformedPayload);
+        }
+        Ok(Self {
+            route_id: u64::from_be_bytes(bytes[0..8].try_into().unwrap()),
+            reject_hop_peer_id: bytes[8..40].try_into().unwrap(),
+            reason_code: u16::from_be_bytes([bytes[40], bytes[41]]),
+            trust_decision: bytes[42],
+            policy_reference: u16::from_be_bytes([bytes[43], bytes[44]]),
         })
     }
 }
