@@ -9,6 +9,9 @@ description = "Channel simulation models for OpenPulseHF (AWGN, Gilbert-Elliott,
 
 [dependencies]
 thiserror.workspace = true
+rand.workspace = true
+rand_distr.workspace = true
+rustfft.workspace = true
 serde = { workspace = true, optional = true }
 
 [features]
