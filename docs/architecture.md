@@ -109,7 +109,68 @@ Single-carrier modulation was chosen over OFDM for HPX2300. Rationale: lower PAP
 | SL10 | — | Reserved |
 | SL11 | 8PSK1000 | Highest HPX2300 rate (~3 kbps raw) |
 
-Planned:
+## Signed session handshake (Phase 2.3)
+
+HPX sessions begin with a two-message signed handshake that authenticates both peers and negotiates the signing mode for the session.
+
+### CONREQ (connection request)
+
+Sent by the initiating station at the start of the Discovery phase.
+
+```
+MAGIC("HSCQ") | VERSION(0x01) | LENGTH(u32, BE) | JSON body
+```
+
+JSON body fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `station_id` | string | Callsign of the initiating station |
+| `pubkey` | `[u8]` | Ed25519 verifying-key bytes (32 bytes) |
+| `signing_modes` | `[string]` | List of supported signing modes (subset of `normal`, `psk`, `relaxed`, `paranoid`) |
+| `session_id` | string | Randomly-generated session identifier |
+| `signature` | `[u8]` | Ed25519 signature (64 bytes) over canonical JSON of the above fields (excluding `signature`) |
+
+### CONACK (connection acknowledgment)
+
+Sent by the responder in reply to a valid CONREQ.
+
+```
+MAGIC("HSAK") | VERSION(0x01) | LENGTH(u32, BE) | JSON body
+```
+
+JSON body fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `station_id` | string | Callsign of the responding station |
+| `pubkey` | `[u8]` | Ed25519 verifying-key bytes (32 bytes) |
+| `selected_mode` | string | Chosen signing mode from the CONREQ offer list |
+| `session_id` | string | Must echo the `session_id` from the CONREQ |
+| `signature` | `[u8]` | Ed25519 signature (64 bytes) over canonical JSON of the above fields (excluding `signature`) |
+
+### Handshake trust evaluation
+
+The receiver of each handshake frame:
+
+1. Verifies the Ed25519 signature against the included `pubkey`.
+2. Looks up the peer's trust level in the local trust store.
+3. Calls `evaluate_handshake(policy, local_min_mode, peer_modes, key_trust, cert_source)` from `openpulse-core::trust`.
+4. On `Rejected` trust level or no mutual signing mode → fires `HpxEvent::SignatureVerificationFailed` → session enters `Failed`.
+5. On success → fires `HpxEvent::DiscoveryOk` → session advances to `Training`.
+
+### Transfer manifest
+
+At session teardown, the sender emits a `TransferManifest` with:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `payload_hash` | `[u8]` | SHA-256 of the complete reassembled payload |
+| `payload_size` | `u64` | Total payload bytes |
+| `sender_id` | string | Callsign of the sender |
+| `signature` | `[u8]` | Ed25519 signature (64 bytes) over canonical JSON of the above fields (excluding `signature`) |
+
+The receiver verifies the signature with `verify_manifest()` and also checks that `payload_hash` matches the locally-computed hash of the received data. A mismatch fires `HpxEvent::TransferError` → `HpxReasonCode::ManifestVerificationFailed`.
 
 ## Frame format
 
