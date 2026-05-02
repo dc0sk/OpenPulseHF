@@ -125,6 +125,24 @@ impl ModemEngine {
         self.dcd.energy()
     }
 
+    /// Check CSMA policy and return `ChannelBusy` if the channel is occupied
+    /// or the p-persistence draw fails.  Called before encoding to avoid
+    /// burning sequence numbers on a deferred transmission.
+    fn csma_check(&self) -> Result<(), ModemError> {
+        if !self.csma_enabled {
+            return Ok(());
+        }
+        if self.dcd.is_busy() {
+            return Err(ModemError::ChannelBusy);
+        }
+        // 0.3-persistence: transmit only with 30% probability on a clear channel
+        let p: f32 = rand::thread_rng().gen();
+        if p >= self.csma_persistence {
+            return Err(ModemError::ChannelBusy);
+        }
+        Ok(())
+    }
+
     /// Begin an adaptive-rate session using the given profile.
     ///
     /// Initialises a [`RateAdapter`] at `profile.initial_level` and stores the
@@ -326,6 +344,9 @@ impl ModemEngine {
             }
         }
 
+        // CSMA check before encoding so a deferral does not burn a sequence number.
+        self.csma_check()?;
+
         let outbound = self.stage_encode_frame(data);
         let outbound = self.route_wire_stage(PipelineStage::EncodeModulate, outbound)?;
 
@@ -397,6 +418,8 @@ impl ModemEngine {
         mode: &str,
         device: Option<&str>,
     ) -> Result<(), ModemError> {
+        self.csma_check()?;
+
         let frame_wire = self.stage_encode_frame(data);
         let fec_bytes = FecCodec::new().encode(&frame_wire.bytes);
         let fec_wire = WirePayload { bytes: fec_bytes };
@@ -428,6 +451,8 @@ impl ModemEngine {
     ) -> Result<Vec<u8>, ModemError> {
         let samples = self.stage_capture_input(device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+
+        self.dcd.update(&samples.samples);
 
         let raw_wire = {
             let plugin = self
@@ -462,6 +487,8 @@ impl ModemEngine {
         device: Option<&str>,
         interleaver_depth: usize,
     ) -> Result<(), ModemError> {
+        self.csma_check()?;
+
         let frame_wire = self.stage_encode_frame(data);
         let fec_bytes = FecCodec::new().encode(&frame_wire.bytes);
         let interleaved = Interleaver::new(interleaver_depth).interleave(&fec_bytes);
@@ -489,6 +516,8 @@ impl ModemEngine {
     ) -> Result<Vec<u8>, ModemError> {
         let samples = self.stage_capture_input(device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+
+        self.dcd.update(&samples.samples);
 
         let raw_wire = {
             let plugin = self
@@ -542,17 +571,6 @@ impl ModemEngine {
         samples: &AudioSamples,
     ) -> Result<(), ModemError> {
         let _stage = PipelineStage::OutputEmit;
-
-        if self.csma_enabled {
-            if self.dcd.is_busy() {
-                return Err(ModemError::ChannelBusy);
-            }
-            // 0.3-persistence: transmit only with 30% probability on a clear channel
-            let p: f32 = rand::thread_rng().gen();
-            if p >= self.csma_persistence {
-                return Err(ModemError::ChannelBusy);
-            }
-        }
 
         let audio_cfg = AudioConfig::default();
         let mut stream = self

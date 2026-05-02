@@ -11,6 +11,14 @@ fn make_engine() -> ModemEngine {
     engine
 }
 
+fn make_engine_with_backend(backend: LoopbackBackend) -> ModemEngine {
+    let mut engine = ModemEngine::new(Box::new(backend));
+    engine
+        .register_plugin(Box::new(BpskPlugin::new()))
+        .expect("register BPSK plugin");
+    engine
+}
+
 /// After receiving a signal, DCD should report the channel as busy.
 #[test]
 fn dcd_detects_energy_from_received_signal() {
@@ -55,24 +63,30 @@ fn csma_disabled_ignores_dcd() {
     assert!(result.is_ok(), "disabled CSMA must not block transmit");
 }
 
-/// Simulates two stations sharing a channel: station A transmits, station B
-/// detects the carrier via DCD and defers its own transmission.
+/// Two engines sharing the same loopback buffer: station A transmits, station B
+/// reads from the same buffer, DCD fires on B, and B's CSMA defers the next TX.
 #[test]
 fn two_station_scenario_second_defers_on_dcd() {
-    let mut station_b = make_engine();
+    let shared_backend = LoopbackBackend::new();
+    let backend_b = shared_backend.clone_shared();
 
-    // Station B receives carrier energy (simulating another station transmitting).
-    station_b
-        .transmit(b"carrier energy", "BPSK250", None)
+    let mut station_a = make_engine_with_backend(shared_backend);
+    let mut station_b = make_engine_with_backend(backend_b);
+    station_b.enable_csma();
+
+    // Station A transmits — samples land in the shared buffer.
+    station_a
+        .transmit(b"station A data", "BPSK250", None)
         .unwrap();
+
+    // Station B reads from the shared buffer — DCD detects A's carrier.
     let _ = station_b.receive("BPSK250", None).unwrap();
     assert!(
         station_b.is_channel_busy(),
-        "station B DCD must see carrier"
+        "station B DCD must detect station A's carrier"
     );
 
-    // Now station B enables CSMA and attempts to transmit — should defer.
-    station_b.enable_csma();
+    // Station B attempts to transmit — CSMA defers.
     let result = station_b.transmit(b"station B data", "BPSK250", None);
     assert!(
         matches!(result, Err(ModemError::ChannelBusy)),
