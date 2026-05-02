@@ -30,6 +30,7 @@ impl QpskPlugin {
                     "QPSK125".to_string(),
                     "QPSK250".to_string(),
                     "QPSK500".to_string(),
+                    "QPSK1000".to_string(),
                 ],
                 trait_version_required: "1.0".to_string(),
             },
@@ -62,6 +63,7 @@ pub(crate) fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
         "125" => Ok(125.0),
         "250" => Ok(250.0),
         "500" => Ok(500.0),
+        "1000" => Ok(1000.0),
         _ => Err(ModemError::Configuration(format!(
             "unknown baud rate in mode '{mode}'"
         ))),
@@ -77,6 +79,21 @@ mod tests {
         assert!((parse_baud_rate("QPSK125").unwrap() - 125.0).abs() < 1e-6);
         assert!((parse_baud_rate("QPSK250").unwrap() - 250.0).abs() < 1e-6);
         assert!((parse_baud_rate("QPSK500").unwrap() - 500.0).abs() < 1e-6);
+        assert!((parse_baud_rate("QPSK1000").unwrap() - 1000.0).abs() < 1e-6);
         assert!(parse_baud_rate("QPSK").is_err());
+    }
+
+    #[test]
+    fn qpsk1000_loopback() {
+        use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+        let plugin = QpskPlugin::new();
+        let cfg = ModulationConfig {
+            mode: "QPSK1000".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"QPSK1000 test";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
     }
 }

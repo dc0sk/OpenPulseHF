@@ -114,7 +114,7 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 - `serial` feature added to `openpulse-cli` propagates to `openpulse-radio/serial`
 - Integration tests: `ptt_wiring_integration.rs` — none/default/unknown-backend cases
 
-### Phase 2 — ✅ Partial (2.1 complete)
+### Phase 2 — ✅ Partial (2.1, 2.2 complete)
 
 **2.1 — ACK taxonomy and rate adaptation** ✅ Done
 - `crates/openpulse-core/src/ack.rs`: `AckType` (8 variants, `#[repr(u8)]`), `AckFrame` (5-byte codec with CRC-8/SMBUS and FNV-1a session hash), `AckError`
@@ -125,6 +125,17 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
   - 4 tones at fc±50 Hz and fc±150 Hz (default fc=1050 Hz), 100 baud, Hann-windowed, Goertzel demodulator
   - 5 bytes = 20 symbols = 200 ms at 8 kHz
 - Integration tests: `crates/openpulse-core/tests/rate_adaptation.rs` (11 tests); FSK4 loopback in `plugins/fsk4/src/lib.rs` (3 tests)
+
+**2.2 — HPX500 and HPX2300 adaptive profiles** ✅ Done
+- `plugins/qpsk/src/lib.rs`: added `QPSK1000` mode (1000 baud, 8 samples/symbol @ 8 kHz)
+- `plugins/psk8/`: `Psk8Plugin` implementing `ModulationPlugin` for `"8PSK500"` and `"8PSK1000"`
+  - Gray-coded 8PSK constellation (8 phases, 3 bits/symbol); Hann-windowed modulator; nearest-point IQ demodulator
+  - HPX2300 waveform decision: single-carrier chosen over OFDM (lower PAPR, no cyclic prefix, simpler AFC — see `docs/architecture.md`)
+- `crates/openpulse-core/src/profile.rs`: `SessionProfile` struct mapping `SpeedLevel` → mode string
+  - `SessionProfile::hpx500()`: SL2=BPSK31, SL3=BPSK63, SL4=BPSK250, SL5=QPSK250, SL6=QPSK500; initial=SL2
+  - `SessionProfile::hpx2300()`: SL8=QPSK500, SL9=QPSK1000, SL11=8PSK1000; initial=SL8
+- `crates/openpulse-modem/src/engine.rs`: `start_adaptive_session()`, `apply_ack()`, `current_adaptive_mode()` wired to `RateAdapter`
+- Integration tests: `crates/openpulse-core/tests/session_profile.rs` (4 tests); `crates/openpulse-modem/tests/adaptive_profile_integration.rs` (8 tests); psk8 loopback (5 tests)
 
 ---
 

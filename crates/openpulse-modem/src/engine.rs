@@ -2,12 +2,15 @@
 
 use tracing::{debug, info};
 
+use openpulse_core::ack::AckType;
 use openpulse_core::audio::{AudioBackend, AudioConfig};
 use openpulse_core::error::{ModemError, PluginError};
 use openpulse_core::fec::{FecCodec, Interleaver};
 use openpulse_core::frame::Frame;
 use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
 use openpulse_core::plugin::{ModulationConfig, PluginRegistry};
+use openpulse_core::profile::SessionProfile;
+use openpulse_core::rate::{RateAdapter, RateEvent};
 use openpulse_core::signed_envelope::SignedEnvelope;
 use openpulse_core::trust::{
     evaluate_handshake, CertificateSource, ConnectionTrustLevel, HandshakeDecision, PolicyProfile,
@@ -51,6 +54,8 @@ pub struct ModemEngine {
     active_handshake: Option<HandshakeDecision>,
     /// Carrier frequency offset estimate from the most recent demodulation call.
     last_afc_offset_hz: Option<f32>,
+    rate_adapter: Option<RateAdapter>,
+    session_profile: Option<SessionProfile>,
 }
 
 impl ModemEngine {
@@ -65,6 +70,8 @@ impl ModemEngine {
             trust_policy_profile: PolicyProfile::Balanced,
             active_handshake: None,
             last_afc_offset_hz: None,
+            rate_adapter: None,
+            session_profile: None,
         }
     }
 
@@ -83,6 +90,40 @@ impl ModemEngine {
     /// if the active plugin does not support AFC.
     pub fn last_afc_offset_hz(&self) -> Option<f32> {
         self.last_afc_offset_hz
+    }
+
+    /// Begin an adaptive-rate session using the given profile.
+    ///
+    /// Initialises a [`RateAdapter`] at `profile.initial_level` and stores the
+    /// profile so that [`current_adaptive_mode`](Self::current_adaptive_mode)
+    /// can resolve the current mode string on each transmit/receive cycle.
+    pub fn start_adaptive_session(&mut self, profile: SessionProfile) {
+        let initial = profile.initial_level;
+        let threshold = profile.nack_threshold;
+        let mut adapter = RateAdapter::new(initial);
+        adapter.nack_threshold = threshold;
+        self.rate_adapter = Some(adapter);
+        self.session_profile = Some(profile);
+    }
+
+    /// Apply a received ACK type to the rate adapter and return the resulting event.
+    ///
+    /// Returns [`RateEvent::Maintained`] when no adaptive session is active.
+    pub fn apply_ack(&mut self, ack: AckType) -> RateEvent {
+        match self.rate_adapter.as_mut() {
+            Some(adapter) => adapter.apply_ack(ack),
+            None => RateEvent::Maintained,
+        }
+    }
+
+    /// Return the mode string for the current speed level of the active adaptive session.
+    ///
+    /// Returns `None` when no profile is active or the current speed level has no
+    /// mode assigned (e.g. SL1 chirp fallback, reserved levels).
+    pub fn current_adaptive_mode(&self) -> Option<&str> {
+        let profile = self.session_profile.as_ref()?;
+        let adapter = self.rate_adapter.as_ref()?;
+        profile.mode_for(adapter.speed_level())
     }
 
     /// Returns the current HPX state for this engine session.

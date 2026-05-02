@@ -76,11 +76,40 @@ Note: this is an amplitude envelope shape applied per symbol, not a root-raised-
 | QPSK125 | 125 | Gray-mapped QPSK | Byte (8-bit) | 2 bits/symbol |
 | QPSK250 | 250 | Gray-mapped QPSK | Byte (8-bit) | 2 bits/symbol |
 | QPSK500 | 500 | Gray-mapped QPSK | Byte (8-bit) | 2 bits/symbol |
+| QPSK1000 | 1000 | Gray-mapped QPSK | Byte (8-bit) | 2 bits/symbol; HPX2300 SL9 |
+| 8PSK500 | 500 | Gray-coded 8PSK | Byte (8-bit) | 3 bits/symbol |
+| 8PSK1000 | 1000 | Gray-coded 8PSK | Byte (8-bit) | 3 bits/symbol; HPX2300 SL11 |
+| FSK4-ACK | 100 (fixed) | 4-tone FSK | ACK frame (5 B) | ACK transport; independent of data mode |
+
+## HPX adaptive profiles
+
+HPX sessions select a modulation mode at runtime based on the current `SpeedLevel` reported by the `RateAdapter`. Two profiles are defined in `openpulse-core/src/profile.rs`:
+
+### HPX500 (500 Hz class)
+
+| SL  | Mode     | Notes |
+|-----|----------|-------|
+| SL1 | — | Chirp fallback (session teardown) |
+| SL2 | BPSK31   | Initial level; most robust |
+| SL3 | BPSK63   | |
+| SL4 | BPSK250  | |
+| SL5 | QPSK250  | |
+| SL6 | QPSK500  | Highest HPX500 rate |
+| SL7 | — | Reserved |
+
+### HPX2300 (2300 Hz class)
+
+Single-carrier modulation was chosen over OFDM for HPX2300. Rationale: lower PAPR (near 0 dB for 8PSK vs 9–12 dB for OFDM), no cyclic prefix overhead, simpler AFC, and architectural consistency with HPX500. OFDM is deferred to Phase 3 if multipath gain measurements justify the added receiver complexity.
+
+| SL  | Mode      | Notes |
+|-----|-----------|-------|
+| SL1–SL7 | — | Chirp fallback / HPX500 territory |
+| SL8 | QPSK500   | Initial level |
+| SL9 | QPSK1000  | |
+| SL10 | — | Reserved |
+| SL11 | 8PSK1000 | Highest HPX2300 rate (~3 kbps raw) |
 
 Planned:
-
-- HPX500: adaptive high-resilience profile in 500 Hz class, rate ladder BPSK → QPSK → 8PSK.
-- HPX2300: adaptive higher-throughput profile in 2300–2400 Hz class.
 
 ## Frame format
 
