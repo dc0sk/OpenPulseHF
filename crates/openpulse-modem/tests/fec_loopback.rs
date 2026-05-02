@@ -4,10 +4,11 @@
 //!  1. FEC round-trips through the modem engine (BPSK + QPSK modes).
 //!  2. Pure codec correctness: encode → inject byte errors → decode.
 //!  3. Overhead assertion: FEC output is strictly larger than the raw input.
+//!  4. Interleaved FEC loopback and Gilbert-Elliott burst scenario.
 
 use bpsk_plugin::BpskPlugin;
 use openpulse_audio::LoopbackBackend;
-use openpulse_core::fec::FecCodec;
+use openpulse_core::fec::{FecCodec, Interleaver, DEFAULT_INTERLEAVER_DEPTH};
 use openpulse_modem::engine::ModemEngine;
 use qpsk_plugin::QpskPlugin;
 
@@ -203,4 +204,55 @@ fn fec_loopback_fixture_matrix() {
     }
 
     assert_eq!(executed, expected);
+}
+
+// ── Interleaved FEC ───────────────────────────────────────────────────────────
+
+/// Basic engine loopback with FEC + interleaving — no injected errors.
+#[test]
+fn fec_interleaved_bpsk250_loopback() {
+    let mut engine = engine_with_both_plugins();
+    let payload = b"interleaved FEC loopback test";
+    engine
+        .transmit_with_fec_interleaved(payload, "BPSK250", None, DEFAULT_INTERLEAVER_DEPTH)
+        .unwrap();
+    let received = engine
+        .receive_with_fec_interleaved("BPSK250", None, DEFAULT_INTERLEAVER_DEPTH)
+        .unwrap();
+    assert_eq!(received, payload);
+}
+
+/// Gilbert-Elliott moderate-burst scenario: five 20-byte bursts spread across
+/// the interleaved buffer (matching the GE moderate-burst profile mean burst
+/// length of 20 symbols).  After deinterleaving and RS correction the original
+/// payload must be recovered.
+///
+/// Each burst of 20 bytes distributes to ≈ 2 errors per RS block across the
+/// 10-block encoded buffer — within the 16-byte RS correction capacity.
+#[test]
+fn fec_interleaved_ge_moderate_burst_scenario() {
+    let codec = FecCodec::new();
+    let il = Interleaver::new(DEFAULT_INTERLEAVER_DEPTH);
+    // 10 RS blocks so burst distribution stays safely under the correction limit.
+    let payload: Vec<u8> = (0..2190u16).map(|v| (v & 0xFF) as u8).collect();
+
+    let encoded = codec.encode(&payload);
+    assert_eq!(encoded.len(), 2550, "expected 10 RS blocks");
+    let interleaved = il.interleave(&encoded);
+
+    // Inject 5 bursts of 20 bytes (GE moderate-burst mean burst length),
+    // evenly spaced to simulate multiple independent burst events.
+    let mut corrupted = interleaved.clone();
+    let burst_len = 20;
+    let spacing = encoded.len() / 5; // 510-byte gap between bursts
+    for b in 0..5 {
+        let offset = b * spacing + 10;
+        for i in offset..offset + burst_len {
+            corrupted[i] ^= 0xFF;
+        }
+    }
+
+    let deinterleaved = il.deinterleave(&corrupted);
+    let recovered = codec.decode(&deinterleaved).unwrap();
+    assert_eq!(recovered, payload);
 }
