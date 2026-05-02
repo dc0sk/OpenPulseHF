@@ -5,6 +5,7 @@ members = [
     "crates/openpulse-audio",
     "crates/openpulse-modem",
     "crates/openpulse-cli",
+    "crates/openpulse-channel",
     "plugins/bpsk",
     "plugins/qpsk",
     "pki-tooling",
@@ -18,11 +19,12 @@ authors = ["OpenPulse Contributors"]
 repository = "https://github.com/dc0sk/OpenPulse"
 
 [workspace.dependencies]
-openpulse-core  = { path = "crates/openpulse-core" }
-openpulse-audio = { path = "crates/openpulse-audio", default-features = false }
-openpulse-modem = { path = "crates/openpulse-modem" }
-bpsk-plugin     = { path = "plugins/bpsk" }
-qpsk-plugin     = { path = "plugins/qpsk" }
+openpulse-core    = { path = "crates/openpulse-core" }
+openpulse-audio   = { path = "crates/openpulse-audio", default-features = false }
+openpulse-modem   = { path = "crates/openpulse-modem" }
+openpulse-channel = { path = "crates/openpulse-channel" }
+bpsk-plugin       = { path = "plugins/bpsk" }
+qpsk-plugin       = { path = "plugins/qpsk" }
 
 thiserror          = "2.0"
 anyhow             = "1.0"
