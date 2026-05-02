@@ -25,6 +25,7 @@ mod cli;
 mod commands;
 mod output;
 mod pki;
+mod radio;
 mod state;
 
 pub use cli::*;
@@ -62,11 +63,12 @@ fn main() -> Result<()> {
     engine.set_trust_policy_profile(load_policy_profile_or_default());
 
     let pki = PkiClient::new(cli.pki_url.clone());
+    let mut ptt = radio::build_ptt_controller(&cli.ptt, &cli.rig)?;
     let mut exit_code = 0;
 
     match cli.command {
         Commands::Transmit { data, mode, device } => {
-            commands::transmit::run(&data, &mode, device.as_deref(), &mut engine)?;
+            commands::transmit::run(&data, &mode, device.as_deref(), &mut engine, ptt.as_mut())?;
         }
         Commands::Receive { mode, device } => {
             commands::receive::run(&mode, device.as_deref(), &mut engine)?;

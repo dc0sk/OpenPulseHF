@@ -21,6 +21,14 @@ pub struct Cli {
     #[arg(long, global = true, default_value = "http://127.0.0.1:8787")]
     pub pki_url: String,
 
+    /// PTT backend: none | rts | dtr | vox | rigctld.
+    #[arg(long, global = true, default_value = "none")]
+    pub ptt: String,
+
+    /// Serial port path or rigctld address:port for PTT (e.g. /dev/ttyUSB0 or localhost:4532).
+    #[arg(long, global = true, default_value = "")]
+    pub rig: String,
+
     #[command(subcommand)]
     pub command: Commands,
 }

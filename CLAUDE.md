@@ -86,11 +86,8 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 
 **1.3 — Wire interleaver into `FecCodec` and `ModemEngine`** ✅ Done (PR #70)
 
-**1.5 — Radio interface layer (`openpulse-radio` crate)** ✅ Core done
+**1.5 — Radio interface layer (`openpulse-radio` crate)** ✅ Done
 - `PttController` trait, `PttError`, `NoOpPtt`, `SerialRtsDtrPtt`, `VoxPtt`, `RigctldPtt` all implemented and tested
-- Pending integration items (tracked separately):
-  - AFC loop: frequency-offset tracking (±50 Hz) in BPSK demodulator; expose in session diagnostics
-  - CLI wiring: `--ptt <none|rts|dtr|vox|rigctld>` and `--rig <address:port>` options in `openpulse-cli`
 
 ### Group 3 — requires resolved design decisions (see below)
 
@@ -108,9 +105,12 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 - `SessionDiagnostics::afc_offset_hz` — `Option<f32>` field, ready for CLI to populate
 - Tracking range: ±baud_rate/4 (BPSK250: ±62.5 Hz; BPSK31: ±7.8 Hz)
 
-**1.5b — PTT CLI wiring**
-- Add `--ptt <none|rts|dtr|vox|rigctld>` and `--rig <address:port>` options to `openpulse-cli`
-- Wire selected `PttController` implementation into `ModemEngine` session path
+**1.5b — PTT CLI wiring** ✅ Done
+- `--ptt <none|rts|dtr|vox|rigctld>` and `--rig <address:port>` global options added to `openpulse-cli`
+- `crates/openpulse-cli/src/radio.rs`: `build_ptt_controller()` factory selects backend at startup
+- `commands/transmit.rs`: wraps transmit with PTT assert/release (release guaranteed on TX error)
+- `serial` feature added to `openpulse-cli` propagates to `openpulse-radio/serial`
+- Integration tests: `ptt_wiring_integration.rs` — none/default/unknown-backend cases
 
 ---
 
