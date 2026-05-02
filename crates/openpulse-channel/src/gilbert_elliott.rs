@@ -29,7 +29,11 @@ impl GilbertElliottChannel {
             Some(s) => rand::rngs::StdRng::seed_from_u64(s),
             None => rand::rngs::StdRng::from_entropy(),
         };
-        Ok(Self { config, rng, in_bad: false })
+        Ok(Self {
+            config,
+            rng,
+            in_bad: false,
+        })
     }
 
     fn noise_sigma_for_snr(&self, snr_db: f32, signal_rms: f32) -> f32 {
@@ -126,7 +130,9 @@ mod tests {
             let u = rand_distr::Distribution::sample(&uniform, &mut rng);
             let was_bad = in_bad;
             if in_bad {
-                if u < p_bg { in_bad = false; }
+                if u < p_bg {
+                    in_bad = false;
+                }
             } else if u < p_gb {
                 in_bad = true;
             }
@@ -146,8 +152,7 @@ mod tests {
             "no bursts observed in {n} samples — p_gb likely too low"
         );
 
-        let observed_mean =
-            burst_lengths.iter().sum::<usize>() as f64 / burst_lengths.len() as f64;
+        let observed_mean = burst_lengths.iter().sum::<usize>() as f64 / burst_lengths.len() as f64;
         let tolerance = expected_mean as f64 * 0.10;
         assert!(
             (observed_mean - expected_mean as f64).abs() < tolerance,

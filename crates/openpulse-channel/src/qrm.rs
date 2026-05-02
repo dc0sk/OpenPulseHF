@@ -30,7 +30,9 @@ fn validate_tone(tone: &ToneConfig) -> Result<(), ChannelError> {
 impl QrmChannel {
     pub fn new(config: QrmConfig) -> Result<Self, ChannelError> {
         if config.sample_rate == 0 {
-            return Err(ChannelError::InvalidParameter("sample_rate must be > 0".into()));
+            return Err(ChannelError::InvalidParameter(
+                "sample_rate must be > 0".into(),
+            ));
         }
         if let Some(snr) = config.noise_floor_snr_db {
             if !snr.is_finite() {
@@ -47,7 +49,11 @@ impl QrmChannel {
             Some(s) => rand::rngs::StdRng::seed_from_u64(s),
             None => rand::rngs::StdRng::from_entropy(),
         };
-        Ok(Self { config, phases, rng })
+        Ok(Self {
+            config,
+            phases,
+            rng,
+        })
     }
 }
 
@@ -61,9 +67,10 @@ impl ChannelModel for QrmChannel {
         let rms = if rms > 0.0 { rms } else { 1e-4 };
 
         // Construct background noise distribution once per block, outside the sample loop.
-        let bg_dist = self.config.noise_floor_snr_db.map(|snr| {
-            Normal::new(0.0f32, rms / 10f32.powf(snr / 20.0)).unwrap()
-        });
+        let bg_dist = self
+            .config
+            .noise_floor_snr_db
+            .map(|snr| Normal::new(0.0f32, rms / 10f32.powf(snr / 20.0)).unwrap());
 
         let mut out = input.to_vec();
         for sample in out.iter_mut() {
@@ -97,7 +104,10 @@ mod tests {
     #[test]
     fn output_length_preserved() {
         let mut ch = QrmChannel::new(QrmConfig {
-            tones: vec![ToneConfig { frequency_hz: 1000.0, amplitude: 0.5 }],
+            tones: vec![ToneConfig {
+                frequency_hz: 1000.0,
+                amplitude: 0.5,
+            }],
             noise_floor_snr_db: None,
             sample_rate: 8000,
             seed: None,
@@ -121,7 +131,10 @@ mod tests {
     #[test]
     fn rejects_non_finite_tone_frequency() {
         let res = QrmChannel::new(QrmConfig {
-            tones: vec![ToneConfig { frequency_hz: f32::NAN, amplitude: 1.0 }],
+            tones: vec![ToneConfig {
+                frequency_hz: f32::NAN,
+                amplitude: 1.0,
+            }],
             noise_floor_snr_db: None,
             sample_rate: 8000,
             seed: None,

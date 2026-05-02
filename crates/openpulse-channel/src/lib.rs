@@ -80,19 +80,43 @@ pub struct GilbertElliottConfig {
 impl GilbertElliottConfig {
     /// Light burst: mean burst = 1/p_bg = 10 symbols.
     pub fn light(seed: Option<u64>) -> Self {
-        Self { p_gb: 0.02, p_bg: 0.1, snr_good_db: 20.0, snr_bad_db: 3.0, seed }
+        Self {
+            p_gb: 0.02,
+            p_bg: 0.1,
+            snr_good_db: 20.0,
+            snr_bad_db: 3.0,
+            seed,
+        }
     }
     /// Moderate burst: mean burst = 1/p_bg = 20 symbols.
     pub fn moderate(seed: Option<u64>) -> Self {
-        Self { p_gb: 0.02, p_bg: 0.05, snr_good_db: 20.0, snr_bad_db: 0.0, seed }
+        Self {
+            p_gb: 0.02,
+            p_bg: 0.05,
+            snr_good_db: 20.0,
+            snr_bad_db: 0.0,
+            seed,
+        }
     }
     /// Heavy burst: mean burst = 1/p_bg = 50 symbols.
     pub fn heavy(seed: Option<u64>) -> Self {
-        Self { p_gb: 0.02, p_bg: 0.02, snr_good_db: 20.0, snr_bad_db: -3.0, seed }
+        Self {
+            p_gb: 0.02,
+            p_bg: 0.02,
+            snr_good_db: 20.0,
+            snr_bad_db: -3.0,
+            seed,
+        }
     }
     /// Severe burst: mean burst = 1/p_bg = 100 symbols.
     pub fn severe(seed: Option<u64>) -> Self {
-        Self { p_gb: 0.02, p_bg: 0.01, snr_good_db: 20.0, snr_bad_db: -6.0, seed }
+        Self {
+            p_gb: 0.02,
+            p_bg: 0.01,
+            snr_good_db: 20.0,
+            snr_bad_db: -6.0,
+            seed,
+        }
     }
 }
 
@@ -114,31 +138,73 @@ pub struct WattersonConfig {
 impl WattersonConfig {
     /// ITU-R F.1487 Good F1: Doppler 0.1 Hz, delay 0.5 ms.
     pub fn good_f1(seed: Option<u64>) -> Self {
-        Self { doppler_spread_hz: 0.1, delay_spread_ms: 0.5, snr_db: 20.0, seed, sample_rate: 8000 }
+        Self {
+            doppler_spread_hz: 0.1,
+            delay_spread_ms: 0.5,
+            snr_db: 20.0,
+            seed,
+            sample_rate: 8000,
+        }
     }
     /// ITU-R F.1487 Good F2: Doppler 0.5 Hz, delay 1.0 ms.
     pub fn good_f2(seed: Option<u64>) -> Self {
-        Self { doppler_spread_hz: 0.5, delay_spread_ms: 1.0, snr_db: 15.0, seed, sample_rate: 8000 }
+        Self {
+            doppler_spread_hz: 0.5,
+            delay_spread_ms: 1.0,
+            snr_db: 15.0,
+            seed,
+            sample_rate: 8000,
+        }
     }
     /// ITU-R F.1487 Moderate F1: Doppler 1.0 Hz, delay 1.0 ms.
     pub fn moderate_f1(seed: Option<u64>) -> Self {
-        Self { doppler_spread_hz: 1.0, delay_spread_ms: 1.0, snr_db: 10.0, seed, sample_rate: 8000 }
+        Self {
+            doppler_spread_hz: 1.0,
+            delay_spread_ms: 1.0,
+            snr_db: 10.0,
+            seed,
+            sample_rate: 8000,
+        }
     }
     /// ITU-R F.1487 Moderate F2: Doppler 1.0 Hz, delay 2.0 ms.
     pub fn moderate_f2(seed: Option<u64>) -> Self {
-        Self { doppler_spread_hz: 1.0, delay_spread_ms: 2.0, snr_db: 10.0, seed, sample_rate: 8000 }
+        Self {
+            doppler_spread_hz: 1.0,
+            delay_spread_ms: 2.0,
+            snr_db: 10.0,
+            seed,
+            sample_rate: 8000,
+        }
     }
     /// ITU-R F.1487 Poor F1: Doppler 2.0 Hz, delay 2.0 ms.
     pub fn poor_f1(seed: Option<u64>) -> Self {
-        Self { doppler_spread_hz: 2.0, delay_spread_ms: 2.0, snr_db: 5.0, seed, sample_rate: 8000 }
+        Self {
+            doppler_spread_hz: 2.0,
+            delay_spread_ms: 2.0,
+            snr_db: 5.0,
+            seed,
+            sample_rate: 8000,
+        }
     }
     /// ITU-R F.1487 Poor F2: Doppler 2.0 Hz, delay 5.0 ms.
     pub fn poor_f2(seed: Option<u64>) -> Self {
-        Self { doppler_spread_hz: 2.0, delay_spread_ms: 5.0, snr_db: 3.0, seed, sample_rate: 8000 }
+        Self {
+            doppler_spread_hz: 2.0,
+            delay_spread_ms: 5.0,
+            snr_db: 3.0,
+            seed,
+            sample_rate: 8000,
+        }
     }
     /// Extreme: Doppler 10.0 Hz, delay 10.0 ms.
     pub fn extreme(seed: Option<u64>) -> Self {
-        Self { doppler_spread_hz: 10.0, delay_spread_ms: 10.0, snr_db: 0.0, seed, sample_rate: 8000 }
+        Self {
+            doppler_spread_hz: 10.0,
+            delay_spread_ms: 10.0,
+            snr_db: 0.0,
+            seed,
+            sample_rate: 8000,
+        }
     }
 }
 
@@ -242,35 +308,41 @@ pub fn build_channel(
     match config {
         ChannelModelConfig::Awgn(cfg) => {
             let mut c = cfg.clone();
-            if seed.is_some() { c.seed = seed; }
+            if seed.is_some() {
+                c.seed = seed;
+            }
             Ok(Box::new(awgn::AwgnChannel::new(c)?))
         }
         ChannelModelConfig::GilbertElliott(cfg) => {
             let mut c = cfg.clone();
-            if seed.is_some() { c.seed = seed; }
+            if seed.is_some() {
+                c.seed = seed;
+            }
             Ok(Box::new(gilbert_elliott::GilbertElliottChannel::new(c)?))
         }
         ChannelModelConfig::Watterson(cfg) => {
             let mut c = cfg.clone();
-            if seed.is_some() { c.seed = seed; }
+            if seed.is_some() {
+                c.seed = seed;
+            }
             Ok(Box::new(watterson::WattersonChannel::new(c)?))
         }
         ChannelModelConfig::Qrn(cfg) => {
             let mut c = cfg.clone();
-            if seed.is_some() { c.seed = seed; }
+            if seed.is_some() {
+                c.seed = seed;
+            }
             Ok(Box::new(qrn::QrnChannel::new(c)?))
         }
         ChannelModelConfig::Qrm(cfg) => {
             let mut c = cfg.clone();
-            if seed.is_some() { c.seed = seed; }
+            if seed.is_some() {
+                c.seed = seed;
+            }
             Ok(Box::new(qrm::QrmChannel::new(c)?))
         }
-        ChannelModelConfig::Qsb(cfg) => {
-            Ok(Box::new(qsb::QsbChannel::new(cfg.clone())?))
-        }
-        ChannelModelConfig::Chirp(cfg) => {
-            Ok(Box::new(chirp::ChirpChannel::new(cfg.clone())?))
-        }
+        ChannelModelConfig::Qsb(cfg) => Ok(Box::new(qsb::QsbChannel::new(cfg.clone())?)),
+        ChannelModelConfig::Chirp(cfg) => Ok(Box::new(chirp::ChirpChannel::new(cfg.clone())?)),
         ChannelModelConfig::Composite(cfg) => {
             Ok(Box::new(composite::CompositeChannel::build(cfg, seed)?))
         }
@@ -285,7 +357,10 @@ mod tests {
 
     #[test]
     fn build_channel_awgn_ok() {
-        let cfg = ChannelModelConfig::Awgn(AwgnConfig { snr_db: 10.0, seed: Some(42) });
+        let cfg = ChannelModelConfig::Awgn(AwgnConfig {
+            snr_db: 10.0,
+            seed: Some(42),
+        });
         assert!(build_channel(&cfg, None).is_ok());
     }
 

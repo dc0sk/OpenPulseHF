@@ -14,7 +14,9 @@ pub struct AwgnChannel {
 impl AwgnChannel {
     pub fn new(config: AwgnConfig) -> Result<Self, ChannelError> {
         if !config.snr_db.is_finite() {
-            return Err(ChannelError::InvalidParameter("snr_db must be finite".into()));
+            return Err(ChannelError::InvalidParameter(
+                "snr_db must be finite".into(),
+            ));
         }
         let rng = match config.seed {
             Some(s) => rand::rngs::StdRng::seed_from_u64(s),
@@ -35,9 +37,16 @@ impl ChannelModel for AwgnChannel {
             return Vec::new();
         }
         let rms = (input.iter().map(|&s| s * s).sum::<f32>() / input.len() as f32).sqrt();
-        let sigma = if rms > 0.0 { self.noise_sigma(rms) } else { 1e-4 };
+        let sigma = if rms > 0.0 {
+            self.noise_sigma(rms)
+        } else {
+            1e-4
+        };
         let dist = Normal::new(0.0f32, sigma).unwrap();
-        input.iter().map(|&s| s + dist.sample(&mut self.rng)).collect()
+        input
+            .iter()
+            .map(|&s| s + dist.sample(&mut self.rng))
+            .collect()
     }
 
     fn generate_noise(&mut self, length: usize) -> Vec<f32> {
@@ -56,13 +65,21 @@ mod tests {
 
     #[test]
     fn rejects_infinite_snr() {
-        assert!(AwgnChannel::new(AwgnConfig { snr_db: f32::INFINITY, seed: None }).is_err());
+        assert!(AwgnChannel::new(AwgnConfig {
+            snr_db: f32::INFINITY,
+            seed: None
+        })
+        .is_err());
     }
 
     /// At SNR = 0 dB the noise power should equal the signal power (within ±0.5 dB).
     #[test]
     fn snr_zero_db_equal_power() {
-        let mut ch = AwgnChannel::new(AwgnConfig { snr_db: 0.0, seed: Some(1) }).unwrap();
+        let mut ch = AwgnChannel::new(AwgnConfig {
+            snr_db: 0.0,
+            seed: Some(1),
+        })
+        .unwrap();
 
         // Unit-amplitude 1500 Hz sine, 8000 Hz sample rate, 8000 samples.
         let n = 8000usize;
@@ -74,9 +91,12 @@ mod tests {
         let signal_power = signal.iter().map(|&s| s * s).sum::<f32>() / n as f32;
         let noisy = ch.apply(&signal);
         // noise = noisy − signal
-        let noise_power =
-            noisy.iter().zip(signal.iter()).map(|(&n, &s)| (n - s).powi(2)).sum::<f32>()
-                / n as f32;
+        let noise_power = noisy
+            .iter()
+            .zip(signal.iter())
+            .map(|(&n, &s)| (n - s).powi(2))
+            .sum::<f32>()
+            / n as f32;
 
         let ratio_db = 10.0 * (noise_power / signal_power).log10();
         assert!(
@@ -87,7 +107,10 @@ mod tests {
 
     #[test]
     fn deterministic_with_seed() {
-        let cfg = AwgnConfig { snr_db: 10.0, seed: Some(99) };
+        let cfg = AwgnConfig {
+            snr_db: 10.0,
+            seed: Some(99),
+        };
         let input = vec![0.5f32; 128];
         let mut ch1 = AwgnChannel::new(cfg.clone()).unwrap();
         let mut ch2 = AwgnChannel::new(cfg).unwrap();

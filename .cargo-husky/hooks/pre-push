@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cargo check --workspace --no-default-features
+cargo test --workspace --no-default-features
+cargo audit

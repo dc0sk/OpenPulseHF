@@ -2,7 +2,7 @@
 //!
 //! Used by the testbench GUI to display real-time spectral data.
 
-use rustfft::{FftPlanner, num_complex::Complex};
+use rustfft::{num_complex::Complex, FftPlanner};
 
 /// FFT size for spectrum analysis (yields 512 positive-frequency bins at 8000 Hz).
 pub const FFT_SIZE: usize = 1024;
@@ -37,7 +37,10 @@ pub struct PowerSpectrum {
 
 impl PowerSpectrum {
     pub fn new() -> Self {
-        Self { planner: FftPlanner::new(), window: hann_window() }
+        Self {
+            planner: FftPlanner::new(),
+            window: hann_window(),
+        }
     }
 
     /// Compute the power spectrum from `samples`.
@@ -83,7 +86,10 @@ pub struct WaterfallBuffer {
 
 impl WaterfallBuffer {
     pub fn new(capacity: usize) -> Self {
-        Self { rows: Vec::with_capacity(capacity), capacity }
+        Self {
+            rows: Vec::with_capacity(capacity),
+            capacity,
+        }
     }
 
     /// Push a new power spectrum row (converted to a plasma colormap index 0–255).
@@ -134,7 +140,10 @@ mod tests {
             .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
             .map(|(i, _)| i)
             .unwrap();
-        assert_eq!(peak_bin, expected_bin, "1500 Hz tone should peak at bin 192");
+        assert_eq!(
+            peak_bin, expected_bin,
+            "1500 Hz tone should peak at bin 192"
+        );
     }
 
     #[test]

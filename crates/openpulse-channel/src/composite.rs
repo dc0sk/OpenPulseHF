@@ -26,7 +26,9 @@ impl CompositeChannel {
 
 impl ChannelModel for CompositeChannel {
     fn apply(&mut self, input: &[f32]) -> Vec<f32> {
-        self.stages.iter_mut().fold(input.to_vec(), |acc, stage| stage.apply(&acc))
+        self.stages
+            .iter_mut()
+            .fold(input.to_vec(), |acc, stage| stage.apply(&acc))
     }
 
     fn generate_noise(&mut self, length: usize) -> Vec<f32> {
@@ -54,8 +56,14 @@ mod tests {
     fn two_stage_awgn_pipeline() {
         let cfg = CompositeConfig {
             stages: vec![
-                ChannelModelConfig::Awgn(AwgnConfig { snr_db: 20.0, seed: Some(1) }),
-                ChannelModelConfig::Awgn(AwgnConfig { snr_db: 20.0, seed: Some(2) }),
+                ChannelModelConfig::Awgn(AwgnConfig {
+                    snr_db: 20.0,
+                    seed: Some(1),
+                }),
+                ChannelModelConfig::Awgn(AwgnConfig {
+                    snr_db: 20.0,
+                    seed: Some(2),
+                }),
             ],
         };
         let mut ch = CompositeChannel::build(&cfg, None).unwrap();
@@ -75,8 +83,14 @@ mod tests {
     fn generate_noise_sums_stages() {
         let cfg = CompositeConfig {
             stages: vec![
-                ChannelModelConfig::Awgn(AwgnConfig { snr_db: 0.0, seed: Some(1) }),
-                ChannelModelConfig::Awgn(AwgnConfig { snr_db: 0.0, seed: Some(2) }),
+                ChannelModelConfig::Awgn(AwgnConfig {
+                    snr_db: 0.0,
+                    seed: Some(1),
+                }),
+                ChannelModelConfig::Awgn(AwgnConfig {
+                    snr_db: 0.0,
+                    seed: Some(2),
+                }),
             ],
         };
         let mut ch = CompositeChannel::build(&cfg, None).unwrap();
@@ -90,8 +104,14 @@ mod tests {
         // With a global seed override both stages should produce different outputs.
         let cfg = CompositeConfig {
             stages: vec![
-                ChannelModelConfig::Awgn(AwgnConfig { snr_db: 20.0, seed: None }),
-                ChannelModelConfig::Awgn(AwgnConfig { snr_db: 20.0, seed: None }),
+                ChannelModelConfig::Awgn(AwgnConfig {
+                    snr_db: 20.0,
+                    seed: None,
+                }),
+                ChannelModelConfig::Awgn(AwgnConfig {
+                    snr_db: 20.0,
+                    seed: None,
+                }),
             ],
         };
         let mut ch = CompositeChannel::build(&cfg, Some(99)).unwrap();
