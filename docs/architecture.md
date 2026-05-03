@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/architecture.md
 status: living
-last_updated: 2026-05-02
+last_updated: 2026-05-03
 ---
 
 # Architecture
@@ -380,6 +380,38 @@ On success: clones envelope with `hop_index += 1`; caller broadcasts to neighbou
 `RelayRouteUpdate` (msg_type 0x07, variable): `route_id` (u64), `previous_hop_count` (u8), `new_hop_count` (u8), `route_change_reason` (u16, `RouteChangeReason` code), replacement hops, `route_update_signature`.
 
 `RelayRouteReject` (msg_type 0x08, 45 bytes fixed): `route_id` (u64), `reject_hop_peer_id` (32 bytes), `reason_code` (u16), `trust_decision` (1 byte, `WireTrustState` code), `policy_reference` (u16).
+
+## Post-quantum in-band handshake (Phase 3.1)
+
+### Algorithms
+
+- **ML-DSA-44 (FIPS 204)**: post-quantum digital signature. Verifying key: 1312 bytes. Signature: 2420 bytes. Signing key stored as 32-byte seed.
+- **ML-KEM-768 (FIPS 203)**: post-quantum key encapsulation mechanism. Encapsulation key (EK): 1184 bytes. Decapsulation key stored as 64-byte `d||z` seed. Ciphertext: 1088 bytes. Shared secret: 32 bytes.
+
+### Signing modes
+
+`PqConReq` / `PqConAck` frames extend the classical handshake with two new `SigningMode` variants:
+
+| Mode | Signatures | Strength rank |
+|------|-----------|---------------|
+| `Pq` | ML-DSA-44 only | 4 |
+| `Hybrid` | Ed25519 + ML-DSA-44 | 5 (highest) |
+
+Canonical body for signing is the JSON of all frame fields excluding `classical_signature` and `pq_signature`, matching the pattern used in the classical `ConReq`/`ConAck` frames.
+
+### SAR transport
+
+Post-quantum key material exceeds a single 255-byte frame.  `encode_pq_conreq` / `encode_pq_conack` serialize to JSON; the caller passes the bytes to `sar_encode` which fragments across up to 255 frames (max 64 005 bytes).  `SarReassembler` collects fragments and delivers the reassembled blob to `decode_pq_conreq` / `decode_pq_conack`.
+
+Typical encoded `PqConReq` size: ≈ 6 700 bytes (27 SAR fragments at 251 bytes/fragment).
+
+### Key exchange flow
+
+1. Initiator calls `create_pq_conreq`: advertises EK + signing modes; signs with ML-DSA-44 (and Ed25519 for Hybrid).
+2. Responder calls `create_pq_conack`: selects mode, encapsulates EK → ciphertext + shared secret; signs reply.
+3. Initiator calls `kem_decapsulate(dk, ack.kem_ciphertext)` to recover the same 32-byte shared secret.
+
+Both `verify_pq_conreq` and `verify_pq_conack` run ML-DSA-44 (and Ed25519 when applicable) before calling `evaluate_handshake` for trust policy evaluation.
 
 ## Radio interface architecture
 

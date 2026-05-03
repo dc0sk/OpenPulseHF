@@ -38,6 +38,10 @@ pub enum SigningMode {
     Psk,
     Relaxed,
     Paranoid,
+    /// ML-DSA-44 post-quantum signature only.
+    Pq,
+    /// Ed25519 + ML-DSA-44 dual signature (highest strength).
+    Hybrid,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,9 +128,26 @@ pub fn classify_connection_trust(
 
 pub fn allowed_signing_modes(profile: PolicyProfile) -> &'static [SigningMode] {
     match profile {
-        PolicyProfile::Strict => &[SigningMode::Normal, SigningMode::Paranoid],
-        PolicyProfile::Balanced => &[SigningMode::Normal, SigningMode::Psk, SigningMode::Relaxed],
-        PolicyProfile::Permissive => &[SigningMode::Normal, SigningMode::Psk, SigningMode::Relaxed],
+        PolicyProfile::Strict => &[
+            SigningMode::Normal,
+            SigningMode::Paranoid,
+            SigningMode::Pq,
+            SigningMode::Hybrid,
+        ],
+        PolicyProfile::Balanced => &[
+            SigningMode::Normal,
+            SigningMode::Psk,
+            SigningMode::Relaxed,
+            SigningMode::Pq,
+            SigningMode::Hybrid,
+        ],
+        PolicyProfile::Permissive => &[
+            SigningMode::Normal,
+            SigningMode::Psk,
+            SigningMode::Relaxed,
+            SigningMode::Pq,
+            SigningMode::Hybrid,
+        ],
     }
 }
 
@@ -135,6 +156,8 @@ fn mode_strength(mode: SigningMode) -> u8 {
         SigningMode::Relaxed => 1,
         SigningMode::Psk | SigningMode::Normal => 2,
         SigningMode::Paranoid => 3,
+        SigningMode::Pq => 4,
+        SigningMode::Hybrid => 5,
     }
 }
 
