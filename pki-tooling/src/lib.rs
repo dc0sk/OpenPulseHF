@@ -1,4 +1,5 @@
 pub mod api;
+pub mod verification;
 
 use axum::routing::{get, patch, post};
 use axum::Router;

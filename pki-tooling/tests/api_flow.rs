@@ -2646,3 +2646,229 @@ async fn publish_trust_bundle_replays_same_response_for_same_request_id() {
     .expect("failed counting trust bundles");
     assert_eq!(count, 1, "dedup should prevent duplicate bundle insert");
 }
+
+// ------------------------------------------------------------------
+// Ed25519 signature verification at ingestion
+// ------------------------------------------------------------------
+
+fn make_signed_handshake_payload(seed: u8) -> (serde_json::Value, String) {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let sk = SigningKey::from_bytes(&[seed; 32]);
+    let pubkey_b64 = STANDARD.encode(sk.verifying_key().to_bytes());
+
+    let payload = json!({
+        "pubkey": pubkey_b64,
+        "session_id": format!("sess-{seed}"),
+        "signed_at": "2026-01-01T00:00:00Z",
+        "peer_id": format!("peer-{seed}"),
+        "handshake_nonce": "nonce-abc",
+    });
+
+    let canonical = serde_json::to_vec(&payload).unwrap();
+    let sig = sk.sign(&canonical);
+    let sig_b64 = STANDARD.encode(sig.to_bytes());
+
+    (payload, sig_b64)
+}
+
+fn make_signed_manifest_payload(seed: u8) -> (serde_json::Value, String) {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let sk = SigningKey::from_bytes(&[seed; 32]);
+    let pubkey_b64 = STANDARD.encode(sk.verifying_key().to_bytes());
+
+    let payload = json!({
+        "pubkey": pubkey_b64,
+        "session_id": format!("sess-manifest-{seed}"),
+        "signed_at": "2026-01-01T00:00:00Z",
+        "manifest_hash": "abc123",
+        "chunk_count": 4,
+    });
+
+    let canonical = serde_json::to_vec(&payload).unwrap();
+    let sig = sk.sign(&canonical);
+    let sig_b64 = STANDARD.encode(sig.to_bytes());
+
+    (payload, sig_b64)
+}
+
+#[tokio::test]
+async fn signed_handshake_with_valid_ed25519_signature_is_accepted() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+    let app = build_router(AppState { db: pool.clone() });
+
+    let (payload, sig_b64) = make_signed_handshake_payload(10);
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/submissions")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "payload_type": "signed_handshake",
+                "payload": payload,
+                "detached_signature": sig_b64,
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let created: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        created
+            .get("validation_summary")
+            .and_then(|s| s.get("status"))
+            .and_then(Value::as_str),
+        Some("signature_verified"),
+        "accepted submission must record signature_verified status"
+    );
+}
+
+#[tokio::test]
+async fn signed_handshake_with_corrupted_signature_rejected() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+    let app = build_router(AppState { db: pool.clone() });
+
+    let (payload, mut sig_b64) = make_signed_handshake_payload(11);
+    // Corrupt the last character of the base64 signature.
+    let last = sig_b64.pop().unwrap();
+    sig_b64.push(if last == 'A' { 'B' } else { 'A' });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/submissions")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "payload_type": "signed_handshake",
+                "payload": payload,
+                "detached_signature": sig_b64,
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let error: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        error.get("status").and_then(Value::as_str),
+        Some("verification_failed")
+    );
+}
+
+#[tokio::test]
+async fn signed_handshake_with_wrong_pubkey_rejected() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+    let app = build_router(AppState { db: pool.clone() });
+
+    let (mut payload, sig_b64) = make_signed_handshake_payload(12);
+    // Replace pubkey with a different key's public key.
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use ed25519_dalek::SigningKey;
+    let other_vk = SigningKey::from_bytes(&[99u8; 32]).verifying_key();
+    payload["pubkey"] = json!(STANDARD.encode(other_vk.to_bytes()));
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/submissions")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "payload_type": "signed_handshake",
+                "payload": payload,
+                "detached_signature": sig_b64,
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn signed_manifest_with_valid_ed25519_signature_is_accepted() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+    let app = build_router(AppState { db: pool.clone() });
+
+    let (payload, sig_b64) = make_signed_manifest_payload(20);
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/submissions")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "payload_type": "signed_manifest",
+                "payload": payload,
+                "detached_signature": sig_b64,
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let created: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        created
+            .get("validation_summary")
+            .and_then(|s| s.get("status"))
+            .and_then(Value::as_str),
+        Some("signature_verified")
+    );
+}
+
+#[tokio::test]
+async fn signed_manifest_with_invalid_signature_rejected() {
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+    let app = build_router(AppState { db: pool.clone() });
+
+    let (payload, _) = make_signed_manifest_payload(21);
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/submissions")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "payload_type": "signed_manifest",
+                "payload": payload,
+                "detached_signature": "bm90YXJlYWxzaWduYXR1cmU=",
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let error: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        error.get("status").and_then(Value::as_str),
+        Some("verification_failed")
+    );
+}
