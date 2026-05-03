@@ -25,6 +25,8 @@ pub enum HandshakeError {
     TrustFailure(TrustError),
     #[error("encoding error: {0}")]
     Encoding(String),
+    #[error("responder selected a compression algorithm not offered by the initiator")]
+    UnsupportedCompression,
 }
 
 impl From<TrustError> for HandshakeError {
@@ -372,12 +374,15 @@ pub fn verify_conreq(
 
 /// Verify a received CONACK and evaluate trust.
 ///
-/// `req_session_id` must match the session ID in the ConAck.  Fails if the
-/// signature is invalid, the session ID does not match, or the trust policy
-/// rejects the responder.
+/// `req_session_id` must match the session ID in the ConAck. `req_supported_compression`
+/// is the list advertised by the initiator; the responder's `selected_compression` must
+/// appear in that list (or be `None`, which is always allowed). Fails if the signature is
+/// invalid, the session ID does not match, compression is not mutually supported, or the
+/// trust policy rejects the responder.
 pub fn verify_conack(
     ack: &ConAck,
     req_session_id: &str,
+    req_supported_compression: &[CompressionAlgorithm],
     trust_store: &dyn TrustStore,
     policy: PolicyProfile,
     local_min_mode: SigningMode,
@@ -387,6 +392,12 @@ pub fn verify_conack(
             expected: req_session_id.to_string(),
             got: ack.session_id.clone(),
         });
+    }
+
+    if ack.selected_compression != CompressionAlgorithm::None
+        && !req_supported_compression.contains(&ack.selected_compression)
+    {
+        return Err(HandshakeError::UnsupportedCompression);
     }
 
     let canonical = ack.canonical_bytes()?;

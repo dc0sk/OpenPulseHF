@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+/// Hard ceiling on decompressed output size (matches SAR max segment: 255 × 251 bytes).
+pub const MAX_DECOMPRESSED_SIZE: usize = 64_005;
+
 /// Compression algorithm negotiated at session setup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -7,7 +10,7 @@ pub enum CompressionAlgorithm {
     /// No compression; payload transmitted as-is.
     #[default]
     None,
-    /// LZ4 frame format (prepended decompressed size).
+    /// LZ4 block format with a 4-byte little-endian decompressed size prefix.
     Lz4,
 }
 
@@ -15,6 +18,8 @@ pub enum CompressionAlgorithm {
 pub enum CompressionError {
     #[error("decompression failed: {0}")]
     DecompressFailed(String),
+    #[error("claimed decompressed size {claimed} exceeds limit {limit}")]
+    DecompressedSizeTooLarge { claimed: usize, limit: usize },
 }
 
 /// Compress `data` with `algo`. `None` returns the data unchanged.
@@ -26,11 +31,28 @@ pub fn compress(data: &[u8], algo: CompressionAlgorithm) -> Vec<u8> {
 }
 
 /// Decompress `data` with `algo`. `None` returns the data unchanged.
+///
+/// Rejects LZ4 input whose size-prefix claims a decompressed size above
+/// [`MAX_DECOMPRESSED_SIZE`] before allocating, preventing OOM on malicious input.
 pub fn decompress(data: &[u8], algo: CompressionAlgorithm) -> Result<Vec<u8>, CompressionError> {
     match algo {
         CompressionAlgorithm::None => Ok(data.to_vec()),
-        CompressionAlgorithm::Lz4 => lz4_flex::decompress_size_prepended(data)
-            .map_err(|e| CompressionError::DecompressFailed(e.to_string())),
+        CompressionAlgorithm::Lz4 => {
+            if data.len() < 4 {
+                return Err(CompressionError::DecompressFailed(
+                    "input too short for size prefix".to_string(),
+                ));
+            }
+            let claimed = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+            if claimed > MAX_DECOMPRESSED_SIZE {
+                return Err(CompressionError::DecompressedSizeTooLarge {
+                    claimed,
+                    limit: MAX_DECOMPRESSED_SIZE,
+                });
+            }
+            lz4_flex::decompress_size_prepended(data)
+                .map_err(|e| CompressionError::DecompressFailed(e.to_string()))
+        }
     }
 }
 

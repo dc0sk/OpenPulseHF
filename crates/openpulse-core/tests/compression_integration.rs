@@ -1,7 +1,9 @@
 use openpulse_core::compression::{
-    compress, compress_if_smaller, decompress, CompressionAlgorithm,
+    compress, compress_if_smaller, decompress, CompressionAlgorithm, MAX_DECOMPRESSED_SIZE,
 };
-use openpulse_core::handshake::{verify_conack, verify_conreq, ConAck, ConReq, InMemoryTrustStore};
+use openpulse_core::handshake::{
+    verify_conack, verify_conreq, ConAck, ConReq, HandshakeError, InMemoryTrustStore,
+};
 use openpulse_core::trust::{PolicyProfile, SigningMode};
 
 // ------------------------------------------------------------------
@@ -105,6 +107,7 @@ fn conack_carries_selected_compression_in_signature() {
     verify_conack(
         &ack,
         "sess-comp-2",
+        &[CompressionAlgorithm::Lz4],
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
@@ -172,6 +175,7 @@ fn full_negotiation_round_trip_with_lz4() {
     verify_conack(
         &ack,
         &req.session_id,
+        &req.supported_compression,
         &alice_store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
@@ -197,5 +201,45 @@ fn compression_field_tampering_invalidates_signature() {
     assert!(
         verify_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Normal).is_err(),
         "tampering with compression field must invalidate signature"
+    );
+}
+
+#[test]
+fn decompress_rejects_oversized_size_prefix() {
+    // Build a byte stream whose 4-byte LE prefix claims MAX_DECOMPRESSED_SIZE + 1.
+    let claimed = (MAX_DECOMPRESSED_SIZE + 1) as u32;
+    let mut buf = claimed.to_le_bytes().to_vec();
+    buf.extend_from_slice(&[0u8; 16]); // dummy payload bytes
+
+    assert!(
+        decompress(&buf, CompressionAlgorithm::Lz4).is_err(),
+        "size prefix exceeding limit must be rejected before allocation"
+    );
+}
+
+#[test]
+fn conack_rejected_when_compression_not_offered() {
+    // Initiator advertises no compression; responder picks Lz4 anyway.
+    let ack = ConAck::create(
+        "KD9XYZ",
+        &make_seed(6),
+        SigningMode::Normal,
+        "sess-comp-5",
+        CompressionAlgorithm::Lz4,
+    )
+    .unwrap();
+
+    let store = InMemoryTrustStore::new();
+    let result = verify_conack(
+        &ack,
+        "sess-comp-5",
+        &[], // initiator offered nothing
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+    );
+    assert!(
+        matches!(result, Err(HandshakeError::UnsupportedCompression)),
+        "selecting an unoffered compression must be rejected"
     );
 }

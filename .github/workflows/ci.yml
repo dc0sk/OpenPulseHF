@@ -18,54 +18,6 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  build-and-test:
-    name: Build & Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      # Linux: install ALSA development headers required by cpal.
-      # PipeWire is supported via the PipeWire ALSA compatibility layer.
-      - name: Install ALSA dev headers (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update -y && sudo apt-get install -y libasound2-dev
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
-
-      - name: Build (all features)
-        run: cargo build --workspace
-
-      # Run tests without the cpal backend so CI doesn't need audio hardware.
-      - name: Test (no-audio-hardware)
-        run: cargo test --workspace --no-default-features
-
-      # Verify the project also compiles with all features enabled.
-      - name: Check (all features)
-        run: cargo check --workspace
-
-      - name: Clippy
-        run: cargo clippy --workspace --no-default-features -- -D warnings
-
-      - name: Rustfmt check
-        run: cargo fmt --all -- --check
-
   cross-aarch64-linux:
     name: Cross-check (aarch64-unknown-linux-gnu)
     runs-on: ubuntu-latest

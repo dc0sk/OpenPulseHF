@@ -385,10 +385,11 @@ On success: clones envelope with `hop_index += 1`; caller broadcasts to neighbou
 
 Payload compression is negotiated during the HPX handshake and applied above the FEC/modulation layer.
 
-- **Algorithm**: LZ4 frame format (`lz4_flex` crate; pure Rust, no C bindings). Chosen for speed and determinism on embedded targets.
-- **Negotiation**: `ConReq.supported_compression` lists algorithms the initiator supports (empty = none). `ConAck.selected_compression` names the algorithm chosen by the responder for the session; defaults to `None` if the initiator advertised no support.
+- **Algorithm**: LZ4 block format with a 4-byte little-endian decompressed-size prefix (`lz4_flex::compress_prepend_size` / `decompress_size_prepended`; pure Rust, no C bindings). This is **not** the standard LZ4 frame container format and is not interoperable with LZ4 frame readers. Chosen for speed and determinism on embedded targets.
+- **Negotiation**: `ConReq.supported_compression` lists algorithms the initiator supports (empty = none). `ConAck.selected_compression` names the algorithm chosen by the responder; must be one of the offered algorithms (or `None`). `verify_conack` rejects a response that picks an unoffered algorithm.
 - **Compress-then-compare**: `compress_if_smaller(payload)` tries LZ4; if the compressed form is not smaller the original bytes and `CompressionAlgorithm::None` are returned. This prevents length inflation on already-compressed or short payloads.
-- **Decompression error**: treated as a frame error (returns `CompressionError::DecompressFailed`); the frame is discarded at the session layer.
+- **Decompression size guard**: before allocating, `decompress` reads the size prefix and rejects inputs whose claimed decompressed size exceeds `MAX_DECOMPRESSED_SIZE` (64 005 bytes, matching the SAR max-segment limit) to prevent OOM on malicious frames.
+- **Decompression error**: treated as a frame error; the frame is discarded at the session layer.
 - Both compression fields are included in the canonical JSON signed during handshake, so field injection after signing is detectable.
 
 ## Post-quantum in-band handshake (Phase 3.1)

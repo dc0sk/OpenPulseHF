@@ -143,6 +143,7 @@ fn valid_conack_accepted() {
     let decision = verify_conack(
         &ack,
         "sess-010",
+        &[],
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
@@ -166,6 +167,7 @@ fn conack_rejected_session_id_mismatch() {
     let result = verify_conack(
         &ack,
         "sess-WRONG",
+        &[],
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
@@ -192,6 +194,7 @@ fn conack_rejected_invalid_signature() {
     let result = verify_conack(
         &ack,
         "sess-010",
+        &[],
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
@@ -238,6 +241,7 @@ fn full_handshake_round_trip() {
     let ack_decision = verify_conack(
         &ack,
         &req.session_id,
+        &req.supported_compression,
         &alice_store,
         PolicyProfile::Strict,
         SigningMode::Normal,
