@@ -7,6 +7,7 @@
 /// **Prerequisites**: set `PKI_TEST_DATABASE_URL` to a writable Postgres DSN.
 /// Tests skip gracefully when the variable is absent.
 use assert_cmd::Command;
+use ed25519_dalek::SigningKey;
 use pki_tooling::{build_router, run_migrations, AppState};
 use predicates::prelude::*;
 use sqlx::postgres::PgPoolOptions;
@@ -61,7 +62,10 @@ async fn spawn_live_server(pool: sqlx::PgPool) -> String {
         .await
         .expect("failed to bind TCP listener");
     let addr = listener.local_addr().expect("no local addr");
-    let router = build_router(AppState { db: pool });
+    let router = build_router(AppState {
+        db: pool,
+        signing_key: SigningKey::from_bytes(&[1u8; 32]),
+    });
     tokio::spawn(async move {
         axum::serve(listener, router)
             .await

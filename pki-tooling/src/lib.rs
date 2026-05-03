@@ -7,6 +7,7 @@ use axum::Router;
 #[derive(Clone)]
 pub struct AppState {
     pub db: sqlx::PgPool,
+    pub signing_key: ed25519_dalek::SigningKey,
 }
 
 pub async fn run_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::migrate::MigrateError> {
@@ -65,5 +66,6 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/session-audit-events",
             post(api::handlers::create_session_audit_event),
         )
+        .route("/api/v1/signing-key", get(api::handlers::get_signing_key))
         .with_state(state)
 }

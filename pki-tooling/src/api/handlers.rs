@@ -6,6 +6,8 @@ use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
+use base64::{engine::general_purpose::STANDARD, Engine};
+use ed25519_dalek::Signer;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, Postgres, QueryBuilder, Row};
@@ -109,7 +111,19 @@ struct RevocationResponse {
     created_at: String,
 }
 
-#[derive(Serialize, FromRow)]
+#[derive(FromRow)]
+struct TrustBundleRow {
+    schema_version: String,
+    bundle_id: String,
+    generated_at: String,
+    issuer_instance_id: String,
+    signing_algorithms: serde_json::Value,
+    records: serde_json::Value,
+    bundle_signature: String,
+    service_pubkey: String,
+}
+
+#[derive(Serialize)]
 struct TrustBundleResponse {
     schema_version: String,
     bundle_id: String,
@@ -118,6 +132,22 @@ struct TrustBundleResponse {
     signing_algorithms: serde_json::Value,
     records: serde_json::Value,
     bundle_signature: String,
+    service_pubkey: String,
+}
+
+impl TrustBundleRow {
+    fn into_response(self) -> TrustBundleResponse {
+        TrustBundleResponse {
+            schema_version: self.schema_version,
+            bundle_id: self.bundle_id,
+            generated_at: self.generated_at,
+            issuer_instance_id: self.issuer_instance_id,
+            signing_algorithms: self.signing_algorithms,
+            records: self.records,
+            bundle_signature: self.bundle_signature,
+            service_pubkey: self.service_pubkey,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -144,7 +174,6 @@ pub struct PublishTrustBundleRequest {
     pub issuer_instance_id: String,
     pub signing_algorithms: serde_json::Value,
     pub records: serde_json::Value,
-    pub bundle_signature: String,
 }
 
 #[derive(Serialize)]
@@ -373,7 +402,7 @@ pub async fn list_revocations(
 }
 
 pub async fn get_current_trust_bundle(State(state): State<AppState>) -> impl IntoResponse {
-    let result = sqlx::query_as::<_, TrustBundleResponse>(
+    let result = sqlx::query_as::<_, TrustBundleRow>(
         "SELECT
             schema_version,
             bundle_id,
@@ -381,7 +410,8 @@ pub async fn get_current_trust_bundle(State(state): State<AppState>) -> impl Int
             issuer_instance_id,
             signing_algorithms,
             records,
-            bundle_signature
+            bundle_signature,
+            service_pubkey
          FROM trust_bundles
          WHERE is_current = TRUE
          ORDER BY generated_at DESC
@@ -391,7 +421,7 @@ pub async fn get_current_trust_bundle(State(state): State<AppState>) -> impl Int
     .await;
 
     match result {
-        Ok(Some(bundle)) => (StatusCode::OK, Json(bundle)).into_response(),
+        Ok(Some(row)) => (StatusCode::OK, Json(row.into_response())).into_response(),
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(ApiMessage {
@@ -415,7 +445,7 @@ pub async fn get_trust_bundle(
     State(state): State<AppState>,
     Path(bundle_id): Path<String>,
 ) -> impl IntoResponse {
-    let result = sqlx::query_as::<_, TrustBundleResponse>(
+    let result = sqlx::query_as::<_, TrustBundleRow>(
         "SELECT
             schema_version,
             bundle_id,
@@ -423,7 +453,8 @@ pub async fn get_trust_bundle(
             issuer_instance_id,
             signing_algorithms,
             records,
-            bundle_signature
+            bundle_signature,
+            service_pubkey
          FROM trust_bundles
          WHERE bundle_id = $1",
     )
@@ -432,7 +463,7 @@ pub async fn get_trust_bundle(
     .await;
 
     match result {
-        Ok(Some(bundle)) => (StatusCode::OK, Json(bundle)).into_response(),
+        Ok(Some(row)) => (StatusCode::OK, Json(row.into_response())).into_response(),
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(ApiMessage {
@@ -1152,13 +1183,12 @@ pub async fn publish_trust_bundle(
     if req.schema_version.trim().is_empty()
         || req.generated_at.trim().is_empty()
         || req.issuer_instance_id.trim().is_empty()
-        || req.bundle_signature.trim().is_empty()
     {
         return (
             StatusCode::BAD_REQUEST,
             Json(ApiMessage {
                 status: "validation_error",
-                detail: "all fields (schema_version, generated_at, issuer_instance_id, signing_algorithms, records, bundle_signature) are required and non-empty".to_string(),
+                detail: "all fields (schema_version, generated_at, issuer_instance_id, signing_algorithms, records) are required and non-empty".to_string(),
             }),
         )
             .into_response();
@@ -1181,6 +1211,17 @@ pub async fn publish_trust_bundle(
     };
 
     let bundle_id = Uuid::new_v4().to_string();
+
+    let canonical = crate::verification::bundle_canonical_body(
+        &bundle_id,
+        &req.schema_version,
+        &req.issuer_instance_id,
+        &req.signing_algorithms,
+        &req.records,
+    );
+    let sig = state.signing_key.sign(&canonical);
+    let bundle_signature = STANDARD.encode(sig.to_bytes());
+    let service_pubkey = STANDARD.encode(state.signing_key.verifying_key().to_bytes());
 
     let mut tx = match state.db.begin().await {
         Ok(tx) => tx,
@@ -1206,8 +1247,9 @@ pub async fn publish_trust_bundle(
             signing_algorithms,
             records,
             bundle_signature,
+            service_pubkey,
             is_current
-         ) VALUES ($1, $2, $3::timestamptz, $4, $5, $6, $7, $8)",
+         ) VALUES ($1, $2, $3::timestamptz, $4, $5, $6, $7, $8, $9)",
     )
     .bind(&bundle_id)
     .bind(&req.schema_version)
@@ -1215,7 +1257,8 @@ pub async fn publish_trust_bundle(
     .bind(&req.issuer_instance_id)
     .bind(&req.signing_algorithms)
     .bind(&req.records)
-    .bind(&req.bundle_signature)
+    .bind(&bundle_signature)
+    .bind(&service_pubkey)
     .bind(false) // initially not current
     .execute(&mut *tx)
     .await;
@@ -1630,6 +1673,17 @@ pub async fn create_session_audit_event(
         )
             .into_response(),
     }
+}
+
+pub async fn get_signing_key(State(state): State<AppState>) -> impl IntoResponse {
+    let pubkey = STANDARD.encode(state.signing_key.verifying_key().to_bytes());
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "algorithm": "ed25519",
+            "pubkey": pubkey,
+        })),
+    )
 }
 
 fn json_kind(value: &serde_json::Value) -> &'static str {
