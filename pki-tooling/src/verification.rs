@@ -11,6 +11,8 @@ pub enum VerificationError {
     InvalidPublicKey,
     #[error("detached_signature is not valid base64")]
     InvalidSignatureEncoding,
+    #[error("detached_signature must be exactly 64 bytes when decoded")]
+    InvalidSignatureLength,
     #[error("signature verification failed")]
     InvalidSignature,
 }
@@ -47,7 +49,7 @@ pub fn verify_submission_signature(
     let sig_arr: [u8; 64] = sig_bytes
         .as_slice()
         .try_into()
-        .map_err(|_| VerificationError::InvalidSignatureEncoding)?;
+        .map_err(|_| VerificationError::InvalidSignatureLength)?;
     let signature = Signature::from_bytes(&sig_arr);
 
     let canonical = serde_json::to_vec(payload).expect("serde_json::Value is always serializable");
@@ -97,7 +99,22 @@ mod tests {
         sig_b64.push(if last == 'A' { 'B' } else { 'A' });
         assert!(matches!(
             verify_submission_signature(&payload, &sig_b64),
-            Err(VerificationError::InvalidSignature | VerificationError::InvalidSignatureEncoding)
+            Err(
+                VerificationError::InvalidSignature
+                    | VerificationError::InvalidSignatureEncoding
+                    | VerificationError::InvalidSignatureLength
+            )
+        ));
+    }
+
+    #[test]
+    fn wrong_length_signature_rejected() {
+        let (payload, _) = make_payload_and_sig(5);
+        // 48 bytes encoded as base64 is valid base64 but not 64 bytes when decoded
+        let short_sig_b64 = STANDARD.encode([0u8; 48]);
+        assert!(matches!(
+            verify_submission_signature(&payload, &short_sig_b64),
+            Err(VerificationError::InvalidSignatureLength)
         ));
     }
 
