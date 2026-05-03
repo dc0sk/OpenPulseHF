@@ -49,6 +49,10 @@ pub enum PqHandshakeError {
     SessionIdMismatch { expected: String, got: String },
     #[error("serialization error: {0}")]
     SerializationError(String),
+    #[error("public key in frame does not match stored trusted key")]
+    PublicKeyMismatch,
+    #[error("selected mode was not offered by the initiator")]
+    UnauthorizedMode,
 }
 
 impl From<TrustError> for PqHandshakeError {
@@ -386,6 +390,23 @@ pub fn verify_pq_conreq(
         return Err(PqHandshakeError::InvalidSignature);
     }
 
+    // Bind the in-frame classical key to the stored trusted key, if any.
+    if let Some(stored_key) = trust_store.pubkey_for(&req.station_id) {
+        let frame_key: [u8; 32] = req
+            .classical_pubkey
+            .as_slice()
+            .try_into()
+            .map_err(|_| PqHandshakeError::PublicKeyMismatch)?;
+        if frame_key != stored_key {
+            return Err(PqHandshakeError::PublicKeyMismatch);
+        }
+    }
+
+    // Validate the KEM encapsulation key is syntactically well-formed.
+    let ek_arr = Key::<EncapsulationKey<MlKem768>>::try_from(req.kem_pubkey.as_slice())
+        .map_err(|_| PqHandshakeError::InvalidPublicKey)?;
+    EncapsulationKey::<MlKem768>::new(&ek_arr).map_err(|_| PqHandshakeError::InvalidPublicKey)?;
+
     let key_trust = trust_store.trust_level(&req.station_id);
     let cert_source = cert_source_for_trust(key_trust);
     let decision = evaluate_handshake(
@@ -399,10 +420,11 @@ pub fn verify_pq_conreq(
     Ok(decision)
 }
 
-/// Verify a received PqConAck, checking session_id and signatures.
+/// Verify a received PqConAck, checking session_id, mode, pubkey binding, and signatures.
 pub fn verify_pq_conack(
     ack: &PqConAck,
     req_session_id: &str,
+    req_signing_modes: &[SigningMode],
     trust_store: &dyn TrustStore,
     policy: PolicyProfile,
     local_min_mode: SigningMode,
@@ -414,6 +436,10 @@ pub fn verify_pq_conack(
         });
     }
 
+    if !req_signing_modes.contains(&ack.selected_mode) {
+        return Err(PqHandshakeError::UnauthorizedMode);
+    }
+
     let canonical = canonical_ack_bytes(ack)?;
 
     ml_dsa_verify(&ack.pq_pubkey, &canonical, &ack.pq_signature)?;
@@ -422,6 +448,18 @@ pub fn verify_pq_conack(
         && !ed25519_verify(&ack.classical_pubkey, &canonical, &ack.classical_signature)
     {
         return Err(PqHandshakeError::InvalidSignature);
+    }
+
+    // Bind the in-frame classical key to the stored trusted key, if any.
+    if let Some(stored_key) = trust_store.pubkey_for(&ack.station_id) {
+        let frame_key: [u8; 32] = ack
+            .classical_pubkey
+            .as_slice()
+            .try_into()
+            .map_err(|_| PqHandshakeError::PublicKeyMismatch)?;
+        if frame_key != stored_key {
+            return Err(PqHandshakeError::PublicKeyMismatch);
+        }
     }
 
     let key_trust = trust_store.trust_level(&ack.station_id);

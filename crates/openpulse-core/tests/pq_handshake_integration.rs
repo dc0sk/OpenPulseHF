@@ -77,8 +77,6 @@ fn make_trust_store(_station_id: &str) -> InMemoryTrustStore {
     InMemoryTrustStore::new()
 }
 
-// Not used in all tests but kept for future trust-level tests
-#[allow(dead_code)]
 fn make_trusted_store(station_id: &str, pubkey: [u8; 32]) -> InMemoryTrustStore {
     let mut store = InMemoryTrustStore::new();
     store.add_trusted(station_id, pubkey);
@@ -142,6 +140,7 @@ fn pq_conack_hybrid_creates_verifies_and_decapsulates() {
     verify_pq_conack(
         &ack,
         "session-2",
+        &req.signing_modes,
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
@@ -215,7 +214,6 @@ fn pq_conreq_tampered_pq_signature_rejected() {
     )
     .expect("create_pq_conreq");
 
-    // Corrupt the PQ signature
     req.pq_signature[0] ^= 0xFF;
 
     let store = make_trust_store("W1AW");
@@ -239,7 +237,6 @@ fn pq_conreq_tampered_classical_signature_rejected() {
     )
     .expect("create_pq_conreq");
 
-    // Corrupt the classical Ed25519 signature
     req.classical_signature[0] ^= 0xFF;
 
     let store = make_trust_store("W1AW");
@@ -270,11 +267,126 @@ fn pq_conack_session_id_mismatch_rejected() {
     let result = verify_pq_conack(
         &ack,
         "session-WRONG",
+        &[SigningMode::Hybrid],
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
     );
     assert!(result.is_err(), "mismatched session_id must be rejected");
+}
+
+#[test]
+fn pq_conreq_pubkey_mismatch_rejected() {
+    let classical_seed = [0xAAu8; 32];
+    let (pq_sk, _) = generate_ml_dsa_44_keypair();
+    let (_dk, kem_ek) = generate_ml_kem_768_keypair();
+
+    let req = create_pq_conreq(
+        "W1AW",
+        &classical_seed,
+        &pq_sk,
+        &kem_ek,
+        vec![SigningMode::Hybrid],
+        "session-pk-mismatch",
+    )
+    .expect("create_pq_conreq");
+
+    // Store a *different* pubkey for the same station ID.
+    let wrong_pubkey = [0xBBu8; 32];
+    let store = make_trusted_store("W1AW", wrong_pubkey);
+    let result = verify_pq_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Normal);
+    assert!(
+        result.is_err(),
+        "pubkey in frame must match stored trusted key"
+    );
+}
+
+#[test]
+fn pq_conack_pubkey_mismatch_rejected() {
+    let classical_seed = [0xCCu8; 32];
+    let (pq_sk, _) = generate_ml_dsa_44_keypair();
+    let (_dk, kem_ek) = generate_ml_kem_768_keypair();
+
+    let (ack, _ss) = create_pq_conack(
+        "KD9XYZ",
+        &classical_seed,
+        &pq_sk,
+        &kem_ek,
+        SigningMode::Hybrid,
+        "session-ack-pk-mismatch",
+    )
+    .expect("create_pq_conack");
+
+    let wrong_pubkey = [0xDDu8; 32];
+    let store = make_trusted_store("KD9XYZ", wrong_pubkey);
+    let result = verify_pq_conack(
+        &ack,
+        "session-ack-pk-mismatch",
+        &[SigningMode::Hybrid],
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+    );
+    assert!(
+        result.is_err(),
+        "pubkey in ACK must match stored trusted key"
+    );
+}
+
+#[test]
+fn pq_conreq_invalid_kem_pubkey_rejected() {
+    let classical_seed = [0xEEu8; 32];
+    let (pq_sk, _) = generate_ml_dsa_44_keypair();
+    let (_dk, kem_ek) = generate_ml_kem_768_keypair();
+
+    let mut req = create_pq_conreq(
+        "W1AW",
+        &classical_seed,
+        &pq_sk,
+        &kem_ek,
+        vec![SigningMode::Hybrid],
+        "session-bad-kem",
+    )
+    .expect("create_pq_conreq");
+
+    // Truncate the KEM pubkey to an invalid length.
+    req.kem_pubkey.truncate(16);
+
+    let store = make_trust_store("W1AW");
+    let result = verify_pq_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Normal);
+    assert!(result.is_err(), "malformed KEM pubkey must be rejected");
+}
+
+#[test]
+fn pq_conack_unauthorized_mode_rejected() {
+    let classical_seed = [0xFFu8; 32];
+    let (pq_sk, _) = generate_ml_dsa_44_keypair();
+    let (_dk, kem_ek) = generate_ml_kem_768_keypair();
+
+    // Responder selects Hybrid, but initiator only offered Pq.
+    let (ack, _ss) = create_pq_conack(
+        "KD9XYZ",
+        &classical_seed,
+        &pq_sk,
+        &kem_ek,
+        SigningMode::Hybrid,
+        "session-unauth-mode",
+    )
+    .expect("create_pq_conack");
+
+    let store = make_trust_store("KD9XYZ");
+    let result = verify_pq_conack(
+        &ack,
+        "session-unauth-mode",
+        &[SigningMode::Pq], // initiator only offered Pq, not Hybrid
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+    );
+    assert!(
+        result.is_err(),
+        "mode not offered by initiator must be rejected"
+    );
 }
 
 // ------------------------------------------------------------------
