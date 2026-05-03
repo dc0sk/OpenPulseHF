@@ -6,6 +6,7 @@
 
 pub mod ack;
 pub mod audio;
+pub mod compression;
 pub mod dcd;
 pub mod error;
 pub mod fec;
@@ -28,6 +29,7 @@ pub mod wire_query;
 
 pub use ack::*;
 pub use audio::*;
+pub use compression::*;
 pub use dcd::*;
 pub use error::*;
 pub use fec::*;

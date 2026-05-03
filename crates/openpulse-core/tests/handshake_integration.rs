@@ -1,4 +1,5 @@
 use ed25519_dalek::SigningKey;
+use openpulse_core::compression::CompressionAlgorithm;
 use openpulse_core::handshake::{
     verify_conack, verify_conreq, ConAck, ConReq, HandshakeError, InMemoryTrustStore,
 };
@@ -20,7 +21,14 @@ fn pubkey_for(seed: u8) -> [u8; 32] {
 
 #[test]
 fn valid_conreq_accepted_trusted_peer() {
-    let req = ConReq::create("W1AW", &make_seed(1), vec![SigningMode::Normal], "sess-001").unwrap();
+    let req = ConReq::create(
+        "W1AW",
+        &make_seed(1),
+        vec![SigningMode::Normal],
+        "sess-001",
+        vec![],
+    )
+    .unwrap();
 
     let mut store = InMemoryTrustStore::new();
     store.add_trusted("W1AW", pubkey_for(1));
@@ -37,6 +45,7 @@ fn valid_conreq_accepted_unknown_peer_permissive() {
         &make_seed(2),
         vec![SigningMode::Normal, SigningMode::Relaxed],
         "sess-002",
+        vec![],
     )
     .unwrap();
 
@@ -54,8 +63,14 @@ fn valid_conreq_accepted_unknown_peer_permissive() {
 
 #[test]
 fn conreq_rejected_invalid_signature() {
-    let mut req =
-        ConReq::create("W1AW", &make_seed(1), vec![SigningMode::Normal], "sess-003").unwrap();
+    let mut req = ConReq::create(
+        "W1AW",
+        &make_seed(1),
+        vec![SigningMode::Normal],
+        "sess-003",
+        vec![],
+    )
+    .unwrap();
     req.signature[0] ^= 0xff; // corrupt
 
     let store = InMemoryTrustStore::new();
@@ -68,7 +83,14 @@ fn conreq_rejected_invalid_signature() {
 
 #[test]
 fn conreq_rejected_revoked_key() {
-    let req = ConReq::create("W1AW", &make_seed(1), vec![SigningMode::Normal], "sess-004").unwrap();
+    let req = ConReq::create(
+        "W1AW",
+        &make_seed(1),
+        vec![SigningMode::Normal],
+        "sess-004",
+        vec![],
+    )
+    .unwrap();
 
     let mut store = InMemoryTrustStore::new();
     store.add_revoked("W1AW", pubkey_for(1));
@@ -87,6 +109,7 @@ fn conreq_rejected_no_mutual_mode_strict() {
         &make_seed(1),
         vec![SigningMode::Relaxed], // only offers Relaxed
         "sess-005",
+        vec![],
     )
     .unwrap();
 
@@ -105,7 +128,14 @@ fn conreq_rejected_no_mutual_mode_strict() {
 
 #[test]
 fn valid_conack_accepted() {
-    let ack = ConAck::create("KD9XYZ", &make_seed(2), SigningMode::Normal, "sess-010").unwrap();
+    let ack = ConAck::create(
+        "KD9XYZ",
+        &make_seed(2),
+        SigningMode::Normal,
+        "sess-010",
+        CompressionAlgorithm::None,
+    )
+    .unwrap();
 
     let mut store = InMemoryTrustStore::new();
     store.add_trusted("KD9XYZ", pubkey_for(2));
@@ -123,7 +153,14 @@ fn valid_conack_accepted() {
 
 #[test]
 fn conack_rejected_session_id_mismatch() {
-    let ack = ConAck::create("KD9XYZ", &make_seed(2), SigningMode::Normal, "sess-010").unwrap();
+    let ack = ConAck::create(
+        "KD9XYZ",
+        &make_seed(2),
+        SigningMode::Normal,
+        "sess-010",
+        CompressionAlgorithm::None,
+    )
+    .unwrap();
     let store = InMemoryTrustStore::new();
 
     let result = verify_conack(
@@ -141,7 +178,14 @@ fn conack_rejected_session_id_mismatch() {
 
 #[test]
 fn conack_rejected_invalid_signature() {
-    let mut ack = ConAck::create("KD9XYZ", &make_seed(2), SigningMode::Normal, "sess-010").unwrap();
+    let mut ack = ConAck::create(
+        "KD9XYZ",
+        &make_seed(2),
+        SigningMode::Normal,
+        "sess-010",
+        CompressionAlgorithm::None,
+    )
+    .unwrap();
     ack.signature[63] ^= 0x01; // corrupt last byte
 
     let store = InMemoryTrustStore::new();
@@ -167,6 +211,7 @@ fn full_handshake_round_trip() {
         &make_seed(1),
         vec![SigningMode::Normal, SigningMode::Paranoid],
         "sess-100",
+        vec![],
     )
     .unwrap();
 
@@ -182,6 +227,7 @@ fn full_handshake_round_trip() {
         &make_seed(2),
         req_decision.selected_mode,
         &req.session_id,
+        CompressionAlgorithm::None,
     )
     .unwrap();
 
@@ -207,7 +253,14 @@ fn full_handshake_round_trip() {
 
 #[test]
 fn conreq_encode_decode_round_trip() {
-    let req = ConReq::create("W1AW", &make_seed(1), vec![SigningMode::Normal], "s1").unwrap();
+    let req = ConReq::create(
+        "W1AW",
+        &make_seed(1),
+        vec![SigningMode::Normal],
+        "s1",
+        vec![],
+    )
+    .unwrap();
     let bytes = req.encode().expect("encode");
     let decoded = ConReq::decode(&bytes).expect("decode");
     assert_eq!(decoded.station_id, req.station_id);
@@ -217,7 +270,14 @@ fn conreq_encode_decode_round_trip() {
 
 #[test]
 fn conack_encode_decode_round_trip() {
-    let ack = ConAck::create("KD9XYZ", &make_seed(2), SigningMode::Normal, "s1").unwrap();
+    let ack = ConAck::create(
+        "KD9XYZ",
+        &make_seed(2),
+        SigningMode::Normal,
+        "s1",
+        CompressionAlgorithm::None,
+    )
+    .unwrap();
     let bytes = ack.encode().expect("encode");
     let decoded = ConAck::decode(&bytes).expect("decode");
     assert_eq!(decoded.station_id, ack.station_id);
@@ -227,7 +287,14 @@ fn conack_encode_decode_round_trip() {
 
 #[test]
 fn conreq_decode_rejects_wrong_magic() {
-    let req = ConReq::create("W1AW", &make_seed(1), vec![SigningMode::Normal], "s1").unwrap();
+    let req = ConReq::create(
+        "W1AW",
+        &make_seed(1),
+        vec![SigningMode::Normal],
+        "s1",
+        vec![],
+    )
+    .unwrap();
     let mut bytes = req.encode().expect("encode");
     bytes[0] = b'X'; // corrupt magic
     assert!(ConReq::decode(&bytes).is_err());

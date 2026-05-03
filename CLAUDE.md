@@ -204,6 +204,15 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
   - `QueryForwarder`: basic propagation, hop-limit, duplicate suppression, trust-policy rejection, event drain
   - 3-node query chain verifying hop_index increment across separate `QueryForwarder` nodes
 
+**2.7 — Compression (session layer)** ✅ Done
+- `crates/openpulse-core/Cargo.toml`: added `lz4_flex 0.11` (pure-Rust LZ4 implementation, no C bindings)
+- `crates/openpulse-core/src/compression.rs`: new module — `CompressionAlgorithm` enum (`None`, `Lz4`), `compress()`, `decompress()`, `compress_if_smaller()` (compress-then-compare; returns original bytes with `None` if LZ4 is not smaller)
+- `crates/openpulse-core/src/handshake.rs`: added `supported_compression: Vec<CompressionAlgorithm>` to `ConReq` and `selected_compression: CompressionAlgorithm` to `ConAck`; both fields are included in the canonical JSON covered by the Ed25519 signature, so post-signing injection is detectable
+- Integration tests: `tests/compression_integration.rs` (9 tests)
+  - Codec round-trips (`None`, `Lz4`), decompression of garbage returns error
+  - `compress_if_smaller` picks Lz4 for compressible data, keeps original for incompressible
+  - `ConReq`/`ConAck` carry and verify compression fields; full negotiation round-trip; tampered compression field invalidates signature
+
 **3.1 — Post-quantum in-band handshake** ✅ Done
 - `crates/openpulse-core/Cargo.toml`: added `ml-dsa 0.1.0-rc.9` (ML-DSA-44, `rand_core` feature), `ml-kem 0.3` (`getrandom` feature), `rand 0.8` promoted from dev-deps to deps
 - `crates/openpulse-core/src/trust.rs`: added `SigningMode::Pq` (ML-DSA-44 only, strength 4) and `SigningMode::Hybrid` (Ed25519 + ML-DSA-44, strength 5); updated `mode_strength()` and `allowed_signing_modes()` for all three policy profiles

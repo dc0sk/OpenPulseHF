@@ -381,6 +381,16 @@ On success: clones envelope with `hop_index += 1`; caller broadcasts to neighbou
 
 `RelayRouteReject` (msg_type 0x08, 45 bytes fixed): `route_id` (u64), `reject_hop_peer_id` (32 bytes), `reason_code` (u16), `trust_decision` (1 byte, `WireTrustState` code), `policy_reference` (u16).
 
+## Session-layer compression (Phase 2.7)
+
+Payload compression is negotiated during the HPX handshake and applied above the FEC/modulation layer.
+
+- **Algorithm**: LZ4 frame format (`lz4_flex` crate; pure Rust, no C bindings). Chosen for speed and determinism on embedded targets.
+- **Negotiation**: `ConReq.supported_compression` lists algorithms the initiator supports (empty = none). `ConAck.selected_compression` names the algorithm chosen by the responder for the session; defaults to `None` if the initiator advertised no support.
+- **Compress-then-compare**: `compress_if_smaller(payload)` tries LZ4; if the compressed form is not smaller the original bytes and `CompressionAlgorithm::None` are returned. This prevents length inflation on already-compressed or short payloads.
+- **Decompression error**: treated as a frame error (returns `CompressionError::DecompressFailed`); the frame is discarded at the session layer.
+- Both compression fields are included in the canonical JSON signed during handshake, so field injection after signing is detectable.
+
 ## Post-quantum in-band handshake (Phase 3.1)
 
 ### Algorithms
