@@ -1,10 +1,18 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
+use ed25519_dalek::SigningKey;
 use pki_tooling::{build_router, run_migrations, AppState};
 use serde_json::{json, Value};
 use sqlx::postgres::PgPoolOptions;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tower::ServiceExt;
+
+fn make_state(pool: sqlx::PgPool) -> AppState {
+    AppState {
+        db: pool,
+        signing_key: SigningKey::from_bytes(&[1u8; 32]),
+    }
+}
 
 async fn setup_pool() -> Option<sqlx::PgPool> {
     let database_url = match std::env::var("PKI_TEST_DATABASE_URL") {
@@ -34,7 +42,7 @@ async fn create_submission_and_read_back_records_audit_event() {
         return;
     };
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let req = Request::builder()
         .method("POST")
@@ -133,7 +141,7 @@ async fn moderation_decision_updates_submission_and_records_events() {
         return;
     };
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let create_req = Request::builder()
         .method("POST")
@@ -287,7 +295,7 @@ async fn create_session_audit_event_persists_required_audit_payload() {
         return;
     };
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -387,7 +395,7 @@ async fn create_submission_rejects_empty_payload_type() {
         return;
     };
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let req = Request::builder()
         .method("POST")
@@ -436,7 +444,7 @@ async fn signed_handshake_requires_detached_signature() {
         return;
     };
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let req = Request::builder()
         .method("POST")
@@ -490,7 +498,7 @@ async fn signed_handshake_requires_required_payload_fields() {
         return;
     };
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let req = Request::builder()
         .method("POST")
@@ -537,7 +545,7 @@ async fn signed_manifest_requires_required_payload_fields() {
         return;
     };
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let req = Request::builder()
         .method("POST")
@@ -584,7 +592,7 @@ async fn signed_manifest_with_required_fields_is_accepted() {
         return;
     };
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let (payload, sig_b64) = make_signed_manifest_payload(30);
     let req = Request::builder()
@@ -615,7 +623,7 @@ async fn moderation_rejects_invalid_decision_value() {
         return;
     };
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let create_req = Request::builder()
         .method("POST")
@@ -695,7 +703,7 @@ async fn moderation_returns_not_found_for_missing_submission() {
         return;
     };
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let moderate_req = Request::builder()
         .method("POST")
@@ -744,7 +752,7 @@ async fn get_submission_returns_not_found_for_missing_submission() {
         return;
     };
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let req = Request::builder()
         .method("GET")
@@ -859,7 +867,7 @@ async fn list_revocations_filters_by_record_id_and_issuer() {
     .await
     .expect("failed to insert revocation B");
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
     let req = Request::builder()
         .method("GET")
         .uri("/api/v1/revocations?record_id=record-rev-a&issuer_id=issuer-alpha")
@@ -896,7 +904,7 @@ async fn list_revocations_rejects_invalid_rfc3339_filters() {
         return;
     };
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
     let req = Request::builder()
         .method("GET")
         .uri("/api/v1/revocations?effective_before=not-a-date")
@@ -936,7 +944,7 @@ async fn list_revocations_rejects_inverted_time_window() {
         return;
     };
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
     let req = Request::builder()
         .method("GET")
         .uri(
@@ -1021,7 +1029,7 @@ async fn list_revocations_applies_effective_time_filters() {
     .await
     .expect("failed to insert filter revocations");
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
     let req = Request::builder()
         .method("GET")
         .uri(
@@ -1108,7 +1116,7 @@ async fn list_revocations_uses_stable_tiebreak_ordering() {
     .await
     .expect("failed to insert ordering revocations");
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
     let req = Request::builder()
         .method("GET")
         .uri("/api/v1/revocations?record_id=record-rev-order")
@@ -1305,7 +1313,7 @@ async fn list_revocations_filters_by_key_fingerprint() {
     .await
     .expect("failed to insert fingerprint revocations");
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
     let req = Request::builder()
         .method("GET")
         .uri("/api/v1/revocations?fingerprint=FP:TARGET")
@@ -1382,7 +1390,7 @@ async fn list_revocations_clamps_limit_boundaries() {
     .await
     .expect("failed to insert limit revocations");
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let min_req = Request::builder()
         .method("GET")
@@ -1466,7 +1474,7 @@ async fn list_revocations_defaults_limit_to_100() {
     .await
     .expect("failed to insert default-limit revocations");
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
     let req = Request::builder()
         .method("GET")
         .uri("/api/v1/revocations?record_id=record-rev-default")
@@ -1593,7 +1601,7 @@ async fn list_revocations_combines_fingerprint_issuer_and_time_filters() {
     .await
     .expect("failed to insert combined-filter revocations");
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
     let req = Request::builder()
         .method("GET")
         .uri(
@@ -1690,7 +1698,7 @@ async fn trust_bundle_endpoints_return_current_and_specific_bundle() {
     .await
     .expect("failed to insert current trust bundle");
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let current_req = Request::builder()
         .method("GET")
@@ -1853,7 +1861,7 @@ async fn list_revocations_returns_empty_when_composed_filter_excludes_all() {
     .await
     .expect("failed to insert empty-filter revocation with wrong issuer");
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     // Query with fingerprint and time window matching, but wrong issuer_id
     let req = Request::builder()
@@ -1984,7 +1992,7 @@ async fn list_revocations_limit_one_returns_deterministic_first_result() {
     .await
     .expect("failed to insert limit-one revocations");
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     // Query with limit=1 and composed filters
     let req = Request::builder()
@@ -2046,7 +2054,7 @@ async fn create_revocation_succeeds_with_valid_input() {
     .await
     .expect("failed to insert record for create_revocation test");
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let req = Request::builder()
         .method("POST")
@@ -2115,7 +2123,7 @@ async fn create_revocation_rejects_empty_fields() {
     .await
     .expect("failed to insert record for empty test");
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let req = Request::builder()
         .method("POST")
@@ -2178,7 +2186,7 @@ async fn create_revocation_rejects_invalid_rfc3339_timestamp() {
     .await
     .expect("failed to insert record for timestamp test");
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let req = Request::builder()
         .method("POST")
@@ -2224,7 +2232,7 @@ async fn create_revocation_rejects_missing_record() {
         return;
     };
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let req = Request::builder()
         .method("POST")
@@ -2270,7 +2278,7 @@ async fn publish_trust_bundle_succeeds_with_valid_input() {
         return;
     };
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let req = Request::builder()
         .method("POST")
@@ -2283,8 +2291,7 @@ async fn publish_trust_bundle_succeeds_with_valid_input() {
                 "generated_at": "2026-03-02T10:00:00Z",
                 "issuer_instance_id": "issuer-pub-1",
                 "signing_algorithms": ["ed25519"],
-                "records": {"stub": "data"},
-                "bundle_signature": "sig-pub-001"
+                "records": {"stub": "data"}
             })
             .to_string(),
         ))
@@ -2316,7 +2323,7 @@ async fn publish_trust_bundle_rejects_empty_fields() {
         return;
     };
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let req = Request::builder()
         .method("POST")
@@ -2328,8 +2335,7 @@ async fn publish_trust_bundle_rejects_empty_fields() {
                 "generated_at": "2026-03-02T10:00:00Z",
                 "issuer_instance_id": "issuer-pub-2",
                 "signing_algorithms": ["ed25519"],
-                "records": {"stub": "data"},
-                "bundle_signature": "sig-pub-002"
+                "records": {"stub": "data"}
             })
             .to_string(),
         ))
@@ -2361,7 +2367,7 @@ async fn publish_trust_bundle_rejects_invalid_rfc3339_timestamp() {
         return;
     };
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let req = Request::builder()
         .method("POST")
@@ -2373,8 +2379,7 @@ async fn publish_trust_bundle_rejects_invalid_rfc3339_timestamp() {
                 "generated_at": "bad-timestamp",
                 "issuer_instance_id": "issuer-pub-3",
                 "signing_algorithms": ["ed25519"],
-                "records": {"stub": "data"},
-                "bundle_signature": "sig-pub-003"
+                "records": {"stub": "data"}
             })
             .to_string(),
         ))
@@ -2437,7 +2442,7 @@ async fn promote_trust_bundle_marks_bundle_current() {
     .await
     .expect("failed to seed trust bundles");
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
     let req = Request::builder()
         .method("PATCH")
         .uri("/api/v1/trust-bundles/bundle-promote-target/promote")
@@ -2480,7 +2485,7 @@ async fn promote_trust_bundle_returns_not_found_for_missing_bundle() {
         return;
     };
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
     let req = Request::builder()
         .method("PATCH")
         .uri("/api/v1/trust-bundles/missing-bundle/promote")
@@ -2516,7 +2521,7 @@ async fn create_revocation_replays_same_response_for_same_request_id() {
     .await
     .expect("failed to seed identity record");
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
     let payload = json!({
         "record_id": "record-dedup-rev",
         "revision_id": "rev-dedup-1",
@@ -2582,14 +2587,13 @@ async fn publish_trust_bundle_replays_same_response_for_same_request_id() {
         return;
     };
 
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
     let payload = json!({
         "schema_version": "1.0",
         "generated_at": "2026-04-03T01:00:00Z",
         "issuer_instance_id": "issuer-dedup-bundle",
         "signing_algorithms": ["ed25519"],
-        "records": {"stub": "data"},
-        "bundle_signature": "sig-dedup"
+        "records": {"stub": "data"}
     })
     .to_string();
 
@@ -2634,14 +2638,12 @@ async fn publish_trust_bundle_replays_same_response_for_same_request_id() {
         "dedup replay should return identical response body"
     );
 
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM trust_bundles WHERE issuer_instance_id = $1 AND bundle_signature = $2",
-    )
-    .bind("issuer-dedup-bundle")
-    .bind("sig-dedup")
-    .fetch_one(&pool)
-    .await
-    .expect("failed counting trust bundles");
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM trust_bundles WHERE issuer_instance_id = $1")
+            .bind("issuer-dedup-bundle")
+            .fetch_one(&pool)
+            .await
+            .expect("failed counting trust bundles");
     assert_eq!(count, 1, "dedup should prevent duplicate bundle insert");
 }
 
@@ -2698,7 +2700,7 @@ async fn signed_handshake_with_valid_ed25519_signature_is_accepted() {
     let Some(pool) = setup_pool().await else {
         return;
     };
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let (payload, sig_b64) = make_signed_handshake_payload(10);
 
@@ -2736,7 +2738,7 @@ async fn signed_handshake_with_corrupted_signature_rejected() {
     let Some(pool) = setup_pool().await else {
         return;
     };
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let (payload, mut sig_b64) = make_signed_handshake_payload(11);
     // Corrupt the last character of the base64 signature.
@@ -2773,7 +2775,7 @@ async fn signed_handshake_with_wrong_pubkey_rejected() {
     let Some(pool) = setup_pool().await else {
         return;
     };
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let (mut payload, sig_b64) = make_signed_handshake_payload(12);
     // Replace pubkey with a different key's public key.
@@ -2805,7 +2807,7 @@ async fn signed_manifest_with_valid_ed25519_signature_is_accepted() {
     let Some(pool) = setup_pool().await else {
         return;
     };
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let (payload, sig_b64) = make_signed_manifest_payload(20);
 
@@ -2842,7 +2844,7 @@ async fn signed_manifest_with_invalid_signature_rejected() {
     let Some(pool) = setup_pool().await else {
         return;
     };
-    let app = build_router(AppState { db: pool.clone() });
+    let app = build_router(make_state(pool.clone()));
 
     let (payload, _) = make_signed_manifest_payload(21);
 
@@ -2868,5 +2870,238 @@ async fn signed_manifest_with_invalid_signature_rejected() {
     assert_eq!(
         error.get("status").and_then(Value::as_str),
         Some("verification_failed")
+    );
+}
+
+// ------------------------------------------------------------------
+// Trust bundle signing tests
+// ------------------------------------------------------------------
+
+#[tokio::test]
+async fn published_bundle_signature_is_verifiable() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+    let app = build_router(make_state(pool.clone()));
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/trust-bundles")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "schema_version": "1.0",
+                "generated_at": "2026-04-10T00:00:00Z",
+                "issuer_instance_id": "issuer-verify-sig",
+                "signing_algorithms": ["ed25519"],
+                "records": []
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let published: Value = serde_json::from_slice(&body).unwrap();
+    let bundle_id = published
+        .get("bundle_id")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_string();
+
+    let get_req = Request::builder()
+        .method("GET")
+        .uri(format!("/api/v1/trust-bundles/{bundle_id}"))
+        .body(Body::empty())
+        .unwrap();
+    let get_res = app.clone().oneshot(get_req).await.unwrap();
+    assert_eq!(get_res.status(), StatusCode::OK);
+    let get_body = to_bytes(get_res.into_body(), usize::MAX).await.unwrap();
+    let bundle: Value = serde_json::from_slice(&get_body).unwrap();
+
+    let bundle_id_str = bundle.get("bundle_id").and_then(Value::as_str).unwrap();
+    let schema_version = bundle
+        .get("schema_version")
+        .and_then(Value::as_str)
+        .unwrap();
+    let issuer_instance_id = bundle
+        .get("issuer_instance_id")
+        .and_then(Value::as_str)
+        .unwrap();
+    let signing_algorithms = bundle.get("signing_algorithms").unwrap();
+    let records = bundle.get("records").unwrap();
+    let bundle_signature = bundle
+        .get("bundle_signature")
+        .and_then(Value::as_str)
+        .unwrap();
+    let service_pubkey_b64 = bundle
+        .get("service_pubkey")
+        .and_then(Value::as_str)
+        .unwrap();
+
+    let canonical = pki_tooling::verification::bundle_canonical_body(
+        bundle_id_str,
+        schema_version,
+        issuer_instance_id,
+        signing_algorithms,
+        records,
+    );
+    let pubkey_bytes: [u8; 32] = STANDARD
+        .decode(service_pubkey_b64)
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+    assert!(
+        pki_tooling::verification::verify_bundle_signature(
+            &canonical,
+            bundle_signature,
+            &pubkey_bytes
+        )
+        .is_ok(),
+        "published bundle signature must verify against service_pubkey"
+    );
+}
+
+#[tokio::test]
+async fn get_signing_key_returns_pubkey() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+    let signing_key = SigningKey::from_bytes(&[1u8; 32]);
+    let expected_pubkey = STANDARD.encode(signing_key.verifying_key().to_bytes());
+
+    let app = build_router(AppState {
+        db: pool.clone(),
+        signing_key,
+    });
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/signing-key")
+        .body(Body::empty())
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let result: Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(
+        result.get("algorithm").and_then(Value::as_str),
+        Some("ed25519")
+    );
+    assert_eq!(
+        result.get("pubkey").and_then(Value::as_str),
+        Some(expected_pubkey.as_str())
+    );
+}
+
+#[tokio::test]
+async fn promoted_bundle_signature_survives_promotion() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    let Some(pool) = setup_pool().await else {
+        return;
+    };
+    let app = build_router(make_state(pool.clone()));
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/trust-bundles")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "schema_version": "1.0",
+                "generated_at": "2026-04-11T00:00:00Z",
+                "issuer_instance_id": "issuer-promote-sig",
+                "signing_algorithms": ["ed25519"],
+                "records": []
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let published: Value = serde_json::from_slice(&body).unwrap();
+    let bundle_id = published
+        .get("bundle_id")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_string();
+
+    let promote_req = Request::builder()
+        .method("PATCH")
+        .uri(format!("/api/v1/trust-bundles/{bundle_id}/promote"))
+        .header("content-type", "application/json")
+        .body(Body::from(json!({ "reason": "test" }).to_string()))
+        .unwrap();
+    let promote_res = app.clone().oneshot(promote_req).await.unwrap();
+    assert_eq!(promote_res.status(), StatusCode::OK);
+
+    let current_req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/trust-bundles/current")
+        .body(Body::empty())
+        .unwrap();
+    let current_res = app.clone().oneshot(current_req).await.unwrap();
+    assert_eq!(current_res.status(), StatusCode::OK);
+    let current_body = to_bytes(current_res.into_body(), usize::MAX).await.unwrap();
+    let bundle: Value = serde_json::from_slice(&current_body).unwrap();
+
+    assert_eq!(
+        bundle.get("bundle_id").and_then(Value::as_str),
+        Some(bundle_id.as_str())
+    );
+
+    let bundle_id_str = bundle.get("bundle_id").and_then(Value::as_str).unwrap();
+    let schema_version = bundle
+        .get("schema_version")
+        .and_then(Value::as_str)
+        .unwrap();
+    let issuer_instance_id = bundle
+        .get("issuer_instance_id")
+        .and_then(Value::as_str)
+        .unwrap();
+    let signing_algorithms = bundle.get("signing_algorithms").unwrap();
+    let records = bundle.get("records").unwrap();
+    let bundle_signature = bundle
+        .get("bundle_signature")
+        .and_then(Value::as_str)
+        .unwrap();
+    let service_pubkey_b64 = bundle
+        .get("service_pubkey")
+        .and_then(Value::as_str)
+        .unwrap();
+
+    let canonical = pki_tooling::verification::bundle_canonical_body(
+        bundle_id_str,
+        schema_version,
+        issuer_instance_id,
+        signing_algorithms,
+        records,
+    );
+    let pubkey_bytes: [u8; 32] = STANDARD
+        .decode(service_pubkey_b64)
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+    assert!(
+        pki_tooling::verification::verify_bundle_signature(
+            &canonical,
+            bundle_signature,
+            &pubkey_bytes
+        )
+        .is_ok(),
+        "promoted bundle signature must still verify after promotion"
     );
 }

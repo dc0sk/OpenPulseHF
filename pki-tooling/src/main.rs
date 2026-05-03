@@ -1,3 +1,5 @@
+use base64::{engine::general_purpose::STANDARD, Engine};
+use ed25519_dalek::SigningKey;
 use pki_tooling::{build_router, AppState};
 use sqlx::postgres::PgPoolOptions;
 use std::env;
@@ -15,7 +17,29 @@ async fn main() {
         .await
         .expect("failed to connect to database");
 
-    let state = AppState { db };
+    let signing_key = match env::var("PKI_SIGNING_KEY") {
+        Ok(b64) => {
+            let seed = STANDARD
+                .decode(&b64)
+                .expect("PKI_SIGNING_KEY must be valid base64");
+            let arr: [u8; 32] = seed
+                .as_slice()
+                .try_into()
+                .expect("PKI_SIGNING_KEY seed must be exactly 32 bytes");
+            SigningKey::from_bytes(&arr)
+        }
+        Err(_) => {
+            tracing::warn!(
+                "PKI_SIGNING_KEY not set; using ephemeral signing key — bundles will not survive restart"
+            );
+            use rand::RngCore;
+            let mut seed = [0u8; 32];
+            rand::rngs::OsRng.fill_bytes(&mut seed);
+            SigningKey::from_bytes(&seed)
+        }
+    };
+
+    let state = AppState { db, signing_key };
 
     let app = build_router(state);
 

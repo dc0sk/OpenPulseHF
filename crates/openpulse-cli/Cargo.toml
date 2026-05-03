@@ -38,6 +38,7 @@ assert_cmd = "2.0"
 predicates = "3.1"
 mockito = "1.6"
 pki-tooling = { path = "../../pki-tooling" }
+ed25519-dalek = "2.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres"] }
 axum = "0.8"

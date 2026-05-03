@@ -59,6 +59,53 @@ pub fn verify_submission_signature(
     Ok(pubkey_arr)
 }
 
+/// Build the canonical body bytes for a trust bundle.
+///
+/// The canonical body covers content fields only (`is_current` and `bundle_signature` are
+/// excluded — they are operational state or output, not content).
+pub fn bundle_canonical_body(
+    bundle_id: &str,
+    schema_version: &str,
+    issuer_instance_id: &str,
+    signing_algorithms: &serde_json::Value,
+    records: &serde_json::Value,
+) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "bundle_id": bundle_id,
+        "schema_version": schema_version,
+        "issuer_instance_id": issuer_instance_id,
+        "signing_algorithms": signing_algorithms,
+        "records": records,
+    }))
+    .expect("serde_json::Value is always serializable")
+}
+
+/// Verify an Ed25519 bundle signature over `canonical_body`.
+///
+/// `signature_b64` must be a base64-encoded 64-byte Ed25519 signature.
+/// `pubkey_bytes` is the 32-byte Ed25519 verifying key.
+pub fn verify_bundle_signature(
+    canonical_body: &[u8],
+    signature_b64: &str,
+    pubkey_bytes: &[u8; 32],
+) -> Result<(), VerificationError> {
+    let verifying_key =
+        VerifyingKey::from_bytes(pubkey_bytes).map_err(|_| VerificationError::InvalidPublicKey)?;
+
+    let sig_bytes = STANDARD
+        .decode(signature_b64)
+        .map_err(|_| VerificationError::InvalidSignatureEncoding)?;
+    let sig_arr: [u8; 64] = sig_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| VerificationError::InvalidSignatureEncoding)?;
+    let signature = Signature::from_bytes(&sig_arr);
+
+    verifying_key
+        .verify(canonical_body, &signature)
+        .map_err(|_| VerificationError::InvalidSignature)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +167,48 @@ mod tests {
             verify_submission_signature(&payload, "AAAA"),
             Err(VerificationError::MissingPublicKey)
         ));
+    }
+
+    #[test]
+    fn bundle_canonical_body_is_deterministic() {
+        let records = json!([{"record_id": "r1"}]);
+        let algs = json!(["ed25519"]);
+        let body1 = bundle_canonical_body("bundle-1", "1.0", "issuer-a", &algs, &records);
+        let body2 = bundle_canonical_body("bundle-1", "1.0", "issuer-a", &algs, &records);
+        assert_eq!(body1, body2);
+    }
+
+    #[test]
+    fn bundle_signature_roundtrip() {
+        let sk = SigningKey::from_bytes(&[42u8; 32]);
+        let vk = sk.verifying_key();
+        let pubkey_bytes = vk.to_bytes();
+
+        let records = json!([]);
+        let algs = json!(["ed25519"]);
+        let canonical = bundle_canonical_body("b-1", "1.0", "issuer-x", &algs, &records);
+
+        let sig: Signature = sk.sign(&canonical);
+        let sig_b64 = STANDARD.encode(sig.to_bytes());
+
+        assert!(verify_bundle_signature(&canonical, &sig_b64, &pubkey_bytes).is_ok());
+    }
+
+    #[test]
+    fn bundle_signature_tampered_body_rejected() {
+        let sk = SigningKey::from_bytes(&[42u8; 32]);
+        let vk = sk.verifying_key();
+        let pubkey_bytes = vk.to_bytes();
+
+        let records = json!([]);
+        let algs = json!(["ed25519"]);
+        let canonical = bundle_canonical_body("b-1", "1.0", "issuer-x", &algs, &records);
+
+        let sig: Signature = sk.sign(&canonical);
+        let sig_b64 = STANDARD.encode(sig.to_bytes());
+
+        // Different content — verification must fail
+        let other = bundle_canonical_body("b-2", "1.0", "issuer-x", &algs, &records);
+        assert!(verify_bundle_signature(&other, &sig_b64, &pubkey_bytes).is_err());
     }
 }
