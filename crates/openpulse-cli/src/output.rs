@@ -150,6 +150,8 @@ pub fn signing_mode_to_str(mode: openpulse_core::trust::SigningMode) -> &'static
         SigningMode::Psk => "psk",
         SigningMode::Relaxed => "relaxed",
         SigningMode::Paranoid => "paranoid",
+        SigningMode::Pq => "pq",
+        SigningMode::Hybrid => "hybrid",
     }
 }
 
