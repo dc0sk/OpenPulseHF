@@ -120,6 +120,7 @@ struct TrustBundleRow {
     signing_algorithms: serde_json::Value,
     records: serde_json::Value,
     bundle_signature: String,
+    service_pubkey: String,
 }
 
 #[derive(Serialize)]
@@ -135,7 +136,7 @@ struct TrustBundleResponse {
 }
 
 impl TrustBundleRow {
-    fn into_response(self, signing_key: &ed25519_dalek::SigningKey) -> TrustBundleResponse {
+    fn into_response(self) -> TrustBundleResponse {
         TrustBundleResponse {
             schema_version: self.schema_version,
             bundle_id: self.bundle_id,
@@ -144,7 +145,7 @@ impl TrustBundleRow {
             signing_algorithms: self.signing_algorithms,
             records: self.records,
             bundle_signature: self.bundle_signature,
-            service_pubkey: STANDARD.encode(signing_key.verifying_key().to_bytes()),
+            service_pubkey: self.service_pubkey,
         }
     }
 }
@@ -409,7 +410,8 @@ pub async fn get_current_trust_bundle(State(state): State<AppState>) -> impl Int
             issuer_instance_id,
             signing_algorithms,
             records,
-            bundle_signature
+            bundle_signature,
+            service_pubkey
          FROM trust_bundles
          WHERE is_current = TRUE
          ORDER BY generated_at DESC
@@ -419,9 +421,7 @@ pub async fn get_current_trust_bundle(State(state): State<AppState>) -> impl Int
     .await;
 
     match result {
-        Ok(Some(row)) => {
-            (StatusCode::OK, Json(row.into_response(&state.signing_key))).into_response()
-        }
+        Ok(Some(row)) => (StatusCode::OK, Json(row.into_response())).into_response(),
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(ApiMessage {
@@ -453,7 +453,8 @@ pub async fn get_trust_bundle(
             issuer_instance_id,
             signing_algorithms,
             records,
-            bundle_signature
+            bundle_signature,
+            service_pubkey
          FROM trust_bundles
          WHERE bundle_id = $1",
     )
@@ -462,9 +463,7 @@ pub async fn get_trust_bundle(
     .await;
 
     match result {
-        Ok(Some(row)) => {
-            (StatusCode::OK, Json(row.into_response(&state.signing_key))).into_response()
-        }
+        Ok(Some(row)) => (StatusCode::OK, Json(row.into_response())).into_response(),
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(ApiMessage {
@@ -1222,6 +1221,7 @@ pub async fn publish_trust_bundle(
     );
     let sig = state.signing_key.sign(&canonical);
     let bundle_signature = STANDARD.encode(sig.to_bytes());
+    let service_pubkey = STANDARD.encode(state.signing_key.verifying_key().to_bytes());
 
     let mut tx = match state.db.begin().await {
         Ok(tx) => tx,
@@ -1247,8 +1247,9 @@ pub async fn publish_trust_bundle(
             signing_algorithms,
             records,
             bundle_signature,
+            service_pubkey,
             is_current
-         ) VALUES ($1, $2, $3::timestamptz, $4, $5, $6, $7, $8)",
+         ) VALUES ($1, $2, $3::timestamptz, $4, $5, $6, $7, $8, $9)",
     )
     .bind(&bundle_id)
     .bind(&req.schema_version)
@@ -1257,6 +1258,7 @@ pub async fn publish_trust_bundle(
     .bind(&req.signing_algorithms)
     .bind(&req.records)
     .bind(&bundle_signature)
+    .bind(&service_pubkey)
     .bind(false) // initially not current
     .execute(&mut *tx)
     .await;

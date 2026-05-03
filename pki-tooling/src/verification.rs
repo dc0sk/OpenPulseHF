@@ -59,10 +59,30 @@ pub fn verify_submission_signature(
     Ok(pubkey_arr)
 }
 
+/// Recursively sort object keys so that JSON round-trips through PostgreSQL JSONB
+/// (which normalises key order alphabetically) produce the same canonical bytes.
+fn sort_json_value(v: serde_json::Value) -> serde_json::Value {
+    match v {
+        serde_json::Value::Object(map) => {
+            let sorted: std::collections::BTreeMap<String, serde_json::Value> = map
+                .into_iter()
+                .map(|(k, v)| (k, sort_json_value(v)))
+                .collect();
+            serde_json::Value::Object(sorted.into_iter().collect())
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.into_iter().map(sort_json_value).collect())
+        }
+        other => other,
+    }
+}
+
 /// Build the canonical body bytes for a trust bundle.
 ///
 /// The canonical body covers content fields only (`is_current` and `bundle_signature` are
 /// excluded — they are operational state or output, not content).
+/// Object keys in `signing_algorithms` and `records` are recursively sorted so that
+/// signatures remain verifiable after a PostgreSQL JSONB round-trip.
 pub fn bundle_canonical_body(
     bundle_id: &str,
     schema_version: &str,
@@ -74,8 +94,8 @@ pub fn bundle_canonical_body(
         "bundle_id": bundle_id,
         "schema_version": schema_version,
         "issuer_instance_id": issuer_instance_id,
-        "signing_algorithms": signing_algorithms,
-        "records": records,
+        "signing_algorithms": sort_json_value(signing_algorithms.clone()),
+        "records": sort_json_value(records.clone()),
     }))
     .expect("serde_json::Value is always serializable")
 }
@@ -192,6 +212,17 @@ mod tests {
         let sig_b64 = STANDARD.encode(sig.to_bytes());
 
         assert!(verify_bundle_signature(&canonical, &sig_b64, &pubkey_bytes).is_ok());
+    }
+
+    #[test]
+    fn bundle_canonical_body_survives_key_reorder() {
+        // Simulate JSONB round-trip: keys arrive in a different order than originally inserted.
+        let algs = json!(["ed25519"]);
+        let records_original = json!([{"z_field": 1, "a_field": 2}]);
+        let records_reordered = json!([{"a_field": 2, "z_field": 1}]);
+        let body1 = bundle_canonical_body("b", "1.0", "issuer", &algs, &records_original);
+        let body2 = bundle_canonical_body("b", "1.0", "issuer", &algs, &records_reordered);
+        assert_eq!(body1, body2, "canonical body must be key-order independent");
     }
 
     #[test]
