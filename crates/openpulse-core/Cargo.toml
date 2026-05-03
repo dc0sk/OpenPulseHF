@@ -19,6 +19,7 @@ reed-solomon  = "0.2"
 ml-dsa        = { version = "0.1.0-rc.9", features = ["rand_core"] }
 ml-kem        = { version = "0.3", features = ["getrandom"] }
 rand          = "0.8"
+lz4_flex      = "0.11"
 
 [dev-dependencies]
 cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }

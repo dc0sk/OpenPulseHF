@@ -4,6 +4,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::compression::CompressionAlgorithm;
 use crate::error::ModemError;
 use crate::trust::{
     evaluate_handshake, CertificateSource, HandshakeDecision, PolicyProfile, PublicKeyTrustLevel,
@@ -24,6 +25,8 @@ pub enum HandshakeError {
     TrustFailure(TrustError),
     #[error("encoding error: {0}")]
     Encoding(String),
+    #[error("responder selected a compression algorithm not offered by the initiator")]
+    UnsupportedCompression,
 }
 
 impl From<TrustError> for HandshakeError {
@@ -101,6 +104,7 @@ struct ConReqBody {
     pubkey: Vec<u8>,
     signing_modes: Vec<SigningMode>,
     session_id: String,
+    supported_compression: Vec<CompressionAlgorithm>,
 }
 
 /// Connection request sent by the initiating station during Discovery.
@@ -114,6 +118,8 @@ pub struct ConReq {
     pub pubkey: Vec<u8>,
     pub signing_modes: Vec<SigningMode>,
     pub session_id: String,
+    /// Compression algorithms the initiator supports (empty = none).
+    pub supported_compression: Vec<CompressionAlgorithm>,
     /// Ed25519 signature over canonical JSON of the body fields (64 bytes).
     pub signature: Vec<u8>,
 }
@@ -127,6 +133,7 @@ impl ConReq {
         signing_key_seed: &[u8; 32],
         signing_modes: Vec<SigningMode>,
         session_id: &str,
+        supported_compression: Vec<CompressionAlgorithm>,
     ) -> Result<Self, HandshakeError> {
         let signing_key = SigningKey::from_bytes(signing_key_seed);
         let verifying_key = signing_key.verifying_key();
@@ -136,6 +143,7 @@ impl ConReq {
             pubkey: verifying_key.to_bytes().to_vec(),
             signing_modes: signing_modes.clone(),
             session_id: session_id.to_string(),
+            supported_compression: supported_compression.clone(),
         };
         let canonical =
             serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))?;
@@ -146,6 +154,7 @@ impl ConReq {
             pubkey: verifying_key.to_bytes().to_vec(),
             signing_modes,
             session_id: session_id.to_string(),
+            supported_compression,
             signature: sig.to_bytes().to_vec(),
         })
     }
@@ -156,6 +165,7 @@ impl ConReq {
             pubkey: self.pubkey.clone(),
             signing_modes: self.signing_modes.clone(),
             session_id: self.session_id.clone(),
+            supported_compression: self.supported_compression.clone(),
         };
         serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))
     }
@@ -206,6 +216,7 @@ struct ConAckBody {
     pubkey: Vec<u8>,
     selected_mode: SigningMode,
     session_id: String,
+    selected_compression: CompressionAlgorithm,
 }
 
 /// Connection acknowledgment sent by the responder during Discovery.
@@ -220,6 +231,8 @@ pub struct ConAck {
     pub selected_mode: SigningMode,
     /// Must echo the session_id from the corresponding ConReq.
     pub session_id: String,
+    /// Compression algorithm selected for this session.
+    pub selected_compression: CompressionAlgorithm,
     /// Ed25519 signature over canonical JSON of the body fields (64 bytes).
     pub signature: Vec<u8>,
 }
@@ -231,6 +244,7 @@ impl ConAck {
         signing_key_seed: &[u8; 32],
         selected_mode: SigningMode,
         session_id: &str,
+        selected_compression: CompressionAlgorithm,
     ) -> Result<Self, HandshakeError> {
         let signing_key = SigningKey::from_bytes(signing_key_seed);
         let verifying_key = signing_key.verifying_key();
@@ -240,6 +254,7 @@ impl ConAck {
             pubkey: verifying_key.to_bytes().to_vec(),
             selected_mode,
             session_id: session_id.to_string(),
+            selected_compression,
         };
         let canonical =
             serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))?;
@@ -250,6 +265,7 @@ impl ConAck {
             pubkey: verifying_key.to_bytes().to_vec(),
             selected_mode,
             session_id: session_id.to_string(),
+            selected_compression,
             signature: sig.to_bytes().to_vec(),
         })
     }
@@ -260,6 +276,7 @@ impl ConAck {
             pubkey: self.pubkey.clone(),
             selected_mode: self.selected_mode,
             session_id: self.session_id.clone(),
+            selected_compression: self.selected_compression,
         };
         serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))
     }
@@ -357,12 +374,15 @@ pub fn verify_conreq(
 
 /// Verify a received CONACK and evaluate trust.
 ///
-/// `req_session_id` must match the session ID in the ConAck.  Fails if the
-/// signature is invalid, the session ID does not match, or the trust policy
-/// rejects the responder.
+/// `req_session_id` must match the session ID in the ConAck. `req_supported_compression`
+/// is the list advertised by the initiator; the responder's `selected_compression` must
+/// appear in that list (or be `None`, which is always allowed). Fails if the signature is
+/// invalid, the session ID does not match, compression is not mutually supported, or the
+/// trust policy rejects the responder.
 pub fn verify_conack(
     ack: &ConAck,
     req_session_id: &str,
+    req_supported_compression: &[CompressionAlgorithm],
     trust_store: &dyn TrustStore,
     policy: PolicyProfile,
     local_min_mode: SigningMode,
@@ -372,6 +392,12 @@ pub fn verify_conack(
             expected: req_session_id.to_string(),
             got: ack.session_id.clone(),
         });
+    }
+
+    if ack.selected_compression != CompressionAlgorithm::None
+        && !req_supported_compression.contains(&ack.selected_compression)
+    {
+        return Err(HandshakeError::UnsupportedCompression);
     }
 
     let canonical = ack.canonical_bytes()?;
@@ -410,6 +436,7 @@ pub(crate) fn sha256_bytes(data: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compression::CompressionAlgorithm;
 
     fn make_key(seed: u8) -> [u8; 32] {
         [seed; 32]
@@ -427,6 +454,7 @@ mod tests {
             &make_key(1),
             vec![SigningMode::Normal],
             "session-abc",
+            vec![],
         )
         .unwrap();
         let encoded = req.encode().expect("encode");
@@ -438,7 +466,14 @@ mod tests {
 
     #[test]
     fn conreq_signature_covers_content() {
-        let req = ConReq::create("W1AW", &make_key(1), vec![SigningMode::Normal], "s1").unwrap();
+        let req = ConReq::create(
+            "W1AW",
+            &make_key(1),
+            vec![SigningMode::Normal],
+            "s1",
+            vec![],
+        )
+        .unwrap();
         let mut tampered = req.clone();
         tampered.station_id = "EVIL".to_string();
         let canonical = tampered.canonical_bytes().unwrap();
@@ -447,8 +482,14 @@ mod tests {
 
     #[test]
     fn conack_round_trip() {
-        let ack =
-            ConAck::create("KD9XYZ", &make_key(2), SigningMode::Normal, "session-abc").unwrap();
+        let ack = ConAck::create(
+            "KD9XYZ",
+            &make_key(2),
+            SigningMode::Normal,
+            "session-abc",
+            CompressionAlgorithm::None,
+        )
+        .unwrap();
         let encoded = ack.encode().expect("encode");
         let decoded = ConAck::decode(&encoded).expect("decode");
         assert_eq!(decoded.station_id, ack.station_id);
@@ -457,8 +498,14 @@ mod tests {
 
     #[test]
     fn verify_conreq_rejects_wrong_pubkey() {
-        let mut req =
-            ConReq::create("W1AW", &make_key(1), vec![SigningMode::Normal], "s1").unwrap();
+        let mut req = ConReq::create(
+            "W1AW",
+            &make_key(1),
+            vec![SigningMode::Normal],
+            "s1",
+            vec![],
+        )
+        .unwrap();
         req.pubkey = pubkey_for_seed(99); // wrong key
 
         let store = InMemoryTrustStore::new();
