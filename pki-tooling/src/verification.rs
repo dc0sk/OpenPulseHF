@@ -47,7 +47,7 @@ pub fn verify_submission_signature(
     let sig_arr: [u8; 64] = sig_bytes
         .as_slice()
         .try_into()
-        .map_err(|_| VerificationError::InvalidSignature)?;
+        .map_err(|_| VerificationError::InvalidSignatureEncoding)?;
     let signature = Signature::from_bytes(&sig_arr);
 
     let canonical = serde_json::to_vec(payload).expect("serde_json::Value is always serializable");

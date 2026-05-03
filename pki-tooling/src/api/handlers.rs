@@ -68,6 +68,7 @@ struct IdentityRecordResponse {
 struct SubmissionResponse {
     submission_id: String,
     submission_state: &'static str,
+    validation_summary: serde_json::Value,
 }
 
 #[derive(Serialize, FromRow)]
@@ -544,7 +545,7 @@ pub async fn create_submission(
     .bind("pending")
     .bind(&artifact_uri)
     .bind(detached_signature_uri)
-    .bind(validation_summary)
+    .bind(&validation_summary)
     .execute(&mut *tx)
     .await;
 
@@ -608,6 +609,7 @@ pub async fn create_submission(
                 Json(SubmissionResponse {
                     submission_id,
                     submission_state: "pending",
+                    validation_summary,
                 }),
             )
                 .into_response()

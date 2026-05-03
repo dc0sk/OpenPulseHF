@@ -500,6 +500,7 @@ async fn signed_handshake_requires_required_payload_fields() {
             json!({
                 "payload_type": "signed_handshake",
                 "payload": {
+                    "pubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
                     "session_id": "sess-001",
                     "peer_id": "peer-01",
                     "signed_at": "2026-04-24T12:00:00Z"
@@ -546,6 +547,7 @@ async fn signed_manifest_requires_required_payload_fields() {
             json!({
                 "payload_type": "signed_manifest",
                 "payload": {
+                    "pubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
                     "session_id": "sess-001",
                     "signed_at": "2026-04-24T12:00:00Z",
                     "manifest_hash": "abc123"
@@ -584,6 +586,7 @@ async fn signed_manifest_with_required_fields_is_accepted() {
 
     let app = build_router(AppState { db: pool.clone() });
 
+    let (payload, sig_b64) = make_signed_manifest_payload(30);
     let req = Request::builder()
         .method("POST")
         .uri("/api/v1/submissions")
@@ -591,13 +594,8 @@ async fn signed_manifest_with_required_fields_is_accepted() {
         .body(Body::from(
             json!({
                 "payload_type": "signed_manifest",
-                "payload": {
-                    "session_id": "sess-001",
-                    "signed_at": "2026-04-24T12:00:00Z",
-                    "manifest_hash": "abc123",
-                    "chunk_count": 42
-                },
-                "detached_signature": "sig-xyz"
+                "payload": payload,
+                "detached_signature": sig_b64,
             })
             .to_string(),
         ))
