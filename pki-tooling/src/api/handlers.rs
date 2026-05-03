@@ -68,6 +68,7 @@ struct IdentityRecordResponse {
 struct SubmissionResponse {
     submission_id: String,
     submission_state: &'static str,
+    validation_summary: serde_json::Value,
 }
 
 #[derive(Serialize, FromRow)]
@@ -480,6 +481,24 @@ pub async fn create_submission(
             .into_response();
     }
 
+    let is_signed_type = matches!(
+        req.payload_type.trim(),
+        "signed_handshake" | "signed_manifest"
+    );
+    if is_signed_type {
+        let sig = req.detached_signature.as_deref().unwrap_or_default();
+        if let Err(e) = crate::verification::verify_submission_signature(&req.payload, sig) {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(ApiMessage {
+                    status: "verification_failed",
+                    detail: e.to_string(),
+                }),
+            )
+                .into_response();
+        }
+    }
+
     let submission_id = Uuid::new_v4().to_string();
     let artifact_uri = format!("inline://submission/{submission_id}");
     let detached_signature_uri = req
@@ -491,7 +510,7 @@ pub async fn create_submission(
     let payload_kind = json_kind(&req.payload);
 
     let validation_summary = serde_json::json!({
-        "status": "pending_validation",
+        "status": if is_signed_type { "signature_verified" } else { "pending_validation" },
         "payload_type": payload_type,
         "payload_kind": payload_kind,
         "has_detached_signature": has_detached_signature
@@ -526,7 +545,7 @@ pub async fn create_submission(
     .bind("pending")
     .bind(&artifact_uri)
     .bind(detached_signature_uri)
-    .bind(validation_summary)
+    .bind(&validation_summary)
     .execute(&mut *tx)
     .await;
 
@@ -590,6 +609,7 @@ pub async fn create_submission(
                 Json(SubmissionResponse {
                     submission_id,
                     submission_state: "pending",
+                    validation_summary,
                 }),
             )
                 .into_response()
@@ -1653,6 +1673,7 @@ fn validate_signed_payload_conformance(req: &SubmissionRequest) -> Result<(), St
 
     require_object_field(&req.payload, "session_id")?;
     require_object_field(&req.payload, "signed_at")?;
+    require_object_field(&req.payload, "pubkey")?;
 
     if payload_type == "signed_handshake" {
         require_object_field(&req.payload, "peer_id")?;
