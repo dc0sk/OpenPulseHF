@@ -102,6 +102,9 @@ fn main() -> Result<()> {
         Commands::Benchmark { command } => {
             exit_code = commands::benchmark::run(command)?;
         }
+        Commands::Monitor { mode } => {
+            commands::monitor::run(&mut engine, &mode)?;
+        }
     }
 
     if exit_code != 0 {

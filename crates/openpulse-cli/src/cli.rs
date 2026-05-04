@@ -79,6 +79,12 @@ pub enum Commands {
         #[command(subcommand)]
         command: BenchmarkCommands,
     },
+    /// Stream engine events as newline-delimited JSON to stdout.
+    Monitor {
+        /// Modulation mode to drive the receive loop.
+        #[arg(short, long, default_value = "BPSK100")]
+        mode: String,
+    },
 }
 
 #[derive(Subcommand)]

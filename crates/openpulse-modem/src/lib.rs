@@ -8,6 +8,8 @@ pub mod channel_sim;
 pub mod diagnostics;
 pub mod engine;
 pub mod envelope_codec;
+pub mod event;
 pub mod pipeline;
 
 pub use engine::ModemEngine;
+pub use event::EngineEvent;

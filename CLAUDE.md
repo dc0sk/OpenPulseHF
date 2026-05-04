@@ -258,7 +258,13 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
   - Loopback mode (`ArdopConfig::loopback`) echoes TX data as RX data for protocol-level integration tests
 - `crates/openpulse-ardop/tests/ardop_integration.rs`: 8 tests — VERSION, MYID, STATE, CONNECT/DISCONNECT, ABORT, BUFFER, data port single-frame and multi-frame loopback
 
----
+**Phase 4.2 — Structured JSON event stream** ✅ Done
+- `crates/openpulse-core/src/hpx.rs`: added `#[derive(Serialize, Deserialize)]` to `HpxState`, `HpxEvent`
+- `crates/openpulse-core/src/rate.rs`: added `#[derive(Serialize, Deserialize)]` to `RateEvent`
+- `crates/openpulse-modem/src/event.rs`: new `EngineEvent` enum (8 variants, NDJSON-ready)
+- `crates/openpulse-modem/src/engine.rs`: added `broadcast::Sender<EngineEvent>` field; `subscribe()` method; events emitted at transmit/receive/apply_ack/hpx_apply_event/begin_secure_session/end_secure_session with DCD change detection
+- `crates/openpulse-cli/src/commands/monitor.rs`: `openpulse monitor --mode <MODE>` subcommand streaming NDJSON to stdout
+- Integration tests: `crates/openpulse-modem/tests/engine_events.rs` (5 tests)
 
 ## Open design decisions
 

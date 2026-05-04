@@ -1,6 +1,7 @@
 //! The core [`ModemEngine`] struct.
 
 use rand::Rng;
+use tokio::sync::broadcast;
 use tracing::{debug, info};
 
 use openpulse_core::ack::AckType;
@@ -19,6 +20,7 @@ use openpulse_core::trust::{
     PublicKeyTrustLevel, SigningMode,
 };
 
+use crate::event::EngineEvent;
 use crate::pipeline::{
     AudioSamples, BackpressurePolicy, DecodedFrame, PipelineMetricsSnapshot, PipelineScheduler,
     PipelineStage, WirePayload,
@@ -61,11 +63,13 @@ pub struct ModemEngine {
     dcd: DcdState,
     csma_enabled: bool,
     csma_persistence: f32,
+    event_tx: broadcast::Sender<EngineEvent>,
 }
 
 impl ModemEngine {
     /// Create a new engine backed by the given audio backend.
     pub fn new(audio: Box<dyn AudioBackend>) -> Self {
+        let (event_tx, _) = broadcast::channel(64);
         Self {
             audio,
             plugins: PluginRegistry::new(),
@@ -80,7 +84,16 @@ impl ModemEngine {
             dcd: DcdState::new(0.01, 800), // 100 ms hold at 8 kHz
             csma_enabled: false,
             csma_persistence: 0.3,
+            event_tx,
         }
+    }
+
+    /// Subscribe to the real-time engine event stream.
+    ///
+    /// Returns a [`broadcast::Receiver`] that receives every [`EngineEvent`]
+    /// emitted after this call.  Lagging receivers silently drop old events.
+    pub fn subscribe(&self) -> broadcast::Receiver<EngineEvent> {
+        self.event_tx.subscribe()
     }
 
     /// Returns the active trust policy profile used as session default.
@@ -161,10 +174,25 @@ impl ModemEngine {
     ///
     /// Returns [`RateEvent::Maintained`] when no adaptive session is active.
     pub fn apply_ack(&mut self, ack: AckType) -> RateEvent {
-        match self.rate_adapter.as_mut() {
+        let rate_event = match self.rate_adapter.as_mut() {
             Some(adapter) => adapter.apply_ack(ack),
             None => RateEvent::Maintained,
-        }
+        };
+        let speed_level = self
+            .rate_adapter
+            .as_ref()
+            .map(|a| a.speed_level())
+            .unwrap_or(openpulse_core::rate::SpeedLevel::Sl2);
+        let mode = self
+            .current_adaptive_mode()
+            .unwrap_or("unknown")
+            .to_string();
+        let _ = self.event_tx.send(EngineEvent::RateChange {
+            event: rate_event,
+            speed_level,
+            mode,
+        });
+        rate_event
     }
 
     /// Return the mode string for the current speed level of the active adaptive session.
@@ -244,6 +272,15 @@ impl ModemEngine {
 
         self.hpx_apply_event(HpxEvent::TrainingOk, timestamp_ms.saturating_add(3))?;
         self.active_handshake = Some(handshake.clone());
+        let _ = self.event_tx.send(EngineEvent::SessionStarted {
+            session_id: self.hpx_session_id().unwrap_or("").to_string(),
+            peer: params
+                .peer_supported_modes
+                .iter()
+                .map(|m| format!("{m:?}"))
+                .collect::<Vec<_>>()
+                .join(","),
+        });
         Ok(handshake)
     }
 
@@ -254,9 +291,14 @@ impl ModemEngine {
             return Ok(());
         }
 
+        let session_id = self.hpx_session_id().unwrap_or("").to_string();
         self.hpx_apply_event(HpxEvent::LocalCancel, timestamp_ms)?;
         self.hpx_apply_event(HpxEvent::TransferComplete, timestamp_ms.saturating_add(1))?;
         self.active_handshake = None;
+        let _ = self.event_tx.send(EngineEvent::SessionEnded {
+            session_id,
+            reason: "local cancel".to_string(),
+        });
         Ok(())
     }
 
@@ -266,9 +308,17 @@ impl ModemEngine {
         event: HpxEvent,
         timestamp_ms: u64,
     ) -> Result<HpxTransition, ModemError> {
-        self.hpx
+        let transition = self
+            .hpx
             .apply_event(event, timestamp_ms)
-            .map_err(|e| ModemError::Configuration(e.to_string()))
+            .map_err(|e| ModemError::Configuration(e.to_string()))?;
+        let _ = self.event_tx.send(EngineEvent::HpxTransition {
+            from: transition.from_state,
+            to: transition.to_state,
+            event: transition.event,
+            session_id: transition.session_id.clone(),
+        });
+        Ok(transition)
     }
 
     /// Encode an application payload into a signed envelope wire blob.
@@ -372,6 +422,10 @@ impl ModemEngine {
 
         self.stage_emit_output(device, &samples)?;
 
+        let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
+            mode: mode.to_string(),
+            bytes: outbound.bytes.len(),
+        });
         Ok(())
     }
 
@@ -383,7 +437,15 @@ impl ModemEngine {
         let samples = self.stage_capture_input(device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
+        let prev_busy = self.dcd.is_busy();
         self.dcd.update(&samples.samples);
+        let now_busy = self.dcd.is_busy();
+        if now_busy != prev_busy {
+            let _ = self.event_tx.send(EngineEvent::DcdChange {
+                busy: now_busy,
+                energy: self.dcd.energy(),
+            });
+        }
 
         info!("received {} audio samples", samples.samples.len());
 
@@ -398,11 +460,21 @@ impl ModemEngine {
         debug!("demodulated {} bytes", wire.bytes.len());
 
         self.update_afc_estimate(mode, &samples.samples);
+        if let Some(hz) = self.last_afc_offset_hz {
+            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
+                offset_hz: hz,
+                mode: mode.to_string(),
+            });
+        }
 
         let frame = self.stage_decode_frame(&wire)?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         info!("received frame seq={}", frame.sequence);
 
+        let _ = self.event_tx.send(EngineEvent::FrameReceived {
+            mode: mode.to_string(),
+            bytes: frame.payload.len(),
+        });
         Ok(frame.payload)
     }
 
@@ -439,7 +511,12 @@ impl ModemEngine {
             self.stage_modulate_payload(plugin, mode, &fec_wire)?
         };
         let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
-        self.stage_emit_output(device, &samples)
+        self.stage_emit_output(device, &samples)?;
+        let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
+            mode: mode.to_string(),
+            bytes: fec_wire.bytes.len(),
+        });
+        Ok(())
     }
 
     /// Like [`receive`](Self::receive) but applies Reed-Solomon FEC error
@@ -452,7 +529,14 @@ impl ModemEngine {
         let samples = self.stage_capture_input(device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
+        let prev_busy = self.dcd.is_busy();
         self.dcd.update(&samples.samples);
+        if self.dcd.is_busy() != prev_busy {
+            let _ = self.event_tx.send(EngineEvent::DcdChange {
+                busy: self.dcd.is_busy(),
+                energy: self.dcd.energy(),
+            });
+        }
 
         let raw_wire = {
             let plugin = self
@@ -464,6 +548,12 @@ impl ModemEngine {
         let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
 
         self.update_afc_estimate(mode, &samples.samples);
+        if let Some(hz) = self.last_afc_offset_hz {
+            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
+                offset_hz: hz,
+                mode: mode.to_string(),
+            });
+        }
 
         let corrected_bytes = FecCodec::new().decode(&raw_wire.bytes)?;
         let corrected_wire = WirePayload {
@@ -474,6 +564,10 @@ impl ModemEngine {
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         info!("FEC receive: frame seq={}", frame.sequence);
 
+        let _ = self.event_tx.send(EngineEvent::FrameReceived {
+            mode: mode.to_string(),
+            bytes: frame.payload.len(),
+        });
         Ok(frame.payload)
     }
 
@@ -503,9 +597,13 @@ impl ModemEngine {
             self.stage_modulate_payload(plugin, mode, &il_wire)?
         };
         let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
-        self.stage_emit_output(device, &samples)
+        self.stage_emit_output(device, &samples)?;
+        let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
+            mode: mode.to_string(),
+            bytes: il_wire.bytes.len(),
+        });
+        Ok(())
     }
-
     /// Like [`receive_with_fec`](Self::receive_with_fec) but deinterleaves the
     /// received bytes before RS decoding to undo the transmitter's interleaving.
     pub fn receive_with_fec_interleaved(
@@ -517,7 +615,14 @@ impl ModemEngine {
         let samples = self.stage_capture_input(device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
+        let prev_busy = self.dcd.is_busy();
         self.dcd.update(&samples.samples);
+        if self.dcd.is_busy() != prev_busy {
+            let _ = self.event_tx.send(EngineEvent::DcdChange {
+                busy: self.dcd.is_busy(),
+                energy: self.dcd.energy(),
+            });
+        }
 
         let raw_wire = {
             let plugin = self
@@ -529,6 +634,12 @@ impl ModemEngine {
         let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
 
         self.update_afc_estimate(mode, &samples.samples);
+        if let Some(hz) = self.last_afc_offset_hz {
+            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
+                offset_hz: hz,
+                mode: mode.to_string(),
+            });
+        }
 
         let deinterleaved = Interleaver::new(interleaver_depth).deinterleave(&raw_wire.bytes);
         let corrected_bytes = FecCodec::new().decode(&deinterleaved)?;
@@ -538,6 +649,10 @@ impl ModemEngine {
 
         let frame = self.stage_decode_frame(&corrected_wire)?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
+        let _ = self.event_tx.send(EngineEvent::FrameReceived {
+            mode: mode.to_string(),
+            bytes: frame.payload.len(),
+        });
         Ok(frame.payload)
     }
 
