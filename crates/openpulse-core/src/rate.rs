@@ -86,7 +86,7 @@ impl SpeedLevel {
 // ── RateEvent ─────────────────────────────────────────────────────────────────
 
 /// Outcome of a single [`RateAdapter::apply_ack`] call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RateEvent {
     /// Speed level is unchanged.
     Maintained,
