@@ -261,10 +261,17 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 **Phase 4.2 — Structured JSON event stream** ✅ Done
 - `crates/openpulse-core/src/hpx.rs`: added `#[derive(Serialize, Deserialize)]` to `HpxState`, `HpxEvent`
 - `crates/openpulse-core/src/rate.rs`: added `#[derive(Serialize, Deserialize)]` to `RateEvent`
-- `crates/openpulse-modem/src/event.rs`: new `EngineEvent` enum (8 variants, NDJSON-ready)
-- `crates/openpulse-modem/src/engine.rs`: added `broadcast::Sender<EngineEvent>` field; `subscribe()` method; events emitted at transmit/receive/apply_ack/hpx_apply_event/begin_secure_session/end_secure_session with DCD change detection
-- `crates/openpulse-cli/src/commands/monitor.rs`: `openpulse monitor --mode <MODE>` subcommand streaming NDJSON to stdout
-- Integration tests: `crates/openpulse-modem/tests/engine_events.rs` (5 tests)
+- `crates/openpulse-modem/src/event.rs`: new `EngineEvent` enum (8 variants, NDJSON-ready); `SessionStarted.session_id` is `Option<String>`; `SessionStarted.peer_modes` (not `peer`)
+- `crates/openpulse-modem/src/engine.rs`: added `broadcast::Sender<EngineEvent>` field; `subscribe()` method; events emitted at transmit/receive/apply_ack/hpx_apply_event/begin_secure_session/end_secure_session with DCD change detection; `RateChange` only emitted when adaptive session is active
+- `crates/openpulse-cli/src/commands/monitor.rs`: `openpulse monitor --mode <MODE>` subcommand streaming NDJSON to stdout; fatal errors propagated; stdout flushed per event
+- Integration tests: `crates/openpulse-modem/tests/engine_events.rs` (7 tests including DcdChange and AfcUpdate)
+
+**Phase 4.1 — TUI frontend** ✅ Done
+- `crates/openpulse-tui/`: new binary crate using ratatui 0.27 + crossterm
+  - `src/app.rs`: `App` state struct updated by `EngineEvent`s; transitions ring buffer (last 50); pause/scroll support
+  - `src/ui.rs`: three-panel layout — HPX state (colour-coded), AFC/rate meters + DCD energy bar, scrollable transitions log
+  - `src/events.rs`: `spawn_worker()` runs engine receive loop in a background thread; `drain_worker()` applies events to `App`
+  - `src/main.rs`: 100 ms tick loop; keyboard: `q`/Ctrl+C quit, `p` pause, ↑↓ scroll
 
 ## Open design decisions
 
