@@ -1,4 +1,6 @@
-use std::io::{Read, Write};
+mod common;
+
+use std::io::{self, ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc::{self, SyncSender};
 use std::thread::{self, JoinHandle};
@@ -11,7 +13,9 @@ use openpulse_modem::channel_sim::ChannelSimHarness;
 use openpulse_b2f::WlHeader;
 use openpulse_b2f_driver::B2fDriver;
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+use common::{mock_cmd_irs, mock_cmd_iss, test_header};
+
+// ── Modem helpers ─────────────────────────────────────────────────────────────
 
 fn make_bpsk_harness() -> ChannelSimHarness {
     let mut h = ChannelSimHarness::new();
@@ -24,41 +28,86 @@ fn make_bpsk_harness() -> ChannelSimHarness {
     h
 }
 
+/// Encode `frame` through the harness, route through AWGN, and decode.
+///
+/// Panics if `frame` exceeds 255 bytes — `ModemEngine::transmit` is limited
+/// by `Frame::new`'s 255-byte payload cap.
 fn relay_frame_awgn(h: &mut ChannelSimHarness, frame: &[u8], ch: &mut AwgnChannel) -> Vec<u8> {
+    assert!(
+        frame.len() <= 255,
+        "frame ({} B) exceeds ModemEngine 255-byte payload limit",
+        frame.len()
+    );
     h.tx_engine.transmit(frame, "BPSK250", None).unwrap();
     h.route(ch);
     h.rx_engine.receive("BPSK250", None).unwrap()
 }
 
+/// Encode `frame` through the harness with no channel distortion and decode.
 fn relay_frame_clean(h: &mut ChannelSimHarness, frame: &[u8]) -> Vec<u8> {
+    assert!(
+        frame.len() <= 255,
+        "frame ({} B) exceeds ModemEngine 255-byte payload limit",
+        frame.len()
+    );
     h.tx_engine.transmit(frame, "BPSK250", None).unwrap();
     h.route_clean();
     h.rx_engine.receive("BPSK250", None).unwrap()
 }
 
-/// Read a u16-BE-framed payload; returns `None` on EOF/error.
+// ── Data-port TCP helpers ─────────────────────────────────────────────────────
+
+/// Read a u16-BE-framed payload; returns `None` on clean TCP close (EOF).
+/// Panics on unexpected I/O errors to surface failures immediately.
 fn recv_frame_ok(stream: &mut TcpStream) -> Option<Vec<u8>> {
     let mut len_buf = [0u8; 2];
-    stream.read_exact(&mut len_buf).ok()?;
+    match stream.read_exact(&mut len_buf) {
+        Ok(()) => {}
+        Err(e)
+            if e.kind() == ErrorKind::UnexpectedEof || e.kind() == ErrorKind::ConnectionReset =>
+        {
+            return None;
+        }
+        Err(e) => panic!("unexpected recv_frame error: {e}"),
+    }
     let len = u16::from_be_bytes(len_buf) as usize;
     let mut payload = vec![0u8; len];
-    stream.read_exact(&mut payload).ok()?;
+    stream.read_exact(&mut payload).expect("read frame payload");
     Some(payload)
 }
 
-/// Write a u16-BE-framed payload; returns false on error.
+/// Write a u16-BE-framed payload; returns `false` on clean TCP close.
+/// Panics on unexpected I/O errors.
 fn send_frame_ok(stream: &mut TcpStream, data: &[u8]) -> bool {
-    let len = data.len() as u16;
-    stream.write_all(&len.to_be_bytes()).is_ok()
-        && stream.write_all(data).is_ok()
-        && stream.flush().is_ok()
+    let len: u16 = data
+        .len()
+        .try_into()
+        .expect("frame payload exceeds u16::MAX");
+    match stream.write_all(&len.to_be_bytes()) {
+        Ok(()) => {}
+        Err(e) if is_closed(&e) => return false,
+        Err(e) => panic!("unexpected send_frame error: {e}"),
+    }
+    match stream.write_all(data).and_then(|_| stream.flush()) {
+        Ok(()) => true,
+        Err(e) if is_closed(&e) => false,
+        Err(e) => panic!("unexpected send_frame error: {e}"),
+    }
 }
+
+fn is_closed(e: &io::Error) -> bool {
+    matches!(
+        e.kind(),
+        ErrorKind::BrokenPipe | ErrorKind::ConnectionReset | ErrorKind::UnexpectedEof
+    )
+}
+
+// ── Infrastructure ────────────────────────────────────────────────────────────
 
 /// TCP data-port mini-server.
 ///
 /// Bridges between a B2fDriver's TCP connection and a pair of mpsc channels
-/// that feed the modem relay.  The outer thread runs the write-to-driver
-/// loop; an inner thread handles reading from the driver.
+/// that feed the modem relay.
 fn spawn_data_server(
     outgoing: SyncSender<Vec<u8>>,
     incoming: mpsc::Receiver<Vec<u8>>,
@@ -78,7 +127,7 @@ fn spawn_data_server(
                         break;
                     }
                 }
-                None => break, // TCP closed
+                None => break,
             }
         });
 
@@ -100,10 +149,9 @@ enum RelayChannel {
 
 /// Bidirectional modem relay.
 ///
-/// Polls ISS and IRS outboxes with `try_recv`; for each frame it encodes
-/// through the appropriate `ChannelSimHarness`, routes through the channel
-/// model, decodes, and forwards to the other side's inbox.  Exits when both
-/// senders have disconnected.
+/// Polls ISS and IRS outboxes with `try_recv`; for each frame encodes through
+/// the appropriate `ChannelSimHarness`, routes through the channel model, decodes,
+/// and forwards to the other side's inbox.  Exits when both senders disconnect.
 fn spawn_modem_relay(
     mut iss_to_irs: ChannelSimHarness,
     mut irs_to_iss: ChannelSimHarness,
@@ -156,85 +204,6 @@ fn spawn_modem_relay(
     })
 }
 
-fn mock_cmd_iss() -> (SocketAddr, JoinHandle<()>) {
-    use std::io::BufRead;
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    let handle = thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
-        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
-        let mut writer = stream;
-        let mut line = String::new();
-        loop {
-            line.clear();
-            if reader.read_line(&mut line).unwrap() == 0 {
-                break;
-            }
-            let cmd = line.trim();
-            if cmd.is_empty() {
-                continue;
-            }
-            if cmd.starts_with("MYID") {
-                let call = cmd.split_whitespace().nth(1).unwrap_or("UNKNOWN");
-                write!(writer, "MYID {call}\r\n").unwrap();
-            } else if cmd.starts_with("CONNECT") {
-                write!(writer, "NEWSTATE CONNECTING\r\nCONNECTED PEER\r\n").unwrap();
-            } else if cmd.starts_with("DISCONNECT") {
-                write!(writer, "NEWSTATE DISCONNECTING\r\nDISCONNECTED\r\n").unwrap();
-                break;
-            }
-            writer.flush().unwrap();
-        }
-    });
-    (addr, handle)
-}
-
-fn mock_cmd_irs() -> (SocketAddr, JoinHandle<()>) {
-    use std::io::BufRead;
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    let handle = thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
-        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
-        let mut writer = stream;
-        let mut line = String::new();
-        loop {
-            line.clear();
-            if reader.read_line(&mut line).unwrap() == 0 {
-                break;
-            }
-            let cmd = line.trim();
-            if cmd.is_empty() {
-                continue;
-            }
-            if cmd.starts_with("MYID") {
-                let call = cmd.split_whitespace().nth(1).unwrap_or("UNKNOWN");
-                write!(writer, "MYID {call}\r\n").unwrap();
-            } else if cmd.starts_with("LISTEN") {
-                write!(writer, "LISTEN TRUE\r\nCONNECTED ISS\r\n").unwrap();
-            } else if cmd.starts_with("DISCONNECT") {
-                write!(writer, "NEWSTATE DISCONNECTING\r\nDISCONNECTED\r\n").unwrap();
-                break;
-            }
-            writer.flush().unwrap();
-        }
-    });
-    (addr, handle)
-}
-
-fn test_header(mid: &str) -> WlHeader {
-    WlHeader {
-        mid: mid.into(),
-        date: "2026/05/04 12:00".into(),
-        from: "K1ABC@winlink.org".into(),
-        to: vec!["K2DEF@winlink.org".into()],
-        subject: "E2E test".into(),
-        size: 0,
-        body: 0,
-        attachments: vec![],
-    }
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 /// Full stack: ISS → BPSK250 → AWGN 20 dB → BPSK250 → IRS.
@@ -272,9 +241,8 @@ fn e2e_single_message_awgn_20db() {
         driver.run_irs("K2DEF", Duration::from_secs(10)).unwrap()
     });
 
-    // Drop iss_driver immediately after run_iss() so its TCP streams close,
-    // which causes the ISS data server's read thread to exit and signals the
-    // relay that the ISS side is done.
+    // Drop iss_driver after run_iss() so its TCP streams close and the relay
+    // can detect that the ISS side is done.
     {
         let cmd = TcpStream::connect(iss_cmd_addr).unwrap();
         let data = TcpStream::connect(iss_data_addr).unwrap();
