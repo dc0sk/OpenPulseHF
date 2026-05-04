@@ -8,6 +8,7 @@ members = [
     "crates/openpulse-channel",
     "crates/openpulse-radio",
     "crates/openpulse-gpu",
+    "crates/openpulse-ardop",
     "plugins/bpsk",
     "plugins/fsk4",
     "plugins/psk8",
@@ -29,6 +30,7 @@ openpulse-modem   = { path = "crates/openpulse-modem" }
 openpulse-channel = { path = "crates/openpulse-channel" }
 openpulse-radio   = { path = "crates/openpulse-radio" }
 openpulse-gpu     = { path = "crates/openpulse-gpu" }
+openpulse-ardop   = { path = "crates/openpulse-ardop" }
 bpsk-plugin       = { path = "plugins/bpsk" }
 fsk4-plugin       = { path = "plugins/fsk4" }
 psk8-plugin       = { path = "plugins/psk8" }
@@ -50,3 +52,4 @@ wgpu               = "0.20"
 bytemuck           = { version = "1.16", features = ["derive"] }
 pollster           = "0.4"
 criterion          = { version = "0.5", features = ["html_reports"] }
+tokio              = { version = "1", features = ["net", "io-util", "sync", "rt-multi-thread", "macros", "time"] }

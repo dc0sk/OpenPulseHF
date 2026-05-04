@@ -1,7 +1,7 @@
 ---
 project: openpulsehf
 doc: docs/project-review-2026-04-29.md
-status: review
+status: living
 last_updated: 2026-04-29
 ---
 
