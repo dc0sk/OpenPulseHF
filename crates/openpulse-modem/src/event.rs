@@ -34,7 +34,13 @@ pub enum EngineEvent {
     /// A frame was successfully received and decoded.
     FrameReceived { mode: String, bytes: usize },
     /// A secure HPX session started.
-    SessionStarted { session_id: String, peer: String },
+    SessionStarted {
+        session_id: Option<String>,
+        peer_modes: String,
+    },
     /// A secure HPX session ended.
-    SessionEnded { session_id: String, reason: String },
+    SessionEnded {
+        session_id: Option<String>,
+        reason: String,
+    },
 }

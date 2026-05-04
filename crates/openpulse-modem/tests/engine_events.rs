@@ -100,3 +100,38 @@ fn emits_session_started() {
         .any(|e| matches!(e, EngineEvent::SessionStarted { .. }));
     assert!(has_started, "no SessionStarted event; got: {events:?}");
 }
+
+#[test]
+fn emits_dcd_change() {
+    let mut engine = make_engine();
+
+    // Transmit to put samples in the loopback buffer.
+    engine.transmit(b"dcd test", "BPSK100", None).unwrap();
+
+    let mut rx = engine.subscribe();
+    // receive() drives DCD update; a non-empty signal should flip DCD to busy.
+    engine.receive("BPSK100", None).unwrap();
+
+    let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    let has_dcd = events
+        .iter()
+        .any(|e| matches!(e, EngineEvent::DcdChange { .. }));
+    assert!(has_dcd, "no DcdChange event; got: {events:?}");
+}
+
+#[test]
+fn emits_afc_update() {
+    let mut engine = make_engine();
+
+    // Transmit to put samples in the loopback buffer.
+    engine.transmit(b"afc test", "BPSK100", None).unwrap();
+
+    let mut rx = engine.subscribe();
+    engine.receive("BPSK100", None).unwrap();
+
+    let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    let has_afc = events
+        .iter()
+        .any(|e| matches!(e, EngineEvent::AfcUpdate { .. }));
+    assert!(has_afc, "no AfcUpdate event; got: {events:?}");
+}

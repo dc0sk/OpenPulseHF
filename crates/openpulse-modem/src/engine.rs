@@ -91,7 +91,9 @@ impl ModemEngine {
     /// Subscribe to the real-time engine event stream.
     ///
     /// Returns a [`broadcast::Receiver`] that receives every [`EngineEvent`]
-    /// emitted after this call.  Lagging receivers silently drop old events.
+    /// emitted after this call.  If a receiver falls behind, `try_recv()` returns
+    /// `TryRecvError::Lagged(n)` indicating the number of dropped events; callers
+    /// must handle this variant explicitly.
     pub fn subscribe(&self) -> broadcast::Receiver<EngineEvent> {
         self.event_tx.subscribe()
     }
@@ -187,11 +189,13 @@ impl ModemEngine {
             .current_adaptive_mode()
             .unwrap_or("unknown")
             .to_string();
-        let _ = self.event_tx.send(EngineEvent::RateChange {
-            event: rate_event,
-            speed_level,
-            mode,
-        });
+        if self.rate_adapter.is_some() {
+            let _ = self.event_tx.send(EngineEvent::RateChange {
+                event: rate_event,
+                speed_level,
+                mode,
+            });
+        }
         rate_event
     }
 
@@ -273,8 +277,8 @@ impl ModemEngine {
         self.hpx_apply_event(HpxEvent::TrainingOk, timestamp_ms.saturating_add(3))?;
         self.active_handshake = Some(handshake.clone());
         let _ = self.event_tx.send(EngineEvent::SessionStarted {
-            session_id: self.hpx_session_id().unwrap_or("").to_string(),
-            peer: params
+            session_id: self.hpx_session_id().map(str::to_string),
+            peer_modes: params
                 .peer_supported_modes
                 .iter()
                 .map(|m| format!("{m:?}"))
@@ -291,7 +295,7 @@ impl ModemEngine {
             return Ok(());
         }
 
-        let session_id = self.hpx_session_id().unwrap_or("").to_string();
+        let session_id = self.hpx_session_id().map(str::to_string);
         self.hpx_apply_event(HpxEvent::LocalCancel, timestamp_ms)?;
         self.hpx_apply_event(HpxEvent::TransferComplete, timestamp_ms.saturating_add(1))?;
         self.active_handshake = None;
