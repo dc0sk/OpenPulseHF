@@ -40,9 +40,10 @@ impl LoopbackBackend {
         }
     }
 
-    /// Clone a second backend whose **output** feeds the **original** backend's input.
+    /// Create a second [`LoopbackBackend`] that shares the same underlying buffer.
     ///
-    /// Audio written by one instance is immediately readable by the other,
+    /// Both instances read from and write to the same buffer — sharing is symmetric.
+    /// Samples written by either instance are immediately readable by either instance,
     /// enabling two-engine tests without real audio hardware.
     pub fn clone_shared(&self) -> Self {
         Self {

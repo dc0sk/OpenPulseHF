@@ -66,8 +66,8 @@ fn watterson_good_f1_bpsk250() {
 
 /// Watterson Good F2 (0.5 Hz Doppler, 1.0 ms delay spread, 15 dB SNR) WITHOUT FEC.
 ///
-/// F2 conditions are more severe than F1; raw BPSK250 should either fail to demodulate
-/// or produce corrupted bytes — confirming the channel model introduces real degradation.
+/// F2 conditions are more severe than F1; with seed 2 the channel introduces enough
+/// errors to prevent exact recovery of raw BPSK250, confirming the model degrades signal.
 #[test]
 fn watterson_good_f2_bpsk250_no_fec_degrades() {
     let mut h = make_harness();
@@ -76,15 +76,13 @@ fn watterson_good_f2_bpsk250_no_fec_degrades() {
     h.tx_engine.transmit(payload, "BPSK250", None).unwrap();
     h.route(&mut channel);
     let rx = h.rx_engine.receive("BPSK250", None);
-    // Either a demodulation/frame error or a corrupted payload is expected under F2 fading.
-    // Exact-match recovery is possible but not required — the test verifies degradation
-    // is possible, not guaranteed. If this starts passing 100% of the time with a given
-    // seed, switch to a more aggressive profile.
-    match rx {
-        Err(_) => {}                      // demodulation failed — expected
-        Ok(data) if data != payload => {} // received but corrupted — expected
-        Ok(_) => {}                       // occasional lucky recovery is acceptable
-    }
+    // Seeded RNG is deterministic: seed 2 + F2 conditions cause enough errors that
+    // exact byte recovery must not occur.  If this assertion fails after a refactor,
+    // switch to a seed or profile that reliably produces degradation.
+    assert!(
+        rx.map_or(true, |data| data != payload.to_vec()),
+        "Watterson F2 seed 2 should degrade raw BPSK250; got exact recovery"
+    );
 }
 
 /// Gilbert-Elliott light burst channel with FEC+interleaver: recovery expected.
@@ -104,26 +102,28 @@ fn gilbert_elliott_light_burst_with_fec() {
     assert_eq!(rx, payload);
 }
 
-/// Gilbert-Elliott moderate burst channel WITHOUT FEC: demodulation should
+/// Gilbert-Elliott burst channel WITHOUT FEC: demodulation should
 /// either fail or produce corrupted output — confirms FEC is load-bearing.
 #[test]
 fn gilbert_elliott_moderate_burst_no_fec_degrades() {
     let mut h = make_harness();
-    // Short payload so the test is fast even when recovery succeeds by luck.
     let payload = b"no fec payload";
-    let mut channel = GilbertElliottChannel::new(GilbertElliottConfig::moderate(Some(99))).unwrap();
+    // Custom destructive burst profile: p_gb=0.1 (burst every ~10 samples), snr_bad=-30 dB
+    // (~31× noise amplitude during bursts). The matched filter cannot average out noise this
+    // large — symbol errors occur whenever a burst spans a symbol period.
+    let mut channel = GilbertElliottChannel::new(GilbertElliottConfig {
+        p_gb: 0.1,
+        p_bg: 0.05,
+        snr_good_db: 20.0,
+        snr_bad_db: -30.0,
+        seed: Some(99),
+    })
+    .unwrap();
     h.tx_engine.transmit(payload, "BPSK250", None).unwrap();
     h.route(&mut channel);
     let rx = h.rx_engine.receive("BPSK250", None);
-    // Without FEC, the moderate burst channel should corrupt or drop the frame.
-    // Either an error or a non-matching payload is acceptable evidence of degradation.
-    match rx {
-        Err(_) => {}                      // demodulation failed — expected
-        Ok(data) if data != payload => {} // received but corrupted — expected
-        Ok(_) => {
-            // Lucky recovery without FEC on a moderate burst channel is possible
-            // with a seeded RNG — acceptable if rare. If this starts failing in CI
-            // consistently, increase the payload size or use a heavier burst profile.
-        }
-    }
+    assert!(
+        rx.map_or(true, |data| data != payload.to_vec()),
+        "destructive G-E burst should degrade raw BPSK250; got exact recovery"
+    );
 }
