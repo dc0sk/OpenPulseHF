@@ -32,13 +32,20 @@ pub fn decompress_gzip(data: &[u8]) -> Result<Vec<u8>, B2fError> {
     Ok(out)
 }
 
+/// Maximum uncompressed payload accepted by `decompress_lzhuf` (16 MiB).
+const LZHUF_MAX_UNCOMPRESSED: u32 = 16 * 1024 * 1024;
+
 /// Compress `data` with LZHUF LH5 (proposal type C).
 ///
 /// Output layout: `[4-byte BE original length][LH5 compressed bytes]`.
 pub fn compress_lzhuf(data: &[u8]) -> Result<Vec<u8>, B2fError> {
+    let raw_len: u32 = data
+        .len()
+        .try_into()
+        .map_err(|_| B2fError::Compression("payload exceeds u32::MAX bytes".into()))?;
     let encoded =
         encode_lzh(data, LzhMethod::Lh5).map_err(|e| B2fError::Compression(e.to_string()))?;
-    let orig_len = (data.len() as u32).to_be_bytes();
+    let orig_len = raw_len.to_be_bytes();
     let mut out = Vec::with_capacity(4 + encoded.len());
     out.extend_from_slice(&orig_len);
     out.extend_from_slice(&encoded);
@@ -52,7 +59,12 @@ pub fn decompress_lzhuf(data: &[u8]) -> Result<Vec<u8>, B2fError> {
     if data.len() < 4 {
         return Err(B2fError::Compression("truncated LZHUF data".into()));
     }
-    let orig_len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as u64;
-    decode_lzh(&data[4..], LzhMethod::Lh5, orig_len)
+    let orig_len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+    if orig_len > LZHUF_MAX_UNCOMPRESSED {
+        return Err(B2fError::Compression(format!(
+            "claimed uncompressed length {orig_len} exceeds limit"
+        )));
+    }
+    decode_lzh(&data[4..], LzhMethod::Lh5, orig_len as u64)
         .map_err(|e| B2fError::Compression(e.to_string()))
 }

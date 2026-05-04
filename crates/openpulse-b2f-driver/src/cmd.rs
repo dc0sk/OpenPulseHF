@@ -1,6 +1,6 @@
 //! ARDOP command port — sends ASCII commands, reads responses and events.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
@@ -29,9 +29,17 @@ impl CmdPort {
     }
 
     /// Read one line from the command port (strips trailing CR/LF).
+    ///
+    /// Maps `TimedOut` / `WouldBlock` I/O errors to `DriverError::Timeout`.
     pub fn read_line(&mut self) -> Result<String, DriverError> {
         let mut line = String::new();
-        let n = self.reader.read_line(&mut line)?;
+        let n = self.reader.read_line(&mut line).map_err(|e| {
+            if e.kind() == io::ErrorKind::TimedOut || e.kind() == io::ErrorKind::WouldBlock {
+                DriverError::Timeout
+            } else {
+                DriverError::Io(e)
+            }
+        })?;
         if n == 0 {
             return Err(DriverError::Ardop("command port closed".into()));
         }

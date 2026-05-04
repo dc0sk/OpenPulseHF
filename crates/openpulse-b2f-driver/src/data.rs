@@ -18,7 +18,12 @@ impl DataPort {
 
     /// Write one frame: `[u16 BE length][payload]`.
     pub fn send_frame(&mut self, data: &[u8]) -> Result<(), DriverError> {
-        let len = data.len() as u16;
+        let len: u16 = data.len().try_into().map_err(|_| {
+            DriverError::Ardop(format!(
+                "frame payload {} bytes exceeds u16::MAX",
+                data.len()
+            ))
+        })?;
         self.stream.write_all(&len.to_be_bytes())?;
         self.stream.write_all(data)?;
         self.stream.flush()?;

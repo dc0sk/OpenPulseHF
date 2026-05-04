@@ -97,7 +97,7 @@ impl B2fSession {
         self.state == SessionState::Done
     }
 
-    /// IRS: number of proposals that were accepted (data frames still to receive).
+    /// IRS: total number of proposals that were accepted.
     pub fn accepted_count(&self) -> usize {
         self.proposals
             .iter()
