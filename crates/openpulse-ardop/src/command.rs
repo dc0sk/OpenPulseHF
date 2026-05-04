@@ -132,6 +132,42 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
             _ => vec!["PTT FALSE".into()],
         },
 
+        "GRIDSQUARE" => {
+            if let Some(grid) = parts.get(1).filter(|s| !s.is_empty()) {
+                *bridge.gridsquare.write().await = grid.to_string();
+                vec![format!("GRIDSQUARE {grid}")]
+            } else {
+                vec![format!("GRIDSQUARE {}", bridge.gridsquare.read().await)]
+            }
+        }
+
+        "ARQBW" => {
+            if let Some(bw) = parts.get(1).and_then(|s| s.parse::<u16>().ok()) {
+                *bridge.arq_bw.write().await = bw;
+                vec![format!("ARQBW {bw}")]
+            } else {
+                vec![format!("ARQBW {}", bridge.arq_bw.read().await)]
+            }
+        }
+
+        "ARQTIMEOUT" => {
+            if let Some(secs) = parts.get(1).and_then(|s| s.parse::<u16>().ok()) {
+                *bridge.arq_timeout.write().await = secs;
+                vec![format!("ARQTIMEOUT {secs}")]
+            } else {
+                vec![format!("ARQTIMEOUT {}", bridge.arq_timeout.read().await)]
+            }
+        }
+
+        "CWID" => match parts.get(1).map(|s| s.to_uppercase()).as_deref() {
+            Some("TRUE") => vec!["CWID TRUE".into()],
+            _ => vec!["CWID FALSE".into()],
+        },
+
+        "SENDID" => vec!["SENDID".into()],
+
+        "PING" => vec!["PONG".into()],
+
         "CLOSE" => vec![],
 
         _ => {

@@ -185,3 +185,38 @@ async fn data_port_multiple_frames() {
         assert_eq!(received, payload, "frame {i} mismatch");
     }
 }
+
+#[tokio::test]
+async fn gridsquare_get_set() {
+    let (cmd_port, _) = start_server(false).await;
+    let stream = TcpStream::connect(("127.0.0.1", cmd_port)).await.unwrap();
+    let mut reader = BufReader::new(stream);
+
+    let resp = cmd(&mut reader, "GRIDSQUARE FN42").await;
+    assert_eq!(resp, "GRIDSQUARE FN42");
+
+    let resp2 = cmd(&mut reader, "GRIDSQUARE").await;
+    assert_eq!(resp2, "GRIDSQUARE FN42");
+}
+
+#[tokio::test]
+async fn arqbw_get_set() {
+    let (cmd_port, _) = start_server(false).await;
+    let stream = TcpStream::connect(("127.0.0.1", cmd_port)).await.unwrap();
+    let mut reader = BufReader::new(stream);
+
+    let resp = cmd(&mut reader, "ARQBW 1000").await;
+    assert_eq!(resp, "ARQBW 1000");
+
+    let resp2 = cmd(&mut reader, "ARQBW").await;
+    assert_eq!(resp2, "ARQBW 1000");
+}
+
+#[tokio::test]
+async fn ping_pong() {
+    let (cmd_port, _) = start_server(false).await;
+    let stream = TcpStream::connect(("127.0.0.1", cmd_port)).await.unwrap();
+    let mut reader = BufReader::new(stream);
+    let resp = cmd(&mut reader, "PING").await;
+    assert_eq!(resp, "PONG");
+}

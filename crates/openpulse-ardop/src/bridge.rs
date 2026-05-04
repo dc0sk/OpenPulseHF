@@ -11,6 +11,11 @@ pub struct ModemBridge {
     pub engine: Arc<std::sync::Mutex<ModemEngine>>,
     pub state: Arc<RwLock<TncState>>,
     pub callsign: Arc<RwLock<String>>,
+    pub gridsquare: Arc<RwLock<String>>,
+    /// ARQ bandwidth in Hz (200/500/1000/2000); default 500.
+    pub arq_bw: Arc<RwLock<u16>>,
+    /// ARQ connection timeout in seconds; default 120.
+    pub arq_timeout: Arc<RwLock<u16>>,
     pub mode: String,
     /// Unsolicited event push channel to all connected command clients.
     pub event_tx: broadcast::Sender<String>,
@@ -37,6 +42,9 @@ impl ModemBridge {
             engine: Arc::new(std::sync::Mutex::new(engine)),
             state: Arc::new(RwLock::new(TncState::Disc)),
             callsign: Arc::new(RwLock::new(String::new())),
+            gridsquare: Arc::new(RwLock::new(String::new())),
+            arq_bw: Arc::new(RwLock::new(500)),
+            arq_timeout: Arc::new(RwLock::new(120)),
             mode,
             event_tx,
             rx_data_tx,
