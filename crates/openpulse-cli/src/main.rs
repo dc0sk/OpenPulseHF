@@ -105,6 +105,11 @@ fn main() -> Result<()> {
         Commands::Monitor { mode } => {
             commands::monitor::run(&mut engine, &mode)?;
         }
+        Commands::Config { command } => match command {
+            cli::ConfigCommands::Init => {
+                commands::config::run_init()?;
+            }
+        },
     }
 
     if exit_code != 0 {

@@ -13,6 +13,7 @@ openpulse-core.workspace = true
 openpulse-audio.workspace = true
 openpulse-modem.workspace = true
 openpulse-radio.workspace = true
+openpulse-config.workspace = true
 bpsk-plugin.workspace = true
 fsk4-plugin.workspace = true
 psk8-plugin.workspace = true
@@ -22,6 +23,7 @@ thiserror.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+clap.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

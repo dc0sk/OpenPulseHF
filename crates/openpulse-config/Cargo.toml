@@ -1,0 +1,11 @@
+[package]
+name = "openpulse-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde     = { workspace = true }
+thiserror = { workspace = true }
+toml      = { version = "0.8", default-features = false, features = ["parse"] }
+dirs      = "5"
