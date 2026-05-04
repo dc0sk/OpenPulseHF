@@ -33,12 +33,11 @@ pub struct WattersonChannel {
     config: WattersonConfig,
     rng: rand::rngs::StdRng,
     planner: FftPlanner<f32>,
-    /// Sample counter for continuous phase tracking.
+    /// Absolute sample counter — drives envelope block cycling.
     sample_idx: usize,
     /// Pre-computed fading coefficients for ray 0 and ray 1.
     env0: Vec<Complex32>,
     env1: Vec<Complex32>,
-    env_cursor: usize,
 }
 
 impl WattersonChannel {
@@ -77,7 +76,6 @@ impl WattersonChannel {
             sample_idx: 0,
             env0: Vec::new(),
             env1: Vec::new(),
-            env_cursor: 0,
         };
         ch.refill_envelopes();
         Ok(ch)
@@ -87,7 +85,6 @@ impl WattersonChannel {
     fn refill_envelopes(&mut self) {
         self.env0 = self.make_envelope();
         self.env1 = self.make_envelope();
-        self.env_cursor = 0;
     }
 
     fn make_envelope(&mut self) -> Vec<Complex32> {
@@ -140,12 +137,18 @@ impl WattersonChannel {
             .collect()
     }
 
-    fn fading_coeff(&mut self, sample: usize) -> (Complex32, Complex32) {
-        if self.env_cursor + sample >= self.env0.len() {
+    /// Return fading coefficients for the given absolute sample index.
+    ///
+    /// Regenerates both envelope vectors at each 1024-sample block boundary so
+    /// every block gets independent Doppler-shaped fading — but only O(n/1024)
+    /// refills per `apply()` call rather than one per sample.
+    fn fading_coeff(&mut self, abs_sample: usize) -> (Complex32, Complex32) {
+        let local_idx = abs_sample % ENVELOPE_FFT_SIZE;
+        // At the start of each new block (except the very first), regenerate.
+        if local_idx == 0 && abs_sample > 0 {
             self.refill_envelopes();
         }
-        let idx = (self.env_cursor + sample) % ENVELOPE_FFT_SIZE;
-        (self.env0[idx], self.env1[idx])
+        (self.env0[local_idx], self.env1[local_idx])
     }
 }
 
@@ -168,7 +171,9 @@ impl ChannelModel for WattersonChannel {
 
         let mut out = vec![0.0f32; n];
         for i in 0..n {
-            let (h0, h1) = self.fading_coeff(i);
+            // Pass the absolute sample index so fading_coeff can cycle through
+            // envelope blocks correctly regardless of per-call buffer size.
+            let (h0, h1) = self.fading_coeff(self.sample_idx + i);
             // Ray 0: direct path; use Rayleigh envelope magnitude.
             let ray0 = input[i] * h0.norm();
             // Ray 1: delayed path (zero-padded for samples before the buffer).
@@ -179,7 +184,6 @@ impl ChannelModel for WattersonChannel {
             };
             out[i] = ray0 + ray1 + noise_dist.sample(&mut self.rng);
         }
-        self.env_cursor += n;
         self.sample_idx += n;
         out
     }

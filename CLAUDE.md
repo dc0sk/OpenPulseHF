@@ -228,6 +228,14 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 - Integration tests: `tests/pq_handshake_integration.rs` (12 tests)
   - Key sizes, KEM shared-secret match, Hybrid and Pq-only round-trips, mode negotiation, tamper rejection (PQ sig, classical sig, session ID mismatch), SAR size gate, SAR encode→fragment→reassemble→decode round-trip
 
+**PKI service-side trust-bundle signing** ✅ Done (PR #88)
+- `pki-tooling/Cargo.toml`: added `rand = "0.8"` for ephemeral key generation
+- `pki-tooling/src/lib.rs`: `AppState` gains `signing_key: ed25519_dalek::SigningKey`; new route `GET /api/v1/signing-key`
+- `pki-tooling/src/main.rs`: loads `PKI_SIGNING_KEY` env var (base64 32-byte seed); falls back to ephemeral key with warning
+- `pki-tooling/src/verification.rs`: added `bundle_canonical_body()` (with recursive key-sort for JSONB stability) and `verify_bundle_signature()`; 8 unit tests
+- `pki-tooling/src/api/handlers.rs`: service computes Ed25519 signature at publish time; `bundle_signature` removed from request; `service_pubkey` persisted per-row and returned in `TrustBundleResponse`; `get_signing_key` handler
+- `pki-tooling/migrations/0010_trust_bundle_service_pubkey.sql`: adds `service_pubkey TEXT NOT NULL DEFAULT ''` to `trust_bundles`
+
 ---
 
 ## Open design decisions
