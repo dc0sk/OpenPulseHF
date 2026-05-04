@@ -309,6 +309,22 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
   - Signal thread uses `bpsk-plugin`/`qpsk-plugin` directly; `Arc<RwLock<TapData>>` shared with UI; `crossbeam_channel` stop signal
   - All 7 channel models wired through `build_channel()` factory from `openpulse-channel`
 
+**Phase 5.1 — B2F session driver** ✅ Done (PR #98)
+- `crates/openpulse-b2f-driver/`: new pure-std crate (no tokio); `B2fDriver`, `DecodedMessage`, `DriverError`
+  - `src/cmd.rs`: `CmdPort` — BufReader<TcpStream> + write half; `TimedOut`/`WouldBlock` mapped to `DriverError::Timeout`
+  - `src/data.rs`: `DataPort` — u16 BE length-prefixed frames; send validated against u16::MAX
+  - `run_iss()`: MYID→CONNECT→recv banner→send FC+FF→recv FS→send blobs→DISCONNECT
+  - `run_irs()`: MYID→LISTEN→wait CONNECTED (with timeout)→send banner→recv FC/FF→send FS→recv N blobs→DISCONNECT
+- Integration tests: `tests/driver_integration.rs` (4 tests): `iss_sends_one_message`, `irs_receives_one_message`, `iss_irs_roundtrip`, `multi_message_roundtrip`
+
+**Phase 5.2 — LZHUF codec** ✅ Done (PR #98)
+- `crates/openpulse-b2f/src/compress.rs`: real LZHUF LH5 via `oxiarc-lzhuf = "0.2.7"`
+  - 4-byte BE original-length prefix makes stream self-contained (known incompatibility with external Winlink Type C — deferred)
+  - `compress_lzhuf`: validates payload fits `u32` before cast
+  - `decompress_lzhuf`: caps `orig_len` at 16 MiB to prevent OOM from malformed frames
+- `B2fSession::accepted_count()` added to `session.rs` — IRS driver uses this to know how many data frames to read
+- Integration tests: `lzhuf_round_trip`, `lzhuf_bad_input_error`
+
 These must be confirmed by the user before the relevant implementation starts. Do not implement speculatively.
 
 ### SAR wire format — Resolved (Option B implemented)
