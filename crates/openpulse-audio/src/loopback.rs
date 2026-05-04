@@ -40,7 +40,7 @@ impl LoopbackBackend {
         }
     }
 
-    /// Create a second [`LoopbackBackend`] that shares the same sample buffer.
+    /// Clone a second backend whose **output** feeds the **original** backend's input.
     ///
     /// Audio written by one instance is immediately readable by the other,
     /// enabling two-engine tests without real audio hardware.
@@ -48,6 +48,23 @@ impl LoopbackBackend {
         Self {
             buf: Arc::clone(&self.buf),
         }
+    }
+
+    /// Drain all samples currently sitting in the shared buffer.
+    ///
+    /// Used by [`ChannelSimHarness`] to intercept TX samples before the RX engine
+    /// reads them, so a channel model can be applied in between.
+    pub fn drain_samples(&self) -> Vec<f32> {
+        let mut guard = self.buf.lock().expect("loopback buffer poisoned");
+        guard.drain(..).collect()
+    }
+
+    /// Inject samples into the shared buffer, making them available to the next `read()`.
+    ///
+    /// Used by [`ChannelSimHarness`] to deliver channel-processed samples to the RX engine.
+    pub fn fill_samples(&self, samples: &[f32]) {
+        let mut guard = self.buf.lock().expect("loopback buffer poisoned");
+        guard.extend(samples.iter().copied());
     }
 }
 
