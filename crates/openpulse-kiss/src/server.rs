@@ -5,10 +5,14 @@ use std::sync::Arc;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
+use tokio::sync::broadcast::error::RecvError;
 
 use crate::bridge::KissBridge;
 use crate::error::KissTncError;
 use crate::kiss;
+
+/// Maximum AX.25/KISS payload size accepted by ModemEngine frame layer.
+const MAX_PAYLOAD_BYTES: usize = 255;
 
 pub async fn serve(listener: TcpListener, bridge: Arc<KissBridge>) -> Result<(), KissTncError> {
     loop {
@@ -40,9 +44,18 @@ async fn handle_client(
                 }
                 match kiss::decode(&frame_body) {
                     Ok((kiss::KISS_DATA, payload)) => {
+                        if payload.len() > MAX_PAYLOAD_BYTES {
+                            tracing::warn!(
+                                "KISS frame too large ({} B > {MAX_PAYLOAD_BYTES} B), dropping",
+                                payload.len()
+                            );
+                            continue;
+                        }
                         let len = payload.len();
-                        bridge.tx_pending.fetch_add(len, Ordering::Relaxed);
-                        bridge.tx_data_tx.try_send(payload).ok();
+                        // Only track bytes we actually enqueue.
+                        if bridge.tx_data_tx.try_send(payload).is_ok() {
+                            bridge.tx_pending.fetch_add(len, Ordering::Relaxed);
+                        }
                     }
                     Ok(_) => {
                         // Non-data KISS commands (e.g. SETHARDWARE) — ignore.
@@ -52,10 +65,22 @@ async fn handle_client(
                     }
                 }
             }
-            Ok(payload) = rx_data.recv() => {
-                let frame = kiss::encode(kiss::KISS_DATA, &payload);
-                write_half.write_all(&frame).await?;
-                write_half.flush().await?;
+            result = rx_data.recv() => {
+                match result {
+                    Ok(payload) => {
+                        let frame = kiss::encode(kiss::KISS_DATA, &payload);
+                        write_half.write_all(&frame).await?;
+                        write_half.flush().await?;
+                    }
+                    Err(RecvError::Lagged(n)) => {
+                        // Slow client; frames were dropped from the broadcast
+                        // ring buffer.  Log and continue — the client stays connected.
+                        tracing::warn!("KISS RX lagged, {n} frame(s) dropped for this client");
+                    }
+                    Err(RecvError::Closed) => {
+                        return Ok(());
+                    }
+                }
             }
         }
     }

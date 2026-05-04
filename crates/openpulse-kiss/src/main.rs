@@ -24,6 +24,7 @@ async fn main() -> anyhow::Result<()> {
     engine.register_plugin(Box::new(fsk4_plugin::Fsk4Plugin::new()))?;
     engine.register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))?;
     engine.register_plugin(Box::new(psk8_plugin::Psk8Plugin::new()))?;
+    engine.enable_csma();
 
     let config = KissConfig {
         bind_addr: bind_addr.clone(),

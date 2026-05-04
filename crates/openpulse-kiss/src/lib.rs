@@ -22,14 +22,21 @@ use openpulse_modem::ModemEngine;
 /// KISS TNC server.
 pub struct KissServer {
     bridge: Arc<KissBridge>,
+    /// Kept here until `run_with_listener` is called so the worker is only
+    /// spawned when the server actually starts, avoiding a thread leak on
+    /// construction.
+    tx_data_rx: Option<std::sync::mpsc::Receiver<Vec<u8>>>,
     config: KissConfig,
 }
 
 impl KissServer {
     pub fn new(engine: ModemEngine, config: KissConfig) -> Self {
         let (bridge, tx_data_rx) = KissBridge::new(engine, config.mode.clone(), config.loopback);
-        spawn_worker(bridge.clone(), tx_data_rx);
-        Self { bridge, config }
+        Self {
+            bridge,
+            tx_data_rx: Some(tx_data_rx),
+            config,
+        }
     }
 
     /// Returns a handle to the shared bridge (useful for testing).
@@ -45,7 +52,11 @@ impl KissServer {
     }
 
     /// Run using a pre-bound listener (useful for tests that need port 0).
-    pub async fn run_with_listener(self, listener: TcpListener) -> Result<(), KissTncError> {
+    pub async fn run_with_listener(mut self, listener: TcpListener) -> Result<(), KissTncError> {
+        spawn_worker(
+            self.bridge.clone(),
+            self.tx_data_rx.take().expect("tx_data_rx already consumed"),
+        );
         server::serve(listener, self.bridge).await
     }
 }
