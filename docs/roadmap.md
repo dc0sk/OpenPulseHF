@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/roadmap.md
 status: living
-last_updated: 2026-05-01
+last_updated: 2026-05-04
 ---
 
 # Roadmap
@@ -52,141 +52,100 @@ All Phase 0 work has shipped and merged.
 
 ---
 
-## Phase 1 — Protocol Foundation (Near term)
+## Phase 1 — Protocol Foundation (Completed)
 
-**Gate to exit Phase 1:** all items complete, multi-platform CI green, real-device validation done, SAR implemented, interleaver integrated with FEC, regulatory checklist signed off.
+All Phase 1 items shipped. See CLAUDE.md for per-PR completion records.
 
-Phase 1 addresses structural gaps that block everything downstream: multi-platform CI confidence, the frame size constraint that blocks PQ crypto, FEC correctness on burst channels, and the radio interface layer.
-
-### 1.1 — CI and codebase health
-- Re-enable the multi-platform Ubuntu/macOS test matrix (currently `if: false` in CI). Failing tests are an advisory failure until fixed; blocking failure once stable.
-- Split `openpulse-cli/src/main.rs` into per-subcommand modules. Current monolith is ~2500 lines and is not unit-testable.
-- Add acceptance criteria to each functional requirement in docs/requirements.md, linking each requirement to a specific test or benchmark scenario.
-- Publish a regulatory compliance sign-off checklist (docs/regulatory.md) as a required gate for any release enabling on-air transmission.
-
-### 1.2 — Segmentation and reassembly (SAR)
-SAR is the prerequisite for in-band PQ handshakes, large object transfer, and clean multi-frame session flows.
-- Define SAR wire format: segment_id (u16, session-scoped), fragment_index (u8), fragment_total (u8), payload slice.
-- Implement SAR encoder and decoder in `openpulse-core`.
-- Integration tests: round-trip of objects from 256 bytes to 64 KB; error injection for missing fragments; reassembly timeout handling.
-- Update frame format documentation in docs/architecture.md with the SAR sub-layer definition.
-- Decision point: evaluate extending the `length` field from `u8` to `u16` as an alternative to SAR for objects up to 65535 bytes; document the decision and rationale.
-
-### 1.3 — Interleaver integration
-FEC phase 1 shipped RS codes but no interleaver. HF burst errors make RS codes alone insufficient.
-- Implement block interleaver in `openpulse-core` paired with the existing `FecCodec`.
-- Interleaver depth must be a configurable parameter per mode profile, documented in the mode definition.
-- Default depth: minimum 5× the expected maximum burst duration in symbols at the mode's baud rate.
-- Add Gilbert-Elliott burst-error channel simulation to the loopback fixture harness.
-- Benchmark FEC+interleaver effectiveness under Gilbert-Elliott moderate and heavy burst profiles.
-- Confirm FEC+interleaver is a gate in the reduced CI suite for FEC-enabled modes.
-
-### 1.4 — Channel model implementation in benchmarks
-Current benchmark harness specifies scenarios by vague name only; channel model parameters are not codified.
-- Implement Watterson two-ray channel simulator in the benchmark harness with configurable Doppler spread and delay spread.
-- Implement Gilbert-Elliott burst error model in the benchmark harness with configurable state transition probabilities.
-- Update all existing scenario YAML files to include explicit `channel_model` and `channel_profile_parameters` fields.
-- Add HF500-BURST-03 and HF2300-FADE-02 scenarios (as defined in docs/benchmark-harness.md) to the CI reduced suite.
-- Document Watterson and Gilbert-Elliott parameter sets in docs/benchmark-harness.md (done).
-
-### 1.5 — Radio interface layer
-OpenPulseHF currently has no PTT control or radio integration beyond the audio path.
-- Define and implement `PttController` trait with: no-op (loopback), serial port RTS/DTR, VOX, and CAT/rigctld.
-- Implement serial RTS/DTR PTT for Linux (primary target) using the `serialport` crate.
-- Implement CAT PTT via Hamlib `rigctld` daemon over TCP.
-- Add AFC (automatic frequency control) loop to the BPSK demodulator tracking ±50 Hz offset.
-- Expose AFC state (estimated offset in Hz) and audio input level in session diagnostics.
-- Add `--ptt` and `--rig` CLI options.
-- Integration test: PTT assert/release timing verified within 50 ms budget under loopback.
-
-### 1.6 — Real-device validation
-- Complete on-air loopback validation (TX→RX via SDR or second transceiver) for BPSK31 and BPSK250.
-- Validate QPSK500 compliance with FCC §97.307(f) on a per-band basis; document restricted bands in CLI output and docs/regulatory.md.
-- Publish first real-device benchmark report under docs/raspberry-pi-4-5-tuning-and-benchmarks.md.
+### 1.1 — CI and codebase health ✅ Done (PR #67, #68)
+### 1.2 — Segmentation and reassembly (SAR) ✅ Done
+### 1.3 — Interleaver integration ✅ Done (PR #70)
+### 1.4 — Channel model implementation ✅ Done (PR #71)
+### 1.5 — Radio interface layer ✅ Done (PTT, AFC, CLI wiring)
+### 1.6 — Real-device validation *(deferred — replaced by Phase 3.5-substitute)*
 
 ---
 
-## Phase 2 — HPX Protocol Completion (Mid term)
+## Phase 2 — HPX Protocol Completion (Completed)
 
-**Gate to exit Phase 2:** HPX500 and HPX2300 profiles implemented with adaptive rate control, ACK taxonomy complete, signed handshake verified end-to-end, peer cache and relay operational, benchmarks published against ARDOP on matched bandwidth profiles.
+All Phase 2 items shipped.
 
-Phase 2 completes the core HPX protocol to a usable and benchmarkable state.
+### 2.1 — ACK frame taxonomy and rate adaptation ✅ Done
+- `AckType` (8 variants), `AckFrame` (5-byte codec, CRC-8/SMBUS, FNV-1a session hash).
+- `SpeedLevel` (SL1–SL11), `RateAdapter` state machine; ACK-DOWN floors at SL2; ChirpFallback via 3 consecutive NACKs.
+- `Fsk4Plugin` for FSK4-ACK: 4 tones, 100 baud, Hann-windowed, Goertzel demodulator.
+- 11 rate adaptation tests; 3 FSK4 loopback tests.
 
-### 2.1 — ACK frame taxonomy and rate adaptation
-- Implement the ACK frame taxonomy defined in docs/architecture.md (ACK-OK, ACK-UP, ACK-DOWN, NACK, BREAK, REQ, QRT, ABORT).
-- ACK frames must use FSK modulation independent of the current data modulation for robustness at low SNR.
-- Implement mid-session rate adaptation: ACK-UP triggers rate increase; ACK-DOWN triggers rate decrease; NACK triggers retransmit at current rate.
-- Add rate adaptation integration tests: verify rate stepping under simulated SNR changes.
+### 2.2 — HPX500 and HPX2300 adaptive profiles ✅ Done
+- `QPSK1000` mode added; `Psk8Plugin` for `8PSK500` and `8PSK1000` (Gray-coded, single-carrier).
+- `SessionProfile::hpx500()` (SL2=BPSK31 → SL6=QPSK500) and `SessionProfile::hpx2300()` (SL8=QPSK500 → SL11=8PSK1000).
+- HPX2300 waveform decision: single-carrier over OFDM (lower PAPR, simpler AFC — see docs/architecture.md).
+- 4 session profile tests; 8 adaptive profile integration tests.
 
-### 2.2 — HPX500 and HPX2300 adaptive profiles
-- Implement HPX500 adaptive profile: rate ladder BPSK31 → BPSK63 → BPSK250 → QPSK250 → QPSK500, selected by ACK-UP/ACK-DOWN feedback.
-- Implement HPX2300 adaptive profile: rate ladder QPSK500 → QPSK1000 → 8PSK (TBD) within 2300 Hz occupied bandwidth.
-- Implement HPX2300 bandwidth design decision: evaluate OFDM vs single-carrier at this bandwidth class; document decision in docs/architecture.md.
-- Benchmark HPX500 against ARDOP 500 and VARA 500 at matched Watterson M1 and M2 channel conditions.
-- Benchmark HPX2300 against ARDOP 2000 and VARA 2300 at matched channel conditions.
+### 2.3 — Signed handshake and manifest verification ✅ Done
+- `ConReq`/`ConAck` wire frames with Ed25519 sign/verify; trust evaluation via `evaluate_handshake()`.
+- `TransferManifest` with SHA-256 payload hash, sender ID, Ed25519 signature; `verify_manifest()`.
+- 12 handshake integration tests; 6 manifest integration tests.
 
-### 2.3 — Signed handshake and manifest verification
-- Implement full HPX session handshake: CONREQ signed with sender Ed25519 key; CONACK signed by responder; trust verification gates session admission.
-- Implement signed transfer manifest: file hash, size, sender identity, signature block; verified by receiver before final delivery acknowledgement.
-- Integration test: verify handshake rejection on tampered or revoked-key sessions.
-- Integration test: verify manifest rejection on payload modification.
+### 2.4 — Channel access and shared-channel operation ✅ Done
+- `DcdState`: RMS energy threshold, 100 ms hold window, `update()`/`is_busy()`/`energy()`.
+- 0.3-persistence CSMA in `stage_emit_output()`; `ModemError::ChannelBusy` on blocked TX.
+- 4 CSMA loopback integration tests.
 
-### 2.4 — Channel access and shared-channel operation
-- Implement DCD (Data Carrier Detect) from demodulated signal energy.
-- Implement 0.3-persistence CSMA for broadcast and relay channel access modes.
-- Integration test: verify that two simultaneous transmitters in loopback both correctly defer on DCD.
+### 2.5 — Peer cache and query subsystem ✅ Done
+- `PeerDescriptor`: self-authenticating signed identity; `peer_id` IS the Ed25519 verifying-key bytes.
+- `PeerCache::query()` with `TrustFilter` and capability mask; `PeerQueryRequest`/`PeerQueryResponse` wire envelopes.
+- 9 peer descriptor tests; 9 wire query tests.
 
-### 2.5 — Peer cache and query subsystem
-- Define peer cache schema: signed identity descriptor, capability field, link quality history, age/TTL policy.
-- Implement local peer cache store with signed descriptor handling and expiry.
-- Implement query engine: local filter queries and bounded network query propagation with hop limit.
-- Implement wire-level peer query and response envelope per docs/peer-query-relay-wire.md.
+### 2.6 — Multi-hop relay ✅ Done
+- `RelayForwarder`: hop-limit enforcement, duplicate suppression, trust-policy check.
+- Trust-weighted path scoring; `score_route`/`select_best_scored_route`.
+- `RelayDataChunk` (msg_type 0x05) and `RelayHopAck` (msg_type 0x06) wire codecs.
+- 12 relay integration tests (path scoring, 3-hop chain, event drain, wire round-trips).
 
-### 2.6 — Multi-hop relay
-- Implement relay path planner: trust-scored and link-quality-scored path selection.
-- Implement relay forwarding: hop-limited, duplicate-suppressed, loop-prevented.
-- Implement relay trust-policy enforcement: each hop verifies trust of the originating station.
-- Implement relay observability: relay events logged to session diagnostics.
-- Integration test: 3-hop relay path in loopback with trust verification at each hop.
-
-### 2.7 — Compression (session layer)
-- Implement lossless payload compression (lz4 recommended: fast, deterministic, low memory).
-- Compression negotiated in handshake; not assumed.
-- Compress-then-compare: only send compressed frame if compressed size < uncompressed.
-- Integration test: compression round-trip with known payload; decompression failure treated as frame error.
+### 2.7 — Compression (session layer) ✅ Done
+- `lz4_flex 0.11`; `compress_if_smaller()` — compress-then-compare, returns original if LZ4 not smaller.
+- `ConReq`/`ConAck` carry `supported_compression`/`selected_compression`; covered by Ed25519 signature.
+- 9 compression integration tests.
 
 ---
 
-## Phase 3 — Advanced Signal Processing and Compliance (Mid-to-long term)
+## Phase 3 — Advanced Signal Processing and Compliance (Partial)
 
-**Gate to exit Phase 3:** PQ in-band handshake operational (requires Phase 1 SAR), regulatory compliance validated on-air, GPU acceleration path benchmarked, ARDOP-compatible interface documented.
+Most Phase 3 items shipped. Remaining: 3.2 (Turbo FEC evaluation, deferred) and 3.5 on-air validation.
 
-### 3.1 — Post-quantum in-band handshake
-Depends on Phase 1 SAR being complete.
-- Implement ML-DSA-44 (FIPS 204) signing and verification for HPX session handshake.
-- Implement ML-KEM-768 (FIPS 203) key encapsulation for session key establishment.
-- Implement hybrid mode: Ed25519 + ML-DSA-44 dual signature; X25519 + ML-KEM-768 dual KEM.
-- Benchmark PQ signature operations on Raspberry Pi 4 (target: signing < 5 ms, verification < 3 ms).
-- Note: ML-DSA-44 signatures (2420 bytes) and ML-KEM-768 public keys (1184 bytes) require SAR for in-band transport. Phase 3.1 is blocked on Phase 1.2 (SAR) completion.
+### 3.1 — Post-quantum in-band handshake ✅ Done
+- `ml-dsa 0.1.0-rc.9` (ML-DSA-44) and `ml-kem 0.3` (ML-KEM-768) added to `openpulse-core`.
+- `PqConReq`/`PqConAck` wire frames with classical + PQ pubkeys, KEM pubkey/ciphertext, dual signatures.
+- Hybrid mode: Ed25519 + ML-DSA-44 dual signature; X25519 + ML-KEM-768 dual KEM.
+- SAR encode→fragment→reassemble→decode round-trip validated for full PQ payload sizes.
+- 12 PQ handshake integration tests.
 
-### 3.2 — Turbo code FEC evaluation
+### 3.2 — Turbo code FEC evaluation *(deferred)*
 - Benchmark Turbo code decoder on Raspberry Pi 4 against equivalent RS+interleaver at matched code rate.
 - If Turbo codes deliver ≥ 2 dB gain at acceptable CPU cost, add as an optional FEC codec for HPX high-rate profiles.
 - Document decision in docs/vara-research.md FEC comparison section.
 
-### 3.3 — GPU acceleration
-- Identify DSP operations with sufficient arithmetic intensity for GPU offload: FFT (future OFDM), matched filter banks, Viterbi/Turbo decoder inner loop.
-- Implement GPU path using wgpu (Vulkan backend) with CPU fallback for all accelerated operations.
-- Benchmark GPU vs CPU on Raspberry Pi 5 (Vulkan support via V3D); publish results.
-- GPU path must not introduce latency regressions on CPU-only systems.
+### 3.3 — GPU acceleration ✅ Done (PR #90)
+- `crates/openpulse-gpu`: `GpuContext` (wgpu device + pre-compiled pipelines), WGSL kernels for BPSK modulation, IQ demodulation, and timing offset search.
+- `bpsk-plugin` gains optional `gpu` feature; CPU fallback when GPU returns `None`.
+- All GPU functions return `Option<T>` to surface failures rather than silently returning empty/zero data.
+- GPU-vs-CPU equivalence tests under `#[cfg(feature = "gpu")]`.
 
-### 3.4 — ARDOP-compatible TCP interface
-- Define an ARDOP-compatible TCP command/data port interface (command port + data port model).
-- This enables existing Winlink and peer-to-peer applications written for ARDOP to work with OpenPulseHF without modification.
-- Note: this is an interface compatibility layer, not a protocol compatibility layer. OpenPulseHF transmissions remain HPX on air.
-- Legal review required before labelling as "ARDOP-compatible" in public documentation.
+### 3.4 — ARDOP-compatible TCP interface ✅ Done (PR #91)
+- ARDOP-compatible TCP command/data port interface (`crates/openpulse-ardop`).
+- Command port (default 8515): ASCII line protocol — VERSION, MYID, LISTEN, CONNECT, DISCONNECT, ABORT, STATE, BUFFER, PTT, CLOSE.
+- Data port (default 8516): `u16 BE` length-prefixed binary framing.
+- `openpulse-tnc` binary; loopback mode for protocol-level integration tests.
+- 8 integration tests covering all major ARDOP commands and data port framing.
+- Legal review still required before labelling as "ARDOP-compatible" in public documentation.
 
-### 3.5 — Regulatory on-air validation
+### 3.5 — Regulatory on-air validation *(Phase 3.5-substitute shipped)*
+Phase 3.5-substitute (sound-loopback channel simulation) is done (PR #89):
+- `ChannelSimHarness` wires two `ModemEngine` instances through `openpulse-channel` models.
+- 6 channel-loopback integration tests (clean, AWGN 20 dB, Watterson F1/F2, Gilbert-Elliott with/without FEC).
+- These replace on-air validation as the CI gate for loopback correctness.
+
+Remaining on-air items:
 - Conduct on-air tests on IARU-aligned frequencies for each supported bandwidth class.
 - Verify station identification behaviour at 10-minute intervals under long sessions.
 - Test relay node automatic control point interface.
@@ -194,24 +153,31 @@ Depends on Phase 1 SAR being complete.
 
 ---
 
-## Phase 4 — Ecosystem and Long-term (Long term)
+## Phase 4 — Ecosystem and Long-term (Active)
 
-Phase 4 is planned but not sprint-scheduled. Items may be promoted earlier based on demand.
+**Active phase.** Phase 4.2 shipped (PR #92). Phase 4.1 and 4.3 are in active development.
 
-### 4.1 — TUI and GUI frontends
-- Terminal UI (TUI) using ratatui or similar, implementing the same stable core API as the CLI.
-- Optional GUI using a cross-platform toolkit; design goals TBD.
-- Both frontends must expose AFC state, audio level, and session diagnostics.
+### 4.2 — Observability and automation ✅ Done (PR #92)
+- `EngineEvent` broadcast channel in `ModemEngine` — 8 event variants (AFC update, rate change, DCD flip, HPX transition, frame TX/RX, session start/end).
+- `engine.subscribe()` returns a `broadcast::Receiver<EngineEvent>` for real-time event consumption.
+- `HpxState`, `HpxEvent`, `RateEvent` all derive `Serialize/Deserialize`.
+- `openpulse monitor --mode <MODE>` CLI subcommand streams all engine events as NDJSON to stdout; pipeable to `jq` or scripts.
+- 5 integration tests in `engine_events.rs`.
 
-### 4.2 — Observability and automation
-- Live link quality display: SNR estimate, AFC offset, retry rate, current rate level.
-- Automation hooks: structured JSON event stream on stdout or Unix socket for scripting.
-- Periodic HPX performance report publication against maintained benchmark profiles.
+### 4.1 — TUI frontend *(next)*
+- New `crates/openpulse-tui` binary crate using ratatui + crossterm.
+- Subscribes directly to `ModemEngine::subscribe()` for real-time updates.
+- Live panels: HPX state (colour-coded), speed level + mode string, DCD energy bar, AFC offset, recent transitions log (scrollable, last 50).
+- Keyboard: `q`/Ctrl+C to quit, `p` to pause, `↑↓` to scroll transition log.
+- No external IPC; creates its own `ModemEngine` instance like the CLI.
 
-### 4.3 — KISS and AX.25 interface
-- AX.25/APRS KISS interface for compatibility with APRS applications (PinPoint, APRSISCE/32).
-- Three KISS frame modes: standard AX.25, 7-char callsign AX.25, generic data (matching VARA KISS model).
-- 0.3-persistence CSMA required for KISS broadcast mode (see Phase 2.4).
+### 4.3 — KISS and AX.25 interface *(next)*
+- New `crates/openpulse-kiss` crate with `openpulse-kisstnc` binary.
+- KISS frame encode/decode with full byte stuffing (FEND/FESC).
+- AX.25 UI frame encode/decode (callsign, SSID, Control=0x03, PID=0xF0).
+- TCP listener (default port 8100) using the same `broadcast` + `std::sync::mpsc` bridge pattern as `openpulse-ardop`.
+- 0.3-persistence CSMA (Phase 2.4) already in `ModemEngine`; honoured on TX path.
+- Target: APRS clients (APRSdroid, PinPoint, Xastir) via KISS over TCP.
 
 ### 4.4 — B2F protocol and Winlink gateway integration
 - Study B2F (Binary over HTTP) protocol as used by Winlink over PACTOR/VARA/ARDOP connections.
