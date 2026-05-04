@@ -102,16 +102,14 @@ impl B2fSession {
         // IRS may receive FC lines before a banner if ISS sends proposals immediately.
         let trimmed = line.trim_end_matches(['\r', '\n']);
         let is_banner = trimmed.starts_with('[') && trimmed.ends_with(']');
-        if is_banner {
-            crate::banner::decode(line)?;
-        }
-        self.state = SessionState::ProposalExchange;
         match self.role {
             SessionRole::Iss => {
-                // ISS must receive a valid remote banner before sending proposals.
+                // ISS must receive a valid remote banner before advancing state.
                 if !is_banner {
                     return Err(B2fError::InvalidBanner(trimmed.to_string()));
                 }
+                crate::banner::decode(line)?;
+                self.state = SessionState::ProposalExchange;
                 let mut out: Vec<String> = self
                     .proposals
                     .iter()
@@ -121,6 +119,10 @@ impl B2fSession {
                 Ok(out)
             }
             SessionRole::Irs => {
+                if is_banner {
+                    crate::banner::decode(line)?;
+                }
+                self.state = SessionState::ProposalExchange;
                 // If we jumped straight to an FC/FF line, process it now.
                 if !is_banner {
                     self.handle_proposal(line)
@@ -203,19 +205,20 @@ impl B2fSession {
     ///
     /// Selects decompressor based on the accepted proposal type (D=Gzip, C=LZHUF).
     pub fn receive_data(&mut self, data: Vec<u8>) -> Result<Vec<u8>, B2fError> {
-        let proposal_type = self
+        if self.state != SessionState::Transfer {
+            return Err(B2fError::InvalidState);
+        }
+        let proposal = self
             .proposals
             .get(self.receive_idx)
-            .and_then(|p| {
-                if let B2fFrame::Fc { proposal_type, .. } = &p.fc {
-                    Some(proposal_type.clone())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(ProposalType::D);
+            .ok_or(B2fError::InvalidState)?;
+        let proposal_type = if let B2fFrame::Fc { proposal_type, .. } = &proposal.fc {
+            proposal_type.clone()
+        } else {
+            return Err(B2fError::InvalidState);
+        };
         self.receive_idx += 1;
-        if self.receive_idx >= self.proposals.len() && self.state == SessionState::Transfer {
+        if self.receive_idx >= self.proposals.len() {
             self.state = SessionState::Done;
         }
         match proposal_type {

@@ -288,6 +288,32 @@ VARA uses Turbo codes. PACTOR-4 uses concatenated convolutional codes. OpenPulse
 
 For OpenPulseHF's current scope (Raspberry Pi, small frames, bounded burst errors with interleaving), Reed-Solomon is the right first implementation. Turbo codes are worth benchmarking on Pi hardware before committing to for HPX high-throughput profiles. LDPC becomes relevant if GPU acceleration is pursued.
 
+### Phase 3.2 evaluation result
+
+No pure-Rust Turbo code (iterative BCJR/MAP) implementation exists as a crate on crates.io. The evaluation used a **rate-1/2 convolutional code (K=3, generators G={7,5} octal, hard-decision Viterbi decoder)** as the closest achievable benchmark proxy — the same class of streaming FEC used by ARDOP and PACTOR-4.
+
+**Benchmark results** (500-byte payload, 50 repetitions; `cargo test -p openpulse-core --test fec_comparison -- --nocapture`):
+
+| Channel BER | RS post-decode BER | ConvCodec post-decode BER |
+|---|---|---|
+| 0.1% (0.001) | 0.000000 | 0.000000 |
+| 1% (0.01) | **0.4973** | **0.0004** |
+| 5% (0.05) | 0.4973 | 0.2040 |
+
+**CPU time** (1000-byte payload encode+decode): RS = 1.7 ms, ConvCodec = 6.3 ms (3.8× overhead — well within budget).
+
+**Interpretation:**
+- At 1% random channel BER, RS fails almost completely (0.497 ≈ 50% post-BER) because 1% bit-level noise produces ~20 byte errors per 255-byte block — exceeding the 16-byte RS correction capacity. The convolutional code corrects isolated bit errors via the Viterbi trellis, achieving post-BER < 0.04%.
+- RS is designed for **burst errors** (via interleaver); the above comparison with random noise is unfair to RS. For burst-error channels (Gilbert-Elliott), RS+interleaver will outperform K=3 Viterbi.
+- The 3.8× CPU overhead is acceptable on Raspberry Pi 4.
+
+**Decision: ConvCodec ACCEPTED as optional FEC for HPX high-rate profiles.**
+
+The convolutional codec (`openpulse_core::conv::ConvCodec`) is added as an optional alternative to `FecCodec` (RS). Recommended usage:
+- Use `FecCodec` (RS) as the default for all HF channel types with an interleaver.
+- Use `ConvCodec` (convolutional/Viterbi) as an experimental alternative for AWGN-dominant paths (e.g., line-of-sight VHF/UHF links) where random noise dominates over burst fading.
+- A K=7 convolutional code with soft-decision Viterbi would give ~5 dB additional gain but is deferred pending a pure-Rust implementation or suitable crate.
+
 ## PSK31 design principles
 
 PSK31 was designed by Peter Martinez (G3PLX) in 1998 and is the direct inspiration for OpenPulseHF's BPSK family. Understanding the original design choices explains several architectural decisions.

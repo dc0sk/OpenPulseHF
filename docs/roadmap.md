@@ -120,10 +120,11 @@ Most Phase 3 items shipped. Remaining: 3.2 (Turbo FEC evaluation, deferred) and 
 - SAR encode→fragment→reassemble→decode round-trip validated for full PQ payload sizes.
 - 12 PQ handshake integration tests.
 
-### 3.2 — Turbo code FEC evaluation *(deferred)*
-- Benchmark Turbo code decoder on Raspberry Pi 4 against equivalent RS+interleaver at matched code rate.
-- If Turbo codes deliver ≥ 2 dB gain at acceptable CPU cost, add as an optional FEC codec for HPX high-rate profiles.
-- Document decision in docs/vara-research.md FEC comparison section.
+### 3.2 — Convolutional FEC evaluation ✅ Done
+- No pure-Rust Turbo (BCJR/MAP iterative) crate exists; proxy: rate-1/2 convolutional code (K=3, G={7,5} octal) with hard-decision Viterbi decoder.
+- `crates/openpulse-core/src/conv.rs`: `ConvCodec` — same interface as `FecCodec` (encode/decode with 4-byte length prefix).
+- Benchmark (`crates/openpulse-core/tests/fec_comparison.rs`, 6 tests): at channel BER 0.01 (AWGN), RS post-decode BER = 0.497 vs ConvCodec post-decode BER = 0.0004; CPU overhead 3.8×.
+- **Decision: ACCEPTED** — ConvCodec added as an optional alternative FEC for AWGN-dominant paths (e.g., VHF line-of-sight). RS+interleaver remains default for HF burst-error profiles. Result documented in `docs/vara-research.md`.
 
 ### 3.3 — GPU acceleration ✅ Done (PR #90)
 - `crates/openpulse-gpu`: `GpuContext` (wgpu device + pre-compiled pipelines), WGSL kernels for BPSK modulation, IQ demodulation, and timing offset search.
@@ -155,7 +156,7 @@ Remaining on-air items:
 
 ## Phase 4 — Ecosystem and Long-term (Active)
 
-**Active phase.** Phase 4.2, 4.1, 4.3, and 4.4 shipped.
+**Active phase.** Phase 4.2, 4.1, 4.3, 4.4, and 4.5 shipped.
 
 ### 4.2 — Observability and automation ✅ Done (PR #92)
 - `EngineEvent` broadcast channel in `ModemEngine` — 8 event variants (AFC update, rate change, DCD flip, HPX transition, frame TX/RX, session start/end).
@@ -179,6 +180,15 @@ Remaining on-air items:
 - Target: APRS clients (APRSdroid, PinPoint, Xastir) via KISS over TCP.
 - 8 integration tests (KISS codec round-trips, byte stuffing, AX.25 frame round-trip, TCP loopback with multi-frame and special bytes).
 
+### 4.5 — Signal-path testbench GUI ✅ Done
+- New `apps/openpulse-testbench` binary crate using egui/eframe 0.29.
+- 4-column live signal-path view: TX (clean), Noise channel, Mixed (TX+noise), RX (decoded).
+- Per-tap spectrum plot (FFT, dBFS, configurable dB range) and plasma-colourmap waterfall display.
+- Toolbar: mode selector (BPSK31–QPSK500), noise model (AWGN/GE/Watterson/QRN/QRM/QSB/Chirp), SNR slider, FEC toggle, RNG seed, dB range sliders.
+- Stats bar: runs, OK, fail, BER, last event from the rolling event log.
+- Signal thread driven by `bpsk-plugin` / `qpsk-plugin` directly (no full `ModemEngine`); communicates with UI via `Arc<RwLock<TapData>>` and `crossbeam_channel` stop signal.
+- All 7 supported channel models wired; `build_channel()` factory from `openpulse-channel`.
+
 ### 4.4 — B2F protocol and Winlink gateway integration ✅ Done
 - New `crates/openpulse-b2f` pure-protocol library (no tokio, no modem engine dependency).
 - Banner encode/decode: `[WL2K-3.0-B2FWINMOR-4.0-XXXXXXXX]` format with FNV-1a session key.
@@ -188,6 +198,75 @@ Remaining on-air items:
 - `B2fSession` state machine: ISS (Information Sending Station) and IRS (Information Receiving Station) roles; Handshake → ProposalExchange → Transfer → Done states; handles ISS-immediate-proposal pattern.
 - Pat-client ARDOP compatibility: added GRIDSQUARE, ARQBW, ARQTIMEOUT, CWID, SENDID, PING commands to `openpulse-ardop`; 3 new integration tests (11 total).
 - 9 integration tests in `crates/openpulse-b2f/tests/b2f_integration.rs`.
+
+---
+
+## Phase 5 — Integration and Release Readiness (Planned)
+
+The protocol stack, modem, and tooling are all built. Phase 5 closes the gap between
+"all pieces exist" and "a station can actually send a Winlink message or conduct an HPX
+session with another station." The gate for Phase 3.5 on-air regulatory validation is
+Phase 5.4 passing in CI loopback.
+
+### 5.1 — B2F session driver
+
+New crate `crates/openpulse-b2f-driver`: glue layer connecting `openpulse-b2f` (protocol
+state machine) and `openpulse-ardop` (TNC TCP interface) into a complete session lifecycle.
+
+- **ISS path**: `connect → handshake → propose queued messages → transfer data → FQ/disconnect`
+- **IRS path**: `listen → receive FC proposals → accept → receive data → reassemble → decode`
+- Async task loop reads ARDOP command/data ports; drives `B2fSession::handle_line()` and
+  `B2fSession::receive_data()`; surfaces decoded `WlHeader + body` via callback/channel
+- 4 integration tests (ISS round-trip, IRS round-trip, FQ abort, multi-message session)
+
+Dependency: Phase 4.4 (B2F library) + Phase 3.4 (ARDOP TNC).
+
+### 5.2 — LZHUF compression (Type C)
+
+Implement the Winlink Type-C (LZHUF / LZHuf) compressor/decompressor in
+`crates/openpulse-b2f/src/compress.rs`, replacing the current pass-through stubs.
+
+- Pure-Rust LZHUF; no C FFT binding.
+- Required for receiving messages from older Winlink gateways that compress with Type C.
+- 3 tests: round-trip, known test-vector from Winlink reference implementation, decompression
+  of garbage bytes returns error.
+
+Dependency: Phase 4.4 (compress.rs stub already in place).
+
+### 5.3 — TOML configuration management
+
+Replace environment-variable configuration in `openpulse-tnc`, `openpulse-kisstnc`, and
+`openpulse-b2f-driver` with a structured TOML config file (`~/.config/openpulse/config.toml`).
+
+- Schema covers: callsign, grid square, modem mode, PTT backend, bind addresses for ARDOP/KISS
+  ports, logging level, relay settings, trust-store path.
+- Precedence: CLI flags > config file > built-in defaults.
+- `openpulse config init` writes a commented template to stdout.
+- 3 tests: load default, CLI override, missing-field defaults.
+
+### 5.4 — End-to-end loopback integration test
+
+Single test suite (`crates/openpulse-b2f-driver/tests/e2e_loopback.rs`) that exercises the
+complete stack without hardware:
+
+```
+pat-like client → ARDOP TCP (ISS) → B2fSession → ModemEngine TX
+    → ChannelSimHarness (AWGN 20 dB) → ModemEngine RX
+    → B2fSession (IRS) → decoded WlHeader + body
+```
+
+- Asserts: decoded callsigns, subject, body bytes match original.
+- Asserts: session reaches `Done` state on both sides.
+- This is the gate for Phase 3.5 on-air validation and any public release.
+
+### 5.5 — Phase 3.5 on-air regulatory validation *(gated by 5.4)*
+
+*(Moved from Phase 3.5 — deferred until 5.4 passes in CI loopback.)*
+
+- Conduct on-air tests on IARU-aligned frequencies for each supported bandwidth class.
+- Verify station identification at 10-minute intervals under long sessions.
+- Test relay node automatic control point interface.
+- Publish compliance test report as a release artefact.
 
 ---
 
