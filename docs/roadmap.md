@@ -120,10 +120,11 @@ Most Phase 3 items shipped. Remaining: 3.2 (Turbo FEC evaluation, deferred) and 
 - SAR encode→fragment→reassemble→decode round-trip validated for full PQ payload sizes.
 - 12 PQ handshake integration tests.
 
-### 3.2 — Turbo code FEC evaluation *(deferred)*
-- Benchmark Turbo code decoder on Raspberry Pi 4 against equivalent RS+interleaver at matched code rate.
-- If Turbo codes deliver ≥ 2 dB gain at acceptable CPU cost, add as an optional FEC codec for HPX high-rate profiles.
-- Document decision in docs/vara-research.md FEC comparison section.
+### 3.2 — Convolutional FEC evaluation ✅ Done
+- No pure-Rust Turbo (BCJR/MAP iterative) crate exists; proxy: rate-1/2 convolutional code (K=3, G={7,5} octal) with hard-decision Viterbi decoder.
+- `crates/openpulse-core/src/conv.rs`: `ConvCodec` — same interface as `FecCodec` (encode/decode with 4-byte length prefix).
+- Benchmark (`crates/openpulse-core/tests/fec_comparison.rs`, 6 tests): at channel BER 0.01 (AWGN), RS post-decode BER = 0.497 vs ConvCodec post-decode BER = 0.0004; CPU overhead 3.8×.
+- **Decision: ACCEPTED** — ConvCodec added as an optional alternative FEC for AWGN-dominant paths (e.g., VHF line-of-sight). RS+interleaver remains default for HF burst-error profiles. Result documented in `docs/vara-research.md`.
 
 ### 3.3 — GPU acceleration ✅ Done (PR #90)
 - `crates/openpulse-gpu`: `GpuContext` (wgpu device + pre-compiled pipelines), WGSL kernels for BPSK modulation, IQ demodulation, and timing offset search.

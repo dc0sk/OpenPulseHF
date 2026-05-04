@@ -7,6 +7,7 @@
 pub mod ack;
 pub mod audio;
 pub mod compression;
+pub mod conv;
 pub mod dcd;
 pub mod error;
 pub mod fec;
