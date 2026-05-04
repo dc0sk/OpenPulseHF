@@ -1,5 +1,6 @@
 //! TUI rendering using ratatui.
 
+use openpulse_core::hpx::HpxState;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
@@ -12,6 +13,15 @@ use crate::app::App;
 
 pub fn render(f: &mut Frame, app: &App) {
     let area = f.size();
+
+    // If a fatal error is set, overlay it across the full terminal.
+    if let Some(err) = &app.fatal_error {
+        let msg = Paragraph::new(format!("Worker error: {err}\n\nPress q to quit."))
+            .style(Style::default().fg(Color::Red))
+            .block(Block::default().borders(Borders::ALL).title("Fatal Error"));
+        f.render_widget(msg, area);
+        return;
+    }
 
     // Outer split: top panel row + transition log + help bar.
     let rows = Layout::default()
@@ -37,7 +47,7 @@ pub fn render(f: &mut Frame, app: &App) {
 
 fn render_hpx_state(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let state_str = format!("{:?}", app.hpx_state);
-    let color = state_color(&state_str);
+    let color = state_color(app.hpx_state);
     let text = Paragraph::new(Span::styled(
         state_str,
         Style::default().fg(color).add_modifier(Modifier::BOLD),
@@ -123,16 +133,15 @@ fn render_help(f: &mut Frame, area: ratatui::layout::Rect) {
     f.render_widget(help, area);
 }
 
-fn state_color(state: &str) -> Color {
+fn state_color(state: HpxState) -> Color {
     match state {
-        "Idle" => Color::DarkGray,
-        "Discovery" => Color::Blue,
-        "Training" => Color::Yellow,
-        "ActiveTransfer" => Color::Green,
-        "Recovery" => Color::Magenta,
-        "RelayActive" => Color::Cyan,
-        "Teardown" => Color::Yellow,
-        "Failed" => Color::Red,
-        _ => Color::White,
+        HpxState::Idle => Color::DarkGray,
+        HpxState::Discovery => Color::Blue,
+        HpxState::Training => Color::Yellow,
+        HpxState::ActiveTransfer => Color::Green,
+        HpxState::Recovery => Color::Magenta,
+        HpxState::RelayActive => Color::Cyan,
+        HpxState::Teardown => Color::Yellow,
+        HpxState::Failed => Color::Red,
     }
 }

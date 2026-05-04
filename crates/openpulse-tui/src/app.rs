@@ -18,6 +18,8 @@ pub struct App {
     pub transitions: VecDeque<String>,
     pub paused: bool,
     pub scroll_offset: usize,
+    /// Set when the background worker exits with a fatal error.
+    pub fatal_error: Option<String>,
 }
 
 impl Default for App {
@@ -32,6 +34,7 @@ impl Default for App {
             transitions: VecDeque::new(),
             paused: false,
             scroll_offset: 0,
+            fatal_error: None,
         }
     }
 }

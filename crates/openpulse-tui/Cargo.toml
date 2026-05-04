@@ -11,6 +11,9 @@ repository.workspace = true
 name = "openpulse-tui"
 path = "src/main.rs"
 
+[features]
+cpal-backend = ["openpulse-audio/cpal-backend"]
+
 [dependencies]
 openpulse-modem  = { workspace = true }
 openpulse-core   = { workspace = true }

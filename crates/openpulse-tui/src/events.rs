@@ -2,6 +2,7 @@
 
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use openpulse_core::error::ModemError;
 use openpulse_modem::ModemEngine;
@@ -12,7 +13,6 @@ use crate::app::App;
 /// Messages sent from the background worker to the TUI main loop.
 pub enum WorkerMsg {
     Event(openpulse_modem::EngineEvent),
-    #[allow(dead_code)]
     FatalError(String),
 }
 
@@ -25,15 +25,20 @@ pub fn spawn_worker(
 ) -> mpsc::Receiver<WorkerMsg> {
     let (tx, recv) = mpsc::channel();
     thread::spawn(move || loop {
-        match engine.receive(&mode, None) {
-            Ok(_)
-            | Err(ModemError::Demodulation(_))
-            | Err(ModemError::Frame(_))
-            | Err(ModemError::ChannelBusy) => {}
+        let no_data = match engine.receive(&mode, None) {
+            Ok(_) => false,
+            // Demodulation/Frame errors are expected when the loopback buffer is empty.
+            Err(ModemError::Demodulation(_)) | Err(ModemError::Frame(_)) => true,
+            Err(ModemError::ChannelBusy) => false,
             Err(e) => {
                 let _ = tx.send(WorkerMsg::FatalError(e.to_string()));
                 return;
             }
+        };
+
+        // Avoid busy-looping when the loopback backend has no samples queued.
+        if no_data {
+            thread::sleep(Duration::from_millis(5));
         }
 
         loop {
@@ -53,15 +58,20 @@ pub fn spawn_worker(
     recv
 }
 
-/// Apply all pending worker messages to `App`. Returns `false` when the channel is closed
-/// or a fatal error was received (caller should exit).
-pub fn drain_worker(app: &mut App, worker: &mpsc::Receiver<WorkerMsg>) -> bool {
+/// Apply all pending worker messages to `App`.
+///
+/// Returns `Ok(())` while the worker is healthy.  Returns `Err(message)` when
+/// the worker sends a fatal error or its channel closes, so the caller can
+/// surface the message before exiting.
+pub fn drain_worker(app: &mut App, worker: &mpsc::Receiver<WorkerMsg>) -> Result<(), String> {
     loop {
         match worker.try_recv() {
             Ok(WorkerMsg::Event(ev)) => app.apply_event(ev),
-            Ok(WorkerMsg::FatalError(_)) => return false,
-            Err(mpsc::TryRecvError::Empty) => return true,
-            Err(mpsc::TryRecvError::Disconnected) => return false,
+            Ok(WorkerMsg::FatalError(msg)) => return Err(msg),
+            Err(mpsc::TryRecvError::Empty) => return Ok(()),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                return Err("worker thread exited unexpectedly".to_string())
+            }
         }
     }
 }

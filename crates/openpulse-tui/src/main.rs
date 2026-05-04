@@ -18,6 +18,9 @@ use openpulse_modem::ModemEngine;
 use psk8_plugin::Psk8Plugin;
 use qpsk_plugin::QpskPlugin;
 
+#[cfg(feature = "cpal-backend")]
+use openpulse_audio::CpalBackend;
+
 mod app;
 mod events;
 mod ui;
@@ -29,7 +32,7 @@ struct Cli {
     #[arg(short, long, default_value = "BPSK100")]
     mode: String,
 
-    /// Audio backend: loopback | default.
+    /// Audio backend: loopback | default | cpal.
     #[arg(long, default_value = "loopback")]
     backend: String,
 
@@ -50,7 +53,16 @@ fn main() -> Result<()> {
 
     let audio: Box<dyn openpulse_core::audio::AudioBackend> = match cli.backend.as_str() {
         "loopback" => Box::new(LoopbackBackend::new()),
-        _ => Box::new(LoopbackBackend::new()),
+        #[cfg(feature = "cpal-backend")]
+        "default" | "cpal" => Box::new(CpalBackend::new()),
+        #[cfg(not(feature = "cpal-backend"))]
+        "default" => {
+            eprintln!(
+                "note: cpal backend not compiled in (enable --features cpal-backend); falling back to loopback"
+            );
+            Box::new(LoopbackBackend::new())
+        }
+        name => anyhow::bail!("unknown backend '{name}'"),
     };
 
     let mut engine = ModemEngine::new(audio);
@@ -106,8 +118,15 @@ fn run_tui(
             }
         }
 
-        if !events::drain_worker(&mut app, &worker) {
-            break;
+        match events::drain_worker(&mut app, &worker) {
+            Ok(()) => {}
+            Err(e) => {
+                // Surface fatal worker error before exiting.
+                app.fatal_error = Some(e);
+                terminal.draw(|f| ui::render(f, &app))?;
+                std::thread::sleep(Duration::from_secs(3));
+                break;
+            }
         }
     }
 
