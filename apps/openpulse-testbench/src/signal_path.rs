@@ -60,7 +60,11 @@ fn run(
     let max_db = config.max_db;
 
     loop {
-        if stop_rx.try_recv().is_ok() {
+        // Pace the loop to ~50 iterations/s; also serves as the stop-check interval.
+        if stop_rx
+            .recv_timeout(std::time::Duration::from_millis(20))
+            .is_ok()
+        {
             break;
         }
 
@@ -78,14 +82,12 @@ fn run(
         };
         push_tap(&taps[0], &mut ps[0], &tx_samples, min_db, max_db);
 
+        // Noise tap: additive component only (zeros for multiplicative models).
         let noise_samples = channel.generate_noise(tx_samples.len());
         push_tap(&taps[1], &mut ps[1], &noise_samples, min_db, max_db);
 
-        let mixed: Vec<f32> = tx_samples
-            .iter()
-            .zip(noise_samples.iter())
-            .map(|(a, b)| a + b)
-            .collect();
+        // Mixed tap: full channel output (fading + additive noise for all model types).
+        let mixed = channel.apply(&tx_samples);
         push_tap(&taps[2], &mut ps[2], &mixed, min_db, max_db);
 
         let rx_result = plugin.demodulate(&mixed, &mod_config);
@@ -169,9 +171,17 @@ fn make_channel_config(config: &AppConfig) -> ChannelModelConfig {
             seed: None,
         }),
         NoiseModel::GilbertElliott => {
-            ChannelModelConfig::GilbertElliott(GilbertElliottConfig::moderate(None))
+            let mut cfg = GilbertElliottConfig::moderate(None);
+            // Map SNR slider: keep the Good/Bad gap (15 dB) but honour the slider level.
+            cfg.snr_good_db = snr;
+            cfg.snr_bad_db = snr - 15.0;
+            ChannelModelConfig::GilbertElliott(cfg)
         }
-        NoiseModel::Watterson => ChannelModelConfig::Watterson(WattersonConfig::moderate_f1(None)),
+        NoiseModel::Watterson => {
+            let mut cfg = WattersonConfig::moderate_f1(None);
+            cfg.snr_db = snr;
+            ChannelModelConfig::Watterson(cfg)
+        }
         NoiseModel::Qrn => ChannelModelConfig::Qrn(QrnConfig {
             gaussian_snr_db: snr,
             impulse_rate_hz: 5.0,

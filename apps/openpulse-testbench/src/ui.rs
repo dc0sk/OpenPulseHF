@@ -106,7 +106,7 @@ pub fn draw_stats(ui: &mut Ui, state: &AppState) {
         ui.label(format!("BER: {:.4}", stats.ber()));
         ui.separator();
 
-        // Event log: last 5 entries inline
+        // Last event inline
         if let Some(last) = stats.event_log.back() {
             ui.label(format!("Last event: {last}"));
         }
@@ -156,11 +156,16 @@ pub fn draw_signal_panel(
     if gen != *last_gen {
         let t = tap.read().unwrap();
         let image = build_waterfall_image(&t.waterfall, config.min_db, config.max_db);
-        *texture = Some(ui.ctx().load_texture(
-            format!("wf_{label}"),
-            image,
-            egui::TextureOptions::default(),
-        ));
+        match texture {
+            Some(tex) => tex.set(image, egui::TextureOptions::default()),
+            None => {
+                *texture = Some(ui.ctx().load_texture(
+                    format!("wf_{label}"),
+                    image,
+                    egui::TextureOptions::default(),
+                ));
+            }
+        }
         *last_gen = gen;
     }
 

@@ -4,6 +4,7 @@ use crate::ui::{draw_signal_panel, draw_stats, draw_toolbar};
 
 pub struct TestbenchApp {
     state: AppState,
+    signal_thread: Option<std::thread::JoinHandle<()>>,
     textures: [Option<egui::TextureHandle>; 4],
     last_gen: [u64; 4],
 }
@@ -12,6 +13,7 @@ impl TestbenchApp {
     pub fn new() -> Self {
         Self {
             state: AppState::new(),
+            signal_thread: None,
             textures: [None, None, None, None],
             last_gen: [u64::MAX; 4],
         }
@@ -24,17 +26,20 @@ impl TestbenchApp {
         self.state.stop_tx = Some(stop_tx);
         self.state.running = true;
 
-        spawn_signal_thread(
+        self.signal_thread = Some(spawn_signal_thread(
             self.state.config.clone(),
             self.state.taps.clone(),
             self.state.stats.clone(),
             stop_rx,
-        );
+        ));
     }
 
     fn stop(&mut self) {
         if let Some(tx) = self.state.stop_tx.take() {
             let _ = tx.send(());
+        }
+        if let Some(handle) = self.signal_thread.take() {
+            let _ = handle.join();
         }
         self.state.running = false;
     }
