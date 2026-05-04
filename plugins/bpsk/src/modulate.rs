@@ -126,8 +126,10 @@ pub fn bpsk_modulate_with_gpu(
     bits.extend(std::iter::repeat_n(false, TAIL_SYMS));
 
     let symbols = nrzi_encode(&bits);
-    let out = openpulse_gpu::bpsk_modulate_gpu(ctx, &symbols, n, fc, fs);
-    Ok(out)
+    match openpulse_gpu::bpsk_modulate_gpu(ctx, &symbols, n, fc, fs) {
+        Some(out) => Ok(out),
+        None => bpsk_modulate(data, config),
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -526,6 +528,34 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         assert_eq!(gpu_syms.len(), cpu_syms.len());
         for (cpu, gpu) in cpu_syms.iter().zip(gpu_syms.iter()) {
             assert!((cpu - gpu).abs() <= 1e-6, "cpu={cpu}, gpu={gpu}");
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn gpu_modulate_matches_cpu() {
+        use openpulse_core::plugin::ModulationConfig;
+        let cfg = ModulationConfig {
+            mode: "BPSK250".to_string(),
+            sample_rate: 8000,
+            center_frequency: 1500.0,
+        };
+        let payload = b"Hello";
+
+        let cpu_out = bpsk_modulate(payload, &cfg).unwrap();
+
+        let Some(ctx) = openpulse_gpu::GpuContext::init() else {
+            eprintln!("skipping gpu_modulate_matches_cpu: no compatible adapter");
+            return;
+        };
+        let gpu_out = bpsk_modulate_with_gpu(payload, &cfg, &ctx).unwrap();
+
+        assert_eq!(cpu_out.len(), gpu_out.len(), "sample count mismatch");
+        for (i, (cpu, gpu)) in cpu_out.iter().zip(gpu_out.iter()).enumerate() {
+            assert!(
+                (cpu - gpu).abs() < 1e-4,
+                "sample[{i}]: cpu={cpu:.6}, gpu={gpu:.6}"
+            );
         }
     }
 }

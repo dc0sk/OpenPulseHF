@@ -34,8 +34,8 @@ struct TimingParams {
 
 /// IQ demodulation of `samples` (pre-sliced at timing offset) on the GPU.
 ///
-/// Returns `(i_values, q_values)` — one value per symbol. The `offset` parameter
-/// is the original timing offset used only for carrier phase calculation.
+/// Returns `Some((i_values, q_values))` on success, `None` if the GPU readback
+/// fails. Callers should fall back to the CPU path on `None`.
 pub fn bpsk_iq_demod_gpu(
     ctx: &GpuContext,
     samples: &[f32],
@@ -43,13 +43,13 @@ pub fn bpsk_iq_demod_gpu(
     fc: f32,
     sample_rate: f32,
     offset: usize,
-) -> (Vec<f32>, Vec<f32>) {
+) -> Option<(Vec<f32>, Vec<f32>)> {
     if samples.is_empty() || samples_per_sym == 0 {
-        return (Vec::new(), Vec::new());
+        return Some((Vec::new(), Vec::new()));
     }
     let n_syms = samples.len() / samples_per_sym;
     if n_syms == 0 {
-        return (Vec::new(), Vec::new());
+        return Some((Vec::new(), Vec::new()));
     }
 
     let params = BpskDemodParams {
@@ -147,13 +147,16 @@ pub fn bpsk_iq_demod_gpu(
 
     // ── Readback ──────────────────────────────────────────────────────────────
 
-    let i_out = readback_f32(&ctx.device, &i_rb, n_syms);
-    let q_out = readback_f32(&ctx.device, &q_rb, n_syms);
-    (i_out, q_out)
+    let i_out = readback_f32(&ctx.device, &i_rb, n_syms)?;
+    let q_out = readback_f32(&ctx.device, &q_rb, n_syms)?;
+    Some((i_out, q_out))
 }
 
 /// Parallel timing offset search: returns the offset (0..`samples_per_sym`)
 /// that maximises preamble correlation energy.
+///
+/// Returns `None` if the GPU readback fails. Callers should fall back to the
+/// CPU path on `None`.
 pub fn timing_offset_search_gpu(
     ctx: &GpuContext,
     samples: &[f32],
@@ -162,10 +165,10 @@ pub fn timing_offset_search_gpu(
     expected_preamble: &[f32],
     fc: f32,
     sample_rate: f32,
-) -> usize {
+) -> Option<usize> {
     let n_offsets = samples_per_sym;
     if samples.is_empty() || n_offsets == 0 {
-        return 0;
+        return Some(0);
     }
 
     let params = TimingParams {
@@ -256,13 +259,15 @@ pub fn timing_offset_search_gpu(
 
     // ── Readback + argmax ─────────────────────────────────────────────────────
 
-    let energies = readback_f32(&ctx.device, &energy_rb, n_offsets);
-    energies
-        .iter()
-        .enumerate()
-        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(i, _)| i)
-        .unwrap_or(0)
+    let energies = readback_f32(&ctx.device, &energy_rb, n_offsets)?;
+    Some(
+        energies
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i)
+            .unwrap_or(0),
+    )
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -283,19 +288,17 @@ fn create_storage_buf_with_data(
     buf
 }
 
-fn readback_f32(device: &wgpu::Device, buf: &wgpu::Buffer, len: usize) -> Vec<f32> {
+fn readback_f32(device: &wgpu::Device, buf: &wgpu::Buffer, _len: usize) -> Option<Vec<f32>> {
     let slice = buf.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
     slice.map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
     device.poll(wgpu::Maintain::Wait);
-    if rx.recv().ok().and_then(|r| r.ok()).is_none() {
-        return vec![0.0; len];
-    }
+    rx.recv().ok()?.ok()?;
     let data = slice.get_mapped_range();
     let out: Vec<f32> = bytemuck::cast_slice::<u8, f32>(&data).to_vec();
     drop(data);
     buf.unmap();
-    out
+    Some(out)
 }

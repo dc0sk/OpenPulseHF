@@ -19,16 +19,16 @@ struct BpskModParams {
 /// `symbols` are NRZI-encoded phase values: `false` → +1 (0°), `true` → −1 (180°).
 /// The output length is `symbols.len() × samples_per_sym`.
 ///
-/// Falls back silently to an empty `Vec` if the GPU dispatch fails.
+/// Returns `None` if the GPU readback fails. Callers should fall back to the CPU path.
 pub fn bpsk_modulate_gpu(
     ctx: &GpuContext,
     symbols: &[bool],
     samples_per_sym: usize,
     fc: f32,
     sample_rate: f32,
-) -> Vec<f32> {
+) -> Option<Vec<f32>> {
     if symbols.is_empty() {
-        return Vec::new();
+        return Some(Vec::new());
     }
     let n_syms = symbols.len();
     let total_samples = n_syms * samples_per_sym;
@@ -123,13 +123,11 @@ pub fn bpsk_modulate_gpu(
         let _ = tx.send(r);
     });
     ctx.device.poll(wgpu::Maintain::Wait);
-    if rx.recv().ok().and_then(|r| r.ok()).is_none() {
-        return Vec::new();
-    }
+    rx.recv().ok()?.ok()?;
 
     let data = slice.get_mapped_range();
     let out: Vec<f32> = bytemuck::cast_slice::<u8, f32>(&data).to_vec();
     drop(data);
     readback_buf.unmap();
-    out
+    Some(out)
 }

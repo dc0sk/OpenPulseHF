@@ -158,11 +158,25 @@ pub fn bpsk_demodulate_with_gpu(
     }
 
     let expected = expected_preamble_symbols(PREAMBLE_SYMS);
-    let offset =
-        openpulse_gpu::timing_offset_search_gpu(ctx, samples, n, PREAMBLE_SYMS, &expected, fc, fs);
+    let offset = match openpulse_gpu::timing_offset_search_gpu(
+        ctx,
+        samples,
+        n,
+        PREAMBLE_SYMS,
+        &expected,
+        fc,
+        fs,
+    ) {
+        Some(o) => o,
+        None => return bpsk_demodulate(samples, config),
+    };
 
     let effective = &samples[offset.min(samples.len())..];
-    let (i_syms, q_syms) = openpulse_gpu::bpsk_iq_demod_gpu(ctx, effective, n, fc, fs, offset);
+    let (i_syms, q_syms) = match openpulse_gpu::bpsk_iq_demod_gpu(ctx, effective, n, fc, fs, offset)
+    {
+        Some(iq) => iq,
+        None => return bpsk_demodulate(samples, config),
+    };
 
     if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
         return Err(ModemError::Demodulation(
@@ -420,5 +434,33 @@ mod tests {
             (offset - 20.0).abs() < 8.0,
             "expected ≈+20 Hz AFC offset, got {offset:.2} Hz"
         );
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn gpu_demodulate_matches_cpu() {
+        use crate::modulate::bpsk_modulate;
+        let cfg = ModulationConfig {
+            mode: "BPSK250".to_string(),
+            sample_rate: 8000,
+            center_frequency: 1500.0,
+        };
+        let payload = b"AB";
+        let samples = bpsk_modulate(payload, &cfg).unwrap();
+
+        let cpu_out = bpsk_demodulate(&samples, &cfg).unwrap();
+
+        let Some(ctx) = openpulse_gpu::GpuContext::init() else {
+            eprintln!("skipping gpu_demodulate_matches_cpu: no compatible adapter");
+            return;
+        };
+        let gpu_out = bpsk_demodulate_with_gpu(&samples, &cfg, &ctx).unwrap();
+
+        assert_eq!(
+            &cpu_out[..payload.len()],
+            payload,
+            "CPU path should recover payload"
+        );
+        assert_eq!(cpu_out, gpu_out, "GPU demodulation must match CPU output");
     }
 }
