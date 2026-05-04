@@ -201,6 +201,75 @@ Remaining on-air items:
 
 ---
 
+## Phase 5 — Integration and Release Readiness (Planned)
+
+The protocol stack, modem, and tooling are all built. Phase 5 closes the gap between
+"all pieces exist" and "a station can actually send a Winlink message or conduct an HPX
+session with another station." The gate for Phase 3.5 on-air regulatory validation is
+Phase 5.4 passing in CI loopback.
+
+### 5.1 — B2F session driver
+
+New crate `crates/openpulse-b2f-driver`: glue layer connecting `openpulse-b2f` (protocol
+state machine) and `openpulse-ardop` (TNC TCP interface) into a complete session lifecycle.
+
+- **ISS path**: `connect → handshake → propose queued messages → transfer data → FQ/disconnect`
+- **IRS path**: `listen → receive FC proposals → accept → receive data → reassemble → decode`
+- Async task loop reads ARDOP command/data ports; drives `B2fSession::handle_line()` and
+  `B2fSession::receive_data()`; surfaces decoded `WlHeader + body` via callback/channel
+- 4 integration tests (ISS round-trip, IRS round-trip, FQ abort, multi-message session)
+
+Dependency: Phase 4.4 (B2F library) + Phase 3.4 (ARDOP TNC).
+
+### 5.2 — LZHUF compression (Type C)
+
+Implement the Winlink Type-C (LZHUF / LZHuf) compressor/decompressor in
+`crates/openpulse-b2f/src/compress.rs`, replacing the current pass-through stubs.
+
+- Pure-Rust LZHUF; no C FFT binding.
+- Required for receiving messages from older Winlink gateways that compress with Type C.
+- 3 tests: round-trip, known test-vector from Winlink reference implementation, decompression
+  of garbage bytes returns error.
+
+Dependency: Phase 4.4 (compress.rs stub already in place).
+
+### 5.3 — TOML configuration management
+
+Replace environment-variable configuration in `openpulse-tnc`, `openpulse-kisstnc`, and
+`openpulse-b2f-driver` with a structured TOML config file (`~/.config/openpulse/config.toml`).
+
+- Schema covers: callsign, grid square, modem mode, PTT backend, bind addresses for ARDOP/KISS
+  ports, logging level, relay settings, trust-store path.
+- Precedence: CLI flags > config file > built-in defaults.
+- `openpulse config init` writes a commented template to stdout.
+- 3 tests: load default, CLI override, missing-field defaults.
+
+### 5.4 — End-to-end loopback integration test
+
+Single test suite (`crates/openpulse-b2f-driver/tests/e2e_loopback.rs`) that exercises the
+complete stack without hardware:
+
+```
+pat-like client → ARDOP TCP (ISS) → B2fSession → ModemEngine TX
+    → ChannelSimHarness (AWGN 20 dB) → ModemEngine RX
+    → B2fSession (IRS) → decoded WlHeader + body
+```
+
+- Asserts: decoded callsigns, subject, body bytes match original.
+- Asserts: session reaches `Done` state on both sides.
+- This is the gate for Phase 3.5 on-air validation and any public release.
+
+### 5.5 — Phase 3.5 on-air regulatory validation *(gated by 5.4)*
+
+*(Moved from Phase 3.5 — deferred until 5.4 passes in CI loopback.)*
+
+- Conduct on-air tests on IARU-aligned frequencies for each supported bandwidth class.
+- Verify station identification at 10-minute intervals under long sessions.
+- Test relay node automatic control point interface.
+- Publish compliance test report as a release artefact.
+
+---
+
 ## Dependency ordering summary
 
 The following dependencies constrain the execution sequence:
