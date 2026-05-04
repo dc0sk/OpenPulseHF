@@ -31,7 +31,7 @@ pub fn decode(line: &str) -> Result<Banner, B2fError> {
         return Err(B2fError::InvalidBanner(trimmed.to_string()));
     }
     Ok(Banner {
-        version: format!("{}-{}", parts[1], parts[2]),
+        version: format!("{}-{}-{}", parts[1], parts[2], parts[3]),
         session_key: parts[4].to_string(),
     })
 }

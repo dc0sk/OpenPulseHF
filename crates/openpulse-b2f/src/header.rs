@@ -57,6 +57,9 @@ pub fn decode(data: &[u8]) -> Result<WlHeader, B2fError> {
     let mut attachments = Vec::new();
 
     for line in text.lines() {
+        if line.trim().is_empty() {
+            break; // blank line marks end of header block
+        }
         if let Some((key, val)) = line.split_once(':') {
             let key = key.trim().to_lowercase();
             let val = val.trim();
@@ -89,6 +92,11 @@ pub fn decode(data: &[u8]) -> Result<WlHeader, B2fError> {
             }
         }
     }
+    require("Mid", &mid)?;
+    require("From", &from)?;
+    if to.is_empty() {
+        return Err(crate::B2fError::InvalidHeader("missing To".into()));
+    }
     Ok(WlHeader {
         mid,
         date,
@@ -99,4 +107,12 @@ pub fn decode(data: &[u8]) -> Result<WlHeader, B2fError> {
         body,
         attachments,
     })
+}
+
+fn require(field: &str, val: &str) -> Result<(), crate::B2fError> {
+    if val.is_empty() {
+        Err(crate::B2fError::InvalidHeader(format!("missing {field}")))
+    } else {
+        Ok(())
+    }
 }

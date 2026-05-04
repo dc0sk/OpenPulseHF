@@ -12,7 +12,7 @@ use openpulse_b2f::{
 fn banner_roundtrip() {
     let encoded = banner::encode("W1AW");
     let decoded = banner::decode(&encoded).unwrap();
-    assert_eq!(decoded.version, "3.0-B2FWINMOR");
+    assert_eq!(decoded.version, "3.0-B2FWINMOR-4.0");
     assert!(!decoded.session_key.is_empty());
 }
 
@@ -86,7 +86,7 @@ fn header_roundtrip() {
 #[test]
 fn gzip_compress_decompress() {
     let data = b"The quick brown fox jumps over the lazy dog".repeat(10);
-    let compressed = compress_gzip(&data);
+    let compressed = compress_gzip(&data).unwrap();
     assert!(
         compressed.len() < data.len(),
         "gzip should compress repetitive data"
@@ -122,7 +122,8 @@ fn session_iss_irs_exchange() {
             attachments: vec![],
         },
         body.clone(),
-    );
+    )
+    .unwrap();
 
     // Build IRS session.
     let mut irs = B2fSession::new(SessionRole::Irs);
@@ -148,10 +149,12 @@ fn session_iss_irs_exchange() {
     iss.handle_line(&irs_ff_out[0]).unwrap();
     let data_chunks = iss.drain_pending_data();
     assert_eq!(data_chunks.len(), 1);
+    assert!(iss.is_done(), "ISS should be Done after draining all data");
 
     // IRS decodes the compressed chunk.
     let decompressed = irs.receive_data(data_chunks[0].clone()).unwrap();
     assert_eq!(decompressed, body);
+    assert!(irs.is_done(), "IRS should be Done after receiving all data");
 }
 
 #[test]
@@ -169,7 +172,8 @@ fn session_irs_rejects() {
             attachments: vec![],
         },
         b"reject me!".to_vec(),
-    );
+    )
+    .unwrap();
 
     let mut irs = B2fSession::new(SessionRole::Irs);
 
@@ -183,7 +187,11 @@ fn session_irs_rejects() {
     });
     iss.handle_line(&reject_fs).unwrap();
 
-    // No data should be staged.
+    // No data should be staged; ISS reaches Done immediately (nothing to transfer).
     assert!(iss.drain_pending_data().is_empty());
+    assert!(
+        iss.is_done(),
+        "ISS should be Done after all proposals rejected"
+    );
     assert!(irs_out[0].starts_with("FS"));
 }

@@ -9,10 +9,12 @@ use std::io::{Read, Write};
 use crate::B2fError;
 
 /// Compress `data` with Gzip (proposal type D).
-pub fn compress_gzip(data: &[u8]) -> Vec<u8> {
+pub fn compress_gzip(data: &[u8]) -> Result<Vec<u8>, B2fError> {
     let mut enc = GzEncoder::new(Vec::new(), Compression::default());
-    enc.write_all(data).expect("gzip write");
-    enc.finish().expect("gzip finish")
+    enc.write_all(data)
+        .map_err(|e| B2fError::Compression(e.to_string()))?;
+    enc.finish()
+        .map_err(|e| B2fError::Compression(e.to_string()))
 }
 
 /// Decompress Gzip bytes.
