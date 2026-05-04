@@ -1,10 +1,9 @@
 [package]
-name = "openpulse-b2f"
+name = "openpulse-b2f-driver"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+openpulse-b2f.workspace = true
 thiserror.workspace = true
-flate2.workspace = true
-oxiarc-lzhuf.workspace = true
