@@ -273,7 +273,18 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
   - `src/events.rs`: `spawn_worker()` runs engine receive loop in a background thread; `drain_worker()` applies events to `App`
   - `src/main.rs`: 100 ms tick loop; keyboard: `q`/Ctrl+C quit, `p` pause, ↑↓ scroll
 
-## Open design decisions
+**Phase 4.3 — KISS and AX.25 interface** ✅ Done
+- `crates/openpulse-kiss/`: new binary crate with `openpulse-kisstnc` binary
+  - `src/kiss.rs`: KISS frame encode/decode with full byte stuffing (FEND/FESC/TFEND/TFESC); `KISS_DATA=0x00` type constant
+  - `src/ax25.rs`: AX.25 UI frame encode/decode — `Ax25Addr` (callsign + SSID), `Ax25UiFrame`; Control=0x03, PID=0xF0; callsign wire encoding via 1-bit left-shift
+  - `src/bridge.rs`: `KissBridge` with `broadcast::Sender<Vec<u8>>` RX channel and `std::sync::mpsc::SyncSender<Vec<u8>>` TX queue; OS-thread worker loop mirrors `openpulse-ardop`
+  - `src/server.rs`: single TCP listener; per-client task reads FEND-delimited KISS frames, KISS-encodes RX payloads back to clients
+  - `src/main.rs`: reads `KISS_PORT` (default 8100), `KISS_BIND`, `KISS_MODE` env vars
+- Integration tests: `tests/kiss_integration.rs` (8 tests)
+  - KISS codec round-trip, FEND/FESC byte stuffing, AX.25 callsign parse and UI frame round-trip
+  - TCP single-frame loopback, multi-frame loopback, byte-stuffed payload loopback
+
+
 
 These must be confirmed by the user before the relevant implementation starts. Do not implement speculatively.
 

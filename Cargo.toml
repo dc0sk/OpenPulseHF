@@ -9,6 +9,7 @@ members = [
     "crates/openpulse-radio",
     "crates/openpulse-gpu",
     "crates/openpulse-ardop",
+    "crates/openpulse-kiss",
     "crates/openpulse-tui",
     "plugins/bpsk",
     "plugins/fsk4",
