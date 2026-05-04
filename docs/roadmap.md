@@ -155,21 +155,20 @@ Remaining on-air items:
 
 ## Phase 4 — Ecosystem and Long-term (Active)
 
-**Active phase.** Phase 4.2 shipped (PR #92). Phase 4.1 and 4.3 are in active development.
+**Active phase.** Phase 4.2 and 4.1 shipped. Phase 4.3 is next.
 
 ### 4.2 — Observability and automation ✅ Done (PR #92)
 - `EngineEvent` broadcast channel in `ModemEngine` — 8 event variants (AFC update, rate change, DCD flip, HPX transition, frame TX/RX, session start/end).
 - `engine.subscribe()` returns a `broadcast::Receiver<EngineEvent>` for real-time event consumption.
 - `HpxState`, `HpxEvent`, `RateEvent` all derive `Serialize/Deserialize`.
 - `openpulse monitor --mode <MODE>` CLI subcommand streams all engine events as NDJSON to stdout; pipeable to `jq` or scripts.
-- 5 integration tests in `engine_events.rs`.
+- 7 integration tests in `engine_events.rs` (including DcdChange and AfcUpdate coverage).
 
-### 4.1 — TUI frontend *(next)*
-- New `crates/openpulse-tui` binary crate using ratatui + crossterm.
-- Subscribes directly to `ModemEngine::subscribe()` for real-time updates.
-- Live panels: HPX state (colour-coded), speed level + mode string, DCD energy bar, AFC offset, recent transitions log (scrollable, last 50).
-- Keyboard: `q`/Ctrl+C to quit, `p` to pause, `↑↓` to scroll transition log.
-- No external IPC; creates its own `ModemEngine` instance like the CLI.
+### 4.1 — TUI frontend ✅ Done
+- New `crates/openpulse-tui` binary crate using ratatui 0.27 + crossterm.
+- Background worker thread drives `ModemEngine::receive()` and forwards events to TUI via `std::sync::mpsc`.
+- Live panels: HPX state (colour-coded), AFC offset + rate/mode, DCD energy bar (Gauge), scrollable transitions log (last 50).
+- Keyboard: `q`/Ctrl+C to quit, `p` to pause updates, `↑↓` to scroll transition log.
 
 ### 4.3 — KISS and AX.25 interface *(next)*
 - New `crates/openpulse-kiss` crate with `openpulse-kisstnc` binary.

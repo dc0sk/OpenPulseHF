@@ -9,6 +9,7 @@ members = [
     "crates/openpulse-radio",
     "crates/openpulse-gpu",
     "crates/openpulse-ardop",
+    "crates/openpulse-tui",
     "plugins/bpsk",
     "plugins/fsk4",
     "plugins/psk8",
@@ -53,3 +54,5 @@ bytemuck           = { version = "1.16", features = ["derive"] }
 pollster           = "0.4"
 criterion          = { version = "0.5", features = ["html_reports"] }
 tokio              = { version = "1", features = ["net", "io-util", "sync", "rt-multi-thread", "macros", "time"] }
+ratatui            = "0.27"
+crossterm          = "0.27"
