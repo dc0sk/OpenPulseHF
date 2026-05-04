@@ -25,6 +25,9 @@
 pub mod demodulate;
 pub mod modulate;
 
+#[cfg(feature = "gpu")]
+use std::sync::Arc;
+
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin, PluginInfo};
 
@@ -33,6 +36,8 @@ use openpulse_core::plugin::{ModulationConfig, ModulationPlugin, PluginInfo};
 /// BPSK modulation plugin.
 pub struct BpskPlugin {
     info: PluginInfo,
+    #[cfg(feature = "gpu")]
+    gpu: Option<Arc<openpulse_gpu::GpuContext>>,
 }
 
 impl Default for BpskPlugin {
@@ -42,24 +47,42 @@ impl Default for BpskPlugin {
 }
 
 impl BpskPlugin {
-    /// Create the plugin.
+    /// Create the plugin with CPU-only DSP.
     pub fn new() -> Self {
         Self {
-            info: PluginInfo {
-                name: "BPSK".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                description:
-                    "Binary Phase-Shift Keying with NRZI encoding and raised-cosine pulse shaping"
-                        .to_string(),
-                author: "OpenPulse Contributors".to_string(),
-                supported_modes: vec![
-                    "BPSK31".to_string(),
-                    "BPSK63".to_string(),
-                    "BPSK100".to_string(),
-                    "BPSK250".to_string(),
-                ],
-                trait_version_required: "1.0".to_string(),
-            },
+            info: Self::make_info(),
+            #[cfg(feature = "gpu")]
+            gpu: None,
+        }
+    }
+
+    /// Create the plugin with GPU-accelerated DSP.
+    ///
+    /// Heavy modulate/demodulate calls are dispatched to the GPU; all other
+    /// operations fall through to the CPU path.
+    #[cfg(feature = "gpu")]
+    pub fn with_gpu(ctx: Arc<openpulse_gpu::GpuContext>) -> Self {
+        Self {
+            info: Self::make_info(),
+            gpu: Some(ctx),
+        }
+    }
+
+    fn make_info() -> PluginInfo {
+        PluginInfo {
+            name: "BPSK".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            description:
+                "Binary Phase-Shift Keying with NRZI encoding and raised-cosine pulse shaping"
+                    .to_string(),
+            author: "OpenPulse Contributors".to_string(),
+            supported_modes: vec![
+                "BPSK31".to_string(),
+                "BPSK63".to_string(),
+                "BPSK100".to_string(),
+                "BPSK250".to_string(),
+            ],
+            trait_version_required: "1.0".to_string(),
         }
     }
 }
@@ -70,6 +93,10 @@ impl ModulationPlugin for BpskPlugin {
     }
 
     fn modulate(&self, data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
+        #[cfg(feature = "gpu")]
+        if let Some(ref ctx) = self.gpu {
+            return modulate::bpsk_modulate_with_gpu(data, config, ctx);
+        }
         modulate::bpsk_modulate(data, config)
     }
 
@@ -78,6 +105,10 @@ impl ModulationPlugin for BpskPlugin {
         samples: &[f32],
         config: &ModulationConfig,
     ) -> Result<Vec<u8>, ModemError> {
+        #[cfg(feature = "gpu")]
+        if let Some(ref ctx) = self.gpu {
+            return demodulate::bpsk_demodulate_with_gpu(samples, config, ctx);
+        }
         demodulate::bpsk_demodulate(samples, config)
     }
 

@@ -106,6 +106,30 @@ pub(crate) fn samples_per_symbol(sample_rate: f32, baud: f32) -> Result<usize, M
     Ok(n)
 }
 
+/// GPU-accelerated modulation: byte→bit→NRZI on CPU, sample rendering on GPU.
+#[cfg(feature = "gpu")]
+pub fn bpsk_modulate_with_gpu(
+    data: &[u8],
+    config: &ModulationConfig,
+    ctx: &openpulse_gpu::GpuContext,
+) -> Result<Vec<f32>, ModemError> {
+    let baud = parse_baud_rate(&config.mode)?;
+    let fs = config.sample_rate as f32;
+    let fc = config.center_frequency;
+    let n = samples_per_symbol(fs, baud)?;
+
+    let mut bits: Vec<bool> = Vec::new();
+    for i in 0..PREAMBLE_SYMS {
+        bits.push(i % 2 == 0);
+    }
+    bits.extend(bytes_to_bits(data));
+    bits.extend(std::iter::repeat_n(false, TAIL_SYMS));
+
+    let symbols = nrzi_encode(&bits);
+    let out = openpulse_gpu::bpsk_modulate_gpu(ctx, &symbols, n, fc, fs);
+    Ok(out)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

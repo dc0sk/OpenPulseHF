@@ -141,6 +141,51 @@ pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32
     Some(estimate_frequency_offset(&i_syms, &q_syms, baud))
 }
 
+/// GPU-accelerated demodulation path.
+#[cfg(feature = "gpu")]
+pub fn bpsk_demodulate_with_gpu(
+    samples: &[f32],
+    config: &ModulationConfig,
+    ctx: &openpulse_gpu::GpuContext,
+) -> Result<Vec<u8>, ModemError> {
+    let baud = parse_baud_rate(&config.mode)?;
+    let fs = config.sample_rate as f32;
+    let fc = config.center_frequency;
+    let n = samples_per_symbol(fs, baud)?;
+
+    if samples.len() < n * (PREAMBLE_SYMS + 1) {
+        return Err(ModemError::Demodulation("signal too short".into()));
+    }
+
+    let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+    let offset =
+        openpulse_gpu::timing_offset_search_gpu(ctx, samples, n, PREAMBLE_SYMS, &expected, fc, fs);
+
+    let effective = &samples[offset.min(samples.len())..];
+    let (i_syms, q_syms) = openpulse_gpu::bpsk_iq_demod_gpu(ctx, effective, n, fc, fs, offset);
+
+    if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
+        return Err(ModemError::Demodulation(
+            "no data symbols after preamble".into(),
+        ));
+    }
+
+    let data_syms_end = i_syms.len() - TAIL_SYMS;
+    if PREAMBLE_SYMS >= data_syms_end {
+        return Ok(vec![]);
+    }
+
+    let range_start = PREAMBLE_SYMS - 1;
+    let iq: Vec<(f32, f32)> = i_syms[range_start..data_syms_end]
+        .iter()
+        .zip(q_syms[range_start..data_syms_end].iter())
+        .map(|(&i, &q)| (i, q))
+        .collect();
+
+    let bits = differential_decode(&iq);
+    Ok(bits_to_bytes(&bits))
+}
+
 // ── Timing search ─────────────────────────────────────────────────────────────
 
 /// Try every possible timing offset within one symbol period.  Return the
