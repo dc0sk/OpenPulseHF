@@ -7,3 +7,8 @@ license.workspace = true
 [dependencies]
 openpulse-b2f.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+openpulse-modem.workspace = true
+openpulse-channel.workspace = true
+bpsk-plugin.workspace = true
