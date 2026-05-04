@@ -1,0 +1,15 @@
+[package]
+name        = "openpulse-gpu"
+description = "GPU compute acceleration for OpenPulse DSP kernels"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+
+[dependencies]
+wgpu     = { workspace = true }
+bytemuck = { workspace = true }
+pollster = { workspace = true }
+thiserror = { workspace = true }
+tracing   = { workspace = true }

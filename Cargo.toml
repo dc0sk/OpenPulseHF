@@ -7,6 +7,7 @@ members = [
     "crates/openpulse-cli",
     "crates/openpulse-channel",
     "crates/openpulse-radio",
+    "crates/openpulse-gpu",
     "plugins/bpsk",
     "plugins/fsk4",
     "plugins/psk8",
@@ -27,6 +28,7 @@ openpulse-audio   = { path = "crates/openpulse-audio", default-features = false 
 openpulse-modem   = { path = "crates/openpulse-modem" }
 openpulse-channel = { path = "crates/openpulse-channel" }
 openpulse-radio   = { path = "crates/openpulse-radio" }
+openpulse-gpu     = { path = "crates/openpulse-gpu" }
 bpsk-plugin       = { path = "plugins/bpsk" }
 fsk4-plugin       = { path = "plugins/fsk4" }
 psk8-plugin       = { path = "plugins/psk8" }
@@ -44,3 +46,7 @@ crossbeam-channel  = "0.5"
 rand               = { version = "0.8", features = ["std_rng"] }
 rand_distr         = "0.4"
 rustfft            = "6.2"
+wgpu               = "0.20"
+bytemuck           = { version = "1.16", features = ["derive"] }
+pollster           = "0.4"
+criterion          = { version = "0.5", features = ["html_reports"] }

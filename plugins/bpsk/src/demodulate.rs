@@ -141,6 +141,65 @@ pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32
     Some(estimate_frequency_offset(&i_syms, &q_syms, baud))
 }
 
+/// GPU-accelerated demodulation path.
+#[cfg(feature = "gpu")]
+pub fn bpsk_demodulate_with_gpu(
+    samples: &[f32],
+    config: &ModulationConfig,
+    ctx: &openpulse_gpu::GpuContext,
+) -> Result<Vec<u8>, ModemError> {
+    let baud = parse_baud_rate(&config.mode)?;
+    let fs = config.sample_rate as f32;
+    let fc = config.center_frequency;
+    let n = samples_per_symbol(fs, baud)?;
+
+    if samples.len() < n * (PREAMBLE_SYMS + 1) {
+        return Err(ModemError::Demodulation("signal too short".into()));
+    }
+
+    let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+    let offset = match openpulse_gpu::timing_offset_search_gpu(
+        ctx,
+        samples,
+        n,
+        PREAMBLE_SYMS,
+        &expected,
+        fc,
+        fs,
+    ) {
+        Some(o) => o,
+        None => return bpsk_demodulate(samples, config),
+    };
+
+    let effective = &samples[offset.min(samples.len())..];
+    let (i_syms, q_syms) = match openpulse_gpu::bpsk_iq_demod_gpu(ctx, effective, n, fc, fs, offset)
+    {
+        Some(iq) => iq,
+        None => return bpsk_demodulate(samples, config),
+    };
+
+    if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
+        return Err(ModemError::Demodulation(
+            "no data symbols after preamble".into(),
+        ));
+    }
+
+    let data_syms_end = i_syms.len() - TAIL_SYMS;
+    if PREAMBLE_SYMS >= data_syms_end {
+        return Ok(vec![]);
+    }
+
+    let range_start = PREAMBLE_SYMS - 1;
+    let iq: Vec<(f32, f32)> = i_syms[range_start..data_syms_end]
+        .iter()
+        .zip(q_syms[range_start..data_syms_end].iter())
+        .map(|(&i, &q)| (i, q))
+        .collect();
+
+    let bits = differential_decode(&iq);
+    Ok(bits_to_bytes(&bits))
+}
+
 // ── Timing search ─────────────────────────────────────────────────────────────
 
 /// Try every possible timing offset within one symbol period.  Return the
@@ -375,5 +434,33 @@ mod tests {
             (offset - 20.0).abs() < 8.0,
             "expected ≈+20 Hz AFC offset, got {offset:.2} Hz"
         );
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn gpu_demodulate_matches_cpu() {
+        use crate::modulate::bpsk_modulate;
+        let cfg = ModulationConfig {
+            mode: "BPSK250".to_string(),
+            sample_rate: 8000,
+            center_frequency: 1500.0,
+        };
+        let payload = b"AB";
+        let samples = bpsk_modulate(payload, &cfg).unwrap();
+
+        let cpu_out = bpsk_demodulate(&samples, &cfg).unwrap();
+
+        let Some(ctx) = openpulse_gpu::GpuContext::init() else {
+            eprintln!("skipping gpu_demodulate_matches_cpu: no compatible adapter");
+            return;
+        };
+        let gpu_out = bpsk_demodulate_with_gpu(&samples, &cfg, &ctx).unwrap();
+
+        assert_eq!(
+            &cpu_out[..payload.len()],
+            payload,
+            "CPU path should recover payload"
+        );
+        assert_eq!(cpu_out, gpu_out, "GPU demodulation must match CPU output");
     }
 }

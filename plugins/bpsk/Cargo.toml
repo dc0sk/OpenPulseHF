@@ -7,10 +7,19 @@ license.workspace    = true
 authors.workspace    = true
 repository.workspace = true
 
+[features]
+gpu = ["dep:openpulse-gpu"]
+
 [dependencies]
 openpulse-core = { workspace = true }
+openpulse-gpu  = { workspace = true, optional = true }
 
 [dev-dependencies]
-bytemuck = { version = "1.16", features = ["derive"] }
-pollster = "0.4"
-wgpu = "0.20"
+bytemuck  = { workspace = true }
+pollster  = { workspace = true }
+wgpu      = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name    = "gpu_vs_cpu"
+harness = false
