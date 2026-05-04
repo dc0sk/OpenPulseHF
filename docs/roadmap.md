@@ -155,7 +155,7 @@ Remaining on-air items:
 
 ## Phase 4 — Ecosystem and Long-term (Active)
 
-**Active phase.** Phase 4.2 and 4.1 shipped. Phase 4.3 is next.
+**Active phase.** Phase 4.2, 4.1, and 4.3 shipped. Phase 4.4 is next.
 
 ### 4.2 — Observability and automation ✅ Done (PR #92)
 - `EngineEvent` broadcast channel in `ModemEngine` — 8 event variants (AFC update, rate change, DCD flip, HPX transition, frame TX/RX, session start/end).
@@ -170,13 +170,14 @@ Remaining on-air items:
 - Live panels: HPX state (colour-coded), AFC offset + rate/mode, DCD energy bar (Gauge), scrollable transitions log (last 50).
 - Keyboard: `q`/Ctrl+C to quit, `p` to pause updates, `↑↓` to scroll transition log.
 
-### 4.3 — KISS and AX.25 interface *(next)*
+### 4.3 — KISS and AX.25 interface ✅ Done
 - New `crates/openpulse-kiss` crate with `openpulse-kisstnc` binary.
 - KISS frame encode/decode with full byte stuffing (FEND/FESC).
 - AX.25 UI frame encode/decode (callsign, SSID, Control=0x03, PID=0xF0).
 - TCP listener (default port 8100) using the same `broadcast` + `std::sync::mpsc` bridge pattern as `openpulse-ardop`.
 - 0.3-persistence CSMA (Phase 2.4) already in `ModemEngine`; honoured on TX path.
 - Target: APRS clients (APRSdroid, PinPoint, Xastir) via KISS over TCP.
+- 8 integration tests (KISS codec round-trips, byte stuffing, AX.25 frame round-trip, TCP loopback with multi-frame and special bytes).
 
 ### 4.4 — B2F protocol and Winlink gateway integration
 - Study B2F (Binary over HTTP) protocol as used by Winlink over PACTOR/VARA/ARDOP connections.
