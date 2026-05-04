@@ -27,7 +27,7 @@ struct Cli {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let mut cfg = openpulse_config::load().unwrap_or_default();
+    let mut cfg = openpulse_config::load()?;
 
     // CLI flags override config file values.
     if let Some(p) = cli.cmd_port {

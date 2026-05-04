@@ -241,9 +241,17 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    fn unique_tmp(suffix: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "openpulse_cfg_{}_{}.toml",
+            std::process::id(),
+            suffix
+        ))
+    }
+
     #[test]
     fn load_defaults_when_no_file() {
-        let path = std::env::temp_dir().join("openpulse_config_nonexistent_xyz.toml");
+        let path = unique_tmp("defaults");
         let _ = std::fs::remove_file(&path);
         let cfg = load_from(&path).unwrap();
         assert_eq!(cfg.station.callsign, "N0CALL");
@@ -260,7 +268,7 @@ mod tests {
     fn cli_override_pattern() {
         // CLI flag > config > default: simulate by loading config then applying
         // an Option<T> override, the pattern used by TNC binaries.
-        let path = std::env::temp_dir().join("openpulse_config_override_test.toml");
+        let path = unique_tmp("override");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "[ardop]").unwrap();
@@ -268,6 +276,7 @@ mod tests {
             writeln!(f, "data_port = 9001").unwrap();
         }
         let mut cfg = load_from(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
         assert_eq!(cfg.ardop.cmd_port, 9000);
 
         // CLI flag supplied → overrides config value.
@@ -278,12 +287,11 @@ mod tests {
         assert_eq!(cfg.ardop.cmd_port, 7777);
         // Unset CLI flag → config value retained.
         assert_eq!(cfg.ardop.data_port, 9001);
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn missing_fields_get_defaults() {
-        let path = std::env::temp_dir().join("openpulse_config_partial_test.toml");
+        let path = unique_tmp("partial");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             // Only set callsign; everything else should come from Default.
@@ -291,11 +299,11 @@ mod tests {
             writeln!(f, r#"callsign = "K1ABC""#).unwrap();
         }
         let cfg = load_from(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
         assert_eq!(cfg.station.callsign, "K1ABC");
         // Fields not in the file use built-in defaults.
         assert_eq!(cfg.station.grid_square, "AA00");
         assert_eq!(cfg.ardop.cmd_port, 8515);
         assert_eq!(cfg.modem.ptt_backend, "none");
-        let _ = std::fs::remove_file(&path);
     }
 }

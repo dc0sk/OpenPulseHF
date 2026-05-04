@@ -37,6 +37,13 @@ use state::load_policy_profile_or_default;
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Short-circuit commands that need no hardware/network setup.
+    if let Commands::Config { command } = &cli.command {
+        return match command {
+            cli::ConfigCommands::Init => commands::config::run_init(),
+        };
+    }
+
     let level: Level = cli.log.parse().unwrap_or(Level::INFO);
     tracing_subscriber::fmt()
         .with_max_level(level)
@@ -105,11 +112,7 @@ fn main() -> Result<()> {
         Commands::Monitor { mode } => {
             commands::monitor::run(&mut engine, &mode)?;
         }
-        Commands::Config { command } => match command {
-            cli::ConfigCommands::Init => {
-                commands::config::run_init()?;
-            }
-        },
+        Commands::Config { .. } => unreachable!("handled above"),
     }
 
     if exit_code != 0 {
