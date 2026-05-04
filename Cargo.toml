@@ -11,6 +11,7 @@ members = [
     "crates/openpulse-ardop",
     "crates/openpulse-kiss",
     "crates/openpulse-b2f",
+    "crates/openpulse-b2f-driver",
     "crates/openpulse-tui",
     "plugins/bpsk",
     "plugins/fsk4",
@@ -35,6 +36,8 @@ openpulse-channel = { path = "crates/openpulse-channel" }
 openpulse-radio   = { path = "crates/openpulse-radio" }
 openpulse-gpu     = { path = "crates/openpulse-gpu" }
 openpulse-ardop   = { path = "crates/openpulse-ardop" }
+openpulse-b2f     = { path = "crates/openpulse-b2f" }
+openpulse-b2f-driver = { path = "crates/openpulse-b2f-driver" }
 bpsk-plugin       = { path = "plugins/bpsk" }
 fsk4-plugin       = { path = "plugins/fsk4" }
 psk8-plugin       = { path = "plugins/psk8" }
@@ -60,6 +63,7 @@ tokio              = { version = "1", features = ["net", "io-util", "sync", "rt-
 ratatui            = "0.27"
 crossterm          = "0.27"
 flate2             = "1.0"
+oxiarc-lzhuf       = "0.2.7"
 eframe             = { version = "0.29", default-features = false, features = ["default_fonts", "glow"] }
 egui               = "0.29"
 egui_plot          = "0.29"

@@ -96,10 +96,23 @@ fn gzip_compress_decompress() {
 }
 
 #[test]
-fn lzhuf_stub_passthrough() {
-    let data = b"stub data";
-    assert_eq!(compress_lzhuf(data), data);
-    assert_eq!(decompress_lzhuf(data).unwrap(), data);
+fn lzhuf_round_trip() {
+    let data: Vec<u8> = b"The quick brown fox jumps over the lazy dog. ".repeat(10);
+    let compressed = compress_lzhuf(&data).unwrap();
+    assert!(
+        compressed.len() < data.len() + 4,
+        "LZHUF should compress repetitive data"
+    );
+    let decompressed = decompress_lzhuf(&compressed).unwrap();
+    assert_eq!(decompressed, data);
+}
+
+#[test]
+fn lzhuf_bad_input_error() {
+    assert!(
+        decompress_lzhuf(b"bad").is_err(),
+        "truncated input must error"
+    );
 }
 
 // ── Session state machine ─────────────────────────────────────────────────────

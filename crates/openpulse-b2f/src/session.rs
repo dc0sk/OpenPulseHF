@@ -97,6 +97,14 @@ impl B2fSession {
         self.state == SessionState::Done
     }
 
+    /// IRS: total number of proposals that were accepted.
+    pub fn accepted_count(&self) -> usize {
+        self.proposals
+            .iter()
+            .filter(|p| matches!(p.answer, Some(FsAnswer::Accept)))
+            .count()
+    }
+
     fn handle_handshake(&mut self, line: &str) -> Result<Vec<String>, B2fError> {
         // Expect the remote banner; transition to proposal exchange.
         // IRS may receive FC lines before a banner if ISS sends proposals immediately.
