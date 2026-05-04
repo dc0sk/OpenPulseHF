@@ -1,4 +1,5 @@
 pub mod benchmark;
+pub mod config;
 pub mod devices;
 pub mod modes;
 pub mod monitor;
