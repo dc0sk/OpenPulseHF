@@ -284,7 +284,15 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
   - KISS codec round-trip, FEND/FESC byte stuffing, AX.25 callsign parse and UI frame round-trip
   - TCP single-frame loopback, multi-frame loopback, byte-stuffed payload loopback
 
-
+**Phase 4.4 — B2F protocol and Winlink gateway integration** ✅ Done
+- `crates/openpulse-b2f/`: new pure-protocol library crate (no tokio, no modem engine dependency)
+  - `src/banner.rs`: WL2K connection banner encode/decode — `[WL2K-3.0-B2FWINMOR-4.0-XXXXXXXX]`; FNV-1a session key
+  - `src/frame.rs`: B2F control frame codec — `Fc`, `Fs`, `Ff`, `Fq`; `ProposalType` (C/D); `FsAnswer` (Accept/Reject/Defer); CR-terminated ASCII
+  - `src/header.rs`: WL2K message header encode/decode; RFC-5322-like CRLF-terminated; `WlHeader`, `AttachmentInfo`
+  - `src/compress.rs`: Gzip (type D) via `flate2`; LZHUF (type C) pass-through stubs
+  - `src/session.rs`: `B2fSession` state machine; `SessionRole::Iss`/`Irs`; Handshake→ProposalExchange→Transfer→Done; handles ISS-immediate-proposal pattern
+- `crates/openpulse-ardop/src/bridge.rs` + `command.rs`: Pat-compatible ARDOP commands — GRIDSQUARE, ARQBW, ARQTIMEOUT, CWID, SENDID, PING; `gridsquare/arq_bw/arq_timeout` fields with `Arc<RwLock<>>` sharing
+- Integration tests: `crates/openpulse-b2f/tests/b2f_integration.rs` (9 tests); `ardop_integration.rs` extended to 11 tests
 
 These must be confirmed by the user before the relevant implementation starts. Do not implement speculatively.
 

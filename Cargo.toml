@@ -10,6 +10,7 @@ members = [
     "crates/openpulse-gpu",
     "crates/openpulse-ardop",
     "crates/openpulse-kiss",
+    "crates/openpulse-b2f",
     "crates/openpulse-tui",
     "plugins/bpsk",
     "plugins/fsk4",
@@ -57,3 +58,4 @@ criterion          = { version = "0.5", features = ["html_reports"] }
 tokio              = { version = "1", features = ["net", "io-util", "sync", "rt-multi-thread", "macros", "time"] }
 ratatui            = "0.27"
 crossterm          = "0.27"
+flate2             = "1.0"

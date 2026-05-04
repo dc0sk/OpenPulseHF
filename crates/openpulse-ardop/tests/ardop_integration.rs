@@ -185,3 +185,94 @@ async fn data_port_multiple_frames() {
         assert_eq!(received, payload, "frame {i} mismatch");
     }
 }
+
+#[tokio::test]
+async fn gridsquare_get_set() {
+    let (cmd_port, _) = start_server(false).await;
+    let stream = TcpStream::connect(("127.0.0.1", cmd_port)).await.unwrap();
+    let mut reader = BufReader::new(stream);
+
+    let resp = cmd(&mut reader, "GRIDSQUARE FN42").await;
+    assert_eq!(resp, "GRIDSQUARE FN42");
+
+    let resp2 = cmd(&mut reader, "GRIDSQUARE").await;
+    assert_eq!(resp2, "GRIDSQUARE FN42");
+}
+
+#[tokio::test]
+async fn arqbw_get_set() {
+    let (cmd_port, _) = start_server(false).await;
+    let stream = TcpStream::connect(("127.0.0.1", cmd_port)).await.unwrap();
+    let mut reader = BufReader::new(stream);
+
+    let resp = cmd(&mut reader, "ARQBW 1000").await;
+    assert_eq!(resp, "ARQBW 1000");
+
+    let resp2 = cmd(&mut reader, "ARQBW").await;
+    assert_eq!(resp2, "ARQBW 1000");
+}
+
+#[tokio::test]
+async fn arqbw_invalid_value() {
+    let (cmd_port, _) = start_server(false).await;
+    let stream = TcpStream::connect(("127.0.0.1", cmd_port)).await.unwrap();
+    let mut reader = BufReader::new(stream);
+
+    let resp = cmd(&mut reader, "ARQBW 300").await;
+    assert!(resp.starts_with("FAULT"), "expected FAULT, got: {resp}");
+}
+
+#[tokio::test]
+async fn arqtimeout_get_set() {
+    let (cmd_port, _) = start_server(false).await;
+    let stream = TcpStream::connect(("127.0.0.1", cmd_port)).await.unwrap();
+    let mut reader = BufReader::new(stream);
+
+    let resp = cmd(&mut reader, "ARQTIMEOUT 60").await;
+    assert_eq!(resp, "ARQTIMEOUT 60");
+
+    let resp2 = cmd(&mut reader, "ARQTIMEOUT").await;
+    assert_eq!(resp2, "ARQTIMEOUT 60");
+}
+
+#[tokio::test]
+async fn arqtimeout_invalid_value() {
+    let (cmd_port, _) = start_server(false).await;
+    let stream = TcpStream::connect(("127.0.0.1", cmd_port)).await.unwrap();
+    let mut reader = BufReader::new(stream);
+
+    let resp = cmd(&mut reader, "ARQTIMEOUT notanumber").await;
+    assert!(resp.starts_with("FAULT"), "expected FAULT, got: {resp}");
+}
+
+#[tokio::test]
+async fn cwid_response() {
+    let (cmd_port, _) = start_server(false).await;
+    let stream = TcpStream::connect(("127.0.0.1", cmd_port)).await.unwrap();
+    let mut reader = BufReader::new(stream);
+
+    let resp_true = cmd(&mut reader, "CWID TRUE").await;
+    assert_eq!(resp_true, "CWID TRUE");
+
+    let resp_false = cmd(&mut reader, "CWID FALSE").await;
+    assert_eq!(resp_false, "CWID FALSE");
+}
+
+#[tokio::test]
+async fn sendid_response() {
+    let (cmd_port, _) = start_server(false).await;
+    let stream = TcpStream::connect(("127.0.0.1", cmd_port)).await.unwrap();
+    let mut reader = BufReader::new(stream);
+
+    let resp = cmd(&mut reader, "SENDID").await;
+    assert_eq!(resp, "SENDID");
+}
+
+#[tokio::test]
+async fn ping_pong() {
+    let (cmd_port, _) = start_server(false).await;
+    let stream = TcpStream::connect(("127.0.0.1", cmd_port)).await.unwrap();
+    let mut reader = BufReader::new(stream);
+    let resp = cmd(&mut reader, "PING").await;
+    assert_eq!(resp, "PONG");
+}

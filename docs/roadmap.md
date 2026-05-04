@@ -155,7 +155,7 @@ Remaining on-air items:
 
 ## Phase 4 — Ecosystem and Long-term (Active)
 
-**Active phase.** Phase 4.2, 4.1, and 4.3 shipped. Phase 4.4 is next.
+**Active phase.** Phase 4.2, 4.1, 4.3, and 4.4 shipped.
 
 ### 4.2 — Observability and automation ✅ Done (PR #92)
 - `EngineEvent` broadcast channel in `ModemEngine` — 8 event variants (AFC update, rate change, DCD flip, HPX transition, frame TX/RX, session start/end).
@@ -179,11 +179,15 @@ Remaining on-air items:
 - Target: APRS clients (APRSdroid, PinPoint, Xastir) via KISS over TCP.
 - 8 integration tests (KISS codec round-trips, byte stuffing, AX.25 frame round-trip, TCP loopback with multi-frame and special bytes).
 
-### 4.4 — B2F protocol and Winlink gateway integration
-- Study B2F (Binary over HTTP) protocol as used by Winlink over PACTOR/VARA/ARDOP connections.
-- B2F is the application-layer protocol for Winlink email forwarding; it runs on top of the TNC data connection.
-- Assess feasibility of B2F integration for full Winlink gateway compatibility.
-- This requires legal review of Winlink protocol documentation before implementation begins.
+### 4.4 — B2F protocol and Winlink gateway integration ✅ Done
+- New `crates/openpulse-b2f` pure-protocol library (no tokio, no modem engine dependency).
+- Banner encode/decode: `[WL2K-3.0-B2FWINMOR-4.0-XXXXXXXX]` format with FNV-1a session key.
+- B2F control frame codec: FC (file check), FS (file select), FF (finished), FQ (quit); CR-terminated ASCII.
+- WL2K message header encode/decode (RFC-5322-like, CRLF-terminated; Mid, Date, From, To, Subject, Body, File, Mbo).
+- Compression: Gzip (type D) via `flate2`; LZHUF (type C) stub preserving API surface for future implementation.
+- `B2fSession` state machine: ISS (Information Sending Station) and IRS (Information Receiving Station) roles; Handshake → ProposalExchange → Transfer → Done states; handles ISS-immediate-proposal pattern.
+- Pat-client ARDOP compatibility: added GRIDSQUARE, ARQBW, ARQTIMEOUT, CWID, SENDID, PING commands to `openpulse-ardop`; 3 new integration tests (11 total).
+- 9 integration tests in `crates/openpulse-b2f/tests/b2f_integration.rs`.
 
 ---
 

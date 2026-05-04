@@ -132,6 +132,49 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
             _ => vec!["PTT FALSE".into()],
         },
 
+        "GRIDSQUARE" => {
+            if let Some(grid) = parts.get(1).filter(|s| !s.is_empty()) {
+                *bridge.gridsquare.write().await = grid.to_string();
+                vec![format!("GRIDSQUARE {grid}")]
+            } else {
+                vec![format!("GRIDSQUARE {}", bridge.gridsquare.read().await)]
+            }
+        }
+
+        "ARQBW" => {
+            const VALID_BW: &[u16] = &[200, 500, 1000, 2000];
+            match parts.get(1).filter(|s| !s.is_empty()) {
+                None => vec![format!("ARQBW {}", bridge.arq_bw.read().await)],
+                Some(arg) => match arg.parse::<u16>().ok().filter(|bw| VALID_BW.contains(bw)) {
+                    Some(bw) => {
+                        *bridge.arq_bw.write().await = bw;
+                        vec![format!("ARQBW {bw}")]
+                    }
+                    None => vec![format!("FAULT invalid bandwidth: {arg}")],
+                },
+            }
+        }
+
+        "ARQTIMEOUT" => match parts.get(1).filter(|s| !s.is_empty()) {
+            None => vec![format!("ARQTIMEOUT {}", bridge.arq_timeout.read().await)],
+            Some(arg) => match arg.parse::<u16>() {
+                Ok(secs) => {
+                    *bridge.arq_timeout.write().await = secs;
+                    vec![format!("ARQTIMEOUT {secs}")]
+                }
+                Err(_) => vec![format!("FAULT invalid timeout: {arg}")],
+            },
+        },
+
+        "CWID" => match parts.get(1).map(|s| s.to_uppercase()).as_deref() {
+            Some("TRUE") => vec!["CWID TRUE".into()],
+            _ => vec!["CWID FALSE".into()],
+        },
+
+        "SENDID" => vec!["SENDID".into()],
+
+        "PING" => vec!["PONG".into()],
+
         "CLOSE" => vec![],
 
         _ => {
