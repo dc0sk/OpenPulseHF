@@ -325,6 +325,14 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 - `B2fSession::accepted_count()` added to `session.rs` — IRS driver uses this to know how many data frames to read
 - Integration tests: `lzhuf_round_trip`, `lzhuf_bad_input_error`
 
+**Phase 5.4 — End-to-end loopback integration test** ✅ Done (PR #100)
+- `crates/openpulse-b2f-driver/tests/e2e_loopback.rs`: full-stack gate test (no hardware required)
+  - Bidirectional modem relay chains two `B2fDriver` instances through `ChannelSimHarness` (BPSK250 encode → channel → BPSK250 decode)
+  - `e2e_single_message_awgn_20db`: one message through AWGN 20 dB (seed 42, deterministic)
+  - `e2e_multi_message_clean`: three messages through clean channel, all bodies verified in order
+  - Shared test helpers extracted to `tests/common/mod.rs` (reused by `driver_integration.rs`)
+- Phase 3.5 on-air validation is now unblocked
+
 These must be confirmed by the user before the relevant implementation starts. Do not implement speculatively.
 
 ### SAR wire format — Resolved (Option B implemented)
