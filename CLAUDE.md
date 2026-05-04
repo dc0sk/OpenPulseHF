@@ -294,6 +294,15 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 - `crates/openpulse-ardop/src/bridge.rs` + `command.rs`: Pat-compatible ARDOP commands — GRIDSQUARE, ARQBW, ARQTIMEOUT, CWID, SENDID, PING; `gridsquare/arq_bw/arq_timeout` fields with `Arc<RwLock<>>` sharing
 - Integration tests: `crates/openpulse-b2f/tests/b2f_integration.rs` (9 tests); `ardop_integration.rs` extended to 11 tests
 
+**Phase 4.5 — Signal-path testbench GUI** ✅ Done
+- `apps/openpulse-testbench/`: new egui/eframe 0.29 binary crate
+  - 4-column live view: TX (clean), Noise channel, Mixed (TX+noise), RX (decoded)
+  - Per-tap: spectrum line plot (FFT dBFS) + plasma-colourmap waterfall texture
+  - Toolbar: mode (BPSK31–QPSK500), noise model (7 models), SNR slider, FEC toggle, seed, dB range sliders
+  - Stats bar: runs / OK / fail / BER / last event from rolling log
+  - Signal thread uses `bpsk-plugin`/`qpsk-plugin` directly; `Arc<RwLock<TapData>>` shared with UI; `crossbeam_channel` stop signal
+  - All 7 channel models wired through `build_channel()` factory from `openpulse-channel`
+
 These must be confirmed by the user before the relevant implementation starts. Do not implement speculatively.
 
 ### SAR wire format — Resolved (Option B implemented)

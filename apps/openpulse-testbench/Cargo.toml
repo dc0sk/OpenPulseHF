@@ -1,0 +1,21 @@
+[package]
+name = "openpulse-testbench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "openpulse-testbench"
+path = "src/main.rs"
+
+[dependencies]
+openpulse-core.workspace    = true
+openpulse-channel.workspace = true
+bpsk-plugin.workspace       = true
+qpsk-plugin.workspace       = true
+crossbeam-channel.workspace = true
+eframe.workspace            = true
+egui.workspace              = true
+egui_plot.workspace         = true
+tracing.workspace           = true
+tracing-subscriber.workspace = true

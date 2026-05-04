@@ -155,7 +155,7 @@ Remaining on-air items:
 
 ## Phase 4 — Ecosystem and Long-term (Active)
 
-**Active phase.** Phase 4.2, 4.1, 4.3, and 4.4 shipped.
+**Active phase.** Phase 4.2, 4.1, 4.3, 4.4, and 4.5 shipped.
 
 ### 4.2 — Observability and automation ✅ Done (PR #92)
 - `EngineEvent` broadcast channel in `ModemEngine` — 8 event variants (AFC update, rate change, DCD flip, HPX transition, frame TX/RX, session start/end).
@@ -178,6 +178,15 @@ Remaining on-air items:
 - 0.3-persistence CSMA (Phase 2.4) already in `ModemEngine`; honoured on TX path.
 - Target: APRS clients (APRSdroid, PinPoint, Xastir) via KISS over TCP.
 - 8 integration tests (KISS codec round-trips, byte stuffing, AX.25 frame round-trip, TCP loopback with multi-frame and special bytes).
+
+### 4.5 — Signal-path testbench GUI ✅ Done
+- New `apps/openpulse-testbench` binary crate using egui/eframe 0.29.
+- 4-column live signal-path view: TX (clean), Noise channel, Mixed (TX+noise), RX (decoded).
+- Per-tap spectrum plot (FFT, dBFS, configurable dB range) and plasma-colourmap waterfall display.
+- Toolbar: mode selector (BPSK31–QPSK500), noise model (AWGN/GE/Watterson/QRN/QRM/QSB/Chirp), SNR slider, FEC toggle, RNG seed, dB range sliders.
+- Stats bar: runs, OK, fail, BER, last event from the rolling event log.
+- Signal thread driven by `bpsk-plugin` / `qpsk-plugin` directly (no full `ModemEngine`); communicates with UI via `Arc<RwLock<TapData>>` and `crossbeam_channel` stop signal.
+- All 7 supported channel models wired; `build_channel()` factory from `openpulse-channel`.
 
 ### 4.4 — B2F protocol and Winlink gateway integration ✅ Done
 - New `crates/openpulse-b2f` pure-protocol library (no tokio, no modem engine dependency).
