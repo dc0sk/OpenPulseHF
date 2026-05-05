@@ -1,0 +1,18 @@
+[package]
+name = "openpulse-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "openpulse-gateway"
+path = "src/main.rs"
+
+[dependencies]
+openpulse-b2f.workspace = true
+openpulse-b2f-driver.workspace = true
+openpulse-config.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

@@ -342,6 +342,15 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
   - Shared test helpers extracted to `tests/common/mod.rs` (reused by `driver_integration.rs`)
 - Phase 3.5 on-air validation is now unblocked
 
+**Phase 5.5 — Direct TCP Winlink CMS gateway** ✅ Done
+- `crates/openpulse-gateway/`: new binary crate (`openpulse-gateway`)
+  - Phase 1 (ISS): connects to `cms.winlink.org:8772`, reads CMS banner, sends FC+FF proposals, reads FS, sends compressed blobs
+  - Phase 2 (IRS): same TCP connection, fresh `B2fSession(Irs)`, reads CMS FC+FF proposals, sends FS, reads and decompresses reply blobs
+  - `DataPort` wraps `TcpStream` directly — Winlink CMS TCP uses identical u16-BE framing as B2F driver
+  - CLI: `openpulse-gateway [--host] [--port] [--callsign] send --to <CALL> [--subject] [--message | stdin]`
+  - Callsign read from `~/.config/openpulse/config.toml`; `--callsign` overrides; bails on default `N0CALL`
+  - `gateway_round_trip` unit test: mock CMS TCP server validates full ISS+IRS exchange without network access
+
 These must be confirmed by the user before the relevant implementation starts. Do not implement speculatively.
 
 ### SAR wire format — Resolved (Option B implemented)

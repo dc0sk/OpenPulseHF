@@ -164,9 +164,13 @@ fn session_iss_irs_exchange() {
     assert_eq!(data_chunks.len(), 1);
     assert!(iss.is_done(), "ISS should be Done after draining all data");
 
-    // IRS decodes the compressed chunk.
+    // IRS decodes the compressed chunk; result includes header block + body.
     let decompressed = irs.receive_data(data_chunks[0].clone()).unwrap();
-    assert_eq!(decompressed, body);
+    let sep = decompressed
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .unwrap();
+    assert_eq!(&decompressed[sep + 4..], body.as_slice());
     assert!(irs.is_done(), "IRS should be Done after receiving all data");
 }
 
