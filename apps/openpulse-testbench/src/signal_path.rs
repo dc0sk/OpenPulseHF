@@ -10,6 +10,8 @@ use openpulse_core::fec::FecCodec;
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
 use qpsk_plugin::QpskPlugin;
 
+#[cfg(feature = "cpal")]
+use crate::state::AudioSource;
 use crate::state::{AppConfig, NoiseModel, Tap, TestStats};
 
 const PAYLOAD: &[u8] = b"OpenPulseHF testbench v0.1 test!";
@@ -20,7 +22,19 @@ pub fn spawn_signal_thread(
     stats: Arc<RwLock<TestStats>>,
     stop_rx: crossbeam_channel::Receiver<()>,
 ) -> std::thread::JoinHandle<()> {
+    #[cfg(feature = "cpal")]
+    if config.audio_source == AudioSource::LiveCapture {
+        return std::thread::spawn(move || run_live(config, taps, stats, stop_rx));
+    }
     std::thread::spawn(move || run(config, taps, stats, stop_rx))
+}
+
+fn make_plugin(mode: &str) -> Box<dyn ModulationPlugin> {
+    if mode.starts_with("BPSK") {
+        Box::new(BpskPlugin::new())
+    } else {
+        Box::new(QpskPlugin::new())
+    }
 }
 
 fn run(
@@ -29,11 +43,7 @@ fn run(
     stats: Arc<RwLock<TestStats>>,
     stop_rx: crossbeam_channel::Receiver<()>,
 ) {
-    let plugin: Box<dyn ModulationPlugin> = if config.mode.starts_with("BPSK") {
-        Box::new(BpskPlugin::new())
-    } else {
-        Box::new(QpskPlugin::new())
-    };
+    let plugin = make_plugin(&config.mode);
     let mod_config = ModulationConfig {
         mode: config.mode.clone(),
         center_frequency: 1500.0,
@@ -107,6 +117,101 @@ fn run(
 
         update_stats(&stats, &rx_result, &fec, PAYLOAD.len());
     }
+}
+
+#[cfg(feature = "cpal")]
+fn run_live(
+    config: AppConfig,
+    taps: [Tap; 4],
+    stats: Arc<RwLock<TestStats>>,
+    stop_rx: crossbeam_channel::Receiver<()>,
+) {
+    use openpulse_audio::CpalBackend;
+    use openpulse_core::audio::{AudioBackend as _, AudioConfig as HwConfig};
+
+    let backend = CpalBackend::new();
+    let hw_cfg = HwConfig::default(); // 8000 Hz mono — radio audio interfaces support this
+    let mut input = match backend.open_input(None, &hw_cfg) {
+        Ok(s) => s,
+        Err(e) => {
+            let msg = format!(
+                "audio input failed: {e} — ensure your audio interface supports 8 kHz mono"
+            );
+            tracing::error!("{msg}");
+            stats.write().unwrap().push_event(msg);
+            return;
+        }
+    };
+
+    let plugin = make_plugin(&config.mode);
+    let mod_config = ModulationConfig {
+        mode: config.mode.clone(),
+        center_frequency: 1500.0,
+        sample_rate: 8000,
+    };
+    let fec = config.fec_enabled.then(FecCodec::new);
+    let mut ps = [
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+    ];
+    let min_db = config.min_db;
+    let max_db = config.max_db;
+
+    // Pre-modulate a TX reference frame shown in tap[0].
+    let tx_payload = match &fec {
+        Some(codec) => codec.encode(PAYLOAD),
+        None => PAYLOAD.to_vec(),
+    };
+    let tx_samples = match plugin.modulate(&tx_payload, &mod_config) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("modulate error for TX ref: {e}");
+            return;
+        }
+    };
+
+    loop {
+        if stop_rx.try_recv().is_ok() {
+            break;
+        }
+
+        // Tap[2]: raw audio captured from the soundcard.
+        let captured = match input.read() {
+            Ok(s) if !s.is_empty() => s,
+            Ok(_) => continue,
+            Err(e) => {
+                tracing::warn!("audio capture error: {e}");
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                continue;
+            }
+        };
+
+        // Tap[0]: synthesized TX reference (updated each captured block).
+        push_tap(&taps[0], &mut ps[0], &tx_samples, min_db, max_db);
+        push_tap(&taps[2], &mut ps[2], &captured, min_db, max_db);
+
+        // Tap[3]: demodulate captured audio.
+        let rx_result = plugin.demodulate(&captured, &mod_config);
+        let rx_samples = match &rx_result {
+            Ok(decoded) => {
+                let base = match &fec {
+                    Some(codec) => codec.decode(decoded).unwrap_or_else(|_| decoded.clone()),
+                    None => decoded.clone(),
+                };
+                plugin
+                    .modulate(&base, &mod_config)
+                    .unwrap_or_else(|_| vec![0.0_f32; captured.len()])
+            }
+            Err(_) => vec![0.0_f32; captured.len()],
+        };
+        push_tap(&taps[3], &mut ps[3], &rx_samples, min_db, max_db);
+
+        update_stats(&stats, &rx_result, &fec, PAYLOAD.len());
+    }
+
+    input.close();
 }
 
 fn push_tap(tap: &Tap, ps: &mut PowerSpectrum, samples: &[f32], min_db: f32, max_db: f32) {

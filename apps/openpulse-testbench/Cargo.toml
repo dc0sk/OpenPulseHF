@@ -8,8 +8,12 @@ license.workspace = true
 name = "openpulse-testbench"
 path = "src/main.rs"
 
+[features]
+cpal = ["openpulse-audio/cpal-backend"]
+
 [dependencies]
 openpulse-core.workspace    = true
+openpulse-audio.workspace   = true
 openpulse-channel.workspace = true
 bpsk-plugin.workspace       = true
 qpsk-plugin.workspace       = true
