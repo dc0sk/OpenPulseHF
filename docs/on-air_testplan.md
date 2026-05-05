@@ -78,10 +78,9 @@ callsign = "YOUR_CALLSIGN"   # e.g. "K1ABC"
 grid_square = "FN42"
 
 [audio]
-backend = "cpal"
-# Leave empty to use system default device, or set to device name from `openpulse devices`
-input_device  = ""
-output_device = ""
+# "default" uses cpal when compiled in, loopback otherwise.
+# Set to "cpal" to require real hardware or "loopback" for software-only testing.
+backend = "default"
 
 [modem]
 mode = "BPSK250"             # starting mode; override per test
@@ -118,10 +117,17 @@ sound card using loopback mode (cable from TX audio out to RX audio in):
 ./target/release/openpulse-kisstnc --backend loopback --mode BPSK250
 ```
 
-**Terminal 2 — send a test frame via socat:**
+**Terminal 2 — send a test KISS DATA frame:**
 ```bash
-# Connect to the KISS TCP port and send a test AX.25 UI frame
-echo -n "TEST" | socat - TCP:127.0.0.1:8100
+# KISS DATA frame: FEND(0xC0) + TYPE(0x00) + payload + FEND(0xC0)
+python3 -c "
+import socket, time
+s = socket.socket()
+s.connect(('127.0.0.1', 8100))
+s.send(bytes([0xC0, 0x00]) + b'TEST' + bytes([0xC0]))
+time.sleep(0.5)
+s.close()
+"
 ```
 
 Switch to `cpal` backend and cable the audio path for a hardware loopback test:
@@ -270,8 +276,8 @@ Run a continuous receive session for 25 minutes. The transceiver should transmit
 station callsign in CW or voice at 10-minute intervals.
 
 ```bash
-# Long-running IRS session
-./target/release/openpulse-tnc --mode BPSK250 --backend cpal --log debug
+# Long-running IRS session with full protocol trace
+RUST_LOG=debug ./target/release/openpulse-tnc --mode BPSK250 --backend cpal
 ```
 
 Observe that the operator manually transmits station ID at least twice during the session.

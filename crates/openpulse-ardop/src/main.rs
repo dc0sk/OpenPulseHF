@@ -25,7 +25,7 @@ struct Cli {
     #[arg(long)]
     bind: Option<String>,
 
-    /// Audio backend: cpal | loopback (overrides config file).
+    /// Audio backend: default | cpal | loopback (overrides config file).
     #[arg(long)]
     backend: Option<String>,
 }
@@ -65,13 +65,17 @@ async fn main() -> anyhow::Result<()> {
         #[cfg(feature = "cpal")]
         "cpal" | "default" => Box::new(CpalBackend::new()),
         #[cfg(not(feature = "cpal"))]
-        "cpal" | "default" => {
+        "cpal" => {
             tracing::warn!(
                 "cpal backend not compiled in (build with --features cpal); using loopback"
             );
             Box::new(LoopbackBackend::default())
         }
-        name => anyhow::bail!("unknown audio backend '{name}' — use 'cpal' or 'loopback'"),
+        #[cfg(not(feature = "cpal"))]
+        "default" => Box::new(LoopbackBackend::default()),
+        name => {
+            anyhow::bail!("unknown audio backend '{name}' — use 'default', 'cpal', or 'loopback'")
+        }
     };
 
     let mut engine = ModemEngine::new(audio);

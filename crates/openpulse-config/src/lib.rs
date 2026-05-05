@@ -40,16 +40,13 @@ pub struct StationConfig {
     pub grid_square: String,
 }
 
-/// Audio backend and device selection.
+/// Audio backend selection.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AudioConfig {
-    /// Audio backend: `cpal` (real hardware) or `loopback` (testing).
+    /// Audio backend: `cpal` (real hardware), `loopback` (testing), or
+    /// `default` (use cpal if compiled in, loopback otherwise).
     pub backend: String,
-    /// Input device name. Empty string selects the system default.
-    pub input_device: String,
-    /// Output device name. Empty string selects the system default.
-    pub output_device: String,
 }
 
 /// Modem defaults shared by all TNC binaries.
@@ -117,9 +114,7 @@ impl Default for StationConfig {
 impl Default for AudioConfig {
     fn default() -> Self {
         Self {
-            backend: "cpal".into(),
-            input_device: String::new(),
-            output_device: String::new(),
+            backend: "default".into(),
         }
     }
 }
@@ -219,13 +214,11 @@ callsign = "N0CALL"
 grid_square = "AA00"
 
 [audio]
-# Audio backend: cpal (real sound card) | loopback (software testing only)
-backend = "cpal"
-# Input device name. Leave empty to use the system default input device.
-# Run `openpulse devices` to list available device names.
-input_device = ""
-# Output device name. Leave empty to use the system default output device.
-output_device = ""
+# Audio backend: default | cpal | loopback
+#   default  — use cpal if compiled in, loopback otherwise (recommended)
+#   cpal     — always use the real sound card (error if not compiled in)
+#   loopback — software loopback for testing only, no audio hardware required
+backend = "default"
 
 [modem]
 # Default modulation mode used when no --mode flag is provided.
