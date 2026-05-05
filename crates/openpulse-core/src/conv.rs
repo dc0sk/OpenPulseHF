@@ -184,14 +184,6 @@ mod tests {
         data[bit_idx / 8] ^= 1 << (7 - (bit_idx % 8));
     }
 
-    fn flip_bits_range(data: &mut Vec<u8>, start: usize, count: usize) {
-        for i in start..start + count {
-            if i / 8 < data.len() {
-                flip_bit(data, i);
-            }
-        }
-    }
-
     #[test]
     fn round_trip_empty() {
         let c = ConvCodec::new();
