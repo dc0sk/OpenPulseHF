@@ -85,6 +85,11 @@ pub enum Commands {
         #[arg(short, long, default_value = "BPSK100")]
         mode: String,
     },
+    /// Configuration management.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -247,4 +252,10 @@ pub enum DiagnoseCommands {
         #[command(flatten)]
         opts: DiagnosticOptions,
     },
+}
+
+#[derive(Subcommand)]
+pub enum ConfigCommands {
+    /// Write a commented configuration template to stdout.
+    Init,
 }
