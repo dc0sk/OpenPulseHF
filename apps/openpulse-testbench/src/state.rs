@@ -3,6 +3,26 @@ use std::sync::{Arc, RwLock};
 
 use openpulse_channel::dsp::{PowerSpectrum, WaterfallBuffer, FFT_SIZE, FREQ_BINS, WATERFALL_ROWS};
 
+// ── Audio source selector ─────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AudioSource {
+    Synthetic,
+    #[cfg(feature = "cpal")]
+    LiveCapture,
+}
+
+impl AudioSource {
+    #[cfg_attr(not(feature = "cpal"), allow(dead_code))]
+    pub fn label(&self) -> &'static str {
+        match self {
+            AudioSource::Synthetic => "Synthetic",
+            #[cfg(feature = "cpal")]
+            AudioSource::LiveCapture => "Live Audio",
+        }
+    }
+}
+
 // ── Noise model selector ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
@@ -46,6 +66,8 @@ pub struct AppConfig {
     pub seed_str: String,
     pub min_db: f32,
     pub max_db: f32,
+    #[cfg_attr(not(feature = "cpal"), allow(dead_code))]
+    pub audio_source: AudioSource,
 }
 
 impl Default for AppConfig {
@@ -58,6 +80,7 @@ impl Default for AppConfig {
             seed_str: "42".into(),
             min_db: -100.0,
             max_db: 0.0,
+            audio_source: AudioSource::Synthetic,
         }
     }
 }

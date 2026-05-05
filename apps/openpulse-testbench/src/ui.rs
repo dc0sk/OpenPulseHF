@@ -3,6 +3,8 @@ use egui_plot::{Line, Plot, PlotPoints};
 use openpulse_channel::dsp::{FREQ_BINS, WATERFALL_ROWS};
 
 use crate::colormap::plasma;
+#[cfg(feature = "cpal")]
+use crate::state::AudioSource;
 use crate::state::{AppConfig, AppState, NoiseModel, Tap, ALL_MODES};
 
 const SPECTRUM_H: f32 = 130.0;
@@ -27,6 +29,26 @@ pub fn draw_toolbar(
 
         ui.separator();
 
+        #[cfg(feature = "cpal")]
+        {
+            ui.label("Source:");
+            egui::ComboBox::from_id_salt("source_combo")
+                .selected_text(state.config.audio_source.label())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut state.config.audio_source,
+                        AudioSource::Synthetic,
+                        "Synthetic",
+                    );
+                    ui.selectable_value(
+                        &mut state.config.audio_source,
+                        AudioSource::LiveCapture,
+                        "Live Audio",
+                    );
+                });
+            ui.separator();
+        }
+
         ui.label("Mode:");
         egui::ComboBox::from_id_salt("mode_combo")
             .selected_text(&state.config.mode)
@@ -36,38 +58,45 @@ pub fn draw_toolbar(
                 }
             });
 
-        ui.separator();
+        #[cfg(feature = "cpal")]
+        let is_live = state.config.audio_source == AudioSource::LiveCapture;
+        #[cfg(not(feature = "cpal"))]
+        let is_live = false;
 
-        ui.label("Noise:");
-        egui::ComboBox::from_id_salt("noise_combo")
-            .selected_text(state.config.noise_model.label())
-            .show_ui(ui, |ui| {
-                for model in NoiseModel::all() {
-                    ui.selectable_value(
-                        &mut state.config.noise_model,
-                        model.clone(),
-                        model.label(),
-                    );
-                }
-            });
+        if !is_live {
+            ui.separator();
 
-        ui.separator();
+            ui.label("Noise:");
+            egui::ComboBox::from_id_salt("noise_combo")
+                .selected_text(state.config.noise_model.label())
+                .show_ui(ui, |ui| {
+                    for model in NoiseModel::all() {
+                        ui.selectable_value(
+                            &mut state.config.noise_model,
+                            model.clone(),
+                            model.label(),
+                        );
+                    }
+                });
 
-        ui.label("SNR:");
-        ui.add(
-            egui::Slider::new(&mut state.config.snr_db, -30.0..=30.0)
-                .suffix(" dB")
-                .step_by(0.5),
-        );
+            ui.separator();
+
+            ui.label("SNR:");
+            ui.add(
+                egui::Slider::new(&mut state.config.snr_db, -30.0..=30.0)
+                    .suffix(" dB")
+                    .step_by(0.5),
+            );
+
+            ui.separator();
+
+            ui.label("Seed:");
+            ui.add(egui::TextEdit::singleline(&mut state.config.seed_str).desired_width(60.0));
+        }
 
         ui.separator();
 
         ui.checkbox(&mut state.config.fec_enabled, "FEC");
-
-        ui.separator();
-
-        ui.label("Seed:");
-        ui.add(egui::TextEdit::singleline(&mut state.config.seed_str).desired_width(60.0));
 
         ui.separator();
 
