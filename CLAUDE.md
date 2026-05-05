@@ -325,6 +325,15 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 - `B2fSession::accepted_count()` added to `session.rs` — IRS driver uses this to know how many data frames to read
 - Integration tests: `lzhuf_round_trip`, `lzhuf_bad_input_error`
 
+**Phase 5.3 — TOML configuration management** ✅ Done (PR #102)
+- `crates/openpulse-config/`: new crate with typed TOML schema covering station, modem, ARDOP, KISS, logging, relay, and trust-store settings
+  - `load()` reads `~/.config/openpulse/config.toml`; propagates errors so misconfiguration is visible at startup
+  - `init_template()` returns a fully-commented TOML template
+  - Precedence: CLI flag > config file > built-in defaults
+- `openpulse-tnc` and `openpulse-kisstnc` accept clap CLI flags (`--cmd-port`, `--data-port`, `--mode`, `--bind` / `--port`) that override config file values, replacing the previous env-var-only approach
+- `openpulse config init` writes the commented template to stdout; short-circuits before any hardware/network setup
+- Three tests: `load_defaults_when_no_file`, `cli_override_pattern`, `missing_fields_get_defaults`
+
 **Phase 5.4 — End-to-end loopback integration test** ✅ Done (PR #100)
 - `crates/openpulse-b2f-driver/tests/e2e_loopback.rs`: full-stack gate test (no hardware required)
   - Bidirectional modem relay chains two `B2fDriver` instances through `ChannelSimHarness` (BPSK250 encode → channel → BPSK250 decode)
