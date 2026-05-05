@@ -13,12 +13,10 @@ pub use cmd::CmdPort;
 pub use data::DataPort;
 
 /// A decoded message received during an IRS session.
-///
-/// `body` is the raw decompressed payload passed by the ISS.  Full header
-/// fields (From, To, Subject) are not separately available in this version
-/// because the current `B2fSession` compresses only the body bytes; encoding
-/// the full `WlHeader` into the compressed stream is deferred to a later phase.
 pub struct DecodedMessage {
+    /// Parsed Winlink message header (Mid, From, To, Subject, …).
+    pub header: WlHeader,
+    /// Raw body bytes following the header block.
     pub body: Vec<u8>,
 }
 
@@ -152,12 +150,28 @@ impl B2fDriver {
         let mut decoded = Vec::with_capacity(count);
         for _ in 0..count {
             let blob = self.data.recv_frame()?;
-            let body = session.receive_data(blob)?;
-            decoded.push(DecodedMessage { body });
+            let raw = session.receive_data(blob)?;
+            let (header, body) = split_message(&raw)?;
+            decoded.push(DecodedMessage { header, body });
         }
 
         self.cmd.send("DISCONNECT")?;
         self.cmd.wait_for("DISCONNECTED")?;
         Ok(decoded)
     }
+}
+
+/// Split a decompressed B2F message into its header and body parts.
+///
+/// The wire format is `<CRLF-terminated header block>\r\n<body bytes>`.
+fn split_message(data: &[u8]) -> Result<(WlHeader, Vec<u8>), DriverError> {
+    const SEP: &[u8] = b"\r\n\r\n";
+    let body_start = data
+        .windows(SEP.len())
+        .position(|w| w == SEP)
+        .map(|p| p + SEP.len())
+        .unwrap_or(data.len());
+    let header = openpulse_b2f::header::decode(&data[..body_start])?;
+    let body = data[body_start..].to_vec();
+    Ok((header, body))
 }

@@ -5,7 +5,7 @@ use std::net::TcpStream;
 use std::thread;
 use std::time::Duration;
 
-use openpulse_b2f::{banner, B2fSession, SessionRole, WlHeader};
+use openpulse_b2f::{banner, header, B2fSession, SessionRole, WlHeader};
 use openpulse_b2f_driver::B2fDriver;
 
 use common::{mock_cmd_irs, mock_cmd_iss, recv_frame, send_frame, test_header};
@@ -72,7 +72,14 @@ fn iss_sends_one_message() {
     cmd_handle.join().unwrap();
 
     assert_eq!(decoded.len(), 1);
-    assert_eq!(decoded[0], body_clone);
+    // The decompressed blob contains header + body; split on \r\n\r\n.
+    let raw = &decoded[0];
+    let sep = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    let hdr = header::decode(&raw[..sep]).unwrap();
+    let body = &raw[sep + 4..];
+    assert_eq!(hdr.from, "K1ABC@winlink.org");
+    assert_eq!(hdr.to, vec!["K2DEF@winlink.org"]);
+    assert_eq!(body, body_clone.as_slice());
 }
 
 /// IRS driver receives one message; a scripted ISS B2fSession handles the

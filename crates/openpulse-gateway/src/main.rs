@@ -12,7 +12,7 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 
 use openpulse_b2f::{B2fSession, SessionRole, WlHeader};
-use openpulse_b2f_driver::DataPort;
+use openpulse_b2f_driver::{DataPort, DriverError};
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
@@ -131,7 +131,7 @@ fn build_header(from: &str, to: &str, subject: &str, body_len: u32) -> WlHeader 
         to: vec![format!("{}@winlink.org", to.to_uppercase())],
         subject: subject.to_string(),
         size: body_len,
-        body: 0,
+        body: body_len,
         attachments: vec![],
     }
 }
@@ -145,6 +145,7 @@ pub(crate) fn iss_send(
     data: &mut DataPort,
     messages: Vec<(WlHeader, Vec<u8>)>,
 ) -> anyhow::Result<()> {
+    let msg_count = messages.len();
     let mut session = B2fSession::new(SessionRole::Iss);
     for (h, b) in messages {
         session.queue_message(h, b)?;
@@ -165,7 +166,11 @@ pub(crate) fn iss_send(
     tracing::debug!("← {}", line.trim());
     session.handle_line(&line)?;
 
-    for blob in session.drain_pending_data() {
+    let blobs = session.drain_pending_data();
+    if msg_count > 0 && blobs.is_empty() {
+        anyhow::bail!("CMS rejected all {} proposed message(s)", msg_count);
+    }
+    for blob in blobs {
         tracing::debug!("→ [blob {} B]", blob.len());
         data.send_frame(&blob)?;
     }
@@ -181,16 +186,31 @@ pub(crate) fn iss_send(
 pub(crate) fn irs_receive(data: &mut DataPort) -> anyhow::Result<Vec<Vec<u8>>> {
     let mut session = B2fSession::new(SessionRole::Irs);
 
-    while let Ok(frame) = data.recv_frame() {
-        let line = String::from_utf8_lossy(&frame).into_owned();
-        tracing::debug!("← {}", line.trim());
-        let responses = session.handle_line(&line)?;
-        for resp in &responses {
-            tracing::debug!("→ {}", resp.trim());
-            data.send_frame(resp.as_bytes())?;
-        }
-        if !responses.is_empty() || session.is_done() {
-            break;
+    loop {
+        match data.recv_frame() {
+            Ok(frame) => {
+                let line = String::from_utf8_lossy(&frame).into_owned();
+                tracing::debug!("← {}", line.trim());
+                let responses = session.handle_line(&line)?;
+                for resp in &responses {
+                    tracing::debug!("→ {}", resp.trim());
+                    data.send_frame(resp.as_bytes())?;
+                }
+                if !responses.is_empty() || session.is_done() {
+                    break;
+                }
+            }
+            Err(DriverError::Io(e))
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::UnexpectedEof
+                        | io::ErrorKind::ConnectionReset
+                        | io::ErrorKind::BrokenPipe
+                ) =>
+            {
+                break;
+            }
+            Err(e) => return Err(e.into()),
         }
     }
 
@@ -223,14 +243,15 @@ fn connect_and_exchange(
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
+    let cfg = openpulse_config::load()?;
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&cfg.logging.level)),
         )
         .init();
 
-    let cfg = openpulse_config::load()?;
     let callsign = cli
         .callsign
         .as_deref()
@@ -287,7 +308,7 @@ mod tests {
     use std::net::TcpListener;
     use std::thread;
 
-    use openpulse_b2f::{banner, compress_gzip, frame};
+    use openpulse_b2f::{banner, compress_gzip, frame, header};
 
     fn tcp_pair() -> (TcpStream, TcpStream) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -335,8 +356,16 @@ mod tests {
                 let blob = cms.recv_frame().unwrap();
                 received_outbound.push(irs.receive_data(blob).unwrap());
             }
+            // Decompress blob and split into header + body.
             assert_eq!(received_outbound.len(), 1);
-            assert_eq!(received_outbound[0], expected_outbound);
+            let raw = &received_outbound[0];
+            let sep_pos = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+            let hdr = header::decode(&raw[..sep_pos]).unwrap();
+            let body = &raw[sep_pos + 4..];
+            assert_eq!(hdr.to, vec!["W1AW@winlink.org"]);
+            assert_eq!(hdr.from, "K1TEST@winlink.org");
+            assert_eq!(hdr.subject, "Test");
+            assert_eq!(body, expected_outbound.as_slice());
 
             // ── Phase 2: propose a reply to the gateway ──
 

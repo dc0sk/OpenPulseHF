@@ -53,8 +53,13 @@ impl B2fSession {
     }
 
     /// ISS: queue a message to propose in the next `ProposalExchange`.
+    ///
+    /// The compressed blob includes the CRLF-terminated header block followed
+    /// by the raw body bytes — matching the wire format expected by real Winlink CMS.
     pub fn queue_message(&mut self, header: WlHeader, body: Vec<u8>) -> Result<(), B2fError> {
-        let compressed = compress_gzip(&body)?;
+        let mut full = crate::header::encode(&header);
+        full.extend_from_slice(&body);
+        let compressed = compress_gzip(&full)?;
         let size = compressed.len() as u32;
         self.proposals.push(Proposal {
             fc: B2fFrame::Fc {
