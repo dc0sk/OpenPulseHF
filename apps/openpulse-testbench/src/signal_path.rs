@@ -127,14 +127,18 @@ fn run_live(
     stop_rx: crossbeam_channel::Receiver<()>,
 ) {
     use openpulse_audio::CpalBackend;
-    use openpulse_core::audio::AudioConfig as HwConfig;
+    use openpulse_core::audio::{AudioBackend as _, AudioConfig as HwConfig};
 
     let backend = CpalBackend::new();
-    let hw_cfg = HwConfig::default(); // 8000 Hz, mono
+    let hw_cfg = HwConfig::default(); // 8000 Hz mono — radio audio interfaces support this
     let mut input = match backend.open_input(None, &hw_cfg) {
         Ok(s) => s,
         Err(e) => {
-            tracing::error!("failed to open audio input: {e}");
+            let msg = format!(
+                "audio input failed: {e} — ensure your audio interface supports 8 kHz mono"
+            );
+            tracing::error!("{msg}");
+            stats.write().unwrap().push_event(msg);
             return;
         }
     };
@@ -173,9 +177,6 @@ fn run_live(
             break;
         }
 
-        // Tap[0]: synthesized TX reference.
-        push_tap(&taps[0], &mut ps[0], &tx_samples, min_db, max_db);
-
         // Tap[2]: raw audio captured from the soundcard.
         let captured = match input.read() {
             Ok(s) if !s.is_empty() => s,
@@ -186,6 +187,9 @@ fn run_live(
                 continue;
             }
         };
+
+        // Tap[0]: synthesized TX reference (updated each captured block).
+        push_tap(&taps[0], &mut ps[0], &tx_samples, min_db, max_db);
         push_tap(&taps[2], &mut ps[2], &captured, min_db, max_db);
 
         // Tap[3]: demodulate captured audio.

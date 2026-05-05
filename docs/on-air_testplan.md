@@ -1,3 +1,10 @@
+---
+project: openpulsehf
+doc: docs/on-air_testplan.md
+status: living
+last_updated: 2026-05-05
+---
+
 # OpenPulseHF On-Air Test Plan
 
 This document describes how two licensed amateur radio operators set up their stations,

@@ -49,6 +49,19 @@ impl TestbenchApp {
 
 impl eframe::App for TestbenchApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Detect a signal thread that exited early (e.g. audio open failure).
+        if self.state.running {
+            if self
+                .signal_thread
+                .as_ref()
+                .map(|h| h.is_finished())
+                .unwrap_or(false)
+            {
+                self.signal_thread = None;
+                self.state.running = false;
+            }
+        }
+
         if self.state.running {
             ctx.request_repaint();
         }

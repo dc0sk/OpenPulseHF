@@ -31,21 +31,24 @@ pub fn draw_toolbar(
 
         #[cfg(feature = "cpal")]
         {
-            ui.label("Source:");
-            egui::ComboBox::from_id_salt("source_combo")
-                .selected_text(state.config.audio_source.label())
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut state.config.audio_source,
-                        AudioSource::Synthetic,
-                        "Synthetic",
-                    );
-                    ui.selectable_value(
-                        &mut state.config.audio_source,
-                        AudioSource::LiveCapture,
-                        "Live Audio",
-                    );
-                });
+            ui.scope(|ui| {
+                ui.set_enabled(!state.running);
+                ui.label("Source:");
+                egui::ComboBox::from_id_salt("source_combo")
+                    .selected_text(state.config.audio_source.label())
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut state.config.audio_source,
+                            AudioSource::Synthetic,
+                            "Synthetic",
+                        );
+                        ui.selectable_value(
+                            &mut state.config.audio_source,
+                            AudioSource::LiveCapture,
+                            "Live Audio",
+                        );
+                    });
+            });
             ui.separator();
         }
 
