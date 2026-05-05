@@ -31,8 +31,7 @@ pub fn draw_toolbar(
 
         #[cfg(feature = "cpal")]
         {
-            ui.scope(|ui| {
-                ui.set_enabled(!state.running);
+            ui.add_enabled_ui(!state.running, |ui| {
                 ui.label("Source:");
                 egui::ComboBox::from_id_salt("source_combo")
                     .selected_text(state.config.audio_source.label())
