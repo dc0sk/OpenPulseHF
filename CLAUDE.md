@@ -351,6 +351,12 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
   - Callsign read from `~/.config/openpulse/config.toml`; `--callsign` overrides; bails on default `N0CALL`
   - `gateway_round_trip` unit test: mock CMS TCP server validates full ISS+IRS exchange without network access
 
+**Phase 5.6 — CpalBackend wiring + TOML audio config + on-air test plan** ✅ Done (PR #105)
+- `crates/openpulse-config/src/lib.rs`: `AudioConfig { backend: String }` (default `"default"`); no device-name fields
+- `crates/openpulse-ardop/src/main.rs` + `crates/openpulse-kiss/src/main.rs`: `--backend` CLI flag; `#[cfg(feature = "cpal")]`/`#[cfg(not(feature = "cpal"))]` match arms; `"default"` silently falls back to loopback; `"cpal"` warns when feature absent
+- Build with real audio: `cargo build --release -p openpulse-kiss --features cpal` / `--features cpal` for ardop
+- `docs/on-air_testplan.md`: hardware prereqs, station config template, audio path verification (Python KISS frame sender), test matrix (BPSK250 exchange, rate adaptation, Winlink CMS via RF, multi-mode ladder, ID compliance), regulatory checklist, diagnostics table
+
 These must be confirmed by the user before the relevant implementation starts. Do not implement speculatively.
 
 ### SAR wire format — Resolved (Option B implemented)
