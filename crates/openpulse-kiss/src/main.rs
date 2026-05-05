@@ -3,6 +3,9 @@ use openpulse_audio::loopback::LoopbackBackend;
 use openpulse_kiss::{KissConfig, KissServer};
 use openpulse_modem::ModemEngine;
 
+#[cfg(feature = "cpal")]
+use openpulse_audio::CpalBackend;
+
 #[derive(Parser)]
 #[command(name = "openpulse-kisstnc", about = "OpenPulse KISS TNC")]
 struct Cli {
@@ -17,6 +20,10 @@ struct Cli {
     /// Bind address (overrides config file).
     #[arg(long)]
     bind: Option<String>,
+
+    /// Audio backend: cpal | loopback (overrides config file).
+    #[arg(long)]
+    backend: Option<String>,
 }
 
 #[tokio::main]
@@ -35,6 +42,9 @@ async fn main() -> anyhow::Result<()> {
     if let Some(b) = cli.bind {
         cfg.kiss.bind_addr = b;
     }
+    if let Some(b) = cli.backend {
+        cfg.audio.backend = b;
+    }
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -43,8 +53,21 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let backend = Box::new(LoopbackBackend::default());
-    let mut engine = ModemEngine::new(backend);
+    let audio: Box<dyn openpulse_core::audio::AudioBackend> = match cfg.audio.backend.as_str() {
+        "loopback" => Box::new(LoopbackBackend::default()),
+        #[cfg(feature = "cpal")]
+        "cpal" | "default" => Box::new(CpalBackend::new()),
+        #[cfg(not(feature = "cpal"))]
+        "cpal" | "default" => {
+            tracing::warn!(
+                "cpal backend not compiled in (build with --features cpal); using loopback"
+            );
+            Box::new(LoopbackBackend::default())
+        }
+        name => anyhow::bail!("unknown audio backend '{name}' — use 'cpal' or 'loopback'"),
+    };
+
+    let mut engine = ModemEngine::new(audio);
     engine.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))?;
     engine.register_plugin(Box::new(fsk4_plugin::Fsk4Plugin::new()))?;
     engine.register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))?;

@@ -8,6 +8,10 @@ license.workspace = true
 name = "openpulse-kisstnc"
 path = "src/main.rs"
 
+[features]
+# Enable real CPAL audio hardware support in the TNC binary.
+cpal = ["openpulse-audio/cpal-backend"]
+
 [dependencies]
 openpulse-core.workspace = true
 openpulse-audio.workspace = true

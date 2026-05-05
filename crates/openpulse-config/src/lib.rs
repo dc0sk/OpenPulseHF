@@ -23,6 +23,7 @@ pub enum ConfigError {
 #[serde(default)]
 pub struct OpenpulseConfig {
     pub station: StationConfig,
+    pub audio: AudioConfig,
     pub modem: ModemConfig,
     pub ardop: ArdopConfig,
     pub kiss: KissConfig,
@@ -37,6 +38,18 @@ pub struct OpenpulseConfig {
 pub struct StationConfig {
     pub callsign: String,
     pub grid_square: String,
+}
+
+/// Audio backend and device selection.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct AudioConfig {
+    /// Audio backend: `cpal` (real hardware) or `loopback` (testing).
+    pub backend: String,
+    /// Input device name. Empty string selects the system default.
+    pub input_device: String,
+    /// Output device name. Empty string selects the system default.
+    pub output_device: String,
 }
 
 /// Modem defaults shared by all TNC binaries.
@@ -97,6 +110,16 @@ impl Default for StationConfig {
         Self {
             callsign: "N0CALL".into(),
             grid_square: "AA00".into(),
+        }
+    }
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            backend: "cpal".into(),
+            input_device: String::new(),
+            output_device: String::new(),
         }
     }
 }
@@ -194,6 +217,15 @@ pub fn init_template() -> String {
 callsign = "N0CALL"
 # Maidenhead grid square locator.
 grid_square = "AA00"
+
+[audio]
+# Audio backend: cpal (real sound card) | loopback (software testing only)
+backend = "cpal"
+# Input device name. Leave empty to use the system default input device.
+# Run `openpulse devices` to list available device names.
+input_device = ""
+# Output device name. Leave empty to use the system default output device.
+output_device = ""
 
 [modem]
 # Default modulation mode used when no --mode flag is provided.
