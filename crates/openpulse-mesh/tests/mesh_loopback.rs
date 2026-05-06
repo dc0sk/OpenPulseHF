@@ -14,7 +14,7 @@ const MODE: &str = "BPSK250";
 
 fn make_node(lb: &LoopbackBackend, peer_id: [u8; 32]) -> MeshDaemon {
     let mut engine = ModemEngine::new(Box::new(lb.clone_shared()));
-    engine.register_plugin(Box::new(BpskPlugin::default()));
+    let _ = engine.register_plugin(Box::new(BpskPlugin::default()));
     let policy = RelayTrustPolicy::deny_relays([] as [&str; 0]);
     MeshDaemon::new(engine, MODE, peer_id, 3, 3600, 300_000, policy)
 }
