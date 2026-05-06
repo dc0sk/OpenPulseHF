@@ -18,8 +18,8 @@ use crate::state::{AppConfig, NoiseModel, Tap, TestStats};
 /// Base pattern repeated to fill the configured payload size.
 const PATTERN: &[u8] = b"OpenPulseHF testbench v0.1 test!";
 
-/// Build a payload of `size` bytes with `run` XORed into the first 8 bytes so each
-/// frame has a distinct bit pattern and the spectrum visually updates every iteration.
+/// Build a payload of `size` bytes with a repeating 8-byte seed derived from `run` XORed
+/// across every byte, so each frame has a distinct bit pattern and the spectrum animates.
 fn make_payload(size: usize, run: u64) -> Vec<u8> {
     let seed = run.to_le_bytes();
     PATTERN

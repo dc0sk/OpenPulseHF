@@ -274,7 +274,7 @@ pub fn draw_stats(ui: &mut Ui, state: &AppState) {
         ui.label(format!("Effective: {}", fmt_bps(effective_bps)))
             .on_hover_text(format!(
                 "Net rate × compression advantage × frame success rate (last 1.5 s)\n\
-                 Compression ratio last run: {:.2}×",
+                 Compression advantage last run: {:.2}×",
                 compress_adv
             ));
         ui.separator();
