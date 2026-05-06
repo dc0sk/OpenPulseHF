@@ -16,7 +16,15 @@ fn make_node(lb: &LoopbackBackend, peer_id: [u8; 32]) -> MeshDaemon {
     let mut engine = ModemEngine::new(Box::new(lb.clone_shared()));
     let _ = engine.register_plugin(Box::new(BpskPlugin::default()));
     let policy = RelayTrustPolicy::deny_relays([] as [&str; 0]);
-    MeshDaemon::new(engine, MODE, peer_id, 3, 3600, 300_000, policy)
+    MeshDaemon::new(engine, MODE, peer_id, 3, 0, 300_000, policy, 64, 3_600_000)
+}
+
+/// A node with beacons enabled (beacon_interval_s=1).
+fn make_beacon_node(lb: &LoopbackBackend, peer_id: [u8; 32]) -> MeshDaemon {
+    let mut engine = ModemEngine::new(Box::new(lb.clone_shared()));
+    let _ = engine.register_plugin(Box::new(BpskPlugin::default()));
+    let policy = RelayTrustPolicy::deny_relays([] as [&str; 0]);
+    MeshDaemon::new(engine, MODE, peer_id, 3, 1, 300_000, policy, 64, 3_600_000)
 }
 
 fn relay_envelope(src: [u8; 32], dst: [u8; 32], session_id: u64, nonce: u8) -> WireEnvelope {
@@ -46,8 +54,6 @@ fn three_node_relay_clean() {
     let peer_b = [2u8; 32];
     let peer_c = [3u8; 32];
 
-    // Each node has its own loopback buffer.  We keep handles to drain TX
-    // samples out and inject them into the next node's RX buffer.
     let lb_a = LoopbackBackend::new();
     let lb_b = LoopbackBackend::new();
     let lb_c = LoopbackBackend::new();
@@ -56,16 +62,13 @@ fn three_node_relay_clean() {
     let mut node_b = make_node(&lb_b, peer_b);
     let mut node_c = make_node(&lb_c, peer_c);
 
-    // A originates a relay frame addressed to C (hop_limit=2, hop_index=0).
     let env = relay_envelope(peer_a, peer_c, 42, 1);
     node_a.send_relay(env).unwrap();
 
-    // Route A → B: drain A's TX samples, inject into B's RX buffer.
     let samples_a = lb_a.drain_samples();
     assert!(!samples_a.is_empty(), "A must have produced TX samples");
     lb_b.fill_samples(&samples_a);
 
-    // B processes: receive → decode → dst ≠ B → RelayForwarder → transmit.
     let events_b = node_b.step(1000);
     assert!(
         events_b
@@ -74,7 +77,6 @@ fn three_node_relay_clean() {
         "B must emit a Forwarded relay event; got {events_b:?}"
     );
 
-    // Route B → C: drain B's TX samples (the forwarded frame), inject into C.
     let samples_b = lb_b.drain_samples();
     assert!(
         !samples_b.is_empty(),
@@ -82,7 +84,6 @@ fn three_node_relay_clean() {
     );
     lb_c.fill_samples(&samples_b);
 
-    // C processes: receive → decode → dst == C → FrameDelivered.
     let events_c = node_c.step(1000);
     assert!(
         events_c
@@ -105,7 +106,6 @@ fn hop_limit_drop_at_relay() {
     let mut node_a = make_node(&lb_a, peer_a);
     let mut node_b = make_node(&lb_b, peer_b);
 
-    // hop_index=2, hop_limit=2 → B must drop (HopLimitExceeded).
     let mut env = relay_envelope(peer_a, peer_c, 99, 2);
     env.hop_index = 2;
     env.hop_limit = 2;
@@ -121,7 +121,6 @@ fn hop_limit_drop_at_relay() {
             .any(|e| matches!(e, MeshEvent::Relay(RelayEvent::HopLimitExceeded { .. }))),
         "B must emit HopLimitExceeded; got {events_b:?}"
     );
-    // B must NOT have transmitted anything.
     assert!(
         lb_b.drain_samples().is_empty(),
         "B must not forward a hop-limit-exceeded frame"
@@ -143,7 +142,6 @@ fn duplicate_suppression_at_relay() {
 
     let env = relay_envelope(peer_a, peer_c, 77, 3);
 
-    // First transmission — B forwards.
     node_a.send_relay(env.clone()).unwrap();
     let s = lb_a.drain_samples();
     lb_b.fill_samples(&s);
@@ -151,9 +149,8 @@ fn duplicate_suppression_at_relay() {
     assert!(events1
         .iter()
         .any(|e| matches!(e, MeshEvent::Relay(RelayEvent::Forwarded { .. }))));
-    lb_b.drain_samples(); // discard forwarded samples
+    lb_b.drain_samples();
 
-    // Second transmission of identical (session_id, nonce) — B suppresses.
     node_a.send_relay(env).unwrap();
     let s = lb_a.drain_samples();
     lb_b.fill_samples(&s);
@@ -167,5 +164,73 @@ fn duplicate_suppression_at_relay() {
     assert!(
         lb_b.drain_samples().is_empty(),
         "B must not forward a duplicate frame"
+    );
+}
+
+/// Peer discovery: A sends a beacon, B receives it, responds with its local cache
+/// (which includes B itself), A caches B and emits PeerDiscovered.
+#[test]
+fn peer_discovery_via_beacon() {
+    let peer_a = [30u8; 32];
+    let peer_b = [31u8; 32];
+
+    let lb_a = LoopbackBackend::new();
+    let lb_b = LoopbackBackend::new();
+
+    // A has beacon_interval_s=1; B has beacons disabled (just responds to queries).
+    let mut node_a = make_beacon_node(&lb_a, peer_a);
+    let mut node_b = make_node(&lb_b, peer_b);
+
+    // Both start with only themselves in their caches.
+    assert_eq!(node_a.peer_cache_len(), 1, "A starts with only self");
+    assert_eq!(node_b.peer_cache_len(), 1, "B starts with only self");
+
+    // Tick A at t=1000 ms to fire the beacon (interval=1 s).
+    let events_a = node_a.step(1000);
+    assert!(
+        events_a
+            .iter()
+            .any(|e| matches!(e, MeshEvent::BeaconSent { .. })),
+        "A must send a beacon; got {events_a:?}"
+    );
+
+    // Route A's beacon TX → B's RX buffer.
+    let samples_a = lb_a.drain_samples();
+    assert!(!samples_a.is_empty(), "A must have produced beacon samples");
+    lb_b.fill_samples(&samples_a);
+
+    // B processes the beacon: receives PeerQueryRequest, responds with its cache.
+    let events_b = node_b.step(1000);
+    assert!(
+        events_b.iter().any(|e| matches!(
+            e,
+            MeshEvent::PeerQueried {
+                result_count: 1,
+                ..
+            }
+        )),
+        "B must answer the query with 1 result (self); got {events_b:?}"
+    );
+
+    // Route B's response TX → A's RX buffer.
+    let samples_b = lb_b.drain_samples();
+    assert!(
+        !samples_b.is_empty(),
+        "B must have produced response samples"
+    );
+    lb_a.fill_samples(&samples_b);
+
+    // A processes B's response: caches B.
+    let events_a2 = node_a.step(1001);
+    assert!(
+        events_a2
+            .iter()
+            .any(|e| matches!(e, MeshEvent::PeerDiscovered { peer_id } if *peer_id == peer_b)),
+        "A must emit PeerDiscovered for B; got {events_a2:?}"
+    );
+    assert_eq!(
+        node_a.peer_cache_len(),
+        2,
+        "A must now have self + B in cache"
     );
 }
