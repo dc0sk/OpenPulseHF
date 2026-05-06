@@ -49,10 +49,14 @@ impl SessionProfile {
         }
     }
 
-    /// HPX2300 profile: 2300 Hz class, single-carrier QPSK/8PSK ladder (SL8–SL11).
+    /// HPX Wideband profile: wideband class, single-carrier QPSK/8PSK ladder (SL8–SL11).
     ///
     /// Single-carrier over OFDM: lower PAPR, no cyclic prefix overhead, simpler AFC.
     /// See docs/architecture.md for the full design rationale.
+    ///
+    /// **Bandwidth note**: SL9 (QPSK1000) and SL11 (8PSK1000) exceed the 2700 Hz HF
+    /// channel-width limit.  Use this profile on FM, satellite, and UHF/VHF links only.
+    /// For HF operation use [`SessionProfile::hpx_hf`].
     ///
     /// | SL  | Mode      |
     /// |-----|-----------|
@@ -61,7 +65,7 @@ impl SessionProfile {
     /// | SL9 | QPSK1000  |
     /// | SL10 | — (reserved) |
     /// | SL11 | 8PSK1000  |
-    pub fn hpx2300() -> Self {
+    pub fn hpx_wideband() -> Self {
         let mut modes = [None; 12];
         modes[SpeedLevel::Sl8 as usize] = Some("QPSK500");
         modes[SpeedLevel::Sl9 as usize] = Some("QPSK1000");

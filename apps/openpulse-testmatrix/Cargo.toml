@@ -1,0 +1,31 @@
+[package]
+name        = "openpulse-testmatrix"
+description = "Comprehensive signal-path test matrix for OpenPulseHF"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+
+[[bin]]
+name = "openpulse-testmatrix"
+path = "src/main.rs"
+
+[dependencies]
+openpulse-core       = { workspace = true }
+openpulse-audio      = { workspace = true }
+openpulse-modem      = { workspace = true }
+openpulse-channel    = { workspace = true }
+openpulse-b2f        = { workspace = true }
+openpulse-b2f-driver = { workspace = true }
+openpulse-ardop      = { workspace = true }
+openpulse-kiss       = { path = "../../crates/openpulse-kiss" }
+bpsk-plugin          = { workspace = true }
+fsk4-plugin          = { workspace = true }
+psk8-plugin          = { workspace = true }
+qpsk-plugin          = { workspace = true }
+serde                = { workspace = true }
+serde_json           = { workspace = true }
+clap                 = { workspace = true }
+tokio                = { workspace = true }
+chrono               = { version = "0.4", features = ["serde"] }

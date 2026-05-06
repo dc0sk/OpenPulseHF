@@ -190,9 +190,13 @@ fn gross_bps(mode: &str) -> f64 {
         "BPSK63" => 62.5,
         "BPSK100" => 100.0,
         "BPSK250" => 250.0,
-        "QPSK125" => 250.0,  // 125 baud × 2 bits/symbol
-        "QPSK250" => 500.0,  // 250 baud × 2 bits/symbol
-        "QPSK500" => 1000.0, // 500 baud × 2 bits/symbol
+        "QPSK125" => 250.0,   // 125 baud × 2 bits/symbol
+        "QPSK250" => 500.0,   // 250 baud × 2 bits/symbol
+        "QPSK500" => 1000.0,  // 500 baud × 2 bits/symbol
+        "QPSK1000" => 2000.0, // 1000 baud × 2 bits/symbol
+        "8PSK500" => 1500.0,  // 500 baud × 3 bits/symbol
+        "8PSK1000" => 3000.0, // 1000 baud × 3 bits/symbol
+        "FSK4-ACK" => 200.0,  // 100 baud × 2 bits/symbol (4-tone)
         _ => 0.0,
     }
 }
@@ -206,6 +210,10 @@ fn mode_symbol_rate_hz(mode: &str) -> f64 {
         "QPSK125" => 125.0,
         "QPSK250" => 250.0,
         "QPSK500" => 500.0,
+        "QPSK1000" => 1000.0,
+        "8PSK500" => 500.0,
+        "8PSK1000" => 1000.0,
+        "FSK4-ACK" => 100.0,
         _ => 250.0,
     }
 }
@@ -329,8 +337,10 @@ pub fn draw_signal_panel(
             // spectrum but are ≥ −31 dB below the main lobe peak.
             let sr = mode_symbol_rate_hz(&config.mode);
             let bw_color = egui::Color32::from_rgba_unmultiplied(255, 180, 50, 160);
-            plot_ui.vline(VLine::new(1500.0 - 2.0 * sr).color(bw_color).name("BW"));
-            plot_ui.vline(VLine::new(1500.0 + 2.0 * sr).color(bw_color).name("BW"));
+            let left = (1500.0 - 2.0 * sr).max(0.0);
+            let right = (1500.0 + 2.0 * sr).min(4000.0);
+            plot_ui.vline(VLine::new(left).color(bw_color).name("BW"));
+            plot_ui.vline(VLine::new(right).color(bw_color).name("BW"));
         });
 
     // Waterfall texture

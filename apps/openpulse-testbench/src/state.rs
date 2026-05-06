@@ -91,7 +91,8 @@ impl Default for AppConfig {
 }
 
 pub const ALL_MODES: &[&str] = &[
-    "BPSK31", "BPSK63", "BPSK100", "BPSK250", "QPSK125", "QPSK250", "QPSK500",
+    "BPSK31", "BPSK63", "BPSK100", "BPSK250", "QPSK125", "QPSK250", "QPSK500", "QPSK1000",
+    "8PSK500", "8PSK1000", "FSK4-ACK",
 ];
 
 // ── Statistics ────────────────────────────────────────────────────────────────

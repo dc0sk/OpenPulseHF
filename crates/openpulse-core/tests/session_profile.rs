@@ -23,8 +23,8 @@ fn hpx500_initial_level() {
 }
 
 #[test]
-fn hpx2300_mode_mapping() {
-    let p = SessionProfile::hpx2300();
+fn hpx_wideband_mode_mapping() {
+    let p = SessionProfile::hpx_wideband();
     assert_eq!(p.mode_for(SpeedLevel::Sl1), None);
     assert_eq!(p.mode_for(SpeedLevel::Sl7), None);
     assert_eq!(p.mode_for(SpeedLevel::Sl8), Some("QPSK500"));
@@ -34,8 +34,8 @@ fn hpx2300_mode_mapping() {
 }
 
 #[test]
-fn hpx2300_initial_level() {
-    let p = SessionProfile::hpx2300();
+fn hpx_wideband_initial_level() {
+    let p = SessionProfile::hpx_wideband();
     assert_eq!(p.initial_level, SpeedLevel::Sl8);
     assert_eq!(p.nack_threshold, 3);
 }
