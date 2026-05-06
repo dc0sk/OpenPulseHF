@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! bytes → bits (LSB-first) → NRZI encode → symbols (+1/−1)
-//!       → raised-cosine pulse shaping → carrier mix → audio samples
+//!       → overlapping half-Hann crossfade → carrier mix → audio samples
 //! ```
 
 use std::f32::consts::PI;

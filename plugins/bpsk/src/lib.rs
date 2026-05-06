@@ -19,8 +19,8 @@
 //! ```
 //!
 //! Each bit is NRZI-encoded ("1" = phase flip, "0" = keep phase) and
-//! pulse-shaped with a raised-cosine (Hann) window per symbol to minimise
-//! occupied bandwidth.
+//! pulse-shaped with a 50% overlapping half-Hann crossfade to minimise
+//! occupied bandwidth and inter-symbol interference.
 
 pub mod demodulate;
 pub mod modulate;
@@ -73,7 +73,7 @@ impl BpskPlugin {
             name: "BPSK".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             description:
-                "Binary Phase-Shift Keying with NRZI encoding and raised-cosine pulse shaping"
+                "Binary Phase-Shift Keying with NRZI encoding and overlapping half-Hann pulse shaping"
                     .to_string(),
             author: "OpenPulse Contributors".to_string(),
             supported_modes: vec![
