@@ -31,6 +31,8 @@ pub struct ModemBridge {
     pub fec_tx: Arc<AtomicBool>,
     /// When true the worker receives with FEC decoding (FECRCV mode).
     pub fec_rx: Arc<AtomicBool>,
+    /// When true the TNC accepts relay frames alongside direct ARQ traffic.
+    pub mesh_mode: Arc<AtomicBool>,
 }
 
 impl ModemBridge {
@@ -57,6 +59,7 @@ impl ModemBridge {
             loopback,
             fec_tx: Arc::new(AtomicBool::new(false)),
             fec_rx: Arc::new(AtomicBool::new(false)),
+            mesh_mode: Arc::new(AtomicBool::new(false)),
         });
         (bridge, tx_data_rx)
     }

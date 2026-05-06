@@ -30,6 +30,7 @@ pub struct OpenpulseConfig {
     pub logging: LoggingConfig,
     pub relay: RelayConfig,
     pub trust: TrustConfig,
+    pub mesh: MeshConfig,
 }
 
 /// Station identity.
@@ -88,7 +89,7 @@ pub struct LoggingConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RelayConfig {
-    pub enable: bool,
+    pub enabled: bool,
     pub max_hops: u8,
 }
 
@@ -98,6 +99,28 @@ pub struct RelayConfig {
 pub struct TrustConfig {
     /// Path to the local trust store. Empty string uses the platform default.
     pub store_path: String,
+}
+
+/// Mesh daemon settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct MeshConfig {
+    /// Enable the mesh relay daemon.
+    pub enabled: bool,
+    /// Maximum relay hop count (envelope dropped when hop_index reaches this).
+    pub max_hops: u8,
+    /// Relay trust policy string: `"strict"`, `"balanced"`, or `"permissive"`.
+    /// Reserved for future trust-level filtering; `RelayTrustPolicy` currently
+    /// models a deny-list of peer IDs and does not yet enforce this value.
+    pub relay_policy: String,
+    /// Store-and-forward frame TTL in seconds (passed to `RelayForwarder` as ttl_ms).
+    pub store_forward_ttl_s: u64,
+    /// Peer discovery beacon interval in seconds; 0 disables beacons.
+    pub beacon_interval_s: u64,
+    /// Maximum entries in the local peer cache.
+    pub peer_cache_capacity: usize,
+    /// Peer cache entry TTL in seconds.
+    pub peer_cache_ttl_s: u64,
 }
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
@@ -158,8 +181,22 @@ impl Default for LoggingConfig {
 impl Default for RelayConfig {
     fn default() -> Self {
         Self {
-            enable: false,
+            enabled: false,
             max_hops: 3,
+        }
+    }
+}
+
+impl Default for MeshConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_hops: 3,
+            relay_policy: "balanced".into(),
+            store_forward_ttl_s: 300,
+            beacon_interval_s: 60,
+            peer_cache_capacity: 256,
+            peer_cache_ttl_s: 3600,
         }
     }
 }
@@ -248,9 +285,25 @@ level = "info"
 
 [relay]
 # Enable multi-hop relay forwarding.
-enable = false
+enabled = false
 # Maximum relay hop count.
 max_hops = 3
+
+[mesh]
+# Enable the openpulse-mesh daemon relay stack.
+enabled = false
+# Maximum relay hop count before a frame is dropped.
+max_hops = 3
+# Relay trust policy: strict | balanced | permissive
+relay_policy = "balanced"
+# Store-and-forward frame TTL in seconds.
+store_forward_ttl_s = 300
+# Peer discovery beacon interval in seconds.
+beacon_interval_s = 60
+# Maximum peer cache entries.
+peer_cache_capacity = 256
+# Peer cache entry TTL in seconds.
+peer_cache_ttl_s = 3600
 
 [trust]
 # Path to the local trust store directory. Empty = platform default.
@@ -285,7 +338,7 @@ mod tests {
         assert_eq!(cfg.kiss.port, 8100);
         assert_eq!(cfg.modem.mode, "BPSK250");
         assert_eq!(cfg.logging.level, "info");
-        assert!(!cfg.relay.enable);
+        assert!(!cfg.relay.enabled);
         assert_eq!(cfg.relay.max_hops, 3);
     }
 
