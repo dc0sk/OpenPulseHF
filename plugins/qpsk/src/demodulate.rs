@@ -78,7 +78,7 @@ fn demodulate_symbols(
         for i in 0..n {
             let g = (offset + start + i) as f32;
             let sample = aligned[start + i];
-            let window = 0.5 * (1.0 - (two_pi * i as f32 / n as f32).cos());
+            let window = 0.5 * (1.0 + (PI * i as f32 / n as f32).cos());
             let t = g / fs;
             let c = (two_pi * fc * t).cos();
             let s = (two_pi * fc * t).sin();

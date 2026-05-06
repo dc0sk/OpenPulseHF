@@ -23,6 +23,7 @@ struct TimingParams {
 @group(0) @binding(3) var<uniform>             params:            TimingParams;
 
 const TWO_PI: f32 = 6.283185307179586;
+const PI:     f32 = 3.141592653589793;
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -51,7 +52,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let sample_idx = off_idx + sym_start + k;
             let sample     = in_samples[sample_idx];
 
-            let window = 0.5 * (1.0 - cos(TWO_PI * f32(k) / f32(n)));
+            let window = 0.5 * (1.0 + cos(PI * f32(k) / f32(n)));
 
             // Carrier phase uses the absolute sample index.
             let t  = f32(sample_idx) / params.sample_rate;

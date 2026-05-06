@@ -2,7 +2,7 @@
 // Each workitem demodulates one symbol.
 // sym_idx = global_invocation_id.x
 //
-// Matches the CPU demodulate_iq(): Hann-windowed matched filter with
+// Matches the CPU demodulate_iq(): half-Hann (w_tail) matched filter with
 // factor-of-2 carrier normalisation. `params.offset` is the timing offset
 // applied before this slice of samples was captured — used only for carrier
 // phase calculation, not for sample indexing (in_samples is already sliced).
@@ -24,6 +24,7 @@ struct BpskDemodParams {
 @group(0) @binding(3) var<uniform>             params:     BpskDemodParams;
 
 const TWO_PI: f32 = 6.283185307179586;
+const PI:     f32 = 3.141592653589793;
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -45,17 +46,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         let sample = in_samples[local_idx];
 
-        // Matched filter: same Hann window as the modulator.
-        let window = 0.5 * (1.0 - cos(TWO_PI * f32(k) / f32(n)));
+        // Matched filter: decreasing half-Hann (w_tail), matching the overlapping
+        // crossfade modulator.  w_tail = 0.5*(1+cos(π*k/n)) → 1 at k=0, 0 at k=n.
+        let window = 0.5 * (1.0 + cos(PI * f32(k) / f32(n)));
 
-        // Global sample index preserving the original timing offset for
-        // correct carrier phase.
         let global_n = f32(params.offset + local_idx);
         let t        = global_n / params.sample_rate;
         let ci       =  cos(TWO_PI * params.fc * t);
         let cq       = -sin(TWO_PI * params.fc * t);
 
-        // Factor-of-2 compensates for the ½ in the carrier product.
         i_sum += sample * ci * window * 2.0;
         q_sum += sample * cq * window * 2.0;
         norm  += window * window;
@@ -69,3 +68,4 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         out_q[sym_idx] = 0.0f;
     }
 }
+

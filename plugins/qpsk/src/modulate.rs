@@ -25,13 +25,17 @@ pub fn qpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
     let two_pi = 2.0 * PI;
 
     for (sym_idx, &(i_amp, q_amp)) in symbols.iter().enumerate() {
+        let (i_next, q_next) = symbols.get(sym_idx + 1).copied().unwrap_or((0.0, 0.0));
         let sym_start = sym_idx * n;
         for i in 0..n {
-            let envelope = 0.5 * (1.0 - (two_pi * i as f32 / n as f32).cos());
+            let w_tail = 0.5 * (1.0 + (PI * i as f32 / n as f32).cos());
+            let w_head = 1.0 - w_tail;
             let t = (sym_start + i) as f32 / fs;
             let c = (two_pi * fc * t).cos();
             let s = (two_pi * fc * t).sin();
-            out[sym_start + i] = envelope * (i_amp * c - q_amp * s);
+            let env_i = i_amp * w_tail + i_next * w_head;
+            let env_q = q_amp * w_tail + q_next * w_head;
+            out[sym_start + i] = env_i * c - env_q * s;
         }
     }
 
