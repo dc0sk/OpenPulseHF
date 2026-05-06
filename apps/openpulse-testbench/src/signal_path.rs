@@ -1,6 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use bpsk_plugin::BpskPlugin;
+use fsk4_plugin::Fsk4Plugin;
 use openpulse_channel::dsp::PowerSpectrum;
 use openpulse_channel::{
     build_channel, AwgnConfig, ChannelModelConfig, ChirpConfig, GilbertElliottConfig, QrmConfig,
@@ -9,6 +10,7 @@ use openpulse_channel::{
 use openpulse_core::compression::{compress_if_smaller, decompress, CompressionAlgorithm};
 use openpulse_core::fec::FecCodec;
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+use psk8_plugin::Psk8Plugin;
 use qpsk_plugin::QpskPlugin;
 
 #[cfg(feature = "cpal")]
@@ -48,6 +50,10 @@ pub fn spawn_signal_thread(
 fn make_plugin(mode: &str) -> Box<dyn ModulationPlugin> {
     if mode.starts_with("BPSK") {
         Box::new(BpskPlugin::new())
+    } else if mode.starts_with("8PSK") {
+        Box::new(Psk8Plugin::new())
+    } else if mode == "FSK4-ACK" {
+        Box::new(Fsk4Plugin::new())
     } else {
         Box::new(QpskPlugin::new())
     }
