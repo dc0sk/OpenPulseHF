@@ -75,7 +75,7 @@ impl MeshDaemon {
     /// - `max_hops` — relay hop limit enforced locally; any received envelope
     ///   with a higher `hop_limit` is clamped to this value before forwarding
     /// - `beacon_interval_s` — seconds between peer-discovery beacons; 0 disables
-    /// - `ttl_ms` — store-and-forward frame TTL (also used as peer cache TTL)
+    /// - `ttl_ms` — store-and-forward frame TTL for `RelayForwarder` and `QueryForwarder`
     /// - `policy` — relay trust policy (deny-list of peer IDs)
     /// - `peer_cache_capacity` — maximum entries in the local peer cache
     /// - `peer_cache_ttl_ms` — peer cache entry TTL in milliseconds
@@ -92,7 +92,8 @@ impl MeshDaemon {
         peer_cache_ttl_ms: u64,
     ) -> Self {
         let mut peer_cache = PeerCache::new(peer_cache_capacity, peer_cache_ttl_ms);
-        // Seed cache with self so we always include ourselves in query responses.
+        // Self-entry is refreshed in handle_peer_query_request before each response,
+        // so updated_at_ms is intentionally left at 0 here (constructor has no now_ms).
         peer_cache.upsert(
             PeerRecord {
                 peer_id: peer_id_hex(&local_peer_id),
@@ -255,9 +256,25 @@ impl MeshDaemon {
             return;
         };
 
+        // Refresh self so the entry is live regardless of when the daemon started.
+        self.peer_cache.upsert(
+            PeerRecord {
+                peer_id: peer_id_hex(&self.local_peer_id),
+                capability_mask: 0,
+                route_quality: 255,
+                trust_level: TrustLevel::Verified,
+                revision: 0,
+                updated_at_ms: now_ms,
+            },
+            now_ms,
+        );
+
         let trust_filter = wire_trust_filter(req.trust_filter);
         let min_quality = req.min_link_quality.min(255) as u8;
-        let max_results = req.max_results as usize;
+        // Cap to the number of results that fit in one Frame (255-byte payload limit).
+        // WireEnvelope overhead = 120 B; PeerQueryResponse header = 10 B;
+        // PeerQueryResult (no sig) = 79 B → floor((255-120-10)/79) = 1.
+        let max_results = (req.max_results as usize).min(MAX_RESULTS_PER_RESPONSE);
 
         let records = self.peer_cache.query(
             req.capability_mask,
@@ -350,6 +367,9 @@ impl MeshDaemon {
             return;
         };
 
+        // Evict stale entries before checking is_new so expired peers fire PeerDiscovered.
+        self.peer_cache.evict_expired(now_ms);
+
         // route_quality decreases with distance; hop_index=0 means direct neighbour.
         let route_quality = (255u16 / (envelope.hop_index as u16 + 1)) as u8;
 
@@ -381,6 +401,10 @@ impl MeshDaemon {
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+// WireEnvelope overhead (104 header + 16 auth_tag) + PeerQueryResponse header (10)
+// leaves 255 - 120 - 10 = 125 bytes; PeerQueryResult without signature = 79 bytes.
+const MAX_RESULTS_PER_RESPONSE: usize = 125 / 79; // = 1
 
 fn peer_id_hex(bytes: &[u8; 32]) -> String {
     bytes.iter().fold(String::with_capacity(64), |mut s, b| {

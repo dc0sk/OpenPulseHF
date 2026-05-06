@@ -84,7 +84,7 @@ fn main() -> Result<()> {
         ttl_ms,
         policy,
         mesh_cfg.peer_cache_capacity,
-        mesh_cfg.peer_cache_ttl_s * 1000,
+        mesh_cfg.peer_cache_ttl_s.saturating_mul(1000),
     );
 
     info!(
