@@ -75,16 +75,16 @@ fn three_nacks_at_sl3_decrement_to_sl2() {
 }
 
 #[test]
-fn hpx2300_starts_at_qpsk500() {
+fn hpx_wideband_starts_at_qpsk500() {
     let mut engine = make_engine();
-    engine.start_adaptive_session(SessionProfile::hpx2300());
+    engine.start_adaptive_session(SessionProfile::hpx_wideband());
     assert_eq!(engine.current_adaptive_mode(), Some("QPSK500"));
 }
 
 #[test]
-fn hpx2300_ack_up_reaches_8psk1000() {
+fn hpx_wideband_ack_up_reaches_8psk1000() {
     let mut engine = make_engine();
-    engine.start_adaptive_session(SessionProfile::hpx2300());
+    engine.start_adaptive_session(SessionProfile::hpx_wideband());
     engine.apply_ack(AckType::AckUp); // SL8 → SL9 (QPSK1000)
     assert_eq!(engine.current_adaptive_mode(), Some("QPSK1000"));
     engine.apply_ack(AckType::AckUp); // SL9 → SL10 (reserved, None)

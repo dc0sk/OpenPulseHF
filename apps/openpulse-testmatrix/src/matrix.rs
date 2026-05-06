@@ -12,7 +12,7 @@ pub enum Tier {
 pub enum UseCase {
     RawModem,
     AdaptiveHpx500,
-    AdaptiveHpx2300,
+    AdaptiveHpxWideband,
     Ardop,
     Kiss,
     B2f,
@@ -23,7 +23,7 @@ impl UseCase {
         match self {
             Self::RawModem => "raw_modem",
             Self::AdaptiveHpx500 => "adaptive_hpx500",
-            Self::AdaptiveHpx2300 => "adaptive_hpx2300",
+            Self::AdaptiveHpxWideband => "adaptive_hpx_wideband",
             Self::Ardop => "ardop",
             Self::Kiss => "kiss",
             Self::B2f => "b2f",

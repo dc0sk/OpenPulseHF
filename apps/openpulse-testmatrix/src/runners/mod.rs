@@ -25,7 +25,7 @@ pub fn run_case(case: &TestCase) -> TestResult {
     match &case.use_case {
         UseCase::RawModem => raw_modem::run(case),
         UseCase::AdaptiveHpx500 => adaptive::run(case, SessionProfile::hpx500()),
-        UseCase::AdaptiveHpx2300 => adaptive::run(case, SessionProfile::hpx2300()),
+        UseCase::AdaptiveHpxWideband => adaptive::run(case, SessionProfile::hpx_wideband()),
         UseCase::Ardop => ardop::run(case),
         UseCase::Kiss => kiss::run(case),
         UseCase::B2f => b2f::run(case),

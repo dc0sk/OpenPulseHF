@@ -77,8 +77,8 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
             tier,
         });
         cases.push(TestCase {
-            use_case: UseCase::AdaptiveHpx2300,
-            mode: "HPX2300".into(),
+            use_case: UseCase::AdaptiveHpxWideband,
+            mode: "HPX_WIDEBAND".into(),
             fec: false,
             compression: CompressionAlgorithm::None,
             channel: channel.clone(),
