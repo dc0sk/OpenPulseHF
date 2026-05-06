@@ -20,7 +20,8 @@
 //!
 //! Each bit is NRZI-encoded ("1" = phase flip, "0" = keep phase) and
 //! pulse-shaped with a 50% overlapping half-Hann crossfade to minimise
-//! occupied bandwidth and inter-symbol interference.
+//! occupied bandwidth; residual ISI is kept below the decision threshold
+//! by the matched half-Hann filter in the demodulator.
 
 pub mod demodulate;
 pub mod modulate;
