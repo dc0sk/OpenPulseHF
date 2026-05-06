@@ -1,12 +1,16 @@
-/// PTT controller trait and implementations for OpenPulseHF.
+/// PTT and full CAT rig controller traits and implementations for OpenPulseHF.
 pub mod error;
 pub mod noop;
+pub mod rig_controller;
+pub mod rig_mode;
 pub mod rigctld;
 pub mod serial;
 pub mod vox;
 
-pub use error::PttError;
+pub use error::{PttError, RadioError};
 pub use noop::NoOpPtt;
+pub use rig_controller::RigctldController;
+pub use rig_mode::RigMode;
 pub use rigctld::RigctldPtt;
 pub use vox::VoxPtt;
 

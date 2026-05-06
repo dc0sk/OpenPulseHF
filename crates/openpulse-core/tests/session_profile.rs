@@ -23,8 +23,8 @@ fn hpx500_initial_level() {
 }
 
 #[test]
-fn hpx2300_mode_mapping() {
-    let p = SessionProfile::hpx2300();
+fn hpx_wideband_mode_mapping() {
+    let p = SessionProfile::hpx_wideband();
     assert_eq!(p.mode_for(SpeedLevel::Sl1), None);
     assert_eq!(p.mode_for(SpeedLevel::Sl7), None);
     assert_eq!(p.mode_for(SpeedLevel::Sl8), Some("QPSK500"));
@@ -34,8 +34,29 @@ fn hpx2300_mode_mapping() {
 }
 
 #[test]
-fn hpx2300_initial_level() {
-    let p = SessionProfile::hpx2300();
+fn hpx_wideband_initial_level() {
+    let p = SessionProfile::hpx_wideband();
     assert_eq!(p.initial_level, SpeedLevel::Sl8);
+    assert_eq!(p.nack_threshold, 3);
+}
+
+#[test]
+fn hpx_hf_mode_mapping() {
+    let p = SessionProfile::hpx_hf();
+    assert_eq!(p.mode_for(SpeedLevel::Sl1), None);
+    assert_eq!(p.mode_for(SpeedLevel::Sl2), Some("BPSK31"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl3), Some("BPSK63"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl4), Some("BPSK250"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl5), Some("QPSK250"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl6), Some("QPSK500"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl7), Some("8PSK500"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl8), None);
+    assert_eq!(p.mode_for(SpeedLevel::Sl11), None);
+}
+
+#[test]
+fn hpx_hf_initial_level() {
+    let p = SessionProfile::hpx_hf();
+    assert_eq!(p.initial_level, SpeedLevel::Sl2);
     assert_eq!(p.nack_threshold, 3);
 }

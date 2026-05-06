@@ -49,10 +49,43 @@ impl SessionProfile {
         }
     }
 
-    /// HPX2300 profile: 2300 Hz class, single-carrier QPSK/8PSK ladder (SL8–SL11).
+    /// HPX HF profile: HF-compliant rate ladder (SL2–SL7), capped at 8PSK500 (≈2000 Hz BW).
+    ///
+    /// Every mode in this profile fits within the 2700 Hz HF channel-width limit.
+    /// Use this profile for on-air HF operation.  For FM/satellite/UHF links with wider
+    /// channels use [`SessionProfile::hpx_wideband`].
+    ///
+    /// | SL  | Mode     |
+    /// |-----|----------|
+    /// | SL2 | BPSK31   |
+    /// | SL3 | BPSK63   |
+    /// | SL4 | BPSK250  |
+    /// | SL5 | QPSK250  |
+    /// | SL6 | QPSK500  |
+    /// | SL7 | 8PSK500  |
+    pub fn hpx_hf() -> Self {
+        let mut modes = [None; 12];
+        modes[SpeedLevel::Sl2 as usize] = Some("BPSK31");
+        modes[SpeedLevel::Sl3 as usize] = Some("BPSK63");
+        modes[SpeedLevel::Sl4 as usize] = Some("BPSK250");
+        modes[SpeedLevel::Sl5 as usize] = Some("QPSK250");
+        modes[SpeedLevel::Sl6 as usize] = Some("QPSK500");
+        modes[SpeedLevel::Sl7 as usize] = Some("8PSK500");
+        Self {
+            modes,
+            initial_level: SpeedLevel::Sl2,
+            nack_threshold: 3,
+        }
+    }
+
+    /// HPX Wideband profile: wideband class, single-carrier QPSK/8PSK ladder (SL8–SL11).
     ///
     /// Single-carrier over OFDM: lower PAPR, no cyclic prefix overhead, simpler AFC.
     /// See docs/architecture.md for the full design rationale.
+    ///
+    /// **Bandwidth note**: SL9 (QPSK1000) and SL11 (8PSK1000) exceed the 2700 Hz HF
+    /// channel-width limit.  Use this profile on FM, satellite, and UHF/VHF links only.
+    /// For HF operation use [`SessionProfile::hpx_hf`].
     ///
     /// | SL  | Mode      |
     /// |-----|-----------|
@@ -61,7 +94,7 @@ impl SessionProfile {
     /// | SL9 | QPSK1000  |
     /// | SL10 | — (reserved) |
     /// | SL11 | 8PSK1000  |
-    pub fn hpx2300() -> Self {
+    pub fn hpx_wideband() -> Self {
         let mut modes = [None; 12];
         modes[SpeedLevel::Sl8 as usize] = Some("QPSK500");
         modes[SpeedLevel::Sl9 as usize] = Some("QPSK1000");

@@ -54,7 +54,8 @@ fn write_summary(dir: &Path, results: &[TestResult], meta: &RunMeta) {
     for use_case in &[
         UseCase::RawModem,
         UseCase::AdaptiveHpx500,
-        UseCase::AdaptiveHpx2300,
+        UseCase::AdaptiveHpxHf,
+        UseCase::AdaptiveHpxWideband,
         UseCase::Ardop,
         UseCase::Kiss,
         UseCase::B2f,

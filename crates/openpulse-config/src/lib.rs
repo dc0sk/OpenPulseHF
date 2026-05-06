@@ -27,6 +27,8 @@ pub struct OpenpulseConfig {
     pub station: StationConfig,
     pub audio: AudioConfig,
     pub modem: ModemConfig,
+    pub radio: RadioConfig,
+    pub repeater: RepeaterConfig,
     pub ardop: ArdopConfig,
     pub kiss: KissConfig,
     pub logging: LoggingConfig,
@@ -60,6 +62,38 @@ pub struct ModemConfig {
     pub mode: String,
     /// PTT backend: `none`, `rts`, `dtr`, `vox`, or `rigctld`.
     pub ptt_backend: String,
+}
+
+/// Per-rig CAT settings (used in `[radio.rig_a]` / `[radio.rig_b]` sections).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct RigConfig {
+    /// rigctld TCP address for this rig (default `"127.0.0.1:4532"`).
+    pub rigctld_addr: String,
+}
+
+/// Rig CAT control settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct RadioConfig {
+    /// rigctld TCP address for single-rig PTT-only use (default `"127.0.0.1:4532"`).
+    pub rigctld_addr: String,
+    /// Primary rig (RX/TX for normal operation and cross-band relay receive).
+    pub rig_a: RigConfig,
+    /// Secondary rig (TX for cross-band relay).  `None` if not configured.
+    pub rig_b: Option<RigConfig>,
+}
+
+/// Cross-band repeater settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct RepeaterConfig {
+    /// Enable the cross-band repeater.  Requires `[radio.rig_a]` and `[radio.rig_b]`.
+    pub enabled: bool,
+    /// Modulation mode used for both RX (rig_a) and TX (rig_b).
+    pub mode: String,
+    /// Milliseconds to hold PTT after the last byte is transmitted.
+    pub tx_hang_ms: u64,
 }
 
 /// ARDOP TNC service settings.
@@ -149,6 +183,34 @@ impl Default for ModemConfig {
         Self {
             mode: "BPSK250".into(),
             ptt_backend: "none".into(),
+        }
+    }
+}
+
+impl Default for RigConfig {
+    fn default() -> Self {
+        Self {
+            rigctld_addr: "127.0.0.1:4532".into(),
+        }
+    }
+}
+
+impl Default for RadioConfig {
+    fn default() -> Self {
+        Self {
+            rigctld_addr: "127.0.0.1:4532".into(),
+            rig_a: RigConfig::default(),
+            rig_b: None,
+        }
+    }
+}
+
+impl Default for RepeaterConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: "BPSK250".into(),
+            tx_hang_ms: 500,
         }
     }
 }
@@ -310,6 +372,26 @@ backend = "default"
 mode = "BPSK250"
 # PTT backend: none | rts | dtr | vox | rigctld
 ptt_backend = "none"
+
+[radio]
+# rigctld TCP address for single-rig PTT-only use.
+rigctld_addr = "127.0.0.1:4532"
+
+# Primary rig (RX/TX for normal operation; also the receive side of cross-band relay).
+[radio.rig_a]
+rigctld_addr = "127.0.0.1:4532"
+
+# Secondary rig (TX side of cross-band relay).  Uncomment to enable dual-rig.
+# [radio.rig_b]
+# rigctld_addr = "127.0.0.1:4533"
+
+[repeater]
+# Enable the cross-band repeater (requires [radio.rig_a] and [radio.rig_b]).
+enabled = false
+# Modulation mode used for both RX (rig_a) and TX (rig_b).
+mode = "BPSK250"
+# Milliseconds to hold PTT after the last byte is transmitted.
+tx_hang_ms = 500
 
 [ardop]
 # IP address the ARDOP TNC listens on.

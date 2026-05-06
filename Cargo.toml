@@ -7,6 +7,7 @@ members = [
     "crates/openpulse-cli",
     "crates/openpulse-channel",
     "crates/openpulse-radio",
+    "crates/openpulse-repeater",
     "crates/openpulse-gpu",
     "crates/openpulse-ardop",
     "crates/openpulse-kiss",
@@ -23,6 +24,7 @@ members = [
     "pki-tooling",
     "apps/openpulse-testbench",
     "apps/openpulse-testmatrix",
+    "crates/openpulse-daemon",
 ]
 
 [workspace.package]
@@ -38,6 +40,7 @@ openpulse-audio   = { path = "crates/openpulse-audio", default-features = false 
 openpulse-modem   = { path = "crates/openpulse-modem" }
 openpulse-channel = { path = "crates/openpulse-channel" }
 openpulse-radio   = { path = "crates/openpulse-radio" }
+openpulse-repeater = { path = "crates/openpulse-repeater" }
 openpulse-gpu     = { path = "crates/openpulse-gpu" }
 openpulse-ardop   = { path = "crates/openpulse-ardop" }
 openpulse-b2f     = { path = "crates/openpulse-b2f" }
@@ -45,6 +48,7 @@ openpulse-b2f-driver = { path = "crates/openpulse-b2f-driver" }
 openpulse-config     = { path = "crates/openpulse-config" }
 openpulse-gateway    = { path = "crates/openpulse-gateway" }
 openpulse-mesh       = { path = "crates/openpulse-mesh" }
+openpulse-daemon     = { path = "crates/openpulse-daemon" }
 bpsk-plugin       = { path = "plugins/bpsk" }
 fsk4-plugin       = { path = "plugins/fsk4" }
 psk8-plugin       = { path = "plugins/psk8" }
