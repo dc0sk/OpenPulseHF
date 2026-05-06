@@ -6,6 +6,7 @@ use openpulse_channel::{
     build_channel, AwgnConfig, ChannelModelConfig, ChirpConfig, GilbertElliottConfig, QrmConfig,
     QrnConfig, QsbConfig, ToneConfig, WattersonConfig,
 };
+use openpulse_core::compression::{compress_if_smaller, decompress, CompressionAlgorithm};
 use openpulse_core::fec::FecCodec;
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
 use qpsk_plugin::QpskPlugin;
@@ -14,16 +15,31 @@ use qpsk_plugin::QpskPlugin;
 use crate::state::AudioSource;
 use crate::state::{AppConfig, NoiseModel, Tap, TestStats};
 
-const PAYLOAD: &[u8] = b"OpenPulseHF testbench v0.1 test!";
+/// Base pattern repeated to fill the configured payload size.
+const PATTERN: &[u8] = b"OpenPulseHF testbench v0.1 test!";
+
+/// Build a payload of `size` bytes with `run` XORed into the first 8 bytes so each
+/// frame has a distinct bit pattern and the spectrum visually updates every iteration.
+fn make_payload(size: usize, run: u64) -> Vec<u8> {
+    let seed = run.to_le_bytes();
+    PATTERN
+        .iter()
+        .cloned()
+        .cycle()
+        .take(size)
+        .enumerate()
+        .map(|(i, b)| b ^ seed[i % seed.len()])
+        .collect()
+}
 
 pub fn spawn_signal_thread(
-    config: AppConfig,
+    config: Arc<RwLock<AppConfig>>,
     taps: [Tap; 4],
     stats: Arc<RwLock<TestStats>>,
     stop_rx: crossbeam_channel::Receiver<()>,
 ) -> std::thread::JoinHandle<()> {
     #[cfg(feature = "cpal")]
-    if config.audio_source == AudioSource::LiveCapture {
+    if config.read().unwrap().audio_source == AudioSource::LiveCapture {
         return std::thread::spawn(move || run_live(config, taps, stats, stop_rx));
     }
     std::thread::spawn(move || run(config, taps, stats, stop_rx))
@@ -37,21 +53,27 @@ fn make_plugin(mode: &str) -> Box<dyn ModulationPlugin> {
     }
 }
 
+fn make_mod_config(config: &AppConfig) -> ModulationConfig {
+    ModulationConfig {
+        mode: config.mode.clone(),
+        center_frequency: 1500.0,
+        sample_rate: 8000,
+    }
+}
+
 fn run(
-    config: AppConfig,
+    config: Arc<RwLock<AppConfig>>,
     taps: [Tap; 4],
     stats: Arc<RwLock<TestStats>>,
     stop_rx: crossbeam_channel::Receiver<()>,
 ) {
-    let plugin = make_plugin(&config.mode);
-    let mod_config = ModulationConfig {
-        mode: config.mode.clone(),
-        center_frequency: 1500.0,
-        sample_rate: 8000,
-    };
-    let fec = config.fec_enabled.then(FecCodec::new);
-    let seed = config.seed_str.parse::<u64>().ok();
-    let channel_config = make_channel_config(&config);
+    let mut current = config.read().unwrap().clone();
+    let mut plugin = make_plugin(&current.mode);
+    let mut mod_config = make_mod_config(&current);
+    let mut fec = current.fec_enabled.then(FecCodec::new);
+
+    let seed = current.seed_str.parse::<u64>().ok();
+    let channel_config = make_channel_config(&current);
     let mut channel = match build_channel(&channel_config, seed) {
         Ok(c) => c,
         Err(e) => {
@@ -66,11 +88,9 @@ fn run(
         PowerSpectrum::new(),
         PowerSpectrum::new(),
     ];
-    let min_db = config.min_db;
-    let max_db = config.max_db;
+    let mut run_count: u64 = 0;
 
     loop {
-        // Pace the loop to ~50 iterations/s; also serves as the stop-check interval.
         if stop_rx
             .recv_timeout(std::time::Duration::from_millis(20))
             .is_ok()
@@ -78,9 +98,48 @@ fn run(
             break;
         }
 
+        // Apply any config changes from the UI.
+        let new_cfg = config.read().unwrap().clone();
+        if new_cfg != current {
+            if new_cfg.mode != current.mode {
+                plugin = make_plugin(&new_cfg.mode);
+                mod_config = make_mod_config(&new_cfg);
+            }
+            if new_cfg.fec_enabled != current.fec_enabled {
+                fec = new_cfg.fec_enabled.then(FecCodec::new);
+            }
+            if new_cfg.noise_model != current.noise_model
+                || new_cfg.snr_db != current.snr_db
+                || new_cfg.seed_str != current.seed_str
+            {
+                let seed = new_cfg.seed_str.parse::<u64>().ok();
+                let channel_config = make_channel_config(&new_cfg);
+                match build_channel(&channel_config, seed) {
+                    Ok(c) => channel = c,
+                    Err(e) => {
+                        tracing::error!("failed to rebuild channel model: {e}");
+                        break;
+                    }
+                }
+            }
+            current = new_cfg;
+        }
+
+        run_count += 1;
+        let min_db = current.min_db;
+        let max_db = current.max_db;
+        let payload = make_payload(current.payload_size, run_count);
+
+        // Compress payload before FEC. compress_if_smaller falls back to None when LZ4
+        // would expand the data, so compress_ratio is always ≤ 1.0.
+        let (compressed, actual_algo) = match current.compression {
+            CompressionAlgorithm::None => (payload.clone(), CompressionAlgorithm::None),
+            CompressionAlgorithm::Lz4 => compress_if_smaller(&payload),
+        };
+        let compress_ratio = compressed.len() as f64 / payload.len() as f64;
         let tx_payload = match &fec {
-            Some(codec) => codec.encode(PAYLOAD),
-            None => PAYLOAD.to_vec(),
+            Some(codec) => codec.encode(&compressed),
+            None => compressed,
         };
 
         let tx_samples = match plugin.modulate(&tx_payload, &mod_config) {
@@ -101,27 +160,43 @@ fn run(
         push_tap(&taps[2], &mut ps[2], &mixed, min_db, max_db);
 
         let rx_result = plugin.demodulate(&mixed, &mod_config);
+        // Show a clean re-modulated signal only when the decoded payload is bit-perfect.
+        // The BPSK demodulator returns Ok even for noise, so we must compare content:
+        // any byte error makes the spectrum look identical to a clean decode (same
+        // center + bandwidth), hiding the channel degradation from the user.
         let rx_samples = match &rx_result {
             Ok(decoded) => {
                 let base = match &fec {
                     Some(codec) => codec.decode(decoded).unwrap_or_else(|_| decoded.clone()),
                     None => decoded.clone(),
                 };
-                plugin
-                    .modulate(&base, &mod_config)
-                    .unwrap_or_else(|_| vec![0.0_f32; tx_samples.len()])
+                let plain = decompress(&base, actual_algo).unwrap_or_else(|_| base.clone());
+                if plain == payload {
+                    plugin
+                        .modulate(&tx_payload, &mod_config)
+                        .unwrap_or_else(|_| vec![0.0_f32; tx_samples.len()])
+                } else {
+                    vec![0.0_f32; tx_samples.len()]
+                }
             }
             Err(_) => vec![0.0_f32; tx_samples.len()],
         };
         push_tap(&taps[3], &mut ps[3], &rx_samples, min_db, max_db);
 
-        update_stats(&stats, &rx_result, &fec, PAYLOAD.len());
+        update_stats(
+            &stats,
+            &rx_result,
+            &fec,
+            actual_algo,
+            compress_ratio,
+            &payload,
+        );
     }
 }
 
 #[cfg(feature = "cpal")]
 fn run_live(
-    config: AppConfig,
+    config: Arc<RwLock<AppConfig>>,
     taps: [Tap; 4],
     stats: Arc<RwLock<TestStats>>,
     stop_rx: crossbeam_channel::Receiver<()>,
@@ -143,39 +218,38 @@ fn run_live(
         }
     };
 
-    let plugin = make_plugin(&config.mode);
-    let mod_config = ModulationConfig {
-        mode: config.mode.clone(),
-        center_frequency: 1500.0,
-        sample_rate: 8000,
-    };
-    let fec = config.fec_enabled.then(FecCodec::new);
+    let mut current = config.read().unwrap().clone();
+    let mut plugin = make_plugin(&current.mode);
+    let mut mod_config = make_mod_config(&current);
+    let mut fec = current.fec_enabled.then(FecCodec::new);
+
     let mut ps = [
         PowerSpectrum::new(),
         PowerSpectrum::new(),
         PowerSpectrum::new(),
         PowerSpectrum::new(),
     ];
-    let min_db = config.min_db;
-    let max_db = config.max_db;
 
     // Pre-modulate a TX reference frame shown in tap[0].
-    let tx_payload = match &fec {
-        Some(codec) => codec.encode(PAYLOAD),
-        None => PAYLOAD.to_vec(),
-    };
-    let tx_samples = match plugin.modulate(&tx_payload, &mod_config) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!("modulate error for TX ref: {e}");
-            return;
-        }
-    };
+    let mut tx_samples = build_tx_ref(&plugin, &mod_config, &fec);
 
     loop {
         if stop_rx.try_recv().is_ok() {
             break;
         }
+
+        // Apply any mode/fec changes from the UI.
+        let new_cfg = config.read().unwrap().clone();
+        if new_cfg.mode != current.mode || new_cfg.fec_enabled != current.fec_enabled {
+            plugin = make_plugin(&new_cfg.mode);
+            mod_config = make_mod_config(&new_cfg);
+            fec = new_cfg.fec_enabled.then(FecCodec::new);
+            tx_samples = build_tx_ref(&plugin, &mod_config, &fec);
+        }
+        current = new_cfg;
+
+        let min_db = current.min_db;
+        let max_db = current.max_db;
 
         // Tap[2]: raw audio captured from the soundcard.
         let captured = match input.read() {
@@ -188,7 +262,7 @@ fn run_live(
             }
         };
 
-        // Tap[0]: synthesized TX reference (updated each captured block).
+        // Tap[0]: synthesized TX reference (static while no mode change).
         push_tap(&taps[0], &mut ps[0], &tx_samples, min_db, max_db);
         push_tap(&taps[2], &mut ps[2], &captured, min_db, max_db);
 
@@ -208,10 +282,41 @@ fn run_live(
         };
         push_tap(&taps[3], &mut ps[3], &rx_samples, min_db, max_db);
 
-        update_stats(&stats, &rx_result, &fec, PAYLOAD.len());
+        // Live mode: count decode success/fail only — no BER against PAYLOAD.
+        {
+            let mut s = stats.write().unwrap();
+            s.runs += 1;
+            if rx_result.is_ok() {
+                s.ok += 1;
+            } else {
+                s.fail += 1;
+                if s.fail <= 10 || s.fail.is_multiple_of(100) {
+                    let msg = format!("Run {}: no signal decoded", s.runs);
+                    s.push_event(msg);
+                }
+            }
+        }
     }
 
     input.close();
+}
+
+#[cfg(feature = "cpal")]
+fn build_tx_ref(
+    plugin: &Box<dyn ModulationPlugin>,
+    mod_config: &ModulationConfig,
+    fec: &Option<FecCodec>,
+) -> Vec<f32> {
+    let tx_payload = match fec {
+        Some(codec) => codec.encode(PATTERN),
+        None => PATTERN.to_vec(),
+    };
+    plugin
+        .modulate(&tx_payload, mod_config)
+        .unwrap_or_else(|e| {
+            tracing::error!("modulate error for TX ref: {e}");
+            Vec::new()
+        })
 }
 
 fn push_tap(tap: &Tap, ps: &mut PowerSpectrum, samples: &[f32], min_db: f32, max_db: f32) {
@@ -224,25 +329,46 @@ fn update_stats(
     stats: &Arc<RwLock<TestStats>>,
     rx_result: &Result<Vec<u8>, openpulse_core::error::ModemError>,
     fec: &Option<FecCodec>,
-    payload_len: usize,
+    compression: CompressionAlgorithm,
+    compress_ratio: f64,
+    payload: &[u8],
 ) {
-    let n_bits = payload_len * 8;
+    const WINDOW_SECS: f64 = 1.5;
+    let n_bits = payload.len() * 8;
     let error_bits: u64 = match rx_result {
         Ok(decoded) => {
-            let plain = match fec {
+            let fec_out = match fec {
                 Some(codec) => codec.decode(decoded).unwrap_or_else(|_| decoded.clone()),
                 None => decoded.clone(),
             };
-            count_bit_errors(PAYLOAD, &plain)
+            let plain = decompress(&fec_out, compression).unwrap_or(fec_out);
+            count_bit_errors(payload, &plain)
         }
         Err(_) => n_bits as u64,
     };
+    let success = rx_result.is_ok() && error_bits == 0;
 
     let mut s = stats.write().unwrap();
     s.runs += 1;
     s.total_bits += n_bits as u64;
     s.error_bits += error_bits;
-    if rx_result.is_ok() && error_bits == 0 {
+    s.last_compress_ratio = compress_ratio;
+
+    // Sliding window: push this run's delivered bits and evict entries older than WINDOW_SECS.
+    let now = std::time::Instant::now();
+    let delivered = if success { n_bits as u64 } else { 0 };
+    s.rate_window.push_back((now, delivered));
+    let cutoff = now - std::time::Duration::from_secs_f64(WINDOW_SECS);
+    while s
+        .rate_window
+        .front()
+        .map(|(t, _)| *t < cutoff)
+        .unwrap_or(false)
+    {
+        s.rate_window.pop_front();
+    }
+
+    if success {
         s.ok += 1;
     } else {
         s.fail += 1;
@@ -277,7 +403,6 @@ fn make_channel_config(config: &AppConfig) -> ChannelModelConfig {
         }),
         NoiseModel::GilbertElliott => {
             let mut cfg = GilbertElliottConfig::moderate(None);
-            // Map SNR slider: keep the Good/Bad gap (15 dB) but honour the slider level.
             cfg.snr_good_db = snr;
             cfg.snr_bad_db = snr - 15.0;
             ChannelModelConfig::GilbertElliott(cfg)
@@ -316,5 +441,39 @@ fn make_channel_config(config: &AppConfig) -> ChannelModelConfig {
             amplitude: 0.5,
             sample_rate: 8000,
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{AppConfig, TapData, TestStats};
+
+    #[test]
+    fn run_loop_produces_tap_updates() {
+        let config = Arc::new(RwLock::new(AppConfig::default()));
+        let make_tap = || Arc::new(RwLock::new(TapData::new()));
+        let taps: [Tap; 4] = [make_tap(), make_tap(), make_tap(), make_tap()];
+        let stats = Arc::new(RwLock::new(TestStats::new()));
+        let (stop_tx, stop_rx) = crossbeam_channel::bounded(1);
+
+        let taps_clone = taps.clone();
+        let stats_clone = Arc::clone(&stats);
+        let config_clone = Arc::clone(&config);
+        let handle = std::thread::spawn(move || {
+            run(config_clone, taps_clone, stats_clone, stop_rx);
+        });
+
+        // Let the signal thread do a few iterations
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let _ = stop_tx.send(());
+        handle.join().expect("signal thread should not panic");
+
+        // Taps should have received data
+        for (i, tap) in taps.iter().enumerate() {
+            let gen = tap.read().unwrap().generation;
+            assert!(gen > 0, "tap[{i}] generation should be > 0, got {gen}");
+        }
+        assert!(stats.read().unwrap().runs > 0, "runs should be > 0");
     }
 }

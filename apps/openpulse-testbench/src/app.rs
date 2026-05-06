@@ -1,3 +1,5 @@
+use std::sync::{Arc, RwLock};
+
 use crate::signal_path::spawn_signal_thread;
 use crate::state::AppState;
 #[cfg(feature = "cpal")]
@@ -28,8 +30,11 @@ impl TestbenchApp {
         self.state.stop_tx = Some(stop_tx);
         self.state.running = true;
 
+        let shared_cfg = Arc::new(RwLock::new(self.state.config.clone()));
+        self.state.shared_config = Some(Arc::clone(&shared_cfg));
+
         self.signal_thread = Some(spawn_signal_thread(
-            self.state.config.clone(),
+            shared_cfg,
             self.state.taps.clone(),
             self.state.stats.clone(),
             stop_rx,
@@ -44,21 +49,29 @@ impl TestbenchApp {
             let _ = handle.join();
         }
         self.state.running = false;
+        self.state.shared_config = None;
     }
 }
 
 impl eframe::App for TestbenchApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Detect a signal thread that exited early (e.g. audio open failure).
-        if self.state.running {
-            if self
+        if self.state.running
+            && self
                 .signal_thread
                 .as_ref()
                 .map(|h| h.is_finished())
                 .unwrap_or(false)
-            {
-                self.signal_thread = None;
-                self.state.running = false;
+        {
+            self.signal_thread = None;
+            self.state.running = false;
+            self.state.shared_config = None;
+        }
+
+        // Propagate any UI config changes to the running signal thread.
+        if self.state.running {
+            if let Some(shared) = &self.state.shared_config {
+                *shared.write().unwrap() = self.state.config.clone();
             }
         }
 
@@ -104,6 +117,17 @@ impl eframe::App for TestbenchApp {
             ];
             let available_width = ui.available_width();
             let col_width = available_width / 4.0;
+
+            // Column captions row — drawn above the signal panels.
+            ui.horizontal(|ui| {
+                for &name in &panel_names {
+                    ui.allocate_ui(egui::vec2(col_width, 20.0), |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.strong(name);
+                        });
+                    });
+                }
+            });
 
             ui.horizontal(|ui| {
                 for (i, &name) in panel_names.iter().enumerate() {
