@@ -339,6 +339,40 @@ operator-enabled; it is never triggered automatically.
 **Dependencies**: hamlib integration (new `openpulse-hamlib` crate wrapping `rigctld` TCP
 interface), Phase 6.3 mesh layer (for relay-assisted QSY coordination).
 
+### FF-2 — I/Q output mode for direct SDR integration
+
+Allows OpenPulseHF to drive SDR radios (QMX, HermesLite 2, ADALM-Pluto, RTL-SDR TX,
+etc.) directly with complex baseband I/Q audio, achieving single-signal generation
+comparable to what the QMX does internally: zero unwanted sideband, zero residual carrier,
+no reliance on the transceiver's SSB filter for image suppression.
+
+**Motivation**: The current architecture generates a real-valued audio signal at ~1500 Hz
+and feeds it to a conventional SSB transceiver.  The radio's SSB filter provides sideband
+and carrier suppression, but with finite roll-off.  I/Q output bypasses this entirely:
+the modem generates complex baseband (I on left channel, Q on right channel of a stereo
+stream), and the SDR upconverts directly to RF with mathematically exact suppression.
+
+**Required changes**
+
+- `ModulationPlugin::modulate_iq()` — new optional trait method returning `(Vec<f32>,
+  Vec<f32>)` I/Q baseband samples at a configurable baseband rate (default 0 Hz centre,
+  i.e. DC-centred); default implementation wraps the existing real `modulate()` via
+  analytic signal (Hilbert transform).
+- `AudioBackend::open_iq_output()` — new optional trait method opening a stereo output
+  stream where left = I, right = Q; `CpalBackend` implements this when the device
+  supports stereo output; `LoopbackBackend` stores interleaved I/Q for testing.
+- `ModemEngine::transmit_iq()` — dispatches via `modulate_iq()` and `open_iq_output()`;
+  falls back to real `transmit()` if either is unavailable.
+- `openpulse-config`: `[audio] iq_output = true` flag; `iq_device` name override.
+- Native I/Q implementations in `bpsk-plugin` and `qpsk-plugin` (trivial — the
+  modulators already compute I/Q internally; the real output is just `I·cos - Q·sin`).
+
+**What this does NOT change**: the demodulator path, the wire protocol, FEC, framing,
+or any higher-layer logic.  It is purely a signal-generation and audio-output concern.
+
+**Dependencies**: Phase 6.2 (CpalBackend is already wired; stereo output needs testing
+on real hardware), SDR radio with stereo line-in capability (QMX, HermesLite, etc.).
+
 ---
 
 ## Dependency ordering summary
