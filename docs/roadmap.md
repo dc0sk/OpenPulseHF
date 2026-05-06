@@ -244,7 +244,7 @@ test relay automatic control point interface, publish compliance report as relea
 
 ## Phase 6 — AFC, Interoperability, and Network (Active)
 
-### 6.1 — AFC correction loop
+### 6.1 — AFC correction loop ✅ Done (PR #116)
 
 Close the automatic frequency control feedback path.  The IQ-squaring estimator
 (`estimate_frequency_offset` / `afc_estimate_hz`) already runs after every receive call
@@ -254,10 +254,11 @@ the correction step.
 - Add `afc_correction_hz: f32` field to `ModemEngine`; accumulated from `last_afc_offset_hz`
   with a configurable step size (default 0.1 × estimated offset per frame — slow loop).
 - Pass corrected carrier frequency `fc + afc_correction_hz` into each demodulate call.
-- Expose `enable_afc(bool)` and `reset_afc()` on `ModemEngine`; default enabled.
-- Add `AfcCorrection` field to `EngineEvent` so the TUI can display the running correction.
-- Integration tests: loopback with a 15 Hz TX/RX carrier offset; assert AFC converges to
-  within ±2 Hz within 10 frames at BPSK250.
+- Expose `enable_afc()`, `disable_afc()`, `reset_afc()`, `set_center_frequency()` on `ModemEngine`; default enabled.
+- `AfcUpdate` event extended with `correction_hz` field so TUI and NDJSON consumers see both
+  the residual estimate and the accumulated correction; `#[serde(default)]` for backward compat.
+- Integration tests: loopback with a 15 Hz TX/RX carrier offset; asserts AFC converges to
+  within ±2 Hz within 25 frames at BPSK100.
 
 ### 6.2 — pat / Winlink interoperability
 
