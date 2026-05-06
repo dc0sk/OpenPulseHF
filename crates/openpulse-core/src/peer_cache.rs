@@ -9,13 +9,14 @@ pub enum TrustLevel {
 }
 
 /// Filter criterion applied to `PeerCache::query` for the trust dimension.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TrustFilter {
     /// Only return peers with `PskVerified` or `Verified` trust.
     TrustedOnly,
     /// Return peers with any trust level except `Reduced`.
     TrustedOrUnknown,
     /// No trust filter — return all peers regardless of trust level.
+    #[default]
     Any,
 }
 

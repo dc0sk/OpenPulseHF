@@ -5,6 +5,7 @@
 
 use bpsk_plugin::BpskPlugin;
 use openpulse_audio::LoopbackBackend;
+use openpulse_core::peer_cache::TrustFilter;
 use openpulse_core::relay::{RelayEvent, RelayTrustPolicy};
 use openpulse_core::wire_query::{WireEnvelope, WireMsgType};
 use openpulse_mesh::{MeshDaemon, MeshEvent};
@@ -16,7 +17,9 @@ fn make_node(lb: &LoopbackBackend, peer_id: [u8; 32]) -> MeshDaemon {
     let mut engine = ModemEngine::new(Box::new(lb.clone_shared()));
     let _ = engine.register_plugin(Box::new(BpskPlugin::default()));
     let policy = RelayTrustPolicy::deny_relays([] as [&str; 0]);
-    MeshDaemon::new(engine, MODE, peer_id, 3, 0, 300_000, policy, 64, 3_600_000)
+    MeshDaemon::new(
+        engine, MODE, peer_id, 3, 0, 300_000, policy, 64, 3_600_000, [0u8; 32], "N0CALL",
+    )
 }
 
 /// A node with beacons enabled (beacon_interval_s=1).
@@ -24,7 +27,9 @@ fn make_beacon_node(lb: &LoopbackBackend, peer_id: [u8; 32]) -> MeshDaemon {
     let mut engine = ModemEngine::new(Box::new(lb.clone_shared()));
     let _ = engine.register_plugin(Box::new(BpskPlugin::default()));
     let policy = RelayTrustPolicy::deny_relays([] as [&str; 0]);
-    MeshDaemon::new(engine, MODE, peer_id, 3, 1, 300_000, policy, 64, 3_600_000)
+    MeshDaemon::new(
+        engine, MODE, peer_id, 3, 1, 300_000, policy, 64, 3_600_000, [0u8; 32], "N0CALL",
+    )
 }
 
 fn relay_envelope(src: [u8; 32], dst: [u8; 32], session_id: u64, nonce: u8) -> WireEnvelope {
@@ -232,5 +237,56 @@ fn peer_discovery_via_beacon() {
         node_a.peer_cache_len(),
         2,
         "A must now have self + B in cache"
+    );
+}
+
+/// Trust-level policy: a relay node with TrustedOnly policy rejects frames from
+/// Unknown peers (not in its cache) and emits PolicyRejected without forwarding.
+#[test]
+fn policy_rejects_unknown_peer() {
+    let peer_a = [40u8; 32];
+    let peer_b = [41u8; 32];
+    let peer_c = [42u8; 32];
+
+    let lb_a = LoopbackBackend::new();
+    let lb_b = LoopbackBackend::new();
+
+    let mut node_a = make_node(&lb_a, peer_a);
+
+    // Node B uses TrustedOnly policy; peer_a is not in its cache.
+    let mut engine_b = ModemEngine::new(Box::new(lb_b.clone_shared()));
+    let _ = engine_b.register_plugin(Box::new(BpskPlugin::default()));
+    let strict_policy =
+        RelayTrustPolicy::with_trust_filter([] as [&str; 0], TrustFilter::TrustedOnly);
+    let mut node_b = MeshDaemon::new(
+        engine_b,
+        MODE,
+        peer_b,
+        3,
+        0,
+        300_000,
+        strict_policy,
+        64,
+        3_600_000,
+        [0u8; 32],
+        "N0CALL",
+    );
+
+    let env = relay_envelope(peer_a, peer_c, 55, 4);
+    node_a.send_relay(env).unwrap();
+
+    let samples_a = lb_a.drain_samples();
+    lb_b.fill_samples(&samples_a);
+
+    let events_b = node_b.step(4000);
+    assert!(
+        events_b
+            .iter()
+            .any(|e| matches!(e, MeshEvent::Relay(RelayEvent::PolicyRejected { .. }))),
+        "B must emit PolicyRejected for unknown peer; got {events_b:?}"
+    );
+    assert!(
+        lb_b.drain_samples().is_empty(),
+        "B must not forward a policy-rejected frame"
     );
 }

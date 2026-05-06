@@ -3,6 +3,9 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
+use openpulse_core::trust::{CertificateSource, PublicKeyTrustLevel, SigningMode};
+use openpulse_modem::engine::SecureSessionParams;
+
 use crate::bridge::ModemBridge;
 use crate::error::ArdopError;
 use crate::state::TncState;
@@ -98,18 +101,39 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
             bridge
                 .set_state(TncState::Connecting { peer: peer.clone() })
                 .await;
-            // TODO: call engine.begin_secure_session() for real HPX handshake.
             bridge
                 .set_state(TncState::Connected { peer: peer.clone() })
                 .await;
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            if let Ok(mut engine) = bridge.engine.lock() {
+                let _ = engine.begin_secure_session(
+                    SecureSessionParams {
+                        local_minimum_mode: SigningMode::Normal,
+                        peer_supported_modes: vec![SigningMode::Normal],
+                        key_trust: PublicKeyTrustLevel::Unknown,
+                        certificate_source: CertificateSource::OverAir,
+                        psk_validated: false,
+                    },
+                    now_ms,
+                );
+            }
             // Both state transitions returned as direct responses in order.
             vec!["NEWSTATE CONNECTING".into(), format!("CONNECTED {peer}")]
         }
 
         "DISCONNECT" => {
             bridge.set_state(TncState::Disconnecting).await;
-            // TODO: call engine.end_secure_session().
             bridge.set_state(TncState::Disc).await;
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            if let Ok(mut engine) = bridge.engine.lock() {
+                let _ = engine.end_secure_session(now_ms);
+            }
             vec!["NEWSTATE DISCONNECTING".into(), "DISCONNECTED".into()]
         }
 

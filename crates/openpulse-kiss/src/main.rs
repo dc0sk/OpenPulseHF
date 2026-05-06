@@ -91,6 +91,19 @@ async fn main() -> anyhow::Result<()> {
         config.port
     );
 
+    if cfg.relay.enabled {
+        tracing::info!(
+            max_hops = cfg.relay.max_hops,
+            "relay forwarding enabled (multi-hop relay not yet wired into KISS bridge)"
+        );
+    }
+    if !cfg.trust.store_path.is_empty() {
+        tracing::warn!(
+            path = %cfg.trust.store_path,
+            "trust.store_path is set but trust store loading is not yet implemented"
+        );
+    }
+
     KissServer::new(engine, config).run().await?;
     Ok(())
 }
