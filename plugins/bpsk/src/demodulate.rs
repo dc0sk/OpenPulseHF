@@ -5,7 +5,7 @@
 //! ```text
 //! audio samples
 //!   → multiply by I/Q reference carriers
-//!   → matched-filter (Hann window) integration per symbol period
+//!   → matched-filter (half-Hann w_tail) integration per symbol period
 //!   → timing search over first symbol period (brute-force energy maximisation)
 //!   → differential phase detection (NRZI decode)
 //!   → bits → bytes
@@ -258,7 +258,7 @@ fn expected_preamble_symbols(len: usize) -> Vec<f32> {
 // ── IQ demodulation ───────────────────────────────────────────────────────────
 
 /// Mix `samples` with I and Q reference carriers, apply the matched filter
-/// (Hann window) and integrate over each symbol period.
+/// (half-Hann w_tail, 1→0) and integrate over each symbol period.
 ///
 /// Returns `(i_values, q_values)` — one value per symbol.
 fn demodulate_iq(
