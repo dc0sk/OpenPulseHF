@@ -9,3 +9,14 @@ pub enum PttError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
+
+/// Error type for full rig CAT control operations.
+#[derive(Debug, Error)]
+pub enum RadioError {
+    #[error("rigctld I/O error: {0}")]
+    RigctldIo(#[from] std::io::Error),
+    #[error("rigctld protocol error: {0}")]
+    RigctldProtocol(String),
+    #[error("parse error: {0}")]
+    Parse(String),
+}
