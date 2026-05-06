@@ -187,6 +187,13 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
             vec!["FECRCV".into()]
         }
 
+        "CONNECT_MESH" => {
+            bridge
+                .mesh_mode
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            vec!["CONNECT_MESH".into()]
+        }
+
         "PING" => vec!["PONG".into()],
 
         "CLOSE" => vec![],

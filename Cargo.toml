@@ -15,6 +15,7 @@ members = [
     "crates/openpulse-config",
     "crates/openpulse-gateway",
     "crates/openpulse-tui",
+    "crates/openpulse-mesh",
     "plugins/bpsk",
     "plugins/fsk4",
     "plugins/psk8",
@@ -42,6 +43,7 @@ openpulse-b2f     = { path = "crates/openpulse-b2f" }
 openpulse-b2f-driver = { path = "crates/openpulse-b2f-driver" }
 openpulse-config     = { path = "crates/openpulse-config" }
 openpulse-gateway    = { path = "crates/openpulse-gateway" }
+openpulse-mesh       = { path = "crates/openpulse-mesh" }
 bpsk-plugin       = { path = "plugins/bpsk" }
 fsk4-plugin       = { path = "plugins/fsk4" }
 psk8-plugin       = { path = "plugins/psk8" }

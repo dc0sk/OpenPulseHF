@@ -278,6 +278,15 @@ async fn ping_pong() {
 }
 
 #[tokio::test]
+async fn connect_mesh_command() {
+    let (cmd_port, _) = start_server(false).await;
+    let stream = TcpStream::connect(("127.0.0.1", cmd_port)).await.unwrap();
+    let mut reader = BufReader::new(stream);
+    let resp = cmd(&mut reader, "CONNECT_MESH").await;
+    assert_eq!(resp, "CONNECT_MESH");
+}
+
+#[tokio::test]
 async fn fecsend_command_acknowledged() {
     let (cmd_port, _) = start_server(false).await;
     let stream = TcpStream::connect(("127.0.0.1", cmd_port)).await.unwrap();

@@ -30,6 +30,7 @@ pub struct OpenpulseConfig {
     pub logging: LoggingConfig,
     pub relay: RelayConfig,
     pub trust: TrustConfig,
+    pub mesh: MeshConfig,
 }
 
 /// Station identity.
@@ -100,6 +101,27 @@ pub struct TrustConfig {
     pub store_path: String,
 }
 
+/// Mesh daemon settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct MeshConfig {
+    /// Enable the mesh relay daemon.
+    pub enabled: bool,
+    /// Maximum relay hop count (envelope dropped when hop_index reaches this).
+    pub max_hops: u8,
+    /// Relay trust policy: `"strict"` (Verified only), `"balanced"` (PskVerified+),
+    /// or `"permissive"` (any).
+    pub relay_policy: String,
+    /// Store-and-forward frame TTL in seconds.
+    pub store_forward_ttl_s: u64,
+    /// Peer discovery beacon interval in seconds.
+    pub beacon_interval_s: u64,
+    /// Maximum entries in the local peer cache.
+    pub peer_cache_capacity: usize,
+    /// Peer cache entry TTL in seconds.
+    pub peer_cache_ttl_s: u64,
+}
+
 // ── Defaults ──────────────────────────────────────────────────────────────────
 
 impl Default for StationConfig {
@@ -160,6 +182,20 @@ impl Default for RelayConfig {
         Self {
             enable: false,
             max_hops: 3,
+        }
+    }
+}
+
+impl Default for MeshConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_hops: 3,
+            relay_policy: "balanced".into(),
+            store_forward_ttl_s: 300,
+            beacon_interval_s: 60,
+            peer_cache_capacity: 256,
+            peer_cache_ttl_s: 3600,
         }
     }
 }
@@ -251,6 +287,22 @@ level = "info"
 enable = false
 # Maximum relay hop count.
 max_hops = 3
+
+[mesh]
+# Enable the openpulse-mesh daemon relay stack.
+enabled = false
+# Maximum relay hop count before a frame is dropped.
+max_hops = 3
+# Relay trust policy: strict | balanced | permissive
+relay_policy = "balanced"
+# Store-and-forward frame TTL in seconds.
+store_forward_ttl_s = 300
+# Peer discovery beacon interval in seconds.
+beacon_interval_s = 60
+# Maximum peer cache entries.
+peer_cache_capacity = 256
+# Peer cache entry TTL in seconds.
+peer_cache_ttl_s = 3600
 
 [trust]
 # Path to the local trust store directory. Empty = platform default.
