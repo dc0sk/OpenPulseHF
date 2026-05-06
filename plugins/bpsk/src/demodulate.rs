@@ -285,8 +285,11 @@ fn demodulate_iq(
             let global_n = (offset + sym_start + i) as f32;
             let sample = effective[sym_start + i];
 
-            // Matched filter: same Hann window used by the modulator.
-            let window = 0.5 * (1.0 - (two_pi * i as f32 / n as f32).cos());
+            // Matched filter for the overlapping half-Hann modulator: the
+            // decreasing half (w_tail = 1→0) correlates with the current
+            // symbol's tail and is approximately orthogonal to the next
+            // symbol's rising head, keeping ISI below the decision threshold.
+            let window = 0.5 * (1.0 + (PI * i as f32 / n as f32).cos());
 
             let t = global_n / fs;
             let ci = (two_pi * fc * t).cos();

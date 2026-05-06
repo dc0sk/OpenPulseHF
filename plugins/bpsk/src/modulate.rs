@@ -47,19 +47,26 @@ pub fn bpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
     let two_pi = 2.0 * PI;
 
     for (sym_idx, &phase_neg) in symbols.iter().enumerate() {
-        let amplitude = if phase_neg { -1.0f32 } else { 1.0f32 };
+        let a_curr = if phase_neg { -1.0f32 } else { 1.0f32 };
+        // Next symbol amplitude for the crossfade tail; fade to silence at end of frame.
+        let a_next = symbols
+            .get(sym_idx + 1)
+            .map(|&neg| if neg { -1.0f32 } else { 1.0f32 })
+            .unwrap_or(0.0f32);
         let sym_start = sym_idx * n;
 
         for i in 0..n {
-            // Raised-cosine (Hann) amplitude envelope – smoothly ramps 0→1→0
-            // across the symbol period, eliminating abrupt phase-change clicks.
-            let envelope = 0.5 * (1.0 - (two_pi * i as f32 / n as f32).cos());
+            // 50 % overlapping Hann crossfade: the tail of the current symbol
+            // blends into the head of the next.  When adjacent symbols share the
+            // same phase the instantaneous amplitude stays at 1 (no sidelobes);
+            // when they differ it dips to zero at the midpoint (clean transition).
+            let w_tail = 0.5 * (1.0 + (PI * i as f32 / n as f32).cos());
+            let w_head = 1.0 - w_tail;
 
-            // The global sample index determines the carrier phase.
             let t = (sym_start + i) as f32 / fs;
             let carrier = (two_pi * fc * t).cos();
 
-            out[sym_start + i] = amplitude * envelope * carrier;
+            out[sym_start + i] = (a_curr * w_tail + a_next * w_head) * carrier;
         }
     }
 
