@@ -173,6 +173,20 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
 
         "SENDID" => vec!["SENDID".into()],
 
+        "FECSEND" => {
+            bridge
+                .fec_tx
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            vec!["FECSEND".into()]
+        }
+
+        "FECRCV" => {
+            bridge
+                .fec_rx
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            vec!["FECRCV".into()]
+        }
+
         "PING" => vec!["PONG".into()],
 
         "CLOSE" => vec![],
