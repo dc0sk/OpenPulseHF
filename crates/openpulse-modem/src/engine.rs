@@ -58,6 +58,14 @@ pub struct ModemEngine {
     active_handshake: Option<HandshakeDecision>,
     /// Carrier frequency offset estimate from the most recent demodulation call.
     last_afc_offset_hz: Option<f32>,
+    /// Accumulated AFC carrier correction applied to demodulation (Hz).
+    afc_correction_hz: f32,
+    /// Whether the AFC tracking loop is active (default: true).
+    afc_enabled: bool,
+    /// Fraction of the estimated offset applied to the correction each frame.
+    afc_step: f32,
+    /// Audio centre frequency used for modulation and demodulation (Hz).
+    center_frequency: f32,
     rate_adapter: Option<RateAdapter>,
     session_profile: Option<SessionProfile>,
     dcd: DcdState,
@@ -79,6 +87,10 @@ impl ModemEngine {
             trust_policy_profile: PolicyProfile::Balanced,
             active_handshake: None,
             last_afc_offset_hz: None,
+            afc_correction_hz: 0.0,
+            afc_enabled: true,
+            afc_step: 0.1,
+            center_frequency: 1500.0,
             rate_adapter: None,
             session_profile: None,
             dcd: DcdState::new(0.01, 800), // 100 ms hold at 8 kHz
@@ -113,6 +125,37 @@ impl ModemEngine {
     /// if the active plugin does not support AFC.
     pub fn last_afc_offset_hz(&self) -> Option<f32> {
         self.last_afc_offset_hz
+    }
+
+    /// Returns the accumulated AFC carrier correction applied to demodulation (Hz).
+    pub fn afc_correction_hz(&self) -> f32 {
+        self.afc_correction_hz
+    }
+
+    /// Sets the audio centre frequency used for modulation and demodulation.
+    pub fn set_center_frequency(&mut self, hz: f32) {
+        self.center_frequency = hz;
+    }
+
+    /// Returns the audio centre frequency.
+    pub fn center_frequency(&self) -> f32 {
+        self.center_frequency
+    }
+
+    /// Enable the AFC tracking loop (default: enabled).
+    pub fn enable_afc(&mut self) {
+        self.afc_enabled = true;
+    }
+
+    /// Disable the AFC tracking loop.
+    pub fn disable_afc(&mut self) {
+        self.afc_enabled = false;
+    }
+
+    /// Reset the accumulated AFC correction and offset estimate to zero.
+    pub fn reset_afc(&mut self) {
+        self.afc_correction_hz = 0.0;
+        self.last_afc_offset_hz = None;
     }
 
     /// Enable 0.3-persistence CSMA channel access control.
@@ -467,6 +510,7 @@ impl ModemEngine {
         if let Some(hz) = self.last_afc_offset_hz {
             let _ = self.event_tx.send(EngineEvent::AfcUpdate {
                 offset_hz: hz,
+                correction_hz: self.afc_correction_hz,
                 mode: mode.to_string(),
             });
         }
@@ -555,6 +599,7 @@ impl ModemEngine {
         if let Some(hz) = self.last_afc_offset_hz {
             let _ = self.event_tx.send(EngineEvent::AfcUpdate {
                 offset_hz: hz,
+                correction_hz: self.afc_correction_hz,
                 mode: mode.to_string(),
             });
         }
@@ -641,6 +686,7 @@ impl ModemEngine {
         if let Some(hz) = self.last_afc_offset_hz {
             let _ = self.event_tx.send(EngineEvent::AfcUpdate {
                 offset_hz: hz,
+                correction_hz: self.afc_correction_hz,
                 mode: mode.to_string(),
             });
         }
@@ -678,6 +724,7 @@ impl ModemEngine {
         let _stage = PipelineStage::EncodeModulate;
         let mod_cfg = ModulationConfig {
             mode: mode.to_string(),
+            center_frequency: self.center_frequency,
             ..ModulationConfig::default()
         };
         let samples = plugin.modulate(&wire.bytes, &mod_cfg)?;
@@ -724,12 +771,19 @@ impl ModemEngine {
     fn update_afc_estimate(&mut self, mode: &str, samples: &[f32]) {
         let mod_cfg = ModulationConfig {
             mode: mode.to_string(),
+            center_frequency: self.center_frequency + self.afc_correction_hz,
             ..ModulationConfig::default()
         };
-        self.last_afc_offset_hz = self
+        let estimate = self
             .plugins
             .get(mode)
             .and_then(|p| p.estimate_afc_hz(samples, &mod_cfg));
+        self.last_afc_offset_hz = estimate;
+        if self.afc_enabled {
+            if let Some(offset) = estimate {
+                self.afc_correction_hz += self.afc_step * offset;
+            }
+        }
     }
 
     fn stage_demodulate_payload(
@@ -741,6 +795,7 @@ impl ModemEngine {
         let _stage = PipelineStage::DemodulateDecode;
         let mod_cfg = ModulationConfig {
             mode: mode.to_string(),
+            center_frequency: self.center_frequency + self.afc_correction_hz,
             ..ModulationConfig::default()
         };
         let wire_bytes = plugin.demodulate(&samples.samples, &mod_cfg)?;
