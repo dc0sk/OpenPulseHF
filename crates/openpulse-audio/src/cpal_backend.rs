@@ -119,12 +119,11 @@ impl AudioBackend for CpalBackend {
                 .default_input_device()
                 .ok_or_else(|| AudioError::DeviceNotFound("no default input device".into()))?,
             Some(name) => {
-                let all = self
+                let mut all = self
                     .host
                     .input_devices()
                     .map_err(|e| AudioError::Stream(e.to_string()))?;
-                all.filter(|d| d.name().ok().as_deref() == Some(name))
-                    .next()
+                all.find(|d| d.name().ok().as_deref() == Some(name))
                     .ok_or_else(|| AudioError::DeviceNotFound(name.to_string()))?
             }
         };
@@ -178,12 +177,11 @@ impl AudioBackend for CpalBackend {
                 .default_output_device()
                 .ok_or_else(|| AudioError::DeviceNotFound("no default output device".into()))?,
             Some(name) => {
-                let all = self
+                let mut all = self
                     .host
                     .output_devices()
                     .map_err(|e| AudioError::Stream(e.to_string()))?;
-                all.filter(|d| d.name().ok().as_deref() == Some(name))
-                    .next()
+                all.find(|d| d.name().ok().as_deref() == Some(name))
                     .ok_or_else(|| AudioError::DeviceNotFound(name.to_string()))?
             }
         };
