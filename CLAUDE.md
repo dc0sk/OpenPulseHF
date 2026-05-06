@@ -357,6 +357,14 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 - Build with real audio: `cargo build --release -p openpulse-kiss --features cpal` / `--features cpal` for ardop
 - `docs/on-air_testplan.md`: hardware prereqs, station config template, audio path verification (Python KISS frame sender), test matrix (BPSK250 exchange, rate adaptation, Winlink CMS via RF, multi-mode ladder, ID compliance), regulatory checklist, diagnostics table
 
+**Phase 5.7 — Testbench live audio capture** ✅ Done (PR #108)
+- `apps/openpulse-testbench/Cargo.toml`: `cpal` feature gates `openpulse-audio/cpal-backend`
+- `AudioSource` enum (`Synthetic` / `LiveCapture`); `AppConfig::audio_source` field
+- `run_live()`: opens default system input at 8 kHz mono, captures audio into tap[2], demodulates into tap[3], synthesized TX reference in tap[0]; failure propagated to stats event log
+- Source combo (cpal only) disabled while simulation is running; panel labels update to match live mode
+- `JoinHandle::is_finished()` check in `update()` auto-clears `running` when thread exits early
+- Build: `cargo build --release -p openpulse-testbench --features cpal`
+
 These must be confirmed by the user before the relevant implementation starts. Do not implement speculatively.
 
 ### SAR wire format — Resolved (Option B implemented)
