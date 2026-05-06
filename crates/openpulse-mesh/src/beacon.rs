@@ -10,6 +10,7 @@ pub struct BeaconScheduler {
 }
 
 impl BeaconScheduler {
+    /// Create a new scheduler.  `interval_s = 0` disables beacons (`is_due` always returns false).
     pub fn new(interval_s: u64) -> Self {
         Self {
             interval_ms: interval_s * 1000,
@@ -19,8 +20,10 @@ impl BeaconScheduler {
     }
 
     /// Returns `true` if a beacon is due at `now_ms`.
+    ///
+    /// Always `false` when `interval_s` was 0 at construction time.
     pub fn is_due(&self, now_ms: u64) -> bool {
-        now_ms >= self.last_sent_ms + self.interval_ms
+        self.interval_ms > 0 && now_ms >= self.last_sent_ms + self.interval_ms
     }
 
     /// Build the next beacon envelope and advance the scheduler.

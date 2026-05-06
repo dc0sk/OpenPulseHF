@@ -2,12 +2,12 @@
 
 use anyhow::Result;
 use clap::Parser;
+use sha2::{Digest, Sha256};
 use tracing::info;
 
 use bpsk_plugin::BpskPlugin;
 use fsk4_plugin::Fsk4Plugin;
 use openpulse_audio::LoopbackBackend;
-use openpulse_config::MeshConfig;
 use openpulse_mesh::MeshDaemon;
 use openpulse_modem::ModemEngine;
 use psk8_plugin::Psk8Plugin;
@@ -46,7 +46,7 @@ fn main() -> Result<()> {
         )
         .init();
 
-    let mesh_cfg: MeshConfig = cfg.mesh.clone();
+    let mesh_cfg = cfg.mesh.clone();
     if !mesh_cfg.enabled {
         info!("mesh is disabled in config; set [mesh] enabled = true to start");
         return Ok(());
@@ -54,18 +54,25 @@ fn main() -> Result<()> {
 
     let mode = cli.mode.unwrap_or_else(|| cfg.modem.mode.clone());
     let max_hops = cli.max_hops.unwrap_or(mesh_cfg.max_hops);
+    let ttl_ms = mesh_cfg.store_forward_ttl_s * 1000;
 
     // Build engine (loopback for now; CpalBackend behind feature flag later).
     let lb = LoopbackBackend::new();
     let mut engine = ModemEngine::new(Box::new(lb));
-    engine.register_plugin(Box::new(BpskPlugin::default()));
-    engine.register_plugin(Box::new(Fsk4Plugin::default()));
-    engine.register_plugin(Box::new(QpskPlugin::default()));
-    engine.register_plugin(Box::new(Psk8Plugin::default()));
+    let _ = engine.register_plugin(Box::new(BpskPlugin::default()));
+    let _ = engine.register_plugin(Box::new(Fsk4Plugin::default()));
+    let _ = engine.register_plugin(Box::new(QpskPlugin::default()));
+    let _ = engine.register_plugin(Box::new(Psk8Plugin::default()));
 
-    // Local peer ID from station callsign hash (placeholder seed).
+    // Stable peer ID derived from callsign via SHA-256 (full 32 bytes).
+    // TODO: replace with a persisted Ed25519 signing keypair so the peer_id
+    // is a real Ed25519 verifying key, matching PeerDescriptor semantics.
     let local_peer_id = peer_id_from_callsign(&cfg.station.callsign);
 
+    // relay_policy string is preserved in config for future trust-level filtering;
+    // RelayTrustPolicy currently models only a deny-list — no peers are denied by
+    // default. The "strict/balanced/permissive" modes will map to minimum trust
+    // levels once RelayTrustPolicy gains that capability.
     let policy = RelayTrustPolicy::deny_relays([] as [&str; 0]);
 
     let mut daemon = MeshDaemon::new(
@@ -74,6 +81,7 @@ fn main() -> Result<()> {
         local_peer_id,
         max_hops,
         mesh_cfg.beacon_interval_s,
+        ttl_ms,
         policy,
     );
 
@@ -81,6 +89,7 @@ fn main() -> Result<()> {
         callsign = %cfg.station.callsign,
         mode = %mode,
         max_hops = max_hops,
+        relay_policy = %mesh_cfg.relay_policy,
         "openpulse-mesh started"
     );
 
@@ -99,13 +108,10 @@ fn main() -> Result<()> {
     }
 }
 
+/// Derive a stable 32-byte peer ID from a callsign using SHA-256.
+///
+/// This is a placeholder until proper Ed25519 keypair persistence is implemented.
 fn peer_id_from_callsign(callsign: &str) -> [u8; 32] {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    callsign.hash(&mut hasher);
-    let h = hasher.finish();
-    let mut id = [0u8; 32];
-    id[..8].copy_from_slice(&h.to_le_bytes());
-    id
+    let hash = Sha256::digest(callsign.to_uppercase().as_bytes());
+    hash.into()
 }

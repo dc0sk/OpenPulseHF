@@ -89,7 +89,7 @@ pub struct LoggingConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RelayConfig {
-    pub enable: bool,
+    pub enabled: bool,
     pub max_hops: u8,
 }
 
@@ -109,12 +109,13 @@ pub struct MeshConfig {
     pub enabled: bool,
     /// Maximum relay hop count (envelope dropped when hop_index reaches this).
     pub max_hops: u8,
-    /// Relay trust policy: `"strict"` (Verified only), `"balanced"` (PskVerified+),
-    /// or `"permissive"` (any).
+    /// Relay trust policy string: `"strict"`, `"balanced"`, or `"permissive"`.
+    /// Reserved for future trust-level filtering; `RelayTrustPolicy` currently
+    /// models a deny-list of peer IDs and does not yet enforce this value.
     pub relay_policy: String,
-    /// Store-and-forward frame TTL in seconds.
+    /// Store-and-forward frame TTL in seconds (passed to `RelayForwarder` as ttl_ms).
     pub store_forward_ttl_s: u64,
-    /// Peer discovery beacon interval in seconds.
+    /// Peer discovery beacon interval in seconds; 0 disables beacons.
     pub beacon_interval_s: u64,
     /// Maximum entries in the local peer cache.
     pub peer_cache_capacity: usize,
@@ -180,7 +181,7 @@ impl Default for LoggingConfig {
 impl Default for RelayConfig {
     fn default() -> Self {
         Self {
-            enable: false,
+            enabled: false,
             max_hops: 3,
         }
     }
@@ -284,7 +285,7 @@ level = "info"
 
 [relay]
 # Enable multi-hop relay forwarding.
-enable = false
+enabled = false
 # Maximum relay hop count.
 max_hops = 3
 
@@ -337,7 +338,7 @@ mod tests {
         assert_eq!(cfg.kiss.port, 8100);
         assert_eq!(cfg.modem.mode, "BPSK250");
         assert_eq!(cfg.logging.level, "info");
-        assert!(!cfg.relay.enable);
+        assert!(!cfg.relay.enabled);
         assert_eq!(cfg.relay.max_hops, 3);
     }
 
