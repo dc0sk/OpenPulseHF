@@ -2,7 +2,6 @@
 
 use anyhow::Result;
 use clap::Parser;
-use sha2::{Digest, Sha256};
 use tracing::info;
 
 use bpsk_plugin::BpskPlugin;
@@ -14,6 +13,7 @@ use psk8_plugin::Psk8Plugin;
 use qpsk_plugin::QpskPlugin;
 
 use openpulse_core::relay::RelayTrustPolicy;
+use openpulse_mesh::trust_filter_from_policy;
 
 #[derive(Parser)]
 #[command(name = "openpulse-mesh", about = "HPX relay mesh daemon")]
@@ -64,16 +64,15 @@ fn main() -> Result<()> {
     let _ = engine.register_plugin(Box::new(QpskPlugin::default()));
     let _ = engine.register_plugin(Box::new(Psk8Plugin::default()));
 
-    // Stable peer ID derived from callsign via SHA-256 (full 32 bytes).
-    // TODO: replace with a persisted Ed25519 signing keypair so the peer_id
-    // is a real Ed25519 verifying key, matching PeerDescriptor semantics.
-    let local_peer_id = peer_id_from_callsign(&cfg.station.callsign);
+    // Load or generate a persistent Ed25519 signing key seed.
+    // peer_id is the 32-byte Ed25519 verifying key derived from that seed.
+    let seed = openpulse_config::load_or_generate_identity()?;
+    let local_peer_id = ed25519_dalek::SigningKey::from_bytes(&seed)
+        .verifying_key()
+        .to_bytes();
 
-    // relay_policy string is preserved in config for future trust-level filtering;
-    // RelayTrustPolicy currently models only a deny-list — no peers are denied by
-    // default. The "strict/balanced/permissive" modes will map to minimum trust
-    // levels once RelayTrustPolicy gains that capability.
-    let policy = RelayTrustPolicy::deny_relays([] as [&str; 0]);
+    let trust_filter = trust_filter_from_policy(&mesh_cfg.relay_policy);
+    let policy = RelayTrustPolicy::with_trust_filter([] as [&str; 0], trust_filter);
 
     let mut daemon = MeshDaemon::new(
         engine,
@@ -85,6 +84,8 @@ fn main() -> Result<()> {
         policy,
         mesh_cfg.peer_cache_capacity,
         mesh_cfg.peer_cache_ttl_s.saturating_mul(1000),
+        seed,
+        cfg.station.callsign.clone(),
     );
 
     info!(
@@ -108,12 +109,4 @@ fn main() -> Result<()> {
 
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-}
-
-/// Derive a stable 32-byte peer ID from a callsign using SHA-256.
-///
-/// This is a placeholder until proper Ed25519 keypair persistence is implemented.
-fn peer_id_from_callsign(callsign: &str) -> [u8; 32] {
-    let hash = Sha256::digest(callsign.to_uppercase().as_bytes());
-    hash.into()
 }

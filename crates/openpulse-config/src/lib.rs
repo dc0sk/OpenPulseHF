@@ -16,6 +16,8 @@ pub enum ConfigError {
     Io(#[from] std::io::Error),
     #[error("failed to parse config file: {0}")]
     Parse(#[from] toml::de::Error),
+    #[error("identity key file has wrong length (expected 32 bytes)")]
+    IdentityKeyLength,
 }
 
 /// Top-level configuration.
@@ -232,6 +234,50 @@ pub fn load_from(path: &Path) -> Result<OpenpulseConfig, ConfigError> {
     Ok(config)
 }
 
+/// Load or generate the node's 32-byte Ed25519 signing key seed.
+///
+/// Reads `identity.key` from the platform config directory (`~/.config/openpulse/`).
+/// If absent, generates a fresh random seed, persists it, then returns it.
+/// The caller derives `peer_id = SigningKey::from_bytes(&seed).verifying_key().to_bytes()`.
+pub fn load_or_generate_identity() -> Result<[u8; 32], ConfigError> {
+    let path = default_identity_path().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "cannot determine config directory",
+        )
+    })?;
+    load_identity_from(&path)
+}
+
+/// Load or generate an identity seed at an explicit path (useful in tests).
+pub fn load_identity_from(path: &Path) -> Result<[u8; 32], ConfigError> {
+    if path.exists() {
+        let bytes = std::fs::read(path)?;
+        if bytes.len() != 32 {
+            return Err(ConfigError::IdentityKeyLength);
+        }
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&bytes);
+        return Ok(seed);
+    }
+
+    use rand::RngCore;
+    let mut seed = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut seed);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, seed)?;
+    Ok(seed)
+}
+
+/// Returns the platform-standard identity key file path.
+///
+/// On Linux: `~/.config/openpulse/identity.key`
+fn default_identity_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("openpulse").join("identity.key"))
+}
+
 /// Returns a commented TOML configuration template for `openpulse config init`.
 pub fn init_template() -> String {
     r#"# OpenPulse configuration file
@@ -383,5 +429,24 @@ mod tests {
         assert_eq!(cfg.station.grid_square, "AA00");
         assert_eq!(cfg.ardop.cmd_port, 8515);
         assert_eq!(cfg.modem.ptt_backend, "none");
+    }
+
+    #[test]
+    fn load_twice_returns_same_seed() {
+        // Use a unique temp dir to avoid polluting the real config directory.
+        let tmp = std::env::temp_dir().join(format!("openpulse_id_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let key_path = tmp.join("identity.key");
+        let _ = std::fs::remove_file(&key_path);
+
+        // First call creates the key file.
+        let seed1 = load_identity_from(&key_path).unwrap();
+        assert_eq!(seed1.len(), 32);
+        // Second call reads the same seed.
+        let seed2 = load_identity_from(&key_path).unwrap();
+        assert_eq!(seed1, seed2);
+
+        let _ = std::fs::remove_file(&key_path);
+        let _ = std::fs::remove_dir(&tmp);
     }
 }

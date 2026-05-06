@@ -303,7 +303,203 @@ nodes can answer peer-query requests from their cached knowledge.
 
 ---
 
-## Far Future
+## Phase 7 — Operator Panel and Dual-Rig Control
+
+### 7.1 — Hamlib full CAT control (`openpulse-radio` extension)
+
+Extend `openpulse-radio` beyond PTT to full rig CAT control via the existing `rigctld`
+TCP interface.  The existing `RigctldPtt` already holds a TCP connection; this task
+promotes it to a general-purpose `RigctldController`.
+
+**New API surface (`openpulse-radio`)**
+- `RigctldController`: wraps a `TcpStream` to `rigctld`; exposes:
+  - `set_frequency(hz: u64)` / `get_frequency() -> u64`
+  - `set_mode(mode: RigMode)` / `get_mode() -> RigMode`  (`RigMode` enum: USB, LSB, FM, AM, CW, …)
+  - `get_signal_strength() -> i32` — S-meter reading in dBm
+  - `get_power_out() -> f32` — forward power in watts
+  - `get_alc() -> f32` — ALC level (0.0–1.0)
+  - `get_swr() -> f32` — SWR reading
+  - `ptt_on()` / `ptt_off()` — replaces `RigctldPtt`
+- All methods return `Result<T, RadioError>`; `RadioError` gains a `RigctldIo` variant.
+- `[radio]` TOML section: `rigctld_addr` (default `"127.0.0.1:4532"`); no breaking change
+  to existing PTT-only config.
+
+**Integration tests** (`crates/openpulse-radio/tests/rigctld_integration.rs`):
+- Mock `rigctld` TCP server responding to `\get_freq`, `\set_freq`, `\get_level STRENGTH`, etc.
+- Round-trip: set frequency → read back; set mode → read back; S-meter parse.
+
+**Dependencies**: none (rigctld TCP protocol is already understood from `RigctldPtt`).
+
+---
+
+### 7.2 — Dual-rig support and cross-band repeater
+
+Add support for a second transceiver and wire both into a cross-band repeater mode.
+
+**Config**
+
+```toml
+[radio.rig_a]
+rigctld_addr = "127.0.0.1:4532"   # primary rig (RX/TX for normal operation)
+
+[radio.rig_b]
+rigctld_addr = "127.0.0.1:4533"   # secondary rig (TX for cross-band repeater)
+```
+
+**New crate: `openpulse-repeater`** (or module in `openpulse-mesh`):
+- `CrossBandRepeater`: holds two `RigctldController` instances and two `ModemEngine`
+  instances (one per audio device); configurable from `[repeater]` TOML section.
+- Repeater loop: `rig_a` engine receives a decoded frame → re-encode → `rig_b` transmits.
+- PTT sequencing: `rig_b.ptt_on()` before TX, `rig_b.ptt_off()` after; configurable
+  TX hang timer (`tx_hang_ms`, default 500 ms) before PTT release.
+- `[repeater] enabled = false` — opt-in; disabled by default.
+- Operator must configure both rigs and TOML explicitly; no auto-activation.
+
+**Integration tests**: loopback cross-band relay — two `LoopbackBackend` + mock
+`rigctld` servers; verify decoded frame on rig_a is re-transmitted on rig_b.
+
+**Dependencies**: Phase 7.1 (`RigctldController`).
+
+---
+
+### 7.3 — Daemon control protocol
+
+Add a structured NDJSON-over-TCP control port to the server daemon, enabling a thin
+client (Phase 7.4) to display real-time status and send operator commands.
+
+**Why NDJSON, not protobuf**: `EngineEvent`, `HpxState`, and `RateEvent` already
+derive `serde::Serialize/Deserialize` and are streamed as NDJSON by `openpulse monitor`.
+The control port is an extension of that existing stream.  Protobuf would require
+maintaining a parallel `.proto` schema alongside the Rust type system with no benefit on
+a local control channel; it also adds a `protoc` build-time dependency that complicates
+cross-compilation to aarch64.  If a future web client materialises, NDJSON over WebSocket
+requires no protocol change.
+
+**Protocol** (newline-delimited JSON over TCP, default port 9000):
+
+*Server → client* (event stream, unsolicited):
+```json
+{"type": "EngineEvent", "event": { ... }}           // existing EngineEvent variants
+{"type": "Metrics", "effective_bps": 245, "ecc_rate": 0.03, "compress_ratio": 1.8,
+ "afc_correction_hz": -3.2, "signal_strength_dbm": -87}
+{"type": "RigStatus", "rig": "a", "freq_hz": 14074000, "mode": "USB",
+ "power_w": 50.0, "alc": 0.12, "swr": 1.4}
+```
+
+*Client → server* (request/response, each on one line):
+```json
+{"cmd": "set_mode",    "mode": "BPSK250"}
+{"cmd": "set_freq",    "rig": "a", "freq_hz": 14074000}
+{"cmd": "accept_qsy",  "token": "abc123"}
+{"cmd": "reject_qsy",  "token": "abc123"}
+{"cmd": "enable_repeater"}
+{"cmd": "disable_repeater"}
+```
+
+Server responds with `{"ok": true}` or `{"ok": false, "error": "..."}` on the same
+connection.
+
+**New crate: `openpulse-server`** (thin binary; library lives in `openpulse-daemon`):
+- Wraps the modem engine, ARDOP bridge, KISS bridge, and mesh daemon into one process.
+- Spawns the control port listener alongside the existing service ports.
+- `Metrics` events emitted on a timer (default 1 Hz) from a background task reading
+  `engine.last_afc_offset_hz()`, `engine.dcd_energy()`, and session stats.
+- `RigStatus` events emitted at 2 Hz when rig CAT is configured.
+
+**Integration tests** (`tests/control_port.rs`):
+- Connect TCP client, verify `EngineEvent` stream flows.
+- Send `set_mode` command; verify engine mode changes.
+- Send `set_freq`; verify mock rigctld receives the frequency command.
+
+**Dependencies**: Phase 7.1 (rig status), Phase 4.2 (EngineEvent already exists).
+
+---
+
+### 7.4 — `openpulse-panel` operator UI
+
+A native egui desktop application that connects to the `openpulse-server` control port
+and provides the full operator experience.
+
+**Layout** (four-region egui window):
+
+```
+┌─────────────────────────────────────────────────┐
+│  Rig A: 14.074 MHz USB  50W  SWR 1.4  [QSY ▼]  │  ← rig status bar
+│  Rig B: 145.500 MHz FM  25W  SWR 1.2  [XBAND]  │
+├────────────────────┬────────────────────────────┤
+│  Waterfall / FFT   │  Session status             │
+│  (egui_plot line)  │  Mode:     BPSK250          │
+│                    │  Speed:    SL5 / 245 bps    │
+│                    │  ECC:      3.1 %            │
+│                    │  Compress: 1.8×             │
+│                    │  AFC:      −3.2 Hz          │
+│                    │  DCD:      ████░░  −92 dBm  │
+├────────────────────┴────────────────────────────┤
+│  Event log (scrollable, last 100 events)        │
+└─────────────────────────────────────────────────┘
+```
+
+**Controls**: mode selector combo, connect/disconnect button, repeater toggle, QSY
+accept/reject buttons (appear only when a QSY proposal is pending), server address field.
+
+**Waterfall**: `egui_plot` line plot of the last FFT snapshot from `Metrics` events;
+plasma colourmap waterfall texture (same approach as `openpulse-testbench`).
+
+**Connection model**: panel connects to `HOST:9000` (default `127.0.0.1:9000`);
+reconnects automatically on drop; server address editable in the toolbar.
+
+**Dependencies**: Phase 7.3 (control protocol), `egui`/`eframe` (already in workspace).
+
+---
+
+### 7.5 — Signed remote rig control (over-the-air)
+
+Allow a trusted peer to send signed rig-control commands over the air, enabling remote
+operation of the second transceiver without an internet link.
+
+**Wire format**: new `WireMsgType::RigCtrlCmd` (msg_type 0x09) carrying a CBOR/JSON
+payload signed with the sender's Ed25519 key:
+```json
+{"cmd": "set_freq", "rig": "b", "freq_hz": 14074000, "ts_ms": 1234567890}
+```
+Signature covers `cmd + rig + freq_hz + ts_ms`; replay window 30 s.
+
+**Trust policy**: `[remote_control] allow_trustlevels = ["verified"]`; Reduced and Unknown
+peers are always rejected; operator must opt in explicitly.
+
+**Acceptance**: `MeshDaemon` dispatches `RigCtrlCmd` frames to a new
+`RemoteControlHandler` that validates the signature, checks trust level, enforces the
+replay window, and calls `RigctldController` if all checks pass.
+
+**Integration tests**: signed command accepted from Verified peer; rejected from Unknown
+peer; replayed command rejected; tampered signature rejected.
+
+**Dependencies**: Phase 7.1 (rig controller), Phase 7.2 (dual-rig), Phase 6.3 (mesh
+daemon dispatch), Phase 2.3 (Ed25519 signing infrastructure).
+
+---
+
+### 7.6 — Full-duplex mode *(stretch — requires dual audio hardware)*
+
+When two `CpalBackend` instances are available (one per rig), enable simultaneous TX on
+rig_b while receiving on rig_a.  This requires the two audio streams to run on separate
+hardware devices to avoid TX self-interference.
+
+**Gating conditions**:
+- Dual-rig (Phase 7.2) operational.
+- TX and RX on physically separate audio devices (enforced at config parse time;
+  same device name for both rigs → error at startup).
+- Operator explicitly sets `[repeater] full_duplex = true`; default false.
+
+**What changes**: the cross-band repeater's TX-hang timer is removed; `rig_b` PTT stays
+asserted continuously while relay traffic is flowing; DCD on rig_a drives the decode
+path regardless of rig_b TX state.
+
+**Dependencies**: Phase 7.2, Phase 5.6 (CpalBackend wiring), hardware availability.
+
+---
+
+
 
 Features deliberately deferred beyond Phase 6.  Each item requires significant design
 work, hardware availability, or explicit operator configuration that is not yet in scope.
@@ -413,6 +609,19 @@ Phase 2.5 (Peer cache)
 
 Phase 2.4 (CSMA / DCD)
     └─> Phase 4.3 (KISS broadcast mode)
+
+Phase 7.1 (RigctldController)
+    └─> Phase 7.2 (dual-rig / cross-band repeater)
+    └─> Phase 7.5 (signed remote rig control)
+
+Phase 7.2 (dual-rig)
+    └─> Phase 7.6 (full-duplex, stretch)
+
+Phase 4.2 (EngineEvent)
+    └─> Phase 7.3 (daemon control protocol)
+
+Phase 7.3 (control protocol)
+    └─> Phase 7.4 (openpulse-panel UI)
 ```
 
 Items within the same phase may proceed in parallel unless a dependency within the phase is listed above.

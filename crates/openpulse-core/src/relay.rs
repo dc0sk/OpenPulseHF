@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::peer_cache::{PeerCache, TrustLevel};
+use crate::peer_cache::{PeerCache, TrustFilter, TrustLevel};
 use crate::wire_query::WireEnvelope;
 
 // ------------------------------------------------------------------
@@ -57,6 +57,8 @@ pub enum RelayEvent {
 #[derive(Debug, Clone, Default)]
 pub struct RelayTrustPolicy {
     denied_relays: HashSet<String>,
+    /// Minimum trust level required to relay a frame.
+    pub min_trust_filter: TrustFilter,
 }
 
 impl RelayTrustPolicy {
@@ -67,6 +69,19 @@ impl RelayTrustPolicy {
     {
         Self {
             denied_relays: denied.into_iter().map(Into::into).collect(),
+            min_trust_filter: TrustFilter::default(),
+        }
+    }
+
+    /// Construct a policy with both a deny-list and a minimum trust level.
+    pub fn with_trust_filter<I, S>(denied: I, min_trust_filter: TrustFilter) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            denied_relays: denied.into_iter().map(Into::into).collect(),
+            min_trust_filter,
         }
     }
 

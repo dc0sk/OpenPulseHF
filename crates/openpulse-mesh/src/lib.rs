@@ -6,6 +6,7 @@
 pub mod beacon;
 
 use openpulse_core::peer_cache::{PeerCache, PeerRecord, TrustFilter, TrustLevel};
+use openpulse_core::peer_descriptor::PeerDescriptor;
 use openpulse_core::query_propagation::{QueryEvent, QueryForwarder};
 use openpulse_core::relay::{RelayEvent, RelayForwarder, RelayTrustPolicy};
 use openpulse_core::wire_query::{
@@ -55,10 +56,14 @@ pub struct MeshDaemon {
     engine: ModemEngine,
     mode: String,
     local_peer_id: [u8; 32],
+    signing_key_seed: [u8; 32],
+    callsign: String,
     relay_forwarder: RelayForwarder,
     query_forwarder: QueryForwarder,
     beacon: BeaconScheduler,
     peer_cache: PeerCache,
+    /// Minimum trust level a peer must have to have its frames relayed.
+    relay_trust_filter: TrustFilter,
     /// Local maximum hop count. Envelopes with hop_limit > this are clamped
     /// before being passed to the forwarders, preventing senders from bypassing
     /// the node's configured relay policy.
@@ -79,6 +84,9 @@ impl MeshDaemon {
     /// - `policy` — relay trust policy (deny-list of peer IDs)
     /// - `peer_cache_capacity` — maximum entries in the local peer cache
     /// - `peer_cache_ttl_ms` — peer cache entry TTL in milliseconds
+    /// - `signing_key_seed` — 32-byte Ed25519 signing key seed used to populate
+    ///   `callsign_hash` and `descriptor_signature` in peer-query responses
+    /// - `callsign` — station callsign included in signed peer descriptors
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         engine: ModemEngine,
@@ -90,6 +98,8 @@ impl MeshDaemon {
         policy: RelayTrustPolicy,
         peer_cache_capacity: usize,
         peer_cache_ttl_ms: u64,
+        signing_key_seed: [u8; 32],
+        callsign: impl Into<String>,
     ) -> Self {
         let mut peer_cache = PeerCache::new(peer_cache_capacity, peer_cache_ttl_ms);
         // Self-entry is refreshed in handle_peer_query_request before each response,
@@ -110,10 +120,13 @@ impl MeshDaemon {
             engine,
             mode: mode.into(),
             local_peer_id,
+            signing_key_seed,
+            callsign: callsign.into(),
             relay_forwarder: RelayForwarder::new(ttl_ms, policy.clone()),
-            query_forwarder: QueryForwarder::new(ttl_ms, 1024, policy),
+            query_forwarder: QueryForwarder::new(ttl_ms, 1024, policy.clone()),
             beacon: BeaconScheduler::new(beacon_interval_s),
             peer_cache,
+            relay_trust_filter: policy.min_trust_filter,
             hop_limit: max_hops,
             events: Vec::new(),
         }
@@ -179,6 +192,21 @@ impl MeshDaemon {
                     });
                     return;
                 }
+
+                // Enforce trust-level policy before forwarding.
+                if !trust_filter_allows(
+                    &self.peer_cache,
+                    &envelope.src_peer_id,
+                    self.relay_trust_filter,
+                ) {
+                    self.events
+                        .push(MeshEvent::Relay(RelayEvent::PolicyRejected {
+                            session_id: envelope.session_id,
+                            src_peer_id: envelope.src_peer_id,
+                        }));
+                    return;
+                }
+
                 match self.relay_forwarder.forward(&envelope, now_ms) {
                     Ok(forwarded) => {
                         let tx_ok = forwarded
@@ -289,11 +317,27 @@ impl MeshDaemon {
             .into_iter()
             .filter_map(|r| {
                 let peer_id_bytes = parse_peer_id_hex(&r.peer_id)?;
+                // Compute callsign_hash for our own entry; remote peers' callsigns
+                // are not stored locally yet, so their hash remains zeroed.
+                // descriptor_signature is intentionally empty: at the 255-byte frame
+                // MTU a single PeerQueryResult already fills the available payload,
+                // leaving no room for a 64-byte Ed25519 signature.
+                let callsign_hash = if peer_id_bytes == self.local_peer_id {
+                    match PeerDescriptor::sign(
+                        &self.callsign,
+                        r.capability_mask,
+                        now_ms,
+                        &self.signing_key_seed,
+                    ) {
+                        Ok(desc) => desc.callsign_hash(),
+                        Err(_) => [0u8; 32],
+                    }
+                } else {
+                    [0u8; 32]
+                };
                 Some(PeerQueryResult {
                     peer_id: peer_id_bytes,
-                    // TODO: store callsign_hash and descriptor_signature in cache
-                    // once PeerDescriptor signing is implemented.
-                    callsign_hash: [0u8; 32],
+                    callsign_hash,
                     capability_mask: r.capability_mask,
                     last_seen_ms: r.updated_at_ms,
                     trust_state: trust_level_to_wire(r.trust_level),
@@ -464,4 +508,35 @@ fn nonce_from_id(id: u64) -> [u8; 12] {
     let mut n = [0u8; 12];
     n[..8].copy_from_slice(&id.to_le_bytes());
     n
+}
+
+/// Returns true if the peer's trust level satisfies `filter`.
+/// Unknown peers (not in cache) are treated as `TrustLevel::Unknown`.
+fn trust_filter_allows(cache: &PeerCache, peer_id: &[u8; 32], filter: TrustFilter) -> bool {
+    match filter {
+        TrustFilter::Any => true,
+        TrustFilter::TrustedOrUnknown => {
+            let level = cache
+                .peek(&peer_id_hex(peer_id))
+                .map(|r| r.trust_level)
+                .unwrap_or(TrustLevel::Unknown);
+            !matches!(level, TrustLevel::Reduced)
+        }
+        TrustFilter::TrustedOnly => {
+            let level = cache
+                .peek(&peer_id_hex(peer_id))
+                .map(|r| r.trust_level)
+                .unwrap_or(TrustLevel::Unknown);
+            matches!(level, TrustLevel::Verified | TrustLevel::PskVerified)
+        }
+    }
+}
+
+/// Map relay_policy config string to a `TrustFilter`.
+pub fn trust_filter_from_policy(policy: &str) -> TrustFilter {
+    match policy {
+        "strict" => TrustFilter::TrustedOnly,
+        "balanced" => TrustFilter::TrustedOrUnknown,
+        _ => TrustFilter::Any,
+    }
 }
