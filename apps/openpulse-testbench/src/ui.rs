@@ -332,13 +332,18 @@ pub fn draw_signal_panel(
         .show(ui, |plot_ui| {
             plot_ui.line(Line::new(plot_points).color(egui::Color32::from_rgb(100, 200, 100)));
 
-            // Bandwidth markers at the Hann-window null-to-null main-lobe bandwidth
-            // (±2 × baud_rate).  Hann sidelobes at ±3×, ±5× … Rs are visible on the
-            // spectrum but are ≥ −31 dB below the main lobe peak.
+            // Bandwidth markers.
+            // 8PSK uses PSK31-style cosine shaping (null-to-null BW ≈ 2×Rs),
+            // all other modes use isolated Hann window (null-to-null BW ≈ 4×Rs).
             let sr = mode_symbol_rate_hz(&config.mode);
+            let bw_half = if config.mode.starts_with("8PSK") {
+                sr
+            } else {
+                2.0 * sr
+            };
             let bw_color = egui::Color32::from_rgba_unmultiplied(255, 180, 50, 160);
-            let left = (1500.0 - 2.0 * sr).max(0.0);
-            let right = (1500.0 + 2.0 * sr).min(4000.0);
+            let left = (1500.0 - bw_half).max(0.0);
+            let right = (1500.0 + bw_half).min(4000.0);
             plot_ui.vline(VLine::new(left).color(bw_color).name("BW"));
             plot_ui.vline(VLine::new(right).color(bw_color).name("BW"));
         });
