@@ -75,6 +75,25 @@ fn three_nacks_at_sl3_decrement_to_sl2() {
 }
 
 #[test]
+fn hpx_hf_starts_at_bpsk31() {
+    let mut engine = make_engine();
+    engine.start_adaptive_session(SessionProfile::hpx_hf());
+    assert_eq!(engine.current_adaptive_mode(), Some("BPSK31"));
+}
+
+#[test]
+fn hpx_hf_ack_up_five_times_reaches_8psk500() {
+    let mut engine = make_engine();
+    engine.start_adaptive_session(SessionProfile::hpx_hf());
+    engine.apply_ack(AckType::AckUp); // SL2 → SL3 (BPSK63)
+    engine.apply_ack(AckType::AckUp); // SL3 → SL4 (BPSK250)
+    engine.apply_ack(AckType::AckUp); // SL4 → SL5 (QPSK250)
+    engine.apply_ack(AckType::AckUp); // SL5 → SL6 (QPSK500)
+    engine.apply_ack(AckType::AckUp); // SL6 → SL7 (8PSK500)
+    assert_eq!(engine.current_adaptive_mode(), Some("8PSK500"));
+}
+
+#[test]
 fn hpx_wideband_starts_at_qpsk500() {
     let mut engine = make_engine();
     engine.start_adaptive_session(SessionProfile::hpx_wideband());

@@ -49,6 +49,35 @@ impl SessionProfile {
         }
     }
 
+    /// HPX HF profile: HF-compliant rate ladder (SL2–SL7), capped at 8PSK500 (≈2000 Hz BW).
+    ///
+    /// Every mode in this profile fits within the 2700 Hz HF channel-width limit.
+    /// Use this profile for on-air HF operation.  For FM/satellite/UHF links with wider
+    /// channels use [`SessionProfile::hpx_wideband`].
+    ///
+    /// | SL  | Mode     |
+    /// |-----|----------|
+    /// | SL2 | BPSK31   |
+    /// | SL3 | BPSK63   |
+    /// | SL4 | BPSK250  |
+    /// | SL5 | QPSK250  |
+    /// | SL6 | QPSK500  |
+    /// | SL7 | 8PSK500  |
+    pub fn hpx_hf() -> Self {
+        let mut modes = [None; 12];
+        modes[SpeedLevel::Sl2 as usize] = Some("BPSK31");
+        modes[SpeedLevel::Sl3 as usize] = Some("BPSK63");
+        modes[SpeedLevel::Sl4 as usize] = Some("BPSK250");
+        modes[SpeedLevel::Sl5 as usize] = Some("QPSK250");
+        modes[SpeedLevel::Sl6 as usize] = Some("QPSK500");
+        modes[SpeedLevel::Sl7 as usize] = Some("8PSK500");
+        Self {
+            modes,
+            initial_level: SpeedLevel::Sl2,
+            nack_threshold: 3,
+        }
+    }
+
     /// HPX Wideband profile: wideband class, single-carrier QPSK/8PSK ladder (SL8–SL11).
     ///
     /// Single-carrier over OFDM: lower PAPR, no cyclic prefix overhead, simpler AFC.
