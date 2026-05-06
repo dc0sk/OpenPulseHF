@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, RwLock};
 
 use openpulse_channel::dsp::{PowerSpectrum, WaterfallBuffer, FFT_SIZE, FREQ_BINS, WATERFALL_ROWS};
+use openpulse_core::compression::CompressionAlgorithm;
 
 // ── Audio source selector ─────────────────────────────────────────────────────
 
@@ -57,12 +58,14 @@ impl NoiseModel {
 
 // ── Application configuration ─────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AppConfig {
     pub mode: String,
     pub noise_model: NoiseModel,
     pub snr_db: f32,
     pub fec_enabled: bool,
+    pub compression: CompressionAlgorithm,
+    pub payload_size: usize,
     pub seed_str: String,
     pub min_db: f32,
     pub max_db: f32,
@@ -77,6 +80,8 @@ impl Default for AppConfig {
             noise_model: NoiseModel::Awgn,
             snr_db: 15.0,
             fec_enabled: false,
+            compression: CompressionAlgorithm::None,
+            payload_size: 32,
             seed_str: "42".into(),
             min_db: -100.0,
             max_db: 0.0,
@@ -97,6 +102,10 @@ pub struct TestStats {
     pub fail: u64,
     pub total_bits: u64,
     pub error_bits: u64,
+    /// compressed_bytes / original_bytes for the last run (1.0 = no compression / no saving).
+    pub last_compress_ratio: f64,
+    /// Sliding window for effective-bitrate calculation: (timestamp, payload_bits_delivered).
+    pub rate_window: VecDeque<(std::time::Instant, u64)>,
     pub event_log: VecDeque<String>,
 }
 
@@ -108,6 +117,8 @@ impl TestStats {
             fail: 0,
             total_bits: 0,
             error_bits: 0,
+            last_compress_ratio: 1.0,
+            rate_window: VecDeque::new(),
             event_log: VecDeque::new(),
         }
     }
@@ -183,6 +194,8 @@ pub struct AppState {
     pub taps: [Tap; 4],
     pub stop_tx: Option<crossbeam_channel::Sender<()>>,
     pub running: bool,
+    /// Shared config Arc written by the UI each frame; read by the signal thread.
+    pub shared_config: Option<Arc<RwLock<AppConfig>>>,
 }
 
 impl AppState {
@@ -194,6 +207,7 @@ impl AppState {
             taps: [make_tap(), make_tap(), make_tap(), make_tap()],
             stop_tx: None,
             running: false,
+            shared_config: None,
         }
     }
 
