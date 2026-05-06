@@ -81,10 +81,11 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
     loop {
         while let Ok(data) = tx_data_rx.try_recv() {
             let len = data.len();
+            // Clear one-shot flag regardless of path so loopback mode doesn't leak it.
+            let use_fec = bridge.fec_tx.swap(false, Ordering::Relaxed);
             if bridge.loopback {
                 let _ = bridge.rx_data_tx.send(data);
             } else {
-                let use_fec = bridge.fec_tx.swap(false, Ordering::Relaxed);
                 let mut engine = bridge.engine.lock().unwrap();
                 let tx_result = if use_fec {
                     engine.transmit_with_fec(&data, &bridge.mode, None)

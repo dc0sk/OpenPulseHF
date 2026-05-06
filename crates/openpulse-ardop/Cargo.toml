@@ -17,9 +17,6 @@ extended-description = "OpenPulseHF ARDOP-compatible TNC for Winlink and pat int
 depends = "$auto"
 section = "hamradio"
 priority = "optional"
-assets = [
-    ["target/release/openpulse-tnc", "usr/bin/openpulse-tnc", "755"],
-]
 
 [features]
 # Enable real CPAL audio hardware support in the TNC binary.
