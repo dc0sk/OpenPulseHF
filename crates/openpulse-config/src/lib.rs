@@ -27,6 +27,7 @@ pub struct OpenpulseConfig {
     pub station: StationConfig,
     pub audio: AudioConfig,
     pub modem: ModemConfig,
+    pub radio: RadioConfig,
     pub ardop: ArdopConfig,
     pub kiss: KissConfig,
     pub logging: LoggingConfig,
@@ -60,6 +61,14 @@ pub struct ModemConfig {
     pub mode: String,
     /// PTT backend: `none`, `rts`, `dtr`, `vox`, or `rigctld`.
     pub ptt_backend: String,
+}
+
+/// Rig CAT control settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct RadioConfig {
+    /// rigctld TCP address for CAT control (default `"127.0.0.1:4532"`).
+    pub rigctld_addr: String,
 }
 
 /// ARDOP TNC service settings.
@@ -149,6 +158,14 @@ impl Default for ModemConfig {
         Self {
             mode: "BPSK250".into(),
             ptt_backend: "none".into(),
+        }
+    }
+}
+
+impl Default for RadioConfig {
+    fn default() -> Self {
+        Self {
+            rigctld_addr: "127.0.0.1:4532".into(),
         }
     }
 }
@@ -310,6 +327,11 @@ backend = "default"
 mode = "BPSK250"
 # PTT backend: none | rts | dtr | vox | rigctld
 ptt_backend = "none"
+
+[radio]
+# rigctld TCP address for full CAT control (frequency, mode, S-meter, etc.).
+# Requires hamlib rigctld running on the specified address.
+rigctld_addr = "127.0.0.1:4532"
 
 [ardop]
 # IP address the ARDOP TNC listens on.
