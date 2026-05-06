@@ -1,0 +1,19 @@
+[package]
+name    = "openpulse-repeater"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Cross-band repeater for OpenPulseHF: relays decoded frames from rig_a to rig_b"
+
+[dependencies]
+openpulse-modem  = { workspace = true }
+openpulse-radio  = { workspace = true }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+openpulse-audio  = { workspace = true }
+bpsk-plugin      = { workspace = true }
+qpsk-plugin      = { workspace = true }
