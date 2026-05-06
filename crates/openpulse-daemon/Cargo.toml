@@ -1,0 +1,28 @@
+[package]
+name    = "openpulse-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "NDJSON-over-TCP control port for the OpenPulseHF server daemon"
+
+[[bin]]
+name = "openpulse-server"
+path = "src/main.rs"
+
+[dependencies]
+openpulse-modem  = { workspace = true }
+openpulse-radio  = { workspace = true }
+openpulse-audio  = { workspace = true }
+openpulse-config = { workspace = true }
+serde            = { workspace = true, features = ["derive"] }
+serde_json       = { workspace = true }
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true }
+tokio            = { workspace = true, features = ["net", "io-util", "sync", "rt-multi-thread", "macros", "time"] }
+
+[dev-dependencies]
+openpulse-audio  = { workspace = true }
+bpsk-plugin      = { workspace = true }
