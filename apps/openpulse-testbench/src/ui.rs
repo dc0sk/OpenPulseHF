@@ -337,8 +337,10 @@ pub fn draw_signal_panel(
             // spectrum but are ≥ −31 dB below the main lobe peak.
             let sr = mode_symbol_rate_hz(&config.mode);
             let bw_color = egui::Color32::from_rgba_unmultiplied(255, 180, 50, 160);
-            plot_ui.vline(VLine::new(1500.0 - 2.0 * sr).color(bw_color).name("BW"));
-            plot_ui.vline(VLine::new(1500.0 + 2.0 * sr).color(bw_color).name("BW"));
+            let left = (1500.0 - 2.0 * sr).max(0.0);
+            let right = (1500.0 + 2.0 * sr).min(4000.0);
+            plot_ui.vline(VLine::new(left).color(bw_color).name("BW"));
+            plot_ui.vline(VLine::new(right).color(bw_color).name("BW"));
         });
 
     // Waterfall texture
