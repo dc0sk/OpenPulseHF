@@ -1,0 +1,128 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-x86-static:
+    name: Build static x86-64 binary
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain + musl target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl tools
+        run: sudo apt-get install -y musl-tools
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: x86-musl-${{ hashFiles('**/Cargo.toml') }}
+
+      - name: Build openpulse-tnc (static musl)
+        run: |
+          cargo build --release -p openpulse-ardop \
+            --target x86_64-unknown-linux-musl \
+            --no-default-features
+
+      - name: Rename artifact
+        run: |
+          cp target/x86_64-unknown-linux-musl/release/openpulse-tnc \
+             openpulse-tnc_linux_x86_64_static
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openpulse-tnc-x86-static
+          path: openpulse-tnc_linux_x86_64_static
+
+  build-aarch64-deb:
+    name: Build aarch64 .deb package
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cross and cargo-deb
+        run: |
+          cargo install cross
+          cargo install cargo-deb
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: aarch64-deb-${{ hashFiles('**/Cargo.toml') }}
+
+      - name: Cross-build openpulse-tnc (aarch64)
+        run: |
+          cross build --release -p openpulse-ardop \
+            --target aarch64-unknown-linux-gnu \
+            --no-default-features
+
+      - name: Package .deb (aarch64)
+        run: |
+          cargo deb -p openpulse-ardop \
+            --no-build \
+            --target aarch64-unknown-linux-gnu
+
+      - name: Locate .deb file
+        id: deb
+        run: |
+          DEB=$(find target/aarch64-unknown-linux-gnu/debian -name '*.deb' | head -1)
+          echo "path=$DEB" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openpulse-tnc-aarch64-deb
+          path: ${{ steps.deb.outputs.path }}
+
+  release:
+    name: Create GitHub Release
+    needs: [build-x86-static, build-aarch64-deb]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download x86 static binary
+        uses: actions/download-artifact@v4
+        with:
+          name: openpulse-tnc-x86-static
+          path: dist/
+
+      - name: Download aarch64 .deb
+        uses: actions/download-artifact@v4
+        with:
+          name: openpulse-tnc-aarch64-deb
+          path: dist/
+
+      - name: Create release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

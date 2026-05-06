@@ -276,3 +276,53 @@ async fn ping_pong() {
     let resp = cmd(&mut reader, "PING").await;
     assert_eq!(resp, "PONG");
 }
+
+#[tokio::test]
+async fn fecsend_command_acknowledged() {
+    let (cmd_port, _) = start_server(false).await;
+    let stream = TcpStream::connect(("127.0.0.1", cmd_port)).await.unwrap();
+    let mut reader = BufReader::new(stream);
+    let resp = cmd(&mut reader, "FECSEND").await;
+    assert_eq!(resp, "FECSEND");
+}
+
+#[tokio::test]
+async fn fecrcv_command_acknowledged() {
+    let (cmd_port, _) = start_server(false).await;
+    let stream = TcpStream::connect(("127.0.0.1", cmd_port)).await.unwrap();
+    let mut reader = BufReader::new(stream);
+    let resp = cmd(&mut reader, "FECRCV").await;
+    assert_eq!(resp, "FECRCV");
+}
+
+#[tokio::test]
+async fn buffer_drains_after_fecsend_loopback() {
+    let (cmd_port, data_port) = start_server(true).await;
+
+    let cmd_stream = TcpStream::connect(("127.0.0.1", cmd_port)).await.unwrap();
+    let mut cmd_reader = BufReader::new(cmd_stream);
+    let mut data_stream = TcpStream::connect(("127.0.0.1", data_port)).await.unwrap();
+
+    // Arm FECSEND before queuing data on the data port.
+    let resp = cmd(&mut cmd_reader, "FECSEND").await;
+    assert_eq!(resp, "FECSEND");
+
+    let payload = b"fec test frame";
+    send_data(&mut data_stream, payload).await;
+
+    // Loopback echoes the frame; verify BUFFER returns to 0 once drained.
+    let echoed = recv_data(&mut data_stream).await;
+    assert_eq!(echoed, payload);
+
+    // Worker drains tx_pending after processing — poll BUFFER until 0 (max 1 s).
+    let mut settled = false;
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let buf = cmd(&mut cmd_reader, "BUFFER").await;
+        if buf == "BUFFER 0" {
+            settled = true;
+            break;
+        }
+    }
+    assert!(settled, "BUFFER did not drain to 0 within 1 second");
+}

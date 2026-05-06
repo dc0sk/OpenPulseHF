@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
@@ -27,6 +27,10 @@ pub struct ModemBridge {
     pub tx_pending: Arc<AtomicUsize>,
     /// When true the worker echoes TX data back as RX data without RF.
     pub loopback: bool,
+    /// When true the next TX frame uses FEC encoding (FECSEND mode).
+    pub fec_tx: Arc<AtomicBool>,
+    /// When true the worker receives with FEC decoding (FECRCV mode).
+    pub fec_rx: Arc<AtomicBool>,
 }
 
 impl ModemBridge {
@@ -51,6 +55,8 @@ impl ModemBridge {
             tx_data_tx,
             tx_pending: Arc::new(AtomicUsize::new(0)),
             loopback,
+            fec_tx: Arc::new(AtomicBool::new(false)),
+            fec_rx: Arc::new(AtomicBool::new(false)),
         });
         (bridge, tx_data_rx)
     }
@@ -75,17 +81,39 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
     loop {
         while let Ok(data) = tx_data_rx.try_recv() {
             let len = data.len();
+            // Clear one-shot flag regardless of path so loopback mode doesn't leak it.
+            let use_fec = bridge.fec_tx.swap(false, Ordering::Relaxed);
             if bridge.loopback {
                 let _ = bridge.rx_data_tx.send(data);
             } else {
-                let _ = bridge
-                    .engine
-                    .lock()
-                    .unwrap()
-                    .transmit(&data, &bridge.mode, None);
-                if let Ok(received) = bridge.engine.lock().unwrap().receive(&bridge.mode, None) {
-                    if !received.is_empty() {
-                        let _ = bridge.rx_data_tx.send(received);
+                let mut engine = bridge.engine.lock().unwrap();
+                let tx_result = if use_fec {
+                    engine.transmit_with_fec(&data, &bridge.mode, None)
+                } else {
+                    engine.transmit(&data, &bridge.mode, None)
+                };
+                drop(engine);
+                if tx_result.is_ok() {
+                    let use_fec_rx = bridge.fec_rx.load(Ordering::Relaxed);
+                    let received = if use_fec_rx {
+                        bridge
+                            .engine
+                            .lock()
+                            .unwrap()
+                            .receive_with_fec(&bridge.mode, None)
+                            .ok()
+                    } else {
+                        bridge
+                            .engine
+                            .lock()
+                            .unwrap()
+                            .receive(&bridge.mode, None)
+                            .ok()
+                    };
+                    if let Some(rx) = received {
+                        if !rx.is_empty() {
+                            let _ = bridge.rx_data_tx.send(rx);
+                        }
                     }
                 }
             }
@@ -96,9 +124,25 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
         }
 
         if !bridge.loopback {
-            if let Ok(received) = bridge.engine.lock().unwrap().receive(&bridge.mode, None) {
-                if !received.is_empty() {
-                    let _ = bridge.rx_data_tx.send(received);
+            let use_fec_rx = bridge.fec_rx.load(Ordering::Relaxed);
+            let received = if use_fec_rx {
+                bridge
+                    .engine
+                    .lock()
+                    .unwrap()
+                    .receive_with_fec(&bridge.mode, None)
+                    .ok()
+            } else {
+                bridge
+                    .engine
+                    .lock()
+                    .unwrap()
+                    .receive(&bridge.mode, None)
+                    .ok()
+            };
+            if let Some(rx) = received {
+                if !rx.is_empty() {
+                    let _ = bridge.rx_data_tx.send(rx);
                 }
             }
         }

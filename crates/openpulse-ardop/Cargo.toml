@@ -8,6 +8,16 @@ license.workspace = true
 name = "openpulse-tnc"
 path = "src/main.rs"
 
+[package.metadata.deb]
+name = "openpulse-tnc"
+maintainer = "OpenPulse Contributors"
+copyright = "2025 OpenPulse Contributors"
+license-file = ["../../LICENSE", "4"]
+extended-description = "OpenPulseHF ARDOP-compatible TNC for Winlink and pat interoperability"
+depends = "$auto"
+section = "hamradio"
+priority = "optional"
+
 [features]
 # Enable real CPAL audio hardware support in the TNC binary.
 cpal = ["openpulse-audio/cpal-backend"]
