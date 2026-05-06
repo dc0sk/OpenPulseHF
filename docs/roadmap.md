@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/roadmap.md
 status: living
-last_updated: 2026-05-04
+last_updated: 2026-05-06
 ---
 
 # Roadmap
@@ -201,72 +201,143 @@ Remaining on-air items:
 
 ---
 
-## Phase 5 — Integration and Release Readiness (Planned)
+## Phase 5 — Integration and Release Readiness (Completed)
 
-The protocol stack, modem, and tooling are all built. Phase 5 closes the gap between
-"all pieces exist" and "a station can actually send a Winlink message or conduct an HPX
-session with another station." The gate for Phase 3.5 on-air regulatory validation is
-Phase 5.4 passing in CI loopback.
+All Phase 5 items shipped. On-air regulatory validation (Phase 3.5) is
+explicitly postponed — no hardware gate blocks further development.
 
-### 5.1 — B2F session driver
+### 5.1 — B2F session driver ✅ Done (PR #98)
+- `crates/openpulse-b2f-driver`: `B2fDriver`, `DataPort`, `CmdPort`; `run_iss()` / `run_irs()` lifecycle.
+- 4 driver integration tests; shared test helpers in `tests/common/mod.rs`.
 
-New crate `crates/openpulse-b2f-driver`: glue layer connecting `openpulse-b2f` (protocol
-state machine) and `openpulse-ardop` (TNC TCP interface) into a complete session lifecycle.
+### 5.2 — LZHUF codec (Type C) ✅ Done (PR #98)
+- Real LH5 via `oxiarc-lzhuf 0.2.7`; 4-byte BE length prefix; 16 MiB decompression cap.
+- `B2fSession::accepted_count()` added to drive IRS data-read loop.
 
-- **ISS path**: `connect → handshake → propose queued messages → transfer data → FQ/disconnect`
-- **IRS path**: `listen → receive FC proposals → accept → receive data → reassemble → decode`
-- Async task loop reads ARDOP command/data ports; drives `B2fSession::handle_line()` and
-  `B2fSession::receive_data()`; surfaces decoded `WlHeader + body` via callback/channel
-- 4 integration tests (ISS round-trip, IRS round-trip, FQ abort, multi-message session)
+### 5.3 — TOML configuration management ✅ Done (PR #102)
+- `crates/openpulse-config`: typed schema, `load()`, `init_template()`; CLI precedence over config.
+- `openpulse-tnc` and `openpulse-kisstnc` accept clap CLI flags overriding config file.
 
-Dependency: Phase 4.4 (B2F library) + Phase 3.4 (ARDOP TNC).
+### 5.4 — End-to-end loopback integration test ✅ Done (PR #100)
+- `crates/openpulse-b2f-driver/tests/e2e_loopback.rs`: bidirectional modem relay through `ChannelSimHarness`.
+- `e2e_single_message_awgn_20db` and `e2e_multi_message_clean` — no hardware required.
 
-### 5.2 — LZHUF compression (Type C)
+### 5.5 — Direct TCP Winlink CMS gateway ✅ Done
+- `crates/openpulse-gateway`: ISS send + IRS receive over a single `TcpStream` to `cms.winlink.org:8772`.
+- `gateway_round_trip` unit test: mock CMS TCP server validates full exchange without network access.
 
-Implement the Winlink Type-C (LZHUF / LZHuf) compressor/decompressor in
-`crates/openpulse-b2f/src/compress.rs`, replacing the current pass-through stubs.
+### 5.6 — CpalBackend wiring and on-air test plan ✅ Done (PR #105)
+- `AudioConfig` in `openpulse-config`; `--backend` CLI flag; cpal feature gate.
+- `docs/on-air_testplan.md`: hardware prereqs, test matrix, regulatory checklist, diagnostics table.
 
-- Pure-Rust LZHUF; no C FFT binding.
-- Required for receiving messages from older Winlink gateways that compress with Type C.
-- 3 tests: round-trip, known test-vector from Winlink reference implementation, decompression
-  of garbage bytes returns error.
+### 5.7 — Testbench live audio capture ✅ Done (PR #108)
+- `AudioSource` enum (`Synthetic` / `LiveCapture`); `run_live()` opens system input at 8 kHz mono.
+- Source combo disabled while running; panel labels reflect live mode.
 
-Dependency: Phase 4.4 (compress.rs stub already in place).
+### 5.5-reg — Phase 3.5 on-air regulatory validation *(postponed — no target date)*
+Conduct on-air tests on IARU-aligned frequencies, verify station ID at 10-minute intervals,
+test relay automatic control point interface, publish compliance report as release artefact.
 
-### 5.3 — TOML configuration management
+---
 
-Replace environment-variable configuration in `openpulse-tnc`, `openpulse-kisstnc`, and
-`openpulse-b2f-driver` with a structured TOML config file (`~/.config/openpulse/config.toml`).
+## Phase 6 — AFC, Interoperability, and Network (Active)
 
-- Schema covers: callsign, grid square, modem mode, PTT backend, bind addresses for ARDOP/KISS
-  ports, logging level, relay settings, trust-store path.
-- Precedence: CLI flags > config file > built-in defaults.
-- `openpulse config init` writes a commented template to stdout.
-- 3 tests: load default, CLI override, missing-field defaults.
+## Phase 6 — AFC, Interoperability, and Network (Active)
 
-### 5.4 — End-to-end loopback integration test
+### 6.1 — AFC correction loop
 
-Single test suite (`crates/openpulse-b2f-driver/tests/e2e_loopback.rs`) that exercises the
-complete stack without hardware:
+Close the automatic frequency control feedback path.  The IQ-squaring estimator
+(`estimate_frequency_offset` / `afc_estimate_hz`) already runs after every receive call
+and its result is exposed via `ModemEngine::last_afc_offset_hz()`.  What is missing is
+the correction step.
 
-```
-pat-like client → ARDOP TCP (ISS) → B2fSession → ModemEngine TX
-    → ChannelSimHarness (AWGN 20 dB) → ModemEngine RX
-    → B2fSession (IRS) → decoded WlHeader + body
-```
+- Add `afc_correction_hz: f32` field to `ModemEngine`; accumulated from `last_afc_offset_hz`
+  with a configurable step size (default 0.1 × estimated offset per frame — slow loop).
+- Pass corrected carrier frequency `fc + afc_correction_hz` into each demodulate call.
+- Expose `enable_afc(bool)` and `reset_afc()` on `ModemEngine`; default enabled.
+- Add `AfcCorrection` field to `EngineEvent` so the TUI can display the running correction.
+- Integration tests: loopback with a 15 Hz TX/RX carrier offset; assert AFC converges to
+  within ±2 Hz within 10 frames at BPSK250.
 
-- Asserts: decoded callsigns, subject, body bytes match original.
-- Asserts: session reaches `Done` state on both sides.
-- This is the gate for Phase 3.5 on-air validation and any public release.
+### 6.2 — pat / Winlink interoperability
 
-### 5.5 — Phase 3.5 on-air regulatory validation *(gated by 5.4)*
+Verify an end-to-end Winlink round-trip driven by `pat` connecting to `openpulse-tnc` via
+its ARDOP interface.
 
-*(Moved from Phase 3.5 — deferred until 5.4 passes in CI loopback.)*
+- Document and fix any wire-level incompatibilities found during `pat connect` against the TNC.
+- Add `FECSEND` and `FECRCV` ARDOP commands (used by pat for FEC-framed transfers).
+- Verify `BUFFER` polling behaviour matches pat's expectations during TX drain.
+- Packaging: produce a reproducible `.deb` for Raspberry Pi OS (aarch64) and a static
+  Linux x86-64 binary; both published as GitHub release assets.
+- Acceptance: `pat` can send a message via `openpulse-tnc` and retrieve it back without
+  any manual intervention beyond normal `pat` UI operation.
 
-- Conduct on-air tests on IARU-aligned frequencies for each supported bandwidth class.
-- Verify station identification at 10-minute intervals under long sessions.
-- Test relay node automatic control point interface.
-- Publish compliance test report as a release artefact.
+### 6.3 — Network mesh layer
+
+Promote the relay, peer-cache, and query-propagation modules from library code to a running
+network service.
+
+- New binary `openpulse-mesh` (or `openpulse-node`) that runs the full HPX relay stack as
+  a daemon: peer discovery beacons, query forwarding, store-and-forward relay.
+- `CONNECT_MESH` extension to the ARDOP command port: directs `ModemEngine` to enter mesh
+  mode, accepting relay frames alongside direct-addressed frames.
+- Config: `[mesh]` section in `config.toml` — `enabled`, `max_hops`, `relay_policy`
+  (trust-level minimum), `store_forward_ttl_s`.
+- Integration tests: 3-node loopback mesh (`ChannelSimHarness` × 2 hops); verify
+  a frame addressed to node C arrives via relay through B from A.
+
+---
+
+## Far Future
+
+Features deliberately deferred beyond Phase 6.  Each item requires significant design
+work, hardware availability, or explicit operator configuration that is not yet in scope.
+
+### FF-1 — Operator-initiated QSY (frequency change) negotiation
+
+Allows two stations to collaboratively move to a better channel when the current
+frequency is impaired by QRM, QSB, or QRN.  The procedure is explicit and
+operator-enabled; it is never triggered automatically.
+
+**Operator prerequisites**
+- QSY must be explicitly enabled per trust level in `config.toml`
+  (`[qsy] allow_trustlevels = ["verified", "psk_verified"]` — untrusted is off by default
+  but can be enabled; the operator takes responsibility).
+- CAT control via hamlib must be configured and active (`[hamlib]` section).
+
+**Procedure**
+
+1. Either station may initiate.  The requesting station sends a `QSY_REQ` frame
+   containing a request token and the number of candidate frequencies it will scan.
+2. The requesting station uses hamlib to scan a configurable set of candidate frequencies
+   (S-meter / noise-floor measurement), then returns to the current operating frequency.
+3. It sends a `QSY_LIST` frame with an ordered list of candidate `(frequency_hz, snr_db)`
+   tuples (best-first, as measured locally).
+4. The partner station receives `QSY_LIST`, scans each candidate locally (hamlib), returns
+   to the current frequency, and responds with a `QSY_VOTE` frame containing its own
+   `(frequency_hz, snr_db)` assessments.
+5. The requesting station picks the channel with the best combined score (sum of both
+   stations' SNR readings), sends `QSY_ACK` naming the agreed frequency and a
+   switchover time offset (seconds from now, default 5 s).
+6. Both stations wait for the switchover time, command hamlib to QSY, and resume the
+   session on the new frequency from where it was interrupted.
+
+**Trust-level policy**
+- `QSY_REQ` is accepted from any trust level that has `allow_trustlevels` covering the
+  peer's current trust classification.
+- A station may reject `QSY_REQ` with `QSY_REJECT` if QSY is disabled or hamlib is
+  unavailable; the session continues on the original frequency.
+- All QSY wire frames are signed with the session Ed25519 key to prevent spoofing.
+
+**New wire frames** (all CR-terminated, carried over the existing B2F data channel)
+- `QSY_REQ <token> <n_candidates>` — initiate QSY scan
+- `QSY_LIST <token> <freq1>,<snr1> [<freq2>,<snr2> …]` — candidate list from requester
+- `QSY_VOTE <token> <freq1>,<snr1> [<freq2>,<snr2> …]` — partner's assessment
+- `QSY_ACK <token> <agreed_freq_hz> <switchover_offset_s>` — confirmed channel + timing
+- `QSY_REJECT <token> <reason>` — decline (hamlib unavailable, policy, etc.)
+
+**Dependencies**: hamlib integration (new `openpulse-hamlib` crate wrapping `rigctld` TCP
+interface), Phase 6.3 mesh layer (for relay-assisted QSY coordination).
 
 ---
 
