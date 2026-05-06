@@ -15,8 +15,13 @@ pub enum EngineEvent {
     /// AFC frequency offset estimate updated after a receive call.
     AfcUpdate {
         /// Residual frequency error measured at the corrected reference (Hz).
+        /// The total offset from the nominal centre frequency is approximately
+        /// `correction_hz + offset_hz`.
         offset_hz: f32,
-        /// Accumulated carrier correction applied to demodulation so far (Hz).
+        /// Accumulated carrier correction that will be applied to subsequent
+        /// demodulation calls (Hz).  Defaults to 0.0 when deserialising older
+        /// event streams that predate this field.
+        #[serde(default)]
         correction_hz: f32,
         mode: String,
     },

@@ -56,7 +56,10 @@ pub struct ModemEngine {
     scheduler: PipelineScheduler,
     trust_policy_profile: PolicyProfile,
     active_handshake: Option<HandshakeDecision>,
-    /// Carrier frequency offset estimate from the most recent demodulation call.
+    /// Residual carrier frequency error measured at the corrected reference from
+    /// the most recent demodulation call.  This is the error *after* applying
+    /// `afc_correction_hz`; the total offset from the nominal centre frequency is
+    /// approximately `afc_correction_hz + last_afc_offset_hz`.
     last_afc_offset_hz: Option<f32>,
     /// Accumulated AFC carrier correction applied to demodulation (Hz).
     afc_correction_hz: f32,
@@ -120,9 +123,13 @@ impl ModemEngine {
         self.trust_policy_profile = profile;
     }
 
-    /// Returns the carrier frequency offset estimate from the most recent
-    /// demodulation call, in Hz.  Returns `None` until the first receive or
-    /// if the active plugin does not support AFC.
+    /// Returns the residual carrier frequency error measured at the corrected
+    /// reference from the most recent demodulation call, in Hz.
+    ///
+    /// This is the error *after* `afc_correction_hz` has been applied.  The
+    /// total offset from the nominal centre frequency is approximately
+    /// `afc_correction_hz() + last_afc_offset_hz()`.  Returns `None` until the
+    /// first receive or if the active plugin does not support AFC.
     pub fn last_afc_offset_hz(&self) -> Option<f32> {
         self.last_afc_offset_hz
     }
