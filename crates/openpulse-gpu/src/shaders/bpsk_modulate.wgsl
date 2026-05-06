@@ -36,12 +36,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i       = sample_idx % params.samples_per_sym;
 
     let a_curr = select(1.0f, -1.0f, symbols[sym_idx] == 1u);
-    // Fade to silence after the last symbol.
-    let a_next = select(
-        select(1.0f, -1.0f, symbols[sym_idx + 1u] == 1u),
-        0.0f,
-        sym_idx + 1u >= params.n_syms,
-    );
+    // Fade to silence after the last symbol.  Guard the array read with an if
+    // because WGSL select() evaluates both branches unconditionally.
+    var a_next = 0.0f;
+    if (sym_idx + 1u < params.n_syms) {
+        a_next = select(1.0f, -1.0f, symbols[sym_idx + 1u] == 1u);
+    }
 
     let n_f    = f32(params.samples_per_sym);
     let w_tail = 0.5 * (1.0 + cos(PI * f32(i) / n_f));
