@@ -501,10 +501,213 @@ path regardless of rig_b TX state.
 
 
 
+---
+
+## Phase 8 — Waveform Compliance and Pulse-Shaping Expansion
+
+*Unlocked by the bandwidth audit that identified QPSK1000 and 8PSK1000 as exceeding the
+2700 Hz HF channel-width limit used by IARU, FCC Part 97, and most national regulations.
+Items 8.1 and 8.2 are naming/profile changes; 8.3 is a DSP change that closes the
+underlying issue.*
+
+### 8.1 — Rename wideband HPX profiles for non-HF use
+
+The current `hpx2300()` profile reaches SL9=QPSK1000 and SL11=8PSK1000, both of which
+occupy ~4000 Hz null-to-null bandwidth with Hann windowing.  These modes are illegal on
+HF amateur allocations (2700 Hz hard ceiling) but are legitimate on FM, satellite, and
+UHF/VHF links.  The rename makes the operating context explicit.
+
+- Rename `SessionProfile::hpx2300()` → `SessionProfile::hpx_wideband()` in
+  `crates/openpulse-core/src/profile.rs`.
+- Update all call sites (testbench, testmatrix, integration tests, CLI).
+- Add doc comment: *"Wideband profile (≤ 4000 Hz). Legal on FM, satellite, and
+  UHF/VHF; exceeds 2700 Hz HF limit at SL9–SL11. Use `hpx_hf()` for HF operation."*
+- No wire-protocol change; profile names are local to the session initialisation API.
+
+**Acceptance**: `cargo test --workspace --no-default-features` passes; testbench and
+testmatrix compile with the renamed symbol.
+
+---
+
+### 8.2 — HF-compliant capped adaptive profile (`hpx_hf`)
+
+Add a new `SessionProfile::hpx_hf()` profile whose top speed level stays within the
+2700 Hz HF channel-width limit.  Bandwidth budget: `4 × Rs ≤ 2700 Hz → Rs ≤ 675 baud`.
+
+| Speed level | Mode | Gross bps | BW (Hann null-to-null) |
+|---|---|---|---|
+| SL2 (initial) | BPSK31 | 31 bps | 125 Hz |
+| SL3 | BPSK63 | 63 bps | 250 Hz |
+| SL4 | BPSK250 | 250 bps | 1000 Hz |
+| SL5 | QPSK250 | 500 bps | 1000 Hz |
+| SL6 (ceiling) | QPSK500 | 1000 bps | 2000 Hz |
+| SL7 (ceiling alt) | 8PSK500 | 1500 bps | 2000 Hz |
+
+`hpx_hf()` peaks at SL7 = 8PSK500 (1500 bps gross, 2000 Hz BW).  This is the
+HF-legal upper limit with the current Hann-window pulse shaping.
+
+- Implement `SessionProfile::hpx_hf()` in `profile.rs`.
+- Add `Tier::Quick` testmatrix cases for the new profile.
+- Document in `docs/architecture.md` alongside the existing profile table.
+- Update testbench adaptive use-case to expose `HPX-HF` as a named profile choice.
+
+**Acceptance**: adaptive profile integration tests pass for the new profile; testmatrix
+quick tier includes at least one HPX-HF × AWGN 20 dB case.
+
+**Dependencies**: none (profile is a pure data change; no new plugins required).
+
+---
+
+### 8.3 — PSK31-style cosine amplitude shaping
+
+PSK31 achieves bandwidth ≈ symbol rate (vs. 4 × Rs for Hann isolated bursts) by applying
+a continuous overlapping cosine amplitude envelope across symbol boundaries.  Phase
+transitions occur at the zero-crossings of the amplitude, so adjacent symbols fade
+smoothly through zero — eliminating the spectral splatter of hard transitions.
+
+Applying this to QPSK1000 reduces its null-to-null bandwidth from ~4000 Hz to ~2000 Hz,
+making it legal on HF.  This is a TX-only pulse-shaping change; the existing
+Goertzel/IQ-integration receiver does not need modification.
+
+**Implementation**:
+- Add `PulseShape` enum to `openpulse-core`: `Hann` (current), `CosineOverlap`.
+- `CosineOverlap`: the amplitude envelope for symbol *n* is a half-cosine centred at
+  the symbol's midpoint; adjacent symbols share the rising/falling edge so the combined
+  envelope is continuous and never drops to zero between symbols (no inter-symbol gap).
+- Expose `PulseShape` via `ModulationConfig`; plugins use it in the modulate path;
+  default remains `Hann` for backward compatibility.
+- Add `"QPSK1000-HF"`, `"8PSK1000-HF"` mode aliases that select `CosineOverlap` with
+  the appropriate baud rate, documented as the HF-safe variants of QPSK1000/8PSK1000.
+- Update testbench `gross_bps` / `mode_symbol_rate_hz` tables for the new aliases.
+- Testmatrix quick tier: add QPSK1000-HF × clean and AWGN 20 dB cases.
+- Measure the actual null-to-null bandwidth of QPSK1000-HF in the testbench and confirm
+  it falls within 2700 Hz before marking done.
+
+**What this does NOT do**: it does not implement a matched receiver filter or timing
+recovery loop.  The receiver integrates over the full symbol period; the overlapping
+envelope causes a mild SNR penalty (~1–2 dB) relative to a true matched filter, but
+no ISI if the channel delay spread is short relative to the symbol period (acceptable
+on HF for 500 baud; marginal at 1000 baud — see FF-3 for the full solution).
+
+**Acceptance**: QPSK1000-HF spectrum in the testbench shows null-to-null BW ≤ 2700 Hz;
+loopback round-trip passes on clean channel and AWGN 20 dB.
+
+**Dependencies**: none beyond existing plugin infrastructure.
+
+---
+
+## Far-future items
+
 Features deliberately deferred beyond Phase 6.  Each item requires significant design
 work, hardware availability, or explicit operator configuration that is not yet in scope.
 
-### FF-1 — Operator-initiated QSY (frequency change) negotiation
+### FF-3 — Root-raised-cosine matched filtering *(far future)*
+
+RRC reduces the occupied bandwidth to `(1 + α) × Rs` Hz.  At α = 0.35 this is 1350 Hz
+for 1000 baud — well within 2700 Hz and comparable to VARA 500 Hz mode spectral
+efficiency.  It is the correct long-term solution but requires a fundamental rework of
+the demodulation chain that is not justified until the current single-carrier architecture
+is otherwise mature.
+
+**What changes relative to today**:
+- TX: replace cosine/Hann amplitude shaping with root-raised-cosine TX filter (finite
+  impulse response; span ~8 symbols, rolloff α configurable 0.2–0.5).
+- RX: matched RRC filter + Gardner timing error detector (or Mueller-Müller) to recover
+  symbol timing.  This replaces the current Goertzel/IQ-integration demodulator, which
+  relies on the symbol being spectrally isolated.
+- Channel equalizer: at 1000 baud on HF, symbol period (1 ms) is comparable to
+  multipath delay spread (0.5–2 ms).  An adaptive equalizer (LMS or DFE, 3–5 taps) is
+  required for reliable operation; at 500 baud it is optional.
+- Coherent carrier recovery: RRC + equalization implies coherent detection (PLL or
+  decision-directed phase recovery), gaining ~3 dB SNR vs. the current differential
+  encoding.
+
+**Design constraint**: every element (RRC filter, timing recovery, equalizer, carrier
+recovery) must be implementable on Raspberry Pi 4 in real time.  GPU acceleration
+(Phase 3.3) can assist the filter convolutions; the timing/carrier loops are control
+algorithms and must run on the CPU.
+
+**Prerequisite research**: benchmark the Raspberry Pi 4 cost of a 512-tap RRC filter
+at 1000 baud before committing to this path; consider NEON/SIMD optimisation.
+
+---
+
+### FF-4 — OFDM wideband profile with reduced PAPR *(far future research)*
+
+VARA achieves 7536 bps in 2400 Hz using 52 subcarriers at 37.5 baud each with a cyclic
+prefix that absorbs HF multipath.  The PAPR cost is 9 dB, requiring amplifier back-off
+to ~12 W average from 100 W peak.  To compete on throughput while reducing this penalty,
+investigate reduced-PAPR OFDM techniques before committing to an implementation.
+
+**Research questions to answer before design begins**:
+
+1. **Clipping + filtering**: clip the OFDM time-domain signal at 3–4 dB above RMS, then
+   apply a bandpass filter to restore spectral mask compliance.  Achieves ~4–5 dB PAPR
+   reduction at the cost of a slight BER floor (~0.1 dB SNR penalty at 10⁻³ BER).
+   Does this bring PAPR close enough to single-carrier to make OFDM viable on class-E /
+   switching amplifiers common in portable HF rigs?
+
+2. **Tone reservation**: reserve a small fraction of subcarriers (2–4 of 52) as PAPR
+   reduction tones; optimise their amplitude/phase to cancel the highest-envelope peaks.
+   No BER impact but reduces usable subcarriers slightly.
+
+3. **Fewer, wider subcarriers**: VARA uses 52 × 37.5 baud.  A profile with 16 × 100 baud
+   subcarriers has lower PAPR (fewer carriers → less constructive interference probability)
+   and a shorter cyclic prefix requirement.  Does 100 baud per subcarrier still survive
+   HF delay spread (≤ 2 ms) with a 5 ms cyclic prefix?
+
+4. **Single-carrier FDMA as a hybrid**: keep a single dominant subcarrier (for robustness
+   on marginal channels) and add secondary subcarriers only when SNR headroom is available.
+   The rate adaptation ladder stays largely unchanged; OFDM is an optional upper tier.
+
+**Gate**: before implementing, conduct a simulation study (using the existing
+`openpulse-channel` models) comparing SNR vs. throughput for the PAPR-reduction
+approaches above against the VARA specification table.  Write results into
+`docs/ofdm-research.md`; only proceed if at least one technique achieves PAPR ≤ 6 dB
+(matching VARA ACK-frame PAPR) without unacceptable BER penalty.
+
+**Dependencies**: Phase 8.3 (pulse shaping infrastructure), simulation tooling on top of
+existing channel models.
+
+---
+
+### FF-5 — Ultra-high-speed UHF/VHF modes *(far future)*
+
+On UHF (430 MHz) and VHF (144 MHz), the 2700 Hz bandwidth restriction does not apply.
+FM voice allocations are typically 12.5–25 kHz wide; weak-signal SSB sub-bands on 2 m
+are narrowband but the band plan permits wide digital emissions in designated segments.
+A UHF/VHF profile can push baud rates and modulation orders well beyond what HF allows.
+
+**Target operating envelope**:
+
+| Channel width | Symbol rate | Modulation | Gross throughput |
+|---|---|---|---|
+| 6 kHz | 3000 baud | 64QAM | ~18 kbps |
+| 12.5 kHz | 6250 baud | 64QAM | ~37 kbps |
+| 25 kHz | 12500 baud | 64QAM | ~75 kbps |
+
+At these rates, HF-specific concerns (multipath delay spread, ionospheric Doppler)
+are replaced by different impairments: Doppler from mobile platforms, adjacent-channel
+interference from FM voice, and receiver phase noise in cheap SDR front-ends.
+
+**Design notes**:
+- At 3000+ baud, per-symbol Goertzel demodulation is no longer practical; a hardware-
+  accelerated receive pipeline (GPU via Phase 3.3, or NEON SIMD) is required.
+- 64QAM requires SNR > 26 dB; suitable for terrestrial line-of-sight links and low-earth-
+  orbit satellite passes but not for EME or troposcatter paths.
+- The rate adaptation ladder (Phase 2.1) already supports SL1–SL11; UHF modes would
+  extend to SL12–SL20 with new `SpeedLevel` variants and a separate `SessionProfile`.
+- PAPR of 64QAM single-carrier is ~7–8 dB; amplifier linearity requirements are
+  higher than for BPSK/QPSK but lower than for OFDM.
+- Regulatory survey required: identify which national band plans permit wide digital
+  emissions at these baud rates; document in `docs/regulatory.md`.
+
+**Dependencies**: FF-3 (RRC matched filtering is essential at 3000+ baud), FF-4 (OFDM
+may be preferred over single-carrier at very wide channels), Phase 3.3 (GPU acceleration).
+
+---
+
+
 
 Allows two stations to collaboratively move to a better channel when the current
 frequency is impaired by QRM, QSB, or QRN.  The procedure is explicit and
@@ -609,6 +812,20 @@ Phase 2.5 (Peer cache)
 
 Phase 2.4 (CSMA / DCD)
     └─> Phase 4.3 (KISS broadcast mode)
+
+Phase 8.1 (rename hpx_wideband)
+    └─> Phase 8.2 (hpx_hf profile — references renamed symbol)
+    └─> Phase 8.3 (cosine pulse shaping — QPSK1000-HF uses it)
+
+Phase 8.3 (cosine pulse shaping)
+    └─> FF-3 (RRC builds on pulse-shaping infrastructure)
+    └─> FF-4 (OFDM research uses channel simulation tooling)
+
+FF-3 (RRC matched filtering)
+    └─> FF-5 (UHF/VHF ultra-high-speed modes require RRC)
+
+FF-4 (OFDM research)
+    └─> FF-5 (OFDM may be preferred at very wide channels)
 
 Phase 7.1 (RigctldController)
     └─> Phase 7.2 (dual-rig / cross-band repeater)
