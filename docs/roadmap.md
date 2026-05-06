@@ -240,7 +240,7 @@ test relay automatic control point interface, publish compliance report as relea
 
 ---
 
-## Phase 6 — AFC, Interoperability, and Network (Active)
+## Phase 6 — AFC, Interoperability, and Network ✅ Done
 
 ### 6.1 — AFC correction loop ✅ Done (PR #116)
 
@@ -285,7 +285,7 @@ network service.
 - Integration tests: 3-node loopback mesh (`ChannelSimHarness` × 2 hops); verify
   a frame addressed to node C arrives via relay through B from A.
 
-### 6.4 — Peer cache wired into mesh daemon 🔄 In progress (PR #121)
+### 6.4 — Peer cache wired into mesh daemon ✅ Done (PR #121)
 
 Wire `PeerCache` into `MeshDaemon` so beacon responses populate the local peer table and
 nodes can answer peer-query requests from their cached knowledge.
