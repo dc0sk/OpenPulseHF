@@ -57,8 +57,12 @@ fn render_hpx_state(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 }
 
 fn render_meters(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let afc = app
+    let afc_offset = app
         .afc_offset_hz
+        .map(|v| format!("{v:+.1} Hz"))
+        .unwrap_or_else(|| "—".to_string());
+    let afc_corr = app
+        .afc_correction_hz
         .map(|v| format!("{v:+.1} Hz"))
         .unwrap_or_else(|| "—".to_string());
     let mode = app.current_mode.as_deref().unwrap_or("—");
@@ -70,8 +74,10 @@ fn render_meters(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 
     let lines = vec![
         Line::from(vec![
-            Span::raw("AFC: "),
-            Span::styled(afc, Style::default().fg(Color::Cyan)),
+            Span::raw("AFC offset: "),
+            Span::styled(afc_offset, Style::default().fg(Color::Cyan)),
+            Span::raw("  corr: "),
+            Span::styled(afc_corr, Style::default().fg(Color::Cyan)),
         ]),
         Line::from(vec![
             Span::raw("Rate: "),

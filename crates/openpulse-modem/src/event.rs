@@ -13,7 +13,18 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EngineEvent {
     /// AFC frequency offset estimate updated after a receive call.
-    AfcUpdate { offset_hz: f32, mode: String },
+    AfcUpdate {
+        /// Residual frequency error measured at the corrected reference (Hz).
+        /// The total offset from the nominal centre frequency is approximately
+        /// `correction_hz + offset_hz`.
+        offset_hz: f32,
+        /// Accumulated carrier correction that will be applied to subsequent
+        /// demodulation calls (Hz).  Defaults to 0.0 when deserialising older
+        /// event streams that predate this field.
+        #[serde(default)]
+        correction_hz: f32,
+        mode: String,
+    },
     /// Rate adapter advanced after an ACK was applied.
     RateChange {
         event: RateEvent,

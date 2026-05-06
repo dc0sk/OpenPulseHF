@@ -14,6 +14,7 @@ pub struct App {
     pub dcd_busy: bool,
     pub dcd_energy: f32,
     pub afc_offset_hz: Option<f32>,
+    pub afc_correction_hz: Option<f32>,
     /// Last 50 transitions, each formatted as "[HH:MM:SS] From → To (Event)".
     pub transitions: VecDeque<String>,
     pub paused: bool,
@@ -31,6 +32,7 @@ impl Default for App {
             dcd_busy: false,
             dcd_energy: 0.0,
             afc_offset_hz: None,
+            afc_correction_hz: None,
             transitions: VecDeque::new(),
             paused: false,
             scroll_offset: 0,
@@ -45,8 +47,13 @@ impl App {
             return;
         }
         match event {
-            EngineEvent::AfcUpdate { offset_hz, .. } => {
+            EngineEvent::AfcUpdate {
+                offset_hz,
+                correction_hz,
+                ..
+            } => {
                 self.afc_offset_hz = Some(offset_hz);
+                self.afc_correction_hz = Some(correction_hz);
             }
             EngineEvent::RateChange {
                 speed_level, mode, ..
