@@ -242,8 +242,6 @@ test relay automatic control point interface, publish compliance report as relea
 
 ## Phase 6 — AFC, Interoperability, and Network (Active)
 
-## Phase 6 — AFC, Interoperability, and Network (Active)
-
 ### 6.1 — AFC correction loop ✅ Done (PR #116)
 
 Close the automatic frequency control feedback path.  The IQ-squaring estimator
@@ -260,7 +258,7 @@ the correction step.
 - Integration tests: loopback with a 15 Hz TX/RX carrier offset; asserts AFC converges to
   within ±2 Hz within 25 frames at BPSK100.
 
-### 6.2 — pat / Winlink interoperability
+### 6.2 — pat / Winlink interoperability ✅ Done (PR #118)
 
 Verify an end-to-end Winlink round-trip driven by `pat` connecting to `openpulse-tnc` via
 its ARDOP interface.
@@ -273,7 +271,7 @@ its ARDOP interface.
 - Acceptance: `pat` can send a message via `openpulse-tnc` and retrieve it back without
   any manual intervention beyond normal `pat` UI operation.
 
-### 6.3 — Network mesh layer
+### 6.3 — Network mesh layer ✅ Done (PR #120)
 
 Promote the relay, peer-cache, and query-propagation modules from library code to a running
 network service.
@@ -286,6 +284,22 @@ network service.
   (trust-level minimum), `store_forward_ttl_s`.
 - Integration tests: 3-node loopback mesh (`ChannelSimHarness` × 2 hops); verify
   a frame addressed to node C arrives via relay through B from A.
+
+### 6.4 — Peer cache wired into mesh daemon 🔄 In progress (PR #121)
+
+Wire `PeerCache` into `MeshDaemon` so beacon responses populate the local peer table and
+nodes can answer peer-query requests from their cached knowledge.
+
+- `MeshDaemon` gains a `PeerCache` field (capacity and TTL from `[mesh]` config).
+- Self-seeded at construction so every node always includes itself in query responses.
+- `WireMsgType::PeerQueryRequest` dispatch: query local cache, broadcast
+  `PeerQueryResponse`, then propagate the request for multi-hop discovery.
+- `WireMsgType::PeerQueryResponse` dispatch: upsert results into cache; emit
+  `MeshEvent::PeerDiscovered` for new entries; `route_quality` derived from
+  `envelope.hop_index`.
+- New `MeshEvent` variants: `PeerQueried` and `PeerDiscovered`.
+- Integration test: `peer_discovery_via_beacon` — A beacons → B responds with self →
+  A caches B and emits `PeerDiscovered`.
 
 ---
 
