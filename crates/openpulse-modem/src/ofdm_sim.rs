@@ -23,10 +23,15 @@ impl OfdmConfig {
         self.n_subcarriers + self.cp_samples
     }
 
+    /// Number of usable one-sided data subcarriers (indices 1..n/2, excluding pilots).
+    fn usable_data_carriers(&self) -> usize {
+        let one_sided = self.n_subcarriers / 2 - 1; // indices 1..n/2
+        one_sided.saturating_sub(self.pilot_count)
+    }
+
     /// Net bits per OFDM symbol (pilots carry no payload).
     pub fn bits_per_ofdm_symbol(&self) -> usize {
-        let data_carriers = self.n_subcarriers.saturating_sub(self.pilot_count);
-        data_carriers * self.mod_order
+        self.usable_data_carriers() * self.mod_order
     }
 
     /// Gross bit rate (bps).
@@ -35,9 +40,9 @@ impl OfdmConfig {
         self.bits_per_ofdm_symbol() as f32 / sym_duration
     }
 
-    /// Occupied bandwidth (Hz) — from DC to the highest subcarrier bin.
+    /// Occupied bandwidth (Hz) — one-sided Nyquist bandwidth.
     pub fn bw_hz(&self) -> f32 {
-        self.n_subcarriers as f32 * self.fs / self.n_subcarriers as f32
+        self.fs / 2.0
     }
 }
 
@@ -109,7 +114,7 @@ fn nearest_bpsk(c: Complex32) -> u8 {
 fn nearest_qpsk(c: Complex32) -> u8 {
     let i_bit = if c.re >= 0.0 { 0u8 } else { 1u8 };
     let q_bit = if c.im >= 0.0 { 0u8 } else { 1u8 };
-    (i_bit << 1) | q_bit
+    i_bit | (q_bit << 1)
 }
 
 fn nearest_qam16(c: Complex32) -> u8 {
@@ -142,18 +147,26 @@ fn demap_symbol(c: Complex32, mod_order: usize) -> u8 {
 
 // ── Frame encode/decode ───────────────────────────────────────────────────────
 
-/// Encode `payload` bytes into OFDM time-domain samples.
+/// Encode `payload` bytes into real-valued OFDM time-domain samples.
 ///
-/// Each byte encodes `mod_order` bits to one subcarrier symbol.  Multiple
-/// OFDM symbols are generated until all payload bits are packed.
-/// Pilot subcarriers are inserted at regular intervals and carry a known
-/// BPSK +1 symbol (not payload-bearing).
+/// Uses Hermitian symmetry so the IFFT output is purely real: data subcarriers
+/// are placed at positive-frequency bins 1..fft_size/2; bins fft_size/2+1..N-1
+/// are set to the complex conjugate of the corresponding positive-frequency bin.
+/// DC (bin 0) and Nyquist (bin fft_size/2) are zeroed.
+///
+/// Pilot subcarriers are inserted at regular intervals within the positive
+/// half and carry a known real BPSK +1 symbol.
 pub fn generate_ofdm_frame(cfg: &OfdmConfig, payload: &[u8]) -> Vec<f32> {
     let fft_size = cfg.n_subcarriers;
-    let data_carriers = fft_size.saturating_sub(cfg.pilot_count);
+    let half = fft_size / 2; // usable positive-frequency range: 1..half
+    let data_carriers = cfg.usable_data_carriers();
     let bits_per_sym = cfg.mod_order;
     let bits_needed = payload.len() * 8;
-    let bits_per_ofdm = data_carriers * bits_per_sym;
+    let bits_per_ofdm = if data_carriers > 0 {
+        data_carriers * bits_per_sym
+    } else {
+        1
+    };
     let n_ofdm_syms = bits_needed.div_ceil(bits_per_ofdm);
 
     let mut planner = FftPlanner::new();
@@ -166,11 +179,12 @@ pub fn generate_ofdm_frame(cfg: &OfdmConfig, payload: &[u8]) -> Vec<f32> {
     for _ in 0..n_ofdm_syms {
         let mut freq = vec![Complex32::new(0.0, 0.0); fft_size];
 
-        // Fill subcarriers: skip pilot positions, place data elsewhere.
-        let mut data_sc = 0usize;
-        for sc in 0..fft_size {
-            if is_pilot(sc, cfg.pilot_count, fft_size) {
-                freq[sc] = Complex32::new(1.0, 0.0); // known pilot
+        // Fill positive-frequency bins 1..half with data/pilots.
+        // bin 0 (DC) and bin half (Nyquist) remain zero.
+        for sc in 1..half {
+            let pos = sc - 1; // 0-indexed position within positive half
+            let sym = if is_pilot_one_sided(pos, cfg.pilot_count, half - 1) {
+                Complex32::new(1.0, 0.0) // known pilot
             } else {
                 let mut sym_bits = 0u8;
                 for b in 0..bits_per_sym {
@@ -179,14 +193,16 @@ pub fn generate_ofdm_frame(cfg: &OfdmConfig, payload: &[u8]) -> Vec<f32> {
                         bit_idx += 1;
                     }
                 }
-                freq[sc] = map_symbol(sym_bits, bits_per_sym);
-                data_sc += 1;
-            }
+                map_symbol(sym_bits, bits_per_sym)
+            };
+            freq[sc] = sym;
+            // Hermitian symmetry: negative-frequency mirror.
+            freq[fft_size - sc] = sym.conj();
         }
-        let _ = data_sc;
 
-        // IFFT.
+        // IFFT — output is purely real due to Hermitian symmetry.
         ifft.process(&mut freq);
+        // Normalise by 1/sqrt(N); the IFFT output will be real-valued.
         let scale = 1.0 / (fft_size as f32).sqrt();
         let time: Vec<f32> = freq.iter().map(|c| c.re * scale).collect();
 
@@ -199,13 +215,23 @@ pub fn generate_ofdm_frame(cfg: &OfdmConfig, payload: &[u8]) -> Vec<f32> {
     out
 }
 
-/// Decode OFDM samples back to payload bytes (best-effort, no FEC).
+/// Decode real-valued OFDM samples back to payload bytes (best-effort, no FEC).
+///
+/// Reads only the positive-frequency half (bins 1..fft_size/2) of the FFT
+/// to match the Hermitian-symmetric transmitter.  Each positive-frequency bin
+/// is multiplied by 2 to account for the energy split between positive and
+/// negative mirrors.
 pub fn demodulate_ofdm_frame(samples: &[f32], cfg: &OfdmConfig) -> Vec<u8> {
     let fft_size = cfg.n_subcarriers;
+    let half = fft_size / 2;
     let sym_len = fft_size + cfg.cp_samples;
-    let data_carriers = fft_size.saturating_sub(cfg.pilot_count);
+    let data_carriers = cfg.usable_data_carriers();
     let bits_per_sym = cfg.mod_order;
-    let bits_per_ofdm = data_carriers * bits_per_sym;
+    let bits_per_ofdm = if data_carriers > 0 {
+        data_carriers * bits_per_sym
+    } else {
+        1
+    };
 
     let mut planner = FftPlanner::new();
     let fft = planner.plan_fft_forward(fft_size);
@@ -226,11 +252,14 @@ pub fn demodulate_ofdm_frame(samples: &[f32], cfg: &OfdmConfig) -> Vec<u8> {
 
         fft.process(&mut freq);
 
-        for sc in 0..fft_size {
-            if is_pilot(sc, cfg.pilot_count, fft_size) {
+        // Decode only positive frequencies 1..half.
+        for sc in 1..half {
+            let pos = sc - 1;
+            if is_pilot_one_sided(pos, cfg.pilot_count, half - 1) {
                 continue;
             }
-            let sym_bits = demap_symbol(freq[sc], bits_per_sym);
+            let sym = freq[sc];
+            let sym_bits = demap_symbol(sym, bits_per_sym);
             for b in 0..bits_per_sym {
                 bits.push((sym_bits >> b) & 1 == 1);
             }
@@ -403,6 +432,14 @@ fn is_pilot(sc: usize, pilot_count: usize, fft_size: usize) -> bool {
     sc > 0 && sc % spacing == 0 && (sc / spacing) <= pilot_count
 }
 
+/// Pilot detection for one-sided (positive-frequency) subcarrier indexing.
+///
+/// `pos` is 0-indexed position within the positive half (0 = bin 1, etc.).
+/// `n_pos` is the total number of positive-frequency subcarriers (half - 1).
+fn is_pilot_one_sided(pos: usize, pilot_count: usize, n_pos: usize) -> bool {
+    is_pilot(pos + 1, pilot_count, n_pos + 1)
+}
+
 fn bytes_to_bits(bytes: &[u8]) -> Vec<bool> {
     let mut bits = Vec::with_capacity(bytes.len() * 8);
     for &b in bytes {
@@ -456,12 +493,19 @@ mod tests {
     }
 
     #[test]
-    fn clip_and_filter_reduces_papr() {
+    fn clip_iterative_reduces_papr_to_target() {
         let cfg = base_cfg();
         let samples = generate_ofdm_frame(&cfg, b"clip test payload");
         let papr_before = measure_papr(&samples);
-        let clipped = clip_and_filter(&samples, 3.0);
+        let clipped = clip_iterative(&samples, 4.0, 50);
         let papr_after = measure_papr(&clipped);
-        assert!(papr_after <= papr_before, "clip did not reduce PAPR");
+        assert!(
+            papr_after <= papr_before,
+            "iterative clip raised PAPR: before={papr_before:.1} after={papr_after:.1}"
+        );
+        assert!(
+            papr_after <= 4.1,
+            "iterative clip did not converge to target: {papr_after:.1} dB"
+        );
     }
 }
