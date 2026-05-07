@@ -28,6 +28,21 @@ pub struct PluginInfo {
     pub trait_version_required: String,
 }
 
+// ── Pulse shaping ─────────────────────────────────────────────────────────────
+
+/// Amplitude envelope applied during symbol modulation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PulseShape {
+    /// 50% overlapping raised-cosine crossfade between adjacent symbols.
+    /// Default for all modes; equivalent to PSK31 shaping for pure BPSK.
+    #[default]
+    Hann,
+    /// Independent sin² amplitude envelope per symbol (0 → 1 → 0 per period).
+    /// Forces amplitude zero at every symbol boundary; achieves null-to-null BW ≈ 2×Rs.
+    /// Used by `-HF` mode aliases for HF-legal operation at high baud rates.
+    CosineOverlap,
+}
+
 // ── Modulation configuration ──────────────────────────────────────────────────
 
 /// Runtime configuration passed to a plugin for each encode/decode call.
@@ -39,6 +54,8 @@ pub struct ModulationConfig {
     pub sample_rate: u32,
     /// Mode string that selects parameters inside the plugin, e.g. `"BPSK31"`.
     pub mode: String,
+    /// Pulse-shaping envelope; overridden automatically by `-HF` mode aliases.
+    pub pulse_shape: PulseShape,
 }
 
 impl Default for ModulationConfig {
@@ -47,6 +64,7 @@ impl Default for ModulationConfig {
             center_frequency: 1500.0,
             sample_rate: 8000,
             mode: "BPSK100".to_string(),
+            pulse_shape: PulseShape::Hann,
         }
     }
 }

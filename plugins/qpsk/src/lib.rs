@@ -31,6 +31,7 @@ impl QpskPlugin {
                     "QPSK250".to_string(),
                     "QPSK500".to_string(),
                     "QPSK1000".to_string(),
+                    "QPSK1000-HF".to_string(),
                 ],
                 trait_version_required: "1.0".to_string(),
             },
@@ -56,9 +57,10 @@ impl ModulationPlugin for QpskPlugin {
     }
 }
 
-/// Parse numeric baud rate from modes such as "QPSK250".
+/// Parse numeric baud rate from modes such as "QPSK250" or "QPSK1000-HF".
 pub(crate) fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
-    let digits: String = mode.chars().skip_while(|c| !c.is_ascii_digit()).collect();
+    let base = mode.trim_end_matches("-HF");
+    let digits: String = base.chars().skip_while(|c| !c.is_ascii_digit()).collect();
     match digits.as_str() {
         "125" => Ok(125.0),
         "250" => Ok(250.0),
@@ -80,6 +82,7 @@ mod tests {
         assert!((parse_baud_rate("QPSK250").unwrap() - 250.0).abs() < 1e-6);
         assert!((parse_baud_rate("QPSK500").unwrap() - 500.0).abs() < 1e-6);
         assert!((parse_baud_rate("QPSK1000").unwrap() - 1000.0).abs() < 1e-6);
+        assert!((parse_baud_rate("QPSK1000-HF").unwrap() - 1000.0).abs() < 1e-6);
         assert!(parse_baud_rate("QPSK").is_err());
     }
 
@@ -95,5 +98,61 @@ mod tests {
         let samples = plugin.modulate(payload, &cfg).expect("modulate");
         let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
         assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    #[test]
+    fn qpsk1000_hf_loopback() {
+        use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+        let plugin = QpskPlugin::new();
+        let cfg = ModulationConfig {
+            mode: "QPSK1000-HF".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"QPSK1000-HF round-trip";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    #[test]
+    fn qpsk1000_hf_bandwidth_under_2700hz() {
+        use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+        use std::f32::consts::PI;
+        let plugin = QpskPlugin::new();
+        let fc = 1500.0f32;
+        let cfg = ModulationConfig {
+            mode: "QPSK1000-HF".to_string(),
+            center_frequency: fc,
+            sample_rate: 8000,
+            ..ModulationConfig::default()
+        };
+        let payload: Vec<u8> = (0..128u8).collect();
+        let samples = plugin.modulate(&payload, &cfg).expect("modulate");
+        let fs = 8000.0f32;
+        let n = samples.len() as f32;
+
+        let power_at = |freq: f32| -> f32 {
+            let re: f32 = samples
+                .iter()
+                .enumerate()
+                .map(|(k, &s)| s * (2.0 * PI * freq * k as f32 / fs).cos())
+                .sum::<f32>()
+                / n;
+            let im: f32 = samples
+                .iter()
+                .enumerate()
+                .map(|(k, &s)| s * (2.0 * PI * freq * k as f32 / fs).sin())
+                .sum::<f32>()
+                / n;
+            re * re + im * im
+        };
+
+        let p_inband = power_at(fc);
+        let p_edge = power_at(fc + 1350.0);
+        // Edge (at the 2700 Hz HF boundary) must be at least 10 dB below in-band.
+        assert!(
+            p_edge < p_inband / 10.0,
+            "edge power {p_edge:.6} should be < 1/10 of in-band {p_inband:.6}"
+        );
     }
 }

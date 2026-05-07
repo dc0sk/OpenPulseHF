@@ -64,6 +64,7 @@ fn make_mod_config(config: &AppConfig) -> ModulationConfig {
         mode: config.mode.clone(),
         center_frequency: 1500.0,
         sample_rate: 8000,
+        ..ModulationConfig::default()
     }
 }
 

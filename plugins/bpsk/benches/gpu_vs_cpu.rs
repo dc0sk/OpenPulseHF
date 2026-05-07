@@ -8,6 +8,7 @@ fn modulation_config() -> ModulationConfig {
         mode: "BPSK250".to_string(),
         sample_rate: 8000,
         center_frequency: 1500.0,
+        ..ModulationConfig::default()
     }
 }
 
