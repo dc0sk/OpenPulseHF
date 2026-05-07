@@ -1,3 +1,10 @@
+---
+project: openpulsehf
+doc: docs/features.md
+status: living
+last_updated: 2026-05-06
+---
+
 # OpenPulseHF — Feature Reference
 
 This document describes every major feature of OpenPulseHF: what is implemented, what
