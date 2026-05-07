@@ -1,0 +1,23 @@
+[package]
+name    = "openpulse-panel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Operator UI panel for OpenPulseHF: connects to openpulse-server control port"
+
+[[bin]]
+name = "openpulse-panel"
+path = "src/main.rs"
+
+[dependencies]
+openpulse-daemon  = { workspace = true }
+openpulse-modem   = { workspace = true }
+serde_json        = { workspace = true }
+crossbeam-channel = { workspace = true }
+eframe.workspace  = true
+egui.workspace    = true
+egui_plot.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
