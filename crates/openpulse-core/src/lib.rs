@@ -23,6 +23,7 @@ pub mod profile;
 pub mod query_propagation;
 pub mod rate;
 pub mod relay;
+pub mod remote_control;
 pub mod sar;
 pub mod signed_envelope;
 pub mod trust;

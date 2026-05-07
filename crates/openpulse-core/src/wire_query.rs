@@ -33,6 +33,8 @@ pub enum WireMsgType {
     RelayHopAck = 0x06,
     RelayRouteUpdate = 0x07,
     RelayRouteReject = 0x08,
+    /// Signed remote rig-control command (Phase 7.5).
+    RigCtrlCmd = 0x09,
 }
 
 impl WireMsgType {
@@ -46,6 +48,7 @@ impl WireMsgType {
             0x06 => Some(Self::RelayHopAck),
             0x07 => Some(Self::RelayRouteUpdate),
             0x08 => Some(Self::RelayRouteReject),
+            0x09 => Some(Self::RigCtrlCmd),
             _ => None,
         }
     }
