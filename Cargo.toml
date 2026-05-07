@@ -24,6 +24,7 @@ members = [
     "pki-tooling",
     "apps/openpulse-testbench",
     "apps/openpulse-testmatrix",
+    "apps/openpulse-panel",
     "crates/openpulse-daemon",
 ]
 
