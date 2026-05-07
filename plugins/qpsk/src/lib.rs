@@ -32,6 +32,8 @@ impl QpskPlugin {
                     "QPSK500".to_string(),
                     "QPSK1000".to_string(),
                     "QPSK1000-HF".to_string(),
+                    "QPSK500-RRC".to_string(),
+                    "QPSK1000-RRC".to_string(),
                 ],
                 trait_version_required: "1.0".to_string(),
             },
@@ -57,9 +59,9 @@ impl ModulationPlugin for QpskPlugin {
     }
 }
 
-/// Parse numeric baud rate from modes such as "QPSK250" or "QPSK1000-HF".
+/// Parse numeric baud rate from modes such as "QPSK250", "QPSK1000-HF", or "QPSK500-RRC".
 pub(crate) fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
-    let base = mode.trim_end_matches("-HF");
+    let base = mode.trim_end_matches("-HF").trim_end_matches("-RRC");
     let digits: String = base.chars().skip_while(|c| !c.is_ascii_digit()).collect();
     match digits.as_str() {
         "125" => Ok(125.0),
@@ -154,5 +156,19 @@ mod tests {
             p_edge < p_inband / 10.0,
             "edge power {p_edge:.6} should be < 1/10 of in-band {p_inband:.6}"
         );
+    }
+
+    #[test]
+    fn qpsk500_rrc_loopback() {
+        use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+        let plugin = QpskPlugin::new();
+        let cfg = ModulationConfig {
+            mode: "QPSK500-RRC".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"QPSK RRC loopback";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
     }
 }

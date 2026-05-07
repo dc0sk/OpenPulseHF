@@ -13,6 +13,11 @@ const FAST_MODES: &[&str] = &[
     "8PSK500",
     "8PSK1000",
     "8PSK1000-HF",
+    "BPSK250-RRC",
+    "QPSK500-RRC",
+    "QPSK1000-RRC",
+    "8PSK500-RRC",
+    "8PSK1000-RRC",
 ];
 const SLOW_MODES: &[&str] = &["BPSK31", "BPSK63", "BPSK100"];
 

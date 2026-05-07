@@ -12,3 +12,4 @@ gpu = []
 
 [dependencies]
 openpulse-core = { workspace = true }
+openpulse-dsp  = { workspace = true }

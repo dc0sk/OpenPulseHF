@@ -12,6 +12,7 @@ gpu = ["dep:openpulse-gpu"]
 
 [dependencies]
 openpulse-core = { workspace = true }
+openpulse-dsp  = { workspace = true }
 openpulse-gpu  = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -22,4 +23,8 @@ criterion = { workspace = true }
 
 [[bench]]
 name    = "gpu_vs_cpu"
+harness = false
+
+[[bench]]
+name    = "rrc_fir_bench"
 harness = false

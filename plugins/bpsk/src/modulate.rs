@@ -10,7 +10,9 @@
 use std::f32::consts::PI;
 
 use openpulse_core::error::ModemError;
-use openpulse_core::plugin::ModulationConfig;
+use openpulse_core::plugin::{ModulationConfig, PulseShape};
+use openpulse_dsp::filter::FirFilter;
+use openpulse_dsp::rrc::generate_rrc_coefficients;
 
 use crate::parse_baud_rate;
 
@@ -18,6 +20,7 @@ use crate::parse_baud_rate;
 pub const PREAMBLE_SYMS: usize = 32;
 /// Number of tail symbols appended after data to let the signal decay.
 pub const TAIL_SYMS: usize = 8;
+pub(crate) const RRC_SPAN_SYMBOLS: usize = 8;
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
@@ -27,6 +30,14 @@ pub fn bpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
     let fs = config.sample_rate as f32;
     let fc = config.center_frequency;
     let n = samples_per_symbol(fs, baud)?;
+
+    let rrc_alpha = if let PulseShape::Rrc { alpha } = config.pulse_shape {
+        Some(alpha)
+    } else if config.mode.ends_with("-RRC") {
+        Some(0.35f32)
+    } else {
+        None
+    };
 
     // Build the bit stream: preamble (all 1s → alternating phases) + data + tail
     let mut bits: Vec<bool> = Vec::new();
@@ -48,26 +59,46 @@ pub fn bpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
 
     for (sym_idx, &phase_neg) in symbols.iter().enumerate() {
         let a_curr = if phase_neg { -1.0f32 } else { 1.0f32 };
-        // Next symbol amplitude for the crossfade tail; fade to silence at end of frame.
-        let a_next = symbols
-            .get(sym_idx + 1)
-            .map(|&neg| if neg { -1.0f32 } else { 1.0f32 })
-            .unwrap_or(0.0f32);
         let sym_start = sym_idx * n;
 
-        for i in 0..n {
-            // 50 % overlapping Hann crossfade: the tail of the current symbol
-            // blends into the head of the next.  When adjacent symbols share the
-            // same phase the instantaneous amplitude stays at 1 (no sidelobes);
-            // when they differ it dips to zero at the midpoint (clean transition).
-            let w_tail = 0.5 * (1.0 + (PI * i as f32 / n as f32).cos());
-            let w_head = 1.0 - w_tail;
-
-            let t = (sym_start + i) as f32 / fs;
-            let carrier = (two_pi * fc * t).cos();
-
-            out[sym_start + i] = (a_curr * w_tail + a_next * w_head) * carrier;
+        if rrc_alpha.is_some() {
+            // RRC path: baseband impulse at symbol start; the RRC FIR filter
+            // below shapes it, and the carrier is applied after filtering.
+            out[sym_start] = a_curr;
+        } else {
+            // 50 % overlapping Hann crossfade.
+            let a_next = symbols
+                .get(sym_idx + 1)
+                .map(|&neg| if neg { -1.0f32 } else { 1.0f32 })
+                .unwrap_or(0.0f32);
+            for i in 0..n {
+                let w_tail = 0.5 * (1.0 + (PI * i as f32 / n as f32).cos());
+                let w_head = 1.0 - w_tail;
+                let t = (sym_start + i) as f32 / fs;
+                let carrier = (two_pi * fc * t).cos();
+                out[sym_start + i] = (a_curr * w_tail + a_next * w_head) * carrier;
+            }
         }
+    }
+
+    // Apply RRC TX filter if requested (operates on baseband), then upconvert.
+    if let Some(alpha) = rrc_alpha {
+        let num_taps = RRC_SPAN_SYMBOLS * n + 1;
+        let coeffs = generate_rrc_coefficients(fs, baud, alpha, num_taps);
+        let group_delay = (num_taps - 1) / 2;
+        let mut fir = FirFilter::new(coeffs);
+        let padded: Vec<f32> = out
+            .iter()
+            .copied()
+            .chain(std::iter::repeat_n(0.0, group_delay))
+            .collect();
+        let filtered = fir.apply(&padded);
+        // Trim group delay, then upconvert the shaped baseband I signal to bandpass.
+        out = filtered[group_delay..]
+            .iter()
+            .enumerate()
+            .map(|(k, &bb)| bb * (two_pi * fc * k as f32 / fs).cos())
+            .collect();
     }
 
     Ok(out)
@@ -120,6 +151,11 @@ pub fn bpsk_modulate_with_gpu(
     config: &ModulationConfig,
     ctx: &openpulse_gpu::GpuContext,
 ) -> Result<Vec<f32>, ModemError> {
+    // RRC path requires FIR filtering; fall back to CPU.
+    if matches!(config.pulse_shape, PulseShape::Rrc { .. }) || config.mode.ends_with("-RRC") {
+        return bpsk_modulate(data, config);
+    }
+
     let baud = parse_baud_rate(&config.mode)?;
     let fs = config.sample_rate as f32;
     let fc = config.center_frequency;

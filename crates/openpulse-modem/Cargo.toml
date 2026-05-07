@@ -14,9 +14,11 @@ openpulse-channel = { workspace = true }
 bpsk-plugin       = { workspace = true }
 tracing           = { workspace = true }
 rand              = { workspace = true }
+rustfft           = { workspace = true }
 serde             = { workspace = true, features = ["derive"] }
 serde_json        = { workspace = true }
 tokio             = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 qpsk-plugin = { workspace = true }
+psk8-plugin = { workspace = true }

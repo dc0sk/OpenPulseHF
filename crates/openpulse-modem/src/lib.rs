@@ -9,6 +9,7 @@ pub mod diagnostics;
 pub mod engine;
 pub mod envelope_codec;
 pub mod event;
+pub mod ofdm_sim;
 pub mod pipeline;
 
 pub use engine::ModemEngine;

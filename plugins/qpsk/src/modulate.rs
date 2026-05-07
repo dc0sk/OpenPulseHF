@@ -2,6 +2,8 @@ use std::f32::consts::PI;
 
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
+use openpulse_dsp::filter::FirFilter;
+use openpulse_dsp::rrc::generate_rrc_coefficients;
 
 use crate::parse_baud_rate;
 
@@ -9,6 +11,9 @@ pub const PREAMBLE_SYMS: usize = 16;
 pub const TAIL_SYMS: usize = 8;
 
 const INV_SQRT_2: f32 = 0.70710677;
+
+/// Number of symbol spans for the RRC FIR filter (controls stop-band rejection).
+pub(crate) const RRC_SPAN_SYMBOLS: usize = 8;
 
 pub fn qpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
     let baud = parse_baud_rate(&config.mode)?;
@@ -18,6 +23,13 @@ pub fn qpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
 
     let cosine_overlap =
         config.pulse_shape == PulseShape::CosineOverlap || config.mode.ends_with("-HF");
+    let rrc_alpha = if let PulseShape::Rrc { alpha } = config.pulse_shape {
+        Some(alpha)
+    } else if config.mode.ends_with("-RRC") {
+        Some(0.35)
+    } else {
+        None
+    };
 
     let mut symbols = preamble_symbols();
     symbols.extend(bits_to_symbols(&bytes_to_bits(data)));
@@ -25,13 +37,28 @@ pub fn qpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
 
     let total = symbols.len() * n;
     let mut out = vec![0.0f32; total];
+    // For RRC: keep separate baseband I and Q impulse streams.
+    let mut bb_i = if rrc_alpha.is_some() {
+        vec![0.0f32; total]
+    } else {
+        vec![]
+    };
+    let mut bb_q = if rrc_alpha.is_some() {
+        vec![0.0f32; total]
+    } else {
+        vec![]
+    };
     let two_pi = 2.0 * PI;
 
     for (sym_idx, &(i_amp, q_amp)) in symbols.iter().enumerate() {
         let sym_start = sym_idx * n;
-        if cosine_overlap {
+        if rrc_alpha.is_some() {
+            // RRC path: baseband impulse at symbol start; carrier applied after
+            // RRC filtering below.
+            bb_i[sym_start] = i_amp;
+            bb_q[sym_start] = q_amp;
+        } else if cosine_overlap {
             for i in 0..n {
-                // sin²(πi/n): 0 at boundaries, peaks at 1 at midpoint.
                 let amp = 0.5 * (1.0 - (2.0 * PI * i as f32 / n as f32).cos());
                 let t = (sym_start + i) as f32 / fs;
                 let c = (two_pi * fc * t).cos();
@@ -51,6 +78,40 @@ pub fn qpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
                 out[sym_start + i] = env_i * c - env_q * s;
             }
         }
+    }
+
+    // Apply RRC TX filter if requested (operates on baseband), then upconvert.
+    if let Some(alpha) = rrc_alpha {
+        let num_taps = RRC_SPAN_SYMBOLS * n + 1;
+        let coeffs = generate_rrc_coefficients(fs, baud, alpha, num_taps);
+        let group_delay = (num_taps - 1) / 2;
+
+        let filter_bb = |bb: Vec<f32>| -> Vec<f32> {
+            let padded: Vec<f32> = bb
+                .iter()
+                .copied()
+                .chain(std::iter::repeat_n(0.0, group_delay))
+                .collect();
+            let mut fir = FirFilter::new(coeffs.clone());
+            let filtered = fir.apply(&padded);
+            filtered[group_delay..].to_vec()
+        };
+
+        let i_filt = filter_bb(bb_i);
+        let q_filt = filter_bb(bb_q);
+
+        // Upconvert shaped baseband I/Q to bandpass.
+        out = i_filt
+            .iter()
+            .zip(q_filt.iter())
+            .enumerate()
+            .map(|(k, (&bi, &bq))| {
+                let t = k as f32 / fs;
+                let c = (two_pi * fc * t).cos();
+                let s = (two_pi * fc * t).sin();
+                bi * c - bq * s
+            })
+            .collect();
     }
 
     Ok(out)
