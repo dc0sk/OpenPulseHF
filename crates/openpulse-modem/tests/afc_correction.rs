@@ -11,6 +11,7 @@ fn make_samples(fc_actual: f32) -> Vec<f32> {
         mode: "BPSK100".to_string(),
         sample_rate: 8000,
         center_frequency: fc_actual,
+        ..ModulationConfig::default()
     };
     bpsk_plugin::modulate::bpsk_modulate(b"AFC test payload 0123456789", &cfg).unwrap()
 }

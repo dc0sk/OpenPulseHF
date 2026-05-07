@@ -88,6 +88,7 @@ mod tests {
             mode: "FSK4-ACK".to_string(),
             sample_rate: 8000,
             center_frequency: 1050.0,
+            ..ModulationConfig::default()
         }
     }
 

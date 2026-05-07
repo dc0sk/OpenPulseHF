@@ -389,6 +389,7 @@ mod tests {
             mode: "BPSK100".to_string(),
             sample_rate: 8000,
             center_frequency: 1500.0,
+            ..ModulationConfig::default()
         };
         let original = b"AB";
         let samples = bpsk_modulate(original, &cfg).unwrap();
@@ -403,6 +404,7 @@ mod tests {
             mode: "BPSK250".to_string(),
             sample_rate: 8000,
             center_frequency: 1500.0,
+            ..ModulationConfig::default()
         };
         let samples = bpsk_modulate(b"HelloWorld", &cfg).unwrap();
         // Estimate AFC with the correct carrier — should be near zero.
@@ -424,11 +426,13 @@ mod tests {
             mode: "BPSK250".to_string(),
             sample_rate: 8000,
             center_frequency: true_fc,
+            ..ModulationConfig::default()
         };
         let cfg_rx = ModulationConfig {
             mode: "BPSK250".to_string(),
             sample_rate: 8000,
             center_frequency: ref_fc,
+            ..ModulationConfig::default()
         };
         let samples = bpsk_modulate(b"HelloWorld", &cfg_tx).unwrap();
         let offset = afc_estimate_hz(&samples, &cfg_rx).expect("afc estimate");
@@ -447,6 +451,7 @@ mod tests {
             mode: "BPSK250".to_string(),
             sample_rate: 8000,
             center_frequency: 1500.0,
+            ..ModulationConfig::default()
         };
         let payload = b"AB";
         let samples = bpsk_modulate(payload, &cfg).unwrap();

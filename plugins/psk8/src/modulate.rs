@@ -1,7 +1,7 @@
 use std::f32::consts::PI;
 
 use openpulse_core::error::ModemError;
-use openpulse_core::plugin::ModulationConfig;
+use openpulse_core::plugin::{ModulationConfig, PulseShape};
 
 use crate::parse_baud_rate;
 
@@ -33,6 +33,9 @@ pub fn psk8_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
     let fc = config.center_frequency;
     let n = samples_per_symbol(fs, baud)?;
 
+    let cosine_overlap =
+        config.pulse_shape == PulseShape::CosineOverlap || config.mode.ends_with("-HF");
+
     let mut symbols = preamble_symbols();
     symbols.extend(bytes_to_symbols(data));
     symbols.extend(std::iter::repeat_n(
@@ -45,17 +48,28 @@ pub fn psk8_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
     let two_pi = 2.0 * PI;
 
     for (sym_idx, &(i_amp, q_amp)) in symbols.iter().enumerate() {
-        let (i_next, q_next) = symbols.get(sym_idx + 1).copied().unwrap_or((0.0, 0.0));
         let sym_start = sym_idx * n;
-        for i in 0..n {
-            let w_tail = 0.5 * (1.0 + (PI * i as f32 / n as f32).cos());
-            let w_head = 1.0 - w_tail;
-            let t = (sym_start + i) as f32 / fs;
-            let c = (two_pi * fc * t).cos();
-            let s = (two_pi * fc * t).sin();
-            let env_i = i_amp * w_tail + i_next * w_head;
-            let env_q = q_amp * w_tail + q_next * w_head;
-            out[sym_start + i] = env_i * c - env_q * s;
+        if cosine_overlap {
+            for i in 0..n {
+                // sin²(πi/n): 0 at boundaries, peaks at 1 at midpoint.
+                let amp = 0.5 * (1.0 - (2.0 * PI * i as f32 / n as f32).cos());
+                let t = (sym_start + i) as f32 / fs;
+                let c = (two_pi * fc * t).cos();
+                let s = (two_pi * fc * t).sin();
+                out[sym_start + i] = (i_amp * c - q_amp * s) * amp;
+            }
+        } else {
+            let (i_next, q_next) = symbols.get(sym_idx + 1).copied().unwrap_or((0.0, 0.0));
+            for i in 0..n {
+                let w_tail = 0.5 * (1.0 + (PI * i as f32 / n as f32).cos());
+                let w_head = 1.0 - w_tail;
+                let t = (sym_start + i) as f32 / fs;
+                let c = (two_pi * fc * t).cos();
+                let s = (two_pi * fc * t).sin();
+                let env_i = i_amp * w_tail + i_next * w_head;
+                let env_q = q_amp * w_tail + q_next * w_head;
+                out[sym_start + i] = env_i * c - env_q * s;
+            }
         }
     }
 

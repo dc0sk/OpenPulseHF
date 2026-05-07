@@ -1,7 +1,7 @@
 use std::f32::consts::PI;
 
 use openpulse_core::error::ModemError;
-use openpulse_core::plugin::ModulationConfig;
+use openpulse_core::plugin::{ModulationConfig, PulseShape};
 
 use crate::modulate::{
     gray_map_8psk, preamble_symbols, samples_per_symbol, PREAMBLE_SYMS, TAIL_SYMS,
@@ -13,13 +13,15 @@ pub fn psk8_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
     let fs = config.sample_rate as f32;
     let fc = config.center_frequency;
     let n = samples_per_symbol(fs, baud)?;
+    let cosine_overlap =
+        config.pulse_shape == PulseShape::CosineOverlap || config.mode.ends_with("-HF");
 
     if samples.len() < n * (PREAMBLE_SYMS + 1) {
         return Err(ModemError::Demodulation("signal too short".to_string()));
     }
 
-    let timing = find_timing_offset(samples, n, fc, fs);
-    let syms = demodulate_symbols(samples, n, fc, fs, timing);
+    let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
+    let syms = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
     if syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
         return Err(ModemError::Demodulation(
             "no data symbols after preamble".to_string(),
@@ -31,7 +33,7 @@ pub fn psk8_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
     Ok(bits_to_bytes(&bits))
 }
 
-fn find_timing_offset(samples: &[f32], n: usize, fc: f32, fs: f32) -> usize {
+fn find_timing_offset(samples: &[f32], n: usize, fc: f32, fs: f32, cosine_overlap: bool) -> usize {
     let expected = preamble_symbols();
     let mut best_off = 0usize;
     let mut best_score = f32::NEG_INFINITY;
@@ -40,7 +42,7 @@ fn find_timing_offset(samples: &[f32], n: usize, fc: f32, fs: f32) -> usize {
         if samples.len() <= off + n * PREAMBLE_SYMS {
             break;
         }
-        let syms = demodulate_symbols(samples, n, fc, fs, off);
+        let syms = demodulate_symbols(samples, n, fc, fs, off, cosine_overlap);
         if syms.len() < PREAMBLE_SYMS {
             continue;
         }
@@ -65,6 +67,7 @@ fn demodulate_symbols(
     fc: f32,
     fs: f32,
     offset: usize,
+    cosine_overlap: bool,
 ) -> Vec<(f32, f32)> {
     let two_pi = 2.0 * PI;
     let aligned = &samples[offset.min(samples.len())..];
@@ -80,10 +83,13 @@ fn demodulate_symbols(
         for i in 0..n {
             let g = (offset + start + i) as f32;
             let sample = aligned[start + i];
-            // Squared w_tail window: more aggressively suppresses end-of-period
-            // samples where ISI from the next symbol is highest.
-            let w = 0.5 * (1.0 + (PI * i as f32 / n as f32).cos());
-            let window = w * w;
+            // Matched filter: sin²(πi/n) for CosineOverlap; squared raised cosine for Hann overlap.
+            let window = if cosine_overlap {
+                0.5 * (1.0 - (two_pi * i as f32 / n as f32).cos())
+            } else {
+                let w = 0.5 * (1.0 + (PI * i as f32 / n as f32).cos());
+                w * w
+            };
             let t = g / fs;
             let c = (two_pi * fc * t).cos();
             let s = (two_pi * fc * t).sin();

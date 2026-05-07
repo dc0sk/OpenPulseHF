@@ -477,6 +477,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             mode: "BPSK100".to_string(),
             sample_rate: 8000,
             center_frequency: 1500.0,
+            ..ModulationConfig::default()
         };
         let data = b"Hi";
         let samples = bpsk_modulate(data, &cfg).unwrap();
@@ -546,6 +547,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             mode: "BPSK250".to_string(),
             sample_rate: 8000,
             center_frequency: 1500.0,
+            ..ModulationConfig::default()
         };
         let payload = b"Hello";
 

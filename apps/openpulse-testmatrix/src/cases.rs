@@ -4,7 +4,15 @@ use crate::channels::channel_suite;
 use crate::matrix::{ChannelSpec, TestCase, Tier, UseCase};
 
 const FAST_MODES: &[&str] = &[
-    "BPSK250", "QPSK125", "QPSK250", "QPSK500", "QPSK1000", "8PSK500", "8PSK1000",
+    "BPSK250",
+    "QPSK125",
+    "QPSK250",
+    "QPSK500",
+    "QPSK1000",
+    "QPSK1000-HF",
+    "8PSK500",
+    "8PSK1000",
+    "8PSK1000-HF",
 ];
 const SLOW_MODES: &[&str] = &["BPSK31", "BPSK63", "BPSK100"];
 
