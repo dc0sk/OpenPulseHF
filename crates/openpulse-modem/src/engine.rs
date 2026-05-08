@@ -1,5 +1,6 @@
 //! The core [`ModemEngine`] struct.
 
+use openpulse_audio::tanh_limit;
 use rand::Rng;
 use tokio::sync::broadcast;
 use tracing::{debug, info};
@@ -82,6 +83,8 @@ pub struct ModemEngine {
     callsign: String,
     /// TX attenuation in dB applied to output samples (0.0 = no attenuation).
     tx_attenuation_db: f32,
+    /// Soft TX limiter threshold (0.0 = disabled). See `tanh_limit`.
+    tx_limiter_threshold: f32,
 }
 
 impl ModemEngine {
@@ -110,6 +113,7 @@ impl ModemEngine {
             broadcast_seq: 0,
             callsign: String::new(),
             tx_attenuation_db: 0.0,
+            tx_limiter_threshold: 0.0,
         }
     }
 
@@ -645,6 +649,11 @@ impl ModemEngine {
         self.tx_attenuation_db
     }
 
+    /// Set the soft TX limiter threshold (0.0 disables the limiter).
+    pub fn set_tx_limiter_threshold(&mut self, threshold: f32) {
+        self.tx_limiter_threshold = threshold;
+    }
+
     /// Unlike [`transmit`](Self::transmit), this method bypasses the CSMA
     /// persistence check — broadcasts are short, and the sender is responsible
     /// for scheduling.  No ACK is expected; no session state is updated.
@@ -924,11 +933,15 @@ impl ModemEngine {
             .map_err(|e| ModemError::Audio(e.to_string()))?;
 
         let atten_linear = 10.0f32.powf(self.tx_attenuation_db / 20.0);
-        let write_samples: Vec<f32> = if (atten_linear - 1.0).abs() < 1e-6 {
+        let mut write_samples: Vec<f32> = if (atten_linear - 1.0).abs() < 1e-6 {
             samples.samples.clone()
         } else {
             samples.samples.iter().map(|s| s * atten_linear).collect()
         };
+        let threshold = self.tx_limiter_threshold;
+        if threshold > 0.0 {
+            tanh_limit(&mut write_samples, threshold);
+        }
 
         stream
             .write(&write_samples)
