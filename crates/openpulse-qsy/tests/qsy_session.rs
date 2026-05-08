@@ -203,6 +203,55 @@ fn reject_on_policy() {
         .any(|a| matches!(a, QsyAction::SendFrame(QsyFrame::Reject { .. }))));
 }
 
+/// When the initiator and responder have no common candidate, the session emits
+/// QSY_REJECT and transitions to Rejected rather than leaving the peer hanging.
+#[test]
+fn disjoint_candidate_lists_emits_reject() {
+    let mut session = QsySession::new_initiator();
+    let init_actions = session.initiate(vec![14070000u64, 14074000u64]).unwrap();
+
+    // Capture the token from the QSY_REQ frame.
+    let token = if let QsyAction::SendFrame(QsyFrame::Req { token, .. }) = &init_actions[0] {
+        token.clone()
+    } else {
+        panic!("expected QSY_REQ as first action");
+    };
+
+    session
+        .scan_complete(vec![(14070000u64, -87.0_f32), (14074000u64, -91.0_f32)])
+        .unwrap();
+
+    // Partner votes on a completely different frequency — no overlap.
+    let actions = session
+        .apply(QsyFrame::Vote {
+            token: token.clone(),
+            votes: vec![(7030000u64, -80.0_f32)],
+        })
+        .unwrap();
+
+    assert!(
+        actions
+            .iter()
+            .any(|a| matches!(a, QsyAction::Reject { .. })),
+        "expected Reject action, got {actions:?}"
+    );
+    assert!(
+        actions
+            .iter()
+            .any(|a| matches!(a, QsyAction::SendFrame(QsyFrame::Reject { .. }))),
+        "expected SendFrame(Reject), got {actions:?}"
+    );
+    // Session must have transitioned to Rejected — not still in Listed.
+    let follow_up = session.apply(QsyFrame::Vote {
+        token,
+        votes: vec![(14070000u64, -85.0_f32)],
+    });
+    assert!(
+        follow_up.is_err(),
+        "session should be in Rejected state, not accept further votes"
+    );
+}
+
 /// Receiving QSY_REJECT at any point yields a Reject action.
 #[test]
 fn qsy_reject_frame_yields_reject_action() {
