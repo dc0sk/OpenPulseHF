@@ -1,4 +1,6 @@
+pub mod beacon;
 pub mod benchmark;
+pub mod broadcast;
 pub mod config;
 pub mod devices;
 pub mod modes;

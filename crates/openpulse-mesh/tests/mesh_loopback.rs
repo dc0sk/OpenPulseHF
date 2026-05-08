@@ -10,7 +10,6 @@ use openpulse_core::relay::{RelayEvent, RelayTrustPolicy};
 use openpulse_core::wire_query::{WireEnvelope, WireMsgType};
 use openpulse_mesh::{MeshDaemon, MeshEvent};
 use openpulse_modem::ModemEngine;
-
 const MODE: &str = "BPSK250";
 
 fn make_node(lb: &LoopbackBackend, peer_id: [u8; 32]) -> MeshDaemon {
@@ -289,4 +288,129 @@ fn policy_rejects_unknown_peer() {
         lb_b.drain_samples().is_empty(),
         "B must not forward a policy-rejected frame"
     );
+}
+
+// ── Broadcast tests ───────────────────────────────────────────────────────────
+
+fn make_broadcast_engine(lb: &LoopbackBackend) -> ModemEngine {
+    let mut engine = ModemEngine::new(Box::new(lb.clone_shared()));
+    let _ = engine.register_plugin(Box::new(BpskPlugin::default()));
+    engine
+}
+
+/// Node A broadcasts; Node B receives and emits BroadcastReceived.
+#[test]
+fn broadcast_received_by_neighbour() {
+    let lb_a = LoopbackBackend::new();
+    let lb_b = LoopbackBackend::new();
+
+    let peer_b = [50u8; 32];
+    let mut engine_a = make_broadcast_engine(&lb_a);
+    engine_a.set_callsign("KX0ABC");
+
+    let mut node_b = make_node(&lb_b, peer_b);
+
+    engine_a
+        .broadcast(b"hello world", MODE, 3, None)
+        .expect("broadcast should succeed");
+
+    let samples_a = lb_a.drain_samples();
+    assert!(!samples_a.is_empty(), "A must produce TX samples");
+    lb_b.fill_samples(&samples_a);
+
+    let events_b = node_b.step(1000);
+    assert!(
+        events_b.iter().any(|e| matches!(
+            e,
+            MeshEvent::BroadcastReceived { payload, .. }
+            if payload == b"hello world"
+        )),
+        "B must emit BroadcastReceived with correct payload; got {events_b:?}"
+    );
+}
+
+/// Node A broadcasts with TTL=2; relay node B re-broadcasts; node C receives with TTL=1.
+#[test]
+fn broadcast_relayed_with_ttl_decrement() {
+    let lb_a = LoopbackBackend::new();
+    let lb_b = LoopbackBackend::new();
+    let lb_c = LoopbackBackend::new();
+
+    let peer_b = [60u8; 32];
+    let peer_c = [61u8; 32];
+
+    let mut engine_a = make_broadcast_engine(&lb_a);
+    engine_a.set_callsign("W1AW");
+
+    let mut node_b = make_node(&lb_b, peer_b);
+    let mut node_c = make_node(&lb_c, peer_c);
+
+    engine_a
+        .broadcast(b"relay me", MODE, 2, None)
+        .expect("broadcast from A");
+
+    // A → B
+    let samples_a = lb_a.drain_samples();
+    lb_b.fill_samples(&samples_a);
+
+    let events_b = node_b.step(1000);
+    // B must receive and emit the event.
+    assert!(
+        events_b
+            .iter()
+            .any(|e| matches!(e, MeshEvent::BroadcastReceived { ttl: 2, .. })),
+        "B must emit BroadcastReceived with ttl=2; got {events_b:?}"
+    );
+    // B must re-broadcast with ttl-1.
+    let samples_b = lb_b.drain_samples();
+    assert!(!samples_b.is_empty(), "B must produce relay TX samples");
+    lb_c.fill_samples(&samples_b);
+
+    let events_c = node_c.step(1000);
+    assert!(
+        events_c.iter().any(|e| matches!(
+            e,
+            MeshEvent::BroadcastReceived { ttl: 1, payload, .. }
+            if payload == b"relay me"
+        )),
+        "C must receive the relay with ttl=1; got {events_c:?}"
+    );
+}
+
+/// A broadcast with TTL=0 is delivered locally but not re-broadcast.
+#[test]
+fn broadcast_ttl_zero_not_relayed() {
+    let lb_a = LoopbackBackend::new();
+    let lb_b = LoopbackBackend::new();
+    let lb_c = LoopbackBackend::new();
+
+    let peer_b = [70u8; 32];
+    let peer_c = [71u8; 32];
+
+    let mut engine_a = make_broadcast_engine(&lb_a);
+    let mut node_b = make_node(&lb_b, peer_b);
+    let mut node_c = make_node(&lb_c, peer_c);
+
+    engine_a
+        .broadcast(b"no relay", MODE, 0, None)
+        .expect("broadcast TTL=0 from A");
+
+    let samples_a = lb_a.drain_samples();
+    lb_b.fill_samples(&samples_a);
+
+    let events_b = node_b.step(1000);
+    assert!(
+        events_b
+            .iter()
+            .any(|e| matches!(e, MeshEvent::BroadcastReceived { ttl: 0, .. })),
+        "B must receive TTL=0 broadcast; got {events_b:?}"
+    );
+
+    // B must NOT re-broadcast.
+    let relay_samples = lb_b.drain_samples();
+    assert!(
+        relay_samples.is_empty(),
+        "B must not relay a TTL=0 broadcast"
+    );
+    drop((node_c, lb_c));
 }

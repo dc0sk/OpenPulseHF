@@ -10,7 +10,7 @@ use openpulse_core::peer_descriptor::PeerDescriptor;
 use openpulse_core::query_propagation::{QueryEvent, QueryForwarder};
 use openpulse_core::relay::{RelayEvent, RelayForwarder, RelayTrustPolicy};
 use openpulse_core::wire_query::{
-    PeerQueryRequest, PeerQueryResponse, PeerQueryResult, WireEnvelope, WireMsgType,
+    BroadcastFrame, PeerQueryRequest, PeerQueryResponse, PeerQueryResult, WireEnvelope, WireMsgType,
 };
 use openpulse_modem::ModemEngine;
 use thiserror::Error;
@@ -44,6 +44,14 @@ pub enum MeshEvent {
     PeerQueried { query_id: u64, result_count: usize },
     /// A previously unknown peer was added to the local peer cache.
     PeerDiscovered { peer_id: [u8; 32] },
+    /// A broadcast frame was received (and re-broadcast if TTL > 0).
+    BroadcastReceived {
+        callsign_hash: u32,
+        seq: u16,
+        payload: Vec<u8>,
+        /// TTL at the time of reception (before decrement).
+        ttl: u8,
+    },
 }
 
 // ── MeshDaemon ────────────────────────────────────────────────────────────────
@@ -184,6 +192,11 @@ impl MeshDaemon {
         }
 
         match envelope.msg_type {
+            // Broadcast: deliver to local subscriber; re-broadcast with ttl-1 if ttl > 0.
+            WireMsgType::BroadcastFrame => {
+                self.handle_broadcast_frame(&envelope);
+            }
+
             // Relay data / ack: deliver if we are the destination, else forward.
             WireMsgType::RelayDataChunk | WireMsgType::RelayHopAck => {
                 if envelope.dst_peer_id == self.local_peer_id {
@@ -275,6 +288,40 @@ impl MeshDaemon {
                     );
                 }
             },
+        }
+    }
+
+    /// Deliver a broadcast frame locally and re-broadcast if TTL permits.
+    fn handle_broadcast_frame(&mut self, envelope: &WireEnvelope) {
+        let Ok(frame) = BroadcastFrame::decode(&envelope.payload) else {
+            return;
+        };
+
+        self.events.push(MeshEvent::BroadcastReceived {
+            callsign_hash: frame.callsign_hash,
+            seq: frame.seq,
+            payload: frame.payload.clone(),
+            ttl: frame.ttl,
+        });
+
+        if frame.ttl == 0 {
+            return;
+        }
+
+        // Decrement TTL and re-broadcast.
+        let relay_frame = BroadcastFrame {
+            ttl: frame.ttl - 1,
+            ..frame
+        };
+        let relay_envelope = WireEnvelope {
+            hop_index: envelope.hop_index.saturating_add(1),
+            payload: relay_frame.encode(),
+            ..envelope.clone()
+        };
+        if let Ok(bytes) = relay_envelope.encode() {
+            if self.engine.transmit(&bytes, &self.mode, None).is_err() {
+                tracing::warn!("broadcast re-transmit failed");
+            }
         }
     }
 
