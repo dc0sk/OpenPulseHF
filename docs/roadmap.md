@@ -604,7 +604,7 @@ are self-contained additions to existing subsystems; none require new crates.*
 
 ---
 
-### 9.1 — Constellation / scatter plot in testbench
+### 9.1 — Constellation / scatter plot in testbench ✅ Done (PR #138)
 
 Add an IQ scatter plot panel to `apps/openpulse-testbench` alongside the existing
 spectrum and waterfall views.
@@ -634,7 +634,7 @@ channel showing four tight clusters; on Watterson Good F1 the clusters visibly b
 
 ---
 
-### 9.2 — Asymmetric per-direction rate adaptation
+### 9.2 — Asymmetric per-direction rate adaptation ✅ Done (PR #138)
 
 Mercury's most differentiating protocol feature: the A→B and B→A paths each select
 their own speed level independently, since SNR is rarely symmetric on HF.
@@ -663,7 +663,7 @@ each direction converge to different speed levels per direction within 30 frames
 
 ---
 
-### 9.3 — SNR trend plot in testbench
+### 9.3 — SNR trend plot in testbench ✅ Done (PR #138)
 
 Add a rolling SNR history chart to the testbench stats panel, inspired by FreeDV's
 180-second SNR plot.
@@ -685,7 +685,7 @@ is switched from Clean to AWGN 10 dB.
 
 ---
 
-### 9.4 — SNR as secondary rate adapter input
+### 9.4 — SNR as secondary rate adapter input ✅ Done (PR #138)
 
 Supplement ACK-only rate decisions with a raw SNR estimate, closing the feedback loop
 faster on rapidly degrading channels (Mercury's "hybrid SNR + delivery-feedback").
@@ -718,7 +718,7 @@ the `SessionProfile` SNR threshold table).
 
 ---
 
-### 9.5 — Broadcast / beacon mode alongside ARQ
+### 9.5 — Broadcast / beacon mode alongside ARQ ✅ Done (PR #139)
 
 Mercury runs a broadcast mode in parallel to its ARQ sessions, enabling one-to-many
 unacknowledged transmissions (beacons, network announcements, position reports).
@@ -884,7 +884,7 @@ may be preferred over single-carrier at very wide channels), Phase 3.3 (GPU acce
 
 ---
 
-
+### FF-1 — QSY frequency-agility protocol ✅ Done (PR #140 / PR #141)
 
 Allows two stations to collaboratively move to a better channel when the current
 frequency is impaired by QRM, QSB, or QRN.  The procedure is explicit and
