@@ -93,19 +93,21 @@ See [`docs/roadmap.md`](docs/roadmap.md) for per-item ✅ markers and PR referen
 
 ## What is coming
 
-Active work tracks (see roadmap FF-series):
+Active work tracks (see [`docs/roadmap.md`](docs/roadmap.md) FF-series):
 
 | Item | Description |
 |---|---|
-| FF-2 — Convolutional FEC hybrid | Adaptive switching between RS and convolutional FEC per channel profile |
-| FF-3 — Multi-station net | Coordinator-driven net control with token passing |
-| FF-4 — Selective-repeat ARQ | Bitmap-based retransmission for high-latency paths |
-| FF-5 — JS8-compatible relay | Interoperability with JS8Call store-and-forward mesh |
-| FF-6 — FreeDV data channel | Authenticated voice frames via FreeDV codec2 data bits |
-| FF-7 — OFDM waveform | Multi-carrier pilot for high-Doppler paths |
-| FF-8 — Mesh routing | Multi-hop store-and-forward with trust-weighted path scoring |
-| FF-9 — On-air auto-test | Automated link-quality beacon with SNR telemetry upload |
-| FF-11 — QSY trust gating | `allow_trustlevels` enforcement in QSY session acceptance |
+| FF-2 — I/Q SDR output | Drive SDR radios directly with complex baseband I/Q audio — zero unwanted sideband, no reliance on the rig's SSB filter |
+| FF-3 — RRC matched filtering | Root-raised-cosine TX/RX filters + Gardner timing recovery; prerequisite for 1000 baud+ on HF |
+| FF-4 — OFDM wideband profile | Multi-carrier pilot for high-Doppler and deep-fading paths; research phase |
+| FF-5 — UHF/VHF ultra-high-speed | 64QAM at 3000–12500 baud for VHF/UHF line-of-sight and satellite; up to ~75 kbps in a 25 kHz channel |
+| FF-6 — Binary WebSocket spectrum | Efficient binary framing for 20 Hz waterfall updates from the daemon to the panel (replaces JSON overhead) |
+| FF-7 — Tanh TX limiter | Soft-clip output audio before the audio backend; reduces PA back-off on 8PSK/RRC peaks |
+| FF-8 — Per-band TX attenuation | Remember TX gain per amateur band segment; restore automatically on band change |
+| FF-9 — HPX reactor pattern | Refactor `HpxSession` into an event-driven reactor for cleaner concurrent-state handling at scale |
+| FF-10 — zstd dictionary compression | Pre-trained shared dictionary for sub-500-byte payloads; meaningful compression where LZ4 fails |
+| FF-11 — Authenticated voice shim | Ed25519 frame-signing shim over FreeDV's codec2 data channel; proof of voice-frame origin without modifying FreeDV |
+| FF-1 ext — QSY trust gating | Wire `allow_trustlevels` from config into QSY session acceptance; deferred until trust context is passed to `QsyPolicy` |
 
 ---
 
