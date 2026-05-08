@@ -27,6 +27,7 @@ members = [
     "apps/openpulse-panel",
     "crates/openpulse-daemon",
     "crates/openpulse-dsp",
+    "crates/openpulse-qsy",
 ]
 
 [workspace.package]
@@ -52,6 +53,7 @@ openpulse-gateway    = { path = "crates/openpulse-gateway" }
 openpulse-mesh       = { path = "crates/openpulse-mesh" }
 openpulse-daemon     = { path = "crates/openpulse-daemon" }
 openpulse-dsp        = { path = "crates/openpulse-dsp" }
+openpulse-qsy        = { path = "crates/openpulse-qsy" }
 bpsk-plugin       = { path = "plugins/bpsk" }
 fsk4-plugin       = { path = "plugins/fsk4" }
 psk8-plugin       = { path = "plugins/psk8" }

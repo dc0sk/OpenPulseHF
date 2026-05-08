@@ -120,6 +120,11 @@ pub enum Commands {
         #[arg(long, default_value_t = 1)]
         ttl: u8,
     },
+    /// QSY frequency-agility negotiation.
+    Qsy {
+        #[command(subcommand)]
+        command: QsyCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -288,4 +293,16 @@ pub enum DiagnoseCommands {
 pub enum ConfigCommands {
     /// Write a commented configuration template to stdout.
     Init,
+}
+
+#[derive(Subcommand)]
+pub enum QsyCommands {
+    /// Initiate a QSY frequency-agility negotiation using the configured rigctld and candidates.
+    Init {
+        /// rigctld address:port (overrides config file).
+        #[arg(long, default_value = "")]
+        rig: String,
+    },
+    /// Show the current QSY config and confirm rigctld connectivity.
+    Status,
 }

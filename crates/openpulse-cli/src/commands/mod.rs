@@ -5,6 +5,7 @@ pub mod config;
 pub mod devices;
 pub mod modes;
 pub mod monitor;
+pub mod qsy;
 pub mod receive;
 pub mod session;
 pub mod transmit;

@@ -1,0 +1,12 @@
+//! QSY frequency-agility protocol for OpenPulseHF.
+//!
+//! Provides frame codec, negotiation state machine, and rig frequency scanner for
+//! collaborative channel-switching between two stations.
+
+pub mod frame;
+pub mod scanner;
+pub mod session;
+
+pub use frame::{QsyFrame, QsyFrameError};
+pub use scanner::{QsyScanner, QsyScannerError};
+pub use session::{QsyAction, QsyError, QsyPolicy, QsySession};

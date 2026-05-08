@@ -128,6 +128,9 @@ fn main() -> Result<()> {
         } => {
             commands::beacon::run(&mut engine, &mode, interval, &callsign, ttl)?;
         }
+        Commands::Qsy { command } => {
+            commands::qsy::run(command)?;
+        }
         Commands::Config { .. } => unreachable!("handled above"),
     }
 

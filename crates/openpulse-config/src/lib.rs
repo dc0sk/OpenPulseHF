@@ -35,6 +35,23 @@ pub struct OpenpulseConfig {
     pub relay: RelayConfig,
     pub trust: TrustConfig,
     pub mesh: MeshConfig,
+    pub qsy: QsyConfig,
+}
+
+/// QSY frequency-agility settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct QsyConfig {
+    /// When false, all incoming QSY_REQ frames are rejected.
+    pub enabled: bool,
+    /// Trust levels whose QSY_REQ frames are accepted ("verified", "psk_verified", "unknown").
+    pub allow_trustlevels: Vec<String>,
+    /// Candidate frequencies to scan during QSY negotiation (Hz).
+    pub candidate_freqs_hz: Vec<u64>,
+    /// Time to dwell on each candidate frequency while reading the S-meter (ms).
+    pub scan_dwell_ms: u64,
+    /// Seconds after QSY_ACK before both stations switch frequency.
+    pub switchover_offset_s: u64,
 }
 
 /// Station identity.
@@ -265,6 +282,18 @@ impl Default for MeshConfig {
     }
 }
 
+impl Default for QsyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allow_trustlevels: vec!["verified".into(), "psk_verified".into()],
+            candidate_freqs_hz: vec![],
+            scan_dwell_ms: 500,
+            switchover_offset_s: 5,
+        }
+    }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Returns the platform-standard config file path.
@@ -436,6 +465,18 @@ peer_cache_ttl_s = 3600
 [trust]
 # Path to the local trust store directory. Empty = platform default.
 store_path = ""
+
+# [qsy]
+# Enable QSY frequency-agility negotiation.  Requires hamlib rigctld configured in [radio].
+# enabled = false
+# Trust levels allowed to initiate QSY with this station.
+# allow_trustlevels = ["verified", "psk_verified"]
+# Candidate frequencies to evaluate during a QSY scan (Hz).
+# candidate_freqs_hz = [14070000, 14074000, 14077000]
+# How long to dwell on each candidate while reading the S-meter (ms).
+# scan_dwell_ms = 500
+# Seconds between QSY_ACK and the actual frequency switch.
+# switchover_offset_s = 5
 "#
     .to_string()
 }
