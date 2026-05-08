@@ -21,6 +21,8 @@ pub use protocol::ControlEvent as Event;
 
 /// Shared mutable mode string, written by `set_mode` commands.
 pub type SharedMode = Arc<Mutex<String>>;
+/// Shared mutable TX attenuation (dB), written by `set_tx_attenuation` commands.
+pub type SharedAttenuation = Arc<Mutex<f32>>;
 
 /// Handle returned by [`ControlServer::spawn`].
 ///
@@ -31,6 +33,8 @@ pub struct ControlServerHandle {
     pub commands: mpsc::Receiver<ControlCommand>,
     /// Current active mode string (also updated by the command handler).
     pub active_mode: SharedMode,
+    /// Current TX attenuation in dB (also updated by the command handler).
+    pub tx_attenuation_db: SharedAttenuation,
 }
 
 /// NDJSON-over-TCP control server.
@@ -61,6 +65,7 @@ impl ControlServer {
         let (cmd_tx, cmd_rx) = mpsc::channel::<ControlCommand>(64);
 
         let active_mode = Arc::new(Mutex::new(initial_mode));
+        let tx_attenuation_db: SharedAttenuation = Arc::new(Mutex::new(0.0f32));
 
         // Background task: forward EngineEvents into the ControlEvent broadcast.
         let mut eng_rx = engine.subscribe();
@@ -98,6 +103,7 @@ impl ControlServer {
         let ev_tx_accept = Arc::clone(&ev_tx);
         let cmd_tx_accept = cmd_tx.clone();
         let mode_accept = Arc::clone(&active_mode);
+        let atten_accept = Arc::clone(&tx_attenuation_db);
         tokio::spawn(async move {
             loop {
                 match listener.accept().await {
@@ -106,7 +112,8 @@ impl ControlServer {
                         let rx = ev_tx_accept.subscribe();
                         let cmd_tx = cmd_tx_accept.clone();
                         let mode = Arc::clone(&mode_accept);
-                        tokio::spawn(handle_client(stream, rx, cmd_tx, mode));
+                        let atten = Arc::clone(&atten_accept);
+                        tokio::spawn(handle_client(stream, rx, cmd_tx, mode, atten));
                     }
                     Err(e) => {
                         tracing::warn!("control port accept error: {e}");
@@ -118,6 +125,7 @@ impl ControlServer {
         Ok(ControlServerHandle {
             commands: cmd_rx,
             active_mode,
+            tx_attenuation_db,
         })
     }
 }
@@ -128,6 +136,7 @@ async fn handle_client(
     mut ev_rx: broadcast::Receiver<ControlEvent>,
     cmd_tx: mpsc::Sender<ControlCommand>,
     active_mode: SharedMode,
+    tx_attenuation_db: SharedAttenuation,
 ) {
     let (read_half, mut write_half) = stream.into_split();
     let mut lines = BufReader::new(read_half).lines();
@@ -155,7 +164,7 @@ async fn handle_client(
             result = lines.next_line() => {
                 match result {
                     Ok(Some(line)) if !line.trim().is_empty() => {
-                        let resp = dispatch_command(&line, &cmd_tx, &active_mode).await;
+                        let resp = dispatch_command(&line, &cmd_tx, &active_mode, &tx_attenuation_db).await;
                         let mut out = match serde_json::to_string(&resp) {
                             Ok(s) => s,
                             Err(_) => continue,
@@ -179,6 +188,7 @@ async fn dispatch_command(
     line: &str,
     cmd_tx: &mpsc::Sender<ControlCommand>,
     active_mode: &SharedMode,
+    tx_attenuation_db: &SharedAttenuation,
 ) -> CommandResponse {
     let cmd: ControlCommand = match serde_json::from_str(line) {
         Ok(c) => c,
@@ -188,6 +198,9 @@ async fn dispatch_command(
     // Apply commands that modify local state immediately; forward all commands to caller.
     if let ControlCommand::SetMode { ref mode } = cmd {
         *active_mode.lock().await = mode.clone();
+    }
+    if let ControlCommand::SetTxAttenuation { db, .. } = cmd {
+        *tx_attenuation_db.lock().await = db;
     }
 
     if cmd_tx.send(cmd).await.is_err() {

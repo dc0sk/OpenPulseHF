@@ -26,6 +26,7 @@ pub struct PanelApp {
     server_addr: String,
     selected_mode: String,
     repeater_enabled: bool,
+    tx_atten_db: f32,
 }
 
 impl PanelApp {
@@ -37,6 +38,7 @@ impl PanelApp {
             server_addr: "127.0.0.1:9000".into(),
             selected_mode: "BPSK250".into(),
             repeater_enabled: false,
+            tx_atten_db: 0.0,
         }
     }
 
@@ -114,6 +116,22 @@ impl eframe::App for PanelApp {
                     } else {
                         self.send(ControlCommand::DisableRepeater);
                     }
+                }
+
+                ui.separator();
+                ui.label("TX Atten:");
+                if ui
+                    .add(
+                        egui::Slider::new(&mut self.tx_atten_db, -30.0_f32..=0.0_f32)
+                            .suffix(" dB")
+                            .fixed_decimals(1),
+                    )
+                    .changed()
+                {
+                    self.send(ControlCommand::SetTxAttenuation {
+                        db: self.tx_atten_db,
+                        band: None,
+                    });
                 }
 
                 // QSY buttons — visible only when a proposal is pending.

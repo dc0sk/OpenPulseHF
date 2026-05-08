@@ -1,4 +1,5 @@
 /// PTT and full CAT rig controller traits and implementations for OpenPulseHF.
+pub mod band_levels;
 pub mod error;
 pub mod noop;
 pub mod rig_controller;
@@ -7,6 +8,7 @@ pub mod rigctld;
 pub mod serial;
 pub mod vox;
 
+pub use band_levels::{attenuation_for_hz, freq_hz_to_band};
 pub use error::{PttError, RadioError};
 pub use noop::NoOpPtt;
 pub use rig_controller::RigctldController;

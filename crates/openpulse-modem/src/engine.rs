@@ -80,6 +80,8 @@ pub struct ModemEngine {
     broadcast_seq: u16,
     /// Callsign used in broadcast frame headers (set via `set_callsign`).
     callsign: String,
+    /// TX attenuation in dB applied to output samples (0.0 = no attenuation).
+    tx_attenuation_db: f32,
 }
 
 impl ModemEngine {
@@ -107,6 +109,7 @@ impl ModemEngine {
             event_tx,
             broadcast_seq: 0,
             callsign: String::new(),
+            tx_attenuation_db: 0.0,
         }
     }
 
@@ -629,8 +632,19 @@ impl ModemEngine {
         self.callsign = callsign.into();
     }
 
-    /// Transmit a one-to-many broadcast frame.
+    /// Set the TX attenuation applied to all transmitted audio (dB; 0.0 = no attenuation).
     ///
+    /// Negative values reduce output level; e.g. `-6.0` halves the amplitude.
+    /// Call this whenever the rig frequency changes to restore the per-band setting.
+    pub fn set_tx_attenuation_db(&mut self, db: f32) {
+        self.tx_attenuation_db = db;
+    }
+
+    /// Return the current TX attenuation in dB.
+    pub fn tx_attenuation_db(&self) -> f32 {
+        self.tx_attenuation_db
+    }
+
     /// Unlike [`transmit`](Self::transmit), this method bypasses the CSMA
     /// persistence check — broadcasts are short, and the sender is responsible
     /// for scheduling.  No ACK is expected; no session state is updated.
@@ -909,8 +923,15 @@ impl ModemEngine {
             .open_output(device, &audio_cfg)
             .map_err(|e| ModemError::Audio(e.to_string()))?;
 
+        let atten_linear = 10.0f32.powf(self.tx_attenuation_db / 20.0);
+        let write_samples: Vec<f32> = if (atten_linear - 1.0).abs() < 1e-6 {
+            samples.samples.clone()
+        } else {
+            samples.samples.iter().map(|s| s * atten_linear).collect()
+        };
+
         stream
-            .write(&samples.samples)
+            .write(&write_samples)
             .map_err(|e| ModemError::Audio(e.to_string()))?;
         stream
             .flush()

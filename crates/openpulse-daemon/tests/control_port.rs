@@ -208,3 +208,81 @@ async fn multiple_clients_both_receive_events() {
     assert!(ok1, "client 1 did not receive FrameTransmitted");
     assert!(ok2, "client 2 did not receive FrameTransmitted");
 }
+
+#[tokio::test]
+async fn set_tx_attenuation_command_returns_ok() {
+    let engine = make_engine();
+    let (addr, _handle) = spawn_server(&engine).await;
+
+    let (mut reader, mut writer) = connect(addr).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let cmd = serde_json::to_string(&ControlCommand::SetTxAttenuation {
+        db: -6.0,
+        band: Some("40m".into()),
+    })
+    .unwrap()
+        + "\n";
+    writer.write_all(cmd.as_bytes()).await.unwrap();
+
+    let resp = timeout(Duration::from_secs(2), async {
+        loop {
+            let mut buf = String::new();
+            reader.read_line(&mut buf).await.unwrap();
+            if buf.contains("\"ok\"") {
+                return serde_json::from_str::<CommandResponse>(buf.trim()).unwrap();
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for attenuation response");
+
+    assert!(
+        resp.ok,
+        "set_tx_attenuation returned error: {:?}",
+        resp.error
+    );
+}
+
+#[tokio::test]
+async fn set_tx_attenuation_updates_shared_state() {
+    let engine = make_engine();
+    let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let handle = ControlServer::spawn(
+        "127.0.0.1:0".parse().unwrap(),
+        &engine,
+        "BPSK250".into(),
+        Some(&mut addr),
+    )
+    .await
+    .unwrap();
+
+    let (mut reader, mut writer) = connect(addr).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let cmd = serde_json::to_string(&ControlCommand::SetTxAttenuation {
+        db: -12.5,
+        band: None,
+    })
+    .unwrap()
+        + "\n";
+    writer.write_all(cmd.as_bytes()).await.unwrap();
+
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let mut buf = String::new();
+            reader.read_line(&mut buf).await.unwrap();
+            if buf.contains("\"ok\"") {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for response");
+
+    let stored = *handle.tx_attenuation_db.lock().await;
+    assert!(
+        (stored - (-12.5)).abs() < 1e-4,
+        "expected -12.5 dB, got {stored}"
+    );
+}
