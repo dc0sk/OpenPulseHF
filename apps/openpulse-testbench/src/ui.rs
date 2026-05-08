@@ -1,5 +1,5 @@
 use egui::Ui;
-use egui_plot::{Line, Plot, PlotPoints, VLine};
+use egui_plot::{Line, Plot, PlotPoints, Points, VLine};
 use openpulse_channel::dsp::{FREQ_BINS, WATERFALL_ROWS};
 use openpulse_core::compression::CompressionAlgorithm;
 
@@ -10,6 +10,8 @@ use crate::state::{AppConfig, AppState, NoiseModel, Tap, ALL_MODES};
 
 const SPECTRUM_H: f32 = 170.0;
 const WATERFALL_H: f32 = 200.0;
+const SCATTER_H: f32 = 170.0;
+const SNR_PLOT_H: f32 = 80.0;
 
 // ── Toolbar ───────────────────────────────────────────────────────────────────
 
@@ -298,10 +300,43 @@ pub fn draw_stats(ui: &mut Ui, state: &AppState) {
             ));
         ui.separator();
 
+        if let Some(snr) = stats.current_snr_db {
+            ui.label(format!("SNR: {snr:.1} dB"))
+                .on_hover_text("Estimated signal-to-noise ratio (TX power / noise power)");
+            ui.separator();
+        }
+
         if let Some(last) = stats.event_log.back() {
             ui.label(format!("Last event: {last}"));
         }
     });
+
+    // SNR trend plot — only shown when history is available.
+    if !stats.snr_history.is_empty() {
+        let now = std::time::Instant::now();
+        let points: PlotPoints = stats
+            .snr_history
+            .iter()
+            .map(|(t, snr)| {
+                let age_s = now.duration_since(*t).as_secs_f64();
+                [-age_s, *snr as f64]
+            })
+            .collect();
+        Plot::new("snr_trend")
+            .height(SNR_PLOT_H)
+            .allow_zoom(false)
+            .allow_drag(false)
+            .include_y(-10.0)
+            .include_y(35.0)
+            .include_x(-180.0)
+            .include_x(0.0)
+            .x_axis_label("s ago")
+            .y_axis_label("dB")
+            .label_formatter(|_, v| format!("{:.0} s ago\n{:.1} dB", -v.x, v.y))
+            .show(ui, |plot_ui| {
+                plot_ui.line(Line::new(points).color(egui::Color32::from_rgb(80, 180, 255)));
+            });
+    }
 }
 
 // ── Signal path panel ─────────────────────────────────────────────────────────
@@ -313,6 +348,7 @@ pub fn draw_signal_panel(
     texture: &mut Option<egui::TextureHandle>,
     last_gen: &mut u64,
     config: &AppConfig,
+    show_scatter: bool,
 ) {
     let (spectrum, gen) = {
         let t = tap.read().unwrap();
@@ -385,6 +421,39 @@ pub fn draw_signal_panel(
         )));
     } else {
         ui.allocate_space(egui::vec2(ui.available_width(), WATERFALL_H));
+    }
+
+    // IQ scatter plot — shown only for the RX tap when enabled.
+    if show_scatter {
+        let iq: Vec<[f64; 2]> = {
+            let t = tap.read().unwrap();
+            t.iq_symbols
+                .iter()
+                .map(|&(i, q)| [i as f64, q as f64])
+                .collect()
+        };
+        Plot::new(format!("scatter_{label}"))
+            .height(SCATTER_H)
+            .allow_zoom(false)
+            .allow_drag(false)
+            .data_aspect(1.0)
+            .include_x(-2.0)
+            .include_x(2.0)
+            .include_y(-2.0)
+            .include_y(2.0)
+            .x_axis_label("I")
+            .y_axis_label("Q")
+            .label_formatter(|_, v| format!("I={:.2} Q={:.2}", v.x, v.y))
+            .show(ui, |plot_ui| {
+                if !iq.is_empty() {
+                    let pts: PlotPoints = iq.into_iter().collect();
+                    plot_ui.points(
+                        Points::new(pts)
+                            .color(egui::Color32::from_rgba_unmultiplied(255, 220, 50, 180))
+                            .radius(1.5),
+                    );
+                }
+            });
     }
 }
 

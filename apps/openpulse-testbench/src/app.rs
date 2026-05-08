@@ -139,6 +139,7 @@ impl eframe::App for TestbenchApp {
                             &mut self.textures[i],
                             &mut self.last_gen[i],
                             &config,
+                            i == 3, // show IQ scatter only for the RX tap
                         );
                     });
                 }

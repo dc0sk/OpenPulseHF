@@ -15,6 +15,10 @@ pub struct SessionProfile {
     pub initial_level: SpeedLevel,
     /// Consecutive NACK count that triggers a speed-level decrement.
     pub nack_threshold: u8,
+    /// Per-level SNR floor (dB).  Drop below this → immediate step-down.
+    snr_floors: [Option<f32>; 12],
+    /// Per-level SNR ceiling (dB).  Rise above this → flag upgrade candidate.
+    snr_ceilings: [Option<f32>; 12],
 }
 
 impl SessionProfile {
@@ -22,6 +26,21 @@ impl SessionProfile {
     /// is not mapped in this profile.
     pub fn mode_for(&self, level: SpeedLevel) -> Option<&'static str> {
         self.modes[level as usize]
+    }
+
+    /// Return the SNR floor (dB) for `level`, or `None` if no threshold is defined.
+    ///
+    /// When measured SNR drops below this, the rate adapter steps down immediately
+    /// without waiting for a NACK.
+    pub fn snr_floor_for_level(&self, level: SpeedLevel) -> Option<f32> {
+        self.snr_floors[level as usize]
+    }
+
+    /// Return the SNR ceiling (dB) for `level`, or `None` if no threshold is defined.
+    ///
+    /// When measured SNR exceeds this, the rate adapter sets an upgrade-candidate flag.
+    pub fn snr_ceiling_for_level(&self, level: SpeedLevel) -> Option<f32> {
+        self.snr_ceilings[level as usize]
     }
 
     /// HPX500 profile: 500 Hz class, BPSK/QPSK rate ladder (SL2–SL6).
@@ -42,10 +61,25 @@ impl SessionProfile {
         modes[SpeedLevel::Sl4 as usize] = Some("BPSK250");
         modes[SpeedLevel::Sl5 as usize] = Some("QPSK250");
         modes[SpeedLevel::Sl6 as usize] = Some("QPSK500");
+        // SNR floors: 3 dB headroom above Eb/N₀ required for 10⁻³ BER.
+        let mut snr_floors = [None; 12];
+        snr_floors[SpeedLevel::Sl2 as usize] = Some(3.0_f32);
+        snr_floors[SpeedLevel::Sl3 as usize] = Some(4.0_f32);
+        snr_floors[SpeedLevel::Sl4 as usize] = Some(5.0_f32);
+        snr_floors[SpeedLevel::Sl5 as usize] = Some(9.0_f32);
+        snr_floors[SpeedLevel::Sl6 as usize] = Some(11.0_f32);
+        let mut snr_ceilings = [None; 12];
+        snr_ceilings[SpeedLevel::Sl2 as usize] = Some(8.0_f32);
+        snr_ceilings[SpeedLevel::Sl3 as usize] = Some(9.0_f32);
+        snr_ceilings[SpeedLevel::Sl4 as usize] = Some(11.0_f32);
+        snr_ceilings[SpeedLevel::Sl5 as usize] = Some(14.0_f32);
+        snr_ceilings[SpeedLevel::Sl6 as usize] = Some(18.0_f32);
         Self {
             modes,
             initial_level: SpeedLevel::Sl2,
             nack_threshold: 3,
+            snr_floors,
+            snr_ceilings,
         }
     }
 
@@ -71,10 +105,26 @@ impl SessionProfile {
         modes[SpeedLevel::Sl5 as usize] = Some("QPSK250");
         modes[SpeedLevel::Sl6 as usize] = Some("QPSK500");
         modes[SpeedLevel::Sl7 as usize] = Some("8PSK500");
+        let mut snr_floors = [None; 12];
+        snr_floors[SpeedLevel::Sl2 as usize] = Some(3.0_f32);
+        snr_floors[SpeedLevel::Sl3 as usize] = Some(4.0_f32);
+        snr_floors[SpeedLevel::Sl4 as usize] = Some(5.0_f32);
+        snr_floors[SpeedLevel::Sl5 as usize] = Some(9.0_f32);
+        snr_floors[SpeedLevel::Sl6 as usize] = Some(11.0_f32);
+        snr_floors[SpeedLevel::Sl7 as usize] = Some(14.0_f32);
+        let mut snr_ceilings = [None; 12];
+        snr_ceilings[SpeedLevel::Sl2 as usize] = Some(8.0_f32);
+        snr_ceilings[SpeedLevel::Sl3 as usize] = Some(9.0_f32);
+        snr_ceilings[SpeedLevel::Sl4 as usize] = Some(11.0_f32);
+        snr_ceilings[SpeedLevel::Sl5 as usize] = Some(14.0_f32);
+        snr_ceilings[SpeedLevel::Sl6 as usize] = Some(18.0_f32);
+        snr_ceilings[SpeedLevel::Sl7 as usize] = Some(22.0_f32);
         Self {
             modes,
             initial_level: SpeedLevel::Sl2,
             nack_threshold: 3,
+            snr_floors,
+            snr_ceilings,
         }
     }
 
@@ -99,10 +149,20 @@ impl SessionProfile {
         modes[SpeedLevel::Sl8 as usize] = Some("QPSK500");
         modes[SpeedLevel::Sl9 as usize] = Some("QPSK1000");
         modes[SpeedLevel::Sl11 as usize] = Some("8PSK1000");
+        let mut snr_floors = [None; 12];
+        snr_floors[SpeedLevel::Sl8 as usize] = Some(11.0_f32);
+        snr_floors[SpeedLevel::Sl9 as usize] = Some(14.0_f32);
+        snr_floors[SpeedLevel::Sl11 as usize] = Some(18.0_f32);
+        let mut snr_ceilings = [None; 12];
+        snr_ceilings[SpeedLevel::Sl8 as usize] = Some(18.0_f32);
+        snr_ceilings[SpeedLevel::Sl9 as usize] = Some(22.0_f32);
+        // SL11 is the ceiling; no upgrade above it.
         Self {
             modes,
             initial_level: SpeedLevel::Sl8,
             nack_threshold: 3,
+            snr_floors,
+            snr_ceilings,
         }
     }
 }

@@ -124,6 +124,10 @@ pub struct TestStats {
     /// Sliding window for effective-bitrate calculation: (timestamp, payload_bits_delivered).
     pub rate_window: VecDeque<(std::time::Instant, u64)>,
     pub event_log: VecDeque<String>,
+    /// Rolling SNR history: (timestamp, snr_db).  Capacity ~1800 entries (180 s at 10 Hz).
+    pub snr_history: VecDeque<(std::time::Instant, f32)>,
+    /// Most recent SNR estimate (dB); `None` before the first frame.
+    pub current_snr_db: Option<f32>,
 }
 
 impl TestStats {
@@ -137,6 +141,8 @@ impl TestStats {
             last_compress_ratio: 1.0,
             rate_window: VecDeque::new(),
             event_log: VecDeque::new(),
+            snr_history: VecDeque::new(),
+            current_snr_db: None,
         }
     }
 
@@ -162,6 +168,9 @@ pub struct TapData {
     pub waterfall: WaterfallBuffer,
     pub latest_spectrum: Vec<f32>,
     pub generation: u64,
+    /// IQ symbol samples at the decision point; used by the scatter plot (tap[3] only).
+    /// Capacity 2000 pairs ≈ 10 s of symbols at 250 baud.
+    pub iq_symbols: VecDeque<(f32, f32)>,
 }
 
 impl TapData {
@@ -170,6 +179,7 @@ impl TapData {
             waterfall: WaterfallBuffer::new(WATERFALL_ROWS),
             latest_spectrum: vec![-120.0_f32; FREQ_BINS],
             generation: 0,
+            iq_symbols: VecDeque::new(),
         }
     }
 
