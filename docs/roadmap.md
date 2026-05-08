@@ -930,7 +930,7 @@ operator-enabled; it is never triggered automatically.
 **Dependencies**: hamlib integration (new `openpulse-hamlib` crate wrapping `rigctld` TCP
 interface), Phase 6.3 mesh layer (for relay-assisted QSY coordination).
 
-### FF-2 — I/Q output mode for direct SDR integration
+### FF-2 — I/Q output mode for direct SDR integration ✅ Done (PR #150)
 
 Allows OpenPulseHF to drive SDR radios (QMX, HermesLite 2, ADALM-Pluto, RTL-SDR TX,
 etc.) directly with complex baseband I/Q audio, achieving single-signal generation
@@ -991,7 +991,7 @@ existing NDJSON event consumers are unaffected.
 
 ---
 
-### FF-7 — Tanh TX limiter
+### FF-7 — Tanh TX limiter ✅ Done (PR #149)
 
 Apply a soft-limiting (tanh) compressor on the modulated audio output immediately before
 the audio backend, preventing ADC clipping and reducing PA non-linearity on hot signals.
@@ -1015,7 +1015,7 @@ above RMS absorbs these without audible distortion, reducing the PA back-off req
 
 ---
 
-### FF-8 — Per-band TX attenuation memory
+### FF-8 — Per-band TX attenuation memory ✅ Done (PR #148)
 
 Store the operator's last TX gain setting per amateur band segment and restore it
 automatically when the rig tunes to that band.
@@ -1039,7 +1039,7 @@ re-adjustment on every band change is error-prone.
 
 ---
 
-### FF-9 — Reactor pattern for HPX state machine
+### FF-9 — Reactor pattern for HPX state machine ✅ Done (PR #151)
 
 Replace the monolithic `HpxSession` state machine with an event-driven reactor pattern,
 decoupling protocol events from state transitions.
