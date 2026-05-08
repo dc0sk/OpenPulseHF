@@ -84,6 +84,11 @@ pub struct AudioConfig {
     /// Each sample `s` becomes `threshold * tanh(s / threshold)`.
     /// Set to `0.0` (default) to disable. Typical value: `1.5 * RMS`.
     pub tx_limiter_threshold: f32,
+    /// When `true`, transmit uses I/Q baseband output instead of real audio.
+    /// Requires a backend with `open_iq_output` support (e.g. SDR hardware).
+    pub iq_output: bool,
+    /// Output device name used for I/Q streaming; `None` selects the backend default.
+    pub iq_device: Option<String>,
 }
 
 /// Modem defaults shared by all TNC binaries.
@@ -207,6 +212,8 @@ impl Default for AudioConfig {
         Self {
             backend: "default".into(),
             tx_limiter_threshold: 0.0,
+            iq_output: false,
+            iq_device: None,
         }
     }
 }
@@ -412,6 +419,10 @@ backend = "default"
 # Soft TX limiter threshold (0.0 = disabled). Typical value: 1.5 × RMS of the
 # modulated signal. Prevents ADC clipping and reduces PA non-linearity on peaks.
 # tx_limiter_threshold = 0.0
+# Set iq_output = true to route TX to a baseband I/Q stream instead of real audio.
+# Required for direct SDR upconversion. Needs a backend that supports open_iq_output.
+# iq_output = false
+# iq_device = "sdr0"
 
 [modem]
 # Default modulation mode used when no --mode flag is provided.

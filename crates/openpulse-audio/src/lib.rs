@@ -12,7 +12,7 @@ pub mod loopback;
 #[cfg(feature = "cpal-backend")]
 pub mod cpal_backend;
 
-pub use loopback::LoopbackBackend;
+pub use loopback::{LoopbackBackend, LoopbackIqOutputStream};
 
 #[cfg(feature = "cpal-backend")]
 pub use cpal_backend::CpalBackend;

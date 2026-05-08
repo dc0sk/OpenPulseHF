@@ -109,6 +109,26 @@ pub trait ModulationPlugin: Send + Sync {
     fn estimate_afc_hz(&self, _samples: &[f32], _config: &ModulationConfig) -> Option<f32> {
         None
     }
+
+    /// Encode `data` bytes and return baseband I and Q sample vectors.
+    ///
+    /// The returned vectors have the same length.  `I` maps to the left
+    /// channel and `Q` to the right channel of a stereo audio output, which
+    /// an SDR upconverts directly to RF with exact sideband suppression.
+    ///
+    /// The default implementation wraps [`modulate`](Self::modulate) via a
+    /// Hilbert-transform baseband shift.  Plugins with a native complex-baseband
+    /// path (BPSK, QPSK) override this for efficiency and accuracy.
+    fn modulate_iq(
+        &self,
+        data: &[u8],
+        config: &ModulationConfig,
+    ) -> Result<(Vec<f32>, Vec<f32>), ModemError> {
+        let real = self.modulate(data, config)?;
+        let (i_bb, q_bb) =
+            crate::iq::hilbert_iq(&real, config.center_frequency, config.sample_rate as f32);
+        Ok((i_bb, q_bb))
+    }
 }
 
 // ── Plugin registry ───────────────────────────────────────────────────────────

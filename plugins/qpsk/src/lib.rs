@@ -57,6 +57,14 @@ impl ModulationPlugin for QpskPlugin {
     ) -> Result<Vec<u8>, ModemError> {
         demodulate::qpsk_demodulate(samples, config)
     }
+
+    fn modulate_iq(
+        &self,
+        data: &[u8],
+        config: &ModulationConfig,
+    ) -> Result<(Vec<f32>, Vec<f32>), ModemError> {
+        modulate::qpsk_modulate_iq(data, config)
+    }
 }
 
 /// Parse numeric baud rate from modes such as "QPSK250", "QPSK1000-HF", or "QPSK500-RRC".
