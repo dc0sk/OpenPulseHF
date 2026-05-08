@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/roadmap.md
 status: living
-last_updated: 2026-05-06
+last_updated: 2026-05-08
 ---
 
 # Roadmap
@@ -596,9 +596,186 @@ loopback round-trip passes on clean channel and AWGN 20 dB.
 
 ---
 
+## Phase 9 — Diagnostics and Protocol Intelligence
+
+*Inspired by analysis of FreeDV GUI (scatter plot, SNR trending, TX limiter) and
+Mercury/Mercury-Qt (asymmetric rate adaptation, SNR-driven gear-shifting).  All items
+are self-contained additions to existing subsystems; none require new crates.*
+
+---
+
+### 9.1 — Constellation / scatter plot in testbench
+
+Add an IQ scatter plot panel to `apps/openpulse-testbench` alongside the existing
+spectrum and waterfall views.
+
+**Motivation**: FreeDV's scatter diagram is its most-used demodulation quality indicator.
+The `-RRC` modes (FF-3) produce a clean QPSK or 8PSK IQ constellation at the matched-
+filter output; the scatter plot makes ISI, phase noise, and timing jitter immediately
+visible without needing to interpret BER numbers.
+
+**Implementation**:
+- Extend `TapData` with a `recent_symbols: VecDeque<(f32, f32)>` ring buffer (capacity
+  ~2000 IQ pairs, ~10 s of symbols at 250 baud).
+- Signal thread appends the raw IQ sample at the final decision point for each decoded
+  symbol before the threshold comparison.  For `-RRC` modes this is after the matched
+  filter and Gardner timing recovery; for Hann/CosineOverlap modes it is the integrated
+  IQ pair.
+- New `draw_scatter_panel()` in `apps/openpulse-testbench/src/ui.rs`: renders an
+  `egui_plot::Points` scatter with a colour gradient fading from yellow (recent) to dark
+  blue (oldest), matching FreeDV's visual idiom.  Panel height matches `SPECTRUM_H`
+  (170 px); placed to the right of the spectrum plot in each tap column.
+- No new dependencies; `egui_plot` is already in the workspace.
+
+**Acceptance**: constellation is visible in the testbench for QPSK500-RRC on a clean
+channel showing four tight clusters; on Watterson Good F1 the clusters visibly broaden.
+
+**Dependencies**: Phase 4.5 (testbench), FF-3 (RRC modes produce cleaner constellation).
+
+---
+
+### 9.2 — Asymmetric per-direction rate adaptation
+
+Mercury's most differentiating protocol feature: the A→B and B→A paths each select
+their own speed level independently, since SNR is rarely symmetric on HF.
+
+**Current state**: `RateAdapter` is stateless per-direction — it applies ACK feedback to
+a single shared `SpeedLevel`.  When node A sends at SL8 but the A→B path is marginal,
+NACKs force both directions down even though B→A may be excellent.
+
+**Implementation**:
+- Add `tx_level: SpeedLevel` and `rx_level: SpeedLevel` fields to `RateAdapter` (or
+  create `BiDirRateAdapter` wrapping two independent `RateAdapter` instances).
+- `apply_ack()` updates only `tx_level` (our outgoing path quality as reported by the
+  peer); a new `apply_remote_ack(ack: AckType)` updates `rx_level` when the peer's ACK
+  includes a reverse-direction quality report.
+- Extend `AckFrame` with a 1-byte `reverse_ack: AckType` field (the sender's assessment
+  of the *incoming* path quality); backward-compatible via a version nibble already in
+  the frame header.
+- `ModemEngine::current_adaptive_mode()` returns `(tx_mode, rx_mode)` as a tuple;
+  callers that assumed symmetric modes need updating.
+- `RigStatus` and `EngineEvent::RateChange` gain an optional `direction` field.
+
+**Acceptance**: integration test: two `ChannelSimHarness` engines with different SNR in
+each direction converge to different speed levels per direction within 30 frames.
+
+**Dependencies**: Phase 2.1 (`RateAdapter`, `AckFrame`), Phase 4.2 (`EngineEvent`).
+
+---
+
+### 9.3 — SNR trend plot in testbench
+
+Add a rolling SNR history chart to the testbench stats panel, inspired by FreeDV's
+180-second SNR plot.
+
+**Implementation**:
+- Add `snr_history: VecDeque<(f64 /*timestamp*/, f32 /*snr_db*/)>` (capacity 1800
+  samples = 180 s at 10 Hz update) to `AppStats`.
+- Signal thread estimates per-frame SNR as `signal_power / noise_power` where
+  `noise_power` is sampled from the `channel.generate_noise()` RMS; emits to stats ring.
+- New `draw_snr_plot()` renders an `egui_plot::Line` showing SNR (dBFS) vs. time
+  (seconds ago); x-axis inverted so newest is on the right.  Range: −10 to +35 dB.
+  Placed below the existing stats bar.
+- Stats bar gains a live `SNR: XX.X dB` label updated at the same 10 Hz cadence.
+
+**Acceptance**: SNR plot is visible in the testbench; SNR drops visibly when noise model
+is switched from Clean to AWGN 10 dB.
+
+**Dependencies**: Phase 4.5 (testbench).
+
+---
+
+### 9.4 — SNR as secondary rate adapter input
+
+Supplement ACK-only rate decisions with a raw SNR estimate, closing the feedback loop
+faster on rapidly degrading channels (Mercury's "hybrid SNR + delivery-feedback").
+
+**Current state**: `RateAdapter::apply_ack()` only acts on `AckType`; it cannot react
+until a full frame has been sent and acknowledged.  On a channel that drops 3 dB in a
+single propagation skip, the engine sends several frames at the wrong rate before the
+NACKs arrive.
+
+**Implementation**:
+- Add `apply_snr_hint(snr_db: f32)` to `RateAdapter`; called after every receive frame
+  (SNR derived from the modem's `estimate_afc_hz` signal-strength side-channel or a
+  separate RMS estimator in `ModemEngine`).
+- If `snr_db` drops below `profile.snr_floor_for_level(current_level)` (a per-level
+  SNR threshold table added to `SessionProfile`), immediately step down one level without
+  waiting for a NACK.  If `snr_db` rises above `snr_ceiling_for_level`, candidate an
+  upgrade (confirmed only after the next ACK-UP).
+- Thresholds are conservative (3 dB headroom above the Eb/N₀ required for 10⁻³ BER at
+  each modulation order) so the SNR hint only acts in unambiguous cases; normal ACK
+  feedback remains the primary driver.
+- `RateChange` engine event gains an optional `trigger: RateTrigger` field
+  (`AckUp`, `AckDown`, `NackDecrement`, `ChirpFallback`, `SnrFloor`, `SnrCeiling`).
+
+**Acceptance**: integration test: engine running at SL8 on a clean channel; inject a
+large noise burst (SNR drops below SL8 floor); assert engine steps down within 3 frames
+before any NACK has been processed.
+
+**Dependencies**: Phase 2.1 (`RateAdapter`), Phase 9.2 (asymmetric adaptation; shares
+the `SessionProfile` SNR threshold table).
+
+---
+
+### 9.5 — Broadcast / beacon mode alongside ARQ
+
+Mercury runs a broadcast mode in parallel to its ARQ sessions, enabling one-to-many
+unacknowledged transmissions (beacons, network announcements, position reports).
+
+**Implementation**:
+- New `WireMsgType::BroadcastFrame` (msg_type 0x0A): fixed 4-byte header
+  `(callsign_hash: u32, seq: u16, ttl: u8, flags: u8)` followed by variable payload.
+  No ACK expected; no session state required.
+- `ModemEngine::broadcast(payload: &[u8])` — encodes a `BroadcastFrame`, skips CSMA
+  persistence check (broadcasts are short; sender takes responsibility), and transmits
+  immediately.
+- `MeshDaemon` re-broadcasts received `BroadcastFrame`s with `ttl -= 1` until `ttl == 0`
+  (store-and-forward propagation limited to TTL hops).
+- `openpulse-cli broadcast --payload <hex|text> --ttl <n>` subcommand.
+- Beacon mode: `openpulse-cli beacon --interval 600s --callsign KX0ABC` sends a minimal
+  `BroadcastFrame` every interval (station ID compliance for long sessions).
+
+**Acceptance**: two `ChannelSimHarness` nodes: node A broadcasts; node B receives and
+emits `EngineEvent::FrameRx`; relay node C re-broadcasts with `ttl - 1`.
+
+**Dependencies**: Phase 2.4 (CSMA/DCD), Phase 6.3 (mesh daemon for multi-hop relay).
+
+---
+
+## Phase 9 dependency summary
+
+```
+Phase 4.5 (testbench)
+    └─> Phase 9.1 (scatter plot)
+    └─> Phase 9.3 (SNR trend plot)
+
+FF-3 (RRC modes)
+    └─> Phase 9.1 (RRC produces clean constellation; scatter plot is most useful)
+
+Phase 2.1 (RateAdapter / AckFrame)
+    └─> Phase 9.2 (asymmetric per-direction adaptation)
+    └─> Phase 9.4 (SNR secondary input)
+
+Phase 9.2 (asymmetric adaptation — adds SNR threshold table)
+    └─> Phase 9.4 (reuses SNR threshold table)
+
+Phase 4.2 (EngineEvent)
+    └─> Phase 9.2 (RateChange event gains direction field)
+    └─> Phase 9.4 (RateChange event gains trigger field)
+
+Phase 2.4 (CSMA/DCD)
+    └─> Phase 9.5 (broadcast mode bypasses CSMA)
+
+Phase 6.3 (mesh daemon)
+    └─> Phase 9.5 (TTL-limited re-broadcast)
+```
+
+---
+
 ## Far-future items
 
-Features deliberately deferred beyond Phase 6.  Each item requires significant design
+Features deliberately deferred beyond Phase 9.  Each item requires significant design
 work, hardware availability, or explicit operator configuration that is not yet in scope.
 
 ### FF-3 — Root-raised-cosine matched filtering *(far future)*
@@ -789,7 +966,110 @@ on real hardware), SDR radio with stereo line-in capability (QMX, HermesLite, et
 
 ---
 
-## Dependency ordering summary
+### FF-6 — Binary WebSocket spectrum channel
+
+Extend the daemon control protocol (Phase 7.3) with a binary frame channel for spectrum
+data, eliminating JSON serialisation overhead on high-frequency FFT updates.
+
+**Motivation**: Mercury-Qt uses a hybrid protocol — JSON for control commands, binary
+frames (magic header + float32 array) for spectrum data.  At 20 Hz waterfall updates
+with 512 bins, JSON encoding wastes ~8 KB/s per client vs. ~4 KB/s for raw float32.
+
+**Implementation**:
+- Binary frame format: `[0x4F 0x50 0x53 0x50] (magic "OPSP") | fft_size: u16 LE |
+  sample_rate: u32 LE | bins: [f32 LE × fft_size]`.
+- Control port (Phase 7.3) gains a `Content-Type: application/octet-stream` upgrade
+  path: client sends `{"cmd": "subscribe_spectrum", "fps": 20}` → server begins
+  interleaving binary frames into the connection alongside NDJSON events.
+- `openpulse-panel` (Phase 7.4) subscribes at startup and feeds the float32 array
+  directly into its waterfall texture, bypassing JSON parse and float conversion.
+
+**Acceptance**: panel waterfall updates at 20 fps with < 5 ms latency on loopback;
+existing NDJSON event consumers are unaffected.
+
+**Dependencies**: Phase 7.3 (control protocol), Phase 7.4 (panel consumes spectrum).
+
+---
+
+### FF-7 — Tanh TX limiter
+
+Apply a soft-limiting (tanh) compressor on the modulated audio output immediately before
+the audio backend, preventing ADC clipping and reducing PA non-linearity on hot signals.
+
+**Motivation**: FreeDV applies tanh limiting for full-duplex mode, but it is useful
+generally: at the top of the HPX rate ladder (8PSK1000-RRC), the RRC filter produces
+occasional amplitude peaks ~3 dB above RMS.  A soft limiter with a threshold at +2 dB
+above RMS absorbs these without audible distortion, reducing the PA back-off requirement.
+
+**Implementation**:
+- `pub fn tanh_limit(samples: &mut [f32], threshold: f32)` in `openpulse-audio` (or
+  `openpulse-core`): apply `threshold * tanh(s / threshold)` per sample.
+- `ModemEngine::transmit()` applies `tanh_limit` with a configurable threshold
+  (default `1.5 × RMS`; `[audio] tx_limiter_threshold` config key; 0.0 = disabled).
+- No changes to any plugin or demodulator.
+
+**Acceptance**: peak amplitude of QPSK1000-RRC frame after limiting does not exceed
+`threshold`; BER on clean loopback is unchanged.
+
+**Dependencies**: Phase 5.6 (CpalBackend audio path), FF-3 (RRC modes benefit most).
+
+---
+
+### FF-8 — Per-band TX attenuation memory
+
+Store the operator's last TX gain setting per amateur band segment and restore it
+automatically when the rig tunes to that band.
+
+**Motivation**: FreeDV stores per-band TX attenuation because operators use different
+power levels on different bands (40 m full power, 30 m QRP-only, etc.).  Manual
+re-adjustment on every band change is error-prone.
+
+**Implementation**:
+- `[tx_levels]` TOML section: `"40m" = -3.0`, `"30m" = -10.0`, etc.; band names follow
+  IARU Region 1 edge frequencies; `"default" = 0.0` for unrecognised frequencies.
+- After each `RigctldController::get_frequency()` call (Phase 7.1), map the result to
+  a band segment; scale TX samples by `10^(attenuation_db / 20)`.
+- `openpulse-panel` toolbar gains a `TX atten: X.X dB` slider that writes to the in-
+  memory value and persists to `[tx_levels]` on change.
+
+**Acceptance**: operator sets -6 dB on 40 m; tunes to 20 m (0 dB); tunes back to 40 m
+— attenuation returns to -6 dB without operator action; persists across restart.
+
+**Dependencies**: Phase 7.1 (RigctldController for frequency readback), Phase 7.4 (panel).
+
+---
+
+### FF-9 — Reactor pattern for HPX state machine
+
+Replace the monolithic `HpxSession` state machine with an event-driven reactor pattern,
+decoupling protocol events from state transitions.
+
+**Motivation**: Mercury replaced its monolithic ARQ state machine with a modular reactor
+because concurrent protocol states became unmanageable in a single match block.
+OpenPulseHF's `HpxSession` is straightforward today, but as relay (Phase 6.3),
+asymmetric rate adaptation (Phase 9.2), broadcast (Phase 9.5), and QSY (FF-1) are all
+wired in, the number of concurrent state combinations will grow.
+
+**What changes**:
+- `HpxSession` becomes `HpxReactor` holding a `HashMap<SessionId, SessionState>` and a
+  bounded event queue.
+- `HpxReactor::dispatch(event: HpxEvent)` routes events to per-state handler functions;
+  no direct state mutation outside handlers.
+- Existing `HpxState` and `HpxEvent` enums are unchanged; HPX conformance tests serve as
+  the acceptance gate.
+- Wire protocol and all wire frame types are unaffected.
+
+**Timing**: defer until at least Phase 9.5 (broadcast) is implemented; only undertake
+the refactor if the state machine branch count exceeds ~50 arms.
+
+**Acceptance**: all existing `hpx_conformance_integration` tests pass unchanged.
+
+**Dependencies**: Phase 9.5, FF-1 — implement after at least two of these add concurrent
+states to `HpxSession`.
+
+---
+
+
 
 The following dependencies constrain the execution sequence:
 
