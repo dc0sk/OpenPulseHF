@@ -305,7 +305,7 @@ nodes can answer peer-query requests from their cached knowledge.
 
 ## Phase 7 — Operator Panel and Dual-Rig Control
 
-### 7.1 — Hamlib full CAT control (`openpulse-radio` extension)
+### 7.1 — Hamlib full CAT control (`openpulse-radio` extension) ✅ Done
 
 Extend `openpulse-radio` beyond PTT to full rig CAT control via the existing `rigctld`
 TCP interface.  The existing `RigctldPtt` already holds a TCP connection; this task
@@ -332,7 +332,7 @@ promotes it to a general-purpose `RigctldController`.
 
 ---
 
-### 7.2 — Dual-rig support and cross-band repeater
+### 7.2 — Dual-rig support and cross-band repeater ✅ Done
 
 Add support for a second transceiver and wire both into a cross-band repeater mode.
 
@@ -362,7 +362,7 @@ rigctld_addr = "127.0.0.1:4533"   # secondary rig (TX for cross-band repeater)
 
 ---
 
-### 7.3 — Daemon control protocol
+### 7.3 — Daemon control protocol ✅ Done
 
 Add a structured NDJSON-over-TCP control port to the server daemon, enabling a thin
 client (Phase 7.4) to display real-time status and send operator commands.
@@ -415,7 +415,7 @@ connection.
 
 ---
 
-### 7.4 — `openpulse-panel` operator UI
+### 7.4 — `openpulse-panel` operator UI ✅ Done
 
 A native egui desktop application that connects to the `openpulse-server` control port
 and provides the full operator experience.
@@ -452,7 +452,7 @@ reconnects automatically on drop; server address editable in the toolbar.
 
 ---
 
-### 7.5 — Signed remote rig control (over-the-air)
+### 7.5 — Signed remote rig control (over-the-air) ✅ Done
 
 Allow a trusted peer to send signed rig-control commands over the air, enabling remote
 operation of the second transceiver without an internet link.
@@ -510,7 +510,7 @@ path regardless of rig_b TX state.
 Items 8.1 and 8.2 are naming/profile changes; 8.3 is a DSP change that closes the
 underlying issue.*
 
-### 8.1 — Rename wideband HPX profiles for non-HF use
+### 8.1 — Rename wideband HPX profiles for non-HF use ✅ Done
 
 The current `hpx2300()` profile reaches SL9=QPSK1000 and SL11=8PSK1000, both of which
 occupy ~4000 Hz null-to-null bandwidth with Hann windowing.  These modes are illegal on
@@ -529,7 +529,7 @@ testmatrix compile with the renamed symbol.
 
 ---
 
-### 8.2 — HF-compliant capped adaptive profile (`hpx_hf`)
+### 8.2 — HF-compliant capped adaptive profile (`hpx_hf`) ✅ Done
 
 Add a new `SessionProfile::hpx_hf()` profile whose top speed level stays within the
 2700 Hz HF channel-width limit.  Bandwidth budget: `4 × Rs ≤ 2700 Hz → Rs ≤ 675 baud`.
@@ -558,7 +558,7 @@ quick tier includes at least one HPX-HF × AWGN 20 dB case.
 
 ---
 
-### 8.3 — PSK31-style cosine amplitude shaping
+### 8.3 — PSK31-style cosine amplitude shaping ✅ Done
 
 PSK31 achieves bandwidth ≈ symbol rate (vs. 4 × Rs for Hann isolated bursts) by applying
 a continuous overlapping cosine amplitude envelope across symbol boundaries.  Phase

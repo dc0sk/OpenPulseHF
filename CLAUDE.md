@@ -80,7 +80,7 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 | `openpulse-cli` | `crates/openpulse-cli` | CLI binary; thin wrapper over modem engine and protocol crates |
 | `openpulse-tui` | `crates/openpulse-tui` | ratatui TUI frontend: HPX state, AFC/rate meters, DCD energy bar, transitions log |
 | `openpulse-testbench` | `apps/openpulse-testbench` | egui/eframe signal-path testbench: 4-column waterfall/spectrum/scatter, 7 channel models |
-| `openpulse-panel` | `apps/openpulse-panel` | Operator panel GUI (Phase 7 work-in-progress) |
+| `openpulse-panel` | `apps/openpulse-panel` | Operator panel GUI (egui; connects to openpulse-daemon control port) |
 | `openpulse-testmatrix` | `apps/openpulse-testmatrix` | Automated mode × channel test matrix runner |
 | `pki-tooling` | `pki-tooling` | Key management, trust store, bundle signing, PKI web service |
 
@@ -97,10 +97,9 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 
 ## Current phase and execution order
 
-**Completed**: Phases 1–9, FF-1. See `docs/roadmap.md` for full history.
+**Completed**: Phases 1–9, Phase 7 (7.1–7.5), Phase 8 (8.1–8.3), FF-1. See `docs/roadmap.md` for full history.
 
 **Active tracks**:
-- **Phase 7** — Operator Panel and Dual-Rig Control (`apps/openpulse-panel`, `openpulse-daemon`): partially implemented, not yet marked done on roadmap
 - **FF series** — Far-future features; FF-1 (QSY) is done; FF-2 through FF-11 are deferred
 
 Execute Phase 1 tasks in this order. Tasks within the same group are independent and may be parallelised.
