@@ -59,6 +59,7 @@ pub fn qpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
             bb_q[sym_start] = q_amp;
         } else if cosine_overlap {
             for i in 0..n {
+                // sin²(πi/n): 0 at boundaries, peaks at 1 at midpoint.
                 let amp = 0.5 * (1.0 - (2.0 * PI * i as f32 / n as f32).cos());
                 let t = (sym_start + i) as f32 / fs;
                 let c = (two_pi * fc * t).cos();
