@@ -46,24 +46,62 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 
 ## Crate map
 
+### Core layer
+
 | Crate | Path | Role |
 |---|---|---|
-| `openpulse-core` | `crates/openpulse-core` | Traits (`ModulationPlugin`, `AudioBackend`), frame format, CRC-16, `FecCodec` (RS), `HpxSession` state machine, plugin registry, trust/signing |
+| `openpulse-core` | `crates/openpulse-core` | Traits, frame format, CRC-16, `FecCodec` (RS+Conv), `HpxSession` state machine, plugin registry, trust/signing, SAR, ACK, rate adaptation, relay, query propagation, peer cache, compression, PQ handshake |
 | `openpulse-audio` | `crates/openpulse-audio` | `LoopbackBackend` (testing) and `CpalBackend` (hardware, feature-gated) |
-| `openpulse-modem` | `crates/openpulse-modem` | `ModemEngine`, `PipelineScheduler`, benchmark harness, diagnostics |
-| `openpulse-cli` | `crates/openpulse-cli` | CLI binary; thin wrapper over modem engine |
-| `bpsk-plugin` | `plugins/bpsk` | BPSK31/63/100/250 modulation plugin |
-| `qpsk-plugin` | `plugins/qpsk` | QPSK125/250/500 modulation plugin |
-| `pki-tooling` | `pki-tooling` | Key management, trust store, signing utilities |
-| `openpulse-channel` | `crates/openpulse-channel` | Channel simulation (Watterson, Gilbert-Elliott, QRN/QRM/QSB/Chirp). Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`. |
-| `openpulse-radio` | `crates/openpulse-radio` | `PttController` trait + `NoOpPtt`, `SerialRtsDtrPtt`, `VoxPtt`, `RigctldPtt` backends. |
-| `openpulse-testbench` | `apps/openpulse-testbench` | **Planned — post Phase A.** egui GUI for testing. Full spec in `docs/testbench-design.md`. |
+| `openpulse-modem` | `crates/openpulse-modem` | `ModemEngine`, `PipelineScheduler`, benchmark harness, diagnostics, CSMA/DCD, channel sim harness |
+| `openpulse-channel` | `crates/openpulse-channel` | Channel simulation (Watterson, Gilbert-Elliott, QRN/QRM/QSB/Chirp) |
+| `openpulse-radio` | `crates/openpulse-radio` | `PttController` trait + `NoOpPtt`, `SerialRtsDtrPtt`, `VoxPtt`, `RigctldPtt`, `RigctldController` (CAT) |
+| `openpulse-dsp` | `crates/openpulse-dsp` | DSP primitives: RRC filter, PLL, timing recovery (shared building blocks, not yet wired into modem) |
+| `openpulse-config` | `crates/openpulse-config` | Typed TOML schema; `load()`, `init_template()`, CLI-override pattern |
+| `openpulse-gpu` | `crates/openpulse-gpu` | wgpu-backed BPSK DSP kernels; CPU fallback when GPU unavailable; gated by `gpu` feature in `bpsk-plugin` |
+
+### Protocol layer
+
+| Crate | Path | Role |
+|---|---|---|
+| `openpulse-ardop` | `crates/openpulse-ardop` | ARDOP-compatible TCP TNC interface; `openpulse-tnc` binary; Pat-compatible command set |
+| `openpulse-kiss` | `crates/openpulse-kiss` | KISS/AX.25 TNC interface; `openpulse-kisstnc` binary |
+| `openpulse-b2f` | `crates/openpulse-b2f` | B2F/Winlink protocol state machine (banner, FC/FS/Ff/Fq frames, gzip+LZHUF compression) |
+| `openpulse-b2f-driver` | `crates/openpulse-b2f-driver` | High-level ISS/IRS session driver over ARDOP TCP; e2e loopback tests |
+| `openpulse-gateway` | `crates/openpulse-gateway` | Direct TCP Winlink CMS gateway; `openpulse-gateway` binary |
+| `openpulse-qsy` | `crates/openpulse-qsy` | QSY frequency-agility protocol: wire frame codec, Ed25519 signing, `QsySession` state machine, `QsyScanner` |
+| `openpulse-mesh` | `crates/openpulse-mesh` | Mesh broadcast daemon; beacon re-broadcast with TTL, `openpulse-mesh` binary |
+| `openpulse-repeater` | `crates/openpulse-repeater` | Digipeater / relay node; configurable filter and forwarding policy |
+| `openpulse-daemon` | `crates/openpulse-daemon` | Unified background daemon aggregating modem, PTT, and control-protocol services |
+
+### UI and tooling layer
+
+| Crate | Path | Role |
+|---|---|---|
+| `openpulse-cli` | `crates/openpulse-cli` | CLI binary; thin wrapper over modem engine and protocol crates |
+| `openpulse-tui` | `crates/openpulse-tui` | ratatui TUI frontend: HPX state, AFC/rate meters, DCD energy bar, transitions log |
+| `openpulse-testbench` | `apps/openpulse-testbench` | egui/eframe signal-path testbench: 4-column waterfall/spectrum/scatter, 7 channel models |
+| `openpulse-panel` | `apps/openpulse-panel` | Operator panel GUI (Phase 7 work-in-progress) |
+| `openpulse-testmatrix` | `apps/openpulse-testmatrix` | Automated mode × channel test matrix runner |
+| `pki-tooling` | `pki-tooling` | Key management, trust store, bundle signing, PKI web service |
+
+### Plugins
+
+| Crate | Path | Role |
+|---|---|---|
+| `bpsk-plugin` | `plugins/bpsk` | BPSK31/63/100/250 modulation plugin; optional GPU path |
+| `qpsk-plugin` | `plugins/qpsk` | QPSK125/250/500/1000 modulation plugin |
+| `psk8-plugin` | `plugins/psk8` | 8PSK500/1000 modulation plugin |
+| `fsk4-plugin` | `plugins/fsk4` | FSK4-ACK modulation plugin (ACK channel) |
 
 ---
 
 ## Current phase and execution order
 
-**Active phase: Phase 2 — ACK Taxonomy and Rate Adaptation.** See `docs/roadmap.md` for the full gate criteria.
+**Completed**: Phases 1–9, FF-1. See `docs/roadmap.md` for full history.
+
+**Active tracks**:
+- **Phase 7** — Operator Panel and Dual-Rig Control (`apps/openpulse-panel`, `openpulse-daemon`): partially implemented, not yet marked done on roadmap
+- **FF series** — Far-future features; FF-1 (QSY) is done; FF-2 through FF-11 are deferred
 
 Execute Phase 1 tasks in this order. Tasks within the same group are independent and may be parallelised.
 
