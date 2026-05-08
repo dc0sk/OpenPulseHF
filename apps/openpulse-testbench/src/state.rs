@@ -103,6 +103,11 @@ pub const ALL_MODES: &[&str] = &[
     "8PSK500",
     "8PSK1000",
     "8PSK1000-HF",
+    "BPSK250-RRC",
+    "QPSK500-RRC",
+    "QPSK1000-RRC",
+    "8PSK500-RRC",
+    "8PSK1000-RRC",
     "FSK4-ACK",
 ];
 

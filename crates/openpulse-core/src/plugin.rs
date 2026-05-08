@@ -31,7 +31,7 @@ pub struct PluginInfo {
 // ── Pulse shaping ─────────────────────────────────────────────────────────────
 
 /// Amplitude envelope applied during symbol modulation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum PulseShape {
     /// 50% overlapping raised-cosine crossfade between adjacent symbols.
     /// Default for all modes; equivalent to PSK31 shaping for pure BPSK.
@@ -41,6 +41,13 @@ pub enum PulseShape {
     /// Forces amplitude zero at every symbol boundary; achieves null-to-null BW ≈ 2×Rs.
     /// Used by `-HF` mode aliases for HF-legal operation at high baud rates.
     CosineOverlap,
+    /// Square-root raised-cosine (SRRC) FIR pulse shaping.
+    /// Occupied bandwidth ≈ (1 + alpha) × Rs Hz; requires a matched RRC RX filter.
+    /// Used by `-RRC` mode aliases.
+    Rrc {
+        /// RRC rolloff factor α ∈ [0, 1]; 0.35 is the default for `-RRC` modes.
+        alpha: f32,
+    },
 }
 
 // ── Modulation configuration ──────────────────────────────────────────────────
@@ -54,7 +61,7 @@ pub struct ModulationConfig {
     pub sample_rate: u32,
     /// Mode string that selects parameters inside the plugin, e.g. `"BPSK31"`.
     pub mode: String,
-    /// Pulse-shaping envelope; overridden automatically by `-HF` mode aliases.
+    /// Pulse-shaping envelope; plugins select this based on the mode string.
     pub pulse_shape: PulseShape,
 }
 

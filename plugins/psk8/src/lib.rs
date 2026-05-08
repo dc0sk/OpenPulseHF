@@ -30,6 +30,8 @@ impl Psk8Plugin {
                     "8PSK500".to_string(),
                     "8PSK1000".to_string(),
                     "8PSK1000-HF".to_string(),
+                    "8PSK500-RRC".to_string(),
+                    "8PSK1000-RRC".to_string(),
                 ],
                 trait_version_required: "1.0".to_string(),
             },
@@ -55,9 +57,9 @@ impl ModulationPlugin for Psk8Plugin {
     }
 }
 
-/// Parse numeric baud rate from the trailing digits of modes such as "8PSK500" or "8PSK1000-HF".
+/// Parse numeric baud rate from the trailing digits of modes such as "8PSK500", "8PSK1000-HF", or "8PSK500-RRC".
 pub(crate) fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
-    let base = mode.trim_end_matches("-HF");
+    let base = mode.trim_end_matches("-HF").trim_end_matches("-RRC");
     let trailing: String = base
         .chars()
         .rev()
@@ -122,6 +124,32 @@ mod tests {
             ..ModulationConfig::default()
         };
         let payload = b"8PSK1000-HF round-trip";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    #[test]
+    fn psk8_500_rrc_loopback() {
+        let plugin = Psk8Plugin::new();
+        let cfg = ModulationConfig {
+            mode: "8PSK500-RRC".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"8PSK RRC loopback";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    #[test]
+    fn psk8_1000_rrc_loopback() {
+        let plugin = Psk8Plugin::new();
+        let cfg = ModulationConfig {
+            mode: "8PSK1000-RRC".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"8PSK1000 RRC loopback";
         let samples = plugin.modulate(payload, &cfg).expect("modulate");
         let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
         assert_eq!(&recovered[..payload.len()], payload);

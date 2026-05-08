@@ -198,7 +198,12 @@ fn gross_bps(mode: &str) -> f64 {
         "8PSK500" => 1500.0,     // 500 baud × 3 bits/symbol
         "8PSK1000" => 3000.0,    // 1000 baud × 3 bits/symbol
         "8PSK1000-HF" => 3000.0, // same rate, narrower BW via cosine overlap
-        "FSK4-ACK" => 200.0,     // 100 baud × 2 bits/symbol (4-tone)
+        "BPSK250-RRC" => 250.0,
+        "QPSK500-RRC" => 1000.0,
+        "QPSK1000-RRC" => 2000.0,
+        "8PSK500-RRC" => 1500.0,
+        "8PSK1000-RRC" => 3000.0,
+        "FSK4-ACK" => 200.0, // 100 baud × 2 bits/symbol (4-tone)
         _ => 0.0,
     }
 }
@@ -215,6 +220,11 @@ fn mode_symbol_rate_hz(mode: &str) -> f64 {
         "QPSK1000" | "QPSK1000-HF" => 1000.0,
         "8PSK500" => 500.0,
         "8PSK1000" | "8PSK1000-HF" => 1000.0,
+        "BPSK250-RRC" => 250.0,
+        "QPSK500-RRC" => 500.0,
+        "QPSK1000-RRC" => 1000.0,
+        "8PSK500-RRC" => 500.0,
+        "8PSK1000-RRC" => 1000.0,
         "FSK4-ACK" => 100.0,
         _ => 250.0,
     }

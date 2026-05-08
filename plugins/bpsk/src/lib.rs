@@ -82,6 +82,7 @@ impl BpskPlugin {
                 "BPSK63".to_string(),
                 "BPSK100".to_string(),
                 "BPSK250".to_string(),
+                "BPSK250-RRC".to_string(),
             ],
             trait_version_required: "1.0".to_string(),
         }
@@ -120,10 +121,11 @@ impl ModulationPlugin for BpskPlugin {
 
 // ── Helper: parse baud rate from mode string ──────────────────────────────────
 
-/// Parse the numeric baud rate from a mode string such as `"BPSK31"`.
+/// Parse the numeric baud rate from a mode string such as `"BPSK31"` or `"BPSK250-RRC"`.
 pub(crate) fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
-    // Strip any leading non-digit characters ("BPSK") then parse the number.
-    let digits: String = mode.chars().skip_while(|c| !c.is_ascii_digit()).collect();
+    // Strip trailing suffixes (-RRC) then parse leading digits after "BPSK".
+    let base = mode.trim_end_matches("-RRC");
+    let digits: String = base.chars().skip_while(|c| !c.is_ascii_digit()).collect();
     match digits.as_str() {
         "31" => Ok(31.25),
         "63" => Ok(62.5),
@@ -144,5 +146,18 @@ mod tests {
         assert!((parse_baud_rate("BPSK100").unwrap() - 100.0).abs() < 1e-4);
         assert!((parse_baud_rate("BPSK250").unwrap() - 250.0).abs() < 1e-4);
         assert!(parse_baud_rate("BPSK").is_err());
+    }
+
+    #[test]
+    fn bpsk250_rrc_loopback() {
+        let plugin = BpskPlugin::new();
+        let cfg = ModulationConfig {
+            mode: "BPSK250-RRC".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"BPSK RRC loopback";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
     }
 }
