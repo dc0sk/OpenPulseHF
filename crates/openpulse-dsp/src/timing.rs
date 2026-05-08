@@ -28,9 +28,10 @@ pub struct GardnerDetector {
 impl GardnerDetector {
     /// Create a new detector.
     ///
-    /// `sps` — integer samples per symbol (e.g. 8 for 1000 baud @ 8 kHz).
+    /// `sps` — integer samples per symbol (must be ≥ 2; e.g. 8 for 1000 baud @ 8 kHz).
     /// `gain` — loop gain; 0.01–0.05 is typical for well-conditioned signals.
     pub fn new(sps: usize, gain: f32) -> Self {
+        assert!(sps >= 2, "GardnerDetector requires sps >= 2 (got {sps})");
         Self {
             gain,
             mu: 0.0,
@@ -51,8 +52,8 @@ impl GardnerDetector {
         self.samples[2] = sample;
         self.phase += 1;
 
-        // Strobe at (sps + mu).round() samples
-        let strobe = (self.sps as f32 + self.mu).round() as usize;
+        // Strobe at (sps + mu).round() samples; clamp to at least 1 to avoid a tight spin.
+        let strobe = ((self.sps as f32 + self.mu).round() as usize).max(1);
         if self.phase < strobe {
             return None;
         }

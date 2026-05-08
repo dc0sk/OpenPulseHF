@@ -218,9 +218,9 @@ pub fn generate_ofdm_frame(cfg: &OfdmConfig, payload: &[u8]) -> Vec<f32> {
 /// Decode real-valued OFDM samples back to payload bytes (best-effort, no FEC).
 ///
 /// Reads only the positive-frequency half (bins 1..fft_size/2) of the FFT
-/// to match the Hermitian-symmetric transmitter.  Each positive-frequency bin
-/// is multiplied by 2 to account for the energy split between positive and
-/// negative mirrors.
+/// to match the Hermitian-symmetric transmitter.  Both TX and RX apply the
+/// same `1/sqrt(N)` normalisation, so the FFT/IFFT round-trip recovers the
+/// original frequency-domain symbols exactly.
 pub fn demodulate_ofdm_frame(samples: &[f32], cfg: &OfdmConfig) -> Vec<u8> {
     let fft_size = cfg.n_subcarriers;
     let half = fft_size / 2;
@@ -320,6 +320,9 @@ pub fn clip_and_filter(samples: &[f32], clip_db: f32) -> Vec<f32> {
 /// energy is monotonically non-increasing, so the threshold is non-increasing
 /// and the signal eventually lies fully within `[-T, T]`.
 pub fn clip_iterative(samples: &[f32], target_papr_db: f32, max_iter: usize) -> Vec<f32> {
+    if samples.is_empty() {
+        return vec![];
+    }
     let mut signal = samples.to_vec();
     let factor = 10.0_f32.powf(target_papr_db / 20.0);
     for _ in 0..max_iter {
@@ -350,12 +353,10 @@ pub fn tone_reservation(cfg: &OfdmConfig, samples: &[f32], n_reserved: usize) ->
     let n_syms = samples.len() / sym_len;
 
     let mut planner = FftPlanner::new();
-    let fft = planner.plan_fft_forward(fft_size);
     let ifft = planner.plan_fft_inverse(fft_size);
 
     let half = n_reserved / 2;
-    let scale_fwd = 1.0 / (fft_size as f32).sqrt();
-    let scale_inv = scale_fwd;
+    let scale_inv = 1.0 / (fft_size as f32).sqrt();
 
     let mut out = samples.to_vec();
 
@@ -412,8 +413,6 @@ pub fn tone_reservation(cfg: &OfdmConfig, samples: &[f32], n_reserved: usize) ->
                 }
             }
         }
-
-        let _ = (fft.as_ref(), scale_fwd); // suppress unused warning
     }
 
     out

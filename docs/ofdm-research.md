@@ -44,12 +44,12 @@ All channels use the `openpulse-channel` crate:
 
 ### 2.4 Metrics
 
-- **PAPR (dB)**: `10·log₁₀(peak² / mean²)` on the TX frame after PAPR reduction
+- **PAPR (dB)**: `10·log₁₀(peak_power / mean_power)` on the TX frame after PAPR reduction
 - **BER**: Bit error rate on 64-byte payload after demodulation (no FEC)
 - **Gross bps**: Net payload bits / OFDM symbol duration (includes CP overhead, excludes pilots)
-- **BW (Hz)**: Occupied bandwidth = fs (all subcarriers span the full Nyquist band for baseband IFFT output)
+- **BW (Hz)**: One-sided Nyquist bandwidth of the baseband signal = fs/2 (4000 Hz at 8 kHz sample rate)
 
-*Note: the simulation uses a real-valued IFFT output (no carrier upconversion) so BW = fs for the baseband representation. Carrier upconversion to the SSB passband is not modelled.*
+*Note: the simulation uses a real-valued IFFT output (no carrier upconversion) so BW = fs/2 (one-sided Nyquist bandwidth of the baseband signal). Carrier upconversion to the SSB passband is not modelled.*
 
 ## 3. Results Summary
 

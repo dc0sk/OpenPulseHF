@@ -61,7 +61,7 @@ pub struct ModulationConfig {
     pub sample_rate: u32,
     /// Mode string that selects parameters inside the plugin, e.g. `"BPSK31"`.
     pub mode: String,
-    /// Pulse-shaping envelope; overridden automatically by `-HF` mode aliases.
+    /// Pulse-shaping envelope; plugins select this based on the mode string.
     pub pulse_shape: PulseShape,
 }
 

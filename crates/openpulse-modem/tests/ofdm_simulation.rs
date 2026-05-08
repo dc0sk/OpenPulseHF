@@ -215,12 +215,12 @@ fn ofdm_sweep_and_papr_gate() {
         }
     }
 
-    // Write results.
-    fs::create_dir_all("../../docs/ofdm-research").ok();
+    // Write results to target/ to avoid writing into the tracked source tree.
+    let out_dir = std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
+    let research_dir = format!("{out_dir}/ofdm-research");
+    fs::create_dir_all(&research_dir).ok();
     let json_out = serde_json::to_string_pretty(&json!({ "results": results })).unwrap();
-    // Write relative to crate root (tests run from workspace root).
-    fs::create_dir_all("docs/ofdm-research").ok();
-    fs::write("docs/ofdm-research/raw_results.json", &json_out).ok();
+    fs::write(format!("{research_dir}/raw_results.json"), &json_out).ok();
 
     // Gate: at least one config + PAPR-reduction combination achieves ≤ 6 dB on clean channel.
     assert!(

@@ -63,8 +63,10 @@ mod tests {
             .chain(std::iter::repeat(0.0).take(coeffs.len() - 1))
             .collect();
         let out = f.apply(&impulse);
-        // impulse response must equal the reversed coefficients (linear-phase: symmetric)
-        for (o, c) in out.iter().zip(coeffs.iter().rev()) {
+        // The impulse response equals the stored coefficients; for symmetric
+        // (linear-phase) filters the reversed order is identical, so either
+        // direction passes — but the assertion is against the forward order.
+        for (o, c) in out.iter().zip(coeffs.iter()) {
             assert!((o - c).abs() < 1e-6, "got {o}, expected {c}");
         }
     }
