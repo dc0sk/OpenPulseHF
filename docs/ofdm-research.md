@@ -1,3 +1,10 @@
+---
+project: openpulsehf
+doc: docs/ofdm-research.md
+status: living
+last_updated: 2026-05-08
+---
+
 # OFDM Research: Simulation Study for OpenPulseHF
 
 ## 1. Motivation and Background
