@@ -5,6 +5,7 @@
 //!
 //! Precedence: CLI flag overrides > config file > built-in defaults.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -36,6 +37,7 @@ pub struct OpenpulseConfig {
     pub trust: TrustConfig,
     pub mesh: MeshConfig,
     pub qsy: QsyConfig,
+    pub tx_levels: TxLevelsConfig,
 }
 
 /// QSY frequency-agility settings.
@@ -54,6 +56,14 @@ pub struct QsyConfig {
     /// Seconds after QSY_ACK before both stations switch frequency.
     pub switchover_offset_s: u64,
 }
+
+/// Per-band TX attenuation memory (FF-8).
+///
+/// Maps amateur band names (e.g. `"40m"`, `"20m"`) to a dB attenuation value.
+/// `"default"` is used for frequencies that fall outside all registered bands.
+/// TX samples are scaled by `10^(db / 20)` before being sent to the audio backend.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct TxLevelsConfig(pub HashMap<String, f32>);
 
 /// Station identity.
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -48,6 +48,8 @@ pub enum ControlCommand {
     EnableRepeater,
     /// Disable the cross-band repeater.
     DisableRepeater,
+    /// Set the TX attenuation for the current band (dB; 0.0 = no attenuation).
+    SetTxAttenuation { db: f32, band: Option<String> },
 }
 
 /// Per-command response.
