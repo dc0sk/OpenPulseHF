@@ -7,13 +7,14 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use openpulse_core::audio::{
-    AudioBackend, AudioConfig, AudioInputStream, AudioOutputStream, DeviceInfo,
+    AudioBackend, AudioConfig, AudioInputStream, AudioIqOutputStream, AudioOutputStream, DeviceInfo,
 };
 use openpulse_core::error::AudioError;
 
 // ── Shared sample buffer ──────────────────────────────────────────────────────
 
 type Buf = Arc<Mutex<VecDeque<f32>>>;
+type IqBuf = Arc<Mutex<Vec<(f32, f32)>>>;
 
 // ── LoopbackBackend ───────────────────────────────────────────────────────────
 
@@ -24,6 +25,7 @@ type Buf = Arc<Mutex<VecDeque<f32>>>;
 /// via [`LoopbackInputStream::read`].
 pub struct LoopbackBackend {
     buf: Buf,
+    iq_buf: IqBuf,
 }
 
 impl Default for LoopbackBackend {
@@ -37,6 +39,7 @@ impl LoopbackBackend {
     pub fn new() -> Self {
         Self {
             buf: Arc::new(Mutex::new(VecDeque::new())),
+            iq_buf: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -48,6 +51,7 @@ impl LoopbackBackend {
     pub fn clone_shared(&self) -> Self {
         Self {
             buf: Arc::clone(&self.buf),
+            iq_buf: Arc::clone(&self.iq_buf),
         }
     }
 
@@ -66,6 +70,12 @@ impl LoopbackBackend {
     pub fn fill_samples(&self, samples: &[f32]) {
         let mut guard = self.buf.lock().expect("loopback buffer poisoned");
         guard.extend(samples.iter().copied());
+    }
+
+    /// Drain all I/Q pairs written via [`open_iq_output`](Self::open_iq_output).
+    pub fn drain_iq_samples(&self) -> Vec<(f32, f32)> {
+        let mut guard = self.iq_buf.lock().expect("loopback iq buffer poisoned");
+        std::mem::take(&mut *guard)
     }
 }
 
@@ -103,6 +113,16 @@ impl AudioBackend for LoopbackBackend {
             buf: Arc::clone(&self.buf),
         }))
     }
+
+    fn open_iq_output(
+        &self,
+        _device: Option<&str>,
+        _config: &AudioConfig,
+    ) -> Option<Result<Box<dyn AudioIqOutputStream>, AudioError>> {
+        Some(Ok(Box::new(LoopbackIqOutputStream {
+            buf: Arc::clone(&self.iq_buf),
+        })))
+    }
 }
 
 // ── Loopback input stream ─────────────────────────────────────────────────────
@@ -132,6 +152,27 @@ impl AudioOutputStream for LoopbackOutputStream {
     fn write(&mut self, samples: &[f32]) -> Result<(), AudioError> {
         let mut guard = self.buf.lock().expect("loopback buffer poisoned");
         guard.extend(samples.iter().copied());
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), AudioError> {
+        Ok(())
+    }
+
+    fn close(self: Box<Self>) {}
+}
+
+// ── Loopback I/Q output stream ────────────────────────────────────────────────
+
+/// Collects I/Q pairs written via [`AudioIqOutputStream`] into an in-memory buffer.
+pub struct LoopbackIqOutputStream {
+    buf: IqBuf,
+}
+
+impl AudioIqOutputStream for LoopbackIqOutputStream {
+    fn write_iq(&mut self, i: &[f32], q: &[f32]) -> Result<(), AudioError> {
+        let mut guard = self.buf.lock().expect("loopback iq buffer poisoned");
+        guard.extend(i.iter().zip(q.iter()).map(|(&iv, &qv)| (iv, qv)));
         Ok(())
     }
 

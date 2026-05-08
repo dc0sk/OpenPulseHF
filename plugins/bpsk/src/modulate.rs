@@ -24,49 +24,45 @@ pub(crate) const RRC_SPAN_SYMBOLS: usize = 8;
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
-/// Modulate `data` bytes to a vector of normalised PCM samples.
-pub fn bpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
-    let baud = parse_baud_rate(&config.mode)?;
-    let fs = config.sample_rate as f32;
-    let fc = config.center_frequency;
-    let n = samples_per_symbol(fs, baud)?;
-
-    let rrc_alpha = if let PulseShape::Rrc { alpha } = config.pulse_shape {
+fn rrc_alpha_for(config: &ModulationConfig) -> Option<f32> {
+    if let PulseShape::Rrc { alpha } = config.pulse_shape {
         Some(alpha)
     } else if config.mode.ends_with("-RRC") {
         Some(0.35f32)
     } else {
         None
-    };
+    }
+}
 
-    // Build the bit stream: preamble (all 1s → alternating phases) + data + tail
+/// Compute the shaped baseband amplitude envelope for BPSK.
+///
+/// Returns the Hann-crossfaded (or RRC-impulse) baseband signal before
+/// carrier multiplication.  For Hann path, the carrier would be
+/// `out[k] * cos(2π·fc·k/fs)`.  For RRC path, caller must apply the RRC
+/// FIR filter and then upconvert.
+fn bpsk_baseband(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
+    let baud = parse_baud_rate(&config.mode)?;
+    let fs = config.sample_rate as f32;
+    let n = samples_per_symbol(fs, baud)?;
+
     let mut bits: Vec<bool> = Vec::new();
-    // Preamble: alternating 1/0 bits so NRZI gives +1,-1,+1,−1 …
     for i in 0..PREAMBLE_SYMS {
-        bits.push(i % 2 == 0); // 1,0,1,0,...
+        bits.push(i % 2 == 0);
     }
     bits.extend(bytes_to_bits(data));
-    // Tail: all zeros (no phase change) so signal fades smoothly
     bits.extend(std::iter::repeat_n(false, TAIL_SYMS));
 
-    // NRZI encode
     let symbols = nrzi_encode(&bits);
-
-    // Render samples
     let total = symbols.len() * n;
     let mut out = vec![0.0f32; total];
-    let two_pi = 2.0 * PI;
 
     for (sym_idx, &phase_neg) in symbols.iter().enumerate() {
         let a_curr = if phase_neg { -1.0f32 } else { 1.0f32 };
         let sym_start = sym_idx * n;
 
-        if rrc_alpha.is_some() {
-            // RRC path: baseband impulse at symbol start; the RRC FIR filter
-            // below shapes it, and the carrier is applied after filtering.
+        if rrc_alpha_for(config).is_some() {
             out[sym_start] = a_curr;
         } else {
-            // 50 % overlapping Hann crossfade.
             let a_next = symbols
                 .get(sym_idx + 1)
                 .map(|&neg| if neg { -1.0f32 } else { 1.0f32 })
@@ -74,34 +70,81 @@ pub fn bpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
             for i in 0..n {
                 let w_tail = 0.5 * (1.0 + (PI * i as f32 / n as f32).cos());
                 let w_head = 1.0 - w_tail;
-                let t = (sym_start + i) as f32 / fs;
-                let carrier = (two_pi * fc * t).cos();
-                out[sym_start + i] = (a_curr * w_tail + a_next * w_head) * carrier;
+                out[sym_start + i] = a_curr * w_tail + a_next * w_head;
             }
         }
     }
+    Ok(out)
+}
 
-    // Apply RRC TX filter if requested (operates on baseband), then upconvert.
-    if let Some(alpha) = rrc_alpha {
+/// Modulate `data` bytes to a vector of normalised PCM samples.
+pub fn bpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
+    let baud = parse_baud_rate(&config.mode)?;
+    let fs = config.sample_rate as f32;
+    let fc = config.center_frequency;
+    let n = samples_per_symbol(fs, baud)?;
+
+    let bb = bpsk_baseband(data, config)?;
+
+    // Apply carrier: real output = I_bb * cos(2π·fc·t), Q = 0.
+    if let Some(alpha) = rrc_alpha_for(config) {
         let num_taps = RRC_SPAN_SYMBOLS * n + 1;
         let coeffs = generate_rrc_coefficients(fs, baud, alpha, num_taps);
         let group_delay = (num_taps - 1) / 2;
         let mut fir = FirFilter::new(coeffs);
-        let padded: Vec<f32> = out
+        let padded: Vec<f32> = bb
             .iter()
             .copied()
             .chain(std::iter::repeat_n(0.0, group_delay))
             .collect();
         let filtered = fir.apply(&padded);
-        // Trim group delay, then upconvert the shaped baseband I signal to bandpass.
-        out = filtered[group_delay..]
+        let two_pi = 2.0 * PI;
+        Ok(filtered[group_delay..]
             .iter()
             .enumerate()
             .map(|(k, &bb)| bb * (two_pi * fc * k as f32 / fs).cos())
-            .collect();
+            .collect())
+    } else {
+        Ok(bb
+            .iter()
+            .enumerate()
+            .map(|(k, &amp)| {
+                let t = k as f32 / fs;
+                amp * (2.0 * PI * fc * t).cos()
+            })
+            .collect())
     }
+}
 
-    Ok(out)
+/// Return baseband I and Q samples for BPSK (Q is always zero).
+///
+/// BPSK is a purely in-phase modulation: the baseband I channel carries the
+/// shaped amplitude envelope (±1 after NRZI) and the Q channel is identically
+/// zero.
+pub fn bpsk_modulate_iq(
+    data: &[u8],
+    config: &ModulationConfig,
+) -> Result<(Vec<f32>, Vec<f32>), ModemError> {
+    let baud = parse_baud_rate(&config.mode)?;
+    let fs = config.sample_rate as f32;
+    let n = samples_per_symbol(fs, baud)?;
+
+    let mut i_bb = bpsk_baseband(data, config)?;
+    if let Some(alpha) = rrc_alpha_for(config) {
+        let num_taps = RRC_SPAN_SYMBOLS * n + 1;
+        let coeffs = generate_rrc_coefficients(fs, baud, alpha, num_taps);
+        let group_delay = (num_taps - 1) / 2;
+        let mut fir = FirFilter::new(coeffs);
+        let padded: Vec<f32> = i_bb
+            .iter()
+            .copied()
+            .chain(std::iter::repeat_n(0.0, group_delay))
+            .collect();
+        let filtered = fir.apply(&padded);
+        i_bb = filtered[group_delay..].to_vec();
+    }
+    let q_bb = vec![0.0f32; i_bb.len()];
+    Ok((i_bb, q_bb))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

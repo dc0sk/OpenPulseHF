@@ -578,6 +578,57 @@ impl ModemEngine {
         Ok(())
     }
 
+    /// Encode `data`, modulate to baseband I/Q, and write to the IQ output stream.
+    ///
+    /// Requires the audio backend to support [`AudioBackend::open_iq_output`].
+    /// Returns `ModemError::Configuration` when the backend has no IQ output.
+    pub fn transmit_iq(
+        &mut self,
+        data: &[u8],
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<(), ModemError> {
+        self.csma_check()?;
+
+        let outbound = self.stage_encode_frame(data);
+        let outbound = self.route_wire_stage(PipelineStage::EncodeModulate, outbound)?;
+
+        let (i_bb, q_bb) = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            let mod_cfg = ModulationConfig {
+                mode: mode.to_string(),
+                center_frequency: self.center_frequency,
+                ..ModulationConfig::default()
+            };
+            plugin.modulate_iq(&outbound.bytes, &mod_cfg)?
+        };
+
+        let audio_cfg = AudioConfig::default();
+        let mut stream = self
+            .audio
+            .open_iq_output(device, &audio_cfg)
+            .ok_or_else(|| {
+                ModemError::Configuration("audio backend does not support IQ output".to_string())
+            })?
+            .map_err(|e| ModemError::Audio(e.to_string()))?;
+
+        stream
+            .write_iq(&i_bb, &q_bb)
+            .map_err(|e| ModemError::Audio(e.to_string()))?;
+        stream
+            .flush()
+            .map_err(|e| ModemError::Audio(e.to_string()))?;
+
+        let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
+            mode: mode.to_string(),
+            bytes: outbound.bytes.len(),
+        });
+        Ok(())
+    }
+
     /// Read audio from the input device, demodulate with the plugin for
     /// `mode`, and return the decoded frame payload.
     ///
