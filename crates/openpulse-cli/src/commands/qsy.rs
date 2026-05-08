@@ -37,7 +37,8 @@ fn run_init(rig_override: String) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("cannot connect to rigctld at {rig_addr}: {e}"))?;
     let mut scanner = QsyScanner::new(rig, qsy_cfg.scan_dwell_ms);
 
-    let mut session = QsySession::new_initiator();
+    let mut session =
+        QsySession::new_initiator().with_switchover_offset_s(qsy_cfg.switchover_offset_s as u32);
     let actions = session.initiate(qsy_cfg.candidate_freqs_hz.clone())?;
 
     for action in &actions {

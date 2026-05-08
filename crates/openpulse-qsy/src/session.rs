@@ -61,6 +61,7 @@ enum State {
     /// Responder: received QSY_REQ, waiting for initiator's QSY_LIST.
     WaitingForList {
         token: String,
+        n_candidates: u32,
     },
     /// Responder: scanning candidates received in QSY_LIST.
     RespScanning {
@@ -81,6 +82,7 @@ pub struct QsySession {
     role: Role,
     state: State,
     policy: QsyPolicy,
+    switchover_offset_s: u32,
 }
 
 impl QsySession {
@@ -90,6 +92,7 @@ impl QsySession {
             role: Role::Initiator,
             state: State::Idle,
             policy: QsyPolicy { enabled: true },
+            switchover_offset_s: 5,
         }
     }
 
@@ -99,7 +102,14 @@ impl QsySession {
             role: Role::Responder,
             state: State::Idle,
             policy,
+            switchover_offset_s: 5,
         }
+    }
+
+    /// Override the switchover offset (seconds after QSY_ACK to tune).
+    pub fn with_switchover_offset_s(mut self, v: u32) -> Self {
+        self.switchover_offset_s = v;
+        self
     }
 
     /// Begin a QSY negotiation (initiator only).
@@ -114,6 +124,11 @@ impl QsySession {
         if !matches!(self.state, State::Idle) {
             return Err(QsyError::InvalidTransition(
                 "initiate() called in non-Idle state".into(),
+            ));
+        }
+        if candidates.is_empty() {
+            return Err(QsyError::InvalidTransition(
+                "candidate list must not be empty".into(),
             ));
         }
         let token = random_token();
@@ -194,18 +209,30 @@ impl QsySession {
                         },
                     ]);
                 }
-                let _ = n_candidates;
-                self.state = State::WaitingForList { token };
+                self.state = State::WaitingForList {
+                    token,
+                    n_candidates,
+                };
                 Ok(vec![])
             }
             QsyFrame::List { token, candidates } => {
                 match &self.state {
-                    State::WaitingForList { token: t } => {
+                    State::WaitingForList {
+                        token: t,
+                        n_candidates,
+                    } => {
                         if *t != token {
                             return Err(QsyError::TokenMismatch {
                                 expected: t.clone(),
                                 got: token,
                             });
+                        }
+                        let expected = *n_candidates as usize;
+                        if candidates.len() != expected {
+                            return Err(QsyError::InvalidTransition(format!(
+                                "QSY_LIST has {} candidates, expected {expected}",
+                                candidates.len()
+                            )));
                         }
                     }
                     other => {
@@ -230,13 +257,13 @@ impl QsySession {
                             got: token.clone(),
                         });
                     }
-                    let best = pick_best_freq(my_votes, &votes);
+                    let best = pick_best_freq(my_votes, &votes)?;
                     self.state = State::Agreed { freq_hz: best };
                     Ok(vec![
                         QsyAction::SendFrame(QsyFrame::Ack {
                             token,
                             agreed_freq_hz: best,
-                            switchover_offset_s: 5,
+                            switchover_offset_s: self.switchover_offset_s,
                         }),
                         QsyAction::QsyNow { freq_hz: best },
                     ])
@@ -273,21 +300,26 @@ impl QsySession {
 }
 
 /// Pick the frequency with the highest combined (initiator + partner) SNR.
-fn pick_best_freq(my: &[(u64, f32)], partner: &[(u64, f32)]) -> u64 {
-    let mut best_freq = my.first().map(|(f, _)| *f).unwrap_or(0);
+///
+/// Only considers frequencies present in both lists; returns an error if the
+/// intersection is empty (no common candidate to agree on).
+fn pick_best_freq(my: &[(u64, f32)], partner: &[(u64, f32)]) -> Result<u64, QsyError> {
+    let mut best_freq: Option<u64> = None;
     let mut best_score = f32::NEG_INFINITY;
     for (freq, my_snr) in my {
-        let partner_snr = partner
-            .iter()
-            .find_map(|(f, s)| if f == freq { Some(*s) } else { None })
-            .unwrap_or(f32::NEG_INFINITY);
-        let score = my_snr + partner_snr;
-        if score > best_score {
-            best_score = score;
-            best_freq = *freq;
+        if let Some((_, partner_snr)) = partner.iter().find(|(f, _)| f == freq) {
+            let score = my_snr + partner_snr;
+            if score > best_score {
+                best_score = score;
+                best_freq = Some(*freq);
+            }
         }
     }
-    best_freq
+    best_freq.ok_or_else(|| {
+        QsyError::InvalidTransition(
+            "no common candidate in initiator and partner vote lists".into(),
+        )
+    })
 }
 
 fn random_token() -> String {

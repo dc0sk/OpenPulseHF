@@ -303,6 +303,6 @@ pub enum QsyCommands {
         #[arg(long, default_value = "")]
         rig: String,
     },
-    /// Show the current QSY config and confirm rigctld connectivity.
+    /// Show the current QSY configuration.
     Status,
 }

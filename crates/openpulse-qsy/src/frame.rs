@@ -117,7 +117,7 @@ pub fn decode_unsigned(line: &str) -> Result<QsyFrame, QsyFrameError> {
                 .map_err(|_| QsyFrameError::Malformed(format!("bad freq: {rest}")))?;
             let offset: u32 = it
                 .next()
-                .unwrap_or("5")
+                .ok_or_else(|| QsyFrameError::Malformed("missing switchover offset".into()))?
                 .parse()
                 .map_err(|_| QsyFrameError::Malformed(format!("bad offset: {rest}")))?;
             Ok(QsyFrame::Ack {
@@ -143,9 +143,10 @@ fn parse_pairs(s: &str) -> Result<Vec<(u64, f32)>, QsyFrameError> {
             .unwrap_or("")
             .parse()
             .map_err(|_| QsyFrameError::Malformed(format!("bad freq in pair: {token}")))?;
-        let snr: f32 = it
+        let snr_str = it
             .next()
-            .unwrap_or("0")
+            .ok_or_else(|| QsyFrameError::Malformed(format!("missing snr in pair: {token}")))?;
+        let snr: f32 = snr_str
             .parse()
             .map_err(|_| QsyFrameError::Malformed(format!("bad snr in pair: {token}")))?;
         out.push((freq, snr));
@@ -161,6 +162,7 @@ pub fn sign_line(line: &str, key: &SigningKey) -> String {
 
 /// Verify the `|SIG:` suffix and return the payload (before the separator).
 pub fn verify_line<'a>(line: &'a str, key: &VerifyingKey) -> Result<&'a str, QsyFrameError> {
+    let line = line.trim_end_matches(['\r', '\n']);
     let (payload, sig_b64) = line
         .rsplit_once("|SIG:")
         .ok_or_else(|| QsyFrameError::Malformed("missing |SIG: field".into()))?;

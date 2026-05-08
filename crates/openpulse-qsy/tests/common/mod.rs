@@ -64,13 +64,17 @@ fn handle_connection_recording(
     let reader_stream = stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(reader_stream);
     let mut line = String::new();
-    let mut recorded = vec![];
     while reader.read_line(&mut line).unwrap_or(0) > 0 {
         let cmd = line.trim().to_string();
-        respond(&mut stream, &cmd, home_freq, strength, &mut recorded);
+        // Record set_freq calls immediately so callers don't need to wait for disconnect.
+        if cmd.starts_with("\\set_freq ") {
+            if let Ok(f) = cmd["\\set_freq ".len()..].trim().parse::<u64>() {
+                freqs.lock().unwrap().push(f);
+            }
+        }
+        respond(&mut stream, &cmd, home_freq, strength, &mut vec![]);
         line.clear();
     }
-    *freqs.lock().unwrap() = recorded;
 }
 
 fn respond(

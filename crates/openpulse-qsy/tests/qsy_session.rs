@@ -231,7 +231,7 @@ fn qsy_reject_frame_yields_reject_action() {
 /// Scanner tunes to candidates, reads S-meter, returns to home frequency.
 #[test]
 fn scanner_returns_snr() {
-    let port = common::start_mock_rigctld(14074000, -87);
+    let (port, recorded_freqs) = common::start_recording_rigctld(14074000, -87);
     let addr = format!("127.0.0.1:{port}");
 
     let rig = RigctldController::connect(&addr).expect("connect to mock rigctld");
@@ -249,6 +249,13 @@ fn scanner_returns_snr() {
         results[0].1
     );
     assert_eq!(results[1].0, 14074000);
+
+    // Verify the rig was tuned to each candidate and then restored to home.
+    let freqs = recorded_freqs.lock().unwrap();
+    assert!(
+        freqs.last() == Some(&14074000),
+        "expected home freq 14074000 as last set_freq, got {freqs:?}"
+    );
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

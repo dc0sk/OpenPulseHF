@@ -35,15 +35,20 @@ impl QsyScanner {
     pub fn scan(&mut self, candidates: &[u64]) -> Result<Vec<(u64, f32)>, QsyScannerError> {
         let home = self.rig.get_frequency()?;
         let mut results = Vec::with_capacity(candidates.len());
-        for &freq in candidates {
-            self.rig.set_frequency(freq)?;
-            if self.dwell_ms > 0 {
-                thread::sleep(Duration::from_millis(self.dwell_ms));
+        let scan_result = (|| {
+            for &freq in candidates {
+                self.rig.set_frequency(freq)?;
+                if self.dwell_ms > 0 {
+                    thread::sleep(Duration::from_millis(self.dwell_ms));
+                }
+                let strength = self.rig.get_signal_strength()? as f32;
+                results.push((freq, strength));
             }
-            let strength = self.rig.get_signal_strength()? as f32;
-            results.push((freq, strength));
-        }
-        self.rig.set_frequency(home)?;
+            Ok::<(), QsyScannerError>(())
+        })();
+        // Always attempt to restore home frequency, even on error.
+        let _ = self.rig.set_frequency(home);
+        scan_result?;
         Ok(results)
     }
 }

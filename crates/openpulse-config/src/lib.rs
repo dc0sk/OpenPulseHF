@@ -45,6 +45,7 @@ pub struct QsyConfig {
     /// When false, all incoming QSY_REQ frames are rejected.
     pub enabled: bool,
     /// Trust levels whose QSY_REQ frames are accepted ("verified", "psk_verified", "unknown").
+    /// Reserved for future trust-gating; not yet enforced by the QSY session layer.
     pub allow_trustlevels: Vec<String>,
     /// Candidate frequencies to scan during QSY negotiation (Hz).
     pub candidate_freqs_hz: Vec<u64>,
