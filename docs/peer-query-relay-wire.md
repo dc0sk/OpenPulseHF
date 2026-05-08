@@ -45,6 +45,8 @@ Notes:
 - 0x06: relay_hop_ack
 - 0x07: relay_route_update
 - 0x08: relay_route_reject
+- 0x09: rig_ctrl_cmd — signed remote rig-control command (Phase 7.5)
+- 0x0A: broadcast_frame — one-to-many unacknowledged broadcast (Phase 9.5)
 
 ## Enum and code registries
 
@@ -223,8 +225,12 @@ Supported algorithm families for initial draft:
 
 ## Compatibility and extension rules
 
-- Unknown msg_type values must be ignored with diagnostic logging.
-- Higher version messages are rejected with explicit unsupported_version reason.
+- Unknown msg_type values cause the decoder to return an error (`UnknownMsgType`). Callers
+  that need forward-compatibility should check the msg_type field before decoding and discard
+  envelopes with unrecognised types with diagnostic logging.
+- The version field is forward-compatible: the decoder parses and accepts higher version
+  values without rejection, to allow incremental protocol evolution. Receivers must not
+  rely on a specific version value for correctness.
 - New payload fields are appended and identified by TLV extension blocks.
 
 ## TLV extension block registry (initial)
