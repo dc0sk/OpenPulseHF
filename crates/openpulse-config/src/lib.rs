@@ -80,6 +80,10 @@ pub struct AudioConfig {
     /// Audio backend: `cpal` (real hardware), `loopback` (testing), or
     /// `default` (use cpal if compiled in, loopback otherwise).
     pub backend: String,
+    /// Soft-limiter threshold applied to TX audio before the output backend.
+    /// Each sample `s` becomes `threshold * tanh(s / threshold)`.
+    /// Set to `0.0` (default) to disable. Typical value: `1.5 * RMS`.
+    pub tx_limiter_threshold: f32,
 }
 
 /// Modem defaults shared by all TNC binaries.
@@ -202,6 +206,7 @@ impl Default for AudioConfig {
     fn default() -> Self {
         Self {
             backend: "default".into(),
+            tx_limiter_threshold: 0.0,
         }
     }
 }
@@ -404,6 +409,9 @@ grid_square = "AA00"
 #   cpal     — always use the real sound card (error if not compiled in)
 #   loopback — software loopback for testing only, no audio hardware required
 backend = "default"
+# Soft TX limiter threshold (0.0 = disabled). Typical value: 1.5 × RMS of the
+# modulated signal. Prevents ADC clipping and reduces PA non-linearity on peaks.
+# tx_limiter_threshold = 0.0
 
 [modem]
 # Default modulation mode used when no --mode flag is provided.
