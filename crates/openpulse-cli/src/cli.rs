@@ -90,6 +90,36 @@ pub enum Commands {
         #[command(subcommand)]
         command: ConfigCommands,
     },
+    /// Transmit a one-to-many broadcast frame (no ACK, no session required).
+    Broadcast {
+        /// Payload to broadcast (UTF-8 text or `0x`-prefixed hex bytes).
+        #[arg(short, long)]
+        payload: String,
+        /// Modulation mode.
+        #[arg(short, long, default_value = "BPSK250")]
+        mode: String,
+        /// Maximum relay hops (TTL).
+        #[arg(long, default_value_t = 3)]
+        ttl: u8,
+        /// Station callsign embedded in the frame header.
+        #[arg(long, default_value = "")]
+        callsign: String,
+    },
+    /// Send periodic station-ID beacons for regulatory compliance.
+    Beacon {
+        /// Modulation mode.
+        #[arg(short, long, default_value = "BPSK250")]
+        mode: String,
+        /// Beacon interval in seconds.
+        #[arg(long, default_value_t = 600)]
+        interval: u64,
+        /// Station callsign included in each beacon.
+        #[arg(long)]
+        callsign: String,
+        /// Maximum relay hops (TTL).
+        #[arg(long, default_value_t = 1)]
+        ttl: u8,
+    },
 }
 
 #[derive(Subcommand)]

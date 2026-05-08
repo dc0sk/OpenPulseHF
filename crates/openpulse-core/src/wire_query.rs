@@ -35,6 +35,8 @@ pub enum WireMsgType {
     RelayRouteReject = 0x08,
     /// Signed remote rig-control command (Phase 7.5).
     RigCtrlCmd = 0x09,
+    /// One-to-many unacknowledged broadcast frame (Phase 9.5).
+    BroadcastFrame = 0x0A,
 }
 
 impl WireMsgType {
@@ -49,6 +51,7 @@ impl WireMsgType {
             0x07 => Some(Self::RelayRouteUpdate),
             0x08 => Some(Self::RelayRouteReject),
             0x09 => Some(Self::RigCtrlCmd),
+            0x0A => Some(Self::BroadcastFrame),
             _ => None,
         }
     }
@@ -752,6 +755,66 @@ impl RelayRouteReject {
     }
 }
 
+// ------------------------------------------------------------------
+// broadcast_frame payload (msg_type 0x0A)
+// ------------------------------------------------------------------
+
+/// Payload for msg_type 0x0A — broadcast_frame.
+///
+/// Header: callsign_hash(4) | seq(2) | ttl(1) | flags(1) = 8 bytes,
+/// followed by variable-length payload bytes.
+/// No ACK is expected; no session state is required.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BroadcastFrame {
+    /// FNV-1a hash of the sender's callsign (for display / dedup without full identity).
+    pub callsign_hash: u32,
+    /// Sender-local sequence number for duplicate suppression.
+    pub seq: u16,
+    /// Remaining TTL hops; relay nodes decrement before re-transmitting.
+    pub ttl: u8,
+    /// Reserved flags byte (0 for now).
+    pub flags: u8,
+    /// Arbitrary payload bytes (station ID text, position, network announcement, …).
+    pub payload: Vec<u8>,
+}
+
+impl BroadcastFrame {
+    pub const HEADER_SIZE: usize = 8;
+
+    pub fn encode(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(Self::HEADER_SIZE + self.payload.len());
+        buf.extend_from_slice(&self.callsign_hash.to_be_bytes());
+        buf.extend_from_slice(&self.seq.to_be_bytes());
+        buf.push(self.ttl);
+        buf.push(self.flags);
+        buf.extend_from_slice(&self.payload);
+        buf
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireQueryError> {
+        if bytes.len() < Self::HEADER_SIZE {
+            return Err(WireQueryError::MalformedPayload);
+        }
+        Ok(Self {
+            callsign_hash: u32::from_be_bytes(bytes[0..4].try_into().unwrap()),
+            seq: u16::from_be_bytes([bytes[4], bytes[5]]),
+            ttl: bytes[6],
+            flags: bytes[7],
+            payload: bytes[8..].to_vec(),
+        })
+    }
+}
+
+/// Compute an FNV-1a 32-bit hash of a callsign string (uppercase, trimmed).
+pub fn callsign_hash(callsign: &str) -> u32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in callsign.trim().to_uppercase().bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    h
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -886,5 +949,41 @@ mod tests {
         let decoded = PeerQueryResponse::decode(&payload).unwrap();
         assert_eq!(decoded.query_id, 99);
         assert!(decoded.results.is_empty());
+    }
+
+    #[test]
+    fn broadcast_frame_round_trip() {
+        let frame = BroadcastFrame {
+            callsign_hash: callsign_hash("KX0ABC"),
+            seq: 42,
+            ttl: 3,
+            flags: 0,
+            payload: b"hello mesh".to_vec(),
+        };
+        let enc = frame.encode();
+        assert_eq!(enc.len(), BroadcastFrame::HEADER_SIZE + 10);
+        let dec = BroadcastFrame::decode(&enc).unwrap();
+        assert_eq!(dec, frame);
+    }
+
+    #[test]
+    fn broadcast_frame_ttl_decrement_in_place() {
+        let mut frame = BroadcastFrame {
+            callsign_hash: callsign_hash("W1AW"),
+            seq: 1,
+            ttl: 2,
+            flags: 0,
+            payload: vec![0xDE, 0xAD],
+        };
+        frame.ttl -= 1;
+        assert_eq!(frame.ttl, 1);
+        let dec = BroadcastFrame::decode(&frame.encode()).unwrap();
+        assert_eq!(dec.ttl, 1);
+    }
+
+    #[test]
+    fn callsign_hash_case_insensitive() {
+        assert_eq!(callsign_hash("kx0abc"), callsign_hash("KX0ABC"));
+        assert_eq!(callsign_hash(" W1AW "), callsign_hash("W1AW"));
     }
 }

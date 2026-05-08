@@ -19,6 +19,7 @@ use openpulse_core::trust::{
     evaluate_handshake, CertificateSource, ConnectionTrustLevel, HandshakeDecision, PolicyProfile,
     PublicKeyTrustLevel, SigningMode,
 };
+use openpulse_core::wire_query::{callsign_hash, BroadcastFrame, WireEnvelope, WireMsgType};
 
 use crate::event::{EngineEvent, RateDirection};
 use crate::pipeline::{
@@ -75,6 +76,10 @@ pub struct ModemEngine {
     csma_enabled: bool,
     csma_persistence: f32,
     event_tx: broadcast::Sender<EngineEvent>,
+    /// Sender-local sequence counter for broadcast frames.
+    broadcast_seq: u16,
+    /// Callsign used in broadcast frame headers (set via `set_callsign`).
+    callsign: String,
 }
 
 impl ModemEngine {
@@ -100,6 +105,8 @@ impl ModemEngine {
             csma_enabled: false,
             csma_persistence: 0.3,
             event_tx,
+            broadcast_seq: 0,
+            callsign: String::new(),
         }
     }
 
@@ -617,6 +624,76 @@ impl ModemEngine {
     /// Like [`transmit`](Self::transmit) but wraps the encoded frame bytes
     /// with Reed-Solomon FEC before modulation.
     ///
+    /// Set the station callsign used in broadcast frame headers.
+    pub fn set_callsign(&mut self, callsign: impl Into<String>) {
+        self.callsign = callsign.into();
+    }
+
+    /// Transmit a one-to-many broadcast frame.
+    ///
+    /// Unlike [`transmit`](Self::transmit), this method bypasses the CSMA
+    /// persistence check — broadcasts are short, and the sender is responsible
+    /// for scheduling.  No ACK is expected; no session state is updated.
+    ///
+    /// The frame is wrapped in a `BroadcastFrame` payload inside a `WireEnvelope`
+    /// with `dst_peer_id = [0; 32]` (broadcast address) and `hop_index = 0`.
+    /// `ttl` limits how many times relay nodes may re-broadcast the frame.
+    pub fn broadcast(
+        &mut self,
+        payload: &[u8],
+        mode: &str,
+        ttl: u8,
+        device: Option<&str>,
+    ) -> Result<(), ModemError> {
+        let seq = self.broadcast_seq;
+        self.broadcast_seq = self.broadcast_seq.wrapping_add(1);
+
+        let frame = BroadcastFrame {
+            callsign_hash: callsign_hash(&self.callsign),
+            seq,
+            ttl,
+            flags: 0,
+            payload: payload.to_vec(),
+        };
+
+        let envelope = WireEnvelope {
+            msg_type: WireMsgType::BroadcastFrame,
+            flags: 0,
+            session_id: 0,
+            src_peer_id: [0u8; 32],
+            dst_peer_id: [0u8; 32], // broadcast address
+            nonce: nonce_from_seq(seq),
+            timestamp_ms: 0,
+            hop_limit: ttl,
+            hop_index: 0,
+            payload: frame.encode(),
+            auth_tag: [0u8; 16],
+        };
+
+        let wire_bytes = envelope
+            .encode()
+            .map_err(|e| ModemError::Configuration(e.to_string()))?;
+
+        let outbound = self.stage_encode_frame(&wire_bytes);
+        let outbound = self.route_wire_stage(PipelineStage::EncodeModulate, outbound)?;
+
+        let samples = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_modulate_payload(plugin, mode, &outbound)?
+        };
+        let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
+        self.stage_emit_output(device, &samples)?;
+
+        let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
+            mode: mode.to_string(),
+            bytes: payload.len(),
+        });
+        Ok(())
+    }
+
     /// On a noisy channel the receiver can use [`receive_with_fec`](Self::receive_with_fec)
     /// to correct up to **16 byte errors per 255-byte RS block** after
     /// demodulation.
@@ -928,6 +1005,12 @@ impl ModemEngine {
             .route_decoded(stage, payload)
             .map_err(|e| ModemError::Configuration(e.to_string()))
     }
+}
+
+fn nonce_from_seq(seq: u16) -> [u8; 12] {
+    let mut n = [0u8; 12];
+    n[..2].copy_from_slice(&seq.to_le_bytes());
+    n
 }
 
 fn minimum_trust_for_profile(profile: PolicyProfile) -> ConnectionTrustLevel {

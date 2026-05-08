@@ -112,6 +112,22 @@ fn main() -> Result<()> {
         Commands::Monitor { mode } => {
             commands::monitor::run(&mut engine, &mode)?;
         }
+        Commands::Broadcast {
+            payload,
+            mode,
+            ttl,
+            callsign,
+        } => {
+            commands::broadcast::run(&mut engine, &payload, &mode, ttl, &callsign)?;
+        }
+        Commands::Beacon {
+            mode,
+            interval,
+            callsign,
+            ttl,
+        } => {
+            commands::beacon::run(&mut engine, &mode, interval, &callsign, ttl)?;
+        }
         Commands::Config { .. } => unreachable!("handled above"),
     }
 
