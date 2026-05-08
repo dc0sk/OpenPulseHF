@@ -53,7 +53,7 @@ OpenPulseHF uses single-carrier phase-shift keying for all current modes. VARA H
 
 **Accepted trade-offs:**
 - Single-carrier modes are more susceptible to inter-symbol interference (ISI) from multipath delay spread. At the symbol periods used by OpenPulseHF (32 ms for BPSK31, 4 ms for BPSK250), ISI from HF multipath delays of 0.5–2 ms is tolerable for lower baud rates without equalization. Higher-rate single-carrier modes will require adaptive equalization as they are developed.
-- Peak throughput for a given occupied bandwidth is lower than OFDM with higher-order QAM, because OFDM can overlap subcarriers spectrally. HPX500 and HPX2300 address this through adaptive modulation across the rate ladder (BPSK → QPSK → 8PSK) within a single occupied bandwidth class.
+- Peak throughput for a given occupied bandwidth is lower than OFDM with higher-order QAM, because OFDM can overlap subcarriers spectrally. `hpx_hf` and `hpx_wideband` address this through adaptive modulation across the rate ladder (BPSK → QPSK → 8PSK) within a single occupied bandwidth class.
 
 ### Differential BPSK encoding
 
@@ -76,16 +76,16 @@ Note: this is an amplitude envelope shape applied per symbol, not a root-raised-
 | QPSK125 | 125 | Gray-mapped QPSK | Byte (8-bit) | 2 bits/symbol |
 | QPSK250 | 250 | Gray-mapped QPSK | Byte (8-bit) | 2 bits/symbol |
 | QPSK500 | 500 | Gray-mapped QPSK | Byte (8-bit) | 2 bits/symbol |
-| QPSK1000 | 1000 | Gray-mapped QPSK | Byte (8-bit) | 2 bits/symbol; HPX2300 SL9 |
+| QPSK1000 | 1000 | Gray-mapped QPSK | Byte (8-bit) | 2 bits/symbol; hpx_wideband SL9 |
 | 8PSK500 | 500 | Gray-coded 8PSK | Byte (8-bit) | 3 bits/symbol |
-| 8PSK1000 | 1000 | Gray-coded 8PSK | Byte (8-bit) | 3 bits/symbol; HPX2300 SL11 |
+| 8PSK1000 | 1000 | Gray-coded 8PSK | Byte (8-bit) | 3 bits/symbol; hpx_wideband SL11 |
 | FSK4-ACK | 100 (fixed) | 4-tone FSK | ACK frame (5 B) | ACK transport; independent of data mode |
 
 ## HPX adaptive profiles
 
-HPX sessions select a modulation mode at runtime based on the current `SpeedLevel` reported by the `RateAdapter`. Two profiles are defined in `openpulse-core/src/profile.rs`:
+HPX sessions select a modulation mode at runtime based on the current `SpeedLevel` reported by the `RateAdapter`. Three profiles are defined in `openpulse-core/src/profile.rs`:
 
-### HPX500 (500 Hz class)
+### `hpx500` — 500 Hz class
 
 | SL  | Mode     | Notes |
 |-----|----------|-------|
@@ -94,20 +94,36 @@ HPX sessions select a modulation mode at runtime based on the current `SpeedLeve
 | SL3 | BPSK63   | |
 | SL4 | BPSK250  | |
 | SL5 | QPSK250  | |
-| SL6 | QPSK500  | Highest HPX500 rate |
+| SL6 | QPSK500  | Highest hpx500 rate |
 | SL7 | — | Reserved |
 
-### HPX2300 (2300 Hz class)
+### `hpx_hf` — HF-compliant adaptive profile (≤ 2700 Hz)
 
-Single-carrier modulation was chosen over OFDM for HPX2300. Rationale: lower PAPR (near 0 dB for 8PSK vs 9–12 dB for OFDM), no cyclic prefix overhead, simpler AFC, and architectural consistency with HPX500. OFDM is deferred to Phase 3 if multipath gain measurements justify the added receiver complexity.
+Peaks at SL7 = 8PSK500 (1500 bps gross, ~2000 Hz BW with Hann windowing). Legal on all HF amateur allocations. Use this profile for HF operation.
 
 | SL  | Mode      | Notes |
 |-----|-----------|-------|
-| SL1–SL7 | — | Chirp fallback / HPX500 territory |
+| SL1 | — | Chirp fallback |
+| SL2 | BPSK31    | Initial level |
+| SL3 | BPSK63    | |
+| SL4 | BPSK250   | |
+| SL5 | QPSK250   | |
+| SL6 | QPSK500   | |
+| SL7 | 8PSK500   | Ceiling — ~2000 Hz BW |
+
+### `hpx_wideband` — Wideband profile (≤ 4000 Hz)
+
+Exceeds the 2700 Hz HF channel-width limit at SL9–SL11. Legal on FM voice channels, satellite, and UHF/VHF links. **Do not use on HF amateur allocations.**
+
+Single-carrier modulation was chosen over OFDM for this profile. Rationale: lower PAPR (near 0 dB for 8PSK vs 9–12 dB for OFDM), no cyclic prefix overhead, simpler AFC, and architectural consistency with `hpx500`. OFDM is deferred to FF-4 if multipath gain measurements justify the added receiver complexity.
+
+| SL  | Mode      | Notes |
+|-----|-----------|-------|
+| SL1–SL7 | — | Chirp fallback / hpx500/hpx_hf territory |
 | SL8 | QPSK500   | Initial level |
 | SL9 | QPSK1000  | |
 | SL10 | — | Reserved |
-| SL11 | 8PSK1000 | Highest HPX2300 rate (~3 kbps raw) |
+| SL11 | 8PSK1000 | Ceiling — ~4000 Hz BW |
 
 ## Signed session handshake (Phase 2.3)
 
