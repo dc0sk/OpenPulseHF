@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use openpulse_modem::ModemEngine;
 use protocol::{CommandResponse, ControlCommand, ControlEvent};
-use serde_json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc, Mutex};

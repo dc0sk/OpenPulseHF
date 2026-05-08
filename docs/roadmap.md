@@ -1069,6 +1069,67 @@ states to `HpxSession`.
 
 ---
 
+### FF-10 — zstd dictionary compression *(far future)*
+
+Add `CompressionAlgorithm::Zstd` backed by a pre-trained shared dictionary built from
+typical HPX/Winlink message content (structured headers, callsigns, common phrases).
+
+**Motivation**: without a dictionary, zstd offers only ~10–30% better ratio than LZ4 for
+1–50 KB payloads — not worth the dependency.  With a dictionary trained on real traffic,
+messages under 500 bytes (where all stream compressors normally fail due to startup
+overhead) compress meaningfully, directly saving airtime on BPSK/QPSK modes.
+
+**Implementation**:
+- Add a shared dictionary artifact (`assets/zstd-hpx-dict.zstd`) trained by
+  `openpulse-dict-trainer` — an offline tool that ingests a corpus of captured messages
+  and calls `zstd --train` (via the `zstd` crate's `train_from_buffer` API).
+- During simulation runs (any `ChannelSimHarness` loopback) the harness optionally
+  collects message payloads as training samples into a local corpus file.
+- `CompressionAlgorithm::Zstd` in `openpulse-core/src/compression.rs` uses the embedded
+  dictionary at compress/decompress time; falls back to no-dictionary if the dictionary
+  asset is absent.
+- `ConReq`/`ConAck` negotiation extended: `Zstd` variant carries a 4-byte dictionary
+  ID so both sides confirm they are using the same dictionary version before enabling it.
+
+**Timing**: defer until enough real or simulated traffic exists to build a meaningful
+training corpus.  The "autotrainer" is a background collection path, not a blocker for
+other work.
+
+**Dependencies**: Phase 2.7 (compression layer), sufficient message corpus.
+
+---
+
+### FF-11 — Authenticated voice shim for FreeDV *(far future, discussion pending)*
+
+FreeDV transmits codec2-compressed voice digitally, but provides no cryptographic
+guarantee that a received frame was actually produced by the claimed operator.  Replay
+attacks and synthetic voice injection are undetectable at the FreeDV layer.
+
+**Core insight**: codec2 is deterministic — the same voice input produces the same
+bitstream.  Signing the bitstream at the frame level gives cryptographic proof of origin
+without modifying FreeDV itself.  FreeDV already carries a small data channel alongside
+voice (used for callsign, SNR reporting, etc.) that is wide enough to carry a signing
+commitment via frame batching (64-byte Ed25519 signature per batch of N frames, or a
+Merkle root over a sliding window).
+
+**Proposed interface** (`crates/openpulse-freedv-auth` — new thin crate):
+- Intercepts the codec2 bitstream from FreeDV's audio/data pipe (stdin/stdout or
+  named pipe; no FreeDV source modification required).
+- Signs outgoing frame batches with the operator's OpenPulse Ed25519 key (Phase 2.3
+  signing infrastructure reused directly).
+- On receive: verifies incoming signatures against the OpenPulse trust store; raises
+  `TrustVerdict::Unverified` when no valid signature is present; exposes the verdict
+  via a small TCP/Unix-socket API that a FreeDV companion UI can poll.
+- Optionally supports ML-DSA-44 hybrid signing (Phase 3.1) for future-proof identity.
+
+**What this does NOT change**: FreeDV's codec, modulation, or network layer.  It is a
+transparent signing wrapper.
+
+**Timing**: defer until FreeDV integration is explicitly requested.  Discuss interface
+design (pipe vs. shared-memory vs. UDP loopback) before starting.
+
+**Dependencies**: Phase 2.3 (Ed25519 signing), Phase 3.1 (optional PQ hybrid).
+
 
 
 The following dependencies constrain the execution sequence:

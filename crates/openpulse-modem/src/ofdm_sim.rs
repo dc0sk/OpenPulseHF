@@ -253,13 +253,11 @@ pub fn demodulate_ofdm_frame(samples: &[f32], cfg: &OfdmConfig) -> Vec<u8> {
         fft.process(&mut freq);
 
         // Decode only positive frequencies 1..half.
-        for sc in 1..half {
-            let pos = sc - 1;
+        for (pos, sym) in freq[1..half].iter().enumerate() {
             if is_pilot_one_sided(pos, cfg.pilot_count, half - 1) {
                 continue;
             }
-            let sym = freq[sc];
-            let sym_bits = demap_symbol(sym, bits_per_sym);
+            let sym_bits = demap_symbol(*sym, bits_per_sym);
             for b in 0..bits_per_sym {
                 bits.push((sym_bits >> b) & 1 == 1);
             }
@@ -304,11 +302,11 @@ pub fn clip_and_filter(samples: &[f32], clip_db: f32) -> Vec<f32> {
     // Simple moving-average (5-tap) to smooth clipping discontinuities.
     let n = clipped.len();
     let mut filtered = vec![0.0f32; n];
-    for i in 0..n {
+    for (i, val) in filtered.iter_mut().enumerate() {
         let lo = i.saturating_sub(2);
         let hi = (i + 3).min(n);
         let sum: f32 = clipped[lo..hi].iter().sum();
-        filtered[i] = sum / (hi - lo) as f32;
+        *val = sum / (hi - lo) as f32;
     }
     filtered
 }
@@ -428,7 +426,7 @@ fn is_pilot(sc: usize, pilot_count: usize, fft_size: usize) -> bool {
     if spacing == 0 {
         return sc < pilot_count;
     }
-    sc > 0 && sc % spacing == 0 && (sc / spacing) <= pilot_count
+    sc > 0 && sc.is_multiple_of(spacing) && (sc / spacing) <= pilot_count
 }
 
 /// Pilot detection for one-sided (positive-frequency) subcarrier indexing.

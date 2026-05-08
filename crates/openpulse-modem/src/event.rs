@@ -1,8 +1,18 @@
 //! Real-time engine event types for the broadcast subscriber API.
 
 use openpulse_core::hpx::{HpxEvent, HpxState};
-use openpulse_core::rate::{RateEvent, SpeedLevel};
+use openpulse_core::rate::{RateEvent, RateTrigger, SpeedLevel};
 use serde::{Deserialize, Serialize};
+
+/// Rate-change direction for bidirectional sessions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RateDirection {
+    /// Our outgoing TX path adapted.
+    Tx,
+    /// Our incoming RX path adapted (from peer's reverse_ack report).
+    Rx,
+}
 
 /// A discrete event emitted by [`ModemEngine`](crate::ModemEngine) at every
 /// significant state change.
@@ -30,6 +40,13 @@ pub enum EngineEvent {
         event: RateEvent,
         speed_level: SpeedLevel,
         mode: String,
+        /// Which direction adapted.  `None` in sessions without bidirectional
+        /// tracking (legacy compatibility).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        direction: Option<RateDirection>,
+        /// What triggered the rate change.  `None` for ACK-only sessions.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trigger: Option<RateTrigger>,
     },
     /// DCD channel-busy status changed.
     DcdChange { busy: bool, energy: f32 },

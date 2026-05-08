@@ -20,6 +20,23 @@ use crate::state::{AppConfig, NoiseModel, Tap, TestStats};
 /// Base pattern repeated to fill the configured payload size.
 const PATTERN: &[u8] = b"OpenPulseHF testbench v0.1 test!";
 
+fn mode_symbol_rate(mode: &str) -> f32 {
+    match mode {
+        "BPSK31" => 31.25,
+        "BPSK63" => 62.5,
+        "BPSK100" => 100.0,
+        "BPSK250" | "BPSK250-RRC" => 250.0,
+        "QPSK125" => 125.0,
+        "QPSK250" => 250.0,
+        "QPSK500" | "QPSK500-RRC" => 500.0,
+        "QPSK1000" | "QPSK1000-HF" | "QPSK1000-RRC" => 1000.0,
+        "8PSK500" | "8PSK500-RRC" => 500.0,
+        "8PSK1000" | "8PSK1000-HF" | "8PSK1000-RRC" => 1000.0,
+        "FSK4-ACK" => 100.0,
+        _ => 250.0,
+    }
+}
+
 /// Build a payload of `size` bytes with a repeating 8-byte seed derived from `run` XORed
 /// across every byte, so each frame has a distinct bit pattern and the spectrum animates.
 fn make_payload(size: usize, run: u64) -> Vec<u8> {
@@ -190,6 +207,11 @@ fn run(
         };
         push_tap(&taps[3], &mut ps[3], &rx_samples, min_db, max_db);
 
+        // IQ scatter: extract symbols from the mixed (post-channel) signal.
+        let baud = mode_symbol_rate(current.mode.as_str());
+        push_iq_symbols(&taps[3], &mixed, 1500.0, 8000.0, baud);
+
+        let snr_db = estimate_snr_db(&tx_samples, &noise_samples);
         update_stats(
             &stats,
             &rx_result,
@@ -197,6 +219,7 @@ fn run(
             actual_algo,
             compress_ratio,
             &payload,
+            snr_db,
         );
     }
 }
@@ -332,6 +355,55 @@ fn push_tap(tap: &Tap, ps: &mut PowerSpectrum, samples: &[f32], min_db: f32, max
         .push_samples(ps, samples, min_db, max_db);
 }
 
+/// Push IQ scatter symbols for the RX tap (tap[3]).
+///
+/// Extracts one IQ pair per symbol period by coherent integration at `center_hz`.
+fn push_iq_symbols(tap: &Tap, samples: &[f32], center_hz: f32, sample_rate: f32, baud: f32) {
+    if samples.is_empty() || baud <= 0.0 {
+        return;
+    }
+    const MAX_IQ: usize = 2000;
+    let sps = (sample_rate / baud).round() as usize;
+    if sps < 2 {
+        return;
+    }
+    let scale = 2.0 / sps as f32;
+    let mut symbols: Vec<(f32, f32)> = Vec::new();
+    let mut offset = 0usize;
+    while offset + sps <= samples.len() {
+        let (mut i_sum, mut q_sum) = (0.0f32, 0.0f32);
+        for k in 0..sps {
+            let t = (offset + k) as f32 / sample_rate;
+            let phi = std::f32::consts::TAU * center_hz * t;
+            i_sum += samples[offset + k] * phi.cos();
+            q_sum += -samples[offset + k] * phi.sin();
+        }
+        symbols.push((i_sum * scale, q_sum * scale));
+        offset += sps;
+    }
+    let mut t = tap.write().unwrap();
+    for sym in symbols {
+        if t.iq_symbols.len() >= MAX_IQ {
+            t.iq_symbols.pop_front();
+        }
+        t.iq_symbols.push_back(sym);
+    }
+}
+
+/// Estimate instantaneous SNR from signal and noise RMS (returns dB).
+fn estimate_snr_db(signal: &[f32], noise: &[f32]) -> f32 {
+    if signal.is_empty() {
+        return 0.0;
+    }
+    let sig_power: f32 = signal.iter().map(|x| x * x).sum::<f32>() / signal.len() as f32;
+    let noise_len = noise.len().max(1);
+    let noise_power: f32 = noise.iter().map(|x| x * x).sum::<f32>() / noise_len as f32;
+    if noise_power < 1e-12 {
+        return 40.0; // clean channel
+    }
+    10.0 * (sig_power / noise_power).log10()
+}
+
 fn update_stats(
     stats: &Arc<RwLock<TestStats>>,
     rx_result: &Result<Vec<u8>, openpulse_core::error::ModemError>,
@@ -339,6 +411,7 @@ fn update_stats(
     compression: CompressionAlgorithm,
     compress_ratio: f64,
     payload: &[u8],
+    snr_db: f32,
 ) {
     const WINDOW_SECS: f64 = 1.5;
     let n_bits = payload.len() * 8;
@@ -384,6 +457,15 @@ fn update_stats(
             s.push_event(msg);
         }
     }
+
+    // SNR history: cap at 1800 entries (180 s at ~10 Hz).
+    const SNR_CAP: usize = 1800;
+    let now = std::time::Instant::now();
+    if s.snr_history.len() >= SNR_CAP {
+        s.snr_history.pop_front();
+    }
+    s.snr_history.push_back((now, snr_db));
+    s.current_snr_db = Some(snr_db);
 }
 
 fn count_bit_errors(a: &[u8], b: &[u8]) -> u64 {

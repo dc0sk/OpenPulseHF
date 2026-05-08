@@ -13,14 +13,14 @@ use openpulse_core::frame::Frame;
 use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
 use openpulse_core::plugin::{ModulationConfig, PluginRegistry};
 use openpulse_core::profile::SessionProfile;
-use openpulse_core::rate::{RateAdapter, RateEvent};
+use openpulse_core::rate::{BiDirRateAdapter, RateEvent, RateTrigger};
 use openpulse_core::signed_envelope::SignedEnvelope;
 use openpulse_core::trust::{
     evaluate_handshake, CertificateSource, ConnectionTrustLevel, HandshakeDecision, PolicyProfile,
     PublicKeyTrustLevel, SigningMode,
 };
 
-use crate::event::EngineEvent;
+use crate::event::{EngineEvent, RateDirection};
 use crate::pipeline::{
     AudioSamples, BackpressurePolicy, DecodedFrame, PipelineMetricsSnapshot, PipelineScheduler,
     PipelineStage, WirePayload,
@@ -69,7 +69,7 @@ pub struct ModemEngine {
     afc_step: f32,
     /// Audio centre frequency used for modulation and demodulation (Hz).
     center_frequency: f32,
-    rate_adapter: Option<RateAdapter>,
+    rate_adapter: Option<BiDirRateAdapter>,
     session_profile: Option<SessionProfile>,
     dcd: DcdState,
     csma_enabled: bool,
@@ -210,22 +210,52 @@ impl ModemEngine {
 
     /// Begin an adaptive-rate session using the given profile.
     ///
-    /// Initialises a [`RateAdapter`] at `profile.initial_level` and stores the
+    /// Initialises a [`BiDirRateAdapter`] at `profile.initial_level` and stores the
     /// profile so that [`current_adaptive_mode`](Self::current_adaptive_mode)
     /// can resolve the current mode string on each transmit/receive cycle.
     pub fn start_adaptive_session(&mut self, profile: SessionProfile) {
         let initial = profile.initial_level;
         let threshold = profile.nack_threshold;
-        let mut adapter = RateAdapter::new(initial);
-        adapter.nack_threshold = threshold;
-        self.rate_adapter = Some(adapter);
+        self.rate_adapter = Some(BiDirRateAdapter::new(initial, threshold));
         self.session_profile = Some(profile);
     }
 
-    /// Apply a received ACK type to the rate adapter and return the resulting event.
+    /// Apply a received ACK type to the TX-direction rate adapter.
     ///
     /// Returns [`RateEvent::Maintained`] when no adaptive session is active.
     pub fn apply_ack(&mut self, ack: AckType) -> RateEvent {
+        self.apply_ack_internal(ack, None)
+    }
+
+    /// Apply a received ACK frame, updating both TX and RX directions.
+    ///
+    /// When the frame carries a `reverse_ack`, the RX-direction adapter is also
+    /// updated and a second `RateChange` event is emitted.
+    pub fn apply_ack_frame(&mut self, frame: &openpulse_core::ack::AckFrame) -> RateEvent {
+        let tx_event = self.apply_ack_internal(frame.ack_type, Some(RateDirection::Tx));
+        if let Some(rev) = frame.reverse_ack {
+            if let Some(adapter) = self.rate_adapter.as_mut() {
+                let rx_event = adapter.apply_reverse_ack(rev);
+                let rx_level = adapter.rx_level();
+                let mode = self
+                    .session_profile
+                    .as_ref()
+                    .and_then(|p| p.mode_for(rx_level))
+                    .unwrap_or("unknown")
+                    .to_string();
+                let _ = self.event_tx.send(EngineEvent::RateChange {
+                    event: rx_event,
+                    speed_level: rx_level,
+                    mode,
+                    direction: Some(RateDirection::Rx),
+                    trigger: None,
+                });
+            }
+        }
+        tx_event
+    }
+
+    fn apply_ack_internal(&mut self, ack: AckType, direction: Option<RateDirection>) -> RateEvent {
         let rate_event = match self.rate_adapter.as_mut() {
             Some(adapter) => adapter.apply_ack(ack),
             None => RateEvent::Maintained,
@@ -233,7 +263,7 @@ impl ModemEngine {
         let speed_level = self
             .rate_adapter
             .as_ref()
-            .map(|a| a.speed_level())
+            .map(|a| a.tx_level())
             .unwrap_or(openpulse_core::rate::SpeedLevel::Sl2);
         let mode = self
             .current_adaptive_mode()
@@ -244,19 +274,70 @@ impl ModemEngine {
                 event: rate_event,
                 speed_level,
                 mode,
+                direction,
+                trigger: None,
             });
         }
         rate_event
     }
 
-    /// Return the mode string for the current speed level of the active adaptive session.
+    /// Return the mode string for the current TX speed level of the active adaptive session.
     ///
     /// Returns `None` when no profile is active or the current speed level has no
     /// mode assigned (e.g. SL1 chirp fallback, reserved levels).
     pub fn current_adaptive_mode(&self) -> Option<&str> {
         let profile = self.session_profile.as_ref()?;
         let adapter = self.rate_adapter.as_ref()?;
-        profile.mode_for(adapter.speed_level())
+        profile.mode_for(adapter.tx_level())
+    }
+
+    /// Return the mode string for the current RX speed level.
+    pub fn current_rx_mode(&self) -> Option<&str> {
+        let profile = self.session_profile.as_ref()?;
+        let adapter = self.rate_adapter.as_ref()?;
+        profile.mode_for(adapter.rx_level())
+    }
+
+    /// Return the current TX [`SpeedLevel`](openpulse_core::rate::SpeedLevel).
+    pub fn current_tx_level(&self) -> Option<openpulse_core::rate::SpeedLevel> {
+        self.rate_adapter.as_ref().map(|a| a.tx_level())
+    }
+
+    /// Apply a raw SNR estimate to the TX-direction rate adapter.
+    ///
+    /// If `snr_db` drops below the per-level SNR floor in the active session
+    /// profile, the TX speed level is stepped down immediately — without waiting
+    /// for a NACK — and a [`EngineEvent::RateChange`] is emitted with
+    /// `trigger: Some(SnrFloor)`.  If `snr_db` rises above the ceiling, the
+    /// upgrade-candidate flag is set; no level change occurs until the next
+    /// ACK-UP is received.
+    ///
+    /// Does nothing when no adaptive session is active.
+    pub fn apply_snr_hint(&mut self, snr_db: f32) {
+        let Some(adapter) = self.rate_adapter.as_mut() else {
+            return;
+        };
+        let Some(profile) = self.session_profile.as_ref() else {
+            return;
+        };
+        let tx_level = adapter.tx_level();
+        let floor_db = profile
+            .snr_floor_for_level(tx_level)
+            .unwrap_or(f32::NEG_INFINITY);
+        let ceiling_db = profile
+            .snr_ceiling_for_level(tx_level)
+            .unwrap_or(f32::INFINITY);
+        if let Some(rate_event) = adapter.tx.apply_snr_hint(snr_db, floor_db, ceiling_db) {
+            let new_level = adapter.tx_level();
+            let mode = profile.mode_for(new_level).unwrap_or("unknown").to_string();
+            let _ = self.event_tx.send(EngineEvent::RateChange {
+                event: rate_event,
+                speed_level: new_level,
+                mode,
+                direction: Some(RateDirection::Tx),
+                trigger: Some(RateTrigger::SnrFloor),
+            });
+        }
     }
 
     /// Returns the current HPX state for this engine session.
