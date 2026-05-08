@@ -257,16 +257,32 @@ impl QsySession {
                             got: token.clone(),
                         });
                     }
-                    let best = pick_best_freq(my_votes, &votes)?;
-                    self.state = State::Agreed { freq_hz: best };
-                    Ok(vec![
-                        QsyAction::SendFrame(QsyFrame::Ack {
-                            token,
-                            agreed_freq_hz: best,
-                            switchover_offset_s: self.switchover_offset_s,
-                        }),
-                        QsyAction::QsyNow { freq_hz: best },
-                    ])
+                    match pick_best_freq(my_votes, &votes) {
+                        Ok(best) => {
+                            self.state = State::Agreed { freq_hz: best };
+                            Ok(vec![
+                                QsyAction::SendFrame(QsyFrame::Ack {
+                                    token,
+                                    agreed_freq_hz: best,
+                                    switchover_offset_s: self.switchover_offset_s,
+                                }),
+                                QsyAction::QsyNow { freq_hz: best },
+                            ])
+                        }
+                        Err(_) => {
+                            // No common candidate — send explicit rejection so the peer
+                            // doesn't hang waiting for an ACK that will never arrive.
+                            let reason = "no common candidate frequency".to_string();
+                            self.state = State::Rejected;
+                            Ok(vec![
+                                QsyAction::SendFrame(QsyFrame::Reject {
+                                    token,
+                                    reason: reason.clone(),
+                                }),
+                                QsyAction::Reject { reason },
+                            ])
+                        }
+                    }
                 }
                 other => Err(QsyError::InvalidTransition(format!(
                     "QSY_VOTE in unexpected state: {other:?}"
