@@ -19,6 +19,7 @@ bpsk-plugin.workspace       = true
 qpsk-plugin.workspace       = true
 psk8-plugin.workspace       = true
 fsk4-plugin.workspace       = true
+ofdm-plugin.workspace       = true
 crossbeam-channel.workspace = true
 eframe.workspace            = true
 egui.workspace              = true

@@ -215,6 +215,9 @@ fn gross_bps(mode: &str) -> f64 {
         "8PSK500-RRC" => 1500.0,
         "8PSK1000-RRC" => 3000.0,
         "FSK4-ACK" => 200.0, // 100 baud × 2 bits/symbol (4-tone)
+        // OFDM: n_data × 2 bits × (8000 / 288) symbol/s
+        "OFDM16" => 889.0,  // 16 × 2 × 8000/288 ≈ 889 bps
+        "OFDM52" => 2889.0, // 52 × 2 × 8000/288 ≈ 2889 bps
         _ => 0.0,
     }
 }
@@ -407,11 +410,17 @@ pub fn draw_signal_panel(
 
             // Bandwidth markers (half-width from centre = 1500 Hz).
             // FSK4-ACK: 4 tones at ±50/±150 Hz → outermost edge at ±150 Hz.
+            // OFDM16: SCs 38–57, edge-to-edge = 20 × 31.25 Hz = 625 Hz → half = 312.5 Hz.
+            // OFDM52: SCs 16–80, edge-to-edge = 65 × 31.25 Hz = 2031 Hz → half ≈ 1016 Hz.
             // -HF / 8PSK: cosine overlap shaping, null-to-null BW ≈ 2×Rs → half = Rs.
             // Everything else: Hann windowing, null-to-null BW ≈ 4×Rs → half = 2×Rs.
             let sr = mode_symbol_rate_hz(&config.mode);
             let bw_half = if config.mode == "FSK4-ACK" {
                 150.0
+            } else if config.mode == "OFDM16" {
+                312.5
+            } else if config.mode == "OFDM52" {
+                1015.6
             } else if config.mode.starts_with("8PSK") || config.mode.ends_with("-HF") {
                 sr
             } else {
