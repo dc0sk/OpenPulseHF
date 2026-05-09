@@ -133,6 +133,7 @@ pub fn draw_toolbar(
                 .selected_text(match state.config.compression {
                     CompressionAlgorithm::None => "None",
                     CompressionAlgorithm::Lz4 => "LZ4",
+                    CompressionAlgorithm::Zstd(_) => "Zstd",
                 })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(

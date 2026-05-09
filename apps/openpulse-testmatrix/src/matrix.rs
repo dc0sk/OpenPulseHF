@@ -95,6 +95,7 @@ impl TestCase {
             match self.compression {
                 CompressionAlgorithm::None => "nocomp",
                 CompressionAlgorithm::Lz4 => "lz4",
+                CompressionAlgorithm::Zstd(_) => "zstd",
             },
             self.channel.label(),
             self.payload_len,

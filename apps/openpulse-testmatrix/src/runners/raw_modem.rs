@@ -22,7 +22,7 @@ pub fn run(case: &TestCase) -> TestResult {
     // Apply compression if requested
     let (wire_payload, actual_algo) = match case.compression {
         CompressionAlgorithm::None => (payload.clone(), CompressionAlgorithm::None),
-        CompressionAlgorithm::Lz4 => compress_if_smaller(&payload),
+        CompressionAlgorithm::Lz4 | CompressionAlgorithm::Zstd(_) => compress_if_smaller(&payload),
     };
 
     // Transmit

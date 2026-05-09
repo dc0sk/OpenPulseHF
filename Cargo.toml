@@ -28,6 +28,7 @@ members = [
     "crates/openpulse-daemon",
     "crates/openpulse-dsp",
     "crates/openpulse-qsy",
+    "tools/openpulse-dict-trainer",
 ]
 
 [workspace.package]
