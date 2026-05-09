@@ -479,23 +479,12 @@ daemon dispatch), Phase 2.3 (Ed25519 signing infrastructure).
 
 ---
 
-### 7.6 — Full-duplex mode *(stretch — requires dual audio hardware)*
+### 7.6 — Full-duplex mode ✅ Done (PR #154)
 
-When two `CpalBackend` instances are available (one per rig), enable simultaneous TX on
-rig_b while receiving on rig_a.  This requires the two audio streams to run on separate
-hardware devices to avoid TX self-interference.
-
-**Gating conditions**:
-- Dual-rig (Phase 7.2) operational.
-- TX and RX on physically separate audio devices (enforced at config parse time;
-  same device name for both rigs → error at startup).
-- Operator explicitly sets `[repeater] full_duplex = true`; default false.
-
-**What changes**: the cross-band repeater's TX-hang timer is removed; `rig_b` PTT stays
-asserted continuously while relay traffic is flowing; DCD on rig_a drives the decode
-path regardless of rig_b TX state.
-
-**Dependencies**: Phase 7.2, Phase 5.6 (CpalBackend wiring), hardware availability.
+Full-duplex cross-band repeater implemented. `run_full_duplex(stop)` asserts PTT once and
+holds it for the session duration; `relay_one_frame()` skips per-frame PTT cycling when
+`full_duplex=true`. PTT is guaranteed to release on error or stop. Config field
+`[repeater] full_duplex = false` (default). 3 integration tests added.
 
 ---
 
