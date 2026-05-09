@@ -5,12 +5,13 @@ use rand::Rng;
 use tokio::sync::broadcast;
 use tracing::{debug, info};
 
+use openpulse_core::ack::AckFrame;
 use openpulse_core::ack::AckType;
 use openpulse_core::audio::{AudioBackend, AudioConfig};
 use openpulse_core::conv::ConvCodec;
 use openpulse_core::dcd::DcdState;
 use openpulse_core::error::{ModemError, PluginError};
-use openpulse_core::fec::{FecCodec, Interleaver};
+use openpulse_core::fec::{FecCodec, Interleaver, ShortFecCodec};
 use openpulse_core::frame::Frame;
 use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
 use openpulse_core::plugin::{ModulationConfig, PluginRegistry};
@@ -1037,6 +1038,49 @@ impl ModemEngine {
             bytes: frame.payload.len(),
         });
         Ok(frame.payload)
+    }
+
+    /// Encode `ack` with ShortFecCodec (5 → 13 bytes) and emit via FSK4-ACK.
+    pub fn transmit_ack_with_short_fec(
+        &mut self,
+        ack: &AckFrame,
+        device: Option<&str>,
+    ) -> Result<(), ModemError> {
+        let raw = ack.encode();
+        let fec_bytes = ShortFecCodec::new().encode(&raw)?;
+        let wire = WirePayload { bytes: fec_bytes };
+        let mode = "FSK4-ACK";
+        let samples = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_modulate_payload(plugin, mode, &wire)?
+        };
+        let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
+        self.stage_emit_output(device, &samples)
+    }
+
+    /// Demodulate FSK4-ACK, ShortFecCodec decode (13 → 5 bytes), return `AckFrame`.
+    pub fn receive_ack_with_short_fec(
+        &mut self,
+        device: Option<&str>,
+    ) -> Result<AckFrame, ModemError> {
+        let samples = self.stage_capture_input(device)?;
+        let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+        let mode = "FSK4-ACK";
+        let wire = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_demodulate_payload(plugin, mode, &samples)?
+        };
+        let decoded = ShortFecCodec::new().decode(&wire.bytes)?;
+        let arr: [u8; 5] = decoded
+            .try_into()
+            .map_err(|_| ModemError::Frame("ShortFEC ACK decode: expected 5 bytes".to_string()))?;
+        AckFrame::decode(&arr).map_err(|e| ModemError::Frame(format!("AckFrame decode: {e:?}")))
     }
 
     fn stage_encode_frame(&mut self, data: &[u8]) -> WirePayload {
