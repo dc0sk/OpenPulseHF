@@ -966,7 +966,7 @@ on real hardware), SDR radio with stereo line-in capability (QMX, HermesLite, et
 
 ---
 
-### FF-6 — Binary WebSocket spectrum channel
+### FF-6 — Binary WebSocket spectrum channel *(far future)*
 
 Extend the daemon control protocol (Phase 7.3) with a binary frame channel for spectrum
 data, eliminating JSON serialisation overhead on high-frequency FFT updates.
