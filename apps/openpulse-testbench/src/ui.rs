@@ -122,8 +122,16 @@ pub fn draw_toolbar(
 
         ui.separator();
 
-        ui.checkbox(&mut state.config.fec_enabled, "FEC")
-            .on_hover_text("Enable Reed-Solomon forward error correction (rate 223/255)");
+        let fsk4 = state.config.mode == "FSK4-ACK";
+        if fsk4 {
+            state.config.fec_enabled = false;
+        }
+        ui.add_enabled(!fsk4, egui::Checkbox::new(&mut state.config.fec_enabled, "FEC"))
+            .on_hover_text(if fsk4 {
+                "FEC unavailable for FSK4-ACK — fixed 5-byte ACK frame, no payload space for RS parity"
+            } else {
+                "Enable Reed-Solomon forward error correction (rate 223/255)"
+            });
 
         if !is_live {
             ui.separator();
