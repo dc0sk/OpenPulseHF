@@ -1083,6 +1083,29 @@ attacks and synthetic voice injection are undetectable at the FreeDV layer.
 
 **Dependencies**: Phase 2.3 (Ed25519 signing) ✅, Phase 3.1 (optional PQ hybrid) ✅.
 
+---
+
+### FF-12 — SC-FDMA waveform (deferred — pending evaluation)
+
+Analysis of five 5G-era multi-carrier schemes (FBMC, UFMC, GFDM, SC-FDMA, OFDMA) against HF
+radio constraints was conducted 2026-05-09.  See `docs/backlog-waveforms.md` for the full
+analysis.
+
+**Conclusion**: SC-FDMA (DFT-spread OFDM) is the only scheme with a clear HF benefit:
+3–4 dB lower PAPR than OFDM without iterative clipping, with identical one-tap ZF channel
+equalization. All other schemes either add receiver complexity with no HF gain (FBMC, UFMC,
+GFDM) or are inapplicable to peer-to-peer links (OFDMA).
+
+**Gate condition for implementation**: measure OFDM52-with-clipping OOB distortion floor on
+a real or simulated PA. If clipping-induced spectral regrowth is ≥ −40 dBc, implement
+`plugins/scfdma/` as a drop-in replacement for `plugins/ofdm/` adding a DFT-spread TX step
+and IDFT de-spread RX step.
+
+**Acceptance criterion**: SC-FDMA52 loopback at Watterson F1 SNR=15 dB achieves equal or
+better BER than OFDM52, with ≥ 3 dB lower measured PAPR.
+
+**Dependencies**: FF-4 (OFDM plugin) ✅.
+
 
 The following dependencies constrain the execution sequence:
 
