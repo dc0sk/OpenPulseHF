@@ -28,6 +28,7 @@ members = [
     "crates/openpulse-daemon",
     "crates/openpulse-dsp",
     "crates/openpulse-qsy",
+    "crates/openpulse-freedv-auth",
     "tools/openpulse-dict-trainer",
 ]
 

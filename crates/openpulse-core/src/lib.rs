@@ -27,6 +27,7 @@ pub mod relay;
 pub mod remote_control;
 pub mod sar;
 pub mod signed_envelope;
+pub mod signing;
 pub mod trust;
 pub mod wire_query;
 
@@ -50,5 +51,6 @@ pub use rate::*;
 pub use relay::*;
 pub use sar::*;
 pub use signed_envelope::*;
+pub use signing::*;
 pub use trust::*;
 pub use wire_query::*;

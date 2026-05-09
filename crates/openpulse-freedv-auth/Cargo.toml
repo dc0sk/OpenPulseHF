@@ -1,0 +1,23 @@
+[package]
+name = "openpulse-freedv-auth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "FreeDV authenticated voice shim: Ed25519-signed auth beacons over the FreeDV UDP data port"
+
+[dependencies]
+openpulse-core = { path = "../../crates/openpulse-core" }
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rand.workspace = true
+tokio.workspace = true
+hex = "0.4"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+rand.workspace = true
+ed25519-dalek = { version = "2.0", features = ["rand_core"] }

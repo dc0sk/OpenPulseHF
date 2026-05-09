@@ -1081,37 +1081,29 @@ other work.
 
 ---
 
-### FF-11 — Authenticated voice shim for FreeDV *(far future, discussion pending)*
+### FF-11 — Authenticated voice shim for FreeDV ✅ Done (PR #162)
 
 FreeDV transmits codec2-compressed voice digitally, but provides no cryptographic
 guarantee that a received frame was actually produced by the claimed operator.  Replay
 attacks and synthetic voice injection are undetectable at the FreeDV layer.
 
-**Core insight**: codec2 is deterministic — the same voice input produces the same
-bitstream.  Signing the bitstream at the frame level gives cryptographic proof of origin
-without modifying FreeDV itself.  FreeDV already carries a small data channel alongside
-voice (used for callsign, SNR reporting, etc.) that is wide enough to carry a signing
-commitment via frame batching (64-byte Ed25519 signature per batch of N frames, or a
-Merkle root over a sliding window).
+**Implemented** in `crates/openpulse-freedv-auth`:
 
-**Proposed interface** (`crates/openpulse-freedv-auth` — new thin crate):
-- Intercepts the codec2 bitstream from FreeDV's audio/data pipe (stdin/stdout or
-  named pipe; no FreeDV source modification required).
-- Signs outgoing frame batches with the operator's OpenPulse Ed25519 key (Phase 2.3
-  signing infrastructure reused directly).
-- On receive: verifies incoming signatures against the OpenPulse trust store; raises
-  `TrustVerdict::Unverified` when no valid signature is present; exposes the verdict
-  via a small TCP/Unix-socket API that a FreeDV companion UI can poll.
-- Optionally supports ML-DSA-44 hybrid signing (Phase 3.1) for future-proof identity.
+- **Authentication model**: station-identity signing — `{callsign, timestamp_utc,
+  session_nonce, freq_hz, mode, pubkey}` as canonical JSON, signed with Ed25519.
+  Satisfies FCC Part 97 ID without per-frame audio signing overhead.
+- **Interface**: FreeDV Qt-GUI UDP data port (`127.0.0.1:10001`).  Pure-Rust, no
+  C FFI, fully compatible with `--no-default-features`.
+- **`AuthBeacon`**: Ed25519-signed, length-prefixed JSON wire format (≈144 bytes).
+  `sign()`, `verify()`, `encode()`, `decode()` API.
+- **`BeaconScheduler`**: sends a beacon immediately then every configured interval.
+- **`FreeDvDataPort`**: async tokio UDP wrapper for beacon injection and receive.
+- **`TrustVerdict`**: `Verified / Unverified / Invalid` with Unix-socket server for
+  companion UI polling.
+- `sign_bytes` / `verify_bytes` primitives exposed from `openpulse-core/src/signing.rs`.
+- 13 tests (8 unit + 5 integration) all passing.
 
-**What this does NOT change**: FreeDV's codec, modulation, or network layer.  It is a
-transparent signing wrapper.
-
-**Timing**: defer until FreeDV integration is explicitly requested.  Discuss interface
-design (pipe vs. shared-memory vs. UDP loopback) before starting.
-
-**Dependencies**: Phase 2.3 (Ed25519 signing), Phase 3.1 (optional PQ hybrid).
-
+**Dependencies**: Phase 2.3 (Ed25519 signing) ✅, Phase 3.1 (optional PQ hybrid) ✅.
 
 
 The following dependencies constrain the execution sequence:
