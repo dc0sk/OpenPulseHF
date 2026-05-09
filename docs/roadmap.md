@@ -1108,7 +1108,7 @@ better BER than OFDM52, with ≥ 3 dB lower measured PAPR.
 
 ---
 
-### FF-13 — Generic serial CAT for rigs not in hamlib
+### FF-13 — Generic serial CAT for rigs not in hamlib ✅ Done (PR #173)
 
 Current rig control is fully dependent on hamlib (`rigctld`) for frequency/mode/level
 commands.  Rigs that are unsupported or only partially supported by hamlib cannot use
