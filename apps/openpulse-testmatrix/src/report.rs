@@ -248,6 +248,7 @@ fn write_by_usecase(dir: &Path, results: &[TestResult], meta: &RunMeta) {
         let comp = match r.case.compression {
             CompressionAlgorithm::None => "none",
             CompressionAlgorithm::Lz4 => "lz4",
+            CompressionAlgorithm::Zstd(_) => "zstd",
         };
         out.push_str(&format!(
             "| {} | {} | {} | {} | {} | {}B | {} | {} | {}ms |\n",

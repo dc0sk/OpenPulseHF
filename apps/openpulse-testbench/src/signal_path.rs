@@ -158,7 +158,9 @@ fn run(
         // would expand the data, so compress_ratio is always ≤ 1.0.
         let (compressed, actual_algo) = match current.compression {
             CompressionAlgorithm::None => (payload.clone(), CompressionAlgorithm::None),
-            CompressionAlgorithm::Lz4 => compress_if_smaller(&payload),
+            CompressionAlgorithm::Lz4 | CompressionAlgorithm::Zstd(_) => {
+                compress_if_smaller(&payload)
+            }
         };
         let compress_ratio = compressed.len() as f64 / payload.len() as f64;
         let tx_payload = match &fec {
