@@ -91,6 +91,8 @@ All items below are merged, tested, and in `main`:
 - **FF-8 Per-band TX attenuation**: per-band TX gain remembered and restored on band change via rigctld
 - **FF-9 HPX reactor pattern**: event-driven `HpxReactor` replacing the polling-loop state machine
 - **FF-10 zstd dictionary compression**: pre-trained shared dictionary for sub-500-byte payloads
+- **FF-11 FreeDV authenticated voice shim**: Ed25519-signed beacon injected into FreeDV Qt-GUI via UDP data port; `TrustVerdict` Unix-socket API for companion UI polling
+- **FF-1 ext — QSY trust gating**: `allow_trustlevels` wired from config into `QsyPolicy`; fail-closed parsing rejects unknown trust-level strings at startup
 - **Phase 9 signal-path analytics**: IQ scatter plot, SNR trend, asymmetric rate adaptation, SNR-driven step-down, broadcast/beacon mode alongside ARQ
 - **Winlink gateway**: direct TCP connection to `cms.winlink.org`, ISS and IRS roles, LZHUF (Type C) and Gzip (Type D) compression
 - **PKI service**: Ed25519 trust-bundle signing, REST API, PostgreSQL backend
@@ -106,8 +108,6 @@ Active work tracks (see [`docs/roadmap.md`](docs/roadmap.md) FF-series):
 | Item | Description |
 |---|---|
 | FF-4 — OFDM wideband profile | Multi-carrier pilot for high-Doppler and deep-fading paths; simulation research underway |
-| FF-11 — Authenticated voice shim | Ed25519 frame-signing shim over FreeDV's codec2 data channel; proof of voice-frame origin without modifying FreeDV |
-| FF-1 ext — QSY trust gating | Wire `allow_trustlevels` from config into QSY session acceptance; deferred until trust context is passed to `QsyPolicy` |
 
 ---
 

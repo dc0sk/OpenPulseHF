@@ -1051,33 +1051,18 @@ states to `HpxSession`.
 
 ---
 
-### FF-10 — zstd dictionary compression *(far future)*
+### FF-10 — zstd dictionary compression ✅ Done (PR #156)
 
-Add `CompressionAlgorithm::Zstd` backed by a pre-trained shared dictionary built from
+Added `CompressionAlgorithm::Zstd` backed by a pre-trained shared dictionary built from
 typical HPX/Winlink message content (structured headers, callsigns, common phrases).
 
-**Motivation**: without a dictionary, zstd offers only ~10–30% better ratio than LZ4 for
-1–50 KB payloads — not worth the dependency.  With a dictionary trained on real traffic,
-messages under 500 bytes (where all stream compressors normally fail due to startup
-overhead) compress meaningfully, directly saving airtime on BPSK/QPSK modes.
+- `zstd` crate dependency added to `openpulse-core`; `train_from_buffer` API used by `openpulse-dict-trainer` offline tool.
+- Dictionary artifact embedded at compile time; falls back to no-dictionary if absent.
+- `ConReq`/`ConAck` negotiation extended: `Zstd` variant carries a 4-byte dictionary ID so both sides confirm they are using the same dictionary version before enabling it.
+- `CompressionAlgorithm::Zstd` in `openpulse-core/src/compression.rs`; `compress_if_smaller` selects Zstd when it beats LZ4 and the plain payload.
+- `openpulse-dict-trainer` binary collects loopback payloads as a training corpus.
 
-**Implementation**:
-- Add a shared dictionary artifact (`assets/zstd-hpx-dict.zstd`) trained by
-  `openpulse-dict-trainer` — an offline tool that ingests a corpus of captured messages
-  and calls `zstd --train` (via the `zstd` crate's `train_from_buffer` API).
-- During simulation runs (any `ChannelSimHarness` loopback) the harness optionally
-  collects message payloads as training samples into a local corpus file.
-- `CompressionAlgorithm::Zstd` in `openpulse-core/src/compression.rs` uses the embedded
-  dictionary at compress/decompress time; falls back to no-dictionary if the dictionary
-  asset is absent.
-- `ConReq`/`ConAck` negotiation extended: `Zstd` variant carries a 4-byte dictionary
-  ID so both sides confirm they are using the same dictionary version before enabling it.
-
-**Timing**: defer until enough real or simulated traffic exists to build a meaningful
-training corpus.  The "autotrainer" is a background collection path, not a blocker for
-other work.
-
-**Dependencies**: Phase 2.7 (compression layer), sufficient message corpus.
+**Dependencies**: Phase 2.7 (compression layer) ✅.
 
 ---
 
