@@ -7,11 +7,12 @@ last_updated: 2026-05-09
 
 # FEC Improvements Backlog
 
-Research conducted 2026-05-09. Current state: RS(255,223) as primary, K=3 ConvCodec as optional alternative. Neither is concatenated.
+Research conducted 2026-05-09. Current state: RS(255,223) as primary, K=3 ConvCodec as
+optional alternative; concatenated Conv+RS and short-block RS both shipped.
 
 ---
 
-## BL-FEC-1 — Concatenated Conv+RS session mode (High priority)
+## BL-FEC-1 — Concatenated Conv+RS session mode ✅ Done (PR #169)
 
 **Problem:** RS(255,223) fails completely at ≥1% random bit BER (accumulates ~18 byte errors/block, exceeding t=16). The block interleaver helps with burst errors but not AWGN.
 
@@ -22,45 +23,55 @@ TX: payload → RS(255,223) outer → ConvCodec(rate-1/2) inner → modulate
 RX: demodulate → ConvCodec Viterbi decode → RS decode → payload
 ```
 
-The Conv inner layer reduces raw BER by ~10 dB; RS outer corrects residual Viterbi burst failures. At 2% raw channel BER, Conv reduces this to ~0.01% residual — well within RS t=16 capacity.
-
-**Implementation:** `transmit_with_concatenated_fec()` / `receive_with_concatenated_fec()` in `crates/openpulse-modem/src/engine.rs` chaining `FecCodec` → `ConvCodec` on TX and `ConvCodec` → `FecCodec` on RX. Both codecs exist; this is ~50 lines of wiring + a new session negotiation flag in the HPX handshake.
-
-**Overhead:** 2× (Conv rate-1/2) × 1.14 (RS) = 2.28× total; acceptable for robust/slow modes.
-
-**Reference:** DVB-S uses the same architecture (RS outer + Conv inner).
+**What was delivered:**
+- `transmit_with_concatenated_fec()` / `receive_with_concatenated_fec()` in `ModemEngine`
+- `FecMode::Concatenated` (strength 3) in handshake negotiation
+- Loopback tests, BER-injection test, overhead assertion (≥ 2× RS-only size)
 
 ---
 
-## BL-FEC-2 — Increase RS ECC to t=32 for AWGN robustness (Medium priority)
+## BL-FEC-2 — Increase RS ECC to t=32 for AWGN robustness (High priority)
 
-**Problem:** RS(255,223) with t=16 corrects up to 16 byte errors per block. AWGN at 1% BER produces ~18 byte errors.
+**Problem:** RS(255,223) with t=16 corrects up to 16 byte errors per block. AWGN at 1% BER produces ~18 byte errors, which the standard codec cannot recover.
 
-**Solution:** Change `FEC_ECC_LEN` constant from 32 to 64 in `crates/openpulse-core/src/fec.rs`.
+**Solution:** Add a `FecCodec::strong()` constructor using `FEC_ECC_LEN_STRONG = 64` ECC bytes.
+New params: RS(255,191), t=32. Overhead increases from 14% to 25% (ECC bytes / block).
 
-New params: RS(255, 191), t=32. Overhead increases from 14% to 25% (ECC bytes / block).
+**Implementation:** New constant and constructor alongside the existing `FecCodec::new()`;
+separate engine methods `transmit_with_strong_fec` / `receive_with_strong_fec`; new
+`FecMode::RsStrong` variant (strength 5) for handshake negotiation.
 
-**Cost:** No code changes beyond the constant and updating tests. Breaks wire compatibility with existing sessions using the smaller block — requires a session negotiation flag.
+**Wire compat:** Fully additive — existing sessions using `FecMode::Rs` are unaffected.
 
 ---
 
-## BL-FEC-3 — Short-block RS for ACK/control frames (Low priority)
+## BL-FEC-3 — Short-block RS for ACK/control frames ✅ Done (PR #170)
 
 **Problem:** RS(255,223) bloats a 5-byte FSK4-ACK frame to 255 bytes, making FEC impractical for short control frames.
 
-**Solution:** Add `ShortFecCodec` using RS(63,55) [t=4] or RS(31,25) [t=3] from the `reed-solomon-erasure` crate (supports configurable GF field sizes, unlike the current `reed-solomon` v0.2 which is hardcoded to GF(2^8)/n=255).
-
-**Impact:** Unlocks FEC for ACK frames, small beacons, and control payloads ≤55 bytes.
-
-**Dependency change:** Replace or supplement `reed-solomon = "0.2"` with `reed-solomon-erasure`.
+**What was delivered:**
+- `ShortFecCodec` (no padding, no length prefix); 5-byte ACK → 13 bytes (5 + 8 ECC, t=4)
+- `FecMode::ShortRs` (strength 4) in handshake negotiation
+- `transmit_ack_with_short_fec` / `receive_ack_with_short_fec` in `ModemEngine`
+- Corrects ≤4 byte errors per frame; validated with FSK4-ACK engine loopback
 
 ---
 
-## BL-FEC-4 — Memory-ARQ soft combining (Mid-term, from pactor-research.md)
+## BL-FEC-4 — Memory-ARQ soft combining (Medium priority)
 
-**From docs/pactor-research.md.** Soft-combine signal samples from multiple NACK retransmissions before decoding (maximal-ratio combining). Reduces required SNR by ~3 dB per doubling of retransmissions.
+**From docs/pactor-research.md.** Soft-combine signal samples from multiple NACK
+retransmissions before decoding (maximal-ratio combining). Each retransmission of the same
+frame is captured and the sample buffers are averaged element-wise before demodulation.
+Reduces required SNR by ~3 dB per doubling of retransmissions (coherent averaging gain).
 
-No wire protocol change needed — only receiver buffering. Compatible with current RS FEC.
+**Implementation:** `SoftCombiner` struct in `fec.rs` accumulates `Vec<f32>` sample
+buffers and computes an element-wise mean on `combine()`. Engine method
+`receive_with_soft_combining(mode, device, n_frames)` captures n_frames sample buffers,
+combines them, then demodulates and RS-decodes the result.
+
+No wire protocol change — the sender simply retransmits the same frame; the receiver
+accumulates. Decodes using the standard RS codec (t=16); pair with
+`transmit_with_fec` on the sender side.
 
 ---
 

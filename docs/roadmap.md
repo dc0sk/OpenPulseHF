@@ -1106,6 +1106,54 @@ better BER than OFDM52, with ≥ 3 dB lower measured PAPR.
 
 **Dependencies**: FF-4 (OFDM plugin) ✅.
 
+---
+
+### FF-13 — Generic serial CAT for rigs not in hamlib
+
+Current rig control is fully dependent on hamlib (`rigctld`) for frequency/mode/level
+commands.  Rigs that are unsupported or only partially supported by hamlib cannot use
+CAT-dependent features (QSY, per-band TX attenuation, remote rig control) and must fall
+back to `SerialRtsDtrPtt` (PTT only) or `VoxPtt`.
+
+**Goal**: add a `GenericSerialCat` backend in `crates/openpulse-radio/` that lets users
+define a rig's CAT protocol via a small TOML script (command templates + response parsers),
+without requiring a hamlib driver.
+
+**Scope**:
+- `crates/openpulse-radio/src/generic_cat.rs`: `GenericSerialCat` implementing `PttController`
+  and a new `CatController` trait (subset: `set_frequency`, `get_frequency`, `set_mode`, PTT).
+- TOML rig definition format: one file per rig model, listing baud rate, byte framing, and
+  per-command byte sequences with optional regex response parser.
+- `crates/openpulse-config/`: `[rig]` section gains `backend = "generic"` and `rig_file = "path/to/rig.toml"`.
+- Ship at least two reference rig files: Icom CI-V (e.g. IC-7300) and Yaesu FT-8x7 binary CAT.
+
+**Limitations accepted at this stage**: features that require real-time level polling
+(S-meter-driven SNR, ALC feedback, power-out reporting) will be unavailable or return
+`RadioError::Unsupported` unless the rig definition provides the relevant command.  The
+QSY and per-band-attenuation features will work as long as `set_frequency` is defined.
+
+**Acceptance criterion**: IC-7300 or FT-817 loopback test (using a mock serial port) sets
+frequency, mode, and PTT via `GenericSerialCat`; `RigctldController`-dependent paths
+degrade gracefully to `RadioError::Unsupported` when the rig file omits the command.
+
+**Dependencies**: Phase 1.5 (`openpulse-radio` crate) ✅, Phase 5.3 (TOML config) ✅.
+
+---
+
+## BL-FEC series — FEC codec improvements
+
+Incremental FEC improvements tracked in [`docs/backlog-fec-improvements.md`](backlog-fec-improvements.md).
+
+| Item | Description | Status |
+|---|---|---|
+| BL-FEC-1 | Concatenated Conv+RS session mode | ✅ Done (PR #169) |
+| BL-FEC-2 | RS t=32 strong codec (RS(255,191), 25% overhead) | Active |
+| BL-FEC-3 | Short-block RS for ACK/control frames (5 B → 13 B) | ✅ Done (PR #170) |
+| BL-FEC-4 | Memory-ARQ soft combining (element-wise sample averaging) | Active |
+| BL-FEC-5 | Soft-decision K=7 Viterbi | Deferred — no crate |
+| BL-FEC-6 | Turbo / LDPC codes | Deferred — GPU required |
+
+---
 
 The following dependencies constrain the execution sequence:
 
