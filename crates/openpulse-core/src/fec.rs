@@ -53,8 +53,8 @@ impl FecMode {
         }
     }
 
-    /// Select the strongest mode that appears in both slices.  Returns `None`
-    /// if the mode is absent from either slice, `None` variant if no overlap.
+    /// Select the strongest mode that appears in both slices.
+    /// Returns `FecMode::None` if there is no overlap between `offered` and `accepted`.
     pub fn negotiate(offered: &[FecMode], accepted: &[FecMode]) -> FecMode {
         offered
             .iter()

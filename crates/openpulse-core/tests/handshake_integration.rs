@@ -151,6 +151,7 @@ fn valid_conack_accepted() {
         &ack,
         "sess-010",
         &[],
+        &[],
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
@@ -175,6 +176,7 @@ fn conack_rejected_session_id_mismatch() {
     let result = verify_conack(
         &ack,
         "sess-WRONG",
+        &[],
         &[],
         &store,
         PolicyProfile::Balanced,
@@ -203,6 +205,7 @@ fn conack_rejected_invalid_signature() {
     let result = verify_conack(
         &ack,
         "sess-010",
+        &[],
         &[],
         &store,
         PolicyProfile::Balanced,
@@ -253,6 +256,7 @@ fn full_handshake_round_trip() {
         &ack,
         &req.session_id,
         &req.supported_compression,
+        &req.supported_fec_modes,
         &alice_store,
         PolicyProfile::Strict,
         SigningMode::Normal,
@@ -362,4 +366,33 @@ fn fec_no_overlap_falls_back_to_none() {
     let offered = [FecMode::Rs];
     let accepted = [FecMode::RsInterleaved];
     assert_eq!(FecMode::negotiate(&offered, &accepted), FecMode::None);
+}
+
+#[test]
+fn conack_rejected_when_fec_mode_not_offered() {
+    // Initiator advertises no FEC; responder selects Concatenated anyway.
+    let ack = ConAck::create(
+        "KD9XYZ",
+        &make_seed(30),
+        SigningMode::Normal,
+        "sess-fec-rej",
+        CompressionAlgorithm::None,
+        FecMode::Concatenated,
+    )
+    .unwrap();
+
+    let store = InMemoryTrustStore::new();
+    let result = verify_conack(
+        &ack,
+        "sess-fec-rej",
+        &[],
+        &[], // initiator offered no FEC modes
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+    );
+    assert!(
+        matches!(result, Err(HandshakeError::UnsupportedFecMode)),
+        "selecting an unoffered FEC mode must be rejected"
+    );
 }

@@ -28,6 +28,8 @@ pub enum HandshakeError {
     Encoding(String),
     #[error("responder selected a compression algorithm not offered by the initiator")]
     UnsupportedCompression,
+    #[error("responder selected a FEC mode not offered by the initiator")]
+    UnsupportedFecMode,
 }
 
 impl From<TrustError> for HandshakeError {
@@ -106,7 +108,7 @@ struct ConReqBody {
     signing_modes: Vec<SigningMode>,
     session_id: String,
     supported_compression: Vec<CompressionAlgorithm>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     supported_fec_modes: Vec<FecMode>,
 }
 
@@ -227,8 +229,12 @@ struct ConAckBody {
     selected_mode: SigningMode,
     session_id: String,
     selected_compression: CompressionAlgorithm,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "fec_mode_is_none")]
     selected_fec_mode: FecMode,
+}
+
+fn fec_mode_is_none(m: &FecMode) -> bool {
+    *m == FecMode::None
 }
 
 /// Connection acknowledgment sent by the responder during Discovery.
@@ -395,13 +401,15 @@ pub fn verify_conreq(
 ///
 /// `req_session_id` must match the session ID in the ConAck. `req_supported_compression`
 /// is the list advertised by the initiator; the responder's `selected_compression` must
-/// appear in that list (or be `None`, which is always allowed). Fails if the signature is
-/// invalid, the session ID does not match, compression is not mutually supported, or the
+/// appear in that list (or be `None`, which is always allowed). `req_supported_fec_modes`
+/// is similarly checked for `selected_fec_mode`. Fails if the signature is invalid, the
+/// session ID does not match, compression or FEC mode is not mutually supported, or the
 /// trust policy rejects the responder.
 pub fn verify_conack(
     ack: &ConAck,
     req_session_id: &str,
     req_supported_compression: &[CompressionAlgorithm],
+    req_supported_fec_modes: &[FecMode],
     trust_store: &dyn TrustStore,
     policy: PolicyProfile,
     local_min_mode: SigningMode,
@@ -417,6 +425,12 @@ pub fn verify_conack(
         && !req_supported_compression.contains(&ack.selected_compression)
     {
         return Err(HandshakeError::UnsupportedCompression);
+    }
+
+    if ack.selected_fec_mode != FecMode::None
+        && !req_supported_fec_modes.contains(&ack.selected_fec_mode)
+    {
+        return Err(HandshakeError::UnsupportedFecMode);
     }
 
     let canonical = ack.canonical_bytes()?;
