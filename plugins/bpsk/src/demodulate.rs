@@ -162,6 +162,65 @@ pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32
     Some(estimate_frequency_offset(&i_syms, &q_syms, baud))
 }
 
+/// Demodulate audio `samples` and return per-bit soft log-likelihood ratios.
+///
+/// Returns one `f32` per decoded bit, with **positive = bit more likely 0**.
+/// Uses the differential-detection dot product directly (real part of
+/// z[k] × conj(z[k−1])) as the soft value; positive dot → same phase → bit 0.
+///
+/// RRC modes fall back to hard ±1.0 pseudo-LLRs (no soft-output RRC path yet).
+pub fn bpsk_demodulate_soft(
+    samples: &[f32],
+    config: &ModulationConfig,
+) -> Result<Vec<f32>, ModemError> {
+    // RRC path: fall back to hard ±1 LLRs — no matched-filter soft-output path yet.
+    if matches!(config.pulse_shape, PulseShape::Rrc { .. }) || config.mode.ends_with("-RRC") {
+        let bytes = bpsk_demodulate(samples, config)?;
+        return Ok(bytes
+            .iter()
+            .flat_map(|&b| (0..8u8).map(move |i| if (b >> i) & 1 == 0 { 1.0f32 } else { -1.0f32 }))
+            .collect());
+    }
+
+    let baud = parse_baud_rate(&config.mode)?;
+    let fs = config.sample_rate as f32;
+    let fc = config.center_frequency;
+    let n = samples_per_symbol(fs, baud)?;
+
+    if samples.len() < n * (PREAMBLE_SYMS + 1) {
+        return Err(ModemError::Demodulation("signal too short".into()));
+    }
+
+    let offset = find_timing_offset(samples, n, fc, fs);
+    let (i_syms, q_syms) = demodulate_iq(samples, n, fc, fs, offset);
+
+    if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
+        return Err(ModemError::Demodulation(
+            "no data symbols after preamble".into(),
+        ));
+    }
+
+    let range_start = PREAMBLE_SYMS - 1;
+    let data_syms_end = i_syms.len() - TAIL_SYMS;
+    let iq: Vec<(f32, f32)> = i_syms[range_start..data_syms_end]
+        .iter()
+        .zip(q_syms[range_start..data_syms_end].iter())
+        .map(|(&i, &q)| (i, q))
+        .collect();
+
+    // dot = Re(z[k] × conj(z[k-1])) = i1*i0 + q1*q0
+    // Positive → same phase → NRZI "0" → bit 0 → LLR > 0 ✓
+    let llrs = iq
+        .windows(2)
+        .map(|w| {
+            let (i0, q0) = w[0];
+            let (i1, q1) = w[1];
+            i1 * i0 + q1 * q0
+        })
+        .collect();
+    Ok(llrs)
+}
+
 /// GPU-accelerated demodulation path.
 #[cfg(feature = "gpu")]
 pub fn bpsk_demodulate_with_gpu(

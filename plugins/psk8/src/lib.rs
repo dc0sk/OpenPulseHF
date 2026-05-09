@@ -61,6 +61,20 @@ impl ModulationPlugin for Psk8Plugin {
     ) -> Result<Vec<u8>, ModemError> {
         demodulate::psk8_demodulate(samples, config)
     }
+
+    fn demodulate_soft(
+        &self,
+        samples: &[f32],
+        config: &ModulationConfig,
+    ) -> Result<Vec<f32>, ModemError> {
+        // TODO(BL-FEC-5): implement Gray-coded 8PSK max-log-MAP soft demapping (~1 dB gain).
+        // For now, fall back to the hard ±1.0 pseudo-LLRs from the trait default.
+        let bytes = self.demodulate(samples, config)?;
+        Ok(bytes
+            .iter()
+            .flat_map(|&b| (0..8u8).map(move |i| if (b >> i) & 1 == 0 { 1.0f32 } else { -1.0f32 }))
+            .collect())
+    }
 }
 
 /// Parse numeric baud rate from the trailing digits of modes such as "8PSK500", "8PSK1000-HF", or "8PSK500-RRC".
