@@ -119,10 +119,10 @@ pub struct TestStats {
     pub fail: u64,
     pub total_bits: u64,
     pub error_bits: u64,
-    /// Bit errors in the raw modem output that FEC subsequently corrected.
-    pub fec_corrected_bits: u64,
-    /// Total bit errors that entered the FEC decoder (corrected + uncorrectable).
-    pub fec_channel_error_bits: u64,
+    /// Bit errors FEC corrected in the most recent transmission.
+    pub last_fec_corrected_bits: u64,
+    /// Total channel bit errors entering FEC in the most recent transmission.
+    pub last_fec_channel_error_bits: u64,
     /// compressed_bytes / original_bytes for the last run (1.0 = no compression / no saving).
     pub last_compress_ratio: f64,
     /// Sliding window for effective-bitrate calculation: (timestamp, payload_bits_delivered).
@@ -142,8 +142,8 @@ impl TestStats {
             fail: 0,
             total_bits: 0,
             error_bits: 0,
-            fec_corrected_bits: 0,
-            fec_channel_error_bits: 0,
+            last_fec_corrected_bits: 0,
+            last_fec_channel_error_bits: 0,
             last_compress_ratio: 1.0,
             rate_window: VecDeque::new(),
             event_log: VecDeque::new(),
@@ -160,13 +160,13 @@ impl TestStats {
         }
     }
 
-    /// Fraction of channel bit errors that FEC successfully corrected, or `None` if no
-    /// FEC errors have been observed yet.
+    /// Fraction of channel bit errors FEC corrected in the last transmission, or `None`
+    /// if the last transmission had no channel errors entering the FEC decoder.
     pub fn fec_correction_rate(&self) -> Option<f32> {
-        if self.fec_channel_error_bits == 0 {
+        if self.last_fec_channel_error_bits == 0 {
             None
         } else {
-            Some(self.fec_corrected_bits as f32 / self.fec_channel_error_bits as f32)
+            Some(self.last_fec_corrected_bits as f32 / self.last_fec_channel_error_bits as f32)
         }
     }
 
