@@ -111,7 +111,10 @@ See [`docs/roadmap.md`](docs/roadmap.md) for per-item ✅ markers and PR referen
 Active work tracks:
 
 - **FF-12 SC-FDMA**: pending OFDM PAPR measurement gate — implement only if clipping-induced spectral regrowth ≥ −40 dBc
-- **FF-13 Generic serial CAT**: TOML-scriptable rig control for rigs not in hamlib (Icom CI-V, Yaesu binary CAT)
+
+Recently completed:
+
+- **FF-13 Generic serial CAT** ✅: TOML-scriptable rig control for rigs not in hamlib (Icom CI-V, Yaesu binary CAT) — PR #173
 
 ---
 
