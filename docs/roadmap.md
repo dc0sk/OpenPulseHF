@@ -1147,9 +1147,9 @@ Incremental FEC improvements tracked in [`docs/backlog-fec-improvements.md`](bac
 | Item | Description | Status |
 |---|---|---|
 | BL-FEC-1 | Concatenated Conv+RS session mode | ✅ Done (PR #169) |
-| BL-FEC-2 | RS t=32 strong codec (RS(255,191), 25% overhead) | Active |
+| BL-FEC-2 | RS t=32 strong codec (RS(255,191), 25% overhead) | ✅ Done (PR #171) |
 | BL-FEC-3 | Short-block RS for ACK/control frames (5 B → 13 B) | ✅ Done (PR #170) |
-| BL-FEC-4 | Memory-ARQ soft combining (element-wise sample averaging) | Active |
+| BL-FEC-4 | Memory-ARQ soft combining (element-wise sample averaging) | ✅ Done (PR #171) |
 | BL-FEC-5 | Soft-decision K=7 Viterbi | Deferred — no crate |
 | BL-FEC-6 | Turbo / LDPC codes | Deferred — GPU required |
 

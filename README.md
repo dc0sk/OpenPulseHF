@@ -96,6 +96,8 @@ All items below are merged, tested, and in `main`:
 - **FF-1 ext — QSY trust gating**: `allow_trustlevels` wired from config into `QsyPolicy`; fail-closed parsing rejects unknown trust-level strings at startup
 - **BL-FEC-1 Concatenated Conv+RS FEC** (PR #169): `transmit_with_concatenated_fec` / `receive_with_concatenated_fec`; Conv(rate-1/2) inner + RS(255,223) outer; ~2.28× overhead; `FecMode::Concatenated` in handshake negotiation
 - **BL-FEC-3 Short-block RS for ACK frames** (PR #170): `ShortFecCodec` encodes 5-byte FSK4-ACK frames to 13 bytes (5 + 8 ECC, t=4); `FecMode::ShortRs` (strength 4); `transmit_ack_with_short_fec` / `receive_ack_with_short_fec`
+- **BL-FEC-2 Strong RS codec** (PR #171): `FecCodec::strong()` — RS(255,191) with t=32 (64 ECC bytes/block); corrects up to 32 byte errors vs. 16; `FecMode::RsStrong` (strength 5); `transmit_with_strong_fec` / `receive_with_strong_fec`
+- **BL-FEC-4 Memory-ARQ soft combining** (PR #171): `SoftCombiner` accumulates N retransmission sample buffers; `receive_with_soft_combining` averages element-wise before demodulation; ~3 dB SNR gain per doubling of retransmissions; no wire protocol change
 - **Phase 9 signal-path analytics**: IQ scatter plot, SNR trend, asymmetric rate adaptation, SNR-driven step-down, broadcast/beacon mode alongside ARQ
 - **Winlink gateway**: direct TCP connection to `cms.winlink.org`, ISS and IRS roles, LZHUF (Type C) and Gzip (Type D) compression
 - **PKI service**: Ed25519 trust-bundle signing, REST API, PostgreSQL backend
@@ -108,8 +110,6 @@ See [`docs/roadmap.md`](docs/roadmap.md) for per-item ✅ markers and PR referen
 
 Active work tracks:
 
-- **BL-FEC-2**: RS(255,191) t=32 strong codec — corrects up to 32 byte errors per block vs. t=16 today; new `FecMode::RsStrong` for handshake negotiation; 25% overhead vs. 14% for standard RS
-- **BL-FEC-4**: Memory-ARQ soft combining — element-wise average of N retransmission sample buffers before demodulation; ~3 dB SNR gain per doubling of retransmissions; no wire protocol change
 - **FF-12 SC-FDMA**: pending OFDM PAPR measurement gate — implement only if clipping-induced spectral regrowth ≥ −40 dBc
 - **FF-13 Generic serial CAT**: TOML-scriptable rig control for rigs not in hamlib (Icom CI-V, Yaesu binary CAT)
 
