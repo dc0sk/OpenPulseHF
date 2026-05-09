@@ -44,30 +44,30 @@ fn rig_widget(ui: &mut Ui, label: &str, snap: Option<&RigSnapshot>) {
     }
 }
 
-/// Left pane: spectrum placeholder + DCD energy bar.
+/// Left pane: real power-spectrum plot + DCD energy bar.
 pub fn draw_spectrum_pane(ui: &mut Ui, st: &PanelState) {
     ui.vertical(|ui| {
-        ui.label(RichText::new("Spectrum / AFC").strong());
+        ui.label(RichText::new("Spectrum").strong());
 
-        // Simple AFC offset plot using the last known value.
-        let afc = st.afc_hz;
-        let points: PlotPoints = (0..=100)
-            .map(|i| {
-                let x = (i as f64 - 50.0) * 30.0; // ±1500 Hz range
-                let dist = (x - afc as f64).abs();
-                let y = (-dist * dist / (2.0 * 150.0 * 150.0)).exp();
-                [x + 1500.0, y]
-            })
-            .collect();
-
-        Plot::new("spectrum")
-            .height(120.0)
-            .include_y(0.0)
-            .include_y(1.1)
-            .x_axis_label("Hz")
-            .show(ui, |plot_ui| {
-                plot_ui.line(Line::new(points).color(Color32::from_rgb(100, 200, 100)));
-            });
+        if st.spectrum_bins.is_empty() {
+            ui.label(RichText::new("waiting for spectrum…").color(Color32::DARK_GRAY));
+        } else {
+            let points: PlotPoints = st
+                .spectrum_bins
+                .iter()
+                .enumerate()
+                .map(|(i, &v)| [i as f64, v as f64])
+                .collect();
+            Plot::new("spectrum")
+                .height(120.0)
+                .include_y(-120.0)
+                .include_y(0.0)
+                .x_axis_label("bin")
+                .y_axis_label("dBFS")
+                .show(ui, |plot_ui| {
+                    plot_ui.line(Line::new(points).color(Color32::from_rgb(100, 200, 100)));
+                });
+        }
 
         // DCD energy bar.
         ui.horizontal(|ui| {

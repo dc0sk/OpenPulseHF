@@ -1,15 +1,21 @@
 //! Background TCP connection thread.
 //!
-//! Connects to `openpulse-server` control port, reads `ControlEvent` NDJSON lines,
-//! applies them to [`PanelState`], and forwards `ControlCommand`s from the UI.
+//! Connects to `openpulse-server` control port, reads `ControlEvent` NDJSON lines
+//! and binary spectrum frames, applies them to [`PanelState`], and forwards
+//! `ControlCommand`s from the UI.
+//!
+//! After connecting, the thread immediately sends `SubscribeSpectrum { fps: 20 }`.
+//! The read loop distinguishes binary spectrum frames from NDJSON lines by peeking
+//! at the first byte: `O` (0x4F = `SPECTRUM_MAGIC[0]`) → binary frame, otherwise
+//! → NDJSON line.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
-use openpulse_daemon::protocol::{ControlCommand, ControlEvent};
+use openpulse_daemon::protocol::{ControlCommand, ControlEvent, SPECTRUM_MAGIC};
 
 use crate::state::{PanelState, RigSnapshot};
 
@@ -73,14 +79,22 @@ fn run_session(
     cmd_rx: &Receiver<ControlCommand>,
 ) {
     let mut write_half = stream.try_clone().unwrap();
-    let reader = BufReader::new(stream);
+    let mut reader = BufReader::new(stream);
 
-    for line in reader.lines() {
+    // Subscribe to spectrum immediately on connect.
+    if let Ok(mut s) = serde_json::to_string(&ControlCommand::SubscribeSpectrum { fps: 20 }) {
+        s.push('\n');
+        let _ = write_half.write_all(s.as_bytes());
+    }
+
+    let mut line = String::new();
+
+    loop {
         if stop_rx.try_recv().is_ok() {
             break;
         }
 
-        // Forward any pending commands.
+        // Forward any pending commands from the UI.
         while let Ok(cmd) = cmd_rx.try_recv() {
             if let Ok(mut s) = serde_json::to_string(&cmd) {
                 s.push('\n');
@@ -88,23 +102,62 @@ fn run_session(
             }
         }
 
-        match line {
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
-            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
+        // Peek at the first buffered byte to decide how to read.
+        let first_byte = match reader.fill_buf() {
+            Err(ref e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                continue
+            }
             Err(_) => break,
-            Ok(text) => {
-                let text = text.trim().to_string();
-                if text.is_empty() {
-                    continue;
+            Ok(&[]) => break, // EOF
+            Ok(buf) => buf[0],
+        };
+
+        if first_byte == SPECTRUM_MAGIC[0] {
+            // Binary spectrum frame: 4 magic + 2 fft_size LE + 4 sample_rate LE + bins.
+            let mut header = [0u8; 10];
+            if reader.read_exact(&mut header).is_err() {
+                break;
+            }
+            if &header[0..4] != SPECTRUM_MAGIC {
+                break;
+            }
+            let fft_size = u16::from_le_bytes([header[4], header[5]]) as usize;
+            let mut bin_bytes = vec![0u8; fft_size * 4];
+            if reader.read_exact(&mut bin_bytes).is_err() {
+                break;
+            }
+            let bins: Vec<f32> = bin_bytes
+                .chunks_exact(4)
+                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect();
+            shared.lock().unwrap().spectrum_bins = bins;
+        } else {
+            // NDJSON line.
+            line.clear();
+            match reader.read_line(&mut line) {
+                Err(ref e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    continue
                 }
-                apply_event(&text, shared);
+                Err(_) | Ok(0) => break,
+                Ok(_) => {
+                    let text = line.trim().to_string();
+                    if !text.is_empty() {
+                        apply_event(&text, shared);
+                    }
+                }
             }
         }
     }
 }
 
 fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
-    // Try CommandResponse first (has `ok` field, not `type`).
+    // CommandResponse has `ok` field; skip it.
     if line.contains("\"ok\"") {
         return;
     }

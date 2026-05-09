@@ -16,6 +16,7 @@ openpulse-modem  = { workspace = true }
 openpulse-radio  = { workspace = true }
 openpulse-audio  = { workspace = true }
 openpulse-config = { workspace = true }
+openpulse-channel = { workspace = true }
 serde            = { workspace = true, features = ["derive"] }
 serde_json       = { workspace = true }
 thiserror.workspace = true

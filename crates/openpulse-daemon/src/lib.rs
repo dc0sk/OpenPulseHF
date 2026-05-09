@@ -4,17 +4,23 @@
 //! concurrent client connections.  Each client receives the full unsolicited
 //! [`ControlEvent`] stream and may send [`ControlCommand`] lines which are
 //! dispatched back to the caller via an `mpsc` channel.
+//!
+//! Clients that send [`ControlCommand::SubscribeSpectrum`] receive binary
+//! spectrum frames interleaved with the NDJSON event stream on the same
+//! connection.  See [`protocol::encode_spectrum_frame`] for the wire format.
 
 pub mod protocol;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
+use openpulse_channel::dsp::PowerSpectrum;
 use openpulse_modem::ModemEngine;
-use protocol::{CommandResponse, ControlCommand, ControlEvent};
+use protocol::{encode_spectrum_frame, CommandResponse, ControlCommand, ControlEvent};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
 pub use protocol::ControlCommand as Command;
 pub use protocol::ControlEvent as Event;
@@ -23,6 +29,8 @@ pub use protocol::ControlEvent as Event;
 pub type SharedMode = Arc<Mutex<String>>;
 /// Shared mutable TX attenuation (dB), written by `set_tx_attenuation` commands.
 pub type SharedAttenuation = Arc<Mutex<f32>>;
+/// Shared audio sample tap for spectrum computation (most-recent 1024 samples).
+pub type SpectrumTap = Arc<RwLock<Vec<f32>>>;
 
 /// Handle returned by [`ControlServer::spawn`].
 ///
@@ -35,6 +43,8 @@ pub struct ControlServerHandle {
     pub active_mode: SharedMode,
     /// Current TX attenuation in dB (also updated by the command handler).
     pub tx_attenuation_db: SharedAttenuation,
+    /// Audio sample tap; caller may write recent RX samples here.
+    pub spectrum_tap: SpectrumTap,
 }
 
 /// NDJSON-over-TCP control server.
@@ -66,6 +76,7 @@ impl ControlServer {
 
         let active_mode = Arc::new(Mutex::new(initial_mode));
         let tx_attenuation_db: SharedAttenuation = Arc::new(Mutex::new(0.0f32));
+        let spectrum_tap: SpectrumTap = Arc::new(RwLock::new(vec![0.0f32; 1024]));
 
         // Background task: forward EngineEvents into the ControlEvent broadcast.
         let mut eng_rx = engine.subscribe();
@@ -85,7 +96,7 @@ impl ControlServer {
         // Background task: periodic Metrics events at 1 Hz.
         let ev_tx_metrics = Arc::clone(&ev_tx);
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
             loop {
                 interval.tick().await;
                 let ev = ControlEvent::Metrics {
@@ -104,6 +115,7 @@ impl ControlServer {
         let cmd_tx_accept = cmd_tx.clone();
         let mode_accept = Arc::clone(&active_mode);
         let atten_accept = Arc::clone(&tx_attenuation_db);
+        let tap_accept = Arc::clone(&spectrum_tap);
         tokio::spawn(async move {
             loop {
                 match listener.accept().await {
@@ -113,7 +125,8 @@ impl ControlServer {
                         let cmd_tx = cmd_tx_accept.clone();
                         let mode = Arc::clone(&mode_accept);
                         let atten = Arc::clone(&atten_accept);
-                        tokio::spawn(handle_client(stream, rx, cmd_tx, mode, atten));
+                        let tap = Arc::clone(&tap_accept);
+                        tokio::spawn(handle_client(stream, rx, cmd_tx, mode, atten, tap));
                     }
                     Err(e) => {
                         tracing::warn!("control port accept error: {e}");
@@ -126,23 +139,36 @@ impl ControlServer {
             commands: cmd_rx,
             active_mode,
             tx_attenuation_db,
+            spectrum_tap,
         })
     }
 }
 
-/// Per-client handler: streams events out, reads commands in.
+/// Per-client handler: streams events out, reads commands in, optionally sends
+/// binary spectrum frames when the client has subscribed.
 async fn handle_client(
     stream: TcpStream,
     mut ev_rx: broadcast::Receiver<ControlEvent>,
     cmd_tx: mpsc::Sender<ControlCommand>,
     active_mode: SharedMode,
     tx_attenuation_db: SharedAttenuation,
+    spectrum_tap: SpectrumTap,
 ) {
     let (read_half, mut write_half) = stream.into_split();
     let mut lines = BufReader::new(read_half).lines();
 
+    // Per-client channel for binary spectrum frames produced by the spectrum task.
+    let (spec_frame_tx, mut spec_frame_rx) = mpsc::channel::<Vec<u8>>(4);
+    let mut spectrum_task: Option<tokio::task::JoinHandle<()>> = None;
+
     loop {
         tokio::select! {
+            // Binary spectrum frames (only populated when client has subscribed).
+            Some(frame) = spec_frame_rx.recv() => {
+                if write_half.write_all(&frame).await.is_err() {
+                    break;
+                }
+            }
             // Outbound: forward events to client.
             result = ev_rx.recv() => {
                 match result {
@@ -164,14 +190,47 @@ async fn handle_client(
             result = lines.next_line() => {
                 match result {
                     Ok(Some(line)) if !line.trim().is_empty() => {
-                        let resp = dispatch_command(&line, &cmd_tx, &active_mode, &tx_attenuation_db).await;
-                        let mut out = match serde_json::to_string(&resp) {
-                            Ok(s) => s,
-                            Err(_) => continue,
+                        // Parse command first to check for SubscribeSpectrum.
+                        let cmd: ControlCommand = match serde_json::from_str(line.trim()) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                let resp = CommandResponse::err(format!("parse error: {e}"));
+                                let _ = send_json(&mut write_half, &resp).await;
+                                continue;
+                            }
                         };
-                        out.push('\n');
-                        if write_half.write_all(out.as_bytes()).await.is_err() {
-                            break;
+
+                        if let ControlCommand::SubscribeSpectrum { fps } = &cmd {
+                            let fps = (*fps).max(1).min(100);
+                            // Cancel existing spectrum task for this client, if any.
+                            if let Some(h) = spectrum_task.take() {
+                                h.abort();
+                            }
+                            let tap = Arc::clone(&spectrum_tap);
+                            let tx = spec_frame_tx.clone();
+                            let period = Duration::from_millis(1000 / fps as u64);
+                            spectrum_task = Some(tokio::spawn(async move {
+                                let mut interval = tokio::time::interval(period);
+                                let mut ps = PowerSpectrum::new();
+                                loop {
+                                    interval.tick().await;
+                                    let samples = tap.read().await.clone();
+                                    let bins = ps.compute(&samples);
+                                    let frame = encode_spectrum_frame(8000, &bins);
+                                    if tx.send(frame).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }));
+                            let resp = CommandResponse::ok();
+                            let _ = send_json(&mut write_half, &resp).await;
+                        } else {
+                            let resp =
+                                dispatch_command(&line, &cmd_tx, &active_mode, &tx_attenuation_db)
+                                    .await;
+                            if send_json(&mut write_half, &resp).await.is_err() {
+                                break;
+                            }
                         }
                     }
                     Ok(None) => break, // client disconnected
@@ -181,6 +240,20 @@ async fn handle_client(
             }
         }
     }
+
+    if let Some(h) = spectrum_task {
+        h.abort();
+    }
+}
+
+/// Serialise `value` as JSON + newline and write it to `writer`.
+async fn send_json<T: serde::Serialize>(
+    writer: &mut tokio::net::tcp::OwnedWriteHalf,
+    value: &T,
+) -> Result<(), std::io::Error> {
+    let mut s = serde_json::to_string(value).unwrap_or_default();
+    s.push('\n');
+    writer.write_all(s.as_bytes()).await
 }
 
 /// Parse and dispatch a single command line; returns the response.
