@@ -3,7 +3,9 @@ use std::f32::consts::PI;
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
 use openpulse_dsp::filter::FirFilter;
+use openpulse_dsp::pll::CarrierPll;
 use openpulse_dsp::rrc::generate_rrc_coefficients;
+use openpulse_dsp::timing::GardnerDetector;
 
 use crate::modulate::{
     gray_map_8psk, preamble_symbols, samples_per_symbol, PREAMBLE_SYMS, RRC_SPAN_SYMBOLS, TAIL_SYMS,
@@ -90,18 +92,37 @@ fn psk8_demodulate_rrc(
     let i_bb = rrc_filter(i_mix);
     let q_bb = rrc_filter(q_mix);
 
-    // 3. Brute-force timing search using full I+Q correlation (more reliable for
-    //    8PSK because four preamble symbols have I=0 and would weaken an I-only search).
-    let timing = find_timing_offset_bb_iq(&i_bb, &q_bb, n);
+    // 3. Coarse timing acquisition via IQ preamble correlation (brute-force).
+    let initial_timing = find_timing_offset_bb_iq(&i_bb, &q_bb, n);
 
-    // 4. Sample at ISI-free positions.
-    // Use ceiling division so a non-zero timing offset never drops the last symbol.
-    let aligned_i = &i_bb[timing.min(i_bb.len())..];
-    let aligned_q = &q_bb[timing.min(q_bb.len())..];
-    let n_syms = aligned_i.len().div_ceil(n);
-    (0..n_syms)
-        .map(|k| (aligned_i[k * n], aligned_q[k * n]))
-        .collect()
+    // 4. Adaptive timing + carrier recovery.
+    gardner_pll_sample_rrc(&i_bb, &q_bb, n, initial_timing)
+}
+
+/// Adaptive timing (Gardner) + carrier recovery (Costas PLL) for 8PSK-RRC.
+///
+/// `initial_timing` seeds the Gardner loop from the IQ preamble correlation.
+/// The Costas PLL (psk_order=3) corrects residual carrier phase and frequency offset.
+fn gardner_pll_sample_rrc(
+    i_bb: &[f32],
+    q_bb: &[f32],
+    n: usize,
+    initial_timing: usize,
+) -> Vec<(f32, f32)> {
+    let start = initial_timing.min(i_bb.len());
+    let mut det = GardnerDetector::new(n, 0.02);
+    // Pre-arm so the first sample at `start` (already an ISI-free point) is output immediately.
+    det.pre_arm();
+    let mut pll = CarrierPll::new(0.02, 3);
+    let mut syms = Vec::new();
+    for (idx, &s_i) in i_bb[start..].iter().enumerate() {
+        if det.update(s_i).is_some() {
+            let s_q = q_bb.get(start + idx).copied().unwrap_or(0.0);
+            pll.update(s_i, s_q);
+            syms.push(pll.correct(s_i, s_q));
+        }
+    }
+    syms
 }
 
 /// Brute-force timing search using both I and Q baseband channels.

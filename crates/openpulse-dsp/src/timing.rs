@@ -78,6 +78,15 @@ impl GardnerDetector {
         self.samples = [0.0; 3];
         self.phase = 0;
     }
+
+    /// Pre-arm the detector so the next sample fed to [`update`] triggers a strobe.
+    ///
+    /// Use this when the initial ISI-free sampling position is already known
+    /// (e.g. from a brute-force preamble search) and the first sample passed
+    /// to `update` should be output immediately rather than discarded.
+    pub fn pre_arm(&mut self) {
+        self.phase = self.sps - 1;
+    }
 }
 
 #[cfg(test)]
