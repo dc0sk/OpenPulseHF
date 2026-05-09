@@ -8,7 +8,8 @@ last_updated: 2026-05-09
 # FEC Improvements Backlog
 
 Research conducted 2026-05-09. Current state: RS(255,223) as primary, K=3 ConvCodec as
-optional alternative; concatenated Conv+RS and short-block RS both shipped.
+optional alternative; concatenated Conv+RS, short-block RS, strong RS(255,191), and
+Memory-ARQ soft combining all shipped.
 
 ---
 
@@ -30,18 +31,16 @@ RX: demodulate → ConvCodec Viterbi decode → RS decode → payload
 
 ---
 
-## BL-FEC-2 — Increase RS ECC to t=32 for AWGN robustness (High priority)
+## BL-FEC-2 — Increase RS ECC to t=32 for AWGN robustness ✅ Done (PR #171)
 
 **Problem:** RS(255,223) with t=16 corrects up to 16 byte errors per block. AWGN at 1% BER produces ~18 byte errors, which the standard codec cannot recover.
 
-**Solution:** Add a `FecCodec::strong()` constructor using `FEC_ECC_LEN_STRONG = 64` ECC bytes.
-New params: RS(255,191), t=32. Overhead increases from 14% to 25% (ECC bytes / block).
-
-**Implementation:** New constant and constructor alongside the existing `FecCodec::new()`;
-separate engine methods `transmit_with_strong_fec` / `receive_with_strong_fec`; new
-`FecMode::RsStrong` variant (strength 5) for handshake negotiation.
-
-**Wire compat:** Fully additive — existing sessions using `FecMode::Rs` are unaffected.
+**What was delivered:**
+- `FecCodec::strong()` — RS(255,191) with 64 ECC bytes per block (t=32); corrects up to 32 byte errors vs. 16 for standard RS; 25% overhead vs. 14%
+- `FecMode::RsStrong` (strength 5, highest) in handshake negotiation
+- `transmit_with_strong_fec` / `receive_with_strong_fec` in `ModemEngine`
+- `FecCodec` refactored with `ecc_len` field so both `new()` and `strong()` share the same encode/decode path
+- Loopback tests, 32-byte error correction test, behavioral comparison test proving strong corrects where standard fails
 
 ---
 
@@ -57,21 +56,18 @@ separate engine methods `transmit_with_strong_fec` / `receive_with_strong_fec`; 
 
 ---
 
-## BL-FEC-4 — Memory-ARQ soft combining (Medium priority)
+## BL-FEC-4 — Memory-ARQ soft combining ✅ Done (PR #171)
 
 **From docs/pactor-research.md.** Soft-combine signal samples from multiple NACK
 retransmissions before decoding (maximal-ratio combining). Each retransmission of the same
 frame is captured and the sample buffers are averaged element-wise before demodulation.
 Reduces required SNR by ~3 dB per doubling of retransmissions (coherent averaging gain).
 
-**Implementation:** `SoftCombiner` struct in `fec.rs` accumulates `Vec<f32>` sample
-buffers and computes an element-wise mean on `combine()`. Engine method
-`receive_with_soft_combining(mode, device, n_frames)` captures n_frames sample buffers,
-combines them, then demodulates and RS-decodes the result.
-
-No wire protocol change — the sender simply retransmits the same frame; the receiver
-accumulates. Decodes using the standard RS codec (t=16); pair with
-`transmit_with_fec` on the sender side.
+**What was delivered:**
+- `SoftCombiner` struct in `fec.rs` — accumulates `Vec<f32>` sample buffers; `combine()` returns element-wise mean; `count()` and `reset()`
+- `receive_with_soft_combining(mode, device, n_frames)` engine method — captures n_frames sample buffers, combines, demodulates, RS-decodes
+- No wire protocol change — sender retransmits the same frame; receiver accumulates
+- Decodes using the standard RS codec (t=16); pair with `transmit_with_fec` on the sender side
 
 ---
 
