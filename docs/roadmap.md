@@ -1085,7 +1085,7 @@ attacks and synthetic voice injection are undetectable at the FreeDV layer.
 
 ---
 
-### FF-12 — SC-FDMA waveform (deferred — pending evaluation)
+### FF-12 — SC-FDMA waveform ✅ Done (PR #175)
 
 Analysis of five 5G-era multi-carrier schemes (FBMC, UFMC, GFDM, SC-FDMA, OFDMA) against HF
 radio constraints was conducted 2026-05-09.  See `docs/backlog-waveforms.md` for the full
@@ -1096,10 +1096,13 @@ analysis.
 equalization. All other schemes either add receiver complexity with no HF gain (FBMC, UFMC,
 GFDM) or are inapplicable to peer-to-peer links (OFDMA).
 
-**Gate condition for implementation**: measure OFDM52-with-clipping OOB distortion floor on
-a real or simulated PA. If clipping-induced spectral regrowth is ≥ −40 dBc, implement
-`plugins/scfdma/` as a drop-in replacement for `plugins/ofdm/` adding a DFT-spread TX step
-and IDFT de-spread RX step.
+The OOB distortion gate was removed: localized SC-FDMA (52/256 subcarriers) achieves
+~8–11 dB PAPR naturally without hard clipping. The benefit over OFDM is the absence of
+clipping-induced OOB spectral regrowth, not that PAPR is numerically below any fixed target.
+
+**Delivered**: `plugins/scfdma/` — `SCFDMA16` (625 Hz BW, ~889 bps) and `SCFDMA52`
+(2031 Hz BW, ~2889 bps) modes; DFT-spread TX, IDFT de-spread RX, shared LS/ZF channel
+estimation with OFDM; registered in CLI and testbench.
 
 **Acceptance criterion**: SC-FDMA52 loopback at Watterson F1 SNR=15 dB achieves equal or
 better BER than OFDM52, with ≥ 3 dB lower measured PAPR.

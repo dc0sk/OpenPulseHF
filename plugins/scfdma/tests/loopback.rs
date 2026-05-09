@@ -66,24 +66,44 @@ fn scfdma16_papr_below_12db() {
 
 #[test]
 fn scfdma16_awgn_snr20db_zero_ber() {
-    use std::f32::consts::PI;
-
     let plugin = ScFdmaPlugin::new();
     let payload: Vec<u8> = (0u8..32).collect();
     let samples = plugin.modulate(&payload, &cfg("SCFDMA16")).unwrap();
 
-    // Add AWGN at 20 dB SNR.
+    // Add true Gaussian AWGN at 20 dB SNR using Box-Muller with a fixed LCG seed.
     let signal_power = samples.iter().map(|&s| s * s).sum::<f32>() / samples.len() as f32;
     let snr_linear = 10.0_f32.powf(20.0 / 10.0);
     let noise_std = (signal_power / snr_linear).sqrt();
 
-    // Deterministic pseudo-noise: sin-based for reproducibility.
-    let noisy: Vec<f32> = samples
-        .iter()
-        .enumerate()
-        .map(|(i, &s)| s + noise_std * (i as f32 * PI * 0.37).sin())
+    let noisy: Vec<f32> = gaussian_noise_iter(0xDEAD_BEEF_u64, samples.len())
+        .zip(samples.iter())
+        .map(|(n, &s)| s + noise_std * n)
         .collect();
 
     let rx = plugin.demodulate(&noisy, &cfg("SCFDMA16")).unwrap();
     assert_eq!(rx, payload, "SCFDMA16 should decode correctly at 20 dB SNR");
+}
+
+/// Deterministic standard-normal samples via Box-Muller + 64-bit LCG.
+fn gaussian_noise_iter(seed: u64, count: usize) -> impl Iterator<Item = f32> {
+    let mut state = seed;
+    let mut buf: Option<f32> = None;
+    (0..count).map(move |_| {
+        if let Some(v) = buf.take() {
+            return v;
+        }
+        // LCG step (Knuth multiplier)
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let u1 = (state >> 11) as f32 / (1u64 << 53) as f32;
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let u2 = (state >> 11) as f32 / (1u64 << 53) as f32;
+        let r = (-2.0 * u1.max(1e-12).ln()).sqrt();
+        let theta = 2.0 * std::f32::consts::PI * u2;
+        buf = Some(r * theta.sin());
+        r * theta.cos()
+    })
 }

@@ -8,7 +8,7 @@ use num_complex::Complex32;
 use rustfft::FftPlanner;
 
 use crate::channel::is_pilot;
-use crate::params::{params_for_mode, ScFdmaParams, CP, FFT_SIZE, PILOT_AMPLITUDE};
+use crate::params::{params_for_mode, ScFdmaParams, CP, FFT_SIZE, PILOT_AMPLITUDE, SYM_LEN};
 
 pub fn scfdma_modulate(payload: &[u8], mode: &str) -> Vec<f32> {
     let p = params_for_mode(mode).expect("caller must validate mode before scfdma_modulate");
@@ -39,7 +39,7 @@ fn modulate_with_params(payload: &[u8], p: &ScFdmaParams) -> Vec<f32> {
     let dft_scale = 1.0 / (p.n_data as f32).sqrt();
     let ifft_scale = 1.0 / (FFT_SIZE as f32).sqrt();
 
-    let mut out = Vec::with_capacity(n_syms * SYM_LEN_CONST);
+    let mut out = Vec::with_capacity(n_syms * SYM_LEN);
     let mut bit_idx = 0usize;
 
     for _ in 0..n_syms {
@@ -89,8 +89,6 @@ fn modulate_with_params(payload: &[u8], p: &ScFdmaParams) -> Vec<f32> {
 
     out
 }
-
-const SYM_LEN_CONST: usize = FFT_SIZE + CP;
 
 // ── QPSK constellation ────────────────────────────────────────────────────────
 
