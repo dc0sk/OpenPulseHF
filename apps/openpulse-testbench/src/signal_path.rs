@@ -449,8 +449,8 @@ fn update_stats(
     s.runs += 1;
     s.total_bits += n_bits as u64;
     s.error_bits += error_bits;
-    s.fec_channel_error_bits += fec_channel_errors;
-    s.fec_corrected_bits += fec_corrected;
+    s.last_fec_channel_error_bits = fec_channel_errors;
+    s.last_fec_corrected_bits = fec_corrected;
     s.last_compress_ratio = compress_ratio;
 
     // Sliding window: push this run's delivered bits and evict entries older than WINDOW_SECS.

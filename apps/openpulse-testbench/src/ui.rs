@@ -269,12 +269,12 @@ pub fn draw_stats(ui: &mut Ui, state: &AppState) {
                 Some(rate) => {
                     ui.label(format!("ECC: {:.1}%", rate * 100.0))
                         .on_hover_text(format!(
-                            "{} of {} channel bit errors corrected by RS(255,223)",
-                            stats.fec_corrected_bits, stats.fec_channel_error_bits
+                            "Last TX: {} of {} channel bit errors corrected by RS(255,223)",
+                            stats.last_fec_corrected_bits, stats.last_fec_channel_error_bits
                         ));
                 }
                 None => {
-                    ui.label("ECC: N/A");
+                    ui.label("ECC: —");
                 }
             }
             ui.separator();
