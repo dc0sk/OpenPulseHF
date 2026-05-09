@@ -50,7 +50,7 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 
 | Crate | Path | Role |
 |---|---|---|
-| `openpulse-core` | `crates/openpulse-core` | Traits, frame format, CRC-16, `FecCodec` (RS+Conv), `HpxSession` state machine, plugin registry, trust/signing, SAR, ACK, rate adaptation, relay, query propagation, peer cache, compression, PQ handshake |
+| `openpulse-core` | `crates/openpulse-core` | Traits, frame format, CRC-16, `FecCodec` (RS+Conv), `HpxSession`/`HpxReactor` state machine, plugin registry, trust/signing, SAR, ACK, rate adaptation, relay, query propagation, peer cache, compression, PQ handshake, Hilbert I/Q |
 | `openpulse-audio` | `crates/openpulse-audio` | `LoopbackBackend` (testing) and `CpalBackend` (hardware, feature-gated) |
 | `openpulse-modem` | `crates/openpulse-modem` | `ModemEngine`, `PipelineScheduler`, benchmark harness, diagnostics, CSMA/DCD, channel sim harness |
 | `openpulse-channel` | `crates/openpulse-channel` | Channel simulation (Watterson, Gilbert-Elliott, QRN/QRM/QSB/Chirp) |
@@ -100,7 +100,7 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 **Completed**: Phases 1–9, Phase 7 (7.1–7.5), Phase 8 (8.1–8.3), FF-1. See `docs/roadmap.md` for full history.
 
 **Active tracks**:
-- **FF series** — Far-future features; FF-1 (QSY) is done; FF-2 through FF-11 are deferred
+- **FF series** — Far-future features; FF-1 (QSY), FF-2 (I/Q output), FF-7 (tanh limiter), FF-8 (per-band TX attenuation), FF-9 (HPX reactor) are done; FF-3 through FF-6, FF-10, FF-11 are deferred
 
 Execute Phase 1 tasks in this order. Tasks within the same group are independent and may be parallelised.
 
