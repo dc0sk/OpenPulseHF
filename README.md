@@ -11,6 +11,9 @@ last_updated: 2026-05-09
 
 [![CI](https://github.com/dc0sk/OpenPulseHF/actions/workflows/ci.yml/badge.svg)](https://github.com/dc0sk/OpenPulseHF/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![Donate via PayPal](https://img.shields.io/badge/Donate-PayPal-blue.svg?logo=paypal)](https://www.paypal.com/donate/?hosted_button_id=WY9U4MQ3ZAQWC)
+
+**Author:** Simon Keimer · [DC0SK](https://github.com/dc0sk)
 
 OpenPulseHF is a full-stack HF digital radio modem: modulation plugins, ARQ session management,
 Winlink/B2F compatibility, AX.25/KISS bridging, a channel-simulation test harness, and a live

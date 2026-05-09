@@ -38,7 +38,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
-authors = ["OpenPulse Contributors"]
+authors = ["Simon Keimer (DC0SK)"]
 repository = "https://github.com/dc0sk/OpenPulse"
 
 [workspace.dependencies]

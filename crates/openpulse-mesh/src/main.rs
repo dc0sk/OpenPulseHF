@@ -16,7 +16,13 @@ use openpulse_core::relay::RelayTrustPolicy;
 use openpulse_mesh::trust_filter_from_policy;
 
 #[derive(Parser)]
-#[command(name = "openpulse-mesh", about = "HPX relay mesh daemon")]
+#[command(
+    name = "openpulse-mesh",
+    about = "HPX relay mesh daemon",
+    long_about = "HPX relay mesh daemon.\n\nAuthor: Simon Keimer (DC0SK)  <https://github.com/dc0sk>",
+    author,
+    version
+)]
 struct Cli {
     /// Override config file path.
     #[arg(long)]
