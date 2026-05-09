@@ -5,35 +5,36 @@ use openpulse_channel::{
 
 use crate::matrix::{ChannelSpec, Tier};
 
+/// AWGN SNR levels for the systematic sweep (full tier).
+pub const SNR_SWEEP_DB: &[f32] = &[0.0, 3.0, 5.0, 8.0, 10.0, 12.0, 15.0, 20.0, 25.0, 30.0];
+
+/// Quick-tier AWGN levels: clean + two reference points.
+pub const SNR_QUICK_DB: &[f32] = &[20.0, 10.0];
+
 pub fn channel_suite(tier: Tier) -> Vec<ChannelSpec> {
-    let mut channels = vec![
-        ChannelSpec::Clean,
-        ChannelSpec::Awgn {
-            snr_db: 20.0,
-            seed: 42,
-        },
-        ChannelSpec::Awgn {
-            snr_db: 10.0,
-            seed: 42,
-        },
-    ];
+    let mut channels = vec![ChannelSpec::Clean];
+
+    // AWGN sweep
+    let snr_levels = if tier == Tier::Full {
+        SNR_SWEEP_DB
+    } else {
+        SNR_QUICK_DB
+    };
+    for &snr_db in snr_levels {
+        channels.push(ChannelSpec::Awgn { snr_db, seed: 42 });
+    }
+
     if tier == Tier::Full {
         channels.extend([
-            ChannelSpec::Awgn {
-                snr_db: 5.0,
-                seed: 42,
-            },
-            ChannelSpec::Awgn {
-                snr_db: 0.0,
-                seed: 42,
-            },
             ChannelSpec::WattersonGoodF1,
             ChannelSpec::WattersonGoodF2,
             ChannelSpec::WattersonModerateF1,
             ChannelSpec::WattersonPoorF1,
+            ChannelSpec::WattersonExtreme,
             ChannelSpec::GilbertElliottLight,
             ChannelSpec::GilbertElliottModerate,
             ChannelSpec::GilbertElliottHeavy,
+            ChannelSpec::GilbertElliottSevere,
             ChannelSpec::QrnLight,
             ChannelSpec::QrmTone,
             ChannelSpec::QsbSlow,
@@ -67,6 +68,10 @@ pub fn build(spec: &ChannelSpec) -> Box<dyn ChannelModel> {
             let cfg = WattersonConfig::poor_f1(Some(4));
             openpulse_channel::build_channel(&ChannelModelConfig::Watterson(cfg), None).unwrap()
         }
+        ChannelSpec::WattersonExtreme => {
+            let cfg = WattersonConfig::extreme(Some(5));
+            openpulse_channel::build_channel(&ChannelModelConfig::Watterson(cfg), None).unwrap()
+        }
         ChannelSpec::GilbertElliottLight => {
             let cfg = GilbertElliottConfig::light(Some(10));
             openpulse_channel::build_channel(&ChannelModelConfig::GilbertElliott(cfg), None)
@@ -79,6 +84,11 @@ pub fn build(spec: &ChannelSpec) -> Box<dyn ChannelModel> {
         }
         ChannelSpec::GilbertElliottHeavy => {
             let cfg = GilbertElliottConfig::heavy(Some(12));
+            openpulse_channel::build_channel(&ChannelModelConfig::GilbertElliott(cfg), None)
+                .unwrap()
+        }
+        ChannelSpec::GilbertElliottSevere => {
+            let cfg = GilbertElliottConfig::severe(Some(13));
             openpulse_channel::build_channel(&ChannelModelConfig::GilbertElliott(cfg), None)
                 .unwrap()
         }

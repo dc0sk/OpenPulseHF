@@ -5,7 +5,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use openpulse_core::compression::CompressionAlgorithm;
 
-use crate::matrix::{TestResult, UseCase};
+use crate::matrix::{fec_label, TestResult, UseCase};
 
 pub struct RunMeta {
     pub date: DateTime<Utc>,
@@ -22,6 +22,7 @@ pub fn write_reports(results: &[TestResult], output_dir: &Path, meta: &RunMeta) 
     write_by_mode(&latest, results, meta);
     write_by_channel(&latest, results, meta);
     write_by_usecase(&latest, results, meta);
+    write_csv(&latest, results, meta);
     write_raw_json(&latest, results);
 }
 
@@ -235,9 +236,9 @@ fn write_by_usecase(dir: &Path, results: &[TestResult], meta: &RunMeta) {
 
     out.push_str("# Results by Use Case\n\n");
     out.push_str(
-        "| Use Case | Mode | Channel | FEC | Compression | Payload | Result | BER | Duration |\n",
+        "| Use Case | Mode | Channel | FEC | Compression | Payload | Result | BER | Eff. bps | Duration |\n",
     );
-    out.push_str("|---|---|---|---|---|---|---|---|---|\n");
+    out.push_str("|---|---|---|---|---|---|---|---|---|---|\n");
 
     for r in results {
         let status = if r.passed { "✓ PASS" } else { "✗ FAIL" };
@@ -250,21 +251,75 @@ fn write_by_usecase(dir: &Path, results: &[TestResult], meta: &RunMeta) {
             CompressionAlgorithm::Lz4 => "lz4",
             CompressionAlgorithm::Zstd(_) => "zstd",
         };
+        let eff_bps = r
+            .effective_bps
+            .map(|b| format!("{b:.0}"))
+            .unwrap_or_else(|| "—".into());
         out.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {}B | {} | {} | {}ms |\n",
+            "| {} | {} | {} | {} | {} | {}B | {} | {} | {} | {}ms |\n",
             r.case.use_case.label(),
             r.case.mode,
             r.case.channel.label(),
-            if r.case.fec { "yes" } else { "no" },
+            fec_label(r.case.fec_mode),
             comp,
             r.case.payload_len,
             status,
             ber,
+            eff_bps,
             r.duration_ms,
         ));
     }
 
     fs::write(dir.join("by-usecase.md"), out).expect("write by-usecase.md");
+}
+
+fn write_csv(dir: &Path, results: &[TestResult], meta: &RunMeta) {
+    let mut out = String::new();
+    // File header comment
+    out.push_str(&format!(
+        "# OpenPulseHF Test Matrix — {tier} — {date} — commit {commit}\n",
+        tier = meta.tier,
+        date = meta.date.format("%Y-%m-%dT%H:%M:%SZ"),
+        commit = meta.git_commit,
+    ));
+    out.push_str(
+        "use_case,mode,fec,compression,channel,snr_db,payload_bytes,passed,ber,effective_bps,duration_ms,note\n",
+    );
+
+    for r in results {
+        let comp = match r.case.compression {
+            CompressionAlgorithm::None => "none",
+            CompressionAlgorithm::Lz4 => "lz4",
+            CompressionAlgorithm::Zstd(_) => "zstd",
+        };
+        let snr_db = match &r.case.channel {
+            crate::matrix::ChannelSpec::Awgn { snr_db, .. } => format!("{snr_db:.1}"),
+            _ => "".into(),
+        };
+        let ber = r.ber.map(|b| format!("{b:.6}")).unwrap_or_default();
+        let eff_bps = r
+            .effective_bps
+            .map(|b| format!("{b:.1}"))
+            .unwrap_or_default();
+        let note = r.note.as_deref().unwrap_or("").replace('"', "\"\""); // CSV escape
+        out.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{},{},\"{}\"\n",
+            r.case.use_case.label(),
+            r.case.mode,
+            fec_label(r.case.fec_mode),
+            comp,
+            r.case.channel.label(),
+            snr_db,
+            r.case.payload_len,
+            r.passed as u8,
+            ber,
+            eff_bps,
+            r.duration_ms,
+            note,
+        ));
+    }
+
+    fs::write(dir.join("results.csv"), out).expect("write results.csv");
 }
 
 fn write_raw_json(dir: &Path, results: &[TestResult]) {

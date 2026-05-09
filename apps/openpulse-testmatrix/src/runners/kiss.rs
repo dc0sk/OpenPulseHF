@@ -26,6 +26,7 @@ pub fn run(case: &TestCase) -> TestResult {
         ber: None,
         bytes_rx: result.as_ref().map(|v| v.len()).unwrap_or(0),
         duration_ms: start.elapsed().as_millis() as u64,
+        effective_bps: None,
         note: result.err().map(|e| e.to_string()),
     }
 }

@@ -81,6 +81,7 @@ pub fn run(case: &TestCase, profile: SessionProfile) -> TestResult {
         ber: None,
         bytes_rx: payload.len(),
         duration_ms,
+        effective_bps: None,
         note: if mode_changed {
             None
         } else {
@@ -96,6 +97,7 @@ fn fail(case: &TestCase, start: Instant, note: String) -> TestResult {
         ber: None,
         bytes_rx: 0,
         duration_ms: start.elapsed().as_millis() as u64,
+        effective_bps: None,
         note: Some(note),
     }
 }
