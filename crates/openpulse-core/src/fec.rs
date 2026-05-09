@@ -18,8 +18,52 @@
 //! ```
 
 use reed_solomon::{Decoder, Encoder};
+use serde::{Deserialize, Serialize};
 
 use crate::error::ModemError;
+
+/// Which FEC scheme is applied above the modulation layer.
+///
+/// Used in the HPX handshake to negotiate FEC between two stations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FecMode {
+    /// No FEC — raw transmit/receive.
+    #[default]
+    None,
+    /// Reed-Solomon RS(255,223) only.
+    Rs,
+    /// Reed-Solomon with stride interleaver (burst-error dispersion).
+    RsInterleaved,
+    /// Concatenated: Conv(rate-1/2) inner + RS outer (DVB-S architecture).
+    ///
+    /// Conv layer reduces random-noise BER; RS corrects residual Viterbi
+    /// burst failures.  Total overhead ≈ 2.28× raw payload.
+    Concatenated,
+}
+
+impl FecMode {
+    /// Numeric strength for negotiation; higher = stronger / preferred.
+    pub fn strength(self) -> u8 {
+        match self {
+            FecMode::None => 0,
+            FecMode::Rs => 1,
+            FecMode::RsInterleaved => 2,
+            FecMode::Concatenated => 3,
+        }
+    }
+
+    /// Select the strongest mode that appears in both slices.
+    /// Returns `FecMode::None` if there is no overlap between `offered` and `accepted`.
+    pub fn negotiate(offered: &[FecMode], accepted: &[FecMode]) -> FecMode {
+        offered
+            .iter()
+            .filter(|m| accepted.contains(m))
+            .copied()
+            .max_by_key(|m| m.strength())
+            .unwrap_or(FecMode::None)
+    }
+}
 
 /// ECC bytes appended per 255-byte RS block.
 pub const FEC_ECC_LEN: usize = 32;
