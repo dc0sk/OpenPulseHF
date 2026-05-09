@@ -1,11 +1,63 @@
 //! NDJSON-over-TCP control protocol types.
 //!
-//! All messages are JSON objects serialised on a single line (newline-terminated).
-//! Server → client: unsolicited [`ControlEvent`] stream.
+//! Messages are either JSON objects on a single newline-terminated line, or binary
+//! spectrum frames that start with [`SPECTRUM_MAGIC`].  Receivers distinguish the two
+//! by inspecting the first byte: `{` (0x7B) → JSON, `O` (0x4F) → binary spectrum frame.
+//!
+//! Server → client: unsolicited [`ControlEvent`] NDJSON stream, interleaved with binary
+//! spectrum frames after [`ControlCommand::SubscribeSpectrum`].
 //! Client → server: [`ControlCommand`] request; server replies with [`CommandResponse`].
 
 use openpulse_modem::event::EngineEvent;
 use serde::{Deserialize, Serialize};
+
+// ---------------------------------------------------------------------------
+// Binary spectrum frame codec
+// ---------------------------------------------------------------------------
+
+/// Magic header for binary spectrum frames: ASCII "OPSP".
+pub const SPECTRUM_MAGIC: &[u8; 4] = b"OPSP";
+
+/// Encode a power-spectrum frame.
+///
+/// Wire layout: `OPSP` (4 B) | fft_size u16 LE | sample_rate u32 LE | bins f32 LE × fft_size
+pub fn encode_spectrum_frame(sample_rate: u32, bins: &[f32]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(4 + 2 + 4 + bins.len() * 4);
+    buf.extend_from_slice(SPECTRUM_MAGIC);
+    buf.extend_from_slice(&(bins.len() as u16).to_le_bytes());
+    buf.extend_from_slice(&sample_rate.to_le_bytes());
+    for &b in bins {
+        buf.extend_from_slice(&b.to_le_bytes());
+    }
+    buf
+}
+
+/// Decode a power-spectrum frame previously encoded by [`encode_spectrum_frame`].
+///
+/// Returns `(sample_rate, bins)` on success or an error string if the buffer is
+/// malformed (bad magic, truncated, wrong length).
+pub fn decode_spectrum_frame(data: &[u8]) -> Result<(u32, Vec<f32>), String> {
+    if data.len() < 10 {
+        return Err(format!("frame too short: {} bytes", data.len()));
+    }
+    if &data[0..4] != SPECTRUM_MAGIC {
+        return Err(format!("bad magic: {:02X?}", &data[0..4]));
+    }
+    let fft_size = u16::from_le_bytes([data[4], data[5]]) as usize;
+    let sample_rate = u32::from_le_bytes([data[6], data[7], data[8], data[9]]);
+    let expected = 10 + fft_size * 4;
+    if data.len() < expected {
+        return Err(format!(
+            "truncated: need {expected} bytes, got {}",
+            data.len()
+        ));
+    }
+    let bins = data[10..expected]
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    Ok((sample_rate, bins))
+}
 
 /// Top-level event pushed from server to every connected client.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +102,8 @@ pub enum ControlCommand {
     DisableRepeater,
     /// Set the TX attenuation for the current band (dB; 0.0 = no attenuation).
     SetTxAttenuation { db: f32, band: Option<String> },
+    /// Begin streaming binary spectrum frames to this client at `fps` frames/second.
+    SubscribeSpectrum { fps: u32 },
 }
 
 /// Per-command response.

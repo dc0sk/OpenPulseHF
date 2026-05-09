@@ -43,6 +43,8 @@ pub struct PanelState {
     pub event_log: VecDeque<String>,
     /// Token of a pending QSY proposal, if any.
     pub pending_qsy_token: Option<String>,
+    /// Most-recent power-spectrum bins (dBFS), 512 values from the daemon.
+    pub spectrum_bins: Vec<f32>,
 }
 
 impl Default for PanelState {
@@ -62,6 +64,7 @@ impl Default for PanelState {
             rig_b: None,
             event_log: VecDeque::new(),
             pending_qsy_token: None,
+            spectrum_bins: Vec::new(),
         }
     }
 }
