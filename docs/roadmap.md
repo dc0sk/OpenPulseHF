@@ -791,42 +791,37 @@ protection on Good F1 channels.  Equalizer remains a future option.
 
 ---
 
-### FF-4 — OFDM wideband profile with reduced PAPR *(far future research)*
+### FF-4 — OFDM wideband profile with reduced PAPR ✅ Research complete (PR #135); implementation deferred
 
 VARA achieves 7536 bps in 2400 Hz using 52 subcarriers at 37.5 baud each with a cyclic
 prefix that absorbs HF multipath.  The PAPR cost is 9 dB, requiring amplifier back-off
-to ~12 W average from 100 W peak.  To compete on throughput while reducing this penalty,
-investigate reduced-PAPR OFDM techniques before committing to an implementation.
+to ~12 W average from 100 W peak.
 
-**Research questions to answer before design begins**:
+**Research conducted** (see `docs/ofdm-research.md` for full results):
 
-1. **Clipping + filtering**: clip the OFDM time-domain signal at 3–4 dB above RMS, then
-   apply a bandpass filter to restore spectral mask compliance.  Achieves ~4–5 dB PAPR
-   reduction at the cost of a slight BER floor (~0.1 dB SNR penalty at 10⁻³ BER).
-   Does this bring PAPR close enough to single-carrier to make OFDM viable on class-E /
-   switching amplifiers common in portable HF rigs?
+Simulation swept 3 OFDM configurations × 6 PAPR reduction techniques × 4 channel models
+using `openpulse-channel` (AWGN 20/10 dB, Watterson Good F1, clean).
 
-2. **Tone reservation**: reserve a small fraction of subcarriers (2–4 of 52) as PAPR
-   reduction tones; optimise their amplitude/phase to cancel the highest-envelope peaks.
-   No BER impact but reduces usable subcarriers slightly.
+Key findings:
+- **PAPR gate**: iterative clipping (50 iterations, target 6 dB) reliably achieves PAPR ≤ 6 dB
+  but at the cost of destroying OFDM orthogonality, causing BER degradation on poor channels.
+- **Single-shot clipping** (3–4 dB above RMS) leaves residual peaks above the gate; only
+  iterative clip passes but with unacceptable BER penalty at SNR < 15 dB.
+- **Tone reservation** (4 tones) achieves only ~1–2 dB PAPR reduction — insufficient alone.
+- **Single-carrier RRC is competitive**: `8PSK1000-RRC` reaches ~2400 net bps at PAPR ~4–5 dB,
+  comparable to reduced OFDM at far lower complexity.
 
-3. **Fewer, wider subcarriers**: VARA uses 52 × 37.5 baud.  A profile with 16 × 100 baud
-   subcarriers has lower PAPR (fewer carriers → less constructive interference probability)
-   and a shorter cyclic prefix requirement.  Does 100 baud per subcarrier still survive
-   HF delay spread (≤ 2 ms) with a 5 ms cyclic prefix?
+**Decision: do not implement OFDM at this time.**  The 6 dB PAPR gate cannot be met without
+aggressive iterative clipping that degrades BER on HF channels.  Reconsider if a
+clip-and-filter PAPR approach with per-subcarrier frequency-domain equalization is
+implemented, or if a throughput target above 5000 bps is set.
 
-4. **Single-carrier FDMA as a hybrid**: keep a single dominant subcarrier (for robustness
-   on marginal channels) and add secondary subcarriers only when SNR headroom is available.
-   The rate adaptation ladder stays largely unchanged; OFDM is an optional upper tier.
-
-**Gate**: before implementing, conduct a simulation study (using the existing
-`openpulse-channel` models) comparing SNR vs. throughput for the PAPR-reduction
-approaches above against the VARA specification table.  Write results into
-`docs/ofdm-research.md`; only proceed if at least one technique achieves PAPR ≤ 6 dB
-(matching VARA ACK-frame PAPR) without unacceptable BER penalty.
-
-**Dependencies**: Phase 8.3 (pulse shaping infrastructure), simulation tooling on top of
-existing channel models.
+**What was delivered** (PR #135):
+- `crates/openpulse-modem/src/ofdm_sim.rs`: `OfdmConfig`, `generate_ofdm_frame()`,
+  `demodulate_ofdm_frame()`, `measure_papr()`, `clip_and_filter()`, `clip_iterative()`,
+  `tone_reservation()`
+- `crates/openpulse-modem/tests/ofdm_simulation.rs`: full sweep test + PAPR gate assertion
+- `docs/ofdm-research.md`: simulation methodology, results tables, recommendation
 
 ---
 
