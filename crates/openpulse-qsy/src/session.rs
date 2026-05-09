@@ -3,6 +3,7 @@
 //! Drive via `initiate()` (initiator role) or `apply()` (both roles) plus
 //! `scan_complete()` after the rig scan finishes.
 
+use openpulse_core::trust::ConnectionTrustLevel;
 use rand::Rng;
 use thiserror::Error;
 
@@ -19,10 +20,38 @@ pub enum QsyError {
 }
 
 /// Policy governing whether this node accepts QSY requests.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct QsyPolicy {
     /// When false, all incoming `QSY_REQ` frames are immediately rejected.
     pub enabled: bool,
+    /// Trust levels from which `QSY_REQ` is accepted.  An empty list accepts any level.
+    pub allow_trustlevels: Vec<ConnectionTrustLevel>,
+}
+
+impl Default for QsyPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allow_trustlevels: vec![],
+        }
+    }
+}
+
+impl QsyPolicy {
+    /// Build a `QsyPolicy` from config values, parsing trust-level strings.
+    ///
+    /// Accepts both kebab-case (`"psk-verified"`) and underscore variants (`"psk_verified"`).
+    /// Unrecognised strings are silently ignored.
+    pub fn from_config(enabled: bool, allow_trustlevels: &[String]) -> Self {
+        let levels = allow_trustlevels
+            .iter()
+            .filter_map(|s| parse_trust_level(s))
+            .collect();
+        Self {
+            enabled,
+            allow_trustlevels: levels,
+        }
+    }
 }
 
 /// Actions returned by the state machine for the caller to execute.
@@ -82,6 +111,7 @@ pub struct QsySession {
     role: Role,
     state: State,
     policy: QsyPolicy,
+    peer_trust: ConnectionTrustLevel,
     switchover_offset_s: u32,
 }
 
@@ -91,17 +121,25 @@ impl QsySession {
         Self {
             role: Role::Initiator,
             state: State::Idle,
-            policy: QsyPolicy { enabled: true },
+            policy: QsyPolicy {
+                enabled: true,
+                allow_trustlevels: vec![],
+            },
+            peer_trust: ConnectionTrustLevel::Unverified,
             switchover_offset_s: 5,
         }
     }
 
     /// Create a session for the station that will respond to a negotiation request.
-    pub fn new_responder(policy: QsyPolicy) -> Self {
+    ///
+    /// `peer_trust` is the classified trust level of the connected peer (from the HPX handshake).
+    /// The policy's `allow_trustlevels` list is checked against it when a `QSY_REQ` arrives.
+    pub fn new_responder(policy: QsyPolicy, peer_trust: ConnectionTrustLevel) -> Self {
         Self {
             role: Role::Responder,
             state: State::Idle,
             policy,
+            peer_trust,
             switchover_offset_s: 5,
         }
     }
@@ -206,6 +244,20 @@ impl QsySession {
                         }),
                         QsyAction::Reject {
                             reason: "qsy disabled".into(),
+                        },
+                    ]);
+                }
+                if !self.policy.allow_trustlevels.is_empty()
+                    && !self.policy.allow_trustlevels.contains(&self.peer_trust)
+                {
+                    self.state = State::Rejected;
+                    return Ok(vec![
+                        QsyAction::SendFrame(QsyFrame::Reject {
+                            token,
+                            reason: "trust level not permitted".into(),
+                        }),
+                        QsyAction::Reject {
+                            reason: "trust level not permitted".into(),
                         },
                     ]);
                 }
@@ -341,4 +393,19 @@ fn pick_best_freq(my: &[(u64, f32)], partner: &[(u64, f32)]) -> Result<u64, QsyE
 fn random_token() -> String {
     let v: u32 = rand::thread_rng().gen();
     format!("{v:08x}")
+}
+
+/// Map a config trust-level string to [`ConnectionTrustLevel`].
+///
+/// Accepts both kebab-case (`"psk-verified"`) and underscore variants (`"psk_verified"`).
+fn parse_trust_level(s: &str) -> Option<ConnectionTrustLevel> {
+    match s.to_ascii_lowercase().replace('_', "-").as_str() {
+        "rejected" => Some(ConnectionTrustLevel::Rejected),
+        "low" => Some(ConnectionTrustLevel::Low),
+        "unverified" => Some(ConnectionTrustLevel::Unverified),
+        "reduced" => Some(ConnectionTrustLevel::Reduced),
+        "psk-verified" => Some(ConnectionTrustLevel::PskVerified),
+        "verified" => Some(ConnectionTrustLevel::Verified),
+        _ => None,
+    }
 }
