@@ -71,15 +71,18 @@ Reduces required SNR by ~3 dB per doubling of retransmissions (coherent averagin
 
 ---
 
-## BL-FEC-5 — Soft-decision K=7 Viterbi (In progress — bl-fec-5-soft-viterbi branch)
+## BL-FEC-5 — Soft-decision K=7 Viterbi ✅ Done (PR #177)
 
-**From docs/vara-research.md.** K=7 soft-decision Viterbi gives ~5 dB additional coding gain over the current hard-decision K=3 ConvCodec. Planned for `crates/openpulse-core/src/soft_viterbi.rs` — no external crate needed.
+**From docs/vara-research.md.** K=7 soft-decision Viterbi gives ~5 dB additional coding gain over the current hard-decision K=3 ConvCodec. Implemented in `crates/openpulse-core/src/soft_viterbi.rs` — no external crate needed.
 
 Generators: G0=0o133, G1=0o171 (NASA/3GPP standard).  64 states.  Branch metric = sum of `llr * (1 - 2*encoded_bit)`.
 
-Requires a new `ModulationPlugin::demodulate_soft()` method returning per-bit LLRs so the inner Viterbi decoder receives true soft values (overridden in BPSK and QPSK plugins; 8PSK and OFDM/SC-FDMA fall back to hard ±1.0).
-
-`FecMode::SoftConcatenated` (strength 6): Conv K=7 soft inner + RS(255,223) outer.
+**What was delivered:**
+- `SoftViterbiCodec` in `soft_viterbi.rs` — K=7 rate-1/2 encoder + soft-decision Viterbi decoder; `decode_soft()` returns `Result<Vec<u8>, ModemError>`; traceback from state 0 (flush-terminated trellis)
+- `ModulationPlugin::demodulate_soft()` default method in `plugin.rs` — hard ±1.0 fallback; BPSK overrides with real differential dot products; QPSK overrides with I/Q projections; 8PSK uses hard fallback + TODO for max-log-MAP
+- `FecMode::SoftConcatenated` (strength 6): K=7 soft Conv inner + RS(255,223) outer
+- `transmit_with_soft_viterbi_fec` / `receive_with_soft_viterbi_fec` in `ModemEngine`
+- Integration tests: round-trip, 5% BER soft vs hard comparison, coding gain over uncoded, soft vs hard at low SNR
 
 ---
 
