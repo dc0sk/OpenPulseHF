@@ -1,6 +1,9 @@
 //! Cross-band repeater: receives frames on one modem engine and re-transmits
 //! them on a second engine through a separate rig.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use openpulse_modem::ModemEngine;
 use openpulse_radio::PttController;
 use thiserror::Error;
@@ -68,14 +71,18 @@ impl CrossBandRepeater {
         }
 
         let n = bytes.len();
-        self.rig_b.assert_ptt().map_err(RepeaterError::Ptt)?;
+        if !self.config.full_duplex {
+            self.rig_b.assert_ptt().map_err(RepeaterError::Ptt)?;
+        }
         self.engine_tx
             .transmit(&bytes, &self.config.mode.clone(), None)
             .map_err(|e| RepeaterError::Modem(e.to_string()))?;
-        if self.config.tx_hang_ms > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(self.config.tx_hang_ms));
+        if !self.config.full_duplex {
+            if self.config.tx_hang_ms > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(self.config.tx_hang_ms));
+            }
+            self.rig_b.release_ptt().map_err(RepeaterError::Ptt)?;
         }
-        self.rig_b.release_ptt().map_err(RepeaterError::Ptt)?;
 
         tracing::info!(
             mode = %self.config.mode,
@@ -84,6 +91,39 @@ impl CrossBandRepeater {
         );
 
         Ok(Some(n))
+    }
+
+    /// Run in full-duplex mode: assert PTT once, relay frames until `stop` is set,
+    /// then release PTT.
+    ///
+    /// Returns the total number of frames relayed. PTT is guaranteed to be released
+    /// even if an error occurs mid-session.
+    pub fn run_full_duplex(&mut self, stop: Arc<AtomicBool>) -> Result<u64, RepeaterError> {
+        if !self.config.enabled {
+            return Ok(0);
+        }
+        self.rig_b.assert_ptt().map_err(RepeaterError::Ptt)?;
+        let mut count = 0u64;
+        let result = loop {
+            if stop.load(Ordering::Relaxed) {
+                break Ok(count);
+            }
+            match self.relay_one_frame() {
+                Ok(Some(_)) => count += 1,
+                Ok(None) => {}
+                Err(e) => break Err(e),
+            }
+        };
+        // Always release PTT before returning, even on error.
+        let release_result = self.rig_b.release_ptt().map_err(RepeaterError::Ptt);
+        match result {
+            Ok(n) => release_result.map(|_| n),
+            Err(e) => {
+                // Release error is swallowed; original error takes priority.
+                let _ = release_result;
+                Err(e)
+            }
+        }
     }
 
     /// Return whether the repeater is enabled.
