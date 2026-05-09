@@ -29,6 +29,7 @@ use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
 use openpulse_dsp::filter::FirFilter;
 use openpulse_dsp::rrc::generate_rrc_coefficients;
+use openpulse_dsp::timing::GardnerDetector;
 
 use crate::modulate::{
     nrzi_encode, samples_per_symbol, PREAMBLE_SYMS, RRC_SPAN_SYMBOLS, TAIL_SYMS,
@@ -271,24 +272,44 @@ fn bpsk_demodulate_rrc(
     let i_bb = rrc_filter(i_mix);
     let q_bb = rrc_filter(q_mix);
 
-    // 3. Timing recovery on the baseband I channel (brute-force correlation,
-    //    same approach as the Hann-window path but working directly on i_bb).
-    let timing = find_timing_offset_bb(&i_bb, n);
+    // 3. Coarse timing acquisition via preamble correlation (brute-force, same as Hann path).
+    let initial_timing = find_timing_offset_bb(&i_bb, n);
 
-    // 4. Sample at ISI-free positions (one sample per symbol).
-    // Use ceiling division so a non-zero timing offset (from the RRC cold-start
-    // transient at position 0) never drops the last symbol.
-    let aligned_i = &i_bb[timing.min(i_bb.len())..];
-    let aligned_q = &q_bb[timing.min(q_bb.len())..];
-    let n_syms = aligned_i.len().div_ceil(n);
-
-    let i_out: Vec<f32> = (0..n_syms).map(|k| aligned_i[k * n]).collect();
-    let q_out: Vec<f32> = (0..n_syms).map(|k| aligned_q[k * n]).collect();
+    // 4. Adaptive timing recovery via Gardner detector starting from the acquired offset.
+    let (i_out, q_out) = gardner_sample_rrc(&i_bb, &q_bb, n, initial_timing);
 
     (i_out, q_out)
 }
 
 // ── Timing search ─────────────────────────────────────────────────────────────
+
+/// Adaptive symbol sampling using the Gardner timing error detector.
+///
+/// `initial_timing` seeds the start position from brute-force preamble
+/// correlation.  The Gardner loop then tracks timing drift adaptively for
+/// the remainder of the frame.
+fn gardner_sample_rrc(
+    i_bb: &[f32],
+    q_bb: &[f32],
+    n: usize,
+    initial_timing: usize,
+) -> (Vec<f32>, Vec<f32>) {
+    let start = initial_timing.min(i_bb.len());
+    let mut det = GardnerDetector::new(n, 0.02);
+    // Pre-arm so the first sample at `start` (already an ISI-free point) is output immediately.
+    det.pre_arm();
+    let mut i_out = Vec::new();
+    let mut q_out = Vec::new();
+    for (idx, &s_i) in i_bb[start..].iter().enumerate() {
+        if det.update(s_i).is_some() {
+            // Strobe fires: s_i is the boundary sample; Q is synchronous (same FIR).
+            let s_q = q_bb.get(start + idx).copied().unwrap_or(0.0);
+            i_out.push(s_i);
+            q_out.push(s_q);
+        }
+    }
+    (i_out, q_out)
+}
 
 /// Brute-force timing search on the baseband I signal (after downmix + RRC).
 ///
