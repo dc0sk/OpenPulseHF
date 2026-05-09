@@ -32,6 +32,12 @@ impl Psk8Plugin {
                     "8PSK1000-HF".to_string(),
                     "8PSK500-RRC".to_string(),
                     "8PSK1000-RRC".to_string(),
+                    // UHF/VHF — 12.5 kHz narrowband (8 kHz audio, 2000 baud, ~2700 Hz BW)
+                    "8PSK2000".to_string(),
+                    "8PSK2000-RRC".to_string(),
+                    // UHF/VHF — 12.5 kHz HD (requires 48 kHz audio, 9600 baud, ~13 kHz BW)
+                    "8PSK9600".to_string(),
+                    "8PSK9600-RRC".to_string(),
                 ],
                 trait_version_required: "1.0".to_string(),
             },
@@ -71,6 +77,8 @@ pub(crate) fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
     match trailing.as_str() {
         "500" => Ok(500.0),
         "1000" => Ok(1000.0),
+        "2000" => Ok(2000.0),
+        "9600" => Ok(9600.0),
         _ => Err(ModemError::Configuration(format!(
             "unknown baud rate in mode '{mode}'"
         ))),
@@ -80,13 +88,16 @@ pub(crate) fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openpulse_core::plugin::ModulationPlugin;
+    use openpulse_core::plugin::{ModulationPlugin, PulseShape};
 
     #[test]
     fn parse_modes() {
         assert!((parse_baud_rate("8PSK500").unwrap() - 500.0).abs() < 1e-6);
         assert!((parse_baud_rate("8PSK1000").unwrap() - 1000.0).abs() < 1e-6);
         assert!((parse_baud_rate("8PSK1000-HF").unwrap() - 1000.0).abs() < 1e-6);
+        assert!((parse_baud_rate("8PSK2000").unwrap() - 2000.0).abs() < 1e-6);
+        assert!((parse_baud_rate("8PSK9600").unwrap() - 9600.0).abs() < 1e-6);
+        assert!((parse_baud_rate("8PSK9600-RRC").unwrap() - 9600.0).abs() < 1e-6);
         assert!(parse_baud_rate("8PSK").is_err());
     }
 
@@ -150,6 +161,71 @@ mod tests {
             ..ModulationConfig::default()
         };
         let payload = b"8PSK1000 RRC loopback";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    /// 8PSK2000 clean loopback at 8 kHz (4 samples/symbol).
+    #[test]
+    fn psk8_2000_loopback() {
+        let plugin = Psk8Plugin::new();
+        let cfg = ModulationConfig {
+            mode: "8PSK2000".to_string(),
+            // Hann ISI at n=4 is too large for 8PSK's 22.5° margins; CosineOverlap
+            // zeros at boundaries, eliminating ISI.  fc must be an integer multiple
+            // of baud (2000 Hz → 1 cycle/symbol) for perfect I/Q orthogonality at n=4.
+            pulse_shape: PulseShape::CosineOverlap,
+            center_frequency: 2000.0,
+            ..ModulationConfig::default()
+        };
+        let payload = b"8PSK2000 VHF narrowband";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    /// 8PSK2000-RRC clean loopback at 8 kHz with Gardner + Costas PLL.
+    #[test]
+    fn psk8_2000_rrc_loopback() {
+        let plugin = Psk8Plugin::new();
+        let cfg = ModulationConfig {
+            mode: "8PSK2000-RRC".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"8PSK2000-RRC 12.5 kHz PMR";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    /// 8PSK9600 clean loopback at 48 kHz (5 samples/symbol, ~13 kHz BW).
+    #[test]
+    fn psk8_9600_loopback_48k() {
+        let plugin = Psk8Plugin::new();
+        let cfg = ModulationConfig {
+            mode: "8PSK9600".to_string(),
+            sample_rate: 48000,
+            center_frequency: 12000.0,
+            ..ModulationConfig::default()
+        };
+        let payload = b"8PSK9600 12.5 kHz HD";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    /// 8PSK9600-RRC loopback at 48 kHz with Gardner + Costas PLL.
+    #[test]
+    fn psk8_9600_rrc_loopback_48k() {
+        let plugin = Psk8Plugin::new();
+        let cfg = ModulationConfig {
+            mode: "8PSK9600-RRC".to_string(),
+            sample_rate: 48000,
+            center_frequency: 12000.0,
+            ..ModulationConfig::default()
+        };
+        let payload = b"8PSK9600-RRC fills 12.5 kHz";
         let samples = plugin.modulate(payload, &cfg).expect("modulate");
         let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
         assert_eq!(&recovered[..payload.len()], payload);

@@ -60,3 +60,39 @@ fn hpx_hf_initial_level() {
     assert_eq!(p.initial_level, SpeedLevel::Sl2);
     assert_eq!(p.nack_threshold, 3);
 }
+
+#[test]
+fn hpx_narrowband_mode_mapping() {
+    let p = SessionProfile::hpx_narrowband();
+    assert_eq!(p.mode_for(SpeedLevel::Sl1), None);
+    assert_eq!(p.mode_for(SpeedLevel::Sl7), None);
+    assert_eq!(p.mode_for(SpeedLevel::Sl8), Some("QPSK500"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl9), Some("QPSK1000"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl10), Some("QPSK2000-RRC"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl11), Some("8PSK2000-RRC"));
+}
+
+#[test]
+fn hpx_narrowband_initial_level() {
+    let p = SessionProfile::hpx_narrowband();
+    assert_eq!(p.initial_level, SpeedLevel::Sl8);
+    assert_eq!(p.nack_threshold, 3);
+}
+
+#[test]
+fn hpx_narrowband_hd_mode_mapping() {
+    let p = SessionProfile::hpx_narrowband_hd();
+    assert_eq!(p.mode_for(SpeedLevel::Sl1), None);
+    assert_eq!(p.mode_for(SpeedLevel::Sl7), None);
+    assert_eq!(p.mode_for(SpeedLevel::Sl8), Some("QPSK9600-RRC"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl9), Some("8PSK9600-RRC"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl10), None);
+    assert_eq!(p.mode_for(SpeedLevel::Sl11), None);
+}
+
+#[test]
+fn hpx_narrowband_hd_initial_level() {
+    let p = SessionProfile::hpx_narrowband_hd();
+    assert_eq!(p.initial_level, SpeedLevel::Sl8);
+    assert_eq!(p.nack_threshold, 3);
+}
