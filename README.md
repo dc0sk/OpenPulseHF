@@ -12,68 +12,191 @@ last_updated: 2026-05-09
 [![CI](https://github.com/dc0sk/OpenPulseHF/actions/workflows/ci.yml/badge.svg)](https://github.com/dc0sk/OpenPulseHF/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-OpenPulseHF is a full-stack HF digital radio modem: modulation plugins, ARQ session management, Winlink/B2F compatibility, AX.25/KISS bridging, a channel-simulation test harness, and a live signal-path testbench GUI — all in a single Rust workspace, no external C dependencies.
+OpenPulseHF is a full-stack HF digital radio modem: modulation plugins, ARQ session management,
+Winlink/B2F compatibility, AX.25/KISS bridging, a channel-simulation test harness, and a live
+signal-path testbench GUI — all in a single Rust workspace, no external C dependencies.
 
 ---
 
 ## Why OpenPulseHF?
 
-HF data links are hostile: ionospheric fading, burst noise, Doppler spread, and narrow bandwidth. OpenPulseHF was designed from the start to cope — with adaptive rate ladders that respond per-direction to real channel conditions, a collaborative frequency-agility protocol that moves the link to a better channel without operator intervention, and a post-quantum-capable handshake that protects session identity today and in the post-quantum era.
+HF data links are hostile: ionospheric fading, burst noise, Doppler spread, and narrow bandwidth.
+OpenPulseHF was designed from the start to cope — with adaptive rate ladders that respond
+per-direction to real channel conditions, a collaborative frequency-agility protocol that moves
+the link to a better channel without operator intervention, and a post-quantum-capable handshake
+that protects session identity today and in the post-quantum era.
 
-Every feature ships with a deterministic, hardware-free test suite and a parametric channel-simulation harness validated against published Watterson and Gilbert-Elliott models.
+Every feature ships with a deterministic, hardware-free test suite and a parametric
+channel-simulation harness validated against published Watterson and Gilbert-Elliott models.
 
 ---
 
 ## Key features
 
-### Modulation and waveforms
+### Modulation and waveforms — 30+ modes across 6 plugins
 
-| Mode | Baud | Typical use |
+#### HF narrow-band (≤ 2700 Hz occupied bandwidth)
+
+| Plugin | Modes | Baud rate | Bits/symbol |
+|---|---|---|---|
+| BPSK | BPSK31 / BPSK63 / BPSK100 / BPSK250 / BPSK250-RRC | 31–250 | 1 |
+| QPSK | QPSK125 / QPSK250 / QPSK500 / QPSK1000-HF / QPSK500-RRC / QPSK1000-RRC | 125–1000 | 2 |
+| 8PSK | 8PSK500 / 8PSK500-RRC / 8PSK1000-HF / 8PSK1000-RRC | 500–1000 | 3 |
+| FSK4 | FSK4-ACK | 100 (200 ms/frame) | 2 |
+| OFDM | OFDM16 (~625 Hz, ~889 bps) / OFDM52 (~2 kHz, ~2889 bps) | — | 2/SC |
+| SC-FDMA | SCFDMA16 / SCFDMA52 — same BW as OFDM, 3–4 dB lower PAPR | — | 2/SC |
+
+#### UHF/VHF narrowband (12.5 kHz channel, 8 kHz audio)
+
+| Mode | Baud | Bandwidth | Use case |
+|---|---|---|---|
+| QPSK2000 / QPSK2000-RRC | 2000 | ~2700 Hz | 12.5 kHz PMR/LMR |
+| 8PSK2000 / 8PSK2000-RRC | 2000 | ~2700 Hz | 12.5 kHz PMR/LMR high throughput |
+
+#### UHF/VHF HD (12.5 kHz channel, 48 kHz audio)
+
+| Mode | Baud | Bandwidth | Use case |
+|---|---|---|---|
+| QPSK9600 / QPSK9600-RRC | 9600 | ~13 kHz | 12.5 kHz PMR/LMR high-speed |
+| 8PSK9600 / 8PSK9600-RRC | 9600 | ~13 kHz | 12.5 kHz PMR/LMR maximum throughput |
+
+Rate adaptation steps across all available modes automatically — independently per direction,
+so an asymmetric path (good downlink, noisy uplink) is handled without penalising the
+better direction.
+
+---
+
+### Forward error correction — 7 modes
+
+| Mode | Mechanism | Corrects | Overhead |
+|---|---|---|---|
+| None | — | — | 0% |
+| RS | RS(255,223) Reed-Solomon t=16 | 16 byte errors/block | 14% |
+| RS-Interleaved | RS(255,223) + stride block interleaver | burst errors dispersed | 14% + IL |
+| Concatenated | Conv K=3 Viterbi inner + RS(255,223) outer | burst + random | 2.28× |
+| ShortRS | Short-block RS t=4 (ACK frames only) | 4 byte errors/frame | 8 B ECC |
+| **RsStrong** | **RS(255,191) t=32** | **32 byte errors/block** | **25%** |
+| **SoftConcatenated** | **K=7 soft Viterbi inner + RS(255,223) outer** | **random noise + burst** | **2.28×, +5 dB** |
+
+**Memory-ARQ soft combining** is also available: sample buffers from N retransmissions are
+element-wise averaged before demodulation, giving ~3 dB SNR gain per doubling of retransmissions
+with no wire-protocol changes.
+
+---
+
+### Compression — negotiated in-band
+
+| Algorithm | Savings on typical HF messages | Notes |
 |---|---|---|
-| BPSK31 / BPSK63 / BPSK100 / BPSK250 | 31–250 | Low-speed, maximum sensitivity |
-| QPSK125 / QPSK250 / QPSK500 / QPSK1000 | 125–1000 | Mid-range, balanced throughput |
-| 8PSK500 / 8PSK1000 | 500–1000 | High throughput on good paths |
-| FSK4-ACK | 100 baud, 200 ms | Ultra-compact ACK frames |
+| None | — | Always available |
+| LZ4 | 20–40% | Fast, general-purpose |
+| **Zstd + HPX dictionary** | **40–60%** | Pre-trained on amateur radio traffic |
 
-Rate adaptation steps across these modes automatically in response to ACKs and NACKs — independently per direction, so an asymmetric path (good downlink, noisy uplink) is handled without penalising the better direction.
+`compress_if_smaller()` tries both algorithms and keeps the smaller result.
+Selection is negotiated in the signed handshake.
+
+---
 
 ### ARQ session layer
 
-- HPX state machine with eight ACK types and eleven speed levels
-- ChirpFallback: after three consecutive NACKs at the lowest adaptive level, falls back to a narrowband chirp-spread waveform
-- Segmentation and reassembly (SAR) handles payloads up to 64 KB in a single session
-- Optional LZ4 session-layer compression; negotiated in the signed handshake
+- HPX state machine with 8 ACK types and 11 speed levels (SL1–SL11)
+- ChirpFallback: after three consecutive NACKs at SL2, falls back to a narrowband chirp
+- Segmentation and reassembly (SAR) handles payloads up to 64 KB per session
+- Six adaptive session profiles: `hpx500`, `hpx_hf`, `hpx_wideband`, `hpx_narrowband`,
+  `hpx_narrowband_hd`, `hpx_ofdm_hf`
 
-### QSY frequency agility (FF-1) — first to market
+---
 
-Two stations can collaboratively negotiate a move to a less congested frequency without operator input. Each side scans candidate frequencies via rigctld, exchanges SNR readings over the existing data channel, votes for the best common frequency, and switches on a coordinated timer.
+### First-to-market features ★
+
+The following features are, to the best of our knowledge, first implementations
+in any open-source amateur radio digital mode software:
+
+| Feature | Notes |
+|---|---|
+| **ML-DSA-44 post-quantum signatures** (FIPS 204) | Hybrid + PQ-only modes |
+| **ML-KEM-768 forward-secrecy KEM** (FIPS 203) | Session key encapsulated in handshake |
+| **QSY frequency agility** | Stations collaboratively hop to a better frequency; Ed25519-signed |
+| **SC-FDMA waveform** | DFT-spread OFDM, 3–4 dB lower PAPR than plain OFDM |
+| **K=7 soft-decision Viterbi FEC** | True LLR inputs from BPSK/QPSK demodulators |
+| **Memory-ARQ soft sample combining** | Element-wise averaging across retransmissions |
+| **Zstd dictionary compression** | Pre-trained HPX dictionary for short payloads |
+| **GPU DSP offload** (wgpu, optional) | BPSK modulation, demodulation, timing search |
+| **Per-band TX attenuation persistence** | Remembers TX gain per frequency band via rigctld |
+| **IQ complex baseband output** | Direct SDR upconversion from baseband samples |
+| **FreeDV authenticated voice** (FF-11) | Ed25519-signed beacon via codec2 data channel |
+
+---
+
+### QSY frequency agility — first to market
+
+Two stations collaboratively negotiate a move to a less congested frequency without operator
+input.  Each side scans candidate frequencies via rigctld, exchanges SNR readings over the
+existing data channel, votes for the best common frequency, and switches on a coordinated timer.
 
 - Five-frame ASCII protocol (QSY_REQ / QSY_LIST / QSY_VOTE / QSY_ACK / QSY_REJECT)
 - Every frame is Ed25519-signed; tampering returns an explicit `InvalidSignature` error
-- Fully operator-configurable: disabled by default, enabled per-session via `[qsy]` config section
-- Tested against a mock rigctld TCP server — no hardware required for CI
+- Disabled by default; enabled per-session via `[qsy]` config section
 
-### Post-quantum in-band handshake
+---
 
-OpenPulseHF supports three signing modes, negotiated in the connection handshake:
+### Post-quantum in-band handshake — first to market
 
-- **Classical**: Ed25519 only
-- **Hybrid**: Ed25519 + ML-DSA-44 (dual signatures, both must verify)
-- **PQ-only**: ML-DSA-44
+Three signing modes, negotiated in the connection handshake:
 
-Key encapsulation for forward secrecy uses ML-KEM-768. The hybrid mode provides a smooth migration path: sessions are authenticated against today's classical trust stores while carrying a PQ signature that will matter when classical keys are threatened.
+| Mode | Ed25519 | ML-DSA-44 | Use case |
+|---|:---:|:---:|---|
+| Classical | ✓ | — | Backward compatible |
+| **Hybrid** | **✓** | **✓** | **Transition period (recommended)** |
+| PQ-only | — | ✓ | Fully post-quantum |
+
+Key encapsulation for forward secrecy uses **ML-KEM-768**.  In hybrid mode both classical and
+post-quantum signatures are required — sessions are authenticated against today's trust stores
+while carrying a PQ signature that will matter when classical keys are threatened.
+
+---
 
 ### Compatibility with existing HF software
 
 | Application | Protocol | Status |
 |---|---|---|
-| Pat (Winlink client) | ARDOP TCP command + data ports | Shipped |
-| Winlink CMS | B2F / Winlink over TCP | Shipped |
-| Any APRS or AX.25 application | KISS TNC over TCP | Shipped |
-| direwolf / soundmodem | KISS framing (FEND/FESC/TFEND/TFESC) | Shipped |
+| Pat (Winlink client) | ARDOP TCP command + data ports | Shipped — `openpulse-tnc` |
+| Winlink CMS | B2F / Winlink over TCP | Shipped — `openpulse-gateway` |
+| Any APRS or AX.25 application | KISS TNC over TCP | Shipped — `openpulse-kisstnc` |
+| direwolf / soundmodem | KISS framing | Shipped |
 | hamlib / flrig | rigctld CAT (PTT, frequency, S-meter) | Shipped |
+| Custom rig without hamlib | Generic serial CAT (TOML-scripted) | Shipped — FF-13 |
 
-The `openpulse-tnc` binary speaks the ARDOP TCP protocol natively — Pat connects to it without configuration changes. The `openpulse-kisstnc` binary does the same for any KISS client.
+`openpulse-tnc` speaks ARDOP TCP natively — Pat connects to port 8515 without any
+configuration changes.
+
+---
+
+### Channel simulation and test harness
+
+Deterministic, hardware-free testing against published propagation models:
+
+| Model | Profiles |
+|---|---|
+| AWGN | Systematic SNR sweep 0–30 dB, seeded RNG |
+| Watterson (ITU-R F.1487) | Good F1, Good F2, Moderate F1, Poor F1, Extreme |
+| Gilbert-Elliott | Light, Moderate, Heavy, Severe burst profiles |
+| QRN | Middleton Class-A impulsive atmospheric noise |
+| QRM | Co-channel tonal interference (configurable frequencies/amplitudes) |
+| QSB | Slow multiplicative fading |
+| Chirp | Swept-frequency chirp interference |
+
+The `openpulse-testmatrix` binary runs the full mode × FEC × compression × channel matrix
+and produces Markdown + CSV reports including per-test BER and effective throughput.
+
+---
+
+### Hardware support
+
+- Any SSB transceiver with a sound-card audio interface
+- **PTT**: hamlib/rigctld · RTS/DTR serial · VOX · TOML-scripted serial CAT (FF-13)
+- Optional GPU acceleration: any Vulkan / Metal / Direct3D 12 adapter via `wgpu`
+- **Raspberry Pi 4** (aarch64): cross-compiled and CI-tested
 
 ---
 
@@ -81,146 +204,164 @@ The `openpulse-tnc` binary speaks the ARDOP TCP protocol natively — Pat connec
 
 All items below are merged, tested, and in `main`:
 
-- **Phases 1–9 complete**: modulation plugins (BPSK, QPSK, 8PSK, FSK4), rate adaptation, ACK taxonomy, signed handshake, SAR, DCD/CSMA, peer cache and query subsystem, multi-hop relay forwarding, post-quantum handshake, GPU acceleration (optional, wgpu), B2F/Winlink session layer, ARDOP TNC, KISS TNC, direct CMS gateway, TOML config management, structured JSON event stream, TUI frontend, egui testbench GUI
-- **FF-1 QSY frequency agility**: collaborative channel-switching via rigctld
-- **FF-2 I/Q SDR output**: complex baseband I/Q audio output for direct SDR upconversion
-- **FF-3 RRC matched filtering**: root-raised-cosine TX/RX filters + Gardner timing recovery + Costas PLL for all `-RRC` modes (BPSK, QPSK, 8PSK)
-- **FF-4 OFDM wideband HF profile**: multi-carrier OFDM plugin with LS channel estimation + ZF equalization; OFDM16 (≈625 Hz, ≈889 bps) and OFDM52 (≈2031 Hz, ≈2889 bps); `hpx_ofdm_hf()` session profile
-- **FF-5 UHF/VHF wideband modes**: 2000 baud (8 kHz audio, ~2700 Hz BW) and 9600 baud (48 kHz audio, ~13 kHz BW) variants for QPSK and 8PSK; `hpx_narrowband` and `hpx_narrowband_hd` session profiles
-- **FF-6 Binary spectrum channel**: `OPSP` binary frame interleaving on the daemon control port for 20 Hz waterfall updates; panel waterfall bypasses JSON overhead
-- **FF-7 Tanh TX limiter**: soft-clip audio output to reduce PA back-off on 8PSK/RRC amplitude peaks
-- **FF-8 Per-band TX attenuation**: per-band TX gain remembered and restored on band change via rigctld
-- **FF-9 HPX reactor pattern**: event-driven `HpxReactor` replacing the polling-loop state machine
-- **FF-10 zstd dictionary compression**: pre-trained shared dictionary for sub-500-byte payloads
-- **FF-11 FreeDV authenticated voice shim**: Ed25519-signed beacon injected into FreeDV Qt-GUI via UDP data port; `TrustVerdict` Unix-socket API for companion UI polling
-- **FF-1 ext — QSY trust gating**: `allow_trustlevels` wired from config into `QsyPolicy`; fail-closed parsing rejects unknown trust-level strings at startup
-- **BL-FEC-1 Concatenated Conv+RS FEC** (PR #169): `transmit_with_concatenated_fec` / `receive_with_concatenated_fec`; Conv(rate-1/2) inner + RS(255,223) outer; ~2.28× overhead; `FecMode::Concatenated` in handshake negotiation
-- **BL-FEC-3 Short-block RS for ACK frames** (PR #170): `ShortFecCodec` encodes 5-byte FSK4-ACK frames to 13 bytes (5 + 8 ECC, t=4); `FecMode::ShortRs` (strength 4); `transmit_ack_with_short_fec` / `receive_ack_with_short_fec`
-- **BL-FEC-2 Strong RS codec** (PR #171): `FecCodec::strong()` — RS(255,191) with t=32 (64 ECC bytes/block); corrects up to 32 byte errors vs. 16; `FecMode::RsStrong` (strength 5); `transmit_with_strong_fec` / `receive_with_strong_fec`
-- **BL-FEC-4 Memory-ARQ soft combining** (PR #171): `SoftCombiner` accumulates N retransmission sample buffers; `receive_with_soft_combining` averages element-wise before demodulation; ~3 dB SNR gain per doubling of retransmissions; no wire protocol change
-- **Phase 9 signal-path analytics**: IQ scatter plot, SNR trend, asymmetric rate adaptation, SNR-driven step-down, broadcast/beacon mode alongside ARQ
-- **Winlink gateway**: direct TCP connection to `cms.winlink.org`, ISS and IRS roles, LZHUF (Type C) and Gzip (Type D) compression
-- **PKI service**: Ed25519 trust-bundle signing, REST API, PostgreSQL backend
+**Core modem (Phases 1–9)**
+Modulation plugins (BPSK, QPSK, 8PSK, FSK4, OFDM, SC-FDMA), rate adaptation, 8 ACK types,
+signed handshake, SAR, DCD/CSMA, peer cache, multi-hop relay, post-quantum handshake,
+GPU acceleration (optional), B2F/Winlink, ARDOP TNC, KISS TNC, direct CMS gateway,
+TOML config, structured JSON event stream, ratatui TUI, egui testbench + operator panel GUI
 
-See [`docs/roadmap.md`](docs/roadmap.md) for per-item ✅ markers and PR references.
+**Far-future features (FF series)**
+
+| Item | Feature |
+|---|---|
+| FF-1 | QSY frequency agility with rigctld |
+| FF-2 | I/Q complex baseband output for SDR upconversion |
+| FF-3 | RRC matched filtering + Gardner timing recovery + Costas PLL |
+| FF-4 | OFDM multi-carrier plugin (OFDM16, OFDM52) with LS+ZF equalization |
+| FF-5 | UHF/VHF narrowband/HD modes (2000 and 9600 baud QPSK/8PSK) |
+| FF-6 | Binary spectrum channel (20 Hz waterfall, operator panel) |
+| FF-7 | Tanh TX limiter (soft-clip for PA back-off on 8PSK/RRC) |
+| FF-8 | Per-band TX attenuation persistence via rigctld |
+| FF-9 | HPX reactor pattern (event-driven session state machine) |
+| FF-10 | Zstd dictionary compression |
+| FF-11 | FreeDV authenticated voice shim (Ed25519 via codec2 data channel) |
+| FF-12 | SC-FDMA waveform plugin (SCFDMA16, SCFDMA52) |
+| FF-13 | Generic serial CAT (TOML-scripted, for rigs not in hamlib) |
+
+**FEC backlog (BL-FEC series)**
+
+| Item | Feature |
+|---|---|
+| BL-FEC-1 | Concatenated Conv+RS session mode (PR #169) |
+| BL-FEC-2 | Strong RS(255,191) t=32 codec (PR #171) |
+| BL-FEC-3 | Short-block RS for ACK/control frames (PR #170) |
+| BL-FEC-4 | Memory-ARQ soft combining (PR #171) |
+| BL-FEC-5 | K=7 soft-decision Viterbi + `demodulate_soft()` plugin API (PR #177) |
+| BL-FEC-6 | `IterativeDecoder` trait + `LdpcCodec` stub — GPU path reserved (PR #176) |
 
 ---
 
-## What is coming
+## Getting started
 
-Active work tracks:
-
-- (no gated items — see `docs/roadmap.md` for deferred FF items)
-
-Recently completed:
-
-- **FF-12 SC-FDMA** ✅: DFT-spread OFDM plugin — SCFDMA16 (625 Hz, ~889 bps) and SCFDMA52 (2031 Hz, ~2889 bps); 3–4 dB lower PAPR than OFDM without clipping — PR #175
-- **FF-13 Generic serial CAT** ✅: TOML-scriptable rig control for rigs not in hamlib (Icom CI-V, Yaesu binary CAT) — PR #173
-
----
-
-## Test and validation harness
-
-OpenPulseHF ships a multi-layer test harness that validates correctness without radio hardware:
-
-### Channel simulation
-
-`openpulse-channel` implements four published ionospheric channel models:
-
-- **Watterson F1** (Good): 0.1 Hz Doppler spread, 0.5 ms delay spread — typical stable mid-latitude path
-- **Watterson F2** (Moderate): 1.0 Hz Doppler spread, 1.0 ms delay spread
-- **Watterson F3** (Poor): 10 Hz Doppler spread, 2.0 ms delay spread
-- **Gilbert-Elliott**: burst-error model with configurable good/bad state transition rates and BER
-- **AWGN**, **QRN** (impulsive noise), **QRM** (co-channel interference), **QSB** (slow fading)
-
-The `ChannelSimHarness` wires two full `ModemEngine` instances through a channel model — the same encode/channel/decode stack used in production.
-
-### Benchmark harness
+### Prerequisites
 
 ```bash
-cargo run -p openpulse-cli --no-default-features -- --backend loopback --log error benchmark run
+# Linux (Debian/Ubuntu)
+sudo apt install libasound2-dev
+
+# macOS — no extra packages needed
+
+# Raspberry Pi 4 cross-compilation
+cargo install cross
 ```
 
-Gate criterion: **100% frame pass rate, mean state transitions ≤ 20**. CI enforces this on every PR.
-
-### Testbench GUI
-
-`apps/openpulse-testbench` is a live four-column egui/eframe signal-path viewer:
-
-- TX (clean) → Noise channel → Mixed (TX+noise) → RX (decoded)
-- Per-tap: FFT spectrum line plot + plasma-colourmap waterfall
-- Mode selector, noise model dropdown, SNR slider, FEC toggle
-- Live BER and rolling event log
-- Optional live audio capture (`--features cpal`) for real-signal testing
-
-### End-to-end loopback
-
-`crates/openpulse-b2f-driver/tests/e2e_loopback.rs` runs a full B2F message exchange through two modem engines and a channel model — no TCP server, no radio hardware, deterministic seed.
-
----
-
-## Legal compliance
-
-**OpenPulseHF uses digital signatures for authentication, not encryption for content privacy.**
-
-This distinction is intentional and legally significant:
-
-- **FCC Part 97.113(a)(4)** prohibits messages encoded for the purpose of obscuring their meaning. OpenPulseHF does not encrypt payload content. The Ed25519 and ML-DSA signatures authenticate the sender and detect tampering — they do not hide the message body.
-- **CEPT/ERC/REC 25-10** and most EU national amateur radio regulations apply the same principle. Content encryption over amateur bands is prohibited; cryptographic authentication of the sender is not.
-- **All frame payloads are human-readable** or decodable with standard tools. The ARDOP and KISS interfaces carry standard AX.25/Winlink message formats.
-- **Callsign identification** is preserved through the B2F/Winlink message headers and the HPX session handshake. The `MYID` command on the ARDOP TNC interface sets the station callsign in all connection frames.
-
-If you use OpenPulseHF on amateur radio frequencies, ensure your callsign is correctly configured in `~/.config/openpulse/config.toml` under `[station] callsign`. The software will refuse to connect to Winlink CMS with the default `N0CALL` placeholder.
-
----
-
-## Quick start
+### Build and run
 
 ```bash
-# Build (requires libasound2-dev on Linux for CPAL; omit --no-default-features for audio hardware)
-cargo build --workspace --no-default-features
+# Full workspace build
+cargo build --workspace
 
-# Run all tests (no audio hardware required)
+# Run the CLI in loopback mode (no radio hardware needed)
+cargo run -p openpulse-cli --no-default-features -- --backend loopback --log info transmit "Hello HF"
+
+# Start an ARDOP-compatible TNC (Pat-ready)
+cargo run -p openpulse-ardop -- --mode BPSK250 --cmd-port 8515 --data-port 8516
+
+# Start a KISS TNC (APRS-ready)
+cargo run -p openpulse-kiss -- --mode BPSK250 --port 8100
+
+# Run the signal-path benchmark
+cargo run -p openpulse-cli --no-default-features -- --backend loopback --log error benchmark run
+
+# Run the full test matrix (virtual channels, no hardware)
+cargo run -p openpulse-testmatrix --no-default-features -- --full --output docs/test-reports
+```
+
+### Tests
+
+```bash
+# Full test suite (no audio hardware required)
 cargo test --workspace --no-default-features
 
-# Start a KISS TNC for your AX.25 application (default port 8100)
-cargo run -p openpulse-kiss --no-default-features
-
-# Start an ARDOP TNC for Pat (default cmd port 8515, data port 8516)
-cargo run -p openpulse-ardop --no-default-features
-
-# Send a Winlink message direct to CMS via TCP
-cargo run -p openpulse-gateway -- send --to W1AW --subject "Hello" --message "Test"
-
-# Initialise a config file
-cargo run -p openpulse-cli --no-default-features -- config init > ~/.config/openpulse/config.toml
+# Clippy (CI gate)
+cargo clippy --workspace --no-default-features -- -D warnings
 ```
 
-See [`docs/cli-guide.md`](docs/cli-guide.md) for full CLI reference and [`docs/on-air_testplan.md`](docs/on-air_testplan.md) for hardware setup and on-air test procedures.
+### Raspberry Pi cross-compilation
+
+```bash
+cross build --release --workspace --target aarch64-unknown-linux-gnu --no-default-features
+```
+
+---
+
+## Architecture overview
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Applications                                                       │
+│  openpulse-cli  openpulse-tui  openpulse-testbench  openpulse-panel│
+└───────────────────┬─────────────────────────────────────────────────┘
+                    │
+┌───────────────────▼─────────────────────────────────────────────────┐
+│  Protocol layer                                                     │
+│  openpulse-ardop  openpulse-kiss  openpulse-b2f  openpulse-gateway │
+│  openpulse-qsy    openpulse-mesh  openpulse-repeater               │
+└───────────────────┬─────────────────────────────────────────────────┘
+                    │
+┌───────────────────▼─────────────────────────────────────────────────┐
+│  Modem engine (openpulse-modem)                                     │
+│  ModemEngine · PipelineScheduler · ChannelSimHarness               │
+└────────┬──────────────────────────────────┬────────────────────────┘
+         │                                  │
+┌────────▼────────┐               ┌─────────▼──────────────────────┐
+│  Core           │               │  Plugins                       │
+│  openpulse-core │               │  bpsk · qpsk · psk8 · fsk4    │
+│  FecCodec · SAR │               │  ofdm · scfdma                 │
+│  HpxReactor     │               └────────────────────────────────┘
+│  PQ handshake   │
+│  Trust / PKI    │
+└─────────────────┘
+```
+
+See `docs/architecture.md` for the full crate map and design decisions.
 
 ---
 
 ## Documentation
 
-| Document | Contents |
+| Topic | Document |
 |---|---|
-| [`docs/roadmap.md`](docs/roadmap.md) | Phase gates, completion status, FF-series feature list |
-| [`docs/architecture.md`](docs/architecture.md) | Crate map, plugin system, session layer design |
-| [`docs/requirements.md`](docs/requirements.md) | Functional and non-functional requirements |
-| [`docs/cli-guide.md`](docs/cli-guide.md) | CLI subcommands, flags, config file reference |
-| [`docs/on-air_testplan.md`](docs/on-air_testplan.md) | Hardware prerequisites, test matrix, regulatory checklist |
-| [`docs/peer-query-relay-wire.md`](docs/peer-query-relay-wire.md) | Binary envelope and payload wire format |
-| [`docs/hpx-session-state-machine.md`](docs/hpx-session-state-machine.md) | HPX session state machine spec |
-| [`docs/benchmark-harness.md`](docs/benchmark-harness.md) | Benchmark harness and channel model spec |
-| [`docs/testbench-design.md`](docs/testbench-design.md) | Testbench GUI design and channel model wiring |
-| [`docs/regulatory.md`](docs/regulatory.md) | FCC Part 97, CEPT, and ITU compliance notes |
-| [`docs/vara-research.md`](docs/vara-research.md) | VARA ACK taxonomy and rate adaptation analysis |
-| [`docs/pactor-research.md`](docs/pactor-research.md) | PACTOR Memory-ARQ and FEC research |
-| [`docs/backlog-fec-improvements.md`](docs/backlog-fec-improvements.md) | FEC improvements backlog (BL-FEC series) |
-| [`docs/backlog-waveforms.md`](docs/backlog-waveforms.md) | Multi-carrier waveform analysis: FBMC, UFMC, GFDM, SC-FDMA, OFDMA vs HF |
+| Architecture and crate map | `docs/architecture.md` |
+| CLI usage | `docs/cli-guide.md` |
+| HPX waveform design | `docs/hpx-waveform-design.md` |
+| HPX state machine | `docs/hpx-session-state-machine.md` |
+| Channel simulation harness | `docs/benchmark-harness.md` |
+| Feature roadmap | `docs/roadmap.md` |
+| FEC backlog | `docs/backlog-fec-improvements.md` |
+| Plugin contribution guide | `docs/contributing-plugins.md` |
+| Commercial plugin interface | `docs/plugin-commercial-interface.md` |
+| Regulatory compliance | `docs/regulatory.md` |
+| VARA research and comparison | `docs/vara-research.md` |
+| On-air test plan | `docs/on-air_testplan.md` |
+| On-air automation scripts | `scripts/run-onair-tests.sh` |
+| Code review request | `docs/requests/code-review.md` |
+| HAMRADIO 2026 marketing | `docs/marketing/` |
+| Agent / contributor safety rules | `AGENTS.md`, `docs/AGENTS.md` |
+
+---
+
+## Contributing
+
+PRs are welcome.  Read `docs/contributing-plugins.md` before writing a new modulation plugin.
+All PRs must pass `cargo test --workspace --no-default-features` and
+`cargo clippy --workspace --no-default-features -- -D warnings`.
 
 ---
 
 ## License
 
-GNU General Public License v3.0 or later — see [LICENSE](LICENSE).
+GNU General Public License v3.0 — see [LICENSE](LICENSE).
+
+For commercial or proprietary plugin integration, see
+[`docs/plugin-commercial-interface.md`](docs/plugin-commercial-interface.md).
