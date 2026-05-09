@@ -215,9 +215,9 @@ fn gross_bps(mode: &str) -> f64 {
         "8PSK500-RRC" => 1500.0,
         "8PSK1000-RRC" => 3000.0,
         "FSK4-ACK" => 200.0, // 100 baud × 2 bits/symbol (4-tone)
-        // OFDM: n_data × 2 bits × (8000 / 288) symbol/s
-        "OFDM16" => 889.0,  // 16 × 2 × 8000/288 ≈ 889 bps
-        "OFDM52" => 2889.0, // 52 × 2 × 8000/288 ≈ 2889 bps
+        // OFDM/SC-FDMA: n_data × 2 bits × (8000 / 288) symbol/s
+        "OFDM16" | "SCFDMA16" => 889.0, // 16 × 2 × 8000/288 ≈ 889 bps
+        "OFDM52" | "SCFDMA52" => 2889.0, // 52 × 2 × 8000/288 ≈ 2889 bps
         _ => 0.0,
     }
 }
@@ -417,9 +417,9 @@ pub fn draw_signal_panel(
             let sr = mode_symbol_rate_hz(&config.mode);
             let bw_half = if config.mode == "FSK4-ACK" {
                 150.0
-            } else if config.mode == "OFDM16" {
+            } else if config.mode == "OFDM16" || config.mode == "SCFDMA16" {
                 312.5
-            } else if config.mode == "OFDM52" {
+            } else if config.mode == "OFDM52" || config.mode == "SCFDMA52" {
                 1015.6
             } else if config.mode.starts_with("8PSK") || config.mode.ends_with("-HF") {
                 sr

@@ -22,6 +22,7 @@ members = [
     "plugins/ofdm",
     "plugins/psk8",
     "plugins/qpsk",
+    "plugins/scfdma",
     "pki-tooling",
     "apps/openpulse-testbench",
     "apps/openpulse-testmatrix",
@@ -62,6 +63,7 @@ fsk4-plugin       = { path = "plugins/fsk4" }
 ofdm-plugin       = { path = "plugins/ofdm" }
 psk8-plugin       = { path = "plugins/psk8" }
 qpsk-plugin       = { path = "plugins/qpsk" }
+scfdma-plugin     = { path = "plugins/scfdma" }
 
 thiserror          = "2.0"
 anyhow             = "1.0"

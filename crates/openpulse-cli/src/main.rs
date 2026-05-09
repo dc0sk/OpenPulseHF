@@ -15,10 +15,12 @@ use tracing::Level;
 
 use bpsk_plugin::BpskPlugin;
 use fsk4_plugin::Fsk4Plugin;
+use ofdm_plugin::OfdmPlugin;
 use openpulse_audio::LoopbackBackend;
 use openpulse_modem::ModemEngine;
 use psk8_plugin::Psk8Plugin;
 use qpsk_plugin::QpskPlugin;
+use scfdma_plugin::ScFdmaPlugin;
 
 #[cfg(feature = "cpal-backend")]
 use openpulse_audio::CpalBackend;
@@ -70,11 +72,17 @@ fn main() -> Result<()> {
         .register_plugin(Box::new(Fsk4Plugin::new()))
         .context("failed to register FSK4 plugin")?;
     engine
+        .register_plugin(Box::new(OfdmPlugin::new()))
+        .context("failed to register OFDM plugin")?;
+    engine
         .register_plugin(Box::new(Psk8Plugin::new()))
         .context("failed to register 8PSK plugin")?;
     engine
         .register_plugin(Box::new(QpskPlugin::new()))
         .context("failed to register QPSK plugin")?;
+    engine
+        .register_plugin(Box::new(ScFdmaPlugin::new()))
+        .context("failed to register SC-FDMA plugin")?;
     engine.set_trust_policy_profile(load_policy_profile_or_default());
 
     let pki = PkiClient::new(cli.pki_url.clone());
