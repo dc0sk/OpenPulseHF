@@ -1122,7 +1122,7 @@ impl ModemEngine {
             });
         }
 
-        let sv_decoded = SoftViterbiCodec.decode_soft(&llrs);
+        let sv_decoded = SoftViterbiCodec.decode_soft(&llrs)?;
         let rs_decoded = FecCodec::new().decode(&sv_decoded)?;
         let corrected_wire = WirePayload { bytes: rs_decoded };
         let corrected_wire =

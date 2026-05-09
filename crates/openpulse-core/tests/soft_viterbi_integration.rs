@@ -72,7 +72,7 @@ fn k7_encode_decode_round_trip() {
     let payload: Vec<u8> = (0u8..64).collect();
     let encoded = codec.encode(&payload);
     let llrs = hard_llrs(&encoded);
-    let decoded = codec.decode_soft(&llrs);
+    let decoded = codec.decode_soft(&llrs).unwrap();
     assert_eq!(decoded, payload);
 }
 
@@ -95,7 +95,7 @@ fn k7_soft_vs_hard_5pct_ber() {
         .iter()
         .flat_map(|&b| (0..8u8).map(move |i| if (b >> i) & 1 == 0 { 1.0f32 } else { -1.0f32 }))
         .collect();
-    let decoded_k7 = k7.decode_soft(&llrs_k7);
+    let decoded_k7 = k7.decode_soft(&llrs_k7).unwrap_or_default();
 
     // K=3 hard: direct decode from corrupted bytes.
     let decoded_k3 = k3.decode(&corrupt_k3).unwrap_or_default();
@@ -129,7 +129,7 @@ fn k7_coding_gain_over_uncoded() {
         .iter()
         .flat_map(|&b| (0..8u8).map(move |i| if (b >> i) & 1 == 0 { 1.0f32 } else { -1.0f32 }))
         .collect();
-    let decoded = k7.decode_soft(&llrs);
+    let decoded = k7.decode_soft(&llrs).unwrap_or_default();
     let fec_errors = count_bit_errors(&decoded, &payload);
 
     assert!(
@@ -158,12 +158,12 @@ fn k7_soft_beats_hard_at_low_snr() {
     for trial in 0u64..20 {
         // Soft: Gaussian-noisy LLRs
         let llrs_soft = bytes_to_llrs_noisy(&encoded, snr_linear, trial * 0x1234_5678 + 1);
-        let dec_soft = k7.decode_soft(&llrs_soft);
+        let dec_soft = k7.decode_soft(&llrs_soft).unwrap_or_default();
         errors_soft += count_bit_errors(&dec_soft, &payload);
 
         // Hard: quantize the same noisy LLRs to ±1.0
         let llrs_hard: Vec<f32> = llrs_soft.iter().map(|&l| l.signum()).collect();
-        let dec_hard = k7.decode_soft(&llrs_hard);
+        let dec_hard = k7.decode_soft(&llrs_hard).unwrap_or_default();
         errors_hard += count_bit_errors(&dec_hard, &payload);
     }
 

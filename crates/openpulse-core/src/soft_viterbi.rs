@@ -28,6 +28,8 @@ const G0: u8 = 0b1011011; // 0o133
 const G1: u8 = 0b1111001; // 0o171
 const FLUSH: usize = K - 1; // 6 tail bits to drain the shift register
 
+use crate::error::ModemError;
+
 /// K=7, rate-1/2 convolutional codec with a soft-decision Viterbi decoder.
 pub struct SoftViterbiCodec;
 
@@ -68,13 +70,15 @@ impl SoftViterbiCodec {
     /// `llrs` holds one `f32` per encoded bit (2 × total encoded bits before
     /// packing, LSB-first), with **positive = more likely 0**.
     ///
-    /// Returns the decoded payload bytes without the length prefix.  Returns an
-    /// empty vec if the LLR slice is too short to hold a valid frame.
-    pub fn decode_soft(&self, llrs: &[f32]) -> Vec<u8> {
+    /// Returns the decoded payload bytes without the length prefix.  Returns
+    /// `Err(ModemError::Fec)` if the LLR slice is too short or the length
+    /// prefix is inconsistent with the data.
+    pub fn decode_soft(&self, llrs: &[f32]) -> Result<Vec<u8>, ModemError> {
         let n_pairs = llrs.len() / 2;
         if n_pairs < 32 + FLUSH {
-            // Too short to contain even the 4-byte prefix + flush tail.
-            return vec![];
+            return Err(ModemError::Fec(
+                "LLR slice too short to contain a valid K=7 frame".into(),
+            ));
         }
 
         const NEG_INF: f32 = f32::NEG_INFINITY;
@@ -117,13 +121,9 @@ impl SoftViterbiCodec {
             tb_from.push(new_from);
         }
 
-        // Traceback from highest-metric terminal state.
-        let mut state = pm
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(i, _)| i)
-            .unwrap_or(0);
+        // The encoder flushes K-1 zero bits, driving the register to state 0.
+        // Traceback must therefore start from state 0, not the max-metric state.
+        let mut state = 0usize;
 
         let mut decoded: Vec<u8> = vec![0u8; n_pairs];
         for step in (0..n_pairs).rev() {
@@ -136,14 +136,18 @@ impl SoftViterbiCodec {
 
         // Read the 4-byte BE length prefix from the first 32 bits.
         if data_bits.len() < 32 {
-            return vec![];
+            return Err(ModemError::Fec(
+                "decoded bit stream too short to contain length prefix".into(),
+            ));
         }
         let orig_len = bits_be_to_u32(&data_bits[..32]) as usize;
         let want_bits = 32 + orig_len * 8;
         if data_bits.len() < want_bits {
-            return vec![];
+            return Err(ModemError::Fec(format!(
+                "decoded length prefix ({orig_len}) exceeds available bits"
+            )));
         }
-        pack_lsb(&data_bits[32..want_bits])
+        Ok(pack_lsb(&data_bits[32..want_bits]))
     }
 }
 
@@ -226,7 +230,7 @@ mod tests {
         let payload = b"Test";
         let encoded = codec.encode(payload);
         let llrs = to_llrs(&encoded);
-        let decoded = codec.decode_soft(&llrs);
+        let decoded = codec.decode_soft(&llrs).unwrap();
         assert_eq!(decoded.as_slice(), payload.as_ref());
     }
 
@@ -236,7 +240,7 @@ mod tests {
         let payload: Vec<u8> = (0u8..32).collect();
         let encoded = codec.encode(&payload);
         let llrs = to_llrs(&encoded);
-        let decoded = codec.decode_soft(&llrs);
+        let decoded = codec.decode_soft(&llrs).unwrap();
         assert_eq!(decoded, payload);
     }
 
@@ -245,7 +249,7 @@ mod tests {
         let codec = SoftViterbiCodec;
         let encoded = codec.encode(&[]);
         let llrs = to_llrs(&encoded);
-        let decoded = codec.decode_soft(&llrs);
+        let decoded = codec.decode_soft(&llrs).unwrap();
         assert_eq!(decoded, &[] as &[u8]);
     }
 
@@ -266,7 +270,13 @@ mod tests {
         let mut llrs = to_llrs(&encoded);
         // Flip one LLR to simulate a channel error.
         llrs[11] = -llrs[11];
-        let decoded = codec.decode_soft(&llrs);
+        let decoded = codec.decode_soft(&llrs).unwrap();
         assert_eq!(decoded.as_slice(), payload.as_ref());
+    }
+
+    #[test]
+    fn too_short_returns_err() {
+        let codec = SoftViterbiCodec;
+        assert!(codec.decode_soft(&[1.0f32; 4]).is_err());
     }
 }
