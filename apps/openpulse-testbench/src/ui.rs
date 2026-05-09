@@ -264,6 +264,22 @@ pub fn draw_stats(ui: &mut Ui, state: &AppState) {
         }
         ui.separator();
 
+        if state.config.fec_enabled {
+            match stats.fec_correction_rate() {
+                Some(rate) => {
+                    ui.label(format!("ECC: {:.1}%", rate * 100.0))
+                        .on_hover_text(format!(
+                            "{} of {} channel bit errors corrected by RS(255,223)",
+                            stats.fec_corrected_bits, stats.fec_channel_error_bits
+                        ));
+                }
+                None => {
+                    ui.label("ECC: N/A");
+                }
+            }
+            ui.separator();
+        }
+
         let gross = gross_bps(&state.config.mode);
         // RS(255,223): code rate = 223/255 ≈ 87.5 %
         let net = if state.config.fec_enabled {
@@ -381,11 +397,14 @@ pub fn draw_signal_panel(
         .show(ui, |plot_ui| {
             plot_ui.line(Line::new(plot_points).color(egui::Color32::from_rgb(100, 200, 100)));
 
-            // Bandwidth markers.
-            // 8PSK uses PSK31-style cosine shaping (null-to-null BW ≈ 2×Rs),
-            // all other modes use isolated Hann window (null-to-null BW ≈ 4×Rs).
+            // Bandwidth markers (half-width from centre = 1500 Hz).
+            // FSK4-ACK: 4 tones at ±50/±150 Hz → outermost edge at ±150 Hz.
+            // -HF / 8PSK: cosine overlap shaping, null-to-null BW ≈ 2×Rs → half = Rs.
+            // Everything else: Hann windowing, null-to-null BW ≈ 4×Rs → half = 2×Rs.
             let sr = mode_symbol_rate_hz(&config.mode);
-            let bw_half = if config.mode.starts_with("8PSK") {
+            let bw_half = if config.mode == "FSK4-ACK" {
+                150.0
+            } else if config.mode.starts_with("8PSK") || config.mode.ends_with("-HF") {
                 sr
             } else {
                 2.0 * sr

@@ -218,6 +218,7 @@ fn run(
             &stats,
             &rx_result,
             &fec,
+            &tx_payload,
             actual_algo,
             compress_ratio,
             &payload,
@@ -410,6 +411,7 @@ fn update_stats(
     stats: &Arc<RwLock<TestStats>>,
     rx_result: &Result<Vec<u8>, openpulse_core::error::ModemError>,
     fec: &Option<FecCodec>,
+    tx_encoded: &[u8],
     compression: CompressionAlgorithm,
     compress_ratio: f64,
     payload: &[u8],
@@ -428,12 +430,27 @@ fn update_stats(
         }
         Err(_) => n_bits as u64,
     };
+
+    // FEC correction accounting: count errors before and after FEC decode.
+    let (fec_channel_errors, fec_corrected) = match (fec, rx_result) {
+        (Some(codec), Ok(decoded)) => {
+            let pre_fec = count_bit_errors(tx_encoded, decoded);
+            let fec_out = codec.decode(decoded).unwrap_or_else(|_| decoded.clone());
+            let plain = decompress(&fec_out, compression).unwrap_or(fec_out);
+            let post_fec = count_bit_errors(payload, &plain);
+            (pre_fec, pre_fec.saturating_sub(post_fec))
+        }
+        _ => (0, 0),
+    };
+
     let success = rx_result.is_ok() && error_bits == 0;
 
     let mut s = stats.write().unwrap();
     s.runs += 1;
     s.total_bits += n_bits as u64;
     s.error_bits += error_bits;
+    s.fec_channel_error_bits += fec_channel_errors;
+    s.fec_corrected_bits += fec_corrected;
     s.last_compress_ratio = compress_ratio;
 
     // Sliding window: push this run's delivered bits and evict entries older than WINDOW_SECS.
