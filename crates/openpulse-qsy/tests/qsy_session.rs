@@ -398,8 +398,10 @@ fn accept_when_allow_list_empty() {
 /// `QsyPolicy::from_config` parses both kebab-case and underscore variants.
 #[test]
 fn from_config_parses_trust_strings() {
+    // underscore variant
     let policy =
-        QsyPolicy::from_config(true, &["verified".to_string(), "psk_verified".to_string()]);
+        QsyPolicy::from_config(true, &["verified".to_string(), "psk_verified".to_string()])
+            .expect("valid trust levels");
     assert!(policy.enabled);
     assert_eq!(
         policy.allow_trustlevels,
@@ -408,6 +410,20 @@ fn from_config_parses_trust_strings() {
             ConnectionTrustLevel::PskVerified
         ]
     );
+
+    // kebab-case variant — same result
+    let policy2 =
+        QsyPolicy::from_config(true, &["verified".to_string(), "psk-verified".to_string()])
+            .expect("valid trust levels (kebab)");
+    assert_eq!(policy.allow_trustlevels, policy2.allow_trustlevels);
+}
+
+/// Misspelled trust-level strings return an error rather than silently opening gating.
+#[test]
+fn from_config_rejects_unknown_trust_level() {
+    let result = QsyPolicy::from_config(true, &["verifed".to_string()]); // typo
+    assert!(result.is_err(), "expected Err for unknown trust level");
+    assert!(result.unwrap_err().contains("verifed"));
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

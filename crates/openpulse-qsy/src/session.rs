@@ -41,16 +41,27 @@ impl QsyPolicy {
     /// Build a `QsyPolicy` from config values, parsing trust-level strings.
     ///
     /// Accepts both kebab-case (`"psk-verified"`) and underscore variants (`"psk_verified"`).
-    /// Unrecognised strings are silently ignored.
-    pub fn from_config(enabled: bool, allow_trustlevels: &[String]) -> Self {
-        let levels = allow_trustlevels
-            .iter()
-            .filter_map(|s| parse_trust_level(s))
-            .collect();
-        Self {
+    /// Returns `Err` listing any unrecognised strings so misconfiguration is visible at startup
+    /// rather than silently opening trust gating.
+    pub fn from_config(enabled: bool, allow_trustlevels: &[String]) -> Result<Self, String> {
+        let mut levels = Vec::new();
+        let mut unknown = Vec::new();
+        for s in allow_trustlevels {
+            match s.parse::<ConnectionTrustLevel>() {
+                Ok(level) => levels.push(level),
+                Err(_) => unknown.push(s.as_str()),
+            }
+        }
+        if !unknown.is_empty() {
+            return Err(format!(
+                "unknown trust level(s) in allow_trustlevels: {}",
+                unknown.join(", ")
+            ));
+        }
+        Ok(Self {
             enabled,
             allow_trustlevels: levels,
-        }
+        })
     }
 }
 
@@ -393,19 +404,4 @@ fn pick_best_freq(my: &[(u64, f32)], partner: &[(u64, f32)]) -> Result<u64, QsyE
 fn random_token() -> String {
     let v: u32 = rand::thread_rng().gen();
     format!("{v:08x}")
-}
-
-/// Map a config trust-level string to [`ConnectionTrustLevel`].
-///
-/// Accepts both kebab-case (`"psk-verified"`) and underscore variants (`"psk_verified"`).
-fn parse_trust_level(s: &str) -> Option<ConnectionTrustLevel> {
-    match s.to_ascii_lowercase().replace('_', "-").as_str() {
-        "rejected" => Some(ConnectionTrustLevel::Rejected),
-        "low" => Some(ConnectionTrustLevel::Low),
-        "unverified" => Some(ConnectionTrustLevel::Unverified),
-        "reduced" => Some(ConnectionTrustLevel::Reduced),
-        "psk-verified" => Some(ConnectionTrustLevel::PskVerified),
-        "verified" => Some(ConnectionTrustLevel::Verified),
-        _ => None,
-    }
 }
