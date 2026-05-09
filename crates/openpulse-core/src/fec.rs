@@ -61,8 +61,8 @@ pub enum FecMode {
     SoftConcatenated,
     /// Reserved for BL-FEC-6 (LDPC / Turbo codes — GPU required, not yet implemented).
     ///
-    /// `ModemEngine` returns `ModemError::Configuration` when this variant is selected
-    /// until a concrete implementation lands in `openpulse-gpu`.
+    /// Higher layers are expected to return `ModemError::Fec` when this variant
+    /// is selected until a concrete implementation lands in `openpulse-gpu`.
     Ldpc,
 }
 
@@ -464,6 +464,23 @@ impl Default for SoftCombiner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fec_mode_strength_ordering() {
+        assert!(FecMode::Rs.strength() > FecMode::None.strength());
+        assert!(FecMode::RsInterleaved.strength() > FecMode::Rs.strength());
+        assert!(FecMode::Concatenated.strength() > FecMode::RsInterleaved.strength());
+        assert!(FecMode::RsStrong.strength() > FecMode::Concatenated.strength());
+        assert!(FecMode::SoftConcatenated.strength() > FecMode::RsStrong.strength());
+        assert!(FecMode::Ldpc.strength() > FecMode::SoftConcatenated.strength());
+    }
+
+    #[test]
+    fn fec_mode_negotiate_picks_strongest_common() {
+        let offered = [FecMode::None, FecMode::Rs, FecMode::SoftConcatenated];
+        let accepted = [FecMode::None, FecMode::Rs, FecMode::Ldpc];
+        assert_eq!(FecMode::negotiate(&offered, &accepted), FecMode::Rs);
+    }
 
     #[test]
     fn round_trip_empty() {

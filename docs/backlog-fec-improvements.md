@@ -73,7 +73,7 @@ Reduces required SNR by ~3 dB per doubling of retransmissions (coherent averagin
 
 ## BL-FEC-5 — Soft-decision K=7 Viterbi (In progress — bl-fec-5-soft-viterbi branch)
 
-**From docs/vara-research.md.** K=7 soft-decision Viterbi gives ~5 dB additional coding gain over the current hard-decision K=3 ConvCodec. Implemented directly in `crates/openpulse-core/src/soft_viterbi.rs` — no external crate needed.
+**From docs/vara-research.md.** K=7 soft-decision Viterbi gives ~5 dB additional coding gain over the current hard-decision K=3 ConvCodec. Planned for `crates/openpulse-core/src/soft_viterbi.rs` — no external crate needed.
 
 Generators: G0=0o133, G1=0o171 (NASA/3GPP standard).  64 states.  Branch metric = sum of `llr * (1 - 2*encoded_bit)`.
 

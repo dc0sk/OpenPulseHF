@@ -46,13 +46,14 @@ pub trait IterativeDecoder: Send + Sync {
 pub struct LdpcCodec;
 
 impl IterativeDecoder for LdpcCodec {
-    fn encode(&self, _data: &[u8]) -> Vec<u8> {
-        // Will be replaced by a proper LDPC encoder once the wgpu path lands.
-        unimplemented!("LDPC encode is not yet implemented (BL-FEC-6 deferred)")
+    fn encode(&self, data: &[u8]) -> Vec<u8> {
+        // Passthrough stub — returns data unchanged until the wgpu encoder lands.
+        // Callers must gate on FecMode::Ldpc being unavailable before invoking.
+        data.to_vec()
     }
 
     fn decode_soft(&self, _llrs: &[f32]) -> Result<Vec<u8>, ModemError> {
-        Err(ModemError::Demodulation(
+        Err(ModemError::Fec(
             "LDPC soft decode not yet implemented (BL-FEC-6 deferred — requires GPU)".into(),
         ))
     }
@@ -73,7 +74,15 @@ mod tests {
     #[test]
     fn ldpc_stub_decode_returns_err() {
         let codec = LdpcCodec;
-        assert!(codec.decode_soft(&[1.0f32; 2048]).is_err());
+        let err = codec.decode_soft(&[1.0f32; 2048]).unwrap_err();
+        assert!(matches!(err, crate::error::ModemError::Fec(_)));
+    }
+
+    #[test]
+    fn ldpc_stub_encode_passthrough() {
+        let codec = LdpcCodec;
+        let data = b"test";
+        assert_eq!(codec.encode(data), data);
     }
 
     #[test]
