@@ -160,6 +160,9 @@ impl TestCase {
 pub struct TestResult {
     pub case: TestCase,
     pub passed: bool,
+    /// True when the case was intentionally skipped (e.g. unsupported FEC mode).
+    /// Skipped cases are excluded from pass-rate aggregation.
+    pub skipped: bool,
     pub ber: Option<f64>,
     pub bytes_rx: usize,
     pub duration_ms: u64,

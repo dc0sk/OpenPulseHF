@@ -78,6 +78,7 @@ pub fn run(case: &TestCase, profile: SessionProfile) -> TestResult {
     TestResult {
         case: case.clone(),
         passed: true,
+        skipped: false,
         ber: None,
         bytes_rx: payload.len(),
         duration_ms,
@@ -94,6 +95,7 @@ fn fail(case: &TestCase, start: Instant, note: String) -> TestResult {
     TestResult {
         case: case.clone(),
         passed: false,
+        skipped: false,
         ber: None,
         bytes_rx: 0,
         duration_ms: start.elapsed().as_millis() as u64,

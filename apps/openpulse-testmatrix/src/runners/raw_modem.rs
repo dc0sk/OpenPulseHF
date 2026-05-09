@@ -98,6 +98,7 @@ pub fn run(case: &TestCase) -> TestResult {
         return TestResult {
             case: case.clone(),
             passed: false,
+            skipped: false,
             ber: Some(byte_ber(&payload, &rx_data)),
             bytes_rx,
             duration_ms,
@@ -109,6 +110,7 @@ pub fn run(case: &TestCase) -> TestResult {
     TestResult {
         case: case.clone(),
         passed: true,
+        skipped: false,
         ber: Some(0.0),
         bytes_rx,
         duration_ms,
@@ -122,6 +124,7 @@ fn fail(case: &TestCase, bytes_rx: usize, start: Instant, note: String) -> TestR
     TestResult {
         case: case.clone(),
         passed: false,
+        skipped: false,
         ber: None,
         bytes_rx,
         duration_ms,
@@ -133,7 +136,8 @@ fn fail(case: &TestCase, bytes_rx: usize, start: Instant, note: String) -> TestR
 fn skip(case: &TestCase, note: &str) -> TestResult {
     TestResult {
         case: case.clone(),
-        passed: true, // skipped cases don't count as failures
+        passed: false,
+        skipped: true,
         ber: None,
         bytes_rx: 0,
         duration_ms: 0,

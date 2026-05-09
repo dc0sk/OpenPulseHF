@@ -94,11 +94,11 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
     }
 
     // ── 2. AWGN SNR sweep: fast HF modes × all AWGN channels × {None, Rs, RsInterleaved} ×
-    //       {128, 512} bytes ───────────────────────────────────────────────────────
+    //       {128, 223} bytes — 223 is the max RS(255,223) input without SAR
     for mode in HF_FAST_MODES {
         for channel in &awgn_channels {
             for &fec in &[FecMode::None, FecMode::Rs, FecMode::RsInterleaved] {
-                for &payload_len in &[128usize, 512] {
+                for &payload_len in &[128usize, 223] {
                     cases.push(raw_case(
                         mode,
                         fec,
@@ -140,7 +140,7 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
         }
     }
 
-    // ── 4. Compression matrix: HF fast modes × clean × all FEC × all compression × 128 bytes
+    // ── 4. Compression matrix: HF fast modes × clean × {None, Rs} FEC × all compression × 128 bytes
     for mode in HF_FAST_MODES {
         for &fec in &[FecMode::None, FecMode::Rs] {
             for compression in [
@@ -246,11 +246,11 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
             }
         }
 
-        // HF fast modes × all propagation channels × all FEC × {32, 128, 512} bytes
+        // HF fast modes × all propagation channels × all FEC × {32, 128, 223} bytes
         for mode in HF_FAST_MODES {
             for channel in &prop_channels {
                 for &fec in DATA_FEC_MODES {
-                    for &payload_len in &[32usize, 128, 512] {
+                    for &payload_len in &[32usize, 128, 223] {
                         cases.push(raw_case(
                             mode,
                             fec,
@@ -296,7 +296,7 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
             }
         }
 
-        // Large payload (4096 bytes): key modes × key FEC × clean + awgn20
+        // Large payload (223 bytes): key modes × key FEC × clean + awgn20
         let large_channels = vec![
             ChannelSpec::Clean,
             ChannelSpec::Awgn {
@@ -312,7 +312,7 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
                         fec,
                         CompressionAlgorithm::None,
                         channel.clone(),
-                        4096,
+                        223,
                         tier,
                     ));
                 }

@@ -21,6 +21,7 @@ pub fn run(case: &TestCase) -> TestResult {
     TestResult {
         case: case.clone(),
         passed: result.is_ok(),
+        skipped: false,
         ber: None,
         bytes_rx: result.as_ref().map(|v| v.len()).unwrap_or(0),
         duration_ms: start.elapsed().as_millis() as u64,

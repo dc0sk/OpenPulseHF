@@ -17,12 +17,24 @@ pub fn register_all(engine: &mut ModemEngine) {
     use psk8_plugin::Psk8Plugin;
     use qpsk_plugin::QpskPlugin;
     use scfdma_plugin::ScFdmaPlugin;
-    let _ = engine.register_plugin(Box::new(BpskPlugin::new()));
-    let _ = engine.register_plugin(Box::new(QpskPlugin::new()));
-    let _ = engine.register_plugin(Box::new(Psk8Plugin::new()));
-    let _ = engine.register_plugin(Box::new(Fsk4Plugin::new()));
-    let _ = engine.register_plugin(Box::new(OfdmPlugin::new()));
-    let _ = engine.register_plugin(Box::new(ScFdmaPlugin::new()));
+    engine
+        .register_plugin(Box::new(BpskPlugin::new()))
+        .expect("register BpskPlugin");
+    engine
+        .register_plugin(Box::new(QpskPlugin::new()))
+        .expect("register QpskPlugin");
+    engine
+        .register_plugin(Box::new(Psk8Plugin::new()))
+        .expect("register Psk8Plugin");
+    engine
+        .register_plugin(Box::new(Fsk4Plugin::new()))
+        .expect("register Fsk4Plugin");
+    engine
+        .register_plugin(Box::new(OfdmPlugin::new()))
+        .expect("register OfdmPlugin");
+    engine
+        .register_plugin(Box::new(ScFdmaPlugin::new()))
+        .expect("register ScFdmaPlugin");
 }
 
 pub fn run_case(case: &TestCase) -> TestResult {
