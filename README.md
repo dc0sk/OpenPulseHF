@@ -106,7 +106,7 @@ See [`docs/roadmap.md`](docs/roadmap.md) for per-item ✅ markers and PR referen
 
 Active work tracks (see [`docs/roadmap.md`](docs/roadmap.md) FF-series):
 
-All FF-series features have shipped. See the roadmap for the FEC improvements backlog (BL-FEC series).
+All FF-series features have shipped. See the roadmap for the FEC improvements backlog (BL-FEC series) and the FF-12 SC-FDMA evaluation gate.
 
 ---
 
@@ -207,6 +207,8 @@ See [`docs/cli-guide.md`](docs/cli-guide.md) for full CLI reference and [`docs/o
 | [`docs/regulatory.md`](docs/regulatory.md) | FCC Part 97, CEPT, and ITU compliance notes |
 | [`docs/vara-research.md`](docs/vara-research.md) | VARA ACK taxonomy and rate adaptation analysis |
 | [`docs/pactor-research.md`](docs/pactor-research.md) | PACTOR Memory-ARQ and FEC research |
+| [`docs/backlog-fec-improvements.md`](docs/backlog-fec-improvements.md) | FEC improvements backlog (BL-FEC series) |
+| [`docs/backlog-waveforms.md`](docs/backlog-waveforms.md) | Multi-carrier waveform analysis: FBMC, UFMC, GFDM, SC-FDMA, OFDMA vs HF |
 
 ---
 
