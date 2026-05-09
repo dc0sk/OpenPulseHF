@@ -1,6 +1,7 @@
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::str::FromStr;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +30,18 @@ pub enum ConnectionTrustLevel {
     Reduced,
     PskVerified,
     Verified,
+}
+
+impl FromStr for ConnectionTrustLevel {
+    type Err = String;
+
+    /// Parse a trust-level string, accepting both kebab-case (`"psk-verified"`) and
+    /// underscore variants (`"psk_verified"`).
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let normalised = s.to_ascii_lowercase().replace('_', "-");
+        serde_json::from_str::<Self>(&format!("\"{normalised}\""))
+            .map_err(|_| format!("unknown trust level: {s:?}"))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

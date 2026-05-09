@@ -6,7 +6,7 @@ use ed25519_dalek::SigningKey;
 use openpulse_qsy::{
     frame::{decode_signed, decode_unsigned, encode_signed, encode_unsigned},
     scanner::QsyScanner,
-    QsyAction, QsyFrame, QsyFrameError, QsyPolicy, QsySession,
+    ConnectionTrustLevel, QsyAction, QsyFrame, QsyFrameError, QsyPolicy, QsySession,
 };
 use openpulse_radio::RigctldController;
 use rand::rngs::OsRng;
@@ -131,7 +131,11 @@ fn initiator_full_flow() {
 /// Responder drives through the full flow and ends with QsyNow.
 #[test]
 fn responder_full_flow() {
-    let mut session = QsySession::new_responder(QsyPolicy { enabled: true });
+    let policy = QsyPolicy {
+        enabled: true,
+        allow_trustlevels: vec![],
+    };
+    let mut session = QsySession::new_responder(policy, ConnectionTrustLevel::Verified);
 
     // Receive QSY_REQ
     let actions = session
@@ -188,7 +192,11 @@ fn responder_full_flow() {
 /// When `enabled=false`, responder rejects QSY_REQ with Reject action.
 #[test]
 fn reject_on_policy() {
-    let mut session = QsySession::new_responder(QsyPolicy { enabled: false });
+    let policy = QsyPolicy {
+        enabled: false,
+        allow_trustlevels: vec![],
+    };
+    let mut session = QsySession::new_responder(policy, ConnectionTrustLevel::Verified);
     let actions = session
         .apply(QsyFrame::Req {
             token: "12345678".into(),
@@ -258,7 +266,13 @@ fn qsy_reject_frame_yields_reject_action() {
     // Test on both initiator and responder
     for mut session in [
         QsySession::new_initiator(),
-        QsySession::new_responder(QsyPolicy { enabled: true }),
+        QsySession::new_responder(
+            QsyPolicy {
+                enabled: true,
+                allow_trustlevels: vec![],
+            },
+            ConnectionTrustLevel::Verified,
+        ),
     ] {
         let actions = session
             .apply(QsyFrame::Reject {
@@ -305,6 +319,111 @@ fn scanner_returns_snr() {
         freqs.last() == Some(&14074000),
         "expected home freq 14074000 as last set_freq, got {freqs:?}"
     );
+}
+
+// ── Trust-gating tests ───────────────────────────────────────────────────────
+
+/// Peer trust level not in allow list → reject with "trust level not permitted".
+#[test]
+fn reject_on_trust_level_not_permitted() {
+    let policy = QsyPolicy {
+        enabled: true,
+        allow_trustlevels: vec![ConnectionTrustLevel::Verified],
+    };
+    let mut session = QsySession::new_responder(policy, ConnectionTrustLevel::Unverified);
+    let actions = session
+        .apply(QsyFrame::Req {
+            token: "aabb1234".into(),
+            n_candidates: 2,
+        })
+        .unwrap();
+    assert!(
+        actions
+            .iter()
+            .any(|a| matches!(a, QsyAction::Reject { reason } if reason.contains("trust"))),
+        "expected trust Reject, got {actions:?}"
+    );
+    assert!(
+        actions
+            .iter()
+            .any(|a| matches!(a, QsyAction::SendFrame(QsyFrame::Reject { .. }))),
+        "expected SendFrame(Reject), got {actions:?}"
+    );
+}
+
+/// Peer trust level in allow list → accepted (no Reject action).
+#[test]
+fn accept_when_trust_level_matches() {
+    let policy = QsyPolicy {
+        enabled: true,
+        allow_trustlevels: vec![ConnectionTrustLevel::Verified],
+    };
+    let mut session = QsySession::new_responder(policy, ConnectionTrustLevel::Verified);
+    let actions = session
+        .apply(QsyFrame::Req {
+            token: "aabb1234".into(),
+            n_candidates: 2,
+        })
+        .unwrap();
+    assert!(
+        !actions
+            .iter()
+            .any(|a| matches!(a, QsyAction::Reject { .. })),
+        "unexpected Reject: {actions:?}"
+    );
+}
+
+/// Empty allow list → any trust level accepted.
+#[test]
+fn accept_when_allow_list_empty() {
+    let policy = QsyPolicy {
+        enabled: true,
+        allow_trustlevels: vec![],
+    };
+    let mut session = QsySession::new_responder(policy, ConnectionTrustLevel::Unverified);
+    let actions = session
+        .apply(QsyFrame::Req {
+            token: "aabb1234".into(),
+            n_candidates: 2,
+        })
+        .unwrap();
+    assert!(
+        !actions
+            .iter()
+            .any(|a| matches!(a, QsyAction::Reject { .. })),
+        "unexpected Reject: {actions:?}"
+    );
+}
+
+/// `QsyPolicy::from_config` parses both kebab-case and underscore variants.
+#[test]
+fn from_config_parses_trust_strings() {
+    // underscore variant
+    let policy =
+        QsyPolicy::from_config(true, &["verified".to_string(), "psk_verified".to_string()])
+            .expect("valid trust levels");
+    assert!(policy.enabled);
+    assert_eq!(
+        policy.allow_trustlevels,
+        vec![
+            ConnectionTrustLevel::Verified,
+            ConnectionTrustLevel::PskVerified
+        ]
+    );
+
+    // kebab-case variant — same result
+    let policy2 =
+        QsyPolicy::from_config(true, &["verified".to_string(), "psk-verified".to_string()])
+            .expect("valid trust levels (kebab)");
+    assert_eq!(policy.allow_trustlevels, policy2.allow_trustlevels);
+}
+
+/// Misspelled trust-level strings return an error rather than silently opening gating.
+#[test]
+fn from_config_rejects_unknown_trust_level() {
+    let result = QsyPolicy::from_config(true, &["verifed".to_string()]); // typo
+    assert!(result.is_err(), "expected Err for unknown trust level");
+    assert!(result.unwrap_err().contains("verifed"));
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

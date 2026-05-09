@@ -8,5 +8,6 @@ pub mod scanner;
 pub mod session;
 
 pub use frame::{QsyFrame, QsyFrameError};
+pub use openpulse_core::trust::ConnectionTrustLevel;
 pub use scanner::{QsyScanner, QsyScannerError};
 pub use session::{QsyAction, QsyError, QsyPolicy, QsySession};
