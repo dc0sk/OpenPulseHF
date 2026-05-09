@@ -1153,8 +1153,8 @@ Incremental FEC improvements tracked in [`docs/backlog-fec-improvements.md`](bac
 | BL-FEC-2 | RS t=32 strong codec (RS(255,191), 25% overhead) | ✅ Done (PR #171) |
 | BL-FEC-3 | Short-block RS for ACK/control frames (5 B → 13 B) | ✅ Done (PR #170) |
 | BL-FEC-4 | Memory-ARQ soft combining (element-wise sample averaging) | ✅ Done (PR #171) |
-| BL-FEC-5 | Soft-decision K=7 Viterbi | In progress — bl-fec-5-soft-viterbi |
-| BL-FEC-6 | Turbo / LDPC codes — `IterativeDecoder` trait + stub | In progress — bl-fec-6-ldpc-prep |
+| BL-FEC-5 | Soft-decision K=7 Viterbi | ✅ Done (PR #177) |
+| BL-FEC-6 | Turbo / LDPC codes — `IterativeDecoder` trait + stub | ✅ Done (PR #176) |
 
 ---
 
