@@ -29,6 +29,10 @@ pub struct Cli {
     #[arg(long, global = true, default_value = "")]
     pub rig: String,
 
+    /// Path to TOML rig-definition file for the generic serial CAT backend.
+    #[arg(long, global = true, default_value = "")]
+    pub rig_file: String,
+
     #[command(subcommand)]
     pub command: Commands,
 }

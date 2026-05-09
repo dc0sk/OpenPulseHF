@@ -20,21 +20,12 @@ pub enum QsyError {
 }
 
 /// Policy governing whether this node accepts QSY requests.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct QsyPolicy {
     /// When false, all incoming `QSY_REQ` frames are immediately rejected.
     pub enabled: bool,
     /// Trust levels from which `QSY_REQ` is accepted.  An empty list accepts any level.
     pub allow_trustlevels: Vec<ConnectionTrustLevel>,
-}
-
-impl Default for QsyPolicy {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            allow_trustlevels: vec![],
-        }
-    }
 }
 
 impl QsyPolicy {

@@ -78,7 +78,7 @@ fn main() -> Result<()> {
     engine.set_trust_policy_profile(load_policy_profile_or_default());
 
     let pki = PkiClient::new(cli.pki_url.clone());
-    let mut ptt = radio::build_ptt_controller(&cli.ptt, &cli.rig)?;
+    let mut ptt = radio::build_ptt_controller(&cli.ptt, &cli.rig, &cli.rig_file)?;
     let mut exit_code = 0;
 
     match cli.command {
