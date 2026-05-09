@@ -211,8 +211,12 @@ impl ShortFecCodec {
         Self::with_ecc_len(SHORT_FEC_ECC_LEN)
     }
 
-    /// Create a codec with a custom ECC byte count.
+    /// Create a codec with a custom ECC byte count (must be in 1..=254).
     pub fn with_ecc_len(ecc_len: usize) -> Self {
+        assert!(
+            (1..=254).contains(&ecc_len),
+            "ShortFecCodec: ecc_len must be 1..=254, got {ecc_len}"
+        );
         Self {
             ecc_len,
             encoder: Encoder::new(ecc_len),
@@ -222,7 +226,7 @@ impl ShortFecCodec {
 
     /// Encode `data` → `data.len() + ecc_len` bytes.
     pub fn encode(&self, data: &[u8]) -> Result<Vec<u8>, ModemError> {
-        let max = 255 - self.ecc_len;
+        let max = 255 - self.ecc_len; // safe: ecc_len ≤ 254 by construction
         if data.len() > max {
             return Err(ModemError::Fec(format!(
                 "ShortFecCodec: payload {} bytes exceeds maximum {max}",

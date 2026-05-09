@@ -1046,6 +1046,7 @@ impl ModemEngine {
         ack: &AckFrame,
         device: Option<&str>,
     ) -> Result<(), ModemError> {
+        self.csma_check()?;
         let raw = ack.encode();
         let fec_bytes = ShortFecCodec::new().encode(&raw)?;
         let wire = WirePayload { bytes: fec_bytes };
@@ -1068,6 +1069,16 @@ impl ModemEngine {
     ) -> Result<AckFrame, ModemError> {
         let samples = self.stage_capture_input(device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+
+        let prev_busy = self.dcd.is_busy();
+        self.dcd.update(&samples.samples);
+        if self.dcd.is_busy() != prev_busy {
+            let _ = self.event_tx.send(EngineEvent::DcdChange {
+                busy: self.dcd.is_busy(),
+                energy: self.dcd.energy(),
+            });
+        }
+
         let mode = "FSK4-ACK";
         let wire = {
             let plugin = self
@@ -1076,10 +1087,21 @@ impl ModemEngine {
                 .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
             self.stage_demodulate_payload(plugin, mode, &samples)?
         };
+
+        self.update_afc_estimate(mode, &samples.samples);
+        if let Some(hz) = self.last_afc_offset_hz {
+            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
+                offset_hz: hz,
+                correction_hz: self.afc_correction_hz,
+                mode: mode.to_string(),
+            });
+        }
+
         let decoded = ShortFecCodec::new().decode(&wire.bytes)?;
-        let arr: [u8; 5] = decoded
-            .try_into()
-            .map_err(|_| ModemError::Frame("ShortFEC ACK decode: expected 5 bytes".to_string()))?;
+        let n = decoded.len();
+        let arr: [u8; 5] = decoded.try_into().map_err(|_| {
+            ModemError::Frame(format!("ShortFEC ACK decode: expected 5 bytes, got {n}"))
+        })?;
         AckFrame::decode(&arr).map_err(|e| ModemError::Frame(format!("AckFrame decode: {e:?}")))
     }
 
