@@ -129,8 +129,10 @@ pub struct RepeaterConfig {
     pub enabled: bool,
     /// Modulation mode used for both RX (rig_a) and TX (rig_b).
     pub mode: String,
-    /// Milliseconds to hold PTT after the last byte is transmitted.
+    /// Milliseconds to hold PTT after the last byte is transmitted (half-duplex only).
     pub tx_hang_ms: u64,
+    /// When true, PTT is held for the entire relay session.  `tx_hang_ms` is ignored.
+    pub full_duplex: bool,
 }
 
 /// ARDOP TNC service settings.
@@ -251,6 +253,7 @@ impl Default for RepeaterConfig {
             enabled: false,
             mode: "BPSK250".into(),
             tx_hang_ms: 500,
+            full_duplex: false,
         }
     }
 }
@@ -449,8 +452,10 @@ rigctld_addr = "127.0.0.1:4532"
 enabled = false
 # Modulation mode used for both RX (rig_a) and TX (rig_b).
 mode = "BPSK250"
-# Milliseconds to hold PTT after the last byte is transmitted.
+# Milliseconds to hold PTT after the last byte is transmitted (half-duplex only).
 tx_hang_ms = 500
+# Hold PTT for the entire relay session instead of per-frame assert/release.
+# full_duplex = false
 
 [ardop]
 # IP address the ARDOP TNC listens on.

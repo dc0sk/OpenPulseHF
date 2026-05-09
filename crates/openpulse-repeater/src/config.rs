@@ -5,8 +5,11 @@ pub struct RepeaterConfig {
     pub enabled: bool,
     /// Modulation mode string used for both RX and TX (e.g. `"BPSK250"`).
     pub mode: String,
-    /// Milliseconds to hold PTT after the last TX byte.
+    /// Milliseconds to hold PTT after the last TX byte (half-duplex only).
     pub tx_hang_ms: u64,
+    /// When true, PTT is held for the entire relay session by `run_full_duplex()`.
+    /// `tx_hang_ms` is ignored in full-duplex mode.
+    pub full_duplex: bool,
 }
 
 impl Default for RepeaterConfig {
@@ -15,6 +18,7 @@ impl Default for RepeaterConfig {
             enabled: true,
             mode: "BPSK250".into(),
             tx_hang_ms: 0,
+            full_duplex: false,
         }
     }
 }
