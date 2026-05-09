@@ -7,6 +7,7 @@ use tracing::{debug, info};
 
 use openpulse_core::ack::AckType;
 use openpulse_core::audio::{AudioBackend, AudioConfig};
+use openpulse_core::conv::ConvCodec;
 use openpulse_core::dcd::DcdState;
 use openpulse_core::error::{ModemError, PluginError};
 use openpulse_core::fec::{FecCodec, Interleaver};
@@ -938,6 +939,99 @@ impl ModemEngine {
 
         let frame = self.stage_decode_frame(&corrected_wire)?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
+        let _ = self.event_tx.send(EngineEvent::FrameReceived {
+            mode: mode.to_string(),
+            bytes: frame.payload.len(),
+        });
+        Ok(frame.payload)
+    }
+
+    /// Transmit with concatenated Conv(rate-1/2) inner + RS outer FEC.
+    ///
+    /// TX chain: frame encode → RS encode → Conv encode → modulate → emit.
+    /// Use [`receive_with_concatenated_fec`](Self::receive_with_concatenated_fec)
+    /// on the receive side.
+    pub fn transmit_with_concatenated_fec(
+        &mut self,
+        data: &[u8],
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<(), ModemError> {
+        self.csma_check()?;
+
+        let frame_wire = self.stage_encode_frame(data);
+        let rs_bytes = FecCodec::new().encode(&frame_wire.bytes);
+        let conv_bytes = ConvCodec::new().encode(&rs_bytes);
+        let fec_wire = WirePayload { bytes: conv_bytes };
+        let fec_wire = self.route_wire_stage(PipelineStage::EncodeModulate, fec_wire)?;
+
+        debug!(
+            "concatenated FEC transmitting {} bytes (seq={}, mode={mode})",
+            fec_wire.bytes.len(),
+            self.sequence.wrapping_sub(1)
+        );
+
+        let samples = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_modulate_payload(plugin, mode, &fec_wire)?
+        };
+        let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
+        self.stage_emit_output(device, &samples)?;
+        let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
+            mode: mode.to_string(),
+            bytes: fec_wire.bytes.len(),
+        });
+        Ok(())
+    }
+
+    /// Receive with concatenated Conv(rate-1/2) inner + RS outer FEC.
+    ///
+    /// RX chain: capture → demodulate → Conv decode → RS decode → frame decode.
+    pub fn receive_with_concatenated_fec(
+        &mut self,
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<Vec<u8>, ModemError> {
+        let samples = self.stage_capture_input(device)?;
+        let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+
+        let prev_busy = self.dcd.is_busy();
+        self.dcd.update(&samples.samples);
+        if self.dcd.is_busy() != prev_busy {
+            let _ = self.event_tx.send(EngineEvent::DcdChange {
+                busy: self.dcd.is_busy(),
+                energy: self.dcd.energy(),
+            });
+        }
+
+        let raw_wire = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_demodulate_payload(plugin, mode, &samples)?
+        };
+        let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
+
+        self.update_afc_estimate(mode, &samples.samples);
+        if let Some(hz) = self.last_afc_offset_hz {
+            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
+                offset_hz: hz,
+                correction_hz: self.afc_correction_hz,
+                mode: mode.to_string(),
+            });
+        }
+
+        let conv_decoded = ConvCodec::new().decode(&raw_wire.bytes)?;
+        let rs_decoded = FecCodec::new().decode(&conv_decoded)?;
+        let corrected_wire = WirePayload { bytes: rs_decoded };
+
+        let frame = self.stage_decode_frame(&corrected_wire)?;
+        let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
+        info!("concatenated FEC receive: frame seq={}", frame.sequence);
         let _ = self.event_tx.send(EngineEvent::FrameReceived {
             mode: mode.to_string(),
             bytes: frame.payload.len(),

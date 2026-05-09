@@ -8,6 +8,7 @@
 
 use bpsk_plugin::BpskPlugin;
 use openpulse_audio::LoopbackBackend;
+use openpulse_core::conv::ConvCodec;
 use openpulse_core::fec::{FecCodec, Interleaver, DEFAULT_INTERLEAVER_DEPTH};
 use openpulse_modem::engine::ModemEngine;
 use qpsk_plugin::QpskPlugin;
@@ -255,4 +256,73 @@ fn fec_interleaved_ge_moderate_burst_scenario() {
     let deinterleaved = il.deinterleave(&corrupted);
     let recovered = codec.decode(&deinterleaved).unwrap();
     assert_eq!(recovered, payload);
+}
+
+// ── Concatenated Conv + RS FEC ────────────────────────────────────────────────
+
+#[test]
+fn concatenated_fec_bpsk250_loopback() {
+    let mut engine = engine_with_both_plugins();
+    let payload = b"concatenated FEC over BPSK250";
+    engine
+        .transmit_with_concatenated_fec(payload, "BPSK250", None)
+        .unwrap();
+    let received = engine
+        .receive_with_concatenated_fec("BPSK250", None)
+        .unwrap();
+    assert_eq!(received, payload);
+}
+
+#[test]
+fn concatenated_fec_qpsk250_loopback() {
+    let mut engine = engine_with_both_plugins();
+    let payload = b"concatenated FEC over QPSK250";
+    engine
+        .transmit_with_concatenated_fec(payload, "QPSK250", None)
+        .unwrap();
+    let received = engine
+        .receive_with_concatenated_fec("QPSK250", None)
+        .unwrap();
+    assert_eq!(received, payload);
+}
+
+/// Concatenated codec: errors injected into the RS layer (simulating residual
+/// Viterbi output errors) are corrected by the outer RS code.
+#[test]
+fn concatenated_codec_corrects_random_errors() {
+    let payload = b"residual error correction test";
+    let rs_bytes = FecCodec::new().encode(payload);
+
+    // Inject 8 byte errors into the RS-encoded data (≤16 per block = within
+    // RS correction capacity). Conv encodes them faithfully; after Conv
+    // decode the corrupted RS bytes come back; RS then corrects them.
+    let mut rs_corrupted = rs_bytes.clone();
+    for i in 0..8usize {
+        rs_corrupted[i * 5] ^= 0xA5;
+    }
+
+    let conv_bytes = ConvCodec::new().encode(&rs_corrupted);
+    let conv_decoded = ConvCodec::new().decode(&conv_bytes).unwrap();
+    let recovered = FecCodec::new().decode(&conv_decoded).unwrap();
+    assert_eq!(recovered, payload);
+}
+
+/// Concatenated overhead must be strictly larger than RS-only overhead.
+/// Conv rate-1/2 approximately doubles the byte count (plus a small K-1 tail).
+#[test]
+fn concatenated_fec_overhead_is_positive() {
+    let payload = b"overhead sanity check for concatenated FEC";
+    let rs_only = FecCodec::new().encode(payload);
+    let concatenated = ConvCodec::new().encode(&rs_only);
+    assert!(
+        concatenated.len() > rs_only.len(),
+        "concatenated output ({} bytes) must be larger than RS-only output ({} bytes)",
+        concatenated.len(),
+        rs_only.len()
+    );
+    // Conv rate-1/2 approximately doubles; allow a small tail (≤16 extra bytes).
+    assert!(
+        concatenated.len() >= rs_only.len() * 2,
+        "concatenated output should be at least 2× the RS-only size"
+    );
 }

@@ -2,6 +2,7 @@ use openpulse_core::compression::{
     compress, compress_if_smaller, decompress, CompressionAlgorithm, MAX_DECOMPRESSED_SIZE,
     ZSTD_DICT_ID,
 };
+use openpulse_core::fec::FecMode;
 use openpulse_core::handshake::{
     verify_conack, verify_conreq, ConAck, ConReq, HandshakeError, InMemoryTrustStore,
 };
@@ -80,6 +81,7 @@ fn conreq_carries_supported_compression_in_signature() {
         vec![SigningMode::Normal],
         "sess-comp-1",
         vec![CompressionAlgorithm::Lz4],
+        vec![],
     )
     .unwrap();
 
@@ -99,6 +101,7 @@ fn conack_carries_selected_compression_in_signature() {
         SigningMode::Normal,
         "sess-comp-2",
         CompressionAlgorithm::Lz4,
+        FecMode::None,
     )
     .unwrap();
 
@@ -125,6 +128,7 @@ fn full_negotiation_round_trip_with_lz4() {
         vec![SigningMode::Normal],
         "sess-comp-3",
         vec![CompressionAlgorithm::Lz4],
+        vec![],
     )
     .unwrap();
 
@@ -160,6 +164,7 @@ fn full_negotiation_round_trip_with_lz4() {
         req_decision.selected_mode,
         &req.session_id,
         selected_compression,
+        FecMode::None,
     )
     .unwrap();
 
@@ -191,6 +196,7 @@ fn compression_field_tampering_invalidates_signature() {
         &make_seed(5),
         vec![SigningMode::Normal],
         "sess-comp-4",
+        vec![],
         vec![],
     )
     .unwrap();
@@ -227,6 +233,7 @@ fn conack_rejected_when_compression_not_offered() {
         SigningMode::Normal,
         "sess-comp-5",
         CompressionAlgorithm::Lz4,
+        FecMode::None,
     )
     .unwrap();
 
@@ -300,6 +307,7 @@ fn zstd_dict_id_mismatch_rejected_in_negotiation() {
             CompressionAlgorithm::Lz4,
             CompressionAlgorithm::Zstd(ZSTD_DICT_ID),
         ],
+        vec![],
     )
     .unwrap();
 
@@ -309,6 +317,7 @@ fn zstd_dict_id_mismatch_rejected_in_negotiation() {
         SigningMode::Normal,
         "sess-zstd-mismatch",
         CompressionAlgorithm::Zstd(wrong_id),
+        FecMode::None,
     )
     .unwrap();
 
@@ -339,6 +348,7 @@ fn zstd_full_negotiation_round_trip() {
             CompressionAlgorithm::Lz4,
             CompressionAlgorithm::Zstd(ZSTD_DICT_ID),
         ],
+        vec![],
     )
     .unwrap();
 
@@ -363,6 +373,7 @@ fn zstd_full_negotiation_round_trip() {
         SigningMode::Normal,
         "sess-zstd-ok",
         CompressionAlgorithm::Zstd(ZSTD_DICT_ID),
+        FecMode::None,
     )
     .unwrap();
     assert_eq!(
