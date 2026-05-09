@@ -201,7 +201,7 @@ async fn handle_client(
                         };
 
                         if let ControlCommand::SubscribeSpectrum { fps } = &cmd {
-                            let fps = (*fps).max(1).min(100);
+                            let fps = (*fps).clamp(1, 100);
                             // Cancel existing spectrum task for this client, if any.
                             if let Some(h) = spectrum_task.take() {
                                 h.abort();

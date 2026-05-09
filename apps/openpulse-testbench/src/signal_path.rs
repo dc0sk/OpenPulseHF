@@ -412,6 +412,7 @@ fn estimate_snr_db(signal: &[f32], noise: &[f32]) -> f32 {
     10.0 * (sig_power / noise_power).log10()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_stats(
     stats: &Arc<RwLock<TestStats>>,
     rx_result: &Result<Vec<u8>, openpulse_core::error::ModemError>,

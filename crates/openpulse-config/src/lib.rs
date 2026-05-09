@@ -107,6 +107,12 @@ pub struct ModemConfig {
 pub struct RigConfig {
     /// rigctld TCP address for this rig (default `"127.0.0.1:4532"`).
     pub rigctld_addr: String,
+    /// CAT backend: `"rigctld"` (default) or `"generic"` (TOML-scripted serial).
+    pub backend: String,
+    /// Serial port path for the `"generic"` backend (e.g. `"/dev/ttyUSB0"`).
+    pub serial_port: String,
+    /// Path to the TOML rig-definition file for the `"generic"` backend.
+    pub rig_file: String,
 }
 
 /// Rig CAT control settings.
@@ -233,6 +239,9 @@ impl Default for RigConfig {
     fn default() -> Self {
         Self {
             rigctld_addr: "127.0.0.1:4532".into(),
+            backend: "rigctld".into(),
+            serial_port: String::new(),
+            rig_file: String::new(),
         }
     }
 }
@@ -442,6 +451,11 @@ rigctld_addr = "127.0.0.1:4532"
 # Primary rig (RX/TX for normal operation; also the receive side of cross-band relay).
 [radio.rig_a]
 rigctld_addr = "127.0.0.1:4532"
+# CAT backend: "rigctld" (default) or "generic" (TOML-scripted serial).
+# backend = "rigctld"
+# Serial port path and rig-definition file for the "generic" backend.
+# serial_port = "/dev/ttyUSB0"
+# rig_file = "~/.config/openpulse/rigs/icom-ic7300.toml"
 
 # Secondary rig (TX side of cross-band relay).  Uncomment to enable dual-rig.
 # [radio.rig_b]

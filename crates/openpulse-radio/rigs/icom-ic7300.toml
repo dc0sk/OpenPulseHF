@@ -1,0 +1,36 @@
+[rig]
+model = "icom-ic7300"
+description = "Icom IC-7300 CI-V serial CAT"
+baud = 9600
+data_bits = 8
+stop_bits = 1
+parity = "none"
+
+[params]
+addr = "94"
+ctrl = "E0"
+
+[commands.ptt_on]
+send = "FE FE {addr} {ctrl} 1C 00 01 FD"
+response_bytes = 6
+
+[commands.ptt_off]
+send = "FE FE {addr} {ctrl} 1C 00 00 FD"
+response_bytes = 6
+
+[commands.set_frequency]
+send = "FE FE {addr} {ctrl} 00 {freq_bcd_le5} FD"
+response_bytes = 6
+
+[commands.get_frequency]
+send = "FE FE {addr} {ctrl} 03 FD"
+response_bytes = 11
+response_extract = { offset = 5, length = 5, encoding = "bcd_le" }
+
+[commands.set_mode_usb]
+send = "FE FE {addr} {ctrl} 06 01 FD"
+response_bytes = 6
+
+[commands.set_mode_lsb]
+send = "FE FE {addr} {ctrl} 06 00 FD"
+response_bytes = 6

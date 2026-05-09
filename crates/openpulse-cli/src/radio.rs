@@ -1,8 +1,12 @@
 use anyhow::{bail, Context, Result};
 use openpulse_radio::{NoOpPtt, PttController, RigctldPtt, VoxPtt};
 
-/// Construct a `PttController` from CLI `--ptt` and `--rig` args.
-pub fn build_ptt_controller(ptt: &str, rig: &str) -> Result<Box<dyn PttController>> {
+/// Construct a `PttController` from CLI `--ptt`, `--rig`, and `--rig-file` args.
+pub fn build_ptt_controller(
+    ptt: &str,
+    rig: &str,
+    rig_file: &str,
+) -> Result<Box<dyn PttController>> {
     match ptt {
         "none" => Ok(Box::new(NoOpPtt::new())),
         "vox" => Ok(Box::new(VoxPtt::new())),
@@ -34,8 +38,25 @@ pub fn build_ptt_controller(ptt: &str, rig: &str) -> Result<Box<dyn PttControlle
             #[cfg(not(feature = "serial"))]
             bail!("serial PTT not compiled in; rebuild with --features serial")
         }
+        "generic" => {
+            if rig.is_empty() {
+                bail!("--rig must specify the serial port path for the generic CAT backend");
+            }
+            if rig_file.is_empty() {
+                bail!("--rig-file must specify the TOML rig-definition file for the generic CAT backend");
+            }
+            #[cfg(all(unix, feature = "generic-serial"))]
+            {
+                use openpulse_radio::GenericSerialCat;
+                let ctrl =
+                    GenericSerialCat::open(rig, rig_file).context("opening generic serial CAT")?;
+                Ok(Box::new(ctrl))
+            }
+            #[cfg(not(all(unix, feature = "generic-serial")))]
+            bail!("generic serial CAT not compiled in; rebuild with --features generic-serial (unix only)")
+        }
         other => {
-            bail!("unknown PTT backend '{other}'; valid values: none | rts | dtr | vox | rigctld")
+            bail!("unknown PTT backend '{other}'; valid values: none | rts | dtr | vox | rigctld | generic")
         }
     }
 }

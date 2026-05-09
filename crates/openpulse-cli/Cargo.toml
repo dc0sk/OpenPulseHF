@@ -15,6 +15,7 @@ path = "src/main.rs"
 default      = ["cpal-backend"]
 cpal-backend = ["openpulse-audio/cpal-backend"]
 serial       = ["openpulse-radio/serial"]
+generic-serial = ["openpulse-radio/generic-serial"]
 
 [dependencies]
 openpulse-core  = { workspace = true }
