@@ -94,6 +94,8 @@ All items below are merged, tested, and in `main`:
 - **FF-10 zstd dictionary compression**: pre-trained shared dictionary for sub-500-byte payloads
 - **FF-11 FreeDV authenticated voice shim**: Ed25519-signed beacon injected into FreeDV Qt-GUI via UDP data port; `TrustVerdict` Unix-socket API for companion UI polling
 - **FF-1 ext — QSY trust gating**: `allow_trustlevels` wired from config into `QsyPolicy`; fail-closed parsing rejects unknown trust-level strings at startup
+- **BL-FEC-1 Concatenated Conv+RS FEC** (PR #169): `transmit_with_concatenated_fec` / `receive_with_concatenated_fec`; Conv(rate-1/2) inner + RS(255,223) outer; ~2.28× overhead; `FecMode::Concatenated` in handshake negotiation
+- **BL-FEC-3 Short-block RS for ACK frames** (PR #170): `ShortFecCodec` encodes 5-byte FSK4-ACK frames to 13 bytes (5 + 8 ECC, t=4); `FecMode::ShortRs` (strength 4); `transmit_ack_with_short_fec` / `receive_ack_with_short_fec`
 - **Phase 9 signal-path analytics**: IQ scatter plot, SNR trend, asymmetric rate adaptation, SNR-driven step-down, broadcast/beacon mode alongside ARQ
 - **Winlink gateway**: direct TCP connection to `cms.winlink.org`, ISS and IRS roles, LZHUF (Type C) and Gzip (Type D) compression
 - **PKI service**: Ed25519 trust-bundle signing, REST API, PostgreSQL backend
@@ -104,9 +106,12 @@ See [`docs/roadmap.md`](docs/roadmap.md) for per-item ✅ markers and PR referen
 
 ## What is coming
 
-Active work tracks (see [`docs/roadmap.md`](docs/roadmap.md) FF-series):
+Active work tracks:
 
-All FF-series features have shipped. See the roadmap for the FEC improvements backlog (BL-FEC series) and the FF-12 SC-FDMA evaluation gate.
+- **BL-FEC-2**: RS(255,191) t=32 strong codec — corrects up to 32 byte errors per block vs. t=16 today; new `FecMode::RsStrong` for handshake negotiation; 25% overhead vs. 14% for standard RS
+- **BL-FEC-4**: Memory-ARQ soft combining — element-wise average of N retransmission sample buffers before demodulation; ~3 dB SNR gain per doubling of retransmissions; no wire protocol change
+- **FF-12 SC-FDMA**: pending OFDM PAPR measurement gate — implement only if clipping-induced spectral regrowth ≥ −40 dBc
+- **FF-13 Generic serial CAT**: TOML-scriptable rig control for rigs not in hamlib (Icom CI-V, Yaesu binary CAT)
 
 ---
 

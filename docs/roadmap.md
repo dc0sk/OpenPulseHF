@@ -1138,6 +1138,22 @@ degrade gracefully to `RadioError::Unsupported` when the rig file omits the comm
 
 **Dependencies**: Phase 1.5 (`openpulse-radio` crate) ✅, Phase 5.3 (TOML config) ✅.
 
+---
+
+## BL-FEC series — FEC codec improvements
+
+Incremental FEC improvements tracked in [`docs/backlog-fec-improvements.md`](backlog-fec-improvements.md).
+
+| Item | Description | Status |
+|---|---|---|
+| BL-FEC-1 | Concatenated Conv+RS session mode | ✅ Done (PR #169) |
+| BL-FEC-2 | RS t=32 strong codec (RS(255,191), 25% overhead) | Active |
+| BL-FEC-3 | Short-block RS for ACK/control frames (5 B → 13 B) | ✅ Done (PR #170) |
+| BL-FEC-4 | Memory-ARQ soft combining (element-wise sample averaging) | Active |
+| BL-FEC-5 | Soft-decision K=7 Viterbi | Deferred — no crate |
+| BL-FEC-6 | Turbo / LDPC codes | Deferred — GPU required |
+
+---
 
 The following dependencies constrain the execution sequence:
 
