@@ -165,4 +165,70 @@ impl SessionProfile {
             snr_ceilings,
         }
     }
+
+    /// HPX Narrowband profile: 12.5 kHz PMR/LMR channel at 8 kHz audio (standard tier).
+    ///
+    /// All modes fit within a 12.5 kHz channelised plan.  Requires only an 8 kHz audio
+    /// path — suitable for standard PMR/LMR radios.
+    ///
+    /// | SL  | Mode           |
+    /// |-----|----------------|
+    /// | SL1–SL7 | — (fall-through to HF/wideband rungs) |
+    /// | SL8  | QPSK500        |
+    /// | SL9  | QPSK1000       |
+    /// | SL10 | QPSK2000-RRC   |
+    /// | SL11 | 8PSK2000-RRC   |
+    pub fn hpx_narrowband() -> Self {
+        let mut modes = [None; 12];
+        modes[SpeedLevel::Sl8 as usize] = Some("QPSK500");
+        modes[SpeedLevel::Sl9 as usize] = Some("QPSK1000");
+        modes[SpeedLevel::Sl10 as usize] = Some("QPSK2000-RRC");
+        modes[SpeedLevel::Sl11 as usize] = Some("8PSK2000-RRC");
+        let mut snr_floors = [None; 12];
+        snr_floors[SpeedLevel::Sl8 as usize] = Some(11.0_f32);
+        snr_floors[SpeedLevel::Sl9 as usize] = Some(14.0_f32);
+        snr_floors[SpeedLevel::Sl10 as usize] = Some(17.0_f32);
+        snr_floors[SpeedLevel::Sl11 as usize] = Some(20.0_f32);
+        let mut snr_ceilings = [None; 12];
+        snr_ceilings[SpeedLevel::Sl8 as usize] = Some(18.0_f32);
+        snr_ceilings[SpeedLevel::Sl9 as usize] = Some(21.0_f32);
+        snr_ceilings[SpeedLevel::Sl10 as usize] = Some(24.0_f32);
+        // SL11 is the ceiling; no upgrade above it.
+        Self {
+            modes,
+            initial_level: SpeedLevel::Sl8,
+            nack_threshold: 3,
+            snr_floors,
+            snr_ceilings,
+        }
+    }
+
+    /// HPX Narrowband HD profile: 12.5 kHz channel at 48 kHz audio (fills the channel).
+    ///
+    /// Occupies the full 12.5 kHz channel at 9600 baud (α=0.35 RRC ≈ 13 kHz BW).
+    /// **Requires a 48 kHz audio path** — not available on standard PMR/LMR radios.
+    ///
+    /// | SL  | Mode           |
+    /// |-----|----------------|
+    /// | SL1–SL7 | — (fall-through to narrowband rungs) |
+    /// | SL8  | QPSK9600-RRC   |
+    /// | SL9  | 8PSK9600-RRC   |
+    pub fn hpx_narrowband_hd() -> Self {
+        let mut modes = [None; 12];
+        modes[SpeedLevel::Sl8 as usize] = Some("QPSK9600-RRC");
+        modes[SpeedLevel::Sl9 as usize] = Some("8PSK9600-RRC");
+        let mut snr_floors = [None; 12];
+        snr_floors[SpeedLevel::Sl8 as usize] = Some(17.0_f32);
+        snr_floors[SpeedLevel::Sl9 as usize] = Some(20.0_f32);
+        let mut snr_ceilings = [None; 12];
+        snr_ceilings[SpeedLevel::Sl8 as usize] = Some(24.0_f32);
+        // SL9 is the ceiling; no upgrade above it.
+        Self {
+            modes,
+            initial_level: SpeedLevel::Sl8,
+            nack_threshold: 3,
+            snr_floors,
+            snr_ceilings,
+        }
+    }
 }

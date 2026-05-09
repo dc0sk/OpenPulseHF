@@ -34,6 +34,12 @@ impl QpskPlugin {
                     "QPSK1000-HF".to_string(),
                     "QPSK500-RRC".to_string(),
                     "QPSK1000-RRC".to_string(),
+                    // UHF/VHF — 12.5 kHz narrowband (8 kHz audio, 2000 baud, ~2700 Hz BW)
+                    "QPSK2000".to_string(),
+                    "QPSK2000-RRC".to_string(),
+                    // UHF/VHF — 12.5 kHz HD (requires 48 kHz audio, 9600 baud, ~13 kHz BW)
+                    "QPSK9600".to_string(),
+                    "QPSK9600-RRC".to_string(),
                 ],
                 trait_version_required: "1.0".to_string(),
             },
@@ -76,6 +82,8 @@ pub(crate) fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
         "250" => Ok(250.0),
         "500" => Ok(500.0),
         "1000" => Ok(1000.0),
+        "2000" => Ok(2000.0),
+        "9600" => Ok(9600.0),
         _ => Err(ModemError::Configuration(format!(
             "unknown baud rate in mode '{mode}'"
         ))),
@@ -93,6 +101,9 @@ mod tests {
         assert!((parse_baud_rate("QPSK500").unwrap() - 500.0).abs() < 1e-6);
         assert!((parse_baud_rate("QPSK1000").unwrap() - 1000.0).abs() < 1e-6);
         assert!((parse_baud_rate("QPSK1000-HF").unwrap() - 1000.0).abs() < 1e-6);
+        assert!((parse_baud_rate("QPSK2000").unwrap() - 2000.0).abs() < 1e-6);
+        assert!((parse_baud_rate("QPSK9600").unwrap() - 9600.0).abs() < 1e-6);
+        assert!((parse_baud_rate("QPSK9600-RRC").unwrap() - 9600.0).abs() < 1e-6);
         assert!(parse_baud_rate("QPSK").is_err());
     }
 
@@ -175,6 +186,72 @@ mod tests {
             ..ModulationConfig::default()
         };
         let payload = b"QPSK RRC loopback";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    /// QPSK2000 clean loopback at 8 kHz (4 samples/symbol).
+    #[test]
+    fn qpsk2000_loopback() {
+        use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+        let plugin = QpskPlugin::new();
+        let cfg = ModulationConfig {
+            mode: "QPSK2000".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"QPSK2000 VHF narrowband";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    /// QPSK2000-RRC clean loopback at 8 kHz with Gardner + Costas PLL.
+    #[test]
+    fn qpsk2000_rrc_loopback() {
+        use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+        let plugin = QpskPlugin::new();
+        let cfg = ModulationConfig {
+            mode: "QPSK2000-RRC".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"QPSK2000-RRC 12.5 kHz PMR";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    /// QPSK9600 clean loopback at 48 kHz (5 samples/symbol, ~13 kHz BW).
+    #[test]
+    fn qpsk9600_loopback_48k() {
+        use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+        let plugin = QpskPlugin::new();
+        let cfg = ModulationConfig {
+            mode: "QPSK9600".to_string(),
+            sample_rate: 48000,
+            // fc=12000 Hz gives 1.25 cycles/symbol at 9600 baud; needed for
+            // Hann-window IQ separation (fc/baud must be >> 1 at low oversampling).
+            center_frequency: 12000.0,
+            ..ModulationConfig::default()
+        };
+        let payload = b"QPSK9600 12.5 kHz HD";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    /// QPSK9600-RRC loopback at 48 kHz with Gardner + Costas PLL.
+    #[test]
+    fn qpsk9600_rrc_loopback_48k() {
+        use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+        let plugin = QpskPlugin::new();
+        let cfg = ModulationConfig {
+            mode: "QPSK9600-RRC".to_string(),
+            sample_rate: 48000,
+            center_frequency: 12000.0,
+            ..ModulationConfig::default()
+        };
+        let payload = b"QPSK9600-RRC fills 12.5 kHz";
         let samples = plugin.modulate(payload, &cfg).expect("modulate");
         let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
         assert_eq!(&recovered[..payload.len()], payload);
