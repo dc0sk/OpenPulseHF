@@ -71,17 +71,33 @@ Reduces required SNR by ~3 dB per doubling of retransmissions (coherent averagin
 
 ---
 
-## BL-FEC-5 — Soft-decision K=7 Viterbi (Deferred — no crate)
+## BL-FEC-5 — Soft-decision K=7 Viterbi (In progress — bl-fec-5-soft-viterbi branch)
 
-**From docs/vara-research.md.** K=7 soft-decision Viterbi gives ~5 dB additional coding gain over the current hard-decision K=3 ConvCodec. No pure-Rust soft-decision K=7 implementation available on crates.io as of 2026-05-09. Revisit when a suitable crate ships or when bespoke implementation is warranted.
+**From docs/vara-research.md.** K=7 soft-decision Viterbi gives ~5 dB additional coding gain over the current hard-decision K=3 ConvCodec. Planned for `crates/openpulse-core/src/soft_viterbi.rs` — no external crate needed.
+
+Generators: G0=0o133, G1=0o171 (NASA/3GPP standard).  64 states.  Branch metric = sum of `llr * (1 - 2*encoded_bit)`.
+
+Requires a new `ModulationPlugin::demodulate_soft()` method returning per-bit LLRs so the inner Viterbi decoder receives true soft values (overridden in BPSK and QPSK plugins; 8PSK and OFDM/SC-FDMA fall back to hard ±1.0).
+
+`FecMode::SoftConcatenated` (strength 6): Conv K=7 soft inner + RS(255,223) outer.
 
 ---
 
-## BL-FEC-6 — Turbo / LDPC codes (Long-term, deferred)
+## BL-FEC-6 — Turbo / LDPC codes (Deferred — GPU required)
 
 **From docs/vara-research.md.** Turbo codes offer near-Shannon-limit performance and are used by VARA. Deferred because:
-- No pure-Rust iterative BCJR/MAP crate available
 - Variable decoder latency is incompatible with fixed ARQ cycle budgets
-- LDPC requires long blocks (thousands of bits) and belief-propagation with unpredictable iteration count; applicable only with GPU acceleration
+- LDPC requires long blocks (≥ 1 kbit) and belief-propagation with unpredictable iteration count; viable only with GPU acceleration
 
-Revisit if GPU path (openpulse-gpu) matures sufficiently to absorb the iterative decode cost.
+**Architecture decision (2026-05-09):** `IterativeDecoder` trait defined in `crates/openpulse-core/src/ldpc.rs`:
+```rust
+pub trait IterativeDecoder: Send + Sync {
+    fn encode(&self, data: &[u8]) -> Vec<u8>;
+    fn decode_soft(&self, llrs: &[f32]) -> Result<Vec<u8>, ModemError>;
+    fn max_iterations(&self) -> u32;
+    fn block_bits(&self) -> usize;
+}
+```
+`LdpcCodec` stub compiles and satisfies the trait; returns `ModemError` on decode.  `FecMode::Ldpc` (strength 7) reserved in the enum.
+
+**GPU path**: LDPC belief-propagation ≥ 50 iterations over a sparse parity-check matrix — each iteration is a vectorised message-passing pass suited to wgpu compute shaders.  Revisit when `crates/openpulse-gpu` matures sufficiently.

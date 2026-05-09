@@ -52,6 +52,18 @@ pub enum FecMode {
     /// capacity.  Use on AWGN-dominant paths where ≥ 1% raw BER is expected.
     /// Overhead: 25% ECC bytes per block vs. 14% for the standard codec.
     RsStrong,
+    /// Soft-decision concatenated: K=7 Conv (soft Viterbi) inner + RS(255,223) outer.
+    ///
+    /// The inner K=7 decoder receives true LLRs from the demodulator instead of
+    /// hard bits, gaining ~5 dB over the hard-decision `Concatenated` mode.
+    /// The RS outer code corrects residual Viterbi burst failures.
+    /// Overhead: ≈ 2.28× raw payload (same as `Concatenated`).
+    SoftConcatenated,
+    /// Reserved for BL-FEC-6 (LDPC / Turbo codes — GPU required, not yet implemented).
+    ///
+    /// Higher layers are expected to return `ModemError::Fec` when this variant
+    /// is selected until a concrete implementation lands in `openpulse-gpu`.
+    Ldpc,
 }
 
 impl FecMode {
@@ -64,6 +76,8 @@ impl FecMode {
             FecMode::Concatenated => 3,
             FecMode::ShortRs => 4,
             FecMode::RsStrong => 5,
+            FecMode::SoftConcatenated => 6,
+            FecMode::Ldpc => 7,
         }
     }
 
@@ -450,6 +464,23 @@ impl Default for SoftCombiner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fec_mode_strength_ordering() {
+        assert!(FecMode::Rs.strength() > FecMode::None.strength());
+        assert!(FecMode::RsInterleaved.strength() > FecMode::Rs.strength());
+        assert!(FecMode::Concatenated.strength() > FecMode::RsInterleaved.strength());
+        assert!(FecMode::RsStrong.strength() > FecMode::Concatenated.strength());
+        assert!(FecMode::SoftConcatenated.strength() > FecMode::RsStrong.strength());
+        assert!(FecMode::Ldpc.strength() > FecMode::SoftConcatenated.strength());
+    }
+
+    #[test]
+    fn fec_mode_negotiate_picks_strongest_common() {
+        let offered = [FecMode::None, FecMode::Rs, FecMode::SoftConcatenated];
+        let accepted = [FecMode::None, FecMode::Rs, FecMode::Ldpc];
+        assert_eq!(FecMode::negotiate(&offered, &accepted), FecMode::Rs);
+    }
 
     #[test]
     fn round_trip_empty() {
