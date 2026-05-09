@@ -52,6 +52,18 @@ pub enum FecMode {
     /// capacity.  Use on AWGN-dominant paths where ≥ 1% raw BER is expected.
     /// Overhead: 25% ECC bytes per block vs. 14% for the standard codec.
     RsStrong,
+    /// Soft-decision concatenated: K=7 Conv (soft Viterbi) inner + RS(255,223) outer.
+    ///
+    /// The inner K=7 decoder receives true LLRs from the demodulator instead of
+    /// hard bits, gaining ~5 dB over the hard-decision `Concatenated` mode.
+    /// The RS outer code corrects residual Viterbi burst failures.
+    /// Overhead: ≈ 2.28× raw payload (same as `Concatenated`).
+    SoftConcatenated,
+    /// Reserved for BL-FEC-6 (LDPC / Turbo codes — GPU required, not yet implemented).
+    ///
+    /// `ModemEngine` returns `ModemError::Configuration` when this variant is selected
+    /// until a concrete implementation lands in `openpulse-gpu`.
+    Ldpc,
 }
 
 impl FecMode {
@@ -64,6 +76,8 @@ impl FecMode {
             FecMode::Concatenated => 3,
             FecMode::ShortRs => 4,
             FecMode::RsStrong => 5,
+            FecMode::SoftConcatenated => 6,
+            FecMode::Ldpc => 7,
         }
     }
 
