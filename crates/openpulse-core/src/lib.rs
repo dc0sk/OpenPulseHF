@@ -29,6 +29,7 @@ pub mod remote_control;
 pub mod sar;
 pub mod signed_envelope;
 pub mod signing;
+pub mod soft_viterbi;
 pub mod trust;
 pub mod wire_query;
 

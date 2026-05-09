@@ -64,6 +64,14 @@ impl ModulationPlugin for QpskPlugin {
         demodulate::qpsk_demodulate(samples, config)
     }
 
+    fn demodulate_soft(
+        &self,
+        samples: &[f32],
+        config: &ModulationConfig,
+    ) -> Result<Vec<f32>, ModemError> {
+        demodulate::qpsk_demodulate_soft(samples, config)
+    }
+
     fn modulate_iq(
         &self,
         data: &[u8],

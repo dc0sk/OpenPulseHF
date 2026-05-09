@@ -94,6 +94,28 @@ pub trait ModulationPlugin: Send + Sync {
     fn demodulate(&self, samples: &[f32], config: &ModulationConfig)
         -> Result<Vec<u8>, ModemError>;
 
+    /// Decode audio samples and return per-bit soft log-likelihood ratios.
+    ///
+    /// Returns one `f32` per bit in the decoded stream, with **positive = bit
+    /// more likely 0** and negative = bit more likely 1.  Plugins that know
+    /// their internal soft values (BPSK I-channel correlation, QPSK I/Q
+    /// projections) should override this for maximum coding gain (~1–2 dB).
+    ///
+    /// The default falls back to [`demodulate`](Self::demodulate) and maps each
+    /// hard-decided bit to ±1.0.
+    fn demodulate_soft(
+        &self,
+        samples: &[f32],
+        config: &ModulationConfig,
+    ) -> Result<Vec<f32>, ModemError> {
+        let bytes = self.demodulate(samples, config)?;
+        let llrs = bytes
+            .iter()
+            .flat_map(|&b| (0..8u8).map(move |i| if (b >> i) & 1 == 0 { 1.0f32 } else { -1.0f32 }))
+            .collect();
+        Ok(llrs)
+    }
+
     /// Return `true` when this plugin can handle `mode` (case-insensitive).
     fn supports_mode(&self, mode: &str) -> bool {
         self.info()

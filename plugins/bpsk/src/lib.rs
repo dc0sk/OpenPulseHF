@@ -114,6 +114,14 @@ impl ModulationPlugin for BpskPlugin {
         demodulate::bpsk_demodulate(samples, config)
     }
 
+    fn demodulate_soft(
+        &self,
+        samples: &[f32],
+        config: &ModulationConfig,
+    ) -> Result<Vec<f32>, ModemError> {
+        demodulate::bpsk_demodulate_soft(samples, config)
+    }
+
     fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
         demodulate::afc_estimate_hz(samples, config)
     }

@@ -18,6 +18,7 @@ use openpulse_core::plugin::{ModulationConfig, PluginRegistry};
 use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::{BiDirRateAdapter, RateEvent, RateTrigger};
 use openpulse_core::signed_envelope::SignedEnvelope;
+use openpulse_core::soft_viterbi::SoftViterbiCodec;
 use openpulse_core::trust::{
     evaluate_handshake, CertificateSource, ConnectionTrustLevel, HandshakeDecision, PolicyProfile,
     PublicKeyTrustLevel, SigningMode,
@@ -1033,6 +1034,103 @@ impl ModemEngine {
         let frame = self.stage_decode_frame(&corrected_wire)?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         info!("concatenated FEC receive: frame seq={}", frame.sequence);
+        let _ = self.event_tx.send(EngineEvent::FrameReceived {
+            mode: mode.to_string(),
+            bytes: frame.payload.len(),
+        });
+        Ok(frame.payload)
+    }
+
+    /// Transmit with K=7 soft-decision Conv inner + RS outer FEC (BL-FEC-5).
+    ///
+    /// TX chain: frame encode → RS encode → SoftViterbiCodec encode → modulate → emit.
+    pub fn transmit_with_soft_viterbi_fec(
+        &mut self,
+        data: &[u8],
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<(), ModemError> {
+        self.csma_check()?;
+
+        let frame_wire = self.stage_encode_frame(data);
+        let rs_bytes = FecCodec::new().encode(&frame_wire.bytes);
+        let sv_bytes = SoftViterbiCodec.encode(&rs_bytes);
+        let fec_wire = WirePayload { bytes: sv_bytes };
+        let fec_wire = self.route_wire_stage(PipelineStage::EncodeModulate, fec_wire)?;
+
+        debug!(
+            "soft-Viterbi FEC transmitting {} bytes (seq={}, mode={mode})",
+            fec_wire.bytes.len(),
+            self.sequence.wrapping_sub(1)
+        );
+
+        let samples = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_modulate_payload(plugin, mode, &fec_wire)?
+        };
+        let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
+        self.stage_emit_output(device, &samples)?;
+        let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
+            mode: mode.to_string(),
+            bytes: fec_wire.bytes.len(),
+        });
+        Ok(())
+    }
+
+    /// Receive with K=7 soft-decision Conv inner + RS outer FEC (BL-FEC-5).
+    ///
+    /// RX chain: capture → demodulate_soft → SoftViterbiCodec decode → RS decode → frame decode.
+    pub fn receive_with_soft_viterbi_fec(
+        &mut self,
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<Vec<u8>, ModemError> {
+        let samples = self.stage_capture_input(device)?;
+        let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+
+        let prev_busy = self.dcd.is_busy();
+        self.dcd.update(&samples.samples);
+        if self.dcd.is_busy() != prev_busy {
+            let _ = self.event_tx.send(EngineEvent::DcdChange {
+                busy: self.dcd.is_busy(),
+                energy: self.dcd.energy(),
+            });
+        }
+
+        let llrs = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            let mod_cfg = ModulationConfig {
+                mode: mode.to_string(),
+                center_frequency: self.center_frequency + self.afc_correction_hz,
+                ..ModulationConfig::default()
+            };
+            plugin.demodulate_soft(&samples.samples, &mod_cfg)?
+        };
+
+        self.update_afc_estimate(mode, &samples.samples);
+        if let Some(hz) = self.last_afc_offset_hz {
+            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
+                offset_hz: hz,
+                correction_hz: self.afc_correction_hz,
+                mode: mode.to_string(),
+            });
+        }
+
+        let sv_decoded = SoftViterbiCodec.decode_soft(&llrs);
+        let rs_decoded = FecCodec::new().decode(&sv_decoded)?;
+        let corrected_wire = WirePayload { bytes: rs_decoded };
+        let corrected_wire =
+            self.route_wire_stage(PipelineStage::DemodulateDecode, corrected_wire)?;
+
+        let frame = self.stage_decode_frame(&corrected_wire)?;
+        let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
+        info!("soft-Viterbi FEC receive: frame seq={}", frame.sequence);
         let _ = self.event_tx.send(EngineEvent::FrameReceived {
             mode: mode.to_string(),
             bytes: frame.payload.len(),

@@ -266,6 +266,53 @@ fn bits_to_bytes(bits: &[bool]) -> Vec<u8> {
         .collect()
 }
 
+/// Demodulate QPSK samples and return per-bit soft log-likelihood ratios.
+///
+/// Returns two `f32`s per symbol, **[q, i]**, matching the (b0, b1) bit order in
+/// `symbols_to_bits`.  With the Gray mapping used by this plugin:
+/// - Q projection → LLR for b0 (Q > 0 means b0 = 0)
+/// - I projection → LLR for b1 (I > 0 means b1 = 0)
+///
+/// RRC modes fall back to hard ±1.0 pseudo-LLRs.
+pub fn qpsk_demodulate_soft(
+    samples: &[f32],
+    config: &ModulationConfig,
+) -> Result<Vec<f32>, ModemError> {
+    if matches!(config.pulse_shape, PulseShape::Rrc { .. }) || config.mode.ends_with("-RRC") {
+        let bytes = qpsk_demodulate(samples, config)?;
+        return Ok(bytes
+            .iter()
+            .flat_map(|&b| (0..8u8).map(move |i| if (b >> i) & 1 == 0 { 1.0f32 } else { -1.0f32 }))
+            .collect());
+    }
+
+    let baud = parse_baud_rate(&config.mode)?;
+    let fs = config.sample_rate as f32;
+    let fc = config.center_frequency;
+    let n = samples_per_symbol(fs, baud)?;
+    let cosine_overlap =
+        config.pulse_shape == PulseShape::CosineOverlap || config.mode.ends_with("-HF");
+
+    if samples.len() < n * (PREAMBLE_SYMS + 1) {
+        return Err(ModemError::Demodulation("signal too short".to_string()));
+    }
+
+    let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
+    let syms = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
+
+    if syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
+        return Err(ModemError::Demodulation(
+            "no data symbols after preamble".to_string(),
+        ));
+    }
+
+    let data = &syms[PREAMBLE_SYMS..(syms.len() - TAIL_SYMS)];
+    // Per symbol: b0 LLR = Q, b1 LLR = I (from the Gray map geometry).
+    // Bits are pushed as (b0, b1) in symbols_to_bits, matching [q, i] here.
+    let llrs = data.iter().flat_map(|&(i, q)| [q, i]).collect();
+    Ok(llrs)
+}
+
 fn preamble_expected() -> Vec<(f32, f32)> {
     preamble_symbols()
 }
