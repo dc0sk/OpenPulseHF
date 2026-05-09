@@ -40,6 +40,12 @@ pub enum FecMode {
     /// Conv layer reduces random-noise BER; RS corrects residual Viterbi
     /// burst failures.  Total overhead ≈ 2.28× raw payload.
     Concatenated,
+    /// Short-block RS for ACK and control frames (no padding, no length prefix).
+    ///
+    /// Encodes a payload of up to 247 bytes into `payload.len() + 8` bytes
+    /// (8 ECC bytes, t=4, corrects up to 4 byte errors).  A 5-byte FSK4-ACK
+    /// frame becomes 13 bytes — versus 255 bytes with the standard RS codec.
+    ShortRs,
 }
 
 impl FecMode {
@@ -50,6 +56,7 @@ impl FecMode {
             FecMode::Rs => 1,
             FecMode::RsInterleaved => 2,
             FecMode::Concatenated => 3,
+            FecMode::ShortRs => 4,
         }
     }
 
@@ -173,6 +180,84 @@ impl FecCodec {
 }
 
 impl Default for FecCodec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ── Short-block RS codec ──────────────────────────────────────────────────────
+
+/// ECC bytes appended by [`ShortFecCodec`] (default instance).  t = 4, corrects
+/// up to 4 byte errors per payload.
+pub const SHORT_FEC_ECC_LEN: usize = 8;
+
+/// Short-block Reed-Solomon codec for ACK and control frames.
+///
+/// Unlike [`FecCodec`], this codec operates on a single payload without block
+/// padding or a length prefix.  Output is exactly `payload.len() + ecc_len` bytes,
+/// making it practical for small fixed-size frames (e.g. 5-byte FSK4-ACK → 13 bytes).
+///
+/// Maximum input per call: `255 - ecc_len` bytes (247 bytes for the default
+/// `ecc_len = 8`).
+pub struct ShortFecCodec {
+    ecc_len: usize,
+    encoder: Encoder,
+    decoder: Decoder,
+}
+
+impl ShortFecCodec {
+    /// Create a codec with [`SHORT_FEC_ECC_LEN`] ECC bytes (t = 4).
+    pub fn new() -> Self {
+        Self::with_ecc_len(SHORT_FEC_ECC_LEN)
+    }
+
+    /// Create a codec with a custom ECC byte count (must be in 1..=254).
+    pub fn with_ecc_len(ecc_len: usize) -> Self {
+        assert!(
+            (1..=254).contains(&ecc_len),
+            "ShortFecCodec: ecc_len must be 1..=254, got {ecc_len}"
+        );
+        Self {
+            ecc_len,
+            encoder: Encoder::new(ecc_len),
+            decoder: Decoder::new(ecc_len),
+        }
+    }
+
+    /// Encode `data` → `data.len() + ecc_len` bytes.
+    pub fn encode(&self, data: &[u8]) -> Result<Vec<u8>, ModemError> {
+        let max = 255 - self.ecc_len; // safe: ecc_len ≤ 254 by construction
+        if data.len() > max {
+            return Err(ModemError::Fec(format!(
+                "ShortFecCodec: payload {} bytes exceeds maximum {max}",
+                data.len()
+            )));
+        }
+        Ok(self.encoder.encode(data).to_vec())
+    }
+
+    /// Decode and error-correct `encoded`, returning the original data bytes.
+    ///
+    /// `encoded.len()` must be greater than `ecc_len`; the data portion is
+    /// `encoded.len() - ecc_len` bytes.
+    pub fn decode(&self, encoded: &[u8]) -> Result<Vec<u8>, ModemError> {
+        if encoded.len() <= self.ecc_len {
+            return Err(ModemError::Fec(format!(
+                "ShortFecCodec: encoded length {} ≤ ecc_len {}",
+                encoded.len(),
+                self.ecc_len
+            )));
+        }
+        let data_len = encoded.len() - self.ecc_len;
+        let corrected = self
+            .decoder
+            .correct(encoded, None)
+            .map_err(|e| ModemError::Fec(format!("ShortFecCodec: RS correction failed: {e:?}")))?;
+        Ok(corrected[..data_len].to_vec())
+    }
+}
+
+impl Default for ShortFecCodec {
     fn default() -> Self {
         Self::new()
     }

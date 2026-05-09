@@ -7,9 +7,11 @@
 //!  4. Interleaved FEC loopback and Gilbert-Elliott burst scenario.
 
 use bpsk_plugin::BpskPlugin;
+use fsk4_plugin::Fsk4Plugin;
 use openpulse_audio::LoopbackBackend;
+use openpulse_core::ack::{AckFrame, AckType};
 use openpulse_core::conv::ConvCodec;
-use openpulse_core::fec::{FecCodec, Interleaver, DEFAULT_INTERLEAVER_DEPTH};
+use openpulse_core::fec::{FecCodec, Interleaver, ShortFecCodec, DEFAULT_INTERLEAVER_DEPTH};
 use openpulse_modem::engine::ModemEngine;
 use qpsk_plugin::QpskPlugin;
 
@@ -325,4 +327,78 @@ fn concatenated_fec_overhead_is_positive() {
         concatenated.len() >= rs_only.len() * 2,
         "concatenated output should be at least 2× the RS-only size"
     );
+}
+
+// ── Short-block RS (ShortFecCodec) ────────────────────────────────────────────
+
+/// 5-byte ACK frame encodes to 13 bytes (5 + 8 ECC), not 255.
+#[test]
+fn short_fec_overhead_is_13_bytes_for_ack_frame() {
+    let codec = ShortFecCodec::new();
+    let payload = [0u8; 5];
+    let encoded = codec.encode(&payload).unwrap();
+    assert_eq!(
+        encoded.len(),
+        13,
+        "5-byte ACK frame should encode to 13 bytes, got {}",
+        encoded.len()
+    );
+}
+
+/// ShortFecCodec round-trip with zero injected errors.
+#[test]
+fn short_fec_codec_round_trip() {
+    let codec = ShortFecCodec::new();
+    let payloads: &[&[u8]] = &[
+        b"hello",
+        &[0x00; 5],
+        &[0xFF; 5],
+        b"short FEC test payload 12345678",
+    ];
+    for payload in payloads {
+        let enc = codec.encode(payload).unwrap();
+        let dec = codec.decode(&enc).unwrap();
+        assert_eq!(
+            &dec,
+            payload,
+            "round-trip failed for {} bytes",
+            payload.len()
+        );
+    }
+}
+
+/// ShortFecCodec corrects up to 4 byte errors (t = 4).
+#[test]
+fn short_fec_codec_corrects_4_byte_errors() {
+    let codec = ShortFecCodec::new();
+    let payload = b"hello";
+    let mut encoded = codec.encode(payload).unwrap();
+    // Flip 4 bytes spread across the encoded buffer.
+    for i in 0..4 {
+        encoded[i * 3] ^= 0xA5;
+    }
+    let recovered = codec
+        .decode(&encoded)
+        .expect("should correct ≤4 byte errors");
+    assert_eq!(recovered, payload);
+}
+
+fn engine_with_fsk4() -> ModemEngine {
+    let audio = Box::new(LoopbackBackend::new());
+    let mut engine = ModemEngine::new(audio);
+    engine
+        .register_plugin(Box::new(Fsk4Plugin::new()))
+        .expect("FSK4 registration");
+    engine
+}
+
+/// AckFrame survives FSK4-ACK engine loopback with ShortFEC applied.
+#[test]
+fn ack_frame_short_fec_engine_loopback() {
+    let mut engine = engine_with_fsk4();
+    let ack = AckFrame::new(AckType::AckOk, "test-session");
+    engine.transmit_ack_with_short_fec(&ack, None).unwrap();
+    let received = engine.receive_ack_with_short_fec(None).unwrap();
+    assert_eq!(received.ack_type, ack.ack_type);
+    assert_eq!(received.session_hash, ack.session_hash);
 }

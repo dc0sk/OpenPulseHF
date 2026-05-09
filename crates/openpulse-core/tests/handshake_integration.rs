@@ -396,3 +396,16 @@ fn conack_rejected_when_fec_mode_not_offered() {
         "selecting an unoffered FEC mode must be rejected"
     );
 }
+
+#[test]
+fn short_rs_negotiates_at_highest_strength() {
+    // Both peers offer [Rs, ShortRs]; negotiate() must select ShortRs (strength 4).
+    let offered = [FecMode::Rs, FecMode::ShortRs];
+    let accepted = [FecMode::Rs, FecMode::ShortRs, FecMode::RsInterleaved];
+    let selected = FecMode::negotiate(&offered, &accepted);
+    assert_eq!(
+        selected,
+        FecMode::ShortRs,
+        "ShortRs (strength 4) should win negotiation over Rs (strength 1)"
+    );
+}
