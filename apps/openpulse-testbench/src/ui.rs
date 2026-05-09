@@ -2,11 +2,14 @@ use egui::Ui;
 use egui_plot::{Line, Plot, PlotPoints, Points, VLine};
 use openpulse_channel::dsp::{FREQ_BINS, WATERFALL_ROWS};
 use openpulse_core::compression::CompressionAlgorithm;
+use openpulse_core::fec::FecMode;
 
 use crate::colormap::plasma;
 #[cfg(feature = "cpal")]
 use crate::state::AudioSource;
-use crate::state::{AppConfig, AppState, NoiseModel, Tap, ALL_MODES};
+use crate::state::{
+    fec_payload_limit, mode_fec_incompatible, AppConfig, AppState, NoiseModel, Tap, ALL_MODES,
+};
 
 const SPECTRUM_H: f32 = 170.0;
 const WATERFALL_H: f32 = 200.0;
@@ -122,16 +125,44 @@ pub fn draw_toolbar(
 
         ui.separator();
 
-        let fsk4 = state.config.mode == "FSK4-ACK";
-        if fsk4 {
-            state.config.fec_enabled = false;
+        let fec_incompatible = mode_fec_incompatible(&state.config.mode);
+        if fec_incompatible {
+            state.config.fec_mode = FecMode::None;
         }
-        ui.add_enabled(!fsk4, egui::Checkbox::new(&mut state.config.fec_enabled, "FEC"))
-            .on_hover_text(if fsk4 {
-                "FEC unavailable for FSK4-ACK — fixed 5-byte ACK frame, no payload space for RS parity"
-            } else {
-                "Enable Reed-Solomon forward error correction (rate 223/255)"
-            });
+        ui.add_enabled_ui(!fec_incompatible, |ui| {
+            ui.label("FEC:");
+            egui::ComboBox::from_id_salt("fec_combo")
+                .selected_text(fec_mode_label(state.config.fec_mode))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut state.config.fec_mode, FecMode::None, "None");
+                    ui.selectable_value(&mut state.config.fec_mode, FecMode::Rs, "RS(255,223)");
+                    ui.selectable_value(
+                        &mut state.config.fec_mode,
+                        FecMode::RsStrong,
+                        "RS(255,191) Strong",
+                    );
+                    ui.selectable_value(
+                        &mut state.config.fec_mode,
+                        FecMode::SoftConcatenated,
+                        "Soft-Conv+RS",
+                    );
+                })
+                .response
+                .on_hover_text(if fec_incompatible {
+                    "FEC unavailable for FSK4-ACK / OFDM / SC-FDMA — internal length prefix\n\
+                     is incompatible with the RS block alignment requirement"
+                } else {
+                    "Forward error correction mode\n\
+                     RS(255,223): corrects up to 16 byte errors/block (rate ≈ 87.5 %)\n\
+                     RS(255,191) Strong: corrects up to 32 byte errors/block (rate ≈ 74.9 %)\n\
+                     Soft-Conv+RS: K=7 soft Viterbi inner + RS outer (rate ≈ 43.7 %)"
+                });
+        });
+
+        // Clamp payload size when FEC is active: must fit within one RS block.
+        if let Some(limit) = fec_payload_limit(state.config.fec_mode) {
+            state.config.payload_size = state.config.payload_size.min(limit);
+        }
 
         if !is_live {
             ui.separator();
@@ -154,6 +185,11 @@ pub fn draw_toolbar(
                         CompressionAlgorithm::Lz4,
                         "LZ4",
                     );
+                    ui.selectable_value(
+                        &mut state.config.compression,
+                        CompressionAlgorithm::Zstd(0),
+                        "Zstd",
+                    );
                 })
                 .response
                 .on_hover_text(
@@ -164,14 +200,16 @@ pub fn draw_toolbar(
             ui.separator();
 
             ui.label("Payload:");
+            let payload_max = fec_payload_limit(state.config.fec_mode).unwrap_or(2048);
             ui.add(
-                egui::Slider::new(&mut state.config.payload_size, 32..=2048)
+                egui::Slider::new(&mut state.config.payload_size, 1..=payload_max)
                     .suffix(" B")
                     .logarithmic(true),
             )
             .on_hover_text(
                 "Payload size in bytes per simulated frame\n\
-                 Larger payloads are more compressible with LZ4",
+                 Larger payloads are more compressible with LZ4/Zstd\n\
+                 Maximum is capped at the RS block data capacity when FEC is active",
             );
         }
 
@@ -252,8 +290,52 @@ fn fmt_bps(bps: f64) -> String {
     }
 }
 
+fn fec_mode_label(mode: FecMode) -> &'static str {
+    match mode {
+        FecMode::None => "None",
+        FecMode::Rs => "RS(255,223)",
+        FecMode::RsStrong => "RS(255,191) Strong",
+        FecMode::SoftConcatenated => "Soft-Conv+RS",
+        FecMode::RsInterleaved => "RS+Interleave",
+        FecMode::Concatenated => "Conv+RS",
+        FecMode::ShortRs => "Short RS",
+        FecMode::Ldpc => "LDPC",
+    }
+}
+
+/// Net bitrate after FEC overhead (gross × code rate).
+fn net_bps(gross: f64, fec_mode: FecMode) -> f64 {
+    match fec_mode {
+        FecMode::None => gross,
+        FecMode::Rs | FecMode::RsInterleaved => gross * 223.0 / 255.0,
+        FecMode::RsStrong => gross * 191.0 / 255.0,
+        // Conv rate-1/2 inner + RS(255,223) outer
+        FecMode::Concatenated | FecMode::SoftConcatenated => gross * 223.0 / 255.0 * 0.5,
+        FecMode::ShortRs => gross,
+        FecMode::Ldpc => gross,
+    }
+}
+
+fn fec_net_tooltip(fec_mode: FecMode) -> &'static str {
+    match fec_mode {
+        FecMode::None => "Payload bit rate — equal to gross when FEC is off",
+        FecMode::Rs | FecMode::RsInterleaved => {
+            "Payload bit rate after RS(255,223) overhead (code rate ≈ 87.5 %)"
+        }
+        FecMode::RsStrong => "Payload bit rate after RS(255,191) overhead (code rate ≈ 74.9 %)",
+        FecMode::Concatenated => {
+            "Payload bit rate after Conv(1/2)+RS(255,223) overhead (code rate ≈ 43.7 %)"
+        }
+        FecMode::SoftConcatenated => {
+            "Payload bit rate after Soft-Conv(1/2)+RS(255,223) overhead (code rate ≈ 43.7 %)"
+        }
+        FecMode::ShortRs | FecMode::Ldpc => "Payload bit rate",
+    }
+}
+
 pub fn draw_stats(ui: &mut Ui, state: &AppState) {
     let stats = state.stats.read().unwrap();
+    let fec_active = state.config.fec_mode != FecMode::None;
     ui.horizontal(|ui| {
         ui.label(format!("Runs: {}", stats.runs));
         ui.separator();
@@ -275,31 +357,8 @@ pub fn draw_stats(ui: &mut Ui, state: &AppState) {
         }
         ui.separator();
 
-        if state.config.fec_enabled {
-            match stats.fec_correction_rate() {
-                Some(rate) => {
-                    ui.label(format!("ECC: {:.1}%", rate * 100.0))
-                        .on_hover_text(format!(
-                            "Last TX: {} of {} channel bit errors corrected by RS(255,223)",
-                            stats.last_fec_corrected_bits, stats.last_fec_channel_error_bits
-                        ));
-                }
-                None => {
-                    ui.label("ECC: —");
-                }
-            }
-            ui.separator();
-        }
-
         let gross = gross_bps(&state.config.mode);
-        // RS(255,223): code rate = 223/255 ≈ 87.5 %
-        let net = if state.config.fec_enabled {
-            gross * 223.0 / 255.0
-        } else {
-            gross
-        };
-        // Effective: net × compression advantage × frame success rate over the last 1.5 s.
-        // compress_adv > 1 when compression shrinks the payload, < 1 when it expands it.
+        let net = net_bps(gross, state.config.fec_mode);
         let window_total = stats.rate_window.len();
         let window_ok = stats.rate_window.iter().filter(|(_, b)| *b > 0).count();
         let success_rate = if window_total > 0 {
@@ -314,11 +373,7 @@ pub fn draw_stats(ui: &mut Ui, state: &AppState) {
             .on_hover_text("Raw air-link bit rate (symbol rate × bits per symbol)");
         ui.separator();
         ui.label(format!("Net: {}", fmt_bps(net)))
-            .on_hover_text(if state.config.fec_enabled {
-                "Payload bit rate after RS(255,223) FEC overhead (code rate ≈ 87.5 %)"
-            } else {
-                "Payload bit rate — equal to gross when FEC is off"
-            });
+            .on_hover_text(fec_net_tooltip(state.config.fec_mode));
         ui.separator();
         ui.label(format!("Effective: {}", fmt_bps(effective_bps)))
             .on_hover_text(format!(
@@ -336,6 +391,23 @@ pub fn draw_stats(ui: &mut Ui, state: &AppState) {
 
         if let Some(last) = stats.event_log.back() {
             ui.label(format!("Last event: {last}"));
+        }
+
+        // ECC at end — only shown when FEC is active.
+        if fec_active {
+            ui.separator();
+            match stats.fec_correction_rate() {
+                Some(rate) => {
+                    ui.label(format!("ECC: {:.1}%", rate * 100.0))
+                        .on_hover_text(format!(
+                            "Last TX: {} of {} channel bit errors corrected by FEC",
+                            stats.last_fec_corrected_bits, stats.last_fec_channel_error_bits
+                        ));
+                }
+                None => {
+                    ui.label("ECC: —");
+                }
+            }
         }
     });
 

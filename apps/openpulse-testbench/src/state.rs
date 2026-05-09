@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use openpulse_channel::dsp::{PowerSpectrum, WaterfallBuffer, FFT_SIZE, FREQ_BINS, WATERFALL_ROWS};
 use openpulse_core::compression::CompressionAlgorithm;
+use openpulse_core::fec::FecMode;
 
 // ── Audio source selector ─────────────────────────────────────────────────────
 
@@ -63,7 +64,7 @@ pub struct AppConfig {
     pub mode: String,
     pub noise_model: NoiseModel,
     pub snr_db: f32,
-    pub fec_enabled: bool,
+    pub fec_mode: FecMode,
     pub compression: CompressionAlgorithm,
     pub payload_size: usize,
     pub seed_str: String,
@@ -79,7 +80,7 @@ impl Default for AppConfig {
             mode: "BPSK250".into(),
             noise_model: NoiseModel::Awgn,
             snr_db: 15.0,
-            fec_enabled: false,
+            fec_mode: FecMode::None,
             compression: CompressionAlgorithm::None,
             payload_size: 32,
             seed_str: "42".into(),
@@ -87,6 +88,23 @@ impl Default for AppConfig {
             max_db: 0.0,
             audio_source: AudioSource::Synthetic,
         }
+    }
+}
+
+/// Returns `true` for modes where FEC cannot be applied in the direct-plugin testbench path.
+pub fn mode_fec_incompatible(mode: &str) -> bool {
+    mode == "FSK4-ACK" || mode.starts_with("OFDM") || mode.starts_with("SCFDMA")
+}
+
+/// Maximum payload bytes that can be encoded in one RS block for the given FEC mode.
+///
+/// Returning `None` means no effective limit (FEC is off).
+pub fn fec_payload_limit(mode: FecMode) -> Option<usize> {
+    match mode {
+        FecMode::None => None,
+        FecMode::Rs | FecMode::SoftConcatenated => Some(223),
+        FecMode::RsStrong => Some(191),
+        _ => Some(223),
     }
 }
 
