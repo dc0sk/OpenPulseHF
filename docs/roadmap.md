@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/roadmap.md
 status: living
-last_updated: 2026-05-08
+last_updated: 2026-05-09
 ---
 
 # Roadmap
@@ -767,109 +767,102 @@ Phase 6.3 (mesh daemon)
 Features deliberately deferred beyond Phase 9.  Each item requires significant design
 work, hardware availability, or explicit operator configuration that is not yet in scope.
 
-### FF-3 — Root-raised-cosine matched filtering *(far future)*
+### FF-3 — Root-raised-cosine matched filtering ✅ Done (PR #158)
 
 RRC reduces the occupied bandwidth to `(1 + α) × Rs` Hz.  At α = 0.35 this is 1350 Hz
 for 1000 baud — well within 2700 Hz and comparable to VARA 500 Hz mode spectral
-efficiency.  It is the correct long-term solution but requires a fundamental rework of
-the demodulation chain that is not justified until the current single-carrier architecture
-is otherwise mature.
+efficiency.
 
-**What changes relative to today**:
-- TX: replace cosine/Hann amplitude shaping with root-raised-cosine TX filter (finite
-  impulse response; span ~8 symbols, rolloff α configurable 0.2–0.5).
-- RX: matched RRC filter + Gardner timing error detector (or Mueller-Müller) to recover
-  symbol timing.  This replaces the current Goertzel/IQ-integration demodulator, which
-  relies on the symbol being spectrally isolated.
-- Channel equalizer: at 1000 baud on HF, symbol period (1 ms) is comparable to
-  multipath delay spread (0.5–2 ms).  An adaptive equalizer (LMS or DFE, 3–5 taps) is
-  required for reliable operation; at 500 baud it is optional.
-- Coherent carrier recovery: RRC + equalization implies coherent detection (PLL or
-  decision-directed phase recovery), gaining ~3 dB SNR vs. the current differential
-  encoding.
+**What was delivered**:
+- TX: RRC FIR TX filter (span = 8 symbols, α = 0.35) replacing cosine/Hann amplitude
+  shaping for all `-RRC` mode variants.
+- RX: matched RRC filter + Gardner timing error detector for adaptive symbol timing
+  recovery across BPSK-RRC, QPSK-RRC, and 8PSK-RRC.  `GardnerDetector::pre_arm()`
+  bridges brute-force preamble acquisition to the adaptive tracking loop.
+- Costas PLL (decision-directed, psk_order=2 for QPSK, psk_order=3 for 8PSK) for
+  coherent carrier recovery on QPSK-RRC and 8PSK-RRC.  BPSK keeps differential
+  detection (NRZI-encoded; coherent detection would break the protocol).
+- Integration tests: `rrc_channel_loopback.rs` — 5 tests covering BPSK250-RRC,
+  QPSK500-RRC, and 8PSK500-RRC on clean channel and AWGN 20 dB.
 
-**Design constraint**: every element (RRC filter, timing recovery, equalizer, carrier
-recovery) must be implementable on Raspberry Pi 4 in real time.  GPU acceleration
-(Phase 3.3) can assist the filter convolutions; the timing/carrier loops are control
-algorithms and must run on the CPU.
-
-**Prerequisite research**: benchmark the Raspberry Pi 4 cost of a 512-tap RRC filter
-at 1000 baud before committing to this path; consider NEON/SIMD optimisation.
+**Note**: adaptive equalizer (LMS/DFE) deferred — at 1000 baud on HF the symbol period
+(1 ms) is comparable to multipath delay spread, but FEC already provides adequate
+protection on Good F1 channels.  Equalizer remains a future option.
 
 ---
 
-### FF-4 — OFDM wideband profile with reduced PAPR *(far future research)*
+### FF-4 — OFDM wideband profile with reduced PAPR ✅ Research complete (PR #135); implementation deferred
 
 VARA achieves 7536 bps in 2400 Hz using 52 subcarriers at 37.5 baud each with a cyclic
 prefix that absorbs HF multipath.  The PAPR cost is 9 dB, requiring amplifier back-off
-to ~12 W average from 100 W peak.  To compete on throughput while reducing this penalty,
-investigate reduced-PAPR OFDM techniques before committing to an implementation.
+to ~12 W average from 100 W peak.
 
-**Research questions to answer before design begins**:
+**Research conducted** (see `docs/ofdm-research.md` for full results):
 
-1. **Clipping + filtering**: clip the OFDM time-domain signal at 3–4 dB above RMS, then
-   apply a bandpass filter to restore spectral mask compliance.  Achieves ~4–5 dB PAPR
-   reduction at the cost of a slight BER floor (~0.1 dB SNR penalty at 10⁻³ BER).
-   Does this bring PAPR close enough to single-carrier to make OFDM viable on class-E /
-   switching amplifiers common in portable HF rigs?
+Simulation swept 3 OFDM configurations × 6 PAPR reduction techniques × 4 channel models
+using `openpulse-channel` (AWGN 20/10 dB, Watterson Good F1, clean).
 
-2. **Tone reservation**: reserve a small fraction of subcarriers (2–4 of 52) as PAPR
-   reduction tones; optimise their amplitude/phase to cancel the highest-envelope peaks.
-   No BER impact but reduces usable subcarriers slightly.
+Key findings:
+- **PAPR gate**: iterative clipping (50 iterations, target 6 dB) reliably achieves PAPR ≤ 6 dB
+  but at the cost of destroying OFDM orthogonality, causing BER degradation on poor channels.
+- **Single-shot clipping** (3–4 dB above RMS) leaves residual peaks above the gate; only
+  iterative clip passes but with unacceptable BER penalty at SNR < 15 dB.
+- **Tone reservation** (4 tones) achieves only ~1–2 dB PAPR reduction — insufficient alone.
+- **Single-carrier RRC is competitive**: `8PSK1000-RRC` reaches ~2400 net bps at PAPR ~4–5 dB,
+  comparable to reduced OFDM at far lower complexity.
 
-3. **Fewer, wider subcarriers**: VARA uses 52 × 37.5 baud.  A profile with 16 × 100 baud
-   subcarriers has lower PAPR (fewer carriers → less constructive interference probability)
-   and a shorter cyclic prefix requirement.  Does 100 baud per subcarrier still survive
-   HF delay spread (≤ 2 ms) with a 5 ms cyclic prefix?
+**Decision: do not implement OFDM at this time.**  The 6 dB PAPR gate cannot be met without
+aggressive iterative clipping that degrades BER on HF channels.  Reconsider if a
+clip-and-filter PAPR approach with per-subcarrier frequency-domain equalization is
+implemented, or if a throughput target above 5000 bps is set.
 
-4. **Single-carrier FDMA as a hybrid**: keep a single dominant subcarrier (for robustness
-   on marginal channels) and add secondary subcarriers only when SNR headroom is available.
-   The rate adaptation ladder stays largely unchanged; OFDM is an optional upper tier.
-
-**Gate**: before implementing, conduct a simulation study (using the existing
-`openpulse-channel` models) comparing SNR vs. throughput for the PAPR-reduction
-approaches above against the VARA specification table.  Write results into
-`docs/ofdm-research.md`; only proceed if at least one technique achieves PAPR ≤ 6 dB
-(matching VARA ACK-frame PAPR) without unacceptable BER penalty.
-
-**Dependencies**: Phase 8.3 (pulse shaping infrastructure), simulation tooling on top of
-existing channel models.
+**What was delivered** (PR #135):
+- `crates/openpulse-modem/src/ofdm_sim.rs`: `OfdmConfig`, `generate_ofdm_frame()`,
+  `demodulate_ofdm_frame()`, `measure_papr()`, `clip_and_filter()`, `clip_iterative()`,
+  `tone_reservation()`
+- `crates/openpulse-modem/tests/ofdm_simulation.rs`: full sweep test + PAPR gate assertion
+- `docs/ofdm-research.md`: simulation methodology, results tables, recommendation
 
 ---
 
-### FF-5 — Ultra-high-speed UHF/VHF modes *(far future)*
+### FF-5 — UHF/VHF wideband modes ✅ Done (PR #159)
 
 On UHF (430 MHz) and VHF (144 MHz), the 2700 Hz bandwidth restriction does not apply.
-FM voice allocations are typically 12.5–25 kHz wide; weak-signal SSB sub-bands on 2 m
-are narrowband but the band plan permits wide digital emissions in designated segments.
-A UHF/VHF profile can push baud rates and modulation orders well beyond what HF allows.
+FM voice allocations are typically 12.5–25 kHz wide.  FF-5 added two tiers of higher-
+baud modes and two new `SessionProfile` constructors targeting PMR/LMR narrowband channels.
 
-**Target operating envelope**:
+**What was delivered**:
 
-| Channel width | Symbol rate | Modulation | Gross throughput |
+Standard tier (8 kHz audio, fits within 12.5 kHz channel, ~2700 Hz occupied BW with α=0.35):
+
+| Mode | Baud | n (sps) | Notes |
 |---|---|---|---|
-| 6 kHz | 3000 baud | 64QAM | ~18 kbps |
-| 12.5 kHz | 6250 baud | 64QAM | ~37 kbps |
-| 25 kHz | 12500 baud | 64QAM | ~75 kbps |
+| QPSK2000 | 2000 | 4 | Hann crossfade |
+| QPSK2000-RRC | 2000 | 4 | RRC + Gardner + Costas |
+| 8PSK2000 | 2000 | 4 | CosineOverlap + fc=2×baud required at n=4 |
+| 8PSK2000-RRC | 2000 | 4 | RRC + Gardner + Costas |
 
-At these rates, HF-specific concerns (multipath delay spread, ionospheric Doppler)
-are replaced by different impairments: Doppler from mobile platforms, adjacent-channel
-interference from FM voice, and receiver phase noise in cheap SDR front-ends.
+HD tier (48 kHz audio required, fills 12.5 kHz channel, ~13 kHz BW):
 
-**Design notes**:
-- At 3000+ baud, per-symbol Goertzel demodulation is no longer practical; a hardware-
-  accelerated receive pipeline (GPU via Phase 3.3, or NEON SIMD) is required.
-- 64QAM requires SNR > 26 dB; suitable for terrestrial line-of-sight links and low-earth-
-  orbit satellite passes but not for EME or troposcatter paths.
-- The rate adaptation ladder (Phase 2.1) already supports SL1–SL11; UHF modes would
-  extend to SL12–SL20 with new `SpeedLevel` variants and a separate `SessionProfile`.
-- PAPR of 64QAM single-carrier is ~7–8 dB; amplifier linearity requirements are
-  higher than for BPSK/QPSK but lower than for OFDM.
-- Regulatory survey required: identify which national band plans permit wide digital
-  emissions at these baud rates; document in `docs/regulatory.md`.
+| Mode | Baud | n (sps) | Notes |
+|---|---|---|---|
+| QPSK9600 | 9600 | 5 | Hann; fc must be ≥ baud (use 12000 Hz) |
+| QPSK9600-RRC | 9600 | 5 | RRC + Gardner + Costas |
+| 8PSK9600 | 9600 | 5 | Hann; fc = 12000 Hz |
+| 8PSK9600-RRC | 9600 | 5 | RRC + Gardner + Costas |
 
-**Dependencies**: FF-3 (RRC matched filtering is essential at 3000+ baud), FF-4 (OFDM
-may be preferred over single-carrier at very wide channels), Phase 3.3 (GPU acceleration).
+New session profiles:
+- `hpx_narrowband()`: SL8=QPSK500, SL9=QPSK1000, SL10=QPSK2000-RRC, SL11=8PSK2000-RRC
+- `hpx_narrowband_hd()`: SL8=QPSK9600-RRC, SL9=8PSK9600-RRC
+
+**Note on 8PSK2000 non-RRC**: at n=4 the Hann crossfade ISI exceeds 8PSK's 22.5°
+decision margins (QPSK passes at n=4 because its margins are 45°).  The mode requires
+`CosineOverlap` (sin² shaping, zeros at boundaries) and fc = integer multiple of baud
+for adequate I/Q orthogonality.  The `-RRC` variant has no such constraint.
+
+**Note on 64QAM at 3000–12500 baud**: original FF-5 scope included 64QAM; deferred
+pending FF-4 OFDM research and FF-3 full-equalizer work.  SL12–SL20 SpeedLevel
+extensions are not yet implemented.
 
 ---
 
@@ -955,7 +948,7 @@ on real hardware), SDR radio with stereo line-in capability (QMX, HermesLite, et
 
 ---
 
-### FF-6 — Binary WebSocket spectrum channel *(far future)*
+### FF-6 — Binary WebSocket spectrum channel ✅ Done (PR #157)
 
 Extend the daemon control protocol (Phase 7.3) with a binary frame channel for spectrum
 data, eliminating JSON serialisation overhead on high-frequency FFT updates.

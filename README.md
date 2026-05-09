@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: README.md
 status: living
-last_updated: 2026-05-08
+last_updated: 2026-05-09
 ---
 
 # OpenPulseHF
@@ -83,6 +83,14 @@ All items below are merged, tested, and in `main`:
 
 - **Phases 1–9 complete**: modulation plugins (BPSK, QPSK, 8PSK, FSK4), rate adaptation, ACK taxonomy, signed handshake, SAR, DCD/CSMA, peer cache and query subsystem, multi-hop relay forwarding, post-quantum handshake, GPU acceleration (optional, wgpu), B2F/Winlink session layer, ARDOP TNC, KISS TNC, direct CMS gateway, TOML config management, structured JSON event stream, TUI frontend, egui testbench GUI
 - **FF-1 QSY frequency agility**: collaborative channel-switching via rigctld
+- **FF-2 I/Q SDR output**: complex baseband I/Q audio output for direct SDR upconversion
+- **FF-3 RRC matched filtering**: root-raised-cosine TX/RX filters + Gardner timing recovery + Costas PLL for all `-RRC` modes (BPSK, QPSK, 8PSK)
+- **FF-5 UHF/VHF wideband modes**: 2000 baud (8 kHz audio, ~2700 Hz BW) and 9600 baud (48 kHz audio, ~13 kHz BW) variants for QPSK and 8PSK; `hpx_narrowband` and `hpx_narrowband_hd` session profiles
+- **FF-6 Binary spectrum channel**: `OPSP` binary frame interleaving on the daemon control port for 20 Hz waterfall updates; panel waterfall bypasses JSON overhead
+- **FF-7 Tanh TX limiter**: soft-clip audio output to reduce PA back-off on 8PSK/RRC amplitude peaks
+- **FF-8 Per-band TX attenuation**: per-band TX gain remembered and restored on band change via rigctld
+- **FF-9 HPX reactor pattern**: event-driven `HpxReactor` replacing the polling-loop state machine
+- **FF-10 zstd dictionary compression**: pre-trained shared dictionary for sub-500-byte payloads
 - **Phase 9 signal-path analytics**: IQ scatter plot, SNR trend, asymmetric rate adaptation, SNR-driven step-down, broadcast/beacon mode alongside ARQ
 - **Winlink gateway**: direct TCP connection to `cms.winlink.org`, ISS and IRS roles, LZHUF (Type C) and Gzip (Type D) compression
 - **PKI service**: Ed25519 trust-bundle signing, REST API, PostgreSQL backend
@@ -97,15 +105,7 @@ Active work tracks (see [`docs/roadmap.md`](docs/roadmap.md) FF-series):
 
 | Item | Description |
 |---|---|
-| FF-2 — I/Q SDR output | Drive SDR radios directly with complex baseband I/Q audio — zero unwanted sideband, no reliance on the rig's SSB filter |
-| FF-3 — RRC matched filtering | Root-raised-cosine TX/RX filters + Gardner timing recovery; prerequisite for 1000 baud+ on HF |
-| FF-4 — OFDM wideband profile | Multi-carrier pilot for high-Doppler and deep-fading paths; research phase |
-| FF-5 — UHF/VHF ultra-high-speed | 64QAM at 3000–12500 baud for VHF/UHF line-of-sight and satellite; up to ~75 kbps in a 25 kHz channel |
-| FF-6 — Binary WebSocket spectrum | Efficient binary framing for 20 Hz waterfall updates from the daemon to the panel (replaces JSON overhead) |
-| FF-7 — Tanh TX limiter | Soft-clip output audio before the audio backend; reduces PA back-off on 8PSK/RRC peaks |
-| FF-8 — Per-band TX attenuation | Remember TX gain per amateur band segment; restore automatically on band change |
-| FF-9 — HPX reactor pattern | Refactor `HpxSession` into an event-driven reactor for cleaner concurrent-state handling at scale |
-| FF-10 — zstd dictionary compression | Pre-trained shared dictionary for sub-500-byte payloads; meaningful compression where LZ4 fails |
+| FF-4 — OFDM wideband profile | Multi-carrier pilot for high-Doppler and deep-fading paths; simulation research underway |
 | FF-11 — Authenticated voice shim | Ed25519 frame-signing shim over FreeDV's codec2 data channel; proof of voice-frame origin without modifying FreeDV |
 | FF-1 ext — QSY trust gating | Wire `allow_trustlevels` from config into QSY session acceptance; deferred until trust context is passed to `QsyPolicy` |
 
