@@ -2,6 +2,7 @@ use std::sync::{Arc, RwLock};
 
 use bpsk_plugin::BpskPlugin;
 use fsk4_plugin::Fsk4Plugin;
+use ofdm_plugin::OfdmPlugin;
 use openpulse_channel::dsp::PowerSpectrum;
 use openpulse_channel::{
     build_channel, AwgnConfig, ChannelModelConfig, ChirpConfig, GilbertElliottConfig, QrmConfig,
@@ -33,6 +34,8 @@ fn mode_symbol_rate(mode: &str) -> f32 {
         "8PSK500" | "8PSK500-RRC" => 500.0,
         "8PSK1000" | "8PSK1000-HF" | "8PSK1000-RRC" => 1000.0,
         "FSK4-ACK" => 100.0,
+        // OFDM symbol rate = fs / (FFT_SIZE + CP) = 8000 / 288 ≈ 27.78 baud
+        "OFDM16" | "OFDM52" => 8000.0 / 288.0,
         _ => 250.0,
     }
 }
@@ -71,6 +74,8 @@ fn make_plugin(mode: &str) -> Box<dyn ModulationPlugin> {
         Box::new(Psk8Plugin::new())
     } else if mode == "FSK4-ACK" {
         Box::new(Fsk4Plugin::new())
+    } else if mode.starts_with("OFDM") {
+        Box::new(OfdmPlugin::new())
     } else {
         Box::new(QpskPlugin::new())
     }

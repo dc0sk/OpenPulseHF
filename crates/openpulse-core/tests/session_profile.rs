@@ -96,3 +96,31 @@ fn hpx_narrowband_hd_initial_level() {
     assert_eq!(p.initial_level, SpeedLevel::Sl8);
     assert_eq!(p.nack_threshold, 3);
 }
+
+#[test]
+fn hpx_ofdm_hf_mode_mapping() {
+    let p = SessionProfile::hpx_ofdm_hf();
+    assert_eq!(p.mode_for(SpeedLevel::Sl1), None);
+    assert_eq!(p.mode_for(SpeedLevel::Sl4), None);
+    assert_eq!(p.mode_for(SpeedLevel::Sl5), Some("OFDM16"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl6), Some("OFDM52"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl7), None);
+    assert_eq!(p.mode_for(SpeedLevel::Sl8), None);
+    assert_eq!(p.mode_for(SpeedLevel::Sl11), None);
+}
+
+#[test]
+fn hpx_ofdm_hf_initial_level() {
+    let p = SessionProfile::hpx_ofdm_hf();
+    assert_eq!(p.initial_level, SpeedLevel::Sl5);
+    assert_eq!(p.nack_threshold, 3);
+}
+
+#[test]
+fn hpx_ofdm_hf_snr_thresholds() {
+    let p = SessionProfile::hpx_ofdm_hf();
+    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl5), Some(8.0));
+    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl6), Some(11.0));
+    assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl5), Some(14.0));
+    assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl6), None);
+}

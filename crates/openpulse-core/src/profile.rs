@@ -203,6 +203,35 @@ impl SessionProfile {
         }
     }
 
+    /// HPX OFDM HF profile: multi-carrier HF ladder (SL5–SL6), capped at 2031 Hz BW.
+    ///
+    /// Both modes fit within the 2700 Hz HF channel-width limit.  Channel equalization
+    /// (LS estimate + ZF) provides robustness against frequency-selective HF fading that
+    /// single-carrier modes cannot achieve without an equalizer.
+    ///
+    /// | SL  | Mode    | BW       | Gross bps |
+    /// |-----|---------|----------|-----------|
+    /// | SL5 | OFDM16  | ≈ 625 Hz | ≈ 889     |
+    /// | SL6 | OFDM52  | ≈ 2031 Hz| ≈ 2889    |
+    pub fn hpx_ofdm_hf() -> Self {
+        let mut modes = [None; 12];
+        modes[SpeedLevel::Sl5 as usize] = Some("OFDM16");
+        modes[SpeedLevel::Sl6 as usize] = Some("OFDM52");
+        let mut snr_floors = [None; 12];
+        snr_floors[SpeedLevel::Sl5 as usize] = Some(8.0_f32);
+        snr_floors[SpeedLevel::Sl6 as usize] = Some(11.0_f32);
+        let mut snr_ceilings = [None; 12];
+        snr_ceilings[SpeedLevel::Sl5 as usize] = Some(14.0_f32);
+        // SL6 is the ceiling; no upgrade above it.
+        Self {
+            modes,
+            initial_level: SpeedLevel::Sl5,
+            nack_threshold: 3,
+            snr_floors,
+            snr_ceilings,
+        }
+    }
+
     /// HPX Narrowband HD profile: 12.5 kHz channel at 48 kHz audio (fills the channel).
     ///
     /// Occupies the full 12.5 kHz channel at 9600 baud (α=0.35 RRC ≈ 13 kHz BW).

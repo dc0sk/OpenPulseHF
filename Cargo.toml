@@ -19,6 +19,7 @@ members = [
     "crates/openpulse-mesh",
     "plugins/bpsk",
     "plugins/fsk4",
+    "plugins/ofdm",
     "plugins/psk8",
     "plugins/qpsk",
     "pki-tooling",
@@ -58,6 +59,7 @@ openpulse-dsp        = { path = "crates/openpulse-dsp" }
 openpulse-qsy        = { path = "crates/openpulse-qsy" }
 bpsk-plugin       = { path = "plugins/bpsk" }
 fsk4-plugin       = { path = "plugins/fsk4" }
+ofdm-plugin       = { path = "plugins/ofdm" }
 psk8-plugin       = { path = "plugins/psk8" }
 qpsk-plugin       = { path = "plugins/qpsk" }
 

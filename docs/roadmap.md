@@ -791,37 +791,30 @@ protection on Good F1 channels.  Equalizer remains a future option.
 
 ---
 
-### FF-4 — OFDM wideband profile with reduced PAPR ✅ Research complete (PR #135); implementation deferred
+### FF-4 — OFDM wideband HF profile ✅ Done (PR #167)
 
-VARA achieves 7536 bps in 2400 Hz using 52 subcarriers at 37.5 baud each with a cyclic
-prefix that absorbs HF multipath.  The PAPR cost is 9 dB, requiring amplifier back-off
-to ~12 W average from 100 W peak.
+OFDM multi-carrier modes for HF use, with LS channel estimation and ZF equalization to handle
+frequency-selective ionospheric fading.  Two sub-profiles are delivered:
 
-**Research conducted** (see `docs/ofdm-research.md` for full results):
+| Mode | SCs | BW | Gross bps | Session SL |
+|---|---|---|---|---|
+| OFDM16 | 16 data + 4 pilot, SCs 38–57 | ≈ 625 Hz | ≈ 889 | SL5 |
+| OFDM52 | 52 data + 13 pilot, SCs 16–80 | ≈ 2031 Hz | ≈ 2889 | SL6 |
 
-Simulation swept 3 OFDM configurations × 6 PAPR reduction techniques × 4 channel models
-using `openpulse-channel` (AWGN 20/10 dB, Watterson Good F1, clean).
+Both modes: FFT=256, CP=32, QPSK per-subcarrier, centre 1500 Hz, iterative PAPR clipping
+(target 6 dB), 2-byte LE length prefix.
 
-Key findings:
-- **PAPR gate**: iterative clipping (50 iterations, target 6 dB) reliably achieves PAPR ≤ 6 dB
-  but at the cost of destroying OFDM orthogonality, causing BER degradation on poor channels.
-- **Single-shot clipping** (3–4 dB above RMS) leaves residual peaks above the gate; only
-  iterative clip passes but with unacceptable BER penalty at SNR < 15 dB.
-- **Tone reservation** (4 tones) achieves only ~1–2 dB PAPR reduction — insufficient alone.
-- **Single-carrier RRC is competitive**: `8PSK1000-RRC` reaches ~2400 net bps at PAPR ~4–5 dB,
-  comparable to reduced OFDM at far lower complexity.
+**What was delivered**:
+- `plugins/ofdm/` — new `ofdm-plugin` crate: `OfdmPlugin`, modulate, demodulate, params, channel equalization modules; 15 tests
+- `crates/openpulse-core/src/profile.rs` — `hpx_ofdm_hf()` session profile (SL5=OFDM16, SL6=OFDM52)
+- `crates/openpulse-core/tests/session_profile.rs` — 3 new profile tests
+- `apps/openpulse-testbench/` — OFDM16 and OFDM52 modes wired into the testbench GUI with correct bandwidth markers and gross bps display
+- `docs/backlog-fec-improvements.md` — FEC backlog items (BL-FEC-1 through BL-FEC-6) from RS research session
 
-**Decision: do not implement OFDM at this time.**  The 6 dB PAPR gate cannot be met without
-aggressive iterative clipping that degrades BER on HF channels.  Reconsider if a
-clip-and-filter PAPR approach with per-subcarrier frequency-domain equalization is
-implemented, or if a throughput target above 5000 bps is set.
-
-**What was delivered** (PR #135):
-- `crates/openpulse-modem/src/ofdm_sim.rs`: `OfdmConfig`, `generate_ofdm_frame()`,
-  `demodulate_ofdm_frame()`, `measure_papr()`, `clip_and_filter()`, `clip_iterative()`,
-  `tone_reservation()`
-- `crates/openpulse-modem/tests/ofdm_simulation.rs`: full sweep test + PAPR gate assertion
-- `docs/ofdm-research.md`: simulation methodology, results tables, recommendation
+**Previous research** (PR #135, `crates/openpulse-modem/src/ofdm_sim.rs`):
+The research showed PAPR reduction via iterative clipping degrades BER.  The production
+plugin resolves this by adding per-subcarrier LS+ZF equalization, which compensates for
+the amplitude distortion introduced by clipping.
 
 ---
 

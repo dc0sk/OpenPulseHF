@@ -85,6 +85,7 @@ All items below are merged, tested, and in `main`:
 - **FF-1 QSY frequency agility**: collaborative channel-switching via rigctld
 - **FF-2 I/Q SDR output**: complex baseband I/Q audio output for direct SDR upconversion
 - **FF-3 RRC matched filtering**: root-raised-cosine TX/RX filters + Gardner timing recovery + Costas PLL for all `-RRC` modes (BPSK, QPSK, 8PSK)
+- **FF-4 OFDM wideband HF profile**: multi-carrier OFDM plugin with LS channel estimation + ZF equalization; OFDM16 (≈625 Hz, ≈889 bps) and OFDM52 (≈2031 Hz, ≈2889 bps); `hpx_ofdm_hf()` session profile
 - **FF-5 UHF/VHF wideband modes**: 2000 baud (8 kHz audio, ~2700 Hz BW) and 9600 baud (48 kHz audio, ~13 kHz BW) variants for QPSK and 8PSK; `hpx_narrowband` and `hpx_narrowband_hd` session profiles
 - **FF-6 Binary spectrum channel**: `OPSP` binary frame interleaving on the daemon control port for 20 Hz waterfall updates; panel waterfall bypasses JSON overhead
 - **FF-7 Tanh TX limiter**: soft-clip audio output to reduce PA back-off on 8PSK/RRC amplitude peaks
@@ -105,9 +106,7 @@ See [`docs/roadmap.md`](docs/roadmap.md) for per-item ✅ markers and PR referen
 
 Active work tracks (see [`docs/roadmap.md`](docs/roadmap.md) FF-series):
 
-| Item | Description |
-|---|---|
-| FF-4 — OFDM wideband profile | Multi-carrier pilot for high-Doppler and deep-fading paths; simulation research underway |
+All FF-series features have shipped. See the roadmap for the FEC improvements backlog (BL-FEC series).
 
 ---
 
