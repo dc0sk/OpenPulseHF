@@ -46,6 +46,12 @@ pub enum FecMode {
     /// (8 ECC bytes, t=4, corrects up to 4 byte errors).  A 5-byte FSK4-ACK
     /// frame becomes 13 bytes — versus 255 bytes with the standard RS codec.
     ShortRs,
+    /// Strong RS: RS(255,191) with t=32 (64 ECC bytes per block).
+    ///
+    /// Corrects up to 32 byte errors per block — double the standard t=16
+    /// capacity.  Use on AWGN-dominant paths where ≥ 1% raw BER is expected.
+    /// Overhead: 25% ECC bytes per block vs. 14% for the standard codec.
+    RsStrong,
 }
 
 impl FecMode {
@@ -57,6 +63,7 @@ impl FecMode {
             FecMode::RsInterleaved => 2,
             FecMode::Concatenated => 3,
             FecMode::ShortRs => 4,
+            FecMode::RsStrong => 5,
         }
     }
 
@@ -72,35 +79,58 @@ impl FecMode {
     }
 }
 
-/// ECC bytes appended per 255-byte RS block.
+/// ECC bytes appended per 255-byte RS block (standard codec, t=16).
 pub const FEC_ECC_LEN: usize = 32;
 
-/// Data bytes per RS block (255 − ECC_LEN).
-const BLOCK_DATA: usize = 255 - FEC_ECC_LEN;
+/// ECC bytes appended per 255-byte RS block by the strong codec (t=32).
+pub const FEC_ECC_LEN_STRONG: usize = 64;
 
-/// Total bytes per encoded RS block.
+/// Total bytes per encoded RS block (always 255 — GF(2^8) block size).
 const BLOCK_TOTAL: usize = 255;
 
 /// Byte width of the big-endian original-length prefix.
 const PREFIX_LEN: usize = 4;
 
+/// Data bytes per block for the standard codec (255 − 32 = 223).
+///
+/// Used by unit tests that hard-code exact block boundaries.
+pub const BLOCK_DATA: usize = BLOCK_TOTAL - FEC_ECC_LEN;
+
 /// Reed-Solomon codec.
 ///
-/// Construct with [`FecCodec::new`] or [`Default`].  The same codec instance
-/// can be reused for multiple encode/decode operations.
+/// Construct with [`FecCodec::new`] (t=16, standard) or [`FecCodec::strong`]
+/// (t=32, AWGN-robust).  The same codec instance can be reused for multiple
+/// encode/decode operations.
 pub struct FecCodec {
+    ecc_len: usize,
     encoder: Encoder,
     decoder: Decoder,
 }
 
 impl FecCodec {
-    /// Create a new codec with the default ECC configuration (ECC_LEN = 32,
-    /// corrects up to 16 byte errors per 255-byte block).
+    /// Create a codec with `ECC_LEN = 32` (RS(255,223), t=16, corrects up to
+    /// 16 byte errors per 255-byte block).
     pub fn new() -> Self {
+        Self::with_ecc_len(FEC_ECC_LEN)
+    }
+
+    /// Create a codec with `ECC_LEN = 64` (RS(255,191), t=32, corrects up to
+    /// 32 byte errors per 255-byte block).  Use when AWGN produces more than
+    /// ~16 byte errors per block (≥ 1% raw BER on a 255-byte block).
+    pub fn strong() -> Self {
+        Self::with_ecc_len(FEC_ECC_LEN_STRONG)
+    }
+
+    fn with_ecc_len(ecc_len: usize) -> Self {
         Self {
-            encoder: Encoder::new(FEC_ECC_LEN),
-            decoder: Decoder::new(FEC_ECC_LEN),
+            ecc_len,
+            encoder: Encoder::new(ecc_len),
+            decoder: Decoder::new(ecc_len),
         }
+    }
+
+    fn block_data(&self) -> usize {
+        BLOCK_TOTAL - self.ecc_len
     }
 
     /// Encode `data` into a sequence of RS-protected 255-byte blocks.
@@ -108,6 +138,7 @@ impl FecCodec {
     /// A 4-byte big-endian length prefix is prepended before blocking so the
     /// decoder can strip trailing padding without side-channel information.
     pub fn encode(&self, data: &[u8]) -> Vec<u8> {
+        let block_data = self.block_data();
         let orig_len = data.len() as u32;
 
         // Prefix + data.
@@ -115,14 +146,14 @@ impl FecCodec {
         input.extend_from_slice(&orig_len.to_be_bytes());
         input.extend_from_slice(data);
 
-        // Pad up to the next multiple of BLOCK_DATA.
-        let padded_len = input.len().div_ceil(BLOCK_DATA) * BLOCK_DATA;
+        // Pad up to the next multiple of block_data.
+        let padded_len = input.len().div_ceil(block_data) * block_data;
         input.resize(padded_len, 0u8);
 
-        let n_blocks = input.len() / BLOCK_DATA;
+        let n_blocks = input.len() / block_data;
         let mut out = Vec::with_capacity(n_blocks * BLOCK_TOTAL);
 
-        for chunk in input.chunks(BLOCK_DATA) {
+        for chunk in input.chunks(block_data) {
             let encoded = self.encoder.encode(chunk);
             out.extend_from_slice(&encoded);
         }
@@ -138,9 +169,11 @@ impl FecCodec {
     ///
     /// Returns [`ModemError::Fec`] when:
     /// - The input length is not a multiple of 255.
-    /// - A block has more than `ECC_LEN / 2 = 16` byte errors.
+    /// - A block has more than `ecc_len / 2` byte errors.
     /// - The embedded length prefix is inconsistent with decoded content.
     pub fn decode(&self, data: &[u8]) -> Result<Vec<u8>, ModemError> {
+        let block_data = self.block_data();
+
         if data.is_empty() || !data.len().is_multiple_of(BLOCK_TOTAL) {
             return Err(ModemError::Fec(format!(
                 "FEC data length {} is not a non-zero multiple of {BLOCK_TOTAL}",
@@ -148,15 +181,13 @@ impl FecCodec {
             )));
         }
 
-        let mut decoded = Vec::with_capacity(data.len() / BLOCK_TOTAL * BLOCK_DATA);
+        let mut decoded = Vec::with_capacity(data.len() / BLOCK_TOTAL * block_data);
 
         for (i, block) in data.chunks(BLOCK_TOTAL).enumerate() {
             let corrected = self.decoder.correct(block, None).map_err(|e| {
                 ModemError::Fec(format!("RS correction failed at block {i}: {e:?}"))
             })?;
-            // The corrected buffer is BLOCK_TOTAL bytes; we only keep the data
-            // portion (first BLOCK_DATA bytes) — the ECC bytes are trailing.
-            decoded.extend_from_slice(&corrected[..BLOCK_DATA]);
+            decoded.extend_from_slice(&corrected[..block_data]);
         }
 
         // Read original length from 4-byte big-endian prefix.
@@ -339,6 +370,78 @@ impl Interleaver {
             out[src] = data[i];
         }
         out
+    }
+}
+
+// ── Memory-ARQ soft combiner ──────────────────────────────────────────────────
+
+/// Element-wise sample accumulator for Memory-ARQ maximal-ratio combining.
+///
+/// Each call to [`push`](Self::push) adds a received sample buffer to the
+/// accumulator.  [`combine`](Self::combine) returns the element-wise mean,
+/// which coherently averages noise and reinforces the signal component.
+///
+/// Combining N identical retransmissions improves effective SNR by ~3 dB per
+/// doubling of N (10 log₁₀ N dB total).  No wire-protocol change is required —
+/// the sender simply retransmits the same frame; only the receiver accumulates.
+pub struct SoftCombiner {
+    accumulator: Vec<f32>,
+    count: usize,
+}
+
+impl SoftCombiner {
+    /// Create an empty combiner.
+    pub fn new() -> Self {
+        Self {
+            accumulator: Vec::new(),
+            count: 0,
+        }
+    }
+
+    /// Accumulate `samples` into the combiner.
+    ///
+    /// On the first call the buffer is cloned; subsequent calls add element-wise
+    /// up to the shorter of the two lengths (trailing samples of the longer
+    /// buffer are discarded to guard against framing drift).
+    pub fn push(&mut self, samples: &[f32]) {
+        if self.accumulator.is_empty() {
+            self.accumulator = samples.to_vec();
+        } else {
+            let len = self.accumulator.len().min(samples.len());
+            self.accumulator.truncate(len);
+            for (a, &s) in self.accumulator.iter_mut().zip(samples) {
+                *a += s;
+            }
+        }
+        self.count += 1;
+    }
+
+    /// Return the element-wise mean of all pushed sample buffers.
+    ///
+    /// Returns an empty `Vec` if no buffers have been pushed.
+    pub fn combine(&self) -> Vec<f32> {
+        if self.count == 0 {
+            return Vec::new();
+        }
+        let n = self.count as f32;
+        self.accumulator.iter().map(|&s| s / n).collect()
+    }
+
+    /// Number of sample buffers accumulated so far.
+    pub fn count(&self) -> usize {
+        self.count
+    }
+
+    /// Reset to the empty state.
+    pub fn reset(&mut self) {
+        self.accumulator.clear();
+        self.count = 0;
+    }
+}
+
+impl Default for SoftCombiner {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

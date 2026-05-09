@@ -11,7 +11,7 @@ use openpulse_core::audio::{AudioBackend, AudioConfig};
 use openpulse_core::conv::ConvCodec;
 use openpulse_core::dcd::DcdState;
 use openpulse_core::error::{ModemError, PluginError};
-use openpulse_core::fec::{FecCodec, Interleaver, ShortFecCodec};
+use openpulse_core::fec::{FecCodec, Interleaver, ShortFecCodec, SoftCombiner};
 use openpulse_core::frame::Frame;
 use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
 use openpulse_core::plugin::{ModulationConfig, PluginRegistry};
@@ -1033,6 +1033,149 @@ impl ModemEngine {
         let frame = self.stage_decode_frame(&corrected_wire)?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         info!("concatenated FEC receive: frame seq={}", frame.sequence);
+        let _ = self.event_tx.send(EngineEvent::FrameReceived {
+            mode: mode.to_string(),
+            bytes: frame.payload.len(),
+        });
+        Ok(frame.payload)
+    }
+
+    /// Transmit with RS(255,191) t=32 strong FEC (corrects up to 32 byte errors/block).
+    ///
+    /// TX chain: frame encode → RS strong encode → modulate → emit.
+    pub fn transmit_with_strong_fec(
+        &mut self,
+        data: &[u8],
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<(), ModemError> {
+        self.csma_check()?;
+        let wire = self.stage_encode_frame(data);
+        let fec_wire = WirePayload {
+            bytes: FecCodec::strong().encode(&wire.bytes),
+        };
+        let samples = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_modulate_payload(plugin, mode, &fec_wire)?
+        };
+        let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
+        self.stage_emit_output(device, &samples)?;
+        let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
+            mode: mode.to_string(),
+            bytes: fec_wire.bytes.len(),
+        });
+        Ok(())
+    }
+
+    /// Receive with RS(255,191) t=32 strong FEC.
+    ///
+    /// RX chain: capture → demodulate → RS strong decode → frame decode.
+    pub fn receive_with_strong_fec(
+        &mut self,
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<Vec<u8>, ModemError> {
+        let samples = self.stage_capture_input(device)?;
+        let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+
+        let prev_busy = self.dcd.is_busy();
+        self.dcd.update(&samples.samples);
+        if self.dcd.is_busy() != prev_busy {
+            let _ = self.event_tx.send(EngineEvent::DcdChange {
+                busy: self.dcd.is_busy(),
+                energy: self.dcd.energy(),
+            });
+        }
+
+        let raw_wire = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_demodulate_payload(plugin, mode, &samples)?
+        };
+        let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
+
+        self.update_afc_estimate(mode, &samples.samples);
+        if let Some(hz) = self.last_afc_offset_hz {
+            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
+                offset_hz: hz,
+                correction_hz: self.afc_correction_hz,
+                mode: mode.to_string(),
+            });
+        }
+
+        let rs_decoded = FecCodec::strong().decode(&raw_wire.bytes)?;
+        let frame = self.stage_decode_frame(&WirePayload { bytes: rs_decoded })?;
+        let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
+        let _ = self.event_tx.send(EngineEvent::FrameReceived {
+            mode: mode.to_string(),
+            bytes: frame.payload.len(),
+        });
+        Ok(frame.payload)
+    }
+
+    /// Receive via Memory-ARQ soft combining: capture `n_frames` sample buffers,
+    /// average them element-wise, then demodulate and RS-decode the combined signal.
+    ///
+    /// Combining N identical retransmissions improves effective SNR by ~3 dB per
+    /// doubling of N (10 log₁₀ N dB total gain over a single reception).
+    pub fn receive_with_soft_combining(
+        &mut self,
+        mode: &str,
+        device: Option<&str>,
+        n_frames: usize,
+    ) -> Result<Vec<u8>, ModemError> {
+        if n_frames == 0 {
+            return Err(ModemError::Frame(
+                "soft combining: n_frames must be ≥ 1".to_string(),
+            ));
+        }
+        let mut combiner = SoftCombiner::new();
+        for _ in 0..n_frames {
+            let samples = self.stage_capture_input(device)?;
+            let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+
+            let prev_busy = self.dcd.is_busy();
+            self.dcd.update(&samples.samples);
+            if self.dcd.is_busy() != prev_busy {
+                let _ = self.event_tx.send(EngineEvent::DcdChange {
+                    busy: self.dcd.is_busy(),
+                    energy: self.dcd.energy(),
+                });
+            }
+
+            combiner.push(&samples.samples);
+        }
+
+        let combined = AudioSamples {
+            samples: combiner.combine(),
+        };
+
+        self.update_afc_estimate(mode, &combined.samples);
+        if let Some(hz) = self.last_afc_offset_hz {
+            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
+                offset_hz: hz,
+                correction_hz: self.afc_correction_hz,
+                mode: mode.to_string(),
+            });
+        }
+
+        let raw_wire = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_demodulate_payload(plugin, mode, &combined)?
+        };
+        let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
+
+        let rs_decoded = FecCodec::new().decode(&raw_wire.bytes)?;
+        let frame = self.stage_decode_frame(&WirePayload { bytes: rs_decoded })?;
+        let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         let _ = self.event_tx.send(EngineEvent::FrameReceived {
             mode: mode.to_string(),
             bytes: frame.payload.len(),
