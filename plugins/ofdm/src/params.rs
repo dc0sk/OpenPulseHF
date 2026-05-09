@@ -80,9 +80,9 @@ pub const OFDM52: OfdmParams = OfdmParams {
     n_pilots: 13,
 };
 
-/// Select `OfdmParams` from a mode string.
+/// Select `OfdmParams` from a mode string (case-insensitive).
 pub fn params_for_mode(mode: &str) -> Option<OfdmParams> {
-    match mode {
+    match mode.to_ascii_uppercase().as_str() {
         "OFDM16" => Some(OFDM16),
         "OFDM52" => Some(OFDM52),
         _ => None,

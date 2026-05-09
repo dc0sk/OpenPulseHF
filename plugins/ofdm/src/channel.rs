@@ -58,11 +58,11 @@ pub fn ls_estimate(p: &OfdmParams, freq: &[Complex32]) -> Vec<Complex32> {
     let (first_pilot_rel, first_h) = known[0];
     let (last_pilot_rel, last_h) = *known.last().unwrap();
 
-    for rel in 0..first_pilot_rel {
-        h_est[rel] = first_h;
+    for h in h_est[..first_pilot_rel].iter_mut() {
+        *h = first_h;
     }
-    for rel in (last_pilot_rel + 1)..total {
-        h_est[rel] = last_h;
+    for h in h_est[(last_pilot_rel + 1)..].iter_mut() {
+        *h = last_h;
     }
 
     // Linear interpolation between adjacent pilot pairs.
@@ -73,9 +73,9 @@ pub fn ls_estimate(p: &OfdmParams, freq: &[Complex32]) -> Vec<Complex32> {
         h_est[rel1] = h1;
         if rel1 > rel0 + 1 {
             let steps = (rel1 - rel0) as f32;
-            for k in (rel0 + 1)..rel1 {
-                let t = (k - rel0) as f32 / steps;
-                h_est[k] = h0 * (1.0 - t) + h1 * t;
+            for (i, h) in h_est[(rel0 + 1)..rel1].iter_mut().enumerate() {
+                let t = (i + 1) as f32 / steps;
+                *h = h0 * (1.0 - t) + h1 * t;
             }
         }
     }
@@ -95,18 +95,13 @@ pub fn ls_estimate(p: &OfdmParams, freq: &[Complex32]) -> Vec<Complex32> {
 /// in order of increasing SC index.
 pub fn zf_equalize(p: &OfdmParams, freq: &[Complex32], h_est: &[Complex32]) -> Vec<Complex32> {
     let mut out = Vec::with_capacity(p.n_data);
-    for sc in p.first_sc..=p.last_sc {
+    for (rel, &h_in) in freq[p.first_sc..=p.last_sc].iter().enumerate() {
+        let sc = p.first_sc + rel;
         if is_pilot(p, sc) {
             continue;
         }
-        let rel = sc - p.first_sc;
         let h = h_est[rel];
-        // Avoid division by near-zero (deep fade or uninitialized estimate).
-        let eq = if h.norm_sqr() < 1e-6 {
-            freq[sc]
-        } else {
-            freq[sc] / h
-        };
+        let eq = if h.norm_sqr() < 1e-6 { h_in } else { h_in / h };
         out.push(eq);
     }
     out

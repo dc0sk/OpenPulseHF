@@ -19,7 +19,7 @@ use openpulse_core::{
 
 use crate::demodulate::ofdm_demodulate;
 use crate::modulate::ofdm_modulate;
-use crate::params::params_for_mode;
+use crate::params::{params_for_mode, SAMPLE_RATE};
 
 /// OFDM plugin supporting OFDM16 and OFDM52 modes.
 pub struct OfdmPlugin {
@@ -59,6 +59,18 @@ impl ModulationPlugin for OfdmPlugin {
                 config.mode
             )));
         }
+        if config.sample_rate != SAMPLE_RATE {
+            return Err(ModemError::Configuration(format!(
+                "OFDM plugin: sample_rate {} not supported; must be {SAMPLE_RATE}",
+                config.sample_rate
+            )));
+        }
+        if (config.center_frequency - 1500.0).abs() > 1.0 {
+            return Err(ModemError::Configuration(format!(
+                "OFDM plugin: center_frequency {:.1} not supported; must be 1500.0 Hz",
+                config.center_frequency
+            )));
+        }
         Ok(ofdm_modulate(data, &config.mode))
     }
 
@@ -73,12 +85,24 @@ impl ModulationPlugin for OfdmPlugin {
                 config.mode
             )));
         }
+        if config.sample_rate != SAMPLE_RATE {
+            return Err(ModemError::Configuration(format!(
+                "OFDM plugin: sample_rate {} not supported; must be {SAMPLE_RATE}",
+                config.sample_rate
+            )));
+        }
+        if (config.center_frequency - 1500.0).abs() > 1.0 {
+            return Err(ModemError::Configuration(format!(
+                "OFDM plugin: center_frequency {:.1} not supported; must be 1500.0 Hz",
+                config.center_frequency
+            )));
+        }
         Ok(ofdm_demodulate(samples, &config.mode))
     }
 
-    // AFC: OFDM channel estimation is per-subcarrier; no global frequency offset.
+    // Per-subcarrier LS/ZF equalization handles channel phase; no global CFO estimator.
     fn estimate_afc_hz(&self, _samples: &[f32], _config: &ModulationConfig) -> Option<f32> {
-        Some(0.0)
+        None
     }
 }
 
@@ -107,7 +131,7 @@ mod tests {
         let payload = b"OFDM16 loopback test payload, hello";
         let samples = plugin.modulate(payload, &mod_config("OFDM16")).unwrap();
         let rx = plugin.demodulate(&samples, &mod_config("OFDM16")).unwrap();
-        assert_eq!(&rx[..payload.len().min(rx.len())], payload);
+        assert_eq!(rx.as_slice(), payload.as_ref());
     }
 
     // 2. OFDM52 clean loopback
@@ -117,7 +141,7 @@ mod tests {
         let payload = b"OFDM52 clean loopback test payload, more data here";
         let samples = plugin.modulate(payload, &mod_config("OFDM52")).unwrap();
         let rx = plugin.demodulate(&samples, &mod_config("OFDM52")).unwrap();
-        assert_eq!(&rx[..payload.len().min(rx.len())], payload);
+        assert_eq!(rx.as_slice(), payload.as_ref());
     }
 
     // 3. Short payload (1 byte) — length prefix must survive round-trip

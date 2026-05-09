@@ -7,7 +7,7 @@ use crate::channel::{ls_estimate, zf_equalize};
 use crate::params::{params_for_mode, OfdmParams, CP, FFT_SIZE, SYM_LEN};
 
 pub fn ofdm_demodulate(samples: &[f32], mode: &str) -> Vec<u8> {
-    let p = params_for_mode(mode).unwrap_or(crate::params::OFDM16);
+    let p = params_for_mode(mode).expect("caller must validate mode before ofdm_demodulate");
     demodulate_with_params(samples, &p)
 }
 
@@ -42,7 +42,7 @@ fn demodulate_with_params(samples: &[f32], p: &OfdmParams) -> Vec<u8> {
         // Decode QPSK symbols.
         for sym in &data_syms {
             let bits2 = qpsk_demod(*sym);
-            bits.push((bits2 >> 0) & 1 == 1);
+            bits.push(bits2 & 1 == 1);
             bits.push((bits2 >> 1) & 1 == 1);
         }
     }

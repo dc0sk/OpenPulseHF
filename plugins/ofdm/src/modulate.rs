@@ -5,12 +5,11 @@ use rustfft::FftPlanner;
 
 use crate::channel::is_pilot;
 use crate::params::{
-    params_for_mode, OfdmParams, CLIP_MAX_ITER, CP, FFT_SIZE, OFDM16, PILOT_AMPLITUDE,
-    TARGET_PAPR_DB,
+    params_for_mode, OfdmParams, CLIP_MAX_ITER, CP, FFT_SIZE, PILOT_AMPLITUDE, TARGET_PAPR_DB,
 };
 
 pub fn ofdm_modulate(payload: &[u8], mode: &str) -> Vec<f32> {
-    let p = params_for_mode(mode).unwrap_or(OFDM16);
+    let p = params_for_mode(mode).expect("caller must validate mode before ofdm_modulate");
     modulate_with_params(payload, &p)
 }
 
@@ -39,7 +38,6 @@ fn modulate_with_params(payload: &[u8], p: &OfdmParams) -> Vec<f32> {
     for _ in 0..n_syms {
         let mut freq = vec![Complex32::new(0.0, 0.0); FFT_SIZE];
 
-        let mut data_bit_idx = 0usize;
         for sc in p.first_sc..=p.last_sc {
             if is_pilot(p, sc) {
                 // Pilot: known BPSK +1 at positive frequency; conjugate at mirror.
@@ -54,9 +52,7 @@ fn modulate_with_params(payload: &[u8], p: &OfdmParams) -> Vec<f32> {
                     sym_bits |= (bits[bit_idx] as u8) << b;
                     bit_idx += 1;
                 }
-                data_bit_idx += 1;
             }
-            let _ = data_bit_idx;
             let sym = qpsk_mod(sym_bits);
             freq[sc] = sym;
             // Hermitian symmetry → real IFFT output.

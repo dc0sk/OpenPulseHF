@@ -37,7 +37,7 @@ pub fn hilbert_iq(real: &[f32], fc: f32, fs: f32) -> (Vec<f32>, Vec<f32>) {
     let mut q_rf = vec![0.0f32; len];
 
     // Direct-form FIR convolution with zero boundary padding.
-    for i in 0..len {
+    for (i, q) in q_rf.iter_mut().enumerate() {
         let mut sum = 0.0f32;
         for (j, &h) in kernel.iter().enumerate() {
             let src = i as i32 - j as i32 + HALF;
@@ -45,7 +45,7 @@ pub fn hilbert_iq(real: &[f32], fc: f32, fs: f32) -> (Vec<f32>, Vec<f32>) {
                 sum += real[src as usize] * h;
             }
         }
-        q_rf[i] = sum;
+        *q = sum;
     }
 
     // Demodulate to baseband: multiply by e^(-j·2π·fc·k/fs).
