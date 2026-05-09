@@ -27,9 +27,11 @@ pub fn run(case: &TestCase) -> TestResult {
             TestResult {
                 case: case.clone(),
                 passed,
+                skipped: false,
                 ber: None,
                 bytes_rx: messages.first().map(|m| m.body.len()).unwrap_or(0),
                 duration_ms,
+                effective_bps: None,
                 note: if passed {
                     None
                 } else {
@@ -40,9 +42,11 @@ pub fn run(case: &TestCase) -> TestResult {
         Err(e) => TestResult {
             case: case.clone(),
             passed: false,
+            skipped: false,
             ber: None,
             bytes_rx: 0,
             duration_ms,
+            effective_bps: None,
             note: Some(e),
         },
     }

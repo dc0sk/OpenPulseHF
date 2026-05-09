@@ -24,6 +24,8 @@ bpsk-plugin          = { workspace = true }
 fsk4-plugin          = { workspace = true }
 psk8-plugin          = { workspace = true }
 qpsk-plugin          = { workspace = true }
+ofdm-plugin          = { workspace = true }
+scfdma-plugin        = { workspace = true }
 serde                = { workspace = true }
 serde_json           = { workspace = true }
 clap                 = { workspace = true }

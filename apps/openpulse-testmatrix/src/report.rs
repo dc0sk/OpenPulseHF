@@ -5,7 +5,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use openpulse_core::compression::CompressionAlgorithm;
 
-use crate::matrix::{TestResult, UseCase};
+use crate::matrix::{fec_label, TestResult, UseCase};
 
 pub struct RunMeta {
     pub date: DateTime<Utc>,
@@ -22,6 +22,7 @@ pub fn write_reports(results: &[TestResult], output_dir: &Path, meta: &RunMeta) 
     write_by_mode(&latest, results, meta);
     write_by_channel(&latest, results, meta);
     write_by_usecase(&latest, results, meta);
+    write_csv(&latest, results, meta);
     write_raw_json(&latest, results);
 }
 
@@ -37,20 +38,27 @@ fn frontmatter(title: &str, subtitle: &str, meta: &RunMeta, total: usize, passed
 }
 
 fn write_summary(dir: &Path, results: &[TestResult], meta: &RunMeta) {
-    let total = results.len();
-    let passed = results.iter().filter(|r| r.passed).count();
+    // Exclude skipped cases from pass-rate aggregation.
+    let active: Vec<_> = results.iter().filter(|r| !r.skipped).collect();
+    let skipped_count = results.len() - active.len();
+    let total = active.len();
+    let passed = active.iter().filter(|r| r.passed).count();
     let mut out = frontmatter("OpenPulseHF Test Matrix", "Summary", meta, total, passed);
 
     out.push_str("# Test Matrix Summary\n\n");
     out.push_str(&format!(
-        "**{passed}/{total} cases passed** in {}s\n\n",
+        "**{passed}/{total} cases passed** in {}s",
         meta.duration.as_secs()
     ));
+    if skipped_count > 0 {
+        out.push_str(&format!(" ({skipped_count} skipped)"));
+    }
+    out.push_str("\n\n");
 
     // Per-use-case summary table
     out.push_str("## By Use Case\n\n");
-    out.push_str("| Use Case | Passed | Total | Pass Rate |\n");
-    out.push_str("|---|---|---|---|\n");
+    out.push_str("| Use Case | Passed | Total | Skipped | Pass Rate |\n");
+    out.push_str("|---|---|---|---|---|\n");
     for use_case in &[
         UseCase::RawModem,
         UseCase::AdaptiveHpx500,
@@ -67,17 +75,23 @@ fn write_summary(dir: &Path, results: &[TestResult], meta: &RunMeta) {
         if uc_results.is_empty() {
             continue;
         }
-        let uc_passed = uc_results.iter().filter(|r| r.passed).count();
-        let uc_total = uc_results.len();
-        let rate = 100 * uc_passed / uc_total;
+        let uc_skipped = uc_results.iter().filter(|r| r.skipped).count();
+        let uc_active: Vec<_> = uc_results.iter().filter(|r| !r.skipped).collect();
+        let uc_passed = uc_active.iter().filter(|r| r.passed).count();
+        let uc_total = uc_active.len();
+        let rate = if uc_total > 0 {
+            100 * uc_passed / uc_total
+        } else {
+            0
+        };
         out.push_str(&format!(
-            "| {} | {uc_passed} | {uc_total} | {rate}% |\n",
+            "| {} | {uc_passed} | {uc_total} | {uc_skipped} | {rate}% |\n",
             use_case.label()
         ));
     }
 
-    // First failures
-    let failures: Vec<_> = results.iter().filter(|r| !r.passed).collect();
+    // First failures (skipped cases excluded)
+    let failures: Vec<_> = results.iter().filter(|r| !r.skipped && !r.passed).collect();
     if !failures.is_empty() {
         out.push_str("\n## Failures\n\n");
         out.push_str("| Case ID | Note |\n");
@@ -98,8 +112,9 @@ fn write_summary(dir: &Path, results: &[TestResult], meta: &RunMeta) {
 }
 
 fn write_by_mode(dir: &Path, results: &[TestResult], meta: &RunMeta) {
-    let total = results.len();
-    let passed = results.iter().filter(|r| r.passed).count();
+    let active: Vec<_> = results.iter().filter(|r| !r.skipped).collect();
+    let total = active.len();
+    let passed = active.iter().filter(|r| r.passed).count();
     let mut out = frontmatter("OpenPulseHF Test Matrix", "By Mode", meta, total, passed);
 
     out.push_str("# Results by Mode\n\n");
@@ -138,7 +153,7 @@ fn write_by_mode(dir: &Path, results: &[TestResult], meta: &RunMeta) {
         for ch in &channels {
             let subset: Vec<_> = results
                 .iter()
-                .filter(|r| &r.case.mode == mode && r.case.channel.label() == *ch)
+                .filter(|r| !r.skipped && &r.case.mode == mode && r.case.channel.label() == *ch)
                 .collect();
             if subset.is_empty() {
                 out.push_str(" — |");
@@ -162,8 +177,9 @@ fn write_by_mode(dir: &Path, results: &[TestResult], meta: &RunMeta) {
 }
 
 fn write_by_channel(dir: &Path, results: &[TestResult], meta: &RunMeta) {
-    let total = results.len();
-    let passed = results.iter().filter(|r| r.passed).count();
+    let active: Vec<_> = results.iter().filter(|r| !r.skipped).collect();
+    let total = active.len();
+    let passed = active.iter().filter(|r| r.passed).count();
     let mut out = frontmatter("OpenPulseHF Test Matrix", "By Channel", meta, total, passed);
 
     out.push_str("# Results by Channel\n\n");
@@ -199,7 +215,7 @@ fn write_by_channel(dir: &Path, results: &[TestResult], meta: &RunMeta) {
         for mode in &modes {
             let subset: Vec<_> = results
                 .iter()
-                .filter(|r| r.case.channel.label() == *ch && &r.case.mode == mode)
+                .filter(|r| !r.skipped && r.case.channel.label() == *ch && &r.case.mode == mode)
                 .collect();
             if subset.is_empty() {
                 out.push_str(" — |");
@@ -223,8 +239,9 @@ fn write_by_channel(dir: &Path, results: &[TestResult], meta: &RunMeta) {
 }
 
 fn write_by_usecase(dir: &Path, results: &[TestResult], meta: &RunMeta) {
-    let total = results.len();
-    let passed = results.iter().filter(|r| r.passed).count();
+    let active: Vec<_> = results.iter().filter(|r| !r.skipped).collect();
+    let total = active.len();
+    let passed = active.iter().filter(|r| r.passed).count();
     let mut out = frontmatter(
         "OpenPulseHF Test Matrix",
         "By Use Case",
@@ -235,12 +252,18 @@ fn write_by_usecase(dir: &Path, results: &[TestResult], meta: &RunMeta) {
 
     out.push_str("# Results by Use Case\n\n");
     out.push_str(
-        "| Use Case | Mode | Channel | FEC | Compression | Payload | Result | BER | Duration |\n",
+        "| Use Case | Mode | Channel | FEC | Compression | Payload | Result | BER | Eff. bps | Duration |\n",
     );
-    out.push_str("|---|---|---|---|---|---|---|---|---|\n");
+    out.push_str("|---|---|---|---|---|---|---|---|---|---|\n");
 
     for r in results {
-        let status = if r.passed { "✓ PASS" } else { "✗ FAIL" };
+        let status = if r.skipped {
+            "— SKIP"
+        } else if r.passed {
+            "✓ PASS"
+        } else {
+            "✗ FAIL"
+        };
         let ber = r
             .ber
             .map(|b| format!("{b:.4}"))
@@ -250,21 +273,70 @@ fn write_by_usecase(dir: &Path, results: &[TestResult], meta: &RunMeta) {
             CompressionAlgorithm::Lz4 => "lz4",
             CompressionAlgorithm::Zstd(_) => "zstd",
         };
+        let eff_bps = r
+            .effective_bps
+            .map(|b| format!("{b:.0}"))
+            .unwrap_or_else(|| "—".into());
         out.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {}B | {} | {} | {}ms |\n",
+            "| {} | {} | {} | {} | {} | {}B | {} | {} | {} | {}ms |\n",
             r.case.use_case.label(),
             r.case.mode,
             r.case.channel.label(),
-            if r.case.fec { "yes" } else { "no" },
+            fec_label(r.case.fec_mode),
             comp,
             r.case.payload_len,
             status,
             ber,
+            eff_bps,
             r.duration_ms,
         ));
     }
 
     fs::write(dir.join("by-usecase.md"), out).expect("write by-usecase.md");
+}
+
+fn write_csv(dir: &Path, results: &[TestResult], _meta: &RunMeta) {
+    let mut out = String::new();
+    // First line must be the column header (CSV does not support comments).
+    out.push_str(
+        "use_case,mode,fec,compression,channel,snr_db,payload_bytes,passed,skipped,ber,effective_bps,duration_ms,note\n",
+    );
+
+    for r in results {
+        let comp = match r.case.compression {
+            CompressionAlgorithm::None => "none",
+            CompressionAlgorithm::Lz4 => "lz4",
+            CompressionAlgorithm::Zstd(_) => "zstd",
+        };
+        let snr_db = match &r.case.channel {
+            crate::matrix::ChannelSpec::Awgn { snr_db, .. } => format!("{snr_db:.1}"),
+            _ => "".into(),
+        };
+        let ber = r.ber.map(|b| format!("{b:.6}")).unwrap_or_default();
+        let eff_bps = r
+            .effective_bps
+            .map(|b| format!("{b:.1}"))
+            .unwrap_or_default();
+        let note = r.note.as_deref().unwrap_or("").replace('"', "\"\""); // CSV escape
+        out.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},\"{}\"\n",
+            r.case.use_case.label(),
+            r.case.mode,
+            fec_label(r.case.fec_mode),
+            comp,
+            r.case.channel.label(),
+            snr_db,
+            r.case.payload_len,
+            r.passed as u8,
+            r.skipped as u8,
+            ber,
+            eff_bps,
+            r.duration_ms,
+            note,
+        ));
+    }
+
+    fs::write(dir.join("results.csv"), out).expect("write results.csv");
 }
 
 fn write_raw_json(dir: &Path, results: &[TestResult]) {

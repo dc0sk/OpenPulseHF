@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use openpulse_core::compression::{compress_if_smaller, decompress, CompressionAlgorithm};
+use openpulse_core::fec::FecMode;
 use openpulse_modem::channel_sim::ChannelSimHarness;
 
 use crate::channels::build as build_channel;
@@ -25,13 +26,37 @@ pub fn run(case: &TestCase) -> TestResult {
         CompressionAlgorithm::Lz4 | CompressionAlgorithm::Zstd(_) => compress_if_smaller(&payload),
     };
 
-    // Transmit
-    let tx_result = if case.fec {
-        h.tx_engine
-            .transmit_with_fec_interleaved(&wire_payload, mode, None, 5)
-    } else {
-        h.tx_engine.transmit(&wire_payload, mode, None)
+    // Transmit — dispatch on FecMode
+    let tx_result = match case.fec_mode {
+        FecMode::None => h.tx_engine.transmit(&wire_payload, mode, None),
+        FecMode::Rs => h.tx_engine.transmit_with_fec(&wire_payload, mode, None),
+        FecMode::RsInterleaved => {
+            h.tx_engine
+                .transmit_with_fec_interleaved(&wire_payload, mode, None, 5)
+        }
+        FecMode::Concatenated => {
+            h.tx_engine
+                .transmit_with_concatenated_fec(&wire_payload, mode, None)
+        }
+        FecMode::ShortRs => {
+            // ShortRs is for ACK frames only — skip with a note
+            return skip(
+                case,
+                "ShortRs is ACK-frame-only; not applicable to raw modem",
+            );
+        }
+        FecMode::RsStrong => h
+            .tx_engine
+            .transmit_with_strong_fec(&wire_payload, mode, None),
+        FecMode::SoftConcatenated => {
+            h.tx_engine
+                .transmit_with_soft_viterbi_fec(&wire_payload, mode, None)
+        }
+        FecMode::Ldpc => {
+            return skip(case, "LDPC deferred (BL-FEC-6) — GPU acceleration required");
+        }
     };
+
     if let Err(e) = tx_result {
         return fail(case, 0, start, format!("TX error: {e}"));
     }
@@ -39,12 +64,17 @@ pub fn run(case: &TestCase) -> TestResult {
     // Route samples through channel model
     h.route(channel.as_mut());
 
-    // Receive
-    let rx_raw = if case.fec {
-        h.rx_engine.receive_with_fec_interleaved(mode, None, 5)
-    } else {
-        h.rx_engine.receive(mode, None)
+    // Receive — dispatch on FecMode
+    let rx_raw = match case.fec_mode {
+        FecMode::None => h.rx_engine.receive(mode, None),
+        FecMode::Rs => h.rx_engine.receive_with_fec(mode, None),
+        FecMode::RsInterleaved => h.rx_engine.receive_with_fec_interleaved(mode, None, 5),
+        FecMode::Concatenated => h.rx_engine.receive_with_concatenated_fec(mode, None),
+        FecMode::ShortRs | FecMode::Ldpc => unreachable!("skipped in TX branch"),
+        FecMode::RsStrong => h.rx_engine.receive_with_strong_fec(mode, None),
+        FecMode::SoftConcatenated => h.rx_engine.receive_with_soft_viterbi_fec(mode, None),
     };
+
     let rx_raw = match rx_raw {
         Ok(r) => r,
         Err(e) => return fail(case, 0, start, format!("RX error: {e}")),
@@ -58,14 +88,21 @@ pub fn run(case: &TestCase) -> TestResult {
 
     let duration_ms = start.elapsed().as_millis() as u64;
     let bytes_rx = rx_data.len();
+    let effective_bps = if duration_ms > 0 {
+        Some(payload.len() as f64 * 8.0 / (duration_ms as f64 / 1000.0))
+    } else {
+        None
+    };
 
     if rx_data != payload {
         return TestResult {
             case: case.clone(),
             passed: false,
+            skipped: false,
             ber: Some(byte_ber(&payload, &rx_data)),
             bytes_rx,
             duration_ms,
+            effective_bps,
             note: Some("payload mismatch".into()),
         };
     }
@@ -73,21 +110,39 @@ pub fn run(case: &TestCase) -> TestResult {
     TestResult {
         case: case.clone(),
         passed: true,
+        skipped: false,
         ber: Some(0.0),
         bytes_rx,
         duration_ms,
+        effective_bps,
         note: None,
     }
 }
 
 fn fail(case: &TestCase, bytes_rx: usize, start: Instant, note: String) -> TestResult {
+    let duration_ms = start.elapsed().as_millis() as u64;
     TestResult {
         case: case.clone(),
         passed: false,
+        skipped: false,
         ber: None,
         bytes_rx,
-        duration_ms: start.elapsed().as_millis() as u64,
+        duration_ms,
+        effective_bps: None,
         note: Some(note),
+    }
+}
+
+fn skip(case: &TestCase, note: &str) -> TestResult {
+    TestResult {
+        case: case.clone(),
+        passed: false,
+        skipped: true,
+        ber: None,
+        bytes_rx: 0,
+        duration_ms: 0,
+        effective_bps: None,
+        note: Some(format!("SKIP: {note}")),
     }
 }
 
