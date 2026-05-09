@@ -26,8 +26,10 @@ openpulse-config = { workspace = true }
 openpulse-qsy   = { workspace = true }
 bpsk-plugin     = { workspace = true }
 fsk4-plugin     = { workspace = true }
+ofdm-plugin     = { workspace = true }
 psk8-plugin     = { workspace = true }
 qpsk-plugin     = { workspace = true }
+scfdma-plugin   = { workspace = true }
 anyhow             = { workspace = true }
 clap               = { workspace = true }
 tracing            = { workspace = true }

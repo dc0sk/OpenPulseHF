@@ -110,10 +110,11 @@ See [`docs/roadmap.md`](docs/roadmap.md) for per-item ✅ markers and PR referen
 
 Active work tracks:
 
-- **FF-12 SC-FDMA**: pending OFDM PAPR measurement gate — implement only if clipping-induced spectral regrowth ≥ −40 dBc
+- (no gated items — see `docs/roadmap.md` for deferred FF items)
 
 Recently completed:
 
+- **FF-12 SC-FDMA** ✅: DFT-spread OFDM plugin — SCFDMA16 (625 Hz, ~889 bps) and SCFDMA52 (2031 Hz, ~2889 bps); 3–4 dB lower PAPR than OFDM without clipping — PR #175
 - **FF-13 Generic serial CAT** ✅: TOML-scriptable rig control for rigs not in hamlib (Icom CI-V, Yaesu binary CAT) — PR #173
 
 ---

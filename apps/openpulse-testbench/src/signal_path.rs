@@ -13,6 +13,7 @@ use openpulse_core::fec::FecCodec;
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
 use psk8_plugin::Psk8Plugin;
 use qpsk_plugin::QpskPlugin;
+use scfdma_plugin::ScFdmaPlugin;
 
 #[cfg(feature = "cpal")]
 use crate::state::AudioSource;
@@ -34,8 +35,8 @@ fn mode_symbol_rate(mode: &str) -> f32 {
         "8PSK500" | "8PSK500-RRC" => 500.0,
         "8PSK1000" | "8PSK1000-HF" | "8PSK1000-RRC" => 1000.0,
         "FSK4-ACK" => 100.0,
-        // OFDM symbol rate = fs / (FFT_SIZE + CP) = 8000 / 288 ≈ 27.78 baud
-        "OFDM16" | "OFDM52" => 8000.0 / 288.0,
+        // OFDM/SC-FDMA symbol rate = fs / (FFT_SIZE + CP) = 8000 / 288 ≈ 27.78 baud
+        "OFDM16" | "OFDM52" | "SCFDMA16" | "SCFDMA52" => 8000.0 / 288.0,
         _ => 250.0,
     }
 }
@@ -76,6 +77,8 @@ fn make_plugin(mode: &str) -> Box<dyn ModulationPlugin> {
         Box::new(Fsk4Plugin::new())
     } else if mode.starts_with("OFDM") {
         Box::new(OfdmPlugin::new())
+    } else if mode.starts_with("SCFDMA") {
+        Box::new(ScFdmaPlugin::new())
     } else {
         Box::new(QpskPlugin::new())
     }

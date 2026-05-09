@@ -111,6 +111,8 @@ pub const ALL_MODES: &[&str] = &[
     "FSK4-ACK",
     "OFDM16",
     "OFDM52",
+    "SCFDMA16",
+    "SCFDMA52",
 ];
 
 // ── Statistics ────────────────────────────────────────────────────────────────
