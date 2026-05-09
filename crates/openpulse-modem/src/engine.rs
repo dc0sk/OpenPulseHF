@@ -1054,6 +1054,7 @@ impl ModemEngine {
         let fec_wire = WirePayload {
             bytes: FecCodec::strong().encode(&wire.bytes),
         };
+        let fec_wire = self.route_wire_stage(PipelineStage::EncodeModulate, fec_wire)?;
         let samples = {
             let plugin = self
                 .plugins
@@ -1123,6 +1124,10 @@ impl ModemEngine {
     ///
     /// Combining N identical retransmissions improves effective SNR by ~3 dB per
     /// doubling of N (10 log₁₀ N dB total gain over a single reception).
+    ///
+    /// Decodes using the standard RS codec (t=16).  For frames transmitted with
+    /// [`transmit_with_strong_fec`](Self::transmit_with_strong_fec) use
+    /// [`receive_with_strong_fec`](Self::receive_with_strong_fec) instead.
     pub fn receive_with_soft_combining(
         &mut self,
         mode: &str,

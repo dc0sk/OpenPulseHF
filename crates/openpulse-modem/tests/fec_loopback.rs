@@ -135,7 +135,7 @@ fn fec_codec_round_trip_no_errors() {
         b"hello",
         b"OpenPulse FEC phase 1",
         &[0xFF; 100],
-        &[0x00; 219], // exactly fills one block (219 = BLOCK_DATA - PREFIX_LEN)
+        &[0x00; 219], // exactly fills one block (219 = BLOCK_DATA_STANDARD - PREFIX_LEN)
         &[0xAB; 220], // spills into two blocks
     ];
 
@@ -477,27 +477,33 @@ fn strong_fec_bpsk250_loopback() {
     assert_eq!(received, payload);
 }
 
-/// Strong FEC overhead is larger than standard RS overhead.
+/// Strong RS corrects error patterns that exceed the standard RS capacity.
+///
+/// Injects 20 consecutive byte errors — beyond standard t=16, within strong t=32.
 #[test]
-fn strong_fec_overhead_exceeds_standard() {
+fn strong_fec_corrects_where_standard_cannot() {
     let payload = b"overhead comparison payload";
-    let standard = FecCodec::new().encode(payload);
-    let strong = FecCodec::strong().encode(payload);
-    assert_eq!(
-        standard.len(),
-        255,
-        "standard RS produces one 255-byte block"
+    let error_count = 20;
+
+    // Standard RS (t=16) should fail with 20 errors.
+    let mut std_encoded = FecCodec::new().encode(payload);
+    for byte in std_encoded.iter_mut().take(error_count) {
+        *byte ^= 0xFF;
+    }
+    assert!(
+        FecCodec::new().decode(&std_encoded).is_err(),
+        "standard RS (t=16) should fail with {error_count} errors"
     );
-    assert_eq!(
-        strong.len(),
-        255,
-        "strong RS also produces one block for this payload"
-    );
-    // Both produce one 255-byte block; the strong codec uses more of it for ECC.
-    // The key assertion: strong codec corrects 2× the errors per block.
-    let standard_ecc_fraction = 32.0 / 255.0;
-    let strong_ecc_fraction = 64.0 / 255.0;
-    assert!(strong_ecc_fraction > standard_ecc_fraction);
+
+    // Strong RS (t=32) should correct the same error count.
+    let mut strong_encoded = FecCodec::strong().encode(payload);
+    for byte in strong_encoded.iter_mut().take(error_count) {
+        *byte ^= 0xFF;
+    }
+    let recovered = FecCodec::strong()
+        .decode(&strong_encoded)
+        .expect("strong RS (t=32) should correct ≤32 byte errors");
+    assert_eq!(recovered, payload);
 }
 
 // ── Memory-ARQ soft combining (BL-FEC-4) ─────────────────────────────────────

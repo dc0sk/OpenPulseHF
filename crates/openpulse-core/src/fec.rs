@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! ┌─────────────────────┬──────────────────────────────────────────────────┐
-//! │ original length (4B)│  data (padded to BLOCK_DATA multiples)          │
+//! │ original length (4B)│  data (padded to BLOCK_DATA_STANDARD multiples)   │
 //! └─────────────────────┴──────────────────────────────────────────────────┘
 //!       ↓  split into 223-byte chunks, RS-encode each
 //! ┌──────────────┬──────────────────────────────────────────────────────────┐
@@ -94,7 +94,7 @@ const PREFIX_LEN: usize = 4;
 /// Data bytes per block for the standard codec (255 − 32 = 223).
 ///
 /// Used by unit tests that hard-code exact block boundaries.
-pub const BLOCK_DATA: usize = BLOCK_TOTAL - FEC_ECC_LEN;
+pub const BLOCK_DATA_STANDARD: usize = BLOCK_TOTAL - FEC_ECC_LEN;
 
 /// Reed-Solomon codec.
 ///
@@ -475,8 +475,8 @@ mod tests {
 
     #[test]
     fn round_trip_exact_block() {
-        // Payload that fills exactly one block (BLOCK_DATA - PREFIX_LEN = 219 bytes).
-        let payload = vec![0x42u8; BLOCK_DATA - PREFIX_LEN];
+        // Payload that fills exactly one block (BLOCK_DATA_STANDARD - PREFIX_LEN = 219 bytes).
+        let payload = vec![0x42u8; BLOCK_DATA_STANDARD - PREFIX_LEN];
         let codec = FecCodec::new();
         let enc = codec.encode(&payload);
         assert_eq!(enc.len(), BLOCK_TOTAL);

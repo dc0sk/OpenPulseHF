@@ -70,7 +70,8 @@ buffers and computes an element-wise mean on `combine()`. Engine method
 combines them, then demodulates and RS-decodes the result.
 
 No wire protocol change — the sender simply retransmits the same frame; the receiver
-accumulates. Compatible with standard RS FEC and the strong RS(255,191) codec.
+accumulates. Decodes using the standard RS codec (t=16); pair with
+`transmit_with_fec` on the sender side.
 
 ---
 
