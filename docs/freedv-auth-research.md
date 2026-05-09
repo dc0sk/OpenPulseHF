@@ -1,7 +1,7 @@
 ---
 project: openpulsehf
-doc: freedv-auth-research.md
-status: research
+doc: docs/freedv-auth-research.md
+status: living
 last_updated: 2026-05-09
 ---
 
