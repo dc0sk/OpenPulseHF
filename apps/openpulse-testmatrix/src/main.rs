@@ -19,7 +19,7 @@ use crate::runners::run_case;
 #[command(
     name = "openpulse-testmatrix",
     about = "OpenPulseHF comprehensive test matrix",
-    long_about = "OpenPulseHF comprehensive test matrix.\n\nAuthor: Simon Keimer (DC0SK)  <https://github.com/dc0sk>",
+    long_about = "OpenPulseHF comprehensive test matrix.",
     author,
     version
 )]
