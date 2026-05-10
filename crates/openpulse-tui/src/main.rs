@@ -29,7 +29,7 @@ mod ui;
 #[command(
     name = "openpulse-tui",
     about = "OpenPulse TUI dashboard",
-    long_about = "OpenPulse TUI dashboard.\n\nAuthor: Simon Keimer (DC0SK)  <https://github.com/dc0sk>",
+    long_about = "OpenPulse TUI dashboard.",
     author,
     version
 )]
