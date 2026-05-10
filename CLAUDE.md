@@ -103,10 +103,19 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 
 ## Current phase and execution order
 
-**Completed**: Phases 1–9, Phase 7 (7.1–7.5), Phase 8 (8.1–8.3), FF-1. See `docs/roadmap.md` for full history.
+**Completed**: Phases 1–9, Phase 7 (7.1–7.5), Phase 8 (8.1–8.3), FF series (FF-1 through FF-13), BL-FEC series (BL-FEC-1 through BL-FEC-6). See `docs/roadmap.md` for full history.
 
 **Active tracks**:
-- **FF series** — Far-future features; FF-1 (QSY), FF-2 (I/Q output), FF-7 (tanh limiter), FF-8 (per-band TX attenuation), FF-9 (HPX reactor) are done; FF-3 through FF-6, FF-10, FF-11 are deferred
+- **Release packaging** — GitHub Actions release workflow (static x86-64 musl binary + aarch64 `.deb` on `v*` tag push) is the only remaining scheduled item.
+
+**Deferred (no target date)**:
+- On-air regulatory validation (Phase 5.5-reg): on-air tests, station ID audit, compliance report
+- Adaptive equalizer LMS/DFE: follow-on to FF-3 RRC; needed for 1000 baud on Watterson Moderate/Poor
+- 64QAM / SL12–SL20: deferred pending equalizer and OFDM research
+
+**Open code stubs** (not blocking any current work):
+- `plugins/psk8/src/lib.rs`: 8PSK max-log-MAP soft demapping — `demodulate_soft()` falls back to hard ±1.0 pseudo-LLRs; ~1 dB gain when implemented
+- `crates/openpulse-cli/src/commands/session.rs`: `manifest verify` CLI path returns a stub response; the library `verify_manifest()` is fully implemented — only the CLI wiring is missing
 
 Execute Phase 1 tasks in this order. Tasks within the same group are independent and may be parallelised.
 
