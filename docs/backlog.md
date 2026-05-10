@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/backlog.md
 status: living
-last_updated: 2026-05-10
+last_updated: 2026-05-11
 ---
 
 # Backlog
@@ -23,13 +23,14 @@ The only remaining scheduled item.
   and an aarch64 `.deb` package and publish both as GitHub release assets.
   The `openpulse-tnc` / `openpulse-kisstnc` binaries are the primary packaging targets.
 
-### Code stubs (tracked; not blocking any current work)
+### Known wiring gaps (runtime warnings; not blocking)
 
-| Location | Description |
+| Location | Gap |
 |---|---|
-| `plugins/psk8/src/lib.rs` | `demodulate_soft()` falls back to hard ±1.0 pseudo-LLRs — Gray-coded max-log-MAP soft demapping (~1 dB SNR gain) not yet implemented |
-| `crates/openpulse-cli/src/commands/session.rs` | `manifest verify` CLI path returns a stub response — `verify_manifest()` in `openpulse-core` is fully implemented; only the CLI wiring is missing |
-| `crates/openpulse-core/src/ldpc.rs` | `LdpcCodec` is an intentional passthrough stub — GPU-backed LDPC decode is reserved for a future wgpu kernel; the `IterativeDecoder` trait and `FecMode::Ldpc` variant are in place |
+| `crates/openpulse-ardop/src/main.rs` | Trust store loading from TOML `trust.store_path` not wired into ARDOP bridge |
+| `crates/openpulse-ardop/src/main.rs` | Multi-hop relay not wired into ARDOP bridge (RelayForwarder exists in core) |
+| `crates/openpulse-kiss/src/main.rs` | Same two gaps as ARDOP bridge |
+| `crates/openpulse-modem/src/engine.rs` | `FecMode::Ldpc` variant has no engine dispatch path — `LdpcCodec` is implemented but not reachable via `transmit_with_fec` |
 
 ### Deferred (no target date)
 
@@ -87,3 +88,11 @@ The only remaining scheduled item.
 | BL-FEC-4 | Memory-ARQ soft combining | #171 |
 | BL-FEC-5 | K=7 soft-decision Viterbi + `demodulate_soft()` plugin API | #177 |
 | BL-FEC-6 | `IterativeDecoder` trait + `LdpcCodec` stub (GPU path reserved) | #176 |
+
+### Code stub implementations (PR #187)
+
+| Stub | Implementation |
+|---|---|
+| 8PSK `demodulate_soft()` | Max-log-MAP LLR demapping replacing ±1.0 fallback (`plugins/psk8`) |
+| `manifest verify` CLI | Real load→lookup→hex-parse→verify path replacing placeholder (`openpulse-cli`) |
+| `LdpcCodec` | Rate-1/2 CPU min-sum BP replacing passthrough stub (`openpulse-core`) |
