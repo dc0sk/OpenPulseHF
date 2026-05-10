@@ -8,7 +8,7 @@ use openpulse_channel::{
     build_channel, AwgnConfig, ChannelModelConfig, ChirpConfig, GilbertElliottConfig, QrmConfig,
     QrnConfig, QsbConfig, ToneConfig, WattersonConfig,
 };
-use openpulse_core::compression::{compress_if_smaller, decompress, CompressionAlgorithm};
+use openpulse_core::compression::{compress, decompress, CompressionAlgorithm};
 use openpulse_core::fec::{FecCodec, FecMode};
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
 use openpulse_core::soft_viterbi::SoftViterbiCodec;
@@ -238,11 +238,17 @@ fn run(
         let max_db = current.max_db;
         let payload = make_payload(current.payload_size, run_count);
 
-        // Compress payload before FEC.
+        // Compress payload before FEC, honouring the user's algorithm selection.
+        // Fall back to no compression if the chosen algorithm expands the data.
         let (compressed, actual_algo) = match current.compression {
             CompressionAlgorithm::None => (payload.clone(), CompressionAlgorithm::None),
-            CompressionAlgorithm::Lz4 | CompressionAlgorithm::Zstd(_) => {
-                compress_if_smaller(&payload)
+            algo => {
+                let c = compress(&payload, algo);
+                if c.len() < payload.len() {
+                    (c, algo)
+                } else {
+                    (payload.clone(), CompressionAlgorithm::None)
+                }
             }
         };
         let compress_ratio = compressed.len() as f64 / payload.len() as f64;
@@ -507,15 +513,20 @@ fn update_stats(
 
     // FEC correction accounting: compare RS-layer bytes entering/leaving the RS decoder.
     // tx_inner = RS-encoded reference; pre_rs_bytes = received bytes before RS decode.
+    // Channel error count is reported whenever pre_rs_bytes is available, independent of
+    // whether decompression succeeded, so the ECC readout is not lost on failed frames.
     let (fec_channel_errors, fec_corrected) = if fec_is_active {
-        match (pre_rs_bytes, rx_result) {
-            (Some(recv_inner), Ok(plain)) => {
-                let pre_fec = count_bit_errors(tx_inner, recv_inner);
+        let channel_errors = pre_rs_bytes
+            .map(|recv| count_bit_errors(tx_inner, recv))
+            .unwrap_or(0);
+        let corrected = match (pre_rs_bytes, rx_result) {
+            (Some(_), Ok(plain)) => {
                 let post_fec = count_bit_errors(payload, plain);
-                (pre_fec, pre_fec.saturating_sub(post_fec))
+                channel_errors.saturating_sub(post_fec)
             }
-            _ => (0, 0),
-        }
+            _ => 0,
+        };
+        (channel_errors, corrected)
     } else {
         (0, 0)
     };

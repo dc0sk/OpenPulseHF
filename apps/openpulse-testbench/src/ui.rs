@@ -1,7 +1,7 @@
 use egui::Ui;
 use egui_plot::{Line, Plot, PlotPoints, Points, VLine};
 use openpulse_channel::dsp::{FREQ_BINS, WATERFALL_ROWS};
-use openpulse_core::compression::CompressionAlgorithm;
+use openpulse_core::compression::{CompressionAlgorithm, ZSTD_DICT_ID};
 use openpulse_core::fec::FecMode;
 
 use crate::colormap::plasma;
@@ -148,9 +148,13 @@ pub fn draw_toolbar(
                     );
                 })
                 .response
-                .on_hover_text(if fec_incompatible {
-                    "FEC unavailable for FSK4-ACK / OFDM / SC-FDMA — internal length prefix\n\
-                     is incompatible with the RS block alignment requirement"
+                .on_hover_text(if state.config.mode == "FSK4-ACK" {
+                    "FEC unavailable for FSK4-ACK — fixed 5-byte ACK payload has no room\n\
+                     for RS parity bytes"
+                } else if fec_incompatible {
+                    "FEC unavailable for OFDM / SC-FDMA — their internal 2-byte length\n\
+                     prefix causes byte counts that are not multiples of 255, which the\n\
+                     RS block decoder requires"
                 } else {
                     "Forward error correction mode\n\
                      RS(255,223): corrects up to 16 byte errors/block (rate ≈ 87.5 %)\n\
@@ -187,7 +191,7 @@ pub fn draw_toolbar(
                     );
                     ui.selectable_value(
                         &mut state.config.compression,
-                        CompressionAlgorithm::Zstd(0),
+                        CompressionAlgorithm::Zstd(ZSTD_DICT_ID),
                         "Zstd",
                     );
                 })
@@ -210,7 +214,8 @@ pub fn draw_toolbar(
             .on_hover_text(
                 "Payload size in bytes per simulated frame\n\
                  Larger payloads are more compressible with LZ4/Zstd\n\
-                 Maximum is capped at the RS block data capacity when FEC is active",
+                 Maximum capped at 219 B (RS / Soft-Conv+RS) or 187 B (RS Strong) when\n\
+                 FEC is active — RS block data capacity minus 4-byte length prefix",
             );
         }
 
