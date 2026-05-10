@@ -38,6 +38,12 @@ cargo run -p openpulse-cli --no-default-features -- --backend loopback --log err
 # CI benchmark regression gate (run locally to verify before PR)
 cargo run -p openpulse-cli --no-default-features -- --backend loopback --log error benchmark run >/tmp/bench.json
 jq '.passed == .total and .mean_transitions <= 20.0' /tmp/bench.json  # must print true
+
+# Run the quick-tier test matrix (virtual channels, no hardware) — outputs to docs/test-reports/
+cargo run -p openpulse-testmatrix --no-default-features
+
+# Run the full test matrix (all propagation channels and payload sizes)
+cargo run -p openpulse-testmatrix --no-default-features -- --full --output docs/test-reports
 ```
 
 The `--no-default-features` flag disables the CPAL audio backend and is required for CI. All tests must pass with this flag. Never add tests that require real audio hardware.

@@ -191,8 +191,10 @@ Deterministic, hardware-free testing against published propagation models:
 | QSB | Slow multiplicative fading |
 | Chirp | Swept-frequency chirp interference |
 
-The `openpulse-testmatrix` binary runs the full mode × FEC × compression × channel matrix
+The `openpulse-testmatrix` binary runs the mode × FEC × compression × channel matrix
 and produces Markdown + CSV reports including per-test BER and effective throughput.
+Run without flags for the quick tier (core modes and channels); add `--full` for the
+complete matrix across all propagation profiles and payload sizes.
 
 ---
 
@@ -284,7 +286,10 @@ cargo run -p openpulse-kiss --features cpal -- --mode BPSK250 --backend cpal --p
 # Run the signal-path benchmark
 cargo run -p openpulse-cli --no-default-features -- --backend loopback --log error benchmark run
 
-# Run the full test matrix (virtual channels, no hardware)
+# Run the quick-tier test matrix (virtual channels, no hardware)
+cargo run -p openpulse-testmatrix --no-default-features
+
+# Run the full test matrix (all propagation channels and payload sizes)
 cargo run -p openpulse-testmatrix --no-default-features -- --full --output docs/test-reports
 ```
 
