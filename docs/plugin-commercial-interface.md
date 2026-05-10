@@ -64,28 +64,32 @@ typedef struct OpBytes {
 const OpPlugin* op_plugin_info(void);
 
 // Modulate: convert data bytes to audio samples.
-// Returns 0 on success; fills out_samples (caller-allocated, out_len elements).
+// Caller provides out_samples and out_samples_cap (capacity in float elements).
+// On success, writes the number of samples produced to *out_len.
 int op_modulate(
     const uint8_t* data, size_t data_len,
-    float* out_samples, size_t* out_len,
+    float* out_samples, size_t out_samples_cap, size_t* out_len,
     const char* mode_str,
     uint32_t sample_rate, float center_frequency
 );
 
 // Demodulate: convert audio samples to data bytes.
-// Returns 0 on success; fills out_data (caller-allocated, out_len bytes).
+// Caller provides out_data and out_data_cap (capacity in bytes).
+// On success, writes the number of bytes produced to *out_len.
 int op_demodulate(
     const float* samples, size_t samples_len,
-    uint8_t* out_data, size_t* out_len,
+    uint8_t* out_data, size_t out_data_cap, size_t* out_len,
     const char* mode_str,
     uint32_t sample_rate, float center_frequency
 );
 
 // Optional: return per-bit LLRs for soft-decision FEC.
+// Caller provides out_llrs and out_llrs_cap (capacity in float elements).
+// On success, writes the number of LLR values produced to *out_len.
 // If not implemented, return -1 (host falls back to hard ±1.0).
 int op_demodulate_soft(
     const float* samples, size_t samples_len,
-    float* out_llrs, size_t* out_len,
+    float* out_llrs, size_t out_llrs_cap, size_t* out_len,
     const char* mode_str,
     uint32_t sample_rate, float center_frequency
 );
