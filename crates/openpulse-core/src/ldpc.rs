@@ -52,8 +52,6 @@ pub struct LdpcCodec {
     /// For each check c: variable indices connected to it.
     /// Info vars from H_s come first; the last entry is always k+c (I_m).
     check_to_vars: Vec<Vec<usize>>,
-    /// For each info variable v: list of check indices (d_v = 3 entries).
-    var_to_checks: Vec<Vec<usize>>,
 }
 
 impl Default for LdpcCodec {
@@ -69,7 +67,6 @@ impl LdpcCodec {
         const M: usize = 1024;
         const DV: usize = 3;
 
-        let mut var_to_checks: Vec<Vec<usize>> = vec![Vec::new(); K];
         let mut check_to_vars_info: Vec<Vec<usize>> = vec![Vec::new(); M];
 
         let mut state = 0xDEAD_BEEFu32;
@@ -82,7 +79,6 @@ impl LdpcCodec {
                     check_to_vars_info[c].push(v);
                 }
             }
-            var_to_checks[v] = chosen;
         }
 
         // Append the parity variable (k+c) to each check's variable list.
@@ -98,7 +94,6 @@ impl LdpcCodec {
             k: K,
             m: M,
             check_to_vars,
-            var_to_checks,
         }
     }
 }
@@ -174,25 +169,26 @@ impl IterativeDecoder for LdpcCodec {
 
             // Min-sum check → variable update.
             for (c, vars) in self.check_to_vars.iter().enumerate() {
-                let nc = vars.len();
-                // Extrinsic v→c message: subtract this check's own prior message.
-                let ext: Vec<f32> = (0..nc).map(|i| total[vars[i]] - c2v[c][i]).collect();
+                // Extrinsic v→c: subtract this check's own prior contribution.
+                let ext: Vec<f32> = vars
+                    .iter()
+                    .zip(&c2v[c])
+                    .map(|(&v, &msg)| total[v] - msg)
+                    .collect();
 
-                for i in 0..nc {
+                for (i, msg) in c2v[c].iter_mut().enumerate() {
                     let mut prod_sign = 1.0f32;
                     let mut min_abs = f32::INFINITY;
-                    for j in 0..nc {
+                    for (j, &e) in ext.iter().enumerate() {
                         if j == i {
                             continue;
                         }
-                        let e = ext[j];
                         prod_sign *= if e >= 0.0 { 1.0 } else { -1.0 };
-                        let a = e.abs();
-                        if a < min_abs {
-                            min_abs = a;
+                        if e.abs() < min_abs {
+                            min_abs = e.abs();
                         }
                     }
-                    c2v[c][i] = prod_sign * min_abs;
+                    *msg = prod_sign * min_abs;
                 }
             }
         }
@@ -219,7 +215,7 @@ fn syndrome_ok(bits: &[bool], check_to_vars: &[Vec<usize>]) -> bool {
 }
 
 fn pack_bits(bits: &[bool]) -> Vec<u8> {
-    let mut out = vec![0u8; (bits.len() + 7) / 8];
+    let mut out = vec![0u8; bits.len().div_ceil(8)];
     for (i, &b) in bits.iter().enumerate() {
         if b {
             out[i / 8] |= 1u8 << (i % 8);
@@ -307,15 +303,18 @@ mod tests {
     }
 
     #[test]
-    fn ldpc_var_to_checks_degree_is_three() {
+    fn ldpc_var_node_degree_is_three() {
+        // Every info variable must appear in exactly 3 check rows (d_v = 3).
+        // Verify by scanning check_to_vars (excluding the trailing parity var).
         let c = make_codec();
-        for (v, checks) in c.var_to_checks.iter().enumerate() {
-            assert_eq!(
-                checks.len(),
-                3,
-                "info variable {v} should have degree 3, got {}",
-                checks.len()
-            );
+        let mut degree = vec![0usize; c.k];
+        for vars in &c.check_to_vars {
+            for &v in &vars[..vars.len() - 1] {
+                degree[v] += 1;
+            }
+        }
+        for (v, &d) in degree.iter().enumerate() {
+            assert_eq!(d, 3, "info variable {v} should have degree 3, got {d}");
         }
     }
 
