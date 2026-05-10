@@ -15,7 +15,7 @@
 pub struct GardnerDetector {
     /// Proportional gain for the timing error integrator.
     gain: f32,
-    /// Accumulated fractional timing offset (in samples, can exceed ±0.5).
+    /// Accumulated fractional timing offset (in samples), clamped to ±0.49 to prevent symbol slips.
     pub mu: f32,
     /// Sample at the previous symbol boundary (sps samples ago).
     s_prev: f32,
@@ -139,14 +139,12 @@ mod tests {
     }
 
     #[test]
-    fn proper_gardner_zero_error_on_clean_bpsk() {
-        // A perfect BPSK-like signal with sps=4: square wave alternating +1/-1.
-        // With proper Gardner, the midpoint between two same-polarity symbols is also ≈+1/-1,
-        // but (s_next - s_prev) = 0, giving zero error.
-        // Between opposite symbols the midpoint is near 0, giving near-zero error.
+    fn mu_clamped_within_bounds_on_square_wave() {
+        // A square wave alternating +1/-1 produces large Gardner errors at every symbol
+        // transition (midpoint is not a zero-crossing of the eye).  The ±0.49 clamp must
+        // absorb these errors and prevent mu from escaping its bounds.
         let sps = 4usize;
         let mut g = GardnerDetector::new(sps, 0.1);
-        // Feed 20 full symbols of alternating +1 / -1 with correct timing (symbol every sps samples).
         let symbols: Vec<f32> = (0..20)
             .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
             .collect();
@@ -156,17 +154,27 @@ mod tests {
                 samples[idx * sps + j] = sym;
             }
         }
-        // Use brute-force pre-arm: first strobe at sample 0.
         g.pre_arm();
-        let mu_start = g.mu;
         for &s in &samples {
             g.update(s);
         }
-        // mu should not drift significantly on a clean, perfectly-timed signal.
         assert!(
-            (g.mu - mu_start).abs() < 0.5,
-            "mu drifted unexpectedly on clean BPSK: final mu = {}",
+            g.mu.abs() <= 0.49,
+            "mu escaped ±0.49 clamp: final mu = {}",
             g.mu
         );
+    }
+
+    #[test]
+    fn zero_error_on_constant_signal() {
+        // A constant signal has no transitions: error = s_mid × (s_next - s_prev) = 0 exactly.
+        // mu must not drift from its initial value.
+        let mut g = GardnerDetector::new(8, 0.1);
+        g.pre_arm();
+        let mu_start = g.mu;
+        for _ in 0..200 {
+            g.update(1.0);
+        }
+        assert_eq!(g.mu, mu_start, "mu drifted on constant (zero-error) signal");
     }
 }

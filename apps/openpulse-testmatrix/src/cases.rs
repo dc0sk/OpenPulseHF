@@ -39,8 +39,9 @@ const DATA_FEC_MODES: &[FecMode] = &[
     FecMode::SoftConcatenated,
 ];
 
-// 8PSK without RRC matched filtering is below the demodulation threshold at 10 dB SNR;
-// only test those modes at ≥ 15 dB.
+// 8PSK without RRC matched filtering requires SNR ≥ 15 dB (insufficient margin at 10 dB).
+// OFDM52 and SCFDMA52 also require ≥ 15 dB: their wider occupied bandwidth and ICI from
+// iterative PAPR clipping push their effective noise floor above the 10 dB AWGN test point.
 fn requires_high_snr(mode: &str) -> bool {
     matches!(mode, "8PSK500" | "8PSK1000-HF" | "OFDM52" | "SCFDMA52")
 }
