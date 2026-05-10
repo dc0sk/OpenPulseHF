@@ -194,7 +194,8 @@ pub fn draw_toolbar(
                 .response
                 .on_hover_text(
                     "Payload compression applied before FEC encoding and modulation\n\
-                     LZ4 block format — only helps with compressible data",
+                     LZ4: block format, fast; Zstd: higher ratio, slightly slower\n\
+                     Both only help with compressible data",
                 );
 
             ui.separator();

@@ -98,13 +98,15 @@ pub fn mode_fec_incompatible(mode: &str) -> bool {
 
 /// Maximum payload bytes that can be encoded in one RS block for the given FEC mode.
 ///
+/// The RS encoder prepends a 4-byte length prefix before splitting into 223-byte (or 191-byte
+/// for RsStrong) blocks, so the true single-block payload capacity is block_data − 4.
 /// Returning `None` means no effective limit (FEC is off).
 pub fn fec_payload_limit(mode: FecMode) -> Option<usize> {
     match mode {
         FecMode::None => None,
-        FecMode::Rs | FecMode::SoftConcatenated => Some(223),
-        FecMode::RsStrong => Some(191),
-        _ => Some(223),
+        FecMode::Rs | FecMode::SoftConcatenated => Some(219), // 223 − 4-byte prefix
+        FecMode::RsStrong => Some(187),                       // 191 − 4-byte prefix
+        _ => Some(219),
     }
 }
 
