@@ -24,7 +24,7 @@ maritime, aeronautical, and other non-amateur spectrum allocations.  Amateur ope
 verify compliance with their national regulatory framework before deploying any proprietary
 data layer.
 
-This document describes two legally distinct integration paths that allow non-GPL code to
+This document describes three legally distinct integration approaches that allow non-GPL code to
 interact with OpenPulseHF without triggering the copyleft clause.
 
 ---
