@@ -1,8 +1,8 @@
 ---
 project: openpulsehf
 doc: docs/plugin-commercial-interface.md
-status: design-proposal
-created: 2026-05-09
+status: living
+last_updated: 2026-05-09
 ---
 
 # Commercial and Third-Party Plugin Interface
