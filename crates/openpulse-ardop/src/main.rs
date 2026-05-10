@@ -10,7 +10,7 @@ use openpulse_audio::CpalBackend;
 #[command(
     name = "openpulse-tnc",
     about = "OpenPulse ARDOP-compatible TNC",
-    long_about = "OpenPulse ARDOP-compatible TNC.\n\nAuthor: Simon Keimer (DC0SK)  <https://github.com/dc0sk>",
+    long_about = "OpenPulse ARDOP-compatible TNC.",
     author,
     version
 )]
