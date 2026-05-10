@@ -124,7 +124,7 @@ impl PeerCache {
             .cloned()
             .collect();
 
-        results.sort_by(|a, b| b.route_quality.cmp(&a.route_quality));
+        results.sort_by_key(|r| std::cmp::Reverse(r.route_quality));
         results.truncate(max_results);
         results
     }

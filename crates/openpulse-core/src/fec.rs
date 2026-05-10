@@ -59,10 +59,10 @@ pub enum FecMode {
     /// The RS outer code corrects residual Viterbi burst failures.
     /// Overhead: ≈ 2.28× raw payload (same as `Concatenated`).
     SoftConcatenated,
-    /// Reserved for BL-FEC-6 (LDPC / Turbo codes — GPU required, not yet implemented).
+    /// Rate-1/2 LDPC (k=1024, n=2048) via min-sum belief propagation.
     ///
-    /// Higher layers are expected to return `ModemError::Fec` when this variant
-    /// is selected until a concrete implementation lands in `openpulse-gpu`.
+    /// CPU implementation lives in `openpulse_core::ldpc::LdpcCodec`.
+    /// A GPU-accelerated path via `openpulse-gpu` is reserved for future work.
     Ldpc,
 }
 

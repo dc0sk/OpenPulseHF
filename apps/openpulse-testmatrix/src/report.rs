@@ -79,11 +79,7 @@ fn write_summary(dir: &Path, results: &[TestResult], meta: &RunMeta) {
         let uc_active: Vec<_> = uc_results.iter().filter(|r| !r.skipped).collect();
         let uc_passed = uc_active.iter().filter(|r| r.passed).count();
         let uc_total = uc_active.len();
-        let rate = if uc_total > 0 {
-            100 * uc_passed / uc_total
-        } else {
-            0
-        };
+        let rate = (100 * uc_passed).checked_div(uc_total).unwrap_or(0);
         out.push_str(&format!(
             "| {} | {uc_passed} | {uc_total} | {uc_skipped} | {rate}% |\n",
             use_case.label()
