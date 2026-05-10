@@ -11,8 +11,11 @@ created: 2026-05-09
 
 OpenPulseHF is licensed under GPL v3.  Any plugin linked into the modem engine as a Rust crate
 is a derived work and inherits the GPL.  This prevents commercial organisations or operators
-from distributing proprietary data-transfer plugins (e.g. a custom encryption layer, a
-commercial compression library, or a proprietary HF waveform) without releasing their source.
+from distributing proprietary data-transfer plugins (e.g. a custom encryption layer for
+non-amateur/commercial allocations, a commercial compression library, or a proprietary HF
+waveform) without releasing their source.  Note: payload encryption is generally not permitted
+on amateur bands, where transmissions must not obscure meaning; any encryption example in this
+document is intended only for non-amateur or otherwise authorized services.
 
 **Regulatory note:** On amateur radio allocations, regulations including FCC §97.113(a)(4) and
 their international equivalents prohibit transmissions whose purpose or content is obscured.
