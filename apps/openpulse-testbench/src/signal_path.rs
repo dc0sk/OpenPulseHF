@@ -8,9 +8,10 @@ use openpulse_channel::{
     build_channel, AwgnConfig, ChannelModelConfig, ChirpConfig, GilbertElliottConfig, QrmConfig,
     QrnConfig, QsbConfig, ToneConfig, WattersonConfig,
 };
-use openpulse_core::compression::{compress_if_smaller, decompress, CompressionAlgorithm};
-use openpulse_core::fec::FecCodec;
+use openpulse_core::compression::{compress, decompress, CompressionAlgorithm};
+use openpulse_core::fec::{FecCodec, FecMode};
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+use openpulse_core::soft_viterbi::SoftViterbiCodec;
 use psk8_plugin::Psk8Plugin;
 use qpsk_plugin::QpskPlugin;
 use scfdma_plugin::ScFdmaPlugin;
@@ -21,6 +22,81 @@ use crate::state::{AppConfig, NoiseModel, Tap, TestStats};
 
 /// Base pattern repeated to fill the configured payload size.
 const PATTERN: &[u8] = b"OpenPulseHF testbench v0.1 test!";
+
+/// FEC dispatch for the direct-plugin testbench path.
+enum TestbenchFec {
+    None,
+    Rs(FecCodec),
+    RsStrong(FecCodec),
+    /// K=7 soft-decision Conv inner + RS(255,223) outer.
+    SoftConcatenated(FecCodec),
+}
+
+impl TestbenchFec {
+    fn from_mode(mode: FecMode) -> Self {
+        match mode {
+            FecMode::None => Self::None,
+            FecMode::Rs | FecMode::RsInterleaved => Self::Rs(FecCodec::new()),
+            FecMode::RsStrong => Self::RsStrong(FecCodec::strong()),
+            FecMode::SoftConcatenated => Self::SoftConcatenated(FecCodec::new()),
+            _ => Self::None,
+        }
+    }
+
+    fn encode(&self, data: &[u8]) -> Vec<u8> {
+        match self {
+            Self::None => data.to_vec(),
+            Self::Rs(c) | Self::RsStrong(c) => c.encode(data),
+            Self::SoftConcatenated(c) => {
+                let rs_encoded = c.encode(data);
+                SoftViterbiCodec.encode(&rs_encoded)
+            }
+        }
+    }
+
+    /// RS-layer encoded bytes only (no Viterbi for SoftConcatenated).
+    /// Used as the reference for FEC channel-error counting.
+    fn inner_encode(&self, data: &[u8]) -> Vec<u8> {
+        match self {
+            Self::None => data.to_vec(),
+            Self::Rs(c) | Self::RsStrong(c) | Self::SoftConcatenated(c) => c.encode(data),
+        }
+    }
+
+    /// Returns `(pre_rs_bytes, post_rs_bytes)` on success.
+    ///
+    /// `pre_rs_bytes` are the bytes entering the RS decoder (raw demod for Rs/RsStrong,
+    /// Viterbi-decoded for SoftConcatenated).  Compare against `inner_encode()` output
+    /// to measure channel bit errors before RS correction.
+    fn decode_soft(
+        &self,
+        plugin: &dyn ModulationPlugin,
+        samples: &[f32],
+        mod_config: &ModulationConfig,
+    ) -> Option<(Vec<u8>, Vec<u8>)> {
+        match self {
+            Self::None => {
+                let b = plugin.demodulate(samples, mod_config).ok()?;
+                Some((b.clone(), b))
+            }
+            Self::Rs(c) | Self::RsStrong(c) => {
+                let raw = plugin.demodulate(samples, mod_config).ok()?;
+                let decoded = c.decode(&raw).ok()?;
+                Some((raw, decoded))
+            }
+            Self::SoftConcatenated(c) => {
+                let llrs = plugin.demodulate_soft(samples, mod_config).ok()?;
+                let sv_decoded = SoftViterbiCodec.decode_soft(&llrs).ok()?;
+                let rs_decoded = c.decode(&sv_decoded).ok()?;
+                Some((sv_decoded, rs_decoded))
+            }
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        !matches!(self, Self::None)
+    }
+}
 
 fn mode_symbol_rate(mode: &str) -> f32 {
     match mode {
@@ -102,7 +178,7 @@ fn run(
     let mut current = config.read().unwrap().clone();
     let mut plugin = make_plugin(&current.mode);
     let mut mod_config = make_mod_config(&current);
-    let mut fec = current.fec_enabled.then(FecCodec::new);
+    let mut fec = TestbenchFec::from_mode(current.fec_mode);
 
     let seed = current.seed_str.parse::<u64>().ok();
     let channel_config = make_channel_config(&current);
@@ -137,8 +213,8 @@ fn run(
                 plugin = make_plugin(&new_cfg.mode);
                 mod_config = make_mod_config(&new_cfg);
             }
-            if new_cfg.fec_enabled != current.fec_enabled {
-                fec = new_cfg.fec_enabled.then(FecCodec::new);
+            if new_cfg.fec_mode != current.fec_mode {
+                fec = TestbenchFec::from_mode(new_cfg.fec_mode);
             }
             if new_cfg.noise_model != current.noise_model
                 || new_cfg.snr_db != current.snr_db
@@ -162,19 +238,22 @@ fn run(
         let max_db = current.max_db;
         let payload = make_payload(current.payload_size, run_count);
 
-        // Compress payload before FEC. compress_if_smaller falls back to None when LZ4
-        // would expand the data, so compress_ratio is always ≤ 1.0.
+        // Compress payload before FEC, honouring the user's algorithm selection.
+        // Fall back to no compression if the chosen algorithm expands the data.
         let (compressed, actual_algo) = match current.compression {
             CompressionAlgorithm::None => (payload.clone(), CompressionAlgorithm::None),
-            CompressionAlgorithm::Lz4 | CompressionAlgorithm::Zstd(_) => {
-                compress_if_smaller(&payload)
+            algo => {
+                let c = compress(&payload, algo);
+                if c.len() < payload.len() {
+                    (c, algo)
+                } else {
+                    (payload.clone(), CompressionAlgorithm::None)
+                }
             }
         };
         let compress_ratio = compressed.len() as f64 / payload.len() as f64;
-        let tx_payload = match &fec {
-            Some(codec) => codec.encode(&compressed),
-            None => compressed,
-        };
+        let tx_inner = fec.inner_encode(&compressed);
+        let tx_payload = fec.encode(&compressed);
 
         let tx_samples = match plugin.modulate(&tx_payload, &mod_config) {
             Ok(s) => s,
@@ -193,27 +272,29 @@ fn run(
         let mixed = channel.apply(&tx_samples);
         push_tap(&taps[2], &mut ps[2], &mixed, min_db, max_db);
 
-        let rx_result = plugin.demodulate(&mixed, &mod_config);
-        // Show a clean re-modulated signal only when the decoded payload is bit-perfect.
-        // The BPSK demodulator returns Ok even for noise, so we must compare content:
-        // any byte error makes the spectrum look identical to a clean decode (same
-        // center + bandwidth), hiding the channel degradation from the user.
-        let rx_samples = match &rx_result {
-            Ok(decoded) => {
-                let base = match &fec {
-                    Some(codec) => codec.decode(decoded).unwrap_or_else(|_| decoded.clone()),
-                    None => decoded.clone(),
-                };
-                let plain = decompress(&base, actual_algo).unwrap_or_else(|_| base.clone());
-                if plain == payload {
-                    plugin
-                        .modulate(&tx_payload, &mod_config)
-                        .unwrap_or_else(|_| vec![0.0_f32; tx_samples.len()])
-                } else {
-                    vec![0.0_f32; tx_samples.len()]
-                }
+        // Decode using the soft path (uses LLRs for SoftConcatenated, hard-decision otherwise).
+        let decoded = fec.decode_soft(plugin.as_ref(), &mixed, &mod_config);
+        let (rx_result, pre_rs_bytes) = match decoded {
+            Some((pre_rs, post_rs)) => {
+                let result = decompress(&post_rs, actual_algo).map_err(|_| {
+                    openpulse_core::error::ModemError::Demodulation("decompress failed".into())
+                });
+                (result, Some(pre_rs))
             }
-            Err(_) => vec![0.0_f32; tx_samples.len()],
+            None => (
+                Err(openpulse_core::error::ModemError::Demodulation(
+                    "decode failed".into(),
+                )),
+                None,
+            ),
+        };
+
+        // Show a clean re-modulated signal only when the decoded payload is bit-perfect.
+        let rx_samples = match &rx_result {
+            Ok(plain) if *plain == payload => plugin
+                .modulate(&tx_payload, &mod_config)
+                .unwrap_or_else(|_| vec![0.0_f32; tx_samples.len()]),
+            _ => vec![0.0_f32; tx_samples.len()],
         };
         push_tap(&taps[3], &mut ps[3], &rx_samples, min_db, max_db);
 
@@ -225,9 +306,9 @@ fn run(
         update_stats(
             &stats,
             &rx_result,
-            &fec,
-            &tx_payload,
-            actual_algo,
+            fec.is_active(),
+            &tx_inner,
+            pre_rs_bytes.as_deref(),
             compress_ratio,
             &payload,
             snr_db,
@@ -262,7 +343,7 @@ fn run_live(
     let mut current = config.read().unwrap().clone();
     let mut plugin = make_plugin(&current.mode);
     let mut mod_config = make_mod_config(&current);
-    let mut fec = current.fec_enabled.then(FecCodec::new);
+    let mut fec = TestbenchFec::from_mode(current.fec_mode);
 
     let mut ps = [
         PowerSpectrum::new(),
@@ -281,10 +362,10 @@ fn run_live(
 
         // Apply any mode/fec changes from the UI.
         let new_cfg = config.read().unwrap().clone();
-        if new_cfg.mode != current.mode || new_cfg.fec_enabled != current.fec_enabled {
+        if new_cfg.mode != current.mode || new_cfg.fec_mode != current.fec_mode {
             plugin = make_plugin(&new_cfg.mode);
             mod_config = make_mod_config(&new_cfg);
-            fec = new_cfg.fec_enabled.then(FecCodec::new);
+            fec = TestbenchFec::from_mode(new_cfg.fec_mode);
             tx_samples = build_tx_ref(&plugin, &mod_config, &fec);
         }
         current = new_cfg;
@@ -308,17 +389,17 @@ fn run_live(
         push_tap(&taps[2], &mut ps[2], &captured, min_db, max_db);
 
         // Tap[3]: demodulate captured audio.
-        let rx_result = plugin.demodulate(&captured, &mod_config);
+        let decoded_opt = fec.decode_soft(plugin.as_ref(), &captured, &mod_config);
+        let rx_result: Result<Vec<u8>, openpulse_core::error::ModemError> = match decoded_opt {
+            Some((_, post_rs)) => Ok(post_rs),
+            None => Err(openpulse_core::error::ModemError::Demodulation(
+                "decode failed".into(),
+            )),
+        };
         let rx_samples = match &rx_result {
-            Ok(decoded) => {
-                let base = match &fec {
-                    Some(codec) => codec.decode(decoded).unwrap_or_else(|_| decoded.clone()),
-                    None => decoded.clone(),
-                };
-                plugin
-                    .modulate(&base, &mod_config)
-                    .unwrap_or_else(|_| vec![0.0_f32; captured.len()])
-            }
+            Ok(b) => plugin
+                .modulate(b, &mod_config)
+                .unwrap_or_else(|_| vec![0.0_f32; captured.len()]),
             Err(_) => vec![0.0_f32; captured.len()],
         };
         push_tap(&taps[3], &mut ps[3], &rx_samples, min_db, max_db);
@@ -346,12 +427,9 @@ fn run_live(
 fn build_tx_ref(
     plugin: &Box<dyn ModulationPlugin>,
     mod_config: &ModulationConfig,
-    fec: &Option<FecCodec>,
+    fec: &TestbenchFec,
 ) -> Vec<f32> {
-    let tx_payload = match fec {
-        Some(codec) => codec.encode(PATTERN),
-        None => PATTERN.to_vec(),
-    };
+    let tx_payload = fec.encode(PATTERN);
     plugin
         .modulate(&tx_payload, mod_config)
         .unwrap_or_else(|e| {
@@ -419,9 +497,9 @@ fn estimate_snr_db(signal: &[f32], noise: &[f32]) -> f32 {
 fn update_stats(
     stats: &Arc<RwLock<TestStats>>,
     rx_result: &Result<Vec<u8>, openpulse_core::error::ModemError>,
-    fec: &Option<FecCodec>,
-    tx_encoded: &[u8],
-    compression: CompressionAlgorithm,
+    fec_is_active: bool,
+    tx_inner: &[u8],
+    pre_rs_bytes: Option<&[u8]>,
     compress_ratio: f64,
     payload: &[u8],
     snr_db: f32,
@@ -429,27 +507,28 @@ fn update_stats(
     const WINDOW_SECS: f64 = 1.5;
     let n_bits = payload.len() * 8;
     let error_bits: u64 = match rx_result {
-        Ok(decoded) => {
-            let fec_out = match fec {
-                Some(codec) => codec.decode(decoded).unwrap_or_else(|_| decoded.clone()),
-                None => decoded.clone(),
-            };
-            let plain = decompress(&fec_out, compression).unwrap_or(fec_out);
-            count_bit_errors(payload, &plain)
-        }
+        Ok(plain) => count_bit_errors(payload, plain),
         Err(_) => n_bits as u64,
     };
 
-    // FEC correction accounting: count errors before and after FEC decode.
-    let (fec_channel_errors, fec_corrected) = match (fec, rx_result) {
-        (Some(codec), Ok(decoded)) => {
-            let pre_fec = count_bit_errors(tx_encoded, decoded);
-            let fec_out = codec.decode(decoded).unwrap_or_else(|_| decoded.clone());
-            let plain = decompress(&fec_out, compression).unwrap_or(fec_out);
-            let post_fec = count_bit_errors(payload, &plain);
-            (pre_fec, pre_fec.saturating_sub(post_fec))
-        }
-        _ => (0, 0),
+    // FEC correction accounting: compare RS-layer bytes entering/leaving the RS decoder.
+    // tx_inner = RS-encoded reference; pre_rs_bytes = received bytes before RS decode.
+    // Channel error count is reported whenever pre_rs_bytes is available, independent of
+    // whether decompression succeeded, so the ECC readout is not lost on failed frames.
+    let (fec_channel_errors, fec_corrected) = if fec_is_active {
+        let channel_errors = pre_rs_bytes
+            .map(|recv| count_bit_errors(tx_inner, recv))
+            .unwrap_or(0);
+        let corrected = match (pre_rs_bytes, rx_result) {
+            (Some(_), Ok(plain)) => {
+                let post_fec = count_bit_errors(payload, plain);
+                channel_errors.saturating_sub(post_fec)
+            }
+            _ => 0,
+        };
+        (channel_errors, corrected)
+    } else {
+        (0, 0)
     };
 
     let success = rx_result.is_ok() && error_bits == 0;
@@ -566,6 +645,15 @@ mod tests {
     use super::*;
     use crate::state::{AppConfig, TapData, TestStats};
 
+    fn bpsk250_config() -> ModulationConfig {
+        ModulationConfig {
+            mode: "BPSK250".into(),
+            center_frequency: 1500.0,
+            sample_rate: 8000,
+            ..ModulationConfig::default()
+        }
+    }
+
     #[test]
     fn run_loop_produces_tap_updates() {
         let config = Arc::new(RwLock::new(AppConfig::default()));
@@ -592,5 +680,55 @@ mod tests {
             assert!(gen > 0, "tap[{i}] generation should be > 0, got {gen}");
         }
         assert!(stats.read().unwrap().runs > 0, "runs should be > 0");
+    }
+
+    #[test]
+    fn testbench_fec_rs_strong_round_trip() {
+        let data = b"hello world - RsStrong encode/decode test payload";
+        let fec = TestbenchFec::from_mode(FecMode::RsStrong);
+        let encoded = fec.encode(data);
+        let inner = fec.inner_encode(data);
+        // For RsStrong, inner_encode == encode (no extra layer).
+        assert_eq!(encoded, inner);
+
+        let plugin = BpskPlugin::new();
+        let mod_cfg = bpsk250_config();
+        let samples = plugin.modulate(&encoded, &mod_cfg).unwrap();
+        let (pre_rs, post_rs) = fec.decode_soft(&plugin, &samples, &mod_cfg).unwrap();
+
+        assert_eq!(
+            &post_rs, data,
+            "RsStrong: decoded payload must match original"
+        );
+        assert_eq!(
+            pre_rs, encoded,
+            "RsStrong: pre_rs must match RS-encoded bytes in clean channel"
+        );
+    }
+
+    #[test]
+    fn testbench_fec_soft_concatenated_round_trip() {
+        let data = b"SoftConcatenated FEC encode/decode round-trip test";
+        let fec = TestbenchFec::from_mode(FecMode::SoftConcatenated);
+        let inner = fec.inner_encode(data); // RS-encoded reference (before Viterbi)
+        let encoded = fec.encode(data); // Viterbi(RS(data)) — what gets modulated
+        assert_ne!(
+            encoded, inner,
+            "Viterbi-encoded output must differ from RS-only output"
+        );
+
+        let plugin = BpskPlugin::new();
+        let mod_cfg = bpsk250_config();
+        let samples = plugin.modulate(&encoded, &mod_cfg).unwrap();
+        let (pre_rs, post_rs) = fec.decode_soft(&plugin, &samples, &mod_cfg).unwrap();
+
+        assert_eq!(
+            &post_rs, data,
+            "SoftConcatenated: decoded payload must match original"
+        );
+        assert_eq!(
+            pre_rs, inner,
+            "SoftConcatenated: pre_rs (Viterbi-decoded) must match RS-encoded reference"
+        );
     }
 }
