@@ -211,6 +211,44 @@ pub fn persist_trust_store_at(path: &Path, store: &LocalTrustStore) -> Result<()
     Ok(())
 }
 
+// ── Manifest persistence ──────────────────────────────────────────────────────
+
+pub fn manifest_file_path(session_id: &str) -> PathBuf {
+    config_dir_path()
+        .join("manifests")
+        .join(format!("{session_id}.json"))
+}
+
+#[allow(dead_code)]
+pub fn save_manifest(
+    session_id: &str,
+    manifest: &openpulse_core::manifest::TransferManifest,
+) -> Result<()> {
+    let path = manifest_file_path(session_id);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!("failed to create manifests directory {}", parent.display())
+        })?;
+    }
+    fs::write(&path, serde_json::to_string_pretty(manifest)?)
+        .with_context(|| format!("failed to write manifest file {}", path.display()))?;
+    Ok(())
+}
+
+pub fn load_manifest(
+    session_id: &str,
+) -> Result<Option<openpulse_core::manifest::TransferManifest>> {
+    let path = manifest_file_path(session_id);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read manifest file {}", path.display()))?;
+    let manifest = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse manifest file {}", path.display()))?;
+    Ok(Some(manifest))
+}
+
 // ── Policy profile persistence ────────────────────────────────────────────────
 
 pub fn load_policy_profile() -> Result<PolicyProfile> {

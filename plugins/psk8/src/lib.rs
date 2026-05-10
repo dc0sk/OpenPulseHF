@@ -67,13 +67,7 @@ impl ModulationPlugin for Psk8Plugin {
         samples: &[f32],
         config: &ModulationConfig,
     ) -> Result<Vec<f32>, ModemError> {
-        // 8PSK max-log-MAP soft demapping (~1 dB gain) is not yet implemented.
-        // Falls back to hard ±1.0 pseudo-LLRs from the trait default.
-        let bytes = self.demodulate(samples, config)?;
-        Ok(bytes
-            .iter()
-            .flat_map(|&b| (0..8u8).map(move |i| if (b >> i) & 1 == 0 { 1.0f32 } else { -1.0f32 }))
-            .collect())
+        demodulate::psk8_demodulate_soft(samples, config)
     }
 }
 
@@ -243,5 +237,50 @@ mod tests {
         let samples = plugin.modulate(payload, &cfg).expect("modulate");
         let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
         assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    /// Max-log-MAP soft LLRs must agree with hard decisions and be strictly more
+    /// confident than the ±1.0 fallback on a clean loopback.
+    #[test]
+    fn soft_demodulate_500_sign_and_magnitude() {
+        let plugin = Psk8Plugin::new();
+        let cfg = ModulationConfig {
+            mode: "8PSK500".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"soft LLR 8PSK check";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let hard_bytes = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        let llrs = plugin
+            .demodulate_soft(&samples, &cfg)
+            .expect("demodulate_soft");
+
+        // LLR count must equal hard byte count × 8.
+        assert_eq!(llrs.len(), hard_bytes.len() * 8);
+
+        // Sign of each LLR must agree with the hard decision.
+        for (byte_idx, &byte) in hard_bytes.iter().enumerate() {
+            for bit in 0..8usize {
+                let hard_bit = (byte >> bit) & 1;
+                let llr = llrs[byte_idx * 8 + bit];
+                // LLR > 0 ↔ bit=0 more likely.
+                if hard_bit == 0 {
+                    assert!(
+                        llr > 0.0,
+                        "byte {byte_idx} bit {bit}: expected positive LLR for 0, got {llr}"
+                    );
+                } else {
+                    assert!(
+                        llr < 0.0,
+                        "byte {byte_idx} bit {bit}: expected negative LLR for 1, got {llr}"
+                    );
+                }
+                // LLR must be a real soft value, not degenerate zero.
+                assert!(
+                    llr.abs() > 0.01,
+                    "byte {byte_idx} bit {bit}: LLR magnitude {llr} too small"
+                );
+            }
+        }
     }
 }

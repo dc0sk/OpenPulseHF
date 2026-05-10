@@ -13,10 +13,11 @@ use crate::{
     },
     pki::{fetch_pki_trust, PkiClient},
     state::{
-        append_session_log_entry, clear_session_state, load_policy_profile, load_session_log,
-        load_session_state, parse_policy_profile, persist_session_log, persist_session_state,
-        policy_profile_to_str, session_log_entry_to_value, session_log_from_transitions,
-        session_state_file_path, PersistedSessionLogEntry, PersistedSessionState,
+        append_session_log_entry, clear_session_state, load_manifest, load_policy_profile,
+        load_session_log, load_session_state, load_trust_store, parse_policy_profile,
+        persist_session_log, persist_session_state, policy_profile_to_str,
+        session_log_entry_to_value, session_log_from_transitions, session_state_file_path,
+        PersistedSessionLogEntry, PersistedSessionState,
     },
     DiagnoseCommands, SessionCommands,
 };
@@ -538,41 +539,110 @@ pub fn run_diagnose(command: DiagnoseCommands, pki: &PkiClient) -> Result<i32> {
         }
 
         DiagnoseCommands::Manifest { session, opts } => {
-            let bundle = match pki.get_current_bundle() {
-                Ok(Some(b)) => b,
+            // Load the manifest written by the engine at transfer completion.
+            let manifest = match load_manifest(&session) {
+                Ok(Some(m)) => m,
                 Ok(None) => {
                     let output = DiagnosticOutput {
                         status: "fail".to_string(),
-                        decision: "invalid".to_string(),
-                        reason_code: "invalid_manifest_schema".to_string(),
-                        details: json!({
-                            "session": session,
-                            "detail": "no current trust bundle available",
-                        }),
-                        recommendation: "Ensure the PKI service has a published trust bundle."
+                        decision: "missing".to_string(),
+                        reason_code: "no_manifest_for_session".to_string(),
+                        details: json!({ "session": session }),
+                        recommendation: "No manifest was recorded for this session. \
+                             Manifests are saved by the engine at transfer completion."
                             .to_string(),
                     };
                     emit_output(&opts, &output)?;
                     return Ok(2);
                 }
-                Err(err) => return emit_transport_failure(&opts, err),
+                Err(err) => {
+                    let output = DiagnosticOutput {
+                        status: "fail".to_string(),
+                        decision: "invalid".to_string(),
+                        reason_code: "manifest_read_error".to_string(),
+                        details: json!({ "session": session, "error": err.to_string() }),
+                        recommendation: "Could not read the manifest file.".to_string(),
+                    };
+                    emit_output(&opts, &output)?;
+                    return Ok(2);
+                }
             };
 
-            let output = DiagnosticOutput {
-                status: "ok".to_string(),
-                decision: "verified".to_string(),
-                reason_code: "manifest_shape_valid".to_string(),
-                details: json!({
-                    "session": session,
-                    "bundle_id": bundle.bundle_id,
-                    "manifest_fields": ["session_id", "peer_id", "policy_profile", "selected_mode"],
-                    "signature_placeholder": "manifest signing not yet implemented",
-                }),
-                recommendation: "Manifest shape is valid (signature verification is a stub)."
-                    .to_string(),
+            // Look up the sender's public key in the local trust store.
+            // key_id is expected to be a 64-hex-char Ed25519 verifying key.
+            let trust_store = load_trust_store()?;
+            let record = trust_store
+                .records
+                .iter()
+                .find(|r| r.station_id == manifest.sender_id);
+
+            let pubkey_bytes = match record {
+                None => {
+                    let output = DiagnosticOutput {
+                        status: "fail".to_string(),
+                        decision: "unverifiable".to_string(),
+                        reason_code: "sender_not_in_trust_store".to_string(),
+                        details: json!({ "session": session, "sender_id": manifest.sender_id }),
+                        recommendation:
+                            "Import the sender's public key with `openpulse trust import`."
+                                .to_string(),
+                    };
+                    emit_output(&opts, &output)?;
+                    return Ok(2);
+                }
+                Some(r) => match parse_hex_key(&r.key_id) {
+                    Some(b) => b,
+                    None => {
+                        let output = DiagnosticOutput {
+                            status: "fail".to_string(),
+                            decision: "unverifiable".to_string(),
+                            reason_code: "key_id_not_parseable_as_pubkey".to_string(),
+                            details: json!({ "session": session, "key_id": r.key_id }),
+                            recommendation:
+                                "The trust record key_id must be a 64-char hex Ed25519 \
+                                 verifying key to enable signature verification."
+                                    .to_string(),
+                        };
+                        emit_output(&opts, &output)?;
+                        return Ok(2);
+                    }
+                },
             };
-            emit_output(&opts, &output)?;
-            Ok(0)
+
+            match openpulse_core::manifest::verify_manifest(&manifest, &pubkey_bytes) {
+                Ok(()) => {
+                    let output = DiagnosticOutput {
+                        status: "ok".to_string(),
+                        decision: "verified".to_string(),
+                        reason_code: "signature_valid".to_string(),
+                        details: json!({
+                            "session": session,
+                            "sender_id": manifest.sender_id,
+                            "payload_size": manifest.payload_size,
+                            "payload_hash": format_hex(&manifest.payload_hash),
+                        }),
+                        recommendation: "Transfer manifest signature is valid.".to_string(),
+                    };
+                    emit_output(&opts, &output)?;
+                    Ok(0)
+                }
+                Err(err) => {
+                    let output = DiagnosticOutput {
+                        status: "fail".to_string(),
+                        decision: "invalid".to_string(),
+                        reason_code: "signature_invalid".to_string(),
+                        details: json!({
+                            "session": session,
+                            "sender_id": manifest.sender_id,
+                            "error": err.to_string(),
+                        }),
+                        recommendation: "Transfer manifest signature verification failed."
+                            .to_string(),
+                    };
+                    emit_output(&opts, &output)?;
+                    Ok(1)
+                }
+            }
         }
 
         DiagnoseCommands::Session { peer, opts } => {
@@ -739,6 +809,26 @@ fn diagnostics_peer(engine: &ModemEngine, persisted: Option<&PersistedSessionSta
         return "live".to_string();
     }
     "unknown".to_string()
+}
+
+// ── Manifest helpers ──────────────────────────────────────────────────────────
+
+/// Parse a 64-char lowercase/uppercase hex string into a 32-byte Ed25519 verifying key.
+fn parse_hex_key(s: &str) -> Option<[u8; 32]> {
+    if s.len() != 64 {
+        return None;
+    }
+    let mut arr = [0u8; 32];
+    for (i, pair) in s.as_bytes().chunks(2).enumerate() {
+        let pair_str = std::str::from_utf8(pair).ok()?;
+        arr[i] = u8::from_str_radix(pair_str, 16).ok()?;
+    }
+    Some(arr)
+}
+
+/// Format a byte slice as lowercase hex.
+fn format_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

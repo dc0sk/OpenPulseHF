@@ -78,40 +78,29 @@ fn trust_show_returns_fail_on_revoked_identity() {
 }
 
 #[test]
-fn diagnose_manifest_returns_invalid_schema_when_no_current_bundle() {
-    let mut server = Server::new();
-
-    let _bundle = server
-        .mock("GET", "/api/v1/trust-bundles/current")
-        .with_status(404)
-        .with_header("content-type", "application/json")
-        .with_body(
-            r#"{
-                "status": "not_found",
-                "detail": "current trust bundle not found"
-            }"#,
-        )
-        .create();
-
+fn diagnose_manifest_returns_missing_when_no_manifest_file() {
     let mut cmd = Command::cargo_bin("openpulse").expect("binary should build");
     cmd.args([
         "--backend",
         "loopback",
-        "--pki-url",
-        &server.url(),
         "diagnose",
         "manifest",
         "--session",
-        "sess-1",
+        "sess-nonexistent",
         "--format",
         "json",
     ]);
+    // Ensure test runs in a temp dir so no real manifest file exists for this session.
+    cmd.env(
+        "OPENPULSE_CONFIG_DIR",
+        std::env::temp_dir().join("openpulse-test-manifest-missing"),
+    );
 
     cmd.assert()
         .failure()
         .code(2)
         .stdout(predicate::str::contains(
-            "\"reason_code\": \"invalid_manifest_schema\"",
+            "\"reason_code\": \"no_manifest_for_session\"",
         ));
 }
 
