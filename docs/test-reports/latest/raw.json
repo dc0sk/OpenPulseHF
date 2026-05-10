@@ -1,366 +1,9 @@
 [
   {
     "case": {
-      "use_case": "RawModem",
-      "mode": "BPSK31",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 32,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 32,
-    "duration_ms": 2308,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "BPSK31",
-      "fec": false,
-      "compression": "lz4",
-      "channel": "Clean",
-      "payload_len": 32,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 32,
-    "duration_ms": 2314,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "BPSK63",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 32,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 32,
-    "duration_ms": 572,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "BPSK63",
-      "fec": false,
-      "compression": "lz4",
-      "channel": "Clean",
-      "payload_len": 32,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 32,
-    "duration_ms": 588,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "BPSK100",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 32,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 32,
-    "duration_ms": 227,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "BPSK100",
-      "fec": false,
-      "compression": "lz4",
-      "channel": "Clean",
-      "payload_len": 32,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 32,
-    "duration_ms": 238,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "BPSK250",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 32,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 32,
-    "duration_ms": 40,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "BPSK250",
-      "fec": false,
-      "compression": "lz4",
-      "channel": "Clean",
-      "payload_len": 32,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 32,
-    "duration_ms": 38,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK125",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 32,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 32,
-    "duration_ms": 38,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK125",
-      "fec": false,
-      "compression": "lz4",
-      "channel": "Clean",
-      "payload_len": 32,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 32,
-    "duration_ms": 38,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK250",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 32,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 32,
-    "duration_ms": 10,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK250",
-      "fec": false,
-      "compression": "lz4",
-      "channel": "Clean",
-      "payload_len": 32,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 32,
-    "duration_ms": 9,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK500",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 32,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 32,
-    "duration_ms": 2,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK500",
-      "fec": false,
-      "compression": "lz4",
-      "channel": "Clean",
-      "payload_len": 32,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 32,
-    "duration_ms": 2,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK1000",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 32,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 32,
-    "duration_ms": 0,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK1000",
-      "fec": false,
-      "compression": "lz4",
-      "channel": "Clean",
-      "payload_len": 32,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 32,
-    "duration_ms": 0,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "8PSK500",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 32,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 32,
-    "duration_ms": 2,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "8PSK500",
-      "fec": false,
-      "compression": "lz4",
-      "channel": "Clean",
-      "payload_len": 32,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 32,
-    "duration_ms": 1,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "8PSK1000",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 32,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 32,
-    "duration_ms": 0,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "8PSK1000",
-      "fec": false,
-      "compression": "lz4",
-      "channel": "Clean",
-      "payload_len": 32,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 32,
-    "duration_ms": 0,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "FSK4-ACK",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 5,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 5,
-    "duration_ms": 0,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "FSK4-ACK",
-      "fec": false,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 20.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 5,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 5,
-    "duration_ms": 3,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "FSK4-ACK",
-      "fec": false,
+      "use_case": "AdaptiveHpx500",
+      "mode": "HPX500",
+      "fec_mode": "none",
       "compression": "none",
       "channel": {
         "Awgn": {
@@ -368,885 +11,86 @@
           "seed": 42
         }
       },
-      "payload_len": 5,
+      "payload_len": 64,
       "tier": "Quick"
     },
     "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 5,
-    "duration_ms": 2,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "BPSK250",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 121,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "BPSK250",
-      "fec": true,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 244,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "BPSK250",
-      "fec": false,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 20.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 141,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "BPSK250",
-      "fec": true,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 20.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 248,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "BPSK250",
-      "fec": false,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 10.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 136,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "BPSK250",
-      "fec": true,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 10.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 246,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK125",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 114,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK125",
-      "fec": true,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 214,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK125",
-      "fec": false,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 20.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 142,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK125",
-      "fec": true,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 20.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 267,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK125",
-      "fec": false,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 10.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 146,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK125",
-      "fec": true,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 10.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 252,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK250",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 32,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK250",
-      "fec": true,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 58,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK250",
-      "fec": false,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 20.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 42,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK250",
-      "fec": true,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 20.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 76,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK250",
-      "fec": false,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 10.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 48,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK250",
-      "fec": true,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 10.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 75,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK500",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 8,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK500",
-      "fec": true,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 15,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK500",
-      "fec": false,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 20.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 13,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK500",
-      "fec": true,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 20.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 24,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK500",
-      "fec": false,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 10.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 13,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK500",
-      "fec": true,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 10.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 24,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK1000",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 2,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK1000",
-      "fec": true,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 4,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK1000",
-      "fec": false,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 20.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 5,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK1000",
-      "fec": true,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 20.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 9,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK1000",
-      "fec": false,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 10.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": false,
+    "skipped": false,
     "ber": null,
-    "bytes_rx": 0,
-    "duration_ms": 5,
-    "note": "RX error: frame encoding/decoding error: CRC mismatch (expected 0x4f3a, got 0x7bb7)"
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "QPSK1000",
-      "fec": true,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 10.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 9,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "8PSK500",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 5,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "8PSK500",
-      "fec": true,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 11,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "8PSK500",
-      "fec": false,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 20.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 9,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "8PSK500",
-      "fec": true,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 20.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 16,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "8PSK500",
-      "fec": false,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 10.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 9,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "8PSK500",
-      "fec": true,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 10.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 16,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "8PSK1000",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 1,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "8PSK1000",
-      "fec": true,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 4,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "8PSK1000",
-      "fec": false,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 20.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 3,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "8PSK1000",
-      "fec": true,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 20.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 7,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "8PSK1000",
-      "fec": false,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 10.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 5,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "RawModem",
-      "mode": "8PSK1000",
-      "fec": true,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 10.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 128,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": 0.0,
-    "bytes_rx": 128,
-    "duration_ms": 7,
+    "bytes_rx": 64,
+    "duration_ms": 5473,
+    "effective_bps": null,
     "note": null
   },
   {
     "case": {
       "use_case": "AdaptiveHpx500",
       "mode": "HPX500",
-      "fec": false,
+      "fec_mode": "none",
       "compression": "none",
-      "channel": "Clean",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
       "payload_len": 64,
       "tier": "Quick"
     },
     "passed": true,
+    "skipped": false,
     "ber": null,
     "bytes_rx": 64,
-    "duration_ms": 5597,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "AdaptiveHpx2300",
-      "mode": "HPX2300",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 64,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": null,
-    "bytes_rx": 64,
-    "duration_ms": 15,
+    "duration_ms": 5123,
+    "effective_bps": null,
     "note": null
   },
   {
     "case": {
       "use_case": "AdaptiveHpx500",
       "mode": "HPX500",
-      "fec": false,
+      "fec_mode": "none",
       "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 20.0,
-          "seed": 42
-        }
-      },
+      "channel": "Clean",
       "payload_len": 64,
       "tier": "Quick"
     },
     "passed": true,
+    "skipped": false,
     "ber": null,
     "bytes_rx": 64,
-    "duration_ms": 5522,
+    "duration_ms": 5122,
+    "effective_bps": null,
     "note": null
   },
   {
     "case": {
-      "use_case": "AdaptiveHpx2300",
-      "mode": "HPX2300",
-      "fec": false,
+      "use_case": "AdaptiveHpxHf",
+      "mode": "HPX_HF",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 64,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": null,
+    "bytes_rx": 64,
+    "duration_ms": 5354,
+    "effective_bps": null,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "AdaptiveHpxHf",
+      "mode": "HPX_HF",
+      "fec_mode": "none",
       "compression": "none",
       "channel": {
         "Awgn": {
@@ -1258,20 +102,63 @@
       "tier": "Quick"
     },
     "passed": true,
+    "skipped": false,
+    "ber": null,
+    "bytes_rx": 64,
+    "duration_ms": 5313,
+    "effective_bps": null,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "AdaptiveHpxHf",
+      "mode": "HPX_HF",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 64,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": null,
+    "bytes_rx": 64,
+    "duration_ms": 5525,
+    "effective_bps": null,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "AdaptiveHpxWideband",
+      "mode": "HPX_WIDEBAND",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 64,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
     "ber": null,
     "bytes_rx": 64,
     "duration_ms": 25,
+    "effective_bps": null,
     "note": null
   },
   {
     "case": {
-      "use_case": "AdaptiveHpx500",
-      "mode": "HPX500",
-      "fec": false,
+      "use_case": "AdaptiveHpxWideband",
+      "mode": "HPX_WIDEBAND",
+      "fec_mode": "none",
       "compression": "none",
       "channel": {
         "Awgn": {
-          "snr_db": 10.0,
+          "snr_db": 20.0,
           "seed": 42
         }
       },
@@ -1279,106 +166,54 @@
       "tier": "Quick"
     },
     "passed": true,
+    "skipped": false,
     "ber": null,
     "bytes_rx": 64,
-    "duration_ms": 5392,
+    "duration_ms": 25,
+    "effective_bps": null,
     "note": null
   },
   {
     "case": {
-      "use_case": "AdaptiveHpx2300",
-      "mode": "HPX2300",
-      "fec": false,
+      "use_case": "AdaptiveHpxWideband",
+      "mode": "HPX_WIDEBAND",
+      "fec_mode": "none",
       "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 10.0,
-          "seed": 42
-        }
-      },
+      "channel": "Clean",
       "payload_len": 64,
       "tier": "Quick"
     },
     "passed": true,
+    "skipped": false,
     "ber": null,
     "bytes_rx": 64,
-    "duration_ms": 23,
+    "duration_ms": 15,
+    "effective_bps": null,
     "note": null
   },
   {
     "case": {
       "use_case": "Ardop",
       "mode": "BPSK250",
-      "fec": false,
+      "fec_mode": "none",
       "compression": "none",
       "channel": "Clean",
       "payload_len": 64,
       "tier": "Quick"
     },
     "passed": true,
+    "skipped": false,
     "ber": null,
     "bytes_rx": 64,
-    "duration_ms": 27,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "Kiss",
-      "mode": "BPSK250",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 64,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": null,
-    "bytes_rx": 64,
-    "duration_ms": 27,
+    "duration_ms": 28,
+    "effective_bps": null,
     "note": null
   },
   {
     "case": {
       "use_case": "B2f",
       "mode": "BPSK250",
-      "fec": false,
-      "compression": "none",
-      "channel": "Clean",
-      "payload_len": 64,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": null,
-    "bytes_rx": 64,
-    "duration_ms": 486,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "B2f",
-      "mode": "BPSK250",
-      "fec": false,
-      "compression": "none",
-      "channel": {
-        "Awgn": {
-          "snr_db": 20.0,
-          "seed": 42
-        }
-      },
-      "payload_len": 64,
-      "tier": "Quick"
-    },
-    "passed": true,
-    "ber": null,
-    "bytes_rx": 64,
-    "duration_ms": 567,
-    "note": null
-  },
-  {
-    "case": {
-      "use_case": "B2f",
-      "mode": "BPSK250",
-      "fec": false,
+      "fec_mode": "none",
       "compression": "none",
       "channel": {
         "Awgn": {
@@ -1390,9 +225,6462 @@
       "tier": "Quick"
     },
     "passed": true,
+    "skipped": false,
     "ber": null,
     "bytes_rx": 64,
-    "duration_ms": 565,
+    "duration_ms": 542,
+    "effective_bps": null,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "B2f",
+      "mode": "BPSK250",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 64,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": null,
+    "bytes_rx": 64,
+    "duration_ms": 544,
+    "effective_bps": null,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "B2f",
+      "mode": "BPSK250",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 64,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": null,
+    "bytes_rx": 64,
+    "duration_ms": 504,
+    "effective_bps": null,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "Kiss",
+      "mode": "BPSK250",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 64,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": null,
+    "bytes_rx": 64,
+    "duration_ms": 27,
+    "effective_bps": null,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-HF",
+      "fec_mode": "none",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 5,
+    "effective_bps": 204800.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-HF",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 10,
+    "effective_bps": 102400.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-HF",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 16,
+    "effective_bps": 111500.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-HF",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 4,
+    "effective_bps": 256000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-HF",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 7,
+    "effective_bps": 254857.14285714284,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-HF",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 32,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 32,
+    "duration_ms": 1,
+    "effective_bps": 256000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-HF",
+      "fec_mode": "none",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 2,
+    "effective_bps": 512000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-HF",
+      "fec_mode": "rs",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 3,
+    "effective_bps": 341333.3333333333,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-HF",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 6,
+    "effective_bps": 170666.66666666666,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-HF",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 12,
+    "effective_bps": 148666.66666666666,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-HF",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 3,
+    "effective_bps": 341333.3333333333,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-HF",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 7,
+    "effective_bps": 254857.14285714284,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-HF",
+      "fec_mode": "rs",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 3,
+    "effective_bps": 341333.3333333333,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-HF",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 6,
+    "effective_bps": 170666.66666666666,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-HF",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 12,
+    "effective_bps": 148666.66666666666,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-HF",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 3,
+    "effective_bps": 341333.3333333333,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-HF",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 7,
+    "effective_bps": 254857.14285714284,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "none",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 22,
+    "effective_bps": 46545.45454545455,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 23,
+    "effective_bps": 44521.739130434784,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 38,
+    "effective_bps": 46947.36842105263,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 23,
+    "effective_bps": 44521.739130434784,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 39,
+    "effective_bps": 45743.58974358974,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 22,
+    "effective_bps": 46545.45454545455,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 36,
+    "effective_bps": 49555.55555555556,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 32,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 32,
+    "duration_ms": 8,
+    "effective_bps": 32000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "none",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 22,
+    "effective_bps": 46545.45454545455,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "rs",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 40,
+    "effective_bps": 25600.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 43,
+    "effective_bps": 23813.953488372095,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 84,
+    "effective_bps": 21238.095238095237,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 43,
+    "effective_bps": 23813.953488372095,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 85,
+    "effective_bps": 20988.235294117647,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 40,
+    "effective_bps": 25600.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 80,
+    "effective_bps": 22300.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "rs",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 41,
+    "effective_bps": 24975.60975609756,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 43,
+    "effective_bps": 23813.953488372095,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 85,
+    "effective_bps": 20988.235294117647,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 43,
+    "effective_bps": 23813.953488372095,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 84,
+    "effective_bps": 21238.095238095237,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 41,
+    "effective_bps": 24975.60975609756,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK1000-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 79,
+    "effective_bps": 22582.278481012658,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "none",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 84,
+    "effective_bps": 12190.476190476189,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 87,
+    "effective_bps": 11770.114942528737,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 143,
+    "effective_bps": 12475.524475524477,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 88,
+    "effective_bps": 11636.363636363638,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 144,
+    "effective_bps": 12388.88888888889,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 84,
+    "effective_bps": 12190.476190476189,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 138,
+    "effective_bps": 12927.536231884056,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 32,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 32,
+    "duration_ms": 29,
+    "effective_bps": 8827.58620689655,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "none",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 85,
+    "effective_bps": 12047.05882352941,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "rs",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 149,
+    "effective_bps": 6872.48322147651,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 154,
+    "effective_bps": 6649.350649350649,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 309,
+    "effective_bps": 5773.462783171521,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 156,
+    "effective_bps": 6564.102564102564,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 313,
+    "effective_bps": 5699.680511182109,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 151,
+    "effective_bps": 6781.456953642384,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 298,
+    "effective_bps": 5986.577181208054,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "rs",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 151,
+    "effective_bps": 6781.456953642384,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 158,
+    "effective_bps": 6481.012658227848,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 319,
+    "effective_bps": 5592.476489028213,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 163,
+    "effective_bps": 6282.208588957055,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 356,
+    "effective_bps": 5011.23595505618,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 152,
+    "effective_bps": 6736.842105263158,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 303,
+    "effective_bps": 5887.788778877888,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500",
+      "fec_mode": "concatenated",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 34,
+    "effective_bps": 30117.647058823528,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500",
+      "fec_mode": "none",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 6,
+    "effective_bps": 170666.66666666666,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 9,
+    "effective_bps": 113777.77777777778,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 15,
+    "effective_bps": 118933.33333333334,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 6,
+    "effective_bps": 170666.66666666666,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 9,
+    "effective_bps": 198222.22222222225,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 32,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 32,
+    "duration_ms": 2,
+    "effective_bps": 128000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500",
+      "fec_mode": "none",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 6,
+    "effective_bps": 170666.66666666666,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500",
+      "fec_mode": "rs",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 11,
+    "effective_bps": 93090.9090909091,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 18,
+    "effective_bps": 56888.88888888889,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 33,
+    "effective_bps": 54060.60606060606,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 11,
+    "effective_bps": 93090.9090909091,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 21,
+    "effective_bps": 84952.38095238095,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500",
+      "fec_mode": "rs",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 11,
+    "effective_bps": 93090.9090909091,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 16,
+    "effective_bps": 64000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 32,
+    "effective_bps": 55750.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 11,
+    "effective_bps": 93090.9090909091,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 23,
+    "effective_bps": 77565.21739130435,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500",
+      "fec_mode": "rs_strong",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 17,
+    "effective_bps": 60235.294117647056,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "8PSK500",
+      "fec_mode": "soft_concatenated",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 52,
+    "effective_bps": 19692.30769230769,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK100",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 32,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 32,
+    "duration_ms": 243,
+    "effective_bps": 1053.4979423868313,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "none",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 870,
+    "effective_bps": 1177.0114942528735,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 824,
+    "effective_bps": 1242.7184466019419,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 1456,
+    "effective_bps": 1225.2747252747254,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 802,
+    "effective_bps": 1276.8079800498751,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 1359,
+    "effective_bps": 1312.729948491538,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 817,
+    "effective_bps": 1253.3659730722154,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 1456,
+    "effective_bps": 1225.2747252747254,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 32,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 32,
+    "duration_ms": 280,
+    "effective_bps": 914.2857142857142,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "none",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 858,
+    "effective_bps": 1193.4731934731935,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "rs",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 1564,
+    "effective_bps": 654.7314578005115,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 1537,
+    "effective_bps": 666.2329212752115,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 3111,
+    "effective_bps": 573.4490517518483,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 1597,
+    "effective_bps": 641.202254226675,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 3115,
+    "effective_bps": 572.712680577849,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 1559,
+    "effective_bps": 656.8313021167415,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 2811,
+    "effective_bps": 634.6495908929206,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "rs",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 1488,
+    "effective_bps": 688.1720430107526,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 1460,
+    "effective_bps": 701.3698630136986,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 2982,
+    "effective_bps": 598.2562038900066,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 1497,
+    "effective_bps": 684.0347361389445,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 2958,
+    "effective_bps": 603.1102096010818,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 1441,
+    "effective_bps": 710.6176266481609,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 2982,
+    "effective_bps": 598.2562038900066,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "concatenated",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 539,
+    "effective_bps": 1899.8144712430426,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "concatenated",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 541,
+    "effective_bps": 1892.7911275415895,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "none",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 128,
+    "effective_bps": 8000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 146,
+    "effective_bps": 7013.698630136987,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 243,
+    "effective_bps": 7341.563786008231,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 145,
+    "effective_bps": 7062.068965517242,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 240,
+    "effective_bps": 7433.333333333334,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 125,
+    "effective_bps": 8192.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 209,
+    "effective_bps": 8535.885167464116,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 32,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 32,
+    "duration_ms": 41,
+    "effective_bps": 6243.90243902439,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "none",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 126,
+    "effective_bps": 8126.984126984127,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "rs",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 230,
+    "effective_bps": 4452.173913043478,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 265,
+    "effective_bps": 3864.150943396226,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 533,
+    "effective_bps": 3347.091932457786,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 275,
+    "effective_bps": 3723.6363636363635,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 544,
+    "effective_bps": 3279.411764705882,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 237,
+    "effective_bps": 4320.675105485232,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 488,
+    "effective_bps": 3655.7377049180327,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "rs",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 276,
+    "effective_bps": 3710.1449275362315,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 286,
+    "effective_bps": 3580.4195804195806,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 536,
+    "effective_bps": 3328.3582089552237,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 283,
+    "effective_bps": 3618.374558303887,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 527,
+    "effective_bps": 3385.199240986717,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 231,
+    "effective_bps": 4432.900432900433,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 454,
+    "effective_bps": 3929.5154185022025,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "rs_strong",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 263,
+    "effective_bps": 3893.5361216730034,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "rs_strong",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 265,
+    "effective_bps": 3864.150943396226,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "soft_concatenated",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 554,
+    "effective_bps": 1848.3754512635378,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK250",
+      "fec_mode": "soft_concatenated",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 551,
+    "effective_bps": 1858.4392014519055,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK31",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 32,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 32,
+    "duration_ms": 2473,
+    "effective_bps": 103.5179943388597,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "BPSK63",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 32,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 32,
+    "duration_ms": 638,
+    "effective_bps": 401.2539184952978,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "FSK4-ACK",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 5,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 5,
+    "duration_ms": 3,
+    "effective_bps": 13333.333333333334,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "FSK4-ACK",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 5,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 5,
+    "duration_ms": 0,
+    "effective_bps": null,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "OFDM16",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 9,
+    "effective_bps": 113777.77777777778,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "OFDM16",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 9,
+    "effective_bps": 113777.77777777778,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "OFDM16",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 3,
+    "effective_bps": 341333.3333333333,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "OFDM16",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 32,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 32,
+    "duration_ms": 1,
+    "effective_bps": 256000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "OFDM16",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 18,
+    "effective_bps": 56888.88888888889,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "OFDM16",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 18,
+    "effective_bps": 56888.88888888889,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "OFDM16",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 8,
+    "effective_bps": 128000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "OFDM52",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 3,
+    "effective_bps": 341333.3333333333,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "OFDM52",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 1,
+    "effective_bps": 1024000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "OFDM52",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 32,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 32,
+    "duration_ms": 0,
+    "effective_bps": null,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "OFDM52",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 6,
+    "effective_bps": 170666.66666666666,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "OFDM52",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 3,
+    "effective_bps": 341333.3333333333,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "none",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 2,
+    "effective_bps": 512000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 5,
+    "effective_bps": 204800.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 8,
+    "effective_bps": 223000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 5,
+    "effective_bps": 204800.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 8,
+    "effective_bps": 223000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 2,
+    "effective_bps": 512000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 4,
+    "effective_bps": 446000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 32,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 32,
+    "duration_ms": 0,
+    "effective_bps": null,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "none",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 2,
+    "effective_bps": 512000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "rs",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 5,
+    "effective_bps": 204800.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 10,
+    "effective_bps": 102400.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 20,
+    "effective_bps": 89200.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 10,
+    "effective_bps": 102400.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 19,
+    "effective_bps": 93894.73684210527,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 5,
+    "effective_bps": 204800.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 10,
+    "effective_bps": 178400.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "rs",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 5,
+    "effective_bps": 204800.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 10,
+    "effective_bps": 102400.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 19,
+    "effective_bps": 93894.73684210527,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 10,
+    "effective_bps": 102400.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 21,
+    "effective_bps": 84952.38095238095,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 5,
+    "effective_bps": 204800.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-HF",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 10,
+    "effective_bps": 178400.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "none",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 37,
+    "effective_bps": 27675.675675675677,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 39,
+    "effective_bps": 26256.410256410258,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 65,
+    "effective_bps": 27446.153846153844,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 39,
+    "effective_bps": 26256.410256410258,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 71,
+    "effective_bps": 25126.760563380285,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 35,
+    "effective_bps": 29257.142857142855,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 57,
+    "effective_bps": 31298.245614035088,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 32,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 32,
+    "duration_ms": 11,
+    "effective_bps": 23272.727272727276,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "none",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 35,
+    "effective_bps": 29257.142857142855,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "rs",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 64,
+    "effective_bps": 16000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 70,
+    "effective_bps": 14628.571428571428,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 143,
+    "effective_bps": 12475.524475524477,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 68,
+    "effective_bps": 15058.823529411764,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 134,
+    "effective_bps": 13313.432835820895,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 67,
+    "effective_bps": 15283.582089552237,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 130,
+    "effective_bps": 13723.076923076922,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "rs",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 67,
+    "effective_bps": 15283.582089552237,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 73,
+    "effective_bps": 14027.397260273974,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 143,
+    "effective_bps": 12475.524475524477,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 73,
+    "effective_bps": 14027.397260273974,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 143,
+    "effective_bps": 12475.524475524477,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 68,
+    "effective_bps": 15058.823529411764,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK1000-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 134,
+    "effective_bps": 13313.432835820895,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "none",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 134,
+    "effective_bps": 7641.791044776119,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 156,
+    "effective_bps": 6564.102564102564,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 258,
+    "effective_bps": 6914.728682170542,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 157,
+    "effective_bps": 6522.292993630574,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 263,
+    "effective_bps": 6783.269961977186,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 136,
+    "effective_bps": 7529.411764705882,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 224,
+    "effective_bps": 7964.285714285714,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 32,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 32,
+    "duration_ms": 44,
+    "effective_bps": 5818.181818181819,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "none",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 136,
+    "effective_bps": 7529.411764705882,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "rs",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 230,
+    "effective_bps": 4452.173913043478,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 268,
+    "effective_bps": 3820.8955223880594,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 603,
+    "effective_bps": 2958.5406301824214,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 267,
+    "effective_bps": 3835.205992509363,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 513,
+    "effective_bps": 3477.5828460038983,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 235,
+    "effective_bps": 4357.446808510638,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 449,
+    "effective_bps": 3973.2739420935413,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "rs",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 228,
+    "effective_bps": 4491.228070175438,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 264,
+    "effective_bps": 3878.7878787878785,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 522,
+    "effective_bps": 3417.6245210727966,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 264,
+    "effective_bps": 3878.7878787878785,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 589,
+    "effective_bps": 3028.8624787775893,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 228,
+    "effective_bps": 4491.228070175438,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK125",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 526,
+    "effective_bps": 3391.634980988593,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "none",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 33,
+    "effective_bps": 31030.30303030303,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 43,
+    "effective_bps": 23813.953488372095,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 72,
+    "effective_bps": 24777.77777777778,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 43,
+    "effective_bps": 23813.953488372095,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 72,
+    "effective_bps": 24777.77777777778,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 33,
+    "effective_bps": 31030.30303030303,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 55,
+    "effective_bps": 32436.363636363636,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 32,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 32,
+    "duration_ms": 11,
+    "effective_bps": 23272.727272727276,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "none",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 33,
+    "effective_bps": 31030.30303030303,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "rs",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 66,
+    "effective_bps": 15515.151515151514,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 95,
+    "effective_bps": 10778.947368421053,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 166,
+    "effective_bps": 10746.987951807228,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 90,
+    "effective_bps": 11377.777777777777,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 163,
+    "effective_bps": 10944.785276073619,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 65,
+    "effective_bps": 15753.846153846152,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 130,
+    "effective_bps": 13723.076923076922,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "rs",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 66,
+    "effective_bps": 15515.151515151514,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 85,
+    "effective_bps": 12047.05882352941,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 169,
+    "effective_bps": 10556.21301775148,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 94,
+    "effective_bps": 10893.617021276596,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 221,
+    "effective_bps": 8072.398190045249,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 78,
+    "effective_bps": 13128.205128205129,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK250",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 139,
+    "effective_bps": 12834.532374100718,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "none",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 131,
+    "effective_bps": 7816.79389312977,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 135,
+    "effective_bps": 7585.185185185184,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 225,
+    "effective_bps": 7928.888888888889,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 135,
+    "effective_bps": 7585.185185185184,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 225,
+    "effective_bps": 7928.888888888889,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 134,
+    "effective_bps": 7641.791044776119,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 218,
+    "effective_bps": 8183.48623853211,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 32,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 32,
+    "duration_ms": 44,
+    "effective_bps": 5818.181818181819,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "none",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 132,
+    "effective_bps": 7757.575757575757,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "rs",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 237,
+    "effective_bps": 4320.675105485232,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 247,
+    "effective_bps": 4145.748987854251,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 487,
+    "effective_bps": 3663.2443531827516,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 246,
+    "effective_bps": 4162.6016260162605,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 483,
+    "effective_bps": 3693.5817805383026,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 234,
+    "effective_bps": 4376.068376068376,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 466,
+    "effective_bps": 3828.3261802575107,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "rs",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 237,
+    "effective_bps": 4320.675105485232,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 249,
+    "effective_bps": 4112.449799196787,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 486,
+    "effective_bps": 3670.7818930041153,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 246,
+    "effective_bps": 4162.6016260162605,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 485,
+    "effective_bps": 3678.3505154639174,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 240,
+    "effective_bps": 4266.666666666667,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500-RRC",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 473,
+    "effective_bps": 3771.670190274842,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "concatenated",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 54,
+    "effective_bps": 18962.962962962964,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "concatenated",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 54,
+    "effective_bps": 18962.962962962964,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "none",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 9,
+    "effective_bps": 113777.77777777778,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 14,
+    "effective_bps": 73142.85714285714,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 23,
+    "effective_bps": 77565.21739130435,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 14,
+    "effective_bps": 73142.85714285714,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 23,
+    "effective_bps": 77565.21739130435,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 9,
+    "effective_bps": 113777.77777777778,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 15,
+    "effective_bps": 118933.33333333334,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 32,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 32,
+    "duration_ms": 3,
+    "effective_bps": 85333.33333333333,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "none",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 9,
+    "effective_bps": 113777.77777777778,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "rs",
+      "compression": "lz4",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 17,
+    "effective_bps": 60235.294117647056,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 26,
+    "effective_bps": 39384.61538461538,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 51,
+    "effective_bps": 34980.39215686275,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 25,
+    "effective_bps": 40960.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 51,
+    "effective_bps": 34980.39215686275,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 17,
+    "effective_bps": 60235.294117647056,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 33,
+    "effective_bps": 54060.60606060606,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "rs",
+      "compression": {
+        "zstd": 2104440671
+      },
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 17,
+    "effective_bps": 60235.294117647056,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 26,
+    "effective_bps": 39384.61538461538,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 51,
+    "effective_bps": 34980.39215686275,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 26,
+    "effective_bps": 39384.61538461538,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 51,
+    "effective_bps": 34980.39215686275,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 16,
+    "effective_bps": 64000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "rs_interleaved",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 223,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 223,
+    "duration_ms": 33,
+    "effective_bps": 54060.60606060606,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "rs_strong",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 26,
+    "effective_bps": 39384.61538461538,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "rs_strong",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 26,
+    "effective_bps": 39384.61538461538,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "soft_concatenated",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 67,
+    "effective_bps": 15283.582089552237,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "QPSK500",
+      "fec_mode": "soft_concatenated",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 66,
+    "effective_bps": 15515.151515151514,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "SCFDMA16",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 8,
+    "effective_bps": 128000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "SCFDMA16",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 8,
+    "effective_bps": 128000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "SCFDMA16",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 3,
+    "effective_bps": 341333.3333333333,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "SCFDMA16",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 32,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 32,
+    "duration_ms": 1,
+    "effective_bps": 256000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "SCFDMA16",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 10.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 16,
+    "effective_bps": 64000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "SCFDMA16",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 16,
+    "effective_bps": 64000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "SCFDMA16",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 6,
+    "effective_bps": 170666.66666666666,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "SCFDMA52",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 3,
+    "effective_bps": 341333.3333333333,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "SCFDMA52",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 1,
+    "effective_bps": 1024000.0,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "SCFDMA52",
+      "fec_mode": "none",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 32,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 32,
+    "duration_ms": 0,
+    "effective_bps": null,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "SCFDMA52",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": {
+        "Awgn": {
+          "snr_db": 20.0,
+          "seed": 42
+        }
+      },
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 6,
+    "effective_bps": 170666.66666666666,
+    "note": null
+  },
+  {
+    "case": {
+      "use_case": "RawModem",
+      "mode": "SCFDMA52",
+      "fec_mode": "rs",
+      "compression": "none",
+      "channel": "Clean",
+      "payload_len": 128,
+      "tier": "Quick"
+    },
+    "passed": true,
+    "skipped": false,
+    "ber": 0.0,
+    "bytes_rx": 128,
+    "duration_ms": 3,
+    "effective_bps": 341333.3333333333,
     "note": null
   }
 ]

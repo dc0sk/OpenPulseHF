@@ -1,15 +1,15 @@
 //! Gardner timing error detector for symbol synchronisation.
 //!
-//! The Gardner algorithm is a non-data-aided timing recovery loop that requires
-//! two samples per symbol period: one at the midpoint and one at the symbol
-//! boundary (early and late are derived from adjacent boundary samples).
+//! The Gardner algorithm is a non-data-aided timing recovery loop.
 //!
 //! Error formula (applies after matched filtering):
 //!   e[n] = s_mid × (s_next − s_prev)
 //!
-//! The loop integrator accumulates timing corrections and drives a numerically
-//! controlled oscillator (NCO) that adjusts where in the sample stream each
-//! symbol boundary falls.
+//! Where s_prev is the previous symbol boundary sample, s_mid is the sample
+//! at the midpoint between symbol boundaries (sps/2 samples after s_prev), and
+//! s_next is the current symbol boundary sample.  For a Nyquist-filtered signal
+//! with perfect timing the midpoint is at the zero-crossing of the ISI-free eye,
+//! making the mean error exactly zero and preventing mu from drifting.
 
 /// Gardner timing error detector with an integrated first-order loop filter.
 pub struct GardnerDetector {
@@ -17,8 +17,10 @@ pub struct GardnerDetector {
     gain: f32,
     /// Accumulated fractional timing offset (in samples, can exceed ±0.5).
     pub mu: f32,
-    /// Stored samples: [prev_boundary, midpoint, current_boundary].
-    samples: [f32; 3],
+    /// Sample at the previous symbol boundary (sps samples ago).
+    s_prev: f32,
+    /// Sample at the midpoint between boundaries (captured at phase == strobe/2).
+    s_mid: f32,
     /// Number of samples accumulated since the last boundary.
     phase: usize,
     /// Samples per symbol (integer part used for strobe generation).
@@ -35,7 +37,8 @@ impl GardnerDetector {
         Self {
             gain,
             mu: 0.0,
-            samples: [0.0; 3],
+            s_prev: 0.0,
+            s_mid: 0.0,
             phase: 0,
             sps,
         }
@@ -46,28 +49,29 @@ impl GardnerDetector {
     /// Returns `Some((timing_error, mu))` at each symbol strobe (every `sps`
     /// samples, adjusted by the accumulated `mu`), or `None` otherwise.
     pub fn update(&mut self, sample: f32) -> Option<(f32, f32)> {
-        // Rotate sample buffer
-        self.samples[0] = self.samples[1];
-        self.samples[1] = self.samples[2];
-        self.samples[2] = sample;
         self.phase += 1;
 
         // Strobe at (sps + mu).round() samples; clamp to at least 1 to avoid a tight spin.
         let strobe = ((self.sps as f32 + self.mu).round() as usize).max(1);
+
+        // Capture the midpoint sample at strobe/2 (halfway between boundaries).
+        if self.phase == strobe / 2 {
+            self.s_mid = sample;
+        }
+
         if self.phase < strobe {
             return None;
         }
         self.phase = 0;
 
-        let s_prev = self.samples[0];
-        let s_mid = self.samples[1];
-        let s_next = self.samples[2];
-
-        // Gardner error: zero when timing is perfect
-        let error = s_mid * (s_next - s_prev);
+        // Proper Gardner error: zero when timing is perfect (midpoint at eye zero-crossing).
+        let error = self.s_mid * (sample - self.s_prev);
         self.mu += self.gain * error;
-        // Clamp mu to prevent run-away
-        self.mu = self.mu.clamp(-2.0, 2.0);
+        // Clamp mu strictly below ±0.5 so the strobe interval (sps + mu).round() never
+        // changes from sps.  Allowing |mu| ≥ 0.5 would cause the strobe to round to
+        // sps±1, skipping or doubling a symbol and corrupting all subsequent bytes.
+        self.mu = self.mu.clamp(-0.49, 0.49);
+        self.s_prev = sample;
 
         Some((error, self.mu))
     }
@@ -75,7 +79,8 @@ impl GardnerDetector {
     /// Reset the detector state.
     pub fn reset(&mut self) {
         self.mu = 0.0;
-        self.samples = [0.0; 3];
+        self.s_prev = 0.0;
+        self.s_mid = 0.0;
         self.phase = 0;
     }
 
@@ -128,7 +133,40 @@ mod tests {
         }
         g.reset();
         assert_eq!(g.mu, 0.0);
-        assert_eq!(g.samples, [0.0, 0.0, 0.0]);
+        assert_eq!(g.s_prev, 0.0);
+        assert_eq!(g.s_mid, 0.0);
         assert_eq!(g.phase, 0);
+    }
+
+    #[test]
+    fn proper_gardner_zero_error_on_clean_bpsk() {
+        // A perfect BPSK-like signal with sps=4: square wave alternating +1/-1.
+        // With proper Gardner, the midpoint between two same-polarity symbols is also ≈+1/-1,
+        // but (s_next - s_prev) = 0, giving zero error.
+        // Between opposite symbols the midpoint is near 0, giving near-zero error.
+        let sps = 4usize;
+        let mut g = GardnerDetector::new(sps, 0.1);
+        // Feed 20 full symbols of alternating +1 / -1 with correct timing (symbol every sps samples).
+        let symbols: Vec<f32> = (0..20)
+            .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
+            .collect();
+        let mut samples = vec![0.0f32; symbols.len() * sps];
+        for (idx, &sym) in symbols.iter().enumerate() {
+            for j in 0..sps {
+                samples[idx * sps + j] = sym;
+            }
+        }
+        // Use brute-force pre-arm: first strobe at sample 0.
+        g.pre_arm();
+        let mu_start = g.mu;
+        for &s in &samples {
+            g.update(s);
+        }
+        // mu should not drift significantly on a clean, perfectly-timed signal.
+        assert!(
+            (g.mu - mu_start).abs() < 0.5,
+            "mu drifted unexpectedly on clean BPSK: final mu = {}",
+            g.mu
+        );
     }
 }

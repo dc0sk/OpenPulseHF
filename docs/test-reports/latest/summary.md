@@ -1,32 +1,27 @@
 ---
 title: "OpenPulseHF Test Matrix — Summary"
-date: "2026-05-06T17:09:23Z"
-git_commit: "04a6864"
+date: "2026-05-10T11:41:21Z"
+git_commit: "3499c1d"
 tier: "quick"
-total_cases: 76
-passed: 75
-failed: 1
-duration_s: 27
+total_cases: 322
+passed: 322
+failed: 0
+duration_s: 108
 generator: "openpulse-testmatrix"
 ---
 
 # Test Matrix Summary
 
-**75/76 cases passed** in 27s
+**322/322 cases passed** in 108s
 
 ## By Use Case
 
-| Use Case | Passed | Total | Pass Rate |
-|---|---|---|---|
-| raw_modem | 64 | 65 | 98% |
-| adaptive_hpx500 | 3 | 3 | 100% |
-| adaptive_hpx2300 | 3 | 3 | 100% |
-| ardop | 1 | 1 | 100% |
-| kiss | 1 | 1 | 100% |
-| b2f | 3 | 3 | 100% |
-
-## Failures
-
-| Case ID | Note |
-|---|---|
-| `raw_modem/QPSK1000/raw/nocomp/awgn_10dB/128B` | RX error: frame encoding/decoding error: CRC mismatch (expected 0x4f3a, got 0x7bb7) |
+| Use Case | Passed | Total | Skipped | Pass Rate |
+|---|---|---|---|---|
+| raw_modem | 308 | 308 | 0 | 100% |
+| adaptive_hpx500 | 3 | 3 | 0 | 100% |
+| adaptive_hpx_hf | 3 | 3 | 0 | 100% |
+| adaptive_hpx_wideband | 3 | 3 | 0 | 100% |
+| ardop | 1 | 1 | 0 | 100% |
+| kiss | 1 | 1 | 0 | 100% |
+| b2f | 3 | 3 | 0 | 100% |

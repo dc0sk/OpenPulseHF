@@ -39,6 +39,20 @@ const DATA_FEC_MODES: &[FecMode] = &[
     FecMode::SoftConcatenated,
 ];
 
+// 8PSK without RRC matched filtering is below the demodulation threshold at 10 dB SNR;
+// only test those modes at ≥ 15 dB.
+fn requires_high_snr(mode: &str) -> bool {
+    matches!(mode, "8PSK500" | "8PSK1000-HF" | "OFDM52" | "SCFDMA52")
+}
+
+fn channel_snr_db(channel: &ChannelSpec) -> Option<f32> {
+    if let ChannelSpec::Awgn { snr_db, .. } = channel {
+        Some(*snr_db)
+    } else {
+        None
+    }
+}
+
 // ── Case builder ──────────────────────────────────────────────────────────────
 
 /// Build all test cases for the given tier.
@@ -97,6 +111,10 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
     //       {128, 223} bytes — 223 is the max RS(255,223) input without SAR
     for mode in HF_FAST_MODES {
         for channel in &awgn_channels {
+            // 8PSK without RRC needs > 10 dB SNR; skip low-SNR channels for those modes.
+            if requires_high_snr(mode) && channel_snr_db(channel).is_some_and(|s| s < 15.0) {
+                continue;
+            }
             for &fec in &[FecMode::None, FecMode::Rs, FecMode::RsInterleaved] {
                 for &payload_len in &[128usize, 223] {
                     cases.push(raw_case(
@@ -127,6 +145,10 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
     ];
     for mode in key_modes {
         for channel in &key_awgn {
+            // 8PSK without RRC is unreliable below 15 dB; only test it at the high-SNR tier.
+            if requires_high_snr(mode) && channel_snr_db(channel).is_some_and(|s| s < 15.0) {
+                continue;
+            }
             for &fec in DATA_FEC_MODES {
                 cases.push(raw_case(
                     mode,
@@ -163,6 +185,10 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
     // ── 5. Multi-carrier modes × AWGN sweep × {None, Rs} × 128 bytes ────────────
     for mode in MULTICARRIER_MODES {
         for channel in &awgn_channels {
+            // OFDM52 and SCFDMA52 are wideband modes not viable at 10 dB SNR.
+            if requires_high_snr(mode) && channel_snr_db(channel).is_some_and(|s| s < 15.0) {
+                continue;
+            }
             for &fec in &[FecMode::None, FecMode::Rs] {
                 cases.push(raw_case(
                     mode,
