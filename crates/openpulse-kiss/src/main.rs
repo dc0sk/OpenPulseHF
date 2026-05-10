@@ -7,7 +7,13 @@ use openpulse_modem::ModemEngine;
 use openpulse_audio::CpalBackend;
 
 #[derive(Parser)]
-#[command(name = "openpulse-kisstnc", about = "OpenPulse KISS TNC")]
+#[command(
+    name = "openpulse-kisstnc",
+    about = "OpenPulse KISS TNC",
+    long_about = "OpenPulse KISS TNC.",
+    author,
+    version
+)]
 struct Cli {
     /// KISS TCP port (overrides config file).
     #[arg(long)]

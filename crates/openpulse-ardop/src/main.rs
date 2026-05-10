@@ -7,7 +7,13 @@ use openpulse_modem::ModemEngine;
 use openpulse_audio::CpalBackend;
 
 #[derive(Parser)]
-#[command(name = "openpulse-tnc", about = "OpenPulse ARDOP-compatible TNC")]
+#[command(
+    name = "openpulse-tnc",
+    about = "OpenPulse ARDOP-compatible TNC",
+    long_about = "OpenPulse ARDOP-compatible TNC.",
+    author,
+    version
+)]
 struct Cli {
     /// ARDOP command port (overrides config file).
     #[arg(long)]

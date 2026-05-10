@@ -26,7 +26,13 @@ mod events;
 mod ui;
 
 #[derive(clap::Parser)]
-#[command(name = "openpulse-tui", about = "OpenPulse TUI dashboard")]
+#[command(
+    name = "openpulse-tui",
+    about = "OpenPulse TUI dashboard",
+    long_about = "OpenPulse TUI dashboard.",
+    author,
+    version
+)]
 struct Cli {
     /// Modulation mode to drive the receive loop.
     #[arg(short, long, default_value = "BPSK100")]

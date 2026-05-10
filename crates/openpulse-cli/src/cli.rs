@@ -6,6 +6,8 @@ use crate::output::DiagnosticOptions;
 #[command(
     name = "openpulse",
     about = "OpenPulse software modem for amateur radio data transmission",
+    long_about = "OpenPulse software modem for amateur radio data transmission.",
+    author,
     version
 )]
 pub struct Cli {

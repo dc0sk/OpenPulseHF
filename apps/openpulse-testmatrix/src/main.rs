@@ -18,7 +18,10 @@ use crate::runners::run_case;
 #[derive(Parser)]
 #[command(
     name = "openpulse-testmatrix",
-    about = "OpenPulseHF comprehensive test matrix"
+    about = "OpenPulseHF comprehensive test matrix",
+    long_about = "OpenPulseHF comprehensive test matrix.",
+    author,
+    version
 )]
 struct Cli {
     /// Run the full matrix including all propagation channels and payload sizes.
