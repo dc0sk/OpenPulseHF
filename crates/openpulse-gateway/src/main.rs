@@ -20,7 +20,7 @@ use openpulse_b2f_driver::{DataPort, DriverError};
 #[command(
     name = "openpulse-gateway",
     about = "Direct TCP connection to a Winlink CMS gateway",
-    long_about = "Direct TCP connection to a Winlink CMS gateway.\n\nAuthor: Simon Keimer (DC0SK)  <https://github.com/dc0sk>",
+    long_about = "Direct TCP connection to a Winlink CMS gateway.",
     author,
     version
 )]
