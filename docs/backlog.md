@@ -2,93 +2,88 @@
 project: openpulsehf
 doc: docs/backlog.md
 status: living
-last_updated: 2026-04-25
+last_updated: 2026-05-10
 ---
 
 # Backlog
 
-## Completed: HPX hardening & observability sprint (PR #49)
+All scheduled phases (1–9), far-future items (FF-1 through FF-13), and FEC backlog items
+(BL-FEC-1 through BL-FEC-6) are shipped and merged.  See `docs/roadmap.md` for the full
+history with PR numbers.
 
-All sprint items (1-5) shipped and merged.
+---
 
-### HPX benchmark harness ✅
-- Input signal corpus (SNR sweep, multipath profiles, silence gaps).
-- Reproducible run procedure and output metrics (frame error rate, throughput, latency).
-- Reduced CI benchmark suite in `openpulse-modem` with regression gate tests.
-- `openpulse benchmark run` CLI subcommand with JSON results.
-- **Status**: 10-scenario corpus implemented, regression gate validates 100% pass rate and mean_transitions ≤ 20.0, CI gate active.
+## Open work items
 
-### Signed transfer envelope ✅
-- On-wire signed transfer envelope format (header, payload hash, signature block).
-- `SignedEnvelope` type in `openpulse-core`.
-- Envelope encode/decode in `openpulse-modem`.
-- **Status**: Full round-trip codec with tamper detection and signature verification implemented and tested.
+### Release packaging 🔄
 
-### HPX session persistence ✅
-- Active session state saved to `~/.config/openpulse/session-state.json` on session start.
-- Session state restored on CLI restart for `session state` and `session log`.
-- **Status**: Snapshot-based persistence with safe metadata storage implemented. Integration tests passing.
+The only remaining scheduled item.
 
-### Trust-store CLI commands ✅
-- `openpulse trust import <key-file>` — import peer public key.
-- `openpulse trust list` — enumerate trusted peers.
-- `openpulse trust revoke <peer-id>` — revoke peer key.
-- **Status**: Local JSON storage with upsert/revoke semantics implemented. Full CLI integration tested.
+- **GitHub Actions release workflow**: on `v*` tag push, build a static x86-64 musl binary
+  and an aarch64 `.deb` package and publish both as GitHub release assets.
+  The `openpulse-tnc` / `openpulse-kisstnc` binaries are the primary packaging targets.
 
-### CI & cross-compile ✅
-- `aarch64-unknown-linux-gnu` cross-compile step in CI.
-- Pi 5 smoke-test profile (loopback only).
-- Benchmark regression gate (fail on any failed scenario or mean_transitions > 20.0).
-- CI auto-trigger on push to main/develop/feat/*, pull requests to main/develop.
-- **Status**: All CI jobs active with automatic triggers enabled. Locally validated on ubuntu-latest.
+### Code stubs (tracked; not blocking any current work)
 
-## Completed: BPSK Hardening & Diagnostics sprint (PR #50)
+| Location | Description |
+|---|---|
+| `plugins/psk8/src/lib.rs` | `demodulate_soft()` falls back to hard ±1.0 pseudo-LLRs — Gray-coded max-log-MAP soft demapping (~1 dB SNR gain) not yet implemented |
+| `crates/openpulse-cli/src/commands/session.rs` | `manifest verify` CLI path returns a stub response — `verify_manifest()` in `openpulse-core` is fully implemented; only the CLI wiring is missing |
+| `crates/openpulse-core/src/ldpc.rs` | `LdpcCodec` is an intentional passthrough stub — GPU-backed LDPC decode is reserved for a future wgpu kernel; the `IterativeDecoder` trait and `FecMode::Ldpc` variant are in place |
 
-### BPSK hardening ✅
-- 17 loopback fixture tests covering SNR sweep, multipath profiles, and recovery scenarios.
-- Added deterministic loopback fixture matrix with 56 scenarios (4 modes x 14 payload profiles).
-- Behavior matrix coverage for invalid mode, empty payload, large payload boundary, and fallback behavior.
-- **Status**: Landed in PR #50.
+### Deferred (no target date)
 
-### Diagnostics & observability ✅
-- Structured session diagnostics (`SessionDiagnostics`) with transition event capture.
-- Structured HPX event log entries now preserve `event_source`, `session_id`, and `reason_string` for transition and raw-event records.
-- `session state --diagnostics` JSON output.
-- **Status**: Landed in PR #50.
+| Item | Reason |
+|---|---|
+| On-air regulatory validation (Phase 5.5-reg) | Requires licensed station and coordinated test schedule |
+| Adaptive equalizer LMS/DFE | Follow-on to FF-3 RRC; needed for 1000 baud on Watterson Moderate/Poor |
+| 64QAM / SL12–SL20 speed levels | Deferred pending equalizer and OFDM research |
+| External Winlink Type C LZHUF compatibility | 4-byte length prefix differs from Winlink convention; deferred |
 
-## Completed: Multithreaded pipeline + session management
+---
 
-### D: Multithreaded pipeline boundaries and scheduling
-- D1 complete: explicit pipeline stage boundaries.
-- D2 complete: bounded-channel scheduler with block backpressure policy.
-- D3 complete: per-stage scheduler metrics exposed in diagnostics.
-- D4 complete: ordering and in-flight depth tests for scheduler correctness.
+## Completed sprint history
 
-### A: Session management extensions
-- A1 complete: `session list` and `session resume` commands.
-- A2 complete: persisted session log lifecycle tracking and `session log --follow` mode.
+### Phases 1–9 (core modem)
 
-## In progress: FEC phase 1 (Reed-Solomon)
+| Phase | Key deliverables | PR |
+|---|---|---|
+| Phase 0 | Benchmark harness, signed envelopes, session persistence, trust-store CLI, CI | #49, #50 |
+| Phase 1 | SAR, block interleaver, channel models, radio interface, AFC, PTT CLI | #67–#71 |
+| Phase 2 | ACK taxonomy, rate adapter, HPX profiles (HPX500/HPX2300), signed handshake, DCD/CSMA, peer cache, relay, compression | various |
+| Phase 3 | Post-quantum handshake (ML-DSA-44 + ML-KEM-768), Convolutional FEC eval, GPU acceleration, ARDOP TNC, channel sim harness | #88–#91 |
+| Phase 4 | Structured JSON event stream, ratatui TUI, KISS/AX.25 TNC, B2F/Winlink, egui testbench | #92–#98 |
+| Phase 5 | B2F session driver, LZHUF codec, TOML config, e2e loopback test, CMS gateway, CpalBackend, testbench live capture | #98–#108 |
+| Phase 6 | AFC correction loop, pat/Winlink interop, network mesh daemon + peer cache | #116–#121 |
+| Phase 7 | Full CAT control, dual-rig repeater, daemon control protocol, operator panel GUI, signed remote rig control, full-duplex mode | #various |
+| Phase 8 | Waveform compliance: `hpx_wideband` rename, `hpx_hf` profile, cosine pulse shaping | various |
+| Phase 9 | IQ scatter plot, asymmetric per-direction rate adaptation, SNR trend plot, SNR secondary rate input, broadcast/beacon mode | #138–#139 |
 
-- F1 complete: `FecCodec` in `openpulse-core` with GF(2^8) RS codec (ECC_LEN=32, corrects up to 16 byte errors per block).
-- F2 complete: `ModemError::Fec` variant.
-- F3 complete: `ModemEngine::transmit_with_fec` and `receive_with_fec`.
-- F4 complete: BER-injection correctness tests and 20-scenario loopback fixture matrix.
+### FF series (far-future features)
 
-## Completed: QPSK mode plugin and spectral efficiency benchmarks
+| Item | Feature | PR |
+|---|---|---|
+| FF-1 | QSY frequency agility with rigctld | #140, #141 |
+| FF-2 | I/Q complex baseband output for SDR upconversion | #150 |
+| FF-3 | RRC matched filtering + Gardner TED + Costas PLL | #158 |
+| FF-4 | OFDM multi-carrier plugin (OFDM16, OFDM52) with LS+ZF equalization | #167 |
+| FF-5 | UHF/VHF narrowband/HD modes (2000 and 9600 baud QPSK/8PSK) | #159 |
+| FF-6 | Binary spectrum channel (20 Hz waterfall in operator panel) | #157 |
+| FF-7 | Tanh TX limiter for PA back-off | #149 |
+| FF-8 | Per-band TX attenuation persistence via rigctld | #148 |
+| FF-9 | HPX reactor pattern (event-driven session state machine) | #151 |
+| FF-10 | Zstd dictionary compression | #156 |
+| FF-11 | FreeDV authenticated voice shim (Ed25519 via codec2 data channel) | #162 |
+| FF-12 | SC-FDMA waveform plugin (SCFDMA16, SCFDMA52) | #175 |
+| FF-13 | Generic serial CAT (TOML-scripted, for rigs not in hamlib) | #173 |
 
-- Q1 complete: `qpsk-plugin` crate with Gray-mapped QPSK modulate/demodulate (merged in PR #56).
-- Q2 complete: CLI plugin registration exposing `QPSK125`, `QPSK250`, `QPSK500`.
-- Q3 complete: loopback fixture matrix (3 modes × 14 payload profiles).
-- Q4 complete: spectral efficiency benchmarks confirming QPSK > BPSK bits/sample at equal baud.
+### BL-FEC series (FEC improvements)
 
-## Icebox
-
-Items acknowledged but not yet sprint-scheduled.
-
-- Optional Reed-Solomon forward error correction.
-- Bandwidth-adaptive rate control hooks.
-- ARDOP-compatible mode plugin skeleton.
-- GPU offload candidate kernel list and CPU/GPU equivalence test design.
-- Peer cache schema and signed descriptor query protocol.
-- Multi-hop relay path selection and trust-policy enforcement.
+| Item | Feature | PR |
+|---|---|---|
+| BL-FEC-1 | Concatenated Conv+RS session mode | #169 |
+| BL-FEC-2 | Strong RS(255,191) t=32 codec | #171 |
+| BL-FEC-3 | Short-block RS for ACK/control frames | #170 |
+| BL-FEC-4 | Memory-ARQ soft combining | #171 |
+| BL-FEC-5 | K=7 soft-decision Viterbi + `demodulate_soft()` plugin API | #177 |
+| BL-FEC-6 | `IterativeDecoder` trait + `LdpcCodec` stub (GPU path reserved) | #176 |

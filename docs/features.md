@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/features.md
 status: living
-last_updated: 2026-05-06
+last_updated: 2026-05-10
 ---
 
 # OpenPulseHF — Feature Reference
@@ -681,44 +681,37 @@ DCD energy bar, scrollable transition log.  Keyboard: `q` quit, `p` pause, ↑�
 
 ---
 
-## Pending and Far-Future Features
+## Pending and Deferred Features
 
-### 6.2 — pat / Winlink packaging 🔄
+### Release packaging 🔄
 
-The wire-protocol layer (`FECSEND`/`FECRCV`/`BUFFER`) is complete.  Remaining:
+The only scheduled remaining item.  The `openpulse-tnc` ARDOP wire protocol and pat
+interoperability are complete (PR #118).  Remaining:
 
-- Validate against a live `pat` client connecting to `openpulse-tnc` (on-air or
-  loopback audio patch).
-- GitHub Actions release workflow builds static x86-64 musl binary and aarch64 `.deb`
-  on `v*` tag push.
+- GitHub Actions release workflow: static x86-64 musl binary and aarch64 `.deb` on `v*` tag push.
 
-### 6.3 — Network mesh daemon 🔲
+### 6.3 — Network mesh daemon ✅ Done (PR #120, #121)
 
-Promote `RelayForwarder` and `QueryForwarder` to a running `openpulse-mesh` daemon:
-peer discovery beacons, query forwarding, store-and-forward relay.  A `CONNECT_MESH`
-ARDOP extension command will direct `ModemEngine` into mesh mode.
+`openpulse-mesh` daemon ships `RelayForwarder`, `QueryForwarder`, peer discovery beacons,
+store-and-forward relay, and peer cache population from beacon responses.  `CONNECT_MESH`
+ARDOP extension command directs `ModemEngine` into mesh mode.
 
-### FF-1 — Operator-initiated QSY negotiation 🔲
+### FF-1 — Operator-initiated QSY negotiation ✅ Done (PR #140, #141)
 
-Six-step collaborative frequency-change protocol for two stations to move to a less
-impaired channel:
+Five-frame Ed25519-signed ASCII protocol (QSY_REQ / QSY_LIST / QSY_VOTE / QSY_ACK /
+QSY_REJECT); `QsySession` state machine and `QsyScanner` in `crates/openpulse-qsy`.
+Disabled by default; enabled per `[qsy]` config section.
 
-1. **QSY-REQ**: initiator proposes a QSY; includes trust-level gate (Verified only).
-2. **QSY-LIST**: responder replies with a list of acceptable candidate frequencies
-   (scanned via hamlib).
-3. **QSY-VOTE**: initiator selects the best candidate.
-4. **QSY-ACK** / **QSY-REJECT**: responder confirms or declines.
-5. Both stations retune and resume on the new frequency.
-6. Rollback: if the new frequency fails within a configurable timeout, both stations
-   return to the original.
+### FF-2 — IQ output mode for direct SDR integration ✅ Done (PR #150)
 
-All QSY frames are Ed25519-signed and the protocol is operator-enabled only — never
-triggered automatically.
+`ModulationPlugin::modulate_iq()` produces complex baseband samples (I/left, Q/right)
+for direct SDR upconversion.  `AudioBackend::open_iq_output()` opens a stereo output
+stream; `ModemEngine::transmit_iq()` dispatches via it with CPU fallback.
 
-### FF-2 — IQ output mode for direct SDR integration 🔲
+### Open code stubs (not blocking any current work)
 
-A `modulate_iq()` path produces complex baseband samples (I on left channel, Q on
-right channel of a stereo stream) instead of the real SSB audio currently produced.
-When connected to an SDR transmitter accepting IQ input, this bypasses the SSB filter
-entirely, providing mathematically exact sideband and carrier suppression (limited only
-by DAC precision) rather than the −40 to −60 dB typical of analogue SSB filters.
+- **8PSK soft demapping** (`plugins/psk8/src/lib.rs`): `demodulate_soft()` falls back to
+  hard ±1.0 pseudo-LLRs.  Gray-coded max-log-MAP demapping would yield ~1 dB SNR gain.
+- **CLI manifest verify** (`crates/openpulse-cli/src/commands/session.rs`): the library
+  `verify_manifest()` is fully implemented; the CLI `manifest verify` path returns a stub
+  response and has not been wired to the library function.

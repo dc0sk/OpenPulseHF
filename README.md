@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: README.md
 status: living
-last_updated: 2026-05-09
+last_updated: 2026-05-10
 ---
 
 # OpenPulseHF
@@ -203,7 +203,7 @@ complete matrix across all propagation profiles and payload sizes.
 - Any SSB transceiver with a sound-card audio interface
 - **PTT**: hamlib/rigctld · RTS/DTR serial · VOX · TOML-scripted serial CAT (FF-13)
 - Optional GPU acceleration: any Vulkan / Metal / Direct3D 12 adapter via `wgpu`
-- **Raspberry Pi 4** (aarch64): cross-compiled and CI-tested
+- **Raspberry Pi 4/5** (aarch64): cross-compiled and CI-tested
 
 ---
 
@@ -258,7 +258,7 @@ sudo apt install libasound2-dev
 
 # macOS — no extra packages needed
 
-# Raspberry Pi 4 cross-compilation
+# Raspberry Pi 4/5 cross-compilation
 cargo install cross
 ```
 

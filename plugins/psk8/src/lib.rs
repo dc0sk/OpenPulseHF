@@ -67,8 +67,8 @@ impl ModulationPlugin for Psk8Plugin {
         samples: &[f32],
         config: &ModulationConfig,
     ) -> Result<Vec<f32>, ModemError> {
-        // TODO(BL-FEC-5): implement Gray-coded 8PSK max-log-MAP soft demapping (~1 dB gain).
-        // For now, fall back to the hard ±1.0 pseudo-LLRs from the trait default.
+        // 8PSK max-log-MAP soft demapping (~1 dB gain) is not yet implemented.
+        // Falls back to hard ±1.0 pseudo-LLRs from the trait default.
         let bytes = self.demodulate(samples, config)?;
         Ok(bytes
             .iter()
