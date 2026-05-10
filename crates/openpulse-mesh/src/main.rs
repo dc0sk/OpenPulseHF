@@ -19,7 +19,7 @@ use openpulse_mesh::trust_filter_from_policy;
 #[command(
     name = "openpulse-mesh",
     about = "HPX relay mesh daemon",
-    long_about = "HPX relay mesh daemon.\n\nAuthor: Simon Keimer (DC0SK)  <https://github.com/dc0sk>",
+    long_about = "HPX relay mesh daemon.",
     author,
     version
 )]
