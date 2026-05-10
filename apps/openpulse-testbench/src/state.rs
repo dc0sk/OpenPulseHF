@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use openpulse_channel::dsp::{PowerSpectrum, WaterfallBuffer, FFT_SIZE, FREQ_BINS, WATERFALL_ROWS};
 use openpulse_core::compression::CompressionAlgorithm;
-use openpulse_core::fec::FecMode;
+use openpulse_core::fec::{FecMode, BLOCK_DATA_STANDARD, FEC_ECC_LEN, FEC_ECC_LEN_STRONG};
 
 // ── Audio source selector ─────────────────────────────────────────────────────
 
@@ -98,15 +98,27 @@ pub fn mode_fec_incompatible(mode: &str) -> bool {
 
 /// Maximum payload bytes that can be encoded in one RS block for the given FEC mode.
 ///
-/// The RS encoder prepends a 4-byte length prefix before splitting into 223-byte (or 191-byte
-/// for RsStrong) blocks, so the true single-block payload capacity is block_data − 4.
-/// Returning `None` means no effective limit (FEC is off).
+/// The RS encoder prepends a 4-byte (u32 BE) length prefix before splitting into blocks,
+/// so the true single-block payload capacity is `block_data_bytes - 4`.
+/// Returns `None` when there is no applicable block-size limit (FEC off, ShortRs, Ldpc).
 pub fn fec_payload_limit(mode: FecMode) -> Option<usize> {
+    // RS block total = BLOCK_DATA_STANDARD + FEC_ECC_LEN = 255 bytes.
+    const RS_BLOCK_TOTAL: usize = BLOCK_DATA_STANDARD + FEC_ECC_LEN;
+    const RS_PREFIX_LEN: usize = 4; // sizeof(u32) big-endian original-length prefix
+    const BLOCK_DATA_STRONG: usize = RS_BLOCK_TOTAL - FEC_ECC_LEN_STRONG; // 191
+
     match mode {
         FecMode::None => None,
-        FecMode::Rs | FecMode::SoftConcatenated => Some(219), // 223 − 4-byte prefix
-        FecMode::RsStrong => Some(187),                       // 191 − 4-byte prefix
-        _ => Some(219),
+        FecMode::Rs
+        | FecMode::RsInterleaved
+        | FecMode::Concatenated
+        | FecMode::SoftConcatenated => {
+            Some(BLOCK_DATA_STANDARD - RS_PREFIX_LEN) // 223 - 4 = 219
+        }
+        FecMode::RsStrong => Some(BLOCK_DATA_STRONG - RS_PREFIX_LEN), // 191 - 4 = 187
+        // ShortRs is fixed-size (5-byte ACK frames only) and manages its own sizing.
+        // Ldpc is not yet implemented.
+        FecMode::ShortRs | FecMode::Ldpc => None,
     }
 }
 
