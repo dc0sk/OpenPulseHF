@@ -13,6 +13,32 @@ use crate::modulate::{
 use crate::parse_baud_rate;
 
 pub fn psk8_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec<u8>, ModemError> {
+    let data = extract_data_symbols(samples, config)?;
+    let bits = symbols_to_bits(&data);
+    Ok(bits_to_bytes(&bits))
+}
+
+/// Return soft LLRs for every bit in the demodulated byte stream.
+///
+/// Uses max-log-MAP: LLR_k = min_d²(bit_k=1) − min_d²(bit_k=0).
+/// Positive LLR means bit=0 is more likely (same sign convention as the hard-decision stub).
+/// Output length equals `psk8_demodulate` byte count × 8, in the same bit order (LSB-first).
+pub fn psk8_demodulate_soft(
+    samples: &[f32],
+    config: &ModulationConfig,
+) -> Result<Vec<f32>, ModemError> {
+    let data = extract_data_symbols(samples, config)?;
+    let raw = compute_soft_llrs(&data);
+    // symbols_to_bits yields 3 bits/symbol; bits_to_bytes drops the partial final chunk.
+    let n_complete_bytes = (data.len() * 3) / 8;
+    Ok(raw[..n_complete_bytes * 8].to_vec())
+}
+
+/// Extract Gray-coded IQ data symbols after preamble/tail stripping.
+fn extract_data_symbols(
+    samples: &[f32],
+    config: &ModulationConfig,
+) -> Result<Vec<(f32, f32)>, ModemError> {
     let baud = parse_baud_rate(&config.mode)?;
     let fs = config.sample_rate as f32;
     let fc = config.center_frequency;
@@ -47,9 +73,44 @@ pub fn psk8_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
         ));
     }
 
-    let data = &syms[PREAMBLE_SYMS..(syms.len() - TAIL_SYMS)];
-    let bits = symbols_to_bits(data);
-    Ok(bits_to_bytes(&bits))
+    Ok(syms[PREAMBLE_SYMS..(syms.len() - TAIL_SYMS)].to_vec())
+}
+
+/// Max-log-MAP soft LLR per bit for a slice of received IQ symbols.
+///
+/// Returns 3 LLRs per symbol in the order [b0, b1, b2, b0, b1, b2, ...].
+fn compute_soft_llrs(syms: &[(f32, f32)]) -> Vec<f32> {
+    let pts: [((f32, f32), [bool; 3]); 8] = [
+        (gray_map_8psk(false, false, false), [false, false, false]),
+        (gray_map_8psk(false, false, true), [false, false, true]),
+        (gray_map_8psk(false, true, false), [false, true, false]),
+        (gray_map_8psk(false, true, true), [false, true, true]),
+        (gray_map_8psk(true, false, false), [true, false, false]),
+        (gray_map_8psk(true, false, true), [true, false, true]),
+        (gray_map_8psk(true, true, false), [true, true, false]),
+        (gray_map_8psk(true, true, true), [true, true, true]),
+    ];
+
+    let mut llrs = Vec::with_capacity(syms.len() * 3);
+    for &(ri, rq) in syms {
+        for bit_pos in 0..3usize {
+            let mut min_d0 = f32::INFINITY;
+            let mut min_d1 = f32::INFINITY;
+            for &((ci, cq), bits) in &pts {
+                let di = ri - ci;
+                let dq = rq - cq;
+                let d2 = di * di + dq * dq;
+                if bits[bit_pos] {
+                    min_d1 = min_d1.min(d2);
+                } else {
+                    min_d0 = min_d0.min(d2);
+                }
+            }
+            // Positive → bit=0 more likely (matches hard-decision sign convention).
+            llrs.push(min_d1 - min_d0);
+        }
+    }
+    llrs
 }
 
 /// RRC demodulation: downmix → matched RRC filter → brute-force timing → sample.
