@@ -10,7 +10,7 @@ use openpulse_audio::CpalBackend;
 #[command(
     name = "openpulse-kisstnc",
     about = "OpenPulse KISS TNC",
-    long_about = "OpenPulse KISS TNC.\n\nAuthor: Simon Keimer (DC0SK)  <https://github.com/dc0sk>",
+    long_about = "OpenPulse KISS TNC.",
     author,
     version
 )]
