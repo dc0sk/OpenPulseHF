@@ -6,7 +6,7 @@ use crate::output::DiagnosticOptions;
 #[command(
     name = "openpulse",
     about = "OpenPulse software modem for amateur radio data transmission",
-    long_about = "OpenPulse software modem for amateur radio data transmission.\n\nAuthor: Simon Keimer (DC0SK)  <https://github.com/dc0sk>",
+    long_about = "OpenPulse software modem for amateur radio data transmission.",
     author,
     version
 )]
