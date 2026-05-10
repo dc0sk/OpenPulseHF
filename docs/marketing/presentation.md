@@ -115,8 +115,9 @@ RX: receive → CP remove → FFT → de-spread → ZF equalise → data
 - 3–4 dB **lower PAPR** — no iterative clipping needed
 - First implementation in amateur HF software
 
-*Speaker notes: Show PAPR comparison histogram: OFDM52 ~9 dB with clipping vs SCFDMA52 <12 dB
-naturally.*
+*Speaker notes: Show PAPR comparison histogram: OFDM52 ~12 dB natively vs SCFDMA52 ~9 dB
+natively — SC-FDMA's single-carrier DFT-spreading eliminates the high-PAPR multi-carrier
+peaks without any clipping needed.*
 
 ---
 
@@ -146,8 +147,8 @@ Station A                          Station B
 ## Slide 9 — Post-quantum security ★ (first in amateur radio)
 
 The threat: Shor's algorithm breaks RSA and elliptic-curve signatures when a cryptographically
-relevant quantum computer arrives.  We don't know when — but the session logs you transmit
-*today* could be decrypted *then*.
+relevant quantum computer arrives.  We don't know when — but signed session frames you transmit
+*today* must still be verifiable as authentic *then*.
 
 OpenPulseHF implements **FIPS 203 + FIPS 204** post-quantum primitives:
 
@@ -320,10 +321,11 @@ trait is stable, CI runs on every PR, and the test matrix gives immediate feedba
 **OpenPulseHF**
 
 github.com/dc0sk/OpenPulseHF  
-GPL v3 · Written in Rust · No C dependencies
+GPL v3 · Written in Rust · No bundled C DSP libraries
 
-*"The HF modem that gives amateur radio operators the same cryptographic protection as
-a TLS 1.3 connection — and an adaptive waveform stack no commercial product has matched."*
+*"The HF modem that gives amateur radio operators cryptographically authenticated sessions —
+post-quantum identity integrity today, and an adaptive waveform stack no commercial product
+has matched."*
 
 ---
 

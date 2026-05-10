@@ -14,6 +14,13 @@ is a derived work and inherits the GPL.  This prevents commercial organisations 
 from distributing proprietary data-transfer plugins (e.g. a custom encryption layer, a
 commercial compression library, or a proprietary HF waveform) without releasing their source.
 
+**Regulatory note:** On amateur radio allocations, regulations including FCC §97.113(a)(4) and
+their international equivalents prohibit transmissions whose purpose or content is obscured.
+This includes payload encryption.  The integration paths below are intended for commercial,
+maritime, aeronautical, and other non-amateur spectrum allocations.  Amateur operators must
+verify compliance with their national regulatory framework before deploying any proprietary
+data layer.
+
 This document describes two legally distinct integration paths that allow non-GPL code to
 interact with OpenPulseHF without triggering the copyleft clause.
 
@@ -27,9 +34,11 @@ Define a C-ABI interface (a `plugin_api.h` header and a corresponding Rust `plug
 licensed under **LGPL v2.1 or later**).  A third party implements a shared library (`.so` /
 `.dll` / `.dylib`) that exposes the C ABI.  The modem engine loads it at runtime via `libloading`.
 
-Because the GPL does not reach across a C ABI boundary when the plugin is a **separate shared
-library** loaded at runtime (the "mere aggregation" and system-library exemptions in GPL §3 and
-§5), the plugin itself remains proprietary.
+Because the GPL may not reach across a C ABI boundary when the plugin is a **separate shared
+library** loaded at runtime — an argument based on the aggregation exemption and system-library
+provisions of GPL §5 — the plugin itself may remain proprietary.  This interpretation is widely
+accepted but not universally settled; anyone distributing a commercial plugin under this approach
+should obtain independent legal review before release.
 
 ### ABI surface (proposed)
 

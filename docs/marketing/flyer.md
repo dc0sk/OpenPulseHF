@@ -129,8 +129,8 @@ Short-block RS (ACK frames) · Memory-ARQ soft combining · Block interleaving
 
 ### System requirements
 
-**Linux / macOS / Windows** · Rust 1.79+ · ALSA (Linux) or CoreAudio (macOS)  
-No external C libraries required (pure Rust, no libcodec2, no libfec)
+**Linux / macOS / Windows** · Rust stable · ALSA (Linux) or CoreAudio (macOS)  
+No bundled C DSP libraries (no libcodec2, no libfec) — ALSA required on Linux
 
 ---
 

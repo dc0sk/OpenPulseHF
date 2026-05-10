@@ -97,9 +97,9 @@ All features shipping in v1.0 — no roadmap promises
 **Centred icons + labels:**
 
 ```
-[Pat icon]          [APRS icon]        [Winlink icon]
-Pat / ARDOP         KISS / AX.25       Direct CMS gateway
-drop-in ready       any APRS client    no extra software
+<!-- layout placeholder: Pat icon -->   <!-- layout placeholder: APRS icon -->   <!-- layout placeholder: Winlink icon -->
+Pat / ARDOP                              KISS / AX.25                             Direct CMS gateway
+drop-in ready                            any APRS client                          no extra software
 ```
 
 ---
@@ -111,7 +111,7 @@ drop-in ready       any APRS client    no extra software
 *Left side — QR code linking to GitHub repo:*
 
 ```
-[QR CODE — github.com/dc0sk/OpenPulseHF]
+<!-- layout placeholder: QR code linking to github.com/dc0sk/OpenPulseHF -->
 ```
 
 *Right side — text:*

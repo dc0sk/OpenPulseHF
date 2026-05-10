@@ -17,7 +17,9 @@ last_updated: 2026-05-09
 
 OpenPulseHF is a full-stack HF digital radio modem: modulation plugins, ARQ session management,
 Winlink/B2F compatibility, AX.25/KISS bridging, a channel-simulation test harness, and a live
-signal-path testbench GUI — all in a single Rust workspace, no external C dependencies.
+signal-path testbench GUI — all in a single Rust workspace, no external C DSP or codec
+dependencies (system audio libraries such as ALSA on Linux or CoreAudio on macOS are required
+when building with the `cpal` audio backend).
 
 ---
 
@@ -267,11 +269,17 @@ cargo build --workspace
 # Run the CLI in loopback mode (no radio hardware needed)
 cargo run -p openpulse-cli --no-default-features -- --backend loopback --log info transmit "Hello HF"
 
-# Start an ARDOP-compatible TNC (Pat-ready)
+# Start an ARDOP-compatible TNC (Pat-ready) — loopback mode, no hardware
 cargo run -p openpulse-ardop -- --mode BPSK250 --cmd-port 8515 --data-port 8516
 
-# Start a KISS TNC (APRS-ready)
+# Start an ARDOP-compatible TNC with real radio hardware (requires cpal feature)
+cargo run -p openpulse-ardop --features cpal -- --mode BPSK250 --backend cpal --cmd-port 8515 --data-port 8516
+
+# Start a KISS TNC (APRS-ready) — loopback mode, no hardware
 cargo run -p openpulse-kiss -- --mode BPSK250 --port 8100
+
+# Start a KISS TNC with real radio hardware (requires cpal feature)
+cargo run -p openpulse-kiss --features cpal -- --mode BPSK250 --backend cpal --port 8100
 
 # Run the signal-path benchmark
 cargo run -p openpulse-cli --no-default-features -- --backend loopback --log error benchmark run
@@ -364,7 +372,7 @@ All PRs must pass `cargo test --workspace --no-default-features` and
 
 ## License
 
-GNU General Public License v3.0 — see [LICENSE](LICENSE).
+GNU General Public License v3.0 or later — see [LICENSE](LICENSE).
 
 For commercial or proprietary plugin integration, see
 [`docs/plugin-commercial-interface.md`](docs/plugin-commercial-interface.md).
