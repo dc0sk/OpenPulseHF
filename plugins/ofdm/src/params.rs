@@ -15,7 +15,12 @@ pub const PILOT_AMPLITUDE: f32 = 1.0;
 /// Pilot spacing — every 5th SC in the occupied range is a pilot.
 pub const PILOT_SPACING: usize = 5;
 /// Target PAPR after iterative clipping (dB).
-pub const TARGET_PAPR_DB: f32 = 6.0;
+///
+/// 12 dB allows peak reduction without introducing ICI that corrupts data
+/// subcarriers in OFDM52 (25% FFT loading).  Below ~10.8 dB, clipping ICI
+/// causes systematic bit errors in zero-padded RS(255,223) blocks.
+/// 6 dB was the original value and was far too aggressive.
+pub const TARGET_PAPR_DB: f32 = 12.0;
 /// Maximum iterations for iterative PAPR clipping.
 pub const CLIP_MAX_ITER: usize = 50;
 

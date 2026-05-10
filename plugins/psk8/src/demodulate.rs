@@ -267,7 +267,10 @@ fn nearest_gray_triplet(i: f32, q: f32) -> (bool, bool, bool) {
 }
 
 fn bits_to_bytes(bits: &[bool]) -> Vec<u8> {
+    // Drop partial final chunk: 8PSK packs 3 bits/symbol, so decoded bit count
+    // may exceed 8*n_bytes by 1–2 bits. The partial chunk is pure padding.
     bits.chunks(8)
+        .filter(|c| c.len() == 8)
         .map(|chunk| {
             chunk
                 .iter()
@@ -291,6 +294,21 @@ mod tests {
         let payload = b"OpenPulse 8PSK";
         let samples = crate::modulate::psk8_modulate(payload, &cfg).expect("modulate");
         let recovered = psk8_demodulate(&samples, &cfg).expect("demodulate");
-        assert_eq!(&recovered[..payload.len()], payload);
+        assert_eq!(recovered, payload);
+    }
+
+    /// Regression: 2048-byte payload (8*2048=16384 bits, 16384 % 3 != 0) must decode
+    /// to exactly 2048 bytes, not 2049 (no spurious zero byte from padding tribit).
+    #[test]
+    fn psk8_1000rrc_round_trip_2048b() {
+        let cfg = ModulationConfig {
+            mode: "8PSK1000-RRC".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload: Vec<u8> = (0u8..=255).cycle().take(2048).collect();
+        let samples = crate::modulate::psk8_modulate(&payload, &cfg).expect("modulate");
+        let recovered = psk8_demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(recovered.len(), payload.len(), "length must be exact");
+        assert_eq!(recovered, payload);
     }
 }
