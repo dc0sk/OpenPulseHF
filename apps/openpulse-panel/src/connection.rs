@@ -241,5 +241,8 @@ fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
             st.rf_connected = connected;
             st.rf_peer = peer;
         }
+        ControlEvent::ConfigData { config } => {
+            st.daemon_config = Some(config);
+        }
     }
 }

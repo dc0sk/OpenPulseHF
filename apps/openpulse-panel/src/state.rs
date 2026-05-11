@@ -2,6 +2,8 @@
 
 use std::collections::VecDeque;
 
+pub use openpulse_daemon::protocol::DaemonConfig;
+
 /// Snapshot of a single rig's CAT status (from `RigStatus` events).
 #[derive(Debug, Clone, Default)]
 pub struct RigSnapshot {
@@ -51,6 +53,8 @@ pub struct PanelState {
     pub rf_connected: bool,
     /// Callsign of the currently connected RF peer, if any.
     pub rf_peer: Option<String>,
+    /// Most-recent daemon configuration snapshot (from `ConfigData` event).
+    pub daemon_config: Option<DaemonConfig>,
 }
 
 impl Default for PanelState {
@@ -74,6 +78,7 @@ impl Default for PanelState {
             ptt_active: false,
             rf_connected: false,
             rf_peer: None,
+            daemon_config: None,
         }
     }
 }

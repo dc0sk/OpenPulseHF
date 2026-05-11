@@ -16,6 +16,10 @@ async fn main() {
 
     let cfg = openpulse_config::load().unwrap_or_default();
     let mode = cfg.modem.mode.clone();
+    let callsign = (
+        cfg.station.callsign.clone(),
+        cfg.station.grid_square.clone(),
+    );
 
     let audio = Box::new(LoopbackBackend::default());
     let engine = ModemEngine::new(audio);
@@ -23,7 +27,7 @@ async fn main() {
     let tcp_bind: std::net::SocketAddr = "127.0.0.1:9000".parse().unwrap();
     let ws_bind: std::net::SocketAddr = "127.0.0.1:9001".parse().unwrap();
 
-    let mut handle = ControlServer::spawn(tcp_bind, &engine, mode, None)
+    let mut handle = ControlServer::spawn(tcp_bind, &engine, mode, callsign, None)
         .await
         .expect("failed to bind TCP control port");
 
@@ -38,6 +42,7 @@ async fn main() {
             active_mode: handle.active_mode.clone(),
             tx_attenuation_db: handle.tx_attenuation_db.clone(),
             spectrum_tap: handle.spectrum_tap.clone(),
+            callsign: handle.callsign.clone(),
         },
         None,
     )

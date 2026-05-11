@@ -7,7 +7,7 @@ use egui::{Color32, RichText};
 use openpulse_daemon::protocol::ControlCommand;
 
 use crate::connection::{self, TransportKind};
-use crate::state::PanelState;
+use crate::state::{DaemonConfig, PanelState};
 use crate::ui::{draw_event_log, draw_rig_bar, draw_session_status, draw_spectrum_pane};
 
 const MODES: &[&str] = &[
@@ -46,6 +46,11 @@ pub struct PanelApp {
 
     // RF peer connect.
     peer_callsign_input: String,
+
+    // Config window.
+    config_open: bool,
+    config_draft: DaemonConfig,
+    config_fetch_pending: bool,
 }
 
 impl PanelApp {
@@ -60,6 +65,14 @@ impl PanelApp {
             repeater_enabled: false,
             tx_atten_db: 0.0,
             peer_callsign_input: String::new(),
+            config_open: false,
+            config_draft: DaemonConfig {
+                callsign: String::new(),
+                grid_square: String::new(),
+                mode: "BPSK250".into(),
+                tx_attenuation_db: 0.0,
+            },
+            config_fetch_pending: false,
         }
     }
 
@@ -232,6 +245,12 @@ impl eframe::App for PanelApp {
                     });
                 }
 
+                // ── Config toggle ─────────────────────────────────────────────
+                ui.separator();
+                if ui.selectable_label(self.config_open, "⚙ Config").clicked() {
+                    self.config_open = !self.config_open;
+                }
+
                 // ── QSY buttons ───────────────────────────────────────────────
                 let qsy_token = self.shared.lock().unwrap().pending_qsy_token.clone();
                 if let Some(token) = qsy_token {
@@ -289,5 +308,75 @@ impl eframe::App for PanelApp {
                 draw_session_status(&mut cols[1], &st);
             });
         });
+
+        // ── Config window ────────────────────────────────────────────────────
+        // Populate draft when a GetConfig response arrives.
+        if self.config_fetch_pending {
+            if let Some(cfg) = self.shared.lock().unwrap().daemon_config.clone() {
+                self.config_draft = cfg;
+                self.config_fetch_pending = false;
+            }
+        }
+
+        if self.config_open {
+            egui::Window::new("Daemon Config")
+                .resizable(false)
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    egui::Grid::new("cfg_grid")
+                        .num_columns(2)
+                        .spacing([8.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.label("Callsign:");
+                            ui.label(&self.config_draft.callsign);
+                            ui.end_row();
+
+                            ui.label("Grid square:");
+                            ui.label(&self.config_draft.grid_square);
+                            ui.end_row();
+
+                            ui.label("Mode:");
+                            egui::ComboBox::from_id_salt("cfg_mode")
+                                .selected_text(&self.config_draft.mode)
+                                .show_ui(ui, |ui| {
+                                    for &m in MODES {
+                                        ui.selectable_value(
+                                            &mut self.config_draft.mode,
+                                            m.into(),
+                                            m,
+                                        );
+                                    }
+                                });
+                            ui.end_row();
+
+                            ui.label("TX Atten:");
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut self.config_draft.tx_attenuation_db,
+                                    -30.0_f32..=0.0_f32,
+                                )
+                                .suffix(" dB")
+                                .fixed_decimals(1),
+                            );
+                            ui.end_row();
+                        });
+
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui.button("Fetch").clicked() {
+                            self.send(ControlCommand::GetConfig);
+                            self.config_fetch_pending = true;
+                        }
+                        if ui.button("Apply").clicked() {
+                            self.send(ControlCommand::SetConfig {
+                                config: self.config_draft.clone(),
+                            });
+                        }
+                        if ui.button("Close").clicked() {
+                            self.config_open = false;
+                        }
+                    });
+                });
+        }
     }
 }
