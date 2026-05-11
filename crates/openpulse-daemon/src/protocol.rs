@@ -59,6 +59,19 @@ pub fn decode_spectrum_frame(data: &[u8]) -> Result<(u32, Vec<f32>), String> {
     Ok((sample_rate, bins))
 }
 
+/// Snapshot of daemon runtime configuration returned by [`ControlCommand::GetConfig`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DaemonConfig {
+    /// Station callsign from config file (read-only at runtime).
+    pub callsign: String,
+    /// Maidenhead grid square from config file (read-only at runtime).
+    pub grid_square: String,
+    /// Active modem mode string (e.g. `"BPSK250"`).
+    pub mode: String,
+    /// TX attenuation in dB (0.0 = no attenuation).
+    pub tx_attenuation_db: f32,
+}
+
 /// Top-level event pushed from server to every connected client.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -89,6 +102,8 @@ pub enum ControlEvent {
         connected: bool,
         peer: Option<String>,
     },
+    /// Response to [`ControlCommand::GetConfig`].
+    ConfigData { config: DaemonConfig },
 }
 
 /// Command sent from a client to the server.
@@ -119,6 +134,11 @@ pub enum ControlCommand {
     ConnectPeer { callsign: String },
     /// Disconnect the current RF peer connection.
     DisconnectPeer,
+    /// Request the daemon's current runtime configuration.
+    GetConfig,
+    /// Apply runtime configuration changes.  Callsign and grid square are
+    /// ignored (read-only at runtime); mode and attenuation take effect immediately.
+    SetConfig { config: DaemonConfig },
 }
 
 /// Per-command response.

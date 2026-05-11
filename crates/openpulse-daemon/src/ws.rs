@@ -19,7 +19,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 use crate::protocol;
-use crate::{SharedAttenuation, SharedMode, SpectrumTap};
+use crate::{SharedAttenuation, SharedCallsign, SharedMode, SpectrumTap};
 
 /// Shared state passed from the TCP control server to the WebSocket endpoint.
 pub struct WsShared {
@@ -28,6 +28,7 @@ pub struct WsShared {
     pub active_mode: SharedMode,
     pub tx_attenuation_db: SharedAttenuation,
     pub spectrum_tap: SpectrumTap,
+    pub callsign: SharedCallsign,
 }
 
 /// Spawn the WebSocket control endpoint on `addr`.
@@ -46,6 +47,7 @@ pub async fn spawn_ws(
         active_mode,
         tx_attenuation_db,
         spectrum_tap,
+        callsign,
     } = shared;
     let listener = TcpListener::bind(addr).await?;
     if let Some(out) = bound_addr {
@@ -78,7 +80,8 @@ pub async fn spawn_ws(
                     let mode = Arc::clone(&active_mode);
                     let atten = Arc::clone(&tx_attenuation_db);
                     let tap = Arc::clone(&spectrum_tap);
-                    tokio::spawn(handle_ws_client(stream, rx, cmd_tx, mode, atten, tap));
+                    let cs = Arc::clone(&callsign);
+                    tokio::spawn(handle_ws_client(stream, rx, cmd_tx, mode, atten, tap, cs));
                 }
                 Err(e) => tracing::warn!("WebSocket accept error: {e}"),
             }
@@ -95,6 +98,7 @@ async fn handle_ws_client(
     active_mode: SharedMode,
     tx_attenuation_db: SharedAttenuation,
     spectrum_tap: SpectrumTap,
+    callsign: SharedCallsign,
 ) {
     let ws = match accept_async(stream).await {
         Ok(w) => w,
@@ -153,7 +157,9 @@ async fn handle_ws_client(
 
                         if let ControlCommand::SubscribeSpectrum { fps } = &cmd {
                             let fps = (*fps).clamp(1, 100);
-                            if let Some(h) = spectrum_task.take() { h.abort(); }
+                            if let Some(h) = spectrum_task.take() {
+                                h.abort();
+                            }
                             let tap = Arc::clone(&spectrum_tap);
                             let tx = spec_frame_tx.clone();
                             let period = Duration::from_millis(1000 / fps as u64);
@@ -165,12 +171,28 @@ async fn handle_ws_client(
                                     let samples = tap.read().await.clone();
                                     let bins = ps.compute(&samples);
                                     let frame = encode_spectrum_frame(8000, &bins);
-                                    if tx.send(frame).await.is_err() { break; }
+                                    if tx.send(frame).await.is_err() {
+                                        break;
+                                    }
                                 }
                             }));
                             let resp = CommandResponse::ok();
                             if let Ok(s) = serde_json::to_string(&resp) {
                                 let _ = ws_tx.send(Message::Text(s)).await;
+                            }
+                        } else if matches!(cmd, ControlCommand::GetConfig) {
+                            let (cs, gs) = callsign.lock().await.clone();
+                            let config = protocol::DaemonConfig {
+                                callsign: cs,
+                                grid_square: gs,
+                                mode: active_mode.lock().await.clone(),
+                                tx_attenuation_db: *tx_attenuation_db.lock().await,
+                            };
+                            let ev = ControlEvent::ConfigData { config };
+                            if let Ok(s) = serde_json::to_string(&ev) {
+                                if ws_tx.send(Message::Text(s)).await.is_err() {
+                                    break;
+                                }
                             }
                         } else {
                             let resp = crate::dispatch_command(
@@ -178,7 +200,8 @@ async fn handle_ws_client(
                                 &cmd_tx,
                                 &active_mode,
                                 &tx_attenuation_db,
-                            ).await;
+                            )
+                            .await;
                             if let Ok(s) = serde_json::to_string(&resp) {
                                 if ws_tx.send(Message::Text(s)).await.is_err() {
                                     break;

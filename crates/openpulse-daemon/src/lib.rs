@@ -32,6 +32,8 @@ pub type SharedMode = Arc<Mutex<String>>;
 pub type SharedAttenuation = Arc<Mutex<f32>>;
 /// Shared audio sample tap for spectrum computation (most-recent 1024 samples).
 pub type SpectrumTap = Arc<RwLock<Vec<f32>>>;
+/// Shared station identity strings (callsign + grid square), set at startup.
+pub type SharedCallsign = Arc<Mutex<(String, String)>>;
 
 /// Handle returned by [`ControlServer::spawn`].
 ///
@@ -51,6 +53,8 @@ pub struct ControlServerHandle {
     pub tx_attenuation_db: SharedAttenuation,
     /// Audio sample tap; caller may write recent RX samples here.
     pub spectrum_tap: SpectrumTap,
+    /// Station callsign and grid square loaded from config at startup.
+    pub callsign: SharedCallsign,
 }
 
 /// NDJSON-over-TCP control server.
@@ -66,6 +70,7 @@ impl ControlServer {
         addr: SocketAddr,
         engine: &ModemEngine,
         initial_mode: String,
+        initial_callsign: (String, String),
         bound_addr: Option<&mut SocketAddr>,
     ) -> Result<ControlServerHandle, std::io::Error> {
         let listener = TcpListener::bind(addr).await?;
@@ -83,6 +88,7 @@ impl ControlServer {
         let active_mode = Arc::new(Mutex::new(initial_mode));
         let tx_attenuation_db: SharedAttenuation = Arc::new(Mutex::new(0.0f32));
         let spectrum_tap: SpectrumTap = Arc::new(RwLock::new(vec![0.0f32; 1024]));
+        let callsign: SharedCallsign = Arc::new(Mutex::new(initial_callsign));
 
         // Background task: forward EngineEvents into the ControlEvent broadcast.
         let mut eng_rx = engine.subscribe();
@@ -122,6 +128,7 @@ impl ControlServer {
         let mode_accept = Arc::clone(&active_mode);
         let atten_accept = Arc::clone(&tx_attenuation_db);
         let tap_accept = Arc::clone(&spectrum_tap);
+        let cs_accept = Arc::clone(&callsign);
         tokio::spawn(async move {
             loop {
                 match listener.accept().await {
@@ -132,7 +139,8 @@ impl ControlServer {
                         let mode = Arc::clone(&mode_accept);
                         let atten = Arc::clone(&atten_accept);
                         let tap = Arc::clone(&tap_accept);
-                        tokio::spawn(handle_client(stream, rx, cmd_tx, mode, atten, tap));
+                        let cs = Arc::clone(&cs_accept);
+                        tokio::spawn(handle_client(stream, rx, cmd_tx, mode, atten, tap, cs));
                     }
                     Err(e) => {
                         tracing::warn!("control port accept error: {e}");
@@ -148,6 +156,7 @@ impl ControlServer {
             active_mode,
             tx_attenuation_db,
             spectrum_tap,
+            callsign,
         })
     }
 }
@@ -161,6 +170,7 @@ async fn handle_client(
     active_mode: SharedMode,
     tx_attenuation_db: SharedAttenuation,
     spectrum_tap: SpectrumTap,
+    callsign: SharedCallsign,
 ) {
     let (read_half, mut write_half) = stream.into_split();
     let mut lines = BufReader::new(read_half).lines();
@@ -232,6 +242,16 @@ async fn handle_client(
                             }));
                             let resp = CommandResponse::ok();
                             let _ = send_json(&mut write_half, &resp).await;
+                        } else if matches!(cmd, ControlCommand::GetConfig) {
+                            let (cs, gs) = callsign.lock().await.clone();
+                            let config = protocol::DaemonConfig {
+                                callsign: cs,
+                                grid_square: gs,
+                                mode: active_mode.lock().await.clone(),
+                                tx_attenuation_db: *tx_attenuation_db.lock().await,
+                            };
+                            let ev = ControlEvent::ConfigData { config };
+                            let _ = send_json(&mut write_half, &ev).await;
                         } else {
                             let resp =
                                 dispatch_command(&line, &cmd_tx, &active_mode, &tx_attenuation_db)
@@ -282,6 +302,10 @@ pub(crate) async fn dispatch_command(
     }
     if let ControlCommand::SetTxAttenuation { db, .. } = cmd {
         *tx_attenuation_db.lock().await = db;
+    }
+    if let ControlCommand::SetConfig { ref config } = cmd {
+        *active_mode.lock().await = config.mode.clone();
+        *tx_attenuation_db.lock().await = config.tx_attenuation_db;
     }
 
     if cmd_tx.send(cmd).await.is_err() {
