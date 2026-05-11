@@ -9,7 +9,10 @@ pub mod frame;
 pub mod header;
 mod session;
 
-pub use compress::{compress_gzip, compress_lzhuf, decompress_gzip, decompress_lzhuf};
+pub use compress::{
+    compress_gzip, compress_lzhuf, compress_lzhuf_winlink, decompress_gzip, decompress_lzhuf,
+    decompress_lzhuf_winlink,
+};
 pub use frame::{B2fFrame, FsAnswer, ProposalType};
 pub use header::{AttachmentInfo, WlHeader};
 pub use session::{B2fSession, SessionRole};
