@@ -18,14 +18,21 @@ pub fn run(case: &TestCase) -> TestResult {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let result = rt.block_on(async { run_async(case).await });
 
+    let duration_ms = start.elapsed().as_millis() as u64;
+    let bytes_rx = result.as_ref().map(|v| v.len()).unwrap_or(0);
+    let effective_bps = if duration_ms > 0 && bytes_rx > 0 {
+        Some((bytes_rx as f64 * 8.0) / (duration_ms as f64 / 1000.0))
+    } else {
+        None
+    };
     TestResult {
         case: case.clone(),
         passed: result.is_ok(),
         skipped: false,
         ber: None,
-        bytes_rx: result.as_ref().map(|v| v.len()).unwrap_or(0),
-        duration_ms: start.elapsed().as_millis() as u64,
-        effective_bps: None,
+        bytes_rx,
+        duration_ms,
+        effective_bps,
         note: result.err().map(|e| e.to_string()),
     }
 }
