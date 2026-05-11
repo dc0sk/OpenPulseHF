@@ -264,6 +264,7 @@ fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
             from,
             to,
             subject,
+            timestamp_secs,
             ..
         } => {
             // Add to inbox if not already present.
@@ -274,7 +275,7 @@ fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
                     from: from.clone(),
                     to: to.clone(),
                     subject: subject.clone(),
-                    timestamp_secs: 0, // not carried in the event
+                    timestamp_secs,
                 });
             }
             st.push_log(format!("MSG from {from} → {to}: {subject}"));

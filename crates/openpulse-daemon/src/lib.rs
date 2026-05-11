@@ -37,7 +37,10 @@ pub type SpectrumTap = Arc<RwLock<Vec<f32>>>;
 /// Shared station identity strings (callsign + grid square), set at startup.
 pub type SharedStationId = Arc<Mutex<(String, String)>>;
 /// Shared in-memory message store (sent and received messages).
-pub type SharedMessageStore = Arc<Mutex<Vec<StoredMessage>>>;
+pub type SharedMessageStore = Arc<Mutex<MessageStore>>;
+
+/// Maximum number of messages kept in memory; oldest are evicted when full.
+pub(crate) const MAX_MESSAGES: usize = 500;
 
 /// A single stored message (sent or received).
 #[derive(Debug, Clone)]
@@ -48,6 +51,32 @@ pub struct StoredMessage {
     pub subject: String,
     pub body: String,
     pub timestamp_secs: u64,
+}
+
+/// In-memory inbox with a monotonically increasing ID counter.
+pub struct MessageStore {
+    next_id: u64,
+    pub messages: Vec<StoredMessage>,
+}
+
+impl MessageStore {
+    fn new() -> Self {
+        Self {
+            next_id: 1,
+            messages: Vec::new(),
+        }
+    }
+
+    /// Allocate the next unique message ID.
+    fn alloc_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.messages.is_empty()
+    }
 }
 
 /// All shared state passed to each per-client TCP handler.
@@ -114,7 +143,7 @@ impl ControlServer {
         let tx_attenuation_db: SharedAttenuation = Arc::new(Mutex::new(0.0f32));
         let spectrum_tap: SpectrumTap = Arc::new(RwLock::new(vec![0.0f32; 1024]));
         let station_id: SharedStationId = Arc::new(Mutex::new(initial_station_id));
-        let message_store: SharedMessageStore = Arc::new(Mutex::new(Vec::new()));
+        let message_store: SharedMessageStore = Arc::new(Mutex::new(MessageStore::new()));
 
         // Background task: forward EngineEvents into the ControlEvent broadcast.
         let mut eng_rx = engine.subscribe();
@@ -283,12 +312,17 @@ async fn handle_command(
 
         ControlCommand::GetConfig => {
             let (cs, gs) = ctx.station_id.lock().await.clone();
+            // Hold both locks simultaneously so the snapshot is consistent with SetConfig.
+            let mode_guard = ctx.active_mode.lock().await;
+            let atten_guard = ctx.tx_attenuation_db.lock().await;
             let config = protocol::DaemonConfig {
                 callsign: cs,
                 grid_square: gs,
-                mode: ctx.active_mode.lock().await.clone(),
-                tx_attenuation_db: *ctx.tx_attenuation_db.lock().await,
+                mode: mode_guard.clone(),
+                tx_attenuation_db: *atten_guard,
             };
+            drop(mode_guard);
+            drop(atten_guard);
             if send_json(write_half, &ControlEvent::ConfigData { config })
                 .await
                 .is_err()
@@ -303,6 +337,7 @@ async fn handle_command(
                 .message_store
                 .lock()
                 .await
+                .messages
                 .iter()
                 .map(|m| MessageSummary {
                     id: m.id,
@@ -326,6 +361,7 @@ async fn handle_command(
                 .message_store
                 .lock()
                 .await
+                .messages
                 .iter()
                 .find(|m| m.id == *id)
                 .cloned();
@@ -360,8 +396,8 @@ async fn handle_command(
                 .as_secs();
             let id = {
                 let mut store = ctx.message_store.lock().await;
-                let id = store.len() as u64 + 1;
-                store.push(StoredMessage {
+                let id = store.alloc_id();
+                store.messages.push(StoredMessage {
                     id,
                     from: from.clone(),
                     to: to.clone(),
@@ -369,6 +405,9 @@ async fn handle_command(
                     body: body.clone(),
                     timestamp_secs,
                 });
+                if store.messages.len() > MAX_MESSAGES {
+                    store.messages.remove(0);
+                }
                 id
             };
             let preview: String = body.chars().take(120).collect();
@@ -378,6 +417,7 @@ async fn handle_command(
                 to: to.clone(),
                 subject: subject.clone(),
                 preview,
+                timestamp_secs,
             };
             // Broadcast to all connected clients.
             let _ = ctx.ev_tx.send(ev);
@@ -387,7 +427,11 @@ async fn handle_command(
         }
 
         ControlCommand::DeleteMessage { id } => {
-            ctx.message_store.lock().await.retain(|m| m.id != *id);
+            ctx.message_store
+                .lock()
+                .await
+                .messages
+                .retain(|m| m.id != *id);
             send_json(write_half, &CommandResponse::ok()).await.is_err()
         }
 
@@ -422,8 +466,11 @@ pub(crate) async fn dispatch_command(
         *tx_attenuation_db.lock().await = *db;
     }
     if let ControlCommand::SetConfig { ref config } = cmd {
-        *active_mode.lock().await = config.mode.clone();
-        *tx_attenuation_db.lock().await = config.tx_attenuation_db;
+        // Hold both locks simultaneously so GetConfig cannot observe a mixed state.
+        let mut mode = active_mode.lock().await;
+        let mut atten = tx_attenuation_db.lock().await;
+        *mode = config.mode.clone();
+        *atten = config.tx_attenuation_db;
     }
 
     if cmd_tx.send(cmd.clone()).await.is_err() {

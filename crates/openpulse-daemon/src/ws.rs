@@ -18,7 +18,9 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 use crate::protocol::{self, MessageSummary};
-use crate::{SharedAttenuation, SharedMessageStore, SharedMode, SharedStationId, SpectrumTap};
+use crate::{
+    SharedAttenuation, SharedMessageStore, SharedMode, SharedStationId, SpectrumTap, MAX_MESSAGES,
+};
 
 /// Shared state passed from the TCP control server to the WebSocket endpoint.
 pub struct WsShared {
@@ -64,6 +66,7 @@ pub async fn spawn_ws(
                 Ok((stream, peer)) => {
                     tracing::info!(%peer, "WebSocket control: client connected");
                     let ctx = WsClientCtx {
+                        ev_tx: Arc::clone(&ev_tx),
                         ev_rx: ev_tx.subscribe(),
                         cmd_tx: cmd_tx.clone(),
                         active_mode: Arc::clone(&active_mode),
@@ -83,6 +86,7 @@ pub async fn spawn_ws(
 }
 
 struct WsClientCtx {
+    ev_tx: Arc<broadcast::Sender<ControlEvent>>,
     ev_rx: broadcast::Receiver<ControlEvent>,
     cmd_tx: mpsc::Sender<ControlCommand>,
     active_mode: SharedMode,
@@ -94,6 +98,7 @@ struct WsClientCtx {
 
 async fn handle_ws_client(stream: TcpStream, ctx: WsClientCtx) {
     let WsClientCtx {
+        ev_tx,
         mut ev_rx,
         cmd_tx,
         active_mode,
@@ -191,12 +196,17 @@ async fn handle_ws_client(stream: TcpStream, ctx: WsClientCtx) {
                             }
                         } else if matches!(cmd, ControlCommand::GetConfig) {
                             let (cs, gs) = station_id.lock().await.clone();
+                            // Hold both locks simultaneously for a consistent snapshot.
+                            let mode_guard = active_mode.lock().await;
+                            let atten_guard = tx_attenuation_db.lock().await;
                             let config = protocol::DaemonConfig {
                                 callsign: cs,
                                 grid_square: gs,
-                                mode: active_mode.lock().await.clone(),
-                                tx_attenuation_db: *tx_attenuation_db.lock().await,
+                                mode: mode_guard.clone(),
+                                tx_attenuation_db: *atten_guard,
                             };
+                            drop(mode_guard);
+                            drop(atten_guard);
                             let ev = ControlEvent::ConfigData { config };
                             if let Ok(s) = serde_json::to_string(&ev) {
                                 if ws_tx.send(Message::Text(s)).await.is_err() {
@@ -210,39 +220,64 @@ async fn handle_ws_client(stream: TcpStream, ctx: WsClientCtx) {
                                 }
                             }
                         } else if matches!(cmd, ControlCommand::ListMessages) {
-                            let messages: Vec<MessageSummary> = message_store.lock().await
+                            let messages: Vec<MessageSummary> = message_store
+                                .lock()
+                                .await
+                                .messages
                                 .iter()
                                 .map(|m| MessageSummary {
-                                    id: m.id, from: m.from.clone(), to: m.to.clone(),
-                                    subject: m.subject.clone(), timestamp_secs: m.timestamp_secs,
+                                    id: m.id,
+                                    from: m.from.clone(),
+                                    to: m.to.clone(),
+                                    subject: m.subject.clone(),
+                                    timestamp_secs: m.timestamp_secs,
                                 })
                                 .collect();
                             let ev = ControlEvent::MessageList { messages };
                             if let Ok(s) = serde_json::to_string(&ev) {
-                                if ws_tx.send(Message::Text(s)).await.is_err() { break; }
+                                if ws_tx.send(Message::Text(s)).await.is_err() {
+                                    break;
+                                }
                             }
                             if let Ok(s) = serde_json::to_string(&CommandResponse::ok()) {
-                                if ws_tx.send(Message::Text(s)).await.is_err() { break; }
+                                if ws_tx.send(Message::Text(s)).await.is_err() {
+                                    break;
+                                }
                             }
                         } else if let ControlCommand::GetMessage { id } = &cmd {
-                            let found = message_store.lock().await.iter().find(|m| m.id == *id).cloned();
+                            let found = message_store
+                                .lock()
+                                .await
+                                .messages
+                                .iter()
+                                .find(|m| m.id == *id)
+                                .cloned();
                             match found {
                                 None => {
                                     let resp = CommandResponse::err(format!("unknown id {id}"));
                                     if let Ok(s) = serde_json::to_string(&resp) {
-                                        if ws_tx.send(Message::Text(s)).await.is_err() { break; }
+                                        if ws_tx.send(Message::Text(s)).await.is_err() {
+                                            break;
+                                        }
                                     }
                                 }
                                 Some(m) => {
                                     let ev = ControlEvent::MessageData {
-                                        id: m.id, from: m.from, to: m.to,
-                                        subject: m.subject, body: m.body,
+                                        id: m.id,
+                                        from: m.from,
+                                        to: m.to,
+                                        subject: m.subject,
+                                        body: m.body,
                                     };
                                     if let Ok(s) = serde_json::to_string(&ev) {
-                                        if ws_tx.send(Message::Text(s)).await.is_err() { break; }
+                                        if ws_tx.send(Message::Text(s)).await.is_err() {
+                                            break;
+                                        }
                                     }
                                     if let Ok(s) = serde_json::to_string(&CommandResponse::ok()) {
-                                        if ws_tx.send(Message::Text(s)).await.is_err() { break; }
+                                        if ws_tx.send(Message::Text(s)).await.is_err() {
+                                            break;
+                                        }
                                     }
                                 }
                             }
@@ -250,34 +285,54 @@ async fn handle_ws_client(stream: TcpStream, ctx: WsClientCtx) {
                             use std::time::{SystemTime, UNIX_EPOCH};
                             let from = station_id.lock().await.0.clone();
                             let timestamp_secs = SystemTime::now()
-                                .duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs();
                             let id = {
                                 let mut store = message_store.lock().await;
-                                let id = store.len() as u64 + 1;
-                                store.push(crate::StoredMessage {
-                                    id, from: from.clone(), to: to.clone(),
-                                    subject: subject.clone(), body: body.clone(), timestamp_secs,
+                                let id = store.alloc_id();
+                                store.messages.push(crate::StoredMessage {
+                                    id,
+                                    from: from.clone(),
+                                    to: to.clone(),
+                                    subject: subject.clone(),
+                                    body: body.clone(),
+                                    timestamp_secs,
                                 });
+                                if store.messages.len() > MAX_MESSAGES {
+                                    store.messages.remove(0);
+                                }
                                 id
                             };
                             let preview: String = body.chars().take(120).collect();
-                            // Broadcast to all clients via shared ev_tx (not available in WS handler —
-                            // forward via cmd_tx so the daemon main can broadcast if needed).
-                            let _ = cmd_tx.send(cmd.clone()).await;
-                            // Send MessageReceived only to this client for now.
+                            // Broadcast MessageReceived to all clients (TCP + WS) via shared ev_tx.
                             let ev = ControlEvent::MessageReceived {
-                                id, from, to: to.clone(), subject: subject.clone(), preview,
+                                id,
+                                from,
+                                to: to.clone(),
+                                subject: subject.clone(),
+                                preview,
+                                timestamp_secs,
                             };
-                            if let Ok(s) = serde_json::to_string(&ev) {
-                                if ws_tx.send(Message::Text(s)).await.is_err() { break; }
-                            }
+                            let _ = ev_tx.send(ev);
+                            // Forward to daemon main for RF dispatch.
+                            let _ = cmd_tx.send(cmd.clone()).await;
+                            // ok is sent directly; ev_rx delivers MessageReceived in the next tick.
                             if let Ok(s) = serde_json::to_string(&CommandResponse::ok()) {
-                                if ws_tx.send(Message::Text(s)).await.is_err() { break; }
+                                if ws_tx.send(Message::Text(s)).await.is_err() {
+                                    break;
+                                }
                             }
                         } else if let ControlCommand::DeleteMessage { id } = &cmd {
-                            message_store.lock().await.retain(|m| m.id != *id);
+                            message_store
+                                .lock()
+                                .await
+                                .messages
+                                .retain(|m| m.id != *id);
                             if let Ok(s) = serde_json::to_string(&CommandResponse::ok()) {
-                                if ws_tx.send(Message::Text(s)).await.is_err() { break; }
+                                if ws_tx.send(Message::Text(s)).await.is_err() {
+                                    break;
+                                }
                             }
                         } else {
                             let resp = crate::dispatch_command(

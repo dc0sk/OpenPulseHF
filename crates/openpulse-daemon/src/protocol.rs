@@ -139,6 +139,8 @@ pub enum ControlEvent {
         subject: String,
         /// First 120 characters of the body for quick preview.
         preview: String,
+        /// Unix timestamp (seconds) when the message was stored.
+        timestamp_secs: u64,
     },
     /// Full inbox listing; sent only to the requesting client.
     MessageList { messages: Vec<MessageSummary> },
