@@ -3,6 +3,7 @@ project: openpulsehf
 doc: docs/requests/code-review.md
 status: open
 created: 2026-05-09
+last_updated: 2026-05-11
 ---
 
 # Full Code Review Request
@@ -50,6 +51,14 @@ are merged.
   malformed input that could cause a panic?
 - **KISS TCP interface**: Same question as ARDOP — no authentication on the KISS port. Is the
   AX.25 decoder robust against malformed or truncated frames from a remote host?
+- **Input size limits on TCP control ports**: ARDOP command port reads ASCII lines with no stated
+  maximum length. An adversarial local process (or misrouted traffic to `0.0.0.0`) could send a
+  very long line and cause unbounded allocation. Confirm `BufReader::lines()` is bounded or that
+  the server drops connections with lines exceeding a sane limit (e.g. 4 KiB).
+- **RelayForwarder dedup table growth**: `RelayForwarder` suppresses duplicates keyed on
+  `(session_id, nonce)`. The table is evicted by TTL, but a remote sender can generate unique
+  nonces faster than the TTL window expires, growing the table without bound. Verify that the
+  dedup map has a capacity cap or that the TTL window is short enough to bound memory use.
 - **Secret material lifetime**: Are ML-DSA-44 and ML-KEM-768 secret keys zeroed on drop?
   (`ed25519_dalek` uses `Zeroize`; confirm `ml_kem` and `ml_dsa` do the same.)
 
@@ -83,6 +92,10 @@ are merged.
   CPU fallback add measurable latency on the first call, or is the path already warm?
 - **ARDOP TCP bridge threading**: The `ModemBridge` spawns an OS thread per connection. Under
   high-frequency reconnects (e.g. Pat session retries), is there a thread leak?
+- **Bridge lock contention**: `Arc<Mutex<ModemEngine>>` is locked on every TX frame and every
+  RX poll in the 5 ms worker loop. At high traffic (rapid Pat retries, mesh relay bursts) this
+  serialises all modem access behind a single lock. Profile whether the lock hold time during a
+  full FEC-encoded TX frame causes measurable latency on subsequent RX polls.
 - **Broadcast channel backpressure**: `broadcast::Sender<EngineEvent>` drops events for
   slow subscribers. Is there any subscriber that must not miss events (e.g. the TUI scroll buffer)?
   If so, use `subscribe()` with a capacity guarantee.
@@ -95,6 +108,21 @@ are merged.
 - **Error handling consistency**: Library crates must not use `unwrap()` or `expect()` in
   production paths (CLAUDE.md). Audit `openpulse-core`, `openpulse-modem`, `openpulse-channel`,
   and `openpulse-radio` for any `unwrap()` outside `#[cfg(test)]` blocks.
+- **Silent error discard in bridge workers**: The ARDOP and KISS bridge worker loops use
+  `let _ = engine.transmit(...)` and `let _ = bridge.rx_data_tx.send(...)`. The RX-channel
+  discard is intentional (no subscribers is not an error), but TX errors from the modem engine
+  are also swallowed — the TX-pending counter still decrements and the caller receives no
+  feedback. Audit every `let _ = ...` in `openpulse-ardop::bridge` and `openpulse-kiss::bridge`
+  and classify each as intentional vs. a silent failure that should propagate or be logged.
+- **Mutex poison propagation**: Worker threads in both bridges call `.lock().unwrap()` on
+  `Arc<Mutex<ModemEngine>>`. If a plugin panics mid-frame (malformed packet, integer overflow in
+  DSP), the mutex becomes poisoned and every subsequent `.lock().unwrap()` in the worker thread
+  panics, bringing down the process. Replace with `.lock().unwrap_or_else(|e| e.into_inner())`
+  or structured panic recovery so a single bad frame does not terminate the bridge.
+- **Integer arithmetic in DSP paths**: Confirm that sample accumulation and bit-packing in
+  `bpsk_modulate`, `qpsk_modulate`, `psk8_modulate`, OFDM and SC-FDMA do not overflow `i32` or
+  saturate `f32` for maximum-length payloads. Pay particular attention to intermediate sums in
+  the IQ accumulator and the LDPC min-sum belief values.
 - **Dead code**: Run `cargo check --workspace --no-default-features 2>&1 | grep "unused"` after
   enabling `#![warn(dead_code)]` in each crate root. Remove dead items or gate them with
   a feature flag and document why they exist.
@@ -107,6 +135,13 @@ are merged.
   `compression.rs` edge cases.
 - **Module boundary discipline**: Confirm that no `pub(crate)` symbol is accessed by another
   crate through a re-export that bypasses visibility intent.
+- **Pre-release dependency pinning**: `ml-dsa` and `ml-kem` are declared with pre-release version
+  strings (`=0.1.0-rc.11`, `0.3`). `Cargo.lock` is gitignored, so CI resolves fresh on every run.
+  A new RC with a breaking API change will silently break CI (this already happened with rc.9→rc.11,
+  breaking `KeyGen` and `MlDsa44::from_seed`). Audit all pre-release and rapidly-moving
+  dependencies; pin each with `=x.y.z-rcN` and document the minimum stable target. Consider
+  committing `Cargo.lock` (removing it from `.gitignore`) to make dependency resolution
+  reproducible across all environments.
 
 ### 6. Compatibility verification
 
