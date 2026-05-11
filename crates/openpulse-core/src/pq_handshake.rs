@@ -4,7 +4,7 @@ use ed25519_dalek::{
 };
 use ml_dsa::{
     signature::{Keypair as MlDsaKeypair, Signer as MlSigner, Verifier as MlVerifier},
-    EncodedVerifyingKey, KeyGen, MlDsa44,
+    EncodedVerifyingKey, MlDsa44, SigningKey as MlDsaSigningKey,
 };
 use ml_kem::{
     kem::{Decapsulate, Encapsulate, KeyExport},
@@ -134,7 +134,7 @@ pub struct PqConAck {
 pub fn generate_ml_dsa_44_keypair() -> (Vec<u8>, Vec<u8>) {
     let mut seed_bytes = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut seed_bytes);
-    let sk = MlDsa44::from_seed(&ml_dsa::Seed::from(seed_bytes));
+    let sk = MlDsaSigningKey::<MlDsa44>::from_seed(&ml_dsa::Seed::from(seed_bytes));
     let vk_encoded = sk.verifying_key().encode();
     let vk_bytes: Vec<u8> = vk_encoded.to_vec();
     (seed_bytes.to_vec(), vk_bytes)
@@ -160,7 +160,7 @@ fn ml_dsa_sign(signing_key_seed: &[u8], message: &[u8]) -> Result<Vec<u8>, PqHan
     let seed_arr: [u8; 32] = signing_key_seed
         .try_into()
         .map_err(|_| PqHandshakeError::InvalidPublicKey)?;
-    let sk = MlDsa44::from_seed(&ml_dsa::Seed::from(seed_arr));
+    let sk = MlDsaSigningKey::<MlDsa44>::from_seed(&ml_dsa::Seed::from(seed_arr));
     let sig: ml_dsa::Signature<MlDsa44> = sk.sign(message);
     let sig_encoded = sig.encode();
     Ok(sig_encoded.to_vec())
@@ -234,7 +234,7 @@ pub fn create_pq_conreq(
     let seed_arr: [u8; 32] = pq_signing_key
         .try_into()
         .map_err(|_| PqHandshakeError::InvalidPublicKey)?;
-    let mldsa_sk = MlDsa44::from_seed(&ml_dsa::Seed::from(seed_arr));
+    let mldsa_sk = MlDsaSigningKey::<MlDsa44>::from_seed(&ml_dsa::Seed::from(seed_arr));
     let pq_pubkey_encoded = mldsa_sk.verifying_key().encode();
     let pq_pubkey: Vec<u8> = pq_pubkey_encoded.to_vec();
 
@@ -285,7 +285,7 @@ pub fn create_pq_conack(
     let seed_arr: [u8; 32] = pq_signing_key
         .try_into()
         .map_err(|_| PqHandshakeError::InvalidPublicKey)?;
-    let mldsa_sk = MlDsa44::from_seed(&ml_dsa::Seed::from(seed_arr));
+    let mldsa_sk = MlDsaSigningKey::<MlDsa44>::from_seed(&ml_dsa::Seed::from(seed_arr));
     let pq_pubkey_encoded = mldsa_sk.verifying_key().encode();
     let pq_pubkey: Vec<u8> = pq_pubkey_encoded.to_vec();
 
