@@ -155,10 +155,15 @@ fn do_receive(bridge: &ModemBridge) -> Option<Vec<u8>> {
 
 /// Attempt to forward `payload` as a relay `WireEnvelope` when relay is enabled.
 ///
-/// The receive path returns decoded HPX frame payloads, not raw wire bytes, so
-/// relay-protocol envelopes must be carried inside an HPX frame by the sender.
-/// When the payload decodes as a valid `WireEnvelope` the forwarder increments
-/// the hop counter and the re-encoded envelope is transmitted as the next hop.
+/// ## Layering contract
+/// `engine.receive()` returns the decoded HPX frame *payload*.  A relay sender
+/// must therefore call `engine.transmit(&envelope.encode()?, …)` so that the
+/// `WireEnvelope` bytes land in the HPX payload slot.  The relay receiver then
+/// gets those bytes here and probes them with `WireEnvelope::decode`.
+///
+/// The probe is cheap: `decode` checks the 4-byte `OPHF` magic first and
+/// returns `Err(InvalidMagic)` immediately for ordinary user-data payloads.
+/// When the magic matches the forwarder increments `hop_index` and re-transmits.
 fn maybe_relay_forward(bridge: &ModemBridge, payload: &[u8]) {
     use openpulse_core::wire_query::WireEnvelope;
 

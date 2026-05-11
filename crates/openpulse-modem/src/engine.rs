@@ -11,10 +11,12 @@ use openpulse_core::audio::{AudioBackend, AudioConfig};
 use openpulse_core::conv::ConvCodec;
 use openpulse_core::dcd::DcdState;
 use openpulse_core::error::{ModemError, PluginError};
-use openpulse_core::fec::{FecCodec, Interleaver, ShortFecCodec, SoftCombiner};
+use openpulse_core::fec::{
+    FecCodec, FecMode, Interleaver, ShortFecCodec, SoftCombiner, DEFAULT_INTERLEAVER_DEPTH,
+};
 use openpulse_core::frame::Frame;
 use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
-use openpulse_core::ldpc::{IterativeDecoder, LdpcCodec};
+use openpulse_core::ldpc::{IterativeDecoder, LdpcCodec, LDPC_CODEWORD_BYTES, LDPC_MAX_INFO_BYTES};
 use openpulse_core::plugin::{ModulationConfig, PluginRegistry};
 use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::{BiDirRateAdapter, RateEvent, RateTrigger};
@@ -1233,10 +1235,11 @@ impl ModemEngine {
         self.csma_check()?;
 
         let frame_wire = self.stage_encode_frame(data);
-        if frame_wire.bytes.len() > 128 {
+        if frame_wire.bytes.len() > LDPC_MAX_INFO_BYTES {
             return Err(ModemError::Frame(format!(
-                "LDPC: encoded frame {} B exceeds one-block limit of 128 B",
-                frame_wire.bytes.len()
+                "LDPC: encoded frame {} B exceeds one-block limit of {} B; split payload at call site",
+                frame_wire.bytes.len(),
+                LDPC_MAX_INFO_BYTES,
             )));
         }
         let codeword = LdpcCodec::new().encode(&frame_wire.bytes);
@@ -1307,9 +1310,8 @@ impl ModemEngine {
             });
         }
 
-        // LDPC block is 2048 coded bits; trim excess LLRs from longer demodulations.
-        const LDPC_N: usize = 2048;
-        let ldpc_llrs = &llrs[..LDPC_N.min(llrs.len())];
+        // LDPC block is LDPC_CODEWORD_BYTES × 8 coded bits; trim any excess LLRs.
+        let ldpc_llrs = &llrs[..(LDPC_CODEWORD_BYTES * 8).min(llrs.len())];
         let info_bytes = LdpcCodec::new().decode_soft(ldpc_llrs)?;
 
         let corrected_wire = WirePayload { bytes: info_bytes };
@@ -1393,6 +1395,70 @@ impl ModemEngine {
             bytes: frame.payload.len(),
         });
         Ok(frame.payload)
+    }
+
+    /// Transmit with the codec selected by `fec`.
+    ///
+    /// This is the single-call dispatch over every `FecMode` variant so callers
+    /// can drive FEC selection from the negotiated `FecMode` without a match
+    /// statement at every call site.
+    ///
+    /// `FecMode::None` maps to plain [`transmit`](Self::transmit).
+    /// `FecMode::RsInterleaved` and `FecMode::Concatenated` use
+    /// [`DEFAULT_INTERLEAVER_DEPTH`].
+    /// `FecMode::Ldpc` calls [`transmit_with_ldpc`](Self::transmit_with_ldpc) and
+    /// is subject to the same single-block limit.
+    /// `FecMode::ShortRs` is reserved for ACK frames; this method returns
+    /// `Err(ModemError::Frame)` when called with it — use
+    /// [`transmit_ack_with_short_fec`](Self::transmit_ack_with_short_fec) instead.
+    pub fn transmit_with_fec_mode(
+        &mut self,
+        data: &[u8],
+        mode: &str,
+        fec: FecMode,
+        device: Option<&str>,
+    ) -> Result<(), ModemError> {
+        match fec {
+            FecMode::None => self.transmit(data, mode, device),
+            FecMode::Rs => self.transmit_with_fec(data, mode, device),
+            FecMode::RsInterleaved => {
+                self.transmit_with_fec_interleaved(data, mode, device, DEFAULT_INTERLEAVER_DEPTH)
+            }
+            FecMode::Concatenated => self.transmit_with_concatenated_fec(data, mode, device),
+            FecMode::ShortRs => Err(ModemError::Frame(
+                "FecMode::ShortRs is for ACK frames only; use transmit_ack_with_short_fec".into(),
+            )),
+            FecMode::RsStrong => self.transmit_with_strong_fec(data, mode, device),
+            FecMode::SoftConcatenated => self.transmit_with_soft_viterbi_fec(data, mode, device),
+            FecMode::Ldpc => self.transmit_with_ldpc(data, mode, device),
+        }
+    }
+
+    /// Receive with the codec selected by `fec`.
+    ///
+    /// Mirror of [`transmit_with_fec_mode`](Self::transmit_with_fec_mode).
+    /// `FecMode::ShortRs` returns `Err` — use
+    /// [`receive_ack_with_short_fec`](Self::receive_ack_with_short_fec) instead.
+    pub fn receive_with_fec_mode(
+        &mut self,
+        mode: &str,
+        fec: FecMode,
+        device: Option<&str>,
+    ) -> Result<Vec<u8>, ModemError> {
+        match fec {
+            FecMode::None => self.receive(mode, device),
+            FecMode::Rs => self.receive_with_fec(mode, device),
+            FecMode::RsInterleaved => {
+                self.receive_with_fec_interleaved(mode, device, DEFAULT_INTERLEAVER_DEPTH)
+            }
+            FecMode::Concatenated => self.receive_with_concatenated_fec(mode, device),
+            FecMode::ShortRs => Err(ModemError::Frame(
+                "FecMode::ShortRs is for ACK frames only; use receive_ack_with_short_fec".into(),
+            )),
+            FecMode::RsStrong => self.receive_with_strong_fec(mode, device),
+            FecMode::SoftConcatenated => self.receive_with_soft_viterbi_fec(mode, device),
+            FecMode::Ldpc => self.receive_with_ldpc(mode, device),
+        }
     }
 
     /// Encode `ack` with ShortFecCodec (5 → 13 bytes) and emit via FSK4-ACK.
