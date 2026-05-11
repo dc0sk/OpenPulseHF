@@ -1,15 +1,24 @@
-//! Two-engine channel simulation harness.
+//! One-way channel simulation harness for integration tests.
 //!
-//! Connects a TX [`ModemEngine`] to an RX [`ModemEngine`] through an
-//! [`openpulse_channel::ChannelModel`], enabling integration tests that
-//! exercise realistic HF propagation without real audio hardware.
+//! Routes samples from a TX [`ModemEngine`] through an
+//! [`openpulse_channel::ChannelModel`] into an RX [`ModemEngine`].
+//! The harness is intentionally **unidirectional**: one call to `route()`
+//! drains TX samples and fills the RX buffer in a single direction with no
+//! shared timebase or concurrent reverse path.  It validates one-way modem
+//! correctness under realistic HF propagation without requiring real audio
+//! hardware, but does not model full-duplex timing behaviour.
 
 use openpulse_audio::LoopbackBackend;
 use openpulse_channel::ChannelModel;
 
 use crate::ModemEngine;
 
-/// A test harness that wires two modem engines through a pluggable channel model.
+/// A one-way test harness that routes TX samples through a pluggable channel model into an RX engine.
+///
+/// Each call to [`route`](Self::route) drains the TX loopback buffer, applies
+/// the channel model, and fills the RX loopback buffer.  There is no reverse
+/// path; to simulate a bidirectional exchange create two harnesses and call
+/// `route` on each in alternation.
 ///
 /// # Usage
 ///

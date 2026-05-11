@@ -47,7 +47,10 @@ pub struct QsyConfig {
     /// When false, all incoming QSY_REQ frames are rejected.
     pub enabled: bool,
     /// Trust levels whose QSY_REQ frames are accepted ("verified", "psk_verified", "unknown").
-    /// Reserved for future trust-gating; not yet enforced by the QSY session layer.
+    ///
+    /// **Not yet enforced.** The field is parsed and stored but the QSY session
+    /// layer does not consult it; all trust levels are currently accepted when
+    /// `enabled = true`.  Do not rely on this for access control.
     pub allow_trustlevels: Vec<String>,
     /// Candidate frequencies to scan during QSY negotiation (Hz).
     pub candidate_freqs_hz: Vec<u64>,
@@ -519,6 +522,7 @@ store_path = ""
 # Enable QSY frequency-agility negotiation.  Requires hamlib rigctld configured in [radio].
 # enabled = false
 # Trust levels allowed to initiate QSY with this station.
+# NOTE: not yet enforced — parsed but ignored by the QSY session layer.
 # allow_trustlevels = ["verified", "psk_verified"]
 # Candidate frequencies to evaluate during a QSY scan (Hz).
 # candidate_freqs_hz = [14070000, 14074000, 14077000]
