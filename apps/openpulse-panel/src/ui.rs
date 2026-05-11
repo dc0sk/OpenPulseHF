@@ -384,3 +384,120 @@ pub fn draw_event_log(ui: &mut Ui, st: &PanelState) {
             }
         });
 }
+
+// ---------------------------------------------------------------------------
+// Messages window
+// ---------------------------------------------------------------------------
+
+/// Mutable compose-field state threaded into [`draw_messages_window`].
+pub struct ComposeState<'a> {
+    pub to: &'a mut String,
+    pub subject: &'a mut String,
+    pub body: &'a mut String,
+    /// Set to `true` by the function when the Close button is clicked.
+    pub close: &'a mut bool,
+    /// Set to the requested message id when the user clicks an inbox row.
+    pub get_msg_id: &'a mut Option<u64>,
+    /// Set to `(to, subject, body)` when the user clicks Send.
+    pub send_msg: &'a mut Option<(String, String, String)>,
+}
+
+/// Floating messages window: inbox list on the left, reader + compose on the right.
+pub fn draw_messages_window(ui: &mut Ui, st: &PanelState, cs: &mut ComposeState<'_>) {
+    ui.columns(2, |cols| {
+        // ── Left column: inbox list ───────────────────────────────────────
+        let left = &mut cols[0];
+        left.label(RichText::new("Inbox").strong());
+        egui::ScrollArea::vertical()
+            .id_salt("inbox_scroll")
+            .max_height(280.0)
+            .show(left, |ui| {
+                if st.inbox.is_empty() {
+                    ui.label(RichText::new("(empty)").color(Color32::DARK_GRAY));
+                }
+                for msg in &st.inbox {
+                    let open = st.open_message_id == Some(msg.id);
+                    let label = format!("{} — {}", msg.from, msg.subject);
+                    let text = if open {
+                        RichText::new(&label).strong()
+                    } else {
+                        RichText::new(&label)
+                    };
+                    if ui.selectable_label(open, text).clicked() {
+                        *cs.get_msg_id = Some(msg.id);
+                    }
+                }
+            });
+
+        // Message reader below the list.
+        if let (Some(id), Some(body)) = (st.open_message_id, st.open_message_body.as_deref()) {
+            left.separator();
+            if let Some(summary) = st.inbox.iter().find(|m| m.id == id) {
+                left.label(
+                    RichText::new(format!("From: {}  To: {}", summary.from, summary.to))
+                        .color(Color32::GRAY)
+                        .small(),
+                );
+                left.label(
+                    RichText::new(format!("Subject: {}", summary.subject))
+                        .small()
+                        .strong(),
+                );
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("msg_body_scroll")
+                .max_height(100.0)
+                .show(left, |ui| {
+                    ui.label(body);
+                });
+        }
+
+        // ── Right column: compose + controls ─────────────────────────────
+        let right = &mut cols[1];
+        right.label(RichText::new("Compose").strong());
+        egui::Grid::new("compose_grid")
+            .num_columns(2)
+            .spacing([4.0, 4.0])
+            .show(right, |ui| {
+                ui.label("To:");
+                ui.add(
+                    egui::TextEdit::singleline(cs.to)
+                        .hint_text("CALLSIGN")
+                        .desired_width(140.0),
+                );
+                ui.end_row();
+
+                ui.label("Subject:");
+                ui.add(
+                    egui::TextEdit::singleline(cs.subject)
+                        .hint_text("subject")
+                        .desired_width(140.0),
+                );
+                ui.end_row();
+            });
+
+        right.add(
+            egui::TextEdit::multiline(cs.body)
+                .hint_text("Message body…")
+                .desired_width(f32::INFINITY)
+                .desired_rows(6),
+        );
+
+        right.horizontal(|ui| {
+            let can_send = !cs.to.is_empty() && !cs.subject.is_empty() && !cs.body.is_empty();
+            if ui
+                .add_enabled(can_send, egui::Button::new("Send"))
+                .clicked()
+            {
+                *cs.send_msg = Some((
+                    cs.to.trim().to_uppercase(),
+                    cs.subject.clone(),
+                    cs.body.clone(),
+                ));
+            }
+            if ui.button("Close").clicked() {
+                *cs.close = true;
+            }
+        });
+    });
+}

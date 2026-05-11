@@ -59,6 +59,29 @@ pub fn decode_spectrum_frame(data: &[u8]) -> Result<(u32, Vec<f32>), String> {
     Ok((sample_rate, bins))
 }
 
+// ---------------------------------------------------------------------------
+// Message store types
+// ---------------------------------------------------------------------------
+
+/// Brief description of a stored message, used in inbox listings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageSummary {
+    /// Unique monotonic message ID within this daemon session.
+    pub id: u64,
+    /// Sender callsign.
+    pub from: String,
+    /// Recipient callsign.
+    pub to: String,
+    /// Message subject line.
+    pub subject: String,
+    /// Unix timestamp (seconds) when the message was stored.
+    pub timestamp_secs: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Config snapshot
+// ---------------------------------------------------------------------------
+
 /// Snapshot of daemon runtime configuration returned by [`ControlCommand::GetConfig`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonConfig {
@@ -71,6 +94,10 @@ pub struct DaemonConfig {
     /// TX attenuation in dB (0.0 = no attenuation).
     pub tx_attenuation_db: f32,
 }
+
+// ---------------------------------------------------------------------------
+// Events and commands
+// ---------------------------------------------------------------------------
 
 /// Top-level event pushed from server to every connected client.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +131,25 @@ pub enum ControlEvent {
     },
     /// Response to [`ControlCommand::GetConfig`].
     ConfigData { config: DaemonConfig },
+    /// A message was stored (sent or received); broadcast to all clients.
+    MessageReceived {
+        id: u64,
+        from: String,
+        to: String,
+        subject: String,
+        /// First 120 characters of the body for quick preview.
+        preview: String,
+    },
+    /// Full inbox listing; sent only to the requesting client.
+    MessageList { messages: Vec<MessageSummary> },
+    /// Full message body; sent only to the requesting client.
+    MessageData {
+        id: u64,
+        from: String,
+        to: String,
+        subject: String,
+        body: String,
+    },
 }
 
 /// Command sent from a client to the server.
@@ -142,6 +188,23 @@ pub enum ControlCommand {
     /// Apply runtime configuration changes.  Callsign and grid square are
     /// ignored (read-only at runtime); mode and attenuation take effect immediately.
     SetConfig { config: DaemonConfig },
+    /// Queue an outbound message; `from` is filled by the daemon using the
+    /// configured callsign.  Broadcasts [`ControlEvent::MessageReceived`] to
+    /// all clients and forwards the command to the caller via `mpsc`.
+    SendMessage {
+        to: String,
+        subject: String,
+        body: String,
+    },
+    /// Request the full inbox listing.  Server responds with
+    /// [`ControlEvent::MessageList`] followed by an `ok` [`CommandResponse`].
+    ListMessages,
+    /// Fetch the full body of a single message by ID.  Server responds with
+    /// [`ControlEvent::MessageData`] followed by an `ok` [`CommandResponse`],
+    /// or an error [`CommandResponse`] if the ID is unknown.
+    GetMessage { id: u64 },
+    /// Delete a stored message by ID.
+    DeleteMessage { id: u64 },
 }
 
 /// Per-command response.

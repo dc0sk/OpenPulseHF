@@ -391,3 +391,208 @@ async fn set_config_updates_mode_and_attenuation_atomically() {
         "expected -6.0 dB"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Messaging tests
+// ---------------------------------------------------------------------------
+
+/// Helper: read lines from `reader` until a line satisfying `pred` is found.
+async fn read_until(
+    reader: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
+    pred: impl Fn(&str) -> bool,
+) -> String {
+    loop {
+        let mut buf = String::new();
+        reader.read_line(&mut buf).await.unwrap();
+        let line = buf.trim().to_string();
+        if !line.is_empty() && pred(&line) {
+            return line;
+        }
+    }
+}
+
+#[tokio::test]
+async fn list_messages_returns_empty_then_message_after_send() {
+    let engine = make_engine();
+    let (addr, _handle) = spawn_server(&engine).await;
+    let (mut reader, mut writer) = connect(addr).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // ListMessages on empty store.
+    let cmd = serde_json::to_string(&ControlCommand::ListMessages).unwrap() + "\n";
+    writer.write_all(cmd.as_bytes()).await.unwrap();
+    let line = timeout(
+        Duration::from_secs(2),
+        read_until(&mut reader, |l| l.contains("message_list")),
+    )
+    .await
+    .expect("timed out waiting for MessageList");
+    let ev: ControlEvent = serde_json::from_str(&line).unwrap();
+    match ev {
+        ControlEvent::MessageList { messages } => assert!(messages.is_empty()),
+        other => panic!("expected MessageList, got {other:?}"),
+    }
+
+    // Skip the ok response.
+    timeout(
+        Duration::from_secs(2),
+        read_until(&mut reader, |l| l.contains("\"ok\"")),
+    )
+    .await
+    .expect("no ok after ListMessages");
+
+    // SendMessage.
+    let cmd = serde_json::to_string(&ControlCommand::SendMessage {
+        to: "N1ABC".into(),
+        subject: "Hello".into(),
+        body: "Test body".into(),
+    })
+    .unwrap()
+        + "\n";
+    writer.write_all(cmd.as_bytes()).await.unwrap();
+
+    // Wire order: ok comes first (direct write), then MessageReceived (ev_rx broadcast).
+    timeout(
+        Duration::from_secs(2),
+        read_until(&mut reader, |l| l.contains("\"ok\"")),
+    )
+    .await
+    .expect("no ok after SendMessage");
+    let line = timeout(
+        Duration::from_secs(2),
+        read_until(&mut reader, |l| l.contains("message_received")),
+    )
+    .await
+    .expect("no MessageReceived event");
+    let ev: ControlEvent = serde_json::from_str(&line).unwrap();
+    match ev {
+        ControlEvent::MessageReceived { subject, .. } => {
+            assert_eq!(subject, "Hello");
+        }
+        other => panic!("expected MessageReceived, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn get_message_returns_full_body() {
+    let engine = make_engine();
+    let (addr, _handle) = spawn_server(&engine).await;
+    let (mut reader, mut writer) = connect(addr).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Send a message first.
+    let cmd = serde_json::to_string(&ControlCommand::SendMessage {
+        to: "W1XYZ".into(),
+        subject: "Subject".into(),
+        body: "Full body text".into(),
+    })
+    .unwrap()
+        + "\n";
+    writer.write_all(cmd.as_bytes()).await.unwrap();
+    // Wait for MessageReceived to get the id.
+    // Wire order for SendMessage: ok first, then MessageReceived broadcast.
+    timeout(
+        Duration::from_secs(2),
+        read_until(&mut reader, |l| l.contains("\"ok\"")),
+    )
+    .await
+    .expect("no ok after SendMessage");
+    let line = timeout(
+        Duration::from_secs(2),
+        read_until(&mut reader, |l| l.contains("message_received")),
+    )
+    .await
+    .expect("no MessageReceived");
+    let ev: ControlEvent = serde_json::from_str(&line).unwrap();
+    let id = match ev {
+        ControlEvent::MessageReceived { id, .. } => id,
+        other => panic!("expected MessageReceived, got {other:?}"),
+    };
+
+    // GetMessage.
+    let cmd = serde_json::to_string(&ControlCommand::GetMessage { id }).unwrap() + "\n";
+    writer.write_all(cmd.as_bytes()).await.unwrap();
+    let line = timeout(
+        Duration::from_secs(2),
+        read_until(&mut reader, |l| l.contains("message_data")),
+    )
+    .await
+    .expect("no MessageData");
+    let ev: ControlEvent = serde_json::from_str(&line).unwrap();
+    match ev {
+        ControlEvent::MessageData { body, subject, .. } => {
+            assert_eq!(body, "Full body text");
+            assert_eq!(subject, "Subject");
+        }
+        other => panic!("expected MessageData, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn get_message_unknown_id_returns_error() {
+    let engine = make_engine();
+    let (addr, _handle) = spawn_server(&engine).await;
+    let (mut reader, mut writer) = connect(addr).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let cmd = serde_json::to_string(&ControlCommand::GetMessage { id: 9999 }).unwrap() + "\n";
+    writer.write_all(cmd.as_bytes()).await.unwrap();
+
+    let line = timeout(
+        Duration::from_secs(2),
+        read_until(&mut reader, |l| l.contains("\"ok\"")),
+    )
+    .await
+    .expect("no error response");
+    let resp: CommandResponse = serde_json::from_str(&line).unwrap();
+    assert!(!resp.ok);
+    assert!(resp.error.is_some());
+}
+
+#[tokio::test]
+async fn delete_message_removes_from_store() {
+    let engine = make_engine();
+    let (addr, handle) = spawn_server(&engine).await;
+    let (mut reader, mut writer) = connect(addr).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Send a message.
+    let cmd = serde_json::to_string(&ControlCommand::SendMessage {
+        to: "K2DEL".into(),
+        subject: "Delete me".into(),
+        body: "bye".into(),
+    })
+    .unwrap()
+        + "\n";
+    writer.write_all(cmd.as_bytes()).await.unwrap();
+    // Wire order for SendMessage: ok first, then MessageReceived broadcast.
+    timeout(
+        Duration::from_secs(2),
+        read_until(&mut reader, |l| l.contains("\"ok\"")),
+    )
+    .await
+    .unwrap();
+    let line = timeout(
+        Duration::from_secs(2),
+        read_until(&mut reader, |l| l.contains("message_received")),
+    )
+    .await
+    .unwrap();
+    let id = match serde_json::from_str::<ControlEvent>(&line).unwrap() {
+        ControlEvent::MessageReceived { id, .. } => id,
+        other => panic!("{other:?}"),
+    };
+
+    // Delete it.
+    let cmd = serde_json::to_string(&ControlCommand::DeleteMessage { id }).unwrap() + "\n";
+    writer.write_all(cmd.as_bytes()).await.unwrap();
+    timeout(
+        Duration::from_secs(2),
+        read_until(&mut reader, |l| l.contains("\"ok\"")),
+    )
+    .await
+    .expect("no ok after delete");
+
+    // Store should now be empty.
+    assert!(handle.message_store.lock().await.is_empty());
+}

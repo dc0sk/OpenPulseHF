@@ -259,5 +259,32 @@ fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
         ControlEvent::ConfigData { config } => {
             st.daemon_config = Some(config);
         }
+        ControlEvent::MessageReceived {
+            id,
+            from,
+            to,
+            subject,
+            ..
+        } => {
+            // Add to inbox if not already present.
+            if !st.inbox.iter().any(|m| m.id == id) {
+                use openpulse_daemon::protocol::MessageSummary;
+                st.inbox.push(MessageSummary {
+                    id,
+                    from: from.clone(),
+                    to: to.clone(),
+                    subject: subject.clone(),
+                    timestamp_secs: 0, // not carried in the event
+                });
+            }
+            st.push_log(format!("MSG from {from} → {to}: {subject}"));
+        }
+        ControlEvent::MessageList { messages } => {
+            st.inbox = messages;
+        }
+        ControlEvent::MessageData { id, body, .. } => {
+            st.open_message_id = Some(id);
+            st.open_message_body = Some(body);
+        }
     }
 }
