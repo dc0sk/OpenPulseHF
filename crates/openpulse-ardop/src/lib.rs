@@ -58,7 +58,23 @@ pub struct ArdopServer {
 
 impl ArdopServer {
     pub fn new(engine: ModemEngine, config: ArdopConfig) -> Self {
-        let (bridge, tx_data_rx) = ModemBridge::new(engine, config.mode.clone(), config.loopback);
+        Self::with_trust_and_relay(engine, config, Default::default(), None)
+    }
+
+    /// Create a server with a pre-loaded trust store and optional relay forwarder.
+    pub fn with_trust_and_relay(
+        engine: ModemEngine,
+        config: ArdopConfig,
+        trust_store: openpulse_core::handshake::InMemoryTrustStore,
+        relay_forwarder: Option<openpulse_core::relay::RelayForwarder>,
+    ) -> Self {
+        let (bridge, tx_data_rx) = ModemBridge::new(
+            engine,
+            config.mode.clone(),
+            config.loopback,
+            trust_store,
+            relay_forwarder,
+        );
         spawn_worker(bridge.clone(), tx_data_rx);
         Self { bridge, config }
     }

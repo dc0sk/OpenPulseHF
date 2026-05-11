@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/backlog.md
 status: living
-last_updated: 2026-05-11
+last_updated: 2026-05-12
 ---
 
 # Backlog
@@ -22,15 +22,6 @@ The only remaining scheduled item.
 - **GitHub Actions release workflow**: on `v*` tag push, build a static x86-64 musl binary
   and an aarch64 `.deb` package and publish both as GitHub release assets.
   The `openpulse-tnc` / `openpulse-kisstnc` binaries are the primary packaging targets.
-
-### Known wiring gaps (runtime warnings; not blocking)
-
-| Location | Gap |
-|---|---|
-| `crates/openpulse-ardop/src/main.rs` | Trust store loading from TOML `trust.store_path` not wired into ARDOP bridge |
-| `crates/openpulse-ardop/src/main.rs` | Multi-hop relay not wired into ARDOP bridge (RelayForwarder exists in core) |
-| `crates/openpulse-kiss/src/main.rs` | Same two gaps as ARDOP bridge |
-| `crates/openpulse-modem/src/engine.rs` | `FecMode::Ldpc` variant has no engine dispatch path — `LdpcCodec` is implemented but not reachable via `transmit_with_fec` |
 
 ### Deferred (no target date)
 
@@ -96,3 +87,11 @@ The only remaining scheduled item.
 | 8PSK `demodulate_soft()` | Max-log-MAP LLR demapping replacing ±1.0 fallback (`plugins/psk8`) |
 | `manifest verify` CLI | Real load→lookup→hex-parse→verify path replacing placeholder (`openpulse-cli`) |
 | `LdpcCodec` | Rate-1/2 CPU min-sum BP replacing passthrough stub (`openpulse-core`) |
+
+### LDPC dispatch + trust store + relay wiring (PR #189)
+
+| Item | Implementation |
+|---|---|
+| `FecMode::Ldpc` engine dispatch | `transmit_with_ldpc` / `receive_with_ldpc` added to `ModemEngine`; single-block (128 B info → 256 B codeword); uses `demodulate_soft` + min-sum BP |
+| Trust store loading | `openpulse-core::trust_store_file::load_trust_store_from_file`; ARDOP and KISS mains load file at startup, log count or warn on error |
+| Multi-hop relay | `RelayForwarder` instantiated when `relay.enabled`; wired into ARDOP and KISS worker loops; `maybe_relay_forward` inspects received payloads for `WireEnvelope` relay frames |

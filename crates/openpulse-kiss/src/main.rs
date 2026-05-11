@@ -1,5 +1,7 @@
 use clap::Parser;
 use openpulse_audio::loopback::LoopbackBackend;
+use openpulse_core::relay::{RelayForwarder, RelayTrustPolicy};
+use openpulse_core::trust_store_file::load_trust_store_from_file;
 use openpulse_kiss::{KissConfig, KissServer};
 use openpulse_modem::ModemEngine;
 
@@ -97,19 +99,31 @@ async fn main() -> anyhow::Result<()> {
         config.port
     );
 
-    if cfg.relay.enabled {
-        tracing::info!(
-            max_hops = cfg.relay.max_hops,
-            "relay forwarding enabled (multi-hop relay not yet wired into KISS bridge)"
-        );
-    }
-    if !cfg.trust.store_path.is_empty() {
-        tracing::warn!(
-            path = %cfg.trust.store_path,
-            "trust.store_path is set but trust store loading is not yet implemented"
-        );
-    }
+    let trust_store = if !cfg.trust.store_path.is_empty() {
+        match load_trust_store_from_file(std::path::Path::new(&cfg.trust.store_path)) {
+            Ok(store) => {
+                tracing::info!(path = %cfg.trust.store_path, "trust store loaded");
+                store
+            }
+            Err(e) => {
+                tracing::warn!(path = %cfg.trust.store_path, error = %e, "failed to load trust store; starting with empty store");
+                Default::default()
+            }
+        }
+    } else {
+        Default::default()
+    };
 
-    KissServer::new(engine, config).run().await?;
+    let relay_forwarder = if cfg.relay.enabled {
+        let fwd = RelayForwarder::new(300_000, RelayTrustPolicy::default());
+        tracing::info!(max_hops = cfg.relay.max_hops, "relay forwarding enabled");
+        Some(fwd)
+    } else {
+        None
+    };
+
+    KissServer::with_trust_and_relay(engine, config, trust_store, relay_forwarder)
+        .run()
+        .await?;
     Ok(())
 }

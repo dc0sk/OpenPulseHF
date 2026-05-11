@@ -14,6 +14,7 @@ use openpulse_core::error::{ModemError, PluginError};
 use openpulse_core::fec::{FecCodec, Interleaver, ShortFecCodec, SoftCombiner};
 use openpulse_core::frame::Frame;
 use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
+use openpulse_core::ldpc::{IterativeDecoder, LdpcCodec};
 use openpulse_core::plugin::{ModulationConfig, PluginRegistry};
 use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::{BiDirRateAdapter, RateEvent, RateTrigger};
@@ -1210,6 +1211,114 @@ impl ModemEngine {
         let rs_decoded = FecCodec::strong().decode(&raw_wire.bytes)?;
         let frame = self.stage_decode_frame(&WirePayload { bytes: rs_decoded })?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
+        let _ = self.event_tx.send(EngineEvent::FrameReceived {
+            mode: mode.to_string(),
+            bytes: frame.payload.len(),
+        });
+        Ok(frame.payload)
+    }
+
+    /// Transmit with rate-1/2 LDPC FEC (1024 info bits → 2048 codeword bits, min-sum BP).
+    ///
+    /// TX chain: frame encode → LDPC encode (128 B → 256 B) → modulate → emit.
+    ///
+    /// The encoded frame must fit in one LDPC block (≤ 128 bytes).  For larger
+    /// payloads split them at the session layer before calling this method.
+    pub fn transmit_with_ldpc(
+        &mut self,
+        data: &[u8],
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<(), ModemError> {
+        self.csma_check()?;
+
+        let frame_wire = self.stage_encode_frame(data);
+        if frame_wire.bytes.len() > 128 {
+            return Err(ModemError::Frame(format!(
+                "LDPC: encoded frame {} B exceeds one-block limit of 128 B",
+                frame_wire.bytes.len()
+            )));
+        }
+        let codeword = LdpcCodec::new().encode(&frame_wire.bytes);
+        let fec_wire = WirePayload { bytes: codeword };
+        let fec_wire = self.route_wire_stage(PipelineStage::EncodeModulate, fec_wire)?;
+
+        debug!(
+            "LDPC transmitting {} B codeword (seq={}, mode={mode})",
+            fec_wire.bytes.len(),
+            self.sequence.wrapping_sub(1)
+        );
+
+        let samples = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_modulate_payload(plugin, mode, &fec_wire)?
+        };
+        let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
+        self.stage_emit_output(device, &samples)?;
+        let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
+            mode: mode.to_string(),
+            bytes: fec_wire.bytes.len(),
+        });
+        Ok(())
+    }
+
+    /// Receive with rate-1/2 LDPC FEC via min-sum belief propagation.
+    ///
+    /// RX chain: capture → demodulate_soft → LDPC decode_soft → frame decode.
+    pub fn receive_with_ldpc(
+        &mut self,
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<Vec<u8>, ModemError> {
+        let samples = self.stage_capture_input(device)?;
+        let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+
+        let prev_busy = self.dcd.is_busy();
+        self.dcd.update(&samples.samples);
+        if self.dcd.is_busy() != prev_busy {
+            let _ = self.event_tx.send(EngineEvent::DcdChange {
+                busy: self.dcd.is_busy(),
+                energy: self.dcd.energy(),
+            });
+        }
+
+        let llrs = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            let mod_cfg = ModulationConfig {
+                mode: mode.to_string(),
+                center_frequency: self.center_frequency + self.afc_correction_hz,
+                ..ModulationConfig::default()
+            };
+            plugin.demodulate_soft(&samples.samples, &mod_cfg)?
+        };
+
+        self.update_afc_estimate(mode, &samples.samples);
+        if let Some(hz) = self.last_afc_offset_hz {
+            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
+                offset_hz: hz,
+                correction_hz: self.afc_correction_hz,
+                mode: mode.to_string(),
+            });
+        }
+
+        // LDPC block is 2048 coded bits; trim excess LLRs from longer demodulations.
+        const LDPC_N: usize = 2048;
+        let ldpc_llrs = &llrs[..LDPC_N.min(llrs.len())];
+        let info_bytes = LdpcCodec::new().decode_soft(ldpc_llrs)?;
+
+        let corrected_wire = WirePayload { bytes: info_bytes };
+        let corrected_wire =
+            self.route_wire_stage(PipelineStage::DemodulateDecode, corrected_wire)?;
+
+        let frame = self.stage_decode_frame(&corrected_wire)?;
+        let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
+        info!("LDPC receive: frame seq={}", frame.sequence);
         let _ = self.event_tx.send(EngineEvent::FrameReceived {
             mode: mode.to_string(),
             bytes: frame.payload.len(),

@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use tokio::sync::broadcast;
 
+use openpulse_core::handshake::InMemoryTrustStore;
+use openpulse_core::relay::RelayForwarder;
 use openpulse_modem::ModemEngine;
 
 /// KissBridge configuration.
@@ -42,6 +44,10 @@ pub struct KissBridge {
     /// Pending TX byte count (mirrors ARDOP BUFFER tracking).
     pub tx_pending: Arc<AtomicUsize>,
     pub loopback: bool,
+    /// Loaded from `trust.store_path`; empty if no path is configured.
+    pub trust_store: Arc<InMemoryTrustStore>,
+    /// Present when relay is enabled in the config; enforces hop-limit and dedup.
+    pub relay_forwarder: Option<Arc<std::sync::Mutex<RelayForwarder>>>,
 }
 
 impl KissBridge {
@@ -49,6 +55,16 @@ impl KissBridge {
         engine: ModemEngine,
         mode: String,
         loopback: bool,
+    ) -> (Arc<Self>, std::sync::mpsc::Receiver<Vec<u8>>) {
+        Self::with_trust_and_relay(engine, mode, loopback, Default::default(), None)
+    }
+
+    pub fn with_trust_and_relay(
+        engine: ModemEngine,
+        mode: String,
+        loopback: bool,
+        trust_store: InMemoryTrustStore,
+        relay_forwarder: Option<RelayForwarder>,
     ) -> (Arc<Self>, std::sync::mpsc::Receiver<Vec<u8>>) {
         let (rx_data_tx, _) = broadcast::channel(32);
         let (tx_data_tx, tx_data_rx) = std::sync::mpsc::sync_channel(64);
@@ -59,6 +75,8 @@ impl KissBridge {
             tx_data_tx,
             tx_pending: Arc::new(AtomicUsize::new(0)),
             loopback,
+            trust_store: Arc::new(trust_store),
+            relay_forwarder: relay_forwarder.map(|f| Arc::new(std::sync::Mutex::new(f))),
         });
         (bridge, tx_data_rx)
     }
@@ -82,6 +100,7 @@ fn worker_loop(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiver<Ve
                     .unwrap()
                     .transmit(&data, &bridge.mode, None);
                 if let Ok(received) = bridge.engine.lock().unwrap().receive(&bridge.mode, None) {
+                    maybe_relay_forward(&bridge, &received);
                     if !received.is_empty() {
                         let _ = bridge.rx_data_tx.send(received);
                     }
@@ -95,6 +114,7 @@ fn worker_loop(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiver<Ve
 
         if !bridge.loopback {
             if let Ok(received) = bridge.engine.lock().unwrap().receive(&bridge.mode, None) {
+                maybe_relay_forward(&bridge, &received);
                 if !received.is_empty() {
                     let _ = bridge.rx_data_tx.send(received);
                 }
@@ -102,5 +122,51 @@ fn worker_loop(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiver<Ve
         }
 
         std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// Attempt to forward `payload` as a relay `WireEnvelope` when relay is enabled.
+///
+/// When the payload decodes as a valid `WireEnvelope` the forwarder increments
+/// the hop counter and the re-encoded envelope is transmitted as the next hop.
+fn maybe_relay_forward(bridge: &KissBridge, payload: &[u8]) {
+    use openpulse_core::wire_query::WireEnvelope;
+
+    let Some(ref fwd_arc) = bridge.relay_forwarder else {
+        return;
+    };
+
+    let Ok(envelope) = WireEnvelope::decode(payload) else {
+        return;
+    };
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    let forwarded = {
+        let mut fwd = fwd_arc.lock().unwrap();
+        fwd.forward(&envelope, now_ms)
+    };
+
+    match forwarded {
+        Ok(out_envelope) => {
+            if let Ok(out_bytes) = out_envelope.encode() {
+                let _ = bridge
+                    .engine
+                    .lock()
+                    .unwrap()
+                    .transmit(&out_bytes, &bridge.mode, None);
+                tracing::debug!(
+                    session_id = out_envelope.session_id,
+                    hop_index = out_envelope.hop_index,
+                    "relay: forwarded envelope"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::debug!("relay: envelope not forwarded: {e:?}");
+        }
     }
 }

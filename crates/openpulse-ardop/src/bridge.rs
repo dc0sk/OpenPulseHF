@@ -2,6 +2,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
+use openpulse_core::handshake::InMemoryTrustStore;
+use openpulse_core::relay::RelayForwarder;
 use openpulse_modem::ModemEngine;
 
 use crate::state::TncState;
@@ -33,6 +35,10 @@ pub struct ModemBridge {
     pub fec_rx: Arc<AtomicBool>,
     /// When true the TNC accepts relay frames alongside direct ARQ traffic.
     pub mesh_mode: Arc<AtomicBool>,
+    /// Loaded from `trust.store_path`; empty if no path is configured.
+    pub trust_store: Arc<InMemoryTrustStore>,
+    /// Present when relay is enabled in the config; enforces hop-limit and dedup.
+    pub relay_forwarder: Option<Arc<std::sync::Mutex<RelayForwarder>>>,
 }
 
 impl ModemBridge {
@@ -40,6 +46,8 @@ impl ModemBridge {
         engine: ModemEngine,
         mode: String,
         loopback: bool,
+        trust_store: InMemoryTrustStore,
+        relay_forwarder: Option<RelayForwarder>,
     ) -> (Arc<Self>, std::sync::mpsc::Receiver<Vec<u8>>) {
         let (event_tx, _) = broadcast::channel(32);
         let (rx_data_tx, _) = broadcast::channel(32);
@@ -60,6 +68,8 @@ impl ModemBridge {
             fec_tx: Arc::new(AtomicBool::new(false)),
             fec_rx: Arc::new(AtomicBool::new(false)),
             mesh_mode: Arc::new(AtomicBool::new(false)),
+            trust_store: Arc::new(trust_store),
+            relay_forwarder: relay_forwarder.map(|f| Arc::new(std::sync::Mutex::new(f))),
         });
         (bridge, tx_data_rx)
     }
@@ -97,23 +107,8 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                 };
                 drop(engine);
                 if tx_result.is_ok() {
-                    let use_fec_rx = bridge.fec_rx.load(Ordering::Relaxed);
-                    let received = if use_fec_rx {
-                        bridge
-                            .engine
-                            .lock()
-                            .unwrap()
-                            .receive_with_fec(&bridge.mode, None)
-                            .ok()
-                    } else {
-                        bridge
-                            .engine
-                            .lock()
-                            .unwrap()
-                            .receive(&bridge.mode, None)
-                            .ok()
-                    };
-                    if let Some(rx) = received {
+                    if let Some(rx) = do_receive(&bridge) {
+                        maybe_relay_forward(&bridge, &rx);
                         if !rx.is_empty() {
                             let _ = bridge.rx_data_tx.send(rx);
                         }
@@ -127,23 +122,8 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
         }
 
         if !bridge.loopback {
-            let use_fec_rx = bridge.fec_rx.load(Ordering::Relaxed);
-            let received = if use_fec_rx {
-                bridge
-                    .engine
-                    .lock()
-                    .unwrap()
-                    .receive_with_fec(&bridge.mode, None)
-                    .ok()
-            } else {
-                bridge
-                    .engine
-                    .lock()
-                    .unwrap()
-                    .receive(&bridge.mode, None)
-                    .ok()
-            };
-            if let Some(rx) = received {
+            if let Some(rx) = do_receive(&bridge) {
+                maybe_relay_forward(&bridge, &rx);
                 if !rx.is_empty() {
                     let _ = bridge.rx_data_tx.send(rx);
                 }
@@ -151,5 +131,72 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
         }
 
         std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+fn do_receive(bridge: &ModemBridge) -> Option<Vec<u8>> {
+    let use_fec_rx = bridge.fec_rx.load(Ordering::Relaxed);
+    if use_fec_rx {
+        bridge
+            .engine
+            .lock()
+            .unwrap()
+            .receive_with_fec(&bridge.mode, None)
+            .ok()
+    } else {
+        bridge
+            .engine
+            .lock()
+            .unwrap()
+            .receive(&bridge.mode, None)
+            .ok()
+    }
+}
+
+/// Attempt to forward `payload` as a relay `WireEnvelope` when relay is enabled.
+///
+/// The receive path returns decoded HPX frame payloads, not raw wire bytes, so
+/// relay-protocol envelopes must be carried inside an HPX frame by the sender.
+/// When the payload decodes as a valid `WireEnvelope` the forwarder increments
+/// the hop counter and the re-encoded envelope is transmitted as the next hop.
+fn maybe_relay_forward(bridge: &ModemBridge, payload: &[u8]) {
+    use openpulse_core::wire_query::WireEnvelope;
+
+    let Some(ref fwd_arc) = bridge.relay_forwarder else {
+        return;
+    };
+
+    let Ok(envelope) = WireEnvelope::decode(payload) else {
+        return;
+    };
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    let forwarded = {
+        let mut fwd = fwd_arc.lock().unwrap();
+        fwd.forward(&envelope, now_ms)
+    };
+
+    match forwarded {
+        Ok(out_envelope) => {
+            if let Ok(out_bytes) = out_envelope.encode() {
+                let _ = bridge
+                    .engine
+                    .lock()
+                    .unwrap()
+                    .transmit(&out_bytes, &bridge.mode, None);
+                tracing::debug!(
+                    session_id = out_envelope.session_id,
+                    hop_index = out_envelope.hop_index,
+                    "relay: forwarded envelope"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::debug!("relay: envelope not forwarded: {e:?}");
+        }
     }
 }
