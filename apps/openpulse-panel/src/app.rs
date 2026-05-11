@@ -8,7 +8,9 @@ use openpulse_daemon::protocol::ControlCommand;
 
 use crate::connection::{self, TransportKind};
 use crate::state::{DaemonConfig, PanelState};
-use crate::ui::{draw_event_log, draw_rig_bar, draw_session_status, draw_spectrum_pane};
+use crate::ui::{
+    build_waterfall_image, draw_event_log, draw_rig_bar, draw_session_status, draw_spectrum_pane,
+};
 
 const MODES: &[&str] = &[
     "BPSK31",
@@ -51,6 +53,9 @@ pub struct PanelApp {
     config_open: bool,
     config_draft: DaemonConfig,
     config_fetch_pending: bool,
+
+    // Waterfall texture (updated each frame when spectrum history changes).
+    waterfall_tex: Option<egui::TextureHandle>,
 }
 
 impl PanelApp {
@@ -73,6 +78,7 @@ impl PanelApp {
                 tx_attenuation_db: 0.0,
             },
             config_fetch_pending: false,
+            waterfall_tex: None,
         }
     }
 
@@ -300,11 +306,21 @@ impl eframe::App for PanelApp {
                 draw_event_log(ui, &st);
             });
 
+        // Rebuild waterfall texture from current history (cheap: 512×64 pixels).
+        {
+            let history = self.shared.lock().unwrap().spectrum_history.clone();
+            if !history.is_empty() {
+                let image = build_waterfall_image(&history);
+                self.waterfall_tex =
+                    Some(ctx.load_texture("waterfall", image, egui::TextureOptions::NEAREST));
+            }
+        }
+
         // ── Central: spectrum left | session status right ────────────────────
         egui::CentralPanel::default().show(ctx, |ui| {
             let st = self.shared.lock().unwrap();
             ui.columns(2, |cols| {
-                draw_spectrum_pane(&mut cols[0], &st);
+                draw_spectrum_pane(&mut cols[0], &st, self.waterfall_tex.as_ref());
                 draw_session_status(&mut cols[1], &st);
             });
         });
