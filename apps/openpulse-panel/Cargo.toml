@@ -21,3 +21,4 @@ egui.workspace    = true
 egui_plot.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+ewebsock          = "0.6"

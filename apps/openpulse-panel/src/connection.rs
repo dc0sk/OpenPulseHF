@@ -1,37 +1,43 @@
-//! Background TCP connection thread.
+//! Background connection thread.
 //!
-//! Connects to `openpulse-server` control port, reads `ControlEvent` NDJSON lines
-//! and binary spectrum frames, applies them to [`PanelState`], and forwards
-//! `ControlCommand`s from the UI.
+//! Connects to the daemon control port (TCP or WebSocket), reads
+//! [`ControlEvent`] messages, applies them to [`PanelState`], and forwards
+//! [`ControlCommand`]s from the UI.
 //!
-//! After connecting, the thread immediately sends `SubscribeSpectrum { fps: 20 }`.
-//! The read loop distinguishes binary spectrum frames from NDJSON lines by peeking
-//! at the first byte: `O` (0x4F = `SPECTRUM_MAGIC[0]`) → binary frame, otherwise
-//! → NDJSON line.
+//! After connecting the thread immediately sends `SubscribeSpectrum { fps: 20 }`.
 
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
 use openpulse_daemon::protocol::{ControlCommand, ControlEvent, SPECTRUM_MAGIC};
 
 use crate::state::{PanelState, RigSnapshot};
+use crate::transport::{RecvMsg, TcpTransport, Transport, WsTransport};
+
+/// Whether to use raw TCP or WebSocket transport.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransportKind {
+    Tcp,
+    WebSocket,
+}
 
 /// Spawn the connection thread.  Returns a sender for outbound commands.
 pub fn spawn(
     addr: String,
+    kind: TransportKind,
     shared: Arc<Mutex<PanelState>>,
     stop_rx: Receiver<()>,
 ) -> Sender<ControlCommand> {
     let (cmd_tx, cmd_rx) = crossbeam_channel::bounded::<ControlCommand>(32);
-    std::thread::spawn(move || run_loop(addr, shared, stop_rx, cmd_rx));
+    thread::spawn(move || run_loop(addr, kind, shared, stop_rx, cmd_rx));
     cmd_tx
 }
 
 fn run_loop(
     addr: String,
+    kind: TransportKind,
     shared: Arc<Mutex<PanelState>>,
     stop_rx: Receiver<()>,
     cmd_rx: Receiver<ControlCommand>,
@@ -41,23 +47,37 @@ fn run_loop(
             break;
         }
 
-        match TcpStream::connect(&addr) {
-            Err(e) => {
-                {
-                    let mut st = shared.lock().unwrap();
-                    st.connected = false;
-                    st.push_log(format!("connect error: {e}"));
-                }
-                std::thread::sleep(Duration::from_secs(2));
+        let transport: Option<Box<dyn Transport>> = match kind {
+            TransportKind::Tcp => {
+                TcpTransport::connect(&addr).map(|t| Box::new(t) as Box<dyn Transport>)
             }
-            Ok(stream) => {
+            TransportKind::WebSocket => {
+                WsTransport::connect(&addr).map(|t| Box::new(t) as Box<dyn Transport>)
+            }
+        };
+
+        match transport {
+            None => {
+                shared
+                    .lock()
+                    .unwrap()
+                    .push_log(format!("connect error: could not reach {addr}"));
+                thread::sleep(Duration::from_secs(2));
+            }
+            Some(mut t) => {
                 {
                     let mut st = shared.lock().unwrap();
                     st.connected = true;
                     st.push_log(format!("connected to {addr}"));
                 }
-                let _ = stream.set_read_timeout(Some(Duration::from_millis(50)));
-                run_session(stream, &shared, &stop_rx, &cmd_rx);
+                // Subscribe to spectrum immediately.
+                if let Ok(s) = serde_json::to_string(&ControlCommand::SubscribeSpectrum { fps: 20 })
+                {
+                    t.send_text(&s);
+                }
+
+                run_session(t.as_mut(), &shared, &stop_rx, &cmd_rx);
+
                 {
                     let mut st = shared.lock().unwrap();
                     st.connected = false;
@@ -66,94 +86,64 @@ fn run_loop(
                     }
                     st.push_log("disconnected — retrying in 2 s".into());
                 }
-                std::thread::sleep(Duration::from_secs(2));
+                thread::sleep(Duration::from_secs(2));
             }
         }
     }
 }
 
 fn run_session(
-    stream: TcpStream,
+    transport: &mut dyn Transport,
     shared: &Arc<Mutex<PanelState>>,
     stop_rx: &Receiver<()>,
     cmd_rx: &Receiver<ControlCommand>,
 ) {
-    let mut write_half = stream.try_clone().unwrap();
-    let mut reader = BufReader::new(stream);
-
-    // Subscribe to spectrum immediately on connect.
-    if let Ok(mut s) = serde_json::to_string(&ControlCommand::SubscribeSpectrum { fps: 20 }) {
-        s.push('\n');
-        let _ = write_half.write_all(s.as_bytes());
-    }
-
-    let mut line = String::new();
-
     loop {
         if stop_rx.try_recv().is_ok() {
             break;
         }
 
-        // Forward any pending commands from the UI.
+        // Forward pending UI commands.
         while let Ok(cmd) = cmd_rx.try_recv() {
-            if let Ok(mut s) = serde_json::to_string(&cmd) {
-                s.push('\n');
-                let _ = write_half.write_all(s.as_bytes());
+            if let Ok(s) = serde_json::to_string(&cmd) {
+                if !transport.send_text(&s) {
+                    return;
+                }
             }
         }
 
-        // Peek at the first buffered byte to decide how to read.
-        let first_byte = match reader.fill_buf() {
-            Err(ref e)
-                if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut =>
-            {
-                continue
+        // Poll for incoming data.
+        match transport.try_recv() {
+            None => {
+                thread::sleep(Duration::from_millis(10));
             }
-            Err(_) => break,
-            Ok(&[]) => break, // EOF
-            Ok(buf) => buf[0],
-        };
-
-        if first_byte == SPECTRUM_MAGIC[0] {
-            // Binary spectrum frame: 4 magic + 2 fft_size LE + 4 sample_rate LE + bins.
-            let mut header = [0u8; 10];
-            if reader.read_exact(&mut header).is_err() {
-                break;
+            Some(Err(())) => break,
+            Some(Ok(RecvMsg::Binary(frame))) => {
+                apply_spectrum(&frame, shared);
             }
-            if &header[0..4] != SPECTRUM_MAGIC {
-                break;
-            }
-            let fft_size = u16::from_le_bytes([header[4], header[5]]) as usize;
-            let mut bin_bytes = vec![0u8; fft_size * 4];
-            if reader.read_exact(&mut bin_bytes).is_err() {
-                break;
-            }
-            let bins: Vec<f32> = bin_bytes
-                .chunks_exact(4)
-                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                .collect();
-            shared.lock().unwrap().spectrum_bins = bins;
-        } else {
-            // NDJSON line.
-            line.clear();
-            match reader.read_line(&mut line) {
-                Err(ref e)
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut =>
-                {
-                    continue
-                }
-                Err(_) | Ok(0) => break,
-                Ok(_) => {
-                    let text = line.trim().to_string();
-                    if !text.is_empty() {
-                        apply_event(&text, shared);
-                    }
+            Some(Ok(RecvMsg::Text(line))) => {
+                if !line.is_empty() {
+                    apply_event(&line, shared);
                 }
             }
         }
     }
+}
+
+fn apply_spectrum(frame: &[u8], shared: &Arc<Mutex<PanelState>>) {
+    if frame.len() < 10 || &frame[0..4] != SPECTRUM_MAGIC {
+        return;
+    }
+    let fft_size = u16::from_le_bytes([frame[4], frame[5]]) as usize;
+    let expected = 10 + fft_size * 4;
+    if frame.len() < expected {
+        return;
+    }
+    let bins: Vec<f32> = frame[10..expected]
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    shared.lock().unwrap().spectrum_bins = bins;
 }
 
 fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
@@ -243,6 +233,13 @@ fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
             } else {
                 st.rig_b = Some(snap);
             }
+        }
+        ControlEvent::PttChanged { active } => {
+            st.ptt_active = active;
+        }
+        ControlEvent::RfConnectionChanged { connected, peer } => {
+            st.rf_connected = connected;
+            st.rf_peer = peer;
         }
     }
 }

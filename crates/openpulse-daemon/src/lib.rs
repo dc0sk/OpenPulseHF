@@ -10,6 +10,7 @@
 //! connection.  See [`protocol::encode_spectrum_frame`] for the wire format.
 
 pub mod protocol;
+pub mod ws;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -39,6 +40,11 @@ pub type SpectrumTap = Arc<RwLock<Vec<f32>>>;
 pub struct ControlServerHandle {
     /// Receives every [`ControlCommand`] dispatched from any connected client.
     pub commands: mpsc::Receiver<ControlCommand>,
+    /// Sender for the shared event broadcast (pass to [`ws::spawn_ws`] to
+    /// share state between the TCP and WebSocket control endpoints).
+    pub event_tx: Arc<broadcast::Sender<ControlEvent>>,
+    /// mpsc sender for injecting commands programmatically (used by WebSocket endpoint).
+    pub command_tx: mpsc::Sender<ControlCommand>,
     /// Current active mode string (also updated by the command handler).
     pub active_mode: SharedMode,
     /// Current TX attenuation in dB (also updated by the command handler).
@@ -137,6 +143,8 @@ impl ControlServer {
 
         Ok(ControlServerHandle {
             commands: cmd_rx,
+            event_tx: ev_tx,
+            command_tx: cmd_tx,
             active_mode,
             tx_attenuation_db,
             spectrum_tap,
@@ -257,7 +265,7 @@ async fn send_json<T: serde::Serialize>(
 }
 
 /// Parse and dispatch a single command line; returns the response.
-async fn dispatch_command(
+pub(crate) async fn dispatch_command(
     line: &str,
     cmd_tx: &mpsc::Sender<ControlCommand>,
     active_mode: &SharedMode,

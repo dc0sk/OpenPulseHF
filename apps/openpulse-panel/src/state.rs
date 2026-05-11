@@ -45,6 +45,12 @@ pub struct PanelState {
     pub pending_qsy_token: Option<String>,
     /// Most-recent power-spectrum bins (dBFS), 512 values from the daemon.
     pub spectrum_bins: Vec<f32>,
+    /// Whether the transmitter is currently keyed (PTT asserted).
+    pub ptt_active: bool,
+    /// Whether an RF peer link is currently active.
+    pub rf_connected: bool,
+    /// Callsign of the currently connected RF peer, if any.
+    pub rf_peer: Option<String>,
 }
 
 impl Default for PanelState {
@@ -65,6 +71,9 @@ impl Default for PanelState {
             event_log: VecDeque::new(),
             pending_qsy_token: None,
             spectrum_bins: Vec::new(),
+            ptt_active: false,
+            rf_connected: false,
+            rf_peer: None,
         }
     }
 }
