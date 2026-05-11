@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: CLAUDE.md
 status: living
-last_updated: 2026-05-03
+last_updated: 2026-05-11
 ---
 
 # CLAUDE.md — OpenPulseHF Agent Contract
@@ -61,7 +61,7 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 | `openpulse-modem` | `crates/openpulse-modem` | `ModemEngine`, `PipelineScheduler`, benchmark harness, diagnostics, CSMA/DCD, channel sim harness |
 | `openpulse-channel` | `crates/openpulse-channel` | Channel simulation (Watterson, Gilbert-Elliott, QRN/QRM/QSB/Chirp) |
 | `openpulse-radio` | `crates/openpulse-radio` | `PttController` trait + `NoOpPtt`, `SerialRtsDtrPtt`, `VoxPtt`, `RigctldPtt`, `RigctldController` (CAT) |
-| `openpulse-dsp` | `crates/openpulse-dsp` | DSP primitives: RRC filter, PLL, timing recovery (shared building blocks, not yet wired into modem) |
+| `openpulse-dsp` | `crates/openpulse-dsp` | DSP primitives: RRC filter, PLL, Gardner timing recovery, LMS/DFE adaptive equalizer |
 | `openpulse-config` | `crates/openpulse-config` | Typed TOML schema; `load()`, `init_template()`, CLI-override pattern |
 | `openpulse-gpu` | `crates/openpulse-gpu` | wgpu-backed BPSK DSP kernels; CPU fallback when GPU unavailable; gated by `gpu` feature in `bpsk-plugin` |
 
@@ -94,9 +94,10 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 
 | Crate | Path | Role |
 |---|---|---|
-| `bpsk-plugin` | `plugins/bpsk` | BPSK31/63/100/250 modulation plugin; optional GPU path |
+| `bpsk-plugin` | `plugins/bpsk` | BPSK31/63/100/250 modulation plugin; optional GPU path; LMS equalizer on RRC path |
 | `qpsk-plugin` | `plugins/qpsk` | QPSK125/250/500/1000 modulation plugin |
 | `psk8-plugin` | `plugins/psk8` | 8PSK500/1000 modulation plugin |
+| `qam64-plugin` | `plugins/64qam` | 64QAM500/1000/2000-RRC modulation plugin; Gray-coded 8×8 PAM-8; soft demodulator |
 | `fsk4-plugin` | `plugins/fsk4` | FSK4-ACK modulation plugin (ACK channel) |
 
 ---
@@ -110,11 +111,15 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 
 **Deferred (no target date)**:
 - On-air regulatory validation (Phase 5.5-reg): on-air tests, station ID audit, compliance report
-- Adaptive equalizer LMS/DFE: follow-on to FF-3 RRC; needed for 1000 baud on Watterson Moderate/Poor
-- 64QAM / SL12–SL20: deferred pending equalizer and OFDM research
-- External Winlink Type C LZHUF compatibility: 4-byte length prefix differs from Winlink convention
 
-**Recently shipped (PRs #187–#189)**:
+**Recently shipped (PRs #193–#195)**:
+- `crates/openpulse-b2f`: `compress_lzhuf_winlink` / `decompress_lzhuf_winlink` — 4-byte LE prefix matching Winlink Type C convention; IRS receive path switched to Winlink codec (PR #193)
+- `crates/openpulse-dsp`: `LmsEqualizer` — complex symbol-rate LMS/DFE, supervised preamble training then decision-directed; wired into BPSK-RRC demodulation path after Gardner TED (PR #194)
+- `plugins/64qam`: full 64QAM plugin — Gray-coded 8×8 PAM-8 constellation, rectangular-windowed and RRC modulator/demodulator, max-log-MAP soft demodulator; modes `64QAM500`, `64QAM1000`, `64QAM2000-RRC` (PR #195)
+- `crates/openpulse-core/src/rate.rs`: `SpeedLevel` extended to SL20 (PR #195)
+- `crates/openpulse-core/src/profile.rs`: `hpx_wideband_hd()` profile mapping SL12–SL14 to 64QAM modes; profile slot arrays widened to 21 (PR #195)
+
+**Previously shipped (PRs #187–#192)**:
 - `plugins/psk8`: max-log-MAP `demodulate_soft()` replacing ±1.0 fallback
 - `openpulse-cli`: `manifest verify` fully wired to `verify_manifest()`
 - `openpulse-core::ldpc`: real rate-1/2 min-sum BP replacing passthrough stub
