@@ -13,6 +13,9 @@ use crate::kiss;
 
 /// Maximum AX.25/KISS payload size accepted by ModemEngine frame layer.
 const MAX_PAYLOAD_BYTES: usize = 255;
+/// Maximum raw frame body size (type byte + worst-case-escaped payload).
+/// 255 bytes × 2 (FESC escaping) + 1 type byte = 511; round up with margin.
+const MAX_FRAME_BODY: usize = 600;
 
 pub async fn serve(listener: TcpListener, bridge: Arc<KissBridge>) -> Result<(), KissTncError> {
     loop {
@@ -100,7 +103,7 @@ async fn read_kiss_frame(
             break;
         }
     }
-    // Accumulate until the next FEND.
+    // Accumulate until the next FEND, bounded by MAX_FRAME_BODY.
     let mut buf = Vec::new();
     loop {
         let b = reader.read_u8().await?;
@@ -108,5 +111,8 @@ async fn read_kiss_frame(
             return Ok(buf);
         }
         buf.push(b);
+        if buf.len() > MAX_FRAME_BODY {
+            return Err(KissTncError::FrameTooLarge(buf.len()));
+        }
     }
 }

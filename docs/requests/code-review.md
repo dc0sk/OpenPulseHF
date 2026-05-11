@@ -83,6 +83,17 @@ are merged.
   `fragment_total` — is a 0-fragment total rejected?
 - **Memory-ARQ** (`SoftCombiner`): If `combine()` is called before any accumulation, does it
   return an empty vec or panic? Verify `reset()` actually clears the accumulator.
+- **LMS/DFE equalizer** (`crates/openpulse-dsp/src/equalizer.rs`, PR #194): Does the supervised
+  preamble training converge within the preamble length at minimum SNR? Is the DFE feedback path
+  stable when decision-directed mode starts with high residual ISI? What happens when the payload
+  is shorter than `fwd_len + dfe_len`?
+- **64QAM soft demodulator** (`plugins/64qam`, PR #195): Verify the max-log-MAP branch metric
+  computation — confirm that log-domain LLR accumulation does not overflow `f32` for the extreme
+  constellation points (±7 PAM-8 levels). Confirm the Gray-coded bit labeling is consistent
+  between modulator and demodulator for all 64 symbols. Verify the `64QAM2000-RRC` RRC-filtered
+  path produces correct output at the matched filter — Hann windowing was deliberately avoided
+  (it causes amplitude-dependent ISI in multi-level constellations), so confirm the rectangular
+  window does not create spectral leakage that degrades adjacent subcarrier rejection.
 
 ### 4. Performance and resource usage
 
@@ -120,9 +131,9 @@ are merged.
   panics, bringing down the process. Replace with `.lock().unwrap_or_else(|e| e.into_inner())`
   or structured panic recovery so a single bad frame does not terminate the bridge.
 - **Integer arithmetic in DSP paths**: Confirm that sample accumulation and bit-packing in
-  `bpsk_modulate`, `qpsk_modulate`, `psk8_modulate`, OFDM and SC-FDMA do not overflow `i32` or
-  saturate `f32` for maximum-length payloads. Pay particular attention to intermediate sums in
-  the IQ accumulator and the LDPC min-sum belief values.
+  `bpsk_modulate`, `qpsk_modulate`, `psk8_modulate`, `qam64_modulate`, OFDM and SC-FDMA do not
+  overflow `i32` or saturate `f32` for maximum-length payloads. Pay particular attention to
+  intermediate sums in the IQ accumulator and the LDPC min-sum belief values.
 - **Dead code**: Run `cargo check --workspace --no-default-features 2>&1 | grep "unused"` after
   enabling `#![warn(dead_code)]` in each crate root. Remove dead items or gate them with
   a feature flag and document why they exist.

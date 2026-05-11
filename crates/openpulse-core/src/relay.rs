@@ -24,6 +24,8 @@ pub enum RelayForwardError {
     DuplicateDetected,
     /// src_peer_id is denied by this node's trust policy.
     PolicyRejected { src_peer_id: [u8; 32] },
+    /// Replay-suppression table is at capacity; envelope dropped.
+    CapacityExceeded,
 }
 
 // ------------------------------------------------------------------
@@ -48,6 +50,8 @@ pub enum RelayEvent {
         session_id: u64,
         src_peer_id: [u8; 32],
     },
+    /// Envelope dropped because the replay-suppression table is full.
+    CapacityExceeded { session_id: u64 },
 }
 
 // ------------------------------------------------------------------
@@ -230,6 +234,13 @@ pub fn select_best_scored_route(
 // Relay forwarder
 // ------------------------------------------------------------------
 
+/// Hard cap on the replay-suppression table size.
+///
+/// A sender that rotates nonces faster than `ttl_ms` expires can otherwise
+/// grow the table without bound.  New envelopes are dropped when the cap is
+/// reached until TTL eviction frees space.
+const MAX_SEEN_ENTRIES: usize = 4096;
+
 /// Stateful relay forwarding node with duplicate suppression and hop limiting.
 ///
 /// Each received `WireEnvelope` is checked for:
@@ -281,7 +292,15 @@ impl RelayForwarder {
             });
         }
 
-        // 2. Duplicate suppression
+        // 2. Capacity guard — reject before inserting when the table is full.
+        if self.seen.len() >= MAX_SEEN_ENTRIES {
+            self.events.push(RelayEvent::CapacityExceeded {
+                session_id: envelope.session_id,
+            });
+            return Err(RelayForwardError::CapacityExceeded);
+        }
+
+        // 3. Duplicate suppression
         let key = (envelope.session_id, envelope.nonce);
         if self.seen.contains_key(&key) {
             self.events.push(RelayEvent::DuplicateSuppressed {
@@ -291,7 +310,7 @@ impl RelayForwarder {
             return Err(RelayForwardError::DuplicateDetected);
         }
 
-        // 3. Trust policy — check originating peer (src_peer_id)
+        // 4. Trust policy — check originating peer (src_peer_id)
         // Convert [u8;32] to a hex string for the policy lookup.
         let src_hex = hex_peer_id(&envelope.src_peer_id);
         if !self.policy.allows(&src_hex) {
