@@ -135,6 +135,9 @@ pub enum ControlCommand {
     /// Disconnect the current RF peer connection.
     DisconnectPeer,
     /// Request the daemon's current runtime configuration.
+    ///
+    /// The server responds with [`ControlEvent::ConfigData`] followed immediately
+    /// by an `ok` [`CommandResponse`].
     GetConfig,
     /// Apply runtime configuration changes.  Callsign and grid square are
     /// ignored (read-only at runtime); mode and attenuation take effect immediately.

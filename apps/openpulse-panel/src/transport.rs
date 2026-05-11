@@ -91,7 +91,15 @@ impl Transport for TcpTransport {
             if self.reader.read_exact(&mut header).is_err() {
                 return Some(Err(()));
             }
+            // Validate full 4-byte magic before trusting the rest of the header.
+            if &header[0..4] != b"OPSP" {
+                return Some(Err(()));
+            }
             let fft_size = u16::from_le_bytes([header[4], header[5]]) as usize;
+            // Sanity-cap to prevent large allocations from a malformed frame.
+            if fft_size > 8192 {
+                return Some(Err(()));
+            }
             let mut payload = vec![0u8; fft_size * 4];
             if self.reader.read_exact(&mut payload).is_err() {
                 return Some(Err(()));

@@ -16,7 +16,7 @@ async fn main() {
 
     let cfg = openpulse_config::load().unwrap_or_default();
     let mode = cfg.modem.mode.clone();
-    let callsign = (
+    let station_id = (
         cfg.station.callsign.clone(),
         cfg.station.grid_square.clone(),
     );
@@ -27,7 +27,7 @@ async fn main() {
     let tcp_bind: std::net::SocketAddr = "127.0.0.1:9000".parse().unwrap();
     let ws_bind: std::net::SocketAddr = "127.0.0.1:9001".parse().unwrap();
 
-    let mut handle = ControlServer::spawn(tcp_bind, &engine, mode, callsign, None)
+    let mut handle = ControlServer::spawn(tcp_bind, &engine, mode, station_id, None)
         .await
         .expect("failed to bind TCP control port");
 
@@ -35,14 +35,13 @@ async fn main() {
 
     ws::spawn_ws(
         ws_bind,
-        &engine,
         ws::WsShared {
             ev_tx: handle.event_tx.clone(),
             cmd_tx: handle.command_tx.clone(),
             active_mode: handle.active_mode.clone(),
             tx_attenuation_db: handle.tx_attenuation_db.clone(),
             spectrum_tap: handle.spectrum_tap.clone(),
-            callsign: handle.callsign.clone(),
+            station_id: handle.station_id.clone(),
         },
         None,
     )
