@@ -27,6 +27,7 @@ use std::f32::consts::PI;
 
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
+use openpulse_dsp::equalizer::LmsEqualizer;
 use openpulse_dsp::filter::FirFilter;
 use openpulse_dsp::rrc::generate_rrc_coefficients;
 use openpulse_dsp::timing::GardnerDetector;
@@ -337,7 +338,23 @@ fn bpsk_demodulate_rrc(
     // 4. Adaptive timing recovery via Gardner detector starting from the acquired offset.
     let (i_out, q_out) = gardner_sample_rrc(&i_bb, &q_bb, n, initial_timing);
 
-    (i_out, q_out)
+    // 5. LMS equalizer: train on the known preamble symbols, then decision-directed.
+    let (i_eq, q_eq) = bpsk_lms_equalize(&i_out, &q_out);
+
+    (i_eq, q_eq)
+}
+
+/// Apply a 7-tap LMS equalizer to BPSK symbol-rate I/Q.
+///
+/// Trains on the first `PREAMBLE_SYMS` samples using the known preamble
+/// sequence, then switches to decision-directed mode.
+fn bpsk_lms_equalize(i_syms: &[f32], q_syms: &[f32]) -> (Vec<f32>, Vec<f32>) {
+    let training = expected_preamble_symbols(PREAMBLE_SYMS.min(i_syms.len()));
+    let training_q = vec![0.0f32; training.len()];
+    let mut eq = LmsEqualizer::new(7, 0, 0.02);
+    eq.process_frame(i_syms, q_syms, &training, &training_q, |i, _q| {
+        (if i >= 0.0 { 1.0 } else { -1.0 }, 0.0)
+    })
 }
 
 // ── Timing search ─────────────────────────────────────────────────────────────
