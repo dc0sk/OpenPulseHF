@@ -389,7 +389,7 @@ fn broadcast_ttl_zero_not_relayed() {
 
     let mut engine_a = make_broadcast_engine(&lb_a);
     let mut node_b = make_node(&lb_b, peer_b);
-    let mut node_c = make_node(&lb_c, peer_c);
+    let node_c = make_node(&lb_c, peer_c);
 
     engine_a
         .broadcast(b"no relay", MODE, 0, None)
