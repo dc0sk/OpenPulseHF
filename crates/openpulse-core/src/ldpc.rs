@@ -38,6 +38,19 @@ fn xorshift32(state: &mut u32) -> u32 {
     *state
 }
 
+// ── Public size constants ─────────────────────────────────────────────────────
+
+/// Maximum number of information bytes per LDPC block (k = 1024 bits = 128 bytes).
+///
+/// Callers of `ModemEngine::transmit_with_ldpc` must ensure the *encoded frame*
+/// (HPX header + payload + CRC, as returned by `stage_encode_frame`) does not
+/// exceed this value.  Typical HPX frame overhead is 8–10 bytes, leaving
+/// ~118–120 bytes of usable user payload per call.
+pub const LDPC_MAX_INFO_BYTES: usize = 128;
+
+/// Number of coded bits per LDPC codeword (n = 2048 bits = 256 bytes).
+pub const LDPC_CODEWORD_BYTES: usize = 256;
+
 // ── LdpcCodec ────────────────────────────────────────────────────────────────
 
 /// Rate-1/2 LDPC codec: 1024 info bits, 2048 codeword bits.
