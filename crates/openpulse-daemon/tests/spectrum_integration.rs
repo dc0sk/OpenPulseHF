@@ -6,8 +6,7 @@ use std::time::Duration;
 use bpsk_plugin::BpskPlugin;
 use openpulse_audio::LoopbackBackend;
 use openpulse_daemon::protocol::{
-    decode_spectrum_frame, encode_spectrum_frame, CommandResponse, ControlCommand, ControlEvent,
-    SPECTRUM_MAGIC,
+    decode_spectrum_frame, encode_spectrum_frame, ControlCommand, SPECTRUM_MAGIC,
 };
 use openpulse_daemon::{ControlServer, ControlServerHandle};
 use openpulse_modem::ModemEngine;
@@ -99,6 +98,7 @@ async fn read_next_message(
     }
 }
 
+#[allow(dead_code)]
 enum Either {
     Binary { fft_size: usize },
     Text(String),
