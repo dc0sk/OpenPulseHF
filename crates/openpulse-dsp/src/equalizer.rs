@@ -17,8 +17,8 @@ use std::collections::VecDeque;
 
 /// LMS adaptive equalizer with optional DFE feedback section.
 pub struct LmsEqualizer {
-    fwd_len: usize,
-    dfe_len: usize,
+    pub fwd_len: usize,
+    pub dfe_len: usize,
     mu: f32,
     // Forward tap weights (complex: (re, im) per tap)
     w_fwd_re: Vec<f32>,
