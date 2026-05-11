@@ -1,44 +1,139 @@
 use std::fs;
 use std::path::Path;
-use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use openpulse_core::compression::CompressionAlgorithm;
+use serde::{Deserialize, Serialize};
 
-use crate::matrix::{fec_label, TestResult, UseCase};
+use crate::compare::{compare_runs, write_comparison};
+use crate::matrix::{fec_label, ChannelSpec, TestResult, UseCase};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunMeta {
+    /// UTC timestamp of this run.
     pub date: DateTime<Utc>,
+    /// Short (7-char) git commit SHA.
     pub git_commit: String,
+    /// Full 40-char git commit SHA.
+    pub git_commit_full: String,
+    /// True when uncommitted changes were present at run time.
+    pub git_dirty: bool,
+    /// Workspace crate version (all crates share this via `version.workspace`).
+    pub workspace_version: String,
+    /// Which tier was run.
     pub tier: String,
-    pub duration: Duration,
+    /// Wall-clock seconds for the full run.
+    pub duration_secs: f64,
+    /// Crates exercised by this test matrix run.
+    pub crates_tested: Vec<String>,
 }
+
+impl RunMeta {
+    /// Human-readable one-line run identity for use in report bodies.
+    pub fn identity_line(&self) -> String {
+        let dirty = if self.git_dirty { " ⚠ dirty" } else { "" };
+        format!(
+            "commit `{}`{dirty} — v{} — {}",
+            self.git_commit,
+            self.workspace_version,
+            self.date.format("%Y-%m-%d %H:%M:%S UTC"),
+        )
+    }
+}
+
+// ── Archival ─────────────────────────────────────────────────────────────────
+
+/// Copy every regular file from `latest/` into `archive/<datetime>-<commit>/`.
+/// Returns the archive path on success.
+fn archive_latest(latest: &Path, archive_root: &Path, meta: &RunMeta) -> Option<()> {
+    let dir_name = format!(
+        "{}-{}",
+        meta.date.format("%Y-%m-%dT%H%M%S"),
+        meta.git_commit
+    );
+    let dest = archive_root.join(dir_name);
+    fs::create_dir_all(&dest).ok()?;
+
+    for entry in fs::read_dir(latest).ok()?.flatten() {
+        let src = entry.path();
+        if src.is_file() {
+            if let Some(name) = src.file_name() {
+                fs::copy(&src, dest.join(name)).ok();
+            }
+        }
+    }
+    Some(())
+}
+
+/// Load raw results + meta from a previous run in `latest/`, if present.
+fn load_previous_run(latest: &Path) -> Option<(Vec<TestResult>, RunMeta)> {
+    let raw = fs::read_to_string(latest.join("raw.json")).ok()?;
+    let results: Vec<TestResult> = serde_json::from_str(&raw).ok()?;
+    let meta_raw = fs::read_to_string(latest.join("meta.json")).ok()?;
+    let meta: RunMeta = serde_json::from_str(&meta_raw).ok()?;
+    Some((results, meta))
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
 
 pub fn write_reports(results: &[TestResult], output_dir: &Path, meta: &RunMeta) {
     let latest = output_dir.join("latest");
+    let archive_root = output_dir.join("archive");
+
+    // Snapshot previous run before overwriting latest/.
+    let previous = load_previous_run(&latest);
+    if let Some((_, ref prev_meta)) = previous {
+        fs::create_dir_all(&archive_root).expect("create archive dir");
+        archive_latest(&latest, &archive_root, prev_meta);
+    }
+
     fs::create_dir_all(&latest).expect("create latest dir");
 
+    write_meta_json(&latest, meta);
     write_summary(&latest, results, meta);
     write_by_mode(&latest, results, meta);
     write_by_channel(&latest, results, meta);
     write_by_usecase(&latest, results, meta);
     write_csv(&latest, results, meta);
     write_raw_json(&latest, results);
+
+    if let Some((prev_results, prev_meta)) = previous {
+        let diffs = compare_runs(&prev_results, results);
+        write_comparison(&latest, &diffs, &prev_meta, meta);
+    }
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn write_meta_json(dir: &Path, meta: &RunMeta) {
+    let json = serde_json::to_string_pretty(meta).expect("serialize meta");
+    fs::write(dir.join("meta.json"), json).expect("write meta.json");
+}
+
+/// Build YAML frontmatter shared by all Markdown reports.
 fn frontmatter(title: &str, subtitle: &str, meta: &RunMeta, total: usize, passed: usize) -> String {
+    let dirty = if meta.git_dirty { "true" } else { "false" };
+    let crates = meta
+        .crates_tested
+        .iter()
+        .map(|c| format!("  - \"{c}\""))
+        .collect::<Vec<_>>()
+        .join("\n");
     format!(
-        "---\ntitle: \"{title} — {subtitle}\"\ndate: \"{}\"\ngit_commit: \"{}\"\ntier: \"{}\"\ntotal_cases: {total}\npassed: {passed}\nfailed: {}\nduration_s: {}\ngenerator: \"openpulse-testmatrix\"\n---\n\n",
+        "---\ntitle: \"{title} — {subtitle}\"\ndate: \"{}\"\ngit_commit: \"{}\"\ngit_commit_full: \"{}\"\ngit_dirty: {dirty}\nworkspace_version: \"{}\"\ntier: \"{}\"\ntotal_cases: {total}\npassed: {passed}\nfailed: {}\nduration_s: {:.1}\ngenerator: \"openpulse-testmatrix\"\ncrates_tested:\n{crates}\n---\n\n",
         meta.date.format("%Y-%m-%dT%H:%M:%SZ"),
         meta.git_commit,
+        meta.git_commit_full,
+        meta.workspace_version,
         meta.tier,
-        total - passed,
-        meta.duration.as_secs(),
+        total.saturating_sub(passed),
+        meta.duration_secs,
     )
 }
 
+// ── Report writers ────────────────────────────────────────────────────────────
+
 fn write_summary(dir: &Path, results: &[TestResult], meta: &RunMeta) {
-    // Exclude skipped cases from pass-rate aggregation.
     let active: Vec<_> = results.iter().filter(|r| !r.skipped).collect();
     let skipped_count = results.len() - active.len();
     let total = active.len();
@@ -46,16 +141,16 @@ fn write_summary(dir: &Path, results: &[TestResult], meta: &RunMeta) {
     let mut out = frontmatter("OpenPulseHF Test Matrix", "Summary", meta, total, passed);
 
     out.push_str("# Test Matrix Summary\n\n");
+    out.push_str(&format!("**Run:** {}\n\n", meta.identity_line()));
     out.push_str(&format!(
-        "**{passed}/{total} cases passed** in {}s",
-        meta.duration.as_secs()
+        "**{passed}/{total} cases passed** in {:.1}s",
+        meta.duration_secs
     ));
     if skipped_count > 0 {
         out.push_str(&format!(" ({skipped_count} skipped)"));
     }
     out.push_str("\n\n");
 
-    // Per-use-case summary table
     out.push_str("## By Use Case\n\n");
     out.push_str("| Use Case | Passed | Total | Skipped | Pass Rate |\n");
     out.push_str("|---|---|---|---|---|\n");
@@ -86,7 +181,6 @@ fn write_summary(dir: &Path, results: &[TestResult], meta: &RunMeta) {
         ));
     }
 
-    // First failures (skipped cases excluded)
     let failures: Vec<_> = results.iter().filter(|r| !r.skipped && !r.passed).collect();
     if !failures.is_empty() {
         out.push_str("\n## Failures\n\n");
@@ -114,8 +208,8 @@ fn write_by_mode(dir: &Path, results: &[TestResult], meta: &RunMeta) {
     let mut out = frontmatter("OpenPulseHF Test Matrix", "By Mode", meta, total, passed);
 
     out.push_str("# Results by Mode\n\n");
+    out.push_str(&format!("**Run:** {}\n\n", meta.identity_line()));
 
-    // Collect unique modes
     let modes: Vec<String> = results
         .iter()
         .map(|r| r.case.mode.clone())
@@ -123,7 +217,6 @@ fn write_by_mode(dir: &Path, results: &[TestResult], meta: &RunMeta) {
         .into_iter()
         .collect();
 
-    // Collect unique channel labels
     let channels: Vec<String> = results
         .iter()
         .map(|r| r.case.channel.label())
@@ -131,7 +224,6 @@ fn write_by_mode(dir: &Path, results: &[TestResult], meta: &RunMeta) {
         .into_iter()
         .collect();
 
-    // Header
     out.push_str("| Mode |");
     for ch in &channels {
         out.push_str(&format!(" {ch} |"));
@@ -179,6 +271,7 @@ fn write_by_channel(dir: &Path, results: &[TestResult], meta: &RunMeta) {
     let mut out = frontmatter("OpenPulseHF Test Matrix", "By Channel", meta, total, passed);
 
     out.push_str("# Results by Channel\n\n");
+    out.push_str(&format!("**Run:** {}\n\n", meta.identity_line()));
 
     let channels: Vec<String> = results
         .iter()
@@ -247,6 +340,7 @@ fn write_by_usecase(dir: &Path, results: &[TestResult], meta: &RunMeta) {
     );
 
     out.push_str("# Results by Use Case\n\n");
+    out.push_str(&format!("**Run:** {}\n\n", meta.identity_line()));
     out.push_str(
         "| Use Case | Mode | Channel | FEC | Compression | Payload | Result | BER | Eff. bps | Duration |\n",
     );
@@ -291,12 +385,17 @@ fn write_by_usecase(dir: &Path, results: &[TestResult], meta: &RunMeta) {
     fs::write(dir.join("by-usecase.md"), out).expect("write by-usecase.md");
 }
 
-fn write_csv(dir: &Path, results: &[TestResult], _meta: &RunMeta) {
+fn write_csv(dir: &Path, results: &[TestResult], meta: &RunMeta) {
     let mut out = String::new();
-    // First line must be the column header (CSV does not support comments).
+    // run_date and run_commit are included as the first two columns so every row
+    // is self-contained when multiple CSV files are concatenated for analysis.
     out.push_str(
-        "use_case,mode,fec,compression,channel,snr_db,payload_bytes,passed,skipped,ber,effective_bps,duration_ms,note\n",
+        "run_date,run_commit,use_case,mode,fec,compression,channel,snr_db,payload_bytes,passed,skipped,ber,effective_bps,duration_ms,note\n",
     );
+
+    let run_date = meta.date.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let dirty = if meta.git_dirty { "*" } else { "" };
+    let run_commit = format!("{}{dirty}", meta.git_commit);
 
     for r in results {
         let comp = match r.case.compression {
@@ -305,7 +404,7 @@ fn write_csv(dir: &Path, results: &[TestResult], _meta: &RunMeta) {
             CompressionAlgorithm::Zstd(_) => "zstd",
         };
         let snr_db = match &r.case.channel {
-            crate::matrix::ChannelSpec::Awgn { snr_db, .. } => format!("{snr_db:.1}"),
+            ChannelSpec::Awgn { snr_db, .. } => format!("{snr_db:.1}"),
             _ => "".into(),
         };
         let ber = r.ber.map(|b| format!("{b:.6}")).unwrap_or_default();
@@ -313,9 +412,9 @@ fn write_csv(dir: &Path, results: &[TestResult], _meta: &RunMeta) {
             .effective_bps
             .map(|b| format!("{b:.1}"))
             .unwrap_or_default();
-        let note = r.note.as_deref().unwrap_or("").replace('"', "\"\""); // CSV escape
+        let note = r.note.as_deref().unwrap_or("").replace('"', "\"\"");
         out.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},\"{}\"\n",
+            "{run_date},{run_commit},{},{},{},{},{},{},{},{},{},{},{},{},\"{}\"\n",
             r.case.use_case.label(),
             r.case.mode,
             fec_label(r.case.fec_mode),
