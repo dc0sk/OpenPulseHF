@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-pub use openpulse_daemon::protocol::DaemonConfig;
+pub use openpulse_daemon::protocol::{DaemonConfig, MessageSummary};
 
 /// Maximum rows kept in the rolling waterfall history.
 pub const WATERFALL_ROWS: usize = 64;
@@ -71,6 +71,12 @@ pub struct PanelState {
     pub rf_peer: Option<String>,
     /// Most-recent daemon configuration snapshot (from `ConfigData` event).
     pub daemon_config: Option<DaemonConfig>,
+    /// Inbox: summaries of all stored messages (from `MessageList` / `MessageReceived` events).
+    pub inbox: Vec<MessageSummary>,
+    /// Full body of the message currently open in the reader pane, if any.
+    pub open_message_body: Option<String>,
+    /// ID of the message whose body is loaded in `open_message_body`.
+    pub open_message_id: Option<u64>,
 }
 
 impl Default for PanelState {
@@ -100,6 +106,9 @@ impl Default for PanelState {
             rf_connected: false,
             rf_peer: None,
             daemon_config: None,
+            inbox: Vec::new(),
+            open_message_body: None,
+            open_message_id: None,
         }
     }
 }

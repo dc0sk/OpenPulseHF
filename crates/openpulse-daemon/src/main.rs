@@ -42,6 +42,7 @@ async fn main() {
             tx_attenuation_db: handle.tx_attenuation_db.clone(),
             spectrum_tap: handle.spectrum_tap.clone(),
             station_id: handle.station_id.clone(),
+            message_store: handle.message_store.clone(),
         },
         None,
     )

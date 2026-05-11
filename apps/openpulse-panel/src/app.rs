@@ -9,7 +9,8 @@ use openpulse_daemon::protocol::ControlCommand;
 use crate::connection::{self, TransportKind};
 use crate::state::{DaemonConfig, PanelState};
 use crate::ui::{
-    build_waterfall_image, draw_event_log, draw_rig_bar, draw_session_status, draw_spectrum_pane,
+    build_waterfall_image, draw_event_log, draw_messages_window, draw_rig_bar, draw_session_status,
+    draw_spectrum_pane, ComposeState,
 };
 
 const MODES: &[&str] = &[
@@ -54,6 +55,12 @@ pub struct PanelApp {
     config_draft: DaemonConfig,
     config_fetch_pending: bool,
 
+    // Messages window.
+    messages_open: bool,
+    compose_to: String,
+    compose_subject: String,
+    compose_body: String,
+
     // Waterfall texture; only rebuilt when spectrum_generation changes.
     waterfall_tex: Option<egui::TextureHandle>,
     waterfall_generation: u64,
@@ -79,6 +86,10 @@ impl PanelApp {
                 tx_attenuation_db: 0.0,
             },
             config_fetch_pending: false,
+            messages_open: false,
+            compose_to: String::new(),
+            compose_subject: String::new(),
+            compose_body: String::new(),
             waterfall_tex: None,
             waterfall_generation: u64::MAX,
         }
@@ -259,6 +270,20 @@ impl eframe::App for PanelApp {
                     self.config_open = !self.config_open;
                 }
 
+                // ── Messages toggle ───────────────────────────────────────────
+                let unread = self.shared.lock().unwrap().inbox.len();
+                let msg_label = if unread > 0 {
+                    format!("✉ Messages ({})", unread)
+                } else {
+                    "✉ Messages".into()
+                };
+                if ui.selectable_label(self.messages_open, msg_label).clicked() {
+                    self.messages_open = !self.messages_open;
+                    if self.messages_open {
+                        self.send(ControlCommand::ListMessages);
+                    }
+                }
+
                 // ── QSY buttons ───────────────────────────────────────────────
                 let qsy_token = self.shared.lock().unwrap().pending_qsy_token.clone();
                 if let Some(token) = qsy_token {
@@ -348,6 +373,45 @@ impl eframe::App for PanelApp {
                 self.tx_atten_db = cfg.tx_attenuation_db;
                 self.config_draft = cfg;
                 self.config_fetch_pending = false;
+            }
+        }
+
+        // ── Messages window ──────────────────────────────────────────────────
+        if self.messages_open {
+            let mut close = false;
+            let mut get_msg_id: Option<u64> = None;
+            let mut send_msg: Option<(String, String, String)> = None;
+
+            egui::Window::new("Messages")
+                .resizable(true)
+                .collapsible(false)
+                .default_size([540.0, 400.0])
+                .show(ctx, |ui| {
+                    draw_messages_window(
+                        ui,
+                        &self.shared.lock().unwrap(),
+                        &mut ComposeState {
+                            to: &mut self.compose_to,
+                            subject: &mut self.compose_subject,
+                            body: &mut self.compose_body,
+                            close: &mut close,
+                            get_msg_id: &mut get_msg_id,
+                            send_msg: &mut send_msg,
+                        },
+                    );
+                });
+
+            if close {
+                self.messages_open = false;
+            }
+            if let Some(id) = get_msg_id {
+                self.send(ControlCommand::GetMessage { id });
+            }
+            if let Some((to, subject, body)) = send_msg {
+                self.send(ControlCommand::SendMessage { to, subject, body });
+                self.compose_to.clear();
+                self.compose_subject.clear();
+                self.compose_body.clear();
             }
         }
 
