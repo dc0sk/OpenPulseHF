@@ -12,8 +12,8 @@ use openpulse_dsp::rrc::generate_rrc_coefficients;
 use openpulse_dsp::timing::GardnerDetector;
 
 use crate::modulate::{
-    bytes_to_bits, gray_map_64qam, pam8_amplitude, preamble_symbols, samples_per_symbol,
-    PAM8_SCALE, PREAMBLE_SYMS, RRC_SPAN_SYMBOLS, TAIL_SYMS,
+    gray_map_64qam, preamble_symbols, samples_per_symbol, PAM8_SCALE, PREAMBLE_SYMS,
+    RRC_SPAN_SYMBOLS, TAIL_SYMS,
 };
 use crate::parse_baud_rate;
 
@@ -332,6 +332,7 @@ fn rrc_alpha(config: &ModulationConfig) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modulate::pam8_amplitude;
 
     #[test]
     fn pam8_decide_all_levels_correct() {
