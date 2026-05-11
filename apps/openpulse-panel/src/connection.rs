@@ -13,7 +13,7 @@ use std::time::Duration;
 use crossbeam_channel::{Receiver, Sender};
 use openpulse_daemon::protocol::{ControlCommand, ControlEvent, SPECTRUM_MAGIC};
 
-use crate::state::{PanelState, RigSnapshot};
+use crate::state::{PanelState, RigSnapshot, ECC_HISTORY_LEN, WATERFALL_ROWS};
 use crate::transport::{RecvMsg, TcpTransport, Transport, WsTransport};
 
 /// Whether to use raw TCP or WebSocket transport.
@@ -146,7 +146,13 @@ fn apply_spectrum(frame: &[u8], shared: &Arc<Mutex<PanelState>>) {
         .chunks_exact(4)
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
-    shared.lock().unwrap().spectrum_bins = bins;
+    let mut st = shared.lock().unwrap();
+    st.spectrum_history.push_front(bins.clone());
+    if st.spectrum_history.len() > WATERFALL_ROWS {
+        st.spectrum_history.pop_back();
+    }
+    st.spectrum_generation = st.spectrum_generation.wrapping_add(1);
+    st.spectrum_bins = bins;
 }
 
 fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
@@ -185,10 +191,12 @@ fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
                     speed_level, mode, ..
                 } => {
                     st.speed_level = format!("{speed_level:?}");
+                    st.speed_level_num = *speed_level as u8;
                     st.mode = mode.clone();
                     format!("RATE {speed_level:?} [{mode}]")
                 }
                 EngineEvent::HpxTransition { from, to, .. } => {
+                    st.hpx_state = format!("{to:?}");
                     format!("HPX {from:?}→{to:?}")
                 }
                 EngineEvent::SessionStarted { session_id, .. } => {
@@ -215,6 +223,10 @@ fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
                 st.afc_hz = afc_correction_hz;
             }
             st.signal_strength_dbm = signal_strength_dbm;
+            st.ecc_history.push_front(ecc_rate);
+            if st.ecc_history.len() > ECC_HISTORY_LEN {
+                st.ecc_history.pop_back();
+            }
         }
         ControlEvent::RigStatus {
             rig,

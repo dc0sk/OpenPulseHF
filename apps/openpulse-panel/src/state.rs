@@ -4,6 +4,11 @@ use std::collections::VecDeque;
 
 pub use openpulse_daemon::protocol::DaemonConfig;
 
+/// Maximum rows kept in the rolling waterfall history.
+pub const WATERFALL_ROWS: usize = 64;
+/// Maximum samples kept in the ECC-rate history (seconds of 1-Hz Metrics events).
+pub const ECC_HISTORY_LEN: usize = 120;
+
 /// Snapshot of a single rig's CAT status (from `RigStatus` events).
 #[derive(Debug, Clone, Default)]
 pub struct RigSnapshot {
@@ -23,6 +28,10 @@ pub struct PanelState {
     pub mode: String,
     /// Current speed-level label (e.g. `"SL5"`).
     pub speed_level: String,
+    /// Numeric speed level (1–20); 0 = unknown.
+    pub speed_level_num: u8,
+    /// Current HPX FSM state as a display string (e.g. `"ActiveTransfer"`).
+    pub hpx_state: String,
     /// AFC frequency offset (Hz) from the last `AfcUpdate` event.
     pub afc_hz: f32,
     /// DCD busy flag from the last `DcdChange` event.
@@ -47,6 +56,13 @@ pub struct PanelState {
     pub pending_qsy_token: Option<String>,
     /// Most-recent power-spectrum bins (dBFS), 512 values from the daemon.
     pub spectrum_bins: Vec<f32>,
+    /// Rolling waterfall history: newest row at index 0, oldest at the back.
+    pub spectrum_history: VecDeque<Vec<f32>>,
+    /// Monotonically increasing counter bumped each time a spectrum frame arrives.
+    /// The UI compares this against its last-seen value to skip redundant texture uploads.
+    pub spectrum_generation: u64,
+    /// Rolling ECC-rate history (one sample per Metrics event at 1 Hz).
+    pub ecc_history: VecDeque<f32>,
     /// Whether the transmitter is currently keyed (PTT asserted).
     pub ptt_active: bool,
     /// Whether an RF peer link is currently active.
@@ -63,6 +79,8 @@ impl Default for PanelState {
             connected: false,
             mode: "—".into(),
             speed_level: "—".into(),
+            speed_level_num: 0,
+            hpx_state: "Idle".into(),
             afc_hz: 0.0,
             dcd_busy: false,
             dcd_energy: 0.0,
@@ -75,6 +93,9 @@ impl Default for PanelState {
             event_log: VecDeque::new(),
             pending_qsy_token: None,
             spectrum_bins: Vec::new(),
+            spectrum_history: VecDeque::new(),
+            spectrum_generation: 0,
+            ecc_history: VecDeque::new(),
             ptt_active: false,
             rf_connected: false,
             rf_peer: None,

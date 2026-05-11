@@ -8,7 +8,9 @@ use openpulse_daemon::protocol::ControlCommand;
 
 use crate::connection::{self, TransportKind};
 use crate::state::{DaemonConfig, PanelState};
-use crate::ui::{draw_event_log, draw_rig_bar, draw_session_status, draw_spectrum_pane};
+use crate::ui::{
+    build_waterfall_image, draw_event_log, draw_rig_bar, draw_session_status, draw_spectrum_pane,
+};
 
 const MODES: &[&str] = &[
     "BPSK31",
@@ -51,6 +53,10 @@ pub struct PanelApp {
     config_open: bool,
     config_draft: DaemonConfig,
     config_fetch_pending: bool,
+
+    // Waterfall texture; only rebuilt when spectrum_generation changes.
+    waterfall_tex: Option<egui::TextureHandle>,
+    waterfall_generation: u64,
 }
 
 impl PanelApp {
@@ -73,6 +79,8 @@ impl PanelApp {
                 tx_attenuation_db: 0.0,
             },
             config_fetch_pending: false,
+            waterfall_tex: None,
+            waterfall_generation: u64::MAX,
         }
     }
 
@@ -300,11 +308,33 @@ impl eframe::App for PanelApp {
                 draw_event_log(ui, &st);
             });
 
+        // Rebuild waterfall texture only when new spectrum data has arrived.
+        {
+            let st = self.shared.lock().unwrap();
+            if st.spectrum_generation != self.waterfall_generation
+                && !st.spectrum_history.is_empty()
+            {
+                let image = build_waterfall_image(&st.spectrum_history);
+                self.waterfall_generation = st.spectrum_generation;
+                drop(st);
+                match &mut self.waterfall_tex {
+                    Some(tex) => tex.set(image, egui::TextureOptions::NEAREST),
+                    None => {
+                        self.waterfall_tex = Some(ctx.load_texture(
+                            "waterfall",
+                            image,
+                            egui::TextureOptions::NEAREST,
+                        ));
+                    }
+                }
+            }
+        }
+
         // ── Central: spectrum left | session status right ────────────────────
         egui::CentralPanel::default().show(ctx, |ui| {
             let st = self.shared.lock().unwrap();
             ui.columns(2, |cols| {
-                draw_spectrum_pane(&mut cols[0], &st);
+                draw_spectrum_pane(&mut cols[0], &st, self.waterfall_tex.as_ref());
                 draw_session_status(&mut cols[1], &st);
             });
         });
