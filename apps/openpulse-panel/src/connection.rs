@@ -13,7 +13,7 @@ use std::time::Duration;
 use crossbeam_channel::{Receiver, Sender};
 use openpulse_daemon::protocol::{ControlCommand, ControlEvent, SPECTRUM_MAGIC};
 
-use crate::state::{PanelState, RigSnapshot, BER_HISTORY_LEN, WATERFALL_ROWS};
+use crate::state::{PanelState, RigSnapshot, ECC_HISTORY_LEN, WATERFALL_ROWS};
 use crate::transport::{RecvMsg, TcpTransport, Transport, WsTransport};
 
 /// Whether to use raw TCP or WebSocket transport.
@@ -151,6 +151,7 @@ fn apply_spectrum(frame: &[u8], shared: &Arc<Mutex<PanelState>>) {
     if st.spectrum_history.len() > WATERFALL_ROWS {
         st.spectrum_history.pop_back();
     }
+    st.spectrum_generation = st.spectrum_generation.wrapping_add(1);
     st.spectrum_bins = bins;
 }
 
@@ -222,9 +223,9 @@ fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
                 st.afc_hz = afc_correction_hz;
             }
             st.signal_strength_dbm = signal_strength_dbm;
-            st.ber_history.push_front(ecc_rate);
-            if st.ber_history.len() > BER_HISTORY_LEN {
-                st.ber_history.pop_back();
+            st.ecc_history.push_front(ecc_rate);
+            if st.ecc_history.len() > ECC_HISTORY_LEN {
+                st.ecc_history.pop_back();
             }
         }
         ControlEvent::RigStatus {

@@ -229,7 +229,7 @@ fn hpx_state_colors(state: &str, active: bool) -> (Color32, Color32) {
         _ => Color32::DARK_GRAY,
     };
     if active {
-        // Brighten and use white text.
+        // Brighten active state and use white text.
         let brightened = Color32::from_rgb(
             (base.r() as u16 + 60).min(255) as u8,
             (base.g() as u16 + 60).min(255) as u8,
@@ -237,7 +237,13 @@ fn hpx_state_colors(state: &str, active: bool) -> (Color32, Color32) {
         );
         (brightened, Color32::WHITE)
     } else {
-        (Color32::from_gray(30), Color32::from_gray(100))
+        // Show per-state color dimmed; mid-gray text for readability.
+        let dimmed = Color32::from_rgb(
+            (base.r() as u16 * 55 / 100) as u8,
+            (base.g() as u16 * 55 / 100) as u8,
+            (base.b() as u16 * 55 / 100) as u8,
+        );
+        (dimmed, Color32::from_gray(160))
     }
 }
 
@@ -296,23 +302,22 @@ pub fn draw_rate_ladder(ui: &mut Ui, st: &PanelState) {
 // BER trend
 // ---------------------------------------------------------------------------
 
-/// Small line plot of rolling ECC-rate history (newest on the right).
+/// Small line plot of rolling ECC-rate history (x=0 is now, x increases to the left/past).
 pub fn draw_ber_trend(ui: &mut Ui, st: &PanelState) {
     ui.label(RichText::new("ECC Rate (2 min)").strong());
-    if st.ber_history.len() < 2 {
+    if st.ecc_history.len() < 2 {
         ui.label(RichText::new("collecting…").color(Color32::DARK_GRAY));
         return;
     }
-    let len = st.ber_history.len();
-    // Oldest sample is at the back; plot left-to-right oldest→newest.
+    let len = st.ecc_history.len();
+    // ecc_history[0] is newest; map index i → x = i (seconds ago), so x=0 is now.
     let points: PlotPoints = st
-        .ber_history
+        .ecc_history
         .iter()
-        .rev()
         .enumerate()
         .map(|(i, &v)| [i as f64, v as f64 * 100.0])
         .collect();
-    Plot::new("ber_trend")
+    Plot::new("ecc_trend")
         .height(60.0)
         .include_y(0.0)
         .include_y(10.0)
