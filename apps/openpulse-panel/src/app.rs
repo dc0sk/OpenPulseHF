@@ -310,9 +310,12 @@ impl eframe::App for PanelApp {
         });
 
         // ── Config window ────────────────────────────────────────────────────
-        // Populate draft when a GetConfig response arrives.
+        // Populate draft when the GetConfig response arrives.
+        // Also sync toolbar controls so they reflect the daemon's actual state.
         if self.config_fetch_pending {
             if let Some(cfg) = self.shared.lock().unwrap().daemon_config.clone() {
+                self.selected_mode = cfg.mode.clone();
+                self.tx_atten_db = cfg.tx_attenuation_db;
                 self.config_draft = cfg;
                 self.config_fetch_pending = false;
             }
@@ -364,6 +367,9 @@ impl eframe::App for PanelApp {
                     ui.separator();
                     ui.horizontal(|ui| {
                         if ui.button("Fetch").clicked() {
+                            // Clear stale snapshot so the pending check only resolves
+                            // on the new response, not an old one.
+                            self.shared.lock().unwrap().daemon_config = None;
                             self.send(ControlCommand::GetConfig);
                             self.config_fetch_pending = true;
                         }

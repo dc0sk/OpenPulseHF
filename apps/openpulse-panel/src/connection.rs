@@ -58,10 +58,13 @@ fn run_loop(
 
         match transport {
             None => {
-                shared
-                    .lock()
-                    .unwrap()
-                    .push_log(format!("connect error: could not reach {addr}"));
+                let kind_str = match kind {
+                    TransportKind::Tcp => "TCP",
+                    TransportKind::WebSocket => "WS",
+                };
+                shared.lock().unwrap().push_log(format!(
+                    "connect error: {kind_str} connection to {addr} failed"
+                ));
                 thread::sleep(Duration::from_secs(2));
             }
             Some(mut t) => {

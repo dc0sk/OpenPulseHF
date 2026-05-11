@@ -12,14 +12,13 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use openpulse_channel::dsp::PowerSpectrum;
-use openpulse_modem::ModemEngine;
 use protocol::{encode_spectrum_frame, CommandResponse, ControlCommand, ControlEvent};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 use crate::protocol;
-use crate::{SharedAttenuation, SharedCallsign, SharedMode, SpectrumTap};
+use crate::{SharedAttenuation, SharedMode, SharedStationId, SpectrumTap};
 
 /// Shared state passed from the TCP control server to the WebSocket endpoint.
 pub struct WsShared {
@@ -28,16 +27,18 @@ pub struct WsShared {
     pub active_mode: SharedMode,
     pub tx_attenuation_db: SharedAttenuation,
     pub spectrum_tap: SpectrumTap,
-    pub callsign: SharedCallsign,
+    /// Station identity (callsign, grid_square) loaded from config at startup.
+    pub station_id: SharedStationId,
 }
 
 /// Spawn the WebSocket control endpoint on `addr`.
 ///
 /// Shares the same event broadcast, command channel, and shared-state arcs as
-/// the TCP control server so both frontends see identical state.
+/// the TCP control server so both frontends see identical state.  The TCP
+/// control server already forwards engine events into `shared.ev_tx`; this
+/// function does not duplicate that subscription.
 pub async fn spawn_ws(
     addr: SocketAddr,
-    engine: &ModemEngine,
     shared: WsShared,
     bound_addr: Option<&mut SocketAddr>,
 ) -> Result<(), std::io::Error> {
@@ -47,28 +48,12 @@ pub async fn spawn_ws(
         active_mode,
         tx_attenuation_db,
         spectrum_tap,
-        callsign,
+        station_id,
     } = shared;
     let listener = TcpListener::bind(addr).await?;
     if let Some(out) = bound_addr {
         *out = listener.local_addr()?;
     }
-
-    // Forward EngineEvents into the shared broadcast (no-op if TCP server already does it;
-    // the broadcast sender is shared so duplicate subscriptions are fine).
-    let mut eng_rx = engine.subscribe();
-    let ev_fwd = Arc::clone(&ev_tx);
-    tokio::spawn(async move {
-        loop {
-            match eng_rx.recv().await {
-                Ok(ev) => {
-                    let _ = ev_fwd.send(ControlEvent::EngineEvent { event: ev });
-                }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => break,
-            }
-        }
-    });
 
     tokio::spawn(async move {
         loop {
@@ -80,8 +65,8 @@ pub async fn spawn_ws(
                     let mode = Arc::clone(&active_mode);
                     let atten = Arc::clone(&tx_attenuation_db);
                     let tap = Arc::clone(&spectrum_tap);
-                    let cs = Arc::clone(&callsign);
-                    tokio::spawn(handle_ws_client(stream, rx, cmd_tx, mode, atten, tap, cs));
+                    let sid = Arc::clone(&station_id);
+                    tokio::spawn(handle_ws_client(stream, rx, cmd_tx, mode, atten, tap, sid));
                 }
                 Err(e) => tracing::warn!("WebSocket accept error: {e}"),
             }
@@ -98,7 +83,7 @@ async fn handle_ws_client(
     active_mode: SharedMode,
     tx_attenuation_db: SharedAttenuation,
     spectrum_tap: SpectrumTap,
-    callsign: SharedCallsign,
+    station_id: SharedStationId,
 ) {
     let ws = match accept_async(stream).await {
         Ok(w) => w,
@@ -140,6 +125,11 @@ async fn handle_ws_client(
                     None => break,
                     Some(Err(_)) => break,
                     Some(Ok(Message::Close(_))) => break,
+                    Some(Ok(Message::Ping(payload))) => {
+                        if ws_tx.send(Message::Pong(payload)).await.is_err() {
+                            break;
+                        }
+                    }
                     Some(Ok(Message::Text(text))) => {
                         let line = text.trim();
                         if line.is_empty() { continue; }
@@ -178,10 +168,12 @@ async fn handle_ws_client(
                             }));
                             let resp = CommandResponse::ok();
                             if let Ok(s) = serde_json::to_string(&resp) {
-                                let _ = ws_tx.send(Message::Text(s)).await;
+                                if ws_tx.send(Message::Text(s)).await.is_err() {
+                                    break;
+                                }
                             }
                         } else if matches!(cmd, ControlCommand::GetConfig) {
-                            let (cs, gs) = callsign.lock().await.clone();
+                            let (cs, gs) = station_id.lock().await.clone();
                             let config = protocol::DaemonConfig {
                                 callsign: cs,
                                 grid_square: gs,
@@ -190,6 +182,12 @@ async fn handle_ws_client(
                             };
                             let ev = ControlEvent::ConfigData { config };
                             if let Ok(s) = serde_json::to_string(&ev) {
+                                if ws_tx.send(Message::Text(s)).await.is_err() {
+                                    break;
+                                }
+                            }
+                            let resp = CommandResponse::ok();
+                            if let Ok(s) = serde_json::to_string(&resp) {
                                 if ws_tx.send(Message::Text(s)).await.is_err() {
                                     break;
                                 }
@@ -209,7 +207,7 @@ async fn handle_ws_client(
                             }
                         }
                     }
-                    Some(Ok(_)) => {} // ping/pong/binary from client — ignore
+                    Some(Ok(_)) => {} // pong/binary from client — ignore
                 }
             }
         }

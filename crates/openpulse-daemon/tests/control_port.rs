@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use bpsk_plugin::BpskPlugin;
 use openpulse_audio::LoopbackBackend;
-use openpulse_daemon::protocol::{CommandResponse, ControlCommand, ControlEvent};
+use openpulse_daemon::protocol::{CommandResponse, ControlCommand, ControlEvent, DaemonConfig};
 use openpulse_daemon::{ControlServer, ControlServerHandle};
 use openpulse_modem::ModemEngine;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -24,7 +24,7 @@ async fn spawn_server(engine: &ModemEngine) -> (SocketAddr, ControlServerHandle)
         "127.0.0.1:0".parse().unwrap(),
         engine,
         "BPSK250".into(),
-        ("N0CALL".into(), "AA00".into()),
+        ("N0CALL".into(), "AA00".into()), // station_id
         Some(&mut addr),
     )
     .await
@@ -253,7 +253,7 @@ async fn set_tx_attenuation_updates_shared_state() {
         "127.0.0.1:0".parse().unwrap(),
         &engine,
         "BPSK250".into(),
-        ("N0CALL".into(), "AA00".into()),
+        ("N0CALL".into(), "AA00".into()), // station_id
         Some(&mut addr),
     )
     .await
@@ -286,5 +286,108 @@ async fn set_tx_attenuation_updates_shared_state() {
     assert!(
         (stored - (-12.5)).abs() < 1e-4,
         "expected -12.5 dB, got {stored}"
+    );
+}
+
+#[tokio::test]
+async fn get_config_returns_config_data_and_ok() {
+    let engine = make_engine();
+    let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let _handle = ControlServer::spawn(
+        "127.0.0.1:0".parse().unwrap(),
+        &engine,
+        "BPSK250".into(),
+        ("K1ABC".into(), "FN42".into()), // station_id
+        Some(&mut addr),
+    )
+    .await
+    .unwrap();
+
+    let (mut reader, mut writer) = connect(addr).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let cmd = serde_json::to_string(&ControlCommand::GetConfig).unwrap() + "\n";
+    writer.write_all(cmd.as_bytes()).await.unwrap();
+
+    let (config_ev, ok_resp) = timeout(Duration::from_secs(2), async {
+        let mut config_ev: Option<ControlEvent> = None;
+        let mut ok_resp: Option<CommandResponse> = None;
+        loop {
+            let mut buf = String::new();
+            reader.read_line(&mut buf).await.unwrap();
+            let line = buf.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if line.contains("\"config_data\"") {
+                config_ev = Some(serde_json::from_str(line).unwrap());
+            } else if line.contains("\"ok\"") {
+                ok_resp = Some(serde_json::from_str(line).unwrap());
+            }
+            if config_ev.is_some() && ok_resp.is_some() {
+                return (config_ev.unwrap(), ok_resp.unwrap());
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for GetConfig response");
+
+    assert!(ok_resp.ok, "GetConfig ok response was not ok");
+    match config_ev {
+        ControlEvent::ConfigData { config } => {
+            assert_eq!(config.callsign, "K1ABC");
+            assert_eq!(config.grid_square, "FN42");
+            assert_eq!(config.mode, "BPSK250");
+            assert!((config.tx_attenuation_db - 0.0).abs() < 1e-4);
+        }
+        other => panic!("expected ConfigData event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn set_config_updates_mode_and_attenuation_atomically() {
+    let engine = make_engine();
+    let mut addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let handle = ControlServer::spawn(
+        "127.0.0.1:0".parse().unwrap(),
+        &engine,
+        "BPSK250".into(),
+        ("N0CALL".into(), "AA00".into()), // station_id
+        Some(&mut addr),
+    )
+    .await
+    .unwrap();
+
+    let (mut reader, mut writer) = connect(addr).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let cmd = serde_json::to_string(&ControlCommand::SetConfig {
+        config: DaemonConfig {
+            callsign: "N0CALL".into(),
+            grid_square: "AA00".into(),
+            mode: "QPSK500".into(),
+            tx_attenuation_db: -6.0,
+        },
+    })
+    .unwrap()
+        + "\n";
+    writer.write_all(cmd.as_bytes()).await.unwrap();
+
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let mut buf = String::new();
+            reader.read_line(&mut buf).await.unwrap();
+            if buf.contains("\"ok\"") {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for SetConfig response");
+
+    assert_eq!(*handle.active_mode.lock().await, "QPSK500");
+    assert!(
+        (*handle.tx_attenuation_db.lock().await - (-6.0)).abs() < 1e-4,
+        "expected -6.0 dB"
     );
 }
