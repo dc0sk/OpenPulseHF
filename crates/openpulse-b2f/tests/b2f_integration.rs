@@ -1,6 +1,9 @@
 use openpulse_b2f::{
     banner,
-    compress::{compress_gzip, compress_lzhuf, decompress_gzip, decompress_lzhuf},
+    compress::{
+        compress_gzip, compress_lzhuf, compress_lzhuf_winlink, decompress_gzip, decompress_lzhuf,
+        decompress_lzhuf_winlink,
+    },
     frame::{self, B2fFrame, FsAnswer, ProposalType},
     header::{self, AttachmentInfo, WlHeader},
     B2fSession, SessionRole,
@@ -113,6 +116,35 @@ fn lzhuf_bad_input_error() {
         decompress_lzhuf(b"bad").is_err(),
         "truncated input must error"
     );
+}
+
+#[test]
+fn lzhuf_winlink_round_trip() {
+    let data: Vec<u8> = b"The quick brown fox jumps over the lazy dog. ".repeat(10);
+    let compressed = compress_lzhuf_winlink(&data).unwrap();
+    assert!(
+        compressed.len() >= 4,
+        "compressed output should be non-trivial"
+    );
+    let decompressed = decompress_lzhuf_winlink(&compressed).unwrap();
+    assert_eq!(decompressed, data);
+}
+
+#[test]
+fn lzhuf_winlink_format_differs_from_internal() {
+    // Use a payload large enough that the length prefix bytes differ between BE and LE.
+    let data = b"Hello from Winlink! ".repeat(15); // 300 bytes > 255
+    let internal = compress_lzhuf(&data).unwrap();
+    let winlink = compress_lzhuf_winlink(&data).unwrap();
+    // Both have 4-byte length prefixes, but BE vs LE differ for lengths > 255.
+    assert_ne!(
+        &internal[..4],
+        &winlink[..4],
+        "BE and LE prefixes should differ for payload length > 255"
+    );
+    // Both must decompress to the original payload.
+    assert_eq!(decompress_lzhuf(&internal).unwrap(), data.to_vec());
+    assert_eq!(decompress_lzhuf_winlink(&winlink).unwrap(), data.to_vec());
 }
 
 // ── Session state machine ─────────────────────────────────────────────────────

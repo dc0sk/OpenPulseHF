@@ -1,6 +1,6 @@
 //! B2F session state machine for ISS (sending) and IRS (receiving) roles.
 
-use crate::compress::{compress_gzip, decompress_gzip, decompress_lzhuf};
+use crate::compress::{compress_gzip, decompress_gzip, decompress_lzhuf_winlink};
 use crate::frame::{self, B2fFrame, FsAnswer, ProposalType};
 use crate::header::WlHeader;
 use crate::B2fError;
@@ -236,7 +236,7 @@ impl B2fSession {
         }
         match proposal_type {
             ProposalType::D => decompress_gzip(&data),
-            ProposalType::C => decompress_lzhuf(&data),
+            ProposalType::C => decompress_lzhuf_winlink(&data),
         }
     }
 }
