@@ -22,14 +22,24 @@ fn rate_increases_on_consecutive_ack_up() {
 }
 
 #[test]
-fn rate_clamps_at_sl11_on_ack_up() {
+fn rate_clamps_at_sl20_on_ack_up() {
+    // SL11 is no longer the ceiling; verify the new ceiling is SL20.
     let mut a = RateAdapter::new(SpeedLevel::Sl10);
     assert_eq!(
         a.apply_ack(AckType::AckUp),
         RateEvent::Increased(SpeedLevel::Sl11)
     );
+    // SL11 → SL12 (no longer clamps here)
+    assert_eq!(
+        a.apply_ack(AckType::AckUp),
+        RateEvent::Increased(SpeedLevel::Sl12)
+    );
+    // Drive to SL20.
+    for _ in 0..8 {
+        a.apply_ack(AckType::AckUp);
+    }
+    assert_eq!(a.speed_level(), SpeedLevel::Sl20);
     assert_eq!(a.apply_ack(AckType::AckUp), RateEvent::Maintained);
-    assert_eq!(a.speed_level(), SpeedLevel::Sl11);
 }
 
 #[test]

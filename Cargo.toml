@@ -17,6 +17,7 @@ members = [
     "crates/openpulse-gateway",
     "crates/openpulse-tui",
     "crates/openpulse-mesh",
+    "plugins/64qam",
     "plugins/bpsk",
     "plugins/fsk4",
     "plugins/ofdm",
@@ -62,6 +63,7 @@ bpsk-plugin       = { path = "plugins/bpsk" }
 fsk4-plugin       = { path = "plugins/fsk4" }
 ofdm-plugin       = { path = "plugins/ofdm" }
 psk8-plugin       = { path = "plugins/psk8" }
+qam64-plugin      = { path = "plugins/64qam" }
 qpsk-plugin       = { path = "plugins/qpsk" }
 scfdma-plugin     = { path = "plugins/scfdma" }
 
