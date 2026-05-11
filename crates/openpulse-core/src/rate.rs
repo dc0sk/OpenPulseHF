@@ -46,7 +46,15 @@ pub enum RateTrigger {
 
 // ── SpeedLevel ────────────────────────────────────────────────────────────────
 
-/// HPX adaptive rate speed level (SL1 = slowest / most robust, SL11 = fastest).
+/// HPX adaptive rate speed level (SL1 = slowest / most robust, SL20 = fastest).
+///
+/// | SL  | HPX profile    | Example mode         |
+/// |-----|----------------|----------------------|
+/// | SL1 | Fallback       | Chirp / minimum rate |
+/// | SL2–SL7  | HPX500/HF  | BPSK31 … 8PSK500    |
+/// | SL8–SL11 | HPX2300    | QPSK500 … 8PSK1000  |
+/// | SL12–SL14 | Wideband HD| 64QAM500/1000/2000 |
+/// | SL15–SL20 | Reserved   | (future expansion)  |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum SpeedLevel {
@@ -61,10 +69,19 @@ pub enum SpeedLevel {
     Sl9 = 9,
     Sl10 = 10,
     Sl11 = 11,
+    Sl12 = 12,
+    Sl13 = 13,
+    Sl14 = 14,
+    Sl15 = 15,
+    Sl16 = 16,
+    Sl17 = 17,
+    Sl18 = 18,
+    Sl19 = 19,
+    Sl20 = 20,
 }
 
 impl SpeedLevel {
-    /// Increment by one step, clamping at `Sl11`.
+    /// Increment by one step, clamping at `Sl20`.
     pub fn step_up(self) -> Self {
         match self {
             Self::Sl1 => Self::Sl2,
@@ -77,7 +94,16 @@ impl SpeedLevel {
             Self::Sl8 => Self::Sl9,
             Self::Sl9 => Self::Sl10,
             Self::Sl10 => Self::Sl11,
-            Self::Sl11 => Self::Sl11,
+            Self::Sl11 => Self::Sl12,
+            Self::Sl12 => Self::Sl13,
+            Self::Sl13 => Self::Sl14,
+            Self::Sl14 => Self::Sl15,
+            Self::Sl15 => Self::Sl16,
+            Self::Sl16 => Self::Sl17,
+            Self::Sl17 => Self::Sl18,
+            Self::Sl18 => Self::Sl19,
+            Self::Sl19 => Self::Sl20,
+            Self::Sl20 => Self::Sl20,
         }
     }
 
@@ -95,6 +121,15 @@ impl SpeedLevel {
             Self::Sl9 => Self::Sl8,
             Self::Sl10 => Self::Sl9,
             Self::Sl11 => Self::Sl10,
+            Self::Sl12 => Self::Sl11,
+            Self::Sl13 => Self::Sl12,
+            Self::Sl14 => Self::Sl13,
+            Self::Sl15 => Self::Sl14,
+            Self::Sl16 => Self::Sl15,
+            Self::Sl17 => Self::Sl16,
+            Self::Sl18 => Self::Sl17,
+            Self::Sl19 => Self::Sl18,
+            Self::Sl20 => Self::Sl19,
         }
     }
 }
@@ -332,10 +367,10 @@ mod tests {
     }
 
     #[test]
-    fn ack_up_clamps_at_sl11() {
-        let mut a = RateAdapter::new(SpeedLevel::Sl11);
+    fn ack_up_clamps_at_sl20() {
+        let mut a = RateAdapter::new(SpeedLevel::Sl20);
         assert_eq!(a.apply_ack(AckType::AckUp), RateEvent::Maintained);
-        assert_eq!(a.speed_level(), SpeedLevel::Sl11);
+        assert_eq!(a.speed_level(), SpeedLevel::Sl20);
     }
 
     #[test]
