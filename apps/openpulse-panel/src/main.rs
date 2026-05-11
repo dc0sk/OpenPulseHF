@@ -3,6 +3,7 @@
 mod app;
 mod connection;
 mod state;
+mod transport;
 mod ui;
 
 fn main() -> eframe::Result<()> {

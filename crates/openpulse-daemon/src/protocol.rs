@@ -82,6 +82,13 @@ pub enum ControlEvent {
         alc: Option<f32>,
         swr: Option<f32>,
     },
+    /// PTT state changed (asserted or released).
+    PttChanged { active: bool },
+    /// RF peer connection state changed.
+    RfConnectionChanged {
+        connected: bool,
+        peer: Option<String>,
+    },
 }
 
 /// Command sent from a client to the server.
@@ -104,6 +111,14 @@ pub enum ControlCommand {
     SetTxAttenuation { db: f32, band: Option<String> },
     /// Begin streaming binary spectrum frames to this client at `fps` frames/second.
     SubscribeSpectrum { fps: u32 },
+    /// Assert PTT (key the transmitter).
+    PttAssert,
+    /// Release PTT (unkey the transmitter).
+    PttRelease,
+    /// Initiate an RF connection to a peer callsign via the TNC.
+    ConnectPeer { callsign: String },
+    /// Disconnect the current RF peer connection.
+    DisconnectPeer,
 }
 
 /// Per-command response.
