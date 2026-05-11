@@ -76,7 +76,7 @@ fn run_status() -> Result<()> {
     let qsy_cfg = &cfg.qsy;
     println!("QSY enabled:           {}", qsy_cfg.enabled);
     println!(
-        "Allow trust levels:    {}",
+        "Allow trust levels:    {} [not yet enforced]",
         if qsy_cfg.allow_trustlevels.is_empty() {
             "(none)".into()
         } else {
