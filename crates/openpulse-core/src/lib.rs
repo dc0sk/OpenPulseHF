@@ -31,6 +31,7 @@ pub mod signed_envelope;
 pub mod signing;
 pub mod soft_viterbi;
 pub mod trust;
+pub mod trust_store_file;
 pub mod wire_query;
 
 pub use ack::*;
