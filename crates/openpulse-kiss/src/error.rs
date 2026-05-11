@@ -6,4 +6,6 @@ pub enum KissTncError {
     Io(#[from] std::io::Error),
     #[error("task join error")]
     Join,
+    #[error("KISS frame body too large ({0} B)")]
+    FrameTooLarge(usize),
 }

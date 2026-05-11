@@ -94,12 +94,21 @@ fn worker_loop(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiver<Ve
             if bridge.loopback {
                 let _ = bridge.rx_data_tx.send(data);
             } else {
-                let _ = bridge
+                match bridge
                     .engine
                     .lock()
-                    .unwrap()
-                    .transmit(&data, &bridge.mode, None);
-                if let Ok(received) = bridge.engine.lock().unwrap().receive(&bridge.mode, None) {
+                    .unwrap_or_else(|e| e.into_inner())
+                    .transmit(&data, &bridge.mode, None)
+                {
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("modem TX error: {e}"),
+                }
+                if let Ok(received) = bridge
+                    .engine
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .receive(&bridge.mode, None)
+                {
                     maybe_relay_forward(&bridge, &received);
                     if !received.is_empty() {
                         let _ = bridge.rx_data_tx.send(received);
@@ -113,7 +122,12 @@ fn worker_loop(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiver<Ve
         }
 
         if !bridge.loopback {
-            if let Ok(received) = bridge.engine.lock().unwrap().receive(&bridge.mode, None) {
+            if let Ok(received) = bridge
+                .engine
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .receive(&bridge.mode, None)
+            {
                 maybe_relay_forward(&bridge, &received);
                 if !received.is_empty() {
                     let _ = bridge.rx_data_tx.send(received);
@@ -153,18 +167,21 @@ fn maybe_relay_forward(bridge: &KissBridge, payload: &[u8]) {
         .as_millis() as u64;
 
     let forwarded = {
-        let mut fwd = fwd_arc.lock().unwrap();
+        let mut fwd = fwd_arc.lock().unwrap_or_else(|e| e.into_inner());
         fwd.forward(&envelope, now_ms)
     };
 
     match forwarded {
         Ok(out_envelope) => {
             if let Ok(out_bytes) = out_envelope.encode() {
-                let _ = bridge
+                if let Err(e) = bridge
                     .engine
                     .lock()
-                    .unwrap()
-                    .transmit(&out_bytes, &bridge.mode, None);
+                    .unwrap_or_else(|e| e.into_inner())
+                    .transmit(&out_bytes, &bridge.mode, None)
+                {
+                    tracing::warn!("relay TX error: {e}");
+                }
                 tracing::debug!(
                     session_id = out_envelope.session_id,
                     hop_index = out_envelope.hop_index,

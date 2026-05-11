@@ -10,6 +10,9 @@ use crate::bridge::ModemBridge;
 use crate::error::ArdopError;
 use crate::state::TncState;
 
+/// Maximum command line length accepted before dropping the connection.
+const MAX_CMD_LINE: usize = 4096;
+
 pub async fn serve(listener: TcpListener, bridge: Arc<ModemBridge>) -> Result<(), ArdopError> {
     loop {
         let (stream, addr) = listener.accept().await?;
@@ -36,8 +39,16 @@ async fn handle_client(
         line.clear();
         tokio::select! {
             n = reader.read_line(&mut line) => {
-                if n? == 0 {
+                let n = n?;
+                if n == 0 {
                     break;
+                }
+                if n > MAX_CMD_LINE {
+                    tracing::warn!("command line too long ({n} B), dropping connection");
+                    return Err(ArdopError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "command line too long",
+                    )));
                 }
                 let cmd = line.trim();
                 if cmd.is_empty() {

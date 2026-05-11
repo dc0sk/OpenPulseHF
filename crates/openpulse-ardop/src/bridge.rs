@@ -99,13 +99,16 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
             if bridge.loopback {
                 let _ = bridge.rx_data_tx.send(data);
             } else {
-                let mut engine = bridge.engine.lock().unwrap();
+                let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
                 let tx_result = if use_fec {
                     engine.transmit_with_fec(&data, &bridge.mode, None)
                 } else {
                     engine.transmit(&data, &bridge.mode, None)
                 };
                 drop(engine);
+                if let Err(ref e) = tx_result {
+                    tracing::warn!("modem TX error: {e}");
+                }
                 if tx_result.is_ok() {
                     if let Some(rx) = do_receive(&bridge) {
                         maybe_relay_forward(&bridge, &rx);
@@ -140,14 +143,14 @@ fn do_receive(bridge: &ModemBridge) -> Option<Vec<u8>> {
         bridge
             .engine
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .receive_with_fec(&bridge.mode, None)
             .ok()
     } else {
         bridge
             .engine
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .receive(&bridge.mode, None)
             .ok()
     }
@@ -181,18 +184,21 @@ fn maybe_relay_forward(bridge: &ModemBridge, payload: &[u8]) {
         .as_millis() as u64;
 
     let forwarded = {
-        let mut fwd = fwd_arc.lock().unwrap();
+        let mut fwd = fwd_arc.lock().unwrap_or_else(|e| e.into_inner());
         fwd.forward(&envelope, now_ms)
     };
 
     match forwarded {
         Ok(out_envelope) => {
             if let Ok(out_bytes) = out_envelope.encode() {
-                let _ = bridge
+                if let Err(e) = bridge
                     .engine
                     .lock()
-                    .unwrap()
-                    .transmit(&out_bytes, &bridge.mode, None);
+                    .unwrap_or_else(|e| e.into_inner())
+                    .transmit(&out_bytes, &bridge.mode, None)
+                {
+                    tracing::warn!("relay TX error: {e}");
+                }
                 tracing::debug!(
                     session_id = out_envelope.session_id,
                     hop_index = out_envelope.hop_index,
