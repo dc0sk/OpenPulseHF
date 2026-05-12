@@ -22,11 +22,6 @@ pub fn run(case: &TestCase) -> TestResult {
 
     let duration_ms = start.elapsed().as_millis() as u64;
     let bytes_rx = result.as_ref().map(|v| v.len()).unwrap_or(0);
-    let effective_bps = if duration_ms > 0 && bytes_rx > 0 {
-        Some((bytes_rx as f64 * 8.0) / (duration_ms as f64 / 1000.0))
-    } else {
-        None
-    };
     TestResult {
         case: case.clone(),
         passed: result.is_ok(),
@@ -34,7 +29,8 @@ pub fn run(case: &TestCase) -> TestResult {
         ber: None,
         bytes_rx,
         duration_ms,
-        effective_bps,
+        // TCP loopback test — wall-clock time is connection latency, not radio link throughput.
+        effective_bps: None,
         note: result.err().map(|e| e.to_string()),
     }
 }

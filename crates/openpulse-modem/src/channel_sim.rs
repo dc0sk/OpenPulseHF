@@ -61,17 +61,26 @@ impl ChannelSimHarness {
 
     /// Move TX samples through `channel` and deliver the result to the RX engine.
     ///
+    /// Returns the number of TX samples routed, which can be divided by the sample
+    /// rate (8000 Hz) to obtain the theoretical on-air duration for throughput calculations.
+    ///
     /// Call this after `tx_engine.transmit()` and before `rx_engine.receive()`.
-    pub fn route(&mut self, channel: &mut dyn ChannelModel) {
+    pub fn route(&mut self, channel: &mut dyn ChannelModel) -> usize {
         let samples = self.tx_loopback.drain_samples();
+        let n = samples.len();
         let processed = channel.apply(&samples);
         self.rx_loopback.fill_samples(&processed);
+        n
     }
 
     /// Route TX samples with no channel distortion (clean passthrough).
-    pub fn route_clean(&mut self) {
+    ///
+    /// Returns the number of TX samples routed (same semantics as [`route`](Self::route)).
+    pub fn route_clean(&mut self) -> usize {
         let samples = self.tx_loopback.drain_samples();
+        let n = samples.len();
         self.rx_loopback.fill_samples(&samples);
+        n
     }
 }
 

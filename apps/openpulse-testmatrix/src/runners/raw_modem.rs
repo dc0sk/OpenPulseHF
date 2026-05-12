@@ -61,8 +61,8 @@ pub fn run(case: &TestCase) -> TestResult {
         return fail(case, 0, start, format!("TX error: {e}"));
     }
 
-    // Route samples through channel model
-    h.route(channel.as_mut());
+    // Route samples through channel model; capture TX sample count for on-air duration.
+    let tx_samples = h.route(channel.as_mut());
 
     // Receive — dispatch on FecMode
     let rx_raw = match case.fec_mode {
@@ -88,8 +88,10 @@ pub fn run(case: &TestCase) -> TestResult {
 
     let duration_ms = start.elapsed().as_millis() as u64;
     let bytes_rx = rx_data.len();
-    let effective_bps = if duration_ms > 0 {
-        Some(payload.len() as f64 * 8.0 / (duration_ms as f64 / 1000.0))
+    // On-air duration = TX samples / sample rate; wall-clock time is not meaningful in simulation.
+    let effective_bps = if tx_samples > 0 {
+        let on_air_s = tx_samples as f64 / 8000.0;
+        Some(payload.len() as f64 * 8.0 / on_air_s)
     } else {
         None
     };

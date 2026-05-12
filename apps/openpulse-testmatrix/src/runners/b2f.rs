@@ -25,11 +25,6 @@ pub fn run(case: &TestCase) -> TestResult {
         Ok(messages) => {
             let passed = messages.len() == 1 && messages[0].body == body_clone;
             let bytes_rx = messages.first().map(|m| m.body.len()).unwrap_or(0);
-            let effective_bps = if duration_ms > 0 && bytes_rx > 0 {
-                Some((bytes_rx as f64 * 8.0) / (duration_ms as f64 / 1000.0))
-            } else {
-                None
-            };
             TestResult {
                 case: case.clone(),
                 passed,
@@ -37,7 +32,9 @@ pub fn run(case: &TestCase) -> TestResult {
                 ber: None,
                 bytes_rx,
                 duration_ms,
-                effective_bps,
+                // Multi-round relay loop — wall-clock time includes thread scheduling;
+                // not a radio link throughput measurement.
+                effective_bps: None,
                 note: if passed {
                     None
                 } else {
