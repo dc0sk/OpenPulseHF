@@ -32,7 +32,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: x86-musl-${{ hashFiles('**/Cargo.toml') }}
+          key: x86-musl-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}
 
       - name: Build binaries (static musl)
         run: |
@@ -69,8 +69,8 @@ jobs:
 
       - name: Install cross and cargo-deb
         run: |
-          cargo install cross --locked
-          cargo install cargo-deb --locked
+          cargo install cross --version 0.2.5 --locked
+          cargo install cargo-deb --version 3.7.0 --locked
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -79,7 +79,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: aarch64-deb-${{ hashFiles('**/Cargo.toml') }}
+          key: aarch64-deb-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}
 
       - name: Cross-build (aarch64)
         run: |
