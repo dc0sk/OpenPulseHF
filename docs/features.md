@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/features.md
 status: living
-last_updated: 2026-05-10
+last_updated: 2026-05-12
 ---
 
 # OpenPulseHF — Feature Reference
@@ -38,23 +38,37 @@ is pending, and — for non-obvious algorithms — the mathematics behind the de
 
 ## Waveform Modes
 
-| Mode | Baud rate | Bits/symbol | Approx throughput | Status |
-|------|-----------|-------------|-------------------|--------|
-| BPSK31 | 31.25 | 1 | ~19 bps net | ✅ |
-| BPSK63 | 62.5 | 1 | ~38 bps net | ✅ |
-| BPSK100 | 100 | 1 | ~60 bps net | ✅ |
-| BPSK250 | 250 | 1 | ~150 bps net | ✅ |
-| QPSK125 | 125 | 2 | ~150 bps net | ✅ |
-| QPSK250 | 250 | 2 | ~300 bps net | ✅ |
-| QPSK500 | 500 | 2 | ~600 bps net | ✅ |
-| QPSK1000 | 1000 | 2 | ~1200 bps net | ✅ |
-| 8PSK500 | 500 | 3 | ~900 bps net | ✅ |
-| 8PSK1000 | 1000 | 3 | ~1800 bps net | ✅ |
-| FSK4-ACK | 100 | 2 | ACK frames only | ✅ |
+| Mode | Baud rate | Bits/sym | BW (Hz) | Eff. throughput | Status |
+|------|-----------|----------|---------|-----------------|--------|
+| BPSK31 | 31 | 1 | ~50 | ~19 bps | ✅ |
+| BPSK63 | 63 | 1 | ~70 | ~38 bps | ✅ |
+| BPSK100 | 100 | 1 | ~110 | ~60 bps | ✅ |
+| BPSK250 | 250 | 1 | ~260 | ~150 bps | ✅ |
+| BPSK250-RRC | 250 | 1 | ~340 | ~150 bps | ✅ |
+| QPSK125 | 125 | 2 | ~140 | ~150 bps | ✅ |
+| QPSK250 | 250 | 2 | ~270 | ~300 bps | ✅ |
+| QPSK500 | 500 | 2 | ~540 | ~600 bps | ✅ |
+| QPSK1000-HF | 1000 | 2 | ~1100 | ~1200 bps | ✅ |
+| QPSK500-RRC | 500 | 2 | ~675 | ~600 bps | ✅ |
+| QPSK1000-RRC | 1000 | 2 | ~1350 | ~1200 bps | ✅ |
+| 8PSK500 | 500 | 3 | ~540 | ~900 bps | ✅ |
+| 8PSK500-RRC | 500 | 3 | ~675 | ~900 bps | ✅ |
+| 8PSK1000-HF | 1000 | 3 | ~1100 | ~1800 bps | ✅ |
+| 8PSK1000-RRC | 1000 | 3 | ~1350 | ~1800 bps | ✅ |
+| 64QAM500 | 500 | 6 | ~540 | ~1800 bps | ✅ |
+| 64QAM1000 | 1000 | 6 | ~1100 | ~3600 bps | ✅ |
+| 64QAM2000-RRC | 2000 | 6 | ~2700 | ~7200 bps | ✅ |
+| FSK4-ACK | 100 | 2 | ~400 | ACK frames only | ✅ |
 
 All modes target an 8 kHz audio sample rate and a nominal 1500 Hz carrier, fitting
-within a standard SSB passband.  Net throughput accounts for the 32-symbol preamble
-and 8-symbol tail added to every frame.
+within a standard SSB passband.  Effective throughput accounts for the 32-symbol
+preamble and 8-symbol tail added to every frame (~40% overhead).  RRC modes use
+α = 0.35; their bandwidth is ~35% wider than the non-RRC equivalent at the same
+baud rate.
+
+64QAM uses a Gray-coded 8×8 PAM-8 constellation (rectangular) with a soft max-log-MAP
+demodulator, providing 6 bits per symbol.  64QAM2000-RRC is the highest-throughput
+single-carrier HF mode and occupies the full 2700 Hz SSB passband.
 
 ### BPSK encoding
 
@@ -280,7 +294,7 @@ CRC-8/SMBUS.
 ### Rate ladder
 
 The `RateAdapter` state machine maps ACK events to speed level transitions across
-11 levels (SL1–SL11):
+20 levels (SL1–SL20):
 
 - **AckUp**: step up (ceiling SL11)
 - **AckDown**: step down (floor SL2; SL1 only reached after 3 consecutive NACKs at SL2
@@ -290,12 +304,12 @@ The `RateAdapter` state machine maps ACK events to speed level transitions acros
 
 ### Adaptive profiles
 
-Two pre-configured profiles map speed levels to modulation modes:
+Three pre-configured profiles map speed levels to modulation modes:
 
 **HPX500** (narrowband, ~500 Hz occupied bandwidth):
 
-| Speed Level | Mode | Approx throughput |
-|-------------|------|-------------------|
+| Speed Level | Mode | Eff. throughput |
+|-------------|------|-----------------|
 | SL1 | Chirp fallback | — |
 | SL2 | BPSK31 | ~19 bps |
 | SL3 | BPSK63 | ~38 bps |
@@ -305,8 +319,8 @@ Two pre-configured profiles map speed levels to modulation modes:
 
 **HPX2300** (wideband, ~2300 Hz occupied bandwidth):
 
-| Speed Level | Mode | Approx throughput |
-|-------------|------|-------------------|
+| Speed Level | Mode | Eff. throughput |
+|-------------|------|-----------------|
 | SL8 | QPSK500 | ~600 bps |
 | SL9 | QPSK1000 | ~1200 bps |
 | SL11 | 8PSK1000 | ~1800 bps |
@@ -314,6 +328,17 @@ Two pre-configured profiles map speed levels to modulation modes:
 The 8PSK1000 waveform at SL11 was chosen over OFDM for its lower Peak-to-Average
 Power Ratio (PAPR ≈ 0 dB for single-carrier vs ≈ 6–10 dB for OFDM), simpler AFC
 (single-carrier phase tracking), and no cyclic-prefix overhead.
+
+**HPX Wideband HD** (full SSB passband, up to 2700 Hz; 64QAM):
+
+| Speed Level | Mode | Eff. throughput |
+|-------------|------|-----------------|
+| SL12 | 64QAM500 | ~1800 bps |
+| SL13 | 64QAM1000 | ~3600 bps |
+| SL14 | 64QAM2000-RRC | ~7200 bps |
+
+`hpx_wideband_hd` is intended for clear VHF/UHF paths or quiet 10 m conditions; 64QAM
+requires an SNR of approximately 20–25 dB for reliable operation.
 
 ---
 
@@ -681,14 +706,12 @@ DCD energy bar, scrollable transition log.  Keyboard: `q` quit, `p` pause, ↑�
 
 ---
 
-## Pending and Deferred Features
+## Deferred Features
 
-### Release packaging 🔄
+### Release packaging ✅ Done (PR #206)
 
-The only scheduled remaining item.  The `openpulse-tnc` ARDOP wire protocol and pat
-interoperability are complete (PR #118).  Remaining:
-
-- GitHub Actions release workflow: static x86-64 musl binary and aarch64 `.deb` on `v*` tag push.
+GitHub Actions release workflow ships static x86-64 musl binaries and aarch64 `.deb`
+packages for `openpulse-tnc`, `openpulse-kisstnc`, and `openpulse-server` on `v*` tag push.
 
 ### 6.3 — Network mesh daemon ✅ Done (PR #120, #121)
 
@@ -710,8 +733,7 @@ stream; `ModemEngine::transmit_iq()` dispatches via it with CPU fallback.
 
 ### Open code stubs (not blocking any current work)
 
-- **8PSK soft demapping** (`plugins/psk8/src/lib.rs`): `demodulate_soft()` falls back to
-  hard ±1.0 pseudo-LLRs.  Gray-coded max-log-MAP demapping would yield ~1 dB SNR gain.
-- **CLI manifest verify** (`crates/openpulse-cli/src/commands/session.rs`): the library
-  `verify_manifest()` is fully implemented; the CLI `manifest verify` path returns a stub
-  response and has not been wired to the library function.
+All previously listed stubs are now closed:
+
+- **8PSK soft demapping** ✅ Done — `demodulate_soft()` implements Gray-coded max-log-MAP demapping.
+- **CLI manifest verify** ✅ Done — `manifest verify` is wired to `verify_manifest()` in the library.

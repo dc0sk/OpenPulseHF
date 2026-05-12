@@ -67,6 +67,8 @@ FULL_CASES=(
     "QPSK500|soft_concatenated|128"
     "8PSK500|none|128"
     "8PSK1000|none|256"
+    "64QAM500|none|128"
+    "64QAM1000|none|256"
 )
 
 if [[ "$TIER" == "quick" ]]; then

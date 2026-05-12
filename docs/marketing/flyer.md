@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/marketing/flyer.md
 status: draft
-last_updated: 2026-05-10
+last_updated: 2026-05-12
 ---
 
 # OpenPulseHF — HAMRADIO 2026 Flyer
@@ -37,7 +37,7 @@ No proprietary firmware.  Works with your existing SSB transceiver.
 
 ### Why OpenPulseHF?
 
-**▶ 30+ modulation modes** — from BPSK31 to 8PSK, OFDM multi-carrier, and SC-FDMA  
+**▶ 35+ modulation modes** — from BPSK31 to 64QAM (7200 bps), OFDM multi-carrier, and SC-FDMA  
 **▶ RRC matched filtering** — Root Raised Cosine pulse shaping on all RRC modes for clean spectrum and precise symbol recovery  
 **▶ Adaptive rate ladder** — 11 speed levels, adjusts per-direction automatically, no operator input  
 **▶ Multi-block RS FEC** — full Reed-Solomon protection at any payload size; no artificial per-frame byte limit  
@@ -89,17 +89,18 @@ Winlink CMS ←──────────── OpenPulseHF  ──→  Your
 
 #### Modulation modes
 
-| Plugin | Modes | Baud rates | Bandwidth | Pulse shaping |
-|---|---|---|---|---|
-| BPSK | BPSK31 / 63 / 100 / 250 | 31–250 | 31–250 Hz | Hann overlap |
-| BPSK | BPSK250-RRC | 250 | ~250 Hz | RRC α=0.35 |
-| QPSK | QPSK125–1000 / -HF | 125–1000 | 125 Hz – 1.4 kHz | Hann / Cosine |
-| QPSK | QPSK500/1000-RRC | 500–1000 | ~700 Hz – 1.4 kHz | RRC α=0.35 |
-| 8PSK | 8PSK500–9600 / -HF | 500–9600 | 500 Hz – 13 kHz | Hann / Cosine |
-| 8PSK | 8PSK500/1000-RRC | 500–1000 | ~700 Hz – 1.4 kHz | RRC α=0.35 |
-| FSK4 | FSK4-ACK | 100 | ~400 Hz | Hann |
-| OFDM | OFDM16 / OFDM52 | ~889–2889 bps gross | 625 Hz – 2 kHz | OFDM CP |
-| SC-FDMA | SCFDMA16 / SCFDMA52 | ~889–2889 bps gross | 625 Hz – 2 kHz | DFT-spread |
+| Plugin | Modes | Baud rates | Bandwidth | Eff. bit rate | Pulse shaping |
+|---|---|---|---|---|---|
+| BPSK | BPSK31 / 63 / 100 / 250 | 31–250 | 50–260 Hz | 19–150 bps | Hann overlap |
+| BPSK | BPSK250-RRC | 250 | ~340 Hz | ~150 bps | RRC α=0.35 |
+| QPSK | QPSK125–1000 / -HF | 125–1000 | 140 Hz – 1.1 kHz | 150–1200 bps | Hann / Cosine |
+| QPSK | QPSK500/1000-RRC | 500–1000 | 675 Hz – 1.35 kHz | 600–1200 bps | RRC α=0.35 |
+| 8PSK | 8PSK500–9600 / -HF | 500–9600 | 540 Hz – 13 kHz | 900 bps – 17.3 kbps | Hann / Cosine |
+| 8PSK | 8PSK500/1000-RRC | 500–1000 | 675 Hz – 1.35 kHz | 900–1800 bps | RRC α=0.35 |
+| **64QAM** | **64QAM500 / 1000 / 2000-RRC** | **500–2000** | **540–2700 Hz** | **1800–7200 bps** | **Hann / RRC** |
+| FSK4 | FSK4-ACK | 100 | ~400 Hz | ACK only | Hann |
+| OFDM | OFDM16 / OFDM52 | — | 625 Hz – 2 kHz | ~530–1730 bps | OFDM CP |
+| SC-FDMA | SCFDMA16 / SCFDMA52 | — | 625 Hz – 2 kHz | ~530–1730 bps | DFT-spread |
 
 RRC modes use a Gardner timing error detector (TED) with a Costas PLL for carrier
 recovery — the same professional-grade loops found in LTE and DVB receivers.

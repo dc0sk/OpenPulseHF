@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: README.md
 status: living
-last_updated: 2026-05-10
+last_updated: 2026-05-12
 ---
 
 # OpenPulseHF
@@ -38,32 +38,36 @@ channel-simulation harness validated against published Watterson and Gilbert-Ell
 
 ## Key features
 
-### Modulation and waveforms — 30+ modes across 6 plugins
+### Modulation and waveforms — 35+ modes across 7 plugins
 
 #### HF narrow-band (≤ 2700 Hz occupied bandwidth)
 
-| Plugin | Modes | Baud rate | Bits/symbol |
-|---|---|---|---|
-| BPSK | BPSK31 / BPSK63 / BPSK100 / BPSK250 / BPSK250-RRC | 31–250 | 1 |
-| QPSK | QPSK125 / QPSK250 / QPSK500 / QPSK1000-HF / QPSK500-RRC / QPSK1000-RRC | 125–1000 | 2 |
-| 8PSK | 8PSK500 / 8PSK500-RRC / 8PSK1000-HF / 8PSK1000-RRC | 500–1000 | 3 |
-| FSK4 | FSK4-ACK | 100 (200 ms/frame) | 2 |
-| OFDM | OFDM16 (~625 Hz, ~889 bps) / OFDM52 (~2 kHz, ~2889 bps) | — | 2/SC |
-| SC-FDMA | SCFDMA16 / SCFDMA52 — same BW as OFDM, 3–4 dB lower PAPR | — | 2/SC |
+| Plugin | Modes | Baud rate | Bits/sym | BW (Hz) | Eff. bit rate |
+|---|---|---|---|---|---|
+| BPSK | BPSK31 / BPSK63 / BPSK100 / BPSK250 / BPSK250-RRC | 31–250 | 1 | 50–340 | 19–150 bps |
+| QPSK | QPSK125 / QPSK250 / QPSK500 / QPSK1000-HF / QPSK500-RRC / QPSK1000-RRC | 125–1000 | 2 | 140–1350 | 150–1200 bps |
+| 8PSK | 8PSK500 / 8PSK500-RRC / 8PSK1000-HF / 8PSK1000-RRC | 500–1000 | 3 | 540–1350 | 900–1800 bps |
+| 64QAM | 64QAM500 / 64QAM1000 / 64QAM2000-RRC | 500–2000 | 6 | 540–2700 | 1800–7200 bps |
+| FSK4 | FSK4-ACK | 100 (200 ms/frame) | 2 | ~400 | ACK only |
+| OFDM | OFDM16 / OFDM52 | — | 2/SC | 625–2000 | ~530–1730 bps |
+| SC-FDMA | SCFDMA16 / SCFDMA52 — same BW as OFDM, 3–4 dB lower PAPR | — | 2/SC | 625–2000 | ~530–1730 bps |
+
+Effective bit rate = raw bps × ~0.60 (accounts for the 32-symbol preamble and 8-symbol tail per frame).
+RRC modes (α = 0.35) occupy ~35% more bandwidth than their non-RRC counterparts.
 
 #### UHF/VHF narrowband (12.5 kHz channel, 8 kHz audio)
 
-| Mode | Baud | Bandwidth | Use case |
-|---|---|---|---|
-| QPSK2000 / QPSK2000-RRC | 2000 | ~2700 Hz | 12.5 kHz PMR/LMR |
-| 8PSK2000 / 8PSK2000-RRC | 2000 | ~2700 Hz | 12.5 kHz PMR/LMR high throughput |
+| Mode | Baud | Bandwidth | Eff. bit rate | Use case |
+|---|---|---|---|---|
+| QPSK2000 / QPSK2000-RRC | 2000 | ~2700 Hz | ~2400 bps | 12.5 kHz PMR/LMR |
+| 8PSK2000 / 8PSK2000-RRC | 2000 | ~2700 Hz | ~3600 bps | 12.5 kHz PMR/LMR high throughput |
 
 #### UHF/VHF HD (12.5 kHz channel, 48 kHz audio)
 
-| Mode | Baud | Bandwidth | Use case |
-|---|---|---|---|
-| QPSK9600 / QPSK9600-RRC | 9600 | ~13 kHz | 12.5 kHz PMR/LMR high-speed |
-| 8PSK9600 / 8PSK9600-RRC | 9600 | ~13 kHz | 12.5 kHz PMR/LMR maximum throughput |
+| Mode | Baud | Bandwidth | Eff. bit rate | Use case |
+|---|---|---|---|---|
+| QPSK9600 / QPSK9600-RRC | 9600 | ~13 kHz | ~11.5 kbps | 12.5 kHz PMR/LMR high-speed |
+| 8PSK9600 / 8PSK9600-RRC | 9600 | ~13 kHz | ~17.3 kbps | 12.5 kHz PMR/LMR maximum throughput |
 
 Rate adaptation steps across all available modes automatically — independently per direction,
 so an asymmetric path (good downlink, noisy uplink) is handled without penalising the
@@ -104,11 +108,11 @@ Selection is negotiated in the signed handshake.
 
 ### ARQ session layer
 
-- HPX state machine with 8 ACK types and 11 speed levels (SL1–SL11)
+- HPX state machine with 8 ACK types and 20 speed levels (SL1–SL20)
 - ChirpFallback: after three consecutive NACKs at SL2, falls back to a narrowband chirp
 - Segmentation and reassembly (SAR) handles payloads up to 64 KB per session
-- Six adaptive session profiles: `hpx500`, `hpx_hf`, `hpx_wideband`, `hpx_narrowband`,
-  `hpx_narrowband_hd`, `hpx_ofdm_hf`
+- Seven adaptive session profiles: `hpx500`, `hpx_hf`, `hpx_wideband`, `hpx_narrowband`,
+  `hpx_narrowband_hd`, `hpx_ofdm_hf`, `hpx_wideband_hd` (SL12–SL20 mapping to 64QAM modes)
 
 ---
 
@@ -332,8 +336,8 @@ cross build --release --workspace --target aarch64-unknown-linux-gnu --no-defaul
          │                                  │
 ┌────────▼────────┐               ┌─────────▼──────────────────────┐
 │  Core           │               │  Plugins                       │
-│  openpulse-core │               │  bpsk · qpsk · psk8 · fsk4    │
-│  FecCodec · SAR │               │  ofdm · scfdma                 │
+│  openpulse-core │               │  bpsk · qpsk · psk8 · 64qam   │
+│  FecCodec · SAR │               │  fsk4 · ofdm · scfdma          │
 │  HpxReactor     │               └────────────────────────────────┘
 │  PQ handshake   │
 │  Trust / PKI    │

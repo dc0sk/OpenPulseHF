@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/marketing/presentation.md
 status: draft
-last_updated: 2026-05-10
+last_updated: 2026-05-12
 ---
 
 # OpenPulseHF — HAMRADIO 2026 Presentation
@@ -48,19 +48,22 @@ no subscription, no dongle. The audience will immediately understand this is dif
 
 ---
 
-## Slide 4 — 30+ waveforms, one engine
+## Slide 4 — 35+ waveforms, one engine
 
-| | BPSK | QPSK | 8PSK | OFDM | SC-FDMA | FSK4 |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|
-| Modes | 5 | 11 | 9 | 2 | 2 | 1 |
-| Baud range | 31–250 | 125–9600 | 500–9600 | — | — | 100 |
-| Max bits/sym | 1 | 2 | 3 | QPSK/SC | QPSK/SC | 2 |
-| HF-compliant | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| | BPSK | QPSK | 8PSK | 64QAM | OFDM | SC-FDMA | FSK4 |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| Modes | 5 | 11 | 9 | 3 | 2 | 2 | 1 |
+| Baud range | 31–250 | 125–9600 | 500–9600 | 500–2000 | — | — | 100 |
+| Max bits/sym | 1 | 2 | 3 | **6** | QPSK/SC | QPSK/SC | 2 |
+| Max eff. bps | 150 | 1200 | 1800 | **7200** | ~1730 | ~1730 | ACK |
+| HF-compliant | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
-All RRC variants (BPSK250-RRC, QPSK500/1000-RRC, 8PSK500/1000-RRC) use Root Raised
-Cosine pulse shaping — the same approach used in LTE and DVB receivers.
+64QAM uses a Gray-coded rectangular constellation with a max-log-MAP soft demodulator.
+All RRC variants use Root Raised Cosine pulse shaping — the same approach used in LTE
+and DVB receivers.
 
-*Speaker notes: Walk through the table quickly. The key message: more modes than any open modem.*
+*Speaker notes: Walk through the table quickly. The key message: 64QAM at 7200 bps eff.
+throughput in the standard 2700 Hz SSB passband — higher than any other open HF modem.*
 
 ---
 
