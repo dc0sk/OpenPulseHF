@@ -2,6 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
+#[cfg(not(target_arch = "wasm32"))]
 use crossbeam_channel::Sender;
 use egui::{Color32, RichText};
 use openpulse_daemon::protocol::ControlCommand;
@@ -33,10 +34,18 @@ const MODES: &[&str] = &[
 pub struct PanelApp {
     /// Shared state read on every repaint.
     shared: Arc<Mutex<PanelState>>,
-    /// Channel to send commands to the connection thread.
+
+    // Native-only: background connection thread channels.
+    #[cfg(not(target_arch = "wasm32"))]
     cmd_tx: Option<Sender<ControlCommand>>,
-    /// Channel to stop the connection thread.
+    #[cfg(not(target_arch = "wasm32"))]
     stop_tx: Option<crossbeam_channel::Sender<()>>,
+
+    // WASM-only: inline WebSocket transport.
+    #[cfg(target_arch = "wasm32")]
+    wasm_sender: Option<ewebsock::WsSender>,
+    #[cfg(target_arch = "wasm32")]
+    wasm_receiver: Option<ewebsock::WsReceiver>,
 
     // Connection config.
     server_addr: String,
@@ -70,10 +79,23 @@ impl PanelApp {
     pub fn new() -> Self {
         Self {
             shared: Arc::new(Mutex::new(PanelState::default())),
+            #[cfg(not(target_arch = "wasm32"))]
             cmd_tx: None,
+            #[cfg(not(target_arch = "wasm32"))]
             stop_tx: None,
+            #[cfg(target_arch = "wasm32")]
+            wasm_sender: None,
+            #[cfg(target_arch = "wasm32")]
+            wasm_receiver: None,
+            // WASM only supports WebSocket; default to the WS endpoint.
+            #[cfg(target_arch = "wasm32")]
+            server_addr: "ws://127.0.0.1:9001".into(),
+            #[cfg(not(target_arch = "wasm32"))]
             server_addr: "127.0.0.1:9000".into(),
+            #[cfg(not(target_arch = "wasm32"))]
             transport_kind: TransportKind::Tcp,
+            #[cfg(target_arch = "wasm32")]
+            transport_kind: TransportKind::WebSocket,
             selected_mode: "BPSK250".into(),
             repeater_enabled: false,
             tx_atten_db: 0.0,
@@ -95,6 +117,7 @@ impl PanelApp {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn connect(&mut self) {
         let (stop_tx, stop_rx) = crossbeam_channel::bounded(1);
         let cmd_tx = connection::spawn(
@@ -107,6 +130,34 @@ impl PanelApp {
         self.cmd_tx = Some(cmd_tx);
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn connect(&mut self) {
+        let url = if self.server_addr.starts_with("ws") {
+            self.server_addr.clone()
+        } else {
+            format!("ws://{}", self.server_addr)
+        };
+        match ewebsock::connect(url, ewebsock::Options::default()) {
+            Ok((mut sender, receiver)) => {
+                if let Ok(s) = serde_json::to_string(&ControlCommand::SubscribeSpectrum { fps: 20 })
+                {
+                    sender.send(ewebsock::WsMessage::Text(s));
+                }
+                self.wasm_sender = Some(sender);
+                self.wasm_receiver = Some(receiver);
+                let mut st = self.shared.lock().unwrap();
+                st.push_log(format!("connecting to {}", self.server_addr));
+            }
+            Err(e) => {
+                self.shared
+                    .lock()
+                    .unwrap()
+                    .push_log(format!("WS connect error: {e}"));
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn disconnect_daemon(&mut self) {
         if let Some(tx) = self.stop_tx.take() {
             let _ = tx.send(());
@@ -115,15 +166,84 @@ impl PanelApp {
         self.shared.lock().unwrap().connected = false;
     }
 
-    fn send(&self, cmd: ControlCommand) {
-        if let Some(tx) = &self.cmd_tx {
-            let _ = tx.try_send(cmd);
+    #[cfg(target_arch = "wasm32")]
+    fn disconnect_daemon(&mut self) {
+        self.wasm_sender = None;
+        self.wasm_receiver = None;
+        self.shared.lock().unwrap().connected = false;
+    }
+
+    fn send(&mut self, cmd: ControlCommand) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(tx) = &self.cmd_tx {
+                let _ = tx.try_send(cmd);
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(sender) = &mut self.wasm_sender {
+                if let Ok(s) = serde_json::to_string(&cmd) {
+                    sender.send(ewebsock::WsMessage::Text(s));
+                }
+            }
+        }
+    }
+
+    /// On WASM, drain inbound WebSocket messages from the main thread.
+    #[cfg(target_arch = "wasm32")]
+    fn poll_wasm(&mut self) {
+        let mut disconnected = false;
+        if let Some(receiver) = &mut self.wasm_receiver {
+            loop {
+                match receiver.try_recv() {
+                    None => break,
+                    Some(ewebsock::WsEvent::Opened) => {
+                        self.shared.lock().unwrap().connected = true;
+                        self.shared
+                            .lock()
+                            .unwrap()
+                            .push_log(format!("connected to {}", self.server_addr));
+                    }
+                    Some(ewebsock::WsEvent::Message(ewebsock::WsMessage::Text(line))) => {
+                        if !line.is_empty() {
+                            connection::apply_event(&line, &self.shared);
+                        }
+                    }
+                    Some(ewebsock::WsEvent::Message(ewebsock::WsMessage::Binary(bytes))) => {
+                        connection::apply_spectrum(&bytes, &self.shared);
+                    }
+                    Some(ewebsock::WsEvent::Message(_)) => {}
+                    Some(ewebsock::WsEvent::Error(e)) => {
+                        self.shared
+                            .lock()
+                            .unwrap()
+                            .push_log(format!("WS error: {e}"));
+                        disconnected = true;
+                        break;
+                    }
+                    Some(ewebsock::WsEvent::Closed) => {
+                        self.shared.lock().unwrap().push_log("disconnected".into());
+                        disconnected = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if disconnected {
+            self.wasm_sender = None;
+            self.wasm_receiver = None;
+            self.shared.lock().unwrap().connected = false;
         }
     }
 }
 
 impl eframe::App for PanelApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // WASM: drain inbound WebSocket events before drawing.
+        #[cfg(target_arch = "wasm32")]
+        self.poll_wasm();
+
         // Always repaint while connected to show live events.
         let connected = self.shared.lock().unwrap().connected;
         if connected {
@@ -133,7 +253,8 @@ impl eframe::App for PanelApp {
         // ── Toolbar ──────────────────────────────────────────────────────────
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                // Transport picker.
+                // Transport picker — TCP only available on native; WASM always uses WS.
+                #[cfg(not(target_arch = "wasm32"))]
                 egui::ComboBox::from_id_salt("transport")
                     .selected_text(match self.transport_kind {
                         TransportKind::Tcp => "TCP",
@@ -148,6 +269,8 @@ impl eframe::App for PanelApp {
                             "WS",
                         );
                     });
+                #[cfg(target_arch = "wasm32")]
+                ui.label("WS");
 
                 ui.label("Server:");
                 ui.add(egui::TextEdit::singleline(&mut self.server_addr).desired_width(160.0));
