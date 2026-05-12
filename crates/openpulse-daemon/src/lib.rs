@@ -10,39 +10,58 @@
 //! connection.  See [`protocol::encode_spectrum_frame`] for the wire format.
 
 pub mod protocol;
+
+/// WebSocket control endpoint — native server builds only.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod ws;
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::net::SocketAddr;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[cfg(not(target_arch = "wasm32"))]
 use openpulse_channel::dsp::PowerSpectrum;
+#[cfg(not(target_arch = "wasm32"))]
 use openpulse_modem::ModemEngine;
+#[cfg(not(target_arch = "wasm32"))]
 use protocol::{
     encode_spectrum_frame, CommandResponse, ControlCommand, ControlEvent, MessageSummary,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::net::{TcpListener, TcpStream};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
 pub use protocol::ControlCommand as Command;
 pub use protocol::ControlEvent as Event;
 
 /// Shared mutable mode string, written by `set_mode` commands.
+#[cfg(not(target_arch = "wasm32"))]
 pub type SharedMode = Arc<Mutex<String>>;
 /// Shared mutable TX attenuation (dB), written by `set_tx_attenuation` commands.
+#[cfg(not(target_arch = "wasm32"))]
 pub type SharedAttenuation = Arc<Mutex<f32>>;
 /// Shared audio sample tap for spectrum computation (most-recent 1024 samples).
+#[cfg(not(target_arch = "wasm32"))]
 pub type SpectrumTap = Arc<RwLock<Vec<f32>>>;
 /// Shared station identity strings (callsign + grid square), set at startup.
+#[cfg(not(target_arch = "wasm32"))]
 pub type SharedStationId = Arc<Mutex<(String, String)>>;
 /// Shared in-memory message store (sent and received messages).
+#[cfg(not(target_arch = "wasm32"))]
 pub type SharedMessageStore = Arc<Mutex<MessageStore>>;
 
 /// Maximum number of messages kept in memory; oldest are evicted when full.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const MAX_MESSAGES: usize = 500;
 
 /// A single stored message (sent or received).
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone)]
 pub struct StoredMessage {
     pub id: u64,
@@ -54,11 +73,13 @@ pub struct StoredMessage {
 }
 
 /// In-memory inbox with a monotonically increasing ID counter.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct MessageStore {
     next_id: u64,
     pub messages: Vec<StoredMessage>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl MessageStore {
     fn new() -> Self {
         Self {
@@ -80,6 +101,7 @@ impl MessageStore {
 }
 
 /// All shared state passed to each per-client TCP handler.
+#[cfg(not(target_arch = "wasm32"))]
 struct ClientCtx {
     ev_tx: Arc<broadcast::Sender<ControlEvent>>,
     cmd_tx: mpsc::Sender<ControlCommand>,
@@ -94,6 +116,7 @@ struct ClientCtx {
 ///
 /// Dropping this handle does *not* stop the server — use [`ControlServerHandle::shutdown`]
 /// for a clean stop (or just let the process exit).
+#[cfg(not(target_arch = "wasm32"))]
 pub struct ControlServerHandle {
     /// Receives every [`ControlCommand`] dispatched from any connected client.
     pub commands: mpsc::Receiver<ControlCommand>,
@@ -115,8 +138,10 @@ pub struct ControlServerHandle {
 }
 
 /// NDJSON-over-TCP control server.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct ControlServer;
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ControlServer {
     /// Spawn the control server on `addr`.
     ///
@@ -219,6 +244,7 @@ impl ControlServer {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn handle_client(
     stream: TcpStream,
     mut ev_rx: broadcast::Receiver<ControlEvent>,
@@ -278,6 +304,7 @@ async fn handle_client(
 }
 
 /// Dispatch one command; returns `true` when the write failed and the loop should exit.
+#[cfg(not(target_arch = "wasm32"))]
 async fn handle_command(
     cmd: ControlCommand,
     write_half: &mut tokio::net::tcp::OwnedWriteHalf,
@@ -443,6 +470,7 @@ async fn handle_command(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn send_json<T: serde::Serialize>(
     writer: &mut tokio::net::tcp::OwnedWriteHalf,
     value: &T,
@@ -453,6 +481,7 @@ async fn send_json<T: serde::Serialize>(
 }
 
 /// Apply state-mutating commands and forward all commands to the caller.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) async fn dispatch_command(
     cmd: &ControlCommand,
     cmd_tx: &mpsc::Sender<ControlCommand>,

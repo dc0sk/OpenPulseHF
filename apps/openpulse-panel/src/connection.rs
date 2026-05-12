@@ -7,23 +7,31 @@
 //! After connecting the thread immediately sends `SubscribeSpectrum { fps: 20 }`.
 
 use std::sync::{Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
 use std::thread;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
+#[cfg(not(target_arch = "wasm32"))]
 use crossbeam_channel::{Receiver, Sender};
-use openpulse_daemon::protocol::{ControlCommand, ControlEvent, SPECTRUM_MAGIC};
+#[cfg(not(target_arch = "wasm32"))]
+use openpulse_daemon::protocol::ControlCommand;
+use openpulse_daemon::protocol::{ControlEvent, SPECTRUM_MAGIC};
 
 use crate::state::{PanelState, RigSnapshot, ECC_HISTORY_LEN, WATERFALL_ROWS};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::transport::{RecvMsg, TcpTransport, Transport, WsTransport};
 
 /// Whether to use raw TCP or WebSocket transport.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransportKind {
+    #[cfg(not(target_arch = "wasm32"))]
     Tcp,
     WebSocket,
 }
 
 /// Spawn the connection thread.  Returns a sender for outbound commands.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn spawn(
     addr: String,
     kind: TransportKind,
@@ -35,6 +43,7 @@ pub fn spawn(
     cmd_tx
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn run_loop(
     addr: String,
     kind: TransportKind,
@@ -95,6 +104,7 @@ fn run_loop(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn run_session(
     transport: &mut dyn Transport,
     shared: &Arc<Mutex<PanelState>>,
@@ -133,7 +143,7 @@ fn run_session(
     }
 }
 
-fn apply_spectrum(frame: &[u8], shared: &Arc<Mutex<PanelState>>) {
+pub(crate) fn apply_spectrum(frame: &[u8], shared: &Arc<Mutex<PanelState>>) {
     if frame.len() < 10 || &frame[0..4] != SPECTRUM_MAGIC {
         return;
     }
@@ -155,7 +165,7 @@ fn apply_spectrum(frame: &[u8], shared: &Arc<Mutex<PanelState>>) {
     st.spectrum_bins = bins;
 }
 
-fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
+pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
     // CommandResponse has `ok` field; skip it.
     if line.contains("\"ok\"") {
         return;

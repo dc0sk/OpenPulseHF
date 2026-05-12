@@ -5,8 +5,12 @@
 //! as a WASM browser application).  Both transports carry the same NDJSON text
 //! messages and binary spectrum frames as the daemon protocol.
 
+// TcpStream is only available on non-WASM targets.
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(not(target_arch = "wasm32"))]
 use std::net::TcpStream;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
@@ -36,17 +40,20 @@ pub trait Transport: Send {
 }
 
 // ---------------------------------------------------------------------------
-// TcpTransport
+// TcpTransport — native only (no TCP sockets in WASM)
 // ---------------------------------------------------------------------------
 
+#[cfg(not(target_arch = "wasm32"))]
 const SPECTRUM_MAGIC: u8 = b'O'; // first byte of "OPSP"
 
 /// Raw TCP transport — matches the existing `TcpStream` connection loop.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct TcpTransport {
     reader: BufReader<TcpStream>,
     writer: TcpStream,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl TcpTransport {
     /// Connect to `addr`; returns `None` on error.
     pub fn connect(addr: &str) -> Option<Self> {
@@ -62,6 +69,7 @@ impl TcpTransport {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Transport for TcpTransport {
     fn send_text(&mut self, s: &str) -> bool {
         writeln!(self.writer, "{s}").is_ok() && self.writer.flush().is_ok()
@@ -157,6 +165,9 @@ impl WsTransport {
     }
 }
 
+// On WASM, WsSender uses Rc<WebSocket> which is not Send; Transport is only
+// used from the native background thread, so skip this impl for WASM.
+#[cfg(not(target_arch = "wasm32"))]
 impl Transport for WsTransport {
     fn send_text(&mut self, s: &str) -> bool {
         if !self.connected {

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenPulse Panel</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #1c1c1c;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="the_canvas_id"></canvas>
+    <script>
+        // Prevent right-click context menu on the canvas.
+        document.getElementById("the_canvas_id").oncontextmenu = function(e) { e.preventDefault(); };
+    </script>
+    <link data-trunk rel="rust" data-wasm-opt="2" />
+</body>
+</html>
