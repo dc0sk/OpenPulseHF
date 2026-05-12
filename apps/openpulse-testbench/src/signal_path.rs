@@ -13,6 +13,7 @@ use openpulse_core::fec::{FecCodec, FecMode};
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
 use openpulse_core::soft_viterbi::SoftViterbiCodec;
 use psk8_plugin::Psk8Plugin;
+use qam64_plugin::Qam64Plugin;
 use qpsk_plugin::QpskPlugin;
 use scfdma_plugin::ScFdmaPlugin;
 
@@ -110,6 +111,10 @@ fn mode_symbol_rate(mode: &str) -> f32 {
         "QPSK1000" | "QPSK1000-HF" | "QPSK1000-RRC" => 1000.0,
         "8PSK500" | "8PSK500-RRC" => 500.0,
         "8PSK1000" | "8PSK1000-HF" | "8PSK1000-RRC" => 1000.0,
+        "64QAM500" => 500.0,
+        "64QAM1000" => 1000.0,
+        "64QAM2000-RRC" => 2000.0,
+        "QPSK2000" | "QPSK2000-RRC" | "8PSK2000" | "8PSK2000-RRC" => 2000.0,
         "FSK4-ACK" => 100.0,
         // OFDM/SC-FDMA symbol rate = fs / (FFT_SIZE + CP) = 8000 / 288 ≈ 27.78 baud
         "OFDM16" | "OFDM52" | "SCFDMA16" | "SCFDMA52" => 8000.0 / 288.0,
@@ -147,6 +152,8 @@ pub fn spawn_signal_thread(
 fn make_plugin(mode: &str) -> Box<dyn ModulationPlugin> {
     if mode.starts_with("BPSK") {
         Box::new(BpskPlugin::new())
+    } else if mode.starts_with("64QAM") {
+        Box::new(Qam64Plugin::new())
     } else if mode.starts_with("8PSK") {
         Box::new(Psk8Plugin::new())
     } else if mode == "FSK4-ACK" {
@@ -156,6 +163,7 @@ fn make_plugin(mode: &str) -> Box<dyn ModulationPlugin> {
     } else if mode.starts_with("SCFDMA") {
         Box::new(ScFdmaPlugin::new())
     } else {
+        // QPSK* and any other unrecognised mode
         Box::new(QpskPlugin::new())
     }
 }
