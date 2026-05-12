@@ -118,7 +118,8 @@ for case_spec in "${CASES[@]}"; do
 
     # 1. Start IRS TNC on station B (background).
     ssh_b "pkill -f openpulse-tnc || true; \
-        ARDOP_MODE=${MODE} ~/bin/openpulse-tnc \
+        ~/bin/openpulse-tnc \
+            --mode ${MODE} \
             --callsign ${CALLSIGN_B} \
             --ptt ${PTT_BACKEND} \
             --listen \

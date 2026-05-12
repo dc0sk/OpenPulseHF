@@ -40,19 +40,21 @@ is pending, and — for non-obvious algorithms — the mathematics behind the de
 
 | Mode | Baud rate | Bits/sym | BW (Hz) | Eff. throughput | Status |
 |------|-----------|----------|---------|-----------------|--------|
-| BPSK31 | 31 | 1 | ~50 | ~19 bps | ✅ |
-| BPSK63 | 63 | 1 | ~70 | ~38 bps | ✅ |
+| BPSK31 | 31.25 | 1 | ~50 | ~19 bps | ✅ |
+| BPSK63 | 62.5 | 1 | ~70 | ~38 bps | ✅ |
 | BPSK100 | 100 | 1 | ~110 | ~60 bps | ✅ |
 | BPSK250 | 250 | 1 | ~260 | ~150 bps | ✅ |
 | BPSK250-RRC | 250 | 1 | ~340 | ~150 bps | ✅ |
 | QPSK125 | 125 | 2 | ~140 | ~150 bps | ✅ |
 | QPSK250 | 250 | 2 | ~270 | ~300 bps | ✅ |
 | QPSK500 | 500 | 2 | ~540 | ~600 bps | ✅ |
+| QPSK1000 | 1000 | 2 | ~1100 | ~1200 bps | ✅ |
 | QPSK1000-HF | 1000 | 2 | ~1100 | ~1200 bps | ✅ |
 | QPSK500-RRC | 500 | 2 | ~675 | ~600 bps | ✅ |
 | QPSK1000-RRC | 1000 | 2 | ~1350 | ~1200 bps | ✅ |
 | 8PSK500 | 500 | 3 | ~540 | ~900 bps | ✅ |
 | 8PSK500-RRC | 500 | 3 | ~675 | ~900 bps | ✅ |
+| 8PSK1000 | 1000 | 3 | ~1100 | ~1800 bps | ✅ |
 | 8PSK1000-HF | 1000 | 3 | ~1100 | ~1800 bps | ✅ |
 | 8PSK1000-RRC | 1000 | 3 | ~1350 | ~1800 bps | ✅ |
 | 64QAM500 | 500 | 6 | ~540 | ~1800 bps | ✅ |
@@ -61,10 +63,15 @@ is pending, and — for non-obvious algorithms — the mathematics behind the de
 | FSK4-ACK | 100 | 2 | ~400 | ACK frames only | ✅ |
 
 All modes target an 8 kHz audio sample rate and a nominal 1500 Hz carrier, fitting
-within a standard SSB passband.  Effective throughput accounts for the 32-symbol
-preamble and 8-symbol tail added to every frame (~40% overhead).  RRC modes use
-α = 0.35; their bandwidth is ~35% wider than the non-RRC equivalent at the same
-baud rate.
+within a standard SSB passband.  Effective throughput figures are approximate; overhead
+includes a per-frame preamble (32 symbols for BPSK, 16 symbols for QPSK/8PSK/64QAM)
+plus an 8-symbol tail.  Actual throughput also depends on frame length, FEC mode, and
+channel conditions.  RRC modes use α = 0.35; their bandwidth is ~35% wider than the
+non-RRC equivalent at the same baud rate.
+
+QPSK1000 (used in the HPX2300 adaptive profile) and QPSK1000-HF are distinct registered
+mode names with the same baud rate and similar bandwidth; the same applies to 8PSK1000
+and 8PSK1000-HF.  The -HF suffix variants are tuned for HF path conditions.
 
 64QAM uses a Gray-coded 8×8 PAM-8 constellation (rectangular) with a soft max-log-MAP
 demodulator, providing 6 bits per symbol.  64QAM2000-RRC is the highest-throughput
@@ -296,7 +303,7 @@ CRC-8/SMBUS.
 The `RateAdapter` state machine maps ACK events to speed level transitions across
 20 levels (SL1–SL20):
 
-- **AckUp**: step up (ceiling SL11)
+- **AckUp**: step up (ceiling SL20)
 - **AckDown**: step down (floor SL2; SL1 only reached after 3 consecutive NACKs at SL2
   as a chirp-fallback emergency)
 - **Nack**: increment NACK counter; after `nack_threshold` (default 3) consecutive

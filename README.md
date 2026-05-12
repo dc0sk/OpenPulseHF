@@ -38,7 +38,7 @@ channel-simulation harness validated against published Watterson and Gilbert-Ell
 
 ## Key features
 
-### Modulation and waveforms — 35+ modes across 7 plugins
+### Modulation and waveforms — 33 modes across 7 plugins
 
 #### HF narrow-band (≤ 2700 Hz occupied bandwidth)
 
@@ -52,7 +52,9 @@ channel-simulation harness validated against published Watterson and Gilbert-Ell
 | OFDM | OFDM16 / OFDM52 | — | 2/SC | 625–2000 | ~530–1730 bps |
 | SC-FDMA | SCFDMA16 / SCFDMA52 — same BW as OFDM, 3–4 dB lower PAPR | — | 2/SC | 625–2000 | ~530–1730 bps |
 
-Effective bit rate = raw bps × ~0.60 (accounts for the 32-symbol preamble and 8-symbol tail per frame).
+Effective bit rate figures are approximate; overhead includes a per-frame preamble (32 symbols
+for BPSK, 16 symbols for QPSK/8PSK/64QAM) plus an 8-symbol tail. Actual throughput also
+depends on frame length, FEC mode, and channel conditions.
 RRC modes (α = 0.35) occupy ~35% more bandwidth than their non-RRC counterparts.
 
 #### UHF/VHF narrowband (12.5 kHz channel, 8 kHz audio)
@@ -112,7 +114,7 @@ Selection is negotiated in the signed handshake.
 - ChirpFallback: after three consecutive NACKs at SL2, falls back to a narrowband chirp
 - Segmentation and reassembly (SAR) handles payloads up to 64 KB per session
 - Seven adaptive session profiles: `hpx500`, `hpx_hf`, `hpx_wideband`, `hpx_narrowband`,
-  `hpx_narrowband_hd`, `hpx_ofdm_hf`, `hpx_wideband_hd` (SL12–SL20 mapping to 64QAM modes)
+  `hpx_narrowband_hd`, `hpx_ofdm_hf`, `hpx_wideband_hd` (SL12–SL14 mapping to 64QAM modes; SL15–SL20 reserved)
 
 ---
 

@@ -48,7 +48,7 @@ no subscription, no dongle. The audience will immediately understand this is dif
 
 ---
 
-## Slide 4 — 35+ waveforms, one engine
+## Slide 4 — 33 waveforms, one engine
 
 | | BPSK | QPSK | 8PSK | 64QAM | OFDM | SC-FDMA | FSK4 |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|

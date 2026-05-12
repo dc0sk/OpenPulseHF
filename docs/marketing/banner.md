@@ -37,7 +37,7 @@ The Open HF Data Modem
 **Large white text, centred:**
 
 ```
-35+ waveforms.
+33 waveforms.
 Post-quantum secure.
 See your signal live.
 100% open source.

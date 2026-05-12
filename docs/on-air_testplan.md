@@ -252,12 +252,12 @@ pat connect ardop:///K1RMS   # replace K1RMS with the RMS callsign
 
 ### 6.4 Multi-mode quality ladder (10m only, CEPT or FCC above 28 MHz)
 
-**Goal:** Exercise HPX2300 and HPX Wideband HD speed levels in order.
+**Goal:** Exercise HPX2300 (SL8–SL11) and HPX Wideband HD (SL12–SL14) speed levels in order.
 
 Run from SL8 to SL14 manually to confirm each mode produces a clean demodulated frame:
 
 ```bash
-for MODE in QPSK500 QPSK1000 8PSK500 8PSK1000 64QAM500 64QAM1000 64QAM2000-RRC; do
+for MODE in QPSK500 QPSK1000 8PSK1000 64QAM500 64QAM1000 64QAM2000-RRC; do
   echo "--- Testing $MODE ---"
   ./target/release/openpulse-gateway \
     --callsign K1ABC \

@@ -37,9 +37,9 @@ No proprietary firmware.  Works with your existing SSB transceiver.
 
 ### Why OpenPulseHF?
 
-**▶ 35+ modulation modes** — from BPSK31 to 64QAM (7200 bps), OFDM multi-carrier, and SC-FDMA  
+**▶ 33 modulation modes** — from BPSK31 to 64QAM (7200 bps), OFDM multi-carrier, and SC-FDMA  
 **▶ RRC matched filtering** — Root Raised Cosine pulse shaping on all RRC modes for clean spectrum and precise symbol recovery  
-**▶ Adaptive rate ladder** — 11 speed levels, adjusts per-direction automatically, no operator input  
+**▶ Adaptive rate ladder** — 20 speed levels (SL1–SL20), adjusts per-direction automatically, no operator input  
 **▶ Multi-block RS FEC** — full Reed-Solomon protection at any payload size; no artificial per-frame byte limit  
 **▶ Post-quantum security** — ML-DSA-44 + ML-KEM-768, future-proof from day one  
 **▶ Winlink / Pat compatible** — drop-in replacement for VARA and ARDOP  
@@ -97,7 +97,7 @@ Winlink CMS ←──────────── OpenPulseHF  ──→  Your
 | QPSK | QPSK500/1000-RRC | 500–1000 | 675 Hz – 1.35 kHz | 600–1200 bps | RRC α=0.35 |
 | 8PSK | 8PSK500–9600 / -HF | 500–9600 | 540 Hz – 13 kHz | 900 bps – 17.3 kbps | Hann / Cosine |
 | 8PSK | 8PSK500/1000-RRC | 500–1000 | 675 Hz – 1.35 kHz | 900–1800 bps | RRC α=0.35 |
-| **64QAM** | **64QAM500 / 1000 / 2000-RRC** | **500–2000** | **540–2700 Hz** | **1800–7200 bps** | **Hann / RRC** |
+| **64QAM** | **64QAM500 / 1000 / 2000-RRC** | **500–2000** | **540–2700 Hz** | **1800–7200 bps** | **Rectangular / RRC** |
 | FSK4 | FSK4-ACK | 100 | ~400 Hz | ACK only | Hann |
 | OFDM | OFDM16 / OFDM52 | — | 625 Hz – 2 kHz | ~530–1730 bps | OFDM CP |
 | SC-FDMA | SCFDMA16 / SCFDMA52 | — | 625 Hz – 2 kHz | ~530–1730 bps | DFT-spread |
@@ -120,7 +120,7 @@ payload cap — a 2048-byte payload receives the same full RS protection as a 12
 
 #### Session management
 
-- HPX state machine · 11 speed levels (SL1–SL11)
+- HPX state machine · 20 speed levels (SL1–SL20)
 - Independent per-direction rate adaptation
 - Segmentation and reassembly (up to 64 KB)
 - LZ4 + Zstd dictionary compression (negotiated in-band, signed in handshake)
