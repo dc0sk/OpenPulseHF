@@ -10,6 +10,8 @@ const MULTICARRIER_MODES: &[&str] = &["OFDM16", "OFDM52", "SCFDMA16", "SCFDMA52"
 
 const NARROWBAND_MODES: &[&str] = &["QPSK2000", "QPSK2000-RRC", "8PSK2000", "8PSK2000-RRC"];
 
+const QAM64_MODES: &[&str] = &["64QAM500", "64QAM1000", "64QAM2000-RRC"];
+
 // All HF modes (≤2700 Hz BW, 8 kHz audio, suitable for standard test matrix).
 const HF_FAST_MODES: &[&str] = &[
     "BPSK250",
@@ -39,11 +41,19 @@ const DATA_FEC_MODES: &[FecMode] = &[
     FecMode::SoftConcatenated,
 ];
 
-// 8PSK without RRC matched filtering requires SNR ≥ 15 dB (insufficient margin at 10 dB).
-// OFDM52 and SCFDMA52 also require ≥ 15 dB: their wider occupied bandwidth and ICI from
-// iterative PAPR clipping push their effective noise floor above the 10 dB AWGN test point.
-fn requires_high_snr(mode: &str) -> bool {
-    matches!(mode, "8PSK500" | "8PSK1000-HF" | "OFDM52" | "SCFDMA52")
+/// Minimum AWGN SNR (dB) at which a mode is reliably testable.
+///
+/// - 8PSK without RRC needs ≥ 15 dB (insufficient margin at 10 dB).
+/// - OFDM52 / SCFDMA52 are wideband: ICI raises the effective noise floor.
+/// - 64QAM requires ≥ 20 dB (6 bits/symbol; very sensitive to noise).
+pub fn mode_min_snr_db(mode: &str) -> f32 {
+    if mode.starts_with("64QAM") {
+        return 20.0;
+    }
+    match mode {
+        "8PSK500" | "8PSK1000-HF" | "OFDM52" | "SCFDMA52" => 15.0,
+        _ => 0.0,
+    }
 }
 
 fn channel_snr_db(channel: &ChannelSpec) -> Option<f32> {
@@ -75,6 +85,7 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
     let all_hf_modes: Vec<&str> = HF_SLOW_MODES
         .iter()
         .chain(HF_FAST_MODES.iter())
+        .chain(QAM64_MODES.iter())
         .chain(MULTICARRIER_MODES.iter())
         .copied()
         .collect();
@@ -110,10 +121,9 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
 
     // ── 2. AWGN SNR sweep: fast HF modes × all AWGN channels × {None, Rs, RsInterleaved} ×
     //       {128, 223} bytes — 223 is the max RS(255,223) input without SAR
-    for mode in HF_FAST_MODES {
+    for mode in HF_FAST_MODES.iter().chain(QAM64_MODES.iter()) {
         for channel in &awgn_channels {
-            // 8PSK without RRC needs > 10 dB SNR; skip low-SNR channels for those modes.
-            if requires_high_snr(mode) && channel_snr_db(channel).is_some_and(|s| s < 15.0) {
+            if channel_snr_db(channel).is_some_and(|s| s < mode_min_snr_db(mode)) {
                 continue;
             }
             for &fec in &[FecMode::None, FecMode::Rs, FecMode::RsInterleaved] {
@@ -147,7 +157,7 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
     for mode in key_modes {
         for channel in &key_awgn {
             // 8PSK without RRC is unreliable below 15 dB; only test it at the high-SNR tier.
-            if requires_high_snr(mode) && channel_snr_db(channel).is_some_and(|s| s < 15.0) {
+            if channel_snr_db(channel).is_some_and(|s| s < mode_min_snr_db(mode)) {
                 continue;
             }
             for &fec in DATA_FEC_MODES {
@@ -163,8 +173,8 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
         }
     }
 
-    // ── 4. Compression matrix: HF fast modes × clean × {None, Rs} FEC × all compression × 128 bytes
-    for mode in HF_FAST_MODES {
+    // ── 4. Compression matrix: HF fast + 64QAM modes × clean × {None, Rs} FEC × all compression × 128 bytes
+    for mode in HF_FAST_MODES.iter().chain(QAM64_MODES.iter()) {
         for &fec in &[FecMode::None, FecMode::Rs] {
             for compression in [
                 CompressionAlgorithm::None,
@@ -187,7 +197,7 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
     for mode in MULTICARRIER_MODES {
         for channel in &awgn_channels {
             // OFDM52 and SCFDMA52 are wideband modes not viable at 10 dB SNR.
-            if requires_high_snr(mode) && channel_snr_db(channel).is_some_and(|s| s < 15.0) {
+            if channel_snr_db(channel).is_some_and(|s| s < mode_min_snr_db(mode)) {
                 continue;
             }
             for &fec in &[FecMode::None, FecMode::Rs] {

@@ -15,6 +15,7 @@ pub fn register_all(engine: &mut ModemEngine) {
     use fsk4_plugin::Fsk4Plugin;
     use ofdm_plugin::OfdmPlugin;
     use psk8_plugin::Psk8Plugin;
+    use qam64_plugin::Qam64Plugin;
     use qpsk_plugin::QpskPlugin;
     use scfdma_plugin::ScFdmaPlugin;
     engine
@@ -26,6 +27,9 @@ pub fn register_all(engine: &mut ModemEngine) {
     engine
         .register_plugin(Box::new(Psk8Plugin::new()))
         .expect("register Psk8Plugin");
+    engine
+        .register_plugin(Box::new(Qam64Plugin::new()))
+        .expect("register Qam64Plugin");
     engine
         .register_plugin(Box::new(Fsk4Plugin::new()))
         .expect("register Fsk4Plugin");

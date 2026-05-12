@@ -1,3 +1,4 @@
+mod bench;
 mod cases;
 mod channels;
 mod compare;
@@ -31,6 +32,7 @@ const CRATES_TESTED: &[&str] = &[
     "openpulse-kiss",
     "openpulse-modem",
     "psk8-plugin",
+    "qam64-plugin",
     "qpsk-plugin",
     "scfdma-plugin",
 ];
@@ -51,6 +53,18 @@ struct Cli {
     /// Output directory for test reports.
     #[arg(long, default_value = "docs/test-reports")]
     output: PathBuf,
+
+    /// Run the multi-frame throughput benchmark after the test matrix.
+    #[arg(long)]
+    bench: bool,
+
+    /// Number of frames per benchmark combination.
+    #[arg(long, default_value = "20")]
+    bench_frames: usize,
+
+    /// Payload size in bytes for the benchmark.
+    #[arg(long, default_value = "512")]
+    bench_payload: usize,
 }
 
 fn git_short() -> String {
@@ -127,6 +141,49 @@ fn main() {
 
     write_reports(&results, &cli.output, &meta);
     println!("Reports written to {}/latest/", cli.output.display());
+
+    if cli.bench {
+        let bench_cases = bench::build_bench_cases(cli.bench_payload);
+        let bench_total = bench_cases.len();
+        println!(
+            "\nRunning throughput benchmark: {} combinations × {} frames ({}-byte payload)",
+            bench_total, cli.bench_frames, cli.bench_payload,
+        );
+        let bench_start = Instant::now();
+        let bench_results: Vec<_> = bench_cases
+            .iter()
+            .enumerate()
+            .map(|(i, case)| {
+                let r = bench::run_bench(case, cli.bench_frames);
+                println!(
+                    "[{:3}/{bench_total}] {} | {} | {} | {} | {}/{} ok | {:.0} bps",
+                    i + 1,
+                    r.mode,
+                    r.channel,
+                    r.fec,
+                    r.compression,
+                    r.frames_ok,
+                    r.n_frames,
+                    r.measured_bps,
+                );
+                r
+            })
+            .collect();
+        let bench_elapsed = bench_start.elapsed().as_secs_f64();
+        let bench_dir = cli.output.join("latest");
+        bench::write_bench_report(
+            &bench_results,
+            &bench_dir,
+            &meta,
+            cli.bench_frames,
+            cli.bench_payload,
+            bench_elapsed,
+        );
+        println!(
+            "Throughput benchmark written to {}/latest/throughput.{{md,csv,json}}",
+            cli.output.display(),
+        );
+    }
 
     if failed > 0 {
         std::process::exit(1);
