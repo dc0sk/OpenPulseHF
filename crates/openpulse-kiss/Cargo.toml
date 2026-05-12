@@ -8,6 +8,16 @@ license.workspace = true
 name = "openpulse-kisstnc"
 path = "src/main.rs"
 
+[package.metadata.deb]
+name = "openpulse-kisstnc"
+maintainer = "OpenPulse Contributors"
+copyright = "2025 OpenPulse Contributors"
+license-file = ["../../LICENSE", "4"]
+extended-description = "OpenPulseHF KISS/AX.25 TNC for digital mode operation"
+depends = "$auto"
+section = "hamradio"
+priority = "optional"
+
 [features]
 # Enable real CPAL audio hardware support in the TNC binary.
 cpal = ["openpulse-audio/cpal-backend"]

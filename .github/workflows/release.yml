@@ -11,7 +11,7 @@ env:
 
 jobs:
   build-x86-static:
-    name: Build static x86-64 binary
+    name: Build static x86-64 binaries
     runs-on: ubuntu-latest
 
     steps:
@@ -34,25 +34,31 @@ jobs:
             target
           key: x86-musl-${{ hashFiles('**/Cargo.toml') }}
 
-      - name: Build openpulse-tnc (static musl)
+      - name: Build binaries (static musl)
         run: |
-          cargo build --release -p openpulse-ardop \
+          cargo build --release --locked \
+            -p openpulse-ardop \
+            -p openpulse-kiss \
+            -p openpulse-daemon \
             --target x86_64-unknown-linux-musl \
             --no-default-features
 
-      - name: Rename artifact
+      - name: Stage artifacts
         run: |
-          cp target/x86_64-unknown-linux-musl/release/openpulse-tnc \
-             openpulse-tnc_linux_x86_64_static
+          TAG="${GITHUB_REF_NAME}"
+          mkdir dist
+          cp target/x86_64-unknown-linux-musl/release/openpulse-tnc     "dist/openpulse-tnc_${TAG}_linux_x86_64_static"
+          cp target/x86_64-unknown-linux-musl/release/openpulse-kisstnc "dist/openpulse-kisstnc_${TAG}_linux_x86_64_static"
+          cp target/x86_64-unknown-linux-musl/release/openpulse-server  "dist/openpulse-server_${TAG}_linux_x86_64_static"
 
-      - name: Upload artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: openpulse-tnc-x86-static
-          path: openpulse-tnc_linux_x86_64_static
+          name: x86-static
+          path: dist/
 
   build-aarch64-deb:
-    name: Build aarch64 .deb package
+    name: Build aarch64 .deb packages
     runs-on: ubuntu-latest
 
     steps:
@@ -63,8 +69,8 @@ jobs:
 
       - name: Install cross and cargo-deb
         run: |
-          cargo install cross
-          cargo install cargo-deb
+          cargo install cross --locked
+          cargo install cargo-deb --locked
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -75,29 +81,33 @@ jobs:
             target
           key: aarch64-deb-${{ hashFiles('**/Cargo.toml') }}
 
-      - name: Cross-build openpulse-tnc (aarch64)
+      - name: Cross-build (aarch64)
         run: |
-          cross build --release -p openpulse-ardop \
+          cross build --release --locked \
+            -p openpulse-ardop \
+            -p openpulse-kiss \
+            -p openpulse-daemon \
             --target aarch64-unknown-linux-gnu \
             --no-default-features
 
-      - name: Package .deb (aarch64)
+      - name: Package .deb files (aarch64)
         run: |
-          cargo deb -p openpulse-ardop \
-            --no-build \
-            --target aarch64-unknown-linux-gnu
+          for pkg in openpulse-ardop openpulse-kiss openpulse-daemon; do
+            cargo deb -p "$pkg" \
+              --no-build \
+              --target aarch64-unknown-linux-gnu
+          done
 
-      - name: Locate .deb file
-        id: deb
+      - name: Stage .deb artifacts
         run: |
-          DEB=$(find target/aarch64-unknown-linux-gnu/debian -name '*.deb' | head -1)
-          echo "path=$DEB" >> "$GITHUB_OUTPUT"
+          mkdir dist
+          find target/aarch64-unknown-linux-gnu/debian -name '*.deb' -exec cp {} dist/ \;
 
-      - name: Upload artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: openpulse-tnc-aarch64-deb
-          path: ${{ steps.deb.outputs.path }}
+          name: aarch64-deb
+          path: dist/
 
   release:
     name: Create GitHub Release
@@ -109,16 +119,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download x86 static binary
+      - name: Download x86 static binaries
         uses: actions/download-artifact@v4
         with:
-          name: openpulse-tnc-x86-static
+          name: x86-static
           path: dist/
 
-      - name: Download aarch64 .deb
+      - name: Download aarch64 .deb packages
         uses: actions/download-artifact@v4
         with:
-          name: openpulse-tnc-aarch64-deb
+          name: aarch64-deb
           path: dist/
 
       - name: Create release and upload assets
