@@ -37,11 +37,13 @@ The Open HF Data Modem
 **Large white text, centred:**
 
 ```
-33 waveforms.
+33 waveforms.  Up to 111 kbps*.
 Post-quantum secure.
 See your signal live.
 100% open source.
 ```
+
+*SCFDMA52 + LZ4, 2048-byte frame — measured in built-in testbench
 
 *Sub-line in lighter weight:*
 
@@ -95,7 +97,8 @@ Right column:
 ★ Built-in signal-path testbench
   (live 4-tap waterfall, IQ scatter,
   BER meter — 7 channel models,
-  no radio required)
+  no radio required; measures up to
+  111 kbps with SCFDMA52 + LZ4)
 
 ★ Zstd dictionary compression
   (sub-500 byte payloads)

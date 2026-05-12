@@ -258,7 +258,12 @@ fn gross_bps(mode: &str) -> f64 {
         "QPSK1000-RRC" => 2000.0,
         "8PSK500-RRC" => 1500.0,
         "8PSK1000-RRC" => 3000.0,
-        "FSK4-ACK" => 200.0, // 100 baud × 2 bits/symbol (4-tone)
+        "64QAM500" => 3000.0,                  // 500 baud × 6 bits/symbol
+        "64QAM1000" => 6000.0,                 // 1000 baud × 6 bits/symbol
+        "64QAM2000-RRC" => 12000.0,            // 2000 baud × 6 bits/symbol
+        "QPSK2000" | "QPSK2000-RRC" => 4000.0, // 2000 baud × 2 bits/symbol
+        "8PSK2000" | "8PSK2000-RRC" => 6000.0, // 2000 baud × 3 bits/symbol
+        "FSK4-ACK" => 200.0,                   // 100 baud × 2 bits/symbol (4-tone)
         // OFDM/SC-FDMA: n_data × 2 bits × (8000 / 288) symbol/s
         "OFDM16" | "SCFDMA16" => 889.0, // 16 × 2 × 8000/288 ≈ 889 bps
         "OFDM52" | "SCFDMA52" => 2889.0, // 52 × 2 × 8000/288 ≈ 2889 bps
@@ -283,6 +288,11 @@ fn mode_symbol_rate_hz(mode: &str) -> f64 {
         "QPSK1000-RRC" => 1000.0,
         "8PSK500-RRC" => 500.0,
         "8PSK1000-RRC" => 1000.0,
+        "64QAM500" => 500.0,
+        "64QAM1000" => 1000.0,
+        "64QAM2000-RRC" => 2000.0,
+        "QPSK2000" | "QPSK2000-RRC" => 2000.0,
+        "8PSK2000" | "8PSK2000-RRC" => 2000.0,
         "FSK4-ACK" => 100.0,
         _ => 250.0,
     }
