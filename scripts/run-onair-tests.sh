@@ -67,6 +67,8 @@ FULL_CASES=(
     "QPSK500|soft_concatenated|128"
     "8PSK500|none|128"
     "8PSK1000|none|256"
+    "64QAM500|none|128"
+    "64QAM1000|none|256"
 )
 
 if [[ "$TIER" == "quick" ]]; then
@@ -116,7 +118,8 @@ for case_spec in "${CASES[@]}"; do
 
     # 1. Start IRS TNC on station B (background).
     ssh_b "pkill -f openpulse-tnc || true; \
-        ARDOP_MODE=${MODE} ~/bin/openpulse-tnc \
+        ~/bin/openpulse-tnc \
+            --mode ${MODE} \
             --callsign ${CALLSIGN_B} \
             --ptt ${PTT_BACKEND} \
             --listen \

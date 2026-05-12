@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/on-air_testplan.md
 status: living
-last_updated: 2026-05-05
+last_updated: 2026-05-12
 ---
 
 # OpenPulseHF On-Air Test Plan
@@ -252,12 +252,12 @@ pat connect ardop:///K1RMS   # replace K1RMS with the RMS callsign
 
 ### 6.4 Multi-mode quality ladder (10m only, CEPT or FCC above 28 MHz)
 
-**Goal:** Exercise all HPX2300 speed levels in order.
+**Goal:** Exercise HPX2300 (SL8–SL11) and HPX Wideband HD (SL12–SL14) speed levels in order.
 
-Run from SL8 to SL11 manually to confirm each mode produces a clean demodulated frame:
+Run from SL8 to SL14 manually to confirm each mode produces a clean demodulated frame:
 
 ```bash
-for MODE in QPSK500 QPSK1000 8PSK500 8PSK1000; do
+for MODE in QPSK500 QPSK1000 8PSK1000 64QAM500 64QAM1000 64QAM2000-RRC; do
   echo "--- Testing $MODE ---"
   ./target/release/openpulse-gateway \
     --callsign K1ABC \
@@ -270,10 +270,16 @@ for MODE in QPSK500 QPSK1000 8PSK500 8PSK1000; do
 done
 ```
 
+**Note:** 64QAM modes require approximately 20–25 dB SNR for reliable operation.
+Test 64QAM500 first; proceed to 64QAM1000 and 64QAM2000-RRC only when SNR is adequate.
+64QAM2000-RRC occupies the full 2700 Hz SSB passband — confirm your transceiver's audio
+bandwidth covers this before transmitting.
+
 **Pass criteria:**
 - Each mode produces a successful session (no `FS -`)
-- `8PSK1000` throughput is measurably higher than `BPSK250` in the TNC log
+- `64QAM2000-RRC` throughput is measurably higher than `8PSK1000` in the TNC log
 - AFC offset reported within ±10 Hz for all modes
+- 64QAM modes degrade gracefully (fall back to lower SL) when SNR drops
 
 ### 6.5 Station identification compliance
 
@@ -302,7 +308,7 @@ Log the exact times in the compliance report.
 Before filing the Phase 3.5 regulatory compliance report, confirm:
 
 - [ ] Occupied bandwidth measured with an SDR or spectrum analyser for each mode
-- [ ] BPSK31 ≤ 50 Hz, BPSK250 ≤ 250 Hz, QPSK500 ≤ 500 Hz (±10%)
+- [ ] BPSK31 ≤ 50 Hz, BPSK250 ≤ 260 Hz, QPSK500 ≤ 540 Hz, 64QAM500 ≤ 540 Hz, 64QAM2000-RRC ≤ 2700 Hz (±10%)
 - [ ] Station ID transmitted at ≤10-minute intervals throughout all sessions
 - [ ] No unattended automatic transmissions without valid automatic control authority
 - [ ] Test log includes date, time, frequency, mode, power, and both callsigns

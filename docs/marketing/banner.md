@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/marketing/banner.md
 status: draft
-last_updated: 2026-05-10
+last_updated: 2026-05-12
 ---
 
 # OpenPulseHF — HAMRADIO 2026 Banner Text
@@ -37,7 +37,7 @@ The Open HF Data Modem
 **Large white text, centred:**
 
 ```
-30+ waveforms.
+33 waveforms.
 Post-quantum secure.
 See your signal live.
 100% open source.
