@@ -103,28 +103,45 @@ pub fn fec_payload_limit(_mode: FecMode) -> Option<usize> {
 }
 
 pub const ALL_MODES: &[&str] = &[
+    // BPSK — HF narrow-band
     "BPSK31",
     "BPSK63",
     "BPSK100",
     "BPSK250",
+    // QPSK — HF narrow-band
     "QPSK125",
     "QPSK250",
     "QPSK500",
     "QPSK1000",
     "QPSK1000-HF",
+    // 8PSK — HF narrow-band
     "8PSK500",
     "8PSK1000",
     "8PSK1000-HF",
+    // 64QAM — HF / full SSB passband (6 bits/sym, up to ~7200 bps eff.)
+    "64QAM500",
+    "64QAM1000",
+    "64QAM2000-RRC",
+    // UHF/VHF narrowband — 2000 baud, 8 kHz audio (12.5 kHz channel)
+    "QPSK2000",
+    "QPSK2000-RRC",
+    "8PSK2000",
+    "8PSK2000-RRC",
+    // RRC variants — HF modes with Root Raised Cosine pulse shaping
     "BPSK250-RRC",
     "QPSK500-RRC",
     "QPSK1000-RRC",
     "8PSK500-RRC",
     "8PSK1000-RRC",
+    // ACK channel
     "FSK4-ACK",
+    // Multi-carrier
     "OFDM16",
     "OFDM52",
     "SCFDMA16",
     "SCFDMA52",
+    // Note: QPSK9600 / 8PSK9600 require 48 kHz sample rate and are not available
+    //       in the testbench (which uses 8 kHz).
 ];
 
 // ── Statistics ────────────────────────────────────────────────────────────────

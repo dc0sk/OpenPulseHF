@@ -42,34 +42,35 @@ channel-simulation harness validated against published Watterson and Gilbert-Ell
 
 #### HF narrow-band (≤ 2700 Hz occupied bandwidth)
 
-| Plugin | Modes | Baud rate | Bits/sym | BW (Hz) | Eff. bit rate |
-|---|---|---|---|---|---|
-| BPSK | BPSK31 / BPSK63 / BPSK100 / BPSK250 / BPSK250-RRC | 31–250 | 1 | 50–340 | 19–150 bps |
-| QPSK | QPSK125 / QPSK250 / QPSK500 / QPSK1000-HF / QPSK500-RRC / QPSK1000-RRC | 125–1000 | 2 | 140–1350 | 150–1200 bps |
-| 8PSK | 8PSK500 / 8PSK500-RRC / 8PSK1000-HF / 8PSK1000-RRC | 500–1000 | 3 | 540–1350 | 900–1800 bps |
-| 64QAM | 64QAM500 / 64QAM1000 / 64QAM2000-RRC | 500–2000 | 6 | 540–2700 | 1800–7200 bps |
-| FSK4 | FSK4-ACK | 100 (200 ms/frame) | 2 | ~400 | ACK only |
-| OFDM | OFDM16 / OFDM52 | — | 2/SC | 625–2000 | ~530–1730 bps |
-| SC-FDMA | SCFDMA16 / SCFDMA52 — same BW as OFDM, 3–4 dB lower PAPR | — | 2/SC | 625–2000 | ~530–1730 bps |
+| Plugin | Modes | Baud rate | Bits/sym | BW (Hz) | Raw data rate | Peak with LZ4† |
+|---|---|---|---|---|---|---|
+| BPSK | BPSK31 / BPSK63 / BPSK100 / BPSK250 / BPSK250-RRC | 31–250 | 1 | 50–340 | 31–250 bps | 62–500 bps |
+| QPSK | QPSK125 / QPSK250 / QPSK500 / QPSK1000-HF / QPSK500-RRC / QPSK1000-RRC | 125–1000 | 2 | 140–1350 | 250–2000 bps | 500–4000 bps |
+| 8PSK | 8PSK500 / 8PSK500-RRC / 8PSK1000-HF / 8PSK1000-RRC | 500–1000 | 3 | 540–1350 | 1500–3000 bps | 3.0–6.0 kbps |
+| 64QAM | 64QAM500 / 64QAM1000 / 64QAM2000-RRC | 500–2000 | 6 | 540–2700 | 3000–12000 bps | 6.0–24.0 kbps |
+| FSK4 | FSK4-ACK | 100 (200 ms/frame) | 2 | ~400 | ACK only | ACK only |
+| OFDM | OFDM16 / OFDM52 | — | 2/SC | 625–2000 | 889–2889 bps | 1.8–5.8 kbps |
+| SC-FDMA | SCFDMA16 / SCFDMA52 — same BW as OFDM, 3–4 dB lower PAPR | — | 2/SC | 625–2000 | 889–2889 bps | 1.8–5.8 kbps |
 
-Effective bit rate figures are approximate; overhead includes a per-frame preamble (32 symbols
-for BPSK, 16 symbols for QPSK/8PSK/64QAM) plus an 8-symbol tail. Actual throughput also
-depends on frame length, FEC mode, and channel conditions.
+† Raw data rate = symbol rate × bits/symbol. "Peak with LZ4" uses a ≈ 2× multiplier typical
+for Winlink messages and APRS text traffic. The built-in testbench measures up to **111 kbps
+on SCFDMA52 + LZ4** with a 2048-byte compressible test frame (≈ 38× ratio on highly repetitive
+data). Actual throughput also depends on FEC mode and channel conditions.
 RRC modes (α = 0.35) occupy ~35% more bandwidth than their non-RRC counterparts.
 
 #### UHF/VHF narrowband (12.5 kHz channel, 8 kHz audio)
 
-| Mode | Baud | Bandwidth | Eff. bit rate | Use case |
-|---|---|---|---|---|
-| QPSK2000 / QPSK2000-RRC | 2000 | ~2700 Hz | ~2400 bps | 12.5 kHz PMR/LMR |
-| 8PSK2000 / 8PSK2000-RRC | 2000 | ~2700 Hz | ~3600 bps | 12.5 kHz PMR/LMR high throughput |
+| Mode | Baud | Bandwidth | Raw data rate | Peak with LZ4† | Use case |
+|---|---|---|---|---|---|
+| QPSK2000 / QPSK2000-RRC | 2000 | ~2700 Hz | 4000 bps | ~8000 bps | 12.5 kHz PMR/LMR |
+| 8PSK2000 / 8PSK2000-RRC | 2000 | ~2700 Hz | 6000 bps | ~12000 bps | 12.5 kHz PMR/LMR high throughput |
 
 #### UHF/VHF HD (12.5 kHz channel, 48 kHz audio)
 
-| Mode | Baud | Bandwidth | Eff. bit rate | Use case |
-|---|---|---|---|---|
-| QPSK9600 / QPSK9600-RRC | 9600 | ~13 kHz | ~11.5 kbps | 12.5 kHz PMR/LMR high-speed |
-| 8PSK9600 / 8PSK9600-RRC | 9600 | ~13 kHz | ~17.3 kbps | 12.5 kHz PMR/LMR maximum throughput |
+| Mode | Baud | Bandwidth | Raw data rate | Peak with LZ4† | Use case |
+|---|---|---|---|---|---|
+| QPSK9600 / QPSK9600-RRC | 9600 | ~13 kHz | 19.2 kbps | ~38.4 kbps | 12.5 kHz PMR/LMR high-speed |
+| 8PSK9600 / 8PSK9600-RRC | 9600 | ~13 kHz | 28.8 kbps | ~57.6 kbps | 12.5 kHz PMR/LMR maximum throughput |
 
 Rate adaptation steps across all available modes automatically — independently per direction,
 so an asymmetric path (good downlink, noisy uplink) is handled without penalising the

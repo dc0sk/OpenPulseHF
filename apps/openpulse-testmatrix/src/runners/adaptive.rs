@@ -36,6 +36,7 @@ pub fn run(case: &TestCase, profile: SessionProfile) -> TestResult {
     let mut total_bit_errors: u64 = 0;
     let mut total_bits: u64 = 0;
     let mut any_rx_ok = false;
+    let mut total_tx_samples: usize = 0;
 
     // Send 6 frames: 3 ACKs step the rate up, 3 NACKs step it back down.
     for pass in 0u8..6 {
@@ -49,7 +50,7 @@ pub fn run(case: &TestCase, profile: SessionProfile) -> TestResult {
             return fail(case, start, format!("TX error on pass {pass}: {e}"));
         }
 
-        h.route(channel.as_mut());
+        total_tx_samples += h.route(channel.as_mut());
 
         match h.rx_engine.receive(&mode, None) {
             Ok(data) => {
@@ -98,8 +99,9 @@ pub fn run(case: &TestCase, profile: SessionProfile) -> TestResult {
     } else {
         None
     };
-    let effective_bps = if duration_ms > 0 {
-        Some((total_bytes_rx as f64 * 8.0) / (duration_ms as f64 / 1000.0))
+    let effective_bps = if total_tx_samples > 0 {
+        let on_air_s = total_tx_samples as f64 / 8000.0;
+        Some(total_bytes_rx as f64 * 8.0 / on_air_s)
     } else {
         None
     };
