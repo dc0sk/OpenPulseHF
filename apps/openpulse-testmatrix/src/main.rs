@@ -62,8 +62,8 @@ struct Cli {
     #[arg(long, default_value = "20")]
     bench_frames: usize,
 
-    /// Payload size in bytes for the benchmark.
-    #[arg(long, default_value = "512")]
+    /// Payload size in bytes for the benchmark (max 223 — RS(255,223) block limit).
+    #[arg(long, default_value = "128")]
     bench_payload: usize,
 }
 
