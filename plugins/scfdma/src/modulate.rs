@@ -43,17 +43,17 @@ fn modulate_with_params(payload: &[u8], p: &ScFdmaParams) -> Vec<f32> {
     let mut bit_idx = 0usize;
 
     for _ in 0..n_syms {
-        // Step 1: QPSK-map N_data data bits-pairs into N_data complex symbols.
+        // Step 1: map N_data data subcarrier symbols using the selected constellation.
         let mut data_syms: Vec<Complex32> = (0..p.n_data)
             .map(|_| {
                 let mut sym_bits = 0u8;
-                for b in 0..2 {
+                for b in 0..p.bits_per_sc {
                     if bit_idx < bits.len() {
                         sym_bits |= (bits[bit_idx] as u8) << b;
                         bit_idx += 1;
                     }
                 }
-                qpsk_mod(sym_bits)
+                map_symbol(sym_bits, p.bits_per_sc)
             })
             .collect();
 
@@ -90,7 +90,17 @@ fn modulate_with_params(payload: &[u8], p: &ScFdmaParams) -> Vec<f32> {
     out
 }
 
-// ── QPSK constellation ────────────────────────────────────────────────────────
+// ── Constellation mappers ─────────────────────────────────────────────────────
+
+/// Dispatch to the appropriate constellation mapper.
+fn map_symbol(bits: u8, bits_per_sc: usize) -> Complex32 {
+    match bits_per_sc {
+        2 => qpsk_mod(bits),
+        4 => qam16_mod(bits),
+        6 => qam64_mod(bits),
+        _ => qpsk_mod(bits),
+    }
+}
 
 const INV_SQRT2: f32 = std::f32::consts::FRAC_1_SQRT_2;
 
@@ -101,6 +111,53 @@ fn qpsk_mod(bits: u8) -> Complex32 {
         2 => Complex32::new(INV_SQRT2, -INV_SQRT2),
         _ => Complex32::new(-INV_SQRT2, -INV_SQRT2),
     }
+}
+
+/// Gray-coded 16QAM: PAM-4 on I and Q, normalised to unit average power.
+///
+/// PAM-4 Gray encoding (2 bits → amplitude):
+/// 00 → −3,  01 → −1,  11 → +1,  10 → +3   (×scale)
+///
+/// Scale = 1/√10 so average power per axis = (9+1+1+9)/4 = 5 → total = 10 → unit.
+fn qam16_mod(bits: u8) -> Complex32 {
+    const SCALE: f32 = 0.316_227_77; // 1/sqrt(10)
+    fn pam4(g: u8) -> f32 {
+        match g & 0x3 {
+            0b00 => -3.0,
+            0b01 => -1.0,
+            0b11 => 1.0,
+            _ => 3.0, // 0b10
+        }
+    }
+    let i = pam4((bits >> 2) & 0x3) * SCALE;
+    let q = pam4(bits & 0x3) * SCALE;
+    Complex32::new(i, q)
+}
+
+/// Gray-coded 64QAM: PAM-8 on I and Q, normalised to unit average power.
+///
+/// Reuses the same 3-bit Gray → PAM-8 mapping as the qam64-plugin:
+/// 000→−7, 001→−5, 011→−3, 010→−1, 110→+1, 111→+3, 101→+5, 100→+7  (×scale)
+///
+/// Scale = 1/√42 so average power = 21 per axis → 42 total → unit.
+fn qam64_mod(bits: u8) -> Complex32 {
+    const SCALE: f32 = 0.154_303_35; // 1/sqrt(42)
+    fn pam8(g: u8) -> f32 {
+        let raw: i8 = match g & 0x7 {
+            0b000 => -7,
+            0b001 => -5,
+            0b011 => -3,
+            0b010 => -1,
+            0b110 => 1,
+            0b111 => 3,
+            0b101 => 5,
+            _ => 7, // 0b100
+        };
+        raw as f32 * SCALE
+    }
+    let i = pam8((bits >> 3) & 0x7);
+    let q = pam8(bits & 0x7);
+    Complex32::new(i, q)
 }
 
 // ── Bit packing ───────────────────────────────────────────────────────────────
@@ -126,4 +183,59 @@ pub fn measure_papr(samples: &[f32]) -> f32 {
         return 0.0;
     }
     10.0 * (peak_sq / mean_sq).log10()
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qam16_average_power_is_unit() {
+        let total: f32 = (0..16u8).map(|b| qam16_mod(b).norm_sqr()).sum::<f32>() / 16.0;
+        assert!(
+            (total - 1.0).abs() < 0.01,
+            "16QAM average power = {total:.4}"
+        );
+    }
+
+    #[test]
+    fn qam16_all_points_distinct() {
+        let points: Vec<(i32, i32)> = (0..16u8)
+            .map(|b| {
+                let c = qam16_mod(b);
+                ((c.re * 1000.0) as i32, (c.im * 1000.0) as i32)
+            })
+            .collect();
+        for i in 0..points.len() {
+            for j in (i + 1)..points.len() {
+                assert_ne!(points[i], points[j], "16QAM points {i} and {j} collide");
+            }
+        }
+    }
+
+    #[test]
+    fn qam64_average_power_is_unit() {
+        let total: f32 = (0..64u8).map(|b| qam64_mod(b).norm_sqr()).sum::<f32>() / 64.0;
+        assert!(
+            (total - 1.0).abs() < 0.01,
+            "64QAM average power = {total:.4}"
+        );
+    }
+
+    #[test]
+    fn qam64_all_points_distinct() {
+        let points: Vec<(i32, i32)> = (0..64u8)
+            .map(|b| {
+                let c = qam64_mod(b);
+                ((c.re * 1000.0) as i32, (c.im * 1000.0) as i32)
+            })
+            .collect();
+        for i in 0..points.len() {
+            for j in (i + 1)..points.len() {
+                assert_ne!(points[i], points[j], "64QAM points {i} and {j} collide");
+            }
+        }
+    }
 }

@@ -229,6 +229,8 @@ pub fn build_bench_cases(payload_len: usize) -> Vec<TestCase> {
         "64QAM1000",
         "OFDM52",
         "SCFDMA52",
+        "SCFDMA52-16QAM",
+        "SCFDMA52-64QAM",
     ];
 
     let bench_channels: &[ChannelSpec] = &[

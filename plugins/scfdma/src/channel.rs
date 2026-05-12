@@ -95,6 +95,59 @@ pub fn zf_equalize(p: &ScFdmaParams, freq: &[Complex32], h_est: &[Complex32]) ->
     out
 }
 
+/// Estimate noise variance from pilot residuals.
+///
+/// Computes the mean squared error between the received pilots and the
+/// LS channel estimate applied to the known pilot amplitude.  This gives a
+/// per-symbol noise power estimate used to regularise MMSE equalization.
+pub fn estimate_noise_var(p: &ScFdmaParams, freq: &[Complex32], h_est: &[Complex32]) -> f32 {
+    let pilots = pilot_positions(p);
+    if pilots.is_empty() {
+        return 1e-3;
+    }
+    let sum: f32 = pilots
+        .iter()
+        .map(|&sc| {
+            let rel = sc - p.first_sc;
+            let received = freq[sc];
+            let predicted = h_est[rel] * Complex32::new(PILOT_AMPLITUDE, 0.0);
+            let diff = received - predicted;
+            diff.norm_sqr()
+        })
+        .sum();
+    (sum / pilots.len() as f32).max(1e-6)
+}
+
+/// Minimum mean-square-error equalization.
+///
+/// Regularises the ZF solution with the estimated noise variance so that
+/// weak subcarriers do not amplify noise — critical for 16QAM and 64QAM.
+///
+/// `W_MMSE[k] = H*[k] / (|H[k]|² + σ²)`
+pub fn mmse_equalize(
+    p: &ScFdmaParams,
+    freq: &[Complex32],
+    h_est: &[Complex32],
+    noise_var: f32,
+) -> Vec<Complex32> {
+    let mut out = Vec::with_capacity(p.n_data);
+    for (rel, &h_in) in freq[p.first_sc..=p.last_sc].iter().enumerate() {
+        let sc = p.first_sc + rel;
+        if is_pilot(p, sc) {
+            continue;
+        }
+        let h = h_est[rel];
+        let denom = h.norm_sqr() + noise_var;
+        let eq = if denom < 1e-9 {
+            h_in
+        } else {
+            h_in * h.conj() / denom
+        };
+        out.push(eq);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

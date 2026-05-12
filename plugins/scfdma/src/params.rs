@@ -29,6 +29,8 @@ pub struct ScFdmaParams {
     pub n_data: usize,
     /// Number of pilot subcarriers.
     pub n_pilots: usize,
+    /// Bits carried per data subcarrier per SC-FDMA symbol (2=QPSK, 4=16QAM, 6=64QAM).
+    pub bits_per_sc: usize,
 }
 
 impl ScFdmaParams {
@@ -37,9 +39,9 @@ impl ScFdmaParams {
         self.last_sc - self.first_sc + 1
     }
 
-    /// Bits per SC-FDMA symbol (QPSK = 2 bits/data SC).
+    /// Bits per SC-FDMA symbol across all data subcarriers.
     pub fn bits_per_symbol(&self) -> usize {
-        self.n_data * 2
+        self.n_data * self.bits_per_sc
     }
 
     /// Gross bit rate (bps).
@@ -54,6 +56,7 @@ pub const SCFDMA16: ScFdmaParams = ScFdmaParams {
     last_sc: 57,
     n_data: 16,
     n_pilots: 4,
+    bits_per_sc: 2,
 };
 
 /// SCFDMA-52: 52 data SCs + 13 pilots, SCs 16–80, centre at SC 48 (1500 Hz), BW ≈ 2031 Hz.
@@ -62,6 +65,25 @@ pub const SCFDMA52: ScFdmaParams = ScFdmaParams {
     last_sc: 80,
     n_data: 52,
     n_pilots: 13,
+    bits_per_sc: 2,
+};
+
+/// SCFDMA-52 with 16QAM subcarriers: 5,778 bps gross.
+pub const SCFDMA52_16QAM: ScFdmaParams = ScFdmaParams {
+    first_sc: 16,
+    last_sc: 80,
+    n_data: 52,
+    n_pilots: 13,
+    bits_per_sc: 4,
+};
+
+/// SCFDMA-52 with 64QAM subcarriers: 8,667 bps gross.
+pub const SCFDMA52_64QAM: ScFdmaParams = ScFdmaParams {
+    first_sc: 16,
+    last_sc: 80,
+    n_data: 52,
+    n_pilots: 13,
+    bits_per_sc: 6,
 };
 
 /// Select `ScFdmaParams` from a mode string (case-insensitive).
@@ -69,6 +91,8 @@ pub fn params_for_mode(mode: &str) -> Option<ScFdmaParams> {
     match mode.to_ascii_uppercase().as_str() {
         "SCFDMA16" => Some(SCFDMA16),
         "SCFDMA52" => Some(SCFDMA52),
+        "SCFDMA52-16QAM" => Some(SCFDMA52_16QAM),
+        "SCFDMA52-64QAM" => Some(SCFDMA52_64QAM),
         _ => None,
     }
 }
@@ -89,5 +113,23 @@ mod tests {
         assert_eq!(SCFDMA52.total_sc(), 65);
         assert_eq!(SCFDMA52.n_data + SCFDMA52.n_pilots, 65);
         assert_eq!(SCFDMA52.bits_per_symbol(), 104);
+    }
+
+    #[test]
+    fn scfdma52_16qam_geometry() {
+        assert_eq!(SCFDMA52_16QAM.n_data, 52);
+        assert_eq!(SCFDMA52_16QAM.bits_per_sc, 4);
+        assert_eq!(SCFDMA52_16QAM.bits_per_symbol(), 208);
+        // 52 × 4 × 8000/288 ≈ 5778 bps
+        assert!((SCFDMA52_16QAM.gross_bps() - 5778.0).abs() < 5.0);
+    }
+
+    #[test]
+    fn scfdma52_64qam_geometry() {
+        assert_eq!(SCFDMA52_64QAM.n_data, 52);
+        assert_eq!(SCFDMA52_64QAM.bits_per_sc, 6);
+        assert_eq!(SCFDMA52_64QAM.bits_per_symbol(), 312);
+        // 52 × 6 × 8000/288 ≈ 8667 bps
+        assert!((SCFDMA52_64QAM.gross_bps() - 8667.0).abs() < 5.0);
     }
 }
