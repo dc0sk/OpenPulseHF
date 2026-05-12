@@ -1,13 +1,16 @@
-//! SC-FDMA modulation plugin for OpenPulse (FF-12).
+//! SC-FDMA modulation plugin for OpenPulse (FF-12 + BL-TP-4).
 //!
 //! SC-FDMA (DFT-spread OFDM) adds a DFT precoding step before the OFDM IFFT,
 //! spreading each symbol across all allocated subcarriers.  The transmitted
 //! signal resembles single-carrier: 3–4 dB lower PAPR than OFDM without any
-//! iterative clipping, while using identical LS+ZF channel equalization on RX.
+//! iterative clipping, while using identical LS channel estimation on RX.
+//! MMSE equalization (BL-TP-4) replaces ZF, enabling reliable 16QAM and 64QAM.
 //!
-//! Two modes match the OFDM bandwidth slots:
-//! - `SCFDMA16`: 16 data SCs, BW ≈ 625 Hz, gross ~889 bps
-//! - `SCFDMA52`: 52 data SCs, BW ≈ 2031 Hz, gross ~2889 bps
+//! Supported modes:
+//! - `SCFDMA16`:       16 data SCs, QPSK,   BW ≈  625 Hz, gross ~   889 bps
+//! - `SCFDMA52`:       52 data SCs, QPSK,   BW ≈ 2031 Hz, gross ~ 2,889 bps
+//! - `SCFDMA52-16QAM`: 52 data SCs, 16QAM,  BW ≈ 2031 Hz, gross ~ 5,778 bps
+//! - `SCFDMA52-64QAM`: 52 data SCs, 64QAM,  BW ≈ 2031 Hz, gross ~ 8,667 bps
 
 pub mod channel;
 pub mod demodulate;
@@ -34,10 +37,17 @@ impl ScFdmaPlugin {
             info: PluginInfo {
                 name: "SC-FDMA".into(),
                 version: "0.1.0".into(),
-                description: "SC-FDMA (DFT-spread OFDM) HF plugin (FF-12): SCFDMA16 and SCFDMA52"
-                    .into(),
+                description:
+                    "SC-FDMA HF plugin: SCFDMA16/52 (QPSK), SCFDMA52-16QAM, SCFDMA52-64QAM; \
+                     MMSE equalization (BL-TP-4)"
+                        .into(),
                 author: "OpenPulse Contributors".into(),
-                supported_modes: vec!["SCFDMA16".into(), "SCFDMA52".into()],
+                supported_modes: vec![
+                    "SCFDMA16".into(),
+                    "SCFDMA52".into(),
+                    "SCFDMA52-16QAM".into(),
+                    "SCFDMA52-64QAM".into(),
+                ],
                 trait_version_required: "1.0".into(),
             },
         }
@@ -173,6 +183,60 @@ mod tests {
         assert_eq!(pilots.len(), SCFDMA52.n_pilots);
         assert_eq!(pilots[0], 20);
         assert_eq!(*pilots.last().unwrap(), 80);
+    }
+
+    #[test]
+    fn scfdma52_16qam_loopback_clean() {
+        let plugin = ScFdmaPlugin::new();
+        let payload = b"SCFDMA52-16QAM loopback test payload, 16QAM subcarriers!";
+        let samples = plugin
+            .modulate(payload, &mod_config("SCFDMA52-16QAM"))
+            .unwrap();
+        let rx = plugin
+            .demodulate(&samples, &mod_config("SCFDMA52-16QAM"))
+            .unwrap();
+        assert_eq!(rx.as_slice(), payload.as_ref());
+    }
+
+    #[test]
+    fn scfdma52_64qam_loopback_clean() {
+        let plugin = ScFdmaPlugin::new();
+        let payload = b"SCFDMA52-64QAM clean loopback: 8667 bps gross, MMSE equalization.";
+        let samples = plugin
+            .modulate(payload, &mod_config("SCFDMA52-64QAM"))
+            .unwrap();
+        let rx = plugin
+            .demodulate(&samples, &mod_config("SCFDMA52-64QAM"))
+            .unwrap();
+        assert_eq!(rx.as_slice(), payload.as_ref());
+    }
+
+    #[test]
+    fn scfdma52_16qam_papr_below_12db() {
+        let plugin = ScFdmaPlugin::new();
+        let payload = b"16QAM PAPR test payload - DFT precoding keeps PAPR low even with 4 bits/SC";
+        let samples = plugin
+            .modulate(payload, &mod_config("SCFDMA52-16QAM"))
+            .unwrap();
+        let papr = measure_papr(&samples);
+        assert!(
+            papr < 12.0,
+            "SCFDMA52-16QAM PAPR {papr:.1} dB should be below 12 dB"
+        );
+    }
+
+    #[test]
+    fn scfdma52_64qam_papr_below_12db() {
+        let plugin = ScFdmaPlugin::new();
+        let payload = b"64QAM PAPR test payload - DFT precoding still suppresses PAPR at 6 bits/SC";
+        let samples = plugin
+            .modulate(payload, &mod_config("SCFDMA52-64QAM"))
+            .unwrap();
+        let papr = measure_papr(&samples);
+        assert!(
+            papr < 12.0,
+            "SCFDMA52-64QAM PAPR {papr:.1} dB should be below 12 dB"
+        );
     }
 
     #[test]

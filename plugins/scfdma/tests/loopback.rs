@@ -62,6 +62,62 @@ fn scfdma16_papr_below_12db() {
     );
 }
 
+// ── Higher-order QAM loopback ─────────────────────────────────────────────────
+
+#[test]
+fn scfdma52_16qam_clean_loopback() {
+    let plugin = ScFdmaPlugin::new();
+    let payload: Vec<u8> = (0u8..128).collect();
+    let samples = plugin.modulate(&payload, &cfg("SCFDMA52-16QAM")).unwrap();
+    let rx = plugin.demodulate(&samples, &cfg("SCFDMA52-16QAM")).unwrap();
+    assert_eq!(rx, payload);
+}
+
+#[test]
+fn scfdma52_64qam_clean_loopback() {
+    let plugin = ScFdmaPlugin::new();
+    let payload: Vec<u8> = (0u8..128).collect();
+    let samples = plugin.modulate(&payload, &cfg("SCFDMA52-64QAM")).unwrap();
+    let rx = plugin.demodulate(&samples, &cfg("SCFDMA52-64QAM")).unwrap();
+    assert_eq!(rx, payload);
+}
+
+#[test]
+fn scfdma52_16qam_awgn_snr25db() {
+    let plugin = ScFdmaPlugin::new();
+    let payload: Vec<u8> = (0u8..128).collect();
+    let samples = plugin.modulate(&payload, &cfg("SCFDMA52-16QAM")).unwrap();
+    let noisy = add_awgn(&samples, 25.0, 0xCAFE_BABE_u64);
+    let rx = plugin.demodulate(&noisy, &cfg("SCFDMA52-16QAM")).unwrap();
+    assert_eq!(
+        rx, payload,
+        "SCFDMA52-16QAM should decode correctly at 25 dB SNR"
+    );
+}
+
+#[test]
+fn scfdma52_64qam_awgn_snr30db() {
+    let plugin = ScFdmaPlugin::new();
+    let payload: Vec<u8> = (0u8..128).collect();
+    let samples = plugin.modulate(&payload, &cfg("SCFDMA52-64QAM")).unwrap();
+    let noisy = add_awgn(&samples, 30.0, 0xDEAD_C0DE_u64);
+    let rx = plugin.demodulate(&noisy, &cfg("SCFDMA52-64QAM")).unwrap();
+    assert_eq!(
+        rx, payload,
+        "SCFDMA52-64QAM should decode correctly at 30 dB SNR"
+    );
+}
+
+fn add_awgn(samples: &[f32], snr_db: f32, seed: u64) -> Vec<f32> {
+    let signal_power = samples.iter().map(|&s| s * s).sum::<f32>() / samples.len() as f32;
+    let snr_linear = 10.0_f32.powf(snr_db / 10.0);
+    let noise_std = (signal_power / snr_linear).sqrt();
+    gaussian_noise_iter(seed, samples.len())
+        .zip(samples.iter())
+        .map(|(n, &s)| s + noise_std * n)
+        .collect()
+}
+
 // ── AWGN robustness ───────────────────────────────────────────────────────────
 
 #[test]
@@ -69,17 +125,7 @@ fn scfdma16_awgn_snr20db_zero_ber() {
     let plugin = ScFdmaPlugin::new();
     let payload: Vec<u8> = (0u8..32).collect();
     let samples = plugin.modulate(&payload, &cfg("SCFDMA16")).unwrap();
-
-    // Add true Gaussian AWGN at 20 dB SNR using Box-Muller with a fixed LCG seed.
-    let signal_power = samples.iter().map(|&s| s * s).sum::<f32>() / samples.len() as f32;
-    let snr_linear = 10.0_f32.powf(20.0 / 10.0);
-    let noise_std = (signal_power / snr_linear).sqrt();
-
-    let noisy: Vec<f32> = gaussian_noise_iter(0xDEAD_BEEF_u64, samples.len())
-        .zip(samples.iter())
-        .map(|(n, &s)| s + noise_std * n)
-        .collect();
-
+    let noisy = add_awgn(&samples, 20.0, 0xDEAD_BEEF_u64);
     let rx = plugin.demodulate(&noisy, &cfg("SCFDMA16")).unwrap();
     assert_eq!(rx, payload, "SCFDMA16 should decode correctly at 20 dB SNR");
 }

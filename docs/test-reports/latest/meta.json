@@ -1,11 +1,11 @@
 {
-  "date": "2026-05-11T13:44:57.839035761Z",
-  "git_commit": "658f421",
-  "git_commit_full": "658f42176275dc66c7c1fd5fbd3316058d4225ca",
-  "git_dirty": false,
+  "date": "2026-05-12T19:20:01.742482781Z",
+  "git_commit": "ce09bd9",
+  "git_commit_full": "ce09bd9aebd4786e0c5faa9b6b05180664d19b0d",
+  "git_dirty": true,
   "workspace_version": "0.1.0",
   "tier": "quick",
-  "duration_secs": 101.195514547,
+  "duration_secs": 21.276255348,
   "crates_tested": [
     "bpsk-plugin",
     "fsk4-plugin",
@@ -20,6 +20,7 @@
     "openpulse-kiss",
     "openpulse-modem",
     "psk8-plugin",
+    "qam64-plugin",
     "qpsk-plugin",
     "scfdma-plugin"
   ]
