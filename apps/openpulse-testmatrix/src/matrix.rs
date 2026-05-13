@@ -39,6 +39,8 @@ pub enum ChannelSpec {
     Awgn { snr_db: f32, seed: u64 },
     WattersonGoodF1,
     WattersonGoodF2,
+    WattersonGoodF1Snr { snr_db: f32, seed: u64 },
+    WattersonGoodF2Snr { snr_db: f32, seed: u64 },
     WattersonModerateF1,
     WattersonPoorF1,
     WattersonExtreme,
@@ -53,12 +55,23 @@ pub enum ChannelSpec {
 }
 
 impl ChannelSpec {
+    fn snr_slug(snr_db: f32) -> String {
+        // Keep enough precision to avoid collisions for nearby sweep points.
+        format!("{snr_db:.2}").replace('.', "p")
+    }
+
     pub fn label(&self) -> String {
         match self {
             Self::Clean => "clean".into(),
             Self::Awgn { snr_db, .. } => format!("awgn_{snr_db:.0}dB"),
             Self::WattersonGoodF1 => "watterson_good_f1".into(),
             Self::WattersonGoodF2 => "watterson_good_f2".into(),
+            Self::WattersonGoodF1Snr { snr_db, .. } => {
+                format!("watterson_good_f1_{}dB", Self::snr_slug(*snr_db))
+            }
+            Self::WattersonGoodF2Snr { snr_db, .. } => {
+                format!("watterson_good_f2_{}dB", Self::snr_slug(*snr_db))
+            }
             Self::WattersonModerateF1 => "watterson_moderate_f1".into(),
             Self::WattersonPoorF1 => "watterson_poor_f1".into(),
             Self::WattersonExtreme => "watterson_extreme".into(),

@@ -60,6 +60,16 @@ pub fn build(spec: &ChannelSpec) -> Box<dyn ChannelModel> {
             let cfg = WattersonConfig::good_f2(Some(2));
             openpulse_channel::build_channel(&ChannelModelConfig::Watterson(cfg), None).unwrap()
         }
+        ChannelSpec::WattersonGoodF1Snr { snr_db, seed } => {
+            let mut cfg = WattersonConfig::good_f1(Some(*seed));
+            cfg.snr_db = *snr_db;
+            openpulse_channel::build_channel(&ChannelModelConfig::Watterson(cfg), None).unwrap()
+        }
+        ChannelSpec::WattersonGoodF2Snr { snr_db, seed } => {
+            let mut cfg = WattersonConfig::good_f2(Some(*seed));
+            cfg.snr_db = *snr_db;
+            openpulse_channel::build_channel(&ChannelModelConfig::Watterson(cfg), None).unwrap()
+        }
         ChannelSpec::WattersonModerateF1 => {
             let cfg = WattersonConfig::moderate_f1(Some(3));
             openpulse_channel::build_channel(&ChannelModelConfig::Watterson(cfg), None).unwrap()
