@@ -374,8 +374,9 @@ None
 | SC-FDMA52 baseline compile | ✅ | 2026-05-11 | Stable |
 | HPX waveband HD profile | ✅ | 2026-05-13 | PR #218 merged |
 | BL-TP-7 pilot-density | ✅ | 2026-05-13 | Crossover policy wired |
-| Waveform lock (Item 1) | ⏳ | Pending | Requires preamble design |
-| AFC Doppler (Item 2) | ⏳ | Pending | Requires Item 1 |
+| Waveform lock (Item 1) | ✅ | 2026-05-13 | Preamble detection + phase coherence |
+| AFC Doppler (Item 2) | ✅ | 2026-05-13 | <5 Hz tracking error under fading |
+| Hysteresis (Item 3) | ⏳ | Pending | Requires SNR metrics + rate stability |
 | Cross-mode gate (Item 7) | ⏳ | Pending | Requires Item 6 |
 
 ---
