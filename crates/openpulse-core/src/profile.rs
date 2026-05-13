@@ -261,28 +261,30 @@ impl SessionProfile {
         }
     }
 
-    /// HPX Wideband HD profile: 64QAM ladder (SL12–SL14) for clean LOS links.
+    /// HPX Wideband HD profile: SC-FDMA crossover ladder (SL12–SL14).
     ///
-    /// Requires ≥ 24 dB SNR; suitable for FM/microwave/satellite links and UHF/VHF
-    /// LoS paths with an adaptive equalizer active.  Not for HF ionospheric paths.
+    /// Dense-pilot SC-FDMA is preferred at crossover/edge SNR, while baseline SC-FDMA
+    /// remains available at higher margin. This profile is suitable for FM/microwave/
+    /// satellite links and UHF/VHF LoS paths with an adaptive equalizer active.
+    /// Not for HF ionospheric paths.
     ///
     /// | SL  | Mode            | Gross bps (8 kHz audio) |
     /// |-----|-----------------|------------------------|
-    /// | SL12 | 64QAM500       | ≈ 3000                |
-    /// | SL13 | 64QAM1000      | ≈ 6000                |
-    /// | SL14 | 64QAM2000-RRC  | ≈ 12000               |
+    /// | SL12 | SCFDMA52-64QAM-P4 | ≈ 8167             |
+    /// | SL13 | SCFDMA52-64QAM    | ≈ 8667             |
+    /// | SL14 | 64QAM2000-RRC     | ≈ 12000            |
     pub fn hpx_wideband_hd() -> Self {
         let mut modes = [None; 21];
-        modes[SpeedLevel::Sl12 as usize] = Some("64QAM500");
-        modes[SpeedLevel::Sl13 as usize] = Some("64QAM1000");
+        modes[SpeedLevel::Sl12 as usize] = Some("SCFDMA52-64QAM-P4");
+        modes[SpeedLevel::Sl13 as usize] = Some("SCFDMA52-64QAM");
         modes[SpeedLevel::Sl14 as usize] = Some("64QAM2000-RRC");
         let mut snr_floors = [None; 21];
-        snr_floors[SpeedLevel::Sl12 as usize] = Some(24.0_f32);
-        snr_floors[SpeedLevel::Sl13 as usize] = Some(27.0_f32);
+        snr_floors[SpeedLevel::Sl12 as usize] = Some(22.0_f32);
+        snr_floors[SpeedLevel::Sl13 as usize] = Some(24.0_f32);
         snr_floors[SpeedLevel::Sl14 as usize] = Some(30.0_f32);
         let mut snr_ceilings = [None; 21];
-        snr_ceilings[SpeedLevel::Sl12 as usize] = Some(30.0_f32);
-        snr_ceilings[SpeedLevel::Sl13 as usize] = Some(33.0_f32);
+        snr_ceilings[SpeedLevel::Sl12 as usize] = Some(26.0_f32);
+        snr_ceilings[SpeedLevel::Sl13 as usize] = Some(30.0_f32);
         // SL14 is the ceiling; no upgrade above it.
         Self {
             modes,

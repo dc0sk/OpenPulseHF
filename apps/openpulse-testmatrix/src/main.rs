@@ -74,6 +74,10 @@ struct Cli {
     #[arg(long)]
     pilot_density_crossover: bool,
 
+    /// Enforce BL-TP-7 crossover regression gate (requires --pilot-density-crossover).
+    #[arg(long)]
+    pilot_density_gate: bool,
+
     /// Number of frames per benchmark combination.
     #[arg(long, default_value = "50")]
     bench_frames: usize,
@@ -125,6 +129,10 @@ fn main() {
     }
     if cli.pilot_density_crossover && !cli.pilot_density_sweep {
         eprintln!("--pilot-density-crossover requires --pilot-density-sweep");
+        std::process::exit(2);
+    }
+    if cli.pilot_density_gate && !cli.pilot_density_crossover {
+        eprintln!("--pilot-density-gate requires --pilot-density-crossover");
         std::process::exit(2);
     }
 
@@ -283,9 +291,21 @@ fn main() {
             sweep_elapsed,
         );
         println!(
-            "Pilot-density sweep written to {}/latest/pilot_density.{{md,csv}}",
+            "Pilot-density sweep written to {}/latest/pilot_density*.{{md,csv}}",
             cli.output.display(),
         );
+
+        if cli.pilot_density_gate {
+            let gate = bench::evaluate_pilot_density_crossover_gate(&sweep_results);
+            for line in &gate.checks {
+                println!("[pilot-density-gate] {line}");
+            }
+            if !gate.passed {
+                eprintln!("BL-TP-7 pilot-density crossover gate failed");
+                std::process::exit(1);
+            }
+            println!("BL-TP-7 pilot-density crossover gate passed");
+        }
     }
 
     if failed > 0 {

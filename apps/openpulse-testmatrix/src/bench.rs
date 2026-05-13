@@ -35,6 +35,12 @@ pub enum PilotDensitySweepProfile {
     Crossover,
 }
 
+#[derive(Debug, Clone)]
+pub struct PilotDensityGateResult {
+    pub passed: bool,
+    pub checks: Vec<String>,
+}
+
 /// Payload pattern representative of typical HF digital radio traffic.
 ///
 /// A 64-byte repeating ASCII template is tiled to the requested length.
@@ -813,4 +819,80 @@ pub fn write_pilot_density_report(
         .expect("write pilot_density_policy.md");
     fs::write(dir.join("pilot_density_policy.csv"), policy_csv)
         .expect("write pilot_density_policy.csv");
+}
+
+/// Evaluate a BL-TP-7 crossover regression gate from raw sweep results.
+///
+/// Gate conditions (mean across seeds):
+/// - `awgn_22dB` + `rs`: dense must improve success by at least 10 percentage points.
+/// - `awgn_24dB` + `none`: dense must improve success by at least 3 percentage points.
+/// - `watterson_good_f1_24p00dB` + `rs`: dense must be non-degrading (delta ≥ 0).
+pub fn evaluate_pilot_density_crossover_gate(results: &[BenchResult]) -> PilotDensityGateResult {
+    fn mean_for(
+        results: &[BenchResult],
+        mode: &str,
+        channel: &str,
+        fec: &str,
+    ) -> Option<(f64, f64, usize)> {
+        let rows: Vec<&BenchResult> = results
+            .iter()
+            .filter(|r| r.mode == mode && r.channel == channel && r.fec == fec)
+            .collect();
+        if rows.is_empty() {
+            return None;
+        }
+        let success = rows.iter().map(|r| r.success_rate_pct).sum::<f64>() / rows.len() as f64;
+        let bps = rows.iter().map(|r| r.measured_bps).sum::<f64>() / rows.len() as f64;
+        Some((success, bps, rows.len()))
+    }
+
+    let checks_cfg = [
+        ("awgn_22dB", "rs", 10.0_f64, "AWGN 22 dB + RS"),
+        ("awgn_24dB", "none", 3.0_f64, "AWGN 24 dB + none"),
+        (
+            "watterson_good_f1_24p00dB",
+            "rs",
+            0.0_f64,
+            "Watterson Good F1 24 dB + RS",
+        ),
+    ];
+
+    let mut checks = Vec::new();
+    let mut passed = true;
+
+    for (channel, fec, min_delta_success, label) in checks_cfg {
+        let Some((base_success, _base_bps, base_n)) =
+            mean_for(results, PILOT_DENSITY_BASELINE_MODE, channel, fec)
+        else {
+            passed = false;
+            checks.push(format!("FAIL {label}: missing baseline rows"));
+            continue;
+        };
+        let Some((dense_success, _dense_bps, dense_n)) =
+            mean_for(results, PILOT_DENSITY_DENSE_MODE, channel, fec)
+        else {
+            passed = false;
+            checks.push(format!("FAIL {label}: missing dense rows"));
+            continue;
+        };
+
+        let delta_success = dense_success - base_success;
+        let ok = delta_success >= min_delta_success;
+        if !ok {
+            passed = false;
+        }
+        checks.push(format!(
+            "{} {}: delta_success={:+.2}% (baseline={:.2}%, dense={:.2}%, samples={}/{}) threshold={:+.2}%",
+            if ok { "PASS" } else { "FAIL" },
+            label,
+            delta_success,
+            base_success,
+            dense_success,
+            base_n,
+            dense_n,
+            min_delta_success,
+        ));
+    }
+
+    PilotDensityGateResult { passed, checks }
 }
