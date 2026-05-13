@@ -94,11 +94,19 @@ This document tracks the 11-item execution plan to achieve VARA-class performanc
 - Hysteresis thresholds: 2 dB margins (e.g., if SL13 at 18 dB, upgrade only at 20 dB).
 - Decision history: track last 5 ACK events and SNR trend.
 
+**Status**: ✅ **COMPLETE** (commit 3c7fdd5)
+
+**Deliverables**:
+- `crates/openpulse-core/src/snr_hysteresis.rs`: SnrEstimator (pilot-based + energy-based EMA), HysteresisController (2 dB margins)
+- Unit tests: 6 tests (SNR accuracy, hysteresis boundaries, oscillation prevention)
+- Integration tests: 4 tests (adaptive_hysteresis.rs) — multi-level transitions, convergence under noise
+- All 21 acceptance tests passing (6 core + 6 modem Item1 + 5 modem Item2 + 4 integration)
+
 **Acceptance Criteria**:
-- [ ] SNR estimator implemented in DSP module; ±1.5 dB accuracy on AWGN 10–30 dB.
-- [ ] Hysteresis prevents oscillation in 10-frame Gilbert-Elliott burst test.
-- [ ] Speed-level transitions logged with SNR and reason (ACK/NACK/SNR-trend).
-- [ ] Integration test: `tests/adaptive_hysteresis.rs`.
+- [x] SNR estimator implemented in DSP module; ±1.5 dB accuracy on AWGN 10–30 dB.
+- [x] Hysteresis prevents oscillation in 10-frame Gilbert-Elliott burst test.
+- [x] Speed-level transitions logged with SNR and reason (ACK/NACK/SNR-trend).
+- [x] Integration test: `tests/adaptive_hysteresis.rs`.
 
 **Depends On**: Item 1, Item 2.
 
@@ -376,7 +384,7 @@ None
 | BL-TP-7 pilot-density | ✅ | 2026-05-13 | Crossover policy wired |
 | Waveform lock (Item 1) | ✅ | 2026-05-13 | Preamble detection + phase coherence |
 | AFC Doppler (Item 2) | ✅ | 2026-05-13 | <5 Hz tracking error under fading |
-| Hysteresis (Item 3) | ⏳ | Pending | Requires SNR metrics + rate stability |
+| Hysteresis (Item 3) | ✅ | 2026-05-13 | SnrEstimator + HysteresisController; 21 tests passing |
 | Cross-mode gate (Item 7) | ⏳ | Pending | Requires Item 6 |
 
 ---
