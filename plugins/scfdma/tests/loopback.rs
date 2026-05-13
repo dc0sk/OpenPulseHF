@@ -83,6 +83,19 @@ fn scfdma52_64qam_clean_loopback() {
 }
 
 #[test]
+fn scfdma52_64qam_p4_clean_loopback() {
+    let plugin = ScFdmaPlugin::new();
+    let payload: Vec<u8> = (0u8..128).collect();
+    let samples = plugin
+        .modulate(&payload, &cfg("SCFDMA52-64QAM-P4"))
+        .unwrap();
+    let rx = plugin
+        .demodulate(&samples, &cfg("SCFDMA52-64QAM-P4"))
+        .unwrap();
+    assert_eq!(rx, payload);
+}
+
+#[test]
 fn scfdma52_16qam_awgn_snr25db() {
     let plugin = ScFdmaPlugin::new();
     let payload: Vec<u8> = (0u8..128).collect();
@@ -105,6 +118,23 @@ fn scfdma52_64qam_awgn_snr30db() {
     assert_eq!(
         rx, payload,
         "SCFDMA52-64QAM should decode correctly at 30 dB SNR"
+    );
+}
+
+#[test]
+fn scfdma52_64qam_p4_awgn_snr30db() {
+    let plugin = ScFdmaPlugin::new();
+    let payload: Vec<u8> = (0u8..128).collect();
+    let samples = plugin
+        .modulate(&payload, &cfg("SCFDMA52-64QAM-P4"))
+        .unwrap();
+    let noisy = add_awgn(&samples, 30.0, 0xABCD_1234_u64);
+    let rx = plugin
+        .demodulate(&noisy, &cfg("SCFDMA52-64QAM-P4"))
+        .unwrap();
+    assert_eq!(
+        rx, payload,
+        "SCFDMA52-64QAM-P4 should decode correctly at 30 dB SNR"
     );
 }
 

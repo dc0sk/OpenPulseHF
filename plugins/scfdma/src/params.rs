@@ -15,8 +15,8 @@ pub const SAMPLE_RATE: u32 = 8000;
 pub const SC_SPACING_HZ: f32 = SAMPLE_RATE as f32 / FFT_SIZE as f32;
 /// Pilot tone amplitude: known real BPSK +1.
 pub const PILOT_AMPLITUDE: f32 = 1.0;
-/// Pilot spacing — every 5th SC in the occupied range is a pilot.
-pub const PILOT_SPACING: usize = 5;
+/// Default pilot spacing — every 5th SC in the occupied range is a pilot.
+pub const DEFAULT_PILOT_SPACING: usize = 5;
 
 /// Per-mode subcarrier layout.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -31,6 +31,8 @@ pub struct ScFdmaParams {
     pub n_pilots: usize,
     /// Bits carried per data subcarrier per SC-FDMA symbol (2=QPSK, 4=16QAM, 6=64QAM).
     pub bits_per_sc: usize,
+    /// Pilot spacing in occupied subcarriers.
+    pub pilot_spacing: usize,
 }
 
 impl ScFdmaParams {
@@ -57,6 +59,7 @@ pub const SCFDMA16: ScFdmaParams = ScFdmaParams {
     n_data: 16,
     n_pilots: 4,
     bits_per_sc: 2,
+    pilot_spacing: DEFAULT_PILOT_SPACING,
 };
 
 /// SCFDMA-52: 52 data SCs + 13 pilots, SCs 16–80, centre at SC 48 (1500 Hz), BW ≈ 2031 Hz.
@@ -66,6 +69,7 @@ pub const SCFDMA52: ScFdmaParams = ScFdmaParams {
     n_data: 52,
     n_pilots: 13,
     bits_per_sc: 2,
+    pilot_spacing: DEFAULT_PILOT_SPACING,
 };
 
 /// SCFDMA-52 with 16QAM subcarriers: 5,778 bps gross.
@@ -75,6 +79,7 @@ pub const SCFDMA52_16QAM: ScFdmaParams = ScFdmaParams {
     n_data: 52,
     n_pilots: 13,
     bits_per_sc: 4,
+    pilot_spacing: DEFAULT_PILOT_SPACING,
 };
 
 /// SCFDMA-52 with 64QAM subcarriers: 8,667 bps gross.
@@ -84,6 +89,18 @@ pub const SCFDMA52_64QAM: ScFdmaParams = ScFdmaParams {
     n_data: 52,
     n_pilots: 13,
     bits_per_sc: 6,
+    pilot_spacing: DEFAULT_PILOT_SPACING,
+};
+
+/// Experimental dense-pilot SCFDMA-52 with 64QAM:
+/// 49 data SCs + 16 pilots (pilot spacing 4) within the same 16..80 allocation.
+pub const SCFDMA52_64QAM_P4: ScFdmaParams = ScFdmaParams {
+    first_sc: 16,
+    last_sc: 80,
+    n_data: 49,
+    n_pilots: 16,
+    bits_per_sc: 6,
+    pilot_spacing: 4,
 };
 
 /// Select `ScFdmaParams` from a mode string (case-insensitive).
@@ -93,6 +110,7 @@ pub fn params_for_mode(mode: &str) -> Option<ScFdmaParams> {
         "SCFDMA52" => Some(SCFDMA52),
         "SCFDMA52-16QAM" => Some(SCFDMA52_16QAM),
         "SCFDMA52-64QAM" => Some(SCFDMA52_64QAM),
+        "SCFDMA52-64QAM-P4" => Some(SCFDMA52_64QAM_P4),
         _ => None,
     }
 }
@@ -131,5 +149,16 @@ mod tests {
         assert_eq!(SCFDMA52_64QAM.bits_per_symbol(), 312);
         // 52 × 6 × 8000/288 ≈ 8667 bps
         assert!((SCFDMA52_64QAM.gross_bps() - 8667.0).abs() < 5.0);
+    }
+
+    #[test]
+    fn scfdma52_64qam_p4_geometry() {
+        assert_eq!(SCFDMA52_64QAM_P4.total_sc(), 65);
+        assert_eq!(SCFDMA52_64QAM_P4.n_data, 49);
+        assert_eq!(SCFDMA52_64QAM_P4.n_pilots, 16);
+        assert_eq!(SCFDMA52_64QAM_P4.n_data + SCFDMA52_64QAM_P4.n_pilots, 65);
+        assert_eq!(SCFDMA52_64QAM_P4.bits_per_symbol(), 294);
+        // 49 × 6 × 8000/288 ≈ 8167 bps
+        assert!((SCFDMA52_64QAM_P4.gross_bps() - 8167.0).abs() < 5.0);
     }
 }

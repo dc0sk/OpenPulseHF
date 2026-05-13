@@ -56,6 +56,7 @@ pub fn mode_gross_bps(mode: &str) -> f64 {
         "64QAM500" => 3000.0,
         "64QAM1000" => 6000.0,
         "64QAM2000-RRC" => 12000.0,
+        "SCFDMA52-64QAM-P4" => 8167.0,
         "FSK4-ACK" => 200.0,
         "OFDM16" | "SCFDMA16" => 889.0,
         "OFDM52" | "SCFDMA52" => 2889.0,
@@ -233,6 +234,7 @@ pub fn build_bench_cases(payload_len: usize) -> Vec<TestCase> {
         "SCFDMA52",
         "SCFDMA52-16QAM",
         "SCFDMA52-64QAM",
+        "SCFDMA52-64QAM-P4",
     ];
 
     let mut bench_channels = vec![
