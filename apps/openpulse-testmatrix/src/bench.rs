@@ -29,6 +29,12 @@ const SAMPLE_RATE_HZ: f64 = 8000.0;
 pub const PILOT_DENSITY_BASELINE_MODE: &str = "SCFDMA52-64QAM";
 pub const PILOT_DENSITY_DENSE_MODE: &str = "SCFDMA52-64QAM-P4";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PilotDensitySweepProfile {
+    Full,
+    Crossover,
+}
+
 /// Payload pattern representative of typical HF digital radio traffic.
 ///
 /// A 64-byte repeating ASCII template is tiled to the requested length.
@@ -387,10 +393,64 @@ pub fn build_bench_cases(payload_len: usize, tier: Tier) -> Vec<TestCase> {
 ///
 /// This sweep compares only baseline vs dense-pilot SC-FDMA 64QAM modes across
 /// a multi-seed SNR ladder for AWGN and Watterson Good F1/F2 channels.
-pub fn build_pilot_density_sweep_cases(payload_len: usize, tier: Tier) -> Vec<TestCase> {
+pub fn build_pilot_density_sweep_cases(
+    payload_len: usize,
+    tier: Tier,
+    profile: PilotDensitySweepProfile,
+) -> Vec<TestCase> {
     let modes = [PILOT_DENSITY_BASELINE_MODE, PILOT_DENSITY_DENSE_MODE];
     let fec_modes = [FecMode::None, FecMode::Rs];
     let mut cases = Vec::new();
+
+    if profile == PilotDensitySweepProfile::Crossover {
+        let awgn_snr_db = [22.0, 24.0];
+        let awgn_seeds = [42, 123, 777, 4242, 9123];
+        let watter_snr_db = [20.0, 22.0, 24.0];
+        let watter_seeds = [101, 202, 303, 404, 505];
+
+        for &mode in &modes {
+            for &fec in &fec_modes {
+                for &snr_db in &awgn_snr_db {
+                    for &seed in &awgn_seeds {
+                        cases.push(TestCase {
+                            use_case: UseCase::RawModem,
+                            mode: mode.to_string(),
+                            fec_mode: fec,
+                            compression: CompressionAlgorithm::None,
+                            channel: ChannelSpec::Awgn { snr_db, seed },
+                            payload_len,
+                            tier,
+                        });
+                    }
+                }
+
+                for &snr_db in &watter_snr_db {
+                    for &seed in &watter_seeds {
+                        cases.push(TestCase {
+                            use_case: UseCase::RawModem,
+                            mode: mode.to_string(),
+                            fec_mode: fec,
+                            compression: CompressionAlgorithm::None,
+                            channel: ChannelSpec::WattersonGoodF1Snr { snr_db, seed },
+                            payload_len,
+                            tier,
+                        });
+                        cases.push(TestCase {
+                            use_case: UseCase::RawModem,
+                            mode: mode.to_string(),
+                            fec_mode: fec,
+                            compression: CompressionAlgorithm::None,
+                            channel: ChannelSpec::WattersonGoodF2Snr { snr_db, seed },
+                            payload_len,
+                            tier,
+                        });
+                    }
+                }
+            }
+        }
+
+        return cases;
+    }
 
     let (awgn_snr_db, awgn_seeds, watter_snr_db, watter_seeds): (&[f32], &[u64], &[f32], &[u64]) =
         if tier == Tier::Full {

@@ -70,6 +70,10 @@ struct Cli {
     #[arg(long)]
     pilot_density_sweep_only: bool,
 
+    /// Restrict pilot-density sweep to crossover points (AWGN 22/24, Watterson 20/22/24).
+    #[arg(long)]
+    pilot_density_crossover: bool,
+
     /// Number of frames per benchmark combination.
     #[arg(long, default_value = "50")]
     bench_frames: usize,
@@ -117,6 +121,10 @@ fn main() {
     }
     if cli.pilot_density_sweep_only && !cli.pilot_density_sweep {
         eprintln!("--pilot-density-sweep-only requires --pilot-density-sweep");
+        std::process::exit(2);
+    }
+    if cli.pilot_density_crossover && !cli.pilot_density_sweep {
+        eprintln!("--pilot-density-crossover requires --pilot-density-sweep");
         std::process::exit(2);
     }
 
@@ -227,11 +235,23 @@ fn main() {
     }
 
     if cli.pilot_density_sweep {
-        let sweep_cases = bench::build_pilot_density_sweep_cases(cli.bench_payload, tier);
+        let profile = if cli.pilot_density_crossover {
+            bench::PilotDensitySweepProfile::Crossover
+        } else {
+            bench::PilotDensitySweepProfile::Full
+        };
+        let sweep_cases = bench::build_pilot_density_sweep_cases(cli.bench_payload, tier, profile);
         let sweep_total = sweep_cases.len();
+        let profile_label = if cli.pilot_density_crossover {
+            "crossover"
+        } else {
+            "full"
+        };
         println!(
-            "\nRunning BL-TP-7 pilot-density sweep: {} combinations × {} frames ({}-byte payload)",
-            sweep_total, cli.bench_frames, cli.bench_payload,
+            "\nRunning BL-TP-7 pilot-density sweep ({profile_label}): {} combinations × {} frames ({}-byte payload)",
+            sweep_total,
+            cli.bench_frames,
+            cli.bench_payload,
         );
         let sweep_start = Instant::now();
         let sweep_results: Vec<_> = sweep_cases
