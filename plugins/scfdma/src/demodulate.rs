@@ -4,6 +4,7 @@ use num_complex::Complex32;
 use rustfft::FftPlanner;
 
 use crate::channel::{estimate_noise_var, ls_estimate, mmse_equalize};
+use crate::modulate::{modulate_with_params, preamble_payload};
 use crate::params::{params_for_mode, ScFdmaParams, CP, FFT_SIZE, SYM_LEN};
 
 pub fn scfdma_demodulate(samples: &[f32], mode: &str) -> Vec<u8> {
@@ -12,6 +13,18 @@ pub fn scfdma_demodulate(samples: &[f32], mode: &str) -> Vec<u8> {
 }
 
 fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Vec<u8> {
+    let sync = modulate_with_params(&preamble_payload(p), p);
+    if samples.len() < sync.len() + SYM_LEN {
+        return vec![];
+    }
+
+    let offset = find_sync_offset(samples, &sync);
+    let payload_start = offset + sync.len();
+    if payload_start >= samples.len() {
+        return vec![];
+    }
+
+    let samples = &samples[payload_start..];
     let n_syms = samples.len() / SYM_LEN;
     if n_syms == 0 {
         return vec![];
@@ -68,6 +81,31 @@ fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Vec<u8> {
     let available = raw.len() - 2;
     let take = payload_len.min(available);
     raw[2..2 + take].to_vec()
+}
+
+fn find_sync_offset(samples: &[f32], sync: &[f32]) -> usize {
+    if samples.len() <= sync.len() {
+        return 0;
+    }
+
+    let max_offset = samples.len() - sync.len();
+    let mut best_offset = 0usize;
+    let mut best_score = f32::NEG_INFINITY;
+
+    // Search the full capture so a caller can prefix arbitrary leading noise.
+    for offset in 0..=max_offset {
+        let score: f32 = samples[offset..offset + sync.len()]
+            .iter()
+            .zip(sync.iter())
+            .map(|(&a, &b)| a * b)
+            .sum();
+        if score > best_score {
+            best_score = score;
+            best_offset = offset;
+        }
+    }
+
+    best_offset
 }
 
 // ── Constellation demappers ───────────────────────────────────────────────────
