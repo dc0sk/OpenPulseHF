@@ -213,13 +213,12 @@ pub fn run_bench(case: &TestCase, n_frames: usize) -> BenchResult {
 
 /// Build the throughput benchmark case list.
 ///
-/// Uses a fixed comprehensive channel suite (not limited by --full) to give
-/// a complete pre-on-air reference: AWGN sweep, Watterson ionospheric, and
-/// Gilbert-Elliott burst profiles.
-pub fn build_bench_cases(payload_len: usize) -> Vec<TestCase> {
+/// Full tier keeps comprehensive coverage; quick tier keeps representative
+/// cases so `--bench` remains practical during iterative development.
+pub fn build_bench_cases(payload_len: usize, tier: Tier) -> Vec<TestCase> {
     const LOW_SNR_SWEEP_DB: &[f32] = &[10.0, 8.0, 5.0, 3.0, 0.0];
 
-    const BENCH_MODES: &[&str] = &[
+    const BENCH_MODES_FULL: &[&str] = &[
         "BPSK250",
         "BPSK250-RRC",
         "QPSK500",
@@ -237,7 +236,18 @@ pub fn build_bench_cases(payload_len: usize) -> Vec<TestCase> {
         "SCFDMA52-64QAM-P4",
     ];
 
-    let mut bench_channels = vec![
+    const BENCH_MODES_QUICK: &[&str] = &[
+        "BPSK250",
+        "QPSK500",
+        "QPSK1000-HF",
+        "8PSK1000-HF",
+        "64QAM1000",
+        "SCFDMA52",
+        "SCFDMA52-64QAM",
+        "SCFDMA52-64QAM-P4",
+    ];
+
+    let mut bench_channels_full = vec![
         ChannelSpec::Clean,
         ChannelSpec::Awgn {
             snr_db: 30.0,
@@ -274,34 +284,87 @@ pub fn build_bench_cases(payload_len: usize) -> Vec<TestCase> {
         ChannelSpec::GilbertElliottModerate,
     ];
 
-    bench_channels.extend(
+    bench_channels_full.extend(
         LOW_SNR_SWEEP_DB
             .iter()
             .copied()
             .map(|snr_db| ChannelSpec::WattersonGoodF1Snr { snr_db, seed: 101 }),
     );
-    bench_channels.extend(
+    bench_channels_full.extend(
         LOW_SNR_SWEEP_DB
             .iter()
             .copied()
             .map(|snr_db| ChannelSpec::WattersonGoodF2Snr { snr_db, seed: 102 }),
     );
 
-    const BENCH_FEC: &[FecMode] = &[FecMode::None, FecMode::Rs, FecMode::SoftConcatenated];
-    const BENCH_COMP: &[CompressionAlgorithm] =
+    let bench_channels_quick = vec![
+        ChannelSpec::Clean,
+        ChannelSpec::Awgn {
+            snr_db: 20.0,
+            seed: 42,
+        },
+        ChannelSpec::Awgn {
+            snr_db: 10.0,
+            seed: 42,
+        },
+        ChannelSpec::Awgn {
+            snr_db: 5.0,
+            seed: 42,
+        },
+        ChannelSpec::Awgn {
+            snr_db: 0.0,
+            seed: 42,
+        },
+        ChannelSpec::WattersonGoodF1,
+        ChannelSpec::WattersonGoodF2,
+        ChannelSpec::WattersonGoodF1Snr {
+            snr_db: 5.0,
+            seed: 101,
+        },
+        ChannelSpec::WattersonGoodF2Snr {
+            snr_db: 5.0,
+            seed: 102,
+        },
+    ];
+
+    const BENCH_FEC_FULL: &[FecMode] = &[FecMode::None, FecMode::Rs, FecMode::SoftConcatenated];
+    const BENCH_COMP_FULL: &[CompressionAlgorithm] =
         &[CompressionAlgorithm::None, CompressionAlgorithm::Lz4];
+    const BENCH_FEC_QUICK: &[FecMode] = &[FecMode::None, FecMode::Rs];
+    const BENCH_COMP_QUICK: &[CompressionAlgorithm] = &[CompressionAlgorithm::None];
+
+    let bench_modes = if tier == Tier::Full {
+        BENCH_MODES_FULL
+    } else {
+        BENCH_MODES_QUICK
+    };
+    let bench_channels = if tier == Tier::Full {
+        &bench_channels_full
+    } else {
+        &bench_channels_quick
+    };
+    let bench_fec = if tier == Tier::Full {
+        BENCH_FEC_FULL
+    } else {
+        BENCH_FEC_QUICK
+    };
+    let bench_comp = if tier == Tier::Full {
+        BENCH_COMP_FULL
+    } else {
+        BENCH_COMP_QUICK
+    };
 
     let mut cases = Vec::new();
-    for &mode in BENCH_MODES {
-        for channel in &bench_channels {
+    for &mode in bench_modes {
+        for channel in bench_channels {
             // Enforce per-mode SNR floor on AWGN channels.
             if let ChannelSpec::Awgn { snr_db, .. } = channel {
-                if *snr_db < mode_min_snr_db(mode) {
+                if snr_db < &mode_min_snr_db(mode) {
                     continue;
                 }
             }
-            for &fec in BENCH_FEC {
-                for &comp in BENCH_COMP {
+            for &fec in bench_fec {
+                for &comp in bench_comp {
                     cases.push(TestCase {
                         use_case: UseCase::RawModem,
                         mode: mode.to_string(),
