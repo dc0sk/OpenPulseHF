@@ -10,12 +10,27 @@ use rustfft::FftPlanner;
 use crate::channel::is_pilot;
 use crate::params::{params_for_mode, ScFdmaParams, CP, FFT_SIZE, PILOT_AMPLITUDE, SYM_LEN};
 
+const PREAMBLE_SYMBOLS: usize = 4;
+const PREAMBLE_PATTERN: &[u8] = b"SCFDMA-SYNC-ACQ";
+
 pub fn scfdma_modulate(payload: &[u8], mode: &str) -> Vec<f32> {
     let p = params_for_mode(mode).expect("caller must validate mode before scfdma_modulate");
-    modulate_with_params(payload, &p)
+    let mut out = modulate_with_params(&preamble_payload(&p), &p);
+    out.extend(modulate_with_params(payload, &p));
+    out
 }
 
-fn modulate_with_params(payload: &[u8], p: &ScFdmaParams) -> Vec<f32> {
+pub(crate) fn preamble_payload(p: &ScFdmaParams) -> Vec<u8> {
+    let bytes = (p.bits_per_symbol() * PREAMBLE_SYMBOLS) / 8;
+    PREAMBLE_PATTERN
+        .iter()
+        .copied()
+        .cycle()
+        .take(bytes)
+        .collect()
+}
+
+pub(crate) fn modulate_with_params(payload: &[u8], p: &ScFdmaParams) -> Vec<f32> {
     // Prepend 2-byte LE length prefix.
     let len_bytes = (payload.len() as u16).to_le_bytes();
     let mut data = Vec::with_capacity(2 + payload.len());

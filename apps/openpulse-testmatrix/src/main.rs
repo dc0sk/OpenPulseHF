@@ -59,7 +59,7 @@ struct Cli {
     bench: bool,
 
     /// Number of frames per benchmark combination.
-    #[arg(long, default_value = "20")]
+    #[arg(long, default_value = "50")]
     bench_frames: usize,
 
     /// Payload size in bytes for the benchmark (max 223 — RS(255,223) block limit).
