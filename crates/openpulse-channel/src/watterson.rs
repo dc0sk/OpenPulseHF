@@ -112,7 +112,9 @@ impl WattersonChannel {
         let ifft = self.planner.plan_fft_inverse(fft_size);
         ifft.process(&mut spec);
 
-        // Normalize to unit mean-square: E[|h|^2] = 2*filter_energy/fft_size (IFFT is unscaled).
+        // Normalize to unit mean-square.  For rustfft's unnormalized IFFT, each time-domain
+        // sample satisfies E[|h[n]|^2] = Σ_k E[|X[k]|^2] = 2·filter_energy (independent of
+        // fft_size — the 1/N from Parseval cancels the N from the unnormalized transform).
         let scale = 1.0 / (2.0 * filter_energy).sqrt();
         spec[..n]
             .iter()

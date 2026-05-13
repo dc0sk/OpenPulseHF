@@ -1234,20 +1234,25 @@ These tasks address the failure modes identified in Watterson channel benchmarki
 
 | ID | Title | Status | PR |
 |---|---|---|---|
-| RF-1 | Diagnose and fix BPSK250 100% failure under Watterson Good F2 | Pending | — |
+| RF-1 | Diagnose and fix BPSK250 100% failure under Watterson Good F2 | Done | #212 |
 | RF-2 | SC-FDMA block interleaver (cross-reference BL-TP-3) | Pending | — |
 | RF-3 | Extend SNR sweep to 0–10 dB in benchmark harness (cross-reference BL-TP-1) | Pending | — |
 | RF-4 | Memory-ARQ end-to-end in SC-FDMA HPX session (cross-reference BL-TP-5) | Pending | — |
 | RF-5 | Preamble / acquisition sequence for HF channel entry (cross-reference BL-TP-6) | Pending | — |
 
-### RF-1 investigation context
+### RF-1 confirmed root cause (PR #212)
 
-Benchmark result: BPSK250 achieves 20/20 at AWGN 15 dB and 20/20 at Watterson Good F1, but 0/20 at Watterson Good F2 with every FEC mode (None, RS, Conv). Good F2 uses a different Doppler spread profile than F1. Hypothesis: the Gardner timing error detector (TED) or the PLL in `crates/openpulse-dsp/src/` loses lock when the fading envelope modulates amplitude faster than the loop bandwidth. The failure is complete (0/20 with RS FEC), ruling out an SNR-floor issue and pointing to a synchronisation collapse.
+Two bugs in the Watterson model caused the 0/20 failure — not a demodulator or timing issue:
 
-Investigation entry points:
-- `crates/openpulse-dsp/src/` — Gardner TED and PLL implementation
-- `plugins/bpsk/src/demodulate.rs` — how TED/PLL outputs are applied; AFC loop interaction
-- `crates/openpulse-channel/src/watterson.rs` — F1 vs F2 parameter difference (Doppler spread and delay spread)
+**Bug 1 — Independent fading per 1024-sample block.** The model regenerated completely new random envelopes every 1024 samples, creating 65 discontinuous channel jumps within a single RS-encoded frame (~66 k samples). Fix: generate one FFT-shaped envelope per `apply()` call, sized to `next_power_of_two(signal_len)`.
+
+**Bug 2 — Magnitude-only fading creates a static frequency-domain null.** Using `h.norm()` discards the random ionospheric phase, leaving the combining sign set purely by geometry:
+- Good F2 (delay 1.0 ms) at fc=1500 Hz: `cos(2π·1500·0.001) = cos(3π) = −1` → permanent destructive null → 0/20
+- Good F1 (delay 0.5 ms) at fc=1500 Hz: `cos(3π/2) = 0` → delayed ray orthogonal to I channel → harmless
+
+Fix: use `h.re × √2` so the complex Gaussian's random phase randomises the combining sign per frame, breaking static nulls while preserving unit mean-square amplitude.
+
+After the fix, BPSK250 + RS FEC + block interleaver correctly decodes through Good F2 (seed 5). Differential detection handles frames where the fading sign is consistent throughout; FEC+interleaver corrects the burst errors at sign-transition boundaries.
 
 ---
 
