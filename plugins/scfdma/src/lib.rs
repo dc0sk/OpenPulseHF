@@ -11,6 +11,7 @@
 //! - `SCFDMA52`:       52 data SCs, QPSK,   BW ≈ 2031 Hz, gross ~ 2,889 bps
 //! - `SCFDMA52-16QAM`: 52 data SCs, 16QAM,  BW ≈ 2031 Hz, gross ~ 5,778 bps
 //! - `SCFDMA52-64QAM`: 52 data SCs, 64QAM,  BW ≈ 2031 Hz, gross ~ 8,667 bps
+//! - `SCFDMA52-64QAM-P4`: 49 data SCs, 64QAM, denser pilots (16), gross ~ 8,167 bps
 
 pub mod channel;
 pub mod demodulate;
@@ -37,16 +38,17 @@ impl ScFdmaPlugin {
             info: PluginInfo {
                 name: "SC-FDMA".into(),
                 version: "0.1.0".into(),
-                description:
-                    "SC-FDMA HF plugin: SCFDMA16/52 (QPSK), SCFDMA52-16QAM, SCFDMA52-64QAM; \
+                description: "SC-FDMA HF plugin: SCFDMA16/52 (QPSK), SCFDMA52-16QAM, \
+                     SCFDMA52-64QAM, SCFDMA52-64QAM-P4 (dense pilots); \
                      MMSE equalization (BL-TP-4)"
-                        .into(),
+                    .into(),
                 author: "OpenPulse Contributors".into(),
                 supported_modes: vec![
                     "SCFDMA16".into(),
                     "SCFDMA52".into(),
                     "SCFDMA52-16QAM".into(),
                     "SCFDMA52-64QAM".into(),
+                    "SCFDMA52-64QAM-P4".into(),
                 ],
                 trait_version_required: "1.0".into(),
             },
@@ -126,7 +128,7 @@ mod tests {
     use super::*;
     use crate::channel::pilot_positions;
     use crate::modulate::measure_papr;
-    use crate::params::{SCFDMA16, SCFDMA52};
+    use crate::params::{SCFDMA16, SCFDMA52, SCFDMA52_64QAM_P4};
 
     fn mod_config(mode: &str) -> ModulationConfig {
         ModulationConfig {
@@ -183,6 +185,14 @@ mod tests {
         assert_eq!(pilots.len(), SCFDMA52.n_pilots);
         assert_eq!(pilots[0], 20);
         assert_eq!(*pilots.last().unwrap(), 80);
+    }
+
+    #[test]
+    fn scfdma52_64qam_p4_pilot_positions_correct() {
+        let pilots = pilot_positions(&SCFDMA52_64QAM_P4);
+        assert_eq!(pilots.len(), SCFDMA52_64QAM_P4.n_pilots);
+        assert_eq!(pilots[0], 19);
+        assert_eq!(*pilots.last().unwrap(), 79);
     }
 
     #[test]

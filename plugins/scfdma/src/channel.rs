@@ -4,26 +4,32 @@
 
 use num_complex::Complex32;
 
-use crate::params::{ScFdmaParams, PILOT_AMPLITUDE, PILOT_SPACING};
+use crate::params::{ScFdmaParams, PILOT_AMPLITUDE};
 
 /// Return the absolute SC indices of all pilot subcarriers for `p`.
 pub fn pilot_positions(p: &ScFdmaParams) -> Vec<usize> {
+    if p.pilot_spacing == 0 {
+        return vec![];
+    }
     let mut pilots = Vec::with_capacity(p.n_pilots);
-    let mut sc = p.first_sc + PILOT_SPACING - 1;
+    let mut sc = p.first_sc + p.pilot_spacing - 1;
     while sc <= p.last_sc {
         pilots.push(sc);
-        sc += PILOT_SPACING;
+        sc += p.pilot_spacing;
     }
     pilots
 }
 
 /// `true` when absolute SC index `sc` is a pilot for this mode.
 pub fn is_pilot(p: &ScFdmaParams, sc: usize) -> bool {
+    if p.pilot_spacing == 0 {
+        return false;
+    }
     if sc < p.first_sc || sc > p.last_sc {
         return false;
     }
     let offset = sc - p.first_sc;
-    offset % PILOT_SPACING == (PILOT_SPACING - 1)
+    offset % p.pilot_spacing == (p.pilot_spacing - 1)
 }
 
 /// Least-squares channel estimate at each pilot SC, linearly interpolated
