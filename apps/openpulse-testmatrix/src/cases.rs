@@ -301,10 +301,15 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
             }
         }
 
-        // Multi-carrier × all propagation channels × {None, Rs, SoftConcatenated}
+        // Multi-carrier × all propagation channels × {None, Rs, RsInterleaved, SoftConcatenated}
         for mode in MULTICARRIER_MODES {
             for channel in &prop_channels {
-                for &fec in &[FecMode::None, FecMode::Rs, FecMode::SoftConcatenated] {
+                for &fec in &[
+                    FecMode::None,
+                    FecMode::Rs,
+                    FecMode::RsInterleaved,
+                    FecMode::SoftConcatenated,
+                ] {
                     cases.push(raw_case(
                         mode,
                         fec,

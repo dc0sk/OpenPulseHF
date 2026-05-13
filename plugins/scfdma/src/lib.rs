@@ -17,10 +17,8 @@ pub mod demodulate;
 pub mod modulate;
 pub mod params;
 
-#[allow(unused_imports)]
 use openpulse_core::{
     error::ModemError,
-    fec::{FecCodec, Interleaver, DEFAULT_INTERLEAVER_DEPTH},
     plugin::{ModulationConfig, ModulationPlugin, PluginInfo},
 };
 
