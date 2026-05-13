@@ -62,6 +62,14 @@ struct Cli {
     #[arg(long)]
     bench_only: bool,
 
+    /// Run focused BL-TP-7 pilot-density sweep (SCFDMA52-64QAM vs SCFDMA52-64QAM-P4).
+    #[arg(long)]
+    pilot_density_sweep: bool,
+
+    /// Run only the BL-TP-7 pilot-density sweep (skip the test matrix pass).
+    #[arg(long)]
+    pilot_density_sweep_only: bool,
+
     /// Number of frames per benchmark combination.
     #[arg(long, default_value = "50")]
     bench_frames: usize,
@@ -107,11 +115,15 @@ fn main() {
         eprintln!("--bench-only requires --bench");
         std::process::exit(2);
     }
+    if cli.pilot_density_sweep_only && !cli.pilot_density_sweep {
+        eprintln!("--pilot-density-sweep-only requires --pilot-density-sweep");
+        std::process::exit(2);
+    }
 
     let tier = if cli.full { Tier::Full } else { Tier::Quick };
 
     let mut failed = 0usize;
-    let elapsed = if cli.bench_only {
+    let elapsed = if cli.bench_only || cli.pilot_density_sweep_only {
         std::time::Duration::from_secs(0)
     } else {
         let cases = build_cases(tier);
@@ -210,6 +222,48 @@ fn main() {
         );
         println!(
             "Throughput benchmark written to {}/latest/throughput.{{md,csv,json}}",
+            cli.output.display(),
+        );
+    }
+
+    if cli.pilot_density_sweep {
+        let sweep_cases = bench::build_pilot_density_sweep_cases(cli.bench_payload, tier);
+        let sweep_total = sweep_cases.len();
+        println!(
+            "\nRunning BL-TP-7 pilot-density sweep: {} combinations × {} frames ({}-byte payload)",
+            sweep_total, cli.bench_frames, cli.bench_payload,
+        );
+        let sweep_start = Instant::now();
+        let sweep_results: Vec<_> = sweep_cases
+            .iter()
+            .enumerate()
+            .map(|(i, case)| {
+                let r = bench::run_bench(case, cli.bench_frames);
+                println!(
+                    "[{:3}/{sweep_total}] {} | {} | {} | {}/{} ok | {:.0} bps",
+                    i + 1,
+                    r.mode,
+                    r.channel,
+                    r.fec,
+                    r.frames_ok,
+                    r.n_frames,
+                    r.measured_bps,
+                );
+                r
+            })
+            .collect();
+        let sweep_elapsed = sweep_start.elapsed().as_secs_f64();
+        let sweep_dir = cli.output.join("latest");
+        bench::write_pilot_density_report(
+            &sweep_results,
+            &sweep_dir,
+            &meta,
+            cli.bench_frames,
+            cli.bench_payload,
+            sweep_elapsed,
+        );
+        println!(
+            "Pilot-density sweep written to {}/latest/pilot_density.{{md,csv}}",
             cli.output.display(),
         );
     }

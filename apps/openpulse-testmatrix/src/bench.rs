@@ -26,6 +26,8 @@ use crate::report::RunMeta;
 use crate::runners::register_all;
 
 const SAMPLE_RATE_HZ: f64 = 8000.0;
+pub const PILOT_DENSITY_BASELINE_MODE: &str = "SCFDMA52-64QAM";
+pub const PILOT_DENSITY_DENSE_MODE: &str = "SCFDMA52-64QAM-P4";
 
 /// Payload pattern representative of typical HF digital radio traffic.
 ///
@@ -381,6 +383,78 @@ pub fn build_bench_cases(payload_len: usize, tier: Tier) -> Vec<TestCase> {
     cases
 }
 
+/// Build focused BL-TP-7 pilot-density sweep cases.
+///
+/// This sweep compares only baseline vs dense-pilot SC-FDMA 64QAM modes across
+/// a multi-seed SNR ladder for AWGN and Watterson Good F1/F2 channels.
+pub fn build_pilot_density_sweep_cases(payload_len: usize, tier: Tier) -> Vec<TestCase> {
+    let modes = [PILOT_DENSITY_BASELINE_MODE, PILOT_DENSITY_DENSE_MODE];
+    let fec_modes = [FecMode::None, FecMode::Rs];
+    let mut cases = Vec::new();
+
+    let (awgn_snr_db, awgn_seeds, watter_snr_db, watter_seeds): (&[f32], &[u64], &[f32], &[u64]) =
+        if tier == Tier::Full {
+            (
+                &[
+                    16.0, 17.0, 18.0, 19.0, 20.0, 21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0,
+                ],
+                &[11, 42, 77, 123],
+                &[14.0, 12.0, 10.0, 8.0, 6.0, 5.0, 4.0],
+                &[101, 202, 303, 404],
+            )
+        } else {
+            (
+                &[18.0, 20.0, 22.0, 24.0, 26.0, 28.0],
+                &[42, 123, 777],
+                &[12.0, 10.0, 8.0, 6.0, 5.0],
+                &[101, 202, 303],
+            )
+        };
+
+    for &mode in &modes {
+        for &fec in &fec_modes {
+            for &snr_db in awgn_snr_db {
+                for &seed in awgn_seeds {
+                    cases.push(TestCase {
+                        use_case: UseCase::RawModem,
+                        mode: mode.to_string(),
+                        fec_mode: fec,
+                        compression: CompressionAlgorithm::None,
+                        channel: ChannelSpec::Awgn { snr_db, seed },
+                        payload_len,
+                        tier,
+                    });
+                }
+            }
+
+            for &snr_db in watter_snr_db {
+                for &seed in watter_seeds {
+                    cases.push(TestCase {
+                        use_case: UseCase::RawModem,
+                        mode: mode.to_string(),
+                        fec_mode: fec,
+                        compression: CompressionAlgorithm::None,
+                        channel: ChannelSpec::WattersonGoodF1Snr { snr_db, seed },
+                        payload_len,
+                        tier,
+                    });
+                    cases.push(TestCase {
+                        use_case: UseCase::RawModem,
+                        mode: mode.to_string(),
+                        fec_mode: fec,
+                        compression: CompressionAlgorithm::None,
+                        channel: ChannelSpec::WattersonGoodF2Snr { snr_db, seed },
+                        payload_len,
+                        tier,
+                    });
+                }
+            }
+        }
+    }
+
+    cases
+}
+
 // ── Report writers ────────────────────────────────────────────────────────────
 
 pub fn write_bench_report(
@@ -512,4 +586,105 @@ fn fmt_bps(bps: f64) -> String {
     } else {
         format!("{:.1} bps", bps)
     }
+}
+
+pub fn write_pilot_density_report(
+    results: &[BenchResult],
+    dir: &Path,
+    meta: &RunMeta,
+    n_frames: usize,
+    payload_len: usize,
+    elapsed_s: f64,
+) {
+    fs::create_dir_all(dir).expect("create pilot-density report directory");
+
+    let mut rows = std::collections::BTreeMap::<
+        (String, String),
+        (Vec<&BenchResult>, Vec<&BenchResult>),
+    >::new();
+
+    for r in results {
+        if r.mode != PILOT_DENSITY_BASELINE_MODE && r.mode != PILOT_DENSITY_DENSE_MODE {
+            continue;
+        }
+        let key = (r.channel.clone(), r.fec.clone());
+        let entry = rows.entry(key).or_insert((Vec::new(), Vec::new()));
+        if r.mode == PILOT_DENSITY_BASELINE_MODE {
+            entry.0.push(r);
+        } else if r.mode == PILOT_DENSITY_DENSE_MODE {
+            entry.1.push(r);
+        }
+    }
+
+    let mut md = String::new();
+    md.push_str("---\n");
+    md.push_str(&format!(
+        "title: \"BL-TP-7 Pilot Density Sweep\"\ndate: \"{}\"\ngit_commit: \"{}\"\n",
+        meta.date.format("%Y-%m-%dT%H:%M:%SZ"),
+        meta.git_commit,
+    ));
+    md.push_str("---\n\n");
+    md.push_str("# BL-TP-7 Pilot Density Sweep\n\n");
+    md.push_str(&format!("**Run:** {}\n\n", meta.identity_line()));
+    md.push_str(&format!(
+        "**Methodology:** {} vs {} with {n_frames} frames/case, payload {payload_len} B, compression none, elapsed {elapsed_s:.1}s.\n\n",
+        PILOT_DENSITY_BASELINE_MODE, PILOT_DENSITY_DENSE_MODE
+    ));
+    md.push_str("| Channel | FEC | Seeds | Baseline Success | Dense Success | Delta Success | Baseline bps | Dense bps | Delta bps |\n");
+    md.push_str("|---|---|---:|---:|---:|---:|---:|---:|---:|\n");
+
+    let mut csv = String::new();
+    csv.push_str(
+        "run_date,run_commit,channel,fec,seeds,baseline_success_pct,dense_success_pct,delta_success_pct,baseline_bps,dense_bps,delta_bps\n",
+    );
+    let run_date = meta.date.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let dirty = if meta.git_dirty { "*" } else { "" };
+    let run_commit = format!("{}{dirty}", meta.git_commit);
+
+    for ((channel, fec), (base, dense)) in rows {
+        if base.is_empty() || dense.is_empty() {
+            continue;
+        }
+
+        let base_success_mean =
+            base.iter().map(|r| r.success_rate_pct).sum::<f64>() / base.len() as f64;
+        let dense_success_mean =
+            dense.iter().map(|r| r.success_rate_pct).sum::<f64>() / dense.len() as f64;
+        let base_bps_mean = base.iter().map(|r| r.measured_bps).sum::<f64>() / base.len() as f64;
+        let dense_bps_mean = dense.iter().map(|r| r.measured_bps).sum::<f64>() / dense.len() as f64;
+        let delta_success = dense_success_mean - base_success_mean;
+        let delta_bps = dense_bps_mean - base_bps_mean;
+        let seeds = base.len().min(dense.len());
+
+        md.push_str(&format!(
+            "| {} | {} | {} | {:.1}% | {:.1}% | {:+.1}% | {:.1} | {:.1} | {:+.1} |\n",
+            channel,
+            fec,
+            seeds,
+            base_success_mean,
+            dense_success_mean,
+            delta_success,
+            base_bps_mean,
+            dense_bps_mean,
+            delta_bps,
+        ));
+
+        csv.push_str(&format!(
+            "{},{},{},{},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2}\n",
+            run_date,
+            run_commit,
+            channel,
+            fec,
+            seeds,
+            base_success_mean,
+            dense_success_mean,
+            delta_success,
+            base_bps_mean,
+            dense_bps_mean,
+            delta_bps,
+        ));
+    }
+
+    fs::write(dir.join("pilot_density.md"), md).expect("write pilot_density.md");
+    fs::write(dir.join("pilot_density.csv"), csv).expect("write pilot_density.csv");
 }
