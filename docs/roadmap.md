@@ -1218,12 +1218,12 @@ These tasks establish the empirical baseline and close the gap between the simul
 
 | ID | Title | Status | PR |
 |---|---|---|---|
-| BL-TP-1 | SNR sweep extended to 0–10 dB (AWGN + Watterson) | Pending | — |
-| BL-TP-2 | Benchmark 20-frame → 50-frame for statistical stability | Pending | — |
-| BL-TP-3 | SC-FDMA block interleaver wired into SC-FDMA encoder/decoder | Pending | — |
+| BL-TP-1 | SNR sweep extended to 0–10 dB (AWGN + Watterson) | Done | #215 |
+| BL-TP-2 | Benchmark 20-frame → 50-frame for statistical stability | Done | #213 |
+| BL-TP-3 | SC-FDMA block interleaver wired into SC-FDMA encoder/decoder | Done | #213 |
 | BL-TP-4 | SC-FDMA 16QAM and 64QAM modes + MMSE equalization | Done | #210 |
-| BL-TP-5 | Memory-ARQ end-to-end in SC-FDMA session (soft combining) | Pending | — |
-| BL-TP-6 | Preamble / sync sequence for carrier and timing acquisition | Pending | — |
+| BL-TP-5 | Memory-ARQ end-to-end in SC-FDMA session (soft combining) | Done | #213 |
+| BL-TP-6 | Preamble / sync sequence for carrier and timing acquisition | Done | #213 |
 | BL-TP-7 | SC-FDMA pilot density review vs measured Doppler spread | Pending | — |
 
 ---
@@ -1235,10 +1235,10 @@ These tasks address the failure modes identified in Watterson channel benchmarki
 | ID | Title | Status | PR |
 |---|---|---|---|
 | RF-1 | Diagnose and fix BPSK250 100% failure under Watterson Good F2 | Done | #212 |
-| RF-2 | SC-FDMA block interleaver (cross-reference BL-TP-3) | Pending | — |
-| RF-3 | Extend SNR sweep to 0–10 dB in benchmark harness (cross-reference BL-TP-1) | Pending | — |
-| RF-4 | Memory-ARQ end-to-end in SC-FDMA HPX session (cross-reference BL-TP-5) | Pending | — |
-| RF-5 | Preamble / acquisition sequence for HF channel entry (cross-reference BL-TP-6) | Pending | — |
+| RF-2 | SC-FDMA block interleaver (cross-reference BL-TP-3) | Done | #213 |
+| RF-3 | Extend SNR sweep to 0–10 dB in benchmark harness (cross-reference BL-TP-1) | Done | #215 |
+| RF-4 | Memory-ARQ end-to-end in SC-FDMA HPX session (cross-reference BL-TP-5) | Done | #213 |
+| RF-5 | Preamble / acquisition sequence for HF channel entry (cross-reference BL-TP-6) | Done | #213 |
 
 ### RF-1 confirmed root cause (PR #212)
 
