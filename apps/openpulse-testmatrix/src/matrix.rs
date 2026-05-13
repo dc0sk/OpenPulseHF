@@ -39,6 +39,8 @@ pub enum ChannelSpec {
     Awgn { snr_db: f32, seed: u64 },
     WattersonGoodF1,
     WattersonGoodF2,
+    WattersonGoodF1Snr { snr_db: f32, seed: u64 },
+    WattersonGoodF2Snr { snr_db: f32, seed: u64 },
     WattersonModerateF1,
     WattersonPoorF1,
     WattersonExtreme,
@@ -59,6 +61,12 @@ impl ChannelSpec {
             Self::Awgn { snr_db, .. } => format!("awgn_{snr_db:.0}dB"),
             Self::WattersonGoodF1 => "watterson_good_f1".into(),
             Self::WattersonGoodF2 => "watterson_good_f2".into(),
+            Self::WattersonGoodF1Snr { snr_db, .. } => {
+                format!("watterson_good_f1_{snr_db:.0}dB")
+            }
+            Self::WattersonGoodF2Snr { snr_db, .. } => {
+                format!("watterson_good_f2_{snr_db:.0}dB")
+            }
             Self::WattersonModerateF1 => "watterson_moderate_f1".into(),
             Self::WattersonPoorF1 => "watterson_poor_f1".into(),
             Self::WattersonExtreme => "watterson_extreme".into(),

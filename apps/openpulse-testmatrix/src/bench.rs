@@ -259,8 +259,52 @@ pub fn build_bench_cases(payload_len: usize) -> Vec<TestCase> {
             snr_db: 5.0,
             seed: 42,
         },
+        ChannelSpec::Awgn {
+            snr_db: 0.0,
+            seed: 42,
+        },
         ChannelSpec::WattersonGoodF1,
         ChannelSpec::WattersonGoodF2,
+        ChannelSpec::WattersonGoodF1Snr {
+            snr_db: 10.0,
+            seed: 101,
+        },
+        ChannelSpec::WattersonGoodF1Snr {
+            snr_db: 8.0,
+            seed: 101,
+        },
+        ChannelSpec::WattersonGoodF1Snr {
+            snr_db: 5.0,
+            seed: 101,
+        },
+        ChannelSpec::WattersonGoodF1Snr {
+            snr_db: 3.0,
+            seed: 101,
+        },
+        ChannelSpec::WattersonGoodF1Snr {
+            snr_db: 0.0,
+            seed: 101,
+        },
+        ChannelSpec::WattersonGoodF2Snr {
+            snr_db: 10.0,
+            seed: 102,
+        },
+        ChannelSpec::WattersonGoodF2Snr {
+            snr_db: 8.0,
+            seed: 102,
+        },
+        ChannelSpec::WattersonGoodF2Snr {
+            snr_db: 5.0,
+            seed: 102,
+        },
+        ChannelSpec::WattersonGoodF2Snr {
+            snr_db: 3.0,
+            seed: 102,
+        },
+        ChannelSpec::WattersonGoodF2Snr {
+            snr_db: 0.0,
+            seed: 102,
+        },
         ChannelSpec::WattersonPoorF1,
         ChannelSpec::GilbertElliottLight,
         ChannelSpec::GilbertElliottModerate,
