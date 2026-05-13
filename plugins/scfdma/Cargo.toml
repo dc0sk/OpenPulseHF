@@ -11,3 +11,6 @@ repository.workspace = true
 openpulse-core = { workspace = true }
 rustfft        = { workspace = true }
 num-complex    = { workspace = true }
+
+[dev-dependencies]
+openpulse-channel = { workspace = true }

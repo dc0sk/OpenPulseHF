@@ -193,14 +193,14 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
         }
     }
 
-    // ── 5. Multi-carrier modes × AWGN sweep × {None, Rs} × 128 bytes ────────────
+    // ── 5. Multi-carrier modes × AWGN sweep × {None, Rs, RsInterleaved} × 128 bytes ─────
     for mode in MULTICARRIER_MODES {
         for channel in &awgn_channels {
             // OFDM52 and SCFDMA52 are wideband modes not viable at 10 dB SNR.
             if channel_snr_db(channel).is_some_and(|s| s < mode_min_snr_db(mode)) {
                 continue;
             }
-            for &fec in &[FecMode::None, FecMode::Rs] {
+            for &fec in &[FecMode::None, FecMode::Rs, FecMode::RsInterleaved] {
                 cases.push(raw_case(
                     mode,
                     fec,
