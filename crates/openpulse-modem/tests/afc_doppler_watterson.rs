@@ -104,7 +104,7 @@ fn test_watterson_f2_doppler_profile() {
         tracker.update(phase);
         phase += doppler_rate + 0.01 * (step as f32 * 0.1).sin(); // Add noise
 
-        if let Some((est_rate, conf)) = tracker.update(phase) {
+        if let Some((est_rate, _conf)) = tracker.update(phase) {
             // Expect some convergence toward true rate
             if step > 50 {
                 // Allow larger error due to added noise
