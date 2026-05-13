@@ -11,6 +11,7 @@ repository.workspace = true
 openpulse-core    = { workspace = true }
 openpulse-audio   = { workspace = true }
 openpulse-channel = { workspace = true }
+openpulse-dsp     = { workspace = true }
 bpsk-plugin       = { workspace = true }
 tracing           = { workspace = true }
 rand              = { workspace = true }
