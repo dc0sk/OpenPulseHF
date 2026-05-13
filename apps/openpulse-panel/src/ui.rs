@@ -400,6 +400,15 @@ pub struct ComposeState<'a> {
     pub get_msg_id: &'a mut Option<u64>,
     /// Set to `(to, subject, body)` when the user clicks Send.
     pub send_msg: &'a mut Option<(String, String, String)>,
+    /// Set to the id of the message the user wants to delete.
+    pub delete_msg_id: &'a mut Option<u64>,
+}
+
+/// Format a Unix timestamp (seconds) as `HH:MMZ` (UTC).
+fn fmt_time_utc(secs: u64) -> String {
+    let h = (secs / 3600) % 24;
+    let m = (secs / 60) % 60;
+    format!("{h:02}:{m:02}Z")
 }
 
 /// Floating messages window: inbox list on the left, reader + compose on the right.
@@ -417,7 +426,12 @@ pub fn draw_messages_window(ui: &mut Ui, st: &PanelState, cs: &mut ComposeState<
                 }
                 for msg in &st.inbox {
                     let open = st.open_message_id == Some(msg.id);
-                    let label = format!("{} — {}", msg.from, msg.subject);
+                    let label = format!(
+                        "{} {} — {}",
+                        fmt_time_utc(msg.timestamp_secs),
+                        msg.from,
+                        msg.subject
+                    );
                     let text = if open {
                         RichText::new(&label).strong()
                     } else {
@@ -434,9 +448,14 @@ pub fn draw_messages_window(ui: &mut Ui, st: &PanelState, cs: &mut ComposeState<
             left.separator();
             if let Some(summary) = st.inbox.iter().find(|m| m.id == id) {
                 left.label(
-                    RichText::new(format!("From: {}  To: {}", summary.from, summary.to))
-                        .color(Color32::GRAY)
-                        .small(),
+                    RichText::new(format!(
+                        "{} From: {}  To: {}",
+                        fmt_time_utc(summary.timestamp_secs),
+                        summary.from,
+                        summary.to
+                    ))
+                    .color(Color32::GRAY)
+                    .small(),
                 );
                 left.label(
                     RichText::new(format!("Subject: {}", summary.subject))
@@ -450,6 +469,14 @@ pub fn draw_messages_window(ui: &mut Ui, st: &PanelState, cs: &mut ComposeState<
                 .show(left, |ui| {
                     ui.label(body);
                 });
+            if left
+                .add(egui::Button::new(
+                    RichText::new("Delete").color(Color32::from_rgb(200, 60, 60)),
+                ))
+                .clicked()
+            {
+                *cs.delete_msg_id = Some(id);
+            }
         }
 
         // ── Right column: compose + controls ─────────────────────────────
