@@ -216,6 +216,8 @@ pub fn run_bench(case: &TestCase, n_frames: usize) -> BenchResult {
 /// a complete pre-on-air reference: AWGN sweep, Watterson ionospheric, and
 /// Gilbert-Elliott burst profiles.
 pub fn build_bench_cases(payload_len: usize) -> Vec<TestCase> {
+    const LOW_SNR_SWEEP_DB: &[f32] = &[10.0, 8.0, 5.0, 3.0, 0.0];
+
     const BENCH_MODES: &[&str] = &[
         "BPSK250",
         "BPSK250-RRC",
@@ -233,7 +235,7 @@ pub fn build_bench_cases(payload_len: usize) -> Vec<TestCase> {
         "SCFDMA52-64QAM",
     ];
 
-    let bench_channels: &[ChannelSpec] = &[
+    let mut bench_channels = vec![
         ChannelSpec::Clean,
         ChannelSpec::Awgn {
             snr_db: 30.0,
@@ -265,50 +267,23 @@ pub fn build_bench_cases(payload_len: usize) -> Vec<TestCase> {
         },
         ChannelSpec::WattersonGoodF1,
         ChannelSpec::WattersonGoodF2,
-        ChannelSpec::WattersonGoodF1Snr {
-            snr_db: 10.0,
-            seed: 101,
-        },
-        ChannelSpec::WattersonGoodF1Snr {
-            snr_db: 8.0,
-            seed: 101,
-        },
-        ChannelSpec::WattersonGoodF1Snr {
-            snr_db: 5.0,
-            seed: 101,
-        },
-        ChannelSpec::WattersonGoodF1Snr {
-            snr_db: 3.0,
-            seed: 101,
-        },
-        ChannelSpec::WattersonGoodF1Snr {
-            snr_db: 0.0,
-            seed: 101,
-        },
-        ChannelSpec::WattersonGoodF2Snr {
-            snr_db: 10.0,
-            seed: 102,
-        },
-        ChannelSpec::WattersonGoodF2Snr {
-            snr_db: 8.0,
-            seed: 102,
-        },
-        ChannelSpec::WattersonGoodF2Snr {
-            snr_db: 5.0,
-            seed: 102,
-        },
-        ChannelSpec::WattersonGoodF2Snr {
-            snr_db: 3.0,
-            seed: 102,
-        },
-        ChannelSpec::WattersonGoodF2Snr {
-            snr_db: 0.0,
-            seed: 102,
-        },
         ChannelSpec::WattersonPoorF1,
         ChannelSpec::GilbertElliottLight,
         ChannelSpec::GilbertElliottModerate,
     ];
+
+    bench_channels.extend(
+        LOW_SNR_SWEEP_DB
+            .iter()
+            .copied()
+            .map(|snr_db| ChannelSpec::WattersonGoodF1Snr { snr_db, seed: 101 }),
+    );
+    bench_channels.extend(
+        LOW_SNR_SWEEP_DB
+            .iter()
+            .copied()
+            .map(|snr_db| ChannelSpec::WattersonGoodF2Snr { snr_db, seed: 102 }),
+    );
 
     const BENCH_FEC: &[FecMode] = &[FecMode::None, FecMode::Rs, FecMode::SoftConcatenated];
     const BENCH_COMP: &[CompressionAlgorithm] =
@@ -316,7 +291,7 @@ pub fn build_bench_cases(payload_len: usize) -> Vec<TestCase> {
 
     let mut cases = Vec::new();
     for &mode in BENCH_MODES {
-        for channel in bench_channels {
+        for channel in &bench_channels {
             // Enforce per-mode SNR floor on AWGN channels.
             if let ChannelSpec::Awgn { snr_db, .. } = channel {
                 if *snr_db < mode_min_snr_db(mode) {
