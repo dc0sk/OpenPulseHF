@@ -3640,6 +3640,7 @@ dependencies = [
  "qpsk-plugin",
  "rand 0.8.6",
  "rustfft",
+ "scfdma-plugin",
  "serde",
  "serde_json",
  "tokio",

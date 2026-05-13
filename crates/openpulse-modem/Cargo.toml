@@ -23,3 +23,4 @@ tokio             = { version = "1", default-features = false, features = ["sync
 qpsk-plugin = { workspace = true }
 psk8-plugin = { workspace = true }
 fsk4-plugin = { workspace = true }
+scfdma-plugin = { workspace = true }
