@@ -697,6 +697,26 @@ pub fn write_pilot_density_report(
     csv.push_str(
         "run_date,run_commit,channel,fec,seeds,baseline_success_pct,dense_success_pct,delta_success_pct,baseline_bps,dense_bps,delta_bps\n",
     );
+
+    let mut policy_md = String::new();
+    policy_md.push_str("---\n");
+    policy_md.push_str(&format!(
+        "title: \"BL-TP-7 Pilot Density Policy\"\ndate: \"{}\"\ngit_commit: \"{}\"\n",
+        meta.date.format("%Y-%m-%dT%H:%M:%SZ"),
+        meta.git_commit,
+    ));
+    policy_md.push_str("---\n\n");
+    policy_md.push_str("# BL-TP-7 Pilot Density Policy\n\n");
+    policy_md.push_str(
+        "Policy rule: prefer dense pilots at crossover/edge unless baseline is already high-margin.\n\n",
+    );
+    policy_md.push_str("| Channel | FEC | Seeds | Baseline Success | Dense Success | Delta Success | Delta bps | Recommended Mode | Rationale |\n");
+    policy_md.push_str("|---|---|---:|---:|---:|---:|---:|---|---|\n");
+
+    let mut policy_csv = String::new();
+    policy_csv.push_str(
+        "run_date,run_commit,channel,fec,seeds,baseline_success_pct,dense_success_pct,delta_success_pct,delta_bps,recommended_mode,rationale\n",
+    );
     let run_date = meta.date.format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let dirty = if meta.git_dirty { "*" } else { "" };
     let run_commit = format!("{}{dirty}", meta.git_commit);
@@ -715,6 +735,20 @@ pub fn write_pilot_density_report(
         let delta_success = dense_success_mean - base_success_mean;
         let delta_bps = dense_bps_mean - base_bps_mean;
         let seeds = base.len().min(dense.len());
+
+        let (recommended_mode, rationale) = if base_success_mean >= 95.0
+            && dense_success_mean >= 95.0
+            && delta_success.abs() <= 1.0
+        {
+            (
+                PILOT_DENSITY_BASELINE_MODE,
+                "high-margin region (both stable)",
+            )
+        } else if delta_success > 0.0 || delta_bps > 0.0 {
+            (PILOT_DENSITY_DENSE_MODE, "crossover/edge gain")
+        } else {
+            (PILOT_DENSITY_BASELINE_MODE, "dense gain not observed")
+        };
 
         md.push_str(&format!(
             "| {} | {} | {} | {:.1}% | {:.1}% | {:+.1}% | {:.1} | {:.1} | {:+.1} |\n",
@@ -743,8 +777,40 @@ pub fn write_pilot_density_report(
             dense_bps_mean,
             delta_bps,
         ));
+
+        policy_md.push_str(&format!(
+            "| {} | {} | {} | {:.1}% | {:.1}% | {:+.1}% | {:+.1} | {} | {} |\n",
+            channel,
+            fec,
+            seeds,
+            base_success_mean,
+            dense_success_mean,
+            delta_success,
+            delta_bps,
+            recommended_mode,
+            rationale,
+        ));
+
+        policy_csv.push_str(&format!(
+            "{},{},{},{},{},{:.2},{:.2},{:.2},{:.2},{},{}\n",
+            run_date,
+            run_commit,
+            channel,
+            fec,
+            seeds,
+            base_success_mean,
+            dense_success_mean,
+            delta_success,
+            delta_bps,
+            recommended_mode,
+            rationale,
+        ));
     }
 
     fs::write(dir.join("pilot_density.md"), md).expect("write pilot_density.md");
     fs::write(dir.join("pilot_density.csv"), csv).expect("write pilot_density.csv");
+    fs::write(dir.join("pilot_density_policy.md"), policy_md)
+        .expect("write pilot_density_policy.md");
+    fs::write(dir.join("pilot_density_policy.csv"), policy_csv)
+        .expect("write pilot_density_policy.csv");
 }
