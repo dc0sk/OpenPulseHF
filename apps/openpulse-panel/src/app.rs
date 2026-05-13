@@ -28,6 +28,10 @@ const MODES: &[&str] = &[
     "64QAM500",
     "64QAM1000",
     "64QAM2000-RRC",
+    "SCFDMA16",
+    "SCFDMA52",
+    "SCFDMA52-16QAM",
+    "SCFDMA52-64QAM",
     "FSK4-ACK",
 ];
 
@@ -504,6 +508,7 @@ impl eframe::App for PanelApp {
             let mut close = false;
             let mut get_msg_id: Option<u64> = None;
             let mut send_msg: Option<(String, String, String)> = None;
+            let mut delete_msg_id: Option<u64> = None;
 
             egui::Window::new("Messages")
                 .resizable(true)
@@ -520,6 +525,7 @@ impl eframe::App for PanelApp {
                             close: &mut close,
                             get_msg_id: &mut get_msg_id,
                             send_msg: &mut send_msg,
+                            delete_msg_id: &mut delete_msg_id,
                         },
                     );
                 });
@@ -535,6 +541,15 @@ impl eframe::App for PanelApp {
                 self.compose_to.clear();
                 self.compose_subject.clear();
                 self.compose_body.clear();
+            }
+            if let Some(id) = delete_msg_id {
+                self.send(ControlCommand::DeleteMessage { id });
+                let mut st = self.shared.lock().unwrap();
+                st.inbox.retain(|m| m.id != id);
+                if st.open_message_id == Some(id) {
+                    st.open_message_id = None;
+                    st.open_message_body = None;
+                }
             }
         }
 
