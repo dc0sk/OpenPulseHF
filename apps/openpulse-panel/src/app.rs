@@ -177,20 +177,24 @@ impl PanelApp {
         self.shared.lock().unwrap().connected = false;
     }
 
-    fn send(&mut self, cmd: ControlCommand) {
+    /// Returns `true` if the command was successfully enqueued.
+    fn send(&mut self, cmd: ControlCommand) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         {
             if let Some(tx) = &self.cmd_tx {
-                let _ = tx.try_send(cmd);
+                return tx.try_send(cmd).is_ok();
             }
+            false
         }
         #[cfg(target_arch = "wasm32")]
         {
             if let Some(sender) = &mut self.wasm_sender {
                 if let Ok(s) = serde_json::to_string(&cmd) {
                     sender.send(ewebsock::WsMessage::Text(s));
+                    return true;
                 }
             }
+            false
         }
     }
 
@@ -543,12 +547,18 @@ impl eframe::App for PanelApp {
                 self.compose_body.clear();
             }
             if let Some(id) = delete_msg_id {
-                self.send(ControlCommand::DeleteMessage { id });
-                let mut st = self.shared.lock().unwrap();
-                st.inbox.retain(|m| m.id != id);
-                if st.open_message_id == Some(id) {
-                    st.open_message_id = None;
-                    st.open_message_body = None;
+                if self.send(ControlCommand::DeleteMessage { id }) {
+                    let mut st = self.shared.lock().unwrap();
+                    st.inbox.retain(|m| m.id != id);
+                    if st.open_message_id == Some(id) {
+                        st.open_message_id = None;
+                        st.open_message_body = None;
+                    }
+                } else {
+                    self.shared
+                        .lock()
+                        .unwrap()
+                        .push_log("delete failed: channel full or disconnected".into());
                 }
             }
         }
