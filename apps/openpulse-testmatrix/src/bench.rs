@@ -372,7 +372,7 @@ pub fn build_bench_cases(payload_len: usize, tier: Tier) -> Vec<TestCase> {
                         compression: comp,
                         channel: channel.clone(),
                         payload_len,
-                        tier: Tier::Quick,
+                        tier,
                     });
                 }
             }
@@ -391,6 +391,7 @@ pub fn write_bench_report(
     payload_len: usize,
     elapsed_s: f64,
 ) {
+    fs::create_dir_all(dir).expect("create benchmark report directory");
     write_bench_markdown(results, dir, meta, n_frames, payload_len, elapsed_s);
     write_bench_csv(results, dir, meta);
     write_bench_json(results, dir);
