@@ -1209,3 +1209,90 @@ Phase 7.3 (control protocol)
 ```
 
 Items within the same phase may proceed in parallel unless a dependency within the phase is listed above.
+
+---
+
+## BL-TP series — Baseline throughput and modulation hardening
+
+These tasks establish the empirical baseline and close the gap between the simulator and a real HF link. All tasks are independent unless noted.
+
+| ID | Title | Status | PR |
+|---|---|---|---|
+| BL-TP-1 | SNR sweep extended to 0–10 dB (AWGN + Watterson) | Pending | — |
+| BL-TP-2 | Benchmark 20-frame → 50-frame for statistical stability | Pending | — |
+| BL-TP-3 | SC-FDMA block interleaver wired into SC-FDMA encoder/decoder | Pending | — |
+| BL-TP-4 | SC-FDMA 16QAM and 64QAM modes + MMSE equalization | Done | #210 |
+| BL-TP-5 | Memory-ARQ end-to-end in SC-FDMA session (soft combining) | Pending | — |
+| BL-TP-6 | Preamble / sync sequence for carrier and timing acquisition | Pending | — |
+| BL-TP-7 | SC-FDMA pilot density review vs measured Doppler spread | Pending | — |
+
+---
+
+## RF series — HF robustness and fading fixes
+
+These tasks address the failure modes identified in Watterson channel benchmarking.
+
+| ID | Title | Status | PR |
+|---|---|---|---|
+| RF-1 | Diagnose and fix BPSK250 100% failure under Watterson Good F2 | Pending | — |
+| RF-2 | SC-FDMA block interleaver (cross-reference BL-TP-3) | Pending | — |
+| RF-3 | Extend SNR sweep to 0–10 dB in benchmark harness (cross-reference BL-TP-1) | Pending | — |
+| RF-4 | Memory-ARQ end-to-end in SC-FDMA HPX session (cross-reference BL-TP-5) | Pending | — |
+| RF-5 | Preamble / acquisition sequence for HF channel entry (cross-reference BL-TP-6) | Pending | — |
+
+### RF-1 investigation context
+
+Benchmark result: BPSK250 achieves 20/20 at AWGN 15 dB and 20/20 at Watterson Good F1, but 0/20 at Watterson Good F2 with every FEC mode (None, RS, Conv). Good F2 uses a different Doppler spread profile than F1. Hypothesis: the Gardner timing error detector (TED) or the PLL in `crates/openpulse-dsp/src/` loses lock when the fading envelope modulates amplitude faster than the loop bandwidth. The failure is complete (0/20 with RS FEC), ruling out an SNR-floor issue and pointing to a synchronisation collapse.
+
+Investigation entry points:
+- `crates/openpulse-dsp/src/` — Gardner TED and PLL implementation
+- `plugins/bpsk/src/demodulate.rs` — how TED/PLL outputs are applied; AFC loop interaction
+- `crates/openpulse-channel/src/watterson.rs` — F1 vs F2 parameter difference (Doppler spread and delay spread)
+
+---
+
+## Profile scope decisions — active vs deferred modes
+
+### Active in HPX profiles (fully tested and benchmarked)
+
+These modes appear in production `SessionProfile` mappings and are exercised by the test matrix:
+
+| Mode | Plugin | Profile |
+|---|---|---|
+| BPSK250 | bpsk-plugin | hpx_hf SL1–SL4 (baseline; SL1/SL2/SL3 deferred once RF-1 resolved) |
+| QPSK250 | qpsk-plugin | hpx_hf SL5 |
+| QPSK500 | qpsk-plugin | hpx_hf SL6 |
+| QPSK1000 | qpsk-plugin | hpx_hf SL8–SL9 |
+| 8PSK500 | psk8-plugin | hpx_hf SL10 |
+| 8PSK1000 | psk8-plugin | hpx_hf SL11 |
+| SCFDMA52-QPSK | scfdma-plugin | hpx_hf SL7 (lower PAPR than OFDM) |
+| SCFDMA52-16QAM | scfdma-plugin | reserved for SL12 after BL-TP-3/5 pass |
+
+### Deferred from HPX profiles (code retained, not profiled)
+
+These remain in the codebase and plugin registry but are not assigned to any `SessionProfile` slot until the corresponding BL-TP/RF gates pass:
+
+| Mode | Reason for deferral |
+|---|---|
+| BPSK31 / BPSK63 / BPSK100 | Low throughput; not competitive vs QPSK at equal bandwidth |
+| SCFDMA52-64QAM | 0% success in all Watterson channels; requires memory-ARQ (BL-TP-5) and better pilots (BL-TP-7) |
+| 64QAM500 / 64QAM1000 / 64QAM2000-RRC | Same reasons as SCFDMA52-64QAM |
+| OFDM variants | Superseded by SC-FDMA for PAPR; kept as research reference |
+| HPX wideband HD (SL12–SL20) | Depends on 64QAM reliability (BL-TP-5/7 gates); SL20 still in schema but not profiled |
+
+### Features that remain fully in scope regardless of mode deferral
+
+All of the following improve SNR, PAPR, or link reliability and are never deferred:
+- SC-FDMA DFT spreading (3–4 dB PAPR improvement over OFDM)
+- MMSE equalization (SNR improvement at weak subcarriers vs ZF)
+- Reed-Solomon + block interleaving (burst-error resilience)
+- Soft Viterbi (convolutional FEC via `ConvCodec`)
+- LMS/DFE adaptive equalizer (`crates/openpulse-dsp`)
+- Memory-ARQ infrastructure (`BL-FEC-4`, soft combining)
+- LZ4 session compression
+- tanh TX limiter (PAPR clipping control)
+- Per-band TX attenuation
+- Ed25519 + ML-DSA-44 handshake signing
+- LDPC stub (placeholder for rate-1/2 BP decoder upgrade)
+- Full-duplex dual-rig path
+- WASM panel WebSocket transport
