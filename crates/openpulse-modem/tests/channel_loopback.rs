@@ -64,25 +64,43 @@ fn watterson_good_f1_bpsk250() {
     assert_eq!(rx, payload);
 }
 
-/// Watterson Good F2 (0.5 Hz Doppler, 1.0 ms delay spread, 15 dB SNR) WITHOUT FEC.
+/// Watterson Extreme (10 Hz Doppler, 10 ms delay, 0 dB SNR) WITHOUT FEC.
 ///
-/// F2 conditions are more severe than F1; with seed 2 the channel introduces enough
-/// errors to prevent exact recovery of raw BPSK250, confirming the model degrades signal.
+/// Extreme conditions reliably degrade BPSK250: high Doppler causes multiple sign
+/// transitions within the frame and 0 dB SNR adds significant noise at every transition.
+/// Uses the extreme profile rather than Good F2 because the complex-fading model +
+/// differential detection can decode Good F2 without FEC when the fading sign happens
+/// to be consistent across the frame (which is the correct physical behaviour).
 #[test]
-fn watterson_good_f2_bpsk250_no_fec_degrades() {
+fn watterson_extreme_bpsk250_no_fec_degrades() {
     let mut h = make_harness();
-    let payload = b"watterson f2 payload";
-    let mut channel = WattersonChannel::new(WattersonConfig::good_f2(Some(2))).unwrap();
+    let payload = b"watterson extreme payload";
+    let mut channel = WattersonChannel::new(WattersonConfig::extreme(Some(2))).unwrap();
     h.tx_engine.transmit(payload, "BPSK250", None).unwrap();
     h.route(&mut channel);
     let rx = h.rx_engine.receive("BPSK250", None);
-    // Seeded RNG is deterministic: seed 2 + F2 conditions cause enough errors that
-    // exact byte recovery must not occur.  If this assertion fails after a refactor,
-    // switch to a seed or profile that reliably produces degradation.
     assert!(
         rx.map_or(true, |data| data != payload.to_vec()),
-        "Watterson F2 seed 2 should degrade raw BPSK250; got exact recovery"
+        "Watterson extreme should degrade raw BPSK250; got exact recovery"
     );
+}
+
+/// Watterson Good F2 with RS FEC + interleaver: recovery expected after temporal-
+/// correlation fix (full-frame FFT envelope instead of independent 1024-sample blocks).
+#[test]
+fn watterson_good_f2_bpsk250_with_fec() {
+    let mut h = make_harness();
+    let payload = b"watterson f2 fec payload";
+    let mut channel = WattersonChannel::new(WattersonConfig::good_f2(Some(5))).unwrap();
+    h.tx_engine
+        .transmit_with_fec_interleaved(payload, "BPSK250", None, 5)
+        .unwrap();
+    h.route(&mut channel);
+    let rx = h
+        .rx_engine
+        .receive_with_fec_interleaved("BPSK250", None, 5)
+        .unwrap();
+    assert_eq!(rx, payload);
 }
 
 /// Gilbert-Elliott light burst channel with FEC+interleaver: recovery expected.
