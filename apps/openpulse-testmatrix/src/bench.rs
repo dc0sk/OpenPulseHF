@@ -836,6 +836,289 @@ pub struct Item6GateResult {
     pub checks: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct Item8LabProfile {
+    pub name: &'static str,
+    pub case: TestCase,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Item8LabSessionResult {
+    pub profile_name: String,
+    pub session_id: usize,
+    pub mode: String,
+    pub fec: String,
+    pub channel: String,
+    pub frames_total: usize,
+    pub frames_ok: usize,
+    pub fer: f64,
+    pub throughput_bps: f64,
+    pub median_ms: u64,
+    pub p95_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Item8LabProfileSummary {
+    pub profile_name: String,
+    pub sessions: usize,
+    pub frames_total: usize,
+    pub frames_ok: usize,
+    pub fer: f64,
+    pub mean_throughput_bps: f64,
+    pub median_p95_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Item8LabDataset {
+    pub sessions_per_profile: usize,
+    pub frames_per_session: usize,
+    pub payload_len: usize,
+    pub total_profiles: usize,
+    pub total_sessions: usize,
+    pub total_frames: usize,
+    pub profile_summaries: Vec<Item8LabProfileSummary>,
+    pub session_results: Vec<Item8LabSessionResult>,
+    pub checks: Vec<String>,
+}
+
+/// Build Item 8 lab fallback profiles for field/emergency/station use cases.
+pub fn build_item8_lab_profiles(payload_len: usize, tier: Tier) -> Vec<Item8LabProfile> {
+    vec![
+        Item8LabProfile {
+            name: "field_relay",
+            case: TestCase {
+                use_case: UseCase::RawModem,
+                mode: "BPSK250".to_string(),
+                fec_mode: FecMode::RsInterleaved,
+                compression: CompressionAlgorithm::None,
+                channel: ChannelSpec::WattersonGoodF1Snr {
+                    snr_db: 10.0,
+                    seed: 420801,
+                },
+                payload_len,
+                tier,
+            },
+        },
+        Item8LabProfile {
+            name: "emergency",
+            case: TestCase {
+                use_case: UseCase::RawModem,
+                mode: "BPSK250-RRC".to_string(),
+                fec_mode: FecMode::RsInterleaved,
+                compression: CompressionAlgorithm::None,
+                channel: ChannelSpec::Awgn {
+                    snr_db: 10.0,
+                    seed: 420901,
+                },
+                payload_len,
+                tier,
+            },
+        },
+        Item8LabProfile {
+            name: "station_relay",
+            case: TestCase {
+                use_case: UseCase::RawModem,
+                mode: ITEM6_MODE.to_string(),
+                fec_mode: FecMode::Rs,
+                compression: CompressionAlgorithm::None,
+                channel: ChannelSpec::Awgn {
+                    snr_db: 30.0,
+                    seed: 421001,
+                },
+                payload_len,
+                tier,
+            },
+        },
+    ]
+}
+
+/// Run Item 8 lab fallback dataset collection.
+pub fn run_item8_lab_dataset(
+    sessions_per_profile: usize,
+    frames_per_session: usize,
+    payload_len: usize,
+    tier: Tier,
+) -> Item8LabDataset {
+    fn lerp(min: f32, max: f32, t: f32) -> f32 {
+        min + (max - min) * t
+    }
+
+    let profiles = build_item8_lab_profiles(payload_len, tier);
+    let mut session_results = Vec::with_capacity(profiles.len() * sessions_per_profile);
+    let denom = sessions_per_profile.saturating_sub(1).max(1) as f32;
+
+    for profile in &profiles {
+        for session_id in 1..=sessions_per_profile {
+            let mut case = profile.case.clone();
+            let t = (session_id.saturating_sub(1)) as f32 / denom;
+
+            // Sweep SNR across each profile band so sessions are independent samples.
+            case.channel = match profile.name {
+                "field_relay" => ChannelSpec::WattersonGoodF1Snr {
+                    snr_db: lerp(10.0, 20.0, t),
+                    seed: 420801 + session_id as u64,
+                },
+                "emergency" => ChannelSpec::Awgn {
+                    snr_db: lerp(6.0, 14.0, t),
+                    seed: 420901 + session_id as u64,
+                },
+                "station_relay" => ChannelSpec::Awgn {
+                    snr_db: lerp(18.0, 30.0, t),
+                    seed: 421001 + session_id as u64,
+                },
+                _ => case.channel,
+            };
+
+            let result = run_bench(&case, frames_per_session);
+            let fer = 1.0 - (result.frames_ok as f64 / frames_per_session.max(1) as f64);
+            session_results.push(Item8LabSessionResult {
+                profile_name: profile.name.to_string(),
+                session_id,
+                mode: result.mode,
+                fec: result.fec,
+                channel: result.channel,
+                frames_total: result.n_frames,
+                frames_ok: result.frames_ok,
+                fer,
+                throughput_bps: result.measured_bps,
+                median_ms: result.median_frame_time_ms,
+                p95_ms: result.p95_frame_time_ms,
+            });
+        }
+    }
+
+    let mut profile_summaries = Vec::new();
+    for profile in &profiles {
+        let rows: Vec<_> = session_results
+            .iter()
+            .filter(|r| r.profile_name == profile.name)
+            .collect();
+        let sessions = rows.len();
+        let frames_total: usize = rows.iter().map(|r| r.frames_total).sum();
+        let frames_ok: usize = rows.iter().map(|r| r.frames_ok).sum();
+        let fer = 1.0 - (frames_ok as f64 / frames_total.max(1) as f64);
+        let mean_throughput_bps = if sessions > 0 {
+            rows.iter().map(|r| r.throughput_bps).sum::<f64>() / sessions as f64
+        } else {
+            0.0
+        };
+        let mut p95_values: Vec<u64> = rows.iter().map(|r| r.p95_ms).collect();
+        p95_values.sort_unstable();
+        let median_p95_ms = percentile_u64(&p95_values, 0.5);
+
+        profile_summaries.push(Item8LabProfileSummary {
+            profile_name: profile.name.to_string(),
+            sessions,
+            frames_total,
+            frames_ok,
+            fer,
+            mean_throughput_bps,
+            median_p95_ms,
+        });
+    }
+
+    let total_sessions = session_results.len();
+    let total_frames = session_results.iter().map(|r| r.frames_total).sum();
+    let min_sessions_observed = profile_summaries
+        .iter()
+        .map(|s| s.sessions)
+        .min()
+        .unwrap_or(0);
+
+    let mut checks = Vec::new();
+    let sessions_ok = min_sessions_observed >= 10;
+    checks.push(format!(
+        "{} min_sessions_per_profile_observed={} (>=10 required)",
+        if sessions_ok { "PASS" } else { "FAIL" },
+        min_sessions_observed
+    ));
+    let frames_ok = total_frames >= 100;
+    checks.push(format!(
+        "{} total_frames={} (>=100 required)",
+        if frames_ok { "PASS" } else { "FAIL" },
+        total_frames
+    ));
+
+    Item8LabDataset {
+        sessions_per_profile,
+        frames_per_session,
+        payload_len,
+        total_profiles: profiles.len(),
+        total_sessions,
+        total_frames,
+        profile_summaries,
+        session_results,
+        checks,
+    }
+}
+
+/// Write Item 8 lab dataset artifacts to `dir`.
+pub fn write_item8_lab_dataset(dataset: &Item8LabDataset, dir: &Path, meta: &RunMeta) {
+    fs::create_dir_all(dir).expect("create item8 lab output directory");
+
+    let json = serde_json::to_string_pretty(dataset).expect("serialize item8 lab dataset");
+    fs::write(dir.join("item8_sessions.json"), json).expect("write item8_sessions.json");
+
+    let mut csv = String::from(
+        "profile_name,session_id,mode,fec,channel,frames_total,frames_ok,fer,throughput_bps,median_ms,p95_ms\n",
+    );
+    for row in &dataset.session_results {
+        csv.push_str(&format!(
+            "{},{},{},{},{},{},{},{:.6},{:.1},{},{}\n",
+            row.profile_name,
+            row.session_id,
+            row.mode,
+            row.fec,
+            row.channel,
+            row.frames_total,
+            row.frames_ok,
+            row.fer,
+            row.throughput_bps,
+            row.median_ms,
+            row.p95_ms,
+        ));
+    }
+    fs::write(dir.join("item8_sessions.csv"), csv).expect("write item8_sessions.csv");
+
+    let mut md = String::new();
+    md.push_str("---\n");
+    md.push_str(&format!(
+        "title: \"OpenPulseHF Item 8 Lab Dataset\"\ndate: \"{}\"\ngit_commit: \"{}\"\n",
+        meta.date.format("%Y-%m-%dT%H:%M:%SZ"),
+        meta.git_commit,
+    ));
+    md.push_str("---\n\n");
+    md.push_str("# Item 8 Lab Dataset\n\n");
+    md.push_str(&format!("**Run:** {}\n\n", meta.identity_line()));
+    md.push_str(&format!(
+        "Collected **{} sessions/profile** across **{} profiles** ({} total sessions, {} total frames).\n\n",
+        dataset.sessions_per_profile,
+        dataset.total_profiles,
+        dataset.total_sessions,
+        dataset.total_frames,
+    ));
+    md.push_str("## Checks\n\n");
+    for check in &dataset.checks {
+        md.push_str(&format!("- {}\n", check));
+    }
+    md.push_str("\n## Profile Summary\n\n");
+    md.push_str("| Profile | Sessions | Frames | Frames OK | FER | Mean Throughput (bps) | Median p95 (ms) |\n");
+    md.push_str("|---|---:|---:|---:|---:|---:|---:|\n");
+    for row in &dataset.profile_summaries {
+        md.push_str(&format!(
+            "| {} | {} | {} | {} | {:.3} | {:.1} | {} |\n",
+            row.profile_name,
+            row.sessions,
+            row.frames_total,
+            row.frames_ok,
+            row.fer,
+            row.mean_throughput_bps,
+            row.median_p95_ms,
+        ));
+    }
+    fs::write(dir.join("item8_sessions.md"), md).expect("write item8_sessions.md");
+}
+
 /// Run the Item 6 HARQ-rate gate.
 ///
 /// Executes SCFDMA52-64QAM-P4 with RS FEC (HarqPolicy at 30 dB: snr>=21 -> Rs) over
