@@ -10,12 +10,19 @@ pub enum BandplanMode {
 }
 
 impl BandplanMode {
-    /// Parse from config text.
-    pub fn from_str(value: &str) -> Result<Self, BandplanError> {
+    fn parse_impl(value: &str) -> Result<Self, BandplanError> {
         match value.trim().to_ascii_lowercase().as_str() {
             "ham-iaru" => Ok(Self::HamIaru),
             other => Err(BandplanError::UnknownMode(other.to_string())),
         }
+    }
+}
+
+impl std::str::FromStr for BandplanMode {
+    type Err = BandplanError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::parse_impl(value)
     }
 }
 

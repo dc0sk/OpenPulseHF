@@ -60,7 +60,8 @@ impl QsyPolicy {
             ));
         }
 
-        let parsed_mode = BandplanMode::from_str(bandplan_mode)
+        let parsed_mode = bandplan_mode
+            .parse::<BandplanMode>()
             .map_err(|_| format!("unknown qsy.bandplan_mode: {bandplan_mode}"))?;
 
         Ok(Self {
