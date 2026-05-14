@@ -18,7 +18,7 @@ This report evaluates Item 8 profiles using the lab fallback session dataset.
 
 Acceptance volume checks:
 
-- PASS sessions_per_profile = 10 (>=10)
+- PASS min_sessions_per_profile_observed = 10 (>=10)
 - PASS total_frames = 120 (>=100)
 
 ## Predicted vs Observed
@@ -27,19 +27,18 @@ Acceptance volume checks:
 |---|---:|---:|---:|---:|---:|---|
 | field_relay | <= 10% | <= 2000 ms | 0.000 | 16480 ms | 108.3 bps | FER pass, latency fail |
 | emergency | <= 5% | <= 2500 ms | 0.000 | 16480 ms | 108.3 bps | FER pass, latency fail |
-| station_relay | <= 3% | <= 1500 ms | 0.000 | 684 ms | 2608.2 bps | pass |
+| station_relay | <= 3% | <= 1500 ms | 0.325 | 684 ms | 1760.5 bps | FER fail, latency pass |
 
 ## Interpretation
 
-- Reliability targets (FER) are met in this lab run for all three profiles.
-- Latency targets are not met for field_relay and emergency profiles because both use robust BPSK+RS-IL style settings with long frame durations at 223-byte payload.
-- station_relay profile meets both reliability and latency targets under high-SNR AWGN.
+- field_relay and emergency reliability targets (FER) are met in this lab run, but both violate latency targets because robust BPSK+RS-IL settings with 223-byte payload produce long frame durations.
+- station_relay meets latency target but does not meet FER target across the full 18-30 dB sweep; lower-SNR sessions in this range show expected decode failures for SCFDMA52-64QAM-P4.
 
 ## Recommendations
 
-1. For field_relay and emergency latency closure, reduce payload per frame and/or evaluate QPSK500 with tuned FEC and interleaver depth.
-2. Keep station_relay baseline as high-throughput profile reference for Item 8.
-3. Run a follow-up sweep with profile-specific payload sizes to close p95 latency without sacrificing FER.
+1. For field_relay and emergency latency closure, reduce payload per frame and/or evaluate QPSK500 with tuned FEC/interleaver depth.
+2. For station_relay FER closure, narrow operational SNR floor for 64QAM profile or add profile fallback to QPSK1000-HF below ~22 dB.
+3. Run a follow-up sweep with profile-specific payload and mode fallback thresholds to close both p95 latency and FER targets.
 
 ## Artifacts
 

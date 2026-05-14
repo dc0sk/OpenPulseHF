@@ -891,7 +891,10 @@ pub fn build_item8_lab_profiles(payload_len: usize, tier: Tier) -> Vec<Item8LabP
                 mode: "BPSK250".to_string(),
                 fec_mode: FecMode::RsInterleaved,
                 compression: CompressionAlgorithm::None,
-                channel: ChannelSpec::GilbertElliottLight,
+                channel: ChannelSpec::WattersonGoodF1Snr {
+                    snr_db: 10.0,
+                    seed: 420801,
+                },
                 payload_len,
                 tier,
             },
@@ -936,21 +939,35 @@ pub fn run_item8_lab_dataset(
     payload_len: usize,
     tier: Tier,
 ) -> Item8LabDataset {
+    fn lerp(min: f32, max: f32, t: f32) -> f32 {
+        min + (max - min) * t
+    }
+
     let profiles = build_item8_lab_profiles(payload_len, tier);
     let mut session_results = Vec::with_capacity(profiles.len() * sessions_per_profile);
+    let denom = sessions_per_profile.saturating_sub(1).max(1) as f32;
 
     for profile in &profiles {
         for session_id in 1..=sessions_per_profile {
             let mut case = profile.case.clone();
-            // Vary seeded channels per session so repeated runs are not identical clones.
-            match &mut case.channel {
-                ChannelSpec::Awgn { seed, .. }
-                | ChannelSpec::WattersonGoodF1Snr { seed, .. }
-                | ChannelSpec::WattersonGoodF2Snr { seed, .. } => {
-                    *seed += session_id as u64;
-                }
-                _ => {}
-            }
+            let t = (session_id.saturating_sub(1)) as f32 / denom;
+
+            // Sweep SNR across each profile band so sessions are independent samples.
+            case.channel = match profile.name {
+                "field_relay" => ChannelSpec::WattersonGoodF1Snr {
+                    snr_db: lerp(10.0, 20.0, t),
+                    seed: 420801 + session_id as u64,
+                },
+                "emergency" => ChannelSpec::Awgn {
+                    snr_db: lerp(6.0, 14.0, t),
+                    seed: 420901 + session_id as u64,
+                },
+                "station_relay" => ChannelSpec::Awgn {
+                    snr_db: lerp(18.0, 30.0, t),
+                    seed: 421001 + session_id as u64,
+                },
+                _ => case.channel,
+            };
 
             let result = run_bench(&case, frames_per_session);
             let fer = 1.0 - (result.frames_ok as f64 / frames_per_session.max(1) as f64);
@@ -1002,13 +1019,18 @@ pub fn run_item8_lab_dataset(
 
     let total_sessions = session_results.len();
     let total_frames = session_results.iter().map(|r| r.frames_total).sum();
+    let min_sessions_observed = profile_summaries
+        .iter()
+        .map(|s| s.sessions)
+        .min()
+        .unwrap_or(0);
 
     let mut checks = Vec::new();
-    let sessions_ok = sessions_per_profile >= 10;
+    let sessions_ok = min_sessions_observed >= 10;
     checks.push(format!(
-        "{} sessions_per_profile={} (>=10 required)",
+        "{} min_sessions_per_profile_observed={} (>=10 required)",
         if sessions_ok { "PASS" } else { "FAIL" },
-        sessions_per_profile
+        min_sessions_observed
     ));
     let frames_ok = total_frames >= 100;
     checks.push(format!(
