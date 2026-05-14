@@ -93,6 +93,8 @@ pub struct ModemEngine {
     tx_attenuation_db: f32,
     /// Soft TX limiter threshold (0.0 = disabled). See `tanh_limit`.
     tx_limiter_threshold: f32,
+    /// Maximum TX power in watts for regulatory compliance (0.0 = no limit).
+    max_power_watts: f32,
 }
 
 impl ModemEngine {
@@ -122,6 +124,7 @@ impl ModemEngine {
             callsign: String::new(),
             tx_attenuation_db: 0.0,
             tx_limiter_threshold: 0.0,
+            max_power_watts: 0.0, // 0.0 means no limit
         }
     }
 
@@ -724,6 +727,16 @@ impl ModemEngine {
     /// Set the soft TX limiter threshold (0.0 disables the limiter).
     pub fn set_tx_limiter_threshold(&mut self, threshold: f32) {
         self.tx_limiter_threshold = threshold;
+    }
+
+    /// Set the maximum TX power in watts for regulatory compliance (0.0 = no limit).
+    pub fn set_max_power_watts(&mut self, watts: f32) {
+        self.max_power_watts = watts.max(0.0);
+    }
+
+    /// Return the current maximum TX power limit in watts.
+    pub fn max_power_watts(&self) -> f32 {
+        self.max_power_watts
     }
 
     /// Unlike [`transmit`](Self::transmit), this method bypasses the CSMA

@@ -84,6 +84,7 @@ fn main() -> Result<()> {
         .register_plugin(Box::new(ScFdmaPlugin::new()))
         .context("failed to register SC-FDMA plugin")?;
     engine.set_trust_policy_profile(load_policy_profile_or_default());
+    engine.set_max_power_watts(cli.max_power);
 
     let pki = PkiClient::new(cli.pki_url.clone());
     let mut ptt = radio::build_ptt_controller(&cli.ptt, &cli.rig, &cli.rig_file)?;

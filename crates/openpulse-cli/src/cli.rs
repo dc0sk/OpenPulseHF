@@ -35,6 +35,10 @@ pub struct Cli {
     #[arg(long, global = true, default_value = "")]
     pub rig_file: String,
 
+    /// Maximum TX power in watts for regulatory compliance (default: 100).
+    #[arg(long, global = true, default_value = "100")]
+    pub max_power: f32,
+
     #[command(subcommand)]
     pub command: Commands,
 }
