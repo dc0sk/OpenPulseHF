@@ -30,6 +30,7 @@ use openpulse_core::trust::{
 use openpulse_core::wire_query::{callsign_hash, BroadcastFrame, WireEnvelope, WireMsgType};
 
 use crate::event::{EngineEvent, RateDirection};
+use crate::harq::{HarqDecision, HarqPolicy};
 use crate::pipeline::{
     AudioSamples, BackpressurePolicy, DecodedFrame, PipelineMetricsSnapshot, PipelineScheduler,
     PipelineStage, WirePayload,
@@ -359,6 +360,19 @@ impl ModemEngine {
                 trigger: Some(RateTrigger::SnrFloor),
             });
         }
+    }
+
+    /// Select HARQ retry parameters from SNR/fading state.
+    ///
+    /// This deterministic mapping is the Item 6 policy hook for choosing
+    /// retry FEC mode and ACK timeout without mutating engine state.
+    pub fn select_harq_decision(
+        &self,
+        snr_db: f32,
+        fading_depth_db: f32,
+        retry_index: u8,
+    ) -> HarqDecision {
+        HarqPolicy::default().select(snr_db, fading_depth_db, retry_index)
     }
 
     /// Returns the current HPX state for this engine session.
@@ -1506,6 +1520,40 @@ impl ModemEngine {
             bytes: frame.payload.len(),
         });
         Ok(frame.payload)
+    }
+
+    /// Transmit one HARQ attempt selected from SNR/fading state.
+    ///
+    /// Returns the [`HarqDecision`] that was applied for this attempt.
+    pub fn transmit_with_harq_attempt(
+        &mut self,
+        data: &[u8],
+        mode: &str,
+        snr_db: f32,
+        fading_depth_db: f32,
+        retry_index: u8,
+        device: Option<&str>,
+    ) -> Result<HarqDecision, ModemError> {
+        let decision = self.select_harq_decision(snr_db, fading_depth_db, retry_index);
+        self.transmit_with_fec_mode(data, mode, decision.fec_mode, device)?;
+        Ok(decision)
+    }
+
+    /// Receive one HARQ attempt selected from SNR/fading state.
+    ///
+    /// Returns `(payload, decision)` where `decision` is the FEC/timeout policy
+    /// that was applied to decode this attempt.
+    pub fn receive_with_harq_attempt(
+        &mut self,
+        mode: &str,
+        snr_db: f32,
+        fading_depth_db: f32,
+        retry_index: u8,
+        device: Option<&str>,
+    ) -> Result<(Vec<u8>, HarqDecision), ModemError> {
+        let decision = self.select_harq_decision(snr_db, fading_depth_db, retry_index);
+        let payload = self.receive_with_fec_mode(mode, decision.fec_mode, device)?;
+        Ok((payload, decision))
     }
 
     /// Transmit with the codec selected by `fec`.

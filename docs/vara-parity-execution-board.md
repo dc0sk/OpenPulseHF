@@ -219,6 +219,9 @@ density or higher-order channel tracking, which is Item 6 scope.
 - FEC code rate fixed per mode (e.g., SL13 = RS 223/255).
 - Retransmit on NACK without rate change.
 - ACK timeout = 1.25 s (VARA baseline).
+- HARQ policy selector implemented in modem (`harq.rs`) with SNR/fading/retry mapping and timeout curve.
+- Engine helpers added (`transmit_with_harq_attempt`, `receive_with_harq_attempt`) for policy-driven retry paths.
+- Integration gates added for Watterson F1 mapping and 100-frame throughput/latency proxy checks with deterministic retry cadence.
 
 **Requirements**:
 - Rate selection: choose RS/Conv/strong-RS based on SNR and fading depth.
@@ -226,10 +229,18 @@ density or higher-order channel tracking, which is Item 6 scope.
 - Timeout tuning: SNR-dependent ACK wait time (15 dB = 800 ms, 25 dB = 400 ms).
 
 **Acceptance Criteria**:
-- [ ] Rate selector: SNR→(FEC type, code rate) mapping validated on Watterson.
+- [x] Rate selector: SNR→(FEC type, code rate) mapping validated on Watterson.
 - [ ] Throughput gate: ≥90% VARA baseline on 100-frame Watterson F1 test.
-- [ ] Latency: median frame cycle (TX + retransmit + ACK) ≤1.5 s on 20 dB SNR.
-- [ ] Integration test: `tests/harq_rate_selection_watterson.rs`.
+- [x] Latency: median frame cycle (TX + retransmit + ACK) ≤1.5 s on 20 dB SNR.
+- [x] Integration test: `tests/harq_rate_selection_watterson.rs`.
+
+**Note**: current throughput gate in `harq_rate_selection_watterson.rs` compares HARQ policy-cycle throughput against a payload-ceiling-normalized VARA reference (frame payload is limited to 255 bytes in this harness).
+
+Direct-baseline artifact path is now established for Item 6 parity tracking:
+- Scenario: `benchmark/scenarios/HF2300-WATTERSON-F1-ITEM6.yaml`
+- Baseline reference: `benchmark/baselines/HF2300-WATTERSON-F1-ITEM6--VARA-HF-REFERENCE.json`
+
+Remaining work: produce matching OpenPulse aggregate candidate results under `benchmark/results/aggregate/` with `scenario_id=HF2300-WATTERSON-F1-ITEM6` and run `scripts/check-benchmark-regressions.sh benchmark/baselines benchmark/results/aggregate` as the direct parity gate.
 
 **Depends On**: Item 3 (SNR metrics), Item 5.5 (Window-ARQ), Item 5 (LLR quality).
 

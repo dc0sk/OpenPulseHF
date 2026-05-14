@@ -1,0 +1,12 @@
+scenario_id: HF2300-WATTERSON-F1-ITEM6
+bandwidth_class_hz: 2300
+family: hf
+profile: watterson_f1
+seed_policy: fixed
+random_seed: 230006
+snr_db_mean: 20.0
+snr_db_jitter: 0.0
+fading_model: watterson_good_f1
+burst_noise_events_per_min: 0
+doppler_hz: 0.1
+run_duration_limit_s: 180
