@@ -510,7 +510,9 @@ pub const WINDOW_ARQ_MAX_RANGES: usize = 2;
 pub struct ByteRange {
     /// Start byte offset from the beginning of the protected frame.
     pub start: u16,
-    /// Number of bytes in the range.
+    /// Number of bytes in the range (max 255 by wire format design).
+    ///
+    /// Callers must split larger contiguous failures into multiple ranges.
     pub len: u8,
 }
 
@@ -533,6 +535,13 @@ pub struct WindowArqFeedback {
 impl WindowArqFeedback {
     /// Build and validate a feedback object.
     pub fn new(mut ranges: Vec<ByteRange>) -> Result<Self, ModemError> {
+        // Canonicalise construction to sorted order.
+        ranges.sort_by_key(|r| r.start);
+        Self::validate_ranges(&ranges, true)?;
+        Ok(Self { ranges })
+    }
+
+    fn validate_ranges(ranges: &[ByteRange], require_sorted: bool) -> Result<(), ModemError> {
         if ranges.len() > WINDOW_ARQ_MAX_RANGES {
             return Err(ModemError::Frame(format!(
                 "window-arq feedback supports at most {WINDOW_ARQ_MAX_RANGES} ranges"
@@ -543,19 +552,21 @@ impl WindowArqFeedback {
                 "window-arq feedback range length must be >= 1".into(),
             ));
         }
-
-        ranges.sort_by_key(|r| r.start);
         for pair in ranges.windows(2) {
             let left = pair[0];
             let right = pair[1];
+            if require_sorted && left.start > right.start {
+                return Err(ModemError::Frame(
+                    "window-arq feedback ranges must be sorted by start".into(),
+                ));
+            }
             if left.end_exclusive() > right.start as usize {
                 return Err(ModemError::Frame(
                     "window-arq feedback ranges must not overlap".into(),
                 ));
             }
         }
-
-        Ok(Self { ranges })
+        Ok(())
     }
 
     /// Return the total number of failed bytes represented by `ranges`.
@@ -602,13 +613,19 @@ impl WindowArqFeedback {
             let len = encoded[off + 2];
             ranges.push(ByteRange { start, len });
         }
-        Self::new(ranges)
+        Self::validate_ranges(&ranges, true)?;
+        Ok(Self { ranges })
     }
 }
 
 /// Encode a selective retransmit packet containing only failed byte ranges.
 ///
 /// Wire format: `MAGIC(1)=0xA5 | count(1) | repeated(start_le:2,len:1,data:len)`.
+///
+/// Packet overhead is `2 + 3*N` bytes (`N` = number of ranges).  Therefore,
+/// the "<=120% of failed bytes" criterion is not universal for tiny failure
+/// sets; callers should apply that gate only when failed bytes are large enough
+/// to amortize header/range descriptors.
 pub fn encode_window_retransmit(
     protected_frame: &[u8],
     feedback: &WindowArqFeedback,
@@ -695,6 +712,9 @@ pub fn apply_window_retransmit(
 /// Combine soft LLR attempts only inside failed byte ranges.
 ///
 /// Outside `feedback.ranges`, values from the first attempt are preserved.
+///
+/// Assumes an LLR layout of exactly 8 bit-LLRs per protected byte (LSB-first),
+/// i.e. byte offsets are converted to LLR offsets by multiplying by 8.
 pub fn combine_llrs_weighted_in_ranges(
     attempts: &[(&[f32], f32)],
     feedback: &WindowArqFeedback,
@@ -966,6 +986,19 @@ mod tests {
     }
 
     #[test]
+    fn window_arq_feedback_decode_rejects_unsorted_wire_order() {
+        // count=2, range0 starts after range1.
+        let encoded = [
+            2, // count
+            40, 0, 5, // r0: start=40 len=5
+            10, 0, 5, // r1: start=10 len=5 (unsorted)
+            0, // pad
+        ];
+        let decoded = WindowArqFeedback::decode(&encoded);
+        assert!(decoded.is_err());
+    }
+
+    #[test]
     fn window_retransmit_payload_stays_within_120_percent_for_50_percent_loss() {
         let protected: Vec<u8> = (0u16..255).map(|v| (v & 0xFF) as u8).collect();
         let feedback = WindowArqFeedback::new(vec![
@@ -983,6 +1016,24 @@ mod tests {
         assert!(
             ratio <= 1.20,
             "window retransmit ratio {ratio:.3} exceeds 1.20 limit"
+        );
+    }
+
+    #[test]
+    fn window_retransmit_small_failed_sets_can_exceed_120_percent() {
+        let protected: Vec<u8> = (0u16..32).map(|v| (v & 0xFF) as u8).collect();
+        let feedback = WindowArqFeedback::new(vec![
+            ByteRange { start: 3, len: 1 },
+            ByteRange { start: 9, len: 1 },
+        ])
+        .unwrap();
+
+        let packet = encode_window_retransmit(&protected, &feedback).unwrap();
+        let failed = feedback.failed_byte_count() as f32;
+        let ratio = packet.len() as f32 / failed;
+        assert!(
+            ratio > 1.20,
+            "expected tiny-failure ratio > 1.20, got {ratio}"
         );
     }
 

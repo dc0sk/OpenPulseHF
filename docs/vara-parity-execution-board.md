@@ -187,6 +187,7 @@ density or higher-order channel tracking, which is Item 6 scope.
 - Window-ARQ feedback codec implemented (`WindowArqFeedback`) with fixed 8-byte wire format.
 - Selective retransmit packet codec implemented (`encode_window_retransmit`, `apply_window_retransmit`).
 - Range-limited weighted LLR combine implemented (`combine_llrs_weighted_in_ranges`).
+- Item 5.5 integration gate uses a modulated-sample airtime proxy for latency and non-target retry-bit unknowns (zero-LLR mask), not adversarial sign inversion.
 
 **Requirements**:
 - Feedback mechanism: receiver sends bitmask or range list of failed ranges.

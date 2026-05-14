@@ -3,7 +3,7 @@
 //! Verifies:
 //! 1) feedback codec stays within 8 bytes,
 //! 2) selective retransmit packet size is <= 120% of failed-byte count,
-//! 3) retry-byte latency is >= 15% lower than full-frame retransmit for 50% erasure,
+//! 3) retry airtime proxy is >= 15% lower than full-frame retransmit for 50% erasure,
 //! 4) range-limited soft combining gains >= 1.5 dB vs full-frame baseline,
 //! all under deterministic Watterson F1 + AWGN trials across 15..25 dB.
 
@@ -35,7 +35,11 @@ fn noise_var_proxy(llrs: &[f32]) -> f32 {
     1.0 / mean_abs.max(1e-6)
 }
 
-fn attenuate_llrs_outside_ranges(llrs: &mut [f32], feedback: &WindowArqFeedback, scale: f32) {
+fn inject_absent_symbol_noise_outside_ranges(
+    llrs: &mut [f32],
+    feedback: &WindowArqFeedback,
+    mut seed: u64,
+) {
     let mut keep = vec![false; llrs.len()];
     for range in &feedback.ranges {
         let start = (range.start as usize).saturating_mul(8).min(llrs.len());
@@ -46,9 +50,20 @@ fn attenuate_llrs_outside_ranges(llrs: &mut [f32], feedback: &WindowArqFeedback,
             *slot = true;
         }
     }
+
+    // xorshift64* deterministic PRNG: absent-symbol LLRs are zero-mean noise.
+    let mut next_noise = || {
+        seed ^= seed >> 12;
+        seed ^= seed << 25;
+        seed ^= seed >> 27;
+        let z = seed.wrapping_mul(0x2545F4914F6CDD1D);
+        let unit = ((z >> 40) as u32) as f32 / ((1u32 << 24) as f32);
+        (unit * 2.0 - 1.0) * 0.6
+    };
+
     for (i, v) in llrs.iter_mut().enumerate() {
         if !keep[i] {
-            *v *= scale;
+            *v = next_noise();
         }
     }
 }
@@ -140,17 +155,18 @@ fn window_arq_watterson_f1_meets_item_55_gates() {
             encoder_ratio
         );
 
-        // Retry-byte proxy for latency: compare bytes sent on attempts 2 and 3.
-        let full_retx_bytes = (protected.len() * 2) as f32;
-        let window_retx_bytes = (window_packet.len() * 2) as f32;
-        let latency_improvement = 1.0 - (window_retx_bytes / full_retx_bytes);
+        // Airtime proxy for latency: compare modulated sample counts for retries.
+        let full_retx_samples = (plugin.modulate(&protected, &cfg).unwrap().len() * 2) as f32;
+        let window_retx_samples = (plugin.modulate(&window_packet, &cfg).unwrap().len() * 2) as f32;
+        let latency_improvement = 1.0 - (window_retx_samples / full_retx_samples);
         assert!(
             latency_improvement >= 0.15,
-            "latency improvement {:.2}% < 15%",
+            "airtime-proxy latency improvement {:.2}% < 15%",
             latency_improvement * 100.0
         );
 
         let mut gain_samples_db = Vec::new();
+        let mut any_window_decode_ok = false;
         for snr_db in [15.0_f32, 17.5, 20.0, 22.5, 25.0] {
             let mut attempts: Vec<(Vec<f32>, f32)> = Vec::with_capacity(3);
 
@@ -160,11 +176,15 @@ fn window_arq_watterson_f1_meets_item_55_gates() {
                 let rx_samples = apply_watterson_f1_awgn(&tx_samples, effective_snr, *seed);
                 let mut llrs = plugin.demodulate_soft(&rx_samples, &cfg).unwrap();
 
-                // Model selective retransmit behavior: retries preserve quality in
-                // failed windows, while non-target regions can be stale/misaligned
-                // and therefore harmful when full-frame combining uses them.
+                // Model selective retransmit behavior: retry frames carry only
+                // failed-window information; non-target bits demodulate as
+                // near-zero, zero-mean noise when no retransmitted symbol exists.
                 if idx > 0 {
-                    attenuate_llrs_outside_ranges(&mut llrs, &feedback, -0.20);
+                    inject_absent_symbol_noise_outside_ranges(
+                        &mut llrs,
+                        &feedback,
+                        *seed ^ ((snr_db * 10.0) as u64),
+                    );
                 }
 
                 let nv = noise_var_proxy(&llrs);
@@ -179,8 +199,8 @@ fn window_arq_watterson_f1_meets_item_55_gates() {
             let full_combined = combine_llrs_weighted(&refs);
             let window_combined = combine_llrs_weighted_in_ranges(&refs, &feedback);
 
-            // Keep a decode sanity check to ensure this remains an integration-level gate.
-            let _ = decode_matches_payload(&window_combined, protected.len(), payload);
+            any_window_decode_ok |=
+                decode_matches_payload(&window_combined, protected.len(), payload);
 
             let ber_full = bit_error_rate_full_frame(&full_combined, &protected);
             let ber_window = bit_error_rate_full_frame(&window_combined, &protected);
@@ -189,6 +209,11 @@ fn window_arq_watterson_f1_meets_item_55_gates() {
             let gain_db = 10.0 * ((ber_full + eps) / (ber_window + eps)).log10();
             gain_samples_db.push(gain_db);
         }
+
+        assert!(
+            any_window_decode_ok,
+            "windowed combine should decode payload at least once across 15..25 dB sweep"
+        );
 
         let gain_db = gain_samples_db.iter().sum::<f32>() / gain_samples_db.len() as f32;
         assert!(
