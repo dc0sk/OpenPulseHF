@@ -30,6 +30,7 @@ use openpulse_core::trust::{
 use openpulse_core::wire_query::{callsign_hash, BroadcastFrame, WireEnvelope, WireMsgType};
 
 use crate::event::{EngineEvent, RateDirection};
+use crate::harq::{HarqDecision, HarqPolicy};
 use crate::pipeline::{
     AudioSamples, BackpressurePolicy, DecodedFrame, PipelineMetricsSnapshot, PipelineScheduler,
     PipelineStage, WirePayload,
@@ -359,6 +360,19 @@ impl ModemEngine {
                 trigger: Some(RateTrigger::SnrFloor),
             });
         }
+    }
+
+    /// Select HARQ retry parameters from SNR/fading state.
+    ///
+    /// This deterministic mapping is the Item 6 policy hook for choosing
+    /// retry FEC mode and ACK timeout without mutating engine state.
+    pub fn select_harq_decision(
+        &self,
+        snr_db: f32,
+        fading_depth_db: f32,
+        retry_index: u8,
+    ) -> HarqDecision {
+        HarqPolicy::default().select(snr_db, fading_depth_db, retry_index)
     }
 
     /// Returns the current HPX state for this engine session.
