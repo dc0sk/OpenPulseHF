@@ -41,6 +41,43 @@ pub struct PilotDensityGateResult {
     pub checks: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
+pub enum CrossModeLevel {
+    Sl12Baseline,
+    Sl13,
+    Sl14,
+}
+
+impl CrossModeLevel {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sl12Baseline => "sl12",
+            Self::Sl13 => "sl13",
+            Self::Sl14 => "sl14",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrossModeBenchCase {
+    pub family: String,
+    pub level: CrossModeLevel,
+    pub case: TestCase,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrossModeBenchResult {
+    pub family: String,
+    pub level: CrossModeLevel,
+    pub result: BenchResult,
+}
+
+#[derive(Debug, Clone)]
+pub struct CrossModeGateResult {
+    pub passed: bool,
+    pub checks: Vec<String>,
+}
+
 /// Payload pattern representative of typical HF digital radio traffic.
 ///
 /// A 64-byte repeating ASCII template is tiled to the requested length.
@@ -103,6 +140,20 @@ pub struct BenchResult {
     pub theoretical_gross_bps: f64,
     /// measured_bps / theoretical_gross_bps × 100.
     pub efficiency_pct: f64,
+    /// Median per-frame on-air time across the benchmark run.
+    pub median_frame_time_ms: u64,
+    /// p95 per-frame on-air time across the benchmark run.
+    pub p95_frame_time_ms: u64,
+}
+
+fn percentile_u64(values: &[u64], percentile: f64) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let rank = ((sorted.len() - 1) as f64 * percentile).round() as usize;
+    sorted[rank.min(sorted.len() - 1)]
 }
 
 // ── Runner ────────────────────────────────────────────────────────────────────
@@ -118,6 +169,7 @@ pub fn run_bench(case: &TestCase, n_frames: usize) -> BenchResult {
     let mut frames_ok = 0usize;
     let mut bytes_delivered = 0usize;
     let mut total_tx_samples = 0usize;
+    let mut frame_time_ms = Vec::with_capacity(n_frames);
 
     for _ in 0..n_frames {
         // Fresh harness per frame: independent timing/carrier recovery state.
@@ -154,7 +206,9 @@ pub fn run_bench(case: &TestCase, n_frames: usize) -> BenchResult {
         };
 
         // Route through channel regardless of TX outcome: on-air time is always consumed.
-        total_tx_samples += h.route(channel.as_mut());
+        let tx_samples = h.route(channel.as_mut());
+        total_tx_samples += tx_samples;
+        frame_time_ms.push((tx_samples as f64 * 1000.0 / SAMPLE_RATE_HZ).round() as u64);
 
         if tx_ok.is_err() {
             continue;
@@ -199,6 +253,8 @@ pub fn run_bench(case: &TestCase, n_frames: usize) -> BenchResult {
     } else {
         0.0
     };
+    let median_frame_time_ms = percentile_u64(&frame_time_ms, 0.5);
+    let p95_frame_time_ms = percentile_u64(&frame_time_ms, 0.95);
     let comp_label = match case.compression {
         CompressionAlgorithm::None => "none",
         CompressionAlgorithm::Lz4 => "lz4",
@@ -220,6 +276,8 @@ pub fn run_bench(case: &TestCase, n_frames: usize) -> BenchResult {
         measured_bps,
         theoretical_gross_bps: theoretical,
         efficiency_pct,
+        median_frame_time_ms,
+        p95_frame_time_ms,
     }
 }
 
@@ -519,6 +577,243 @@ pub fn build_pilot_density_sweep_cases(
     }
 
     cases
+}
+
+pub fn build_cross_mode_cases(payload_len: usize, tier: Tier) -> Vec<CrossModeBenchCase> {
+    let families: &[(&str, &[(CrossModeLevel, &str, FecMode)])] = &[
+        (
+            "BPSK250",
+            &[
+                (CrossModeLevel::Sl12Baseline, "BPSK250", FecMode::RsStrong),
+                (CrossModeLevel::Sl13, "BPSK250", FecMode::Rs),
+                (CrossModeLevel::Sl14, "BPSK250", FecMode::None),
+            ],
+        ),
+        (
+            "QPSK500",
+            &[
+                (CrossModeLevel::Sl12Baseline, "QPSK500", FecMode::RsStrong),
+                (CrossModeLevel::Sl13, "QPSK500", FecMode::Rs),
+                (CrossModeLevel::Sl14, "QPSK500", FecMode::None),
+            ],
+        ),
+        (
+            "64QAM",
+            &[
+                (CrossModeLevel::Sl12Baseline, "64QAM500", FecMode::RsStrong),
+                (CrossModeLevel::Sl13, "64QAM1000", FecMode::Rs),
+                (CrossModeLevel::Sl14, "64QAM2000-RRC", FecMode::None),
+            ],
+        ),
+        (
+            "SCFDMA52",
+            &[
+                (CrossModeLevel::Sl12Baseline, "SCFDMA52", FecMode::RsStrong),
+                (CrossModeLevel::Sl13, "SCFDMA52-16QAM", FecMode::Rs),
+                (CrossModeLevel::Sl14, "SCFDMA52-64QAM", FecMode::None),
+            ],
+        ),
+    ];
+
+    let full_channels = [
+        ChannelSpec::Awgn {
+            snr_db: 20.0,
+            seed: 42,
+        },
+        ChannelSpec::WattersonGoodF1,
+        ChannelSpec::WattersonGoodF2,
+        ChannelSpec::GilbertElliottLight,
+    ];
+    let quick_channels = [ChannelSpec::Awgn {
+        snr_db: 20.0,
+        seed: 42,
+    }];
+    let channels = if tier == Tier::Full {
+        &full_channels[..]
+    } else {
+        &quick_channels[..]
+    };
+
+    let mut cases = Vec::new();
+    for (family, levels) in families {
+        for &(level, mode, fec_mode) in *levels {
+            for channel in channels {
+                cases.push(CrossModeBenchCase {
+                    family: (*family).to_string(),
+                    level,
+                    case: TestCase {
+                        use_case: UseCase::RawModem,
+                        mode: mode.to_string(),
+                        fec_mode,
+                        compression: CompressionAlgorithm::None,
+                        channel: channel.clone(),
+                        payload_len,
+                        tier,
+                    },
+                });
+            }
+        }
+    }
+    cases
+}
+
+pub fn evaluate_cross_mode_consistency_gate(
+    current: &[CrossModeBenchResult],
+    baseline: &[CrossModeBenchResult],
+) -> CrossModeGateResult {
+    use std::collections::BTreeMap;
+
+    let mut checks = Vec::new();
+    let mut passed = true;
+
+    let baseline_map: BTreeMap<(String, CrossModeLevel, String), &CrossModeBenchResult> = baseline
+        .iter()
+        .map(|row| {
+            (
+                (row.family.clone(), row.level, row.result.channel.clone()),
+                row,
+            )
+        })
+        .collect();
+
+    for row in current {
+        let key = (row.family.clone(), row.level, row.result.channel.clone());
+        if let Some(prev) = baseline_map.get(&key) {
+            let baseline_bps = prev.result.measured_bps;
+            let ratio = if baseline_bps > 0.0 {
+                row.result.measured_bps / baseline_bps
+            } else {
+                1.0
+            };
+            let ok = ratio >= 0.95;
+            if !ok {
+                passed = false;
+            }
+            checks.push(format!(
+                "{} throughput {} {} {}: {:.1}% of baseline ({:.1} vs {:.1} bps)",
+                if ok { "PASS" } else { "FAIL" },
+                row.family,
+                row.level.label(),
+                row.result.channel,
+                ratio * 100.0,
+                row.result.measured_bps,
+                baseline_bps,
+            ));
+        }
+
+        let median_ok = row.result.median_frame_time_ms <= 1500;
+        let p95_ok = row.result.p95_frame_time_ms <= 2000;
+        if !median_ok || !p95_ok {
+            passed = false;
+        }
+        checks.push(format!(
+            "{} latency {} {} {}: median={} ms, p95={} ms",
+            if median_ok && p95_ok { "PASS" } else { "FAIL" },
+            row.family,
+            row.level.label(),
+            row.result.channel,
+            row.result.median_frame_time_ms,
+            row.result.p95_frame_time_ms,
+        ));
+    }
+
+    let mut grouped: BTreeMap<(String, String), Vec<&CrossModeBenchResult>> = BTreeMap::new();
+    for row in current {
+        grouped
+            .entry((row.family.clone(), row.result.channel.clone()))
+            .or_default()
+            .push(row);
+    }
+
+    for ((family, channel), mut rows) in grouped {
+        rows.sort_by_key(|row| row.level);
+        for pair in rows.windows(2) {
+            let prev = pair[0];
+            let next = pair[1];
+            let prev_bps = prev.result.measured_bps;
+            let ratio = if prev_bps > 0.0 {
+                next.result.measured_bps / prev_bps
+            } else {
+                1.0
+            };
+            let ok = ratio >= 0.97;
+            if !ok {
+                passed = false;
+            }
+            checks.push(format!(
+                "{} ladder {} {} {}->{}: {:.1}% ({:.1} vs {:.1} bps)",
+                if ok { "PASS" } else { "FAIL" },
+                family,
+                channel,
+                prev.level.label(),
+                next.level.label(),
+                ratio * 100.0,
+                next.result.measured_bps,
+                prev_bps,
+            ));
+        }
+    }
+
+    CrossModeGateResult { passed, checks }
+}
+
+pub fn load_cross_mode_results(dir: &Path) -> Option<Vec<CrossModeBenchResult>> {
+    let path = dir.join("cross_mode.json");
+    let json = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&json).ok()
+}
+
+pub fn write_cross_mode_report(
+    results: &[CrossModeBenchResult],
+    gate: &CrossModeGateResult,
+    dir: &Path,
+    meta: &RunMeta,
+    n_frames: usize,
+    payload_len: usize,
+    elapsed_s: f64,
+) {
+    fs::create_dir_all(dir).expect("create cross-mode report directory");
+
+    let mut md = String::new();
+    md.push_str("---\n");
+    md.push_str(&format!(
+        "title: \"OpenPulseHF Cross-Mode Gate\"\ndate: \"{}\"\ngit_commit: \"{}\"\n",
+        meta.date.format("%Y-%m-%dT%H:%M:%SZ"),
+        meta.git_commit,
+    ));
+    md.push_str("---\n\n");
+    md.push_str("# OpenPulseHF Cross-Mode Gate\n\n");
+    md.push_str(&format!("**Run:** {}\n\n", meta.identity_line()));
+    md.push_str(&format!(
+        "**Methodology:** {} rows, {n_frames} frames/case, payload {payload_len} B, elapsed {elapsed_s:.1}s.\n\n",
+        results.len(),
+    ));
+    md.push_str(&format!(
+        "**Verdict:** {}\n\n",
+        if gate.passed { "PASS" } else { "FAIL" }
+    ));
+    md.push_str("| Family | Level | Mode | Channel | Measured bps | Median ms | p95 ms |\n");
+    md.push_str("|---|---|---|---|---:|---:|---:|\n");
+    for row in results {
+        md.push_str(&format!(
+            "| {} | {} | {} | {} | {:.1} | {} | {} |\n",
+            row.family,
+            row.level.label(),
+            row.result.mode,
+            row.result.channel,
+            row.result.measured_bps,
+            row.result.median_frame_time_ms,
+            row.result.p95_frame_time_ms,
+        ));
+    }
+    md.push_str("\n## Checks\n\n");
+    for check in &gate.checks {
+        md.push_str(&format!("- {}\n", check));
+    }
+    fs::write(dir.join("cross_mode.md"), md).expect("write cross_mode.md");
+
+    let json = serde_json::to_string_pretty(results).expect("serialize cross-mode results");
+    fs::write(dir.join("cross_mode.json"), json).expect("write cross_mode.json");
 }
 
 // ── Report writers ────────────────────────────────────────────────────────────
@@ -895,4 +1190,144 @@ pub fn evaluate_pilot_density_crossover_gate(results: &[BenchResult]) -> PilotDe
     }
 
     PilotDensityGateResult { passed, checks }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn synthetic_cross_mode_result(
+        family: &str,
+        level: CrossModeLevel,
+        mode: &str,
+        channel: &str,
+        measured_bps: f64,
+        median_frame_time_ms: u64,
+        p95_frame_time_ms: u64,
+    ) -> CrossModeBenchResult {
+        CrossModeBenchResult {
+            family: family.to_string(),
+            level,
+            result: BenchResult {
+                mode: mode.to_string(),
+                channel: channel.to_string(),
+                fec: "rs".to_string(),
+                compression: "none".to_string(),
+                payload_len: 128,
+                n_frames: 50,
+                frames_ok: 50,
+                bytes_delivered: 6400,
+                total_tx_samples: 8000,
+                on_air_s: 1.0,
+                success_rate_pct: 100.0,
+                measured_bps,
+                theoretical_gross_bps: measured_bps,
+                efficiency_pct: 100.0,
+                median_frame_time_ms,
+                p95_frame_time_ms,
+            },
+        }
+    }
+
+    #[test]
+    fn cross_mode_case_builder_full_produces_48_cases() {
+        let cases = build_cross_mode_cases(128, Tier::Full);
+        assert_eq!(cases.len(), 48);
+
+        let scfdma_sl13 = cases.iter().find(|case| {
+            case.family == "SCFDMA52"
+                && case.level == CrossModeLevel::Sl13
+                && case.case.channel.label() == "watterson_good_f2"
+        });
+        let scfdma_sl13 = scfdma_sl13.expect("missing SCFDMA52 SL13 Watterson Good F2 case");
+        assert_eq!(scfdma_sl13.case.mode, "SCFDMA52-16QAM");
+        assert_eq!(scfdma_sl13.case.fec_mode, FecMode::Rs);
+    }
+
+    #[test]
+    fn cross_mode_case_builder_quick_produces_12_cases() {
+        let cases = build_cross_mode_cases(128, Tier::Quick);
+        assert_eq!(cases.len(), 12);
+        assert!(cases
+            .iter()
+            .all(|case| case.case.channel.label() == "awgn_20dB"));
+    }
+
+    #[test]
+    fn cross_mode_gate_flags_regression_and_latency_failures() {
+        let baseline = vec![
+            synthetic_cross_mode_result(
+                "SCFDMA52",
+                CrossModeLevel::Sl12Baseline,
+                "SCFDMA52",
+                "awgn_20dB",
+                1000.0,
+                1100,
+                1400,
+            ),
+            synthetic_cross_mode_result(
+                "SCFDMA52",
+                CrossModeLevel::Sl13,
+                "SCFDMA52-16QAM",
+                "awgn_20dB",
+                1400.0,
+                1200,
+                1500,
+            ),
+            synthetic_cross_mode_result(
+                "SCFDMA52",
+                CrossModeLevel::Sl14,
+                "SCFDMA52-64QAM",
+                "awgn_20dB",
+                1800.0,
+                1300,
+                1600,
+            ),
+        ];
+
+        let current = vec![
+            synthetic_cross_mode_result(
+                "SCFDMA52",
+                CrossModeLevel::Sl12Baseline,
+                "SCFDMA52",
+                "awgn_20dB",
+                980.0,
+                1200,
+                1500,
+            ),
+            synthetic_cross_mode_result(
+                "SCFDMA52",
+                CrossModeLevel::Sl13,
+                "SCFDMA52-16QAM",
+                "awgn_20dB",
+                900.0,
+                1600,
+                2100,
+            ),
+            synthetic_cross_mode_result(
+                "SCFDMA52",
+                CrossModeLevel::Sl14,
+                "SCFDMA52-64QAM",
+                "awgn_20dB",
+                870.0,
+                1400,
+                1700,
+            ),
+        ];
+
+        let result = evaluate_cross_mode_consistency_gate(&current, &baseline);
+        assert!(!result.passed);
+        assert!(result
+            .checks
+            .iter()
+            .any(|check| check.contains("FAIL throughput SCFDMA52 sl13 awgn_20dB")));
+        assert!(result
+            .checks
+            .iter()
+            .any(|check| check.contains("FAIL latency SCFDMA52 sl13 awgn_20dB")));
+        assert!(result
+            .checks
+            .iter()
+            .any(|check| check.contains("FAIL ladder SCFDMA52 awgn_20dB sl12->sl13")));
+    }
 }

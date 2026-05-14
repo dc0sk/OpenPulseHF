@@ -78,6 +78,10 @@ struct Cli {
     #[arg(long)]
     pilot_density_gate: bool,
 
+    /// Run the Item 7 cross-mode consistency gate.
+    #[arg(long)]
+    cross_mode_gate: bool,
+
     /// Number of frames per benchmark combination.
     #[arg(long, default_value = "50")]
     bench_frames: usize,
@@ -139,7 +143,11 @@ fn main() {
     let tier = if cli.full { Tier::Full } else { Tier::Quick };
 
     let mut failed = 0usize;
-    let elapsed = if cli.bench_only || cli.pilot_density_sweep_only {
+    let run_matrix = !cli.bench_only
+        && !cli.pilot_density_sweep_only
+        && !(cli.cross_mode_gate && !cli.bench && !cli.pilot_density_sweep);
+
+    let elapsed = if !run_matrix {
         std::time::Duration::from_secs(0)
     } else {
         let cases = build_cases(tier);
@@ -306,6 +314,67 @@ fn main() {
             }
             println!("BL-TP-7 pilot-density crossover gate passed");
         }
+    }
+
+    if cli.cross_mode_gate {
+        let cross_mode_cases = bench::build_cross_mode_cases(cli.bench_payload, tier);
+        let cross_mode_total = cross_mode_cases.len();
+        println!(
+            "\nRunning Item 7 cross-mode gate: {} combinations × {} frames ({}-byte payload)",
+            cross_mode_total, cli.bench_frames, cli.bench_payload,
+        );
+        let cross_mode_start = Instant::now();
+        let cross_mode_dir = cli.output.join("latest");
+        let previous = bench::load_cross_mode_results(&cross_mode_dir).unwrap_or_default();
+        if previous.is_empty() {
+            println!("[cross-mode-gate] no previous cross_mode.json baseline found; throughput checks will use current-run ladder/latency only");
+        }
+        let cross_mode_results: Vec<_> = cross_mode_cases
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let result = bench::run_bench(&entry.case, cli.bench_frames);
+                println!(
+                    "[{:3}/{cross_mode_total}] {} | {} | {} | {} | {:.0} bps | median {} ms | p95 {} ms",
+                    i + 1,
+                    entry.family,
+                    entry.level.label(),
+                    result.mode,
+                    result.channel,
+                    result.measured_bps,
+                    result.median_frame_time_ms,
+                    result.p95_frame_time_ms,
+                );
+                bench::CrossModeBenchResult {
+                    family: entry.family.clone(),
+                    level: entry.level,
+                    result,
+                }
+            })
+            .collect();
+        let cross_mode_elapsed = cross_mode_start.elapsed().as_secs_f64();
+        let gate = bench::evaluate_cross_mode_consistency_gate(&cross_mode_results, &previous);
+        bench::write_cross_mode_report(
+            &cross_mode_results,
+            &gate,
+            &cross_mode_dir,
+            &meta,
+            cli.bench_frames,
+            cli.bench_payload,
+            cross_mode_elapsed,
+        );
+        println!(
+            "Cross-mode gate written to {}/latest/cross_mode.{{md,json}}",
+            cli.output.display(),
+        );
+        for line in &gate.checks {
+            println!("[cross-mode-gate] {line}");
+        }
+        if !gate.passed {
+            eprintln!("Item 7 cross-mode consistency gate failed");
+            std::process::exit(1);
+        }
+        println!("Item 7 cross-mode consistency gate passed");
     }
 
     if failed > 0 {
