@@ -680,10 +680,12 @@ pub fn evaluate_cross_mode_consistency_gate(
         let key = (row.family.clone(), row.level, row.result.channel.clone());
         if let Some(prev) = baseline_map.get(&key) {
             let baseline_bps = prev.result.measured_bps;
+            // A zero baseline means the prior run itself was broken for this case;
+            // treat that as a regression (ratio 0%) rather than silently passing.
             let ratio = if baseline_bps > 0.0 {
                 row.result.measured_bps / baseline_bps
             } else {
-                1.0
+                0.0
             };
             let ok = ratio >= 0.95;
             if !ok {
@@ -698,6 +700,16 @@ pub fn evaluate_cross_mode_consistency_gate(
                 ratio * 100.0,
                 row.result.measured_bps,
                 baseline_bps,
+            ));
+        } else if !baseline_map.is_empty() {
+            // Baseline exists but is missing this key — treat as a gate failure so
+            // a partial baseline cannot silently under-check the regression gate.
+            passed = false;
+            checks.push(format!(
+                "FAIL throughput {} {} {}: key missing from baseline",
+                row.family,
+                row.level.label(),
+                row.result.channel,
             ));
         }
 
@@ -731,10 +743,12 @@ pub fn evaluate_cross_mode_consistency_gate(
             let prev = pair[0];
             let next = pair[1];
             let prev_bps = prev.result.measured_bps;
+            // A lower level at 0 bps means the ladder is already broken;
+            // treat as regression rather than silently passing.
             let ratio = if prev_bps > 0.0 {
                 next.result.measured_bps / prev_bps
             } else {
-                1.0
+                0.0
             };
             let ok = ratio >= 0.97;
             if !ok {
@@ -759,8 +773,31 @@ pub fn evaluate_cross_mode_consistency_gate(
 
 pub fn load_cross_mode_results(dir: &Path) -> Option<Vec<CrossModeBenchResult>> {
     let path = dir.join("cross_mode.json");
-    let json = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&json).ok()
+    if !path.exists() {
+        return None;
+    }
+    let json = match fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "[cross-mode-gate] warning: could not read {}: {}",
+                path.display(),
+                e
+            );
+            return None;
+        }
+    };
+    match serde_json::from_str(&json) {
+        Ok(results) => Some(results),
+        Err(e) => {
+            eprintln!(
+                "[cross-mode-gate] warning: baseline {} is present but failed to parse ({}); treating as missing — regenerate with a clean run",
+                path.display(),
+                e
+            );
+            None
+        }
+    }
 }
 
 pub fn write_cross_mode_report(

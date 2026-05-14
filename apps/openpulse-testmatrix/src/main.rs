@@ -139,6 +139,14 @@ fn main() {
         eprintln!("--pilot-density-gate requires --pilot-density-crossover");
         std::process::exit(2);
     }
+    if cli.cross_mode_gate && cli.bench_only {
+        eprintln!("--cross-mode-gate cannot be combined with --bench-only");
+        std::process::exit(2);
+    }
+    if cli.cross_mode_gate && cli.pilot_density_sweep_only {
+        eprintln!("--cross-mode-gate cannot be combined with --pilot-density-sweep-only");
+        std::process::exit(2);
+    }
 
     let tier = if cli.full { Tier::Full } else { Tier::Quick };
 
