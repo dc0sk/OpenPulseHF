@@ -3,7 +3,7 @@
 use num_complex::Complex32;
 use rustfft::FftPlanner;
 
-use crate::channel::{estimate_noise_var, ls_estimate, mmse_equalize};
+use crate::channel::{estimate_noise_var, estimate_rician_k_linear, ls_estimate, mmse_equalize};
 use crate::modulate::{modulate_with_params, preamble_payload};
 use crate::params::{params_for_mode, ScFdmaParams, CP, FFT_SIZE, SYM_LEN};
 
@@ -17,7 +17,68 @@ pub fn scfdma_demodulate(samples: &[f32], mode: &str) -> Vec<u8> {
 /// Positive values indicate bit 0 is more likely; negative values indicate bit 1.
 pub fn scfdma_demodulate_soft(samples: &[f32], mode: &str) -> Vec<f32> {
     let p = params_for_mode(mode).expect("caller must validate mode before scfdma_demodulate_soft");
+    demodulate_soft_with_params(samples, &p).llrs
+}
+
+/// Per-frame quality metrics produced during soft demodulation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SoftFrameMetrics {
+    /// Mean pilot-residual noise variance across demodulated symbols.
+    pub mean_noise_var: f32,
+    /// Mean estimated Rician K-factor in dB across symbols.
+    pub mean_rician_k_db: f32,
+    /// Number of symbols included in the metric averages.
+    pub symbols_used: usize,
+}
+
+/// Soft demodulation output with reliability metrics for adaptive combining.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SoftDemodOutput {
+    /// Payload LLRs (positive => likely 0, negative => likely 1).
+    pub llrs: Vec<f32>,
+    /// Aggregated frame metrics measured from pilots/channel estimate.
+    pub metrics: SoftFrameMetrics,
+}
+
+/// Demodulate SC-FDMA samples into LLRs and frame quality metrics.
+pub fn scfdma_demodulate_soft_with_metrics(samples: &[f32], mode: &str) -> SoftDemodOutput {
+    let p = params_for_mode(mode)
+        .expect("caller must validate mode before scfdma_demodulate_soft_with_metrics");
     demodulate_soft_with_params(samples, &p)
+}
+
+/// Combine multiple LLR attempts using inverse-noise variance weighting.
+pub fn combine_llrs_weighted(attempts: &[(&[f32], f32)]) -> Vec<f32> {
+    if attempts.is_empty() {
+        return Vec::new();
+    }
+    let min_len = attempts
+        .iter()
+        .map(|(llrs, _)| llrs.len())
+        .min()
+        .unwrap_or(0);
+    if min_len == 0 {
+        return Vec::new();
+    }
+
+    let mut out = vec![0.0f32; min_len];
+    let mut weight_sum = 0.0f32;
+
+    for (llrs, noise_var) in attempts {
+        let w = 1.0 / noise_var.max(1e-6);
+        weight_sum += w;
+        for (dst, src) in out.iter_mut().zip(llrs.iter().take(min_len)) {
+            *dst += *src * w;
+        }
+    }
+
+    if weight_sum <= 0.0 {
+        return vec![0.0; min_len];
+    }
+    for v in &mut out {
+        *v /= weight_sum;
+    }
+    out
 }
 
 fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Vec<u8> {
@@ -91,22 +152,43 @@ fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Vec<u8> {
     raw[2..2 + take].to_vec()
 }
 
-fn demodulate_soft_with_params(samples: &[f32], p: &ScFdmaParams) -> Vec<f32> {
+fn demodulate_soft_with_params(samples: &[f32], p: &ScFdmaParams) -> SoftDemodOutput {
     let sync = modulate_with_params(&preamble_payload(p), p);
     if samples.len() < sync.len() + SYM_LEN {
-        return vec![];
+        return SoftDemodOutput {
+            llrs: vec![],
+            metrics: SoftFrameMetrics {
+                mean_noise_var: 0.0,
+                mean_rician_k_db: 0.0,
+                symbols_used: 0,
+            },
+        };
     }
 
     let offset = find_sync_offset(samples, &sync);
     let payload_start = offset + sync.len();
     if payload_start >= samples.len() {
-        return vec![];
+        return SoftDemodOutput {
+            llrs: vec![],
+            metrics: SoftFrameMetrics {
+                mean_noise_var: 0.0,
+                mean_rician_k_db: 0.0,
+                symbols_used: 0,
+            },
+        };
     }
 
     let samples = &samples[payload_start..];
     let n_syms = samples.len() / SYM_LEN;
     if n_syms == 0 {
-        return vec![];
+        return SoftDemodOutput {
+            llrs: vec![],
+            metrics: SoftFrameMetrics {
+                mean_noise_var: 0.0,
+                mean_rician_k_db: 0.0,
+                symbols_used: 0,
+            },
+        };
     }
 
     let mut planner = FftPlanner::<f32>::new();
@@ -118,6 +200,9 @@ fn demodulate_soft_with_params(samples: &[f32], p: &ScFdmaParams) -> Vec<f32> {
 
     let points = constellation_points(p.bits_per_sc);
     let mut llrs = Vec::with_capacity(n_syms * p.bits_per_symbol());
+    let mut noise_sum = 0.0f32;
+    let mut k_db_sum = 0.0f32;
+    let mut metric_symbols = 0usize;
 
     for sym_idx in 0..n_syms {
         let start = sym_idx * SYM_LEN + CP;
@@ -132,19 +217,44 @@ fn demodulate_soft_with_params(samples: &[f32], p: &ScFdmaParams) -> Vec<f32> {
         fft.process(&mut freq);
 
         let h_est = ls_estimate(p, &freq);
-        let noise_var = estimate_noise_var(p, &freq, &h_est).max(1e-6);
-        let mut equalized = mmse_equalize(p, &freq, &h_est, noise_var);
+        let pilot_noise_var = estimate_noise_var(p, &freq, &h_est).max(1e-6);
+        let k_linear = estimate_rician_k_linear(&h_est);
+        let k_db = 10.0 * (k_linear + 1e-6).log10();
+        let k_gain = (1.0 + k_linear).clamp(1.0, 8.0);
+
+        let mut equalized = mmse_equalize(p, &freq, &h_est, pilot_noise_var);
 
         idft.process(&mut equalized);
         let data_syms: Vec<Complex32> = equalized.iter().map(|c| c * idft_scale).collect();
+        let decision_noise_var = estimate_decision_noise_var(&data_syms, p.bits_per_sc).max(1e-6);
+        let llr_noise_var = (decision_noise_var / k_gain).max(1e-6);
 
         for sym in &data_syms {
-            llrs.extend(symbol_llrs(*sym, p.bits_per_sc, noise_var, &points));
+            llrs.extend(symbol_llrs(*sym, p.bits_per_sc, llr_noise_var, &points));
         }
+
+        noise_sum += decision_noise_var;
+        k_db_sum += k_db;
+        metric_symbols += 1;
     }
 
     if llrs.len() < 16 {
-        return llrs;
+        return SoftDemodOutput {
+            llrs,
+            metrics: SoftFrameMetrics {
+                mean_noise_var: if metric_symbols > 0 {
+                    noise_sum / metric_symbols as f32
+                } else {
+                    0.0
+                },
+                mean_rician_k_db: if metric_symbols > 0 {
+                    k_db_sum / metric_symbols as f32
+                } else {
+                    0.0
+                },
+                symbols_used: metric_symbols,
+            },
+        };
     }
 
     let mut len_bytes = [0u8; 2];
@@ -168,7 +278,14 @@ fn demodulate_soft_with_params(samples: &[f32], p: &ScFdmaParams) -> Vec<f32> {
     } else {
         payload_bits.min(available_payload_bits)
     };
-    llrs[16..16 + take].to_vec()
+    SoftDemodOutput {
+        llrs: llrs[16..16 + take].to_vec(),
+        metrics: SoftFrameMetrics {
+            mean_noise_var: noise_sum / metric_symbols.max(1) as f32,
+            mean_rician_k_db: k_db_sum / metric_symbols.max(1) as f32,
+            symbols_used: metric_symbols,
+        },
+    }
 }
 
 fn find_sync_offset(samples: &[f32], sync: &[f32]) -> usize {
@@ -312,6 +429,23 @@ fn constellation_points(bits_per_sc: usize) -> Vec<(u8, Complex32)> {
         6 => (0u8..64).map(|b| (b, qam64_point(b))).collect(),
         _ => (0u8..4).map(|b| (b, qpsk_point(b))).collect(),
     }
+}
+
+fn estimate_decision_noise_var(symbols: &[Complex32], bits_per_sc: usize) -> f32 {
+    if symbols.is_empty() {
+        return 1e-6;
+    }
+    let points = constellation_points(bits_per_sc);
+    let sum_min_dist: f32 = symbols
+        .iter()
+        .map(|s| {
+            points
+                .iter()
+                .map(|(_, pt)| (*s - *pt).norm_sqr())
+                .fold(f32::INFINITY, f32::min)
+        })
+        .sum();
+    (sum_min_dist / symbols.len() as f32).max(1e-6)
 }
 
 fn qpsk_point(bits: u8) -> Complex32 {
