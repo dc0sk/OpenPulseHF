@@ -5,6 +5,8 @@
 
 use std::f32::consts::PI;
 
+const INV_SQRT2: f32 = 0.70710677;
+
 /// Standard preamble types for frame synchronization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreambleType {
@@ -20,12 +22,80 @@ pub enum PreambleType {
     ZadoffChu64,
 }
 
+/// Symbol constellation used when materializing preambles into IQ symbols.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreambleConstellation {
+    /// Real-axis BPSK symbols (I=chip, Q=0).
+    Bpsk,
+    /// Unit-power QPSK symbols derived from the chip sequence.
+    Qpsk,
+}
+
+/// Configurable preamble generation settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreambleSpec {
+    /// Base preamble family.
+    pub preamble_type: PreambleType,
+    /// Number of output symbols to generate.
+    pub length_symbols: usize,
+    /// Output constellation mapping.
+    pub constellation: PreambleConstellation,
+}
+
+impl PreambleSpec {
+    /// Create a preamble spec with explicit length and constellation.
+    pub fn new(
+        preamble_type: PreambleType,
+        length_symbols: usize,
+        constellation: PreambleConstellation,
+    ) -> Self {
+        Self {
+            preamble_type,
+            length_symbols,
+            constellation,
+        }
+    }
+
+    /// Generate real-valued chips, repeating/truncating the base family sequence as needed.
+    pub fn chips(&self) -> Vec<f32> {
+        if self.length_symbols == 0 {
+            return Vec::new();
+        }
+        let base = self.preamble_type.base_sequence();
+        if base.is_empty() {
+            return Vec::new();
+        }
+
+        base.iter()
+            .copied()
+            .cycle()
+            .take(self.length_symbols)
+            .collect()
+    }
+
+    /// Generate IQ symbols according to `constellation`.
+    pub fn iq_symbols(&self) -> Vec<(f32, f32)> {
+        let chips = self.chips();
+        match self.constellation {
+            PreambleConstellation::Bpsk => chips.into_iter().map(|c| (c, 0.0)).collect(),
+            PreambleConstellation::Qpsk => chips
+                .into_iter()
+                .enumerate()
+                .map(|(idx, c)| {
+                    // Alternate the quadrature sign to keep a balanced Q branch.
+                    if idx % 2 == 0 {
+                        (c * INV_SQRT2, c * INV_SQRT2)
+                    } else {
+                        (c * INV_SQRT2, -c * INV_SQRT2)
+                    }
+                })
+                .collect(),
+        }
+    }
+}
+
 impl PreambleType {
-    /// Return the preamble sequence as `f32` symbols/samples.
-    ///
-    /// Barker and PN variants are BPSK symbols (`+1.0` or `-1.0`).
-    /// `ZadoffChu64` is returned as a real-valued projection.
-    pub fn sequence(&self) -> Vec<f32> {
+    fn base_sequence(&self) -> Vec<f32> {
         match self {
             PreambleType::Barker11 => {
                 vec![1.0, 1.0, 1.0, 1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, 1.0]
@@ -39,6 +109,14 @@ impl PreambleType {
         }
     }
 
+    /// Return the preamble sequence as `f32` symbols/samples.
+    ///
+    /// Barker and PN variants are BPSK symbols (`+1.0` or `-1.0`).
+    /// `ZadoffChu64` is returned as a real-valued projection.
+    pub fn sequence(&self) -> Vec<f32> {
+        self.base_sequence()
+    }
+
     /// Length of the preamble in symbols.
     pub fn len(&self) -> usize {
         match self {
@@ -48,6 +126,11 @@ impl PreambleType {
             PreambleType::Pn63 => 63,
             PreambleType::ZadoffChu64 => 64,
         }
+    }
+
+    /// Return `true` if the preamble has zero symbols.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
@@ -266,5 +349,31 @@ mod tests {
 
         // Should remain coherent
         assert!(detector.check_phase_coherence(0.15));
+    }
+
+    #[test]
+    fn test_configurable_length_repeats_or_truncates_base_sequence() {
+        let spec = PreambleSpec::new(PreambleType::Barker11, 20, PreambleConstellation::Bpsk);
+        let chips = spec.chips();
+        assert_eq!(chips.len(), 20);
+        assert_eq!(chips[0], 1.0);
+        assert_eq!(chips[11], 1.0); // Repeats from start of Barker11.
+
+        let spec = PreambleSpec::new(PreambleType::Pn63, 32, PreambleConstellation::Bpsk);
+        let chips = spec.chips();
+        assert_eq!(chips.len(), 32);
+    }
+
+    #[test]
+    fn test_constellation_mapping_generates_iq_symbols() {
+        let bpsk =
+            PreambleSpec::new(PreambleType::Barker13, 13, PreambleConstellation::Bpsk).iq_symbols();
+        assert_eq!(bpsk.len(), 13);
+        assert!(bpsk.iter().all(|(_, q)| q.abs() < 1e-6));
+
+        let qpsk =
+            PreambleSpec::new(PreambleType::Barker13, 13, PreambleConstellation::Qpsk).iq_symbols();
+        assert_eq!(qpsk.len(), 13);
+        assert!(qpsk.iter().all(|(i, q)| i.abs() > 0.0 && q.abs() > 0.0));
     }
 }
