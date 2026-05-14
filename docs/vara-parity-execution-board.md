@@ -35,7 +35,8 @@ This document tracks the 11-item execution plan to achieve VARA-class performanc
 - BPSK/QPSK use Gardner TED (timing error detector) with PLL.
 - AFC (automatic frequency correction) via IQ-squaring estimator; tracking range ±baud_rate/4.
 - `openpulse-dsp::preamble` now provides configurable preamble generation (length + constellation) and phase-coherence checks.
-- Watterson-scoped lock/timing acceptance measurements are still pending.
+- Waveform-lock reliability matrix now runs in integration tests for AWGN and Watterson Good F1/F2.
+- PLL settling-time acceptance measurement is still pending.
 
 **Requirements**:
 - Preamble structure: Barker-like or PN sequence, 32–64 symbols, known constellation.
@@ -46,8 +47,8 @@ This document tracks the 11-item execution plan to achieve VARA-class performanc
 **Acceptance Criteria**:
 - [x] Preamble codec (encode/decode) with configurable length and constellation.
 - [ ] PLL settling time ≤200 ms measured on Watterson F1 @ 15 dB SNR.
-- [ ] Frame lock reliability ≥99% on 100-frame loopback test across 10–25 dB AWGN.
-- [ ] Integration test: `tests/waveform_lock_watterson.rs` (Watterson F1/F2, 15/20/25 dB, 20 frames each).
+- [x] Frame lock reliability ≥99% on 100-frame loopback test across 10–25 dB AWGN.
+- [x] Integration test: `tests/waveform_lock_watterson.rs` (Watterson F1/F2, 15/20/25 dB, 20 frames each).
 
 **Depends On**: None (can parallelize).
 

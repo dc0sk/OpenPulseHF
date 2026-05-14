@@ -5,8 +5,60 @@
 //! - Carrier recovery phase coherence
 //! - Frame lock reliability
 
+use openpulse_channel::awgn::AwgnChannel;
+use openpulse_channel::watterson::WattersonChannel;
+use openpulse_channel::{AwgnConfig, ChannelModel, WattersonConfig};
 use openpulse_dsp::preamble::{PreambleDetector, PreambleType};
 use std::f32::consts::PI;
+
+fn normalize_rms_to_reference(reference: &[f32], received: &[f32]) -> Vec<f32> {
+    let ref_rms = (reference.iter().map(|s| s * s).sum::<f32>() / reference.len() as f32).sqrt();
+    let rx_rms = (received.iter().map(|s| s * s).sum::<f32>() / received.len() as f32).sqrt();
+    if rx_rms < 1e-8 {
+        return received.to_vec();
+    }
+    let scale = ref_rms / rx_rms;
+    received.iter().map(|s| s * scale).collect()
+}
+
+fn lock_rate_with_channel(
+    channel: &mut dyn ChannelModel,
+    preamble_type: PreambleType,
+    preamble: &[f32],
+    frames: usize,
+    corr_threshold: f32,
+) -> f32 {
+    let guard = 16usize;
+    let mut tx_frame = vec![0.0_f32; guard];
+    tx_frame.extend_from_slice(preamble);
+    tx_frame.extend(std::iter::repeat_n(0.0_f32, guard));
+
+    let search_start = guard.saturating_sub(12);
+    let search_end = guard + 12;
+    let mut lock_count = 0usize;
+
+    for _ in 0..frames {
+        let distorted = channel.apply(&tx_frame);
+        let mut best_mag = 0.0_f32;
+
+        for offset in search_start..=search_end {
+            if offset + preamble.len() > distorted.len() {
+                break;
+            }
+            let slice = &distorted[offset..offset + preamble.len()];
+            let normalized = normalize_rms_to_reference(preamble, slice);
+            let mut detector = PreambleDetector::new(preamble_type, 4);
+            let (mag, _) = detector.correlate_bpsk(&normalized);
+            best_mag = best_mag.max(mag);
+        }
+
+        if best_mag >= corr_threshold {
+            lock_count += 1;
+        }
+    }
+
+    lock_count as f32 / frames as f32
+}
 
 #[test]
 fn test_preamble_detection_clean_loopback() {
@@ -25,6 +77,56 @@ fn test_preamble_detection_clean_loopback() {
 
     // Expect 100% frame lock on clean loopback
     assert_eq!(lock_count, 100, "Frame lock rate {}/100", lock_count);
+}
+
+#[test]
+fn test_frame_lock_reliability_awgn_10_to_25_db() {
+    let preamble = PreambleType::Pn63.sequence();
+    let snr_values = [10.0_f32, 15.0, 20.0, 25.0];
+
+    for (idx, snr_db) in snr_values.into_iter().enumerate() {
+        let mut channel = AwgnChannel::new(AwgnConfig {
+            snr_db,
+            seed: Some(100 + idx as u64),
+        })
+        .expect("awgn channel should construct");
+
+        let rate = lock_rate_with_channel(&mut channel, PreambleType::Pn63, &preamble, 100, 0.75);
+        assert!(
+            rate >= 0.99,
+            "AWGN {:.1} dB lock rate {:.2}% must be >= 99%",
+            snr_db,
+            rate * 100.0
+        );
+    }
+}
+
+#[test]
+fn test_frame_lock_watterson_f1_f2_matrix() {
+    let preamble = PreambleType::Pn63.sequence();
+    let snr_values = [15.0_f32, 20.0, 25.0];
+
+    for (profile_name, base_cfg) in [
+        ("good_f1", WattersonConfig::good_f1(Some(501))),
+        ("good_f2", WattersonConfig::good_f2(Some(777))),
+    ] {
+        for snr_db in snr_values {
+            let mut cfg = base_cfg.clone();
+            cfg.snr_db = snr_db;
+            let mut channel =
+                WattersonChannel::new(cfg).expect("watterson channel should construct");
+
+            let rate =
+                lock_rate_with_channel(&mut channel, PreambleType::Pn63, &preamble, 20, 0.70);
+            assert!(
+                rate >= 0.85,
+                "Watterson {} {:.1} dB lock rate {:.2}% must be >= 85%",
+                profile_name,
+                snr_db,
+                rate * 100.0
+            );
+        }
+    }
 }
 
 #[test]
