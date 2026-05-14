@@ -234,7 +234,13 @@ density or higher-order channel tracking, which is Item 6 scope.
 - [x] Latency: median frame cycle (TX + retransmit + ACK) ≤1.5 s on 20 dB SNR.
 - [x] Integration test: `tests/harq_rate_selection_watterson.rs`.
 
-**Note**: current throughput gate in `harq_rate_selection_watterson.rs` compares HARQ policy-cycle throughput against a payload-ceiling-normalized VARA reference (frame payload is limited to 255 bytes in this harness). A direct full-frame VARA baseline measurement remains open.
+**Note**: current throughput gate in `harq_rate_selection_watterson.rs` compares HARQ policy-cycle throughput against a payload-ceiling-normalized VARA reference (frame payload is limited to 255 bytes in this harness).
+
+Direct-baseline artifact path is now established for Item 6 parity tracking:
+- Scenario: `benchmark/scenarios/HF2300-WATTERSON-F1-ITEM6.yaml`
+- Baseline reference: `benchmark/baselines/HF2300-WATTERSON-F1-ITEM6--VARA-HF-REFERENCE.json`
+
+Remaining work: produce matching OpenPulse aggregate candidate results under `benchmark/results/aggregate/` with `scenario_id=HF2300-WATTERSON-F1-ITEM6` and run `scripts/check-benchmark-regressions.sh benchmark/baselines benchmark/results/aggregate` as the direct parity gate.
 
 **Depends On**: Item 3 (SNR metrics), Item 5.5 (Window-ARQ), Item 5 (LLR quality).
 
