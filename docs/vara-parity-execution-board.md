@@ -184,9 +184,10 @@ density or higher-order channel tracking, which is Item 6 scope.
 **Description**: Implement selective retransmit of failed symbol/byte ranges rather than full-frame retransmit, reducing TX overhead and latency.
 
 **Current State**:
-- Full-frame retransmit on NACK.
-- Soft-combine via Memory-ARQ (repeated captures averaged before decode).
-- No partial-frame or windowed retry capability.
+- Window-ARQ feedback codec implemented (`WindowArqFeedback`) with fixed 8-byte wire format.
+- Selective retransmit packet codec implemented (`encode_window_retransmit`, `apply_window_retransmit`).
+- Range-limited weighted LLR combine implemented (`combine_llrs_weighted_in_ranges`).
+- Item 5.5 integration gate uses a modulated-sample airtime proxy for latency and non-target retry-bit unknowns (zero-LLR mask), not adversarial sign inversion.
 
 **Requirements**:
 - Feedback mechanism: receiver sends bitmask or range list of failed ranges.
@@ -198,11 +199,11 @@ density or higher-order channel tracking, which is Item 6 scope.
 - **PACTOR-4**: windowed soft-combine with RAKE multipath, concatenated FEC.
 
 **Acceptance Criteria**:
-- [ ] Receiver feedback codec (bitmask or range list) ≤8 bytes.
-- [ ] Windowed encoder: output size ≤120% of failed byte count (preamble amortized).
-- [ ] Latency improvement: ≥15% vs full-frame on typical 50% erasure pattern.
-- [ ] Soft-combine gain: ≥1.5 dB vs full-frame baseline on 3-attempt test.
-- [ ] Integration test: `tests/window_arq_watterson.rs` (F1, 15–25 dB, erasure patterns).
+- [x] Receiver feedback codec (bitmask or range list) ≤8 bytes.
+- [x] Windowed encoder: output size ≤120% of failed byte count (preamble amortized).
+- [x] Latency improvement: ≥15% vs full-frame on typical 50% erasure pattern.
+- [x] Soft-combine gain: ≥1.5 dB vs full-frame baseline on 3-attempt test.
+- [x] Integration test: `tests/window_arq_watterson.rs` (F1, 15–25 dB, erasure patterns).
 
 **Depends On**: Item 5 (LLR quality), Item 1 (preamble for windowed retransmit).
 

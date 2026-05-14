@@ -499,6 +499,256 @@ pub fn combine_llrs_weighted(attempts: &[(&[f32], f32)]) -> Vec<f32> {
     out
 }
 
+/// Fixed wire size (bytes) for Window-ARQ failed-range feedback.
+pub const WINDOW_ARQ_FEEDBACK_SIZE: usize = 8;
+
+/// Maximum number of byte ranges encoded in a Window-ARQ feedback frame.
+pub const WINDOW_ARQ_MAX_RANGES: usize = 2;
+
+/// A contiguous byte range inside a protected frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ByteRange {
+    /// Start byte offset from the beginning of the protected frame.
+    pub start: u16,
+    /// Number of bytes in the range (max 255 by wire format design).
+    ///
+    /// Callers must split larger contiguous failures into multiple ranges.
+    pub len: u8,
+}
+
+impl ByteRange {
+    fn end_exclusive(self) -> usize {
+        self.start as usize + self.len as usize
+    }
+}
+
+/// Receiver feedback for selective Window-ARQ retries.
+///
+/// The codec uses a fixed 8-byte wire format:
+/// `count(1) | range0(start_le:2,len:1) | range1(start_le:2,len:1) | pad(1)`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowArqFeedback {
+    /// Non-overlapping failed byte ranges sorted by `start`.
+    pub ranges: Vec<ByteRange>,
+}
+
+impl WindowArqFeedback {
+    /// Build and validate a feedback object.
+    pub fn new(mut ranges: Vec<ByteRange>) -> Result<Self, ModemError> {
+        // Canonicalise construction to sorted order.
+        ranges.sort_by_key(|r| r.start);
+        Self::validate_ranges(&ranges, true)?;
+        Ok(Self { ranges })
+    }
+
+    fn validate_ranges(ranges: &[ByteRange], require_sorted: bool) -> Result<(), ModemError> {
+        if ranges.len() > WINDOW_ARQ_MAX_RANGES {
+            return Err(ModemError::Frame(format!(
+                "window-arq feedback supports at most {WINDOW_ARQ_MAX_RANGES} ranges"
+            )));
+        }
+        if ranges.iter().any(|r| r.len == 0) {
+            return Err(ModemError::Frame(
+                "window-arq feedback range length must be >= 1".into(),
+            ));
+        }
+        for pair in ranges.windows(2) {
+            let left = pair[0];
+            let right = pair[1];
+            if require_sorted && left.start > right.start {
+                return Err(ModemError::Frame(
+                    "window-arq feedback ranges must be sorted by start".into(),
+                ));
+            }
+            if left.end_exclusive() > right.start as usize {
+                return Err(ModemError::Frame(
+                    "window-arq feedback ranges must not overlap".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Return the total number of failed bytes represented by `ranges`.
+    pub fn failed_byte_count(&self) -> usize {
+        self.ranges.iter().map(|r| r.len as usize).sum()
+    }
+
+    /// Encode feedback to a fixed-size 8-byte wire frame.
+    pub fn encode(&self) -> Result<[u8; WINDOW_ARQ_FEEDBACK_SIZE], ModemError> {
+        if self.ranges.len() > WINDOW_ARQ_MAX_RANGES {
+            return Err(ModemError::Frame(format!(
+                "window-arq feedback supports at most {WINDOW_ARQ_MAX_RANGES} ranges"
+            )));
+        }
+        let mut out = [0u8; WINDOW_ARQ_FEEDBACK_SIZE];
+        out[0] = self.ranges.len() as u8;
+        for (i, range) in self.ranges.iter().enumerate() {
+            let off = 1 + i * 3;
+            out[off..off + 2].copy_from_slice(&range.start.to_le_bytes());
+            out[off + 2] = range.len;
+        }
+        Ok(out)
+    }
+
+    /// Decode a fixed-size 8-byte feedback wire frame.
+    pub fn decode(encoded: &[u8]) -> Result<Self, ModemError> {
+        if encoded.len() != WINDOW_ARQ_FEEDBACK_SIZE {
+            return Err(ModemError::Frame(format!(
+                "window-arq feedback must be exactly {WINDOW_ARQ_FEEDBACK_SIZE} bytes, got {}",
+                encoded.len()
+            )));
+        }
+        let count = encoded[0] as usize;
+        if count > WINDOW_ARQ_MAX_RANGES {
+            return Err(ModemError::Frame(format!(
+                "window-arq feedback range count {count} exceeds max {WINDOW_ARQ_MAX_RANGES}"
+            )));
+        }
+
+        let mut ranges = Vec::with_capacity(count);
+        for i in 0..count {
+            let off = 1 + i * 3;
+            let start = u16::from_le_bytes([encoded[off], encoded[off + 1]]);
+            let len = encoded[off + 2];
+            ranges.push(ByteRange { start, len });
+        }
+        Self::validate_ranges(&ranges, true)?;
+        Ok(Self { ranges })
+    }
+}
+
+/// Encode a selective retransmit packet containing only failed byte ranges.
+///
+/// Wire format: `MAGIC(1)=0xA5 | count(1) | repeated(start_le:2,len:1,data:len)`.
+///
+/// Packet overhead is `2 + 3*N` bytes (`N` = number of ranges).  Therefore,
+/// the "<=120% of failed bytes" criterion is not universal for tiny failure
+/// sets; callers should apply that gate only when failed bytes are large enough
+/// to amortize header/range descriptors.
+pub fn encode_window_retransmit(
+    protected_frame: &[u8],
+    feedback: &WindowArqFeedback,
+) -> Result<Vec<u8>, ModemError> {
+    let mut out = Vec::with_capacity(2 + feedback.ranges.len() * 3 + feedback.failed_byte_count());
+    out.push(0xA5);
+    out.push(feedback.ranges.len() as u8);
+
+    for range in &feedback.ranges {
+        let start = range.start as usize;
+        let end = range.end_exclusive();
+        if end > protected_frame.len() {
+            return Err(ModemError::Frame(format!(
+                "window-arq range [{start}, {end}) exceeds frame length {}",
+                protected_frame.len()
+            )));
+        }
+        out.extend_from_slice(&range.start.to_le_bytes());
+        out.push(range.len);
+        out.extend_from_slice(&protected_frame[start..end]);
+    }
+
+    Ok(out)
+}
+
+/// Apply a selective retransmit packet to an existing protected frame buffer.
+pub fn apply_window_retransmit(
+    protected_frame: &mut [u8],
+    retransmit_packet: &[u8],
+) -> Result<(), ModemError> {
+    if retransmit_packet.len() < 2 {
+        return Err(ModemError::Frame(
+            "window-arq packet too short for header".into(),
+        ));
+    }
+    if retransmit_packet[0] != 0xA5 {
+        return Err(ModemError::Frame("window-arq packet bad magic".into()));
+    }
+    let count = retransmit_packet[1] as usize;
+    if count > WINDOW_ARQ_MAX_RANGES {
+        return Err(ModemError::Frame(format!(
+            "window-arq packet range count {count} exceeds max {WINDOW_ARQ_MAX_RANGES}"
+        )));
+    }
+
+    let mut cursor = 2usize;
+    for _ in 0..count {
+        if cursor + 3 > retransmit_packet.len() {
+            return Err(ModemError::Frame(
+                "window-arq packet truncated at range header".into(),
+            ));
+        }
+        let start =
+            u16::from_le_bytes([retransmit_packet[cursor], retransmit_packet[cursor + 1]]) as usize;
+        let len = retransmit_packet[cursor + 2] as usize;
+        cursor += 3;
+
+        let end = start + len;
+        if cursor + len > retransmit_packet.len() {
+            return Err(ModemError::Frame(
+                "window-arq packet truncated at range payload".into(),
+            ));
+        }
+        if end > protected_frame.len() {
+            return Err(ModemError::Frame(format!(
+                "window-arq patch range [{start}, {end}) exceeds frame length {}",
+                protected_frame.len()
+            )));
+        }
+
+        protected_frame[start..end].copy_from_slice(&retransmit_packet[cursor..cursor + len]);
+        cursor += len;
+    }
+
+    if cursor != retransmit_packet.len() {
+        return Err(ModemError::Frame(
+            "window-arq packet has trailing bytes".into(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Combine soft LLR attempts only inside failed byte ranges.
+///
+/// Outside `feedback.ranges`, values from the first attempt are preserved.
+///
+/// Assumes an LLR layout of exactly 8 bit-LLRs per protected byte (LSB-first),
+/// i.e. byte offsets are converted to LLR offsets by multiplying by 8.
+pub fn combine_llrs_weighted_in_ranges(
+    attempts: &[(&[f32], f32)],
+    feedback: &WindowArqFeedback,
+) -> Vec<f32> {
+    if attempts.is_empty() {
+        return Vec::new();
+    }
+    let len = attempts.iter().map(|(l, _)| l.len()).min().unwrap_or(0);
+    if len == 0 {
+        return Vec::new();
+    }
+
+    let mut out = attempts[0].0[..len].to_vec();
+
+    for range in &feedback.ranges {
+        let start = (range.start as usize).saturating_mul(8).min(len);
+        let end = start
+            .saturating_add((range.len as usize).saturating_mul(8))
+            .min(len);
+        if start >= end {
+            continue;
+        }
+
+        let mut slices: Vec<(&[f32], f32)> = Vec::with_capacity(attempts.len());
+        for (llrs, noise_var) in attempts {
+            slices.push((&llrs[start..end], *noise_var));
+        }
+        let combined = combine_llrs_weighted(&slices);
+        out[start..end].copy_from_slice(&combined);
+    }
+
+    out
+}
+
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -708,5 +958,122 @@ mod tests {
         let b = [1.0f32, 2.0];
         let out = combine_llrs_weighted(&[(&a, 1.0), (&b, 1.0)]);
         assert_eq!(out.len(), 2, "output truncated to min length");
+    }
+
+    #[test]
+    fn window_arq_feedback_codec_is_fixed_8_bytes_round_trip() {
+        let fb = WindowArqFeedback::new(vec![
+            ByteRange { start: 12, len: 8 },
+            ByteRange { start: 64, len: 16 },
+        ])
+        .unwrap();
+        let encoded = fb.encode().unwrap();
+        assert_eq!(encoded.len(), WINDOW_ARQ_FEEDBACK_SIZE);
+        let decoded = WindowArqFeedback::decode(&encoded).unwrap();
+        assert_eq!(decoded, fb);
+    }
+
+    #[test]
+    fn window_arq_feedback_rejects_invalid_ranges() {
+        let overlap = WindowArqFeedback::new(vec![
+            ByteRange { start: 10, len: 10 },
+            ByteRange { start: 15, len: 3 },
+        ]);
+        assert!(overlap.is_err());
+
+        let zero = WindowArqFeedback::new(vec![ByteRange { start: 2, len: 0 }]);
+        assert!(zero.is_err());
+    }
+
+    #[test]
+    fn window_arq_feedback_decode_rejects_unsorted_wire_order() {
+        // count=2, range0 starts after range1.
+        let encoded = [
+            2, // count
+            40, 0, 5, // r0: start=40 len=5
+            10, 0, 5, // r1: start=10 len=5 (unsorted)
+            0, // pad
+        ];
+        let decoded = WindowArqFeedback::decode(&encoded);
+        assert!(decoded.is_err());
+    }
+
+    #[test]
+    fn window_retransmit_payload_stays_within_120_percent_for_50_percent_loss() {
+        let protected: Vec<u8> = (0u16..255).map(|v| (v & 0xFF) as u8).collect();
+        let feedback = WindowArqFeedback::new(vec![
+            ByteRange { start: 0, len: 64 },
+            ByteRange {
+                start: 128,
+                len: 64,
+            },
+        ])
+        .unwrap();
+
+        let packet = encode_window_retransmit(&protected, &feedback).unwrap();
+        let failed = feedback.failed_byte_count() as f32;
+        let ratio = packet.len() as f32 / failed;
+        assert!(
+            ratio <= 1.20,
+            "window retransmit ratio {ratio:.3} exceeds 1.20 limit"
+        );
+    }
+
+    #[test]
+    fn window_retransmit_small_failed_sets_can_exceed_120_percent() {
+        let protected: Vec<u8> = (0u16..32).map(|v| (v & 0xFF) as u8).collect();
+        let feedback = WindowArqFeedback::new(vec![
+            ByteRange { start: 3, len: 1 },
+            ByteRange { start: 9, len: 1 },
+        ])
+        .unwrap();
+
+        let packet = encode_window_retransmit(&protected, &feedback).unwrap();
+        let failed = feedback.failed_byte_count() as f32;
+        let ratio = packet.len() as f32 / failed;
+        assert!(
+            ratio > 1.20,
+            "expected tiny-failure ratio > 1.20, got {ratio}"
+        );
+    }
+
+    #[test]
+    fn apply_window_retransmit_patches_only_selected_ranges() {
+        let original: Vec<u8> = (0u16..80).map(|v| (v & 0xFF) as u8).collect();
+        let mut repaired = original.clone();
+        let mut updated = original.clone();
+
+        for b in &mut updated[10..20] {
+            *b ^= 0x5A;
+        }
+        for b in &mut updated[40..50] {
+            *b ^= 0xA5;
+        }
+
+        let fb = WindowArqFeedback::new(vec![
+            ByteRange { start: 10, len: 10 },
+            ByteRange { start: 40, len: 10 },
+        ])
+        .unwrap();
+
+        let packet = encode_window_retransmit(&updated, &fb).unwrap();
+        apply_window_retransmit(&mut repaired, &packet).unwrap();
+        assert_eq!(repaired, updated);
+    }
+
+    #[test]
+    fn combine_llrs_weighted_in_ranges_keeps_unselected_bits_from_first_attempt() {
+        let first = vec![1.0f32; 32];
+        let second = vec![-1.0f32; 32];
+        let fb = WindowArqFeedback::new(vec![ByteRange { start: 2, len: 1 }]).unwrap();
+
+        let out = combine_llrs_weighted_in_ranges(&[(&first, 1.0), (&second, 1.0)], &fb);
+
+        // Byte 0..1 unchanged from first attempt.
+        assert!(out[..16].iter().all(|&v| (v - 1.0).abs() < 1e-6));
+        // Byte 2 (bits 16..24) averaged.
+        assert!(out[16..24].iter().all(|&v| v.abs() < 1e-6));
+        // Remaining bits unchanged from first attempt.
+        assert!(out[24..].iter().all(|&v| (v - 1.0).abs() < 1e-6));
     }
 }
