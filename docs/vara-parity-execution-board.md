@@ -128,11 +128,18 @@ This document tracks the 11-item execution plan to achieve VARA-class performanc
 - MMSE interpolation across data subcarriers.
 - Soft-symbol scaling: LLR = 2×Es/N0 × Re{y* h̄} for Gaussian channels.
 
+**Status**: ✅ **COMPLETE**
+
+**Deliverables**:
+- `plugins/scfdma/src/demodulate.rs`: LS/MMSE equalization wired into `scfdma_demodulate_soft()`, with per-symbol max-log LLR generation.
+- `plugins/scfdma/src/lib.rs`: `demodulate_soft()` exposed through the plugin trait path.
+- `plugins/scfdma/tests/pilot_channel_estimation.rs`: AWGN soft-gain gate and Watterson F1 throughput gate added to acceptance coverage.
+
 **Acceptance Criteria**:
-- [ ] Channel estimator (LS/MMSE) wired into SC-FDMA demodulator.
-- [ ] Soft-symbol SNR gain: ≥1.5 dB vs hard-decision baseline on AWGN.
-- [ ] Watterson F1 @ 20 dB: throughput improvement ≥8% (item 1.5 gate).
-- [ ] Integration test: `tests/pilot_channel_estimation.rs`.
+- [x] Channel estimator (LS/MMSE) wired into SC-FDMA demodulator.
+- [x] Soft-symbol SNR gain: ≥1.5 dB vs hard-decision baseline on AWGN.
+- [x] Watterson F1 @ 20 dB: throughput improvement ≥8% (item 1.5 gate).
+- [x] Integration test: `tests/pilot_channel_estimation.rs`.
 
 **Depends On**: Item 1 (preamble for phase reference).
 
@@ -385,6 +392,7 @@ None
 | Waveform lock (Item 1) | ✅ | 2026-05-13 | Preamble detection + phase coherence |
 | AFC Doppler (Item 2) | ✅ | 2026-05-13 | <5 Hz tracking error under fading |
 | Hysteresis (Item 3) | ✅ | 2026-05-13 | SnrEstimator + HysteresisController; 21 tests passing |
+| Pilot estimation + soft symbols (Item 4) | ✅ | 2026-05-14 | LS/MMSE soft demod path + AWGN/Watterson acceptance gates |
 | Cross-mode gate (Item 7) | ⏳ | Pending | Requires Item 6 |
 
 ---
@@ -403,5 +411,5 @@ None
 ## Contact & Questions
 
 **Owner**: OpenPulse HF Development Team  
-**Last Updated**: 2026-05-13  
-**Status**: Execution phase, Items 1-3 complete; preparing next gate items
+**Last Updated**: 2026-05-14  
+**Status**: Execution phase, Items 1-4 complete; preparing Item 5
