@@ -23,7 +23,7 @@ use openpulse_core::{
     plugin::{ModulationConfig, ModulationPlugin, PluginInfo},
 };
 
-use crate::demodulate::scfdma_demodulate;
+use crate::demodulate::{scfdma_demodulate, scfdma_demodulate_soft};
 use crate::modulate::scfdma_modulate;
 use crate::params::{params_for_mode, SAMPLE_RATE};
 
@@ -113,6 +113,33 @@ impl ModulationPlugin for ScFdmaPlugin {
             )));
         }
         Ok(scfdma_demodulate(samples, &config.mode))
+    }
+
+    fn demodulate_soft(
+        &self,
+        samples: &[f32],
+        config: &ModulationConfig,
+    ) -> Result<Vec<f32>, ModemError> {
+        if params_for_mode(&config.mode).is_none() {
+            return Err(ModemError::Configuration(format!(
+                "SC-FDMA plugin: unknown mode '{}'",
+                config.mode
+            )));
+        }
+        if config.sample_rate != SAMPLE_RATE {
+            return Err(ModemError::Configuration(format!(
+                "SC-FDMA plugin: sample_rate {} not supported; must be {SAMPLE_RATE}",
+                config.sample_rate
+            )));
+        }
+        if (config.center_frequency - 1500.0).abs() > 1.0 {
+            return Err(ModemError::Configuration(format!(
+                "SC-FDMA plugin: center_frequency {:.1} not supported; must be 1500.0 Hz",
+                config.center_frequency
+            )));
+        }
+
+        Ok(scfdma_demodulate_soft(samples, &config.mode))
     }
 
     // Per-subcarrier LS/ZF equalization handles channel phase; no global CFO estimator.
