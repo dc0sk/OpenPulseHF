@@ -33,6 +33,10 @@ Suggested implementation scope (future work):
 - Config flags for awareness mode and the two enforcement options.
 - Audit/log output when override is used.
 
+Current status:
+- ✅ QSY-path guardrails shipped: `ham-iaru` policy checks, candidate validation, max-width and segment enforcement, default-enabled awareness, and compliance-override logging.
+- 🔄 Remaining: wire the same policy into non-QSY operator mode selection paths.
+
 ### Release packaging ✅ Done (PR #231)
 
 - **GitHub Actions release workflow** is now in place: on `v*` tag push, build static

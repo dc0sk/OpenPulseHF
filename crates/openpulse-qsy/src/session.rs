@@ -7,6 +7,7 @@ use openpulse_core::trust::ConnectionTrustLevel;
 use rand::Rng;
 use thiserror::Error;
 
+use crate::bandplan::{BandplanMode, BandplanPolicy};
 use crate::frame::{QsyFrame, QsyFrameError};
 
 #[derive(Debug, Error)]
@@ -20,12 +21,14 @@ pub enum QsyError {
 }
 
 /// Policy governing whether this node accepts QSY requests.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct QsyPolicy {
     /// When false, all incoming `QSY_REQ` frames are immediately rejected.
     pub enabled: bool,
     /// Trust levels from which `QSY_REQ` is accepted.  An empty list accepts any level.
     pub allow_trustlevels: Vec<ConnectionTrustLevel>,
+    /// Bandplan awareness settings for QSY frequencies.
+    pub bandplan: BandplanPolicy,
 }
 
 impl QsyPolicy {
@@ -34,7 +37,14 @@ impl QsyPolicy {
     /// Accepts both kebab-case (`"psk-verified"`) and underscore variants (`"psk_verified"`).
     /// Returns `Err` listing any unrecognised strings so misconfiguration is visible at startup
     /// rather than silently opening trust gating.
-    pub fn from_config(enabled: bool, allow_trustlevels: &[String]) -> Result<Self, String> {
+    pub fn from_config(
+        enabled: bool,
+        allow_trustlevels: &[String],
+        bandplan_mode: &str,
+        bandplan_awareness_enabled: bool,
+        enforce_max_channel_width: bool,
+        enforce_segment_conventions: bool,
+    ) -> Result<Self, String> {
         let mut levels = Vec::new();
         let mut unknown = Vec::new();
         for s in allow_trustlevels {
@@ -49,10 +59,30 @@ impl QsyPolicy {
                 unknown.join(", ")
             ));
         }
+
+        let parsed_mode = BandplanMode::from_str(bandplan_mode)
+            .map_err(|_| format!("unknown qsy.bandplan_mode: {bandplan_mode}"))?;
+
         Ok(Self {
             enabled,
             allow_trustlevels: levels,
+            bandplan: BandplanPolicy {
+                awareness_enabled: bandplan_awareness_enabled,
+                mode: parsed_mode,
+                enforce_max_channel_width,
+                enforce_segment_conventions,
+            },
         })
+    }
+}
+
+impl Default for QsyPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            allow_trustlevels: vec![],
+            bandplan: BandplanPolicy::default(),
+        }
     }
 }
 
@@ -115,6 +145,7 @@ pub struct QsySession {
     policy: QsyPolicy,
     peer_trust: ConnectionTrustLevel,
     switchover_offset_s: u32,
+    operating_mode: Option<String>,
 }
 
 impl QsySession {
@@ -123,12 +154,10 @@ impl QsySession {
         Self {
             role: Role::Initiator,
             state: State::Idle,
-            policy: QsyPolicy {
-                enabled: true,
-                allow_trustlevels: vec![],
-            },
+            policy: QsyPolicy::default(),
             peer_trust: ConnectionTrustLevel::Unverified,
             switchover_offset_s: 5,
+            operating_mode: None,
         }
     }
 
@@ -143,7 +172,20 @@ impl QsySession {
             policy,
             peer_trust,
             switchover_offset_s: 5,
+            operating_mode: None,
         }
+    }
+
+    /// Override policy (useful for initiator config wiring).
+    pub fn with_policy(mut self, policy: QsyPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// Set modem operating mode used for bandplan channel-width checks.
+    pub fn with_operating_mode(mut self, mode: impl Into<String>) -> Self {
+        self.operating_mode = Some(mode.into());
+        self
     }
 
     /// Override the switchover offset (seconds after QSY_ACK to tune).
@@ -171,6 +213,9 @@ impl QsySession {
                 "candidate list must not be empty".into(),
             ));
         }
+
+        self.validate_frequencies(candidates.iter().copied())?;
+
         let token = random_token();
         let n = candidates.len() as u32;
         self.state = State::InitScanning {
@@ -295,6 +340,9 @@ impl QsySession {
                         )))
                     }
                 }
+
+                self.validate_frequencies(candidates.iter().map(|(freq_hz, _)| *freq_hz))?;
+
                 self.state = State::RespScanning {
                     token: token.clone(),
                 };
@@ -354,6 +402,7 @@ impl QsySession {
                             got: token,
                         });
                     }
+                    self.validate_frequencies(std::iter::once(agreed_freq_hz))?;
                     self.state = State::Agreed {
                         freq_hz: agreed_freq_hz,
                     };
@@ -366,6 +415,30 @@ impl QsySession {
                 ))),
             },
         }
+    }
+}
+
+impl QsySession {
+    fn validate_frequencies(&self, freqs: impl IntoIterator<Item = u64>) -> Result<(), QsyError> {
+        if !self.policy.bandplan.awareness_enabled {
+            return Ok(());
+        }
+
+        let mode = self.operating_mode.as_deref().ok_or_else(|| {
+            QsyError::InvalidTransition(
+                "operating_mode must be set for bandplan-aware QSY validation".into(),
+            )
+        })?;
+
+        for freq_hz in freqs {
+            self.policy
+                .bandplan
+                .validate_frequency(freq_hz, mode)
+                .map_err(|e| {
+                    QsyError::InvalidTransition(format!("bandplan policy violation: {e}"))
+                })?;
+        }
+        Ok(())
     }
 }
 
