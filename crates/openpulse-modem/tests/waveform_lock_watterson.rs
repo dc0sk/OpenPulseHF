@@ -5,8 +5,86 @@
 //! - Carrier recovery phase coherence
 //! - Frame lock reliability
 
+use openpulse_channel::awgn::AwgnChannel;
+use openpulse_channel::watterson::WattersonChannel;
+use openpulse_channel::{AwgnConfig, ChannelModel, WattersonConfig};
+use openpulse_dsp::pll::CarrierPll;
 use openpulse_dsp::preamble::{PreambleDetector, PreambleType};
 use std::f32::consts::PI;
+
+fn normalized_abs_correlation(reference: &[f32], received: &[f32]) -> f32 {
+    if reference.is_empty() || received.is_empty() || reference.len() != received.len() {
+        return 0.0;
+    }
+
+    let dot = reference
+        .iter()
+        .zip(received.iter())
+        .map(|(&a, &b)| a * b)
+        .sum::<f32>();
+    let ref_norm = reference.iter().map(|v| v * v).sum::<f32>().sqrt();
+    let rx_norm = received.iter().map(|v| v * v).sum::<f32>().sqrt();
+
+    if ref_norm < 1e-8 || rx_norm < 1e-8 {
+        0.0
+    } else {
+        (dot / (ref_norm * rx_norm)).abs()
+    }
+}
+
+fn lock_rate_with_channel(
+    channel: &mut dyn ChannelModel,
+    preamble: &[f32],
+    frames: usize,
+    corr_threshold: f32,
+) -> f32 {
+    let guard = 16usize;
+    let mut tx_frame = vec![0.0_f32; guard];
+    tx_frame.extend_from_slice(preamble);
+    tx_frame.extend(std::iter::repeat_n(0.0_f32, guard));
+
+    let search_start = guard.saturating_sub(12);
+    let search_end = guard + 12;
+    let mut lock_count = 0usize;
+
+    for _ in 0..frames {
+        let distorted = channel.apply(&tx_frame);
+        let mut best_mag = 0.0_f32;
+
+        for offset in search_start..=search_end {
+            if offset + preamble.len() > distorted.len() {
+                break;
+            }
+            let slice = &distorted[offset..offset + preamble.len()];
+            let mag = normalized_abs_correlation(preamble, slice);
+            best_mag = best_mag.max(mag);
+        }
+
+        if best_mag >= corr_threshold {
+            lock_count += 1;
+        }
+    }
+
+    lock_count as f32 / frames as f32
+}
+
+fn wrap_phase(mut x: f32) -> f32 {
+    while x > PI {
+        x -= 2.0 * PI;
+    }
+    while x <= -PI {
+        x += 2.0 * PI;
+    }
+    x
+}
+
+// BPSK has a π phase ambiguity; treat 0 and ±π as equivalent lock points.
+fn bpsk_phase_error_rad(phase_rad: f32) -> f32 {
+    let e0 = wrap_phase(phase_rad).abs();
+    let e1 = wrap_phase(phase_rad - PI).abs();
+    let e2 = wrap_phase(phase_rad + PI).abs();
+    e0.min(e1).min(e2)
+}
 
 #[test]
 fn test_preamble_detection_clean_loopback() {
@@ -25,6 +103,104 @@ fn test_preamble_detection_clean_loopback() {
 
     // Expect 100% frame lock on clean loopback
     assert_eq!(lock_count, 100, "Frame lock rate {}/100", lock_count);
+}
+
+#[test]
+fn test_frame_lock_reliability_awgn_10_to_25_db() {
+    let preamble = PreambleType::Pn63.sequence();
+    let snr_values = [10.0_f32, 15.0, 20.0, 25.0];
+
+    for (idx, snr_db) in snr_values.into_iter().enumerate() {
+        let mut channel = AwgnChannel::new(AwgnConfig {
+            snr_db,
+            seed: Some(100 + idx as u64),
+        })
+        .expect("awgn channel should construct");
+
+        let rate = lock_rate_with_channel(&mut channel, &preamble, 100, 0.75);
+        assert!(
+            rate >= 0.99,
+            "AWGN {:.1} dB lock rate {:.2}% must be >= 99%",
+            snr_db,
+            rate * 100.0
+        );
+    }
+}
+
+#[test]
+fn test_frame_lock_watterson_f1_f2_matrix() {
+    let preamble = PreambleType::Pn63.sequence();
+    let snr_values = [15.0_f32, 20.0, 25.0];
+
+    for (profile_name, base_cfg) in [
+        ("good_f1", WattersonConfig::good_f1(Some(501))),
+        ("good_f2", WattersonConfig::good_f2(Some(777))),
+    ] {
+        for snr_db in snr_values {
+            let mut cfg = base_cfg.clone();
+            cfg.snr_db = snr_db;
+            let mut channel =
+                WattersonChannel::new(cfg).expect("watterson channel should construct");
+
+            let rate = lock_rate_with_channel(&mut channel, &preamble, 20, 0.70);
+            assert!(
+                rate >= 0.85,
+                "Watterson {} {:.1} dB lock rate {:.2}% must be >= 85%",
+                profile_name,
+                snr_db,
+                rate * 100.0
+            );
+        }
+    }
+}
+
+#[test]
+fn test_pll_settling_time_watterson_f1_15db_under_200ms() {
+    let sample_rate_hz = 8000.0_f32;
+    let max_settle_samples = (0.200 * sample_rate_hz) as usize; // 200 ms
+    let total_samples = 2400usize; // 300 ms observation window
+    let loop_bw = 0.05_f32;
+
+    // Constant BPSK +1 symbol stream with a fixed carrier phase offset.
+    let phase_offset = 0.55_f32;
+    let tx_i = vec![phase_offset.cos(); total_samples];
+    let tx_q = vec![phase_offset.sin(); total_samples];
+
+    let mut cfg = WattersonConfig::good_f1(Some(901));
+    cfg.snr_db = 15.0;
+    let mut ch = WattersonChannel::new(cfg).expect("watterson channel should construct");
+    let (rx_i, rx_q) = ch.apply_complex(&tx_i, &tx_q);
+
+    let mut pll = CarrierPll::new(loop_bw, 1);
+    let phase_tol_rad = 0.25_f32;
+    let consecutive_needed = 64usize;
+    let mut streak = 0usize;
+    let mut settle_idx: Option<usize> = None;
+
+    for idx in 0..total_samples {
+        pll.update(rx_i[idx], rx_q[idx]);
+        let (i_corr, q_corr) = pll.correct(rx_i[idx], rx_q[idx]);
+        let err = bpsk_phase_error_rad(q_corr.atan2(i_corr));
+
+        if err <= phase_tol_rad {
+            streak += 1;
+            if streak >= consecutive_needed {
+                settle_idx = Some(idx + 1 - consecutive_needed);
+                break;
+            }
+        } else {
+            streak = 0;
+        }
+    }
+
+    let settle_idx = settle_idx.expect("PLL did not settle within observation window");
+    assert!(
+        settle_idx <= max_settle_samples,
+        "PLL settled at sample {} ({:.1} ms), expected <= {} samples (200 ms)",
+        settle_idx,
+        (settle_idx as f32 / sample_rate_hz) * 1000.0,
+        max_settle_samples
+    );
 }
 
 #[test]
