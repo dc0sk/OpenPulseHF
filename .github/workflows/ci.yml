@@ -37,8 +37,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: cross-aarch64-cargo-${{ hashFiles('**/Cargo.toml') }}
+          key: cross-aarch64-cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}
 
       # Use `cross` to handle cross-compilation without requiring native aarch64 toolchain.
       - name: Check workspace for aarch64 target
