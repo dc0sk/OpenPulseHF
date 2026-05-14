@@ -27,7 +27,7 @@ pub fn render(f: &mut Frame, app: &App) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5),
+            Constraint::Length(7),
             Constraint::Min(4),
             Constraint::Length(1),
         ])
@@ -71,6 +71,22 @@ fn render_meters(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .as_ref()
         .map(|s| format!("{s:?}"))
         .unwrap_or_else(|| "—".to_string());
+    let trend = app
+        .speed_trend()
+        .map(|t| match t {
+            crate::app::SpeedTrend::Up => "up",
+            crate::app::SpeedTrend::Down => "down",
+            crate::app::SpeedTrend::Flat => "flat",
+        })
+        .unwrap_or("—");
+
+    let block = Block::default().borders(Borders::ALL).title("Meters");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
 
     let lines = vec![
         Line::from(vec![
@@ -82,19 +98,26 @@ fn render_meters(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         Line::from(vec![
             Span::raw("Rate: "),
             Span::styled(format!("{sl} {mode}"), Style::default().fg(Color::Yellow)),
+            Span::raw("  trend: "),
+            Span::styled(trend, Style::default().fg(Color::LightYellow)),
         ]),
     ];
 
-    let text = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("Meters"));
-    f.render_widget(text, area);
+    let text_height = inner.height.min(2);
+    let text_area = ratatui::layout::Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: text_height,
+    };
+    let text = Paragraph::new(lines);
+    f.render_widget(text, text_area);
 
-    // DCD energy bar drawn below the paragraph — ratatui Gauge widget.
-    // We render it on the last line of the area if space permits.
-    if area.height >= 4 {
-        let gauge_area = ratatui::layout::Rect {
-            x: area.x + 1,
-            y: area.y + area.height - 2,
-            width: area.width.saturating_sub(2),
+    if inner.height >= 3 {
+        let dcd_area = ratatui::layout::Rect {
+            x: inner.x,
+            y: inner.y + 2,
+            width: inner.width,
             height: 1,
         };
         let energy_pct = (app.dcd_energy * 100.0).clamp(0.0, 100.0) as u16;
@@ -104,11 +127,36 @@ fn render_meters(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             Color::Green
         };
         let gauge = Gauge::default()
-            .block(Block::default())
             .gauge_style(Style::default().fg(dcd_color))
             .percent(energy_pct)
             .label(format!("DCD {energy_pct}%"));
-        f.render_widget(gauge, gauge_area);
+        f.render_widget(gauge, dcd_area);
+    }
+
+    if inner.height >= 4 {
+        let fer_area = ratatui::layout::Rect {
+            x: inner.x,
+            y: inner.y + 3,
+            width: inner.width,
+            height: 1,
+        };
+        let fer_pct = app.fer_percent().unwrap_or(0.0).clamp(0.0, 100.0);
+        let fer_color = if fer_pct < 5.0 {
+            Color::Green
+        } else if fer_pct < 15.0 {
+            Color::Yellow
+        } else {
+            Color::Red
+        };
+        let gauge = Gauge::default()
+            .gauge_style(Style::default().fg(fer_color))
+            .percent(fer_pct as u16)
+            .label(if app.fer_percent().is_some() {
+                format!("FER {fer_pct:.1}%")
+            } else {
+                "FER n/a".to_string()
+            });
+        f.render_widget(gauge, fer_area);
     }
 }
 

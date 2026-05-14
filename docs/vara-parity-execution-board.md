@@ -363,7 +363,9 @@ The VARA WattersonF1 throughput parity criterion is deferred — see note.
 
 **Current State**:
 - `openpulse-cli monitor` shows HPX state, AFC, DCD energy.
-- No speed-level recommendation or reason for last mode change.
+- `openpulse mode-advisor --snr <dB>` implemented with speed-level/mode recommendation + reason.
+- `openpulse session-metrics` implemented for JSON export of throughput/FER/latency/SNR estimate.
+- `openpulse-tui` now shows speed-level trend (up/down/flat) and an FER gauge (green under 5%).
 - No histogram of throughput or latency per mode.
 
 **Requirements**:
@@ -373,11 +375,19 @@ The VARA WattersonF1 throughput parity criterion is deferred — see note.
 - TUI enhancements: color-coded speed-level bar, trend arrows (up/down), FER gauge.
 
 **Acceptance Criteria**:
-- [ ] `openpulse mode-advisor --snr <dB>` outputs recommended speed level + reason.
-- [ ] `openpulse session-metrics` exports session perf (throughput, FER, latency, SNR).
-- [ ] TUI: added speed-level indicator with trend arrow; FER gauge <5% in green.
-- [ ] Integration test: `tests/cli_mode_advisor.rs` (10 SNR values, correct recommendations).
-- [ ] Doc: `docs/cli-mode-advisor-guide.md`.
+- [x] `openpulse mode-advisor --snr <dB>` outputs recommended speed level + reason.
+- [x] `openpulse session-metrics` exports session perf (throughput, FER, latency, SNR).
+- [x] TUI: added speed-level indicator with trend arrow; FER gauge <5% in green.
+- [x] Integration test: `tests/cli_mode_advisor.rs` (10 SNR values, correct recommendations).
+- [x] Doc: `docs/cli-mode-advisor-guide.md`.
+
+### Follow-up backlog additions
+
+- Bandplan awareness request logged in `docs/backlog.md`:
+	- default-enabled bandplan awareness for auto-QSY and general operating mode
+	- initial mode: HAM/IARU bandplan
+	- options: max channel-width enforcement and convention-segment enforcement
+	- explicit responsible-user override allowed (with operational audit logging)
 
 **Depends On**: Item 6 (HARQ tuning finalized).
 

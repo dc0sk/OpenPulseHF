@@ -46,6 +46,10 @@ fn main() -> Result<()> {
         };
     }
 
+    if let Commands::ModeAdvisor { snr } = &cli.command {
+        return commands::mode_advisor::run(*snr);
+    }
+
     let level: Level = cli.log.parse().unwrap_or(Level::INFO);
     tracing_subscriber::fmt()
         .with_max_level(level)
@@ -103,6 +107,9 @@ fn main() -> Result<()> {
         Commands::Modes => {
             commands::modes::run_modes(&engine)?;
         }
+        Commands::SessionMetrics { opts } => {
+            exit_code = commands::session_metrics::run(&engine, &opts)?;
+        }
         Commands::Identity { command } => {
             exit_code = commands::modes::run_identity(command, &pki)?;
         }
@@ -140,6 +147,7 @@ fn main() -> Result<()> {
         Commands::Qsy { command } => {
             commands::qsy::run(command)?;
         }
+        Commands::ModeAdvisor { .. } => unreachable!("handled above"),
         Commands::Config { .. } => unreachable!("handled above"),
     }
 

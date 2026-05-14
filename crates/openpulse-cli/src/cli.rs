@@ -64,6 +64,17 @@ pub enum Commands {
     Devices,
     /// List registered modulation modes.
     Modes,
+    /// Recommend a speed level and mode for the current SNR.
+    ModeAdvisor {
+        /// Estimated signal-to-noise ratio in dB.
+        #[arg(long)]
+        snr: f32,
+    },
+    /// Export session performance metrics (throughput, FER, latency, SNR estimate).
+    SessionMetrics {
+        #[command(flatten)]
+        opts: DiagnosticOptions,
+    },
     /// Identity diagnostics.
     Identity {
         #[command(subcommand)]

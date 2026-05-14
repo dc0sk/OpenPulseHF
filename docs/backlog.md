@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/backlog.md
 status: living
-last_updated: 2026-05-12
+last_updated: 2026-05-14
 ---
 
 # Backlog
@@ -14,6 +14,24 @@ history with PR numbers.
 ---
 
 ## Open work items
+
+### Bandplan awareness for QSY and operating mode 🔄
+
+Add bandplan-awareness guardrails for auto-QSY mode and general operating mode.
+
+- **Bandplan mode set (initial)**: `ham-iaru` (HAM/IARU bandplan awareness).
+- **Configured-plan enforcement**: node may only QSY to frequencies permitted by its configured bandplan mode.
+- **Options per bandplan mode**:
+  - **Max channel-width enforcement**: enforce per-band/segment maximum occupied bandwidth; **enabled by default**.
+  - **Band-segment convention enforcement**: respect convention-bound frequency portions (for example FT8, JS8, FT4, SSB voice, CW segments).
+- **Default behavior**: bandplan awareness is **enabled by default**.
+- **Override**: may be disabled only by a **responsible user** (explicit operator opt-out in configuration/CLI, logged as an operational compliance exception).
+
+Suggested implementation scope (future work):
+- Central bandplan policy module (shared by QSY and operator mode selection).
+- QSY candidate pre-filter + reject reasons for out-of-plan frequencies.
+- Config flags for awareness mode and the two enforcement options.
+- Audit/log output when override is used.
 
 ### Release packaging 🔄
 
