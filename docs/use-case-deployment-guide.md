@@ -1,7 +1,8 @@
 ---
-title: "OpenPulseHF Use-Case Deployment Guide"
-last_updated: "2026-05-14"
-status: "draft"
+project: openpulsehf
+doc: docs/use-case-deployment-guide.md
+status: living
+last_updated: 2026-05-14
 ---
 
 # OpenPulseHF Use-Case Deployment Guide
