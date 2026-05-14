@@ -8,6 +8,7 @@
 use openpulse_channel::awgn::AwgnChannel;
 use openpulse_channel::watterson::WattersonChannel;
 use openpulse_channel::{AwgnConfig, ChannelModel, WattersonConfig};
+use openpulse_dsp::pll::CarrierPll;
 use openpulse_dsp::preamble::{PreambleDetector, PreambleType};
 use std::f32::consts::PI;
 
@@ -58,6 +59,24 @@ fn lock_rate_with_channel(
     }
 
     lock_count as f32 / frames as f32
+}
+
+fn wrap_phase(mut x: f32) -> f32 {
+    while x > PI {
+        x -= 2.0 * PI;
+    }
+    while x <= -PI {
+        x += 2.0 * PI;
+    }
+    x
+}
+
+// BPSK has a π phase ambiguity; treat 0 and ±π as equivalent lock points.
+fn bpsk_phase_error_rad(phase_rad: f32) -> f32 {
+    let e0 = wrap_phase(phase_rad).abs();
+    let e1 = wrap_phase(phase_rad - PI).abs();
+    let e2 = wrap_phase(phase_rad + PI).abs();
+    e0.min(e1).min(e2)
 }
 
 #[test]
@@ -127,6 +146,61 @@ fn test_frame_lock_watterson_f1_f2_matrix() {
             );
         }
     }
+}
+
+#[test]
+fn test_pll_settling_time_watterson_f1_15db_under_200ms() {
+    let sample_rate_hz = 8000.0_f32;
+    let max_settle_samples = (0.200 * sample_rate_hz) as usize; // 200 ms
+    let total_samples = 2400usize; // 300 ms observation window
+    let loop_bw = 0.05_f32;
+
+    // Constant BPSK +1 symbol stream with a fixed carrier phase offset.
+    let phase_offset = 0.55_f32;
+    let tx_i = vec![phase_offset.cos(); total_samples];
+    let tx_q = vec![phase_offset.sin(); total_samples];
+
+    let mut cfg_i = WattersonConfig::good_f1(Some(901));
+    cfg_i.snr_db = 15.0;
+    let cfg_q = cfg_i.clone();
+
+    // Use twin channels with identical config/seed so I/Q see the same fading realization.
+    let mut ch_i = WattersonChannel::new(cfg_i).expect("watterson I channel should construct");
+    let mut ch_q = WattersonChannel::new(cfg_q).expect("watterson Q channel should construct");
+
+    let rx_i = ch_i.apply(&tx_i);
+    let rx_q = ch_q.apply(&tx_q);
+
+    let mut pll = CarrierPll::new(loop_bw, 1);
+    let phase_tol_rad = 0.25_f32;
+    let consecutive_needed = 64usize;
+    let mut streak = 0usize;
+    let mut settle_idx: Option<usize> = None;
+
+    for idx in 0..total_samples {
+        pll.update(rx_i[idx], rx_q[idx]);
+        let (i_corr, q_corr) = pll.correct(rx_i[idx], rx_q[idx]);
+        let err = bpsk_phase_error_rad(q_corr.atan2(i_corr));
+
+        if err <= phase_tol_rad {
+            streak += 1;
+            if streak >= consecutive_needed {
+                settle_idx = Some(idx + 1 - consecutive_needed);
+                break;
+            }
+        } else {
+            streak = 0;
+        }
+    }
+
+    let settle_idx = settle_idx.expect("PLL did not settle within observation window");
+    assert!(
+        settle_idx <= max_settle_samples,
+        "PLL settled at sample {} ({:.1} ms), expected <= {} samples (200 ms)",
+        settle_idx,
+        (settle_idx as f32 / sample_rate_hz) * 1000.0,
+        max_settle_samples
+    );
 }
 
 #[test]
