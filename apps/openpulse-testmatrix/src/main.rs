@@ -86,6 +86,18 @@ struct Cli {
     #[arg(long)]
     item6_gate: bool,
 
+    /// Collect Item 8 lab fallback datasets (field_relay/emergency/station_relay).
+    #[arg(long)]
+    item8_lab_dataset: bool,
+
+    /// Sessions per Item 8 profile.
+    #[arg(long, default_value = "10")]
+    item8_sessions: usize,
+
+    /// Frames per session for Item 8 dataset collection.
+    #[arg(long, default_value = "4")]
+    item8_frames_per_session: usize,
+
     /// Number of frames per benchmark combination.
     #[arg(long, default_value = "50")]
     bench_frames: usize,
@@ -147,6 +159,14 @@ fn main() {
         eprintln!("--bench-frames must be >= 1");
         std::process::exit(2);
     }
+    if cli.item8_sessions == 0 {
+        eprintln!("--item8-sessions must be >= 1");
+        std::process::exit(2);
+    }
+    if cli.item8_frames_per_session == 0 {
+        eprintln!("--item8-frames-per-session must be >= 1");
+        std::process::exit(2);
+    }
     if cli.cross_mode_gate && cli.bench_only {
         eprintln!("--cross-mode-gate cannot be combined with --bench-only");
         std::process::exit(2);
@@ -163,6 +183,14 @@ fn main() {
         eprintln!("--item6-gate cannot be combined with --pilot-density-sweep-only");
         std::process::exit(2);
     }
+    if cli.item8_lab_dataset && cli.bench_only {
+        eprintln!("--item8-lab-dataset cannot be combined with --bench-only");
+        std::process::exit(2);
+    }
+    if cli.item8_lab_dataset && cli.pilot_density_sweep_only {
+        eprintln!("--item8-lab-dataset cannot be combined with --pilot-density-sweep-only");
+        std::process::exit(2);
+    }
 
     let tier = if cli.full { Tier::Full } else { Tier::Quick };
 
@@ -170,7 +198,8 @@ fn main() {
     let run_matrix = !cli.bench_only
         && !cli.pilot_density_sweep_only
         && !(cli.cross_mode_gate && !cli.bench && !cli.pilot_density_sweep)
-        && !cli.item6_gate;
+        && !cli.item6_gate
+        && !cli.item8_lab_dataset;
 
     let elapsed = if !run_matrix {
         std::time::Duration::from_secs(0)
@@ -426,6 +455,30 @@ fn main() {
             std::process::exit(1);
         }
         println!("Item 6 HARQ-rate gate passed");
+    }
+
+    if cli.item8_lab_dataset {
+        println!(
+            "\nRunning Item 8 lab dataset: {} sessions/profile × {} frames/session ({}-byte payload)",
+            cli.item8_sessions,
+            cli.item8_frames_per_session,
+            cli.bench_payload,
+        );
+        let dataset = bench::run_item8_lab_dataset(
+            cli.item8_sessions,
+            cli.item8_frames_per_session,
+            cli.bench_payload,
+            tier,
+        );
+        let out_dir = cli.output.join("item8-lab/latest");
+        bench::write_item8_lab_dataset(&dataset, &out_dir, &meta);
+        println!(
+            "Item 8 lab dataset written to {}/item8_sessions.{{md,csv,json}}",
+            out_dir.display(),
+        );
+        for line in &dataset.checks {
+            println!("[item8-lab] {line}");
+        }
     }
 
     if failed > 0 {

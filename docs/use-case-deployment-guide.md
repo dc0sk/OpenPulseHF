@@ -95,6 +95,8 @@ If on-air operation is not approved, run loopback/sim validation:
    cargo run -p openpulse-testmatrix --no-default-features -- --cross-mode-gate --bench-frames 50 --bench-payload 223
 4. Run Item 6 HARQ-rate gate:
    cargo run -p openpulse-testmatrix --no-default-features -- --item6-gate --bench-frames 50 --bench-payload 223
+5. Collect Item 8 lab sessions:
+   cargo run -p openpulse-testmatrix --no-default-features -- --item8-lab-dataset --item8-sessions 10 --item8-frames-per-session 4 --bench-payload 223
 
 Publish outputs under docs/test-reports/latest and compare against prior run reports.
 
