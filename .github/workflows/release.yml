@@ -31,8 +31,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: x86-musl-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}
+          key: x86-musl-${{ runner.os }}-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}
 
       - name: Build binaries (static musl)
         run: |
@@ -56,6 +55,7 @@ jobs:
         with:
           name: x86-static
           path: dist/
+          retention-days: 7
 
   build-aarch64-deb:
     name: Build aarch64 .deb packages
@@ -78,8 +78,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: aarch64-deb-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}
+          key: aarch64-deb-${{ runner.os }}-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}
 
       - name: Cross-build (aarch64)
         run: |
@@ -108,6 +107,7 @@ jobs:
         with:
           name: aarch64-deb
           path: dist/
+          retention-days: 7
 
   release:
     name: Create GitHub Release
