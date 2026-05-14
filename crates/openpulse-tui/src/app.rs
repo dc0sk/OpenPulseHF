@@ -2,9 +2,17 @@
 
 use std::collections::VecDeque;
 
-use openpulse_core::hpx::HpxState;
+use openpulse_core::hpx::{HpxEvent, HpxState};
 use openpulse_core::rate::SpeedLevel;
 use openpulse_modem::EngineEvent;
+
+/// Coarse trend direction across the retained speed-level history window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeedTrend {
+    Up,
+    Down,
+    Flat,
+}
 
 /// Live state displayed by the TUI.
 pub struct App {
@@ -15,6 +23,12 @@ pub struct App {
     pub dcd_energy: f32,
     pub afc_offset_hz: Option<f32>,
     pub afc_correction_hz: Option<f32>,
+    /// Last N speed levels for trend display.
+    pub speed_history: VecDeque<SpeedLevel>,
+    /// Session-level successful transfer count.
+    pub transfer_ok: u32,
+    /// Session-level transfer error count.
+    pub transfer_error: u32,
     /// Last 50 transitions, each formatted as "[HH:MM:SS] From → To (Event)".
     pub transitions: VecDeque<String>,
     pub paused: bool,
@@ -33,6 +47,9 @@ impl Default for App {
             dcd_energy: 0.0,
             afc_offset_hz: None,
             afc_correction_hz: None,
+            speed_history: VecDeque::new(),
+            transfer_ok: 0,
+            transfer_error: 0,
             transitions: VecDeque::new(),
             paused: false,
             scroll_offset: 0,
@@ -60,6 +77,10 @@ impl App {
             } => {
                 self.speed_level = Some(speed_level);
                 self.current_mode = Some(mode);
+                self.speed_history.push_back(speed_level);
+                if self.speed_history.len() > 8 {
+                    self.speed_history.pop_front();
+                }
             }
             EngineEvent::DcdChange { busy, energy } => {
                 self.dcd_busy = busy;
@@ -72,6 +93,14 @@ impl App {
                 session_id,
             } => {
                 self.hpx_state = to;
+                if event == HpxEvent::TransferComplete && from == HpxState::ActiveTransfer {
+                    self.transfer_ok = self.transfer_ok.saturating_add(1);
+                }
+                if event == HpxEvent::TransferError
+                    && matches!(from, HpxState::ActiveTransfer | HpxState::RelayActive)
+                {
+                    self.transfer_error = self.transfer_error.saturating_add(1);
+                }
                 let ts = chrono_hms();
                 let sid = session_id
                     .as_deref()
@@ -92,6 +121,30 @@ impl App {
             EngineEvent::SessionStarted { .. } | EngineEvent::SessionEnded { .. } => {}
         }
     }
+
+    /// Returns FER as a percentage when at least one transfer outcome is known.
+    pub fn fer_percent(&self) -> Option<f32> {
+        let total = self.transfer_ok.saturating_add(self.transfer_error);
+        if total == 0 {
+            return None;
+        }
+        Some((self.transfer_error as f32 / total as f32) * 100.0)
+    }
+
+    /// Returns trend direction across the retained speed history window.
+    pub fn speed_trend(&self) -> Option<SpeedTrend> {
+        let first = self.speed_history.front()?;
+        let last = self.speed_history.back()?;
+        let first = *first as u8;
+        let last = *last as u8;
+        if last > first {
+            Some(SpeedTrend::Up)
+        } else if last < first {
+            Some(SpeedTrend::Down)
+        } else {
+            Some(SpeedTrend::Flat)
+        }
+    }
 }
 
 fn chrono_hms() -> String {
@@ -104,4 +157,71 @@ fn chrono_hms() -> String {
     let m = (secs / 60) % 60;
     let s = secs % 60;
     format!("{h:02}:{m:02}:{s:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openpulse_core::rate::RateEvent;
+
+    fn rate_change(level: SpeedLevel) -> EngineEvent {
+        EngineEvent::RateChange {
+            event: RateEvent::Maintained,
+            speed_level: level,
+            mode: "BPSK31".to_string(),
+            direction: None,
+            trigger: None,
+        }
+    }
+
+    fn transition(from: HpxState, to: HpxState, event: HpxEvent) -> EngineEvent {
+        EngineEvent::HpxTransition {
+            from,
+            to,
+            event,
+            session_id: None,
+        }
+    }
+
+    #[test]
+    fn fer_percent_counts_only_transfer_outcomes() {
+        let mut app = App::default();
+        app.apply_event(transition(
+            HpxState::Training,
+            HpxState::ActiveTransfer,
+            HpxEvent::TrainingOk,
+        ));
+        app.apply_event(transition(
+            HpxState::ActiveTransfer,
+            HpxState::Teardown,
+            HpxEvent::TransferComplete,
+        ));
+        app.apply_event(transition(
+            HpxState::RelayActive,
+            HpxState::Recovery,
+            HpxEvent::TransferError,
+        ));
+
+        assert_eq!(app.transfer_ok, 1);
+        assert_eq!(app.transfer_error, 1);
+        assert_eq!(app.fer_percent(), Some(50.0));
+    }
+
+    #[test]
+    fn speed_trend_follows_history_window_direction() {
+        let mut app = App::default();
+        app.apply_event(rate_change(SpeedLevel::Sl2));
+        app.apply_event(rate_change(SpeedLevel::Sl4));
+        assert_eq!(app.speed_trend(), Some(SpeedTrend::Up));
+
+        let mut app = App::default();
+        app.apply_event(rate_change(SpeedLevel::Sl5));
+        app.apply_event(rate_change(SpeedLevel::Sl3));
+        assert_eq!(app.speed_trend(), Some(SpeedTrend::Down));
+
+        let mut app = App::default();
+        app.apply_event(rate_change(SpeedLevel::Sl3));
+        app.apply_event(rate_change(SpeedLevel::Sl3));
+        assert_eq!(app.speed_trend(), Some(SpeedTrend::Flat));
+    }
 }

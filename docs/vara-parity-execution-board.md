@@ -363,6 +363,7 @@ The VARA WattersonF1 throughput parity criterion is deferred — see note.
 - `openpulse-cli monitor` shows HPX state, AFC, DCD energy.
 - `openpulse mode-advisor --snr <dB>` implemented with speed-level/mode recommendation + reason.
 - `openpulse session-metrics` implemented for JSON export of throughput/FER/latency/SNR estimate.
+- `openpulse-tui` now shows speed-level trend (up/down/flat) and an FER gauge (green under 5%).
 - No histogram of throughput or latency per mode.
 
 **Requirements**:
@@ -374,7 +375,7 @@ The VARA WattersonF1 throughput parity criterion is deferred — see note.
 **Acceptance Criteria**:
 - [x] `openpulse mode-advisor --snr <dB>` outputs recommended speed level + reason.
 - [x] `openpulse session-metrics` exports session perf (throughput, FER, latency, SNR).
-- [ ] TUI: added speed-level indicator with trend arrow; FER gauge <5% in green.
+- [x] TUI: added speed-level indicator with trend arrow; FER gauge <5% in green.
 - [x] Integration test: `tests/cli_mode_advisor.rs` (10 SNR values, correct recommendations).
 - [x] Doc: `docs/cli-mode-advisor-guide.md`.
 
