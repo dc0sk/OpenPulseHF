@@ -160,7 +160,14 @@ fn demodulate_soft_with_params(samples: &[f32], p: &ScFdmaParams) -> Vec<f32> {
     let payload_len = u16::from_le_bytes(len_bytes) as usize;
     let payload_bits = payload_len.saturating_mul(8);
     let available_payload_bits = llrs.len().saturating_sub(16);
-    let take = payload_bits.min(available_payload_bits);
+    let take = if payload_bits == 0 && available_payload_bits > 0 {
+        // A noisy length prefix can decode to zero under fading; in that case,
+        // return all whole-byte payload bits so downstream soft combining still
+        // has useful information.
+        available_payload_bits - (available_payload_bits % 8)
+    } else {
+        payload_bits.min(available_payload_bits)
+    };
     llrs[16..16 + take].to_vec()
 }
 
