@@ -1,9 +1,8 @@
 ---
-title: OpenPulseHF Regulatory Compliance Checklist
-version: 1.0
-status: in-progress
-created: 2026-05-14
-updated: 2026-05-14
+project: openpulsehf
+doc: docs/regulatory-compliance-checklist.md
+status: living
+last_updated: 2026-05-14
 ---
 
 # OpenPulseHF Regulatory Compliance Checklist
