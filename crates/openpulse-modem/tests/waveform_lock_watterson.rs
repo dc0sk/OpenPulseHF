@@ -12,19 +12,28 @@ use openpulse_dsp::pll::CarrierPll;
 use openpulse_dsp::preamble::{PreambleDetector, PreambleType};
 use std::f32::consts::PI;
 
-fn normalize_rms_to_reference(reference: &[f32], received: &[f32]) -> Vec<f32> {
-    let ref_rms = (reference.iter().map(|s| s * s).sum::<f32>() / reference.len() as f32).sqrt();
-    let rx_rms = (received.iter().map(|s| s * s).sum::<f32>() / received.len() as f32).sqrt();
-    if rx_rms < 1e-8 {
-        return received.to_vec();
+fn normalized_abs_correlation(reference: &[f32], received: &[f32]) -> f32 {
+    if reference.is_empty() || received.is_empty() || reference.len() != received.len() {
+        return 0.0;
     }
-    let scale = ref_rms / rx_rms;
-    received.iter().map(|s| s * scale).collect()
+
+    let dot = reference
+        .iter()
+        .zip(received.iter())
+        .map(|(&a, &b)| a * b)
+        .sum::<f32>();
+    let ref_norm = reference.iter().map(|v| v * v).sum::<f32>().sqrt();
+    let rx_norm = received.iter().map(|v| v * v).sum::<f32>().sqrt();
+
+    if ref_norm < 1e-8 || rx_norm < 1e-8 {
+        0.0
+    } else {
+        (dot / (ref_norm * rx_norm)).abs()
+    }
 }
 
 fn lock_rate_with_channel(
     channel: &mut dyn ChannelModel,
-    preamble_type: PreambleType,
     preamble: &[f32],
     frames: usize,
     corr_threshold: f32,
@@ -47,9 +56,7 @@ fn lock_rate_with_channel(
                 break;
             }
             let slice = &distorted[offset..offset + preamble.len()];
-            let normalized = normalize_rms_to_reference(preamble, slice);
-            let mut detector = PreambleDetector::new(preamble_type, 4);
-            let (mag, _) = detector.correlate_bpsk(&normalized);
+            let mag = normalized_abs_correlation(preamble, slice);
             best_mag = best_mag.max(mag);
         }
 
@@ -110,7 +117,7 @@ fn test_frame_lock_reliability_awgn_10_to_25_db() {
         })
         .expect("awgn channel should construct");
 
-        let rate = lock_rate_with_channel(&mut channel, PreambleType::Pn63, &preamble, 100, 0.75);
+        let rate = lock_rate_with_channel(&mut channel, &preamble, 100, 0.75);
         assert!(
             rate >= 0.99,
             "AWGN {:.1} dB lock rate {:.2}% must be >= 99%",
@@ -135,8 +142,7 @@ fn test_frame_lock_watterson_f1_f2_matrix() {
             let mut channel =
                 WattersonChannel::new(cfg).expect("watterson channel should construct");
 
-            let rate =
-                lock_rate_with_channel(&mut channel, PreambleType::Pn63, &preamble, 20, 0.70);
+            let rate = lock_rate_with_channel(&mut channel, &preamble, 20, 0.70);
             assert!(
                 rate >= 0.85,
                 "Watterson {} {:.1} dB lock rate {:.2}% must be >= 85%",
@@ -160,16 +166,10 @@ fn test_pll_settling_time_watterson_f1_15db_under_200ms() {
     let tx_i = vec![phase_offset.cos(); total_samples];
     let tx_q = vec![phase_offset.sin(); total_samples];
 
-    let mut cfg_i = WattersonConfig::good_f1(Some(901));
-    cfg_i.snr_db = 15.0;
-    let cfg_q = cfg_i.clone();
-
-    // Use twin channels with identical config/seed so I/Q see the same fading realization.
-    let mut ch_i = WattersonChannel::new(cfg_i).expect("watterson I channel should construct");
-    let mut ch_q = WattersonChannel::new(cfg_q).expect("watterson Q channel should construct");
-
-    let rx_i = ch_i.apply(&tx_i);
-    let rx_q = ch_q.apply(&tx_q);
+    let mut cfg = WattersonConfig::good_f1(Some(901));
+    cfg.snr_db = 15.0;
+    let mut ch = WattersonChannel::new(cfg).expect("watterson channel should construct");
+    let (rx_i, rx_q) = ch.apply_complex(&tx_i, &tx_q);
 
     let mut pll = CarrierPll::new(loop_bw, 1);
     let phase_tol_rad = 0.25_f32;

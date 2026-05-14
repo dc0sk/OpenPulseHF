@@ -78,18 +78,20 @@ impl PreambleSpec {
         let chips = self.chips();
         match self.constellation {
             PreambleConstellation::Bpsk => chips.into_iter().map(|c| (c, 0.0)).collect(),
-            PreambleConstellation::Qpsk => chips
-                .into_iter()
-                .enumerate()
-                .map(|(idx, c)| {
-                    // Alternate the quadrature sign to keep a balanced Q branch.
-                    if idx % 2 == 0 {
-                        (c * INV_SQRT2, c * INV_SQRT2)
-                    } else {
-                        (c * INV_SQRT2, -c * INV_SQRT2)
-                    }
-                })
-                .collect(),
+            PreambleConstellation::Qpsk => {
+                if chips.is_empty() {
+                    return Vec::new();
+                }
+
+                (0..self.length_symbols)
+                    .map(|k| {
+                        // Map consecutive chips to I/Q to preserve chip-sequence structure.
+                        let i_chip = chips[(2 * k) % chips.len()];
+                        let q_chip = chips[(2 * k + 1) % chips.len()];
+                        (i_chip * INV_SQRT2, q_chip * INV_SQRT2)
+                    })
+                    .collect()
+            }
         }
     }
 }

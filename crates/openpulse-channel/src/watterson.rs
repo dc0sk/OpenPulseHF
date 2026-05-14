@@ -121,6 +121,55 @@ impl WattersonChannel {
             .map(|c| Complex32::new(c.re * scale, c.im * scale))
             .collect()
     }
+
+    /// Apply Watterson fading to complex baseband input using one coherent
+    /// channel realization for both I and Q rails.
+    pub fn apply_complex(&mut self, i_in: &[f32], q_in: &[f32]) -> (Vec<f32>, Vec<f32>) {
+        let n = i_in.len().min(q_in.len());
+        if n == 0 {
+            return (Vec::new(), Vec::new());
+        }
+
+        let env0 = self.make_envelope(n);
+        let env1 = self.make_envelope(n);
+        let delay_samples =
+            (self.config.delay_spread_ms / 1000.0 * self.config.sample_rate as f32) as usize;
+
+        let signal_rms = (i_in
+            .iter()
+            .zip(q_in.iter())
+            .take(n)
+            .map(|(&i, &q)| i * i + q * q)
+            .sum::<f32>()
+            / n as f32)
+            .sqrt();
+
+        // Per-component sigma so the total complex-noise RMS tracks the requested SNR.
+        let noise_sigma = if signal_rms > 0.0 {
+            signal_rms / (10f32.powf(self.config.snr_db / 20.0) * std::f32::consts::SQRT_2)
+        } else {
+            1e-4
+        };
+        let noise_dist = Normal::new(0.0f32, noise_sigma).unwrap();
+
+        let mut out_i = vec![0.0_f32; n];
+        let mut out_q = vec![0.0_f32; n];
+
+        for idx in 0..n {
+            let x0 = Complex32::new(i_in[idx], q_in[idx]);
+            let x1 = if idx >= delay_samples {
+                Complex32::new(i_in[idx - delay_samples], q_in[idx - delay_samples])
+            } else {
+                Complex32::new(0.0, 0.0)
+            };
+
+            let y = env0[idx] * x0 + env1[idx] * x1;
+            out_i[idx] = y.re + noise_dist.sample(&mut self.rng);
+            out_q[idx] = y.im + noise_dist.sample(&mut self.rng);
+        }
+
+        (out_i, out_q)
+    }
 }
 
 impl ChannelModel for WattersonChannel {
