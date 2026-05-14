@@ -3636,6 +3636,7 @@ dependencies = [
  "openpulse-audio",
  "openpulse-channel",
  "openpulse-core",
+ "openpulse-dsp",
  "psk8-plugin",
  "qpsk-plugin",
  "rand 0.8.6",
