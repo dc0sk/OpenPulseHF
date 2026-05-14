@@ -313,6 +313,7 @@ The VARA WattersonF1 throughput parity criterion is deferred — see note.
 - Added `docs/use-case-deployment-guide.md` with three use-case profiles (`field_relay`, `emergency`, `station_relay`), SNR/FER targets, mode ladders, and fallback rules.
 - Added a field deployment checklist covering regulatory pre-checks, RF setup, operations, and logging requirements.
 - Added data-minimum schema and lab-only fallback workflow to unblock pre-on-air validation.
+- Added baseline lab validation snapshot: `docs/test-reports/use-case-validation-lab-2026-05-14.md` (quick-tier + Item 6 gate metrics), with explicit field/on-air gaps.
 
 **Remaining work**:
 - Run/collect ≥10 sessions per use case (≥100 frames total) and publish a validation report mapping observed throughput/FER/latency to profile targets.
