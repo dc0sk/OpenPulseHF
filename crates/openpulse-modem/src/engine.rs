@@ -1522,6 +1522,40 @@ impl ModemEngine {
         Ok(frame.payload)
     }
 
+    /// Transmit one HARQ attempt selected from SNR/fading state.
+    ///
+    /// Returns the [`HarqDecision`] that was applied for this attempt.
+    pub fn transmit_with_harq_attempt(
+        &mut self,
+        data: &[u8],
+        mode: &str,
+        snr_db: f32,
+        fading_depth_db: f32,
+        retry_index: u8,
+        device: Option<&str>,
+    ) -> Result<HarqDecision, ModemError> {
+        let decision = self.select_harq_decision(snr_db, fading_depth_db, retry_index);
+        self.transmit_with_fec_mode(data, mode, decision.fec_mode, device)?;
+        Ok(decision)
+    }
+
+    /// Receive one HARQ attempt selected from SNR/fading state.
+    ///
+    /// Returns `(payload, decision)` where `decision` is the FEC/timeout policy
+    /// that was applied to decode this attempt.
+    pub fn receive_with_harq_attempt(
+        &mut self,
+        mode: &str,
+        snr_db: f32,
+        fading_depth_db: f32,
+        retry_index: u8,
+        device: Option<&str>,
+    ) -> Result<(Vec<u8>, HarqDecision), ModemError> {
+        let decision = self.select_harq_decision(snr_db, fading_depth_db, retry_index);
+        let payload = self.receive_with_fec_mode(mode, decision.fec_mode, device)?;
+        Ok((payload, decision))
+    }
+
     /// Transmit with the codec selected by `fec`.
     ///
     /// This is the single-call dispatch over every `FecMode` variant so callers
