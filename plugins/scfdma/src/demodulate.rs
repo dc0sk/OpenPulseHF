@@ -7,6 +7,10 @@ use crate::channel::{estimate_noise_var, estimate_rician_k_linear, ls_estimate, 
 use crate::modulate::{modulate_with_params, preamble_payload};
 use crate::params::{params_for_mode, ScFdmaParams, CP, FFT_SIZE, SYM_LEN};
 
+// Re-export from the canonical core implementation so the plugin exposes the
+// same public path without duplicating the logic.
+pub use openpulse_core::fec::combine_llrs_weighted;
+
 pub fn scfdma_demodulate(samples: &[f32], mode: &str) -> Vec<u8> {
     let p = params_for_mode(mode).expect("caller must validate mode before scfdma_demodulate");
     demodulate_with_params(samples, &p)
@@ -48,39 +52,6 @@ pub fn scfdma_demodulate_soft_with_metrics(samples: &[f32], mode: &str) -> SoftD
 }
 
 /// Combine multiple LLR attempts using inverse-noise variance weighting.
-pub fn combine_llrs_weighted(attempts: &[(&[f32], f32)]) -> Vec<f32> {
-    if attempts.is_empty() {
-        return Vec::new();
-    }
-    let min_len = attempts
-        .iter()
-        .map(|(llrs, _)| llrs.len())
-        .min()
-        .unwrap_or(0);
-    if min_len == 0 {
-        return Vec::new();
-    }
-
-    let mut out = vec![0.0f32; min_len];
-    let mut weight_sum = 0.0f32;
-
-    for (llrs, noise_var) in attempts {
-        let w = 1.0 / noise_var.max(1e-6);
-        weight_sum += w;
-        for (dst, src) in out.iter_mut().zip(llrs.iter().take(min_len)) {
-            *dst += *src * w;
-        }
-    }
-
-    if weight_sum <= 0.0 {
-        return vec![0.0; min_len];
-    }
-    for v in &mut out {
-        *v /= weight_sum;
-    }
-    out
-}
-
 fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Vec<u8> {
     let sync = modulate_with_params(&preamble_payload(p), p);
     if samples.len() < sync.len() + SYM_LEN {

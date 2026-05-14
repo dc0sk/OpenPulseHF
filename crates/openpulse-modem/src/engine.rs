@@ -1400,16 +1400,18 @@ impl ModemEngine {
 
     /// Receive via SNR-weighted LLR combining: demodulate each attempt separately,
     /// weight the resulting soft LLRs by inverse-noise-variance, combine, then
-    /// Soft-Viterbi + RS decode.
+    /// RS decode.
     ///
     /// Each attempt yields a LLR vector from `plugin.demodulate_soft`.  The
     /// per-frame noise-variance proxy is `1 / mean(|LLR|)` — frames with higher
     /// confidence (larger magnitude LLRs) receive proportionally more weight.
+    /// Hard decisions are taken from the combined LLRs before RS decode.
     ///
     /// This provides ~2–4 dB improvement over equal-weight sample combining when
     /// different attempts experience different SNR (e.g., Watterson fading).
     ///
-    /// TX chain: `transmit_with_fec` or `transmit_with_fec_mode(Concatenated)`.
+    /// TX chain: `transmit_with_fec` (RS-protected).  For Conv+RS frames use
+    /// `receive_with_soft_viterbi_fec` on the combined samples instead.
     pub fn receive_with_llr_combining(
         &mut self,
         mode: &str,
@@ -1429,7 +1431,6 @@ impl ModemEngine {
         };
 
         let mut attempts: Vec<(Vec<f32>, f32)> = Vec::with_capacity(n_frames);
-        let mut first_audio: Vec<f32> = Vec::new();
 
         for i in 0..n_frames {
             let samples = self.stage_capture_input(device)?;
@@ -1444,8 +1445,16 @@ impl ModemEngine {
                 });
             }
 
+            // Update AFC from the first captured frame; no extra clone needed.
             if i == 0 {
-                first_audio = samples.samples.clone();
+                self.update_afc_estimate(mode, &samples.samples);
+                if let Some(hz) = self.last_afc_offset_hz {
+                    let _ = self.event_tx.send(EngineEvent::AfcUpdate {
+                        offset_hz: hz,
+                        correction_hz: self.afc_correction_hz,
+                        mode: mode.to_string(),
+                    });
+                }
             }
 
             let llrs = {
@@ -1466,15 +1475,6 @@ impl ModemEngine {
             let noise_var = 1.0 / mean_abs.max(1e-6);
 
             attempts.push((llrs, noise_var));
-        }
-
-        self.update_afc_estimate(mode, &first_audio);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
         }
 
         let attempt_refs: Vec<(&[f32], f32)> = attempts

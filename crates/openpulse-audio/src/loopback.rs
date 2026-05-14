@@ -243,4 +243,27 @@ mod tests {
         assert_eq!(devices[0].name, "loopback");
         assert!(devices[0].is_input && devices[0].is_output);
     }
+
+    /// `push_frame` frames are returned one-per-read in order, taking priority
+    /// over samples placed via `fill_samples`.
+    #[test]
+    fn push_frame_returns_one_frame_per_read_in_order() {
+        let backend = LoopbackBackend::new();
+        let cfg = AudioConfig::default();
+
+        // Pre-fill the flat buffer — should not be returned until frame queue is drained.
+        backend.fill_samples(&[9.0, 9.0]);
+
+        backend.push_frame(&[1.0, 2.0]);
+        backend.push_frame(&[3.0, 4.0]);
+
+        let mut inp = backend.open_input(None, &cfg).unwrap();
+
+        // First read returns first queued frame.
+        assert_eq!(inp.read().unwrap(), vec![1.0, 2.0]);
+        // Second read returns second queued frame.
+        assert_eq!(inp.read().unwrap(), vec![3.0, 4.0]);
+        // Queue drained; next read returns the flat fill_samples data.
+        assert_eq!(inp.read().unwrap(), vec![9.0, 9.0]);
+    }
 }

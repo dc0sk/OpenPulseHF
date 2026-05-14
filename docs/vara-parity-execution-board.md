@@ -156,7 +156,7 @@ This document tracks the 11-item execution plan to achieve VARA-class performanc
 **Deliverables**:
 - `plugins/scfdma/src/channel.rs`: `estimate_rician_k_linear()` moment-based K-factor estimator.
 - `plugins/scfdma/src/demodulate.rs`: `SoftFrameMetrics`, `SoftDemodOutput`, `scfdma_demodulate_soft_with_metrics()`, `combine_llrs_weighted()`, decision-directed noise variance estimation.
-- `crates/openpulse-core/src/fec.rs`: `combine_llrs_weighted()` moved to core for engine-level use.
+- `crates/openpulse-core/src/fec.rs`: `combine_llrs_weighted()` defined here (authoritative); re-exported from `plugins/scfdma/src/demodulate.rs` to keep the plugin public path stable.
 - `crates/openpulse-audio/src/loopback.rs`: `push_frame()` API for sequential per-frame test reads.
 - `crates/openpulse-modem/src/engine.rs`: `receive_with_llr_combining()` — SNR-weighted LLR combining receive path using inverse-noise-var proxy from mean `|LLR|`.
 - `plugins/scfdma/tests/llr_weighting_adaptation.rs`: AWGN variance tracking, Watterson F1 K-range sanity, weighted-vs-equal soft-combine behavior (3 tests).
