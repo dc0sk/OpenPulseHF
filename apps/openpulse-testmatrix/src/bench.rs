@@ -841,7 +841,7 @@ pub struct Item6GateResult {
 /// Executes SCFDMA52-64QAM-P4 with RS FEC (HarqPolicy at 30 dB: snr>=21 -> Rs) over
 /// AWGN 30 dB (seed 42). Hard gate: success_rate >= 0.95, p95 latency <= 2000 ms.
 /// VARA WattersonF1 parity ratio is logged as informational only.
-pub fn run_item6_gate(n_frames: usize, payload_len: usize) -> Item6GateResult {
+pub fn run_item6_gate(n_frames: usize, payload_len: usize, tier: Tier) -> Item6GateResult {
     let case = TestCase {
         use_case: UseCase::RawModem,
         mode: ITEM6_MODE.to_string(),
@@ -853,13 +853,19 @@ pub fn run_item6_gate(n_frames: usize, payload_len: usize) -> Item6GateResult {
             seed: 42,
         },
         payload_len,
-        tier: Tier::Full,
+        tier,
     };
 
     let result = run_bench(&case, n_frames);
 
     let success_rate = result.frames_ok as f64 / n_frames.max(1) as f64;
     let spectral_efficiency = result.measured_bps / ITEM6_BANDWIDTH_HZ;
+
+    let mean_time_to_first_payload_ms = if n_frames > 0 {
+        result.on_air_s * 1000.0 / n_frames as f64
+    } else {
+        0.0
+    };
 
     let aggregate = AggregateResult {
         scenario_id: ITEM6_SCENARIO_ID.to_string(),
@@ -870,7 +876,7 @@ pub fn run_item6_gate(n_frames: usize, payload_len: usize) -> Item6GateResult {
         p95_completion_time_ms: result.p95_frame_time_ms,
         mean_arq_efficiency: success_rate,
         median_spectral_efficiency_bphz: spectral_efficiency,
-        mean_time_to_first_payload_ms: result.median_frame_time_ms as f64,
+        mean_time_to_first_payload_ms,
         recovery_success_rate: success_rate,
     };
 

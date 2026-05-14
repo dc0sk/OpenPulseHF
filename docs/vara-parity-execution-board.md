@@ -301,11 +301,21 @@ The VARA WattersonF1 throughput parity criterion is deferred — see note.
 - Fallback guidance: recommended speed ladder per use case.
 
 **Acceptance Criteria**:
-- [ ] Use-case profiles documented with SNR targets and FER tolerance.
-- [ ] Field deployment checklist (regulatory, frequency, power, callsign, logging).
+- [x] Use-case profiles documented with SNR targets and FER tolerance.
+- [x] Field deployment checklist (regulatory, frequency, power, callsign, logging).
 - [ ] Log data: ≥10 sessions per use case, ≥100 frames total.
 - [ ] Validation report: throughput vs predicted, FER, latency.
-- [ ] Doc: `docs/use-case-deployment-guide.md`.
+- [x] Doc: `docs/use-case-deployment-guide.md`.
+
+**Status**: 🚧 **IN PROGRESS** (documentation baseline complete; field/log validation pending).
+
+**Progress (2026-05-14)**:
+- Added `docs/use-case-deployment-guide.md` with three use-case profiles (`field_relay`, `emergency`, `station_relay`), SNR/FER targets, mode ladders, and fallback rules.
+- Added a field deployment checklist covering regulatory pre-checks, RF setup, operations, and logging requirements.
+- Added data-minimum schema and lab-only fallback workflow to unblock pre-on-air validation.
+
+**Remaining work**:
+- Run/collect ≥10 sessions per use case (≥100 frames total) and publish a validation report mapping observed throughput/FER/latency to profile targets.
 
 **Depends On**: Item 6 (HARQ tuning), Item 7 (gates pass).
 

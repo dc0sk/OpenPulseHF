@@ -82,7 +82,7 @@ struct Cli {
     #[arg(long)]
     cross_mode_gate: bool,
 
-    /// Run the Item 6 VARA-parity gate (SCFDMA52-64QAM-P4 vs VARA HF reference).
+    /// Run the Item 6 HARQ-rate gate (standalone; skips the main matrix pass).
     #[arg(long)]
     item6_gate: bool,
 
@@ -143,6 +143,10 @@ fn main() {
         eprintln!("--pilot-density-gate requires --pilot-density-crossover");
         std::process::exit(2);
     }
+    if cli.bench_frames == 0 {
+        eprintln!("--bench-frames must be >= 1");
+        std::process::exit(2);
+    }
     if cli.cross_mode_gate && cli.bench_only {
         eprintln!("--cross-mode-gate cannot be combined with --bench-only");
         std::process::exit(2);
@@ -165,7 +169,8 @@ fn main() {
     let mut failed = 0usize;
     let run_matrix = !cli.bench_only
         && !cli.pilot_density_sweep_only
-        && !(cli.cross_mode_gate && !cli.bench && !cli.pilot_density_sweep);
+        && !(cli.cross_mode_gate && !cli.bench && !cli.pilot_density_sweep)
+        && !cli.item6_gate;
 
     let elapsed = if !run_matrix {
         std::time::Duration::from_secs(0)
@@ -404,7 +409,7 @@ fn main() {
             cli.bench_frames,
             cli.bench_payload,
         );
-        let gate = bench::run_item6_gate(cli.bench_frames, cli.bench_payload);
+        let gate = bench::run_item6_gate(cli.bench_frames, cli.bench_payload, tier);
         let aggregate_dir = std::path::Path::new("benchmark/results/aggregate");
         bench::write_item6_aggregate(&gate.aggregate, aggregate_dir);
         println!(
