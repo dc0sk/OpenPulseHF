@@ -82,6 +82,10 @@ struct Cli {
     #[arg(long)]
     cross_mode_gate: bool,
 
+    /// Run the Item 6 HARQ-rate gate (standalone; skips the main matrix pass).
+    #[arg(long)]
+    item6_gate: bool,
+
     /// Number of frames per benchmark combination.
     #[arg(long, default_value = "50")]
     bench_frames: usize,
@@ -139,6 +143,10 @@ fn main() {
         eprintln!("--pilot-density-gate requires --pilot-density-crossover");
         std::process::exit(2);
     }
+    if cli.bench_frames == 0 {
+        eprintln!("--bench-frames must be >= 1");
+        std::process::exit(2);
+    }
     if cli.cross_mode_gate && cli.bench_only {
         eprintln!("--cross-mode-gate cannot be combined with --bench-only");
         std::process::exit(2);
@@ -147,13 +155,22 @@ fn main() {
         eprintln!("--cross-mode-gate cannot be combined with --pilot-density-sweep-only");
         std::process::exit(2);
     }
+    if cli.item6_gate && cli.bench_only {
+        eprintln!("--item6-gate cannot be combined with --bench-only");
+        std::process::exit(2);
+    }
+    if cli.item6_gate && cli.pilot_density_sweep_only {
+        eprintln!("--item6-gate cannot be combined with --pilot-density-sweep-only");
+        std::process::exit(2);
+    }
 
     let tier = if cli.full { Tier::Full } else { Tier::Quick };
 
     let mut failed = 0usize;
     let run_matrix = !cli.bench_only
         && !cli.pilot_density_sweep_only
-        && !(cli.cross_mode_gate && !cli.bench && !cli.pilot_density_sweep);
+        && !(cli.cross_mode_gate && !cli.bench && !cli.pilot_density_sweep)
+        && !cli.item6_gate;
 
     let elapsed = if !run_matrix {
         std::time::Duration::from_secs(0)
@@ -383,6 +400,32 @@ fn main() {
             std::process::exit(1);
         }
         println!("Item 7 cross-mode consistency gate passed");
+    }
+
+    if cli.item6_gate {
+        println!(
+            "\nRunning Item 6 HARQ-rate gate: {} × {} frames ({}-byte payload, AWGN 30 dB)",
+            bench::ITEM6_MODE,
+            cli.bench_frames,
+            cli.bench_payload,
+        );
+        let gate = bench::run_item6_gate(cli.bench_frames, cli.bench_payload, tier);
+        let aggregate_dir = std::path::Path::new("benchmark/results/aggregate");
+        bench::write_item6_aggregate(&gate.aggregate, aggregate_dir);
+        println!(
+            "Item 6 aggregate result written to {}/{}--{}.json",
+            aggregate_dir.display(),
+            bench::ITEM6_SCENARIO_ID,
+            bench::ITEM6_MODE,
+        );
+        for line in &gate.checks {
+            println!("[item6-gate] {line}");
+        }
+        if !gate.passed {
+            eprintln!("Item 6 HARQ-rate gate failed");
+            std::process::exit(1);
+        }
+        println!("Item 6 HARQ-rate gate passed");
     }
 
     if failed > 0 {

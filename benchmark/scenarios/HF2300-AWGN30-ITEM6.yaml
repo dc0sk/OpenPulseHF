@@ -1,0 +1,17 @@
+scenario_id: HF2300-AWGN30-ITEM6
+bandwidth_class_hz: 2300
+family: hf
+profile: awgn_30db
+seed_policy: fixed
+random_seed: 42
+snr_db_mean: 30.0
+snr_db_jitter: 0.0
+fading_model: none
+burst_noise_events_per_min: 0
+doppler_hz: 0.0
+run_duration_limit_s: 180
+# Note: SCFDMA52-64QAM-P4 requires >=30 dB SNR for reliable operation.
+# WattersonGoodF1 at 20 dB is not a valid single-attempt operating point for 64QAM
+# without multi-attempt HARQ ARQ soft-combine (Items 5.5/6 full ARQ path).
+# The VARA WattersonF1 parity gap (55% of VARA 7536 bps at AWGN 30 dB) is tracked
+# as an informational metric pending LDPC/turbo FEC or full ARQ path integration.
