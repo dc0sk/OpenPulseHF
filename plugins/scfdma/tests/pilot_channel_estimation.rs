@@ -269,7 +269,9 @@ fn soft_symbol_gain_awgn_meets_1p5db_gate() {
 }
 
 #[test]
-#[ignore = "Gate depends on Item 5 LLR weighting to meet >=8% consistently on Good F1"]
+#[ignore = "Pilot-density throughput gain at Watterson F1 is ~2.6%, below the 8% target; \
+    improvement requires adaptive pilot density selection or higher-order channel tracking \
+    (Item 6 tuning scope), not Item 5 multi-frame LLR combining"]
 fn watterson_f1_pilot_density_throughput_improves_at_least_8_percent() {
     let plugin = ScFdmaPlugin::new();
     let baseline_mode = "SCFDMA52-64QAM";

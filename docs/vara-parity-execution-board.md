@@ -151,24 +151,27 @@ This document tracks the 11-item execution plan to achieve VARA-class performanc
 
 **Description**: Improve log-likelihood ratio (LLR) computation by incorporating channel fading state and noise variance adaptation.
 
-**Status**: 🚧 **IN PROGRESS**
+**Status**: ✅ **COMPLETE**
 
-**Current State**:
-- Soft demod now emits per-frame quality metrics (`mean_noise_var`, `mean_rician_k_db`) via `scfdma_demodulate_soft_with_metrics()`.
-- LLR scaling now includes adaptive decision-directed noise variance plus channel-state gain from estimated Rician K-factor.
-- Weighted LLR combine helper (`combine_llrs_weighted`) added for inverse-noise retransmission combining.
-- New integration tests in `plugins/scfdma/tests/llr_weighting_adaptation.rs` cover AWGN variance tracking, Watterson F1 K-range sanity, and weighted-vs-equal soft-combine behavior.
-
-**Requirements**:
-- Noise variance adaptation: estimate per-frame or per-pilot.
-- Rician K-factor tracking: weight soft symbols based on fading depth.
-- Soft-combine: weight by inverse noise variance (or SNR) per attempt.
+**Deliverables**:
+- `plugins/scfdma/src/channel.rs`: `estimate_rician_k_linear()` moment-based K-factor estimator.
+- `plugins/scfdma/src/demodulate.rs`: `SoftFrameMetrics`, `SoftDemodOutput`, `scfdma_demodulate_soft_with_metrics()`, `combine_llrs_weighted()`, decision-directed noise variance estimation.
+- `crates/openpulse-core/src/fec.rs`: `combine_llrs_weighted()` moved to core for engine-level use.
+- `crates/openpulse-audio/src/loopback.rs`: `push_frame()` API for sequential per-frame test reads.
+- `crates/openpulse-modem/src/engine.rs`: `receive_with_llr_combining()` — SNR-weighted LLR combining receive path using inverse-noise-var proxy from mean `|LLR|`.
+- `plugins/scfdma/tests/llr_weighting_adaptation.rs`: AWGN variance tracking, Watterson F1 K-range sanity, weighted-vs-equal soft-combine behavior (3 tests).
+- `crates/openpulse-modem/tests/llr_combining_gain.rs`: Engine-level ≥2 dB gain gate (mixed-SNR fading scenario).
 
 **Acceptance Criteria**:
-- [ ] Adaptive noise variance estimator; validation ±0.5 dB on AWGN.
-- [ ] Rician K-factor estimator; Watterson F1 K=2–5 dB ✓.
-- [ ] Soft-combine gain: ≥2 dB vs equal-weight on Memory-ARQ 3-attempt test.
-- [ ] Integration test: `tests/llr_weighting_adaptation.rs`.
+- [x] Adaptive noise variance estimator; validation ±0.5 dB on AWGN.
+- [x] Rician K-factor estimator; Watterson F1 K=2–5 dB ✓.
+- [x] Soft-combine gain: ≥2 dB vs equal-weight on Memory-ARQ 3-attempt test.
+- [x] Integration test: `tests/llr_weighting_adaptation.rs`.
+
+**Note**: `watterson_f1_pilot_density_throughput_improves_at_least_8_percent` in
+`pilot_channel_estimation.rs` remains `#[ignore]`d. That test measures pilot-count vs
+bandwidth throughput trade-off (~2.6% achieved); the 8% target requires adaptive pilot
+density or higher-order channel tracking, which is Item 6 scope.
 
 **Depends On**: Item 4.
 

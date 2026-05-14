@@ -14,6 +14,7 @@ use openpulse_core::error::AudioError;
 // ── Shared sample buffer ──────────────────────────────────────────────────────
 
 type Buf = Arc<Mutex<VecDeque<f32>>>;
+type FrameQueue = Arc<Mutex<VecDeque<Vec<f32>>>>;
 type IqBuf = Arc<Mutex<Vec<(f32, f32)>>>;
 
 // ── LoopbackBackend ───────────────────────────────────────────────────────────
@@ -25,6 +26,7 @@ type IqBuf = Arc<Mutex<Vec<(f32, f32)>>>;
 /// via [`LoopbackInputStream::read`].
 pub struct LoopbackBackend {
     buf: Buf,
+    frame_queue: FrameQueue,
     iq_buf: IqBuf,
 }
 
@@ -39,6 +41,7 @@ impl LoopbackBackend {
     pub fn new() -> Self {
         Self {
             buf: Arc::new(Mutex::new(VecDeque::new())),
+            frame_queue: Arc::new(Mutex::new(VecDeque::new())),
             iq_buf: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -51,6 +54,7 @@ impl LoopbackBackend {
     pub fn clone_shared(&self) -> Self {
         Self {
             buf: Arc::clone(&self.buf),
+            frame_queue: Arc::clone(&self.frame_queue),
             iq_buf: Arc::clone(&self.iq_buf),
         }
     }
@@ -70,6 +74,20 @@ impl LoopbackBackend {
     pub fn fill_samples(&self, samples: &[f32]) {
         let mut guard = self.buf.lock().expect("loopback buffer poisoned");
         guard.extend(samples.iter().copied());
+    }
+
+    /// Enqueue individual sample frames for sequential per-frame reads.
+    ///
+    /// Each frame pushed here will be returned by one `read()` call on the input
+    /// stream, in order.  Frames in the queue take priority over the flat `buf`.
+    /// Useful for multi-attempt receive tests where each attempt must see exactly
+    /// one frame's worth of samples.
+    pub fn push_frame(&self, samples: &[f32]) {
+        let mut guard = self
+            .frame_queue
+            .lock()
+            .expect("loopback frame queue poisoned");
+        guard.push_back(samples.to_vec());
     }
 
     /// Drain all I/Q pairs written via [`open_iq_output`](Self::open_iq_output).
@@ -101,6 +119,7 @@ impl AudioBackend for LoopbackBackend {
     ) -> Result<Box<dyn AudioInputStream>, AudioError> {
         Ok(Box::new(LoopbackInputStream {
             buf: Arc::clone(&self.buf),
+            frame_queue: Arc::clone(&self.frame_queue),
         }))
     }
 
@@ -130,10 +149,21 @@ impl AudioBackend for LoopbackBackend {
 /// Reads samples that were previously written to the loopback output.
 pub struct LoopbackInputStream {
     buf: Buf,
+    frame_queue: FrameQueue,
 }
 
 impl AudioInputStream for LoopbackInputStream {
     fn read(&mut self) -> Result<Vec<f32>, AudioError> {
+        // If frames were queued via `push_frame`, pop one frame per read.
+        {
+            let mut q = self
+                .frame_queue
+                .lock()
+                .expect("loopback frame queue poisoned");
+            if let Some(frame) = q.pop_front() {
+                return Ok(frame);
+            }
+        }
         let mut guard = self.buf.lock().expect("loopback buffer poisoned");
         Ok(guard.drain(..).collect())
     }

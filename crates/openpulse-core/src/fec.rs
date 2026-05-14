@@ -459,6 +459,41 @@ impl Default for SoftCombiner {
     }
 }
 
+// ── Weighted LLR combiner ─────────────────────────────────────────────────────
+
+/// Combine multiple soft-demodulated LLR vectors using inverse-noise-variance weighting.
+///
+/// Each attempt is a pair of `(llrs, noise_var)` where `noise_var` is the estimated
+/// per-frame noise variance.  Frames with lower noise (higher confidence) receive
+/// proportionally higher weight.
+///
+/// If `noise_var` is zero or negative it is clamped to `f32::MIN_POSITIVE` so the
+/// call never panics.  If `attempts` is empty an empty vector is returned.
+pub fn combine_llrs_weighted(attempts: &[(&[f32], f32)]) -> Vec<f32> {
+    if attempts.is_empty() {
+        return Vec::new();
+    }
+    let len = attempts.iter().map(|(l, _)| l.len()).min().unwrap_or(0);
+    if len == 0 {
+        return Vec::new();
+    }
+    let mut out = vec![0.0f32; len];
+    let mut weight_sum = 0.0f32;
+    for (llrs, noise_var) in attempts {
+        let w = 1.0 / noise_var.max(f32::MIN_POSITIVE);
+        weight_sum += w;
+        for (o, &l) in out.iter_mut().zip(llrs.iter()) {
+            *o += w * l;
+        }
+    }
+    if weight_sum > 0.0 {
+        for o in &mut out {
+            *o /= weight_sum;
+        }
+    }
+    out
+}
+
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
