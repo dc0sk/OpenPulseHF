@@ -11,7 +11,7 @@ use std::f32::consts::PI;
 #[test]
 fn test_preamble_detection_clean_loopback() {
     // Test preamble detection on clean loopback (no channel distortion)
-    let preamble_detector = PreambleDetector::new(PreambleType::Barker13, 20);
+    let mut preamble_detector = PreambleDetector::new(PreambleType::Barker13, 20);
     let preamble = PreambleType::Barker13.sequence();
 
     // All 100 trials should lock
@@ -62,7 +62,7 @@ fn test_phase_coherence_tracking() {
 #[test]
 fn test_barker_autocorrelation() {
     // Verify Barker sequences have good autocorrelation properties
-    let detector = PreambleDetector::new(PreambleType::Barker13, 5);
+    let mut detector = PreambleDetector::new(PreambleType::Barker13, 5);
     let barker = PreambleType::Barker13.sequence();
 
     // Perfect correlation with itself
@@ -98,8 +98,8 @@ fn test_pn31_sequence_properties() {
 #[test]
 fn test_preamble_detector_multiple_instances() {
     // Verify multiple detector instances work independently
-    let det1 = PreambleDetector::new(PreambleType::Barker11, 5);
-    let det2 = PreambleDetector::new(PreambleType::Pn63, 5);
+    let mut det1 = PreambleDetector::new(PreambleType::Barker11, 5);
+    let mut det2 = PreambleDetector::new(PreambleType::Pn63, 5);
 
     let preamble1 = PreambleType::Barker11.sequence();
     let preamble2 = PreambleType::Pn63.sequence();

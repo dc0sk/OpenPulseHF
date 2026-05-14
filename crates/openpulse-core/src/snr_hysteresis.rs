@@ -51,9 +51,12 @@ impl SnrEstimator {
     ///
     /// Simple method: received energy vs reference.
     pub fn update_energy_based(&mut self, received_energy: f32, reference_energy: f32) {
+        let error = received_energy - reference_energy;
+        let noise_power_inst = error * error;
+
         self.signal_power = (1.0 - self.alpha) * self.signal_power + self.alpha * reference_energy;
-        self.noise_power = (1.0 - self.alpha) * self.noise_power
-            + self.alpha * (received_energy - reference_energy).abs().max(1e-6);
+        self.noise_power = (1.0 - self.alpha) * self.noise_power + self.alpha * noise_power_inst;
+        self.noise_power = self.noise_power.max(1e-6);
     }
 
     /// Get current SNR in dB.
@@ -193,12 +196,12 @@ mod tests {
         let mut est = SnrEstimator::new(0.1);
 
         // Reference energy = 1.0, received = 1.1 (small noise)
-        for _ in 0..20 {
+        for _ in 0..100 {
             est.update_energy_based(1.1, 1.0);
         }
 
         let snr = est.snr_db();
-        assert!((snr - 10.0).abs() < 2.0, "SNR should be ~10 dB: {}", snr);
+        assert!((snr - 20.0).abs() < 2.0, "SNR should be ~20 dB: {}", snr);
     }
 
     #[test]

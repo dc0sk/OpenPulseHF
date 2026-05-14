@@ -16,12 +16,15 @@ pub enum PreambleType {
     Pn31,
     /// m-sequence (PN-63) seeded with 0x45 (63 symbols, near-ideal autocorrelation).
     Pn63,
-    /// Zadoff-Chu (ZC) sequence of length 64, u=1 (flat autocorrelation magnitude).
+    /// Zadoff-Chu (ZC) sequence of length 64, u=1, represented as a real projection.
     ZadoffChu64,
 }
 
 impl PreambleType {
-    /// Return the preamble sequence as BPSK symbols (+1.0 or -1.0).
+    /// Return the preamble sequence as `f32` symbols/samples.
+    ///
+    /// Barker and PN variants are BPSK symbols (`+1.0` or `-1.0`).
+    /// `ZadoffChu64` is returned as a real-valued projection.
     pub fn sequence(&self) -> Vec<f32> {
         match self {
             PreambleType::Barker11 => {
@@ -54,21 +57,25 @@ impl PreambleType {
 /// - `length`: desired sequence length (e.g., 31, 63 for primitive polynomials)
 /// - `seed`: initial LFSR state (nonzero)
 fn pn_sequence(length: usize, seed: u32) -> Vec<f32> {
+    let (degree, tap_a, tap_b) = match length {
+        // Primitive polynomial x^5 + x^2 + 1 (period 31)
+        31 => (5u32, 0u32, 2u32),
+        // Primitive polynomial x^6 + x + 1 (period 63)
+        63 => (6u32, 0u32, 1u32),
+        _ => return Vec::new(),
+    };
+
     let mut seq = Vec::with_capacity(length);
-    let mut state = seed as u64;
-    let mask = (1u64 << length) - 1; // Create bitmask for the length
+    let mask = (1u32 << degree) - 1;
+    let mut state = seed & mask;
+    if state == 0 {
+        state = 1;
+    }
 
     for _ in 0..length {
-        // XOR feedback from taps (e.g., bits 0, 5 for length 31)
-        let tap_a = state & 1;
-        let tap_b = (state >> 5) & 1;
-        let feedback = tap_a ^ tap_b;
-
-        // Output the LSB
+        let feedback = ((state >> tap_a) ^ (state >> tap_b)) & 1;
         seq.push(if state & 1 == 1 { 1.0 } else { -1.0 });
-
-        // Shift and inject feedback
-        state = ((state >> 1) | (feedback << (length - 1))) & mask;
+        state = ((state >> 1) | (feedback << (degree - 1))) & mask;
     }
     seq
 }
@@ -86,7 +93,7 @@ fn zadoff_chu_sequence(length: usize, u: i32) -> Vec<f32> {
         let n_f32 = n as f32;
         let exponent = -PI * u as f32 * n_f32 * (n_f32 + 1.0) / n_f;
         let (_sin, cos) = exponent.sin_cos();
-        seq.push(cos); // Return as complex magnitude (cos for real, sin for imag in full impl)
+        seq.push(cos);
     }
     seq
 }
@@ -119,7 +126,7 @@ impl PreambleDetector {
     /// Returns (correlation_magnitude, phase_estimate) where:
     /// - correlation_magnitude: |∑ recv_i × ref_i| / len
     /// - phase_estimate: 0 if positive, π if negative
-    pub fn correlate_bpsk(&self, received: &[f32]) -> (f32, f32) {
+    pub fn correlate_bpsk(&mut self, received: &[f32]) -> (f32, f32) {
         if received.len() != self.reference.len() {
             return (0.0, 0.0);
         }
@@ -134,6 +141,11 @@ impl PreambleDetector {
         let mag = i_acc.abs() / received.len() as f32;
         let phase = if i_acc > 0.0 { 0.0 } else { PI };
 
+        self.correlation_history.push(mag);
+        if self.correlation_history.len() > self.max_history {
+            self.correlation_history.remove(0);
+        }
+
         (mag, phase)
     }
 
@@ -141,43 +153,44 @@ impl PreambleDetector {
     ///
     /// Returns true if phase slip is within acceptable bounds (±45°), false otherwise.
     pub fn check_phase_coherence(&mut self, phase_rad: f32) -> bool {
-        self.phase_history.push(phase_rad);
+        if self.phase_history.is_empty() {
+            self.phase_history.push(phase_rad);
+            return true;
+        }
+
+        let prev_unwrapped = self.phase_history[self.phase_history.len() - 1];
+        let unwrapped = Self::unwrap_phase_incremental(prev_unwrapped, phase_rad);
+        self.phase_history.push(unwrapped);
         if self.phase_history.len() > self.max_history {
             self.phase_history.remove(0);
         }
 
-        // Unwrap and compute phase slope (indicating Doppler or frequency offset drift)
-        let phase_unwrapped = self
-            .phase_history
-            .iter()
-            .map(|&p| self.unwrap_phase(p))
-            .collect::<Vec<_>>();
-
-        // Accept if recent phase is within ±45° of median
-        if let Some(&recent) = phase_unwrapped.last() {
-            let threshold = PI / 4.0; // 45 degrees
-            (recent.abs() % (2.0 * PI)) < threshold
-                || ((recent.abs() % (2.0 * PI)) > (2.0 * PI - threshold))
-        } else {
-            true
-        }
+        let median = Self::median(&self.phase_history);
+        let threshold = PI / 4.0;
+        (unwrapped - median).abs() <= threshold
     }
 
-    /// Unwrap a phase value, tracking drift relative to previous samples.
-    fn unwrap_phase(&self, phase_rad: f32) -> f32 {
-        if self.phase_history.is_empty() {
-            return phase_rad;
+    /// Unwrap a phase sample relative to the previous unwrapped phase.
+    fn unwrap_phase_incremental(prev_unwrapped: f32, phase_rad: f32) -> f32 {
+        let mut delta = phase_rad - prev_unwrapped;
+        while delta > PI {
+            delta -= 2.0 * PI;
         }
+        while delta < -PI {
+            delta += 2.0 * PI;
+        }
+        prev_unwrapped + delta
+    }
 
-        let prev = self.phase_history[self.phase_history.len() - 1];
-        let delta = phase_rad - prev;
-
-        if delta > PI {
-            prev + delta - 2.0 * PI
-        } else if delta < -PI {
-            prev + delta + 2.0 * PI
+    /// Compute a robust median of a small history vector.
+    fn median(values: &[f32]) -> f32 {
+        let mut sorted = values.to_vec();
+        sorted.sort_by(|a, b| a.total_cmp(b));
+        let mid = sorted.len() / 2;
+        if sorted.len() % 2 == 0 {
+            (sorted[mid - 1] + sorted[mid]) * 0.5
         } else {
-            prev + delta
+            sorted[mid]
         }
     }
 
@@ -228,7 +241,7 @@ mod tests {
 
     #[test]
     fn test_preamble_detector_correlation() {
-        let detector = PreambleDetector::new(PreambleType::Barker11, 10);
+        let mut detector = PreambleDetector::new(PreambleType::Barker11, 10);
         let reference = PreambleType::Barker11.sequence();
 
         // Correlate with itself should give max correlation

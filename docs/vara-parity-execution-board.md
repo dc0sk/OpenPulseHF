@@ -85,9 +85,9 @@ This document tracks the 11-item execution plan to achieve VARA-class performanc
 **Description**: Implement SNR estimation and speed-level hysteresis to minimize ping-ponging between modes.
 
 **Current State**:
-- `RateAdapter::apply_ack()` makes speed decisions based on ACK count only.
-- No SNR measurement; no hysteresis thresholds.
-- Can oscillate between SL12 ↔ SL13 on borderline channels.
+- `RateAdapter::apply_ack()` still supports ACK-count-driven speed changes.
+- SNR-driven adaptation hooks already exist via `RateAdapter::apply_snr_hint()` and `ModemEngine::apply_snr_hint()`, but there is no fully integrated estimator/confidence pipeline in this baseline.
+- No explicit hysteresis thresholds yet; borderline channels can still oscillate between adjacent levels such as SL12 ↔ SL13.
 
 **Requirements**:
 - SNR estimator: pilot-based or reference-symbol approach; confidence metric.
@@ -404,4 +404,4 @@ None
 
 **Owner**: OpenPulse HF Development Team  
 **Last Updated**: 2026-05-13  
-**Status**: Execution phase, working Item 1 (Waveform Lock)
+**Status**: Execution phase, Items 1-3 complete; preparing next gate items
