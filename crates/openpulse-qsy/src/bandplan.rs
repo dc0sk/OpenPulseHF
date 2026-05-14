@@ -62,7 +62,7 @@ pub enum BandplanError {
     #[error("unknown modulation mode for bandwidth checks: {mode}")]
     UnknownOperatingMode { mode: String },
     #[error(
-        "mode {mode} requires ~{required_hz} Hz occupied bandwidth, exceeds segment limit {max_hz} Hz"
+        "mode {mode} requires ~{required_hz} Hz occupied bandwidth, exceeds policy limit {max_hz} Hz"
     )]
     ChannelWidthExceeded {
         mode: String,
@@ -99,28 +99,32 @@ fn validate_ham_iaru(
     enforce_segments: bool,
     enforce_width: bool,
 ) -> Result<(), BandplanError> {
-    let segment = find_ham_iaru_segment(freq_hz).ok_or(BandplanError::FrequencyOutOfBand {
+    let band = find_ham_iaru_band(freq_hz).ok_or(BandplanError::FrequencyOutOfBand {
         freq_hz,
         mode: "ham-iaru",
     })?;
 
-    if enforce_segments && !(segment.min_hz..=segment.max_hz).contains(&freq_hz) {
-        return Err(BandplanError::SegmentViolation {
-            freq_hz,
-            mode: "ham-iaru",
-        });
-    }
+    let max_bw_hz = if enforce_segments {
+        find_ham_iaru_segment(freq_hz)
+            .map(|segment| segment.max_bw_hz)
+            .ok_or(BandplanError::SegmentViolation {
+                freq_hz,
+                mode: "ham-iaru",
+            })?
+    } else {
+        band.max_bw_hz
+    };
 
     if enforce_width {
         let bw =
             occupied_bandwidth_hz(operating_mode).ok_or(BandplanError::UnknownOperatingMode {
                 mode: operating_mode.to_string(),
             })?;
-        if bw > segment.max_bw_hz {
+        if bw > max_bw_hz {
             return Err(BandplanError::ChannelWidthExceeded {
                 mode: operating_mode.to_string(),
                 required_hz: bw,
-                max_hz: segment.max_bw_hz,
+                max_hz: max_bw_hz,
             });
         }
     }
@@ -162,6 +166,68 @@ struct DigitalSegment {
     min_hz: u64,
     max_hz: u64,
     max_bw_hz: u32,
+}
+
+#[derive(Clone, Copy)]
+struct HamBand {
+    min_hz: u64,
+    max_hz: u64,
+    max_bw_hz: u32,
+}
+
+fn find_ham_iaru_band(freq_hz: u64) -> Option<HamBand> {
+    const BANDS: [HamBand; 9] = [
+        HamBand {
+            min_hz: 1_800_000,
+            max_hz: 2_000_000,
+            max_bw_hz: 2_700,
+        }, // 160m
+        HamBand {
+            min_hz: 3_500_000,
+            max_hz: 4_000_000,
+            max_bw_hz: 2_700,
+        }, // 80m
+        HamBand {
+            min_hz: 7_000_000,
+            max_hz: 7_300_000,
+            max_bw_hz: 2_700,
+        }, // 40m
+        HamBand {
+            min_hz: 10_100_000,
+            max_hz: 10_150_000,
+            max_bw_hz: 500,
+        }, // 30m (narrow data)
+        HamBand {
+            min_hz: 14_000_000,
+            max_hz: 14_350_000,
+            max_bw_hz: 2_700,
+        }, // 20m
+        HamBand {
+            min_hz: 18_068_000,
+            max_hz: 18_168_000,
+            max_bw_hz: 2_700,
+        }, // 17m
+        HamBand {
+            min_hz: 21_000_000,
+            max_hz: 21_450_000,
+            max_bw_hz: 2_700,
+        }, // 15m
+        HamBand {
+            min_hz: 24_890_000,
+            max_hz: 24_990_000,
+            max_bw_hz: 2_700,
+        }, // 12m
+        HamBand {
+            min_hz: 28_000_000,
+            max_hz: 29_700_000,
+            max_bw_hz: 2_700,
+        }, // 10m
+    ];
+
+    BANDS
+        .iter()
+        .copied()
+        .find(|band| (band.min_hz..=band.max_hz).contains(&freq_hz))
 }
 
 fn find_ham_iaru_segment(freq_hz: u64) -> Option<DigitalSegment> {
@@ -234,8 +300,15 @@ mod tests {
         let policy = BandplanPolicy::default();
         assert!(matches!(
             policy.validate_frequency(14_200_000, "BPSK250"),
-            Err(BandplanError::FrequencyOutOfBand { .. })
+            Err(BandplanError::SegmentViolation { .. })
         ));
+    }
+
+    #[test]
+    fn ham_iaru_allows_non_segment_when_conventions_disabled() {
+        let mut policy = BandplanPolicy::default();
+        policy.enforce_segment_conventions = false;
+        assert!(policy.validate_frequency(14_200_000, "BPSK250").is_ok());
     }
 
     #[test]

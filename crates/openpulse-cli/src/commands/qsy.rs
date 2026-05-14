@@ -1,6 +1,7 @@
 //! `openpulse qsy` subcommand — QSY frequency-agility negotiation.
 
 use anyhow::{bail, Result};
+use tracing::warn;
 
 use openpulse_config as config;
 use openpulse_qsy::{scanner::QsyScanner, QsyAction, QsyPolicy, QsySession};
@@ -47,8 +48,8 @@ fn run_init(rig_override: String) -> Result<()> {
     let mut scanner = QsyScanner::new(rig, qsy_cfg.scan_dwell_ms);
 
     if !qsy_cfg.bandplan_awareness_enabled {
-        eprintln!(
-            "warning: qsy.bandplan_awareness_enabled=false (operator override); compliance exception logged"
+        warn!(
+            "qsy.bandplan_awareness_enabled=false; responsible-operator compliance override active"
         );
     }
 

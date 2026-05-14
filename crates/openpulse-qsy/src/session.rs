@@ -82,7 +82,10 @@ impl Default for QsyPolicy {
         Self {
             enabled: true,
             allow_trustlevels: vec![],
-            bandplan: BandplanPolicy::default(),
+            bandplan: BandplanPolicy {
+                awareness_enabled: false,
+                ..BandplanPolicy::default()
+            },
         }
     }
 }
@@ -425,11 +428,15 @@ impl QsySession {
             return Ok(());
         }
 
-        let mode = self.operating_mode.as_deref().ok_or_else(|| {
-            QsyError::InvalidTransition(
-                "operating_mode must be set for bandplan-aware QSY validation".into(),
-            )
-        })?;
+        if self.policy.bandplan.enforce_max_channel_width && self.operating_mode.is_none() {
+            return Err(QsyError::InvalidTransition(
+                "operating_mode must be set when max-channel-width bandplan enforcement is enabled"
+                    .into(),
+            ));
+        }
+
+        // Segment-only validation does not require a mode string.
+        let mode = self.operating_mode.as_deref().unwrap_or("");
 
         for freq_hz in freqs {
             self.policy

@@ -458,6 +458,10 @@ fn responder_rejects_out_of_bandplan_list() {
     let policy = QsyPolicy {
         enabled: true,
         allow_trustlevels: vec![],
+        bandplan: BandplanPolicy {
+            awareness_enabled: true,
+            ..BandplanPolicy::default()
+        },
         ..QsyPolicy::default()
     };
     let mut session = QsySession::new_responder(policy, ConnectionTrustLevel::Verified)
@@ -500,6 +504,38 @@ fn awareness_override_allows_out_of_segment_candidates() {
     assert!(actions
         .iter()
         .any(|a| matches!(a, QsyAction::SendFrame(QsyFrame::Req { .. }))));
+}
+
+/// Default library policy keeps bandplan awareness disabled to avoid breaking
+/// callers that do not set an operating mode.
+#[test]
+fn default_initiator_does_not_require_operating_mode() {
+    let mut session = QsySession::new_initiator();
+    let actions = session
+        .initiate(vec![14_200_000])
+        .expect("default session should remain backward-compatible");
+    assert!(actions
+        .iter()
+        .any(|a| matches!(a, QsyAction::SendFrame(QsyFrame::Req { .. }))));
+}
+
+/// Segment-only bandplan enforcement does not require an operating mode.
+#[test]
+fn segment_only_policy_does_not_require_operating_mode() {
+    let mut session = QsySession::new_initiator().with_policy(QsyPolicy {
+        enabled: true,
+        allow_trustlevels: vec![],
+        bandplan: BandplanPolicy {
+            awareness_enabled: true,
+            enforce_max_channel_width: false,
+            enforce_segment_conventions: true,
+            ..BandplanPolicy::default()
+        },
+    });
+
+    session
+        .initiate(vec![14_074_000])
+        .expect("segment-only checks should not require operating_mode");
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

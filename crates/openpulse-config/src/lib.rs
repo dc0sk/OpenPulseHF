@@ -46,7 +46,9 @@ pub struct OpenpulseConfig {
 pub struct QsyConfig {
     /// When false, all incoming QSY_REQ frames are rejected.
     pub enabled: bool,
-    /// Trust levels whose QSY_REQ frames are accepted ("verified", "psk_verified", "unknown").
+    /// Trust levels whose QSY_REQ frames are accepted.
+    /// Accepted values: "rejected", "low", "unverified", "reduced", "psk_verified", "verified"
+    /// (kebab-case variants are also accepted).
     pub allow_trustlevels: Vec<String>,
     /// Bandplan mode for QSY and operating-mode guardrails.
     pub bandplan_mode: String,
