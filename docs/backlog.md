@@ -33,13 +33,10 @@ Suggested implementation scope (future work):
 - Config flags for awareness mode and the two enforcement options.
 - Audit/log output when override is used.
 
-### Release packaging 🔄
+### Release packaging ✅ Done (PR #231)
 
-The only remaining scheduled item.
-
-- **GitHub Actions release workflow**: on `v*` tag push, build a static x86-64 musl binary
-  and an aarch64 `.deb` package and publish both as GitHub release assets.
-  The `openpulse-tnc` / `openpulse-kisstnc` binaries are the primary packaging targets.
+- **GitHub Actions release workflow** is now in place: on `v*` tag push, build static
+  x86-64 musl binaries and aarch64 `.deb` packages, then publish them as release assets.
 
 ### Deferred (no target date)
 

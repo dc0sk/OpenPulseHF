@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: CLAUDE.md
 status: living
-last_updated: 2026-05-11
+last_updated: 2026-05-14
 ---
 
 # CLAUDE.md — OpenPulseHF Agent Contract
@@ -107,7 +107,7 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 **Completed**: Phases 1–9, Phase 7 (7.1–7.5), Phase 8 (8.1–8.3), FF series (FF-1 through FF-13), BL-FEC series (BL-FEC-1 through BL-FEC-6), all code stubs (PR #187–#189). See `docs/roadmap.md` for full history.
 
 **Active tracks**:
-- **Release packaging** — GitHub Actions release workflow (static x86-64 musl binary + aarch64 `.deb` on `v*` tag push) is the only remaining scheduled item.
+- No remaining scheduled implementation tracks.
 
 **Deferred (no target date)**:
 - On-air regulatory validation (Phase 5.5-reg): on-air tests, station ID audit, compliance report
