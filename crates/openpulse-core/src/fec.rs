@@ -459,6 +459,46 @@ impl Default for SoftCombiner {
     }
 }
 
+// ── Weighted LLR combiner ─────────────────────────────────────────────────────
+
+/// Combine multiple soft-demodulated LLR vectors using inverse-noise-variance weighting.
+///
+/// Each attempt is a pair of `(llrs, noise_var)` where `noise_var` is the estimated
+/// per-frame noise variance.  Frames with lower noise (higher confidence) receive
+/// proportionally higher weight.
+///
+/// If `noise_var` is zero or negative it is clamped to `f32::MIN_POSITIVE` so the
+/// call never panics.  If `attempts` is empty an empty vector is returned.
+///
+/// **Length mismatch**: the output length is truncated to the shortest input LLR vector.
+/// This guards against framing drift while preserving the most-reliable samples, but
+/// callers should ensure all attempts produce the same number of LLRs to avoid
+/// discarding information from longer vectors.
+pub fn combine_llrs_weighted(attempts: &[(&[f32], f32)]) -> Vec<f32> {
+    if attempts.is_empty() {
+        return Vec::new();
+    }
+    let len = attempts.iter().map(|(l, _)| l.len()).min().unwrap_or(0);
+    if len == 0 {
+        return Vec::new();
+    }
+    let mut out = vec![0.0f32; len];
+    let mut weight_sum = 0.0f32;
+    for (llrs, noise_var) in attempts {
+        let w = 1.0 / noise_var.max(f32::MIN_POSITIVE);
+        weight_sum += w;
+        for (o, &l) in out.iter_mut().zip(llrs.iter()) {
+            *o += w * l;
+        }
+    }
+    if weight_sum > 0.0 {
+        for o in &mut out {
+            *o /= weight_sum;
+        }
+    }
+    out
+}
+
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -618,5 +658,55 @@ mod tests {
         let deinterleaved = il.deinterleave(&corrupted);
         let recovered = codec.decode(&deinterleaved).unwrap();
         assert_eq!(recovered, payload);
+    }
+
+    // ── combine_llrs_weighted tests ───────────────────────────────────────────
+
+    #[test]
+    fn combine_llrs_weighted_empty_returns_empty() {
+        assert!(combine_llrs_weighted(&[]).is_empty());
+    }
+
+    #[test]
+    fn combine_llrs_weighted_single_attempt_is_identity() {
+        let llrs = [1.0f32, -2.0, 3.0];
+        let out = combine_llrs_weighted(&[(&llrs, 1.0)]);
+        assert_eq!(out.len(), 3);
+        for (o, &e) in out.iter().zip(llrs.iter()) {
+            assert!((o - e).abs() < 1e-5, "expected {e} got {o}");
+        }
+    }
+
+    #[test]
+    fn combine_llrs_weighted_equal_weights_is_mean() {
+        // Two attempts, equal noise_var → result should equal element-wise mean.
+        let a = [2.0f32, -4.0];
+        let b = [4.0f32, -2.0];
+        let out = combine_llrs_weighted(&[(&a, 1.0), (&b, 1.0)]);
+        assert_eq!(out.len(), 2);
+        assert!((out[0] - 3.0).abs() < 1e-5);
+        assert!((out[1] - (-3.0)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn combine_llrs_weighted_higher_weight_dominates() {
+        // Attempt A: noise_var=0.1 (high confidence, high weight)
+        // Attempt B: noise_var=10.0 (low confidence, low weight)
+        // Result should be closer to A than B.
+        let a = [10.0f32];
+        let b = [-10.0f32];
+        let out = combine_llrs_weighted(&[(&a, 0.1), (&b, 10.0)]);
+        assert_eq!(out.len(), 1);
+        assert!(out[0] > 0.0, "high-confidence positive LLR should dominate");
+    }
+
+    #[test]
+    fn combine_llrs_weighted_length_mismatch_truncates_to_shorter() {
+        // Shorter vector determines output length; trailing samples of the
+        // longer vector are dropped (documented truncation behaviour).
+        let a = [1.0f32, 2.0, 3.0];
+        let b = [1.0f32, 2.0];
+        let out = combine_llrs_weighted(&[(&a, 1.0), (&b, 1.0)]);
+        assert_eq!(out.len(), 2, "output truncated to min length");
     }
 }
