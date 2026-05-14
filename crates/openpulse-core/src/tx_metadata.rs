@@ -154,7 +154,9 @@ mod tests {
 
         log.log_frame(TxMetadata::with_timestamp("G4XYZ", 1000, "BPSK31", 25.0, 1));
         log.log_frame(TxMetadata::with_timestamp("G4XYZ", 2000, "BPSK31", 25.0, 2));
-        log.log_frame(TxMetadata::with_timestamp("G4XYZ", 3000, "QPSK250", 50.0, 3));
+        log.log_frame(TxMetadata::with_timestamp(
+            "G4XYZ", 3000, "QPSK250", 50.0, 3,
+        ));
 
         assert_eq!(log.frame_count(), 3);
         assert_eq!(log.get_by_sequence(2).unwrap().mode, "BPSK31");
@@ -168,7 +170,9 @@ mod tests {
     #[test]
     fn test_tx_session_log_json() {
         let mut log = TxSessionLog::new("N0CALL");
-        log.log_frame(TxMetadata::with_timestamp("N0CALL", 1000, "FSK4-ACK", 10.0, 99));
+        log.log_frame(TxMetadata::with_timestamp(
+            "N0CALL", 1000, "FSK4-ACK", 10.0, 99,
+        ));
 
         let json = log.to_json_string().unwrap();
         assert!(json.contains("N0CALL"));

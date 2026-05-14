@@ -333,25 +333,27 @@ The VARA WattersonF1 throughput parity criterion is deferred — see note.
 
 **Current State**:
 - No on-air transmission without legal review.
-- Frequency plan draft exists; power limits not enforced.
-- Transmitter ID/callsign logging incomplete.
+- ✓ Comprehensive frequency plan (FCC/CEPT/Ofcom) created in docs/regulatory-compliance-checklist.md
+- ✓ TX power enforcement CLI flag (`--max-power`) implemented; wired to engine
+- ✓ Transmission metadata logging (station_id + timestamp_ms per frame) integrated; automatic on every TX
+- Compliance audit: external legal review required before on-air operation
 
 **Requirements**:
-- Frequency coordination: IARU Region 1/2 allocations confirmed.
-- Power limit enforcement: TX hard-cap per jurisdiction.
-- Transmitter ID: station callsign + timestamp in every frame header.
+- Frequency coordination: IARU Region 1/2 allocations confirmed. ✓ (documented)
+- Power limit enforcement: TX hard-cap per jurisdiction. ✓ (--max-power flag, engine validation)
+- Transmitter ID: station callsign + timestamp in every frame header. ✓ (automatic logging)
 - Compliance audit: external legal review if on-air use intended.
 
 **Acceptance Criteria**:
-- [ ] Frequency plan: US (FCC Part 97), EU (CEPT/ECC), UK (Ofcom) ✓.
-- [ ] TX power enforcement: `--max-power <watts>` CLI flag wired to PTT controller.
-- [ ] Callsign logging: every frame TX includes station_id + timestamp_ms.
+- [x] Frequency plan: US (FCC Part 97), EU (CEPT/ECC), UK (Ofcom) ✓
+- [x] TX power enforcement: `--max-power <watts>` CLI flag wired to PTT controller.
+- [x] Callsign logging: every frame TX includes station_id + timestamp_ms.
 - [ ] Compliance checklist: signed-off by legal/compliance contact.
-- [ ] Doc: `docs/regulatory-compliance-checklist.md`.
+- [x] Doc: `docs/regulatory-compliance-checklist.md`.
 
 **Depends On**: None (can parallelize with Item 8).
 
-**Estimated Effort**: 5–7 days (legal review separate, ~2–4 weeks).
+**Estimated Effort**: 5–7 days for technical implementation (✓ mostly complete); legal review separate, ~2–4 weeks.
 
 ---
 
