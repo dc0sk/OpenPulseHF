@@ -35,6 +35,7 @@ cargo build --release
 - openpulse devices
 - openpulse modes
 - openpulse mode-advisor --snr <dB>
+- openpulse session-metrics --format json
 
 ## Session diagnostics and persistence
 

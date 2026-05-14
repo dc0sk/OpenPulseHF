@@ -9,5 +9,6 @@ pub mod monitor;
 pub mod qsy;
 pub mod receive;
 pub mod session;
+pub mod session_metrics;
 pub mod transmit;
 pub mod trust;

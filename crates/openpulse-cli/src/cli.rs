@@ -66,6 +66,11 @@ pub enum Commands {
         #[arg(long)]
         snr: f32,
     },
+    /// Export session performance metrics (throughput, FER, latency, SNR estimate).
+    SessionMetrics {
+        #[command(flatten)]
+        opts: DiagnosticOptions,
+    },
     /// Identity diagnostics.
     Identity {
         #[command(subcommand)]

@@ -105,6 +105,9 @@ fn main() -> Result<()> {
         Commands::ModeAdvisor { snr } => {
             commands::mode_advisor::run(snr)?;
         }
+        Commands::SessionMetrics { opts } => {
+            exit_code = commands::session_metrics::run(&engine, &opts)?;
+        }
         Commands::Identity { command } => {
             exit_code = commands::modes::run_identity(command, &pki)?;
         }
