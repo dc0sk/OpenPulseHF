@@ -124,6 +124,45 @@ pub fn estimate_noise_var(p: &ScFdmaParams, freq: &[Complex32], h_est: &[Complex
     (sum / pilots.len() as f32).max(1e-6)
 }
 
+/// Estimate the Rician K-factor (linear ratio) from per-subcarrier channel taps.
+///
+/// The estimator uses the first two moments of instantaneous power |h|^2.
+/// Returns 0.0 for near-Rayleigh channels and larger values for strong LOS.
+pub fn estimate_rician_k_linear(h_est: &[Complex32]) -> f32 {
+    if h_est.len() < 2 {
+        return 0.0;
+    }
+
+    let powers: Vec<f32> = h_est.iter().map(|h| h.norm_sqr()).collect();
+    let mean_power = powers.iter().sum::<f32>() / powers.len() as f32;
+    if mean_power <= 1e-9 {
+        return 0.0;
+    }
+
+    let var_power = powers
+        .iter()
+        .map(|p| {
+            let d = *p - mean_power;
+            d * d
+        })
+        .sum::<f32>()
+        / powers.len() as f32;
+
+    let mut r = var_power / (mean_power * mean_power);
+    if !r.is_finite() {
+        return 0.0;
+    }
+
+    // For Rician fading, r is in (0, 1] where 1 is Rayleigh (K=0).
+    r = r.clamp(1e-6, 1.0);
+    if (r - 1.0).abs() < 1e-4 {
+        return 0.0;
+    }
+
+    let t = (1.0 - r).max(0.0);
+    ((t + t.sqrt()) / r).max(0.0)
+}
+
 /// Minimum mean-square-error equalization.
 ///
 /// Regularises the ZF solution with the estimated noise variance so that
@@ -172,5 +211,41 @@ mod tests {
         assert_eq!(pilots.len(), SCFDMA52.n_pilots);
         assert_eq!(pilots[0], 20);
         assert_eq!(*pilots.last().unwrap(), 80);
+    }
+
+    #[test]
+    fn rician_k_estimator_rayleigh_like_near_zero() {
+        // Deterministic Box-Muller Gaussian taps with zero-mean I/Q.
+        let mut state = 0x1234_5678_9abc_def0u64;
+        let mut taps = Vec::with_capacity(256);
+        for _ in 0..256 {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let u1 = ((state >> 11) as f64) * (1.0 / ((1u64 << 53) as f64));
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let u2 = ((state >> 11) as f64) * (1.0 / ((1u64 << 53) as f64));
+            let u1 = u1.clamp(1e-12, 1.0 - 1e-12);
+            let r = (-2.0 * u1.ln()).sqrt() as f32;
+            let theta = (2.0 * std::f64::consts::PI * u2) as f32;
+            taps.push(Complex32::new(r * theta.cos(), r * theta.sin()));
+        }
+
+        let k = estimate_rician_k_linear(&taps);
+        assert!(k >= 0.0);
+        assert!(k < 1.5, "expected low K for diffuse channel, got {k}");
+    }
+
+    #[test]
+    fn rician_k_estimator_los_dominant_higher() {
+        let diffuse: Vec<Complex32> = (0..128)
+            .map(|i| Complex32::new((i as f32 * 0.11).sin(), (i as f32 * 0.23).cos()))
+            .collect();
+        let los: Vec<Complex32> = diffuse
+            .iter()
+            .map(|h| Complex32::new(2.0 + h.re * 0.2, 0.1 + h.im * 0.2))
+            .collect();
+
+        let k_diffuse = estimate_rician_k_linear(&diffuse);
+        let k_los = estimate_rician_k_linear(&los);
+        assert!(k_los > k_diffuse, "expected LOS channel to raise K");
     }
 }

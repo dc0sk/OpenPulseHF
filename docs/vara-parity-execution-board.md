@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/vara-parity-execution-board.md
 status: living
-last_updated: 2026-05-13
+last_updated: 2026-05-14
 ---
 
 # VARA-Parity SC-FDMA Execution Board
@@ -151,10 +151,13 @@ This document tracks the 11-item execution plan to achieve VARA-class performanc
 
 **Description**: Improve log-likelihood ratio (LLR) computation by incorporating channel fading state and noise variance adaptation.
 
+**Status**: 🚧 **IN PROGRESS**
+
 **Current State**:
-- LLR computed as `2×y_soft×h̄/σ_n²` assuming flat, known noise variance.
-- No Rician K-factor estimation; no fading state feedback to FEC decoder.
-- Soft-combine from Memory-ARQ uses simple average, no SNR weighting.
+- Soft demod now emits per-frame quality metrics (`mean_noise_var`, `mean_rician_k_db`) via `scfdma_demodulate_soft_with_metrics()`.
+- LLR scaling now includes adaptive decision-directed noise variance plus channel-state gain from estimated Rician K-factor.
+- Weighted LLR combine helper (`combine_llrs_weighted`) added for inverse-noise retransmission combining.
+- New integration tests in `plugins/scfdma/tests/llr_weighting_adaptation.rs` cover AWGN variance tracking, Watterson F1 K-range sanity, and weighted-vs-equal soft-combine behavior.
 
 **Requirements**:
 - Noise variance adaptation: estimate per-frame or per-pilot.
