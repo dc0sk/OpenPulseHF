@@ -221,7 +221,7 @@ density or higher-order channel tracking, which is Item 6 scope.
 - ACK timeout = 1.25 s (VARA baseline).
 - HARQ policy selector implemented in modem (`harq.rs`) with SNR/fading/retry mapping and timeout curve.
 - Engine helpers added (`transmit_with_harq_attempt`, `receive_with_harq_attempt`) for policy-driven retry paths.
-- Integration gates added for Watterson F1 mapping and 100-frame throughput/latency proxy checks.
+- Integration gates added for Watterson F1 mapping and 100-frame throughput/latency proxy checks with deterministic retry cadence.
 
 **Requirements**:
 - Rate selection: choose RS/Conv/strong-RS based on SNR and fading depth.
@@ -234,7 +234,7 @@ density or higher-order channel tracking, which is Item 6 scope.
 - [x] Latency: median frame cycle (TX + retransmit + ACK) ≤1.5 s on 20 dB SNR.
 - [x] Integration test: `tests/harq_rate_selection_watterson.rs`.
 
-**Note**: current throughput gate in `harq_rate_selection_watterson.rs` compares HARQ goodput against a fixed-RS baseline proxy under identical deterministic channel draws. A direct VARA-reference baseline measurement remains open.
+**Note**: current throughput gate in `harq_rate_selection_watterson.rs` compares HARQ policy-cycle throughput against a payload-ceiling-normalized VARA reference (frame payload is limited to 255 bytes in this harness). A direct full-frame VARA baseline measurement remains open.
 
 **Depends On**: Item 3 (SNR metrics), Item 5.5 (Window-ARQ), Item 5 (LLR quality).
 
