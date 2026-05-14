@@ -27,6 +27,7 @@ use openpulse_core::trust::{
     evaluate_handshake, CertificateSource, ConnectionTrustLevel, HandshakeDecision, PolicyProfile,
     PublicKeyTrustLevel, SigningMode,
 };
+use openpulse_core::tx_metadata::{TxMetadata, TxSessionLog};
 use openpulse_core::wire_query::{callsign_hash, BroadcastFrame, WireEnvelope, WireMsgType};
 
 use crate::event::{EngineEvent, RateDirection};
@@ -93,6 +94,10 @@ pub struct ModemEngine {
     tx_attenuation_db: f32,
     /// Soft TX limiter threshold (0.0 = disabled). See `tanh_limit`.
     tx_limiter_threshold: f32,
+    /// Maximum TX power in watts for regulatory compliance (0.0 = no limit).
+    max_power_watts: f32,
+    /// Transmission metadata log for regulatory compliance (station_id, timestamps).
+    tx_session_log: TxSessionLog,
 }
 
 impl ModemEngine {
@@ -122,6 +127,8 @@ impl ModemEngine {
             callsign: String::new(),
             tx_attenuation_db: 0.0,
             tx_limiter_threshold: 0.0,
+            max_power_watts: 0.0, // 0.0 means no limit
+            tx_session_log: TxSessionLog::new("UNKNOWN"),
         }
     }
 
@@ -592,6 +599,12 @@ impl ModemEngine {
 
         self.stage_emit_output(device, &samples)?;
 
+        // Log transmission metadata for regulatory compliance
+        let tx_seq = self.sequence.wrapping_sub(1);
+        let metadata = TxMetadata::new(&self.callsign, mode, self.max_power_watts, tx_seq);
+        self.tx_session_log.log_frame(metadata.clone());
+        debug!("logged TX metadata: {}", metadata.to_log_line());
+
         let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
             mode: mode.to_string(),
             bytes: outbound.bytes.len(),
@@ -706,6 +719,7 @@ impl ModemEngine {
     /// Set the station callsign used in broadcast frame headers.
     pub fn set_callsign(&mut self, callsign: impl Into<String>) {
         self.callsign = callsign.into();
+        self.update_tx_session_callsign();
     }
 
     /// Set the TX attenuation applied to all transmitted audio (dB; 0.0 = no attenuation).
@@ -724,6 +738,31 @@ impl ModemEngine {
     /// Set the soft TX limiter threshold (0.0 disables the limiter).
     pub fn set_tx_limiter_threshold(&mut self, threshold: f32) {
         self.tx_limiter_threshold = threshold;
+    }
+
+    /// Set the maximum TX power in watts for regulatory compliance (0.0 = no limit).
+    pub fn set_max_power_watts(&mut self, watts: f32) {
+        self.max_power_watts = watts.max(0.0);
+    }
+
+    /// Return the current maximum TX power limit in watts.
+    pub fn max_power_watts(&self) -> f32 {
+        self.max_power_watts
+    }
+
+    /// Return reference to the transmission session log for regulatory compliance.
+    pub fn tx_session_log(&self) -> &TxSessionLog {
+        &self.tx_session_log
+    }
+
+    /// Clear the transmission session log.
+    pub fn clear_tx_session_log(&mut self) {
+        self.tx_session_log = TxSessionLog::new(self.callsign.clone());
+    }
+
+    /// Update callsign in active TX session log.
+    fn update_tx_session_callsign(&mut self) {
+        self.tx_session_log.station_id = self.callsign.clone();
     }
 
     /// Unlike [`transmit`](Self::transmit), this method bypasses the CSMA
