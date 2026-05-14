@@ -28,6 +28,14 @@ fn parse_snr_db(reason: &str) -> Option<f64> {
     None
 }
 
+fn is_success_transition(event: &str, from_state: &str) -> bool {
+    event == "transfercomplete" && from_state == "activetransfer"
+}
+
+fn is_error_transition(event: &str, from_state: &str) -> bool {
+    event == "transfererror" && (from_state == "activetransfer" || from_state == "relayactive")
+}
+
 pub fn run(engine: &ModemEngine, opts: &DiagnosticOptions) -> Result<i32> {
     let Some(entries) = load_session_log()? else {
         let output = DiagnosticOutput {
@@ -66,11 +74,11 @@ pub fn run(engine: &ModemEngine, opts: &DiagnosticOptions) -> Result<i32> {
 
     let transfer_ok = entries
         .iter()
-        .filter(|e| e.event == "transfercomplete")
+        .filter(|e| is_success_transition(&e.event, &e.from_state))
         .count() as u64;
     let transfer_error = entries
         .iter()
-        .filter(|e| e.event == "transfererror" || e.to_state == "failed")
+        .filter(|e| is_error_transition(&e.event, &e.from_state))
         .count() as u64;
 
     let attempts = transfer_ok + transfer_error;
@@ -144,12 +152,23 @@ pub fn run(engine: &ModemEngine, opts: &DiagnosticOptions) -> Result<i32> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_snr_db;
+    use super::{is_error_transition, is_success_transition, parse_snr_db};
 
     #[test]
     fn parse_snr_db_handles_supported_markers() {
         assert_eq!(parse_snr_db("foo snr_db=12.5 bar"), Some(12.5));
         assert_eq!(parse_snr_db("snr=9.0"), Some(9.0));
         assert_eq!(parse_snr_db("no marker"), None);
+    }
+
+    #[test]
+    fn transition_classifiers_avoid_double_counting() {
+        assert!(is_success_transition("transfercomplete", "activetransfer"));
+        assert!(!is_success_transition("transfercomplete", "teardown"));
+
+        assert!(is_error_transition("transfererror", "activetransfer"));
+        assert!(is_error_transition("transfererror", "relayactive"));
+        assert!(!is_error_transition("transfererror", "teardown"));
+        assert!(!is_error_transition("qualitydrop", "activetransfer"));
     }
 }

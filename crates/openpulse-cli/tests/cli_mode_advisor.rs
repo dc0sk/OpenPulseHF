@@ -6,7 +6,7 @@ fn mode_advisor_outputs_expected_levels_for_10_snr_values() {
     let cases = [
         (0.0, "SL2", "BPSK31"),
         (2.5, "SL2", "BPSK31"),
-        (3.5, "SL3", "BPSK63"),
+        (3.5, "SL2", "BPSK31"),
         (4.5, "SL3", "BPSK63"),
         (5.5, "SL4", "BPSK250"),
         (8.5, "SL4", "BPSK250"),

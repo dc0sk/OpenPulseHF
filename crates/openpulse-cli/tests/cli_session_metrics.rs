@@ -24,11 +24,19 @@ fn session_metrics_exports_json_with_perf_fields() {
     let session_log = r#"[
     {
         "timestamp_ms": 1000,
-        "from_state": "training",
-        "to_state": "activetransfer",
+        "from_state": "activetransfer",
+        "to_state": "teardown",
         "event": "transfercomplete",
         "reason_code": "success",
         "reason_string": "snr_db=12.0"
+    },
+    {
+        "timestamp_ms": 1200,
+        "from_state": "teardown",
+        "to_state": "idle",
+        "event": "transfercomplete",
+        "reason_code": "success",
+        "reason_string": "teardown complete"
     },
     {
         "timestamp_ms": 3000,
@@ -58,6 +66,8 @@ fn session_metrics_exports_json_with_perf_fields() {
             "\"reason_code\": \"session_metrics_export\"",
         ))
         .stdout(predicate::str::contains("\"throughput_bps\""))
+        .stdout(predicate::str::contains("\"transfer_ok\": 1"))
+        .stdout(predicate::str::contains("\"transfer_error\": 1"))
         .stdout(predicate::str::contains("\"fer\": 0.5"))
         .stdout(predicate::str::contains("\"latency_ms\": 2000.0"))
         .stdout(predicate::str::contains("\"snr_db_estimate\": 10.0"));
