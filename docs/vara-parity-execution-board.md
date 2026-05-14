@@ -61,9 +61,9 @@ This document tracks the 11-item execution plan to achieve VARA-class performanc
 **Description**: Extend AFC estimator to track Doppler shift and maintain carrier lock under rapid fading.
 
 **Current State**:
-- IQ-squaring estimator works on clean or slowly-fading channels.
-- No Doppler compensation or adaptive loop bandwidth.
-- Tracking range fixed at ±baud_rate/4; fails on >100 Hz/s Doppler rate.
+- Doppler phase-slope tracking is implemented in `openpulse-dsp::doppler_tracker::DopplerTracker`.
+- Adaptive AFC loop bandwidth controller is implemented in `AdaptiveAfcLoopBandwidth`.
+- Integration coverage for Watterson F2 and mild Doppler lock is present in `tests/afc_doppler_watterson.rs`.
 
 **Requirements**:
 - Doppler rate estimation: use phase difference across blocks or pilot tones.
@@ -71,10 +71,10 @@ This document tracks the 11-item execution plan to achieve VARA-class performanc
 - Stability test: maintain lock on Watterson F2 (fading_spread=0.8 Hz, Doppler_spread=2.0 Hz).
 
 **Acceptance Criteria**:
-- [ ] Doppler rate estimator (phase slope across N-symbol windows).
-- [ ] AFC error <±5 Hz on Watterson F2 @ 20 dB SNR (500-symbol window).
-- [ ] Loop stability: no cycle slips in 100-frame Watterson F2 test.
-- [ ] Integration test: `tests/afc_doppler_watterson.rs`.
+- [x] Doppler rate estimator (phase slope across N-symbol windows).
+- [x] AFC error <±5 Hz on Watterson F2 @ 20 dB SNR (500-symbol window).
+- [x] Loop stability: no cycle slips in 100-frame Watterson F2 test.
+- [x] Integration test: `tests/afc_doppler_watterson.rs`.
 
 **Depends On**: Item 1 (preamble available for phase reference).
 
