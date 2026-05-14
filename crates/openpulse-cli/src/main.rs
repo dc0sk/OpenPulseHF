@@ -102,6 +102,9 @@ fn main() -> Result<()> {
         Commands::Modes => {
             commands::modes::run_modes(&engine)?;
         }
+        Commands::ModeAdvisor { snr } => {
+            commands::mode_advisor::run(snr)?;
+        }
         Commands::Identity { command } => {
             exit_code = commands::modes::run_identity(command, &pki)?;
         }

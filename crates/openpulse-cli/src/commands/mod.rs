@@ -3,6 +3,7 @@ pub mod benchmark;
 pub mod broadcast;
 pub mod config;
 pub mod devices;
+pub mod mode_advisor;
 pub mod modes;
 pub mod monitor;
 pub mod qsy;

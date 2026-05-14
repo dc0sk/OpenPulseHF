@@ -34,6 +34,7 @@ cargo build --release
 - openpulse receive --mode <MODE>
 - openpulse devices
 - openpulse modes
+- openpulse mode-advisor --snr <dB>
 
 ## Session diagnostics and persistence
 

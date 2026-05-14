@@ -60,6 +60,12 @@ pub enum Commands {
     Devices,
     /// List registered modulation modes.
     Modes,
+    /// Recommend a speed level and mode for the current SNR.
+    ModeAdvisor {
+        /// Estimated signal-to-noise ratio in dB.
+        #[arg(long)]
+        snr: f32,
+    },
     /// Identity diagnostics.
     Identity {
         #[command(subcommand)]
