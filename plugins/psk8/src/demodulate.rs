@@ -332,7 +332,7 @@ fn nearest_gray_triplet(i: f32, q: f32) -> (bool, bool, bool) {
 }
 
 fn should_equalize(mode: &str) -> bool {
-    mode.ends_with("-HF")
+    mode.contains("-HF")
 }
 
 fn psk8_map_decision(i: f32, q: f32) -> (f32, f32) {
@@ -458,15 +458,12 @@ mod tests {
             let mut ch = WattersonChannel::new(WattersonConfig::moderate_f1(Some(seed)))
                 .expect("watterson moderate f1");
             let rx_samples = ch.apply(&tx_samples);
-            match psk8_demodulate(&rx_samples, &cfg) {
-                Ok(decoded) => {
-                    decoded_count += 1;
-                    let ber = ber_helper(&decoded, &payload);
-                    if ber <= 0.12 {
-                        low_ber_count += 1;
-                    }
+            if let Ok(decoded) = psk8_demodulate(&rx_samples, &cfg) {
+                decoded_count += 1;
+                let ber = ber_helper(&decoded, &payload);
+                if ber <= 0.12 {
+                    low_ber_count += 1;
                 }
-                Err(_) => {}
             }
         }
 
