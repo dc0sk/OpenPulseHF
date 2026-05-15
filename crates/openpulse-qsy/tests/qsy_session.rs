@@ -6,7 +6,8 @@ use ed25519_dalek::SigningKey;
 use openpulse_qsy::{
     frame::{decode_signed, decode_unsigned, encode_signed, encode_unsigned},
     scanner::QsyScanner,
-    ConnectionTrustLevel, QsyAction, QsyFrame, QsyFrameError, QsyPolicy, QsySession,
+    BandplanPolicy, ConnectionTrustLevel, QsyAction, QsyFrame, QsyFrameError, QsyPolicy,
+    QsySession,
 };
 use openpulse_radio::RigctldController;
 use rand::rngs::OsRng;
@@ -83,7 +84,7 @@ fn signature_tamper() {
 /// Initiator drives through the full flow and ends with QsyNow.
 #[test]
 fn initiator_full_flow() {
-    let mut session = QsySession::new_initiator();
+    let mut session = QsySession::new_initiator().with_operating_mode("BPSK250");
     let candidates = vec![14070000u64, 14074000u64];
 
     // Step 1: initiate
@@ -134,8 +135,10 @@ fn responder_full_flow() {
     let policy = QsyPolicy {
         enabled: true,
         allow_trustlevels: vec![],
+        ..QsyPolicy::default()
     };
-    let mut session = QsySession::new_responder(policy, ConnectionTrustLevel::Verified);
+    let mut session = QsySession::new_responder(policy, ConnectionTrustLevel::Verified)
+        .with_operating_mode("BPSK250");
 
     // Receive QSY_REQ
     let actions = session
@@ -195,8 +198,10 @@ fn reject_on_policy() {
     let policy = QsyPolicy {
         enabled: false,
         allow_trustlevels: vec![],
+        ..QsyPolicy::default()
     };
-    let mut session = QsySession::new_responder(policy, ConnectionTrustLevel::Verified);
+    let mut session = QsySession::new_responder(policy, ConnectionTrustLevel::Verified)
+        .with_operating_mode("BPSK250");
     let actions = session
         .apply(QsyFrame::Req {
             token: "12345678".into(),
@@ -215,7 +220,7 @@ fn reject_on_policy() {
 /// QSY_REJECT and transitions to Rejected rather than leaving the peer hanging.
 #[test]
 fn disjoint_candidate_lists_emits_reject() {
-    let mut session = QsySession::new_initiator();
+    let mut session = QsySession::new_initiator().with_operating_mode("BPSK250");
     let init_actions = session.initiate(vec![14070000u64, 14074000u64]).unwrap();
 
     // Capture the token from the QSY_REQ frame.
@@ -265,14 +270,16 @@ fn disjoint_candidate_lists_emits_reject() {
 fn qsy_reject_frame_yields_reject_action() {
     // Test on both initiator and responder
     for mut session in [
-        QsySession::new_initiator(),
+        QsySession::new_initiator().with_operating_mode("BPSK250"),
         QsySession::new_responder(
             QsyPolicy {
                 enabled: true,
                 allow_trustlevels: vec![],
+                ..QsyPolicy::default()
             },
             ConnectionTrustLevel::Verified,
-        ),
+        )
+        .with_operating_mode("BPSK250"),
     ] {
         let actions = session
             .apply(QsyFrame::Reject {
@@ -329,8 +336,10 @@ fn reject_on_trust_level_not_permitted() {
     let policy = QsyPolicy {
         enabled: true,
         allow_trustlevels: vec![ConnectionTrustLevel::Verified],
+        ..QsyPolicy::default()
     };
-    let mut session = QsySession::new_responder(policy, ConnectionTrustLevel::Unverified);
+    let mut session = QsySession::new_responder(policy, ConnectionTrustLevel::Unverified)
+        .with_operating_mode("BPSK250");
     let actions = session
         .apply(QsyFrame::Req {
             token: "aabb1234".into(),
@@ -357,8 +366,10 @@ fn accept_when_trust_level_matches() {
     let policy = QsyPolicy {
         enabled: true,
         allow_trustlevels: vec![ConnectionTrustLevel::Verified],
+        ..QsyPolicy::default()
     };
-    let mut session = QsySession::new_responder(policy, ConnectionTrustLevel::Verified);
+    let mut session = QsySession::new_responder(policy, ConnectionTrustLevel::Verified)
+        .with_operating_mode("BPSK250");
     let actions = session
         .apply(QsyFrame::Req {
             token: "aabb1234".into(),
@@ -379,8 +390,10 @@ fn accept_when_allow_list_empty() {
     let policy = QsyPolicy {
         enabled: true,
         allow_trustlevels: vec![],
+        ..QsyPolicy::default()
     };
-    let mut session = QsySession::new_responder(policy, ConnectionTrustLevel::Unverified);
+    let mut session = QsySession::new_responder(policy, ConnectionTrustLevel::Unverified)
+        .with_operating_mode("BPSK250");
     let actions = session
         .apply(QsyFrame::Req {
             token: "aabb1234".into(),
@@ -399,9 +412,15 @@ fn accept_when_allow_list_empty() {
 #[test]
 fn from_config_parses_trust_strings() {
     // underscore variant
-    let policy =
-        QsyPolicy::from_config(true, &["verified".to_string(), "psk_verified".to_string()])
-            .expect("valid trust levels");
+    let policy = QsyPolicy::from_config(
+        true,
+        &["verified".to_string(), "psk_verified".to_string()],
+        "ham-iaru",
+        true,
+        true,
+        true,
+    )
+    .expect("valid trust levels");
     assert!(policy.enabled);
     assert_eq!(
         policy.allow_trustlevels,
@@ -412,18 +431,111 @@ fn from_config_parses_trust_strings() {
     );
 
     // kebab-case variant — same result
-    let policy2 =
-        QsyPolicy::from_config(true, &["verified".to_string(), "psk-verified".to_string()])
-            .expect("valid trust levels (kebab)");
+    let policy2 = QsyPolicy::from_config(
+        true,
+        &["verified".to_string(), "psk-verified".to_string()],
+        "ham-iaru",
+        true,
+        true,
+        true,
+    )
+    .expect("valid trust levels (kebab)");
     assert_eq!(policy.allow_trustlevels, policy2.allow_trustlevels);
 }
 
 /// Misspelled trust-level strings return an error rather than silently opening gating.
 #[test]
 fn from_config_rejects_unknown_trust_level() {
-    let result = QsyPolicy::from_config(true, &["verifed".to_string()]); // typo
+    let result =
+        QsyPolicy::from_config(true, &["verifed".to_string()], "ham-iaru", true, true, true); // typo
     assert!(result.is_err(), "expected Err for unknown trust level");
     assert!(result.unwrap_err().contains("verifed"));
+}
+
+/// Responder rejects candidate list outside HAM/IARU digital segment when awareness is enabled.
+#[test]
+fn responder_rejects_out_of_bandplan_list() {
+    let policy = QsyPolicy {
+        enabled: true,
+        allow_trustlevels: vec![],
+        bandplan: BandplanPolicy {
+            awareness_enabled: true,
+            ..BandplanPolicy::default()
+        },
+        ..QsyPolicy::default()
+    };
+    let mut session = QsySession::new_responder(policy, ConnectionTrustLevel::Verified)
+        .with_operating_mode("BPSK250");
+
+    session
+        .apply(QsyFrame::Req {
+            token: "cafebabe".into(),
+            n_candidates: 1,
+        })
+        .unwrap();
+
+    let err = session
+        .apply(QsyFrame::List {
+            token: "cafebabe".into(),
+            candidates: vec![(14_200_000, -80.0)],
+        })
+        .expect_err("expected bandplan rejection");
+    assert!(format!("{err}").contains("bandplan policy violation"));
+}
+
+/// Bandplan awareness override allows out-of-segment candidates.
+#[test]
+fn awareness_override_allows_out_of_segment_candidates() {
+    let policy = QsyPolicy {
+        enabled: true,
+        allow_trustlevels: vec![],
+        bandplan: BandplanPolicy {
+            awareness_enabled: false,
+            ..BandplanPolicy::default()
+        },
+    };
+    let mut session = QsySession::new_initiator()
+        .with_policy(policy)
+        .with_operating_mode("QPSK2000");
+
+    let actions = session
+        .initiate(vec![14_200_000])
+        .expect("override should allow out-of-segment candidate");
+    assert!(actions
+        .iter()
+        .any(|a| matches!(a, QsyAction::SendFrame(QsyFrame::Req { .. }))));
+}
+
+/// Default library policy keeps bandplan awareness disabled to avoid breaking
+/// callers that do not set an operating mode.
+#[test]
+fn default_initiator_does_not_require_operating_mode() {
+    let mut session = QsySession::new_initiator();
+    let actions = session
+        .initiate(vec![14_200_000])
+        .expect("default session should remain backward-compatible");
+    assert!(actions
+        .iter()
+        .any(|a| matches!(a, QsyAction::SendFrame(QsyFrame::Req { .. }))));
+}
+
+/// Segment-only bandplan enforcement does not require an operating mode.
+#[test]
+fn segment_only_policy_does_not_require_operating_mode() {
+    let mut session = QsySession::new_initiator().with_policy(QsyPolicy {
+        enabled: true,
+        allow_trustlevels: vec![],
+        bandplan: BandplanPolicy {
+            awareness_enabled: true,
+            enforce_max_channel_width: false,
+            enforce_segment_conventions: true,
+            ..BandplanPolicy::default()
+        },
+    });
+
+    session
+        .initiate(vec![14_074_000])
+        .expect("segment-only checks should not require operating_mode");
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

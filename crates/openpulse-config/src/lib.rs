@@ -46,12 +46,18 @@ pub struct OpenpulseConfig {
 pub struct QsyConfig {
     /// When false, all incoming QSY_REQ frames are rejected.
     pub enabled: bool,
-    /// Trust levels whose QSY_REQ frames are accepted ("verified", "psk_verified", "unknown").
-    ///
-    /// **Not yet enforced.** The field is parsed and stored but the QSY session
-    /// layer does not consult it; all trust levels are currently accepted when
-    /// `enabled = true`.  Do not rely on this for access control.
+    /// Trust levels whose QSY_REQ frames are accepted.
+    /// Accepted values: "rejected", "low", "unverified", "reduced", "psk_verified", "verified"
+    /// (kebab-case variants are also accepted).
     pub allow_trustlevels: Vec<String>,
+    /// Bandplan mode for QSY and operating-mode guardrails.
+    pub bandplan_mode: String,
+    /// Enable bandplan awareness checks before selecting QSY frequencies.
+    pub bandplan_awareness_enabled: bool,
+    /// Enforce per-segment maximum occupied channel width.
+    pub enforce_max_channel_width: bool,
+    /// Enforce convention-bound digital/data segments.
+    pub enforce_segment_conventions: bool,
     /// Candidate frequencies to scan during QSY negotiation (Hz).
     pub candidate_freqs_hz: Vec<u64>,
     /// Time to dwell on each candidate frequency while reading the S-meter (ms).
@@ -325,6 +331,10 @@ impl Default for QsyConfig {
         Self {
             enabled: false,
             allow_trustlevels: vec!["verified".into(), "psk_verified".into()],
+            bandplan_mode: "ham-iaru".into(),
+            bandplan_awareness_enabled: true,
+            enforce_max_channel_width: true,
+            enforce_segment_conventions: true,
             candidate_freqs_hz: vec![],
             scan_dwell_ms: 500,
             switchover_offset_s: 5,
@@ -522,8 +532,16 @@ store_path = ""
 # Enable QSY frequency-agility negotiation.  Requires hamlib rigctld configured in [radio].
 # enabled = false
 # Trust levels allowed to initiate QSY with this station.
-# NOTE: not yet enforced — parsed but ignored by the QSY session layer.
 # allow_trustlevels = ["verified", "psk_verified"]
+# Bandplan-awareness mode: currently only "ham-iaru" is supported.
+# bandplan_mode = "ham-iaru"
+# Enforce bandplan guardrails for QSY (enabled by default).
+# Set to false only as an explicit responsible-operator compliance override.
+# bandplan_awareness_enabled = true
+# Enforce per-segment occupied bandwidth limits for the active modem mode.
+# enforce_max_channel_width = true
+# Enforce convention-bound digital/data segments.
+# enforce_segment_conventions = true
 # Candidate frequencies to evaluate during a QSY scan (Hz).
 # candidate_freqs_hz = [14070000, 14074000, 14077000]
 # How long to dwell on each candidate while reading the S-meter (ms).

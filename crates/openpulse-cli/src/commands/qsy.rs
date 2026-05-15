@@ -1,9 +1,10 @@
 //! `openpulse qsy` subcommand — QSY frequency-agility negotiation.
 
 use anyhow::{bail, Result};
+use tracing::warn;
 
 use openpulse_config as config;
-use openpulse_qsy::{scanner::QsyScanner, QsyAction, QsySession};
+use openpulse_qsy::{scanner::QsyScanner, QsyAction, QsyPolicy, QsySession};
 use openpulse_radio::RigctldController;
 
 use crate::cli::QsyCommands;
@@ -19,6 +20,15 @@ pub fn run(command: QsyCommands) -> Result<()> {
 fn run_init(rig_override: String) -> Result<()> {
     let cfg = config::load()?;
     let qsy_cfg = &cfg.qsy;
+    let policy = QsyPolicy::from_config(
+        qsy_cfg.enabled,
+        &qsy_cfg.allow_trustlevels,
+        &qsy_cfg.bandplan_mode,
+        qsy_cfg.bandplan_awareness_enabled,
+        qsy_cfg.enforce_max_channel_width,
+        qsy_cfg.enforce_segment_conventions,
+    )
+    .map_err(|e| anyhow::anyhow!("invalid [qsy] config: {e}"))?;
 
     if !qsy_cfg.enabled {
         bail!("QSY is disabled in config.toml — set [qsy] enabled = true to use it");
@@ -37,8 +47,16 @@ fn run_init(rig_override: String) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("cannot connect to rigctld at {rig_addr}: {e}"))?;
     let mut scanner = QsyScanner::new(rig, qsy_cfg.scan_dwell_ms);
 
-    let mut session =
-        QsySession::new_initiator().with_switchover_offset_s(qsy_cfg.switchover_offset_s as u32);
+    if !qsy_cfg.bandplan_awareness_enabled {
+        warn!(
+            "qsy.bandplan_awareness_enabled=false; responsible-operator compliance override active"
+        );
+    }
+
+    let mut session = QsySession::new_initiator()
+        .with_policy(policy)
+        .with_operating_mode(cfg.modem.mode.clone())
+        .with_switchover_offset_s(qsy_cfg.switchover_offset_s as u32);
     let actions = session.initiate(qsy_cfg.candidate_freqs_hz.clone())?;
 
     for action in &actions {
@@ -76,13 +94,31 @@ fn run_status() -> Result<()> {
     let qsy_cfg = &cfg.qsy;
     println!("QSY enabled:           {}", qsy_cfg.enabled);
     println!(
-        "Allow trust levels:    {} [not yet enforced]",
+        "Allow trust levels:    {}",
         if qsy_cfg.allow_trustlevels.is_empty() {
             "(none)".into()
         } else {
             qsy_cfg.allow_trustlevels.join(", ")
         }
     );
+    println!("Bandplan mode:         {}", qsy_cfg.bandplan_mode);
+    println!(
+        "Bandplan awareness:    {}",
+        qsy_cfg.bandplan_awareness_enabled
+    );
+    println!(
+        "Enforce max width:     {}",
+        qsy_cfg.enforce_max_channel_width
+    );
+    println!(
+        "Enforce conventions:   {}",
+        qsy_cfg.enforce_segment_conventions
+    );
+    if !qsy_cfg.bandplan_awareness_enabled {
+        println!(
+            "Compliance exception:  bandplan-awareness override is active (responsible operator required)"
+        );
+    }
     println!(
         "Candidate freqs (Hz):  {}",
         if qsy_cfg.candidate_freqs_hz.is_empty() {
