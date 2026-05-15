@@ -268,11 +268,12 @@ fn gray_map_decision(i: f32, q: f32) -> (f32, f32) {
 /// Trains on known preamble symbols, then switches to decision-directed mode.
 fn lms_profile(mode: &str) -> (usize, usize, f32) {
     // HF 1000-baud paths see stronger multipath/ISI under Watterson Moderate/Poor,
-    // so enable a short DFE section and slightly smaller step size for stability.
+    // so use a longer forward filter, enable a short DFE section, and reduce
+    // the LMS step size for better decision-directed stability.
     if mode.contains("-HF") && mode.contains("-RRC") && mode.contains("1000") {
-        (9, 2, 0.012)
+        (11, 2, 0.010)
     } else if mode.contains("-HF") && mode.contains("1000") {
-        (9, 2, 0.015)
+        (11, 2, 0.012)
     } else {
         (7, 0, 0.02)
     }
@@ -421,14 +422,14 @@ mod tests {
     #[test]
     fn lms_profile_hf_uses_dfe() {
         let (fwd, dfe, mu) = lms_profile("QPSK1000-HF");
-        assert_eq!(fwd, 9);
-        assert_eq!(dfe, 2);
-        assert!((mu - 0.015).abs() < 1e-6);
-
-        let (fwd, dfe, mu) = lms_profile("QPSK1000-HF-RRC");
-        assert_eq!(fwd, 9);
+        assert_eq!(fwd, 11);
         assert_eq!(dfe, 2);
         assert!((mu - 0.012).abs() < 1e-6);
+
+        let (fwd, dfe, mu) = lms_profile("QPSK1000-HF-RRC");
+        assert_eq!(fwd, 11);
+        assert_eq!(dfe, 2);
+        assert!((mu - 0.010).abs() < 1e-6);
     }
 
     #[test]
