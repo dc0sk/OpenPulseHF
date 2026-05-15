@@ -42,6 +42,8 @@ Then run targeted crate tests for touched areas to iterate faster.
 - Keep commits small and single-purpose.
 - Every behavior change should include/adjust tests.
 - Validate changes locally before requesting review.
+- Before pushing Rust changes, always run formatting and clippy (`cargo fmt --all -- --check` and `cargo clippy --workspace --no-default-features -- -D warnings`) and fix actionable lint findings.
+- Before pushing, review the diff for obvious problems, regressions, and missed edge cases, and fix them on the same branch instead of deferring them.
 
 ## 6) Known sharp edges (high impact)
 

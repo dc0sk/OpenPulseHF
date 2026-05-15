@@ -15,7 +15,10 @@ history with PR numbers.
 
 ## Open work items
 
-### Bandplan awareness for QSY and operating mode 🔄
+No active implementation items remain.  Remaining entries are deferred research tracks
+or external/regulatory sign-off dependencies.
+
+### Bandplan awareness for QSY and operating mode ✅ Done (PRs #235, #236, #237)
 
 Add bandplan-awareness guardrails for auto-QSY mode and general operating mode.
 
@@ -27,15 +30,10 @@ Add bandplan-awareness guardrails for auto-QSY mode and general operating mode.
 - **Default behavior**: bandplan awareness is **enabled by default**.
 - **Override**: may be disabled only by a **responsible user** (explicit operator opt-out in configuration/CLI, logged as an operational compliance exception).
 
-Suggested implementation scope (future work):
-- Central bandplan policy module (shared by QSY and operator mode selection).
-- QSY candidate pre-filter + reject reasons for out-of-plan frequencies.
-- Config flags for awareness mode and the two enforcement options.
-- Audit/log output when override is used.
-
-Current status:
-- ✅ QSY-path guardrails shipped: `ham-iaru` policy checks, candidate validation, max-width and segment enforcement, default-enabled awareness, and compliance-override logging.
-- ✅ Non-QSY operating-mode guardrails wired for CLI transmit paths (`transmit`, `broadcast`, `beacon`) using the same policy and compliance-override behavior.
+Shipped scope:
+- ✅ QSY-path guardrails: `ham-iaru` policy checks, candidate validation, max-width and segment enforcement, default-enabled awareness, and compliance-override logging.
+- ✅ Non-QSY operating-mode guardrails for CLI transmit paths (`transmit`, `broadcast`, `beacon`) using the same policy and compliance-override behavior.
+- ✅ Override behavior fix: `bandplan_awareness_enabled=false` short-circuits guardrails before mode parsing, preserving responsible-operator override semantics.
 
 ### Release packaging ✅ Done (PR #231)
 
