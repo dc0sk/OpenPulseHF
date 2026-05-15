@@ -1,4 +1,5 @@
 /target/
+**/target/
 pki-tooling/target/
 *.swp
 *.bak
