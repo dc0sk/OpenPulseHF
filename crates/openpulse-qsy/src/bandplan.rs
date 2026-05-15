@@ -5,14 +5,23 @@ use thiserror::Error;
 /// Supported bandplan modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BandplanMode {
-    /// HAM/IARU HF bandplan guardrails.
+    /// HAM/IARU HF bandplan guardrails (deprecated: use region-specific variants).
     HamIaru,
+    /// IARU Region 1 (Europe, Africa, Middle East) HF bandplan.
+    HamIaruRegion1,
+    /// IARU Region 2 (Americas) HF bandplan.
+    HamIaruRegion2,
+    /// IARU Region 3 (Asia-Pacific) HF bandplan.
+    HamIaruRegion3,
 }
 
 impl BandplanMode {
     fn parse_impl(value: &str) -> Result<Self, BandplanError> {
         match value.trim().to_ascii_lowercase().as_str() {
             "ham-iaru" => Ok(Self::HamIaru),
+            "ham-iaru-r1" | "ham-iaru-region1" => Ok(Self::HamIaruRegion1),
+            "ham-iaru-r2" | "ham-iaru-region2" => Ok(Self::HamIaruRegion2),
+            "ham-iaru-r3" | "ham-iaru-region3" => Ok(Self::HamIaruRegion3),
             other => Err(BandplanError::UnknownMode(other.to_string())),
         }
     }
@@ -51,7 +60,7 @@ impl Default for BandplanPolicy {
 }
 
 /// Errors emitted while evaluating bandplan policy.
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq)]
 pub enum BandplanError {
     #[error("unknown bandplan mode: {0}")]
     UnknownMode(String),
@@ -83,9 +92,30 @@ impl BandplanPolicy {
         }
 
         match self.mode {
-            BandplanMode::HamIaru => validate_ham_iaru(
+            BandplanMode::HamIaru => validate_ham_iaru_base(
                 freq_hz,
                 operating_mode,
+                self.enforce_segment_conventions,
+                self.enforce_max_channel_width,
+            ),
+            BandplanMode::HamIaruRegion1 => validate_iaru_region(
+                freq_hz,
+                operating_mode,
+                ItuRegion::Region1,
+                self.enforce_segment_conventions,
+                self.enforce_max_channel_width,
+            ),
+            BandplanMode::HamIaruRegion2 => validate_iaru_region(
+                freq_hz,
+                operating_mode,
+                ItuRegion::Region2,
+                self.enforce_segment_conventions,
+                self.enforce_max_channel_width,
+            ),
+            BandplanMode::HamIaruRegion3 => validate_iaru_region(
+                freq_hz,
+                operating_mode,
+                ItuRegion::Region3,
                 self.enforce_segment_conventions,
                 self.enforce_max_channel_width,
             ),
@@ -93,7 +123,7 @@ impl BandplanPolicy {
     }
 }
 
-fn validate_ham_iaru(
+fn validate_ham_iaru_base(
     freq_hz: u64,
     operating_mode: &str,
     enforce_segments: bool,
@@ -130,6 +160,80 @@ fn validate_ham_iaru(
     }
 
     Ok(())
+}
+
+/// ITU radio regions for bandplan allocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ItuRegion {
+    Region1,
+    Region2,
+    Region3,
+}
+
+impl ItuRegion {
+    fn mode_string(self) -> &'static str {
+        match self {
+            Self::Region1 => "ham-iaru-r1",
+            Self::Region2 => "ham-iaru-r2",
+            Self::Region3 => "ham-iaru-r3",
+        }
+    }
+}
+
+fn validate_iaru_region(
+    freq_hz: u64,
+    operating_mode: &str,
+    region: ItuRegion,
+    enforce_segments: bool,
+    enforce_width: bool,
+) -> Result<(), BandplanError> {
+    let band = find_band_for_region(freq_hz, region).ok_or(BandplanError::FrequencyOutOfBand {
+        freq_hz,
+        mode: region.mode_string(),
+    })?;
+
+    let max_bw_hz = if enforce_segments {
+        find_segment_for_region(freq_hz, region)
+            .map(|segment| segment.max_bw_hz)
+            .ok_or(BandplanError::SegmentViolation {
+                freq_hz,
+                mode: region.mode_string(),
+            })?
+    } else {
+        band.max_bw_hz
+    };
+
+    if enforce_width {
+        let bw =
+            occupied_bandwidth_hz(operating_mode).ok_or(BandplanError::UnknownOperatingMode {
+                mode: operating_mode.to_string(),
+            })?;
+        if bw > max_bw_hz {
+            return Err(BandplanError::ChannelWidthExceeded {
+                mode: operating_mode.to_string(),
+                required_hz: bw,
+                max_hz: max_bw_hz,
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn find_band_for_region(freq_hz: u64, region: ItuRegion) -> Option<HamBand> {
+    match region {
+        ItuRegion::Region1 => find_region1_band(freq_hz),
+        ItuRegion::Region2 => find_region2_band(freq_hz),
+        ItuRegion::Region3 => find_region3_band(freq_hz),
+    }
+}
+
+fn find_segment_for_region(freq_hz: u64, region: ItuRegion) -> Option<DigitalSegment> {
+    match region {
+        ItuRegion::Region1 => find_region1_segment(freq_hz),
+        ItuRegion::Region2 => find_region2_segment(freq_hz),
+        ItuRegion::Region3 => find_region3_segment(freq_hz),
+    }
 }
 
 /// Conservative occupied-bandwidth estimates used for policy checks.
@@ -285,6 +389,139 @@ fn find_ham_iaru_segment(freq_hz: u64) -> Option<DigitalSegment> {
         .find(|s| (s.min_hz..=s.max_hz).contains(&freq_hz))
 }
 
+/// IARU Region 1 (Europe, Africa, Middle East) digital segments.
+fn find_region1_band(freq_hz: u64) -> Option<HamBand> {
+    // Region 1 uses standard HF allocation; reuse base implementation.
+    find_ham_iaru_band(freq_hz)
+}
+
+fn find_region1_segment(freq_hz: u64) -> Option<DigitalSegment> {
+    const SEGMENTS: [DigitalSegment; 9] = [
+        DigitalSegment {
+            min_hz: 1_838_000,
+            max_hz: 1_843_000,
+            max_bw_hz: 2_700,
+        }, // 160m
+        DigitalSegment {
+            min_hz: 3_570_000,
+            max_hz: 3_600_000,
+            max_bw_hz: 2_700,
+        }, // 80m
+        DigitalSegment {
+            min_hz: 7_040_000,
+            max_hz: 7_125_000,
+            max_bw_hz: 2_700,
+        }, // 40m
+        DigitalSegment {
+            min_hz: 10_130_000,
+            max_hz: 10_150_000,
+            max_bw_hz: 500,
+        }, // 30m
+        DigitalSegment {
+            min_hz: 14_070_000,
+            max_hz: 14_112_000,
+            max_bw_hz: 2_700,
+        }, // 20m — Region 1 is narrower
+        DigitalSegment {
+            min_hz: 18_100_000,
+            max_hz: 18_110_000,
+            max_bw_hz: 2_700,
+        }, // 17m
+        DigitalSegment {
+            min_hz: 21_070_000,
+            max_hz: 21_149_000,
+            max_bw_hz: 2_700,
+        }, // 15m
+        DigitalSegment {
+            min_hz: 24_920_000,
+            max_hz: 24_929_000,
+            max_bw_hz: 2_700,
+        }, // 12m
+        DigitalSegment {
+            min_hz: 28_070_000,
+            max_hz: 28_190_000,
+            max_bw_hz: 2_700,
+        }, // 10m
+    ];
+
+    SEGMENTS
+        .iter()
+        .copied()
+        .find(|s| (s.min_hz..=s.max_hz).contains(&freq_hz))
+}
+
+/// IARU Region 2 (Americas) digital segments — generally wider digital allocations.
+fn find_region2_band(freq_hz: u64) -> Option<HamBand> {
+    // Region 2 generally shares the same band allocations; reuse base.
+    find_ham_iaru_band(freq_hz)
+}
+
+fn find_region2_segment(freq_hz: u64) -> Option<DigitalSegment> {
+    const SEGMENTS: [DigitalSegment; 9] = [
+        DigitalSegment {
+            min_hz: 1_838_000,
+            max_hz: 1_843_000,
+            max_bw_hz: 2_700,
+        }, // 160m
+        DigitalSegment {
+            min_hz: 3_570_000,
+            max_hz: 3_600_000,
+            max_bw_hz: 2_700,
+        }, // 80m
+        DigitalSegment {
+            min_hz: 7_040_000,
+            max_hz: 7_125_000,
+            max_bw_hz: 2_700,
+        }, // 40m
+        DigitalSegment {
+            min_hz: 10_130_000,
+            max_hz: 10_150_000,
+            max_bw_hz: 500,
+        }, // 30m
+        DigitalSegment {
+            min_hz: 14_070_000,
+            max_hz: 14_150_000,
+            max_bw_hz: 2_700,
+        }, // 20m — Region 2 is wider (to 14.150)
+        DigitalSegment {
+            min_hz: 18_100_000,
+            max_hz: 18_110_000,
+            max_bw_hz: 2_700,
+        }, // 17m
+        DigitalSegment {
+            min_hz: 21_070_000,
+            max_hz: 21_149_000,
+            max_bw_hz: 2_700,
+        }, // 15m
+        DigitalSegment {
+            min_hz: 24_920_000,
+            max_hz: 24_929_000,
+            max_bw_hz: 2_700,
+        }, // 12m
+        DigitalSegment {
+            min_hz: 28_070_000,
+            max_hz: 28_190_000,
+            max_bw_hz: 2_700,
+        }, // 10m
+    ];
+
+    SEGMENTS
+        .iter()
+        .copied()
+        .find(|s| (s.min_hz..=s.max_hz).contains(&freq_hz))
+}
+
+/// IARU Region 3 (Asia-Pacific) digital segments — varies by administration.
+/// For simplicity, use Region 1 allocations as a reasonable default.
+fn find_region3_band(freq_hz: u64) -> Option<HamBand> {
+    find_ham_iaru_band(freq_hz)
+}
+
+fn find_region3_segment(freq_hz: u64) -> Option<DigitalSegment> {
+    // Region 3 allocations vary by country; default to Region 1.
+    find_region1_segment(freq_hz)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,5 +562,91 @@ mod tests {
         let mut policy = BandplanPolicy::default();
         policy.awareness_enabled = false;
         assert!(policy.validate_frequency(14_200_000, "QPSK2000").is_ok());
+    }
+
+    #[test]
+    fn region1_accepts_20m_digital_lower_edge() {
+        let mut policy = BandplanPolicy::default();
+        policy.mode = BandplanMode::HamIaruRegion1;
+        assert!(policy.validate_frequency(14_070_000, "BPSK250").is_ok());
+    }
+
+    #[test]
+    fn region1_accepts_20m_digital_upper_edge() {
+        let mut policy = BandplanPolicy::default();
+        policy.mode = BandplanMode::HamIaruRegion1;
+        assert!(policy.validate_frequency(14_112_000, "BPSK250").is_ok());
+    }
+
+    #[test]
+    fn region1_rejects_20m_outside_segment_upper() {
+        let mut policy = BandplanPolicy::default();
+        policy.mode = BandplanMode::HamIaruRegion1;
+        assert!(matches!(
+            policy.validate_frequency(14_120_000, "BPSK250"),
+            Err(BandplanError::SegmentViolation { .. })
+        ));
+    }
+
+    #[test]
+    fn region2_accepts_wider_20m_digital_segment() {
+        let mut policy = BandplanPolicy::default();
+        policy.mode = BandplanMode::HamIaruRegion2;
+        // Region 2 allows up to 14.150 MHz, whereas Region 1 stops at 14.112
+        assert!(policy.validate_frequency(14_140_000, "BPSK250").is_ok());
+    }
+
+    #[test]
+    fn region2_rejects_outside_20m_segment_upper() {
+        let mut policy = BandplanPolicy::default();
+        policy.mode = BandplanMode::HamIaruRegion2;
+        assert!(matches!(
+            policy.validate_frequency(14_160_000, "BPSK250"),
+            Err(BandplanError::SegmentViolation { .. })
+        ));
+    }
+
+    #[test]
+    fn region3_defaults_to_region1_allocations() {
+        let mut policy = BandplanPolicy::default();
+        policy.mode = BandplanMode::HamIaruRegion3;
+        // Region 3 defaults to Region 1 allocations
+        assert!(policy.validate_frequency(14_112_000, "BPSK250").is_ok());
+        assert!(matches!(
+            policy.validate_frequency(14_120_000, "BPSK250"),
+            Err(BandplanError::SegmentViolation { .. })
+        ));
+    }
+
+    #[test]
+    fn parse_region_mode_strings() {
+        assert_eq!(
+            "ham-iaru".parse::<BandplanMode>(),
+            Ok(BandplanMode::HamIaru)
+        );
+        assert_eq!(
+            "ham-iaru-r1".parse::<BandplanMode>(),
+            Ok(BandplanMode::HamIaruRegion1)
+        );
+        assert_eq!(
+            "ham-iaru-region2".parse::<BandplanMode>(),
+            Ok(BandplanMode::HamIaruRegion2)
+        );
+        assert_eq!(
+            "ham-iaru-r3".parse::<BandplanMode>(),
+            Ok(BandplanMode::HamIaruRegion3)
+        );
+    }
+
+    #[test]
+    fn parse_region_mode_strings_case_insensitive() {
+        assert_eq!(
+            "HAM-IARU-R1".parse::<BandplanMode>(),
+            Ok(BandplanMode::HamIaruRegion1)
+        );
+        assert_eq!(
+            "Ham-IARU-Region2".parse::<BandplanMode>(),
+            Ok(BandplanMode::HamIaruRegion2)
+        );
     }
 }
