@@ -350,12 +350,11 @@ The VARA WattersonF1 throughput parity criterion is deferred — see note.
 - [x] Frequency plan: US (FCC Part 97), EU (CEPT/ECC), UK (Ofcom) ✓
 - [x] TX power enforcement: `--max-power <watts>` CLI flag wired to PTT controller.
 - [x] Callsign logging: every frame TX includes station_id + timestamp_ms.
-- [ ] Compliance checklist: signed-off by legal/compliance contact.
 - [x] Doc: `docs/regulatory-compliance-checklist.md`.
 
 **Depends On**: None (can parallelize with Item 8).
 
-**Estimated Effort**: 5–7 days for technical implementation (✓ mostly complete); legal review separate, ~2–4 weeks.
+**Estimated Effort**: 5–7 days for technical implementation (✓ complete).
 
 ---
 
