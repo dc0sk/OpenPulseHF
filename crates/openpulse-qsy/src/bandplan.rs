@@ -4,8 +4,13 @@ use thiserror::Error;
 
 /// Supported bandplan modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BandplanMode {
-    /// HAM/IARU HF bandplan guardrails (deprecated: use region-specific variants).
+    /// HAM/IARU HF bandplan guardrails; use region-specific variants instead.
+    #[deprecated(
+        since = "1.5.0",
+        note = "use region-specific variants (HamIaruRegion1/2/3) instead"
+    )]
     HamIaru,
     /// IARU Region 1 (Europe, Africa, Middle East) HF bandplan.
     HamIaruRegion1,
@@ -18,6 +23,7 @@ pub enum BandplanMode {
 impl BandplanMode {
     fn parse_impl(value: &str) -> Result<Self, BandplanError> {
         match value.trim().to_ascii_lowercase().as_str() {
+            #[allow(deprecated)]
             "ham-iaru" => Ok(Self::HamIaru),
             "ham-iaru-r1" | "ham-iaru-region1" => Ok(Self::HamIaruRegion1),
             "ham-iaru-r2" | "ham-iaru-region2" => Ok(Self::HamIaruRegion2),
@@ -52,6 +58,7 @@ impl Default for BandplanPolicy {
     fn default() -> Self {
         Self {
             awareness_enabled: true,
+            #[allow(deprecated)]
             mode: BandplanMode::HamIaru,
             enforce_max_channel_width: true,
             enforce_segment_conventions: true,
@@ -92,6 +99,7 @@ impl BandplanPolicy {
         }
 
         match self.mode {
+            #[allow(deprecated)]
             BandplanMode::HamIaru => validate_ham_iaru_base(
                 freq_hz,
                 operating_mode,
@@ -334,8 +342,8 @@ fn find_ham_iaru_band(freq_hz: u64) -> Option<HamBand> {
         .find(|band| (band.min_hz..=band.max_hz).contains(&freq_hz))
 }
 
-fn find_ham_iaru_segment(freq_hz: u64) -> Option<DigitalSegment> {
-    const SEGMENTS: [DigitalSegment; 9] = [
+fn shared_base_digital_segments() -> &'static [DigitalSegment; 9] {
+    &[
         DigitalSegment {
             min_hz: 1_838_000,
             max_hz: 1_843_000,
@@ -360,7 +368,7 @@ fn find_ham_iaru_segment(freq_hz: u64) -> Option<DigitalSegment> {
             min_hz: 14_070_000,
             max_hz: 14_112_000,
             max_bw_hz: 2_700,
-        }, // 20m
+        }, // 20m — base (Region 1 narrow)
         DigitalSegment {
             min_hz: 18_100_000,
             max_hz: 18_110_000,
@@ -381,9 +389,11 @@ fn find_ham_iaru_segment(freq_hz: u64) -> Option<DigitalSegment> {
             max_hz: 28_190_000,
             max_bw_hz: 2_700,
         }, // 10m
-    ];
+    ]
+}
 
-    SEGMENTS
+fn find_ham_iaru_segment(freq_hz: u64) -> Option<DigitalSegment> {
+    shared_base_digital_segments()
         .iter()
         .copied()
         .find(|s| (s.min_hz..=s.max_hz).contains(&freq_hz))
@@ -396,55 +406,8 @@ fn find_region1_band(freq_hz: u64) -> Option<HamBand> {
 }
 
 fn find_region1_segment(freq_hz: u64) -> Option<DigitalSegment> {
-    const SEGMENTS: [DigitalSegment; 9] = [
-        DigitalSegment {
-            min_hz: 1_838_000,
-            max_hz: 1_843_000,
-            max_bw_hz: 2_700,
-        }, // 160m
-        DigitalSegment {
-            min_hz: 3_570_000,
-            max_hz: 3_600_000,
-            max_bw_hz: 2_700,
-        }, // 80m
-        DigitalSegment {
-            min_hz: 7_040_000,
-            max_hz: 7_125_000,
-            max_bw_hz: 2_700,
-        }, // 40m
-        DigitalSegment {
-            min_hz: 10_130_000,
-            max_hz: 10_150_000,
-            max_bw_hz: 500,
-        }, // 30m
-        DigitalSegment {
-            min_hz: 14_070_000,
-            max_hz: 14_112_000,
-            max_bw_hz: 2_700,
-        }, // 20m — Region 1 is narrower
-        DigitalSegment {
-            min_hz: 18_100_000,
-            max_hz: 18_110_000,
-            max_bw_hz: 2_700,
-        }, // 17m
-        DigitalSegment {
-            min_hz: 21_070_000,
-            max_hz: 21_149_000,
-            max_bw_hz: 2_700,
-        }, // 15m
-        DigitalSegment {
-            min_hz: 24_920_000,
-            max_hz: 24_929_000,
-            max_bw_hz: 2_700,
-        }, // 12m
-        DigitalSegment {
-            min_hz: 28_070_000,
-            max_hz: 28_190_000,
-            max_bw_hz: 2_700,
-        }, // 10m
-    ];
-
-    SEGMENTS
+    // Region 1 uses the shared base table (narrower 20m: 14.070-14.112).
+    shared_base_digital_segments()
         .iter()
         .copied()
         .find(|s| (s.min_hz..=s.max_hz).contains(&freq_hz))
@@ -457,55 +420,16 @@ fn find_region2_band(freq_hz: u64) -> Option<HamBand> {
 }
 
 fn find_region2_segment(freq_hz: u64) -> Option<DigitalSegment> {
-    const SEGMENTS: [DigitalSegment; 9] = [
-        DigitalSegment {
-            min_hz: 1_838_000,
-            max_hz: 1_843_000,
-            max_bw_hz: 2_700,
-        }, // 160m
-        DigitalSegment {
-            min_hz: 3_570_000,
-            max_hz: 3_600_000,
-            max_bw_hz: 2_700,
-        }, // 80m
-        DigitalSegment {
-            min_hz: 7_040_000,
-            max_hz: 7_125_000,
-            max_bw_hz: 2_700,
-        }, // 40m
-        DigitalSegment {
-            min_hz: 10_130_000,
-            max_hz: 10_150_000,
-            max_bw_hz: 500,
-        }, // 30m
-        DigitalSegment {
+    // Region 2 uses shared base except 20m segment is wider (14.070-14.150).
+    let freq = freq_hz;
+    if (14_070_000..=14_150_000).contains(&freq) {
+        return Some(DigitalSegment {
             min_hz: 14_070_000,
             max_hz: 14_150_000,
             max_bw_hz: 2_700,
-        }, // 20m — Region 2 is wider (to 14.150)
-        DigitalSegment {
-            min_hz: 18_100_000,
-            max_hz: 18_110_000,
-            max_bw_hz: 2_700,
-        }, // 17m
-        DigitalSegment {
-            min_hz: 21_070_000,
-            max_hz: 21_149_000,
-            max_bw_hz: 2_700,
-        }, // 15m
-        DigitalSegment {
-            min_hz: 24_920_000,
-            max_hz: 24_929_000,
-            max_bw_hz: 2_700,
-        }, // 12m
-        DigitalSegment {
-            min_hz: 28_070_000,
-            max_hz: 28_190_000,
-            max_bw_hz: 2_700,
-        }, // 10m
-    ];
-
-    SEGMENTS
+        });
+    }
+    shared_base_digital_segments()
         .iter()
         .copied()
         .find(|s| (s.min_hz..=s.max_hz).contains(&freq_hz))
@@ -619,6 +543,14 @@ mod tests {
     }
 
     #[test]
+    fn region2_accepts_20m_upper_edge() {
+        let mut policy = BandplanPolicy::default();
+        policy.mode = BandplanMode::HamIaruRegion2;
+        // Verify exact upper boundary: 14.150 MHz is the Region 2 limit for 20m digital
+        assert!(policy.validate_frequency(14_150_000, "BPSK250").is_ok());
+    }
+
+    #[test]
     fn parse_region_mode_strings() {
         assert_eq!(
             "ham-iaru".parse::<BandplanMode>(),
@@ -629,11 +561,19 @@ mod tests {
             Ok(BandplanMode::HamIaruRegion1)
         );
         assert_eq!(
+            "ham-iaru-region1".parse::<BandplanMode>(),
+            Ok(BandplanMode::HamIaruRegion1)
+        );
+        assert_eq!(
             "ham-iaru-region2".parse::<BandplanMode>(),
             Ok(BandplanMode::HamIaruRegion2)
         );
         assert_eq!(
             "ham-iaru-r3".parse::<BandplanMode>(),
+            Ok(BandplanMode::HamIaruRegion3)
+        );
+        assert_eq!(
+            "ham-iaru-region3".parse::<BandplanMode>(),
             Ok(BandplanMode::HamIaruRegion3)
         );
     }
@@ -647,6 +587,14 @@ mod tests {
         assert_eq!(
             "Ham-IARU-Region2".parse::<BandplanMode>(),
             Ok(BandplanMode::HamIaruRegion2)
+        );
+        assert_eq!(
+            "HAM-IARU-REGION1".parse::<BandplanMode>(),
+            Ok(BandplanMode::HamIaruRegion1)
+        );
+        assert_eq!(
+            "ham-iaru-region3".parse::<BandplanMode>(),
+            Ok(BandplanMode::HamIaruRegion3)
         );
     }
 }
