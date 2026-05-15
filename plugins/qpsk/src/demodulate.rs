@@ -518,4 +518,76 @@ mod tests {
             "HF profile should not regress average BER materially; avg_base={avg_base:.4}, avg_hf={avg_hf:.4}"
         );
     }
+
+    #[test]
+    fn lms_profile_hf_not_worse_than_baseline_on_watterson_poor_f1() {
+        let payload: Vec<u8> = (0..96u8).map(|v| v ^ 0xA5).collect();
+        let cfg = ModulationConfig {
+            mode: "QPSK1000-HF".to_string(),
+            ..ModulationConfig::default()
+        };
+        let tx = crate::modulate::qpsk_modulate(&payload, &cfg).expect("modulate");
+
+        let baud = parse_baud_rate(&cfg.mode).expect("parse baud");
+        let fs = cfg.sample_rate as f32;
+        let fc = cfg.center_frequency;
+        let n = samples_per_symbol(fs, baud).expect("samples/symbol");
+        let cosine_overlap = true;
+
+        let mut compared_trials = 0usize;
+        let mut hf_better_or_equal = 0usize;
+        let mut sum_ber_base = 0.0f32;
+        let mut sum_ber_hf = 0.0f32;
+
+        for seed in [
+            0x5201, 0x5202, 0x5203, 0x5204, 0x5205, 0x5206, 0x5207, 0x5208,
+        ] {
+            let mut ch = WattersonChannel::new(WattersonConfig::poor_f1(Some(seed)))
+                .expect("watterson poor f1");
+            let rx = ch.apply(&tx);
+
+            let timing = find_timing_offset(&rx, n, fc, fs, cosine_overlap);
+            let syms = demodulate_symbols(&rx, n, fc, fs, timing, cosine_overlap);
+            if syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
+                continue;
+            }
+
+            let eq_baseline = qpsk_lms_equalize(&syms, "QPSK1000");
+            let eq_hf = qpsk_lms_equalize(&syms, "QPSK1000-HF");
+
+            let data_base = &eq_baseline[PREAMBLE_SYMS..(eq_baseline.len() - TAIL_SYMS)];
+            let data_hf = &eq_hf[PREAMBLE_SYMS..(eq_hf.len() - TAIL_SYMS)];
+            let rec_base = bits_to_bytes(&symbols_to_bits(data_base));
+            let rec_hf = bits_to_bytes(&symbols_to_bits(data_hf));
+            if rec_base.len() < payload.len() || rec_hf.len() < payload.len() {
+                continue;
+            }
+
+            let ber_base = bit_error_rate(&payload, &rec_base[..payload.len()]);
+            let ber_hf = bit_error_rate(&payload, &rec_hf[..payload.len()]);
+            compared_trials += 1;
+            sum_ber_base += ber_base;
+            sum_ber_hf += ber_hf;
+            if ber_hf <= ber_base {
+                hf_better_or_equal += 1;
+            }
+        }
+
+        assert!(
+            compared_trials >= 6,
+            "expected enough deterministic trials for profile comparison, got {compared_trials}"
+        );
+
+        let avg_base = sum_ber_base / compared_trials as f32;
+        let avg_hf = sum_ber_hf / compared_trials as f32;
+
+        assert!(
+            hf_better_or_equal >= 3,
+            "HF profile should be no-worse on most deterministic poor_f1 trials; hf_better_or_equal={hf_better_or_equal}/{compared_trials}"
+        );
+        assert!(
+            avg_hf <= avg_base + 0.03,
+            "HF profile should not regress average BER materially on poor_f1; avg_base={avg_base:.4}, avg_hf={avg_hf:.4}"
+        );
+    }
 }
