@@ -375,7 +375,29 @@ fn preamble_expected() -> Vec<(f32, f32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openpulse_channel::watterson::WattersonChannel;
+    use openpulse_channel::{ChannelModel, WattersonConfig};
     use openpulse_core::plugin::ModulationConfig;
+
+    fn bit_error_rate(expected: &[u8], recovered: &[u8]) -> f32 {
+        assert_eq!(
+            expected.len(),
+            recovered.len(),
+            "bit_error_rate requires equal-length slices"
+        );
+
+        let mut bit_errors = 0usize;
+        let mut total_bits = 0usize;
+        for (a, b) in expected.iter().zip(recovered.iter()) {
+            bit_errors += (a ^ b).count_ones() as usize;
+            total_bits += 8;
+        }
+        if total_bits == 0 {
+            0.0
+        } else {
+            bit_errors as f32 / total_bits as f32
+        }
+    }
 
     #[test]
     fn qpsk_round_trip() {
@@ -422,5 +444,77 @@ mod tests {
         assert_eq!(fwd, 7);
         assert_eq!(dfe, 0);
         assert!((mu - 0.02).abs() < 1e-6);
+    }
+
+    #[test]
+    fn lms_profile_hf_not_worse_than_baseline_on_watterson_moderate_f1() {
+        let payload: Vec<u8> = (0..96u8).map(|v| v ^ 0x5A).collect();
+        let cfg = ModulationConfig {
+            mode: "QPSK1000-HF".to_string(),
+            ..ModulationConfig::default()
+        };
+        let tx = crate::modulate::qpsk_modulate(&payload, &cfg).expect("modulate");
+
+        let baud = parse_baud_rate(&cfg.mode).expect("parse baud");
+        let fs = cfg.sample_rate as f32;
+        let fc = cfg.center_frequency;
+        let n = samples_per_symbol(fs, baud).expect("samples/symbol");
+        let cosine_overlap = true;
+
+        let mut compared_trials = 0usize;
+        let mut hf_better_or_equal = 0usize;
+        let mut sum_ber_base = 0.0f32;
+        let mut sum_ber_hf = 0.0f32;
+
+        for seed in [
+            0x5101, 0x5102, 0x5103, 0x5104, 0x5105, 0x5106, 0x5107, 0x5108,
+        ] {
+            let mut ch = WattersonChannel::new(WattersonConfig::moderate_f1(Some(seed)))
+                .expect("watterson moderate f1");
+            let rx = ch.apply(&tx);
+
+            let timing = find_timing_offset(&rx, n, fc, fs, cosine_overlap);
+            let syms = demodulate_symbols(&rx, n, fc, fs, timing, cosine_overlap);
+            if syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
+                continue;
+            }
+
+            let eq_baseline = qpsk_lms_equalize(&syms, "QPSK1000");
+            let eq_hf = qpsk_lms_equalize(&syms, "QPSK1000-HF");
+
+            let data_base = &eq_baseline[PREAMBLE_SYMS..(eq_baseline.len() - TAIL_SYMS)];
+            let data_hf = &eq_hf[PREAMBLE_SYMS..(eq_hf.len() - TAIL_SYMS)];
+            let rec_base = bits_to_bytes(&symbols_to_bits(data_base));
+            let rec_hf = bits_to_bytes(&symbols_to_bits(data_hf));
+            if rec_base.len() < payload.len() || rec_hf.len() < payload.len() {
+                continue;
+            }
+
+            let ber_base = bit_error_rate(&payload, &rec_base[..payload.len()]);
+            let ber_hf = bit_error_rate(&payload, &rec_hf[..payload.len()]);
+            compared_trials += 1;
+            sum_ber_base += ber_base;
+            sum_ber_hf += ber_hf;
+            if ber_hf <= ber_base {
+                hf_better_or_equal += 1;
+            }
+        }
+
+        assert!(
+            compared_trials >= 6,
+            "expected enough deterministic trials for profile comparison, got {compared_trials}"
+        );
+
+        let avg_base = sum_ber_base / compared_trials as f32;
+        let avg_hf = sum_ber_hf / compared_trials as f32;
+
+        assert!(
+            hf_better_or_equal >= 4,
+            "HF profile should be no-worse on most deterministic moderate_f1 trials; hf_better_or_equal={hf_better_or_equal}/{compared_trials}"
+        );
+        assert!(
+            avg_hf <= avg_base + 0.01,
+            "HF profile should not regress average BER materially; avg_base={avg_base:.4}, avg_hf={avg_hf:.4}"
+        );
     }
 }
