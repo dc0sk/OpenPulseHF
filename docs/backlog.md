@@ -16,7 +16,7 @@ history with PR numbers.
 ## Open work items
 
 No active implementation items remain.  Remaining entries are deferred research tracks
-or external/regulatory sign-off dependencies.
+only.
 
 ### Bandplan awareness for QSY and operating mode ✅ Done (PRs #235, #236, #237)
 
