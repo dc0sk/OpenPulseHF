@@ -3,6 +3,8 @@
 use anyhow::{bail, Result};
 use openpulse_modem::ModemEngine;
 
+use crate::commands::bandplan_guard::enforce_mode_guardrails;
+
 /// Run the broadcast subcommand.
 pub fn run(
     engine: &mut ModemEngine,
@@ -11,6 +13,8 @@ pub fn run(
     ttl: u8,
     callsign: &str,
 ) -> Result<()> {
+    enforce_mode_guardrails(mode)?;
+
     let payload = parse_payload(payload_str)?;
     engine.set_callsign(callsign);
     engine.broadcast(&payload, mode, ttl, None)?;

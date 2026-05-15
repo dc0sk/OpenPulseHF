@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use openpulse_modem::ModemEngine;
 use openpulse_radio::PttController;
 
+use crate::commands::bandplan_guard::enforce_mode_guardrails;
+
 pub fn run(
     data: &str,
     mode: &str,
@@ -9,6 +11,8 @@ pub fn run(
     engine: &mut ModemEngine,
     ptt: &mut dyn PttController,
 ) -> Result<()> {
+    enforce_mode_guardrails(mode)?;
+
     ptt.assert_ptt().context("PTT assert failed")?;
     let tx_result = engine
         .transmit(data.as_bytes(), mode, device)
