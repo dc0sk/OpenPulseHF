@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/vara-parity-execution-board.md
 status: living
-last_updated: 2026-05-14
+last_updated: 2026-05-15
 ---
 
 # VARA-Parity SC-FDMA Execution Board
@@ -383,13 +383,12 @@ The VARA WattersonF1 throughput parity criterion is deferred — see note.
 - [x] Integration test: `tests/cli_mode_advisor.rs` (10 SNR values, correct recommendations).
 - [x] Doc: `docs/cli-mode-advisor-guide.md`.
 
-### Follow-up backlog additions
+### Follow-up backlog closure
 
-- Bandplan awareness request logged in `docs/backlog.md`:
-	- default-enabled bandplan awareness for auto-QSY and general operating mode
-	- initial mode: HAM/IARU bandplan
-	- options: max channel-width enforcement and convention-segment enforcement
-	- explicit responsible-user override allowed (with operational audit logging)
+- Bandplan awareness implementation is complete and merged:
+	- PR #235: QSY-path `ham-iaru` guardrails and config wiring
+	- PR #236: non-QSY CLI transmit-path guardrails (`transmit`, `broadcast`, `beacon`)
+	- PR #237: override semantics fix (`bandplan_awareness_enabled=false` short-circuit)
 
 **Depends On**: Item 6 (HARQ tuning finalized).
 
