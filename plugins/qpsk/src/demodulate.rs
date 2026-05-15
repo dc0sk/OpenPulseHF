@@ -41,13 +41,14 @@ pub fn qpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
         let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
         demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap)
     };
-    let syms = qpsk_lms_equalize(&syms);
 
     if syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
         return Err(ModemError::Demodulation(
             "no data symbols after preamble".to_string(),
         ));
     }
+
+    let syms = qpsk_lms_equalize(&syms);
 
     let data = &syms[PREAMBLE_SYMS..(syms.len() - TAIL_SYMS)];
     let bits = symbols_to_bits(data);
@@ -272,18 +273,26 @@ fn qpsk_lms_equalize(symbols: &[(f32, f32)]) -> Vec<(f32, f32)> {
 
     let train_len = PREAMBLE_SYMS.min(symbols.len());
     let expected = preamble_expected();
-    let training_i: Vec<f32> = expected.iter().take(train_len).map(|(i, _)| *i).collect();
-    let training_q: Vec<f32> = expected.iter().take(train_len).map(|(_, q)| *q).collect();
+    let mut training_i = Vec::with_capacity(train_len);
+    let mut training_q = Vec::with_capacity(train_len);
+    for &(i, q) in expected.iter().take(train_len) {
+        training_i.push(i);
+        training_q.push(q);
+    }
 
-    let i_syms: Vec<f32> = symbols.iter().map(|(i, _)| *i).collect();
-    let q_syms: Vec<f32> = symbols.iter().map(|(_, q)| *q).collect();
+    // Split complex symbols in one pass to reduce hot-path iterator churn.
+    let (i_syms, q_syms): (Vec<f32>, Vec<f32>) = symbols.iter().copied().unzip();
 
     let mut eq = LmsEqualizer::new(7, 0, 0.02);
     let (i_eq, q_eq) = eq.process_frame(&i_syms, &q_syms, &training_i, &training_q, |i, q| {
         gray_map_decision(i, q)
     });
 
-    i_eq.into_iter().zip(q_eq).collect()
+    let mut out = Vec::with_capacity(i_eq.len().min(q_eq.len()));
+    for (i, q) in i_eq.into_iter().zip(q_eq) {
+        out.push((i, q));
+    }
+    out
 }
 
 fn bits_to_bytes(bits: &[bool]) -> Vec<u8> {
@@ -329,20 +338,15 @@ pub fn qpsk_demodulate_soft(
     }
 
     let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
-    let syms = qpsk_lms_equalize(&demodulate_symbols(
-        samples,
-        n,
-        fc,
-        fs,
-        timing,
-        cosine_overlap,
-    ));
+    let syms = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
 
     if syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
         return Err(ModemError::Demodulation(
             "no data symbols after preamble".to_string(),
         ));
     }
+
+    let syms = qpsk_lms_equalize(&syms);
 
     let data = &syms[PREAMBLE_SYMS..(syms.len() - TAIL_SYMS)];
     // Per symbol: b0 LLR = Q, b1 LLR = I (from the Gray map geometry).
