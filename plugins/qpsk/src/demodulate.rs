@@ -2,6 +2,7 @@ use std::f32::consts::PI;
 
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
+use openpulse_dsp::equalizer::LmsEqualizer;
 use openpulse_dsp::filter::FirFilter;
 use openpulse_dsp::pll::CarrierPll;
 use openpulse_dsp::rrc::generate_rrc_coefficients;
@@ -40,6 +41,7 @@ pub fn qpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
         let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
         demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap)
     };
+    let syms = qpsk_lms_equalize(&syms);
 
     if syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
         return Err(ModemError::Demodulation(
@@ -255,6 +257,35 @@ fn nearest_gray_bits(i: f32, q: f32) -> (bool, bool) {
     best
 }
 
+fn gray_map_decision(i: f32, q: f32) -> (f32, f32) {
+    let (b0, b1) = nearest_gray_bits(i, q);
+    gray_map(b0, b1)
+}
+
+/// Apply an LMS equalizer to QPSK symbol-rate I/Q.
+///
+/// Trains on known preamble symbols, then switches to decision-directed mode.
+fn qpsk_lms_equalize(symbols: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    if symbols.is_empty() {
+        return Vec::new();
+    }
+
+    let train_len = PREAMBLE_SYMS.min(symbols.len());
+    let expected = preamble_expected();
+    let training_i: Vec<f32> = expected.iter().take(train_len).map(|(i, _)| *i).collect();
+    let training_q: Vec<f32> = expected.iter().take(train_len).map(|(_, q)| *q).collect();
+
+    let i_syms: Vec<f32> = symbols.iter().map(|(i, _)| *i).collect();
+    let q_syms: Vec<f32> = symbols.iter().map(|(_, q)| *q).collect();
+
+    let mut eq = LmsEqualizer::new(7, 0, 0.02);
+    let (i_eq, q_eq) = eq.process_frame(&i_syms, &q_syms, &training_i, &training_q, |i, q| {
+        gray_map_decision(i, q)
+    });
+
+    i_eq.into_iter().zip(q_eq).collect()
+}
+
 fn bits_to_bytes(bits: &[bool]) -> Vec<u8> {
     bits.chunks(8)
         .map(|chunk| {
@@ -298,7 +329,14 @@ pub fn qpsk_demodulate_soft(
     }
 
     let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
-    let syms = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
+    let syms = qpsk_lms_equalize(&demodulate_symbols(
+        samples,
+        n,
+        fc,
+        fs,
+        timing,
+        cosine_overlap,
+    ));
 
     if syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
         return Err(ModemError::Demodulation(
@@ -332,5 +370,12 @@ mod tests {
         let samples = crate::modulate::qpsk_modulate(payload, &cfg).expect("modulate");
         let recovered = qpsk_demodulate(&samples, &cfg).expect("demodulate");
         assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    #[test]
+    fn lms_equalizer_preserves_symbol_count() {
+        let syms = vec![(1.0, 1.0); PREAMBLE_SYMS + 8];
+        let eq = qpsk_lms_equalize(&syms);
+        assert_eq!(eq.len(), syms.len());
     }
 }
