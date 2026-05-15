@@ -10,9 +10,9 @@ last_updated: 2026-05-15
 ## Unreleased
 
 - Adaptive-rate ACK-UP progression now skips unmapped reserved profile rungs,
-	avoiding transitions into `None` mode mappings during active sessions.
+  avoiding transitions into `None` mode mappings during active sessions.
 - The SNR-gated admission path remains limited to HPX wideband-HD SL13 -> SL14;
-	non-wideband profiles keep expected ACK-UP progression.
+  non-wideband profiles keep expected ACK-UP progression.
 
 - Project docs are now organized under docs/ with a consistent format.
 - Pull requests now run docs frontmatter validation checks.
