@@ -32,6 +32,7 @@ impl QpskPlugin {
                     "QPSK500".to_string(),
                     "QPSK1000".to_string(),
                     "QPSK1000-HF".to_string(),
+                    "QPSK1000-HF-RRC".to_string(),
                     "QPSK500-RRC".to_string(),
                     "QPSK1000-RRC".to_string(),
                     // UHF/VHF — 12.5 kHz narrowband (8 kHz audio, 2000 baud, ~2700 Hz BW)
@@ -143,6 +144,12 @@ mod tests {
         assert!((parse_baud_rate("QPSK1000-HF-RRC").unwrap() - 1000.0).abs() < 1e-6);
         assert!((parse_baud_rate("QPSK500-HF-RRC").unwrap() - 500.0).abs() < 1e-6);
         assert!(parse_baud_rate("QPSK").is_err());
+    }
+
+    #[test]
+    fn supported_modes_include_composite_hf_rrc() {
+        let plugin = QpskPlugin::new();
+        assert!(plugin.supports_mode("QPSK1000-HF-RRC"));
     }
 
     #[test]
