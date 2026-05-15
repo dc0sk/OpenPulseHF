@@ -394,6 +394,84 @@ mod tests {
         );
     }
 
+    #[test]
+    fn qpsk1000_hf_rrc_watterson_moderate_f1_decode_coverage() {
+        use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+        let plugin = QpskPlugin::new();
+        let cfg = ModulationConfig {
+            mode: "QPSK1000-HF-RRC".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload: Vec<u8> = (0..96u8).map(|v| v ^ 0xA5).collect();
+        let tx = plugin.modulate(&payload, &cfg).expect("modulate");
+
+        let mut decoded = 0usize;
+        let mut good_ber = 0usize;
+        let mut best_ber = f32::INFINITY;
+        for seed in [
+            0x5301, 0x5302, 0x5303, 0x5304, 0x5305, 0x5306, 0x5307, 0x5308,
+        ] {
+            let mut ch = WattersonChannel::new(WattersonConfig::moderate_f1(Some(seed)))
+                .expect("watterson moderate f1");
+            let rx = ch.apply(&tx);
+            if let Ok(recovered) = plugin.demodulate(&rx, &cfg) {
+                if recovered.len() >= payload.len() {
+                    decoded += 1;
+                    let ber = bit_error_rate(&payload, &recovered[..payload.len()]);
+                    best_ber = best_ber.min(ber);
+                    if ber <= 0.12 {
+                        good_ber += 1;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            decoded >= 6,
+            "QPSK1000-HF-RRC moderate_f1 should decode payload length in most deterministic trials, decoded={decoded}/8"
+        );
+        assert!(
+            good_ber >= 1,
+            "QPSK1000-HF-RRC moderate_f1 should include at least one deterministic low-BER decode, good_ber={good_ber}/8, best_ber={best_ber:.3}"
+        );
+    }
+
+    #[test]
+    fn qpsk1000_hf_rrc_watterson_poor_f1_decode_presence() {
+        use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+        let plugin = QpskPlugin::new();
+        let cfg = ModulationConfig {
+            mode: "QPSK1000-HF-RRC".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload: Vec<u8> = (0..96u8).collect();
+        let tx = plugin.modulate(&payload, &cfg).expect("modulate");
+
+        let mut decoded = 0usize;
+        let mut best_ber = f32::INFINITY;
+        for seed in [0x5401, 0x5402, 0x5403, 0x5404, 0x5405, 0x5406] {
+            let mut ch = WattersonChannel::new(WattersonConfig::poor_f1(Some(seed)))
+                .expect("watterson poor f1");
+            let rx = ch.apply(&tx);
+            if let Ok(recovered) = plugin.demodulate(&rx, &cfg) {
+                if recovered.len() >= payload.len() {
+                    decoded += 1;
+                    let ber = bit_error_rate(&payload, &recovered[..payload.len()]);
+                    best_ber = best_ber.min(ber);
+                }
+            }
+        }
+
+        assert!(
+            decoded >= 1,
+            "QPSK1000-HF-RRC poor_f1 should produce at least one full-length deterministic decode, decoded={decoded}/6"
+        );
+        assert!(
+            best_ber < 0.5,
+            "QPSK1000-HF-RRC poor_f1 best decode BER must beat random (0.5), got best_ber={best_ber:.3}"
+        );
+    }
+
     /// Measure BER improvement from HF-optimized profile on moderate-f1 channel.
     ///
     /// This test compares the baseline profile (fwd=7, dfe=0) against the
