@@ -30,6 +30,7 @@ impl Psk8Plugin {
                     "8PSK500".to_string(),
                     "8PSK1000".to_string(),
                     "8PSK1000-HF".to_string(),
+                    "8PSK1000-HF-RRC".to_string(),
                     "8PSK500-RRC".to_string(),
                     "8PSK1000-RRC".to_string(),
                     // UHF/VHF — 12.5 kHz narrowband (8 kHz audio, 2000 baud, ~2700 Hz BW)
@@ -120,6 +121,12 @@ mod tests {
         assert!((parse_baud_rate("8PSK1000-HF-RRC").unwrap() - 1000.0).abs() < 1e-6);
         assert!((parse_baud_rate("8PSK500-HF-RRC").unwrap() - 500.0).abs() < 1e-6);
         assert!(parse_baud_rate("8PSK").is_err());
+    }
+
+    #[test]
+    fn supported_modes_include_composite_hf_rrc() {
+        let plugin = Psk8Plugin::new();
+        assert!(plugin.supports_mode("8PSK1000-HF-RRC"));
     }
 
     #[test]
