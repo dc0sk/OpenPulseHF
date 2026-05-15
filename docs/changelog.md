@@ -2,12 +2,18 @@
 project: openpulsehf
 doc: docs/changelog.md
 status: living
-last_updated: 2026-04-25
+last_updated: 2026-05-15
 ---
 
 # Changelog
 
 ## Unreleased
+
+- Updated adaptive-rate ACK-UP behavior in `openpulse-modem` so active session
+  profiles skip unmapped reserved speed levels instead of landing on
+  `None` mode mappings (for example, HPX wideband now advances SL9 -> SL11).
+- Clarified and regression-tested that SNR-gated admission remains specific to
+  HPX wideband-HD SL13 -> SL14 and does not affect non-wideband-HD profiles.
 
 - Added `FecCodec` to `openpulse-core`: Reed-Solomon GF(2^8) codec (ECC_LEN=32, corrects up to 16 byte errors per 255-byte block).
 - Added `ModemError::Fec` variant for FEC-specific error propagation.
