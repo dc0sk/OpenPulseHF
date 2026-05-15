@@ -206,9 +206,9 @@ fn wideband_hd_sl13_ack_up_without_ceiling_stays_sl13() {
     assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl13));
 }
 
-/// Non-wideband-HD profiles must keep legacy ACK-UP behavior (no SNR gate at SL9).
+/// Non-wideband-HD profiles must remain unaffected by the SL13->SL14 wideband-HD gate.
 #[test]
-fn hpx_wideband_sl9_ack_up_without_ceiling_still_advances() {
+fn hpx_wideband_sl9_ack_up_skips_reserved_rung_and_advances() {
     let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
     engine.start_adaptive_session(SessionProfile::hpx_wideband());
 
@@ -219,17 +219,17 @@ fn hpx_wideband_sl9_ack_up_without_ceiling_still_advances() {
     );
     assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl9));
 
-    // No ceiling hint applied here: ACK-UP should still advance for hpx_wideband.
+    // No wideband-HD gate applies here: ACK-UP should advance to next mapped rung.
     assert_eq!(
         engine.apply_ack(AckType::AckUp),
-        RateEvent::Increased(SpeedLevel::Sl10)
+        RateEvent::Increased(SpeedLevel::Sl11)
     );
-    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl10));
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl11));
 }
 
 /// Narrowband profile must also remain ungated by SL13-only wideband-HD admission checks.
 #[test]
-fn hpx_narrowband_sl9_ack_up_without_ceiling_still_advances() {
+fn hpx_narrowband_sl9_ack_up_still_advances() {
     let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
     engine.start_adaptive_session(SessionProfile::hpx_narrowband());
 
@@ -240,7 +240,7 @@ fn hpx_narrowband_sl9_ack_up_without_ceiling_still_advances() {
     );
     assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl9));
 
-    // No ceiling hint applied here: ACK-UP should still advance for hpx_narrowband.
+    // No wideband-HD gate applies here.
     assert_eq!(
         engine.apply_ack(AckType::AckUp),
         RateEvent::Increased(SpeedLevel::Sl10)

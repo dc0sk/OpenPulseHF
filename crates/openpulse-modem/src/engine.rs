@@ -20,7 +20,7 @@ use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
 use openpulse_core::ldpc::{IterativeDecoder, LdpcCodec, LDPC_CODEWORD_BYTES, LDPC_MAX_INFO_BYTES};
 use openpulse_core::plugin::{ModulationConfig, PluginRegistry};
 use openpulse_core::profile::SessionProfile;
-use openpulse_core::rate::{BiDirRateAdapter, RateEvent, RateTrigger};
+use openpulse_core::rate::{BiDirRateAdapter, RateEvent, RateTrigger, SpeedLevel};
 use openpulse_core::signed_envelope::SignedEnvelope;
 use openpulse_core::soft_viterbi::SoftViterbiCodec;
 use openpulse_core::trust::{
@@ -290,6 +290,28 @@ impl ModemEngine {
             Some(adapter) => {
                 if hold_ack_up {
                     RateEvent::Maintained
+                } else if ack == AckType::AckUp {
+                    if let Some(profile) = self.session_profile.as_ref() {
+                        let current = adapter.tx_level();
+                        if let Some(target) = Self::next_mapped_level_above(profile, current) {
+                            let mut last_event = RateEvent::Maintained;
+                            while adapter.tx_level() < target {
+                                last_event = adapter.apply_ack(AckType::AckUp);
+                                if matches!(last_event, RateEvent::Maintained) {
+                                    break;
+                                }
+                            }
+
+                            match last_event {
+                                RateEvent::Increased(_) => RateEvent::Increased(adapter.tx_level()),
+                                other => other,
+                            }
+                        } else {
+                            RateEvent::Maintained
+                        }
+                    } else {
+                        adapter.apply_ack(ack)
+                    }
                 } else {
                     adapter.apply_ack(ack)
                 }
@@ -339,6 +361,23 @@ impl ModemEngine {
         is_wideband_hd
             && tx_level == openpulse_core::rate::SpeedLevel::Sl13
             && !adapter.tx.is_snr_upgrade_candidate()
+    }
+
+    fn next_mapped_level_above(
+        profile: &SessionProfile,
+        current: SpeedLevel,
+    ) -> Option<SpeedLevel> {
+        let mut probe = current;
+        loop {
+            let next = probe.step_up();
+            if next == probe {
+                return None;
+            }
+            probe = next;
+            if profile.mode_for(probe).is_some() {
+                return Some(probe);
+            }
+        }
     }
 
     /// Return the mode string for the current TX speed level of the active adaptive session.
