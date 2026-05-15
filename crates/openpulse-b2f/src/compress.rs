@@ -3,7 +3,7 @@
 //! Type D: Gzip (via `flate2`).
 //! Type C: LZHUF LH5 (via `oxiarc-lzhuf`).
 //!
-//! Two LZHUF API tiers:
+//! LZHUF API helpers:
 //! - `compress_lzhuf` / `decompress_lzhuf`: internal format with a 4-byte BE
 //!   original-length prefix.  Self-contained but not wire-compatible with
 //!   external Winlink software (RMS Express, RMS Gateway).
@@ -12,7 +12,8 @@
 //!   Winlink Type C implementations (RMS Express, RMS Gateway), which use LE
 //!   byte order for the length header.
 //! - `decompress_lzhuf_compat`: decode helper that accepts either prefix format
-//!   (LE first, then BE fallback) for mixed-version interoperability.
+//!   (chooses a plausible first attempt, then falls back) for mixed-version
+//!   interoperability.
 
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use oxiarc_lzhuf::{decode_lzh, encode_lzh, LzhMethod};
@@ -114,16 +115,46 @@ pub fn decompress_lzhuf_winlink(data: &[u8]) -> Result<Vec<u8>, B2fError> {
 
 /// Decompress Type C payloads accepting Winlink LE and legacy BE headers.
 ///
-/// Tries Winlink-compatible LE first; if decode fails, retries with the
-/// internal BE format to preserve compatibility with older OpenPulse peers.
+/// Uses prefix plausibility to pick a first attempt, then retries with the
+/// other format if decode fails, preserving compatibility with older
+/// OpenPulse peers and Winlink gateways.
 pub fn decompress_lzhuf_compat(data: &[u8]) -> Result<Vec<u8>, B2fError> {
-    match decompress_lzhuf_winlink(data) {
-        Ok(v) => Ok(v),
-        Err(le_err) => match decompress_lzhuf(data) {
+    if data.len() < 4 {
+        return Err(B2fError::Compression("truncated LZHUF data".into()));
+    }
+
+    let le_len = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+    let be_len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+    let le_in_range = le_len <= LZHUF_MAX_UNCOMPRESSED;
+    let be_in_range = be_len <= LZHUF_MAX_UNCOMPRESSED;
+
+    let try_le_first = match (le_in_range, be_in_range) {
+        (true, false) => true,
+        (false, true) => false,
+        (true, true) => le_len <= be_len,
+        // Both out of range: keep LE first for deterministic error ordering.
+        (false, false) => true,
+    };
+
+    if try_le_first {
+        match decompress_lzhuf_winlink(data) {
             Ok(v) => Ok(v),
-            Err(be_err) => Err(B2fError::Compression(format!(
-                "type-c decode failed for LE ({le_err}) and BE ({be_err})"
-            ))),
-        },
+            Err(le_err) => match decompress_lzhuf(data) {
+                Ok(v) => Ok(v),
+                Err(be_err) => Err(B2fError::Compression(format!(
+                    "type-c decode failed for LE ({le_err}) and BE ({be_err})"
+                ))),
+            },
+        }
+    } else {
+        match decompress_lzhuf(data) {
+            Ok(v) => Ok(v),
+            Err(be_err) => match decompress_lzhuf_winlink(data) {
+                Ok(v) => Ok(v),
+                Err(le_err) => Err(B2fError::Compression(format!(
+                    "type-c decode failed for BE ({be_err}) and LE ({le_err})"
+                ))),
+            },
+        }
     }
 }
