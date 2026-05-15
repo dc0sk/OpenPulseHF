@@ -4144,6 +4144,7 @@ dependencies = [
 name = "qpsk-plugin"
 version = "0.1.0"
 dependencies = [
+ "openpulse-channel",
  "openpulse-core",
  "openpulse-dsp",
 ]

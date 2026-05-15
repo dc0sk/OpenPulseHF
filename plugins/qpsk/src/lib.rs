@@ -101,6 +101,23 @@ pub(crate) fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openpulse_channel::watterson::WattersonChannel;
+    use openpulse_channel::{ChannelModel, WattersonConfig};
+
+    fn bit_error_rate(expected: &[u8], got: &[u8]) -> f32 {
+        let n = expected.len().min(got.len());
+        if n == 0 {
+            return 1.0;
+        }
+
+        let bit_errors: u32 = expected
+            .iter()
+            .zip(got.iter())
+            .take(n)
+            .map(|(&a, &b)| (a ^ b).count_ones())
+            .sum();
+        bit_errors as f32 / (n as f32 * 8.0)
+    }
 
     #[test]
     fn parse_modes() {
@@ -263,5 +280,79 @@ mod tests {
         let samples = plugin.modulate(payload, &cfg).expect("modulate");
         let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
         assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    #[test]
+    fn qpsk1000_hf_watterson_moderate_f1_decode_coverage() {
+        use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+        let plugin = QpskPlugin::new();
+        let cfg = ModulationConfig {
+            mode: "QPSK1000-HF".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload: Vec<u8> = (0..96u8).map(|v| v ^ 0x5A).collect();
+        let tx = plugin.modulate(&payload, &cfg).expect("modulate");
+
+        let mut decoded = 0usize;
+        let mut good_ber = 0usize;
+        let mut best_ber = f32::INFINITY;
+        for seed in [
+            0x5101, 0x5102, 0x5103, 0x5104, 0x5105, 0x5106, 0x5107, 0x5108,
+        ] {
+            let mut ch = WattersonChannel::new(WattersonConfig::moderate_f1(Some(seed)))
+                .expect("watterson moderate f1");
+            let rx = ch.apply(&tx);
+            if let Ok(recovered) = plugin.demodulate(&rx, &cfg) {
+                if recovered.len() >= payload.len() {
+                    decoded += 1;
+                    let ber = bit_error_rate(&payload, &recovered[..payload.len()]);
+                    best_ber = best_ber.min(ber);
+                    if ber <= 0.12 {
+                        good_ber += 1;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            decoded >= 6,
+            "QPSK1000-HF moderate_f1 should decode payload length in most deterministic trials, decoded={decoded}/8"
+        );
+        assert!(
+            good_ber >= 2,
+            "QPSK1000-HF moderate_f1 should include at least two deterministic low-BER decodes, good_ber={good_ber}/8, best_ber={best_ber:.3}"
+        );
+    }
+
+    #[test]
+    fn qpsk1000_hf_watterson_poor_f1_decode_presence() {
+        use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+        let plugin = QpskPlugin::new();
+        let cfg = ModulationConfig {
+            mode: "QPSK1000-HF".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload: Vec<u8> = (0..96u8).collect();
+        let tx = plugin.modulate(&payload, &cfg).expect("modulate");
+
+        let mut decoded = 0usize;
+        let mut best_ber = f32::INFINITY;
+        for seed in [0x5201, 0x5202, 0x5203, 0x5204, 0x5205, 0x5206] {
+            let mut ch = WattersonChannel::new(WattersonConfig::poor_f1(Some(seed)))
+                .expect("watterson poor f1");
+            let rx = ch.apply(&tx);
+            if let Ok(recovered) = plugin.demodulate(&rx, &cfg) {
+                if recovered.len() >= payload.len() {
+                    decoded += 1;
+                    let ber = bit_error_rate(&payload, &recovered[..payload.len()]);
+                    best_ber = best_ber.min(ber);
+                }
+            }
+        }
+
+        assert!(
+            decoded >= 1,
+            "QPSK1000-HF poor_f1 should produce at least one full-length deterministic decode, decoded={decoded}/6, best_ber={best_ber:.3}"
+        );
     }
 }
