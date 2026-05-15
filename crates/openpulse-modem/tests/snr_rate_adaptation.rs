@@ -190,6 +190,24 @@ fn wideband_hd_sl13_ceiling_sets_candidate_without_level_change() {
 
 /// After SL13 ceiling hint, next ACK-UP should admit SL14.
 #[test]
+fn wideband_hd_sl13_ack_up_without_ceiling_stays_sl13() {
+    let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+    engine.start_adaptive_session(SessionProfile::hpx_wideband_hd());
+
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl12));
+    assert_eq!(
+        engine.apply_ack(AckType::AckUp),
+        RateEvent::Increased(SpeedLevel::Sl13)
+    );
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl13));
+
+    // Without a prior ceiling hint at SL13, ACK-UP must not admit SL14.
+    assert_eq!(engine.apply_ack(AckType::AckUp), RateEvent::Maintained);
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl13));
+}
+
+/// After SL13 ceiling hint, next ACK-UP should admit SL14.
+#[test]
 fn wideband_hd_sl13_ceiling_then_ack_up_reaches_sl14() {
     let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
     engine.start_adaptive_session(SessionProfile::hpx_wideband_hd());
