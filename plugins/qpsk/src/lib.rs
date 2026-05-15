@@ -352,7 +352,11 @@ mod tests {
 
         assert!(
             decoded >= 1,
-            "QPSK1000-HF poor_f1 should produce at least one full-length deterministic decode, decoded={decoded}/6, best_ber={best_ber:.3}"
+            "QPSK1000-HF poor_f1 should produce at least one full-length deterministic decode, decoded={decoded}/6"
+        );
+        assert!(
+            best_ber < 0.5,
+            "QPSK1000-HF poor_f1 best decode BER must beat random (0.5), got best_ber={best_ber:.3}"
         );
     }
 
