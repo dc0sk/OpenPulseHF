@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/backlog.md
 status: living
-last_updated: 2026-05-14
+last_updated: 2026-05-15
 ---
 
 # Backlog
@@ -35,7 +35,7 @@ Suggested implementation scope (future work):
 
 Current status:
 - ✅ QSY-path guardrails shipped: `ham-iaru` policy checks, candidate validation, max-width and segment enforcement, default-enabled awareness, and compliance-override logging.
-- 🔄 Remaining: wire the same policy into non-QSY operator mode selection paths.
+- ✅ Non-QSY operating-mode guardrails wired for CLI transmit paths (`transmit`, `broadcast`, `beacon`) using the same policy and compliance-override behavior.
 
 ### Release packaging ✅ Done (PR #231)
 

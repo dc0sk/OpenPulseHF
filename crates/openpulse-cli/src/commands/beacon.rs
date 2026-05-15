@@ -3,6 +3,8 @@
 use anyhow::Result;
 use openpulse_modem::ModemEngine;
 
+use crate::commands::bandplan_guard::enforce_mode_guardrails;
+
 /// Run the beacon loop.
 ///
 /// Sends a `BroadcastFrame` every `interval_s` seconds until Ctrl+C.
@@ -13,6 +15,8 @@ pub fn run(
     callsign: &str,
     ttl: u8,
 ) -> Result<()> {
+    enforce_mode_guardrails(mode)?;
+
     let payload = format!("DE {callsign}").into_bytes();
     engine.set_callsign(callsign);
 
