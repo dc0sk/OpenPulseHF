@@ -48,7 +48,7 @@ pub fn qpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
         ));
     }
 
-    let syms = qpsk_lms_equalize(&syms);
+    let syms = qpsk_lms_equalize(&syms, &config.mode);
 
     let data = &syms[PREAMBLE_SYMS..(syms.len() - TAIL_SYMS)];
     let bits = symbols_to_bits(data);
@@ -266,7 +266,17 @@ fn gray_map_decision(i: f32, q: f32) -> (f32, f32) {
 /// Apply an LMS equalizer to QPSK symbol-rate I/Q.
 ///
 /// Trains on known preamble symbols, then switches to decision-directed mode.
-fn qpsk_lms_equalize(symbols: &[(f32, f32)]) -> Vec<(f32, f32)> {
+fn lms_profile(mode: &str) -> (usize, usize, f32) {
+    // HF 1000-baud paths see stronger multipath/ISI under Watterson Moderate/Poor,
+    // so enable a short DFE section and slightly smaller step size for stability.
+    if mode.ends_with("-HF") && mode.contains("1000") {
+        (9, 2, 0.015)
+    } else {
+        (7, 0, 0.02)
+    }
+}
+
+fn qpsk_lms_equalize(symbols: &[(f32, f32)], mode: &str) -> Vec<(f32, f32)> {
     if symbols.is_empty() {
         return Vec::new();
     }
@@ -283,7 +293,8 @@ fn qpsk_lms_equalize(symbols: &[(f32, f32)]) -> Vec<(f32, f32)> {
     // Split complex symbols in one pass to reduce hot-path iterator churn.
     let (i_syms, q_syms): (Vec<f32>, Vec<f32>) = symbols.iter().copied().unzip();
 
-    let mut eq = LmsEqualizer::new(7, 0, 0.02);
+    let (fwd_len, dfe_len, mu) = lms_profile(mode);
+    let mut eq = LmsEqualizer::new(fwd_len, dfe_len, mu);
     let (i_eq, q_eq) = eq.process_frame(&i_syms, &q_syms, &training_i, &training_q, |i, q| {
         gray_map_decision(i, q)
     });
@@ -346,7 +357,7 @@ pub fn qpsk_demodulate_soft(
         ));
     }
 
-    let syms = qpsk_lms_equalize(&syms);
+    let syms = qpsk_lms_equalize(&syms, &config.mode);
 
     let data = &syms[PREAMBLE_SYMS..(syms.len() - TAIL_SYMS)];
     // Per symbol: b0 LLR = Q, b1 LLR = I (from the Gray map geometry).
@@ -379,7 +390,23 @@ mod tests {
     #[test]
     fn lms_equalizer_preserves_symbol_count() {
         let syms = vec![(1.0, 1.0); PREAMBLE_SYMS + 8];
-        let eq = qpsk_lms_equalize(&syms);
+        let eq = qpsk_lms_equalize(&syms, "QPSK1000");
         assert_eq!(eq.len(), syms.len());
+    }
+
+    #[test]
+    fn lms_profile_hf_uses_dfe() {
+        let (fwd, dfe, mu) = lms_profile("QPSK1000-HF");
+        assert_eq!(fwd, 9);
+        assert_eq!(dfe, 2);
+        assert!((mu - 0.015).abs() < 1e-6);
+    }
+
+    #[test]
+    fn lms_profile_default_matches_baseline() {
+        let (fwd, dfe, mu) = lms_profile("QPSK500");
+        assert_eq!(fwd, 7);
+        assert_eq!(dfe, 0);
+        assert!((mu - 0.02).abs() < 1e-6);
     }
 }
