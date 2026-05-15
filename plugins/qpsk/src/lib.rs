@@ -81,9 +81,19 @@ impl ModulationPlugin for QpskPlugin {
     }
 }
 
-/// Parse numeric baud rate from modes such as "QPSK250", "QPSK1000-HF", or "QPSK500-RRC".
+/// Parse numeric baud rate from modes such as "QPSK250", "QPSK1000-HF", "QPSK500-RRC", or "QPSK1000-HF-RRC".
+///
+/// Suffixes "-HF" and "-RRC" are stripped in a loop until neither appears at the end, which
+/// handles composite variants like "QPSK1000-HF-RRC" regardless of ordering.
 pub(crate) fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
-    let base = mode.trim_end_matches("-HF").trim_end_matches("-RRC");
+    let mut base = mode;
+    loop {
+        let stripped = base.trim_end_matches("-HF").trim_end_matches("-RRC");
+        if stripped == base {
+            break;
+        }
+        base = stripped;
+    }
     let digits: String = base.chars().skip_while(|c| !c.is_ascii_digit()).collect();
     match digits.as_str() {
         "125" => Ok(125.0),
@@ -129,6 +139,9 @@ mod tests {
         assert!((parse_baud_rate("QPSK2000").unwrap() - 2000.0).abs() < 1e-6);
         assert!((parse_baud_rate("QPSK9600").unwrap() - 9600.0).abs() < 1e-6);
         assert!((parse_baud_rate("QPSK9600-RRC").unwrap() - 9600.0).abs() < 1e-6);
+        // Composite HF-RRC suffix: order must not matter.
+        assert!((parse_baud_rate("QPSK1000-HF-RRC").unwrap() - 1000.0).abs() < 1e-6);
+        assert!((parse_baud_rate("QPSK500-HF-RRC").unwrap() - 500.0).abs() < 1e-6);
         assert!(parse_baud_rate("QPSK").is_err());
     }
 
@@ -155,6 +168,20 @@ mod tests {
             ..ModulationConfig::default()
         };
         let payload = b"QPSK1000-HF round-trip";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    #[test]
+    fn qpsk1000_hf_rrc_loopback() {
+        use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+        let plugin = QpskPlugin::new();
+        let cfg = ModulationConfig {
+            mode: "QPSK1000-HF-RRC".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"composite HF-RRC mode";
         let samples = plugin.modulate(payload, &cfg).expect("modulate");
         let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
         assert_eq!(&recovered[..payload.len()], payload);
