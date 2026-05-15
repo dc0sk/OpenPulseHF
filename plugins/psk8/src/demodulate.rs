@@ -45,7 +45,7 @@ fn extract_data_symbols(
     let fc = config.center_frequency;
     let n = samples_per_symbol(fs, baud)?;
     let cosine_overlap =
-        config.pulse_shape == PulseShape::CosineOverlap || config.mode.ends_with("-HF");
+        config.pulse_shape == PulseShape::CosineOverlap || is_hf_mode(&config.mode);
     let rrc_alpha = if let PulseShape::Rrc { alpha } = config.pulse_shape {
         Some(alpha)
     } else if config.mode.ends_with("-RRC") {
@@ -331,8 +331,12 @@ fn nearest_gray_triplet(i: f32, q: f32) -> (bool, bool, bool) {
     best
 }
 
-fn should_equalize(mode: &str) -> bool {
+fn is_hf_mode(mode: &str) -> bool {
     mode.contains("-HF")
+}
+
+fn should_equalize(mode: &str) -> bool {
+    is_hf_mode(mode)
 }
 
 fn psk8_map_decision(i: f32, q: f32) -> (f32, f32) {
@@ -343,7 +347,7 @@ fn psk8_map_decision(i: f32, q: f32) -> (f32, f32) {
 fn lms_profile(mode: &str) -> (usize, usize, f32) {
     // HF 1000-baud paths see stronger multipath/ISI under Watterson Moderate/Poor,
     // so enable a short DFE section and slightly smaller step size for stability.
-    if mode.ends_with("-HF") && mode.contains("1000") {
+    if is_hf_mode(mode) && mode.contains("1000") {
         (9, 2, 0.015)
     } else {
         (7, 0, 0.02)
@@ -523,6 +527,13 @@ mod tests {
         assert_eq!(fwd, 9);
         assert_eq!(dfe, 2);
         assert!(mu < 0.02, "HF mu should be smaller for stability");
+
+        // Composite mode names with HF tag should still select HF profile.
+        let (fwd, dfe, mu) = lms_profile("8PSK1000-HF-RRC");
+        assert_eq!(fwd, 9);
+        assert_eq!(dfe, 2);
+        assert!(mu < 0.02, "HF-RRC mu should be smaller for stability");
+        assert!(should_equalize("8PSK1000-HF-RRC"));
 
         // Non-HF modes get baseline profile.
         let (fwd, dfe, mu) = lms_profile("8PSK500");
