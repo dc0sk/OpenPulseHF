@@ -54,6 +54,31 @@ Shipped scope:
 | 64QAM / SL12–SL20 speed levels | Deferred pending equalizer and OFDM research |
 | External Winlink Type C LZHUF compatibility | 4-byte length prefix differs from Winlink convention; deferred |
 
+#### On-air regulatory validation execution checklist
+
+When station access is available, run this checklist before marking Phase 5.5-reg complete.
+
+1. Operator and station readiness
+  - Confirm licensed control operator is assigned for each test window.
+  - Confirm frequency plan uses IARU-aligned allocations for each target region.
+  - Confirm station ID cadence meets local rules (10-minute interval and end-of-contact).
+2. Hardware and software readiness
+  - Verify audio/PTT path with `openpulse-kisstnc` or `openpulse-tnc` using CPAL backend.
+  - Verify rig CAT/PTT control and fail-safe PTT release behavior.
+  - Capture exact software revision (`git rev-parse HEAD`) and active config snapshot.
+3. Required test matrix (minimum)
+  - HF narrowband baseline: BPSK250 and QPSK500 on clean and typical live channel conditions.
+  - Adaptive profile run: confirm ACK/NACK-driven transitions remain policy-safe on-air.
+  - Gateway/interoperability run: one end-to-end message session with logs retained.
+4. Evidence capture
+  - Record timestamped logs, selected frequencies, mode transitions, and operator notes.
+  - Export benchmark/test artifacts to `docs/test-reports/on-air/` with scenario labels.
+  - Document any compliance exceptions and mitigations.
+5. Completion criteria
+  - No unresolved compliance exceptions.
+  - Stable on-air sessions across the required matrix.
+  - Follow-up docs updated: `docs/roadmap.md`, `docs/releasenotes.md`, and compliance notes.
+
 ---
 
 ## Completed sprint history
