@@ -2,7 +2,7 @@ use bpsk_plugin::BpskPlugin;
 use openpulse_audio::LoopbackBackend;
 use openpulse_core::ack::AckType;
 use openpulse_core::profile::SessionProfile;
-use openpulse_core::rate::{RateTrigger, SpeedLevel};
+use openpulse_core::rate::{RateEvent, RateTrigger, SpeedLevel};
 use openpulse_modem::{EngineEvent, ModemEngine};
 
 /// Engine at SL8 (hpx_wideband); inject SNR well below the SL8 floor.
@@ -159,4 +159,55 @@ fn wideband_hd_sl13_floor_breach_steps_to_sl12() {
         saw_snr_floor,
         "must observe RateChange with SnrFloor trigger at SL12"
     );
+}
+
+/// SL13 ceiling breach should only mark upgrade-candidate; no immediate level change.
+#[test]
+fn wideband_hd_sl13_ceiling_sets_candidate_without_level_change() {
+    let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+    let mut rx = engine.subscribe();
+    engine.start_adaptive_session(SessionProfile::hpx_wideband_hd());
+
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl12));
+    assert_eq!(
+        engine.apply_ack(AckType::AckUp),
+        RateEvent::Increased(SpeedLevel::Sl13)
+    );
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl13));
+
+    // Drain ACK-UP event so we can assert that ceiling hint itself emits nothing.
+    while rx.try_recv().is_ok() {}
+
+    // SL13 ceiling = 30 dB; 31 dB should only set upgrade-candidate.
+    engine.apply_snr_hint(31.0);
+
+    assert!(
+        rx.try_recv().is_err(),
+        "ceiling hint should not emit immediate RateChange"
+    );
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl13));
+}
+
+/// After SL13 ceiling hint, next ACK-UP should admit SL14.
+#[test]
+fn wideband_hd_sl13_ceiling_then_ack_up_reaches_sl14() {
+    let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+    engine.start_adaptive_session(SessionProfile::hpx_wideband_hd());
+
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl12));
+    assert_eq!(
+        engine.apply_ack(AckType::AckUp),
+        RateEvent::Increased(SpeedLevel::Sl13)
+    );
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl13));
+
+    // Prime upgrade-candidate at SL13.
+    engine.apply_snr_hint(31.0);
+
+    // ACK-UP should now advance to SL14.
+    assert_eq!(
+        engine.apply_ack(AckType::AckUp),
+        RateEvent::Increased(SpeedLevel::Sl14)
+    );
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl14));
 }
