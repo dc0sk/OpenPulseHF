@@ -627,6 +627,12 @@ mod tests {
         let original = b"OpenPulseHF";
         let samples = bpsk_modulate(original, &cfg).unwrap();
         let recovered = bpsk_demodulate(&samples, &cfg).unwrap();
+        assert!(
+            recovered.len() >= original.len(),
+            "Recovered {} bytes, expected at least {}",
+            recovered.len(),
+            original.len()
+        );
         assert_eq!(
             &recovered[..original.len()],
             original,
