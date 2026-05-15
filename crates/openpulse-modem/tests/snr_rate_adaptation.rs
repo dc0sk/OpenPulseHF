@@ -188,7 +188,7 @@ fn wideband_hd_sl13_ceiling_sets_candidate_without_level_change() {
     assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl13));
 }
 
-/// After SL13 ceiling hint, next ACK-UP should admit SL14.
+/// Without SL13 ceiling hint, ACK-UP must not admit SL14 in wideband-HD.
 #[test]
 fn wideband_hd_sl13_ack_up_without_ceiling_stays_sl13() {
     let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
@@ -204,6 +204,48 @@ fn wideband_hd_sl13_ack_up_without_ceiling_stays_sl13() {
     // Without a prior ceiling hint at SL13, ACK-UP must not admit SL14.
     assert_eq!(engine.apply_ack(AckType::AckUp), RateEvent::Maintained);
     assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl13));
+}
+
+/// Non-wideband-HD profiles must remain unaffected by the SL13->SL14 wideband-HD gate.
+#[test]
+fn hpx_wideband_sl9_ack_up_skips_reserved_rung_and_advances() {
+    let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+    engine.start_adaptive_session(SessionProfile::hpx_wideband());
+
+    // SL8 -> SL9
+    assert_eq!(
+        engine.apply_ack(AckType::AckUp),
+        RateEvent::Increased(SpeedLevel::Sl9)
+    );
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl9));
+
+    // No wideband-HD gate applies here: ACK-UP should advance to next mapped rung.
+    assert_eq!(
+        engine.apply_ack(AckType::AckUp),
+        RateEvent::Increased(SpeedLevel::Sl11)
+    );
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl11));
+}
+
+/// Narrowband profile must also remain ungated by SL13-only wideband-HD admission checks.
+#[test]
+fn hpx_narrowband_sl9_ack_up_still_advances() {
+    let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+    engine.start_adaptive_session(SessionProfile::hpx_narrowband());
+
+    // SL8 -> SL9
+    assert_eq!(
+        engine.apply_ack(AckType::AckUp),
+        RateEvent::Increased(SpeedLevel::Sl9)
+    );
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl9));
+
+    // No wideband-HD gate applies here.
+    assert_eq!(
+        engine.apply_ack(AckType::AckUp),
+        RateEvent::Increased(SpeedLevel::Sl10)
+    );
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl10));
 }
 
 /// After SL13 ceiling hint, next ACK-UP should admit SL14.

@@ -106,8 +106,6 @@ fn hpx_wideband_ack_up_reaches_8psk1000() {
     engine.start_adaptive_session(SessionProfile::hpx_wideband());
     engine.apply_ack(AckType::AckUp); // SL8 → SL9 (QPSK1000)
     assert_eq!(engine.current_adaptive_mode(), Some("QPSK1000"));
-    engine.apply_ack(AckType::AckUp); // SL9 → SL10 (reserved, None)
-    assert_eq!(engine.current_adaptive_mode(), None);
-    engine.apply_ack(AckType::AckUp); // SL10 → SL11 (8PSK1000)
+    engine.apply_ack(AckType::AckUp); // SL9 → SL11 (skip reserved SL10)
     assert_eq!(engine.current_adaptive_mode(), Some("8PSK1000"));
 }
