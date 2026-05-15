@@ -347,7 +347,9 @@ fn psk8_map_decision(i: f32, q: f32) -> (f32, f32) {
 fn lms_profile(mode: &str) -> (usize, usize, f32) {
     // HF 1000-baud paths see stronger multipath/ISI under Watterson Moderate/Poor,
     // so enable a short DFE section and slightly smaller step size for stability.
-    if is_hf_mode(mode) && mode.contains("1000") {
+    if is_hf_mode(mode) && mode.contains("-RRC") && mode.contains("1000") {
+        (9, 2, 0.012)
+    } else if is_hf_mode(mode) && mode.contains("1000") {
         (9, 2, 0.015)
     } else {
         (7, 0, 0.02)
@@ -521,6 +523,79 @@ mod tests {
     }
 
     #[test]
+    fn psk8_1000_hf_rrc_watterson_moderate_f1_decode_coverage() {
+        let payload: Vec<u8> = (0u8..=255).cycle().take(256).collect();
+        let cfg = ModulationConfig {
+            mode: "8PSK1000-HF-RRC".to_string(),
+            sample_rate: 8000,
+            center_frequency: 1500.0,
+            ..ModulationConfig::default()
+        };
+        let tx_samples = crate::modulate::psk8_modulate(&payload, &cfg).expect("modulate");
+
+        let mut decoded_count = 0usize;
+        let mut best_ber = f32::INFINITY;
+        for seed in [42u64, 111, 222, 333, 444, 555, 666, 777] {
+            let mut ch = WattersonChannel::new(WattersonConfig::moderate_f1(Some(seed)))
+                .expect("watterson moderate f1");
+            let rx_samples = ch.apply(&tx_samples);
+            if let Ok(decoded) = psk8_demodulate(&rx_samples, &cfg) {
+                if decoded.len() >= payload.len() {
+                    decoded_count += 1;
+                    let ber = ber_helper(&decoded[..payload.len()], &payload);
+                    best_ber = best_ber.min(ber);
+                }
+            }
+        }
+
+        assert!(
+            decoded_count >= 6,
+            "Moderate F1 (HF-RRC): decode coverage at least 6/8, got {}",
+            decoded_count
+        );
+        assert!(
+            best_ber < 0.25,
+            "Moderate F1 (HF-RRC): best BER must be < 0.25, got {}",
+            best_ber
+        );
+    }
+
+    #[test]
+    fn psk8_1000_hf_rrc_watterson_poor_f1_decode_presence() {
+        let payload: Vec<u8> = (0u8..=255).cycle().take(256).collect();
+        let cfg = ModulationConfig {
+            mode: "8PSK1000-HF-RRC".to_string(),
+            sample_rate: 8000,
+            center_frequency: 1500.0,
+            ..ModulationConfig::default()
+        };
+        let tx_samples = crate::modulate::psk8_modulate(&payload, &cfg).expect("modulate");
+
+        let mut best_ber = f32::INFINITY;
+        let mut decoded_any = false;
+
+        for seed in [42u64, 111, 222, 333, 444, 555, 666, 777] {
+            let mut ch = WattersonChannel::new(WattersonConfig::poor_f1(Some(seed)))
+                .expect("watterson poor f1");
+            let rx_samples = ch.apply(&tx_samples);
+            if let Ok(decoded) = psk8_demodulate(&rx_samples, &cfg) {
+                if decoded.len() >= payload.len() {
+                    decoded_any = true;
+                    let ber = ber_helper(&decoded[..payload.len()], &payload);
+                    best_ber = best_ber.min(ber);
+                }
+            }
+        }
+
+        assert!(decoded_any, "Poor F1 (HF-RRC): must decode at least once");
+        assert!(
+            best_ber < 0.5,
+            "Poor F1 (HF-RRC): best BER must be < 0.5 (beat random), got {}",
+            best_ber
+        );
+    }
+
+    #[test]
     fn test_lms_profile_selection() {
         // HF 1000-baud modes should get the stronger profile.
         let (fwd, dfe, mu) = lms_profile("8PSK1000-HF");
@@ -533,6 +608,7 @@ mod tests {
         assert_eq!(fwd, 9);
         assert_eq!(dfe, 2);
         assert!(mu < 0.02, "HF-RRC mu should be smaller for stability");
+        assert!((mu - 0.012).abs() < 1e-6, "HF-RRC profile uses tuned mu");
         assert!(should_equalize("8PSK1000-HF-RRC"));
 
         // Non-HF modes get baseline profile.
@@ -546,5 +622,12 @@ mod tests {
         assert_eq!(fwd, 7);
         assert_eq!(dfe, 0);
         assert_eq!(mu, 0.02);
+    }
+
+    #[test]
+    fn test_lms_profile_hf_rrc_more_conservative_than_hf() {
+        let (_fwd_hf, _dfe_hf, mu_hf) = lms_profile("8PSK1000-HF");
+        let (_fwd_rrc, _dfe_rrc, mu_rrc) = lms_profile("8PSK1000-HF-RRC");
+        assert!(mu_rrc < mu_hf);
     }
 }
