@@ -11,6 +11,8 @@
 //!   original-length prefix followed by raw LH5 bytes.  Wire-compatible with
 //!   Winlink Type C implementations (RMS Express, RMS Gateway), which use LE
 //!   byte order for the length header.
+//! - `decompress_lzhuf_compat`: decode helper that accepts either prefix format
+//!   (LE first, then BE fallback) for mixed-version interoperability.
 
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use oxiarc_lzhuf::{decode_lzh, encode_lzh, LzhMethod};
@@ -108,4 +110,20 @@ pub fn decompress_lzhuf_winlink(data: &[u8]) -> Result<Vec<u8>, B2fError> {
     }
     decode_lzh(&data[4..], LzhMethod::Lh5, orig_len as u64)
         .map_err(|e| B2fError::Compression(e.to_string()))
+}
+
+/// Decompress Type C payloads accepting Winlink LE and legacy BE headers.
+///
+/// Tries Winlink-compatible LE first; if decode fails, retries with the
+/// internal BE format to preserve compatibility with older OpenPulse peers.
+pub fn decompress_lzhuf_compat(data: &[u8]) -> Result<Vec<u8>, B2fError> {
+    match decompress_lzhuf_winlink(data) {
+        Ok(v) => Ok(v),
+        Err(le_err) => match decompress_lzhuf(data) {
+            Ok(v) => Ok(v),
+            Err(be_err) => Err(B2fError::Compression(format!(
+                "type-c decode failed for LE ({le_err}) and BE ({be_err})"
+            ))),
+        },
+    }
 }

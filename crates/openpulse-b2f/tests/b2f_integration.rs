@@ -2,7 +2,7 @@ use openpulse_b2f::{
     banner,
     compress::{
         compress_gzip, compress_lzhuf, compress_lzhuf_winlink, decompress_gzip, decompress_lzhuf,
-        decompress_lzhuf_winlink,
+        decompress_lzhuf_compat, decompress_lzhuf_winlink,
     },
     frame::{self, B2fFrame, FsAnswer, ProposalType},
     header::{self, AttachmentInfo, WlHeader},
@@ -147,6 +147,16 @@ fn lzhuf_winlink_format_differs_from_internal() {
     assert_eq!(decompress_lzhuf_winlink(&winlink).unwrap(), data.to_vec());
 }
 
+#[test]
+fn lzhuf_compat_accepts_both_length_prefixes() {
+    let data = b"Winlink Type C compatibility payload".repeat(12);
+    let internal = compress_lzhuf(&data).unwrap();
+    let winlink = compress_lzhuf_winlink(&data).unwrap();
+
+    assert_eq!(decompress_lzhuf_compat(&internal).unwrap(), data.to_vec());
+    assert_eq!(decompress_lzhuf_compat(&winlink).unwrap(), data.to_vec());
+}
+
 // ── Session state machine ─────────────────────────────────────────────────────
 
 #[test]
@@ -243,4 +253,36 @@ fn session_irs_rejects() {
         "ISS should be Done after all proposals rejected"
     );
     assert!(irs_out[0].starts_with("FS"));
+}
+
+#[test]
+fn session_receive_data_type_c_accepts_internal_and_winlink_prefixes() {
+    let mut irs = B2fSession::new(SessionRole::Irs);
+
+    // Drive IRS into Transfer state with one accepted Type C proposal.
+    let fc = frame::encode(&B2fFrame::Fc {
+        proposal_type: ProposalType::C,
+        mid: "MSG003".into(),
+        size: 64,
+        date: "20260504120000".into(),
+    });
+    irs.handle_line(&fc).unwrap();
+    let fs = irs.handle_line(&frame::encode(&B2fFrame::Ff)).unwrap();
+    assert_eq!(fs.len(), 1);
+    assert!(fs[0].starts_with("FS "));
+
+    let payload = b"compat body".repeat(8);
+    let winlink = compress_lzhuf_winlink(&payload).unwrap();
+    let internal = compress_lzhuf(&payload).unwrap();
+
+    // First accepted payload uses Winlink LE format.
+    let out1 = irs.receive_data(winlink).unwrap();
+    assert_eq!(out1, payload);
+
+    // Rebuild IRS for BE-format fallback path.
+    let mut irs2 = B2fSession::new(SessionRole::Irs);
+    irs2.handle_line(&fc).unwrap();
+    irs2.handle_line(&frame::encode(&B2fFrame::Ff)).unwrap();
+    let out2 = irs2.receive_data(internal).unwrap();
+    assert_eq!(out2, payload);
 }
