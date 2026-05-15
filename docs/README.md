@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/README.md
 status: living
-last_updated: 2026-05-01
+last_updated: 2026-05-15
 ---
 
 # Documentation Index
@@ -11,39 +11,82 @@ Canonical documentation lives in the files listed below.
 
 ## Index
 
-- docs/overview.md: project summary and inspiration context
-- docs/vara-research.md: public-source technical notes on VARA, FEC comparison, single-carrier vs OFDM analysis, PSK31 design principles
-- docs/ardop-research.md: public-source technical notes on ARDOP (open-source HF ARQ baseline for comparison)
-- docs/pactor-research.md: technical history and design pattern analysis for PACTOR-I through PACTOR-4
-- docs/regulatory.md: FCC Part 97, CEPT/EU, UK Ofcom regulatory compliance analysis and release checklist
-- docs/high-performance-mode.md: feature analysis for HPX mode and signed transfer model
-- docs/hpx-session-state-machine.md: normative HPX session lifecycle and conformance cases
-- docs/benchmark-harness.md: benchmark scenarios, result schema, and CI gate rules for HPX
-- docs/cli-ux-identity-trust-diagnostics.md: command taxonomy, outputs, and exit-code semantics for identity/trust diagnostics
-- docs/raspberry-pi-4-5-tuning-and-benchmarks.md: Raspberry Pi performance tuning guidance and benchmark report appendix template
-- docs/peer-caching-relay.md: peer discovery cache, query model, and multi-hop relay behavior
-- docs/peer-query-relay-wire.md: wire-level schema for peer query and relay envelopes
-- docs/pki-tooling-api.md: API surface and export schema for separate PKI tooling
-- docs/pki-tooling-architecture.md: architecture for separate PKI publication, lookup, and trust tooling
-- docs/pki-tooling-conformance.md: conformance levels, test categories, and release gates for PKI tooling
-- docs/pki-tooling-data-model.md: canonical entity model, state transitions, and migration policy for PKI tooling
-- docs/trust-store-file-format.md: trust-store serialization format, compatibility rules, and migration/rollback policy
-- docs/pki-tooling-glossary.md: canonical terms and abbreviations for PKI tooling documentation
-- docs/pki-tooling-implementation-starter.md: implementation blueprint with repo layout, routes, jobs, and MVP milestones
-- docs/pki-tooling-operations-runbook.md: operational procedures, incident playbooks, and backup/restore guidance for PKI tooling
-- docs/pki-tooling-requirements.md: requirements for separate PKI publication, lookup, and trust tooling
-- docs/pki-tooling-rollout-plan.md: phased implementation, quality gates, and release milestones for PKI tooling
-- docs/pki-tooling-spec-map.md: normative and informative classification and reading order for PKI docs
-- docs/pki-tooling-trust-policy.md: moderation workflow, trust scoring policy, and decision guardrails for PKI tooling
+### Core planning and release
+
+- docs/roadmap.md: phased execution history and roadmap status
+- docs/backlog.md: open/deferred follow-up work
 - docs/requirements.md: functional and non-functional requirements
-- docs/steering.md: governance and decision ownership
-- docs/roadmap.md: phased execution plan
 - docs/changelog.md: internal change history
 - docs/releasenotes.md: externally facing release summaries
+- docs/release-checklist.md: release and tagging procedure
+
+### Architecture and operations
+
 - docs/architecture.md: system architecture and boundaries
-- docs/design.md: implementation-level product design
-- docs/backlog.md: remaining follow-up tasks
-- docs/cli-guide.md: CLI usage and option reference
-- docs/sbom.md: software bill of materials policy and process
-- docs/memories.md: lessons learned and operator notes
-- docs/AGENTS.md: agent safeguards, root-cause analysis, and recovery countermeasures
+- docs/design.md: product design principles
+- docs/overview.md: project summary and context
+- docs/high-performance-mode.md: HPX mode analysis
+- docs/hpx-session-state-machine.md: HPX lifecycle and conformance
+- docs/hpx-waveform-design.md: waveform and profile rationale
+- docs/benchmark-harness.md: benchmark scenarios and regression gates
+- docs/testbench-design.md: signal-path testbench design
+- docs/troubleshooting-alsa-cpal.md: audio backend troubleshooting
+- docs/use-case-deployment-guide.md: deployment patterns and operator scenarios
+
+### CLI and user-facing behavior
+
+- docs/cli-guide.md: CLI usage and options
+- docs/cli-mode-advisor-guide.md: mode advisor workflow
+- docs/cli-ux-identity-trust-diagnostics.md: identity/trust diagnostics UX and exit codes
+- docs/features.md: full feature and mode reference
+
+### Security, trust, and regulatory
+
+- docs/trust-store-file-format.md: trust-store serialization format
+- docs/regulatory.md: regulatory analysis by jurisdiction
+- docs/regulatory-compliance-checklist.md: compliance checklist and implementation notes
+- docs/on-air_testplan.md: on-air validation plan and evidence checklist
+- docs/sbom.md: software bill of materials policy
+
+### Protocol and plugin specifications
+
+- docs/peer-caching-relay.md: peer cache and relay behavior
+- docs/peer-query-relay-wire.md: wire-level query/relay envelope schema
+- docs/plugin-commercial-interface.md: commercial plugin interface guidance
+- docs/plugin-trait-versioning.md: plugin trait versioning policy
+- docs/contributing-plugins.md: plugin contribution guide
+
+### Research references
+
+- docs/vara-research.md: VARA-related technical research notes
+- docs/ardop-research.md: ARDOP research notes
+- docs/pactor-research.md: PACTOR research notes
+- docs/wsjtx-analysis.md: WSJT-X analysis notes
+- docs/js8call-analysis.md: JS8Call analysis notes
+- docs/ofdm-research.md: OFDM research notes
+- docs/freedv-auth-research.md: authenticated FreeDV research notes
+
+### PKI tooling
+
+- docs/pki-tooling-spec-map.md: PKI specification map and reading order
+- docs/pki-tooling-requirements.md: PKI requirements
+- docs/pki-tooling-architecture.md: PKI architecture
+- docs/pki-tooling-data-model.md: PKI data model
+- docs/pki-tooling-api.md: PKI API surface
+- docs/pki-tooling-conformance.md: PKI conformance and release gates
+- docs/pki-tooling-trust-policy.md: PKI moderation and trust policy
+- docs/pki-tooling-operations-runbook.md: PKI operations runbook
+- docs/pki-tooling-rollout-plan.md: PKI rollout milestones
+- docs/pki-tooling-implementation-starter.md: PKI implementation starter blueprint
+- docs/pki-tooling-glossary.md: PKI glossary
+
+### Safety and governance
+
+- docs/AGENTS.md: agent safeguards and recovery countermeasures
+- docs/steering.md: governance and decision ownership
+- docs/memories.md: distilled lessons and operator notes
+
+### Archive
+
+- docs/archive/handoff-2026-05-13.md: historical AI handoff snapshot
+- docs/archive/project-review-2026-04-29.md: historical project review snapshot
