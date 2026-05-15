@@ -195,11 +195,11 @@ fn main() {
     let tier = if cli.full { Tier::Full } else { Tier::Quick };
 
     let mut failed = 0usize;
-    let run_matrix = !cli.bench_only
-        && !cli.pilot_density_sweep_only
-        && !(cli.cross_mode_gate && !cli.bench && !cli.pilot_density_sweep)
-        && !cli.item6_gate
-        && !cli.item8_lab_dataset;
+    let run_matrix = !(cli.bench_only
+        || cli.pilot_density_sweep_only
+        || cli.item6_gate
+        || cli.item8_lab_dataset
+        || (cli.cross_mode_gate && !cli.bench && !cli.pilot_density_sweep));
 
     let elapsed = if !run_matrix {
         std::time::Duration::from_secs(0)

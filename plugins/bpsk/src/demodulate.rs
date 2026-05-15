@@ -69,8 +69,7 @@ pub fn bpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
         }
         let offset = find_timing_offset(samples, n, fc, fs);
         let (iv, qv) = demodulate_iq(samples, n, fc, fs, offset);
-        // Apply LMS equalization trained on preamble.
-        bpsk_lms_equalize(&iv, &qv, &config.mode)
+        (iv, qv)
     };
 
     if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
@@ -341,6 +340,7 @@ fn bpsk_demodulate_rrc(
     let (i_out, q_out) = gardner_sample_rrc(&i_bb, &q_bb, n, initial_timing);
 
     // 5. LMS equalizer: train on the known preamble symbols, then decision-directed.
+    // RRC path: DFE enabled for BPSK250 to handle multipath ISI.
     let (i_eq, q_eq) = bpsk_lms_equalize(&i_out, &q_out, mode);
 
     (i_eq, q_eq)
@@ -350,7 +350,8 @@ fn bpsk_demodulate_rrc(
 ///
 /// BPSK250 has a 4 ms/symbol period — short enough that Watterson Moderate/Poor
 /// delay spread (0.5–3 ms) produces multi-symbol ISI.  A 9-tap feedforward
-/// plus 2-tap DFE with a tighter step gives better convergence on those paths.
+/// plus 2-tap DFE with a tighter step gives better convergence on the
+/// RRC+Gardner path where multipath ISI is the dominant impairment.
 /// Narrow-band HF modes (BPSK31/63/100) have symbol periods ≥ 10 ms and are
 /// inherently ISI-immune at typical HF delay spreads; the baseline 7-tap
 /// equalizer is sufficient.
@@ -365,7 +366,10 @@ fn lms_profile(mode: &str) -> (usize, usize, f32) {
 /// Apply a mode-aware LMS equalizer to BPSK symbol-rate I/Q.
 ///
 /// Trains on the first `PREAMBLE_SYMS` samples using the known preamble
-/// sequence, then switches to decision-directed mode.
+/// sequence, then switches to decision-directed mode.  Called only from the
+/// RRC+Gardner path; the Hann-windowed non-RRC path does not apply LMS
+/// (the integration already suppresses ISI and LMS decision-directed mode
+/// degrades fading-channel performance).
 fn bpsk_lms_equalize(i_syms: &[f32], q_syms: &[f32], mode: &str) -> (Vec<f32>, Vec<f32>) {
     let training = expected_preamble_symbols(PREAMBLE_SYMS.min(i_syms.len()));
     let training_q = vec![0.0f32; training.len()];
@@ -606,6 +610,28 @@ mod tests {
             .collect();
         let bits = differential_decode(&iq);
         assert!(bits.iter().all(|&b| b));
+    }
+
+    #[test]
+    fn loopback_round_trip_bpsk250_non_rrc() {
+        // Regression guard: BPSK250 non-RRC (Hann) path must round-trip cleanly.
+        // This path does NOT apply LMS equalization (Hann integration is sufficient;
+        // LMS decision-directed degrades fading-channel FEC performance).
+        use crate::modulate::bpsk_modulate;
+        let cfg = ModulationConfig {
+            mode: "BPSK250".to_string(),
+            sample_rate: 8000,
+            center_frequency: 1500.0,
+            ..ModulationConfig::default()
+        };
+        let original = b"OpenPulseHF";
+        let samples = bpsk_modulate(original, &cfg).unwrap();
+        let recovered = bpsk_demodulate(&samples, &cfg).unwrap();
+        assert_eq!(
+            &recovered[..original.len()],
+            original,
+            "BPSK250 non-RRC clean loopback must recover payload exactly"
+        );
     }
 
     #[test]
