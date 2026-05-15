@@ -71,9 +71,19 @@ impl ModulationPlugin for Psk8Plugin {
     }
 }
 
-/// Parse numeric baud rate from the trailing digits of modes such as "8PSK500", "8PSK1000-HF", or "8PSK500-RRC".
+/// Parse numeric baud rate from the trailing digits of modes such as "8PSK500", "8PSK1000-HF", "8PSK500-RRC", or "8PSK1000-HF-RRC".
+///
+/// Suffixes "-HF" and "-RRC" are stripped repeatedly until neither appears at the end, which
+/// handles composite variants such as "8PSK1000-HF-RRC" regardless of suffix ordering.
 pub(crate) fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
-    let base = mode.trim_end_matches("-HF").trim_end_matches("-RRC");
+    let mut base = mode;
+    loop {
+        let stripped = base.trim_end_matches("-HF").trim_end_matches("-RRC");
+        if stripped == base {
+            break;
+        }
+        base = stripped;
+    }
     let trailing: String = base
         .chars()
         .rev()
@@ -106,6 +116,9 @@ mod tests {
         assert!((parse_baud_rate("8PSK2000").unwrap() - 2000.0).abs() < 1e-6);
         assert!((parse_baud_rate("8PSK9600").unwrap() - 9600.0).abs() < 1e-6);
         assert!((parse_baud_rate("8PSK9600-RRC").unwrap() - 9600.0).abs() < 1e-6);
+        // Composite HF-RRC suffix: order must not matter.
+        assert!((parse_baud_rate("8PSK1000-HF-RRC").unwrap() - 1000.0).abs() < 1e-6);
+        assert!((parse_baud_rate("8PSK500-HF-RRC").unwrap() - 500.0).abs() < 1e-6);
         assert!(parse_baud_rate("8PSK").is_err());
     }
 
@@ -143,6 +156,22 @@ mod tests {
             ..ModulationConfig::default()
         };
         let payload = b"8PSK1000-HF round-trip";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    /// Composite "8PSK1000-HF-RRC" loopback exercises the full parse → modulate →
+    /// demodulate path through the fixed suffix-stripping logic; previously this
+    /// mode would cause parse_baud_rate to error before reaching LMS equalization.
+    #[test]
+    fn psk8_1000_hf_rrc_loopback() {
+        let plugin = Psk8Plugin::new();
+        let cfg = ModulationConfig {
+            mode: "8PSK1000-HF-RRC".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"composite HF-RRC mode";
         let samples = plugin.modulate(payload, &cfg).expect("modulate");
         let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
         assert_eq!(&recovered[..payload.len()], payload);
