@@ -15,8 +15,14 @@ history with PR numbers.
 
 ## Open work items
 
-No active implementation items remain.  Remaining entries are deferred research tracks
-only.
+### Adaptive equalizer LMS/DFE 🔄 In Progress
+
+Follow-on to FF-3 RRC for robust 1000 baud operation under Watterson Moderate/Poor channels.
+
+Kickoff status:
+- ✅ Initial QPSK demod-path LMS equalizer wiring landed in plugin demodulation pipelines (hard + soft paths).
+- ✅ Baseline validation passed on `qpsk-plugin` unit tests and `openpulse-modem` QPSK hardening integration tests.
+- 🔄 Next: channel-stress validation on Watterson Moderate/Poor fixtures and DFE/pilot tuning.
 
 ### Bandplan awareness for QSY and operating mode ✅ Done (PRs #235, #236, #237)
 
@@ -45,7 +51,6 @@ Shipped scope:
 | Item | Reason |
 |---|---|
 | On-air regulatory validation (Phase 5.5-reg) | Requires licensed station and coordinated test schedule |
-| Adaptive equalizer LMS/DFE | Follow-on to FF-3 RRC; needed for 1000 baud on Watterson Moderate/Poor |
 | 64QAM / SL12–SL20 speed levels | Deferred pending equalizer and OFDM research |
 | External Winlink Type C LZHUF compatibility | 4-byte length prefix differs from Winlink convention; deferred |
 

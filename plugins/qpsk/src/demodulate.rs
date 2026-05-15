@@ -2,6 +2,7 @@ use std::f32::consts::PI;
 
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
+use openpulse_dsp::equalizer::LmsEqualizer;
 use openpulse_dsp::filter::FirFilter;
 use openpulse_dsp::pll::CarrierPll;
 use openpulse_dsp::rrc::generate_rrc_coefficients;
@@ -46,6 +47,8 @@ pub fn qpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
             "no data symbols after preamble".to_string(),
         ));
     }
+
+    let syms = qpsk_lms_equalize(&syms);
 
     let data = &syms[PREAMBLE_SYMS..(syms.len() - TAIL_SYMS)];
     let bits = symbols_to_bits(data);
@@ -255,6 +258,43 @@ fn nearest_gray_bits(i: f32, q: f32) -> (bool, bool) {
     best
 }
 
+fn gray_map_decision(i: f32, q: f32) -> (f32, f32) {
+    let (b0, b1) = nearest_gray_bits(i, q);
+    gray_map(b0, b1)
+}
+
+/// Apply an LMS equalizer to QPSK symbol-rate I/Q.
+///
+/// Trains on known preamble symbols, then switches to decision-directed mode.
+fn qpsk_lms_equalize(symbols: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    if symbols.is_empty() {
+        return Vec::new();
+    }
+
+    let train_len = PREAMBLE_SYMS.min(symbols.len());
+    let expected = preamble_expected();
+    let mut training_i = Vec::with_capacity(train_len);
+    let mut training_q = Vec::with_capacity(train_len);
+    for &(i, q) in expected.iter().take(train_len) {
+        training_i.push(i);
+        training_q.push(q);
+    }
+
+    // Split complex symbols in one pass to reduce hot-path iterator churn.
+    let (i_syms, q_syms): (Vec<f32>, Vec<f32>) = symbols.iter().copied().unzip();
+
+    let mut eq = LmsEqualizer::new(7, 0, 0.02);
+    let (i_eq, q_eq) = eq.process_frame(&i_syms, &q_syms, &training_i, &training_q, |i, q| {
+        gray_map_decision(i, q)
+    });
+
+    let mut out = Vec::with_capacity(i_eq.len().min(q_eq.len()));
+    for (i, q) in i_eq.into_iter().zip(q_eq) {
+        out.push((i, q));
+    }
+    out
+}
+
 fn bits_to_bytes(bits: &[bool]) -> Vec<u8> {
     bits.chunks(8)
         .map(|chunk| {
@@ -306,6 +346,8 @@ pub fn qpsk_demodulate_soft(
         ));
     }
 
+    let syms = qpsk_lms_equalize(&syms);
+
     let data = &syms[PREAMBLE_SYMS..(syms.len() - TAIL_SYMS)];
     // Per symbol: b0 LLR = Q, b1 LLR = I (from the Gray map geometry).
     // Bits are pushed as (b0, b1) in symbols_to_bits, matching [q, i] here.
@@ -332,5 +374,12 @@ mod tests {
         let samples = crate::modulate::qpsk_modulate(payload, &cfg).expect("modulate");
         let recovered = qpsk_demodulate(&samples, &cfg).expect("demodulate");
         assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    #[test]
+    fn lms_equalizer_preserves_symbol_count() {
+        let syms = vec![(1.0, 1.0); PREAMBLE_SYMS + 8];
+        let eq = qpsk_lms_equalize(&syms);
+        assert_eq!(eq.len(), syms.len());
     }
 }
