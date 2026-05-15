@@ -380,6 +380,12 @@ mod tests {
     use openpulse_core::plugin::ModulationConfig;
 
     fn bit_error_rate(expected: &[u8], recovered: &[u8]) -> f32 {
+        assert_eq!(
+            expected.len(),
+            recovered.len(),
+            "bit_error_rate requires equal-length slices"
+        );
+
         let mut bit_errors = 0usize;
         let mut total_bits = 0usize;
         for (a, b) in expected.iter().zip(recovered.iter()) {
@@ -494,13 +500,14 @@ mod tests {
             }
         }
 
-        let avg_base = sum_ber_base / compared_trials as f32;
-        let avg_hf = sum_ber_hf / compared_trials as f32;
-
         assert!(
             compared_trials >= 6,
             "expected enough deterministic trials for profile comparison, got {compared_trials}"
         );
+
+        let avg_base = sum_ber_base / compared_trials as f32;
+        let avg_hf = sum_ber_hf / compared_trials as f32;
+
         assert!(
             hf_better_or_equal >= 4,
             "HF profile should be no-worse on most deterministic moderate_f1 trials; hf_better_or_equal={hf_better_or_equal}/{compared_trials}"
