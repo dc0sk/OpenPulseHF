@@ -269,7 +269,9 @@ fn gray_map_decision(i: f32, q: f32) -> (f32, f32) {
 fn lms_profile(mode: &str) -> (usize, usize, f32) {
     // HF 1000-baud paths see stronger multipath/ISI under Watterson Moderate/Poor,
     // so enable a short DFE section and slightly smaller step size for stability.
-    if mode.contains("-HF") && mode.contains("1000") {
+    if mode.contains("-HF") && mode.contains("-RRC") && mode.contains("1000") {
+        (9, 2, 0.012)
+    } else if mode.contains("-HF") && mode.contains("1000") {
         (9, 2, 0.015)
     } else {
         (7, 0, 0.02)
@@ -401,11 +403,17 @@ mod tests {
         assert_eq!(dfe, 2);
         assert!((mu - 0.015).abs() < 1e-6);
 
-        // Composite mode must resolve to the same HF profile.
         let (fwd, dfe, mu) = lms_profile("QPSK1000-HF-RRC");
         assert_eq!(fwd, 9);
         assert_eq!(dfe, 2);
-        assert!((mu - 0.015).abs() < 1e-6);
+        assert!((mu - 0.012).abs() < 1e-6);
+    }
+
+    #[test]
+    fn lms_profile_hf_rrc_uses_more_conservative_step_size() {
+        let (_fwd_hf, _dfe_hf, mu_hf) = lms_profile("QPSK1000-HF");
+        let (_fwd_rrc, _dfe_rrc, mu_rrc) = lms_profile("QPSK1000-HF-RRC");
+        assert!(mu_rrc < mu_hf);
     }
 
     #[test]
