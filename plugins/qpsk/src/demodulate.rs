@@ -268,7 +268,8 @@ fn gray_map_decision(i: f32, q: f32) -> (f32, f32) {
 /// Trains on known preamble symbols, then switches to decision-directed mode.
 fn lms_profile(mode: &str) -> (usize, usize, f32) {
     // HF 1000-baud paths see stronger multipath/ISI under Watterson Moderate/Poor,
-    // so use a longer forward filter and slightly smaller step size for stability.
+    // so use a longer forward filter, enable a short DFE section, and reduce
+    // the LMS step size for better decision-directed stability.
     if mode.contains("-HF") && mode.contains("-RRC") && mode.contains("1000") {
         (11, 2, 0.010)
     } else if mode.contains("-HF") && mode.contains("1000") {
