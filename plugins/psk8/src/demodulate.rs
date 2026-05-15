@@ -540,9 +540,11 @@ mod tests {
                 .expect("watterson moderate f1");
             let rx_samples = ch.apply(&tx_samples);
             if let Ok(decoded) = psk8_demodulate(&rx_samples, &cfg) {
-                decoded_count += 1;
-                let ber = ber_helper(&decoded, &payload);
-                best_ber = best_ber.min(ber);
+                if decoded.len() >= payload.len() {
+                    decoded_count += 1;
+                    let ber = ber_helper(&decoded[..payload.len()], &payload);
+                    best_ber = best_ber.min(ber);
+                }
             }
         }
 
@@ -577,9 +579,11 @@ mod tests {
                 .expect("watterson poor f1");
             let rx_samples = ch.apply(&tx_samples);
             if let Ok(decoded) = psk8_demodulate(&rx_samples, &cfg) {
-                decoded_any = true;
-                let ber = ber_helper(&decoded, &payload);
-                best_ber = best_ber.min(ber);
+                if decoded.len() >= payload.len() {
+                    decoded_any = true;
+                    let ber = ber_helper(&decoded[..payload.len()], &payload);
+                    best_ber = best_ber.min(ber);
+                }
             }
         }
 
