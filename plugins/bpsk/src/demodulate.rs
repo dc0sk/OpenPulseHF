@@ -62,7 +62,7 @@ pub fn bpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
         if samples.len() < n * (PREAMBLE_SYMS + 1) {
             return Err(ModemError::Demodulation("signal too short".into()));
         }
-        bpsk_demodulate_rrc(samples, n, baud, fc, fs, alpha)
+        bpsk_demodulate_rrc(samples, n, baud, fc, fs, alpha, &config.mode)
     } else {
         if samples.len() < n * (PREAMBLE_SYMS + 1) {
             return Err(ModemError::Demodulation("signal too short".into()));
@@ -299,6 +299,7 @@ fn bpsk_demodulate_rrc(
     fc: f32,
     fs: f32,
     alpha: f32,
+    mode: &str,
 ) -> (Vec<f32>, Vec<f32>) {
     let two_pi = 2.0 * PI;
     let num_taps = RRC_SPAN_SYMBOLS * n + 1;
@@ -339,19 +340,41 @@ fn bpsk_demodulate_rrc(
     let (i_out, q_out) = gardner_sample_rrc(&i_bb, &q_bb, n, initial_timing);
 
     // 5. LMS equalizer: train on the known preamble symbols, then decision-directed.
-    let (i_eq, q_eq) = bpsk_lms_equalize(&i_out, &q_out);
+    // RRC path: DFE enabled for BPSK250 to handle multipath ISI.
+    let (i_eq, q_eq) = bpsk_lms_equalize(&i_out, &q_out, mode);
 
     (i_eq, q_eq)
 }
 
-/// Apply a 7-tap LMS equalizer to BPSK symbol-rate I/Q.
+/// Select the LMS tap/step profile for a given mode.
+///
+/// BPSK250 has a 4 ms/symbol period — short enough that Watterson Moderate/Poor
+/// delay spread (0.5–3 ms) produces multi-symbol ISI.  A 9-tap feedforward
+/// plus 2-tap DFE with a tighter step gives better convergence on the
+/// RRC+Gardner path where multipath ISI is the dominant impairment.
+/// Narrow-band HF modes (BPSK31/63/100) have symbol periods ≥ 10 ms and are
+/// inherently ISI-immune at typical HF delay spreads; the baseline 7-tap
+/// equalizer is sufficient.
+fn lms_profile(mode: &str) -> (usize, usize, f32) {
+    if mode.contains("250") {
+        (9, 2, 0.015)
+    } else {
+        (7, 0, 0.02)
+    }
+}
+
+/// Apply a mode-aware LMS equalizer to BPSK symbol-rate I/Q.
 ///
 /// Trains on the first `PREAMBLE_SYMS` samples using the known preamble
-/// sequence, then switches to decision-directed mode.
-fn bpsk_lms_equalize(i_syms: &[f32], q_syms: &[f32]) -> (Vec<f32>, Vec<f32>) {
+/// sequence, then switches to decision-directed mode.  Called only from the
+/// RRC+Gardner path; the Hann-windowed non-RRC path does not apply LMS
+/// (the integration already suppresses ISI and LMS decision-directed mode
+/// degrades fading-channel performance).
+fn bpsk_lms_equalize(i_syms: &[f32], q_syms: &[f32], mode: &str) -> (Vec<f32>, Vec<f32>) {
     let training = expected_preamble_symbols(PREAMBLE_SYMS.min(i_syms.len()));
     let training_q = vec![0.0f32; training.len()];
-    let mut eq = LmsEqualizer::new(7, 0, 0.02);
+    let (fwd_len, dfe_len, mu) = lms_profile(mode);
+    let mut eq = LmsEqualizer::new(fwd_len, dfe_len, mu);
     eq.process_frame(i_syms, q_syms, &training, &training_q, |i, _q| {
         (if i >= 0.0 { 1.0 } else { -1.0 }, 0.0)
     })
@@ -590,6 +613,34 @@ mod tests {
     }
 
     #[test]
+    fn loopback_round_trip_bpsk250_non_rrc() {
+        // Regression guard: BPSK250 non-RRC (Hann) path must round-trip cleanly.
+        // This path does NOT apply LMS equalization (Hann integration is sufficient;
+        // LMS decision-directed degrades fading-channel FEC performance).
+        use crate::modulate::bpsk_modulate;
+        let cfg = ModulationConfig {
+            mode: "BPSK250".to_string(),
+            sample_rate: 8000,
+            center_frequency: 1500.0,
+            ..ModulationConfig::default()
+        };
+        let original = b"OpenPulseHF";
+        let samples = bpsk_modulate(original, &cfg).unwrap();
+        let recovered = bpsk_demodulate(&samples, &cfg).unwrap();
+        assert!(
+            recovered.len() >= original.len(),
+            "Recovered {} bytes, expected at least {}",
+            recovered.len(),
+            original.len()
+        );
+        assert_eq!(
+            &recovered[..original.len()],
+            original,
+            "BPSK250 non-RRC clean loopback must recover payload exactly"
+        );
+    }
+
+    #[test]
     fn loopback_round_trip() {
         use crate::modulate::bpsk_modulate;
         let cfg = ModulationConfig {
@@ -677,5 +728,131 @@ mod tests {
             "CPU path should recover payload"
         );
         assert_eq!(cpu_out, gpu_out, "GPU demodulation must match CPU output");
+    }
+
+    // ── LMS profile and Watterson channel stress tests ──────────────────────
+
+    #[test]
+    fn lms_profile_bpsk250_uses_dfe() {
+        let (fwd, dfe, mu) = lms_profile("BPSK250");
+        assert_eq!(fwd, 9);
+        assert_eq!(dfe, 2);
+        assert!(mu < 0.02, "BPSK250 mu should be tighter than baseline");
+    }
+
+    #[test]
+    fn lms_profile_narrow_modes_use_baseline() {
+        for mode in ["BPSK31", "BPSK63", "BPSK100"] {
+            let (fwd, dfe, mu) = lms_profile(mode);
+            assert_eq!(fwd, 7, "{mode}: expect 7-tap fwd");
+            assert_eq!(dfe, 0, "{mode}: expect no DFE");
+            assert!((mu - 0.02).abs() < 1e-6, "{mode}: expect mu=0.02");
+        }
+    }
+
+    #[test]
+    fn bpsk250_watterson_moderate_f1_decode_coverage() {
+        use crate::modulate::bpsk_modulate;
+        use openpulse_channel::watterson::WattersonChannel;
+        use openpulse_channel::{ChannelModel, WattersonConfig};
+
+        let cfg = ModulationConfig {
+            mode: "BPSK250".to_string(),
+            sample_rate: 8000,
+            center_frequency: 1500.0,
+            ..ModulationConfig::default()
+        };
+        let payload: Vec<u8> = (0..96u8).map(|v| v ^ 0x5A).collect();
+        let tx = bpsk_modulate(&payload, &cfg).expect("modulate");
+
+        let bit_error_rate = |expected: &[u8], got: &[u8]| -> f32 {
+            let n = expected.len().min(got.len());
+            if n == 0 {
+                return 1.0;
+            }
+            let bit_errors: u32 = expected
+                .iter()
+                .zip(got.iter())
+                .take(n)
+                .map(|(&a, &b)| (a ^ b).count_ones())
+                .sum();
+            bit_errors as f32 / (n as f32 * 8.0)
+        };
+
+        let mut decoded = 0usize;
+        let mut good_ber = 0usize;
+        let mut best_ber = f32::INFINITY;
+        for seed in [
+            0x6101u64, 0x6102, 0x6103, 0x6104, 0x6105, 0x6106, 0x6107, 0x6108,
+        ] {
+            let mut ch = WattersonChannel::new(WattersonConfig::moderate_f1(Some(seed)))
+                .expect("watterson moderate f1");
+            let rx = ch.apply(&tx);
+            if let Ok(recovered) = bpsk_demodulate(&rx, &cfg) {
+                if recovered.len() >= payload.len() {
+                    decoded += 1;
+                    let ber = bit_error_rate(&payload, &recovered[..payload.len()]);
+                    best_ber = best_ber.min(ber);
+                    if ber <= 0.12 {
+                        good_ber += 1;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            decoded >= 6,
+            "BPSK250 moderate_f1 should decode payload length in most trials, decoded={decoded}/8"
+        );
+        assert!(
+            good_ber >= 2,
+            "BPSK250 moderate_f1 should include at least two low-BER decodes, good_ber={good_ber}/8, best_ber={best_ber:.3}"
+        );
+    }
+
+    #[test]
+    fn bpsk250_watterson_poor_f1_decode_presence() {
+        use crate::modulate::bpsk_modulate;
+        use openpulse_channel::watterson::WattersonChannel;
+        use openpulse_channel::{ChannelModel, WattersonConfig};
+
+        let cfg = ModulationConfig {
+            mode: "BPSK250".to_string(),
+            sample_rate: 8000,
+            center_frequency: 1500.0,
+            ..ModulationConfig::default()
+        };
+        let payload: Vec<u8> = (0..96u8).collect();
+        let tx = bpsk_modulate(&payload, &cfg).expect("modulate");
+
+        let mut decoded = 0usize;
+        let mut best_ber = f32::INFINITY;
+        for seed in [0x6201u64, 0x6202, 0x6203, 0x6204, 0x6205, 0x6206] {
+            let mut ch = WattersonChannel::new(WattersonConfig::poor_f1(Some(seed)))
+                .expect("watterson poor f1");
+            let rx = ch.apply(&tx);
+            if let Ok(recovered) = bpsk_demodulate(&rx, &cfg) {
+                if recovered.len() >= payload.len() {
+                    decoded += 1;
+                    let ber: f32 = payload
+                        .iter()
+                        .zip(recovered.iter())
+                        .take(payload.len())
+                        .map(|(&a, &b)| (a ^ b).count_ones() as f32)
+                        .sum::<f32>()
+                        / (payload.len() as f32 * 8.0);
+                    best_ber = best_ber.min(ber);
+                }
+            }
+        }
+
+        assert!(
+            decoded >= 1,
+            "BPSK250 poor_f1 should produce at least one full-length decode, decoded={decoded}/6"
+        );
+        assert!(
+            best_ber < 0.5,
+            "BPSK250 poor_f1 best BER must beat random (0.5), got best_ber={best_ber:.3}"
+        );
     }
 }

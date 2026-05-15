@@ -91,6 +91,7 @@ fn code_rate_for_fec(fec: FecMode) -> f32 {
 /// Policy anchor points:
 /// - 15 dB -> 800 ms
 /// - 25 dB -> 400 ms
+///
 /// Values are linearly interpolated and clamped to [400, 800].
 pub fn ack_timeout_ms_for_snr(snr_db: f32) -> u16 {
     if snr_db <= 15.0 {

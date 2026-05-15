@@ -580,6 +580,7 @@ pub fn build_pilot_density_sweep_cases(
 }
 
 pub fn build_cross_mode_cases(payload_len: usize, tier: Tier) -> Vec<CrossModeBenchCase> {
+    #[allow(clippy::type_complexity)]
     let families: &[(&str, &[(CrossModeLevel, &str, FecMode)])] = &[
         (
             "BPSK250",
