@@ -14,6 +14,13 @@ pub fn enforce_mode_guardrails(mode: &str) -> Result<()> {
     let cfg = config::load()?;
     let qsy_cfg = &cfg.qsy;
 
+    if !qsy_cfg.bandplan_awareness_enabled {
+        warn!(
+            "bandplan-awareness override active for operating mode guardrails (qsy.bandplan_awareness_enabled=false)"
+        );
+        return Ok(());
+    }
+
     let policy = BandplanPolicy {
         awareness_enabled: qsy_cfg.bandplan_awareness_enabled,
         mode: qsy_cfg
@@ -23,13 +30,6 @@ pub fn enforce_mode_guardrails(mode: &str) -> Result<()> {
         enforce_max_channel_width: qsy_cfg.enforce_max_channel_width,
         enforce_segment_conventions: qsy_cfg.enforce_segment_conventions,
     };
-
-    if !policy.awareness_enabled {
-        warn!(
-            "bandplan-awareness override active for operating mode guardrails (qsy.bandplan_awareness_enabled=false)"
-        );
-        return Ok(());
-    }
 
     let mut rig = match RigctldController::connect(&cfg.radio.rigctld_addr) {
         Ok(rig) => rig,
