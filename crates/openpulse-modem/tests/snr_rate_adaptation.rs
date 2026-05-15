@@ -1,5 +1,6 @@
 use bpsk_plugin::BpskPlugin;
 use openpulse_audio::LoopbackBackend;
+use openpulse_core::ack::AckType;
 use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::{RateTrigger, SpeedLevel};
 use openpulse_modem::{EngineEvent, ModemEngine};
@@ -86,4 +87,51 @@ fn snr_ceiling_sets_upgrade_candidate_without_level_change() {
     );
     // Level unchanged — still waiting for ACK-UP.
     assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl8));
+}
+
+/// Engine at SL12 (hpx_wideband_hd); inject SNR below SL12 floor.
+/// Must step down immediately with SnrFloor trigger.
+#[test]
+fn wideband_hd_sl12_floor_breach_steps_down_immediately() {
+    let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+    let mut rx = engine.subscribe();
+    engine.register_plugin(Box::new(BpskPlugin::new())).ok();
+    engine.start_adaptive_session(SessionProfile::hpx_wideband_hd());
+
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl12));
+
+    // SL12 floor = 22 dB; 20 dB should force immediate step-down.
+    engine.apply_snr_hint(20.0);
+
+    assert!(
+        engine.current_tx_level().unwrap() < SpeedLevel::Sl12,
+        "SL12 floor breach must step down immediately"
+    );
+
+    let event = rx
+        .try_recv()
+        .expect("a RateChange event must be emitted on wideband-hd floor breach");
+    match event {
+        EngineEvent::RateChange { trigger, .. } => {
+            assert_eq!(trigger, Some(RateTrigger::SnrFloor));
+        }
+        other => panic!("expected RateChange, got {other:?}"),
+    }
+}
+
+/// Engine at SL13 (hpx_wideband_hd); SNR below SL13 floor must step down to SL12.
+#[test]
+fn wideband_hd_sl13_floor_breach_steps_to_sl12() {
+    let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+    engine.register_plugin(Box::new(BpskPlugin::new())).ok();
+    engine.start_adaptive_session(SessionProfile::hpx_wideband_hd());
+
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl12));
+    // SL12 -> SL13 by ACK-UP.
+    let _ = engine.apply_ack(AckType::AckUp);
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl13));
+
+    // SL13 floor = 24 dB; 23 dB should force immediate step-down.
+    engine.apply_snr_hint(23.0);
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl12));
 }
