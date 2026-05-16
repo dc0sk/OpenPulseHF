@@ -16,6 +16,8 @@ last_updated: 2026-05-16
   validated Watterson characterization and in-code documentation.
 - Added `scripts/onair-preflight.sh` to validate on-air readiness locally
   (required tooling, callsign/config sanity, and expected release binaries).
+- `scripts/run-onair-tests.sh` now executes local preflight by default,
+  with `--no-preflight` available for explicitly pre-validated sessions.
 
 - Adaptive-rate ACK-UP progression now skips unmapped reserved profile rungs,
   avoiding transitions into `None` mode mappings during active sessions.

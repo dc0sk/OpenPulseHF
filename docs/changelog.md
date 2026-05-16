@@ -16,6 +16,8 @@ last_updated: 2026-05-16
   `mu=0.015` (from `0.012`) and kept deterministic Watterson guard tests green.
 - Added `scripts/onair-preflight.sh` for repeatable station-readiness checks
   before live RF sessions (`--strict` mode enforces built binaries and config).
+- `scripts/run-onair-tests.sh` now runs local preflight by default
+  (override with `--no-preflight` when already validated).
 
 - Updated adaptive-rate ACK-UP behavior in `openpulse-modem` so active session
   profiles skip unmapped reserved speed levels instead of landing on
