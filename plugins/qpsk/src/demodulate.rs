@@ -7,6 +7,7 @@ use openpulse_dsp::filter::FirFilter;
 use openpulse_dsp::pll::CarrierPll;
 use openpulse_dsp::rrc::generate_rrc_coefficients;
 use openpulse_dsp::timing::GardnerDetector;
+use std::sync::OnceLock;
 
 use crate::modulate::{
     gray_map, preamble_symbols, samples_per_symbol, PREAMBLE_SYMS, RRC_SPAN_SYMBOLS, TAIL_SYMS,
@@ -65,21 +66,21 @@ fn qpsk_demodulate_rrc(
     alpha: f32,
 ) -> Vec<(f32, f32)> {
     let two_pi = 2.0 * PI;
+    let phase_step = two_pi * fc / fs;
     let num_taps = RRC_SPAN_SYMBOLS * n + 1;
     let coeffs = generate_rrc_coefficients(fs, baud, alpha, num_taps);
     let group_delay = (num_taps - 1) / 2;
 
-    // 1. Downmix to baseband I and Q.
-    let i_mix: Vec<f32> = samples
-        .iter()
-        .enumerate()
-        .map(|(k, &s)| s * (two_pi * fc * k as f32 / fs).cos() * 2.0)
-        .collect();
-    let q_mix: Vec<f32> = samples
-        .iter()
-        .enumerate()
-        .map(|(k, &s)| -s * (two_pi * fc * k as f32 / fs).sin() * 2.0)
-        .collect();
+    // 1. Downmix to baseband I and Q in one pass.
+    let mut i_mix = Vec::with_capacity(samples.len());
+    let mut q_mix = Vec::with_capacity(samples.len());
+    let mut phase = 0.0f32;
+    for &sample in samples {
+        let (sin_p, cos_p) = phase.sin_cos();
+        i_mix.push(sample * cos_p * 2.0);
+        q_mix.push(-sample * sin_p * 2.0);
+        phase += phase_step;
+    }
 
     // 2. Apply RRC matched filter with group delay compensation.
     let rrc_filter = |mix: Vec<f32>| -> Vec<f32> {
@@ -186,33 +187,40 @@ fn demodulate_symbols(
     cosine_overlap: bool,
 ) -> Vec<(f32, f32)> {
     let two_pi = 2.0 * PI;
+    let phase_step = two_pi * fc / fs;
     let aligned = &samples[offset.min(samples.len())..];
     let n_syms = aligned.len() / n;
     let mut out = Vec::with_capacity(n_syms);
+    let inv_n = 1.0f32 / n as f32;
+
+    let mut window = Vec::with_capacity(n);
+    for i in 0..n {
+        let x = i as f32 * inv_n;
+        let w = if cosine_overlap {
+            0.5 * (1.0 - (two_pi * x).cos())
+        } else {
+            0.5 * (1.0 + (PI * x).cos())
+        };
+        window.push(w);
+    }
 
     for sym_idx in 0..n_syms {
         let start = sym_idx * n;
+        let base = (offset + start) as f32;
+        let mut phase = phase_step * base;
         let mut i_acc = 0.0f32;
         let mut q_acc = 0.0f32;
         let mut norm = 0.0f32;
 
         for i in 0..n {
-            let g = (offset + start + i) as f32;
             let sample = aligned[start + i];
-            // Matched filter: use sin²(πi/n) for CosineOverlap (signal peaks at centre);
-            // use raised cosine for Hann overlap (signal peaks at leading edge).
-            let window = if cosine_overlap {
-                0.5 * (1.0 - (two_pi * i as f32 / n as f32).cos())
-            } else {
-                0.5 * (1.0 + (PI * i as f32 / n as f32).cos())
-            };
-            let t = g / fs;
-            let c = (two_pi * fc * t).cos();
-            let s = (two_pi * fc * t).sin();
+            let w = window[i];
+            let (s, c) = phase.sin_cos();
 
-            i_acc += sample * c * window * 2.0;
-            q_acc += -sample * s * window * 2.0;
-            norm += window * window;
+            i_acc += sample * c * w * 2.0;
+            q_acc += -sample * s * w * 2.0;
+            norm += w * w;
+            phase += phase_step;
         }
 
         if norm > 1e-9 {
@@ -263,17 +271,43 @@ fn gray_map_decision(i: f32, q: f32) -> (f32, f32) {
     gray_map(b0, b1)
 }
 
+const LMS_PROFILE_ENV: &str = "OPENPULSE_QPSK_LMS_PROFILE";
+static LMS_PROFILE_OVERRIDE: OnceLock<Option<(usize, usize, f32)>> = OnceLock::new();
+
+fn parse_lms_profile_override(raw: &str) -> Option<(usize, usize, f32)> {
+    let mut parts = raw.split(',').map(str::trim);
+    let fwd = parts.next()?.parse::<usize>().ok()?;
+    let dfe = parts.next()?.parse::<usize>().ok()?;
+    let mu = parts.next()?.parse::<f32>().ok()?;
+    if parts.next().is_some() || fwd == 0 || mu <= 0.0 {
+        return None;
+    }
+    Some((fwd, dfe, mu))
+}
+
+fn lms_profile_override_from_env() -> Option<(usize, usize, f32)> {
+    *LMS_PROFILE_OVERRIDE.get_or_init(|| {
+        std::env::var(LMS_PROFILE_ENV)
+            .ok()
+            .and_then(|raw| parse_lms_profile_override(&raw))
+    })
+}
+
 /// Apply an LMS equalizer to QPSK symbol-rate I/Q.
 ///
 /// Trains on known preamble symbols, then switches to decision-directed mode.
 fn lms_profile(mode: &str) -> (usize, usize, f32) {
+    if let Some(override_profile) = lms_profile_override_from_env() {
+        return override_profile;
+    }
+
     // HF 1000-baud paths see stronger multipath/ISI under Watterson Moderate/Poor,
     // so use a longer forward filter, enable a short DFE section, and reduce
     // the LMS step size for better decision-directed stability.
     if mode.contains("-HF") && mode.contains("-RRC") && mode.contains("1000") {
         (11, 2, 0.010)
     } else if mode.contains("-HF") && mode.contains("1000") {
-        (11, 2, 0.012)
+        (11, 2, 0.015)
     } else {
         (7, 0, 0.02)
     }
@@ -608,7 +642,7 @@ mod tests {
         let (fwd, dfe, mu) = lms_profile("QPSK1000-HF");
         assert_eq!(fwd, 11);
         assert_eq!(dfe, 2);
-        assert!((mu - 0.012).abs() < 1e-6);
+        assert!((mu - 0.015).abs() < 1e-6);
 
         let (fwd, dfe, mu) = lms_profile("QPSK1000-HF-RRC");
         assert_eq!(fwd, 11);
@@ -629,6 +663,21 @@ mod tests {
         assert_eq!(fwd, 7);
         assert_eq!(dfe, 0);
         assert!((mu - 0.02).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parse_lms_profile_override_accepts_valid_triplet() {
+        let parsed = parse_lms_profile_override("11,2,0.015").expect("valid override");
+        assert_eq!(parsed, (11, 2, 0.015));
+    }
+
+    #[test]
+    fn parse_lms_profile_override_rejects_invalid_values() {
+        assert!(parse_lms_profile_override("11,2").is_none());
+        assert!(parse_lms_profile_override("0,2,0.01").is_none());
+        assert!(parse_lms_profile_override("11,2,0.0").is_none());
+        assert!(parse_lms_profile_override("11,2,abc").is_none());
+        assert!(parse_lms_profile_override("11,2,0.01,extra").is_none());
     }
 
     #[test]
