@@ -3,7 +3,7 @@
 #
 # Usage:
 #   source config/onair-stations.sh   # set STATION_A, STATION_B, etc.
-#   ./scripts/run-onair-tests.sh [--quick | --full] [--output DIR]
+#   ./scripts/run-onair-tests.sh [--quick | --full] [--output DIR] [--no-preflight]
 #
 # Prerequisites on each station:
 #   - ~/bin/openpulse-tnc  (deployed by deploy-rpi-pair.sh)
@@ -30,12 +30,14 @@ TX_TIMEOUT="${TX_TIMEOUT:-90}"              # seconds before ISS transmit is dec
 
 TIER="quick"
 OUTPUT_DIR="docs/test-reports"
+RUN_PREFLIGHT=1
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --quick) TIER="quick" ;;
         --full)  TIER="full"  ;;
         --output) OUTPUT_DIR="$2"; shift ;;
+        --no-preflight) RUN_PREFLIGHT=0 ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
     shift
@@ -45,6 +47,12 @@ TS=$(date -u +%Y-%m-%dT%H%M%S)
 GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 REPORT_FILE="${OUTPUT_DIR}/onair-${TS}.json"
 mkdir -p "$OUTPUT_DIR"
+
+if [[ "$RUN_PREFLIGHT" -eq 1 ]]; then
+    echo "==> Running local preflight gate"
+    ./scripts/onair-preflight.sh --strict
+    echo
+fi
 
 # ── Test matrix ───────────────────────────────────────────────────────────────
 # Format: "mode|fec|payload_size_bytes"

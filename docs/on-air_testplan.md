@@ -76,6 +76,14 @@ Run local preflight checks before any live session:
 This gate verifies required tooling, config presence, non-placeholder callsign,
 and release binaries needed by the on-air matrix scripts.
 
+The orchestrated matrix runner now executes this preflight by default:
+
+```bash
+./scripts/run-onair-tests.sh --quick
+```
+
+Use `--no-preflight` only when the preflight was already executed in the same shell session.
+
 ---
 
 ## 4. Station configuration
