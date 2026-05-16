@@ -2,7 +2,7 @@
 # Local preflight checks before executing on-air tests.
 #
 # Usage:
-#   ./scripts/onair-preflight.sh [--strict]
+#   ./scripts/onair-preflight.sh [--strict] [--help]
 #
 # Strict mode fails if release binaries are missing. Non-strict mode reports
 # warnings but still returns success when core tooling/config checks pass.
