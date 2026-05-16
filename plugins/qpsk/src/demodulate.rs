@@ -730,4 +730,127 @@ mod tests {
             "HF-RRC profile should not regress BER catastrophically on moderate_f1; avg_base={avg_base:.4}, avg_hf={avg_hf:.4}"
         );
     }
+
+    #[test]
+    #[ignore = "characterization sweep for follow-up DFE/pilot tuning work"]
+    fn characterize_hf_rrc_lms_parameter_sweep_watterson() {
+        let payload: Vec<u8> = (0..96u8).map(|v| v ^ 0x6D).collect();
+        let cfg = ModulationConfig {
+            mode: "QPSK1000-HF-RRC".to_string(),
+            ..ModulationConfig::default()
+        };
+        let tx = crate::modulate::qpsk_modulate(&payload, &cfg).expect("modulate");
+
+        let baud = parse_baud_rate(&cfg.mode).expect("parse baud");
+        let fs = cfg.sample_rate as f32;
+        let fc = cfg.center_frequency;
+        let n = samples_per_symbol(fs, baud).expect("samples/symbol");
+        let cosine_overlap = true;
+
+        let candidates = [
+            (11usize, 2usize, 0.0100f32),
+            (11, 2, 0.0095),
+            (12, 2, 0.0095),
+            (12, 3, 0.0090),
+        ];
+        let moderate = [0x5301u64, 0x5302, 0x5303, 0x5304, 0x5305, 0x5306];
+        let poor = [0x5401u64, 0x5402, 0x5403, 0x5404, 0x5405, 0x5406];
+
+        fn avg_ber_for_seeds(
+            tx: &[f32],
+            payload: &[u8],
+            seeds: &[u64],
+            n: usize,
+            fc: f32,
+            fs: f32,
+            cosine_overlap: bool,
+            fwd: usize,
+            dfe: usize,
+            mu: f32,
+            channel_kind: &str,
+        ) -> Option<f32> {
+            let mut compared = 0usize;
+            let mut sum = 0.0f32;
+            for &seed in seeds {
+                let mut ch = match channel_kind {
+                    "moderate" => WattersonChannel::new(WattersonConfig::moderate_f1(Some(seed)))
+                        .expect("watterson moderate f1"),
+                    _ => WattersonChannel::new(WattersonConfig::poor_f1(Some(seed)))
+                        .expect("watterson poor f1"),
+                };
+                let rx = ch.apply(tx);
+                let timing = find_timing_offset(&rx, n, fc, fs, cosine_overlap);
+                let syms = demodulate_symbols(&rx, n, fc, fs, timing, cosine_overlap);
+                if syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
+                    continue;
+                }
+
+                let train_len = PREAMBLE_SYMS.min(syms.len());
+                let expected = preamble_expected();
+                let mut training_i = Vec::with_capacity(train_len);
+                let mut training_q = Vec::with_capacity(train_len);
+                for &(ti, tq) in expected.iter().take(train_len) {
+                    training_i.push(ti);
+                    training_q.push(tq);
+                }
+
+                let (i_syms, q_syms): (Vec<f32>, Vec<f32>) = syms.iter().copied().unzip();
+                let mut eq = LmsEqualizer::new(fwd, dfe, mu);
+                let (i_eq, q_eq) =
+                    eq.process_frame(&i_syms, &q_syms, &training_i, &training_q, |i, q| {
+                        gray_map_decision(i, q)
+                    });
+
+                let eq_syms: Vec<(f32, f32)> = i_eq.into_iter().zip(q_eq.into_iter()).collect();
+                let data = &eq_syms[PREAMBLE_SYMS..(eq_syms.len() - TAIL_SYMS)];
+                let rec = bits_to_bytes(&symbols_to_bits(data));
+                if rec.len() < payload.len() {
+                    continue;
+                }
+                let ber = bit_error_rate(payload, &rec[..payload.len()]);
+                compared += 1;
+                sum += ber;
+            }
+            if compared == 0 {
+                None
+            } else {
+                Some(sum / compared as f32)
+            }
+        }
+
+        for (fwd, dfe, mu) in candidates {
+            let avg_moderate = avg_ber_for_seeds(
+                &tx,
+                &payload,
+                &moderate,
+                n,
+                fc,
+                fs,
+                cosine_overlap,
+                fwd,
+                dfe,
+                mu,
+                "moderate",
+            )
+            .expect("moderate BER");
+            let avg_poor = avg_ber_for_seeds(
+                &tx,
+                &payload,
+                &poor,
+                n,
+                fc,
+                fs,
+                cosine_overlap,
+                fwd,
+                dfe,
+                mu,
+                "poor",
+            )
+            .expect("poor BER");
+
+            println!(
+                "candidate fwd={fwd} dfe={dfe} mu={mu:.4}: moderate_avg_ber={avg_moderate:.4} poor_avg_ber={avg_poor:.4}"
+            );
+        }
+    }
 }
