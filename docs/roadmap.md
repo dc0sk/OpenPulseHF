@@ -1224,7 +1224,12 @@ These tasks establish the empirical baseline and close the gap between the simul
 | BL-TP-4 | SC-FDMA 16QAM and 64QAM modes + MMSE equalization | Done | #210 |
 | BL-TP-5 | Memory-ARQ end-to-end in SC-FDMA session (soft combining) | Done | #213 |
 | BL-TP-6 | Preamble / sync sequence for carrier and timing acquisition | Done | #213 |
-| BL-TP-7 | SC-FDMA pilot density review vs measured Doppler spread | Pending | — |
+| BL-TP-7 | SC-FDMA pilot density review vs measured Doppler spread | Done | (this PR) |
+
+BL-TP-7 validation is now covered by `plugins/scfdma/tests/pilot_density_review.rs`,
+which compares sparse-pilot (`SCFDMA52-64QAM`) and dense-pilot (`SCFDMA52-64QAM-P4`)
+profiles across low and high Doppler Watterson settings and gates that dense-pilot
+absolute bit agreement is not worse than sparse-pilot at either Doppler point.
 
 ---
 

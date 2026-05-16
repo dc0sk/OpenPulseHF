@@ -18,6 +18,21 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+usage() {
+        cat <<'EOF'
+Usage:
+    source config/onair-stations.sh
+    ./scripts/run-onair-tests.sh [--quick | --full] [--output DIR] [--no-preflight] [--help]
+
+Options:
+    --quick         Run the short matrix (default).
+    --full          Run the extended matrix.
+    --output DIR    Report output directory (default: docs/test-reports).
+    --no-preflight  Skip local strict preflight.
+    --help          Show this help text.
+EOF
+}
+
 # ── Config defaults ───────────────────────────────────────────────────────────
 STATION_A="${STATION_A:-dc0sk@192.168.1.10}"
 STATION_B="${STATION_B:-dc0sk@192.168.1.11}"
@@ -38,7 +53,12 @@ while [[ $# -gt 0 ]]; do
         --full)  TIER="full"  ;;
         --output) OUTPUT_DIR="$2"; shift ;;
         --no-preflight) RUN_PREFLIGHT=0 ;;
-        *) echo "Unknown argument: $1" >&2; exit 1 ;;
+        --help|-h) usage; exit 0 ;;
+        *)
+            echo "Unknown argument: $1" >&2
+            usage >&2
+            exit 1
+            ;;
     esac
     shift
 done

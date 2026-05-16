@@ -12,10 +12,35 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+usage() {
+    cat <<'EOF'
+Usage:
+  ./scripts/onair-preflight.sh [--strict] [--help]
+
+Options:
+  --strict  Fail when expected release binaries are missing.
+  --help    Show this help text.
+EOF
+}
+
 STRICT=0
-if [[ "${1:-}" == "--strict" ]]; then
-    STRICT=1
-fi
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --strict)
+            STRICT=1
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown argument: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+    shift
+done
 
 CFG_FILE="${OPENPULSE_CONFIG_FILE:-$HOME/.config/openpulse/config.toml}"
 

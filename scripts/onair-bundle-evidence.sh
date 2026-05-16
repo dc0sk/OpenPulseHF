@@ -15,6 +15,24 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+usage() {
+        cat <<'EOF'
+Usage:
+    ./scripts/onair-bundle-evidence.sh [--report FILE] [--notes FILE] [--output DIR] [--label NAME]
+        [--require-report] [--require-config] [--require-preflight] [--help]
+
+Options:
+    --report FILE          On-air report JSON to include.
+    --notes FILE           Operator notes file to include.
+    --output DIR           Bundle output root (default: docs/test-reports/on-air).
+    --label NAME           Optional label appended to bundle directory name.
+    --require-report       Fail if report is missing.
+    --require-config       Fail if config snapshot is missing.
+    --require-preflight    Fail if report lacks preflight metadata.
+    --help                 Show this help text.
+EOF
+}
+
 REPORT_FILE=""
 NOTES_FILE=""
 OUTPUT_DIR="docs/test-reports/on-air"
@@ -50,8 +68,13 @@ while [[ $# -gt 0 ]]; do
         --require-preflight)
             REQUIRE_PREFLIGHT=1
             ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
         *)
             echo "Unknown argument: $1" >&2
+            usage >&2
             exit 1
             ;;
     esac
@@ -79,6 +102,10 @@ mkdir -p "$BUNDLE_DIR"
 CONFIG_FILE="${OPENPULSE_CONFIG_FILE:-$HOME/.config/openpulse/config.toml}"
 GIT_SHA="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 GIT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+GIT_DIRTY=false
+if ! git diff --quiet --ignore-submodules -- 2>/dev/null || ! git diff --cached --quiet --ignore-submodules -- 2>/dev/null; then
+    GIT_DIRTY=true
+fi
 
 REPORT_BASENAME=""
 if [[ -n "$REPORT_FILE" ]]; then
@@ -88,6 +115,10 @@ if [[ -n "$REPORT_FILE" ]]; then
     fi
     REPORT_BASENAME="$(basename "$REPORT_FILE")"
     cp "$REPORT_FILE" "$BUNDLE_DIR/$REPORT_BASENAME"
+fi
+
+if command -v git >/dev/null 2>&1; then
+    git status --short >"$BUNDLE_DIR/git-status.short.txt" 2>/dev/null || true
 fi
 
 NOTES_BASENAME=""
@@ -134,6 +165,7 @@ fi
 
 export TS GIT_SHA GIT_BRANCH CONFIG_FILE BUNDLE_DIR REPORT_FILE REPORT_BASENAME REPORT_SHA256
 export CONFIG_BASENAME CONFIG_SHA256 NOTES_BASENAME NOTES_SHA256 LABEL REQUIRE_PREFLIGHT
+export GIT_DIRTY
 
 python3 - <<'PY'
 import json
@@ -161,6 +193,7 @@ meta = {
     "captured_at_utc": os.environ["TS"],
     "git_sha": os.environ["GIT_SHA"],
     "git_branch": os.environ["GIT_BRANCH"],
+    "git_dirty": os.environ.get("GIT_DIRTY", "false").lower() == "true",
     "host": socket.gethostname(),
     "operator_user": os.environ.get("USER", "unknown"),
     "label": os.environ.get("LABEL", ""),

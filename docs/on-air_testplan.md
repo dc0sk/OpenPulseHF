@@ -73,6 +73,14 @@ Run local preflight checks before any live session:
 ./scripts/onair-preflight.sh --strict
 ```
 
+All orchestration scripts support `--help` for usage details:
+
+```bash
+./scripts/onair-preflight.sh --help
+./scripts/run-onair-tests.sh --help
+./scripts/onair-bundle-evidence.sh --help
+```
+
 This gate verifies required tooling, config presence, non-placeholder callsign,
 and release binaries needed by the on-air matrix scripts.
 
@@ -398,7 +406,8 @@ For compliance runs, use strict validation so the bundle fails fast if required 
 ```
 
 The bundle is written under `docs/test-reports/on-air/bundle-<utc>-<label>/` and includes:
-- `metadata.json` (git SHA, host/user, optional preflight metadata extracted from report)
+- `metadata.json` (git SHA/branch, git dirty flag, host/user, optional preflight metadata extracted from report)
+- `git-status.short.txt` (short `git status` snapshot for traceability)
 - copied on-air report JSON
 - config snapshot (`config.toml.snapshot`, when available)
 - operator notes (when provided)
