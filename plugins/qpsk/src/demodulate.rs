@@ -765,6 +765,9 @@ mod tests {
             0x5301u64, 0x5302, 0x5303, 0x5304, 0x5305, 0x5306, 0x5307, 0x5308,
         ];
         let poor = [0x5401u64, 0x5402, 0x5403, 0x5404, 0x5405, 0x5406];
+        let current_profile = (11usize, 2usize, 0.0100f32);
+        let mut any_overall_pass = false;
+        let mut current_profile_passes = false;
 
         struct CandidateStats {
             compared_trials: usize,
@@ -905,6 +908,23 @@ mod tests {
                 poor_ok,
                 moderate_ok && poor_ok
             );
+
+            let overall_ok = moderate_ok && poor_ok;
+            if overall_ok {
+                any_overall_pass = true;
+            }
+            if (fwd, dfe, mu) == current_profile {
+                current_profile_passes = overall_ok;
+            }
         }
+
+        assert!(
+            any_overall_pass,
+            "at least one candidate should satisfy both deterministic moderate and poor guard criteria"
+        );
+        assert!(
+            current_profile_passes,
+            "current HF-RRC profile must remain a passing candidate in characterization"
+        );
     }
 }
