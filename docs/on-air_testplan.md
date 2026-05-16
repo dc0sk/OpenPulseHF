@@ -377,3 +377,18 @@ Notes:
 ```
 
 Attach the `RUST_LOG=debug` output for any failed session.
+
+Create a reproducible evidence bundle immediately after each run:
+
+```bash
+./scripts/onair-bundle-evidence.sh \
+  --report docs/test-reports/onair-<timestamp>.json \
+  --notes path/to/operator-notes.txt \
+  --label 20m-qpsk500
+```
+
+The bundle is written under `docs/test-reports/on-air/bundle-<utc>-<label>/` and includes:
+- `metadata.json` (git SHA, host/user, optional preflight metadata extracted from report)
+- copied on-air report JSON
+- config snapshot (`config.toml.snapshot`, when available)
+- operator notes (when provided)
