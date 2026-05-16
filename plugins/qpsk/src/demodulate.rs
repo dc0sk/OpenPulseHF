@@ -734,16 +734,20 @@ mod tests {
     #[test]
     #[ignore = "characterization sweep for follow-up DFE/pilot tuning work"]
     fn characterize_hf_rrc_lms_parameter_sweep_watterson() {
-        let payload: Vec<u8> = (0..96u8).map(|v| v ^ 0x6D).collect();
-        let cfg = ModulationConfig {
+        let moderate_payload: Vec<u8> = (0..96u8).map(|v| v ^ 0xC3).collect();
+        let poor_payload: Vec<u8> = (0..96u8).map(|v| v ^ 0x3C).collect();
+        let base_cfg = ModulationConfig {
             mode: "QPSK1000-HF-RRC".to_string(),
             ..ModulationConfig::default()
         };
-        let tx = crate::modulate::qpsk_modulate(&payload, &cfg).expect("modulate");
+        let tx_moderate = crate::modulate::qpsk_modulate(&moderate_payload, &base_cfg)
+            .expect("modulate moderate payload");
+        let tx_poor = crate::modulate::qpsk_modulate(&poor_payload, &base_cfg)
+            .expect("modulate poor payload");
 
-        let baud = parse_baud_rate(&cfg.mode).expect("parse baud");
-        let fs = cfg.sample_rate as f32;
-        let fc = cfg.center_frequency;
+        let baud = parse_baud_rate(&base_cfg.mode).expect("parse baud");
+        let fs = base_cfg.sample_rate as f32;
+        let fc = base_cfg.center_frequency;
         let n = samples_per_symbol(fs, baud).expect("samples/symbol");
         let cosine_overlap = true;
 
@@ -757,10 +761,19 @@ mod tests {
             (12, 3, 0.0090),
             (13, 2, 0.0090),
         ];
-        let moderate = [0x5301u64, 0x5302, 0x5303, 0x5304, 0x5305, 0x5306];
+        let moderate = [
+            0x5301u64, 0x5302, 0x5303, 0x5304, 0x5305, 0x5306, 0x5307, 0x5308,
+        ];
         let poor = [0x5401u64, 0x5402, 0x5403, 0x5404, 0x5405, 0x5406];
 
-        fn avg_ber_for_seeds(
+        struct CandidateStats {
+            compared_trials: usize,
+            better_or_equal: usize,
+            avg_base: f32,
+            avg_candidate: f32,
+        }
+
+        fn candidate_stats_for_seeds(
             tx: &[f32],
             payload: &[u8],
             seeds: &[u64],
@@ -772,9 +785,11 @@ mod tests {
             dfe: usize,
             mu: f32,
             channel_kind: &str,
-        ) -> Option<f32> {
+        ) -> Option<CandidateStats> {
             let mut compared = 0usize;
-            let mut sum = 0.0f32;
+            let mut better_or_equal = 0usize;
+            let mut sum_base = 0.0f32;
+            let mut sum_candidate = 0.0f32;
             for &seed in seeds {
                 let mut ch = match channel_kind {
                     "moderate" => WattersonChannel::new(WattersonConfig::moderate_f1(Some(seed)))
@@ -788,6 +803,14 @@ mod tests {
                 if syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
                     continue;
                 }
+
+                let eq_baseline = qpsk_lms_equalize(&syms, "QPSK1000-RRC");
+                let data_base = &eq_baseline[PREAMBLE_SYMS..(eq_baseline.len() - TAIL_SYMS)];
+                let rec_base = bits_to_bytes(&symbols_to_bits(data_base));
+                if rec_base.len() < payload.len() {
+                    continue;
+                }
+                let ber_base = bit_error_rate(payload, &rec_base[..payload.len()]);
 
                 let train_len = PREAMBLE_SYMS.min(syms.len());
                 let expected = preamble_expected();
@@ -811,21 +834,30 @@ mod tests {
                 if rec.len() < payload.len() {
                     continue;
                 }
-                let ber = bit_error_rate(payload, &rec[..payload.len()]);
+                let ber_candidate = bit_error_rate(payload, &rec[..payload.len()]);
                 compared += 1;
-                sum += ber;
+                sum_base += ber_base;
+                sum_candidate += ber_candidate;
+                if ber_candidate <= ber_base {
+                    better_or_equal += 1;
+                }
             }
             if compared == 0 {
                 None
             } else {
-                Some(sum / compared as f32)
+                Some(CandidateStats {
+                    compared_trials: compared,
+                    better_or_equal,
+                    avg_base: sum_base / compared as f32,
+                    avg_candidate: sum_candidate / compared as f32,
+                })
             }
         }
 
         for (fwd, dfe, mu) in candidates {
-            let avg_moderate = avg_ber_for_seeds(
-                &tx,
-                &payload,
+            let moderate_stats = candidate_stats_for_seeds(
+                &tx_moderate,
+                &moderate_payload,
                 &moderate,
                 n,
                 fc,
@@ -836,10 +868,10 @@ mod tests {
                 mu,
                 "moderate",
             )
-            .expect("moderate BER");
-            let avg_poor = avg_ber_for_seeds(
-                &tx,
-                &payload,
+            .expect("moderate stats");
+            let poor_stats = candidate_stats_for_seeds(
+                &tx_poor,
+                &poor_payload,
                 &poor,
                 n,
                 fc,
@@ -850,10 +882,28 @@ mod tests {
                 mu,
                 "poor",
             )
-            .expect("poor BER");
+            .expect("poor stats");
+
+            let moderate_ok = moderate_stats.compared_trials >= 6
+                && moderate_stats.better_or_equal >= 2
+                && moderate_stats.avg_candidate <= moderate_stats.avg_base + 0.05;
+            let poor_ok = poor_stats.compared_trials >= 4
+                && poor_stats.better_or_equal >= 2
+                && poor_stats.avg_candidate <= poor_stats.avg_base + 0.02;
 
             println!(
-                "candidate fwd={fwd} dfe={dfe} mu={mu:.4}: moderate_avg_ber={avg_moderate:.4} poor_avg_ber={avg_poor:.4}"
+                "candidate fwd={fwd} dfe={dfe} mu={mu:.4}: moderate avg={:.4} base={:.4} better_or_equal={}/{} pass={} | poor avg={:.4} base={:.4} better_or_equal={}/{} pass={} | overall_pass={}",
+                moderate_stats.avg_candidate,
+                moderate_stats.avg_base,
+                moderate_stats.better_or_equal,
+                moderate_stats.compared_trials,
+                moderate_ok,
+                poor_stats.avg_candidate,
+                poor_stats.avg_base,
+                poor_stats.better_or_equal,
+                poor_stats.compared_trials,
+                poor_ok,
+                moderate_ok && poor_ok
             );
         }
     }
