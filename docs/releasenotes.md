@@ -18,6 +18,8 @@ last_updated: 2026-05-16
   (required tooling, callsign/config sanity, and expected release binaries).
 - `scripts/run-onair-tests.sh` now executes local preflight by default,
   with `--no-preflight` available for explicitly pre-validated sessions.
+- On-air report JSON now records preflight execution metadata
+  (`preflight.ran` and `preflight.mode`) for compliance evidence trails.
 
 - Adaptive-rate ACK-UP progression now skips unmapped reserved profile rungs,
   avoiding transitions into `None` mode mappings during active sessions.

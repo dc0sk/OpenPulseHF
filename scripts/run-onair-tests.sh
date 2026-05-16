@@ -47,10 +47,14 @@ TS=$(date -u +%Y-%m-%dT%H%M%S)
 GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 REPORT_FILE="${OUTPUT_DIR}/onair-${TS}.json"
 mkdir -p "$OUTPUT_DIR"
+PREFLIGHT_RAN=false
+PREFLIGHT_MODE="skipped"
 
 if [[ "$RUN_PREFLIGHT" -eq 1 ]]; then
     echo "==> Running local preflight gate"
     ./scripts/onair-preflight.sh --strict
+    PREFLIGHT_RAN=true
+    PREFLIGHT_MODE="strict"
     echo
 fi
 
@@ -185,6 +189,10 @@ cat > "${REPORT_FILE}" <<JSON
 {
   "timestamp": "${TS}",
   "git_sha": "${GIT_SHA}",
+    "preflight": {
+        "ran": ${PREFLIGHT_RAN},
+        "mode": "${PREFLIGHT_MODE}"
+    },
   "tier": "${TIER}",
   "station_a": "$(json_escape "${STATION_A}")",
   "station_b": "$(json_escape "${STATION_B}")",

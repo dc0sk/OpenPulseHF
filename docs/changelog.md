@@ -18,6 +18,8 @@ last_updated: 2026-05-16
   before live RF sessions (`--strict` mode enforces built binaries and config).
 - `scripts/run-onair-tests.sh` now runs local preflight by default
   (override with `--no-preflight` when already validated).
+- On-air JSON reports now include preflight execution metadata
+  (`preflight.ran`, `preflight.mode`) for audit traceability.
 
 - Updated adaptive-rate ACK-UP behavior in `openpulse-modem` so active session
   profiles skip unmapped reserved speed levels instead of landing on

@@ -84,6 +84,15 @@ The orchestrated matrix runner now executes this preflight by default:
 
 Use `--no-preflight` only when the preflight was already executed in the same shell session.
 
+Generated JSON reports now include explicit preflight metadata:
+
+```json
+"preflight": {
+  "ran": true,
+  "mode": "strict"
+}
+```
+
 ---
 
 ## 4. Station configuration
