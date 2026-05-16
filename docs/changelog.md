@@ -2,12 +2,14 @@
 project: openpulsehf
 doc: docs/changelog.md
 status: living
-last_updated: 2026-05-16
----
+last_updated: 2026-05-17
 
 # Changelog
 
 ## Unreleased
+
+- **Performance**: Cached standard benchmark corpus using `LazyLock` to eliminate repeated Vec allocation on every benchmark run. Result: cleaner command invocations without changing regression criteria (PR #275).
+- **Quality**: Resolved Clippy `needless_borrow` warning in benchmark CLI command and replaced deprecated `BandplanMode::HamIaru` with region-specific `HamIaruRegion1` in tests (PR #276).
 
 - Optimized `qpsk-plugin` demodulation hot paths by reducing duplicate trigonometric
   work in passband/RRC downmix loops and using phase-step accumulation in symbol
