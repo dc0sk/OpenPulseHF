@@ -7,7 +7,7 @@ use openpulse_modem::benchmark::{
 #[test]
 fn standard_corpus_passes_regression_gate() {
     let corpus = standard_corpus();
-    let report = run_benchmark(&corpus);
+    let report = run_benchmark(corpus);
 
     // Emit a structured summary so CI logs are readable.
     for s in &report.scenarios {
@@ -34,7 +34,7 @@ fn standard_corpus_passes_regression_gate() {
 #[test]
 fn standard_corpus_has_no_invalid_transitions() {
     let corpus = standard_corpus();
-    let report = run_benchmark(&corpus);
+    let report = run_benchmark(corpus);
 
     for s in &report.scenarios {
         assert_eq!(
@@ -49,7 +49,7 @@ fn standard_corpus_has_no_invalid_transitions() {
 #[test]
 fn benchmark_report_serialises_to_json() {
     let corpus = standard_corpus();
-    let report = run_benchmark(&corpus);
+    let report = run_benchmark(corpus);
     let json = serde_json::to_string_pretty(&report).expect("report must serialise to JSON");
     let reparsed: serde_json::Value =
         serde_json::from_str(&json).expect("serialised report must be valid JSON");
@@ -63,4 +63,18 @@ fn benchmark_report_serialises_to_json() {
         report.passed as u64
     );
     assert!(reparsed["scenarios"].is_array());
+}
+
+/// The standard corpus is cached and should return the same static slice
+/// reference on repeated calls.
+#[test]
+fn standard_corpus_is_cached_static_slice() {
+    let first = standard_corpus();
+    let second = standard_corpus();
+
+    assert!(!first.is_empty(), "standard corpus must not be empty");
+    assert!(
+        std::ptr::eq(first, second),
+        "standard corpus should be cached"
+    );
 }

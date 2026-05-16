@@ -9,6 +9,18 @@ last_updated: 2026-05-16
 
 ## Unreleased
 
+- Added BL-TP-7 SC-FDMA pilot-density Doppler review coverage in
+  `plugins/scfdma/tests/pilot_density_review.rs`, validating dense-pilot
+  (`SCFDMA52-64QAM-P4`) robustness against sparse-pilot
+  (`SCFDMA52-64QAM`) under deterministic Watterson channels.
+- On-air orchestration scripts now support `--help` and print usage text for
+  unknown flags:
+  `scripts/onair-preflight.sh`, `scripts/run-onair-tests.sh`,
+  and `scripts/onair-bundle-evidence.sh`.
+- Evidence bundles now include repository-state traceability:
+  `metadata.json` carries `git_dirty`, and bundles include
+  `git-status.short.txt`.
+
 - `qpsk-plugin` demodulation now uses lower-overhead carrier/downmix loops
   (single-pass sin/cos evaluation and phase-step accumulation), reducing CPU
   cost in symbol extraction paths.
