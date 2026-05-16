@@ -7,6 +7,7 @@ use std::time::Instant;
 use crate::engine::ModemEngine;
 use bpsk_plugin::BpskPlugin;
 use openpulse_audio::LoopbackBackend;
+use std::sync::LazyLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BenchmarkScenario {
@@ -59,14 +60,7 @@ fn bev(event: &str, elapsed_ms: u64) -> BenchmarkEvent {
     }
 }
 
-/// Returns the standard benchmark scenario corpus used for regression gating.
-///
-/// Each scenario is a complete HPX path from Idle driven via `hpx_apply_event`.
-/// - `TransferComplete` from `ActiveTransfer` → `Teardown`; a second from
-///   `Teardown` → `Idle`.
-/// - Recovery exhaustion fires on the 5th entry into `Recovery` from a
-///   non-`Recovery` state (counter > MAX_RECOVERY_ATTEMPTS=4).
-pub fn standard_corpus() -> Vec<BenchmarkScenario> {
+fn build_standard_corpus() -> Vec<BenchmarkScenario> {
     vec![
         BenchmarkScenario {
             name: "happy_path".into(),
@@ -178,6 +172,19 @@ pub fn standard_corpus() -> Vec<BenchmarkScenario> {
             expected_terminal_state: "idle".into(),
         },
     ]
+}
+
+static STANDARD_CORPUS: LazyLock<Vec<BenchmarkScenario>> = LazyLock::new(build_standard_corpus);
+
+/// Returns the standard benchmark scenario corpus used for regression gating.
+///
+/// Each scenario is a complete HPX path from Idle driven via `hpx_apply_event`.
+/// - `TransferComplete` from `ActiveTransfer` → `Teardown`; a second from
+///   `Teardown` → `Idle`.
+/// - Recovery exhaustion fires on the 5th entry into `Recovery` from a
+///   non-`Recovery` state (counter > MAX_RECOVERY_ATTEMPTS=4).
+pub fn standard_corpus() -> &'static [BenchmarkScenario] {
+    STANDARD_CORPUS.as_slice()
 }
 
 fn parse_event(s: &str) -> Option<HpxEvent> {
