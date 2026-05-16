@@ -73,7 +73,7 @@ mod tests {
     fn segment_and_width_enforced_by_policy() {
         let policy = BandplanPolicy {
             awareness_enabled: true,
-            mode: BandplanMode::HamIaru,
+            mode: BandplanMode::HamIaruRegion1,
             enforce_max_channel_width: true,
             enforce_segment_conventions: true,
         };
@@ -86,7 +86,7 @@ mod tests {
     fn segment_can_be_relaxed_while_awareness_stays_enabled() {
         let policy = BandplanPolicy {
             awareness_enabled: true,
-            mode: BandplanMode::HamIaru,
+            mode: BandplanMode::HamIaruRegion1,
             enforce_max_channel_width: true,
             enforce_segment_conventions: false,
         };
