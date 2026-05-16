@@ -60,7 +60,7 @@ fn run_mean_agreement(mode: &str, doppler_hz: f32, frames: usize) -> f32 {
 }
 
 #[test]
-fn dense_pilot_profile_degrades_less_under_higher_doppler() {
+fn dense_pilot_profile_matches_or_beats_sparse_agreement() {
     let frames = 24usize;
 
     // Lower Doppler (close to Good F2).
