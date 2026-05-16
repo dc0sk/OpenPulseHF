@@ -33,7 +33,15 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache cross binary
+        id: cache-cross-bin
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cross
+          key: cross-bin-${{ runner.os }}
+
       - name: Install cross
+        if: steps.cache-cross-bin.outputs.cache-hit != 'true'
         run: cargo install cross
 
       - name: Cache cargo registry
