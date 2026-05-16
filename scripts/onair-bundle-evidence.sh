@@ -3,6 +3,7 @@
 #
 # Usage:
 #   ./scripts/onair-bundle-evidence.sh [--report FILE] [--notes FILE] [--output DIR] [--label NAME]
+#     [--require-report] [--require-config] [--require-preflight]
 #
 # Defaults:
 #   report: latest docs/test-reports/onair-*.json (if present)
@@ -18,6 +19,9 @@ REPORT_FILE=""
 NOTES_FILE=""
 OUTPUT_DIR="docs/test-reports/on-air"
 LABEL=""
+REQUIRE_REPORT=0
+REQUIRE_CONFIG=0
+REQUIRE_PREFLIGHT=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -37,6 +41,15 @@ while [[ $# -gt 0 ]]; do
             LABEL="$2"
             shift
             ;;
+        --require-report)
+            REQUIRE_REPORT=1
+            ;;
+        --require-config)
+            REQUIRE_CONFIG=1
+            ;;
+        --require-preflight)
+            REQUIRE_PREFLIGHT=1
+            ;;
         *)
             echo "Unknown argument: $1" >&2
             exit 1
@@ -47,6 +60,11 @@ done
 
 if [[ -z "$REPORT_FILE" ]]; then
     REPORT_FILE="$(ls -t docs/test-reports/onair-*.json 2>/dev/null | head -1 || true)"
+fi
+
+if [[ $REQUIRE_REPORT -eq 1 && -z "$REPORT_FILE" ]]; then
+    echo "No on-air report found; pass --report FILE or run the matrix first." >&2
+    exit 1
 fi
 
 TS="$(date -u +%Y-%m-%dT%H%M%SZ)"
@@ -86,6 +104,9 @@ CONFIG_BASENAME=""
 if [[ -f "$CONFIG_FILE" ]]; then
     CONFIG_BASENAME="config.toml.snapshot"
     cp "$CONFIG_FILE" "$BUNDLE_DIR/$CONFIG_BASENAME"
+elif [[ $REQUIRE_CONFIG -eq 1 ]]; then
+    echo "Config snapshot missing: $CONFIG_FILE" >&2
+    exit 1
 fi
 
 HASH_CMD=""
@@ -112,12 +133,13 @@ if [[ -n "$HASH_CMD" ]]; then
 fi
 
 export TS GIT_SHA GIT_BRANCH CONFIG_FILE BUNDLE_DIR REPORT_FILE REPORT_BASENAME REPORT_SHA256
-export CONFIG_BASENAME CONFIG_SHA256 NOTES_BASENAME NOTES_SHA256 LABEL
+export CONFIG_BASENAME CONFIG_SHA256 NOTES_BASENAME NOTES_SHA256 LABEL REQUIRE_PREFLIGHT
 
 python3 - <<'PY'
 import json
 import os
 import socket
+import sys
 
 bundle_dir = os.environ["BUNDLE_DIR"]
 report_path = os.path.join(bundle_dir, os.environ["REPORT_BASENAME"]) if os.environ["REPORT_BASENAME"] else None
@@ -130,6 +152,10 @@ if report_path and os.path.exists(report_path):
         preflight = report.get("preflight")
     except Exception:
         preflight = None
+
+if os.environ.get("REQUIRE_PREFLIGHT") == "1" and not preflight:
+    print("Preflight metadata missing from report; rerun with a report produced by run-onair-tests.sh", file=sys.stderr)
+    raise SystemExit(1)
 
 meta = {
     "captured_at_utc": os.environ["TS"],

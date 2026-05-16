@@ -387,6 +387,16 @@ Create a reproducible evidence bundle immediately after each run:
   --label 20m-qpsk500
 ```
 
+For compliance runs, use strict validation so the bundle fails fast if required artifacts are missing:
+
+```bash
+./scripts/onair-bundle-evidence.sh \
+  --report docs/test-reports/onair-<timestamp>.json \
+  --require-report \
+  --require-config \
+  --require-preflight
+```
+
 The bundle is written under `docs/test-reports/on-air/bundle-<utc>-<label>/` and includes:
 - `metadata.json` (git SHA, host/user, optional preflight metadata extracted from report)
 - copied on-air report JSON

@@ -54,6 +54,7 @@ When station access is available, run this checklist before marking Phase 5.5-re
   - Record timestamped logs, selected frequencies, mode transitions, and operator notes.
   - Export benchmark/test artifacts to `docs/test-reports/on-air/` with scenario labels.
   - Build a per-run evidence bundle with `./scripts/onair-bundle-evidence.sh`.
+  - Use `--require-report --require-config --require-preflight` for compliance runs.
   - Document any compliance exceptions and mitigations.
 5. Completion criteria
   - No unresolved compliance exceptions.

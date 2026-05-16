@@ -22,6 +22,8 @@ last_updated: 2026-05-16
   (`preflight.ran`, `preflight.mode`) for audit traceability.
 - Added `scripts/onair-bundle-evidence.sh` to package on-air run artifacts
   (report JSON, metadata, config snapshot, notes) for Phase 5.5-reg evidence capture.
+- Added strict validation flags to the evidence-bundle tool so compliance runs
+  can fail fast when report, config, or preflight metadata are missing.
 
 - Updated adaptive-rate ACK-UP behavior in `openpulse-modem` so active session
   profiles skip unmapped reserved speed levels instead of landing on
