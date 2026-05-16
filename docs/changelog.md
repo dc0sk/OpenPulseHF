@@ -20,6 +20,8 @@ last_updated: 2026-05-16
   (override with `--no-preflight` when already validated).
 - On-air JSON reports now include preflight execution metadata
   (`preflight.ran`, `preflight.mode`) for audit traceability.
+- Added `scripts/onair-bundle-evidence.sh` to package on-air run artifacts
+  (report JSON, metadata, config snapshot, notes) for Phase 5.5-reg evidence capture.
 
 - Updated adaptive-rate ACK-UP behavior in `openpulse-modem` so active session
   profiles skip unmapped reserved speed levels instead of landing on
