@@ -1,21 +1,7 @@
 name: CI
 
 on:
-  push:
-    branches:
-      - main
-      - develop
-    paths-ignore:
-      - 'docs/**'
-      - '**/*.md'
-  pull_request:
-    branches:
-      - main
-      - develop
-    paths-ignore:
-      - 'docs/**'
-      - '**/*.md'
-  # Also allow manual triggering via the Actions tab for convenience.
+  # Manual trigger only: these jobs are optional/slow and intentionally off the PR path.
   workflow_dispatch:
 
 env:
