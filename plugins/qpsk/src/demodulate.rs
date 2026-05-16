@@ -376,6 +376,94 @@ fn preamble_expected() -> Vec<(f32, f32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct CandidateStats {
+        compared_trials: usize,
+        better_or_equal: usize,
+        avg_base: f32,
+        avg_candidate: f32,
+    }
+
+    fn candidate_stats_for_seeds(
+        tx: &[f32],
+        payload: &[u8],
+        seeds: &[u64],
+        n: usize,
+        fc: f32,
+        fs: f32,
+        cosine_overlap: bool,
+        fwd: usize,
+        dfe: usize,
+        mu: f32,
+        channel_kind: &str,
+    ) -> Option<CandidateStats> {
+        let mut compared = 0usize;
+        let mut better_or_equal = 0usize;
+        let mut sum_base = 0.0f32;
+        let mut sum_candidate = 0.0f32;
+        for &seed in seeds {
+            let mut ch = match channel_kind {
+                "moderate" => WattersonChannel::new(WattersonConfig::moderate_f1(Some(seed)))
+                    .expect("watterson moderate f1"),
+                _ => WattersonChannel::new(WattersonConfig::poor_f1(Some(seed)))
+                    .expect("watterson poor f1"),
+            };
+            let rx = ch.apply(tx);
+            let timing = find_timing_offset(&rx, n, fc, fs, cosine_overlap);
+            let syms = demodulate_symbols(&rx, n, fc, fs, timing, cosine_overlap);
+            if syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
+                continue;
+            }
+
+            let eq_baseline = qpsk_lms_equalize(&syms, "QPSK1000-RRC");
+            let data_base = &eq_baseline[PREAMBLE_SYMS..(eq_baseline.len() - TAIL_SYMS)];
+            let rec_base = bits_to_bytes(&symbols_to_bits(data_base));
+            if rec_base.len() < payload.len() {
+                continue;
+            }
+            let ber_base = bit_error_rate(payload, &rec_base[..payload.len()]);
+
+            let train_len = PREAMBLE_SYMS.min(syms.len());
+            let expected = preamble_expected();
+            let mut training_i = Vec::with_capacity(train_len);
+            let mut training_q = Vec::with_capacity(train_len);
+            for &(ti, tq) in expected.iter().take(train_len) {
+                training_i.push(ti);
+                training_q.push(tq);
+            }
+
+            let (i_syms, q_syms): (Vec<f32>, Vec<f32>) = syms.iter().copied().unzip();
+            let mut eq = LmsEqualizer::new(fwd, dfe, mu);
+            let (i_eq, q_eq) =
+                eq.process_frame(&i_syms, &q_syms, &training_i, &training_q, |i, q| {
+                    gray_map_decision(i, q)
+                });
+
+            let eq_syms: Vec<(f32, f32)> = i_eq.into_iter().zip(q_eq.into_iter()).collect();
+            let data = &eq_syms[PREAMBLE_SYMS..(eq_syms.len() - TAIL_SYMS)];
+            let rec = bits_to_bytes(&symbols_to_bits(data));
+            if rec.len() < payload.len() {
+                continue;
+            }
+            let ber_candidate = bit_error_rate(payload, &rec[..payload.len()]);
+            compared += 1;
+            sum_base += ber_base;
+            sum_candidate += ber_candidate;
+            if ber_candidate <= ber_base {
+                better_or_equal += 1;
+            }
+        }
+        if compared == 0 {
+            None
+        } else {
+            Some(CandidateStats {
+                compared_trials: compared,
+                better_or_equal,
+                avg_base: sum_base / compared as f32,
+                avg_candidate: sum_candidate / compared as f32,
+            })
+        }
+    }
     use openpulse_channel::watterson::WattersonChannel;
     use openpulse_channel::{ChannelModel, WattersonConfig};
     use openpulse_core::plugin::ModulationConfig;
@@ -802,94 +890,6 @@ mod tests {
         let mut any_overall_pass = false;
         let mut current_profile_passes = false;
 
-        struct CandidateStats {
-            compared_trials: usize,
-            better_or_equal: usize,
-            avg_base: f32,
-            avg_candidate: f32,
-        }
-
-        fn candidate_stats_for_seeds(
-            tx: &[f32],
-            payload: &[u8],
-            seeds: &[u64],
-            n: usize,
-            fc: f32,
-            fs: f32,
-            cosine_overlap: bool,
-            fwd: usize,
-            dfe: usize,
-            mu: f32,
-            channel_kind: &str,
-        ) -> Option<CandidateStats> {
-            let mut compared = 0usize;
-            let mut better_or_equal = 0usize;
-            let mut sum_base = 0.0f32;
-            let mut sum_candidate = 0.0f32;
-            for &seed in seeds {
-                let mut ch = match channel_kind {
-                    "moderate" => WattersonChannel::new(WattersonConfig::moderate_f1(Some(seed)))
-                        .expect("watterson moderate f1"),
-                    _ => WattersonChannel::new(WattersonConfig::poor_f1(Some(seed)))
-                        .expect("watterson poor f1"),
-                };
-                let rx = ch.apply(tx);
-                let timing = find_timing_offset(&rx, n, fc, fs, cosine_overlap);
-                let syms = demodulate_symbols(&rx, n, fc, fs, timing, cosine_overlap);
-                if syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
-                    continue;
-                }
-
-                let eq_baseline = qpsk_lms_equalize(&syms, "QPSK1000-RRC");
-                let data_base = &eq_baseline[PREAMBLE_SYMS..(eq_baseline.len() - TAIL_SYMS)];
-                let rec_base = bits_to_bytes(&symbols_to_bits(data_base));
-                if rec_base.len() < payload.len() {
-                    continue;
-                }
-                let ber_base = bit_error_rate(payload, &rec_base[..payload.len()]);
-
-                let train_len = PREAMBLE_SYMS.min(syms.len());
-                let expected = preamble_expected();
-                let mut training_i = Vec::with_capacity(train_len);
-                let mut training_q = Vec::with_capacity(train_len);
-                for &(ti, tq) in expected.iter().take(train_len) {
-                    training_i.push(ti);
-                    training_q.push(tq);
-                }
-
-                let (i_syms, q_syms): (Vec<f32>, Vec<f32>) = syms.iter().copied().unzip();
-                let mut eq = LmsEqualizer::new(fwd, dfe, mu);
-                let (i_eq, q_eq) =
-                    eq.process_frame(&i_syms, &q_syms, &training_i, &training_q, |i, q| {
-                        gray_map_decision(i, q)
-                    });
-
-                let eq_syms: Vec<(f32, f32)> = i_eq.into_iter().zip(q_eq.into_iter()).collect();
-                let data = &eq_syms[PREAMBLE_SYMS..(eq_syms.len() - TAIL_SYMS)];
-                let rec = bits_to_bytes(&symbols_to_bits(data));
-                if rec.len() < payload.len() {
-                    continue;
-                }
-                let ber_candidate = bit_error_rate(payload, &rec[..payload.len()]);
-                compared += 1;
-                sum_base += ber_base;
-                sum_candidate += ber_candidate;
-                if ber_candidate <= ber_base {
-                    better_or_equal += 1;
-                }
-            }
-            if compared == 0 {
-                None
-            } else {
-                Some(CandidateStats {
-                    compared_trials: compared,
-                    better_or_equal,
-                    avg_base: sum_base / compared as f32,
-                    avg_candidate: sum_candidate / compared as f32,
-                })
-            }
-        }
-
         for (fwd, dfe, mu) in candidates {
             let moderate_stats = candidate_stats_for_seeds(
                 &tx_moderate,
@@ -1029,6 +1029,120 @@ mod tests {
         assert!(
             current_profile_passes,
             "current HF-RRC profile must remain a passing candidate in characterization"
+        );
+    }
+
+    #[test]
+    #[ignore = "characterization sweep for follow-up DFE/pilot tuning work"]
+    fn characterize_hf_lms_parameter_sweep_watterson() {
+        // Characterization for HF (non-RRC) LMS/DFE profile optimization.
+        // Mirrors HF-RRC sweep but for standard RRC rolloff to compare tuning headroom.
+        let moderate_payload: Vec<u8> = (0..96u8).map(|v| v ^ 0x41).collect();
+        let poor_payload: Vec<u8> = (0..96u8).map(|v| v ^ 0x9E).collect();
+        let base_cfg = ModulationConfig {
+            mode: "QPSK1000-HF".to_string(),
+            ..ModulationConfig::default()
+        };
+        let tx_moderate = crate::modulate::qpsk_modulate(&moderate_payload, &base_cfg)
+            .expect("modulate moderate payload");
+        let tx_poor = crate::modulate::qpsk_modulate(&poor_payload, &base_cfg)
+            .expect("modulate poor payload");
+
+        let baud = parse_baud_rate(&base_cfg.mode).expect("parse baud");
+        let fs = base_cfg.sample_rate as f32;
+        let fc = base_cfg.center_frequency;
+        let n = samples_per_symbol(fs, baud).expect("samples/symbol");
+        let cosine_overlap = true;
+
+        let candidates = [
+            // Conservative + baseline variants
+            (10usize, 1usize, 0.0150f32),
+            (11, 2, 0.0140),
+            (12, 2, 0.0130),
+            // Target around mu=0.015 (HF non-RRC typically needs more aggressive learning)
+            (11, 2, 0.0150),
+            (11, 3, 0.0150),
+            (10, 2, 0.0150),
+            (12, 2, 0.0150),
+            // Explore lower mu variants
+            (11, 2, 0.0135),
+            (11, 2, 0.0145),
+        ];
+        let moderate = [
+            0x5301u64, 0x5302, 0x5303, 0x5304, 0x5305, 0x5306, 0x5307, 0x5308,
+        ];
+        let poor = [0x5401u64, 0x5402, 0x5403, 0x5404, 0x5405, 0x5406];
+        let current_hf_profile = (11usize, 2usize, 0.0150f32);
+        let mut any_hf_pass = false;
+        let mut hf_current_passes = false;
+
+        for (fwd, dfe, mu) in candidates {
+            let moderate_stats = candidate_stats_for_seeds(
+                &tx_moderate,
+                &moderate_payload,
+                &moderate,
+                n,
+                fc,
+                fs,
+                cosine_overlap,
+                fwd,
+                dfe,
+                mu,
+                "moderate",
+            )
+            .expect("moderate stats");
+            let poor_stats = candidate_stats_for_seeds(
+                &tx_poor,
+                &poor_payload,
+                &poor,
+                n,
+                fc,
+                fs,
+                cosine_overlap,
+                fwd,
+                dfe,
+                mu,
+                "poor",
+            )
+            .expect("poor stats");
+
+            let moderate_ok =
+                moderate_stats.compared_trials >= 6 && moderate_stats.better_or_equal >= 2;
+            let poor_ok = poor_stats.compared_trials >= 4 && poor_stats.better_or_equal >= 2;
+
+            println!(
+                "HF candidate fwd={fwd} dfe={dfe} mu={mu:.4}: moderate better_or_equal={}/{} pass={} | poor better_or_equal={}/{} pass={} | overall_pass={}",
+                moderate_stats.better_or_equal,
+                moderate_stats.compared_trials,
+                moderate_ok,
+                poor_stats.better_or_equal,
+                poor_stats.compared_trials,
+                poor_ok,
+                moderate_ok && poor_ok
+            );
+
+            let overall_ok = moderate_ok && poor_ok;
+            if overall_ok {
+                any_hf_pass = true;
+            }
+            if (fwd, dfe, mu) == current_hf_profile {
+                hf_current_passes = overall_ok;
+            }
+        }
+
+        eprintln!(
+            "\n[HF tuning sweep final]: candidates={} any_pass={}",
+            candidates.len(),
+            any_hf_pass
+        );
+
+        assert!(
+            any_hf_pass,
+            "at least one HF candidate should pass moderate and poor guard criteria"
+        );
+        assert!(
+            hf_current_passes,
+            "current HF profile must remain a passing candidate in characterization"
         );
     }
 }
