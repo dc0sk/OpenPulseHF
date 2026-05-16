@@ -22,6 +22,8 @@ last_updated: 2026-05-16
   (`preflight.ran` and `preflight.mode`) for compliance evidence trails.
 - Added `scripts/onair-bundle-evidence.sh` to create structured evidence bundles
   for on-air validation runs (metadata + report + config snapshot + notes).
+- Evidence bundles now support strict validation flags to require report, config,
+  and preflight metadata for compliance capture.
 
 - Adaptive-rate ACK-UP progression now skips unmapped reserved profile rungs,
   avoiding transitions into `None` mode mappings during active sessions.
