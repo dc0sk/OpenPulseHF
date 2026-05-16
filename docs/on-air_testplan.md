@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/on-air_testplan.md
 status: living
-last_updated: 2026-05-12
+last_updated: 2026-05-16
 ---
 
 # OpenPulseHF On-Air Test Plan
@@ -66,6 +66,15 @@ Verify audio devices are visible:
 ```
 
 Expected output lists your sound card input and output devices by name.
+
+Run local preflight checks before any live session:
+
+```bash
+./scripts/onair-preflight.sh --strict
+```
+
+This gate verifies required tooling, config presence, non-placeholder callsign,
+and release binaries needed by the on-air matrix scripts.
 
 ---
 

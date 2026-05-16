@@ -2,12 +2,20 @@
 project: openpulsehf
 doc: docs/changelog.md
 status: living
-last_updated: 2026-05-15
+last_updated: 2026-05-16
 ---
 
 # Changelog
 
 ## Unreleased
+
+- Optimized `qpsk-plugin` demodulation hot paths by reducing duplicate trigonometric
+  work in passband/RRC downmix loops and using phase-step accumulation in symbol
+  integration.
+- Aligned the `QPSK1000-HF` LMS profile to the validated characterization value
+  `mu=0.015` (from `0.012`) and kept deterministic Watterson guard tests green.
+- Added `scripts/onair-preflight.sh` for repeatable station-readiness checks
+  before live RF sessions (`--strict` mode enforces built binaries and config).
 
 - Updated adaptive-rate ACK-UP behavior in `openpulse-modem` so active session
   profiles skip unmapped reserved speed levels instead of landing on
