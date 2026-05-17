@@ -26,7 +26,7 @@ bash scripts/run-test-matrix-full.sh
 ## Report Structure
 
 ```
-docs/test-reports/
+docs/dev/test-reports/
 ├── README.md              — this file
 ├── latest/                — most recent run (overwritten on each run)
 │   ├── summary.md         — pass/fail totals by use case, first-failure list
@@ -37,6 +37,14 @@ docs/test-reports/
 └── archive/               — historical runs (created by run-test-matrix.sh)
     └── YYYY-MM-DDTHHMMSS-<sha>/
 ```
+
+## On-Air Validation Artifacts (Phase 5.5-reg)
+
+On-air scripts write artifacts under `docs/dev/test-reports`:
+
+- `onair-<timestamp>.json` from `scripts/run-onair-tests.sh`
+- `on-air/bundle-<utc>-<label>/` from `scripts/onair-bundle-evidence.sh`
+- `on-air/phase-5.5-reg-<timestamp>.md` from `scripts/onair-generate-report.sh`
 
 ## Test Dimensions
 

@@ -17,7 +17,7 @@ TS=$(date -u +%Y-%m-%dT%H%M%S)
 echo "==> Running openpulse-testmatrix ${*:-}"
 cargo run --no-default-features -p openpulse-testmatrix -- "$@"
 
-ARCHIVE_DIR="docs/test-reports/archive/${TS}-${GIT_SHA}"
+ARCHIVE_DIR="docs/dev/test-reports/archive/${TS}-${GIT_SHA}"
 mkdir -p "$ARCHIVE_DIR"
-cp -r docs/test-reports/latest/. "$ARCHIVE_DIR/"
+cp -r docs/dev/test-reports/latest/. "$ARCHIVE_DIR/"
 echo "==> Archived to $ARCHIVE_DIR"
