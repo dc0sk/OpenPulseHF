@@ -58,8 +58,7 @@ impl Default for BandplanPolicy {
     fn default() -> Self {
         Self {
             awareness_enabled: true,
-            #[allow(deprecated)]
-            mode: BandplanMode::HamIaru,
+            mode: BandplanMode::HamIaruRegion1,
             enforce_max_channel_width: true,
             enforce_segment_conventions: true,
         }
@@ -251,15 +250,21 @@ pub fn occupied_bandwidth_hz(mode: &str) -> Option<u32> {
         "BPSK63" => Some(150),
         "BPSK100" => Some(200),
         "BPSK250" => Some(500),
+        "BPSK250-RRC" => Some(350),
         "QPSK125" => Some(350),
         "QPSK250" => Some(700),
         "QPSK500" => Some(1400),
-        "QPSK1000" | "QPSK1000-HF" => Some(2800),
+        "QPSK500-RRC" => Some(675),
+        "QPSK1000" => Some(2800),
+        "QPSK1000-HF" | "QPSK1000-HF-RRC" => Some(1350),
         "QPSK2000" => Some(5600),
         "QPSK9600" | "QPSK9600-RRC" => Some(12000),
         "8PSK500" => Some(1500),
+        "8PSK500-RRC" => Some(675),
         "8PSK1000" | "8PSK1000-HF" => Some(3000),
+        "8PSK1000-RRC" | "8PSK1000-HF-RRC" => Some(1350),
         "8PSK2000" => Some(6000),
+        "8PSK2000-RRC" => Some(2700),
         "8PSK9600" | "8PSK9600-RRC" => Some(12000),
         "64QAM500" => Some(1600),
         "64QAM1000" => Some(3200),
@@ -267,7 +272,7 @@ pub fn occupied_bandwidth_hz(mode: &str) -> Option<u32> {
         "OFDM16" => Some(2200),
         "OFDM52" => Some(3200),
         "SCFDMA16" => Some(2200),
-        "SCFDMA52" => Some(3200),
+        "SCFDMA52" | "SCFDMA52-64QAM-P4" => Some(3200),
         "FSK4-ACK" => Some(400),
         _ => None,
     }
@@ -596,5 +601,29 @@ mod tests {
             "ham-iaru-region3".parse::<BandplanMode>(),
             Ok(BandplanMode::HamIaruRegion3)
         );
+    }
+
+    #[test]
+    fn default_policy_uses_region1_mode() {
+        let policy = BandplanPolicy::default();
+        assert_eq!(policy.mode, BandplanMode::HamIaruRegion1);
+    }
+
+    #[test]
+    fn occupied_bandwidth_covers_active_rrc_and_dense_pilot_modes() {
+        assert_eq!(occupied_bandwidth_hz("BPSK250-RRC"), Some(350));
+        assert_eq!(occupied_bandwidth_hz("QPSK500-RRC"), Some(675));
+        assert_eq!(occupied_bandwidth_hz("QPSK1000-HF-RRC"), Some(1350));
+        assert_eq!(occupied_bandwidth_hz("8PSK500-RRC"), Some(675));
+        assert_eq!(occupied_bandwidth_hz("8PSK1000-RRC"), Some(1350));
+        assert_eq!(occupied_bandwidth_hz("8PSK1000-HF-RRC"), Some(1350));
+        assert_eq!(occupied_bandwidth_hz("8PSK2000-RRC"), Some(2700));
+        assert_eq!(occupied_bandwidth_hz("SCFDMA52-64QAM-P4"), Some(3200));
+    }
+
+    #[test]
+    fn region1_accepts_rrc_mode_when_bandwidth_is_known() {
+        let policy = BandplanPolicy::default();
+        assert!(policy.validate_frequency(14_074_000, "QPSK500-RRC").is_ok());
     }
 }

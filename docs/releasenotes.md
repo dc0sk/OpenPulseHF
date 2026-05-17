@@ -9,6 +9,12 @@ last_updated: 2026-05-16
 
 ## Unreleased
 
+- Bandplan guardrails now recognize active `-RRC` waveform variants and
+  `SCFDMA52-64QAM-P4` in occupied-bandwidth checks, preventing valid
+  transmissions from being rejected as unknown operating modes.
+- `BandplanPolicy::default()` now uses `HamIaruRegion1` instead of the
+  deprecated `HamIaru` ruleset variant.
+
 - Added BL-TP-7 SC-FDMA pilot-density Doppler review coverage in
   `plugins/scfdma/tests/pilot_density_review.rs`, validating dense-pilot
   (`SCFDMA52-64QAM-P4`) robustness against sparse-pilot

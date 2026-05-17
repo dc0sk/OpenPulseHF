@@ -9,6 +9,9 @@ last_updated: 2026-05-16
 
 ## Unreleased
 
+- **Bandplan Guardrails**: Added missing occupied-bandwidth coverage for active `-RRC` waveform variants and `SCFDMA52-64QAM-P4`, preventing valid region-aware transmissions from being rejected as `UnknownOperatingMode`.
+- **Bandplan Guardrails**: `BandplanPolicy::default()` now uses `HamIaruRegion1` instead of the deprecated `HamIaru` variant.
+
 - **Waveform Validation**: Added BL-TP-7 pilot-density Doppler review test (`plugins/scfdma/tests/pilot_density_review.rs`) comparing sparse (`SCFDMA52-64QAM`) and dense (`SCFDMA52-64QAM-P4`) pilot profiles under deterministic Watterson low/high Doppler conditions.
 - **CLI/UX**: Added `--help` support to on-air orchestration scripts (`onair-preflight.sh`, `run-onair-tests.sh`, and `onair-bundle-evidence.sh`) plus usage output on unknown flags.
 - **Operational Tooling**: Evidence bundles now capture repository state context (`git_dirty` in `metadata.json` and `git-status.short.txt` snapshot) for stronger compliance traceability.
