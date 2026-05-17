@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/troubleshooting-alsa-cpal.md
 status: living
-last_updated: 2026-04-24
+last_updated: 2026-05-17
 ---
 
 # Troubleshooting ALSA and CPAL Audio Setup
@@ -30,9 +30,13 @@ OpenPulse uses the **`cpal`** (Cross-Platform Audio Library) crate to abstract a
 # List available plugins (should show BPSK at minimum)
 openpulse-cli plugins list
 
-# List detected audio backends (output varies by platform)
-# This requires a diagnostic command (planned for future release)
-# For now, check manually:
+# Verify backend flags are available in the current binaries
+openpulse --help | grep backend
+openpulse-kisstnc --help | grep backend
+openpulse-tnc --help | grep backend
+
+# List detected audio devices from the CLI
+openpulse devices
 ```
 
 ### 2. Check if cpal was compiled with audio support
@@ -499,7 +503,6 @@ ALSA_CARD=0 openpulse-cli receive BPSK31
 # Create a loopback connection to verify modulation/demodulation
 openpulse-cli transmit "Hello World" BPSK100 --backend loopback
 openpulse-cli receive BPSK100 --backend loopback
-# (Note: --backend flag is planned; current versions use default)
 ```
 
 ### Real audio device test

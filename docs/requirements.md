@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/requirements.md
 status: living
-last_updated: 2026-05-01
+last_updated: 2026-05-17
 ---
 
 # Requirements
@@ -124,7 +124,7 @@ Regulatory compliance is a hard requirement for any transmission on amateur radi
 
 ### United States — FCC Part 97
 
-- §97.307(f): The maximum symbol rate on any single carrier must not exceed 300 baud below 28 MHz in phone subbands. All currently planned OpenPulseHF single-carrier modes (BPSK31 at 31.25 baud through BPSK250 at 250 baud) satisfy this limit. Any new mode must verify compliance before release.
+- §97.307(f): The maximum symbol rate on any single carrier must not exceed 300 baud below 28 MHz in phone subbands. OpenPulseHF includes sub-300-baud modes (for example BPSK31/BPSK63/BPSK100/BPSK250) and higher-rate single-carrier modes (for example QPSK500+ and 8PSK500+). Operators must select frequencies, modes, and regional band segments consistent with local rules before transmission.
 - §97.309(a)(4): Digital codes whose use is not specifically prohibited elsewhere and whose technical characteristics are publicly documented are permitted. OpenPulseHF must maintain a published technical specification sufficient for any amateur to decode the transmitted signal.
 - §97.119(a): Station identification is required every 10 minutes during a transmission and at the end of each transmission series. In digital modes, identification must be in a format decodable by a receiving station.
 - §97.221: Automatically controlled digital stations (unattended nodes, relay nodes) require an automatic control point. HPX relay nodes operating without a control operator present are automatically controlled stations and must comply with §97.221 including power limits and frequency restrictions.
