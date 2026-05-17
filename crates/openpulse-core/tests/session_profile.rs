@@ -52,6 +52,8 @@ fn hpx_hf_mode_mapping() {
     assert_eq!(p.mode_for(SpeedLevel::Sl7), Some("8PSK500"));
     assert_eq!(p.mode_for(SpeedLevel::Sl8), None);
     assert_eq!(p.mode_for(SpeedLevel::Sl11), None);
+    assert_eq!(p.mode_for(SpeedLevel::Sl12), None);
+    assert_eq!(p.mode_for(SpeedLevel::Sl13), None);
 }
 
 #[test]
@@ -59,6 +61,17 @@ fn hpx_hf_initial_level() {
     let p = SessionProfile::hpx_hf();
     assert_eq!(p.initial_level, SpeedLevel::Sl2);
     assert_eq!(p.nack_threshold, 3);
+}
+
+#[test]
+fn scfdma_qam_hf_entry_policy_matches_matrix_gate() {
+    let policy = SessionProfile::SCFDMA_QAM_HF_ENTRY_POLICY;
+    assert_eq!(policy.min_success_rate, 0.90);
+    assert_eq!(policy.frames_per_scenario, 30);
+    assert_eq!(
+        policy.required_scenarios,
+        &["good_f1", "good_f2", "moderate_f1"]
+    );
 }
 
 #[test]
