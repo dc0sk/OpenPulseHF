@@ -600,12 +600,14 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn parse_region_mode_strings() {
-        assert_eq!(
-            "ham-iaru".parse::<BandplanMode>(),
-            Ok(BandplanMode::HamIaru)
-        );
+        #[allow(deprecated)]
+        {
+            assert_eq!(
+                "ham-iaru".parse::<BandplanMode>(),
+                Ok(BandplanMode::HamIaru)
+            );
+        }
         assert_eq!(
             "ham-iaru-r1".parse::<BandplanMode>(),
             Ok(BandplanMode::HamIaruRegion1)
