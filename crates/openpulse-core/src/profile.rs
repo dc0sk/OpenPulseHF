@@ -2,6 +2,17 @@
 
 use crate::rate::SpeedLevel;
 
+/// Profile-entry policy for promoting SC-FDMA QAM rungs into the HPX HF ladder.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScfdmaQamHfEntryPolicy {
+    /// Minimum per-scenario frame success required for promotion.
+    pub min_success_rate: f32,
+    /// Deterministic scenario labels that must all meet `min_success_rate`.
+    pub required_scenarios: &'static [&'static str],
+    /// Frames evaluated per scenario in the deterministic matrix test.
+    pub frames_per_scenario: usize,
+}
+
 /// Maps each [`SpeedLevel`] to a concrete modulation mode string for a given HPX profile.
 ///
 /// A `None` entry means that speed level is not reachable within the profile (either
@@ -22,6 +33,17 @@ pub struct SessionProfile {
 }
 
 impl SessionProfile {
+    /// Deterministic promotion policy for SC-FDMA QAM modes on HF ladders.
+    ///
+    /// This policy is validated in
+    /// `plugins/scfdma/tests/pilot_channel_estimation.rs` against a Watterson
+    /// profile-entry matrix.
+    pub const SCFDMA_QAM_HF_ENTRY_POLICY: ScfdmaQamHfEntryPolicy = ScfdmaQamHfEntryPolicy {
+        min_success_rate: 0.90,
+        required_scenarios: &["good_f1", "good_f2", "moderate_f1"],
+        frames_per_scenario: 30,
+    };
+
     /// Return the mode string for the given speed level, or `None` if the level
     /// is not mapped in this profile.
     pub fn mode_for(&self, level: SpeedLevel) -> Option<&'static str> {
@@ -97,6 +119,7 @@ impl SessionProfile {
     /// | SL5 | QPSK250  |
     /// | SL6 | QPSK500  |
     /// | SL7 | 8PSK500  |
+    /// | SL12+ | — (reserved until `SCFDMA_QAM_HF_ENTRY_POLICY` is satisfied) |
     pub fn hpx_hf() -> Self {
         let mut modes = [None; 21];
         modes[SpeedLevel::Sl2 as usize] = Some("BPSK31");
