@@ -14,6 +14,8 @@ last_updated: 2026-05-16
   transmissions from being rejected as unknown operating modes.
 - `BandplanPolicy::default()` now uses `HamIaruRegion1` instead of the
   deprecated `HamIaru` ruleset variant.
+- Region 3 bandplan validation now exposes an explicit warning path when it
+  uses Region 1 allocations as a conservative proxy.
 
 - Added BL-TP-7 SC-FDMA pilot-density Doppler review coverage in
   `plugins/scfdma/tests/pilot_density_review.rs`, validating dense-pilot
