@@ -30,6 +30,8 @@ pub struct SessionProfile {
     snr_floors: [Option<f32>; 21],
     /// Per-level SNR ceiling (dB).  Rise above this → flag upgrade candidate.
     snr_ceilings: [Option<f32>; 21],
+    /// If set, ACK-UP at this level requires a prior SNR upgrade candidate.
+    ack_up_requires_snr_candidate_at: Option<SpeedLevel>,
 }
 
 impl SessionProfile {
@@ -63,6 +65,12 @@ impl SessionProfile {
     /// When measured SNR exceeds this, the rate adapter sets an upgrade-candidate flag.
     pub fn snr_ceiling_for_level(&self, level: SpeedLevel) -> Option<f32> {
         self.snr_ceilings[level as usize]
+    }
+
+    /// Return the level where ACK-UP promotion is SNR-gated, if the profile
+    /// requires that extra admission check.
+    pub fn ack_up_requires_snr_candidate_at(&self) -> Option<SpeedLevel> {
+        self.ack_up_requires_snr_candidate_at
     }
 
     /// HPX500 profile: 500 Hz class, BPSK/QPSK rate ladder (SL2–SL6).
@@ -102,6 +110,7 @@ impl SessionProfile {
             nack_threshold: 3,
             snr_floors,
             snr_ceilings,
+            ack_up_requires_snr_candidate_at: None,
         }
     }
 
@@ -148,6 +157,7 @@ impl SessionProfile {
             nack_threshold: 3,
             snr_floors,
             snr_ceilings,
+            ack_up_requires_snr_candidate_at: None,
         }
     }
 
@@ -186,6 +196,7 @@ impl SessionProfile {
             nack_threshold: 3,
             snr_floors,
             snr_ceilings,
+            ack_up_requires_snr_candidate_at: None,
         }
     }
 
@@ -223,6 +234,7 @@ impl SessionProfile {
             nack_threshold: 3,
             snr_floors,
             snr_ceilings,
+            ack_up_requires_snr_candidate_at: None,
         }
     }
 
@@ -252,6 +264,7 @@ impl SessionProfile {
             nack_threshold: 3,
             snr_floors,
             snr_ceilings,
+            ack_up_requires_snr_candidate_at: None,
         }
     }
 
@@ -281,6 +294,7 @@ impl SessionProfile {
             nack_threshold: 3,
             snr_floors,
             snr_ceilings,
+            ack_up_requires_snr_candidate_at: None,
         }
     }
 
@@ -315,6 +329,7 @@ impl SessionProfile {
             nack_threshold: 2,
             snr_floors,
             snr_ceilings,
+            ack_up_requires_snr_candidate_at: Some(SpeedLevel::Sl13),
         }
     }
 }

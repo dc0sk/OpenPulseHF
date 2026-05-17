@@ -159,3 +159,12 @@ fn hpx_wideband_hd_snr_thresholds_match_policy_intent() {
     assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl13), Some(30.0));
     assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl14), None);
 }
+
+#[test]
+fn hpx_wideband_hd_requires_snr_candidate_before_sl14_ack_up() {
+    let p = SessionProfile::hpx_wideband_hd();
+    assert_eq!(p.ack_up_requires_snr_candidate_at(), Some(SpeedLevel::Sl13));
+
+    let wideband = SessionProfile::hpx_wideband();
+    assert_eq!(wideband.ack_up_requires_snr_candidate_at(), None);
+}

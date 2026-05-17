@@ -352,14 +352,7 @@ impl ModemEngine {
         };
 
         let tx_level = adapter.tx_level();
-        // Wideband-HD SL14 admission is SNR-gated: SL13 must first cross ceiling.
-        let is_wideband_hd = profile.mode_for(openpulse_core::rate::SpeedLevel::Sl12)
-            == Some("SCFDMA52-64QAM-P4")
-            && profile.mode_for(openpulse_core::rate::SpeedLevel::Sl13) == Some("SCFDMA52-64QAM")
-            && profile.mode_for(openpulse_core::rate::SpeedLevel::Sl14) == Some("64QAM2000-RRC");
-
-        is_wideband_hd
-            && tx_level == openpulse_core::rate::SpeedLevel::Sl13
+        profile.ack_up_requires_snr_candidate_at() == Some(tx_level)
             && !adapter.tx.is_snr_upgrade_candidate()
     }
 
