@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/vara-parity-execution-board.md
 status: living
-last_updated: 2026-05-15
+last_updated: 2026-05-17
 ---
 
 # VARA-Parity SC-FDMA Execution Board
@@ -266,9 +266,9 @@ The VARA WattersonF1 throughput parity criterion is deferred — see note.
 **Description**: Extend testmatrix with cross-mode regression gate (SC-FDMA vs BPSK/QPSK, speed ladder consistency).
 
 **Current State**:
-- Per-mode gates exist (e.g., BL-TP-7 pilot-density crossover).
-- No cross-mode gate: SC-FDMA52 SL12–SL14 vs legacy BPSK250/QPSK500/64QAM.
-- Regression detection is mode-specific; global throughput trends invisible.
+- Cross-mode gate implemented and wired into benchmark evaluation flow.
+- Scenario generator and consistency checks are active for SC-FDMA vs legacy modes.
+- Global throughput/latency trend visibility is available through gate reports.
 
 **Requirements**:
 - Cross-mode scenario matrix: {SCFDMA52, BPSK250, QPSK500, 64QAM} × {AWGN 20, Watterson F1/F2, G-E light} × {SL12 baseline, SL13, SL14}.
@@ -450,7 +450,7 @@ None
 | AFC Doppler (Item 2) | ✅ | 2026-05-13 | <5 Hz tracking error under fading |
 | Hysteresis (Item 3) | ✅ | 2026-05-13 | SnrEstimator + HysteresisController; 21 tests passing |
 | Pilot estimation + soft symbols (Item 4) | ✅ | 2026-05-14 | LS/MMSE soft demod path + AWGN/Watterson acceptance gates |
-| Cross-mode gate (Item 7) | ⏳ | Pending | Requires Item 6 |
+| Cross-mode gate (Item 7) | ✅ | 2026-05-15 | Complete (PR #226) |
 
 ---
 
@@ -468,5 +468,5 @@ None
 ## Contact & Questions
 
 **Owner**: OpenPulse HF Development Team  
-**Last Updated**: 2026-05-14  
-**Status**: Execution phase, Items 1-4 complete; preparing Item 5
+**Last Updated**: 2026-05-17  
+**Status**: Execution phase, Items 1-8 complete in lab scope; remaining work is regulatory/on-air validation.
