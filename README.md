@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: README.md
 status: living
-last_updated: 2026-05-12
+last_updated: 2026-05-17
 ---
 
 # OpenPulseHF
@@ -38,19 +38,19 @@ channel-simulation harness validated against published Watterson and Gilbert-Ell
 
 ## Key features
 
-### Modulation and waveforms — 33 modes across 7 plugins
+### Modulation and waveforms — 38 modes across 7 plugins
 
 #### HF narrow-band (≤ 2700 Hz occupied bandwidth)
 
 | Plugin | Modes | Baud rate | Bits/sym | BW (Hz) | Raw data rate | Peak with LZ4† |
 |---|---|---|---|---|---|---|
 | BPSK | BPSK31 / BPSK63 / BPSK100 / BPSK250 / BPSK250-RRC | 31–250 | 1 | 50–340 | 31–250 bps | 62–500 bps |
-| QPSK | QPSK125 / QPSK250 / QPSK500 / QPSK1000-HF / QPSK500-RRC / QPSK1000-RRC | 125–1000 | 2 | 140–1350 | 250–2000 bps | 500–4000 bps |
-| 8PSK | 8PSK500 / 8PSK500-RRC / 8PSK1000-HF / 8PSK1000-RRC | 500–1000 | 3 | 540–1350 | 1500–3000 bps | 3.0–6.0 kbps |
+| QPSK | QPSK125 / QPSK250 / QPSK500 / QPSK1000-HF / QPSK500-RRC / QPSK1000-RRC (plus QPSK2000/QPSK9600 variants below) | 125–1000 | 2 | 140–1350 | 250–2000 bps | 500–4000 bps |
+| 8PSK | 8PSK500 / 8PSK500-RRC / 8PSK1000-HF / 8PSK1000-RRC (plus 8PSK2000/8PSK9600 variants below) | 500–1000 | 3 | 540–1350 | 1500–3000 bps | 3.0–6.0 kbps |
 | 64QAM | 64QAM500 / 64QAM1000 / 64QAM2000-RRC | 500–2000 | 6 | 540–2700 | 3000–12000 bps | 6.0–24.0 kbps |
 | FSK4 | FSK4-ACK | 100 (200 ms/frame) | 2 | ~400 | ACK only | ACK only |
 | OFDM | OFDM16 / OFDM52 | — | 2/SC | 625–2000 | 889–2889 bps | 1.8–5.8 kbps |
-| SC-FDMA | SCFDMA16 / SCFDMA52 — same BW as OFDM, 3–4 dB lower PAPR | — | 2/SC | 625–2000 | 889–2889 bps | 1.8–5.8 kbps |
+| SC-FDMA | SCFDMA16 / SCFDMA52 / SCFDMA52-16QAM / SCFDMA52-64QAM / SCFDMA52-64QAM-P4 | — | 2/4/6 per SC | 625–2000 | 889–8167 bps | 1.8–16.3 kbps |
 
 † Raw data rate = symbol rate × bits/symbol. "Peak with LZ4" uses a ≈ 2× multiplier typical
 for Winlink messages and APRS text traffic. The built-in testbench measures up to **111 kbps
@@ -251,7 +251,7 @@ TOML config, structured JSON event stream, ratatui TUI, egui testbench + operato
 | BL-FEC-3 | Short-block RS for ACK/control frames (PR #170) |
 | BL-FEC-4 | Memory-ARQ soft combining (PR #171) |
 | BL-FEC-5 | K=7 soft-decision Viterbi + `demodulate_soft()` plugin API (PR #177) |
-| BL-FEC-6 | `IterativeDecoder` trait + `LdpcCodec` stub — GPU path reserved (PR #176) |
+| BL-FEC-6 | `IterativeDecoder` trait + CPU `LdpcCodec` min-sum implementation; GPU path reserved (PR #176) |
 
 ---
 

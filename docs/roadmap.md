@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/roadmap.md
 status: living
-last_updated: 2026-05-10
+last_updated: 2026-05-17
 ---
 
 # Roadmap
@@ -111,7 +111,7 @@ All Phase 2 items shipped.
 
 ## Phase 3 — Advanced Signal Processing and Compliance (Partial)
 
-Most Phase 3 items shipped. Remaining: 3.2 (Turbo FEC evaluation, deferred) and 3.5 on-air validation.
+Most Phase 3 items shipped. Remaining: 3.5 on-air validation.
 
 ### 3.1 — Post-quantum in-band handshake ✅ Done
 - `ml-dsa 0.1.0-rc.9` (ML-DSA-44) and `ml-kem 0.3` (ML-KEM-768) added to `openpulse-core`.
@@ -194,7 +194,7 @@ Remaining on-air items:
 - Banner encode/decode: `[WL2K-3.0-B2FWINMOR-4.0-XXXXXXXX]` format with FNV-1a session key.
 - B2F control frame codec: FC (file check), FS (file select), FF (finished), FQ (quit); CR-terminated ASCII.
 - WL2K message header encode/decode (RFC-5322-like, CRLF-terminated; Mid, Date, From, To, Subject, Body, File, Mbo).
-- Compression: Gzip (type D) via `flate2`; LZHUF (type C) stub preserving API surface for future implementation.
+- Compression: Gzip (type D) via `flate2`; LZHUF LH5 (type C) implemented via `oxiarc-lzhuf`, including OpenPulse and Winlink-compatible length-prefix helpers.
 - `B2fSession` state machine: ISS (Information Sending Station) and IRS (Information Receiving Station) roles; Handshake → ProposalExchange → Transfer → Done states; handles ISS-immediate-proposal pattern.
 - Pat-client ARDOP compatibility: added GRIDSQUARE, ARQBW, ARQTIMEOUT, CWID, SENDID, PING commands to `openpulse-ardop`; 3 new integration tests (11 total).
 - 9 integration tests in `crates/openpulse-b2f/tests/b2f_integration.rs`.
@@ -1152,7 +1152,7 @@ Incremental FEC improvements tracked in [`docs/backlog-fec-improvements.md`](bac
 | BL-FEC-3 | Short-block RS for ACK/control frames (5 B → 13 B) | ✅ Done (PR #170) |
 | BL-FEC-4 | Memory-ARQ soft combining (element-wise sample averaging) | ✅ Done (PR #171) |
 | BL-FEC-5 | Soft-decision K=7 Viterbi | ✅ Done (PR #177) |
-| BL-FEC-6 | Turbo / LDPC codes — `IterativeDecoder` trait + stub | ✅ Done (PR #176) |
+| BL-FEC-6 | Turbo / LDPC codes — `IterativeDecoder` trait + CPU LDPC min-sum implementation (GPU acceleration reserved) | ✅ Done (PR #176) |
 
 ---
 
