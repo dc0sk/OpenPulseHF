@@ -8,3 +8,4 @@ authors.workspace    = true
 repository.workspace = true
 
 [dependencies]
+tracing.workspace = true

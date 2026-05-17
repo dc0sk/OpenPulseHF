@@ -3546,6 +3546,9 @@ dependencies = [
 [[package]]
 name = "openpulse-dsp"
 version = "0.1.0"
+dependencies = [
+ "tracing",
+]
 
 [[package]]
 name = "openpulse-freedv-auth"
