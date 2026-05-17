@@ -331,7 +331,7 @@ impl Default for QsyConfig {
         Self {
             enabled: false,
             allow_trustlevels: vec!["verified".into(), "psk_verified".into()],
-            bandplan_mode: "ham-iaru".into(),
+            bandplan_mode: "ham-iaru-r1".into(),
             bandplan_awareness_enabled: true,
             enforce_max_channel_width: true,
             enforce_segment_conventions: true,
@@ -560,8 +560,8 @@ store_path = ""
 # enabled = false
 # Trust levels allowed to initiate QSY with this station.
 # allow_trustlevels = ["verified", "psk_verified"]
-# Bandplan-awareness mode: currently only "ham-iaru" is supported.
-# bandplan_mode = "ham-iaru"
+# Bandplan-awareness mode: ham-iaru-r1 | ham-iaru-r2 | ham-iaru-r3
+# bandplan_mode = "ham-iaru-r1"
 # Enforce bandplan guardrails for QSY (enabled by default).
 # Set to false only as an explicit responsible-operator compliance override.
 # bandplan_awareness_enabled = true
