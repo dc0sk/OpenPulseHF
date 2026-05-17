@@ -6,9 +6,9 @@
 #     [--require-report] [--require-config] [--require-preflight]
 #
 # Defaults:
-#   report: latest docs/test-reports/onair-*.json (if present)
+#   report: latest docs/dev/test-reports/onair-*.json (if present)
 #   notes:  none
-#   output: docs/test-reports/on-air
+#   output: docs/dev/test-reports/on-air
 
 set -euo pipefail
 
@@ -24,7 +24,7 @@ Usage:
 Options:
     --report FILE          On-air report JSON to include.
     --notes FILE           Operator notes file to include.
-    --output DIR           Bundle output root (default: docs/test-reports/on-air).
+    --output DIR           Bundle output root (default: docs/dev/test-reports/on-air).
     --label NAME           Optional label appended to bundle directory name.
     --require-report       Fail if report is missing.
     --require-config       Fail if config snapshot is missing.
@@ -35,7 +35,7 @@ EOF
 
 REPORT_FILE=""
 NOTES_FILE=""
-OUTPUT_DIR="docs/test-reports/on-air"
+OUTPUT_DIR="docs/dev/test-reports/on-air"
 LABEL=""
 REQUIRE_REPORT=0
 REQUIRE_CONFIG=0
@@ -82,7 +82,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$REPORT_FILE" ]]; then
-    REPORT_FILE="$(ls -t docs/test-reports/onair-*.json 2>/dev/null | head -1 || true)"
+    REPORT_FILE="$(ls -t docs/dev/test-reports/onair-*.json 2>/dev/null | head -1 || true)"
+    if [[ -z "$REPORT_FILE" ]]; then
+        # Backward-compatible fallback for pre-doc-reorg output directories.
+        REPORT_FILE="$(ls -t docs/test-reports/onair-*.json 2>/dev/null | head -1 || true)"
+    fi
 fi
 
 if [[ $REQUIRE_REPORT -eq 1 && -z "$REPORT_FILE" ]]; then

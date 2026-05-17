@@ -27,7 +27,7 @@ Usage:
 Options:
     --quick         Run the short matrix (default).
     --full          Run the extended matrix.
-    --output DIR    Report output directory (default: docs/test-reports).
+    --output DIR    Report output directory (default: docs/dev/test-reports).
     --no-preflight  Skip local strict preflight.
     --help          Show this help text.
 EOF
@@ -44,7 +44,7 @@ IRS_STARTUP_WAIT="${IRS_STARTUP_WAIT:-5}"   # seconds to wait for IRS TNC to be 
 TX_TIMEOUT="${TX_TIMEOUT:-90}"              # seconds before ISS transmit is declared failed
 
 TIER="quick"
-OUTPUT_DIR="docs/test-reports"
+OUTPUT_DIR="docs/dev/test-reports"
 RUN_PREFLIGHT=1
 
 while [[ $# -gt 0 ]]; do
