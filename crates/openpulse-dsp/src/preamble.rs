@@ -3,6 +3,7 @@
 //! Provides standard preamble sequences (Barker, PN, Zadoff-Chu) and methods
 //! for frame alignment, timing lock validation, and phase coherence checking.
 
+use std::collections::VecDeque;
 use std::f32::consts::PI;
 
 const INV_SQRT2: f32 = 0.70710677;
@@ -188,8 +189,8 @@ pub struct PreambleDetector {
     #[allow(dead_code)]
     preamble_type: PreambleType,
     reference: Vec<f32>,
-    correlation_history: Vec<f32>,
-    phase_history: Vec<f32>,
+    correlation_history: VecDeque<f32>,
+    phase_history: VecDeque<f32>,
     max_history: usize,
 }
 
@@ -200,8 +201,8 @@ impl PreambleDetector {
         Self {
             preamble_type,
             reference,
-            correlation_history: Vec::with_capacity(history_len),
-            phase_history: Vec::with_capacity(history_len),
+            correlation_history: VecDeque::with_capacity(history_len),
+            phase_history: VecDeque::with_capacity(history_len),
             max_history: history_len,
         }
     }
@@ -226,9 +227,9 @@ impl PreambleDetector {
         let mag = i_acc.abs() / received.len() as f32;
         let phase = if i_acc > 0.0 { 0.0 } else { PI };
 
-        self.correlation_history.push(mag);
+        self.correlation_history.push_back(mag);
         if self.correlation_history.len() > self.max_history {
-            self.correlation_history.remove(0);
+            self.correlation_history.pop_front();
         }
 
         (mag, phase)
@@ -239,15 +240,15 @@ impl PreambleDetector {
     /// Returns true if phase slip is within acceptable bounds (±45°), false otherwise.
     pub fn check_phase_coherence(&mut self, phase_rad: f32) -> bool {
         if self.phase_history.is_empty() {
-            self.phase_history.push(phase_rad);
+            self.phase_history.push_back(phase_rad);
             return true;
         }
 
-        let prev_unwrapped = self.phase_history[self.phase_history.len() - 1];
+        let prev_unwrapped = *self.phase_history.back().unwrap_or(&phase_rad);
         let unwrapped = Self::unwrap_phase_incremental(prev_unwrapped, phase_rad);
-        self.phase_history.push(unwrapped);
+        self.phase_history.push_back(unwrapped);
         if self.phase_history.len() > self.max_history {
-            self.phase_history.remove(0);
+            self.phase_history.pop_front();
         }
 
         let median = Self::median(&self.phase_history);
@@ -268,8 +269,8 @@ impl PreambleDetector {
     }
 
     /// Compute a robust median of a small history vector.
-    fn median(values: &[f32]) -> f32 {
-        let mut sorted = values.to_vec();
+    fn median(values: &VecDeque<f32>) -> f32 {
+        let mut sorted: Vec<f32> = values.iter().copied().collect();
         sorted.sort_by(|a, b| a.total_cmp(b));
         let mid = sorted.len() / 2;
         if sorted.len().is_multiple_of(2) {

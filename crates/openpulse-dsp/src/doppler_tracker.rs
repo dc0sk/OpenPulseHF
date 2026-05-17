@@ -3,6 +3,7 @@
 //! Tracks frequency drift and Doppler spread to maintain carrier lock under
 //! rapid ionospheric fading (Watterson F2 profile).
 
+use std::collections::VecDeque;
 use std::f32::consts::PI;
 
 /// Doppler rate tracker using phase-slope estimation across symbol windows.
@@ -12,7 +13,7 @@ use std::f32::consts::PI;
 /// bandwidth must increase to maintain lock.
 pub struct DopplerTracker {
     /// Phase history (last N symbols), radians
-    phase_history: Vec<f32>,
+    phase_history: VecDeque<f32>,
     /// Maximum history depth
     max_history: usize,
     /// Estimated Doppler rate (Hz/sample at symbol rate)
@@ -28,7 +29,7 @@ impl DopplerTracker {
     ///   (e.g., 32 for 32-symbol window at 1000 baud = 32 ms).
     pub fn new(window_symbols: usize) -> Self {
         Self {
-            phase_history: Vec::with_capacity(window_symbols),
+            phase_history: VecDeque::with_capacity(window_symbols),
             max_history: window_symbols,
             doppler_rate: 0.0,
             confidence: 0.0,
@@ -40,10 +41,10 @@ impl DopplerTracker {
     /// Returns the estimated Doppler rate in Hz/sample (at symbol rate) and
     /// confidence (0.0–1.0) if the history buffer is full, otherwise `None`.
     pub fn update(&mut self, phase_rad: f32) -> Option<(f32, f32)> {
-        self.phase_history.push(self.unwrap_phase(phase_rad));
+        self.phase_history.push_back(self.unwrap_phase(phase_rad));
 
         if self.phase_history.len() > self.max_history {
-            self.phase_history.remove(0);
+            self.phase_history.pop_front();
         }
 
         if self.phase_history.len() < self.max_history {
@@ -97,7 +98,7 @@ impl DopplerTracker {
             return phase_rad;
         }
 
-        let prev = self.phase_history[self.phase_history.len() - 1];
+        let prev = *self.phase_history.back().unwrap_or(&phase_rad);
         let mut unwrapped = phase_rad;
 
         // Unwrap to be close to prev

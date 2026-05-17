@@ -2,6 +2,8 @@
 //!
 //! Provides SNR measurement techniques for adaptive threshold decisions.
 
+use std::collections::VecDeque;
+
 /// SNR estimator using received power and noise variance.
 pub struct SnrEstimator {
     /// Estimated signal power (exponential moving average)
@@ -98,7 +100,7 @@ pub struct HysteresisController {
     /// SNR threshold per level (in dB)
     thresholds: Vec<f32>,
     /// History of SNR measurements (for trend analysis)
-    snr_history: Vec<f32>,
+    snr_history: VecDeque<f32>,
     /// Max history depth
     max_history: usize,
 }
@@ -115,7 +117,7 @@ impl HysteresisController {
             current_level: initial_level,
             margin_db,
             thresholds,
-            snr_history: Vec::with_capacity(10),
+            snr_history: VecDeque::with_capacity(10),
             max_history: 10,
         }
     }
@@ -124,9 +126,9 @@ impl HysteresisController {
     ///
     /// Returns (new_level, changed) where changed indicates if level switched.
     pub fn update(&mut self, snr_db: f32) -> (u8, bool) {
-        self.snr_history.push(snr_db);
+        self.snr_history.push_back(snr_db);
         if self.snr_history.len() > self.max_history {
-            self.snr_history.remove(0);
+            self.snr_history.pop_front();
         }
 
         let old_level = self.current_level;
@@ -162,8 +164,8 @@ impl HysteresisController {
             return 0.0;
         }
 
-        let recent = self.snr_history[self.snr_history.len() - 1];
-        let past = self.snr_history[0];
+        let recent = *self.snr_history.back().unwrap_or(&0.0);
+        let past = *self.snr_history.front().unwrap_or(&0.0);
         recent - past
     }
 
