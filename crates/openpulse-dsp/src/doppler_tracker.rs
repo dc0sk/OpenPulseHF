@@ -142,8 +142,8 @@ pub struct AdaptiveAfcLoopBandwidth {
     max_bandwidth: f32,
     /// SNR estimate (dB)
     snr_db: f32,
-    /// Doppler rate estimate (rad/sample)
-    doppler_rate: f32,
+    /// Absolute Doppler rate magnitude estimate (rad/sample).
+    doppler_rate_magnitude: f32,
 }
 
 impl AdaptiveAfcLoopBandwidth {
@@ -158,14 +158,18 @@ impl AdaptiveAfcLoopBandwidth {
             min_bandwidth,
             max_bandwidth,
             snr_db: 10.0,
-            doppler_rate: 0.0,
+            doppler_rate_magnitude: 0.0,
         }
     }
 
     /// Update SNR and Doppler estimates, return recommended loop bandwidth.
+    ///
+    /// `doppler_rate` may be signed; the controller stores and uses only its
+    /// absolute magnitude because loop aggressiveness depends on drift size,
+    /// not drift direction.
     pub fn update(&mut self, snr_db: f32, doppler_rate: f32) -> f32 {
         self.snr_db = snr_db;
-        self.doppler_rate = doppler_rate.abs();
+        self.doppler_rate_magnitude = doppler_rate.abs();
 
         // SNR scaling: increase bandwidth at high SNR (lower noise),
         // decrease at low SNR (more robust)
@@ -179,7 +183,7 @@ impl AdaptiveAfcLoopBandwidth {
 
         // Doppler scaling: increase bandwidth if Doppler rate is high
         // (need faster loop to track phase drift)
-        let doppler_scale = (1.0 + self.doppler_rate / 0.01).min(3.0); // up to 3x increase
+        let doppler_scale = (1.0 + self.doppler_rate_magnitude / 0.01).min(3.0); // up to 3x increase
 
         let recommended = self.base_bandwidth * snr_scale * doppler_scale;
         recommended.clamp(self.min_bandwidth, self.max_bandwidth)
@@ -190,9 +194,10 @@ impl AdaptiveAfcLoopBandwidth {
         self.snr_db
     }
 
-    /// Get the current Doppler rate.
+    /// Get the current absolute Doppler rate magnitude used by the AFC
+    /// bandwidth controller.
     pub fn get_doppler_rate(&self) -> f32 {
-        self.doppler_rate
+        self.doppler_rate_magnitude
     }
 }
 
@@ -283,6 +288,19 @@ mod tests {
             bw_high_doppler > bw_no_doppler,
             "High Doppler should increase bandwidth"
         );
+    }
+
+    #[test]
+    fn test_adaptive_bandwidth_tracks_absolute_doppler_magnitude() {
+        let mut bw = AdaptiveAfcLoopBandwidth::new(0.02, 0.001, 0.1);
+
+        let widened = bw.update(15.0, -0.05);
+
+        assert!(
+            widened > 0.02,
+            "higher Doppler magnitude should widen bandwidth"
+        );
+        assert!((bw.get_doppler_rate() - 0.05).abs() < 1e-6);
     }
 
     #[test]
