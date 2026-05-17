@@ -1273,7 +1273,7 @@ These modes appear in production `SessionProfile` mappings and are exercised by 
 | QPSK1000 | qpsk-plugin | hpx_hf SL8–SL9 |
 | 8PSK500 | psk8-plugin | hpx_hf SL10 |
 | 8PSK1000 | psk8-plugin | hpx_hf SL11 |
-| SCFDMA52-QPSK | scfdma-plugin | hpx_hf SL7 (lower PAPR than OFDM) |
+| 8PSK500 | psk8-plugin | hpx_hf SL7 |
 | SCFDMA52-16QAM | scfdma-plugin | reserved for SL12 after BL-TP-3/5 pass |
 
 ### Deferred from HPX profiles (code retained, not profiled)
