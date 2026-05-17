@@ -93,6 +93,12 @@ pub struct DaemonConfig {
     pub mode: String,
     /// TX attenuation in dB (0.0 = no attenuation).
     pub tx_attenuation_db: f32,
+    /// Whether the QSY frequency-agility protocol is enabled.
+    pub qsy_enabled: bool,
+    /// Active bandplan guardrail mode.
+    /// `"unrestricted"` disables all frequency checks.
+    /// Other valid values: `"ham-iaru-r1"`, `"ham-iaru-r2"`, `"ham-iaru-r3"`.
+    pub bandplan_mode: String,
 }
 
 // ---------------------------------------------------------------------------

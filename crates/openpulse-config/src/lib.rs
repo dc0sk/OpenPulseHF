@@ -417,6 +417,33 @@ fn default_identity_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("openpulse").join("identity.key"))
 }
 
+/// Persist updated QSY settings to the platform config file.
+///
+/// Loads the existing config (falling back to defaults), updates the two QSY
+/// fields, then rewrites the file.  Silently returns `Ok(())` if the config
+/// directory cannot be determined.
+pub fn save_qsy_config(qsy_enabled: bool, bandplan_mode: &str) -> Result<(), ConfigError> {
+    let path = match default_config_path() {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+    let mut cfg = load_from(&path).unwrap_or_default();
+    cfg.qsy.enabled = qsy_enabled;
+    if bandplan_mode == "unrestricted" {
+        cfg.qsy.bandplan_awareness_enabled = false;
+    } else {
+        cfg.qsy.bandplan_awareness_enabled = true;
+        cfg.qsy.bandplan_mode = bandplan_mode.to_string();
+    }
+    let toml_str =
+        toml::to_string_pretty(&cfg).map_err(|e| std::io::Error::other(e.to_string()))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, toml_str)?;
+    Ok(())
+}
+
 /// Returns a commented TOML configuration template for `openpulse config init`.
 pub fn init_template() -> String {
     r#"# OpenPulse configuration file

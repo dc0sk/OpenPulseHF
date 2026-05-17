@@ -80,13 +80,26 @@ fn main() -> Result<()> {
     let rx = engine.subscribe();
     let worker = events::spawn_worker(engine, cli.mode.clone(), rx);
 
+    let cfg = openpulse_config::load().unwrap_or_default();
+    let initial_qsy_enabled = cfg.qsy.enabled;
+    let initial_bandplan_mode = if cfg.qsy.bandplan_awareness_enabled {
+        cfg.qsy.bandplan_mode.clone()
+    } else {
+        "unrestricted".to_string()
+    };
+
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_tui(&mut terminal, worker);
+    let result = run_tui(
+        &mut terminal,
+        worker,
+        initial_qsy_enabled,
+        initial_bandplan_mode,
+    );
 
     disable_raw_mode()?;
     execute!(
@@ -101,8 +114,14 @@ fn main() -> Result<()> {
 fn run_tui(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     worker: std::sync::mpsc::Receiver<events::WorkerMsg>,
+    initial_qsy_enabled: bool,
+    initial_bandplan_mode: String,
 ) -> Result<()> {
-    let mut app = app::App::default();
+    let mut app = app::App {
+        qsy_enabled: initial_qsy_enabled,
+        bandplan_mode: initial_bandplan_mode,
+        ..Default::default()
+    };
     let tick = Duration::from_millis(100);
 
     loop {
@@ -118,6 +137,16 @@ fn run_tui(
                     }
                     (KeyCode::Down, _) => {
                         app.scroll_offset = app.scroll_offset.saturating_add(1);
+                    }
+                    (KeyCode::Char('Q'), _) => {
+                        app.qsy_enabled = !app.qsy_enabled;
+                        let _ =
+                            openpulse_config::save_qsy_config(app.qsy_enabled, &app.bandplan_mode);
+                    }
+                    (KeyCode::Char('b'), _) => {
+                        app.bandplan_mode = cycle_bandplan(&app.bandplan_mode).to_string();
+                        let _ =
+                            openpulse_config::save_qsy_config(app.qsy_enabled, &app.bandplan_mode);
                     }
                     _ => {}
                 }
@@ -137,4 +166,14 @@ fn run_tui(
     }
 
     Ok(())
+}
+
+const BANDPLAN_CYCLE: &[&str] = &["unrestricted", "ham-iaru-r1", "ham-iaru-r2", "ham-iaru-r3"];
+
+fn cycle_bandplan(current: &str) -> &'static str {
+    let pos = BANDPLAN_CYCLE
+        .iter()
+        .position(|&s| s == current)
+        .unwrap_or(0);
+    BANDPLAN_CYCLE[(pos + 1) % BANDPLAN_CYCLE.len()]
 }

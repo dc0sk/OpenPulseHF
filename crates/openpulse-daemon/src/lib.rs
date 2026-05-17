@@ -46,6 +46,12 @@ pub type SharedMode = Arc<Mutex<String>>;
 /// Shared mutable TX attenuation (dB), written by `set_tx_attenuation` commands.
 #[cfg(not(target_arch = "wasm32"))]
 pub type SharedAttenuation = Arc<Mutex<f32>>;
+/// Shared QSY enabled flag, toggled by `set_config` commands.
+#[cfg(not(target_arch = "wasm32"))]
+pub type SharedQsyEnabled = Arc<Mutex<bool>>;
+/// Shared bandplan mode string (`"unrestricted"`, `"ham-iaru-r1"`, etc.).
+#[cfg(not(target_arch = "wasm32"))]
+pub type SharedBandplanMode = Arc<Mutex<String>>;
 /// Shared audio sample tap for spectrum computation (most-recent 1024 samples).
 #[cfg(not(target_arch = "wasm32"))]
 pub type SpectrumTap = Arc<RwLock<Vec<f32>>>;
@@ -107,6 +113,8 @@ struct ClientCtx {
     cmd_tx: mpsc::Sender<ControlCommand>,
     active_mode: SharedMode,
     tx_attenuation_db: SharedAttenuation,
+    qsy_enabled: SharedQsyEnabled,
+    bandplan_mode: SharedBandplanMode,
     spectrum_tap: SpectrumTap,
     station_id: SharedStationId,
     message_store: SharedMessageStore,
@@ -129,6 +137,10 @@ pub struct ControlServerHandle {
     pub active_mode: SharedMode,
     /// Current TX attenuation in dB (also updated by the command handler).
     pub tx_attenuation_db: SharedAttenuation,
+    /// Whether QSY frequency-agility is enabled.
+    pub qsy_enabled: SharedQsyEnabled,
+    /// Active bandplan guardrail mode string.
+    pub bandplan_mode: SharedBandplanMode,
     /// Audio sample tap; caller may write recent RX samples here.
     pub spectrum_tap: SpectrumTap,
     /// Station callsign and grid square loaded from config at startup.
@@ -153,6 +165,8 @@ impl ControlServer {
         engine: &ModemEngine,
         initial_mode: String,
         initial_station_id: (String, String),
+        initial_qsy_enabled: bool,
+        initial_bandplan_mode: String,
         bound_addr: Option<&mut SocketAddr>,
     ) -> Result<ControlServerHandle, std::io::Error> {
         let listener = TcpListener::bind(addr).await?;
@@ -166,6 +180,8 @@ impl ControlServer {
 
         let active_mode = Arc::new(Mutex::new(initial_mode));
         let tx_attenuation_db: SharedAttenuation = Arc::new(Mutex::new(0.0f32));
+        let qsy_enabled: SharedQsyEnabled = Arc::new(Mutex::new(initial_qsy_enabled));
+        let bandplan_mode: SharedBandplanMode = Arc::new(Mutex::new(initial_bandplan_mode));
         let spectrum_tap: SpectrumTap = Arc::new(RwLock::new(vec![0.0f32; 1024]));
         let station_id: SharedStationId = Arc::new(Mutex::new(initial_station_id));
         let message_store: SharedMessageStore = Arc::new(Mutex::new(MessageStore::new()));
@@ -206,6 +222,8 @@ impl ControlServer {
         let cmd_tx_a = cmd_tx.clone();
         let mode_a = Arc::clone(&active_mode);
         let atten_a = Arc::clone(&tx_attenuation_db);
+        let qsy_a = Arc::clone(&qsy_enabled);
+        let bp_a = Arc::clone(&bandplan_mode);
         let tap_a = Arc::clone(&spectrum_tap);
         let sid_a = Arc::clone(&station_id);
         let store_a = Arc::clone(&message_store);
@@ -219,6 +237,8 @@ impl ControlServer {
                             cmd_tx: cmd_tx_a.clone(),
                             active_mode: Arc::clone(&mode_a),
                             tx_attenuation_db: Arc::clone(&atten_a),
+                            qsy_enabled: Arc::clone(&qsy_a),
+                            bandplan_mode: Arc::clone(&bp_a),
                             spectrum_tap: Arc::clone(&tap_a),
                             station_id: Arc::clone(&sid_a),
                             message_store: Arc::clone(&store_a),
@@ -237,6 +257,8 @@ impl ControlServer {
             command_tx: cmd_tx,
             active_mode,
             tx_attenuation_db,
+            qsy_enabled,
+            bandplan_mode,
             spectrum_tap,
             station_id,
             message_store,
@@ -339,17 +361,23 @@ async fn handle_command(
 
         ControlCommand::GetConfig => {
             let (cs, gs) = ctx.station_id.lock().await.clone();
-            // Hold both locks simultaneously so the snapshot is consistent with SetConfig.
+            // Hold all four locks simultaneously so the snapshot is consistent with SetConfig.
             let mode_guard = ctx.active_mode.lock().await;
             let atten_guard = ctx.tx_attenuation_db.lock().await;
+            let qsy_guard = ctx.qsy_enabled.lock().await;
+            let bp_guard = ctx.bandplan_mode.lock().await;
             let config = protocol::DaemonConfig {
                 callsign: cs,
                 grid_square: gs,
                 mode: mode_guard.clone(),
                 tx_attenuation_db: *atten_guard,
+                qsy_enabled: *qsy_guard,
+                bandplan_mode: bp_guard.clone(),
             };
             drop(mode_guard);
             drop(atten_guard);
+            drop(qsy_guard);
+            drop(bp_guard);
             if send_json(write_half, &ControlEvent::ConfigData { config })
                 .await
                 .is_err()
@@ -463,8 +491,15 @@ async fn handle_command(
         }
 
         _ => {
-            let resp =
-                dispatch_command(&cmd, &ctx.cmd_tx, &ctx.active_mode, &ctx.tx_attenuation_db).await;
+            let resp = dispatch_command(
+                &cmd,
+                &ctx.cmd_tx,
+                &ctx.active_mode,
+                &ctx.tx_attenuation_db,
+                &ctx.qsy_enabled,
+                &ctx.bandplan_mode,
+            )
+            .await;
             send_json(write_half, &resp).await.is_err()
         }
     }
@@ -487,6 +522,8 @@ pub(crate) async fn dispatch_command(
     cmd_tx: &mpsc::Sender<ControlCommand>,
     active_mode: &SharedMode,
     tx_attenuation_db: &SharedAttenuation,
+    qsy_enabled: &SharedQsyEnabled,
+    bandplan_mode: &SharedBandplanMode,
 ) -> CommandResponse {
     if let ControlCommand::SetMode { ref mode } = cmd {
         *active_mode.lock().await = mode.clone();
@@ -495,11 +532,15 @@ pub(crate) async fn dispatch_command(
         *tx_attenuation_db.lock().await = *db;
     }
     if let ControlCommand::SetConfig { ref config } = cmd {
-        // Hold both locks simultaneously so GetConfig cannot observe a mixed state.
+        // Hold all four locks simultaneously so GetConfig cannot observe a mixed state.
         let mut mode = active_mode.lock().await;
         let mut atten = tx_attenuation_db.lock().await;
+        let mut qsy = qsy_enabled.lock().await;
+        let mut bp = bandplan_mode.lock().await;
         *mode = config.mode.clone();
         *atten = config.tx_attenuation_db;
+        *qsy = config.qsy_enabled;
+        *bp = config.bandplan_mode.clone();
     }
 
     if cmd_tx.send(cmd.clone()).await.is_err() {

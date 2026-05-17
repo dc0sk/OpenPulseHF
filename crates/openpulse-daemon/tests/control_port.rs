@@ -25,6 +25,8 @@ async fn spawn_server(engine: &ModemEngine) -> (SocketAddr, ControlServerHandle)
         engine,
         "BPSK250".into(),
         ("N0CALL".into(), "AA00".into()), // station_id
+        false,
+        "unrestricted".into(),
         Some(&mut addr),
     )
     .await
@@ -254,6 +256,8 @@ async fn set_tx_attenuation_updates_shared_state() {
         &engine,
         "BPSK250".into(),
         ("N0CALL".into(), "AA00".into()), // station_id
+        false,
+        "unrestricted".into(),
         Some(&mut addr),
     )
     .await
@@ -298,6 +302,8 @@ async fn get_config_returns_config_data_and_ok() {
         &engine,
         "BPSK250".into(),
         ("K1ABC".into(), "FN42".into()), // station_id
+        false,
+        "unrestricted".into(),
         Some(&mut addr),
     )
     .await
@@ -353,6 +359,8 @@ async fn set_config_updates_mode_and_attenuation_atomically() {
         &engine,
         "BPSK250".into(),
         ("N0CALL".into(), "AA00".into()), // station_id
+        false,
+        "unrestricted".into(),
         Some(&mut addr),
     )
     .await
@@ -367,6 +375,8 @@ async fn set_config_updates_mode_and_attenuation_atomically() {
             grid_square: "AA00".into(),
             mode: "QPSK500".into(),
             tx_attenuation_db: -6.0,
+            qsy_enabled: false,
+            bandplan_mode: "unrestricted".into(),
         },
     })
     .unwrap()
