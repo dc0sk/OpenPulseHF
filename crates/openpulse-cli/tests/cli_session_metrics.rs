@@ -66,6 +66,9 @@ fn session_metrics_exports_json_with_perf_fields() {
             "\"reason_code\": \"session_metrics_export\"",
         ))
         .stdout(predicate::str::contains("\"throughput_bps\""))
+        .stdout(predicate::str::contains("\"throughput_bps_upper_bound\""))
+        .stdout(predicate::str::contains("\"throughput_bps_note\""))
+        .stdout(predicate::str::contains("223-byte"))
         .stdout(predicate::str::contains("\"transfer_ok\": 1"))
         .stdout(predicate::str::contains("\"transfer_error\": 1"))
         .stdout(predicate::str::contains("\"fer\": 0.5"))
