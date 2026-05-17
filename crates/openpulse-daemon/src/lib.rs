@@ -556,3 +556,164 @@ pub(crate) async fn dispatch_command(
 
     CommandResponse::ok()
 }
+
+/// Execute side-effectful control commands against the live modem engine.
+///
+/// This complements [`dispatch_command`], which updates shared daemon state and
+/// forwards commands to the caller. Unsupported commands are ignored.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn apply_command_to_engine(
+    cmd: &ControlCommand,
+    engine: &mut ModemEngine,
+    active_mode: &SharedMode,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+) {
+    match cmd {
+        ControlCommand::SetMode { mode } => {
+            if engine.plugins().get(mode).is_some() {
+                *active_mode.lock().await = mode.clone();
+            } else {
+                let _ = event_tx.send(ControlEvent::CommandError {
+                    command: "set_mode".to_string(),
+                    reason: format!("unsupported mode '{mode}'"),
+                });
+            }
+        }
+        ControlCommand::SetTxAttenuation { db, .. } => {
+            engine.set_tx_attenuation_db(*db);
+        }
+        ControlCommand::SetConfig { config } => {
+            if engine.plugins().get(&config.mode).is_some() {
+                *active_mode.lock().await = config.mode.clone();
+            } else {
+                let _ = event_tx.send(ControlEvent::CommandError {
+                    command: "set_config".to_string(),
+                    reason: format!("unsupported mode '{}'", config.mode),
+                });
+            }
+            engine.set_tx_attenuation_db(config.tx_attenuation_db);
+        }
+        ControlCommand::PttAssert => {
+            let _ = event_tx.send(ControlEvent::PttChanged { active: true });
+        }
+        ControlCommand::PttRelease => {
+            let _ = event_tx.send(ControlEvent::PttChanged { active: false });
+        }
+        ControlCommand::ConnectPeer { callsign } => {
+            let _ = event_tx.send(ControlEvent::RfConnectionChanged {
+                connected: true,
+                peer: Some(callsign.clone()),
+            });
+        }
+        ControlCommand::DisconnectPeer => {
+            let _ = event_tx.send(ControlEvent::RfConnectionChanged {
+                connected: false,
+                peer: None,
+            });
+        }
+        ControlCommand::SendMessage { body, .. } => {
+            let mode = active_mode.lock().await.clone();
+            if let Err(err) = engine.transmit(body.as_bytes(), &mode, None) {
+                tracing::warn!(mode = %mode, error = %err, "daemon rf dispatch failed for SendMessage");
+                let _ = event_tx.send(ControlEvent::CommandError {
+                    command: "send_message".to_string(),
+                    reason: format!("rf dispatch failed in mode '{mode}': {err}"),
+                });
+            }
+        }
+        // No live-modem side effects yet for these commands.
+        ControlCommand::SetFreq { .. }
+        | ControlCommand::AcceptQsy { .. }
+        | ControlCommand::RejectQsy { .. }
+        | ControlCommand::EnableRepeater
+        | ControlCommand::DisableRepeater
+        | ControlCommand::SubscribeSpectrum { .. }
+        | ControlCommand::GetConfig
+        | ControlCommand::ListMessages
+        | ControlCommand::GetMessage { .. }
+        | ControlCommand::DeleteMessage { .. } => {}
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod command_apply_tests {
+    use super::*;
+    use bpsk_plugin::BpskPlugin;
+    use openpulse_audio::LoopbackBackend;
+
+    fn test_engine() -> ModemEngine {
+        let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        engine.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+        engine
+    }
+
+    #[tokio::test]
+    async fn apply_set_config_updates_mode_and_tx_attenuation() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, _) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+
+        let cmd = ControlCommand::SetConfig {
+            config: protocol::DaemonConfig {
+                callsign: "N0CALL".into(),
+                grid_square: "AA00".into(),
+                mode: "BPSK250".into(),
+                tx_attenuation_db: -6.0,
+                qsy_enabled: false,
+                bandplan_mode: "unrestricted".into(),
+            },
+        };
+
+        apply_command_to_engine(&cmd, &mut engine, &active_mode, &ev_tx).await;
+
+        assert_eq!(*active_mode.lock().await, "BPSK250");
+        assert!((engine.tx_attenuation_db() - (-6.0)).abs() < 1e-6);
+    }
+
+    #[tokio::test]
+    async fn apply_send_message_transmits_payload_over_active_mode() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, _) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+
+        let cmd = ControlCommand::SendMessage {
+            to: "W1AW".into(),
+            subject: "status".into(),
+            body: "rf body payload".into(),
+        };
+
+        apply_command_to_engine(&cmd, &mut engine, &active_mode, &ev_tx).await;
+
+        let rx = engine.receive("BPSK250", None).unwrap();
+        assert_eq!(rx, b"rf body payload");
+    }
+
+    #[tokio::test]
+    async fn apply_send_message_invalid_mode_emits_command_error() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("NO_SUCH_MODE".to_string()));
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+
+        let cmd = ControlCommand::SendMessage {
+            to: "W1AW".into(),
+            subject: "status".into(),
+            body: "rf body payload".into(),
+        };
+
+        apply_command_to_engine(&cmd, &mut engine, &active_mode, &ev_tx).await;
+
+        let mut saw_error = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let ControlEvent::CommandError { command, reason } = ev {
+                assert_eq!(command, "send_message");
+                assert!(reason.contains("NO_SUCH_MODE"));
+                saw_error = true;
+                break;
+            }
+        }
+        assert!(saw_error, "expected command_error event");
+    }
+}

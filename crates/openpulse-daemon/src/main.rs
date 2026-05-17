@@ -2,8 +2,16 @@
 //! control port on TCP port 9000 and WebSocket port 9001 (defaults).
 
 use openpulse_audio::LoopbackBackend;
-use openpulse_daemon::{ws, ControlServer};
+use openpulse_daemon::{apply_command_to_engine, ws, ControlServer};
 use openpulse_modem::ModemEngine;
+
+use bpsk_plugin::BpskPlugin;
+use fsk4_plugin::Fsk4Plugin;
+use ofdm_plugin::OfdmPlugin;
+use psk8_plugin::Psk8Plugin;
+use qam64_plugin::Qam64Plugin;
+use qpsk_plugin::QpskPlugin;
+use scfdma_plugin::ScFdmaPlugin;
 
 #[tokio::main]
 async fn main() {
@@ -28,7 +36,28 @@ async fn main() {
     };
 
     let audio = Box::new(LoopbackBackend::default());
-    let engine = ModemEngine::new(audio);
+    let mut engine = ModemEngine::new(audio);
+    engine
+        .register_plugin(Box::new(BpskPlugin::new()))
+        .expect("failed to register BPSK plugin");
+    engine
+        .register_plugin(Box::new(Fsk4Plugin::new()))
+        .expect("failed to register FSK4 plugin");
+    engine
+        .register_plugin(Box::new(OfdmPlugin::new()))
+        .expect("failed to register OFDM plugin");
+    engine
+        .register_plugin(Box::new(Psk8Plugin::new()))
+        .expect("failed to register 8PSK plugin");
+    engine
+        .register_plugin(Box::new(Qam64Plugin::new()))
+        .expect("failed to register 64QAM plugin");
+    engine
+        .register_plugin(Box::new(QpskPlugin::new()))
+        .expect("failed to register QPSK plugin");
+    engine
+        .register_plugin(Box::new(ScFdmaPlugin::new()))
+        .expect("failed to register SC-FDMA plugin");
 
     let tcp_bind: std::net::SocketAddr = "127.0.0.1:9000".parse().unwrap();
     let ws_bind: std::net::SocketAddr = "127.0.0.1:9001".parse().unwrap();
@@ -67,9 +96,8 @@ async fn main() {
 
     tracing::info!("openpulse-server WebSocket control port listening on {ws_bind}");
 
-    // Drain command channel; in a real deployment additional handlers would
-    // act on each command (set frequency on rig, toggle repeater, etc.).
+    // Execute side-effectful commands against the live modem engine.
     while let Some(cmd) = handle.commands.recv().await {
-        tracing::info!(?cmd, "control command received");
+        apply_command_to_engine(&cmd, &mut engine, &handle.active_mode, &handle.event_tx).await;
     }
 }
