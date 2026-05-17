@@ -49,4 +49,4 @@ surface and the strongest integration-test evidence currently in-tree.
 
 | Feature | Primary implementation | Validation evidence | Status |
 |---|---|---|---|
-| On-air regulatory validation report (Phase 5.5-reg) | Process/documentation workflow | `docs/on-air_testplan.md` defines procedure; no shipped report artifact in-tree | Pending (explicitly postponed) |
+| On-air regulatory validation report (Phase 5.5-reg) | Process/documentation workflow | `docs/on-air_testplan.md` defines procedure; `scripts/onair-generate-report.sh` and `scripts/onair-bundle-evidence.sh` provide the report scaffold | Partial (scaffold shipped; field report still pending) |
