@@ -533,14 +533,21 @@ pub(crate) async fn dispatch_command(
     }
     if let ControlCommand::SetConfig { ref config } = cmd {
         // Hold all four locks simultaneously so GetConfig cannot observe a mixed state.
-        let mut mode = active_mode.lock().await;
-        let mut atten = tx_attenuation_db.lock().await;
-        let mut qsy = qsy_enabled.lock().await;
-        let mut bp = bandplan_mode.lock().await;
-        *mode = config.mode.clone();
-        *atten = config.tx_attenuation_db;
-        *qsy = config.qsy_enabled;
-        *bp = config.bandplan_mode.clone();
+        let (new_qsy, new_bp) = {
+            let mut mode = active_mode.lock().await;
+            let mut atten = tx_attenuation_db.lock().await;
+            let mut qsy = qsy_enabled.lock().await;
+            let mut bp = bandplan_mode.lock().await;
+            *mode = config.mode.clone();
+            *atten = config.tx_attenuation_db;
+            *qsy = config.qsy_enabled;
+            *bp = config.bandplan_mode.clone();
+            (*qsy, bp.clone())
+        };
+        // Persist QSY settings so they survive a daemon restart.
+        if let Err(e) = openpulse_config::save_qsy_config(new_qsy, &new_bp) {
+            tracing::warn!("could not persist QSY config: {e}");
+        }
     }
 
     if cmd_tx.send(cmd.clone()).await.is_err() {
