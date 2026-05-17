@@ -663,6 +663,7 @@ impl ModemEngine {
         self.stage_emit_output(device, &samples)?;
 
         // Log transmission metadata for regulatory compliance
+        self.update_tx_session_callsign();
         let tx_seq = self.sequence.wrapping_sub(1);
         let metadata = TxMetadata::new(&self.callsign, mode, self.max_power_watts, tx_seq);
         self.tx_session_log
