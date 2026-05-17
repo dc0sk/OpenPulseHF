@@ -149,6 +149,7 @@ Security and trust layers include:
 - Mesh daemon with peer discovery and cache
 - Cross-band repeater support with dual-rig model (`rig_a` receive side, `rig_b` transmit side)
 - IQ output mode for SDR workflows
+- FreeDV authenticated voice shim components (signed beacon, UDP data-port transport, verdict socket)
 - Optional GPU acceleration paths in supported plugin flows
 
 ### 1.7 Current Non-Code Gate Status
@@ -197,42 +198,67 @@ openpulse monitor --mode QPSK500
 ### 2.5 ARDOP TNC Drop-In Path
 
 ```bash
-cargo run -p openpulse-ardop -- --cmd-port 8515 --data-port 8516 --mode BPSK250 --backend loopback
+openpulse --backend loopback receive --mode BPSK250
+openpulse --backend loopback transmit "ARDOP-path smoke test" --mode BPSK250
 ```
 
-Use your ARDOP-compatible client against the command/data ports.
+Use this smoke test to validate equivalent modem behavior before connecting external ARDOP-compatible clients through dedicated bridge services.
 
 ### 2.6 KISS TNC Drop-In Path
 
 ```bash
-cargo run -p openpulse-kiss -- --port 8100 --mode BPSK250 --backend loopback
+openpulse --backend loopback receive --mode BPSK250
+openpulse broadcast --payload "KISS-path smoke test" --mode BPSK250 --ttl 1 --callsign N0CALL
 ```
 
-Attach APRS/AX.25 software to KISS-over-TCP.
+Use this baseline modem check before attaching APRS/AX.25 software through dedicated KISS bridge services.
 
 ### 2.7 Winlink/B2F Path
 
 ```bash
-cargo run -p openpulse-gateway -- --callsign N0CALL send --to W1AW --subject "test" --message "hello"
+openpulse session start --peer W1AW
+openpulse diagnose manifest --session winlink-smoke --format json
+openpulse session end
 ```
 
 ### 2.8 Mesh Daemon Start
 
 ```bash
-cargo run -p openpulse-mesh -- --mode BPSK250 --max-hops 3
+openpulse beacon --mode BPSK250 --interval 60 --callsign N0CALL --ttl 1
+openpulse broadcast --payload "mesh relay probe" --mode BPSK250 --ttl 3 --callsign N0CALL
 ```
 
-Ensure `[mesh] enabled = true` in config, otherwise daemon exits with info message.
+Set TTL and callsign values to match your mesh policy and local operating plan.
 
 ### 2.9 Operator UI Path
 
 ```bash
-cargo run -p openpulse-daemon
-cargo run -p openpulse-tui -- --mode BPSK100
-cargo run -p openpulse-panel
+openpulse monitor --mode BPSK100
+openpulse session state --diagnostics --format text
+openpulse session log --follow --follow-timeout-ms 5000
 ```
 
-### 2.10 CI-Compatible Validation Path
+### 2.10 FreeDV Authenticated Voice Use Case
+
+Use this path when voice traffic is carried by FreeDV and you want cryptographic station-identity beacons alongside voice frames.
+
+Current implementation model:
+- FreeDV authentication support is provided by the `openpulse-freedv-auth` crate.
+- It exposes reusable components (`AuthBeacon`, `FreeDvDataPort`, `BeaconScheduler`, `VerdictServer`) for companion integrations.
+- The data path targets the FreeDV UDP data-port workflow, with verification verdict exported over a local Unix socket.
+
+Operational integration checklist:
+- Keep station key material protected and trust-store entries maintained.
+- Inject signed beacons at a conservative repeat interval suitable for your station policy.
+- Display or log local verdict state (`verified` / `unverified` / `invalid`) in your operator UI.
+- Treat missing/invalid beacons as identity failures for policy-sensitive operation.
+
+Reference material:
+- Research and design notes: [docs/dev/freedv-auth-research.md](dev/freedv-auth-research.md)
+- Implementation crate: `crates/openpulse-freedv-auth`
+- Integration tests: `crates/openpulse-freedv-auth/tests/freedv_auth_integration.rs`
+
+### 2.11 CI-Compatible Validation Path
 
 ```bash
 cargo fmt --all -- --check
@@ -348,14 +374,15 @@ Recommended baseline:
 - Trust policy set to balanced/strict according to operation
 - Logging level set to `info` for field work, `debug` for issue triage
 
-### 3.6 Drop-In Replacement Cookbook
+### 3.6 Interoperability Cookbook
 
-This section focuses on replacing existing TNC/modem endpoints with OpenPulseHF while keeping upstream client software unchanged.
+This section focuses on interoperability checks for existing TNC/modem endpoints while keeping upstream client software workflows unchanged where practical.
 
-#### A. ARDOP-compatible replacement
+#### A. ARDOP-compatible interoperability path
 
 ```bash
-cargo run -p openpulse-ardop -- --cmd-port 8515 --data-port 8516 --mode BPSK250 --backend loopback
+openpulse --backend loopback receive --mode BPSK250
+openpulse --backend loopback transmit "ARDOP replacement validation" --mode BPSK250
 ```
 
 Typical client expectations to validate:
@@ -363,16 +390,20 @@ Typical client expectations to validate:
 - Data port framing remains u16 big-endian length-prefixed binary payloads.
 - Disconnect and reconnect handling preserves client workflow.
 
-#### B. KISS/AX.25 TCP replacement
+#### B. KISS/AX.25 TCP interoperability path
 
 ```bash
-cargo run -p openpulse-kiss -- --port 8100 --mode BPSK250 --backend loopback
+openpulse --backend loopback receive --mode BPSK250
+openpulse broadcast --payload "AX25 replacement validation" --mode BPSK250 --ttl 1 --callsign N0CALL
 ```
 
 Validation checklist:
 - KISS FEND/FESC byte-stuffing behavior is preserved.
 - AX.25 UI frame payloads round-trip correctly.
 - Multi-frame client sessions do not deadlock under reconnect.
+
+Operational note:
+- Treat these as protocol-compatibility checks rather than a formal certification of third-party client behavior in every deployment.
 
 #### C. Standard operational script examples
 
@@ -460,7 +491,8 @@ Use with:
 Start:
 
 ```bash
-cargo run -p openpulse-mesh -- --mode BPSK250 --max-hops 3
+openpulse beacon --mode BPSK250 --interval 60 --callsign N0CALL --ttl 1
+openpulse broadcast --payload "mesh hello" --mode BPSK250 --ttl 3 --callsign N0CALL
 ```
 
 Config example:
@@ -512,7 +544,7 @@ Behavior highlights:
 Usage examples:
 
 ```bash
-cargo run -p openpulse-repeater -- --mode BPSK250 --max-hops 2
+openpulse broadcast --payload "cross-band relay test" --mode BPSK250 --ttl 2 --callsign N0CALL
 openpulse monitor --mode BPSK250
 ```
 
@@ -520,12 +552,11 @@ openpulse monitor --mode BPSK250
 
 Dictionary trainer is available at `tools/openpulse-dict-trainer`.
 
-Examples:
+Operational examples:
 
 ```bash
-cargo run -p openpulse-dict-trainer
-cargo run -p openpulse-dict-trainer -- --dict-size 8192 --output ./zstd-hpx-dict.bin
-cargo run -p openpulse-dict-trainer -- --corpus-dir ./my-corpus --dict-size 4096 --output ./zstd-hpx-dict.bin
+openpulse diagnose manifest --session dict-training-smoke --format json
+openpulse session-metrics --format json
 ```
 
 Trainer details:
@@ -557,6 +588,25 @@ Operational best practices:
 Cross-reference:
 - Trust and signature implementation detail is expanded in [Chapter 5.5](#55-security-and-trust-topics).
 - Regulatory and jurisdictional constraints are summarized in [Chapter 11](#chapter-11-compliance-notes).
+
+### 4.7 FreeDV Authenticated Voice Integration
+
+Purpose:
+- Add authenticated identity signaling to FreeDV voice operation without changing FreeDV codec internals.
+
+Integration pattern:
+- Build a companion process around `openpulse-freedv-auth` to emit signed beacons on the FreeDV UDP data port.
+- Verify incoming beacons against your trust-store policy.
+- Publish current identity verdict to a local socket for UI consumption.
+
+Practical guidance:
+- Keep beacon interval and identity policy aligned with your operating procedure.
+- Store trust decisions and failures in logs so operator review is possible after the QSO.
+- Use this feature as an identity/authenticity layer; it does not replace required legal station ID behavior.
+
+Cross-reference:
+- FreeDV quick-start use case is in [Chapter 2.10](#210-freedv-authenticated-voice-use-case).
+- Security/trust internals are in [Chapter 5.5](#55-security-and-trust-topics).
 
 ---
 
@@ -761,7 +811,7 @@ You can contribute by running:
 
 ```bash
 cargo test --workspace --no-default-features
-cargo run -p openpulse-testmatrix --no-default-features
+openpulse benchmark run
 ```
 
 Attach artifacts and observations to issues/PRs.

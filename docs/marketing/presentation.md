@@ -16,7 +16,7 @@ last_updated: 2026-05-12
 **OpenPulseHF**  
 *The Open HF Data Modem That Sets New Standards*
 
-> "Everything VARA does — and things nothing else does."
+> "Covers core VARA/ARDOP-era workflows — plus open features not commonly available elsewhere."
 
 *Speaker notes: Introduce yourself and the project. State upfront: 100% open source, GPL v3,
 no subscription, no dongle. The audience will immediately understand this is different.*
@@ -56,20 +56,21 @@ no subscription, no dongle. The audience will immediately understand this is dif
 | Baud range | 31–250 | 125–9600 | 500–9600 | 500–2000 | — | — | 100 |
 | Max bits/sym | 1 | 2 | 3 | **6** | QPSK/SC | QPSK/SC | 2 |
 | Raw data rate (max) | 250 bps | 2000 bps | 3000 bps | **12 kbps** | ~2889 bps | ~2889 bps | ACK |
-| Peak with LZ4† | ~500 bps | ~4000 bps | ~6 kbps | **~24 kbps** | ~5.8 kbps | **111 kbps†** | ACK |
+| Peak with LZ4† | ~500 bps | ~4000 bps | ~6 kbps | **~24 kbps** | ~5.8 kbps | **111 kbps lab peak†** | ACK |
 | HF-compliant | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
-† Raw data rate = symbol rate × bits/symbol. "Peak with LZ4" uses ≈ 2× for typical text payloads
-except SC-FDMA which shows the testbench-measured peak: **111 kbps on SCFDMA52 + LZ4** with a
-2048-byte compressible frame (≈ 38× ratio on highly repetitive data).
+† Raw data rate = symbol rate × bits/symbol. "Peak with LZ4" uses ≈ 2× for typical text payloads.
+The SC-FDMA figure is a **lab peak** from the built-in testbench: **111 kbps on SCFDMA52 + LZ4**
+with a 2048-byte highly repetitive frame (≈ 38× compression ratio); it is not a typical on-air
+goodput number.
 
 64QAM uses a Gray-coded rectangular constellation with a max-log-MAP soft demodulator.
 All RRC variants use Root Raised Cosine pulse shaping — the same approach used in LTE
 and DVB receivers.
 
-*Speaker notes: Walk through the table quickly. The key message: 64QAM at 12 kbps raw in
-the standard 2700 Hz SSB passband. With LZ4 on compressible data the testbench measures
-up to 111 kbps on SCFDMA52 — higher than any other open HF modem by an order of magnitude.*
+*Speaker notes: Walk through the table quickly. The key message: 64QAM reaches 12 kbps raw in
+the standard 2700 Hz SSB passband. The 111 kbps number is a lab compression peak on synthetic
+data; present it explicitly as a best-case demonstration, not typical field throughput.*
 
 ---
 
