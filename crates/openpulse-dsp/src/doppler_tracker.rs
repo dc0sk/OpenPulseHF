@@ -112,7 +112,8 @@ impl DopplerTracker {
         unwrapped
     }
 
-    /// Get the current Doppler rate estimate.
+    /// Returns the signed Doppler rate estimate in rad/sample.
+    /// Positive values indicate increasing carrier phase (upward Doppler shift).
     pub fn get_doppler_rate(&self) -> f32 {
         self.doppler_rate
     }

@@ -214,7 +214,7 @@ impl PreambleDetector {
     /// - phase_estimate: 0 if positive, π if negative
     pub fn correlate_bpsk(&mut self, received: &[f32]) -> (f32, f32) {
         if received.len() != self.reference.len() {
-            tracing::debug!(
+            tracing::warn!(
                 preamble_type = ?self.preamble_type,
                 expected_len = self.reference.len(),
                 received_len = received.len(),
