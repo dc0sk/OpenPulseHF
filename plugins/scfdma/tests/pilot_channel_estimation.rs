@@ -115,6 +115,29 @@ fn frame_success_rate_hard_diversity_awgn(
     ok as f32 / frames as f32
 }
 
+fn frame_success_rate_watterson_hard(
+    plugin: &ScFdmaPlugin,
+    samples: &[f32],
+    mode: &str,
+    payload: &[u8],
+    frames: usize,
+    mut config_for_seed: impl FnMut(u64) -> WattersonConfig,
+) -> f32 {
+    let mut ok = 0usize;
+    for frame in 0..frames {
+        let seed = 0x7100_0000 + frame as u64;
+        let channel_cfg = config_for_seed(seed);
+        let mut ch = WattersonChannel::new(channel_cfg)
+            .expect("failed to construct Watterson channel profile");
+        let faded = ch.apply(samples);
+        let got = plugin.demodulate(&faded, &cfg(mode)).unwrap();
+        if got == payload {
+            ok += 1;
+        }
+    }
+    ok as f32 / frames as f32
+}
+
 fn frame_success_rate_soft_combine_awgn(
     plugin: &ScFdmaPlugin,
     samples: &[f32],
@@ -334,5 +357,64 @@ fn watterson_f1_pilot_density_throughput_improves_at_least_2_percent() {
     assert!(
         p80_improvement >= 2.0,
         "Watterson F1 useful-bit throughput gain should be >= 2% at 20 dB (p80 across seed windows): baseline={avg_hard:.1} b/frame, improved={avg_soft:.1} b/frame, p80_gain={p80_improvement:.2}%"
+    );
+}
+
+#[test]
+fn scfdma_qam_modes_remain_deferred_on_watterson_profile_entry_matrix() {
+    let plugin = ScFdmaPlugin::new();
+    let payload: Vec<u8> = (0u8..96).collect();
+    let frames = 30usize;
+
+    let samples_16 = plugin.modulate(&payload, &cfg("SCFDMA52-16QAM")).unwrap();
+    let samples_64 = plugin.modulate(&payload, &cfg("SCFDMA52-64QAM")).unwrap();
+
+    let scenarios: [(&str, fn(u64) -> WattersonConfig); 3] = [
+        ("good_f1", |seed| WattersonConfig::good_f1(Some(seed))),
+        ("good_f2", |seed| WattersonConfig::good_f2(Some(seed))),
+        ("moderate_f1", |seed| {
+            WattersonConfig::moderate_f1(Some(seed))
+        }),
+    ];
+
+    let mut worst_16 = f32::INFINITY;
+    let mut worst_64 = f32::INFINITY;
+
+    for (label, mk) in scenarios {
+        let succ_16 = frame_success_rate_watterson_hard(
+            &plugin,
+            &samples_16,
+            "SCFDMA52-16QAM",
+            &payload,
+            frames,
+            mk,
+        );
+        let succ_64 = frame_success_rate_watterson_hard(
+            &plugin,
+            &samples_64,
+            "SCFDMA52-64QAM",
+            &payload,
+            frames,
+            mk,
+        );
+
+        worst_16 = worst_16.min(succ_16);
+        worst_64 = worst_64.min(succ_64);
+
+        println!(
+            "profile-entry-matrix {label}: 16QAM_success={succ_16:.3} 64QAM_success={succ_64:.3}"
+        );
+    }
+
+    // Profile-entry gate (wide-matrix): min scenario success >= 90%.
+    // Current expectation: both modes remain below this gate and therefore deferred.
+    const PROFILE_ENTRY_MIN_SUCCESS: f32 = 0.90;
+    assert!(
+        worst_16 < PROFILE_ENTRY_MIN_SUCCESS,
+        "SCFDMA52-16QAM unexpectedly met profile-entry gate across matrix: worst={worst_16:.3}"
+    );
+    assert!(
+        worst_64 < PROFILE_ENTRY_MIN_SUCCESS,
+        "SCFDMA52-64QAM unexpectedly met profile-entry gate across matrix: worst={worst_64:.3}"
     );
 }
