@@ -13,6 +13,7 @@ openpulse-audio   = { workspace = true }
 openpulse-channel = { workspace = true }
 openpulse-dsp     = { workspace = true }
 bpsk-plugin       = { workspace = true }
+qpsk-plugin       = { workspace = true }
 tracing           = { workspace = true }
 rand              = { workspace = true }
 rustfft           = { workspace = true }
@@ -21,7 +22,6 @@ serde_json        = { workspace = true }
 tokio             = { version = "1", default-features = false, features = ["sync"] }
 
 [dev-dependencies]
-qpsk-plugin = { workspace = true }
 psk8-plugin = { workspace = true }
 fsk4-plugin = { workspace = true }
 scfdma-plugin = { workspace = true }
