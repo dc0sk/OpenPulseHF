@@ -1285,7 +1285,7 @@ These remain in the codebase and plugin registry but are not assigned to any `Se
 | Mode | Reason for deferral |
 |---|---|
 | BPSK31 / BPSK63 / BPSK100 | Low throughput; not competitive vs QPSK at equal bandwidth |
-| SCFDMA52-64QAM | 0% success in all Watterson channels; requires memory-ARQ (BL-TP-5) and better pilots (BL-TP-7) |
+| SCFDMA52-64QAM | Reliability still below profile-entry bar under wider HF channel matrix; BL-TP-5 and BL-TP-7 landed but additional robustness gates are required before profile assignment |
 | 64QAM500 / 64QAM1000 / 64QAM2000-RRC | Same reasons as SCFDMA52-64QAM |
 | OFDM variants | Superseded by SC-FDMA for PAPR; kept as research reference |
 | HPX wideband HD (SL12–SL20) | Depends on 64QAM reliability (BL-TP-5/7 gates); SL20 still in schema but not profiled |
