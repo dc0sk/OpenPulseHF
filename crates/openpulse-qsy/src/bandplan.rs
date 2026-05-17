@@ -600,6 +600,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn parse_region_mode_strings() {
         assert_eq!(
             "ham-iaru".parse::<BandplanMode>(),
