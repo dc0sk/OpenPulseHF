@@ -54,6 +54,13 @@ pub struct BandplanPolicy {
     pub enforce_segment_conventions: bool,
 }
 
+/// Additional non-fatal diagnostics emitted while evaluating bandplan policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BandplanWarning {
+    /// Region 3 currently uses Region 1 allocations as a conservative proxy.
+    Region3UsesRegion1Proxy,
+}
+
 impl Default for BandplanPolicy {
     fn default() -> Self {
         Self {
@@ -93,40 +100,65 @@ impl BandplanPolicy {
         freq_hz: u64,
         operating_mode: &str,
     ) -> Result<(), BandplanError> {
+        self.validate_frequency_with_warnings(freq_hz, operating_mode)
+            .map(|_| ())
+    }
+
+    /// Evaluate whether a frequency/mode pair is permitted by the policy and
+    /// return any non-fatal warnings about approximation or proxy behavior.
+    pub fn validate_frequency_with_warnings(
+        &self,
+        freq_hz: u64,
+        operating_mode: &str,
+    ) -> Result<Vec<BandplanWarning>, BandplanError> {
         if !self.awareness_enabled {
-            return Ok(());
+            return Ok(vec![]);
         }
 
-        match self.mode {
+        let warnings = match self.mode {
             #[allow(deprecated)]
-            BandplanMode::HamIaru => validate_ham_iaru_base(
-                freq_hz,
-                operating_mode,
-                self.enforce_segment_conventions,
-                self.enforce_max_channel_width,
-            ),
-            BandplanMode::HamIaruRegion1 => validate_iaru_region(
-                freq_hz,
-                operating_mode,
-                ItuRegion::Region1,
-                self.enforce_segment_conventions,
-                self.enforce_max_channel_width,
-            ),
-            BandplanMode::HamIaruRegion2 => validate_iaru_region(
-                freq_hz,
-                operating_mode,
-                ItuRegion::Region2,
-                self.enforce_segment_conventions,
-                self.enforce_max_channel_width,
-            ),
-            BandplanMode::HamIaruRegion3 => validate_iaru_region(
-                freq_hz,
-                operating_mode,
-                ItuRegion::Region3,
-                self.enforce_segment_conventions,
-                self.enforce_max_channel_width,
-            ),
-        }
+            BandplanMode::HamIaru => {
+                validate_ham_iaru_base(
+                    freq_hz,
+                    operating_mode,
+                    self.enforce_segment_conventions,
+                    self.enforce_max_channel_width,
+                )?;
+                vec![]
+            }
+            BandplanMode::HamIaruRegion1 => {
+                validate_iaru_region(
+                    freq_hz,
+                    operating_mode,
+                    ItuRegion::Region1,
+                    self.enforce_segment_conventions,
+                    self.enforce_max_channel_width,
+                )?;
+                vec![]
+            }
+            BandplanMode::HamIaruRegion2 => {
+                validate_iaru_region(
+                    freq_hz,
+                    operating_mode,
+                    ItuRegion::Region2,
+                    self.enforce_segment_conventions,
+                    self.enforce_max_channel_width,
+                )?;
+                vec![]
+            }
+            BandplanMode::HamIaruRegion3 => {
+                validate_iaru_region(
+                    freq_hz,
+                    operating_mode,
+                    ItuRegion::Region3,
+                    self.enforce_segment_conventions,
+                    self.enforce_max_channel_width,
+                )?;
+                vec![BandplanWarning::Region3UsesRegion1Proxy]
+            }
+        };
+
+        Ok(warnings)
     }
 }
 
@@ -545,6 +577,18 @@ mod tests {
             policy.validate_frequency(14_120_000, "BPSK250"),
             Err(BandplanError::SegmentViolation { .. })
         ));
+    }
+
+    #[test]
+    fn region3_validation_emits_proxy_warning() {
+        let mut policy = BandplanPolicy::default();
+        policy.mode = BandplanMode::HamIaruRegion3;
+
+        let warnings = policy
+            .validate_frequency_with_warnings(14_112_000, "BPSK250")
+            .expect("region3 proxy validation should still succeed");
+
+        assert_eq!(warnings, vec![BandplanWarning::Region3UsesRegion1Proxy]);
     }
 
     #[test]
