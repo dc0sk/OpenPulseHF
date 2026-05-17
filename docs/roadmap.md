@@ -344,14 +344,12 @@ rigctld_addr = "127.0.0.1:4532"   # primary rig (RX/TX for normal operation)
 
 [radio.rig_b]
 rigctld_addr = "127.0.0.1:4533"   # secondary rig (TX for cross-band repeater)
-```
 
 **New crate: `openpulse-repeater`** (or module in `openpulse-mesh`):
 - `CrossBandRepeater`: holds two `RigctldController` instances and two `ModemEngine`
   instances (one per audio device); configurable from `[repeater]` TOML section.
-- Repeater loop: `rig_a` engine receives a decoded frame → re-encode → `rig_b` transmits.
 - PTT sequencing: `rig_b.ptt_on()` before TX, `rig_b.ptt_off()` after; configurable
-  TX hang timer (`tx_hang_ms`, default 500 ms) before PTT release.
+last_updated: 2026-05-17
 - `[repeater] enabled = false` — opt-in; disabled by default.
 - Operator must configure both rigs and TOML explicitly; no auto-activation.
 
@@ -1289,6 +1287,10 @@ These remain in the codebase and plugin registry but are not assigned to any `Se
 | 64QAM500 / 64QAM1000 / 64QAM2000-RRC | Same reasons as SCFDMA52-64QAM |
 | OFDM variants | Superseded by SC-FDMA for PAPR; kept as research reference |
 | HPX wideband HD (SL12–SL20) | Depends on 64QAM reliability (BL-TP-5/7 gates); SL20 still in schema but not profiled |
+
+The wide-matrix gate is tracked by
+`plugins/scfdma/tests/pilot_channel_estimation.rs::scfdma_qam_modes_remain_deferred_on_watterson_profile_entry_matrix`,
+which checks SCFDMA52-16QAM and SCFDMA52-64QAM across Good F1, Good F2, and Moderate F1.
 
 ### Features that remain fully in scope regardless of mode deferral
 
