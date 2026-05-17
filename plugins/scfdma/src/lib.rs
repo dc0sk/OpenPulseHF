@@ -142,9 +142,9 @@ impl ModulationPlugin for ScFdmaPlugin {
         Ok(scfdma_demodulate_soft(samples, &config.mode))
     }
 
-    // Per-subcarrier LS/ZF equalization handles channel phase; no global CFO estimator.
-    fn estimate_afc_hz(&self, _samples: &[f32], _config: &ModulationConfig) -> Option<f32> {
-        None
+    fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+        let p = params_for_mode(&config.mode)?;
+        crate::channel::estimate_cfo_hz(samples, &p)
     }
 }
 
@@ -291,12 +291,77 @@ mod tests {
         let payload = b"SC-FDMA PAPR test payload longer text here for more subcarriers fill";
         let samples = plugin.modulate(payload, &mod_config("SCFDMA52")).unwrap();
         let papr = measure_papr(&samples);
-        // Localized SC-FDMA with 52 of 256 subcarriers achieves ~8-11 dB PAPR without
-        // hard clipping.  OFDM with the same allocation clips to a 6 dB target,
-        // introducing OOB spectral regrowth; SC-FDMA avoids that distortion.
         assert!(
             papr < 12.0,
             "SC-FDMA PAPR {papr:.1} dB should be below 12 dB (no clipping applied)"
+        );
+    }
+
+    // AFC estimator: on-carrier SCFDMA16 signal returns near-zero estimate.
+    #[test]
+    fn afc_estimate_near_zero_scfdma16() {
+        let plugin = ScFdmaPlugin::new();
+        let cfg = mod_config("SCFDMA16");
+        let payload: Vec<u8> = (0..32u8).collect();
+        let samples = plugin.modulate(&payload, &cfg).unwrap();
+        let est = plugin
+            .estimate_afc_hz(&samples, &cfg)
+            .expect("afc estimate");
+        assert!(est.abs() < 5.0, "expected near-zero AFC, got {est:.2} Hz");
+    }
+
+    // AFC estimator: on-carrier SCFDMA52 signal returns near-zero estimate.
+    #[test]
+    fn afc_estimate_near_zero_scfdma52() {
+        let plugin = ScFdmaPlugin::new();
+        let cfg = mod_config("SCFDMA52");
+        let payload: Vec<u8> = (0..64u8).collect();
+        let samples = plugin.modulate(&payload, &cfg).unwrap();
+        let est = plugin
+            .estimate_afc_hz(&samples, &cfg)
+            .expect("afc estimate");
+        assert!(est.abs() < 5.0, "expected near-zero AFC, got {est:.2} Hz");
+    }
+
+    // AFC estimator: synthetic signal with known inter-symbol pilot phase drift.
+    #[test]
+    fn afc_synthetic_pilot_phase_drift_scfdma16() {
+        use crate::channel::{estimate_cfo_hz, pilot_positions};
+        use crate::params::{CP, FFT_SIZE, PILOT_AMPLITUDE, SAMPLE_RATE, SYM_LEN};
+        use num_complex::Complex32;
+        use rustfft::FftPlanner;
+        use std::f32::consts::PI;
+
+        let cfo_hz = 8.0_f32;
+        let delta_phi = 2.0 * PI * cfo_hz * SYM_LEN as f32 / SAMPLE_RATE as f32;
+        let p = SCFDMA16;
+        let pilots = pilot_positions(&p);
+        let n_syms = 4usize;
+
+        let mut planner = FftPlanner::<f32>::new();
+        let ifft = planner.plan_fft_inverse(FFT_SIZE);
+        let scale = 1.0 / FFT_SIZE as f32;
+
+        let mut samples = Vec::with_capacity(n_syms * SYM_LEN);
+        for sym_idx in 0..n_syms {
+            let phase = sym_idx as f32 * delta_phi;
+            let (sin_p, cos_p) = phase.sin_cos();
+            let mut freq = vec![Complex32::new(0.0, 0.0); FFT_SIZE];
+            for &k in &pilots {
+                freq[k] = Complex32::new(cos_p, sin_p) * PILOT_AMPLITUDE;
+                freq[FFT_SIZE - k] = Complex32::new(cos_p, -sin_p) * PILOT_AMPLITUDE;
+            }
+            ifft.process(&mut freq);
+            let time: Vec<f32> = freq.iter().map(|c| c.re * scale).collect();
+            let cp_start = FFT_SIZE - CP;
+            samples.extend_from_slice(&time[cp_start..]);
+            samples.extend_from_slice(&time);
+        }
+
+        let est = estimate_cfo_hz(&samples, &p).expect("synthetic cfo estimate");
+        assert!(
+            (est - cfo_hz).abs() < 2.0,
+            "expected ~{cfo_hz:.1} Hz CFO, got {est:.2} Hz"
         );
     }
 }

@@ -13,6 +13,60 @@ use crate::modulate::{
 };
 use crate::parse_baud_rate;
 
+fn estimate_frequency_offset_from_preamble(
+    i_syms: &[f32],
+    q_syms: &[f32],
+    baud_rate: f32,
+) -> Option<f32> {
+    let expected = preamble_symbols();
+    let n = i_syms.len().min(q_syms.len()).min(expected.len());
+    if n < 2 {
+        return None;
+    }
+
+    // Remove known preamble phase: y[k] = z[k] * conj(preamble[k]).
+    let mut y_re = Vec::with_capacity(n);
+    let mut y_im = Vec::with_capacity(n);
+    for k in 0..n {
+        let zr = i_syms[k];
+        let zi = q_syms[k];
+        let (pr, pi) = expected[k];
+        y_re.push(zr * pr + zi * pi);
+        y_im.push(zi * pr - zr * pi);
+    }
+
+    let mut re_sum = 0.0f32;
+    let mut im_sum = 0.0f32;
+    for k in 1..n {
+        re_sum += y_re[k] * y_re[k - 1] + y_im[k] * y_im[k - 1];
+        im_sum += y_im[k] * y_re[k - 1] - y_re[k] * y_im[k - 1];
+    }
+
+    Some(im_sum.atan2(re_sum) * baud_rate / (2.0 * PI))
+}
+
+pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+    let baud = parse_baud_rate(&config.mode).ok()?;
+    let fs = config.sample_rate as f32;
+    let fc = config.center_frequency;
+    let n = samples_per_symbol(fs, baud).ok()?;
+    let cosine_overlap =
+        config.pulse_shape == PulseShape::CosineOverlap || is_hf_mode(&config.mode);
+
+    if samples.len() < n * (PREAMBLE_SYMS + 1) {
+        return None;
+    }
+
+    let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
+    let syms = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
+    if syms.len() < 2 {
+        return None;
+    }
+
+    let (i_syms, q_syms): (Vec<f32>, Vec<f32>) = syms.into_iter().unzip();
+    estimate_frequency_offset_from_preamble(&i_syms, &q_syms, baud)
+}
+
 pub fn psk8_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec<u8>, ModemError> {
     let data = extract_data_symbols(samples, config)?;
     let bits = symbols_to_bits(&data);

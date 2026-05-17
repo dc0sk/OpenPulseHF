@@ -73,6 +73,10 @@ impl ModulationPlugin for QpskPlugin {
         demodulate::qpsk_demodulate_soft(samples, config)
     }
 
+    fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+        demodulate::afc_estimate_hz(samples, config)
+    }
+
     fn modulate_iq(
         &self,
         data: &[u8],
@@ -192,6 +196,47 @@ mod tests {
         let samples = plugin.modulate(payload, &cfg).expect("modulate");
         let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
         assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    #[test]
+    fn afc_estimate_near_zero_on_carrier_match() {
+        use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+        let plugin = QpskPlugin::new();
+        let tx_cfg = ModulationConfig {
+            mode: "QPSK500".to_string(),
+            center_frequency: 1500.0,
+            ..ModulationConfig::default()
+        };
+        let rx_cfg = tx_cfg.clone();
+        let samples = plugin.modulate(b"afc qpsk", &tx_cfg).expect("modulate");
+        let est = plugin
+            .estimate_afc_hz(&samples, &rx_cfg)
+            .expect("afc estimate");
+        assert!(est.abs() < 3.0, "expected near-zero AFC, got {est:.2} Hz");
+    }
+
+    #[test]
+    fn afc_estimate_tracks_positive_offset() {
+        use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+        let plugin = QpskPlugin::new();
+        let tx_cfg = ModulationConfig {
+            mode: "QPSK500".to_string(),
+            center_frequency: 1520.0,
+            ..ModulationConfig::default()
+        };
+        let rx_cfg = ModulationConfig {
+            mode: "QPSK500".to_string(),
+            center_frequency: 1500.0,
+            ..ModulationConfig::default()
+        };
+        let samples = plugin.modulate(b"afc qpsk", &tx_cfg).expect("modulate");
+        let est = plugin
+            .estimate_afc_hz(&samples, &rx_cfg)
+            .expect("afc estimate");
+        assert!(
+            (est - 20.0).abs() < 6.0,
+            "expected about +20 Hz AFC, got {est:.2} Hz"
+        );
     }
 
     #[test]

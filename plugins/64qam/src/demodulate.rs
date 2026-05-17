@@ -17,6 +17,55 @@ use crate::modulate::{
 };
 use crate::parse_baud_rate;
 
+fn estimate_frequency_offset_mth(i_syms: &[f32], q_syms: &[f32], baud_rate: f32, m: u32) -> f32 {
+    if i_syms.len() < 2 || m == 0 {
+        return 0.0;
+    }
+
+    let mut re_m = Vec::with_capacity(i_syms.len());
+    let mut im_m = Vec::with_capacity(i_syms.len());
+    for (&i, &q) in i_syms.iter().zip(q_syms.iter()) {
+        let mut re = i;
+        let mut im = q;
+        for _ in 1..m {
+            let next_re = re * i - im * q;
+            let next_im = re * q + im * i;
+            re = next_re;
+            im = next_im;
+        }
+        re_m.push(re);
+        im_m.push(im);
+    }
+
+    let mut re_sum = 0.0f32;
+    let mut im_sum = 0.0f32;
+    for k in 1..re_m.len() {
+        re_sum += re_m[k] * re_m[k - 1] + im_m[k] * im_m[k - 1];
+        im_sum += im_m[k] * re_m[k - 1] - re_m[k] * im_m[k - 1];
+    }
+
+    im_sum.atan2(re_sum) * baud_rate / (2.0 * PI * m as f32)
+}
+
+pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+    let baud = parse_baud_rate(&config.mode).ok()?;
+    let fs = config.sample_rate as f32;
+    let fc = config.center_frequency;
+    let n = samples_per_symbol(fs, baud).ok()?;
+
+    if samples.len() < n * (PREAMBLE_SYMS + 1) {
+        return None;
+    }
+
+    let offset = find_timing_offset(samples, n, fc, fs);
+    let (i_syms, q_syms) = demodulate_iq(samples, n, fc, fs, offset);
+    if i_syms.len() < 2 {
+        return None;
+    }
+
+    Some(estimate_frequency_offset_mth(&i_syms, &q_syms, baud, 4))
+}
+
 // ── Nearest-point decision ────────────────────────────────────────────────────
 
 /// Inverse PAM-8 Gray map: normalised amplitude → 3-bit Gray code (0–7).
