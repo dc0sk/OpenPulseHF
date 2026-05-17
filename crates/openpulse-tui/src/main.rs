@@ -13,10 +13,13 @@ use tracing::Level;
 
 use bpsk_plugin::BpskPlugin;
 use fsk4_plugin::Fsk4Plugin;
+use ofdm_plugin::OfdmPlugin;
 use openpulse_audio::LoopbackBackend;
 use openpulse_modem::ModemEngine;
 use psk8_plugin::Psk8Plugin;
+use qam64_plugin::Qam64Plugin;
 use qpsk_plugin::QpskPlugin;
+use scfdma_plugin::ScFdmaPlugin;
 
 #[cfg(feature = "cpal-backend")]
 use openpulse_audio::CpalBackend;
@@ -74,8 +77,11 @@ fn main() -> Result<()> {
     let mut engine = ModemEngine::new(audio);
     engine.register_plugin(Box::new(BpskPlugin::new()))?;
     engine.register_plugin(Box::new(Fsk4Plugin::new()))?;
+    engine.register_plugin(Box::new(OfdmPlugin::new()))?;
     engine.register_plugin(Box::new(Psk8Plugin::new()))?;
+    engine.register_plugin(Box::new(Qam64Plugin::new()))?;
     engine.register_plugin(Box::new(QpskPlugin::new()))?;
+    engine.register_plugin(Box::new(ScFdmaPlugin::new()))?;
 
     let rx = engine.subscribe();
     let worker = events::spawn_worker(engine, cli.mode.clone(), rx);

@@ -479,7 +479,9 @@ backend = "default"
 [modem]
 # Default modulation mode used when no --mode flag is provided.
 # Available: BPSK31, BPSK63, BPSK100, BPSK250, QPSK125, QPSK250, QPSK500,
-#            QPSK1000, 8PSK500, 8PSK1000, FSK4-ACK
+#            QPSK1000, 8PSK500, 8PSK1000, 64QAM500, 64QAM1000, 64QAM2000-RRC,
+#            OFDM16, OFDM52, SCFDMA16, SCFDMA52, SCFDMA52-16QAM,
+#            SCFDMA52-64QAM, SCFDMA52-64QAM-P4, FSK4-ACK
 mode = "BPSK250"
 # PTT backend: none | rts | dtr | vox | rigctld
 ptt_backend = "none"
