@@ -665,7 +665,9 @@ impl ModemEngine {
         // Log transmission metadata for regulatory compliance
         let tx_seq = self.sequence.wrapping_sub(1);
         let metadata = TxMetadata::new(&self.callsign, mode, self.max_power_watts, tx_seq);
-        self.tx_session_log.log_frame(metadata.clone());
+        self.tx_session_log
+            .log_frame(metadata.clone())
+            .map_err(|err| ModemError::Configuration(err.to_string()))?;
         debug!("logged TX metadata: {}", metadata.to_log_line());
 
         let _ = self.event_tx.send(EngineEvent::FrameTransmitted {

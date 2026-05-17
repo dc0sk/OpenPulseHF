@@ -10,6 +10,14 @@
 /// from the wire frame itself.
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
+use thiserror::Error;
+
+/// Errors produced while appending transmission metadata to a session log.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum TxSessionLogError {
+    #[error("tx session log station mismatch: log station '{expected}', frame station '{got}'")]
+    StationMismatch { expected: String, got: String },
+}
 
 /// Metadata associated with a single transmitted frame.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -93,8 +101,15 @@ impl TxSessionLog {
     }
 
     /// Append a transmitted frame.
-    pub fn log_frame(&mut self, metadata: TxMetadata) {
+    pub fn log_frame(&mut self, metadata: TxMetadata) -> Result<(), TxSessionLogError> {
+        if metadata.station_id != self.station_id {
+            return Err(TxSessionLogError::StationMismatch {
+                expected: self.station_id.clone(),
+                got: metadata.station_id,
+            });
+        }
         self.frames.push(metadata);
+        Ok(())
     }
 
     /// Total frames transmitted in this session.
@@ -152,11 +167,14 @@ mod tests {
         let mut log = TxSessionLog::new("G4XYZ");
         assert_eq!(log.frame_count(), 0);
 
-        log.log_frame(TxMetadata::with_timestamp("G4XYZ", 1000, "BPSK31", 25.0, 1));
-        log.log_frame(TxMetadata::with_timestamp("G4XYZ", 2000, "BPSK31", 25.0, 2));
+        log.log_frame(TxMetadata::with_timestamp("G4XYZ", 1000, "BPSK31", 25.0, 1))
+            .expect("matching station should append");
+        log.log_frame(TxMetadata::with_timestamp("G4XYZ", 2000, "BPSK31", 25.0, 2))
+            .expect("matching station should append");
         log.log_frame(TxMetadata::with_timestamp(
             "G4XYZ", 3000, "QPSK250", 50.0, 3,
-        ));
+        ))
+        .expect("matching station should append");
 
         assert_eq!(log.frame_count(), 3);
         assert_eq!(log.get_by_sequence(2).unwrap().mode, "BPSK31");
@@ -172,11 +190,32 @@ mod tests {
         let mut log = TxSessionLog::new("N0CALL");
         log.log_frame(TxMetadata::with_timestamp(
             "N0CALL", 1000, "FSK4-ACK", 10.0, 99,
-        ));
+        ))
+        .expect("matching station should append");
 
         let json = log.to_json_string().unwrap();
         assert!(json.contains("N0CALL"));
         assert!(json.contains("1000"));
         assert!(json.contains("FSK4-ACK"));
+    }
+
+    #[test]
+    fn test_tx_session_log_rejects_cross_station_frame() {
+        let mut log = TxSessionLog::new("W5ABC");
+
+        let err = log
+            .log_frame(TxMetadata::with_timestamp(
+                "K7XYZ", 1000, "BPSK250", 50.0, 1,
+            ))
+            .expect_err("cross-station frame should be rejected");
+
+        assert_eq!(
+            err,
+            TxSessionLogError::StationMismatch {
+                expected: "W5ABC".to_string(),
+                got: "K7XYZ".to_string(),
+            }
+        );
+        assert_eq!(log.frame_count(), 0);
     }
 }
