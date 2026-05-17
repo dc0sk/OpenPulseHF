@@ -126,9 +126,9 @@ fn frame_success_rate_watterson_hard(
     let mut ok = 0usize;
     for frame in 0..frames {
         let seed = 0x7100_0000 + frame as u64;
-        let cfg = config_for_seed(seed);
-        let mut ch =
-            WattersonChannel::new(cfg).expect("failed to construct Watterson channel profile");
+        let channel_cfg = config_for_seed(seed);
+        let mut ch = WattersonChannel::new(channel_cfg)
+            .expect("failed to construct Watterson channel profile");
         let faded = ch.apply(samples);
         let got = plugin.demodulate(&faded, &cfg(mode)).unwrap();
         if got == payload {
