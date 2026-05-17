@@ -15,7 +15,7 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("OpenPulse Panel")
-            .with_inner_size([900.0, 600.0]),
+            .with_inner_size([1500.0, 600.0]),
         ..Default::default()
     };
 
