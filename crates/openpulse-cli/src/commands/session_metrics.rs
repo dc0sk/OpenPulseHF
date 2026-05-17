@@ -94,7 +94,7 @@ pub fn run(engine: &ModemEngine, opts: &DiagnosticOptions) -> Result<i32> {
         None
     };
 
-    let throughput_bps = if elapsed_ms > 0 {
+    let throughput_bps_upper_bound = if elapsed_ms > 0 {
         let bits = transfer_ok as f64 * BYTES_PER_SUCCESS_FRAME_PROXY * 8.0;
         Some(bits / (elapsed_ms as f64 / 1000.0))
     } else {
@@ -125,7 +125,9 @@ pub fn run(engine: &ModemEngine, opts: &DiagnosticOptions) -> Result<i32> {
                 "elapsed_ms": elapsed_ms,
             },
             "metrics": {
-                "throughput_bps": throughput_bps,
+                "throughput_bps": throughput_bps_upper_bound,
+                "throughput_bps_upper_bound": throughput_bps_upper_bound,
+                "throughput_bps_note": "223-byte successful-frame proxy; actual payload throughput may be lower",
                 "fer": fer,
                 "latency_ms": latency_ms,
                 "snr_db_estimate": snr_db_estimate,

@@ -18,6 +18,9 @@ last_updated: 2026-05-16
   uses Region 1 allocations as a conservative proxy.
 - TX compliance logs now reject cross-station frame metadata instead of
   silently mixing different callsigns into a single session log.
+- Session metrics now publish throughput as an explicit upper-bound proxy and
+  include a dedicated note field to avoid interpreting it as exact payload
+  throughput.
 
 - Added BL-TP-7 SC-FDMA pilot-density Doppler review coverage in
   `plugins/scfdma/tests/pilot_density_review.rs`, validating dense-pilot
