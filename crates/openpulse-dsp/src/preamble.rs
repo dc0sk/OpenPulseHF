@@ -214,6 +214,12 @@ impl PreambleDetector {
     /// - phase_estimate: 0 if positive, π if negative
     pub fn correlate_bpsk(&mut self, received: &[f32]) -> (f32, f32) {
         if received.len() != self.reference.len() {
+            tracing::debug!(
+                preamble_type = ?self.preamble_type,
+                expected_len = self.reference.len(),
+                received_len = received.len(),
+                "preamble correlation skipped due to length mismatch"
+            );
             return (0.0, 0.0);
         }
 
@@ -340,6 +346,16 @@ mod tests {
         let (mag2, phase2) = detector.correlate_bpsk(&inverted);
         assert!(mag2 > 0.9); // Magnitude should still be high
         assert!((phase2 - PI).abs() < 0.1); // Phase should be π (flipped)
+    }
+
+    #[test]
+    fn test_preamble_detector_length_mismatch_does_not_update_history() {
+        let mut detector = PreambleDetector::new(PreambleType::Barker11, 10);
+
+        let (mag, phase) = detector.correlate_bpsk(&[1.0, -1.0, 1.0]);
+
+        assert_eq!((mag, phase), (0.0, 0.0));
+        assert_eq!(detector.correlation_stats(), None);
     }
 
     #[test]
