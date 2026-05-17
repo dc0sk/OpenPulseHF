@@ -20,6 +20,12 @@ async fn main() {
         cfg.station.callsign.clone(),
         cfg.station.grid_square.clone(),
     );
+    let initial_qsy_enabled = cfg.qsy.enabled;
+    let initial_bandplan_mode = if cfg.qsy.bandplan_awareness_enabled {
+        cfg.qsy.bandplan_mode.clone()
+    } else {
+        "unrestricted".to_string()
+    };
 
     let audio = Box::new(LoopbackBackend::default());
     let engine = ModemEngine::new(audio);
@@ -27,9 +33,17 @@ async fn main() {
     let tcp_bind: std::net::SocketAddr = "127.0.0.1:9000".parse().unwrap();
     let ws_bind: std::net::SocketAddr = "127.0.0.1:9001".parse().unwrap();
 
-    let mut handle = ControlServer::spawn(tcp_bind, &engine, mode, station_id, None)
-        .await
-        .expect("failed to bind TCP control port");
+    let mut handle = ControlServer::spawn(
+        tcp_bind,
+        &engine,
+        mode,
+        station_id,
+        initial_qsy_enabled,
+        initial_bandplan_mode,
+        None,
+    )
+    .await
+    .expect("failed to bind TCP control port");
 
     tracing::info!("openpulse-server TCP control port listening on {tcp_bind}");
 
@@ -40,6 +54,8 @@ async fn main() {
             cmd_tx: handle.command_tx.clone(),
             active_mode: handle.active_mode.clone(),
             tx_attenuation_db: handle.tx_attenuation_db.clone(),
+            qsy_enabled: handle.qsy_enabled.clone(),
+            bandplan_mode: handle.bandplan_mode.clone(),
             spectrum_tap: handle.spectrum_tap.clone(),
             station_id: handle.station_id.clone(),
             message_store: handle.message_store.clone(),

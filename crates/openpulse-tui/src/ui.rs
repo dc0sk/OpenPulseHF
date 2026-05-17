@@ -23,12 +23,13 @@ pub fn render(f: &mut Frame, app: &App) {
         return;
     }
 
-    // Outer split: top panel row + transition log + help bar.
+    // Outer split: top panel row + transition log + QSY status + help bar.
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(7),
             Constraint::Min(4),
+            Constraint::Length(1),
             Constraint::Length(1),
         ])
         .split(area);
@@ -42,7 +43,8 @@ pub fn render(f: &mut Frame, app: &App) {
     render_hpx_state(f, app, top_cols[0]);
     render_meters(f, app, top_cols[1]);
     render_transitions(f, app, rows[1]);
-    render_help(f, rows[2]);
+    render_qsy_status(f, app, rows[2]);
+    render_help(f, rows[3]);
 }
 
 fn render_hpx_state(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
@@ -182,9 +184,37 @@ fn render_transitions(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 }
 
 fn render_help(f: &mut Frame, area: ratatui::layout::Rect) {
-    let help = Paragraph::new("[q] Quit   [p] Pause/Resume   [↑↓] Scroll transitions")
-        .style(Style::default().fg(Color::DarkGray));
+    let help = Paragraph::new(
+        "[q] Quit   [p] Pause/Resume   [↑↓] Scroll   [Q] Toggle QSY   [b] Cycle bandplan",
+    )
+    .style(Style::default().fg(Color::DarkGray));
     f.render_widget(help, area);
+}
+
+fn render_qsy_status(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let qsy_str = if app.qsy_enabled { "ON" } else { "OFF" };
+    let qsy_color = if app.qsy_enabled {
+        Color::Green
+    } else {
+        Color::DarkGray
+    };
+    let bp_label = match app.bandplan_mode.as_str() {
+        "ham-iaru-r1" => "IARU R1",
+        "ham-iaru-r2" => "IARU R2",
+        "ham-iaru-r3" => "IARU R3",
+        _ => "Unrestricted",
+    };
+    let line = Line::from(vec![
+        Span::raw("QSY: "),
+        Span::styled(qsy_str, Style::default().fg(qsy_color)),
+        Span::raw("  Bandplan: "),
+        Span::styled(bp_label, Style::default().fg(Color::Cyan)),
+        Span::styled(
+            "  (restart required to take effect)",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
+    f.render_widget(Paragraph::new(line), area);
 }
 
 fn state_color(state: HpxState) -> Color {

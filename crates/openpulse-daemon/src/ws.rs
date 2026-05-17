@@ -19,7 +19,8 @@ use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 use crate::protocol::{self, MessageSummary};
 use crate::{
-    SharedAttenuation, SharedMessageStore, SharedMode, SharedStationId, SpectrumTap, MAX_MESSAGES,
+    SharedAttenuation, SharedBandplanMode, SharedMessageStore, SharedMode, SharedQsyEnabled,
+    SharedStationId, SpectrumTap, MAX_MESSAGES,
 };
 
 /// Shared state passed from the TCP control server to the WebSocket endpoint.
@@ -28,6 +29,8 @@ pub struct WsShared {
     pub cmd_tx: mpsc::Sender<ControlCommand>,
     pub active_mode: SharedMode,
     pub tx_attenuation_db: SharedAttenuation,
+    pub qsy_enabled: SharedQsyEnabled,
+    pub bandplan_mode: SharedBandplanMode,
     pub spectrum_tap: SpectrumTap,
     /// Station identity (callsign, grid_square) loaded from config at startup.
     pub station_id: SharedStationId,
@@ -51,6 +54,8 @@ pub async fn spawn_ws(
         cmd_tx,
         active_mode,
         tx_attenuation_db,
+        qsy_enabled,
+        bandplan_mode,
         spectrum_tap,
         station_id,
         message_store,
@@ -71,6 +76,8 @@ pub async fn spawn_ws(
                         cmd_tx: cmd_tx.clone(),
                         active_mode: Arc::clone(&active_mode),
                         tx_attenuation_db: Arc::clone(&tx_attenuation_db),
+                        qsy_enabled: Arc::clone(&qsy_enabled),
+                        bandplan_mode: Arc::clone(&bandplan_mode),
                         spectrum_tap: Arc::clone(&spectrum_tap),
                         station_id: Arc::clone(&station_id),
                         message_store: Arc::clone(&message_store),
@@ -91,6 +98,8 @@ struct WsClientCtx {
     cmd_tx: mpsc::Sender<ControlCommand>,
     active_mode: SharedMode,
     tx_attenuation_db: SharedAttenuation,
+    qsy_enabled: SharedQsyEnabled,
+    bandplan_mode: SharedBandplanMode,
     spectrum_tap: SpectrumTap,
     station_id: SharedStationId,
     message_store: SharedMessageStore,
@@ -103,6 +112,8 @@ async fn handle_ws_client(stream: TcpStream, ctx: WsClientCtx) {
         cmd_tx,
         active_mode,
         tx_attenuation_db,
+        qsy_enabled,
+        bandplan_mode,
         spectrum_tap,
         station_id,
         message_store,
@@ -196,17 +207,23 @@ async fn handle_ws_client(stream: TcpStream, ctx: WsClientCtx) {
                             }
                         } else if matches!(cmd, ControlCommand::GetConfig) {
                             let (cs, gs) = station_id.lock().await.clone();
-                            // Hold both locks simultaneously for a consistent snapshot.
+                            // Hold all four locks simultaneously for a consistent snapshot.
                             let mode_guard = active_mode.lock().await;
                             let atten_guard = tx_attenuation_db.lock().await;
+                            let qsy_guard = qsy_enabled.lock().await;
+                            let bp_guard = bandplan_mode.lock().await;
                             let config = protocol::DaemonConfig {
                                 callsign: cs,
                                 grid_square: gs,
                                 mode: mode_guard.clone(),
                                 tx_attenuation_db: *atten_guard,
+                                qsy_enabled: *qsy_guard,
+                                bandplan_mode: bp_guard.clone(),
                             };
                             drop(mode_guard);
                             drop(atten_guard);
+                            drop(qsy_guard);
+                            drop(bp_guard);
                             let ev = ControlEvent::ConfigData { config };
                             if let Ok(s) = serde_json::to_string(&ev) {
                                 if ws_tx.send(Message::Text(s)).await.is_err() {
@@ -340,6 +357,8 @@ async fn handle_ws_client(stream: TcpStream, ctx: WsClientCtx) {
                                 &cmd_tx,
                                 &active_mode,
                                 &tx_attenuation_db,
+                                &qsy_enabled,
+                                &bandplan_mode,
                             )
                             .await;
                             if let Ok(s) = serde_json::to_string(&resp) {

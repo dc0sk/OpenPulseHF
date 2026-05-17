@@ -35,6 +35,10 @@ pub struct App {
     pub scroll_offset: usize,
     /// Set when the background worker exits with a fatal error.
     pub fatal_error: Option<String>,
+    /// QSY frequency-agility enabled flag (editable; restart required).
+    pub qsy_enabled: bool,
+    /// Active bandplan mode string (editable; restart required).
+    pub bandplan_mode: String,
 }
 
 impl Default for App {
@@ -54,6 +58,8 @@ impl Default for App {
             paused: false,
             scroll_offset: 0,
             fatal_error: None,
+            qsy_enabled: false,
+            bandplan_mode: "unrestricted".to_string(),
         }
     }
 }

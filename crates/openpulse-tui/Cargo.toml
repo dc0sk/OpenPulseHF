@@ -18,6 +18,7 @@ cpal-backend = ["openpulse-audio/cpal-backend"]
 openpulse-modem  = { workspace = true }
 openpulse-core   = { workspace = true }
 openpulse-audio  = { workspace = true, default-features = false }
+openpulse-config = { workspace = true }
 bpsk-plugin      = { workspace = true }
 fsk4-plugin      = { workspace = true }
 qpsk-plugin      = { workspace = true }

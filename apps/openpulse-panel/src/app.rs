@@ -35,6 +35,21 @@ const MODES: &[&str] = &[
     "FSK4-ACK",
 ];
 
+const BANDPLAN_OPTIONS: &[(&str, &str)] = &[
+    ("unrestricted", "Unrestricted"),
+    ("ham-iaru-r1", "IARU Region 1"),
+    ("ham-iaru-r2", "IARU Region 2"),
+    ("ham-iaru-r3", "IARU Region 3"),
+];
+
+fn bandplan_label(mode: &str) -> &'static str {
+    BANDPLAN_OPTIONS
+        .iter()
+        .find(|(k, _)| *k == mode)
+        .map(|(_, l)| *l)
+        .unwrap_or("Unrestricted")
+}
+
 pub struct PanelApp {
     /// Shared state read on every repaint.
     shared: Arc<Mutex<PanelState>>,
@@ -110,6 +125,8 @@ impl PanelApp {
                 grid_square: String::new(),
                 mode: "BPSK250".into(),
                 tx_attenuation_db: 0.0,
+                qsy_enabled: false,
+                bandplan_mode: "unrestricted".into(),
             },
             config_fetch_pending: false,
             messages_open: false,
@@ -603,6 +620,24 @@ impl eframe::App for PanelApp {
                                 .suffix(" dB")
                                 .fixed_decimals(1),
                             );
+                            ui.end_row();
+
+                            ui.label("QSY:");
+                            ui.checkbox(&mut self.config_draft.qsy_enabled, "Enabled");
+                            ui.end_row();
+
+                            ui.label("Bandplan:");
+                            egui::ComboBox::from_id_salt("cfg_bandplan")
+                                .selected_text(bandplan_label(&self.config_draft.bandplan_mode))
+                                .show_ui(ui, |ui| {
+                                    for &(key, label) in BANDPLAN_OPTIONS {
+                                        ui.selectable_value(
+                                            &mut self.config_draft.bandplan_mode,
+                                            key.into(),
+                                            label,
+                                        );
+                                    }
+                                });
                             ui.end_row();
                         });
 
