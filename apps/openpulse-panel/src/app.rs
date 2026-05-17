@@ -582,8 +582,9 @@ impl eframe::App for PanelApp {
 
         if self.config_open {
             egui::Window::new("Daemon Config")
-                .resizable(false)
+                .resizable(true)
                 .collapsible(false)
+                .default_size([320.0, 220.0])
                 .show(ctx, |ui| {
                     egui::Grid::new("cfg_grid")
                         .num_columns(2)
