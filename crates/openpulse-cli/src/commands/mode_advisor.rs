@@ -30,16 +30,8 @@ fn speed_level_label(level: SpeedLevel) -> &'static str {
 
 fn recommend_hf_level(profile: &SessionProfile, snr_db: f32) -> (SpeedLevel, String) {
     let mut selected = SpeedLevel::Sl2;
-    let levels = [
-        SpeedLevel::Sl2,
-        SpeedLevel::Sl3,
-        SpeedLevel::Sl4,
-        SpeedLevel::Sl5,
-        SpeedLevel::Sl6,
-        SpeedLevel::Sl7,
-    ];
 
-    for level in levels {
+    for level in profile.defined_levels() {
         let Some(floor_db) = profile.snr_floor_for_level(level) else {
             continue;
         };

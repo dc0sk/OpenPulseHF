@@ -73,6 +73,20 @@ impl SessionProfile {
         self.ack_up_requires_snr_candidate_at
     }
 
+    /// Return all speed levels that have a mode string defined in this profile, in
+    /// ascending order.  Useful for building profile-driven recommendation tables
+    /// without hard-coding a fixed level range.
+    pub fn defined_levels(&self) -> Vec<SpeedLevel> {
+        use SpeedLevel::*;
+        [
+            Sl1, Sl2, Sl3, Sl4, Sl5, Sl6, Sl7, Sl8, Sl9, Sl10, Sl11, Sl12, Sl13, Sl14, Sl15, Sl16,
+            Sl17, Sl18, Sl19, Sl20,
+        ]
+        .into_iter()
+        .filter(|&l| self.modes[l as usize].is_some())
+        .collect()
+    }
+
     /// HPX500 profile: 500 Hz class, BPSK/QPSK rate ladder (SL2–SL6).
     ///
     /// | SL  | Mode     |
