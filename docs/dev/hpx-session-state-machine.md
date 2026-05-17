@@ -37,7 +37,7 @@ This specification is independent of underlying modulation plugins, audio backen
 - Conformance test scenarios
 
 ### Out of Scope
-- Modulation/coding profile definitions (see `docs/high-performance-mode.md`)
+- Modulation/coding profile definitions (see `docs/dev/high-performance-mode.md`)
 - Channel estimation algorithms (implementation-specific)
 - ARQ/FEC codec details (plugin-specific)
 - Audio backend specifics
@@ -433,7 +433,7 @@ But **must** adhere to:
 
 ## References
 
-- [OpenPulse High-Performance Mode](docs/high-performance-mode.md)
-- [PKI Trust Policy](docs/pki-tooling-trust-policy.md)
-- [Modem Engine Architecture](docs/architecture.md)
+- [OpenPulse High-Performance Mode](high-performance-mode.md)
+- [PKI Trust Policy](pki-tooling-trust-policy.md)
+- [Modem Engine Architecture](architecture.md)
 
