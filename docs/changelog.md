@@ -12,6 +12,7 @@ last_updated: 2026-05-16
 - **Bandplan Guardrails**: Added missing occupied-bandwidth coverage for active `-RRC` waveform variants and `SCFDMA52-64QAM-P4`, preventing valid region-aware transmissions from being rejected as `UnknownOperatingMode`.
 - **Bandplan Guardrails**: `BandplanPolicy::default()` now uses `HamIaruRegion1` instead of the deprecated `HamIaru` variant.
 - **Bandplan Guardrails**: Region 3 validation now exposes an explicit warning when Region 1 allocations are being used as a conservative proxy.
+- **Regulatory Logging**: `TxSessionLog::log_frame` now rejects cross-station metadata instead of silently mixing frames from different callsigns into the same compliance log.
 
 - **Waveform Validation**: Added BL-TP-7 pilot-density Doppler review test (`plugins/scfdma/tests/pilot_density_review.rs`) comparing sparse (`SCFDMA52-64QAM`) and dense (`SCFDMA52-64QAM-P4`) pilot profiles under deterministic Watterson low/high Doppler conditions.
 - **CLI/UX**: Added `--help` support to on-air orchestration scripts (`onair-preflight.sh`, `run-onair-tests.sh`, and `onair-bundle-evidence.sh`) plus usage output on unknown flags.

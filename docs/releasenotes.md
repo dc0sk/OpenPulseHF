@@ -16,6 +16,8 @@ last_updated: 2026-05-16
   deprecated `HamIaru` ruleset variant.
 - Region 3 bandplan validation now exposes an explicit warning path when it
   uses Region 1 allocations as a conservative proxy.
+- TX compliance logs now reject cross-station frame metadata instead of
+  silently mixing different callsigns into a single session log.
 
 - Added BL-TP-7 SC-FDMA pilot-density Doppler review coverage in
   `plugins/scfdma/tests/pilot_density_review.rs`, validating dense-pilot
