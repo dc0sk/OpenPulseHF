@@ -277,7 +277,7 @@ impl eframe::App for PanelApp {
 
         // ── Toolbar ──────────────────────────────────────────────────────────
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 // Transport picker — TCP only available on native; WASM always uses WS.
                 #[cfg(not(target_arch = "wasm32"))]
                 egui::ComboBox::from_id_salt("transport")
