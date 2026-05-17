@@ -66,6 +66,10 @@ impl ModulationPlugin for Qam64Plugin {
     ) -> Result<Vec<f32>, ModemError> {
         demodulate::qam64_demodulate_soft(samples, config)
     }
+
+    fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+        demodulate::afc_estimate_hz(samples, config)
+    }
 }
 
 fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
@@ -134,5 +138,34 @@ mod tests {
         assert!(modes.iter().any(|m| m == "64QAM500"));
         assert!(modes.iter().any(|m| m == "64QAM1000"));
         assert!(modes.iter().any(|m| m == "64QAM2000-RRC"));
+    }
+
+    #[test]
+    fn afc_estimate_near_zero_on_carrier_match() {
+        let plugin = Qam64Plugin::new();
+        let tx_cfg = cfg("64QAM1000");
+        let rx_cfg = tx_cfg.clone();
+        let samples = plugin.modulate(b"afc qam64", &tx_cfg).expect("modulate");
+        let est = plugin
+            .estimate_afc_hz(&samples, &rx_cfg)
+            .expect("afc estimate");
+        assert!(est.abs() < 3.0, "expected near-zero AFC, got {est:.2} Hz");
+    }
+
+    #[test]
+    fn afc_estimate_tracks_positive_offset() {
+        let plugin = Qam64Plugin::new();
+        let mut tx_cfg = cfg("64QAM1000");
+        tx_cfg.center_frequency = 1520.0;
+        let mut rx_cfg = cfg("64QAM1000");
+        rx_cfg.center_frequency = 1500.0;
+        let samples = plugin.modulate(b"afc qam64", &tx_cfg).expect("modulate");
+        let est = plugin
+            .estimate_afc_hz(&samples, &rx_cfg)
+            .expect("afc estimate");
+        assert!(
+            (est - 20.0).abs() < 6.0,
+            "expected about +20 Hz AFC, got {est:.2} Hz"
+        );
     }
 }

@@ -297,5 +297,8 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
             st.open_message_id = Some(id);
             st.open_message_body = Some(body);
         }
+        ControlEvent::CommandError { command, reason } => {
+            st.push_log(format!("CMD ERROR {command}: {reason}"));
+        }
     }
 }

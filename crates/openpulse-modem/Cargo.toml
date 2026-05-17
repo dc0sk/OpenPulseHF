@@ -26,3 +26,4 @@ psk8-plugin = { workspace = true }
 fsk4-plugin = { workspace = true }
 scfdma-plugin = { workspace = true }
 qam64-plugin = { workspace = true }
+ofdm-plugin = { workspace = true }

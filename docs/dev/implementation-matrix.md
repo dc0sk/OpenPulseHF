@@ -29,6 +29,7 @@ surface and the strongest integration-test evidence currently in-tree.
 | AFC loop and correction | `plugins/bpsk/src/demodulate.rs`, `crates/openpulse-modem/src/engine.rs` | `crates/openpulse-modem/tests/afc_correction.rs` | Implemented |
 | DCD + CSMA channel access | `crates/openpulse-core/src/dcd.rs`, `crates/openpulse-modem/src/engine.rs` | `crates/openpulse-modem/tests/csma_loopback.rs` | Implemented |
 | RS/Interleaver/StrongRS/ShortRS/Concat/SoftConcat | `crates/openpulse-core/src/fec.rs`, `crates/openpulse-core/src/soft_viterbi.rs` | `crates/openpulse-modem/tests/fec_loopback.rs` | Implemented |
+| Window-ARQ selective retry + range-limited combine | `crates/openpulse-core/src/fec.rs`, `crates/openpulse-modem/src/engine.rs` | `crates/openpulse-modem/tests/window_arq_watterson.rs`, `crates/openpulse-modem/tests/window_arq_multimode.rs`, `crates/openpulse-modem/tests/window_arq_selective_engine.rs` | Implemented |
 | LDPC iterative decoder path | `crates/openpulse-core/src/ldpc.rs`, `crates/openpulse-modem/src/engine.rs` | `crates/openpulse-modem/tests/ldpc_engine_loopback.rs` | Implemented |
 
 ## Services, interop, and tooling
@@ -41,7 +42,7 @@ surface and the strongest integration-test evidence currently in-tree.
 | B2F driver end-to-end loopback | `crates/openpulse-b2f-driver` | `crates/openpulse-b2f-driver/tests/e2e_loopback.rs` | Implemented |
 | QSY frequency agility | `crates/openpulse-qsy` | `crates/openpulse-qsy/tests/qsy_session.rs` | Implemented |
 | Mesh relay and query propagation | `crates/openpulse-mesh`, `crates/openpulse-core/src/relay.rs`, `crates/openpulse-core/src/query_propagation.rs` | relay/query integration tests in `crates/openpulse-core/tests/` and mesh integration tests | Implemented |
-| Daemon control server + panel/TUI control surfaces | `crates/openpulse-daemon`, `apps/openpulse-panel`, `crates/openpulse-tui` | `crates/openpulse-daemon/tests/control_port.rs`, TUI/panel unit coverage | Implemented |
+| Daemon control server + panel/TUI control surfaces | `crates/openpulse-daemon`, `apps/openpulse-panel`, `crates/openpulse-tui` | `crates/openpulse-daemon/tests/control_port.rs`, command-apply unit tests in `crates/openpulse-daemon/src/lib.rs`, TUI/panel unit coverage | Implemented |
 | FreeDV authenticated voice shim | `crates/openpulse-freedv-auth` | `crates/openpulse-freedv-auth/tests/freedv_auth_integration.rs` | Implemented |
 
 ## Non-code release/compliance gates

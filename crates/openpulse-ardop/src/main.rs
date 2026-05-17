@@ -89,8 +89,11 @@ async fn main() -> anyhow::Result<()> {
     let mut engine = ModemEngine::new(audio);
     engine.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))?;
     engine.register_plugin(Box::new(fsk4_plugin::Fsk4Plugin::new()))?;
+    engine.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))?;
     engine.register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))?;
     engine.register_plugin(Box::new(psk8_plugin::Psk8Plugin::new()))?;
+    engine.register_plugin(Box::new(qam64_plugin::Qam64Plugin::new()))?;
+    engine.register_plugin(Box::new(scfdma_plugin::ScFdmaPlugin::new()))?;
 
     let config = ArdopConfig {
         bind_addr: cfg.ardop.bind_addr.clone(),

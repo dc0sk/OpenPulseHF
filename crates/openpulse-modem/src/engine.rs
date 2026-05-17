@@ -12,8 +12,9 @@ use openpulse_core::conv::ConvCodec;
 use openpulse_core::dcd::DcdState;
 use openpulse_core::error::{ModemError, PluginError};
 use openpulse_core::fec::{
-    combine_llrs_weighted, FecCodec, FecMode, Interleaver, ShortFecCodec, SoftCombiner,
-    DEFAULT_INTERLEAVER_DEPTH,
+    apply_window_retransmit, combine_llrs_weighted, combine_llrs_weighted_in_ranges,
+    encode_window_retransmit, FecCodec, FecMode, Interleaver, ShortFecCodec, SoftCombiner,
+    WindowArqFeedback, DEFAULT_INTERLEAVER_DEPTH,
 };
 use openpulse_core::frame::Frame;
 use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
@@ -1618,6 +1619,220 @@ impl ModemEngine {
 
         let rs_decoded = FecCodec::new().decode(&hard_wire.bytes)?;
 
+        let frame = self.stage_decode_frame(&WirePayload { bytes: rs_decoded })?;
+        let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
+        let _ = self.event_tx.send(EngineEvent::FrameReceived {
+            mode: mode.to_string(),
+            bytes: frame.payload.len(),
+        });
+        Ok(frame.payload)
+    }
+
+    /// Receive via Window-ARQ range-limited weighted LLR combining.
+    ///
+    /// Captures `n_frames` receive attempts, combines soft LLRs only inside
+    /// `feedback.ranges`, then takes hard decisions and RS-decodes the combined
+    /// protected frame. Outside selected ranges, the first attempt is preserved.
+    ///
+    /// This path is mode-agnostic and works for any registered plugin that
+    /// implements `demodulate_soft`.
+    pub fn receive_with_window_arq(
+        &mut self,
+        mode: &str,
+        device: Option<&str>,
+        n_frames: usize,
+        feedback: &WindowArqFeedback,
+    ) -> Result<Vec<u8>, ModemError> {
+        if n_frames == 0 {
+            return Err(ModemError::Frame(
+                "window-arq combining: n_frames must be >= 1".to_string(),
+            ));
+        }
+
+        let mod_cfg = ModulationConfig {
+            mode: mode.to_string(),
+            center_frequency: self.center_frequency + self.afc_correction_hz,
+            ..ModulationConfig::default()
+        };
+
+        let mut attempts: Vec<(Vec<f32>, f32)> = Vec::with_capacity(n_frames);
+
+        for i in 0..n_frames {
+            let samples = self.stage_capture_input(device)?;
+            let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+
+            let prev_busy = self.dcd.is_busy();
+            self.dcd.update(&samples.samples);
+            if self.dcd.is_busy() != prev_busy {
+                let _ = self.event_tx.send(EngineEvent::DcdChange {
+                    busy: self.dcd.is_busy(),
+                    energy: self.dcd.energy(),
+                });
+            }
+
+            if i == 0 {
+                self.update_afc_estimate(mode, &samples.samples);
+                if let Some(hz) = self.last_afc_offset_hz {
+                    let _ = self.event_tx.send(EngineEvent::AfcUpdate {
+                        offset_hz: hz,
+                        correction_hz: self.afc_correction_hz,
+                        mode: mode.to_string(),
+                    });
+                }
+            }
+
+            let llrs = {
+                let plugin = self
+                    .plugins
+                    .get(mode)
+                    .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+                plugin.demodulate_soft(&samples.samples, &mod_cfg)?
+            };
+
+            let mean_abs = if llrs.is_empty() {
+                1.0
+            } else {
+                llrs.iter().map(|v| v.abs()).sum::<f32>() / llrs.len() as f32
+            };
+            let noise_var = 1.0 / mean_abs.max(1e-6);
+            attempts.push((llrs, noise_var));
+        }
+
+        let attempt_refs: Vec<(&[f32], f32)> = attempts
+            .iter()
+            .map(|(llrs, nv)| (llrs.as_slice(), *nv))
+            .collect();
+        let combined_llrs = combine_llrs_weighted_in_ranges(&attempt_refs, feedback);
+
+        let hard_bytes: Vec<u8> = combined_llrs
+            .chunks(8)
+            .map(|chunk| {
+                chunk.iter().enumerate().fold(0u8, |acc, (i, &llr)| {
+                    acc | ((llr.is_sign_negative() as u8) << i)
+                })
+            })
+            .collect();
+
+        let hard_wire = WirePayload { bytes: hard_bytes };
+        let hard_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, hard_wire)?;
+
+        let rs_decoded = FecCodec::new().decode(&hard_wire.bytes)?;
+        let frame = self.stage_decode_frame(&WirePayload { bytes: rs_decoded })?;
+        let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
+        let _ = self.event_tx.send(EngineEvent::FrameReceived {
+            mode: mode.to_string(),
+            bytes: frame.payload.len(),
+        });
+        Ok(frame.payload)
+    }
+
+    /// Build and transmit a selective Window-ARQ retransmit packet.
+    ///
+    /// The sender provides the original RS-protected frame bytes and the
+    /// receiver-provided `feedback` failed ranges. Only failed byte windows are
+    /// emitted, reducing retry airtime compared to full-frame retransmit.
+    ///
+    /// Returns the encoded retransmit packet bytes that were emitted.
+    pub fn transmit_window_retransmit_packet(
+        &mut self,
+        protected_frame: &[u8],
+        feedback: &WindowArqFeedback,
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<Vec<u8>, ModemError> {
+        self.csma_check()?;
+
+        let packet = encode_window_retransmit(protected_frame, feedback)?;
+        let wire = WirePayload {
+            bytes: packet.clone(),
+        };
+        let wire = self.route_wire_stage(PipelineStage::EncodeModulate, wire)?;
+
+        let samples = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_modulate_payload(plugin, mode, &wire)?
+        };
+        let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
+        self.stage_emit_output(device, &samples)?;
+
+        let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
+            mode: mode.to_string(),
+            bytes: wire.bytes.len(),
+        });
+        Ok(packet)
+    }
+
+    /// Receive one selective Window-ARQ retransmit packet for `mode`.
+    ///
+    /// This method demodulates raw retransmit bytes and does not attempt frame
+    /// decode. The returned packet is consumed by
+    /// [`receive_with_window_arq_selective`](Self::receive_with_window_arq_selective)
+    /// or call-site patch logic.
+    pub fn receive_window_retransmit_packet(
+        &mut self,
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<Vec<u8>, ModemError> {
+        let samples = self.stage_capture_input(device)?;
+        let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+
+        let prev_busy = self.dcd.is_busy();
+        self.dcd.update(&samples.samples);
+        if self.dcd.is_busy() != prev_busy {
+            let _ = self.event_tx.send(EngineEvent::DcdChange {
+                busy: self.dcd.is_busy(),
+                energy: self.dcd.energy(),
+            });
+        }
+
+        let wire = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_demodulate_payload(plugin, mode, &samples)?
+        };
+        let wire = self.route_wire_stage(PipelineStage::DemodulateDecode, wire)?;
+
+        self.update_afc_estimate(mode, &samples.samples);
+        if let Some(hz) = self.last_afc_offset_hz {
+            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
+                offset_hz: hz,
+                correction_hz: self.afc_correction_hz,
+                mode: mode.to_string(),
+            });
+        }
+
+        Ok(wire.bytes)
+    }
+
+    /// Full selective Window-ARQ receive path.
+    ///
+    /// Applies `n_packets` retransmit packets to `protected_frame` using
+    /// `apply_window_retransmit`, then RS-decodes and frame-decodes the repaired
+    /// buffer.
+    pub fn receive_with_window_arq_selective(
+        &mut self,
+        mode: &str,
+        device: Option<&str>,
+        protected_frame: &mut [u8],
+        n_packets: usize,
+    ) -> Result<Vec<u8>, ModemError> {
+        if n_packets == 0 {
+            return Err(ModemError::Frame(
+                "window-arq selective: n_packets must be >= 1".to_string(),
+            ));
+        }
+
+        for _ in 0..n_packets {
+            let packet = self.receive_window_retransmit_packet(mode, device)?;
+            apply_window_retransmit(protected_frame, &packet)?;
+        }
+
+        let rs_decoded = FecCodec::new().decode(protected_frame)?;
         let frame = self.stage_decode_frame(&WirePayload { bytes: rs_decoded })?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         let _ = self.event_tx.send(EngineEvent::FrameReceived {

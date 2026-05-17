@@ -158,6 +158,13 @@ pub enum ControlEvent {
         subject: String,
         body: String,
     },
+    /// Structured command execution failure emitted by daemon runtime handlers.
+    CommandError {
+        /// Command name in snake_case (e.g. `"send_message"`).
+        command: String,
+        /// Human-readable failure detail.
+        reason: String,
+    },
 }
 
 /// Command sent from a client to the server.

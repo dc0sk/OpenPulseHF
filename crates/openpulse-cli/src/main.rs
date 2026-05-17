@@ -19,6 +19,7 @@ use ofdm_plugin::OfdmPlugin;
 use openpulse_audio::LoopbackBackend;
 use openpulse_modem::ModemEngine;
 use psk8_plugin::Psk8Plugin;
+use qam64_plugin::Qam64Plugin;
 use qpsk_plugin::QpskPlugin;
 use scfdma_plugin::ScFdmaPlugin;
 
@@ -81,6 +82,9 @@ fn main() -> Result<()> {
     engine
         .register_plugin(Box::new(Psk8Plugin::new()))
         .context("failed to register 8PSK plugin")?;
+    engine
+        .register_plugin(Box::new(Qam64Plugin::new()))
+        .context("failed to register 64QAM plugin")?;
     engine
         .register_plugin(Box::new(QpskPlugin::new()))
         .context("failed to register QPSK plugin")?;

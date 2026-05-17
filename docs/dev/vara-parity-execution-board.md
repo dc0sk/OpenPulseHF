@@ -189,6 +189,8 @@ density or higher-order channel tracking, which is Item 6 scope.
 - Window-ARQ feedback codec implemented (`WindowArqFeedback`) with fixed 8-byte wire format.
 - Selective retransmit packet codec implemented (`encode_window_retransmit`, `apply_window_retransmit`).
 - Range-limited weighted LLR combine implemented (`combine_llrs_weighted_in_ranges`).
+- Modem-engine receive path implemented (`ModemEngine::receive_with_window_arq`) for soft-demod-capable modes.
+- Multi-mode engine integration gate added (`tests/window_arq_multimode.rs`).
 - Item 5.5 integration gate uses a modulated-sample airtime proxy for latency and non-target retry-bit unknowns (zero-LLR mask), not adversarial sign inversion.
 
 **Requirements**:
@@ -458,8 +460,8 @@ None
 - [PACTOR Research](pactor-research.md) — PACTOR-4 multipath and soft-combine.
 - [Benchmark Harness](benchmark-harness.md) — Testmatrix scenario definition.
 - [HPX Waveform Design](hpx-waveform-design.md) — SC-FDMA52 design rationale.
-- [On-Air Test Plan](on-air_testplan.md) — Field deployment checklist.
-- [Regulatory](regulatory.md) — FCC/CEPT/Ofcom compliance overview.
+- [On-Air Test Plan](../on-air_testplan.md) — Field deployment checklist.
+- [Regulatory](../regulatory.md) — FCC/CEPT/Ofcom compliance overview.
 
 ---
 

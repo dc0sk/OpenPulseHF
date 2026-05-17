@@ -28,10 +28,13 @@ const MODES: &[&str] = &[
     "64QAM500",
     "64QAM1000",
     "64QAM2000-RRC",
+    "OFDM16",
+    "OFDM52",
     "SCFDMA16",
     "SCFDMA52",
     "SCFDMA52-16QAM",
     "SCFDMA52-64QAM",
+    "SCFDMA52-64QAM-P4",
     "FSK4-ACK",
 ];
 

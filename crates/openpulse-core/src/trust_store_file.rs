@@ -36,6 +36,8 @@ pub fn load_trust_store_from_file(
         return Ok(InMemoryTrustStore::new());
     }
 
+    validate_trust_store_permissions(path)?;
+
     let content =
         std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let file: TrustFile =
@@ -58,6 +60,35 @@ pub fn load_trust_store_from_file(
     Ok(store)
 }
 
+#[cfg(unix)]
+fn validate_trust_store_permissions(
+    path: &Path,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = std::fs::metadata(path)
+        .map_err(|e| format!("stat {}: {e}", path.display()))?
+        .permissions()
+        .mode()
+        & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(format!(
+            "unsafe trust store permissions on {}: {:o} (expected owner-only, e.g. 600)",
+            path.display(),
+            mode
+        )
+        .into());
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_trust_store_permissions(
+    _path: &Path,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    Ok(())
+}
+
 fn parse_hex_key(s: &str) -> Option<[u8; 32]> {
     if s.len() != 64 {
         return None;
@@ -68,4 +99,41 @@ fn parse_hex_key(s: &str) -> Option<[u8; 32]> {
         out[i] = u8::from_str_radix(pair_str, 16).ok()?;
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_insecure_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "openpulse-core-trust-store-unsafe-perms-{}-{}",
+            std::process::id(),
+            nonce
+        ));
+        let path = root.join("trust-store.json");
+
+        std::fs::create_dir_all(&root).expect("create temp root");
+        std::fs::write(&path, r#"{"schema_version":"1.0.0","records":[]}"#)
+            .expect("write trust store");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("set insecure mode");
+
+        let err = load_trust_store_from_file(&path).expect_err("should reject unsafe mode");
+        assert!(
+            err.to_string().contains("unsafe trust store permissions"),
+            "unexpected error: {err}"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

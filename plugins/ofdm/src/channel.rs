@@ -1,8 +1,11 @@
-//! Pilot layout, LS channel estimation, and ZF equalization.
+//! Pilot layout, LS channel estimation, ZF equalization, and CFO estimation.
 
 use num_complex::Complex32;
+use rustfft::FftPlanner;
 
-use crate::params::{OfdmParams, PILOT_AMPLITUDE, PILOT_SPACING};
+use crate::params::{
+    OfdmParams, CP, FFT_SIZE, PILOT_AMPLITUDE, PILOT_SPACING, SAMPLE_RATE, SYM_LEN,
+};
 
 /// Return the absolute SC indices of all pilot subcarriers for `p`.
 ///
@@ -105,6 +108,69 @@ pub fn zf_equalize(p: &OfdmParams, freq: &[Complex32], h_est: &[Complex32]) -> V
         out.push(eq);
     }
     out
+}
+
+/// Estimate the carrier frequency offset (CFO) in Hz using inter-symbol pilot
+/// phase drift across consecutive OFDM symbols.
+///
+/// Averages the conjugate-product phase at each pilot SC across consecutive
+/// symbol pairs (up to 8 symbols).  The phase rotation per symbol period is
+/// `2π × CFO × SYM_LEN / Fs`, so the unambiguous range is
+/// `±Fs / (2 × SYM_LEN) ≈ ±13.9 Hz`.
+///
+/// Returns `None` when there are fewer than two complete symbols or no pilots.
+pub fn estimate_cfo_hz(samples: &[f32], p: &OfdmParams) -> Option<f32> {
+    use std::f32::consts::PI;
+
+    let n_syms = samples.len() / SYM_LEN;
+    if n_syms < 2 {
+        return None;
+    }
+    let pilots = pilot_positions(p);
+    if pilots.is_empty() {
+        return None;
+    }
+
+    let n_use = n_syms.min(8);
+    let scale = 1.0 / (FFT_SIZE as f32).sqrt();
+    let mut planner = FftPlanner::<f32>::new();
+    let fft = planner.plan_fft_forward(FFT_SIZE);
+
+    let mut spectra: Vec<Vec<Complex32>> = Vec::with_capacity(n_use);
+    for sym_idx in 0..n_use {
+        let start = sym_idx * SYM_LEN + CP;
+        if start + FFT_SIZE > samples.len() {
+            break;
+        }
+        let mut freq: Vec<Complex32> = samples[start..start + FFT_SIZE]
+            .iter()
+            .map(|&s| Complex32::new(s * scale, 0.0))
+            .collect();
+        fft.process(&mut freq);
+        spectra.push(freq);
+    }
+    if spectra.len() < 2 {
+        return None;
+    }
+
+    let mut phase_sum = 0.0f32;
+    let mut count = 0u32;
+    for i in 0..(spectra.len() - 1) {
+        for &k in &pilots {
+            if k < FFT_SIZE {
+                let conj_prod = spectra[i][k].conj() * spectra[i + 1][k];
+                phase_sum += conj_prod.arg();
+                count += 1;
+            }
+        }
+    }
+    if count == 0 {
+        return None;
+    }
+
+    let mean_phase = phase_sum / count as f32;
+    let t_sym = SYM_LEN as f32 / SAMPLE_RATE as f32;
+    Some(mean_phase / (2.0 * PI * t_sym))
 }
 
 #[cfg(test)]

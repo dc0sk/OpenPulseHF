@@ -70,6 +70,10 @@ impl ModulationPlugin for Psk8Plugin {
     ) -> Result<Vec<f32>, ModemError> {
         demodulate::psk8_demodulate_soft(samples, config)
     }
+
+    fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+        demodulate::afc_estimate_hz(samples, config)
+    }
 }
 
 /// Parse numeric baud rate from the trailing digits of modes such as "8PSK500", "8PSK1000-HF", "8PSK500-RRC", or "8PSK1000-HF-RRC".
@@ -166,6 +170,45 @@ mod tests {
         let samples = plugin.modulate(payload, &cfg).expect("modulate");
         let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
         assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    #[test]
+    fn afc_estimate_near_zero_on_carrier_match() {
+        let plugin = Psk8Plugin::new();
+        let tx_cfg = ModulationConfig {
+            mode: "8PSK1000".to_string(),
+            center_frequency: 1500.0,
+            ..ModulationConfig::default()
+        };
+        let rx_cfg = tx_cfg.clone();
+        let samples = plugin.modulate(b"afc psk8", &tx_cfg).expect("modulate");
+        let est = plugin
+            .estimate_afc_hz(&samples, &rx_cfg)
+            .expect("afc estimate");
+        assert!(est.abs() < 3.0, "expected near-zero AFC, got {est:.2} Hz");
+    }
+
+    #[test]
+    fn afc_estimate_tracks_positive_offset() {
+        let plugin = Psk8Plugin::new();
+        let tx_cfg = ModulationConfig {
+            mode: "8PSK1000".to_string(),
+            center_frequency: 1520.0,
+            ..ModulationConfig::default()
+        };
+        let rx_cfg = ModulationConfig {
+            mode: "8PSK1000".to_string(),
+            center_frequency: 1500.0,
+            ..ModulationConfig::default()
+        };
+        let samples = plugin.modulate(b"afc psk8", &tx_cfg).expect("modulate");
+        let est = plugin
+            .estimate_afc_hz(&samples, &rx_cfg)
+            .expect("afc estimate");
+        assert!(
+            (est - 20.0).abs() < 6.0,
+            "expected about +20 Hz AFC, got {est:.2} Hz"
+        );
     }
 
     /// Composite "8PSK1000-HF-RRC" loopback exercises the full parse → modulate →

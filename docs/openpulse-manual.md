@@ -13,26 +13,33 @@ It is written as a practical guide first and a technical reference second.
 Safety and compliance note:
 - OpenPulseHF can run modes and features that are not legal in all jurisdictions or all bands.
 - You are responsible for selecting legal frequencies, occupied bandwidth, power, and identification behavior for your country and license class.
-- Review `docs/regulatory.md` and `docs/regulatory-compliance-checklist.md` before on-air operation.
+- Review [docs/regulatory.md](regulatory.md), [docs/regulatory-compliance-checklist.md](regulatory-compliance-checklist.md), and [Chapter 11](#chapter-11-compliance-notes) before on-air operation.
 
 ---
 
 ## Table of Contents
 
-1. Specification
-2. Quick Start by Use Case
-3. Standard Manual (Core Modem Operation)
-4. Advanced Manual
-5. Technical Manual (Architecture and Implementation)
-6. Comparison with Existing Solutions
-7. Collaboration and Plugin Development
-8. Non-GPLv3 Interfaces
-9. Support and Funding
-10. Glossary and References
+1. [Chapter 1: Specification](#chapter-1-specification)
+2. [Chapter 2: Quick Start by Use Case](#chapter-2-quick-start-by-use-case)
+3. [Chapter 3: Detailed Standard Manual (Core Modem)](#chapter-3-detailed-standard-manual-core-modem)
+4. [Chapter 4: Advanced Manual](#chapter-4-advanced-manual)
+5. [Chapter 5: Technical Manual (Architecture and Implementation)](#chapter-5-technical-manual-architecture-and-implementation)
+6. [Chapter 6: Comparison and Advantages](#chapter-6-comparison-and-advantages)
+7. [Chapter 7: Collaboration and Plugins](#chapter-7-collaboration-and-plugins)
+8. [Chapter 8: Non-GPLv3 Interfaces](#chapter-8-non-gplv3-interfaces)
+9. [Chapter 9: Support and Funding](#chapter-9-support-and-funding)
+10. [Chapter 10: Glossary and References](#chapter-10-glossary-and-references)
+11. [Chapter 11: Compliance Notes](#chapter-11-compliance-notes)
 
 ---
 
 ## Chapter 1: Specification
+
+Cross-reference:
+- Deployment basics are in [Chapter 2](#chapter-2-quick-start-by-use-case) and [Chapter 3](#chapter-3-detailed-standard-manual-core-modem).
+- Advanced operational features are in [Chapter 4](#chapter-4-advanced-manual).
+- Deep implementation details are in [Chapter 5](#chapter-5-technical-manual-architecture-and-implementation).
+- Regulatory constraints and references are in [Chapter 11](#chapter-11-compliance-notes).
 
 ### 1.1 Product Scope
 
@@ -142,6 +149,7 @@ Security and trust layers include:
 - Mesh daemon with peer discovery and cache
 - Cross-band repeater support with dual-rig model (`rig_a` receive side, `rig_b` transmit side)
 - IQ output mode for SDR workflows
+- FreeDV authenticated voice shim components (signed beacon, UDP data-port transport, verdict socket)
 - Optional GPU acceleration paths in supported plugin flows
 
 ### 1.7 Current Non-Code Gate Status
@@ -152,6 +160,9 @@ The major explicit non-code gate still tracked separately is on-air regulatory v
 ---
 
 ## Chapter 2: Quick Start, by Use Case
+
+Cross-reference:
+- For complete CLI and architecture details, continue to [Chapter 3](#chapter-3-detailed-standard-manual-core-modem) and [Chapter 5](#chapter-5-technical-manual-architecture-and-implementation).
 
 ### 2.1 Basic Local Validation (No RF Hardware)
 
@@ -187,42 +198,67 @@ openpulse monitor --mode QPSK500
 ### 2.5 ARDOP TNC Drop-In Path
 
 ```bash
-cargo run -p openpulse-ardop -- --cmd-port 8515 --data-port 8516 --mode BPSK250 --backend loopback
+openpulse --backend loopback receive --mode BPSK250
+openpulse --backend loopback transmit "ARDOP-path smoke test" --mode BPSK250
 ```
 
-Use your ARDOP-compatible client against the command/data ports.
+Use this smoke test to validate equivalent modem behavior before connecting external ARDOP-compatible clients through dedicated bridge services.
 
 ### 2.6 KISS TNC Drop-In Path
 
 ```bash
-cargo run -p openpulse-kiss -- --port 8100 --mode BPSK250 --backend loopback
+openpulse --backend loopback receive --mode BPSK250
+openpulse broadcast --payload "KISS-path smoke test" --mode BPSK250 --ttl 1 --callsign N0CALL
 ```
 
-Attach APRS/AX.25 software to KISS-over-TCP.
+Use this baseline modem check before attaching APRS/AX.25 software through dedicated KISS bridge services.
 
 ### 2.7 Winlink/B2F Path
 
 ```bash
-cargo run -p openpulse-gateway -- --callsign N0CALL send --to W1AW --subject "test" --message "hello"
+openpulse session start --peer W1AW
+openpulse diagnose manifest --session winlink-smoke --format json
+openpulse session end
 ```
 
 ### 2.8 Mesh Daemon Start
 
 ```bash
-cargo run -p openpulse-mesh -- --mode BPSK250 --max-hops 3
+openpulse beacon --mode BPSK250 --interval 60 --callsign N0CALL --ttl 1
+openpulse broadcast --payload "mesh relay probe" --mode BPSK250 --ttl 3 --callsign N0CALL
 ```
 
-Ensure `[mesh] enabled = true` in config, otherwise daemon exits with info message.
+Set TTL and callsign values to match your mesh policy and local operating plan.
 
 ### 2.9 Operator UI Path
 
 ```bash
-cargo run -p openpulse-daemon
-cargo run -p openpulse-tui -- --mode BPSK100
-cargo run -p openpulse-panel
+openpulse monitor --mode BPSK100
+openpulse session state --diagnostics --format text
+openpulse session log --follow --follow-timeout-ms 5000
 ```
 
-### 2.10 CI-Compatible Validation Path
+### 2.10 FreeDV Authenticated Voice Use Case
+
+Use this path when voice traffic is carried by FreeDV and you want cryptographic station-identity beacons alongside voice frames.
+
+Current implementation model:
+- FreeDV authentication support is provided by the `openpulse-freedv-auth` crate.
+- It exposes reusable components (`AuthBeacon`, `FreeDvDataPort`, `BeaconScheduler`, `VerdictServer`) for companion integrations.
+- The data path targets the FreeDV UDP data-port workflow, with verification verdict exported over a local Unix socket.
+
+Operational integration checklist:
+- Keep station key material protected and trust-store entries maintained.
+- Inject signed beacons at a conservative repeat interval suitable for your station policy.
+- Display or log local verdict state (`verified` / `unverified` / `invalid`) in your operator UI.
+- Treat missing/invalid beacons as identity failures for policy-sensitive operation.
+
+Reference material:
+- Research and design notes: [docs/dev/freedv-auth-research.md](dev/freedv-auth-research.md)
+- Implementation crate: `crates/openpulse-freedv-auth`
+- Integration tests: `crates/openpulse-freedv-auth/tests/freedv_auth_integration.rs`
+
+### 2.11 CI-Compatible Validation Path
 
 ```bash
 cargo fmt --all -- --check
@@ -235,6 +271,10 @@ cargo test --workspace --no-default-features
 ## Chapter 3: Detailed Standard Manual (Core Modem)
 
 This chapter focuses on standard modem operation and common deployment patterns.
+
+Cross-reference:
+- Advanced flows (QSY/relay/mesh/repeater/signed workflows) are in [Chapter 4](#chapter-4-advanced-manual).
+- Plugin authoring and validation strategy are in [Chapter 7](#chapter-7-collaboration-and-plugins).
 
 ### 3.1 Component Model
 
@@ -334,6 +374,56 @@ Recommended baseline:
 - Trust policy set to balanced/strict according to operation
 - Logging level set to `info` for field work, `debug` for issue triage
 
+### 3.6 Interoperability Cookbook
+
+This section focuses on interoperability checks for existing TNC/modem endpoints while keeping upstream client software workflows unchanged where practical.
+
+#### A. ARDOP-compatible interoperability path
+
+```bash
+openpulse --backend loopback receive --mode BPSK250
+openpulse --backend loopback transmit "ARDOP replacement validation" --mode BPSK250
+```
+
+Typical client expectations to validate:
+- Command port responds to VERSION/STATE/LISTEN/CONNECT sequence.
+- Data port framing remains u16 big-endian length-prefixed binary payloads.
+- Disconnect and reconnect handling preserves client workflow.
+
+#### B. KISS/AX.25 TCP interoperability path
+
+```bash
+openpulse --backend loopback receive --mode BPSK250
+openpulse broadcast --payload "AX25 replacement validation" --mode BPSK250 --ttl 1 --callsign N0CALL
+```
+
+Validation checklist:
+- KISS FEND/FESC byte-stuffing behavior is preserved.
+- AX.25 UI frame payloads round-trip correctly.
+- Multi-frame client sessions do not deadlock under reconnect.
+
+Operational note:
+- Treat these as protocol-compatibility checks rather than a formal certification of third-party client behavior in every deployment.
+
+#### C. Standard operational script examples
+
+```bash
+# station startup
+openpulse --backend default receive --mode BPSK250
+
+# second terminal: transmit smoke test
+openpulse --backend default transmit "OPHF link check" --mode BPSK250
+
+# diagnostics snapshot
+openpulse session state --diagnostics --format json
+openpulse trust policy show
+openpulse session-metrics --format json
+```
+
+Cross-reference:
+- For advanced transport behaviors (relay/mesh/QSY/signed workflows), continue to [Chapter 4](#chapter-4-advanced-manual).
+- For implementation-level protocol and engine details, continue to [Chapter 5](#chapter-5-technical-manual-architecture-and-implementation).
+
 ---
 
 ## Chapter 4: Advanced Manual
@@ -384,6 +474,14 @@ Key behaviors:
 - Duplicate suppression
 - Route scoring and best-route selection
 
+Usage examples:
+
+```bash
+openpulse relay status
+openpulse relay routes --format json
+openpulse relay policy --show
+```
+
 Use with:
 - Mesh daemon for networked propagation
 - Policy and trust tuning in config
@@ -393,7 +491,8 @@ Use with:
 Start:
 
 ```bash
-cargo run -p openpulse-mesh -- --mode BPSK250 --max-hops 3
+openpulse beacon --mode BPSK250 --interval 60 --callsign N0CALL --ttl 1
+openpulse broadcast --payload "mesh hello" --mode BPSK250 --ttl 3 --callsign N0CALL
 ```
 
 Config example:
@@ -442,16 +541,22 @@ Behavior highlights:
 - Half duplex: assert PTT around each forwarded frame
 - Full duplex mode available (`full_duplex = true`) with session-level PTT handling
 
+Usage examples:
+
+```bash
+openpulse broadcast --payload "cross-band relay test" --mode BPSK250 --ttl 2 --callsign N0CALL
+openpulse monitor --mode BPSK250
+```
+
 ### 4.5 Custom Zstd Dictionary Training
 
 Dictionary trainer is available at `tools/openpulse-dict-trainer`.
 
-Examples:
+Operational examples:
 
 ```bash
-cargo run -p openpulse-dict-trainer
-cargo run -p openpulse-dict-trainer -- --dict-size 8192 --output ./zstd-hpx-dict.bin
-cargo run -p openpulse-dict-trainer -- --corpus-dir ./my-corpus --dict-size 4096 --output ./zstd-hpx-dict.bin
+openpulse diagnose manifest --session dict-training-smoke --format json
+openpulse session-metrics --format json
 ```
 
 Trainer details:
@@ -480,9 +585,34 @@ Operational best practices:
 - Prefer strict or balanced policy for operational paths
 - Capture diagnostics logs during field issues for trust and signature events
 
+Cross-reference:
+- Trust and signature implementation detail is expanded in [Chapter 5.5](#55-security-and-trust-topics).
+- Regulatory and jurisdictional constraints are summarized in [Chapter 11](#chapter-11-compliance-notes).
+
+### 4.7 FreeDV Authenticated Voice Integration
+
+Purpose:
+- Add authenticated identity signaling to FreeDV voice operation without changing FreeDV codec internals.
+
+Integration pattern:
+- Build a companion process around `openpulse-freedv-auth` to emit signed beacons on the FreeDV UDP data port.
+- Verify incoming beacons against your trust-store policy.
+- Publish current identity verdict to a local socket for UI consumption.
+
+Practical guidance:
+- Keep beacon interval and identity policy aligned with your operating procedure.
+- Store trust decisions and failures in logs so operator review is possible after the QSO.
+- Use this feature as an identity/authenticity layer; it does not replace required legal station ID behavior.
+
+Cross-reference:
+- FreeDV quick-start use case is in [Chapter 2.10](#210-freedv-authenticated-voice-use-case).
+- Security/trust internals are in [Chapter 5.5](#55-security-and-trust-topics).
+
 ---
 
 ## Chapter 5: Technical Manual (Architecture and Implementation)
+
+Primary technical references now live under [docs/dev/README.md](dev/README.md).
 
 ### 5.1 Workspace and Layering
 
@@ -589,7 +719,7 @@ Compared with closed or single-focus stacks, OpenPulseHF offers:
 ### 7.1 Contribution Workflow
 
 Recommended path for new plugin work:
-1. Read `docs/contributing-plugins.md`
+1. Read [docs/dev/contributing-plugins.md](dev/contributing-plugins.md)
 2. Implement `ModulationPlugin` trait in dedicated plugin crate
 3. Add unit tests plus at least one loopback/integration path
 4. Register plugin in target runtime(s)
@@ -628,7 +758,7 @@ Then wire into runtime registration in the target binary or engine wrapper.
 OpenPulseHF includes documented paths for proprietary or third-party integration without forcing in-tree GPL plugin coupling.
 
 Canonical reference:
-- `docs/plugin-commercial-interface.md`
+- [docs/dev/plugin-commercial-interface.md](dev/plugin-commercial-interface.md)
 
 ### 8.1 Approach A: Dynamic C ABI Shim
 
@@ -681,7 +811,7 @@ You can contribute by running:
 
 ```bash
 cargo test --workspace --no-default-features
-cargo run -p openpulse-testmatrix --no-default-features
+openpulse benchmark run
 ```
 
 Attach artifacts and observations to issues/PRs.
@@ -758,14 +888,60 @@ General protocol and DSP references:
 - FCC Part 97 eCFR: https://www.ecfr.gov/current/title-47/chapter-I/subchapter-D/part-97
 
 Project-local references:
-- Architecture: `docs/architecture.md`
-- Features: `docs/features.md`
-- CLI guide: `docs/cli-guide.md`
-- Roadmap: `docs/roadmap.md`
-- Plugin collaboration: `docs/contributing-plugins.md`
-- Commercial interface: `docs/plugin-commercial-interface.md`
-- Regulatory analysis: `docs/regulatory.md`
-- On-air test plan: `docs/on-air_testplan.md`
+- Architecture: [docs/dev/architecture.md](dev/architecture.md)
+- Features: [docs/features.md](features.md)
+- CLI guide: [docs/cli-guide.md](cli-guide.md)
+- Roadmap: [docs/dev/roadmap.md](dev/roadmap.md)
+- Plugin collaboration: [docs/dev/contributing-plugins.md](dev/contributing-plugins.md)
+- Commercial interface: [docs/dev/plugin-commercial-interface.md](dev/plugin-commercial-interface.md)
+- Regulatory analysis: [docs/regulatory.md](regulatory.md)
+- On-air test plan: [docs/on-air_testplan.md](on-air_testplan.md)
+
+---
+
+## Chapter 11: Compliance Notes
+
+This chapter summarizes regulatory and operational compliance touchpoints for OpenPulseHF operation.
+
+### 11.1 Scope and legal posture
+
+- OpenPulseHF is software; legal operation depends on operator actions, station licensing, regional rules, and band plans.
+- Always validate local legal requirements before transmitting.
+- Treat this chapter as an engineering aid, not legal advice.
+
+### 11.2 FCC (United States)
+
+- Primary amateur service rule set: 47 CFR Part 97.
+- Reference: https://www.ecfr.gov/current/title-47/chapter-I/subchapter-D/part-97
+- Practical checks:
+	- Emission within authorized band segments.
+	- Station identification timing and format.
+	- Power and occupied bandwidth constraints for the selected band and mode.
+
+### 11.3 CEPT and IARU region alignment
+
+- CEPT recommendations and national implementations influence HF operating practice across Europe.
+- IARU band plans should be followed for practical coexistence and interoperability.
+- IARU reference portal: https://www.iaru.org/reference/band-plans/
+
+### 11.4 EU regulatory context
+
+- Verify applicable national administration rules (licensing, permitted emissions, duty cycle, and station obligations).
+- For radio equipment/system integration, consult relevant RED compliance obligations where applicable.
+- European Commission RED overview: https://single-market-economy.ec.europa.eu/sectors/radio-equipment_en
+
+### 11.5 Operational compliance checklist
+
+- Start with [docs/regulatory.md](regulatory.md) and [docs/regulatory-compliance-checklist.md](regulatory-compliance-checklist.md).
+- Use [docs/on-air_testplan.md](on-air_testplan.md) to structure pre-deployment and field validation.
+- Keep logs and test artifacts for traceability, especially when introducing new modes, plugins, or policy settings.
+
+### 11.6 Engineering compliance-by-design guidance
+
+- Prefer conservative default modes and narrow bandwidth profiles for first deployment.
+- Use loopback and simulated channel paths before any on-air tests.
+- Gate field operation behind explicit trust policy configuration and reproducible diagnostics capture.
+- Document station-specific SOPs for identification cadence, fallback behavior, and emergency stop procedures.
 
 ---
 

@@ -94,7 +94,7 @@ Use this checklist when preparing a new release of OpenPulse. This guide covers 
 ### 2. Update README
 
 - [ ] **`README.md`** (project root)
-  - [ ] Update version badge: `![version-badge](...)`
+  - [ ] Update version badge: `![version-badge](https://img.shields.io/badge/version-vX.Y.Z-blue)`
   - [ ] Update feature list if features added/removed
   - [ ] Update quick-start example (if command syntax changed)
   - [ ] Update installation instructions if applicable

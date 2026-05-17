@@ -42,11 +42,11 @@ No proprietary firmware.  Works with your existing SSB transceiver.
 **▶ Adaptive rate ladder** — 20 speed levels (SL1–SL20), adjusts per-direction automatically, no operator input  
 **▶ Multi-block RS FEC** — full Reed-Solomon protection at any payload size; no artificial per-frame byte limit  
 **▶ Post-quantum security** — ML-DSA-44 + ML-KEM-768, future-proof from day one  
-**▶ Winlink / Pat compatible** — drop-in replacement for VARA and ARDOP  
+**▶ Winlink / Pat compatible** — drop-in replacement for ARDOP-TCP workflows and OpenPulse bridges  
 **▶ Full FEC stack** — RS t=16/t=32, Conv K=7 soft Viterbi, Memory-ARQ, concatenated codes  
 **▶ Built-in signal-path testbench** — live 4-column waterfall + IQ scatter + BER meter, 7 channel models  
 **▶ Automatic frequency correction (AFC)** — tracks ±62.5 Hz drift; tolerates imperfect radio calibration  
-**▶ Up to 111 kbps effective throughput** — SCFDMA52 + LZ4 compression, measured in built-in testbench  
+**▶ Lab peak up to 111 kbps effective throughput** — SCFDMA52 + LZ4 on highly compressible synthetic payloads in built-in testbench  
 **▶ Runs on Raspberry Pi** — cross-compiles to aarch64, tested on RPi 4  
 
 ---
@@ -101,11 +101,12 @@ Winlink CMS ←──────────── OpenPulseHF  ──→  Your
 | **64QAM** | **64QAM500 / 1000 / 2000-RRC** | **500–2000** | **540–2700 Hz** | **3000–12000 bps** | **6.0–24.0 kbps** | **Rectangular / RRC** |
 | FSK4 | FSK4-ACK | 100 | ~400 Hz | ACK only | ACK only | Hann |
 | OFDM | OFDM16 / OFDM52 | — | 625 Hz – 2 kHz | 889–2889 bps | 1.8–5.8 kbps | OFDM CP |
-| SC-FDMA | SCFDMA16 / SCFDMA52 | — | 625 Hz – 2 kHz | 889–2889 bps | **1.8–5.8 kbps (peak: 111 kbps†)** | DFT-spread |
+| SC-FDMA | SCFDMA16 / SCFDMA52 | — | 625 Hz – 2 kHz | 889–2889 bps | **1.8–5.8 kbps (lab peak: 111 kbps†)** | DFT-spread |
 
 † Raw data rate = symbol rate × bits/symbol. "Peak with LZ4" uses ≈ 2× typical for text payloads
-(Winlink messages, emails). The built-in testbench measures **111 kbps on SCFDMA52 + LZ4** with a
-2048-byte compressible test frame (≈ 38× ratio on highly repetitive data).
+(Winlink messages, emails). The **111 kbps** value is a lab peak from the built-in testbench on
+`SCFDMA52 + LZ4` with a 2048-byte highly repetitive payload (≈ 38× ratio); it is not a typical
+on-air goodput figure.
 
 RRC modes use a Gardner timing error detector (TED) with a Costas PLL for carrier
 recovery — the same professional-grade loops found in LTE and DVB receivers.
