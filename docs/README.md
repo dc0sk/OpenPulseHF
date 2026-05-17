@@ -39,6 +39,7 @@ Canonical documentation lives in the files listed below.
 - docs/cli-mode-advisor-guide.md: mode advisor workflow
 - docs/cli-ux-identity-trust-diagnostics.md: identity/trust diagnostics UX and exit codes
 - docs/features.md: full feature and mode reference
+- docs/openpulse-manual.md: complete operator, integration, and technical manual (10 chapters)
 
 ### Security, trust, and regulatory
 
