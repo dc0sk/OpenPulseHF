@@ -390,7 +390,7 @@ Create a reproducible evidence bundle immediately after each run:
 
 ```bash
 ./scripts/onair-bundle-evidence.sh \
-  --report docs/test-reports/onair-<timestamp>.json \
+  --report docs/dev/test-reports/onair-<timestamp>.json \
   --notes path/to/operator-notes.txt \
   --label 20m-qpsk500
 ```
@@ -399,15 +399,25 @@ For compliance runs, use strict validation so the bundle fails fast if required 
 
 ```bash
 ./scripts/onair-bundle-evidence.sh \
-  --report docs/test-reports/onair-<timestamp>.json \
+  --report docs/dev/test-reports/onair-<timestamp>.json \
   --require-report \
   --require-config \
   --require-preflight
 ```
 
-The bundle is written under `docs/test-reports/on-air/bundle-<utc>-<label>/` and includes:
+The bundle is written under `docs/dev/test-reports/on-air/bundle-<utc>-<label>/` and includes:
 - `metadata.json` (git SHA/branch, git dirty flag, host/user, optional preflight metadata extracted from report)
 - `git-status.short.txt` (short `git status` snapshot for traceability)
 - copied on-air report JSON
 - config snapshot (`config.toml.snapshot`, when available)
 - operator notes (when provided)
+
+Generate a standardized Phase 5.5-reg report scaffold from the JSON and optional bundle metadata:
+
+```bash
+./scripts/onair-generate-report.sh \
+  --report docs/dev/test-reports/onair-<timestamp>.json \
+  --metadata docs/dev/test-reports/on-air/bundle-<utc>-<label>/metadata.json
+```
+
+By default, this writes to `docs/dev/test-reports/on-air/phase-5.5-reg-<timestamp>.md`.
