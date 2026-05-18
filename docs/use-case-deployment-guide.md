@@ -98,7 +98,7 @@ If on-air operation is not approved, run loopback/sim validation:
 5. Collect Item 8 lab sessions:
    cargo run -p openpulse-testmatrix --no-default-features -- --item8-lab-dataset --item8-sessions 10 --item8-frames-per-session 4 --bench-payload 223
 
-Publish outputs under docs/test-reports/latest and compare against prior run reports.
+Publish outputs under docs/dev/test-reports/latest and compare against prior run reports.
 
 ## 6. Validation Report Template
 

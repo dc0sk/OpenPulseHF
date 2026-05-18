@@ -52,7 +52,7 @@ When station access is available, run this checklist before marking Phase 5.5-re
   - Gateway/interoperability run: one end-to-end message session with logs retained.
 4. Evidence capture
   - Record timestamped logs, selected frequencies, mode transitions, and operator notes.
-  - Export benchmark/test artifacts to `docs/test-reports/on-air/` with scenario labels.
+  - Export benchmark/test artifacts to `docs/dev/test-reports/on-air/` with scenario labels.
   - Build a per-run evidence bundle with `./scripts/onair-bundle-evidence.sh`.
   - Use `--require-report --require-config --require-preflight` for compliance runs.
   - Document any compliance exceptions and mitigations.

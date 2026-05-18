@@ -317,10 +317,10 @@ The VARA WattersonF1 throughput parity criterion is deferred — see note.
 - Added `docs/use-case-deployment-guide.md` with three use-case profiles (`field_relay`, `emergency`, `station_relay`), SNR/FER targets, mode ladders, and fallback rules.
 - Added a field deployment checklist covering regulatory pre-checks, RF setup, operations, and logging requirements.
 - Added data-minimum schema and lab-only fallback workflow to unblock pre-on-air validation.
-- Added baseline lab validation snapshot: `docs/test-reports/use-case-validation-lab-2026-05-14.md` (quick-tier + Item 6 gate metrics), with explicit field/on-air gaps.
+- Added baseline lab validation snapshot: `docs/dev/test-reports/use-case-validation-lab-2026-05-14.md` (quick-tier + Item 6 gate metrics), with explicit field/on-air gaps.
 - Added automated Item 8 lab dataset collection via `openpulse-testmatrix --item8-lab-dataset`.
-- Collected lab dataset at `docs/test-reports/item8-lab/latest/item8_sessions.{md,csv,json}` with 10 sessions/profile and 120 total frames.
-- Published validation report: `docs/test-reports/item8-lab/latest/item8-validation-report-2026-05-14.md`.
+- Collected lab dataset at `docs/dev/test-reports/item8-lab/latest/item8_sessions.{md,csv,json}` with 10 sessions/profile and 120 total frames.
+- Published validation report: `docs/dev/test-reports/item8-lab/latest/item8-validation-report-2026-05-14.md`.
 
 **Remaining work**:
 - On-air validation campaign (if/when regulatory approval is granted) using the field checklist and profile guidance.
