@@ -85,6 +85,104 @@ pub fn ls_estimate(p: &ScFdmaParams, freq: &[Complex32]) -> Vec<Complex32> {
     h_est
 }
 
+/// DFT-domain channel estimation (DFT-CE).
+///
+/// Replaces LS + linear interpolation with IDFT → delay-window → direct evaluation.
+/// The physical channel has at most `CP` samples of delay spread; by transforming the
+/// P pilot observations to a P-point CIR and zeroing taps beyond that window, noise
+/// energy outside the CP window is discarded before reconstructing H at every SC.
+///
+/// The reconstruction step evaluates the DFT at each occupied SC position analytically
+/// rather than via zero-padding, which correctly handles the non-zero `first_sc` offset.
+///
+/// Returns estimates indexed by `sc - first_sc` (length = `p.total_sc()`).
+pub fn dft_ce_estimate(p: &ScFdmaParams, freq: &[Complex32]) -> Vec<Complex32> {
+    let total = p.total_sc();
+    let pilots = pilot_positions(p);
+    let n_pilots = pilots.len();
+
+    if n_pilots < 2 {
+        return ls_estimate(p, freq);
+    }
+
+    // --- Step 1: LS at pilot SCs ---
+    let mut h_pilot: Vec<Complex32> = pilots
+        .iter()
+        .map(|&sc| freq[sc] / Complex32::new(PILOT_AMPLITUDE, 0.0))
+        .collect();
+
+    // --- Step 2: IDFT(P) → P-point warped CIR h'[l] ---
+    // CIR tap l represents physical delay  d_l = l × N_FFT / total_sc  samples.
+    let mut planner = FftPlanner::<f32>::new();
+    let idft = planner.plan_fft_inverse(n_pilots);
+    idft.process(&mut h_pilot);
+    let inv_p = 1.0 / n_pilots as f32;
+    for h in &mut h_pilot {
+        *h *= inv_p;
+    }
+
+    // --- Step 3: CP-window — zero taps whose delay exceeds the cyclic prefix ---
+    // d_l ≤ CP  ⟺  l ≤ CP × total_sc / N_FFT.
+    // For SCFDMA52: ceil(32 × 65 / 256) = 9 taps (out of 13) kept.
+    let l_max = (CP * total).div_ceil(FFT_SIZE).clamp(1, n_pilots);
+    for h in h_pilot[l_max..].iter_mut() {
+        *h = Complex32::new(0.0, 0.0);
+    }
+
+    // --- Step 4: Reconstruct H at all occupied SCs ---
+    // H_est[first_sc + rel] = Σ_{l=0}^{l_max-1} h'[l] × exp(-j2π (rel - offset) l / total)
+    // where offset = (first_pilot_sc - first_sc) = pilot_spacing - 1.
+    let offset = p.pilot_spacing as isize - 1;
+    (0..total)
+        .map(|rel| {
+            let freq_idx = rel as isize - offset;
+            let mut sum = Complex32::new(0.0, 0.0);
+            for (l, &tap) in h_pilot.iter().enumerate().take(l_max) {
+                let phase = -std::f32::consts::TAU * freq_idx as f32 * l as f32 / total as f32;
+                sum += tap * Complex32::new(phase.cos(), phase.sin());
+            }
+            sum
+        })
+        .collect()
+}
+
+/// Compute the LLR noise variance for soft demodulation after MMSE equalization and IDFT.
+///
+/// Returns `(llr_noise_var, alpha_avg)` where `alpha_avg` is the mean MMSE signal attenuation
+/// across data SCs.  Dividing equalized symbols by `alpha_avg` restores unit-constellation
+/// scale; `llr_noise_var` is then the correctly calibrated noise floor for min-log-MAP LLRs.
+pub fn mmse_llr_noise_var(p: &ScFdmaParams, h_est: &[Complex32], noise_var: f32) -> (f32, f32) {
+    let sigma2 = noise_var;
+    let mut alpha_sum = 0.0f32;
+    let mut eff_var_sum = 0.0f32;
+    let mut count = 0usize;
+
+    for (rel, h) in h_est.iter().enumerate() {
+        if is_pilot(p, p.first_sc + rel) {
+            continue;
+        }
+        let h_sq = h.norm_sqr();
+        let denom = (h_sq + sigma2).max(1e-9);
+        let alpha = h_sq / denom;
+        // MMSE output noise per SC: σ² × |H|² / (|H|² + σ²)²
+        let eff_var = sigma2 * h_sq / (denom * denom).max(1e-12);
+        alpha_sum += alpha;
+        eff_var_sum += eff_var;
+        count += 1;
+    }
+
+    if count == 0 {
+        return (sigma2, 1.0);
+    }
+
+    let alpha_avg = (alpha_sum / count as f32).max(1e-6);
+    let eff_var_avg = eff_var_sum / count as f32;
+    // After dividing symbols by alpha_avg, effective noise variance is:
+    // σ²_LLR = eff_var_avg / alpha_avg²
+    let llr_noise_var = (eff_var_avg / (alpha_avg * alpha_avg)).max(1e-6);
+    (llr_noise_var, alpha_avg)
+}
+
 /// Zero-forcing equalization: divide each data SC bin by its channel estimate.
 ///
 /// Returns equalized frequency-domain symbols for data SCs only.
@@ -312,5 +410,83 @@ mod tests {
         let k_diffuse = estimate_rician_k_linear(&diffuse);
         let k_los = estimate_rician_k_linear(&los);
         assert!(k_los > k_diffuse, "expected LOS channel to raise K");
+    }
+
+    #[test]
+    fn dft_ce_flat_channel_all_ones() {
+        // Flat channel: H[k]=1 for all occupied SCs.  Pilot observations are
+        // exactly PILOT_AMPLITUDE so LS gives h=1.0 at every pilot SC.
+        // DFT-CE must recover h≈1.0 at every total SC position.
+        let p = &SCFDMA52;
+        let mut freq = vec![Complex32::new(0.0, 0.0); FFT_SIZE];
+        for sc in p.first_sc..=p.last_sc {
+            freq[sc] = Complex32::new(PILOT_AMPLITUDE, 0.0);
+        }
+        let h_est = dft_ce_estimate(p, &freq);
+        assert_eq!(h_est.len(), p.total_sc());
+        for (i, h) in h_est.iter().enumerate() {
+            assert!(
+                (h.re - 1.0).abs() < 0.01 && h.im.abs() < 0.01,
+                "SC rel {i}: expected h≈1+0j, got {h:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dft_ce_less_noise_than_ls_under_awgn() {
+        // AWGN on pilot observations: DFT-CE exploits the CP window to average
+        // noise across all pilots, giving lower RMS error than LS interpolation.
+        let p = &SCFDMA52;
+        // Deterministic PRNG noise (LCG) at pilot positions.
+        let mut state = 0xDEAD_BEEF_u64;
+        let noise_std = 0.15_f32; // ~16 dB below pilot amplitude
+        let mut freq = vec![Complex32::new(0.0, 0.0); FFT_SIZE];
+        // Data and pilot SCs: true channel H=1.
+        for sc in p.first_sc..=p.last_sc {
+            freq[sc] = Complex32::new(PILOT_AMPLITUDE, 0.0);
+        }
+        // Corrupt pilot SCs with additive noise.
+        for &sc in pilot_positions(p).iter() {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let ni = ((state >> 11) as f32) / ((1u64 << 53) as f32) * 2.0 - 1.0;
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let nq = ((state >> 11) as f32) / ((1u64 << 53) as f32) * 2.0 - 1.0;
+            freq[sc] += Complex32::new(ni * noise_std, nq * noise_std);
+        }
+
+        let h_dft = dft_ce_estimate(p, &freq);
+        let h_ls = ls_estimate(p, &freq);
+
+        // RMS error over all total SCs: DFT-CE must beat LS.
+        let rms = |est: &[Complex32]| {
+            let mse: f32 = est
+                .iter()
+                .map(|h| (h.re - 1.0).powi(2) + h.im.powi(2))
+                .sum::<f32>()
+                / est.len() as f32;
+            mse.sqrt()
+        };
+        let rms_dft = rms(&h_dft);
+        let rms_ls = rms(&h_ls);
+        assert!(
+            rms_dft < rms_ls,
+            "DFT-CE RMS {rms_dft:.4} should be less than LS RMS {rms_ls:.4}"
+        );
+    }
+
+    #[test]
+    fn dft_ce_output_length_matches_total_sc() {
+        // Output slice must cover all occupied SCs regardless of pilot count.
+        for p in [&SCFDMA16, &SCFDMA52] {
+            let freq = vec![Complex32::new(PILOT_AMPLITUDE, 0.0); FFT_SIZE];
+            let h = dft_ce_estimate(p, &freq);
+            assert_eq!(
+                h.len(),
+                p.total_sc(),
+                "mode first_sc={} last_sc={}",
+                p.first_sc,
+                p.last_sc
+            );
+        }
     }
 }

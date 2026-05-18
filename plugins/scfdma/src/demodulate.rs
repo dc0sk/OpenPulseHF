@@ -3,8 +3,12 @@
 use num_complex::Complex32;
 use rustfft::FftPlanner;
 
-use crate::channel::{estimate_noise_var, estimate_rician_k_linear, ls_estimate, mmse_equalize};
+use crate::channel::{
+    dft_ce_estimate, estimate_noise_var, estimate_rician_k_linear, mmse_equalize,
+    mmse_llr_noise_var, pilot_positions,
+};
 use crate::modulate::{modulate_with_params, preamble_payload};
+use crate::params::PILOT_AMPLITUDE;
 use crate::params::{params_for_mode, ScFdmaParams, CP, FFT_SIZE, SYM_LEN};
 
 // Re-export from the canonical core implementation so the plugin exposes the
@@ -93,8 +97,8 @@ fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Vec<u8> {
             .collect();
         fft.process(&mut freq);
 
-        // Step 2: LS channel estimation + MMSE equalization.
-        let h_est = ls_estimate(p, &freq);
+        // Step 2: DFT-domain channel estimation + MMSE equalization.
+        let h_est = dft_ce_estimate(p, &freq);
         let noise_var = estimate_noise_var(p, &freq, &h_est);
         let mut equalized = mmse_equalize(p, &freq, &h_est, noise_var);
 
@@ -187,23 +191,35 @@ fn demodulate_soft_with_params(samples: &[f32], p: &ScFdmaParams) -> SoftDemodOu
             .collect();
         fft.process(&mut freq);
 
-        let h_est = ls_estimate(p, &freq);
+        let h_est = dft_ce_estimate(p, &freq);
         let pilot_noise_var = estimate_noise_var(p, &freq, &h_est).max(1e-6);
-        let k_linear = estimate_rician_k_linear(&h_est);
-        let k_db = 10.0 * (k_linear + 1e-6).log10();
-        let k_gain = (1.0 + k_linear).clamp(1.0, 8.0);
 
+        // Rician K for SoftFrameMetrics: computed from raw pilot LS observations
+        // so the estimator range is independent of the CE method used for equalization.
+        let h_pilots: Vec<Complex32> = pilot_positions(p)
+            .iter()
+            .map(|&sc| freq[sc] / Complex32::new(PILOT_AMPLITUDE, 0.0))
+            .collect();
+        let k_linear = estimate_rician_k_linear(&h_pilots);
+        let k_db = 10.0 * (k_linear + 1e-6).log10();
+
+        let (llr_noise_var, alpha_avg) = mmse_llr_noise_var(p, &h_est, pilot_noise_var);
         let mut equalized = mmse_equalize(p, &freq, &h_est, pilot_noise_var);
 
         idft.process(&mut equalized);
-        let data_syms: Vec<Complex32> = equalized.iter().map(|c| c * idft_scale).collect();
-        let decision_noise_var = estimate_decision_noise_var(&data_syms, p.bits_per_sc).max(1e-6);
-        let llr_noise_var = (decision_noise_var / k_gain).max(1e-6);
+        // Divide by alpha_avg to restore unit-constellation scale after MMSE bias.
+        let data_syms: Vec<Complex32> = equalized
+            .iter()
+            .map(|c| *c * idft_scale / alpha_avg)
+            .collect();
 
         for sym in &data_syms {
             llrs.extend(symbol_llrs(*sym, p.bits_per_sc, llr_noise_var, &points));
         }
 
+        // Decision-residual metric for inverse-noise combining: computed after
+        // alpha_avg normalization so symbols are on the unit-constellation scale.
+        let decision_noise_var = estimate_decision_noise_var(&data_syms, p.bits_per_sc).max(1e-6);
         noise_sum += decision_noise_var;
         k_db_sum += k_db;
         metric_symbols += 1;
