@@ -116,12 +116,30 @@ fn ax25_ui_frame_roundtrip() {
         src: Ax25Addr::parse("W1AW-9").unwrap(),
         info: b"!4903.50N/07201.75W-PHG5132".to_vec(),
     };
-    let encoded = frame.encode();
+    let encoded = frame.encode().unwrap();
     let decoded = Ax25UiFrame::decode(&encoded).unwrap();
     assert_eq!(decoded.dest.callsign_str(), "APRS");
     assert_eq!(decoded.src.callsign_str(), "W1AW");
     assert_eq!(decoded.src.ssid, 9);
     assert_eq!(decoded.info, frame.info);
+}
+
+#[test]
+fn ax25_ui_frame_encode_rejects_out_of_range_ssid() {
+    let frame = Ax25UiFrame {
+        dest: Ax25Addr::parse("APRS").unwrap(),
+        src: Ax25Addr {
+            callsign: *b"W1AW  ",
+            ssid: 16,
+        },
+        info: b"test".to_vec(),
+    };
+
+    let err = frame.encode().unwrap_err();
+    assert!(matches!(
+        err,
+        openpulse_kiss::ax25::Ax25Error::InvalidSsid(16)
+    ));
 }
 
 // ── Integration tests: TCP loopback ──────────────────────────────────────────
