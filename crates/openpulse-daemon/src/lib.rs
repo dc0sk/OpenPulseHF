@@ -27,6 +27,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_channel::dsp::PowerSpectrum;
 #[cfg(not(target_arch = "wasm32"))]
+use openpulse_core::trust::{CertificateSource, PublicKeyTrustLevel, SigningMode};
+#[cfg(not(target_arch = "wasm32"))]
+use openpulse_modem::engine::SecureSessionParams;
+#[cfg(not(target_arch = "wasm32"))]
 use openpulse_modem::ModemEngine;
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_radio::RigctldController;
@@ -43,6 +47,15 @@ use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
 pub use protocol::ControlCommand as Command;
 pub use protocol::ControlEvent as Event;
+
+/// Mutable daemon runtime state touched by side-effectful control commands.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Default)]
+pub struct RuntimeControlState {
+    pub repeater_enabled: bool,
+    pub qsy_decisions: HashMap<String, bool>,
+    pub qsy_pending_token: Option<String>,
+}
 
 /// Shared mutable mode string, written by `set_mode` commands.
 #[cfg(not(target_arch = "wasm32"))]
@@ -573,8 +586,7 @@ pub async fn apply_command_to_engine(
     active_mode: &SharedMode,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
     rig_controller: Option<&mut RigctldController>,
-    repeater_enabled: &mut bool,
-    qsy_decisions: &mut HashMap<String, bool>,
+    runtime_state: &mut RuntimeControlState,
 ) {
     match cmd {
         ControlCommand::SetMode { mode } => {
@@ -608,16 +620,57 @@ pub async fn apply_command_to_engine(
             let _ = event_tx.send(ControlEvent::PttChanged { active: false });
         }
         ControlCommand::ConnectPeer { callsign } => {
-            let _ = event_tx.send(ControlEvent::RfConnectionChanged {
-                connected: true,
-                peer: Some(callsign.clone()),
-            });
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let params = SecureSessionParams {
+                local_minimum_mode: SigningMode::Normal,
+                peer_supported_modes: vec![SigningMode::Normal, SigningMode::Psk],
+                key_trust: PublicKeyTrustLevel::Full,
+                certificate_source: CertificateSource::OutOfBand,
+                psk_validated: false,
+            };
+
+            match engine.begin_secure_session(params, now_ms) {
+                Ok(_) => {
+                    let _ = event_tx.send(ControlEvent::RfConnectionChanged {
+                        connected: true,
+                        peer: Some(callsign.clone()),
+                    });
+
+                    let token = format!("qsy-{now_ms}");
+                    runtime_state.qsy_pending_token = Some(token.clone());
+                    let _ = event_tx.send(ControlEvent::QsyPending { token });
+                }
+                Err(err) => {
+                    let _ = event_tx.send(ControlEvent::CommandError {
+                        command: "connect_peer".to_string(),
+                        reason: format!("secure session start failed: {err}"),
+                    });
+                }
+            }
         }
         ControlCommand::DisconnectPeer => {
-            let _ = event_tx.send(ControlEvent::RfConnectionChanged {
-                connected: false,
-                peer: None,
-            });
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            match engine.end_secure_session(now_ms) {
+                Ok(()) => {
+                    runtime_state.qsy_pending_token = None;
+                    let _ = event_tx.send(ControlEvent::RfConnectionChanged {
+                        connected: false,
+                        peer: None,
+                    });
+                }
+                Err(err) => {
+                    let _ = event_tx.send(ControlEvent::CommandError {
+                        command: "disconnect_peer".to_string(),
+                        reason: format!("secure session end failed: {err}"),
+                    });
+                }
+            }
         }
         ControlCommand::SendMessage { body, .. } => {
             let mode = active_mode.lock().await.clone();
@@ -675,7 +728,15 @@ pub async fn apply_command_to_engine(
                 return;
             }
 
-            match qsy_decisions.get(token) {
+            if runtime_state.qsy_pending_token.as_deref() != Some(token) {
+                let _ = event_tx.send(ControlEvent::CommandError {
+                    command: "accept_qsy".to_string(),
+                    reason: format!("unknown pending token '{token}'"),
+                });
+                return;
+            }
+
+            match runtime_state.qsy_decisions.get(token) {
                 Some(true) => {
                     let _ = event_tx.send(ControlEvent::CommandError {
                         command: "accept_qsy".to_string(),
@@ -689,7 +750,8 @@ pub async fn apply_command_to_engine(
                     });
                 }
                 None => {
-                    qsy_decisions.insert(token.to_string(), true);
+                    runtime_state.qsy_decisions.insert(token.to_string(), true);
+                    runtime_state.qsy_pending_token = None;
                     let _ = event_tx.send(ControlEvent::QsyDecision {
                         token: token.to_string(),
                         accepted: true,
@@ -707,7 +769,15 @@ pub async fn apply_command_to_engine(
                 return;
             }
 
-            match qsy_decisions.get(token) {
+            if runtime_state.qsy_pending_token.as_deref() != Some(token) {
+                let _ = event_tx.send(ControlEvent::CommandError {
+                    command: "reject_qsy".to_string(),
+                    reason: format!("unknown pending token '{token}'"),
+                });
+                return;
+            }
+
+            match runtime_state.qsy_decisions.get(token) {
                 Some(true) => {
                     let _ = event_tx.send(ControlEvent::CommandError {
                         command: "reject_qsy".to_string(),
@@ -721,7 +791,8 @@ pub async fn apply_command_to_engine(
                     });
                 }
                 None => {
-                    qsy_decisions.insert(token.to_string(), false);
+                    runtime_state.qsy_decisions.insert(token.to_string(), false);
+                    runtime_state.qsy_pending_token = None;
                     let _ = event_tx.send(ControlEvent::QsyDecision {
                         token: token.to_string(),
                         accepted: false,
@@ -730,7 +801,7 @@ pub async fn apply_command_to_engine(
             }
         }
         ControlCommand::EnableRepeater => {
-            if *repeater_enabled {
+            if runtime_state.repeater_enabled {
                 let _ = event_tx.send(ControlEvent::CommandError {
                     command: "enable_repeater".to_string(),
                     reason: "repeater already enabled".to_string(),
@@ -738,11 +809,11 @@ pub async fn apply_command_to_engine(
                 return;
             }
 
-            *repeater_enabled = true;
+            runtime_state.repeater_enabled = true;
             let _ = event_tx.send(ControlEvent::RepeaterChanged { enabled: true });
         }
         ControlCommand::DisableRepeater => {
-            if !*repeater_enabled {
+            if !runtime_state.repeater_enabled {
                 let _ = event_tx.send(ControlEvent::CommandError {
                     command: "disable_repeater".to_string(),
                     reason: "repeater already disabled".to_string(),
@@ -750,7 +821,7 @@ pub async fn apply_command_to_engine(
                 return;
             }
 
-            *repeater_enabled = false;
+            runtime_state.repeater_enabled = false;
             let _ = event_tx.send(ControlEvent::RepeaterChanged { enabled: false });
         }
         // No live-modem side effects for these commands in the engine path.
@@ -793,16 +864,14 @@ mod command_apply_tests {
             },
         };
 
-        let mut repeater_enabled = false;
-        let mut qsy_decisions = HashMap::new();
+        let mut runtime_state = RuntimeControlState::default();
         apply_command_to_engine(
             &cmd,
             &mut engine,
             &active_mode,
             &ev_tx,
             None,
-            &mut repeater_enabled,
-            &mut qsy_decisions,
+            &mut runtime_state,
         )
         .await;
 
@@ -823,16 +892,14 @@ mod command_apply_tests {
             body: "rf body payload".into(),
         };
 
-        let mut repeater_enabled = false;
-        let mut qsy_decisions = HashMap::new();
+        let mut runtime_state = RuntimeControlState::default();
         apply_command_to_engine(
             &cmd,
             &mut engine,
             &active_mode,
             &ev_tx,
             None,
-            &mut repeater_enabled,
-            &mut qsy_decisions,
+            &mut runtime_state,
         )
         .await;
 
@@ -853,16 +920,14 @@ mod command_apply_tests {
             body: "rf body payload".into(),
         };
 
-        let mut repeater_enabled = false;
-        let mut qsy_decisions = HashMap::new();
+        let mut runtime_state = RuntimeControlState::default();
         apply_command_to_engine(
             &cmd,
             &mut engine,
             &active_mode,
             &ev_tx,
             None,
-            &mut repeater_enabled,
-            &mut qsy_decisions,
+            &mut runtime_state,
         )
         .await;
 
@@ -899,20 +964,18 @@ mod command_apply_tests {
                     token: "tok-1".into(),
                 },
                 "accept_qsy",
-                "already accepted",
+                "unknown pending token",
             ),
             (
                 ControlCommand::RejectQsy {
                     token: "tok-1".into(),
                 },
                 "reject_qsy",
-                "already accepted",
+                "unknown pending token",
             ),
         ];
 
-        let mut repeater_enabled = false;
-        let mut qsy_decisions = HashMap::new();
-        qsy_decisions.insert("tok-1".to_string(), true);
+        let mut runtime_state = RuntimeControlState::default();
         for (cmd, expected_command, expected_reason_substr) in cases {
             apply_command_to_engine(
                 &cmd,
@@ -920,8 +983,7 @@ mod command_apply_tests {
                 &active_mode,
                 &ev_tx,
                 None,
-                &mut repeater_enabled,
-                &mut qsy_decisions,
+                &mut runtime_state,
             )
             .await;
             let ev = rx.recv().await.expect("expected command_error event");
@@ -941,8 +1003,7 @@ mod command_apply_tests {
         let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
         let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
         let ev_tx = Arc::new(tx);
-        let mut repeater_enabled = false;
-        let mut qsy_decisions = HashMap::new();
+        let mut runtime_state = RuntimeControlState::default();
 
         apply_command_to_engine(
             &ControlCommand::EnableRepeater,
@@ -950,11 +1011,10 @@ mod command_apply_tests {
             &active_mode,
             &ev_tx,
             None,
-            &mut repeater_enabled,
-            &mut qsy_decisions,
+            &mut runtime_state,
         )
         .await;
-        assert!(repeater_enabled);
+        assert!(runtime_state.repeater_enabled);
         match rx.recv().await.expect("expected repeater event") {
             ControlEvent::RepeaterChanged { enabled } => assert!(enabled),
             other => panic!("expected RepeaterChanged, got {other:?}"),
@@ -966,11 +1026,10 @@ mod command_apply_tests {
             &active_mode,
             &ev_tx,
             None,
-            &mut repeater_enabled,
-            &mut qsy_decisions,
+            &mut runtime_state,
         )
         .await;
-        assert!(!repeater_enabled);
+        assert!(!runtime_state.repeater_enabled);
         match rx.recv().await.expect("expected repeater event") {
             ControlEvent::RepeaterChanged { enabled } => assert!(!enabled),
             other => panic!("expected RepeaterChanged, got {other:?}"),
@@ -983,8 +1042,8 @@ mod command_apply_tests {
         let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
         let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
         let ev_tx = Arc::new(tx);
-        let mut repeater_enabled = false;
-        let mut qsy_decisions = HashMap::new();
+        let mut runtime_state = RuntimeControlState::default();
+        runtime_state.qsy_pending_token = Some("tok-accept".to_string());
 
         apply_command_to_engine(
             &ControlCommand::AcceptQsy {
@@ -994,11 +1053,11 @@ mod command_apply_tests {
             &active_mode,
             &ev_tx,
             None,
-            &mut repeater_enabled,
-            &mut qsy_decisions,
+            &mut runtime_state,
         )
         .await;
-        assert_eq!(qsy_decisions.get("tok-accept"), Some(&true));
+        assert_eq!(runtime_state.qsy_decisions.get("tok-accept"), Some(&true));
+        assert!(runtime_state.qsy_pending_token.is_none());
         match rx.recv().await.expect("expected qsy event") {
             ControlEvent::QsyDecision { token, accepted } => {
                 assert_eq!(token, "tok-accept");
@@ -1007,6 +1066,7 @@ mod command_apply_tests {
             other => panic!("expected QsyDecision, got {other:?}"),
         }
 
+        runtime_state.qsy_pending_token = Some("tok-reject".to_string());
         apply_command_to_engine(
             &ControlCommand::RejectQsy {
                 token: "tok-reject".into(),
@@ -1015,11 +1075,11 @@ mod command_apply_tests {
             &active_mode,
             &ev_tx,
             None,
-            &mut repeater_enabled,
-            &mut qsy_decisions,
+            &mut runtime_state,
         )
         .await;
-        assert_eq!(qsy_decisions.get("tok-reject"), Some(&false));
+        assert_eq!(runtime_state.qsy_decisions.get("tok-reject"), Some(&false));
+        assert!(runtime_state.qsy_pending_token.is_none());
         match rx.recv().await.expect("expected qsy event") {
             ControlEvent::QsyDecision { token, accepted } => {
                 assert_eq!(token, "tok-reject");
@@ -1027,5 +1087,78 @@ mod command_apply_tests {
             }
             other => panic!("expected QsyDecision, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn apply_connect_disconnect_drive_secure_session_and_pending_qsy() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(32);
+        let ev_tx = Arc::new(tx);
+        let mut runtime_state = RuntimeControlState::default();
+
+        apply_command_to_engine(
+            &ControlCommand::ConnectPeer {
+                callsign: "W1AW".to_string(),
+            },
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut runtime_state,
+        )
+        .await;
+
+        assert!(engine.hpx_session_id().is_some());
+        let token = runtime_state
+            .qsy_pending_token
+            .clone()
+            .expect("connect should create pending qsy token");
+
+        let first = rx.recv().await.expect("expected event");
+        let second = rx.recv().await.expect("expected event");
+        let saw_connected = matches!(
+            (&first, &second),
+            (
+                ControlEvent::RfConnectionChanged {
+                    connected: true,
+                    peer: Some(_)
+                },
+                ControlEvent::QsyPending { .. }
+            ) | (
+                ControlEvent::QsyPending { .. },
+                ControlEvent::RfConnectionChanged {
+                    connected: true,
+                    peer: Some(_)
+                }
+            )
+        );
+        assert!(
+            saw_connected,
+            "expected rf connected and qsy pending events"
+        );
+
+        apply_command_to_engine(
+            &ControlCommand::AcceptQsy { token },
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut runtime_state,
+        )
+        .await;
+
+        apply_command_to_engine(
+            &ControlCommand::DisconnectPeer,
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut runtime_state,
+        )
+        .await;
+
+        assert!(runtime_state.qsy_pending_token.is_none());
+        assert!(engine.hpx_session_id().is_none());
     }
 }
