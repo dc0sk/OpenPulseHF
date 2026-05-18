@@ -25,6 +25,8 @@ pub enum Ax25Error {
     BadFrame,
     #[error("invalid callsign")]
     InvalidCallsign,
+    #[error("invalid ssid: {0} (expected 0..=15)")]
+    InvalidSsid(u8),
 }
 
 impl Ax25Addr {
@@ -59,6 +61,13 @@ impl Ax25Addr {
         out
     }
 
+    fn validate(&self) -> Result<(), Ax25Error> {
+        if self.ssid > 15 {
+            return Err(Ax25Error::InvalidSsid(self.ssid));
+        }
+        Ok(())
+    }
+
     fn from_wire(bytes: &[u8]) -> Self {
         let mut callsign = [0u8; 6];
         for (i, &b) in bytes[..6].iter().enumerate() {
@@ -79,14 +88,17 @@ impl Ax25Addr {
 
 impl Ax25UiFrame {
     /// Encode to wire bytes: dest(7) + src(7) + Control(0x03) + PID(0xF0) + info.
-    pub fn encode(&self) -> Vec<u8> {
+    pub fn encode(&self) -> Result<Vec<u8>, Ax25Error> {
+        self.dest.validate()?;
+        self.src.validate()?;
+
         let mut out = Vec::with_capacity(16 + self.info.len());
         out.extend_from_slice(&self.dest.to_wire(false));
         out.extend_from_slice(&self.src.to_wire(true));
         out.push(0x03); // Control: UI
         out.push(0xF0); // PID: no layer 3
         out.extend_from_slice(&self.info);
-        out
+        Ok(out)
     }
 
     /// Decode from wire bytes.
