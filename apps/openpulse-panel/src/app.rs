@@ -274,6 +274,8 @@ impl eframe::App for PanelApp {
 
         // Always repaint while connected to show live events.
         let connected = self.shared.lock().unwrap().connected;
+        let repeater_enabled = self.shared.lock().unwrap().repeater_enabled;
+        self.repeater_enabled = repeater_enabled;
         if connected {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }

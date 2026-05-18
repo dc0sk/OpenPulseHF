@@ -266,6 +266,13 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
             st.rf_connected = connected;
             st.rf_peer = peer;
         }
+        ControlEvent::RepeaterChanged { enabled } => {
+            st.repeater_enabled = enabled;
+            st.push_log(format!(
+                "Repeater {}",
+                if enabled { "enabled" } else { "disabled" }
+            ));
+        }
         ControlEvent::ConfigData { config } => {
             st.daemon_config = Some(config);
         }

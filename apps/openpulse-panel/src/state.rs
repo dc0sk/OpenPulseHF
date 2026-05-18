@@ -69,6 +69,8 @@ pub struct PanelState {
     pub rf_connected: bool,
     /// Callsign of the currently connected RF peer, if any.
     pub rf_peer: Option<String>,
+    /// Whether the daemon reports repeater runtime enabled.
+    pub repeater_enabled: bool,
     /// Most-recent daemon configuration snapshot (from `ConfigData` event).
     pub daemon_config: Option<DaemonConfig>,
     /// Inbox: summaries of all stored messages (from `MessageList` / `MessageReceived` events).
@@ -105,6 +107,7 @@ impl Default for PanelState {
             ptt_active: false,
             rf_connected: false,
             rf_peer: None,
+            repeater_enabled: false,
             daemon_config: None,
             inbox: Vec::new(),
             open_message_body: None,
