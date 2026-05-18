@@ -79,6 +79,7 @@ All orchestration scripts support `--help` for usage details:
 ./scripts/onair-preflight.sh --help
 ./scripts/run-onair-tests.sh --help
 ./scripts/onair-bundle-evidence.sh --help
+./scripts/run-onair-validation-flow.sh --help
 ```
 
 This gate verifies required tooling, config presence, non-placeholder callsign,
@@ -100,6 +101,15 @@ Generated JSON reports now include explicit preflight metadata:
   "mode": "strict"
 }
 ```
+
+For a full runbook execution in one command (matrix + evidence bundle + markdown report):
+
+```bash
+source config/onair-stations.sh
+./scripts/run-onair-validation-flow.sh --quick --label 20m-bpsk250 --notes path/to/operator-notes.txt
+```
+
+This command writes all artifacts under `docs/dev/test-reports/` by default.
 
 ---
 
