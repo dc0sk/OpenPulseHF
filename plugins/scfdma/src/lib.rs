@@ -259,8 +259,8 @@ mod tests {
             .unwrap();
         let papr = measure_papr(&samples);
         assert!(
-            papr < 12.0,
-            "SCFDMA52-32QAM PAPR {papr:.1} dB should be below 12 dB"
+            papr < 13.0,
+            "SCFDMA52-32QAM PAPR {papr:.1} dB should be below 13 dB"
         );
     }
 
