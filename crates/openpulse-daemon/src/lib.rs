@@ -27,6 +27,8 @@ use openpulse_channel::dsp::PowerSpectrum;
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_modem::ModemEngine;
 #[cfg(not(target_arch = "wasm32"))]
+use openpulse_radio::RigctldController;
+#[cfg(not(target_arch = "wasm32"))]
 use protocol::{
     encode_spectrum_frame, CommandResponse, ControlCommand, ControlEvent, MessageSummary,
 };
@@ -560,13 +562,15 @@ pub(crate) async fn dispatch_command(
 /// Execute side-effectful control commands against the live modem engine.
 ///
 /// This complements [`dispatch_command`], which updates shared daemon state and
-/// forwards commands to the caller. Unsupported commands are ignored.
+/// forwards commands to the caller. Commands without runtime support emit a
+/// [`ControlEvent::CommandError`] instead of failing silently.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn apply_command_to_engine(
     cmd: &ControlCommand,
     engine: &mut ModemEngine,
     active_mode: &SharedMode,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+    rig_controller: Option<&mut RigctldController>,
 ) {
     match cmd {
         ControlCommand::SetMode { mode } => {
@@ -621,13 +625,69 @@ pub async fn apply_command_to_engine(
                 });
             }
         }
-        // No live-modem side effects yet for these commands.
-        ControlCommand::SetFreq { .. }
-        | ControlCommand::AcceptQsy { .. }
-        | ControlCommand::RejectQsy { .. }
-        | ControlCommand::EnableRepeater
-        | ControlCommand::DisableRepeater
-        | ControlCommand::SubscribeSpectrum { .. }
+        ControlCommand::SetFreq { rig, freq_hz } => {
+            if rig != "rigctld" {
+                let _ = event_tx.send(ControlEvent::CommandError {
+                    command: "set_freq".to_string(),
+                    reason: format!("unsupported rig target '{rig}'"),
+                });
+                return;
+            }
+
+            let Some(controller) = rig_controller else {
+                let _ = event_tx.send(ControlEvent::CommandError {
+                    command: "set_freq".to_string(),
+                    reason: "no rigctld controller configured".to_string(),
+                });
+                return;
+            };
+
+            match controller.set_frequency(*freq_hz) {
+                Ok(()) => {
+                    let _ = event_tx.send(ControlEvent::RigStatus {
+                        rig: rig.clone(),
+                        freq_hz: *freq_hz,
+                        mode: "CAT".to_string(),
+                        power_w: None,
+                        alc: None,
+                        swr: None,
+                    });
+                }
+                Err(err) => {
+                    let _ = event_tx.send(ControlEvent::CommandError {
+                        command: "set_freq".to_string(),
+                        reason: format!("rigctld set_frequency failed: {err}"),
+                    });
+                }
+            }
+        }
+        ControlCommand::AcceptQsy { .. } => {
+            let _ = event_tx.send(ControlEvent::CommandError {
+                command: "accept_qsy".to_string(),
+                reason: "not implemented in daemon runtime".to_string(),
+            });
+        }
+        ControlCommand::RejectQsy { .. } => {
+            let _ = event_tx.send(ControlEvent::CommandError {
+                command: "reject_qsy".to_string(),
+                reason: "not implemented in daemon runtime".to_string(),
+            });
+        }
+        ControlCommand::EnableRepeater => {
+            let _ = event_tx.send(ControlEvent::CommandError {
+                command: "enable_repeater".to_string(),
+                reason: "not implemented in daemon runtime".to_string(),
+            });
+        }
+        ControlCommand::DisableRepeater => {
+            let _ = event_tx.send(ControlEvent::CommandError {
+                command: "disable_repeater".to_string(),
+                reason: "not implemented in daemon runtime".to_string(),
+            });
+        }
+        // No live-modem side effects for these commands in the engine path.
+        // They are handled by dispatch-only paths or request-response control flow.
+        ControlCommand::SubscribeSpectrum { .. }
         | ControlCommand::GetConfig
         | ControlCommand::ListMessages
         | ControlCommand::GetMessage { .. }
@@ -665,7 +725,7 @@ mod command_apply_tests {
             },
         };
 
-        apply_command_to_engine(&cmd, &mut engine, &active_mode, &ev_tx).await;
+        apply_command_to_engine(&cmd, &mut engine, &active_mode, &ev_tx, None).await;
 
         assert_eq!(*active_mode.lock().await, "BPSK250");
         assert!((engine.tx_attenuation_db() - (-6.0)).abs() < 1e-6);
@@ -684,7 +744,7 @@ mod command_apply_tests {
             body: "rf body payload".into(),
         };
 
-        apply_command_to_engine(&cmd, &mut engine, &active_mode, &ev_tx).await;
+        apply_command_to_engine(&cmd, &mut engine, &active_mode, &ev_tx, None).await;
 
         let rx = engine.receive("BPSK250", None).unwrap();
         assert_eq!(rx, b"rf body payload");
@@ -703,7 +763,7 @@ mod command_apply_tests {
             body: "rf body payload".into(),
         };
 
-        apply_command_to_engine(&cmd, &mut engine, &active_mode, &ev_tx).await;
+        apply_command_to_engine(&cmd, &mut engine, &active_mode, &ev_tx, None).await;
 
         let mut saw_error = false;
         while let Ok(ev) = rx.try_recv() {
@@ -715,5 +775,60 @@ mod command_apply_tests {
             }
         }
         assert!(saw_error, "expected command_error event");
+    }
+
+    #[tokio::test]
+    async fn apply_unimplemented_runtime_commands_emit_command_error() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+
+        let cases = vec![
+            (
+                ControlCommand::SetFreq {
+                    rig: "rigctld".into(),
+                    freq_hz: 7_100_000,
+                },
+                "set_freq",
+                "no rigctld controller configured",
+            ),
+            (
+                ControlCommand::AcceptQsy {
+                    token: "tok-1".into(),
+                },
+                "accept_qsy",
+                "not implemented",
+            ),
+            (
+                ControlCommand::RejectQsy {
+                    token: "tok-2".into(),
+                },
+                "reject_qsy",
+                "not implemented",
+            ),
+            (
+                ControlCommand::EnableRepeater,
+                "enable_repeater",
+                "not implemented",
+            ),
+            (
+                ControlCommand::DisableRepeater,
+                "disable_repeater",
+                "not implemented",
+            ),
+        ];
+
+        for (cmd, expected_command, expected_reason_substr) in cases {
+            apply_command_to_engine(&cmd, &mut engine, &active_mode, &ev_tx, None).await;
+            let ev = rx.recv().await.expect("expected command_error event");
+            match ev {
+                ControlEvent::CommandError { command, reason } => {
+                    assert_eq!(command, expected_command);
+                    assert!(reason.contains(expected_reason_substr));
+                }
+                other => panic!("expected command_error event, got {other:?}"),
+            }
+        }
     }
 }

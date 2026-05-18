@@ -420,14 +420,31 @@ fn default_identity_path() -> Option<PathBuf> {
 /// Persist updated QSY settings to the platform config file.
 ///
 /// Loads the existing config (falling back to defaults), updates the two QSY
-/// fields, then rewrites the file.  Silently returns `Ok(())` if the config
-/// directory cannot be determined.
+/// fields, then rewrites the file. Returns an error when the config directory
+/// cannot be determined.
 pub fn save_qsy_config(qsy_enabled: bool, bandplan_mode: &str) -> Result<(), ConfigError> {
     let path = match default_config_path() {
         Some(p) => p,
-        None => return Ok(()),
+        None => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "cannot determine config directory",
+            )
+            .into())
+        }
     };
-    let mut cfg = load_from(&path).unwrap_or_default();
+    save_qsy_config_to_path(&path, qsy_enabled, bandplan_mode)
+}
+
+/// Persist updated QSY settings to an explicit config path.
+///
+/// This is used by tests and tooling that need deterministic file locations.
+pub fn save_qsy_config_to_path(
+    path: &Path,
+    qsy_enabled: bool,
+    bandplan_mode: &str,
+) -> Result<(), ConfigError> {
+    let mut cfg = load_from(path).unwrap_or_default();
     cfg.qsy.enabled = qsy_enabled;
     if bandplan_mode == "unrestricted" {
         cfg.qsy.bandplan_awareness_enabled = false;
@@ -440,7 +457,7 @@ pub fn save_qsy_config(qsy_enabled: bool, bandplan_mode: &str) -> Result<(), Con
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&path, toml_str)?;
+    std::fs::write(path, toml_str)?;
     Ok(())
 }
 
@@ -671,5 +688,32 @@ mod tests {
 
         let _ = std::fs::remove_file(&key_path);
         let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[test]
+    fn save_qsy_config_to_path_persists_unrestricted_mode() {
+        let path = unique_tmp("qsy_unrestricted");
+        let _ = std::fs::remove_file(&path);
+
+        save_qsy_config_to_path(&path, true, "unrestricted").unwrap();
+
+        let cfg = load_from(&path).unwrap();
+        assert!(cfg.qsy.enabled);
+        assert!(!cfg.qsy.bandplan_awareness_enabled);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn save_qsy_config_to_path_persists_bandplan_mode() {
+        let path = unique_tmp("qsy_bandplan");
+        let _ = std::fs::remove_file(&path);
+
+        save_qsy_config_to_path(&path, true, "ham-iaru-r2").unwrap();
+
+        let cfg = load_from(&path).unwrap();
+        assert!(cfg.qsy.enabled);
+        assert!(cfg.qsy.bandplan_awareness_enabled);
+        assert_eq!(cfg.qsy.bandplan_mode, "ham-iaru-r2");
+        let _ = std::fs::remove_file(&path);
     }
 }

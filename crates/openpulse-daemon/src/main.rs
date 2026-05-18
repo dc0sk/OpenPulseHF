@@ -4,6 +4,7 @@
 use openpulse_audio::LoopbackBackend;
 use openpulse_daemon::{apply_command_to_engine, ws, ControlServer};
 use openpulse_modem::ModemEngine;
+use openpulse_radio::RigctldController;
 
 use bpsk_plugin::BpskPlugin;
 use fsk4_plugin::Fsk4Plugin;
@@ -23,6 +24,13 @@ async fn main() {
         .init();
 
     let cfg = openpulse_config::load().unwrap_or_default();
+    if cfg.station.callsign.trim().eq_ignore_ascii_case("N0CALL") {
+        tracing::error!(
+            "invalid callsign N0CALL in configuration; set [station].callsign before starting daemon"
+        );
+        return;
+    }
+
     let mode = cfg.modem.mode.clone();
     let station_id = (
         cfg.station.callsign.clone(),
@@ -96,8 +104,27 @@ async fn main() {
 
     tracing::info!("openpulse-server WebSocket control port listening on {ws_bind}");
 
+    let mut rig_controller = match RigctldController::connect(&cfg.radio.rigctld_addr) {
+        Ok(controller) => Some(controller),
+        Err(err) => {
+            tracing::warn!(
+                addr = %cfg.radio.rigctld_addr,
+                error = %err,
+                "rigctld connect failed; set_freq commands will emit command_error"
+            );
+            None
+        }
+    };
+
     // Execute side-effectful commands against the live modem engine.
     while let Some(cmd) = handle.commands.recv().await {
-        apply_command_to_engine(&cmd, &mut engine, &handle.active_mode, &handle.event_tx).await;
+        apply_command_to_engine(
+            &cmd,
+            &mut engine,
+            &handle.active_mode,
+            &handle.event_tx,
+            rig_controller.as_mut(),
+        )
+        .await;
     }
 }

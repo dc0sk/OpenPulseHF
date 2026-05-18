@@ -87,6 +87,12 @@ fn main() -> Result<()> {
     let worker = events::spawn_worker(engine, cli.mode.clone(), rx);
 
     let cfg = openpulse_config::load().unwrap_or_default();
+    if cfg.station.callsign.trim().eq_ignore_ascii_case("N0CALL") {
+        anyhow::bail!(
+            "invalid callsign N0CALL in configuration; set [station].callsign before running openpulse-tui"
+        );
+    }
+
     let initial_qsy_enabled = cfg.qsy.enabled;
     let initial_bandplan_mode = if cfg.qsy.bandplan_awareness_enabled {
         cfg.qsy.bandplan_mode.clone()
