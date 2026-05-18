@@ -50,7 +50,7 @@ fn hpx_hf_mode_mapping() {
     assert_eq!(p.mode_for(SpeedLevel::Sl5), Some("QPSK250"));
     assert_eq!(p.mode_for(SpeedLevel::Sl6), Some("QPSK500"));
     assert_eq!(p.mode_for(SpeedLevel::Sl7), Some("8PSK500"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl8), None);
+    assert_eq!(p.mode_for(SpeedLevel::Sl8), Some("SCFDMA52-8PSK"));
     assert_eq!(p.mode_for(SpeedLevel::Sl11), None);
     assert_eq!(p.mode_for(SpeedLevel::Sl12), None);
     assert_eq!(p.mode_for(SpeedLevel::Sl13), None);

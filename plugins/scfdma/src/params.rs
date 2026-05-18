@@ -72,6 +72,16 @@ pub const SCFDMA52: ScFdmaParams = ScFdmaParams {
     pilot_spacing: DEFAULT_PILOT_SPACING,
 };
 
+/// SCFDMA-52 with 8PSK subcarriers: 4,333 bps gross.
+pub const SCFDMA52_8PSK: ScFdmaParams = ScFdmaParams {
+    first_sc: 16,
+    last_sc: 80,
+    n_data: 52,
+    n_pilots: 13,
+    bits_per_sc: 3,
+    pilot_spacing: DEFAULT_PILOT_SPACING,
+};
+
 /// SCFDMA-52 with 16QAM subcarriers: 5,778 bps gross.
 pub const SCFDMA52_16QAM: ScFdmaParams = ScFdmaParams {
     first_sc: 16,
@@ -121,6 +131,7 @@ pub fn params_for_mode(mode: &str) -> Option<ScFdmaParams> {
     match mode.to_ascii_uppercase().as_str() {
         "SCFDMA16" => Some(SCFDMA16),
         "SCFDMA52" => Some(SCFDMA52),
+        "SCFDMA52-8PSK" => Some(SCFDMA52_8PSK),
         "SCFDMA52-16QAM" => Some(SCFDMA52_16QAM),
         "SCFDMA52-32QAM" => Some(SCFDMA52_32QAM),
         "SCFDMA52-64QAM" => Some(SCFDMA52_64QAM),
@@ -145,6 +156,15 @@ mod tests {
         assert_eq!(SCFDMA52.total_sc(), 65);
         assert_eq!(SCFDMA52.n_data + SCFDMA52.n_pilots, 65);
         assert_eq!(SCFDMA52.bits_per_symbol(), 104);
+    }
+
+    #[test]
+    fn scfdma52_8psk_geometry() {
+        assert_eq!(SCFDMA52_8PSK.n_data, 52);
+        assert_eq!(SCFDMA52_8PSK.bits_per_sc, 3);
+        assert_eq!(SCFDMA52_8PSK.bits_per_symbol(), 156);
+        // 52 × 3 × 8000/288 ≈ 4333 bps
+        assert!((SCFDMA52_8PSK.gross_bps() - 4333.0).abs() < 5.0);
     }
 
     #[test]

@@ -8,8 +8,8 @@ use crate::channel::{
     mmse_llr_noise_var, pilot_positions,
 };
 use crate::modulate::{
-    gray5_to_natural, modulate_with_params, natural5_to_gray, preamble_payload, QAM32_SCALE,
-    QAM32_SPATIAL,
+    gray3_to_natural, gray5_to_natural, modulate_with_params, natural3_to_gray, natural5_to_gray,
+    preamble_payload, QAM32_SCALE, QAM32_SPATIAL,
 };
 use crate::params::PILOT_AMPLITUDE;
 use crate::params::{params_for_mode, ScFdmaParams, CP, FFT_SIZE, SYM_LEN};
@@ -308,6 +308,7 @@ fn find_sync_offset(samples: &[f32], sync: &[f32]) -> usize {
 fn demap_symbol(c: Complex32, bits_per_sc: usize) -> u8 {
     match bits_per_sc {
         2 => qpsk_demod(c),
+        3 => psk8_demod(c),
         4 => qam16_demod(c),
         5 => qam32_demod(c),
         6 => qam64_demod(c),
@@ -416,6 +417,7 @@ fn symbol_llrs(
 fn constellation_points(bits_per_sc: usize) -> Vec<(u8, Complex32)> {
     match bits_per_sc {
         2 => (0u8..4).map(|b| (b, qpsk_point(b))).collect(),
+        3 => (0u8..8).map(|b| (b, psk8_point(b))).collect(),
         4 => (0u8..16).map(|b| (b, qam16_point(b))).collect(),
         5 => (0u8..32).map(|b| (b, qam32_point(b))).collect(),
         6 => (0u8..64).map(|b| (b, qam64_point(b))).collect(),
@@ -463,6 +465,19 @@ fn qam16_point(bits: u8) -> Complex32 {
     let i = pam4((bits >> 2) & 0x3) * SCALE;
     let q = pam4(bits & 0x3) * SCALE;
     Complex32::new(i, q)
+}
+
+fn psk8_point(bits: u8) -> Complex32 {
+    let k = gray3_to_natural(bits);
+    let angle = k as f32 * std::f32::consts::FRAC_PI_4;
+    Complex32::new(angle.cos(), angle.sin())
+}
+
+fn psk8_demod(c: Complex32) -> u8 {
+    use std::f32::consts::{FRAC_PI_4, TAU};
+    let angle = c.im.atan2(c.re).rem_euclid(TAU);
+    let k = ((angle / FRAC_PI_4) + 0.5).floor() as u8 % 8;
+    natural3_to_gray(k)
 }
 
 fn qam32_point(bits: u8) -> Complex32 {

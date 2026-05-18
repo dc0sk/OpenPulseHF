@@ -111,6 +111,7 @@ pub(crate) fn modulate_with_params(payload: &[u8], p: &ScFdmaParams) -> Vec<f32>
 fn map_symbol(bits: u8, bits_per_sc: usize) -> Complex32 {
     match bits_per_sc {
         2 => qpsk_mod(bits),
+        3 => psk8_mod(bits),
         4 => qam16_mod(bits),
         5 => qam32_mod(bits),
         6 => qam64_mod(bits),
@@ -127,6 +128,30 @@ fn qpsk_mod(bits: u8) -> Complex32 {
         2 => Complex32::new(INV_SQRT2, -INV_SQRT2),
         _ => Complex32::new(-INV_SQRT2, -INV_SQRT2),
     }
+}
+
+/// Gray-coded 8PSK: 8 phases equally spaced on the unit circle.
+///
+/// Natural index k → angle k×π/4.  Gray coding: label = k XOR (k>>1).
+/// Mean power = 1 (all points on unit circle).
+fn psk8_mod(bits: u8) -> Complex32 {
+    let k = gray3_to_natural(bits);
+    let angle = k as f32 * std::f32::consts::FRAC_PI_4;
+    Complex32::new(angle.cos(), angle.sin())
+}
+
+/// Convert a 3-bit Gray code to a natural (binary) index.
+pub(crate) fn gray3_to_natural(g: u8) -> u8 {
+    let g = g & 0x7;
+    let b2 = (g >> 2) & 1;
+    let b1 = ((g >> 1) ^ b2) & 1;
+    let b0 = (g ^ b1) & 1;
+    (b2 << 2) | (b1 << 1) | b0
+}
+
+/// Convert a natural (binary) 3-bit index to its Gray code.
+pub(crate) fn natural3_to_gray(n: u8) -> u8 {
+    (n ^ (n >> 1)) & 0x7
 }
 
 /// Gray-coded 16QAM: PAM-4 on I and Q, normalised to unit average power.
@@ -282,6 +307,41 @@ pub fn measure_papr(samples: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn psk8_average_power_is_unit() {
+        let total: f32 = (0..8u8).map(|b| psk8_mod(b).norm_sqr()).sum::<f32>() / 8.0;
+        assert!(
+            (total - 1.0).abs() < 0.01,
+            "8PSK average power = {total:.4}"
+        );
+    }
+
+    #[test]
+    fn psk8_all_points_distinct() {
+        let points: Vec<(i32, i32)> = (0..8u8)
+            .map(|b| {
+                let c = psk8_mod(b);
+                ((c.re * 1000.0) as i32, (c.im * 1000.0) as i32)
+            })
+            .collect();
+        for i in 0..points.len() {
+            for j in (i + 1)..points.len() {
+                assert_ne!(points[i], points[j], "8PSK points {i} and {j} collide");
+            }
+        }
+    }
+
+    #[test]
+    fn gray3_round_trip() {
+        for n in 0u8..8 {
+            assert_eq!(
+                gray3_to_natural(natural3_to_gray(n)),
+                n,
+                "round-trip failed for n={n}"
+            );
+        }
+    }
 
     #[test]
     fn qam16_average_power_is_unit() {

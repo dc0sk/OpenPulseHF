@@ -9,6 +9,7 @@
 //! Supported modes:
 //! - `SCFDMA16`:          16 data SCs, QPSK,       BW ≈  625 Hz, gross ~   889 bps
 //! - `SCFDMA52`:          52 data SCs, QPSK,       BW ≈ 2031 Hz, gross ~ 2,889 bps
+//! - `SCFDMA52-8PSK`:     52 data SCs, 8PSK,       BW ≈ 2031 Hz, gross ~ 4,333 bps
 //! - `SCFDMA52-16QAM`:    52 data SCs, 16QAM,      BW ≈ 2031 Hz, gross ~ 5,778 bps
 //! - `SCFDMA52-32QAM`:    52 data SCs, cross-32QAM, BW ≈ 2031 Hz, gross ~ 7,222 bps
 //! - `SCFDMA52-64QAM`:    52 data SCs, 64QAM,      BW ≈ 2031 Hz, gross ~ 8,667 bps
@@ -39,14 +40,15 @@ impl ScFdmaPlugin {
             info: PluginInfo {
                 name: "SC-FDMA".into(),
                 version: "0.1.0".into(),
-                description: "SC-FDMA HF plugin: SCFDMA16/52 (QPSK), SCFDMA52-16QAM, \
-                     SCFDMA52-32QAM (cross-32QAM), SCFDMA52-64QAM, SCFDMA52-64QAM-P4 \
-                     (dense pilots); MMSE equalization (BL-TP-4)"
+                description: "SC-FDMA HF plugin: SCFDMA16/52 (QPSK), SCFDMA52-8PSK, \
+                     SCFDMA52-16QAM, SCFDMA52-32QAM (cross-32QAM), SCFDMA52-64QAM, \
+                     SCFDMA52-64QAM-P4 (dense pilots); MMSE equalization (BL-TP-4)"
                     .into(),
                 author: "OpenPulse Contributors".into(),
                 supported_modes: vec![
                     "SCFDMA16".into(),
                     "SCFDMA52".into(),
+                    "SCFDMA52-8PSK".into(),
                     "SCFDMA52-16QAM".into(),
                     "SCFDMA52-32QAM".into(),
                     "SCFDMA52-64QAM".into(),
@@ -157,7 +159,7 @@ mod tests {
     use super::*;
     use crate::channel::pilot_positions;
     use crate::modulate::measure_papr;
-    use crate::params::{SCFDMA16, SCFDMA52, SCFDMA52_32QAM, SCFDMA52_64QAM_P4};
+    use crate::params::{SCFDMA16, SCFDMA52, SCFDMA52_32QAM, SCFDMA52_64QAM_P4, SCFDMA52_8PSK};
 
     fn mod_config(mode: &str) -> ModulationConfig {
         ModulationConfig {
@@ -235,6 +237,41 @@ mod tests {
             .demodulate(&samples, &mod_config("SCFDMA52-16QAM"))
             .unwrap();
         assert_eq!(rx.as_slice(), payload.as_ref());
+    }
+
+    #[test]
+    fn scfdma52_8psk_loopback_clean() {
+        let plugin = ScFdmaPlugin::new();
+        let payload = b"SCFDMA52-8PSK clean loopback: 4333 bps gross, Gray-coded 8PSK.";
+        let samples = plugin
+            .modulate(payload, &mod_config("SCFDMA52-8PSK"))
+            .unwrap();
+        let rx = plugin
+            .demodulate(&samples, &mod_config("SCFDMA52-8PSK"))
+            .unwrap();
+        assert_eq!(rx.as_slice(), payload.as_ref());
+    }
+
+    #[test]
+    fn scfdma52_8psk_papr_below_12db() {
+        let plugin = ScFdmaPlugin::new();
+        let payload = b"8PSK PAPR test payload - unit circle means low PAPR with DFT precoding";
+        let samples = plugin
+            .modulate(payload, &mod_config("SCFDMA52-8PSK"))
+            .unwrap();
+        let papr = measure_papr(&samples);
+        assert!(
+            papr < 12.0,
+            "SCFDMA52-8PSK PAPR {papr:.1} dB should be below 12 dB"
+        );
+    }
+
+    #[test]
+    fn scfdma52_8psk_pilot_count_matches_params() {
+        use crate::channel::pilot_positions;
+        let pilots = pilot_positions(&SCFDMA52_8PSK);
+        assert_eq!(pilots.len(), SCFDMA52_8PSK.n_pilots);
+        assert_eq!(SCFDMA52_8PSK.bits_per_sc, 3);
     }
 
     #[test]
