@@ -288,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn scfdma52_32qam_papr_below_12db() {
+    fn scfdma52_32qam_papr_below_13db() {
         let plugin = ScFdmaPlugin::new();
         let payload = b"32QAM PAPR test payload - DFT precoding keeps PAPR low at 5 bits/SC";
         let samples = plugin

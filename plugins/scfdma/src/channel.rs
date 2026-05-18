@@ -3,7 +3,7 @@
 //! Pilot layout is identical to OFDM: every 5th SC starting at first_sc+4.
 
 use num_complex::Complex32;
-use rustfft::FftPlanner;
+use rustfft::{Fft, FftPlanner};
 
 use crate::params::{ScFdmaParams, CP, FFT_SIZE, PILOT_AMPLITUDE, SAMPLE_RATE, SYM_LEN};
 
@@ -96,7 +96,14 @@ pub fn ls_estimate(p: &ScFdmaParams, freq: &[Complex32]) -> Vec<Complex32> {
 /// rather than via zero-padding, which correctly handles the non-zero `first_sc` offset.
 ///
 /// Returns estimates indexed by `sc - first_sc` (length = `p.total_sc()`).
-pub fn dft_ce_estimate(p: &ScFdmaParams, freq: &[Complex32]) -> Vec<Complex32> {
+///
+/// `ce_idft` must be a pre-planned P-point inverse FFT where P = `p.n_pilots`.
+/// Pass a plan created once per demodulation session rather than replanning per symbol.
+pub fn dft_ce_estimate(
+    p: &ScFdmaParams,
+    freq: &[Complex32],
+    ce_idft: &dyn Fft<f32>,
+) -> Vec<Complex32> {
     let total = p.total_sc();
     let pilots = pilot_positions(p);
     let n_pilots = pilots.len();
@@ -113,9 +120,7 @@ pub fn dft_ce_estimate(p: &ScFdmaParams, freq: &[Complex32]) -> Vec<Complex32> {
 
     // --- Step 2: IDFT(P) → P-point warped CIR h'[l] ---
     // CIR tap l represents physical delay  d_l = l × N_FFT / total_sc  samples.
-    let mut planner = FftPlanner::<f32>::new();
-    let idft = planner.plan_fft_inverse(n_pilots);
-    idft.process(&mut h_pilot);
+    ce_idft.process(&mut h_pilot);
     let inv_p = 1.0 / n_pilots as f32;
     for h in &mut h_pilot {
         *h *= inv_p;
@@ -131,8 +136,10 @@ pub fn dft_ce_estimate(p: &ScFdmaParams, freq: &[Complex32]) -> Vec<Complex32> {
 
     // --- Step 4: Reconstruct H at all occupied SCs ---
     // H_est[first_sc + rel] = Σ_{l=0}^{l_max-1} h'[l] × exp(-j2π (rel - offset) l / total)
-    // where offset = (first_pilot_sc - first_sc) = pilot_spacing - 1.
-    let offset = p.pilot_spacing as isize - 1;
+    // offset = pilots[0] - first_sc: the position of the first pilot within the occupied band.
+    // Using the actual pilot position decouples the formula from the pilot_spacing heuristic and
+    // handles non-uniform pilot grids (e.g. SCFDMA52-64QAM-P4 where spacing×n_pilots ≠ total_sc).
+    let offset = pilots[0] as isize - p.first_sc as isize;
     (0..total)
         .map(|rel| {
             let freq_idx = rel as isize - offset;
@@ -422,7 +429,9 @@ mod tests {
         for sc in p.first_sc..=p.last_sc {
             freq[sc] = Complex32::new(PILOT_AMPLITUDE, 0.0);
         }
-        let h_est = dft_ce_estimate(p, &freq);
+        let mut planner = FftPlanner::<f32>::new();
+        let ce_idft = planner.plan_fft_inverse(p.n_pilots);
+        let h_est = dft_ce_estimate(p, &freq, &*ce_idft);
         assert_eq!(h_est.len(), p.total_sc());
         for (i, h) in h_est.iter().enumerate() {
             assert!(
@@ -454,7 +463,9 @@ mod tests {
             freq[sc] += Complex32::new(ni * noise_std, nq * noise_std);
         }
 
-        let h_dft = dft_ce_estimate(p, &freq);
+        let mut planner = FftPlanner::<f32>::new();
+        let ce_idft = planner.plan_fft_inverse(p.n_pilots);
+        let h_dft = dft_ce_estimate(p, &freq, &*ce_idft);
         let h_ls = ls_estimate(p, &freq);
 
         // RMS error over all total SCs: DFT-CE must beat LS.
@@ -479,7 +490,9 @@ mod tests {
         // Output slice must cover all occupied SCs regardless of pilot count.
         for p in [&SCFDMA16, &SCFDMA52] {
             let freq = vec![Complex32::new(PILOT_AMPLITUDE, 0.0); FFT_SIZE];
-            let h = dft_ce_estimate(p, &freq);
+            let mut planner = FftPlanner::<f32>::new();
+            let ce_idft = planner.plan_fft_inverse(p.n_pilots);
+            let h = dft_ce_estimate(p, &freq, &*ce_idft);
             assert_eq!(
                 h.len(),
                 p.total_sc(),

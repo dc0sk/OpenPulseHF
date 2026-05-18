@@ -81,6 +81,8 @@ fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Vec<u8> {
     let fft = planner.plan_fft_forward(FFT_SIZE);
     // N_data-point IDFT to undo DFT precoding.
     let idft = planner.plan_fft_inverse(p.n_data);
+    // P-point IDFT for DFT-CE pilot CIR estimation — planned once, reused per symbol.
+    let ce_idft = planner.plan_fft_inverse(p.n_pilots);
 
     let fft_scale = 1.0 / (FFT_SIZE as f32).sqrt();
     let idft_scale = 1.0 / (p.n_data as f32).sqrt();
@@ -101,7 +103,7 @@ fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Vec<u8> {
         fft.process(&mut freq);
 
         // Step 2: DFT-domain channel estimation + MMSE equalization.
-        let h_est = dft_ce_estimate(p, &freq);
+        let h_est = dft_ce_estimate(p, &freq, &*ce_idft);
         let noise_var = estimate_noise_var(p, &freq, &h_est);
         let mut equalized = mmse_equalize(p, &freq, &h_est, noise_var);
 
@@ -172,6 +174,7 @@ fn demodulate_soft_with_params(samples: &[f32], p: &ScFdmaParams) -> SoftDemodOu
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(FFT_SIZE);
     let idft = planner.plan_fft_inverse(p.n_data);
+    let ce_idft = planner.plan_fft_inverse(p.n_pilots);
 
     let fft_scale = 1.0 / (FFT_SIZE as f32).sqrt();
     let idft_scale = 1.0 / (p.n_data as f32).sqrt();
@@ -194,7 +197,7 @@ fn demodulate_soft_with_params(samples: &[f32], p: &ScFdmaParams) -> SoftDemodOu
             .collect();
         fft.process(&mut freq);
 
-        let h_est = dft_ce_estimate(p, &freq);
+        let h_est = dft_ce_estimate(p, &freq, &*ce_idft);
         let pilot_noise_var = estimate_noise_var(p, &freq, &h_est).max(1e-6);
 
         // Rician K for SoftFrameMetrics: computed from raw pilot LS observations

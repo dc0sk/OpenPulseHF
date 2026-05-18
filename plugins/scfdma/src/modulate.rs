@@ -368,6 +368,41 @@ mod tests {
     }
 
     #[test]
+    fn qam32_average_power_is_unit() {
+        let total: f32 = (0..32u8).map(|b| qam32_mod(b).norm_sqr()).sum::<f32>() / 32.0;
+        assert!(
+            (total - 1.0).abs() < 0.01,
+            "32QAM average power = {total:.4}"
+        );
+    }
+
+    #[test]
+    fn qam32_all_points_distinct() {
+        let points: Vec<(i32, i32)> = (0..32u8)
+            .map(|b| {
+                let c = qam32_mod(b);
+                ((c.re * 1000.0) as i32, (c.im * 1000.0) as i32)
+            })
+            .collect();
+        for i in 0..points.len() {
+            for j in (i + 1)..points.len() {
+                assert_ne!(points[i], points[j], "32QAM points {i} and {j} collide");
+            }
+        }
+    }
+
+    #[test]
+    fn gray5_round_trip() {
+        for n in 0u8..32 {
+            assert_eq!(
+                gray5_to_natural(natural5_to_gray(n)),
+                n,
+                "round-trip failed for n={n}"
+            );
+        }
+    }
+
+    #[test]
     fn qam64_average_power_is_unit() {
         let total: f32 = (0..64u8).map(|b| qam64_mod(b).norm_sqr()).sum::<f32>() / 64.0;
         assert!(
