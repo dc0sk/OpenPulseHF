@@ -135,6 +135,8 @@ pub enum ControlEvent {
         connected: bool,
         peer: Option<String>,
     },
+    /// Repeater runtime state changed.
+    RepeaterChanged { enabled: bool },
     /// Response to [`ControlCommand::GetConfig`].
     ConfigData { config: DaemonConfig },
     /// A message was stored (sent or received); broadcast to all clients.

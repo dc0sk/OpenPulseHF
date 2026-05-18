@@ -571,6 +571,7 @@ pub async fn apply_command_to_engine(
     active_mode: &SharedMode,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
     rig_controller: Option<&mut RigctldController>,
+    repeater_enabled: &mut bool,
 ) {
     match cmd {
         ControlCommand::SetMode { mode } => {
@@ -674,16 +675,28 @@ pub async fn apply_command_to_engine(
             });
         }
         ControlCommand::EnableRepeater => {
-            let _ = event_tx.send(ControlEvent::CommandError {
-                command: "enable_repeater".to_string(),
-                reason: "not implemented in daemon runtime".to_string(),
-            });
+            if *repeater_enabled {
+                let _ = event_tx.send(ControlEvent::CommandError {
+                    command: "enable_repeater".to_string(),
+                    reason: "repeater already enabled".to_string(),
+                });
+                return;
+            }
+
+            *repeater_enabled = true;
+            let _ = event_tx.send(ControlEvent::RepeaterChanged { enabled: true });
         }
         ControlCommand::DisableRepeater => {
-            let _ = event_tx.send(ControlEvent::CommandError {
-                command: "disable_repeater".to_string(),
-                reason: "not implemented in daemon runtime".to_string(),
-            });
+            if !*repeater_enabled {
+                let _ = event_tx.send(ControlEvent::CommandError {
+                    command: "disable_repeater".to_string(),
+                    reason: "repeater already disabled".to_string(),
+                });
+                return;
+            }
+
+            *repeater_enabled = false;
+            let _ = event_tx.send(ControlEvent::RepeaterChanged { enabled: false });
         }
         // No live-modem side effects for these commands in the engine path.
         // They are handled by dispatch-only paths or request-response control flow.
@@ -725,7 +738,16 @@ mod command_apply_tests {
             },
         };
 
-        apply_command_to_engine(&cmd, &mut engine, &active_mode, &ev_tx, None).await;
+        let mut repeater_enabled = false;
+        apply_command_to_engine(
+            &cmd,
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut repeater_enabled,
+        )
+        .await;
 
         assert_eq!(*active_mode.lock().await, "BPSK250");
         assert!((engine.tx_attenuation_db() - (-6.0)).abs() < 1e-6);
@@ -744,7 +766,16 @@ mod command_apply_tests {
             body: "rf body payload".into(),
         };
 
-        apply_command_to_engine(&cmd, &mut engine, &active_mode, &ev_tx, None).await;
+        let mut repeater_enabled = false;
+        apply_command_to_engine(
+            &cmd,
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut repeater_enabled,
+        )
+        .await;
 
         let rx = engine.receive("BPSK250", None).unwrap();
         assert_eq!(rx, b"rf body payload");
@@ -763,7 +794,16 @@ mod command_apply_tests {
             body: "rf body payload".into(),
         };
 
-        apply_command_to_engine(&cmd, &mut engine, &active_mode, &ev_tx, None).await;
+        let mut repeater_enabled = false;
+        apply_command_to_engine(
+            &cmd,
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut repeater_enabled,
+        )
+        .await;
 
         let mut saw_error = false;
         while let Ok(ev) = rx.try_recv() {
@@ -807,20 +847,19 @@ mod command_apply_tests {
                 "reject_qsy",
                 "not implemented",
             ),
-            (
-                ControlCommand::EnableRepeater,
-                "enable_repeater",
-                "not implemented",
-            ),
-            (
-                ControlCommand::DisableRepeater,
-                "disable_repeater",
-                "not implemented",
-            ),
         ];
 
+        let mut repeater_enabled = false;
         for (cmd, expected_command, expected_reason_substr) in cases {
-            apply_command_to_engine(&cmd, &mut engine, &active_mode, &ev_tx, None).await;
+            apply_command_to_engine(
+                &cmd,
+                &mut engine,
+                &active_mode,
+                &ev_tx,
+                None,
+                &mut repeater_enabled,
+            )
+            .await;
             let ev = rx.recv().await.expect("expected command_error event");
             match ev {
                 ControlEvent::CommandError { command, reason } => {
@@ -829,6 +868,45 @@ mod command_apply_tests {
                 }
                 other => panic!("expected command_error event, got {other:?}"),
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_repeater_enable_disable_emits_state_changes() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let mut repeater_enabled = false;
+
+        apply_command_to_engine(
+            &ControlCommand::EnableRepeater,
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut repeater_enabled,
+        )
+        .await;
+        assert!(repeater_enabled);
+        match rx.recv().await.expect("expected repeater event") {
+            ControlEvent::RepeaterChanged { enabled } => assert!(enabled),
+            other => panic!("expected RepeaterChanged, got {other:?}"),
+        }
+
+        apply_command_to_engine(
+            &ControlCommand::DisableRepeater,
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut repeater_enabled,
+        )
+        .await;
+        assert!(!repeater_enabled);
+        match rx.recv().await.expect("expected repeater event") {
+            ControlEvent::RepeaterChanged { enabled } => assert!(!enabled),
+            other => panic!("expected RepeaterChanged, got {other:?}"),
         }
     }
 }

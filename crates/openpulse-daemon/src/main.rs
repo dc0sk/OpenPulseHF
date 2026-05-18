@@ -115,6 +115,7 @@ async fn main() {
             None
         }
     };
+    let mut repeater_enabled = cfg.repeater.enabled;
 
     // Execute side-effectful commands against the live modem engine.
     while let Some(cmd) = handle.commands.recv().await {
@@ -124,6 +125,7 @@ async fn main() {
             &handle.active_mode,
             &handle.event_tx,
             rig_controller.as_mut(),
+            &mut repeater_enabled,
         )
         .await;
     }
