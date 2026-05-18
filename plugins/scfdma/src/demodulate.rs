@@ -184,6 +184,8 @@ fn demodulate_soft_with_params(samples: &[f32], p: &ScFdmaParams) -> SoftDemodOu
     let mut noise_sum = 0.0f32;
     let mut k_db_sum = 0.0f32;
     let mut metric_symbols = 0usize;
+    let pilot_scs = pilot_positions(p);
+    let mut h_pilots_buf = vec![Complex32::new(0.0, 0.0); p.n_pilots];
 
     for sym_idx in 0..n_syms {
         let start = sym_idx * SYM_LEN + CP;
@@ -200,13 +202,11 @@ fn demodulate_soft_with_params(samples: &[f32], p: &ScFdmaParams) -> SoftDemodOu
         let h_est = dft_ce_estimate(p, &freq, &*ce_idft);
         let pilot_noise_var = estimate_noise_var(p, &freq, &h_est).max(1e-6);
 
-        // Rician K for SoftFrameMetrics: computed from raw pilot LS observations
-        // so the estimator range is independent of the CE method used for equalization.
-        let h_pilots: Vec<Complex32> = pilot_positions(p)
-            .iter()
-            .map(|&sc| freq[sc] / Complex32::new(PILOT_AMPLITUDE, 0.0))
-            .collect();
-        let k_linear = estimate_rician_k_linear(&h_pilots);
+        // Rician K for SoftFrameMetrics: reuse pre-allocated buffer to avoid per-symbol allocation.
+        for (buf, &sc) in h_pilots_buf.iter_mut().zip(pilot_scs.iter()) {
+            *buf = freq[sc] / Complex32::new(PILOT_AMPLITUDE, 0.0);
+        }
+        let k_linear = estimate_rician_k_linear(&h_pilots_buf);
         let k_db = 10.0 * (k_linear + 1e-6).log10();
 
         let (llr_noise_var, alpha_avg) = mmse_llr_noise_var(p, &h_est, pilot_noise_var);

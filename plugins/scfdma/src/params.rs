@@ -29,7 +29,7 @@ pub struct ScFdmaParams {
     pub n_data: usize,
     /// Number of pilot subcarriers.
     pub n_pilots: usize,
-    /// Bits carried per data subcarrier per SC-FDMA symbol (2=QPSK, 4=16QAM, 5=32QAM, 6=64QAM).
+    /// Bits carried per data subcarrier per SC-FDMA symbol (2=QPSK, 3=8PSK, 4=16QAM, 5=32QAM, 6=64QAM).
     pub bits_per_sc: usize,
     /// Pilot spacing in occupied subcarriers.
     pub pilot_spacing: usize,
