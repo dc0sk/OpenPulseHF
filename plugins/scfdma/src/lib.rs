@@ -7,10 +7,11 @@
 //! MMSE equalization (BL-TP-4) replaces ZF, enabling reliable 16QAM and 64QAM.
 //!
 //! Supported modes:
-//! - `SCFDMA16`:       16 data SCs, QPSK,   BW ≈  625 Hz, gross ~   889 bps
-//! - `SCFDMA52`:       52 data SCs, QPSK,   BW ≈ 2031 Hz, gross ~ 2,889 bps
-//! - `SCFDMA52-16QAM`: 52 data SCs, 16QAM,  BW ≈ 2031 Hz, gross ~ 5,778 bps
-//! - `SCFDMA52-64QAM`: 52 data SCs, 64QAM,  BW ≈ 2031 Hz, gross ~ 8,667 bps
+//! - `SCFDMA16`:          16 data SCs, QPSK,       BW ≈  625 Hz, gross ~   889 bps
+//! - `SCFDMA52`:          52 data SCs, QPSK,       BW ≈ 2031 Hz, gross ~ 2,889 bps
+//! - `SCFDMA52-16QAM`:    52 data SCs, 16QAM,      BW ≈ 2031 Hz, gross ~ 5,778 bps
+//! - `SCFDMA52-32QAM`:    52 data SCs, cross-32QAM, BW ≈ 2031 Hz, gross ~ 7,222 bps
+//! - `SCFDMA52-64QAM`:    52 data SCs, 64QAM,      BW ≈ 2031 Hz, gross ~ 8,667 bps
 //! - `SCFDMA52-64QAM-P4`: 49 data SCs, 64QAM, denser pilots (16), gross ~ 8,167 bps
 
 pub mod channel;
@@ -39,14 +40,15 @@ impl ScFdmaPlugin {
                 name: "SC-FDMA".into(),
                 version: "0.1.0".into(),
                 description: "SC-FDMA HF plugin: SCFDMA16/52 (QPSK), SCFDMA52-16QAM, \
-                     SCFDMA52-64QAM, SCFDMA52-64QAM-P4 (dense pilots); \
-                     MMSE equalization (BL-TP-4)"
+                     SCFDMA52-32QAM (cross-32QAM), SCFDMA52-64QAM, SCFDMA52-64QAM-P4 \
+                     (dense pilots); MMSE equalization (BL-TP-4)"
                     .into(),
                 author: "OpenPulse Contributors".into(),
                 supported_modes: vec![
                     "SCFDMA16".into(),
                     "SCFDMA52".into(),
                     "SCFDMA52-16QAM".into(),
+                    "SCFDMA52-32QAM".into(),
                     "SCFDMA52-64QAM".into(),
                     "SCFDMA52-64QAM-P4".into(),
                 ],
@@ -155,7 +157,7 @@ mod tests {
     use super::*;
     use crate::channel::pilot_positions;
     use crate::modulate::measure_papr;
-    use crate::params::{SCFDMA16, SCFDMA52, SCFDMA52_64QAM_P4};
+    use crate::params::{SCFDMA16, SCFDMA52, SCFDMA52_32QAM, SCFDMA52_64QAM_P4};
 
     fn mod_config(mode: &str) -> ModulationConfig {
         ModulationConfig {
@@ -233,6 +235,41 @@ mod tests {
             .demodulate(&samples, &mod_config("SCFDMA52-16QAM"))
             .unwrap();
         assert_eq!(rx.as_slice(), payload.as_ref());
+    }
+
+    #[test]
+    fn scfdma52_32qam_loopback_clean() {
+        let plugin = ScFdmaPlugin::new();
+        let payload = b"SCFDMA52-32QAM clean loopback: 7222 bps gross, cross-32QAM.";
+        let samples = plugin
+            .modulate(payload, &mod_config("SCFDMA52-32QAM"))
+            .unwrap();
+        let rx = plugin
+            .demodulate(&samples, &mod_config("SCFDMA52-32QAM"))
+            .unwrap();
+        assert_eq!(rx.as_slice(), payload.as_ref());
+    }
+
+    #[test]
+    fn scfdma52_32qam_papr_below_12db() {
+        let plugin = ScFdmaPlugin::new();
+        let payload = b"32QAM PAPR test payload - DFT precoding keeps PAPR low at 5 bits/SC";
+        let samples = plugin
+            .modulate(payload, &mod_config("SCFDMA52-32QAM"))
+            .unwrap();
+        let papr = measure_papr(&samples);
+        assert!(
+            papr < 12.0,
+            "SCFDMA52-32QAM PAPR {papr:.1} dB should be below 12 dB"
+        );
+    }
+
+    #[test]
+    fn scfdma52_32qam_pilot_count_matches_params() {
+        use crate::channel::pilot_positions;
+        let pilots = pilot_positions(&SCFDMA52_32QAM);
+        assert_eq!(pilots.len(), SCFDMA52_32QAM.n_pilots);
+        assert_eq!(SCFDMA52_32QAM.bits_per_sc, 5);
     }
 
     #[test]

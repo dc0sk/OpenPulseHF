@@ -112,6 +112,7 @@ fn map_symbol(bits: u8, bits_per_sc: usize) -> Complex32 {
     match bits_per_sc {
         2 => qpsk_mod(bits),
         4 => qam16_mod(bits),
+        5 => qam32_mod(bits),
         6 => qam64_mod(bits),
         _ => qpsk_mod(bits),
     }
@@ -147,6 +148,82 @@ fn qam16_mod(bits: u8) -> Complex32 {
     let i = pam4((bits >> 2) & 0x3) * SCALE;
     let q = pam4(bits & 0x3) * SCALE;
     Complex32::new(i, q)
+}
+
+/// Cross-32QAM modulator.
+///
+/// The constellation is a 6×6 PAM grid with the four corner points (|I|=5 and |Q|=5) removed,
+/// giving 32 points.  Mean power = 20 → scale = 1/√20.
+///
+/// 5-bit input is a standard 5-bit Gray code.  The Gray index maps to a spatial position
+/// in a raster-scan ordering (Q=5..−5 top-to-bottom, I=−5..+5 left-to-right), which gives
+/// single-bit transitions for all horizontally adjacent constellation neighbours.
+fn qam32_mod(bits: u8) -> Complex32 {
+    let (i_raw, q_raw) = QAM32_SPATIAL[gray5_to_natural(bits) as usize];
+    Complex32::new(i_raw as f32 * QAM32_SCALE, q_raw as f32 * QAM32_SCALE)
+}
+
+/// 1/√20 — normalization scale for cross-32QAM (mean power per complex sample = 1).
+pub(crate) const QAM32_SCALE: f32 = 0.223_606_8; // 1/sqrt(20)
+
+/// Raster-scan ordering of the 32 cross-32QAM points: Q=5 → −5, I=−5 → +5.
+///
+/// Spatial index → (I_unnorm, Q_unnorm).  Corners (|I|=5 and |Q|=5) are absent.
+pub(crate) const QAM32_SPATIAL: [(i8, i8); 32] = [
+    // Q = 5 (4 pts)
+    (-3, 5),
+    (-1, 5),
+    (1, 5),
+    (3, 5),
+    // Q = 3 (6 pts)
+    (-5, 3),
+    (-3, 3),
+    (-1, 3),
+    (1, 3),
+    (3, 3),
+    (5, 3),
+    // Q = 1 (6 pts)
+    (-5, 1),
+    (-3, 1),
+    (-1, 1),
+    (1, 1),
+    (3, 1),
+    (5, 1),
+    // Q = −1 (6 pts)
+    (-5, -1),
+    (-3, -1),
+    (-1, -1),
+    (1, -1),
+    (3, -1),
+    (5, -1),
+    // Q = −3 (6 pts)
+    (-5, -3),
+    (-3, -3),
+    (-1, -3),
+    (1, -3),
+    (3, -3),
+    (5, -3),
+    // Q = −5 (4 pts)
+    (-3, -5),
+    (-1, -5),
+    (1, -5),
+    (3, -5),
+];
+
+/// Convert a 5-bit Gray code to a natural (binary) index.
+pub(crate) fn gray5_to_natural(g: u8) -> u8 {
+    let g = g & 0x1f;
+    let b4 = (g >> 4) & 1;
+    let b3 = ((g >> 3) ^ b4) & 1;
+    let b2 = ((g >> 2) ^ b3) & 1;
+    let b1 = ((g >> 1) ^ b2) & 1;
+    let b0 = (g ^ b1) & 1;
+    (b4 << 4) | (b3 << 3) | (b2 << 2) | (b1 << 1) | b0
+}
+
+/// Convert a natural (binary) 5-bit index to its Gray code.
+pub(crate) fn natural5_to_gray(n: u8) -> u8 {
+    (n ^ (n >> 1)) & 0x1f
 }
 
 /// Gray-coded 64QAM: PAM-8 on I and Q, normalised to unit average power.

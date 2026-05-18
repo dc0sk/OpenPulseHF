@@ -7,7 +7,10 @@ use crate::channel::{
     dft_ce_estimate, estimate_noise_var, estimate_rician_k_linear, mmse_equalize,
     mmse_llr_noise_var, pilot_positions,
 };
-use crate::modulate::{modulate_with_params, preamble_payload};
+use crate::modulate::{
+    gray5_to_natural, modulate_with_params, natural5_to_gray, preamble_payload, QAM32_SCALE,
+    QAM32_SPATIAL,
+};
 use crate::params::PILOT_AMPLITUDE;
 use crate::params::{params_for_mode, ScFdmaParams, CP, FFT_SIZE, SYM_LEN};
 
@@ -306,6 +309,7 @@ fn demap_symbol(c: Complex32, bits_per_sc: usize) -> u8 {
     match bits_per_sc {
         2 => qpsk_demod(c),
         4 => qam16_demod(c),
+        5 => qam32_demod(c),
         6 => qam64_demod(c),
         _ => qpsk_demod(c),
     }
@@ -413,6 +417,7 @@ fn constellation_points(bits_per_sc: usize) -> Vec<(u8, Complex32)> {
     match bits_per_sc {
         2 => (0u8..4).map(|b| (b, qpsk_point(b))).collect(),
         4 => (0u8..16).map(|b| (b, qam16_point(b))).collect(),
+        5 => (0u8..32).map(|b| (b, qam32_point(b))).collect(),
         6 => (0u8..64).map(|b| (b, qam64_point(b))).collect(),
         _ => (0u8..4).map(|b| (b, qpsk_point(b))).collect(),
     }
@@ -458,6 +463,24 @@ fn qam16_point(bits: u8) -> Complex32 {
     let i = pam4((bits >> 2) & 0x3) * SCALE;
     let q = pam4(bits & 0x3) * SCALE;
     Complex32::new(i, q)
+}
+
+fn qam32_point(bits: u8) -> Complex32 {
+    let (i, q) = QAM32_SPATIAL[gray5_to_natural(bits) as usize];
+    Complex32::new(i as f32 * QAM32_SCALE, q as f32 * QAM32_SCALE)
+}
+
+fn qam32_demod(c: Complex32) -> u8 {
+    let mut best_idx = 0u8;
+    let mut best_d = f32::INFINITY;
+    for (idx, &(i, q)) in QAM32_SPATIAL.iter().enumerate() {
+        let d = (c.re - i as f32 * QAM32_SCALE).powi(2) + (c.im - q as f32 * QAM32_SCALE).powi(2);
+        if d < best_d {
+            best_d = d;
+            best_idx = idx as u8;
+        }
+    }
+    natural5_to_gray(best_idx)
 }
 
 fn qam64_point(bits: u8) -> Complex32 {
