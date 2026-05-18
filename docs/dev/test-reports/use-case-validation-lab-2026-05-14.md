@@ -1,7 +1,7 @@
 ---
 title: "Item 8 Lab Validation Baseline"
 date: "2026-05-14T00:00:00Z"
-source_run: "docs/test-reports/latest/raw.json"
+source_run: "docs/dev/test-reports/latest/raw.json"
 status: "baseline-only"
 ---
 
@@ -12,8 +12,8 @@ It is based on the latest quick-tier matrix run and Item 6 HARQ-rate gate output
 
 ## Data Sources
 
-- Matrix raw results: docs/test-reports/latest/raw.json
-- Use-case table: docs/test-reports/latest/by-usecase.md
+- Matrix raw results: docs/dev/test-reports/latest/raw.json
+- Use-case table: docs/dev/test-reports/latest/by-usecase.md
 - Item 6 aggregate: benchmark/results/aggregate/HF2300-AWGN30-ITEM6--SCFDMA52-64QAM-P4.json
 
 ## Aggregate Summary by Existing Testmatrix UseCase

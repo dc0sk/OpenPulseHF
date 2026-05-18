@@ -1,7 +1,7 @@
 ---
 title: "Item 8 Lab Validation Report"
 date: "2026-05-14T16:46:03Z"
-source_dataset: "docs/test-reports/item8-lab/latest/item8_sessions.json"
+source_dataset: "docs/dev/test-reports/item8-lab/latest/item8_sessions.json"
 ---
 
 # Item 8 Lab Validation Report (2026-05-14)
@@ -42,6 +42,6 @@ Acceptance volume checks:
 
 ## Artifacts
 
-- Dataset markdown: docs/test-reports/item8-lab/latest/item8_sessions.md
-- Dataset CSV: docs/test-reports/item8-lab/latest/item8_sessions.csv
-- Dataset JSON: docs/test-reports/item8-lab/latest/item8_sessions.json
+- Dataset markdown: docs/dev/test-reports/item8-lab/latest/item8_sessions.md
+- Dataset CSV: docs/dev/test-reports/item8-lab/latest/item8_sessions.csv
+- Dataset JSON: docs/dev/test-reports/item8-lab/latest/item8_sessions.json
