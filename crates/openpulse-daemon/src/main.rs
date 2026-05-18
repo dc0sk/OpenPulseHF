@@ -2,10 +2,9 @@
 //! control port on TCP port 9000 and WebSocket port 9001 (defaults).
 
 use openpulse_audio::LoopbackBackend;
-use openpulse_daemon::{apply_command_to_engine, ws, ControlServer};
+use openpulse_daemon::{apply_command_to_engine, ws, ControlServer, RuntimeControlState};
 use openpulse_modem::ModemEngine;
 use openpulse_radio::RigctldController;
-use std::collections::HashMap;
 
 use bpsk_plugin::BpskPlugin;
 use fsk4_plugin::Fsk4Plugin;
@@ -116,8 +115,10 @@ async fn main() {
             None
         }
     };
-    let mut repeater_enabled = cfg.repeater.enabled;
-    let mut qsy_decisions: HashMap<String, bool> = HashMap::new();
+    let mut runtime_state = RuntimeControlState {
+        repeater_enabled: cfg.repeater.enabled,
+        ..RuntimeControlState::default()
+    };
 
     // Execute side-effectful commands against the live modem engine.
     while let Some(cmd) = handle.commands.recv().await {
@@ -127,8 +128,7 @@ async fn main() {
             &handle.active_mode,
             &handle.event_tx,
             rig_controller.as_mut(),
-            &mut repeater_enabled,
-            &mut qsy_decisions,
+            &mut runtime_state,
         )
         .await;
     }

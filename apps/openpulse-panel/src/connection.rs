@@ -273,6 +273,10 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
                 if enabled { "enabled" } else { "disabled" }
             ));
         }
+        ControlEvent::QsyPending { token } => {
+            st.pending_qsy_token = Some(token.clone());
+            st.push_log(format!("QSY pending token {token}"));
+        }
         ControlEvent::QsyDecision { token, accepted } => {
             if st.pending_qsy_token.as_deref() == Some(token.as_str()) {
                 st.pending_qsy_token = None;

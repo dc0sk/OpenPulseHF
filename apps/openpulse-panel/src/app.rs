@@ -446,11 +446,9 @@ impl eframe::App for PanelApp {
                         self.send(ControlCommand::AcceptQsy {
                             token: token.clone(),
                         });
-                        self.shared.lock().unwrap().pending_qsy_token = None;
                     }
                     if ui.button("Reject QSY").clicked() {
                         self.send(ControlCommand::RejectQsy { token });
-                        self.shared.lock().unwrap().pending_qsy_token = None;
                     }
                 }
 

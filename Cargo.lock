@@ -3531,6 +3531,7 @@ dependencies = [
  "openpulse-audio",
  "openpulse-channel",
  "openpulse-config",
+ "openpulse-core",
  "openpulse-modem",
  "openpulse-radio",
  "psk8-plugin",

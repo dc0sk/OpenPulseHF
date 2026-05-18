@@ -137,6 +137,8 @@ pub enum ControlEvent {
     },
     /// Repeater runtime state changed.
     RepeaterChanged { enabled: bool },
+    /// New pending QSY proposal token available for operator decision.
+    QsyPending { token: String },
     /// QSY decision recorded by daemon runtime.
     QsyDecision { token: String, accepted: bool },
     /// Response to [`ControlCommand::GetConfig`].
