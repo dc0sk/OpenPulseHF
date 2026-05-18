@@ -7,6 +7,7 @@ use crate::handshake::sha256_bytes;
 // Errors
 // ------------------------------------------------------------------
 
+/// Errors returned when signing or verifying a `TransferManifest`.
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestError {
     #[error("invalid manifest signature")]

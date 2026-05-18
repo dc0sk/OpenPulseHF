@@ -23,18 +23,24 @@ use crate::trust::{
 // Size constants (verified against FIPS 203/204)
 // ------------------------------------------------------------------
 
+/// Byte length of an ML-DSA-44 verifying key.
 pub const ML_DSA_44_PUBKEY_SIZE: usize = 1312;
+/// Byte length of an ML-DSA-44 signature.
 pub const ML_DSA_44_SIG_SIZE: usize = 2420;
+/// Byte length of an ML-KEM-768 encapsulation key.
 pub const ML_KEM_768_EK_SIZE: usize = 1184;
 /// ML-KEM-768 decapsulation key in d||z seed form (64 bytes).
 pub const ML_KEM_768_DK_SIZE: usize = 64;
+/// Byte length of an ML-KEM-768 ciphertext.
 pub const ML_KEM_768_CT_SIZE: usize = 1088;
+/// Byte length of the ML-KEM-768 shared secret.
 pub const ML_KEM_768_SS_SIZE: usize = 32;
 
 // ------------------------------------------------------------------
 // Error type
 // ------------------------------------------------------------------
 
+/// Errors returned during post-quantum handshake creation or verification.
 #[derive(Debug, thiserror::Error)]
 pub enum PqHandshakeError {
     #[error("invalid ML-DSA-44 public key")]

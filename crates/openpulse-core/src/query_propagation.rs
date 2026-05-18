@@ -9,6 +9,7 @@ struct QueryKey {
     query_id: u64,
 }
 
+/// Duplicate-suppression and TTL tracker for forwarded peer-query messages.
 #[derive(Debug, Clone)]
 pub struct QueryPropagationTracker {
     ttl_ms: u64,
@@ -19,6 +20,7 @@ pub struct QueryPropagationTracker {
 }
 
 impl QueryPropagationTracker {
+    /// Create a new tracker with the given TTL and maximum entry capacity.
     pub fn new(ttl_ms: u64, capacity: usize) -> Self {
         Self {
             ttl_ms,
@@ -29,6 +31,7 @@ impl QueryPropagationTracker {
         }
     }
 
+    /// Return `true` if this query has not been seen before and should be forwarded.
     pub fn should_forward_query(&mut self, src_peer_id: &str, query_id: u64, now_ms: u64) -> bool {
         self.evict_expired(now_ms);
 
@@ -48,6 +51,7 @@ impl QueryPropagationTracker {
         true
     }
 
+    /// Return `true` if this response from `responder_peer_id` has not been seen before.
     pub fn should_accept_response(
         &mut self,
         query_id: u64,
@@ -65,6 +69,7 @@ impl QueryPropagationTracker {
         true
     }
 
+    /// Remove all TTL-expired entries from the tracker.
     pub fn evict_expired(&mut self, now_ms: u64) {
         self.seen_queries
             .retain(|_, first_seen_ms| now_ms.saturating_sub(*first_seen_ms) <= self.ttl_ms);
@@ -147,6 +152,7 @@ pub struct QueryForwarder {
 }
 
 impl QueryForwarder {
+    /// Create a new `QueryForwarder` with the given dedup TTL, capacity, and trust policy.
     pub fn new(ttl_ms: u64, capacity: usize, policy: RelayTrustPolicy) -> Self {
         Self {
             tracker: QueryPropagationTracker::new(ttl_ms, capacity),

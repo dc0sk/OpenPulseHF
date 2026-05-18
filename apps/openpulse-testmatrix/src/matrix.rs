@@ -91,42 +91,6 @@ impl ChannelSpec {
     }
 }
 
-/// Approximate effective throughput for a mode in bits per second (payload bits, no overhead).
-#[allow(dead_code)]
-pub fn mode_effective_bps(
-    _mode: &str,
-    _fec_mode: FecMode,
-    payload_len: usize,
-    duration_ms: u64,
-) -> Option<f64> {
-    if duration_ms == 0 {
-        return None;
-    }
-    let payload_bits = payload_len as f64 * 8.0;
-    let duration_s = duration_ms as f64 / 1000.0;
-    Some(payload_bits / duration_s)
-}
-
-/// Theoretical nominal baud rate for a mode string (for reference column in reports).
-#[allow(dead_code)]
-pub fn mode_nominal_baud(mode: &str) -> Option<f32> {
-    let base = mode.trim_end_matches("-RRC").trim_end_matches("-HF");
-    let digits: String = base.chars().skip_while(|c| !c.is_ascii_digit()).collect();
-    match digits.as_str() {
-        "31" => Some(31.25),
-        "63" => Some(62.5),
-        "100" => Some(100.0),
-        "125" => Some(125.0),
-        "250" => Some(250.0),
-        "500" => Some(500.0),
-        "1000" => Some(1000.0),
-        "2000" => Some(2000.0),
-        "9600" => Some(9600.0),
-        "16" | "52" => None, // OFDM/SCFDMA — not baud-based
-        _ => None,
-    }
-}
-
 pub fn fec_label(fec_mode: FecMode) -> &'static str {
     match fec_mode {
         FecMode::None => "none",

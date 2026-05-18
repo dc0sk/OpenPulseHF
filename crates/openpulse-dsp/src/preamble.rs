@@ -186,7 +186,6 @@ fn zadoff_chu_sequence(length: usize, u: i32) -> Vec<f32> {
 
 /// Preamble detector and phase-coherence tracker.
 pub struct PreambleDetector {
-    #[allow(dead_code)]
     preamble_type: PreambleType,
     reference: Vec<f32>,
     correlation_history: VecDeque<f32>,

@@ -27,6 +27,7 @@ pub enum CompressionAlgorithm {
     Zstd(u32),
 }
 
+/// Errors returned by decompression routines.
 #[derive(Debug, thiserror::Error)]
 pub enum CompressionError {
     #[error("decompression failed: {0}")]
