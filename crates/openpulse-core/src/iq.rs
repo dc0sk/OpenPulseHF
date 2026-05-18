@@ -1,7 +1,7 @@
 //! Hilbert-transform baseband I/Q extraction.
 //!
 //! Used as the fallback default implementation of
-//! [`ModulationPlugin::modulate_iq`] for plugins that do not provide a
+//! [`crate::plugin::ModulationPlugin::modulate_iq`] for plugins that do not provide a
 //! native I/Q path.  BPSK and QPSK plugins override the trait method and
 //! bypass this entirely.
 

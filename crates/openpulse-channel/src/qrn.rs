@@ -60,12 +60,12 @@ impl ChannelModel for QrnChannel {
 
         let expected_spikes =
             self.config.impulse_rate_hz * n as f32 / self.config.sample_rate as f32;
-        if expected_spikes > 0.0 {
+        let spike_sigma = rms * self.config.impulse_amplitude_ratio;
+        if expected_spikes > 0.0 && spike_sigma > 0.0 {
             let n_spikes = Poisson::new(expected_spikes as f64)
                 .unwrap()
                 .sample(&mut self.rng) as usize;
             let pos_dist = Uniform::new(0usize, n);
-            let spike_sigma = rms * self.config.impulse_amplitude_ratio;
             let spike_dist = Normal::new(0.0f32, spike_sigma).unwrap();
             let dur = self.config.max_spike_duration_samples.max(1) as usize;
 

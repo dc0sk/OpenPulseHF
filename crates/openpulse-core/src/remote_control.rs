@@ -102,7 +102,7 @@ impl RigCtrlCmd {
         Ok(out)
     }
 
-    /// Decode from bytes produced by [`encode`].
+    /// Decode from bytes produced by [`Self::encode`].
     pub fn decode(bytes: &[u8]) -> Result<Self, RemoteControlError> {
         if bytes.len() < 4 + 32 + 64 {
             return Err(RemoteControlError::Encoding("buffer too short".into()));
