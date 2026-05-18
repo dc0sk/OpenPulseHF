@@ -16,6 +16,8 @@ pub mod protocol;
 pub mod ws;
 
 #[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::net::SocketAddr;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
@@ -572,6 +574,7 @@ pub async fn apply_command_to_engine(
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
     rig_controller: Option<&mut RigctldController>,
     repeater_enabled: &mut bool,
+    qsy_decisions: &mut HashMap<String, bool>,
 ) {
     match cmd {
         ControlCommand::SetMode { mode } => {
@@ -662,17 +665,69 @@ pub async fn apply_command_to_engine(
                 }
             }
         }
-        ControlCommand::AcceptQsy { .. } => {
-            let _ = event_tx.send(ControlEvent::CommandError {
-                command: "accept_qsy".to_string(),
-                reason: "not implemented in daemon runtime".to_string(),
-            });
+        ControlCommand::AcceptQsy { token } => {
+            let token = token.trim();
+            if token.is_empty() {
+                let _ = event_tx.send(ControlEvent::CommandError {
+                    command: "accept_qsy".to_string(),
+                    reason: "empty token".to_string(),
+                });
+                return;
+            }
+
+            match qsy_decisions.get(token) {
+                Some(true) => {
+                    let _ = event_tx.send(ControlEvent::CommandError {
+                        command: "accept_qsy".to_string(),
+                        reason: format!("token '{token}' already accepted"),
+                    });
+                }
+                Some(false) => {
+                    let _ = event_tx.send(ControlEvent::CommandError {
+                        command: "accept_qsy".to_string(),
+                        reason: format!("token '{token}' already rejected"),
+                    });
+                }
+                None => {
+                    qsy_decisions.insert(token.to_string(), true);
+                    let _ = event_tx.send(ControlEvent::QsyDecision {
+                        token: token.to_string(),
+                        accepted: true,
+                    });
+                }
+            }
         }
-        ControlCommand::RejectQsy { .. } => {
-            let _ = event_tx.send(ControlEvent::CommandError {
-                command: "reject_qsy".to_string(),
-                reason: "not implemented in daemon runtime".to_string(),
-            });
+        ControlCommand::RejectQsy { token } => {
+            let token = token.trim();
+            if token.is_empty() {
+                let _ = event_tx.send(ControlEvent::CommandError {
+                    command: "reject_qsy".to_string(),
+                    reason: "empty token".to_string(),
+                });
+                return;
+            }
+
+            match qsy_decisions.get(token) {
+                Some(true) => {
+                    let _ = event_tx.send(ControlEvent::CommandError {
+                        command: "reject_qsy".to_string(),
+                        reason: format!("token '{token}' already accepted"),
+                    });
+                }
+                Some(false) => {
+                    let _ = event_tx.send(ControlEvent::CommandError {
+                        command: "reject_qsy".to_string(),
+                        reason: format!("token '{token}' already rejected"),
+                    });
+                }
+                None => {
+                    qsy_decisions.insert(token.to_string(), false);
+                    let _ = event_tx.send(ControlEvent::QsyDecision {
+                        token: token.to_string(),
+                        accepted: false,
+                    });
+                }
+            }
         }
         ControlCommand::EnableRepeater => {
             if *repeater_enabled {
@@ -739,6 +794,7 @@ mod command_apply_tests {
         };
 
         let mut repeater_enabled = false;
+        let mut qsy_decisions = HashMap::new();
         apply_command_to_engine(
             &cmd,
             &mut engine,
@@ -746,6 +802,7 @@ mod command_apply_tests {
             &ev_tx,
             None,
             &mut repeater_enabled,
+            &mut qsy_decisions,
         )
         .await;
 
@@ -767,6 +824,7 @@ mod command_apply_tests {
         };
 
         let mut repeater_enabled = false;
+        let mut qsy_decisions = HashMap::new();
         apply_command_to_engine(
             &cmd,
             &mut engine,
@@ -774,6 +832,7 @@ mod command_apply_tests {
             &ev_tx,
             None,
             &mut repeater_enabled,
+            &mut qsy_decisions,
         )
         .await;
 
@@ -795,6 +854,7 @@ mod command_apply_tests {
         };
 
         let mut repeater_enabled = false;
+        let mut qsy_decisions = HashMap::new();
         apply_command_to_engine(
             &cmd,
             &mut engine,
@@ -802,6 +862,7 @@ mod command_apply_tests {
             &ev_tx,
             None,
             &mut repeater_enabled,
+            &mut qsy_decisions,
         )
         .await;
 
@@ -838,18 +899,20 @@ mod command_apply_tests {
                     token: "tok-1".into(),
                 },
                 "accept_qsy",
-                "not implemented",
+                "already accepted",
             ),
             (
                 ControlCommand::RejectQsy {
-                    token: "tok-2".into(),
+                    token: "tok-1".into(),
                 },
                 "reject_qsy",
-                "not implemented",
+                "already accepted",
             ),
         ];
 
         let mut repeater_enabled = false;
+        let mut qsy_decisions = HashMap::new();
+        qsy_decisions.insert("tok-1".to_string(), true);
         for (cmd, expected_command, expected_reason_substr) in cases {
             apply_command_to_engine(
                 &cmd,
@@ -858,6 +921,7 @@ mod command_apply_tests {
                 &ev_tx,
                 None,
                 &mut repeater_enabled,
+                &mut qsy_decisions,
             )
             .await;
             let ev = rx.recv().await.expect("expected command_error event");
@@ -878,6 +942,7 @@ mod command_apply_tests {
         let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
         let ev_tx = Arc::new(tx);
         let mut repeater_enabled = false;
+        let mut qsy_decisions = HashMap::new();
 
         apply_command_to_engine(
             &ControlCommand::EnableRepeater,
@@ -886,6 +951,7 @@ mod command_apply_tests {
             &ev_tx,
             None,
             &mut repeater_enabled,
+            &mut qsy_decisions,
         )
         .await;
         assert!(repeater_enabled);
@@ -901,12 +967,65 @@ mod command_apply_tests {
             &ev_tx,
             None,
             &mut repeater_enabled,
+            &mut qsy_decisions,
         )
         .await;
         assert!(!repeater_enabled);
         match rx.recv().await.expect("expected repeater event") {
             ControlEvent::RepeaterChanged { enabled } => assert!(!enabled),
             other => panic!("expected RepeaterChanged, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_qsy_accept_reject_record_and_emit_decisions() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let mut repeater_enabled = false;
+        let mut qsy_decisions = HashMap::new();
+
+        apply_command_to_engine(
+            &ControlCommand::AcceptQsy {
+                token: "tok-accept".into(),
+            },
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut repeater_enabled,
+            &mut qsy_decisions,
+        )
+        .await;
+        assert_eq!(qsy_decisions.get("tok-accept"), Some(&true));
+        match rx.recv().await.expect("expected qsy event") {
+            ControlEvent::QsyDecision { token, accepted } => {
+                assert_eq!(token, "tok-accept");
+                assert!(accepted);
+            }
+            other => panic!("expected QsyDecision, got {other:?}"),
+        }
+
+        apply_command_to_engine(
+            &ControlCommand::RejectQsy {
+                token: "tok-reject".into(),
+            },
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut repeater_enabled,
+            &mut qsy_decisions,
+        )
+        .await;
+        assert_eq!(qsy_decisions.get("tok-reject"), Some(&false));
+        match rx.recv().await.expect("expected qsy event") {
+            ControlEvent::QsyDecision { token, accepted } => {
+                assert_eq!(token, "tok-reject");
+                assert!(!accepted);
+            }
+            other => panic!("expected QsyDecision, got {other:?}"),
         }
     }
 }

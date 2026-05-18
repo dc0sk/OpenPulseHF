@@ -273,6 +273,15 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
                 if enabled { "enabled" } else { "disabled" }
             ));
         }
+        ControlEvent::QsyDecision { token, accepted } => {
+            if st.pending_qsy_token.as_deref() == Some(token.as_str()) {
+                st.pending_qsy_token = None;
+            }
+            st.push_log(format!(
+                "QSY {} for token {token}",
+                if accepted { "accepted" } else { "rejected" }
+            ));
+        }
         ControlEvent::ConfigData { config } => {
             st.daemon_config = Some(config);
         }

@@ -5,6 +5,7 @@ use openpulse_audio::LoopbackBackend;
 use openpulse_daemon::{apply_command_to_engine, ws, ControlServer};
 use openpulse_modem::ModemEngine;
 use openpulse_radio::RigctldController;
+use std::collections::HashMap;
 
 use bpsk_plugin::BpskPlugin;
 use fsk4_plugin::Fsk4Plugin;
@@ -116,6 +117,7 @@ async fn main() {
         }
     };
     let mut repeater_enabled = cfg.repeater.enabled;
+    let mut qsy_decisions: HashMap<String, bool> = HashMap::new();
 
     // Execute side-effectful commands against the live modem engine.
     while let Some(cmd) = handle.commands.recv().await {
@@ -126,6 +128,7 @@ async fn main() {
             &handle.event_tx,
             rig_controller.as_mut(),
             &mut repeater_enabled,
+            &mut qsy_decisions,
         )
         .await;
     }

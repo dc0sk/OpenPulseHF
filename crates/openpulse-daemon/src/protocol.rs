@@ -137,6 +137,8 @@ pub enum ControlEvent {
     },
     /// Repeater runtime state changed.
     RepeaterChanged { enabled: bool },
+    /// QSY decision recorded by daemon runtime.
+    QsyDecision { token: String, accepted: bool },
     /// Response to [`ControlCommand::GetConfig`].
     ConfigData { config: DaemonConfig },
     /// A message was stored (sent or received); broadcast to all clients.
