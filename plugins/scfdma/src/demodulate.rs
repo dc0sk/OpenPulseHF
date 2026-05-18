@@ -3,8 +3,15 @@
 use num_complex::Complex32;
 use rustfft::FftPlanner;
 
-use crate::channel::{estimate_noise_var, estimate_rician_k_linear, ls_estimate, mmse_equalize};
-use crate::modulate::{modulate_with_params, preamble_payload};
+use crate::channel::{
+    dft_ce_estimate, estimate_noise_var, estimate_rician_k_linear, mmse_equalize,
+    mmse_llr_noise_var, pilot_positions,
+};
+use crate::modulate::{
+    gray3_to_natural, gray5_to_natural, modulate_with_params, natural3_to_gray, natural5_to_gray,
+    preamble_payload, QAM32_SCALE, QAM32_SPATIAL,
+};
+use crate::params::PILOT_AMPLITUDE;
 use crate::params::{params_for_mode, ScFdmaParams, CP, FFT_SIZE, SYM_LEN};
 
 // Re-export from the canonical core implementation so the plugin exposes the
@@ -74,6 +81,8 @@ fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Vec<u8> {
     let fft = planner.plan_fft_forward(FFT_SIZE);
     // N_data-point IDFT to undo DFT precoding.
     let idft = planner.plan_fft_inverse(p.n_data);
+    // P-point IDFT for DFT-CE pilot CIR estimation — planned once, reused per symbol.
+    let ce_idft = planner.plan_fft_inverse(p.n_pilots);
 
     let fft_scale = 1.0 / (FFT_SIZE as f32).sqrt();
     let idft_scale = 1.0 / (p.n_data as f32).sqrt();
@@ -93,8 +102,8 @@ fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Vec<u8> {
             .collect();
         fft.process(&mut freq);
 
-        // Step 2: LS channel estimation + MMSE equalization.
-        let h_est = ls_estimate(p, &freq);
+        // Step 2: DFT-domain channel estimation + MMSE equalization.
+        let h_est = dft_ce_estimate(p, &freq, &*ce_idft);
         let noise_var = estimate_noise_var(p, &freq, &h_est);
         let mut equalized = mmse_equalize(p, &freq, &h_est, noise_var);
 
@@ -165,6 +174,7 @@ fn demodulate_soft_with_params(samples: &[f32], p: &ScFdmaParams) -> SoftDemodOu
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(FFT_SIZE);
     let idft = planner.plan_fft_inverse(p.n_data);
+    let ce_idft = planner.plan_fft_inverse(p.n_pilots);
 
     let fft_scale = 1.0 / (FFT_SIZE as f32).sqrt();
     let idft_scale = 1.0 / (p.n_data as f32).sqrt();
@@ -187,23 +197,35 @@ fn demodulate_soft_with_params(samples: &[f32], p: &ScFdmaParams) -> SoftDemodOu
             .collect();
         fft.process(&mut freq);
 
-        let h_est = ls_estimate(p, &freq);
+        let h_est = dft_ce_estimate(p, &freq, &*ce_idft);
         let pilot_noise_var = estimate_noise_var(p, &freq, &h_est).max(1e-6);
-        let k_linear = estimate_rician_k_linear(&h_est);
-        let k_db = 10.0 * (k_linear + 1e-6).log10();
-        let k_gain = (1.0 + k_linear).clamp(1.0, 8.0);
 
+        // Rician K for SoftFrameMetrics: computed from raw pilot LS observations
+        // so the estimator range is independent of the CE method used for equalization.
+        let h_pilots: Vec<Complex32> = pilot_positions(p)
+            .iter()
+            .map(|&sc| freq[sc] / Complex32::new(PILOT_AMPLITUDE, 0.0))
+            .collect();
+        let k_linear = estimate_rician_k_linear(&h_pilots);
+        let k_db = 10.0 * (k_linear + 1e-6).log10();
+
+        let (llr_noise_var, alpha_avg) = mmse_llr_noise_var(p, &h_est, pilot_noise_var);
         let mut equalized = mmse_equalize(p, &freq, &h_est, pilot_noise_var);
 
         idft.process(&mut equalized);
-        let data_syms: Vec<Complex32> = equalized.iter().map(|c| c * idft_scale).collect();
-        let decision_noise_var = estimate_decision_noise_var(&data_syms, p.bits_per_sc).max(1e-6);
-        let llr_noise_var = (decision_noise_var / k_gain).max(1e-6);
+        // Divide by alpha_avg to restore unit-constellation scale after MMSE bias.
+        let data_syms: Vec<Complex32> = equalized
+            .iter()
+            .map(|c| *c * idft_scale / alpha_avg)
+            .collect();
 
         for sym in &data_syms {
             llrs.extend(symbol_llrs(*sym, p.bits_per_sc, llr_noise_var, &points));
         }
 
+        // Decision-residual metric for inverse-noise combining: computed after
+        // alpha_avg normalization so symbols are on the unit-constellation scale.
+        let decision_noise_var = estimate_decision_noise_var(&data_syms, p.bits_per_sc).max(1e-6);
         noise_sum += decision_noise_var;
         k_db_sum += k_db;
         metric_symbols += 1;
@@ -289,7 +311,9 @@ fn find_sync_offset(samples: &[f32], sync: &[f32]) -> usize {
 fn demap_symbol(c: Complex32, bits_per_sc: usize) -> u8 {
     match bits_per_sc {
         2 => qpsk_demod(c),
+        3 => psk8_demod(c),
         4 => qam16_demod(c),
+        5 => qam32_demod(c),
         6 => qam64_demod(c),
         _ => qpsk_demod(c),
     }
@@ -396,7 +420,9 @@ fn symbol_llrs(
 fn constellation_points(bits_per_sc: usize) -> Vec<(u8, Complex32)> {
     match bits_per_sc {
         2 => (0u8..4).map(|b| (b, qpsk_point(b))).collect(),
+        3 => (0u8..8).map(|b| (b, psk8_point(b))).collect(),
         4 => (0u8..16).map(|b| (b, qam16_point(b))).collect(),
+        5 => (0u8..32).map(|b| (b, qam32_point(b))).collect(),
         6 => (0u8..64).map(|b| (b, qam64_point(b))).collect(),
         _ => (0u8..4).map(|b| (b, qpsk_point(b))).collect(),
     }
@@ -442,6 +468,37 @@ fn qam16_point(bits: u8) -> Complex32 {
     let i = pam4((bits >> 2) & 0x3) * SCALE;
     let q = pam4(bits & 0x3) * SCALE;
     Complex32::new(i, q)
+}
+
+fn psk8_point(bits: u8) -> Complex32 {
+    let k = gray3_to_natural(bits);
+    let angle = k as f32 * std::f32::consts::FRAC_PI_4;
+    Complex32::new(angle.cos(), angle.sin())
+}
+
+fn psk8_demod(c: Complex32) -> u8 {
+    use std::f32::consts::{FRAC_PI_4, TAU};
+    let angle = c.im.atan2(c.re).rem_euclid(TAU);
+    let k = ((angle / FRAC_PI_4) + 0.5).floor() as u8 % 8;
+    natural3_to_gray(k)
+}
+
+fn qam32_point(bits: u8) -> Complex32 {
+    let (i, q) = QAM32_SPATIAL[gray5_to_natural(bits) as usize];
+    Complex32::new(i as f32 * QAM32_SCALE, q as f32 * QAM32_SCALE)
+}
+
+fn qam32_demod(c: Complex32) -> u8 {
+    let mut best_idx = 0u8;
+    let mut best_d = f32::INFINITY;
+    for (idx, &(i, q)) in QAM32_SPATIAL.iter().enumerate() {
+        let d = (c.re - i as f32 * QAM32_SCALE).powi(2) + (c.im - q as f32 * QAM32_SCALE).powi(2);
+        if d < best_d {
+            best_d = d;
+            best_idx = idx as u8;
+        }
+    }
+    natural5_to_gray(best_idx)
 }
 
 fn qam64_point(bits: u8) -> Complex32 {

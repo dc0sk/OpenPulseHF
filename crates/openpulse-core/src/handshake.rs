@@ -16,6 +16,7 @@ use crate::trust::{
 // Errors
 // ------------------------------------------------------------------
 
+/// Errors returned when creating or verifying a handshake frame.
 #[derive(Debug, thiserror::Error)]
 pub enum HandshakeError {
     #[error("invalid Ed25519 signature")]
@@ -58,6 +59,7 @@ pub struct InMemoryTrustStore {
 }
 
 impl InMemoryTrustStore {
+    /// Create an empty trust store with no entries.
     pub fn new() -> Self {
         Self::default()
     }
@@ -182,6 +184,7 @@ impl ConReq {
         serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))
     }
 
+    /// Serialize to HSCQ wire frame: magic(4) + version(1) + length(4) + JSON.
     pub fn encode(&self) -> Result<Vec<u8>, ModemError> {
         let body = serde_json::to_vec(self)
             .map_err(|e| ModemError::Frame(format!("CONREQ encode failed: {e}")))?;
@@ -195,6 +198,7 @@ impl ConReq {
         Ok(out)
     }
 
+    /// Deserialize from a HSCQ wire frame.
     pub fn decode(bytes: &[u8]) -> Result<Self, ModemError> {
         let min = 9;
         if bytes.len() < min {
@@ -306,6 +310,7 @@ impl ConAck {
         serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))
     }
 
+    /// Serialize to HSAK wire frame: magic(4) + version(1) + length(4) + JSON.
     pub fn encode(&self) -> Result<Vec<u8>, ModemError> {
         let body = serde_json::to_vec(self)
             .map_err(|e| ModemError::Frame(format!("CONACK encode failed: {e}")))?;
@@ -319,6 +324,7 @@ impl ConAck {
         Ok(out)
     }
 
+    /// Deserialize from a HSAK wire frame.
     pub fn decode(bytes: &[u8]) -> Result<Self, ModemError> {
         let min = 9;
         if bytes.len() < min {

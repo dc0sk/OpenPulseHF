@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 const ENVELOPE_MAGIC: &[u8; 4] = b"OPSE";
 const ENVELOPE_VERSION: u8 = 1;
 
+/// Header fields that are included in the `SignedEnvelope` JSON body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnvelopeHeader {
     pub session_id: String,
@@ -14,6 +15,7 @@ pub struct EnvelopeHeader {
     pub payload_hash_algorithm: String,
 }
 
+/// Signer identity and raw signature bytes attached to a `SignedEnvelope`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignatureBlock {
     pub signer_id: String,
@@ -21,6 +23,9 @@ pub struct SignatureBlock {
     pub signature: Vec<u8>,
 }
 
+/// A framed payload with an SHA-256 integrity hash and a detached signature.
+///
+/// Wire format: `OPSE` magic (4) + version (1) + body length (4 BE u32) + JSON body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignedEnvelope {
     pub header: EnvelopeHeader,
@@ -30,6 +35,7 @@ pub struct SignedEnvelope {
 }
 
 impl SignedEnvelope {
+    /// Construct a new envelope, computing the SHA-256 hash of `payload`.
     pub fn new(
         session_id: impl Into<String>,
         sequence: u64,
@@ -57,10 +63,12 @@ impl SignedEnvelope {
         }
     }
 
+    /// Return `true` if the stored `payload_hash` matches SHA-256 of `payload`.
     pub fn verify_payload_hash(&self) -> bool {
         self.payload_hash == sha256(&self.payload)
     }
 
+    /// Serialize to `OPSE` wire format.
     pub fn encode(&self) -> Result<Vec<u8>, ModemError> {
         let body = serde_json::to_vec(self)
             .map_err(|e| ModemError::Frame(format!("signed envelope encode failed: {e}")))?;
@@ -75,6 +83,7 @@ impl SignedEnvelope {
         Ok(out)
     }
 
+    /// Deserialize from `OPSE` wire format, verifying magic, version, and payload hash.
     pub fn decode(bytes: &[u8]) -> Result<Self, ModemError> {
         let min = 4 + 1 + 4;
         if bytes.len() < min {

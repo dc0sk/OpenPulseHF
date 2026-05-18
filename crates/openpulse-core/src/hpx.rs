@@ -3,6 +3,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+/// State nodes in the HPX session state machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HpxState {
     Idle,
@@ -15,6 +16,7 @@ pub enum HpxState {
     Failed,
 }
 
+/// Events that drive `HpxState` transitions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HpxEvent {
     StartSession,
@@ -34,6 +36,7 @@ pub enum HpxEvent {
     SignatureVerificationFailed,
 }
 
+/// Numeric reason codes embedded in `HpxTransition` for machine-readable diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum HpxReasonCode {
@@ -49,6 +52,7 @@ pub enum HpxReasonCode {
     Unclassified = 0xFF,
 }
 
+/// Audit record for a single state transition in an HPX session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HpxTransition {
     pub timestamp_ms: u64,
@@ -60,6 +64,7 @@ pub struct HpxTransition {
     pub session_id: Option<String>,
 }
 
+/// Errors returned by `HpxReactor::apply_event`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HpxStateError {
     InvalidTransition { state: HpxState, event: HpxEvent },
@@ -258,7 +263,9 @@ impl Default for HpxReactor {
 }
 
 impl HpxReactor {
+    /// Maximum consecutive recovery attempts before transitioning to Failed.
     pub const MAX_RECOVERY_ATTEMPTS: u8 = 4;
+    /// Maximum ARQ retries per chunk before treating the chunk as unrecoverable.
     pub const MAX_ARQ_RETRIES_PER_CHUNK: u8 = 6;
 
     /// Create an empty reactor with no sessions.
@@ -448,37 +455,46 @@ impl Clone for HpxReactor {
 }
 
 impl HpxSession {
+    /// Re-export of `HpxReactor::MAX_RECOVERY_ATTEMPTS` for convenience.
     pub const MAX_RECOVERY_ATTEMPTS: u8 = HpxReactor::MAX_RECOVERY_ATTEMPTS;
+    /// Re-export of `HpxReactor::MAX_ARQ_RETRIES_PER_CHUNK` for convenience.
     pub const MAX_ARQ_RETRIES_PER_CHUNK: u8 = HpxReactor::MAX_ARQ_RETRIES_PER_CHUNK;
 
+    /// Create a new single-session facade backed by a fresh `HpxReactor`.
     pub fn new() -> Self {
         let mut reactor = HpxReactor::new();
         let key = reactor.create_session();
         Self { reactor, key }
     }
 
+    /// Return the current HPX state of this session.
     pub fn state(&self) -> HpxState {
         self.reactor
             .session_state(&self.key)
             .unwrap_or(HpxState::Idle)
     }
 
+    /// Return the wire-level session ID assigned at `StartSession`, if set.
     pub fn session_id(&self) -> Option<&str> {
         self.reactor.session_wire_id(&self.key)
     }
 
+    /// Return the ordered list of state transitions recorded for this session.
     pub fn transitions(&self) -> &[HpxTransition] {
         self.reactor.transitions(&self.key).unwrap_or(&[])
     }
 
+    /// Increment the ARQ retry counter; returns `Err` when the limit is exceeded.
     pub fn record_arq_retry(&mut self) -> Result<(), HpxStateError> {
         self.reactor.record_arq_retry(&self.key)
     }
 
+    /// Reset the per-chunk ARQ retry counter after a successful chunk delivery.
     pub fn reset_arq_retry_counter(&mut self) {
         self.reactor.reset_arq_retry_counter(&self.key);
     }
 
+    /// Drive the state machine with `event` at `timestamp_ms`.
     pub fn apply_event(
         &mut self,
         event: HpxEvent,

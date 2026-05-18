@@ -19,6 +19,7 @@ const TAIL_BITS: usize = 2;
 pub struct ConvCodec;
 
 impl ConvCodec {
+    /// Create a new `ConvCodec` instance (stateless; constructor provided for API consistency).
     pub fn new() -> Self {
         Self
     }

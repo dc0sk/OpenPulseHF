@@ -53,9 +53,10 @@ pub fn load_trust_store_from_file(
         }
     }
     if skipped > 0 {
-        // Surface skipped records as a recoverable warning through the return value.
-        // Callers log it; openpulse-core has no tracing dependency.
-        eprintln!("trust_store_file: {skipped} record(s) skipped (non-hex or wrong-length key_id)");
+        tracing::warn!(
+            skipped,
+            "trust_store_file: record(s) skipped (non-hex or wrong-length key_id)"
+        );
     }
     Ok(store)
 }

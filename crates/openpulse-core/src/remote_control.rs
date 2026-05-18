@@ -16,6 +16,7 @@ use crate::trust::PublicKeyTrustLevel;
 
 // ── Errors ────────────────────────────────────────────────────────────────────
 
+/// Errors returned by remote rig-control validation.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RemoteControlError {
     #[error("signature verification failed")]
@@ -106,7 +107,11 @@ impl RigCtrlCmd {
         if bytes.len() < 4 + 32 + 64 {
             return Err(RemoteControlError::Encoding("buffer too short".into()));
         }
-        let body_len = u32::from_be_bytes(bytes[..4].try_into().unwrap()) as usize;
+        let body_len = u32::from_be_bytes(
+            bytes[..4]
+                .try_into()
+                .map_err(|_| RemoteControlError::Encoding("body-length slice error".into()))?,
+        ) as usize;
         let body_end = 4 + body_len;
         if bytes.len() < body_end + 32 + 64 {
             return Err(RemoteControlError::Encoding(
@@ -115,8 +120,12 @@ impl RigCtrlCmd {
         }
         let body: RigCtrlCmdBody = serde_json::from_slice(&bytes[4..body_end])
             .map_err(|e| RemoteControlError::Encoding(e.to_string()))?;
-        let sender_pubkey: [u8; 32] = bytes[body_end..body_end + 32].try_into().unwrap();
-        let signature: [u8; 64] = bytes[body_end + 32..body_end + 96].try_into().unwrap();
+        let sender_pubkey: [u8; 32] = bytes[body_end..body_end + 32]
+            .try_into()
+            .map_err(|_| RemoteControlError::Encoding("pubkey slice error".into()))?;
+        let signature: [u8; 64] = bytes[body_end + 32..body_end + 96]
+            .try_into()
+            .map_err(|_| RemoteControlError::Encoding("signature slice error".into()))?;
         Ok(Self {
             body,
             sender_pubkey,
@@ -164,6 +173,7 @@ impl Default for RemoteControlHandler {
 }
 
 impl RemoteControlHandler {
+    /// Create a new handler with the default 30-second replay window.
     pub fn new() -> Self {
         Self::default()
     }

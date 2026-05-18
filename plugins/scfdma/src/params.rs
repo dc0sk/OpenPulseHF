@@ -29,7 +29,7 @@ pub struct ScFdmaParams {
     pub n_data: usize,
     /// Number of pilot subcarriers.
     pub n_pilots: usize,
-    /// Bits carried per data subcarrier per SC-FDMA symbol (2=QPSK, 4=16QAM, 6=64QAM).
+    /// Bits carried per data subcarrier per SC-FDMA symbol (2=QPSK, 4=16QAM, 5=32QAM, 6=64QAM).
     pub bits_per_sc: usize,
     /// Pilot spacing in occupied subcarriers.
     pub pilot_spacing: usize,
@@ -72,6 +72,16 @@ pub const SCFDMA52: ScFdmaParams = ScFdmaParams {
     pilot_spacing: DEFAULT_PILOT_SPACING,
 };
 
+/// SCFDMA-52 with 8PSK subcarriers: 4,333 bps gross.
+pub const SCFDMA52_8PSK: ScFdmaParams = ScFdmaParams {
+    first_sc: 16,
+    last_sc: 80,
+    n_data: 52,
+    n_pilots: 13,
+    bits_per_sc: 3,
+    pilot_spacing: DEFAULT_PILOT_SPACING,
+};
+
 /// SCFDMA-52 with 16QAM subcarriers: 5,778 bps gross.
 pub const SCFDMA52_16QAM: ScFdmaParams = ScFdmaParams {
     first_sc: 16,
@@ -79,6 +89,19 @@ pub const SCFDMA52_16QAM: ScFdmaParams = ScFdmaParams {
     n_data: 52,
     n_pilots: 13,
     bits_per_sc: 4,
+    pilot_spacing: DEFAULT_PILOT_SPACING,
+};
+
+/// SCFDMA-52 with cross-32QAM subcarriers: 7,222 bps gross.
+///
+/// Cross-32QAM uses a 6×6 PAM grid with the four corner points removed (32 = 36 − 4).
+/// At 5 bits/SC, peak-SNR requirement is ~5 dB lower than 64QAM and matches VARA HF Level 16.
+pub const SCFDMA52_32QAM: ScFdmaParams = ScFdmaParams {
+    first_sc: 16,
+    last_sc: 80,
+    n_data: 52,
+    n_pilots: 13,
+    bits_per_sc: 5,
     pilot_spacing: DEFAULT_PILOT_SPACING,
 };
 
@@ -108,7 +131,9 @@ pub fn params_for_mode(mode: &str) -> Option<ScFdmaParams> {
     match mode.to_ascii_uppercase().as_str() {
         "SCFDMA16" => Some(SCFDMA16),
         "SCFDMA52" => Some(SCFDMA52),
+        "SCFDMA52-8PSK" => Some(SCFDMA52_8PSK),
         "SCFDMA52-16QAM" => Some(SCFDMA52_16QAM),
+        "SCFDMA52-32QAM" => Some(SCFDMA52_32QAM),
         "SCFDMA52-64QAM" => Some(SCFDMA52_64QAM),
         "SCFDMA52-64QAM-P4" => Some(SCFDMA52_64QAM_P4),
         _ => None,
@@ -134,12 +159,30 @@ mod tests {
     }
 
     #[test]
+    fn scfdma52_8psk_geometry() {
+        assert_eq!(SCFDMA52_8PSK.n_data, 52);
+        assert_eq!(SCFDMA52_8PSK.bits_per_sc, 3);
+        assert_eq!(SCFDMA52_8PSK.bits_per_symbol(), 156);
+        // 52 × 3 × 8000/288 ≈ 4333 bps
+        assert!((SCFDMA52_8PSK.gross_bps() - 4333.0).abs() < 5.0);
+    }
+
+    #[test]
     fn scfdma52_16qam_geometry() {
         assert_eq!(SCFDMA52_16QAM.n_data, 52);
         assert_eq!(SCFDMA52_16QAM.bits_per_sc, 4);
         assert_eq!(SCFDMA52_16QAM.bits_per_symbol(), 208);
         // 52 × 4 × 8000/288 ≈ 5778 bps
         assert!((SCFDMA52_16QAM.gross_bps() - 5778.0).abs() < 5.0);
+    }
+
+    #[test]
+    fn scfdma52_32qam_geometry() {
+        assert_eq!(SCFDMA52_32QAM.n_data, 52);
+        assert_eq!(SCFDMA52_32QAM.bits_per_sc, 5);
+        assert_eq!(SCFDMA52_32QAM.bits_per_symbol(), 260);
+        // 52 × 5 × 8000/288 ≈ 7222 bps
+        assert!((SCFDMA52_32QAM.gross_bps() - 7222.0).abs() < 5.0);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 
+/// Trust level assigned to a cached peer by the local node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TrustLevel {
     Unknown,
@@ -20,6 +21,7 @@ pub enum TrustFilter {
     Any,
 }
 
+/// One entry in the peer cache: identity, capabilities, and link-quality metrics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerRecord {
     pub peer_id: String,
@@ -30,6 +32,7 @@ pub struct PeerRecord {
     pub updated_at_ms: u64,
 }
 
+/// LRU-with-TTL cache of recently observed peers and their link metrics.
 #[derive(Debug, Clone)]
 pub struct PeerCache {
     capacity: usize,
@@ -39,6 +42,7 @@ pub struct PeerCache {
 }
 
 impl PeerCache {
+    /// Create an empty cache with the given capacity and TTL.
     pub fn new(capacity: usize, ttl_ms: u64) -> Self {
         Self {
             capacity,
@@ -48,14 +52,17 @@ impl PeerCache {
         }
     }
 
+    /// Number of live entries currently in the cache.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    /// Return `true` if the cache has no live entries.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
+    /// Insert or update a peer record; returns `true` if the cache was modified.
     pub fn upsert(&mut self, incoming: PeerRecord, now_ms: u64) -> bool {
         self.evict_expired(now_ms);
 
@@ -71,6 +78,7 @@ impl PeerCache {
         }
     }
 
+    /// Look up a peer by ID, bumping its LRU position; returns `None` if expired or absent.
     pub fn get(&mut self, peer_id: &str, now_ms: u64) -> Option<&PeerRecord> {
         self.evict_expired(now_ms);
         if self.entries.contains_key(peer_id) {
@@ -129,6 +137,7 @@ impl PeerCache {
         results
     }
 
+    /// Remove all entries that have exceeded their TTL; returns the eviction count.
     pub fn evict_expired(&mut self, now_ms: u64) -> usize {
         let before = self.entries.len();
         self.entries

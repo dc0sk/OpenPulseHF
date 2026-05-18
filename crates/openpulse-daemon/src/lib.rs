@@ -756,6 +756,12 @@ pub async fn apply_command_to_engine(
                         token: token.to_string(),
                         accepted: true,
                     });
+                    // QsySession state machine and RF frame transmission are not yet
+                    // wired at the daemon level; operator decision is recorded only.
+                    tracing::warn!(
+                        token,
+                        "accept_qsy: decision recorded; RF QSY negotiation not yet implemented"
+                    );
                 }
             }
         }
@@ -811,6 +817,11 @@ pub async fn apply_command_to_engine(
 
             runtime_state.repeater_enabled = true;
             let _ = event_tx.send(ControlEvent::RepeaterChanged { enabled: true });
+            // CrossBandRepeater worker thread is not yet spawned by the daemon;
+            // flag change is recorded and event emitted but no audio routing occurs.
+            tracing::warn!(
+                "enable_repeater: flag set; CrossBandRepeater audio routing not yet implemented"
+            );
         }
         ControlCommand::DisableRepeater => {
             if !runtime_state.repeater_enabled {

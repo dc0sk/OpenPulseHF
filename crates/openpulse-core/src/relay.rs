@@ -7,6 +7,7 @@ use crate::wire_query::WireEnvelope;
 // Errors
 // ------------------------------------------------------------------
 
+/// Errors returned by route validation functions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RelayRouteError {
     EmptyRoute,
@@ -16,6 +17,7 @@ pub enum RelayRouteError {
     NoValidRoute,
 }
 
+/// Errors returned by `RelayForwarder::try_forward`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RelayForwardError {
     /// hop_index has reached hop_limit; message must be dropped.
@@ -58,6 +60,7 @@ pub enum RelayEvent {
 // Trust policy
 // ------------------------------------------------------------------
 
+/// Trust policy applied at relay nodes to filter which originators may be forwarded.
 #[derive(Debug, Clone, Default)]
 pub struct RelayTrustPolicy {
     denied_relays: HashSet<String>,
@@ -66,6 +69,7 @@ pub struct RelayTrustPolicy {
 }
 
 impl RelayTrustPolicy {
+    /// Construct a policy that blocks the listed peer IDs; all others are allowed.
     pub fn deny_relays<I, S>(denied: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -89,6 +93,7 @@ impl RelayTrustPolicy {
         }
     }
 
+    /// Return `true` if `relay_peer_id` is not on the deny list.
     pub fn allows(&self, relay_peer_id: &str) -> bool {
         !self.denied_relays.contains(relay_peer_id)
     }
@@ -98,6 +103,7 @@ impl RelayTrustPolicy {
 // Route validation (existing API, unchanged)
 // ------------------------------------------------------------------
 
+/// Validate that a route has no duplicate peer IDs and does not exceed `max_hops`.
 pub fn validate_route_no_loops(route: &[String], max_hops: usize) -> Result<(), RelayRouteError> {
     if route.is_empty() {
         return Err(RelayRouteError::EmptyRoute);
@@ -120,6 +126,7 @@ pub fn validate_route_no_loops(route: &[String], max_hops: usize) -> Result<(), 
     Ok(())
 }
 
+/// Validate a route for loops, hop count, and intermediate-relay trust policy.
 pub fn validate_route_with_policy(
     route: &[String],
     max_hops: usize,
@@ -142,6 +149,7 @@ pub fn validate_route_with_policy(
     Ok(())
 }
 
+/// Select the shortest valid route from `candidates` that passes loop and policy checks.
 pub fn select_best_valid_route(
     candidates: &[Vec<String>],
     max_hops: usize,
@@ -260,6 +268,7 @@ pub struct RelayForwarder {
 }
 
 impl RelayForwarder {
+    /// Create a new forwarder with the given replay-suppression TTL and trust policy.
     pub fn new(ttl_ms: u64, policy: RelayTrustPolicy) -> Self {
         Self {
             policy,

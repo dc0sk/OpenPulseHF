@@ -99,13 +99,13 @@ fn wideband_hd_sl12_floor_breach_steps_down_immediately() {
 
     assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl12));
 
-    // SL12 floor = 22 dB; 20 dB should force immediate step-down.
-    engine.apply_snr_hint(20.0);
+    // SL12 floor = 16 dB; 14 dB should force immediate step-down.
+    engine.apply_snr_hint(14.0);
 
     assert_eq!(
         engine.current_tx_level(),
         Some(SpeedLevel::Sl11),
-        "SL12 floor breach must step down by exactly one rung"
+        "SL12 floor breach must step down; no mode below SL12, so falls to Sl11 (undefined = step past)"
     );
 
     let event = rx
@@ -136,8 +136,8 @@ fn wideband_hd_sl13_floor_breach_steps_to_sl12() {
     let _ = engine.apply_ack(AckType::AckUp);
     assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl13));
 
-    // SL13 floor = 24 dB; 23 dB should force immediate step-down.
-    engine.apply_snr_hint(23.0);
+    // SL13 floor = 20 dB; 18 dB should force immediate step-down.
+    engine.apply_snr_hint(18.0);
     assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl12));
 
     let mut saw_snr_floor = false;
