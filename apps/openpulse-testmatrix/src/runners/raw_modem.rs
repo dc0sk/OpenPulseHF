@@ -53,7 +53,14 @@ pub fn run(case: &TestCase) -> TestResult {
                 .transmit_with_soft_viterbi_fec(&wire_payload, mode, None)
         }
         FecMode::Ldpc => {
-            return skip(case, "LDPC deferred (BL-FEC-6) — GPU acceleration required");
+            // Single-block limit: user payload + ~8 bytes frame header must fit in LDPC_MAX_INFO_BYTES (128).
+            if wire_payload.len() > 112 {
+                return skip(
+                    case,
+                    "LDPC payload too large for single block (max 112 bytes user data; LDPC_MAX_INFO_BYTES=128)",
+                );
+            }
+            h.tx_engine.transmit_with_ldpc(&wire_payload, mode, None)
         }
     };
 
@@ -70,7 +77,8 @@ pub fn run(case: &TestCase) -> TestResult {
         FecMode::Rs => h.rx_engine.receive_with_fec(mode, None),
         FecMode::RsInterleaved => h.rx_engine.receive_with_fec_interleaved(mode, None, 5),
         FecMode::Concatenated => h.rx_engine.receive_with_concatenated_fec(mode, None),
-        FecMode::ShortRs | FecMode::Ldpc => unreachable!("skipped in TX branch"),
+        FecMode::ShortRs => unreachable!("skipped in TX branch"),
+        FecMode::Ldpc => h.rx_engine.receive_with_ldpc(mode, None),
         FecMode::RsStrong => h.rx_engine.receive_with_strong_fec(mode, None),
         FecMode::SoftConcatenated => h.rx_engine.receive_with_soft_viterbi_fec(mode, None),
     };

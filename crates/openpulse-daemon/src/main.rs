@@ -4,7 +4,7 @@
 use openpulse_audio::LoopbackBackend;
 use openpulse_daemon::{apply_command_to_engine, ws, ControlServer, RuntimeControlState};
 use openpulse_modem::ModemEngine;
-use openpulse_radio::RigctldController;
+use openpulse_radio::{NoOpPtt, PttController, RigctldController, RigctldPtt, VoxPtt};
 
 use bpsk_plugin::BpskPlugin;
 use fsk4_plugin::Fsk4Plugin;
@@ -115,6 +115,8 @@ async fn main() {
             None
         }
     };
+    let mut ptt_controller: Option<Box<dyn PttController>> =
+        build_ptt_controller(&cfg.modem.ptt_backend, &cfg.radio.rigctld_addr);
     let mut runtime_state = RuntimeControlState {
         repeater_enabled: cfg.repeater.enabled,
         ..RuntimeControlState::default()
@@ -122,14 +124,69 @@ async fn main() {
 
     // Execute side-effectful commands against the live modem engine.
     while let Some(cmd) = handle.commands.recv().await {
-        apply_command_to_engine(
-            &cmd,
-            &mut engine,
-            &handle.active_mode,
-            &handle.event_tx,
-            rig_controller.as_mut(),
-            &mut runtime_state,
-        )
-        .await;
+        // PTT hardware calls are synchronous; handle them before the async engine dispatch so
+        // the borrow of ptt_controller doesn't cross the await point.
+        // If the hardware call fails, skip the engine dispatch to avoid emitting a spurious
+        // PttChanged event that would tell clients PTT is active when it is not.
+        let mut ptt_hard_failed = false;
+        match &cmd {
+            openpulse_daemon::Command::PttAssert => {
+                if let Some(ref mut ptt) = ptt_controller {
+                    if let Err(e) = ptt.assert_ptt() {
+                        tracing::warn!("PTT assert failed: {e}");
+                        ptt_hard_failed = true;
+                    }
+                }
+            }
+            openpulse_daemon::Command::PttRelease => {
+                if let Some(ref mut ptt) = ptt_controller {
+                    if let Err(e) = ptt.release_ptt() {
+                        tracing::warn!("PTT release failed: {e}");
+                        ptt_hard_failed = true;
+                    }
+                }
+            }
+            _ => {}
+        }
+        if !ptt_hard_failed {
+            apply_command_to_engine(
+                &cmd,
+                &mut engine,
+                &handle.active_mode,
+                &handle.event_tx,
+                rig_controller.as_mut(),
+                &mut runtime_state,
+            )
+            .await;
+        }
+    }
+}
+
+fn build_ptt_controller(backend: &str, rigctld_addr: &str) -> Option<Box<dyn PttController>> {
+    match backend {
+        "none" => Some(Box::new(NoOpPtt::new())),
+        "vox" => Some(Box::new(VoxPtt::new())),
+        "rigctld" => match RigctldPtt::connect(rigctld_addr) {
+            Ok(ctrl) => Some(Box::new(ctrl)),
+            Err(e) => {
+                tracing::warn!(
+                    addr = %rigctld_addr,
+                    error = %e,
+                    "rigctld PTT connect failed; PTT commands will be no-ops"
+                );
+                None
+            }
+        },
+        "rts" | "dtr" => {
+            tracing::warn!(
+                backend,
+                "serial PTT not supported in daemon build (recompile with --features serial); PTT disabled"
+            );
+            None
+        }
+        other => {
+            tracing::warn!(backend = %other, "unknown PTT backend; PTT disabled");
+            None
+        }
     }
 }

@@ -8,7 +8,15 @@ use crate::matrix::{ChannelSpec, TestCase, Tier, UseCase};
 
 const MULTICARRIER_MODES: &[&str] = &["OFDM16", "OFDM52", "SCFDMA16", "SCFDMA52"];
 
-const NARROWBAND_MODES: &[&str] = &["QPSK2000", "QPSK2000-RRC", "8PSK2000", "8PSK2000-RRC"];
+/// SC-FDMA higher-order modulation modes (SCFDMA52 with denser constellations).
+/// Require higher minimum SNR than SCFDMA52-QPSK; min thresholds set in mode_min_snr_db().
+const SCFDMA_HOM_MODES: &[&str] = &[
+    "SCFDMA52-8PSK",
+    "SCFDMA52-16QAM",
+    "SCFDMA52-32QAM",
+    "SCFDMA52-64QAM",
+    "SCFDMA52-64QAM-P4",
+];
 
 const QAM64_MODES: &[&str] = &["64QAM500", "64QAM1000", "64QAM2000-RRC"];
 
@@ -22,11 +30,19 @@ const HF_FAST_MODES: &[&str] = &[
     "QPSK1000-HF",
     "QPSK500-RRC",
     "QPSK1000-RRC",
+    // UHF/VHF narrowband: RRC variant works at all payload sizes at 4 sps (8 kHz / 2000 baud).
+    "QPSK2000-RRC",
     "8PSK500",
     "8PSK1000-HF",
     "8PSK500-RRC",
     "8PSK1000-RRC",
 ];
+
+/// Modes that are smoke-tested (clean/32B) only.
+///
+/// Plain QPSK2000 (rectangular pulse) has timing drift at >32-byte payloads at 4 samples/symbol;
+/// include it for feature-presence tracking but not in the AWGN sweep.
+const SMOKE_ONLY_MODES: &[&str] = &["QPSK2000"];
 
 // Modes that are slow enough that large case counts are impractical.
 const HF_SLOW_MODES: &[&str] = &["BPSK31", "BPSK63", "BPSK100"];
@@ -52,6 +68,10 @@ pub fn mode_min_snr_db(mode: &str) -> f32 {
     }
     match mode {
         "8PSK500" | "8PSK1000-HF" | "OFDM52" | "SCFDMA52" => 15.0,
+        "SCFDMA52-8PSK" => 15.0,
+        "SCFDMA52-16QAM" => 20.0,
+        "SCFDMA52-32QAM" => 25.0,
+        "SCFDMA52-64QAM" | "SCFDMA52-64QAM-P4" => 30.0,
         _ => 0.0,
     }
 }
@@ -87,6 +107,8 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
         .chain(HF_FAST_MODES.iter())
         .chain(QAM64_MODES.iter())
         .chain(MULTICARRIER_MODES.iter())
+        .chain(SCFDMA_HOM_MODES.iter())
+        .chain(SMOKE_ONLY_MODES.iter())
         .copied()
         .collect();
 
@@ -213,6 +235,52 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
         }
     }
 
+    // ── 5a. LDPC × key HF modes × clean + AWGN × 32 bytes ───────────────────────────
+    //        Payload capped at 32 bytes: LDPC single-block limit is ~112 bytes of user
+    //        data after frame overhead; 32 bytes gives comfortable headroom and is
+    //        sufficient to exercise the full soft-decode path.
+    let ldpc_modes = &["BPSK250", "QPSK500", "8PSK500"];
+    let ldpc_channels = vec![
+        ChannelSpec::Clean,
+        ChannelSpec::Awgn {
+            snr_db: 20.0,
+            seed: 42,
+        },
+    ];
+    for mode in ldpc_modes {
+        for channel in &ldpc_channels {
+            cases.push(raw_case(
+                mode,
+                FecMode::Ldpc,
+                CompressionAlgorithm::None,
+                channel.clone(),
+                32,
+                tier,
+            ));
+        }
+    }
+
+    // ── 5b. SC-FDMA higher-order modes × AWGN sweep × {None, Rs} × 32 bytes ────────
+    //        Payload kept at 32 bytes: these wideband modes are SNR-sensitive and
+    //        the smoke + FEC coverage is sufficient for the Quick tier.
+    for mode in SCFDMA_HOM_MODES {
+        for channel in &awgn_channels {
+            if channel_snr_db(channel).is_some_and(|s| s < mode_min_snr_db(mode)) {
+                continue;
+            }
+            for &fec in &[FecMode::None, FecMode::Rs] {
+                cases.push(raw_case(
+                    mode,
+                    fec,
+                    CompressionAlgorithm::None,
+                    channel.clone(),
+                    32,
+                    tier,
+                ));
+            }
+        }
+    }
+
     // ── 6. Adaptive profiles (clean + AWGN channels) ──────────────────────────────
     for channel in &awgn_channels {
         cases.push(adaptive_case(
@@ -322,16 +390,16 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
             }
         }
 
-        // Narrowband modes (8 kHz audio, PMR) × clean + AWGN × key FEC
-        for mode in NARROWBAND_MODES {
-            for channel in &awgn_channels {
+        // SC-FDMA higher-order × all propagation channels × {None, Rs} × 32 bytes
+        for mode in SCFDMA_HOM_MODES {
+            for channel in &prop_channels {
                 for &fec in &[FecMode::None, FecMode::Rs] {
                     cases.push(raw_case(
                         mode,
                         fec,
                         CompressionAlgorithm::None,
                         channel.clone(),
-                        128,
+                        32,
                         tier,
                     ));
                 }

@@ -900,7 +900,8 @@ impl ModemEngine {
     ) -> Result<RateEvent, ModemError> {
         let attempts = 1 + max_retries;
         for attempt in 0..attempts {
-            self.transmit(data, mode, device)?;
+            let current_mode = self.current_adaptive_mode().unwrap_or(mode).to_owned();
+            self.transmit(data, &current_mode, device)?;
 
             match self.receive_ack_with_short_fec(device) {
                 Ok(ack_frame) if ack_frame.ack_type != AckType::Nack => {
