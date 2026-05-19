@@ -335,3 +335,25 @@ async fn buffer_drains_after_fecsend_loopback() {
     }
     assert!(settled, "BUFFER did not drain to 0 within 1 second");
 }
+
+#[tokio::test]
+async fn waveform_get_set() {
+    let (cmd_port, _) = start_server(false).await;
+    let stream = TcpStream::connect(("127.0.0.1", cmd_port)).await.unwrap();
+    let mut reader = BufReader::new(stream);
+
+    // Query current waveform (should be the startup default).
+    let initial = cmd(&mut reader, "WAVEFORM").await;
+    assert!(
+        initial.starts_with("WAVEFORM "),
+        "expected WAVEFORM response, got: {initial}"
+    );
+
+    // Switch to a different waveform.
+    let resp = cmd(&mut reader, "WAVEFORM BPSK31").await;
+    assert_eq!(resp, "WAVEFORM BPSK31");
+
+    // Verify the new waveform is persisted.
+    let resp2 = cmd(&mut reader, "WAVEFORM").await;
+    assert_eq!(resp2, "WAVEFORM BPSK31");
+}

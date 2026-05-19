@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{broadcast, RwLock};
 
 use openpulse_core::ack::{AckFrame, AckType};
@@ -19,7 +19,8 @@ pub struct ModemBridge {
     pub arq_bw: Arc<RwLock<u16>>,
     /// ARQ connection timeout in seconds; default 120.
     pub arq_timeout: Arc<RwLock<u16>>,
-    pub mode: String,
+    /// Active modem mode string; changeable at runtime via the `WAVEFORM` command.
+    pub mode: Arc<StdRwLock<String>>,
     /// Unsolicited event push channel to all connected command clients.
     pub event_tx: broadcast::Sender<String>,
     /// Received data pushed from the worker to all data port clients.
@@ -60,7 +61,7 @@ impl ModemBridge {
             gridsquare: Arc::new(RwLock::new(String::new())),
             arq_bw: Arc::new(RwLock::new(500)),
             arq_timeout: Arc::new(RwLock::new(120)),
-            mode,
+            mode: Arc::new(StdRwLock::new(mode)),
             event_tx,
             rx_data_tx,
             tx_data_tx,
@@ -93,6 +94,13 @@ pub fn spawn_worker(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Recei
 
 fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<Vec<u8>>) {
     loop {
+        // Snapshot the current mode once per iteration to avoid holding the lock across I/O.
+        let mode = bridge
+            .mode
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+
         while let Ok(data) = tx_data_rx.try_recv() {
             let len = data.len();
             // Clear one-shot flag regardless of path so loopback mode doesn't leak it.
@@ -114,7 +122,7 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                         .engine
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
-                        .transmit_arq(&data, &bridge.mode, None, 3)
+                        .transmit_arq(&data, &mode, None, 3)
                     {
                         Ok(rate_event) => {
                             tracing::debug!(rate_event = ?rate_event, "ARQ TX succeeded");
@@ -126,17 +134,17 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                 } else {
                     let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
                     let tx_result = if use_fec {
-                        engine.transmit_with_fec(&data, &bridge.mode, None)
+                        engine.transmit_with_fec(&data, &mode, None)
                     } else {
-                        engine.transmit(&data, &bridge.mode, None)
+                        engine.transmit(&data, &mode, None)
                     };
                     drop(engine);
                     if let Err(ref e) = tx_result {
                         tracing::warn!("modem TX error: {e}");
                     }
                     if tx_result.is_ok() {
-                        if let Some(rx) = do_receive(&bridge) {
-                            maybe_relay_forward(&bridge, &rx);
+                        if let Some(rx) = do_receive(&bridge, &mode) {
+                            maybe_relay_forward(&bridge, &rx, &mode);
                             if !rx.is_empty() {
                                 let _ = bridge.rx_data_tx.send(rx);
                             }
@@ -160,12 +168,12 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                 .current_tx_level()
                 .is_some();
             let received = if adaptive {
-                do_receive_with_ack_hint(&bridge)
+                do_receive_with_ack_hint(&bridge, &mode)
             } else {
-                do_receive(&bridge)
+                do_receive(&bridge, &mode)
             };
             if let Some(rx) = received {
-                maybe_relay_forward(&bridge, &rx);
+                maybe_relay_forward(&bridge, &rx, &mode);
                 if !rx.is_empty() {
                     let _ = bridge.rx_data_tx.send(rx);
                 }
@@ -176,21 +184,21 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
     }
 }
 
-fn do_receive(bridge: &ModemBridge) -> Option<Vec<u8>> {
+fn do_receive(bridge: &ModemBridge, mode: &str) -> Option<Vec<u8>> {
     let use_fec_rx = bridge.fec_rx.load(Ordering::Relaxed);
     if use_fec_rx {
         bridge
             .engine
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .receive_with_fec(&bridge.mode, None)
+            .receive_with_fec(mode, None)
             .ok()
     } else {
         bridge
             .engine
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .receive(&bridge.mode, None)
+            .receive(mode, None)
             .ok()
     }
 }
@@ -200,18 +208,18 @@ fn do_receive(bridge: &ModemBridge) -> Option<Vec<u8>> {
 ///
 /// On decode failure a `Nack` is transmitted so the ISS can step down.
 /// Returns the decoded payload on success, `None` on failure.
-fn do_receive_with_ack_hint(bridge: &ModemBridge) -> Option<Vec<u8>> {
+fn do_receive_with_ack_hint(bridge: &ModemBridge, mode: &str) -> Option<Vec<u8>> {
     let result = bridge
         .engine
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .receive_with_ack_hint(&bridge.mode, None);
+        .receive_with_ack_hint(mode, None);
 
     let (payload, ack_type) = match result {
         Ok(pair) => pair,
         Err(e) => {
             tracing::debug!("IRS receive_with_ack_hint failed ({e}); sending Nack");
-            let nack = AckFrame::new(AckType::Nack, &bridge.mode);
+            let nack = AckFrame::new(AckType::Nack, mode);
             if let Err(e) = bridge
                 .engine
                 .lock()
@@ -224,7 +232,7 @@ fn do_receive_with_ack_hint(bridge: &ModemBridge) -> Option<Vec<u8>> {
         }
     };
 
-    let ack_frame = AckFrame::new(ack_type, &bridge.mode);
+    let ack_frame = AckFrame::new(ack_type, mode);
     if let Err(e) = bridge
         .engine
         .lock()
@@ -248,7 +256,7 @@ fn do_receive_with_ack_hint(bridge: &ModemBridge) -> Option<Vec<u8>> {
 /// The probe is cheap: `decode` checks the 4-byte `OPHF` magic first and
 /// returns `Err(InvalidMagic)` immediately for ordinary user-data payloads.
 /// When the magic matches the forwarder increments `hop_index` and re-transmits.
-fn maybe_relay_forward(bridge: &ModemBridge, payload: &[u8]) {
+fn maybe_relay_forward(bridge: &ModemBridge, payload: &[u8], mode: &str) {
     use openpulse_core::wire_query::WireEnvelope;
 
     let Some(ref fwd_arc) = bridge.relay_forwarder else {
@@ -276,7 +284,7 @@ fn maybe_relay_forward(bridge: &ModemBridge, payload: &[u8]) {
                     .engine
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .transmit(&out_bytes, &bridge.mode, None)
+                    .transmit(&out_bytes, mode, None)
                 {
                     tracing::warn!("relay TX error: {e}");
                 }
