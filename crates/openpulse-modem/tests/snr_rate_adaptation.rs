@@ -188,9 +188,10 @@ fn wideband_hd_sl13_ceiling_sets_candidate_without_level_change() {
     assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl13));
 }
 
-/// Without SL13 ceiling hint, ACK-UP must not admit SL14 in wideband-HD.
+/// Without SL14 ceiling hint, ACK-UP must not admit SL15 in wideband-HD.
+/// SL13 → SL14 is freely admitted (no gate there); only SL14 → SL15 is gated.
 #[test]
-fn wideband_hd_sl13_ack_up_without_ceiling_stays_sl13() {
+fn wideband_hd_sl14_ack_up_without_ceiling_stays_sl14() {
     let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
     engine.start_adaptive_session(SessionProfile::hpx_wideband_hd());
 
@@ -201,9 +202,16 @@ fn wideband_hd_sl13_ack_up_without_ceiling_stays_sl13() {
     );
     assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl13));
 
-    // Without a prior ceiling hint at SL13, ACK-UP must not admit SL14.
+    // SL13 → SL14: no gate at SL13, so ACK-UP is freely admitted.
+    assert_eq!(
+        engine.apply_ack(AckType::AckUp),
+        RateEvent::Increased(SpeedLevel::Sl14)
+    );
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl14));
+
+    // Without a prior ceiling hint at SL14, ACK-UP must not admit SL15.
     assert_eq!(engine.apply_ack(AckType::AckUp), RateEvent::Maintained);
-    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl13));
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl14));
 }
 
 /// Non-wideband-HD profiles must remain unaffected by the SL13->SL14 wideband-HD gate.

@@ -350,7 +350,7 @@ impl SessionProfile {
             nack_threshold: 2,
             snr_floors,
             snr_ceilings,
-            ack_up_requires_snr_candidate_at: Some(SpeedLevel::Sl13),
+            ack_up_requires_snr_candidate_at: Some(SpeedLevel::Sl14),
         }
     }
 }
