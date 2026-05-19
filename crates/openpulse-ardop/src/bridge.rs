@@ -100,31 +100,46 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
             if bridge.loopback {
                 let _ = bridge.rx_data_tx.send(data);
             } else {
-                let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
-                let tx_result = if use_fec {
-                    engine.transmit_with_fec(&data, &bridge.mode, None)
-                } else {
-                    engine.transmit(&data, &bridge.mode, None)
-                };
-                drop(engine);
-                if let Err(ref e) = tx_result {
-                    tracing::warn!("modem TX error: {e}");
-                }
-                if tx_result.is_ok() {
-                    // ISS path: if adaptive session is active, listen for the IRS
-                    // ACK frame (FSK4-ACK) and apply it to the TX rate adapter.
-                    let adaptive = bridge
+                let adaptive = bridge
+                    .engine
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .current_tx_level()
+                    .is_some();
+
+                if adaptive && !use_fec {
+                    // ISS adaptive path: transmit with ARQ retry (up to 3 retransmits).
+                    // FEC transmissions use their own reliability mechanism and skip ARQ.
+                    match bridge
                         .engine
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
-                        .current_tx_level()
-                        .is_some();
-                    if adaptive {
-                        do_receive_ack_frame(&bridge);
-                    } else if let Some(rx) = do_receive(&bridge) {
-                        maybe_relay_forward(&bridge, &rx);
-                        if !rx.is_empty() {
-                            let _ = bridge.rx_data_tx.send(rx);
+                        .transmit_arq(&data, &bridge.mode, None, 3)
+                    {
+                        Ok(rate_event) => {
+                            tracing::debug!(rate_event = ?rate_event, "ARQ TX succeeded");
+                        }
+                        Err(e) => {
+                            tracing::warn!("ARQ TX failed: {e}");
+                        }
+                    }
+                } else {
+                    let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
+                    let tx_result = if use_fec {
+                        engine.transmit_with_fec(&data, &bridge.mode, None)
+                    } else {
+                        engine.transmit(&data, &bridge.mode, None)
+                    };
+                    drop(engine);
+                    if let Err(ref e) = tx_result {
+                        tracing::warn!("modem TX error: {e}");
+                    }
+                    if tx_result.is_ok() {
+                        if let Some(rx) = do_receive(&bridge) {
+                            maybe_relay_forward(&bridge, &rx);
+                            if !rx.is_empty() {
+                                let _ = bridge.rx_data_tx.send(rx);
+                            }
                         }
                     }
                 }
@@ -220,35 +235,6 @@ fn do_receive_with_ack_hint(bridge: &ModemBridge) -> Option<Vec<u8>> {
     }
 
     Some(payload)
-}
-
-/// ISS adaptive path: receive the FSK4-ACK reply from the IRS and apply it to
-/// the TX rate adapter.  Errors are logged and silently swallowed — a missed
-/// ACK degrades to no rate change rather than a hard failure.
-fn do_receive_ack_frame(bridge: &ModemBridge) {
-    let ack_result = bridge
-        .engine
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .receive_ack_with_short_fec(None);
-
-    match ack_result {
-        Ok(ack_frame) => {
-            let rate_event = bridge
-                .engine
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .apply_ack_frame(&ack_frame);
-            tracing::debug!(
-                ack_type = ?ack_frame.ack_type,
-                rate_event = ?rate_event,
-                "ISS: applied ACK frame from IRS"
-            );
-        }
-        Err(e) => {
-            tracing::debug!("ISS: no ACK frame received ({e})");
-        }
-    }
 }
 
 /// Attempt to forward `payload` as a relay `WireEnvelope` when relay is enabled.
