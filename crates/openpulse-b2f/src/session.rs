@@ -1,6 +1,8 @@
 //! B2F session state machine for ISS (sending) and IRS (receiving) roles.
 
-use crate::compress::{compress_gzip, decompress_gzip, decompress_lzhuf_compat};
+use crate::compress::{
+    compress_gzip, compress_lzhuf_winlink, decompress_gzip, decompress_lzhuf_compat,
+};
 use crate::frame::{self, B2fFrame, FsAnswer, ProposalType};
 use crate::header::WlHeader;
 use crate::B2fError;
@@ -52,7 +54,7 @@ impl B2fSession {
         }
     }
 
-    /// ISS: queue a message to propose in the next `ProposalExchange`.
+    /// ISS: queue a message as proposal type D (Gzip) in the next `ProposalExchange`.
     ///
     /// The compressed blob includes the CRLF-terminated header block followed
     /// by the raw body bytes — matching the wire format expected by real Winlink CMS.
@@ -64,6 +66,34 @@ impl B2fSession {
         self.proposals.push(Proposal {
             fc: B2fFrame::Fc {
                 proposal_type: ProposalType::D,
+                mid: header.mid.clone(),
+                size,
+                date: header.date.clone(),
+            },
+            compressed_data: compressed,
+            answer: None,
+        });
+        Ok(())
+    }
+
+    /// ISS: queue a message as proposal type C (LZHUF, Winlink-compatible) in the next
+    /// `ProposalExchange`.
+    ///
+    /// Uses a 4-byte LE length prefix matching the Winlink Type C convention (RMS Express,
+    /// RMS Gateway).  Use this instead of `queue_message` when interoperating with
+    /// external Winlink gateways that require Type C compression.
+    pub fn queue_message_type_c(
+        &mut self,
+        header: WlHeader,
+        body: Vec<u8>,
+    ) -> Result<(), B2fError> {
+        let mut full = crate::header::encode(&header);
+        full.extend_from_slice(&body);
+        let compressed = compress_lzhuf_winlink(&full)?;
+        let size = compressed.len() as u32;
+        self.proposals.push(Proposal {
+            fc: B2fFrame::Fc {
+                proposal_type: ProposalType::C,
                 mid: header.mid.clone(),
                 size,
                 date: header.date.clone(),
