@@ -126,11 +126,15 @@ async fn main() {
     while let Some(cmd) = handle.commands.recv().await {
         // PTT hardware calls are synchronous; handle them before the async engine dispatch so
         // the borrow of ptt_controller doesn't cross the await point.
+        // If the hardware call fails, skip the engine dispatch to avoid emitting a spurious
+        // PttChanged event that would tell clients PTT is active when it is not.
+        let mut ptt_hard_failed = false;
         match &cmd {
             openpulse_daemon::Command::PttAssert => {
                 if let Some(ref mut ptt) = ptt_controller {
                     if let Err(e) = ptt.assert_ptt() {
                         tracing::warn!("PTT assert failed: {e}");
+                        ptt_hard_failed = true;
                     }
                 }
             }
@@ -138,20 +142,23 @@ async fn main() {
                 if let Some(ref mut ptt) = ptt_controller {
                     if let Err(e) = ptt.release_ptt() {
                         tracing::warn!("PTT release failed: {e}");
+                        ptt_hard_failed = true;
                     }
                 }
             }
             _ => {}
         }
-        apply_command_to_engine(
-            &cmd,
-            &mut engine,
-            &handle.active_mode,
-            &handle.event_tx,
-            rig_controller.as_mut(),
-            &mut runtime_state,
-        )
-        .await;
+        if !ptt_hard_failed {
+            apply_command_to_engine(
+                &cmd,
+                &mut engine,
+                &handle.active_mode,
+                &handle.event_tx,
+                rig_controller.as_mut(),
+                &mut runtime_state,
+            )
+            .await;
+        }
     }
 }
 
