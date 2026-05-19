@@ -5,6 +5,7 @@ use openpulse_audio::LoopbackBackend;
 use openpulse_daemon::{apply_command_to_engine, ws, ControlServer, RuntimeControlState};
 use openpulse_modem::ModemEngine;
 use openpulse_radio::{NoOpPtt, PttController, RigctldController, RigctldPtt, VoxPtt};
+use openpulse_repeater::{CrossBandRepeater, RepeaterConfig};
 
 use bpsk_plugin::BpskPlugin;
 use fsk4_plugin::Fsk4Plugin;
@@ -67,6 +68,25 @@ async fn main() {
         .register_plugin(Box::new(ScFdmaPlugin::new()))
         .expect("failed to register SC-FDMA plugin");
 
+    // Pre-build the cross-band repeater so it is ready when EnableRepeater fires.
+    let repeater = {
+        let mut rx = ModemEngine::new(Box::new(LoopbackBackend::default()));
+        rx.register_plugin(Box::new(BpskPlugin::new())).ok();
+        rx.register_plugin(Box::new(QpskPlugin::new())).ok();
+        rx.register_plugin(Box::new(Psk8Plugin::new())).ok();
+        let mut tx = ModemEngine::new(Box::new(LoopbackBackend::default()));
+        tx.register_plugin(Box::new(BpskPlugin::new())).ok();
+        tx.register_plugin(Box::new(QpskPlugin::new())).ok();
+        tx.register_plugin(Box::new(Psk8Plugin::new())).ok();
+        let rep_cfg = RepeaterConfig {
+            enabled: true,
+            mode: cfg.modem.mode.clone(),
+            tx_hang_ms: 0,
+            full_duplex: false,
+        };
+        CrossBandRepeater::new(Box::new(NoOpPtt::new()), rx, tx, rep_cfg)
+    };
+
     let tcp_bind: std::net::SocketAddr = "127.0.0.1:9000".parse().unwrap();
     let ws_bind: std::net::SocketAddr = "127.0.0.1:9001".parse().unwrap();
 
@@ -119,6 +139,8 @@ async fn main() {
         build_ptt_controller(&cfg.modem.ptt_backend, &cfg.radio.rigctld_addr);
     let mut runtime_state = RuntimeControlState {
         repeater_enabled: cfg.repeater.enabled,
+        repeater: Some(repeater),
+        qsy_candidate_freqs: cfg.qsy.candidate_freqs_hz.clone(),
         ..RuntimeControlState::default()
     };
 

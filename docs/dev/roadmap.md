@@ -1259,38 +1259,61 @@ After the fix, BPSK250 + RS FEC + block interleaver correctly decodes through Go
 
 ---
 
-## Profile scope decisions — active vs deferred modes
+## Profile scope decisions — active vs deferred modes (updated 2026-05-19)
 
-### Active in HPX profiles (fully tested and benchmarked)
+### Current SessionProfile table (profile.rs HEAD)
 
-These modes appear in production `SessionProfile` mappings and are exercised by the test matrix:
+| Profile | SL range | Initial | Top mode |
+|---|---|---|---|
+| `hpx_hf` | SL2–SL8 | SL2 | SCFDMA52-8PSK |
+| `hpx_narrowband` | SL8–SL11 | SL8 | 8PSK2000-RRC |
+| `hpx_wideband` | SL8–SL11 | SL8 | 8PSK1000 |
+| `hpx_ofdm_hf` | SL5–SL6 | SL5 | OFDM52 |
+| `hpx_narrowband_hd` | SL8–SL9 | SL8 | 8PSK9600-RRC |
+| `hpx_wideband_hd` | SL12–SL15 | SL12 | 64QAM2000-RRC |
 
-| Mode | Plugin | Profile |
+### Mode-to-plugin mapping
+
+| Mode | Plugin | Profile slot |
 |---|---|---|
-| BPSK250 | bpsk-plugin | hpx_hf SL1–SL4 (baseline; SL1/SL2/SL3 deferred once RF-1 resolved) |
-| QPSK250 | qpsk-plugin | hpx_hf SL5 |
-| QPSK500 | qpsk-plugin | hpx_hf SL6 |
-| QPSK1000 | qpsk-plugin | hpx_hf SL8–SL9 |
-| 8PSK500 | psk8-plugin | hpx_hf SL10 |
-| 8PSK1000 | psk8-plugin | hpx_hf SL11 |
+| BPSK31/63/250 | bpsk-plugin | hpx_hf SL2–SL4 |
+| QPSK250/500 | qpsk-plugin | hpx_hf SL5–SL6 |
 | 8PSK500 | psk8-plugin | hpx_hf SL7 |
-| SCFDMA52-16QAM | scfdma-plugin | reserved for SL12 after BL-TP-3/5 pass |
+| SCFDMA52-8PSK | scfdma-plugin | hpx_hf SL8 |
+| QPSK500/1000 | qpsk-plugin | hpx_narrowband SL8–SL9, hpx_wideband SL8–SL9 |
+| QPSK2000-RRC | qpsk-plugin | hpx_narrowband SL10 |
+| 8PSK2000-RRC | psk8-plugin | hpx_narrowband SL11 |
+| 8PSK1000 | psk8-plugin | hpx_wideband SL11 |
+| OFDM16/OFDM52 | ofdm-plugin | hpx_ofdm_hf SL5–SL6 |
+| QPSK9600-RRC | qpsk-plugin | hpx_narrowband_hd SL8 |
+| 8PSK9600-RRC | psk8-plugin | hpx_narrowband_hd SL9 |
+| SCFDMA52-16QAM | scfdma-plugin | hpx_wideband_hd SL12 |
+| SCFDMA52-32QAM | scfdma-plugin | hpx_wideband_hd SL13 |
+| SCFDMA52-64QAM | scfdma-plugin | hpx_wideband_hd SL14 |
+| 64QAM2000-RRC | 64qam-plugin | hpx_wideband_hd SL15 |
 
-### Deferred from HPX profiles (code retained, not profiled)
+### Modes in plugins but not in any profile (no planned home)
 
-These remain in the codebase and plugin registry but are not assigned to any `SessionProfile` slot until the corresponding BL-TP/RF gates pass:
+| Mode | Plugin | Note |
+|---|---|---|
+| BPSK100 | bpsk-plugin | Low throughput; not competitive vs QPSK |
+| SCFDMA52-64QAM-P4 | scfdma-plugin | Dense-pilot research variant; no profile slot |
+| 64QAM500 / 64QAM1000 | 64qam-plugin | No profile home |
 
-| Mode | Reason for deferral |
-|---|---|
-| BPSK31 / BPSK63 / BPSK100 | Low throughput; not competitive vs QPSK at equal bandwidth |
-| SCFDMA52-64QAM | Reliability still below profile-entry bar under wider HF channel matrix; BL-TP-5 and BL-TP-7 landed but additional robustness gates are required before profile assignment |
-| 64QAM500 / 64QAM1000 / 64QAM2000-RRC | Same reasons as SCFDMA52-64QAM |
-| OFDM variants | Superseded by SC-FDMA for PAPR; kept as research reference |
-| HPX wideband HD (SL12–SL20) | Depends on 64QAM reliability (BL-TP-5/7 gates); SL20 still in schema but not profiled |
+### Open daemon-level implementation gaps (2026-05-19)
 
-The wide-matrix gate is tracked by
-`plugins/scfdma/tests/pilot_channel_estimation.rs::scfdma_qam_modes_remain_deferred_on_watterson_profile_entry_matrix`,
-which checks SCFDMA52-16QAM and SCFDMA52-64QAM across Good F1, Good F2, and Moderate F1.
+Found during implementation audit. Both are graceful (events are still emitted; no crash).
+
+| Gap | Location | Severity |
+|---|---|---|
+| `accept_qsy` records decision but does not invoke `QsySession` or transmit RF QSY frames | `crates/openpulse-daemon/src/lib.rs:759` | gap |
+| `enable_repeater` sets flag and emits event but does not spawn CrossBandRepeater audio routing thread | `crates/openpulse-daemon/src/lib.rs:820` | gap |
+
+### Features shipped (no longer deferred)
+
+- LDPC: real rate-1/2 min-sum belief propagation shipped in PR #187. The "LDPC stub" entry below is obsolete.
+- SCFDMA52-16QAM through SCFDMA52-64QAM: all assigned to `hpx_wideband_hd` (PRs #316, #320).
+- 64QAM2000-RRC: assigned to `hpx_wideband_hd` SL15 (PR #320).
 
 ### Features that remain fully in scope regardless of mode deferral
 
@@ -1305,6 +1328,6 @@ All of the following improve SNR, PAPR, or link reliability and are never deferr
 - tanh TX limiter (PAPR clipping control)
 - Per-band TX attenuation
 - Ed25519 + ML-DSA-44 handshake signing
-- LDPC stub (placeholder for rate-1/2 BP decoder upgrade)
+- LDPC rate-1/2 min-sum belief propagation (shipped PR #187; not a stub)
 - Full-duplex dual-rig path
 - WASM panel WebSocket transport

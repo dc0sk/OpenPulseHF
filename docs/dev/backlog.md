@@ -2,37 +2,26 @@
 project: openpulsehf
 doc: docs/backlog.md
 status: living
-last_updated: 2026-05-15
+last_updated: 2026-05-19
 ---
 
 # Backlog
 
-All scheduled phases (1–9), far-future items (FF-1 through FF-13), and FEC backlog items
-(BL-FEC-1 through BL-FEC-6) are shipped and merged.  See `docs/roadmap.md` for the full
-history with PR numbers.
+All scheduled phases (1–9), far-future items (FF-1 through FF-13), FEC backlog items
+(BL-FEC-1 through BL-FEC-6), and all previously documented daemon wiring gaps are
+shipped and merged.  See `docs/roadmap.md` for the full history with PR numbers.
 
 ---
 
 ## Open work items
 
-### Adaptive equalizer LMS/DFE ✅ Complete (PR #263)
-
-Follow-on to FF-3 RRC for robust 1000 baud operation under Watterson Moderate/Poor channels.
-
-Completed:
-- ✅ Initial QPSK demod-path LMS equalizer wiring landed in plugin demodulation pipelines (hard + soft paths).
-- ✅ Baseline validation passed on `qpsk-plugin` unit tests and `openpulse-modem` QPSK hardening integration tests.
-- ✅ Channel-stress validation completed: deterministic Watterson Moderate/Poor characterization framework with 16-candidate HF-RRC sweep and 9-candidate HF sweep. Current profiles (11,2,0.0100) for HF-RRC and (11,2,0.0150) for HF remain optimal within tested parameter space.
-- ✅ Comprehensive test module documentation added; enforced guards ensure no regression on future changes.
-- 📋 Next: pilot-aided tracking and non-uniform DFE are documented as future algorithmic improvements (deferred).
+None.
 
 ### Deferred (no target date)
 
 | Item | Reason |
 |---|---|
 | On-air regulatory validation (Phase 5.5-reg) | Requires licensed station and coordinated test schedule |
-| 64QAM / SL12–SL20 speed levels | Deferred pending equalizer and OFDM research |
-| External Winlink Type C LZHUF compatibility | 4-byte length prefix differs from Winlink convention; deferred |
 
 #### On-air regulatory validation execution checklist
 
@@ -65,7 +54,10 @@ When station access is available, run this checklist before marking Phase 5.5-re
 
 ## Recently completed (summary)
 
-- Bandplan awareness for QSY and operating mode shipped (PRs #235, #236, #237).
-- Release packaging workflow shipped (PR #231).
+- Daemon QSY RF wiring: `QsySession` state machine wired into `AcceptQsy` handler; QSY_REQ and QSY_LIST frames transmitted via modem engine (PR #321).
+- Daemon CrossBandRepeater wiring: `CrossBandRepeater` pre-built in `main.rs` with plugin-registered engines; `EnableRepeater` spawns worker thread; `DisableRepeater` stops and joins it (PR #321).
+- SC-FDMA 64QAM promoted into `hpx_wideband_hd` (SL14); SNR gate at SL14 protecting SL15 ceiling (PR #320).
+- Winlink Type C LZHUF ISS compatibility: `queue_message_type_c` uses `compress_lzhuf_winlink` (LE prefix) for wire-compatible ISS sends (PR #320).
+- ARQ retry loop resolves adaptive mode before each retry; PTT hard-failure no longer emits spurious `PttChanged` event (PR #319).
 
 For full completion history (Phases 0-9, FF series, BL-FEC series), use `docs/roadmap.md`.

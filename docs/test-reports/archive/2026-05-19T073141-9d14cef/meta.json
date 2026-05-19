@@ -1,0 +1,27 @@
+{
+  "date": "2026-05-19T07:31:41.155051653Z",
+  "git_commit": "9d14cef",
+  "git_commit_full": "9d14cef5938ef631ce69fc82563796f301b04493",
+  "git_dirty": false,
+  "workspace_version": "0.1.0",
+  "tier": "quick",
+  "duration_secs": 111.676204335,
+  "crates_tested": [
+    "bpsk-plugin",
+    "fsk4-plugin",
+    "ofdm-plugin",
+    "openpulse-ardop",
+    "openpulse-audio",
+    "openpulse-b2f",
+    "openpulse-b2f-driver",
+    "openpulse-channel",
+    "openpulse-core",
+    "openpulse-dsp",
+    "openpulse-kiss",
+    "openpulse-modem",
+    "psk8-plugin",
+    "qam64-plugin",
+    "qpsk-plugin",
+    "scfdma-plugin"
+  ]
+}

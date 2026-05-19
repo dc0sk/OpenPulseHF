@@ -32,10 +32,12 @@ tracing.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Server runtime; not needed when openpulse-daemon is used as a protocol library in WASM.
-openpulse-radio  = { workspace = true }
-openpulse-audio  = { workspace = true }
-openpulse-config = { workspace = true }
+openpulse-radio   = { workspace = true }
+openpulse-audio   = { workspace = true }
+openpulse-config  = { workspace = true }
 openpulse-channel = { workspace = true }
+openpulse-qsy     = { workspace = true }
+openpulse-repeater = { workspace = true }
 bpsk-plugin      = { workspace = true }
 fsk4-plugin      = { workspace = true }
 ofdm-plugin      = { workspace = true }
