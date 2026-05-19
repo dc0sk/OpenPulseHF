@@ -33,11 +33,19 @@ use openpulse_modem::engine::SecureSessionParams;
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_modem::ModemEngine;
 #[cfg(not(target_arch = "wasm32"))]
+use openpulse_qsy::frame::encode_unsigned as encode_qsy_frame;
+#[cfg(not(target_arch = "wasm32"))]
+use openpulse_qsy::session::{QsyAction, QsySession};
+#[cfg(not(target_arch = "wasm32"))]
 use openpulse_radio::RigctldController;
+#[cfg(not(target_arch = "wasm32"))]
+use openpulse_repeater::CrossBandRepeater;
 #[cfg(not(target_arch = "wasm32"))]
 use protocol::{
     encode_spectrum_frame, CommandResponse, ControlCommand, ControlEvent, MessageSummary,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 #[cfg(not(target_arch = "wasm32"))]
@@ -50,11 +58,37 @@ pub use protocol::ControlEvent as Event;
 
 /// Mutable daemon runtime state touched by side-effectful control commands.
 #[cfg(not(target_arch = "wasm32"))]
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct RuntimeControlState {
     pub repeater_enabled: bool,
     pub qsy_decisions: HashMap<String, bool>,
     pub qsy_pending_token: Option<String>,
+    /// Active QSY negotiation session (present after operator accepts a pending token).
+    pub qsy_session: Option<QsySession>,
+    /// Candidate frequencies (Hz) supplied from config for QSY scanning.
+    pub qsy_candidate_freqs: Vec<u64>,
+    /// Pre-built cross-band repeater; taken and moved into a thread by EnableRepeater.
+    pub repeater: Option<CrossBandRepeater>,
+    /// Stop flag for the running repeater thread.
+    pub repeater_stop: Option<Arc<AtomicBool>>,
+    /// Handle for the running repeater thread.
+    pub repeater_thread: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::fmt::Debug for RuntimeControlState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuntimeControlState")
+            .field("repeater_enabled", &self.repeater_enabled)
+            .field("qsy_decisions", &self.qsy_decisions)
+            .field("qsy_pending_token", &self.qsy_pending_token)
+            .field("qsy_session", &self.qsy_session.is_some())
+            .field("qsy_candidate_freqs", &self.qsy_candidate_freqs)
+            .field("repeater", &self.repeater.is_some())
+            .field("repeater_stop", &self.repeater_stop.is_some())
+            .field("repeater_thread", &self.repeater_thread.is_some())
+            .finish()
+    }
 }
 
 /// Shared mutable mode string, written by `set_mode` commands.
@@ -585,7 +619,7 @@ pub async fn apply_command_to_engine(
     engine: &mut ModemEngine,
     active_mode: &SharedMode,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
-    rig_controller: Option<&mut RigctldController>,
+    mut rig_controller: Option<&mut RigctldController>,
     runtime_state: &mut RuntimeControlState,
 ) {
     match cmd {
@@ -756,12 +790,93 @@ pub async fn apply_command_to_engine(
                         token: token.to_string(),
                         accepted: true,
                     });
-                    // QsySession state machine and RF frame transmission are not yet
-                    // wired at the daemon level; operator decision is recorded only.
-                    tracing::warn!(
-                        token,
-                        "accept_qsy: decision recorded; RF QSY negotiation not yet implemented"
-                    );
+
+                    let candidates = runtime_state.qsy_candidate_freqs.clone();
+                    if candidates.is_empty() {
+                        let _ = event_tx.send(ControlEvent::CommandError {
+                            command: "accept_qsy".to_string(),
+                            reason: "no candidate frequencies configured (qsy.candidate_freqs_hz)"
+                                .to_string(),
+                        });
+                        return;
+                    }
+
+                    let mut session = QsySession::new_initiator();
+                    let actions = match session.initiate(candidates) {
+                        Ok(a) => a,
+                        Err(e) => {
+                            let _ = event_tx.send(ControlEvent::CommandError {
+                                command: "accept_qsy".to_string(),
+                                reason: format!("QSY session initiate failed: {e}"),
+                            });
+                            return;
+                        }
+                    };
+
+                    let mode = active_mode.lock().await.clone();
+                    let mut scan_candidates: Option<Vec<u64>> = None;
+
+                    for action in &actions {
+                        match action {
+                            QsyAction::SendFrame(frame) => {
+                                let line = encode_qsy_frame(frame);
+                                if let Err(e) = engine.transmit(line.as_bytes(), &mode, None) {
+                                    tracing::warn!(error = %e, "accept_qsy: QSY frame transmit failed");
+                                }
+                            }
+                            QsyAction::StartScan { candidates: freqs } => {
+                                scan_candidates = Some(freqs.clone());
+                            }
+                            QsyAction::QsyNow { freq_hz } => {
+                                if let Some(ref mut rig) = rig_controller {
+                                    if let Err(e) = rig.set_frequency(*freq_hz) {
+                                        tracing::warn!(freq_hz, error = %e, "accept_qsy: set_frequency failed");
+                                    }
+                                }
+                            }
+                            QsyAction::Reject { reason } => {
+                                let _ = event_tx.send(ControlEvent::CommandError {
+                                    command: "accept_qsy".to_string(),
+                                    reason: format!("QSY rejected: {reason}"),
+                                });
+                            }
+                        }
+                    }
+
+                    // No S-meter available; supply uniform 0 dB SNR for all candidates so
+                    // the session can advance to QSY_LIST without blocking on hardware.
+                    if let Some(freqs) = scan_candidates {
+                        let results: Vec<(u64, f32)> = freqs.iter().map(|&f| (f, 0.0)).collect();
+                        match session.scan_complete(results) {
+                            Ok(follow_up) => {
+                                for action in follow_up {
+                                    match action {
+                                        QsyAction::SendFrame(frame) => {
+                                            let line = encode_qsy_frame(&frame);
+                                            if let Err(e) =
+                                                engine.transmit(line.as_bytes(), &mode, None)
+                                            {
+                                                tracing::warn!(error = %e, "accept_qsy: QSY_LIST transmit failed");
+                                            }
+                                        }
+                                        QsyAction::QsyNow { freq_hz } => {
+                                            if let Some(ref mut rig) = rig_controller {
+                                                if let Err(e) = rig.set_frequency(freq_hz) {
+                                                    tracing::warn!(freq_hz, error = %e, "accept_qsy: set_frequency failed");
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "accept_qsy: scan_complete failed");
+                            }
+                        }
+                    }
+
+                    runtime_state.qsy_session = Some(session);
                 }
             }
         }
@@ -815,13 +930,22 @@ pub async fn apply_command_to_engine(
                 return;
             }
 
+            if let Some(mut repeater) = runtime_state.repeater.take() {
+                let stop = Arc::new(AtomicBool::new(false));
+                let stop_clone = Arc::clone(&stop);
+                let thread = std::thread::spawn(move || {
+                    if let Err(e) = repeater.run_full_duplex(stop_clone) {
+                        tracing::warn!(error = %e, "cross-band repeater exited with error");
+                    }
+                });
+                runtime_state.repeater_stop = Some(stop);
+                runtime_state.repeater_thread = Some(thread);
+            } else {
+                tracing::warn!("enable_repeater: no pre-built repeater in runtime state; audio routing not started");
+            }
+
             runtime_state.repeater_enabled = true;
             let _ = event_tx.send(ControlEvent::RepeaterChanged { enabled: true });
-            // CrossBandRepeater worker thread is not yet spawned by the daemon;
-            // flag change is recorded and event emitted but no audio routing occurs.
-            tracing::warn!(
-                "enable_repeater: flag set; CrossBandRepeater audio routing not yet implemented"
-            );
         }
         ControlCommand::DisableRepeater => {
             if !runtime_state.repeater_enabled {
@@ -830,6 +954,13 @@ pub async fn apply_command_to_engine(
                     reason: "repeater already disabled".to_string(),
                 });
                 return;
+            }
+
+            if let Some(stop) = runtime_state.repeater_stop.take() {
+                stop.store(true, Ordering::Relaxed);
+            }
+            if let Some(thread) = runtime_state.repeater_thread.take() {
+                let _ = thread.join();
             }
 
             runtime_state.repeater_enabled = false;
@@ -1055,6 +1186,7 @@ mod command_apply_tests {
         let ev_tx = Arc::new(tx);
         let mut runtime_state = RuntimeControlState::default();
         runtime_state.qsy_pending_token = Some("tok-accept".to_string());
+        runtime_state.qsy_candidate_freqs = vec![14_070_000, 14_077_000];
 
         apply_command_to_engine(
             &ControlCommand::AcceptQsy {
@@ -1171,5 +1303,156 @@ mod command_apply_tests {
 
         assert!(runtime_state.qsy_pending_token.is_none());
         assert!(engine.hpx_session_id().is_none());
+    }
+
+    #[tokio::test]
+    async fn accept_qsy_with_candidates_initiates_session_and_transmits_req() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let mut runtime_state = RuntimeControlState::default();
+        runtime_state.qsy_pending_token = Some("tok-qsy".to_string());
+        runtime_state.qsy_candidate_freqs = vec![14_070_000, 14_077_000];
+
+        apply_command_to_engine(
+            &ControlCommand::AcceptQsy {
+                token: "tok-qsy".into(),
+            },
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut runtime_state,
+        )
+        .await;
+
+        assert_eq!(runtime_state.qsy_decisions.get("tok-qsy"), Some(&true));
+        assert!(runtime_state.qsy_pending_token.is_none());
+        assert!(
+            runtime_state.qsy_session.is_some(),
+            "QsySession should be stored in runtime_state"
+        );
+
+        // QsyDecision event must be first
+        match rx.recv().await.expect("expected QsyDecision event") {
+            ControlEvent::QsyDecision { token, accepted } => {
+                assert_eq!(token, "tok-qsy");
+                assert!(accepted);
+            }
+            other => panic!("expected QsyDecision, got {other:?}"),
+        }
+
+        // QSY_REQ and QSY_LIST frames were transmitted; verify loopback receive contains QSY text
+        let bytes = engine.receive("BPSK250", None).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            text.contains("QSY_REQ") || text.contains("QSY_LIST"),
+            "expected QSY frame in modem output, got: {text:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn accept_qsy_without_candidates_emits_command_error() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let mut runtime_state = RuntimeControlState::default();
+        runtime_state.qsy_pending_token = Some("tok-nocand".to_string());
+        // qsy_candidate_freqs is empty (default)
+
+        apply_command_to_engine(
+            &ControlCommand::AcceptQsy {
+                token: "tok-nocand".into(),
+            },
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut runtime_state,
+        )
+        .await;
+
+        // QsyDecision event first, then CommandError for no candidates
+        let ev1 = rx.recv().await.expect("expected first event");
+        assert!(
+            matches!(ev1, ControlEvent::QsyDecision { .. }),
+            "expected QsyDecision"
+        );
+        let ev2 = rx.recv().await.expect("expected CommandError event");
+        match ev2 {
+            ControlEvent::CommandError { command, reason } => {
+                assert_eq!(command, "accept_qsy");
+                assert!(reason.contains("candidate"), "reason: {reason}");
+            }
+            other => panic!("expected CommandError, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn repeater_enable_with_prebuilt_spawns_thread_and_disable_joins_it() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let mut runtime_state = RuntimeControlState::default();
+
+        // Inject a pre-built repeater using LoopbackBackend engines.
+        let rep_rx = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        let rep_tx = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        let rep_cfg = openpulse_repeater::RepeaterConfig {
+            enabled: true,
+            mode: "BPSK250".to_string(),
+            tx_hang_ms: 0,
+            full_duplex: false,
+        };
+        runtime_state.repeater = Some(openpulse_repeater::CrossBandRepeater::new(
+            Box::new(openpulse_radio::NoOpPtt::new()),
+            rep_rx,
+            rep_tx,
+            rep_cfg,
+        ));
+
+        apply_command_to_engine(
+            &ControlCommand::EnableRepeater,
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut runtime_state,
+        )
+        .await;
+
+        assert!(runtime_state.repeater_enabled);
+        assert!(
+            runtime_state.repeater_thread.is_some(),
+            "repeater thread should be spawned"
+        );
+        match rx.recv().await.expect("expected RepeaterChanged event") {
+            ControlEvent::RepeaterChanged { enabled } => assert!(enabled),
+            other => panic!("expected RepeaterChanged, got {other:?}"),
+        }
+
+        // Disable the repeater — sets stop flag, joins the thread.
+        apply_command_to_engine(
+            &ControlCommand::DisableRepeater,
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut runtime_state,
+        )
+        .await;
+
+        assert!(!runtime_state.repeater_enabled);
+        assert!(
+            runtime_state.repeater_thread.is_none(),
+            "thread handle should be cleared after join"
+        );
+        match rx.recv().await.expect("expected RepeaterChanged event") {
+            ControlEvent::RepeaterChanged { enabled } => assert!(!enabled),
+            other => panic!("expected RepeaterChanged, got {other:?}"),
+        }
     }
 }

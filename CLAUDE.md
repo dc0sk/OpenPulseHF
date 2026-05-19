@@ -112,12 +112,25 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 **Deferred (no target date)**:
 - On-air regulatory validation (Phase 5.5-reg): on-air tests, station ID audit, compliance report
 
-**Recently shipped (PRs #193–#195)**:
+**Recently shipped (PRs #316–#321)**:
+- `crates/openpulse-daemon/src/lib.rs`: QSY RF wiring — `QsySession` state machine wired into `AcceptQsy`; QSY_REQ + QSY_LIST frames transmitted via modem engine; `process_received_bytes` drives responder role from incoming RF (PR #321)
+- `crates/openpulse-daemon/src/lib.rs`: CrossBandRepeater wiring — pre-built in `main.rs`; `EnableRepeater` spawns thread via `run_full_duplex`; `DisableRepeater` stops and joins it (PR #321)
+- `apps/openpulse-panel/src/app.rs`: mode list updated to include RRC modes added in #319 and correct SCFDMA names (PR #321)
+- `plugins/scfdma`: DFT-CE pilot-aided channel estimation; SCFDMA52-16QAM, SCFDMA52-32QAM (cross-32QAM), SCFDMA52-64QAM, SCFDMA52-64QAM-P4 modes; MMSE equalization (PR #316)
+- `crates/openpulse-modem/src/arq_session.rs`: `ArqSession` — ARQ retry loop with soft LLR accumulation across retransmissions; runtime mode switching between registered plugins (PR #318)
+- `crates/openpulse-core/src/profile.rs`: `hpx_narrowband_hd()` profile — SL8=QPSK9600-RRC, SL9=8PSK9600-RRC; `hpx_narrowband()` gains QPSK2000-RRC (SL10) and 8PSK2000-RRC (SL11) (PR #319)
+- `plugins/qpsk`: `QPSK2000-RRC` and `QPSK9600-RRC` modes; `plugins/psk8`: `8PSK2000-RRC` and `8PSK9600-RRC` modes (PR #319)
+- `crates/openpulse-daemon/src/main.rs`: PTT controller wired from config; `apply_command_to_engine` skips dispatch on PTT hardware assertion failure (PR #319)
+- `apps/openpulse-testmatrix`: LDPC FEC entries added (PR #319)
+- `crates/openpulse-core/src/profile.rs`: `hpx_wideband_hd()` updated to SL12–SL15 (SCFDMA52-16QAM → SCFDMA52-64QAM → 64QAM2000-RRC); ACK-UP gate at SL14 protecting SL15 admission (PR #320)
+- `crates/openpulse-b2f/src/session.rs`: `queue_message_type_c()` — ISS Type C proposals using `compress_lzhuf_winlink` (LE prefix, Winlink-compatible) (PR #320)
+
+**Previously shipped (PRs #193–#195)**:
 - `crates/openpulse-b2f`: `compress_lzhuf_winlink` / `decompress_lzhuf_winlink` — 4-byte LE prefix matching Winlink Type C convention; IRS receive path switched to Winlink codec (PR #193)
 - `crates/openpulse-dsp`: `LmsEqualizer` — complex symbol-rate LMS/DFE, supervised preamble training then decision-directed; wired into BPSK-RRC demodulation path after Gardner TED (PR #194)
 - `plugins/64qam`: full 64QAM plugin — Gray-coded 8×8 PAM-8 constellation, rectangular-windowed and RRC modulator/demodulator, max-log-MAP soft demodulator; modes `64QAM500`, `64QAM1000`, `64QAM2000-RRC` (PR #195)
 - `crates/openpulse-core/src/rate.rs`: `SpeedLevel` extended to SL20 (PR #195)
-- `crates/openpulse-core/src/profile.rs`: `hpx_wideband_hd()` profile mapping SL12–SL14 to 64QAM modes; profile slot arrays widened to 21 (PR #195)
+- `crates/openpulse-core/src/profile.rs`: initial `hpx_wideband_hd()` profile (SL12–SL14); profile slot arrays widened to 21 (PR #195)
 
 **Previously shipped (PRs #187–#192)**:
 - `plugins/psk8`: max-log-MAP `demodulate_soft()` replacing ±1.0 fallback
