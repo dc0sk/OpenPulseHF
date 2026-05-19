@@ -2,7 +2,9 @@
 //! control port on TCP port 9000 and WebSocket port 9001 (defaults).
 
 use openpulse_audio::LoopbackBackend;
-use openpulse_daemon::{apply_command_to_engine, ws, ControlServer, RuntimeControlState};
+use openpulse_daemon::{
+    apply_command_to_engine, process_received_bytes, ws, ControlServer, RuntimeControlState,
+};
 use openpulse_modem::ModemEngine;
 use openpulse_radio::{NoOpPtt, PttController, RigctldController, RigctldPtt, VoxPtt};
 use openpulse_repeater::{CrossBandRepeater, RepeaterConfig};
@@ -145,41 +147,68 @@ async fn main() {
     };
 
     // Execute side-effectful commands against the live modem engine.
-    while let Some(cmd) = handle.commands.recv().await {
-        // PTT hardware calls are synchronous; handle them before the async engine dispatch so
-        // the borrow of ptt_controller doesn't cross the await point.
-        // If the hardware call fails, skip the engine dispatch to avoid emitting a spurious
-        // PttChanged event that would tell clients PTT is active when it is not.
-        let mut ptt_hard_failed = false;
-        match &cmd {
-            openpulse_daemon::Command::PttAssert => {
-                if let Some(ref mut ptt) = ptt_controller {
-                    if let Err(e) = ptt.assert_ptt() {
-                        tracing::warn!("PTT assert failed: {e}");
-                        ptt_hard_failed = true;
+    // A 50 ms receive ticker polls the modem for decoded bytes so the QSY
+    // responder path can react to incoming RF frames without operator commands.
+    let mut rx_ticker = tokio::time::interval(std::time::Duration::from_millis(50));
+    loop {
+        tokio::select! {
+            biased;
+            Some(cmd) = handle.commands.recv() => {
+                // PTT hardware calls are synchronous; handle them before the async engine dispatch so
+                // the borrow of ptt_controller doesn't cross the await point.
+                // If the hardware call fails, skip the engine dispatch to avoid emitting a spurious
+                // PttChanged event that would tell clients PTT is active when it is not.
+                let mut ptt_hard_failed = false;
+                match &cmd {
+                    openpulse_daemon::Command::PttAssert => {
+                        if let Some(ref mut ptt) = ptt_controller {
+                            if let Err(e) = ptt.assert_ptt() {
+                                tracing::warn!("PTT assert failed: {e}");
+                                ptt_hard_failed = true;
+                            }
+                        }
                     }
+                    openpulse_daemon::Command::PttRelease => {
+                        if let Some(ref mut ptt) = ptt_controller {
+                            if let Err(e) = ptt.release_ptt() {
+                                tracing::warn!("PTT release failed: {e}");
+                                ptt_hard_failed = true;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                if !ptt_hard_failed {
+                    apply_command_to_engine(
+                        &cmd,
+                        &mut engine,
+                        &handle.active_mode,
+                        &handle.event_tx,
+                        rig_controller.as_mut(),
+                        &mut runtime_state,
+                    )
+                    .await;
                 }
             }
-            openpulse_daemon::Command::PttRelease => {
-                if let Some(ref mut ptt) = ptt_controller {
-                    if let Err(e) = ptt.release_ptt() {
-                        tracing::warn!("PTT release failed: {e}");
-                        ptt_hard_failed = true;
-                    }
+            _ = rx_ticker.tick() => {
+                let mode = handle.active_mode.lock().await.clone();
+                // block_in_place: engine.receive() is synchronous; LoopbackBackend returns
+                // immediately. A real audio backend would block until samples are available.
+                let bytes = tokio::task::block_in_place(|| {
+                    engine.receive(&mode, None).unwrap_or_default()
+                });
+                if !bytes.is_empty() {
+                    process_received_bytes(
+                        &bytes,
+                        &mut runtime_state,
+                        rig_controller.as_mut(),
+                        &handle.event_tx,
+                        &handle.active_mode,
+                        &mut engine,
+                    )
+                    .await;
                 }
             }
-            _ => {}
-        }
-        if !ptt_hard_failed {
-            apply_command_to_engine(
-                &cmd,
-                &mut engine,
-                &handle.active_mode,
-                &handle.event_tx,
-                rig_controller.as_mut(),
-                &mut runtime_state,
-            )
-            .await;
         }
     }
 }

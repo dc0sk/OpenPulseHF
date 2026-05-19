@@ -33,9 +33,13 @@ use openpulse_modem::engine::SecureSessionParams;
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_modem::ModemEngine;
 #[cfg(not(target_arch = "wasm32"))]
-use openpulse_qsy::frame::encode_unsigned as encode_qsy_frame;
+use openpulse_qsy::frame::{
+    decode_unsigned as decode_qsy_frame, encode_unsigned as encode_qsy_frame,
+};
 #[cfg(not(target_arch = "wasm32"))]
-use openpulse_qsy::session::{QsyAction, QsySession};
+use openpulse_qsy::session::{QsyAction, QsyPolicy, QsySession};
+#[cfg(not(target_arch = "wasm32"))]
+use openpulse_qsy::ConnectionTrustLevel;
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_radio::RigctldController;
 #[cfg(not(target_arch = "wasm32"))]
@@ -608,6 +612,115 @@ pub(crate) async fn dispatch_command(
     CommandResponse::ok()
 }
 
+/// Dispatch a list of [`QsyAction`]s produced by a [`QsySession`].
+///
+/// Used by both the initiator (`accept_qsy`) and responder (`process_received_bytes`) paths.
+#[cfg(not(target_arch = "wasm32"))]
+async fn execute_qsy_actions(
+    actions: Vec<QsyAction>,
+    session: &mut QsySession,
+    engine: &mut ModemEngine,
+    mut rig_controller: Option<&mut RigctldController>,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+    mode: &str,
+) {
+    let mut scan_freqs: Option<Vec<u64>> = None;
+
+    for action in actions {
+        match action {
+            QsyAction::SendFrame(ref frame) => {
+                let line = encode_qsy_frame(frame);
+                if let Err(e) = engine.transmit(line.as_bytes(), mode, None) {
+                    tracing::warn!(error = %e, "qsy: frame transmit failed");
+                }
+            }
+            QsyAction::StartScan { candidates } => {
+                scan_freqs = Some(candidates);
+            }
+            QsyAction::QsyNow { freq_hz } => {
+                if let Some(ref mut rig) = rig_controller {
+                    if let Err(e) = rig.set_frequency(freq_hz) {
+                        tracing::warn!(freq_hz, error = %e, "qsy: set_frequency failed");
+                    }
+                }
+            }
+            QsyAction::Reject { reason } => {
+                let _ = event_tx.send(ControlEvent::CommandError {
+                    command: "qsy".to_string(),
+                    reason: format!("QSY rejected: {reason}"),
+                });
+            }
+        }
+    }
+
+    if let Some(freqs) = scan_freqs {
+        // Use last observed SNR as a uniform estimate for all candidates; no per-frequency
+        // S-meter is available at the daemon layer.
+        let observed_snr = engine.last_rx_snr_db().unwrap_or(0.0);
+        let results: Vec<(u64, f32)> = freqs.iter().map(|&f| (f, observed_snr)).collect();
+        match session.scan_complete(results) {
+            Ok(follow_up) => {
+                // scan_complete never returns another StartScan; iterate directly.
+                for action in follow_up {
+                    match action {
+                        QsyAction::SendFrame(ref frame) => {
+                            let line = encode_qsy_frame(frame);
+                            if let Err(e) = engine.transmit(line.as_bytes(), mode, None) {
+                                tracing::warn!(error = %e, "qsy: post-scan frame transmit failed");
+                            }
+                        }
+                        QsyAction::QsyNow { freq_hz } => {
+                            if let Some(ref mut rig) = rig_controller {
+                                if let Err(e) = rig.set_frequency(freq_hz) {
+                                    tracing::warn!(freq_hz, error = %e, "qsy: post-scan set_frequency failed");
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "qsy: scan_complete failed"),
+        }
+    }
+}
+
+/// Process raw bytes received from the modem engine and drive QSY responder logic.
+///
+/// Called from the main daemon loop after each receive tick. Non-QSY payloads are
+/// silently discarded; only valid [`QsyFrame`] lines advance the session.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn process_received_bytes(
+    bytes: &[u8],
+    runtime_state: &mut RuntimeControlState,
+    rig_controller: Option<&mut RigctldController>,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+    active_mode: &SharedMode,
+    engine: &mut ModemEngine,
+) {
+    if bytes.is_empty() {
+        return;
+    }
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return;
+    };
+    let Ok(frame) = decode_qsy_frame(text.trim()) else {
+        return;
+    };
+
+    let mode = active_mode.lock().await.clone();
+    let session = runtime_state.qsy_session.get_or_insert_with(|| {
+        QsySession::new_responder(QsyPolicy::default(), ConnectionTrustLevel::Unverified)
+    });
+
+    match session.apply(frame) {
+        Ok(actions) => {
+            execute_qsy_actions(actions, session, engine, rig_controller, event_tx, &mode).await;
+        }
+        Err(e) => tracing::warn!(error = %e, "qsy responder: apply frame failed"),
+    }
+}
+
 /// Execute side-effectful control commands against the live modem engine.
 ///
 /// This complements [`dispatch_command`], which updates shared daemon state and
@@ -619,7 +732,7 @@ pub async fn apply_command_to_engine(
     engine: &mut ModemEngine,
     active_mode: &SharedMode,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
-    mut rig_controller: Option<&mut RigctldController>,
+    rig_controller: Option<&mut RigctldController>,
     runtime_state: &mut RuntimeControlState,
 ) {
     match cmd {
@@ -814,67 +927,15 @@ pub async fn apply_command_to_engine(
                     };
 
                     let mode = active_mode.lock().await.clone();
-                    let mut scan_candidates: Option<Vec<u64>> = None;
-
-                    for action in &actions {
-                        match action {
-                            QsyAction::SendFrame(frame) => {
-                                let line = encode_qsy_frame(frame);
-                                if let Err(e) = engine.transmit(line.as_bytes(), &mode, None) {
-                                    tracing::warn!(error = %e, "accept_qsy: QSY frame transmit failed");
-                                }
-                            }
-                            QsyAction::StartScan { candidates: freqs } => {
-                                scan_candidates = Some(freqs.clone());
-                            }
-                            QsyAction::QsyNow { freq_hz } => {
-                                if let Some(ref mut rig) = rig_controller {
-                                    if let Err(e) = rig.set_frequency(*freq_hz) {
-                                        tracing::warn!(freq_hz, error = %e, "accept_qsy: set_frequency failed");
-                                    }
-                                }
-                            }
-                            QsyAction::Reject { reason } => {
-                                let _ = event_tx.send(ControlEvent::CommandError {
-                                    command: "accept_qsy".to_string(),
-                                    reason: format!("QSY rejected: {reason}"),
-                                });
-                            }
-                        }
-                    }
-
-                    // No S-meter available; supply uniform 0 dB SNR for all candidates so
-                    // the session can advance to QSY_LIST without blocking on hardware.
-                    if let Some(freqs) = scan_candidates {
-                        let results: Vec<(u64, f32)> = freqs.iter().map(|&f| (f, 0.0)).collect();
-                        match session.scan_complete(results) {
-                            Ok(follow_up) => {
-                                for action in follow_up {
-                                    match action {
-                                        QsyAction::SendFrame(frame) => {
-                                            let line = encode_qsy_frame(&frame);
-                                            if let Err(e) =
-                                                engine.transmit(line.as_bytes(), &mode, None)
-                                            {
-                                                tracing::warn!(error = %e, "accept_qsy: QSY_LIST transmit failed");
-                                            }
-                                        }
-                                        QsyAction::QsyNow { freq_hz } => {
-                                            if let Some(ref mut rig) = rig_controller {
-                                                if let Err(e) = rig.set_frequency(freq_hz) {
-                                                    tracing::warn!(freq_hz, error = %e, "accept_qsy: set_frequency failed");
-                                                }
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!(error = %e, "accept_qsy: scan_complete failed");
-                            }
-                        }
-                    }
+                    execute_qsy_actions(
+                        actions,
+                        &mut session,
+                        engine,
+                        rig_controller,
+                        event_tx,
+                        &mode,
+                    )
+                    .await;
 
                     runtime_state.qsy_session = Some(session);
                 }
@@ -1454,5 +1515,79 @@ mod command_apply_tests {
             ControlEvent::RepeaterChanged { enabled } => assert!(!enabled),
             other => panic!("expected RepeaterChanged, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn process_received_bytes_with_qsy_req_creates_responder_session() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let mut runtime_state = RuntimeControlState::default();
+
+        // QSY_REQ frame: verb, token, n_candidates
+        let qsy_req = b"QSY_REQ tok-resp 2";
+        process_received_bytes(
+            qsy_req,
+            &mut runtime_state,
+            None,
+            &ev_tx,
+            &active_mode,
+            &mut engine,
+        )
+        .await;
+
+        assert!(
+            runtime_state.qsy_session.is_some(),
+            "responder session should be created on first QSY_REQ"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_received_bytes_ignores_non_qsy_text() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let mut runtime_state = RuntimeControlState::default();
+
+        process_received_bytes(
+            b"hello world",
+            &mut runtime_state,
+            None,
+            &ev_tx,
+            &active_mode,
+            &mut engine,
+        )
+        .await;
+
+        assert!(
+            runtime_state.qsy_session.is_none(),
+            "no session for non-QSY text"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_received_bytes_ignores_non_utf8() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let mut runtime_state = RuntimeControlState::default();
+
+        process_received_bytes(
+            &[0xff, 0xfe, 0x00],
+            &mut runtime_state,
+            None,
+            &ev_tx,
+            &active_mode,
+            &mut engine,
+        )
+        .await;
+
+        assert!(
+            runtime_state.qsy_session.is_none(),
+            "no session for non-UTF-8 bytes"
+        );
     }
 }
