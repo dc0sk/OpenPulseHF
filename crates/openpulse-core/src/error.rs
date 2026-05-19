@@ -27,7 +27,7 @@ pub enum ModemError {
     #[error("channel busy: CSMA deferred transmission")]
     ChannelBusy,
 
-    #[error("ARQ failed: all {0} retransmit attempts exhausted without acknowledgement")]
+    #[error("ARQ failed: all {0} transmit attempts exhausted without acknowledgement")]
     ArqMaxRetries(usize),
 }
 

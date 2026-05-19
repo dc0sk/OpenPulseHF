@@ -108,22 +108,14 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
             if bridge.loopback {
                 let _ = bridge.rx_data_tx.send(data);
             } else {
-                let adaptive = bridge
-                    .engine
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .current_tx_level()
-                    .is_some();
+                // Acquire the lock once to read adaptive state and perform TX in the same scope.
+                let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
+                let adaptive = engine.current_tx_level().is_some();
 
                 if adaptive && !use_fec {
                     // ISS adaptive path: transmit with ARQ retry (up to 3 retransmits).
                     // FEC transmissions use their own reliability mechanism and skip ARQ.
-                    match bridge
-                        .engine
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .transmit_arq(&data, &mode, None, 3)
-                    {
+                    match engine.transmit_arq(&data, &mode, None, 3) {
                         Ok(rate_event) => {
                             tracing::debug!(rate_event = ?rate_event, "ARQ TX succeeded");
                         }
@@ -131,8 +123,8 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                             tracing::warn!("ARQ TX failed: {e}");
                         }
                     }
+                    drop(engine);
                 } else {
-                    let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
                     let tx_result = if use_fec {
                         engine.transmit_with_fec(&data, &mode, None)
                     } else {
@@ -159,19 +151,40 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
         }
 
         if !bridge.loopback {
-            // IRS path: if adaptive session is active, receive data with an SNR
-            // hint and immediately transmit the suggested ACK frame back to the ISS.
-            let adaptive = bridge
-                .engine
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .current_tx_level()
-                .is_some();
+            // IRS path: acquire the engine lock once for both the adaptive check and
+            // the receive+ACK dispatch to avoid lock churn and inconsistent state.
+            let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
+            let adaptive = engine.current_tx_level().is_some();
             let received = if adaptive {
-                do_receive_with_ack_hint(&bridge, &mode)
+                // Adaptive IRS: receive with SNR hint then immediately reply with ACK
+                // or Nack — all within the same lock scope so no other caller can
+                // interleave between receive and the ACK transmit.
+                match engine.receive_with_ack_hint(&mode, None) {
+                    Ok((payload, ack_type)) => {
+                        let ack_frame = AckFrame::new(ack_type, &mode);
+                        if let Err(e) = engine.transmit_ack_with_short_fec(&ack_frame, None) {
+                            tracing::warn!("IRS ACK transmit failed: {e}");
+                        }
+                        Some(payload)
+                    }
+                    Err(e) => {
+                        tracing::debug!("IRS receive_with_ack_hint failed ({e}); sending Nack");
+                        let nack = AckFrame::new(AckType::Nack, &mode);
+                        if let Err(e) = engine.transmit_ack_with_short_fec(&nack, None) {
+                            tracing::warn!("IRS Nack transmit failed: {e}");
+                        }
+                        None
+                    }
+                }
             } else {
-                do_receive(&bridge, &mode)
+                let use_fec_rx = bridge.fec_rx.load(Ordering::Relaxed);
+                if use_fec_rx {
+                    engine.receive_with_fec(&mode, None).ok()
+                } else {
+                    engine.receive(&mode, None).ok()
+                }
             };
+            drop(engine);
             if let Some(rx) = received {
                 maybe_relay_forward(&bridge, &rx, &mode);
                 if !rx.is_empty() {
@@ -201,48 +214,6 @@ fn do_receive(bridge: &ModemBridge, mode: &str) -> Option<Vec<u8>> {
             .receive(mode, None)
             .ok()
     }
-}
-
-/// IRS adaptive path: receive data with an SNR hint, then immediately transmit
-/// the suggested ACK type back to the sender via FSK4-ACK.
-///
-/// On decode failure a `Nack` is transmitted so the ISS can step down.
-/// Returns the decoded payload on success, `None` on failure.
-fn do_receive_with_ack_hint(bridge: &ModemBridge, mode: &str) -> Option<Vec<u8>> {
-    let result = bridge
-        .engine
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .receive_with_ack_hint(mode, None);
-
-    let (payload, ack_type) = match result {
-        Ok(pair) => pair,
-        Err(e) => {
-            tracing::debug!("IRS receive_with_ack_hint failed ({e}); sending Nack");
-            let nack = AckFrame::new(AckType::Nack, mode);
-            if let Err(e) = bridge
-                .engine
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .transmit_ack_with_short_fec(&nack, None)
-            {
-                tracing::warn!("IRS Nack transmit failed: {e}");
-            }
-            return None;
-        }
-    };
-
-    let ack_frame = AckFrame::new(ack_type, mode);
-    if let Err(e) = bridge
-        .engine
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .transmit_ack_with_short_fec(&ack_frame, None)
-    {
-        tracing::warn!("IRS ACK transmit failed: {e}");
-    }
-
-    Some(payload)
 }
 
 /// Attempt to forward `payload` as a relay `WireEnvelope` when relay is enabled.

@@ -195,6 +195,10 @@ mod tests {
             .expect("demodulate_soft");
 
         assert!(!llrs.is_empty(), "LLRs must not be empty");
+        assert!(
+            llrs.iter().all(|x| x.is_finite()),
+            "demodulate_soft must not return NaN or Inf"
+        );
         let all_hard = llrs.iter().all(|&x| x == 1.0f32 || x == -1.0f32);
         assert!(
             !all_hard,

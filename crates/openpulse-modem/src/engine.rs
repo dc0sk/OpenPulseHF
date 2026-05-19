@@ -850,14 +850,12 @@ impl ModemEngine {
         self.last_rx_snr_db = Some(snr_db);
 
         let wire_bytes: Vec<u8> = llrs
-            .iter()
-            .collect::<Vec<_>>()
             .chunks(8)
             .map(|byte_llrs| {
                 byte_llrs
                     .iter()
                     .enumerate()
-                    .fold(0u8, |acc, (i, &&llr)| acc | (u8::from(llr <= 0.0) << i))
+                    .fold(0u8, |acc, (i, &llr)| acc | (u8::from(llr <= 0.0) << i))
             })
             .collect();
 
