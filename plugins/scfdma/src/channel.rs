@@ -112,6 +112,14 @@ pub fn dft_ce_estimate(
         return ls_estimate(p, freq);
     }
 
+    assert_eq!(
+        n_pilots,
+        p.n_pilots,
+        "pilot_positions() returned {} pilots but ScFdmaParams.n_pilots={}; params are inconsistent",
+        n_pilots,
+        p.n_pilots,
+    );
+
     // --- Step 1: LS at pilot SCs ---
     let mut h_pilot: Vec<Complex32> = pilots
         .iter()

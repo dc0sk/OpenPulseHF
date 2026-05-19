@@ -248,9 +248,9 @@ fn handle_teardown(event: HpxEvent) -> HandlerResult {
 
 /// Event-driven reactor managing one or more concurrent HPX sessions.
 ///
-/// Each session is identified by a string key returned from [`create_session`].
+/// Each session is identified by a string key returned from [`HpxReactor::create_session`].
 /// Events are routed to per-state handler functions; no state mutation happens
-/// outside [`dispatch`].
+/// outside [`HpxReactor::dispatch`].
 pub struct HpxReactor {
     sessions: HashMap<String, SessionState>,
     next_id: u64,

@@ -612,8 +612,8 @@ impl RouteDiscoveryRequest {
 
 /// Payload for msg_type 0x04 — route_discovery_response.
 ///
-/// Variable: route_query_id(8) | route_id(8) | hop_count(1) |
-///           hops[hop_count × 37] | sig_len(2) | route_signature[sig_len].
+/// Variable layout: `route_query_id(8) | route_id(8) | hop_count(1) |`
+/// `hops[hop_count × 37] | sig_len(2) | route_signature[sig_len]`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteDiscoveryResponse {
     pub route_query_id: u64,
@@ -685,9 +685,9 @@ impl RouteDiscoveryResponse {
 
 /// Payload for msg_type 0x07 — relay_route_update.
 ///
-/// Variable: route_id(8) | previous_hop_count(1) | new_hop_count(1) |
-///           route_change_reason(2) | replacement_hops[new_hop_count × 37] |
-///           sig_len(2) | route_update_signature[sig_len].
+/// Variable layout: `route_id(8) | previous_hop_count(1) | new_hop_count(1) |`
+/// `route_change_reason(2) | replacement_hops[new_hop_count × 37] |`
+/// `sig_len(2) | route_update_signature[sig_len]`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelayRouteUpdate {
     pub route_id: u64,

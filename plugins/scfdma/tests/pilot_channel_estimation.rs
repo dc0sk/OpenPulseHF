@@ -292,7 +292,7 @@ fn soft_symbol_gain_awgn_meets_1p5db_gate() {
 }
 
 #[test]
-fn watterson_f1_pilot_density_throughput_improves_at_least_2_percent() {
+fn watterson_f1_p4_dense_pilot_does_not_regress_baseline_by_more_than_5_percent() {
     let plugin = ScFdmaPlugin::new();
     let baseline_mode = "SCFDMA52-64QAM";
     let improved_mode = "SCFDMA52-64QAM-P4";

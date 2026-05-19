@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{ModemError, PluginError};
 
 /// Current plugin trait version.
-/// Format: "<major>.<minor>.<patch>"
+/// Format: `<major>.<minor>.<patch>`
 pub const PLUGIN_TRAIT_VERSION: &str = "1.0.0";
 
 // ── Plugin metadata ───────────────────────────────────────────────────────────
@@ -21,7 +21,7 @@ pub struct PluginInfo {
     pub author: String,
     /// List of mode strings this plugin handles, e.g. `["BPSK31", "BPSK100"]`.
     pub supported_modes: Vec<String>,
-    /// Plugin trait version requirement, e.g. `"1.0"` (format: "<major>.<minor>").
+    /// Plugin trait version requirement, e.g. `"1.0"` (format: `<major>.<minor>`).
     /// The plugin is compatible with the framework if:
     /// - framework major version == plugin major version, AND
     /// - framework minor version >= plugin minor version
@@ -199,9 +199,17 @@ impl PluginRegistry {
             PluginError::InvalidTraitVersionFormat(info.trait_version_required.clone())
         })?;
 
-        let framework_parts: Vec<&str> = PLUGIN_TRAIT_VERSION.split('.').collect();
-        let framework_major = framework_parts[0].parse::<u32>().unwrap();
-        let framework_minor = framework_parts[1].parse::<u32>().unwrap();
+        let (fw_major_str, fw_rest) = PLUGIN_TRAIT_VERSION
+            .split_once('.')
+            .expect("BUG: PLUGIN_TRAIT_VERSION must be semver");
+        let framework_major = fw_major_str
+            .parse::<u32>()
+            .expect("BUG: PLUGIN_TRAIT_VERSION major must be numeric");
+        let framework_minor = fw_rest
+            .split_once('.')
+            .map_or(fw_rest, |(m, _)| m)
+            .parse::<u32>()
+            .expect("BUG: PLUGIN_TRAIT_VERSION minor must be numeric");
 
         // Compatible if: framework major == plugin major AND framework minor >= plugin minor
         if plugin_major != framework_major || framework_minor < plugin_minor {

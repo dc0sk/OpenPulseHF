@@ -70,7 +70,7 @@ pub struct AckFrame {
     /// Sender's assessment of the *incoming* path quality (reverse direction).
     ///
     /// When set, the sender piggybacks its own RX quality report so the peer
-    /// can update its RX-direction [`BiDirRateAdapter`] without a separate frame.
+    /// can update its own [`crate::rate::RateAdapter`] for the reverse direction without a separate frame.
     /// `None` encodes as byte 3 = 0 (backward compatible with old receivers).
     pub reverse_ack: Option<AckType>,
 }

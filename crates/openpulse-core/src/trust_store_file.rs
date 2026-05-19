@@ -20,8 +20,8 @@ struct TrustFileRecord {
 
 #[derive(Debug, Deserialize)]
 struct TrustFile {
-    #[allow(dead_code)]
-    schema_version: String,
+    #[serde(rename = "schema_version")]
+    _schema_version: String,
     records: Vec<TrustFileRecord>,
 }
 

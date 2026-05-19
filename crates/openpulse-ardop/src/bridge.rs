@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
+use openpulse_core::ack::{AckFrame, AckType};
 use openpulse_core::handshake::InMemoryTrustStore;
 use openpulse_core::relay::RelayForwarder;
 use openpulse_modem::ModemEngine;
@@ -110,7 +111,17 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                     tracing::warn!("modem TX error: {e}");
                 }
                 if tx_result.is_ok() {
-                    if let Some(rx) = do_receive(&bridge) {
+                    // ISS path: if adaptive session is active, listen for the IRS
+                    // ACK frame (FSK4-ACK) and apply it to the TX rate adapter.
+                    let adaptive = bridge
+                        .engine
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .current_tx_level()
+                        .is_some();
+                    if adaptive {
+                        do_receive_ack_frame(&bridge);
+                    } else if let Some(rx) = do_receive(&bridge) {
                         maybe_relay_forward(&bridge, &rx);
                         if !rx.is_empty() {
                             let _ = bridge.rx_data_tx.send(rx);
@@ -125,7 +136,20 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
         }
 
         if !bridge.loopback {
-            if let Some(rx) = do_receive(&bridge) {
+            // IRS path: if adaptive session is active, receive data with an SNR
+            // hint and immediately transmit the suggested ACK frame back to the ISS.
+            let adaptive = bridge
+                .engine
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .current_tx_level()
+                .is_some();
+            let received = if adaptive {
+                do_receive_with_ack_hint(&bridge)
+            } else {
+                do_receive(&bridge)
+            };
+            if let Some(rx) = received {
                 maybe_relay_forward(&bridge, &rx);
                 if !rx.is_empty() {
                     let _ = bridge.rx_data_tx.send(rx);
@@ -153,6 +177,77 @@ fn do_receive(bridge: &ModemBridge) -> Option<Vec<u8>> {
             .unwrap_or_else(|e| e.into_inner())
             .receive(&bridge.mode, None)
             .ok()
+    }
+}
+
+/// IRS adaptive path: receive data with an SNR hint, then immediately transmit
+/// the suggested ACK type back to the sender via FSK4-ACK.
+///
+/// On decode failure a `Nack` is transmitted so the ISS can step down.
+/// Returns the decoded payload on success, `None` on failure.
+fn do_receive_with_ack_hint(bridge: &ModemBridge) -> Option<Vec<u8>> {
+    let result = bridge
+        .engine
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .receive_with_ack_hint(&bridge.mode, None);
+
+    let (payload, ack_type) = match result {
+        Ok(pair) => pair,
+        Err(e) => {
+            tracing::debug!("IRS receive_with_ack_hint failed ({e}); sending Nack");
+            let nack = AckFrame::new(AckType::Nack, &bridge.mode);
+            if let Err(e) = bridge
+                .engine
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .transmit_ack_with_short_fec(&nack, None)
+            {
+                tracing::warn!("IRS Nack transmit failed: {e}");
+            }
+            return None;
+        }
+    };
+
+    let ack_frame = AckFrame::new(ack_type, &bridge.mode);
+    if let Err(e) = bridge
+        .engine
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .transmit_ack_with_short_fec(&ack_frame, None)
+    {
+        tracing::warn!("IRS ACK transmit failed: {e}");
+    }
+
+    Some(payload)
+}
+
+/// ISS adaptive path: receive the FSK4-ACK reply from the IRS and apply it to
+/// the TX rate adapter.  Errors are logged and silently swallowed — a missed
+/// ACK degrades to no rate change rather than a hard failure.
+fn do_receive_ack_frame(bridge: &ModemBridge) {
+    let ack_result = bridge
+        .engine
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .receive_ack_with_short_fec(None);
+
+    match ack_result {
+        Ok(ack_frame) => {
+            let rate_event = bridge
+                .engine
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .apply_ack_frame(&ack_frame);
+            tracing::debug!(
+                ack_type = ?ack_frame.ack_type,
+                rate_event = ?rate_event,
+                "ISS: applied ACK frame from IRS"
+            );
+        }
+        Err(e) => {
+            tracing::debug!("ISS: no ACK frame received ({e})");
+        }
     }
 }
 

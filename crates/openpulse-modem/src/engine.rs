@@ -83,6 +83,8 @@ pub struct ModemEngine {
     center_frequency: f32,
     rate_adapter: Option<BiDirRateAdapter>,
     session_profile: Option<SessionProfile>,
+    /// SNR estimate (dB) from the most recent `receive_with_ack_hint` call.
+    last_rx_snr_db: Option<f32>,
     dcd: DcdState,
     csma_enabled: bool,
     csma_persistence: f32,
@@ -120,6 +122,7 @@ impl ModemEngine {
             center_frequency: 1500.0,
             rate_adapter: None,
             session_profile: None,
+            last_rx_snr_db: None,
             dcd: DcdState::new(0.01, 800), // 100 ms hold at 8 kHz
             csma_enabled: false,
             csma_persistence: 0.3,
@@ -394,6 +397,15 @@ impl ModemEngine {
     /// Return the current TX [`SpeedLevel`](openpulse_core::rate::SpeedLevel).
     pub fn current_tx_level(&self) -> Option<openpulse_core::rate::SpeedLevel> {
         self.rate_adapter.as_ref().map(|a| a.tx_level())
+    }
+
+    /// Return the SNR estimate (dB) measured during the most recent
+    /// [`receive_with_ack_hint`](Self::receive_with_ack_hint) call.
+    ///
+    /// Derived from mean absolute LLR magnitude; useful for display and logging.
+    /// Returns `None` if no `receive_with_ack_hint` call has completed yet.
+    pub fn last_rx_snr_db(&self) -> Option<f32> {
+        self.last_rx_snr_db
     }
 
     /// Apply a raw SNR estimate to the TX-direction rate adapter.
@@ -778,6 +790,147 @@ impl ModemEngine {
             bytes: frame.payload.len(),
         });
         Ok(frame.payload)
+    }
+
+    /// Receive a data frame and derive an ACK type recommendation for the sender.
+    ///
+    /// This is the full adaptive receive path:
+    /// 1. Captures audio samples, demodulates, and decodes the payload (identical
+    ///    to [`receive`](Self::receive)).
+    /// 2. Estimates receive-path SNR from the mean absolute LLR magnitude.
+    /// 3. Applies the SNR estimate to the RX direction of the active rate adapter.
+    /// 4. Returns the decoded payload together with the [`AckType`] the caller
+    ///    should transmit back to the sender via
+    ///    [`transmit_ack_with_short_fec`](Self::transmit_ack_with_short_fec).
+    ///
+    /// When no adaptive session is active the returned `AckType` is always
+    /// [`AckType::AckOk`].
+    ///
+    /// On decode failure returns `Err`; the caller should transmit
+    /// [`AckType::Nack`] in that case.
+    pub fn receive_with_ack_hint(
+        &mut self,
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<(Vec<u8>, AckType), ModemError> {
+        let samples = self.stage_capture_input(device)?;
+        let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+
+        let prev_busy = self.dcd.is_busy();
+        self.dcd.update(&samples.samples);
+        if self.dcd.is_busy() != prev_busy {
+            let _ = self.event_tx.send(EngineEvent::DcdChange {
+                busy: self.dcd.is_busy(),
+                energy: self.dcd.energy(),
+            });
+        }
+
+        self.update_afc_estimate(mode, &samples.samples);
+        if let Some(hz) = self.last_afc_offset_hz {
+            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
+                offset_hz: hz,
+                correction_hz: self.afc_correction_hz,
+                mode: mode.to_string(),
+            });
+        }
+
+        let mod_cfg = ModulationConfig {
+            mode: mode.to_string(),
+            center_frequency: self.center_frequency + self.afc_correction_hz,
+            ..ModulationConfig::default()
+        };
+
+        let plugin = self
+            .plugins
+            .get(mode)
+            .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+
+        let llrs = plugin.demodulate_soft(&samples.samples, &mod_cfg)?;
+        let snr_db = Self::snr_from_llrs(&llrs);
+        self.last_rx_snr_db = Some(snr_db);
+
+        let wire_bytes: Vec<u8> = llrs
+            .iter()
+            .collect::<Vec<_>>()
+            .chunks(8)
+            .map(|byte_llrs| {
+                byte_llrs
+                    .iter()
+                    .enumerate()
+                    .fold(0u8, |acc, (i, &&llr)| acc | (u8::from(llr <= 0.0) << i))
+            })
+            .collect();
+
+        let wire = WirePayload { bytes: wire_bytes };
+        let wire = self.route_wire_stage(PipelineStage::DemodulateDecode, wire)?;
+        let frame = self.stage_decode_frame(&wire)?;
+        let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
+        info!(
+            "receive_with_ack_hint: seq={} snr={:.1}dB",
+            frame.sequence, snr_db
+        );
+
+        let _ = self.event_tx.send(EngineEvent::FrameReceived {
+            mode: mode.to_string(),
+            bytes: frame.payload.len(),
+        });
+
+        let ack_type = self.select_rx_ack_type(snr_db);
+        Ok((frame.payload, ack_type))
+    }
+
+    /// Derive an outgoing [`AckType`] from the receive-path SNR and the active profile.
+    ///
+    /// Policy (conservative — avoids proactive rate limiting per design intent):
+    /// - [`AckDown`](AckType::AckDown): SNR has dropped below the floor for the current
+    ///   RX speed level.  The peer should transmit slower.
+    /// - [`AckUp`](AckType::AckUp): SNR has risen above the ceiling *and* the RX rate
+    ///   adapter has already set the upgrade-candidate flag (requires two consecutive
+    ///   above-ceiling measurements).  The peer may try a faster mode.
+    /// - [`AckOk`](AckType::AckOk): anything else.
+    ///
+    /// Also updates the RX direction of the bidirectional rate adapter as a side-effect.
+    fn select_rx_ack_type(&mut self, snr_db: f32) -> AckType {
+        let Some(adapter) = self.rate_adapter.as_mut() else {
+            return AckType::AckOk;
+        };
+        let Some(profile) = self.session_profile.as_ref() else {
+            return AckType::AckOk;
+        };
+
+        let rx_level = adapter.rx_level();
+        let floor_db = profile
+            .snr_floor_for_level(rx_level)
+            .unwrap_or(f32::NEG_INFINITY);
+        let ceiling_db = profile
+            .snr_ceiling_for_level(rx_level)
+            .unwrap_or(f32::INFINITY);
+
+        let snr_event = adapter.rx.apply_snr_hint(snr_db, floor_db, ceiling_db);
+
+        if snr_event.is_some() {
+            // apply_snr_hint returned Some only for a floor breach → step down.
+            AckType::AckDown
+        } else if adapter.rx.is_snr_upgrade_candidate() {
+            // SNR has crossed the ceiling in at least the previous measurement
+            // and again now → conservative upgrade signal.
+            AckType::AckUp
+        } else {
+            AckType::AckOk
+        }
+    }
+
+    /// Estimate receive-path SNR (dB) from LLR magnitudes.
+    ///
+    /// Uses `mean(|llr|) / 2` as a linear SNR proxy; suitable for comparison
+    /// against profile floor/ceiling thresholds.  Returns 0 dB for empty input.
+    fn snr_from_llrs(llrs: &[f32]) -> f32 {
+        if llrs.is_empty() {
+            return 0.0;
+        }
+        let mean_abs = llrs.iter().map(|l| l.abs()).sum::<f32>() / llrs.len() as f32;
+        // 10*log10 of linear SNR proxy; clamp to [-5, 40] dB for sanity.
+        (10.0 * (mean_abs / 2.0).max(1e-6).log10()).clamp(-5.0, 40.0)
     }
 
     /// Like [`transmit`](Self::transmit) but wraps the encoded frame bytes
