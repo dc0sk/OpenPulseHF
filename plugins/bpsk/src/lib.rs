@@ -176,4 +176,33 @@ mod tests {
         let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
         assert_eq!(&recovered[..payload.len()], payload);
     }
+
+    /// `demodulate_soft` for BPSK250-RRC must return real matched-filter LLRs, not hard ±1.0.
+    ///
+    /// Hard ±1.0 fallback produces values that are EXACTLY 1.0f32 or -1.0f32.
+    /// Real matched-filter soft LLRs will deviate from exact ±1 due to signal amplitude scaling.
+    #[test]
+    fn bpsk250_rrc_soft_demod_returns_real_llrs() {
+        let plugin = BpskPlugin::new();
+        let cfg = ModulationConfig {
+            mode: "BPSK250-RRC".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"soft llr test";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let llrs = plugin
+            .demodulate_soft(&samples, &cfg)
+            .expect("demodulate_soft");
+
+        assert!(!llrs.is_empty(), "LLRs must not be empty");
+        assert!(
+            llrs.iter().all(|x| x.is_finite()),
+            "demodulate_soft must not return NaN or Inf"
+        );
+        let all_hard = llrs.iter().all(|&x| x == 1.0f32 || x == -1.0f32);
+        assert!(
+            !all_hard,
+            "demodulate_soft must return real soft LLRs, not hard ±1.0 decisions"
+        );
+    }
 }

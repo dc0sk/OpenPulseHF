@@ -169,20 +169,14 @@ pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32
 /// Uses the differential-detection dot product directly (real part of
 /// z[k] × conj(z[k−1])) as the soft value; positive dot → same phase → bit 0.
 ///
-/// RRC modes fall back to hard ±1.0 pseudo-LLRs (no soft-output RRC path yet).
+/// Returns one `f32` per decoded bit (positive = bit more likely 0).
+///
+/// For non-RRC modes: differential cross-correlation dot product on Hann-windowed symbols.
+/// For RRC modes: same dot product applied to Gardner+LMS recovered symbols.
 pub fn bpsk_demodulate_soft(
     samples: &[f32],
     config: &ModulationConfig,
 ) -> Result<Vec<f32>, ModemError> {
-    // RRC path: fall back to hard ±1 LLRs — no matched-filter soft-output path yet.
-    if matches!(config.pulse_shape, PulseShape::Rrc { .. }) || config.mode.ends_with("-RRC") {
-        let bytes = bpsk_demodulate(samples, config)?;
-        return Ok(bytes
-            .iter()
-            .flat_map(|&b| (0..8u8).map(move |i| if (b >> i) & 1 == 0 { 1.0f32 } else { -1.0f32 }))
-            .collect());
-    }
-
     let baud = parse_baud_rate(&config.mode)?;
     let fs = config.sample_rate as f32;
     let fc = config.center_frequency;
@@ -192,8 +186,20 @@ pub fn bpsk_demodulate_soft(
         return Err(ModemError::Demodulation("signal too short".into()));
     }
 
-    let offset = find_timing_offset(samples, n, fc, fs);
-    let (i_syms, q_syms) = demodulate_iq(samples, n, fc, fs, offset);
+    let rrc_alpha = if let PulseShape::Rrc { alpha } = config.pulse_shape {
+        Some(alpha)
+    } else if config.mode.ends_with("-RRC") {
+        Some(0.35f32)
+    } else {
+        None
+    };
+
+    let (i_syms, q_syms) = if let Some(alpha) = rrc_alpha {
+        bpsk_demodulate_rrc(samples, n, baud, fc, fs, alpha, &config.mode)
+    } else {
+        let offset = find_timing_offset(samples, n, fc, fs);
+        demodulate_iq(samples, n, fc, fs, offset)
+    };
 
     if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
         return Err(ModemError::Demodulation(

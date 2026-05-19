@@ -112,7 +112,7 @@ pub fn dft_ce_estimate(
         return ls_estimate(p, freq);
     }
 
-    assert_eq!(
+    debug_assert_eq!(
         n_pilots,
         p.n_pilots,
         "pilot_positions() returned {} pilots but ScFdmaParams.n_pilots={}; params are inconsistent",

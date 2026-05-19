@@ -229,6 +229,21 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
             vec!["CONNECT_MESH".into()]
         }
 
+        "WAVEFORM" => {
+            if let Some(new_mode) = parts.get(1).filter(|s| !s.is_empty()) {
+                *bridge.mode.write().unwrap_or_else(|e| e.into_inner()) = new_mode.to_string();
+                tracing::info!("waveform changed to {new_mode}");
+                vec![format!("WAVEFORM {new_mode}")]
+            } else {
+                let mode = bridge
+                    .mode
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                vec![format!("WAVEFORM {mode}")]
+            }
+        }
+
         "PING" => vec!["PONG".into()],
 
         "CLOSE" => vec![],

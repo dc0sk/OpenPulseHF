@@ -185,7 +185,7 @@ fn demodulate_soft_with_params(samples: &[f32], p: &ScFdmaParams) -> SoftDemodOu
     let mut k_db_sum = 0.0f32;
     let mut metric_symbols = 0usize;
     let pilot_scs = pilot_positions(p);
-    let mut h_pilots_buf = vec![Complex32::new(0.0, 0.0); p.n_pilots];
+    let mut h_pilots_buf = vec![Complex32::new(0.0, 0.0); pilot_scs.len()];
 
     for sym_idx in 0..n_syms {
         let start = sym_idx * SYM_LEN + CP;

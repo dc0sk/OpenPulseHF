@@ -1,7 +1,7 @@
 //! KissBridge: shared state coordinating the TCP server and modem worker.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
 
 use tokio::sync::broadcast;
 
@@ -36,7 +36,8 @@ impl Default for KissConfig {
 /// Shared state coordinating the per-client handlers and the modem worker.
 pub struct KissBridge {
     pub engine: Arc<std::sync::Mutex<ModemEngine>>,
-    pub mode: String,
+    /// Active modem mode string; changeable at runtime via `set_mode()`.
+    pub mode: Arc<StdRwLock<String>>,
     /// Raw payloads (AX.25 frames) pushed from the worker to all connected clients.
     pub rx_data_tx: broadcast::Sender<Vec<u8>>,
     /// Raw payloads queued by clients for transmission.
@@ -70,7 +71,7 @@ impl KissBridge {
         let (tx_data_tx, tx_data_rx) = std::sync::mpsc::sync_channel(64);
         let bridge = Arc::new(Self {
             engine: Arc::new(std::sync::Mutex::new(engine)),
-            mode,
+            mode: Arc::new(StdRwLock::new(mode)),
             rx_data_tx,
             tx_data_tx,
             tx_pending: Arc::new(AtomicUsize::new(0)),
@@ -82,6 +83,18 @@ impl KissBridge {
     }
 }
 
+impl KissBridge {
+    /// Change the active modem mode at runtime.
+    pub fn set_mode(&self, mode: String) {
+        *self.mode.write().unwrap_or_else(|e| e.into_inner()) = mode;
+    }
+
+    /// Read the active modem mode.
+    pub fn current_mode(&self) -> String {
+        self.mode.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
 /// Spawn the background worker thread that drives TX/RX via the modem engine.
 pub fn spawn_worker(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiver<Vec<u8>>) {
     std::thread::spawn(move || worker_loop(bridge, tx_data_rx));
@@ -89,6 +102,12 @@ pub fn spawn_worker(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiv
 
 fn worker_loop(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiver<Vec<u8>>) {
     loop {
+        let mode = bridge
+            .mode
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+
         while let Ok(data) = tx_data_rx.try_recv() {
             let len = data.len();
             if bridge.loopback {
@@ -98,7 +117,7 @@ fn worker_loop(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiver<Ve
                     .engine
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .transmit(&data, &bridge.mode, None)
+                    .transmit(&data, &mode, None)
                 {
                     Ok(_) => {}
                     Err(e) => tracing::warn!("modem TX error: {e}"),
@@ -107,9 +126,9 @@ fn worker_loop(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiver<Ve
                     .engine
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .receive(&bridge.mode, None)
+                    .receive(&mode, None)
                 {
-                    maybe_relay_forward(&bridge, &received);
+                    maybe_relay_forward(&bridge, &received, &mode);
                     if !received.is_empty() {
                         let _ = bridge.rx_data_tx.send(received);
                     }
@@ -126,9 +145,9 @@ fn worker_loop(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiver<Ve
                 .engine
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .receive(&bridge.mode, None)
+                .receive(&mode, None)
             {
-                maybe_relay_forward(&bridge, &received);
+                maybe_relay_forward(&bridge, &received, &mode);
                 if !received.is_empty() {
                     let _ = bridge.rx_data_tx.send(received);
                 }
@@ -150,7 +169,7 @@ fn worker_loop(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiver<Ve
 /// The probe is cheap: `decode` checks the 4-byte `OPHF` magic first and
 /// returns `Err(InvalidMagic)` immediately for ordinary user-data payloads.
 /// When the magic matches the forwarder increments `hop_index` and re-transmits.
-fn maybe_relay_forward(bridge: &KissBridge, payload: &[u8]) {
+fn maybe_relay_forward(bridge: &KissBridge, payload: &[u8], mode: &str) {
     use openpulse_core::wire_query::WireEnvelope;
 
     let Some(ref fwd_arc) = bridge.relay_forwarder else {
@@ -178,7 +197,7 @@ fn maybe_relay_forward(bridge: &KissBridge, payload: &[u8]) {
                     .engine
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .transmit(&out_bytes, &bridge.mode, None)
+                    .transmit(&out_bytes, mode, None)
                 {
                     tracing::warn!("relay TX error: {e}");
                 }

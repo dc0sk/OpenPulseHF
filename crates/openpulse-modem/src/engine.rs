@@ -850,14 +850,12 @@ impl ModemEngine {
         self.last_rx_snr_db = Some(snr_db);
 
         let wire_bytes: Vec<u8> = llrs
-            .iter()
-            .collect::<Vec<_>>()
             .chunks(8)
             .map(|byte_llrs| {
                 byte_llrs
                     .iter()
                     .enumerate()
-                    .fold(0u8, |acc, (i, &&llr)| acc | (u8::from(llr <= 0.0) << i))
+                    .fold(0u8, |acc, (i, &llr)| acc | (u8::from(llr <= 0.0) << i))
             })
             .collect();
 
@@ -877,6 +875,65 @@ impl ModemEngine {
 
         let ack_type = self.select_rx_ack_type(snr_db);
         Ok((frame.payload, ack_type))
+    }
+
+    /// ISS ARQ transmit: send `data`, wait for a FSK4-ACK reply, retry on Nack.
+    ///
+    /// Transmits the frame up to `1 + max_retries` times (initial attempt plus
+    /// retries).  On each attempt:
+    /// - A successful ACK (`AckOk`, `AckUp`, `AckDown`) is applied to the TX
+    ///   rate adapter and the call returns `Ok(rate_event)`.
+    /// - A `Nack` or a receive error is treated as a delivery failure; the TX
+    ///   adapter is stepped down and the frame is retransmitted.
+    ///
+    /// Returns [`ModemError::ArqMaxRetries`] if no ACK is received after all
+    /// attempts are exhausted.
+    ///
+    /// Pass `max_retries = 0` to transmit once with no retry (equivalent to
+    /// `transmit` followed by a single `receive_ack_with_short_fec`).
+    pub fn transmit_arq(
+        &mut self,
+        data: &[u8],
+        mode: &str,
+        device: Option<&str>,
+        max_retries: usize,
+    ) -> Result<RateEvent, ModemError> {
+        let attempts = 1 + max_retries;
+        for attempt in 0..attempts {
+            self.transmit(data, mode, device)?;
+
+            match self.receive_ack_with_short_fec(device) {
+                Ok(ack_frame) if ack_frame.ack_type != AckType::Nack => {
+                    let rate_event = self.apply_ack_frame(&ack_frame);
+                    info!(
+                        "ARQ: ACK {:?} after attempt {}/{}",
+                        ack_frame.ack_type,
+                        attempt + 1,
+                        attempts
+                    );
+                    return Ok(rate_event);
+                }
+                Ok(_nack) => {
+                    // Nack: step down TX rate and retry.
+                    let _ = self.apply_ack(AckType::AckDown);
+                    info!(
+                        "ARQ: Nack on attempt {}/{}, retrying",
+                        attempt + 1,
+                        attempts
+                    );
+                }
+                Err(e) => {
+                    // No ACK received at all: treat as implicit Nack.
+                    let _ = self.apply_ack(AckType::AckDown);
+                    info!(
+                        "ARQ: no ACK on attempt {}/{} ({e}), retrying",
+                        attempt + 1,
+                        attempts
+                    );
+                }
+            }
+        }
+        Err(ModemError::ArqMaxRetries(attempts))
     }
 
     /// Derive an outgoing [`AckType`] from the receive-path SNR and the active profile.

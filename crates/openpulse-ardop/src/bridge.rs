@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{broadcast, RwLock};
 
 use openpulse_core::ack::{AckFrame, AckType};
@@ -19,7 +19,8 @@ pub struct ModemBridge {
     pub arq_bw: Arc<RwLock<u16>>,
     /// ARQ connection timeout in seconds; default 120.
     pub arq_timeout: Arc<RwLock<u16>>,
-    pub mode: String,
+    /// Active modem mode string; changeable at runtime via the `WAVEFORM` command.
+    pub mode: Arc<StdRwLock<String>>,
     /// Unsolicited event push channel to all connected command clients.
     pub event_tx: broadcast::Sender<String>,
     /// Received data pushed from the worker to all data port clients.
@@ -60,7 +61,7 @@ impl ModemBridge {
             gridsquare: Arc::new(RwLock::new(String::new())),
             arq_bw: Arc::new(RwLock::new(500)),
             arq_timeout: Arc::new(RwLock::new(120)),
-            mode,
+            mode: Arc::new(StdRwLock::new(mode)),
             event_tx,
             rx_data_tx,
             tx_data_tx,
@@ -93,6 +94,13 @@ pub fn spawn_worker(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Recei
 
 fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<Vec<u8>>) {
     loop {
+        // Snapshot the current mode once per iteration to avoid holding the lock across I/O.
+        let mode = bridge
+            .mode
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+
         while let Ok(data) = tx_data_rx.try_recv() {
             let len = data.len();
             // Clear one-shot flag regardless of path so loopback mode doesn't leak it.
@@ -100,31 +108,38 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
             if bridge.loopback {
                 let _ = bridge.rx_data_tx.send(data);
             } else {
+                // Acquire the lock once to read adaptive state and perform TX in the same scope.
                 let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
-                let tx_result = if use_fec {
-                    engine.transmit_with_fec(&data, &bridge.mode, None)
+                let adaptive = engine.current_tx_level().is_some();
+
+                if adaptive && !use_fec {
+                    // ISS adaptive path: transmit with ARQ retry (up to 3 retransmits).
+                    // FEC transmissions use their own reliability mechanism and skip ARQ.
+                    match engine.transmit_arq(&data, &mode, None, 3) {
+                        Ok(rate_event) => {
+                            tracing::debug!(rate_event = ?rate_event, "ARQ TX succeeded");
+                        }
+                        Err(e) => {
+                            tracing::warn!("ARQ TX failed: {e}");
+                        }
+                    }
+                    drop(engine);
                 } else {
-                    engine.transmit(&data, &bridge.mode, None)
-                };
-                drop(engine);
-                if let Err(ref e) = tx_result {
-                    tracing::warn!("modem TX error: {e}");
-                }
-                if tx_result.is_ok() {
-                    // ISS path: if adaptive session is active, listen for the IRS
-                    // ACK frame (FSK4-ACK) and apply it to the TX rate adapter.
-                    let adaptive = bridge
-                        .engine
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .current_tx_level()
-                        .is_some();
-                    if adaptive {
-                        do_receive_ack_frame(&bridge);
-                    } else if let Some(rx) = do_receive(&bridge) {
-                        maybe_relay_forward(&bridge, &rx);
-                        if !rx.is_empty() {
-                            let _ = bridge.rx_data_tx.send(rx);
+                    let tx_result = if use_fec {
+                        engine.transmit_with_fec(&data, &mode, None)
+                    } else {
+                        engine.transmit(&data, &mode, None)
+                    };
+                    drop(engine);
+                    if let Err(ref e) = tx_result {
+                        tracing::warn!("modem TX error: {e}");
+                    }
+                    if tx_result.is_ok() {
+                        if let Some(rx) = do_receive(&bridge, &mode) {
+                            maybe_relay_forward(&bridge, &rx, &mode);
+                            if !rx.is_empty() {
+                                let _ = bridge.rx_data_tx.send(rx);
+                            }
                         }
                     }
                 }
@@ -136,21 +151,42 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
         }
 
         if !bridge.loopback {
-            // IRS path: if adaptive session is active, receive data with an SNR
-            // hint and immediately transmit the suggested ACK frame back to the ISS.
-            let adaptive = bridge
-                .engine
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .current_tx_level()
-                .is_some();
+            // IRS path: acquire the engine lock once for both the adaptive check and
+            // the receive+ACK dispatch to avoid lock churn and inconsistent state.
+            let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
+            let adaptive = engine.current_tx_level().is_some();
             let received = if adaptive {
-                do_receive_with_ack_hint(&bridge)
+                // Adaptive IRS: receive with SNR hint then immediately reply with ACK
+                // or Nack — all within the same lock scope so no other caller can
+                // interleave between receive and the ACK transmit.
+                match engine.receive_with_ack_hint(&mode, None) {
+                    Ok((payload, ack_type)) => {
+                        let ack_frame = AckFrame::new(ack_type, &mode);
+                        if let Err(e) = engine.transmit_ack_with_short_fec(&ack_frame, None) {
+                            tracing::warn!("IRS ACK transmit failed: {e}");
+                        }
+                        Some(payload)
+                    }
+                    Err(e) => {
+                        tracing::debug!("IRS receive_with_ack_hint failed ({e}); sending Nack");
+                        let nack = AckFrame::new(AckType::Nack, &mode);
+                        if let Err(e) = engine.transmit_ack_with_short_fec(&nack, None) {
+                            tracing::warn!("IRS Nack transmit failed: {e}");
+                        }
+                        None
+                    }
+                }
             } else {
-                do_receive(&bridge)
+                let use_fec_rx = bridge.fec_rx.load(Ordering::Relaxed);
+                if use_fec_rx {
+                    engine.receive_with_fec(&mode, None).ok()
+                } else {
+                    engine.receive(&mode, None).ok()
+                }
             };
+            drop(engine);
             if let Some(rx) = received {
-                maybe_relay_forward(&bridge, &rx);
+                maybe_relay_forward(&bridge, &rx, &mode);
                 if !rx.is_empty() {
                     let _ = bridge.rx_data_tx.send(rx);
                 }
@@ -161,93 +197,22 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
     }
 }
 
-fn do_receive(bridge: &ModemBridge) -> Option<Vec<u8>> {
+fn do_receive(bridge: &ModemBridge, mode: &str) -> Option<Vec<u8>> {
     let use_fec_rx = bridge.fec_rx.load(Ordering::Relaxed);
     if use_fec_rx {
         bridge
             .engine
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .receive_with_fec(&bridge.mode, None)
+            .receive_with_fec(mode, None)
             .ok()
     } else {
         bridge
             .engine
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .receive(&bridge.mode, None)
+            .receive(mode, None)
             .ok()
-    }
-}
-
-/// IRS adaptive path: receive data with an SNR hint, then immediately transmit
-/// the suggested ACK type back to the sender via FSK4-ACK.
-///
-/// On decode failure a `Nack` is transmitted so the ISS can step down.
-/// Returns the decoded payload on success, `None` on failure.
-fn do_receive_with_ack_hint(bridge: &ModemBridge) -> Option<Vec<u8>> {
-    let result = bridge
-        .engine
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .receive_with_ack_hint(&bridge.mode, None);
-
-    let (payload, ack_type) = match result {
-        Ok(pair) => pair,
-        Err(e) => {
-            tracing::debug!("IRS receive_with_ack_hint failed ({e}); sending Nack");
-            let nack = AckFrame::new(AckType::Nack, &bridge.mode);
-            if let Err(e) = bridge
-                .engine
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .transmit_ack_with_short_fec(&nack, None)
-            {
-                tracing::warn!("IRS Nack transmit failed: {e}");
-            }
-            return None;
-        }
-    };
-
-    let ack_frame = AckFrame::new(ack_type, &bridge.mode);
-    if let Err(e) = bridge
-        .engine
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .transmit_ack_with_short_fec(&ack_frame, None)
-    {
-        tracing::warn!("IRS ACK transmit failed: {e}");
-    }
-
-    Some(payload)
-}
-
-/// ISS adaptive path: receive the FSK4-ACK reply from the IRS and apply it to
-/// the TX rate adapter.  Errors are logged and silently swallowed — a missed
-/// ACK degrades to no rate change rather than a hard failure.
-fn do_receive_ack_frame(bridge: &ModemBridge) {
-    let ack_result = bridge
-        .engine
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .receive_ack_with_short_fec(None);
-
-    match ack_result {
-        Ok(ack_frame) => {
-            let rate_event = bridge
-                .engine
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .apply_ack_frame(&ack_frame);
-            tracing::debug!(
-                ack_type = ?ack_frame.ack_type,
-                rate_event = ?rate_event,
-                "ISS: applied ACK frame from IRS"
-            );
-        }
-        Err(e) => {
-            tracing::debug!("ISS: no ACK frame received ({e})");
-        }
     }
 }
 
@@ -262,7 +227,7 @@ fn do_receive_ack_frame(bridge: &ModemBridge) {
 /// The probe is cheap: `decode` checks the 4-byte `OPHF` magic first and
 /// returns `Err(InvalidMagic)` immediately for ordinary user-data payloads.
 /// When the magic matches the forwarder increments `hop_index` and re-transmits.
-fn maybe_relay_forward(bridge: &ModemBridge, payload: &[u8]) {
+fn maybe_relay_forward(bridge: &ModemBridge, payload: &[u8], mode: &str) {
     use openpulse_core::wire_query::WireEnvelope;
 
     let Some(ref fwd_arc) = bridge.relay_forwarder else {
@@ -290,7 +255,7 @@ fn maybe_relay_forward(bridge: &ModemBridge, payload: &[u8]) {
                     .engine
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .transmit(&out_bytes, &bridge.mode, None)
+                    .transmit(&out_bytes, mode, None)
                 {
                     tracing::warn!("relay TX error: {e}");
                 }

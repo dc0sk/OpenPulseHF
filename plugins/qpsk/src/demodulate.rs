@@ -413,32 +413,35 @@ fn bits_to_bytes(bits: &[bool]) -> Vec<u8> {
 /// - Q projection → LLR for b0 (Q > 0 means b0 = 0)
 /// - I projection → LLR for b1 (I > 0 means b1 = 0)
 ///
-/// RRC modes fall back to hard ±1.0 pseudo-LLRs.
+/// Both RRC and non-RRC modes return proper matched-filter soft projections.
 pub fn qpsk_demodulate_soft(
     samples: &[f32],
     config: &ModulationConfig,
 ) -> Result<Vec<f32>, ModemError> {
-    if matches!(config.pulse_shape, PulseShape::Rrc { .. }) || config.mode.ends_with("-RRC") {
-        let bytes = qpsk_demodulate(samples, config)?;
-        return Ok(bytes
-            .iter()
-            .flat_map(|&b| (0..8u8).map(move |i| if (b >> i) & 1 == 0 { 1.0f32 } else { -1.0f32 }))
-            .collect());
-    }
-
     let baud = parse_baud_rate(&config.mode)?;
     let fs = config.sample_rate as f32;
     let fc = config.center_frequency;
     let n = samples_per_symbol(fs, baud)?;
     let cosine_overlap =
         config.pulse_shape == PulseShape::CosineOverlap || config.mode.contains("-HF");
+    let rrc_alpha = if let PulseShape::Rrc { alpha } = config.pulse_shape {
+        Some(alpha)
+    } else if config.mode.ends_with("-RRC") {
+        Some(0.35f32)
+    } else {
+        None
+    };
 
     if samples.len() < n * (PREAMBLE_SYMS + 1) {
         return Err(ModemError::Demodulation("signal too short".to_string()));
     }
 
-    let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
-    let syms = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
+    let syms = if let Some(alpha) = rrc_alpha {
+        qpsk_demodulate_rrc(samples, n, baud, fc, fs, alpha)
+    } else {
+        let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
+        demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap)
+    };
 
     if syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
         return Err(ModemError::Demodulation(
@@ -447,7 +450,6 @@ pub fn qpsk_demodulate_soft(
     }
 
     let syms = qpsk_lms_equalize(&syms, &config.mode);
-
     let data = &syms[PREAMBLE_SYMS..(syms.len() - TAIL_SYMS)];
     // Per symbol: b0 LLR = Q, b1 LLR = I (from the Gray map geometry).
     // Bits are pushed as (b0, b1) in symbols_to_bits, matching [q, i] here.

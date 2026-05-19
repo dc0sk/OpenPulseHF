@@ -572,4 +572,34 @@ mod tests {
             test_seed, baseline_ber, hf_ber, improvement
         );
     }
+
+    /// `demodulate_soft` for QPSK500-RRC must return real matched-filter LLRs, not hard ±1.0.
+    ///
+    /// Hard ±1.0 fallback produces values that are EXACTLY 1.0f32 or -1.0f32.
+    /// Real matched-filter soft LLRs (I/Q projections) deviate from exact ±1.
+    #[test]
+    fn qpsk500_rrc_soft_demod_returns_real_llrs() {
+        use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+        let plugin = QpskPlugin::new();
+        let cfg = ModulationConfig {
+            mode: "QPSK500-RRC".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"soft llr test";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let llrs = plugin
+            .demodulate_soft(&samples, &cfg)
+            .expect("demodulate_soft");
+
+        assert!(!llrs.is_empty(), "LLRs must not be empty");
+        assert!(
+            llrs.iter().all(|x| x.is_finite()),
+            "demodulate_soft must not return NaN or Inf"
+        );
+        let all_hard = llrs.iter().all(|&x| x == 1.0f32 || x == -1.0f32);
+        assert!(
+            !all_hard,
+            "demodulate_soft must return real soft LLRs, not hard ±1.0 decisions"
+        );
+    }
 }
