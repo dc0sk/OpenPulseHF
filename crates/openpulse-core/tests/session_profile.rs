@@ -144,7 +144,8 @@ fn hpx_wideband_hd_mode_mapping_uses_crossover_policy() {
     assert_eq!(p.mode_for(SpeedLevel::Sl11), None);
     assert_eq!(p.mode_for(SpeedLevel::Sl12), Some("SCFDMA52-16QAM"));
     assert_eq!(p.mode_for(SpeedLevel::Sl13), Some("SCFDMA52-32QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl14), Some("64QAM2000-RRC"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl14), Some("SCFDMA52-64QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl15), Some("64QAM2000-RRC"));
 }
 
 #[test]
@@ -155,15 +156,17 @@ fn hpx_wideband_hd_snr_thresholds_match_policy_intent() {
     assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl12), Some(16.0));
     assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl13), Some(20.0));
     assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl14), Some(28.0));
+    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl15), Some(35.0));
     assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl12), Some(20.0));
     assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl13), Some(26.0));
-    assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl14), None);
+    assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl14), Some(33.0));
+    assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl15), None);
 }
 
 #[test]
-fn hpx_wideband_hd_requires_snr_candidate_before_sl14_ack_up() {
+fn hpx_wideband_hd_requires_snr_candidate_before_sl15_ack_up() {
     let p = SessionProfile::hpx_wideband_hd();
-    assert_eq!(p.ack_up_requires_snr_candidate_at(), Some(SpeedLevel::Sl13));
+    assert_eq!(p.ack_up_requires_snr_candidate_at(), Some(SpeedLevel::Sl14));
 
     let wideband = SessionProfile::hpx_wideband();
     assert_eq!(wideband.ack_up_requires_snr_candidate_at(), None);

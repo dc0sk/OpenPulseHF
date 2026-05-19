@@ -365,8 +365,12 @@ fn watterson_f1_p4_dense_pilot_does_not_regress_baseline_by_more_than_5_percent(
     );
 }
 
+// SC-FDMA QAM modes are assigned to hpx_wideband_hd() (VHF/UHF) — NOT hpx_hf() (HF).
+// This test documents the HF-unsuitability: both modes fail Watterson fading because
+// 16QAM/64QAM coherence requirements exceed what ionospheric channels can maintain.
+// The 90% gate below is the HF profile-entry threshold; these modes must stay below it.
 #[test]
-fn scfdma_qam_modes_remain_deferred_on_watterson_profile_entry_matrix() {
+fn scfdma_qam_modes_unsuitable_for_hf_watterson_profiles() {
     let plugin = ScFdmaPlugin::new();
     let payload: Vec<u8> = (0u8..96).collect();
     let frames = 30usize;
@@ -407,19 +411,45 @@ fn scfdma_qam_modes_remain_deferred_on_watterson_profile_entry_matrix() {
         worst_64 = worst_64.min(succ_64);
 
         println!(
-            "profile-entry-matrix {label}: 16QAM_success={succ_16:.3} 64QAM_success={succ_64:.3}"
+            "hf-suitability-matrix {label}: 16QAM_success={succ_16:.3} 64QAM_success={succ_64:.3}"
         );
     }
 
-    // Profile-entry gate (wide-matrix): min scenario success >= 90%.
-    // Current expectation: both modes remain below this gate and therefore deferred.
-    const PROFILE_ENTRY_MIN_SUCCESS: f32 = 0.90;
+    // HF profile-entry gate: min scenario success across Watterson matrix must be >= 90%.
+    // These modes fail this gate by design — they belong in hpx_wideband_hd() (VHF/UHF),
+    // where AWGN channels at 28–35 dB SNR are achievable, not in hpx_hf() (HF).
+    const HF_PROFILE_ENTRY_MIN_SUCCESS: f32 = 0.90;
     assert!(
-        worst_16 < PROFILE_ENTRY_MIN_SUCCESS,
-        "SCFDMA52-16QAM unexpectedly met profile-entry gate across matrix: worst={worst_16:.3}"
+        worst_16 < HF_PROFILE_ENTRY_MIN_SUCCESS,
+        "SCFDMA52-16QAM unexpectedly met HF profile-entry gate: worst={worst_16:.3}"
     );
     assert!(
-        worst_64 < PROFILE_ENTRY_MIN_SUCCESS,
-        "SCFDMA52-64QAM unexpectedly met profile-entry gate across matrix: worst={worst_64:.3}"
+        worst_64 < HF_PROFILE_ENTRY_MIN_SUCCESS,
+        "SCFDMA52-64QAM unexpectedly met HF profile-entry gate: worst={worst_64:.3}"
+    );
+}
+
+// VHF/UHF profile-entry gate for SCFDMA52-64QAM: must achieve >= 90% success
+// at 30 dB AWGN (representative of FM/microwave link budget).
+#[test]
+fn scfdma_64qam_meets_vhf_uhf_profile_entry_gate_awgn_30db() {
+    let plugin = ScFdmaPlugin::new();
+    let payload: Vec<u8> = (0u8..96).collect();
+    let frames = 30usize;
+    let snr_db = 30.0_f32;
+
+    let samples = plugin.modulate(&payload, &cfg("SCFDMA52-64QAM")).unwrap();
+    let success = frame_success_rate_hard_diversity_awgn(
+        &plugin,
+        &samples,
+        "SCFDMA52-64QAM",
+        &payload,
+        snr_db,
+        frames,
+    );
+
+    assert!(
+        success >= 0.90,
+        "SCFDMA52-64QAM failed VHF/UHF profile-entry gate at 30 dB AWGN: success={success:.3} (need >= 0.90)"
     );
 }

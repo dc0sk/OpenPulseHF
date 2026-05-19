@@ -286,3 +286,54 @@ fn session_receive_data_type_c_accepts_internal_and_winlink_prefixes() {
     let out2 = irs2.receive_data(internal).unwrap();
     assert_eq!(out2, payload);
 }
+
+#[test]
+fn session_iss_type_c_irs_roundtrip() {
+    let body = b"Winlink Type C round-trip body".to_vec();
+
+    // ISS proposes with Type C (LZHUF Winlink-compatible).
+    let mut iss = B2fSession::new(SessionRole::Iss);
+    iss.queue_message_type_c(
+        WlHeader {
+            mid: "MSG_TC01".into(),
+            date: "2026/05/19 10:00".into(),
+            from: "W1AW@winlink.org".into(),
+            to: vec!["W2AW@winlink.org".into()],
+            subject: "Type C test".into(),
+            size: body.len() as u32,
+            body: body.len() as u32,
+            attachments: vec![],
+        },
+        body.clone(),
+    )
+    .unwrap();
+
+    let mut irs = B2fSession::new(SessionRole::Irs);
+
+    // Handshake: IRS banner → ISS emits FC (type=C) + FF.
+    let iss_out = iss.handle_line(&banner::encode("W2AW")).unwrap();
+    assert_eq!(iss_out.len(), 2);
+    assert!(iss_out[0].starts_with("FC C"), "FC proposal must be Type C");
+    assert!(iss_out[1].trim_end_matches('\r') == "FF");
+
+    // IRS receives FC + FF → sends FS accept.
+    irs.handle_line(&iss_out[0]).unwrap();
+    let irs_out = irs.handle_line(&iss_out[1]).unwrap();
+    assert_eq!(irs_out.len(), 1);
+    assert!(irs_out[0].starts_with("FS"));
+
+    // ISS receives FS → stages LZHUF-compressed data.
+    iss.handle_line(&irs_out[0]).unwrap();
+    let chunks = iss.drain_pending_data();
+    assert_eq!(chunks.len(), 1);
+    assert!(iss.is_done());
+
+    // IRS decompresses via decompress_lzhuf_compat (accepts Winlink LE prefix).
+    let decompressed = irs.receive_data(chunks[0].clone()).unwrap();
+    let sep = decompressed
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .unwrap();
+    assert_eq!(&decompressed[sep + 4..], body.as_slice());
+    assert!(irs.is_done());
+}
