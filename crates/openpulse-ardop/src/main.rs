@@ -127,8 +127,17 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let relay_forwarder = if cfg.relay.enabled {
-        let fwd = RelayForwarder::new(300_000, RelayTrustPolicy::default());
-        tracing::info!(max_hops = cfg.relay.max_hops, "relay forwarding enabled");
+        let policy = if cfg.relay.deny_list.is_empty() {
+            RelayTrustPolicy::default()
+        } else {
+            RelayTrustPolicy::deny_relays(cfg.relay.deny_list.iter().map(|s| s.as_str()))
+        };
+        let fwd = RelayForwarder::new(300_000, policy);
+        tracing::info!(
+            max_hops = cfg.relay.max_hops,
+            deny_count = cfg.relay.deny_list.len(),
+            "relay forwarding enabled"
+        );
         Some(fwd)
     } else {
         None

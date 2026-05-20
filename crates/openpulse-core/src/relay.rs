@@ -505,6 +505,16 @@ mod tests {
     }
 
     #[test]
+    fn forwarder_allows_non_denied_peer_when_deny_list_active() {
+        // deny 0xbb..bb; the test envelope src is 0xaa..aa — should forward normally
+        let denied_hex = hex_peer_id(&[0xbb; 32]);
+        let policy = RelayTrustPolicy::deny_relays([denied_hex]);
+        let mut fwd = RelayForwarder::new(60_000, policy);
+        let env = test_envelope(1, 3, 0); // src = 0xaa..aa
+        assert!(fwd.forward(&env, 1_000).is_ok());
+    }
+
+    #[test]
     fn forwarder_emits_events() {
         let mut fwd = RelayForwarder::new(60_000, RelayTrustPolicy::default());
         let env = test_envelope(42, 3, 0);

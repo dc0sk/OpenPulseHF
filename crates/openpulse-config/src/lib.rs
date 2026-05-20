@@ -181,6 +181,8 @@ pub struct LoggingConfig {
 pub struct RelayConfig {
     pub enabled: bool,
     pub max_hops: u8,
+    /// Peer IDs (lower-hex, 64 chars each) whose frames are dropped at the first relay hop.
+    pub deny_list: Vec<String>,
 }
 
 /// Trust store settings.
@@ -308,6 +310,7 @@ impl Default for RelayConfig {
         Self {
             enabled: false,
             max_hops: 3,
+            deny_list: Vec::new(),
         }
     }
 }
