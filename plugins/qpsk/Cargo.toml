@@ -8,11 +8,12 @@ authors.workspace    = true
 repository.workspace = true
 
 [features]
-gpu = []
+gpu = ["openpulse-gpu"]
 
 [dependencies]
 openpulse-core = { workspace = true }
 openpulse-dsp  = { workspace = true }
+openpulse-gpu  = { workspace = true, optional = true }
 
 [dev-dependencies]
 openpulse-channel = { workspace = true }

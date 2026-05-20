@@ -3,12 +3,17 @@
 pub mod demodulate;
 pub mod modulate;
 
+#[cfg(feature = "gpu")]
+use std::sync::Arc;
+
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin, PluginInfo};
 
 /// QPSK modulation plugin.
 pub struct QpskPlugin {
     info: PluginInfo,
+    #[cfg(feature = "gpu")]
+    gpu: Option<Arc<openpulse_gpu::GpuContext>>,
 }
 
 impl Default for QpskPlugin {
@@ -21,29 +26,44 @@ impl QpskPlugin {
     /// Create the plugin.
     pub fn new() -> Self {
         Self {
-            info: PluginInfo {
-                name: "QPSK".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                description: "Quadrature Phase-Shift Keying with Gray-mapped dibits".to_string(),
-                author: "OpenPulse Contributors".to_string(),
-                supported_modes: vec![
-                    "QPSK125".to_string(),
-                    "QPSK250".to_string(),
-                    "QPSK500".to_string(),
-                    "QPSK1000".to_string(),
-                    "QPSK1000-HF".to_string(),
-                    "QPSK1000-HF-RRC".to_string(),
-                    "QPSK500-RRC".to_string(),
-                    "QPSK1000-RRC".to_string(),
-                    // UHF/VHF — 12.5 kHz narrowband (8 kHz audio, 2000 baud, ~2700 Hz BW)
-                    "QPSK2000".to_string(),
-                    "QPSK2000-RRC".to_string(),
-                    // UHF/VHF — 12.5 kHz HD (requires 48 kHz audio, 9600 baud, ~13 kHz BW)
-                    "QPSK9600".to_string(),
-                    "QPSK9600-RRC".to_string(),
-                ],
-                trait_version_required: "1.0".to_string(),
-            },
+            info: Self::make_info(),
+            #[cfg(feature = "gpu")]
+            gpu: None,
+        }
+    }
+
+    /// Create the plugin with a GPU context for accelerated RRC FIR filtering.
+    #[cfg(feature = "gpu")]
+    pub fn with_gpu(ctx: Arc<openpulse_gpu::GpuContext>) -> Self {
+        Self {
+            info: Self::make_info(),
+            gpu: Some(ctx),
+        }
+    }
+
+    fn make_info() -> PluginInfo {
+        PluginInfo {
+            name: "QPSK".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            description: "Quadrature Phase-Shift Keying with Gray-mapped dibits".to_string(),
+            author: "OpenPulse Contributors".to_string(),
+            supported_modes: vec![
+                "QPSK125".to_string(),
+                "QPSK250".to_string(),
+                "QPSK500".to_string(),
+                "QPSK1000".to_string(),
+                "QPSK1000-HF".to_string(),
+                "QPSK1000-HF-RRC".to_string(),
+                "QPSK500-RRC".to_string(),
+                "QPSK1000-RRC".to_string(),
+                // UHF/VHF — 12.5 kHz narrowband (8 kHz audio, 2000 baud, ~2700 Hz BW)
+                "QPSK2000".to_string(),
+                "QPSK2000-RRC".to_string(),
+                // UHF/VHF — 12.5 kHz HD (requires 48 kHz audio, 9600 baud, ~13 kHz BW)
+                "QPSK9600".to_string(),
+                "QPSK9600-RRC".to_string(),
+            ],
+            trait_version_required: "1.0".to_string(),
         }
     }
 }
@@ -54,6 +74,10 @@ impl ModulationPlugin for QpskPlugin {
     }
 
     fn modulate(&self, data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
+        #[cfg(feature = "gpu")]
+        if let Some(ref ctx) = self.gpu {
+            return modulate::qpsk_modulate_rrc_gpu(data, config, ctx);
+        }
         modulate::qpsk_modulate(data, config)
     }
 
