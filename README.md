@@ -35,7 +35,7 @@ Several capabilities here are firsts or near-firsts in open-source amateur digit
 | **64QAM and SCFDMA-64QAM with soft demodulation** | Gray-coded 64QAM with max-log-MAP soft demodulator. Aggressive constellation for VHF/UHF links with proper soft FEC backing. |
 | **LDPC belief propagation** | Real rate-1/2 min-sum belief propagation — not a stub. First open-source HF software modem with working LDPC. |
 | **LLR-accumulating ARQ** | Soft LLR values accumulate across retransmissions (PACTOR-style Memory-ARQ), turning each retry into a soft combining gain. |
-| **GPU-accelerated DSP** | 9 wgpu compute kernels covering BPSK, RRC FIR, 256-pt FFT/IFFT, SC-FDMA (hard + soft), 64QAM, and 8PSK — all with automatic CPU fallback. See [GPU-accelerated features](#gpu-accelerated-features). |
+| **GPU-accelerated DSP** | 11 wgpu compute kernels covering BPSK, RRC FIR, 256-pt FFT/IFFT, SC-FDMA (hard + soft, all constellations), OFDM16/52 (hard + soft), 64QAM, and 8PSK — all with automatic CPU fallback. See [GPU-accelerated features](#gpu-accelerated-features). |
 | **QSY frequency agility** | Ed25519-signed QSY_REQ/LIST/VOTE/ACK wire protocol. Initiator and responder roles wired into the daemon; rig CAT control via rigctld. |
 | **FreeDV authenticated voice** *(planned)* | Ed25519 per-frame signing piggybacked on the codec2 embedded data channel — no FreeDV fork, no separate hardware. Roadmap FF-11. |
 
@@ -55,7 +55,7 @@ Capabilities that are firsts or near-firsts among open-source amateur digital-mo
 | 3 | **64QAM and SCFDMA-64QAM soft demodulation** | Gray-coded 64QAM max-log-MAP LLR demodulator; SCFDMA52-64QAM reaching 8 667 bps gross over a 2 kHz slice (`plugins/64qam`, `plugins/scfdma`) |
 | 4 | **Working LDPC belief propagation** | Rate-1/2 min-sum BP — not a passthrough stub; wired into `transmit_with_ldpc` / `receive_with_ldpc` in the modem engine (`crates/openpulse-core/src/ldpc.rs`) |
 | 5 | **LLR-accumulating Memory-ARQ** | Soft LLR values accumulated across retransmissions (PACTOR-style); mode switching on sustained NACK (`crates/openpulse-modem/src/arq_session.rs`) |
-| 6 | **GPU DSP across 5 modulation families** | 9 wgpu WGSL kernels (BPSK, RRC FIR, 256-pt FFT, SC-FDMA hard/soft, 64QAM, 8PSK) with CPU fallback — see [GPU-accelerated features](#gpu-accelerated-features) |
+| 6 | **GPU DSP across 6 modulation families** | 11 wgpu WGSL kernels (BPSK, RRC FIR, 256-pt FFT, SC-FDMA hard/soft covering QPSK–64QAM, OFDM16/52 hard/soft, 64QAM, 8PSK) with CPU fallback — see [GPU-accelerated features](#gpu-accelerated-features) |
 | 7 | **Ed25519-signed QSY frequency agility** | Full initiator + responder state machines wired into the daemon; SNR-ranked channel-list negotiation; rig CAT via rigctld (`crates/openpulse-qsy`) |
 | 8 | **Zstd pre-trained compression dictionary** | Dictionary trained on amateur/Winlink traffic patterns; negotiated at session setup and covered by handshake signature (`crates/openpulse-core/src/compression.rs`) |
 | 9 | **Trust-weighted multi-hop relay with query propagation** | `RelayForwarder` enforces hop limits and suppresses duplicates; `score_route` weights paths by trust level (Verified=4 … Reduced=1); `QueryForwarder` propagates route-discovery requests across nodes (`crates/openpulse-core/src/relay.rs`, `query_propagation.rs`) |
@@ -156,10 +156,12 @@ All GPU functions return `Option<T>` — `None` triggers automatic CPU fallback.
 | **BPSK timing search** | `bpsk_timing.wgsl` | `openpulse-gpu` / `bpsk-plugin` | Symbol-timing offset search via parallel energy integration |
 | **RRC FIR convolution** | `rrc_fir.wgsl` | `openpulse-gpu` | Causal RRC pulse-shaping filter; workgroup 256; wired into BPSK, QPSK, 8PSK, SC-FDMA |
 | **256-pt FFT / IFFT** | `fft256.wgsl` | `openpulse-gpu` | Cooley-Tukey radix-2 DIT; one workgroup per symbol; shared-memory in-place butterfly |
-| **Batch FFT (SC-FDMA hard demod)** | `fft256.wgsl` (batched) | `scfdma-plugin` | All per-symbol FFTs dispatched in one `gpu_fft256_batch` call; CPU DFT-CE + MMSE + demap |
-| **Batch FFT (SC-FDMA soft demod)** | `fft256.wgsl` (batched) | `scfdma-plugin` | Same batch dispatch; CPU DFT-CE + MMSE + LLR computation; wired into `ScFdmaPlugin::demodulate_soft` |
+| **Batch FFT (SC-FDMA hard demod)** | `fft256.wgsl` (batched) | `scfdma-plugin` | All per-symbol FFTs dispatched in one `gpu_fft256_batch` call; CPU DFT-CE + MMSE + demap; covers QPSK, 8PSK, 16QAM, 32QAM, 64QAM SC-FDMA variants |
+| **Batch FFT (SC-FDMA soft demod)** | `fft256.wgsl` (batched) | `scfdma-plugin` | Same batch dispatch; CPU DFT-CE + MMSE + LLR computation; all SC-FDMA constellations including 16QAM and 32QAM |
 | **64QAM soft demodulation** | `fft256.wgsl` (batched) | `64qam-plugin` | GPU batch FFT for symbol timing; CPU max-log-MAP LLR |
 | **8PSK soft demodulation** | `fft256.wgsl` (batched) | `psk8-plugin` | GPU batch FFT; CPU Gray-coded LLR |
+| **OFDM16/52 hard demodulation** | `fft256.wgsl` (batched) | `ofdm-plugin` | Batch FFT across all OFDM symbols; CPU LS channel estimation + ZF equalization + BPSK demap |
+| **OFDM16/52 soft demodulation** | `fft256.wgsl` (batched) | `ofdm-plugin` | Same batch FFT; CPU ZF equalization + BPSK LLR output |
 
 ### Adaptive rate profiles
 
