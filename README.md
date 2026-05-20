@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: README.md
 status: living
-last_updated: 2026-05-19
+last_updated: 2026-05-20
 ---
 
 # OpenPulseHF
@@ -18,6 +18,7 @@ hardware is required to build or test.
 
 [![CI](https://github.com/dc0sk/OpenPulseHF/actions/workflows/ci.yml/badge.svg)](https://github.com/dc0sk/OpenPulseHF/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![Donate via PayPal](https://img.shields.io/badge/Donate-PayPal-blue.svg?logo=paypal)](https://www.paypal.com/donate/?hosted_button_id=WY9U4MQ3ZAQWC)
 
 **Author:** Simon Keimer · [DC0SK](https://github.com/dc0sk)
 
@@ -42,58 +43,117 @@ simulated-channel paths only.
 
 ---
 
-## Feature highlights
+## Feature tables
 
-### Modulation and waveforms
+### Modulation types
 
-- **20+ registered modes** across 7 plugins: BPSK31–BPSK250, QPSK125–QPSK9600,
-  QPSK/8PSK -2000-RRC and -9600-RRC, 8PSK500–8PSK1000, 64QAM500–64QAM2000-RRC,
-  SCFDMA52-8PSK/16QAM/32QAM/64QAM, OFDM16/OFDM52, FSK4-ACK
-- RRC pulse shaping on all carrier modes; Gardner TED timing recovery
-- LMS/DFE adaptive equalizer on BPSK-RRC demodulation path
-- DFT-CE pilot-aided channel estimation in SC-FDMA (MMSE equalization)
-- AFC offset estimation in BPSK demodulator; offset tracked per session
-- Soft-decision (max-log-MAP) demodulators for 8PSK, SC-FDMA QAM, and 64QAM
-- Optional GPU-accelerated BPSK DSP kernels via wgpu (automatic CPU fallback)
+| Mode | Plugin | Baud | Bits/sym | Gross bps | Waveform | Notes |
+|---|---|---|---|---|---|---|
+| BPSK31 | `bpsk` | 31.25 | 1 | 31 | Single-carrier | Narrowband HF |
+| BPSK63 | `bpsk` | 62.5 | 1 | 63 | Single-carrier | |
+| BPSK100 | `bpsk` | 100 | 1 | 100 | Single-carrier | |
+| BPSK250 | `bpsk` | 250 | 1 | 250 | Single-carrier + RRC | |
+| QPSK125 | `qpsk` | 62.5 | 2 | 125 | Single-carrier | |
+| QPSK250 | `qpsk` | 125 | 2 | 250 | Single-carrier | |
+| QPSK500 | `qpsk` | 250 | 2 | 500 | Single-carrier | |
+| QPSK1000 | `qpsk` | 500 | 2 | 1 000 | Single-carrier | |
+| QPSK2000-RRC | `qpsk` | 1 000 | 2 | 2 000 | Single-carrier + RRC | |
+| QPSK9600-RRC | `qpsk` | 4 800 | 2 | 9 600 | Single-carrier + RRC | VHF/UHF |
+| 8PSK500 | `psk8` | 167 | 3 | 500 | Single-carrier | Gray-coded |
+| 8PSK1000 | `psk8` | 333 | 3 | 1 000 | Single-carrier | |
+| 8PSK2000-RRC | `psk8` | 667 | 3 | 2 000 | Single-carrier + RRC | |
+| 8PSK9600-RRC | `psk8` | 3 200 | 3 | 9 600 | Single-carrier + RRC | VHF/UHF |
+| 64QAM500 | `64qam` | 83 | 6 | 500 | Single-carrier | |
+| 64QAM1000 | `64qam` | 167 | 6 | 1 000 | Single-carrier | |
+| 64QAM2000-RRC | `64qam` | 333 | 6 | 2 000 | Single-carrier + RRC | Requires SNR ≥ 25 dB |
+| SCFDMA16 | `scfdma` | — | 2 | ~889 | SC-FDMA (16 SCs, QPSK) | DFT-CE + MMSE |
+| SCFDMA52 | `scfdma` | — | 2 | ~2 889 | SC-FDMA (52 SCs, QPSK) | |
+| SCFDMA52-8PSK | `scfdma` | — | 3 | ~4 333 | SC-FDMA (52 SCs, 8PSK) | |
+| SCFDMA52-16QAM | `scfdma` | — | 4 | ~5 778 | SC-FDMA (52 SCs, 16QAM) | |
+| SCFDMA52-32QAM | `scfdma` | — | 5 | ~7 222 | SC-FDMA (52 SCs, cross-32QAM) | |
+| SCFDMA52-64QAM | `scfdma` | — | 6 | ~8 667 | SC-FDMA (52 SCs, 64QAM) | |
+| SCFDMA52-64QAM-P4 | `scfdma` | — | 6 | ~8 167 | SC-FDMA (49 SCs, dense pilots) | |
+| OFDM16 | `ofdm` | — | 2 | ~444 | OFDM (16 SCs, QPSK) | LS + ZF |
+| OFDM52 | `ofdm` | — | 2 | ~1 444 | OFDM (52 SCs, QPSK) | |
+| FSK4-ACK | `fsk4` | 100 | 2 | 200 | 4-FSK | ACK control channel only |
 
-### Error correction and channel coding
+### MAC / channel access types
 
-| Layer | Algorithm |
-|---|---|
-| Reed-Solomon | RS(255, 223) + block interleaver — default for HF burst-error profiles |
-| Convolutional | Rate-1/2, K=3, G={7,5}, hard-decision Viterbi — better for AWGN-dominant paths |
-| LDPC | Rate-1/2 min-sum belief propagation — highest coding gain |
-| ARQ | Soft LLR accumulation across retransmissions; adaptive mode switching per retry |
+| Mechanism | Where used | Description |
+|---|---|---|
+| **0.3-persistence CSMA** | `openpulse-modem` | DCD energy check; transmit deferred when channel busy; configurable per `ModemEngine` |
+| **DCD energy threshold** | `openpulse-core` (dcd.rs) | RMS energy gate with configurable hold window (default 100 ms); forced-busy override for testing |
+| **HPX adaptive session** | `openpulse-core` (hpx.rs) | ACK/NACK-driven speed-ladder state machine; `RateAdapter` with per-level SNR gates and NACK-decrement hysteresis |
+| **ARQ retry loop** | `openpulse-modem` (arq_session.rs) | LLR-accumulating retransmission loop; mode switching on sustained NACK; configurable retry limit |
+| **QSY frequency agility** | `openpulse-qsy` | SNR-ranked channel-list negotiation; initiator transmits QSY_REQ → LIST → VOTE/ACK; responder role wired into daemon receive path |
+| **Cross-band repeater** | `openpulse-repeater` | Full-duplex digipeater; configurable trust-policy filter; `EnableRepeater`/`DisableRepeater` daemon commands |
+| **Mesh re-broadcast** | `openpulse-mesh` | TTL-limited beacon re-broadcast with (session_id, nonce) duplicate suppression |
+| **Multi-hop relay** | `openpulse-core` (relay.rs) | `RelayForwarder` with trust-weighted path scoring; hop-limit enforcement; `score_route`/`select_best_scored_route` |
+
+### Compression types
+
+| Algorithm | Layer | Direction | Notes |
+|---|---|---|---|
+| **LZ4** | Session (in-band) | Both | `lz4_flex`; transparent negotiation in ConReq/ConAck; fast, good for structured text |
+| **Zstd + HPX dictionary** | Session (in-band) | Both | Pre-trained dictionary on amateur/Winlink traffic; best compression ratio |
+| **None** | Session (in-band) | Both | Binary payloads that are already compressed |
+| **Gzip** | B2F wire (Type D) | Both | `flate2`; Winlink Type D proposal |
+| **LZHUF / LH5** | B2F wire (Type C) | Both | `oxiarc-lzhuf`; 4-byte LE prefix; Winlink Type C wire-compatible |
+
+Compression algorithm negotiated at session setup via `supported_compression` / `selected_compression` fields in ConReq/ConAck, covered by Ed25519 signature — post-signing injection is detectable.
+
+### ARQ types
+
+| Type | Crate / module | Description |
+|---|---|---|
+| **Stop-and-wait ARQ** | `openpulse-modem` (engine.rs) | Basic per-frame ACK; NACK triggers retransmit of last frame |
+| **LLR-accumulating ARQ (Memory-ARQ)** | `openpulse-modem` (arq_session.rs) | Soft LLR values accumulated across retransmissions (PACTOR-style); each retry adds soft-combining gain; mode switch on sustained NACK |
+| **SAR (Segmentation and Reassembly)** | `openpulse-core` (sar.rs) | 4-byte header (segment_id, fragment_index, fragment_total); max 64 005 bytes per segment; configurable reassembly timeout; duplicate-idempotent |
+| **QSY ACK** | `openpulse-qsy` | Ed25519-signed ACK/REJECT frames completing the QSY_REQ → LIST → VOTE → ACK negotiation loop |
+
+### Error correction types
+
+| Algorithm | Crate / module | Code rate | Strength | Notes |
+|---|---|---|---|---|
+| **Reed-Solomon RS(255,223)** | `openpulse-core` (fec.rs) | 223/255 ≈ 0.87 | 16-byte burst correction per block | Default for HF burst-error profiles; always paired with block interleaver |
+| **Reed-Solomon RS(255,191)** | `openpulse-core` (fec.rs) | 191/255 ≈ 0.75 | 32-byte burst correction per block | Higher erasure tolerance |
+| **Block interleaver** | `openpulse-core` (fec.rs) | 1.0 | Disperses burst errors | Configurable depth; used with RS by default |
+| **Convolutional K=3** | `openpulse-core` (conv.rs) | 1/2 | AWGN-dominant paths | G={7,5}; hard-decision Viterbi; better than RS at random-error BER 1% |
+| **LDPC rate-1/2** | `openpulse-core` (ldpc.rs) | 1/2 | Highest coding gain | Min-sum belief propagation; configurable iterations; first open-source HF modem with working LDPC |
+| **Concatenated RS + Conv** | `openpulse-core` | ~0.44 | Strong burst + AWGN | RS outer, Conv inner |
+| **Short-block FEC** | `openpulse-core` | varies | ACK/control frames | For FSK4-ACK and small control payloads |
+
+### GPU-accelerated features
+
+All GPU functions return `Option<T>` — `None` triggers automatic CPU fallback. Gated by `#[cfg(feature = "gpu")]`; `--no-default-features` builds use CPU paths throughout.
+
+| Feature | Kernel | Crate / file | Description |
+|---|---|---|---|
+| **BPSK modulation** | `bpsk_modulate.wgsl` | `openpulse-gpu` / `bpsk-plugin` | GPU symbol mapping and carrier generation |
+| **BPSK IQ demodulation** | `bpsk_iq_demod.wgsl` | `openpulse-gpu` / `bpsk-plugin` | Parallel IQ correlation across all sample offsets |
+| **BPSK timing search** | `bpsk_timing.wgsl` | `openpulse-gpu` / `bpsk-plugin` | Symbol-timing offset search via parallel energy integration |
+| **RRC FIR convolution** | `rrc_fir.wgsl` | `openpulse-gpu` | Causal RRC pulse-shaping filter; workgroup 256; wired into BPSK, QPSK, 8PSK, SC-FDMA |
+| **256-pt FFT / IFFT** | `fft256.wgsl` | `openpulse-gpu` | Cooley-Tukey radix-2 DIT; one workgroup per symbol; shared-memory in-place butterfly |
+| **Batch FFT (SC-FDMA hard demod)** | `fft256.wgsl` (batched) | `scfdma-plugin` | All per-symbol FFTs dispatched in one `gpu_fft256_batch` call; CPU DFT-CE + MMSE + demap |
+| **Batch FFT (SC-FDMA soft demod)** | `fft256.wgsl` (batched) | `scfdma-plugin` | Same batch dispatch; CPU DFT-CE + MMSE + LLR computation; wired into `ScFdmaPlugin::demodulate_soft` |
+| **64QAM soft demodulation** | `fft256.wgsl` (batched) | `64qam-plugin` | GPU batch FFT for symbol timing; CPU max-log-MAP LLR |
+| **8PSK soft demodulation** | `fft256.wgsl` (batched) | `psk8-plugin` | GPU batch FFT; CPU Gray-coded LLR |
 
 ### Adaptive rate profiles
 
 Six `SessionProfile` mappings from speed levels to modes, driven by ACK/NACK feedback
 and per-level SNR floor/ceiling gates:
 
-| Profile | SL range | Initial | Top mode |
-|---|---|---|---|
-| `hpx_hf` | SL2–SL8 | SL2 | SCFDMA52-8PSK |
-| `hpx_narrowband` | SL8–SL11 | SL8 | 8PSK2000-RRC |
-| `hpx_wideband` | SL8–SL11 | SL8 | 8PSK1000 |
-| `hpx_ofdm_hf` | SL5–SL6 | SL5 | OFDM52 |
-| `hpx_narrowband_hd` | SL8–SL9 | SL8 | 8PSK9600-RRC |
-| `hpx_wideband_hd` | SL12–SL15 | SL12 | 64QAM2000-RRC |
+| Profile | SL range | Initial | Top mode | Target link |
+|---|---|---|---|---|
+| `hpx_hf` | SL2–SL8 | SL2 | SCFDMA52-8PSK | HF ionospheric |
+| `hpx_narrowband` | SL8–SL11 | SL8 | 8PSK2000-RRC | Narrowband HF / VHF |
+| `hpx_wideband` | SL8–SL11 | SL8 | 8PSK1000 | Wideband HF |
+| `hpx_ofdm_hf` | SL5–SL6 | SL5 | OFDM52 | HF OFDM ladder |
+| `hpx_narrowband_hd` | SL8–SL9 | SL8 | 8PSK9600-RRC | VHF/UHF narrowband |
+| `hpx_wideband_hd` | SL12–SL15 | SL12 | 64QAM2000-RRC | VHF/UHF FM / satellite |
 
-`hpx_wideband_hd` targets VHF/UHF FM, microwave, and satellite links (SNR 16–40 dB).
-It is not suitable for HF ionospheric paths.
-
-### Compression
-
-Three algorithms negotiated at session setup, transparent to higher layers:
-
-| Algorithm | Use case |
-|---|---|
-| LZ4 | Low-latency; good for structured text and log payloads |
-| Zstd + pre-trained HPX dictionary | Best ratio on amateur/Winlink message traffic |
-| None | Binary payloads that don't compress |
-
-B2F/Winlink wire layer additionally supports **Gzip** (Type D) and **LZHUF/LH5** (Type C,
-Winlink-wire-compatible LE-prefix format).
+`hpx_wideband_hd` requires SNR ≥ 16 dB and is not suitable for HF ionospheric paths.
 
 ### Protocol and interfaces
 
