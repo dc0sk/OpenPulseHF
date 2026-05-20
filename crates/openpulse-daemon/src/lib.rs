@@ -34,7 +34,7 @@ use openpulse_modem::engine::SecureSessionParams;
 use openpulse_modem::ModemEngine;
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_qsy::frame::{
-    decode_unsigned as decode_qsy_frame, encode_unsigned as encode_qsy_frame,
+    decode_unsigned as decode_qsy_frame, encode_unsigned as encode_qsy_frame, QsyFrame,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_qsy::session::{QsyAction, QsyPolicy, QsySession};
@@ -709,9 +709,24 @@ pub async fn process_received_bytes(
     };
 
     let mode = active_mode.lock().await.clone();
+    let is_new_session = runtime_state.qsy_session.is_none();
     let session = runtime_state.qsy_session.get_or_insert_with(|| {
         QsySession::new_responder(QsyPolicy::default(), ConnectionTrustLevel::Unverified)
     });
+
+    // Notify connected clients that a remote station initiated QSY.
+    if is_new_session {
+        if let QsyFrame::Req {
+            ref token,
+            n_candidates,
+        } = frame
+        {
+            let _ = event_tx.send(ControlEvent::QsyIncoming {
+                token: token.clone(),
+                n_candidates,
+            });
+        }
+    }
 
     match session.apply(frame) {
         Ok(actions) => {
@@ -1589,5 +1604,72 @@ mod command_apply_tests {
             runtime_state.qsy_session.is_none(),
             "no session for non-UTF-8 bytes"
         );
+    }
+
+    /// End-to-end test: an initiator session generates a QSY_REQ frame; that
+    /// frame is fed to the responder path, which must create a session and emit
+    /// `QsyIncoming`.
+    #[tokio::test]
+    async fn qsy_initiator_req_drives_responder_session_and_emits_event() {
+        // ── Initiator: build the QSY_REQ frame ─────────────────────────────
+        let candidates: Vec<u64> = vec![14074000, 14070000, 7074000];
+        let mut init_session = QsySession::new_initiator();
+        let actions = init_session
+            .initiate(candidates)
+            .expect("initiator initiate should succeed");
+
+        // The first action must be SendFrame(Req).
+        let req_text = actions
+            .iter()
+            .find_map(|a| {
+                if let QsyAction::SendFrame(frame @ QsyFrame::Req { .. }) = a {
+                    Some(encode_qsy_frame(frame))
+                } else {
+                    None
+                }
+            })
+            .expect("initiator must produce SendFrame(Req) action");
+
+        // Extract the token from the encoded line for assertion.
+        let token_from_line = req_text.split_whitespace().nth(1).unwrap().to_string();
+
+        // ── Responder: feed the frame ───────────────────────────────────────
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(32);
+        let ev_tx = Arc::new(tx);
+        let mut runtime_state = RuntimeControlState::default();
+
+        process_received_bytes(
+            req_text.as_bytes(),
+            &mut runtime_state,
+            None,
+            &ev_tx,
+            &active_mode,
+            &mut engine,
+        )
+        .await;
+
+        // Responder must have a session.
+        assert!(
+            runtime_state.qsy_session.is_some(),
+            "responder session should be created on receiving QSY_REQ"
+        );
+
+        // A QsyIncoming event must have been broadcast with matching token.
+        let ev = rx.recv().await.expect("expected QsyIncoming event");
+        match ev {
+            ControlEvent::QsyIncoming {
+                token,
+                n_candidates,
+            } => {
+                assert_eq!(token, token_from_line, "QsyIncoming token must match frame");
+                assert_eq!(
+                    n_candidates, 3,
+                    "n_candidates must match initiator's candidate list length"
+                );
+            }
+            other => panic!("expected QsyIncoming, got {other:?}"),
+        }
     }
 }

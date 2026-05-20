@@ -521,6 +521,116 @@ fn qam64_point(bits: u8) -> Complex32 {
     Complex32::new(i, q)
 }
 
+/// GPU-accelerated soft demodulator.  Batches all per-symbol 256-point FFTs in
+/// a single GPU dispatch; channel estimation, MMSE equalization, IDFT, and LLR
+/// computation remain on CPU.  Returns `None` on GPU error (caller falls back).
+#[cfg(feature = "gpu")]
+pub fn scfdma_demodulate_soft_gpu(
+    samples: &[f32],
+    mode: &str,
+    ctx: &std::sync::Arc<openpulse_gpu::GpuContext>,
+) -> Option<Vec<f32>> {
+    let p = params_for_mode(mode)?;
+
+    let sync = modulate_with_params(&preamble_payload(&p), &p);
+    if samples.len() < sync.len() + SYM_LEN {
+        return None;
+    }
+
+    let offset = find_sync_offset(samples, &sync);
+    let payload_start = offset + sync.len();
+    if payload_start >= samples.len() {
+        return None;
+    }
+
+    let payload_samples = &samples[payload_start..];
+    let n_syms = payload_samples.len() / SYM_LEN;
+    if n_syms == 0 {
+        return None;
+    }
+
+    let fft_scale = 1.0 / (FFT_SIZE as f32).sqrt();
+    let mut packed: Vec<f32> = Vec::with_capacity(n_syms * FFT_SIZE * 2);
+    for sym_idx in 0..n_syms {
+        let start = sym_idx * SYM_LEN + CP;
+        if start + FFT_SIZE > payload_samples.len() {
+            break;
+        }
+        for &s in &payload_samples[start..start + FFT_SIZE] {
+            packed.push(s * fft_scale);
+            packed.push(0.0);
+        }
+    }
+    let actual_syms = packed.len() / (FFT_SIZE * 2);
+    if actual_syms == 0 {
+        return None;
+    }
+
+    let gpu_out = openpulse_gpu::gpu_fft256_batch(ctx, &packed, true)?;
+
+    let mut planner = rustfft::FftPlanner::<f32>::new();
+    let idft = planner.plan_fft_inverse(p.n_data);
+    let ce_idft = planner.plan_fft_inverse(p.n_pilots);
+    let idft_scale = 1.0 / (p.n_data as f32).sqrt();
+
+    let points = constellation_points(p.bits_per_sc);
+    let pilot_scs = crate::channel::pilot_positions(&p);
+    let mut h_pilots_buf = vec![Complex32::new(0.0, 0.0); pilot_scs.len()];
+    let mut all_llrs: Vec<f32> = Vec::with_capacity(actual_syms * p.bits_per_symbol());
+
+    for sym_idx in 0..actual_syms {
+        let base = sym_idx * FFT_SIZE * 2;
+        let freq: Vec<Complex32> = (0..FFT_SIZE)
+            .map(|k| Complex32::new(gpu_out[base + k * 2], gpu_out[base + k * 2 + 1]))
+            .collect();
+
+        let h_est = dft_ce_estimate(&p, &freq, &*ce_idft);
+        let pilot_noise_var = estimate_noise_var(&p, &freq, &h_est).max(1e-6);
+
+        for (buf, &sc) in h_pilots_buf.iter_mut().zip(pilot_scs.iter()) {
+            *buf = freq[sc] / Complex32::new(crate::params::PILOT_AMPLITUDE, 0.0);
+        }
+
+        let (llr_noise_var, alpha_avg) = mmse_llr_noise_var(&p, &h_est, pilot_noise_var);
+        let mut equalized = mmse_equalize(&p, &freq, &h_est, pilot_noise_var);
+
+        idft.process(&mut equalized);
+        let data_syms: Vec<Complex32> = equalized
+            .iter()
+            .map(|c| *c * idft_scale / alpha_avg)
+            .collect();
+
+        for sym in &data_syms {
+            all_llrs.extend(symbol_llrs(*sym, p.bits_per_sc, llr_noise_var, &points));
+        }
+    }
+
+    if all_llrs.len() < 16 {
+        return Some(all_llrs);
+    }
+
+    // Strip the 2-byte LE length prefix from the LLR stream, mirroring the CPU path.
+    let mut len_bytes = [0u8; 2];
+    for (byte_idx, byte_out) in len_bytes.iter_mut().enumerate() {
+        let mut v = 0u8;
+        for bit in 0..8 {
+            if all_llrs[byte_idx * 8 + bit].is_sign_negative() {
+                v |= 1u8 << bit;
+            }
+        }
+        *byte_out = v;
+    }
+    let payload_len = u16::from_le_bytes(len_bytes) as usize;
+    let payload_bits = payload_len.saturating_mul(8);
+    let available_payload_bits = all_llrs.len().saturating_sub(16);
+    let take = if payload_bits == 0 && available_payload_bits > 0 {
+        available_payload_bits - (available_payload_bits % 8)
+    } else {
+        payload_bits.min(available_payload_bits)
+    };
+    Some(all_llrs[16..16 + take].to_vec())
+}
+
 /// GPU-accelerated hard demodulator.  Batches all per-symbol 256-point FFTs
 /// into a single GPU dispatch; channel estimation, MMSE equalization, IDFT, and
 /// demapping remain on CPU.  Returns `None` on GPU error (caller falls back to CPU).
