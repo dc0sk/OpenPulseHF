@@ -171,6 +171,79 @@ fn compute_soft_llrs(syms: &[(f32, f32)]) -> Vec<f32> {
     llrs
 }
 
+/// GPU-accelerated hard demodulator.  Uses GPU RRC FIR for the matched filter;
+/// timing/carrier recovery and LMS equalization remain on CPU.
+/// Returns `None` for non-RRC modes or on GPU error (caller falls back to CPU).
+#[cfg(feature = "gpu")]
+pub fn psk8_demodulate_gpu(
+    samples: &[f32],
+    config: &ModulationConfig,
+    ctx: &std::sync::Arc<openpulse_gpu::GpuContext>,
+) -> Option<Result<Vec<u8>, ModemError>> {
+    // Only accelerate RRC modes; non-RRC path has no FIR to offload.
+    let alpha = if let PulseShape::Rrc { alpha } = config.pulse_shape {
+        alpha
+    } else if config.mode.ends_with("-RRC") {
+        0.35
+    } else {
+        return None;
+    };
+
+    let baud = parse_baud_rate(&config.mode).ok()?;
+    let fs = config.sample_rate as f32;
+    let fc = config.center_frequency;
+    let n = samples_per_symbol(fs, baud).ok()?;
+
+    if samples.len() < n * (PREAMBLE_SYMS + 1) {
+        return Some(Err(ModemError::Demodulation(
+            "signal too short".to_string(),
+        )));
+    }
+
+    let two_pi = 2.0 * PI;
+    let num_taps = RRC_SPAN_SYMBOLS * n + 1;
+    let coeffs = generate_rrc_coefficients(fs, baud, alpha, num_taps);
+    let group_delay = (num_taps - 1) / 2;
+
+    let i_mix: Vec<f32> = samples
+        .iter()
+        .enumerate()
+        .map(|(k, &s)| s * (two_pi * fc * k as f32 / fs).cos() * 2.0)
+        .collect();
+    let q_mix: Vec<f32> = samples
+        .iter()
+        .enumerate()
+        .map(|(k, &s)| -s * (two_pi * fc * k as f32 / fs).sin() * 2.0)
+        .collect();
+
+    let gpu_rrc = |mix: Vec<f32>| -> Option<Vec<f32>> {
+        let padded: Vec<f32> = mix
+            .iter()
+            .copied()
+            .chain(std::iter::repeat(0.0).take(group_delay))
+            .collect();
+        let filtered = openpulse_gpu::gpu_rrc_fir(ctx, &padded, &coeffs)?;
+        Some(filtered[group_delay..].to_vec())
+    };
+
+    let i_bb = gpu_rrc(i_mix)?;
+    let q_bb = gpu_rrc(q_mix)?;
+
+    let initial_timing = find_timing_offset_bb_iq(&i_bb, &q_bb, n);
+    let mut syms = gardner_pll_sample_rrc(&i_bb, &q_bb, n, initial_timing);
+
+    if syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
+        return Some(Err(ModemError::Demodulation(
+            "no data symbols after preamble".to_string(),
+        )));
+    }
+
+    syms = psk8_lms_equalize(&syms, &config.mode);
+    let data = syms[PREAMBLE_SYMS..(syms.len() - TAIL_SYMS)].to_vec();
+    let bits = symbols_to_bits(&data);
+    Some(Ok(bits_to_bytes(&bits)))
+}
+
 /// GPU-accelerated soft demodulator. Falls back to the CPU path if the GPU
 /// returns `None`.
 #[cfg(feature = "gpu")]

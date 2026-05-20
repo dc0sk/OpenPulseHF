@@ -416,6 +416,83 @@ pub fn qam64_demodulate_soft_gpu(
     qam64_demodulate_soft(samples, config)
 }
 
+/// GPU-accelerated hard demodulator.  Uses GPU RRC FIR for the matched filter;
+/// timing recovery and symbol decisions remain on CPU.
+/// Falls back to the CPU path if the GPU returns `None`.
+#[cfg(feature = "gpu")]
+pub fn qam64_demodulate_gpu(
+    samples: &[f32],
+    config: &ModulationConfig,
+    ctx: &std::sync::Arc<openpulse_gpu::GpuContext>,
+) -> Option<Result<Vec<u8>, ModemError>> {
+    let alpha = rrc_alpha(config)?; // only accelerate RRC modes
+
+    let baud = parse_baud_rate(&config.mode).ok()?;
+    let fs = config.sample_rate as f32;
+    let fc = config.center_frequency;
+    let n = samples_per_symbol(fs, baud).ok()?;
+
+    if samples.len() < n * (PREAMBLE_SYMS + 1) {
+        return Some(Err(ModemError::Demodulation("signal too short".into())));
+    }
+
+    let two_pi = 2.0 * std::f32::consts::PI;
+    let num_taps = RRC_SPAN_SYMBOLS * n + 1;
+    let coeffs = generate_rrc_coefficients(fs, baud, alpha, num_taps);
+    let group_delay = (num_taps - 1) / 2;
+
+    let i_mix: Vec<f32> = samples
+        .iter()
+        .enumerate()
+        .map(|(k, &s)| s * (two_pi * fc * k as f32 / fs).cos() * 2.0)
+        .collect();
+    let q_mix: Vec<f32> = samples
+        .iter()
+        .enumerate()
+        .map(|(k, &s)| -s * (two_pi * fc * k as f32 / fs).sin() * 2.0)
+        .collect();
+
+    let gpu_rrc = |mix: Vec<f32>| -> Option<Vec<f32>> {
+        let padded: Vec<f32> = mix
+            .iter()
+            .copied()
+            .chain(std::iter::repeat(0.0).take(group_delay))
+            .collect();
+        let filtered = openpulse_gpu::gpu_rrc_fir(ctx, &padded, &coeffs)?;
+        Some(filtered[group_delay..].to_vec())
+    };
+
+    let i_bb = gpu_rrc(i_mix)?;
+    let q_bb = gpu_rrc(q_mix)?;
+
+    let initial_timing = find_timing_offset_bb(&i_bb, &q_bb, n);
+    let start = initial_timing.min(i_bb.len());
+    let mut det = GardnerDetector::new(n, 0.02);
+    det.pre_arm();
+    let mut i_out = Vec::new();
+    let mut q_out = Vec::new();
+    for (idx, &s_i) in i_bb[start..].iter().enumerate() {
+        if det.update(s_i).is_some() {
+            let s_q = q_bb.get(start + idx).copied().unwrap_or(0.0);
+            i_out.push(s_i);
+            q_out.push(s_q);
+        }
+    }
+
+    if i_out.len() <= PREAMBLE_SYMS + TAIL_SYMS {
+        return Some(Err(ModemError::Demodulation(
+            "no data symbols after preamble".into(),
+        )));
+    }
+
+    let data_start = PREAMBLE_SYMS;
+    let data_end = i_out.len() - TAIL_SYMS;
+    Some(Ok(symbols_to_bytes(
+        &i_out[data_start..data_end],
+        &q_out[data_start..data_end],
+    )))
+}
+
 fn rrc_alpha(config: &ModulationConfig) -> Option<f32> {
     if let PulseShape::Rrc { alpha } = config.pulse_shape {
         Some(alpha)
