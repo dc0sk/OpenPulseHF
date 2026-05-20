@@ -17,22 +17,12 @@ shipped and merged.  See `docs/dev/roadmap.md` for the full history with PR numb
 
 Ordered by priority.  Items marked **[deferred]** have no target date.
 
-### 1 — FreeDV frame signing (FF-11)
+### 1 — FreeDV frame signing (FF-11) ✅ Already shipped
 
-**Goal:** Ed25519 per-frame signature piggybacked on the codec2 embedded data channel.
-No FreeDV fork required; a thin external shim encodes the signature into the 4-byte
-data bits available in each codec2 frame and verifies them on the receive path.
-
-**Acceptance criteria:**
-- `crates/openpulse-freedv/` (new crate): `FreeDvSigner` that encodes/decodes a
-  truncated Ed25519 signature across the codec2 data channel, fragmented over N frames.
-- `FreeDvSigner::sign_frame(codec2_bits, signing_key)` appends the next signature
-  fragment to the outgoing codec2 bit-stream.
-- `FreeDvSigner::verify_frame(codec2_bits, verifying_key) -> Option<bool>` returns
-  `Some(true/false)` once a complete signature has accumulated, `None` otherwise.
-- Round-trip test: encode 4 frames, verify signature matches; tampered bit returns `false`.
-- No dependency on any FreeDV C library in the library crate (FFI optional; pure-Rust
-  codec2 fragment codec acceptable).
+`crates/openpulse-freedv-auth` is complete: `AuthBeacon` (Ed25519 sign/verify),
+`FreeDvDataPort` (UDP to FreeDV Qt-GUI data port), `BeaconScheduler` (interval firing),
+`TrustVerdict` + `VerdictServer` (Unix socket for UI polling).  5 integration tests pass.
+No further work required; close this item.
 
 ---
 

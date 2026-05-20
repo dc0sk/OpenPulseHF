@@ -37,7 +37,7 @@ Several capabilities here are firsts or near-firsts in open-source amateur digit
 | **LLR-accumulating ARQ** | Soft LLR values accumulate across retransmissions (PACTOR-style Memory-ARQ), turning each retry into a soft combining gain. |
 | **GPU-accelerated DSP** | 11 wgpu compute kernels covering BPSK, RRC FIR, 256-pt FFT/IFFT, SC-FDMA (hard + soft, all constellations), OFDM16/52 (hard + soft), 64QAM, and 8PSK — all with automatic CPU fallback. See [GPU-accelerated features](#gpu-accelerated-features). |
 | **QSY frequency agility** | Ed25519-signed QSY_REQ/LIST/VOTE/ACK wire protocol. Initiator and responder roles wired into the daemon; rig CAT control via rigctld. |
-| **FreeDV authenticated voice** *(planned)* | Ed25519 per-frame signing piggybacked on the codec2 embedded data channel — no FreeDV fork, no separate hardware. Roadmap FF-11. |
+| **FreeDV authenticated voice** | Ed25519-signed authentication beacons transmitted via the FreeDV Qt-GUI UDP data port (`openpulse-freedv-auth`); no FreeDV fork required. |
 
 On-air regulatory validation has not been completed. All tests use loopback and
 simulated-channel paths only.
@@ -61,7 +61,7 @@ Capabilities that are firsts or near-firsts among open-source amateur digital-mo
 | 9 | **Trust-weighted multi-hop relay with query propagation** | `RelayForwarder` enforces hop limits and suppresses duplicates; `score_route` weights paths by trust level (Verified=4 … Reduced=1); `QueryForwarder` propagates route-discovery requests across nodes (`crates/openpulse-core/src/relay.rs`, `query_propagation.rs`) |
 | 10 | **Cross-band full-duplex repeater** | `CrossBandRepeater` runs in a daemon-managed thread; `EnableRepeater`/`DisableRepeater` control commands; trust-policy filtering on forwarded frames (`crates/openpulse-repeater`) |
 | 11 | **Mesh broadcast daemon with authenticated beacons** | TTL-limited re-broadcast; (session_id, nonce) duplicate suppression; beacon payloads carry signed peer descriptors where the peer ID *is* the Ed25519 verifying key (`crates/openpulse-mesh`) |
-| 12 | **FreeDV frame signing via codec2 data channel** *(planned — roadmap FF-11)* | External shim adding Ed25519 per-frame signatures to FreeDV voice transmissions using the codec2 embedded data channel; no FreeDV fork required |
+| 12 | **FreeDV frame signing via codec2 data channel** | External shim adding Ed25519 per-frame signatures to FreeDV voice transmissions using the codec2 embedded data channel; no FreeDV fork required |
 
 ---
 
@@ -200,7 +200,7 @@ and per-level SNR floor/ceiling gates:
 - **Three trust profiles**: OpenTrust, Balanced, Strict — configurable per deployment
 - **PKI service** — Ed25519 trust-bundle signing with PostgreSQL persistence
 - **Signed peer descriptors** — self-authenticating identity; peer ID is the verifying key bytes
-- **FreeDV frame signing** *(planned, roadmap FF-11)* — Ed25519 signatures over the codec2 embedded data channel; authenticates voice transmissions without modifying FreeDV itself
+- **FreeDV frame signing** (`crates/openpulse-freedv-auth`) — Ed25519 signatures over the codec2 embedded data channel; authenticates voice transmissions without modifying FreeDV itself
 
 ### Channel simulation
 
