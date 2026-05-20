@@ -13,6 +13,15 @@ pub fn ofdm_modulate(payload: &[u8], mode: &str) -> Vec<f32> {
     modulate_with_params(payload, &p)
 }
 
+/// Return interleaved I/Q samples at complex baseband (fc = 0 Hz).
+///
+/// OFDM uses Hermitian symmetry so the IFFT output is real; the Q channel is
+/// identically zero.  Interleaved layout: [I₀, Q₀, I₁, Q₁, …].
+pub fn ofdm_modulate_iq(payload: &[u8], mode: &str) -> Vec<f32> {
+    let real = ofdm_modulate(payload, mode);
+    real.iter().flat_map(|&s| [s, 0.0_f32]).collect()
+}
+
 fn modulate_with_params(payload: &[u8], p: &OfdmParams) -> Vec<f32> {
     // Prepend 2-byte LE length prefix.
     let len_bytes = (payload.len() as u16).to_le_bytes();
@@ -141,6 +150,7 @@ pub fn measure_papr(samples: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::demodulate::ofdm_demodulate;
 
     #[test]
     fn clip_reduces_papr_to_target() {
@@ -148,5 +158,26 @@ mod tests {
         // Clipping is applied inside ofdm_modulate; verify result is within target.
         let papr = measure_papr(&samples);
         assert!(papr <= TARGET_PAPR_DB + 0.5, "PAPR={papr:.1} dB > target");
+    }
+
+    #[test]
+    fn ofdm16_iq_i_channel_matches_modulate() {
+        let payload = b"IQ test payload";
+        let iq = ofdm_modulate_iq(payload, "OFDM16");
+        let real = ofdm_modulate(payload, "OFDM16");
+        assert_eq!(iq.len(), real.len() * 2);
+        let i_ch: Vec<f32> = iq.iter().step_by(2).copied().collect();
+        assert_eq!(i_ch, real, "I channel must match ofdm_modulate output");
+        let q_ch: Vec<f32> = iq.iter().skip(1).step_by(2).copied().collect();
+        assert!(q_ch.iter().all(|&q| q == 0.0), "Q channel must be zero");
+    }
+
+    #[test]
+    fn ofdm16_iq_round_trip() {
+        let payload = b"round trip IQ ofdm16";
+        let iq = ofdm_modulate_iq(payload, "OFDM16");
+        let i_ch: Vec<f32> = iq.iter().step_by(2).copied().collect();
+        let decoded = ofdm_demodulate(&i_ch, "OFDM16");
+        assert_eq!(decoded, payload);
     }
 }

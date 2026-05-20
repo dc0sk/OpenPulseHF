@@ -20,6 +20,15 @@ pub fn scfdma_modulate(payload: &[u8], mode: &str) -> Vec<f32> {
     out
 }
 
+/// Return interleaved I/Q samples at complex baseband (fc = 0 Hz).
+///
+/// SC-FDMA uses Hermitian symmetry so the IFFT output is real; the Q channel is
+/// identically zero.  Interleaved layout: [I₀, Q₀, I₁, Q₁, …].
+pub fn scfdma_modulate_iq(payload: &[u8], mode: &str) -> Vec<f32> {
+    let real = scfdma_modulate(payload, mode);
+    real.iter().flat_map(|&s| [s, 0.0_f32]).collect()
+}
+
 pub(crate) fn preamble_payload(p: &ScFdmaParams) -> Vec<u8> {
     let bytes = (p.bits_per_symbol() * PREAMBLE_SYMBOLS) / 8;
     PREAMBLE_PATTERN
@@ -307,6 +316,7 @@ pub fn measure_papr(samples: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::demodulate::scfdma_demodulate;
 
     #[test]
     fn psk8_average_power_is_unit() {
@@ -424,5 +434,26 @@ mod tests {
                 assert_ne!(points[i], points[j], "64QAM points {i} and {j} collide");
             }
         }
+    }
+
+    #[test]
+    fn scfdma52_iq_i_channel_matches_modulate() {
+        let payload = b"IQ test payload";
+        let iq = scfdma_modulate_iq(payload, "SCFDMA52");
+        let real = scfdma_modulate(payload, "SCFDMA52");
+        assert_eq!(iq.len(), real.len() * 2);
+        let i_ch: Vec<f32> = iq.iter().step_by(2).copied().collect();
+        assert_eq!(i_ch, real, "I channel must match scfdma_modulate output");
+        let q_ch: Vec<f32> = iq.iter().skip(1).step_by(2).copied().collect();
+        assert!(q_ch.iter().all(|&q| q == 0.0), "Q channel must be zero");
+    }
+
+    #[test]
+    fn scfdma52_iq_round_trip() {
+        let payload = b"round trip IQ scfdma52";
+        let iq = scfdma_modulate_iq(payload, "SCFDMA52");
+        let i_ch: Vec<f32> = iq.iter().step_by(2).copied().collect();
+        let decoded = scfdma_demodulate(&i_ch, "SCFDMA52");
+        assert_eq!(decoded, payload);
     }
 }
