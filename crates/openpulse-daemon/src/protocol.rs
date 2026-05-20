@@ -141,6 +141,8 @@ pub enum ControlEvent {
     QsyPending { token: String },
     /// QSY decision recorded by daemon runtime.
     QsyDecision { token: String, accepted: bool },
+    /// Remote station initiated a QSY negotiation; received over RF.
+    QsyIncoming { token: String, n_candidates: u32 },
     /// Response to [`ControlCommand::GetConfig`].
     ConfigData { config: DaemonConfig },
     /// A message was stored (sent or received); broadcast to all clients.

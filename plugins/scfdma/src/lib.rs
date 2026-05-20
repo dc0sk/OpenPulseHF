@@ -168,6 +168,13 @@ impl ModulationPlugin for ScFdmaPlugin {
                 config.center_frequency
             )));
         }
+        #[cfg(feature = "gpu")]
+        if let Some(ref ctx) = self.gpu {
+            if let Some(result) = demodulate::scfdma_demodulate_soft_gpu(samples, &config.mode, ctx)
+            {
+                return Ok(result);
+            }
+        }
 
         Ok(scfdma_demodulate_soft(samples, &config.mode))
     }

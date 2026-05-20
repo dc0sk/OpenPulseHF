@@ -88,6 +88,12 @@ pub fn decode_unsigned(line: &str) -> Result<QsyFrame, QsyFrameError> {
         .next()
         .ok_or_else(|| QsyFrameError::Malformed("missing token".into()))?
         .to_string();
+    if token.len() > 64 {
+        return Err(QsyFrameError::Malformed(format!(
+            "token too long: {} bytes (max 64)",
+            token.len()
+        )));
+    }
     let rest = parts.next().unwrap_or("").trim();
 
     match verb {
@@ -262,5 +268,22 @@ mod tests {
             decode_signed(&line, &key.verifying_key()),
             Err(QsyFrameError::InvalidSignature)
         ));
+    }
+
+    #[test]
+    fn token_too_long_rejected() {
+        let long_token = "a".repeat(65);
+        let line = format!("QSY_REQ {long_token} 2");
+        assert!(matches!(
+            decode_unsigned(&line),
+            Err(QsyFrameError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn token_max_length_accepted() {
+        let token = "a".repeat(64);
+        let line = format!("QSY_REQ {token} 2");
+        assert!(decode_unsigned(&line).is_ok());
     }
 }

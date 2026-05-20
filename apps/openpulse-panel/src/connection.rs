@@ -286,6 +286,14 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
                 if accepted { "accepted" } else { "rejected" }
             ));
         }
+        ControlEvent::QsyIncoming {
+            token,
+            n_candidates,
+        } => {
+            st.push_log(format!(
+                "QSY incoming from remote: token {token}, {n_candidates} candidates requested"
+            ));
+        }
         ControlEvent::ConfigData { config } => {
             st.daemon_config = Some(config);
         }
