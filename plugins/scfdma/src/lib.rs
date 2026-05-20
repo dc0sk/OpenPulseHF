@@ -15,6 +15,7 @@
 //! - `SCFDMA52-64QAM`:    52 data SCs, 64QAM,      BW ≈ 2031 Hz, gross ~ 8,667 bps
 //! - `SCFDMA52-64QAM-P4`: 49 data SCs, 64QAM, denser pilots (16), gross ~ 8,167 bps
 
+pub mod adaptive_pilot;
 pub mod channel;
 pub mod demodulate;
 pub mod modulate;
@@ -22,12 +23,14 @@ pub mod params;
 
 #[cfg(feature = "gpu")]
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use openpulse_core::{
     error::ModemError,
     plugin::{ModulationConfig, ModulationPlugin, PluginInfo},
 };
 
+use crate::adaptive_pilot::AdaptivePilotState;
 use crate::demodulate::{scfdma_demodulate, scfdma_demodulate_soft};
 use crate::modulate::{scfdma_modulate, scfdma_modulate_iq};
 use crate::params::{params_for_mode, SAMPLE_RATE};
@@ -37,6 +40,7 @@ pub struct ScFdmaPlugin {
     info: PluginInfo,
     #[cfg(feature = "gpu")]
     gpu: Option<Arc<openpulse_gpu::GpuContext>>,
+    adaptive: Mutex<AdaptivePilotState>,
 }
 
 impl ScFdmaPlugin {
@@ -45,6 +49,7 @@ impl ScFdmaPlugin {
             info: Self::make_info(),
             #[cfg(feature = "gpu")]
             gpu: None,
+            adaptive: Mutex::new(AdaptivePilotState::new()),
         }
     }
 
@@ -54,7 +59,16 @@ impl ScFdmaPlugin {
         Self {
             info: Self::make_info(),
             gpu: Some(ctx),
+            adaptive: Mutex::new(AdaptivePilotState::new()),
         }
+    }
+
+    /// Return `ScFdmaParams` for `mode` with pilot spacing adapted to the current
+    /// smoothed coherence bandwidth estimate.
+    pub fn adaptive_params_for_mode(&self, mode: &str) -> Option<crate::params::ScFdmaParams> {
+        let base = params_for_mode(mode)?;
+        let coh_bw = self.adaptive.lock().ok()?.coh_bw_hz();
+        Some(base.with_pilot_density(coh_bw))
     }
 
     fn make_info() -> PluginInfo {
@@ -198,6 +212,11 @@ impl ModulationPlugin for ScFdmaPlugin {
 
     fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
         let p = params_for_mode(&config.mode)?;
+        if let Some(coh_bw) = crate::channel::estimate_coh_bw_hz(samples, &p) {
+            if let Ok(mut state) = self.adaptive.lock() {
+                state.update(coh_bw);
+            }
+        }
         crate::channel::estimate_cfo_hz(samples, &p)
     }
 }
@@ -445,6 +464,89 @@ mod tests {
             .estimate_afc_hz(&samples, &cfg)
             .expect("afc estimate");
         assert!(est.abs() < 5.0, "expected near-zero AFC, got {est:.2} Hz");
+    }
+
+    // Flat channel → high coherence BW estimate → sparse pilots.
+    #[test]
+    fn adaptive_pilot_density_flat_channel_stays_sparse() {
+        let plugin = ScFdmaPlugin::new();
+        let cfg = mod_config("SCFDMA52");
+        let payload: Vec<u8> = (0..64u8).collect();
+        let samples = plugin.modulate(&payload, &cfg).unwrap();
+        for _ in 0..10 {
+            plugin.estimate_afc_hz(&samples, &cfg);
+        }
+        let adapted = plugin
+            .adaptive_params_for_mode("SCFDMA52")
+            .expect("adaptive params");
+        assert!(
+            adapted.pilot_spacing >= 5,
+            "flat channel should use default/sparse pilots, got spacing={}",
+            adapted.pilot_spacing
+        );
+    }
+
+    // 2-tap multipath at delay=26 samples maximises frequency selectivity for 5-SC pilot spacing
+    // (phase step per pilot ≈ π → alternating high/low amplitude, B_c ≈ 57 Hz < 100 Hz → dense).
+    #[test]
+    fn adaptive_pilot_density_selective_channel_triggers_dense() {
+        let plugin = ScFdmaPlugin::new();
+        let cfg = mod_config("SCFDMA52");
+        let payload: Vec<u8> = (0..64u8).collect();
+        let samples = plugin.modulate(&payload, &cfg).unwrap();
+        let selective: Vec<f32> = samples
+            .iter()
+            .enumerate()
+            .map(|(i, &s)| s + if i >= 26 { samples[i - 26] * 0.7 } else { 0.0 })
+            .collect();
+        for _ in 0..10 {
+            plugin.estimate_afc_hz(&selective, &cfg);
+        }
+        let adapted = plugin
+            .adaptive_params_for_mode("SCFDMA52")
+            .expect("adaptive params");
+        assert_eq!(
+            adapted.pilot_spacing, 4,
+            "selective channel (2-tap, delay=26) should trigger dense pilots"
+        );
+    }
+
+    // After selective channel → dense, clean frames revert to sparse (EMA tracking).
+    #[test]
+    fn adaptive_pilot_density_reverts_to_sparse_after_channel_clears() {
+        let plugin = ScFdmaPlugin::new();
+        let cfg = mod_config("SCFDMA52");
+        let payload: Vec<u8> = (0..64u8).collect();
+        let samples = plugin.modulate(&payload, &cfg).unwrap();
+        let selective: Vec<f32> = samples
+            .iter()
+            .enumerate()
+            .map(|(i, &s)| s + if i >= 26 { samples[i - 26] * 0.7 } else { 0.0 })
+            .collect();
+
+        // Drive to dense state.
+        for _ in 0..8 {
+            plugin.estimate_afc_hz(&selective, &cfg);
+        }
+        assert_eq!(
+            plugin
+                .adaptive_params_for_mode("SCFDMA52")
+                .unwrap()
+                .pilot_spacing,
+            4,
+            "should be dense after selective channel"
+        );
+
+        // Feed 14 clean frames; EMA must revert above the 300 Hz threshold.
+        for _ in 0..14 {
+            plugin.estimate_afc_hz(&samples, &cfg);
+        }
+        let adapted = plugin.adaptive_params_for_mode("SCFDMA52").unwrap();
+        assert!(
+            adapted.pilot_spacing >= 5,
+            "should revert to sparse after clean channel, got spacing={}",
+            adapted.pilot_spacing
+        );
     }
 
     // AFC estimator: synthetic signal with known inter-symbol pilot phase drift.

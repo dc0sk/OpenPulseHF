@@ -5,7 +5,9 @@
 use num_complex::Complex32;
 use rustfft::{Fft, FftPlanner};
 
-use crate::params::{ScFdmaParams, CP, FFT_SIZE, PILOT_AMPLITUDE, SAMPLE_RATE, SYM_LEN};
+use crate::params::{
+    ScFdmaParams, CP, FFT_SIZE, PILOT_AMPLITUDE, SAMPLE_RATE, SC_SPACING_HZ, SYM_LEN,
+};
 
 /// Return the absolute SC indices of all pilot subcarriers for `p`.
 pub fn pilot_positions(p: &ScFdmaParams) -> Vec<usize> {
@@ -305,6 +307,62 @@ pub fn mmse_equalize(
         out.push(eq);
     }
     out
+}
+
+/// Estimate channel coherence bandwidth in Hz from inter-pilot complex correlations.
+///
+/// Under the exponential PDP model: |r₁|² ≈ 1 / (1 + (Δf_pilot/B_c)²), which
+/// inverts to B_c = Δf_pilot / √(1/|r₁|² − 1).  Returns `None` when fewer than
+/// two symbols or fewer than four pilots are available.
+pub fn estimate_coh_bw_hz(samples: &[f32], p: &ScFdmaParams) -> Option<f32> {
+    let n_syms = samples.len() / SYM_LEN;
+    if n_syms < 2 {
+        return None;
+    }
+    let pilots = pilot_positions(p);
+    let n_pilots = pilots.len();
+    if n_pilots < 4 {
+        return None;
+    }
+
+    let n_use = n_syms.min(8);
+    let scale = 1.0 / (FFT_SIZE as f32).sqrt();
+    let mut planner = FftPlanner::<f32>::new();
+    let fft = planner.plan_fft_forward(FFT_SIZE);
+
+    let mut r1_num = Complex32::new(0.0, 0.0);
+    let mut pow0 = 0.0f32;
+    let mut pow1 = 0.0f32;
+
+    for sym_idx in 0..n_use {
+        let start = sym_idx * SYM_LEN + CP;
+        if start + FFT_SIZE > samples.len() {
+            break;
+        }
+        let mut freq: Vec<Complex32> = samples[start..start + FFT_SIZE]
+            .iter()
+            .map(|&s| Complex32::new(s * scale, 0.0))
+            .collect();
+        fft.process(&mut freq);
+        let h: Vec<Complex32> = pilots
+            .iter()
+            .map(|&k| freq[k] / Complex32::new(PILOT_AMPLITUDE, 0.0))
+            .collect();
+        for i in 0..n_pilots - 1 {
+            r1_num += h[i].conj() * h[i + 1];
+            pow0 += h[i].norm_sqr();
+            pow1 += h[i + 1].norm_sqr();
+        }
+    }
+
+    let denom = (pow0 * pow1).sqrt();
+    if denom < 1e-8 {
+        return None;
+    }
+    let r1_mag = (r1_num.norm() / denom).clamp(0.001, 0.9999);
+    let pilot_sep_hz = p.pilot_spacing as f32 * SC_SPACING_HZ;
+    let ratio_sq = (1.0 / (r1_mag * r1_mag) - 1.0).max(1e-6);
+    Some((pilot_sep_hz / ratio_sq.sqrt()).clamp(10.0, 2000.0))
 }
 
 /// Estimate the carrier frequency offset (CFO) in Hz using inter-symbol pilot
