@@ -7,12 +7,17 @@
 pub mod demodulate;
 pub mod modulate;
 
+#[cfg(feature = "gpu")]
+use std::sync::Arc;
+
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin, PluginInfo};
 
 /// 64QAM modulation plugin.
 pub struct Qam64Plugin {
     info: PluginInfo,
+    #[cfg(feature = "gpu")]
+    gpu: Option<Arc<openpulse_gpu::GpuContext>>,
 }
 
 impl Default for Qam64Plugin {
@@ -22,22 +27,37 @@ impl Default for Qam64Plugin {
 }
 
 impl Qam64Plugin {
-    /// Create the plugin.
+    /// Create the plugin with CPU-only DSP.
     pub fn new() -> Self {
         Self {
-            info: PluginInfo {
-                name: "64QAM".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                description: "64-Quadrature Amplitude Modulation (6 bits/symbol, Gray-coded)"
-                    .to_string(),
-                author: "OpenPulse Contributors".to_string(),
-                supported_modes: vec![
-                    "64QAM500".to_string(),
-                    "64QAM1000".to_string(),
-                    "64QAM2000-RRC".to_string(),
-                ],
-                trait_version_required: "1.0".to_string(),
-            },
+            info: Self::make_info(),
+            #[cfg(feature = "gpu")]
+            gpu: None,
+        }
+    }
+
+    /// Create the plugin with GPU-accelerated soft demodulation.
+    #[cfg(feature = "gpu")]
+    pub fn with_gpu(ctx: Arc<openpulse_gpu::GpuContext>) -> Self {
+        Self {
+            info: Self::make_info(),
+            gpu: Some(ctx),
+        }
+    }
+
+    fn make_info() -> PluginInfo {
+        PluginInfo {
+            name: "64QAM".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            description: "64-Quadrature Amplitude Modulation (6 bits/symbol, Gray-coded)"
+                .to_string(),
+            author: "OpenPulse Contributors".to_string(),
+            supported_modes: vec![
+                "64QAM500".to_string(),
+                "64QAM1000".to_string(),
+                "64QAM2000-RRC".to_string(),
+            ],
+            trait_version_required: "1.0".to_string(),
         }
     }
 }
@@ -64,6 +84,10 @@ impl ModulationPlugin for Qam64Plugin {
         samples: &[f32],
         config: &ModulationConfig,
     ) -> Result<Vec<f32>, ModemError> {
+        #[cfg(feature = "gpu")]
+        if let Some(ref ctx) = self.gpu {
+            return demodulate::qam64_demodulate_soft_gpu(samples, config, ctx);
+        }
         demodulate::qam64_demodulate_soft(samples, config)
     }
 

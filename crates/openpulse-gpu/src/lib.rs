@@ -7,9 +7,11 @@
 
 pub mod demodulate;
 pub mod modulate;
+pub mod soft_demod;
 
 pub use demodulate::{bpsk_iq_demod_gpu, timing_offset_search_gpu};
 pub use modulate::bpsk_modulate_gpu;
+pub use soft_demod::gpu_soft_demod;
 
 use std::sync::Arc;
 
@@ -32,6 +34,7 @@ pub struct GpuContext {
     pub(crate) bpsk_mod_pipeline: wgpu::ComputePipeline,
     pub(crate) bpsk_demod_pipeline: wgpu::ComputePipeline,
     pub(crate) timing_search_pipeline: wgpu::ComputePipeline,
+    pub(crate) soft_demod_pipeline: wgpu::ComputePipeline,
 }
 
 impl GpuContext {
@@ -76,6 +79,11 @@ impl GpuContext {
             include_str!("shaders/timing_search.wgsl"),
             "timing-search",
         );
+        let soft_demod_pipeline = Self::make_pipeline(
+            &device,
+            include_str!("shaders/soft_demod.wgsl"),
+            "soft-demod",
+        );
 
         Some(Arc::new(Self {
             device,
@@ -83,6 +91,7 @@ impl GpuContext {
             bpsk_mod_pipeline,
             bpsk_demod_pipeline,
             timing_search_pipeline,
+            soft_demod_pipeline,
         }))
     }
 
