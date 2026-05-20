@@ -171,6 +171,39 @@ fn compute_soft_llrs(syms: &[(f32, f32)]) -> Vec<f32> {
     llrs
 }
 
+/// GPU-accelerated soft demodulator. Falls back to the CPU path if the GPU
+/// returns `None`.
+#[cfg(feature = "gpu")]
+pub fn psk8_demodulate_soft_gpu(
+    samples: &[f32],
+    config: &ModulationConfig,
+    ctx: &std::sync::Arc<openpulse_gpu::GpuContext>,
+) -> Result<Vec<f32>, ModemError> {
+    let data = extract_data_symbols(samples, config)?;
+
+    let pts_iq: Vec<(f32, f32)> = [
+        (false, false, false),
+        (false, false, true),
+        (false, true, false),
+        (false, true, true),
+        (true, false, false),
+        (true, false, true),
+        (true, true, false),
+        (true, true, true),
+    ]
+    .iter()
+    .map(|&(b2, b1, b0)| gray_map_8psk(b2, b1, b0))
+    .collect();
+    let bit_table: Vec<u32> = (0..8u32).collect();
+
+    if let Some(raw) = openpulse_gpu::gpu_soft_demod(ctx, &data, &pts_iq, &bit_table, 3) {
+        let n_complete_bytes = (data.len() * 3) / 8;
+        return Ok(raw[..n_complete_bytes * 8].to_vec());
+    }
+    // GPU returned None — fall back to CPU.
+    psk8_demodulate_soft(samples, config)
+}
+
 /// RRC demodulation: downmix → matched RRC filter → brute-force timing → sample.
 fn psk8_demodulate_rrc(
     samples: &[f32],

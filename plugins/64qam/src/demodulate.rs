@@ -368,6 +368,54 @@ pub fn qam64_demodulate_soft(
     Ok(llrs)
 }
 
+/// GPU-accelerated soft demodulator. Falls back to the CPU path if the GPU
+/// returns `None`.
+#[cfg(feature = "gpu")]
+pub fn qam64_demodulate_soft_gpu(
+    samples: &[f32],
+    config: &ModulationConfig,
+    ctx: &std::sync::Arc<openpulse_gpu::GpuContext>,
+) -> Result<Vec<f32>, ModemError> {
+    let baud = parse_baud_rate(&config.mode)?;
+    let fs = config.sample_rate as f32;
+    let fc = config.center_frequency;
+    let n = samples_per_symbol(fs, baud)?;
+
+    if samples.len() < n * (PREAMBLE_SYMS + 1) {
+        return Err(ModemError::Demodulation("signal too short".into()));
+    }
+
+    let (i_syms, q_syms) = if let Some(alpha) = rrc_alpha(config) {
+        qam64_demodulate_rrc(samples, n, baud, fc, fs, alpha)
+    } else {
+        let offset = find_timing_offset(samples, n, fc, fs);
+        demodulate_iq(samples, n, fc, fs, offset)
+    };
+
+    if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
+        return Err(ModemError::Demodulation(
+            "no data symbols after preamble".into(),
+        ));
+    }
+
+    let data_start = PREAMBLE_SYMS;
+    let data_end = i_syms.len() - TAIL_SYMS;
+    let syms: Vec<(f32, f32)> = i_syms[data_start..data_end]
+        .iter()
+        .zip(q_syms[data_start..data_end].iter())
+        .map(|(&i, &q)| (i, q))
+        .collect();
+
+    let constellation: Vec<(f32, f32)> = (0..64u8).map(gray_map_64qam).collect();
+    let bit_table: Vec<u32> = (0..64u32).collect();
+
+    if let Some(llrs) = openpulse_gpu::gpu_soft_demod(ctx, &syms, &constellation, &bit_table, 6) {
+        return Ok(llrs);
+    }
+    // GPU returned None — fall back to CPU.
+    qam64_demodulate_soft(samples, config)
+}
+
 fn rrc_alpha(config: &ModulationConfig) -> Option<f32> {
     if let PulseShape::Rrc { alpha } = config.pulse_shape {
         Some(alpha)

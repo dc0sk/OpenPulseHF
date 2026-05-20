@@ -3,12 +3,17 @@
 pub mod demodulate;
 pub mod modulate;
 
+#[cfg(feature = "gpu")]
+use std::sync::Arc;
+
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin, PluginInfo};
 
 /// 8PSK modulation plugin.
 pub struct Psk8Plugin {
     info: PluginInfo,
+    #[cfg(feature = "gpu")]
+    gpu: Option<Arc<openpulse_gpu::GpuContext>>,
 }
 
 impl Default for Psk8Plugin {
@@ -18,30 +23,45 @@ impl Default for Psk8Plugin {
 }
 
 impl Psk8Plugin {
-    /// Create the plugin.
+    /// Create the plugin with CPU-only DSP.
     pub fn new() -> Self {
         Self {
-            info: PluginInfo {
-                name: "8PSK".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                description: "8-Phase-Shift Keying with Gray-mapped tribits".to_string(),
-                author: "OpenPulse Contributors".to_string(),
-                supported_modes: vec![
-                    "8PSK500".to_string(),
-                    "8PSK1000".to_string(),
-                    "8PSK1000-HF".to_string(),
-                    "8PSK1000-HF-RRC".to_string(),
-                    "8PSK500-RRC".to_string(),
-                    "8PSK1000-RRC".to_string(),
-                    // UHF/VHF — 12.5 kHz narrowband (8 kHz audio, 2000 baud, ~2700 Hz BW)
-                    "8PSK2000".to_string(),
-                    "8PSK2000-RRC".to_string(),
-                    // UHF/VHF — 12.5 kHz HD (requires 48 kHz audio, 9600 baud, ~13 kHz BW)
-                    "8PSK9600".to_string(),
-                    "8PSK9600-RRC".to_string(),
-                ],
-                trait_version_required: "1.0".to_string(),
-            },
+            info: Self::make_info(),
+            #[cfg(feature = "gpu")]
+            gpu: None,
+        }
+    }
+
+    /// Create the plugin with GPU-accelerated soft demodulation.
+    #[cfg(feature = "gpu")]
+    pub fn with_gpu(ctx: Arc<openpulse_gpu::GpuContext>) -> Self {
+        Self {
+            info: Self::make_info(),
+            gpu: Some(ctx),
+        }
+    }
+
+    fn make_info() -> PluginInfo {
+        PluginInfo {
+            name: "8PSK".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            description: "8-Phase-Shift Keying with Gray-mapped tribits".to_string(),
+            author: "OpenPulse Contributors".to_string(),
+            supported_modes: vec![
+                "8PSK500".to_string(),
+                "8PSK1000".to_string(),
+                "8PSK1000-HF".to_string(),
+                "8PSK1000-HF-RRC".to_string(),
+                "8PSK500-RRC".to_string(),
+                "8PSK1000-RRC".to_string(),
+                // UHF/VHF — 12.5 kHz narrowband (8 kHz audio, 2000 baud, ~2700 Hz BW)
+                "8PSK2000".to_string(),
+                "8PSK2000-RRC".to_string(),
+                // UHF/VHF — 12.5 kHz HD (requires 48 kHz audio, 9600 baud, ~13 kHz BW)
+                "8PSK9600".to_string(),
+                "8PSK9600-RRC".to_string(),
+            ],
+            trait_version_required: "1.0".to_string(),
         }
     }
 }
@@ -68,6 +88,10 @@ impl ModulationPlugin for Psk8Plugin {
         samples: &[f32],
         config: &ModulationConfig,
     ) -> Result<Vec<f32>, ModemError> {
+        #[cfg(feature = "gpu")]
+        if let Some(ref ctx) = self.gpu {
+            return demodulate::psk8_demodulate_soft_gpu(samples, config, ctx);
+        }
         demodulate::psk8_demodulate_soft(samples, config)
     }
 
