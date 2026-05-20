@@ -118,6 +118,94 @@ pub fn qpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
     Ok(out)
 }
 
+/// Apply RRC FIR on bb_i/bb_q via wgpu, then upconvert to bandpass.
+///
+/// Falls back to CPU path if the GPU returns `None`.
+#[cfg(feature = "gpu")]
+pub fn qpsk_modulate_rrc_gpu(
+    data: &[u8],
+    config: &ModulationConfig,
+    ctx: &std::sync::Arc<openpulse_gpu::GpuContext>,
+) -> Result<Vec<f32>, ModemError> {
+    use openpulse_gpu::gpu_rrc_fir;
+
+    let baud = parse_baud_rate(&config.mode)?;
+    let fs = config.sample_rate as f32;
+    let fc = config.center_frequency;
+    let n = samples_per_symbol(fs, baud)?;
+
+    // Only handle RRC modes; fall through to CPU for non-RRC.
+    let rrc_alpha = if let PulseShape::Rrc { alpha } = config.pulse_shape {
+        Some(alpha)
+    } else if config.mode.ends_with("-RRC") {
+        Some(0.35f32)
+    } else {
+        return qpsk_modulate(data, config);
+    };
+
+    let alpha = rrc_alpha.unwrap();
+    let mut symbols = preamble_symbols();
+    symbols.extend(bits_to_symbols(&bytes_to_bits(data)));
+    symbols.extend(std::iter::repeat_n((INV_SQRT_2, INV_SQRT_2), TAIL_SYMS));
+
+    let total = symbols.len() * n;
+    let mut bb_i = vec![0.0f32; total];
+    let mut bb_q = vec![0.0f32; total];
+
+    for (sym_idx, &(i_amp, q_amp)) in symbols.iter().enumerate() {
+        let sym_start = sym_idx * n;
+        bb_i[sym_start] = i_amp;
+        bb_q[sym_start] = q_amp;
+    }
+
+    let num_taps = RRC_SPAN_SYMBOLS * n + 1;
+    let coeffs = generate_rrc_coefficients(fs, baud, alpha, num_taps);
+    let group_delay = (num_taps - 1) / 2;
+
+    let gpu_filter = |bb: &[f32]| -> Option<Vec<f32>> {
+        let padded: Vec<f32> = bb
+            .iter()
+            .copied()
+            .chain(std::iter::repeat_n(0.0, group_delay))
+            .collect();
+        let filtered = gpu_rrc_fir(ctx, &padded, &coeffs)?;
+        Some(filtered[group_delay..].to_vec())
+    };
+
+    let (i_filt, q_filt) = match (gpu_filter(&bb_i), gpu_filter(&bb_q)) {
+        (Some(i), Some(q)) => (i, q),
+        _ => {
+            // GPU unavailable; complete via CPU fallback.
+            let cpu_filter = |bb: Vec<f32>| -> Vec<f32> {
+                let padded: Vec<f32> = bb
+                    .iter()
+                    .copied()
+                    .chain(std::iter::repeat_n(0.0, group_delay))
+                    .collect();
+                let mut fir = FirFilter::new(coeffs.clone());
+                let filtered = fir.apply(&padded);
+                filtered[group_delay..].to_vec()
+            };
+            (cpu_filter(bb_i), cpu_filter(bb_q))
+        }
+    };
+
+    let two_pi = 2.0 * PI;
+    let out = i_filt
+        .iter()
+        .zip(q_filt.iter())
+        .enumerate()
+        .map(|(k, (&bi, &bq))| {
+            let t = k as f32 / fs;
+            let c = (two_pi * fc * t).cos();
+            let s = (two_pi * fc * t).sin();
+            bi * c - bq * s
+        })
+        .collect();
+
+    Ok(out)
+}
+
 /// Encode `data` bytes as QPSK baseband I and Q sample vectors.
 ///
 /// Returns `(i_bb, q_bb)` without carrier upconversion; suitable for direct
@@ -256,5 +344,33 @@ mod tests {
         assert_eq!(gray_map(false, true), (-INV_SQRT_2, INV_SQRT_2));
         assert_eq!(gray_map(true, true), (-INV_SQRT_2, -INV_SQRT_2));
         assert_eq!(gray_map(true, false), (INV_SQRT_2, -INV_SQRT_2));
+    }
+
+    /// CPU vs GPU RRC FIR equivalence: max sample delta < 1e-4.
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn qpsk500_rrc_gpu_matches_cpu() {
+        use openpulse_core::plugin::ModulationConfig;
+        use std::sync::Arc;
+
+        let ctx =
+            Arc::new(openpulse_gpu::GpuContext::new().expect("GPU context required for this test"));
+        let cfg = ModulationConfig {
+            mode: "QPSK500-RRC".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"cpu vs gpu equivalence test";
+        let cpu_out = qpsk_modulate(payload, &cfg).expect("CPU modulate failed");
+        let gpu_out = qpsk_modulate_rrc_gpu(payload, &cfg, &ctx).expect("GPU modulate failed");
+        assert_eq!(cpu_out.len(), gpu_out.len(), "output length mismatch");
+        let max_delta = cpu_out
+            .iter()
+            .zip(gpu_out.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_delta < 1e-4,
+            "GPU/CPU max sample delta {max_delta:.2e} exceeds 1e-4"
+        );
     }
 }
