@@ -35,11 +35,28 @@ Several capabilities here are firsts or near-firsts in open-source amateur digit
 | **64QAM and SCFDMA-64QAM with soft demodulation** | Gray-coded 64QAM with max-log-MAP soft demodulator. Aggressive constellation for VHF/UHF links with proper soft FEC backing. |
 | **LDPC belief propagation** | Real rate-1/2 min-sum belief propagation — not a stub. First open-source HF software modem with working LDPC. |
 | **LLR-accumulating ARQ** | Soft LLR values accumulate across retransmissions (PACTOR-style Memory-ARQ), turning each retry into a soft combining gain. |
-| **GPU-accelerated DSP** | wgpu-backed BPSK DSP kernels with automatic CPU fallback — rare in open-source HF modems. |
+| **GPU-accelerated DSP** | 9 wgpu compute kernels covering BPSK, RRC FIR, 256-pt FFT/IFFT, SC-FDMA (hard + soft), 64QAM, and 8PSK — all with automatic CPU fallback. See [GPU-accelerated features](#gpu-accelerated-features). |
 | **QSY frequency agility** | Ed25519-signed QSY_REQ/LIST/VOTE/ACK wire protocol. Initiator and responder roles wired into the daemon; rig CAT control via rigctld. |
 
 On-air regulatory validation has not been completed. All tests use loopback and
 simulated-channel paths only.
+
+---
+
+## First-to-market features
+
+Capabilities that are firsts or near-firsts among open-source amateur digital-mode software:
+
+| # | Capability | Evidence / where to look |
+|---|---|---|
+| 1 | **Post-quantum in-band handshake** | ML-DSA-44 + ML-KEM-768 negotiated inside the ConReq/ConAck wire frames; Hybrid mode dual-signs with Ed25519 + ML-DSA-44 simultaneously (`crates/openpulse-core/src/pq_handshake.rs`) |
+| 2 | **SC-FDMA (LTE uplink waveform) on HF** | DFT-spread OFDM with DFT-CE pilot-aided channel estimation and MMSE equalization; 3–4 dB lower PAPR than equivalent OFDM (`plugins/scfdma`) |
+| 3 | **64QAM and SCFDMA-64QAM soft demodulation** | Gray-coded 64QAM max-log-MAP LLR demodulator; SCFDMA52-64QAM reaching 8 667 bps gross over a 2 kHz slice (`plugins/64qam`, `plugins/scfdma`) |
+| 4 | **Working LDPC belief propagation** | Rate-1/2 min-sum BP — not a passthrough stub; wired into `transmit_with_ldpc` / `receive_with_ldpc` in the modem engine (`crates/openpulse-core/src/ldpc.rs`) |
+| 5 | **LLR-accumulating Memory-ARQ** | Soft LLR values accumulated across retransmissions (PACTOR-style); mode switching on sustained NACK (`crates/openpulse-modem/src/arq_session.rs`) |
+| 6 | **GPU DSP across 5 modulation families** | 9 wgpu WGSL kernels (BPSK, RRC FIR, 256-pt FFT, SC-FDMA hard/soft, 64QAM, 8PSK) with CPU fallback — see [GPU-accelerated features](#gpu-accelerated-features) |
+| 7 | **Ed25519-signed QSY frequency agility** | Full initiator + responder state machines wired into the daemon; SNR-ranked channel-list negotiation; rig CAT via rigctld (`crates/openpulse-qsy`) |
+| 8 | **Zstd pre-trained compression dictionary** | Dictionary trained on amateur/Winlink traffic patterns; negotiated at session setup and covered by handshake signature (`crates/openpulse-core/src/compression.rs`) |
 
 ---
 
