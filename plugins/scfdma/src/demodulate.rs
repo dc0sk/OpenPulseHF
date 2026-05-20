@@ -520,3 +520,91 @@ fn qam64_point(bits: u8) -> Complex32 {
     let q = pam8(bits & 0x7);
     Complex32::new(i, q)
 }
+
+/// GPU-accelerated hard demodulator.  Batches all per-symbol 256-point FFTs
+/// into a single GPU dispatch; channel estimation, MMSE equalization, IDFT, and
+/// demapping remain on CPU.  Returns `None` on GPU error (caller falls back to CPU).
+#[cfg(feature = "gpu")]
+pub fn scfdma_demodulate_gpu(
+    samples: &[f32],
+    mode: &str,
+    ctx: &std::sync::Arc<openpulse_gpu::GpuContext>,
+) -> Option<Vec<u8>> {
+    let p = params_for_mode(mode)?;
+
+    let sync = modulate_with_params(&preamble_payload(&p), &p);
+    if samples.len() < sync.len() + SYM_LEN {
+        return None;
+    }
+
+    let offset = find_sync_offset(samples, &sync);
+    let payload_start = offset + sync.len();
+    if payload_start >= samples.len() {
+        return None;
+    }
+
+    let payload_samples = &samples[payload_start..];
+    let n_syms = payload_samples.len() / SYM_LEN;
+    if n_syms == 0 {
+        return None;
+    }
+
+    // Pack all symbol windows as interleaved (re, 0) complex f32 pairs.
+    let mut packed: Vec<f32> = Vec::with_capacity(n_syms * FFT_SIZE * 2);
+    for sym_idx in 0..n_syms {
+        let start = sym_idx * SYM_LEN + CP;
+        if start + FFT_SIZE > payload_samples.len() {
+            break;
+        }
+        let fft_scale = 1.0 / (FFT_SIZE as f32).sqrt();
+        for &s in &payload_samples[start..start + FFT_SIZE] {
+            packed.push(s * fft_scale);
+            packed.push(0.0);
+        }
+    }
+    let actual_syms = packed.len() / (FFT_SIZE * 2);
+    if actual_syms == 0 {
+        return None;
+    }
+
+    let gpu_out = openpulse_gpu::gpu_fft256_batch(ctx, &packed, true)?;
+
+    // Reconstruct Complex32 frequency bins per symbol and run CPU equalization.
+    let mut planner = rustfft::FftPlanner::<f32>::new();
+    let idft = planner.plan_fft_inverse(p.n_data);
+    let ce_idft = planner.plan_fft_inverse(p.n_pilots);
+    let idft_scale = 1.0 / (p.n_data as f32).sqrt();
+
+    let mut bits: Vec<bool> = Vec::with_capacity(actual_syms * p.bits_per_symbol());
+
+    for sym_idx in 0..actual_syms {
+        let base = sym_idx * FFT_SIZE * 2;
+        let freq: Vec<Complex32> = (0..FFT_SIZE)
+            .map(|k| Complex32::new(gpu_out[base + k * 2], gpu_out[base + k * 2 + 1]))
+            .collect();
+
+        let h_est = dft_ce_estimate(&p, &freq, &*ce_idft);
+        let noise_var = estimate_noise_var(&p, &freq, &h_est);
+        let mut equalized = mmse_equalize(&p, &freq, &h_est, noise_var);
+
+        idft.process(&mut equalized);
+        let data_syms: Vec<Complex32> = equalized.iter().map(|c| c * idft_scale).collect();
+
+        for sym in &data_syms {
+            let b = demap_symbol(*sym, p.bits_per_sc);
+            for bit_pos in 0..p.bits_per_sc {
+                bits.push((b >> bit_pos) & 1 == 1);
+            }
+        }
+    }
+
+    let raw = bits_to_bytes(&bits);
+
+    if raw.len() < 2 {
+        return Some(raw);
+    }
+    let payload_len = u16::from_le_bytes([raw[0], raw[1]]) as usize;
+    let available = raw.len() - 2;
+    let take = payload_len.min(available);
+    Some(raw[2..2 + take].to_vec())
+}

@@ -80,6 +80,12 @@ impl ModulationPlugin for Psk8Plugin {
         samples: &[f32],
         config: &ModulationConfig,
     ) -> Result<Vec<u8>, ModemError> {
+        #[cfg(feature = "gpu")]
+        if let Some(ref ctx) = self.gpu {
+            if let Some(result) = demodulate::psk8_demodulate_gpu(samples, config, ctx) {
+                return result;
+            }
+        }
         demodulate::psk8_demodulate(samples, config)
     }
 

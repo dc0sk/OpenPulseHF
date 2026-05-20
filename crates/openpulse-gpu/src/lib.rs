@@ -1,16 +1,21 @@
 //! GPU compute acceleration for OpenPulse DSP kernels.
 //!
 //! Provides [`GpuContext`] which holds a wgpu device and pre-compiled compute
-//! pipelines for BPSK modulation and demodulation. Construction is optional:
+//! pipelines for BPSK modulation/demodulation, soft LLR demodulation, RRC FIR
+//! convolution, and 256-point complex FFT. Construction is optional:
 //! [`GpuContext::init`] returns `None` when no compatible GPU adapter is
 //! available, allowing callers to fall back to the CPU path transparently.
 
 pub mod demodulate;
+pub mod fft256;
 pub mod modulate;
+pub mod rrc_fir;
 pub mod soft_demod;
 
 pub use demodulate::{bpsk_iq_demod_gpu, timing_offset_search_gpu};
+pub use fft256::gpu_fft256_batch;
 pub use modulate::bpsk_modulate_gpu;
+pub use rrc_fir::gpu_rrc_fir;
 pub use soft_demod::gpu_soft_demod;
 
 use std::sync::Arc;
@@ -35,6 +40,8 @@ pub struct GpuContext {
     pub(crate) bpsk_demod_pipeline: wgpu::ComputePipeline,
     pub(crate) timing_search_pipeline: wgpu::ComputePipeline,
     pub(crate) soft_demod_pipeline: wgpu::ComputePipeline,
+    pub(crate) rrc_fir_pipeline: wgpu::ComputePipeline,
+    pub(crate) fft256_pipeline: wgpu::ComputePipeline,
 }
 
 impl GpuContext {
@@ -84,6 +91,10 @@ impl GpuContext {
             include_str!("shaders/soft_demod.wgsl"),
             "soft-demod",
         );
+        let rrc_fir_pipeline =
+            Self::make_pipeline(&device, include_str!("shaders/rrc_fir.wgsl"), "rrc-fir");
+        let fft256_pipeline =
+            Self::make_pipeline(&device, include_str!("shaders/fft256.wgsl"), "fft256");
 
         Some(Arc::new(Self {
             device,
@@ -92,6 +103,8 @@ impl GpuContext {
             bpsk_demod_pipeline,
             timing_search_pipeline,
             soft_demod_pipeline,
+            rrc_fir_pipeline,
+            fft256_pipeline,
         }))
     }
 

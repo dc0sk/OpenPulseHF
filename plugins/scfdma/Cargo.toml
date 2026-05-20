@@ -7,10 +7,14 @@ license.workspace    = true
 authors.workspace    = true
 repository.workspace = true
 
+[features]
+gpu = ["dep:openpulse-gpu"]
+
 [dependencies]
 openpulse-core = { workspace = true }
 rustfft        = { workspace = true }
 num-complex    = { workspace = true }
+openpulse-gpu  = { workspace = true, optional = true }
 
 [dev-dependencies]
 openpulse-channel = { workspace = true }

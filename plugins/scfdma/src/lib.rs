@@ -20,6 +20,9 @@ pub mod demodulate;
 pub mod modulate;
 pub mod params;
 
+#[cfg(feature = "gpu")]
+use std::sync::Arc;
+
 use openpulse_core::{
     error::ModemError,
     plugin::{ModulationConfig, ModulationPlugin, PluginInfo},
@@ -32,30 +35,47 @@ use crate::params::{params_for_mode, SAMPLE_RATE};
 /// SC-FDMA plugin supporting SCFDMA16 and SCFDMA52 modes.
 pub struct ScFdmaPlugin {
     info: PluginInfo,
+    #[cfg(feature = "gpu")]
+    gpu: Option<Arc<openpulse_gpu::GpuContext>>,
 }
 
 impl ScFdmaPlugin {
     pub fn new() -> Self {
         Self {
-            info: PluginInfo {
-                name: "SC-FDMA".into(),
-                version: "0.1.0".into(),
-                description: "SC-FDMA HF plugin: SCFDMA16/52 (QPSK), SCFDMA52-8PSK, \
-                     SCFDMA52-16QAM, SCFDMA52-32QAM (cross-32QAM), SCFDMA52-64QAM, \
-                     SCFDMA52-64QAM-P4 (dense pilots); MMSE equalization (BL-TP-4)"
-                    .into(),
-                author: "OpenPulse Contributors".into(),
-                supported_modes: vec![
-                    "SCFDMA16".into(),
-                    "SCFDMA52".into(),
-                    "SCFDMA52-8PSK".into(),
-                    "SCFDMA52-16QAM".into(),
-                    "SCFDMA52-32QAM".into(),
-                    "SCFDMA52-64QAM".into(),
-                    "SCFDMA52-64QAM-P4".into(),
-                ],
-                trait_version_required: "1.0".into(),
-            },
+            info: Self::make_info(),
+            #[cfg(feature = "gpu")]
+            gpu: None,
+        }
+    }
+
+    /// Create the plugin with GPU-accelerated FFT demodulation.
+    #[cfg(feature = "gpu")]
+    pub fn with_gpu(ctx: Arc<openpulse_gpu::GpuContext>) -> Self {
+        Self {
+            info: Self::make_info(),
+            gpu: Some(ctx),
+        }
+    }
+
+    fn make_info() -> PluginInfo {
+        PluginInfo {
+            name: "SC-FDMA".into(),
+            version: "0.1.0".into(),
+            description: "SC-FDMA HF plugin: SCFDMA16/52 (QPSK), SCFDMA52-8PSK, \
+                 SCFDMA52-16QAM, SCFDMA52-32QAM (cross-32QAM), SCFDMA52-64QAM, \
+                 SCFDMA52-64QAM-P4 (dense pilots); MMSE equalization (BL-TP-4)"
+                .into(),
+            author: "OpenPulse Contributors".into(),
+            supported_modes: vec![
+                "SCFDMA16".into(),
+                "SCFDMA52".into(),
+                "SCFDMA52-8PSK".into(),
+                "SCFDMA52-16QAM".into(),
+                "SCFDMA52-32QAM".into(),
+                "SCFDMA52-64QAM".into(),
+                "SCFDMA52-64QAM-P4".into(),
+            ],
+            trait_version_required: "1.0".into(),
         }
     }
 }
@@ -115,6 +135,12 @@ impl ModulationPlugin for ScFdmaPlugin {
                 "SC-FDMA plugin: center_frequency {:.1} not supported; must be 1500.0 Hz",
                 config.center_frequency
             )));
+        }
+        #[cfg(feature = "gpu")]
+        if let Some(ref ctx) = self.gpu {
+            if let Some(result) = demodulate::scfdma_demodulate_gpu(samples, &config.mode, ctx) {
+                return Ok(result);
+            }
         }
         Ok(scfdma_demodulate(samples, &config.mode))
     }

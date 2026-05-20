@@ -4151,6 +4151,7 @@ dependencies = [
  "openpulse-channel",
  "openpulse-core",
  "openpulse-dsp",
+ "openpulse-gpu",
 ]
 
 [[package]]
@@ -4165,6 +4166,7 @@ version = "0.1.0"
 dependencies = [
  "openpulse-core",
  "openpulse-dsp",
+ "openpulse-gpu",
 ]
 
 [[package]]
@@ -4666,6 +4668,7 @@ dependencies = [
  "num-complex",
  "openpulse-channel",
  "openpulse-core",
+ "openpulse-gpu",
  "rustfft",
 ]
 

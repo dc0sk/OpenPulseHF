@@ -228,6 +228,82 @@ pub fn bpsk_demodulate_soft(
     Ok(llrs)
 }
 
+/// GPU RRC demodulation: downmix on CPU, matched RRC filter on GPU, timing + LMS on CPU.
+#[cfg(feature = "gpu")]
+fn bpsk_demodulate_rrc_gpu(
+    samples: &[f32],
+    config: &ModulationConfig,
+    ctx: &openpulse_gpu::GpuContext,
+) -> Result<Vec<u8>, ModemError> {
+    let baud = parse_baud_rate(&config.mode)?;
+    let fs = config.sample_rate as f32;
+    let fc = config.center_frequency;
+    let n = samples_per_symbol(fs, baud)?;
+    let alpha = if let PulseShape::Rrc { alpha } = config.pulse_shape {
+        alpha
+    } else {
+        0.35
+    };
+
+    if samples.len() < n * (PREAMBLE_SYMS + 1) {
+        return Err(ModemError::Demodulation("signal too short".into()));
+    }
+
+    let two_pi = 2.0 * PI;
+    let num_taps = RRC_SPAN_SYMBOLS * n + 1;
+    let coeffs = generate_rrc_coefficients(fs, baud, alpha, num_taps);
+    let group_delay = (num_taps - 1) / 2;
+
+    let i_mix: Vec<f32> = samples
+        .iter()
+        .enumerate()
+        .map(|(k, &s)| s * (two_pi * fc * k as f32 / fs).cos() * 2.0)
+        .collect();
+    let q_mix: Vec<f32> = samples
+        .iter()
+        .enumerate()
+        .map(|(k, &s)| -s * (two_pi * fc * k as f32 / fs).sin() * 2.0)
+        .collect();
+
+    // GPU FIR: pad tail by group_delay, filter, then trim.
+    let gpu_rrc = |mix: Vec<f32>| -> Option<Vec<f32>> {
+        let padded: Vec<f32> = mix
+            .iter()
+            .copied()
+            .chain(std::iter::repeat(0.0).take(group_delay))
+            .collect();
+        let filtered = openpulse_gpu::gpu_rrc_fir(ctx, &padded, &coeffs)?;
+        Some(filtered[group_delay..].to_vec())
+    };
+
+    let (i_bb, q_bb) = match (gpu_rrc(i_mix), gpu_rrc(q_mix)) {
+        (Some(i), Some(q)) => (i, q),
+        // GPU error — fall back to CPU path.
+        _ => return bpsk_demodulate(samples, config),
+    };
+
+    let initial_timing = find_timing_offset_bb(&i_bb, n);
+    let (i_out, q_out) = gardner_sample_rrc(&i_bb, &q_bb, n, initial_timing);
+    let (i_syms, q_syms) = bpsk_lms_equalize(&i_out, &q_out, &config.mode);
+
+    if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
+        return Err(ModemError::Demodulation(
+            "no data symbols after preamble".into(),
+        ));
+    }
+
+    let data_syms_end = i_syms.len() - TAIL_SYMS;
+    let range_start = PREAMBLE_SYMS - 1;
+    let iq: Vec<(f32, f32)> = i_syms[range_start..data_syms_end]
+        .iter()
+        .zip(q_syms[range_start..data_syms_end].iter())
+        .map(|(&i, &q)| (i, q))
+        .collect();
+
+    let bits = differential_decode(&iq);
+    Ok(bits_to_bytes(&bits))
+}
+
 /// GPU-accelerated demodulation path.
 #[cfg(feature = "gpu")]
 pub fn bpsk_demodulate_with_gpu(
@@ -235,9 +311,9 @@ pub fn bpsk_demodulate_with_gpu(
     config: &ModulationConfig,
     ctx: &openpulse_gpu::GpuContext,
 ) -> Result<Vec<u8>, ModemError> {
-    // RRC path requires FIR filtering; fall back to CPU.
+    // RRC path: downmix on CPU, matched RRC filter on GPU, timing + LMS on CPU.
     if matches!(config.pulse_shape, PulseShape::Rrc { .. }) || config.mode.ends_with("-RRC") {
-        return bpsk_demodulate(samples, config);
+        return bpsk_demodulate_rrc_gpu(samples, config, ctx);
     }
 
     let baud = parse_baud_rate(&config.mode)?;
