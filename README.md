@@ -199,11 +199,7 @@ and per-level SNR floor/ceiling gates:
 - **Three trust profiles**: OpenTrust, Balanced, Strict — configurable per deployment
 - **PKI service** — Ed25519 trust-bundle signing with PostgreSQL persistence
 - **Signed peer descriptors** — self-authenticating identity; peer ID is the verifying key bytes
-<<<<<<< HEAD
 - **FreeDV frame signing** (`crates/openpulse-freedv-auth`) — Ed25519 signatures over the codec2 embedded data channel; authenticates voice transmissions without modifying FreeDV itself
-=======
-- **FreeDV frame signing** *(planned, roadmap FF-11)* — Ed25519 signatures over the codec2 embedded data channel; authenticates voice transmissions without modifying FreeDV itself
->>>>>>> d60141b (docs: add relay/repeater/mesh/FreeDV rows to first-to-market table, FreeDV in Why and security sections)
 
 ### Channel simulation
 
