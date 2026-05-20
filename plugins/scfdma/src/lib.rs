@@ -29,7 +29,7 @@ use openpulse_core::{
 };
 
 use crate::demodulate::{scfdma_demodulate, scfdma_demodulate_soft};
-use crate::modulate::scfdma_modulate;
+use crate::modulate::{scfdma_modulate, scfdma_modulate_iq};
 use crate::params::{params_for_mode, SAMPLE_RATE};
 
 /// SC-FDMA plugin supporting SCFDMA16 and SCFDMA52 modes.
@@ -111,6 +111,23 @@ impl ModulationPlugin for ScFdmaPlugin {
             )));
         }
         Ok(scfdma_modulate(data, &config.mode))
+    }
+
+    fn modulate_iq(
+        &self,
+        data: &[u8],
+        config: &ModulationConfig,
+    ) -> Result<(Vec<f32>, Vec<f32>), ModemError> {
+        if params_for_mode(&config.mode).is_none() {
+            return Err(ModemError::Configuration(format!(
+                "SC-FDMA plugin: unknown mode '{}'",
+                config.mode
+            )));
+        }
+        let interleaved = scfdma_modulate_iq(data, &config.mode);
+        let i_ch = interleaved.iter().step_by(2).copied().collect();
+        let q_ch = interleaved.iter().skip(1).step_by(2).copied().collect();
+        Ok((i_ch, q_ch))
     }
 
     fn demodulate(

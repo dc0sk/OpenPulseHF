@@ -18,7 +18,7 @@ use openpulse_core::{
 };
 
 use crate::demodulate::ofdm_demodulate;
-use crate::modulate::ofdm_modulate;
+use crate::modulate::{ofdm_modulate, ofdm_modulate_iq};
 use crate::params::{params_for_mode, SAMPLE_RATE};
 
 /// OFDM plugin supporting OFDM16 and OFDM52 modes.
@@ -72,6 +72,23 @@ impl ModulationPlugin for OfdmPlugin {
             )));
         }
         Ok(ofdm_modulate(data, &config.mode))
+    }
+
+    fn modulate_iq(
+        &self,
+        data: &[u8],
+        config: &ModulationConfig,
+    ) -> Result<(Vec<f32>, Vec<f32>), ModemError> {
+        if params_for_mode(&config.mode).is_none() {
+            return Err(ModemError::Configuration(format!(
+                "OFDM plugin: unknown mode '{}'",
+                config.mode
+            )));
+        }
+        let interleaved = ofdm_modulate_iq(data, &config.mode);
+        let i_ch = interleaved.iter().step_by(2).copied().collect();
+        let q_ch = interleaved.iter().skip(1).step_by(2).copied().collect();
+        Ok((i_ch, q_ch))
     }
 
     fn demodulate(
