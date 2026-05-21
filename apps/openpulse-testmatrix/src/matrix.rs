@@ -101,6 +101,7 @@ pub fn fec_label(fec_mode: FecMode) -> &'static str {
         FecMode::RsStrong => "rs_strong",
         FecMode::SoftConcatenated => "soft_concat",
         FecMode::Ldpc => "ldpc",
+        FecMode::Turbo => "turbo",
     }
 }
 

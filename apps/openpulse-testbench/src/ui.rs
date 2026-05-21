@@ -316,6 +316,7 @@ fn fec_mode_label(mode: FecMode) -> &'static str {
         FecMode::Concatenated => "Conv+RS",
         FecMode::ShortRs => "Short RS",
         FecMode::Ldpc => "LDPC",
+        FecMode::Turbo => "Turbo (1/3)",
     }
 }
 
@@ -329,6 +330,7 @@ fn net_bps(gross: f64, fec_mode: FecMode) -> f64 {
         FecMode::Concatenated | FecMode::SoftConcatenated => gross * 223.0 / 255.0 * 0.5,
         FecMode::ShortRs => gross,
         FecMode::Ldpc => gross,
+        FecMode::Turbo => gross / 3.0,
     }
 }
 
@@ -346,6 +348,7 @@ fn fec_net_tooltip(fec_mode: FecMode) -> &'static str {
             "Payload bit rate after Soft-Conv(1/2)+RS(255,223) overhead (code rate ≈ 43.7 %)"
         }
         FecMode::ShortRs | FecMode::Ldpc => "Payload bit rate",
+        FecMode::Turbo => "Payload bit rate after rate-1/3 Turbo overhead (code rate ≈ 33.3 %)",
     }
 }
 

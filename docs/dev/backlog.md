@@ -87,22 +87,13 @@ tests run against the loopback backend; optional `--output <path>` writes JSON.
 
 ---
 
-### 7 — Turbo codes
+### 7 — Turbo codes ✅ Shipped (PR #337)
 
-**Goal:** Rate-1/3 Parallel Concatenated Convolutional Code (PCCC, 3GPP Turbo) as an
-optional FEC mode offering higher coding gain than LDPC for the short block sizes
-(≤ 256 bits) common in HF ARQ retransmissions.
-
-**Acceptance criteria:**
-- `crates/openpulse-core/src/turbo.rs`: `TurboCodec` with `encode(data: &[u8]) -> Vec<u8>`
-  and `decode(llrs: &[f32]) -> Result<Vec<u8>, FecError>`.
-- Rate-1/3, constituent RSC encoders G1={1,1,1}, G2={1,0,1} (generators 0x7, 0x5 octal),
-  internal interleaver length 40–6144 bits (3GPP TS 36.212 table).
-- Max-Log-MAP BCJR decoder, 8 iterations, early-exit on CRC pass.
-- BER ≤ 0.01 at Eb/N0 = 2 dB for 256-bit blocks (AWGN loopback test).
-- Wired into `transmit_with_fec_mode` / `receive_with_fec_mode` as `FecMode::Turbo`.
-- `cargo test --package openpulse-core --no-default-features` passes; turbo BER test
-  joins the FEC comparison suite.
+`crates/openpulse-core/src/turbo.rs`: `TurboCodec` with `encode(data: &[u8]) -> Vec<u8>` and
+`decode(llrs: &[f32]) -> Result<Vec<u8>, ModemError>`.  Rate-1/3 PCCC, RSC G1={1,1,1} G2={1,0,1},
+3GPP TS 36.212 QPP interleaver (K=40–6144), Max-Log-MAP BCJR, 8 iterations, CRC-16 early exit.
+`FecMode::Turbo` (strength=8) wired into `transmit_with_fec_mode` / `receive_with_fec_mode`.
+BER ≤ 0.01 at Eb/N0 = 2 dB for 256-bit blocks confirmed by `tests/turbo_ber.rs`.
 
 ---
 
@@ -143,6 +134,7 @@ When station access is available, run this checklist before marking Phase 5.5-re
 
 ## Recently completed (summary)
 
+- Turbo codec: rate-1/3 PCCC `TurboCodec`, Max-Log-MAP BCJR, 8 iterations, `FecMode::Turbo` wired into engine dispatch (PR #337).
 - On-device calibration wizard: `openpulse calibrate audio|ptt|afc`; loopback-only, JSON output via `--output` (PR #336).
 - SC-FDMA adaptive pilot density: `AdaptivePilotState`, `estimate_coh_bw_hz()`, `ScFdmaParams::with_pilot_density()` (PR #335).
 - OFDM16/52 GPU hard+soft demodulation via `gpu_fft256_batch`; `OfdmPlugin::with_gpu()` constructor (PR #330).
