@@ -50,6 +50,39 @@ impl ScFdmaParams {
     pub fn gross_bps(&self) -> f32 {
         self.bits_per_symbol() as f32 / (SYM_LEN as f32 / SAMPLE_RATE as f32)
     }
+
+    /// Return a copy with pilot spacing adjusted to match the observed coherence bandwidth.
+    ///
+    /// - `coh_bw_hz` < 100 Hz → spacing 4 (dense, every 125 Hz)
+    /// - `coh_bw_hz` > 300 Hz → spacing 8 (sparse, every 250 Hz)
+    /// - otherwise           → default spacing 5 (every 156.25 Hz)
+    ///
+    /// `n_pilots` and `n_data` are recomputed to preserve `total_sc()`.
+    pub fn with_pilot_density(self, coh_bw_hz: f32) -> Self {
+        let new_spacing = if coh_bw_hz < 100.0 {
+            4
+        } else if coh_bw_hz > 300.0 {
+            8
+        } else {
+            DEFAULT_PILOT_SPACING
+        };
+        if new_spacing == self.pilot_spacing {
+            return self;
+        }
+        let first_pilot = self.first_sc + new_spacing - 1;
+        let n_pilots = if first_pilot <= self.last_sc {
+            (self.last_sc - first_pilot) / new_spacing + 1
+        } else {
+            0
+        };
+        let n_data = self.total_sc().saturating_sub(n_pilots);
+        Self {
+            pilot_spacing: new_spacing,
+            n_pilots,
+            n_data,
+            ..self
+        }
+    }
 }
 
 /// SCFDMA-16: 16 data SCs + 4 pilots, SCs 38–57, centre at SC 48 (1500 Hz), BW ≈ 625 Hz.
@@ -192,6 +225,33 @@ mod tests {
         assert_eq!(SCFDMA52_64QAM.bits_per_symbol(), 312);
         // 52 × 6 × 8000/288 ≈ 8667 bps
         assert!((SCFDMA52_64QAM.gross_bps() - 8667.0).abs() < 5.0);
+    }
+
+    #[test]
+    fn with_pilot_density_dense() {
+        let p = SCFDMA52.with_pilot_density(50.0); // < 100 Hz → spacing 4
+        assert_eq!(p.pilot_spacing, 4);
+        assert_eq!(p.n_pilots, 16);
+        assert_eq!(p.n_data, 49);
+        assert_eq!(p.n_data + p.n_pilots, SCFDMA52.total_sc());
+        assert_eq!(p.first_sc, SCFDMA52.first_sc);
+        assert_eq!(p.last_sc, SCFDMA52.last_sc);
+        assert_eq!(p.bits_per_sc, SCFDMA52.bits_per_sc);
+    }
+
+    #[test]
+    fn with_pilot_density_sparse() {
+        let p = SCFDMA52.with_pilot_density(400.0); // > 300 Hz → spacing 8
+        assert_eq!(p.pilot_spacing, 8);
+        assert_eq!(p.n_pilots, 8);
+        assert_eq!(p.n_data, 57);
+        assert_eq!(p.n_data + p.n_pilots, SCFDMA52.total_sc());
+    }
+
+    #[test]
+    fn with_pilot_density_default_unchanged() {
+        let p = SCFDMA52.with_pilot_density(200.0); // 100–300 Hz → default spacing 5
+        assert_eq!(p, SCFDMA52);
     }
 
     #[test]

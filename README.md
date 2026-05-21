@@ -100,7 +100,6 @@ Capabilities that are firsts or near-firsts among open-source amateur digital-mo
 | FSK4-ACK | `fsk4` | 100 | 2 | 200 | 4-FSK | ACK control channel only |
 
 ### MAC / channel access types
-
 | Mechanism | Where used | Description |
 |---|---|---|
 | **0.3-persistence CSMA** | `openpulse-modem` | DCD energy check; transmit deferred when channel busy; configurable per `ModemEngine` |

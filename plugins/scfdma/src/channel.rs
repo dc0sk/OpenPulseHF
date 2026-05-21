@@ -5,7 +5,9 @@
 use num_complex::Complex32;
 use rustfft::{Fft, FftPlanner};
 
-use crate::params::{ScFdmaParams, CP, FFT_SIZE, PILOT_AMPLITUDE, SAMPLE_RATE, SYM_LEN};
+use crate::params::{
+    ScFdmaParams, CP, FFT_SIZE, PILOT_AMPLITUDE, SAMPLE_RATE, SC_SPACING_HZ, SYM_LEN,
+};
 
 /// Return the absolute SC indices of all pilot subcarriers for `p`.
 pub fn pilot_positions(p: &ScFdmaParams) -> Vec<usize> {
@@ -307,34 +309,22 @@ pub fn mmse_equalize(
     out
 }
 
-/// Estimate the carrier frequency offset (CFO) in Hz using inter-symbol pilot
-/// phase drift across consecutive SC-FDMA symbols.
+/// Compute per-symbol FFT spectra for up to 8 symbols.
 ///
-/// Identical algorithm to the OFDM CFO estimator: the DFT-spreading step in
-/// SC-FDMA does not affect pilot subcarriers (pilots bypass DFT precoding),
-/// so inter-symbol pilot phase drift directly reveals the CFO.
-///
-/// Unambiguous range: `±Fs / (2 × SYM_LEN) ≈ ±13.9 Hz`.
-///
-/// Returns `None` when there are fewer than two complete symbols or no pilots.
-pub fn estimate_cfo_hz(samples: &[f32], p: &ScFdmaParams) -> Option<f32> {
-    use std::f32::consts::PI;
-
+/// Returns an empty `Vec` when fewer than two complete symbols are available.
+/// Each entry is a full `FFT_SIZE`-point complex spectrum with the cyclic prefix
+/// stripped.  Used by both `estimate_coh_bw_hz` and `estimate_cfo_hz` so the
+/// FFT work is done once when both estimates are needed together.
+pub(crate) fn compute_pilot_spectra(samples: &[f32], _p: &ScFdmaParams) -> Vec<Vec<Complex32>> {
     let n_syms = samples.len() / SYM_LEN;
     if n_syms < 2 {
-        return None;
+        return vec![];
     }
-    let pilots = pilot_positions(p);
-    if pilots.is_empty() {
-        return None;
-    }
-
     let n_use = n_syms.min(8);
     let scale = 1.0 / (FFT_SIZE as f32).sqrt();
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(FFT_SIZE);
-
-    let mut spectra: Vec<Vec<Complex32>> = Vec::with_capacity(n_use);
+    let mut spectra = Vec::with_capacity(n_use);
     for sym_idx in 0..n_use {
         let start = sym_idx * SYM_LEN + CP;
         if start + FFT_SIZE > samples.len() {
@@ -347,7 +337,61 @@ pub fn estimate_cfo_hz(samples: &[f32], p: &ScFdmaParams) -> Option<f32> {
         fft.process(&mut freq);
         spectra.push(freq);
     }
+    spectra
+}
+
+/// Estimate coherence bandwidth from pre-computed pilot spectra.
+///
+/// Returns `None` when fewer than two spectra or fewer than four pilots are
+/// available.  Call `compute_pilot_spectra` once and pass the result to both
+/// this function and `cfo_from_spectra` to avoid redundant FFT work.
+pub(crate) fn coh_bw_from_spectra(spectra: &[Vec<Complex32>], p: &ScFdmaParams) -> Option<f32> {
     if spectra.len() < 2 {
+        return None;
+    }
+    let pilots = pilot_positions(p);
+    let n_pilots = pilots.len();
+    if n_pilots < 4 {
+        return None;
+    }
+
+    let mut r1_num = Complex32::new(0.0, 0.0);
+    let mut pow0 = 0.0f32;
+    let mut pow1 = 0.0f32;
+
+    for freq in spectra {
+        let h: Vec<Complex32> = pilots
+            .iter()
+            .map(|&k| freq[k] / Complex32::new(PILOT_AMPLITUDE, 0.0))
+            .collect();
+        for i in 0..n_pilots - 1 {
+            r1_num += h[i].conj() * h[i + 1];
+            pow0 += h[i].norm_sqr();
+            pow1 += h[i + 1].norm_sqr();
+        }
+    }
+
+    let denom = (pow0 * pow1).sqrt();
+    if denom < 1e-8 {
+        return None;
+    }
+    let r1_mag = (r1_num.norm() / denom).clamp(0.001, 0.9999);
+    let pilot_sep_hz = p.pilot_spacing as f32 * SC_SPACING_HZ;
+    let ratio_sq = (1.0 / (r1_mag * r1_mag) - 1.0).max(1e-6);
+    Some((pilot_sep_hz / ratio_sq.sqrt()).clamp(10.0, 2000.0))
+}
+
+/// Estimate CFO in Hz from pre-computed pilot spectra.
+///
+/// Returns `None` when fewer than two spectra or no pilots are available.
+pub(crate) fn cfo_from_spectra(spectra: &[Vec<Complex32>], p: &ScFdmaParams) -> Option<f32> {
+    use std::f32::consts::PI;
+
+    if spectra.len() < 2 {
+        return None;
+    }
+    let pilots = pilot_positions(p);
+    if pilots.is_empty() {
         return None;
     }
 
@@ -369,6 +413,31 @@ pub fn estimate_cfo_hz(samples: &[f32], p: &ScFdmaParams) -> Option<f32> {
     let mean_phase = phase_sum / count as f32;
     let t_sym = SYM_LEN as f32 / SAMPLE_RATE as f32;
     Some(mean_phase / (2.0 * PI * t_sym))
+}
+
+/// Estimate channel coherence bandwidth in Hz from inter-pilot complex correlations.
+///
+/// Under the exponential PDP model: |r₁|² ≈ 1 / (1 + (Δf_pilot/B_c)²), which
+/// inverts to B_c = Δf_pilot / √(1/|r₁|² − 1).  Returns `None` when fewer than
+/// two symbols or fewer than four pilots are available.
+pub fn estimate_coh_bw_hz(samples: &[f32], p: &ScFdmaParams) -> Option<f32> {
+    let spectra = compute_pilot_spectra(samples, p);
+    coh_bw_from_spectra(&spectra, p)
+}
+
+/// Estimate the carrier frequency offset (CFO) in Hz using inter-symbol pilot
+/// phase drift across consecutive SC-FDMA symbols.
+///
+/// Identical algorithm to the OFDM CFO estimator: the DFT-spreading step in
+/// SC-FDMA does not affect pilot subcarriers (pilots bypass DFT precoding),
+/// so inter-symbol pilot phase drift directly reveals the CFO.
+///
+/// Unambiguous range: `±Fs / (2 × SYM_LEN) ≈ ±13.9 Hz`.
+///
+/// Returns `None` when there are fewer than two complete symbols or no pilots.
+pub fn estimate_cfo_hz(samples: &[f32], p: &ScFdmaParams) -> Option<f32> {
+    let spectra = compute_pilot_spectra(samples, p);
+    cfo_from_spectra(&spectra, p)
 }
 
 #[cfg(test)]

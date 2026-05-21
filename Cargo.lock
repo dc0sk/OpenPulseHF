@@ -4176,6 +4176,7 @@ dependencies = [
  "openpulse-channel",
  "openpulse-core",
  "openpulse-dsp",
+ "openpulse-gpu",
 ]
 
 [[package]]

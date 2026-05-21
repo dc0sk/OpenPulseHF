@@ -70,20 +70,12 @@ pipeline symmetry.
 
 ---
 
-### 5 — SC-FDMA adaptive pilot density
+### 5 — SC-FDMA adaptive pilot density (PR #335, pending merge)
 
-**Goal:** Pilot spacing is currently fixed per mode (`SCFDMA52` uses 8, `SCFDMA52-64QAM-P4`
-uses 16).  Under fast-fading channels the fixed spacing may be too coarse; under good
-channels the extra pilot overhead wastes capacity.  Adapt pilot count at session setup
-based on measured channel coherence bandwidth from the last `estimate_cfo_hz` call.
-
-**Acceptance criteria:**
-- `ScFdmaParams::with_pilot_density(measured_coh_bw_hz) -> Self` adjusts `n_pilots`
-  and regenerates pilot positions within the existing geometry constraints.
-- `ScFdmaPlugin::estimate_afc_hz` feeds back coherence BW estimate to a per-session
-  `AdaptivePilotState`.
-- Integration test: heavy Watterson fading triggers denser pilots; clean channel
-  reverts to sparse pilots after N frames.
+`AdaptivePilotState` (EMA α=0.3), `ScFdmaParams::with_pilot_density()`, and
+`estimate_coh_bw_hz()` lag-1 pilot correlation estimator.  `ScFdmaPlugin::estimate_afc_hz`
+feeds coherence BW into the adaptive state; `adaptive_params_for_mode()` returns adjusted
+params.  Tests: flat → sparse, delay-26 2-tap (B_c ≈ 57 Hz) → dense, EMA reversion.
 
 ---
 
@@ -160,6 +152,7 @@ When station access is available, run this checklist before marking Phase 5.5-re
 
 ## Recently completed (summary)
 
+- SC-FDMA adaptive pilot density: `AdaptivePilotState`, `estimate_coh_bw_hz()`, `ScFdmaParams::with_pilot_density()` (PR #335).
 - OFDM16/52 GPU hard+soft demodulation via `gpu_fft256_batch`; `OfdmPlugin::with_gpu()` constructor (PR #330).
 - README expanded with modulation/MAC/compression/ARQ/FEC/GPU feature tables; first-to-market table with 12 entries; PayPal sponsor badge restored (PRs #327–#329).
 - QSY incoming event (`QsyIncoming` `ControlEvent`), 64-byte token length bound, e2e initiator→responder test, SC-FDMA GPU soft-demod (`scfdma_demodulate_soft_gpu`), `CHANGELOG.md` created (PR #326).
