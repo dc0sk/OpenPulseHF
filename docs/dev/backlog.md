@@ -79,20 +79,11 @@ params.  Tests: flat → sparse, delay-26 2-tap (B_c ≈ 57 Hz) → dense, EMA r
 
 ---
 
-### 6 — On-device tuning/calibration wizard
+### 6 — On-device tuning/calibration wizard ✅ Shipped (PR #336)
 
-**Goal:** New `openpulse-cli` subcommand `calibrate` that guides an operator through
-audio level, PTT timing, and AFC offset setup without RF transmission.
-
-**Acceptance criteria:**
-- `openpulse calibrate audio` — plays a 1500 Hz tone at −18 dBFS, measures input
-  level, reports clip headroom.
-- `openpulse calibrate ptt` — asserts PTT, measures assert-to-audio latency via
-  loopback, reports result vs 50 ms target.
-- `openpulse calibrate afc` — plays a known BPSK250 burst into the audio loopback,
-  runs `estimate_afc_hz`, reports measured offset.
-- All subcommands write a machine-readable JSON summary to `--output <path>`.
-- No RF transmission required; CPAL loopback backend sufficient.
+`openpulse calibrate audio|ptt|afc` subcommands wired into `openpulse-cli`.  All three
+tests run against the loopback backend; optional `--output <path>` writes JSON.
+4 integration tests pass.
 
 ---
 
@@ -152,6 +143,7 @@ When station access is available, run this checklist before marking Phase 5.5-re
 
 ## Recently completed (summary)
 
+- On-device calibration wizard: `openpulse calibrate audio|ptt|afc`; loopback-only, JSON output via `--output` (PR #336).
 - SC-FDMA adaptive pilot density: `AdaptivePilotState`, `estimate_coh_bw_hz()`, `ScFdmaParams::with_pilot_density()` (PR #335).
 - OFDM16/52 GPU hard+soft demodulation via `gpu_fft256_batch`; `OfdmPlugin::with_gpu()` constructor (PR #330).
 - README expanded with modulation/MAC/compression/ARQ/FEC/GPU feature tables; first-to-market table with 12 entries; PayPal sponsor badge restored (PRs #327–#329).

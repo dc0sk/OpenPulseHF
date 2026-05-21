@@ -51,6 +51,16 @@ fn main() -> Result<()> {
         return commands::mode_advisor::run(*snr);
     }
 
+    if let Commands::Calibrate { command, output } = &cli.command {
+        return commands::calibrate::run(
+            command,
+            &cli.ptt,
+            &cli.rig,
+            &cli.rig_file,
+            output.as_ref(),
+        );
+    }
+
     let level: Level = cli.log.parse().unwrap_or(Level::INFO);
     tracing_subscriber::fmt()
         .with_max_level(level)
@@ -153,6 +163,7 @@ fn main() -> Result<()> {
         }
         Commands::ModeAdvisor { .. } => unreachable!("handled above"),
         Commands::Config { .. } => unreachable!("handled above"),
+        Commands::Calibrate { .. } => unreachable!("handled above"),
     }
 
     if exit_code != 0 {

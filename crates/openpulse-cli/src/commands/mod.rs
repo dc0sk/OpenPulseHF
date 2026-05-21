@@ -2,6 +2,7 @@ pub mod bandplan_guard;
 pub mod beacon;
 pub mod benchmark;
 pub mod broadcast;
+pub mod calibrate;
 pub mod config;
 pub mod devices;
 pub mod mode_advisor;
