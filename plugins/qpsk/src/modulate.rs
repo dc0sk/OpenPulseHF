@@ -351,10 +351,11 @@ mod tests {
     #[test]
     fn qpsk500_rrc_gpu_matches_cpu() {
         use openpulse_core::plugin::ModulationConfig;
-        use std::sync::Arc;
 
-        let ctx =
-            Arc::new(openpulse_gpu::GpuContext::new().expect("GPU context required for this test"));
+        let ctx = match openpulse_gpu::GpuContext::init() {
+            Some(c) => c,
+            None => return, // skip on headless / CI without GPU
+        };
         let cfg = ModulationConfig {
             mode: "QPSK500-RRC".to_string(),
             ..ModulationConfig::default()

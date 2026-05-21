@@ -70,7 +70,7 @@ pipeline symmetry.
 
 ---
 
-### 5 — SC-FDMA adaptive pilot density ✅ Shipped (PR #335)
+### 5 — SC-FDMA adaptive pilot density (PR #335, pending merge)
 
 `AdaptivePilotState` (EMA α=0.3), `ScFdmaParams::with_pilot_density()`, and
 `estimate_coh_bw_hz()` lag-1 pilot correlation estimator.  `ScFdmaPlugin::estimate_afc_hz`

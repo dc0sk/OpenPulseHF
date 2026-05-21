@@ -67,7 +67,11 @@ impl ScFdmaPlugin {
     /// smoothed coherence bandwidth estimate.
     pub fn adaptive_params_for_mode(&self, mode: &str) -> Option<crate::params::ScFdmaParams> {
         let base = params_for_mode(mode)?;
-        let coh_bw = self.adaptive.lock().ok()?.coh_bw_hz();
+        let coh_bw = self
+            .adaptive
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .coh_bw_hz();
         Some(base.with_pilot_density(coh_bw))
     }
 
@@ -212,12 +216,14 @@ impl ModulationPlugin for ScFdmaPlugin {
 
     fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
         let p = params_for_mode(&config.mode)?;
-        if let Some(coh_bw) = crate::channel::estimate_coh_bw_hz(samples, &p) {
-            if let Ok(mut state) = self.adaptive.lock() {
-                state.update(coh_bw);
-            }
+        let spectra = crate::channel::compute_pilot_spectra(samples, &p);
+        if let Some(coh_bw) = crate::channel::coh_bw_from_spectra(&spectra, &p) {
+            self.adaptive
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .update(coh_bw);
         }
-        crate::channel::estimate_cfo_hz(samples, &p)
+        crate::channel::cfo_from_spectra(&spectra, &p)
     }
 }
 

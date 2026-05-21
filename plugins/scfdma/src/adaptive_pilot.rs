@@ -44,12 +44,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ema_converges_from_flat() {
+    fn ema_step_response_matches_formula() {
         let mut s = AdaptivePilotState::new();
-        for _ in 0..20 {
-            s.update(2000.0);
-        }
-        assert!(s.coh_bw_hz() > 1500.0);
+        s.update(2000.0); // first call → sets directly to 2000
+        s.update(100.0); // EMA: 0.3×100 + 0.7×2000 = 1430
+        let expected = 0.3 * 100.0 + 0.7 * 2000.0;
+        assert!(
+            (s.coh_bw_hz() - expected).abs() < 1.0,
+            "EMA step: expected {expected:.1}, got {:.1}",
+            s.coh_bw_hz()
+        );
     }
 
     #[test]
