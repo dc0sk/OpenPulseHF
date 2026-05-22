@@ -52,6 +52,13 @@ fn main() -> Result<()> {
     }
 
     if let Commands::Calibrate { command, output } = &cli.command {
+        // Validate --backend consistently even though calibrate uses loopback internally.
+        match cli.backend.as_str() {
+            "loopback" | "default" => {}
+            #[cfg(feature = "cpal-backend")]
+            "cpal" => {}
+            name => anyhow::bail!("unknown backend '{name}'"),
+        }
         return commands::calibrate::run(
             command,
             &cli.ptt,
