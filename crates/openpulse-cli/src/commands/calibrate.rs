@@ -130,7 +130,7 @@ pub fn run_afc() -> Result<CalibrationResult> {
     let mut engine = ModemEngine::new(Box::new(loopback));
     engine
         .register_plugin(Box::new(BpskPlugin::new()))
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        .map_err(anyhow::Error::new)?;
     engine.disable_csma();
 
     if let Err(e) = engine.transmit(b"AFC_CAL_TEST", "BPSK250", None) {
