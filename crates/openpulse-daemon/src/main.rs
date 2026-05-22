@@ -35,14 +35,14 @@ async fn main() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("fatal: failed to load config: {e}");
-            return;
+            std::process::exit(1);
         }
     };
     if cfg.station.callsign.trim().eq_ignore_ascii_case("N0CALL") {
         tracing::error!(
             "invalid callsign N0CALL in configuration; set [station].callsign before starting daemon"
         );
-        return;
+        std::process::exit(1);
     }
 
     let mode = cfg.modem.mode.clone();
@@ -212,7 +212,7 @@ async fn main() {
         Ok(p) => p,
         Err(e) => {
             tracing::error!(error = %e, "QSY policy config is invalid; refusing to start with permissive defaults — fix [qsy] in config");
-            return;
+            std::process::exit(1);
         }
     };
 
