@@ -3,7 +3,8 @@
 
 use openpulse_audio::LoopbackBackend;
 use openpulse_daemon::{
-    apply_command_to_engine, process_received_bytes, ws, ControlServer, RuntimeControlState,
+    apply_command_to_engine, check_ptt_watchdog, process_received_bytes, ws, ControlServer,
+    RuntimeControlState,
 };
 use openpulse_modem::ModemEngine;
 use openpulse_radio::{NoOpPtt, PttController, RigctldController, RigctldPtt, VoxPtt};
@@ -191,6 +192,14 @@ async fn main() {
                 }
             }
             _ = rx_ticker.tick() => {
+                // Release PTT hardware if the watchdog deadline has elapsed.
+                if check_ptt_watchdog(&mut runtime_state, &handle.event_tx) {
+                    if let Some(ref mut ptt) = ptt_controller {
+                        if let Err(e) = ptt.release_ptt() {
+                            tracing::warn!("PTT watchdog release failed: {e}");
+                        }
+                    }
+                }
                 let mode = handle.active_mode.lock().await.clone();
                 // block_in_place: engine.receive() is synchronous; LoopbackBackend returns
                 // immediately. A real audio backend would block until samples are available.

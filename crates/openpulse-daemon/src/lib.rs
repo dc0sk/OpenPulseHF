@@ -22,7 +22,7 @@ use std::net::SocketAddr;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_channel::dsp::PowerSpectrum;
@@ -62,7 +62,6 @@ pub use protocol::ControlEvent as Event;
 
 /// Mutable daemon runtime state touched by side-effectful control commands.
 #[cfg(not(target_arch = "wasm32"))]
-#[derive(Default)]
 pub struct RuntimeControlState {
     pub repeater_enabled: bool,
     pub qsy_decisions: HashMap<String, bool>,
@@ -77,6 +76,29 @@ pub struct RuntimeControlState {
     pub repeater_stop: Option<Arc<AtomicBool>>,
     /// Handle for the running repeater thread.
     pub repeater_thread: Option<std::thread::JoinHandle<()>>,
+    /// Timestamp of the most recent PttAssert; `None` when PTT is not active.
+    pub ptt_asserted_at: Option<Instant>,
+    /// Maximum continuous transmit time before the watchdog releases PTT.
+    /// Defaults to 3 minutes (180 s) to stay within Part 97 duty-cycle guidance.
+    pub ptt_max_duration: Duration,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for RuntimeControlState {
+    fn default() -> Self {
+        Self {
+            repeater_enabled: false,
+            qsy_decisions: HashMap::new(),
+            qsy_pending_token: None,
+            qsy_session: None,
+            qsy_candidate_freqs: Vec::new(),
+            repeater: None,
+            repeater_stop: None,
+            repeater_thread: None,
+            ptt_asserted_at: None,
+            ptt_max_duration: Duration::from_secs(180),
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -91,6 +113,11 @@ impl std::fmt::Debug for RuntimeControlState {
             .field("repeater", &self.repeater.is_some())
             .field("repeater_stop", &self.repeater_stop.is_some())
             .field("repeater_thread", &self.repeater_thread.is_some())
+            .field(
+                "ptt_asserted_at",
+                &self.ptt_asserted_at.map(|t| t.elapsed()),
+            )
+            .field("ptt_max_duration", &self.ptt_max_duration)
             .finish()
     }
 }
@@ -685,6 +712,29 @@ async fn execute_qsy_actions(
     }
 }
 
+/// Release PTT if the watchdog deadline has elapsed since `PttAssert`.
+///
+/// Returns `true` if the watchdog fired (PTT was forcibly released), so the
+/// caller can propagate the hardware release through the PTT controller.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn check_ptt_watchdog(
+    runtime_state: &mut RuntimeControlState,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+) -> bool {
+    if let Some(asserted_at) = runtime_state.ptt_asserted_at {
+        if asserted_at.elapsed() >= runtime_state.ptt_max_duration {
+            runtime_state.ptt_asserted_at = None;
+            tracing::warn!(
+                max_secs = runtime_state.ptt_max_duration.as_secs(),
+                "PTT watchdog fired — transmitter has been keyed beyond max duration; releasing"
+            );
+            let _ = event_tx.send(ControlEvent::PttChanged { active: false });
+            return true;
+        }
+    }
+    false
+}
+
 /// Process raw bytes received from the modem engine and drive QSY responder logic.
 ///
 /// Called from the main daemon loop after each receive tick. Non-QSY payloads are
@@ -776,9 +826,11 @@ pub async fn apply_command_to_engine(
             engine.set_tx_attenuation_db(config.tx_attenuation_db);
         }
         ControlCommand::PttAssert => {
+            runtime_state.ptt_asserted_at = Some(Instant::now());
             let _ = event_tx.send(ControlEvent::PttChanged { active: true });
         }
         ControlCommand::PttRelease => {
+            runtime_state.ptt_asserted_at = None;
             let _ = event_tx.send(ControlEvent::PttChanged { active: false });
         }
         ControlCommand::ConnectPeer { callsign } => {
@@ -1671,5 +1723,53 @@ mod command_apply_tests {
             }
             other => panic!("expected QsyIncoming, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn ptt_watchdog_fires_after_deadline() {
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let mut state = RuntimeControlState {
+            ptt_asserted_at: Some(Instant::now() - Duration::from_secs(200)),
+            ptt_max_duration: Duration::from_secs(180),
+            ..RuntimeControlState::default()
+        };
+        let fired = check_ptt_watchdog(&mut state, &ev_tx);
+        assert!(fired, "watchdog must fire when deadline is exceeded");
+        assert!(
+            state.ptt_asserted_at.is_none(),
+            "ptt_asserted_at must be cleared"
+        );
+        let ev = rx.try_recv().expect("PttChanged event must be emitted");
+        assert!(
+            matches!(ev, ControlEvent::PttChanged { active: false }),
+            "event must be PttChanged {{active: false}}"
+        );
+    }
+
+    #[test]
+    fn ptt_watchdog_silent_before_deadline() {
+        let (tx, _) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let mut state = RuntimeControlState {
+            ptt_asserted_at: Some(Instant::now()),
+            ptt_max_duration: Duration::from_secs(180),
+            ..RuntimeControlState::default()
+        };
+        let fired = check_ptt_watchdog(&mut state, &ev_tx);
+        assert!(!fired, "watchdog must not fire before deadline");
+        assert!(
+            state.ptt_asserted_at.is_some(),
+            "ptt_asserted_at must remain set"
+        );
+    }
+
+    #[test]
+    fn ptt_watchdog_silent_when_ptt_not_active() {
+        let (tx, _) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let mut state = RuntimeControlState::default();
+        let fired = check_ptt_watchdog(&mut state, &ev_tx);
+        assert!(!fired, "watchdog must not fire when PTT is not active");
     }
 }
