@@ -27,6 +27,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_channel::dsp::PowerSpectrum;
 #[cfg(not(target_arch = "wasm32"))]
+use openpulse_core::handshake::InMemoryTrustStore;
 use openpulse_core::trust::{CertificateSource, PublicKeyTrustLevel, SigningMode};
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_modem::engine::SecureSessionParams;
@@ -81,6 +82,8 @@ pub struct RuntimeControlState {
     /// Maximum continuous transmit time before the watchdog releases PTT.
     /// Defaults to 3 minutes (180 s) to stay within Part 97 duty-cycle guidance.
     pub ptt_max_duration: Duration,
+    /// Loaded trust store for verifying incoming peer handshakes.
+    pub trust_store: InMemoryTrustStore,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -97,6 +100,7 @@ impl Default for RuntimeControlState {
             repeater_thread: None,
             ptt_asserted_at: None,
             ptt_max_duration: Duration::from_secs(180),
+            trust_store: InMemoryTrustStore::default(),
         }
     }
 }
@@ -118,6 +122,7 @@ impl std::fmt::Debug for RuntimeControlState {
                 &self.ptt_asserted_at.map(|t| t.elapsed()),
             )
             .field("ptt_max_duration", &self.ptt_max_duration)
+            .field("trust_store_entries", &"<opaque>")
             .finish()
     }
 }

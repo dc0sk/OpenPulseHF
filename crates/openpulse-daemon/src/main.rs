@@ -2,6 +2,7 @@
 //! control port on TCP port 9000 and WebSocket port 9001 (defaults).
 
 use openpulse_audio::LoopbackBackend;
+use openpulse_core::trust_store_file::load_trust_store_from_file;
 use openpulse_daemon::{
     apply_command_to_engine, check_ptt_watchdog, process_received_bytes, ws, ControlServer,
     RuntimeControlState,
@@ -144,6 +145,24 @@ async fn main() {
         repeater_enabled: cfg.repeater.enabled,
         repeater: Some(repeater),
         qsy_candidate_freqs: cfg.qsy.candidate_freqs_hz.clone(),
+        trust_store: if !cfg.trust.store_path.is_empty() {
+            match load_trust_store_from_file(std::path::Path::new(&cfg.trust.store_path)) {
+                Ok(store) => {
+                    tracing::info!(path = %cfg.trust.store_path, "trust store loaded");
+                    store
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        path = %cfg.trust.store_path,
+                        error = %e,
+                        "failed to load trust store; starting with empty store"
+                    );
+                    Default::default()
+                }
+            }
+        } else {
+            Default::default()
+        },
         ..RuntimeControlState::default()
     };
 
