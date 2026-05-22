@@ -763,13 +763,26 @@ impl ModemEngine {
 
         info!("received {} audio samples", samples.samples.len());
 
-        let wire = {
+        let (wire, snr_hint) = {
             let plugin = self
                 .plugins
                 .get(mode)
                 .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
-            self.stage_demodulate_payload(plugin, mode, &samples)?
+            let mod_cfg = ModulationConfig {
+                mode: mode.to_string(),
+                center_frequency: self.center_frequency + self.afc_correction_hz,
+                ..ModulationConfig::default()
+            };
+            let snr = plugin
+                .demodulate_soft(&samples.samples, &mod_cfg)
+                .ok()
+                .map(|llrs| Self::snr_from_llrs(&llrs));
+            let wire = self.stage_demodulate_payload(plugin, mode, &samples)?;
+            (wire, snr)
         };
+        if let Some(snr) = snr_hint {
+            self.last_rx_snr_db = Some(snr);
+        }
         let wire = self.route_wire_stage(PipelineStage::DemodulateDecode, wire)?;
         debug!("demodulated {} bytes", wire.bytes.len());
 

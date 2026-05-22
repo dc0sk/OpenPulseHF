@@ -120,7 +120,7 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
                 .unwrap_or_default()
                 .as_millis() as u64;
             if let Ok(mut engine) = bridge.engine.lock() {
-                let _ = engine.begin_secure_session(
+                if let Err(e) = engine.begin_secure_session(
                     SecureSessionParams {
                         local_minimum_mode: SigningMode::Normal,
                         peer_supported_modes: vec![SigningMode::Normal],
@@ -129,7 +129,9 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
                         psk_validated: false,
                     },
                     now_ms,
-                );
+                ) {
+                    tracing::warn!(peer = %peer, error = %e, "begin_secure_session failed on CONNECT");
+                }
             }
             // Both state transitions returned as direct responses in order.
             vec!["NEWSTATE CONNECTING".into(), format!("CONNECTED {peer}")]
@@ -143,7 +145,9 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
                 .unwrap_or_default()
                 .as_millis() as u64;
             if let Ok(mut engine) = bridge.engine.lock() {
-                let _ = engine.end_secure_session(now_ms);
+                if let Err(e) = engine.end_secure_session(now_ms) {
+                    tracing::warn!(error = %e, "end_secure_session failed on DISCONNECT");
+                }
             }
             vec!["NEWSTATE DISCONNECTING".into(), "DISCONNECTED".into()]
         }
@@ -163,8 +167,14 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
         }
 
         "PTT" => match parts.get(1).map(|s| s.to_uppercase()).as_deref() {
-            Some("TRUE") => vec!["PTT TRUE".into()],
-            _ => vec!["PTT FALSE".into()],
+            Some("TRUE") => {
+                tracing::warn!("PTT TRUE received but hardware PTT is not implemented in ARDOP bridge; stub response only");
+                vec!["PTT TRUE".into()]
+            }
+            _ => {
+                tracing::warn!("PTT FALSE received but hardware PTT is not implemented in ARDOP bridge; stub response only");
+                vec!["PTT FALSE".into()]
+            }
         },
 
         "GRIDSQUARE" => {
@@ -202,11 +212,19 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
         },
 
         "CWID" => match parts.get(1).map(|s| s.to_uppercase()).as_deref() {
-            Some("TRUE") => vec!["CWID TRUE".into()],
+            Some("TRUE") => {
+                tracing::warn!("CWID TRUE received but CW ID transmission is not implemented; stub response only");
+                vec!["CWID TRUE".into()]
+            }
             _ => vec!["CWID FALSE".into()],
         },
 
-        "SENDID" => vec!["SENDID".into()],
+        "SENDID" => {
+            tracing::warn!(
+                "SENDID received but ID frame transmission is not implemented; stub response only"
+            );
+            vec!["SENDID".into()]
+        }
 
         "FECSEND" => {
             bridge
