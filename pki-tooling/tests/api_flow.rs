@@ -11,6 +11,7 @@ fn make_state(pool: sqlx::PgPool) -> AppState {
     AppState {
         db: pool,
         signing_key: SigningKey::from_bytes(&[1u8; 32]),
+        api_key: "test-api-key".to_string(),
     }
 }
 
@@ -184,6 +185,7 @@ async fn moderation_decision_updates_submission_and_records_events() {
     let moderate_req = Request::builder()
         .method("POST")
         .uri(format!("/api/v1/moderation/{submission_id}/decision"))
+        .header("authorization", "Bearer test-api-key")
         .header("content-type", "application/json")
         .header("x-request-id", "req-moderation-001")
         .body(Body::from(
@@ -306,6 +308,7 @@ async fn create_session_audit_event_persists_required_audit_payload() {
     let req = Request::builder()
         .method("POST")
         .uri("/api/v1/session-audit-events")
+        .header("authorization", "Bearer test-api-key")
         .header("content-type", "application/json")
         .header("x-request-id", "req-session-audit-001")
         .body(Body::from(
@@ -659,6 +662,7 @@ async fn moderation_rejects_invalid_decision_value() {
     let moderate_req = Request::builder()
         .method("POST")
         .uri(format!("/api/v1/moderation/{submission_id}/decision"))
+        .header("authorization", "Bearer test-api-key")
         .header("content-type", "application/json")
         .body(Body::from(
             json!({
@@ -708,6 +712,7 @@ async fn moderation_returns_not_found_for_missing_submission() {
     let moderate_req = Request::builder()
         .method("POST")
         .uri("/api/v1/moderation/non-existent-submission/decision")
+        .header("authorization", "Bearer test-api-key")
         .header("content-type", "application/json")
         .body(Body::from(
             json!({
@@ -1703,6 +1708,7 @@ async fn trust_bundle_endpoints_return_current_and_specific_bundle() {
     let current_req = Request::builder()
         .method("GET")
         .uri("/api/v1/trust-bundles/current")
+        .header("authorization", "Bearer test-api-key")
         .body(Body::empty())
         .expect("failed to build GET /trust-bundles/current request");
 
@@ -1735,6 +1741,7 @@ async fn trust_bundle_endpoints_return_current_and_specific_bundle() {
     let by_id_req = Request::builder()
         .method("GET")
         .uri("/api/v1/trust-bundles/bundle-old")
+        .header("authorization", "Bearer test-api-key")
         .body(Body::empty())
         .expect("failed to build GET /trust-bundles/{bundle_id} request");
 
@@ -1760,6 +1767,7 @@ async fn trust_bundle_endpoints_return_current_and_specific_bundle() {
     let missing_req = Request::builder()
         .method("GET")
         .uri("/api/v1/trust-bundles/missing-bundle")
+        .header("authorization", "Bearer test-api-key")
         .body(Body::empty())
         .expect("failed to build missing bundle request");
 
@@ -2059,6 +2067,7 @@ async fn create_revocation_succeeds_with_valid_input() {
     let req = Request::builder()
         .method("POST")
         .uri("/api/v1/revocations")
+        .header("authorization", "Bearer test-api-key")
         .header("content-type", "application/json")
         .header("x-request-id", "req-create-rev-001")
         .body(Body::from(
@@ -2128,6 +2137,7 @@ async fn create_revocation_rejects_empty_fields() {
     let req = Request::builder()
         .method("POST")
         .uri("/api/v1/revocations")
+        .header("authorization", "Bearer test-api-key")
         .header("content-type", "application/json")
         .body(Body::from(
             json!({
@@ -2191,6 +2201,7 @@ async fn create_revocation_rejects_invalid_rfc3339_timestamp() {
     let req = Request::builder()
         .method("POST")
         .uri("/api/v1/revocations")
+        .header("authorization", "Bearer test-api-key")
         .header("content-type", "application/json")
         .body(Body::from(
             json!({
@@ -2237,6 +2248,7 @@ async fn create_revocation_rejects_missing_record() {
     let req = Request::builder()
         .method("POST")
         .uri("/api/v1/revocations")
+        .header("authorization", "Bearer test-api-key")
         .header("content-type", "application/json")
         .body(Body::from(
             json!({
@@ -2283,6 +2295,7 @@ async fn publish_trust_bundle_succeeds_with_valid_input() {
     let req = Request::builder()
         .method("POST")
         .uri("/api/v1/trust-bundles")
+        .header("authorization", "Bearer test-api-key")
         .header("content-type", "application/json")
         .header("x-request-id", "req-pub-bundle-001")
         .body(Body::from(
@@ -2328,6 +2341,7 @@ async fn publish_trust_bundle_rejects_empty_fields() {
     let req = Request::builder()
         .method("POST")
         .uri("/api/v1/trust-bundles")
+        .header("authorization", "Bearer test-api-key")
         .header("content-type", "application/json")
         .body(Body::from(
             json!({
@@ -2372,6 +2386,7 @@ async fn publish_trust_bundle_rejects_invalid_rfc3339_timestamp() {
     let req = Request::builder()
         .method("POST")
         .uri("/api/v1/trust-bundles")
+        .header("authorization", "Bearer test-api-key")
         .header("content-type", "application/json")
         .body(Body::from(
             json!({
@@ -2446,6 +2461,7 @@ async fn promote_trust_bundle_marks_bundle_current() {
     let req = Request::builder()
         .method("PATCH")
         .uri("/api/v1/trust-bundles/bundle-promote-target/promote")
+        .header("authorization", "Bearer test-api-key")
         .header("content-type", "application/json")
         .header("x-request-id", "req-promote-001")
         .body(Body::from(json!({ "reason": "rollout" }).to_string()))
@@ -2489,6 +2505,7 @@ async fn promote_trust_bundle_returns_not_found_for_missing_bundle() {
     let req = Request::builder()
         .method("PATCH")
         .uri("/api/v1/trust-bundles/missing-bundle/promote")
+        .header("authorization", "Bearer test-api-key")
         .header("content-type", "application/json")
         .header("x-request-id", "req-promote-404")
         .body(Body::from(json!({ "reason": "none" }).to_string()))
@@ -2535,6 +2552,7 @@ async fn create_revocation_replays_same_response_for_same_request_id() {
     let req1 = Request::builder()
         .method("POST")
         .uri("/api/v1/revocations")
+        .header("authorization", "Bearer test-api-key")
         .header("content-type", "application/json")
         .header("x-request-id", "req-dedup-rev-001")
         .body(Body::from(payload.clone()))
@@ -2553,6 +2571,7 @@ async fn create_revocation_replays_same_response_for_same_request_id() {
     let req2 = Request::builder()
         .method("POST")
         .uri("/api/v1/revocations")
+        .header("authorization", "Bearer test-api-key")
         .header("content-type", "application/json")
         .header("x-request-id", "req-dedup-rev-001")
         .body(Body::from(payload))
@@ -2600,6 +2619,7 @@ async fn publish_trust_bundle_replays_same_response_for_same_request_id() {
     let req1 = Request::builder()
         .method("POST")
         .uri("/api/v1/trust-bundles")
+        .header("authorization", "Bearer test-api-key")
         .header("content-type", "application/json")
         .header("x-request-id", "req-dedup-bundle-001")
         .body(Body::from(payload.clone()))
@@ -2618,6 +2638,7 @@ async fn publish_trust_bundle_replays_same_response_for_same_request_id() {
     let req2 = Request::builder()
         .method("POST")
         .uri("/api/v1/trust-bundles")
+        .header("authorization", "Bearer test-api-key")
         .header("content-type", "application/json")
         .header("x-request-id", "req-dedup-bundle-001")
         .body(Body::from(payload))
@@ -2889,6 +2910,7 @@ async fn published_bundle_signature_is_verifiable() {
     let req = Request::builder()
         .method("POST")
         .uri("/api/v1/trust-bundles")
+        .header("authorization", "Bearer test-api-key")
         .header("content-type", "application/json")
         .body(Body::from(
             json!({
@@ -2915,6 +2937,7 @@ async fn published_bundle_signature_is_verifiable() {
     let get_req = Request::builder()
         .method("GET")
         .uri(format!("/api/v1/trust-bundles/{bundle_id}"))
+        .header("authorization", "Bearer test-api-key")
         .body(Body::empty())
         .unwrap();
     let get_res = app.clone().oneshot(get_req).await.unwrap();
@@ -2979,6 +3002,7 @@ async fn get_signing_key_returns_pubkey() {
     let app = build_router(AppState {
         db: pool.clone(),
         signing_key,
+        api_key: "test-api-key".to_string(),
     });
 
     let req = Request::builder()
@@ -3015,6 +3039,7 @@ async fn promoted_bundle_signature_survives_promotion() {
     let req = Request::builder()
         .method("POST")
         .uri("/api/v1/trust-bundles")
+        .header("authorization", "Bearer test-api-key")
         .header("content-type", "application/json")
         .body(Body::from(
             json!({
@@ -3041,6 +3066,7 @@ async fn promoted_bundle_signature_survives_promotion() {
     let promote_req = Request::builder()
         .method("PATCH")
         .uri(format!("/api/v1/trust-bundles/{bundle_id}/promote"))
+        .header("authorization", "Bearer test-api-key")
         .header("content-type", "application/json")
         .body(Body::from(json!({ "reason": "test" }).to_string()))
         .unwrap();
@@ -3050,6 +3076,7 @@ async fn promoted_bundle_signature_survives_promotion() {
     let current_req = Request::builder()
         .method("GET")
         .uri("/api/v1/trust-bundles/current")
+        .header("authorization", "Bearer test-api-key")
         .body(Body::empty())
         .unwrap();
     let current_res = app.clone().oneshot(current_req).await.unwrap();

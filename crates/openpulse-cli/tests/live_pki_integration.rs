@@ -65,6 +65,7 @@ async fn spawn_live_server(pool: sqlx::PgPool) -> String {
     let router = build_router(AppState {
         db: pool,
         signing_key: SigningKey::from_bytes(&[1u8; 32]),
+        api_key: "test-api-key".to_string(),
     });
     tokio::spawn(async move {
         axum::serve(listener, router)
