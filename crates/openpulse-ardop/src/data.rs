@@ -53,7 +53,10 @@ async fn handle_client(
                         len,
                         "ARDOP data port TX queue full — frame dropped; backpressure needed"
                     );
-                    bridge.tx_pending.fetch_sub(len, Ordering::Relaxed);
+                    bridge.tx_pending.fetch_sub(
+                        len.min(bridge.tx_pending.load(Ordering::Relaxed)),
+                        Ordering::Relaxed,
+                    );
                 }
             }
             Ok(data) = rx_data.recv() => {
