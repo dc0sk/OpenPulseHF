@@ -63,6 +63,18 @@ use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 pub use protocol::ControlCommand as Command;
 pub use protocol::ControlEvent as Event;
 
+/// Live engine metrics shared between the main loop and the periodic metrics task.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+pub struct MetricsSnapshot {
+    pub afc_correction_hz: f32,
+    /// Cumulative bytes decoded from the RF receive path.
+    pub total_rx_bytes: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+type SharedMetrics = Arc<Mutex<MetricsSnapshot>>;
+
 /// Mutable daemon runtime state touched by side-effectful control commands.
 #[cfg(not(target_arch = "wasm32"))]
 pub struct RuntimeControlState {
@@ -247,6 +259,8 @@ pub struct ControlServerHandle {
     pub station_id: SharedStationId,
     /// In-memory message store shared across all control endpoints.
     pub message_store: SharedMessageStore,
+    /// Live engine metrics written by the main loop; read by the periodic metrics task.
+    pub shared_metrics: SharedMetrics,
 }
 
 /// NDJSON-over-TCP control server.
@@ -285,6 +299,7 @@ impl ControlServer {
         let spectrum_tap: SpectrumTap = Arc::new(RwLock::new(vec![0.0f32; 1024]));
         let station_id: SharedStationId = Arc::new(Mutex::new(initial_station_id));
         let message_store: SharedMessageStore = Arc::new(Mutex::new(MessageStore::new()));
+        let shared_metrics: SharedMetrics = Arc::new(Mutex::new(MetricsSnapshot::default()));
 
         // Background task: forward EngineEvents into the ControlEvent broadcast.
         let mut eng_rx = engine.subscribe();
@@ -303,15 +318,25 @@ impl ControlServer {
 
         // Background task: periodic Metrics events at 1 Hz.
         let ev_metrics = Arc::clone(&ev_tx);
+        let metrics_snap = Arc::clone(&shared_metrics);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(1));
+            let mut last_bytes: u64 = 0;
             loop {
                 interval.tick().await;
+                let (afc, new_bytes) = {
+                    let m = metrics_snap.lock().await;
+                    (m.afc_correction_hz, m.total_rx_bytes)
+                };
+                let effective_bps = (new_bytes.saturating_sub(last_bytes) * 8) as f32;
+                last_bytes = new_bytes;
                 let _ = ev_metrics.send(ControlEvent::Metrics {
-                    effective_bps: 0.0,
+                    effective_bps,
                     ecc_rate: 0.0,
                     compress_ratio: 1.0,
-                    afc_correction_hz: 0.0,
+                    afc_correction_hz: afc,
+                    // signal_strength_dbm requires calibrated S-meter data from the rig;
+                    // SNR from last_rx_snr_db is in dB, not dBm, so it is left absent here.
                     signal_strength_dbm: None,
                 });
             }
@@ -362,6 +387,7 @@ impl ControlServer {
             spectrum_tap,
             station_id,
             message_store,
+            shared_metrics,
         })
     }
 }
@@ -699,10 +725,38 @@ async fn execute_qsy_actions(
     }
 
     if let Some(freqs) = scan_freqs {
-        // Use last observed SNR as a uniform estimate for all candidates; no per-frequency
-        // S-meter is available at the daemon layer.
-        let observed_snr = engine.last_rx_snr_db().unwrap_or(0.0);
-        let results: Vec<(u64, f32)> = freqs.iter().map(|&f| (f, observed_snr)).collect();
+        let results: Vec<(u64, f32)> = if let Some(ref mut rig) = rig_controller {
+            // Hop to each candidate, dwell briefly, and read the measured SNR.
+            // Save and restore the original frequency so the radio is left on-channel.
+            // Rig calls are synchronous TCP I/O — run them in block_in_place so they
+            // don't stall the Tokio runtime during the scan.
+            let original_freq = tokio::task::block_in_place(|| rig.get_frequency()).ok();
+            let mut scan_results = Vec::with_capacity(freqs.len());
+            for &freq in &freqs {
+                if let Err(e) = tokio::task::block_in_place(|| rig.set_frequency(freq)) {
+                    tracing::warn!(freq, error = %e, "qsy scan: set_frequency failed; using last SNR");
+                    scan_results.push((freq, engine.last_rx_snr_db().unwrap_or(0.0)));
+                    continue;
+                }
+                // 100 ms dwell: let the audio buffer refresh before sampling SNR.
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                match tokio::task::block_in_place(|| engine.receive(mode, None)) {
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(freq, error = %e, "qsy scan: receive failed"),
+                }
+                scan_results.push((freq, engine.last_rx_snr_db().unwrap_or(0.0)));
+            }
+            if let Some(orig) = original_freq {
+                if let Err(e) = tokio::task::block_in_place(|| rig.set_frequency(orig)) {
+                    tracing::warn!(freq = orig, error = %e, "qsy scan: failed to restore frequency");
+                }
+            }
+            scan_results
+        } else {
+            // No rig controller: fall back to uniform SNR from the most recent receive.
+            let observed_snr = engine.last_rx_snr_db().unwrap_or(0.0);
+            freqs.iter().map(|&f| (f, observed_snr)).collect()
+        };
         match session.scan_complete(results) {
             Ok(follow_up) => {
                 // scan_complete never returns another StartScan; iterate directly.

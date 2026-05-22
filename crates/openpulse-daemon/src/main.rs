@@ -331,6 +331,12 @@ async fn main() {
                     )
                     .await;
                 }
+                // Refresh live metrics so the periodic metrics task can broadcast real values.
+                {
+                    let mut m = handle.shared_metrics.lock().await;
+                    m.afc_correction_hz = engine.last_afc_offset_hz().unwrap_or(0.0);
+                    m.total_rx_bytes += bytes.len() as u64;
+                }
             }
         }
     }
