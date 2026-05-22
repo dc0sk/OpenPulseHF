@@ -222,9 +222,7 @@ async fn main() {
             deny_count = cfg.relay.deny_list.len(),
             "relay forwarding enabled"
         );
-        Some(std::sync::Arc::new(std::sync::Mutex::new(
-            RelayForwarder::new(ttl_ms, policy),
-        )))
+        Some(RelayForwarder::new(ttl_ms, policy))
     } else {
         None
     };
@@ -233,7 +231,13 @@ async fn main() {
         repeater_enabled: cfg.repeater.enabled,
         repeater: Some(repeater),
         qsy_candidate_freqs: cfg.qsy.candidate_freqs_hz.clone(),
-        qsy_switchover_offset_s: cfg.qsy.switchover_offset_s as u32,
+        qsy_switchover_offset_s: u32::try_from(cfg.qsy.switchover_offset_s).unwrap_or_else(|_| {
+            tracing::warn!(
+                value = cfg.qsy.switchover_offset_s,
+                "qsy.switchover_offset_s exceeds u32::MAX; clamping to u32::MAX"
+            );
+            u32::MAX
+        }),
         qsy_policy,
         relay_forwarder,
         trust_store: if !cfg.trust.store_path.is_empty() {

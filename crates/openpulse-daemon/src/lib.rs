@@ -91,7 +91,7 @@ pub struct RuntimeControlState {
     /// Loaded trust store for verifying incoming peer handshakes.
     pub trust_store: InMemoryTrustStore,
     /// Optional relay forwarder; `Some` when `[relay] enabled = true` in config.
-    pub relay_forwarder: Option<std::sync::Arc<std::sync::Mutex<RelayForwarder>>>,
+    pub relay_forwarder: Option<RelayForwarder>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -769,6 +769,11 @@ pub async fn process_received_bytes(
     if bytes.is_empty() {
         return;
     }
+    let mode = active_mode.lock().await.clone();
+    // Attempt relay forwarding on the raw bytes before QSY parsing: WireEnvelope frames
+    // are binary and would be dropped by the UTF-8 early return below.
+    maybe_relay_forward(bytes, &mode, runtime_state, engine);
+
     let Ok(text) = std::str::from_utf8(bytes) else {
         return;
     };
@@ -776,7 +781,6 @@ pub async fn process_received_bytes(
         return;
     };
 
-    let mode = active_mode.lock().await.clone();
     let is_new_session = runtime_state.qsy_session.is_none();
     let session = runtime_state.qsy_session.get_or_insert_with(|| {
         QsySession::new_responder(
@@ -805,21 +809,17 @@ pub async fn process_received_bytes(
         }
         Err(e) => tracing::warn!(error = %e, "qsy responder: apply frame failed"),
     }
-
-    // Attempt relay forwarding if enabled.  Probing with WireEnvelope::decode is cheap
-    // (rejects on non-OPHF magic immediately) so it is always safe to attempt.
-    maybe_relay_forward(bytes, &mode, runtime_state, engine);
 }
 
 fn maybe_relay_forward(
     payload: &[u8],
     mode: &str,
-    runtime_state: &RuntimeControlState,
+    runtime_state: &mut RuntimeControlState,
     engine: &mut ModemEngine,
 ) {
     use openpulse_core::wire_query::WireEnvelope;
 
-    let Some(ref fwd_arc) = runtime_state.relay_forwarder else {
+    let Some(ref mut fwd) = runtime_state.relay_forwarder else {
         return;
     };
     let Ok(envelope) = WireEnvelope::decode(payload) else {
@@ -829,10 +829,7 @@ fn maybe_relay_forward(
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
-    let forwarded = {
-        let mut fwd = fwd_arc.lock().unwrap_or_else(|e| e.into_inner());
-        fwd.forward(&envelope, now_ms)
-    };
+    let forwarded = fwd.forward(&envelope, now_ms);
     match forwarded {
         Ok(out_envelope) => match out_envelope.encode() {
             Ok(out_bytes) => {
