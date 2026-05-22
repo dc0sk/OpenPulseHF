@@ -401,10 +401,10 @@ impl ModemEngine {
     }
 
     /// Return the SNR estimate (dB) measured during the most recent
-    /// [`receive_with_ack_hint`](Self::receive_with_ack_hint) call.
+    /// [`receive`](Self::receive) or [`receive_with_ack_hint`](Self::receive_with_ack_hint) call.
     ///
     /// Derived from mean absolute LLR magnitude; useful for display and logging.
-    /// Returns `None` if no `receive_with_ack_hint` call has completed yet.
+    /// Returns `None` if no receive call that supports soft demodulation has completed yet.
     pub fn last_rx_snr_db(&self) -> Option<f32> {
         self.last_rx_snr_db
     }
@@ -763,13 +763,42 @@ impl ModemEngine {
 
         info!("received {} audio samples", samples.samples.len());
 
-        let wire = {
+        let (wire, snr_opt) = {
             let plugin = self
                 .plugins
                 .get(mode)
                 .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
-            self.stage_demodulate_payload(plugin, mode, &samples)?
+            let mod_cfg = ModulationConfig {
+                mode: mode.to_string(),
+                center_frequency: self.center_frequency + self.afc_correction_hz,
+                ..ModulationConfig::default()
+            };
+            // Prefer soft demodulation: a single pass yields both LLRs (for SNR)
+            // and hard bits (via sign decision), avoiding a redundant demodulate() call.
+            match plugin.demodulate_soft(&samples.samples, &mod_cfg) {
+                Ok(llrs) => {
+                    let snr = Self::snr_from_llrs(&llrs);
+                    let wire_bytes: Vec<u8> = llrs
+                        .chunks(8)
+                        .map(|byte_llrs| {
+                            byte_llrs
+                                .iter()
+                                .enumerate()
+                                .fold(0u8, |acc, (i, &llr)| acc | (u8::from(llr <= 0.0) << i))
+                        })
+                        .collect();
+                    (WirePayload { bytes: wire_bytes }, Some(snr))
+                }
+                Err(_) => {
+                    // Plugin does not support soft demodulation; use hard path.
+                    let wire = self.stage_demodulate_payload(plugin, mode, &samples)?;
+                    (wire, None)
+                }
+            }
         };
+        if let Some(snr) = snr_opt {
+            self.last_rx_snr_db = Some(snr);
+        }
         let wire = self.route_wire_stage(PipelineStage::DemodulateDecode, wire)?;
         debug!("demodulated {} bytes", wire.bytes.len());
 

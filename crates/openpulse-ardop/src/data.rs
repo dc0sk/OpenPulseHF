@@ -48,8 +48,16 @@ async fn handle_client(
                 let mut payload = vec![0u8; len];
                 read_half.read_exact(&mut payload).await?;
                 bridge.tx_pending.fetch_add(len, Ordering::Relaxed);
-                // Non-blocking send; silently drop if queue is full.
-                bridge.tx_data_tx.try_send(payload).ok();
+                if bridge.tx_data_tx.try_send(payload).is_err() {
+                    tracing::warn!(
+                        len,
+                        "ARDOP data port TX queue full — frame dropped; backpressure needed"
+                    );
+                    bridge.tx_pending.fetch_sub(
+                        len.min(bridge.tx_pending.load(Ordering::Relaxed)),
+                        Ordering::Relaxed,
+                    );
+                }
             }
             Ok(data) = rx_data.recv() => {
                 let len = data.len() as u16;

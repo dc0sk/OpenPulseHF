@@ -111,7 +111,9 @@ fn worker_loop(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiver<Ve
         while let Ok(data) = tx_data_rx.try_recv() {
             let len = data.len();
             if bridge.loopback {
-                let _ = bridge.rx_data_tx.send(data);
+                if bridge.rx_data_tx.send(data).is_err() {
+                    tracing::debug!("KISS loopback RX: no subscribers, frame dropped");
+                }
             } else {
                 match bridge
                     .engine

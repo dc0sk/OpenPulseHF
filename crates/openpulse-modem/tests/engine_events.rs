@@ -45,6 +45,20 @@ fn emits_frame_received() {
 }
 
 #[test]
+fn receive_populates_last_rx_snr_db() {
+    let mut engine = make_engine();
+
+    // Transmit so the loopback backend has samples queued.
+    engine.transmit(b"hello", "BPSK100", None).unwrap();
+    engine.receive("BPSK100", None).unwrap();
+
+    assert!(
+        engine.last_rx_snr_db().is_some(),
+        "last_rx_snr_db() should be Some(_) after receive() with a plugin that supports demodulate_soft"
+    );
+}
+
+#[test]
 fn emits_hpx_transition() {
     let mut engine = make_engine();
     let mut rx = engine.subscribe();
