@@ -97,7 +97,10 @@ impl KissBridge {
 
 /// Spawn the background worker thread that drives TX/RX via the modem engine.
 pub fn spawn_worker(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiver<Vec<u8>>) {
-    std::thread::spawn(move || worker_loop(bridge, tx_data_rx));
+    std::thread::Builder::new()
+        .name("kiss-modem-worker".into())
+        .spawn(move || worker_loop(bridge, tx_data_rx))
+        .expect("failed to spawn kiss-modem-worker thread");
 }
 
 fn worker_loop(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiver<Vec<u8>>) {

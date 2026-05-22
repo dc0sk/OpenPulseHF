@@ -125,7 +125,7 @@ fn run_b2f_pair(case: &TestCase, body: Vec<u8>) -> Result<Vec<DecodedMessage>, S
     let irs_thread = thread::spawn(move || {
         let cmd = TcpStream::connect(irs_cmd_addr).map_err(|e| e.to_string())?;
         let data = TcpStream::connect(irs_data_addr).map_err(|e| e.to_string())?;
-        let mut driver = B2fDriver::new(cmd, data);
+        let mut driver = B2fDriver::new(cmd, data).unwrap();
         driver
             .run_irs("K2DEF", Duration::from_secs(30))
             .map_err(|e| e.to_string())
@@ -134,7 +134,7 @@ fn run_b2f_pair(case: &TestCase, body: Vec<u8>) -> Result<Vec<DecodedMessage>, S
     {
         let cmd = TcpStream::connect(iss_cmd_addr).map_err(|e| e.to_string())?;
         let data = TcpStream::connect(iss_data_addr).map_err(|e| e.to_string())?;
-        let mut iss_driver = B2fDriver::new(cmd, data);
+        let mut iss_driver = B2fDriver::new(cmd, data).unwrap();
         iss_driver
             .run_iss("K1ABC", "K2DEF", vec![(header, body)])
             .map_err(|e| e.to_string())?;

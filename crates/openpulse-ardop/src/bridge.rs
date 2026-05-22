@@ -89,7 +89,10 @@ impl ModemBridge {
 
 /// Spawn the background worker thread that processes TX/RX data via the engine.
 pub fn spawn_worker(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<Vec<u8>>) {
-    std::thread::spawn(move || worker_loop(bridge, tx_data_rx));
+    std::thread::Builder::new()
+        .name("ardop-modem-worker".into())
+        .spawn(move || worker_loop(bridge, tx_data_rx))
+        .expect("failed to spawn ardop-modem-worker thread");
 }
 
 fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<Vec<u8>>) {
