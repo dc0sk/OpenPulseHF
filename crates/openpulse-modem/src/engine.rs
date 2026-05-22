@@ -2040,6 +2040,17 @@ impl ModemEngine {
             })
             .collect();
 
+        // OFDM/SC-FDMA pad the last symbol to a whole subcarrier boundary; the
+        // resulting hard_bytes may be a few bytes longer than an exact RS multiple.
+        // Trim to the nearest multiple of 255 (RS BLOCK_TOTAL) so FecCodec::decode
+        // doesn't reject the buffer.
+        const RS_BLOCK: usize = 255;
+        let rs_len = (hard_bytes.len() / RS_BLOCK) * RS_BLOCK;
+        let hard_bytes = if rs_len > 0 && rs_len < hard_bytes.len() {
+            hard_bytes[..rs_len].to_vec()
+        } else {
+            hard_bytes
+        };
         let hard_wire = WirePayload { bytes: hard_bytes };
         let hard_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, hard_wire)?;
 
