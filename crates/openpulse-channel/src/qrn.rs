@@ -1,7 +1,8 @@
 //! QRN (atmospheric noise) — Middleton Class-A impulsive noise model.
 
+use rand::Rng;
 use rand::SeedableRng;
-use rand_distr::{Distribution, Normal, Poisson, Uniform};
+use rand_distr::{Poisson, StandardNormal};
 
 use crate::{ChannelError, ChannelModel, QrnConfig};
 
@@ -51,11 +52,10 @@ impl ChannelModel for QrnChannel {
         let rms = if rms > 0.0 { rms } else { 1e-4 };
 
         let bg_sigma = rms / 10f32.powf(self.config.gaussian_snr_db / 20.0);
-        let bg_dist = Normal::new(0.0f32, bg_sigma).unwrap();
 
         let mut out: Vec<f32> = input
             .iter()
-            .map(|&s| s + bg_dist.sample(&mut self.rng))
+            .map(|&s| s + bg_sigma * self.rng.sample::<f32, _>(StandardNormal))
             .collect();
 
         let expected_spikes =
@@ -63,15 +63,13 @@ impl ChannelModel for QrnChannel {
         let spike_sigma = rms * self.config.impulse_amplitude_ratio;
         if expected_spikes > 0.0 && spike_sigma > 0.0 {
             let n_spikes = Poisson::new(expected_spikes as f64)
-                .unwrap()
-                .sample(&mut self.rng) as usize;
-            let pos_dist = Uniform::new(0usize, n);
-            let spike_dist = Normal::new(0.0f32, spike_sigma).unwrap();
+                .map(|d| self.rng.sample::<f64, _>(d) as usize)
+                .unwrap_or(0);
             let dur = self.config.max_spike_duration_samples.max(1) as usize;
 
             for _ in 0..n_spikes {
-                let start = pos_dist.sample(&mut self.rng);
-                let amp = spike_dist.sample(&mut self.rng);
+                let start = self.rng.gen_range(0..n);
+                let amp: f32 = spike_sigma * self.rng.sample::<f32, _>(StandardNormal);
                 for sample in out[start..(start + dur).min(n)].iter_mut() {
                     *sample += amp;
                 }
@@ -82,8 +80,10 @@ impl ChannelModel for QrnChannel {
 
     fn generate_noise(&mut self, length: usize) -> Vec<f32> {
         let sigma = 1.0 / 10f32.powf(self.config.gaussian_snr_db / 20.0);
-        let bg_dist = Normal::new(0.0f32, sigma).unwrap();
-        (0..length).map(|_| bg_dist.sample(&mut self.rng)).collect()
+        let rng = &mut self.rng;
+        (0..length)
+            .map(|_| sigma * rng.sample::<f32, _>(StandardNormal))
+            .collect()
     }
 }
 
