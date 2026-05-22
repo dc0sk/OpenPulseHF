@@ -1757,7 +1757,7 @@ impl ModemEngine {
         } else {
             let pad = 3 - (llrs.len() % 3);
             let mut v = llrs;
-            v.extend(std::iter::repeat(0.0f32).take(pad));
+            v.extend(std::iter::repeat_n(0.0f32, pad));
             v
         };
         let info_bytes = turbo_decode_soft(&llrs)?;

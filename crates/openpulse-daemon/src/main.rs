@@ -2,12 +2,15 @@
 //! control port on TCP port 9000 and WebSocket port 9001 (defaults).
 
 use openpulse_audio::LoopbackBackend;
+use openpulse_core::audio::AudioBackend;
+use openpulse_core::relay::{RelayForwarder, RelayTrustPolicy};
 use openpulse_core::trust_store_file::load_trust_store_from_file;
 use openpulse_daemon::{
     apply_command_to_engine, check_ptt_watchdog, process_received_bytes, ws, ControlServer,
     RuntimeControlState,
 };
 use openpulse_modem::ModemEngine;
+use openpulse_qsy::session::QsyPolicy;
 use openpulse_radio::{NoOpPtt, PttController, RigctldController, RigctldPtt, VoxPtt};
 use openpulse_repeater::{CrossBandRepeater, RepeaterConfig};
 
@@ -48,8 +51,7 @@ async fn main() {
         "unrestricted".to_string()
     };
 
-    let audio = Box::new(LoopbackBackend::default());
-    let mut engine = ModemEngine::new(audio);
+    let mut engine = ModemEngine::new(build_audio_backend(&cfg.audio.backend));
     engine
         .register_plugin(Box::new(BpskPlugin::new()))
         .expect("failed to register BPSK plugin");
@@ -72,23 +74,74 @@ async fn main() {
         .register_plugin(Box::new(ScFdmaPlugin::new()))
         .expect("failed to register SC-FDMA plugin");
 
+    if cfg.audio.tx_limiter_threshold > 0.0 {
+        engine.set_tx_limiter_threshold(cfg.audio.tx_limiter_threshold);
+        tracing::info!(
+            threshold = cfg.audio.tx_limiter_threshold,
+            "TX soft-limiter enabled"
+        );
+    }
+
     // Pre-build the cross-band repeater so it is ready when EnableRepeater fires.
     let repeater = {
-        let mut rx = ModemEngine::new(Box::new(LoopbackBackend::default()));
-        rx.register_plugin(Box::new(BpskPlugin::new())).ok();
-        rx.register_plugin(Box::new(QpskPlugin::new())).ok();
-        rx.register_plugin(Box::new(Psk8Plugin::new())).ok();
-        let mut tx = ModemEngine::new(Box::new(LoopbackBackend::default()));
-        tx.register_plugin(Box::new(BpskPlugin::new())).ok();
-        tx.register_plugin(Box::new(QpskPlugin::new())).ok();
-        tx.register_plugin(Box::new(Psk8Plugin::new())).ok();
-        let rep_cfg = RepeaterConfig {
-            enabled: true,
-            mode: cfg.modem.mode.clone(),
-            tx_hang_ms: 0,
-            full_duplex: false,
+        let mut rx = ModemEngine::new(build_audio_backend(&cfg.audio.backend));
+        for (name, plugin) in [
+            (
+                "BPSK",
+                Box::new(BpskPlugin::new()) as Box<dyn openpulse_core::plugin::ModulationPlugin>,
+            ),
+            ("QPSK", Box::new(QpskPlugin::new())),
+            ("8PSK", Box::new(Psk8Plugin::new())),
+        ] {
+            if let Err(e) = rx.register_plugin(plugin) {
+                tracing::warn!(plugin = name, error = %e, "repeater rx: plugin registration failed");
+            }
+        }
+        let mut tx = ModemEngine::new(build_audio_backend(&cfg.audio.backend));
+        for (name, plugin) in [
+            (
+                "BPSK",
+                Box::new(BpskPlugin::new()) as Box<dyn openpulse_core::plugin::ModulationPlugin>,
+            ),
+            ("QPSK", Box::new(QpskPlugin::new())),
+            ("8PSK", Box::new(Psk8Plugin::new())),
+        ] {
+            if let Err(e) = tx.register_plugin(plugin) {
+                tracing::warn!(plugin = name, error = %e, "repeater tx: plugin registration failed");
+            }
+        }
+        let rep_ptt: Box<dyn PttController + Send> = match cfg.radio.rig_b.as_ref() {
+            Some(rig_b) => match RigctldPtt::connect(&rig_b.rigctld_addr) {
+                Ok(ctrl) => {
+                    tracing::info!(addr = %rig_b.rigctld_addr, "repeater PTT connected via rigctld");
+                    Box::new(ctrl)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        addr = %rig_b.rigctld_addr,
+                        error = %e,
+                        "repeater rigctld PTT connect failed; repeater TX will be silent"
+                    );
+                    Box::new(NoOpPtt::new())
+                }
+            },
+            None => {
+                if cfg.repeater.enabled {
+                    tracing::warn!(
+                        "repeater.enabled = true but [radio.rig_b] is not configured; \
+                         repeater PTT will be no-op — add [radio.rig_b] to config.toml"
+                    );
+                }
+                Box::new(NoOpPtt::new())
+            }
         };
-        CrossBandRepeater::new(Box::new(NoOpPtt::new()), rx, tx, rep_cfg)
+        let rep_cfg = RepeaterConfig {
+            enabled: cfg.repeater.enabled,
+            mode: cfg.repeater.mode.clone(),
+            tx_hang_ms: cfg.repeater.tx_hang_ms,
+            full_duplex: cfg.repeater.full_duplex,
+        };
+        CrossBandRepeater::new(rep_ptt, rx, tx, rep_cfg)
     };
 
     let tcp_bind: std::net::SocketAddr = "127.0.0.1:9000".parse().unwrap();
@@ -141,10 +194,52 @@ async fn main() {
     };
     let mut ptt_controller: Option<Box<dyn PttController>> =
         build_ptt_controller(&cfg.modem.ptt_backend, &cfg.radio.rigctld_addr);
+
+    let qsy_policy = match QsyPolicy::from_config(
+        cfg.qsy.enabled,
+        &cfg.qsy.allow_trustlevels,
+        &cfg.qsy.bandplan_mode,
+        cfg.qsy.bandplan_awareness_enabled,
+        cfg.qsy.enforce_max_channel_width,
+        cfg.qsy.enforce_segment_conventions,
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "QSY policy config error; using permissive defaults");
+            QsyPolicy::default()
+        }
+    };
+
+    let relay_forwarder = if cfg.relay.enabled {
+        let policy = if cfg.relay.deny_list.is_empty() {
+            RelayTrustPolicy::default()
+        } else {
+            RelayTrustPolicy::deny_relays(cfg.relay.deny_list.iter().map(|s| s.as_str()))
+        };
+        let ttl_ms = cfg.mesh.store_forward_ttl_s.saturating_mul(1000);
+        tracing::info!(
+            max_hops = cfg.relay.max_hops,
+            deny_count = cfg.relay.deny_list.len(),
+            "relay forwarding enabled"
+        );
+        Some(RelayForwarder::new(ttl_ms, policy))
+    } else {
+        None
+    };
+
     let mut runtime_state = RuntimeControlState {
         repeater_enabled: cfg.repeater.enabled,
         repeater: Some(repeater),
         qsy_candidate_freqs: cfg.qsy.candidate_freqs_hz.clone(),
+        qsy_switchover_offset_s: u32::try_from(cfg.qsy.switchover_offset_s).unwrap_or_else(|_| {
+            tracing::warn!(
+                value = cfg.qsy.switchover_offset_s,
+                "qsy.switchover_offset_s exceeds u32::MAX; clamping to u32::MAX"
+            );
+            u32::MAX
+        }),
+        qsy_policy,
+        relay_forwarder,
         trust_store: if !cfg.trust.store_path.is_empty() {
             match load_trust_store_from_file(std::path::Path::new(&cfg.trust.store_path)) {
                 Ok(store) => {
@@ -239,6 +334,30 @@ async fn main() {
             }
         }
     }
+}
+
+/// Select an audio backend based on the config string.
+///
+/// `"cpal"` and `"default"` use [`CpalBackend`] when the `cpal` feature is compiled in.
+/// All other values (and `"cpal"`/`"default"` without the feature) fall back to
+/// [`LoopbackBackend`].  Production builds should be compiled with `--features cpal`.
+fn build_audio_backend(backend: &str) -> Box<dyn AudioBackend> {
+    #[cfg(feature = "cpal")]
+    {
+        use openpulse_audio::CpalBackend;
+        if matches!(backend, "cpal" | "default") {
+            return Box::new(CpalBackend::new());
+        }
+    }
+    if matches!(backend, "cpal" | "default") {
+        tracing::warn!(
+            backend,
+            "cpal audio backend requested but not compiled in (missing --features cpal); using loopback"
+        );
+    } else if backend != "loopback" {
+        tracing::warn!(backend, "unknown audio backend; using loopback");
+    }
+    Box::new(LoopbackBackend::default())
 }
 
 fn build_ptt_controller(backend: &str, rigctld_addr: &str) -> Option<Box<dyn PttController>> {

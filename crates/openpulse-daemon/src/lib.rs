@@ -28,6 +28,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use openpulse_channel::dsp::PowerSpectrum;
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_core::handshake::{InMemoryTrustStore, TrustStore};
+#[cfg(not(target_arch = "wasm32"))]
+use openpulse_core::relay::RelayForwarder;
 use openpulse_core::trust::{CertificateSource, PublicKeyTrustLevel, SigningMode};
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_modem::engine::SecureSessionParams;
@@ -71,6 +73,10 @@ pub struct RuntimeControlState {
     pub qsy_session: Option<QsySession>,
     /// Candidate frequencies (Hz) supplied from config for QSY scanning.
     pub qsy_candidate_freqs: Vec<u64>,
+    /// QSY policy parsed from config; governs which requests are accepted.
+    pub qsy_policy: QsyPolicy,
+    /// Switchover offset (seconds) encoded in outgoing QSY_ACK frames.
+    pub qsy_switchover_offset_s: u32,
     /// Pre-built cross-band repeater; taken and moved into a thread by EnableRepeater.
     pub repeater: Option<CrossBandRepeater>,
     /// Stop flag for the running repeater thread.
@@ -84,6 +90,8 @@ pub struct RuntimeControlState {
     pub ptt_max_duration: Duration,
     /// Loaded trust store for verifying incoming peer handshakes.
     pub trust_store: InMemoryTrustStore,
+    /// Optional relay forwarder; `Some` when `[relay] enabled = true` in config.
+    pub relay_forwarder: Option<RelayForwarder>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -95,12 +103,15 @@ impl Default for RuntimeControlState {
             qsy_pending_token: None,
             qsy_session: None,
             qsy_candidate_freqs: Vec::new(),
+            qsy_policy: QsyPolicy::default(),
+            qsy_switchover_offset_s: 5,
             repeater: None,
             repeater_stop: None,
             repeater_thread: None,
             ptt_asserted_at: None,
             ptt_max_duration: Duration::from_secs(180),
             trust_store: InMemoryTrustStore::default(),
+            relay_forwarder: None,
         }
     }
 }
@@ -114,6 +125,7 @@ impl std::fmt::Debug for RuntimeControlState {
             .field("qsy_pending_token", &self.qsy_pending_token)
             .field("qsy_session", &self.qsy_session.is_some())
             .field("qsy_candidate_freqs", &self.qsy_candidate_freqs)
+            .field("qsy_switchover_offset_s", &self.qsy_switchover_offset_s)
             .field("repeater", &self.repeater.is_some())
             .field("repeater_stop", &self.repeater_stop.is_some())
             .field("repeater_thread", &self.repeater_thread.is_some())
@@ -123,6 +135,7 @@ impl std::fmt::Debug for RuntimeControlState {
             )
             .field("ptt_max_duration", &self.ptt_max_duration)
             .field("trust_store_entries", &"<opaque>")
+            .field("relay_forwarder", &self.relay_forwarder.is_some())
             .finish()
     }
 }
@@ -756,6 +769,11 @@ pub async fn process_received_bytes(
     if bytes.is_empty() {
         return;
     }
+    let mode = active_mode.lock().await.clone();
+    // Attempt relay forwarding on the raw bytes before QSY parsing: WireEnvelope frames
+    // are binary and would be dropped by the UTF-8 early return below.
+    maybe_relay_forward(bytes, &mode, runtime_state, engine);
+
     let Ok(text) = std::str::from_utf8(bytes) else {
         return;
     };
@@ -763,10 +781,12 @@ pub async fn process_received_bytes(
         return;
     };
 
-    let mode = active_mode.lock().await.clone();
     let is_new_session = runtime_state.qsy_session.is_none();
     let session = runtime_state.qsy_session.get_or_insert_with(|| {
-        QsySession::new_responder(QsyPolicy::default(), ConnectionTrustLevel::Unverified)
+        QsySession::new_responder(
+            runtime_state.qsy_policy.clone(),
+            ConnectionTrustLevel::Unverified,
+        )
     });
 
     // Notify connected clients that a remote station initiated QSY.
@@ -791,7 +811,37 @@ pub async fn process_received_bytes(
     }
 }
 
-/// Execute side-effectful control commands against the live modem engine.
+fn maybe_relay_forward(
+    payload: &[u8],
+    mode: &str,
+    runtime_state: &mut RuntimeControlState,
+    engine: &mut ModemEngine,
+) {
+    use openpulse_core::wire_query::WireEnvelope;
+
+    let Some(ref mut fwd) = runtime_state.relay_forwarder else {
+        return;
+    };
+    let Ok(envelope) = WireEnvelope::decode(payload) else {
+        return;
+    };
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let forwarded = fwd.forward(&envelope, now_ms);
+    match forwarded {
+        Ok(out_envelope) => match out_envelope.encode() {
+            Ok(out_bytes) => {
+                if let Err(e) = engine.transmit(&out_bytes, mode, None) {
+                    tracing::warn!(error = %e, "relay: retransmit failed");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "relay: envelope encode failed"),
+        },
+        Err(e) => tracing::debug!(error = ?e, "relay: not forwarding"),
+    }
+}
 ///
 /// This complements [`dispatch_command`], which updates shared daemon state and
 /// forwards commands to the caller. Commands without runtime support emit a
@@ -846,7 +896,7 @@ pub async fn apply_command_to_engine(
             // Use the configured trust level when the peer is in the trust store.
             // Unknown peers (not yet in store) get Full so the session proceeds and
             // trust is established at handshake time.  Revoked peers are rejected.
-            let stored_trust = runtime_state.trust_store.trust_level(&callsign);
+            let stored_trust = runtime_state.trust_store.trust_level(callsign);
             let key_trust = if stored_trust == PublicKeyTrustLevel::Unknown {
                 PublicKeyTrustLevel::Full
             } else {
@@ -995,7 +1045,8 @@ pub async fn apply_command_to_engine(
                         return;
                     }
 
-                    let mut session = QsySession::new_initiator();
+                    let mut session = QsySession::new_initiator()
+                        .with_switchover_offset_s(runtime_state.qsy_switchover_offset_s);
                     let actions = match session.initiate(candidates) {
                         Ok(a) => a,
                         Err(e) => {
