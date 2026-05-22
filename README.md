@@ -89,7 +89,7 @@ Capabilities that are firsts or near-firsts among open-source amateur digital-mo
 | 64QAM1000 | `64qam` | 167 | 6 | 1 000 | Single-carrier | |
 | 64QAM2000-RRC | `64qam` | 333 | 6 | 2 000 | Single-carrier + RRC | Requires SNR ≥ 25 dB |
 | SCFDMA16 | `scfdma` | — | 2 | ~889 | SC-FDMA (16 SCs, QPSK) | DFT-CE + MMSE |
-| SCFDMA52 | `scfdma` | — | 2 | ~2 889 | SC-FDMA (52 SCs, QPSK) | |
+| SCFDMA52 | `scfdma` | — | 2 | ~2 889 | SC-FDMA (52 SCs, QPSK) | Adaptive pilot density |
 | SCFDMA52-8PSK | `scfdma` | — | 3 | ~4 333 | SC-FDMA (52 SCs, 8PSK) | |
 | SCFDMA52-16QAM | `scfdma` | — | 4 | ~5 778 | SC-FDMA (52 SCs, 16QAM) | |
 | SCFDMA52-32QAM | `scfdma` | — | 5 | ~7 222 | SC-FDMA (52 SCs, cross-32QAM) | |
@@ -141,6 +141,7 @@ Compression algorithm negotiated at session setup via `supported_compression` / 
 | **Block interleaver** | `openpulse-core` (fec.rs) | 1.0 | Disperses burst errors | Configurable depth; used with RS by default |
 | **Convolutional K=3** | `openpulse-core` (conv.rs) | 1/2 | AWGN-dominant paths | G={7,5}; hard-decision Viterbi; better than RS at random-error BER 1% |
 | **LDPC rate-1/2** | `openpulse-core` (ldpc.rs) | 1/2 | Highest coding gain | Min-sum belief propagation; configurable iterations; first open-source HF modem with working LDPC |
+| **Turbo (rate-1/3 PCCC)** | `openpulse-core` (turbo.rs) | 1/3 | Near-capacity on AWGN | RSC K=3, 3GPP QPP interleaver K=40–6144, Max-Log-MAP BCJR, 8 iterations, CRC-16 early exit |
 | **Concatenated RS + Conv** | `openpulse-core` | ~0.44 | Strong burst + AWGN | RS outer, Conv inner |
 | **Short-block FEC** | `openpulse-core` | varies | ACK/control frames | For FSK4-ACK and small control payloads |
 
@@ -214,7 +215,7 @@ and per-level SNR floor/ceiling gates:
 |---|---|
 | **Operator panel** (`openpulse-panel`) | Full egui/eframe GUI connecting to the daemon via TCP control port; mode selection, PTT, QSY management, message store, live status |
 | **TUI** (`openpulse-tui`) | ratatui terminal UI — HPX state (colour-coded), AFC/rate meters, DCD energy bar, scrollable transitions log |
-| **CLI** (`openpulse-cli`) | Full-featured command-line interface: transmit, receive, benchmark, monitor, config init |
+| **CLI** (`openpulse-cli`) | Full-featured command-line interface: transmit, receive, benchmark, monitor, config init, calibrate (audio/PTT/AFC) |
 | **Signal testbench** (`openpulse-testbench`) | egui 4-column live view: TX / channel / mixed / RX; waterfall, spectrum, scatter; 7 channel models; SNR slider |
 
 ---

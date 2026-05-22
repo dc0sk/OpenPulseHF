@@ -413,6 +413,9 @@ fn bits_to_bytes(bits: &[bool]) -> Vec<u8> {
 /// - Q projection → LLR for b0 (Q > 0 means b0 = 0)
 /// - I projection → LLR for b1 (I > 0 means b1 = 0)
 ///
+/// **LLR sign convention**: positive = bit more likely 0 (matches all other plugins
+/// and codecs in this codebase).
+///
 /// Both RRC and non-RRC modes return proper matched-filter soft projections.
 pub fn qpsk_demodulate_soft(
     samples: &[f32],

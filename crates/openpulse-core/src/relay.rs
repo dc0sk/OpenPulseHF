@@ -10,10 +10,15 @@ use crate::wire_query::WireEnvelope;
 /// Errors returned by route validation functions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RelayRouteError {
+    /// Route slice is empty; at least one hop is required.
     EmptyRoute,
+    /// A peer_id appears more than once in the route (routing loop).
     LoopDetected { peer_id: String },
+    /// Route length exceeds the configured `max_hops` limit.
     TooManyHops { hops: usize, max_hops: usize },
+    /// An intermediate relay's peer_id was rejected by the trust policy.
     TrustPolicyRejected { peer_id: String },
+    /// No candidate route passed policy and loop checks.
     NoValidRoute,
 }
 
