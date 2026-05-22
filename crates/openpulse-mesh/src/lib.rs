@@ -120,6 +120,7 @@ impl MeshDaemon {
                 trust_level: TrustLevel::Verified,
                 revision: 0,
                 updated_at_ms: 0,
+                callsign_hash: [0u8; 32],
             },
             0,
         );
@@ -340,6 +341,7 @@ impl MeshDaemon {
                 trust_level: TrustLevel::Verified,
                 revision: 0,
                 updated_at_ms: now_ms,
+                callsign_hash: [0u8; 32],
             },
             now_ms,
         );
@@ -364,11 +366,10 @@ impl MeshDaemon {
             .into_iter()
             .filter_map(|r| {
                 let peer_id_bytes = parse_peer_id_hex(&r.peer_id)?;
-                // Compute callsign_hash for our own entry; remote peers' callsigns
-                // are not stored locally yet, so their hash remains zeroed.
-                // descriptor_signature is intentionally empty: at the 255-byte frame
-                // MTU a single PeerQueryResult already fills the available payload,
-                // leaving no room for a 64-byte Ed25519 signature.
+                // Compute callsign_hash for the local entry via PeerDescriptor::sign.
+                // For remote peers use the cached hash received in prior query responses;
+                // descriptor_signature stays empty because the 255-byte frame MTU leaves
+                // no room for a 64-byte Ed25519 signature alongside the 79-byte result body.
                 let callsign_hash = if peer_id_bytes == self.local_peer_id {
                     match PeerDescriptor::sign(
                         &self.callsign,
@@ -380,7 +381,7 @@ impl MeshDaemon {
                         Err(_) => [0u8; 32],
                     }
                 } else {
-                    [0u8; 32]
+                    r.callsign_hash
                 };
                 Some(PeerQueryResult {
                     peer_id: peer_id_bytes,
@@ -479,6 +480,7 @@ impl MeshDaemon {
                 trust_level: wire_trust_level(result.trust_state),
                 revision: 0,
                 updated_at_ms: now_ms,
+                callsign_hash: result.callsign_hash,
             };
             self.peer_cache.upsert(record, now_ms);
 

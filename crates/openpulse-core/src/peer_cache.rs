@@ -30,6 +30,9 @@ pub struct PeerRecord {
     pub trust_level: TrustLevel,
     pub revision: u64,
     pub updated_at_ms: u64,
+    /// SHA-256 of the peer's callsign; populated when received in a query response.
+    /// All-zeros means the callsign hash is unknown.
+    pub callsign_hash: [u8; 32],
 }
 
 /// LRU-with-TTL cache of recently observed peers and their link metrics.
@@ -68,7 +71,26 @@ impl PeerCache {
 
         match self.entries.get(&incoming.peer_id) {
             Some(existing) if !Self::should_replace(existing, &incoming) => false,
-            _ => {
+            Some(existing) => {
+                // Carry forward a known callsign_hash so subsequent updates don't erase it.
+                let callsign_hash = if incoming.callsign_hash != [0u8; 32] {
+                    incoming.callsign_hash
+                } else {
+                    existing.callsign_hash
+                };
+                let peer_id = incoming.peer_id.clone();
+                self.entries.insert(
+                    peer_id.clone(),
+                    PeerRecord {
+                        callsign_hash,
+                        ..incoming
+                    },
+                );
+                self.touch_lru(&peer_id);
+                self.evict_over_capacity();
+                true
+            }
+            None => {
                 let peer_id = incoming.peer_id.clone();
                 self.entries.insert(peer_id.clone(), incoming);
                 self.touch_lru(&peer_id);
@@ -206,6 +228,7 @@ mod tests {
             trust_level,
             revision,
             updated_at_ms,
+            callsign_hash: [0u8; 32],
         }
     }
 

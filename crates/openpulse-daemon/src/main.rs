@@ -331,6 +331,16 @@ async fn main() {
                     )
                     .await;
                 }
+                // Refresh live metrics so the periodic metrics task can broadcast real values.
+                {
+                    let mut m = handle
+                        .shared_metrics
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    m.afc_correction_hz = engine.last_afc_offset_hz().unwrap_or(0.0);
+                    m.snr_db = engine.last_rx_snr_db();
+                    m.total_rx_bytes += bytes.len() as u64;
+                }
             }
         }
     }

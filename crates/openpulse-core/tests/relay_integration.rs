@@ -16,6 +16,7 @@ fn make_peer(peer_id: &str, quality: u8, trust: TrustLevel) -> PeerRecord {
         trust_level: trust,
         revision: 1,
         updated_at_ms: 1_000,
+        callsign_hash: [0u8; 32],
     }
 }
 
