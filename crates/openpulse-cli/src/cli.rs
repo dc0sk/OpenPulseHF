@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 
+use crate::commands;
 use crate::output::DiagnosticOptions;
 
 #[derive(Parser)]
@@ -145,6 +146,14 @@ pub enum Commands {
     Qsy {
         #[command(subcommand)]
         command: QsyCommands,
+    },
+    /// On-device audio/PTT/AFC calibration checks.
+    Calibrate {
+        #[command(subcommand)]
+        command: commands::calibrate::CalibrateCommands,
+        /// Write JSON result to this path (in addition to stdout).
+        #[arg(long)]
+        output: Option<std::path::PathBuf>,
     },
 }
 
