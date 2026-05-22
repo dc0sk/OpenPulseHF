@@ -2239,6 +2239,24 @@ impl ModemEngine {
         fec: FecMode,
         device: Option<&str>,
     ) -> Result<Vec<u8>, ModemError> {
+        // Warn when a soft-input FEC mode is paired with a plugin that only
+        // produces hard-decision ±1.0 LLRs — the decoder gains nothing.
+        let is_soft_fec = matches!(
+            fec,
+            FecMode::SoftConcatenated | FecMode::Ldpc | FecMode::Turbo
+        );
+        if is_soft_fec {
+            if let Some(plugin) = self.plugins.get(mode) {
+                if !plugin.supports_soft_demod() {
+                    tracing::warn!(
+                        mode,
+                        fec = ?fec,
+                        "soft-FEC mode paired with a plugin that provides only hard-decision LLRs; \
+                         iteration gain will be zero — consider a plugin that overrides supports_soft_demod()"
+                    );
+                }
+            }
+        }
         match fec {
             FecMode::None => self.receive(mode, device),
             FecMode::Rs => self.receive_with_fec(mode, device),

@@ -122,6 +122,10 @@ impl ModulationPlugin for BpskPlugin {
         demodulate::bpsk_demodulate_soft(samples, config)
     }
 
+    fn supports_soft_demod(&self) -> bool {
+        true
+    }
+
     fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
         demodulate::afc_estimate_hz(samples, config)
     }
