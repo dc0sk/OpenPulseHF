@@ -181,14 +181,14 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                 if use_fec_rx {
                     engine
                         .receive_with_fec(&mode, None)
-                        .map_err(|e| {
+                        .inspect_err(|e| {
                             tracing::debug!("non-adaptive IRS receive_with_fec failed: {e}")
                         })
                         .ok()
                 } else {
                     engine
                         .receive(&mode, None)
-                        .map_err(|e| tracing::debug!("non-adaptive IRS receive failed: {e}"))
+                        .inspect_err(|e| tracing::debug!("non-adaptive IRS receive failed: {e}"))
                         .ok()
                 }
             };
