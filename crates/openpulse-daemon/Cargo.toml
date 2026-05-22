@@ -21,6 +21,11 @@ depends = "$auto"
 section = "hamradio"
 priority = "optional"
 
+[features]
+# Enable real audio hardware support (CPAL backend).  Off by default so CI builds
+# don't require ALSA/CoreAudio headers.  For production: cargo build --features cpal
+cpal = ["openpulse-audio/cpal-backend"]
+
 [dependencies]
 # Protocol types only; compiles for all targets including WASM.
 openpulse-core   = { workspace = true }
