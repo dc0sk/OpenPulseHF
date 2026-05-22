@@ -410,6 +410,11 @@ pub fn load_identity_from(path: &Path) -> Result<[u8; 32], ConfigError> {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(path, seed)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
     Ok(seed)
 }
 

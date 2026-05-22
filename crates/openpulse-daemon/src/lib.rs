@@ -87,6 +87,8 @@ pub struct RuntimeControlState {
     pub qsy_candidate_freqs: Vec<u64>,
     /// QSY policy parsed from config; governs which requests are accepted.
     pub qsy_policy: QsyPolicy,
+    /// Dwell time per frequency during a QSY scan (milliseconds).
+    pub qsy_scan_dwell_ms: u64,
     /// Switchover offset (seconds) encoded in outgoing QSY_ACK frames.
     pub qsy_switchover_offset_s: u32,
     /// Pre-built cross-band repeater; taken and moved into a thread by EnableRepeater.
@@ -116,6 +118,7 @@ impl Default for RuntimeControlState {
             qsy_session: None,
             qsy_candidate_freqs: Vec::new(),
             qsy_policy: QsyPolicy::default(),
+            qsy_scan_dwell_ms: 500,
             qsy_switchover_offset_s: 5,
             repeater: None,
             repeater_stop: None,
@@ -332,11 +335,9 @@ impl ControlServer {
                 last_bytes = new_bytes;
                 let _ = ev_metrics.send(ControlEvent::Metrics {
                     effective_bps,
-                    ecc_rate: 0.0,
-                    compress_ratio: 1.0,
+                    ecc_rate: None,
+                    compress_ratio: None,
                     afc_correction_hz: afc,
-                    // signal_strength_dbm requires calibrated S-meter data from the rig;
-                    // SNR from last_rx_snr_db is in dB, not dBm, so it is left absent here.
                     signal_strength_dbm: None,
                 });
             }
@@ -694,6 +695,7 @@ async fn execute_qsy_actions(
     mut rig_controller: Option<&mut RigctldController>,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
     mode: &str,
+    scan_dwell_ms: u64,
 ) {
     let mut scan_freqs: Option<Vec<u64>> = None;
 
@@ -747,8 +749,8 @@ async fn execute_qsy_actions(
                     scan_results.push((freq, engine.last_rx_snr_db().unwrap_or(0.0)));
                     continue;
                 }
-                // 100 ms dwell: let the audio buffer refresh before sampling SNR.
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                // Dwell per config to let the audio buffer refresh before sampling SNR.
+                tokio::time::sleep(Duration::from_millis(scan_dwell_ms)).await;
                 match tokio::task::block_in_place(|| engine.receive(mode, None)) {
                     Ok(_) => {}
                     Err(e) => tracing::warn!(freq, error = %e, "qsy scan: receive failed"),
@@ -868,7 +870,16 @@ pub async fn process_received_bytes(
 
     match session.apply(frame) {
         Ok(actions) => {
-            execute_qsy_actions(actions, session, engine, rig_controller, event_tx, &mode).await;
+            execute_qsy_actions(
+                actions,
+                session,
+                engine,
+                rig_controller,
+                event_tx,
+                &mode,
+                runtime_state.qsy_scan_dwell_ms,
+            )
+            .await;
         }
         Err(e) => tracing::warn!(error = %e, "qsy responder: apply frame failed"),
     }
@@ -1129,6 +1140,7 @@ pub async fn apply_command_to_engine(
                         rig_controller,
                         event_tx,
                         &mode,
+                        runtime_state.qsy_scan_dwell_ms,
                     )
                     .await;
 

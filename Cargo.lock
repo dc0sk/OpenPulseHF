@@ -3437,6 +3437,7 @@ dependencies = [
  "flate2",
  "oxiarc-lzhuf",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]

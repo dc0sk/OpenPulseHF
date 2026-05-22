@@ -227,13 +227,13 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
             signal_strength_dbm,
         } => {
             st.effective_bps = effective_bps;
-            st.ecc_rate = ecc_rate;
-            st.compress_ratio = compress_ratio;
+            st.ecc_rate = ecc_rate.unwrap_or(0.0);
+            st.compress_ratio = compress_ratio.unwrap_or(1.0);
             if afc_correction_hz != 0.0 {
                 st.afc_hz = afc_correction_hz;
             }
             st.signal_strength_dbm = signal_strength_dbm;
-            st.ecc_history.push_front(ecc_rate);
+            st.ecc_history.push_front(ecc_rate.unwrap_or(0.0));
             if st.ecc_history.len() > ECC_HISTORY_LEN {
                 st.ecc_history.pop_back();
             }

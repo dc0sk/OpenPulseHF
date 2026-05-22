@@ -1,6 +1,7 @@
 pub mod api;
 pub mod verification;
 
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, patch, post};
 use axum::Router;
 
@@ -67,5 +68,6 @@ pub fn build_router(state: AppState) -> Router {
             post(api::handlers::create_session_audit_event),
         )
         .route("/api/v1/signing-key", get(api::handlers::get_signing_key))
+        .layer(DefaultBodyLimit::max(256 * 1024))
         .with_state(state)
 }
