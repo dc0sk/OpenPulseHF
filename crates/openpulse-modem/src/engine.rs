@@ -1747,6 +1747,19 @@ impl ModemEngine {
             });
         }
 
+        // Timing recovery can yield ±1–2 fewer symbols than transmitted; pad to the
+        // next multiple of 3 so turbo_decode_soft's divisibility check always passes.
+        // Padded LLRs are 0.0 (maximum uncertainty), which the BCJR decoder handles
+        // gracefully — they correspond to the padding bits the encoder added to reach
+        // the QPP block size.
+        let llrs = if llrs.len() % 3 == 0 {
+            llrs
+        } else {
+            let pad = 3 - (llrs.len() % 3);
+            let mut v = llrs;
+            v.extend(std::iter::repeat(0.0f32).take(pad));
+            v
+        };
         let info_bytes = turbo_decode_soft(&llrs)?;
 
         let corrected_wire = WirePayload { bytes: info_bytes };

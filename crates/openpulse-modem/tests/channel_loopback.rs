@@ -12,6 +12,7 @@ use openpulse_channel::{
     awgn::AwgnChannel, gilbert_elliott::GilbertElliottChannel, watterson::WattersonChannel,
     AwgnConfig, GilbertElliottConfig, WattersonConfig,
 };
+use openpulse_core::fec::FecMode;
 use openpulse_modem::channel_sim::ChannelSimHarness;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -144,4 +145,41 @@ fn gilbert_elliott_moderate_burst_no_fec_degrades() {
         rx.map_or(true, |data| data != payload.to_vec()),
         "destructive G-E burst should degrade raw BPSK250; got exact recovery"
     );
+}
+
+/// Turbo FEC (rate-1/3 PCCC) over Watterson Good F1 on BPSK250: recovery expected.
+///
+/// Turbo's iterative belief-propagation decoder handles mild Doppler spread better
+/// than single-pass RS; this test confirms the channel-sim path through FecMode::Turbo.
+#[test]
+fn watterson_good_f1_bpsk250_turbo() {
+    let mut h = make_harness();
+    let payload = b"turbo watterson good f1";
+    let mut channel = WattersonChannel::new(WattersonConfig::good_f1(Some(7))).unwrap();
+    h.tx_engine
+        .transmit_with_fec_mode(payload, "BPSK250", FecMode::Turbo, None)
+        .unwrap();
+    h.route(&mut channel);
+    let rx = h
+        .rx_engine
+        .receive_with_fec_mode("BPSK250", FecMode::Turbo, None)
+        .unwrap();
+    assert_eq!(&rx[..payload.len()], payload);
+}
+
+/// LDPC over AWGN at 15 dB SNR on BPSK250: recovery expected with soft-decision decoding.
+#[test]
+fn awgn_15db_bpsk250_ldpc() {
+    let mut h = make_harness();
+    let payload = b"ldpc bpsk250 awgn 15db";
+    let mut channel = AwgnChannel::new(AwgnConfig::new(15.0, Some(50))).unwrap();
+    h.tx_engine
+        .transmit_with_fec_mode(payload, "BPSK250", FecMode::Ldpc, None)
+        .unwrap();
+    h.route(&mut channel);
+    let rx = h
+        .rx_engine
+        .receive_with_fec_mode("BPSK250", FecMode::Ldpc, None)
+        .unwrap();
+    assert_eq!(&rx[..payload.len()], payload);
 }
