@@ -7,6 +7,14 @@ use tokio::net::TcpListener;
 use crate::bridge::ModemBridge;
 use crate::error::ArdopError;
 
+/// Maximum data-port frame payload accepted from clients.
+///
+/// The ARDOP TNC transport carries modem frames which are always ≤ 255 bytes
+/// per HPX SAR fragment.  4096 bytes is a generous upper bound that still
+/// prevents a malicious client from forcing a 64 KiB heap allocation with a
+/// crafted `u16::MAX` length prefix.
+const MAX_FRAME_BYTES: usize = 4096;
+
 pub async fn serve(listener: TcpListener, bridge: Arc<ModemBridge>) -> Result<(), ArdopError> {
     loop {
         let (stream, addr) = listener.accept().await?;
@@ -33,6 +41,10 @@ async fn handle_client(
             r = read_half.read_exact(&mut len_buf) => {
                 r?;
                 let len = u16::from_be_bytes(len_buf) as usize;
+                if len > MAX_FRAME_BYTES {
+                    tracing::warn!(len, max = MAX_FRAME_BYTES, "data port frame rejected — too large");
+                    return Err(ArdopError::FrameTooLarge { len, max: MAX_FRAME_BYTES });
+                }
                 let mut payload = vec![0u8; len];
                 read_half.read_exact(&mut payload).await?;
                 bridge.tx_pending.fetch_add(len, Ordering::Relaxed);

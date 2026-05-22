@@ -1747,6 +1747,19 @@ impl ModemEngine {
             });
         }
 
+        // Timing recovery can yield ±1–2 fewer symbols than transmitted; pad to the
+        // next multiple of 3 so turbo_decode_soft's divisibility check always passes.
+        // Padded LLRs are 0.0 (maximum uncertainty), which the BCJR decoder handles
+        // gracefully — they correspond to the padding bits the encoder added to reach
+        // the QPP block size.
+        let llrs = if llrs.len() % 3 == 0 {
+            llrs
+        } else {
+            let pad = 3 - (llrs.len() % 3);
+            let mut v = llrs;
+            v.extend(std::iter::repeat(0.0f32).take(pad));
+            v
+        };
         let info_bytes = turbo_decode_soft(&llrs)?;
 
         let corrected_wire = WirePayload { bytes: info_bytes };
@@ -2027,6 +2040,16 @@ impl ModemEngine {
             })
             .collect();
 
+        // OFDM/SC-FDMA pad the last symbol to a whole subcarrier boundary; the
+        // resulting hard_bytes may be a few bytes longer than an exact RS multiple.
+        // Trim to the nearest multiple of 255 (RS BLOCK_TOTAL) so FecCodec::decode
+        // doesn't reject the buffer.
+        const RS_BLOCK: usize = 255;
+        let rs_len = (hard_bytes.len() / RS_BLOCK) * RS_BLOCK;
+        let mut hard_bytes = hard_bytes;
+        if rs_len > 0 && rs_len < hard_bytes.len() {
+            hard_bytes.truncate(rs_len);
+        }
         let hard_wire = WirePayload { bytes: hard_bytes };
         let hard_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, hard_wire)?;
 
@@ -2239,6 +2262,24 @@ impl ModemEngine {
         fec: FecMode,
         device: Option<&str>,
     ) -> Result<Vec<u8>, ModemError> {
+        // Warn when a soft-input FEC mode is paired with a plugin that only
+        // produces hard-decision ±1.0 LLRs — the decoder gains nothing.
+        let is_soft_fec = matches!(
+            fec,
+            FecMode::SoftConcatenated | FecMode::Ldpc | FecMode::Turbo
+        );
+        if is_soft_fec {
+            if let Some(plugin) = self.plugins.get(mode) {
+                if !plugin.supports_soft_demod() {
+                    tracing::warn!(
+                        mode,
+                        fec = ?fec,
+                        "soft-FEC mode paired with a plugin that provides only hard-decision LLRs; \
+                         iteration gain will be zero — consider a plugin that overrides supports_soft_demod()"
+                    );
+                }
+            }
+        }
         match fec {
             FecMode::None => self.receive(mode, device),
             FecMode::Rs => self.receive_with_fec(mode, device),

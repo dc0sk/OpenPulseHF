@@ -214,6 +214,10 @@ impl ModulationPlugin for ScFdmaPlugin {
         Ok(scfdma_demodulate_soft(samples, &config.mode))
     }
 
+    fn supports_soft_demod(&self) -> bool {
+        true
+    }
+
     fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
         let p = params_for_mode(&config.mode)?;
         let spectra = crate::channel::compute_pilot_spectra(samples, &p);

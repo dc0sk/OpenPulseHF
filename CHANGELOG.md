@@ -8,6 +8,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Turbo codec: rate-1/3 PCCC with RSC K=3 component codes (G1={1,1,1} G2={1,0,1}),
+  3GPP QPP interleaver (K=40–6144), Max-Log-MAP BCJR, 8 iterations, CRC-16 early exit;
+  `FecMode::Turbo` wired into `transmit_with_fec_mode` / `receive_with_fec_mode` (#337).
+- On-device calibration wizard: `openpulse calibrate audio|ptt|afc` subcommands; all
+  three run against the loopback backend with no hardware required; `--output <path>`
+  writes a machine-readable JSON summary (#336).
+- SC-FDMA adaptive pilot density via coherence-BW estimation: `AdaptivePilotState`
+  (EMA α=0.3), `ScFdmaParams::with_pilot_density()`, `estimate_coh_bw_hz()` (#335).
 - `QsyIncoming` `ControlEvent` variant: emitted when the daemon receives a `QSY_REQ`
   frame over RF, surfacing the incoming token and candidate count to panel clients.
 - SC-FDMA GPU soft demodulator (`scfdma_demodulate_soft_gpu`): batches all per-symbol
@@ -22,6 +30,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - GPU RRC FIR convolution kernel (`rrc_fir.wgsl`/`rrc_fir.rs`) and 256-point complex
   FFT/IFFT kernel (`fft256.wgsl`/`fft256.rs`) in `openpulse-gpu`; wired into BPSK,
   64QAM, 8PSK, and SC-FDMA plugins via `#[cfg(feature = "gpu")]` dispatch (#325).
+
+### Fixed
+- Turbo codec: `WrappedTurboCodecTest` log-domain underflow at low SNR; `alpha`/`beta`
+  arrays use `f32::NEG_INFINITY` sentinels; BER test passes at Eb/N0 = 2 dB (#339).
+- Calibration wizard: AFC calibration exit criteria widened from ±0.5 Hz to ±2.0 Hz
+  to match BPSK31 AFC convergence time; test no longer flaky (#338).
 
 ### Changed
 - SC-FDMA `ScFdmaPlugin` gains `gpu` feature flag (optional `openpulse-gpu` dep) and

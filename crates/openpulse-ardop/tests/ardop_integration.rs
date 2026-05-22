@@ -357,3 +357,25 @@ async fn waveform_get_set() {
     let resp2 = cmd(&mut reader, "WAVEFORM").await;
     assert_eq!(resp2, "WAVEFORM BPSK31");
 }
+
+#[tokio::test]
+async fn data_port_rejects_oversized_frame() {
+    let (_, data_port) = start_server(false).await;
+    let mut stream = TcpStream::connect(("127.0.0.1", data_port)).await.unwrap();
+
+    // Send a frame claiming to be 5000 bytes — above the 4096-byte cap.
+    let len: u16 = 5000;
+    stream.write_all(&len.to_be_bytes()).await.unwrap();
+    // Write a partial body; the server should close the connection before reading it.
+    stream.write_all(&vec![0u8; 64]).await.unwrap();
+    stream.flush().await.unwrap();
+
+    // The server must close the connection after rejecting the oversized frame.
+    let mut buf = [0u8; 1];
+    let result = timeout(Duration::from_secs(2), stream.read(&mut buf)).await;
+    match result {
+        Ok(Ok(0)) | Ok(Err(_)) => {} // connection closed — expected
+        Ok(Ok(_)) => panic!("server should have closed connection after oversized frame"),
+        Err(_) => panic!("timeout waiting for server to close connection"),
+    }
+}

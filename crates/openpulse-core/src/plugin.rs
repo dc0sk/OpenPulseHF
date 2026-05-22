@@ -116,6 +116,21 @@ pub trait ModulationPlugin: Send + Sync {
         Ok(llrs)
     }
 
+    /// Return `true` if this plugin produces genuine soft LLRs from
+    /// [`demodulate_soft`](Self::demodulate_soft).
+    ///
+    /// Plugins that override `demodulate_soft` with proper LLR computation
+    /// (e.g. matched-filter projections, per-subcarrier FFT magnitude) should
+    /// override this to return `true`.  The default `false` indicates the
+    /// fallback ±1.0 hard-decision output, which provides no iteration gain
+    /// to soft-input FEC decoders such as LDPC and turbo.
+    ///
+    /// The modem engine logs a warning when a soft-FEC mode is paired with a
+    /// plugin that returns `false`.
+    fn supports_soft_demod(&self) -> bool {
+        false
+    }
+
     /// Return `true` when this plugin can handle `mode` (case-insensitive).
     fn supports_mode(&self, mode: &str) -> bool {
         self.info()
