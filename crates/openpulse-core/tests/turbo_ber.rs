@@ -22,7 +22,7 @@ fn box_muller(s: &mut u64) -> f64 {
 }
 
 /// Apply AWGN at the given Eb/N0 (linear) for a rate-1/3 turbo codeword.
-/// Returns LLRs (positive = likely 0).
+/// Returns LLRs (positive = likely 0), LSB-first per byte (matching the modem stack).
 fn awgn_channel(encoded_bytes: &[u8], ebno_linear: f64, seed: &mut u64) -> Vec<f32> {
     let code_rate = 1.0_f64 / 3.0;
     let ecno = ebno_linear * code_rate;
@@ -32,7 +32,7 @@ fn awgn_channel(encoded_bytes: &[u8], ebno_linear: f64, seed: &mut u64) -> Vec<f
 
     encoded_bytes
         .iter()
-        .flat_map(|&b| (0..8u32).rev().map(move |i| (b >> i) & 1))
+        .flat_map(|&b| (0..8u32).map(move |i| (b >> i) & 1))
         .map(|bit| {
             let symbol = if bit == 0 { 1.0_f64 } else { -1.0_f64 };
             let noisy = symbol + box_muller(seed) * sigma;
@@ -60,7 +60,7 @@ fn turbo_ber_256_bit_block_at_2db_ebno() {
     let mut seed = 0xDEAD_BEEF_1234_5678u64;
 
     for _ in 0..REPS {
-        let encoded = codec.encode(&payload);
+        let encoded = codec.encode(&payload).expect("encode must succeed");
         let llrs = awgn_channel(&encoded, ebno, &mut seed);
         let decoded = codec.decode(&llrs).unwrap_or_default();
 
@@ -86,10 +86,10 @@ fn turbo_ber_256_bit_block_at_2db_ebno() {
 fn turbo_round_trip_noiseless() {
     let codec = TurboCodec::new();
     let payload = b"turbo noiseless";
-    let encoded = codec.encode(payload);
+    let encoded = codec.encode(payload).expect("encode must succeed");
     let llrs: Vec<f32> = encoded
         .iter()
-        .flat_map(|&b| (0..8u32).rev().map(move |i| (b >> i) & 1))
+        .flat_map(|&b| (0..8u32).map(move |i| (b >> i) & 1))
         .map(|bit| if bit == 0 { 10.0f32 } else { -10.0f32 })
         .collect();
     let decoded = codec

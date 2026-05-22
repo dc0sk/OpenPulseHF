@@ -260,7 +260,29 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
         }
     }
 
-    // ── 5b. SC-FDMA higher-order modes × AWGN sweep × {None, Rs} × 32 bytes ────────
+    // ── 5b. Turbo × key HF modes × clean + AWGN × 32 bytes ──────────────────────────
+    //        Payload capped at 32 bytes for the same reason as LDPC; turbo one-block
+    //        limit is 764 bytes of info after the codec's own 4-byte wrapper.
+    let turbo_modes = &["BPSK250", "QPSK500"];
+    let turbo_channels = vec![
+        ChannelSpec::Clean,
+        ChannelSpec::Awgn {
+            snr_db: 20.0,
+            seed: 43,
+        },
+    ];
+    for mode in turbo_modes {
+        for channel in &turbo_channels {
+            cases.push(raw_case(
+                mode,
+                FecMode::Turbo,
+                CompressionAlgorithm::None,
+                channel.clone(),
+                32,
+                tier,
+            ));
+        }
+    }
     //        Payload kept at 32 bytes: these wideband modes are SNR-sensitive and
     //        the smoke + FEC coverage is sufficient for the Quick tier.
     for mode in SCFDMA_HOM_MODES {

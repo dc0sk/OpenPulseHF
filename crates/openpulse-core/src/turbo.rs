@@ -92,7 +92,7 @@ fn rsc_parity(bits: &[u8], trellis: &[[(u8, u8); 2]; 4]) -> Vec<u8> {
 fn bytes_to_bits(bytes: &[u8]) -> Vec<u8> {
     bytes
         .iter()
-        .flat_map(|&b| (0..8).rev().map(move |i| (b >> i) & 1))
+        .flat_map(|&b| (0..8).map(move |i| (b >> i) & 1))
         .collect()
 }
 
@@ -102,7 +102,7 @@ fn bits_to_bytes(bits: &[u8]) -> Vec<u8> {
             chunk
                 .iter()
                 .enumerate()
-                .fold(0u8, |acc, (i, &b)| acc | (b << (7 - i)))
+                .fold(0u8, |acc, (i, &b)| acc | (b << i))
         })
         .collect()
 }
@@ -238,6 +238,12 @@ fn bcjr_pass(
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/// Maximum information bytes that `TurboCodec::encode` accepts in one call.
+///
+/// Derived from the largest QPP table entry (K=6144 bits = 768 bytes) minus
+/// the 4-byte turbo wire header (2-byte LE length + 2-byte CRC-16).
+pub const TURBO_MAX_INFO_BYTES: usize = 764;
+
 /// Rate-1/3 PCCC turbo codec with 3GPP QPP interleaver and Max-Log-MAP BCJR decoder.
 pub struct TurboCodec {
     max_iter: usize,
@@ -261,10 +267,17 @@ impl TurboCodec {
     }
 
     /// Encode `data` bytes into a packed rate-1/3 bit stream.
-    pub fn encode(&self, data: &[u8]) -> Vec<u8> {
+    ///
+    /// Returns `Err` if `data` exceeds `TURBO_MAX_INFO_BYTES` (no QPP entry covers the block).
+    pub fn encode(&self, data: &[u8]) -> Result<Vec<u8>, ModemError> {
         let payload = Self::build_payload(data);
         let raw_bits = bytes_to_bits(&payload);
-        let (k, f1, f2) = qpp_params(raw_bits.len()).unwrap_or_else(|| *QPP_TABLE.last().unwrap());
+        let (k, f1, f2) = qpp_params(raw_bits.len()).ok_or_else(|| {
+            ModemError::Frame(format!(
+                "turbo: block {} bits exceeds max QPP size (6144); split payload at call site",
+                raw_bits.len()
+            ))
+        })?;
         let mut bits = raw_bits;
         bits.resize(k, 0);
 
@@ -274,7 +287,7 @@ impl TurboCodec {
         let pi_bits: Vec<u8> = (0..k).map(|i| bits[qpp_permute(i, f1, f2, k)]).collect();
         let par2 = rsc_parity(&pi_bits, &trellis);
 
-        pack_bits(&bits, &par1, &par2)
+        Ok(pack_bits(&bits, &par1, &par2))
     }
 
     /// Soft-decision decode `llrs` (positive = likely 0) and return recovered data bytes.
@@ -366,7 +379,7 @@ impl Default for TurboCodec {
 // ── Engine-level helpers ───────────────────────────────────────────────────────
 
 /// Encode `data` with `TurboCodec` and return the packed codeword bytes.
-pub fn turbo_encode(data: &[u8]) -> Vec<u8> {
+pub fn turbo_encode(data: &[u8]) -> Result<Vec<u8>, ModemError> {
     TurboCodec::new().encode(data)
 }
 
@@ -385,7 +398,7 @@ mod tests {
     fn round_trip_clean() {
         let codec = TurboCodec::new();
         let data = b"Hello turbo!";
-        let encoded = codec.encode(data);
+        let encoded = codec.encode(data).expect("encode must succeed");
         // Perfect channel: convert each byte to bipolar LLRs (+5.0 = confident 0, -5.0 = confident 1)
         let llrs: Vec<f32> = bytes_to_bits(&encoded)
             .iter()
@@ -393,6 +406,14 @@ mod tests {
             .collect();
         let decoded = codec.decode(&llrs).expect("clean round-trip must succeed");
         assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn encode_rejects_oversize_block() {
+        let codec = TurboCodec::new();
+        // 765 bytes of data → payload = 769 bytes → 6152 bits > 6144 max QPP K
+        let big = vec![0u8; 765];
+        assert!(codec.encode(&big).is_err());
     }
 
     #[test]

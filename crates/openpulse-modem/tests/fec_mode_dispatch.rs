@@ -66,6 +66,11 @@ fn dispatch_ldpc() {
 }
 
 #[test]
+fn dispatch_turbo() {
+    roundtrip(FecMode::Turbo, "BPSK250");
+}
+
+#[test]
 fn dispatch_short_rs_returns_err() {
     let mut e = engine();
     assert!(
