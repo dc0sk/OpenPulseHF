@@ -30,6 +30,18 @@ pub(crate) const BAUD: f32 = 100.0;
 // ── Fsk4Plugin ────────────────────────────────────────────────────────────────
 
 /// 4FSK ACK frame modulation plugin.
+///
+/// FSK4-ACK is the HPX control channel for ACK/NACK frames.  It intentionally
+/// provides only **hard-decision** demodulation — `demodulate_soft` is not
+/// overridden and therefore returns ±1.0 LLRs rather than genuine probability
+/// values.  This is acceptable because:
+///
+/// 1. The ACK channel always uses short-block FEC (`ShortFecCodec`) which is a
+///    hard-decision code.
+/// 2. FSK4-ACK is never used as a carrier for LDPC or turbo payloads.
+///
+/// `supports_soft_demod()` returns `false` so that `receive_with_fec_mode` can
+/// warn if this plugin is accidentally paired with a soft-FEC mode.
 pub struct Fsk4Plugin {
     info: PluginInfo,
 }
