@@ -38,36 +38,27 @@ rejected and allowed-peer paths: `forwarder_rejects_denied_src_peer` and
 
 ---
 
-### 3 — IQ output for OFDM and SC-FDMA plugins
+### 3 — IQ output for OFDM and SC-FDMA plugins ✅ Already shipped
 
-**Goal:** `ModulationPlugin::modulate_iq()` already exists and BPSK uses it for direct
-SDR upconversion.  OFDM and SC-FDMA plugins return the default empty-vec fallback.
-
-**Acceptance criteria:**
-- `ofdm_modulate_iq(payload, mode) -> Vec<f32>` — interleaved I/Q stereo output,
-  identical carrier content to `ofdm_modulate`, at complex baseband (fc = 0 Hz).
-- `scfdma_modulate_iq(payload, mode) -> Vec<f32>` — same convention.
-- Both plugins override `ModulationPlugin::modulate_iq()` to call the new functions.
-- Round-trip test for each: I/Q samples demodulate correctly when mixed to passband.
+`ofdm_modulate_iq` and `scfdma_modulate_iq` are implemented in
+`plugins/ofdm/src/modulate.rs` and `plugins/scfdma/src/modulate.rs`.  Both plugins
+override `ModulationPlugin::modulate_iq()`.  Both OFDM and SC-FDMA use Hermitian
+symmetry (real IFFT output) so Q is identically zero; the interleaved output is
+`[I₀, 0, I₁, 0, …]`.  Round-trip tests `ofdm16_iq_round_trip` and
+`scfdma52_iq_round_trip` pass.
 
 ---
 
-### 4 — GPU extensions: QPSK correlator + modulate-side RRC
+### 4 — GPU extensions: QPSK correlator + modulate-side RRC ✅ Already shipped
 
-**Goal:** GPU RRC FIR kernel exists for the receive path.  The modulate path still runs
-CPU-side RRC for QPSK.  Low-priority given 1000 baud maximum, but worthwhile for
-pipeline symmetry.
-
-**Acceptance criteria:**
-- `openpulse_gpu::gpu_rrc_fir` wired into `qpsk_modulate` via `#[cfg(feature = "gpu")]`
-  dispatch, replacing the CPU convolution.
-- `QpskPlugin::with_gpu()` constructor (mirrors `BpskPlugin::with_gpu`).
-- CPU vs GPU modulate equivalence test (max sample delta < 1e-4).
-- `cargo test --package qpsk-plugin --no-default-features` passes unchanged.
+`QpskPlugin::with_gpu()` constructor exists; `openpulse_gpu::gpu_rrc_fir` is dispatched
+inside `qpsk_modulate` via `#[cfg(feature = "gpu")]`, replacing the CPU RRC convolution.
+CPU vs GPU equivalence test in `plugins/qpsk/src/modulate.rs` asserts max sample delta
+< 1e-4.  `cargo test --package qpsk-plugin --no-default-features` passes unchanged (PR #325).
 
 ---
 
-### 5 — SC-FDMA adaptive pilot density (PR #335, pending merge)
+### 5 — SC-FDMA adaptive pilot density ✅ Shipped (PR #335)
 
 `AdaptivePilotState` (EMA α=0.3), `ScFdmaParams::with_pilot_density()`, and
 `estimate_coh_bw_hz()` lag-1 pilot correlation estimator.  `ScFdmaPlugin::estimate_afc_hz`
@@ -133,6 +124,8 @@ When station access is available, run this checklist before marking Phase 5.5-re
 
 - Turbo codec: rate-1/3 PCCC `TurboCodec`, Max-Log-MAP BCJR, 8 iterations, `FecMode::Turbo` wired into engine dispatch (PR #337).
 - Peer deny-list enforcement: `RelayForwarder::forward` returns `PolicyRejected` for deny-listed `src_peer_id`; ARDOP and KISS bridges wire `cfg.relay.deny_list` via `RelayTrustPolicy::deny_relays`; two unit tests in `relay.rs`.
+- IQ output for OFDM and SC-FDMA: `ofdm_modulate_iq` / `scfdma_modulate_iq` implemented; both plugins override `modulate_iq()`; round-trip tests pass.
+- GPU QPSK modulate-side RRC: `QpskPlugin::with_gpu()`, `gpu_rrc_fir` dispatch in `qpsk_modulate`, CPU/GPU equivalence test (PR #325).
 - On-device calibration wizard: `openpulse calibrate audio|ptt|afc`; loopback-only, JSON output via `--output` (PR #336).
 - SC-FDMA adaptive pilot density: `AdaptivePilotState`, `estimate_coh_bw_hz()`, `ScFdmaParams::with_pilot_density()` (PR #335).
 - OFDM16/52 GPU hard+soft demodulation via `gpu_fft256_batch`; `OfdmPlugin::with_gpu()` constructor (PR #330).
