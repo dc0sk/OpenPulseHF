@@ -13,12 +13,12 @@ pub struct CmdPort {
 }
 
 impl CmdPort {
-    pub fn new(stream: TcpStream) -> Self {
-        let writer = stream.try_clone().expect("TcpStream clone for cmd write");
-        Self {
+    pub fn new(stream: TcpStream) -> Result<Self, crate::DriverError> {
+        let writer = stream.try_clone().map_err(crate::DriverError::Io)?;
+        Ok(Self {
             reader: BufReader::new(stream),
             writer,
-        }
+        })
     }
 
     /// Send an ARDOP command (CR-LF terminated).

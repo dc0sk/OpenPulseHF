@@ -237,7 +237,7 @@ fn e2e_single_message_awgn_20db() {
     let irs_thread = thread::spawn(move || {
         let cmd = TcpStream::connect(irs_cmd_addr).unwrap();
         let data = TcpStream::connect(irs_data_addr).unwrap();
-        let mut driver = B2fDriver::new(cmd, data);
+        let mut driver = B2fDriver::new(cmd, data).unwrap();
         driver.run_irs("K2DEF", Duration::from_secs(10)).unwrap()
     });
 
@@ -246,7 +246,7 @@ fn e2e_single_message_awgn_20db() {
     {
         let cmd = TcpStream::connect(iss_cmd_addr).unwrap();
         let data = TcpStream::connect(iss_data_addr).unwrap();
-        let mut iss_driver = B2fDriver::new(cmd, data);
+        let mut iss_driver = B2fDriver::new(cmd, data).unwrap();
         iss_driver
             .run_iss("K1ABC", "K2DEF", vec![(test_header("E2E001"), body)])
             .unwrap();
@@ -297,7 +297,7 @@ fn e2e_multi_message_clean() {
     let irs_thread = thread::spawn(move || {
         let cmd = TcpStream::connect(irs_cmd_addr).unwrap();
         let data = TcpStream::connect(irs_data_addr).unwrap();
-        let mut driver = B2fDriver::new(cmd, data);
+        let mut driver = B2fDriver::new(cmd, data).unwrap();
         driver.run_irs("K2DEF", Duration::from_secs(10)).unwrap()
     });
 
@@ -311,7 +311,7 @@ fn e2e_multi_message_clean() {
     {
         let cmd = TcpStream::connect(iss_cmd_addr).unwrap();
         let data = TcpStream::connect(iss_data_addr).unwrap();
-        let mut iss_driver = B2fDriver::new(cmd, data);
+        let mut iss_driver = B2fDriver::new(cmd, data).unwrap();
         iss_driver.run_iss("K1ABC", "K2DEF", msgs).unwrap();
     }
 

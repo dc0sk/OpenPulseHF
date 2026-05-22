@@ -62,7 +62,7 @@ fn iss_sends_one_message() {
     });
 
     let cmd_stream = TcpStream::connect(cmd_addr).unwrap();
-    let mut driver = B2fDriver::new(cmd_stream, iss_data);
+    let mut driver = B2fDriver::new(cmd_stream, iss_data).unwrap();
     driver
         .run_iss("K1ABC", "K2DEF", vec![(test_header("MSG001"), body)])
         .unwrap();
@@ -114,7 +114,7 @@ fn irs_receives_one_message() {
     });
 
     let cmd_stream = TcpStream::connect(cmd_addr).unwrap();
-    let mut driver = B2fDriver::new(cmd_stream, irs_data);
+    let mut driver = B2fDriver::new(cmd_stream, irs_data).unwrap();
     let decoded = driver.run_irs("K2DEF", Duration::from_secs(5)).unwrap();
 
     iss_thread.join().unwrap();
@@ -136,12 +136,12 @@ fn iss_irs_roundtrip() {
 
     let irs_thread = thread::spawn(move || {
         let cmd = TcpStream::connect(irs_cmd_addr).unwrap();
-        let mut driver = B2fDriver::new(cmd, irs_data);
+        let mut driver = B2fDriver::new(cmd, irs_data).unwrap();
         driver.run_irs("K2DEF", Duration::from_secs(5)).unwrap()
     });
 
     let iss_cmd = TcpStream::connect(iss_cmd_addr).unwrap();
-    let mut iss_driver = B2fDriver::new(iss_cmd, iss_data);
+    let mut iss_driver = B2fDriver::new(iss_cmd, iss_data).unwrap();
     iss_driver
         .run_iss("K1ABC", "K2DEF", vec![(test_header("MSG003"), body)])
         .unwrap();
@@ -170,12 +170,12 @@ fn multi_message_roundtrip() {
 
     let irs_thread = thread::spawn(move || {
         let cmd = TcpStream::connect(irs_cmd_addr).unwrap();
-        let mut driver = B2fDriver::new(cmd, irs_data);
+        let mut driver = B2fDriver::new(cmd, irs_data).unwrap();
         driver.run_irs("K2DEF", Duration::from_secs(5)).unwrap()
     });
 
     let iss_cmd = TcpStream::connect(iss_cmd_addr).unwrap();
-    let mut iss_driver = B2fDriver::new(iss_cmd, iss_data);
+    let mut iss_driver = B2fDriver::new(iss_cmd, iss_data).unwrap();
     let msgs: Vec<(WlHeader, Vec<u8>)> = messages
         .into_iter()
         .enumerate()

@@ -43,11 +43,11 @@ pub struct B2fDriver {
 
 impl B2fDriver {
     /// Construct from pre-connected TCP streams.
-    pub fn new(cmd: TcpStream, data: TcpStream) -> Self {
-        Self {
-            cmd: CmdPort::new(cmd),
+    pub fn new(cmd: TcpStream, data: TcpStream) -> Result<Self, DriverError> {
+        Ok(Self {
+            cmd: CmdPort::new(cmd)?,
             data: DataPort::new(data),
-        }
+        })
     }
 
     /// Connect to a running ARDOP TNC at `cmd_addr` (command port) and
@@ -61,7 +61,7 @@ impl B2fDriver {
         let data_stream = TcpStream::connect(data_addr)?;
         cmd_stream.set_read_timeout(Some(timeout))?;
         data_stream.set_read_timeout(Some(timeout))?;
-        Ok(Self::new(cmd_stream, data_stream))
+        Self::new(cmd_stream, data_stream)
     }
 
     /// ISS: connect to `remote_call`, send queued messages, then disconnect.
