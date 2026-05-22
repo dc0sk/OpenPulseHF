@@ -2046,11 +2046,10 @@ impl ModemEngine {
         // doesn't reject the buffer.
         const RS_BLOCK: usize = 255;
         let rs_len = (hard_bytes.len() / RS_BLOCK) * RS_BLOCK;
-        let hard_bytes = if rs_len > 0 && rs_len < hard_bytes.len() {
-            hard_bytes[..rs_len].to_vec()
-        } else {
-            hard_bytes
-        };
+        let mut hard_bytes = hard_bytes;
+        if rs_len > 0 && rs_len < hard_bytes.len() {
+            hard_bytes.truncate(rs_len);
+        }
         let hard_wire = WirePayload { bytes: hard_bytes };
         let hard_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, hard_wire)?;
 

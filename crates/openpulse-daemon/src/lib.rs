@@ -27,7 +27,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_channel::dsp::PowerSpectrum;
 #[cfg(not(target_arch = "wasm32"))]
-use openpulse_core::handshake::InMemoryTrustStore;
+use openpulse_core::handshake::{InMemoryTrustStore, TrustStore};
 use openpulse_core::trust::{CertificateSource, PublicKeyTrustLevel, SigningMode};
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_modem::engine::SecureSessionParams;
@@ -843,10 +843,19 @@ pub async fn apply_command_to_engine(
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
+            // Use the configured trust level when the peer is in the trust store.
+            // Unknown peers (not yet in store) get Full so the session proceeds and
+            // trust is established at handshake time.  Revoked peers are rejected.
+            let stored_trust = runtime_state.trust_store.trust_level(&callsign);
+            let key_trust = if stored_trust == PublicKeyTrustLevel::Unknown {
+                PublicKeyTrustLevel::Full
+            } else {
+                stored_trust
+            };
             let params = SecureSessionParams {
                 local_minimum_mode: SigningMode::Normal,
                 peer_supported_modes: vec![SigningMode::Normal, SigningMode::Psk],
-                key_trust: PublicKeyTrustLevel::Full,
+                key_trust,
                 certificate_source: CertificateSource::OutOfBand,
                 psk_validated: false,
             };
@@ -1734,9 +1743,16 @@ mod command_apply_tests {
     fn ptt_watchdog_fires_after_deadline() {
         let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
         let ev_tx = Arc::new(tx);
+        // Use a small ptt_max_duration so Instant::now() is guaranteed to be past
+        // the deadline without requiring the subtraction to go back farther than the
+        // process uptime (avoids panic on freshly booted CI containers).
         let mut state = RuntimeControlState {
-            ptt_asserted_at: Some(Instant::now() - Duration::from_secs(200)),
-            ptt_max_duration: Duration::from_secs(180),
+            ptt_asserted_at: Some(
+                Instant::now()
+                    .checked_sub(Duration::from_millis(100))
+                    .unwrap_or_else(Instant::now),
+            ),
+            ptt_max_duration: Duration::from_nanos(1),
             ..RuntimeControlState::default()
         };
         let fired = check_ptt_watchdog(&mut state, &ev_tx);

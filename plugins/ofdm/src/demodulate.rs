@@ -25,8 +25,10 @@ pub fn ofdm_demodulate(samples: &[f32], mode: &str) -> Vec<u8> {
 /// The 2-byte LE length prefix inserted by `ofdm_modulate` is consumed and
 /// excluded from the output.
 pub fn ofdm_demodulate_soft(samples: &[f32], mode: &str) -> Vec<f32> {
-    let p = params_for_mode(mode).expect("caller must validate mode before ofdm_demodulate_soft");
-    demodulate_soft_with_params(samples, &p)
+    match params_for_mode(mode) {
+        Some(p) => demodulate_soft_with_params(samples, &p),
+        None => vec![],
+    }
 }
 
 fn demodulate_with_params(samples: &[f32], p: &OfdmParams) -> Vec<u8> {
@@ -125,12 +127,20 @@ fn demodulate_soft_with_params(samples: &[f32], p: &OfdmParams) -> Vec<f32> {
         }
     }
 
-    // The 2-byte LE length prefix occupies the first 16 LLR values (8 bits/byte × 2 bytes).
-    // Strip them so the returned LLRs correspond only to payload bits.
-    if llrs.len() > 16 {
-        llrs.drain(0..16);
+    // Hard-decode the 2-byte LE length prefix from the first 16 LLRs to recover the
+    // actual payload bit count.  This lets us trim padding bits added by the last
+    // OFDM symbol boundary so decoders that expect an exact codeword length (e.g.
+    // turbo) don't see spurious bits.
+    if llrs.len() < 16 {
+        return vec![];
     }
-    llrs
+    let b0 = (0..8u8).fold(0u8, |a, i| a | (((llrs[i as usize] < 0.0) as u8) << i));
+    let b1 = (0..8u8).fold(0u8, |a, i| a | (((llrs[8 + i as usize] < 0.0) as u8) << i));
+    let payload_len = u16::from_le_bytes([b0, b1]) as usize;
+    // Skip the 16-LLR prefix and return exactly payload_len * 8 LLRs.
+    let bit_llrs = &llrs[16..];
+    let take = (payload_len * 8).min(bit_llrs.len());
+    bit_llrs[..take].to_vec()
 }
 
 // ── Bit helpers ───────────────────────────────────────────────────────────────
