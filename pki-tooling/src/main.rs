@@ -39,7 +39,23 @@ async fn main() {
         }
     };
 
-    let state = AppState { db, signing_key };
+    let api_key = match env::var("PKI_API_KEY") {
+        Ok(k) if !k.trim().is_empty() => k,
+        Ok(_) => {
+            eprintln!("fatal: PKI_API_KEY must not be empty");
+            std::process::exit(1);
+        }
+        Err(_) => {
+            eprintln!("fatal: PKI_API_KEY env var must be set");
+            std::process::exit(1);
+        }
+    };
+
+    let state = AppState {
+        db,
+        signing_key,
+        api_key,
+    };
 
     let app = build_router(state);
 
