@@ -6,6 +6,7 @@ use axum::{
     response::{IntoResponse, Json, Response},
 };
 use serde_json::json;
+use subtle::ConstantTimeEq;
 
 use crate::AppState;
 
@@ -22,7 +23,7 @@ pub async fn require_api_key(
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|token| token == state.api_key)
+        .map(|token| token.as_bytes().ct_eq(state.api_key.as_bytes()).into())
         .unwrap_or(false);
 
     if valid {

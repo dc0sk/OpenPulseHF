@@ -413,14 +413,25 @@ pub fn load_identity_from(path: &Path) -> Result<[u8; 32], ConfigError> {
     // where the file exists with broader umask-derived permissions.
     #[cfg(unix)]
     {
-        use std::io::Write;
+        use std::io::{ErrorKind, Write};
         use std::os::unix::fs::OpenOptionsExt;
-        let mut f = std::fs::OpenOptions::new()
+        match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
-            .open(path)?;
-        f.write_all(&seed)?;
+            .open(path)
+        {
+            Ok(mut f) => f.write_all(&seed)?,
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                // Another process won the race and already created the file.
+                let bytes = std::fs::read(path)?;
+                if bytes.len() != 32 {
+                    return Err(ConfigError::IdentityKeyLength);
+                }
+                seed.copy_from_slice(&bytes);
+            }
+            Err(e) => return Err(e.into()),
+        }
     }
     #[cfg(not(unix))]
     std::fs::write(path, seed)?;

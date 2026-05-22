@@ -30,7 +30,7 @@ jobs:
         run: cargo clippy --workspace --no-default-features -- -D warnings
       - name: Security audit
         run: |
-          cargo install cargo-audit --locked 2>/dev/null || true
+          cargo install cargo-audit --locked
           cargo audit
 
   build-x86-static:
