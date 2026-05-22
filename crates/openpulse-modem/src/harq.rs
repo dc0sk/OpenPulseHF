@@ -83,6 +83,7 @@ fn code_rate_for_fec(fec: FecMode) -> f32 {
         FecMode::RsStrong => 191.0 / 255.0,
         FecMode::SoftConcatenated => (223.0 / 255.0) * 0.5,
         FecMode::Ldpc => 0.5,
+        FecMode::Turbo => 1.0 / 3.0,
     }
 }
 

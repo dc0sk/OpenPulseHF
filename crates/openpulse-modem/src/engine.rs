@@ -28,6 +28,7 @@ use openpulse_core::trust::{
     evaluate_handshake, CertificateSource, ConnectionTrustLevel, HandshakeDecision, PolicyProfile,
     PublicKeyTrustLevel, SigningMode,
 };
+use openpulse_core::turbo::{turbo_decode_soft, turbo_encode};
 use openpulse_core::tx_metadata::{TxMetadata, TxSessionLog};
 use openpulse_core::wire_query::{callsign_hash, BroadcastFrame, WireEnvelope, WireMsgType};
 
@@ -1660,6 +1661,101 @@ impl ModemEngine {
         Ok(frame.payload)
     }
 
+    /// Encode `data` with rate-1/3 PCCC turbo FEC and transmit.
+    ///
+    /// TX chain: frame encode → turbo encode → modulate → emit.
+    pub fn transmit_with_turbo(
+        &mut self,
+        data: &[u8],
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<(), ModemError> {
+        self.csma_check()?;
+
+        let frame_wire = self.stage_encode_frame(data);
+        let codeword = turbo_encode(&frame_wire.bytes);
+        let fec_wire = WirePayload { bytes: codeword };
+        let fec_wire = self.route_wire_stage(PipelineStage::EncodeModulate, fec_wire)?;
+
+        debug!(
+            "Turbo transmitting {} B codeword (mode={mode})",
+            fec_wire.bytes.len()
+        );
+
+        let samples = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_modulate_payload(plugin, mode, &fec_wire)?
+        };
+        let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
+        self.stage_emit_output(device, &samples)?;
+        let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
+            mode: mode.to_string(),
+            bytes: fec_wire.bytes.len(),
+        });
+        Ok(())
+    }
+
+    /// Receive with rate-1/3 PCCC turbo FEC (Max-Log-MAP BCJR, 8 iterations).
+    ///
+    /// RX chain: capture → demodulate_soft → turbo decode → frame decode.
+    pub fn receive_with_turbo(
+        &mut self,
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<Vec<u8>, ModemError> {
+        let samples = self.stage_capture_input(device)?;
+        let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+
+        let prev_busy = self.dcd.is_busy();
+        self.dcd.update(&samples.samples);
+        if self.dcd.is_busy() != prev_busy {
+            let _ = self.event_tx.send(EngineEvent::DcdChange {
+                busy: self.dcd.is_busy(),
+                energy: self.dcd.energy(),
+            });
+        }
+
+        let llrs = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            let mod_cfg = ModulationConfig {
+                mode: mode.to_string(),
+                center_frequency: self.center_frequency + self.afc_correction_hz,
+                ..ModulationConfig::default()
+            };
+            plugin.demodulate_soft(&samples.samples, &mod_cfg)?
+        };
+
+        self.update_afc_estimate(mode, &samples.samples);
+        if let Some(hz) = self.last_afc_offset_hz {
+            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
+                offset_hz: hz,
+                correction_hz: self.afc_correction_hz,
+                mode: mode.to_string(),
+            });
+        }
+
+        let info_bytes = turbo_decode_soft(&llrs)?;
+
+        let corrected_wire = WirePayload { bytes: info_bytes };
+        let corrected_wire =
+            self.route_wire_stage(PipelineStage::DemodulateDecode, corrected_wire)?;
+
+        let frame = self.stage_decode_frame(&corrected_wire)?;
+        let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
+        info!("Turbo receive: frame seq={}", frame.sequence);
+        let _ = self.event_tx.send(EngineEvent::FrameReceived {
+            mode: mode.to_string(),
+            bytes: frame.payload.len(),
+        });
+        Ok(frame.payload)
+    }
+
     /// Receive via Memory-ARQ soft combining: capture `n_frames` sample buffers,
     /// average them element-wise, then demodulate and RS-decode the combined signal.
     ///
@@ -2121,6 +2217,7 @@ impl ModemEngine {
             FecMode::RsStrong => self.transmit_with_strong_fec(data, mode, device),
             FecMode::SoftConcatenated => self.transmit_with_soft_viterbi_fec(data, mode, device),
             FecMode::Ldpc => self.transmit_with_ldpc(data, mode, device),
+            FecMode::Turbo => self.transmit_with_turbo(data, mode, device),
         }
     }
 
@@ -2148,6 +2245,7 @@ impl ModemEngine {
             FecMode::RsStrong => self.receive_with_strong_fec(mode, device),
             FecMode::SoftConcatenated => self.receive_with_soft_viterbi_fec(mode, device),
             FecMode::Ldpc => self.receive_with_ldpc(mode, device),
+            FecMode::Turbo => self.receive_with_turbo(mode, device),
         }
     }
 

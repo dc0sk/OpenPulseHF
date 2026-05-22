@@ -62,6 +62,7 @@ pub fn run(case: &TestCase) -> TestResult {
             }
             h.tx_engine.transmit_with_ldpc(&wire_payload, mode, None)
         }
+        FecMode::Turbo => h.tx_engine.transmit_with_turbo(&wire_payload, mode, None),
     };
 
     if let Err(e) = tx_result {
@@ -81,6 +82,7 @@ pub fn run(case: &TestCase) -> TestResult {
         FecMode::Ldpc => h.rx_engine.receive_with_ldpc(mode, None),
         FecMode::RsStrong => h.rx_engine.receive_with_strong_fec(mode, None),
         FecMode::SoftConcatenated => h.rx_engine.receive_with_soft_viterbi_fec(mode, None),
+        FecMode::Turbo => h.rx_engine.receive_with_turbo(mode, None),
     };
 
     let rx_raw = match rx_raw {

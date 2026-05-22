@@ -64,6 +64,10 @@ pub enum FecMode {
     /// CPU implementation lives in `openpulse_core::ldpc::LdpcCodec`.
     /// A GPU-accelerated path via `openpulse-gpu` is reserved for future work.
     Ldpc,
+    /// Rate-1/3 PCCC turbo code (3GPP QPP interleaver, Max-Log-MAP BCJR, 8 iterations).
+    ///
+    /// Higher coding gain than LDPC for short block sizes (≤ 256 bits).
+    Turbo,
 }
 
 impl FecMode {
@@ -78,6 +82,7 @@ impl FecMode {
             FecMode::RsStrong => 5,
             FecMode::SoftConcatenated => 6,
             FecMode::Ldpc => 7,
+            FecMode::Turbo => 8,
         }
     }
 
@@ -763,6 +768,7 @@ mod tests {
         assert!(FecMode::RsStrong.strength() > FecMode::Concatenated.strength());
         assert!(FecMode::SoftConcatenated.strength() > FecMode::RsStrong.strength());
         assert!(FecMode::Ldpc.strength() > FecMode::SoftConcatenated.strength());
+        assert!(FecMode::Turbo.strength() > FecMode::Ldpc.strength());
     }
 
     #[test]

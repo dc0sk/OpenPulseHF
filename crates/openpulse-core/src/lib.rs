@@ -33,6 +33,7 @@ pub mod snr_hysteresis;
 pub mod soft_viterbi;
 pub mod trust;
 pub mod trust_store_file;
+pub mod turbo;
 pub mod tx_metadata;
 pub mod wire_query;
 
@@ -58,5 +59,6 @@ pub use sar::*;
 pub use signed_envelope::*;
 pub use signing::*;
 pub use trust::*;
+pub use turbo::*;
 pub use tx_metadata::*;
 pub use wire_query::*;
