@@ -8,4 +8,6 @@ pub enum ArdopError {
     Modem(#[from] openpulse_core::error::ModemError),
     #[error("background task panicked")]
     Join,
+    #[error("data port frame too large: {len} bytes (max {max})")]
+    FrameTooLarge { len: usize, max: usize },
 }
