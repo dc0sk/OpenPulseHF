@@ -1,0 +1,14 @@
+[advisories]
+# RUSTSEC-2023-0071: rsa 0.9.10 Marvin Attack timing side-channel.
+#
+# Affected path: rsa ← sqlx-mysql ← sqlx (optional dep, never compiled).
+#
+# Neither openpulse-cli nor pki-tooling enable the sqlx mysql feature.
+# sqlx-mysql exists in Cargo.lock because cargo resolves all optional
+# packages regardless of whether they are enabled.  cargo audit traces
+# through the lock file and reports the advisory even though rsa is never
+# linked into any binary produced by this workspace.
+#
+# Re-audit when sqlx releases a version that drops the mysql optional dep
+# or when a fixed rsa crate becomes available.
+ignore = ["RUSTSEC-2023-0071"]
