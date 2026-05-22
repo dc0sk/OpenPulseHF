@@ -68,13 +68,12 @@ pub use protocol::ControlEvent as Event;
 #[derive(Default)]
 pub struct MetricsSnapshot {
     pub afc_correction_hz: f32,
-    pub snr_db: Option<f32>,
     /// Cumulative bytes decoded from the RF receive path.
     pub total_rx_bytes: u64,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-type SharedMetrics = Arc<std::sync::Mutex<MetricsSnapshot>>;
+type SharedMetrics = Arc<Mutex<MetricsSnapshot>>;
 
 /// Mutable daemon runtime state touched by side-effectful control commands.
 #[cfg(not(target_arch = "wasm32"))]
@@ -300,8 +299,7 @@ impl ControlServer {
         let spectrum_tap: SpectrumTap = Arc::new(RwLock::new(vec![0.0f32; 1024]));
         let station_id: SharedStationId = Arc::new(Mutex::new(initial_station_id));
         let message_store: SharedMessageStore = Arc::new(Mutex::new(MessageStore::new()));
-        let shared_metrics: SharedMetrics =
-            Arc::new(std::sync::Mutex::new(MetricsSnapshot::default()));
+        let shared_metrics: SharedMetrics = Arc::new(Mutex::new(MetricsSnapshot::default()));
 
         // Background task: forward EngineEvents into the ControlEvent broadcast.
         let mut eng_rx = engine.subscribe();
@@ -326,13 +324,9 @@ impl ControlServer {
             let mut last_bytes: u64 = 0;
             loop {
                 interval.tick().await;
-                let (afc, snr, new_bytes) = {
-                    let m = metrics_snap.lock().unwrap_or_else(|e| e.into_inner());
-                    (
-                        m.afc_correction_hz,
-                        m.snr_db.map(|v| v as i32),
-                        m.total_rx_bytes,
-                    )
+                let (afc, new_bytes) = {
+                    let m = metrics_snap.lock().await;
+                    (m.afc_correction_hz, m.total_rx_bytes)
                 };
                 let effective_bps = (new_bytes.saturating_sub(last_bytes) * 8) as f32;
                 last_bytes = new_bytes;
@@ -341,7 +335,9 @@ impl ControlServer {
                     ecc_rate: 0.0,
                     compress_ratio: 1.0,
                     afc_correction_hz: afc,
-                    signal_strength_dbm: snr,
+                    // signal_strength_dbm requires calibrated S-meter data from the rig;
+                    // SNR from last_rx_snr_db is in dB, not dBm, so it is left absent here.
+                    signal_strength_dbm: None,
                 });
             }
         });
@@ -732,21 +728,26 @@ async fn execute_qsy_actions(
         let results: Vec<(u64, f32)> = if let Some(ref mut rig) = rig_controller {
             // Hop to each candidate, dwell briefly, and read the measured SNR.
             // Save and restore the original frequency so the radio is left on-channel.
-            let original_freq = rig.get_frequency().ok();
+            // Rig calls are synchronous TCP I/O — run them in block_in_place so they
+            // don't stall the Tokio runtime during the scan.
+            let original_freq = tokio::task::block_in_place(|| rig.get_frequency()).ok();
             let mut scan_results = Vec::with_capacity(freqs.len());
             for &freq in &freqs {
-                if let Err(e) = rig.set_frequency(freq) {
+                if let Err(e) = tokio::task::block_in_place(|| rig.set_frequency(freq)) {
                     tracing::warn!(freq, error = %e, "qsy scan: set_frequency failed; using last SNR");
                     scan_results.push((freq, engine.last_rx_snr_db().unwrap_or(0.0)));
                     continue;
                 }
                 // 100 ms dwell: let the audio buffer refresh before sampling SNR.
                 tokio::time::sleep(Duration::from_millis(100)).await;
-                let _ = tokio::task::block_in_place(|| engine.receive(mode, None));
+                match tokio::task::block_in_place(|| engine.receive(mode, None)) {
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(freq, error = %e, "qsy scan: receive failed"),
+                }
                 scan_results.push((freq, engine.last_rx_snr_db().unwrap_or(0.0)));
             }
             if let Some(orig) = original_freq {
-                if let Err(e) = rig.set_frequency(orig) {
+                if let Err(e) = tokio::task::block_in_place(|| rig.set_frequency(orig)) {
                     tracing::warn!(freq = orig, error = %e, "qsy scan: failed to restore frequency");
                 }
             }
