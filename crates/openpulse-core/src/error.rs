@@ -1,5 +1,12 @@
 use thiserror::Error;
 
+/// Errors produced by the frame layer.
+#[derive(Debug, Error)]
+pub enum FrameError {
+    #[error("payload too large: {0} bytes (max 255)")]
+    PayloadTooLarge(usize),
+}
+
 /// Errors produced by the modem layer.
 #[derive(Debug, Error)]
 pub enum ModemError {

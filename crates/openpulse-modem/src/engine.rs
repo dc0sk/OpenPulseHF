@@ -651,7 +651,7 @@ impl ModemEngine {
         // CSMA check before encoding so a deferral does not burn a sequence number.
         self.csma_check()?;
 
-        let outbound = self.stage_encode_frame(data);
+        let outbound = self.stage_encode_frame(data)?;
         let outbound = self.route_wire_stage(PipelineStage::EncodeModulate, outbound)?;
 
         debug!(
@@ -704,7 +704,7 @@ impl ModemEngine {
     ) -> Result<(), ModemError> {
         self.csma_check()?;
 
-        let outbound = self.stage_encode_frame(data);
+        let outbound = self.stage_encode_frame(data)?;
         let outbound = self.route_wire_stage(PipelineStage::EncodeModulate, outbound)?;
 
         let (i_bb, q_bb) = {
@@ -1116,7 +1116,7 @@ impl ModemEngine {
             .encode()
             .map_err(|e| ModemError::Configuration(e.to_string()))?;
 
-        let outbound = self.stage_encode_frame(&wire_bytes);
+        let outbound = self.stage_encode_frame(&wire_bytes)?;
         let outbound = self.route_wire_stage(PipelineStage::EncodeModulate, outbound)?;
 
         let samples = {
@@ -1147,7 +1147,7 @@ impl ModemEngine {
     ) -> Result<(), ModemError> {
         self.csma_check()?;
 
-        let frame_wire = self.stage_encode_frame(data);
+        let frame_wire = self.stage_encode_frame(data)?;
         let fec_bytes = FecCodec::new().encode(&frame_wire.bytes);
         let fec_wire = WirePayload { bytes: fec_bytes };
         let fec_wire = self.route_wire_stage(PipelineStage::EncodeModulate, fec_wire)?;
@@ -1239,7 +1239,7 @@ impl ModemEngine {
     ) -> Result<(), ModemError> {
         self.csma_check()?;
 
-        let frame_wire = self.stage_encode_frame(data);
+        let frame_wire = self.stage_encode_frame(data)?;
         let fec_bytes = FecCodec::new().encode(&frame_wire.bytes);
         let interleaved = Interleaver::new(interleaver_depth).interleave(&fec_bytes);
         let il_wire = WirePayload { bytes: interleaved };
@@ -1326,7 +1326,7 @@ impl ModemEngine {
     ) -> Result<(), ModemError> {
         self.csma_check()?;
 
-        let frame_wire = self.stage_encode_frame(data);
+        let frame_wire = self.stage_encode_frame(data)?;
         let rs_bytes = FecCodec::new().encode(&frame_wire.bytes);
         let conv_bytes = ConvCodec::new().encode(&rs_bytes);
         let fec_wire = WirePayload { bytes: conv_bytes };
@@ -1417,7 +1417,7 @@ impl ModemEngine {
     ) -> Result<(), ModemError> {
         self.csma_check()?;
 
-        let frame_wire = self.stage_encode_frame(data);
+        let frame_wire = self.stage_encode_frame(data)?;
         let rs_bytes = FecCodec::new().encode(&frame_wire.bytes);
         let sv_bytes = SoftViterbiCodec.encode(&rs_bytes);
         let fec_wire = WirePayload { bytes: sv_bytes };
@@ -1513,7 +1513,7 @@ impl ModemEngine {
         device: Option<&str>,
     ) -> Result<(), ModemError> {
         self.csma_check()?;
-        let wire = self.stage_encode_frame(data);
+        let wire = self.stage_encode_frame(data)?;
         let fec_wire = WirePayload {
             bytes: FecCodec::strong().encode(&wire.bytes),
         };
@@ -1596,7 +1596,7 @@ impl ModemEngine {
     ) -> Result<(), ModemError> {
         self.csma_check()?;
 
-        let frame_wire = self.stage_encode_frame(data);
+        let frame_wire = self.stage_encode_frame(data)?;
         if frame_wire.bytes.len() > LDPC_MAX_INFO_BYTES {
             return Err(ModemError::Frame(format!(
                 "LDPC: encoded frame {} B exceeds one-block limit of {} B; split payload at call site",
@@ -1701,7 +1701,7 @@ impl ModemEngine {
     ) -> Result<(), ModemError> {
         self.csma_check()?;
 
-        let frame_wire = self.stage_encode_frame(data);
+        let frame_wire = self.stage_encode_frame(data)?;
         if frame_wire.bytes.len() > TURBO_MAX_INFO_BYTES {
             return Err(ModemError::Frame(format!(
                 "turbo: encoded frame {} B exceeds one-block limit of {} B; split payload at call site",
@@ -2391,13 +2391,14 @@ impl ModemEngine {
         AckFrame::decode(&arr).map_err(|e| ModemError::Frame(format!("AckFrame decode: {e:?}")))
     }
 
-    fn stage_encode_frame(&mut self, data: &[u8]) -> WirePayload {
+    fn stage_encode_frame(&mut self, data: &[u8]) -> Result<WirePayload, ModemError> {
         let _stage = PipelineStage::EncodeModulate;
-        let frame = Frame::new(self.sequence, data.to_vec());
+        let frame = Frame::new(self.sequence, data.to_vec())
+            .map_err(|e| ModemError::Frame(e.to_string()))?;
         self.sequence = self.sequence.wrapping_add(1);
-        WirePayload {
+        Ok(WirePayload {
             bytes: frame.encode(),
-        }
+        })
     }
 
     fn stage_modulate_payload(

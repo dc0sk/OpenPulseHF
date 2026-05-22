@@ -31,12 +31,18 @@ async fn main() {
         )
         .init();
 
-    let cfg = openpulse_config::load().unwrap_or_default();
+    let cfg = match openpulse_config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("fatal: failed to load config: {e}");
+            std::process::exit(1);
+        }
+    };
     if cfg.station.callsign.trim().eq_ignore_ascii_case("N0CALL") {
         tracing::error!(
             "invalid callsign N0CALL in configuration; set [station].callsign before starting daemon"
         );
-        return;
+        std::process::exit(1);
     }
 
     let mode = cfg.modem.mode.clone();
@@ -205,8 +211,8 @@ async fn main() {
     ) {
         Ok(p) => p,
         Err(e) => {
-            tracing::warn!(error = %e, "QSY policy config error; using permissive defaults");
-            QsyPolicy::default()
+            tracing::error!(error = %e, "QSY policy config is invalid; refusing to start with permissive defaults — fix [qsy] in config");
+            std::process::exit(1);
         }
     };
 
@@ -238,6 +244,7 @@ async fn main() {
             );
             u32::MAX
         }),
+        qsy_scan_dwell_ms: cfg.qsy.scan_dwell_ms,
         qsy_policy,
         relay_forwarder,
         trust_store: if !cfg.trust.store_path.is_empty() {

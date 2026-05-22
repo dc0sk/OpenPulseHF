@@ -10,8 +10,32 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  test:
+    name: Test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: test-${{ runner.os }}-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}
+      - name: Run tests
+        run: cargo test --workspace --no-default-features --locked
+      - name: Clippy
+        run: cargo clippy --workspace --no-default-features -- -D warnings
+      - name: Security audit
+        run: |
+          cargo install cargo-audit --locked 2>/dev/null || true
+          cargo audit
+
   build-x86-static:
     name: Build static x86-64 binaries
+    needs: [test]
     runs-on: ubuntu-latest
 
     steps:
@@ -59,6 +83,7 @@ jobs:
 
   build-aarch64-deb:
     name: Build aarch64 .deb packages
+    needs: [test]
     runs-on: ubuntu-latest
 
     steps:
@@ -111,7 +136,7 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [build-x86-static, build-aarch64-deb]
+    needs: [test, build-x86-static, build-aarch64-deb]
     runs-on: ubuntu-latest
     permissions:
       contents: write

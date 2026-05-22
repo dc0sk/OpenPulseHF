@@ -6,11 +6,14 @@ use tracing::info;
 
 use bpsk_plugin::BpskPlugin;
 use fsk4_plugin::Fsk4Plugin;
-use openpulse_audio::LoopbackBackend;
+use openpulse_audio::loopback::LoopbackBackend;
 use openpulse_mesh::MeshDaemon;
 use openpulse_modem::ModemEngine;
 use psk8_plugin::Psk8Plugin;
 use qpsk_plugin::QpskPlugin;
+
+#[cfg(feature = "cpal")]
+use openpulse_audio::CpalBackend;
 
 use openpulse_core::relay::RelayTrustPolicy;
 use openpulse_mesh::trust_filter_from_policy;
@@ -35,15 +38,23 @@ struct Cli {
     /// Override max relay hops.
     #[arg(long)]
     max_hops: Option<u8>,
+
+    /// Audio backend: default | cpal | loopback (overrides config file).
+    #[arg(long)]
+    backend: Option<String>,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let cfg = match &cli.config {
+    let mut cfg = match &cli.config {
         Some(path) => openpulse_config::load_from(path)?,
         None => openpulse_config::load()?,
     };
+
+    if let Some(b) = cli.backend {
+        cfg.audio.backend = b;
+    }
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -62,9 +73,25 @@ fn main() -> Result<()> {
     let max_hops = cli.max_hops.unwrap_or(mesh_cfg.max_hops);
     let ttl_ms = mesh_cfg.store_forward_ttl_s * 1000;
 
-    // Build engine (loopback for now; CpalBackend behind feature flag later).
-    let lb = LoopbackBackend::new();
-    let mut engine = ModemEngine::new(Box::new(lb));
+    let audio: Box<dyn openpulse_core::audio::AudioBackend> = match cfg.audio.backend.as_str() {
+        "loopback" => Box::new(LoopbackBackend::default()),
+        #[cfg(feature = "cpal")]
+        "cpal" | "default" => Box::new(CpalBackend::new()),
+        #[cfg(not(feature = "cpal"))]
+        "cpal" => {
+            tracing::warn!(
+                "cpal backend not compiled in (build with --features cpal); using loopback"
+            );
+            Box::new(LoopbackBackend::default())
+        }
+        #[cfg(not(feature = "cpal"))]
+        "default" => Box::new(LoopbackBackend::default()),
+        name => {
+            anyhow::bail!("unknown audio backend '{name}' — use 'default', 'cpal', or 'loopback'")
+        }
+    };
+
+    let mut engine = ModemEngine::new(audio);
     let _ = engine.register_plugin(Box::new(BpskPlugin::default()));
     let _ = engine.register_plugin(Box::new(Fsk4Plugin::default()));
     let _ = engine.register_plugin(Box::new(QpskPlugin::default()));

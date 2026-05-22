@@ -17,7 +17,7 @@ fn selective_window_retransmit_recovers_corrupted_protected_frame() {
     let mut engine = setup_engine();
 
     let payload = b"window-arq selective full-path payload".to_vec();
-    let frame = Frame::new(7, payload.clone());
+    let frame = Frame::new(7, payload.clone()).unwrap();
     let wire = frame.encode();
     let protected = FecCodec::new().encode(&wire);
 

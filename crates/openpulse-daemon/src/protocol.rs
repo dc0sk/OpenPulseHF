@@ -114,8 +114,10 @@ pub enum ControlEvent {
     /// Periodic modem metrics snapshot (default 1 Hz).
     Metrics {
         effective_bps: f32,
-        ecc_rate: f32,
-        compress_ratio: f32,
+        /// RS/FEC byte-error correction rate; `None` until wired to engine diagnostics.
+        ecc_rate: Option<f32>,
+        /// Session compression ratio (compressed / raw); `None` until wired.
+        compress_ratio: Option<f32>,
         afc_correction_hz: f32,
         signal_strength_dbm: Option<i32>,
     },

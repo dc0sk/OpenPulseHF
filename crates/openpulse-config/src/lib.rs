@@ -409,10 +409,23 @@ pub fn load_identity_from(path: &Path) -> Result<[u8; 32], ConfigError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    // Create with owner-only permissions atomically on Unix to avoid a window
+    // where the file exists with broader umask-derived permissions.
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)?;
+        f.write_all(&seed)?;
+    }
+    #[cfg(not(unix))]
     std::fs::write(path, seed)?;
     Ok(seed)
 }
-
 /// Returns the platform-standard identity key file path.
 ///
 /// On Linux: `~/.config/openpulse/identity.key`

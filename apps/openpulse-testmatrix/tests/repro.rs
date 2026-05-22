@@ -49,7 +49,7 @@ fn make_qpsk_harness() -> ChannelSimHarness {
 fn ofdm52_plugin_direct_with_modem_frame() {
     let plugin = OfdmPlugin::new();
     let payload: Vec<u8> = (0..32).map(|i| i as u8).collect();
-    let frame = Frame::new(0, payload.clone());
+    let frame = Frame::new(0, payload.clone()).unwrap();
     let frame_bytes = frame.encode();
     assert!(
         frame_bytes.starts_with(b"OPLS"),
@@ -136,7 +136,7 @@ fn ofdm52_rs_clean_128b_engine() {
 fn qpsk1000_rrc_plugin_direct_223b() {
     let plugin = QpskPlugin::new();
     let payload: Vec<u8> = (0..223).map(|i| i as u8).collect();
-    let frame = Frame::new(0, payload.clone());
+    let frame = Frame::new(0, payload.clone()).unwrap();
     let frame_bytes = frame.encode();
     println!("Frame bytes len={} (wire for 223B)", frame_bytes.len());
 
@@ -175,7 +175,7 @@ fn qpsk1000_rrc_plugin_direct_223b() {
 fn qpsk1000_rrc_plugin_direct_128b() {
     let plugin = QpskPlugin::new();
     let payload: Vec<u8> = (0..128).map(|i| i as u8).collect();
-    let frame = Frame::new(0, payload.clone());
+    let frame = Frame::new(0, payload.clone()).unwrap();
     let frame_bytes = frame.encode();
     let samples = plugin
         .modulate(&frame_bytes, &qpsk_cfg("QPSK1000-RRC"))
