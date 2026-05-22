@@ -8,3 +8,4 @@ license.workspace = true
 thiserror.workspace = true
 flate2.workspace = true
 oxiarc-lzhuf.workspace = true
+tracing.workspace = true

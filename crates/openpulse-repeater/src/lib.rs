@@ -119,8 +119,10 @@ impl CrossBandRepeater {
         match result {
             Ok(n) => release_result.map(|_| n),
             Err(e) => {
-                // Release error is swallowed; original error takes priority.
-                let _ = release_result;
+                // PTT release failure is logged but the original error takes priority as return value.
+                if let Err(release_err) = release_result {
+                    tracing::warn!(error = %release_err, "PTT release failed after repeater error; hardware may remain keyed");
+                }
                 Err(e)
             }
         }

@@ -730,7 +730,16 @@ async fn execute_qsy_actions(
             // Save and restore the original frequency so the radio is left on-channel.
             // Rig calls are synchronous TCP I/O — run them in block_in_place so they
             // don't stall the Tokio runtime during the scan.
-            let original_freq = tokio::task::block_in_place(|| rig.get_frequency()).ok();
+            let original_freq = match tokio::task::block_in_place(|| rig.get_frequency()) {
+                Ok(f) => Some(f),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "qsy scan: failed to read current frequency; will not restore after scan"
+                    );
+                    None
+                }
+            };
             let mut scan_results = Vec::with_capacity(freqs.len());
             for &freq in &freqs {
                 if let Err(e) = tokio::task::block_in_place(|| rig.set_frequency(freq)) {

@@ -234,7 +234,15 @@ impl B2fSession {
                 self.state = SessionState::Done;
                 Ok(vec![])
             }
-            _ => Ok(vec![]),
+            (role, frame) => {
+                tracing::debug!(
+                    ?role,
+                    ?frame,
+                    state = ?self.state,
+                    "B2F: unexpected (role, frame) combination; no response sent"
+                );
+                Ok(vec![])
+            }
         }
     }
 
