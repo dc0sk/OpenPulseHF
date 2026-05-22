@@ -28,7 +28,7 @@ use openpulse_core::trust::{
     evaluate_handshake, CertificateSource, ConnectionTrustLevel, HandshakeDecision, PolicyProfile,
     PublicKeyTrustLevel, SigningMode,
 };
-use openpulse_core::turbo::{turbo_decode_soft, turbo_encode};
+use openpulse_core::turbo::{turbo_decode_soft, turbo_encode, TURBO_MAX_INFO_BYTES};
 use openpulse_core::tx_metadata::{TxMetadata, TxSessionLog};
 use openpulse_core::wire_query::{callsign_hash, BroadcastFrame, WireEnvelope, WireMsgType};
 
@@ -1673,7 +1673,14 @@ impl ModemEngine {
         self.csma_check()?;
 
         let frame_wire = self.stage_encode_frame(data);
-        let codeword = turbo_encode(&frame_wire.bytes);
+        if frame_wire.bytes.len() > TURBO_MAX_INFO_BYTES {
+            return Err(ModemError::Frame(format!(
+                "turbo: encoded frame {} B exceeds one-block limit of {} B; split payload at call site",
+                frame_wire.bytes.len(),
+                TURBO_MAX_INFO_BYTES,
+            )));
+        }
+        let codeword = turbo_encode(&frame_wire.bytes)?;
         let fec_wire = WirePayload { bytes: codeword };
         let fec_wire = self.route_wire_stage(PipelineStage::EncodeModulate, fec_wire)?;
 
