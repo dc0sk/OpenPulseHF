@@ -148,7 +148,10 @@ async fn handle_ws_client(stream: TcpStream, ctx: WsClientCtx) {
                             }
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(lost = n, "WebSocket event receiver lagged; events dropped");
+                        continue;
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }

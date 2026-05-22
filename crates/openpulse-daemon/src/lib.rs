@@ -313,7 +313,10 @@ impl ControlServer {
                     Ok(ev) => {
                         let _ = ev_fwd.send(ControlEvent::EngineEvent { event: ev });
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(lost = n, "engine event receiver lagged; events dropped");
+                        continue;
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
@@ -420,7 +423,10 @@ async fn handle_client(
                         line.push('\n');
                         if write_half.write_all(line.as_bytes()).await.is_err() { break; }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(lost = n, "TCP client event receiver lagged; events dropped");
+                        continue;
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }

@@ -1,5 +1,6 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
+use std::time::Duration;
 
 use crate::rig_mode::RigMode;
 use crate::{PttController, PttError, RadioError};
@@ -16,10 +17,14 @@ pub struct RigctldController {
     ptt_asserted: bool,
 }
 
+const RIGCTLD_TIMEOUT: Duration = Duration::from_secs(5);
+
 impl RigctldController {
     /// Connect to a rigctld daemon at `addr` (e.g. `"127.0.0.1:4532"`).
     pub fn connect(addr: &str) -> Result<Self, RadioError> {
         let stream = TcpStream::connect(addr)?;
+        stream.set_read_timeout(Some(RIGCTLD_TIMEOUT))?;
+        stream.set_write_timeout(Some(RIGCTLD_TIMEOUT))?;
         let reader = BufReader::new(stream.try_clone()?);
         Ok(Self {
             stream,
