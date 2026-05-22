@@ -90,23 +90,36 @@ pub fn run_audio() -> Result<CalibrationResult> {
 pub fn run_ptt(ptt_backend: &str, rig: &str, rig_file: &str) -> Result<CalibrationResult> {
     let mut ptt = build_ptt_controller(ptt_backend, rig, rig_file)?;
     let t0 = Instant::now();
-    let assert_ok = ptt.assert_ptt().is_ok();
-    let release_ok = ptt.release_ptt().is_ok();
+    let assert_result = ptt.assert_ptt();
+    let release_result = ptt.release_ptt();
     let elapsed_ms = t0.elapsed().as_secs_f32() * 1_000.0;
+    let assert_ok = assert_result.is_ok();
+    let release_ok = release_result.is_ok();
     let pass = assert_ok && release_ok && elapsed_ms < PTT_TARGET_MS;
+    let message = if !pass {
+        let mut parts = Vec::new();
+        if let Err(e) = assert_result {
+            parts.push(format!("assert error: {e}"));
+        }
+        if let Err(e) = release_result {
+            parts.push(format!("release error: {e}"));
+        }
+        if elapsed_ms >= PTT_TARGET_MS {
+            parts.push(format!(
+                "latency {elapsed_ms:.1} ms vs {PTT_TARGET_MS} ms target"
+            ));
+        }
+        Some(parts.join("; "))
+    } else {
+        None
+    };
     Ok(CalibrationResult {
         test: "ptt".into(),
         result: if pass { "pass" } else { "fail" }.into(),
         headroom_db: None,
         latency_ms: Some(elapsed_ms),
         afc_offset_hz: None,
-        message: if !pass {
-            Some(format!(
-                "latency {elapsed_ms:.1} ms vs {PTT_TARGET_MS} ms target"
-            ))
-        } else {
-            None
-        },
+        message,
     })
 }
 
@@ -120,7 +133,16 @@ pub fn run_afc() -> Result<CalibrationResult> {
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     engine.disable_csma();
 
-    engine.transmit(b"AFC_CAL_TEST", "BPSK250", None).ok();
+    if let Err(e) = engine.transmit(b"AFC_CAL_TEST", "BPSK250", None) {
+        return Ok(CalibrationResult {
+            test: "afc".into(),
+            result: "fail".into(),
+            headroom_db: None,
+            latency_ms: None,
+            afc_offset_hz: None,
+            message: Some(format!("TX failed: {e}")),
+        });
+    }
     let tx = shared.drain_samples();
     if tx.is_empty() {
         return Ok(CalibrationResult {
@@ -133,14 +155,29 @@ pub fn run_afc() -> Result<CalibrationResult> {
         });
     }
     shared.fill_samples(&tx);
-    engine.receive("BPSK250", None).ok();
+    if let Err(e) = engine.receive("BPSK250", None) {
+        return Ok(CalibrationResult {
+            test: "afc".into(),
+            result: "fail".into(),
+            headroom_db: None,
+            latency_ms: None,
+            afc_offset_hz: None,
+            message: Some(format!("RX failed: {e}")),
+        });
+    }
+    let afc_offset_hz = engine.last_afc_offset_hz();
+    let pass = afc_offset_hz.is_some();
     Ok(CalibrationResult {
         test: "afc".into(),
-        result: "pass".into(),
+        result: if pass { "pass" } else { "fail" }.into(),
         headroom_db: None,
         latency_ms: None,
-        afc_offset_hz: engine.last_afc_offset_hz(),
-        message: None,
+        afc_offset_hz,
+        message: if !pass {
+            Some("demodulation produced no AFC estimate".into())
+        } else {
+            None
+        },
     })
 }
 
