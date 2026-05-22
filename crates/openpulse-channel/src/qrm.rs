@@ -1,7 +1,8 @@
 //! QRM (man-made interference) — phase-coherent discrete tones.
 
+use rand::Rng;
 use rand::SeedableRng;
-use rand_distr::{Distribution, Normal};
+use rand_distr::StandardNormal;
 
 use crate::{ChannelError, ChannelModel, QrmConfig, ToneConfig};
 
@@ -66,11 +67,11 @@ impl ChannelModel for QrmChannel {
         let rms = (input.iter().map(|&s| s * s).sum::<f32>() / input.len() as f32).sqrt();
         let rms = if rms > 0.0 { rms } else { 1e-4 };
 
-        // Construct background noise distribution once per block, outside the sample loop.
-        let bg_dist = self
+        // Precompute optional background-noise sigma once per block, outside the sample loop.
+        let bg_sigma = self
             .config
             .noise_floor_snr_db
-            .map(|snr| Normal::new(0.0f32, rms / 10f32.powf(snr / 20.0)).unwrap());
+            .map(|snr| rms / 10f32.powf(snr / 20.0));
 
         let mut out = input.to_vec();
         for sample in out.iter_mut() {
@@ -79,8 +80,8 @@ impl ChannelModel for QrmChannel {
                 self.phases[t] += phase_step;
                 *sample += tone.amplitude * rms * self.phases[t].sin();
             }
-            if let Some(ref dist) = bg_dist {
-                *sample += dist.sample(&mut self.rng);
+            if let Some(sigma) = bg_sigma {
+                *sample += sigma * self.rng.sample::<f32, _>(StandardNormal);
             }
         }
         for p in &mut self.phases {

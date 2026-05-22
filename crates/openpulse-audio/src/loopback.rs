@@ -64,7 +64,7 @@ impl LoopbackBackend {
     /// Used by [`ChannelSimHarness`] to intercept TX samples before the RX engine
     /// reads them, so a channel model can be applied in between.
     pub fn drain_samples(&self) -> Vec<f32> {
-        let mut guard = self.buf.lock().expect("loopback buffer poisoned");
+        let mut guard = self.buf.lock().unwrap_or_else(|e| e.into_inner());
         guard.drain(..).collect()
     }
 
@@ -72,7 +72,7 @@ impl LoopbackBackend {
     ///
     /// Used by [`ChannelSimHarness`] to deliver channel-processed samples to the RX engine.
     pub fn fill_samples(&self, samples: &[f32]) {
-        let mut guard = self.buf.lock().expect("loopback buffer poisoned");
+        let mut guard = self.buf.lock().unwrap_or_else(|e| e.into_inner());
         guard.extend(samples.iter().copied());
     }
 
@@ -83,16 +83,13 @@ impl LoopbackBackend {
     /// Useful for multi-attempt receive tests where each attempt must see exactly
     /// one frame's worth of samples.
     pub fn push_frame(&self, samples: &[f32]) {
-        let mut guard = self
-            .frame_queue
-            .lock()
-            .expect("loopback frame queue poisoned");
+        let mut guard = self.frame_queue.lock().unwrap_or_else(|e| e.into_inner());
         guard.push_back(samples.to_vec());
     }
 
     /// Drain all I/Q pairs written via [`open_iq_output`](Self::open_iq_output).
     pub fn drain_iq_samples(&self) -> Vec<(f32, f32)> {
-        let mut guard = self.iq_buf.lock().expect("loopback iq buffer poisoned");
+        let mut guard = self.iq_buf.lock().unwrap_or_else(|e| e.into_inner());
         std::mem::take(&mut *guard)
     }
 }
@@ -156,15 +153,12 @@ impl AudioInputStream for LoopbackInputStream {
     fn read(&mut self) -> Result<Vec<f32>, AudioError> {
         // If frames were queued via `push_frame`, pop one frame per read.
         {
-            let mut q = self
-                .frame_queue
-                .lock()
-                .expect("loopback frame queue poisoned");
+            let mut q = self.frame_queue.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(frame) = q.pop_front() {
                 return Ok(frame);
             }
         }
-        let mut guard = self.buf.lock().expect("loopback buffer poisoned");
+        let mut guard = self.buf.lock().unwrap_or_else(|e| e.into_inner());
         Ok(guard.drain(..).collect())
     }
 
@@ -180,7 +174,7 @@ pub struct LoopbackOutputStream {
 
 impl AudioOutputStream for LoopbackOutputStream {
     fn write(&mut self, samples: &[f32]) -> Result<(), AudioError> {
-        let mut guard = self.buf.lock().expect("loopback buffer poisoned");
+        let mut guard = self.buf.lock().unwrap_or_else(|e| e.into_inner());
         guard.extend(samples.iter().copied());
         Ok(())
     }
@@ -201,7 +195,7 @@ pub struct LoopbackIqOutputStream {
 
 impl AudioIqOutputStream for LoopbackIqOutputStream {
     fn write_iq(&mut self, i: &[f32], q: &[f32]) -> Result<(), AudioError> {
-        let mut guard = self.buf.lock().expect("loopback iq buffer poisoned");
+        let mut guard = self.buf.lock().unwrap_or_else(|e| e.into_inner());
         guard.extend(i.iter().zip(q.iter()).map(|(&iv, &qv)| (iv, qv)));
         Ok(())
     }

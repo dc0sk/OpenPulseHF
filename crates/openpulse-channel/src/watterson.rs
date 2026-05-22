@@ -15,8 +15,9 @@
 //! Using N = next_power_of_two(signal_len) gives proper temporal correlation over the
 //! full call rather than jumping to independent states at fixed-size block boundaries.
 
+use rand::Rng;
 use rand::SeedableRng;
-use rand_distr::{Distribution, Normal};
+use rand_distr::StandardNormal;
 use rustfft::{num_complex::Complex, FftPlanner};
 
 type Complex32 = Complex<f32>;
@@ -74,11 +75,14 @@ impl WattersonChannel {
     /// states at each fixed-size block boundary.
     fn make_envelope(&mut self, n: usize) -> Vec<Complex32> {
         let fft_size = n.next_power_of_two().max(4);
-        let normal = Normal::new(0.0f32, 1.0).unwrap();
-
         // Random complex Gaussian spectrum.
         let mut spec: Vec<Complex<f32>> = (0..fft_size)
-            .map(|_| Complex::new(normal.sample(&mut self.rng), normal.sample(&mut self.rng)))
+            .map(|_| {
+                Complex::new(
+                    self.rng.sample::<f32, _>(StandardNormal),
+                    self.rng.sample::<f32, _>(StandardNormal),
+                )
+            })
             .collect();
 
         // Gaussian Doppler shaping: sigma = doppler_hz / bin_width.
@@ -150,7 +154,6 @@ impl WattersonChannel {
         } else {
             1e-4
         };
-        let noise_dist = Normal::new(0.0f32, noise_sigma).unwrap();
 
         let mut out_i = vec![0.0_f32; n];
         let mut out_q = vec![0.0_f32; n];
@@ -164,8 +167,8 @@ impl WattersonChannel {
             };
 
             let y = env0[idx] * x0 + env1[idx] * x1;
-            out_i[idx] = y.re + noise_dist.sample(&mut self.rng);
-            out_q[idx] = y.im + noise_dist.sample(&mut self.rng);
+            out_i[idx] = y.re + noise_sigma * self.rng.sample::<f32, _>(StandardNormal);
+            out_q[idx] = y.im + noise_sigma * self.rng.sample::<f32, _>(StandardNormal);
         }
 
         (out_i, out_q)
@@ -192,7 +195,6 @@ impl ChannelModel for WattersonChannel {
         } else {
             1e-4
         };
-        let noise_dist = Normal::new(0.0f32, noise_sigma).unwrap();
 
         // Use the real part of the complex fading coefficient (× √2 for unit mean-square).
         // The complex Gaussian envelope encodes a random carrier phase in its argument.
@@ -210,7 +212,7 @@ impl ChannelModel for WattersonChannel {
             } else {
                 0.0
             };
-            out[i] = ray0 + ray1 + noise_dist.sample(&mut self.rng);
+            out[i] = ray0 + ray1 + noise_sigma * self.rng.sample::<f32, _>(StandardNormal);
         }
         out
     }

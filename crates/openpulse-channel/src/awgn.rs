@@ -1,7 +1,8 @@
 //! AWGN channel: additive white Gaussian noise at a fixed SNR.
 
+use rand::Rng;
 use rand::SeedableRng;
-use rand_distr::{Distribution, Normal};
+use rand_distr::StandardNormal;
 
 use crate::{AwgnConfig, ChannelError, ChannelModel};
 
@@ -42,18 +43,20 @@ impl ChannelModel for AwgnChannel {
         } else {
             1e-4
         };
-        let dist = Normal::new(0.0f32, sigma).unwrap();
+        let rng = &mut self.rng;
         input
             .iter()
-            .map(|&s| s + dist.sample(&mut self.rng))
+            .map(|&s| s + sigma * rng.sample::<f32, _>(StandardNormal))
             .collect()
     }
 
     fn generate_noise(&mut self, length: usize) -> Vec<f32> {
         // Without a reference signal, use unit-RMS noise scaled by the SNR formula at RMS=1.
         let sigma = self.noise_sigma(1.0);
-        let dist = Normal::new(0.0f32, sigma).unwrap();
-        (0..length).map(|_| dist.sample(&mut self.rng)).collect()
+        let rng = &mut self.rng;
+        (0..length)
+            .map(|_| sigma * rng.sample::<f32, _>(StandardNormal))
+            .collect()
     }
 }
 
