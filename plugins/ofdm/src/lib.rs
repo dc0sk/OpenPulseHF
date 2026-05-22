@@ -17,7 +17,7 @@ use openpulse_core::{
     plugin::{ModulationConfig, ModulationPlugin, PluginInfo},
 };
 
-use crate::demodulate::ofdm_demodulate;
+use crate::demodulate::{ofdm_demodulate, ofdm_demodulate_soft};
 use crate::modulate::{ofdm_modulate, ofdm_modulate_iq};
 use crate::params::{params_for_mode, SAMPLE_RATE};
 
@@ -115,6 +115,24 @@ impl ModulationPlugin for OfdmPlugin {
             )));
         }
         Ok(ofdm_demodulate(samples, &config.mode))
+    }
+
+    fn demodulate_soft(
+        &self,
+        samples: &[f32],
+        config: &ModulationConfig,
+    ) -> Result<Vec<f32>, ModemError> {
+        if params_for_mode(&config.mode).is_none() {
+            return Err(ModemError::Configuration(format!(
+                "OFDM plugin: unknown mode '{}'",
+                config.mode
+            )));
+        }
+        Ok(ofdm_demodulate_soft(samples, &config.mode))
+    }
+
+    fn supports_soft_demod(&self) -> bool {
+        true
     }
 
     fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
@@ -244,6 +262,66 @@ mod tests {
         assert!(plugin.modulate(b"x", &cfg).is_err());
         let samples = vec![0.0f32; 288];
         assert!(plugin.demodulate(&samples, &cfg).is_err());
+        assert!(plugin.demodulate_soft(&samples, &cfg).is_err());
+    }
+
+    // Soft demod: LLR count must be at least 8× payload bytes (1 byte = 8 bits = 8 LLRs).
+    #[test]
+    fn ofdm16_soft_demod_llr_count() {
+        let plugin = OfdmPlugin::new();
+        let payload = b"soft test";
+        let samples = plugin.modulate(payload, &mod_config("OFDM16")).unwrap();
+        let llrs = plugin
+            .demodulate_soft(&samples, &mod_config("OFDM16"))
+            .unwrap();
+        assert!(
+            llrs.len() >= payload.len() * 8,
+            "too few LLRs: {}",
+            llrs.len()
+        );
+        assert!(llrs.iter().all(|v| v.is_finite()), "non-finite LLR");
+    }
+
+    // Soft demod: LLR sign convention — signs must agree with hard decisions.
+    #[test]
+    fn ofdm52_soft_demod_sign_convention() {
+        let plugin = OfdmPlugin::new();
+        // Mixed payload to avoid worst-case coherent PAPR clipping (all-zero maximizes peak).
+        let payload: Vec<u8> = (0u8..=63u8).collect();
+        let samples = plugin.modulate(&payload, &mod_config("OFDM52")).unwrap();
+        let llrs = plugin
+            .demodulate_soft(&samples, &mod_config("OFDM52"))
+            .unwrap();
+        let bits_hard = plugin.demodulate(&samples, &mod_config("OFDM52")).unwrap();
+
+        // For each payload bit: LLR > 0 must agree with bit == 0.
+        let mut matches = 0usize;
+        let mut total = 0usize;
+        for (byte_idx, &b) in bits_hard.iter().take(payload.len()).enumerate() {
+            for bit in 0..8usize {
+                let llr_idx = byte_idx * 8 + bit;
+                if llr_idx >= llrs.len() {
+                    break;
+                }
+                let bit_val = (b >> bit) & 1;
+                let llr_positive = llrs[llr_idx] > 0.0;
+                if (bit_val == 0) == llr_positive {
+                    matches += 1;
+                }
+                total += 1;
+            }
+        }
+        assert!(
+            matches > total * 9 / 10,
+            "LLR signs disagree with hard decisions: {matches}/{total} agree"
+        );
+    }
+
+    // supports_soft_demod must be true for OFDM plugin.
+    #[test]
+    fn ofdm_supports_soft_demod() {
+        let plugin = OfdmPlugin::new();
+        assert!(plugin.supports_soft_demod());
     }
 
     // AFC estimator: on-carrier signal returns near-zero estimate.
