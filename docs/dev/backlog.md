@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/backlog.md
 status: living
-last_updated: 2026-05-20
+last_updated: 2026-05-22
 ---
 
 # Backlog
@@ -26,18 +26,15 @@ No further work required; close this item.
 
 ---
 
-### 2 — Peer deny-list enforcement
+### 2 — Peer deny-list enforcement ✅ Already shipped
 
-**Goal:** `openpulse-config` has `relay.deny_list: Vec<String>` (peer IDs as hex) that
-parses correctly but is never read.  Wire it into `RelayForwarder` so frames from
-deny-listed peers are dropped at the first hop with a `PolicyRejected` event.
-
-**Acceptance criteria:**
-- `RelayForwarder::new` accepts `deny_list: Vec<[u8; 32]>` (pre-parsed peer IDs).
-- `RelayForwarder::try_forward` returns `RelayForwardError::PolicyRejected` when
-  `src_peer_id` is in the deny list.
-- Daemon wires config deny list into `RelayForwarder` at startup.
-- Two unit tests: denied peer is rejected; allow-listed peer forwards normally.
+`RelayForwarder::forward` returns `RelayForwardError::PolicyRejected` when
+`src_peer_id` matches any entry in the `RelayTrustPolicy` deny list (hex strings,
+checked via `hex_peer_id` conversion).  Both `openpulse-ardop/src/main.rs` and
+`openpulse-kiss/src/main.rs` read `cfg.relay.deny_list` at startup and pass it into
+`RelayTrustPolicy::deny_relays`.  Two inline unit tests in `relay.rs` cover the
+rejected and allowed-peer paths: `forwarder_rejects_denied_src_peer` and
+`forwarder_allows_non_denied_peer_when_deny_list_active`.
 
 ---
 
@@ -135,6 +132,7 @@ When station access is available, run this checklist before marking Phase 5.5-re
 ## Recently completed (summary)
 
 - Turbo codec: rate-1/3 PCCC `TurboCodec`, Max-Log-MAP BCJR, 8 iterations, `FecMode::Turbo` wired into engine dispatch (PR #337).
+- Peer deny-list enforcement: `RelayForwarder::forward` returns `PolicyRejected` for deny-listed `src_peer_id`; ARDOP and KISS bridges wire `cfg.relay.deny_list` via `RelayTrustPolicy::deny_relays`; two unit tests in `relay.rs`.
 - On-device calibration wizard: `openpulse calibrate audio|ptt|afc`; loopback-only, JSON output via `--output` (PR #336).
 - SC-FDMA adaptive pilot density: `AdaptivePilotState`, `estimate_coh_bw_hz()`, `ScFdmaParams::with_pilot_density()` (PR #335).
 - OFDM16/52 GPU hard+soft demodulation via `gpu_fft256_batch`; `OfdmPlugin::with_gpu()` constructor (PR #330).
