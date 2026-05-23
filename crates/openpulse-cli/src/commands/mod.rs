@@ -4,6 +4,7 @@ pub mod benchmark;
 pub mod broadcast;
 pub mod calibrate;
 pub mod config;
+pub mod daemon;
 pub mod devices;
 pub mod mode_advisor;
 pub mod modes;

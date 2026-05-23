@@ -51,6 +51,14 @@ fn main() -> Result<()> {
         return commands::mode_advisor::run(*snr);
     }
 
+    if let Commands::Daemon { addr, command } = cli.command {
+        let code = commands::daemon::run(&addr, command)?;
+        if code != 0 {
+            std::process::exit(code);
+        }
+        return Ok(());
+    }
+
     if let Commands::Calibrate { command, output } = &cli.command {
         // Validate --backend consistently even though calibrate uses loopback internally.
         match cli.backend.as_str() {
@@ -171,6 +179,7 @@ fn main() -> Result<()> {
         Commands::ModeAdvisor { .. } => unreachable!("handled above"),
         Commands::Config { .. } => unreachable!("handled above"),
         Commands::Calibrate { .. } => unreachable!("handled above"),
+        Commands::Daemon { .. } => unreachable!("handled above"),
     }
 
     if exit_code != 0 {
