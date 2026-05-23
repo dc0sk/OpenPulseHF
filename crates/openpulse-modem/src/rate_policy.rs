@@ -274,13 +274,18 @@ mod tests {
     }
 
     #[test]
-    fn ack_up_advances_to_next_mapped_level() {
+    fn ack_up_skips_unmapped_levels() {
+        // hpx_wideband: SL8=QPSK500, SL9=QPSK1000, (SL10 unmapped), SL11=8PSK1000.
+        // Starting at SL9, AckUp must jump to SL11 — proving gap-skipping.
         let mut p = RateAdaptationPolicy::new();
-        p.start_session(SessionProfile::hpx500());
-        let before = p.current_tx_level().unwrap();
+        p.start_session(SessionProfile::hpx_wideband());
+        // Advance from SL8 to SL9 first.
         let (_ev, _payload) = p.apply_ack(AckType::AckUp);
-        // hpx500 initial is SL2 with mappings at SL2..SL6 contiguous, so this just steps up.
-        assert!(p.current_tx_level().unwrap() >= before);
+        assert_eq!(p.current_tx_level(), Some(SpeedLevel::Sl9));
+        // Next AckUp must skip SL10 and land on SL11.
+        let (ev, _payload) = p.apply_ack(AckType::AckUp);
+        assert_eq!(p.current_tx_level(), Some(SpeedLevel::Sl11));
+        assert!(matches!(ev, RateEvent::Increased(SpeedLevel::Sl11)));
     }
 
     #[test]

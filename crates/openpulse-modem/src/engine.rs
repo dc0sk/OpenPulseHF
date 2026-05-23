@@ -240,8 +240,10 @@ impl ModemEngine {
 
     /// Begin an adaptive-rate session using the given profile.
     ///
-    /// Initialises a [`BiDirRateAdapter`] at `profile.initial_level` and stores the
-    /// profile so that [`current_adaptive_mode`](Self::current_adaptive_mode)
+    /// Initialises a bidirectional rate adapter
+    /// ([`openpulse_core::rate::BiDirRateAdapter`]) at `profile.initial_level`
+    /// and stores the profile so that
+    /// [`current_adaptive_mode`](Self::current_adaptive_mode)
     /// can resolve the current mode string on each transmit/receive cycle.
     pub fn start_adaptive_session(&mut self, profile: SessionProfile) {
         self.rate_policy.start_session(profile);
@@ -844,20 +846,6 @@ impl ModemEngine {
         Err(ModemError::ArqMaxRetries(attempts))
     }
 
-    /// Derive an outgoing [`AckType`] from the receive-path SNR and the active profile.
-    ///
-    /// Policy (conservative — avoids proactive rate limiting per design intent):
-    /// - [`AckDown`](AckType::AckDown): SNR has dropped below the floor for the current
-    ///   RX speed level.  The peer should transmit slower.
-    /// - [`AckUp`](AckType::AckUp): SNR has risen above the ceiling *and* the RX rate
-    ///   adapter has already set the upgrade-candidate flag (requires two consecutive
-    ///   above-ceiling measurements).  The peer may try a faster mode.
-    /// - [`AckOk`](AckType::AckOk): anything else.
-    ///
-    /// Also updates the RX direction of the bidirectional rate adapter as a side-effect.
-    pub fn select_rx_ack_type(&mut self, snr_db: f32) -> AckType {
-        self.rate_policy.select_rx_ack_type(snr_db)
-    }
     /// Like [`transmit`](Self::transmit) but wraps the encoded frame bytes
     /// with Reed-Solomon FEC before modulation.
     ///
