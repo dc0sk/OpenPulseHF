@@ -20,8 +20,12 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 fn run_command(addr: &str, cmd: &ControlCommand) -> Result<(Vec<ControlEvent>, CommandResponse)> {
     let stream =
         TcpStream::connect(addr).with_context(|| format!("connect to daemon at {addr}"))?;
-    stream.set_read_timeout(Some(DEFAULT_TIMEOUT)).ok();
-    stream.set_write_timeout(Some(DEFAULT_TIMEOUT)).ok();
+    stream
+        .set_read_timeout(Some(DEFAULT_TIMEOUT))
+        .context("set read timeout")?;
+    stream
+        .set_write_timeout(Some(DEFAULT_TIMEOUT))
+        .context("set write timeout")?;
     let mut writer = stream.try_clone().context("clone tcp stream")?;
     let mut reader = BufReader::new(stream);
 
@@ -49,7 +53,9 @@ fn run_command(addr: &str, cmd: &ControlCommand) -> Result<(Vec<ControlEvent>, C
             events.push(ev);
             continue;
         }
-        // Ignore unrelated frames (binary spectrum prefix, foreign events).
+        // Unrecognized NDJSON line (e.g. an event variant the CLI doesn't model yet);
+        // skip it.  Binary spectrum frames cannot appear here because we never send
+        // `SubscribeSpectrum` on this connection.
     }
 }
 
@@ -203,7 +209,9 @@ fn subscribe_spectrum(addr: &str, fps: u32, frames: u32) -> Result<i32> {
 
     let stream =
         TcpStream::connect(addr).with_context(|| format!("connect to daemon at {addr}"))?;
-    stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .context("set read timeout")?;
     let mut writer = stream.try_clone().context("clone tcp stream")?;
     let mut reader = BufReader::new(stream);
 
@@ -239,13 +247,24 @@ fn subscribe_spectrum(addr: &str, fps: u32, frames: u32) -> Result<i32> {
             continue;
         }
         if buf[0] == SPECTRUM_MAGIC[0] {
-            let mut hdr = [0u8; 10];
-            reader.read_exact(&mut hdr)?;
-            let fft_size = u16::from_le_bytes([hdr[4], hdr[5]]) as usize;
+            // Read and verify the full 4-byte magic before trusting the header.
+            let mut magic = [0u8; 4];
+            reader
+                .read_exact(&mut magic)
+                .context("read spectrum magic")?;
+            if magic != *SPECTRUM_MAGIC {
+                return Err(anyhow!("bad spectrum magic: {magic:02X?}"));
+            }
+            let mut tail = [0u8; 6];
+            reader
+                .read_exact(&mut tail)
+                .context("read spectrum header tail")?;
+            let fft_size = u16::from_le_bytes([tail[0], tail[1]]) as usize;
             let mut bins = vec![0u8; fft_size * 4];
-            reader.read_exact(&mut bins)?;
+            reader.read_exact(&mut bins).context("read spectrum bins")?;
             let mut frame = Vec::with_capacity(10 + bins.len());
-            frame.extend_from_slice(&hdr);
+            frame.extend_from_slice(&magic);
+            frame.extend_from_slice(&tail);
             frame.extend_from_slice(&bins);
             let (sample_rate, bins) =
                 decode_spectrum_frame(&frame).map_err(|e| anyhow!("decode spectrum: {e}"))?;

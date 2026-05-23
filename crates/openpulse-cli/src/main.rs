@@ -51,8 +51,8 @@ fn main() -> Result<()> {
         return commands::mode_advisor::run(*snr);
     }
 
-    if let Commands::Daemon { addr, command } = cli.command {
-        let code = commands::daemon::run(&addr, command)?;
+    if let Commands::Daemon { addr, command } = &cli.command {
+        let code = commands::daemon::run(addr, command.clone())?;
         if code != 0 {
             std::process::exit(code);
         }

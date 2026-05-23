@@ -165,7 +165,7 @@ pub enum Commands {
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
 pub enum DaemonCommands {
     /// Initiate an RF connection to a peer callsign via the TNC.
     ConnectPeer { callsign: String },
