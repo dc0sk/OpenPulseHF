@@ -593,7 +593,7 @@ async fn handle_command(
                     timestamp_secs,
                 });
                 if store.messages.len() > MAX_MESSAGES {
-                    store.messages.pop_front();
+                    let _ = store.messages.pop_front();
                 }
                 id
             };

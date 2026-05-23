@@ -168,31 +168,33 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
 
         "PTT" => match parts.get(1).map(|s| s.to_uppercase()).as_deref() {
             Some("TRUE") => {
-                match bridge
-                    .ptt
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .assert_ptt()
+                let ptt = bridge.ptt.clone();
+                match tokio::task::spawn_blocking(move || {
+                    ptt.lock().unwrap_or_else(|e| e.into_inner()).assert_ptt()
+                })
+                .await
                 {
-                    Ok(()) => vec!["PTT TRUE".into()],
-                    Err(e) => {
+                    Ok(Ok(())) => vec!["PTT TRUE".into()],
+                    Ok(Err(e)) => {
                         tracing::error!(error = %e, "PTT assert failed");
                         vec![format!("FAULT PTT assert failed: {e}")]
                     }
+                    Err(_) => vec!["FAULT PTT task panicked".into()],
                 }
             }
             _ => {
-                match bridge
-                    .ptt
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .release_ptt()
+                let ptt = bridge.ptt.clone();
+                match tokio::task::spawn_blocking(move || {
+                    ptt.lock().unwrap_or_else(|e| e.into_inner()).release_ptt()
+                })
+                .await
                 {
-                    Ok(()) => vec!["PTT FALSE".into()],
-                    Err(e) => {
+                    Ok(Ok(())) => vec!["PTT FALSE".into()],
+                    Ok(Err(e)) => {
                         tracing::error!(error = %e, "PTT release failed");
                         vec![format!("FAULT PTT release failed: {e}")]
                     }
+                    Err(_) => vec!["FAULT PTT task panicked".into()],
                 }
             }
         },

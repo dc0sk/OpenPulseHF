@@ -319,7 +319,7 @@ async fn handle_ws_client(stream: TcpStream, ctx: WsClientCtx) {
                                     timestamp_secs,
                                 });
                                 if store.messages.len() > MAX_MESSAGES {
-                                    store.messages.pop_front();
+                                    let _ = store.messages.pop_front();
                                 }
                                 id
                             };
