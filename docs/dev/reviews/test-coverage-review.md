@@ -1,7 +1,8 @@
 ---
 doc: docs/dev/reviews/test-coverage-review.md
 date: 2026-05-22
-status: initial
+status: resolved
+resolved: 2026-05-23
 ---
 
 # Test Coverage Review
@@ -129,10 +130,10 @@ repeater (1), scfdma plugin (6).
 
 ## Action Items
 
-| ID | Severity | Action |
-|---|---|---|
-| TST-01 | Medium | Add channel-sim tests for QPSK, OFDM, SC-FDMA through AWGN + Watterson |
-| TST-02 | Low | Add Watterson test for turbo FEC |
-| TST-03 | Low | Add AWGN channel-sim test for LDPC |
-| TST-06 | Low | Add `plugins/fsk4/tests/fsk4_integration.rs` |
-| TST-07 | Low | Add SC-FDMA HOM modes to testmatrix |
+| ID | Severity | Action | Resolution |
+|---|---|---|---|
+| TST-01 | Medium | Add channel-sim tests for QPSK, OFDM, SC-FDMA through AWGN + Watterson | ✅ `crates/openpulse-modem/tests/channel_loopback_multimode.rs` — QPSK500/AWGN, QPSK500/Watterson Good F1 (degrades), OFDM52/AWGN, OFDM52/Watterson, SCFDMA52-16QAM/AWGN, SCFDMA52-64QAM/AWGN |
+| TST-02 | Low | Add Watterson test for turbo FEC | ✅ `channel_loopback.rs::watterson_good_f1_bpsk250_turbo` — Watterson Good F1 through `FecMode::Turbo` |
+| TST-03 | Low | Add AWGN channel-sim test for LDPC | ✅ `channel_loopback.rs::awgn_15db_bpsk250_ldpc` — AWGN 15 dB through `FecMode::Ldpc` |
+| TST-06 | Low | Add `plugins/fsk4/tests/fsk4_integration.rs` | ✅ `plugins/fsk4/tests/fsk4_integration.rs` added with loopback round-trip and AWGN degradation tests |
+| TST-07 | Low | Add SC-FDMA HOM modes to testmatrix | ✅ `SCFDMA_HOM_MODES` const in `apps/openpulse-testmatrix/src/cases.rs` covers SCFDMA52-8PSK, -16QAM, -32QAM, -64QAM, -64QAM-P4 with SNR gates from `mode_min_snr_db()` |

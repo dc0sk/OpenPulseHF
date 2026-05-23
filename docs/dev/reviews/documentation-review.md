@@ -1,7 +1,8 @@
 ---
 doc: docs/dev/reviews/documentation-review.md
 date: 2026-05-22
-status: initial
+status: resolved
+resolved: 2026-05-23
 ---
 
 # Documentation Review
@@ -110,9 +111,9 @@ of each would significantly reduce the barrier for new contributors.
 
 ## Action Items
 
-| ID | Severity | Action |
-|---|---|---|
-| DOC-01 | Medium | Add PRs #335–#341 entries to `CHANGELOG.md [Unreleased]` |
-| DOC-02 | Low | Update README feature tables for turbo codec and calibration wizard |
-| DOC-03 | Low | Add `///` doc comments to undocumented public items in `relay.rs` |
-| DOC-07 | Low | Add one-line `///` doc to key public methods in `engine.rs` |
+| ID | Severity | Action | Resolution |
+|---|---|---|---|
+| DOC-01 | Medium | Add PRs #335–#341 entries to `CHANGELOG.md [Unreleased]` | ✅ `CHANGELOG.md [Unreleased]` covers turbo codec (#337), calibration wizard (#336), SC-FDMA adaptive pilot density (#335), QSY responder, GPU kernels, and associated fixes (#338–#341) |
+| DOC-02 | Low | Update README feature tables for turbo codec and calibration wizard | ✅ `README.md` FEC table includes `Turbo (rate-1/3 PCCC)`; tooling section includes `calibrate (audio/PTT/AFC)` subcommand |
+| DOC-03 | Low | Add `///` doc comments to undocumented public items in `relay.rs` | ✅ All 17 public items in `crates/openpulse-core/src/relay.rs` carry `///` doc comments including enum variants, `evict_expired`, and helper functions |
+| DOC-07 | Low | Add one-line `///` doc to key public methods in `engine.rs` | ✅ `transmit_with_fec_mode`, `receive_with_fec_mode`, `transmit_with_turbo`, and `last_rx_snr_db` all carry full doc blocks in `crates/openpulse-modem/src/engine.rs` |
