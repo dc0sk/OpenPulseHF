@@ -60,7 +60,7 @@ mod tests {
         let coeffs = vec![0.25, 0.5, 0.25];
         let mut f = FirFilter::new(coeffs.clone());
         let impulse: Vec<f32> = std::iter::once(1.0f32)
-            .chain(std::iter::repeat(0.0).take(coeffs.len() - 1))
+            .chain(std::iter::repeat_n(0.0, coeffs.len() - 1))
             .collect();
         let out = f.apply(&impulse);
         // The impulse response equals the stored coefficients; for symmetric

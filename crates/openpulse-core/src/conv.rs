@@ -181,7 +181,7 @@ fn bits_to_u32(bits: &[u8]) -> u32 {
 mod tests {
     use super::*;
 
-    fn flip_bit(data: &mut Vec<u8>, bit_idx: usize) {
+    fn flip_bit(data: &mut [u8], bit_idx: usize) {
         data[bit_idx / 8] ^= 1 << (7 - (bit_idx % 8));
     }
 

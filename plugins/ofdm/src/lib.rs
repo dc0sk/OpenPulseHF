@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(pilots.len(), OFDM16.n_pilots, "pilot count mismatch");
         // All pilots must fall within [first_sc, last_sc].
         for &sc in &pilots {
-            assert!(sc >= OFDM16.first_sc && sc <= OFDM16.last_sc);
+            assert!((OFDM16.first_sc..=OFDM16.last_sc).contains(&sc));
         }
         // Pilots: 38+4=42, 47, 52, 57
         assert_eq!(pilots, vec![42, 47, 52, 57]);
@@ -220,7 +220,7 @@ mod tests {
         let pilots = pilot_positions(&OFDM52);
         assert_eq!(pilots.len(), OFDM52.n_pilots, "pilot count mismatch");
         for &sc in &pilots {
-            assert!(sc >= OFDM52.first_sc && sc <= OFDM52.last_sc);
+            assert!((OFDM52.first_sc..=OFDM52.last_sc).contains(&sc));
         }
         // first pilot: 16+4=20; last: 80
         assert_eq!(pilots[0], 20);

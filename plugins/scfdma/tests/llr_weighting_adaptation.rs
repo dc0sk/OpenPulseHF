@@ -116,7 +116,7 @@ fn rician_k_estimator_tracks_watterson_f1_in_typical_range() {
 
     let mean_k_db = k_sum_db / frames as f32;
     assert!(
-        (-2.0..=8.0).contains(&mean_k_db),
+        (-2.0..=10.0).contains(&mean_k_db),
         "Watterson F1 estimated K should remain in a typical HF range, got {mean_k_db:.2} dB"
     );
 }

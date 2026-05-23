@@ -67,8 +67,8 @@ fn handle_connection_recording(
     while reader.read_line(&mut line).unwrap_or(0) > 0 {
         let cmd = line.trim().to_string();
         // Record set_freq calls immediately so callers don't need to wait for disconnect.
-        if cmd.starts_with("\\set_freq ") {
-            if let Ok(f) = cmd["\\set_freq ".len()..].trim().parse::<u64>() {
+        if let Some(stripped) = cmd.strip_prefix("\\set_freq ") {
+            if let Ok(f) = stripped.trim().parse::<u64>() {
                 freqs.lock().unwrap().push(f);
             }
         }
@@ -84,8 +84,8 @@ fn respond(
     strength: i32,
     recorded: &mut Vec<u64>,
 ) {
-    if cmd.starts_with("\\set_freq ") {
-        if let Ok(f) = cmd["\\set_freq ".len()..].trim().parse::<u64>() {
+    if let Some(stripped) = cmd.strip_prefix("\\set_freq ") {
+        if let Ok(f) = stripped.trim().parse::<u64>() {
             recorded.push(f);
         }
         writeln!(stream, "RPRT 0").ok();

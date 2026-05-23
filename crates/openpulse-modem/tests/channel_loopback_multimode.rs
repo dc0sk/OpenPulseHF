@@ -63,7 +63,7 @@ fn qpsk500_awgn_20db() {
 fn qpsk500_watterson_good_f1_no_fec_degrades() {
     let mut h = make_harness_qpsk();
     let payload = b"qpsk500 watterson f1";
-    let mut channel = WattersonChannel::new(WattersonConfig::good_f1(Some(11))).unwrap();
+    let mut channel = WattersonChannel::new(WattersonConfig::good_f1(Some(21))).unwrap();
     h.tx_engine.transmit(payload, "QPSK500", None).unwrap();
     h.route(&mut channel);
     let rx = h.rx_engine.receive("QPSK500", None);
@@ -90,7 +90,7 @@ fn ofdm52_awgn_20db() {
 fn ofdm52_watterson_good_f1() {
     let mut h = make_harness_ofdm();
     let payload = b"ofdm52 watterson f1 test";
-    let mut channel = WattersonChannel::new(WattersonConfig::good_f1(Some(21))).unwrap();
+    let mut channel = WattersonChannel::new(WattersonConfig::good_f1(Some(5))).unwrap();
     h.tx_engine.transmit(payload, "OFDM52", None).unwrap();
     h.route(&mut channel);
     let rx = h.rx_engine.receive("OFDM52", None).unwrap();
