@@ -71,16 +71,26 @@ fn dispatch_turbo() {
 }
 
 #[test]
-fn dispatch_short_rs_returns_err() {
+fn dispatch_short_rs_data_frame_roundtrip() {
+    // ShortRs now dispatches to the data-frame path; verify a small payload
+    // round-trips through the generic dispatch.
     let mut e = engine();
+    let payload = b"short-rs dispatch";
+    e.transmit_with_fec_mode(payload, "BPSK250", FecMode::ShortRs, None)
+        .expect("ShortRs dispatch transmit");
+    let received = e
+        .receive_with_fec_mode("BPSK250", FecMode::ShortRs, None)
+        .expect("ShortRs dispatch receive");
+    assert_eq!(&received, payload);
+}
+
+#[test]
+fn dispatch_short_rs_rejects_oversized_payload() {
+    let mut e = engine();
+    let oversized = vec![0u8; 214];
     assert!(
-        e.transmit_with_fec_mode(b"ack", "BPSK100", FecMode::ShortRs, None)
+        e.transmit_with_fec_mode(&oversized, "BPSK250", FecMode::ShortRs, None)
             .is_err(),
-        "ShortRs must return Err from generic dispatch"
-    );
-    assert!(
-        e.receive_with_fec_mode("BPSK100", FecMode::ShortRs, None)
-            .is_err(),
-        "ShortRs must return Err from generic dispatch"
+        "ShortRs must reject payloads > 213 bytes"
     );
 }

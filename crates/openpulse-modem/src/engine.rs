@@ -2078,9 +2078,11 @@ impl ModemEngine {
     /// [`DEFAULT_INTERLEAVER_DEPTH`].
     /// `FecMode::Ldpc` calls [`transmit_with_ldpc`](Self::transmit_with_ldpc) and
     /// is subject to the same single-block limit.
-    /// `FecMode::ShortRs` is reserved for ACK frames; this method returns
-    /// `Err(ModemError::Frame)` when called with it — use
-    /// [`transmit_ack_with_short_fec`](Self::transmit_ack_with_short_fec) instead.
+    /// `FecMode::ShortRs` is supported for both ACK frames (5-byte fixed) and
+    /// data frames (≤ 223 bytes). Data frames are dispatched to
+    /// [`transmit_with_short_fec_data`](Self::transmit_with_short_fec_data);
+    /// ACK frames should call
+    /// [`transmit_ack_with_short_fec`](Self::transmit_ack_with_short_fec) directly.
     pub fn transmit_with_fec_mode(
         &mut self,
         data: &[u8],
@@ -2095,9 +2097,7 @@ impl ModemEngine {
                 self.transmit_with_fec_interleaved(data, mode, device, DEFAULT_INTERLEAVER_DEPTH)
             }
             FecMode::Concatenated => self.transmit_with_concatenated_fec(data, mode, device),
-            FecMode::ShortRs => Err(ModemError::Frame(
-                "FecMode::ShortRs is for ACK frames only; use transmit_ack_with_short_fec".into(),
-            )),
+            FecMode::ShortRs => self.transmit_with_short_fec_data(data, mode, device),
             FecMode::RsStrong => self.transmit_with_strong_fec(data, mode, device),
             FecMode::SoftConcatenated => self.transmit_with_soft_viterbi_fec(data, mode, device),
             FecMode::Ldpc => self.transmit_with_ldpc(data, mode, device),
@@ -2108,8 +2108,10 @@ impl ModemEngine {
     /// Receive with the codec selected by `fec`.
     ///
     /// Mirror of [`transmit_with_fec_mode`](Self::transmit_with_fec_mode).
-    /// `FecMode::ShortRs` returns `Err` — use
-    /// [`receive_ack_with_short_fec`](Self::receive_ack_with_short_fec) instead.
+    /// `FecMode::ShortRs` dispatches to
+    /// [`receive_with_short_fec_data`](Self::receive_with_short_fec_data); for
+    /// ACK frames call
+    /// [`receive_ack_with_short_fec`](Self::receive_ack_with_short_fec) directly.
     pub fn receive_with_fec_mode(
         &mut self,
         mode: &str,
@@ -2141,9 +2143,7 @@ impl ModemEngine {
                 self.receive_with_fec_interleaved(mode, device, DEFAULT_INTERLEAVER_DEPTH)
             }
             FecMode::Concatenated => self.receive_with_concatenated_fec(mode, device),
-            FecMode::ShortRs => Err(ModemError::Frame(
-                "FecMode::ShortRs is for ACK frames only; use receive_ack_with_short_fec".into(),
-            )),
+            FecMode::ShortRs => self.receive_with_short_fec_data(mode, device),
             FecMode::RsStrong => self.receive_with_strong_fec(mode, device),
             FecMode::SoftConcatenated => self.receive_with_soft_viterbi_fec(mode, device),
             FecMode::Ldpc => self.receive_with_ldpc(mode, device),
@@ -2214,6 +2214,125 @@ impl ModemEngine {
             ModemError::Frame(format!("ShortFEC ACK decode: expected 5 bytes, got {n}"))
         })?;
         AckFrame::decode(&arr).map_err(|e| ModemError::Frame(format!("AckFrame decode: {e:?}")))
+    }
+
+    /// ECC bytes appended by the ShortRs data-frame codec (t = 16).
+    const SHORT_FEC_DATA_ECC_LEN: usize = 32;
+
+    /// Frame envelope (magic + ver + seq + len + CRC) bytes added by
+    /// [`stage_encode_frame`]. Mirrors `openpulse_core::frame::Frame::encode`.
+    const FRAME_ENVELOPE_LEN: usize = 4 + 1 + 2 + 1 + 2;
+
+    /// Maximum user payload accepted by [`transmit_with_short_fec_data`].
+    ///
+    /// The on-air buffer is `Frame(payload) + 32 B ECC`, which must fit in
+    /// `ShortFecCodec`'s 255-byte block, i.e.
+    /// `FRAME_ENVELOPE_LEN + payload + ECC_LEN ≤ 255`.
+    const SHORT_FEC_DATA_MAX_PAYLOAD: usize =
+        255 - Self::SHORT_FEC_DATA_ECC_LEN - Self::FRAME_ENVELOPE_LEN;
+
+    /// Transmit `payload` using the short-block RS codec.
+    ///
+    /// The bytes on the wire are `Frame(payload) + 32 B ECC` —
+    /// `payload.len() + 42` bytes — instead of the full 255-byte block
+    /// produced by [`transmit_with_fec`](Self::transmit_with_fec). Strength is
+    /// t = 16 byte errors per frame.
+    ///
+    /// Maximum payload is
+    /// [`SHORT_FEC_DATA_MAX_PAYLOAD`](Self::SHORT_FEC_DATA_MAX_PAYLOAD)
+    /// (213 bytes); larger payloads return `ModemError::Frame`.
+    ///
+    /// The receiver determines the data length from the demodulated byte count,
+    /// so this path only round-trips reliably when the modulation plugin emits
+    /// the exact number of bytes corresponding to the transmitted frame
+    /// (loopback and well-framed half-duplex paths). Paths that pad to a
+    /// subcarrier boundary (OFDM/SC-FDMA) are not supported.
+    pub fn transmit_with_short_fec_data(
+        &mut self,
+        payload: &[u8],
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<(), ModemError> {
+        if payload.len() > Self::SHORT_FEC_DATA_MAX_PAYLOAD {
+            return Err(ModemError::Frame(format!(
+                "ShortRs data frame: payload {} bytes exceeds maximum {}",
+                payload.len(),
+                Self::SHORT_FEC_DATA_MAX_PAYLOAD
+            )));
+        }
+        self.csma_check()?;
+
+        let frame_wire = self.stage_encode_frame(payload)?;
+        let fec_bytes =
+            ShortFecCodec::with_ecc_len(Self::SHORT_FEC_DATA_ECC_LEN).encode(&frame_wire.bytes)?;
+        let wire = WirePayload { bytes: fec_bytes };
+        let wire = self.route_wire_stage(PipelineStage::EncodeModulate, wire)?;
+
+        let samples = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_modulate_payload(plugin, mode, &wire)?
+        };
+        let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
+        self.stage_emit_output(device, &samples)?;
+        let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
+            mode: mode.to_string(),
+            bytes: wire.bytes.len(),
+        });
+        Ok(())
+    }
+
+    /// Demodulate and decode a frame emitted by
+    /// [`transmit_with_short_fec_data`](Self::transmit_with_short_fec_data).
+    pub fn receive_with_short_fec_data(
+        &mut self,
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<Vec<u8>, ModemError> {
+        let samples = self.stage_capture_input(device)?;
+        let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+
+        let prev_busy = self.dcd.is_busy();
+        self.dcd.update(&samples.samples);
+        if self.dcd.is_busy() != prev_busy {
+            let _ = self.event_tx.send(EngineEvent::DcdChange {
+                busy: self.dcd.is_busy(),
+                energy: self.dcd.energy(),
+            });
+        }
+
+        let wire = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_demodulate_payload(plugin, mode, &samples)?
+        };
+        let wire = self.route_wire_stage(PipelineStage::DemodulateDecode, wire)?;
+
+        self.update_afc_estimate(mode, &samples.samples);
+        if let Some(hz) = self.last_afc_offset_hz {
+            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
+                offset_hz: hz,
+                correction_hz: self.afc_correction_hz,
+                mode: mode.to_string(),
+            });
+        }
+
+        let corrected_bytes =
+            ShortFecCodec::with_ecc_len(Self::SHORT_FEC_DATA_ECC_LEN).decode(&wire.bytes)?;
+        let corrected_wire = WirePayload {
+            bytes: corrected_bytes,
+        };
+        let frame = self.stage_decode_frame(&corrected_wire)?;
+        let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
+        let _ = self.event_tx.send(EngineEvent::FrameReceived {
+            mode: mode.to_string(),
+            bytes: frame.payload.len(),
+        });
+        Ok(frame.payload)
     }
 
     fn stage_encode_frame(&mut self, data: &[u8]) -> Result<WirePayload, ModemError> {
