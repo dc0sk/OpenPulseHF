@@ -209,6 +209,32 @@ and per-level SNR floor/ceiling gates:
 - **QRN/QRM/QSB/Chirp** — broadband noise, interference, slow fading, frequency drift
 - DCD energy threshold and 0.3-persistence CSMA channel access
 
+### Filtering and signal enhancement
+
+Options that reduce out-of-band emissions, suppress spectral sidelobes, or improve
+receiver sensitivity.  Each can be selected independently per mode.
+
+| Technique | Where | Sidelobe / benefit | Notes |
+|---|---|---|---|
+| **Half-Hann overlapping crossfade** (`PulseShape::Hann`) | All single-carrier modes (default) | ~−32 dB first sidelobe | 50 % symbol overlap; no ISI at SNR > 3 dB; CPU path only |
+| **Cosine overlap** (`PulseShape::CosineOverlap`) | Single-carrier alternative | ~−32 dB; null-to-null BW ≈ 2×Rs | Lower spectral leakage than rectangular; GPU-compatible |
+| **Root Raised Cosine (SRRC) FIR** (`PulseShape::Rrc`) | `-RRC` mode suffix (QPSK, 8PSK, 64QAM) | ~−35 dB OOB; excess BW = 35 % | α = 0.35 rolloff; taps configurable; ISI-free by matched-filter design |
+| **Barker-11 preamble** | Preamble / timing | PSL = −13 dB | 11-chip Barker; used for frame timing acquisition |
+| **Barker-13 preamble** | Preamble / timing | PSL = −17 dB | 13-chip Barker; better sidelobe suppression than Barker-11 |
+| **DFT-CE pilot-aided channel estimation** | SC-FDMA (all SCFDMA modes) | Removes multipath phase rotation | DFT-domain CE on pilot subcarriers; combines with MMSE |
+| **MMSE equalization** | SC-FDMA | Suppresses inter-subcarrier interference | Per-subcarrier minimum mean-square error; requires DFT-CE |
+| **LS channel estimation** | OFDM (OFDM16 / OFDM52) | Least-squares pilot tap estimation | Per-symbol LS CE → ZF equalization |
+| **ZF equalization** | OFDM | Removes pilot-estimated channel distortion | Per-subcarrier zero-forcing; follows LS-CE |
+| **LMS/DFE adaptive equalizer** | BPSK-RRC demod path | Residual ISI suppression | Supervised preamble training → decision-directed; `crates/openpulse-dsp` |
+| **Gardner timing error detector** | All single-carrier modes | Symbol clock recovery | Symbol-rate TED; feeds symbol timing interpolator |
+| **PLL carrier phase tracking** | BPSK / QPSK / 8PSK | Phase noise rejection | Phase-locked loop updated per symbol; `crates/openpulse-dsp` |
+| **AFC IQ-squaring estimator** | BPSK (all rates) | Frequency offset correction ±baud/4 | Tracking range: ±7.8 Hz (BPSK31) … ±62.5 Hz (BPSK250) |
+| **Soft-input FEC (LDPC / Turbo)** | Any mode with `supports_soft_demod()` | Coding gain vs. hard-decision FEC | Requires a plugin that returns genuine LLRs; engine warns if paired with hard-only plugin |
+
+**Rectangular pulse spectrum** for reference: first sidelobes −13 dB; classical full-Hann windowing
+improves this to −32 dB at the cost of ISI.  See [`docs/features.md`](features.md) for the
+detailed crossfade and ISI analysis.
+
 ### Operator interfaces
 
 | Interface | Description |
@@ -296,6 +322,32 @@ pass with this flag. Never add tests that require real audio hardware.
 | `plugins/scfdma` | SCFDMA52-8PSK, SCFDMA52-16QAM, SCFDMA52-32QAM, SCFDMA52-64QAM; DFT-CE + MMSE |
 | `plugins/ofdm` | OFDM16, OFDM52; LS channel estimation + ZF equalization |
 | `plugins/fsk4` | FSK4-ACK (100 baud ACK channel; Goertzel demodulator) |
+
+---
+
+## Non-GPL interfacing
+
+OpenPulseHF is GPL v3, but several interfaces let non-GPL software interoperate without
+GPL obligations.  All of the following sit behind a **process boundary** or a **network
+protocol boundary**, which the FSF and courts have consistently held does not trigger
+copyleft:
+
+| Interface | Transport | Description |
+|---|---|---|
+| **ARDOP TNC** | TCP 8515 (cmd) / 8516 (data) | ARDOP ASCII command protocol; Pat, Winlink Express, JS8Call–compatible |
+| **KISS/AX.25 TNC** | TCP 8100 | Standard KISS framing; compatible with Xastir, YAAC, APRX, Linux AX.25 tools |
+| **Daemon control port** | NDJSON over TCP 9000 | Full event stream + control commands; operator panel and scripting |
+| **Daemon WebSocket** | JSON over WS 9001 | Same protocol as TCP port; browser and Electron clients |
+| **PKI REST API** | HTTP/JSON 8080 | Trust-bundle and key-management endpoints; read-only routes unauthenticated |
+| **CLI subprocess** | stdin / stdout | NDJSON output; invocation crosses the process boundary |
+| **Winlink CMS gateway** | B2F over TCP 8772 | Outbound-only client to `cms.winlink.org`; CMS is proprietary |
+
+Note: **plugins that statically link against `openpulse-core`** are derivative works
+and must be GPL-compatible.  The only supported path for proprietary DSP backends is to
+run them as a separate process and bridge data through one of the TCP interfaces above.
+
+See [`docs/non-gpl-interfacing.md`](non-gpl-interfacing.md) for the full interface
+specifications including wire formats, authentication, and schema references.
 
 ---
 
