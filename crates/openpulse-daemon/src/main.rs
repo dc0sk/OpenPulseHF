@@ -222,7 +222,7 @@ async fn main() {
         } else {
             RelayTrustPolicy::deny_relays(cfg.relay.deny_list.iter().map(|s| s.as_str()))
         };
-        let ttl_ms = cfg.mesh.store_forward_ttl_s.saturating_mul(1000);
+        let ttl_ms = cfg.relay.store_forward_ttl_s.saturating_mul(1000);
         tracing::info!(
             max_hops = cfg.relay.max_hops,
             deny_count = cfg.relay.deny_list.len(),

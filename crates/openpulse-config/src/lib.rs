@@ -181,6 +181,8 @@ pub struct LoggingConfig {
 pub struct RelayConfig {
     pub enabled: bool,
     pub max_hops: u8,
+    /// Store-and-forward frame TTL in seconds. Read by `openpulse-daemon`'s relay forwarder.
+    pub store_forward_ttl_s: u64,
     /// Peer IDs (lower-hex, 64 chars each) whose frames are dropped at the first relay hop.
     pub deny_list: Vec<String>,
 }
@@ -205,7 +207,7 @@ pub struct MeshConfig {
     /// Reserved for future trust-level filtering; `RelayTrustPolicy` currently
     /// models a deny-list of peer IDs and does not yet enforce this value.
     pub relay_policy: String,
-    /// Store-and-forward frame TTL in seconds (passed to `RelayForwarder` as ttl_ms).
+    /// Store-and-forward frame TTL in seconds. Read by `openpulse-mesh` daemon.
     pub store_forward_ttl_s: u64,
     /// Peer discovery beacon interval in seconds; 0 disables beacons.
     pub beacon_interval_s: u64,
@@ -310,6 +312,7 @@ impl Default for RelayConfig {
         Self {
             enabled: false,
             max_hops: 3,
+            store_forward_ttl_s: 300,
             deny_list: Vec::new(),
         }
     }
@@ -576,19 +579,21 @@ port = 8100
 level = "info"
 
 [relay]
-# Enable multi-hop relay forwarding.
+# Enable multi-hop relay forwarding (used by openpulse-daemon).
 enabled = false
 # Maximum relay hop count.
 max_hops = 3
+# Store-and-forward frame TTL in seconds (read by openpulse-daemon relay forwarder).
+store_forward_ttl_s = 300
 
 [mesh]
-# Enable the openpulse-mesh daemon relay stack.
+# Enable the openpulse-mesh daemon relay stack (used by openpulse-mesh binary).
 enabled = false
 # Maximum relay hop count before a frame is dropped.
 max_hops = 3
 # Relay trust policy: strict | balanced | permissive
 relay_policy = "balanced"
-# Store-and-forward frame TTL in seconds.
+# Store-and-forward frame TTL in seconds (read by openpulse-mesh binary).
 store_forward_ttl_s = 300
 # Peer discovery beacon interval in seconds.
 beacon_interval_s = 60
@@ -598,7 +603,7 @@ peer_cache_capacity = 256
 peer_cache_ttl_s = 3600
 
 [trust]
-# Path to the local trust store directory. Empty = platform default.
+# Path to the local trust store file. Empty = platform default.
 store_path = ""
 
 # [qsy]

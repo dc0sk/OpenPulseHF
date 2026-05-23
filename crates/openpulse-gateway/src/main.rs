@@ -233,6 +233,13 @@ fn connect_and_exchange(
     port: u16,
     messages: Vec<(WlHeader, Vec<u8>)>,
 ) -> anyhow::Result<Vec<Vec<u8>>> {
+    // Winlink CMS port 8772 uses the B2F wire protocol, which is unauthenticated
+    // plaintext by specification. TLS is not available at this port.
+    tracing::warn!(
+        host,
+        port,
+        "connecting to Winlink CMS over unauthenticated plaintext (B2F protocol)"
+    );
     let stream =
         TcpStream::connect((host, port)).with_context(|| format!("connecting to {host}:{port}"))?;
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;

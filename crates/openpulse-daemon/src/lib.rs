@@ -197,7 +197,7 @@ pub struct StoredMessage {
 #[cfg(not(target_arch = "wasm32"))]
 pub struct MessageStore {
     next_id: u64,
-    pub messages: Vec<StoredMessage>,
+    pub messages: std::collections::VecDeque<StoredMessage>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -205,7 +205,7 @@ impl MessageStore {
     fn new() -> Self {
         Self {
             next_id: 1,
-            messages: Vec::new(),
+            messages: std::collections::VecDeque::new(),
         }
     }
 
@@ -481,8 +481,7 @@ async fn handle_command(
                 let mut ps = PowerSpectrum::new();
                 loop {
                     interval.tick().await;
-                    let samples = tap.read().await.clone();
-                    let bins = ps.compute(&samples);
+                    let bins = ps.compute(&*tap.read().await);
                     let frame = encode_spectrum_frame(8000, &bins);
                     if tx.send(frame).await.is_err() {
                         break;
@@ -585,7 +584,7 @@ async fn handle_command(
             let id = {
                 let mut store = ctx.message_store.lock().await;
                 let id = store.alloc_id();
-                store.messages.push(StoredMessage {
+                store.messages.push_back(StoredMessage {
                     id,
                     from: from.clone(),
                     to: to.clone(),
@@ -594,7 +593,7 @@ async fn handle_command(
                     timestamp_secs,
                 });
                 if store.messages.len() > MAX_MESSAGES {
-                    store.messages.remove(0);
+                    let _ = store.messages.pop_front();
                 }
                 id
             };
