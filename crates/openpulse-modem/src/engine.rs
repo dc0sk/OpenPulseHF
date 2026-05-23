@@ -21,7 +21,7 @@ use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
 use openpulse_core::ldpc::{IterativeDecoder, LdpcCodec, LDPC_CODEWORD_BYTES, LDPC_MAX_INFO_BYTES};
 use openpulse_core::plugin::{ModulationConfig, PluginRegistry};
 use openpulse_core::profile::SessionProfile;
-use openpulse_core::rate::{BiDirRateAdapter, RateEvent, RateTrigger, SpeedLevel};
+use openpulse_core::rate::RateEvent;
 use openpulse_core::signed_envelope::SignedEnvelope;
 use openpulse_core::soft_viterbi::SoftViterbiCodec;
 use openpulse_core::trust::{
@@ -32,12 +32,13 @@ use openpulse_core::turbo::{turbo_decode_soft, turbo_encode, TURBO_MAX_INFO_BYTE
 use openpulse_core::tx_metadata::{TxMetadata, TxSessionLog};
 use openpulse_core::wire_query::{callsign_hash, BroadcastFrame, WireEnvelope, WireMsgType};
 
-use crate::event::{EngineEvent, RateDirection};
+use crate::event::EngineEvent;
 use crate::harq::{HarqDecision, HarqPolicy};
 use crate::pipeline::{
     AudioSamples, BackpressurePolicy, DecodedFrame, PipelineMetricsSnapshot, PipelineScheduler,
     PipelineStage, WirePayload,
 };
+use crate::rate_policy::{RateAdaptationPolicy, RateChangePayload};
 
 #[derive(Debug, Clone)]
 pub struct SecureSessionParams {
@@ -82,10 +83,7 @@ pub struct ModemEngine {
     afc_step: f32,
     /// Audio centre frequency used for modulation and demodulation (Hz).
     center_frequency: f32,
-    rate_adapter: Option<BiDirRateAdapter>,
-    session_profile: Option<SessionProfile>,
-    /// SNR estimate (dB) from the most recent `receive_with_ack_hint` call.
-    last_rx_snr_db: Option<f32>,
+    rate_policy: RateAdaptationPolicy,
     dcd: DcdState,
     csma_enabled: bool,
     csma_persistence: f32,
@@ -121,9 +119,7 @@ impl ModemEngine {
             afc_enabled: true,
             afc_step: 0.1,
             center_frequency: 1500.0,
-            rate_adapter: None,
-            session_profile: None,
-            last_rx_snr_db: None,
+            rate_policy: RateAdaptationPolicy::new(),
             dcd: DcdState::new(0.01, 800), // 100 ms hold at 8 kHz
             csma_enabled: false,
             csma_persistence: 0.3,
@@ -248,17 +244,18 @@ impl ModemEngine {
     /// profile so that [`current_adaptive_mode`](Self::current_adaptive_mode)
     /// can resolve the current mode string on each transmit/receive cycle.
     pub fn start_adaptive_session(&mut self, profile: SessionProfile) {
-        let initial = profile.initial_level;
-        let threshold = profile.nack_threshold;
-        self.rate_adapter = Some(BiDirRateAdapter::new(initial, threshold));
-        self.session_profile = Some(profile);
+        self.rate_policy.start_session(profile);
     }
 
     /// Apply a received ACK type to the TX-direction rate adapter.
     ///
     /// Returns [`RateEvent::Maintained`] when no adaptive session is active.
     pub fn apply_ack(&mut self, ack: AckType) -> RateEvent {
-        self.apply_ack_internal(ack, None)
+        let (event, payload) = self.rate_policy.apply_ack(ack);
+        if let Some(p) = payload {
+            self.emit_rate_change(p);
+        }
+        event
     }
 
     /// Apply a received ACK frame, updating both TX and RX directions.
@@ -266,116 +263,21 @@ impl ModemEngine {
     /// When the frame carries a `reverse_ack`, the RX-direction adapter is also
     /// updated and a second `RateChange` event is emitted.
     pub fn apply_ack_frame(&mut self, frame: &openpulse_core::ack::AckFrame) -> RateEvent {
-        let tx_event = self.apply_ack_internal(frame.ack_type, Some(RateDirection::Tx));
-        if let Some(rev) = frame.reverse_ack {
-            if let Some(adapter) = self.rate_adapter.as_mut() {
-                let rx_event = adapter.apply_reverse_ack(rev);
-                let rx_level = adapter.rx_level();
-                let mode = self
-                    .session_profile
-                    .as_ref()
-                    .and_then(|p| p.mode_for(rx_level))
-                    .unwrap_or("unknown")
-                    .to_string();
-                let _ = self.event_tx.send(EngineEvent::RateChange {
-                    event: rx_event,
-                    speed_level: rx_level,
-                    mode,
-                    direction: Some(RateDirection::Rx),
-                    trigger: None,
-                });
-            }
+        let (tx_event, payloads) = self.rate_policy.apply_ack_frame(frame);
+        for p in payloads {
+            self.emit_rate_change(p);
         }
         tx_event
     }
 
-    fn apply_ack_internal(&mut self, ack: AckType, direction: Option<RateDirection>) -> RateEvent {
-        let hold_ack_up = self.should_hold_ack_up_without_snr_candidate(ack);
-        let rate_event = self.decide_rate_change(ack, hold_ack_up);
-        let speed_level = self
-            .rate_adapter
-            .as_ref()
-            .map(|a| a.tx_level())
-            .unwrap_or(openpulse_core::rate::SpeedLevel::Sl2);
-        let mode = self
-            .current_adaptive_mode()
-            .unwrap_or("unknown")
-            .to_string();
-        if self.rate_adapter.is_some() {
-            let _ = self.event_tx.send(EngineEvent::RateChange {
-                event: rate_event,
-                speed_level,
-                mode,
-                direction,
-                trigger: None,
-            });
-        }
-        rate_event
-    }
-
-    fn decide_rate_change(&mut self, ack: AckType, hold_ack_up: bool) -> RateEvent {
-        let profile = self.session_profile.clone();
-        let Some(adapter) = self.rate_adapter.as_mut() else {
-            return RateEvent::Maintained;
-        };
-        if hold_ack_up {
-            return RateEvent::Maintained;
-        }
-        if ack != AckType::AckUp {
-            return adapter.apply_ack(ack);
-        }
-        let Some(profile) = profile.as_ref() else {
-            return adapter.apply_ack(ack);
-        };
-        let current = adapter.tx_level();
-        let Some(target) = Self::next_mapped_level_above(profile, current) else {
-            return RateEvent::Maintained;
-        };
-        let mut last_event = RateEvent::Maintained;
-        while adapter.tx_level() < target {
-            last_event = adapter.apply_ack(AckType::AckUp);
-            if matches!(last_event, RateEvent::Maintained) {
-                break;
-            }
-        }
-        match last_event {
-            RateEvent::Increased(_) => RateEvent::Increased(adapter.tx_level()),
-            other => other,
-        }
-    }
-
-    fn should_hold_ack_up_without_snr_candidate(&self, ack: AckType) -> bool {
-        if ack != AckType::AckUp {
-            return false;
-        }
-
-        let Some(profile) = self.session_profile.as_ref() else {
-            return false;
-        };
-        let Some(adapter) = self.rate_adapter.as_ref() else {
-            return false;
-        };
-
-        let tx_level = adapter.tx_level();
-        profile.ack_up_requires_snr_candidate_at() == Some(tx_level)
-            && !adapter.tx.is_snr_upgrade_candidate()
-    }
-
-    fn next_mapped_level_above(
-        profile: &SessionProfile,
-        current: SpeedLevel,
-    ) -> Option<SpeedLevel> {
-        let mut probe = current;
-        loop {
-            let next = probe.step_up();
-            if next == probe {
-                return None;
-            }
-            probe = next;
-            if profile.mode_for(probe).is_some() {
-                return Some(probe);
-            }
-        }
+    fn emit_rate_change(&self, payload: RateChangePayload) {
+        let _ = self.event_tx.send(EngineEvent::RateChange {
+            event: payload.event,
+            speed_level: payload.speed_level,
+            mode: payload.mode,
+            direction: payload.direction,
+            trigger: payload.trigger,
+        });
     }
 
     /// Return the mode string for the current TX speed level of the active adaptive session.
@@ -383,21 +285,17 @@ impl ModemEngine {
     /// Returns `None` when no profile is active or the current speed level has no
     /// mode assigned (e.g. SL1 chirp fallback, reserved levels).
     pub fn current_adaptive_mode(&self) -> Option<&str> {
-        let profile = self.session_profile.as_ref()?;
-        let adapter = self.rate_adapter.as_ref()?;
-        profile.mode_for(adapter.tx_level())
+        self.rate_policy.current_adaptive_mode()
     }
 
     /// Return the mode string for the current RX speed level.
     pub fn current_rx_mode(&self) -> Option<&str> {
-        let profile = self.session_profile.as_ref()?;
-        let adapter = self.rate_adapter.as_ref()?;
-        profile.mode_for(adapter.rx_level())
+        self.rate_policy.current_rx_mode()
     }
 
     /// Return the current TX [`SpeedLevel`](openpulse_core::rate::SpeedLevel).
     pub fn current_tx_level(&self) -> Option<openpulse_core::rate::SpeedLevel> {
-        self.rate_adapter.as_ref().map(|a| a.tx_level())
+        self.rate_policy.current_tx_level()
     }
 
     /// Return the SNR estimate (dB) measured during the most recent
@@ -406,7 +304,7 @@ impl ModemEngine {
     /// Derived from mean absolute LLR magnitude; useful for display and logging.
     /// Returns `None` if no receive call that supports soft demodulation has completed yet.
     pub fn last_rx_snr_db(&self) -> Option<f32> {
-        self.last_rx_snr_db
+        self.rate_policy.last_rx_snr_db()
     }
 
     /// Apply a raw SNR estimate to the TX-direction rate adapter.
@@ -420,29 +318,8 @@ impl ModemEngine {
     ///
     /// Does nothing when no adaptive session is active.
     pub fn apply_snr_hint(&mut self, snr_db: f32) {
-        let Some(adapter) = self.rate_adapter.as_mut() else {
-            return;
-        };
-        let Some(profile) = self.session_profile.as_ref() else {
-            return;
-        };
-        let tx_level = adapter.tx_level();
-        let floor_db = profile
-            .snr_floor_for_level(tx_level)
-            .unwrap_or(f32::NEG_INFINITY);
-        let ceiling_db = profile
-            .snr_ceiling_for_level(tx_level)
-            .unwrap_or(f32::INFINITY);
-        if let Some(rate_event) = adapter.tx.apply_snr_hint(snr_db, floor_db, ceiling_db) {
-            let new_level = adapter.tx_level();
-            let mode = profile.mode_for(new_level).unwrap_or("unknown").to_string();
-            let _ = self.event_tx.send(EngineEvent::RateChange {
-                event: rate_event,
-                speed_level: new_level,
-                mode,
-                direction: Some(RateDirection::Tx),
-                trigger: Some(RateTrigger::SnrFloor),
-            });
+        if let Some(payload) = self.rate_policy.apply_snr_hint(snr_db) {
+            self.emit_rate_change(payload);
         }
     }
 
@@ -777,7 +654,7 @@ impl ModemEngine {
             // and hard bits (via sign decision), avoiding a redundant demodulate() call.
             match plugin.demodulate_soft(&samples.samples, &mod_cfg) {
                 Ok(llrs) => {
-                    let snr = Self::snr_from_llrs(&llrs);
+                    let snr = RateAdaptationPolicy::snr_from_llrs(&llrs);
                     let wire_bytes: Vec<u8> = llrs
                         .chunks(8)
                         .map(|byte_llrs| {
@@ -797,7 +674,7 @@ impl ModemEngine {
             }
         };
         if let Some(snr) = snr_opt {
-            self.last_rx_snr_db = Some(snr);
+            self.rate_policy.record_rx_snr(snr);
         }
         let wire = self.route_wire_stage(PipelineStage::DemodulateDecode, wire)?;
         debug!("demodulated {} bytes", wire.bytes.len());
@@ -876,8 +753,8 @@ impl ModemEngine {
             .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
 
         let llrs = plugin.demodulate_soft(&samples.samples, &mod_cfg)?;
-        let snr_db = Self::snr_from_llrs(&llrs);
-        self.last_rx_snr_db = Some(snr_db);
+        let snr_db = RateAdaptationPolicy::snr_from_llrs(&llrs);
+        self.rate_policy.record_rx_snr(snr_db);
 
         let wire_bytes: Vec<u8> = llrs
             .chunks(8)
@@ -903,7 +780,7 @@ impl ModemEngine {
             bytes: frame.payload.len(),
         });
 
-        let ack_type = self.select_rx_ack_type(snr_db);
+        let ack_type = self.rate_policy.select_rx_ack_type(snr_db);
         Ok((frame.payload, ack_type))
     }
 
@@ -978,49 +855,9 @@ impl ModemEngine {
     /// - [`AckOk`](AckType::AckOk): anything else.
     ///
     /// Also updates the RX direction of the bidirectional rate adapter as a side-effect.
-    fn select_rx_ack_type(&mut self, snr_db: f32) -> AckType {
-        let Some(adapter) = self.rate_adapter.as_mut() else {
-            return AckType::AckOk;
-        };
-        let Some(profile) = self.session_profile.as_ref() else {
-            return AckType::AckOk;
-        };
-
-        let rx_level = adapter.rx_level();
-        let floor_db = profile
-            .snr_floor_for_level(rx_level)
-            .unwrap_or(f32::NEG_INFINITY);
-        let ceiling_db = profile
-            .snr_ceiling_for_level(rx_level)
-            .unwrap_or(f32::INFINITY);
-
-        let snr_event = adapter.rx.apply_snr_hint(snr_db, floor_db, ceiling_db);
-
-        if snr_event.is_some() {
-            // apply_snr_hint returned Some only for a floor breach → step down.
-            AckType::AckDown
-        } else if adapter.rx.is_snr_upgrade_candidate() {
-            // SNR has crossed the ceiling in at least the previous measurement
-            // and again now → conservative upgrade signal.
-            AckType::AckUp
-        } else {
-            AckType::AckOk
-        }
+    pub fn select_rx_ack_type(&mut self, snr_db: f32) -> AckType {
+        self.rate_policy.select_rx_ack_type(snr_db)
     }
-
-    /// Estimate receive-path SNR (dB) from LLR magnitudes.
-    ///
-    /// Uses `mean(|llr|) / 2` as a linear SNR proxy; suitable for comparison
-    /// against profile floor/ceiling thresholds.  Returns 0 dB for empty input.
-    fn snr_from_llrs(llrs: &[f32]) -> f32 {
-        if llrs.is_empty() {
-            return 0.0;
-        }
-        let mean_abs = llrs.iter().map(|l| l.abs()).sum::<f32>() / llrs.len() as f32;
-        // 10*log10 of linear SNR proxy; clamp to [-5, 40] dB for sanity.
-        (10.0 * (mean_abs / 2.0).max(1e-6).log10()).clamp(-5.0, 40.0)
-    }
-
     /// Like [`transmit`](Self::transmit) but wraps the encoded frame bytes
     /// with Reed-Solomon FEC before modulation.
     ///
