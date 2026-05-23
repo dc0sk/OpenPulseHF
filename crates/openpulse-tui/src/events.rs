@@ -51,7 +51,9 @@ pub fn spawn_worker(
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Closed) => return,
-                Err(TryRecvError::Lagged(_)) => {}
+                Err(TryRecvError::Lagged(n)) => {
+                    tracing::warn!(lost = n, "TUI event receiver lagged; events dropped");
+                }
             }
         }
     });

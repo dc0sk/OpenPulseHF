@@ -179,8 +179,12 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
 
         "GRIDSQUARE" => {
             if let Some(grid) = parts.get(1).filter(|s| !s.is_empty()) {
-                *bridge.gridsquare.write().await = grid.to_string();
-                vec![format!("GRIDSQUARE {grid}")]
+                if !is_valid_gridsquare(grid) {
+                    return vec![format!("FAULT invalid grid square: {grid}")];
+                }
+                let upper = grid.to_ascii_uppercase();
+                *bridge.gridsquare.write().await = upper.clone();
+                vec![format!("GRIDSQUARE {upper}")]
             } else {
                 vec![format!("GRIDSQUARE {}", bridge.gridsquare.read().await)]
             }
@@ -203,10 +207,11 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
         "ARQTIMEOUT" => match parts.get(1).filter(|s| !s.is_empty()) {
             None => vec![format!("ARQTIMEOUT {}", bridge.arq_timeout.read().await)],
             Some(arg) => match arg.parse::<u16>() {
-                Ok(secs) => {
+                Ok(secs) if (30..=600).contains(&secs) => {
                     *bridge.arq_timeout.write().await = secs;
                     vec![format!("ARQTIMEOUT {secs}")]
                 }
+                Ok(secs) => vec![format!("FAULT timeout out of range (30-600): {secs}")],
                 Err(_) => vec![format!("FAULT invalid timeout: {arg}")],
             },
         },
@@ -271,4 +276,16 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
             vec![]
         }
     }
+}
+
+/// Validates a Maidenhead grid locator: 4 chars (field+square) or 6 chars (+subsquare).
+/// Format: two letters, two digits, optionally two letters (case-insensitive).
+fn is_valid_gridsquare(s: &str) -> bool {
+    let b = s.as_bytes();
+    matches!(b.len(), 4 | 6)
+        && b[0].is_ascii_alphabetic()
+        && b[1].is_ascii_alphabetic()
+        && b[2].is_ascii_digit()
+        && b[3].is_ascii_digit()
+        && (b.len() == 4 || (b[4].is_ascii_alphabetic() && b[5].is_ascii_alphabetic()))
 }
