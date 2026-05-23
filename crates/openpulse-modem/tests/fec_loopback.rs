@@ -1,4 +1,5 @@
 //! FEC loopback hardening tests.
+#![allow(clippy::needless_range_loop)]
 //!
 //! Exercises:
 //!  1. FEC round-trips through the modem engine (BPSK + QPSK modes).

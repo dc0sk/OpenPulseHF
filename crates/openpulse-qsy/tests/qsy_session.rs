@@ -462,7 +462,6 @@ fn responder_rejects_out_of_bandplan_list() {
             awareness_enabled: true,
             ..BandplanPolicy::default()
         },
-        ..QsyPolicy::default()
     };
     let mut session = QsySession::new_responder(policy, ConnectionTrustLevel::Verified)
         .with_operating_mode("BPSK250");

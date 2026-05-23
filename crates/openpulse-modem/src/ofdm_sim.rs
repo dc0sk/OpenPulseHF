@@ -372,7 +372,7 @@ pub fn tone_reservation(cfg: &OfdmConfig, samples: &[f32], n_reserved: usize) ->
             let (peak_idx, &peak_val) = body
                 .iter()
                 .enumerate()
-                .max_by(|(_, a), (_, b)| a.abs().partial_cmp(&b.abs()).unwrap())
+                .max_by(|(_, a), (_, b)| a.abs().total_cmp(&b.abs()))
                 .unwrap_or((0, &0.0));
 
             let rms = (body.iter().map(|&s| s * s).sum::<f32>() / fft_size as f32).sqrt();

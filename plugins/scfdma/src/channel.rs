@@ -441,6 +441,7 @@ pub fn estimate_cfo_hz(samples: &[f32], p: &ScFdmaParams) -> Option<f32> {
 }
 
 #[cfg(test)]
+#[allow(clippy::needless_range_loop)]
 mod tests {
     use super::*;
     use crate::params::{SCFDMA16, SCFDMA52};

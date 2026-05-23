@@ -1256,6 +1256,7 @@ pub async fn apply_command_to_engine(
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::field_reassign_with_default)]
 mod command_apply_tests {
     use super::*;
     use bpsk_plugin::BpskPlugin;

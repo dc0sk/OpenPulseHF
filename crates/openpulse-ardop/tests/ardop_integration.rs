@@ -367,7 +367,7 @@ async fn data_port_rejects_oversized_frame() {
     let len: u16 = 5000;
     stream.write_all(&len.to_be_bytes()).await.unwrap();
     // Write a partial body; the server should close the connection before reading it.
-    stream.write_all(&vec![0u8; 64]).await.unwrap();
+    stream.write_all(&[0u8; 64]).await.unwrap();
     stream.flush().await.unwrap();
 
     // The server must close the connection after rejecting the oversized frame.

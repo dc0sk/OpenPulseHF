@@ -214,17 +214,19 @@ impl PluginRegistry {
             PluginError::InvalidTraitVersionFormat(info.trait_version_required.clone())
         })?;
 
-        let (fw_major_str, fw_rest) = PLUGIN_TRAIT_VERSION
-            .split_once('.')
-            .expect("BUG: PLUGIN_TRAIT_VERSION must be semver");
-        let framework_major = fw_major_str
-            .parse::<u32>()
-            .expect("BUG: PLUGIN_TRAIT_VERSION major must be numeric");
+        let (fw_major_str, fw_rest) = PLUGIN_TRAIT_VERSION.split_once('.').ok_or_else(|| {
+            PluginError::InvalidTraitVersionFormat(PLUGIN_TRAIT_VERSION.to_string())
+        })?;
+        let framework_major = fw_major_str.parse::<u32>().map_err(|_| {
+            PluginError::InvalidTraitVersionFormat(PLUGIN_TRAIT_VERSION.to_string())
+        })?;
         let framework_minor = fw_rest
             .split_once('.')
             .map_or(fw_rest, |(m, _)| m)
             .parse::<u32>()
-            .expect("BUG: PLUGIN_TRAIT_VERSION minor must be numeric");
+            .map_err(|_| {
+                PluginError::InvalidTraitVersionFormat(PLUGIN_TRAIT_VERSION.to_string())
+            })?;
 
         // Compatible if: framework major == plugin major AND framework minor >= plugin minor
         if plugin_major != framework_major || framework_minor < plugin_minor {

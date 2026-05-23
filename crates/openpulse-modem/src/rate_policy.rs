@@ -303,7 +303,7 @@ mod tests {
     fn snr_from_llrs_clamps_range() {
         // Tiny LLRs floor at -5 dB.
         let lo = RateAdaptationPolicy::snr_from_llrs(&[0.0; 16]);
-        assert!(lo >= -5.0 - 1e-3 && lo <= -5.0 + 1e-3);
+        assert!((-5.0 - 1e-3..=-5.0 + 1e-3).contains(&lo));
         // Huge LLRs ceiling at 40 dB.
         let hi = RateAdaptationPolicy::snr_from_llrs(&[1e9; 4]);
         assert!((hi - 40.0).abs() < 1e-3);

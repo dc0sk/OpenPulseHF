@@ -81,7 +81,7 @@ fn test_adaptive_bandwidth_scaling() {
     // Low SNR + high Doppler: conflicting; should stay within bounds
     let bw_conflict = bw_ctrl.update(5.0, 0.1);
     assert!(
-        bw_conflict >= 0.001 && bw_conflict <= 0.1,
+        (0.001..=0.1).contains(&bw_conflict),
         "BW out of bounds: {}",
         bw_conflict
     );

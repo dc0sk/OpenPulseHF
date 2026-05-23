@@ -330,8 +330,8 @@ async fn get_config_returns_config_data_and_ok() {
             } else if line.contains("\"ok\"") {
                 ok_resp = Some(serde_json::from_str(line).unwrap());
             }
-            if config_ev.is_some() && ok_resp.is_some() {
-                return (config_ev.unwrap(), ok_resp.unwrap());
+            if let (Some(cfg), Some(ok)) = (config_ev.as_ref(), ok_resp.as_ref()) {
+                return (cfg.clone(), ok.clone());
             }
         }
     })
