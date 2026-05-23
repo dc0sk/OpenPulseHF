@@ -84,8 +84,8 @@ bytemuck           = { version = "1.16", features = ["derive"] }
 pollster           = "0.4"
 criterion          = { version = "0.5", features = ["html_reports"] }
 tokio              = { version = "1", features = ["net", "io-util", "sync", "rt-multi-thread", "macros", "time"] }
-ratatui            = "0.27"
-crossterm          = "0.27"
+ratatui            = "0.30"
+crossterm          = "0.28"
 flate2             = "1.0"
 oxiarc-lzhuf       = "0.2.7"
 sha2               = "0.10"

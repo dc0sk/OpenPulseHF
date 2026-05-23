@@ -12,7 +12,7 @@ use ratatui::{
 use crate::app::App;
 
 pub fn render(f: &mut Frame, app: &App) {
-    let area = f.size();
+    let area = f.area();
 
     // If a fatal error is set, overlay it across the full terminal.
     if let Some(err) = &app.fatal_error {
