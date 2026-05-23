@@ -1,4 +1,5 @@
 ---
+project: openpulsehf
 doc: docs/non-gpl-interfacing.md
 status: living
 last_updated: 2026-05-23
