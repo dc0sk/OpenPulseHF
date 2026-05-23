@@ -206,7 +206,7 @@ Status legend: ✅ resolved · ⏳ deferred (out of scope for sweep cleanup; tra
 | SWEEP-01 | High | DSP | OFDM soft-LLR scaling: multiply by `2/sigma^2` | ✅ Partial — per-subcarrier `|H|²` weighting added; absolute `sigma²` normalization deferred (would require restructuring channel estimation) |
 | SWEEP-02 | High | Plugin panic | Replace `.expect()` in OFDM/SCFDMA/QPSK-GPU public fns with typed errors | ✅ `.expect()` removed; helper fns return empty outputs on unknown mode, typed errors propagate at the `ModulationPlugin` trait boundary |
 | SWEEP-03 | High | Audio | Audio callback mutex-poison should degrade, not panic | ✅ |
-| SWEEP-04 | Medium | Refactor | Split `ModemEngine` (extract rate policy + SNR tracker) | ⏳ Deferred — 2718-line file split warrants a dedicated PR |
+| SWEEP-04 | Medium | Refactor | Split `ModemEngine` (extract rate policy + SNR tracker) | ✅ Extracted `RateAdaptationPolicy` (owns rate adapter, session profile, last-RX SNR) into `crates/openpulse-modem/src/rate_policy.rs`; SNR tracker folded into the same module since `select_rx_ack_type`/`apply_snr_hint` bridge SNR data to rate decisions |
 | SWEEP-05 | Medium | Config | Hoist daemon TCP/WS ports + tick interval to config | ✅ |
 | SWEEP-06 | Medium | Config | Honor `relay.store_forward_ttl_s` in KISS/ARDOP TNCs | ✅ |
 | SWEEP-07 | Medium | Observability | Log on `event_tx.send()` failure in `ModemEngine` | ✅ (false positive — `broadcast::Sender::send` only errs on no subscribers; lag is consumer-side via `RecvError::Lagged`) |
