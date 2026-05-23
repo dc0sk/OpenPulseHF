@@ -3,12 +3,14 @@
 use num_complex::Complex32;
 use rustfft::FftPlanner;
 
-use crate::channel::{ls_estimate, zf_equalize};
+use crate::channel::{is_pilot, ls_estimate, zf_equalize};
 use crate::params::{params_for_mode, OfdmParams, CP, FFT_SIZE, SYM_LEN};
 
 pub fn ofdm_demodulate(samples: &[f32], mode: &str) -> Vec<u8> {
-    let p = params_for_mode(mode).expect("caller must validate mode before ofdm_demodulate");
-    demodulate_with_params(samples, &p)
+    match params_for_mode(mode) {
+        Some(p) => demodulate_with_params(samples, &p),
+        None => vec![],
+    }
 }
 
 /// Demodulate OFDM samples and return per-bit soft LLRs.
@@ -87,9 +89,11 @@ fn qpsk_demod(c: Complex32) -> u8 {
     i_bit | (q_bit << 1)
 }
 
-fn qpsk_llr(c: Complex32) -> [f32; 2] {
-    // positive = bit more likely 0 (matches the qpsk_demod convention above).
-    [c.re, c.im]
+fn qpsk_llr(c: Complex32, weight: f32) -> [f32; 2] {
+    // Post-ZF noise variance scales as σ²/|H|², so the matched-filter LLR is
+    // proportional to symbol × |H|². Weighting by |H|² suppresses confidence on
+    // faded subcarriers and matches the noise statistics seen by the FEC decoder.
+    [c.re * weight, c.im * weight]
 }
 
 fn demodulate_soft_with_params(samples: &[f32], p: &OfdmParams) -> Vec<f32> {
@@ -120,8 +124,18 @@ fn demodulate_soft_with_params(samples: &[f32], p: &OfdmParams) -> Vec<f32> {
         let h_est = ls_estimate(p, &freq);
         let data_syms = zf_equalize(p, &freq, &h_est);
 
-        for sym in &data_syms {
-            let [l0, l1] = qpsk_llr(*sym);
+        // Per-data-subcarrier |H|² weights, in the same order as `data_syms`.
+        let mut weights: Vec<f32> = Vec::with_capacity(data_syms.len());
+        for (rel, _) in freq[p.first_sc..=p.last_sc].iter().enumerate() {
+            let sc = p.first_sc + rel;
+            if is_pilot(p, sc) {
+                continue;
+            }
+            weights.push(h_est[rel].norm_sqr());
+        }
+
+        for (sym, &w) in data_syms.iter().zip(weights.iter()) {
+            let [l0, l1] = qpsk_llr(*sym, w);
             llrs.push(l0);
             llrs.push(l1);
         }

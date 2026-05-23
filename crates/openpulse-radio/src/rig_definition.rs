@@ -200,7 +200,10 @@ pub fn decode_response_value(bytes: &[u8], encoding: &str) -> Result<u64, String
             Ok(hz)
         }
         "u32_le" if bytes.len() >= 4 => {
-            Ok(u32::from_le_bytes(bytes[..4].try_into().unwrap()) as u64)
+            let arr: [u8; 4] = bytes[..4]
+                .try_into()
+                .map_err(|_| "u32_le slice conversion failed".to_string())?;
+            Ok(u32::from_le_bytes(arr) as u64)
         }
         other => Err(format!("unknown response encoding '{other}'")),
     }

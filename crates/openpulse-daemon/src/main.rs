@@ -150,8 +150,16 @@ async fn main() {
         CrossBandRepeater::new(rep_ptt, rx, tx, rep_cfg)
     };
 
-    let tcp_bind: std::net::SocketAddr = "127.0.0.1:9000".parse().unwrap();
-    let ws_bind: std::net::SocketAddr = "127.0.0.1:9001".parse().unwrap();
+    let tcp_bind: std::net::SocketAddr =
+        format!("{}:{}", cfg.daemon.tcp_bind_addr, cfg.daemon.tcp_port)
+            .parse()
+            .expect("invalid daemon.tcp_bind_addr/tcp_port");
+    let ws_bind: std::net::SocketAddr = format!(
+        "{}:{}",
+        cfg.daemon.websocket_bind_addr, cfg.daemon.websocket_port
+    )
+    .parse()
+    .expect("invalid daemon.websocket_bind_addr/websocket_port");
 
     let mut handle = ControlServer::spawn(
         tcp_bind,
@@ -269,9 +277,10 @@ async fn main() {
     };
 
     // Execute side-effectful commands against the live modem engine.
-    // A 50 ms receive ticker polls the modem for decoded bytes so the QSY
-    // responder path can react to incoming RF frames without operator commands.
-    let mut rx_ticker = tokio::time::interval(std::time::Duration::from_millis(50));
+    // The receive ticker polls the modem for decoded bytes so the QSY responder path
+    // can react to incoming RF frames without operator commands.
+    let mut rx_ticker =
+        tokio::time::interval(std::time::Duration::from_millis(cfg.daemon.receive_tick_ms));
     loop {
         tokio::select! {
             biased;

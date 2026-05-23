@@ -112,7 +112,10 @@ async fn read_kiss_frame(
         }
         buf.push(b);
         if buf.len() > MAX_FRAME_BODY {
-            return Err(KissTncError::FrameTooLarge(buf.len()));
+            return Err(KissTncError::FrameTooLarge {
+                len: buf.len(),
+                max: MAX_FRAME_BODY,
+            });
         }
     }
 }

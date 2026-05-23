@@ -9,8 +9,10 @@ use crate::params::{
 };
 
 pub fn ofdm_modulate(payload: &[u8], mode: &str) -> Vec<f32> {
-    let p = params_for_mode(mode).expect("caller must validate mode before ofdm_modulate");
-    modulate_with_params(payload, &p)
+    match params_for_mode(mode) {
+        Some(p) => modulate_with_params(payload, &p),
+        None => vec![],
+    }
 }
 
 /// Return interleaved I/Q samples at complex baseband (fc = 0 Hz).

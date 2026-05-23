@@ -5,7 +5,6 @@
 //!
 //! Precedence: CLI flag overrides > config file > built-in defaults.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -37,7 +36,23 @@ pub struct OpenpulseConfig {
     pub trust: TrustConfig,
     pub mesh: MeshConfig,
     pub qsy: QsyConfig,
-    pub tx_levels: TxLevelsConfig,
+    pub daemon: DaemonConfig,
+}
+
+/// `openpulse-daemon` runtime settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct DaemonConfig {
+    /// Bind address for the TCP control port.
+    pub tcp_bind_addr: String,
+    /// TCP control port (default 9000).
+    pub tcp_port: u16,
+    /// Bind address for the WebSocket control port.
+    pub websocket_bind_addr: String,
+    /// WebSocket control port (default 9001).
+    pub websocket_port: u16,
+    /// Modem-engine receive ticker interval (ms). Lower = more responsive QSY, higher CPU.
+    pub receive_tick_ms: u64,
 }
 
 /// QSY frequency-agility settings.
@@ -66,14 +81,6 @@ pub struct QsyConfig {
     pub switchover_offset_s: u64,
 }
 
-/// Per-band TX attenuation memory (FF-8).
-///
-/// Maps amateur band names (e.g. `"40m"`, `"20m"`) to a dB attenuation value.
-/// `"default"` is used for frequencies that fall outside all registered bands.
-/// TX samples are scaled by `10^(db / 20)` before being sent to the audio backend.
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-pub struct TxLevelsConfig(pub HashMap<String, f32>);
-
 /// Station identity.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -93,11 +100,6 @@ pub struct AudioConfig {
     /// Each sample `s` becomes `threshold * tanh(s / threshold)`.
     /// Set to `0.0` (default) to disable. Typical value: `1.5 * RMS`.
     pub tx_limiter_threshold: f32,
-    /// When `true`, transmit uses I/Q baseband output instead of real audio.
-    /// Requires a backend with `open_iq_output` support (e.g. SDR hardware).
-    pub iq_output: bool,
-    /// Output device name used for I/Q streaming; `None` selects the backend default.
-    pub iq_device: Option<String>,
 }
 
 /// Modem defaults shared by all TNC binaries.
@@ -233,8 +235,6 @@ impl Default for AudioConfig {
         Self {
             backend: "default".into(),
             tx_limiter_threshold: 0.0,
-            iq_output: false,
-            iq_device: None,
         }
     }
 }
@@ -344,6 +344,18 @@ impl Default for QsyConfig {
             candidate_freqs_hz: vec![],
             scan_dwell_ms: 500,
             switchover_offset_s: 5,
+        }
+    }
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        Self {
+            tcp_bind_addr: "127.0.0.1".into(),
+            tcp_port: 9000,
+            websocket_bind_addr: "127.0.0.1".into(),
+            websocket_port: 9001,
+            receive_tick_ms: 50,
         }
     }
 }
@@ -518,10 +530,6 @@ backend = "default"
 # Soft TX limiter threshold (0.0 = disabled). Typical value: 1.5 × RMS of the
 # modulated signal. Prevents ADC clipping and reduces PA non-linearity on peaks.
 # tx_limiter_threshold = 0.0
-# Set iq_output = true to route TX to a baseband I/Q stream instead of real audio.
-# Required for direct SDR upconversion. Needs a backend that supports open_iq_output.
-# iq_output = false
-# iq_device = "sdr0"
 
 [modem]
 # Default modulation mode used when no --mode flag is provided.
@@ -605,6 +613,16 @@ peer_cache_ttl_s = 3600
 [trust]
 # Path to the local trust store file. Empty = platform default.
 store_path = ""
+
+[daemon]
+# TCP control port (openpulse-daemon).
+tcp_bind_addr = "127.0.0.1"
+tcp_port = 9000
+# WebSocket control port (openpulse-daemon).
+websocket_bind_addr = "127.0.0.1"
+websocket_port = 9001
+# Modem receive ticker interval (ms). Lower = more responsive RF reception, higher CPU.
+receive_tick_ms = 50
 
 # [qsy]
 # Enable QSY frequency-agility negotiation.  Requires hamlib rigctld configured in [radio].

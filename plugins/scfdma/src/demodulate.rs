@@ -19,16 +19,20 @@ use crate::params::{params_for_mode, ScFdmaParams, CP, FFT_SIZE, SYM_LEN};
 pub use openpulse_core::fec::combine_llrs_weighted;
 
 pub fn scfdma_demodulate(samples: &[f32], mode: &str) -> Vec<u8> {
-    let p = params_for_mode(mode).expect("caller must validate mode before scfdma_demodulate");
-    demodulate_with_params(samples, &p)
+    match params_for_mode(mode) {
+        Some(p) => demodulate_with_params(samples, &p),
+        None => vec![],
+    }
 }
 
 /// Demodulate SC-FDMA samples and return per-bit soft values (LLRs).
 ///
 /// Positive values indicate bit 0 is more likely; negative values indicate bit 1.
 pub fn scfdma_demodulate_soft(samples: &[f32], mode: &str) -> Vec<f32> {
-    let p = params_for_mode(mode).expect("caller must validate mode before scfdma_demodulate_soft");
-    demodulate_soft_with_params(samples, &p).llrs
+    match params_for_mode(mode) {
+        Some(p) => demodulate_soft_with_params(samples, &p).llrs,
+        None => vec![],
+    }
 }
 
 /// Per-frame quality metrics produced during soft demodulation.
@@ -53,9 +57,17 @@ pub struct SoftDemodOutput {
 
 /// Demodulate SC-FDMA samples into LLRs and frame quality metrics.
 pub fn scfdma_demodulate_soft_with_metrics(samples: &[f32], mode: &str) -> SoftDemodOutput {
-    let p = params_for_mode(mode)
-        .expect("caller must validate mode before scfdma_demodulate_soft_with_metrics");
-    demodulate_soft_with_params(samples, &p)
+    match params_for_mode(mode) {
+        Some(p) => demodulate_soft_with_params(samples, &p),
+        None => SoftDemodOutput {
+            llrs: vec![],
+            metrics: SoftFrameMetrics {
+                mean_noise_var: 0.0,
+                mean_rician_k_db: 0.0,
+                symbols_used: 0,
+            },
+        },
+    }
 }
 
 /// Combine multiple LLR attempts using inverse-noise variance weighting.

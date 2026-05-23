@@ -80,6 +80,13 @@ fn read_u32(bytes: &[u8], off: usize) -> Result<u32, WireQueryError> {
     ))
 }
 
+fn read_u16(bytes: &[u8], off: usize) -> Result<u16, WireQueryError> {
+    if bytes.len() < off + 2 {
+        return Err(WireQueryError::MalformedPayload);
+    }
+    Ok(u16::from_be_bytes([bytes[off], bytes[off + 1]]))
+}
+
 fn read_arr32(bytes: &[u8], off: usize) -> Result<[u8; 32], WireQueryError> {
     bytes[off..off + 32]
         .try_into()
@@ -140,7 +147,7 @@ impl WireEnvelope {
         // bytes[4] = version; forward-compatible: parse but don't reject unknown versions here
         let msg_type =
             WireMsgType::from_u8(bytes[5]).ok_or(WireQueryError::UnknownMsgType(bytes[5]))?;
-        let flags = u16::from_be_bytes([bytes[6], bytes[7]]);
+        let flags = read_u16(bytes, 6)?;
         let session_id = read_u64(bytes, 8)?;
         let src_peer_id = read_arr32(bytes, 16)?;
         let dst_peer_id = read_arr32(bytes, 48)?;
@@ -150,7 +157,7 @@ impl WireEnvelope {
         let timestamp_ms = read_u64(bytes, 92)?;
         let hop_limit = bytes[100];
         let hop_index = bytes[101];
-        let payload_len = u16::from_be_bytes([bytes[102], bytes[103]]) as usize;
+        let payload_len = read_u16(bytes, 102)? as usize;
 
         let payload_start = 104;
         let payload_end = payload_start + payload_len;
