@@ -182,8 +182,9 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
                 if !is_valid_gridsquare(grid) {
                     return vec![format!("FAULT invalid grid square: {grid}")];
                 }
-                *bridge.gridsquare.write().await = grid.to_ascii_uppercase();
-                vec![format!("GRIDSQUARE {}", grid.to_ascii_uppercase())]
+                let upper = grid.to_ascii_uppercase();
+                *bridge.gridsquare.write().await = upper.clone();
+                vec![format!("GRIDSQUARE {upper}")]
             } else {
                 vec![format!("GRIDSQUARE {}", bridge.gridsquare.read().await)]
             }
@@ -210,7 +211,7 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
                     *bridge.arq_timeout.write().await = secs;
                     vec![format!("ARQTIMEOUT {secs}")]
                 }
-                Ok(secs) => vec![format!("FAULT timeout out of range (30–600): {secs}")],
+                Ok(secs) => vec![format!("FAULT timeout out of range (30-600): {secs}")],
                 Err(_) => vec![format!("FAULT invalid timeout: {arg}")],
             },
         },

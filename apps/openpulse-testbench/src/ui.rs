@@ -469,22 +469,22 @@ pub fn draw_signal_panel(
     config: &AppConfig,
     show_scatter: bool,
 ) {
-    let (plot_points, gen) = {
+    let (spectrum, gen) = {
         let t = tap.read().unwrap();
-        let points: PlotPoints = t
-            .latest_spectrum
-            .iter()
-            .enumerate()
-            .map(|(i, &db)| {
-                // FREQ_BINS = FFT_SIZE/2 positive bins; max frequency = sample_rate/2 = 4000 Hz
-                let freq = i as f64 * 4000.0 / FREQ_BINS as f64;
-                [freq, db as f64]
-            })
-            .collect();
-        (points, t.generation)
+        (t.latest_spectrum.clone(), t.generation)
     };
 
     // Spectrum line plot
+    let plot_points: PlotPoints = spectrum
+        .iter()
+        .enumerate()
+        .map(|(i, &db)| {
+            // FREQ_BINS = FFT_SIZE/2 positive bins; max frequency = sample_rate/2 = 4000 Hz
+            let freq = i as f64 * 4000.0 / FREQ_BINS as f64;
+            [freq, db as f64]
+        })
+        .collect();
+
     Plot::new(format!("spectrum_{label}"))
         .height(SPECTRUM_H)
         .allow_zoom(false)
