@@ -203,8 +203,8 @@ Status legend: ✅ resolved · ⏳ deferred (out of scope for sweep cleanup; tra
 
 | ID | Severity | Area | Action | Status |
 |---|---|---|---|---|
-| SWEEP-01 | High | DSP | OFDM soft-LLR scaling: multiply by `2/sigma^2` | ✅ |
-| SWEEP-02 | High | Plugin panic | Replace `.expect()` in OFDM/SCFDMA/QPSK-GPU public fns with typed errors | ✅ |
+| SWEEP-01 | High | DSP | OFDM soft-LLR scaling: multiply by `2/sigma^2` | ✅ Partial — per-subcarrier `|H|²` weighting added; absolute `sigma²` normalization deferred (would require restructuring channel estimation) |
+| SWEEP-02 | High | Plugin panic | Replace `.expect()` in OFDM/SCFDMA/QPSK-GPU public fns with typed errors | ✅ `.expect()` removed; helper fns return empty outputs on unknown mode, typed errors propagate at the `ModulationPlugin` trait boundary |
 | SWEEP-03 | High | Audio | Audio callback mutex-poison should degrade, not panic | ✅ |
 | SWEEP-04 | Medium | Refactor | Split `ModemEngine` (extract rate policy + SNR tracker) | ⏳ Deferred — 2718-line file split warrants a dedicated PR |
 | SWEEP-05 | Medium | Config | Hoist daemon TCP/WS ports + tick interval to config | ✅ |
