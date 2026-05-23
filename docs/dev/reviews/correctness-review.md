@@ -1,7 +1,8 @@
 ---
 doc: docs/dev/reviews/correctness-review.md
 date: 2026-05-22
-status: initial
+status: resolved
+resolved: 2026-05-23
 ---
 
 # Correctness Review
@@ -99,6 +100,6 @@ is therefore guaranteed to succeed. This is a provable invariant, not a panic ha
 
 ## Action Items
 
-| ID | Severity | Action |
-|---|---|---|
-| COR-03 | Low | Add `/// positive = bit more likely 0` doc to `qpsk/src/demodulate.rs::demodulate_soft` |
+| ID | Severity | Action | Resolution |
+|---|---|---|---|
+| COR-03 | Low | Add `/// positive = bit more likely 0` doc to `qpsk/src/demodulate.rs::demodulate_soft` | ✅ Full LLR sign convention doc block added to `qpsk_demodulate_soft` |

@@ -1,7 +1,8 @@
 ---
 doc: docs/dev/reviews/consistency-review.md
 date: 2026-05-22
-status: initial
+status: resolved
+resolved: 2026-05-23
 ---
 
 # Consistency Review
@@ -108,9 +109,9 @@ with a plugin that returns `false`.
 
 ## Action Items
 
-| ID | Severity | Action |
-|---|---|---|
-| CON-01 | Low | Document FSK4 hard-decision-only contract or implement Goertzel LLR |
-| CON-02 | Low | Implement `demodulate_soft` for OFDM with per-subcarrier QPSK LLRs |
-| CON-03 | Low | Wire `load_trust_store_from_file` in daemon startup |
-| CON-07 | Low | Add `supports_soft_demod()` capability flag to `ModulationPlugin` |
+| ID | Severity | Action | Resolution |
+|---|---|---|---|
+| CON-01 | Low | Document FSK4 hard-decision-only contract or implement Goertzel LLR | ✅ Documented in `plugins/fsk4/src/lib.rs`; `supports_soft_demod()` returns `false` |
+| CON-02 | Low | Implement `demodulate_soft` for OFDM with per-subcarrier QPSK LLRs | ✅ Implemented in `plugins/ofdm/src/demodulate.rs`; `supports_soft_demod()` returns `true` |
+| CON-03 | Low | Wire `load_trust_store_from_file` in daemon startup | ✅ Wired in `crates/openpulse-daemon/src/main.rs` |
+| CON-07 | Low | Add `supports_soft_demod()` capability flag to `ModulationPlugin` | ✅ Added to `crates/openpulse-core/src/plugin.rs`; engine warns when soft-FEC + hard-only plugin |
