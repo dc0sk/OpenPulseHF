@@ -68,12 +68,30 @@ impl ArdopServer {
         trust_store: openpulse_core::handshake::InMemoryTrustStore,
         relay_forwarder: Option<openpulse_core::relay::RelayForwarder>,
     ) -> Self {
-        let (bridge, tx_data_rx) = ModemBridge::new(
+        Self::with_trust_relay_ptt(
+            engine,
+            config,
+            trust_store,
+            relay_forwarder,
+            Box::new(openpulse_radio::NoOpPtt::new()),
+        )
+    }
+
+    /// Create a server with a pre-loaded trust store, optional relay forwarder, and PTT controller.
+    pub fn with_trust_relay_ptt(
+        engine: ModemEngine,
+        config: ArdopConfig,
+        trust_store: openpulse_core::handshake::InMemoryTrustStore,
+        relay_forwarder: Option<openpulse_core::relay::RelayForwarder>,
+        ptt: Box<dyn openpulse_radio::PttController + Send>,
+    ) -> Self {
+        let (bridge, tx_data_rx) = ModemBridge::with_ptt(
             engine,
             config.mode.clone(),
             config.loopback,
             trust_store,
             relay_forwarder,
+            ptt,
         );
         spawn_worker(bridge.clone(), tx_data_rx);
         Self { bridge, config }

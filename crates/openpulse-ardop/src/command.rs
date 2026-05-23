@@ -168,12 +168,32 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
 
         "PTT" => match parts.get(1).map(|s| s.to_uppercase()).as_deref() {
             Some("TRUE") => {
-                tracing::warn!("PTT TRUE received but hardware PTT is not implemented in ARDOP bridge; stub response only");
-                vec!["PTT TRUE".into()]
+                match bridge
+                    .ptt
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .assert_ptt()
+                {
+                    Ok(()) => vec!["PTT TRUE".into()],
+                    Err(e) => {
+                        tracing::error!(error = %e, "PTT assert failed");
+                        vec![format!("FAULT PTT assert failed: {e}")]
+                    }
+                }
             }
             _ => {
-                tracing::warn!("PTT FALSE received but hardware PTT is not implemented in ARDOP bridge; stub response only");
-                vec!["PTT FALSE".into()]
+                match bridge
+                    .ptt
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .release_ptt()
+                {
+                    Ok(()) => vec!["PTT FALSE".into()],
+                    Err(e) => {
+                        tracing::error!(error = %e, "PTT release failed");
+                        vec![format!("FAULT PTT release failed: {e}")]
+                    }
+                }
             }
         },
 

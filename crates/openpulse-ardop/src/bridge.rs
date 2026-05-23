@@ -6,6 +6,7 @@ use openpulse_core::ack::{AckFrame, AckType};
 use openpulse_core::handshake::InMemoryTrustStore;
 use openpulse_core::relay::RelayForwarder;
 use openpulse_modem::ModemEngine;
+use openpulse_radio::{NoOpPtt, PttController};
 
 use crate::state::TncState;
 
@@ -41,6 +42,8 @@ pub struct ModemBridge {
     pub trust_store: Arc<InMemoryTrustStore>,
     /// Present when relay is enabled in the config; enforces hop-limit and dedup.
     pub relay_forwarder: Option<Arc<std::sync::Mutex<RelayForwarder>>>,
+    /// PTT controller for hardware transmit gating; `NoOpPtt` when not configured.
+    pub ptt: Arc<std::sync::Mutex<Box<dyn PttController + Send>>>,
 }
 
 impl ModemBridge {
@@ -50,6 +53,24 @@ impl ModemBridge {
         loopback: bool,
         trust_store: InMemoryTrustStore,
         relay_forwarder: Option<RelayForwarder>,
+    ) -> (Arc<Self>, std::sync::mpsc::Receiver<Vec<u8>>) {
+        Self::with_ptt(
+            engine,
+            mode,
+            loopback,
+            trust_store,
+            relay_forwarder,
+            Box::new(NoOpPtt::new()),
+        )
+    }
+
+    pub fn with_ptt(
+        engine: ModemEngine,
+        mode: String,
+        loopback: bool,
+        trust_store: InMemoryTrustStore,
+        relay_forwarder: Option<RelayForwarder>,
+        ptt: Box<dyn PttController + Send>,
     ) -> (Arc<Self>, std::sync::mpsc::Receiver<Vec<u8>>) {
         let (event_tx, _) = broadcast::channel(32);
         let (rx_data_tx, _) = broadcast::channel(32);
@@ -72,6 +93,7 @@ impl ModemBridge {
             mesh_mode: Arc::new(AtomicBool::new(false)),
             trust_store: Arc::new(trust_store),
             relay_forwarder: relay_forwarder.map(|f| Arc::new(std::sync::Mutex::new(f))),
+            ptt: Arc::new(std::sync::Mutex::new(ptt)),
         });
         (bridge, tx_data_rx)
     }

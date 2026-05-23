@@ -181,6 +181,8 @@ pub struct LoggingConfig {
 pub struct RelayConfig {
     pub enabled: bool,
     pub max_hops: u8,
+    /// Store-and-forward frame TTL in seconds.
+    pub store_forward_ttl_s: u64,
     /// Peer IDs (lower-hex, 64 chars each) whose frames are dropped at the first relay hop.
     pub deny_list: Vec<String>,
 }
@@ -310,6 +312,7 @@ impl Default for RelayConfig {
         Self {
             enabled: false,
             max_hops: 3,
+            store_forward_ttl_s: 300,
             deny_list: Vec::new(),
         }
     }
@@ -580,6 +583,8 @@ level = "info"
 enabled = false
 # Maximum relay hop count.
 max_hops = 3
+# Store-and-forward frame TTL in seconds.
+store_forward_ttl_s = 300
 
 [mesh]
 # Enable the openpulse-mesh daemon relay stack.
@@ -598,7 +603,7 @@ peer_cache_capacity = 256
 peer_cache_ttl_s = 3600
 
 [trust]
-# Path to the local trust store directory. Empty = platform default.
+# Path to the local trust store file. Empty = platform default.
 store_path = ""
 
 # [qsy]

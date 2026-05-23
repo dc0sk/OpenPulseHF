@@ -66,6 +66,11 @@ jobs:
       - name: Pi5 smoke tests (loopback only)
         run: cargo test --workspace --no-default-features
 
+      - name: Security audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+
       - name: Pi5 benchmark smoke run
         run: cargo run -p openpulse-cli --no-default-features -- --backend loopback --log error benchmark run >/tmp/openpulse-benchmark.json
 

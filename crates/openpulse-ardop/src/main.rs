@@ -4,6 +4,7 @@ use openpulse_audio::loopback::LoopbackBackend;
 use openpulse_core::relay::{RelayForwarder, RelayTrustPolicy};
 use openpulse_core::trust_store_file::load_trust_store_from_file;
 use openpulse_modem::ModemEngine;
+use openpulse_radio::{NoOpPtt, PttController, RigctldPtt, VoxPtt};
 
 #[cfg(feature = "cpal")]
 use openpulse_audio::CpalBackend;
@@ -143,8 +144,35 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    ArdopServer::with_trust_and_relay(engine, config, trust_store, relay_forwarder)
-        .run()
-        .await?;
+    ArdopServer::with_trust_relay_ptt(
+        engine,
+        config,
+        trust_store,
+        relay_forwarder,
+        build_ptt(&cfg),
+    )
+    .run()
+    .await?;
     Ok(())
+}
+
+fn build_ptt(cfg: &openpulse_config::OpenpulseConfig) -> Box<dyn PttController + Send> {
+    match cfg.modem.ptt_backend.as_str() {
+        "vox" => Box::new(VoxPtt::new()),
+        "rigctld" => match RigctldPtt::connect(&cfg.radio.rigctld_addr) {
+            Ok(p) => {
+                tracing::info!(addr = %cfg.radio.rigctld_addr, "rigctld PTT connected");
+                Box::new(p)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "rigctld PTT connect failed; using NoOpPtt");
+                Box::new(NoOpPtt::new())
+            }
+        },
+        "none" | "" => Box::new(NoOpPtt::new()),
+        other => {
+            tracing::warn!(backend = other, "unknown PTT backend; using NoOpPtt");
+            Box::new(NoOpPtt::new())
+        }
+    }
 }
