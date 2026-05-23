@@ -850,8 +850,8 @@ mod tests {
         let mut enc = codec.encode(payload);
 
         // Corrupt 17 bytes (one more than the correction capacity).
-        for i in 0..17 {
-            enc[i] ^= 0xFF;
+        for item in enc.iter_mut().take(17) {
+            *item ^= 0xFF;
         }
 
         assert!(
@@ -910,8 +910,12 @@ mod tests {
         // Inject DEFAULT_INTERLEAVER_DEPTH consecutive byte errors starting at offset 10.
         let mut corrupted = interleaved.clone();
         let burst_start = 10;
-        for i in burst_start..burst_start + DEFAULT_INTERLEAVER_DEPTH {
-            corrupted[i] ^= 0xFF;
+        for item in corrupted
+            .iter_mut()
+            .skip(burst_start)
+            .take(DEFAULT_INTERLEAVER_DEPTH)
+        {
+            *item ^= 0xFF;
         }
 
         let deinterleaved = il.deinterleave(&corrupted);

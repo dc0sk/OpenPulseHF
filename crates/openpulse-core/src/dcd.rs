@@ -105,7 +105,7 @@ mod tests {
     fn busy_clears_even_without_further_receive_calls() {
         // Regression: hold must expire via wall clock, not sample count.
         let mut dcd = DcdState::new_with_duration(0.01, Duration::from_millis(10));
-        dcd.update(&vec![0.5f32; 8]);
+        dcd.update(&[0.5f32; 8]);
         assert!(dcd.is_busy());
         // No more update() calls — busy flag must still expire.
         std::thread::sleep(Duration::from_millis(20));

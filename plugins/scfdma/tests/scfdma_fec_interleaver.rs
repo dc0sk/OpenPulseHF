@@ -30,7 +30,7 @@ fn scfdma52_qpsk_with_fec_interleaver_watterson_f1() {
         .modulate(&interleaved, &config)
         .expect("modulate failed");
 
-    // Route through Watterson Good F1 fading channel (seed 1 for determinism).
+    // Route through Watterson Good F1 fading channel (seed 2 for determinism).
     let mut channel = WattersonChannel::new(WattersonConfig::good_f1(Some(2)))
         .expect("failed to create Watterson channel");
     let faded = channel.apply(&samples);

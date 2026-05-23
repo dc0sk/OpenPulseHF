@@ -201,8 +201,8 @@ mod tests {
         let p = &OFDM16;
         let mut freq = vec![Complex32::new(0.0, 0.0); 256];
         // Set all occupied SCs to data or pilot symbols.
-        for sc in p.first_sc..=p.last_sc {
-            freq[sc] = Complex32::new(1.0, 0.0);
+        for item in freq.iter_mut().take(p.last_sc + 1).skip(p.first_sc) {
+            *item = Complex32::new(1.0, 0.0);
         }
         let h_est = ls_estimate(p, &freq);
         for h in &h_est {

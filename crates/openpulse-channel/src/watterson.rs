@@ -89,9 +89,7 @@ impl WattersonChannel {
         } else {
             signal_fft
         };
-        let fft_size = signal_fft
-            .max(required_fft.next_power_of_two())
-            .min(MAX_FFT);
+        let fft_size = signal_fft.max(required_fft.next_power_of_two().min(MAX_FFT));
         // Random complex Gaussian spectrum.
         let mut spec: Vec<Complex<f32>> = (0..fft_size)
             .map(|_| {
