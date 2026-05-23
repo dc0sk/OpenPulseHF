@@ -73,8 +73,25 @@ impl WattersonChannel {
     /// the call share a single coherent realization.  This gives correct temporal
     /// correlation across the full signal length rather than jumping to independent
     /// states at each fixed-size block boundary.
+    ///
+    /// For low Doppler spreads (e.g. F1 = 0.1 Hz), the signal-length FFT alone
+    /// yields a sub-bin shaping filter (σ_bins ≪ 1) that would collapse to the
+    /// 0.5 floor and produce a near-constant envelope.  The FFT is therefore
+    /// enlarged so σ_bins ≥ `TARGET_SIGMA_BINS`, up to `MAX_FFT` samples
+    /// (~2 MB of `Complex<f32>`).
     fn make_envelope(&mut self, n: usize) -> Vec<Complex32> {
-        let fft_size = n.next_power_of_two().max(4);
+        const TARGET_SIGMA_BINS: f32 = 2.0;
+        const MAX_FFT: usize = 1 << 18;
+        let signal_fft = n.next_power_of_two().max(4);
+        let sr = self.config.sample_rate as f32;
+        let required_fft = if self.config.doppler_spread_hz > 1e-4 {
+            (TARGET_SIGMA_BINS * sr / self.config.doppler_spread_hz).ceil() as usize
+        } else {
+            signal_fft
+        };
+        let fft_size = signal_fft
+            .max(required_fft.next_power_of_two())
+            .min(MAX_FFT);
         // Random complex Gaussian spectrum.
         let mut spec: Vec<Complex<f32>> = (0..fft_size)
             .map(|_| {
@@ -86,9 +103,9 @@ impl WattersonChannel {
             .collect();
 
         // Gaussian Doppler shaping: sigma = doppler_hz / bin_width.
-        // With fft_size ≥ n (the full signal length), one bin is sample_rate/fft_size Hz,
-        // giving meaningful resolution for real Doppler spreads rather than sub-bin clamping.
-        let sr = self.config.sample_rate as f32;
+        // `fft_size` is sized above so σ_bins ≥ TARGET_SIGMA_BINS for non-trivial
+        // Doppler; the 0.5 floor remains as defense-in-depth for the doppler≈0 case
+        // and for the MAX_FFT cap.
         let sigma_bins = (self.config.doppler_spread_hz / (sr / fft_size as f32)).max(0.5);
 
         let filter_energy: f32 = (0..fft_size)
@@ -269,5 +286,45 @@ mod tests {
         let mut cfg = WattersonConfig::moderate_f1(None);
         cfg.doppler_spread_hz = -1.0;
         assert!(WattersonChannel::new(cfg).is_err());
+    }
+
+    /// The Good-F1 profile (Doppler = 0.1 Hz) historically collapsed to a
+    /// near-constant envelope because the shaping σ_bins fell below the 0.5
+    /// floor.  After auto-sizing the FFT for low-Doppler resolution, the
+    /// envelope must show non-trivial variation across a full call.
+    ///
+    /// At 0.1 Hz the coherence time is on the order of 10 s, so a multi-second
+    /// signal is needed for the windows to span more than one fading dwell.
+    #[test]
+    fn f1_envelope_has_non_trivial_variation() {
+        let cfg = WattersonConfig::good_f1(Some(7));
+        let mut ch = WattersonChannel::new(cfg).unwrap();
+
+        let n = 80_000usize; // 10 s @ 8 kHz — multiple coherence times of F1
+        let signal: Vec<f32> = (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * 1500.0 * i as f32 / 8000.0).sin())
+            .collect();
+        let out = ch.apply(&signal);
+
+        let window = 4000usize; // 0.5 s windows
+        let n_windows = n / window;
+        let window_rms: Vec<f32> = (0..n_windows)
+            .map(|w| {
+                let start = w * window;
+                let end = start + window;
+                (out[start..end].iter().map(|&s| s * s).sum::<f32>() / window as f32).sqrt()
+            })
+            .collect();
+        let mean = window_rms.iter().sum::<f32>() / n_windows as f32;
+        let variance =
+            window_rms.iter().map(|&r| (r - mean).powi(2)).sum::<f32>() / n_windows as f32;
+        let cv = variance.sqrt() / mean;
+
+        assert!(
+            cv > 0.10,
+            "F1 envelope CV {:.4} should exceed 0.10; the FFT auto-sizing in make_envelope \
+             must keep σ_bins clear of the 0.5 floor",
+            cv
+        );
     }
 }

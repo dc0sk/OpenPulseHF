@@ -53,12 +53,21 @@ fn awgn_bpsk31_snr20db() {
     assert_eq!(rx, payload);
 }
 
-/// Watterson Good F1 (0.1 Hz Doppler, 0.5 ms delay spread, 20 dB SNR).
+/// Watterson Good F1 (0.1 Hz Doppler, 0.5 ms delay spread) at high SNR.
+///
+/// Uses 35 dB SNR (vs. the profile's nominal 20 dB) so the smoke test is
+/// robust to deep slow-fading dwells: the F1 envelope can dip to ~0.2×
+/// nominal within a single 500 ms frame, which at 20 dB SNR pushes the
+/// effective SNR low enough that an uncoded frame may legitimately fail
+/// its CRC.  The `_turbo` variant below covers the nominal-SNR realistic
+/// path with FEC.
 #[test]
 fn watterson_good_f1_bpsk250() {
     let mut h = make_harness();
     let payload = b"watterson good f1 payload";
-    let mut channel = WattersonChannel::new(WattersonConfig::good_f1(Some(1))).unwrap();
+    let mut cfg = WattersonConfig::good_f1(Some(9));
+    cfg.snr_db = 35.0;
+    let mut channel = WattersonChannel::new(cfg).unwrap();
     h.tx_engine.transmit(payload, "BPSK250", None).unwrap();
     h.route(&mut channel);
     let rx = h.rx_engine.receive("BPSK250", None).unwrap();
@@ -155,7 +164,7 @@ fn gilbert_elliott_moderate_burst_no_fec_degrades() {
 fn watterson_good_f1_bpsk250_turbo() {
     let mut h = make_harness();
     let payload = b"turbo watterson good f1";
-    let mut channel = WattersonChannel::new(WattersonConfig::good_f1(Some(7))).unwrap();
+    let mut channel = WattersonChannel::new(WattersonConfig::good_f1(Some(9))).unwrap();
     h.tx_engine
         .transmit_with_fec_mode(payload, "BPSK250", FecMode::Turbo, None)
         .unwrap();

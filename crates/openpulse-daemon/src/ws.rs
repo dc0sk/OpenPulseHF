@@ -194,7 +194,7 @@ async fn handle_ws_client(stream: TcpStream, ctx: WsClientCtx) {
                                 let mut ps = PowerSpectrum::new();
                                 loop {
                                     interval.tick().await;
-                                    let bins = ps.compute(&*tap.read().await);
+                                    let bins = ps.compute(&tap.read().await);
                                     let frame = encode_spectrum_frame(8000, &bins);
                                     if tx.send(frame).await.is_err() {
                                         break;
