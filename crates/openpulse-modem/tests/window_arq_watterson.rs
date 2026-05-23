@@ -1,10 +1,11 @@
 //! Item 5.5 acceptance gate: Window-ARQ under Watterson Good F1.
 //!
 //! Verifies:
-//! 1) feedback codec stays within 8 bytes,
-//! 2) selective retransmit packet size is <= 120% of failed-byte count,
-//! 3) retry airtime proxy is >= 15% lower than full-frame retransmit for 50% erasure,
-//! 4) range-limited soft combining gains >= 1.5 dB vs full-frame baseline,
+//!   1) feedback codec stays within 8 bytes,
+//!   2) selective retransmit packet size is <= 120% of failed-byte count,
+//!   3) retry airtime proxy is >= 15% lower than full-frame retransmit for 50% erasure,
+//!   4) range-limited soft combining gains >= 1.5 dB vs full-frame baseline,
+//!
 //! all under deterministic Watterson F1 + AWGN trials across 15..25 dB.
 
 use bpsk_plugin::BpskPlugin;

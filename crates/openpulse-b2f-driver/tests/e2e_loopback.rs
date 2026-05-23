@@ -1,3 +1,5 @@
+#![allow(clippy::while_let_loop, clippy::large_enum_variant)]
+
 mod common;
 
 use std::io::{self, ErrorKind, Read, Write};

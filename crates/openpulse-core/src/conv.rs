@@ -104,7 +104,7 @@ impl ConvCodec {
         }
 
         // Traceback from best terminal state.
-        let mut best_state = (0..STATES).min_by_key(|&s| metrics[s]).unwrap() as u32;
+        let mut best_state = (0..STATES).min_by_key(|&s| metrics[s]).unwrap_or(0) as u32;
         let mut decoded_bits: Vec<u8> = vec![0; n_symbols];
         for t in (0..n_symbols).rev() {
             let (prev, bit) = decisions[t][best_state as usize];

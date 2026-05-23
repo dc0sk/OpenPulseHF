@@ -156,15 +156,7 @@ impl SarReassembler {
         }
 
         if slot.received == slot.total {
-            let assembled: Vec<u8> = slot
-                .fragments
-                .iter()
-                .flat_map(|f| {
-                    f.as_ref()
-                        .expect("received == total guarantees all present")
-                })
-                .copied()
-                .collect();
+            let assembled: Vec<u8> = slot.fragments.iter().flatten().flatten().copied().collect();
             // Remove completed slot.
             let key = (session_id.to_string(), segment_id);
             self.slots.remove(&key);

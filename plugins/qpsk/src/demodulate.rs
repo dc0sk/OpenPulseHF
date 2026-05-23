@@ -465,6 +465,7 @@ fn preamble_expected() -> Vec<(f32, f32)> {
 }
 
 #[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 mod tests {
     //! # QPSK Adaptive Equalizer Characterization Framework
     //!

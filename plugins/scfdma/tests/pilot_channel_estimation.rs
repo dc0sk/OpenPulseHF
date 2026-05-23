@@ -1,4 +1,5 @@
 //! Pilot-aided channel-estimation and soft-demodulation tests.
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 use openpulse_channel::{watterson::WattersonChannel, ChannelModel, WattersonConfig};
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};

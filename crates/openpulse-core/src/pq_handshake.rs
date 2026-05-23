@@ -153,8 +153,7 @@ pub fn generate_ml_kem_768_keypair() -> (Vec<u8>, Vec<u8>) {
     let dk = DecapsulationKey::<MlKem768>::from_seed(MlKemSeed::from(seed_bytes));
     let ek_encoded = dk.encapsulation_key().to_bytes();
     let ek_bytes: Vec<u8> = ek_encoded.to_vec();
-    let dk_seed = dk.to_seed().expect("freshly generated key has seed");
-    let dk_bytes: Vec<u8> = dk_seed.to_vec();
+    let dk_bytes: Vec<u8> = seed_bytes.to_vec();
     (dk_bytes, ek_bytes)
 }
 

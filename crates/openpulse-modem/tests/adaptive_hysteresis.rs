@@ -43,7 +43,7 @@ fn test_hysteresis_allows_upgrade_when_snr_sufficient() {
     let thresholds = vec![10.0, 15.0, 20.0, 25.0];
     let mut hysteresis = HysteresisController::new(1, thresholds, 2.0);
 
-    let snr_sequence = vec![
+    let snr_sequence = [
         15.5, 15.5, 15.8, 16.0, 16.5, 17.1, 17.5, 18.0, // Cross upgrade threshold (17.0)
     ];
 
@@ -118,4 +118,3 @@ fn test_multi_level_adaptive_profile() {
 }
 
 // Re-export rand for test
-use rand;

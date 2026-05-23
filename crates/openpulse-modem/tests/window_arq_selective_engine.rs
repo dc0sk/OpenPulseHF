@@ -1,4 +1,5 @@
 //! Full selective Window-ARQ engine path integration tests.
+#![allow(clippy::needless_range_loop)]
 
 use bpsk_plugin::BpskPlugin;
 use openpulse_audio::LoopbackBackend;

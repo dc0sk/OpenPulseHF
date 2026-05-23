@@ -484,6 +484,7 @@ fn find_region3_segment(freq_hz: u64) -> Option<DigitalSegment> {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
 

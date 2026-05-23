@@ -407,7 +407,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         let input_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("syms-input"),
-            size: (bits.len() * std::mem::size_of::<u32>()) as u64,
+            size: std::mem::size_of_val(bits) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -570,7 +570,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let cfg = ModulationConfig::default();
         let samples = bpsk_modulate(b"test", &cfg).unwrap();
         for &s in &samples {
-            assert!(s >= -1.0 && s <= 1.0, "sample {s} out of range");
+            assert!((-1.0..=1.0).contains(&s), "sample {s} out of range");
         }
     }
 
