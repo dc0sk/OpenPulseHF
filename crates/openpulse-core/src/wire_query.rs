@@ -80,6 +80,13 @@ fn read_u32(bytes: &[u8], off: usize) -> Result<u32, WireQueryError> {
     ))
 }
 
+fn read_u16(bytes: &[u8], off: usize) -> Result<u16, WireQueryError> {
+    if bytes.len() < off + 2 {
+        return Err(WireQueryError::MalformedPayload);
+    }
+    Ok(u16::from_be_bytes([bytes[off], bytes[off + 1]]))
+}
+
 fn read_arr32(bytes: &[u8], off: usize) -> Result<[u8; 32], WireQueryError> {
     bytes[off..off + 32]
         .try_into()

@@ -215,7 +215,10 @@ impl FecCodec {
                 "decoded data too short to contain length prefix".into(),
             ));
         }
-        let orig_len = u32::from_be_bytes(decoded[..PREFIX_LEN].try_into().unwrap()) as usize;
+        let prefix: [u8; PREFIX_LEN] = decoded[..PREFIX_LEN]
+            .try_into()
+            .map_err(|_| ModemError::Fec("length-prefix slice conversion failed".into()))?;
+        let orig_len = u32::from_be_bytes(prefix) as usize;
 
         let end = PREFIX_LEN + orig_len;
         if decoded.len() < end {

@@ -144,7 +144,9 @@ impl AudioBackend for CpalBackend {
             .build_input_stream(
                 &stream_config,
                 move |data: &[f32], _| {
-                    let mut guard = buf_write.lock().expect("cpal buffer poisoned");
+                    // Recover from a poisoned lock: another thread panicked while
+                    // holding it, but the VecDeque is still in a usable state.
+                    let mut guard = buf_write.lock().unwrap_or_else(|p| p.into_inner());
                     guard.extend(data.iter().copied());
                 },
                 |err| warn!("cpal input error: {err}"),
@@ -202,7 +204,7 @@ impl AudioBackend for CpalBackend {
             .build_output_stream(
                 &stream_config,
                 move |output: &mut [f32], _| {
-                    let mut guard = buf_read.lock().expect("cpal buffer poisoned");
+                    let mut guard = buf_read.lock().unwrap_or_else(|p| p.into_inner());
                     for sample in output.iter_mut() {
                         *sample = guard.pop_front().unwrap_or(0.0);
                     }
@@ -238,14 +240,14 @@ pub struct CpalInputStream {
 impl AudioInputStream for CpalInputStream {
     fn read(&mut self) -> Result<Vec<f32>, AudioError> {
         // Poll the buffer; only sleep when it is empty to avoid unnecessary latency.
-        let mut guard = self.buf.lock().expect("cpal buffer poisoned");
+        let mut guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
         if !guard.is_empty() {
             return Ok(guard.drain(..).collect());
         }
         drop(guard);
         // Buffer is empty – give the driver a moment to fill it.
         std::thread::sleep(Duration::from_millis(10));
-        let mut guard = self.buf.lock().expect("cpal buffer poisoned");
+        let mut guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
         Ok(guard.drain(..).collect())
     }
 
@@ -264,7 +266,7 @@ pub struct CpalOutputStream {
 
 impl AudioOutputStream for CpalOutputStream {
     fn write(&mut self, samples: &[f32]) -> Result<(), AudioError> {
-        let mut guard = self.buf.lock().expect("cpal buffer poisoned");
+        let mut guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
         guard.extend(samples.iter().copied());
         Ok(())
     }
@@ -274,7 +276,7 @@ impl AudioOutputStream for CpalOutputStream {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
             std::thread::sleep(Duration::from_millis(10));
-            let guard = self.buf.lock().expect("cpal buffer poisoned");
+            let guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
             if guard.is_empty() {
                 return Ok(());
             }

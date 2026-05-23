@@ -29,4 +29,6 @@ pub enum B2fError {
     Compression(String),
     #[error("invalid session state")]
     InvalidState,
+    #[error("proposal/answer count mismatch: expected {expected}, got {got}")]
+    ProposalCountMismatch { expected: usize, got: usize },
 }

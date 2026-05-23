@@ -123,10 +123,12 @@ async fn main() -> anyhow::Result<()> {
         } else {
             RelayTrustPolicy::deny_relays(cfg.relay.deny_list.iter().map(|s| s.as_str()))
         };
-        let fwd = RelayForwarder::new(300_000, policy);
+        let ttl_ms = cfg.relay.store_forward_ttl_s.saturating_mul(1000);
+        let fwd = RelayForwarder::new(ttl_ms, policy);
         tracing::info!(
             max_hops = cfg.relay.max_hops,
             deny_count = cfg.relay.deny_list.len(),
+            ttl_s = cfg.relay.store_forward_ttl_s,
             "relay forwarding enabled"
         );
         Some(fwd)

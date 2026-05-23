@@ -135,15 +135,14 @@ pub fn qpsk_modulate_rrc_gpu(
     let n = samples_per_symbol(fs, baud)?;
 
     // Only handle RRC modes; fall through to CPU for non-RRC.
-    let rrc_alpha = if let PulseShape::Rrc { alpha } = config.pulse_shape {
-        Some(alpha)
+    let alpha = if let PulseShape::Rrc { alpha } = config.pulse_shape {
+        alpha
     } else if config.mode.ends_with("-RRC") {
-        Some(0.35f32)
+        0.35f32
     } else {
         return qpsk_modulate(data, config);
     };
 
-    let alpha = rrc_alpha.unwrap();
     let mut symbols = preamble_symbols();
     symbols.extend(bits_to_symbols(&bytes_to_bits(data)));
     symbols.extend(std::iter::repeat_n((INV_SQRT_2, INV_SQRT_2), TAIL_SYMS));

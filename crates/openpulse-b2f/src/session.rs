@@ -186,13 +186,17 @@ impl B2fSession {
         let f = frame::decode(line)?;
         match (self.role.clone(), f) {
             (SessionRole::Iss, B2fFrame::Fs { answers }) => {
-                // Record answers and stage accepted data.
+                if answers.len() != self.proposals.len() {
+                    return Err(B2fError::ProposalCountMismatch {
+                        expected: self.proposals.len(),
+                        got: answers.len(),
+                    });
+                }
                 for (i, answer) in answers.into_iter().enumerate() {
-                    if let Some(p) = self.proposals.get_mut(i) {
-                        p.answer = Some(answer.clone());
-                        if answer == FsAnswer::Accept {
-                            self.pending_data.push(p.compressed_data.clone());
-                        }
+                    let p = &mut self.proposals[i];
+                    p.answer = Some(answer.clone());
+                    if answer == FsAnswer::Accept {
+                        self.pending_data.push(p.compressed_data.clone());
                     }
                 }
                 self.state = if self.pending_data.is_empty() {

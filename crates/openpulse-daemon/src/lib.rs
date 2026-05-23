@@ -912,13 +912,19 @@ fn maybe_relay_forward(
     match forwarded {
         Ok(out_envelope) => match out_envelope.encode() {
             Ok(out_bytes) => {
+                tracing::info!(
+                    session_id = ?out_envelope.session_id,
+                    hop_index = out_envelope.hop_index,
+                    bytes = out_bytes.len(),
+                    "relay: forwarding envelope"
+                );
                 if let Err(e) = engine.transmit(&out_bytes, mode, None) {
                     tracing::warn!(error = %e, "relay: retransmit failed");
                 }
             }
             Err(e) => tracing::warn!(error = %e, "relay: envelope encode failed"),
         },
-        Err(e) => tracing::debug!(error = ?e, "relay: not forwarding"),
+        Err(e) => tracing::info!(reason = ?e, "relay: dropping envelope"),
     }
 }
 ///

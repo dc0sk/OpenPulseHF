@@ -16,5 +16,9 @@ tracing        = { workspace = true }
 cpal = { version = "0.15", optional = true }
 
 [features]
-default      = ["cpal-backend"]
+# No default features: CI builds (`cargo build --workspace --no-default-features`)
+# and downstream crates that opt into `cpal-backend` get a consistent picture.
+# Production builds enable the feature explicitly via `--features cpal-backend`,
+# or via the `cpal`/`cpal-backend` feature on the parent crate.
+default      = []
 cpal-backend = ["dep:cpal"]

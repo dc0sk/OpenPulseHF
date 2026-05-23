@@ -291,38 +291,7 @@ impl ModemEngine {
 
     fn apply_ack_internal(&mut self, ack: AckType, direction: Option<RateDirection>) -> RateEvent {
         let hold_ack_up = self.should_hold_ack_up_without_snr_candidate(ack);
-        let rate_event = match self.rate_adapter.as_mut() {
-            Some(adapter) => {
-                if hold_ack_up {
-                    RateEvent::Maintained
-                } else if ack == AckType::AckUp {
-                    if let Some(profile) = self.session_profile.as_ref() {
-                        let current = adapter.tx_level();
-                        if let Some(target) = Self::next_mapped_level_above(profile, current) {
-                            let mut last_event = RateEvent::Maintained;
-                            while adapter.tx_level() < target {
-                                last_event = adapter.apply_ack(AckType::AckUp);
-                                if matches!(last_event, RateEvent::Maintained) {
-                                    break;
-                                }
-                            }
-
-                            match last_event {
-                                RateEvent::Increased(_) => RateEvent::Increased(adapter.tx_level()),
-                                other => other,
-                            }
-                        } else {
-                            RateEvent::Maintained
-                        }
-                    } else {
-                        adapter.apply_ack(ack)
-                    }
-                } else {
-                    adapter.apply_ack(ack)
-                }
-            }
-            None => RateEvent::Maintained,
-        };
+        let rate_event = self.decide_rate_change(ack, hold_ack_up);
         let speed_level = self
             .rate_adapter
             .as_ref()
@@ -342,6 +311,37 @@ impl ModemEngine {
             });
         }
         rate_event
+    }
+
+    fn decide_rate_change(&mut self, ack: AckType, hold_ack_up: bool) -> RateEvent {
+        let profile = self.session_profile.clone();
+        let Some(adapter) = self.rate_adapter.as_mut() else {
+            return RateEvent::Maintained;
+        };
+        if hold_ack_up {
+            return RateEvent::Maintained;
+        }
+        if ack != AckType::AckUp {
+            return adapter.apply_ack(ack);
+        }
+        let Some(profile) = profile.as_ref() else {
+            return adapter.apply_ack(ack);
+        };
+        let current = adapter.tx_level();
+        let Some(target) = Self::next_mapped_level_above(profile, current) else {
+            return RateEvent::Maintained;
+        };
+        let mut last_event = RateEvent::Maintained;
+        while adapter.tx_level() < target {
+            last_event = adapter.apply_ack(AckType::AckUp);
+            if matches!(last_event, RateEvent::Maintained) {
+                break;
+            }
+        }
+        match last_event {
+            RateEvent::Increased(_) => RateEvent::Increased(adapter.tx_level()),
+            other => other,
+        }
     }
 
     fn should_hold_ack_up_without_snr_candidate(&self, ack: AckType) -> bool {
