@@ -2219,14 +2219,28 @@ impl ModemEngine {
     /// ECC bytes appended by the ShortRs data-frame codec (t = 16).
     const SHORT_FEC_DATA_ECC_LEN: usize = 32;
 
-    /// Maximum payload accepted by [`transmit_with_short_fec_data`].
-    const SHORT_FEC_DATA_MAX_PAYLOAD: usize = 255 - Self::SHORT_FEC_DATA_ECC_LEN;
+    /// Frame envelope (magic + ver + seq + len + CRC) bytes added by
+    /// [`stage_encode_frame`]. Mirrors `openpulse_core::frame::Frame::encode`.
+    const FRAME_ENVELOPE_LEN: usize = 4 + 1 + 2 + 1 + 2;
 
-    /// Transmit `payload` (≤ 223 bytes) using the short-block RS codec.
+    /// Maximum user payload accepted by [`transmit_with_short_fec_data`].
     ///
-    /// Emits exactly `payload.len() + 32` bytes on the wire instead of the full
-    /// 255-byte block produced by [`transmit_with_fec`](Self::transmit_with_fec).
-    /// Strength is t = 16 byte errors per frame.
+    /// The on-air buffer is `Frame(payload) + 32 B ECC`, which must fit in
+    /// `ShortFecCodec`'s 255-byte block, i.e.
+    /// `FRAME_ENVELOPE_LEN + payload + ECC_LEN ≤ 255`.
+    const SHORT_FEC_DATA_MAX_PAYLOAD: usize =
+        255 - Self::SHORT_FEC_DATA_ECC_LEN - Self::FRAME_ENVELOPE_LEN;
+
+    /// Transmit `payload` using the short-block RS codec.
+    ///
+    /// The bytes on the wire are `Frame(payload) + 32 B ECC` —
+    /// `payload.len() + 42` bytes — instead of the full 255-byte block
+    /// produced by [`transmit_with_fec`](Self::transmit_with_fec). Strength is
+    /// t = 16 byte errors per frame.
+    ///
+    /// Maximum payload is
+    /// [`SHORT_FEC_DATA_MAX_PAYLOAD`](Self::SHORT_FEC_DATA_MAX_PAYLOAD)
+    /// (213 bytes); larger payloads return `ModemError::Frame`.
     ///
     /// The receiver determines the data length from the demodulated byte count,
     /// so this path only round-trips reliably when the modulation plugin emits
@@ -2248,8 +2262,9 @@ impl ModemEngine {
         }
         self.csma_check()?;
 
+        let frame_wire = self.stage_encode_frame(payload)?;
         let fec_bytes =
-            ShortFecCodec::with_ecc_len(Self::SHORT_FEC_DATA_ECC_LEN).encode(payload)?;
+            ShortFecCodec::with_ecc_len(Self::SHORT_FEC_DATA_ECC_LEN).encode(&frame_wire.bytes)?;
         let wire = WirePayload { bytes: fec_bytes };
         let wire = self.route_wire_stage(PipelineStage::EncodeModulate, wire)?;
 
@@ -2306,13 +2321,18 @@ impl ModemEngine {
             });
         }
 
-        let decoded =
+        let corrected_bytes =
             ShortFecCodec::with_ecc_len(Self::SHORT_FEC_DATA_ECC_LEN).decode(&wire.bytes)?;
+        let corrected_wire = WirePayload {
+            bytes: corrected_bytes,
+        };
+        let frame = self.stage_decode_frame(&corrected_wire)?;
+        let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         let _ = self.event_tx.send(EngineEvent::FrameReceived {
             mode: mode.to_string(),
-            bytes: decoded.len(),
+            bytes: frame.payload.len(),
         });
-        Ok(decoded)
+        Ok(frame.payload)
     }
 
     fn stage_encode_frame(&mut self, data: &[u8]) -> Result<WirePayload, ModemError> {

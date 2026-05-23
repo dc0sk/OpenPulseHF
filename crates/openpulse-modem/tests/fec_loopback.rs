@@ -409,8 +409,8 @@ fn ack_frame_short_fec_engine_loopback() {
 }
 
 /// ShortRs data-frame engine loopback: a 32-byte payload survives BPSK250
-/// round-trip via `FecMode::ShortRs`, and the wire size is `payload + 32`
-/// rather than a full 255-byte block.
+/// round-trip via `FecMode::ShortRs`. The wire carries `Frame(payload) + 32`
+/// ECC bytes (≈ `payload + 42` total) rather than a full 255-byte block.
 #[test]
 fn short_fec_data_frame_engine_loopback() {
     use openpulse_core::fec::FecMode;
@@ -433,13 +433,14 @@ fn short_fec_data_frame_engine_loopback() {
     assert!(encoded.len() < 255);
 }
 
-/// ShortRs data-frame path rejects payloads larger than 223 B.
+/// ShortRs data-frame path rejects payloads larger than the 213 B limit
+/// (255 − 32 ECC − 10 B Frame envelope).
 #[test]
 fn short_fec_data_frame_rejects_oversized_payload() {
     use openpulse_core::fec::FecMode;
 
     let mut engine = engine_with_both_plugins();
-    let oversized = vec![0u8; 224];
+    let oversized = vec![0u8; 214];
     let err = engine
         .transmit_with_fec_mode(&oversized, "BPSK250", FecMode::ShortRs, None)
         .expect_err("224-byte payload must be rejected");

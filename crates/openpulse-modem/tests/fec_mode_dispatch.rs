@@ -87,10 +87,10 @@ fn dispatch_short_rs_data_frame_roundtrip() {
 #[test]
 fn dispatch_short_rs_rejects_oversized_payload() {
     let mut e = engine();
-    let oversized = vec![0u8; 224];
+    let oversized = vec![0u8; 214];
     assert!(
         e.transmit_with_fec_mode(&oversized, "BPSK250", FecMode::ShortRs, None)
             .is_err(),
-        "ShortRs must reject payloads > 223 bytes"
+        "ShortRs must reject payloads > 213 bytes"
     );
 }
