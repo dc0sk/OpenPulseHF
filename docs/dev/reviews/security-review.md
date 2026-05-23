@@ -1,7 +1,8 @@
 ---
 doc: docs/dev/reviews/security-review.md
 date: 2026-05-22
-status: initial
+status: resolved
+resolved: 2026-05-23
 ---
 
 # Security Review
@@ -120,8 +121,8 @@ a panic hazard.
 
 ## Action Items
 
-| ID | Severity | Action |
-|---|---|---|
-| SEC-01 | Medium | Audit `sqlx` feature flags in `openpulse-cli` to remove `sqlx-mysql` and the `rsa` dep |
-| SEC-02 | Low | Add PTT watchdog / max-TX-time guard to daemon `RuntimeControlState` |
-| SEC-03 | Low | Cap ARDOP data port frame size at ≤ 4096 bytes |
+| ID | Severity | Action | Resolution |
+|---|---|---|---|
+| SEC-01 | Medium | Audit `sqlx` feature flags in `openpulse-cli` to remove `sqlx-mysql` and the `rsa` dep | ✅ Accepted with documented exception: neither `pki-tooling` nor `openpulse-cli` enable the `mysql` sqlx feature; `rsa` appears in `Cargo.lock` because Cargo resolves all optional deps when computing the lock file, but `sqlx-mysql` and `rsa` are never compiled into any OpenPulseHF binary |
+| SEC-02 | Low | Add PTT watchdog / max-TX-time guard to daemon `RuntimeControlState` | ✅ Implemented: `RuntimeControlState` gains `ptt_asserted_at: Option<Instant>` and `ptt_max_duration: Duration` (default 180 s); `check_ptt_watchdog()` releases PTT and emits `PttChanged` when the deadline elapses |
+| SEC-03 | Low | Cap ARDOP data port frame size at ≤ 4096 bytes | ✅ Implemented: `MAX_FRAME_BYTES = 4096` constant in `crates/openpulse-ardop/src/data.rs`; frames exceeding the cap are rejected with `ArdopError::FrameTooLarge` and the connection is closed |
