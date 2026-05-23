@@ -213,7 +213,7 @@ Status legend: ✅ resolved · ⏳ deferred (out of scope for sweep cleanup; tra
 | SWEEP-08 | Medium | Protocol | Validate B2F proposal/answer count match | ✅ |
 | SWEEP-09 | Medium | Error | Replace `try_into().unwrap()` in `fec.rs:218` with `?` | ✅ |
 | SWEEP-10 | Medium | Error | Same fix in `rig_definition.rs:203` | ✅ |
-| SWEEP-11 | Low | API parity | Add CLI surface for daemon control commands | ⏳ Deferred — new feature work; 10 commands warrant a dedicated PR |
+| SWEEP-11 | Low | API parity | Add CLI surface for daemon control commands | ✅ Added `openpulse daemon <cmd>` subcommand with `--addr` global; covers all 10 NDJSON control commands (`connect-peer`, `disconnect-peer`, `list-messages`, `get-message`, `delete-message`, `enable-repeater`, `disable-repeater`, `subscribe-spectrum`, `get-config`, `set-config`) |
 | SWEEP-12 | Low | API | Normalize `ArdopError`/`KissTncError` ergonomics | ✅ |
 | SWEEP-13 | Low | Refactor | Extract `decide_rate_change` from `apply_ack_internal` | ✅ |
 | SWEEP-14 | Low | Refactor | Generic wire-codec helper for `wire_query.rs` | ✅ (added `read_u16` helper; existing `read_u64`/`read_u32`/`read_arr32` already factored) |

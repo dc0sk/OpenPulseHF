@@ -155,6 +155,54 @@ pub enum Commands {
         #[arg(long)]
         output: Option<std::path::PathBuf>,
     },
+    /// Control a running openpulse-server daemon via its NDJSON-over-TCP port.
+    Daemon {
+        /// Daemon control address (host:port).
+        #[arg(long, default_value = "127.0.0.1:9000")]
+        addr: String,
+        #[command(subcommand)]
+        command: DaemonCommands,
+    },
+}
+
+#[derive(Subcommand, Clone)]
+pub enum DaemonCommands {
+    /// Initiate an RF connection to a peer callsign via the TNC.
+    ConnectPeer { callsign: String },
+    /// Disconnect the current RF peer connection.
+    DisconnectPeer,
+    /// Print the full inbox listing as JSON.
+    ListMessages,
+    /// Fetch the full body of a single message by ID.
+    GetMessage { id: u64 },
+    /// Delete a stored message by ID.
+    DeleteMessage { id: u64 },
+    /// Enable the cross-band repeater.
+    EnableRepeater,
+    /// Disable the cross-band repeater.
+    DisableRepeater,
+    /// Stream binary spectrum frames as NDJSON to stdout.
+    SubscribeSpectrum {
+        /// Frames per second requested from the daemon.
+        #[arg(long, default_value_t = 10)]
+        fps: u32,
+        /// Stop after this many frames; 0 = stream until interrupted.
+        #[arg(long, default_value_t = 0)]
+        frames: u32,
+    },
+    /// Print the daemon's current runtime configuration as JSON.
+    GetConfig,
+    /// Update runtime configuration; omitted fields are preserved.
+    SetConfig {
+        #[arg(long)]
+        mode: Option<String>,
+        #[arg(long)]
+        tx_attenuation_db: Option<f32>,
+        #[arg(long)]
+        qsy_enabled: Option<bool>,
+        #[arg(long)]
+        bandplan_mode: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

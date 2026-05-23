@@ -18,12 +18,13 @@ serial       = ["openpulse-radio/serial"]
 generic-serial = ["openpulse-radio/generic-serial"]
 
 [dependencies]
-openpulse-core  = { workspace = true }
-openpulse-audio = { workspace = true }
-openpulse-modem = { workspace = true }
-openpulse-radio = { workspace = true }
+openpulse-core   = { workspace = true }
+openpulse-audio  = { workspace = true }
+openpulse-modem  = { workspace = true }
+openpulse-radio  = { workspace = true }
 openpulse-config = { workspace = true }
-openpulse-qsy   = { workspace = true }
+openpulse-daemon = { workspace = true }
+openpulse-qsy    = { workspace = true }
 bpsk-plugin     = { workspace = true }
 fsk4-plugin     = { workspace = true }
 ofdm-plugin     = { workspace = true }
