@@ -48,10 +48,6 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/submissions/{submission_id}",
             get(api::handlers::get_submission),
         )
-        .route(
-            "/api/v1/moderation/queue",
-            get(api::handlers::get_moderation_queue),
-        )
         .route("/api/v1/signing-key", get(api::handlers::get_signing_key));
 
     // Mutating routes — require valid Bearer token.
@@ -71,6 +67,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/moderation/{submission_id}/decision",
             post(api::handlers::post_moderation_decision),
+        )
+        .route(
+            "/api/v1/moderation/queue",
+            get(api::handlers::get_moderation_queue),
         )
         .route(
             "/api/v1/session-audit-events",
@@ -164,5 +164,27 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         assert_eq!(status_for(app, req).await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn moderation_queue_without_token_returns_401() {
+        let app = build_router(test_state());
+        let req = Request::builder()
+            .uri("/api/v1/moderation/queue")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(status_for(app, req).await, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn moderation_queue_with_token_passes_auth() {
+        let app = build_router(test_state());
+        let req = Request::builder()
+            .uri("/api/v1/moderation/queue")
+            .header("authorization", "Bearer test-secret")
+            .body(Body::empty())
+            .unwrap();
+        let status = status_for(app, req).await;
+        assert_ne!(status, StatusCode::UNAUTHORIZED);
     }
 }
