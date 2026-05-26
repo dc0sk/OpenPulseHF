@@ -14,6 +14,9 @@ This file is the authoritative guide for any coding agent working in this reposi
 ## Build and test commands
 
 ```bash
+# Toolchain preflight (required: rustc >= 1.94.0)
+./scripts/check-toolchain.sh
+
 # Full workspace build (requires libasound2-dev on Linux)
 cargo build --workspace
 
@@ -44,6 +47,10 @@ cargo run -p openpulse-testmatrix --no-default-features
 
 # Run the full test matrix (all propagation channels and payload sizes)
 cargo run -p openpulse-testmatrix --no-default-features -- --full --output docs/test-reports
+
+# Fallback core gates when full workspace checks are blocked by local toolchain constraints
+cargo clippy --workspace --exclude pki-tooling --no-default-features -- -D warnings
+cargo test --workspace --exclude pki-tooling --no-default-features
 ```
 
 The `--no-default-features` flag disables the CPAL audio backend and is required for CI. All tests must pass with this flag. Never add tests that require real audio hardware.

@@ -186,6 +186,9 @@ mod tests {
             .unwrap();
         // In test_state() the DB is deliberately unreachable, so auth should pass
         // and the handler should fail at data access with a deterministic 500.
-        assert_eq!(status_for(app, req).await, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            status_for(app, req).await,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 }

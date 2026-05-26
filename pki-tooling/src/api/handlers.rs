@@ -248,7 +248,7 @@ pub async fn get_identity(
             }),
         )
             .into_response(),
-        Err(err) => (
+        Err(_err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
@@ -289,7 +289,7 @@ pub async fn lookup_identity(
     let built = qb.build_query_as::<IdentityRecordResponse>();
     match built.fetch_all(&state.db).await {
         Ok(records) => (StatusCode::OK, Json(records)).into_response(),
-        Err(err) => (
+        Err(_err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
@@ -390,7 +390,7 @@ pub async fn list_revocations(
     let built = qb.build_query_as::<RevocationResponse>();
     match built.fetch_all(&state.db).await {
         Ok(records) => (StatusCode::OK, Json(records)).into_response(),
-        Err(err) => (
+        Err(_err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
@@ -430,7 +430,7 @@ pub async fn get_current_trust_bundle(State(state): State<AppState>) -> impl Int
             }),
         )
             .into_response(),
-        Err(err) => (
+        Err(_err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
@@ -472,7 +472,7 @@ pub async fn get_trust_bundle(
             }),
         )
             .into_response(),
-        Err(err) => (
+        Err(_err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
@@ -550,7 +550,7 @@ pub async fn create_submission(
 
     let mut tx = match state.db.begin().await {
         Ok(tx) => tx,
-        Err(err) => {
+        Err(_err) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiMessage {
@@ -614,7 +614,7 @@ pub async fn create_submission(
             .execute(&mut *tx)
             .await;
 
-            if let Err(err) = insert_audit {
+            if let Err(_err) = insert_audit {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ApiMessage {
@@ -625,7 +625,7 @@ pub async fn create_submission(
                     .into_response();
             }
 
-            if let Err(err) = tx.commit().await {
+            if let Err(_err) = tx.commit().await {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ApiMessage {
@@ -646,7 +646,7 @@ pub async fn create_submission(
             )
                 .into_response()
         }
-        Err(err) => (
+        Err(_err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
@@ -687,7 +687,7 @@ pub async fn get_submission(
             }),
         )
             .into_response(),
-        Err(err) => (
+        Err(_err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
@@ -733,7 +733,7 @@ pub async fn get_moderation_queue(
     let built = qb.build_query_as::<ModerationQueueItem>();
     match built.fetch_all(&state.db).await {
         Ok(queue) => (StatusCode::OK, Json(queue)).into_response(),
-        Err(err) => (
+        Err(_err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
@@ -781,7 +781,7 @@ pub async fn post_moderation_decision(
 
     let mut tx = match state.db.begin().await {
         Ok(tx) => tx,
-        Err(err) => {
+        Err(_err) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiMessage {
@@ -808,7 +808,7 @@ pub async fn post_moderation_decision(
 
     let updated_rows = match update {
         Ok(res) => res.rows_affected(),
-        Err(err) => {
+        Err(_err) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiMessage {
@@ -851,7 +851,7 @@ pub async fn post_moderation_decision(
     .execute(&mut *tx)
     .await;
 
-    if let Err(err) = insert_event {
+    if let Err(_err) = insert_event {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
@@ -893,7 +893,7 @@ pub async fn post_moderation_decision(
     .execute(&mut *tx)
     .await;
 
-    if let Err(err) = insert_audit {
+    if let Err(_err) = insert_audit {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
@@ -904,7 +904,7 @@ pub async fn post_moderation_decision(
             .into_response();
     }
 
-    if let Err(err) = tx.commit().await {
+    if let Err(_err) = tx.commit().await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
@@ -938,7 +938,7 @@ pub async fn create_revocation(
         {
             Ok(Some((status, body))) => return (status, Json(body)).into_response(),
             Ok(None) => {}
-            Err(err) => {
+            Err(_err) => {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ApiMessage {
@@ -1002,7 +1002,7 @@ pub async fn create_revocation(
             )
                 .into_response();
         }
-        Err(err) => {
+        Err(_err) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiMessage {
@@ -1019,7 +1019,7 @@ pub async fn create_revocation(
 
     let mut tx = match state.db.begin().await {
         Ok(tx) => tx,
-        Err(err) => {
+        Err(_err) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiMessage {
@@ -1053,7 +1053,7 @@ pub async fn create_revocation(
     .execute(&mut *tx)
     .await;
 
-    if let Err(err) = insert_revocation {
+    if let Err(_err) = insert_revocation {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
@@ -1097,7 +1097,7 @@ pub async fn create_revocation(
     .execute(&mut *tx)
     .await;
 
-    if let Err(err) = insert_audit {
+    if let Err(_err) = insert_audit {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
@@ -1108,7 +1108,7 @@ pub async fn create_revocation(
             .into_response();
     }
 
-    if let Err(err) = tx.commit().await {
+    if let Err(_err) = tx.commit().await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
@@ -1167,7 +1167,7 @@ pub async fn publish_trust_bundle(
         {
             Ok(Some((status, body))) => return (status, Json(body)).into_response(),
             Ok(None) => {}
-            Err(err) => {
+            Err(_err) => {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ApiMessage {
@@ -1226,7 +1226,7 @@ pub async fn publish_trust_bundle(
 
     let mut tx = match state.db.begin().await {
         Ok(tx) => tx,
-        Err(err) => {
+        Err(_err) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiMessage {
@@ -1264,7 +1264,7 @@ pub async fn publish_trust_bundle(
     .execute(&mut *tx)
     .await;
 
-    if let Err(err) = insert_bundle {
+    if let Err(_err) = insert_bundle {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
@@ -1307,7 +1307,7 @@ pub async fn publish_trust_bundle(
     .execute(&mut *tx)
     .await;
 
-    if let Err(err) = insert_audit {
+    if let Err(_err) = insert_audit {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
@@ -1318,7 +1318,7 @@ pub async fn publish_trust_bundle(
             .into_response();
     }
 
-    if let Err(err) = tx.commit().await {
+    if let Err(_err) = tx.commit().await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
@@ -1383,7 +1383,7 @@ pub async fn promote_trust_bundle(
         {
             Ok(Some((status, body))) => return (status, Json(body)).into_response(),
             Ok(None) => {}
-            Err(err) => {
+            Err(_err) => {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ApiMessage {
@@ -1398,7 +1398,7 @@ pub async fn promote_trust_bundle(
 
     let mut tx = match state.db.begin().await {
         Ok(tx) => tx,
-        Err(err) => {
+        Err(_err) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiMessage {
@@ -1417,7 +1417,7 @@ pub async fn promote_trust_bundle(
     {
         Ok(Some(_)) => true,
         Ok(None) => false,
-        Err(err) => {
+        Err(_err) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiMessage {
@@ -1448,7 +1448,7 @@ pub async fn promote_trust_bundle(
         return (StatusCode::NOT_FOUND, Json(body)).into_response();
     }
 
-    if let Err(err) =
+    if let Err(_err) =
         sqlx::query("UPDATE trust_bundles SET is_current = false WHERE is_current = true")
             .execute(&mut *tx)
             .await
@@ -1463,10 +1463,11 @@ pub async fn promote_trust_bundle(
             .into_response();
     }
 
-    if let Err(err) = sqlx::query("UPDATE trust_bundles SET is_current = true WHERE bundle_id = $1")
-        .bind(&bundle_id)
-        .execute(&mut *tx)
-        .await
+    if let Err(_err) =
+        sqlx::query("UPDATE trust_bundles SET is_current = true WHERE bundle_id = $1")
+            .bind(&bundle_id)
+            .execute(&mut *tx)
+            .await
     {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1485,7 +1486,7 @@ pub async fn promote_trust_bundle(
     });
     let payload_hash = payload_sha256(&audit_payload);
 
-    if let Err(err) = sqlx::query(
+    if let Err(_err) = sqlx::query(
         "INSERT INTO audit_events (
             event_id,
             event_type,
@@ -1518,7 +1519,7 @@ pub async fn promote_trust_bundle(
             .into_response();
     }
 
-    if let Err(err) = tx.commit().await {
+    if let Err(_err) = tx.commit().await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
@@ -1665,7 +1666,7 @@ pub async fn create_session_audit_event(
             }),
         )
             .into_response(),
-        Err(err) => (
+        Err(_err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
