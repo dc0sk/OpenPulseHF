@@ -1749,6 +1749,9 @@ fn derive_submitter_identity(req: &SubmissionRequest) -> String {
         "signed_handshake" | "signed_manifest"
     ) {
         if let Some(pubkey) = req.payload.get("pubkey").and_then(|value| value.as_str()) {
+            if pubkey.starts_with("pubkey:") {
+                return pubkey.to_string();
+            }
             return format!("pubkey:{pubkey}");
         }
     }
