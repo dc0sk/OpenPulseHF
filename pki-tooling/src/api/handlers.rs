@@ -252,7 +252,7 @@ pub async fn get_identity(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("database query failed: {err}"),
+                detail: "database query failed".to_string(),
             }),
         )
             .into_response(),
@@ -293,7 +293,7 @@ pub async fn lookup_identity(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("identity lookup failed: {err}"),
+                detail: "identity lookup failed".to_string(),
             }),
         )
             .into_response(),
@@ -394,7 +394,7 @@ pub async fn list_revocations(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("revocation lookup failed: {err}"),
+                detail: "revocation lookup failed".to_string(),
             }),
         )
             .into_response(),
@@ -434,7 +434,7 @@ pub async fn get_current_trust_bundle(State(state): State<AppState>) -> impl Int
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("trust bundle query failed: {err}"),
+                detail: "trust bundle query failed".to_string(),
             }),
         )
             .into_response(),
@@ -476,7 +476,7 @@ pub async fn get_trust_bundle(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("trust bundle query failed: {err}"),
+                detail: "trust bundle query failed".to_string(),
             }),
         )
             .into_response(),
@@ -546,6 +546,7 @@ pub async fn create_submission(
         "payload_kind": payload_kind,
         "has_detached_signature": has_detached_signature
     });
+    let submitter_identity = derive_submitter_identity(&req);
 
     let mut tx = match state.db.begin().await {
         Ok(tx) => tx,
@@ -554,7 +555,7 @@ pub async fn create_submission(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiMessage {
                     status: "db_error",
-                    detail: format!("failed to begin transaction: {err}"),
+                    detail: "failed to begin transaction".to_string(),
                 }),
             )
                 .into_response()
@@ -572,7 +573,7 @@ pub async fn create_submission(
         ) VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(&submission_id)
-    .bind("api:anonymous")
+    .bind(&submitter_identity)
     .bind("pending")
     .bind(&artifact_uri)
     .bind(detached_signature_uri)
@@ -606,7 +607,7 @@ pub async fn create_submission(
             .bind("submission.created")
             .bind("submission")
             .bind(&submission_id)
-            .bind("api:anonymous")
+            .bind(&submitter_identity)
             .bind(request_id)
             .bind(payload_hash)
             .bind(payload)
@@ -618,7 +619,7 @@ pub async fn create_submission(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ApiMessage {
                         status: "db_error",
-                        detail: format!("failed to insert audit event: {err}"),
+                        detail: "failed to insert audit event".to_string(),
                     }),
                 )
                     .into_response();
@@ -629,7 +630,7 @@ pub async fn create_submission(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ApiMessage {
                         status: "db_error",
-                        detail: format!("failed to commit transaction: {err}"),
+                        detail: "failed to commit transaction".to_string(),
                     }),
                 )
                     .into_response();
@@ -649,7 +650,7 @@ pub async fn create_submission(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("failed to persist submission: {err}"),
+                detail: "failed to persist submission".to_string(),
             }),
         )
             .into_response(),
@@ -690,7 +691,7 @@ pub async fn get_submission(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("database query failed: {err}"),
+                detail: "database query failed".to_string(),
             }),
         )
             .into_response(),
@@ -736,7 +737,7 @@ pub async fn get_moderation_queue(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("moderation queue query failed: {err}"),
+                detail: "moderation queue query failed".to_string(),
             }),
         )
             .into_response(),
@@ -785,7 +786,7 @@ pub async fn post_moderation_decision(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiMessage {
                     status: "db_error",
-                    detail: format!("failed to begin transaction: {err}"),
+                    detail: "failed to begin transaction".to_string(),
                 }),
             )
                 .into_response()
@@ -812,7 +813,7 @@ pub async fn post_moderation_decision(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiMessage {
                     status: "db_error",
-                    detail: format!("failed to update submission: {err}"),
+                    detail: "failed to update submission".to_string(),
                 }),
             )
                 .into_response()
@@ -855,7 +856,7 @@ pub async fn post_moderation_decision(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("failed to insert moderation event: {err}"),
+                detail: "failed to insert moderation event".to_string(),
             }),
         )
             .into_response();
@@ -897,7 +898,7 @@ pub async fn post_moderation_decision(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("failed to insert audit event: {err}"),
+                detail: "failed to insert audit event".to_string(),
             }),
         )
             .into_response();
@@ -908,7 +909,7 @@ pub async fn post_moderation_decision(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("failed to commit transaction: {err}"),
+                detail: "failed to commit transaction".to_string(),
             }),
         )
             .into_response();
@@ -942,7 +943,7 @@ pub async fn create_revocation(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ApiMessage {
                         status: "db_error",
-                        detail: format!("failed to read request tracking: {err}"),
+                        detail: "failed to read request tracking".to_string(),
                     }),
                 )
                     .into_response();
@@ -1006,7 +1007,7 @@ pub async fn create_revocation(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiMessage {
                     status: "db_error",
-                    detail: format!("failed to verify record: {err}"),
+                    detail: "failed to verify record".to_string(),
                 }),
             )
                 .into_response();
@@ -1023,7 +1024,7 @@ pub async fn create_revocation(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiMessage {
                     status: "db_error",
-                    detail: format!("failed to begin transaction: {err}"),
+                    detail: "failed to begin transaction".to_string(),
                 }),
             )
                 .into_response()
@@ -1057,7 +1058,7 @@ pub async fn create_revocation(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("failed to insert revocation: {err}"),
+                detail: "failed to insert revocation".to_string(),
             }),
         )
             .into_response();
@@ -1101,7 +1102,7 @@ pub async fn create_revocation(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("failed to insert audit event: {err}"),
+                detail: "failed to insert audit event".to_string(),
             }),
         )
             .into_response();
@@ -1112,7 +1113,7 @@ pub async fn create_revocation(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("failed to commit transaction: {err}"),
+                detail: "failed to commit transaction".to_string(),
             }),
         )
             .into_response();
@@ -1171,7 +1172,7 @@ pub async fn publish_trust_bundle(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ApiMessage {
                         status: "db_error",
-                        detail: format!("failed to read request tracking: {err}"),
+                        detail: "failed to read request tracking".to_string(),
                     }),
                 )
                     .into_response();
@@ -1230,7 +1231,7 @@ pub async fn publish_trust_bundle(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiMessage {
                     status: "db_error",
-                    detail: format!("failed to begin transaction: {err}"),
+                    detail: "failed to begin transaction".to_string(),
                 }),
             )
                 .into_response()
@@ -1268,7 +1269,7 @@ pub async fn publish_trust_bundle(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("failed to insert trust bundle: {err}"),
+                detail: "failed to insert trust bundle".to_string(),
             }),
         )
             .into_response();
@@ -1311,7 +1312,7 @@ pub async fn publish_trust_bundle(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("failed to insert audit event: {err}"),
+                detail: "failed to insert audit event".to_string(),
             }),
         )
             .into_response();
@@ -1322,7 +1323,7 @@ pub async fn publish_trust_bundle(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("failed to commit transaction: {err}"),
+                detail: "failed to commit transaction".to_string(),
             }),
         )
             .into_response();
@@ -1387,7 +1388,7 @@ pub async fn promote_trust_bundle(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ApiMessage {
                         status: "db_error",
-                        detail: format!("failed to read request tracking: {err}"),
+                        detail: "failed to read request tracking".to_string(),
                     }),
                 )
                     .into_response();
@@ -1402,7 +1403,7 @@ pub async fn promote_trust_bundle(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiMessage {
                     status: "db_error",
-                    detail: format!("failed to begin transaction: {err}"),
+                    detail: "failed to begin transaction".to_string(),
                 }),
             )
                 .into_response()
@@ -1421,7 +1422,7 @@ pub async fn promote_trust_bundle(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiMessage {
                     status: "db_error",
-                    detail: format!("failed to query trust bundle: {err}"),
+                    detail: "failed to query trust bundle".to_string(),
                 }),
             )
                 .into_response();
@@ -1456,7 +1457,7 @@ pub async fn promote_trust_bundle(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("failed to clear current trust bundle: {err}"),
+                detail: "failed to clear current trust bundle".to_string(),
             }),
         )
             .into_response();
@@ -1471,7 +1472,7 @@ pub async fn promote_trust_bundle(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("failed to promote trust bundle: {err}"),
+                detail: "failed to promote trust bundle".to_string(),
             }),
         )
             .into_response();
@@ -1511,7 +1512,7 @@ pub async fn promote_trust_bundle(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("failed to insert audit event: {err}"),
+                detail: "failed to insert audit event".to_string(),
             }),
         )
             .into_response();
@@ -1522,7 +1523,7 @@ pub async fn promote_trust_bundle(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("failed to commit transaction: {err}"),
+                detail: "failed to commit transaction".to_string(),
             }),
         )
             .into_response();
@@ -1668,7 +1669,7 @@ pub async fn create_session_audit_event(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiMessage {
                 status: "db_error",
-                detail: format!("failed to insert session audit event: {err}"),
+                detail: "failed to insert session audit event".to_string(),
             }),
         )
             .into_response(),
@@ -1740,6 +1741,22 @@ fn validate_signed_payload_conformance(req: &SubmissionRequest) -> Result<(), St
     }
 
     Ok(())
+}
+
+fn derive_submitter_identity(req: &SubmissionRequest) -> String {
+    if matches!(
+        req.payload_type.trim(),
+        "signed_handshake" | "signed_manifest"
+    ) {
+        if let Some(pubkey) = req.payload.get("pubkey").and_then(|value| value.as_str()) {
+            if pubkey.starts_with("pubkey:") {
+                return pubkey.to_string();
+            }
+            return format!("pubkey:{pubkey}");
+        }
+    }
+
+    "api:anonymous".to_string()
 }
 
 fn payload_sha256(payload: &serde_json::Value) -> String {
@@ -1849,4 +1866,38 @@ async fn track_request(
     .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn derive_submitter_identity_uses_pubkey_for_signed_payloads() {
+        let req = SubmissionRequest {
+            payload_type: "signed_manifest".to_string(),
+            payload: json!({
+                "pubkey": "pubkey:abc123",
+                "session_id": "session-1",
+                "signed_at": "2026-05-26T00:00:00Z",
+                "manifest_hash": "deadbeef",
+                "chunk_count": 3,
+            }),
+            detached_signature: Some("sig".to_string()),
+        };
+
+        assert_eq!(derive_submitter_identity(&req), "pubkey:abc123");
+    }
+
+    #[test]
+    fn derive_submitter_identity_falls_back_to_anonymous_for_unsigned_payloads() {
+        let req = SubmissionRequest {
+            payload_type: "raw_message".to_string(),
+            payload: json!({"message": "hello"}),
+            detached_signature: None,
+        };
+
+        assert_eq!(derive_submitter_identity(&req), "api:anonymous");
+    }
 }
