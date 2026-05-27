@@ -1,8 +1,9 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_dalek::SigningKey;
+use pki_tooling::startup_env::{optional_env, required_env, EnvVarError};
 use pki_tooling::{build_router, AppState};
 use sqlx::postgres::PgPoolOptions;
-use std::{env, net::SocketAddr};
+use std::{error::Error as _, net::SocketAddr};
 use thiserror::Error;
 
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8080";
@@ -21,8 +22,10 @@ enum StartupError {
     InvalidSigningKeyEncoding(#[source] base64::DecodeError),
     #[error("PKI_SIGNING_KEY seed must be exactly 32 bytes")]
     InvalidSigningKeyLength,
-    #[error("PKI_ALLOW_EPHEMERAL_KEY must be one of: true, false, 1, 0, yes, no")]
-    InvalidEphemeralFlag,
+    #[error(
+        "PKI_ALLOW_EPHEMERAL_KEY value '{value}' is invalid; expected one of: true, false, 1, 0, yes, no"
+    )]
+    InvalidEphemeralFlag { value: String },
     #[error("PKI_BIND_ADDR must be a valid socket address")]
     InvalidBindAddr(#[source] std::net::AddrParseError),
     #[error("failed to connect to database")]
@@ -41,6 +44,12 @@ enum StartupError {
 async fn main() {
     if let Err(err) = run().await {
         eprintln!("fatal: {err}");
+        eprintln!("fatal(debug): {err:?}");
+        let mut source = err.source();
+        while let Some(cause) = source {
+            eprintln!("caused by: {cause}");
+            source = cause.source();
+        }
         std::process::exit(1);
     }
 }
@@ -50,18 +59,20 @@ async fn run() -> Result<(), StartupError> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let database_url = required_env("DATABASE_URL")?;
+    let database_url = required_env("DATABASE_URL").map_err(map_env_error)?;
     let db = PgPoolOptions::new()
         .max_connections(10)
         .connect(&database_url)
         .await
         .map_err(StartupError::Database)?;
 
-    let signing_key =
-        load_signing_key(optional_env("PKI_SIGNING_KEY")?, ephemeral_mode_enabled()?)?;
+    let signing_key = load_signing_key(
+        optional_env("PKI_SIGNING_KEY").map_err(map_env_error)?,
+        ephemeral_mode_enabled()?,
+    )?;
 
-    let api_key = required_env("PKI_API_KEY")?;
-    let bind_addr = resolve_bind_addr(optional_env("PKI_BIND_ADDR")?)?;
+    let api_key = required_env("PKI_API_KEY").map_err(map_env_error)?;
+    let bind_addr = resolve_bind_addr(optional_env("PKI_BIND_ADDR").map_err(map_env_error)?)?;
 
     let state = AppState {
         db,
@@ -84,27 +95,16 @@ async fn run() -> Result<(), StartupError> {
         .map_err(StartupError::Serve)
 }
 
-fn required_env(name: &'static str) -> Result<String, StartupError> {
-    optional_env(name)?.ok_or(StartupError::MissingEnv(name))
-}
-
-fn optional_env(name: &'static str) -> Result<Option<String>, StartupError> {
-    match env::var(name) {
-        Ok(value) => {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                Err(StartupError::EmptyEnv(name))
-            } else {
-                Ok(Some(trimmed.to_owned()))
-            }
-        }
-        Err(env::VarError::NotPresent) => Ok(None),
-        Err(env::VarError::NotUnicode(_)) => Err(StartupError::InvalidUnicode(name)),
+fn map_env_error(err: EnvVarError) -> StartupError {
+    match err {
+        EnvVarError::Missing(name) => StartupError::MissingEnv(name),
+        EnvVarError::Empty(name) => StartupError::EmptyEnv(name),
+        EnvVarError::InvalidUnicode(name) => StartupError::InvalidUnicode(name),
     }
 }
 
 fn ephemeral_mode_enabled() -> Result<bool, StartupError> {
-    match optional_env("PKI_ALLOW_EPHEMERAL_KEY")? {
+    match optional_env("PKI_ALLOW_EPHEMERAL_KEY").map_err(map_env_error)? {
         Some(value) => parse_bool_flag(&value),
         None => Ok(false),
     }
@@ -125,7 +125,9 @@ fn parse_bool_flag(value: &str) -> Result<bool, StartupError> {
         return Ok(false);
     }
 
-    Err(StartupError::InvalidEphemeralFlag)
+    Err(StartupError::InvalidEphemeralFlag {
+        value: value.to_string(),
+    })
 }
 
 fn load_signing_key(
@@ -194,7 +196,7 @@ mod tests {
     #[test]
     fn invalid_bool_flag_is_rejected() {
         let err = parse_bool_flag("sometimes").unwrap_err();
-        assert!(matches!(err, StartupError::InvalidEphemeralFlag));
+        assert!(matches!(err, StartupError::InvalidEphemeralFlag { .. }));
     }
 
     #[test]

@@ -1,5 +1,5 @@
+use pki_tooling::startup_env::{required_env, EnvVarError};
 use sqlx::postgres::PgPoolOptions;
-use std::env;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -25,7 +25,7 @@ async fn main() {
 }
 
 async fn run() -> Result<(), MigrateError> {
-    let database_url = required_database_url()?;
+    let database_url = required_env("DATABASE_URL").map_err(map_env_error)?;
     let db = PgPoolOptions::new()
         .max_connections(5)
         .connect(&database_url)
@@ -40,17 +40,13 @@ async fn run() -> Result<(), MigrateError> {
     Ok(())
 }
 
-fn required_database_url() -> Result<String, MigrateError> {
-    match env::var("DATABASE_URL") {
-        Ok(value) => {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                Err(MigrateError::EmptyDatabaseUrl)
-            } else {
-                Ok(trimmed.to_string())
-            }
-        }
-        Err(env::VarError::NotPresent) => Err(MigrateError::MissingDatabaseUrl),
-        Err(env::VarError::NotUnicode(_)) => Err(MigrateError::InvalidDatabaseUrl),
+fn map_env_error(err: EnvVarError) -> MigrateError {
+    match err {
+        EnvVarError::Missing("DATABASE_URL") => MigrateError::MissingDatabaseUrl,
+        EnvVarError::Empty("DATABASE_URL") => MigrateError::EmptyDatabaseUrl,
+        EnvVarError::InvalidUnicode("DATABASE_URL") => MigrateError::InvalidDatabaseUrl,
+        EnvVarError::Missing(_) => MigrateError::MissingDatabaseUrl,
+        EnvVarError::Empty(_) => MigrateError::EmptyDatabaseUrl,
+        EnvVarError::InvalidUnicode(_) => MigrateError::InvalidDatabaseUrl,
     }
 }

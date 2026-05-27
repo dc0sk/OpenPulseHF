@@ -31,7 +31,7 @@ The interfaces below all sit on the safe side of one or both of those boundaries
 | [KISS/AX.25 TCP TNC](#kissax25-tcp-tnc) | KISS framing over TCP | `127.0.0.1:8100` | APRS clients, Direwolf-compatible apps |
 | [Daemon TCP control port](#daemon-control-port-ndjson--tcp) | NDJSON lines | `127.0.0.1:9000` | Events + commands; operator panel |
 | [Daemon WebSocket endpoint](#daemon-websocket-endpoint) | JSON over WebSocket | `127.0.0.1:9001` | Browser / Electron clients |
-| [PKI tooling REST API](#pki-tooling-rest-api) | HTTP/JSON | `127.0.0.1:8080` default via `PKI_BIND_ADDR` | Trust-bundle and key management |
+| [PKI tooling REST API](#pki-tooling-rest-api) | HTTP/JSON | `127.0.0.1:8080` (default; configurable via `PKI_BIND_ADDR`) | Trust-bundle and key management |
 | [CLI subprocess](#cli-subprocess) | stdin / stdout | — | Pipe-based scripting |
 | [Winlink CMS gateway](#winlink-cms-gateway) | B2F over TCP | `cms.winlink.org:8772` | Outbound gateway; no local server |
 
