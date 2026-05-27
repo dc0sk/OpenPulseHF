@@ -110,6 +110,8 @@ enum Role {
 }
 
 #[derive(Debug, Clone)]
+// Some state variants are only constructed along specific negotiation paths
+// and remain intentionally uninstantiated in tests or alternative build slices.
 #[allow(dead_code)]
 enum State {
     Idle,
