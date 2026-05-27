@@ -14,7 +14,7 @@ pub enum VerificationError {
     #[error("signature verification failed")]
     InvalidSignature,
     #[error("failed to canonicalize JSON payload")]
-    CanonicalizationFailed,
+    CanonicalizationFailed(#[source] serde_json::Error),
 }
 
 /// Verify an Ed25519 detached signature over the canonical JSON bytes of `payload`.
@@ -53,7 +53,7 @@ pub fn verify_submission_signature(
     let signature = Signature::from_bytes(&sig_arr);
 
     let canonical =
-        serde_json::to_vec(payload).map_err(|_| VerificationError::CanonicalizationFailed)?;
+        serde_json::to_vec(payload).map_err(VerificationError::CanonicalizationFailed)?;
 
     verifying_key
         .verify(&canonical, &signature)
@@ -100,7 +100,7 @@ pub fn bundle_canonical_body(
         "signing_algorithms": sort_json_value(signing_algorithms.clone()),
         "records": sort_json_value(records.clone()),
     }))
-    .map_err(|_| VerificationError::CanonicalizationFailed)
+    .map_err(VerificationError::CanonicalizationFailed)
 }
 
 /// Verify an Ed25519 bundle signature over `canonical_body`.
