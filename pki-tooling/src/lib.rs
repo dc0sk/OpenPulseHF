@@ -41,6 +41,8 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/trust-bundles/{bundle_id}",
             get(api::handlers::get_trust_bundle),
         )
+        // Submission intake is intentionally public: untrusted/signed payloads are
+        // accepted into moderation and verified by server-side policy before use.
         .route(
             "/api/v1/submissions",
             post(api::handlers::create_submission),
@@ -191,5 +193,19 @@ mod tests {
             status_for(app, req).await,
             StatusCode::INTERNAL_SERVER_ERROR
         );
+    }
+
+    #[tokio::test]
+    async fn submissions_intake_without_token_is_not_auth_blocked() {
+        let app = build_router(test_state());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/submissions")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        // Endpoint is intentionally open; malformed payload should fail validation,
+        // but never with auth failure.
+        assert_ne!(status_for(app, req).await, StatusCode::UNAUTHORIZED);
     }
 }

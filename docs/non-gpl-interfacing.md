@@ -119,17 +119,21 @@ startup. The service also requires `PKI_SIGNING_KEY` as a base64-encoded 32-byte
 for persistent trust-bundle signing; `PKI_ALLOW_EPHEMERAL_KEY=true` is an explicit
 development-only override and should not be used for persistent deployments.
 
+Exception: `POST /api/v1/submissions` is intentionally public intake for moderation
+and signature verification workflows; it does not require the bearer token.
+
 Key endpoints:
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/api/v1/trust-bundles` | None | List published trust bundles |
-| `GET` | `/api/v1/trust-bundles/:id` | None | Fetch a bundle by ID |
+| `GET` | `/api/v1/trust-bundles/{bundle_id}` | None | Fetch a bundle by ID |
 | `GET` | `/api/v1/signing-key` | None | Retrieve the service Ed25519 public key |
+| `POST` | `/api/v1/submissions` | None | Public submission intake (validation/moderation pipeline) |
 | `POST` | `/api/v1/trust-bundles` | Bearer | Publish a new trust bundle |
-| `PATCH` | `/api/v1/trust-bundles/:id/promote` | Bearer | Promote a bundle to active |
+| `PATCH` | `/api/v1/trust-bundles/{bundle_id}/promote` | Bearer | Promote a bundle to active |
 | `POST` | `/api/v1/revocations` | Bearer | Record a key revocation |
-| `POST` | `/api/v1/moderation/:id/decision` | Bearer | Post a moderation outcome |
+| `POST` | `/api/v1/moderation/{submission_id}/decision` | Bearer | Post a moderation outcome |
 | `POST` | `/api/v1/session-audit-events` | Bearer | Submit an audit event |
 
 Any HTTP client library in any language can consume this API.  Response bodies are

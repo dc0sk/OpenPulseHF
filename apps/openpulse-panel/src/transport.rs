@@ -31,6 +31,9 @@ pub trait Transport: Send {
     /// connection has broken.
     fn send_text(&mut self, s: &str) -> bool;
     /// Send raw binary data (e.g. a spectrum subscription payload).
+    /// Kept on the trait because both native TCP and WASM transports expose
+    /// the same spectrum frame API, even though some call sites only exercise
+    /// the text path in a given build.
     #[allow(dead_code)]
     fn send_binary(&mut self, b: &[u8]) -> bool;
     /// Non-blocking poll for the next inbound message.  Returns `None` when no

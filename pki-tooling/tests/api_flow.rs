@@ -2971,7 +2971,8 @@ async fn published_bundle_signature_is_verifiable() {
         issuer_instance_id,
         signing_algorithms,
         records,
-    );
+    )
+    .unwrap();
     let pubkey_bytes: [u8; 32] = STANDARD
         .decode(service_pubkey_b64)
         .unwrap()
@@ -3115,7 +3116,8 @@ async fn promoted_bundle_signature_survives_promotion() {
         issuer_instance_id,
         signing_algorithms,
         records,
-    );
+    )
+    .unwrap();
     let pubkey_bytes: [u8; 32] = STANDARD
         .decode(service_pubkey_b64)
         .unwrap()

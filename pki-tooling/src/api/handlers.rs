@@ -1055,13 +1055,26 @@ pub async fn publish_trust_bundle(
 
     let bundle_id = Uuid::new_v4().to_string();
 
-    let canonical = crate::verification::bundle_canonical_body(
+    let canonical = match crate::verification::bundle_canonical_body(
         &bundle_id,
         &req.schema_version,
         &req.issuer_instance_id,
         &req.signing_algorithms,
         &req.records,
-    );
+    ) {
+        Ok(canonical) => canonical,
+        Err(err) => {
+            tracing::error!(error = ?err, "failed to canonicalize trust bundle payload");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiMessage {
+                    status: "internal_error",
+                    detail: "failed to prepare trust bundle signature payload".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
     let sig = state.signing_key.sign(&canonical);
     let bundle_signature = STANDARD.encode(sig.to_bytes());
     let service_pubkey = STANDARD.encode(state.signing_key.verifying_key().to_bytes());

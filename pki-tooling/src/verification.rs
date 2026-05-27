@@ -13,6 +13,8 @@ pub enum VerificationError {
     InvalidSignatureEncoding,
     #[error("signature verification failed")]
     InvalidSignature,
+    #[error("failed to canonicalize JSON payload")]
+    CanonicalizationFailed(#[source] serde_json::Error),
 }
 
 /// Verify an Ed25519 detached signature over the canonical JSON bytes of `payload`.
@@ -50,7 +52,8 @@ pub fn verify_submission_signature(
         .map_err(|_| VerificationError::InvalidSignatureEncoding)?;
     let signature = Signature::from_bytes(&sig_arr);
 
-    let canonical = serde_json::to_vec(payload).expect("serde_json::Value is always serializable");
+    let canonical =
+        serde_json::to_vec(payload).map_err(VerificationError::CanonicalizationFailed)?;
 
     verifying_key
         .verify(&canonical, &signature)
@@ -89,7 +92,7 @@ pub fn bundle_canonical_body(
     issuer_instance_id: &str,
     signing_algorithms: &serde_json::Value,
     records: &serde_json::Value,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, VerificationError> {
     serde_json::to_vec(&serde_json::json!({
         "bundle_id": bundle_id,
         "schema_version": schema_version,
@@ -97,7 +100,7 @@ pub fn bundle_canonical_body(
         "signing_algorithms": sort_json_value(signing_algorithms.clone()),
         "records": sort_json_value(records.clone()),
     }))
-    .expect("serde_json::Value is always serializable")
+    .map_err(VerificationError::CanonicalizationFailed)
 }
 
 /// Verify an Ed25519 bundle signature over `canonical_body`.
@@ -193,8 +196,8 @@ mod tests {
     fn bundle_canonical_body_is_deterministic() {
         let records = json!([{"record_id": "r1"}]);
         let algs = json!(["ed25519"]);
-        let body1 = bundle_canonical_body("bundle-1", "1.0", "issuer-a", &algs, &records);
-        let body2 = bundle_canonical_body("bundle-1", "1.0", "issuer-a", &algs, &records);
+        let body1 = bundle_canonical_body("bundle-1", "1.0", "issuer-a", &algs, &records).unwrap();
+        let body2 = bundle_canonical_body("bundle-1", "1.0", "issuer-a", &algs, &records).unwrap();
         assert_eq!(body1, body2);
     }
 
@@ -206,7 +209,7 @@ mod tests {
 
         let records = json!([]);
         let algs = json!(["ed25519"]);
-        let canonical = bundle_canonical_body("b-1", "1.0", "issuer-x", &algs, &records);
+        let canonical = bundle_canonical_body("b-1", "1.0", "issuer-x", &algs, &records).unwrap();
 
         let sig: Signature = sk.sign(&canonical);
         let sig_b64 = STANDARD.encode(sig.to_bytes());
@@ -220,8 +223,8 @@ mod tests {
         let algs = json!(["ed25519"]);
         let records_original = json!([{"z_field": 1, "a_field": 2}]);
         let records_reordered = json!([{"a_field": 2, "z_field": 1}]);
-        let body1 = bundle_canonical_body("b", "1.0", "issuer", &algs, &records_original);
-        let body2 = bundle_canonical_body("b", "1.0", "issuer", &algs, &records_reordered);
+        let body1 = bundle_canonical_body("b", "1.0", "issuer", &algs, &records_original).unwrap();
+        let body2 = bundle_canonical_body("b", "1.0", "issuer", &algs, &records_reordered).unwrap();
         assert_eq!(body1, body2, "canonical body must be key-order independent");
     }
 
@@ -233,13 +236,13 @@ mod tests {
 
         let records = json!([]);
         let algs = json!(["ed25519"]);
-        let canonical = bundle_canonical_body("b-1", "1.0", "issuer-x", &algs, &records);
+        let canonical = bundle_canonical_body("b-1", "1.0", "issuer-x", &algs, &records).unwrap();
 
         let sig: Signature = sk.sign(&canonical);
         let sig_b64 = STANDARD.encode(sig.to_bytes());
 
         // Different content — verification must fail
-        let other = bundle_canonical_body("b-2", "1.0", "issuer-x", &algs, &records);
+        let other = bundle_canonical_body("b-2", "1.0", "issuer-x", &algs, &records).unwrap();
         assert!(verify_bundle_signature(&other, &sig_b64, &pubkey_bytes).is_err());
     }
 }
