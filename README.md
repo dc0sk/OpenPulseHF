@@ -249,6 +249,9 @@ detailed crossfade and ISI analysis.
 ## Quick start
 
 ```bash
+# Toolchain preflight (required: rustc >= 1.94.0)
+./scripts/check-toolchain.sh
+
 # Build (requires libasound2-dev on Linux for the CPAL audio feature)
 cargo build --workspace
 
@@ -264,6 +267,13 @@ cargo run -p openpulse-cli --no-default-features -- --backend loopback --log err
 
 # Automated mode × channel test matrix (outputs to docs/test-reports/)
 cargo run -p openpulse-testmatrix --no-default-features
+```
+
+If you are temporarily pinned to an older Rust toolchain, run the fallback core gates to keep CI-relevant coverage for all non-PKI crates:
+
+```bash
+cargo clippy --workspace --exclude pki-tooling --no-default-features -- -D warnings
+cargo test --workspace --exclude pki-tooling --no-default-features
 ```
 
 The `--no-default-features` flag disables the CPAL audio backend. All tests must
