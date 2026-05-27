@@ -31,7 +31,7 @@ The interfaces below all sit on the safe side of one or both of those boundaries
 | [KISS/AX.25 TCP TNC](#kissax25-tcp-tnc) | KISS framing over TCP | `127.0.0.1:8100` | APRS clients, Direwolf-compatible apps |
 | [Daemon TCP control port](#daemon-control-port-ndjson--tcp) | NDJSON lines | `127.0.0.1:9000` | Events + commands; operator panel |
 | [Daemon WebSocket endpoint](#daemon-websocket-endpoint) | JSON over WebSocket | `127.0.0.1:9001` | Browser / Electron clients |
-| [PKI tooling REST API](#pki-tooling-rest-api) | HTTP/JSON | `127.0.0.1:8080` | Trust-bundle and key management |
+| [PKI tooling REST API](#pki-tooling-rest-api) | HTTP/JSON | `127.0.0.1:8080` (default; configurable via `PKI_BIND_ADDR`) | Trust-bundle and key management |
 | [CLI subprocess](#cli-subprocess) | stdin / stdout | — | Pipe-based scripting |
 | [Winlink CMS gateway](#winlink-cms-gateway) | B2F over TCP | `cms.winlink.org:8772` | Outbound gateway; no local server |
 
@@ -111,10 +111,13 @@ operator panel and is suitable for browser or Electron clients.
 
 ## PKI tooling REST API
 
-`pki-tooling` exposes an HTTP/JSON REST API (default `127.0.0.1:8080`).  Read-only
-endpoints require no authentication.  Mutating endpoints require an
-`Authorization: Bearer <token>` header whose value matches the `PKI_API_KEY` environment
-variable set at server startup.
+`pki-tooling` exposes an HTTP/JSON REST API. By default it binds to `127.0.0.1:8080`,
+and operators can override that with `PKI_BIND_ADDR`. Read-only endpoints require no
+authentication. Mutating endpoints require an `Authorization: Bearer <token>` header
+whose value matches the non-empty `PKI_API_KEY` environment variable set at server
+startup. The service also requires `PKI_SIGNING_KEY` as a base64-encoded 32-byte seed
+for persistent trust-bundle signing; `PKI_ALLOW_EPHEMERAL_KEY=true` is an explicit
+development-only override and should not be used for persistent deployments.
 
 Key endpoints:
 

@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/pki-tooling-operations-runbook.md
 status: living
-last_updated: 2026-04-24
+last_updated: 2026-05-27
 ---
 
 # PKI Tooling Operations Runbook
@@ -29,6 +29,14 @@ This runbook defines day-to-day operational procedures for the separate PKI tool
 - Canonical database
 - Submission artifact storage
 - Audit event store
+
+## Startup configuration requirements
+
+- `DATABASE_URL` must be set and reachable before startup.
+- `PKI_API_KEY` must be set to a non-empty bearer token for mutating endpoints.
+- `PKI_SIGNING_KEY` should be set to a base64-encoded 32-byte Ed25519 seed for all persistent environments.
+- `PKI_ALLOW_EPHEMERAL_KEY=true` is a development-only override and must remain disabled in persistent or production-like environments.
+- `PKI_BIND_ADDR` is optional and defaults to `127.0.0.1:8080`.
 
 ## Operational SLO targets
 
