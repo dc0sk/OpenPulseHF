@@ -14,6 +14,7 @@ Canonical documentation lives in the files listed below.
 ### CLI and user-facing behavior
 
 - [docs/openpulse-manual.md](openpulse-manual.md): complete operator, integration, and technical manual (11 chapters)
+- [docs/openpulse-manual.md#212-pki-tooling-service-quick-start](openpulse-manual.md#212-pki-tooling-service-quick-start): PKI tooling quick-start with startup and API examples
 - [docs/cli-guide.md](cli-guide.md): CLI usage and options
 - [docs/cli-mode-advisor-guide.md](cli-mode-advisor-guide.md): mode advisor workflow
 - [docs/cli-ux-identity-trust-diagnostics.md](cli-ux-identity-trust-diagnostics.md): identity/trust diagnostics UX and exit codes
