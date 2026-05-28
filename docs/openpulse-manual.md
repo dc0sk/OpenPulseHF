@@ -30,6 +30,7 @@ Safety and compliance note:
 9. [Chapter 9: Support and Funding](#chapter-9-support-and-funding)
 10. [Chapter 10: Glossary and References](#chapter-10-glossary-and-references)
 11. [Chapter 11: Compliance Notes](#chapter-11-compliance-notes)
+12. [Chapter 12: Configuration File Overview](#chapter-12-configuration-file-overview)
 
 ---
 
@@ -261,10 +262,79 @@ Reference material:
 ### 2.11 CI-Compatible Validation Path
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --no-default-features -- -D warnings
+cargo build --workspace --no-default-features
 cargo test --workspace --no-default-features
 ```
+
+### 2.12 PKI Tooling Service Quick Start
+
+Use this subchapter when you need a local trust-bundle service for identity, moderation,
+and trust publication workflows.
+
+Startup requirements:
+- `DATABASE_URL` must point to a reachable PostgreSQL instance.
+- `PKI_API_KEY` must be non-empty for mutating endpoints.
+- `PKI_SIGNING_KEY` should be a base64-encoded 32-byte Ed25519 seed for persistent deployments.
+- `PKI_ALLOW_EPHEMERAL_KEY=true` is development-only and should not be used for persistent trust history.
+- `PKI_BIND_ADDR` is optional and defaults to `127.0.0.1:8080`.
+
+Example startup:
+
+```bash
+export DATABASE_URL='postgres://openpulse:openpulse@127.0.0.1:5432/openpulse_pki'
+export PKI_API_KEY='replace-with-strong-token'
+export PKI_SIGNING_KEY='replace-with-base64-32-byte-seed'
+export PKI_BIND_ADDR='127.0.0.1:8080'
+
+pki-tooling
+```
+
+Example read-only checks (no bearer token required):
+
+```bash
+curl -s http://127.0.0.1:8080/healthz | jq .
+curl -s http://127.0.0.1:8080/api/v1/signing-key | jq .
+curl -s http://127.0.0.1:8080/api/v1/trust-bundles/current | jq .
+```
+
+Example public submission intake (intentionally unauthenticated endpoint):
+
+```bash
+curl -sS -X POST http://127.0.0.1:8080/api/v1/submissions \
+	-H 'Content-Type: application/json' \
+	-d '{
+		"payload_type": "identity-assertion",
+		"payload": {
+			"callsign": "N0CALL",
+			"pubkey": "BASE64_ED25519_PUBKEY"
+		}
+	}' | jq .
+```
+
+Example trust-bundle publication and promotion (requires bearer token):
+
+```bash
+bundle_id=$(curl -sS -X POST http://127.0.0.1:8080/api/v1/trust-bundles \
+	-H "Authorization: Bearer ${PKI_API_KEY}" \
+	-H 'Content-Type: application/json' \
+	-d '{
+		"schema_version": "1.0",
+		"generated_at": "2026-05-28T00:00:00Z",
+		"issuer_instance_id": "manual-example",
+		"signing_algorithms": ["ed25519"],
+		"records": []
+	}' | jq -r '.bundle_id')
+
+curl -sS -X PATCH "http://127.0.0.1:8080/api/v1/trust-bundles/${bundle_id}/promote" \
+	-H "Authorization: Bearer ${PKI_API_KEY}" \
+	-H 'Content-Type: application/json' \
+	-d '{"reason":"manual quickstart"}' | jq .
+```
+
+For full endpoint contracts and operational guidance, see:
+- [docs/non-gpl-interfacing.md](non-gpl-interfacing.md#pki-tooling-rest-api)
+- [docs/dev/pki-tooling-api.md](dev/pki-tooling-api.md)
+- [docs/dev/pki-tooling-operations-runbook.md](dev/pki-tooling-operations-runbook.md)
 
 ---
 
@@ -663,8 +733,7 @@ Covered in implementation and docs:
 Primary CI-compatible gate:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --no-default-features -- -D warnings
+cargo build --workspace --no-default-features
 cargo test --workspace --no-default-features
 ```
 
@@ -742,11 +811,9 @@ Recommended path for new plugin work:
 ### 7.4 Example New Plugin Bring-Up
 
 ```bash
-cd plugins
-cargo new mymode-plugin --lib
-# implement trait + tests
+cp -r plugins/bpsk plugins/mymode-plugin
+# rename crate metadata in plugins/mymode-plugin/Cargo.toml, then implement trait + tests
 cargo test -p mymode-plugin
-cargo clippy -p mymode-plugin -- -D warnings
 ```
 
 Then wire into runtime registration in the target binary or engine wrapper.
@@ -942,6 +1009,60 @@ This chapter summarizes regulatory and operational compliance touchpoints for Op
 - Use loopback and simulated channel paths before any on-air tests.
 - Gate field operation behind explicit trust policy configuration and reproducible diagnostics capture.
 - Document station-specific SOPs for identification cadence, fallback behavior, and emergency stop procedures.
+
+---
+
+## Chapter 12: Configuration File Overview
+
+This chapter summarizes operator-facing configuration files used across OpenPulseHF.
+All examples in this chapter are stored in `docs/config/` for copy/edit workflows.
+
+### 12.1 OpenPulse Runtime Config (`config.toml`)
+
+Purpose:
+- Defines station, modem, relay, mesh, QSY, and daemon settings consumed by OpenPulse binaries.
+
+Default location:
+- `~/.config/openpulse/config.toml`
+
+Example file:
+- [docs/config/openpulse.config.toml](config/openpulse.config.toml)
+
+### 12.2 PKI Tooling Environment File
+
+Purpose:
+- Provides startup environment for the `pki-tooling` service (database, API key, signing key, bind address).
+
+Typical usage:
+- Source in shell before launching `pki-tooling`.
+
+Example file:
+- [docs/config/pki-tooling.env.example](config/pki-tooling.env.example)
+
+### 12.3 On-Air Station Pair Script Config
+
+Purpose:
+- Configures station A/B connection, callsigns, PTT backend, and optional audio/rigctld parameters for on-air scripts.
+
+Example file:
+- [docs/config/onair-stations.example.sh](config/onair-stations.example.sh)
+
+### 12.4 Radio CAT Rig Definition Files
+
+Purpose:
+- Defines model-specific serial/CAT command templates for the `generic` rig backend.
+
+Example files:
+- [docs/config/rig-icom-ic7300.toml](config/rig-icom-ic7300.toml)
+- [docs/config/rig-yaesu-ft817.toml](config/rig-yaesu-ft817.toml)
+
+### 12.5 OpenPulse Panel Trunk Config
+
+Purpose:
+- Configures local host/port and optional WebSocket proxy for the `openpulse-panel` web UI.
+
+Example file:
+- [docs/config/openpulse-panel.Trunk.toml](config/openpulse-panel.Trunk.toml)
 
 ---
 

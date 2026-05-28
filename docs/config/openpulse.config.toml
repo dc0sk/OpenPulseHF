@@ -1,0 +1,84 @@
+# Example OpenPulse runtime config.
+# Typical location: ~/.config/openpulse/config.toml
+
+[station]
+callsign = "N0CALL"
+grid_square = "AA00"
+
+[audio]
+backend = "default"
+tx_limiter_threshold = 0.0
+
+[modem]
+mode = "BPSK250"
+ptt_backend = "none"
+
+[radio]
+rigctld_addr = "127.0.0.1:4532"
+
+[radio.rig_a]
+rigctld_addr = "127.0.0.1:4532"
+backend = "rigctld"
+serial_port = ""
+rig_file = ""
+
+# Uncomment for cross-band repeater operation.
+# [radio.rig_b]
+# rigctld_addr = "127.0.0.1:4533"
+# backend = "rigctld"
+# serial_port = ""
+# rig_file = ""
+
+[repeater]
+enabled = false
+mode = "BPSK250"
+tx_hang_ms = 500
+full_duplex = false
+
+[ardop]
+bind_addr = "127.0.0.1"
+cmd_port = 8515
+data_port = 8516
+
+[kiss]
+bind_addr = "127.0.0.1"
+port = 8100
+
+[logging]
+level = "info"
+
+[relay]
+enabled = false
+max_hops = 3
+store_forward_ttl_s = 300
+deny_list = []
+
+[trust]
+store_path = ""
+
+[mesh]
+enabled = false
+max_hops = 3
+relay_policy = "balanced"
+store_forward_ttl_s = 300
+beacon_interval_s = 60
+peer_cache_capacity = 256
+peer_cache_ttl_s = 3600
+
+[qsy]
+enabled = false
+allow_trustlevels = ["verified", "psk_verified"]
+bandplan_mode = "ham-iaru-r1"
+bandplan_awareness_enabled = true
+enforce_max_channel_width = true
+enforce_segment_conventions = true
+candidate_freqs_hz = [7074000, 7076000, 7104000]
+scan_dwell_ms = 500
+switchover_offset_s = 5
+
+[daemon]
+tcp_bind_addr = "127.0.0.1"
+tcp_port = 9000
+websocket_bind_addr = "127.0.0.1"
+websocket_port = 9001
+receive_tick_ms = 50
