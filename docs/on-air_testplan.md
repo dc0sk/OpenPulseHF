@@ -115,46 +115,115 @@ This command writes all artifacts under `docs/dev/test-reports/` by default.
 
 ## 4. Station configuration
 
-Generate a base config file:
+The first on-air pass uses two nearby stations with low RF power and inline
+attenuation so the pair can be tested safely while still validating the full RF
+path over the air.
+
+Use the example configs under [docs/config/](config/README.md):
+
+- [docs/config/onair-tx500-kx3.example.sh](config/onair-tx500-kx3.example.sh)
+- [docs/config/openpulse-tx500.toml](config/openpulse-tx500.toml)
+- [docs/config/openpulse-kx3.toml](config/openpulse-kx3.toml)
+
+Generate a fresh runtime config on each station only if you want to start from the
+binary defaults:
 
 ```bash
 ./target/release/openpulse config init > ~/.config/openpulse/config.toml
 ```
 
-Edit `~/.config/openpulse/config.toml` on each station:
+#### 4.1 Lab599 TX500 on Raspberry Pi via Digirig
+
+This station is the Raspberry Pi side of the pair. Keep the transceiver in low-power
+mode for the first run, connect the Digirig for audio/PTT, and insert external
+attenuation between the two radios.
+
+Example runtime config:
 
 ```toml
 [station]
-callsign = "YOUR_CALLSIGN"   # e.g. "K1ABC"
-grid_square = "FN42"
+callsign = "TX500TEST"
+grid_square = "AA00"
 
 [audio]
-# "default" uses cpal when compiled in, loopback otherwise.
-# Set to "cpal" to require real hardware or "loopback" for software-only testing.
-backend = "default"
+backend = "cpal"
 
 [modem]
-mode = "BPSK250"             # starting mode; override per test
-ptt_backend = "rts"          # rts | dtr | vox | rigctld | none
+mode = "BPSK250"
+ptt_backend = "rigctld"
+
+[radio]
+rigctld_addr = "127.0.0.1:4532"
+
+[radio.rig_a]
+rigctld_addr = "127.0.0.1:4532"
 
 [logging]
-level = "debug"              # use debug during testing for full protocol trace
+level = "debug"
 ```
 
-PTT wiring examples:
+#### 4.2 Elecraft KX3 on Linux laptop via Digirig
+
+This station is the Linux laptop side of the pair. Use the Digirig for audio/PTT,
+keep the RF output low for the first pass, and apply the same external attenuation
+between both rigs.
+
+Example runtime config:
 
 ```toml
-# Serial cable — RTS line asserts PTT
-ptt_backend = "rts"
+[station]
+callsign = "KX3TEST"
+grid_square = "AA00"
 
-# VOX (transceiver detects audio)
-ptt_backend = "vox"
+[audio]
+backend = "cpal"
 
-# Hamlib rigctld (start rigctld separately before the TNC)
+[modem]
+mode = "BPSK250"
 ptt_backend = "rigctld"
-# Also set in [modem] section:
-# rigctld_addr = "127.0.0.1:4532"
+
+[radio]
+rigctld_addr = "127.0.0.1:4532"
+
+[radio.rig_a]
+rigctld_addr = "127.0.0.1:4532"
+
+[logging]
+level = "debug"
 ```
+
+#### 4.3 SSH setup and supervision
+
+Load your SSH keys first and confirm the agent is available:
+
+```bash
+ssh-add -l
+```
+
+Then source the combined station profile and deploy the example configs:
+
+```bash
+source docs/config/onair-tx500-kx3.example.sh
+./scripts/onair-tx500-kx3-supervisor.sh setup
+```
+
+To manage or inspect both hosts:
+
+```bash
+./scripts/onair-tx500-kx3-supervisor.sh manage status
+./scripts/onair-tx500-kx3-supervisor.sh manage cleanup
+```
+
+Run the full test set end-to-end over SSH, including the existing quick and full
+matrix cases, with automatic evidence/report generation:
+
+```bash
+./scripts/onair-tx500-kx3-supervisor.sh supervise --all --label tx500-kx3-first-run
+```
+
+The first pass should use the closest safe spacing, low power, and inline attenuation.
+Once that passes, remove the extra attenuation only if you need to characterize the
+link margin at a less constrained setup.
 
 ---
 
