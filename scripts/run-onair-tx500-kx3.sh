@@ -234,22 +234,18 @@ tune_tx500_pi() {
 # ── Binary build ──────────────────────────────────────────────────────────────
 build_local() {
     echo "==> Building cpal-enabled binaries (local / KX3)"
-    cargo build --release \
-        -p openpulse-cli \
-        -p openpulse-ardop \
-        -p openpulse-kiss \
-        --features cpal-backend 2>&1 | tail -5
+    cargo build --release -p openpulse-cli --features cpal-backend 2>&1 | tail -3
+    cargo build --release -p openpulse-ardop --features cpal 2>&1 | tail -3
+    cargo build --release -p openpulse-kiss --features cpal 2>&1 | tail -3
     echo "  [build] local binaries ready in ${LOCAL_BIN_DIR}"
 }
 
 build_pi() {
     echo "==> Building cpal-enabled binaries on Pi (TX500)"
     ssh_pi "cd ${PI_REPO_DIR} && \
-        cargo build --release \
-            -p openpulse-cli \
-            -p openpulse-ardop \
-            -p openpulse-kiss \
-            --features cpal-backend 2>&1 | tail -5 && \
+        cargo build --release -p openpulse-cli --features cpal-backend 2>&1 | tail -3 && \
+        cargo build --release -p openpulse-ardop --features cpal 2>&1 | tail -3 && \
+        cargo build --release -p openpulse-kiss --features cpal 2>&1 | tail -3 && \
         echo '[build] Pi binaries ready'"
 }
 
@@ -266,11 +262,11 @@ status_local() {
 status_pi() {
     echo "── Pi (TX500 / ISS) ─────────────────────────────────────────────────────────"
     ssh_pi "
-        printf '  openpulse:       '; test -x \${HOME}/git/OpenPulseHF/target/release/openpulse && echo present || echo MISSING
-        printf '  openpulse-tnc:   '; test -x \${HOME}/git/OpenPulseHF/target/release/openpulse-tnc && echo present || echo MISSING
+        printf '  openpulse:       '; test -x ${PI_REPO_DIR}/target/release/openpulse && echo present || echo MISSING
+        printf '  openpulse-tnc:   '; test -x ${PI_REPO_DIR}/target/release/openpulse-tnc && echo present || echo MISSING
         printf '  rigctld running: '; pgrep -f 'rigctld.*${TX500_CAT_PORT}' >/dev/null 2>&1 && echo yes || echo no
         printf '  TX500 serial:    '; test -e '${TX500_CAT_PORT}' && echo present || echo MISSING
-        printf '  log dir:         '; test -d \${HOME}/var/log/openpulse/on-air && echo present || echo missing
+        printf '  log dir:         '; test -d ${PI_LOG_DIR} && echo present || echo missing
     " || echo "  (SSH connection failed)"
 }
 
@@ -280,7 +276,7 @@ cleanup_all() {
     stop_rigctld_local
     stop_rigctld_pi
     pkill -f "${LOCAL_BIN_DIR}/openpulse-tnc" 2>/dev/null || true
-    ssh_pi "pkill -f 'openpulse-tnc\|openpulse send\|openpulse-kisstnc' 2>/dev/null || true" || true
+    ssh_pi "pkill -f 'openpulse-tnc|openpulse send|openpulse-kisstnc' 2>/dev/null || true" || true
     echo "  done"
 }
 
@@ -297,12 +293,12 @@ setup() {
        [[ ! -x "${LOCAL_BIN_DIR}/openpulse-tnc" ]]; then
         build_local
     else
-        echo "==> Local binaries already present (use --build to force rebuild)"
+        echo "==> Local binaries already present"
     fi
 
     # Check/build Pi binaries
-    PI_HAVE_BINS=$(ssh_pi "test -x \${HOME}/git/OpenPulseHF/target/release/openpulse && \
-        test -x \${HOME}/git/OpenPulseHF/target/release/openpulse-tnc && echo yes || echo no")
+    PI_HAVE_BINS=$(ssh_pi "test -x ${PI_REPO_DIR}/target/release/openpulse && \
+        test -x ${PI_REPO_DIR}/target/release/openpulse-tnc && echo yes || echo no")
     if [[ "$PI_HAVE_BINS" != "yes" ]]; then
         build_pi
     else
@@ -505,13 +501,12 @@ JSON
 }
 
 # ── Main ─────────────────────────────────────────────────────────────────────
-trap 'cleanup_all' EXIT
-
 case "$ACTION" in
     setup)
         setup
         ;;
     run)
+        trap 'cleanup_all' EXIT
         check_ssh_agent
         start_rigctld_local
         start_rigctld_pi
@@ -522,6 +517,7 @@ case "$ACTION" in
         stop_rigctld_pi
         ;;
     supervise)
+        trap 'cleanup_all' EXIT
         check_ssh_agent
         setup
         run_matrix

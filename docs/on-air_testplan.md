@@ -214,10 +214,10 @@ tunes both rigs to `TEST_FREQ_HZ`, runs the test matrix, and writes a JSON repor
 plus evidence bundle.  Individual sub-commands are also available:
 
 ```bash
-./scripts/run-onair-tx500-kx3.sh setup             # build + preflight only
-./scripts/run-onair-tx500-kx3.sh run --full         # test matrix only (rigctld already up)
-./scripts/run-onair-tx500-kx3.sh status             # check both stations
-./scripts/run-onair-tx500-kx3.sh cleanup            # kill rigctld + TNC processes
+./scripts/run-onair-tx500-kx3.sh setup             # build binaries, start rigctld, tune rigs
+./scripts/run-onair-tx500-kx3.sh run --full         # start rigctld, run full matrix, write report
+./scripts/run-onair-tx500-kx3.sh status             # check both stations without side effects
+./scripts/run-onair-tx500-kx3.sh cleanup            # kill rigctld and TNC processes
 ```
 
 **Two-remote-SSH variant** (both stations on remote hosts):

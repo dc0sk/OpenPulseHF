@@ -24,7 +24,7 @@ export PI_SSH="pi@raspberrypi.local"
 export SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=30"
 
 # ── Callsigns ─────────────────────────────────────────────────────────────────
-# FILL IN: your licenced callsigns
+# FILL IN: your licensed callsigns
 export CALLSIGN_A="N0CALL"      # TX500 on Pi    — ISS (initiating)
 export CALLSIGN_B="N0CALL"      # KX3 on laptop  — IRS (responding)
 export GRID_A="AA00"
