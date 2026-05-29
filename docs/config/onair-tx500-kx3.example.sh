@@ -15,6 +15,11 @@ export SSH_OPTS="-o BatchMode=yes"
 export CALLSIGN_A="TX500TEST"
 export CALLSIGN_B="KX3TEST"
 
+# Keep matrix runner PTT args aligned with station runtime configs.
+export PTT_BACKEND="rigctld"
+export RIGCTLD_ADDR_A="127.0.0.1:4532"
+export RIGCTLD_ADDR_B="127.0.0.1:4532"
+
 export TX500_CONFIG_FILE="docs/config/openpulse-tx500.toml"
 export KX3_CONFIG_FILE="docs/config/openpulse-kx3.toml"
 

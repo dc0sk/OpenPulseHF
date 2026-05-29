@@ -113,7 +113,7 @@ This command writes all artifacts under `docs/dev/test-reports/` by default.
 
 ---
 
-### 4. Station configuration
+## 4. Station configuration
 
 The first on-air pass uses two nearby stations with low RF power and inline
 attenuation so the pair can be tested safely while still validating the full RF
@@ -150,7 +150,7 @@ backend = "cpal"
 
 [modem]
 mode = "BPSK250"
-ptt_backend = "rts"
+ptt_backend = "rigctld"
 
 [radio]
 rigctld_addr = "127.0.0.1:4532"
@@ -180,7 +180,7 @@ backend = "cpal"
 
 [modem]
 mode = "BPSK250"
-ptt_backend = "rts"
+ptt_backend = "rigctld"
 
 [radio]
 rigctld_addr = "127.0.0.1:4532"

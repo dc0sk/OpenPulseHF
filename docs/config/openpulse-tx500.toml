@@ -15,7 +15,7 @@ backend = "cpal"
 
 [modem]
 mode = "BPSK250"
-ptt_backend = "rts"
+ptt_backend = "rigctld"
 
 [radio]
 rigctld_addr = "127.0.0.1:4532"

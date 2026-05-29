@@ -172,7 +172,7 @@ check_remote_state() {
 
 cleanup_remote() {
     local host="$1"
-    ssh ${SSH_OPTS} "$host" "pkill -f openpulse-tnc || true; pkill -f openpulse-kisstnc || true; pkill -f openpulse-gateway || true; pkill -f openpulse || true"
+    ssh ${SSH_OPTS} "$host" "pkill -f openpulse-tnc || true; pkill -f openpulse-kisstnc || true; pkill -f openpulse-gateway || true"
 }
 
 run_flow() {
