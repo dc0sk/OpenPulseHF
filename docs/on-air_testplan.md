@@ -121,7 +121,8 @@ path over the air.
 
 Use the example configs under [docs/config/](config/README.md):
 
-- [docs/config/onair-tx500-kx3.example.sh](config/onair-tx500-kx3.example.sh)
+- [docs/config/onair-tx500-kx3.example.sh](config/onair-tx500-kx3.example.sh) — two-remote-SSH variant
+- [docs/config/onair-tx500-kx3-local.example.sh](config/onair-tx500-kx3-local.example.sh) — KX3 local + TX500 on Pi via SSH
 - [docs/config/openpulse-tx500.toml](config/openpulse-tx500.toml)
 - [docs/config/openpulse-kx3.toml](config/openpulse-kx3.toml)
 
@@ -200,24 +201,29 @@ Load your SSH keys first and confirm the agent is available:
 ssh-add -l
 ```
 
-Then source the combined station profile and deploy the example configs:
+**KX3 local + TX500 on Raspberry Pi (the primary test setup):**
+
+```bash
+# Fill in PI_SSH, callsigns, and serial ports, then:
+source docs/config/onair-tx500-kx3-local.example.sh
+./scripts/run-onair-tx500-kx3.sh supervise --quick --label tx500-kx3-first-run
+```
+
+This single command builds cpal-enabled binaries on both machines, starts rigctld,
+tunes both rigs to `TEST_FREQ_HZ`, runs the test matrix, and writes a JSON report
+plus evidence bundle.  Individual sub-commands are also available:
+
+```bash
+./scripts/run-onair-tx500-kx3.sh setup             # build + preflight only
+./scripts/run-onair-tx500-kx3.sh run --full         # test matrix only (rigctld already up)
+./scripts/run-onair-tx500-kx3.sh status             # check both stations
+./scripts/run-onair-tx500-kx3.sh cleanup            # kill rigctld + TNC processes
+```
+
+**Two-remote-SSH variant** (both stations on remote hosts):
 
 ```bash
 source docs/config/onair-tx500-kx3.example.sh
-./scripts/onair-tx500-kx3-supervisor.sh setup
-```
-
-To manage or inspect both hosts:
-
-```bash
-./scripts/onair-tx500-kx3-supervisor.sh manage status
-./scripts/onair-tx500-kx3-supervisor.sh manage cleanup
-```
-
-Run the full test set end-to-end over SSH, including the existing quick and full
-matrix cases, with automatic evidence/report generation:
-
-```bash
 ./scripts/onair-tx500-kx3-supervisor.sh supervise --all --label tx500-kx3-first-run
 ```
 
