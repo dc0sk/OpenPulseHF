@@ -1,0 +1,30 @@
+# Example OpenPulse runtime config for an Elecraft KX3 on a Linux laptop.
+#
+# Assumptions for the first on-air run:
+# - Digirig provides audio/PTT to the KX3.
+# - rigctld is listening locally against the Digirig serial control path.
+# - The transceiver is run at low power and externally attenuated against the
+#   companion station for the first RF pass.
+
+[station]
+callsign = "KX3TEST"
+grid_square = "AA00"
+
+[audio]
+backend = "cpal"
+
+[modem]
+mode = "BPSK250"
+ptt_backend = "rts"
+
+[radio]
+rigctld_addr = "127.0.0.1:4532"
+
+[radio.rig_a]
+rigctld_addr = "127.0.0.1:4532"
+
+[logging]
+level = "debug"
+
+[trust]
+store_path = ""
