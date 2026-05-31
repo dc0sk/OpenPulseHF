@@ -28,14 +28,14 @@ PI_SSH="${PI_SSH:-}"
 SSH_OPTS="${SSH_OPTS:--o BatchMode=yes -o ConnectTimeout=10}"
 CALLSIGN_A="${CALLSIGN_A:-N0CALL}"
 CALLSIGN_B="${CALLSIGN_B:-N0CALL}"
-KX3_HAMLIB_MODEL="${KX3_HAMLIB_MODEL:-229}"
+KX3_HAMLIB_MODEL="${KX3_HAMLIB_MODEL:-2045}"
 KX3_CAT_PORT="${KX3_CAT_PORT:-/dev/ttyUSB0}"
 KX3_CAT_BAUD="${KX3_CAT_BAUD:-38400}"
 KX3_PTT_PORT="${KX3_PTT_PORT:-/dev/ttyUSB0}"
 KX3_PTT_TYPE="${KX3_PTT_TYPE:-RTS}"
 KX3_RIGCTLD_ADDR="${KX3_RIGCTLD_ADDR:-127.0.0.1}"
 KX3_RIGCTLD_PORT="${KX3_RIGCTLD_PORT:-4532}"
-TX500_HAMLIB_MODEL="${TX500_HAMLIB_MODEL:-3020}"
+TX500_HAMLIB_MODEL="${TX500_HAMLIB_MODEL:-2050}"
 TX500_CAT_PORT="${TX500_CAT_PORT:-/dev/ttyUSB0}"
 TX500_CAT_BAUD="${TX500_CAT_BAUD:-19200}"
 TX500_PTT_PORT="${TX500_PTT_PORT:-/dev/ttyUSB0}"
@@ -44,8 +44,14 @@ TX500_RIGCTLD_ADDR="${TX500_RIGCTLD_ADDR:-127.0.0.1}"
 TX500_RIGCTLD_PORT="${TX500_RIGCTLD_PORT:-4532}"
 TEST_FREQ_HZ="${TEST_FREQ_HZ:-14070000}"
 TEST_MODE_RIG="${TEST_MODE_RIG:-USB}"
-PI_REPO_DIR="${PI_REPO_DIR:-\${HOME}/git/OpenPulseHF}"
-PI_LOG_DIR="${PI_LOG_DIR:-\${HOME}/var/log/openpulse/on-air}"
+LOCAL_AUDIO_DEVICE="${LOCAL_AUDIO_DEVICE:-}"
+PI_AUDIO_DEVICE="${PI_AUDIO_DEVICE:-}"
+if [[ -z "${PI_REPO_DIR:-}" ]]; then
+    PI_REPO_DIR='${HOME}/git/OpenPulseHF'
+fi
+if [[ -z "${PI_LOG_DIR:-}" ]]; then
+    PI_LOG_DIR='${HOME}/var/log/openpulse/on-air'
+fi
 IRS_STARTUP_WAIT="${IRS_STARTUP_WAIT:-5}"
 TX_TIMEOUT="${TX_TIMEOUT:-120}"
 
@@ -145,6 +151,9 @@ ssh_pi() {
 # Expand PI_REPO_DIR and PI_LOG_DIR on the Pi.
 pi_repo()  { ssh_pi "echo ${PI_REPO_DIR}"; }
 pi_logdir(){ ssh_pi "echo ${PI_LOG_DIR}"; }
+pi_cargo() {
+    ssh_pi "if command -v cargo >/dev/null 2>&1; then command -v cargo; elif [[ -x \\$HOME/.cargo/bin/cargo ]]; then echo \\$HOME/.cargo/bin/cargo; else echo ''; fi"
+}
 
 json_escape() {
     printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -159,54 +168,35 @@ check_ssh_agent() {
 
 # ── rigctld lifecycle ─────────────────────────────────────────────────────────
 start_rigctld_local() {
-    if pgrep -f "rigctld.*${KX3_CAT_PORT}" >/dev/null 2>&1; then
-        echo "  [kx3 rigctld] already running on port ${KX3_RIGCTLD_PORT}"
-        return
-    fi
-    echo "  [kx3 rigctld] starting (model=${KX3_HAMLIB_MODEL} port=${KX3_CAT_PORT} baud=${KX3_CAT_BAUD})"
-    rigctld \
-        -m "${KX3_HAMLIB_MODEL}" \
-        -r "${KX3_CAT_PORT}" \
-        -s "${KX3_CAT_BAUD}" \
-        -p "${KX3_PTT_PORT}" \
-        -P "${KX3_PTT_TYPE}" \
-        -t "${KX3_RIGCTLD_PORT}" \
-        >/tmp/kx3-rigctld.log 2>&1 &
-    KX3_RIGCTLD_PID=$!
-    sleep 1
-    if ! kill -0 "${KX3_RIGCTLD_PID}" 2>/dev/null; then
-        echo "  [kx3 rigctld] failed to start; check /tmp/kx3-rigctld.log" >&2
-        exit 1
-    fi
-    echo "  [kx3 rigctld] started (pid=${KX3_RIGCTLD_PID})"
+    echo "  [kx3 rigctld] skipped (safety mode: local KX3 uses direct one-shot CAT only)"
 }
 
 stop_rigctld_local() {
-    if [[ -n "$KX3_RIGCTLD_PID" ]] && kill -0 "${KX3_RIGCTLD_PID}" 2>/dev/null; then
-        echo "  [kx3 rigctld] stopping (pid=${KX3_RIGCTLD_PID})"
-        kill "${KX3_RIGCTLD_PID}" || true
-        KX3_RIGCTLD_PID=""
+    if pgrep -f "rigctld.*${KX3_CAT_PORT}" >/dev/null 2>&1; then
+        echo "  [kx3 rigctld] stopping stray local rigctld on ${KX3_CAT_PORT}"
+        pkill -f "rigctld.*${KX3_CAT_PORT}" 2>/dev/null || true
     fi
+    KX3_RIGCTLD_PID=""
 }
 
 start_rigctld_pi() {
     echo "  [tx500 rigctld] starting on Pi (model=${TX500_HAMLIB_MODEL} port=${TX500_CAT_PORT})"
-    ssh_pi "pkill -f 'rigctld.*${TX500_CAT_PORT}' 2>/dev/null || true; sleep 0.5; \
-        rigctld \
+    ssh_pi "pkill -x rigctld 2>/dev/null || true; sleep 0.5; \
+        nohup rigctld \
             -m ${TX500_HAMLIB_MODEL} \
             -r ${TX500_CAT_PORT} \
             -s ${TX500_CAT_BAUD} \
             -p ${TX500_PTT_PORT} \
             -P ${TX500_PTT_TYPE} \
             -t ${TX500_RIGCTLD_PORT} \
-            >/tmp/tx500-rigctld.log 2>&1 &
+            </dev/null >/tmp/tx500-rigctld.log 2>&1 &
         sleep 1
-        pgrep -f 'rigctld.*${TX500_CAT_PORT}' >/dev/null && echo 'ok' || { echo 'fail'; exit 1; }"
+        pgrep -x rigctld >/dev/null && echo 'ok' || { echo 'fail'; exit 1; }"
 }
 
 stop_rigctld_pi() {
     echo "  [tx500 rigctld] stopping on Pi"
-    ssh_pi "pkill -f 'rigctld.*${TX500_CAT_PORT}' 2>/dev/null || true" || true
+    ssh_pi "pkill -x rigctld 2>/dev/null || true" || true
 }
 
 # ── Frequency / mode tuning ───────────────────────────────────────────────────
@@ -222,7 +212,11 @@ tune_rig() {
 }
 
 tune_kx3_local() {
-    tune_rig "KX3 (local)" "${KX3_RIGCTLD_ADDR}" "${KX3_RIGCTLD_PORT}"
+    echo "  [tune] KX3 (local) direct CAT → ${TEST_FREQ_HZ} Hz ${TEST_MODE_RIG}"
+    rigctl -m "${KX3_HAMLIB_MODEL}" -r "${KX3_CAT_PORT}" -s "${KX3_CAT_BAUD}" F "${TEST_FREQ_HZ}" 2>/dev/null || \
+        echo "  [tune] WARNING: could not set frequency on KX3 via direct CAT"
+    rigctl -m "${KX3_HAMLIB_MODEL}" -r "${KX3_CAT_PORT}" -s "${KX3_CAT_BAUD}" M "${TEST_MODE_RIG}" 2400 2>/dev/null || \
+        echo "  [tune] WARNING: could not set mode on KX3 via direct CAT"
 }
 
 tune_tx500_pi() {
@@ -242,10 +236,21 @@ build_local() {
 
 build_pi() {
     echo "==> Building cpal-enabled binaries on Pi (TX500)"
-    ssh_pi "cd ${PI_REPO_DIR} && \
-        cargo build --release -p openpulse-cli --features cpal-backend 2>&1 | tail -3 && \
-        cargo build --release -p openpulse-ardop --features cpal 2>&1 | tail -3 && \
-        cargo build --release -p openpulse-kiss --features cpal 2>&1 | tail -3 && \
+    local pi_repo_dir
+    local pi_cargo_bin
+    pi_repo_dir="$(pi_repo)"
+    pi_cargo_bin="$(pi_cargo)"
+    if [[ -z "${pi_cargo_bin}" ]]; then
+        echo "ERROR: cargo missing on Pi" >&2
+        exit 1
+    fi
+    ssh_pi "cd '${pi_repo_dir}' && \
+        '${pi_cargo_bin}' build --release -p openpulse-cli --features cpal-backend >/tmp/openpulse-cli-build.log 2>&1 || { tail -3 /tmp/openpulse-cli-build.log; exit 1; } && \
+        tail -3 /tmp/openpulse-cli-build.log && \
+        '${pi_cargo_bin}' build --release -p openpulse-ardop --features cpal >/tmp/openpulse-ardop-build.log 2>&1 || { tail -3 /tmp/openpulse-ardop-build.log; exit 1; } && \
+        tail -3 /tmp/openpulse-ardop-build.log && \
+        '${pi_cargo_bin}' build --release -p openpulse-kiss --features cpal >/tmp/openpulse-kiss-build.log 2>&1 || { tail -3 /tmp/openpulse-kiss-build.log; exit 1; } && \
+        tail -3 /tmp/openpulse-kiss-build.log && \
         echo '[build] Pi binaries ready'"
 }
 
@@ -254,19 +259,23 @@ status_local() {
     echo "── Local (KX3 / IRS) ────────────────────────────────────────────────────────"
     printf "  openpulse:       %s\n" "$(test -x "${LOCAL_BIN_DIR}/openpulse" && echo present || echo MISSING)"
     printf "  openpulse-tnc:   %s\n" "$(test -x "${LOCAL_BIN_DIR}/openpulse-tnc" && echo present || echo MISSING)"
-    printf "  rigctld running: %s\n" "$(pgrep -f "rigctld.*${KX3_CAT_PORT}" >/dev/null 2>&1 && echo yes || echo no)"
+    printf "  rigctld running: %s\n" "$(pgrep -f "rigctld.*${KX3_CAT_PORT}" >/dev/null 2>&1 && echo yes \(unexpected\) || echo no \(expected\))"
     printf "  KX3 serial port: %s\n" "$(test -e "${KX3_CAT_PORT}" && echo present || echo MISSING)"
     printf "  ssh-agent:       %s\n" "$(ssh-add -l >/dev/null 2>&1 && echo loaded || echo NOT LOADED)"
 }
 
 status_pi() {
     echo "── Pi (TX500 / ISS) ─────────────────────────────────────────────────────────"
+    local pi_repo_dir
+    local pi_log_dir
+    pi_repo_dir="$(pi_repo)"
+    pi_log_dir="$(pi_logdir)"
     ssh_pi "
-        printf '  openpulse:       '; test -x ${PI_REPO_DIR}/target/release/openpulse && echo present || echo MISSING
-        printf '  openpulse-tnc:   '; test -x ${PI_REPO_DIR}/target/release/openpulse-tnc && echo present || echo MISSING
-        printf '  rigctld running: '; pgrep -f 'rigctld.*${TX500_CAT_PORT}' >/dev/null 2>&1 && echo yes || echo no
+        printf '  openpulse:       '; test -x '${pi_repo_dir}/target/release/openpulse' && echo present || echo MISSING
+        printf '  openpulse-tnc:   '; test -x '${pi_repo_dir}/target/release/openpulse-tnc' && echo present || echo MISSING
+        printf '  rigctld running: '; pgrep -x rigctld >/dev/null 2>&1 && echo yes || echo no
         printf '  TX500 serial:    '; test -e '${TX500_CAT_PORT}' && echo present || echo MISSING
-        printf '  log dir:         '; test -d ${PI_LOG_DIR} && echo present || echo missing
+        printf '  log dir:         '; test -d '${pi_log_dir}' && echo present || echo missing
     " || echo "  (SSH connection failed)"
 }
 
@@ -283,10 +292,16 @@ cleanup_all() {
 # ── Setup ─────────────────────────────────────────────────────────────────────
 setup() {
     check_ssh_agent
+    local pi_repo_dir
+    local pi_log_dir
+    local pi_cargo_bin
+    pi_repo_dir="$(pi_repo)"
+    pi_log_dir="$(pi_logdir)"
+    pi_cargo_bin="$(pi_cargo)"
 
     # Create log directories
     mkdir -p "$OUTPUT_DIR"
-    ssh_pi "mkdir -p ${PI_LOG_DIR}"
+    ssh_pi "mkdir -p '${pi_log_dir}'"
 
     # Check/build local binaries
     if [[ ! -x "${LOCAL_BIN_DIR}/openpulse" ]] || \
@@ -297,8 +312,8 @@ setup() {
     fi
 
     # Check/build Pi binaries
-    PI_HAVE_BINS=$(ssh_pi "test -x ${PI_REPO_DIR}/target/release/openpulse && \
-        test -x ${PI_REPO_DIR}/target/release/openpulse-tnc && echo yes || echo no")
+    PI_HAVE_BINS=$(ssh_pi "test -x '${pi_repo_dir}/target/release/openpulse' && \
+        test -x '${pi_repo_dir}/target/release/openpulse-tnc' && echo yes || echo no")
     if [[ "$PI_HAVE_BINS" != "yes" ]]; then
         build_pi
     else
@@ -308,6 +323,10 @@ setup() {
     # Verify rigctld is installed
     if ! command -v rigctld >/dev/null 2>&1; then
         echo "ERROR: rigctld not found locally; install hamlib (e.g. sudo pacman -S hamlib)" >&2
+        exit 1
+    fi
+    if [[ -z "${pi_cargo_bin}" ]]; then
+        echo "ERROR: cargo missing on Pi" >&2
         exit 1
     fi
     ssh_pi "command -v rigctld >/dev/null || { echo 'ERROR: rigctld missing on Pi'; exit 1; }"
@@ -343,9 +362,9 @@ FULL_CASES=(
     "QPSK500|rs|128"
     "QPSK500|soft_concatenated|128"
     "8PSK500|none|128"
-    "8PSK1000|none|256"
+    "8PSK1000|none|255"
     "64QAM500|none|128"
-    "64QAM1000|none|256"
+    "64QAM1000|none|255"
 )
 
 run_matrix() {
@@ -374,12 +393,15 @@ run_matrix() {
     echo "    Freq: ${TEST_FREQ_HZ} Hz ${TEST_MODE_RIG}"
     echo "    Report: ${report}"
     echo ""
+    echo "    Note: current openpulse CLI does not expose FEC selection; requested FEC labels are recorded, but the live test path exercises modem transmit/receive only."
+    echo "    Audio devices: local='${LOCAL_AUDIO_DEVICE:-default}' pi='${PI_AUDIO_DEVICE:-default}'"
+    echo ""
 
     # Fetch expanded Pi paths once
     local pi_bin_dir
-    pi_bin_dir=$(ssh_pi "echo \${HOME}/git/OpenPulseHF/target/release")
+    pi_bin_dir="$(pi_repo)/target/release"
     local pi_log_dir
-    pi_log_dir=$(ssh_pi "echo ${PI_LOG_DIR}")
+    pi_log_dir="$(pi_logdir)"
 
     for case_spec in "${cases[@]}"; do
         IFS='|' read -r MODE FEC PAYLOAD_SIZE <<< "$case_spec"
@@ -389,19 +411,31 @@ run_matrix() {
         local iss_log="/tmp/openpulse-iss-${MODE}-${FEC}.log"
         local irs_log="/tmp/openpulse-irs-${MODE}-${FEC}.log"
         local pi_iss_log="${pi_log_dir}/iss-${MODE}-${FEC}.log"
+        local listen_ms=$(( (IRS_STARTUP_WAIT + TX_TIMEOUT + 5) * 1000 ))
+        local local_device_args=()
+        local pi_device_arg=""
+        if [[ -n "${LOCAL_AUDIO_DEVICE}" ]]; then
+            local_device_args=(--device "${LOCAL_AUDIO_DEVICE}")
+        fi
+        if [[ -n "${PI_AUDIO_DEVICE}" ]]; then
+            pi_device_arg="--device '${PI_AUDIO_DEVICE}'"
+        fi
 
-        # Generate random hex payload
-        local payload_hex
-        payload_hex=$(python3 -c \
-            "import os,sys; sys.stdout.write(os.urandom(${PAYLOAD_SIZE}).hex())")
+        # Generate a fixed-length ASCII payload so transmit length equals PAYLOAD_SIZE.
+        local payload_text
+        payload_text=$(python3 -c \
+            "import secrets, string, sys; a = string.ascii_letters + string.digits; sys.stdout.write(''.join(secrets.choice(a) for _ in range(${PAYLOAD_SIZE})))")
 
-        # 1. Start IRS TNC locally (KX3, background)
-        pkill -f "${LOCAL_BIN_DIR}/openpulse-tnc" 2>/dev/null || true
-        RUST_LOG=info "${LOCAL_BIN_DIR}/openpulse-tnc" \
+        # 1. Start IRS receiver locally (KX3, background)
+        pkill -f "${LOCAL_BIN_DIR}/openpulse receive" 2>/dev/null || true
+        "${LOCAL_BIN_DIR}/openpulse" \
+            --backend cpal \
+            --log info \
+            --ptt none \
+            receive \
             --mode "${MODE}" \
-            --callsign "${CALLSIGN_B}" \
-            --ptt rigctld \
-            --listen \
+            --listen-ms "${listen_ms}" \
+            "${local_device_args[@]}" \
             >"${irs_log}" 2>&1 &
         local irs_pid=$!
 
@@ -409,15 +443,17 @@ run_matrix() {
 
         # 2. Send from ISS (TX500 on Pi)
         local iss_exit=0
-        timeout "${TX_TIMEOUT}" ssh_pi \
-            "echo '${payload_hex}' | \
-                ${pi_bin_dir}/openpulse send \
-                    --mode ${MODE} \
-                    --fec ${FEC} \
-                    --callsign ${CALLSIGN_A} \
-                    --to ${CALLSIGN_B} \
+        # timeout executes a program, not a shell function, so invoke ssh directly here.
+        timeout "${TX_TIMEOUT}" ssh ${SSH_OPTS} "${PI_SSH}" \
+            "${pi_bin_dir}/openpulse \
+                    --backend cpal \
+                    --log info \
                     --ptt rigctld \
-                    --hex \
+                    --rig ${TX500_RIGCTLD_ADDR}:${TX500_RIGCTLD_PORT} \
+                    transmit \
+                    --mode ${MODE} \
+                    ${pi_device_arg} \
+                    '${payload_text}' \
                 >${pi_iss_log} 2>&1" \
             || iss_exit=$?
 
@@ -435,8 +471,8 @@ run_matrix() {
         local fail_reason=""
         if [[ $iss_exit -ne 0 ]]; then
             fail_reason="ISS exit ${iss_exit}"
-        elif ! echo "${irs_content}" | grep -qi "frame received"; then
-            fail_reason="IRS: no 'frame received' in log"
+        elif ! echo "${irs_content}" | grep -Fq "${payload_text}"; then
+            fail_reason="IRS: payload not observed in receiver output"
         else
             test_pass=true
         fi
