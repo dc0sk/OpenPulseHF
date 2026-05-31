@@ -225,6 +225,8 @@ impl AudioBackend for CpalBackend {
         Ok(Box::new(CpalOutputStream {
             _stream: stream,
             buf,
+            sample_rate_hz: config.sample_rate,
+            channels: config.channels,
         }))
     }
 }
@@ -262,6 +264,8 @@ impl AudioInputStream for CpalInputStream {
 pub struct CpalOutputStream {
     _stream: Stream,
     buf: Arc<Mutex<VecDeque<f32>>>,
+    sample_rate_hz: u32,
+    channels: u16,
 }
 
 impl AudioOutputStream for CpalOutputStream {
@@ -272,8 +276,20 @@ impl AudioOutputStream for CpalOutputStream {
     }
 
     fn flush(&mut self) -> Result<(), AudioError> {
-        // Wait until the driver has consumed all buffered samples, up to 5 s.
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        // Wait until the driver has consumed all buffered samples.
+        // Timeout adapts to queued audio length so slow modes can fully drain.
+        let queued_samples = {
+            let guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
+            guard.len()
+        };
+        let samples_per_second = (self.sample_rate_hz as f64) * (self.channels as f64);
+        let queued_seconds = if samples_per_second > 0.0 {
+            (queued_samples as f64) / samples_per_second
+        } else {
+            0.0
+        };
+        let timeout_seconds = (queued_seconds + 3.0).max(5.0).min(60.0);
+        let deadline = std::time::Instant::now() + Duration::from_secs_f64(timeout_seconds);
         loop {
             std::thread::sleep(Duration::from_millis(10));
             let guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
@@ -281,9 +297,10 @@ impl AudioOutputStream for CpalOutputStream {
                 return Ok(());
             }
             if std::time::Instant::now() >= deadline {
-                return Err(AudioError::Stream(
-                    "flush timeout: output buffer did not drain within 5 s".into(),
-                ));
+                return Err(AudioError::Stream(format!(
+                    "flush timeout: output buffer did not drain within {:.1} s",
+                    timeout_seconds
+                )));
             }
         }
     }

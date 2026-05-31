@@ -2,6 +2,7 @@
 
 use openpulse_audio::tanh_limit;
 use rand::Rng;
+use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use tracing::{debug, info};
 
@@ -628,6 +629,63 @@ impl ModemEngine {
     /// Pass `device = None` to use the backend's default input device.
     pub fn receive(&mut self, mode: &str, device: Option<&str>) -> Result<Vec<u8>, ModemError> {
         let samples = self.stage_capture_input(device)?;
+        self.receive_from_samples(mode, samples)
+    }
+
+    /// Receive a frame by listening on the input stream until a decode succeeds
+    /// or the timeout elapses.
+    pub fn receive_with_timeout(
+        &mut self,
+        mode: &str,
+        device: Option<&str>,
+        listen_for: Duration,
+    ) -> Result<Vec<u8>, ModemError> {
+        let audio_cfg = AudioConfig::default();
+        let mut stream = self
+            .audio
+            .open_input(device, &audio_cfg)
+            .map_err(|e| ModemError::Audio(e.to_string()))?;
+
+        let deadline = Instant::now() + listen_for;
+        let mut accumulated = Vec::new();
+        let mut last_err: Option<ModemError> = None;
+
+        loop {
+            let chunk = stream
+                .read()
+                .map_err(|e| ModemError::Audio(e.to_string()))?;
+            if !chunk.is_empty() {
+                accumulated.extend(chunk);
+                debug!("received {} accumulated audio samples", accumulated.len());
+                match self.receive_from_samples(
+                    mode,
+                    AudioSamples {
+                        samples: accumulated.clone(),
+                    },
+                ) {
+                    Ok(payload) => return Ok(payload),
+                    Err(err) => last_err = Some(err),
+                }
+            }
+
+            if Instant::now() >= deadline {
+                break;
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| {
+            ModemError::Demodulation(format!(
+                "no decodable frame within {} ms",
+                listen_for.as_millis()
+            ))
+        }))
+    }
+
+    fn receive_from_samples(
+        &mut self,
+        mode: &str,
+        samples: AudioSamples,
+    ) -> Result<Vec<u8>, ModemError> {
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
@@ -2518,6 +2576,16 @@ mod tests {
         let mut engine = make_engine();
         engine.transmit(b"Hello", "BPSK100", None).unwrap();
         let received = engine.receive("BPSK100", None).unwrap();
+        assert_eq!(received, b"Hello");
+    }
+
+    #[test]
+    fn transmit_then_receive_with_timeout() {
+        let mut engine = make_engine();
+        engine.transmit(b"Hello", "BPSK100", None).unwrap();
+        let received = engine
+            .receive_with_timeout("BPSK100", None, Duration::from_millis(100))
+            .unwrap();
         assert_eq!(received, b"Hello");
     }
 

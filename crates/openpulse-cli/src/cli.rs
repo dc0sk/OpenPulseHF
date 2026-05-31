@@ -60,6 +60,9 @@ pub enum Commands {
         mode: String,
         #[arg(short, long)]
         device: Option<String>,
+        /// Listen for up to this many milliseconds before giving up.
+        #[arg(long)]
+        listen_ms: Option<u64>,
     },
     /// List available audio devices.
     Devices,

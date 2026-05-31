@@ -127,8 +127,12 @@ fn main() -> Result<()> {
         Commands::Transmit { data, mode, device } => {
             commands::transmit::run(&data, &mode, device.as_deref(), &mut engine, ptt.as_mut())?;
         }
-        Commands::Receive { mode, device } => {
-            commands::receive::run(&mode, device.as_deref(), &mut engine)?;
+        Commands::Receive {
+            mode,
+            device,
+            listen_ms,
+        } => {
+            commands::receive::run(&mode, device.as_deref(), listen_ms, &mut engine)?;
         }
         Commands::Devices => {
             commands::devices::run(&cli.backend)?;
