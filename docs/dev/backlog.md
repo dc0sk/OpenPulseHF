@@ -17,6 +17,41 @@ shipped and merged.  See `docs/dev/roadmap.md` for the full history with PR numb
 
 Ordered by priority.  Items marked **[deferred]** have no target date.
 
+### 8 — Operator transmit-settings auto-tune and restore
+
+Add an OpenPulse helper that snapshots the current rig transmit settings before a test window, applies the known-good data-mode settings for the session, and restores the original values when the run ends.
+
+Scope:
+
+- query and store per-rig `freq`, `mode`, `RFPOWER`, `MICGAIN`, and `COMP` state when available
+- apply the test profile settings before TX begins
+- restore the saved baseline during cleanup even if a test fails early
+- pair the helper with RF/ALC readback so operators can see whether the radio is actually producing output
+
+Why:
+
+- the June 4 session showed that PTT can succeed while RF output remains absent
+- compression and mic gain are easy to leave in a bad state between operator sessions
+- restoring the original state lowers operator risk and keeps the radios ready for the next task
+
+### 9 — Integrated tuner on high SWR (explicit opt-in)
+
+Add an explicit operator-controlled setting to allow integrated tuner operation when SWR exceeds a configured threshold during on-air runs.
+
+Scope:
+
+- add a runtime/frontend-visible flag for "allow integrated tuner on high SWR"
+- gate behavior behind explicit opt-in (default disabled)
+- execute tuner attempt only when SWR is above threshold
+- apply the same policy after QSY/tune transitions when QSY mode is enabled
+- record tuner attempts and outcomes in run logs for operator auditability
+
+Why:
+
+- protects operators from automatic tuner actions unless they explicitly allow it
+- avoids repeated manual interventions during high-SWR conditions
+- keeps QSY workflows consistent with preflight SWR safety policy
+
 ### 1 — FreeDV frame signing (FF-11) ✅ Already shipped
 
 `crates/openpulse-freedv-auth` is complete: `AuthBeacon` (Ed25519 sign/verify),

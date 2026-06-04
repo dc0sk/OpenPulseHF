@@ -6,7 +6,7 @@ use std::time::Duration;
 use bpsk_plugin::BpskPlugin;
 use openpulse_audio::LoopbackBackend;
 use openpulse_daemon::protocol::{CommandResponse, ControlCommand, ControlEvent, DaemonConfig};
-use openpulse_daemon::{ControlServer, ControlServerHandle};
+use openpulse_daemon::{ControlServer, ControlServerConfig, ControlServerHandle};
 use openpulse_modem::ModemEngine;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -23,10 +23,13 @@ async fn spawn_server(engine: &ModemEngine) -> (SocketAddr, ControlServerHandle)
     let handle = ControlServer::spawn(
         "127.0.0.1:0".parse().unwrap(),
         engine,
-        "BPSK250".into(),
-        ("N0CALL".into(), "AA00".into()), // station_id
-        false,
-        "unrestricted".into(),
+        ControlServerConfig {
+            initial_mode: "BPSK250".into(),
+            initial_station_id: ("N0CALL".into(), "AA00".into()),
+            initial_qsy_enabled: false,
+            initial_bandplan_mode: "unrestricted".into(),
+            initial_allow_tuner_on_high_swr: false,
+        },
         Some(&mut addr),
     )
     .await
@@ -254,10 +257,13 @@ async fn set_tx_attenuation_updates_shared_state() {
     let handle = ControlServer::spawn(
         "127.0.0.1:0".parse().unwrap(),
         &engine,
-        "BPSK250".into(),
-        ("N0CALL".into(), "AA00".into()), // station_id
-        false,
-        "unrestricted".into(),
+        ControlServerConfig {
+            initial_mode: "BPSK250".into(),
+            initial_station_id: ("N0CALL".into(), "AA00".into()),
+            initial_qsy_enabled: false,
+            initial_bandplan_mode: "unrestricted".into(),
+            initial_allow_tuner_on_high_swr: false,
+        },
         Some(&mut addr),
     )
     .await
@@ -300,10 +306,13 @@ async fn get_config_returns_config_data_and_ok() {
     let _handle = ControlServer::spawn(
         "127.0.0.1:0".parse().unwrap(),
         &engine,
-        "BPSK250".into(),
-        ("K1ABC".into(), "FN42".into()), // station_id
-        false,
-        "unrestricted".into(),
+        ControlServerConfig {
+            initial_mode: "BPSK250".into(),
+            initial_station_id: ("K1ABC".into(), "FN42".into()),
+            initial_qsy_enabled: false,
+            initial_bandplan_mode: "unrestricted".into(),
+            initial_allow_tuner_on_high_swr: false,
+        },
         Some(&mut addr),
     )
     .await
@@ -345,6 +354,7 @@ async fn get_config_returns_config_data_and_ok() {
             assert_eq!(config.grid_square, "FN42");
             assert_eq!(config.mode, "BPSK250");
             assert!((config.tx_attenuation_db - 0.0).abs() < 1e-4);
+            assert!(!config.allow_tuner_on_high_swr);
         }
         other => panic!("expected ConfigData event, got {other:?}"),
     }
@@ -357,10 +367,13 @@ async fn set_config_updates_mode_and_attenuation_atomically() {
     let handle = ControlServer::spawn(
         "127.0.0.1:0".parse().unwrap(),
         &engine,
-        "BPSK250".into(),
-        ("N0CALL".into(), "AA00".into()), // station_id
-        false,
-        "unrestricted".into(),
+        ControlServerConfig {
+            initial_mode: "BPSK250".into(),
+            initial_station_id: ("N0CALL".into(), "AA00".into()),
+            initial_qsy_enabled: false,
+            initial_bandplan_mode: "unrestricted".into(),
+            initial_allow_tuner_on_high_swr: false,
+        },
         Some(&mut addr),
     )
     .await
@@ -377,6 +390,7 @@ async fn set_config_updates_mode_and_attenuation_atomically() {
             tx_attenuation_db: -6.0,
             qsy_enabled: false,
             bandplan_mode: "unrestricted".into(),
+            allow_tuner_on_high_swr: false,
         },
     })
     .unwrap()
@@ -400,6 +414,7 @@ async fn set_config_updates_mode_and_attenuation_atomically() {
         (*handle.tx_attenuation_db.lock().await - (-6.0)).abs() < 1e-4,
         "expected -6.0 dB"
     );
+    assert!(!*handle.allow_tuner_on_high_swr.lock().await);
 }
 
 // ---------------------------------------------------------------------------

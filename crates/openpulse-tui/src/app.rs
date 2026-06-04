@@ -39,6 +39,8 @@ pub struct App {
     pub qsy_enabled: bool,
     /// Active bandplan mode string (editable; restart required).
     pub bandplan_mode: String,
+    /// Allow integrated tuner operation when SWR is high (editable; restart required).
+    pub allow_tuner_on_high_swr: bool,
 }
 
 impl Default for App {
@@ -60,6 +62,7 @@ impl Default for App {
             fatal_error: None,
             qsy_enabled: false,
             bandplan_mode: "unrestricted".to_string(),
+            allow_tuner_on_high_swr: false,
         }
     }
 }

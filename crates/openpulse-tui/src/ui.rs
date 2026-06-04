@@ -185,7 +185,7 @@ fn render_transitions(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 
 fn render_help(f: &mut Frame, area: ratatui::layout::Rect) {
     let help = Paragraph::new(
-        "[q] Quit   [p] Pause/Resume   [↑↓] Scroll   [Q] Toggle QSY   [b] Cycle bandplan",
+        "[q] Quit   [p] Pause/Resume   [↑↓] Scroll   [Q] Toggle QSY   [b] Cycle bandplan   [t] Toggle tune-on-high-SWR",
     )
     .style(Style::default().fg(Color::DarkGray));
     f.render_widget(help, area);
@@ -204,11 +204,23 @@ fn render_qsy_status(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         "ham-iaru-r3" => "IARU R3",
         _ => "Unrestricted",
     };
+    let tuner_str = if app.allow_tuner_on_high_swr {
+        "Allowed"
+    } else {
+        "Off"
+    };
+    let tuner_color = if app.allow_tuner_on_high_swr {
+        Color::Green
+    } else {
+        Color::DarkGray
+    };
     let line = Line::from(vec![
         Span::raw("QSY: "),
         Span::styled(qsy_str, Style::default().fg(qsy_color)),
         Span::raw("  Bandplan: "),
         Span::styled(bp_label, Style::default().fg(Color::Cyan)),
+        Span::raw("  Tune-on-high-SWR: "),
+        Span::styled(tuner_str, Style::default().fg(tuner_color)),
         Span::styled(
             "  (restart required to take effect)",
             Style::default().fg(Color::DarkGray),

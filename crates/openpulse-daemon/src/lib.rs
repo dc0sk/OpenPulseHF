@@ -167,6 +167,9 @@ pub type SharedQsyEnabled = Arc<Mutex<bool>>;
 /// Shared bandplan mode string (`"unrestricted"`, `"ham-iaru-r1"`, etc.).
 #[cfg(not(target_arch = "wasm32"))]
 pub type SharedBandplanMode = Arc<Mutex<String>>;
+/// Shared flag: allow integrated tuner operation when SWR is high.
+#[cfg(not(target_arch = "wasm32"))]
+pub type SharedTunerOnHighSWR = Arc<Mutex<bool>>;
 /// Shared audio sample tap for spectrum computation (most-recent 1024 samples).
 #[cfg(not(target_arch = "wasm32"))]
 pub type SpectrumTap = Arc<RwLock<Vec<f32>>>;
@@ -176,6 +179,16 @@ pub type SharedStationId = Arc<Mutex<(String, String)>>;
 /// Shared in-memory message store (sent and received messages).
 #[cfg(not(target_arch = "wasm32"))]
 pub type SharedMessageStore = Arc<Mutex<MessageStore>>;
+
+/// Initial state used when starting the TCP control server.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct ControlServerConfig {
+    pub initial_mode: String,
+    pub initial_station_id: (String, String),
+    pub initial_qsy_enabled: bool,
+    pub initial_bandplan_mode: String,
+    pub initial_allow_tuner_on_high_swr: bool,
+}
 
 /// Maximum number of messages kept in memory; oldest are evicted when full.
 #[cfg(not(target_arch = "wasm32"))]
@@ -230,6 +243,7 @@ struct ClientCtx {
     tx_attenuation_db: SharedAttenuation,
     qsy_enabled: SharedQsyEnabled,
     bandplan_mode: SharedBandplanMode,
+    allow_tuner_on_high_swr: SharedTunerOnHighSWR,
     spectrum_tap: SpectrumTap,
     station_id: SharedStationId,
     message_store: SharedMessageStore,
@@ -256,6 +270,8 @@ pub struct ControlServerHandle {
     pub qsy_enabled: SharedQsyEnabled,
     /// Active bandplan guardrail mode string.
     pub bandplan_mode: SharedBandplanMode,
+    /// Whether tuner-on-high-SWR behavior is allowed.
+    pub allow_tuner_on_high_swr: SharedTunerOnHighSWR,
     /// Audio sample tap; caller may write recent RX samples here.
     pub spectrum_tap: SpectrumTap,
     /// Station callsign and grid square loaded from config at startup.
@@ -280,10 +296,7 @@ impl ControlServer {
     pub async fn spawn(
         addr: SocketAddr,
         engine: &ModemEngine,
-        initial_mode: String,
-        initial_station_id: (String, String),
-        initial_qsy_enabled: bool,
-        initial_bandplan_mode: String,
+        config: ControlServerConfig,
         bound_addr: Option<&mut SocketAddr>,
     ) -> Result<ControlServerHandle, std::io::Error> {
         let listener = TcpListener::bind(addr).await?;
@@ -295,12 +308,14 @@ impl ControlServer {
         let ev_tx = Arc::new(ev_tx);
         let (cmd_tx, cmd_rx) = mpsc::channel::<ControlCommand>(64);
 
-        let active_mode = Arc::new(Mutex::new(initial_mode));
+        let active_mode = Arc::new(Mutex::new(config.initial_mode));
         let tx_attenuation_db: SharedAttenuation = Arc::new(Mutex::new(0.0f32));
-        let qsy_enabled: SharedQsyEnabled = Arc::new(Mutex::new(initial_qsy_enabled));
-        let bandplan_mode: SharedBandplanMode = Arc::new(Mutex::new(initial_bandplan_mode));
+        let qsy_enabled: SharedQsyEnabled = Arc::new(Mutex::new(config.initial_qsy_enabled));
+        let bandplan_mode: SharedBandplanMode = Arc::new(Mutex::new(config.initial_bandplan_mode));
+        let allow_tuner_on_high_swr: SharedTunerOnHighSWR =
+            Arc::new(Mutex::new(config.initial_allow_tuner_on_high_swr));
         let spectrum_tap: SpectrumTap = Arc::new(RwLock::new(vec![0.0f32; 1024]));
-        let station_id: SharedStationId = Arc::new(Mutex::new(initial_station_id));
+        let station_id: SharedStationId = Arc::new(Mutex::new(config.initial_station_id));
         let message_store: SharedMessageStore = Arc::new(Mutex::new(MessageStore::new()));
         let shared_metrics: SharedMetrics = Arc::new(Mutex::new(MetricsSnapshot::default()));
 
@@ -353,6 +368,7 @@ impl ControlServer {
         let atten_a = Arc::clone(&tx_attenuation_db);
         let qsy_a = Arc::clone(&qsy_enabled);
         let bp_a = Arc::clone(&bandplan_mode);
+        let tuner_a = Arc::clone(&allow_tuner_on_high_swr);
         let tap_a = Arc::clone(&spectrum_tap);
         let sid_a = Arc::clone(&station_id);
         let store_a = Arc::clone(&message_store);
@@ -368,6 +384,7 @@ impl ControlServer {
                             tx_attenuation_db: Arc::clone(&atten_a),
                             qsy_enabled: Arc::clone(&qsy_a),
                             bandplan_mode: Arc::clone(&bp_a),
+                            allow_tuner_on_high_swr: Arc::clone(&tuner_a),
                             spectrum_tap: Arc::clone(&tap_a),
                             station_id: Arc::clone(&sid_a),
                             message_store: Arc::clone(&store_a),
@@ -388,6 +405,7 @@ impl ControlServer {
             tx_attenuation_db,
             qsy_enabled,
             bandplan_mode,
+            allow_tuner_on_high_swr,
             spectrum_tap,
             station_id,
             message_store,
@@ -493,11 +511,12 @@ async fn handle_command(
 
         ControlCommand::GetConfig => {
             let (cs, gs) = ctx.station_id.lock().await.clone();
-            // Hold all four locks simultaneously so the snapshot is consistent with SetConfig.
+            // Hold all locks simultaneously so the snapshot is consistent with SetConfig.
             let mode_guard = ctx.active_mode.lock().await;
             let atten_guard = ctx.tx_attenuation_db.lock().await;
             let qsy_guard = ctx.qsy_enabled.lock().await;
             let bp_guard = ctx.bandplan_mode.lock().await;
+            let tuner_guard = ctx.allow_tuner_on_high_swr.lock().await;
             let config = protocol::DaemonConfig {
                 callsign: cs,
                 grid_square: gs,
@@ -505,11 +524,13 @@ async fn handle_command(
                 tx_attenuation_db: *atten_guard,
                 qsy_enabled: *qsy_guard,
                 bandplan_mode: bp_guard.clone(),
+                allow_tuner_on_high_swr: *tuner_guard,
             };
             drop(mode_guard);
             drop(atten_guard);
             drop(qsy_guard);
             drop(bp_guard);
+            drop(tuner_guard);
             if send_json(write_half, &ControlEvent::ConfigData { config })
                 .await
                 .is_err()
@@ -630,6 +651,7 @@ async fn handle_command(
                 &ctx.tx_attenuation_db,
                 &ctx.qsy_enabled,
                 &ctx.bandplan_mode,
+                &ctx.allow_tuner_on_high_swr,
             )
             .await;
             send_json(write_half, &resp).await.is_err()
@@ -656,6 +678,7 @@ pub(crate) async fn dispatch_command(
     tx_attenuation_db: &SharedAttenuation,
     qsy_enabled: &SharedQsyEnabled,
     bandplan_mode: &SharedBandplanMode,
+    allow_tuner_on_high_swr: &SharedTunerOnHighSWR,
 ) -> CommandResponse {
     if let ControlCommand::SetMode { ref mode } = cmd {
         *active_mode.lock().await = mode.clone();
@@ -664,20 +687,22 @@ pub(crate) async fn dispatch_command(
         *tx_attenuation_db.lock().await = *db;
     }
     if let ControlCommand::SetConfig { ref config } = cmd {
-        // Hold all four locks simultaneously so GetConfig cannot observe a mixed state.
-        let (new_qsy, new_bp) = {
+        // Hold all locks simultaneously so GetConfig cannot observe a mixed state.
+        let (new_qsy, new_bp, new_allow_tuner) = {
             let mut mode = active_mode.lock().await;
             let mut atten = tx_attenuation_db.lock().await;
             let mut qsy = qsy_enabled.lock().await;
             let mut bp = bandplan_mode.lock().await;
+            let mut tuner = allow_tuner_on_high_swr.lock().await;
             *mode = config.mode.clone();
             *atten = config.tx_attenuation_db;
             *qsy = config.qsy_enabled;
             *bp = config.bandplan_mode.clone();
-            (*qsy, bp.clone())
+            *tuner = config.allow_tuner_on_high_swr;
+            (*qsy, bp.clone(), *tuner)
         };
         // Persist QSY settings so they survive a daemon restart.
-        if let Err(e) = openpulse_config::save_qsy_config(new_qsy, &new_bp) {
+        if let Err(e) = openpulse_config::save_qsy_config(new_qsy, &new_bp, new_allow_tuner) {
             tracing::warn!("could not persist QSY config: {e}");
         }
     }
@@ -1283,6 +1308,7 @@ mod command_apply_tests {
                 tx_attenuation_db: -6.0,
                 qsy_enabled: false,
                 bandplan_mode: "unrestricted".into(),
+                allow_tuner_on_high_swr: false,
             },
         };
 

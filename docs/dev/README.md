@@ -74,6 +74,7 @@ This index contains development-oriented, planning, architecture, protocol-spec,
 
 - [docs/dev/archive/handoff-2026-05-13.md](archive/handoff-2026-05-13.md): historical AI handoff snapshot
 - [docs/dev/archive/project-review-2026-04-29.md](archive/project-review-2026-04-29.md): historical project review snapshot
+- [docs/dev/archive/onair-ic9700-ft991a-session-learnings-2026-06-04.md](archive/onair-ic9700-ft991a-session-learnings-2026-06-04.md): on-air session learnings, failure modes, and operator setup notes
 - [docs/dev/requests/code-review.md](requests/code-review.md): review request template
 - [docs/dev/requests/code-review-output.md](requests/code-review-output.md): review output sample
 - [docs/dev/reviews/review-request.md](reviews/review-request.md): review request log

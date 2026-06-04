@@ -8,7 +8,7 @@ use openpulse_audio::LoopbackBackend;
 use openpulse_daemon::protocol::{
     decode_spectrum_frame, encode_spectrum_frame, ControlCommand, SPECTRUM_MAGIC,
 };
-use openpulse_daemon::{ControlServer, ControlServerHandle};
+use openpulse_daemon::{ControlServer, ControlServerConfig, ControlServerHandle};
 use openpulse_modem::ModemEngine;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -25,10 +25,13 @@ async fn spawn_server(engine: &ModemEngine) -> (SocketAddr, ControlServerHandle)
     let handle = ControlServer::spawn(
         "127.0.0.1:0".parse().unwrap(),
         engine,
-        "BPSK250".into(),
-        ("N0CALL".into(), "AA00".into()), // station_id
-        false,
-        "unrestricted".into(),
+        ControlServerConfig {
+            initial_mode: "BPSK250".into(),
+            initial_station_id: ("N0CALL".into(), "AA00".into()),
+            initial_qsy_enabled: false,
+            initial_bandplan_mode: "unrestricted".into(),
+            initial_allow_tuner_on_high_swr: false,
+        },
         Some(&mut addr),
     )
     .await
