@@ -165,11 +165,13 @@ async fn main() {
     let mut handle = ControlServer::spawn(
         tcp_bind,
         &engine,
-        mode,
-        station_id,
-        initial_qsy_enabled,
-        initial_bandplan_mode,
-        initial_allow_tuner_on_high_swr,
+        openpulse_daemon::ControlServerConfig {
+            initial_mode: mode,
+            initial_station_id: station_id,
+            initial_qsy_enabled,
+            initial_bandplan_mode,
+            initial_allow_tuner_on_high_swr,
+        },
         None,
     )
     .await

@@ -180,6 +180,16 @@ pub type SharedStationId = Arc<Mutex<(String, String)>>;
 #[cfg(not(target_arch = "wasm32"))]
 pub type SharedMessageStore = Arc<Mutex<MessageStore>>;
 
+/// Initial state used when starting the TCP control server.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct ControlServerConfig {
+    pub initial_mode: String,
+    pub initial_station_id: (String, String),
+    pub initial_qsy_enabled: bool,
+    pub initial_bandplan_mode: String,
+    pub initial_allow_tuner_on_high_swr: bool,
+}
+
 /// Maximum number of messages kept in memory; oldest are evicted when full.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const MAX_MESSAGES: usize = 500;
@@ -286,11 +296,7 @@ impl ControlServer {
     pub async fn spawn(
         addr: SocketAddr,
         engine: &ModemEngine,
-        initial_mode: String,
-        initial_station_id: (String, String),
-        initial_qsy_enabled: bool,
-        initial_bandplan_mode: String,
-        initial_allow_tuner_on_high_swr: bool,
+        config: ControlServerConfig,
         bound_addr: Option<&mut SocketAddr>,
     ) -> Result<ControlServerHandle, std::io::Error> {
         let listener = TcpListener::bind(addr).await?;
@@ -302,14 +308,14 @@ impl ControlServer {
         let ev_tx = Arc::new(ev_tx);
         let (cmd_tx, cmd_rx) = mpsc::channel::<ControlCommand>(64);
 
-        let active_mode = Arc::new(Mutex::new(initial_mode));
+        let active_mode = Arc::new(Mutex::new(config.initial_mode));
         let tx_attenuation_db: SharedAttenuation = Arc::new(Mutex::new(0.0f32));
-        let qsy_enabled: SharedQsyEnabled = Arc::new(Mutex::new(initial_qsy_enabled));
-        let bandplan_mode: SharedBandplanMode = Arc::new(Mutex::new(initial_bandplan_mode));
+        let qsy_enabled: SharedQsyEnabled = Arc::new(Mutex::new(config.initial_qsy_enabled));
+        let bandplan_mode: SharedBandplanMode = Arc::new(Mutex::new(config.initial_bandplan_mode));
         let allow_tuner_on_high_swr: SharedTunerOnHighSWR =
-            Arc::new(Mutex::new(initial_allow_tuner_on_high_swr));
+            Arc::new(Mutex::new(config.initial_allow_tuner_on_high_swr));
         let spectrum_tap: SpectrumTap = Arc::new(RwLock::new(vec![0.0f32; 1024]));
-        let station_id: SharedStationId = Arc::new(Mutex::new(initial_station_id));
+        let station_id: SharedStationId = Arc::new(Mutex::new(config.initial_station_id));
         let message_store: SharedMessageStore = Arc::new(Mutex::new(MessageStore::new()));
         let shared_metrics: SharedMetrics = Arc::new(Mutex::new(MetricsSnapshot::default()));
 
