@@ -76,7 +76,15 @@ pub fn run(addr: &str, cmd: DaemonCommands) -> Result<i32> {
             tx_attenuation_db,
             qsy_enabled,
             bandplan_mode,
-        } => set_config(addr, mode, tx_attenuation_db, qsy_enabled, bandplan_mode),
+            allow_tuner_on_high_swr,
+        } => set_config(
+            addr,
+            mode,
+            tx_attenuation_db,
+            qsy_enabled,
+            bandplan_mode,
+            allow_tuner_on_high_swr,
+        ),
         DaemonCommands::SubscribeSpectrum { fps, frames } => subscribe_spectrum(addr, fps, frames),
     }
 }
@@ -172,6 +180,7 @@ fn set_config(
     tx_attenuation_db: Option<f32>,
     qsy_enabled: Option<bool>,
     bandplan_mode: Option<String>,
+    allow_tuner_on_high_swr: Option<bool>,
 ) -> Result<i32> {
     let (events, resp) = run_command(addr, &ControlCommand::GetConfig)?;
     if !resp.ok {
@@ -199,6 +208,9 @@ fn set_config(
     }
     if let Some(bp) = bandplan_mode {
         cfg.bandplan_mode = bp;
+    }
+    if let Some(v) = allow_tuner_on_high_swr {
+        cfg.allow_tuner_on_high_swr = v;
     }
     simple(addr, ControlCommand::SetConfig { config: cfg })
 }

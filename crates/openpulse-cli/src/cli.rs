@@ -205,6 +205,8 @@ pub enum DaemonCommands {
         qsy_enabled: Option<bool>,
         #[arg(long)]
         bandplan_mode: Option<String>,
+        #[arg(long)]
+        allow_tuner_on_high_swr: Option<bool>,
     },
 }
 

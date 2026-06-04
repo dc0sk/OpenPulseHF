@@ -79,6 +79,8 @@ pub struct QsyConfig {
     pub scan_dwell_ms: u64,
     /// Seconds after QSY_ACK before both stations switch frequency.
     pub switchover_offset_s: u64,
+    /// Allow invoking the rig's integrated tuner when SWR is high.
+    pub allow_integrated_tuner_on_high_swr: bool,
 }
 
 /// Station identity.
@@ -344,6 +346,7 @@ impl Default for QsyConfig {
             candidate_freqs_hz: vec![],
             scan_dwell_ms: 500,
             switchover_offset_s: 5,
+            allow_integrated_tuner_on_high_swr: false,
         }
     }
 }
@@ -461,10 +464,14 @@ fn default_identity_path() -> Option<PathBuf> {
 
 /// Persist updated QSY settings to the platform config file.
 ///
-/// Loads the existing config (falling back to defaults), updates the two QSY
+/// Loads the existing config (falling back to defaults), updates the QSY
 /// fields, then rewrites the file. Returns an error when the config directory
 /// cannot be determined.
-pub fn save_qsy_config(qsy_enabled: bool, bandplan_mode: &str) -> Result<(), ConfigError> {
+pub fn save_qsy_config(
+    qsy_enabled: bool,
+    bandplan_mode: &str,
+    allow_integrated_tuner_on_high_swr: bool,
+) -> Result<(), ConfigError> {
     let path = match default_config_path() {
         Some(p) => p,
         None => {
@@ -475,7 +482,12 @@ pub fn save_qsy_config(qsy_enabled: bool, bandplan_mode: &str) -> Result<(), Con
             .into())
         }
     };
-    save_qsy_config_to_path(&path, qsy_enabled, bandplan_mode)
+    save_qsy_config_to_path(
+        &path,
+        qsy_enabled,
+        bandplan_mode,
+        allow_integrated_tuner_on_high_swr,
+    )
 }
 
 /// Persist updated QSY settings to an explicit config path.
@@ -485,9 +497,11 @@ pub fn save_qsy_config_to_path(
     path: &Path,
     qsy_enabled: bool,
     bandplan_mode: &str,
+    allow_integrated_tuner_on_high_swr: bool,
 ) -> Result<(), ConfigError> {
     let mut cfg = load_from(path).unwrap_or_default();
     cfg.qsy.enabled = qsy_enabled;
+    cfg.qsy.allow_integrated_tuner_on_high_swr = allow_integrated_tuner_on_high_swr;
     if bandplan_mode == "unrestricted" {
         cfg.qsy.bandplan_awareness_enabled = false;
     } else {
@@ -644,6 +658,8 @@ receive_tick_ms = 50
 # scan_dwell_ms = 500
 # Seconds between QSY_ACK and the actual frequency switch.
 # switchover_offset_s = 5
+# Allow integrated tuner operation when high SWR is detected.
+# allow_integrated_tuner_on_high_swr = false
 "#
     .to_string()
 }
@@ -745,11 +761,12 @@ mod tests {
         let path = unique_tmp("qsy_unrestricted");
         let _ = std::fs::remove_file(&path);
 
-        save_qsy_config_to_path(&path, true, "unrestricted").unwrap();
+        save_qsy_config_to_path(&path, true, "unrestricted", true).unwrap();
 
         let cfg = load_from(&path).unwrap();
         assert!(cfg.qsy.enabled);
         assert!(!cfg.qsy.bandplan_awareness_enabled);
+        assert!(cfg.qsy.allow_integrated_tuner_on_high_swr);
         let _ = std::fs::remove_file(&path);
     }
 
@@ -758,12 +775,13 @@ mod tests {
         let path = unique_tmp("qsy_bandplan");
         let _ = std::fs::remove_file(&path);
 
-        save_qsy_config_to_path(&path, true, "ham-iaru-r2").unwrap();
+        save_qsy_config_to_path(&path, true, "ham-iaru-r2", false).unwrap();
 
         let cfg = load_from(&path).unwrap();
         assert!(cfg.qsy.enabled);
         assert!(cfg.qsy.bandplan_awareness_enabled);
         assert_eq!(cfg.qsy.bandplan_mode, "ham-iaru-r2");
+        assert!(!cfg.qsy.allow_integrated_tuner_on_high_swr);
         let _ = std::fs::remove_file(&path);
     }
 }

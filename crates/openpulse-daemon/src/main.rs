@@ -51,6 +51,7 @@ async fn main() {
         cfg.station.grid_square.clone(),
     );
     let initial_qsy_enabled = cfg.qsy.enabled;
+    let initial_allow_tuner_on_high_swr = cfg.qsy.allow_integrated_tuner_on_high_swr;
     let initial_bandplan_mode = if cfg.qsy.bandplan_awareness_enabled {
         cfg.qsy.bandplan_mode.clone()
     } else {
@@ -168,6 +169,7 @@ async fn main() {
         station_id,
         initial_qsy_enabled,
         initial_bandplan_mode,
+        initial_allow_tuner_on_high_swr,
         None,
     )
     .await
@@ -184,6 +186,7 @@ async fn main() {
             tx_attenuation_db: handle.tx_attenuation_db.clone(),
             qsy_enabled: handle.qsy_enabled.clone(),
             bandplan_mode: handle.bandplan_mode.clone(),
+            allow_tuner_on_high_swr: handle.allow_tuner_on_high_swr.clone(),
             spectrum_tap: handle.spectrum_tap.clone(),
             station_id: handle.station_id.clone(),
             message_store: handle.message_store.clone(),

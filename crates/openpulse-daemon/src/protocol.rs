@@ -99,6 +99,9 @@ pub struct DaemonConfig {
     /// `"unrestricted"` disables all frequency checks.
     /// Other valid values: `"ham-iaru-r1"`, `"ham-iaru-r2"`, `"ham-iaru-r3"`.
     pub bandplan_mode: String,
+    /// Allow integrated tuner operations when SWR is high.
+    #[serde(default)]
+    pub allow_tuner_on_high_swr: bool,
 }
 
 // ---------------------------------------------------------------------------

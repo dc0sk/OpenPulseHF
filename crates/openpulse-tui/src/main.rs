@@ -94,6 +94,7 @@ fn main() -> Result<()> {
     }
 
     let initial_qsy_enabled = cfg.qsy.enabled;
+    let initial_allow_tuner_on_high_swr = cfg.qsy.allow_integrated_tuner_on_high_swr;
     let initial_bandplan_mode = if cfg.qsy.bandplan_awareness_enabled {
         cfg.qsy.bandplan_mode.clone()
     } else {
@@ -111,6 +112,7 @@ fn main() -> Result<()> {
         worker,
         initial_qsy_enabled,
         initial_bandplan_mode,
+        initial_allow_tuner_on_high_swr,
     );
 
     disable_raw_mode()?;
@@ -128,10 +130,12 @@ fn run_tui(
     worker: std::sync::mpsc::Receiver<events::WorkerMsg>,
     initial_qsy_enabled: bool,
     initial_bandplan_mode: String,
+    initial_allow_tuner_on_high_swr: bool,
 ) -> Result<()> {
     let mut app = app::App {
         qsy_enabled: initial_qsy_enabled,
         bandplan_mode: initial_bandplan_mode,
+        allow_tuner_on_high_swr: initial_allow_tuner_on_high_swr,
         ..Default::default()
     };
     let tick = Duration::from_millis(100);
@@ -152,13 +156,27 @@ fn run_tui(
                     }
                     (KeyCode::Char('Q'), _) => {
                         app.qsy_enabled = !app.qsy_enabled;
-                        let _ =
-                            openpulse_config::save_qsy_config(app.qsy_enabled, &app.bandplan_mode);
+                        let _ = openpulse_config::save_qsy_config(
+                            app.qsy_enabled,
+                            &app.bandplan_mode,
+                            app.allow_tuner_on_high_swr,
+                        );
                     }
                     (KeyCode::Char('b'), _) => {
                         app.bandplan_mode = cycle_bandplan(&app.bandplan_mode).to_string();
-                        let _ =
-                            openpulse_config::save_qsy_config(app.qsy_enabled, &app.bandplan_mode);
+                        let _ = openpulse_config::save_qsy_config(
+                            app.qsy_enabled,
+                            &app.bandplan_mode,
+                            app.allow_tuner_on_high_swr,
+                        );
+                    }
+                    (KeyCode::Char('t'), _) => {
+                        app.allow_tuner_on_high_swr = !app.allow_tuner_on_high_swr;
+                        let _ = openpulse_config::save_qsy_config(
+                            app.qsy_enabled,
+                            &app.bandplan_mode,
+                            app.allow_tuner_on_high_swr,
+                        );
                     }
                     _ => {}
                 }

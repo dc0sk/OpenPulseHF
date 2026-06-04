@@ -29,6 +29,7 @@ async fn spawn_server(engine: &ModemEngine) -> (SocketAddr, ControlServerHandle)
         ("N0CALL".into(), "AA00".into()), // station_id
         false,
         "unrestricted".into(),
+        false,
         Some(&mut addr),
     )
     .await

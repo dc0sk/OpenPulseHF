@@ -133,6 +133,7 @@ impl PanelApp {
                 tx_attenuation_db: 0.0,
                 qsy_enabled: false,
                 bandplan_mode: "unrestricted".into(),
+                allow_tuner_on_high_swr: false,
             },
             config_fetch_pending: false,
             messages_open: false,
@@ -645,6 +646,10 @@ impl eframe::App for PanelApp {
                                         );
                                     }
                                 });
+                            ui.end_row();
+
+                            ui.label("Tune on high SWR:");
+                            ui.checkbox(&mut self.config_draft.allow_tuner_on_high_swr, "Allowed");
                             ui.end_row();
                         });
 
