@@ -1,8 +1,8 @@
 ---
 project: openpulsehf
 doc: docs/dev/archive/onair-ic9700-ft991a-session-learnings-2026-06-04.md
-status: living
-last_updated: 2026-06-04
+status: resolved
+last_updated: 2026-06-05
 ---
 
 # IC-9700 / FT-991A On-Air Session Learnings
@@ -66,6 +66,21 @@ This note captures the concrete findings from the June 4 on-air session on the I
 - Verify the CODEC with a direct `amixer -c CODEC get PCM` readout instead of expecting a VU meter.
 - If the goal is audio-path verification, use a tone injection test or a future RF/ALC readback in the software, not `alsamixer`.
 
+## Root-cause resolution (2026-06-05)
+
+**Root cause**: PulseAudio/PipeWire on dc0sk-rpi51 holds the IC-9700 USB CODEC
+(`card 2: CODEC [USB Audio CODEC]`) exclusively. Direct ALSA `hw:CARD=CODEC,DEV=0`
+access appeared to succeed (aplay reported no error) but produced zero RF/ALC because
+PulseAudio silently discarded or blocked the write at the OS level.
+
+**Fix**: `A_AUDIO_DEVICE=pulse` in the profile routes through PulseAudio to the
+default sink (`alsa_output.usb-Burr-Brown_from_TI_USB_Audio_CODEC-00.analog-stereo`),
+which is the IC-9700 USB CODEC. ALC confirmed at full deflection with this path.
+
+**Diagnostic tool**: `scripts/audio-device-sweep-a.sh` sweeps all ALSA playback devices
+with CAT PTT asserted, and now warns about the PulseAudio exclusive-hold pitfall.
+
 ## Next step
 
-The next practical validation step is a JS8Call cross-check on both rigs after the cleaned-up setup, using the same audio and CAT assumptions confirmed here.
+Run `./scripts/run-onair-ic9700-ft991a.sh sidea` with the updated profile to confirm
+a BPSK250 frame transmits successfully end-to-end before bringing side B back into the loop.

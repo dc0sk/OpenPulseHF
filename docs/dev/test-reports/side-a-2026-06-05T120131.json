@@ -1,0 +1,24 @@
+{
+  "timestamp": "2026-06-05T120131",
+  "git_sha": "ee22523",
+  "station": "IC-9700",
+  "callsign": "DC0SK",
+  "freq_hz": 144650000,
+  "mode": "BPSK250",
+  "fec": "none",
+  "payload_bytes": 64,
+  "audio_device": "sysdefault:CARD=CODEC",
+    "audio_usb_id": "08bb:2901",
+  "audio_device_label": "Burr-Brown USB Audio CODEC",
+  "result": "fail",
+  "fail_reason": "side-A transmit produced no RF/ALC movement",
+  "iss_exit": 0,
+  "telemetry": {
+    "ptt_on": "2",
+    "pcm_playback": "na",
+    "pcm_mixer_line": "  Playback channels: Front Left - Front Right",
+    "alc_nonzero": "0",
+    "rfm_nonzero": "0",
+    "swr_max": "1"
+  }
+}
