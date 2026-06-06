@@ -232,6 +232,21 @@ verify_audio_device_a() {
     echo "  [${A_LABEL} device] ${device_line}"
 }
 
+verify_audio_device_b() {
+    if [[ -z "${B_AUDIO_DEVICE}" ]]; then
+        echo "  [${B_LABEL} device] (default device)"
+        return 0
+    fi
+    local device_line
+    device_line="$(ssh_b "aplay -L 2>/dev/null | grep -Fx '${B_AUDIO_DEVICE}' | head -n1 || true")"
+    if [[ -z "$device_line" ]]; then
+        echo "ERROR: side-B audio device '${B_AUDIO_DEVICE}' not found" >&2
+        ssh_b "aplay -L 2>/dev/null | sed -n '1,20p'" || true
+        exit 1
+    fi
+    echo "  [${B_LABEL} device] ${device_line}"
+}
+
 verify_ptt_control_a() {
     echo "  [${A_LABEL} ptt] asserting rigctld PTT briefly"
     local ptt_on ptt_off
@@ -338,16 +353,6 @@ check_ssh_agent() {
         echo "ssh-agent has no identities loaded; run: ssh-add" >&2
         exit 1
     fi
-}
-
-stop_audio_services_b() {
-    echo "  [${B_LABEL} audio] stopping user audio services on B (PipeWire/WirePlumber)"
-    ssh_b "systemctl --user stop pipewire.service pipewire.socket pipewire-pulse.service pipewire-pulse.socket wireplumber.service >/dev/null 2>&1 || true"
-}
-
-start_audio_services_b() {
-    echo "  [${B_LABEL} audio] restoring user audio services on B"
-    ssh_b "systemctl --user start pipewire.socket pipewire-pulse.socket wireplumber.service >/dev/null 2>&1 || true"
 }
 
 start_rigctld_a() {
@@ -468,6 +473,7 @@ build_on_a() {
     fi
 
     ssh_a "cd '${repo_dir}' && \
+        git pull --ff-only 2>&1 | tail -3 && \
         '${cargo_bin}' build --release -p openpulse-cli --features cpal-backend >/tmp/openpulse-cli-build.log 2>&1 || { tail -30 /tmp/openpulse-cli-build.log; exit 1; } && \
         tail -3 /tmp/openpulse-cli-build.log && \
         '${cargo_bin}' build --release -p openpulse-ardop --features cpal >/tmp/openpulse-ardop-build.log 2>&1 || { tail -30 /tmp/openpulse-ardop-build.log; exit 1; } && \
@@ -528,7 +534,6 @@ cleanup_all() {
     stop_rigctld_b
     ssh_a "pkill -f 'openpulse receive|openpulse transmit|openpulse-tnc|openpulse-kisstnc' 2>/dev/null || true" || true
     ssh_b "pkill -f 'openpulse receive|openpulse transmit|openpulse-tnc|openpulse-kisstnc' 2>/dev/null || true" || true
-    start_audio_services_b
     echo "  done"
 }
 
@@ -760,14 +765,16 @@ setup() {
     mkdir -p "$OUTPUT_DIR"
     ssh_b "mkdir -p '${bl}'"
 
-    # Release side-B CODEC endpoints for exclusive ALSA access during test run.
-    stop_audio_services_b
-
     build_on_a
     transfer_binaries_a_to_b
 
     ssh_a "command -v rigctld >/dev/null || { echo 'ERROR: rigctld missing on Station A'; exit 1; }"
     ssh_b "command -v rigctld >/dev/null || { echo 'ERROR: rigctld missing on Station B'; exit 1; }"
+
+    if [[ -n "${A_AUDIO_DEVICE}" ]]; then
+        verify_audio_device_a
+    fi
+    verify_audio_device_b
 
     start_rigctld_a
     start_rigctld_b
@@ -1115,7 +1122,7 @@ run_matrix() {
                 done; \
                 nohup '${ar}/target/release/openpulse' \
                     --backend cpal \
-                    --log info \
+                    --log debug \
                     --ptt none \
                     receive \
                     --mode '${MODE}' \
@@ -1221,7 +1228,7 @@ run_matrix() {
                 done; \
                 nohup '${br}/target/release/openpulse' \
                     --backend cpal \
-                    --log info \
+                    --log debug \
                     --ptt none \
                     receive \
                     --mode '${MODE}' \
@@ -1284,6 +1291,17 @@ run_matrix() {
         else
             echo "FAIL (${fail_reason})"
             fail=$(( fail + 1 ))
+            # Show the last lines of the IRS log to expose audio/decode issues.
+            local irs_tail=""
+            if [[ "$REVERSE" == "1" ]]; then
+                irs_tail="$(ssh_a "tail -n 30 '${a_irs_log}' 2>/dev/null || true" || true)"
+            else
+                irs_tail="$(ssh_b "tail -n 30 '${b_irs_log}' 2>/dev/null || true" || true)"
+            fi
+            if [[ -n "$irs_tail" ]]; then
+                echo "    IRS log tail:"
+                echo "$irs_tail" | sed 's/^/      /'
+            fi
         fi
 
         if [[ -n "$telemetry_summary" ]]; then

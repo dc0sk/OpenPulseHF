@@ -77,8 +77,13 @@ export TX_TIMEOUT=120
 
 # RF power (Hamlib scale 0.0–1.0; 0.05 = 5% of max).
 # Pre-flight check aborts the run if this reads back as < 1% — set explicitly.
-export A_RFPOWER=0.05
+export A_RFPOWER=0.5
 export B_RFPOWER=0.05
+
+# Telemetry: capture PTT/ALC/RFM on ISS and STRENGTH on IRS during each case.
+export TELEMETRY_ENABLE=1
+export TELEMETRY_SAMPLES=40
+export TELEMETRY_INTERVAL=0.2
 
 # Safety note for report metadata
 export ON_AIR_FIRST_PASS_NOTE="2m only, low power, agreed test window"
