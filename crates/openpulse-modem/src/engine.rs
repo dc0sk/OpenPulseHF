@@ -2545,6 +2545,12 @@ impl ModemEngine {
         if self.afc_enabled {
             if let Some(offset) = estimate {
                 self.afc_correction_hz += self.afc_step * offset;
+                debug!(
+                    "AFC: raw_estimate={:.1}Hz correction={:.1}Hz total_offset={:.1}Hz",
+                    offset,
+                    self.afc_correction_hz,
+                    offset + self.afc_correction_hz
+                );
             }
         }
     }
