@@ -687,6 +687,15 @@ impl ModemEngine {
         // Incremental scan: only try start positions not yet attempted.
         let mut last_tried_end: usize = 0;
 
+        // AFC pre-convergence state.
+        // On first signal detection, run fast AFC settling passes in-place (no decode),
+        // then reset the scan to that position so the first full decode attempt uses
+        // a converged AFC correction.  Without this, afc_step=0.1 takes ~22 scan
+        // positions (~704 samples) to converge, by which point we have already
+        // advanced past the preamble start and can never re-decode it.
+        let mut first_energy_pos: Option<usize> = None;
+        let mut scan_reset_pending = false;
+
         loop {
             let chunk = stream
                 .read()
@@ -694,10 +703,24 @@ impl ModemEngine {
             if !chunk.is_empty() {
                 accumulated.extend(chunk);
                 debug!("received {} accumulated audio samples", accumulated.len());
+            }
 
-                // Scan the new start positions introduced by this chunk.
+            // After AFC settling, reset the scan back to the first energy position.
+            // This fires even when no new audio arrived so that the decode pass runs
+            // immediately against the already-accumulated buffer (avoids stalling when
+            // the audio backend returns empty after the initial fill, e.g. loopback).
+            if scan_reset_pending {
+                scan_reset_pending = false;
+                if let Some(fep) = first_energy_pos {
+                    last_tried_end = last_tried_end.min(fep);
+                }
+            }
+
+            // Scan start positions: covers both new positions added by the latest chunk
+            // and (after AFC reset) positions from the first-energy point onward.
+            if !accumulated.is_empty() {
                 let new_end = accumulated.len().saturating_sub(min_frame_samples);
-                for start in (last_tried_end..=new_end).step_by(step) {
+                'inner: for start in (last_tried_end..=new_end).step_by(step) {
                     // Fast energy gate: check the first 32 symbol periods at this
                     // position.  Silence costs < 0.1 ms; only emit the full
                     // demodulation call (≈ 90 ms on a Pi 4) when signal is present.
@@ -712,6 +735,24 @@ impl ModemEngine {
                         if mean_sq < ENERGY_GATE_THRESHOLD {
                             continue;
                         }
+                    }
+
+                    // On the very first signal-energy position, run 6 fast AFC
+                    // estimation passes in-place before attempting any decode.
+                    // A temporary step of 0.7 converges in 6 iterations:
+                    // (1 − 0.3⁶) × 150 Hz ≈ 149.9 Hz — effectively one-shot for
+                    // crystal errors up to ±300 Hz on 144 MHz (≈ ±2 ppm).
+                    if first_energy_pos.is_none() {
+                        first_energy_pos = Some(start);
+                        let end = (start + max_frame_samples).min(accumulated.len());
+                        let saved_step = self.afc_step;
+                        self.afc_step = 0.7;
+                        for _ in 0..6 {
+                            self.update_afc_estimate(mode, &accumulated[start..end]);
+                        }
+                        self.afc_step = saved_step;
+                        scan_reset_pending = true;
+                        break 'inner;
                     }
 
                     // Bound the demodulation window to one maximum-length frame so
@@ -2653,8 +2694,11 @@ mod tests {
     fn transmit_then_receive_with_timeout() {
         let mut engine = make_engine();
         engine.transmit(b"Hello", "BPSK100", None).unwrap();
+        // Use a generous timeout — this test validates correctness, not speed.
+        // AFC settling (6 Goertzel scans) plus the full RS-FEC decode can take
+        // several hundred milliseconds in debug builds.
         let received = engine
-            .receive_with_timeout("BPSK100", None, Duration::from_millis(100))
+            .receive_with_timeout("BPSK100", None, Duration::from_secs(30))
             .unwrap();
         assert_eq!(received, b"Hello");
     }
