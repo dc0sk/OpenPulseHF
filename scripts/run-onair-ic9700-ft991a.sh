@@ -340,16 +340,6 @@ check_ssh_agent() {
     fi
 }
 
-stop_audio_services_b() {
-    echo "  [${B_LABEL} audio] stopping user audio services on B (PipeWire/WirePlumber)"
-    ssh_b "systemctl --user stop pipewire.service pipewire.socket pipewire-pulse.service pipewire-pulse.socket wireplumber.service >/dev/null 2>&1 || true"
-}
-
-start_audio_services_b() {
-    echo "  [${B_LABEL} audio] restoring user audio services on B"
-    ssh_b "systemctl --user start pipewire.socket pipewire-pulse.socket wireplumber.service >/dev/null 2>&1 || true"
-}
-
 start_rigctld_a() {
     echo "  [${A_LABEL} rigctld] starting on A"
     local a_ptt_type_upper
@@ -468,6 +458,7 @@ build_on_a() {
     fi
 
     ssh_a "cd '${repo_dir}' && \
+        git pull --ff-only 2>&1 | tail -3 && \
         '${cargo_bin}' build --release -p openpulse-cli --features cpal-backend >/tmp/openpulse-cli-build.log 2>&1 || { tail -30 /tmp/openpulse-cli-build.log; exit 1; } && \
         tail -3 /tmp/openpulse-cli-build.log && \
         '${cargo_bin}' build --release -p openpulse-ardop --features cpal >/tmp/openpulse-ardop-build.log 2>&1 || { tail -30 /tmp/openpulse-ardop-build.log; exit 1; } && \
@@ -528,7 +519,6 @@ cleanup_all() {
     stop_rigctld_b
     ssh_a "pkill -f 'openpulse receive|openpulse transmit|openpulse-tnc|openpulse-kisstnc' 2>/dev/null || true" || true
     ssh_b "pkill -f 'openpulse receive|openpulse transmit|openpulse-tnc|openpulse-kisstnc' 2>/dev/null || true" || true
-    start_audio_services_b
     echo "  done"
 }
 
@@ -759,9 +749,6 @@ setup() {
 
     mkdir -p "$OUTPUT_DIR"
     ssh_b "mkdir -p '${bl}'"
-
-    # Release side-B CODEC endpoints for exclusive ALSA access during test run.
-    stop_audio_services_b
 
     build_on_a
     transfer_binaries_a_to_b

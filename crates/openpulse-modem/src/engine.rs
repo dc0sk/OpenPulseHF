@@ -650,6 +650,32 @@ impl ModemEngine {
         let mut accumulated = Vec::new();
         let mut last_err: Option<ModemError> = None;
 
+        // Symbol period in samples, used as the sliding-search step.
+        // Derived from the numeric baud rate embedded in the mode name (e.g. "BPSK250" → 250);
+        // falls back to 32 (BPSK250 at 8 kHz) so the step is always ≤ one symbol period.
+        let step = {
+            let baud: u32 = mode
+                .trim_end_matches("-RRC")
+                .bytes()
+                .rev()
+                .take_while(|b| b.is_ascii_digit())
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .fold(0u32, |acc, b| acc * 10 + (b - b'0') as u32);
+            if baud > 0 {
+                (audio_cfg.sample_rate as f32 / baud as f32).round() as usize
+            } else {
+                32
+            }
+        };
+        // Minimum sample count required for at least one decodable frame.
+        // 33 = PREAMBLE_SYMS(32) + 1 data symbol.
+        let min_frame_samples = step * 33;
+
+        // Incremental scan: only try start positions not yet attempted.
+        let mut last_tried_end: usize = 0;
+
         loop {
             let chunk = stream
                 .read()
@@ -657,14 +683,22 @@ impl ModemEngine {
             if !chunk.is_empty() {
                 accumulated.extend(chunk);
                 debug!("received {} accumulated audio samples", accumulated.len());
-                match self.receive_from_samples(
-                    mode,
-                    AudioSamples {
-                        samples: accumulated.clone(),
-                    },
-                ) {
-                    Ok(payload) => return Ok(payload),
-                    Err(err) => last_err = Some(err),
+
+                // Scan the new start positions introduced by this chunk.
+                let new_end = accumulated.len().saturating_sub(min_frame_samples);
+                for start in (last_tried_end..=new_end).step_by(step) {
+                    match self.receive_from_samples(
+                        mode,
+                        AudioSamples {
+                            samples: accumulated[start..].to_vec(),
+                        },
+                    ) {
+                        Ok(payload) => return Ok(payload),
+                        Err(err) => last_err = Some(err),
+                    }
+                }
+                if new_end > last_tried_end {
+                    last_tried_end = new_end;
                 }
             }
 

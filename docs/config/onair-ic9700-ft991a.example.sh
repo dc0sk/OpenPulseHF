@@ -77,7 +77,7 @@ export TX_TIMEOUT=120
 
 # RF power (Hamlib scale 0.0–1.0; 0.05 = 5% of max).
 # Pre-flight check aborts the run if this reads back as < 1% — set explicitly.
-export A_RFPOWER=0.05
+export A_RFPOWER=0.5
 export B_RFPOWER=0.05
 
 # Safety note for report metadata
