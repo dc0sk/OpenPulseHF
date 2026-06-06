@@ -41,6 +41,7 @@ TEST_MODE_RIG_A="${TEST_MODE_RIG_A:-${TEST_MODE_RIG:-USB}}"
 TEST_MODE_RIG_B="${TEST_MODE_RIG_B:-${TEST_MODE_RIG:-PKTUSB}}"
 A_AUDIO_DEVICE="${A_AUDIO_DEVICE:-}"
 B_AUDIO_DEVICE="${B_AUDIO_DEVICE:-}"
+A_AUDIO_DEVICE_LABEL="${A_AUDIO_DEVICE_LABEL:-IC-9700 USB Audio CODEC}"
 if [[ -z "${A_REPO_DIR:-}" ]]; then
     A_REPO_DIR='${HOME}/git/OpenPulseHF'
 fi
@@ -80,6 +81,7 @@ ACTION="supervise"
 PROFILE_FILE=""
 SINGLE_CASE=""
 REVERSE="0"
+SIDE_A_SINGLE_CASE="${SIDE_A_SINGLE_CASE:-BPSK250|none|64}"
 
 usage() {
     cat <<'EOF'
@@ -91,6 +93,8 @@ Actions:
   setup       Build on Station A, transfer binaries to Station B, verify rigctld,
               create logs, tune both rigs.
   run         Start rigctld on both stations, execute matrix, write report.
+    sidea       Build on Station A and run a single transmit-only smoke test on
+                            side-A using the IC-9700 USB audio path.
   supervise   setup + run in one command (default).
   status      Show process and config status on both stations.
   cleanup     Kill rigctld and TNC processes on both stations.
@@ -112,7 +116,7 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        setup|run|supervise|status|cleanup)
+        setup|run|sidea|supervise|status|cleanup)
             ACTION="$1" ;;
         --profile)
             PROFILE_FILE="$2"; shift ;;
@@ -193,6 +197,46 @@ is_truthy() {
     local v
     v="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
     [[ "$v" == "1" || "$v" == "true" || "$v" == "yes" || "$v" == "on" ]]
+}
+
+verify_audio_codec_a() {
+    local codec_line
+    codec_line="$(ssh_a "aplay -l 2>/dev/null | grep -i -F '${A_AUDIO_DEVICE_LABEL}' | head -n1 || true")"
+    if [[ -z "$codec_line" ]]; then
+        codec_line="$(ssh_a "aplay -l 2>/dev/null | grep -i -F 'USB Audio CODEC' | head -n1 || true")"
+    fi
+    if [[ -z "$codec_line" ]]; then
+        echo "ERROR: side-A audio codec '${A_AUDIO_DEVICE_LABEL}' (or USB Audio CODEC) not found" >&2
+        ssh_a "aplay -l 2>/dev/null | sed -n '1,12p'" || true
+        exit 1
+    fi
+    echo "  [${A_LABEL} audio] ${codec_line}"
+
+    local pcm_line
+    pcm_line="$(ssh_a "amixer -c CODEC get PCM 2>/dev/null | grep 'Front Left' | head -n1 || true")"
+    if [[ -n "$pcm_line" ]]; then
+        echo "  [${A_LABEL} audio] ${pcm_line}"
+    fi
+}
+
+verify_audio_device_a() {
+    local device_line
+    device_line="$(ssh_a "aplay -L 2>/dev/null | grep -Fx '${A_AUDIO_DEVICE}' | head -n1 || true")"
+    if [[ -z "$device_line" ]]; then
+        echo "ERROR: side-A audio device '${A_AUDIO_DEVICE}' not found" >&2
+        ssh_a "aplay -L 2>/dev/null | sed -n '1,20p'" || true
+        exit 1
+    fi
+    echo "  [${A_LABEL} device] ${device_line}"
+}
+
+verify_ptt_control_a() {
+    echo "  [${A_LABEL} ptt] asserting rigctld PTT briefly"
+    local ptt_on ptt_off
+    ptt_on="$(ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} T 1 >/dev/null 2>&1 && sleep 1; rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} t 2>/dev/null | tail -n1 || echo na" || echo na)"
+    ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} T 0 >/dev/null 2>&1 || true"
+    ptt_off="$(ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} t 2>/dev/null | tail -n1 || echo na" || echo na)"
+    echo "  [${A_LABEL} ptt] during=${ptt_on} after=${ptt_off}"
 }
 
 read_swr_a() {
@@ -482,7 +526,6 @@ cleanup_all() {
     stop_rigctld_b
     ssh_a "pkill -f 'openpulse receive|openpulse transmit|openpulse-tnc|openpulse-kisstnc' 2>/dev/null || true" || true
     ssh_b "pkill -f 'openpulse receive|openpulse transmit|openpulse-tnc|openpulse-kisstnc' 2>/dev/null || true" || true
-    start_audio_services_b
     echo "  done"
 }
 
@@ -493,9 +536,6 @@ setup() {
 
     mkdir -p "$OUTPUT_DIR"
     ssh_b "mkdir -p '${bl}'"
-
-    # Release side-B CODEC endpoints for exclusive ALSA access during test run.
-    stop_audio_services_b
 
     build_on_a
     transfer_binaries_a_to_b
@@ -520,6 +560,193 @@ setup() {
     echo "==> Setup complete"
     status_a
     status_b
+}
+
+setup_side_a() {
+    check_ssh_agent
+    mkdir -p "$OUTPUT_DIR"
+
+    build_on_a
+
+    ssh_a "command -v rigctld >/dev/null || { echo 'ERROR: rigctld missing on Station A'; exit 1; }"
+
+    start_rigctld_a
+    sleep 1
+    save_rig_state_a
+    apply_known_good_settings_a
+    verify_audio_device_a
+    verify_ptt_control_a
+    verify_audio_codec_a
+    tune_a
+    maybe_tune_high_swr_a "startup"
+    maybe_tune_high_swr_a "qsy"
+
+    echo "==> Side-A setup complete"
+    status_a
+}
+
+cleanup_side_a() {
+    echo "==> Cleanup"
+    restore_rig_state_a
+    stop_rigctld_a
+    ssh_a "pkill -f 'openpulse receive|openpulse transmit|openpulse-tnc|openpulse-kisstnc' 2>/dev/null || true" || true
+    echo "  done"
+}
+
+run_side_a_transmit() {
+    local case_spec normalized_case_spec MODE FEC PAYLOAD_SIZE
+    case_spec="$SIDE_A_SINGLE_CASE"
+    if [[ -n "$SINGLE_CASE" ]]; then
+        case_spec="$SINGLE_CASE"
+    fi
+
+    normalized_case_spec="$case_spec"
+    if [[ "$normalized_case_spec" == *,* && "$normalized_case_spec" != *"|"* ]]; then
+        normalized_case_spec="${normalized_case_spec//,/|}"
+    fi
+
+    IFS='|' read -r MODE FEC PAYLOAD_SIZE <<< "$normalized_case_spec"
+    if [[ -z "${MODE}" || -z "${PAYLOAD_SIZE}" ]]; then
+        echo "FAIL (invalid side-A case format; expected MODE|FEC|PAYLOAD_BYTES or MODE|PAYLOAD_BYTES)"
+        return 1
+    fi
+    if [[ -z "${FEC}" ]]; then
+        FEC="none"
+    fi
+    if ! [[ "$PAYLOAD_SIZE" =~ ^[0-9]+$ ]] || (( PAYLOAD_SIZE < 1 || PAYLOAD_SIZE > 255 )); then
+        echo "FAIL (invalid payload size '${PAYLOAD_SIZE}'; must be 1..255)"
+        return 1
+    fi
+
+    local ts git_sha report
+    local ar
+    ts="$(date -u +%Y-%m-%dT%H%M%S)"
+    git_sha="$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
+    report="${OUTPUT_DIR}/side-a-${ts}.json"
+    mkdir -p "$OUTPUT_DIR"
+    ar="$(a_repo)"
+
+    local a_iss_log="/tmp/openpulse-side-a-${MODE}-${FEC}.log"
+    local a_tel_log="/tmp/openpulse-side-a-telemetry-${MODE}-${FEC}.log"
+    local a_device_arg=""
+    if [[ -n "${A_AUDIO_DEVICE}" ]]; then
+        a_device_arg="--device '${A_AUDIO_DEVICE}'"
+    fi
+
+    local payload_text
+    payload_text="$(python3 -c "import secrets, string, sys; a = string.ascii_letters + string.digits; sys.stdout.write(''.join(secrets.choice(a) for _ in range(${PAYLOAD_SIZE})))")"
+
+    local iss_exit=0
+    local telemetry_summary=""
+    local tel_ptt_on="na"
+    local tel_alc_nonzero="na"
+    local tel_rfm_nonzero="na"
+    local tel_swr_max="na"
+    local tel_pcm_playback="na"
+    local tel_pcm_mixer_line="na"
+
+    echo "==> Side-A transmit smoke test"
+    echo "    Station: ${A_LABEL} on ${A_SSH}   callsign=${CALLSIGN_A}"
+    echo "    Mode: ${MODE}   Payload: ${PAYLOAD_SIZE}B   Audio: ${A_AUDIO_DEVICE_LABEL}"
+    echo "    Freq: ${TEST_FREQ_HZ} Hz (${TEST_MODE_RIG_A}) (2m enforced)"
+    echo "    Report: ${report}"
+    echo ""
+
+    local tel_pid=""
+    (
+        ssh_a "set +e; rm -f '${a_tel_log}'; \
+            pcm_line=\$(amixer -c CODEC get PCM 2>/dev/null | grep 'Front Left' | head -n1 || true); \
+            echo 'PCM_MIXER_LINE='\"\${pcm_line}\" >>'${a_tel_log}'; \
+            pcm=\$(printf '%s\n' \"\$pcm_line\" | sed -n 's/.*\[\([0-9][0-9]*%\)\].*/\1/p'); \
+            [[ -n \"\$pcm\" ]] || pcm=na; \
+            echo 'PCM_PLAYBACK='\"\${pcm}\" >>'${a_tel_log}'; \
+            for _ in \$(seq 1 ${TELEMETRY_SAMPLES}); do \
+                ts=\$(date +%H:%M:%S.%3N); \
+                ptt=\$(rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} t 2>/dev/null | tail -n 1 || echo na); \
+                alc=\$(rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} l ALC_METER 2>/dev/null | tail -n 1 || echo na); \
+                rfm=\$(rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} l RFPOWER_METER 2>/dev/null | tail -n 1 || echo na); \
+                swr=\$(rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} l SWR 2>/dev/null | tail -n 1 || echo na); \
+                echo \"\${ts} PTT=\${ptt} ALC=\${alc} RFM=\${rfm} SWR=\${swr}\" >>'${a_tel_log}'; \
+                sleep ${TELEMETRY_INTERVAL}; \
+            done"
+    ) &
+    tel_pid="$!"
+
+    timeout "${TX_TIMEOUT}" ssh ${SSH_OPTS} "${A_SSH}" \
+        "'${ar}/target/release/openpulse' \
+            --backend cpal \
+            --log info \
+            --ptt rigctld \
+            --rig ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} \
+            transmit \
+            --mode '${MODE}' \
+            ${a_device_arg} \
+            '${payload_text}' \
+            >'${a_iss_log}' 2>&1" \
+        || iss_exit=$?
+
+    sleep 2
+    ssh_a "pkill -f '${ar}/target/release/openpulse .*transmit' 2>/dev/null || true" || true
+
+    if [[ -n "$tel_pid" ]]; then
+        wait "$tel_pid" || true
+    fi
+
+    tel_ptt_on="$(ssh_a "awk '/PTT=1/{c++} END{print c+0}' '${a_tel_log}' 2>/dev/null || echo na" || echo na)"
+    tel_alc_nonzero="$(ssh_a "awk -F'ALC=' '{if (NF>1){split(\$2,a,\" \" ); v=a[1]+0; if (v>0)c++}} END{print c+0}' '${a_tel_log}' 2>/dev/null || echo na" || echo na)"
+    tel_rfm_nonzero="$(ssh_a "awk -F'RFM=' '{if (NF>1){v=\$2+0; if (v>0)c++}} END{print c+0}' '${a_tel_log}' 2>/dev/null || echo na" || echo na)"
+    tel_swr_max="$(ssh_a "awk -F'SWR=' '{if (NF>1){v=\$2+0; if (!seen || v>mx){mx=v; seen=1}}} END{if (seen) print mx; else print \"na\"}' '${a_tel_log}' 2>/dev/null || echo na" || echo na)"
+    tel_pcm_playback="$(ssh_a "awk -F'=' '/^PCM_PLAYBACK=/{print \$2; exit}' '${a_tel_log}' 2>/dev/null || echo na" || echo na)"
+    tel_pcm_mixer_line="$(ssh_a "awk -F'=' '/^PCM_MIXER_LINE=/{sub(/^PCM_MIXER_LINE=/, \"\", \$0); print; exit}' '${a_tel_log}' 2>/dev/null || echo na" || echo na)"
+
+    telemetry_summary="A(ptt_on=${tel_ptt_on}, pcm=${tel_pcm_playback}, mixer=\"${tel_pcm_mixer_line}\", alc>0=${tel_alc_nonzero}, rfm>0=${tel_rfm_nonzero}, swr_max=${tel_swr_max})"
+
+    local test_pass=false
+    local fail_reason=""
+    if [[ $iss_exit -ne 0 ]]; then
+        fail_reason="ISS exit ${iss_exit}"
+    elif [[ "${tel_alc_nonzero}" == "0" && "${tel_rfm_nonzero}" == "0" ]]; then
+        fail_reason="side-A transmit produced no RF/ALC movement"
+    else
+        test_pass=true
+    fi
+
+    if $test_pass; then
+        echo "PASS"
+    else
+        echo "FAIL (${fail_reason})"
+    fi
+    echo "    telemetry: ${telemetry_summary}"
+
+    cat > "${report}" <<JSON
+{
+  "timestamp": "${ts}",
+  "git_sha": "${git_sha}",
+  "station": "$(json_escape "${A_LABEL}")",
+  "callsign": "$(json_escape "${CALLSIGN_A}")",
+  "freq_hz": ${TEST_FREQ_HZ},
+  "mode": "$(json_escape "${MODE}")",
+  "fec": "$(json_escape "${FEC}")",
+  "payload_bytes": ${PAYLOAD_SIZE},
+  "audio_device": "$(json_escape "${A_AUDIO_DEVICE}")",
+  "audio_device_label": "$(json_escape "${A_AUDIO_DEVICE_LABEL}")",
+  "result": "$(if $test_pass; then echo pass; else echo fail; fi)",
+  "fail_reason": "$(json_escape "${fail_reason}")",
+  "iss_exit": ${iss_exit},
+  "telemetry": {
+    "ptt_on": "$(json_escape "${tel_ptt_on}")",
+    "pcm_playback": "$(json_escape "${tel_pcm_playback}")",
+    "pcm_mixer_line": "$(json_escape "${tel_pcm_mixer_line}")",
+    "alc_nonzero": "$(json_escape "${tel_alc_nonzero}")",
+    "rfm_nonzero": "$(json_escape "${tel_rfm_nonzero}")",
+    "swr_max": "$(json_escape "${tel_swr_max}")"
+  }
+}
+JSON
+
+    echo "    Report: ${report}"
+
+    [[ $test_pass == true ]]
 }
 
 QUICK_CASES=(
@@ -896,6 +1123,11 @@ case "$ACTION" in
         maybe_tune_high_swr_a "qsy"
         maybe_tune_high_swr_b "qsy"
         run_matrix
+        ;;
+    sidea)
+        trap 'cleanup_side_a' EXIT
+        setup_side_a
+        run_side_a_transmit
         ;;
     supervise)
         trap 'cleanup_all' EXIT

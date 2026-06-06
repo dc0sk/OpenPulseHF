@@ -60,7 +60,7 @@ export TEST_MODE_RIG="PKTUSB"
 #   alsa_output.usb-Burr-Brown_from_TI_USB_Audio_CODEC-00.analog-stereo
 export A_AUDIO_DEVICE="pulse"
 export A_AUDIO_DEVICE_LABEL="IC-9700 USB Audio CODEC (PulseAudio)"
-export B_AUDIO_DEVICE="default:CARD=CODEC"
+export B_AUDIO_DEVICE="pulse"
 
 # Paths:
 # A is a normal repo checkout and used as build source.
