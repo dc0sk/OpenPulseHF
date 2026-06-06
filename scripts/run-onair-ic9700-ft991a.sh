@@ -41,6 +41,7 @@ TEST_MODE_RIG_A="${TEST_MODE_RIG_A:-${TEST_MODE_RIG:-USB}}"
 TEST_MODE_RIG_B="${TEST_MODE_RIG_B:-${TEST_MODE_RIG:-PKTUSB}}"
 A_AUDIO_DEVICE="${A_AUDIO_DEVICE:-}"
 B_AUDIO_DEVICE="${B_AUDIO_DEVICE:-}"
+A_AUDIO_DEVICE_LABEL="${A_AUDIO_DEVICE_LABEL:-IC-9700 USB Audio CODEC}"
 if [[ -z "${A_REPO_DIR:-}" ]]; then
     A_REPO_DIR='${HOME}/git/OpenPulseHF'
 fi
@@ -53,6 +54,8 @@ if [[ -z "${B_LOG_DIR:-}" ]]; then
 fi
 IRS_STARTUP_WAIT="${IRS_STARTUP_WAIT:-5}"
 TX_TIMEOUT="${TX_TIMEOUT:-120}"
+A_RFPOWER="${A_RFPOWER:-0.05}"
+B_RFPOWER="${B_RFPOWER:-0.05}"
 TELEMETRY_ENABLE="${TELEMETRY_ENABLE:-0}"
 TELEMETRY_SAMPLES="${TELEMETRY_SAMPLES:-40}"
 TELEMETRY_INTERVAL="${TELEMETRY_INTERVAL:-0.2}"
@@ -80,6 +83,7 @@ ACTION="supervise"
 PROFILE_FILE=""
 SINGLE_CASE=""
 REVERSE="0"
+SIDE_A_SINGLE_CASE="${SIDE_A_SINGLE_CASE:-BPSK250|none|64}"
 
 usage() {
     cat <<'EOF'
@@ -91,6 +95,8 @@ Actions:
   setup       Build on Station A, transfer binaries to Station B, verify rigctld,
               create logs, tune both rigs.
   run         Start rigctld on both stations, execute matrix, write report.
+    sidea       Build on Station A and run a single transmit-only smoke test on
+                            side-A using the IC-9700 USB audio path.
   supervise   setup + run in one command (default).
   status      Show process and config status on both stations.
   cleanup     Kill rigctld and TNC processes on both stations.
@@ -112,7 +118,7 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        setup|run|supervise|status|cleanup)
+        setup|run|sidea|supervise|status|cleanup)
             ACTION="$1" ;;
         --profile)
             PROFILE_FILE="$2"; shift ;;
@@ -193,6 +199,46 @@ is_truthy() {
     local v
     v="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
     [[ "$v" == "1" || "$v" == "true" || "$v" == "yes" || "$v" == "on" ]]
+}
+
+verify_audio_codec_a() {
+    local codec_line
+    codec_line="$(ssh_a "aplay -l 2>/dev/null | grep -i -F '${A_AUDIO_DEVICE_LABEL}' | head -n1 || true")"
+    if [[ -z "$codec_line" ]]; then
+        codec_line="$(ssh_a "aplay -l 2>/dev/null | grep -i -F 'USB Audio CODEC' | head -n1 || true")"
+    fi
+    if [[ -z "$codec_line" ]]; then
+        echo "ERROR: side-A audio codec '${A_AUDIO_DEVICE_LABEL}' (or USB Audio CODEC) not found" >&2
+        ssh_a "aplay -l 2>/dev/null | sed -n '1,12p'" || true
+        exit 1
+    fi
+    echo "  [${A_LABEL} audio] ${codec_line}"
+
+    local pcm_line
+    pcm_line="$(ssh_a "amixer -c CODEC get PCM 2>/dev/null | grep 'Front Left' | head -n1 || true")"
+    if [[ -n "$pcm_line" ]]; then
+        echo "  [${A_LABEL} audio] ${pcm_line}"
+    fi
+}
+
+verify_audio_device_a() {
+    local device_line
+    device_line="$(ssh_a "aplay -L 2>/dev/null | grep -Fx '${A_AUDIO_DEVICE}' | head -n1 || true")"
+    if [[ -z "$device_line" ]]; then
+        echo "ERROR: side-A audio device '${A_AUDIO_DEVICE}' not found" >&2
+        ssh_a "aplay -L 2>/dev/null | sed -n '1,20p'" || true
+        exit 1
+    fi
+    echo "  [${A_LABEL} device] ${device_line}"
+}
+
+verify_ptt_control_a() {
+    echo "  [${A_LABEL} ptt] asserting rigctld PTT briefly"
+    local ptt_on ptt_off
+    ptt_on="$(ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} T 1 >/dev/null 2>&1 && sleep 1; rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} t 2>/dev/null | tail -n1 || echo na" || echo na)"
+    ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} T 0 >/dev/null 2>&1 || true"
+    ptt_off="$(ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} t 2>/dev/null | tail -n1 || echo na" || echo na)"
+    echo "  [${A_LABEL} ptt] during=${ptt_on} after=${ptt_off}"
 }
 
 read_swr_a() {
@@ -383,13 +429,13 @@ save_rig_state_b() {
 }
 
 apply_known_good_settings_a() {
-    ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} L RFPOWER 0.01 >/dev/null 2>&1 || true; \
+    ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} L RFPOWER ${A_RFPOWER} >/dev/null 2>&1 || true; \
         rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} L COMP 0 >/dev/null 2>&1 || true; \
         rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} L MICGAIN 0.75 >/dev/null 2>&1 || true"
 }
 
 apply_known_good_settings_b() {
-    ssh_b "rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} L RFPOWER 0.01 >/dev/null 2>&1 || true; \
+    ssh_b "rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} L RFPOWER ${B_RFPOWER} >/dev/null 2>&1 || true; \
         rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} L COMP 0 >/dev/null 2>&1 || true; \
         rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} L MICGAIN 0.75 >/dev/null 2>&1 || true"
 }
@@ -486,6 +532,226 @@ cleanup_all() {
     echo "  done"
 }
 
+preflight_check() {
+    echo "==> Pre-flight rig check"
+    local fail=0
+    local rc_a="rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT}"
+    local rc_b="rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT}"
+
+    # Apply corrections on both stations before readback (best-effort).
+    echo "  Applying corrections (COMP/NB/NR/SQL/VOX=0)..."
+    ssh_a "${rc_a} L COMP 0 2>/dev/null || true; \
+           ${rc_a} L NB   0 2>/dev/null || true; \
+           ${rc_a} L NR   0 2>/dev/null || true; \
+           ${rc_a} L SQL  0 2>/dev/null || true; \
+           ${rc_a} L VOX  0 2>/dev/null || true" 2>/dev/null || true
+    ssh_b "${rc_b} L COMP 0 2>/dev/null || true; \
+           ${rc_b} L NB   0 2>/dev/null || true; \
+           ${rc_b} L NR   0 2>/dev/null || true; \
+           ${rc_b} L SQL  0 2>/dev/null || true; \
+           ${rc_b} L VOX  0 2>/dev/null || true" 2>/dev/null || true
+
+    # Batch-read all rig state + audio in a single SSH session per station.
+    # Each line of output is KEY:VALUE so we can parse safely even if some
+    # rigctl calls return empty or multi-line results.
+    local a_raw
+    a_raw="$(ssh_a "
+        _mode_out=\$(${rc_a} m 2>/dev/null | grep -v Hamlib || echo na)
+        _sink_vol=\$(pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null \
+            | grep -o '[0-9]*%' | head -n1 | tr -d '%' || echo na)
+        _sink_mute=\$(pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null \
+            | awk '{print \$2}' || echo na)
+        printf 'FREQ:%s\n'     \"\$(${rc_a} f        2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'MODE:%s\n'     \"\$(printf '%s' \"\$_mode_out\" | head -n1)\"
+        printf 'PASSBAND:%s\n' \"\$(printf '%s' \"\$_mode_out\" | sed -n '2p')\"
+        printf 'RFPOWER:%s\n'  \"\$(${rc_a} l RFPOWER  2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'COMP:%s\n'     \"\$(${rc_a} l COMP     2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'NB:%s\n'       \"\$(${rc_a} l NB       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'NR:%s\n'       \"\$(${rc_a} l NR       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'SQL:%s\n'      \"\$(${rc_a} l SQL      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'VOX:%s\n'      \"\$(${rc_a} l VOX      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'RFGAIN:%s\n'   \"\$(${rc_a} l RFGAIN   2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'PREAMP:%s\n'   \"\$(${rc_a} l PREAMP   2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'SWR:%s\n'      \"\$(${rc_a} l SWR      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'STRENGTH:%s\n' \"\$(${rc_a} l STRENGTH 2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'SINKVOL:%s\n'  \"\${_sink_vol:-na}\"
+        printf 'SINKMUTE:%s\n' \"\${_sink_mute:-na}\"
+    " 2>/dev/null || echo "")"
+
+    local b_raw
+    b_raw="$(ssh_b "
+        _mode_out=\$(${rc_b} m 2>/dev/null | grep -v Hamlib || echo na)
+        _src_vol=\$(pactl get-source-volume @DEFAULT_SOURCE@ 2>/dev/null \
+            | grep -o '[0-9]*%' | head -n1 | tr -d '%' || echo na)
+        _src_mute=\$(pactl get-source-mute @DEFAULT_SOURCE@ 2>/dev/null \
+            | awk '{print \$2}' || echo na)
+        printf 'FREQ:%s\n'     \"\$(${rc_b} f        2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'MODE:%s\n'     \"\$(printf '%s' \"\$_mode_out\" | head -n1)\"
+        printf 'PASSBAND:%s\n' \"\$(printf '%s' \"\$_mode_out\" | sed -n '2p')\"
+        printf 'RFPOWER:%s\n'  \"\$(${rc_b} l RFPOWER  2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'COMP:%s\n'     \"\$(${rc_b} l COMP     2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'NB:%s\n'       \"\$(${rc_b} l NB       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'NR:%s\n'       \"\$(${rc_b} l NR       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'SQL:%s\n'      \"\$(${rc_b} l SQL      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'VOX:%s\n'      \"\$(${rc_b} l VOX      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'RFGAIN:%s\n'   \"\$(${rc_b} l RFGAIN   2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'PREAMP:%s\n'   \"\$(${rc_b} l PREAMP   2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'SWR:%s\n'      \"\$(${rc_b} l SWR      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'STRENGTH:%s\n' \"\$(${rc_b} l STRENGTH 2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'SRCVOL:%s\n'   \"\${_src_vol:-na}\"
+        printf 'SRCMUTE:%s\n'  \"\${_src_mute:-na}\"
+    " 2>/dev/null || echo "")"
+
+    # Extract KEY:VALUE from raw multi-line output.
+    _pf_val() { printf '%s' "${1}" | sed -n "s/^${2}://p" | head -n1; }
+    _pf_lt()  { awk -v v="${1}" -v t="${2}" 'BEGIN{print (v+0 < t+0) ? 1 : 0}'; }
+    _pf_gt()  { awk -v v="${1}" -v t="${2}" 'BEGIN{print (v+0 > t+0) ? 1 : 0}'; }
+
+    # Parse Station A.
+    local a_freq a_mode a_passband a_rfpower a_comp a_nb a_nr a_sql a_vox
+    local a_rfgain a_preamp a_swr a_strength a_sinkvol a_sinkmute
+    a_freq="$(_pf_val "$a_raw" FREQ)";         a_freq="${a_freq:-na}"
+    a_mode="$(_pf_val "$a_raw" MODE)";         a_mode="${a_mode:-na}"
+    a_passband="$(_pf_val "$a_raw" PASSBAND)"; a_passband="${a_passband:-na}"
+    a_rfpower="$(_pf_val "$a_raw" RFPOWER)";   a_rfpower="${a_rfpower:-na}"
+    a_comp="$(_pf_val "$a_raw" COMP)";         a_comp="${a_comp:-na}"
+    a_nb="$(_pf_val "$a_raw" NB)";             a_nb="${a_nb:-na}"
+    a_nr="$(_pf_val "$a_raw" NR)";             a_nr="${a_nr:-na}"
+    a_sql="$(_pf_val "$a_raw" SQL)";           a_sql="${a_sql:-na}"
+    a_vox="$(_pf_val "$a_raw" VOX)";           a_vox="${a_vox:-na}"
+    a_rfgain="$(_pf_val "$a_raw" RFGAIN)";     a_rfgain="${a_rfgain:-na}"
+    a_preamp="$(_pf_val "$a_raw" PREAMP)";     a_preamp="${a_preamp:-na}"
+    a_swr="$(_pf_val "$a_raw" SWR)";           a_swr="${a_swr:-na}"
+    a_strength="$(_pf_val "$a_raw" STRENGTH)"; a_strength="${a_strength:-na}"
+    a_sinkvol="$(_pf_val "$a_raw" SINKVOL)";   a_sinkvol="${a_sinkvol:-na}"
+    a_sinkmute="$(_pf_val "$a_raw" SINKMUTE)"; a_sinkmute="${a_sinkmute:-na}"
+
+    # Parse Station B.
+    local b_freq b_mode b_passband b_rfpower b_comp b_nb b_nr b_sql b_vox
+    local b_rfgain b_preamp b_swr b_strength b_srcvol b_srcmute
+    b_freq="$(_pf_val "$b_raw" FREQ)";         b_freq="${b_freq:-na}"
+    b_mode="$(_pf_val "$b_raw" MODE)";         b_mode="${b_mode:-na}"
+    b_passband="$(_pf_val "$b_raw" PASSBAND)"; b_passband="${b_passband:-na}"
+    b_rfpower="$(_pf_val "$b_raw" RFPOWER)";   b_rfpower="${b_rfpower:-na}"
+    b_comp="$(_pf_val "$b_raw" COMP)";         b_comp="${b_comp:-na}"
+    b_nb="$(_pf_val "$b_raw" NB)";             b_nb="${b_nb:-na}"
+    b_nr="$(_pf_val "$b_raw" NR)";             b_nr="${b_nr:-na}"
+    b_sql="$(_pf_val "$b_raw" SQL)";           b_sql="${b_sql:-na}"
+    b_vox="$(_pf_val "$b_raw" VOX)";           b_vox="${b_vox:-na}"
+    b_rfgain="$(_pf_val "$b_raw" RFGAIN)";     b_rfgain="${b_rfgain:-na}"
+    b_preamp="$(_pf_val "$b_raw" PREAMP)";     b_preamp="${b_preamp:-na}"
+    b_swr="$(_pf_val "$b_raw" SWR)";           b_swr="${b_swr:-na}"
+    b_strength="$(_pf_val "$b_raw" STRENGTH)"; b_strength="${b_strength:-na}"
+    b_srcvol="$(_pf_val "$b_raw" SRCVOL)";     b_srcvol="${b_srcvol:-na}"
+    b_srcmute="$(_pf_val "$b_raw" SRCMUTE)";   b_srcmute="${b_srcmute:-na}"
+
+    # Display per-station summary.
+    echo ""
+    echo "  ${A_LABEL} (ISS / TX):"
+    echo "    freq     = ${a_freq} Hz  [expected ${TEST_FREQ_HZ}]"
+    echo "    mode     = ${a_mode}  passband = ${a_passband} Hz"
+    echo "    rfpower  = ${a_rfpower}  comp=${a_comp}  nb=${a_nb}  nr=${a_nr}  sql=${a_sql}  vox=${a_vox}"
+    echo "    rfgain   = ${a_rfgain}  preamp=${a_preamp}  swr=${a_swr}  strength=${a_strength} dBm"
+    echo "    audio TX = ${a_sinkvol}%  mute=${a_sinkmute}"
+    echo ""
+    echo "  ${B_LABEL} (IRS / RX):"
+    echo "    freq     = ${b_freq} Hz  [expected ${TEST_FREQ_HZ}]"
+    echo "    mode     = ${b_mode}  passband = ${b_passband} Hz"
+    echo "    rfpower  = ${b_rfpower}  comp=${b_comp}  nb=${b_nb}  nr=${b_nr}  sql=${b_sql}  vox=${b_vox}"
+    echo "    rfgain   = ${b_rfgain}  preamp=${b_preamp}  swr=${b_swr}  strength=${b_strength} dBm"
+    echo "    audio RX = ${b_srcvol}%  mute=${b_srcmute}"
+    echo ""
+
+    # --- CRITICAL: frequency must match on both stations ---
+    for _entry in "${A_LABEL}:${a_freq}" "${B_LABEL}:${b_freq}"; do
+        local _lbl="${_entry%%:*}" _val="${_entry#*:}"
+        if [[ "$_val" != "na" && "$_val" != "${TEST_FREQ_HZ}" ]]; then
+            echo "  ERROR: ${_lbl} frequency ${_val} != expected ${TEST_FREQ_HZ}" >&2
+            fail=1
+        fi
+    done
+
+    # --- CRITICAL: RF power must be >= 1% ---
+    for _entry in "${A_LABEL}:${a_rfpower}" "${B_LABEL}:${b_rfpower}"; do
+        local _lbl="${_entry%%:*}" _val="${_entry#*:}"
+        if [[ "$_val" != "na" ]] && [[ "$(_pf_lt "$_val" 0.01)" == "1" ]]; then
+            echo "  ERROR: ${_lbl} rfpower=${_val} is effectively 0 — set A_RFPOWER/B_RFPOWER in the profile" >&2
+            fail=1
+        fi
+    done
+
+    # --- CRITICAL: TX audio output must not be muted ---
+    if [[ "$a_sinkmute" == "yes" ]]; then
+        echo "  ERROR: ${A_LABEL} PulseAudio output is muted — no audio will reach the radio" >&2
+        fail=1
+    fi
+
+    # --- CRITICAL: RX capture must not be muted ---
+    if [[ "$b_srcmute" == "yes" ]]; then
+        echo "  ERROR: ${B_LABEL} PulseAudio capture is muted — received audio cannot be decoded" >&2
+        fail=1
+    fi
+
+    # --- WARN: mode should match TEST_MODE_RIG ---
+    for _entry in "${A_LABEL}:${a_mode}" "${B_LABEL}:${b_mode}"; do
+        local _lbl="${_entry%%:*}" _val="${_entry#*:}"
+        if [[ "$_val" != "na" && "$_val" != "${TEST_MODE_RIG}" && "$_val" != "USB" ]]; then
+            echo "  WARN: ${_lbl} mode=${_val} — expected ${TEST_MODE_RIG} or USB" >&2
+        fi
+    done
+
+    # --- WARN: passband should be >= 2400 Hz for digital modes ---
+    for _entry in "${A_LABEL}:${a_passband}" "${B_LABEL}:${b_passband}"; do
+        local _lbl="${_entry%%:*}" _val="${_entry#*:}"
+        if [[ "$_val" != "na" && -n "$_val" ]] && [[ "$(_pf_lt "$_val" 2400)" == "1" ]]; then
+            echo "  WARN: ${_lbl} passband=${_val} Hz — digital modes need >= 2400 Hz" >&2
+        fi
+    done
+
+    # --- WARN: TX audio output level too low ---
+    if [[ "$a_sinkvol" != "na" && -n "$a_sinkvol" ]] && [[ "$(_pf_lt "$a_sinkvol" 20)" == "1" ]]; then
+        echo "  WARN: ${A_LABEL} PulseAudio output volume=${a_sinkvol}% — may be too low for TX audio" >&2
+    fi
+
+    # --- WARN: RX capture level too low ---
+    if [[ "$b_srcvol" != "na" && -n "$b_srcvol" ]] && [[ "$(_pf_lt "$b_srcvol" 20)" == "1" ]]; then
+        echo "  WARN: ${B_LABEL} PulseAudio capture volume=${b_srcvol}% — may be too low to decode" >&2
+    fi
+
+    # --- WARN: squelch active (gates received audio) ---
+    for _entry in "${A_LABEL}:${a_sql}" "${B_LABEL}:${b_sql}"; do
+        local _lbl="${_entry%%:*}" _val="${_entry#*:}"
+        if [[ "$_val" != "na" ]] && [[ "$(_pf_gt "$_val" 0.1)" == "1" ]]; then
+            echo "  WARN: ${_lbl} sql=${_val} — squelch active, may gate received audio" >&2
+        fi
+    done
+
+    # --- WARN: noise blanker / noise reduction still active after correction ---
+    for _entry in "${A_LABEL}:NB:${a_nb}" "${A_LABEL}:NR:${a_nr}" \
+                  "${B_LABEL}:NB:${b_nb}" "${B_LABEL}:NR:${b_nr}"; do
+        local _lbl="${_entry%%:*}"
+        local _key; _key="$(printf '%s' "$_entry" | cut -d: -f2)"
+        local _val; _val="$(printf '%s' "$_entry" | cut -d: -f3)"
+        if [[ "$_val" != "na" ]] && [[ "$(_pf_gt "$_val" 0.0)" == "1" ]]; then
+            echo "  WARN: ${_lbl} ${_key}=${_val} — DSP filter still active after correction attempt" >&2
+        fi
+    done
+
+    # --- WARN: VOX still on after correction ---
+    for _entry in "${A_LABEL}:${a_vox}" "${B_LABEL}:${b_vox}"; do
+        local _lbl="${_entry%%:*}" _val="${_entry#*:}"
+        if [[ "$_val" != "na" ]] && [[ "$(_pf_gt "$_val" 0.0)" == "1" ]]; then
+            echo "  WARN: ${_lbl} vox=${_val} — VOX still active after correction attempt" >&2
+        fi
+    done
+
+    if [[ "$fail" == "1" ]]; then
+        echo "  Pre-flight check FAILED — aborting test run" >&2
+        exit 1
+    fi
+    echo "  Pre-flight OK"
+}
+
 setup() {
     check_ssh_agent
     local bl
@@ -520,6 +786,193 @@ setup() {
     echo "==> Setup complete"
     status_a
     status_b
+}
+
+setup_side_a() {
+    check_ssh_agent
+    mkdir -p "$OUTPUT_DIR"
+
+    build_on_a
+
+    ssh_a "command -v rigctld >/dev/null || { echo 'ERROR: rigctld missing on Station A'; exit 1; }"
+
+    start_rigctld_a
+    sleep 1
+    save_rig_state_a
+    apply_known_good_settings_a
+    verify_audio_device_a
+    verify_ptt_control_a
+    verify_audio_codec_a
+    tune_a
+    maybe_tune_high_swr_a "startup"
+    maybe_tune_high_swr_a "qsy"
+
+    echo "==> Side-A setup complete"
+    status_a
+}
+
+cleanup_side_a() {
+    echo "==> Cleanup"
+    restore_rig_state_a
+    stop_rigctld_a
+    ssh_a "pkill -f 'openpulse receive|openpulse transmit|openpulse-tnc|openpulse-kisstnc' 2>/dev/null || true" || true
+    echo "  done"
+}
+
+run_side_a_transmit() {
+    local case_spec normalized_case_spec MODE FEC PAYLOAD_SIZE
+    case_spec="$SIDE_A_SINGLE_CASE"
+    if [[ -n "$SINGLE_CASE" ]]; then
+        case_spec="$SINGLE_CASE"
+    fi
+
+    normalized_case_spec="$case_spec"
+    if [[ "$normalized_case_spec" == *,* && "$normalized_case_spec" != *"|"* ]]; then
+        normalized_case_spec="${normalized_case_spec//,/|}"
+    fi
+
+    IFS='|' read -r MODE FEC PAYLOAD_SIZE <<< "$normalized_case_spec"
+    if [[ -z "${MODE}" || -z "${PAYLOAD_SIZE}" ]]; then
+        echo "FAIL (invalid side-A case format; expected MODE|FEC|PAYLOAD_BYTES or MODE|PAYLOAD_BYTES)"
+        return 1
+    fi
+    if [[ -z "${FEC}" ]]; then
+        FEC="none"
+    fi
+    if ! [[ "$PAYLOAD_SIZE" =~ ^[0-9]+$ ]] || (( PAYLOAD_SIZE < 1 || PAYLOAD_SIZE > 255 )); then
+        echo "FAIL (invalid payload size '${PAYLOAD_SIZE}'; must be 1..255)"
+        return 1
+    fi
+
+    local ts git_sha report
+    local ar
+    ts="$(date -u +%Y-%m-%dT%H%M%S)"
+    git_sha="$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
+    report="${OUTPUT_DIR}/side-a-${ts}.json"
+    mkdir -p "$OUTPUT_DIR"
+    ar="$(a_repo)"
+
+    local a_iss_log="/tmp/openpulse-side-a-${MODE}-${FEC}.log"
+    local a_tel_log="/tmp/openpulse-side-a-telemetry-${MODE}-${FEC}.log"
+    local a_device_arg=""
+    if [[ -n "${A_AUDIO_DEVICE}" ]]; then
+        a_device_arg="--device '${A_AUDIO_DEVICE}'"
+    fi
+
+    local payload_text
+    payload_text="$(python3 -c "import secrets, string, sys; a = string.ascii_letters + string.digits; sys.stdout.write(''.join(secrets.choice(a) for _ in range(${PAYLOAD_SIZE})))")"
+
+    local iss_exit=0
+    local telemetry_summary=""
+    local tel_ptt_on="na"
+    local tel_alc_nonzero="na"
+    local tel_rfm_nonzero="na"
+    local tel_swr_max="na"
+    local tel_pcm_playback="na"
+    local tel_pcm_mixer_line="na"
+
+    echo "==> Side-A transmit smoke test"
+    echo "    Station: ${A_LABEL} on ${A_SSH}   callsign=${CALLSIGN_A}"
+    echo "    Mode: ${MODE}   Payload: ${PAYLOAD_SIZE}B   Audio: ${A_AUDIO_DEVICE_LABEL}"
+    echo "    Freq: ${TEST_FREQ_HZ} Hz (${TEST_MODE_RIG_A}) (2m enforced)"
+    echo "    Report: ${report}"
+    echo ""
+
+    local tel_pid=""
+    (
+        ssh_a "set +e; rm -f '${a_tel_log}'; \
+            pcm_line=\$(amixer -c CODEC get PCM 2>/dev/null | grep 'Front Left' | head -n1 || true); \
+            echo 'PCM_MIXER_LINE='\"\${pcm_line}\" >>'${a_tel_log}'; \
+            pcm=\$(printf '%s\n' \"\$pcm_line\" | sed -n 's/.*\[\([0-9][0-9]*%\)\].*/\1/p'); \
+            [[ -n \"\$pcm\" ]] || pcm=na; \
+            echo 'PCM_PLAYBACK='\"\${pcm}\" >>'${a_tel_log}'; \
+            for _ in \$(seq 1 ${TELEMETRY_SAMPLES}); do \
+                ts=\$(date +%H:%M:%S.%3N); \
+                ptt=\$(rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} t 2>/dev/null | tail -n 1 || echo na); \
+                alc=\$(rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} l ALC_METER 2>/dev/null | tail -n 1 || echo na); \
+                rfm=\$(rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} l RFPOWER_METER 2>/dev/null | tail -n 1 || echo na); \
+                swr=\$(rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} l SWR 2>/dev/null | tail -n 1 || echo na); \
+                echo \"\${ts} PTT=\${ptt} ALC=\${alc} RFM=\${rfm} SWR=\${swr}\" >>'${a_tel_log}'; \
+                sleep ${TELEMETRY_INTERVAL}; \
+            done"
+    ) &
+    tel_pid="$!"
+
+    timeout "${TX_TIMEOUT}" ssh ${SSH_OPTS} "${A_SSH}" \
+        "'${ar}/target/release/openpulse' \
+            --backend cpal \
+            --log info \
+            --ptt rigctld \
+            --rig ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} \
+            transmit \
+            --mode '${MODE}' \
+            ${a_device_arg} \
+            '${payload_text}' \
+            >'${a_iss_log}' 2>&1" \
+        || iss_exit=$?
+
+    sleep 2
+    ssh_a "pkill -f '${ar}/target/release/openpulse .*transmit' 2>/dev/null || true" || true
+
+    if [[ -n "$tel_pid" ]]; then
+        wait "$tel_pid" || true
+    fi
+
+    tel_ptt_on="$(ssh_a "awk '/PTT=1/{c++} END{print c+0}' '${a_tel_log}' 2>/dev/null || echo na" || echo na)"
+    tel_alc_nonzero="$(ssh_a "awk -F'ALC=' '{if (NF>1){split(\$2,a,\" \" ); v=a[1]+0; if (v>0)c++}} END{print c+0}' '${a_tel_log}' 2>/dev/null || echo na" || echo na)"
+    tel_rfm_nonzero="$(ssh_a "awk -F'RFM=' '{if (NF>1){v=\$2+0; if (v>0)c++}} END{print c+0}' '${a_tel_log}' 2>/dev/null || echo na" || echo na)"
+    tel_swr_max="$(ssh_a "awk -F'SWR=' '{if (NF>1){v=\$2+0; if (!seen || v>mx){mx=v; seen=1}}} END{if (seen) print mx; else print \"na\"}' '${a_tel_log}' 2>/dev/null || echo na" || echo na)"
+    tel_pcm_playback="$(ssh_a "awk -F'=' '/^PCM_PLAYBACK=/{print \$2; exit}' '${a_tel_log}' 2>/dev/null || echo na" || echo na)"
+    tel_pcm_mixer_line="$(ssh_a "awk -F'=' '/^PCM_MIXER_LINE=/{sub(/^PCM_MIXER_LINE=/, \"\", \$0); print; exit}' '${a_tel_log}' 2>/dev/null || echo na" || echo na)"
+
+    telemetry_summary="A(ptt_on=${tel_ptt_on}, pcm=${tel_pcm_playback}, mixer=\"${tel_pcm_mixer_line}\", alc>0=${tel_alc_nonzero}, rfm>0=${tel_rfm_nonzero}, swr_max=${tel_swr_max})"
+
+    local test_pass=false
+    local fail_reason=""
+    if [[ $iss_exit -ne 0 ]]; then
+        fail_reason="ISS exit ${iss_exit}"
+    elif [[ "${tel_alc_nonzero}" == "0" && "${tel_rfm_nonzero}" == "0" ]]; then
+        fail_reason="side-A transmit produced no RF/ALC movement"
+    else
+        test_pass=true
+    fi
+
+    if $test_pass; then
+        echo "PASS"
+    else
+        echo "FAIL (${fail_reason})"
+    fi
+    echo "    telemetry: ${telemetry_summary}"
+
+    cat > "${report}" <<JSON
+{
+  "timestamp": "${ts}",
+  "git_sha": "${git_sha}",
+  "station": "$(json_escape "${A_LABEL}")",
+  "callsign": "$(json_escape "${CALLSIGN_A}")",
+  "freq_hz": ${TEST_FREQ_HZ},
+  "mode": "$(json_escape "${MODE}")",
+  "fec": "$(json_escape "${FEC}")",
+  "payload_bytes": ${PAYLOAD_SIZE},
+  "audio_device": "$(json_escape "${A_AUDIO_DEVICE}")",
+  "audio_device_label": "$(json_escape "${A_AUDIO_DEVICE_LABEL}")",
+  "result": "$(if $test_pass; then echo pass; else echo fail; fi)",
+  "fail_reason": "$(json_escape "${fail_reason}")",
+  "iss_exit": ${iss_exit},
+  "telemetry": {
+    "ptt_on": "$(json_escape "${tel_ptt_on}")",
+    "pcm_playback": "$(json_escape "${tel_pcm_playback}")",
+    "pcm_mixer_line": "$(json_escape "${tel_pcm_mixer_line}")",
+    "alc_nonzero": "$(json_escape "${tel_alc_nonzero}")",
+    "rfm_nonzero": "$(json_escape "${tel_rfm_nonzero}")",
+    "swr_max": "$(json_escape "${tel_swr_max}")"
+  }
+}
+JSON
+
+    echo "    Report: ${report}"
+
+    [[ $test_pass == true ]]
 }
 
 QUICK_CASES=(
@@ -592,6 +1045,8 @@ run_matrix() {
         irs_callsign="${CALLSIGN_B}"
     fi
 
+    preflight_check
+
     echo "==> On-air test matrix (tier=${TIER}, ${total} cases)"
     echo "    ISS: ${iss_label} on ${iss_station}   callsign=${iss_callsign}"
     echo "    IRS: ${irs_label} on ${irs_station}   callsign=${irs_callsign}"
@@ -649,6 +1104,9 @@ run_matrix() {
         local tel_iss_pcm_playback="na"
         local tel_irs_strength_max="na"
 
+        local irs_listen_ms
+        irs_listen_ms=$(( (IRS_STARTUP_WAIT + TX_TIMEOUT + 30) * 1000 ))
+
         if [[ "$REVERSE" == "1" ]]; then
             # 1) Start IRS receiver on Station A.
             ssh_a "pids=\$(pgrep -f '${ar}/target/release/openpulse .*receive' || true); \
@@ -661,6 +1119,7 @@ run_matrix() {
                     --ptt none \
                     receive \
                     --mode '${MODE}' \
+                    --listen-ms ${irs_listen_ms} \
                     ${a_device_arg} \
                     >'${a_irs_log}' 2>&1 </dev/null &"
 
@@ -766,6 +1225,7 @@ run_matrix() {
                     --ptt none \
                     receive \
                     --mode '${MODE}' \
+                    --listen-ms ${irs_listen_ms} \
                     ${b_device_arg} \
                     >'${b_irs_log}' 2>&1 </dev/null &"
 
@@ -896,6 +1356,11 @@ case "$ACTION" in
         maybe_tune_high_swr_a "qsy"
         maybe_tune_high_swr_b "qsy"
         run_matrix
+        ;;
+    sidea)
+        trap 'cleanup_side_a' EXIT
+        setup_side_a
+        run_side_a_transmit
         ;;
     supervise)
         trap 'cleanup_all' EXIT

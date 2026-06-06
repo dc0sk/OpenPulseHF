@@ -1,0 +1,26 @@
+{
+  "captured_at_utc": "2026-06-06T080122Z",
+  "git_sha": "1a7f10279a8f4a8b7e93aba68c796aa847c31cf0",
+  "git_branch": "feat/onair-tuner-swr-qsy-controls-20260604",
+  "git_dirty": true,
+  "host": "DC0SK-P14s",
+  "operator_user": "dc0sk",
+  "label": "ic9700-ft991a-quick",
+  "files": {
+    "report": {
+      "source": "docs/dev/test-reports/onair-2026-06-06T080029.json",
+      "bundle_name": "onair-2026-06-06T080029.json",
+      "sha256": "a1cbb3369f43dced1392e44950e5720bb5e529d191832148162fe0b87797e33f"
+    },
+    "config_snapshot": {
+      "source": "/home/dc0sk/.config/openpulse/config.toml",
+      "bundle_name": "config.toml.snapshot",
+      "sha256": "888b8277d5afe1cb624e10c027423a346e9ad8c7658f3ccdb7f3f25b880b64c0"
+    },
+    "notes": {
+      "bundle_name": "",
+      "sha256": ""
+    }
+  },
+  "preflight": null
+}

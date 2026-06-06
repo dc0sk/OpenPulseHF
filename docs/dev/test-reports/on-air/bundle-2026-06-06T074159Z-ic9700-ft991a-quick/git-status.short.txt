@@ -1,0 +1,12 @@
+ M .cargo-husky/hooks/pre-push
+ M .github/workflows/ci.yml
+ M crates/openpulse-audio/src/cpal_backend.rs
+ M docs/config/onair-ic9700-ft991a.example.sh
+ M docs/config/onair-tx500-kx3-local.example.sh
+ M scripts/run-onair-ic9700-ft991a.sh
+?? docs/dev/test-reports/on-air/
+?? docs/dev/test-reports/onair-2026-06-06T072608.json
+?? docs/dev/test-reports/onair-2026-06-06T073021.json
+?? docs/dev/test-reports/onair-2026-06-06T073513.json
+?? docs/dev/test-reports/onair-2026-06-06T074107.json
+?? docs/dev/test-reports/side-a-2026-06-06T072142.json

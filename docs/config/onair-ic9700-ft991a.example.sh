@@ -28,7 +28,8 @@ export B_HAMLIB_MODEL=1035
 export A_CAT_PORT="/dev/serial/by-id/usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_IC-9700_13012889_A-if00-port0"
 export A_CAT_BAUD=115200
 export A_PTT_PORT="/dev/serial/by-id/usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_IC-9700_13012889_B-if00-port0"
-export A_PTT_TYPE="RTS"
+# Prefer CAT PTT on the IC-9700; RTS is kept only as an explicit fallback.
+export A_PTT_TYPE="CAT"
 export A_RIGCTLD_ADDR="127.0.0.1"
 export A_RIGCTLD_PORT=4532
 
@@ -44,11 +45,22 @@ export B_RIGCTLD_PORT=4532
 export BAND2M_MIN_HZ=144500000
 export BAND2M_MAX_HZ=144750000
 export TEST_FREQ_HZ=144650000
-export TEST_MODE_RIG="USB"
+export TEST_MODE_RIG="PKTUSB"
+
+# IC-9700 audio prerequisites for digital USB TX (set on the radio UI):
+# - DATA MOD = USB
+# - USB MOD Level > 0 (start around mid-scale)
+# - Correct DATA mode (USB-D/PKTUSB) selected
 
 # Optional audio device pinning per station (leave empty for default)
-export A_AUDIO_DEVICE="sysdefault:CARD=CODEC"
-export B_AUDIO_DEVICE="default:CARD=CODEC"
+# Use the PulseAudio sink rather than direct hw: access.
+# PulseAudio holds the IC-9700 USB CODEC exclusively; hw:/plughw: access is
+# blocked at the OS level and produces no RF even though aplay reports success.
+# The PulseAudio default sink is:
+#   alsa_output.usb-Burr-Brown_from_TI_USB_Audio_CODEC-00.analog-stereo
+export A_AUDIO_DEVICE="pulse"
+export A_AUDIO_DEVICE_LABEL="IC-9700 USB Audio CODEC (PulseAudio)"
+export B_AUDIO_DEVICE="pulse"
 
 # Paths:
 # A is a normal repo checkout and used as build source.
@@ -63,9 +75,17 @@ export B_LOG_DIR='${HOME}/var/log/openpulse/on-air'
 export IRS_STARTUP_WAIT=5
 export TX_TIMEOUT=120
 
+# RF power (Hamlib scale 0.0–1.0; 0.05 = 5% of max).
+# Pre-flight check aborts the run if this reads back as < 1% — set explicitly.
+export A_RFPOWER=0.05
+export B_RFPOWER=0.05
+
 # Safety note for report metadata
 export ON_AIR_FIRST_PASS_NOTE="2m only, low power, agreed test window"
 
+# Side-A-only transmit smoke test defaults. The `sidea` action uses these when
+# reducing the test loop to a single transmit path on the IC-9700.
+export SIDE_A_SINGLE_CASE="BPSK250|none|64"
 # Optional high-SWR tuner policy (all values are explicit opt-in defaults).
 # When enabled, the runner checks SWR and attempts integrated tuner operation
 # on rigs that support the Hamlib TUNER function.

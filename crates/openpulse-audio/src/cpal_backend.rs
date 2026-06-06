@@ -241,16 +241,22 @@ pub struct CpalInputStream {
 
 impl AudioInputStream for CpalInputStream {
     fn read(&mut self) -> Result<Vec<f32>, AudioError> {
-        // Poll the buffer; only sleep when it is empty to avoid unnecessary latency.
-        let mut guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
-        if !guard.is_empty() {
-            return Ok(guard.drain(..).collect());
+        // Spin-wait until the CPAL callback deposits at least one sample.
+        // PulseAudio/PipeWire backends can have periods of 20–100 ms, so a
+        // single 10 ms sleep was not enough and the first read returned empty.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            {
+                let mut guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
+                if !guard.is_empty() {
+                    return Ok(guard.drain(..).collect());
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return Ok(Vec::new());
+            }
+            std::thread::sleep(Duration::from_millis(10));
         }
-        drop(guard);
-        // Buffer is empty – give the driver a moment to fill it.
-        std::thread::sleep(Duration::from_millis(10));
-        let mut guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
-        Ok(guard.drain(..).collect())
     }
 
     fn close(self: Box<Self>) {
