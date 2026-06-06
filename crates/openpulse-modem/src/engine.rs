@@ -673,6 +673,17 @@ impl ModemEngine {
         // 33 = PREAMBLE_SYMS(32) + 1 data symbol.
         let min_frame_samples = step * 33;
 
+        // Maximum window passed to each demodulation attempt.
+        // PREAMBLE_SYMS(32) + full RS FEC frame (255 bytes = 2040 bits BPSK) = 2072 symbols,
+        // plus 10 % margin.  Bounding the slice keeps per-attempt cost O(1) regardless of
+        // how much silence has accumulated before the signal arrived.
+        let max_frame_samples = step * 2280;
+
+        // RMS energy threshold for the fast silence gate (same as DcdState default: 0.01 RMS
+        // → 0.0001 mean-square).  Silence/noise floor is typically < 0.000025 mean-square;
+        // a live BPSK carrier at 30 % full-scale gives mean-square ≈ 0.045.
+        const ENERGY_GATE_THRESHOLD: f32 = 0.0001;
+
         // Incremental scan: only try start positions not yet attempted.
         let mut last_tried_end: usize = 0;
 
@@ -687,10 +698,29 @@ impl ModemEngine {
                 // Scan the new start positions introduced by this chunk.
                 let new_end = accumulated.len().saturating_sub(min_frame_samples);
                 for start in (last_tried_end..=new_end).step_by(step) {
+                    // Fast energy gate: check the first 32 symbol periods at this
+                    // position.  Silence costs < 0.1 ms; only emit the full
+                    // demodulation call (≈ 90 ms on a Pi 4) when signal is present.
+                    let gate_end = (start + step * 32).min(accumulated.len());
+                    let gate_len = gate_end - start;
+                    if gate_len > 0 {
+                        let mean_sq = accumulated[start..gate_end]
+                            .iter()
+                            .map(|s| s * s)
+                            .sum::<f32>()
+                            / gate_len as f32;
+                        if mean_sq < ENERGY_GATE_THRESHOLD {
+                            continue;
+                        }
+                    }
+
+                    // Bound the demodulation window to one maximum-length frame so
+                    // the per-attempt cost does not grow with accumulated buffer size.
+                    let end = (start + max_frame_samples).min(accumulated.len());
                     match self.receive_from_samples(
                         mode,
                         AudioSamples {
-                            samples: accumulated[start..].to_vec(),
+                            samples: accumulated[start..end].to_vec(),
                         },
                     ) {
                         Ok(payload) => return Ok(payload),
