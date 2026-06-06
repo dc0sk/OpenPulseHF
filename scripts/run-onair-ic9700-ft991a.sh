@@ -232,6 +232,21 @@ verify_audio_device_a() {
     echo "  [${A_LABEL} device] ${device_line}"
 }
 
+verify_audio_device_b() {
+    if [[ -z "${B_AUDIO_DEVICE}" ]]; then
+        echo "  [${B_LABEL} device] (default device)"
+        return 0
+    fi
+    local device_line
+    device_line="$(ssh_b "aplay -L 2>/dev/null | grep -Fx '${B_AUDIO_DEVICE}' | head -n1 || true")"
+    if [[ -z "$device_line" ]]; then
+        echo "ERROR: side-B audio device '${B_AUDIO_DEVICE}' not found" >&2
+        ssh_b "aplay -L 2>/dev/null | sed -n '1,20p'" || true
+        exit 1
+    fi
+    echo "  [${B_LABEL} device] ${device_line}"
+}
+
 verify_ptt_control_a() {
     echo "  [${A_LABEL} ptt] asserting rigctld PTT briefly"
     local ptt_on ptt_off
@@ -756,6 +771,11 @@ setup() {
     ssh_a "command -v rigctld >/dev/null || { echo 'ERROR: rigctld missing on Station A'; exit 1; }"
     ssh_b "command -v rigctld >/dev/null || { echo 'ERROR: rigctld missing on Station B'; exit 1; }"
 
+    if [[ -n "${A_AUDIO_DEVICE}" ]]; then
+        verify_audio_device_a
+    fi
+    verify_audio_device_b
+
     start_rigctld_a
     start_rigctld_b
     sleep 1
@@ -1102,7 +1122,7 @@ run_matrix() {
                 done; \
                 nohup '${ar}/target/release/openpulse' \
                     --backend cpal \
-                    --log info \
+                    --log debug \
                     --ptt none \
                     receive \
                     --mode '${MODE}' \
@@ -1208,7 +1228,7 @@ run_matrix() {
                 done; \
                 nohup '${br}/target/release/openpulse' \
                     --backend cpal \
-                    --log info \
+                    --log debug \
                     --ptt none \
                     receive \
                     --mode '${MODE}' \
@@ -1271,6 +1291,17 @@ run_matrix() {
         else
             echo "FAIL (${fail_reason})"
             fail=$(( fail + 1 ))
+            # Show the last lines of the IRS log to expose audio/decode issues.
+            local irs_tail=""
+            if [[ "$REVERSE" == "1" ]]; then
+                irs_tail="$(ssh_a "tail -n 30 '${a_irs_log}' 2>/dev/null || true" || true)"
+            else
+                irs_tail="$(ssh_b "tail -n 30 '${b_irs_log}' 2>/dev/null || true" || true)"
+            fi
+            if [[ -n "$irs_tail" ]]; then
+                echo "    IRS log tail:"
+                echo "$irs_tail" | sed 's/^/      /'
+            fi
         fi
 
         if [[ -n "$telemetry_summary" ]]; then

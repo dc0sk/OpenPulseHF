@@ -80,6 +80,11 @@ export TX_TIMEOUT=120
 export A_RFPOWER=0.5
 export B_RFPOWER=0.05
 
+# Telemetry: capture PTT/ALC/RFM on ISS and STRENGTH on IRS during each case.
+export TELEMETRY_ENABLE=1
+export TELEMETRY_SAMPLES=40
+export TELEMETRY_INTERVAL=0.2
+
 # Safety note for report metadata
 export ON_AIR_FIRST_PASS_NOTE="2m only, low power, agreed test window"
 
