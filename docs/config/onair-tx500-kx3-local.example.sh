@@ -25,7 +25,7 @@ export SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=30
 
 # ── Callsigns ─────────────────────────────────────────────────────────────────
 # FILL IN: your licensed callsigns
-export CALLSIGN_A="DC0SK"      # TX500 on Pi    — ISS (initiating)
+export CALLSIGN_A="DL0GG"      # TX500 on Pi    — ISS (initiating)
 export CALLSIGN_B="DC0SK"      # KX3 on laptop  — IRS (responding)
 export GRID_A="JN49"
 export GRID_B="JN49"

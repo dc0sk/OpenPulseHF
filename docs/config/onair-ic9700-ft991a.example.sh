@@ -86,7 +86,6 @@ export ON_AIR_FIRST_PASS_NOTE="2m only, low power, agreed test window"
 # Side-A-only transmit smoke test defaults. The `sidea` action uses these when
 # reducing the test loop to a single transmit path on the IC-9700.
 export SIDE_A_SINGLE_CASE="BPSK250|none|64"
-
 # Optional high-SWR tuner policy (all values are explicit opt-in defaults).
 # When enabled, the runner checks SWR and attempts integrated tuner operation
 # on rigs that support the Hamlib TUNER function.

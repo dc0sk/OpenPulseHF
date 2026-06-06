@@ -528,6 +528,7 @@ cleanup_all() {
     stop_rigctld_b
     ssh_a "pkill -f 'openpulse receive|openpulse transmit|openpulse-tnc|openpulse-kisstnc' 2>/dev/null || true" || true
     ssh_b "pkill -f 'openpulse receive|openpulse transmit|openpulse-tnc|openpulse-kisstnc' 2>/dev/null || true" || true
+    start_audio_services_b
     echo "  done"
 }
 
@@ -758,6 +759,9 @@ setup() {
 
     mkdir -p "$OUTPUT_DIR"
     ssh_b "mkdir -p '${bl}'"
+
+    # Release side-B CODEC endpoints for exclusive ALSA access during test run.
+    stop_audio_services_b
 
     build_on_a
     transfer_binaries_a_to_b
