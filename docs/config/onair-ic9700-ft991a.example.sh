@@ -75,6 +75,11 @@ export B_LOG_DIR='${HOME}/var/log/openpulse/on-air'
 export IRS_STARTUP_WAIT=5
 export TX_TIMEOUT=120
 
+# RF power (Hamlib scale 0.0–1.0; 0.05 = 5% of max).
+# Pre-flight check aborts the run if this reads back as < 1% — set explicitly.
+export A_RFPOWER=0.05
+export B_RFPOWER=0.05
+
 # Safety note for report metadata
 export ON_AIR_FIRST_PASS_NOTE="2m only, low power, agreed test window"
 

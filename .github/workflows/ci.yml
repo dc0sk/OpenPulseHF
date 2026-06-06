@@ -16,6 +16,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  pr-hook-long-runner:
+    name: PR hook long runner
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.REQUIRED_RUST }}
+
+      - name: Pre-push migrated check gate
+        run: cargo check --workspace --no-default-features
+
+      - name: Pre-push migrated test gate
+        run: cargo test --workspace --no-default-features
+
+      - name: Pre-push migrated security audit
+        run: |
+          cargo install cargo-audit --locked
+          # RUSTSEC-2023-0071: rsa Marvin attack via sqlx-mysql — no fix available upstream
+          # RUSTSEC-2024-0436: paste crate unmaintained — transitive via wgpu/metal
+          cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0436
+
   cross-aarch64-linux:
     name: Cross-check (aarch64-unknown-linux-gnu)
     runs-on: ubuntu-latest

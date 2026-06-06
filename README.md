@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: README.md
 status: living
-last_updated: 2026-05-20
+last_updated: 2026-06-06
 ---
 
 # OpenPulseHF
@@ -21,6 +21,20 @@ hardware is required to build or test.
 [![Donate via PayPal](https://img.shields.io/badge/Donate-PayPal-blue.svg?logo=paypal)](https://www.paypal.com/donate/?hosted_button_id=WY9U4MQ3ZAQWC)
 
 **Author:** Simon Keimer · [DC0SK](https://github.com/dc0sk)
+
+---
+## Supporters
+
+Big thanks to:
+
+DD2ZM for providing access to a remote controllable station for testing.
+
+DB1IUA for helping stuffing the budget sink-hole.
+
+---
+## Status
+
+As of 6th of June '26, I'm  busy with on-air-testing and fixing a lot of bugs and some misconceptions. Mostly related to Linux' soundsystems.
 
 ---
 
