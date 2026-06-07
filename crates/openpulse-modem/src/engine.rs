@@ -758,6 +758,11 @@ impl ModemEngine {
                     // Bound the demodulation window to one maximum-length frame so
                     // the per-attempt cost does not grow with accumulated buffer size.
                     let end = (start + max_frame_samples).min(accumulated.len());
+                    // Save AFC state before each decode attempt: on failure the
+                    // attempted demodulation has already called update_afc_estimate
+                    // (step=0.1 per call).  Without the restore, ~1744 failed
+                    // attempts per outer loop accumulate >1000 Hz of drift.
+                    let afc_before = self.afc_correction_hz;
                     match self.receive_from_samples(
                         mode,
                         AudioSamples {
@@ -765,7 +770,10 @@ impl ModemEngine {
                         },
                     ) {
                         Ok(payload) => return Ok(payload),
-                        Err(err) => last_err = Some(err),
+                        Err(err) => {
+                            last_err = Some(err);
+                            self.afc_correction_hz = afc_before;
+                        }
                     }
                 }
                 if new_end > last_tried_end {
