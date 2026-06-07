@@ -1,10 +1,7 @@
 name: Stamp Docs last_updated in PRs
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - "docs/**"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -12,30 +9,7 @@ permissions:
 
 jobs:
   stamp-docs:
-    if: ${{ github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout PR branch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-
-      - name: Set up git identity
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Stamp changed docs
-        run: |
-          bash scripts/stamp-doc-last-updated.sh "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}"
-
-      - name: Commit and push stamp changes
-        run: |
-          if git diff --quiet -- docs; then
-            echo "No stamp changes to commit."
-            exit 0
-          fi
-          git add docs
-          git commit -m "docs: stamp last_updated"
-          git push
+      - name: Manual-only notice
+        run: echo "Automatic PR stamping disabled. Run scripts/stamp-doc-last-updated.sh locally when needed."

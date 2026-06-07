@@ -1,13 +1,16 @@
 name: Request Copilot Review
 
 on:
-  pull_request:
-    types: [opened, synchronize, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to request Copilot review for
+        required: true
+        type: string
 
 jobs:
   request-copilot-review:
     runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false
     permissions:
       pull-requests: write
     steps:
@@ -15,6 +18,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh pr edit "${{ github.event.pull_request.number }}" \
+          gh pr edit "${{ inputs.pr_number }}" \
             --repo "${{ github.repository }}" \
             --add-reviewer Copilot || true
