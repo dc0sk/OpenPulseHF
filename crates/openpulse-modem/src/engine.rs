@@ -751,6 +751,11 @@ impl ModemEngine {
                             self.update_afc_estimate(mode, &accumulated[start..end]);
                         }
                         self.afc_step = saved_step;
+                        info!(
+                            "AFC settling done: correction={:.1}Hz buf_len={}",
+                            self.afc_correction_hz,
+                            accumulated.len()
+                        );
                         scan_reset_pending = true;
                         break 'inner;
                     }
@@ -763,6 +768,7 @@ impl ModemEngine {
                     // (step=0.1 per call).  Without the restore, ~1744 failed
                     // attempts per outer loop accumulate >1000 Hz of drift.
                     let afc_before = self.afc_correction_hz;
+                    debug!("AFC decode: pos={} correction={:.1}Hz", start, afc_before);
                     match self.receive_from_samples(
                         mode,
                         AudioSamples {

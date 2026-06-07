@@ -1292,11 +1292,17 @@ run_matrix() {
             echo "FAIL (${fail_reason})"
             fail=$(( fail + 1 ))
             # Show the last lines of the IRS log to expose audio/decode issues.
-            local irs_tail=""
+            local irs_head="" irs_tail=""
             if [[ "$REVERSE" == "1" ]]; then
-                irs_tail="$(ssh_a "tail -n 30 '${a_irs_log}' 2>/dev/null || true" || true)"
+                irs_head="$(ssh_a "head -n 15 '${a_irs_log}' 2>/dev/null || true" || true)"
+                irs_tail="$(ssh_a "tail -n 25 '${a_irs_log}' 2>/dev/null || true" || true)"
             else
-                irs_tail="$(ssh_b "tail -n 30 '${b_irs_log}' 2>/dev/null || true" || true)"
+                irs_head="$(ssh_b "head -n 15 '${b_irs_log}' 2>/dev/null || true" || true)"
+                irs_tail="$(ssh_b "tail -n 25 '${b_irs_log}' 2>/dev/null || true" || true)"
+            fi
+            if [[ -n "$irs_head" ]]; then
+                echo "    IRS log head:"
+                echo "$irs_head" | sed 's/^/      /'
             fi
             if [[ -n "$irs_tail" ]]; then
                 echo "    IRS log tail:"
