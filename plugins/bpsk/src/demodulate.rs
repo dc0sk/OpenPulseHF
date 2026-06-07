@@ -167,9 +167,12 @@ fn estimate_carrier_hz_wide(samples: &[f32], config: &ModulationConfig) -> Optio
 
     let target_2fc = 2.0 * fc;
     let step_hz = 25.0f32; // 25 Hz at 2×fc = 12.5 Hz baseband
-    let range_hz = 600.0f32; // ±600 Hz at 2×fc = ±300 Hz baseband
+    let range_hz = 800.0f32; // ±800 Hz at 2×fc = ±400 Hz baseband
 
-    let mut best_power = 0.0f32;
+    // NEG_INFINITY ensures the closest bin is always returned even when the
+    // carrier is near the scan boundary (avoids returning Some(0.0) when the
+    // carrier sits just outside the old ±300 Hz range on the first settling pass).
+    let mut best_power = f32::NEG_INFINITY;
     let mut best_offset_2fc = 0.0f32;
 
     let mut df = -range_hz;
@@ -197,8 +200,8 @@ fn estimate_carrier_hz_wide(samples: &[f32], config: &ModulationConfig) -> Optio
 /// Run a lightweight demodulation pass to estimate the carrier frequency offset.
 ///
 /// **Two-stage estimator:**
-/// 1. Goertzel coarse search (±300 Hz, 12.5 Hz resolution at baseband) to handle
-///    large initial offsets — e.g., VHF crystal errors of up to ±2 ppm on 144 MHz.
+/// 1. Goertzel coarse search (±400 Hz, 12.5 Hz resolution at baseband) to handle
+///    large initial offsets — e.g., VHF crystal errors of up to ±3 ppm on 144 MHz.
 /// 2. IQ-squaring fine correction at the Goertzel-corrected centre frequency to
 ///    recover the sub-step residual (≤ 6.25 Hz) for accurate tracking.
 ///

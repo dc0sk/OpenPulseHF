@@ -162,6 +162,6 @@ Before declaring work complete:
 
 ### Learnings and Maintenance
 
-- Capture recurring pitfalls as concise additions to this file or CLAUDE.md.
+- Capture recurring pitfalls as concise additions to this file and CLAUDE.md.
 - Keep guidance current with repository tooling and CI behavior.
 - Prefer updating existing guidance sections over creating fragmented policy files.
