@@ -145,22 +145,91 @@ pub fn estimate_frequency_offset(i_syms: &[f32], q_syms: &[f32], baud_rate: f32)
     im_sum.atan2(re_sum) * baud_rate / (4.0 * PI)
 }
 
-/// Run a lightweight demodulation pass to estimate the carrier frequency offset.
+/// Wide-range carrier frequency estimator using the Goertzel algorithm on the
+/// squared signal.
 ///
-/// Returns `None` if the sample buffer is too short.
-pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+/// Squaring removes BPSK modulation, leaving a tone at 2×fc.  A Goertzel
+/// search in 25 Hz steps over 2×fc ± 600 Hz (= fc ± 300 Hz at baseband)
+/// locates the dominant peak.  **Acquisition range: ±300 Hz.**
+fn estimate_carrier_hz_wide(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
     let baud = crate::parse_baud_rate(&config.mode).ok()?;
     let fs = config.sample_rate as f32;
     let fc = config.center_frequency;
     let n = crate::modulate::samples_per_symbol(fs, baud).ok()?;
 
-    if samples.len() < n * (PREAMBLE_SYMS + 1) {
+    if samples.len() < n * PREAMBLE_SYMS {
         return None;
     }
 
-    let offset = find_timing_offset(samples, n, fc, fs);
-    let (i_syms, q_syms) = demodulate_iq(samples, n, fc, fs, offset);
-    Some(estimate_frequency_offset(&i_syms, &q_syms, baud))
+    // Limit to 4× preamble length to keep per-call cost bounded.
+    let window_len = (n * PREAMBLE_SYMS * 4).min(samples.len());
+    let sq: Vec<f32> = samples[..window_len].iter().map(|&s| s * s).collect();
+
+    let target_2fc = 2.0 * fc;
+    let step_hz = 25.0f32; // 25 Hz at 2×fc = 12.5 Hz baseband
+    let range_hz = 600.0f32; // ±600 Hz at 2×fc = ±300 Hz baseband
+
+    let mut best_power = 0.0f32;
+    let mut best_offset_2fc = 0.0f32;
+
+    let mut df = -range_hz;
+    while df <= range_hz + 0.5 {
+        let test_freq = target_2fc + df;
+        let omega = 2.0 * PI * test_freq / fs;
+        let coeff = 2.0 * omega.cos();
+        let (mut s1, mut s2) = (0.0f32, 0.0f32);
+        for &x in &sq {
+            let s0 = x + coeff * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        let power = s1 * s1 + s2 * s2 - coeff * s1 * s2;
+        if power > best_power {
+            best_power = power;
+            best_offset_2fc = df;
+        }
+        df += step_hz;
+    }
+
+    Some(best_offset_2fc / 2.0)
+}
+
+/// Run a lightweight demodulation pass to estimate the carrier frequency offset.
+///
+/// **Two-stage estimator:**
+/// 1. Goertzel coarse search (±300 Hz, 12.5 Hz resolution at baseband) to handle
+///    large initial offsets — e.g., VHF crystal errors of up to ±2 ppm on 144 MHz.
+/// 2. IQ-squaring fine correction at the Goertzel-corrected centre frequency to
+///    recover the sub-step residual (≤ 6.25 Hz) for accurate tracking.
+///
+/// Returns `None` if the buffer is too short for either path.
+pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+    let baud = crate::parse_baud_rate(&config.mode).ok()?;
+    let fs = config.sample_rate as f32;
+    let n = crate::modulate::samples_per_symbol(fs, baud).ok()?;
+
+    // Stage 1: coarse Goertzel acquisition (±300 Hz).
+    let coarse = estimate_carrier_hz_wide(samples, config);
+
+    if samples.len() < n * (PREAMBLE_SYMS + 1) {
+        return coarse;
+    }
+
+    // Stage 2: fine IQ-squaring at the Goertzel-corrected centre frequency to
+    // eliminate the sub-step quantisation error (≤ 6.25 Hz).
+    let c = coarse.unwrap_or(0.0);
+    let corrected_fc = config.center_frequency + c;
+    let offset = find_timing_offset(samples, n, corrected_fc, fs);
+    let (i_syms, q_syms) = demodulate_iq(samples, n, corrected_fc, fs, offset);
+    let residual = estimate_frequency_offset(&i_syms, &q_syms, baud);
+
+    // The residual should be within ±baud/4 of 0 after Goertzel correction.
+    // If it is, combine both stages; otherwise fall back to the coarse estimate.
+    if residual.abs() < baud / 4.0 {
+        Some(c + residual)
+    } else {
+        coarse
+    }
 }
 
 /// Demodulate audio `samples` and return per-bit soft log-likelihood ratios.
@@ -780,6 +849,33 @@ mod tests {
         assert!(
             (offset - 20.0).abs() < 8.0,
             "expected ≈+20 Hz AFC offset, got {offset:.2} Hz"
+        );
+    }
+
+    #[test]
+    fn afc_wide_detects_large_offset() {
+        use crate::modulate::bpsk_modulate;
+        // 150 Hz offset — beyond the narrow ±62.5 Hz range; wide Goertzel must acquire.
+        let true_fc = 1650.0f32;
+        let ref_fc = 1500.0f32;
+        let cfg_tx = ModulationConfig {
+            mode: "BPSK250".to_string(),
+            sample_rate: 8000,
+            center_frequency: true_fc,
+            ..ModulationConfig::default()
+        };
+        let cfg_rx = ModulationConfig {
+            mode: "BPSK250".to_string(),
+            sample_rate: 8000,
+            center_frequency: ref_fc,
+            ..ModulationConfig::default()
+        };
+        let samples = bpsk_modulate(b"HelloWorldABCDEFGHIJKLMNOP", &cfg_tx).unwrap();
+        let offset = afc_estimate_hz(&samples, &cfg_rx).expect("afc estimate");
+        // Goertzel step is 12.5 Hz at baseband; allow ±15 Hz tolerance.
+        assert!(
+            (offset - 150.0).abs() < 15.0,
+            "expected ≈+150 Hz AFC offset, got {offset:.2} Hz"
         );
     }
 
