@@ -683,6 +683,17 @@ impl ModemEngine {
         // → 0.0001 mean-square).  Silence/noise floor is typically < 0.000025 mean-square;
         // a live BPSK carrier at 30 % full-scale gives mean-square ≈ 0.045.
         const ENERGY_GATE_THRESHOLD: f32 = 0.0001;
+        // AFC settling requires stronger signal energy than the fast energy gate.
+        // The main gate (0.0001 ≈ -40 dBFS RMS) skips obvious silence; the AFC
+        // gate (0.001 ≈ -30 dBFS RMS) ensures settling fires on the actual BPSK
+        // carrier, not on receiver noise or audio system artefacts whose Goertzel
+        // response can lock to a wrong frequency.
+        const AFC_SETTLE_THRESHOLD: f32 = 0.001;
+        // Maximum AFC correction magnitude accepted after settling.  The Goertzel
+        // scan covers ±300 Hz; well-calibrated rigs should be within ±200 Hz of
+        // the nominal carrier.  A larger correction indicates the AFC locked onto
+        // noise or an artefact rather than the real signal.
+        const AFC_MAX_CORRECTION_HZ: f32 = 250.0;
 
         // Incremental scan: only try start positions not yet attempted.
         let mut last_tried_end: usize = 0;
@@ -788,15 +799,17 @@ impl ModemEngine {
                     // demodulation call (≈ 90 ms on a Pi 4) when signal is present.
                     let gate_end = (start + step * 32).min(accumulated.len());
                     let gate_len = gate_end - start;
-                    if gate_len > 0 {
-                        let mean_sq = accumulated[start..gate_end]
+                    let mean_sq = if gate_len > 0 {
+                        accumulated[start..gate_end]
                             .iter()
                             .map(|s| s * s)
                             .sum::<f32>()
-                            / gate_len as f32;
-                        if mean_sq < ENERGY_GATE_THRESHOLD {
-                            continue;
-                        }
+                            / gate_len as f32
+                    } else {
+                        0.0
+                    };
+                    if mean_sq < ENERGY_GATE_THRESHOLD {
+                        continue;
                     }
 
                     // On the very first signal-energy position, run 6 fast AFC
@@ -806,13 +819,14 @@ impl ModemEngine {
                     // crystal errors up to ±300 Hz on 144 MHz (≈ ±2 ppm).
                     if first_energy_pos.is_none() {
                         let end = (start + max_frame_samples).min(accumulated.len());
+                        // Require higher energy for AFC settling than for the main
+                        // scan gate.  This prevents locking to receiver noise or audio
+                        // artefacts before the real BPSK carrier arrives.
+                        if mean_sq < AFC_SETTLE_THRESHOLD {
+                            continue;
+                        }
                         // estimate_carrier_hz_wide needs at least PREAMBLE_SYMS
                         // symbol periods (32 × step = 1024 samples for BPSK250).
-                        // If the window is smaller the estimator returns None for
-                        // all 6 iterations, correction stays 0, and first_energy_pos
-                        // is set permanently — blocking any future settle attempt.
-                        // This happens when the CPAL backend delivers a tiny initial
-                        // batch that trips the energy gate before the signal arrives.
                         // Defer settling until the window is large enough.
                         if end - start < step * 32 {
                             continue;
@@ -825,14 +839,18 @@ impl ModemEngine {
                             self.update_afc_estimate(mode, &accumulated[start..end]);
                         }
                         self.afc_step = saved_step;
-                        // Reject if the last estimate jumped by ≥ 5 Hz relative to
-                        // the previous one: this indicates oscillation on noise, not
-                        // convergence on a real carrier.  Let the scan continue to a
-                        // position where the actual signal is present.
+                        // Reject if the last estimate jumped by ≥ 5 Hz (oscillating
+                        // noise) or if the correction magnitude is implausibly large
+                        // (noise artefact locked to wrong frequency).
                         let converged = (self.afc_correction_hz - prev_correction).abs() < 5.0;
-                        if !converged {
-                            debug!("AFC settling rejected (not converged, Δ={:.1}Hz) at pos={start}",
-                                   (self.afc_correction_hz - prev_correction).abs());
+                        let plausible = self.afc_correction_hz.abs() <= AFC_MAX_CORRECTION_HZ;
+                        if !converged || !plausible {
+                            debug!(
+                                "AFC settling rejected at pos={start}: \
+                                 converged={converged} plausible={plausible} \
+                                 correction={:.1}Hz",
+                                self.afc_correction_hz
+                            );
                             self.afc_correction_hz = 0.0;
                             continue;
                         }
