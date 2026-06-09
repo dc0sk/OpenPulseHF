@@ -695,6 +695,16 @@ impl ModemEngine {
         // advanced past the preamble start and can never re-decode it.
         let mut first_energy_pos: Option<usize> = None;
         let mut scan_reset_pending = false;
+        // When the incremental scan advances past first_energy_pos before the full
+        // frame has buffered, we schedule one targeted retry over a ±PREAMBLE_SYMS
+        // window around fep once the frame has ended.  last_signal_pos tracks the
+        // last main-scan position where the energy gate passed, which marks the
+        // approximate end of the transmitted frame.  The retry fires as soon as the
+        // scan moves past last_signal_pos (signal gone → frame complete) and the
+        // buffer holds one preamble of margin past last_signal_pos.  Fallback: if
+        // last_signal_pos was never set (signal too short), fire at fep+max_frame_samples.
+        let mut fep_full_retry_done = false;
+        let mut last_signal_pos: usize = 0;
 
         loop {
             let chunk = stream
@@ -713,6 +723,58 @@ impl ModemEngine {
                 scan_reset_pending = false;
                 if let Some(fep) = first_energy_pos {
                     last_tried_end = last_tried_end.min(fep);
+                }
+            }
+
+                // One-shot full-frame retry around the first-energy position.
+            // Fires when accumulated ≥ fep + max_frame_samples.  By then the full
+            // frame is in the buffer.  Retry positions span fep ± one symbol period
+            // (step samples) only — NOT a full preamble lookback.  The preamble must
+            // be near the START of each slice so that find_timing_offset (which only
+            // searches within one symbol period) can locate it.  Earlier runs used
+            // fep ± PREAMBLE_SYMS (1024 samples) which placed the preamble 32 symbols
+            // into the slice for positions before fep, causing find_timing_offset to
+            // return a garbage offset and decode the preamble bits as frame data.
+            if !fep_full_retry_done {
+                if let Some(fep) = first_energy_pos {
+                    if accumulated.len() >= fep.saturating_add(max_frame_samples) {
+                        fep_full_retry_done = true;
+                        // Scan fep .. fep + PREAMBLE_SYMS×step (one full preamble
+                        // length forward).  The energy gate fires when the signal
+                        // carrier is first detectable, but ISS CPAL startup latency
+                        // can delay the actual first preamble symbol by up to one
+                        // preamble length (~88 ms / 1024 samples at 8 kHz).
+                        // Scanning forward from fep covers that delay window.
+                        // find_timing_offset handles the sub-symbol (<32 sample)
+                        // misalignment within each candidate start position.
+                        let lookback = step; // one symbol back in case gate fires slightly late
+                        let retry_start = fep.saturating_sub(lookback);
+                        let retry_end = fep + step * 32; // one preamble length forward
+                        // Keep the settled AFC correction for the retry attempts.
+                        // The initial settling happens on the signal (or near-zero
+                        // noise), so the correction is valid or safely near 0.
+                        let saved_afc = self.afc_correction_hz;
+                        for start in (retry_start..=retry_end).step_by(step) {
+                            let end = (start + max_frame_samples).min(accumulated.len());
+                            if end.saturating_sub(start) < min_frame_samples {
+                                continue;
+                            }
+                            debug!("AFC full-retry: pos={start} correction={:.1}Hz", self.afc_correction_hz);
+                            match self.receive_from_samples(
+                                mode,
+                                AudioSamples {
+                                    samples: accumulated[start..end].to_vec(),
+                                },
+                            ) {
+                                Ok(payload) => return Ok(payload),
+                                Err(err) => {
+                                    debug!("AFC full-retry: pos={start} FAILED: {err}");
+                                    last_err = Some(err);
+                                    self.afc_correction_hz = saved_afc;
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -743,14 +805,38 @@ impl ModemEngine {
                     // (1 − 0.3⁶) × 150 Hz ≈ 149.9 Hz — effectively one-shot for
                     // crystal errors up to ±300 Hz on 144 MHz (≈ ±2 ppm).
                     if first_energy_pos.is_none() {
-                        first_energy_pos = Some(start);
                         let end = (start + max_frame_samples).min(accumulated.len());
+                        // estimate_carrier_hz_wide needs at least PREAMBLE_SYMS
+                        // symbol periods (32 × step = 1024 samples for BPSK250).
+                        // If the window is smaller the estimator returns None for
+                        // all 6 iterations, correction stays 0, and first_energy_pos
+                        // is set permanently — blocking any future settle attempt.
+                        // This happens when the CPAL backend delivers a tiny initial
+                        // batch that trips the energy gate before the signal arrives.
+                        // Defer settling until the window is large enough.
+                        if end - start < step * 32 {
+                            continue;
+                        }
                         let saved_step = self.afc_step;
                         self.afc_step = 0.7;
+                        let mut prev_correction = self.afc_correction_hz;
                         for _ in 0..6 {
+                            prev_correction = self.afc_correction_hz;
                             self.update_afc_estimate(mode, &accumulated[start..end]);
                         }
                         self.afc_step = saved_step;
+                        // Reject if the last estimate jumped by ≥ 5 Hz relative to
+                        // the previous one: this indicates oscillation on noise, not
+                        // convergence on a real carrier.  Let the scan continue to a
+                        // position where the actual signal is present.
+                        let converged = (self.afc_correction_hz - prev_correction).abs() < 5.0;
+                        if !converged {
+                            debug!("AFC settling rejected (not converged, Δ={:.1}Hz) at pos={start}",
+                                   (self.afc_correction_hz - prev_correction).abs());
+                            self.afc_correction_hz = 0.0;
+                            continue;
+                        }
+                        first_energy_pos = Some(start);
                         info!(
                             "AFC settling done: correction={:.1}Hz buf_len={}",
                             self.afc_correction_hz,
@@ -758,6 +844,12 @@ impl ModemEngine {
                         );
                         scan_reset_pending = true;
                         break 'inner;
+                    }
+
+                    // Record the furthest signal-energy position seen so we know
+                    // when the frame has ended (energy gate will fail past this).
+                    if start > last_signal_pos {
+                        last_signal_pos = start;
                     }
 
                     // Bound the demodulation window to one maximum-length frame so

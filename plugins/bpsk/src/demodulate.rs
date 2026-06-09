@@ -281,6 +281,7 @@ pub fn bpsk_demodulate_soft(
 
     let range_start = PREAMBLE_SYMS - 1;
     let data_syms_end = i_syms.len() - TAIL_SYMS;
+
     let iq: Vec<(f32, f32)> = i_syms[range_start..data_syms_end]
         .iter()
         .zip(q_syms[range_start..data_syms_end].iter())
@@ -605,13 +606,17 @@ fn find_timing_offset(samples: &[f32], n: usize, fc: f32, fs: f32) -> usize {
 
         // Correlate the first PREAMBLE_SYMS I values with the expected
         // alternating pattern (+1, −1, +1, −1, …) that NRZI-encoding the
-        // preamble bits produces.
+        // preamble bits produces.  Use |energy| so the search is immune to
+        // 180° phase ambiguity: an inverted preamble gives a large negative
+        // score that would otherwise lose to any noise offset with score > 0.
+        // The differential BPSK decoder handles the polarity after timing lock.
         let expected = expected_preamble_symbols(PREAMBLE_SYMS);
         let energy: f32 = i_syms[..PREAMBLE_SYMS]
             .iter()
             .zip(expected.iter())
             .map(|(&s, &e)| s * e)
-            .sum();
+            .sum::<f32>()
+            .abs();
 
         if energy > best_energy {
             best_energy = energy;
