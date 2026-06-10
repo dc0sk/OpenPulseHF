@@ -76,14 +76,13 @@ pub fn run(addr: &str, cmd: DaemonCommands) -> Result<i32> {
             tx_attenuation_db,
             qsy_enabled,
             bandplan_mode,
-            allow_tuner_on_high_swr,
         } => set_config(
             addr,
             mode,
             tx_attenuation_db,
             qsy_enabled,
             bandplan_mode,
-            allow_tuner_on_high_swr,
+            None,
         ),
         DaemonCommands::SubscribeSpectrum { fps, frames } => subscribe_spectrum(addr, fps, frames),
     }

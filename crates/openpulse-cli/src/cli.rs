@@ -53,6 +53,11 @@ pub enum Commands {
         mode: String,
         #[arg(short, long)]
         device: Option<String>,
+        /// Audio carrier center frequency in Hz (default: 1500).
+        /// Use when the receive side expects the signal at a specific audio
+        /// frequency due to rig VFO offset (e.g. --center-frequency 2550).
+        #[arg(long, default_value = "1500")]
+        center_frequency: f32,
     },
     /// Receive data and print to stdout.
     Receive {
@@ -63,6 +68,11 @@ pub enum Commands {
         /// Listen for up to this many milliseconds before giving up.
         #[arg(long)]
         listen_ms: Option<u64>,
+        /// Audio carrier center frequency in Hz (default: 1500).
+        /// Use when the transmitting station's signal arrives at a different
+        /// audio frequency due to rig VFO offset (e.g. --center-frequency 450).
+        #[arg(long, default_value = "1500")]
+        center_frequency: f32,
     },
     /// List available audio devices.
     Devices,
@@ -205,8 +215,6 @@ pub enum DaemonCommands {
         qsy_enabled: Option<bool>,
         #[arg(long)]
         bandplan_mode: Option<String>,
-        #[arg(long)]
-        allow_tuner_on_high_swr: Option<bool>,
     },
 }
 

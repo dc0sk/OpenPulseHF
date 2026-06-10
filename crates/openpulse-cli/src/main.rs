@@ -124,14 +124,26 @@ fn main() -> Result<()> {
     let mut exit_code = 0;
 
     match cli.command {
-        Commands::Transmit { data, mode, device } => {
+        Commands::Transmit {
+            data,
+            mode,
+            device,
+            center_frequency,
+        } => {
+            if center_frequency != 1500.0 {
+                engine.set_center_frequency(center_frequency);
+            }
             commands::transmit::run(&data, &mode, device.as_deref(), &mut engine, ptt.as_mut())?;
         }
         Commands::Receive {
             mode,
             device,
             listen_ms,
+            center_frequency,
         } => {
+            if center_frequency != 1500.0 {
+                engine.set_center_frequency(center_frequency);
+            }
             commands::receive::run(&mode, device.as_deref(), listen_ms, &mut engine)?;
         }
         Commands::Devices => {

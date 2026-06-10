@@ -7,139 +7,132 @@ last_updated: 2026-06-10
 
 # On-Air Test Handoff
 
-All loopback tests pass (PR #383). The on-air test still fails. This document captures the exact state of the investigation.
+All loopback tests pass (PR #383). The on-air test still fails. This document is the current state of the investigation.
 
 ---
 
-## What is working
+## Summary of confirmed facts
 
-- **Loopback test (rpi51 → cable → rpi52)**: 3/3 PASS, merged in PR #383.
-- **FT-991A PTT via CAT**: confirmed working (`ptt_on=2`, `rfm=2` in telemetry). `B_PTT_TYPE="CAT"`.
-- **IC-9700 RF path (reverse)**: IC-9700 S-meter shows `str_max=18` (≈ S9+18dB = −55 dBm) during FT-991A TX, confirming a real RF signal arrives at the IC-9700 antenna.
-- **FT-991A USB audio**: FT-991A properly outputs RX audio via USB CODEC (CPAL can capture it; the 1286 Hz interferer at 144.650 MHz was audible via USB).
-
----
-
-## Root cause of current on-air failure
-
-### IC-9700 USB AF output not enabled
-
-**Observation (2026-06-10):**  
-Stereo raw capture from the IC-9700 USB CODEC (`plughw:CARD=CODEC,DEV=0`, 2-channel, 8 kHz) during a real FT-991A transmit burst shows NO energy jump on either channel:
-
-| Second | ch0 mean_sq | ch1 mean_sq |
-|--------|------------|------------|
-| 0 | 0.001276 | 0.000192 |
-| 1–19 | 0.000831–0.001276 | 0.000023–0.000030 |
-| (FT-991A TX at ~T=5–7.5s) | **no jump** | **no jump** |
-
-The IC-9700 S-meter simultaneously shows `str_max=18` (S9+18 dB, confirmed real signal). The user confirms they can **see and hear** the FT-991A signal on the IC-9700 display and speaker. But the USB CODEC output carries no RX audio.
-
-**Root cause:**  
-The IC-9700 is not routing its received audio to the USB CODEC output. In PKTUSB mode, the IC-9700 plays received audio through its internal speaker/headphone but does NOT send it to the USB audio device unless explicitly configured in the menu.
-
-**Required fix (hardware, must be done on the rig):**  
-IC-9700 menu → Set → Connectors → **USB AF/IF Output** → set to **AF** (not IF or Off).  
-Also verify: Menu → Set → Connectors → **MOD Level** (DATA MOD source for TX audio) and that PKT AF input is set to **USB**.
-
-This is the single gating issue for the reverse (FT-991A ISS → IC-9700 IRS) test direction.
+| Fact | Source |
+|------|--------|
+| FT-991A PTT via CAT works | `ptt_on=2`, `rfm>0=2` in test telemetry |
+| FT-991A transmits at correct RF frequency | On-air spectrum observation |
+| FT-991A audio chain works | FT-8 and other digital modes work on same hardware |
+| IC-9700 receives FT-991A signal | User confirmed: visible on IC-9700 display, audible on speaker, `str_max=18` (≈ S9+18 dB) |
+| IC-9700 USB CODEC can capture at 8000 Hz | `plughw:CARD=CODEC,DEV=0` confirmed working, idle mean_sq ≈ 0.001 |
+| FT-991A USB CODEC minimum rate = 32000 Hz | `/proc/asound/card3/stream0`; capture only at 48000 Hz |
+| rpi51 PulseAudio default source = TX output monitor | `pactl info` shows monitor source as default |
 
 ---
 
-### AFC locking onto noise carrier before signal arrives (forward direction)
+## The core open question
 
-**Observation:**  
-In the forward direction (IC-9700 ISS → FT-991A IRS), the AFC settles at T=0.15s (before the IC-9700 signal arrives at T=5s) on a noise/QRM carrier in the IC-9700 audio. The settled correction is +175Hz (1675Hz tone in the audio), not the IC-9700's carrier offset.
+**Why does the IC-9700 USB audio capture show no signal burst during FT-991A TX?**
 
-The main scan then runs the full session at +175Hz and never decodes the real signal.
+In a 20-second stereo raw capture (`plughw:CARD=CODEC,DEV=0`, 2-channel, 8 kHz) taken during a test run where the FT-991A was transmitting (`str_max=18`), both channels stayed completely flat:
 
-**Root cause:**  
-The AFC settling fires on the first stable carrier above the noise floor (`ENERGY_GATE_THRESHOLD = 0.0001`). On the IC-9700 channel there is a persistent carrier at ≈1675Hz (probably an audio artifact of the IC-9700 USB CODEC or residual QRM) that is stable enough to pass the stability guard. This carrier is weaker than the actual IC-9700 BPSK signal but arrives earlier.
-
-**Mitigation added (this branch):**  
-- One-shot anchor + 5-pass fine-track in both main-scan settling and retry mini-settle.
-- Stability guard: |after_fine − after_anchor| ≤ 20 Hz (noise-oscillating estimates are rejected).
-- AFC_MAX_CORRECTION_HZ raised from 100 Hz to 450 Hz to accommodate the ~300–400 Hz rig crystal offsets.
-- Retry trigger: wall-clock T ≥ 12s + re-arm every 2s (rate-independent).
-- Retry energy gate: 0.01 (tries to skip noise-only positions; see limitation below).
-
-**Limitation:**  
-The retry energy gate at 0.01 was set assuming FT-991A signal mean_sq ≫ noise (0.001). If the IC-9700 USB AF output is also not configured for the non-reverse IRS side (which is the FT-991A IRS — a separate rig), and if the FT-991A analog level is only slightly above the noise floor, the gate would block the signal. The FT-991A IRS USB audio level has NOT yet been verified during a real IC-9700 TX burst.
-
----
-
-## Audio device configuration
-
-| Station | Role | Correct CPAL device | Notes |
-|---------|------|---------------------|-------|
-| rpi51 (IC-9700 ISS) | TX | `pulse` (PulseAudio default sink) | PulseAudio default sink = IC-9700 USB output. Confirmed working. |
-| rpi51 (IC-9700 IRS) | RX | `plughw:CARD=CODEC,DEV=0` | **NOT `pulse`**. PulseAudio default source on rpi51 is the monitor of the USB output (captures TX feedback, not RX audio). Direct ALSA bypasses this. BUT: IC-9700 USB AF output must be enabled in the rig menu first. |
-| dd2zm-landline (FT-991A ISS) | TX | `pulse` | PulseAudio default sink = FT-991A USB output. Confirmed working. |
-| dd2zm-landline (FT-991A IRS) | RX | `pulse` | Need to verify whether PulseAudio default source on dd2zm-landline is the FT-991A input or a monitor. |
-
-**Action required in config:**  
-```bash
-# In docs/config/onair-ic9700-ft991a.example.sh:
-# IC-9700 RX (IRS role) must use direct ALSA, not PulseAudio default:
-export A_AUDIO_DEVICE="plughw:CARD=CODEC,DEV=0"  # for IRS role
-# IC-9700 TX (ISS role) must keep PulseAudio:
-export A_AUDIO_DEVICE="pulse"  # for ISS role
+```
+t(s)   ch0_msq    ch1_msq
+   4   0.000860   0.000027   ← FT-991A TX period (T≈5–7.5s from IRS start)
+   5   0.000895   0.000025
+   6   0.000831   0.000028
 ```
 
-The script does not currently support per-role audio device selection. Needs a code change or a second variable (e.g. `A_AUDIO_CAPTURE_DEVICE`).
+The IC-9700 shows S9+18 dB on the S-meter and the user hears the signal on the speaker. The USB audio level (ch0 idle ≈ 0.001 mean_sq) does not increase when the FT-991A transmits.
+
+**Possible explanations (to investigate):**
+
+1. **IC-9700 AGC / AF gain setting:** The IC-9700 may apply heavy AGC to the DATA/PKT mode audio, compressing the received signal to the same level as background noise. A 0 dB SNR at the USB audio output is possible even with a strong S-meter reading.
+
+2. **Timing mismatch in the capture:** The stereo capture was run in parallel with the test script. The FT-991A only transmits for ~2.5 seconds (frame duration). If the capture window was not aligned with the TX window, the signal burst would be missed. **To verify:** do a synchronized capture during a known TX burst using the test script's PTT confirmation.
+
+3. **Wrong channel:** The IC-9700 USB CODEC may route RX audio to ch1 (right) instead of ch0 (left) in PKTUSB mode. Our capture showed ch1 very quiet (mean_sq ≈ 0.000025), but this was also flat before and after the TX window. If the signal IS on ch1, the AGC might still compress it to the same level as idle noise.
+
+4. **IC-9700 RX audio routing to USB:** Even if USB AF output is set to AF, the specific routing in PKTUSB mode may differ from SSB voice. There may be a separate menu setting for the PKT mode digital audio path.
+
+5. **IC-9700 Ethernet interface:** The IC-9700 can be interfaced via Ethernet (LAN), which exposes the audio at a known sample rate independently of the USB CODEC configuration. Software that supports this interface (e.g., wfview as a reference implementation using the IC-9700 Ethernet API) could be used to provide audio to openpulse without the USB channel.
 
 ---
 
-## Open action items
+## What is known about the audio pipeline
 
-| # | Action | Blocker? | Status |
-|---|--------|----------|--------|
-| 1 | Enable USB AF output on IC-9700 (Menu → Set → Connectors → USB AF/IF Output = AF) | **YES — gating for reverse test** | Requires physical rig access |
-| 2 | Verify FT-991A USB AF output for non-reverse test (PulseAudio default source on dd2zm-landline) | YES — gating for forward test | Run `pactl info` on dd2zm-landline, check default source |
-| 3 | Commit engine.rs changes on `fix/afc-settling-receive-with-timeout` | No | Pending — see below |
-| 4 | Add per-role audio device config (capture vs. playback separate) | No | Low priority |
-| 5 | Measure FT-991A IRS audio level during IC-9700 TX | No | After items 1/2 |
+### rpi51 (IC-9700 side)
+
+| Path | Details |
+|------|---------|
+| IC-9700 USB CODEC | PCM2901, card 2 (`plughw:CARD=CODEC,DEV=0`). Supports 8000 Hz natively. |
+| CPAL capture device | Must be `plughw:CARD=CODEC,DEV=0`. PulseAudio default source = output monitor (captures TX audio, not RX). |
+| IC-9700 USB CODEC capture channels | ch0 (L): mean_sq ≈ 0.001 at idle. ch1 (R): mean_sq ≈ 0.000025 at idle (near silence). Neither shows signal burst. |
+| IC-9700 audio during FT-991A TX | Flat — no measurable increase in USB audio level on either channel. |
+
+### dd2zm-landline (FT-991A side)
+
+| Path | Details |
+|------|---------|
+| FT-991A USB CODEC | PCM2901 (Burr-Brown). Playback: 32000/44100/48000 Hz only. Capture: 48000 Hz only. |
+| CPAL device used | `pulse` (PipeWire-pulse). PipeWire resamples 8000→32000 Hz for TX, 48000→8000 Hz for RX. |
+| ALC during TX | ALC=1 at peak during openpulse burst (barely deflects). Very low modulation level. |
+| FT-8 / other modes | Work correctly — audio chain is functional. |
 
 ---
 
-## Uncommitted changes (engine.rs)
+## Current state of code changes
 
-All changes are on branch `fix/afc-settling-receive-with-timeout`. The engine.rs changes improve the receive pipeline but do not fix the hardware configuration issue above.
+| Component | Change | Status |
+|-----------|--------|--------|
+| `engine.rs` | AFC one-shot anchor, ±450 Hz correction range, wall-clock retry trigger | Committed (ff6a1b3) |
+| `cli.rs` + `main.rs` | `--center-frequency <HZ>` flag for transmit and receive | Implemented, not yet committed |
+| `onair-ic9700-ft991a.example.sh` | `A_AUDIO_DEVICE=plughw:CARD=CODEC,DEV=0` for IRS mode | Committed (ff6a1b3) |
 
-| Change | Purpose |
-|--------|---------|
-| `AFC_MAX_CORRECTION_HZ = 450.0` (was 100.0) | Accept rig crystal offsets up to ±400 Hz (IC-9700/FT-991A offset measured at ≈300–400 Hz) |
-| One-shot anchor + 5-pass fine-track (main scan settling AND retry) | Avoid iterative divergence for signals at the Goertzel boundary (±400 Hz offset saturates iterative update) |
-| Stability guard: \|fine − anchor\| ≤ 20 Hz | Distinguish stable signal (both passes agree) from noise (both passes random-walk) |
-| Flat-noise guard: both anchor and fine < 5 Hz → skip | Avoid full decodes on silent sections where Goertzel returns ~0 Hz |
-| Retry energy gate: 0.01 mean_sq | Skip noise-only positions in retry scan (relies on signal being > 10× noise power) |
-| Retry trigger: T ≥ 12s, re-arm every 2s | Rate-independent trigger replacing sample-count threshold |
+---
 
-**To commit:**
+## Next steps
+
+### Step 1 — Synchronized audio capture during confirmed FT-991A TX
+
+Run the stereo IC-9700 capture in the same test window as the full test script (which confirms PTT assertion), and analyze the per-second energy precisely in the FT-991A TX window:
+
 ```bash
-git add crates/openpulse-modem/src/engine.rs docs/config/onair-ic9700-ft991a.example.sh
-git commit -m "fix: AFC one-shot anchor, wider correction range, wall-clock retry trigger"
-git push
-```
+# On rpi51: start 20-second capture in background
+ssh dc0sk@dc0sk-rpi51 "arecord -D plughw:CARD=CODEC,DEV=0 -f S16_LE -r 8000 -c 2 -d 20 /tmp/ic9700-sync.raw &"
 
----
-
-## Test commands
-
-```bash
-# Single case, normal direction (IC-9700 ISS → FT-991A IRS):
+# Immediately run the test (FT-991A TX starts at ~T=5s):
 source docs/config/onair-ic9700-ft991a.example.sh
-export SSH_AUTH_SOCK=/run/user/1000/ssh-agent.socket
-./scripts/run-onair-ic9700-ft991a.sh supervise --single-case 'BPSK250|none|64'
-
-# Single case, reverse (FT-991A ISS → IC-9700 IRS):
-export A_AUDIO_DEVICE="plughw:CARD=CODEC,DEV=0"   # use direct ALSA for IRS capture
+export A_AUDIO_DEVICE="plughw:CARD=CODEC,DEV=0"
 ./scripts/run-onair-ic9700-ft991a.sh supervise --single-case 'BPSK250|none|64' --reverse
 
-# Verify IC-9700 USB AF output is working (run during FT-991A TX burst):
-ssh dc0sk@dc0sk-rpi51 "arecord -D plughw:CARD=CODEC,DEV=0 -f S16_LE -r 8000 -c 2 -d 15 /tmp/ic9700-rx.raw"
-# Analyze: look for energy jump on ch0 or ch1 at ~T=5s when FT-991A starts TX
+# Analyze capture:
+ssh dc0sk@dc0sk-rpi51 "python3 -c \"
+import struct, math
+d = open('/tmp/ic9700-sync.raw','rb').read()
+s = struct.unpack('<'+'h'*(len(d)//2), d)
+L, R = s[0::2], s[1::2]
+for i in range(0, min(len(L),len(R))-8000, 8000):
+    q0 = sum(x*x for x in L[i:i+8000])/8000/32768**2
+    q1 = sum(x*x for x in R[i:i+8000])/8000/32768**2
+    print(f't={i//8000:3d}s  L={q0:.6f}  R={q1:.6f}')
+\""
 ```
+
+This will reveal whether the IC-9700 USB audio shows ANY level change during the FT-991A TX window, and which channel carries the signal.
+
+### Step 2 — Check IC-9700 low-level audio settings
+
+If the USB audio level during TX is below the AFC settling threshold (`ENERGY_GATE_THRESHOLD = 0.0001`), the receive engine will not detect the signal. Check:
+- IC-9700 menu → Data → Data MOD (should be USB)
+- IC-9700 menu → Connectors → USB Serial Function (should be DATA for PKT)
+- IC-9700 AF gain (physical knob or menu) — affects USB output level
+
+### Step 3 — Lower energy gate if signal level is near noise
+
+If Step 1 shows the IC-9700 USB audio has a slight signal increase (but below 0.0001 mean_sq), lower `ENERGY_GATE_THRESHOLD` in `engine.rs` and the retry gate from 0.01 to something matching the observed level.
+
+### Step 4 — Consider IC-9700 Ethernet audio
+
+The IC-9700 can serve audio directly over Ethernet (LAN connection, CI-V over TCP). This bypasses the USB CODEC entirely and provides audio at a configurable sample rate. wfview is one example of software that implements this interface; the IC-9700 Ethernet audio API is documented in the IC-9700 Advanced Manual. This path would:
+- Eliminate any USB AF output routing question
+- Provide audio at a well-known rate (8000/16000/24000/48000 Hz selectable)
+- Potentially have better gain/level properties
 
 ---
 
@@ -147,11 +140,10 @@ ssh dc0sk@dc0sk-rpi51 "arecord -D plughw:CARD=CODEC,DEV=0 -f S16_LE -r 8000 -c 2
 
 | Item | Note |
 |------|------|
-| FT-991A PTT | CAT only, not RTS. `B_PTT_TYPE="CAT"`. |
-| FT-991A RF power | Fixed at 5W remotely (Hamlib set_level RFPOWER unsupported for model 1035). |
-| FT-991A PipeWire audio | ~3600 effective samples/s due to PipeWire buffering. IRS accumulates correctly but slowly. |
-| IC-9700 audio (capture) | Must use `plughw:CARD=CODEC,DEV=0` not `pulse`. PulseAudio default source = monitor of TX output. |
-| IC-9700 audio (USB AF out) | **NOT yet confirmed enabled.** Stereo capture shows no signal burst during FT-991A TX. Must enable in rig menu. |
-| IC-9700 carrier offset | ≈ −300 to −400 Hz offset relative to FT-991A at same dial frequency (1200–1100 Hz audio instead of 1500 Hz). |
-| IC-9700 S-meter (Hamlib) | STRENGTH returns dB relative to S9 reference; `str_max=18` ≈ S9+18dB = −55 dBm. |
-| Freq | 144.640 MHz (moved from 144.650 MHz to avoid 1286 Hz interferer in FT-991A passband). |
+| FT-991A PTT | CAT only (`B_PTT_TYPE="CAT"`). CAT port: `if00-port0`. |
+| FT-991A RF power | Fixed at 5W remotely. ALC barely deflects during openpulse TX — modulation level is low. Investigate FT-991A DATA/PKT audio input gain in menu. |
+| FT-991A USB CODEC | Min playback rate 32000 Hz; capture only 48000 Hz. PipeWire handles resampling. |
+| IC-9700 USB capture | Must use `plughw:CARD=CODEC,DEV=0`, not `pulse` (PulseAudio default source is output monitor). |
+| IC-9700 Ethernet | Alternative audio path: IC-9700 LAN port → CI-V/audio over TCP. See IC-9700 Advanced Manual. |
+| IC-9700 preamp | Can enable (+20–30 dB). Raises noise floor equally — does not improve SNR, but may push audio above any fixed-level threshold if the current issue is low absolute level. |
+| Frequency | 144.640 MHz (moved from 144.650 MHz to avoid 1286 Hz interferer in FT-991A passband). |
