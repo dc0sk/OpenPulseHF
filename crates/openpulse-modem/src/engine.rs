@@ -647,6 +647,7 @@ impl ModemEngine {
             .map_err(|e| ModemError::Audio(e.to_string()))?;
 
         let deadline = Instant::now() + listen_for;
+        let start_time = Instant::now();
         let mut accumulated = Vec::new();
         let mut last_err: Option<ModemError> = None;
 
@@ -683,17 +684,15 @@ impl ModemEngine {
         // → 0.0001 mean-square).  Silence/noise floor is typically < 0.000025 mean-square;
         // a live BPSK carrier at 30 % full-scale gives mean-square ≈ 0.045.
         const ENERGY_GATE_THRESHOLD: f32 = 0.0001;
-        // AFC settling requires stronger signal energy than the fast energy gate.
-        // The main gate (0.0001 ≈ -40 dBFS RMS) skips obvious silence; the AFC
-        // gate (0.001 ≈ -30 dBFS RMS) ensures settling fires on the actual BPSK
-        // carrier, not on receiver noise or audio system artefacts whose Goertzel
-        // response can lock to a wrong frequency.
-        const AFC_SETTLE_THRESHOLD: f32 = 0.001;
-        // Maximum AFC correction magnitude accepted after settling.  The Goertzel
-        // scan covers ±300 Hz; well-calibrated rigs should be within ±200 Hz of
-        // the nominal carrier.  A larger correction indicates the AFC locked onto
-        // noise or an artefact rather than the real signal.
-        const AFC_MAX_CORRECTION_HZ: f32 = 250.0;
+        // Maximum AFC correction magnitude accepted after settling.
+        // The Goertzel acquisition range is ±400 Hz (range_hz = 800 in the
+        // estimate_carrier_hz_wide implementation).  On-air measurements between
+        // IC-9700 and FT-991A show a consistent ~400 Hz carrier offset between
+        // the two rigs at the same nominal dial frequency — reject anything
+        // beyond the full ±400 Hz Goertzel range plus a small margin.
+        // The convergence guard (|change| > 5 Hz) still rejects flat noise
+        // that produces a near-zero stable estimate.
+        const AFC_MAX_CORRECTION_HZ: f32 = 450.0;
 
         // Incremental scan: only try start positions not yet attempted.
         let mut last_tried_end: usize = 0;
@@ -714,7 +713,12 @@ impl ModemEngine {
         // scan moves past last_signal_pos (signal gone → frame complete) and the
         // buffer holds one preamble of margin past last_signal_pos.  Fallback: if
         // last_signal_pos was never set (signal too short), fire at fep+max_frame_samples.
+        // Retry fires every 2 s after T=12 s.  fep_full_retry_done is reset
+        // after each unsuccessful retry so the next 2-second tick re-fires
+        // with a larger accumulated buffer (more of the frame available).
+        // Set permanently to true only on a successful decode (Ok returns).
         let mut fep_full_retry_done = false;
+        let mut last_retry_at: Option<Instant> = None;
         let mut last_signal_pos: usize = 0;
 
         loop {
@@ -746,26 +750,127 @@ impl ModemEngine {
             // fep ± PREAMBLE_SYMS (1024 samples) which placed the preamble 32 symbols
             // into the slice for positions before fep, causing find_timing_offset to
             // return a garbage offset and decode the preamble bits as frame data.
-            if !fep_full_retry_done {
-                if let Some(fep) = first_energy_pos {
-                    if accumulated.len() >= fep.saturating_add(max_frame_samples) {
-                        fep_full_retry_done = true;
-                        // Scan fep .. fep + PREAMBLE_SYMS×step (one full preamble
-                        // length forward).  The energy gate fires when the signal
-                        // carrier is first detectable, but ISS CPAL startup latency
-                        // can delay the actual first preamble symbol by up to one
-                        // preamble length (~88 ms / 1024 samples at 8 kHz).
-                        // Scanning forward from fep covers that delay window.
-                        // find_timing_offset handles the sub-symbol (<32 sample)
-                        // misalignment within each candidate start position.
-                        let lookback = step; // one symbol back in case gate fires slightly late
-                        let retry_start = fep.saturating_sub(lookback);
-                        let retry_end = fep + step * 32; // one preamble length forward
-                        // Keep the settled AFC correction for the retry attempts.
-                        // The initial settling happens on the signal (or near-zero
-                        // noise), so the correction is valid or safely near 0.
+            // Retry fires when enough audio has accumulated to guarantee the
+            // full frame is in the buffer:
+            //   accumulated ≥ signal_arrival_samples + frame_size
+            //
+            // For 8 kHz (loopback / IC-9700 USB):
+            //   signal_arrival ≈ IRS_STARTUP_WAIT × 8000 = 40 000 samples
+            //   frame_size     ≈ 20 224 samples  (BPSK250, 64 B payload)
+            //   minimum        ≈ 60 000 → 7.5 s at 8 kHz
+            //
+            // For FT-991A PipeWire (~3 600 effective samples/s):
+            //   signal_arrival ≈ 6 s × 3 600 = 21 600 samples
+            //   frame_size     ≈ 20 224 samples
+            //   minimum        ≈ 42 000; trigger at 60 000 → fires at 16.7 s
+            //   IRS kill window ≈ 17 s — just within budget
+            //
+            // A fep-relative threshold (fep + N) fails when fep fires on
+            // early noise far before the signal; the fixed count avoids that.
+            // Wall-clock trigger: retry fires every 2 s starting at T=12 s.
+            // The FT-991A PipeWire effective rate varies between 2 300 and
+            // 7 600 samples/s, making sample-count thresholds unreliable.
+            // At the first firing the signal may not yet be fully buffered
+            // (slice too short → CRC fails).  Re-firing every 2 s lets each
+            // subsequent attempt use a longer accumulated buffer until the
+            // frame fits and the decode succeeds.
+            let elapsed_secs = start_time.elapsed().as_secs();
+            let retry_ready = elapsed_secs >= 12 && match last_retry_at {
+                None => true,
+                Some(t) => t.elapsed().as_secs() >= 2,
+            };
+            if fep_full_retry_done && retry_ready {
+                // Re-arm the retry for the next 2-second tick.
+                fep_full_retry_done = false;
+            }
+            let retry_trigger = retry_ready && !accumulated.is_empty();
+            if !fep_full_retry_done && retry_trigger {
+                {
+                    fep_full_retry_done = true;
+                    last_retry_at = Some(Instant::now());
+                        // Scan the entire accumulated buffer from the start.
+                        // The AFC correction is kept from the settled value:
+                        // when settling succeeded on the real signal the
+                        // correction is valid (e.g. −43.8 Hz carrier offset).
+                        // A 43.8 Hz offset at 250 baud causes a 63° phase ramp
+                        // per symbol, which flips preamble bits after 2 symbols
+                        // and prevents timing lock — resetting to 0 would cause
+                        // all retry positions to fail even when the signal is
+                        // present.  If settling was rejected (saved_afc = 0)
+                        // the retry falls back to AFC=0 naturally.
+                        let retry_end = accumulated.len().saturating_sub(min_frame_samples);
                         let saved_afc = self.afc_correction_hz;
-                        for start in (retry_start..=retry_end).step_by(step) {
+                        let saved_step = self.afc_step;
+                        for start in (0..=retry_end).step_by(step) {
+                            let gate_end = (start + step * 32).min(accumulated.len());
+                            let gate_len = gate_end - start;
+                            // Energy gate: skip positions that cannot contain
+                            // the BPSK signal.  On-air IC-9700 (plughw direct,
+                            // 144.640 MHz): idle noise+QRM mean_sq ≈ 0.0015.
+                            // FT-991A at 74 dB SNR above IC-9700 noise floor:
+                            // mean_sq ≈ 0.15 (100×).  Threshold of 0.01 sits
+                            // between the two, skipping QRM noise positions
+                            // without a 70 ms decode each.
+                            if gate_len > 0 {
+                                let msq = accumulated[start..gate_end]
+                                    .iter()
+                                    .map(|s| s * s)
+                                    .sum::<f32>()
+                                    / gate_len as f32;
+                                if msq < 0.01 {
+                                    continue;
+                                }
+                            }
+                            // Mini-settle: 6 fast AFC passes refine the carrier
+                            // estimate before the full decode.  Starting from
+                            // saved_afc, 6 passes at afc_step=0.7 converge
+                            // from up to ±400 Hz to within ±1 Hz of the carrier.
+                            // Only skip if the result diverged past the Goertzel
+                            // acquisition limit — the convergence guard (|change|
+                            // < 5 Hz) was removed because it incorrectly blocks
+                            // signals at exactly fc (0 Hz offset, saved_afc=0)
+                            // and signals at the Goertzel boundary (e.g. −400 Hz
+                            // which saturates and accumulates past the old limit).
+                            if gate_len >= step * 32 {
+                                // Step 1: one-shot wide-scan to anchor the
+                                // carrier frequency (afc_step=1.0 sets the
+                                // correction directly to the Goertzel peak).
+                                let initial_step = self.afc_step;
+                                self.afc_step = 1.0;
+                                self.afc_correction_hz = 0.0;
+                                self.update_afc_estimate(
+                                    mode,
+                                    &accumulated[start..gate_end],
+                                );
+                                let after_anchor = self.afc_correction_hz;
+                                // Step 2: 5 fine-tracking passes to converge.
+                                self.afc_step = 0.7;
+                                for _ in 0..5 {
+                                    self.update_afc_estimate(
+                                        mode,
+                                        &accumulated[start..gate_end],
+                                    );
+                                }
+                                self.afc_step = initial_step;
+                                let after_fine = self.afc_correction_hz;
+                                // Stability guard: reject if the fine-track
+                                // drifted >20 Hz from the anchor (unstable
+                                // noise) or exceeded the Goertzel range.
+                                // Also reject when BOTH anchor and fine-track
+                                // are <5 Hz (flat noise / no carrier) — this
+                                // avoids expensive full decodes on silent
+                                // sections where the Goertzel returns ~0 Hz.
+                                // The one exception that matters — a signal
+                                // exactly at fc (0 Hz offset) — is handled by
+                                // the main scan which runs at saved_afc anyway.
+                                if (after_fine - after_anchor).abs() > 20.0
+                                    || after_fine.abs() > AFC_MAX_CORRECTION_HZ
+                                    || (after_fine.abs() < 5.0 && after_anchor.abs() < 5.0)
+                                {
+                                    self.afc_correction_hz = saved_afc;
+                                    continue;
+                                }
+                            }
                             let end = (start + max_frame_samples).min(accumulated.len());
                             if end.saturating_sub(start) < min_frame_samples {
                                 continue;
@@ -785,7 +890,8 @@ impl ModemEngine {
                                 }
                             }
                         }
-                    }
+                        self.afc_correction_hz = saved_afc;
+                        self.afc_step = saved_step;
                 }
             }
 
@@ -818,31 +924,43 @@ impl ModemEngine {
                     // (1 − 0.3⁶) × 150 Hz ≈ 149.9 Hz — effectively one-shot for
                     // crystal errors up to ±300 Hz on 144 MHz (≈ ±2 ppm).
                     if first_energy_pos.is_none() {
-                        let end = (start + max_frame_samples).min(accumulated.len());
-                        // Require higher energy for AFC settling than for the main
-                        // scan gate.  This prevents locking to receiver noise or audio
-                        // artefacts before the real BPSK carrier arrives.
-                        if mean_sq < AFC_SETTLE_THRESHOLD {
-                            continue;
-                        }
-                        // estimate_carrier_hz_wide needs at least PREAMBLE_SYMS
-                        // symbol periods (32 × step = 1024 samples for BPSK250).
-                        // Defer settling until the window is large enough.
-                        if end - start < step * 32 {
+                        // Use a short window (one preamble length = 1024 samples)
+                        // for AFC settling.  Using max_frame_samples (72960) makes
+                        // settling O(N²) in buffer length when the noise floor is
+                        // above ENERGY_GATE_THRESHOLD: every position fires the gate,
+                        // each runs 6 Goertzel passes on 72960 samples (≈ 170 ms),
+                        // and the scan falls hours behind the live audio.  A 1024-
+                        // sample window is 70× faster and still provides enough SNR
+                        // to locate the BPSK carrier when the signal is present.
+                        let settle_end = (start + step * 32).min(accumulated.len());
+                        if settle_end - start < step * 32 {
                             continue;
                         }
                         let saved_step = self.afc_step;
+                        // Step 1: one-shot wide-scan to anchor the carrier.
+                        // Iterative passes at afc_step=0.7 fail for signals
+                        // at the Goertzel boundary (e.g. carrier at ±400 Hz
+                        // from fc): each pass accumulates the boundary
+                        // raw_estimate, diverging to ±1680 Hz after 6 passes.
+                        // afc_step=1.0 sets the correction to the single-pass
+                        // estimate directly, landing at the carrier.
+                        self.afc_step = 1.0;
+                        self.afc_correction_hz = 0.0;
+                        self.update_afc_estimate(mode, &accumulated[start..settle_end]);
+                        let after_anchor = self.afc_correction_hz;
+                        // Step 2: 5 fine-tracking passes to converge within ±1 Hz.
                         self.afc_step = 0.7;
-                        let mut prev_correction = self.afc_correction_hz;
-                        for _ in 0..6 {
+                        let mut prev_correction = after_anchor;
+                        for _ in 0..5 {
                             prev_correction = self.afc_correction_hz;
-                            self.update_afc_estimate(mode, &accumulated[start..end]);
+                            self.update_afc_estimate(mode, &accumulated[start..settle_end]);
                         }
                         self.afc_step = saved_step;
-                        // Reject if the last estimate jumped by ≥ 5 Hz (oscillating
-                        // noise) or if the correction magnitude is implausibly large
-                        // (noise artefact locked to wrong frequency).
-                        let converged = (self.afc_correction_hz - prev_correction).abs() < 5.0;
+                        // Stability check: fine-track must agree with the
+                        // anchor within 20 Hz (real carrier) and the magnitude
+                        // must not exceed the Goertzel acquisition range.
+                        let converged = (self.afc_correction_hz - prev_correction).abs() < 5.0
+                            && (self.afc_correction_hz - after_anchor).abs() <= 20.0;
                         let plausible = self.afc_correction_hz.abs() <= AFC_MAX_CORRECTION_HZ;
                         if !converged || !plausible {
                             debug!(

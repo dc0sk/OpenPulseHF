@@ -37,14 +37,15 @@ export A_RIGCTLD_PORT=4532
 export B_CAT_PORT="/dev/serial/by-id/usb-Silicon_Labs_CP2105_Dual_USB_to_UART_Bridge_Controller_008924A1-if00-port0"
 export B_CAT_BAUD=38400
 export B_PTT_PORT="/dev/serial/by-id/usb-Silicon_Labs_CP2105_Dual_USB_to_UART_Bridge_Controller_008924A1-if01-port0"
-export B_PTT_TYPE="RTS"
+# FT-991A PTT is via CAT (confirmed via js8call/flrig — RTS does not work).
+export B_PTT_TYPE="CAT"
 export B_RIGCTLD_ADDR="127.0.0.1"
 export B_RIGCTLD_PORT=4532
 
 # 2m safety guard for this test window (script enforces this range)
 export BAND2M_MIN_HZ=144500000
 export BAND2M_MAX_HZ=144750000
-export TEST_FREQ_HZ=144650000
+export TEST_FREQ_HZ=144640000
 export TEST_MODE_RIG="PKTUSB"
 
 # IC-9700 audio prerequisites for digital USB TX (set on the radio UI):
@@ -78,7 +79,7 @@ export TX_TIMEOUT=120
 # RF power (Hamlib scale 0.0–1.0; 0.05 = 5% of max).
 # Pre-flight check aborts the run if this reads back as < 1% — set explicitly.
 export A_RFPOWER=0.5
-export B_RFPOWER=0.05
+export B_RFPOWER=0.5
 
 # Telemetry: capture PTT/ALC/RFM on ISS and STRENGTH on IRS during each case.
 export TELEMETRY_ENABLE=1
