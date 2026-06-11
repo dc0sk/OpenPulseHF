@@ -89,6 +89,30 @@ export TELEMETRY_INTERVAL=0.2
 # Safety note for report metadata
 export ON_AIR_FIRST_PASS_NOTE="2m only, low power, agreed test window"
 
+# Power cycle transceivers via Hamlib CAT before setup.
+# Both radios enter CAT standby on power-off so the same serial port handles
+# power-on. IC-9700 and FT-991A both support Hamlib P 0/1 commands.
+# Set to 1 to enable; useful when resuming after a reboot or config change.
+export POWER_CYCLE_ENABLE=0
+export POWER_OFF_WAIT=10   # seconds between power-off and power-on commands
+export POWER_ON_WAIT=15    # seconds after power-on before rigctld starts
+
+# Hardware audio loopback regression (rpi51 ↔ rpi52 USB cable).
+# run_loopback_regression() deploys the freshly-built binary to rpi52, then
+# runs run-loopback-rpi51-rpi52.sh to verify the full audio+modem stack.
+# LOOPBACK_TIER: 'quick' (4 modes, ~100s) or 'full' (8 modes, ~200s).
+#   supervise/sidea always use 'full' at session start.
+#   run action uses 'quick' (binary already deployed).
+#   post-failure check uses the default tier below.
+export LOOPBACK_IRS_SSH="dc0sk@dc0sk-rpi52"
+export LOOPBACK_IRS_BIN_DIR="/home/dc0sk/openpulse/bin"
+export LOOPBACK_TIER="quick"
+
+# Periodic loopback interval: run a quick-tier loopback every N on-air test cases.
+# Each quick loopback takes ~100s; set 0 to disable periodic checks.
+# Session-start and post-failure checks always run regardless of this setting.
+export LOOPBACK_REGRESSION_INTERVAL=0
+
 # Side-A-only transmit smoke test defaults. The `sidea` action uses these when
 # reducing the test loop to a single transmit path on the IC-9700.
 export SIDE_A_SINGLE_CASE="BPSK250|none|64"

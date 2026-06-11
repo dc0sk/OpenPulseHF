@@ -63,6 +63,13 @@ ALLOW_TUNER_ON_HIGH_SWR="${ALLOW_TUNER_ON_HIGH_SWR:-0}"
 HIGH_SWR_THRESHOLD="${HIGH_SWR_THRESHOLD:-2.0}"
 TUNER_TRIGGER_ON_QSY="${TUNER_TRIGGER_ON_QSY:-1}"
 QSY_MODE_ENABLED="${QSY_MODE_ENABLED:-0}"
+POWER_CYCLE_ENABLE="${POWER_CYCLE_ENABLE:-0}"
+POWER_OFF_WAIT="${POWER_OFF_WAIT:-10}"
+POWER_ON_WAIT="${POWER_ON_WAIT:-15}"
+LOOPBACK_IRS_SSH="${LOOPBACK_IRS_SSH:-dc0sk@dc0sk-rpi52}"
+LOOPBACK_IRS_BIN_DIR="${LOOPBACK_IRS_BIN_DIR:-/home/dc0sk/openpulse/bin}"
+LOOPBACK_TIER="${LOOPBACK_TIER:-quick}"
+LOOPBACK_REGRESSION_INTERVAL="${LOOPBACK_REGRESSION_INTERVAL:-0}"
 
 A_SAVED_FREQ=""
 A_SAVED_MODE=""
@@ -254,6 +261,71 @@ verify_ptt_control_a() {
     ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} T 0 >/dev/null 2>&1 || true"
     ptt_off="$(ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} t 2>/dev/null | tail -n1 || echo na" || echo na)"
     echo "  [${A_LABEL} ptt] during=${ptt_on} after=${ptt_off}"
+}
+
+power_cycle_a() {
+    echo "  [${A_LABEL}] power cycle via direct CAT (${A_CAT_PORT})"
+    ssh_a "rigctl -m ${A_HAMLIB_MODEL} -r '${A_CAT_PORT}' -s ${A_CAT_BAUD} P 0 2>/dev/null || true"
+    echo "  [${A_LABEL}] powering down (${POWER_OFF_WAIT}s)..."
+    sleep "${POWER_OFF_WAIT}"
+    ssh_a "rigctl -m ${A_HAMLIB_MODEL} -r '${A_CAT_PORT}' -s ${A_CAT_BAUD} P 1 2>/dev/null || true"
+    echo "  [${A_LABEL}] powering up (${POWER_ON_WAIT}s)..."
+    sleep "${POWER_ON_WAIT}"
+    local freq
+    freq="$(ssh_a "rigctl -m ${A_HAMLIB_MODEL} -r '${A_CAT_PORT}' -s ${A_CAT_BAUD} f 2>/dev/null | tail -n1 || echo na" || echo na)"
+    if [[ "${freq}" == "na" || -z "${freq}" ]]; then
+        echo "  ERROR: ${A_LABEL} not responding after power cycle" >&2
+        exit 1
+    fi
+    echo "  [${A_LABEL}] power cycle OK (freq=${freq} Hz)"
+}
+
+power_cycle_b() {
+    echo "  [${B_LABEL}] power cycle via direct CAT (${B_CAT_PORT})"
+    ssh_b "rigctl -m ${B_HAMLIB_MODEL} -r '${B_CAT_PORT}' -s ${B_CAT_BAUD} P 0 2>/dev/null || true"
+    echo "  [${B_LABEL}] powering down (${POWER_OFF_WAIT}s)..."
+    sleep "${POWER_OFF_WAIT}"
+    ssh_b "rigctl -m ${B_HAMLIB_MODEL} -r '${B_CAT_PORT}' -s ${B_CAT_BAUD} P 1 2>/dev/null || true"
+    echo "  [${B_LABEL}] powering up (${POWER_ON_WAIT}s)..."
+    sleep "${POWER_ON_WAIT}"
+    local freq
+    freq="$(ssh_b "rigctl -m ${B_HAMLIB_MODEL} -r '${B_CAT_PORT}' -s ${B_CAT_BAUD} f 2>/dev/null | tail -n1 || echo na" || echo na)"
+    if [[ "${freq}" == "na" || -z "${freq}" ]]; then
+        echo "  ERROR: ${B_LABEL} not responding after power cycle" >&2
+        exit 1
+    fi
+    echo "  [${B_LABEL}] power cycle OK (freq=${freq} Hz)"
+}
+
+run_loopback_regression() {
+    local tier="${1:-${LOOPBACK_TIER:-quick}}"
+    local ar
+    ar="$(a_repo)"
+
+    # Stream the freshly-built binary from rpi51 to the loopback IRS (rpi52) so
+    # both ends run identical code during the regression check.
+    echo "  [loopback] deploying binary → ${LOOPBACK_IRS_SSH}:${LOOPBACK_IRS_BIN_DIR}"
+    # shellcheck disable=SC2086
+    ssh_a "tar -C '${ar}/target/release' -cf - openpulse" | \
+        ssh ${SSH_OPTS} "${LOOPBACK_IRS_SSH}" \
+            "mkdir -p '${LOOPBACK_IRS_BIN_DIR}' && \
+             tar -C '${LOOPBACK_IRS_BIN_DIR}' -xf - && \
+             chmod +x '${LOOPBACK_IRS_BIN_DIR}/openpulse'" \
+        || { echo "  [loopback] FAIL: binary deploy to ${LOOPBACK_IRS_SSH} failed" >&2; return 1; }
+
+    echo "  [loopback] rpi51↔rpi52 hardware loopback (${tier} tier)"
+    local lb_exit=0
+    ISS_BIN="${ar}/target/release/openpulse" \
+    IRS_BIN="${LOOPBACK_IRS_BIN_DIR}/openpulse" \
+    IRS_SSH="${LOOPBACK_IRS_SSH}" \
+        "${REPO_ROOT}/scripts/run-loopback-rpi51-rpi52.sh" \
+            "--${tier}" \
+            --output "${OUTPUT_DIR}" \
+        || lb_exit=$?
+    if [[ ${lb_exit} -ne 0 ]]; then
+        echo "  [loopback] FAIL (exit ${lb_exit}) — modem regression on rpi51↔rpi52" >&2
+        return 1
+    fi
 }
 
 read_swr_a() {
@@ -767,6 +839,7 @@ setup() {
 
     build_on_a
     transfer_binaries_a_to_b
+    run_loopback_regression full
 
     ssh_a "command -v rigctld >/dev/null || { echo 'ERROR: rigctld missing on Station A'; exit 1; }"
     ssh_b "command -v rigctld >/dev/null || { echo 'ERROR: rigctld missing on Station B'; exit 1; }"
@@ -775,6 +848,11 @@ setup() {
         verify_audio_device_a
     fi
     verify_audio_device_b
+
+    if is_truthy "${POWER_CYCLE_ENABLE}"; then
+        power_cycle_a
+        power_cycle_b
+    fi
 
     start_rigctld_a
     start_rigctld_b
@@ -800,9 +878,13 @@ setup_side_a() {
     mkdir -p "$OUTPUT_DIR"
 
     build_on_a
+    run_loopback_regression full
 
     ssh_a "command -v rigctld >/dev/null || { echo 'ERROR: rigctld missing on Station A'; exit 1; }"
 
+    if is_truthy "${POWER_CYCLE_ENABLE}"; then
+        power_cycle_a
+    fi
     start_rigctld_a
     sleep 1
     save_rig_state_a
@@ -884,6 +966,7 @@ run_side_a_transmit() {
     echo "    Freq: ${TEST_FREQ_HZ} Hz (${TEST_MODE_RIG_A}) (2m enforced)"
     echo "    Report: ${report}"
     echo ""
+    preflight_check
 
     local tel_pid=""
     (
@@ -1022,6 +1105,7 @@ run_matrix() {
     local pass=0
     local fail=0
     local results=()
+    local loopback_case_counter=0
 
     local ar
     local br
@@ -1062,6 +1146,10 @@ run_matrix() {
     echo ""
 
     for case_spec in "${cases[@]}"; do
+        loopback_case_counter=$(( loopback_case_counter + 1 ))
+        if (( LOOPBACK_REGRESSION_INTERVAL > 0 && loopback_case_counter % LOOPBACK_REGRESSION_INTERVAL == 0 )); then
+            run_loopback_regression
+        fi
         local normalized_case_spec
         normalized_case_spec="$case_spec"
         if [[ "$normalized_case_spec" == *,* && "$normalized_case_spec" != *"|"* ]]; then
@@ -1291,6 +1379,7 @@ run_matrix() {
         else
             echo "FAIL (${fail_reason})"
             fail=$(( fail + 1 ))
+            run_loopback_regression || echo "  [loopback] FAIL after test failure — software regression suspected" >&2
             # Show the last lines of the IRS log to expose audio/decode issues.
             local irs_head="" irs_tail=""
             if [[ "$REVERSE" == "1" ]]; then
@@ -1379,6 +1468,7 @@ case "$ACTION" in
         maybe_tune_high_swr_b "startup"
         maybe_tune_high_swr_a "qsy"
         maybe_tune_high_swr_b "qsy"
+        run_loopback_regression quick
         run_matrix
         ;;
     sidea)
