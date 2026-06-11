@@ -5,6 +5,8 @@ branch: fix/afc-settling-receive-with-timeout
 last_updated: 2026-06-10
 ---
 
+> **2026-06-10 update:** After rebooting rpi51 and the FT-991A, the IC-9700 USB CODEC on Side A now shows the received level nearly doubling when Side B (FT-991A) transmits. The blocking mystery from the handoff (flat USB audio during TX) is resolved. The signal chain plan is in `docs/dev/onair-signal-chain-verification.md`. Run all gates in order before the next test run.
+
 # On-Air Test Handoff
 
 All loopback tests pass (PR #383). The on-air test still fails. This document is the current state of the investigation.
