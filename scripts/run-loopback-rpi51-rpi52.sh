@@ -30,7 +30,7 @@ IRS_BIN="${IRS_BIN:-/home/dc0sk/openpulse/bin/openpulse}"
 
 # ── Audio devices ──────────────────────────────────────────────────────────────
 # plughw lets ALSA resample 8 kHz ↔ 48 kHz; the cards only support 44100/48000.
-ISS_DEVICE="${ISS_DEVICE:-plughw:CARD=Device_1,DEV=0}"
+ISS_DEVICE="${ISS_DEVICE:-plughw:CARD=Device,DEV=0}"
 IRS_DEVICE="${IRS_DEVICE:-plughw:CARD=Device,DEV=0}"
 
 # ── Timing ─────────────────────────────────────────────────────────────────────
@@ -43,34 +43,70 @@ TX_TIMEOUT="${TX_TIMEOUT:-60}"              # hard ISS transmit timeout (s)
 KILL_WAIT="${KILL_WAIT:-12}"                # seconds after TX before killing IRS
 
 # ── Test matrix ────────────────────────────────────────────────────────────────
-DEFAULT_MODE="${DEFAULT_MODE:-BPSK250}"
-DEFAULT_PAYLOAD="${DEFAULT_PAYLOAD:-64}"
+# Quick tier: one case per mode family; fast enough for repeated regression checks.
+# BPSK31 excluded: 12 s frame exposes carrier phase accumulation at 31.25 baud (engine bug).
+# QPSK500 excluded: AFC anchor fires at preamble start, retry misses by 200 samples (engine bug).
+QUICK_CASES=(
+    "BPSK100|64"
+    "BPSK250|64"
+    "QPSK125|64"
+    "QPSK250|64"
+)
 
-# Parse optional overrides: --mode X --payload N
+# Full tier: broader coverage across baud rates and payload sizes.
+FULL_CASES=(
+    "BPSK31|32"
+    "BPSK63|32"
+    "BPSK100|64"
+    "BPSK250|64"
+    "QPSK125|64"
+    "QPSK250|64"
+    "QPSK500|128"
+    "QPSK1000|128"
+)
+
+TIER="${TIER:-quick}"
+OUTPUT_DIR="${OUTPUT_DIR:-docs/dev/test-reports}"
+SINGLE_CASE=""
+_LEGACY_MODE=""
+_LEGACY_PAYLOAD="64"
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --mode)    DEFAULT_MODE="$2";    shift 2 ;;
-        --payload) DEFAULT_PAYLOAD="$2"; shift 2 ;;
+        --quick)       TIER="quick";         shift ;;
+        --full)        TIER="full";          shift ;;
+        --output)      OUTPUT_DIR="$2";      shift 2 ;;
+        --single-case) SINGLE_CASE="$2";     shift 2 ;;
+        --mode)        _LEGACY_MODE="$2";    shift 2 ;;
+        --payload)     _LEGACY_PAYLOAD="$2"; shift 2 ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
 
-CASES=(
-    "${DEFAULT_MODE}|${DEFAULT_PAYLOAD}"
-)
+# Resolve legacy --mode / --payload pair into a single-case spec.
+[[ -n "${_LEGACY_MODE}" ]] && SINGLE_CASE="${_LEGACY_MODE}|${_LEGACY_PAYLOAD}"
+
+if [[ -n "${SINGLE_CASE}" ]]; then
+    CASES=("${SINGLE_CASE}")
+elif [[ "${TIER}" == "full" ]]; then
+    CASES=("${FULL_CASES[@]}")
+else
+    CASES=("${QUICK_CASES[@]}")
+fi
 
 pass=0
 fail=0
 total="${#CASES[@]}"
 
 ts="$(date -u +%Y-%m-%dT%H%M%SZ)"
-report="/tmp/loopback-report-${ts}.json"
+mkdir -p "${OUTPUT_DIR}"
+report="${OUTPUT_DIR}/loopback-${TIER}-${ts}.json"
 results=()
 
-echo "==> Audio loopback test (${ts})"
+echo "==> Audio loopback test (${ts})  tier=${TIER}  cases=${total}"
 echo "    ISS: ${ISS_SSH}  device=${ISS_DEVICE}"
 echo "    IRS: ${IRS_SSH}  device=${IRS_DEVICE}"
-echo "    IRS listen: ${IRS_LISTEN_MS} ms"
+echo "    IRS listen: ${IRS_LISTEN_MS} ms  report=${report}"
 echo ""
 
 # ── Preflight ─────────────────────────────────────────────────────────────────
@@ -86,15 +122,66 @@ if [[ "$irs_bin_ok" != "ok" ]]; then
 fi
 echo "    binaries: ok"
 
-# Verify IRS device is visible
-irs_dev_ok="$(ssh_irs "~/openpulse/bin/openpulse --backend cpal devices 2>/dev/null | grep -Fq '${IRS_DEVICE}' && echo ok || echo missing" || echo missing)"
-if [[ "$irs_dev_ok" != "ok" ]]; then
-    echo "WARN: IRS device '${IRS_DEVICE}' not found in cpal device list — will attempt anyway"
+# Verify devices are present by USB by-path symlinks (set by identify-loopback-audio.sh).
+# If not set, fall back to ALSA name check.
+if [[ -n "${ISS_DEVICE_BYPATH:-}" ]]; then
+    iss_path_name="${ISS_DEVICE_BYPATH##*/}"
+    iss_path_ok="$(ssh_iss "ls /dev/snd/by-path/ 2>/dev/null | grep -Fq '${iss_path_name}' && echo ok || echo missing" || echo missing)"
+    if [[ "$iss_path_ok" != "ok" ]]; then
+        echo "FAIL: ISS audio device not found at by-path '${iss_path_name}' on ${ISS_SSH}" >&2
+        echo "      Check USB cable connection and run scripts/identify-loopback-audio.sh to refresh." >&2
+        exit 1
+    fi
+    echo "    ISS device: ok (by-path ${iss_path_name})"
 else
-    echo "    IRS device: ok"
+    iss_dev_ok="$(ssh_iss "aplay -l 2>/dev/null | grep -Fq '${ISS_DEVICE##*CARD=}' && echo ok || echo missing" || echo missing)"
+    if [[ "$iss_dev_ok" != "ok" ]]; then
+        echo "WARN: ISS device '${ISS_DEVICE}' not found — will attempt anyway"
+    else
+        echo "    ISS device: ok (by ALSA name)"
+    fi
+fi
+
+if [[ -n "${IRS_DEVICE_BYPATH:-}" ]]; then
+    irs_path_name="${IRS_DEVICE_BYPATH##*/}"
+    irs_path_ok="$(ssh_irs "ls /dev/snd/by-path/ 2>/dev/null | grep -Fq '${irs_path_name}' && echo ok || echo missing" || echo missing)"
+    if [[ "$irs_path_ok" != "ok" ]]; then
+        echo "FAIL: IRS audio device not found at by-path '${irs_path_name}' on ${IRS_SSH}" >&2
+        echo "      Check USB cable connection and run scripts/identify-loopback-audio.sh to refresh." >&2
+        exit 1
+    fi
+    echo "    IRS device: ok (by-path ${irs_path_name})"
+else
+    irs_dev_ok="$(ssh_irs "arecord -l 2>/dev/null | grep -Fq '${IRS_DEVICE##*CARD=}' && echo ok || echo missing" || echo missing)"
+    if [[ "$irs_dev_ok" != "ok" ]]; then
+        echo "WARN: IRS device '${IRS_DEVICE}' not found — will attempt anyway"
+    else
+        echo "    IRS device: ok (by ALSA name)"
+    fi
 fi
 
 echo ""
+
+# ── Audio level normalisation ─────────────────────────────────────────────────
+# Extract ALSA card names from the device strings.
+_irs_card="${IRS_DEVICE#*CARD=}"; _irs_card="${_irs_card%%,*}"
+
+# Disable AGC on IRS before every test case.
+# The CM108 (and similar USB audio codecs) include a hardware Auto Gain Control
+# that reduces capture gain after successive strong signals.  After BPSK100 +
+# BPSK250 both decode cleanly, the AGC pulls the gain down enough to push the
+# QPSK carrier below ENERGY_GATE_THRESHOLD (0.0001), causing the engine to miss
+# the signal entirely.  Disabling AGC before each case locks the gain at its
+# current setting.  DO NOT touch Mic Capture Volume here: the existing level
+# (set by the system or identify-loopback-audio.sh) is already calibrated to
+# produce a clean, non-overdriven signal through the cable.
+_normalise_irs_levels() {
+    ssh_irs "
+        amixer -c '${_irs_card}' set 'Auto Gain Control' off >/dev/null 2>&1 || true
+        amixer -c '${_irs_card}' set 'Mic Capture Switch'  on  >/dev/null 2>&1 || true
+    " 2>/dev/null || true
+}
+_normalise_irs_levels  # Once at session start before the first case.
 
 # ── Test loop ─────────────────────────────────────────────────────────────────
 for case_spec in "${CASES[@]}"; do
@@ -112,6 +199,7 @@ sys.stdout.write(''.join(secrets.choice(a) for _ in range(${PAYLOAD_SIZE})))
     printf "  [%-10s payload=%4sB] ... " "${MODE}" "${PAYLOAD_SIZE}"
 
     # 1) Start IRS receiver on rpi52.
+    _normalise_irs_levels  # Reset AGC/capture volume before each case.
     ssh_irs "pids=\$(pgrep -f '${IRS_BIN}.*receive' || true); \
         for pid in \$pids; do \
             [[ \"\$pid\" != \"\$\$\" ]] && kill \"\$pid\" 2>/dev/null || true; \
