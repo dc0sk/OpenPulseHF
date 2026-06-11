@@ -38,7 +38,7 @@ IRS_DEVICE="${IRS_DEVICE:-plughw:CARD=Device,DEV=0}"
 # begins. ISS must not transmit until after that window or the frame lands in
 # the settling buffer and is never scanned. 10 s gives ~3.6 s margin.
 IRS_STARTUP_WAIT="${IRS_STARTUP_WAIT:-10}"  # seconds before ISS starts TX
-IRS_LISTEN_MS="${IRS_LISTEN_MS:-30000}"     # IRS receive window (ms)
+IRS_LISTEN_MS="${IRS_LISTEN_MS:-45000}"     # IRS receive window (ms)
 TX_TIMEOUT="${TX_TIMEOUT:-60}"              # hard ISS transmit timeout (s)
 KILL_WAIT="${KILL_WAIT:-12}"                # seconds after TX before killing IRS
 
@@ -166,19 +166,19 @@ echo ""
 # Extract ALSA card names from the device strings.
 _irs_card="${IRS_DEVICE#*CARD=}"; _irs_card="${_irs_card%%,*}"
 
-# Disable AGC on IRS before every test case.
-# The CM108 (and similar USB audio codecs) include a hardware Auto Gain Control
-# that reduces capture gain after successive strong signals.  After BPSK100 +
-# BPSK250 both decode cleanly, the AGC pulls the gain down enough to push the
-# QPSK carrier below ENERGY_GATE_THRESHOLD (0.0001), causing the engine to miss
-# the signal entirely.  Disabling AGC before each case locks the gain at its
-# current setting.  DO NOT touch Mic Capture Volume here: the existing level
-# (set by the system or identify-loopback-audio.sh) is already calibrated to
-# produce a clean, non-overdriven signal through the cable.
+# Disable AGC and reset capture volume on IRS before every test case.
+# The CM108 hardware AGC reduces Mic Capture Volume after successive strong
+# signals.  After BPSK100 + BPSK250 both decode cleanly, the volume drops
+# enough to push the QPSK carrier below ENERGY_GATE_THRESHOLD (0.0001),
+# delaying fep by 3+ seconds and causing the frame to miss the receive window.
+# Reset volume to max (16 = 23.81 dB on CM108, verified safe — does not
+# overdrive the loopback cable at this level) and disable AGC to prevent
+# further drift during the test.
 _normalise_irs_levels() {
     ssh_irs "
-        amixer -c '${_irs_card}' set 'Auto Gain Control' off >/dev/null 2>&1 || true
+        amixer -c '${_irs_card}' set 'Auto Gain Control'  off >/dev/null 2>&1 || true
         amixer -c '${_irs_card}' set 'Mic Capture Switch'  on  >/dev/null 2>&1 || true
+        amixer -c '${_irs_card}' set 'Mic Capture Volume'  16  >/dev/null 2>&1 || true
     " 2>/dev/null || true
 }
 _normalise_irs_levels  # Once at session start before the first case.
