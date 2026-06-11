@@ -212,6 +212,7 @@ sys.stdout.write(''.join(secrets.choice(a) for _ in range(${PAYLOAD_SIZE})))
             --mode '${MODE}' \
             --listen-ms ${IRS_LISTEN_MS} \
             --device '${IRS_DEVICE}' \
+            --no-afc \
             >'${irs_log}' 2>&1 </dev/null &"
 
     sleep "${IRS_STARTUP_WAIT}"

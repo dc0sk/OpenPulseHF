@@ -140,9 +140,13 @@ fn main() -> Result<()> {
             device,
             listen_ms,
             center_frequency,
+            no_afc,
         } => {
             if center_frequency != 1500.0 {
                 engine.set_center_frequency(center_frequency);
+            }
+            if no_afc {
+                engine.disable_afc();
             }
             commands::receive::run(&mode, device.as_deref(), listen_ms, &mut engine)?;
         }

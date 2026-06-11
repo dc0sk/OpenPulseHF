@@ -73,6 +73,15 @@ pub enum Commands {
         /// audio frequency due to rig VFO offset (e.g. --center-frequency 450).
         #[arg(long, default_value = "1500")]
         center_frequency: f32,
+        /// Disable automatic frequency correction (AFC) settling.
+        ///
+        /// Use when the transmitter and receiver share the same audio path
+        /// (loopback cable, direct USB audio) and no carrier frequency offset
+        /// is expected.  AFC can produce spurious corrections when applied to
+        /// near-zero-offset signals, shifting the demodulator off the true
+        /// carrier.
+        #[arg(long, default_value = "false")]
+        no_afc: bool,
     },
     /// List available audio devices.
     Devices,
