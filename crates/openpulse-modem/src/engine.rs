@@ -804,20 +804,23 @@ impl ModemEngine {
                         for start in (0..=retry_end).step_by(step) {
                             let gate_end = (start + step * 32).min(accumulated.len());
                             let gate_len = gate_end - start;
-                            // Energy gate: skip positions that cannot contain
-                            // the BPSK signal.  On-air IC-9700 (plughw direct,
-                            // 144.640 MHz): idle noise+QRM mean_sq ≈ 0.0015.
-                            // FT-991A at 74 dB SNR above IC-9700 noise floor:
-                            // mean_sq ≈ 0.15 (100×).  Threshold of 0.01 sits
-                            // between the two, skipping QRM noise positions
-                            // without a 70 ms decode each.
+                            // Energy gate: skip silent positions.  Use the
+                            // same threshold as the main scan (ENERGY_GATE_THRESHOLD
+                            // = 0.0001) so the retry can find signals that are weaker
+                            // than the old hardcoded 0.01 level.  The 0.01 threshold
+                            // was calibrated for on-air QRM (noise floor ≈ 0.0015)
+                            // but is too high for the loopback cable (signal mean_sq
+                            // ≈ 0.001–0.005).  The mini-settle AFC stability guard
+                            // (divergence check below) handles noise positions that
+                            // pass this gate by rejecting them before the expensive
+                            // decode attempt runs.
                             if gate_len > 0 {
                                 let msq = accumulated[start..gate_end]
                                     .iter()
                                     .map(|s| s * s)
                                     .sum::<f32>()
                                     / gate_len as f32;
-                                if msq < 0.01 {
+                                if msq < ENERGY_GATE_THRESHOLD {
                                     continue;
                                 }
                             }
@@ -856,16 +859,17 @@ impl ModemEngine {
                                 // Stability guard: reject if the fine-track
                                 // drifted >20 Hz from the anchor (unstable
                                 // noise) or exceeded the Goertzel range.
-                                // Also reject when BOTH anchor and fine-track
-                                // are <5 Hz (flat noise / no carrier) — this
-                                // avoids expensive full decodes on silent
-                                // sections where the Goertzel returns ~0 Hz.
-                                // The one exception that matters — a signal
-                                // exactly at fc (0 Hz offset) — is handled by
-                                // the main scan which runs at saved_afc anyway.
+                                // The old third condition — skip when BOTH
+                                // anchor and fine are <5 Hz — was intended to
+                                // avoid decodes on silence, but it incorrectly
+                                // skips signals whose carrier is on-frequency
+                                // (AFC offset ≈ 0 Hz, e.g. QPSK500 over the
+                                // loopback cable with <1 Hz crystal error).
+                                // The energy gate above already filters silence;
+                                // the divergence check here catches noise that
+                                // slips through.
                                 if (after_fine - after_anchor).abs() > 20.0
                                     || after_fine.abs() > AFC_MAX_CORRECTION_HZ
-                                    || (after_fine.abs() < 5.0 && after_anchor.abs() < 5.0)
                                 {
                                     self.afc_correction_hz = saved_afc;
                                     continue;
