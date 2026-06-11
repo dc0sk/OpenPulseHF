@@ -216,12 +216,21 @@ fn find_timing_offset(samples: &[f32], n: usize, fc: f32, fs: f32, cosine_overla
         if syms.len() < PREAMBLE_SYMS {
             continue;
         }
+        // Use |correlation| rather than raw correlation.  The QPSK carrier phase at the
+        // start of the received slice is unknown (accumulator timing places the signal at
+        // a random sample offset, giving any phase in [0, 2π)).  When the phase is near
+        // 180° every dot-product is negative; argmax would then pick the wrong timing
+        // offset (least-negative score at an ISI-misaligned position) instead of the
+        // correct one (most-negative = highest magnitude).  |score| is always positive
+        // and correctly identifies the offset with the strongest preamble correlation
+        // regardless of carrier phase.
         let score: f32 = syms
             .iter()
             .zip(expected.iter())
             .take(PREAMBLE_SYMS)
             .map(|(&(i, q), &(ei, eq))| i * ei + q * eq)
-            .sum();
+            .sum::<f32>()
+            .abs();
         if score > best_score {
             best_score = score;
             best_off = off;
