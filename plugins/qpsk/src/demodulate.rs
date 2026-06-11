@@ -513,31 +513,28 @@ fn carrier_phase_correct(syms: &[(f32, f32)], afc_correction_hz: f32) -> Vec<(f3
         (sum_phi / n, 0.0)
     };
 
-    // Apply drift correction only when the engine ran AFC settling and
-    // applied a meaningful correction.  Without AFC (afc_correction_hz ≈ 0),
-    // there is no systematic carrier offset — the signal was generated with
-    // the same sample clock as the demodulator (software loopback / AWGN
-    // tests).  Applying a drift estimate from 16 noisy preamble symbols in
-    // that case amplifies AWGN noise into large rotation errors at late data
-    // symbols (e.g. symbol 140 of a QPSK500 frame → ~0.54 rad 1σ noise).
-    // When the engine ran AFC settling the preamble-measured drift reflects
-    // the true residual after that AFC correction.
-    // Threshold 0.5 Hz: any AFC correction >= 0.5 Hz indicates the engine
-    // found and partially corrected a real carrier offset.  Below 0.5 Hz
-    // the residual drift is < 0.025 rad/sym for QPSK125 and the LMS
-    // handles it without the risk of noise amplification.
-    // When no AFC correction was applied (software loopback, AWGN tests, channel
-    // simulation harness), skip correction entirely — the LMS handles any small
-    // residual and applying preamble-estimated corrections amplifies noise.
-    if afc_correction_hz.abs() < 0.5 {
-        return syms.to_vec();
-    }
+    // phase_0: constant carrier phase offset.  On hardware (real audio I/O) the
+    // signal arrives after several seconds of ALSA buffer fill; by then the
+    // carrier has accumulated 1500 Hz × 13 s × 2π ≈ random radians.  The IQ
+    // demodulator reference starts at phase 0, so phase_0 is genuinely random
+    // and MUST be corrected to avoid a 90°/180°/270° phase ambiguity that causes
+    // every symbol decision to be wrong.  In software (channel-sim harness, AWGN
+    // tests) both transmitter and demodulator share the same t=0, so phase_0 ≈ 0
+    // and this correction is a near-no-op.  Always apply.
+    //
+    // drift: per-symbol phase ramp from a residual carrier frequency offset.
+    // Only present when the engine applied AFC correction for a real RF frequency
+    // mismatch (IC-9700 / FT-991A local oscillator offset).  Applying drift
+    // correction when none is present amplifies noise: 16 preamble samples at
+    // 20 dB SNR give a drift std ≈ 0.004 rad/sym, which grows to ~0.56 rad (1σ)
+    // at symbol 140 of a QPSK500 frame.  Gate on afc_correction_hz ≥ 0.5 Hz.
+    let effective_drift = if afc_correction_hz.abs() >= 0.5 { drift } else { 0.0 };
 
-    // Apply inverse correction: rotate symbol k by -(phase_0 + drift * k).
+    // Apply inverse correction: rotate symbol k by -(phase_0 + effective_drift * k).
     syms.iter()
         .enumerate()
         .map(|(k, &(i, q))| {
-            let theta = -(phase_0 + drift * k as f32);
+            let theta = -(phase_0 + effective_drift * k as f32);
             let (s, c) = theta.sin_cos();
             (i * c - q * s, i * s + q * c)
         })
