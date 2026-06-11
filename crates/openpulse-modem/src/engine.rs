@@ -1059,6 +1059,7 @@ impl ModemEngine {
             let mod_cfg = ModulationConfig {
                 mode: mode.to_string(),
                 center_frequency: self.center_frequency + self.afc_correction_hz,
+                afc_correction_hz: self.afc_correction_hz,
                 ..ModulationConfig::default()
             };
             // Prefer soft demodulation: a single pass yields both LLRs (for SNR)
@@ -1155,6 +1156,7 @@ impl ModemEngine {
         let mod_cfg = ModulationConfig {
             mode: mode.to_string(),
             center_frequency: self.center_frequency + self.afc_correction_hz,
+            afc_correction_hz: self.afc_correction_hz,
             ..ModulationConfig::default()
         };
 

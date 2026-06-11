@@ -92,7 +92,8 @@ pub fn qpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
         qpsk_demodulate_rrc(samples, n, baud, fc, fs, alpha)
     } else {
         let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
-        demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap)
+        let raw = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
+        carrier_phase_correct(&raw, config.afc_correction_hz)
     };
 
     if syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
@@ -443,7 +444,8 @@ pub fn qpsk_demodulate_soft(
         qpsk_demodulate_rrc(samples, n, baud, fc, fs, alpha)
     } else {
         let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
-        demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap)
+        let raw = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
+        carrier_phase_correct(&raw, config.afc_correction_hz)
     };
 
     if syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
@@ -462,6 +464,84 @@ pub fn qpsk_demodulate_soft(
 
 fn preamble_expected() -> Vec<(f32, f32)> {
     preamble_symbols()
+}
+
+/// Correct a linear carrier phase drift using the known preamble as a pilot.
+///
+/// A residual AFC error of Δf Hz causes phase to grow by 2π·Δf/baud radians per
+/// symbol — e.g. 1.73 °/sym for 0.6 Hz residual on QPSK125.  The LMS equalizer
+/// absorbs a constant rotation but not a linear drift, so symbols past symbol ~26
+/// fall outside the ±45° QPSK decision region and are decoded wrong.
+///
+/// This function estimates the initial phase offset (φ₀) and drift rate (δφ/sym)
+/// from the first `PREAMBLE_SYMS` symbols by comparing them to the expected
+/// preamble, then applies the inverse linear correction to every symbol.
+/// A 16-symbol preamble gives a well-conditioned 2-parameter least-squares fit.
+fn carrier_phase_correct(syms: &[(f32, f32)], afc_correction_hz: f32) -> Vec<(f32, f32)> {
+    if syms.len() < PREAMBLE_SYMS {
+        return syms.to_vec();
+    }
+    let expected = preamble_expected();
+    let n = PREAMBLE_SYMS.min(syms.len()) as f32;
+
+    // Compute per-symbol phase error = arg(received × conj(expected)).
+    // Use two accumulators for least-squares fit: phase = phase_0 + drift * k.
+    let mut sum_k = 0.0f32;
+    let mut sum_k2 = 0.0f32;
+    let mut sum_phi = 0.0f32;
+    let mut sum_k_phi = 0.0f32;
+
+    for (k, (&(ri, rq), &(ei, eq))) in syms.iter().zip(expected.iter()).enumerate().take(PREAMBLE_SYMS) {
+        // Phase error = atan2(im(r * conj(e)), re(r * conj(e)))
+        let re = ri * ei + rq * eq;
+        let im = rq * ei - ri * eq;
+        let phi = im.atan2(re);
+        let kf = k as f32;
+        sum_k += kf;
+        sum_k2 += kf * kf;
+        sum_phi += phi;
+        sum_k_phi += kf * phi;
+    }
+
+    // Least-squares line fit.
+    let denom = n * sum_k2 - sum_k * sum_k;
+    let (phase_0, drift) = if denom.abs() > 1e-9 {
+        let drift = (n * sum_k_phi - sum_k * sum_phi) / denom;
+        let phase_0 = (sum_phi - drift * sum_k) / n;
+        (phase_0, drift)
+    } else {
+        (sum_phi / n, 0.0)
+    };
+
+    // Apply drift correction only when the engine ran AFC settling and
+    // applied a meaningful correction.  Without AFC (afc_correction_hz ≈ 0),
+    // there is no systematic carrier offset — the signal was generated with
+    // the same sample clock as the demodulator (software loopback / AWGN
+    // tests).  Applying a drift estimate from 16 noisy preamble symbols in
+    // that case amplifies AWGN noise into large rotation errors at late data
+    // symbols (e.g. symbol 140 of a QPSK500 frame → ~0.54 rad 1σ noise).
+    // When the engine ran AFC settling the preamble-measured drift reflects
+    // the true residual after that AFC correction.
+    // Threshold 0.5 Hz: any AFC correction >= 0.5 Hz indicates the engine
+    // found and partially corrected a real carrier offset.  Below 0.5 Hz
+    // the residual drift is < 0.025 rad/sym for QPSK125 and the LMS
+    // handles it without the risk of noise amplification.
+    // When no AFC correction was applied (software loopback, AWGN tests, channel
+    // simulation harness), skip correction entirely — the LMS handles any small
+    // residual and applying preamble-estimated corrections amplifies noise.
+    if afc_correction_hz.abs() < 0.5 {
+        return syms.to_vec();
+    }
+
+    // Apply inverse correction: rotate symbol k by -(phase_0 + drift * k).
+    syms.iter()
+        .enumerate()
+        .map(|(k, &(i, q))| {
+            let theta = -(phase_0 + drift * k as f32);
+            let (s, c) = theta.sin_cos();
+            (i * c - q * s, i * s + q * c)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -686,6 +766,65 @@ mod tests {
         let samples = crate::modulate::qpsk_modulate(payload, &cfg).expect("modulate");
         let recovered = qpsk_demodulate(&samples, &cfg).expect("demodulate");
         assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    /// Verify QPSK125 decodes correctly even with a 0.6 Hz carrier offset between
+    /// transmitter and receiver (loopback cable hardware: two CM108 chips with
+    /// different crystal oscillators).  Without carrier_phase_correct this test
+    /// fails because 0.6 Hz × (1/125 baud) = 1.73 °/sym drift accumulates to
+    /// 45 ° at data symbol 26, putting the constellation outside the ±45 ° QPSK
+    /// decision region.  BPSK is immune (differential decoding cancels drift);
+    /// QPSK is not, so the fix is pilot-aided linear phase de-rotation.
+    #[test]
+    fn qpsk125_round_trip_with_frequency_offset() {
+        let payload: Vec<u8> = (0u8..64).collect();
+        let tx_cfg = ModulationConfig {
+            mode: "QPSK125".to_string(),
+            center_frequency: 1500.0,
+            ..ModulationConfig::default()
+        };
+        let samples = crate::modulate::qpsk_modulate(&payload, &tx_cfg).expect("modulate");
+
+        // Demodulate with a 0.6 Hz residual offset (typical loopback crystal difference).
+        // afc_correction_hz = 0.6 signals that AFC settled and drift correction is needed.
+        let rx_cfg = ModulationConfig {
+            mode: "QPSK125".to_string(),
+            center_frequency: 1500.6,
+            afc_correction_hz: 0.6,
+            ..ModulationConfig::default()
+        };
+        let recovered = qpsk_demodulate(&samples, &rx_cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], &payload[..]);
+    }
+
+    /// Same as above but via the soft (LLR) path used by the modem engine.
+    #[test]
+    fn qpsk125_soft_round_trip_with_frequency_offset() {
+        let payload: Vec<u8> = (0u8..64).collect();
+        let tx_cfg = ModulationConfig {
+            mode: "QPSK125".to_string(),
+            center_frequency: 1500.0,
+            ..ModulationConfig::default()
+        };
+        let samples = crate::modulate::qpsk_modulate(&payload, &tx_cfg).expect("modulate");
+
+        let rx_cfg = ModulationConfig {
+            mode: "QPSK125".to_string(),
+            center_frequency: 1500.6,
+            afc_correction_hz: 0.6,
+            ..ModulationConfig::default()
+        };
+        let llrs = qpsk_demodulate_soft(&samples, &rx_cfg).expect("demodulate soft");
+        let wire: Vec<u8> = llrs
+            .chunks(8)
+            .map(|byte_llrs| {
+                byte_llrs
+                    .iter()
+                    .enumerate()
+                    .fold(0u8, |acc, (i, &llr)| acc | (u8::from(llr <= 0.0) << i))
+            })
+            .collect();
+        assert_eq!(&wire[..payload.len()], &payload[..]);
     }
 
     #[test]

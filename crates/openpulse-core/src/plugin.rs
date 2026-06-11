@@ -63,6 +63,12 @@ pub struct ModulationConfig {
     pub mode: String,
     /// Pulse-shaping envelope; plugins select this based on the mode string.
     pub pulse_shape: PulseShape,
+    /// AFC correction already applied to `center_frequency` by the engine, in Hz.
+    ///
+    /// Non-zero when the engine ran AFC settling before this decode attempt.
+    /// Plugins may use this to decide whether carrier-phase drift correction
+    /// is appropriate (e.g. QPSK only corrects drift when AFC is active).
+    pub afc_correction_hz: f32,
 }
 
 impl Default for ModulationConfig {
@@ -72,6 +78,7 @@ impl Default for ModulationConfig {
             sample_rate: 8000,
             mode: "BPSK100".to_string(),
             pulse_shape: PulseShape::Hann,
+            afc_correction_hz: 0.0,
         }
     }
 }

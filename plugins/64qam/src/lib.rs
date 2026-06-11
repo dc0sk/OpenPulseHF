@@ -132,6 +132,7 @@ mod tests {
             } else {
                 PulseShape::Hann
             },
+            ..ModulationConfig::default()
         }
     }
 
