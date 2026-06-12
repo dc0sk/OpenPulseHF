@@ -69,17 +69,27 @@ pub(crate) fn find_first_data_body(samples: &[f32], p: &OfdmParams) -> Option<us
     let max_d = (samples.len() - 2 * L).min(SEARCH_CAP);
 
     // ── Stage 1: coarse Schmidl-Cox autocorrelation ────────────────────────────
+    // Normalised by the MEAN energy of both half-windows (Minn variant), not
+    // just the second half.  The classic P²/R₂² form explodes at the frame's
+    // TRAILING edge: the first half holds the signal tail, the second holds
+    // near-silence, R₂ → ε and M → 10³⁺, beating the true preamble's M ≈ 1
+    // and locking acquisition onto the end of the frame.  On hardware this is
+    // gated by the sound card's noise floor — a quiet card exposes it.  With
+    // the mean-energy normalisation a silent half drags M toward 0 instead.
     let mut p_acc = 0.0f32;
-    let mut r_acc = 0.0f32;
+    let mut r1_acc = 0.0f32;
+    let mut r2_acc = 0.0f32;
     for m in 0..L {
         p_acc += samples[m] * samples[m + L];
-        r_acc += samples[m + L] * samples[m + L];
+        r1_acc += samples[m] * samples[m];
+        r2_acc += samples[m + L] * samples[m + L];
     }
     let mut best_m = 0.0f32;
     let mut best_d = 0usize;
     for d in 0..=max_d {
-        let m = if r_acc > 1e-9 {
-            (p_acc * p_acc) / (r_acc * r_acc)
+        let r_mean = 0.5 * (r1_acc + r2_acc);
+        let m = if r_mean > 1e-9 {
+            (p_acc * p_acc) / (r_mean * r_mean)
         } else {
             0.0
         };
@@ -89,7 +99,8 @@ pub(crate) fn find_first_data_body(samples: &[f32], p: &OfdmParams) -> Option<us
         }
         if d < max_d {
             p_acc += -samples[d] * samples[d + L] + samples[d + L] * samples[d + 2 * L];
-            r_acc += -samples[d + L] * samples[d + L] + samples[d + 2 * L] * samples[d + 2 * L];
+            r1_acc += -samples[d] * samples[d] + samples[d + L] * samples[d + L];
+            r2_acc += -samples[d + L] * samples[d + L] + samples[d + 2 * L] * samples[d + 2 * L];
         }
     }
     // Require a clear correlation peak (M → 1 at perfect alignment).

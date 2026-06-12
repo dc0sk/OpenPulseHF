@@ -188,6 +188,37 @@ mod tests {
         assert!(g.max_frame_samples > g.min_frame_samples);
     }
 
+    // Acquisition must lock the frame START, not its trailing edge.  The
+    // classic Schmidl-Cox P²/R₂² metric (normalised by the second half-window
+    // only) explodes where the first half holds the signal tail and the
+    // second holds near-silence — on a quiet sound card M reaches 10³⁺ there,
+    // beating the true preamble's M ≈ 1 and decoding garbage from the frame
+    // end.  Reproduced from a hardware capture (rpi51→rpi52, 2026-06-12).
+    #[test]
+    fn ofdm16_acquires_frame_start_not_trailing_edge() {
+        let plugin = OfdmPlugin::new();
+        let payload: Vec<u8> = (0..64u8).collect();
+        let frame = plugin.modulate(&payload, &mod_config("OFDM16")).unwrap();
+        // Leading offset + frame + long quiet tail with a faint noise floor
+        // (a pure-zero tail is masked by the r > 1e-9 guard; real cards give
+        // small nonzero noise).
+        let mut state = 0x1234u32;
+        let mut noise = |amp: f32| {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            ((state >> 16) as f32 / 32768.0 - 1.0) * amp
+        };
+        let mut rx = Vec::new();
+        for _ in 0..200 {
+            rx.push(noise(1e-4));
+        }
+        rx.extend_from_slice(&frame);
+        for _ in 0..4000 {
+            rx.push(noise(1e-4));
+        }
+        let decoded = plugin.demodulate(&rx, &mod_config("OFDM16")).unwrap();
+        assert_eq!(decoded, payload, "must decode from the frame start");
+    }
+
     // 1. OFDM16 clean loopback
     #[test]
     fn ofdm16_loopback_clean() {
