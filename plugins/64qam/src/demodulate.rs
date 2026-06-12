@@ -112,6 +112,51 @@ fn qam64_decide_bits(i: f32, q: f32) -> u8 {
     (pam8_decide(i) << 3) | pam8_decide(q)
 }
 
+/// Nearest PAM-8 amplitude {±1,±3,±5,±7}×scale to `amp`.
+fn pam8_nearest_amplitude(amp: f32) -> f32 {
+    let a = (amp / PAM8_SCALE).round();
+    // Snap to the nearest odd integer in [-7, 7].
+    let odd = (((a - 1.0) / 2.0).round() * 2.0 + 1.0).clamp(-7.0, 7.0);
+    odd * PAM8_SCALE
+}
+
+/// Decision-directed carrier tracking loop for 64QAM.
+///
+/// 64QAM is not constant-modulus, so an M-PSK Costas loop cannot be used.  This
+/// second-order loop instead derives its phase error from the decision: for each
+/// symbol it de-rotates by the running phase estimate, decides the nearest
+/// constellation point, and uses Im(r·conj(decision)) as the error.  It is seeded
+/// at zero because `carrier_phase_correct` has already removed the static offset, so
+/// the loop only has to track the residual frequency drift (e.g. the difference in
+/// USB-audio crystal frequencies between two stations), which static correction
+/// cannot follow across a frame.
+fn dd_carrier_track(i_syms: &[f32], q_syms: &[f32], loop_bw: f32) -> (Vec<f32>, Vec<f32>) {
+    let alpha = loop_bw;
+    let beta = loop_bw * loop_bw * 0.25;
+    let mut phase = 0.0f32;
+    let mut freq = 0.0f32;
+    let mut i_out = Vec::with_capacity(i_syms.len());
+    let mut q_out = Vec::with_capacity(q_syms.len());
+    for (&i, &q) in i_syms.iter().zip(q_syms.iter()) {
+        let (s, c) = (-phase).sin_cos();
+        let di = i * c - q * s;
+        let dq = i * s + q * c;
+        let pi = pam8_nearest_amplitude(di);
+        let pq = pam8_nearest_amplitude(dq);
+        let denom = pi * pi + pq * pq;
+        let err = if denom > 1e-6 {
+            (dq * pi - di * pq) / denom
+        } else {
+            0.0
+        };
+        i_out.push(di);
+        q_out.push(dq);
+        freq += beta * err;
+        phase += freq + alpha * err;
+    }
+    (i_out, q_out)
+}
+
 // ── IQ demodulation (Hann integration path) ──────────────────────────────────
 
 fn demodulate_iq(
@@ -402,6 +447,9 @@ pub fn qam64_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Ve
         demodulate_iq(samples, n, fc, fs, offset)
     };
     let (i_syms, q_syms) = carrier_phase_correct(&i_syms, &q_syms, config.afc_correction_hz);
+    // Track residual carrier frequency drift across the frame (hardware crystal
+    // offset); static phase correction alone cannot follow it on the dense grid.
+    let (i_syms, q_syms) = dd_carrier_track(&i_syms, &q_syms, 0.01);
 
     if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
         return Err(ModemError::Demodulation(
@@ -442,6 +490,9 @@ pub fn qam64_demodulate_soft(
         demodulate_iq(samples, n, fc, fs, offset)
     };
     let (i_syms, q_syms) = carrier_phase_correct(&i_syms, &q_syms, config.afc_correction_hz);
+    // Track residual carrier frequency drift across the frame (hardware crystal
+    // offset); static phase correction alone cannot follow it on the dense grid.
+    let (i_syms, q_syms) = dd_carrier_track(&i_syms, &q_syms, 0.01);
 
     if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
         return Err(ModemError::Demodulation(
@@ -505,6 +556,9 @@ pub fn qam64_demodulate_soft_gpu(
         demodulate_iq(samples, n, fc, fs, offset)
     };
     let (i_syms, q_syms) = carrier_phase_correct(&i_syms, &q_syms, config.afc_correction_hz);
+    // Track residual carrier frequency drift across the frame (hardware crystal
+    // offset); static phase correction alone cannot follow it on the dense grid.
+    let (i_syms, q_syms) = dd_carrier_track(&i_syms, &q_syms, 0.01);
 
     if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
         return Err(ModemError::Demodulation(
