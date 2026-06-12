@@ -12,6 +12,9 @@ pub const SAMPLE_RATE: u32 = 8000;
 pub const SC_SPACING_HZ: f32 = SAMPLE_RATE as f32 / FFT_SIZE as f32;
 /// Pilot tone: known real BPSK +1.
 pub const PILOT_AMPLITUDE: f32 = 1.0;
+/// Preamble subcarrier amplitude.  Only even SCs are loaded (half the band), so
+/// boosting by √2 keeps the preamble's total power comparable to a data symbol.
+pub const PREAMBLE_AMPLITUDE: f32 = std::f32::consts::SQRT_2;
 /// Pilot spacing — every 5th SC in the occupied range is a pilot.
 pub const PILOT_SPACING: usize = 5;
 /// Target PAPR after iterative clipping (dB).
@@ -23,6 +26,19 @@ pub const PILOT_SPACING: usize = 5;
 pub const TARGET_PAPR_DB: f32 = 12.0;
 /// Maximum iterations for iterative PAPR clipping.
 pub const CLIP_MAX_ITER: usize = 50;
+
+/// Deterministic ±1 BPSK sign for the timing-acquisition preamble at SC index `k`.
+///
+/// A whitened (pseudo-random) pattern keeps the preamble PAPR moderate and gives
+/// a sharp autocorrelation peak; an all-`+1` comb would be highly peaked.
+pub fn preamble_sign(k: usize) -> f32 {
+    let h = (k as u32).wrapping_mul(2_654_435_761) >> 13;
+    if h & 1 == 0 {
+        1.0
+    } else {
+        -1.0
+    }
+}
 
 /// Per-mode subcarrier layout.
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -5,7 +5,8 @@ use rustfft::FftPlanner;
 
 use crate::channel::is_pilot;
 use crate::params::{
-    params_for_mode, OfdmParams, CLIP_MAX_ITER, CP, FFT_SIZE, PILOT_AMPLITUDE, TARGET_PAPR_DB,
+    params_for_mode, preamble_sign, OfdmParams, CLIP_MAX_ITER, CP, FFT_SIZE, PILOT_AMPLITUDE,
+    PREAMBLE_AMPLITUDE, TARGET_PAPR_DB,
 };
 
 pub fn ofdm_modulate(payload: &[u8], mode: &str) -> Vec<f32> {
@@ -81,7 +82,57 @@ fn modulate_with_params(payload: &[u8], p: &OfdmParams) -> Vec<f32> {
         out.extend_from_slice(&time);
     }
 
-    clip_iterative(&out, TARGET_PAPR_DB, CLIP_MAX_ITER)
+    // Clip the data symbols on their own so their post-clip SNR is identical to a
+    // no-preamble waveform — then prepend the timing-acquisition preamble, itself
+    // clipped separately so its high comb-PAPR cannot raise the data clip
+    // threshold (which would otherwise degrade the data subcarriers).
+    let data = clip_iterative(&out, TARGET_PAPR_DB, CLIP_MAX_ITER);
+    let preamble = clip_iterative(
+        &build_preamble(p, &ifft, scale),
+        TARGET_PAPR_DB,
+        CLIP_MAX_ITER,
+    );
+
+    let mut frame = Vec::with_capacity(preamble.len() + data.len());
+    frame.extend_from_slice(&preamble);
+    frame.extend_from_slice(&data);
+    frame
+}
+
+/// The clean (pre-clip) preamble symbol waveform, used by the receiver as a
+/// matched-filter template for sample-accurate timing acquisition.
+pub(crate) fn preamble_template(p: &OfdmParams) -> Vec<f32> {
+    let mut planner = FftPlanner::<f32>::new();
+    let ifft = planner.plan_fft_inverse(FFT_SIZE);
+    let scale = 1.0 / (FFT_SIZE as f32).sqrt();
+    build_preamble(p, &ifft, scale)
+}
+
+/// Build the timing-acquisition preamble symbol (CP + body) in the time domain.
+///
+/// Only even occupied subcarriers are loaded (with a known BPSK PN sequence and
+/// Hermitian symmetry), giving an IFFT output whose two halves are identical.
+fn build_preamble(
+    p: &OfdmParams,
+    ifft: &std::sync::Arc<dyn rustfft::Fft<f32>>,
+    scale: f32,
+) -> Vec<f32> {
+    let mut freq = vec![Complex32::new(0.0, 0.0); FFT_SIZE];
+    for sc in p.first_sc..=p.last_sc {
+        if !sc.is_multiple_of(2) {
+            continue;
+        }
+        let val = Complex32::new(PREAMBLE_AMPLITUDE * preamble_sign(sc), 0.0);
+        freq[sc] = val;
+        freq[FFT_SIZE - sc] = val.conj();
+    }
+    ifft.process(&mut freq);
+    let time: Vec<f32> = freq.iter().map(|c| c.re * scale).collect();
+    let cp_start = FFT_SIZE - CP;
+    let mut out = Vec::with_capacity(FFT_SIZE + CP);
+    out.extend_from_slice(&time[cp_start..]);
+    out.extend_from_slice(&time);
+    out
 }
 
 // ── QPSK constellation ────────────────────────────────────────────────────────

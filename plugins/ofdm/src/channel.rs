@@ -90,6 +90,37 @@ pub fn ls_estimate(p: &OfdmParams, freq: &[Complex32]) -> Vec<Complex32> {
     h_est
 }
 
+/// Remove the dominant linear phase ramp across subcarriers, in place.
+///
+/// A residual symbol-timing offset of `δ` samples imprints a phase slope of
+/// `−2πδ/N` rad per subcarrier on the FFT output.  Linearly interpolating the
+/// channel estimate between sparse pilots across such a ramp is lossy, so we
+/// first estimate the slope from adjacent pilot pairs and de-rotate every bin.
+/// The residual (channel magnitude ripple) is then smooth enough for the
+/// existing pilot interpolation.  On a flat, perfectly-timed channel the slope
+/// is ≈ 0 and this is a no-op.
+pub fn deramp_timing(p: &OfdmParams, freq: &mut [Complex32]) {
+    let pilots = pilot_positions(p);
+    if pilots.len() < 2 {
+        return;
+    }
+    // Pilots are real BPSK +1, evenly spaced by `PILOT_SPACING`.  The vector sum
+    // of adjacent conjugate products yields the average per-pilot-step rotation.
+    let mut acc = Complex32::new(0.0, 0.0);
+    for w in pilots.windows(2) {
+        acc += freq[w[1]] * freq[w[0]].conj();
+    }
+    if acc.norm_sqr() < 1e-12 {
+        return;
+    }
+    let slope = acc.arg() / PILOT_SPACING as f32; // rad per subcarrier
+    let k_ref = pilots[0] as f32;
+    for (k, c) in freq.iter_mut().enumerate() {
+        let (sin_p, cos_p) = (-slope * (k as f32 - k_ref)).sin_cos();
+        *c *= Complex32::new(cos_p, sin_p);
+    }
+}
+
 /// Zero-forcing equalization: divide each data SC bin by its channel estimate.
 ///
 /// `freq` is the full FFT output (length `FFT_SIZE`).
@@ -122,7 +153,12 @@ pub fn zf_equalize(p: &OfdmParams, freq: &[Complex32], h_est: &[Complex32]) -> V
 pub fn estimate_cfo_hz(samples: &[f32], p: &OfdmParams) -> Option<f32> {
     use std::f32::consts::PI;
 
-    let n_syms = samples.len() / SYM_LEN;
+    // Skip the (pilotless) timing-acquisition preamble; CFO is measured across
+    // consecutive DATA symbols only.  Fall back to sample 0 when no preamble is
+    // detected so callers passing bare symbol streams still get an estimate.
+    let data_start = crate::demodulate::find_first_data_body(samples, p).unwrap_or(CP);
+    let usable = samples.len().saturating_sub(data_start) + CP;
+    let n_syms = usable / SYM_LEN;
     if n_syms < 2 {
         return None;
     }
@@ -138,7 +174,7 @@ pub fn estimate_cfo_hz(samples: &[f32], p: &OfdmParams) -> Option<f32> {
 
     let mut spectra: Vec<Vec<Complex32>> = Vec::with_capacity(n_use);
     for sym_idx in 0..n_use {
-        let start = sym_idx * SYM_LEN + CP;
+        let start = data_start + sym_idx * SYM_LEN;
         if start + FFT_SIZE > samples.len() {
             break;
         }
@@ -153,22 +189,22 @@ pub fn estimate_cfo_hz(samples: &[f32], p: &OfdmParams) -> Option<f32> {
         return None;
     }
 
-    let mut phase_sum = 0.0f32;
-    let mut count = 0u32;
+    // Vector-average the conjugate products (more robust than averaging
+    // individual phase angles, which suffer wrap-around and over-weight
+    // low-magnitude bins).
+    let mut acc = Complex32::new(0.0, 0.0);
     for i in 0..(spectra.len() - 1) {
         for &k in &pilots {
             if k < FFT_SIZE {
-                let conj_prod = spectra[i][k].conj() * spectra[i + 1][k];
-                phase_sum += conj_prod.arg();
-                count += 1;
+                acc += spectra[i][k].conj() * spectra[i + 1][k];
             }
         }
     }
-    if count == 0 {
+    if acc.norm_sqr() < 1e-12 {
         return None;
     }
 
-    let mean_phase = phase_sum / count as f32;
+    let mean_phase = acc.arg();
     let t_sym = SYM_LEN as f32 / SAMPLE_RATE as f32;
     Some(mean_phase / (2.0 * PI * t_sym))
 }
