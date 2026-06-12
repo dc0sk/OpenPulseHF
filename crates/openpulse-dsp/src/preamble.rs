@@ -76,21 +76,26 @@ impl PreambleSpec {
 
     /// Generate IQ symbols according to `constellation`.
     pub fn iq_symbols(&self) -> Vec<(f32, f32)> {
-        let chips = self.chips();
         match self.constellation {
-            PreambleConstellation::Bpsk => chips.into_iter().map(|c| (c, 0.0)).collect(),
+            PreambleConstellation::Bpsk => self.chips().into_iter().map(|c| (c, 0.0)).collect(),
             PreambleConstellation::Qpsk => {
-                if chips.is_empty() {
+                // Consume a 2×-length chip stream pairwise.  Indexing a
+                // length_symbols chip vector with (2k) % len drifted parity on
+                // each wrap for odd-length base sequences (Barker-11/13),
+                // destroying the designed correlation structure.
+                let base = self.preamble_type.base_sequence();
+                if base.is_empty() || self.length_symbols == 0 {
                     return Vec::new();
                 }
-
-                (0..self.length_symbols)
-                    .map(|k| {
-                        // Map consecutive chips to I/Q to preserve chip-sequence structure.
-                        let i_chip = chips[(2 * k) % chips.len()];
-                        let q_chip = chips[(2 * k + 1) % chips.len()];
-                        (i_chip * INV_SQRT2, q_chip * INV_SQRT2)
-                    })
+                let chips: Vec<f32> = base
+                    .iter()
+                    .copied()
+                    .cycle()
+                    .take(2 * self.length_symbols)
+                    .collect();
+                chips
+                    .chunks_exact(2)
+                    .map(|pair| (pair[0] * INV_SQRT2, pair[1] * INV_SQRT2))
                     .collect()
             }
         }
@@ -115,9 +120,21 @@ impl PreambleType {
     /// Return the preamble sequence as `f32` symbols/samples.
     ///
     /// Barker and PN variants are BPSK symbols (`+1.0` or `-1.0`).
-    /// `ZadoffChu64` is returned as a real-valued projection.
+    /// `ZadoffChu64` is returned as a real-valued projection, which does NOT
+    /// preserve the CAZAC autocorrelation — see [`PreambleType::iq_sequence`].
     pub fn sequence(&self) -> Vec<f32> {
         self.base_sequence()
+    }
+
+    /// Return the preamble as complex (I, Q) symbols.
+    ///
+    /// Barker/PN map to the real axis; `ZadoffChu64` returns the true complex
+    /// CAZAC sequence.
+    pub fn iq_sequence(&self) -> Vec<(f32, f32)> {
+        match self {
+            PreambleType::ZadoffChu64 => zadoff_chu_sequence_iq(64, 1),
+            _ => self.base_sequence().into_iter().map(|c| (c, 0.0)).collect(),
+        }
     }
 
     /// Length of the preamble in symbols.
@@ -166,22 +183,45 @@ fn pn_sequence(length: usize, seed: u32) -> Vec<f32> {
     seq
 }
 
-/// Generate a Zadoff-Chu (ZC) sequence.
+/// Generate the complex Zadoff-Chu (ZC) sequence `exp(-jπ·u·n(n+1)/N)`.
+///
+/// The constant-amplitude zero-autocorrelation (CAZAC) property only holds
+/// for the COMPLEX sequence — use [`PreambleType::iq_sequence`] when the
+/// autocorrelation properties matter.
 ///
 /// Parameters:
 /// - `length`: sequence length (N)
 /// - `u`: coprime with N (typically 1)
-fn zadoff_chu_sequence(length: usize, u: i32) -> Vec<f32> {
+fn zadoff_chu_sequence_iq(length: usize, u: i32) -> Vec<(f32, f32)> {
     let mut seq = Vec::with_capacity(length);
     let n_f = length as f32;
 
     for n in 0..length {
         let n_f32 = n as f32;
-        let exponent = -PI * u as f32 * n_f32 * (n_f32 + 1.0) / n_f;
-        let (_sin, cos) = exponent.sin_cos();
-        seq.push(cos);
+        // CAZAC requires the n² phase profile for even N and n(n+1) for odd N.
+        let quad = if length.is_multiple_of(2) {
+            n_f32 * n_f32
+        } else {
+            n_f32 * (n_f32 + 1.0)
+        };
+        let exponent = -PI * u as f32 * quad / n_f;
+        let (sin, cos) = exponent.sin_cos();
+        seq.push((cos, sin));
     }
     seq
+}
+
+/// Real projection of the ZC sequence (cosine component only).
+///
+/// **The real projection does NOT preserve the CAZAC autocorrelation** — it
+/// exists only so ZC can be materialised through the real-valued
+/// [`PreambleType::sequence`] interface.  Prefer Barker/PN for real-valued
+/// preambles, or [`PreambleType::iq_sequence`] for true ZC.
+fn zadoff_chu_sequence(length: usize, u: i32) -> Vec<f32> {
+    zadoff_chu_sequence_iq(length, u)
+        .into_iter()
+        .map(|(re, _)| re)
+        .collect()
 }
 
 /// Preamble detector and phase-coherence tracker.
@@ -206,7 +246,15 @@ impl PreambleDetector {
         }
     }
 
-    /// Correlate a received symbol sequence with the preamble reference.
+    /// Correlate a coherently-demodulated BPSK symbol sequence with the
+    /// preamble reference.
+    ///
+    /// **Scope warning:** this is an I-channel-only real correlation.  The
+    /// `abs` handles the 180° polarity ambiguity but NOT an arbitrary carrier
+    /// phase — at ~90° the I-channel energy collapses.  It is only valid on
+    /// symbol streams that are already carrier-phase corrected; for passband
+    /// or rotated-symbol acquisition use
+    /// [`crate::acquisition::IqMatchedFilter`] / `preamble_corr_sq`.
     ///
     /// Returns (correlation_magnitude, phase_estimate) where:
     /// - correlation_magnitude: |∑ recv_i × ref_i| / len
@@ -328,6 +376,36 @@ mod tests {
     fn test_zadoff_chu_64() {
         let seq = PreambleType::ZadoffChu64.sequence();
         assert_eq!(seq.len(), 64);
+    }
+
+    // The COMPLEX ZC sequence is CAZAC: constant amplitude, near-zero
+    // autocorrelation at every nonzero cyclic lag.  (The real projection from
+    // sequence() does not have this property — that's why iq_sequence exists.)
+    #[test]
+    fn test_zadoff_chu_complex_is_cazac() {
+        let seq = PreambleType::ZadoffChu64.iq_sequence();
+        let n = seq.len();
+        for &(re, im) in &seq {
+            assert!(
+                (re * re + im * im - 1.0).abs() < 1e-4,
+                "non-constant amplitude"
+            );
+        }
+        for lag in 1..n {
+            let (mut acc_re, mut acc_im) = (0.0f32, 0.0f32);
+            for k in 0..n {
+                let (ar, ai) = seq[k];
+                let (br, bi) = seq[(k + lag) % n];
+                // a × conj(b)
+                acc_re += ar * br + ai * bi;
+                acc_im += ai * br - ar * bi;
+            }
+            let mag = (acc_re * acc_re + acc_im * acc_im).sqrt();
+            assert!(
+                mag < 1e-2 * n as f32,
+                "lag {lag}: cyclic autocorrelation {mag} not ~0"
+            );
+        }
     }
 
     #[test]
