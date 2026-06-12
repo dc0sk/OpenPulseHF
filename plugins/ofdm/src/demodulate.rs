@@ -51,10 +51,18 @@ pub fn ofdm_demodulate_soft(samples: &[f32], mode: &str) -> Vec<f32> {
 ///    that the autocorrelation alone cannot.
 pub(crate) fn find_first_data_body(samples: &[f32], p: &OfdmParams) -> Option<usize> {
     const L: usize = FFT_SIZE / 2;
+    // The preamble is always near the front of the slice: the receive engine
+    // positions each demodulation window at the detected signal start and slides
+    // it forward symbol-by-symbol, so when the preamble is present it appears
+    // within the first few hundred samples.  Bounding the autocorrelation search
+    // keeps this O(SEARCH_CAP) per call instead of O(slice_len) — the engine may
+    // hand us a slice tens of seconds long, and an unbounded scan both starves
+    // the real-time receive loop and risks a spurious far-field correlation peak.
+    const SEARCH_CAP: usize = 8192;
     if samples.len() < 2 * L + 1 {
         return None;
     }
-    let max_d = samples.len() - 2 * L;
+    let max_d = (samples.len() - 2 * L).min(SEARCH_CAP);
 
     // ── Stage 1: coarse Schmidl-Cox autocorrelation ────────────────────────────
     let mut p_acc = 0.0f32;
