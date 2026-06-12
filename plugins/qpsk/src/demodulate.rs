@@ -93,7 +93,8 @@ pub fn qpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
     } else {
         let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
         let raw = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
-        carrier_phase_correct(&raw, config.afc_correction_hz)
+        let phase_corrected = carrier_phase_correct(&raw, config.afc_correction_hz);
+        carrier_pll_track(&phase_corrected)
     };
 
     if syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
@@ -454,7 +455,8 @@ pub fn qpsk_demodulate_soft(
     } else {
         let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
         let raw = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
-        carrier_phase_correct(&raw, config.afc_correction_hz)
+        let phase_corrected = carrier_phase_correct(&raw, config.afc_correction_hz);
+        carrier_pll_track(&phase_corrected)
     };
 
     if syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
@@ -473,6 +475,28 @@ pub fn qpsk_demodulate_soft(
 
 fn preamble_expected() -> Vec<(f32, f32)> {
     preamble_symbols()
+}
+
+/// Track residual carrier frequency drift using a QPSK Costas decision-directed PLL.
+///
+/// `carrier_phase_correct` resolves the 90° phase ambiguity and removes the static
+/// phase offset estimated from the preamble.  A residual frequency offset (e.g. the
+/// difference in USB audio crystal frequencies between two CM108 dongles on separate
+/// hosts, typically < 2 Hz) still causes a linear phase ramp that accumulates across
+/// the data frame and is NOT removed by a one-shot preamble fit.
+///
+/// This function runs a second-order Costas PLL (loop_bw = 0.02) over every symbol.
+/// The PLL acquires within ~100 symbols and then tracks the drift continuously,
+/// keeping the residual phase error well within the ±45° QPSK decision boundary
+/// for the duration of the frame.
+fn carrier_pll_track(syms: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    let mut pll = CarrierPll::new(0.02, 2);
+    syms.iter()
+        .map(|&(i, q)| {
+            pll.update(i, q);
+            pll.correct(i, q)
+        })
+        .collect()
 }
 
 /// Correct a linear carrier phase drift using the known preamble as a pilot.
@@ -831,6 +855,53 @@ mod tests {
             })
             .collect();
         assert_eq!(&wire[..payload.len()], &payload[..]);
+    }
+
+    /// Verify the Costas PLL handles a carrier frequency offset with AFC disabled.
+    ///
+    /// On a loopback cable between two hosts using separate CM108 USB audio dongles,
+    /// the crystal oscillators differ by ~0.1–0.2 Hz at 1500 Hz.  This causes a
+    /// linear phase ramp that defeats QPSK absolute-phase decoding unless the PLL
+    /// tracks it continuously.  afc_correction_hz=0.0 mimics --no-afc on hardware.
+    #[test]
+    fn qpsk125_pll_tracks_crystal_offset_without_afc() {
+        let payload: Vec<u8> = (0u8..64).collect();
+        let tx_cfg = ModulationConfig {
+            mode: "QPSK125".to_string(),
+            center_frequency: 1500.0,
+            ..ModulationConfig::default()
+        };
+        let samples = crate::modulate::qpsk_modulate(&payload, &tx_cfg).expect("modulate");
+
+        // 0.2 Hz crystal offset, AFC disabled — the PLL must compensate.
+        let rx_cfg = ModulationConfig {
+            mode: "QPSK125".to_string(),
+            center_frequency: 1500.2,
+            afc_correction_hz: 0.0,
+            ..ModulationConfig::default()
+        };
+        let recovered = qpsk_demodulate(&samples, &rx_cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], &payload[..]);
+    }
+
+    #[test]
+    fn qpsk250_pll_tracks_crystal_offset_without_afc() {
+        let payload: Vec<u8> = (0u8..64).collect();
+        let tx_cfg = ModulationConfig {
+            mode: "QPSK250".to_string(),
+            center_frequency: 1500.0,
+            ..ModulationConfig::default()
+        };
+        let samples = crate::modulate::qpsk_modulate(&payload, &tx_cfg).expect("modulate");
+
+        let rx_cfg = ModulationConfig {
+            mode: "QPSK250".to_string(),
+            center_frequency: 1500.2,
+            afc_correction_hz: 0.0,
+            ..ModulationConfig::default()
+        };
+        let recovered = qpsk_demodulate(&samples, &rx_cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], &payload[..]);
     }
 
     #[test]
