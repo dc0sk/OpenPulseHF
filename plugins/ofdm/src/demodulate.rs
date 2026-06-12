@@ -33,8 +33,151 @@ pub fn ofdm_demodulate_soft(samples: &[f32], mode: &str) -> Vec<f32> {
     }
 }
 
+/// Locate the first data-symbol body via Schmidl-Cox preamble acquisition.
+///
+/// Returns the sample index of the FFT window for data symbol 0 (i.e. just past
+/// the preamble), or `None` when no preamble correlation peak is found.
+///
+/// Acquisition is two-stage:
+///
+/// 1. **Coarse, CFO-robust presence detection** via a Schmidl-Cox half-symbol
+///    autocorrelation `M(d) = P(d)²/R(d)²` over the whole slice.  The preamble
+///    body has two identical halves of length `L = FFT_SIZE/2`, so `M → 1` on a
+///    plateau of width `CP`; the argmax falls somewhere in that plateau.
+/// 2. **Fine, sample-accurate timing** via a normalised cross-correlation
+///    against the known clean preamble waveform, searched only in a small window
+///    around the coarse peak.  The matched filter gives a single sharp peak at
+///    the preamble's first sample (frame start), resolving the plateau ambiguity
+///    that the autocorrelation alone cannot.
+pub(crate) fn find_first_data_body(samples: &[f32], p: &OfdmParams) -> Option<usize> {
+    const L: usize = FFT_SIZE / 2;
+    if samples.len() < 2 * L + 1 {
+        return None;
+    }
+    let max_d = samples.len() - 2 * L;
+
+    // ── Stage 1: coarse Schmidl-Cox autocorrelation ────────────────────────────
+    let mut p_acc = 0.0f32;
+    let mut r_acc = 0.0f32;
+    for m in 0..L {
+        p_acc += samples[m] * samples[m + L];
+        r_acc += samples[m + L] * samples[m + L];
+    }
+    let mut best_m = 0.0f32;
+    let mut best_d = 0usize;
+    for d in 0..=max_d {
+        let m = if r_acc > 1e-9 {
+            (p_acc * p_acc) / (r_acc * r_acc)
+        } else {
+            0.0
+        };
+        if m > best_m {
+            best_m = m;
+            best_d = d;
+        }
+        if d < max_d {
+            p_acc += -samples[d] * samples[d + L] + samples[d + L] * samples[d + 2 * L];
+            r_acc += -samples[d + L] * samples[d + L] + samples[d + 2 * L] * samples[d + 2 * L];
+        }
+    }
+    // Require a clear correlation peak (M → 1 at perfect alignment).
+    if best_m < 0.5 {
+        return None;
+    }
+
+    // ── Stage 2: matched-filter fine timing ────────────────────────────────────
+    // Correlate against BOTH the in-phase preamble and its quadrature (Hilbert)
+    // companion, then maximise the correlation magnitude.  This is insensitive to
+    // the channel's carrier phase, so a multipath/fading channel cannot drag the
+    // timing peak off the true frame start the way a bare real correlation would.
+    let template = crate::modulate::preamble_template(p);
+    let template_q = quadrature(&template);
+    let tlen = template.len();
+    let t_energy: f32 = template.iter().map(|&x| x * x).sum();
+    if t_energy < 1e-12 || samples.len() < tlen {
+        return None;
+    }
+
+    // The frame start (preamble's first sample) lies at or just left of the
+    // autocorrelation plateau.  Search a window that brackets it.
+    let lo = best_d.saturating_sub(L);
+    let hi = (best_d + CP).min(samples.len() - tlen);
+    if lo > hi {
+        return None;
+    }
+    let mut rhos = Vec::with_capacity(hi - lo + 1);
+    let mut best_rho = f32::MIN;
+    let mut peak_idx = 0usize;
+    for d in lo..=hi {
+        let mut dot_i = 0.0f32;
+        let mut dot_q = 0.0f32;
+        let mut e = 0.0f32;
+        for m in 0..tlen {
+            let s = samples[d + m];
+            dot_i += s * template[m];
+            dot_q += s * template_q[m];
+            e += s * s;
+        }
+        let rho = (dot_i * dot_i + dot_q * dot_q).sqrt() / ((e * t_energy).sqrt() + 1e-12);
+        if rho > best_rho {
+            best_rho = rho;
+            peak_idx = rhos.len();
+        }
+        rhos.push(rho);
+    }
+    // Lock to the LEADING path, not the strongest.  On a multipath channel a
+    // delayed echo can be the dominant correlation peak; starting the FFT window
+    // there would read into the next symbol (inter-symbol interference).  Starting
+    // at — or just before — the first path is absorbed by the cyclic prefix as a
+    // benign phase ramp.  Scan back up to one CP from the peak for the earliest
+    // tap above half the peak correlation.
+    let lead_thresh = best_rho * 0.20;
+    let search_lo = peak_idx.saturating_sub(CP);
+    let chosen = (search_lo..=peak_idx)
+        .find(|&i| rhos[i] >= lead_thresh)
+        .unwrap_or(peak_idx);
+    let frame_start = lo + chosen;
+
+    // Data symbol 0 body = frame start + full preamble symbol (SYM_LEN) + the
+    // first data symbol's own cyclic prefix (CP).
+    Some(frame_start + SYM_LEN + CP)
+}
+
+/// Quadrature (90°-shifted) companion of a real signal via the FFT Hilbert
+/// transform: the imaginary part of the analytic signal.
+fn quadrature(x: &[f32]) -> Vec<f32> {
+    let n = x.len();
+    if n == 0 {
+        return vec![];
+    }
+    let mut planner = FftPlanner::<f32>::new();
+    let fwd = planner.plan_fft_forward(n);
+    let inv = planner.plan_fft_inverse(n);
+    let mut buf: Vec<Complex32> = x.iter().map(|&v| Complex32::new(v, 0.0)).collect();
+    fwd.process(&mut buf);
+    let half = n / 2;
+    for (k, c) in buf.iter_mut().enumerate() {
+        if k == 0 || (n.is_multiple_of(2) && k == half) {
+            // DC and Nyquist unchanged.
+        } else if k < half {
+            *c *= 2.0; // positive frequencies doubled
+        } else {
+            *c = Complex32::new(0.0, 0.0); // negative frequencies zeroed
+        }
+    }
+    inv.process(&mut buf);
+    let scale = 1.0 / n as f32;
+    buf.iter().map(|c| c.im * scale).collect()
+}
+
 fn demodulate_with_params(samples: &[f32], p: &OfdmParams) -> Vec<u8> {
-    let n_syms = samples.len() / SYM_LEN;
+    let Some(data_start) = find_first_data_body(samples, p) else {
+        return vec![];
+    };
+    if data_start >= samples.len() {
+        return vec![];
+    }
+    let n_syms = (samples.len() - data_start + CP) / SYM_LEN;
     if n_syms == 0 {
         return vec![];
     }
@@ -46,7 +189,7 @@ fn demodulate_with_params(samples: &[f32], p: &OfdmParams) -> Vec<u8> {
     let mut bits: Vec<bool> = Vec::with_capacity(n_syms * p.bits_per_symbol());
 
     for sym_idx in 0..n_syms {
-        let start = sym_idx * SYM_LEN + CP; // strip cyclic prefix
+        let start = data_start + sym_idx * SYM_LEN; // FFT window (CP already stripped)
         if start + FFT_SIZE > samples.len() {
             break;
         }
@@ -56,6 +199,7 @@ fn demodulate_with_params(samples: &[f32], p: &OfdmParams) -> Vec<u8> {
             .map(|&s| Complex32::new(s * scale, 0.0))
             .collect();
         fft.process(&mut freq);
+        crate::channel::deramp_timing(p, &mut freq);
 
         // LS channel estimation + ZF equalization.
         let h_est = ls_estimate(p, &freq);
@@ -97,7 +241,13 @@ fn qpsk_llr(c: Complex32, weight: f32) -> [f32; 2] {
 }
 
 fn demodulate_soft_with_params(samples: &[f32], p: &OfdmParams) -> Vec<f32> {
-    let n_syms = samples.len() / SYM_LEN;
+    let Some(data_start) = find_first_data_body(samples, p) else {
+        return vec![];
+    };
+    if data_start >= samples.len() {
+        return vec![];
+    }
+    let n_syms = (samples.len() - data_start + CP) / SYM_LEN;
     if n_syms == 0 {
         return vec![];
     }
@@ -110,7 +260,7 @@ fn demodulate_soft_with_params(samples: &[f32], p: &OfdmParams) -> Vec<f32> {
     let mut llrs: Vec<f32> = Vec::with_capacity(n_syms * p.bits_per_symbol());
 
     for sym_idx in 0..n_syms {
-        let start = sym_idx * SYM_LEN + CP;
+        let start = data_start + sym_idx * SYM_LEN;
         if start + FFT_SIZE > samples.len() {
             break;
         }
@@ -120,6 +270,7 @@ fn demodulate_soft_with_params(samples: &[f32], p: &OfdmParams) -> Vec<f32> {
             .map(|&s| Complex32::new(s * scale, 0.0))
             .collect();
         fft.process(&mut freq);
+        crate::channel::deramp_timing(p, &mut freq);
 
         let h_est = ls_estimate(p, &freq);
         let data_syms = zf_equalize(p, &freq, &h_est);

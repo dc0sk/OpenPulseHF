@@ -324,6 +324,42 @@ mod tests {
         assert!(plugin.supports_soft_demod());
     }
 
+    // Timing acquisition: frame arriving at a non-symbol-aligned sample offset,
+    // preceded by leading capture noise, must still decode.  This is the
+    // hardware-loopback condition the synchronous channel-sim harness never
+    // exercises (it routes frame-aligned samples).
+    #[test]
+    fn ofdm52_acquires_with_leading_offset_and_noise() {
+        let plugin = OfdmPlugin::new();
+        let payload: Vec<u8> = (0u8..64).collect();
+        let frame = plugin.modulate(&payload, &mod_config("OFDM52")).unwrap();
+
+        // Deterministic low-level pre-roll noise at an offset that is NOT a
+        // multiple of the OFDM symbol period (SYM_LEN = 288).
+        let mut buf = Vec::new();
+        let mut seed = 0x1234_5678u32;
+        for _ in 0..137 {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            buf.push(((seed >> 8) as f32 / u32::MAX as f32 - 0.5) * 0.01);
+        }
+        buf.extend_from_slice(&frame);
+        buf.extend(std::iter::repeat(0.0).take(300));
+
+        let rx = plugin.demodulate(&buf, &mod_config("OFDM52")).unwrap();
+        assert_eq!(rx.as_slice(), payload.as_slice());
+    }
+
+    #[test]
+    fn ofdm16_acquires_with_leading_offset() {
+        let plugin = OfdmPlugin::new();
+        let payload = b"timing acquisition";
+        let frame = plugin.modulate(payload, &mod_config("OFDM16")).unwrap();
+        let mut buf = vec![0.0f32; 211];
+        buf.extend_from_slice(&frame);
+        let rx = plugin.demodulate(&buf, &mod_config("OFDM16")).unwrap();
+        assert_eq!(rx.as_slice(), payload.as_ref());
+    }
+
     // AFC estimator: on-carrier signal returns near-zero estimate.
     #[test]
     fn afc_estimate_near_zero_ofdm16() {
