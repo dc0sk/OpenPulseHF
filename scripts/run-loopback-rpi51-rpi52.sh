@@ -4,8 +4,9 @@
 # No RF, no PTT, no rigctld.  Tests the software modem stack end-to-end with
 # real audio hardware to isolate software bugs from RF/transceiver variables.
 #
-# Hardware:
-#   rpi51 card 4 (Device_1) speaker out → cable → rpi52 card 3 (Device) mic in
+# Hardware (2026-06-12: rpi52's CM108 replaced with the same C-Media
+# "USB Audio Device" model as rpi51 — both ends now use the same card):
+#   rpi51 CARD=Device speaker out → cable → rpi52 CARD=Device mic in
 #
 # Usage:
 #   ./scripts/run-loopback-rpi51-rpi52.sh
@@ -134,7 +135,8 @@ if [[ -n "${ISS_DEVICE_BYPATH:-}" ]]; then
     fi
     echo "    ISS device: ok (by-path ${iss_path_name})"
 else
-    iss_dev_ok="$(ssh_iss "aplay -l 2>/dev/null | grep -Fq '${ISS_DEVICE##*CARD=}' && echo ok || echo missing" || echo missing)"
+    _iss_card_name="${ISS_DEVICE##*CARD=}"; _iss_card_name="${_iss_card_name%%,*}"
+    iss_dev_ok="$(ssh_iss "aplay -l 2>/dev/null | grep -Fq ': ${_iss_card_name} [' && echo ok || echo missing" || echo missing)"
     if [[ "$iss_dev_ok" != "ok" ]]; then
         echo "WARN: ISS device '${ISS_DEVICE}' not found — will attempt anyway"
     else
@@ -152,7 +154,8 @@ if [[ -n "${IRS_DEVICE_BYPATH:-}" ]]; then
     fi
     echo "    IRS device: ok (by-path ${irs_path_name})"
 else
-    irs_dev_ok="$(ssh_irs "arecord -l 2>/dev/null | grep -Fq '${IRS_DEVICE##*CARD=}' && echo ok || echo missing" || echo missing)"
+    _irs_card_name="${IRS_DEVICE##*CARD=}"; _irs_card_name="${_irs_card_name%%,*}"
+    irs_dev_ok="$(ssh_irs "arecord -l 2>/dev/null | grep -Fq ': ${_irs_card_name} [' && echo ok || echo missing" || echo missing)"
     if [[ "$irs_dev_ok" != "ok" ]]; then
         echo "WARN: IRS device '${IRS_DEVICE}' not found — will attempt anyway"
     else
@@ -167,18 +170,23 @@ echo ""
 _irs_card="${IRS_DEVICE#*CARD=}"; _irs_card="${_irs_card%%,*}"
 
 # Disable AGC and reset capture volume on IRS before every test case.
-# The CM108 hardware AGC reduces Mic Capture Volume after successive strong
+# The C-Media hardware AGC reduces Mic Capture Volume after successive strong
 # signals.  After BPSK100 + BPSK250 both decode cleanly, the volume drops
 # enough to push the QPSK carrier below ENERGY_GATE_THRESHOLD (0.0001),
 # delaying fep by 3+ seconds and causing the frame to miss the receive window.
-# Reset volume to max (16 = 23.81 dB on CM108, verified safe — does not
-# overdrive the loopback cable at this level) and disable AGC to prevent
-# further drift during the test.
+# Reset volume to max and disable AGC to prevent further drift during the test.
+#
+# 2026-06-12: rpi52's CM108 ("USB PnP Sound Device") was replaced with the same
+# C-Media "USB Audio Device" model used on rpi51.  On this model the capture
+# controls are NOT exposed under the simple-mixer names 'Mic Capture Volume' /
+# 'Mic Capture Switch' (amixer set fails), only as raw controls — use cset.
+# Capture range is 0–35 (35 = 23.0 dB max, ≈ the old CM108's 16 = 23.81 dB).
+# The raw-control names are identical on both models, so cset works for either.
 _normalise_irs_levels() {
     ssh_irs "
-        amixer -c '${_irs_card}' set 'Auto Gain Control'  off >/dev/null 2>&1 || true
-        amixer -c '${_irs_card}' set 'Mic Capture Switch'  on  >/dev/null 2>&1 || true
-        amixer -c '${_irs_card}' set 'Mic Capture Volume'  16  >/dev/null 2>&1 || true
+        amixer -c '${_irs_card}' cset name='Auto Gain Control' 0  >/dev/null 2>&1 || true
+        amixer -c '${_irs_card}' cset name='Mic Capture Switch' 1 >/dev/null 2>&1 || true
+        amixer -c '${_irs_card}' cset name='Mic Capture Volume' 35 >/dev/null 2>&1 || true
     " 2>/dev/null || true
 }
 _normalise_irs_levels  # Once at session start before the first case.
