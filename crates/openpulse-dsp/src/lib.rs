@@ -6,6 +6,7 @@
 pub mod acquisition;
 pub mod doppler_tracker;
 pub mod equalizer;
+pub mod farrow;
 pub mod filter;
 pub mod pll;
 pub mod preamble;

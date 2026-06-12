@@ -29,9 +29,10 @@ use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
 use openpulse_dsp::acquisition::goertzel_carrier_scan;
 use openpulse_dsp::equalizer::LmsEqualizer;
+use openpulse_dsp::farrow::FarrowTimingLoop;
 use openpulse_dsp::filter::FirFilter;
+use openpulse_dsp::pll::CarrierPll;
 use openpulse_dsp::rrc::generate_rrc_coefficients;
-use openpulse_dsp::timing::GardnerDetector;
 
 use crate::modulate::{
     nrzi_encode, samples_per_symbol, PREAMBLE_SYMS, RRC_SPAN_SYMBOLS, TAIL_SYMS,
@@ -537,7 +538,11 @@ fn bpsk_lms_equalize(i_syms: &[f32], q_syms: &[f32], mode: &str) -> (Vec<f32>, V
     let training = expected_preamble_symbols(PREAMBLE_SYMS.min(i_syms.len()));
     let training_q = vec![0.0f32; training.len()];
     let (fwd_len, dfe_len, mu) = lms_profile(mode);
-    let mut eq = LmsEqualizer::new(fwd_len, dfe_len, mu);
+    // Train-then-freeze: unsupervised DD adaptation drifts to a wrong
+    // self-consistent equilibrium (gain creep + Q contamination) over long
+    // frames even on clean input; the residual carrier is already tracked by
+    // the Costas PLL ahead of this stage, so frozen taps stay valid.
+    let mut eq = LmsEqualizer::new(fwd_len, dfe_len, mu).with_frozen_dd();
     eq.process_frame(i_syms, q_syms, &training, &training_q, |i, _q| {
         (if i >= 0.0 { 1.0 } else { -1.0 }, 0.0)
     })
@@ -545,11 +550,14 @@ fn bpsk_lms_equalize(i_syms: &[f32], q_syms: &[f32], mode: &str) -> (Vec<f32>, V
 
 // ── Timing search ─────────────────────────────────────────────────────────────
 
-/// Adaptive symbol sampling using the Gardner timing error detector.
+/// Interpolating symbol sampling with true timing-drift tracking.
 ///
 /// `initial_timing` seeds the start position from brute-force preamble
-/// correlation.  The Gardner loop then tracks timing drift adaptively for
-/// the remainder of the frame.
+/// correlation; the Farrow loop then tracks fractional timing AND the actual
+/// samples-per-symbol period for the remainder of the frame.  The previous
+/// fixed-stride GardnerDetector could not adjust the sampling instant at all
+/// (its mu clamp kept the strobe interval at exactly `n`), so a sound-card
+/// sample-rate offset slid long frames into heavy ISI.
 fn gardner_sample_rrc(
     i_bb: &[f32],
     q_bb: &[f32],
@@ -557,20 +565,30 @@ fn gardner_sample_rrc(
     initial_timing: usize,
 ) -> (Vec<f32>, Vec<f32>) {
     let start = initial_timing.min(i_bb.len());
-    let mut det = GardnerDetector::new(n, 0.02);
-    // Pre-arm so the first sample at `start` (already an ISI-free point) is output immediately.
-    det.pre_arm();
-    let mut i_out = Vec::new();
-    let mut q_out = Vec::new();
-    for (idx, &s_i) in i_bb[start..].iter().enumerate() {
-        if det.update(s_i).is_some() {
-            // Strobe fires: s_i is the boundary sample; Q is synchronous (same FIR).
-            let s_q = q_bb.get(start + idx).copied().unwrap_or(0.0);
-            i_out.push(s_i);
-            q_out.push(s_q);
-        }
+    // Stronger-than-default gains: at ≤ 250 baud the HF delay spread is
+    // sub-symbol, so the multipath bias that forces the conservative default
+    // gains on high-baud modes does not apply — and the long low-baud frames
+    // need the loop to track 150 ppm with ≤ a few % of period lag.
+    let (i_out, q_out) = FarrowTimingLoop::new(n)
+        .with_gains(0.05, 0.002)
+        .process(i_bb, q_bb, start);
+
+    // Track residual carrier frequency with a BPSK Costas PLL.  A sample-rate
+    // offset shifts the carrier too (150 ppm ⇒ −0.225 Hz at 1500 Hz), which
+    // rotates the constellation ~90° per ~300 symbols at 250 baud — the LMS
+    // stage trains on REAL (±1, 0) targets and cannot follow a rotation, so
+    // without the PLL its decision-directed mode collapses mid-frame.  The
+    // PLL's 180° ambiguity is harmless: decoding is differential.
+    let mut pll = CarrierPll::new(0.02, 1);
+    let mut i_trk = Vec::with_capacity(i_out.len());
+    let mut q_trk = Vec::with_capacity(q_out.len());
+    for (&s_i, &s_q) in i_out.iter().zip(q_out.iter()) {
+        pll.update(s_i, s_q);
+        let (ci, cq) = pll.correct(s_i, s_q);
+        i_trk.push(ci);
+        q_trk.push(cq);
     }
-    (i_out, q_out)
+    (i_trk, q_trk)
 }
 
 /// Brute-force timing search on the baseband I/Q signal (after downmix + RRC).
@@ -880,6 +898,66 @@ mod tests {
 
         let recovered = bpsk_demodulate(&samples, &cfg).unwrap();
         assert_eq!(&recovered[..payload.len()], &payload[..]);
+    }
+
+    /// Sample-rate-offset acceptance (review A13): a full 255-byte BPSK250-RRC
+    /// frame decodes through a 150 ppm resampling — the two-free-running-
+    /// sound-card condition.  The frame is ~66k samples, so 150 ppm drifts the
+    /// ISI-free sampling instant by ~10 samples (31% of the 32-sample symbol
+    /// period); the fixed-stride timing path cannot decode this.
+    #[test]
+    fn bpsk250_rrc_decodes_through_150ppm_sample_rate_offset() {
+        use crate::modulate::bpsk_modulate;
+        let cfg = ModulationConfig {
+            mode: "BPSK250-RRC".to_string(),
+            sample_rate: 8000,
+            center_frequency: 1500.0,
+            ..ModulationConfig::default()
+        };
+        let payload: Vec<u8> = (0..255u8).collect();
+        let tx = bpsk_modulate(&payload, &cfg).unwrap();
+
+        // Linear resampling models the receiver clock running 150 ppm fast.
+        let ratio = 1.0f64 + 150e-6;
+        let out_len = (tx.len() as f64 / ratio) as usize;
+        let rx: Vec<f32> = (0..out_len)
+            .map(|k| {
+                let pos = k as f64 * ratio;
+                let base = pos.floor() as usize;
+                let t = (pos - base as f64) as f32;
+                if base + 1 < tx.len() {
+                    tx[base] * (1.0 - t) + tx[base + 1] * t
+                } else {
+                    tx[tx.len() - 1]
+                }
+            })
+            .collect();
+
+        let recovered = bpsk_demodulate(&rx, &cfg).unwrap();
+        assert!(
+            recovered.len() >= payload.len(),
+            "recovered only {} bytes",
+            recovered.len()
+        );
+        let first_bad = recovered[..payload.len()]
+            .iter()
+            .zip(payload.iter())
+            .position(|(a, b)| a != b);
+        let n_bad = recovered[..payload.len()]
+            .iter()
+            .zip(payload.iter())
+            .filter(|(a, b)| a != b)
+            .count();
+        let bit_errs: u32 = recovered[..payload.len()]
+            .iter()
+            .zip(payload.iter())
+            .map(|(a, b)| (a ^ b).count_ones())
+            .sum();
+        assert_eq!(
+            &recovered[..payload.len()],
+            &payload[..],
+            "BPSK250-RRC 150 ppm SRO: first mismatch byte {first_bad:?}, {n_bad}/255 bad bytes, {bit_errs} bit errors"
+        );
     }
 
     #[test]

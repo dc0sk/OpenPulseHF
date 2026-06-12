@@ -20,6 +20,11 @@ pub struct LmsEqualizer {
     pub fwd_len: usize,
     pub dfe_len: usize,
     mu: f32,
+    /// Adapt tap weights in decision-directed mode (default true).  Disable
+    /// for train-then-freeze operation: unsupervised DD adaptation over long
+    /// frames can drift to a wrong self-consistent equilibrium (gain creep,
+    /// Q-channel contamination on real constellations) even on clean input.
+    dd_adapt: bool,
     // Forward tap weights (complex: (re, im) per tap)
     w_fwd_re: Vec<f32>,
     w_fwd_im: Vec<f32>,
@@ -59,7 +64,14 @@ impl LmsEqualizer {
             buf_im: VecDeque::from(vec![0.0f32; fwd_len]),
             dec_re: VecDeque::from(vec![0.0f32; dfe_len.max(1)]),
             dec_im: VecDeque::from(vec![0.0f32; dfe_len.max(1)]),
+            dd_adapt: true,
         }
+    }
+
+    /// Disable decision-directed weight adaptation (train-then-freeze).
+    pub fn with_frozen_dd(mut self) -> Self {
+        self.dd_adapt = false;
+        self
     }
 
     /// Filter one symbol and return `(y_re, y_im)` without updating weights.
@@ -126,6 +138,33 @@ impl LmsEqualizer {
             *w_re += self.mu * (e_re * d_re + e_im * d_im);
             *w_im += self.mu * (e_im * d_re - e_re * d_im);
         }
+
+        // Divergence guard: decision-directed adaptation over long frames can
+        // run away (wrong decisions feed back into the update and the DFE).
+        // A healthy trained tap set has energy ≈ 1–2 (unit centre tap plus
+        // small correction taps); rescale if the total energy exceeds a bound
+        // that normal operation never reaches.
+        const MAX_TAP_ENERGY: f32 = 16.0;
+        let energy: f32 = self
+            .w_fwd_re
+            .iter()
+            .chain(self.w_fwd_im.iter())
+            .chain(self.w_dfe_re.iter())
+            .chain(self.w_dfe_im.iter())
+            .map(|w| w * w)
+            .sum();
+        if energy > MAX_TAP_ENERGY {
+            let k = (MAX_TAP_ENERGY / energy).sqrt();
+            for w in self
+                .w_fwd_re
+                .iter_mut()
+                .chain(self.w_fwd_im.iter_mut())
+                .chain(self.w_dfe_re.iter_mut())
+                .chain(self.w_dfe_im.iter_mut())
+            {
+                *w *= k;
+            }
+        }
     }
 
     /// Push a new input sample into the delay lines.
@@ -178,9 +217,11 @@ impl LmsEqualizer {
         self.push_input(in_re, in_im);
         let (y_re, y_im) = self.filter();
         let (d_re, d_im) = decide(y_re, y_im);
-        let e_re = d_re - y_re;
-        let e_im = d_im - y_im;
-        self.lms_update(e_re, e_im);
+        if self.dd_adapt {
+            let e_re = d_re - y_re;
+            let e_im = d_im - y_im;
+            self.lms_update(e_re, e_im);
+        }
         self.push_decision(d_re, d_im);
         (y_re, y_im)
     }

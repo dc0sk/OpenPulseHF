@@ -7,7 +7,6 @@ use openpulse_dsp::equalizer::LmsEqualizer;
 use openpulse_dsp::filter::FirFilter;
 use openpulse_dsp::pll::CarrierPll;
 use openpulse_dsp::rrc::generate_rrc_coefficients;
-use openpulse_dsp::timing::GardnerDetector;
 use std::sync::OnceLock;
 
 use crate::modulate::{
@@ -210,10 +209,17 @@ fn qpsk_demodulate_rrc(
     gardner_pll_sample_rrc(&i_bb, &q_bb, n, initial_timing)
 }
 
-/// Adaptive timing (Gardner) + carrier recovery (Costas PLL) for QPSK-RRC.
+/// Fixed-stride symbol sampling + carrier recovery (Costas PLL) for QPSK-RRC.
 ///
-/// `initial_timing` seeds the Gardner loop from the brute-force preamble search.
-/// The Costas PLL (psk_order=2) corrects residual carrier phase and frequency offset.
+/// `initial_timing` comes from the brute-force preamble search; symbols are
+/// then taken at a fixed `n`-sample stride.  An interpolating timing loop
+/// (openpulse_dsp::farrow) was evaluated here and REGRESSED the Watterson
+/// 1000-baud HF guards: at 8 samples/symbol the multipath delay spread spans
+/// 1–2 symbols, so the Gardner error is biased toward the echo centroid and
+/// even a very-low-bandwidth loop walks the timing off the preamble lock the
+/// LMS/DFE trained on.  Sample-rate offset over these SHORT high-baud frames
+/// is negligible (≈ 1 sample per 8 s at 150 ppm); the Farrow loop is wired
+/// where SRO actually bites — long low-baud BPSK-RRC frames.
 fn gardner_pll_sample_rrc(
     i_bb: &[f32],
     q_bb: &[f32],
@@ -221,17 +227,15 @@ fn gardner_pll_sample_rrc(
     initial_timing: usize,
 ) -> Vec<(f32, f32)> {
     let start = initial_timing.min(i_bb.len());
-    let mut det = GardnerDetector::new(n, 0.02);
-    // Pre-arm so the first sample at `start` (already an ISI-free point) is output immediately.
-    det.pre_arm();
     let mut pll = CarrierPll::new(0.02, 2);
     let mut syms = Vec::new();
-    for (idx, &s_i) in i_bb[start..].iter().enumerate() {
-        if det.update(s_i).is_some() {
-            let s_q = q_bb.get(start + idx).copied().unwrap_or(0.0);
-            pll.update(s_i, s_q);
-            syms.push(pll.correct(s_i, s_q));
-        }
+    let mut pos = start;
+    while pos < i_bb.len() {
+        let s_i = i_bb[pos];
+        let s_q = q_bb.get(pos).copied().unwrap_or(0.0);
+        pll.update(s_i, s_q);
+        syms.push(pll.correct(s_i, s_q));
+        pos += n;
     }
     syms
 }

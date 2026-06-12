@@ -10,7 +10,6 @@ use openpulse_core::plugin::{ModulationConfig, PulseShape};
 use openpulse_dsp::acquisition::{estimate_cfo_data_aided, preamble_corr_sq};
 use openpulse_dsp::filter::FirFilter;
 use openpulse_dsp::rrc::generate_rrc_coefficients;
-use openpulse_dsp::timing::GardnerDetector;
 
 use crate::modulate::{
     gray_map_64qam, preamble_symbols, samples_per_symbol, PAM8_SCALE, PREAMBLE_SYMS,
@@ -256,20 +255,19 @@ fn qam64_demodulate_rrc(
     let phase_0 = coarse_baseband_phase(&i_bb, &q_bb, n, initial_timing);
     let (sin0, cos0) = (-phase_0).sin_cos();
 
+    // Fixed-stride sampling: see the QPSK/8PSK RRC paths for why an
+    // interpolating timing loop is deliberately NOT used on the short
+    // high-baud frames (multipath-biased Gardner error vs negligible SRO).
     let start = initial_timing.min(i_bb.len());
-    let mut det = GardnerDetector::new(n, 0.02);
-    det.pre_arm();
     let mut i_out = Vec::new();
     let mut q_out = Vec::new();
-    for idx in 0..i_bb[start..].len() {
-        let raw_i = i_bb[start + idx];
-        let raw_q = q_bb.get(start + idx).copied().unwrap_or(0.0);
-        let s_i = raw_i * cos0 - raw_q * sin0;
-        if det.update(s_i).is_some() {
-            let s_q = raw_i * sin0 + raw_q * cos0;
-            i_out.push(s_i);
-            q_out.push(s_q);
-        }
+    let mut pos = start;
+    while pos < i_bb.len() {
+        let raw_i = i_bb[pos];
+        let raw_q = q_bb.get(pos).copied().unwrap_or(0.0);
+        i_out.push(raw_i * cos0 - raw_q * sin0);
+        q_out.push(raw_i * sin0 + raw_q * cos0);
+        pos += n;
     }
     (i_out, q_out)
 }
@@ -621,16 +619,13 @@ pub fn qam64_demodulate_gpu(
 
     let initial_timing = find_timing_offset_bb(&i_bb, &q_bb, n);
     let start = initial_timing.min(i_bb.len());
-    let mut det = GardnerDetector::new(n, 0.02);
-    det.pre_arm();
     let mut i_out = Vec::new();
     let mut q_out = Vec::new();
-    for (idx, &s_i) in i_bb[start..].iter().enumerate() {
-        if det.update(s_i).is_some() {
-            let s_q = q_bb.get(start + idx).copied().unwrap_or(0.0);
-            i_out.push(s_i);
-            q_out.push(s_q);
-        }
+    let mut pos = start;
+    while pos < i_bb.len() {
+        i_out.push(i_bb[pos]);
+        q_out.push(q_bb.get(pos).copied().unwrap_or(0.0));
+        pos += n;
     }
 
     if i_out.len() <= PREAMBLE_SYMS + TAIL_SYMS {
