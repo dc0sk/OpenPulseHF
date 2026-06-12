@@ -741,7 +741,7 @@ impl ModemEngine {
                 }
             }
 
-                // One-shot full-frame retry around the first-energy position.
+            // One-shot full-frame retry around the first-energy position.
             // Fires when accumulated ≥ fep + max_frame_samples.  By then the full
             // frame is in the buffer.  Retry positions span fep ± one symbol period
             // (step samples) only — NOT a full preamble lookback.  The preamble must
@@ -775,10 +775,11 @@ impl ModemEngine {
             // subsequent attempt use a longer accumulated buffer until the
             // frame fits and the decode succeeds.
             let elapsed_secs = start_time.elapsed().as_secs();
-            let retry_ready = elapsed_secs >= 12 && match last_retry_at {
-                None => true,
-                Some(t) => t.elapsed().as_secs() >= 2,
-            };
+            let retry_ready = elapsed_secs >= 12
+                && match last_retry_at {
+                    None => true,
+                    Some(t) => t.elapsed().as_secs() >= 2,
+                };
             if fep_full_retry_done && retry_ready {
                 // Re-arm the retry for the next 2-second tick.
                 fep_full_retry_done = false;
@@ -788,114 +789,111 @@ impl ModemEngine {
                 {
                     fep_full_retry_done = true;
                     last_retry_at = Some(Instant::now());
-                        // Scan the entire accumulated buffer from the start.
-                        // The AFC correction is kept from the settled value:
-                        // when settling succeeded on the real signal the
-                        // correction is valid (e.g. −43.8 Hz carrier offset).
-                        // A 43.8 Hz offset at 250 baud causes a 63° phase ramp
-                        // per symbol, which flips preamble bits after 2 symbols
-                        // and prevents timing lock — resetting to 0 would cause
-                        // all retry positions to fail even when the signal is
-                        // present.  If settling was rejected (saved_afc = 0)
-                        // the retry falls back to AFC=0 naturally.
-                        let retry_end = accumulated.len().saturating_sub(min_frame_samples);
-                        let saved_afc = self.afc_correction_hz;
-                        let saved_step = self.afc_step;
-                        for start in (0..=retry_end).step_by(step) {
-                            let gate_end = (start + step * 32).min(accumulated.len());
-                            let gate_len = gate_end - start;
-                            // Energy gate: skip silent positions.  Use the
-                            // same threshold as the main scan (ENERGY_GATE_THRESHOLD
-                            // = 0.0001) so the retry can find signals that are weaker
-                            // than the old hardcoded 0.01 level.  The 0.01 threshold
-                            // was calibrated for on-air QRM (noise floor ≈ 0.0015)
-                            // but is too high for the loopback cable (signal mean_sq
-                            // ≈ 0.001–0.005).  The mini-settle AFC stability guard
-                            // (divergence check below) handles noise positions that
-                            // pass this gate by rejecting them before the expensive
-                            // decode attempt runs.
-                            if gate_len > 0 {
-                                let msq = accumulated[start..gate_end]
-                                    .iter()
-                                    .map(|s| s * s)
-                                    .sum::<f32>()
-                                    / gate_len as f32;
-                                if msq < ENERGY_GATE_THRESHOLD {
-                                    continue;
-                                }
-                            }
-                            // Mini-settle: 6 fast AFC passes refine the carrier
-                            // estimate before the full decode.  Starting from
-                            // saved_afc, 6 passes at afc_step=0.7 converge
-                            // from up to ±400 Hz to within ±1 Hz of the carrier.
-                            // Only skip if the result diverged past the Goertzel
-                            // acquisition limit — the convergence guard (|change|
-                            // < 5 Hz) was removed because it incorrectly blocks
-                            // signals at exactly fc (0 Hz offset, saved_afc=0)
-                            // and signals at the Goertzel boundary (e.g. −400 Hz
-                            // which saturates and accumulates past the old limit).
-                            if gate_len >= step * 32 {
-                                // Step 1: one-shot wide-scan to anchor the
-                                // carrier frequency (afc_step=1.0 sets the
-                                // correction directly to the Goertzel peak).
-                                let initial_step = self.afc_step;
-                                self.afc_step = 1.0;
-                                self.afc_correction_hz = 0.0;
-                                self.update_afc_estimate(
-                                    mode,
-                                    &accumulated[start..gate_end],
-                                );
-                                let after_anchor = self.afc_correction_hz;
-                                // Step 2: 5 fine-tracking passes to converge.
-                                self.afc_step = 0.7;
-                                for _ in 0..5 {
-                                    self.update_afc_estimate(
-                                        mode,
-                                        &accumulated[start..gate_end],
-                                    );
-                                }
-                                self.afc_step = initial_step;
-                                let after_fine = self.afc_correction_hz;
-                                // Stability guard: reject if the fine-track
-                                // drifted >20 Hz from the anchor (unstable
-                                // noise) or exceeded the Goertzel range.
-                                // The old third condition — skip when BOTH
-                                // anchor and fine are <5 Hz — was intended to
-                                // avoid decodes on silence, but it incorrectly
-                                // skips signals whose carrier is on-frequency
-                                // (AFC offset ≈ 0 Hz, e.g. QPSK500 over the
-                                // loopback cable with <1 Hz crystal error).
-                                // The energy gate above already filters silence;
-                                // the divergence check here catches noise that
-                                // slips through.
-                                if (after_fine - after_anchor).abs() > 20.0
-                                    || after_fine.abs() > AFC_MAX_CORRECTION_HZ
-                                {
-                                    self.afc_correction_hz = saved_afc;
-                                    continue;
-                                }
-                            }
-                            let end = (start + max_frame_samples).min(accumulated.len());
-                            if end.saturating_sub(start) < min_frame_samples {
+                    // Scan the entire accumulated buffer from the start.
+                    // The AFC correction is kept from the settled value:
+                    // when settling succeeded on the real signal the
+                    // correction is valid (e.g. −43.8 Hz carrier offset).
+                    // A 43.8 Hz offset at 250 baud causes a 63° phase ramp
+                    // per symbol, which flips preamble bits after 2 symbols
+                    // and prevents timing lock — resetting to 0 would cause
+                    // all retry positions to fail even when the signal is
+                    // present.  If settling was rejected (saved_afc = 0)
+                    // the retry falls back to AFC=0 naturally.
+                    let retry_end = accumulated.len().saturating_sub(min_frame_samples);
+                    let saved_afc = self.afc_correction_hz;
+                    let saved_step = self.afc_step;
+                    for start in (0..=retry_end).step_by(step) {
+                        let gate_end = (start + step * 32).min(accumulated.len());
+                        let gate_len = gate_end - start;
+                        // Energy gate: skip silent positions.  Use the
+                        // same threshold as the main scan (ENERGY_GATE_THRESHOLD
+                        // = 0.0001) so the retry can find signals that are weaker
+                        // than the old hardcoded 0.01 level.  The 0.01 threshold
+                        // was calibrated for on-air QRM (noise floor ≈ 0.0015)
+                        // but is too high for the loopback cable (signal mean_sq
+                        // ≈ 0.001–0.005).  The mini-settle AFC stability guard
+                        // (divergence check below) handles noise positions that
+                        // pass this gate by rejecting them before the expensive
+                        // decode attempt runs.
+                        if gate_len > 0 {
+                            let msq = accumulated[start..gate_end]
+                                .iter()
+                                .map(|s| s * s)
+                                .sum::<f32>()
+                                / gate_len as f32;
+                            if msq < ENERGY_GATE_THRESHOLD {
                                 continue;
                             }
-                            debug!("AFC full-retry: pos={start} correction={:.1}Hz", self.afc_correction_hz);
-                            match self.receive_from_samples(
-                                mode,
-                                AudioSamples {
-                                    samples: accumulated[start..end].to_vec(),
-                                },
-                            ) {
-                                Ok(payload) => return Ok(payload),
-                                Err(err) => {
-                                    debug!("AFC full-retry: pos={start} FAILED: {err}");
-                                    last_err = Some(err);
-                                    self.afc_correction_hz = saved_afc;
-                                }
+                        }
+                        // Mini-settle: 6 fast AFC passes refine the carrier
+                        // estimate before the full decode.  Starting from
+                        // saved_afc, 6 passes at afc_step=0.7 converge
+                        // from up to ±400 Hz to within ±1 Hz of the carrier.
+                        // Only skip if the result diverged past the Goertzel
+                        // acquisition limit — the convergence guard (|change|
+                        // < 5 Hz) was removed because it incorrectly blocks
+                        // signals at exactly fc (0 Hz offset, saved_afc=0)
+                        // and signals at the Goertzel boundary (e.g. −400 Hz
+                        // which saturates and accumulates past the old limit).
+                        if gate_len >= step * 32 {
+                            // Step 1: one-shot wide-scan to anchor the
+                            // carrier frequency (afc_step=1.0 sets the
+                            // correction directly to the Goertzel peak).
+                            let initial_step = self.afc_step;
+                            self.afc_step = 1.0;
+                            self.afc_correction_hz = 0.0;
+                            self.update_afc_estimate(mode, &accumulated[start..gate_end]);
+                            let after_anchor = self.afc_correction_hz;
+                            // Step 2: 5 fine-tracking passes to converge.
+                            self.afc_step = 0.7;
+                            for _ in 0..5 {
+                                self.update_afc_estimate(mode, &accumulated[start..gate_end]);
+                            }
+                            self.afc_step = initial_step;
+                            let after_fine = self.afc_correction_hz;
+                            // Stability guard: reject if the fine-track
+                            // drifted >20 Hz from the anchor (unstable
+                            // noise) or exceeded the Goertzel range.
+                            // The old third condition — skip when BOTH
+                            // anchor and fine are <5 Hz — was intended to
+                            // avoid decodes on silence, but it incorrectly
+                            // skips signals whose carrier is on-frequency
+                            // (AFC offset ≈ 0 Hz, e.g. QPSK500 over the
+                            // loopback cable with <1 Hz crystal error).
+                            // The energy gate above already filters silence;
+                            // the divergence check here catches noise that
+                            // slips through.
+                            if (after_fine - after_anchor).abs() > 20.0
+                                || after_fine.abs() > AFC_MAX_CORRECTION_HZ
+                            {
+                                self.afc_correction_hz = saved_afc;
+                                continue;
                             }
                         }
-                        self.afc_correction_hz = saved_afc;
-                        self.afc_step = saved_step;
+                        let end = (start + max_frame_samples).min(accumulated.len());
+                        if end.saturating_sub(start) < min_frame_samples {
+                            continue;
+                        }
+                        debug!(
+                            "AFC full-retry: pos={start} correction={:.1}Hz",
+                            self.afc_correction_hz
+                        );
+                        match self.receive_from_samples(
+                            mode,
+                            AudioSamples {
+                                samples: accumulated[start..end].to_vec(),
+                            },
+                        ) {
+                            Ok(payload) => return Ok(payload),
+                            Err(err) => {
+                                debug!("AFC full-retry: pos={start} FAILED: {err}");
+                                last_err = Some(err);
+                                self.afc_correction_hz = saved_afc;
+                            }
+                        }
+                    }
+                    self.afc_correction_hz = saved_afc;
+                    self.afc_step = saved_step;
                 }
             }
 
@@ -1064,25 +1062,26 @@ impl ModemEngine {
             };
             // Prefer soft demodulation: a single pass yields both LLRs (for SNR)
             // and hard bits (via sign decision), avoiding a redundant demodulate() call.
-            match plugin.demodulate_soft(&samples.samples, &mod_cfg) {
-                Ok(llrs) => {
-                    let snr = RateAdaptationPolicy::snr_from_llrs(&llrs);
-                    let wire_bytes: Vec<u8> = llrs
-                        .chunks(8)
-                        .map(|byte_llrs| {
-                            byte_llrs
-                                .iter()
-                                .enumerate()
-                                .fold(0u8, |acc, (i, &llr)| acc | (u8::from(llr <= 0.0) << i))
-                        })
-                        .collect();
-                    (WirePayload { bytes: wire_bytes }, Some(snr))
-                }
-                Err(_) => {
-                    // Plugin does not support soft demodulation; use hard path.
-                    let wire = self.stage_demodulate_payload(plugin, mode, &samples)?;
-                    (wire, None)
-                }
+            // Only plugins that declare soft support take this path; for them a soft
+            // error is a genuine demodulation failure, not a cue to re-demodulate hard
+            // (which would double the per-attempt cost and can't succeed where the
+            // soft pass failed — both share the same acquisition front end).
+            if plugin.supports_soft_demod() {
+                let llrs = plugin.demodulate_soft(&samples.samples, &mod_cfg)?;
+                let snr = RateAdaptationPolicy::snr_from_llrs(&llrs);
+                let wire_bytes: Vec<u8> = llrs
+                    .chunks(8)
+                    .map(|byte_llrs| {
+                        byte_llrs
+                            .iter()
+                            .enumerate()
+                            .fold(0u8, |acc, (i, &llr)| acc | (u8::from(llr <= 0.0) << i))
+                    })
+                    .collect();
+                (WirePayload { bytes: wire_bytes }, Some(snr))
+            } else {
+                let wire = self.stage_demodulate_payload(plugin, mode, &samples)?;
+                (wire, None)
             }
         };
         if let Some(snr) = snr_opt {
@@ -2824,6 +2823,7 @@ impl ModemEngine {
         let mod_cfg = ModulationConfig {
             mode: mode.to_string(),
             center_frequency: self.center_frequency + self.afc_correction_hz,
+            afc_correction_hz: self.afc_correction_hz,
             ..ModulationConfig::default()
         };
         let estimate = self
@@ -2854,6 +2854,7 @@ impl ModemEngine {
         let mod_cfg = ModulationConfig {
             mode: mode.to_string(),
             center_frequency: self.center_frequency + self.afc_correction_hz,
+            afc_correction_hz: self.afc_correction_hz,
             ..ModulationConfig::default()
         };
         let wire_bytes = plugin.demodulate(&samples.samples, &mod_cfg)?;
