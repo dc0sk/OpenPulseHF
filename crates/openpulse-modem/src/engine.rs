@@ -63,6 +63,99 @@ pub struct SecureSessionParams {
 /// engine.transmit(b"Hello", "BPSK100", None).unwrap();
 /// let received = engine.receive("BPSK100", None).unwrap();
 /// ```
+/// Scan/retry policy for [`ModemEngine::receive_with_timeout`], extracted as
+/// a pure state machine over (elapsed seconds, buffer length) so the policy is
+/// unit-testable without an audio backend.
+///
+/// Responsibilities: incremental scan-position bookkeeping (never re-try a
+/// start position), the post-AFC-settle scan reset back to the first-energy
+/// position, and the wall-clock full-buffer retry cadence.
+struct ScanPlanner {
+    step: usize,
+    min_frame_samples: usize,
+    last_tried_end: usize,
+    first_energy_pos: Option<usize>,
+    scan_reset_pending: bool,
+    /// Elapsed-seconds timestamp of the last fired retry.
+    last_retry_at_secs: Option<u64>,
+}
+
+impl ScanPlanner {
+    /// Full-buffer retries start at this elapsed time.  The wall-clock
+    /// trigger exists because effective sample rates vary widely between
+    /// audio stacks (FT-991A PipeWire: 2 300–7 600 samples/s), making
+    /// sample-count thresholds unreliable.
+    const RETRY_START_SECS: u64 = 12;
+    /// Re-fire cadence: each subsequent retry sees a longer buffer until the
+    /// frame fits and the decode succeeds.
+    const RETRY_INTERVAL_SECS: u64 = 2;
+
+    fn new(step: usize, min_frame_samples: usize) -> Self {
+        Self {
+            step,
+            min_frame_samples,
+            last_tried_end: 0,
+            first_energy_pos: None,
+            scan_reset_pending: false,
+            last_retry_at_secs: None,
+        }
+    }
+
+    /// `true` once AFC settling has located the first signal energy.
+    fn is_settled(&self) -> bool {
+        self.first_energy_pos.is_some()
+    }
+
+    /// Record a successful AFC settle at `pos` and schedule a scan reset so
+    /// the next decode pass starts from that position with converged AFC.
+    fn note_settled(&mut self, pos: usize) {
+        self.first_energy_pos = Some(pos);
+        self.scan_reset_pending = true;
+    }
+
+    /// Apply a pending scan reset (runs even when no new audio arrived so the
+    /// decode pass fires immediately against the already-accumulated buffer).
+    fn apply_pending_reset(&mut self) {
+        if self.scan_reset_pending {
+            self.scan_reset_pending = false;
+            if let Some(fep) = self.first_energy_pos {
+                self.last_tried_end = self.last_tried_end.min(fep);
+            }
+        }
+    }
+
+    /// Untried scan start positions for the current buffer, ending exactly at
+    /// the last position that still fits a minimal frame.
+    fn scan_positions(&self, buffer_len: usize) -> impl Iterator<Item = usize> + use<> {
+        let new_end = buffer_len.saturating_sub(self.min_frame_samples);
+        (self.last_tried_end..=new_end).step_by(self.step.max(1))
+    }
+
+    /// Mark the current buffer's positions as tried.
+    fn commit_scan(&mut self, buffer_len: usize) {
+        let new_end = buffer_len.saturating_sub(self.min_frame_samples);
+        if new_end > self.last_tried_end {
+            self.last_tried_end = new_end;
+        }
+    }
+
+    /// Whether a full-buffer retry fires now.  Consumes the tick: the next
+    /// retry becomes due `RETRY_INTERVAL_SECS` later.
+    fn retry_due(&mut self, elapsed_secs: u64, buffer_len: usize) -> bool {
+        if buffer_len == 0 || elapsed_secs < Self::RETRY_START_SECS {
+            return false;
+        }
+        let ready = match self.last_retry_at_secs {
+            None => true,
+            Some(t) => elapsed_secs.saturating_sub(t) >= Self::RETRY_INTERVAL_SECS,
+        };
+        if ready {
+            self.last_retry_at_secs = Some(elapsed_secs);
+        }
+        ready
+    }
+}
+
 /// Result of [`ModemEngine::afc_mini_settle`].
 struct AfcSettleOutcome {
     /// Correction after the one-shot wide-scan anchor pass.
@@ -769,32 +862,14 @@ impl ModemEngine {
         // that produces a near-zero stable estimate.
         const AFC_MAX_CORRECTION_HZ: f32 = 450.0;
 
-        // Incremental scan: only try start positions not yet attempted.
-        let mut last_tried_end: usize = 0;
-
-        // AFC pre-convergence state.
-        // On first signal detection, run fast AFC settling passes in-place (no decode),
-        // then reset the scan to that position so the first full decode attempt uses
-        // a converged AFC correction.  Without this, afc_step=0.1 takes ~22 scan
-        // positions (~704 samples) to converge, by which point we have already
-        // advanced past the preamble start and can never re-decode it.
-        let mut first_energy_pos: Option<usize> = None;
-        let mut scan_reset_pending = false;
-        // When the incremental scan advances past first_energy_pos before the full
-        // frame has buffered, we schedule one targeted retry over a ±PREAMBLE_SYMS
-        // window around fep once the frame has ended.  last_signal_pos tracks the
-        // last main-scan position where the energy gate passed, which marks the
-        // approximate end of the transmitted frame.  The retry fires as soon as the
-        // scan moves past last_signal_pos (signal gone → frame complete) and the
-        // buffer holds one preamble of margin past last_signal_pos.  Fallback: if
-        // last_signal_pos was never set (signal too short), fire at fep+max_frame_samples.
-        // Retry fires every 2 s after T=12 s.  fep_full_retry_done is reset
-        // after each unsuccessful retry so the next 2-second tick re-fires
-        // with a larger accumulated buffer (more of the frame available).
-        // Set permanently to true only on a successful decode (Ok returns).
-        let mut fep_full_retry_done = false;
-        let mut last_retry_at: Option<Instant> = None;
-        let mut last_signal_pos: usize = 0;
+        // Scan/retry policy state (see ScanPlanner).  On first signal
+        // detection the engine runs fast AFC settling passes in-place (no
+        // decode), then the planner resets the scan to that position so the
+        // first full decode attempt uses a converged AFC correction.  Without
+        // this, afc_step=0.1 takes ~22 scan positions (~704 samples) to
+        // converge, by which point the scan has advanced past the preamble
+        // start and can never re-decode it.
+        let mut planner = ScanPlanner::new(step, min_frame_samples);
 
         loop {
             let chunk = stream
@@ -809,12 +884,7 @@ impl ModemEngine {
             // This fires even when no new audio arrived so that the decode pass runs
             // immediately against the already-accumulated buffer (avoids stalling when
             // the audio backend returns empty after the initial fill, e.g. loopback).
-            if scan_reset_pending {
-                scan_reset_pending = false;
-                if let Some(fep) = first_energy_pos {
-                    last_tried_end = last_tried_end.min(fep);
-                }
-            }
+            planner.apply_pending_reset();
 
             // One-shot full-frame retry around the first-energy position.
             // Fires when accumulated ≥ fep + max_frame_samples.  By then the full
@@ -850,20 +920,8 @@ impl ModemEngine {
             // subsequent attempt use a longer accumulated buffer until the
             // frame fits and the decode succeeds.
             let elapsed_secs = start_time.elapsed().as_secs();
-            let retry_ready = elapsed_secs >= 12
-                && match last_retry_at {
-                    None => true,
-                    Some(t) => t.elapsed().as_secs() >= 2,
-                };
-            if fep_full_retry_done && retry_ready {
-                // Re-arm the retry for the next 2-second tick.
-                fep_full_retry_done = false;
-            }
-            let retry_trigger = retry_ready && !accumulated.is_empty();
-            if !fep_full_retry_done && retry_trigger {
+            if planner.retry_due(elapsed_secs, accumulated.len()) {
                 {
-                    fep_full_retry_done = true;
-                    last_retry_at = Some(Instant::now());
                     // Scan the entire accumulated buffer from the start.
                     // The AFC correction is kept from the settled value:
                     // when settling succeeded on the real signal the
@@ -943,8 +1001,7 @@ impl ModemEngine {
             // Scan start positions: covers both new positions added by the latest chunk
             // and (after AFC reset) positions from the first-energy point onward.
             if !accumulated.is_empty() {
-                let new_end = accumulated.len().saturating_sub(min_frame_samples);
-                'inner: for start in (last_tried_end..=new_end).step_by(step) {
+                'inner: for start in planner.scan_positions(accumulated.len()) {
                     // Fast energy gate: check the first 32 symbol periods at this
                     // position.  Silence costs < 0.1 ms; only emit the full
                     // demodulation call (≈ 90 ms on a Pi 4) when signal is present.
@@ -968,7 +1025,7 @@ impl ModemEngine {
                     // A temporary step of 0.7 converges in 6 iterations:
                     // (1 − 0.3⁶) × 150 Hz ≈ 149.9 Hz — effectively one-shot for
                     // crystal errors up to ±300 Hz on 144 MHz (≈ ±2 ppm).
-                    if first_energy_pos.is_none() {
+                    if !planner.is_settled() {
                         // Use a short window (one preamble length = 1024 samples)
                         // for AFC settling.  Using max_frame_samples (72960) makes
                         // settling O(N²) in buffer length when the noise floor is
@@ -1000,20 +1057,13 @@ impl ModemEngine {
                             self.afc_correction_hz = 0.0;
                             continue;
                         }
-                        first_energy_pos = Some(start);
+                        planner.note_settled(start);
                         info!(
                             "AFC settling done: correction={:.1}Hz buf_len={}",
                             self.afc_correction_hz,
                             accumulated.len()
                         );
-                        scan_reset_pending = true;
                         break 'inner;
-                    }
-
-                    // Record the furthest signal-energy position seen so we know
-                    // when the frame has ended (energy gate will fail past this).
-                    if start > last_signal_pos {
-                        last_signal_pos = start;
                     }
 
                     // Bound the demodulation window to one maximum-length frame so
@@ -1038,9 +1088,7 @@ impl ModemEngine {
                         }
                     }
                 }
-                if new_end > last_tried_end {
-                    last_tried_end = new_end;
-                }
+                planner.commit_scan(accumulated.len());
             }
 
             if Instant::now() >= deadline {
@@ -3171,5 +3219,49 @@ mod tests {
         assert!(!g.passes(0.0015), "steady QRM floor must be gated out");
         // A genuine signal above the clamped threshold still passes.
         assert!(g.passes(0.0045));
+    }
+
+    #[test]
+    fn scan_planner_incremental_positions_never_repeat() {
+        let mut p = ScanPlanner::new(32, 1056);
+        let first: Vec<usize> = p.scan_positions(3000).collect();
+        assert_eq!(first.first(), Some(&0));
+        // Last position still fits a minimal frame: largest step ≤ 3000−1056.
+        assert_eq!(*first.last().unwrap(), 1920);
+        p.commit_scan(3000);
+        // More audio: the scan resumes at the committed boundary.
+        let second: Vec<usize> = p.scan_positions(4000).collect();
+        assert_eq!(second.first(), Some(&(3000 - 1056)));
+        // Largest 1944 + k·32 that still fits a minimal frame (≤ 2944).
+        assert_eq!(*second.last().unwrap(), 2936);
+    }
+
+    #[test]
+    fn scan_planner_reset_returns_to_first_energy_pos() {
+        let mut p = ScanPlanner::new(32, 1056);
+        p.commit_scan(50_000);
+        p.note_settled(1234);
+        p.apply_pending_reset();
+        let next: Vec<usize> = p.scan_positions(50_000).take(1).collect();
+        assert_eq!(next.first(), Some(&1234));
+        assert!(p.is_settled());
+    }
+
+    #[test]
+    fn scan_planner_retry_cadence() {
+        let mut p = ScanPlanner::new(32, 1056);
+        // Before T=12 s: never.
+        assert!(!p.retry_due(0, 10_000));
+        assert!(!p.retry_due(11, 10_000));
+        // Empty buffer: never.
+        assert!(!p.retry_due(20, 0));
+        // First firing at T>=12 with data.
+        assert!(p.retry_due(12, 10_000));
+        // Within the 2 s interval: no.
+        assert!(!p.retry_due(13, 10_000));
+        // After the interval: fires again.
+        assert!(p.retry_due(14, 10_000));
+        assert!(!p.retry_due(15, 10_000));
+        assert!(p.retry_due(16, 10_000));
     }
 }
