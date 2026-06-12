@@ -651,34 +651,48 @@ impl ModemEngine {
         let mut accumulated = Vec::new();
         let mut last_err: Option<ModemError> = None;
 
-        // Symbol period in samples, used as the sliding-search step.
-        // Derived from the numeric baud rate embedded in the mode name (e.g. "BPSK250" → 250);
-        // falls back to 32 (BPSK250 at 8 kHz) so the step is always ≤ one symbol period.
-        let step = {
-            let baud: u32 = mode
-                .trim_end_matches("-RRC")
-                .bytes()
-                .rev()
-                .take_while(|b| b.is_ascii_digit())
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .fold(0u32, |acc, b| acc * 10 + (b - b'0') as u32);
-            if baud > 0 {
-                (audio_cfg.sample_rate as f32 / baud as f32).round() as usize
-            } else {
-                32
+        // Frame geometry: scan step, acquisition window, and per-attempt slice
+        // bounds.  Preferred source is the plugin itself via frame_geometry().
+        // The legacy fallback (trailing mode-name digits as baud, 32-symbol
+        // preamble) is only correct for modes named after their baud rate —
+        // it parsed OFDM52's subcarrier count as baud and SCFDMA52-64QAM-P4
+        // as 4 baud — and remains only for unregistered/external plugins.
+        let geometry = self.plugins.get(mode).and_then(|p| {
+            p.frame_geometry(&ModulationConfig {
+                mode: mode.to_string(),
+                sample_rate: audio_cfg.sample_rate,
+                ..ModulationConfig::default()
+            })
+        });
+        let (step, acq_samples, min_frame_samples, max_frame_samples) = match geometry {
+            Some(g) => (
+                g.symbol_period_samples.max(1),
+                g.preamble_samples.max(g.symbol_period_samples).max(1),
+                g.min_frame_samples.max(1),
+                g.max_frame_samples.max(g.min_frame_samples),
+            ),
+            None => {
+                let step = {
+                    let baud: u32 = mode
+                        .trim_end_matches("-RRC")
+                        .bytes()
+                        .rev()
+                        .take_while(|b| b.is_ascii_digit())
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .fold(0u32, |acc, b| acc * 10 + (b - b'0') as u32);
+                    if baud > 0 {
+                        (audio_cfg.sample_rate as f32 / baud as f32).round() as usize
+                    } else {
+                        32
+                    }
+                };
+                // 33 = PREAMBLE_SYMS(32) + 1 data symbol; 2280 = preamble +
+                // full 255-byte RS frame at 1 bit/symbol + 10 % margin.
+                (step, step * 32, step * 33, step * 2280)
             }
         };
-        // Minimum sample count required for at least one decodable frame.
-        // 33 = PREAMBLE_SYMS(32) + 1 data symbol.
-        let min_frame_samples = step * 33;
-
-        // Maximum window passed to each demodulation attempt.
-        // PREAMBLE_SYMS(32) + full RS FEC frame (255 bytes = 2040 bits BPSK) = 2072 symbols,
-        // plus 10 % margin.  Bounding the slice keeps per-attempt cost O(1) regardless of
-        // how much silence has accumulated before the signal arrived.
-        let max_frame_samples = step * 2280;
 
         // RMS energy threshold for the fast silence gate (same as DcdState default: 0.01 RMS
         // → 0.0001 mean-square).  Silence/noise floor is typically < 0.000025 mean-square;
@@ -803,7 +817,7 @@ impl ModemEngine {
                     let saved_afc = self.afc_correction_hz;
                     let saved_step = self.afc_step;
                     for start in (0..=retry_end).step_by(step) {
-                        let gate_end = (start + step * 32).min(accumulated.len());
+                        let gate_end = (start + acq_samples).min(accumulated.len());
                         let gate_len = gate_end - start;
                         // Energy gate: skip silent positions.  Use the
                         // same threshold as the main scan (ENERGY_GATE_THRESHOLD
@@ -835,7 +849,7 @@ impl ModemEngine {
                         // signals at exactly fc (0 Hz offset, saved_afc=0)
                         // and signals at the Goertzel boundary (e.g. −400 Hz
                         // which saturates and accumulates past the old limit).
-                        if gate_len >= step * 32 {
+                        if gate_len >= acq_samples {
                             // Step 1: one-shot wide-scan to anchor the
                             // carrier frequency (afc_step=1.0 sets the
                             // correction directly to the Goertzel peak).
@@ -905,7 +919,7 @@ impl ModemEngine {
                     // Fast energy gate: check the first 32 symbol periods at this
                     // position.  Silence costs < 0.1 ms; only emit the full
                     // demodulation call (≈ 90 ms on a Pi 4) when signal is present.
-                    let gate_end = (start + step * 32).min(accumulated.len());
+                    let gate_end = (start + acq_samples).min(accumulated.len());
                     let gate_len = gate_end - start;
                     let mean_sq = if gate_len > 0 {
                         accumulated[start..gate_end]
@@ -934,8 +948,8 @@ impl ModemEngine {
                         // and the scan falls hours behind the live audio.  A 1024-
                         // sample window is 70× faster and still provides enough SNR
                         // to locate the BPSK carrier when the signal is present.
-                        let settle_end = (start + step * 32).min(accumulated.len());
-                        if settle_end - start < step * 32 {
+                        let settle_end = (start + acq_samples).min(accumulated.len());
+                        if settle_end - start < acq_samples {
                             continue;
                         }
                         let saved_step = self.afc_step;

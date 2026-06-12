@@ -83,6 +83,31 @@ impl Default for ModulationConfig {
     }
 }
 
+// ── Frame geometry ────────────────────────────────────────────────────────────
+
+/// Mode-specific frame dimensions used by the receive engine to size its scan
+/// step, energy-gate window, and per-attempt demodulation slice.
+///
+/// All values are in samples at the config's sample rate.  Before this struct
+/// existed the engine guessed these from trailing digits of the mode name —
+/// wrong for every mode whose name does not end in its baud rate (OFDM52's 52
+/// is a subcarrier count; SCFDMA52-64QAM-P4 parsed as 4 baud) — and assumed a
+/// 32-symbol preamble (true only for BPSK).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameGeometry {
+    /// Scan step: one symbol period (serial-tone modes) or one block-symbol
+    /// length (OFDM/SC-FDMA).
+    pub symbol_period_samples: usize,
+    /// Acquisition span the demodulator needs near the slice front (preamble
+    /// or sync sequence).
+    pub preamble_samples: usize,
+    /// Minimum slice length that can hold one decodable minimal frame.
+    pub min_frame_samples: usize,
+    /// Slice length that bounds one demodulation attempt: the largest frame
+    /// this mode emits (255-byte RS block) plus margin.
+    pub max_frame_samples: usize,
+}
+
 // ── Plugin trait ──────────────────────────────────────────────────────────────
 
 /// A modulation / demodulation plugin.
@@ -121,6 +146,17 @@ pub trait ModulationPlugin: Send + Sync {
             .flat_map(|&b| (0..8u8).map(move |i| if (b >> i) & 1 == 0 { 1.0f32 } else { -1.0f32 }))
             .collect();
         Ok(llrs)
+    }
+
+    /// Frame geometry for `config.mode`, used by the receive engine to size
+    /// its scan step, energy-gate window, and demodulation slices.
+    ///
+    /// Returns `None` (the default) when the plugin does not describe its
+    /// geometry; the engine then falls back to a mode-name heuristic that is
+    /// only correct for modes named after their baud rate with a 32-symbol
+    /// preamble.  Every production plugin should override this.
+    fn frame_geometry(&self, _config: &ModulationConfig) -> Option<FrameGeometry> {
+        None
     }
 
     /// Return `true` if this plugin produces genuine soft LLRs from

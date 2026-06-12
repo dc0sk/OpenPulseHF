@@ -17,8 +17,9 @@ use crate::params::{params_for_mode, ScFdmaParams, CP, FFT_SIZE, SYM_LEN};
 // Re-export from the canonical core implementation so the plugin exposes the
 // same public path without duplicating the logic.
 pub use openpulse_core::fec::combine_llrs_weighted;
-// Canonical shared implementations (openpulse-dsp); re-exported because tests
-// and lib.rs reference them via this module's path.
+// Canonical shared implementation (openpulse-dsp); re-exported because the
+// lib.rs acquisition regression test references it via this module's path.
+#[cfg(test)]
 pub(crate) use openpulse_dsp::acquisition::quadrature;
 use openpulse_dsp::acquisition::IqMatchedFilter;
 

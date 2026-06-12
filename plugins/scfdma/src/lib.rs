@@ -27,13 +27,13 @@ use std::sync::Mutex;
 
 use openpulse_core::{
     error::ModemError,
-    plugin::{ModulationConfig, ModulationPlugin, PluginInfo},
+    plugin::{FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo},
 };
 
 use crate::adaptive_pilot::AdaptivePilotState;
 use crate::demodulate::{scfdma_demodulate, scfdma_demodulate_soft};
 use crate::modulate::{scfdma_modulate, scfdma_modulate_iq};
-use crate::params::{params_for_mode, SAMPLE_RATE};
+use crate::params::{params_for_mode, SAMPLE_RATE, SYM_LEN};
 
 /// SC-FDMA plugin supporting SCFDMA16 and SCFDMA52 modes.
 pub struct ScFdmaPlugin {
@@ -214,6 +214,21 @@ impl ModulationPlugin for ScFdmaPlugin {
         Ok(scfdma_demodulate_soft(samples, &config.mode))
     }
 
+    fn frame_geometry(&self, config: &ModulationConfig) -> Option<FrameGeometry> {
+        let p = params_for_mode(&config.mode)?;
+        // Sync sequence = the modulated known preamble payload (exact length).
+        let sync_len =
+            crate::modulate::modulate_with_params(&crate::modulate::preamble_payload(&p), &p).len();
+        // Largest frame: 2-byte length prefix + 255-byte RS block + margin.
+        let max_data_syms = (260usize * 8).div_ceil(p.bits_per_symbol());
+        Some(FrameGeometry {
+            symbol_period_samples: SYM_LEN,
+            preamble_samples: sync_len,
+            min_frame_samples: sync_len + SYM_LEN,
+            max_frame_samples: (sync_len + max_data_syms * SYM_LEN) * 11 / 10,
+        })
+    }
+
     fn supports_soft_demod(&self) -> bool {
         true
     }
@@ -247,6 +262,22 @@ mod tests {
             sample_rate: 8000,
             ..ModulationConfig::default()
         }
+    }
+
+    // The engine previously parsed trailing mode-name digits as baud: this
+    // mode parsed as "4 baud" giving a 2000-sample scan stride that could
+    // step entirely over a frame.  The plugin now owns its geometry.
+    #[test]
+    fn frame_geometry_p4_mode_uses_block_symbol_period() {
+        use crate::params::SYM_LEN;
+        let plugin = ScFdmaPlugin::new();
+        let g = plugin
+            .frame_geometry(&mod_config("SCFDMA52-64QAM-P4"))
+            .expect("geometry");
+        assert_eq!(g.symbol_period_samples, SYM_LEN);
+        assert!(g.preamble_samples >= SYM_LEN);
+        assert!(g.min_frame_samples > g.preamble_samples);
+        assert!(g.max_frame_samples > g.min_frame_samples);
     }
 
     #[test]

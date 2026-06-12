@@ -14,12 +14,12 @@ pub mod params;
 
 use openpulse_core::{
     error::ModemError,
-    plugin::{ModulationConfig, ModulationPlugin, PluginInfo},
+    plugin::{FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo},
 };
 
 use crate::demodulate::{ofdm_demodulate, ofdm_demodulate_soft};
 use crate::modulate::{ofdm_modulate, ofdm_modulate_iq};
-use crate::params::{params_for_mode, SAMPLE_RATE};
+use crate::params::{params_for_mode, SAMPLE_RATE, SYM_LEN};
 
 /// OFDM plugin supporting OFDM16 and OFDM52 modes.
 pub struct OfdmPlugin {
@@ -131,6 +131,20 @@ impl ModulationPlugin for OfdmPlugin {
         Ok(ofdm_demodulate_soft(samples, &config.mode))
     }
 
+    fn frame_geometry(&self, config: &ModulationConfig) -> Option<FrameGeometry> {
+        let p = params_for_mode(&config.mode)?;
+        // Schmidl-Cox preamble = one full OFDM symbol (body + CP).
+        let preamble = SYM_LEN;
+        // Largest frame: 2-byte length prefix + 255-byte RS block + margin.
+        let max_data_syms = (260usize * 8).div_ceil(p.bits_per_symbol());
+        Some(FrameGeometry {
+            symbol_period_samples: SYM_LEN,
+            preamble_samples: preamble,
+            min_frame_samples: preamble + SYM_LEN,
+            max_frame_samples: (preamble + max_data_syms * SYM_LEN) * 11 / 10,
+        })
+    }
+
     fn supports_soft_demod(&self) -> bool {
         true
     }
@@ -157,6 +171,21 @@ mod tests {
             sample_rate: 8000,
             ..ModulationConfig::default()
         }
+    }
+
+    // The engine previously parsed OFDM52's subcarrier count as "52 baud";
+    // the plugin now owns its geometry (block-symbol period).
+    #[test]
+    fn frame_geometry_uses_block_symbol_period() {
+        use crate::params::SYM_LEN;
+        let plugin = OfdmPlugin::new();
+        let g = plugin
+            .frame_geometry(&mod_config("OFDM52"))
+            .expect("geometry");
+        assert_eq!(g.symbol_period_samples, SYM_LEN);
+        assert_eq!(g.preamble_samples, SYM_LEN);
+        assert!(g.min_frame_samples > g.preamble_samples);
+        assert!(g.max_frame_samples > g.min_frame_samples);
     }
 
     // 1. OFDM16 clean loopback
