@@ -8,7 +8,7 @@
 //! Supported discriminants:
 //!
 //! - **BPSK** (1 bit/symbol): `e = Q × sign(I)`
-//! - **QPSK** (2 bits/symbol): `e = I·sign(Q) − Q·sign(I)`
+//! - **QPSK** (2 bits/symbol): `e = Q·sign(I) − I·sign(Q)` (Costas, standard form)
 //! - **8PSK** (3 bits/symbol): decision-directed —
 //!   phase of `received × conj(decided)` using nearest-constellation-point.
 
@@ -32,8 +32,14 @@ impl CarrierPll {
     ///
     /// `loop_bw` — normalised loop bandwidth (Bn·Ts); 0.01–0.05 is typical.
     ///             Larger values track faster but are noisier.
-    /// `psk_order` — 1, 2, or 3 (bits per symbol = modulation order).
+    /// `psk_order` — bits per symbol: 1 (BPSK), 2 (QPSK), or 3 (8PSK).
+    ///               Other values are not supported (QAM needs a
+    ///               decision-directed loop, not a PSK discriminant).
     pub fn new(loop_bw: f32, psk_order: u32) -> Self {
+        assert!(
+            (1..=3).contains(&psk_order),
+            "CarrierPll supports psk_order 1..=3 (bits/symbol), got {psk_order}"
+        );
         // Second-order loop filter gains derived from loop bandwidth
         // using the approximation from Mengali & D'Andrea:
         //   damp ≈ 1/√2, α = 2·damp·Bn, β = Bn²

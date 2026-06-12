@@ -8,4 +8,6 @@ authors.workspace    = true
 repository.workspace = true
 
 [dependencies]
-tracing.workspace = true
+tracing.workspace     = true
+rustfft.workspace     = true
+num-complex.workspace = true
