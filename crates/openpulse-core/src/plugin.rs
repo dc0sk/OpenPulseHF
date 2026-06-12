@@ -128,10 +128,26 @@ pub trait ModulationPlugin: Send + Sync {
 
     /// Decode audio samples and return per-bit soft log-likelihood ratios.
     ///
-    /// Returns one `f32` per bit in the decoded stream, with **positive = bit
-    /// more likely 0** and negative = bit more likely 1.  Plugins that know
-    /// their internal soft values (BPSK I-channel correlation, QPSK I/Q
-    /// projections) should override this for maximum coding gain (~1–2 dB).
+    /// # LLR convention
+    ///
+    /// - **Sign**: positive = bit more likely 0, negative = bit more likely 1.
+    ///   Hard-slicing every LLR (`bit = llr <= 0`) MUST reproduce exactly the
+    ///   byte stream returned by [`demodulate`](Self::demodulate) on the same
+    ///   input (bit order LSB-first within each byte).  This is enforced by
+    ///   the cross-plugin conformance test `llr_convention_conformance` in
+    ///   `openpulse-modem`.
+    /// - **Scale**: per-plugin and NOT normalised across plugins — BPSK emits
+    ///   raw differential dot products, OFDM emits |H|²-weighted projections,
+    ///   8PSK emits max-log-MAP distance differences.  Within one plugin the
+    ///   scale is monotone in reliability (required by `snr_from_llrs` and by
+    ///   per-frame soft combining).  Cross-MODE soft combining (e.g. ARQ
+    ///   retransmission in a different mode) must therefore weight per frame
+    ///   — `combine_llrs_weighted` with per-frame noise metrics — rather than
+    ///   adding raw LLRs from different plugins.
+    ///
+    /// Plugins that know their internal soft values (BPSK I-channel
+    /// correlation, QPSK I/Q projections) should override this for maximum
+    /// coding gain (~1–2 dB).
     ///
     /// The default falls back to [`demodulate`](Self::demodulate) and maps each
     /// hard-decided bit to ±1.0.
