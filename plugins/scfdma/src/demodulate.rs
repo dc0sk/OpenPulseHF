@@ -17,6 +17,10 @@ use crate::params::{params_for_mode, ScFdmaParams, CP, FFT_SIZE, SYM_LEN};
 // Re-export from the canonical core implementation so the plugin exposes the
 // same public path without duplicating the logic.
 pub use openpulse_core::fec::combine_llrs_weighted;
+// Canonical shared implementations (openpulse-dsp); re-exported because tests
+// and lib.rs reference them via this module's path.
+pub(crate) use openpulse_dsp::acquisition::quadrature;
+use openpulse_dsp::acquisition::IqMatchedFilter;
 
 pub fn scfdma_demodulate(samples: &[f32], mode: &str) -> Vec<u8> {
     match params_for_mode(mode) {
@@ -77,7 +81,9 @@ fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Vec<u8> {
         return vec![];
     }
 
-    let offset = find_sync_offset(samples, &sync);
+    let Some(offset) = find_sync_offset(samples, &sync) else {
+        return vec![];
+    };
     let payload_start = offset + sync.len();
     if payload_start >= samples.len() {
         return vec![];
@@ -157,7 +163,16 @@ fn demodulate_soft_with_params(samples: &[f32], p: &ScFdmaParams) -> SoftDemodOu
         };
     }
 
-    let offset = find_sync_offset(samples, &sync);
+    let Some(offset) = find_sync_offset(samples, &sync) else {
+        return SoftDemodOutput {
+            llrs: vec![],
+            metrics: SoftFrameMetrics {
+                mean_noise_var: 0.0,
+                mean_rician_k_db: 0.0,
+                symbols_used: 0,
+            },
+        };
+    };
     let payload_start = offset + sync.len();
     if payload_start >= samples.len() {
         return SoftDemodOutput {
@@ -298,71 +313,35 @@ fn demodulate_soft_with_params(samples: &[f32], p: &ScFdmaParams) -> SoftDemodOu
 /// A bare real cross-correlation (`Σ a·b`) is carrier-phase sensitive: over the
 /// async-audio loopback the two sound-card clocks impose an arbitrary carrier
 /// phase, and a ~90° rotation collapses the real correlation to near zero,
-/// landing on a wrong offset.  Correlating against BOTH the preamble and its
-/// quadrature (Hilbert) companion and maximising the magnitude removes that
-/// dependence — the per-symbol pilot/MMSE equalizer then handles the residual
-/// phase.  The search is bounded to the slice front: the receive engine aligns
-/// each window to the detected signal start, so the preamble appears near the
-/// front, and an unbounded scan over a multi-second slice is O(N²) (too slow for
-/// the real-time loop) and prone to spurious far-field peaks.
-fn find_sync_offset(samples: &[f32], sync: &[f32]) -> usize {
+/// landing on a wrong offset.  The shared [`IqMatchedFilter`] correlates
+/// against BOTH the preamble and its quadrature (Hilbert) companion and
+/// maximises the magnitude, removing that dependence — the per-symbol
+/// pilot/MMSE equalizer then handles the residual phase.  The search is
+/// bounded to the slice front: the receive engine aligns each window to the
+/// detected signal start, so the preamble appears near the front, and an
+/// unbounded scan over a multi-second slice is O(N²) (too slow for the
+/// real-time loop) and prone to spurious far-field peaks.
+///
+/// Returns `None` when the best alignment's normalised correlation falls below
+/// the detection floor — on a no-signal window the unnormalised argmax is an
+/// arbitrary noise offset, and demodulating from it produces garbage bytes
+/// (including a random length prefix) at full frame cost.
+fn find_sync_offset(samples: &[f32], sync: &[f32]) -> Option<usize> {
     if samples.len() <= sync.len() {
-        return 0;
+        return None;
     }
     const SEARCH_CAP: usize = 8192;
-    let max_offset = (samples.len() - sync.len()).min(SEARCH_CAP);
+    // Minimum normalised correlation to accept a sync lock.  Noise scores
+    // ≲ 0.1 with a multi-symbol template; a real (even band-limited, faded)
+    // preamble correlates well above this.
+    const DETECTION_FLOOR_RHO: f32 = 0.15;
 
-    let sync_q = quadrature(sync);
-
-    // Unnormalised correlation magnitude: like the original `Σ a·b` it favours
-    // high-correlation *and* high-energy alignment (so a deep-fade low-energy
-    // window can't win), but the I/Q magnitude makes it carrier-phase invariant.
-    let mut best_offset = 0usize;
-    let mut best_score = f32::NEG_INFINITY;
-    for offset in 0..=max_offset {
-        let win = &samples[offset..offset + sync.len()];
-        let mut dot_i = 0.0f32;
-        let mut dot_q = 0.0f32;
-        for (m, &b) in sync.iter().enumerate() {
-            let s = win[m];
-            dot_i += s * b;
-            dot_q += s * sync_q[m];
-        }
-        let score = dot_i * dot_i + dot_q * dot_q;
-        if score > best_score {
-            best_score = score;
-            best_offset = offset;
-        }
+    let filt = IqMatchedFilter::new(sync.to_vec());
+    let result = filt.search(samples, SEARCH_CAP)?;
+    if result.rho < DETECTION_FLOOR_RHO {
+        return None;
     }
-
-    best_offset
-}
-
-/// Quadrature (90°-shifted) companion of a real signal via the FFT Hilbert
-/// transform: the imaginary part of the analytic signal.
-pub(crate) fn quadrature(x: &[f32]) -> Vec<f32> {
-    let n = x.len();
-    if n == 0 {
-        return vec![];
-    }
-    let mut planner = FftPlanner::<f32>::new();
-    let fwd = planner.plan_fft_forward(n);
-    let inv = planner.plan_fft_inverse(n);
-    let mut buf: Vec<Complex32> = x.iter().map(|&v| Complex32::new(v, 0.0)).collect();
-    fwd.process(&mut buf);
-    let half = n / 2;
-    for (k, c) in buf.iter_mut().enumerate() {
-        if k == 0 || (n.is_multiple_of(2) && k == half) {
-            // DC and Nyquist unchanged.
-        } else if k < half {
-            *c *= 2.0;
-        } else {
-            *c = Complex32::new(0.0, 0.0);
-        }
-    }
-    inv.process(&mut buf);
-    let scale = 1.0 / n as f32;
-    buf.iter().map(|c| c.im * scale).collect()
+    Some(result.offset)
 }
 
 // ── Constellation demappers ───────────────────────────────────────────────────
@@ -596,7 +575,7 @@ pub fn scfdma_demodulate_soft_gpu(
         return None;
     }
 
-    let offset = find_sync_offset(samples, &sync);
+    let offset = find_sync_offset(samples, &sync)?;
     let payload_start = offset + sync.len();
     if payload_start >= samples.len() {
         return None;
@@ -706,7 +685,7 @@ pub fn scfdma_demodulate_gpu(
         return None;
     }
 
-    let offset = find_sync_offset(samples, &sync);
+    let offset = find_sync_offset(samples, &sync)?;
     let payload_start = offset + sync.len();
     if payload_start >= samples.len() {
         return None;

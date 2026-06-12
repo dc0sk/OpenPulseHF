@@ -1,12 +1,13 @@
 //! 64QAM demodulator.
 //!
-//! Pipeline: downmix → Hann integration or RRC matched-filter + Gardner → nearest-point
-//! decision → bit extraction.
+//! Pipeline: downmix → rectangular integration or RRC matched-filter + Gardner
+//! → nearest-point decision → bit extraction.
 
 use std::f32::consts::PI;
 
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
+use openpulse_dsp::acquisition::{estimate_cfo_data_aided, preamble_corr_sq};
 use openpulse_dsp::filter::FirFilter;
 use openpulse_dsp::rrc::generate_rrc_coefficients;
 use openpulse_dsp::timing::GardnerDetector;
@@ -16,36 +17,6 @@ use crate::modulate::{
     RRC_SPAN_SYMBOLS, TAIL_SYMS,
 };
 use crate::parse_baud_rate;
-
-fn estimate_frequency_offset_mth(i_syms: &[f32], q_syms: &[f32], baud_rate: f32, m: u32) -> f32 {
-    if i_syms.len() < 2 || m == 0 {
-        return 0.0;
-    }
-
-    let mut re_m = Vec::with_capacity(i_syms.len());
-    let mut im_m = Vec::with_capacity(i_syms.len());
-    for (&i, &q) in i_syms.iter().zip(q_syms.iter()) {
-        let mut re = i;
-        let mut im = q;
-        for _ in 1..m {
-            let next_re = re * i - im * q;
-            let next_im = re * q + im * i;
-            re = next_re;
-            im = next_im;
-        }
-        re_m.push(re);
-        im_m.push(im);
-    }
-
-    let mut re_sum = 0.0f32;
-    let mut im_sum = 0.0f32;
-    for k in 1..re_m.len() {
-        re_sum += re_m[k] * re_m[k - 1] + im_m[k] * im_m[k - 1];
-        im_sum += im_m[k] * re_m[k - 1] - re_m[k] * im_m[k - 1];
-    }
-
-    im_sum.atan2(re_sum) * baud_rate / (2.0 * PI * m as f32)
-}
 
 pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
     let baud = parse_baud_rate(&config.mode).ok()?;
@@ -63,7 +34,12 @@ pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32
         return None;
     }
 
-    Some(estimate_frequency_offset_mth(&i_syms, &q_syms, baud, 4))
+    // Data-aided estimation against the known corner preamble.  The blind
+    // 4th-power method previously used here has heavy self-noise on a
+    // non-constant-modulus 64QAM symbol stream; the 16 corner preamble symbols
+    // ARE constant-modulus, so the data-aided estimator is both wider-range
+    // (±baud/2 vs ±baud/8) and free of constellation self-noise.
+    estimate_cfo_data_aided(&i_syms, &q_syms, &preamble_symbols(), baud)
 }
 
 // ── Nearest-point decision ────────────────────────────────────────────────────
@@ -157,7 +133,13 @@ fn dd_carrier_track(i_syms: &[f32], q_syms: &[f32], loop_bw: f32) -> (Vec<f32>, 
     (i_out, q_out)
 }
 
-// ── IQ demodulation (Hann integration path) ──────────────────────────────────
+// ── IQ demodulation (rectangular integration path) ───────────────────────────
+//
+// Deliberately rectangular, NOT the half-Hann window used by the PSK plugins:
+// the modulator's non-RRC path emits rectangular-windowed symbols (see
+// modulate.rs — the Hann crossfade would blur 8 distinct amplitude levels per
+// axis across symbol boundaries), so rectangular integration IS the matched
+// filter here.
 
 fn demodulate_iq(
     samples: &[f32],
@@ -196,21 +178,23 @@ fn find_timing_offset(samples: &[f32], n: usize, fc: f32, fs: f32) -> usize {
         if samples.len() < off + n * PREAMBLE_SYMS {
             break;
         }
-        let (i_v, q_v) = demodulate_iq(samples, n, fc, fs, off);
+        // Demodulate ONLY the preamble span at this offset (the full slice may
+        // be multi-second; demodulating all of it per offset is O(offsets × N)).
+        let span_end = (off + n * PREAMBLE_SYMS).min(samples.len());
+        let (i_v, q_v) = demodulate_iq(&samples[..span_end], n, fc, fs, off);
         if i_v.len() < PREAMBLE_SYMS || q_v.len() < PREAMBLE_SYMS {
             continue;
         }
         // Squared magnitude of the complex preamble correlation Σ r_k·conj(e_k).  The
         // signed real part collapses to 0 when the unknown carrier phase is near
-        // 90°/270°, letting a wrong offset win; re² + im² is rotation-invariant.
-        let (re_sum, im_sum) = (0..PREAMBLE_SYMS).fold((0.0f32, 0.0f32), |(re, im), s| {
-            let (ei, eq) = expected_syms[s];
-            (
-                re + i_v[s] * ei + q_v[s] * eq,
-                im + q_v[s] * ei - i_v[s] * eq,
-            )
-        });
-        let score = re_sum * re_sum + im_sum * im_sum;
+        // 90°/270°, letting a wrong offset win; |·|² is rotation-invariant.
+        let received: Vec<(f32, f32)> = i_v
+            .iter()
+            .zip(q_v.iter())
+            .take(PREAMBLE_SYMS)
+            .map(|(&i, &q)| (i, q))
+            .collect();
+        let score = preamble_corr_sq(&received, &expected_syms);
         if score > best_score {
             best_score = score;
             best_off = off;
@@ -306,19 +290,17 @@ fn find_timing_offset_bb(i_bb: &[f32], q_bb: &[f32], n: usize) -> usize {
     let expected = preamble_symbols();
     let mut best_off = 0usize;
     let mut best_score = f32::NEG_INFINITY;
+    let mut received = vec![(0.0f32, 0.0f32); PREAMBLE_SYMS];
     for off in 0..n {
         if i_bb.len() < off + n * PREAMBLE_SYMS {
             break;
         }
         // Squared magnitude of the complex correlation — invariant to the residual
         // carrier phase left after downmix.
-        let (re_sum, im_sum) = (0..PREAMBLE_SYMS).fold((0.0f32, 0.0f32), |(re, im), s| {
-            let ri = i_bb[off + s * n];
-            let rq = q_bb[off + s * n];
-            let (ei, eq) = expected[s];
-            (re + ri * ei + rq * eq, im + rq * ei - ri * eq)
-        });
-        let score = re_sum * re_sum + im_sum * im_sum;
+        for (s, slot) in received.iter_mut().enumerate() {
+            *slot = (i_bb[off + s * n], q_bb[off + s * n]);
+        }
+        let score = preamble_corr_sq(&received, &expected);
         if score > best_score {
             best_score = score;
             best_off = off;

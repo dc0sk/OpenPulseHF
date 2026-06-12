@@ -1,6 +1,7 @@
 //! OFDM demodulation: samples → FFT frames → LS/ZF equalize → payload.
 
 use num_complex::Complex32;
+use openpulse_dsp::acquisition::IqMatchedFilter;
 use rustfft::FftPlanner;
 
 use crate::channel::{is_pilot, ls_estimate, zf_equalize};
@@ -94,15 +95,18 @@ pub(crate) fn find_first_data_body(samples: &[f32], p: &OfdmParams) -> Option<us
     }
 
     // ── Stage 2: matched-filter fine timing ────────────────────────────────────
-    // Correlate against BOTH the in-phase preamble and its quadrature (Hilbert)
-    // companion, then maximise the correlation magnitude.  This is insensitive to
-    // the channel's carrier phase, so a multipath/fading channel cannot drag the
-    // timing peak off the true frame start the way a bare real correlation would.
+    // The shared IqMatchedFilter correlates against BOTH the in-phase preamble
+    // and its quadrature (Hilbert) companion, then maximises the correlation
+    // magnitude.  This is insensitive to the channel's carrier phase, so a
+    // multipath/fading channel cannot drag the timing peak off the true frame
+    // start the way a bare real correlation would.
     let template = crate::modulate::preamble_template(p);
-    let template_q = quadrature(&template);
     let tlen = template.len();
-    let t_energy: f32 = template.iter().map(|&x| x * x).sum();
-    if t_energy < 1e-12 || samples.len() < tlen {
+    if samples.len() < tlen {
+        return None;
+    }
+    let filt = IqMatchedFilter::new(template);
+    if filt.is_empty() {
         return None;
     }
 
@@ -113,32 +117,22 @@ pub(crate) fn find_first_data_body(samples: &[f32], p: &OfdmParams) -> Option<us
     if lo > hi {
         return None;
     }
-    let mut rhos = Vec::with_capacity(hi - lo + 1);
-    let mut best_rho = f32::MIN;
-    let mut peak_idx = 0usize;
-    for d in lo..=hi {
-        let mut dot_i = 0.0f32;
-        let mut dot_q = 0.0f32;
-        let mut e = 0.0f32;
-        for m in 0..tlen {
-            let s = samples[d + m];
-            dot_i += s * template[m];
-            dot_q += s * template_q[m];
-            e += s * s;
-        }
-        let rho = (dot_i * dot_i + dot_q * dot_q).sqrt() / ((e * t_energy).sqrt() + 1e-12);
-        if rho > best_rho {
-            best_rho = rho;
-            peak_idx = rhos.len();
-        }
-        rhos.push(rho);
+    let rhos = filt.rho_profile(samples, lo, hi);
+    if rhos.is_empty() {
+        return None;
     }
+    let (peak_idx, &best_rho) = rhos
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.total_cmp(b.1))
+        .unwrap_or((0, &0.0));
     // Lock to the LEADING path, not the strongest.  On a multipath channel a
     // delayed echo can be the dominant correlation peak; starting the FFT window
     // there would read into the next symbol (inter-symbol interference).  Starting
     // at — or just before — the first path is absorbed by the cyclic prefix as a
     // benign phase ramp.  Scan back up to one CP from the peak for the earliest
-    // tap above half the peak correlation.
+    // tap above 0.20 × the peak correlation (hardware-tuned; low enough to catch
+    // a weak leading path, high enough to reject pre-peak noise).
     let lead_thresh = best_rho * 0.20;
     let search_lo = peak_idx.saturating_sub(CP);
     let chosen = (search_lo..=peak_idx)
@@ -149,33 +143,6 @@ pub(crate) fn find_first_data_body(samples: &[f32], p: &OfdmParams) -> Option<us
     // Data symbol 0 body = frame start + full preamble symbol (SYM_LEN) + the
     // first data symbol's own cyclic prefix (CP).
     Some(frame_start + SYM_LEN + CP)
-}
-
-/// Quadrature (90°-shifted) companion of a real signal via the FFT Hilbert
-/// transform: the imaginary part of the analytic signal.
-fn quadrature(x: &[f32]) -> Vec<f32> {
-    let n = x.len();
-    if n == 0 {
-        return vec![];
-    }
-    let mut planner = FftPlanner::<f32>::new();
-    let fwd = planner.plan_fft_forward(n);
-    let inv = planner.plan_fft_inverse(n);
-    let mut buf: Vec<Complex32> = x.iter().map(|&v| Complex32::new(v, 0.0)).collect();
-    fwd.process(&mut buf);
-    let half = n / 2;
-    for (k, c) in buf.iter_mut().enumerate() {
-        if k == 0 || (n.is_multiple_of(2) && k == half) {
-            // DC and Nyquist unchanged.
-        } else if k < half {
-            *c *= 2.0; // positive frequencies doubled
-        } else {
-            *c = Complex32::new(0.0, 0.0); // negative frequencies zeroed
-        }
-    }
-    inv.process(&mut buf);
-    let scale = 1.0 / n as f32;
-    buf.iter().map(|c| c.im * scale).collect()
 }
 
 fn demodulate_with_params(samples: &[f32], p: &OfdmParams) -> Vec<u8> {

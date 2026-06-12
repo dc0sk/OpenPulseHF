@@ -290,6 +290,29 @@ mod tests {
         assert_eq!(rx.as_slice(), payload.as_ref());
     }
 
+    // Detection floor: a pure-noise window must NOT produce a sync lock.
+    // Without the normalised-correlation gate the unnormalised argmax returns
+    // an arbitrary offset and the demodulator emits garbage bytes (with a
+    // random length prefix) at full frame cost on every silent scan position.
+    #[test]
+    fn scfdma52_rejects_noise_no_false_sync() {
+        let plugin = ScFdmaPlugin::new();
+        // Deterministic LCG noise, comfortably above the engine energy gate.
+        let mut state = 0xDEADBEEFu32;
+        let noise: Vec<f32> = (0..40_000)
+            .map(|_| {
+                state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                ((state >> 16) as f32 / 32768.0 - 1.0) * 0.3
+            })
+            .collect();
+        let rx = plugin.demodulate(&noise, &mod_config("SCFDMA52")).unwrap();
+        assert!(
+            rx.is_empty(),
+            "noise must not decode to bytes, got {} bytes",
+            rx.len()
+        );
+    }
+
     #[test]
     fn scfdma16_loopback_short_payload() {
         let plugin = ScFdmaPlugin::new();

@@ -2,6 +2,7 @@ use std::f32::consts::PI;
 
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
+use openpulse_dsp::acquisition::{estimate_cfo_mth_power, preamble_corr_sq};
 use openpulse_dsp::equalizer::LmsEqualizer;
 use openpulse_dsp::filter::FirFilter;
 use openpulse_dsp::pll::CarrierPll;
@@ -13,36 +14,6 @@ use crate::modulate::{
     gray_map, preamble_symbols, samples_per_symbol, PREAMBLE_SYMS, RRC_SPAN_SYMBOLS, TAIL_SYMS,
 };
 use crate::parse_baud_rate;
-
-fn estimate_frequency_offset_mth(i_syms: &[f32], q_syms: &[f32], baud_rate: f32, m: u32) -> f32 {
-    if i_syms.len() < 2 || m == 0 {
-        return 0.0;
-    }
-
-    let mut re_m = Vec::with_capacity(i_syms.len());
-    let mut im_m = Vec::with_capacity(i_syms.len());
-    for (&i, &q) in i_syms.iter().zip(q_syms.iter()) {
-        let mut re = i;
-        let mut im = q;
-        for _ in 1..m {
-            let next_re = re * i - im * q;
-            let next_im = re * q + im * i;
-            re = next_re;
-            im = next_im;
-        }
-        re_m.push(re);
-        im_m.push(im);
-    }
-
-    let mut re_sum = 0.0f32;
-    let mut im_sum = 0.0f32;
-    for k in 1..re_m.len() {
-        re_sum += re_m[k] * re_m[k - 1] + im_m[k] * im_m[k - 1];
-        im_sum += im_m[k] * re_m[k - 1] - re_m[k] * im_m[k - 1];
-    }
-
-    im_sum.atan2(re_sum) * baud_rate / (2.0 * PI * m as f32)
-}
 
 pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
     let baud = parse_baud_rate(&config.mode).ok()?;
@@ -63,7 +34,7 @@ pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32
     }
 
     let (i_syms, q_syms): (Vec<f32>, Vec<f32>) = syms.into_iter().unzip();
-    Some(estimate_frequency_offset_mth(&i_syms, &q_syms, baud, 4))
+    Some(estimate_cfo_mth_power(&i_syms, &q_syms, baud, 4))
 }
 
 pub fn qpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec<u8>, ModemError> {
@@ -185,24 +156,26 @@ fn gardner_pll_sample_rrc(
 
 /// Brute-force timing search on the baseband I/Q signal (after downmix + RRC).
 ///
-/// Uses squared complex correlation (re²+im²) rather than |re| so the metric is
-/// invariant to the unknown carrier phase offset that remains after downmix.
+/// Uses the shared squared complex correlation `|Σ r·conj(e)|²` rather than
+/// |re| so the metric is invariant to the unknown carrier phase offset that
+/// remains after downmix.
 fn find_timing_offset_bb(i_bb: &[f32], q_bb: &[f32], n: usize) -> usize {
     let expected = preamble_expected();
     let mut best_off = 0usize;
     let mut best_score = f32::NEG_INFINITY;
+    let mut received = vec![(0.0f32, 0.0f32); PREAMBLE_SYMS];
 
     for off in 0..n {
         if i_bb.len() < off + n * PREAMBLE_SYMS {
             break;
         }
-        let (re_sum, im_sum) = (0..PREAMBLE_SYMS).fold((0.0f32, 0.0f32), |(re, im), s| {
-            let ri = i_bb[off + s * n];
-            let rq = q_bb.get(off + s * n).copied().unwrap_or(0.0);
-            let (ei, eq) = expected[s];
-            (re + ri * ei + rq * eq, im + rq * ei - ri * eq)
-        });
-        let score = re_sum * re_sum + im_sum * im_sum;
+        for (s, slot) in received.iter_mut().enumerate() {
+            *slot = (
+                i_bb[off + s * n],
+                q_bb.get(off + s * n).copied().unwrap_or(0.0),
+            );
+        }
+        let score = preamble_corr_sq(&received, &expected);
         if score > best_score {
             best_score = score;
             best_off = off;
@@ -220,7 +193,13 @@ fn find_timing_offset(samples: &[f32], n: usize, fc: f32, fs: f32, cosine_overla
         if samples.len() <= off + n * PREAMBLE_SYMS {
             break;
         }
-        let syms = demodulate_symbols(samples, n, fc, fs, off, cosine_overlap);
+        // Demodulate ONLY the preamble span at this candidate offset: the search
+        // needs PREAMBLE_SYMS symbols, and demodulating the full (possibly
+        // multi-second) slice per offset made the search O(offsets × slice_len).
+        // The slice is truncated rather than re-based so the carrier phase
+        // reference (computed from the absolute offset) is unchanged.
+        let span_end = (off + n * PREAMBLE_SYMS).min(samples.len());
+        let syms = demodulate_symbols(&samples[..span_end], n, fc, fs, off, cosine_overlap);
         if syms.len() < PREAMBLE_SYMS {
             continue;
         }
@@ -228,18 +207,9 @@ fn find_timing_offset(samples: &[f32], n: usize, fc: f32, fs: f32, cosine_overla
         // absolute real part.  The QPSK carrier phase at the start of the received slice
         // is unknown.  |re_sum| collapses to 0 when the carrier is near 90°/270° and a
         // near-maximal ISI alias (d = n-1 samples late) wins instead of the correct
-        // timing.  re_sum² + im_sum² is the squared magnitude of Σ r_k·conj(e_k); by
-        // expansion it equals N² × [(n-d)² + d²] / n² which is strictly maximised at
-        // d=0 (correct timing, score = N²) for any carrier phase, with the nearest
-        // wrong offset (d=1 or d=n-1) scoring N² × (n²-2(n-1))/n² ≈ 0.97 × N².
-        let (re_sum, im_sum) = syms
-            .iter()
-            .zip(expected.iter())
-            .take(PREAMBLE_SYMS)
-            .fold((0.0f32, 0.0f32), |(re, im), (&(i, q), &(ei, eq))| {
-                (re + i * ei + q * eq, im + q * ei - i * eq)
-            });
-        let score = re_sum * re_sum + im_sum * im_sum;
+        // timing.  |Σ r_k·conj(e_k)|² is strictly maximised at the correct timing for
+        // any carrier phase (see openpulse_dsp::acquisition::preamble_corr_sq).
+        let score = preamble_corr_sq(&syms[..PREAMBLE_SYMS], &expected);
         if score > best_score {
             best_score = score;
             best_off = off;
@@ -532,7 +502,12 @@ fn carrier_phase_correct(syms: &[(f32, f32)], afc_correction_hz: f32) -> Vec<(f3
     let mut sum_phi = 0.0f32;
     let mut sum_k_phi = 0.0f32;
 
-    for (k, (&(ri, rq), &(ei, eq))) in syms.iter().zip(expected.iter()).enumerate().take(PREAMBLE_SYMS) {
+    for (k, (&(ri, rq), &(ei, eq))) in syms
+        .iter()
+        .zip(expected.iter())
+        .enumerate()
+        .take(PREAMBLE_SYMS)
+    {
         // Phase error = atan2(im(r * conj(e)), re(r * conj(e)))
         let re = ri * ei + rq * eq;
         let im = rq * ei - ri * eq;
@@ -569,7 +544,11 @@ fn carrier_phase_correct(syms: &[(f32, f32)], afc_correction_hz: f32) -> Vec<(f3
     // correction when none is present amplifies noise: 16 preamble samples at
     // 20 dB SNR give a drift std ≈ 0.004 rad/sym, which grows to ~0.56 rad (1σ)
     // at symbol 140 of a QPSK500 frame.  Gate on afc_correction_hz ≥ 0.5 Hz.
-    let effective_drift = if afc_correction_hz.abs() >= 0.5 { drift } else { 0.0 };
+    let effective_drift = if afc_correction_hz.abs() >= 0.5 {
+        drift
+    } else {
+        0.0
+    };
 
     // Apply inverse correction: rotate symbol k by -(phase_0 + effective_drift * k).
     syms.iter()
