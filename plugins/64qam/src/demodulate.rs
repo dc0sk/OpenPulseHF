@@ -18,6 +18,15 @@ use crate::modulate::{
 };
 use crate::parse_baud_rate;
 
+/// Data-aided AFC estimation against the known corner preamble.
+///
+/// The blind 4th-power method previously used here has heavy self-noise on a
+/// non-constant-modulus 64QAM symbol stream (the data symbols sit at angles
+/// that are not multiples of 90°, so the 4th power does not strip them
+/// cleanly — this also rules out a 4th-power Goertzel coarse stage).  The 16
+/// corner preamble symbols ARE constant-modulus, so the data-aided estimator
+/// is both wide-range (±baud/2 = ±250 Hz at 64QAM500 up to ±1000 Hz at
+/// 64QAM2000) and free of constellation self-noise.
 pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
     let baud = parse_baud_rate(&config.mode).ok()?;
     let fs = config.sample_rate as f32;
@@ -34,11 +43,6 @@ pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32
         return None;
     }
 
-    // Data-aided estimation against the known corner preamble.  The blind
-    // 4th-power method previously used here has heavy self-noise on a
-    // non-constant-modulus 64QAM symbol stream; the 16 corner preamble symbols
-    // ARE constant-modulus, so the data-aided estimator is both wider-range
-    // (±baud/2 vs ±baud/8) and free of constellation self-noise.
     estimate_cfo_data_aided(&i_syms, &q_syms, &preamble_symbols(), baud)
 }
 

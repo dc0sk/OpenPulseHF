@@ -378,3 +378,128 @@ mod tests {
         assert!((est - cfo).abs() < 2.0, "estimated {est}, expected {cfo}");
     }
 }
+
+/// Coarse wide-range carrier-offset scan via Goertzel on the M-th-power signal.
+///
+/// Raising the real passband signal to the M-th power strips M-ary PSK
+/// modulation (M=2 for BPSK, 4 for QPSK and square QAM), leaving a stable
+/// spectral line at `M·fc`.  A Goertzel probe sweeps `M·(fc + δf)` over
+/// `δf ∈ ±range_hz` in `step_hz` increments and returns the best `δf`.
+/// Probe frequencies above Nyquist are folded (real-signal spectrum is
+/// symmetric), so `M·fc` may exceed `fs/2` — e.g. 4 × 1500 Hz at fs = 8 kHz
+/// probes the 2 kHz alias.
+///
+/// Returns `None` for an empty buffer, `m == 0`, or a degenerate grid.
+pub fn goertzel_carrier_scan(
+    samples: &[f32],
+    fs: f32,
+    fc: f32,
+    m: u32,
+    range_hz: f32,
+    step_hz: f32,
+) -> Option<f32> {
+    if samples.is_empty() || m == 0 || step_hz <= 0.0 || range_hz < 0.0 {
+        return None;
+    }
+
+    let powered: Vec<f32> = samples
+        .iter()
+        .map(|&s| {
+            let mut acc = s;
+            for _ in 1..m {
+                acc *= s;
+            }
+            acc
+        })
+        .collect();
+
+    let fold = |f: f32| -> f32 {
+        // Alias of a real tone: reflect into [0, fs/2].
+        let f = f.rem_euclid(fs);
+        if f > fs / 2.0 {
+            fs - f
+        } else {
+            f
+        }
+    };
+
+    // The powered signal also contains strong self-mixing lines at k·fc for
+    // k < m (x⁴ has a large DC term and a 2·fc term, x² has DC).  A probe
+    // whose alias lands on one of those fixed lines reports a huge spurious
+    // power and captures the scan, so such probes are skipped — the wanted
+    // m·fc line moves with δf while the interferers do not, leaving only
+    // small holes in the scan grid.
+    const INTERFERER_GUARD_HZ: f32 = 150.0;
+    let mut interferers: Vec<f32> = vec![0.0]; // DC
+    for k in 1..m {
+        interferers.push(fold(k as f32 * fc));
+    }
+
+    let mut best_power = f32::NEG_INFINITY;
+    let mut best_df = 0.0f32;
+    let mut df = -range_hz;
+    while df <= range_hz + step_hz / 2.0 {
+        let probe = fold(m as f32 * (fc + df));
+        if interferers
+            .iter()
+            .any(|&intf| (probe - intf).abs() < INTERFERER_GUARD_HZ)
+            || probe > fs / 2.0 - INTERFERER_GUARD_HZ
+        {
+            df += step_hz;
+            continue;
+        }
+        let omega = 2.0 * std::f32::consts::PI * probe / fs;
+        let coeff = 2.0 * omega.cos();
+        let (mut s1, mut s2) = (0.0f32, 0.0f32);
+        for &x in &powered {
+            let s0 = x + coeff * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        let power = s1 * s1 + s2 * s2 - coeff * s1 * s2;
+        if power > best_power {
+            best_power = power;
+            best_df = df;
+        }
+        df += step_hz;
+    }
+
+    Some(best_df)
+}
+
+#[cfg(test)]
+mod goertzel_tests {
+    use super::*;
+    use std::f32::consts::PI;
+
+    fn psk_signal(fs: f32, fc: f32, baud: f32, order: u32, n_syms: usize) -> Vec<f32> {
+        let sps = (fs / baud) as usize;
+        let mut out = Vec::with_capacity(n_syms * sps);
+        let mut state = 7u32;
+        for _ in 0..n_syms {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            let phase = 2.0 * PI * ((state >> 8) % order) as f32 / order as f32;
+            for k in 0..sps {
+                let t = out.len() as f32 / fs;
+                out.push((2.0 * PI * fc * t + phase).cos());
+                let _ = k;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn scan_finds_bpsk_offset_m2() {
+        let sig = psk_signal(8000.0, 1650.0, 250.0, 2, 64);
+        let df = goertzel_carrier_scan(&sig, 8000.0, 1500.0, 2, 400.0, 25.0).expect("scan");
+        assert!((df - 150.0).abs() <= 25.0, "df = {df}");
+    }
+
+    #[test]
+    fn scan_finds_qpsk_offset_m4_with_alias_fold() {
+        // 4·fc = 6 kHz > Nyquist at fs = 8 kHz: exercises the alias fold.
+        let sig = psk_signal(8000.0, 1350.0, 250.0, 4, 64);
+        let df = goertzel_carrier_scan(&sig, 8000.0, 1500.0, 4, 400.0, 25.0).expect("scan");
+        assert!((df + 150.0).abs() <= 25.0, "df = {df}");
+    }
+}

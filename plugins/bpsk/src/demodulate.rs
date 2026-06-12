@@ -27,6 +27,7 @@ use std::f32::consts::PI;
 
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
+use openpulse_dsp::acquisition::goertzel_carrier_scan;
 use openpulse_dsp::equalizer::LmsEqualizer;
 use openpulse_dsp::filter::FirFilter;
 use openpulse_dsp::rrc::generate_rrc_coefficients;
@@ -163,38 +164,7 @@ fn estimate_carrier_hz_wide(samples: &[f32], config: &ModulationConfig) -> Optio
 
     // Limit to 4× preamble length to keep per-call cost bounded.
     let window_len = (n * PREAMBLE_SYMS * 4).min(samples.len());
-    let sq: Vec<f32> = samples[..window_len].iter().map(|&s| s * s).collect();
-
-    let target_2fc = 2.0 * fc;
-    let step_hz = 25.0f32; // 25 Hz at 2×fc = 12.5 Hz baseband
-    let range_hz = 800.0f32; // ±800 Hz at 2×fc = ±400 Hz baseband
-
-    // NEG_INFINITY ensures the closest bin is always returned even when the
-    // carrier is near the scan boundary (avoids returning Some(0.0) when the
-    // carrier sits just outside the old ±300 Hz range on the first settling pass).
-    let mut best_power = f32::NEG_INFINITY;
-    let mut best_offset_2fc = 0.0f32;
-
-    let mut df = -range_hz;
-    while df <= range_hz + 0.5 {
-        let test_freq = target_2fc + df;
-        let omega = 2.0 * PI * test_freq / fs;
-        let coeff = 2.0 * omega.cos();
-        let (mut s1, mut s2) = (0.0f32, 0.0f32);
-        for &x in &sq {
-            let s0 = x + coeff * s1 - s2;
-            s2 = s1;
-            s1 = s0;
-        }
-        let power = s1 * s1 + s2 * s2 - coeff * s1 * s2;
-        if power > best_power {
-            best_power = power;
-            best_offset_2fc = df;
-        }
-        df += step_hz;
-    }
-
-    Some(best_offset_2fc / 2.0)
+    goertzel_carrier_scan(&samples[..window_len], fs, fc, 2, 400.0, 12.5)
 }
 
 /// Run a lightweight demodulation pass to estimate the carrier frequency offset.
