@@ -169,19 +169,31 @@ pub(crate) fn samples_per_symbol(sample_rate: f32, baud: f32) -> Result<usize, M
 }
 
 pub(crate) fn preamble_symbols() -> Vec<(f32, f32)> {
-    let pattern = [
-        gray_map_8psk(false, false, false),
-        gray_map_8psk(false, false, true),
-        gray_map_8psk(false, true, true),
-        gray_map_8psk(false, true, false),
-        gray_map_8psk(true, true, false),
-        gray_map_8psk(true, true, true),
-        gray_map_8psk(true, false, true),
-        gray_map_8psk(true, false, false),
+    // Designed low-autocorrelation sequence over all 8 phases (each used twice).
+    //
+    // The previous pattern walked the constellation in constant +45° steps, so the
+    // 1-lag autocorrelation R₁ ≈ 16.  With the crossfade modulator this made the
+    // squared-complex timing correlation nearly flat across all sample offsets, so
+    // the correct offset could not be distinguished from the d=n-1 ISI alias and the
+    // decode failed whenever the unknown carrier phase landed near 90°.
+    //
+    // This order (found by search) has peak aperiodic autocorrelation sidelobe ≈2.2
+    // and R₁ ≈1.2 versus the mainlobe 16, giving an unambiguous timing peak for any
+    // carrier phase.  All 8 constellation points appear exactly twice for supervised
+    // LMS training diversity, and there are no adjacent repeats.  Phase-index order:
+    //   [90,0,270,180,90,135,45,180,0,45,135,225,315,225,270,315]°
+    let pts = [
+        gray_map_8psk(false, false, false), // idx 0 →   0°
+        gray_map_8psk(false, false, true),  // idx 1 →  45°
+        gray_map_8psk(false, true, true),   // idx 2 →  90°
+        gray_map_8psk(false, true, false),  // idx 3 → 135°
+        gray_map_8psk(true, true, false),   // idx 4 → 180°
+        gray_map_8psk(true, true, true),    // idx 5 → 225°
+        gray_map_8psk(true, false, true),   // idx 6 → 270°
+        gray_map_8psk(true, false, false),  // idx 7 → 315°
     ];
-    (0..PREAMBLE_SYMS)
-        .map(|i| pattern[i % pattern.len()])
-        .collect()
+    const PHASE_IDX: [usize; PREAMBLE_SYMS] = [2, 0, 6, 4, 2, 3, 1, 4, 0, 1, 3, 5, 7, 5, 6, 7];
+    PHASE_IDX.iter().map(|&k| pts[k]).collect()
 }
 
 #[cfg(test)]

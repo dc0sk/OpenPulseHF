@@ -13,6 +13,13 @@ use crate::modulate::{
 };
 use crate::parse_baud_rate;
 
+/// Estimate the residual carrier frequency offset from the known preamble.
+///
+/// Removes the preamble modulation (y[k] = z[k]·conj(e[k])) and measures the mean
+/// phase increment of the residual, which is proportional to the offset.  The
+/// designed (non-cyclic) preamble leaves a small ISI-induced bias of a few Hz; this
+/// is operationally negligible for the ±450 Hz AFC acquisition range and is removed
+/// by the downstream Costas PLL.
 fn estimate_frequency_offset_from_preamble(
     i_syms: &[f32],
     q_syms: &[f32],
@@ -116,10 +123,15 @@ fn extract_data_symbols(
     // filter; applying the baseband RRC directly to the passband signal would
     // place fc outside the filter passband and attenuate the signal to ~0.
     let mut syms = if let Some(alpha) = rrc_alpha {
-        psk8_demodulate_rrc(samples, n, baud, fc, fs, alpha)
+        // The RRC Costas PLL removes carrier frequency/phase only up to the 45° 8PSK
+        // rotational ambiguity; resolve the absolute phase against the known preamble.
+        let rrc_syms = psk8_demodulate_rrc(samples, n, baud, fc, fs, alpha);
+        carrier_phase_correct(&rrc_syms, config.afc_correction_hz)
     } else {
         let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
-        demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap)
+        let raw = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
+        let phase_corrected = carrier_phase_correct(&raw, config.afc_correction_hz);
+        carrier_pll_track(&phase_corrected)
     };
 
     if syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
@@ -320,8 +332,47 @@ fn psk8_demodulate_rrc(
     // 3. Coarse timing acquisition via IQ preamble correlation (brute-force).
     let initial_timing = find_timing_offset_bb_iq(&i_bb, &q_bb, n);
 
-    // 4. Adaptive timing + carrier recovery.
-    gardner_pll_sample_rrc(&i_bb, &q_bb, n, initial_timing)
+    // 4. Resolve the coarse carrier phase from the preamble and de-rotate the whole
+    //    baseband BEFORE the decision-directed loop.  The 8PSK Costas PLL only locks
+    //    to the nearest 45° rotational symmetry; if the true offset is off-grid (e.g.
+    //    67.5°) the PLL hard-quantises every symbol onto the wrong grid, leaving them
+    //    on the ±22.5° decision boundary.  Pre-de-rotating onto the correct grid (the
+    //    preamble is a known pilot) lets the PLL track only the residual.
+    let phase_0 = coarse_baseband_phase(&i_bb, &q_bb, n, initial_timing);
+    let (sin0, cos0) = (-phase_0).sin_cos();
+    let i_rot: Vec<f32> = i_bb
+        .iter()
+        .zip(q_bb.iter())
+        .map(|(&i, &q)| i * cos0 - q * sin0)
+        .collect();
+    let q_rot: Vec<f32> = i_bb
+        .iter()
+        .zip(q_bb.iter())
+        .map(|(&i, &q)| i * sin0 + q * cos0)
+        .collect();
+
+    // 5. Adaptive timing + carrier recovery on the de-rotated baseband.
+    gardner_pll_sample_rrc(&i_rot, &q_rot, n, initial_timing)
+}
+
+/// Coarse carrier phase from the preamble samples of the RRC baseband.
+///
+/// Samples the `PREAMBLE_SYMS` preamble symbols at `timing` with stride `n` and
+/// returns arg(Σ r_k·conj(e_k)) — the ML phase estimate, robust to ISI via the
+/// vector sum.
+fn coarse_baseband_phase(i_bb: &[f32], q_bb: &[f32], n: usize, timing: usize) -> f32 {
+    let expected = preamble_symbols();
+    let (mut re, mut im) = (0.0f32, 0.0f32);
+    for (s, &(ei, eq)) in expected.iter().enumerate().take(PREAMBLE_SYMS) {
+        let idx = timing + s * n;
+        if idx >= i_bb.len() {
+            break;
+        }
+        let (ri, rq) = (i_bb[idx], q_bb[idx]);
+        re += ri * ei + rq * eq;
+        im += rq * ei - ri * eq;
+    }
+    im.atan2(re)
 }
 
 /// Adaptive timing (Gardner) + carrier recovery (Costas PLL) for 8PSK-RRC.
@@ -352,9 +403,8 @@ fn gardner_pll_sample_rrc(
 
 /// Brute-force timing search using both I and Q baseband channels.
 ///
-/// For 8PSK, four of the 16 preamble symbols have I=0, so an I-only
-/// correlation misses half the signal energy.  Full IQ correlation gives a
-/// sharper peak at the true ISI-free timing offset.
+/// Uses the squared magnitude of the complex preamble correlation so the metric
+/// is invariant to the unknown residual carrier phase after downmix.
 fn find_timing_offset_bb_iq(i_bb: &[f32], q_bb: &[f32], n: usize) -> usize {
     let expected = preamble_symbols();
     let mut best_off = 0usize;
@@ -364,9 +414,13 @@ fn find_timing_offset_bb_iq(i_bb: &[f32], q_bb: &[f32], n: usize) -> usize {
         if i_bb.len() < off + n * PREAMBLE_SYMS {
             break;
         }
-        let score: f32 = (0..PREAMBLE_SYMS)
-            .map(|s| i_bb[off + s * n] * expected[s].0 + q_bb[off + s * n] * expected[s].1)
-            .sum();
+        let (re_sum, im_sum) = (0..PREAMBLE_SYMS).fold((0.0f32, 0.0f32), |(re, im), s| {
+            let ri = i_bb[off + s * n];
+            let rq = q_bb[off + s * n];
+            let (ei, eq) = expected[s];
+            (re + ri * ei + rq * eq, im + rq * ei - ri * eq)
+        });
+        let score = re_sum * re_sum + im_sum * im_sum;
         if score > best_score {
             best_score = score;
             best_off = off;
@@ -388,12 +442,19 @@ fn find_timing_offset(samples: &[f32], n: usize, fc: f32, fs: f32, cosine_overla
         if syms.len() < PREAMBLE_SYMS {
             continue;
         }
-        let score: f32 = syms
+        // Squared magnitude of the complex preamble correlation Σ r_k·conj(e_k),
+        // not the signed real part.  The carrier phase at the start of the slice is
+        // unknown; the real part collapses to 0 near 90°/270° and a wrong offset
+        // wins.  re² + im² is rotation-invariant and peaks at the correct offset for
+        // any carrier phase.
+        let (re_sum, im_sum) = syms
             .iter()
             .zip(expected.iter())
             .take(PREAMBLE_SYMS)
-            .map(|(&(i, q), &(ei, eq))| i * ei + q * eq)
-            .sum();
+            .fold((0.0f32, 0.0f32), |(re, im), (&(i, q), &(ei, eq))| {
+                (re + i * ei + q * eq, im + q * ei - i * eq)
+            });
+        let score = re_sum * re_sum + im_sum * im_sum;
         if score > best_score {
             best_score = score;
             best_off = off;
@@ -401,6 +462,109 @@ fn find_timing_offset(samples: &[f32], n: usize, fc: f32, fs: f32, cosine_overla
     }
 
     best_off
+}
+
+/// Phase of the complex preamble correlation Σ r_k·conj(e_k) over `range`.
+///
+/// This vector-sum estimator is robust to the crossfade ISI: per-symbol phase
+/// errors `arg(r_k·conj(e_k))` can exceed ±90° at low oversampling (8PSK9600 has
+/// only 5 samples/symbol), so averaging their wrapped `atan2` values is meaningless,
+/// but the ISI averages out coherently in the vector sum (its bias is bounded by the
+/// preamble's small 1-lag autocorrelation R₁).
+fn preamble_corr_phase(
+    syms: &[(f32, f32)],
+    expected: &[(f32, f32)],
+    range: std::ops::Range<usize>,
+) -> f32 {
+    let (mut re, mut im) = (0.0f32, 0.0f32);
+    for k in range {
+        let (ri, rq) = syms[k];
+        let (ei, eq) = expected[k];
+        re += ri * ei + rq * eq;
+        im += rq * ei - ri * eq;
+    }
+    im.atan2(re)
+}
+
+/// Remove the static carrier phase offset using the known preamble as a pilot.
+///
+/// φ₀ is always removed: on real hardware the carrier phase at frame start is
+/// effectively random, and the non-HF 8PSK path has no equalizer to absorb it, so
+/// without this every symbol decision would be rotated to a wrong constellation
+/// point.  A per-symbol drift term is additionally removed only when the engine
+/// signalled a real RF offset (`afc_correction_hz` ≥ 0.5 Hz); it is estimated from
+/// the phase difference between the two preamble halves (each via the robust
+/// vector-sum), which avoids fitting drift to preamble noise on clean paths.
+fn carrier_phase_correct(syms: &[(f32, f32)], afc_correction_hz: f32) -> Vec<(f32, f32)> {
+    if syms.len() < PREAMBLE_SYMS {
+        return syms.to_vec();
+    }
+    let expected = preamble_symbols();
+
+    if afc_correction_hz.abs() >= 0.5 {
+        // Drift present: anchor phase at each half's centroid and fit a line.
+        let half = PREAMBLE_SYMS / 2;
+        let p_a = preamble_corr_phase(syms, &expected, 0..half);
+        let p_b = preamble_corr_phase(syms, &expected, half..PREAMBLE_SYMS);
+        let k_a = (half - 1) as f32 / 2.0;
+        let k_b = half as f32 + (half - 1) as f32 / 2.0;
+        // Wrap the half-to-half phase difference into (−π, π].
+        let mut dphi = p_b - p_a;
+        while dphi > PI {
+            dphi -= 2.0 * PI;
+        }
+        while dphi < -PI {
+            dphi += 2.0 * PI;
+        }
+        let drift = dphi / (k_b - k_a);
+        let phase_0 = p_a - drift * k_a;
+        return syms
+            .iter()
+            .enumerate()
+            .map(|(k, &(i, q))| {
+                let theta = -(phase_0 + drift * k as f32);
+                let (s, c) = theta.sin_cos();
+                (i * c - q * s, i * s + q * c)
+            })
+            .collect();
+    }
+
+    // No drift: remove the single ML phase offset over the whole preamble.
+    let phase_0 = preamble_corr_phase(syms, &expected, 0..PREAMBLE_SYMS);
+    // Only correct a *gross* offset.  The job here is to resolve the random
+    // hardware carrier phase (uniform over 360°); an offset already within roughly
+    // half the 22.5° 8PSK decision margin is harmless and the downstream Costas PLL
+    // removes any residual anyway.  Skipping it keeps the constellation untouched on
+    // clean low-offset signals — at the 5-samples/symbol 8PSK9600 rate the eye is
+    // nearly closed by crossfade ISI, so even a few degrees of spurious rotation
+    // would tip marginal symbols past the boundary.
+    if phase_0.abs() < 0.2 {
+        return syms.to_vec();
+    }
+    let (s, c) = (-phase_0).sin_cos();
+    syms.iter()
+        .map(|&(i, q)| (i * c - q * s, i * s + q * c))
+        .collect()
+}
+
+/// Track residual carrier frequency drift with a decision-directed 8PSK Costas PLL.
+///
+/// `carrier_phase_correct` removes the static phase offset; a residual frequency
+/// offset (e.g. differing USB-audio crystal frequencies between two hosts) still
+/// produces a linear phase ramp that accumulates across the frame.  The 8th-order
+/// (psk_order = 3) PLL tracks that drift so the residual phase error stays within the
+/// ±22.5° 8PSK decision boundary.  The loop bandwidth is deliberately gentle (0.010,
+/// half the QPSK value): the 8th-power phase detector is noisier than QPSK's 4th, so
+/// a tighter loop would perturb clean signals enough to tip symbols at the
+/// 5-samples/symbol 8PSK9600 rate where the eye is already nearly closed by ISI.
+fn carrier_pll_track(syms: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    let mut pll = CarrierPll::new(0.010, 3);
+    syms.iter()
+        .map(|&(i, q)| {
+            pll.update(i, q);
+            pll.correct(i, q)
+        })
+        .collect()
 }
 
 fn demodulate_symbols(
