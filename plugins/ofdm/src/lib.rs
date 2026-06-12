@@ -114,7 +114,7 @@ impl ModulationPlugin for OfdmPlugin {
                 config.center_frequency
             )));
         }
-        Ok(ofdm_demodulate(samples, &config.mode))
+        ofdm_demodulate(samples, &config.mode)
     }
 
     fn demodulate_soft(
@@ -128,7 +128,7 @@ impl ModulationPlugin for OfdmPlugin {
                 config.mode
             )));
         }
-        Ok(ofdm_demodulate_soft(samples, &config.mode))
+        ofdm_demodulate_soft(samples, &config.mode)
     }
 
     fn frame_geometry(&self, config: &ModulationConfig) -> Option<FrameGeometry> {

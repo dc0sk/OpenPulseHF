@@ -16,6 +16,7 @@ pub mod handshake;
 pub mod hpx;
 pub mod iq;
 pub mod ldpc;
+pub mod len_prefix;
 pub mod manifest;
 pub mod peer_cache;
 pub mod peer_descriptor;

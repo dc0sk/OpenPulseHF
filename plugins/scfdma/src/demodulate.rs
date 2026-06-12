@@ -16,28 +16,32 @@ use crate::params::{params_for_mode, ScFdmaParams, CP, FFT_SIZE, SYM_LEN};
 
 // Re-export from the canonical core implementation so the plugin exposes the
 // same public path without duplicating the logic.
+use openpulse_core::error::ModemError;
 pub use openpulse_core::fec::combine_llrs_weighted;
+use openpulse_core::len_prefix::{
+    decode_len_prefix, decode_len_prefix_llrs, LEN_PREFIX_BITS, LEN_PREFIX_BYTES,
+};
 // Canonical shared implementation (openpulse-dsp); re-exported because the
 // lib.rs acquisition regression test references it via this module's path.
 #[cfg(test)]
 pub(crate) use openpulse_dsp::acquisition::quadrature;
 use openpulse_dsp::acquisition::IqMatchedFilter;
 
-pub fn scfdma_demodulate(samples: &[f32], mode: &str) -> Vec<u8> {
-    match params_for_mode(mode) {
-        Some(p) => demodulate_with_params(samples, &p),
-        None => vec![],
-    }
+pub fn scfdma_demodulate(samples: &[f32], mode: &str) -> Result<Vec<u8>, ModemError> {
+    let p = params_for_mode(mode).ok_or_else(|| {
+        ModemError::Configuration(format!("SC-FDMA plugin: unknown mode '{mode}'"))
+    })?;
+    demodulate_with_params(samples, &p)
 }
 
 /// Demodulate SC-FDMA samples and return per-bit soft values (LLRs).
 ///
 /// Positive values indicate bit 0 is more likely; negative values indicate bit 1.
-pub fn scfdma_demodulate_soft(samples: &[f32], mode: &str) -> Vec<f32> {
-    match params_for_mode(mode) {
-        Some(p) => demodulate_soft_with_params(samples, &p).llrs,
-        None => vec![],
-    }
+pub fn scfdma_demodulate_soft(samples: &[f32], mode: &str) -> Result<Vec<f32>, ModemError> {
+    let p = params_for_mode(mode).ok_or_else(|| {
+        ModemError::Configuration(format!("SC-FDMA plugin: unknown mode '{mode}'"))
+    })?;
+    Ok(demodulate_soft_with_params(samples, &p)?.llrs)
 }
 
 /// Per-frame quality metrics produced during soft demodulation.
@@ -61,39 +65,39 @@ pub struct SoftDemodOutput {
 }
 
 /// Demodulate SC-FDMA samples into LLRs and frame quality metrics.
-pub fn scfdma_demodulate_soft_with_metrics(samples: &[f32], mode: &str) -> SoftDemodOutput {
-    match params_for_mode(mode) {
-        Some(p) => demodulate_soft_with_params(samples, &p),
-        None => SoftDemodOutput {
-            llrs: vec![],
-            metrics: SoftFrameMetrics {
-                mean_noise_var: 0.0,
-                mean_rician_k_db: 0.0,
-                symbols_used: 0,
-            },
-        },
-    }
+pub fn scfdma_demodulate_soft_with_metrics(
+    samples: &[f32],
+    mode: &str,
+) -> Result<SoftDemodOutput, ModemError> {
+    let p = params_for_mode(mode).ok_or_else(|| {
+        ModemError::Configuration(format!("SC-FDMA plugin: unknown mode '{mode}'"))
+    })?;
+    demodulate_soft_with_params(samples, &p)
 }
 
 /// Combine multiple LLR attempts using inverse-noise variance weighting.
-fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Vec<u8> {
+fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Result<Vec<u8>, ModemError> {
     let sync = modulate_with_params(&preamble_payload(p), p);
     if samples.len() < sync.len() + SYM_LEN {
-        return vec![];
+        return Err(ModemError::Demodulation("signal too short".into()));
     }
 
     let Some(offset) = find_sync_offset(samples, &sync) else {
-        return vec![];
+        return Err(ModemError::Demodulation("no SC-FDMA sync detected".into()));
     };
     let payload_start = offset + sync.len();
     if payload_start >= samples.len() {
-        return vec![];
+        return Err(ModemError::Demodulation(
+            "SC-FDMA frame truncated after sync".into(),
+        ));
     }
 
     let samples = &samples[payload_start..];
     let n_syms = samples.len() / SYM_LEN;
     if n_syms == 0 {
-        return vec![];
+        return Err(ModemError::Demodulation(
+            "SC-FDMA frame truncated after sync".into(),
+        ));
     }
 
     let mut planner = FftPlanner::<f32>::new();
@@ -141,62 +145,42 @@ fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Vec<u8> {
 
     let raw = bits_to_bytes(&bits);
 
-    // Strip 2-byte LE length prefix.
-    if raw.len() < 2 {
-        return raw;
-    }
-    let payload_len = u16::from_le_bytes([raw[0], raw[1]]) as usize;
-    let available = raw.len() - 2;
-    let take = payload_len.min(available);
-    raw[2..2 + take].to_vec()
+    // Strip the majority-protected length prefix.
+    let Some(payload_len) = decode_len_prefix(&raw) else {
+        return Err(ModemError::Demodulation(
+            "SC-FDMA frame shorter than length prefix".into(),
+        ));
+    };
+    let available = raw.len() - LEN_PREFIX_BYTES;
+    let take = (payload_len as usize).min(available);
+    Ok(raw[LEN_PREFIX_BYTES..LEN_PREFIX_BYTES + take].to_vec())
 }
 
-fn demodulate_soft_with_params(samples: &[f32], p: &ScFdmaParams) -> SoftDemodOutput {
+fn demodulate_soft_with_params(
+    samples: &[f32],
+    p: &ScFdmaParams,
+) -> Result<SoftDemodOutput, ModemError> {
     let sync = modulate_with_params(&preamble_payload(p), p);
     if samples.len() < sync.len() + SYM_LEN {
-        return SoftDemodOutput {
-            llrs: vec![],
-            metrics: SoftFrameMetrics {
-                mean_noise_var: 0.0,
-                mean_rician_k_db: 0.0,
-                symbols_used: 0,
-            },
-        };
+        return Err(ModemError::Demodulation("signal too short".into()));
     }
 
     let Some(offset) = find_sync_offset(samples, &sync) else {
-        return SoftDemodOutput {
-            llrs: vec![],
-            metrics: SoftFrameMetrics {
-                mean_noise_var: 0.0,
-                mean_rician_k_db: 0.0,
-                symbols_used: 0,
-            },
-        };
+        return Err(ModemError::Demodulation("no SC-FDMA sync detected".into()));
     };
     let payload_start = offset + sync.len();
     if payload_start >= samples.len() {
-        return SoftDemodOutput {
-            llrs: vec![],
-            metrics: SoftFrameMetrics {
-                mean_noise_var: 0.0,
-                mean_rician_k_db: 0.0,
-                symbols_used: 0,
-            },
-        };
+        return Err(ModemError::Demodulation(
+            "SC-FDMA frame truncated after sync".into(),
+        ));
     }
 
     let samples = &samples[payload_start..];
     let n_syms = samples.len() / SYM_LEN;
     if n_syms == 0 {
-        return SoftDemodOutput {
-            llrs: vec![],
-            metrics: SoftFrameMetrics {
-                mean_noise_var: 0.0,
-                mean_rician_k_db: 0.0,
-                symbols_used: 0,
-            },
-        };
+        return Err(ModemError::Demodulation(
+            "SC-FDMA frame truncated after sync".into(),
+        ));
     }
 
     let mut planner = FftPlanner::<f32>::new();
@@ -259,38 +243,13 @@ fn demodulate_soft_with_params(samples: &[f32], p: &ScFdmaParams) -> SoftDemodOu
         metric_symbols += 1;
     }
 
-    if llrs.len() < 16 {
-        return SoftDemodOutput {
-            llrs,
-            metrics: SoftFrameMetrics {
-                mean_noise_var: if metric_symbols > 0 {
-                    noise_sum / metric_symbols as f32
-                } else {
-                    0.0
-                },
-                mean_rician_k_db: if metric_symbols > 0 {
-                    k_db_sum / metric_symbols as f32
-                } else {
-                    0.0
-                },
-                symbols_used: metric_symbols,
-            },
-        };
-    }
-
-    let mut len_bytes = [0u8; 2];
-    for (byte_idx, byte_out) in len_bytes.iter_mut().enumerate() {
-        let mut v = 0u8;
-        for bit in 0..8 {
-            if llrs[byte_idx * 8 + bit].is_sign_negative() {
-                v |= 1u8 << bit;
-            }
-        }
-        *byte_out = v;
-    }
-    let payload_len = u16::from_le_bytes(len_bytes) as usize;
-    let payload_bits = payload_len.saturating_mul(8);
-    let available_payload_bits = llrs.len().saturating_sub(16);
+    let Some(payload_len) = decode_len_prefix_llrs(&llrs) else {
+        return Err(ModemError::Demodulation(
+            "SC-FDMA frame shorter than length prefix".into(),
+        ));
+    };
+    let payload_bits = (payload_len as usize).saturating_mul(8);
+    let available_payload_bits = llrs.len().saturating_sub(LEN_PREFIX_BITS);
     let take = if payload_bits == 0 && available_payload_bits > 0 {
         // A noisy length prefix can decode to zero under fading; in that case,
         // return all whole-byte payload bits so downstream soft combining still
@@ -299,14 +258,14 @@ fn demodulate_soft_with_params(samples: &[f32], p: &ScFdmaParams) -> SoftDemodOu
     } else {
         payload_bits.min(available_payload_bits)
     };
-    SoftDemodOutput {
-        llrs: llrs[16..16 + take].to_vec(),
+    Ok(SoftDemodOutput {
+        llrs: llrs[LEN_PREFIX_BITS..LEN_PREFIX_BITS + take].to_vec(),
         metrics: SoftFrameMetrics {
             mean_noise_var: noise_sum / metric_symbols.max(1) as f32,
             mean_rician_k_db: k_db_sum / metric_symbols.max(1) as f32,
             symbols_used: metric_symbols,
         },
-    }
+    })
 }
 
 /// Locate the preamble within `samples` via a phase-insensitive matched filter.
@@ -644,30 +603,17 @@ pub fn scfdma_demodulate_soft_gpu(
         }
     }
 
-    if all_llrs.len() < 16 {
-        return Some(all_llrs);
-    }
-
-    // Strip the 2-byte LE length prefix from the LLR stream, mirroring the CPU path.
-    let mut len_bytes = [0u8; 2];
-    for (byte_idx, byte_out) in len_bytes.iter_mut().enumerate() {
-        let mut v = 0u8;
-        for bit in 0..8 {
-            if all_llrs[byte_idx * 8 + bit].is_sign_negative() {
-                v |= 1u8 << bit;
-            }
-        }
-        *byte_out = v;
-    }
-    let payload_len = u16::from_le_bytes(len_bytes) as usize;
+    // Strip the majority-protected length prefix from the LLR stream,
+    // mirroring the CPU path.
+    let payload_len = decode_len_prefix_llrs(&all_llrs)? as usize;
     let payload_bits = payload_len.saturating_mul(8);
-    let available_payload_bits = all_llrs.len().saturating_sub(16);
+    let available_payload_bits = all_llrs.len().saturating_sub(LEN_PREFIX_BITS);
     let take = if payload_bits == 0 && available_payload_bits > 0 {
         available_payload_bits - (available_payload_bits % 8)
     } else {
         payload_bits.min(available_payload_bits)
     };
-    Some(all_llrs[16..16 + take].to_vec())
+    Some(all_llrs[LEN_PREFIX_BITS..LEN_PREFIX_BITS + take].to_vec())
 }
 
 /// GPU-accelerated hard demodulator.  Batches all per-symbol 256-point FFTs
@@ -749,11 +695,9 @@ pub fn scfdma_demodulate_gpu(
 
     let raw = bits_to_bytes(&bits);
 
-    if raw.len() < 2 {
-        return Some(raw);
-    }
-    let payload_len = u16::from_le_bytes([raw[0], raw[1]]) as usize;
-    let available = raw.len() - 2;
+    // Strip the majority-protected length prefix (mirrors the CPU path).
+    let payload_len = decode_len_prefix(&raw)? as usize;
+    let available = raw.len() - LEN_PREFIX_BYTES;
     let take = payload_len.min(available);
-    Some(raw[2..2 + take].to_vec())
+    Some(raw[LEN_PREFIX_BYTES..LEN_PREFIX_BYTES + take].to_vec())
 }

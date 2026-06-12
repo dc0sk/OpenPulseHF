@@ -63,6 +63,26 @@ impl ScFdmaPlugin {
         }
     }
 
+    /// Feed one frame-bearing sample window into the adaptive pilot tracker.
+    ///
+    /// Updates the smoothed coherence-bandwidth estimate consumed by
+    /// [`ScFdmaPlugin::adaptive_params_for_mode`].  Deliberately separate from
+    /// `estimate_afc_hz` so AFC settling passes over candidate noise windows
+    /// cannot pollute the channel adaptation state — call this only on
+    /// windows where a frame was actually detected/decoded.
+    pub fn observe_channel(&self, samples: &[f32], mode: &str) {
+        let Some(p) = params_for_mode(mode) else {
+            return;
+        };
+        let spectra = crate::channel::compute_pilot_spectra(samples, &p);
+        if let Some(coh_bw) = crate::channel::coh_bw_from_spectra(&spectra, &p) {
+            self.adaptive
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .update(coh_bw);
+        }
+    }
+
     /// Return `ScFdmaParams` for `mode` with pilot spacing adapted to the current
     /// smoothed coherence bandwidth estimate.
     pub fn adaptive_params_for_mode(&self, mode: &str) -> Option<crate::params::ScFdmaParams> {
@@ -177,7 +197,7 @@ impl ModulationPlugin for ScFdmaPlugin {
                 return Ok(result);
             }
         }
-        Ok(scfdma_demodulate(samples, &config.mode))
+        scfdma_demodulate(samples, &config.mode)
     }
 
     fn demodulate_soft(
@@ -211,7 +231,7 @@ impl ModulationPlugin for ScFdmaPlugin {
             }
         }
 
-        Ok(scfdma_demodulate_soft(samples, &config.mode))
+        scfdma_demodulate_soft(samples, &config.mode)
     }
 
     fn frame_geometry(&self, config: &ModulationConfig) -> Option<FrameGeometry> {
@@ -233,15 +253,15 @@ impl ModulationPlugin for ScFdmaPlugin {
         true
     }
 
+    /// Pure CFO estimation — no internal state is touched.  The engine calls
+    /// this repeatedly during AFC settling on candidate windows that are
+    /// frequently rejected as noise; feeding those into the adaptive pilot
+    /// tracker (as this method previously did as a side effect) polluted the
+    /// coherence-bandwidth estimate.  Call [`ScFdmaPlugin::observe_channel`]
+    /// explicitly on windows known to contain a frame.
     fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
         let p = params_for_mode(&config.mode)?;
         let spectra = crate::channel::compute_pilot_spectra(samples, &p);
-        if let Some(coh_bw) = crate::channel::coh_bw_from_spectra(&spectra, &p) {
-            self.adaptive
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .update(coh_bw);
-        }
         crate::channel::cfo_from_spectra(&spectra, &p)
     }
 }
@@ -336,11 +356,12 @@ mod tests {
                 ((state >> 16) as f32 / 32768.0 - 1.0) * 0.3
             })
             .collect();
-        let rx = plugin.demodulate(&noise, &mod_config("SCFDMA52")).unwrap();
+        let err = plugin
+            .demodulate(&noise, &mod_config("SCFDMA52"))
+            .expect_err("noise must not produce a sync lock");
         assert!(
-            rx.is_empty(),
-            "noise must not decode to bytes, got {} bytes",
-            rx.len()
+            err.to_string().contains("no SC-FDMA sync"),
+            "expected sync-detection error, got: {err}"
         );
     }
 
@@ -557,7 +578,7 @@ mod tests {
         let payload: Vec<u8> = (0..64u8).collect();
         let samples = plugin.modulate(&payload, &cfg).unwrap();
         for _ in 0..10 {
-            plugin.estimate_afc_hz(&samples, &cfg);
+            plugin.observe_channel(&samples, &cfg.mode);
         }
         let adapted = plugin
             .adaptive_params_for_mode("SCFDMA52")
@@ -583,7 +604,7 @@ mod tests {
             .map(|(i, &s)| s + if i >= 26 { samples[i - 26] * 0.7 } else { 0.0 })
             .collect();
         for _ in 0..10 {
-            plugin.estimate_afc_hz(&selective, &cfg);
+            plugin.observe_channel(&selective, &cfg.mode);
         }
         let adapted = plugin
             .adaptive_params_for_mode("SCFDMA52")
@@ -609,7 +630,7 @@ mod tests {
 
         // Drive to dense state.
         for _ in 0..8 {
-            plugin.estimate_afc_hz(&selective, &cfg);
+            plugin.observe_channel(&selective, &cfg.mode);
         }
         assert_eq!(
             plugin
@@ -622,7 +643,7 @@ mod tests {
 
         // Feed 14 clean frames; EMA must revert above the 300 Hz threshold.
         for _ in 0..14 {
-            plugin.estimate_afc_hz(&samples, &cfg);
+            plugin.observe_channel(&samples, &cfg.mode);
         }
         let adapted = plugin.adaptive_params_for_mode("SCFDMA52").unwrap();
         assert!(

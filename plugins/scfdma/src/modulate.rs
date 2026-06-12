@@ -5,6 +5,7 @@
 //! a single-carrier waveform (3–4 dB lower PAPR than plain OFDM).
 
 use num_complex::Complex32;
+use openpulse_core::len_prefix::{encode_len_prefix, LEN_PREFIX_BYTES};
 use rustfft::FftPlanner;
 
 use crate::channel::is_pilot;
@@ -40,9 +41,9 @@ pub(crate) fn preamble_payload(p: &ScFdmaParams) -> Vec<u8> {
 }
 
 pub(crate) fn modulate_with_params(payload: &[u8], p: &ScFdmaParams) -> Vec<f32> {
-    // Prepend 2-byte LE length prefix.
-    let len_bytes = (payload.len() as u16).to_le_bytes();
-    let mut data = Vec::with_capacity(2 + payload.len());
+    // Prepend the majority-protected length prefix (3 LE copies).
+    let len_bytes = encode_len_prefix(payload.len() as u16);
+    let mut data = Vec::with_capacity(LEN_PREFIX_BYTES + payload.len());
     data.extend_from_slice(&len_bytes);
     data.extend_from_slice(payload);
 
@@ -453,7 +454,7 @@ mod tests {
         let payload = b"round trip IQ scfdma52";
         let iq = scfdma_modulate_iq(payload, "SCFDMA52");
         let i_ch: Vec<f32> = iq.iter().step_by(2).copied().collect();
-        let decoded = scfdma_demodulate(&i_ch, "SCFDMA52");
+        let decoded = scfdma_demodulate(&i_ch, "SCFDMA52").expect("demodulate");
         assert_eq!(decoded, payload);
     }
 }
