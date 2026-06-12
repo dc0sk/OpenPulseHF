@@ -57,19 +57,20 @@ fn qpsk500_awgn_20db() {
     assert_eq!(rx, payload);
 }
 
-/// QPSK500 over Watterson Good F1 WITHOUT FEC: degrades — ISI from 0.5 ms delay spread
-/// exceeds what RS can correct; QPSK500 requires equalization for multipath channels.
+/// QPSK500 over Watterson Poor F2 WITHOUT FEC: must degrade — high Doppler (tens of Hz)
+/// and multi-ms delay spread cause severe ISI and phase scrambling that carrier-phase
+/// correction and the basic LMS cannot recover.
 #[test]
-fn qpsk500_watterson_good_f1_no_fec_degrades() {
+fn qpsk500_watterson_poor_f2_no_fec_degrades() {
     let mut h = make_harness_qpsk();
-    let payload = b"qpsk500 watterson f1";
-    let mut channel = WattersonChannel::new(WattersonConfig::good_f1(Some(21))).unwrap();
+    let payload = b"qpsk500 watterson f2";
+    let mut channel = WattersonChannel::new(WattersonConfig::poor_f2(Some(21))).unwrap();
     h.tx_engine.transmit(payload, "QPSK500", None).unwrap();
     h.route(&mut channel);
     let rx = h.rx_engine.receive("QPSK500", None);
     assert!(
         rx.map_or(true, |data| data != payload.to_vec()),
-        "Watterson Good F1 should degrade raw QPSK500 (no equalizer)"
+        "Watterson Poor F2 should degrade raw QPSK500 (no FEC or HF equalizer)"
     );
 }
 

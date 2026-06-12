@@ -37,14 +37,15 @@ export A_RIGCTLD_PORT=4532
 export B_CAT_PORT="/dev/serial/by-id/usb-Silicon_Labs_CP2105_Dual_USB_to_UART_Bridge_Controller_008924A1-if00-port0"
 export B_CAT_BAUD=38400
 export B_PTT_PORT="/dev/serial/by-id/usb-Silicon_Labs_CP2105_Dual_USB_to_UART_Bridge_Controller_008924A1-if01-port0"
-export B_PTT_TYPE="RTS"
+# FT-991A PTT is via CAT (confirmed via js8call/flrig — RTS does not work).
+export B_PTT_TYPE="CAT"
 export B_RIGCTLD_ADDR="127.0.0.1"
 export B_RIGCTLD_PORT=4532
 
 # 2m safety guard for this test window (script enforces this range)
 export BAND2M_MIN_HZ=144500000
 export BAND2M_MAX_HZ=144750000
-export TEST_FREQ_HZ=144650000
+export TEST_FREQ_HZ=144640000
 export TEST_MODE_RIG="PKTUSB"
 
 # IC-9700 audio prerequisites for digital USB TX (set on the radio UI):
@@ -78,7 +79,7 @@ export TX_TIMEOUT=120
 # RF power (Hamlib scale 0.0–1.0; 0.05 = 5% of max).
 # Pre-flight check aborts the run if this reads back as < 1% — set explicitly.
 export A_RFPOWER=0.5
-export B_RFPOWER=0.05
+export B_RFPOWER=0.5
 
 # Telemetry: capture PTT/ALC/RFM on ISS and STRENGTH on IRS during each case.
 export TELEMETRY_ENABLE=1
@@ -87,6 +88,30 @@ export TELEMETRY_INTERVAL=0.2
 
 # Safety note for report metadata
 export ON_AIR_FIRST_PASS_NOTE="2m only, low power, agreed test window"
+
+# Power cycle transceivers via Hamlib CAT before setup.
+# Both radios enter CAT standby on power-off so the same serial port handles
+# power-on. IC-9700 and FT-991A both support Hamlib P 0/1 commands.
+# Set to 1 to enable; useful when resuming after a reboot or config change.
+export POWER_CYCLE_ENABLE=0
+export POWER_OFF_WAIT=10   # seconds between power-off and power-on commands
+export POWER_ON_WAIT=15    # seconds after power-on before rigctld starts
+
+# Hardware audio loopback regression (rpi51 ↔ rpi52 USB cable).
+# run_loopback_regression() deploys the freshly-built binary to rpi52, then
+# runs run-loopback-rpi51-rpi52.sh to verify the full audio+modem stack.
+# LOOPBACK_TIER: 'quick' (4 modes, ~100s) or 'full' (8 modes, ~200s).
+#   supervise/sidea always use 'full' at session start.
+#   run action uses 'quick' (binary already deployed).
+#   post-failure check uses the default tier below.
+export LOOPBACK_IRS_SSH="dc0sk@dc0sk-rpi52"
+export LOOPBACK_IRS_BIN_DIR="/home/dc0sk/openpulse/bin"
+export LOOPBACK_TIER="quick"
+
+# Periodic loopback interval: run a quick-tier loopback every N on-air test cases.
+# Each quick loopback takes ~100s; set 0 to disable periodic checks.
+# Session-start and post-failure checks always run regardless of this setting.
+export LOOPBACK_REGRESSION_INTERVAL=0
 
 # Side-A-only transmit smoke test defaults. The `sidea` action uses these when
 # reducing the test loop to a single transmit path on the IC-9700.

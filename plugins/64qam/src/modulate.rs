@@ -82,16 +82,25 @@ pub(crate) fn bytes_to_symbols(data: &[u8]) -> Vec<(f32, f32)> {
 }
 
 pub(crate) fn preamble_symbols() -> Vec<(f32, f32)> {
-    // Alternating corner and inner points for reliable timing acquisition.
-    let pattern = [
-        gray_map_64qam(0b000_000), // (−7,−7) normalised
-        gray_map_64qam(0b100_100), // (+7,+7)
-        gray_map_64qam(0b000_100), // (−7,+7)
-        gray_map_64qam(0b100_000), // (+7,−7)
+    // The four 64QAM corners are equal-magnitude and form a (rotated) QPSK
+    // constellation, so the preamble reuses the proven QPSK designed sequence whose
+    // 1-lag autocorrelation R₁ has magnitude 1 (minimum).  The previous cyclic
+    // [225°,45°,135°,315°] pattern stepped by a constant phase each symbol, which —
+    // with the crossfade modulator — made the squared-complex timing correlation flat
+    // across all sample offsets, so the correct offset could not be distinguished from
+    // the d=n-1 ISI alias and the decode failed at any carrier phase near 90°.
+    //
+    // Corner phases: 45°→(+7,+7), 135°→(−7,+7), 225°→(−7,−7), 315°→(+7,−7).
+    // Phase order: [45,135,225,315,225,135,45,315,225,135,45,135,225,315,45,315]°,
+    // each corner appearing 4× for full I/Q timing- and phase-estimation diversity.
+    let corners = [
+        gray_map_64qam(0b100_100), // 45°  (+7,+7)
+        gray_map_64qam(0b000_100), // 135° (−7,+7)
+        gray_map_64qam(0b000_000), // 225° (−7,−7)
+        gray_map_64qam(0b100_000), // 315° (+7,−7)
     ];
-    (0..PREAMBLE_SYMS)
-        .map(|i| pattern[i % pattern.len()])
-        .collect()
+    const CORNER_IDX: [usize; PREAMBLE_SYMS] = [0, 1, 2, 3, 2, 1, 0, 3, 2, 1, 0, 1, 2, 3, 0, 3];
+    CORNER_IDX.iter().map(|&k| corners[k]).collect()
 }
 
 pub(crate) fn samples_per_symbol(sample_rate: f32, baud: f32) -> Result<usize, ModemError> {

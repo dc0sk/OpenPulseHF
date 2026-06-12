@@ -132,6 +132,7 @@ mod tests {
             } else {
                 PulseShape::Hann
             },
+            ..ModulationConfig::default()
         }
     }
 
@@ -151,6 +152,32 @@ mod tests {
         let samples = plugin.modulate(data, &cfg("64QAM1000")).unwrap();
         let recovered = plugin.demodulate(&samples, &cfg("64QAM1000")).unwrap();
         assert_eq!(&recovered[..data.len()], data);
+    }
+
+    /// The carrier phase at the start of a received frame is effectively random on
+    /// hardware.  Decoding must be invariant to it.  Prepending silent samples sweeps
+    /// the carrier start phase; every sub-symbol offset must decode bit-exact for both
+    /// the Hann and RRC paths.  (Padding stays below one symbol period: a full-symbol
+    /// shift is a separate frame-acquisition concern handled by the engine's scan.)
+    #[test]
+    fn qam64_decode_invariant_to_carrier_phase() {
+        let plugin = Qam64Plugin::new();
+        let payload: Vec<u8> = (0u8..48).collect();
+        for mode in ["64QAM500", "64QAM1000", "64QAM2000-RRC"] {
+            let config = cfg(mode);
+            let baud = crate::parse_baud_rate(mode).expect("baud");
+            let n = (config.sample_rate as f32 / baud).round() as usize;
+            let signal = plugin.modulate(&payload, &config).expect("modulate");
+            for pad in 0..n {
+                let mut samples = vec![0.0f32; pad];
+                samples.extend_from_slice(&signal);
+                let recovered = plugin.demodulate(&samples, &config).expect("demodulate");
+                assert!(
+                    recovered.len() >= payload.len() && recovered[..payload.len()] == payload[..],
+                    "{mode}: wrong decode at carrier phase offset pad={pad}"
+                );
+            }
+        }
     }
 
     #[test]

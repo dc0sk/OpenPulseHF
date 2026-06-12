@@ -34,6 +34,8 @@ DB1IUA for helping stuffing the budget sink-hole.
 ---
 ## Status
 
+9th of June '26, the soundsystem bugs have been fixed and validated, now returning to on-air tests.
+
 As of 6th of June '26, I'm  busy with on-air-testing and fixing a lot of bugs and some misconceptions. Mostly related to Linux' soundsystems.
 
 ---

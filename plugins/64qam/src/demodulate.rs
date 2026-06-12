@@ -112,6 +112,51 @@ fn qam64_decide_bits(i: f32, q: f32) -> u8 {
     (pam8_decide(i) << 3) | pam8_decide(q)
 }
 
+/// Nearest PAM-8 amplitude {±1,±3,±5,±7}×scale to `amp`.
+fn pam8_nearest_amplitude(amp: f32) -> f32 {
+    let a = (amp / PAM8_SCALE).round();
+    // Snap to the nearest odd integer in [-7, 7].
+    let odd = (((a - 1.0) / 2.0).round() * 2.0 + 1.0).clamp(-7.0, 7.0);
+    odd * PAM8_SCALE
+}
+
+/// Decision-directed carrier tracking loop for 64QAM.
+///
+/// 64QAM is not constant-modulus, so an M-PSK Costas loop cannot be used.  This
+/// second-order loop instead derives its phase error from the decision: for each
+/// symbol it de-rotates by the running phase estimate, decides the nearest
+/// constellation point, and uses Im(r·conj(decision)) as the error.  It is seeded
+/// at zero because `carrier_phase_correct` has already removed the static offset, so
+/// the loop only has to track the residual frequency drift (e.g. the difference in
+/// USB-audio crystal frequencies between two stations), which static correction
+/// cannot follow across a frame.
+fn dd_carrier_track(i_syms: &[f32], q_syms: &[f32], loop_bw: f32) -> (Vec<f32>, Vec<f32>) {
+    let alpha = loop_bw;
+    let beta = loop_bw * loop_bw * 0.25;
+    let mut phase = 0.0f32;
+    let mut freq = 0.0f32;
+    let mut i_out = Vec::with_capacity(i_syms.len());
+    let mut q_out = Vec::with_capacity(q_syms.len());
+    for (&i, &q) in i_syms.iter().zip(q_syms.iter()) {
+        let (s, c) = (-phase).sin_cos();
+        let di = i * c - q * s;
+        let dq = i * s + q * c;
+        let pi = pam8_nearest_amplitude(di);
+        let pq = pam8_nearest_amplitude(dq);
+        let denom = pi * pi + pq * pq;
+        let err = if denom > 1e-6 {
+            (dq * pi - di * pq) / denom
+        } else {
+            0.0
+        };
+        i_out.push(di);
+        q_out.push(dq);
+        freq += beta * err;
+        phase += freq + alpha * err;
+    }
+    (i_out, q_out)
+}
+
 // ── IQ demodulation (Hann integration path) ──────────────────────────────────
 
 fn demodulate_iq(
@@ -155,12 +200,17 @@ fn find_timing_offset(samples: &[f32], n: usize, fc: f32, fs: f32) -> usize {
         if i_v.len() < PREAMBLE_SYMS || q_v.len() < PREAMBLE_SYMS {
             continue;
         }
-        let score: f32 = (0..PREAMBLE_SYMS)
-            .map(|s| {
-                let (ei, eq) = expected_syms[s];
-                i_v[s] * ei + q_v[s] * eq
-            })
-            .sum();
+        // Squared magnitude of the complex preamble correlation Σ r_k·conj(e_k).  The
+        // signed real part collapses to 0 when the unknown carrier phase is near
+        // 90°/270°, letting a wrong offset win; re² + im² is rotation-invariant.
+        let (re_sum, im_sum) = (0..PREAMBLE_SYMS).fold((0.0f32, 0.0f32), |(re, im), s| {
+            let (ei, eq) = expected_syms[s];
+            (
+                re + i_v[s] * ei + q_v[s] * eq,
+                im + q_v[s] * ei - i_v[s] * eq,
+            )
+        });
+        let score = re_sum * re_sum + im_sum * im_sum;
         if score > best_score {
             best_score = score;
             best_off = off;
@@ -211,19 +261,45 @@ fn qam64_demodulate_rrc(
 
     let initial_timing = find_timing_offset_bb(&i_bb, &q_bb, n);
 
+    // De-rotate the whole baseband to the correct carrier phase BEFORE Gardner.  The
+    // Gardner TED runs on the I channel; an uncorrected carrier phase mixes I and Q,
+    // mistiming the loop and corrupting every sample (a downstream phase correction
+    // cannot recover mistimed symbols).  The corner preamble is a known pilot.
+    let phase_0 = coarse_baseband_phase(&i_bb, &q_bb, n, initial_timing);
+    let (sin0, cos0) = (-phase_0).sin_cos();
+
     let start = initial_timing.min(i_bb.len());
     let mut det = GardnerDetector::new(n, 0.02);
     det.pre_arm();
     let mut i_out = Vec::new();
     let mut q_out = Vec::new();
-    for (idx, &s_i) in i_bb[start..].iter().enumerate() {
+    for idx in 0..i_bb[start..].len() {
+        let raw_i = i_bb[start + idx];
+        let raw_q = q_bb.get(start + idx).copied().unwrap_or(0.0);
+        let s_i = raw_i * cos0 - raw_q * sin0;
         if det.update(s_i).is_some() {
-            let s_q = q_bb.get(start + idx).copied().unwrap_or(0.0);
+            let s_q = raw_i * sin0 + raw_q * cos0;
             i_out.push(s_i);
             q_out.push(s_q);
         }
     }
     (i_out, q_out)
+}
+
+/// Coarse carrier phase from the corner preamble samples of the RRC baseband.
+fn coarse_baseband_phase(i_bb: &[f32], q_bb: &[f32], n: usize, timing: usize) -> f32 {
+    let expected = preamble_symbols();
+    let (mut re, mut im) = (0.0f32, 0.0f32);
+    for (s, &(ei, eq)) in expected.iter().enumerate().take(PREAMBLE_SYMS) {
+        let idx = timing + s * n;
+        if idx >= i_bb.len() {
+            break;
+        }
+        let (ri, rq) = (i_bb[idx], q_bb[idx]);
+        re += ri * ei + rq * eq;
+        im += rq * ei - ri * eq;
+    }
+    im.atan2(re)
 }
 
 fn find_timing_offset_bb(i_bb: &[f32], q_bb: &[f32], n: usize) -> usize {
@@ -234,18 +310,98 @@ fn find_timing_offset_bb(i_bb: &[f32], q_bb: &[f32], n: usize) -> usize {
         if i_bb.len() < off + n * PREAMBLE_SYMS {
             break;
         }
-        let score: f32 = (0..PREAMBLE_SYMS)
-            .map(|s| {
-                let (ei, eq) = expected[s];
-                i_bb[off + s * n] * ei + q_bb[off + s * n] * eq
-            })
-            .sum();
+        // Squared magnitude of the complex correlation — invariant to the residual
+        // carrier phase left after downmix.
+        let (re_sum, im_sum) = (0..PREAMBLE_SYMS).fold((0.0f32, 0.0f32), |(re, im), s| {
+            let ri = i_bb[off + s * n];
+            let rq = q_bb[off + s * n];
+            let (ei, eq) = expected[s];
+            (re + ri * ei + rq * eq, im + rq * ei - ri * eq)
+        });
+        let score = re_sum * re_sum + im_sum * im_sum;
         if score > best_score {
             best_score = score;
             best_off = off;
         }
     }
     best_off
+}
+
+// ── Carrier phase recovery ────────────────────────────────────────────────────
+
+/// Phase of the complex preamble correlation Σ r_k·conj(e_k) over `range`.
+///
+/// The 64QAM preamble uses only the four equal-magnitude corners, so this vector
+/// sum is a clean ML phase estimate (robust to crossfade ISI via the small 1-lag
+/// autocorrelation of the designed corner sequence).
+fn preamble_corr_phase(
+    i_syms: &[f32],
+    q_syms: &[f32],
+    expected: &[(f32, f32)],
+    range: std::ops::Range<usize>,
+) -> f32 {
+    let (mut re, mut im) = (0.0f32, 0.0f32);
+    for k in range {
+        let (ri, rq) = (i_syms[k], q_syms[k]);
+        let (ei, eq) = expected[k];
+        re += ri * ei + rq * eq;
+        im += rq * ei - ri * eq;
+    }
+    im.atan2(re)
+}
+
+/// Remove the static carrier phase offset (and, when AFC is active, a linear drift)
+/// using the known corner preamble as a pilot.
+///
+/// 64QAM has no constant modulus, so a Costas/decision-directed loop is unreliable;
+/// instead the equal-magnitude corner preamble gives a direct phase reference.  The
+/// offset is *always* removed (no small-angle skip): the dense 64QAM constellation
+/// has a tiny angular margin, so even a few degrees of uncorrected rotation flips
+/// outer points.  The drift term is applied only when the engine signalled a real RF
+/// offset (`afc_correction_hz` ≥ 0.5 Hz).
+fn carrier_phase_correct(
+    i_syms: &[f32],
+    q_syms: &[f32],
+    afc_correction_hz: f32,
+) -> (Vec<f32>, Vec<f32>) {
+    let expected = preamble_symbols();
+    let p = i_syms
+        .len()
+        .min(q_syms.len())
+        .min(expected.len())
+        .min(PREAMBLE_SYMS);
+    if p < 4 {
+        return (i_syms.to_vec(), q_syms.to_vec());
+    }
+
+    let (phase_0, drift) = if afc_correction_hz.abs() >= 0.5 {
+        let half = p / 2;
+        let p_a = preamble_corr_phase(i_syms, q_syms, &expected, 0..half);
+        let p_b = preamble_corr_phase(i_syms, q_syms, &expected, half..p);
+        let k_a = (half - 1) as f32 / 2.0;
+        let k_b = half as f32 + (p - half - 1) as f32 / 2.0;
+        let mut dphi = p_b - p_a;
+        while dphi > PI {
+            dphi -= 2.0 * PI;
+        }
+        while dphi < -PI {
+            dphi += 2.0 * PI;
+        }
+        let drift = dphi / (k_b - k_a);
+        (p_a - drift * k_a, drift)
+    } else {
+        (preamble_corr_phase(i_syms, q_syms, &expected, 0..p), 0.0)
+    };
+
+    let mut i_out = Vec::with_capacity(i_syms.len());
+    let mut q_out = Vec::with_capacity(q_syms.len());
+    for (k, (&i, &q)) in i_syms.iter().zip(q_syms.iter()).enumerate() {
+        let theta = -(phase_0 + drift * k as f32);
+        let (s, c) = theta.sin_cos();
+        i_out.push(i * c - q * s);
+        q_out.push(i * s + q * c);
+    }
+    (i_out, q_out)
 }
 
 // ── Symbol → bytes ────────────────────────────────────────────────────────────
@@ -290,6 +446,10 @@ pub fn qam64_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Ve
         let offset = find_timing_offset(samples, n, fc, fs);
         demodulate_iq(samples, n, fc, fs, offset)
     };
+    let (i_syms, q_syms) = carrier_phase_correct(&i_syms, &q_syms, config.afc_correction_hz);
+    // Track residual carrier frequency drift across the frame (hardware crystal
+    // offset); static phase correction alone cannot follow it on the dense grid.
+    let (i_syms, q_syms) = dd_carrier_track(&i_syms, &q_syms, 0.01);
 
     if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
         return Err(ModemError::Demodulation(
@@ -329,6 +489,10 @@ pub fn qam64_demodulate_soft(
         let offset = find_timing_offset(samples, n, fc, fs);
         demodulate_iq(samples, n, fc, fs, offset)
     };
+    let (i_syms, q_syms) = carrier_phase_correct(&i_syms, &q_syms, config.afc_correction_hz);
+    // Track residual carrier frequency drift across the frame (hardware crystal
+    // offset); static phase correction alone cannot follow it on the dense grid.
+    let (i_syms, q_syms) = dd_carrier_track(&i_syms, &q_syms, 0.01);
 
     if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
         return Err(ModemError::Demodulation(
@@ -391,6 +555,10 @@ pub fn qam64_demodulate_soft_gpu(
         let offset = find_timing_offset(samples, n, fc, fs);
         demodulate_iq(samples, n, fc, fs, offset)
     };
+    let (i_syms, q_syms) = carrier_phase_correct(&i_syms, &q_syms, config.afc_correction_hz);
+    // Track residual carrier frequency drift across the frame (hardware crystal
+    // offset); static phase correction alone cannot follow it on the dense grid.
+    let (i_syms, q_syms) = dd_carrier_track(&i_syms, &q_syms, 0.01);
 
     if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
         return Err(ModemError::Demodulation(
