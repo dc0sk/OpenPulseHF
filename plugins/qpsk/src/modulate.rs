@@ -322,15 +322,47 @@ pub(crate) fn samples_per_symbol(sample_rate: f32, baud: f32) -> Result<usize, M
 }
 
 pub(crate) fn preamble_symbols() -> Vec<(f32, f32)> {
-    let pattern = [
-        gray_map(false, false),
-        gray_map(false, true),
-        gray_map(true, true),
-        gray_map(true, false),
-    ];
-    (0..PREAMBLE_SYMS)
-        .map(|i| pattern[i % pattern.len()])
-        .collect()
+    // Designed sequence: [45°,135°,225°,315°,225°,135°,45°,315°,225°,135°,45°,135°,225°,315°,45°,315°]
+    //
+    // Three properties are required simultaneously:
+    //
+    // 1. Timing discriminability: the cyclic 4-phase pattern had a constant +90° step
+    //    between every pair, so the 1-lag autocorrelation R₁ = Σ e_{k+1}·conj(e_k) ≈ 16j.
+    //    Crossfade ISI then made the squared-complex correlation flat across ALL timing
+    //    offsets — the correct d=0 was indistinguishable from d=n-1.  This sequence has
+    //    R₁ = -j (minimum magnitude 1), so the d=n-1 sidelobe is negligible vs the
+    //    N²=256 mainlobe.
+    //
+    // 2. carrier_phase_correct drift accuracy: ISI introduces per-symbol phase biases
+    //    bias_k ∝ Im(e_{k+1}·conj(e_k)).  Drift is estimated by least-squares fit.
+    //    The artifact is drift_error = (16·Σk·bias_k − 120·Σbias_k) / 5440.  For this
+    //    sequence Σk·Im(d_k) = −7 and Σ Im(d_k) = −1, giving drift_error = ε/680 ≈ 0
+    //    (same as the alternating [45°,315°] preamble).  Without this property the fit
+    //    misestimates drift by ~0.02 rad/sym, accumulating to >90° over a 64-symbol frame.
+    //
+    // 3. LMS training diversity: all 4 QPSK constellation points appear exactly 4× each,
+    //    providing both I and Q variation for the supervised preamble-training phase of
+    //    the LMS equalizer.  The alternating [45°,315°] preamble had constant I=0.707,
+    //    which degraded equalizer convergence on dispersive HF channels.
+    [
+        gray_map(false, false), // k=0:  45°
+        gray_map(false, true),  // k=1: 135°
+        gray_map(true, true),   // k=2: 225°
+        gray_map(true, false),  // k=3: 315°
+        gray_map(true, true),   // k=4: 225°
+        gray_map(false, true),  // k=5: 135°
+        gray_map(false, false), // k=6:  45°
+        gray_map(true, false),  // k=7: 315°
+        gray_map(true, true),   // k=8: 225°
+        gray_map(false, true),  // k=9: 135°
+        gray_map(false, false), // k=10: 45°
+        gray_map(false, true),  // k=11:135°
+        gray_map(true, true),   // k=12:225°
+        gray_map(true, false),  // k=13:315°
+        gray_map(false, false), // k=14: 45°
+        gray_map(true, false),  // k=15:315°
+    ]
+    .to_vec()
 }
 
 #[cfg(test)]
