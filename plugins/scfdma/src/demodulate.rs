@@ -293,22 +293,42 @@ fn demodulate_soft_with_params(samples: &[f32], p: &ScFdmaParams) -> SoftDemodOu
     }
 }
 
+/// Locate the preamble within `samples` via a phase-insensitive matched filter.
+///
+/// A bare real cross-correlation (`Σ a·b`) is carrier-phase sensitive: over the
+/// async-audio loopback the two sound-card clocks impose an arbitrary carrier
+/// phase, and a ~90° rotation collapses the real correlation to near zero,
+/// landing on a wrong offset.  Correlating against BOTH the preamble and its
+/// quadrature (Hilbert) companion and maximising the magnitude removes that
+/// dependence — the per-symbol pilot/MMSE equalizer then handles the residual
+/// phase.  The search is bounded to the slice front: the receive engine aligns
+/// each window to the detected signal start, so the preamble appears near the
+/// front, and an unbounded scan over a multi-second slice is O(N²) (too slow for
+/// the real-time loop) and prone to spurious far-field peaks.
 fn find_sync_offset(samples: &[f32], sync: &[f32]) -> usize {
     if samples.len() <= sync.len() {
         return 0;
     }
+    const SEARCH_CAP: usize = 8192;
+    let max_offset = (samples.len() - sync.len()).min(SEARCH_CAP);
 
-    let max_offset = samples.len() - sync.len();
+    let sync_q = quadrature(sync);
+
+    // Unnormalised correlation magnitude: like the original `Σ a·b` it favours
+    // high-correlation *and* high-energy alignment (so a deep-fade low-energy
+    // window can't win), but the I/Q magnitude makes it carrier-phase invariant.
     let mut best_offset = 0usize;
     let mut best_score = f32::NEG_INFINITY;
-
-    // Search the full capture so a caller can prefix arbitrary leading noise.
     for offset in 0..=max_offset {
-        let score: f32 = samples[offset..offset + sync.len()]
-            .iter()
-            .zip(sync.iter())
-            .map(|(&a, &b)| a * b)
-            .sum();
+        let win = &samples[offset..offset + sync.len()];
+        let mut dot_i = 0.0f32;
+        let mut dot_q = 0.0f32;
+        for (m, &b) in sync.iter().enumerate() {
+            let s = win[m];
+            dot_i += s * b;
+            dot_q += s * sync_q[m];
+        }
+        let score = dot_i * dot_i + dot_q * dot_q;
         if score > best_score {
             best_score = score;
             best_offset = offset;
@@ -316,6 +336,33 @@ fn find_sync_offset(samples: &[f32], sync: &[f32]) -> usize {
     }
 
     best_offset
+}
+
+/// Quadrature (90°-shifted) companion of a real signal via the FFT Hilbert
+/// transform: the imaginary part of the analytic signal.
+pub(crate) fn quadrature(x: &[f32]) -> Vec<f32> {
+    let n = x.len();
+    if n == 0 {
+        return vec![];
+    }
+    let mut planner = FftPlanner::<f32>::new();
+    let fwd = planner.plan_fft_forward(n);
+    let inv = planner.plan_fft_inverse(n);
+    let mut buf: Vec<Complex32> = x.iter().map(|&v| Complex32::new(v, 0.0)).collect();
+    fwd.process(&mut buf);
+    let half = n / 2;
+    for (k, c) in buf.iter_mut().enumerate() {
+        if k == 0 || (n.is_multiple_of(2) && k == half) {
+            // DC and Nyquist unchanged.
+        } else if k < half {
+            *c *= 2.0;
+        } else {
+            *c = Complex32::new(0.0, 0.0);
+        }
+    }
+    inv.process(&mut buf);
+    let scale = 1.0 / n as f32;
+    buf.iter().map(|c| c.im * scale).collect()
 }
 
 // ── Constellation demappers ───────────────────────────────────────────────────

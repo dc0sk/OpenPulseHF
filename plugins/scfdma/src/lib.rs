@@ -260,6 +260,25 @@ mod tests {
         assert_eq!(rx.as_slice(), payload.as_ref());
     }
 
+    // Acquisition over the async-audio loopback condition: an arbitrary carrier
+    // phase (here the worst case, ~90°, applied as the Hilbert transform of the
+    // real passband frame) plus a non-symbol-aligned leading offset.  A bare real
+    // cross-correlation sync collapses under the 90° rotation and lands on a wrong
+    // offset; the phase-insensitive matched filter must still acquire and decode.
+    #[test]
+    fn scfdma52_acquires_phase_rotated_with_offset() {
+        let plugin = ScFdmaPlugin::new();
+        let payload = b"SCFDMA52 phase-rotated acquisition regression payload!";
+        let frame = plugin.modulate(payload, &mod_config("SCFDMA52")).unwrap();
+        // +90° carrier rotation of a real passband signal = −(its Hilbert transform).
+        let rotated = crate::demodulate::quadrature(&frame);
+        let mut buf = vec![0.0f32; 173];
+        buf.extend(rotated.iter().map(|&v| -v));
+        buf.extend(std::iter::repeat(0.0).take(300));
+        let rx = plugin.demodulate(&buf, &mod_config("SCFDMA52")).unwrap();
+        assert_eq!(rx.as_slice(), payload.as_ref());
+    }
+
     #[test]
     fn scfdma52_loopback_clean() {
         let plugin = ScFdmaPlugin::new();
