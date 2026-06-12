@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-06-12T210726Z",
+  "iss": "dc0sk@dc0sk-rpi51",
+  "irs": "dc0sk@dc0sk-rpi52",
+  "iss_device": "plughw:CARD=Device,DEV=0",
+  "irs_device": "plughw:CARD=Device,DEV=0",
+  "total": 1,
+  "pass": 1,
+  "fail": 0,
+  "cases": [{"mode":"OFDM16","payload_bytes":64,"result":"pass","fail_reason":""}]
+}

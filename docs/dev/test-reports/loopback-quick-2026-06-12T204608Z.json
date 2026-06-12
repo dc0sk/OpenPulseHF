@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-06-12T204608Z",
+  "iss": "dc0sk@dc0sk-rpi51",
+  "irs": "dc0sk@dc0sk-rpi52",
+  "iss_device": "plughw:CARD=Device,DEV=0",
+  "irs_device": "plughw:CARD=Device,DEV=0",
+  "total": 4,
+  "pass": 4,
+  "fail": 0,
+  "cases": [{"mode":"BPSK100","payload_bytes":64,"result":"pass","fail_reason":""},{"mode":"BPSK250","payload_bytes":64,"result":"pass","fail_reason":""},{"mode":"QPSK125","payload_bytes":64,"result":"pass","fail_reason":""},{"mode":"QPSK250","payload_bytes":64,"result":"pass","fail_reason":""}]
+}
