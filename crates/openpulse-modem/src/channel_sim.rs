@@ -82,6 +82,19 @@ impl ChannelSimHarness {
         self.rx_loopback.fill_samples(&samples);
         n
     }
+
+    /// Route TX samples through a pure sample-rate-offset (clock-drift) channel.
+    ///
+    /// `ppm` is the RX-vs-TX clock offset in parts-per-million (positive = RX
+    /// faster). This isolates the two-independent-clock effect that distinguishes
+    /// the dual-clock hardware loopback from the single-clock virtual loopback.
+    /// Returns the number of TX samples routed.
+    pub fn route_with_sro(&mut self, ppm: f32) -> usize {
+        let mut channel =
+            openpulse_channel::sro::SroChannel::new(openpulse_channel::sro::SroConfig::new(ppm))
+                .expect("finite ppm");
+        self.route(&mut channel)
+    }
 }
 
 impl Default for ChannelSimHarness {
