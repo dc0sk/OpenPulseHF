@@ -4,7 +4,7 @@ use num_complex::Complex32;
 use rustfft::FftPlanner;
 
 use crate::channel::{
-    dft_ce_estimate, estimate_noise_var, estimate_rician_k_linear, mmse_equalize,
+    deramp_timing, dft_ce_estimate, estimate_noise_var, estimate_rician_k_linear, mmse_equalize,
     mmse_llr_noise_var, pilot_positions,
 };
 use crate::modulate::{
@@ -125,6 +125,10 @@ fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Result<Vec<u8>, 
             .collect();
         fft.process(&mut freq);
 
+        // Remove the per-symbol sampling-frequency-offset phase ramp before
+        // de-spreading (mirrors the OFDM path); critical for SC-FDMA under SRO.
+        deramp_timing(p, &mut freq);
+
         // Step 2: DFT-domain channel estimation + MMSE equalization.
         let h_est = dft_ce_estimate(p, &freq, &*ce_idft);
         let noise_var = estimate_noise_var(p, &freq, &h_est);
@@ -210,6 +214,10 @@ fn demodulate_soft_with_params(
             .map(|&s| Complex32::new(s * fft_scale, 0.0))
             .collect();
         fft.process(&mut freq);
+
+        // Remove the per-symbol sampling-frequency-offset phase ramp before
+        // de-spreading (mirrors the OFDM path); critical for SC-FDMA under SRO.
+        deramp_timing(p, &mut freq);
 
         let h_est = dft_ce_estimate(p, &freq, &*ce_idft);
         let pilot_noise_var = estimate_noise_var(p, &freq, &h_est).max(1e-6);
