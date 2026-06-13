@@ -27,13 +27,13 @@ use std::sync::Mutex;
 
 use openpulse_core::{
     error::ModemError,
-    plugin::{ModulationConfig, ModulationPlugin, PluginInfo},
+    plugin::{FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo},
 };
 
 use crate::adaptive_pilot::AdaptivePilotState;
 use crate::demodulate::{scfdma_demodulate, scfdma_demodulate_soft};
 use crate::modulate::{scfdma_modulate, scfdma_modulate_iq};
-use crate::params::{params_for_mode, SAMPLE_RATE};
+use crate::params::{params_for_mode, SAMPLE_RATE, SYM_LEN};
 
 /// SC-FDMA plugin supporting SCFDMA16 and SCFDMA52 modes.
 pub struct ScFdmaPlugin {
@@ -60,6 +60,26 @@ impl ScFdmaPlugin {
             info: Self::make_info(),
             gpu: Some(ctx),
             adaptive: Mutex::new(AdaptivePilotState::new()),
+        }
+    }
+
+    /// Feed one frame-bearing sample window into the adaptive pilot tracker.
+    ///
+    /// Updates the smoothed coherence-bandwidth estimate consumed by
+    /// [`ScFdmaPlugin::adaptive_params_for_mode`].  Deliberately separate from
+    /// `estimate_afc_hz` so AFC settling passes over candidate noise windows
+    /// cannot pollute the channel adaptation state — call this only on
+    /// windows where a frame was actually detected/decoded.
+    pub fn observe_channel(&self, samples: &[f32], mode: &str) {
+        let Some(p) = params_for_mode(mode) else {
+            return;
+        };
+        let spectra = crate::channel::compute_pilot_spectra(samples, &p);
+        if let Some(coh_bw) = crate::channel::coh_bw_from_spectra(&spectra, &p) {
+            self.adaptive
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .update(coh_bw);
         }
     }
 
@@ -177,7 +197,7 @@ impl ModulationPlugin for ScFdmaPlugin {
                 return Ok(result);
             }
         }
-        Ok(scfdma_demodulate(samples, &config.mode))
+        scfdma_demodulate(samples, &config.mode)
     }
 
     fn demodulate_soft(
@@ -211,22 +231,37 @@ impl ModulationPlugin for ScFdmaPlugin {
             }
         }
 
-        Ok(scfdma_demodulate_soft(samples, &config.mode))
+        scfdma_demodulate_soft(samples, &config.mode)
+    }
+
+    fn frame_geometry(&self, config: &ModulationConfig) -> Option<FrameGeometry> {
+        let p = params_for_mode(&config.mode)?;
+        // Sync sequence = the modulated known preamble payload (exact length).
+        let sync_len =
+            crate::modulate::modulate_with_params(&crate::modulate::preamble_payload(&p), &p).len();
+        // Largest frame: 2-byte length prefix + 255-byte RS block + margin.
+        let max_data_syms = (260usize * 8).div_ceil(p.bits_per_symbol());
+        Some(FrameGeometry {
+            symbol_period_samples: SYM_LEN,
+            preamble_samples: sync_len,
+            min_frame_samples: sync_len + SYM_LEN,
+            max_frame_samples: (sync_len + max_data_syms * SYM_LEN) * 11 / 10,
+        })
     }
 
     fn supports_soft_demod(&self) -> bool {
         true
     }
 
+    /// Pure CFO estimation — no internal state is touched.  The engine calls
+    /// this repeatedly during AFC settling on candidate windows that are
+    /// frequently rejected as noise; feeding those into the adaptive pilot
+    /// tracker (as this method previously did as a side effect) polluted the
+    /// coherence-bandwidth estimate.  Call [`ScFdmaPlugin::observe_channel`]
+    /// explicitly on windows known to contain a frame.
     fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
         let p = params_for_mode(&config.mode)?;
         let spectra = crate::channel::compute_pilot_spectra(samples, &p);
-        if let Some(coh_bw) = crate::channel::coh_bw_from_spectra(&spectra, &p) {
-            self.adaptive
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .update(coh_bw);
-        }
         crate::channel::cfo_from_spectra(&spectra, &p)
     }
 }
@@ -247,6 +282,22 @@ mod tests {
             sample_rate: 8000,
             ..ModulationConfig::default()
         }
+    }
+
+    // The engine previously parsed trailing mode-name digits as baud: this
+    // mode parsed as "4 baud" giving a 2000-sample scan stride that could
+    // step entirely over a frame.  The plugin now owns its geometry.
+    #[test]
+    fn frame_geometry_p4_mode_uses_block_symbol_period() {
+        use crate::params::SYM_LEN;
+        let plugin = ScFdmaPlugin::new();
+        let g = plugin
+            .frame_geometry(&mod_config("SCFDMA52-64QAM-P4"))
+            .expect("geometry");
+        assert_eq!(g.symbol_period_samples, SYM_LEN);
+        assert!(g.preamble_samples >= SYM_LEN);
+        assert!(g.min_frame_samples > g.preamble_samples);
+        assert!(g.max_frame_samples > g.min_frame_samples);
     }
 
     #[test]
@@ -288,6 +339,30 @@ mod tests {
             .demodulate(&samples, &mod_config("SCFDMA52"))
             .unwrap();
         assert_eq!(rx.as_slice(), payload.as_ref());
+    }
+
+    // Detection floor: a pure-noise window must NOT produce a sync lock.
+    // Without the normalised-correlation gate the unnormalised argmax returns
+    // an arbitrary offset and the demodulator emits garbage bytes (with a
+    // random length prefix) at full frame cost on every silent scan position.
+    #[test]
+    fn scfdma52_rejects_noise_no_false_sync() {
+        let plugin = ScFdmaPlugin::new();
+        // Deterministic LCG noise, comfortably above the engine energy gate.
+        let mut state = 0xDEADBEEFu32;
+        let noise: Vec<f32> = (0..40_000)
+            .map(|_| {
+                state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                ((state >> 16) as f32 / 32768.0 - 1.0) * 0.3
+            })
+            .collect();
+        let err = plugin
+            .demodulate(&noise, &mod_config("SCFDMA52"))
+            .expect_err("noise must not produce a sync lock");
+        assert!(
+            err.to_string().contains("no SC-FDMA sync"),
+            "expected sync-detection error, got: {err}"
+        );
     }
 
     #[test]
@@ -503,7 +578,7 @@ mod tests {
         let payload: Vec<u8> = (0..64u8).collect();
         let samples = plugin.modulate(&payload, &cfg).unwrap();
         for _ in 0..10 {
-            plugin.estimate_afc_hz(&samples, &cfg);
+            plugin.observe_channel(&samples, &cfg.mode);
         }
         let adapted = plugin
             .adaptive_params_for_mode("SCFDMA52")
@@ -529,7 +604,7 @@ mod tests {
             .map(|(i, &s)| s + if i >= 26 { samples[i - 26] * 0.7 } else { 0.0 })
             .collect();
         for _ in 0..10 {
-            plugin.estimate_afc_hz(&selective, &cfg);
+            plugin.observe_channel(&selective, &cfg.mode);
         }
         let adapted = plugin
             .adaptive_params_for_mode("SCFDMA52")
@@ -555,7 +630,7 @@ mod tests {
 
         // Drive to dense state.
         for _ in 0..8 {
-            plugin.estimate_afc_hz(&selective, &cfg);
+            plugin.observe_channel(&selective, &cfg.mode);
         }
         assert_eq!(
             plugin
@@ -568,7 +643,7 @@ mod tests {
 
         // Feed 14 clean frames; EMA must revert above the 300 Hz threshold.
         for _ in 0..14 {
-            plugin.estimate_afc_hz(&samples, &cfg);
+            plugin.observe_channel(&samples, &cfg.mode);
         }
         let adapted = plugin.adaptive_params_for_mode("SCFDMA52").unwrap();
         assert!(

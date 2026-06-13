@@ -2,11 +2,11 @@ use std::f32::consts::PI;
 
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
+use openpulse_dsp::acquisition::{estimate_cfo_data_aided, preamble_corr_sq};
 use openpulse_dsp::equalizer::LmsEqualizer;
 use openpulse_dsp::filter::FirFilter;
 use openpulse_dsp::pll::CarrierPll;
 use openpulse_dsp::rrc::generate_rrc_coefficients;
-use openpulse_dsp::timing::GardnerDetector;
 
 use crate::modulate::{
     gray_map_8psk, preamble_symbols, samples_per_symbol, PREAMBLE_SYMS, RRC_SPAN_SYMBOLS, TAIL_SYMS,
@@ -25,31 +25,7 @@ fn estimate_frequency_offset_from_preamble(
     q_syms: &[f32],
     baud_rate: f32,
 ) -> Option<f32> {
-    let expected = preamble_symbols();
-    let n = i_syms.len().min(q_syms.len()).min(expected.len());
-    if n < 2 {
-        return None;
-    }
-
-    // Remove known preamble phase: y[k] = z[k] * conj(preamble[k]).
-    let mut y_re = Vec::with_capacity(n);
-    let mut y_im = Vec::with_capacity(n);
-    for k in 0..n {
-        let zr = i_syms[k];
-        let zi = q_syms[k];
-        let (pr, pi) = expected[k];
-        y_re.push(zr * pr + zi * pi);
-        y_im.push(zi * pr - zr * pi);
-    }
-
-    let mut re_sum = 0.0f32;
-    let mut im_sum = 0.0f32;
-    for k in 1..n {
-        re_sum += y_re[k] * y_re[k - 1] + y_im[k] * y_im[k - 1];
-        im_sum += y_im[k] * y_re[k - 1] - y_re[k] * y_im[k - 1];
-    }
-
-    Some(im_sum.atan2(re_sum) * baud_rate / (2.0 * PI))
+    estimate_cfo_data_aided(i_syms, q_syms, &preamble_symbols(), baud_rate)
 }
 
 pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
@@ -375,10 +351,12 @@ fn coarse_baseband_phase(i_bb: &[f32], q_bb: &[f32], n: usize, timing: usize) ->
     im.atan2(re)
 }
 
-/// Adaptive timing (Gardner) + carrier recovery (Costas PLL) for 8PSK-RRC.
+/// Fixed-stride symbol sampling + carrier recovery (Costas PLL) for 8PSK-RRC.
 ///
-/// `initial_timing` seeds the Gardner loop from the IQ preamble correlation.
-/// The Costas PLL (psk_order=3) corrects residual carrier phase and frequency offset.
+/// See the QPSK twin for why this deliberately does NOT run an interpolating
+/// timing loop: at 1000 baud the Watterson delay spread spans symbols and
+/// biases the Gardner error toward the echo centroid, walking the timing off
+/// the preamble lock; SRO over these short frames is negligible.
 fn gardner_pll_sample_rrc(
     i_bb: &[f32],
     q_bb: &[f32],
@@ -386,17 +364,15 @@ fn gardner_pll_sample_rrc(
     initial_timing: usize,
 ) -> Vec<(f32, f32)> {
     let start = initial_timing.min(i_bb.len());
-    let mut det = GardnerDetector::new(n, 0.02);
-    // Pre-arm so the first sample at `start` (already an ISI-free point) is output immediately.
-    det.pre_arm();
     let mut pll = CarrierPll::new(0.02, 3);
     let mut syms = Vec::new();
-    for (idx, &s_i) in i_bb[start..].iter().enumerate() {
-        if det.update(s_i).is_some() {
-            let s_q = q_bb.get(start + idx).copied().unwrap_or(0.0);
-            pll.update(s_i, s_q);
-            syms.push(pll.correct(s_i, s_q));
-        }
+    let mut pos = start;
+    while pos < i_bb.len() {
+        let s_i = i_bb[pos];
+        let s_q = q_bb.get(pos).copied().unwrap_or(0.0);
+        pll.update(s_i, s_q);
+        syms.push(pll.correct(s_i, s_q));
+        pos += n;
     }
     syms
 }
@@ -410,17 +386,15 @@ fn find_timing_offset_bb_iq(i_bb: &[f32], q_bb: &[f32], n: usize) -> usize {
     let mut best_off = 0usize;
     let mut best_score = f32::NEG_INFINITY;
 
+    let mut received = vec![(0.0f32, 0.0f32); PREAMBLE_SYMS];
     for off in 0..n {
         if i_bb.len() < off + n * PREAMBLE_SYMS {
             break;
         }
-        let (re_sum, im_sum) = (0..PREAMBLE_SYMS).fold((0.0f32, 0.0f32), |(re, im), s| {
-            let ri = i_bb[off + s * n];
-            let rq = q_bb[off + s * n];
-            let (ei, eq) = expected[s];
-            (re + ri * ei + rq * eq, im + rq * ei - ri * eq)
-        });
-        let score = re_sum * re_sum + im_sum * im_sum;
+        for (s, slot) in received.iter_mut().enumerate() {
+            *slot = (i_bb[off + s * n], q_bb[off + s * n]);
+        }
+        let score = preamble_corr_sq(&received, &expected);
         if score > best_score {
             best_score = score;
             best_off = off;
@@ -438,23 +412,19 @@ fn find_timing_offset(samples: &[f32], n: usize, fc: f32, fs: f32, cosine_overla
         if samples.len() <= off + n * PREAMBLE_SYMS {
             break;
         }
-        let syms = demodulate_symbols(samples, n, fc, fs, off, cosine_overlap);
+        // Demodulate ONLY the preamble span at this offset (the slice may be
+        // multi-second; demodulating all of it per offset is O(offsets × N)).
+        let span_end = (off + n * PREAMBLE_SYMS).min(samples.len());
+        let syms = demodulate_symbols(&samples[..span_end], n, fc, fs, off, cosine_overlap);
         if syms.len() < PREAMBLE_SYMS {
             continue;
         }
         // Squared magnitude of the complex preamble correlation Σ r_k·conj(e_k),
         // not the signed real part.  The carrier phase at the start of the slice is
         // unknown; the real part collapses to 0 near 90°/270° and a wrong offset
-        // wins.  re² + im² is rotation-invariant and peaks at the correct offset for
-        // any carrier phase.
-        let (re_sum, im_sum) = syms
-            .iter()
-            .zip(expected.iter())
-            .take(PREAMBLE_SYMS)
-            .fold((0.0f32, 0.0f32), |(re, im), (&(i, q), &(ei, eq))| {
-                (re + i * ei + q * eq, im + q * ei - i * eq)
-            });
-        let score = re_sum * re_sum + im_sum * im_sum;
+        // wins.  |·|² is rotation-invariant and peaks at the correct offset for
+        // any carrier phase (see openpulse_dsp::acquisition::preamble_corr_sq).
+        let score = preamble_corr_sq(&syms[..PREAMBLE_SYMS], &expected);
         if score > best_score {
             best_score = score;
             best_off = off;

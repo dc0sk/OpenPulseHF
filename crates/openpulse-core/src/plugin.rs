@@ -83,6 +83,31 @@ impl Default for ModulationConfig {
     }
 }
 
+// ── Frame geometry ────────────────────────────────────────────────────────────
+
+/// Mode-specific frame dimensions used by the receive engine to size its scan
+/// step, energy-gate window, and per-attempt demodulation slice.
+///
+/// All values are in samples at the config's sample rate.  Before this struct
+/// existed the engine guessed these from trailing digits of the mode name —
+/// wrong for every mode whose name does not end in its baud rate (OFDM52's 52
+/// is a subcarrier count; SCFDMA52-64QAM-P4 parsed as 4 baud) — and assumed a
+/// 32-symbol preamble (true only for BPSK).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameGeometry {
+    /// Scan step: one symbol period (serial-tone modes) or one block-symbol
+    /// length (OFDM/SC-FDMA).
+    pub symbol_period_samples: usize,
+    /// Acquisition span the demodulator needs near the slice front (preamble
+    /// or sync sequence).
+    pub preamble_samples: usize,
+    /// Minimum slice length that can hold one decodable minimal frame.
+    pub min_frame_samples: usize,
+    /// Slice length that bounds one demodulation attempt: the largest frame
+    /// this mode emits (255-byte RS block) plus margin.
+    pub max_frame_samples: usize,
+}
+
 // ── Plugin trait ──────────────────────────────────────────────────────────────
 
 /// A modulation / demodulation plugin.
@@ -103,10 +128,26 @@ pub trait ModulationPlugin: Send + Sync {
 
     /// Decode audio samples and return per-bit soft log-likelihood ratios.
     ///
-    /// Returns one `f32` per bit in the decoded stream, with **positive = bit
-    /// more likely 0** and negative = bit more likely 1.  Plugins that know
-    /// their internal soft values (BPSK I-channel correlation, QPSK I/Q
-    /// projections) should override this for maximum coding gain (~1–2 dB).
+    /// # LLR convention
+    ///
+    /// - **Sign**: positive = bit more likely 0, negative = bit more likely 1.
+    ///   Hard-slicing every LLR (`bit = llr <= 0`) MUST reproduce exactly the
+    ///   byte stream returned by [`demodulate`](Self::demodulate) on the same
+    ///   input (bit order LSB-first within each byte).  This is enforced by
+    ///   the cross-plugin conformance test `llr_convention_conformance` in
+    ///   `openpulse-modem`.
+    /// - **Scale**: per-plugin and NOT normalised across plugins — BPSK emits
+    ///   raw differential dot products, OFDM emits |H|²-weighted projections,
+    ///   8PSK emits max-log-MAP distance differences.  Within one plugin the
+    ///   scale is monotone in reliability (required by `snr_from_llrs` and by
+    ///   per-frame soft combining).  Cross-MODE soft combining (e.g. ARQ
+    ///   retransmission in a different mode) must therefore weight per frame
+    ///   — `combine_llrs_weighted` with per-frame noise metrics — rather than
+    ///   adding raw LLRs from different plugins.
+    ///
+    /// Plugins that know their internal soft values (BPSK I-channel
+    /// correlation, QPSK I/Q projections) should override this for maximum
+    /// coding gain (~1–2 dB).
     ///
     /// The default falls back to [`demodulate`](Self::demodulate) and maps each
     /// hard-decided bit to ±1.0.
@@ -121,6 +162,17 @@ pub trait ModulationPlugin: Send + Sync {
             .flat_map(|&b| (0..8u8).map(move |i| if (b >> i) & 1 == 0 { 1.0f32 } else { -1.0f32 }))
             .collect();
         Ok(llrs)
+    }
+
+    /// Frame geometry for `config.mode`, used by the receive engine to size
+    /// its scan step, energy-gate window, and demodulation slices.
+    ///
+    /// Returns `None` (the default) when the plugin does not describe its
+    /// geometry; the engine then falls back to a mode-name heuristic that is
+    /// only correct for modes named after their baud rate with a 32-symbol
+    /// preamble.  Every production plugin should override this.
+    fn frame_geometry(&self, _config: &ModulationConfig) -> Option<FrameGeometry> {
+        None
     }
 
     /// Return `true` if this plugin produces genuine soft LLRs from

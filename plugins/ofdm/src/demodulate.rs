@@ -1,16 +1,21 @@
 //! OFDM demodulation: samples → FFT frames → LS/ZF equalize → payload.
 
 use num_complex::Complex32;
+use openpulse_dsp::acquisition::IqMatchedFilter;
 use rustfft::FftPlanner;
+
+use openpulse_core::error::ModemError;
+use openpulse_core::len_prefix::{
+    decode_len_prefix, decode_len_prefix_llrs, LEN_PREFIX_BITS, LEN_PREFIX_BYTES,
+};
 
 use crate::channel::{is_pilot, ls_estimate, zf_equalize};
 use crate::params::{params_for_mode, OfdmParams, CP, FFT_SIZE, SYM_LEN};
 
-pub fn ofdm_demodulate(samples: &[f32], mode: &str) -> Vec<u8> {
-    match params_for_mode(mode) {
-        Some(p) => demodulate_with_params(samples, &p),
-        None => vec![],
-    }
+pub fn ofdm_demodulate(samples: &[f32], mode: &str) -> Result<Vec<u8>, ModemError> {
+    let p = params_for_mode(mode)
+        .ok_or_else(|| ModemError::Configuration(format!("OFDM plugin: unknown mode '{mode}'")))?;
+    demodulate_with_params(samples, &p)
 }
 
 /// Demodulate OFDM samples and return per-bit soft LLRs.
@@ -24,13 +29,12 @@ pub fn ofdm_demodulate(samples: &[f32], mode: &str) -> Vec<u8> {
 /// **LLR sign convention**: positive = bit more likely 0, matching all other
 /// plugins and codecs in this codebase.
 ///
-/// The 2-byte LE length prefix inserted by `ofdm_modulate` is consumed and
-/// excluded from the output.
-pub fn ofdm_demodulate_soft(samples: &[f32], mode: &str) -> Vec<f32> {
-    match params_for_mode(mode) {
-        Some(p) => demodulate_soft_with_params(samples, &p),
-        None => vec![],
-    }
+/// The majority-protected length prefix inserted by `ofdm_modulate` is
+/// consumed and excluded from the output.
+pub fn ofdm_demodulate_soft(samples: &[f32], mode: &str) -> Result<Vec<f32>, ModemError> {
+    let p = params_for_mode(mode)
+        .ok_or_else(|| ModemError::Configuration(format!("OFDM plugin: unknown mode '{mode}'")))?;
+    demodulate_soft_with_params(samples, &p)
 }
 
 /// Locate the first data-symbol body via Schmidl-Cox preamble acquisition.
@@ -65,17 +69,27 @@ pub(crate) fn find_first_data_body(samples: &[f32], p: &OfdmParams) -> Option<us
     let max_d = (samples.len() - 2 * L).min(SEARCH_CAP);
 
     // ── Stage 1: coarse Schmidl-Cox autocorrelation ────────────────────────────
+    // Normalised by the MEAN energy of both half-windows (Minn variant), not
+    // just the second half.  The classic P²/R₂² form explodes at the frame's
+    // TRAILING edge: the first half holds the signal tail, the second holds
+    // near-silence, R₂ → ε and M → 10³⁺, beating the true preamble's M ≈ 1
+    // and locking acquisition onto the end of the frame.  On hardware this is
+    // gated by the sound card's noise floor — a quiet card exposes it.  With
+    // the mean-energy normalisation a silent half drags M toward 0 instead.
     let mut p_acc = 0.0f32;
-    let mut r_acc = 0.0f32;
+    let mut r1_acc = 0.0f32;
+    let mut r2_acc = 0.0f32;
     for m in 0..L {
         p_acc += samples[m] * samples[m + L];
-        r_acc += samples[m + L] * samples[m + L];
+        r1_acc += samples[m] * samples[m];
+        r2_acc += samples[m + L] * samples[m + L];
     }
     let mut best_m = 0.0f32;
     let mut best_d = 0usize;
     for d in 0..=max_d {
-        let m = if r_acc > 1e-9 {
-            (p_acc * p_acc) / (r_acc * r_acc)
+        let r_mean = 0.5 * (r1_acc + r2_acc);
+        let m = if r_mean > 1e-9 {
+            (p_acc * p_acc) / (r_mean * r_mean)
         } else {
             0.0
         };
@@ -85,7 +99,8 @@ pub(crate) fn find_first_data_body(samples: &[f32], p: &OfdmParams) -> Option<us
         }
         if d < max_d {
             p_acc += -samples[d] * samples[d + L] + samples[d + L] * samples[d + 2 * L];
-            r_acc += -samples[d + L] * samples[d + L] + samples[d + 2 * L] * samples[d + 2 * L];
+            r1_acc += -samples[d] * samples[d] + samples[d + L] * samples[d + L];
+            r2_acc += -samples[d + L] * samples[d + L] + samples[d + 2 * L] * samples[d + 2 * L];
         }
     }
     // Require a clear correlation peak (M → 1 at perfect alignment).
@@ -94,15 +109,18 @@ pub(crate) fn find_first_data_body(samples: &[f32], p: &OfdmParams) -> Option<us
     }
 
     // ── Stage 2: matched-filter fine timing ────────────────────────────────────
-    // Correlate against BOTH the in-phase preamble and its quadrature (Hilbert)
-    // companion, then maximise the correlation magnitude.  This is insensitive to
-    // the channel's carrier phase, so a multipath/fading channel cannot drag the
-    // timing peak off the true frame start the way a bare real correlation would.
+    // The shared IqMatchedFilter correlates against BOTH the in-phase preamble
+    // and its quadrature (Hilbert) companion, then maximises the correlation
+    // magnitude.  This is insensitive to the channel's carrier phase, so a
+    // multipath/fading channel cannot drag the timing peak off the true frame
+    // start the way a bare real correlation would.
     let template = crate::modulate::preamble_template(p);
-    let template_q = quadrature(&template);
     let tlen = template.len();
-    let t_energy: f32 = template.iter().map(|&x| x * x).sum();
-    if t_energy < 1e-12 || samples.len() < tlen {
+    if samples.len() < tlen {
+        return None;
+    }
+    let filt = IqMatchedFilter::new(template);
+    if filt.is_empty() {
         return None;
     }
 
@@ -113,32 +131,22 @@ pub(crate) fn find_first_data_body(samples: &[f32], p: &OfdmParams) -> Option<us
     if lo > hi {
         return None;
     }
-    let mut rhos = Vec::with_capacity(hi - lo + 1);
-    let mut best_rho = f32::MIN;
-    let mut peak_idx = 0usize;
-    for d in lo..=hi {
-        let mut dot_i = 0.0f32;
-        let mut dot_q = 0.0f32;
-        let mut e = 0.0f32;
-        for m in 0..tlen {
-            let s = samples[d + m];
-            dot_i += s * template[m];
-            dot_q += s * template_q[m];
-            e += s * s;
-        }
-        let rho = (dot_i * dot_i + dot_q * dot_q).sqrt() / ((e * t_energy).sqrt() + 1e-12);
-        if rho > best_rho {
-            best_rho = rho;
-            peak_idx = rhos.len();
-        }
-        rhos.push(rho);
+    let rhos = filt.rho_profile(samples, lo, hi);
+    if rhos.is_empty() {
+        return None;
     }
+    let (peak_idx, &best_rho) = rhos
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.total_cmp(b.1))
+        .unwrap_or((0, &0.0));
     // Lock to the LEADING path, not the strongest.  On a multipath channel a
     // delayed echo can be the dominant correlation peak; starting the FFT window
     // there would read into the next symbol (inter-symbol interference).  Starting
     // at — or just before — the first path is absorbed by the cyclic prefix as a
     // benign phase ramp.  Scan back up to one CP from the peak for the earliest
-    // tap above half the peak correlation.
+    // tap above 0.20 × the peak correlation (hardware-tuned; low enough to catch
+    // a weak leading path, high enough to reject pre-peak noise).
     let lead_thresh = best_rho * 0.20;
     let search_lo = peak_idx.saturating_sub(CP);
     let chosen = (search_lo..=peak_idx)
@@ -151,43 +159,20 @@ pub(crate) fn find_first_data_body(samples: &[f32], p: &OfdmParams) -> Option<us
     Some(frame_start + SYM_LEN + CP)
 }
 
-/// Quadrature (90°-shifted) companion of a real signal via the FFT Hilbert
-/// transform: the imaginary part of the analytic signal.
-fn quadrature(x: &[f32]) -> Vec<f32> {
-    let n = x.len();
-    if n == 0 {
-        return vec![];
-    }
-    let mut planner = FftPlanner::<f32>::new();
-    let fwd = planner.plan_fft_forward(n);
-    let inv = planner.plan_fft_inverse(n);
-    let mut buf: Vec<Complex32> = x.iter().map(|&v| Complex32::new(v, 0.0)).collect();
-    fwd.process(&mut buf);
-    let half = n / 2;
-    for (k, c) in buf.iter_mut().enumerate() {
-        if k == 0 || (n.is_multiple_of(2) && k == half) {
-            // DC and Nyquist unchanged.
-        } else if k < half {
-            *c *= 2.0; // positive frequencies doubled
-        } else {
-            *c = Complex32::new(0.0, 0.0); // negative frequencies zeroed
-        }
-    }
-    inv.process(&mut buf);
-    let scale = 1.0 / n as f32;
-    buf.iter().map(|c| c.im * scale).collect()
-}
-
-fn demodulate_with_params(samples: &[f32], p: &OfdmParams) -> Vec<u8> {
+fn demodulate_with_params(samples: &[f32], p: &OfdmParams) -> Result<Vec<u8>, ModemError> {
     let Some(data_start) = find_first_data_body(samples, p) else {
-        return vec![];
+        return Err(ModemError::Demodulation("no OFDM preamble detected".into()));
     };
     if data_start >= samples.len() {
-        return vec![];
+        return Err(ModemError::Demodulation(
+            "OFDM frame truncated before first data symbol".into(),
+        ));
     }
     let n_syms = (samples.len() - data_start + CP) / SYM_LEN;
     if n_syms == 0 {
-        return vec![];
+        return Err(ModemError::Demodulation(
+            "OFDM frame truncated before first data symbol".into(),
+        ));
     }
 
     let mut planner = FftPlanner::<f32>::new();
@@ -223,14 +208,15 @@ fn demodulate_with_params(samples: &[f32], p: &OfdmParams) -> Vec<u8> {
 
     let raw = bits_to_bytes(&bits);
 
-    // Strip 2-byte LE length prefix.
-    if raw.len() < 2 {
-        return raw;
-    }
-    let payload_len = u16::from_le_bytes([raw[0], raw[1]]) as usize;
-    let available = raw.len() - 2;
-    let take = payload_len.min(available);
-    raw[2..2 + take].to_vec()
+    // Strip the majority-protected length prefix.
+    let Some(payload_len) = decode_len_prefix(&raw) else {
+        return Err(ModemError::Demodulation(
+            "OFDM frame shorter than length prefix".into(),
+        ));
+    };
+    let available = raw.len() - LEN_PREFIX_BYTES;
+    let take = (payload_len as usize).min(available);
+    Ok(raw[LEN_PREFIX_BYTES..LEN_PREFIX_BYTES + take].to_vec())
 }
 
 // ── QPSK demapping ────────────────────────────────────────────────────────────
@@ -248,16 +234,20 @@ fn qpsk_llr(c: Complex32, weight: f32) -> [f32; 2] {
     [c.re * weight, c.im * weight]
 }
 
-fn demodulate_soft_with_params(samples: &[f32], p: &OfdmParams) -> Vec<f32> {
+fn demodulate_soft_with_params(samples: &[f32], p: &OfdmParams) -> Result<Vec<f32>, ModemError> {
     let Some(data_start) = find_first_data_body(samples, p) else {
-        return vec![];
+        return Err(ModemError::Demodulation("no OFDM preamble detected".into()));
     };
     if data_start >= samples.len() {
-        return vec![];
+        return Err(ModemError::Demodulation(
+            "OFDM frame truncated before first data symbol".into(),
+        ));
     }
     let n_syms = (samples.len() - data_start + CP) / SYM_LEN;
     if n_syms == 0 {
-        return vec![];
+        return Err(ModemError::Demodulation(
+            "OFDM frame truncated before first data symbol".into(),
+        ));
     }
 
     let mut planner = FftPlanner::<f32>::new();
@@ -300,20 +290,20 @@ fn demodulate_soft_with_params(samples: &[f32], p: &OfdmParams) -> Vec<f32> {
         }
     }
 
-    // Hard-decode the 2-byte LE length prefix from the first 16 LLRs to recover the
-    // actual payload bit count.  This lets us trim padding bits added by the last
-    // OFDM symbol boundary so decoders that expect an exact codeword length (e.g.
-    // turbo) don't see spurious bits.
-    if llrs.len() < 16 {
-        return vec![];
-    }
-    let b0 = (0..8u8).fold(0u8, |a, i| a | (((llrs[i as usize] < 0.0) as u8) << i));
-    let b1 = (0..8u8).fold(0u8, |a, i| a | (((llrs[8 + i as usize] < 0.0) as u8) << i));
-    let payload_len = u16::from_le_bytes([b0, b1]) as usize;
-    // Skip the 16-LLR prefix and return exactly payload_len * 8 LLRs.
-    let bit_llrs = &llrs[16..];
-    let take = (payload_len * 8).min(bit_llrs.len());
-    bit_llrs[..take].to_vec()
+    // Decode the majority-protected length prefix from the first 48 LLRs
+    // (soft-combining the three copies) to recover the actual payload bit
+    // count.  This lets us trim padding bits added by the last OFDM symbol
+    // boundary so decoders that expect an exact codeword length (e.g. turbo)
+    // don't see spurious bits.
+    let Some(payload_len) = decode_len_prefix_llrs(&llrs) else {
+        return Err(ModemError::Demodulation(
+            "OFDM frame shorter than length prefix".into(),
+        ));
+    };
+    // Skip the prefix LLRs and return exactly payload_len × 8 LLRs.
+    let bit_llrs = &llrs[LEN_PREFIX_BITS..];
+    let take = (payload_len as usize * 8).min(bit_llrs.len());
+    Ok(bit_llrs[..take].to_vec())
 }
 
 // ── Bit helpers ───────────────────────────────────────────────────────────────

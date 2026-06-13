@@ -4,6 +4,8 @@ use num_complex::Complex32;
 use rustfft::FftPlanner;
 
 use crate::channel::is_pilot;
+use openpulse_core::len_prefix::{encode_len_prefix, LEN_PREFIX_BYTES};
+
 use crate::params::{
     params_for_mode, preamble_sign, OfdmParams, CLIP_MAX_ITER, CP, FFT_SIZE, PILOT_AMPLITUDE,
     PREAMBLE_AMPLITUDE, TARGET_PAPR_DB,
@@ -26,9 +28,9 @@ pub fn ofdm_modulate_iq(payload: &[u8], mode: &str) -> Vec<f32> {
 }
 
 fn modulate_with_params(payload: &[u8], p: &OfdmParams) -> Vec<f32> {
-    // Prepend 2-byte LE length prefix.
-    let len_bytes = (payload.len() as u16).to_le_bytes();
-    let mut data = Vec::with_capacity(2 + payload.len());
+    // Prepend the majority-protected length prefix (3 LE copies).
+    let len_bytes = encode_len_prefix(payload.len() as u16);
+    let mut data = Vec::with_capacity(LEN_PREFIX_BYTES + payload.len());
     data.extend_from_slice(&len_bytes);
     data.extend_from_slice(payload);
 
@@ -87,11 +89,26 @@ fn modulate_with_params(payload: &[u8], p: &OfdmParams) -> Vec<f32> {
     // clipped separately so its high comb-PAPR cannot raise the data clip
     // threshold (which would otherwise degrade the data subcarriers).
     let data = clip_iterative(&out, TARGET_PAPR_DB, CLIP_MAX_ITER);
-    let preamble = clip_iterative(
+    let mut preamble = clip_iterative(
         &build_preamble(p, &ifft, scale),
         TARGET_PAPR_DB,
         CLIP_MAX_ITER,
     );
+
+    // Equalize section RMS: each section is clipped to the PAPR target against
+    // its OWN rms, but the frame PAPR is measured against the POOLED rms — a
+    // quieter section dilutes the pool and pushes the frame PAPR above target.
+    // Scaling the preamble to the data rms leaves both acquisition stages
+    // unaffected (Schmidl-Cox M(d) and the matched-filter ρ are scale-
+    // invariant) and guarantees frame PAPR = max(section PAPRs) ≤ target.
+    let rms = |x: &[f32]| (x.iter().map(|&s| s * s).sum::<f32>() / x.len().max(1) as f32).sqrt();
+    let (rms_pre, rms_data) = (rms(&preamble), rms(&data));
+    if rms_pre > 1e-9 && rms_data > 1e-9 {
+        let k = rms_data / rms_pre;
+        for s in &mut preamble {
+            *s *= k;
+        }
+    }
 
     let mut frame = Vec::with_capacity(preamble.len() + data.len());
     frame.extend_from_slice(&preamble);
@@ -230,7 +247,7 @@ mod tests {
         let payload = b"round trip IQ ofdm16";
         let iq = ofdm_modulate_iq(payload, "OFDM16");
         let i_ch: Vec<f32> = iq.iter().step_by(2).copied().collect();
-        let decoded = ofdm_demodulate(&i_ch, "OFDM16");
+        let decoded = ofdm_demodulate(&i_ch, "OFDM16").expect("demodulate");
         assert_eq!(decoded, payload);
     }
 }

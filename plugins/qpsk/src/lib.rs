@@ -7,7 +7,7 @@ pub mod modulate;
 use std::sync::Arc;
 
 use openpulse_core::error::ModemError;
-use openpulse_core::plugin::{ModulationConfig, ModulationPlugin, PluginInfo};
+use openpulse_core::plugin::{FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo};
 
 /// QPSK modulation plugin.
 pub struct QpskPlugin {
@@ -95,6 +95,21 @@ impl ModulationPlugin for QpskPlugin {
         config: &ModulationConfig,
     ) -> Result<Vec<f32>, ModemError> {
         demodulate::qpsk_demodulate_soft(samples, config)
+    }
+
+    fn frame_geometry(&self, config: &ModulationConfig) -> Option<FrameGeometry> {
+        let baud = parse_baud_rate(&config.mode).ok()?;
+        let n = modulate::samples_per_symbol(config.sample_rate as f32, baud).ok()?;
+        const BITS_PER_SYMBOL: usize = 2;
+        // Largest frame: full 255-byte RS block + envelope, plus 10% margin.
+        let max_data_syms = (260usize * 8).div_ceil(BITS_PER_SYMBOL);
+        let frame_syms = modulate::PREAMBLE_SYMS + max_data_syms + modulate::TAIL_SYMS;
+        Some(FrameGeometry {
+            symbol_period_samples: n,
+            preamble_samples: n * modulate::PREAMBLE_SYMS,
+            min_frame_samples: n * (modulate::PREAMBLE_SYMS + 1),
+            max_frame_samples: n * frame_syms * 11 / 10,
+        })
     }
 
     fn supports_soft_demod(&self) -> bool {

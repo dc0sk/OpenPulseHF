@@ -106,8 +106,10 @@ fn frame_success_rate_hard_diversity_awgn(
         let noisy_a = add_awgn(samples, snr_db, 0xD400_0000 + frame as u64);
         let noisy_b = add_awgn(samples, snr_db, 0xE500_0000 + frame as u64);
 
-        let got_a = plugin.demodulate(&noisy_a, &cfg(mode)).unwrap();
-        let got_b = plugin.demodulate(&noisy_b, &cfg(mode)).unwrap();
+        // A demod error (e.g. sync below the detection floor at low SNR)
+        // counts as a failed frame.
+        let got_a = plugin.demodulate(&noisy_a, &cfg(mode)).unwrap_or_default();
+        let got_b = plugin.demodulate(&noisy_b, &cfg(mode)).unwrap_or_default();
 
         if got_a == payload || got_b == payload {
             ok += 1;
@@ -131,7 +133,8 @@ fn frame_success_rate_watterson_hard(
         let mut ch = WattersonChannel::new(channel_cfg)
             .expect("failed to construct Watterson channel profile");
         let faded = ch.apply(samples);
-        let got = plugin.demodulate(&faded, &cfg(mode)).unwrap();
+        // A demod error under a deep fade counts as a failed frame.
+        let got = plugin.demodulate(&faded, &cfg(mode)).unwrap_or_default();
         if got == payload {
             ok += 1;
         }
@@ -152,8 +155,13 @@ fn frame_success_rate_soft_combine_awgn(
         let noisy_a = add_awgn(samples, snr_db, 0xB200_0000 + frame as u64);
         let noisy_b = add_awgn(samples, snr_db, 0xC300_0000 + frame as u64);
 
-        let llr_a = plugin.demodulate_soft(&noisy_a, &cfg(mode)).unwrap();
-        let llr_b = plugin.demodulate_soft(&noisy_b, &cfg(mode)).unwrap();
+        // A demod error counts as a failed attempt (empty LLRs skip below).
+        let llr_a = plugin
+            .demodulate_soft(&noisy_a, &cfg(mode))
+            .unwrap_or_default();
+        let llr_b = plugin
+            .demodulate_soft(&noisy_b, &cfg(mode))
+            .unwrap_or_default();
 
         let n = payload.len() * 8;
         if llr_a.len() < n || llr_b.len() < n {

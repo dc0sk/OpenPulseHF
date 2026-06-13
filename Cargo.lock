@@ -3628,6 +3628,7 @@ version = "0.1.0"
 dependencies = [
  "num-complex",
  "openpulse-core",
+ "openpulse-dsp",
  "rustfft",
 ]
 
@@ -3824,6 +3825,8 @@ dependencies = [
 name = "openpulse-dsp"
 version = "0.1.0"
 dependencies = [
+ "num-complex",
+ "rustfft",
  "tracing",
 ]
 
@@ -5084,6 +5087,7 @@ dependencies = [
  "num-complex",
  "openpulse-channel",
  "openpulse-core",
+ "openpulse-dsp",
  "openpulse-gpu",
  "rustfft",
 ]

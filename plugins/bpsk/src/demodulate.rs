@@ -27,10 +27,12 @@ use std::f32::consts::PI;
 
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
+use openpulse_dsp::acquisition::goertzel_carrier_scan;
 use openpulse_dsp::equalizer::LmsEqualizer;
+use openpulse_dsp::farrow::FarrowTimingLoop;
 use openpulse_dsp::filter::FirFilter;
+use openpulse_dsp::pll::CarrierPll;
 use openpulse_dsp::rrc::generate_rrc_coefficients;
-use openpulse_dsp::timing::GardnerDetector;
 
 use crate::modulate::{
     nrzi_encode, samples_per_symbol, PREAMBLE_SYMS, RRC_SPAN_SYMBOLS, TAIL_SYMS,
@@ -149,8 +151,8 @@ pub fn estimate_frequency_offset(i_syms: &[f32], q_syms: &[f32], baud_rate: f32)
 /// squared signal.
 ///
 /// Squaring removes BPSK modulation, leaving a tone at 2×fc.  A Goertzel
-/// search in 25 Hz steps over 2×fc ± 600 Hz (= fc ± 300 Hz at baseband)
-/// locates the dominant peak.  **Acquisition range: ±300 Hz.**
+/// search in 25 Hz steps over 2×fc ± 800 Hz (= fc ± 400 Hz at baseband)
+/// locates the dominant peak.  **Acquisition range: ±400 Hz.**
 fn estimate_carrier_hz_wide(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
     let baud = crate::parse_baud_rate(&config.mode).ok()?;
     let fs = config.sample_rate as f32;
@@ -163,38 +165,7 @@ fn estimate_carrier_hz_wide(samples: &[f32], config: &ModulationConfig) -> Optio
 
     // Limit to 4× preamble length to keep per-call cost bounded.
     let window_len = (n * PREAMBLE_SYMS * 4).min(samples.len());
-    let sq: Vec<f32> = samples[..window_len].iter().map(|&s| s * s).collect();
-
-    let target_2fc = 2.0 * fc;
-    let step_hz = 25.0f32; // 25 Hz at 2×fc = 12.5 Hz baseband
-    let range_hz = 800.0f32; // ±800 Hz at 2×fc = ±400 Hz baseband
-
-    // NEG_INFINITY ensures the closest bin is always returned even when the
-    // carrier is near the scan boundary (avoids returning Some(0.0) when the
-    // carrier sits just outside the old ±300 Hz range on the first settling pass).
-    let mut best_power = f32::NEG_INFINITY;
-    let mut best_offset_2fc = 0.0f32;
-
-    let mut df = -range_hz;
-    while df <= range_hz + 0.5 {
-        let test_freq = target_2fc + df;
-        let omega = 2.0 * PI * test_freq / fs;
-        let coeff = 2.0 * omega.cos();
-        let (mut s1, mut s2) = (0.0f32, 0.0f32);
-        for &x in &sq {
-            let s0 = x + coeff * s1 - s2;
-            s2 = s1;
-            s1 = s0;
-        }
-        let power = s1 * s1 + s2 * s2 - coeff * s1 * s2;
-        if power > best_power {
-            best_power = power;
-            best_offset_2fc = df;
-        }
-        df += step_hz;
-    }
-
-    Some(best_offset_2fc / 2.0)
+    goertzel_carrier_scan(&samples[..window_len], fs, fc, 2, 400.0, 12.5)
 }
 
 /// Run a lightweight demodulation pass to estimate the carrier frequency offset.
@@ -211,7 +182,7 @@ pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32
     let fs = config.sample_rate as f32;
     let n = crate::modulate::samples_per_symbol(fs, baud).ok()?;
 
-    // Stage 1: coarse Goertzel acquisition (±300 Hz).
+    // Stage 1: coarse Goertzel acquisition (±400 Hz).
     let coarse = estimate_carrier_hz_wide(samples, config);
 
     if samples.len() < n * (PREAMBLE_SYMS + 1) {
@@ -355,8 +326,16 @@ fn bpsk_demodulate_rrc_gpu(
         _ => return bpsk_demodulate(samples, config),
     };
 
-    let initial_timing = find_timing_offset_bb(&i_bb, n);
-    let (i_out, q_out) = gardner_sample_rrc(&i_bb, &q_bb, n, initial_timing);
+    let initial_timing = find_timing_offset_bb(&i_bb, &q_bb, n);
+    // De-rotate to the preamble carrier phase before LMS (see bpsk_demodulate_rrc).
+    let phase_0 = coarse_baseband_phase(&i_bb, &q_bb, n, initial_timing);
+    let (sin0, cos0) = (-phase_0).sin_cos();
+    let (i_rot, q_rot): (Vec<f32>, Vec<f32>) = i_bb
+        .iter()
+        .zip(q_bb.iter())
+        .map(|(&i, &q)| (i * cos0 - q * sin0, i * sin0 + q * cos0))
+        .unzip();
+    let (i_out, q_out) = gardner_sample_rrc(&i_rot, &q_rot, n, initial_timing);
     let (i_syms, q_syms) = bpsk_lms_equalize(&i_out, &q_out, &config.mode);
 
     if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
@@ -489,16 +468,46 @@ fn bpsk_demodulate_rrc(
     let q_bb = rrc_filter(q_mix);
 
     // 3. Coarse timing acquisition via preamble correlation (brute-force, same as Hann path).
-    let initial_timing = find_timing_offset_bb(&i_bb, n);
+    let initial_timing = find_timing_offset_bb(&i_bb, &q_bb, n);
+
+    // 3b. De-rotate the baseband to the preamble's carrier phase BEFORE the
+    // LMS stage.  The equalizer trains against the REAL (±1, 0) preamble
+    // targets; at a ~90° carrier phase the symbol energy lives in Q and 32
+    // training symbols are not enough for the complex taps to converge from a
+    // full quadrature rotation — decision-directed mode then destabilises.
+    // The known preamble gives the phase directly (same pattern as 64QAM).
+    let phase_0 = coarse_baseband_phase(&i_bb, &q_bb, n, initial_timing);
+    let (sin0, cos0) = (-phase_0).sin_cos();
+    let (i_rot, q_rot): (Vec<f32>, Vec<f32>) = i_bb
+        .iter()
+        .zip(q_bb.iter())
+        .map(|(&i, &q)| (i * cos0 - q * sin0, i * sin0 + q * cos0))
+        .unzip();
 
     // 4. Adaptive timing recovery via Gardner detector starting from the acquired offset.
-    let (i_out, q_out) = gardner_sample_rrc(&i_bb, &q_bb, n, initial_timing);
+    let (i_out, q_out) = gardner_sample_rrc(&i_rot, &q_rot, n, initial_timing);
 
     // 5. LMS equalizer: train on the known preamble symbols, then decision-directed.
     // RRC path: DFE enabled for BPSK250 to handle multipath ISI.
     let (i_eq, q_eq) = bpsk_lms_equalize(&i_out, &q_out, mode);
 
     (i_eq, q_eq)
+}
+
+/// Carrier phase of the preamble at `timing`: arg of the complex correlation
+/// `Σ (i + jq)·e` against the real expected preamble amplitudes.
+fn coarse_baseband_phase(i_bb: &[f32], q_bb: &[f32], n: usize, timing: usize) -> f32 {
+    let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+    let (mut re, mut im) = (0.0f32, 0.0f32);
+    for (s, &e) in expected.iter().enumerate() {
+        let idx = timing + s * n;
+        if idx >= i_bb.len() {
+            break;
+        }
+        re += i_bb[idx] * e;
+        im += q_bb.get(idx).copied().unwrap_or(0.0) * e;
+    }
+    im.atan2(re)
 }
 
 /// Select the LMS tap/step profile for a given mode.
@@ -529,7 +538,11 @@ fn bpsk_lms_equalize(i_syms: &[f32], q_syms: &[f32], mode: &str) -> (Vec<f32>, V
     let training = expected_preamble_symbols(PREAMBLE_SYMS.min(i_syms.len()));
     let training_q = vec![0.0f32; training.len()];
     let (fwd_len, dfe_len, mu) = lms_profile(mode);
-    let mut eq = LmsEqualizer::new(fwd_len, dfe_len, mu);
+    // Train-then-freeze: unsupervised DD adaptation drifts to a wrong
+    // self-consistent equilibrium (gain creep + Q contamination) over long
+    // frames even on clean input; the residual carrier is already tracked by
+    // the Costas PLL ahead of this stage, so frozen taps stay valid.
+    let mut eq = LmsEqualizer::new(fwd_len, dfe_len, mu).with_frozen_dd();
     eq.process_frame(i_syms, q_syms, &training, &training_q, |i, _q| {
         (if i >= 0.0 { 1.0 } else { -1.0 }, 0.0)
     })
@@ -537,11 +550,14 @@ fn bpsk_lms_equalize(i_syms: &[f32], q_syms: &[f32], mode: &str) -> (Vec<f32>, V
 
 // ── Timing search ─────────────────────────────────────────────────────────────
 
-/// Adaptive symbol sampling using the Gardner timing error detector.
+/// Interpolating symbol sampling with true timing-drift tracking.
 ///
 /// `initial_timing` seeds the start position from brute-force preamble
-/// correlation.  The Gardner loop then tracks timing drift adaptively for
-/// the remainder of the frame.
+/// correlation; the Farrow loop then tracks fractional timing AND the actual
+/// samples-per-symbol period for the remainder of the frame.  The previous
+/// fixed-stride GardnerDetector could not adjust the sampling instant at all
+/// (its mu clamp kept the strobe interval at exactly `n`), so a sound-card
+/// sample-rate offset slid long frames into heavy ISI.
 fn gardner_sample_rrc(
     i_bb: &[f32],
     q_bb: &[f32],
@@ -549,27 +565,41 @@ fn gardner_sample_rrc(
     initial_timing: usize,
 ) -> (Vec<f32>, Vec<f32>) {
     let start = initial_timing.min(i_bb.len());
-    let mut det = GardnerDetector::new(n, 0.02);
-    // Pre-arm so the first sample at `start` (already an ISI-free point) is output immediately.
-    det.pre_arm();
-    let mut i_out = Vec::new();
-    let mut q_out = Vec::new();
-    for (idx, &s_i) in i_bb[start..].iter().enumerate() {
-        if det.update(s_i).is_some() {
-            // Strobe fires: s_i is the boundary sample; Q is synchronous (same FIR).
-            let s_q = q_bb.get(start + idx).copied().unwrap_or(0.0);
-            i_out.push(s_i);
-            q_out.push(s_q);
-        }
+    // Stronger-than-default gains: at ≤ 250 baud the HF delay spread is
+    // sub-symbol, so the multipath bias that forces the conservative default
+    // gains on high-baud modes does not apply — and the long low-baud frames
+    // need the loop to track 150 ppm with ≤ a few % of period lag.
+    let (i_out, q_out) = FarrowTimingLoop::new(n)
+        .with_gains(0.05, 0.002)
+        .process(i_bb, q_bb, start);
+
+    // Track residual carrier frequency with a BPSK Costas PLL.  A sample-rate
+    // offset shifts the carrier too (150 ppm ⇒ −0.225 Hz at 1500 Hz), which
+    // rotates the constellation ~90° per ~300 symbols at 250 baud — the LMS
+    // stage trains on REAL (±1, 0) targets and cannot follow a rotation, so
+    // without the PLL its decision-directed mode collapses mid-frame.  The
+    // PLL's 180° ambiguity is harmless: decoding is differential.
+    let mut pll = CarrierPll::new(0.02, 1);
+    let mut i_trk = Vec::with_capacity(i_out.len());
+    let mut q_trk = Vec::with_capacity(q_out.len());
+    for (&s_i, &s_q) in i_out.iter().zip(q_out.iter()) {
+        pll.update(s_i, s_q);
+        let (ci, cq) = pll.correct(s_i, s_q);
+        i_trk.push(ci);
+        q_trk.push(cq);
     }
-    (i_out, q_out)
+    (i_trk, q_trk)
 }
 
-/// Brute-force timing search on the baseband I signal (after downmix + RRC).
+/// Brute-force timing search on the baseband I/Q signal (after downmix + RRC).
 ///
-/// Tries every offset in 0..n, samples the baseband I at positions
-/// `offset + k*n`, and correlates with the expected preamble pattern.
-fn find_timing_offset_bb(i_bb: &[f32], n: usize) -> usize {
+/// Tries every offset in 0..n, samples the baseband at positions
+/// `offset + k*n`, and correlates with the expected preamble pattern using the
+/// carrier-phase-invariant squared magnitude `(Σ I·e)² + (Σ Q·e)²`.  The old
+/// I-only signed correlation collapsed at a ~90° carrier phase (preamble
+/// energy entirely in Q) and was additionally polarity-sensitive — the same
+/// bug class fixed in QPSK/8PSK/SCFDMA/OFDM.
+fn find_timing_offset_bb(i_bb: &[f32], q_bb: &[f32], n: usize) -> usize {
     let expected = expected_preamble_symbols(PREAMBLE_SYMS);
     let mut best_off = 0usize;
     let mut best_score = f32::NEG_INFINITY;
@@ -578,9 +608,14 @@ fn find_timing_offset_bb(i_bb: &[f32], n: usize) -> usize {
         if i_bb.len() < off + n * PREAMBLE_SYMS {
             break;
         }
-        let score: f32 = (0..PREAMBLE_SYMS)
-            .map(|s| i_bb[off + s * n] * expected[s])
-            .sum();
+        let (re, im) = (0..PREAMBLE_SYMS).fold((0.0f32, 0.0f32), |(re, im), s| {
+            let idx = off + s * n;
+            (
+                re + i_bb[idx] * expected[s],
+                im + q_bb.get(idx).copied().unwrap_or(0.0) * expected[s],
+            )
+        });
+        let score = re * re + im * im;
         if score > best_score {
             best_score = score;
             best_off = off;
@@ -590,33 +625,38 @@ fn find_timing_offset_bb(i_bb: &[f32], n: usize) -> usize {
 }
 
 /// Try every possible timing offset within one symbol period.  Return the
-/// offset that gives the maximum preamble energy.
+/// offset that gives the maximum preamble correlation magnitude.
 fn find_timing_offset(samples: &[f32], n: usize, fc: f32, fs: f32) -> usize {
     let mut best_energy = f32::NEG_INFINITY;
     let mut best_offset = 0usize;
+    let expected = expected_preamble_symbols(PREAMBLE_SYMS);
 
     for offset in 0..n {
         if samples.len() < offset + n * PREAMBLE_SYMS {
             break;
         }
-        let (i_syms, _) = demodulate_iq(&samples[offset..], n, fc, fs, 0);
+        // Demodulate ONLY the preamble span at this offset (the slice may be
+        // multi-second; demodulating all of it per offset is O(offsets × N)).
+        let span_end = (offset + n * PREAMBLE_SYMS).min(samples.len());
+        let (i_syms, q_syms) = demodulate_iq(&samples[..span_end], n, fc, fs, offset);
         if i_syms.len() < PREAMBLE_SYMS {
             continue;
         }
 
-        // Correlate the first PREAMBLE_SYMS I values with the expected
-        // alternating pattern (+1, −1, +1, −1, …) that NRZI-encoding the
-        // preamble bits produces.  Use |energy| so the search is immune to
-        // 180° phase ambiguity: an inverted preamble gives a large negative
-        // score that would otherwise lose to any noise offset with score > 0.
-        // The differential BPSK decoder handles the polarity after timing lock.
-        let expected = expected_preamble_symbols(PREAMBLE_SYMS);
-        let energy: f32 = i_syms[..PREAMBLE_SYMS]
+        // Correlate the first PREAMBLE_SYMS symbols with the expected
+        // alternating pattern that NRZI-encoding the preamble bits produces,
+        // using the carrier-phase-invariant magnitude (Σ I·e)² + (Σ Q·e)².
+        // The previous |Σ I·e| handled the 180° polarity ambiguity but
+        // collapsed at a ~90° carrier phase where the preamble energy lives in
+        // Q.  The differential BPSK decoder handles polarity after timing lock.
+        let (re, im) = i_syms[..PREAMBLE_SYMS]
             .iter()
+            .zip(q_syms[..PREAMBLE_SYMS].iter())
             .zip(expected.iter())
-            .map(|(&s, &e)| s * e)
-            .sum::<f32>()
-            .abs();
+            .fold((0.0f32, 0.0f32), |(re, im), ((&i, &q), &e)| {
+                (re + i * e, im + q * e)
+            });
+        let energy = re * re + im * im;
 
         if energy > best_energy {
             best_energy = energy;
@@ -812,6 +852,112 @@ mod tests {
         let samples = bpsk_modulate(original, &cfg).unwrap();
         let recovered = bpsk_demodulate(&samples, &cfg).unwrap();
         assert_eq!(&recovered[..original.len()], original);
+    }
+
+    /// Timing lock at a 90° carrier phase: with the old I-only correlation the
+    /// preamble energy lives entirely in Q at this phase, the metric collapses
+    /// to ~0 for every offset, and the search picks an arbitrary (wrong)
+    /// timing.  fc=2000 Hz at fs=8000 gives a carrier phase step of exactly
+    /// π/2 per sample, so one prepended silent sample puts the preamble start
+    /// at carrier phase 90°.
+    #[test]
+    fn bpsk250_timing_correct_at_carrier_90_degrees() {
+        use crate::modulate::bpsk_modulate;
+        let fc = 2000.0f32;
+        let cfg = ModulationConfig {
+            mode: "BPSK250".to_string(),
+            sample_rate: 8000,
+            center_frequency: fc,
+            ..ModulationConfig::default()
+        };
+        let payload: Vec<u8> = (0u8..64).collect();
+        let signal = bpsk_modulate(&payload, &cfg).unwrap();
+        let mut samples = vec![0.0f32; 1];
+        samples.extend_from_slice(&signal);
+
+        let recovered = bpsk_demodulate(&samples, &cfg).unwrap();
+        assert_eq!(&recovered[..payload.len()], &payload[..]);
+    }
+
+    /// Same carrier-90° regression for the RRC path, whose old baseband search
+    /// was additionally polarity-sensitive (signed I-only score, no abs).
+    #[test]
+    fn bpsk250_rrc_timing_correct_at_carrier_90_degrees() {
+        use crate::modulate::bpsk_modulate;
+        let fc = 2000.0f32;
+        let cfg = ModulationConfig {
+            mode: "BPSK250-RRC".to_string(),
+            sample_rate: 8000,
+            center_frequency: fc,
+            ..ModulationConfig::default()
+        };
+        let payload: Vec<u8> = (0u8..64).collect();
+        let signal = bpsk_modulate(&payload, &cfg).unwrap();
+        let mut samples = vec![0.0f32; 1];
+        samples.extend_from_slice(&signal);
+
+        let recovered = bpsk_demodulate(&samples, &cfg).unwrap();
+        assert_eq!(&recovered[..payload.len()], &payload[..]);
+    }
+
+    /// Sample-rate-offset acceptance (review A13): a full 255-byte BPSK250-RRC
+    /// frame decodes through a 150 ppm resampling — the two-free-running-
+    /// sound-card condition.  The frame is ~66k samples, so 150 ppm drifts the
+    /// ISI-free sampling instant by ~10 samples (31% of the 32-sample symbol
+    /// period); the fixed-stride timing path cannot decode this.
+    #[test]
+    fn bpsk250_rrc_decodes_through_150ppm_sample_rate_offset() {
+        use crate::modulate::bpsk_modulate;
+        let cfg = ModulationConfig {
+            mode: "BPSK250-RRC".to_string(),
+            sample_rate: 8000,
+            center_frequency: 1500.0,
+            ..ModulationConfig::default()
+        };
+        let payload: Vec<u8> = (0..255u8).collect();
+        let tx = bpsk_modulate(&payload, &cfg).unwrap();
+
+        // Linear resampling models the receiver clock running 150 ppm fast.
+        let ratio = 1.0f64 + 150e-6;
+        let out_len = (tx.len() as f64 / ratio) as usize;
+        let rx: Vec<f32> = (0..out_len)
+            .map(|k| {
+                let pos = k as f64 * ratio;
+                let base = pos.floor() as usize;
+                let t = (pos - base as f64) as f32;
+                if base + 1 < tx.len() {
+                    tx[base] * (1.0 - t) + tx[base + 1] * t
+                } else {
+                    tx[tx.len() - 1]
+                }
+            })
+            .collect();
+
+        let recovered = bpsk_demodulate(&rx, &cfg).unwrap();
+        assert!(
+            recovered.len() >= payload.len(),
+            "recovered only {} bytes",
+            recovered.len()
+        );
+        let first_bad = recovered[..payload.len()]
+            .iter()
+            .zip(payload.iter())
+            .position(|(a, b)| a != b);
+        let n_bad = recovered[..payload.len()]
+            .iter()
+            .zip(payload.iter())
+            .filter(|(a, b)| a != b)
+            .count();
+        let bit_errs: u32 = recovered[..payload.len()]
+            .iter()
+            .zip(payload.iter())
+            .map(|(a, b)| (a ^ b).count_ones())
+            .sum();
+        assert_eq!(
+            &recovered[..payload.len()],
+            &payload[..],
+            "BPSK250-RRC 150 ppm SRO: first mismatch byte {first_bad:?}, {n_bad}/255 bad bytes, {bit_errs} bit errors"
+        );
     }
 
     #[test]
