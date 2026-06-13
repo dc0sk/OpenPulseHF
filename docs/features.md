@@ -744,3 +744,20 @@ All previously listed stubs are now closed:
 
 - **8PSK soft demapping** ✅ Done — `demodulate_soft()` implements Gray-coded max-log-MAP demapping.
 - **CLI manifest verify** ✅ Done — `manifest verify` is wired to `verify_manifest()` in the library.
+
+### V1.x — Wider-than-3 kHz channel support (10 m HF / VHF / UHF) 🔲 Planned
+
+v1.0 targets standard HF SSB channels (≤ ~2.7 kHz occupied, 8 kHz audio). The 9600-baud
+modes — `QPSK9600`, `QPSK9600-RRC`, `8PSK9600`, `8PSK9600-RRC` — occupy ~12–13 kHz and need
+≥ 38.4 kHz audio (≥ 4 samples/symbol), so they cannot run on the HF path. Their plugin code
+is retained for a post-v1.0 wideband transport (10 m HF, VHF/UHF FM channels). Scope:
+
+- A wideband transport (≥ 48 kHz audio device path) for loopback and on-air testing.
+- Test-matrix coverage for the 9600-baud modes at the higher sample rate (they are listed in
+  `WIDEBAND_POST_V1_MODES` in `apps/openpulse-testmatrix/src/cases.rs`, deferred and enforced
+  by the coverage regression test until then).
+- Revisit the `hpx_narrowband_hd` profile naming, which currently maps 9600-baud (wideband)
+  modes — see `crates/openpulse-core/src/profile.rs`.
+
+Related v1.0 known limitation: plain rectangular `8PSK2000` closes the eye at 4 samples/symbol
+on the 8 kHz path (use `8PSK2000-RRC`); tracked in `KNOWN_LIMITATION_MODES`.
