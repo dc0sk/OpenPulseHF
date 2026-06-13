@@ -14,6 +14,9 @@
 //! - `SCFDMA52-32QAM`:    52 data SCs, cross-32QAM, BW ≈ 2031 Hz, gross ~ 7,222 bps
 //! - `SCFDMA52-64QAM`:    52 data SCs, 64QAM,      BW ≈ 2031 Hz, gross ~ 8,667 bps
 //! - `SCFDMA52-64QAM-P4`: 49 data SCs, 64QAM, denser pilots (16), gross ~ 8,167 bps
+//! - `SCFDMA26-8PSK`:     26 data SCs, 8PSK,  BW ≈ 1000 Hz, gross ~ 2,167 bps (+3 dB/SC)
+//! - `SCFDMA26-16QAM`:    26 data SCs, 16QAM, BW ≈ 1000 Hz, gross ~ 2,889 bps (+3 dB/SC)
+//! - `SCFDMA26-32QAM`:    26 data SCs, 32QAM, BW ≈ 1000 Hz, gross ~ 3,611 bps (+3 dB/SC)
 
 pub mod adaptive_pilot;
 pub mod channel;
@@ -101,7 +104,8 @@ impl ScFdmaPlugin {
             version: "0.1.0".into(),
             description: "SC-FDMA HF plugin: SCFDMA16/52 (QPSK), SCFDMA52-8PSK, \
                  SCFDMA52-16QAM, SCFDMA52-32QAM (cross-32QAM), SCFDMA52-64QAM, \
-                 SCFDMA52-64QAM-P4 (dense pilots); MMSE equalization (BL-TP-4)"
+                 SCFDMA52-64QAM-P4 (dense pilots); narrowband SCFDMA26-8PSK/16QAM/32QAM \
+                 (half-width, +3 dB/SC); MMSE equalization (BL-TP-4)"
                 .into(),
             author: "OpenPulse Contributors".into(),
             supported_modes: vec![
@@ -112,6 +116,9 @@ impl ScFdmaPlugin {
                 "SCFDMA52-32QAM".into(),
                 "SCFDMA52-64QAM".into(),
                 "SCFDMA52-64QAM-P4".into(),
+                "SCFDMA26-8PSK".into(),
+                "SCFDMA26-16QAM".into(),
+                "SCFDMA26-32QAM".into(),
             ],
             trait_version_required: "1.0".into(),
         }

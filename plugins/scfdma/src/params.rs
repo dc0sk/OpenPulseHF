@@ -159,6 +159,45 @@ pub const SCFDMA52_64QAM_P4: ScFdmaParams = ScFdmaParams {
     pilot_spacing: 4,
 };
 
+// ── Narrowband higher-order family ──────────────────────────────────────────────
+//
+// Half the SCFDMA52 width (SCs 32–63: 26 data + 6 pilots, BW ≈ 1000 Hz, centre SC
+// 47.5 ≈ 1484 Hz — same centring convention as SCFDMA16). Concentrating the same
+// transmit power into ~half the subcarriers raises per-subcarrier SNR by ~3 dB and
+// cuts band-edge/ICI loss, so the dense constellations decode where the full-width
+// SCFDMA52-* modes are SNR-starved. Lower throughput, higher robustness — the rung
+// an adaptive profile drops to when the wide high-order mode won't close.
+
+/// SCFDMA26 with 8PSK subcarriers (26 data SCs): ~2,167 bps gross.
+pub const SCFDMA26_8PSK: ScFdmaParams = ScFdmaParams {
+    first_sc: 32,
+    last_sc: 63,
+    n_data: 26,
+    n_pilots: 6,
+    bits_per_sc: 3,
+    pilot_spacing: DEFAULT_PILOT_SPACING,
+};
+
+/// SCFDMA26 with 16QAM subcarriers (26 data SCs): ~2,889 bps gross.
+pub const SCFDMA26_16QAM: ScFdmaParams = ScFdmaParams {
+    first_sc: 32,
+    last_sc: 63,
+    n_data: 26,
+    n_pilots: 6,
+    bits_per_sc: 4,
+    pilot_spacing: DEFAULT_PILOT_SPACING,
+};
+
+/// SCFDMA26 with cross-32QAM subcarriers (26 data SCs): ~3,611 bps gross.
+pub const SCFDMA26_32QAM: ScFdmaParams = ScFdmaParams {
+    first_sc: 32,
+    last_sc: 63,
+    n_data: 26,
+    n_pilots: 6,
+    bits_per_sc: 5,
+    pilot_spacing: DEFAULT_PILOT_SPACING,
+};
+
 /// Select `ScFdmaParams` from a mode string (case-insensitive).
 pub fn params_for_mode(mode: &str) -> Option<ScFdmaParams> {
     match mode.to_ascii_uppercase().as_str() {
@@ -169,6 +208,9 @@ pub fn params_for_mode(mode: &str) -> Option<ScFdmaParams> {
         "SCFDMA52-32QAM" => Some(SCFDMA52_32QAM),
         "SCFDMA52-64QAM" => Some(SCFDMA52_64QAM),
         "SCFDMA52-64QAM-P4" => Some(SCFDMA52_64QAM_P4),
+        "SCFDMA26-8PSK" => Some(SCFDMA26_8PSK),
+        "SCFDMA26-16QAM" => Some(SCFDMA26_16QAM),
+        "SCFDMA26-32QAM" => Some(SCFDMA26_32QAM),
         _ => None,
     }
 }
@@ -263,5 +305,23 @@ mod tests {
         assert_eq!(SCFDMA52_64QAM_P4.bits_per_symbol(), 294);
         // 49 × 6 × 8000/288 ≈ 8167 bps
         assert!((SCFDMA52_64QAM_P4.gross_bps() - 8167.0).abs() < 5.0);
+    }
+
+    #[test]
+    fn scfdma26_family_geometry() {
+        // Half-width: 32 occupied SCs (26 data + 6 pilots), ~1000 Hz, centre 47.5.
+        for p in [SCFDMA26_8PSK, SCFDMA26_16QAM, SCFDMA26_32QAM] {
+            assert_eq!(p.total_sc(), 32);
+            assert_eq!(p.n_data, 26);
+            assert_eq!(p.n_pilots, 6);
+            assert_eq!(p.n_data + p.n_pilots, p.total_sc());
+            assert_eq!(p.first_sc, 32);
+            assert_eq!(p.last_sc, 63);
+        }
+        // ~half the SCFDMA52 occupied width → ~+3 dB per-subcarrier power.
+        assert!((SCFDMA52.total_sc() as f32 / 32.0 - 2.03).abs() < 0.05);
+        assert_eq!(SCFDMA26_8PSK.bits_per_sc, 3);
+        assert_eq!(SCFDMA26_16QAM.bits_per_sc, 4);
+        assert_eq!(SCFDMA26_32QAM.bits_per_sc, 5);
     }
 }
