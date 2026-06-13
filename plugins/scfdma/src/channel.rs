@@ -23,6 +23,39 @@ pub fn pilot_positions(p: &ScFdmaParams) -> Vec<usize> {
     pilots
 }
 
+/// Remove the residual linear phase ramp across subcarriers (sampling-frequency /
+/// timing offset) using the known real-BPSK pilots — the SC-FDMA counterpart of
+/// the OFDM `deramp_timing`.
+///
+/// A sample-rate offset between the TX and RX clocks rotates each subcarrier's
+/// phase by an amount proportional to subcarrier index (and growing with symbol
+/// index). On the direct per-SC OFDM path that is benign, but SC-FDMA's DFT
+/// de-spread coherently combines all subcarriers, so an uncorrected ramp smears
+/// across every recovered data symbol. The pilots are real +1 and evenly spaced,
+/// so the vector sum of adjacent-pilot conjugate products gives the average
+/// per-pilot-step rotation; de-rotating the whole spectrum removes the ramp
+/// before channel estimation. On a clean (offset-free) channel the slope is ~0
+/// and this is a near-identity.
+pub fn deramp_timing(p: &ScFdmaParams, freq: &mut [Complex32]) {
+    let pilots = pilot_positions(p);
+    if pilots.len() < 2 {
+        return;
+    }
+    let mut acc = Complex32::new(0.0, 0.0);
+    for w in pilots.windows(2) {
+        acc += freq[w[1]] * freq[w[0]].conj();
+    }
+    if acc.norm_sqr() < 1e-12 {
+        return;
+    }
+    let slope = acc.arg() / p.pilot_spacing as f32; // rad per subcarrier
+    let k_ref = pilots[0] as f32;
+    for (k, c) in freq.iter_mut().enumerate() {
+        let (sin_p, cos_p) = (-slope * (k as f32 - k_ref)).sin_cos();
+        *c *= Complex32::new(cos_p, sin_p);
+    }
+}
+
 /// `true` when absolute SC index `sc` is a pilot for this mode.
 pub fn is_pilot(p: &ScFdmaParams, sc: usize) -> bool {
     if p.pilot_spacing == 0 {

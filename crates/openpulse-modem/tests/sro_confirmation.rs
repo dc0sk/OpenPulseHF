@@ -100,13 +100,10 @@ fn sro_sweep_matrix() {
     }
 }
 
-/// Target for the upcoming SC-FDMA / 64QAM sync-tracking work: these wideband and
-/// dense modes currently fail at a realistic sample-rate offset where single-carrier
-/// and cyclic-prefix OFDM modes do not. Marked `#[ignore]` because it fails today;
-/// remove the attribute once SRO/pilot tracking lands and it passes.
+/// SC-FDMA sync tracking under sample-rate offset (per-symbol pilot deramp).
+/// Before the fix SCFDMA52 failed at ≥200 ppm; it now matches OFDM's robustness.
 #[test]
-#[ignore = "red TDD target for SC-FDMA/64QAM SRO sync tracking; passes once the fix lands"]
-fn scfdma52_and_64qam_tolerate_realistic_sro() {
+fn scfdma52_tolerates_realistic_sro() {
     let payload: Vec<u8> = (0..64)
         .map(|i| b"OpenPulseHF-SRO-target--"[i % 24])
         .collect();
@@ -114,6 +111,22 @@ fn scfdma52_and_64qam_tolerate_realistic_sro() {
         decodes_at("SCFDMA52", 200.0, &payload),
         "SCFDMA52 @ 200 ppm"
     );
+    assert!(
+        decodes_at("SCFDMA52", 500.0, &payload),
+        "SCFDMA52 @ 500 ppm"
+    );
+}
+
+/// Target for the 64QAM (dense single-carrier) SRO work: it currently fails at a
+/// realistic sample-rate offset where single-carrier PSK and OFDM/SC-FDMA do not.
+/// Marked `#[ignore]` because it fails today; remove the attribute once 64QAM's
+/// symbol-timing recovery tracks SRO.
+#[test]
+#[ignore = "red TDD target for 64QAM single-carrier SRO timing tracking; flip when the fix lands"]
+fn qam64_tolerates_realistic_sro() {
+    let payload: Vec<u8> = (0..64)
+        .map(|i| b"OpenPulseHF-SRO-target--"[i % 24])
+        .collect();
     assert!(
         decodes_at("64QAM500", 100.0, &payload),
         "64QAM500 @ 100 ppm"
