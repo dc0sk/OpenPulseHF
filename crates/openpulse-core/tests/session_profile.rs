@@ -141,7 +141,10 @@ fn hpx_ofdm_hf_snr_thresholds() {
 #[test]
 fn hpx_wideband_hd_mode_mapping_uses_crossover_policy() {
     let p = SessionProfile::hpx_wideband_hd();
-    assert_eq!(p.mode_for(SpeedLevel::Sl11), None);
+    // SL9–SL11: narrowband (half-width) HOM fallback rungs.
+    assert_eq!(p.mode_for(SpeedLevel::Sl9), Some("SCFDMA26-8PSK"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl10), Some("SCFDMA26-16QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl11), Some("SCFDMA26-32QAM"));
     assert_eq!(p.mode_for(SpeedLevel::Sl12), Some("SCFDMA52-16QAM"));
     assert_eq!(p.mode_for(SpeedLevel::Sl13), Some("SCFDMA52-32QAM"));
     assert_eq!(p.mode_for(SpeedLevel::Sl14), Some("SCFDMA52-64QAM"));
@@ -153,6 +156,11 @@ fn hpx_wideband_hd_snr_thresholds_match_policy_intent() {
     let p = SessionProfile::hpx_wideband_hd();
     assert_eq!(p.initial_level, SpeedLevel::Sl12);
     assert_eq!(p.nack_threshold, 2);
+    // Narrowband fallback rungs sit below SL12 with lower floors (more robust).
+    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl9), Some(9.0));
+    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl10), Some(11.0));
+    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl11), Some(13.0));
+    assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl11), Some(16.0));
     assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl12), Some(16.0));
     assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl13), Some(20.0));
     assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl14), Some(28.0));
