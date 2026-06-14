@@ -314,12 +314,15 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
     }
     //        Payload kept at 32 bytes: these wideband modes are SNR-sensitive and
     //        the smoke + FEC coverage is sufficient for the Quick tier.
+    //        SoftConcatenated included because the dense HOM modes operate under a
+    //        soft code in practice (it is what closes them on a real link — see the
+    //        --fec hardware loopback results); testing only None/Rs missed that path.
     for mode in SCFDMA_HOM_MODES {
         for channel in &awgn_channels {
             if channel_snr_db(channel).is_some_and(|s| s < mode_min_snr_db(mode)) {
                 continue;
             }
-            for &fec in &[FecMode::None, FecMode::Rs] {
+            for &fec in &[FecMode::None, FecMode::Rs, FecMode::SoftConcatenated] {
                 cases.push(raw_case(
                     mode,
                     fec,

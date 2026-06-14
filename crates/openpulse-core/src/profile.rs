@@ -330,16 +330,30 @@ impl SessionProfile {
     /// | SL15 | 64QAM2000-RRC    | ≈ 12000                 | 35 dB   |
     pub fn hpx_wideband_hd() -> Self {
         let mut modes = [None; 21];
+        // SL9–SL11: half-width SCFDMA26 higher-order rungs — the robust graceful-
+        // degradation path. Same constellations as the wide SL12+ modes but ~half the
+        // occupied bandwidth (~+3 dB per-subcarrier SNR), so an adaptive session drops
+        // here when the link cannot sustain the full-width modes. Hardware-validated
+        // with soft-concatenated FEC (the session FEC these dense modes run under).
+        modes[SpeedLevel::Sl9 as usize] = Some("SCFDMA26-8PSK");
+        modes[SpeedLevel::Sl10 as usize] = Some("SCFDMA26-16QAM");
+        modes[SpeedLevel::Sl11 as usize] = Some("SCFDMA26-32QAM");
         modes[SpeedLevel::Sl12 as usize] = Some("SCFDMA52-16QAM");
         modes[SpeedLevel::Sl13 as usize] = Some("SCFDMA52-32QAM");
         modes[SpeedLevel::Sl14 as usize] = Some("SCFDMA52-64QAM");
         modes[SpeedLevel::Sl15 as usize] = Some("64QAM2000-RRC");
         let mut snr_floors = [None; 21];
+        snr_floors[SpeedLevel::Sl9 as usize] = Some(9.0_f32);
+        snr_floors[SpeedLevel::Sl10 as usize] = Some(11.0_f32);
+        snr_floors[SpeedLevel::Sl11 as usize] = Some(13.0_f32);
         snr_floors[SpeedLevel::Sl12 as usize] = Some(16.0_f32);
         snr_floors[SpeedLevel::Sl13 as usize] = Some(20.0_f32);
         snr_floors[SpeedLevel::Sl14 as usize] = Some(28.0_f32);
         snr_floors[SpeedLevel::Sl15 as usize] = Some(35.0_f32);
         let mut snr_ceilings = [None; 21];
+        snr_ceilings[SpeedLevel::Sl9 as usize] = Some(12.0_f32);
+        snr_ceilings[SpeedLevel::Sl10 as usize] = Some(14.0_f32);
+        snr_ceilings[SpeedLevel::Sl11 as usize] = Some(16.0_f32);
         snr_ceilings[SpeedLevel::Sl12 as usize] = Some(20.0_f32);
         snr_ceilings[SpeedLevel::Sl13 as usize] = Some(26.0_f32);
         snr_ceilings[SpeedLevel::Sl14 as usize] = Some(33.0_f32);
