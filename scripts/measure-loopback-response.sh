@@ -15,6 +15,7 @@ IRS_SSH="${IRS_SSH:-dc0sk@dc0sk-rpi52}"
 SSH_OPTS="${SSH_OPTS:--o BatchMode=yes -o ConnectTimeout=10}"
 CARD="${CARD:-plughw:CARD=Device,DEV=0}"
 OUT="${OUT:-/tmp}"
+mkdir -p "${OUT}"
 
 ssh_iss() { ssh ${SSH_OPTS} "${ISS_SSH}" "$@"; }
 ssh_irs() { ssh ${SSH_OPTS} "${IRS_SSH}" "$@"; }

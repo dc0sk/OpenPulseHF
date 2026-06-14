@@ -1141,6 +1141,32 @@ degrade gracefully to `RadioError::Unsupported` when the rig file omits the comm
 
 ---
 
+### FF-14 — Mode spectral-efficiency audit and pruning *(backlog, no target date)*
+
+Review every registered mode by **spectral efficiency** (gross bps ÷ occupied bandwidth =
+bps/Hz) and decide which earn a place in the adaptive profiles versus being deprecated or
+kept only for research/comparison.
+
+**Motivating example**: `OFDM52` delivers ~1 444 gross bps over ~2 031 Hz ≈ **0.71 bps/Hz**,
+while `SCFDMA52` (QPSK) delivers ~2 889 bps over the *same* bandwidth ≈ **1.42 bps/Hz** —
+twice the efficiency for identical occupancy and lower PAPR. As a production rung OFDM52 is
+dominated by SCFDMA52; it is not "worth much" standalone.
+
+**Task**:
+- Build the bps/Hz table for all modes (extend `docs/mode-fec-ladder.md`); flag any mode
+  dominated on both axes (equal/narrower BW *and* ≥ throughput) by another mode.
+- Decide per dominated mode: drop from the adaptive profiles, keep as a non-default
+  research/diagnostic mode, or repurpose (e.g. OFDM for its different multipath behaviour
+  or as the comb-pilot reference, not as a throughput rung).
+- The mode *implementations* stay in the plugins (cheap to keep, useful for comparison);
+  this is about which modes the **profiles/ladder** advertise.
+
+**Candidates to examine first**: OFDM52 vs SCFDMA52; OFDM16 vs SCFDMA16; SCFDMA52-64QAM-P4
+vs SCFDMA52-64QAM; the plain rectangular 2000-baud single-carrier modes vs their `-RRC`
+variants.
+
+---
+
 ## BL-FEC series — FEC codec improvements
 
 Incremental FEC improvements tracked in [`docs/backlog-fec-improvements.md`](backlog-fec-improvements.md).
