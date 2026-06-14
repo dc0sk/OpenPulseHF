@@ -47,7 +47,7 @@ Several capabilities here are firsts or near-firsts in open-source amateur digit
 | Capability | What makes it different |
 |---|---|
 | **Post-quantum link security** | ML-DSA-44 signing + ML-KEM-768 key encapsulation negotiated in-band. Hybrid mode signs with both Ed25519 and ML-DSA-44 simultaneously. No other open HF modem does this. |
-| **SC-FDMA waveform on HF** | Single-Carrier FDMA (the LTE uplink waveform) brought to HF with DFT-CE pilot-aided channel estimation and MMSE equalization — not OFDM, so PAPR stays low. |
+| **SC-FDMA waveform on HF** | Single-Carrier FDMA (the LTE uplink waveform) brought to HF with DFT-CE pilot-aided channel estimation and MMSE equalization. (DFT-spread is the low-PAPR-capable structure; the current frequency-interleaved pilot scheme limits the realized PAPR — see [mode/FEC guide §7](docs/mode-fec-ladder.md).) |
 | **64QAM and SCFDMA-64QAM with soft demodulation** | Gray-coded 64QAM with max-log-MAP soft demodulator. Aggressive constellation for VHF/UHF links with proper soft FEC backing. |
 | **LDPC belief propagation** | Real rate-1/2 min-sum belief propagation — not a stub. First open-source HF software modem with working LDPC. |
 | **LLR-accumulating ARQ** | Soft LLR values accumulate across retransmissions (PACTOR-style Memory-ARQ), turning each retry into a soft combining gain. |
@@ -67,7 +67,7 @@ Capabilities that are firsts or near-firsts among open-source amateur digital-mo
 | # | Capability | Evidence / where to look |
 |---|---|---|
 | 1 | **Post-quantum in-band handshake** | ML-DSA-44 + ML-KEM-768 negotiated inside the ConReq/ConAck wire frames; Hybrid mode dual-signs with Ed25519 + ML-DSA-44 simultaneously (`crates/openpulse-core/src/pq_handshake.rs`) |
-| 2 | **SC-FDMA (LTE uplink waveform) on HF** | DFT-spread OFDM with DFT-CE pilot-aided channel estimation and MMSE equalization; 3–4 dB lower PAPR than equivalent OFDM (`plugins/scfdma`) |
+| 2 | **SC-FDMA (LTE uplink waveform) on HF** | DFT-spread OFDM with DFT-CE pilot-aided channel estimation and MMSE equalization (`plugins/scfdma`). DFT-spread is the low-PAPR-capable structure; realizing the full PAPR advantage over OFDM needs a non-interleaved pilot scheme (tracked: roadmap FF-14 / mode-FEC guide §7) |
 | 3 | **64QAM and SCFDMA-64QAM soft demodulation** | Gray-coded 64QAM max-log-MAP LLR demodulator; SCFDMA52-64QAM reaching 8 667 bps gross over a 2 kHz slice (`plugins/64qam`, `plugins/scfdma`) |
 | 4 | **Working LDPC belief propagation** | Rate-1/2 min-sum BP — not a passthrough stub; wired into `transmit_with_ldpc` / `receive_with_ldpc` in the modem engine (`crates/openpulse-core/src/ldpc.rs`) |
 | 5 | **LLR-accumulating Memory-ARQ** | Soft LLR values accumulated across retransmissions (PACTOR-style); mode switching on sustained NACK (`crates/openpulse-modem/src/arq_session.rs`) |
@@ -102,7 +102,7 @@ single-carrier modes; SC-FDMA/OFDM are named by data-subcarrier count and span
 | QPSK500 | `qpsk` | 500 | 2 | 1&nbsp;000 | ~550 | Single-carrier (+RRC) | |
 | 8PSK500 | `psk8` | 500 | 3 | 1&nbsp;500 | ~550 | Single-carrier (+RRC) | Gray-coded |
 | 64QAM500 | `64qam` | 500 | 6 | 3&nbsp;000 | ~550 | Single-carrier | |
-| OFDM16 | `ofdm` | — | 2 | ~444 | ~625 | OFDM (16 SCs, QPSK) | LS + ZF |
+| OFDM16 | `ofdm` | — | 2 | ~889 | ~625 | OFDM (16 SCs, QPSK) | LS + ZF; ≡ SCFDMA16 throughput |
 | SCFDMA16 | `scfdma` | — | 2 | ~889 | ~625 | SC-FDMA (16 SCs, QPSK) | DFT-CE + MMSE |
 | SCFDMA26-8PSK | `scfdma` | — | 3 | ~2&nbsp;167 | ~1&nbsp;000 | SC-FDMA (26 SCs, 8PSK) | Narrowband HOM (+3 dB/SC) |
 | SCFDMA26-16QAM | `scfdma` | — | 4 | ~2&nbsp;889 | ~1&nbsp;000 | SC-FDMA (26 SCs, 16QAM) | Narrowband HOM (+3 dB/SC) |
@@ -110,7 +110,7 @@ single-carrier modes; SC-FDMA/OFDM are named by data-subcarrier count and span
 | QPSK1000 | `qpsk` | 1&nbsp;000 | 2 | 2&nbsp;000 | ~1&nbsp;100 | Single-carrier (+RRC/HF) | |
 | 8PSK1000 | `psk8` | 1&nbsp;000 | 3 | 3&nbsp;000 | ~1&nbsp;100 | Single-carrier (+RRC/HF) | |
 | 64QAM1000 | `64qam` | 1&nbsp;000 | 6 | 6&nbsp;000 | ~1&nbsp;100 | Single-carrier | |
-| OFDM52 | `ofdm` | — | 2 | ~1&nbsp;444 | ~2&nbsp;031 | OFDM (52 SCs, QPSK) | |
+| OFDM52 | `ofdm` | — | 2 | ~2&nbsp;889 | ~2&nbsp;031 | OFDM (52 SCs, QPSK) | ≡ SCFDMA52 throughput; OFDM trades PAPR for per-SC EQ |
 | SCFDMA52 | `scfdma` | — | 2 | ~2&nbsp;889 | ~2&nbsp;031 | SC-FDMA (52 SCs, QPSK) | Adaptive pilot density |
 | SCFDMA52-8PSK | `scfdma` | — | 3 | ~4&nbsp;333 | ~2&nbsp;031 | SC-FDMA (52 SCs, 8PSK) | |
 | SCFDMA52-16QAM | `scfdma` | — | 4 | ~5&nbsp;778 | ~2&nbsp;031 | SC-FDMA (52 SCs, 16QAM) | |

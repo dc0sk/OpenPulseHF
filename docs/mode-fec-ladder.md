@@ -164,3 +164,66 @@ Combinations that **don't** make sense:
   at 100 ppm with two-pass carrier tracking) and is SNR-bound on the test cable, so
   it can only be validated in simulation, not on the current hardware. It remains a
   documented, lower-priority item rather than a v1.0 blocker.
+
+---
+
+## 7. Spectral efficiency and PAPR (the FF-14 audit)
+
+Two numbers decide whether a mode earns a place in a profile: **spectral efficiency**
+(gross bps ÷ occupied Hz) at the SNR it needs, and **PAPR** (which sets how much average
+power survives a peak-limited transmitter). Representative measurements:
+
+| Mode | Gross bps | Occ. BW | bps/Hz | ~SNR floor | PAPR (dB) |
+|---|---|---|---|---|---|
+| BPSK250 | 250 | 275 | 0.9 | 5 | 4.2 |
+| QPSK500 | 1 000 | 550 | 1.8 | 11 | 4.2 |
+| 8PSK500 | 1 500 | 550 | 2.7 | 14 | 4.2 |
+| 64QAM500 | 3 000 | 550 | 5.5 | 26 | 6.3 |
+| QPSK2000-RRC | 4 000 | 2 700 | 1.5 | 11 | 6.6 |
+| 64QAM2000-RRC | 12 000 | 2 700 | 4.4 | ~30 | 7.4 |
+| OFDM16 | ~889 | 625 | 1.4 | 8 | 11.7 |
+| OFDM52 | ~2 889 | 2 031 | 1.4 | 11 | 12.0 |
+| SCFDMA16 | ~889 | 625 | 1.4 | ~9 | 11.3 |
+| SCFDMA52 | ~2 889 | 2 031 | 1.4 | 11 | 12.1 |
+| SCFDMA52-8PSK | ~4 333 | 2 031 | 2.1 | 15 | 11.1 |
+| SCFDMA52-16QAM | ~5 778 | 2 031 | 2.8 | 16 | 12.7 |
+| SCFDMA52-64QAM | ~8 667 | 2 031 | 4.3 | 28 | 12.2 |
+| SCFDMA26-16QAM | ~2 889 | 1 000 | 2.9 | 13 | 10.9 |
+
+**Findings:**
+
+1. **bps/Hz tracks the constellation order**, as expected — single-carrier 64QAM is the
+   most efficient (5.5 bps/Hz) but needs ~26 dB; QPSK sits at ~1.8 and works near 10 dB.
+   Efficiency only matters *at the SNR the link can sustain*, so the ladder, not raw
+   bps/Hz, is what selects a mode.
+
+2. **OFDM ≡ SC-FDMA in throughput and bandwidth.** OFDM16/52 carry ~889 / ~2 889 bps over
+   the *same* subcarriers as SCFDMA16/52 (identical FFT/CP/SC geometry) — earlier docs
+   listing OFDM at ~444 / ~1 444 were wrong. So OFDM is **not less efficient**; it is
+   **redundant** with SC-FDMA on a flat channel.
+
+3. **The expected SC-FDMA PAPR advantage is currently *not realized*.** SC-FDMA's DFT
+   precoding *should* give a single-carrier-like envelope (~4–6 dB PAPR), but the measured
+   PAPR (~11–12 dB) equals OFDM's. Root cause: pilots are **frequency-interleaved every
+   5th subcarrier**, which breaks the contiguous DFT-spread mapping and restores
+   OFDM-like PAPR. At a peak-limited transmitter that ~12 dB PAPR costs ~8 dB of average
+   power vs a single-carrier mode — the dominant EVM limiter for the dense modes on the
+   hardware rig (the rig is *not* thermal-noise-limited; a chirp probe measured ~39 dB
+   SNR available on the 8 kHz path).
+
+**Decisions:**
+
+- **OFDM stays, but as a niche, not a throughput rung.** It is not in the adaptive HF
+  ladders (`hpx_hf`, `hpx_wideband_hd`); it lives in `hpx_ofdm_hf`. Its one genuine edge
+  over SC-FDMA is **per-subcarrier equalization on frequency-selective fades** — a dead
+  subcarrier costs only its own bits, whereas SC-FDMA's de-spread smears that loss across
+  the whole symbol block. Keep it for that and as a DSP reference; do not advertise it as
+  a higher-throughput option.
+- **SC-FDMA is the default multicarrier**, and its real upside (lower PAPR → more average
+  power at the TX → better dense-mode EVM) is gated behind a **pilot-scheme redesign**
+  (move pilots out of the interleaved data span: block/time-multiplexed or
+  superimposed pilots, with the matching channel-estimation change). Tracked as the PAPR
+  work item (roadmap FF-14); it is the highest-leverage lever for the dense modes on real
+  hardware.
+- No single-carrier mode is dominated; the plain rectangular 2000-baud modes remain
+  superseded by their `-RRC` variants (documented in §1).
