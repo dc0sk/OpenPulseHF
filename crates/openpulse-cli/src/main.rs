@@ -9,8 +9,9 @@
 //! openpulse modes
 //! ```
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
+use openpulse_core::fec::FecMode;
 use tracing::Level;
 
 use bpsk_plugin::BpskPlugin;
@@ -36,6 +37,26 @@ mod state;
 pub use cli::*;
 use pki::PkiClient;
 use state::load_policy_profile_or_default;
+
+/// Parse a `--fec` codec name into a [`FecMode`].
+fn parse_fec(s: &str) -> Result<FecMode> {
+    Ok(match s.to_ascii_lowercase().replace('_', "-").as_str() {
+        "none" => FecMode::None,
+        "rs" => FecMode::Rs,
+        "rs-interleaved" => FecMode::RsInterleaved,
+        "concatenated" => FecMode::Concatenated,
+        "rs-strong" => FecMode::RsStrong,
+        "soft-concatenated" => FecMode::SoftConcatenated,
+        "ldpc" => FecMode::Ldpc,
+        "turbo" => FecMode::Turbo,
+        other => {
+            return Err(anyhow!(
+                "unknown --fec '{other}' (expected none, rs, rs-interleaved, \
+                 concatenated, rs-strong, soft-concatenated, ldpc, or turbo)"
+            ))
+        }
+    })
+}
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -128,16 +149,26 @@ fn main() -> Result<()> {
             data,
             mode,
             device,
+            fec,
             center_frequency,
         } => {
             if center_frequency != 1500.0 {
                 engine.set_center_frequency(center_frequency);
             }
-            commands::transmit::run(&data, &mode, device.as_deref(), &mut engine, ptt.as_mut())?;
+            let fec = parse_fec(&fec)?;
+            commands::transmit::run(
+                &data,
+                &mode,
+                fec,
+                device.as_deref(),
+                &mut engine,
+                ptt.as_mut(),
+            )?;
         }
         Commands::Receive {
             mode,
             device,
+            fec,
             listen_ms,
             center_frequency,
             no_afc,
@@ -148,7 +179,8 @@ fn main() -> Result<()> {
             if no_afc {
                 engine.disable_afc();
             }
-            commands::receive::run(&mode, device.as_deref(), listen_ms, &mut engine)?;
+            let fec = parse_fec(&fec)?;
+            commands::receive::run(&mode, fec, device.as_deref(), listen_ms, &mut engine)?;
         }
         Commands::Devices => {
             commands::devices::run(&cli.backend)?;

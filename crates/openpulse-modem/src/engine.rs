@@ -786,12 +786,36 @@ impl ModemEngine {
     }
 
     /// Receive a frame by listening on the input stream until a decode succeeds
-    /// or the timeout elapses.
+    /// or the timeout elapses (no FEC).
     pub fn receive_with_timeout(
         &mut self,
         mode: &str,
         device: Option<&str>,
         listen_for: Duration,
+    ) -> Result<Vec<u8>, ModemError> {
+        self.receive_with_timeout_fec(mode, device, listen_for, FecMode::None)
+    }
+
+    /// As [`receive_with_timeout`](Self::receive_with_timeout) but applies the FEC
+    /// codec `fec` to each decode attempt — the timeout-scanning counterpart of
+    /// [`receive_with_fec_mode`](Self::receive_with_fec_mode), needed for live
+    /// (loopback / on-air) reception of FEC-protected frames.
+    pub fn receive_with_fec_mode_timeout(
+        &mut self,
+        mode: &str,
+        fec: FecMode,
+        device: Option<&str>,
+        listen_for: Duration,
+    ) -> Result<Vec<u8>, ModemError> {
+        self.receive_with_timeout_fec(mode, device, listen_for, fec)
+    }
+
+    fn receive_with_timeout_fec(
+        &mut self,
+        mode: &str,
+        device: Option<&str>,
+        listen_for: Duration,
+        fec: FecMode,
     ) -> Result<Vec<u8>, ModemError> {
         let audio_cfg = AudioConfig::default();
         let mut stream = self
@@ -845,6 +869,15 @@ impl ModemEngine {
                 // full 255-byte RS frame at 1 bit/symbol + 10 % margin.
                 (step, step * 32, step * 33, step * 2280)
             }
+        };
+
+        // FEC frames are larger than the un-coded frame the geometry describes
+        // (conv rate-1/2 ≈ 2×, RS ≈ 1.15×); widen the per-attempt slice so the whole
+        // coded frame is decoded rather than truncated at max_frame_samples.
+        let max_frame_samples = if matches!(fec, FecMode::None) {
+            max_frame_samples
+        } else {
+            max_frame_samples.saturating_mul(3)
         };
 
         // Adaptive silence gate (absolute floor 1e-4 mean-square, raised above
@@ -980,11 +1013,12 @@ impl ModemEngine {
                             "AFC full-retry: pos={start} correction={:.1}Hz",
                             self.afc_correction_hz
                         );
-                        match self.receive_from_samples(
+                        match self.decode_attempt(
                             mode,
                             AudioSamples {
                                 samples: accumulated[start..end].to_vec(),
                             },
+                            fec,
                         ) {
                             Ok(payload) => return Ok(payload),
                             Err(err) => {
@@ -1075,11 +1109,12 @@ impl ModemEngine {
                     // attempts per outer loop accumulate >1000 Hz of drift.
                     let afc_before = self.afc_correction_hz;
                     debug!("AFC decode: pos={} correction={:.1}Hz", start, afc_before);
-                    match self.receive_from_samples(
+                    match self.decode_attempt(
                         mode,
                         AudioSamples {
                             samples: accumulated[start..end].to_vec(),
                         },
+                        fec,
                     ) {
                         Ok(payload) => return Ok(payload),
                         Err(err) => {
@@ -1177,6 +1212,127 @@ impl ModemEngine {
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         info!("received frame seq={}", frame.sequence);
 
+        let _ = self.event_tx.send(EngineEvent::FrameReceived {
+            mode: mode.to_string(),
+            bytes: frame.payload.len(),
+        });
+        Ok(frame.payload)
+    }
+
+    /// Dispatch one decode attempt: no-FEC uses the unchanged
+    /// [`receive_from_samples`](Self::receive_from_samples); otherwise the
+    /// FEC-aware path. Keeps the `FecMode::None` behaviour byte-identical.
+    fn decode_attempt(
+        &mut self,
+        mode: &str,
+        samples: AudioSamples,
+        fec: FecMode,
+    ) -> Result<Vec<u8>, ModemError> {
+        match fec {
+            FecMode::None => self.receive_from_samples(mode, samples),
+            _ => self.receive_from_samples_with_fec(mode, samples, fec),
+        }
+    }
+
+    /// FEC-aware counterpart of [`receive_from_samples`](Self::receive_from_samples):
+    /// demodulate the slice, apply codec `fec`, then decode the frame. Mirrors the
+    /// one-shot `receive_with_*_fec` methods but operates on a provided sample slice
+    /// so the timeout-scanning loop can apply FEC per attempt.
+    fn receive_from_samples_with_fec(
+        &mut self,
+        mode: &str,
+        samples: AudioSamples,
+        fec: FecMode,
+    ) -> Result<Vec<u8>, ModemError> {
+        let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+
+        let prev_busy = self.dcd.is_busy();
+        self.dcd.update(&samples.samples);
+        if self.dcd.is_busy() != prev_busy {
+            let _ = self.event_tx.send(EngineEvent::DcdChange {
+                busy: self.dcd.is_busy(),
+                energy: self.dcd.energy(),
+            });
+        }
+
+        let mod_cfg = ModulationConfig {
+            mode: mode.to_string(),
+            center_frequency: self.center_frequency + self.afc_correction_hz,
+            afc_correction_hz: self.afc_correction_hz,
+            ..ModulationConfig::default()
+        };
+
+        let soft = matches!(
+            fec,
+            FecMode::SoftConcatenated | FecMode::Ldpc | FecMode::Turbo
+        );
+
+        // Soft codecs consume LLRs; hard codecs consume demodulated wire bytes.
+        let (llrs, raw_wire) = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            if soft {
+                (
+                    Some(plugin.demodulate_soft(&samples.samples, &mod_cfg)?),
+                    None,
+                )
+            } else {
+                (
+                    None,
+                    Some(self.stage_demodulate_payload(plugin, mode, &samples)?),
+                )
+            }
+        };
+
+        self.update_afc_estimate(mode, &samples.samples);
+        if let Some(hz) = self.last_afc_offset_hz {
+            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
+                offset_hz: hz,
+                correction_hz: self.afc_correction_hz,
+                mode: mode.to_string(),
+            });
+        }
+
+        let corrected = match fec {
+            FecMode::Rs => {
+                let wire =
+                    self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire.unwrap())?;
+                WirePayload {
+                    bytes: FecCodec::new().decode(&wire.bytes)?,
+                }
+            }
+            FecMode::RsInterleaved => {
+                let wire =
+                    self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire.unwrap())?;
+                let deint = Interleaver::new(DEFAULT_INTERLEAVER_DEPTH).deinterleave(&wire.bytes);
+                WirePayload {
+                    bytes: FecCodec::new().decode(&deint)?,
+                }
+            }
+            FecMode::SoftConcatenated => {
+                let llrs = llrs.unwrap();
+                let sv = SoftViterbiCodec.decode_soft(&llrs)?;
+                let rs = FecCodec::new().decode(&sv)?;
+                self.route_wire_stage(PipelineStage::DemodulateDecode, WirePayload { bytes: rs })?
+            }
+            FecMode::Ldpc => {
+                let llrs = llrs.unwrap();
+                let ldpc_llrs = &llrs[..(LDPC_CODEWORD_BYTES * 8).min(llrs.len())];
+                let info = LdpcCodec::new().decode_soft(ldpc_llrs)?;
+                self.route_wire_stage(PipelineStage::DemodulateDecode, WirePayload { bytes: info })?
+            }
+            other => {
+                return Err(ModemError::Demodulation(format!(
+                    "FEC mode {other:?} is not supported by the timeout receive; \
+                     use receive_with_fec_mode for a single-shot decode"
+                )))
+            }
+        };
+
+        let frame = self.stage_decode_frame(&corrected)?;
+        let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         let _ = self.event_tx.send(EngineEvent::FrameReceived {
             mode: mode.to_string(),
             bytes: frame.payload.len(),
