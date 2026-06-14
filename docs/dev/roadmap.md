@@ -1141,29 +1141,39 @@ degrade gracefully to `RadioError::Unsupported` when the rig file omits the comm
 
 ---
 
-### FF-14 — Mode spectral-efficiency audit and pruning *(backlog, no target date)*
+### FF-14 — SC-FDMA PAPR: non-interleaved pilot redesign *(backlog, no target date)*
 
-Review every registered mode by **spectral efficiency** (gross bps ÷ occupied bandwidth =
-bps/Hz) and decide which earn a place in the adaptive profiles versus being deprecated or
-kept only for research/comparison.
+The mode spectral-efficiency audit is **done** — see `docs/mode-fec-ladder.md` §7. It found:
+- OFDM16/52 are *not* less efficient than SC-FDMA (they share the exact FFT/CP/SC geometry,
+  ~889/~2889 bps; earlier ~444/~1444 figures were wrong). OFDM is **redundant** with
+  SC-FDMA on a flat channel; it stays only as the per-subcarrier-EQ option for
+  frequency-selective fades, not as a throughput rung. No profile pruning needed.
+- The remaining real work: **SC-FDMA's PAPR advantage is not realized.** Measured PAPR is
+  ~11–12 dB for both OFDM and SC-FDMA, where DFT-spread should give ~4–6 dB. Root cause:
+  pilots are **frequency-interleaved every 5th subcarrier**, which breaks the contiguous
+  DFT-spread mapping and restores OFDM-like PAPR.
 
-**Motivating example**: `OFDM52` delivers ~1 444 gross bps over ~2 031 Hz ≈ **0.71 bps/Hz**,
-while `SCFDMA52` (QPSK) delivers ~2 889 bps over the *same* bandwidth ≈ **1.42 bps/Hz** —
-twice the efficiency for identical occupancy and lower PAPR. As a production rung OFDM52 is
-dominated by SCFDMA52; it is not "worth much" standalone.
+**Why it matters**: the modulator emits an unnormalised ~2.8-peak waveform; with the TX
+limiter off by default it hard-clips at the DAC, and that clipping EVM is the dominant
+dense-mode limiter on the hardware rig (QPSK survives it, 16QAM+ do not — soft FEC and
+narrowing are the current workarounds). The rig is *not* thermal-noise-limited (~39 dB SNR
+available). Peak-normalising instead of clipping is not a free win — a 12 dB-PAPR signal
+peak-limited to 1.0 loses ~8 dB of average power (and can drop below the RX energy gate),
+so the genuine fix is to **reduce PAPR**, not just rescale.
 
 **Task**:
-- Build the bps/Hz table for all modes (extend `docs/mode-fec-ladder.md`); flag any mode
-  dominated on both axes (equal/narrower BW *and* ≥ throughput) by another mode.
-- Decide per dominated mode: drop from the adaptive profiles, keep as a non-default
-  research/diagnostic mode, or repurpose (e.g. OFDM for its different multipath behaviour
-  or as the comb-pilot reference, not as a throughput rung).
-- The mode *implementations* stay in the plugins (cheap to keep, useful for comparison);
-  this is about which modes the **profiles/ladder** advertise.
+- Move pilots out of the DFT-spread data span — block/time-multiplexed pilot symbols or
+  superimposed pilots — and update `dft_ce_estimate` to match; re-validate decode + PAPR.
+- Alternatively/additionally a PAPR-reduction stage (clip-and-filter or tone reservation).
+- Interim: deliberate TX level management (never ship |sample|>1.0 to the backend); tune
+  the existing `tx_limiter_threshold` / `tx_attenuation_db` against the dense modes on the
+  hardware rig.
+- Validation is hardware-gated (the PAPR/clipping penalty only manifests at a peak-limited
+  DAC; the in-process loopback is float and does not clip).
 
-**Candidates to examine first**: OFDM52 vs SCFDMA52; OFDM16 vs SCFDMA16; SCFDMA52-64QAM-P4
-vs SCFDMA52-64QAM; the plain rectangular 2000-baud single-carrier modes vs their `-RRC`
-variants.
+**Other audit notes** (no action, documented for completeness): SCFDMA52-64QAM-P4 trades
+throughput for dense pilots (high-Doppler use, not dominated); plain rectangular 2000-baud
+single-carrier modes remain superseded by their `-RRC` variants.
 
 ---
 
