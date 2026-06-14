@@ -128,11 +128,13 @@ impl SessionProfile {
         }
     }
 
-    /// HPX HF profile: HF-compliant rate ladder (SL2–SL8), capped at SCFDMA52-8PSK (≈2031 Hz BW).
+    /// HPX HF profile: the full HF-compliant rate ladder (SL2–SL11), up to SCFDMA52-64QAM.
     ///
-    /// Every mode in this profile fits within the 2700 Hz HF channel-width limit.
-    /// Use this profile for on-air HF operation.  For FM/satellite/UHF links with wider
-    /// channels use [`SessionProfile::hpx_wideband`].
+    /// Every mode here fits within the 2700 Hz HF channel-width limit (SCFDMA52-* is
+    /// ≈2031 Hz), so the ladder spans weak-signal BPSK all the way to 64QAM SC-FDMA on
+    /// HF.  The dense top rungs (SL9–SL11) run FEC-protected (soft-concatenated).  For
+    /// SNR-marginal links, `hpx_wideband_hd` provides the narrowband SCFDMA26-* fallback
+    /// rungs; for genuinely wider-than-3 kHz channels (FM/UHF/VHF) use `hpx_wideband`.
     ///
     /// | SL  | Mode            |
     /// |-----|-----------------|
@@ -143,7 +145,9 @@ impl SessionProfile {
     /// | SL6 | QPSK500         |
     /// | SL7 | 8PSK500         |
     /// | SL8 | SCFDMA52-8PSK   |
-    /// | SL12+ | — (reserved until `SCFDMA_QAM_HF_ENTRY_POLICY` is satisfied) |
+    /// | SL9 | SCFDMA52-16QAM  |
+    /// | SL10 | SCFDMA52-32QAM |
+    /// | SL11 | SCFDMA52-64QAM |
     pub fn hpx_hf() -> Self {
         let mut modes = [None; 21];
         modes[SpeedLevel::Sl2 as usize] = Some("BPSK31");
@@ -153,6 +157,13 @@ impl SessionProfile {
         modes[SpeedLevel::Sl6 as usize] = Some("QPSK500");
         modes[SpeedLevel::Sl7 as usize] = Some("8PSK500");
         modes[SpeedLevel::Sl8 as usize] = Some("SCFDMA52-8PSK");
+        // SL9–SL11: the higher-order SC-FDMA modes are all ≤2 kHz occupied (well within
+        // the 2700 Hz HF channel), so they belong on the HF ladder rather than a separate
+        // "wideband" profile. They run FEC-protected (soft-concatenated). The narrowband
+        // SCFDMA26-* fallbacks live in `hpx_wideband_hd` for SNR-marginal links.
+        modes[SpeedLevel::Sl9 as usize] = Some("SCFDMA52-16QAM");
+        modes[SpeedLevel::Sl10 as usize] = Some("SCFDMA52-32QAM");
+        modes[SpeedLevel::Sl11 as usize] = Some("SCFDMA52-64QAM");
         let mut snr_floors = [None; 21];
         snr_floors[SpeedLevel::Sl2 as usize] = Some(3.0_f32);
         snr_floors[SpeedLevel::Sl3 as usize] = Some(4.0_f32);
@@ -161,6 +172,9 @@ impl SessionProfile {
         snr_floors[SpeedLevel::Sl6 as usize] = Some(11.0_f32);
         snr_floors[SpeedLevel::Sl7 as usize] = Some(14.0_f32);
         snr_floors[SpeedLevel::Sl8 as usize] = Some(16.0_f32);
+        snr_floors[SpeedLevel::Sl9 as usize] = Some(18.0_f32);
+        snr_floors[SpeedLevel::Sl10 as usize] = Some(22.0_f32);
+        snr_floors[SpeedLevel::Sl11 as usize] = Some(28.0_f32);
         let mut snr_ceilings = [None; 21];
         snr_ceilings[SpeedLevel::Sl2 as usize] = Some(8.0_f32);
         snr_ceilings[SpeedLevel::Sl3 as usize] = Some(9.0_f32);
@@ -168,14 +182,19 @@ impl SessionProfile {
         snr_ceilings[SpeedLevel::Sl5 as usize] = Some(14.0_f32);
         snr_ceilings[SpeedLevel::Sl6 as usize] = Some(18.0_f32);
         snr_ceilings[SpeedLevel::Sl7 as usize] = Some(20.0_f32);
-        // SL8 is the ceiling of hpx_hf; no upgrade above it.
+        snr_ceilings[SpeedLevel::Sl8 as usize] = Some(18.0_f32);
+        snr_ceilings[SpeedLevel::Sl9 as usize] = Some(22.0_f32);
+        snr_ceilings[SpeedLevel::Sl10 as usize] = Some(28.0_f32);
+        // SL11 (SCFDMA52-64QAM) is the ceiling of hpx_hf; no upgrade above it.
         Self {
             modes,
             initial_level: SpeedLevel::Sl2,
             nack_threshold: 3,
             snr_floors,
             snr_ceilings,
-            ack_up_requires_snr_candidate_at: None,
+            // Guard admission to the densest rung (64QAM) behind a prior SNR upgrade
+            // candidate, mirroring hpx_wideband_hd.
+            ack_up_requires_snr_candidate_at: Some(SpeedLevel::Sl11),
         }
     }
 
