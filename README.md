@@ -90,7 +90,7 @@ single-carrier modes; SC-FDMA/OFDM are named by data-subcarrier count and span
 `total_SCs × 31.25 Hz`). The single-carrier modes also have `-RRC` (α = 0.35,
 ~+35 % bandwidth) and `-HF` tuning variants not all listed here.
 
-| Mode | Plugin | Baud | Bits/sym | Gross bps | Occ. BW (Hz) | Waveform | Notes |
+| Mode | Plugin | Baud | Bits/sym | Gross&nbsp;bps | Occ.&nbsp;BW&nbsp;(Hz) | Waveform | Notes |
 |---|---|---|---|---|---|---|---|
 | BPSK31 | `bpsk` | 31.25 | 1 | 31 | ~50 | Single-carrier | Weak-signal narrowband HF |
 | BPSK63 | `bpsk` | 62.5 | 1 | 63 | ~70 | Single-carrier | |
@@ -99,29 +99,29 @@ single-carrier modes; SC-FDMA/OFDM are named by data-subcarrier count and span
 | BPSK250 | `bpsk` | 250 | 1 | 250 | ~275 | Single-carrier (+RRC) | |
 | QPSK250 | `qpsk` | 250 | 2 | 500 | ~275 | Single-carrier | |
 | FSK4-ACK | `fsk4` | 100 | 2 | 200 | ~400 | 4-FSK | ACK control channel only |
-| QPSK500 | `qpsk` | 500 | 2 | 1 000 | ~550 | Single-carrier (+RRC) | |
-| 8PSK500 | `psk8` | 500 | 3 | 1 500 | ~550 | Single-carrier (+RRC) | Gray-coded |
-| 64QAM500 | `64qam` | 500 | 6 | 3 000 | ~550 | Single-carrier | |
+| QPSK500 | `qpsk` | 500 | 2 | 1&nbsp;000 | ~550 | Single-carrier (+RRC) | |
+| 8PSK500 | `psk8` | 500 | 3 | 1&nbsp;500 | ~550 | Single-carrier (+RRC) | Gray-coded |
+| 64QAM500 | `64qam` | 500 | 6 | 3&nbsp;000 | ~550 | Single-carrier | |
 | OFDM16 | `ofdm` | — | 2 | ~444 | ~625 | OFDM (16 SCs, QPSK) | LS + ZF |
 | SCFDMA16 | `scfdma` | — | 2 | ~889 | ~625 | SC-FDMA (16 SCs, QPSK) | DFT-CE + MMSE |
-| SCFDMA26-8PSK | `scfdma` | — | 3 | ~2 167 | ~1 000 | SC-FDMA (26 SCs, 8PSK) | Narrowband HOM (+3 dB/SC) |
-| SCFDMA26-16QAM | `scfdma` | — | 4 | ~2 889 | ~1 000 | SC-FDMA (26 SCs, 16QAM) | Narrowband HOM (+3 dB/SC) |
-| SCFDMA26-32QAM | `scfdma` | — | 5 | ~3 611 | ~1 000 | SC-FDMA (26 SCs, cross-32QAM) | Narrowband HOM (+3 dB/SC) |
-| QPSK1000 | `qpsk` | 1 000 | 2 | 2 000 | ~1 100 | Single-carrier (+RRC/HF) | |
-| 8PSK1000 | `psk8` | 1 000 | 3 | 3 000 | ~1 100 | Single-carrier (+RRC/HF) | |
-| 64QAM1000 | `64qam` | 1 000 | 6 | 6 000 | ~1 100 | Single-carrier | |
-| OFDM52 | `ofdm` | — | 2 | ~1 444 | ~2 031 | OFDM (52 SCs, QPSK) | |
-| SCFDMA52 | `scfdma` | — | 2 | ~2 889 | ~2 031 | SC-FDMA (52 SCs, QPSK) | Adaptive pilot density |
-| SCFDMA52-8PSK | `scfdma` | — | 3 | ~4 333 | ~2 031 | SC-FDMA (52 SCs, 8PSK) | |
-| SCFDMA52-16QAM | `scfdma` | — | 4 | ~5 778 | ~2 031 | SC-FDMA (52 SCs, 16QAM) | |
-| SCFDMA52-32QAM | `scfdma` | — | 5 | ~7 222 | ~2 031 | SC-FDMA (52 SCs, cross-32QAM) | |
-| SCFDMA52-64QAM | `scfdma` | — | 6 | ~8 667 | ~2 031 | SC-FDMA (52 SCs, 64QAM) | |
-| SCFDMA52-64QAM-P4 | `scfdma` | — | 6 | ~8 167 | ~2 031 | SC-FDMA (49 SCs, dense pilots) | |
-| QPSK2000-RRC | `qpsk` | 2 000 | 2 | 4 000 | ~2 700 | Single-carrier + RRC | |
-| 8PSK2000-RRC | `psk8` | 2 000 | 3 | 6 000 | ~2 700 | Single-carrier + RRC | |
-| 64QAM2000-RRC | `64qam` | 2 000 | 6 | 12 000 | ~2 700 | Single-carrier + RRC | Requires SNR ≥ 25 dB |
-| _QPSK9600-RRC_ | `qpsk` | 9 600 | 2 | 19 200 | ~13 000 | Single-carrier + RRC | **Deferred (post-1.0)** — VHF/UHF, needs ≥38.4 kHz Fs |
-| _8PSK9600-RRC_ | `psk8` | 9 600 | 3 | 28 800 | ~13 000 | Single-carrier + RRC | **Deferred (post-1.0)** — VHF/UHF, needs ≥38.4 kHz Fs |
+| SCFDMA26-8PSK | `scfdma` | — | 3 | ~2&nbsp;167 | ~1&nbsp;000 | SC-FDMA (26 SCs, 8PSK) | Narrowband HOM (+3 dB/SC) |
+| SCFDMA26-16QAM | `scfdma` | — | 4 | ~2&nbsp;889 | ~1&nbsp;000 | SC-FDMA (26 SCs, 16QAM) | Narrowband HOM (+3 dB/SC) |
+| SCFDMA26-32QAM | `scfdma` | — | 5 | ~3&nbsp;611 | ~1&nbsp;000 | SC-FDMA (26 SCs, cross-32QAM) | Narrowband HOM (+3 dB/SC) |
+| QPSK1000 | `qpsk` | 1&nbsp;000 | 2 | 2&nbsp;000 | ~1&nbsp;100 | Single-carrier (+RRC/HF) | |
+| 8PSK1000 | `psk8` | 1&nbsp;000 | 3 | 3&nbsp;000 | ~1&nbsp;100 | Single-carrier (+RRC/HF) | |
+| 64QAM1000 | `64qam` | 1&nbsp;000 | 6 | 6&nbsp;000 | ~1&nbsp;100 | Single-carrier | |
+| OFDM52 | `ofdm` | — | 2 | ~1&nbsp;444 | ~2&nbsp;031 | OFDM (52 SCs, QPSK) | |
+| SCFDMA52 | `scfdma` | — | 2 | ~2&nbsp;889 | ~2&nbsp;031 | SC-FDMA (52 SCs, QPSK) | Adaptive pilot density |
+| SCFDMA52-8PSK | `scfdma` | — | 3 | ~4&nbsp;333 | ~2&nbsp;031 | SC-FDMA (52 SCs, 8PSK) | |
+| SCFDMA52-16QAM | `scfdma` | — | 4 | ~5&nbsp;778 | ~2&nbsp;031 | SC-FDMA (52 SCs, 16QAM) | |
+| SCFDMA52-32QAM | `scfdma` | — | 5 | ~7&nbsp;222 | ~2&nbsp;031 | SC-FDMA (52 SCs, cross-32QAM) | |
+| SCFDMA52-64QAM | `scfdma` | — | 6 | ~8&nbsp;667 | ~2&nbsp;031 | SC-FDMA (52 SCs, 64QAM) | |
+| SCFDMA52-64QAM-P4 | `scfdma` | — | 6 | ~8&nbsp;167 | ~2&nbsp;031 | SC-FDMA (49 SCs, dense pilots) | |
+| QPSK2000-RRC | `qpsk` | 2&nbsp;000 | 2 | 4&nbsp;000 | ~2&nbsp;700 | Single-carrier + RRC | |
+| 8PSK2000-RRC | `psk8` | 2&nbsp;000 | 3 | 6&nbsp;000 | ~2&nbsp;700 | Single-carrier + RRC | |
+| 64QAM2000-RRC | `64qam` | 2&nbsp;000 | 6 | 12&nbsp;000 | ~2&nbsp;700 | Single-carrier + RRC | Requires SNR ≥ 25 dB |
+| _QPSK9600-RRC_ | `qpsk` | 9&nbsp;600 | 2 | 19&nbsp;200 | ~13&nbsp;000 | Single-carrier + RRC | **Deferred (post-1.0)** — VHF/UHF, needs ≥38.4 kHz Fs |
+| _8PSK9600-RRC_ | `psk8` | 9&nbsp;600 | 3 | 28&nbsp;800 | ~13&nbsp;000 | Single-carrier + RRC | **Deferred (post-1.0)** — VHF/UHF, needs ≥38.4 kHz Fs |
 
 The mode/FEC selection ladder and which combinations are usable on HF is documented in [docs/mode-fec-ladder.md](docs/mode-fec-ladder.md).
 
