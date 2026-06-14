@@ -53,6 +53,11 @@ pub enum Commands {
         mode: String,
         #[arg(short, long)]
         device: Option<String>,
+        /// Forward error correction codec. One of: none, rs, rs-interleaved,
+        /// concatenated, rs-strong, soft-concatenated, ldpc, turbo. The receiver
+        /// must pass the same value.
+        #[arg(long, default_value = "none")]
+        fec: String,
         /// Audio carrier center frequency in Hz (default: 1500).
         /// Use when the receive side expects the signal at a specific audio
         /// frequency due to rig VFO offset (e.g. --center-frequency 2550).
@@ -65,6 +70,11 @@ pub enum Commands {
         mode: String,
         #[arg(short, long)]
         device: Option<String>,
+        /// Forward error correction codec; must match the transmitter's `--fec`.
+        /// Timeout (`--listen-ms`) reception supports: none, rs, rs-interleaved,
+        /// soft-concatenated, ldpc.
+        #[arg(long, default_value = "none")]
+        fec: String,
         /// Listen for up to this many milliseconds before giving up.
         #[arg(long)]
         listen_ms: Option<u64>,

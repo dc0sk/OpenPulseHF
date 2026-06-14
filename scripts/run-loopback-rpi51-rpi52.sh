@@ -41,6 +41,7 @@ IRS_DEVICE="${IRS_DEVICE:-plughw:CARD=Device,DEV=0}"
 IRS_STARTUP_WAIT="${IRS_STARTUP_WAIT:-10}"  # seconds before ISS starts TX
 IRS_LISTEN_MS="${IRS_LISTEN_MS:-45000}"     # IRS receive window (ms)
 TX_TIMEOUT="${TX_TIMEOUT:-60}"              # hard ISS transmit timeout (s)
+FEC="${FEC:-none}"                          # FEC codec (none|rs|rs-interleaved|soft-concatenated|ldpc)
 KILL_WAIT="${KILL_WAIT:-12}"                # seconds after TX before killing IRS
 
 # ── Test matrix ────────────────────────────────────────────────────────────────
@@ -218,6 +219,7 @@ sys.stdout.write(''.join(secrets.choice(a) for _ in range(${PAYLOAD_SIZE})))
             --ptt none \
             receive \
             --mode '${MODE}' \
+            --fec '${FEC}' \
             --listen-ms ${IRS_LISTEN_MS} \
             --device '${IRS_DEVICE}' \
             --no-afc \
@@ -248,6 +250,7 @@ sys.stdout.write(''.join(secrets.choice(a) for _ in range(${PAYLOAD_SIZE})))
             --ptt none \
             transmit \
             --mode '${MODE}' \
+            --fec '${FEC}' \
             --device '${ISS_DEVICE}' \
             '${payload_text}' \
             >'${iss_log}' 2>&1" \
