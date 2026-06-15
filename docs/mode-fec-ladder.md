@@ -104,20 +104,50 @@ Two rules of thumb:
 ## 4. Adaptive profiles (the SpeedLevel ladders)
 
 Each profile is a `SpeedLevel → {mode, SNR floor, SNR ceiling}` map in
-`crates/openpulse-core/src/profile.rs`. The controller starts at `initial_level`
-and walks up/down.
+`crates/openpulse-core/src/profile.rs`. The controller starts at `initial_level`,
+steps **down** when the estimated SNR drops below a rung's floor (or after
+`nack_threshold` consecutive NACKs), and steps **up** when SNR clears a rung's
+ceiling *and* a positive ACK arrives.
 
-| Profile | Rungs (low → high) | Use |
-|---|---|---|
-| `hpx500` | BPSK31 → BPSK63 → BPSK250 → QPSK250 → QPSK500 | Robust narrowband HF |
-| `hpx_hf` | …BPSK → QPSK → 8PSK500 → SCFDMA52-8PSK | HF-compliant, ≤2 kHz |
-| `hpx_wideband_hd` | **SCFDMA26-8PSK/16QAM/32QAM (SL9–11)** → SCFDMA52-16QAM/-32QAM/-64QAM → 64QAM2000-RRC (SL12–15) | Wideband HD; the SL9–11 narrowband rungs are the graceful-degradation path |
-| `hpx_narrowband_hd` | QPSK/8PSK 9600-RRC | Post-1.0 (wider than 3 kHz; deferred) |
+| Profile | Class | Rungs (low → high) | Use |
+|---|---|---|---|
+| `hpx500` | Narrowband | BPSK31 → BPSK63 → BPSK250 → QPSK250 → QPSK500 | Robust, ≤600 Hz HF |
+| **`hpx_hf`** | **HF (≤2700 Hz)** | **BPSK31/63/250 → QPSK250/500 → 8PSK500 → SCFDMA52-{8PSK,16QAM,32QAM,64QAM}** | **Primary HF profile — the full HF-legal span** |
+| `hpx_ofdm_hf` | HF multicarrier | OFDM16 → OFDM52 | OFDM reference / frequency-selective fades |
+| `hpx_wideband_hd` | Wideband HD | SCFDMA26-{8PSK,16QAM,32QAM} (SL9–11 fallback) → SCFDMA52-{16QAM,32QAM,64QAM} → 64QAM2000-RRC (SL12–15) | >2700 Hz links; SL9–11 are the graceful-degradation rungs |
+| `hpx_wideband` / `hpx_narrowband` / `hpx_narrowband_hd` | Wide / post-1.0 | QPSK/8PSK 1000, 2000-RRC, 9600-RRC | FM / VHF / UHF or wider-than-HF; deferred (§8) |
 
-The key design point in `hpx_wideband_hd`: when the link cannot sustain the
-full-width SL12+ modes, the controller drops onto the **half-width `SCFDMA26-*`
-rungs** (SL9–11) — same constellations, ~+3 dB per-subcarrier SNR — instead of
-falling all the way back to QPSK.
+### `hpx_hf` — the primary HF ladder (the full ≤2700 Hz span)
+
+This is the profile for a real HF SSB channel. It spans the **entire** mode set that
+fits the 2700 Hz channel — from the most robust BPSK to the densest SC-FDMA — so one
+adaptive session walks from weak-signal to high-throughput without switching profiles:
+
+| SL | Mode | SNR floor | SNR ceiling | Notes |
+|---|---|---|---|---|
+| SL2 | BPSK31 | 3 | 8 | weak-signal floor; `initial_level` |
+| SL3 | BPSK63 | 4 | 9 | |
+| SL4 | BPSK250 | 5 | 11 | |
+| SL5 | QPSK250 | 9 | 14 | |
+| SL6 | QPSK500 | 11 | 18 | workhorse |
+| SL7 | 8PSK500 | 14 | 20 | |
+| SL8 | SCFDMA52-8PSK | 16 | 18 | first multicarrier rung |
+| SL9 | SCFDMA52-16QAM | 18 | 22 | FEC-protected (soft) |
+| SL10 | SCFDMA52-32QAM | 22 | 28 | FEC-protected (soft) |
+| SL11 | SCFDMA52-64QAM | 28 | — | densest HF rung; gated admission |
+
+Design points:
+
+- **One HF ladder, not two.** Earlier drafts split the dense SC-FDMA modes into a
+  separate "wideband" profile. They are all **≤2 kHz occupied** (well inside 2700 Hz),
+  so they belong on the HF ladder. `SCFDMA52-16QAM/-32QAM/-64QAM` (SL9–11) run
+  **FEC-protected** (`SoftConcatenated`), never no-FEC (see §5).
+- **The densest rung is gated.** SL11 (SCFDMA52-64QAM, ~28 dB) is admitted only after a
+  prior SNR-upgrade candidate (`ack_up_requires_snr_candidate_at = SL11`), so the
+  controller never jumps to 64QAM on one lucky ACK.
+- **The half-width `SCFDMA26-*` rungs are the SNR-marginal fallback** and live in
+  `hpx_wideband_hd` (SL9–11), not `hpx_hf`: same constellations at ~1 kHz, ~+3 dB
+  per-subcarrier SNR, for when the full-width modes won't close.
 
 ---
 
@@ -227,3 +257,86 @@ power survives a peak-limited transmitter). Representative measurements:
   hardware.
 - No single-carrier mode is dominated; the plain rectangular 2000-baud modes remain
   superseded by their `-RRC` variants (documented in §1).
+
+### SC-FDMA vs OFDM, and the PAPR tradeoff
+
+**Is there truly an advantage to SC-FDMA over OFDM?** *In theory yes; in this
+implementation, not yet.* SC-FDMA's DFT precoding is meant to give a
+single-carrier-like envelope (~4–6 dB PAPR vs OFDM's ~12 dB), and that lower PAPR is
+the entire point — it lets a peak-limited transmitter put more average power on air.
+But our pilots are frequency-interleaved (every 5th subcarrier), which breaks the
+contiguous DFT-spread and restores OFDM-like ~12 dB PAPR (finding 3 above). So **today
+the two are equivalent**: same throughput, same bandwidth, same PAPR — and OFDM even
+keeps one real edge, per-subcarrier equalization, where a single faded subcarrier costs
+only its own bits instead of smearing across the whole de-spread block.
+
+**Can SC-FDMA compete on stability and throughput?**
+
+- *Throughput* — already equal (identical FFT/CP/SC geometry).
+- *Stability* — equal on a flat channel. On a frequency-selective fade OFDM is
+  currently more robust (per-SC equalization); SC-FDMA needs solid pilot-aided MMSE
+  equalization or it suffers noise enhancement on deep-faded subcarriers. SC-FDMA's
+  compensating advantage — tolerance of PAPR-induced clipping — is exactly what the
+  hardware rig is limited by (EVM/PAPR-bound, not noise-bound), but it stays unrealized
+  while the pilots are interleaved. **Net: SC-FDMA can match OFDM now and beat it on a
+  clipping-limited TX — but only after the PAPR redesign.**
+
+**What PAPR work is needed, and what is the tradeoff?** The fix (roadmap FF-14) moves
+the pilots out of the interleaved data span so the data subcarriers stay contiguous and
+the DFT-spread actually lowers PAPR. The options and their costs:
+
+| Pilot scheme | PAPR | Channel tracking | Overhead |
+|---|---|---|---|
+| Frequency-interleaved (today) | ~12 dB (no benefit) | per-symbol, excellent | moderate |
+| Time-multiplexed (pilot symbols) | ~4–6 dB (full benefit) | per *block*, coarser | a few dedicated symbols |
+| Superimposed (pilots added to data) | low | per-symbol | power split + self-interference |
+
+The core tradeoff is **low PAPR vs fast channel tracking**: interleaved pilots track
+every symbol (good for fast fading) but kill PAPR; time-multiplexed pilots restore the
+low PAPR but track only as often as the pilot symbols recur. On HF this favours the
+redesign — Doppler is slow (~0.1–1 Hz), so pilots every few symbols track the channel
+fine, and the ~6–8 dB of average-power headroom recovered at the TX is worth far more on
+a clipping-limited link than per-symbol pilots are. The cost is the channel-estimator
+rewrite plus a small pilot-symbol overhead. It is the highest-leverage lever for the
+dense modes on real hardware.
+
+---
+
+## 8. Sample rate vs channel bandwidth (why 8 kHz, and the wide-mode ceiling)
+
+The modem runs its DSP at **8 kHz**. The soundcards run at 48 kHz (or 44.1); ALSA's
+`plug` layer resamples 8 ↔ 48 kHz, and cpal opens the device at 8 kHz. This is
+deliberate, and it is a common source of confusion, so to be precise:
+
+**Sample rate (Fs) is not channel bandwidth.** 8 kHz Fs gives a usable passband up to
+the Nyquist limit of **4 kHz**. An HF SSB channel is ~300–2700 Hz, so 8 kHz covers it
+with margin to spare. Two *independent* constraints decide whether a mode runs at 8 kHz:
+
+1. **Occupied bandwidth < Nyquist (4 kHz).** Every HF mode (≤2700 Hz occupied) clears
+   this easily — SCFDMA52 tops out near 2.5 kHz.
+2. **Enough samples per symbol.** A single-carrier mode needs ≥~4 samples/symbol for
+   clean timing recovery, i.e. `Fs ≥ ~4 × baud`. At 8 kHz that caps the baud rate near
+   2000 (hence `QPSK2000-RRC` is the fastest single-carrier HF mode).
+
+**Why 8 kHz and not 48 kHz:** matching Fs to the channel keeps CPU and memory low —
+every FFT, filter, and equalizer runs on ⅙ the samples — with no loss, because
+oversampling a 2.7 kHz channel at 48 kHz buys nothing on air. It is the same reason
+VARA, ARDOP, and Mercury use 8 kHz (or 12 kHz) internal rates. The 48 kHz card rate
+exists only because consumer sound hardware does not natively clock 8 kHz; the
+resampler bridges it, and the chirp probe confirmed the resampler is flat well past
+3 kHz (see `docs/dev/virtual-loopback.md`).
+
+**The wide-mode ceiling (why the 9600-baud modes are deferred).** `QPSK9600-RRC` and the
+other 9600-baud modes are **physically impossible at 8 kHz** on *both* counts:
+
+- 9600 baud × (1 + 0.35 RRC) ≈ **13 kHz occupied** — over 3× the 4 kHz Nyquist.
+- 9600 baud needs `Fs ≥ ~38.4 kHz` just for 4 samples/symbol; at 8 kHz that is 0.83
+  samples/symbol, which cannot be demodulated at all.
+
+So they need **two** things the HF path does not provide: a **higher sample rate**
+(native 48 kHz, no resample) **and** a **wider channel** than HF SSB allows (13 kHz fits
+a VHF/UHF FM data channel or a wideband 10 m segment, not a 2700 Hz HF slot). They are
+kept in the registry and in `hpx_narrowband_hd` for a future higher-Fs transport
+(post-1.0); the loopback and test-matrix runners **SKIP them with reason** rather than
+silently dropping them. They are not a defect — they are simply out of scope for an
+8 kHz / 2700 Hz HF modem.
