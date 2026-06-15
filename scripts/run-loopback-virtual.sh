@@ -81,7 +81,12 @@ run_once() {  # mode -> 0 pass / 1 fail ; sets $REASON
         return 1
     fi
     if grep -Fq "$payload" "$rxlog"; then REASON=""; return 0; fi
-    if grep -q "underrun" "$txlog"; then REASON="tx underrun (rig pacing)"; else REASON="payload not decoded"; fi
+    # A single ALSA underrun is the benign stream-close artifact (logged by
+    # snd_pcm_recover when the cpal stream is dropped) and is NOT the cause of a
+    # decode failure — don't let it mask the real reason. Only >=2 underruns
+    # indicate genuine mid-stream TX pacing trouble.
+    local ucount; ucount=$(grep -c "underrun" "$txlog" 2>/dev/null)
+    if [[ "${ucount:-0}" -ge 2 ]]; then REASON="tx underrun x${ucount} (rig pacing)"; else REASON="payload not decoded"; fi
     return 1
 }
 
