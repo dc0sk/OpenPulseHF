@@ -51,6 +51,37 @@ fn afc_converges_within_25_frames() {
 }
 
 #[test]
+fn bpsk31_decodes_through_carrier_offset() {
+    // BPSK31 differential detection tolerates only ±baud/4 = ±7.8 Hz residual.
+    // The AFC settling window used to be exactly the preamble length — one symbol
+    // short of the plugin's fine (IQ-squaring) estimator threshold — so BPSK31
+    // settled on the coarse ±12.5 Hz Goertzel grid (≤6.25 Hz residual) and could
+    // not decode through even a small carrier offset, while wider-tolerance
+    // BPSK63/100/250 survived the same residual. A 5 Hz offset must now decode.
+    let payload = b"PSK31 carrier-offset regression test payload";
+
+    let (mut engine, shared) = make_engine();
+
+    // Transmit the framed payload at 1505 Hz, capture the modulated signal...
+    engine.set_center_frequency(1505.0);
+    engine.transmit(payload, "BPSK31", None).expect("transmit");
+    let offset_signal = shared.drain_samples();
+    assert!(!offset_signal.is_empty(), "transmit must produce samples");
+
+    // ...then receive it at 1500 Hz: a 5 Hz carrier offset the AFC must remove.
+    engine.set_center_frequency(1500.0);
+    shared.fill_samples(&offset_signal);
+    let got = engine
+        .receive_with_timeout("BPSK31", None, std::time::Duration::from_secs(15))
+        .expect("BPSK31 must decode through a 5 Hz carrier offset after AFC settling");
+    assert_eq!(
+        &got[..payload.len()],
+        payload,
+        "BPSK31 payload must round-trip through the 5 Hz offset"
+    );
+}
+
+#[test]
 fn afc_disabled_correction_stays_zero() {
     let fc_actual = 1520.0_f32;
 
