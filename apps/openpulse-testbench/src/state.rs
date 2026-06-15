@@ -5,6 +5,25 @@ use openpulse_channel::dsp::{PowerSpectrum, WaterfallBuffer, FFT_SIZE, FREQ_BINS
 use openpulse_core::compression::CompressionAlgorithm;
 use openpulse_core::fec::FecMode;
 
+#[cfg(feature = "cpal")]
+use openpulse_audio::CpalBackend;
+#[cfg(feature = "cpal")]
+use openpulse_core::audio::AudioBackend as _;
+
+/// Enumerate capture-capable device names for the live-audio device selector.
+#[cfg(feature = "cpal")]
+fn enumerate_input_devices() -> Vec<String> {
+    CpalBackend::new()
+        .list_devices()
+        .map(|devs| {
+            devs.into_iter()
+                .filter(|d| d.is_input)
+                .map(|d| d.name)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 // ── Audio source selector ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
@@ -72,6 +91,9 @@ pub struct AppConfig {
     pub max_db: f32,
     #[cfg_attr(not(feature = "cpal"), allow(dead_code))]
     pub audio_source: AudioSource,
+    /// Capture device for live audio; `None` selects the system default. cpal-only.
+    #[cfg_attr(not(feature = "cpal"), allow(dead_code))]
+    pub input_device: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -87,6 +109,7 @@ impl Default for AppConfig {
             min_db: -100.0,
             max_db: 0.0,
             audio_source: AudioSource::Synthetic,
+            input_device: None,
         }
     }
 }
@@ -272,6 +295,9 @@ pub struct AppState {
     pub running: bool,
     /// Shared config Arc written by the UI each frame; read by the signal thread.
     pub shared_config: Option<Arc<RwLock<AppConfig>>>,
+    /// Cached capture-device names for the live-audio selector (cpal-only).
+    #[cfg(feature = "cpal")]
+    pub input_devices: Vec<String>,
 }
 
 impl AppState {
@@ -284,6 +310,8 @@ impl AppState {
             stop_tx: None,
             running: false,
             shared_config: None,
+            #[cfg(feature = "cpal")]
+            input_devices: enumerate_input_devices(),
         }
     }
 
@@ -293,5 +321,11 @@ impl AppState {
             *tap.write().unwrap() = TapData::new();
         }
         *self.stats.write().unwrap() = TestStats::new();
+    }
+
+    /// Re-scan the available capture devices (cpal-only).
+    #[cfg(feature = "cpal")]
+    pub fn refresh_input_devices(&mut self) {
+        self.input_devices = enumerate_input_devices();
     }
 }
