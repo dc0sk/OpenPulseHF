@@ -67,6 +67,37 @@ pub fn draw_toolbar(
                          Live Audio: captured directly from your sound card",
                     );
             });
+
+            // Capture-device selector — only meaningful for live audio.
+            if state.config.audio_source == AudioSource::LiveCapture {
+                ui.add_enabled_ui(!state.running, |ui| {
+                    ui.label("Device:");
+                    let devices = state.input_devices.clone();
+                    let mut sel = state.config.input_device.clone();
+                    let sel_text = sel.clone().unwrap_or_else(|| "(default)".to_string());
+                    egui::ComboBox::from_id_salt("device_combo")
+                        .selected_text(sel_text)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut sel, None, "(default)");
+                            for dev in &devices {
+                                ui.selectable_value(&mut sel, Some(dev.clone()), dev);
+                            }
+                        })
+                        .response
+                        .on_hover_text(
+                            "Capture device for live audio — choose aloop_rx to scope the \
+                             virtual loopback, or your radio's soundcard input",
+                        );
+                    state.config.input_device = sel;
+                    if ui
+                        .small_button("⟳")
+                        .on_hover_text("Re-scan input devices")
+                        .clicked()
+                    {
+                        state.refresh_input_devices();
+                    }
+                });
+            }
             ui.separator();
         }
 

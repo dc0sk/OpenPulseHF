@@ -334,9 +334,10 @@ fn run_live(
     use openpulse_audio::CpalBackend;
     use openpulse_core::audio::{AudioBackend as _, AudioConfig as HwConfig};
 
+    let mut current = config.read().unwrap().clone();
     let backend = CpalBackend::new();
     let hw_cfg = HwConfig::default(); // 8000 Hz mono — radio audio interfaces support this
-    let mut input = match backend.open_input(None, &hw_cfg) {
+    let mut input = match backend.open_input(current.input_device.as_deref(), &hw_cfg) {
         Ok(s) => s,
         Err(e) => {
             let msg = format!(
@@ -348,7 +349,6 @@ fn run_live(
         }
     };
 
-    let mut current = config.read().unwrap().clone();
     let mut plugin = make_plugin(&current.mode);
     let mut mod_config = make_mod_config(&current);
     let mut fec = TestbenchFec::from_mode(current.fec_mode);
@@ -361,7 +361,7 @@ fn run_live(
     ];
 
     // Pre-modulate a TX reference frame shown in tap[0].
-    let mut tx_samples = build_tx_ref(&plugin, &mod_config, &fec);
+    let mut tx_samples = build_tx_ref(plugin.as_ref(), &mod_config, &fec);
 
     loop {
         if stop_rx.try_recv().is_ok() {
@@ -374,7 +374,7 @@ fn run_live(
             plugin = make_plugin(&new_cfg.mode);
             mod_config = make_mod_config(&new_cfg);
             fec = TestbenchFec::from_mode(new_cfg.fec_mode);
-            tx_samples = build_tx_ref(&plugin, &mod_config, &fec);
+            tx_samples = build_tx_ref(plugin.as_ref(), &mod_config, &fec);
         }
         current = new_cfg;
 
@@ -412,6 +412,15 @@ fn run_live(
         };
         push_tap(&taps[3], &mut ps[3], &rx_samples, min_db, max_db);
 
+        // IQ scatter from the captured audio so the constellation works in live mode.
+        push_iq_symbols(
+            &taps[3],
+            &captured,
+            1500.0,
+            8000.0,
+            mode_symbol_rate(&current.mode),
+        );
+
         // Live mode: count decode success/fail only — no BER against PAYLOAD.
         {
             let mut s = stats.write().unwrap();
@@ -433,7 +442,7 @@ fn run_live(
 
 #[cfg(feature = "cpal")]
 fn build_tx_ref(
-    plugin: &Box<dyn ModulationPlugin>,
+    plugin: &dyn ModulationPlugin,
     mod_config: &ModulationConfig,
     fec: &TestbenchFec,
 ) -> Vec<f32> {
@@ -738,5 +747,35 @@ mod tests {
             pre_rs, inner,
             "SoftConcatenated: pre_rs (Viterbi-decoded) must match RS-encoded reference"
         );
+    }
+
+    #[test]
+    fn push_iq_symbols_extracts_carrier_tone() {
+        // A pure cosine at the 1500 Hz centre coherently integrates to (+1, ~0); one IQ
+        // symbol is emitted per symbol period. This is the extraction the live constellation
+        // relies on, so lock it down without needing an audio device.
+        let tap: Tap = Arc::new(RwLock::new(TapData::new()));
+        let sr = 8000.0_f32;
+        let baud = 250.0_f32; // 32 samples/symbol
+        let n = 32 * 8; // 8 whole symbols
+        let samples: Vec<f32> = (0..n)
+            .map(|i| (std::f32::consts::TAU * 1500.0 * i as f32 / sr).cos())
+            .collect();
+
+        push_iq_symbols(&tap, &samples, 1500.0, sr, baud);
+
+        let t = tap.read().unwrap();
+        assert_eq!(t.iq_symbols.len(), 8, "one IQ symbol per symbol period");
+        let (i, q) = t.iq_symbols[0];
+        assert!((i - 1.0).abs() < 0.1, "cosine → I≈1.0, got {i}");
+        assert!(q.abs() < 0.1, "cosine → Q≈0, got {q}");
+    }
+
+    #[test]
+    fn push_iq_symbols_ignores_subnyquist_baud() {
+        // sps < 2 (baud > sample_rate/2) must be rejected, not panic.
+        let tap: Tap = Arc::new(RwLock::new(TapData::new()));
+        push_iq_symbols(&tap, &[0.1_f32; 64], 1500.0, 8000.0, 6000.0);
+        assert!(tap.read().unwrap().iq_symbols.is_empty());
     }
 }
