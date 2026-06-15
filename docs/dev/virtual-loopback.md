@@ -22,6 +22,10 @@ A failure that appears only when you move *up* a rung tells you which layer is r
 
 The virtual rung catches DSP, acquisition, framing, resampler, and config regressions on the real audio path without needing two Raspberry Pis and a cable. It is deterministic, fast, and runnable in CI (given the `snd-aloop` module). Hardware and on-air then only need to be run to validate the effects they uniquely add (dual-clock SRO, analog response, RF).
 
+### In CI
+
+The `virtual-loopback-smoke` job in `.github/workflows/ci.yml` (manual `workflow_dispatch`) runs a representative subset (`BPSK250 QPSK500 OFDM52`) through the virtual rung on the GitHub runner. It is **non-blocking** (`continue-on-error`) and **gracefully skips** when `snd-aloop` is unavailable on the runner image, because audio timing under CI scheduling is best-effort — the authoritative virtual gate is the local run before a hardware/on-air session. Once the job is observed stable on the runner image it can be promoted to a blocking gate.
+
 ## Setup
 
 ```bash
@@ -34,9 +38,23 @@ scripts/run-loopback-virtual.sh          # runs every registered mode through th
 
 `run-loopback-virtual.sh` enumerates the full mode set from `openpulse modes` (no curated exclusions). Modes that are physically impossible at 8 kHz audio (the 9600-baud modes need ≥4 samples/symbol → Fs ≥ 38.4 kHz) are reported as **SKIP with reason**, not silently dropped. Override the mode set with `MODES="BPSK250 SCFDMA52"` for targeted runs.
 
-### Known rig limitation
+### cpal transmit pacing
 
-The cpal output callback emits silence on buffer underflow, so very slow (BPSK31/63) and bursty wideband (OFDM52) modes can intermittently **underrun** and produce a corrupted transmit, causing a flaky fail. The script retries each mode up to `RETRIES` (default 3) to absorb this. A proper fix is to pre-buffer/pace the cpal transmit side; tracked as follow-up.
+The cpal output stream previously called `play()` immediately on open — before any
+samples were buffered — so the output callback fired against an empty queue and
+**underran at the frame start**, corrupting the transmit. This was flaky for slow
+(BPSK31/63) and bursty wideband (OFDM52) modes. The fix (`crates/openpulse-audio/src/cpal_backend.rs`):
+
+- **Defer `play()` to the first `write()`**, once the frame is buffered, so the
+  callback never starts against an empty queue.
+- **Append a short trailing-silence pad in `flush()`** so the unavoidable
+  pull-based end-of-stream underrun (ALSA logs one `snd_pcm_recover` line when the
+  stream is dropped) lands in silence and never clips the final data symbols.
+
+After the fix, OFDM52 decodes reliably on the virtual rig instead of intermittently.
+A single close-time underrun line is benign; the loopback script only treats **≥2**
+underruns as a TX-pacing failure (one is the stream-close artifact). `RETRIES`
+(default 3) remains as a safety net for the hardware rig's dual-clock jitter.
 
 ## Diagnosing analog-path effects: the chirp probe
 
