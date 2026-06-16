@@ -1,3 +1,4 @@
+pub mod adaptive;
 pub mod bandplan_guard;
 pub mod beacon;
 pub mod benchmark;

@@ -9,20 +9,13 @@
 //! openpulse modes
 //! ```
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use clap::Parser;
 use openpulse_core::fec::FecMode;
 use tracing::Level;
 
-use bpsk_plugin::BpskPlugin;
-use fsk4_plugin::Fsk4Plugin;
-use ofdm_plugin::OfdmPlugin;
 use openpulse_audio::LoopbackBackend;
 use openpulse_modem::ModemEngine;
-use psk8_plugin::Psk8Plugin;
-use qam64_plugin::Qam64Plugin;
-use qpsk_plugin::QpskPlugin;
-use scfdma_plugin::ScFdmaPlugin;
 
 #[cfg(feature = "cpal-backend")]
 use openpulse_audio::CpalBackend;
@@ -31,6 +24,7 @@ mod cli;
 mod commands;
 mod output;
 mod pki;
+mod plugins;
 mod radio;
 mod state;
 
@@ -70,6 +64,27 @@ fn main() -> Result<()> {
 
     if let Commands::ModeAdvisor { snr, profile } = &cli.command {
         return commands::mode_advisor::run(*snr, profile.as_deref());
+    }
+
+    if let Commands::Adaptive {
+        profile,
+        channel,
+        snr,
+        frames,
+        payload_len,
+        seed,
+        json,
+    } = &cli.command
+    {
+        return commands::adaptive::run(
+            profile.as_deref(),
+            channel,
+            *snr,
+            *frames,
+            *payload_len,
+            *seed,
+            *json,
+        );
     }
 
     if let Commands::Daemon { addr, command } = &cli.command {
@@ -116,27 +131,7 @@ fn main() -> Result<()> {
     };
 
     let mut engine = ModemEngine::new(audio);
-    engine
-        .register_plugin(Box::new(BpskPlugin::new()))
-        .context("failed to register BPSK plugin")?;
-    engine
-        .register_plugin(Box::new(Fsk4Plugin::new()))
-        .context("failed to register FSK4 plugin")?;
-    engine
-        .register_plugin(Box::new(OfdmPlugin::new()))
-        .context("failed to register OFDM plugin")?;
-    engine
-        .register_plugin(Box::new(Psk8Plugin::new()))
-        .context("failed to register 8PSK plugin")?;
-    engine
-        .register_plugin(Box::new(Qam64Plugin::new()))
-        .context("failed to register 64QAM plugin")?;
-    engine
-        .register_plugin(Box::new(QpskPlugin::new()))
-        .context("failed to register QPSK plugin")?;
-    engine
-        .register_plugin(Box::new(ScFdmaPlugin::new()))
-        .context("failed to register SC-FDMA plugin")?;
+    plugins::register_all(&mut engine)?;
     engine.set_trust_policy_profile(load_policy_profile_or_default());
     engine.set_max_power_watts(cli.max_power);
 
@@ -229,6 +224,7 @@ fn main() -> Result<()> {
             commands::qsy::run(command)?;
         }
         Commands::ModeAdvisor { .. } => unreachable!("handled above"),
+        Commands::Adaptive { .. } => unreachable!("handled above"),
         Commands::Config { .. } => unreachable!("handled above"),
         Commands::Calibrate { .. } => unreachable!("handled above"),
         Commands::Daemon { .. } => unreachable!("handled above"),

@@ -3,7 +3,7 @@ use anyhow::Result;
 use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::SpeedLevel;
 
-fn speed_level_label(level: SpeedLevel) -> &'static str {
+pub(crate) fn speed_level_label(level: SpeedLevel) -> &'static str {
     match level {
         SpeedLevel::Sl1 => "SL1",
         SpeedLevel::Sl2 => "SL2",

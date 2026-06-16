@@ -144,6 +144,34 @@ pub enum Commands {
         #[arg(short, long, default_value = "BPSK100")]
         mode: String,
     },
+    /// Run an adaptive rate-control session over a simulated channel and report
+    /// each speed-level transition (loopback/channel-sim; no hardware required).
+    Adaptive {
+        /// Session profile (overrides config `[modem] profile`). One of: hpx500,
+        /// hpx_hf, hpx_ofdm_hf, hpx_wideband, hpx_wideband_hd, hpx_narrowband,
+        /// hpx_narrowband_hd.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Channel model: clean, awgn, watterson-good-f1, watterson-poor-f1.
+        #[arg(long, default_value = "clean")]
+        channel: String,
+        /// AWGN SNR in dB (used by `--channel awgn`, and as the rate-adapter SNR
+        /// hint when the receiver cannot measure one).
+        #[arg(long)]
+        snr: Option<f32>,
+        /// Number of frames to send.
+        #[arg(long, default_value_t = 8)]
+        frames: usize,
+        /// Payload length per frame, in bytes.
+        #[arg(long, default_value_t = 64)]
+        payload_len: usize,
+        /// Deterministic channel seed.
+        #[arg(long)]
+        seed: Option<u64>,
+        /// Emit newline-delimited JSON instead of human-readable lines.
+        #[arg(long)]
+        json: bool,
+    },
     /// Configuration management.
     Config {
         #[command(subcommand)]

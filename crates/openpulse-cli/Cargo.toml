@@ -18,9 +18,10 @@ serial       = ["openpulse-radio/serial"]
 generic-serial = ["openpulse-radio/generic-serial"]
 
 [dependencies]
-openpulse-core   = { workspace = true }
+openpulse-core    = { workspace = true }
 openpulse-audio  = { workspace = true }
 openpulse-modem  = { workspace = true }
+openpulse-channel = { workspace = true }
 openpulse-radio  = { workspace = true }
 openpulse-config = { workspace = true }
 openpulse-daemon = { workspace = true }

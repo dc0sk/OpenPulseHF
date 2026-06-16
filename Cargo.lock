@@ -3731,6 +3731,7 @@ dependencies = [
  "mockito",
  "ofdm-plugin",
  "openpulse-audio",
+ "openpulse-channel",
  "openpulse-config",
  "openpulse-core",
  "openpulse-daemon",
