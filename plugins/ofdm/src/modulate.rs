@@ -124,6 +124,23 @@ fn modulate_with_params(payload: &[u8], p: &OfdmParams) -> Vec<f32> {
     let mut frame = Vec::with_capacity(preamble.len() + data.len());
     frame.extend_from_slice(&preamble);
     frame.extend_from_slice(&data);
+
+    // DAC-safe peak normalisation for the un-clipped higher-order modes.  Without
+    // clipping, OFDM's ~12 dB PAPR drives peaks past full scale, so a real DAC
+    // hard-clips them and shreds the dense constellation (acquisition still locks,
+    // but 16QAM/64QAM decode to garbage on hardware).  Scaling the whole frame so
+    // its peak sits at 0.9 fits the DAC WITHOUT clipping distortion — the inherent
+    // PAPR backoff, applied uniformly so the demodulator (which equalizes) is
+    // unaffected.  QPSK keeps its clip-bounded peak (it already fits).
+    if p.bits_per_sc != 2 {
+        let peak = frame.iter().map(|s| s.abs()).fold(0.0_f32, f32::max);
+        if peak > 0.9 {
+            let g = 0.9 / peak;
+            for s in &mut frame {
+                *s *= g;
+            }
+        }
+    }
     frame
 }
 
