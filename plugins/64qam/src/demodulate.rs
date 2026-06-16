@@ -5,15 +5,16 @@
 
 use std::f32::consts::PI;
 
+use num_complex::Complex32;
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
 use openpulse_dsp::acquisition::{estimate_cfo_data_aided, preamble_corr_sq};
+use openpulse_dsp::constellation::{constellation_points, symbol_llrs};
 use openpulse_dsp::filter::FirFilter;
 use openpulse_dsp::rrc::generate_rrc_coefficients;
 
 use crate::modulate::{
-    gray_map_64qam, preamble_symbols, samples_per_symbol, PAM8_SCALE, PREAMBLE_SYMS,
-    RRC_SPAN_SYMBOLS, TAIL_SYMS,
+    preamble_symbols, samples_per_symbol, PAM8_SCALE, PREAMBLE_SYMS, RRC_SPAN_SYMBOLS, TAIL_SYMS,
 };
 use crate::parse_baud_rate;
 
@@ -510,30 +511,14 @@ pub fn qam64_demodulate_soft(
     let data_end = i_syms.len() - TAIL_SYMS;
     let mut llrs = Vec::with_capacity((data_end - data_start) * 6);
 
-    // Precompute all 64 constellation points.
-    let points: Vec<(f32, f32)> = (0..64u8).map(gray_map_64qam).collect();
-
+    // Max-log-MAP LLRs via the shared constellation engine. noise_var = 1 keeps
+    // the same σ²=1 scaling as before (positive LLR → bit more likely 0).
+    let points = constellation_points(6);
     for (&yi, &yq) in i_syms[data_start..data_end]
         .iter()
         .zip(q_syms[data_start..data_end].iter())
     {
-        for bit_pos in 0..6u8 {
-            let mask = 1 << bit_pos;
-            let mut min_d0 = f32::MAX;
-            let mut min_d1 = f32::MAX;
-            for (sym_idx, &(pi, pq)) in points.iter().enumerate() {
-                let d = (yi - pi).powi(2) + (yq - pq).powi(2);
-                if sym_idx as u8 & mask == 0 {
-                    if d < min_d0 {
-                        min_d0 = d;
-                    }
-                } else if d < min_d1 {
-                    min_d1 = d;
-                }
-            }
-            // Positive LLR → bit is more likely 0.
-            llrs.push(min_d1 - min_d0);
-        }
+        llrs.extend(symbol_llrs(Complex32::new(yi, yq), 6, 1.0, &points));
     }
     Ok(llrs)
 }
@@ -677,7 +662,7 @@ fn rrc_alpha(config: &ModulationConfig) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modulate::pam8_amplitude;
+    use crate::modulate::{gray_map_64qam, pam8_amplitude};
 
     #[test]
     fn pam8_decide_all_levels_correct() {
