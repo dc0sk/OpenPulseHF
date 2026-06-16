@@ -51,6 +51,8 @@ pub struct OfdmParams {
     pub n_data: usize,
     /// Number of pilot subcarriers.
     pub n_pilots: usize,
+    /// Bits carried per data subcarrier (2=QPSK, 3=8PSK, 4=16QAM, 5=32QAM, 6=64QAM).
+    pub bits_per_sc: usize,
 }
 
 impl OfdmParams {
@@ -59,9 +61,9 @@ impl OfdmParams {
         self.last_sc - self.first_sc + 1
     }
 
-    /// Bits per OFDM symbol (QPSK = 2 bits/SC).
+    /// Bits per OFDM symbol = data subcarriers × bits per subcarrier.
     pub fn bits_per_symbol(&self) -> usize {
-        self.n_data * 2
+        self.n_data * self.bits_per_sc
     }
 
     /// Bytes per OFDM symbol (rounded down).
@@ -91,6 +93,7 @@ pub const OFDM16: OfdmParams = OfdmParams {
     last_sc: 57,
     n_data: 16,
     n_pilots: 4,
+    bits_per_sc: 2,
 };
 
 /// OFDM-52: 52 data SCs + 13 pilots, SCs 16–80, centre at SC 48 (1500 Hz), BW ≈ 2031 Hz.
@@ -99,6 +102,47 @@ pub const OFDM52: OfdmParams = OfdmParams {
     last_sc: 80,
     n_data: 52,
     n_pilots: 13,
+    bits_per_sc: 2,
+};
+
+/// OFDM-52 with 16QAM subcarriers: same SC layout as OFDM52, 4 bits/SC ≈ 5778 bps gross.
+///
+/// OFDM (not SC-FDMA) is the higher-throughput/higher-reliability HF path: the CP +
+/// per-subcarrier equalization handle frequency-selective multipath natively, with no
+/// DFT-despread noise enhancement.  Run FEC-protected (soft).
+pub const OFDM52_16QAM: OfdmParams = OfdmParams {
+    first_sc: 16,
+    last_sc: 80,
+    n_data: 52,
+    n_pilots: 13,
+    bits_per_sc: 4,
+};
+
+/// OFDM-52 with 8PSK subcarriers: 3 bits/SC ≈ 4333 bps gross.
+pub const OFDM52_8PSK: OfdmParams = OfdmParams {
+    first_sc: 16,
+    last_sc: 80,
+    n_data: 52,
+    n_pilots: 13,
+    bits_per_sc: 3,
+};
+
+/// OFDM-52 with cross-32QAM subcarriers: 5 bits/SC ≈ 7222 bps gross.
+pub const OFDM52_32QAM: OfdmParams = OfdmParams {
+    first_sc: 16,
+    last_sc: 80,
+    n_data: 52,
+    n_pilots: 13,
+    bits_per_sc: 5,
+};
+
+/// OFDM-52 with 64QAM subcarriers: 6 bits/SC ≈ 8667 bps gross.
+pub const OFDM52_64QAM: OfdmParams = OfdmParams {
+    first_sc: 16,
+    last_sc: 80,
+    n_data: 52,
+    n_pilots: 13,
+    bits_per_sc: 6,
 };
 
 /// Select `OfdmParams` from a mode string (case-insensitive).
@@ -106,6 +150,10 @@ pub fn params_for_mode(mode: &str) -> Option<OfdmParams> {
     match mode.to_ascii_uppercase().as_str() {
         "OFDM16" => Some(OFDM16),
         "OFDM52" => Some(OFDM52),
+        "OFDM52-8PSK" => Some(OFDM52_8PSK),
+        "OFDM52-16QAM" => Some(OFDM52_16QAM),
+        "OFDM52-32QAM" => Some(OFDM52_32QAM),
+        "OFDM52-64QAM" => Some(OFDM52_64QAM),
         _ => None,
     }
 }

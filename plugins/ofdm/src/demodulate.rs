@@ -2,6 +2,9 @@
 
 use num_complex::Complex32;
 use openpulse_dsp::acquisition::IqMatchedFilter;
+use openpulse_dsp::constellation::{
+    constellation_points, demap_symbol, estimate_decision_noise_var, symbol_llrs,
+};
 use rustfft::FftPlanner;
 
 use openpulse_core::error::ModemError;
@@ -20,11 +23,12 @@ pub fn ofdm_demodulate(samples: &[f32], mode: &str) -> Result<Vec<u8>, ModemErro
 
 /// Demodulate OFDM samples and return per-bit soft LLRs.
 ///
-/// After ZF equalization each subcarrier carries a QPSK symbol.  The LLR for
-/// each of its two bits is the signed projection onto the decision axis:
-///
-/// - bit 0 → `sym.re`  (positive = I > 0 = bit more likely 0)
-/// - bit 1 → `sym.im`  (positive = Q > 0 = bit more likely 0)
+/// After ZF equalization each subcarrier carries one `bits_per_sc` constellation
+/// symbol; max-log-MAP gives `bits_per_sc` LLRs per symbol.  The per-subcarrier
+/// effective noise is scaled by `mean|H|² / |H_sc|²`, so faded subcarriers yield
+/// lower-confidence LLRs — the per-subcarrier weighting that makes OFDM robust to
+/// frequency-selective fades.  For QPSK this reduces to the |H|²-weighted
+/// matched-filter LLR.
 ///
 /// **LLR sign convention**: positive = bit more likely 0, matching all other
 /// plugins and codecs in this codebase.
@@ -198,11 +202,12 @@ fn demodulate_with_params(samples: &[f32], p: &OfdmParams) -> Result<Vec<u8>, Mo
         let h_est = ls_estimate(p, &freq);
         let data_syms = zf_equalize(p, &freq, &h_est);
 
-        // Decode QPSK symbols.
+        // Hard-decode each subcarrier's constellation symbol.
         for sym in &data_syms {
-            let bits2 = qpsk_demod(*sym);
-            bits.push(bits2 & 1 == 1);
-            bits.push((bits2 >> 1) & 1 == 1);
+            let label = demap_symbol(*sym, p.bits_per_sc);
+            for b in 0..p.bits_per_sc {
+                bits.push((label >> b) & 1 == 1);
+            }
         }
     }
 
@@ -217,21 +222,6 @@ fn demodulate_with_params(samples: &[f32], p: &OfdmParams) -> Result<Vec<u8>, Mo
     let available = raw.len() - LEN_PREFIX_BYTES;
     let take = (payload_len as usize).min(available);
     Ok(raw[LEN_PREFIX_BYTES..LEN_PREFIX_BYTES + take].to_vec())
-}
-
-// ── QPSK demapping ────────────────────────────────────────────────────────────
-
-fn qpsk_demod(c: Complex32) -> u8 {
-    let i_bit = if c.re >= 0.0 { 0u8 } else { 1u8 };
-    let q_bit = if c.im >= 0.0 { 0u8 } else { 1u8 };
-    i_bit | (q_bit << 1)
-}
-
-fn qpsk_llr(c: Complex32, weight: f32) -> [f32; 2] {
-    // Post-ZF noise variance scales as σ²/|H|², so the matched-filter LLR is
-    // proportional to symbol × |H|². Weighting by |H|² suppresses confidence on
-    // faded subcarriers and matches the noise statistics seen by the FEC decoder.
-    [c.re * weight, c.im * weight]
 }
 
 fn demodulate_soft_with_params(samples: &[f32], p: &OfdmParams) -> Result<Vec<f32>, ModemError> {
@@ -282,11 +272,15 @@ fn demodulate_soft_with_params(samples: &[f32], p: &OfdmParams) -> Result<Vec<f3
             }
             weights.push(h_est[rel].norm_sqr());
         }
+        let mean_w = (weights.iter().sum::<f32>() / weights.len().max(1) as f32).max(1e-6);
+        let block_noise = estimate_decision_noise_var(&data_syms, p.bits_per_sc);
+        let points = constellation_points(p.bits_per_sc);
 
         for (sym, &w) in data_syms.iter().zip(weights.iter()) {
-            let [l0, l1] = qpsk_llr(*sym, w);
-            llrs.push(l0);
-            llrs.push(l1);
+            // Faded subcarriers (low |H|²) get higher effective noise → lower-
+            // confidence LLRs.  For QPSK this matches the old |H|²-weighted form.
+            let noise_var = block_noise * mean_w / w.max(1e-6);
+            llrs.extend(symbol_llrs(*sym, p.bits_per_sc, noise_var, &points));
         }
     }
 
