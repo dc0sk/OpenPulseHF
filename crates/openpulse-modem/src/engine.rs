@@ -1123,30 +1123,41 @@ impl ModemEngine {
                     // (1 − 0.3⁶) × 150 Hz ≈ 149.9 Hz — effectively one-shot for
                     // crystal errors up to ±300 Hz on 144 MHz (≈ ±2 ppm).
                     if !planner.is_settled() {
-                        // Settle over `afc_window` (preamble + 1 symbol), NOT
-                        // max_frame_samples (72960): the latter makes settling
-                        // O(N²) in buffer length when the noise floor is above
-                        // ENERGY_GATE_THRESHOLD (every position fires the gate,
-                        // each runs 6 Goertzel passes on the full slice ≈ 170 ms)
+                        // Refine the coarse gate position to the true signal onset
+                        // BEFORE settling AFC.  The energy gate can trip up to a full
+                        // acquisition window early, with the signal entering only at the
+                        // window tail (e.g. QPSK500: the gate trips ~240 samples before
+                        // the frame).  Settling at the coarse position then runs the
+                        // carrier estimator over a mostly-silent window, which yields a
+                        // confident-but-bogus correction (QPSK500: a stable ~257 Hz from
+                        // ~2 signal symbols, last_delta≈0 so it passes the convergence
+                        // guard) that breaks the decode at the correct onset.  Settling
+                        // from the onset keeps the window on signal.
+                        let onset = refine_onset(&accumulated, start, acq_samples, step);
+                        // Settle over `afc_window` (preamble + 1 symbol) from the onset,
+                        // NOT max_frame_samples: the latter makes settling O(N²) in buffer
+                        // length when the noise floor is above the gate (every position
+                        // fires the gate, each runs 6 Goertzel passes on the full slice)
                         // and the scan falls behind live audio.  afc_window is
-                        // ~preamble-sized (fast) yet long enough to engage the
-                        // plugin's fine AFC stage — see its definition above.
-                        let settle_end = (start + afc_window).min(accumulated.len());
-                        if settle_end - start < afc_window {
+                        // ~preamble-sized (fast) yet long enough to engage the plugin's
+                        // fine AFC stage — see its definition above.
+                        let settle_end = (onset + afc_window).min(accumulated.len());
+                        if settle_end - onset < afc_window {
+                            // The onset's signal window is not fully buffered yet; wait for
+                            // the next read (the broad scan re-runs as the buffer grows).
                             continue;
                         }
-                        let settle = self.afc_mini_settle(mode, &accumulated[start..settle_end]);
-                        // Stability check: the final fine pass must have
-                        // converged (small last delta), the fine track must
-                        // agree with the anchor within 20 Hz (real carrier),
-                        // and the magnitude must not exceed the Goertzel
-                        // acquisition range.
+                        let settle = self.afc_mini_settle(mode, &accumulated[onset..settle_end]);
+                        // Stability check: the final fine pass must have converged (small
+                        // last delta), the fine track must agree with the anchor within
+                        // 20 Hz (real carrier), and the magnitude must not exceed the
+                        // Goertzel acquisition range.
                         let converged =
                             settle.last_delta < 5.0 && (settle.fine - settle.anchor).abs() <= 20.0;
                         let plausible = settle.fine.abs() <= AFC_MAX_CORRECTION_HZ;
                         if !converged || !plausible {
                             debug!(
-                                "AFC settling rejected at pos={start}: \
+                                "AFC settling rejected at onset={onset} (coarse={start}): \
                                  converged={converged} plausible={plausible} \
                                  correction={:.1}Hz",
                                 self.afc_correction_hz
@@ -1154,7 +1165,6 @@ impl ModemEngine {
                             self.afc_correction_hz = 0.0;
                             continue;
                         }
-                        let onset = refine_onset(&accumulated, start, acq_samples, step);
                         planner.note_settled(onset);
                         info!(
                             "AFC settling done: correction={:.1}Hz onset={onset} (coarse={start}) buf_len={}",

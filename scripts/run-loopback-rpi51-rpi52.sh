@@ -51,12 +51,19 @@ KILL_WAIT="${KILL_WAIT:-12}"                # seconds after TX before killing IR
 #    hardware-validated: the engine refines the first-energy onset and re-decodes
 #    it as the frame buffers — see engine.rs refine_onset / the first-energy
 #    re-decode. The earlier "carrier phase accumulation" label was a misdiagnosis.)
-# QPSK500 excluded: AFC anchor fires at preamble start, retry misses by 200 samples (engine bug).
+# QPSK500's acquisition bug is fixed (in-process validated; hardware re-check pending):
+#   the energy gate trips up to a full acquisition window before the onset, so AFC
+#   settled over a mostly-silent window and produced a confident-but-bogus correction
+#   (~257 Hz from ~2 signal symbols, last_delta≈0 so it passed the convergence guard)
+#   that broke the decode at the true onset. The engine now refines the onset BEFORE
+#   settling AFC — see engine.rs (refine-onset-then-settle) and
+#   tests/qpsk500_acquisition.rs.
 QUICK_CASES=(
     "BPSK100|64"
     "BPSK250|64"
     "QPSK125|64"
     "QPSK250|64"
+    "QPSK500|128"
 )
 
 # Full tier: broader coverage across baud rates and payload sizes.
