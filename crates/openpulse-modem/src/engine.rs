@@ -1550,6 +1550,38 @@ impl ModemEngine {
         Err(ModemError::ArqMaxRetries(attempts))
     }
 
+    /// IRS side of an ARQ exchange: receive one data frame and reply with an ACK.
+    ///
+    /// Receives at the current RX adaptive mode when a session is active, else at
+    /// `mode`. On a clean decode it replies with the SNR-derived [`AckType`] (always
+    /// [`AckType::AckOk`] without an adaptive session) and returns the payload; on
+    /// decode failure it replies [`AckType::Nack`] and returns the error, so the
+    /// transmitting [`transmit_arq`](Self::transmit_arq) peer retransmits.
+    ///
+    /// This is the reliable, fixed-mode counterpart to `transmit_arq`. Adaptive
+    /// rate-stepping in the RX direction (keeping the IRS RX level in lockstep with
+    /// the ISS TX level across an `AckUp`) is layered on top separately.
+    pub fn respond_arq(
+        &mut self,
+        mode: &str,
+        session_id: &str,
+        device: Option<&str>,
+    ) -> Result<Vec<u8>, ModemError> {
+        let rx_mode = self.current_rx_mode().unwrap_or(mode).to_owned();
+        match self.receive_with_ack_hint(&rx_mode, device) {
+            Ok((payload, ack_type)) => {
+                let ack = AckFrame::new(ack_type, session_id);
+                self.transmit_ack_with_short_fec(&ack, device)?;
+                Ok(payload)
+            }
+            Err(e) => {
+                let nack = AckFrame::new(AckType::Nack, session_id);
+                let _ = self.transmit_ack_with_short_fec(&nack, device);
+                Err(e)
+            }
+        }
+    }
+
     /// Like [`transmit`](Self::transmit) but wraps the encoded frame bytes
     /// with Reed-Solomon FEC before modulation.
     ///

@@ -172,6 +172,13 @@ pub enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Reliable two-way ARQ over the modem (FSK4 ACK return + retransmit).
+    ///
+    /// Targets VOX or wired/full-duplex audio paths (keying is per transmission).
+    Arq {
+        #[command(subcommand)]
+        command: ArqCommands,
+    },
     /// Configuration management.
     Config {
         #[command(subcommand)]
@@ -436,6 +443,46 @@ pub enum DiagnoseCommands {
 pub enum ConfigCommands {
     /// Write a commented configuration template to stdout.
     Init,
+}
+
+#[derive(Subcommand)]
+pub enum ArqCommands {
+    /// ISS: transmit a payload with ARQ, retransmitting until ACK.
+    Send {
+        /// Payload text to send.
+        #[arg(short, long)]
+        payload: String,
+        /// Modulation mode (start mode when --profile is set).
+        #[arg(short, long, default_value = "BPSK250")]
+        mode: String,
+        /// Adaptive session profile (enables rate stepping). See PROFILE_NAMES.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Maximum retransmissions before giving up.
+        #[arg(long, default_value_t = 3)]
+        retries: usize,
+        /// Audio device name (backend-specific).
+        #[arg(short, long)]
+        device: Option<String>,
+    },
+    /// IRS: receive data frames and ACK each (NACK on decode failure).
+    Listen {
+        /// Modulation mode (fallback when no adaptive session is active).
+        #[arg(short, long, default_value = "BPSK250")]
+        mode: String,
+        /// Adaptive session profile (enables rate stepping). See PROFILE_NAMES.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Number of frames to receive before exiting.
+        #[arg(long, default_value_t = 1)]
+        frames: usize,
+        /// Session identifier echoed in ACK frames.
+        #[arg(long, default_value = "openpulse-arq")]
+        session: String,
+        /// Audio device name (backend-specific).
+        #[arg(short, long)]
+        device: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
