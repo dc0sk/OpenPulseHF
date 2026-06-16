@@ -113,9 +113,13 @@ ceiling *and* a positive ACK arrives.
 |---|---|---|---|
 | `hpx500` | Narrowband | BPSK31 → BPSK63 → BPSK250 → QPSK250 → QPSK500 | Robust, ≤600 Hz HF |
 | **`hpx_hf`** | **HF (≤2700 Hz)** | **BPSK31/63/250 → QPSK250/500 → 8PSK500 → SCFDMA52-{8PSK,16QAM,32QAM,64QAM}** | **Primary HF profile — the full HF-legal span** |
-| `hpx_ofdm_hf` | HF multicarrier | OFDM16 → OFDM52 | OFDM reference / frequency-selective fades |
+| **`hpx_ofdm_hf`** | **HF multicarrier** | **OFDM16 → OFDM52 → OFDM52-{8PSK,16QAM,32QAM,64QAM} (SL5–10)** | **High-throughput / high-reliability HF — per-SC equalization on fades (§7)** |
 | `hpx_wideband_hd` | Wideband HD | SCFDMA26-{8PSK,16QAM,32QAM} (SL9–11 fallback) → SCFDMA52-{16QAM,32QAM,64QAM} → 64QAM2000-RRC (SL12–15) | >2700 Hz links; SL9–11 are the graceful-degradation rungs |
 | `hpx_wideband` / `hpx_narrowband` / `hpx_narrowband_hd` | Wide / post-1.0 | QPSK/8PSK 1000, 2000-RRC, 9600-RRC | FM / VHF / UHF or wider-than-HF; deferred (§8) |
+
+For dense multicarrier throughput on HF, **`hpx_ofdm_hf` (OFDM HOM) is preferred over the
+SCFDMA52 rungs in `hpx_hf`** — OFDM handles frequency-selective fading better and the
+SC-FDMA PAPR advantage that once motivated those rungs did not materialise (§7).
 
 ### `hpx_hf` — the primary HF ladder (the full ≤2700 Hz span)
 
@@ -197,7 +201,7 @@ Combinations that **don't** make sense:
 
 ---
 
-## 7. Spectral efficiency and PAPR (the FF-14 audit)
+## 7. Spectral efficiency and PAPR — why OFDM (not SC-FDMA) is the HF high-throughput path
 
 Two numbers decide whether a mode earns a place in a profile: **spectral efficiency**
 (gross bps ÷ occupied Hz) at the SNR it needs, and **PAPR** (which sets how much average
@@ -241,64 +245,44 @@ power survives a peak-limited transmitter). Representative measurements:
    hardware rig (the rig is *not* thermal-noise-limited; a chirp probe measured ~39 dB
    SNR available on the 8 kHz path).
 
-**Decisions:**
+**Decisions (the OFDM higher-order ladder, not the SC-FDMA pilot redesign):**
 
-- **OFDM stays, but as a niche, not a throughput rung.** It is not in the adaptive HF
-  ladders (`hpx_hf`, `hpx_wideband_hd`); it lives in `hpx_ofdm_hf`. Its one genuine edge
-  over SC-FDMA is **per-subcarrier equalization on frequency-selective fades** — a dead
-  subcarrier costs only its own bits, whereas SC-FDMA's de-spread smears that loss across
-  the whole symbol block. Keep it for that and as a DSP reference; do not advertise it as
-  a higher-throughput option.
-- **SC-FDMA is the default multicarrier**, and its real upside (lower PAPR → more average
-  power at the TX → better dense-mode EVM) is gated behind a **pilot-scheme redesign**
-  (move pilots out of the interleaved data span: block/time-multiplexed or
-  superimposed pilots, with the matching channel-estimation change). Tracked as the PAPR
-  work item (roadmap FF-14); it is the highest-leverage lever for the dense modes on real
-  hardware.
+- **OFDM is the high-throughput / high-reliability HF path**, via a higher-order ladder
+  (`OFDM52-{8PSK,16QAM,32QAM,64QAM}`, ~4.3–8.7 kbps gross) in `hpx_ofdm_hf` (§4). OFDM's
+  CP + per-subcarrier equalization handle frequency-selective HF multipath natively — a
+  dead subcarrier costs only its own bits, with **no DFT-despread noise enhancement**.
+  This is the industry choice for HF data (VARA HF, Mercury, ARDOP).
+- **The SC-FDMA PAPR pilot redesign (old roadmap FF-14) was dropped.** A prototype measured
+  the *realized* PAPR gain from contiguous (de-interleaved) pilots at only **~3.8 dB**
+  (12.7 → ~8.9 dB), not the ~6–8 dB first assumed: OpenPulseHF's SC-FDMA is a **real-valued
+  passband** signal (Hermitian symmetry, 1500 Hz centre), and the ~3 dB real-bandpass
+  penalty floors it well above textbook complex-baseband SC-FDMA. Single-carrier RRC already
+  beats that (~6.6 dB), and `64QAM2000-RRC` out-throughputs `SCFDMA52-64QAM` — so SC-FDMA is
+  dominated (no PAPR edge, *worse* selective-fade handling) and not worth the redesign.
+- **SC-FDMA stays as-is** — a working, hardware-validated dense-multicarrier path and the
+  source of the shared constellation code (`openpulse_dsp::constellation`) the OFDM HOM
+  ladder reuses. Kept, not retired; not invested in further.
 - No single-carrier mode is dominated; the plain rectangular 2000-baud modes remain
   superseded by their `-RRC` variants (documented in §1).
 
-### SC-FDMA vs OFDM, and the PAPR tradeoff
+### Managing OFDM's PAPR — leveling, not clipping
 
-**Is there truly an advantage to SC-FDMA over OFDM?** *In theory yes; in this
-implementation, not yet.* SC-FDMA's DFT precoding is meant to give a
-single-carrier-like envelope (~4–6 dB PAPR vs OFDM's ~12 dB), and that lower PAPR is
-the entire point — it lets a peak-limited transmitter put more average power on air.
-But our pilots are frequency-interleaved (every 5th subcarrier), which breaks the
-contiguous DFT-spread and restores OFDM-like ~12 dB PAPR (finding 3 above). So **today
-the two are equivalent**: same throughput, same bandwidth, same PAPR — and OFDM even
-keeps one real edge, per-subcarrier equalization, where a single faded subcarrier costs
-only its own bits instead of smearing across the whole de-spread block.
+OFDM's ~12 dB PAPR is real, but it is a **leveling** problem, not a blocker: SSB rigs apply
+drive backoff for exactly this (VARA HF runs OFDM through them daily). On the ~39 dB-SNR
+8 kHz path, even ~12 dB of backoff leaves ~27 dB — enough for 64QAM (~26–28 dB). Two
+concrete points from bringing the ladder up on hardware:
 
-**Can SC-FDMA compete on stability and throughput?**
+- **Clipping is QPSK-only.** Iterative PAPR clipping injects broadband distortion the dense
+  constellations cannot absorb — it breaks 64QAM even on a clean channel — so the
+  higher-order OFDM modes are left un-clipped.
+- **Higher-order frames are peak-normalized to a DAC-safe 0.9.** Un-clipped, OFDM's peaks
+  overshoot the DAC, which hard-clips them and shreds the dense constellation (on the rig
+  OFDM52-16QAM *acquired but decoded garbage* until this was added). Scaling the frame to
+  fit the DAC is the inherent PAPR backoff with no clipping distortion.
 
-- *Throughput* — already equal (identical FFT/CP/SC geometry).
-- *Stability* — equal on a flat channel. On a frequency-selective fade OFDM is
-  currently more robust (per-SC equalization); SC-FDMA needs solid pilot-aided MMSE
-  equalization or it suffers noise enhancement on deep-faded subcarriers. SC-FDMA's
-  compensating advantage — tolerance of PAPR-induced clipping — is exactly what the
-  hardware rig is limited by (EVM/PAPR-bound, not noise-bound), but it stays unrealized
-  while the pilots are interleaved. **Net: SC-FDMA can match OFDM now and beat it on a
-  clipping-limited TX — but only after the PAPR redesign.**
-
-**What PAPR work is needed, and what is the tradeoff?** The fix (roadmap FF-14) moves
-the pilots out of the interleaved data span so the data subcarriers stay contiguous and
-the DFT-spread actually lowers PAPR. The options and their costs:
-
-| Pilot scheme | PAPR | Channel tracking | Overhead |
-|---|---|---|---|
-| Frequency-interleaved (today) | ~12 dB (no benefit) | per-symbol, excellent | moderate |
-| Time-multiplexed (pilot symbols) | ~4–6 dB (full benefit) | per *block*, coarser | a few dedicated symbols |
-| Superimposed (pilots added to data) | low | per-symbol | power split + self-interference |
-
-The core tradeoff is **low PAPR vs fast channel tracking**: interleaved pilots track
-every symbol (good for fast fading) but kill PAPR; time-multiplexed pilots restore the
-low PAPR but track only as often as the pilot symbols recur. On HF this favours the
-redesign — Doppler is slow (~0.1–1 Hz), so pilots every few symbols track the channel
-fine, and the ~6–8 dB of average-power headroom recovered at the TX is worth far more on
-a clipping-limited link than per-symbol pilots are. The cost is the channel-estimator
-rewrite plus a small pilot-symbol overhead. It is the highest-leverage lever for the
-dense modes on real hardware.
+With that, `OFDM52-16QAM` (uncoded **and** with soft FEC) and `OFDM52-64QAM` all decode on
+the rpi51↔rpi52 hardware loopback, and `OFDM52-16QAM` + soft FEC decodes a Watterson Good-F1
+channel through the engine — the high-throughput / high-reliability HF path, realized.
 
 ---
 
