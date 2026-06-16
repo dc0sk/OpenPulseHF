@@ -212,6 +212,40 @@ fn main() -> Result<()> {
         } => {
             commands::broadcast::run(&mut engine, &payload, &mode, ttl, &callsign)?;
         }
+        Commands::Arq { command } => match command {
+            cli::ArqCommands::Send {
+                payload,
+                mode,
+                profile,
+                retries,
+                device,
+            } => {
+                commands::arq::run_send(
+                    &mut engine,
+                    &payload,
+                    &mode,
+                    profile.as_deref(),
+                    retries,
+                    device.as_deref(),
+                )?;
+            }
+            cli::ArqCommands::Listen {
+                mode,
+                profile,
+                frames,
+                session,
+                device,
+            } => {
+                commands::arq::run_listen(
+                    &mut engine,
+                    &mode,
+                    profile.as_deref(),
+                    frames,
+                    &session,
+                    device.as_deref(),
+                )?;
+            }
+        },
         Commands::Beacon {
             mode,
             interval,
