@@ -1,9 +1,12 @@
 //! Multi-mode channel-simulation loopback integration tests (QPSK, OFDM, SCFDMA).
 
+use std::time::Duration;
+
 use ofdm_plugin::OfdmPlugin;
 use openpulse_channel::{
     awgn::AwgnChannel, watterson::WattersonChannel, AwgnConfig, WattersonConfig,
 };
+use openpulse_core::fec::FecMode;
 use openpulse_modem::channel_sim::ChannelSimHarness;
 use qpsk_plugin::QpskPlugin;
 use scfdma_plugin::ScFdmaPlugin;
@@ -132,5 +135,57 @@ fn scfdma52_64qam_awgn_25db() {
         .unwrap();
     h.route(&mut channel);
     let rx = h.rx_engine.receive("SCFDMA52-64QAM", None).unwrap();
+    assert_eq!(rx, payload);
+}
+
+// ── OFDM higher-order ladder (end-to-end through the engine) ─────────────────────
+
+/// OFDM52-16QAM over AWGN at 20 dB SNR, uncoded: per-subcarrier equalization recovers bytes.
+#[test]
+fn ofdm52_16qam_awgn_20db() {
+    let mut h = make_harness_ofdm();
+    let payload = b"ofdm52 16qam awgn end-to-end";
+    let mut channel = AwgnChannel::new(AwgnConfig::new(20.0, Some(40))).unwrap();
+    h.tx_engine.transmit(payload, "OFDM52-16QAM", None).unwrap();
+    h.route(&mut channel);
+    let rx = h.rx_engine.receive("OFDM52-16QAM", None).unwrap();
+    assert_eq!(rx, payload);
+}
+
+/// OFDM52-64QAM over AWGN at 28 dB SNR, uncoded: the densest OFDM rung end-to-end.
+#[test]
+fn ofdm52_64qam_awgn_28db() {
+    let mut h = make_harness_ofdm();
+    let payload = b"ofdm52 64qam awgn";
+    let mut channel = AwgnChannel::new(AwgnConfig::new(28.0, Some(41))).unwrap();
+    h.tx_engine.transmit(payload, "OFDM52-64QAM", None).unwrap();
+    h.route(&mut channel);
+    let rx = h.rx_engine.receive("OFDM52-64QAM", None).unwrap();
+    assert_eq!(rx, payload);
+}
+
+/// OFDM52-16QAM + SoftConcatenated FEC over Watterson Good-F1: the high-reliability HF path.
+///
+/// Soft LLRs (per-subcarrier |H|²-weighted max-log-MAP) feed soft-Viterbi+RS, and the CP +
+/// per-subcarrier equalization handle the frequency-selective fade — the combination that
+/// makes OFDM the high-throughput/high-reliability HF mode.
+#[test]
+fn ofdm52_16qam_soft_fec_watterson_good_f1() {
+    let mut h = make_harness_ofdm();
+    let payload = b"ofdm 16qam soft-fec watterson high-reliability path";
+    let mut channel = WattersonChannel::new(WattersonConfig::good_f1(Some(7))).unwrap();
+    h.tx_engine
+        .transmit_with_fec_mode(payload, "OFDM52-16QAM", FecMode::SoftConcatenated, None)
+        .unwrap();
+    h.route(&mut channel);
+    let rx = h
+        .rx_engine
+        .receive_with_fec_mode_timeout(
+            "OFDM52-16QAM",
+            FecMode::SoftConcatenated,
+            None,
+            Duration::from_millis(4000),
+        )
+        .unwrap();
     assert_eq!(rx, payload);
 }
