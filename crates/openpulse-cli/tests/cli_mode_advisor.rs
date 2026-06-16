@@ -19,7 +19,13 @@ fn mode_advisor_outputs_expected_levels_for_10_snr_values() {
     for (snr, level, mode) in cases {
         let mut cmd = Command::cargo_bin("openpulse").expect("binary should build");
         // Pin the profile so the assertion is independent of any ambient config file.
-        cmd.args(["mode-advisor", "--snr", &snr.to_string(), "--profile", "hpx_hf"]);
+        cmd.args([
+            "mode-advisor",
+            "--snr",
+            &snr.to_string(),
+            "--profile",
+            "hpx_hf",
+        ]);
 
         cmd.assert()
             .success()
