@@ -12,3 +12,6 @@ openpulse-core = { workspace = true }
 openpulse-dsp  = { workspace = true }
 rustfft        = { workspace = true }
 num-complex    = { workspace = true }
+
+[dev-dependencies]
+openpulse-channel = { workspace = true }

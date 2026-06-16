@@ -5,6 +5,7 @@ use rustfft::FftPlanner;
 
 use crate::channel::is_pilot;
 use openpulse_core::len_prefix::{encode_len_prefix, LEN_PREFIX_BYTES};
+use openpulse_dsp::constellation::map_symbol;
 
 use crate::params::{
     params_for_mode, preamble_sign, OfdmParams, CLIP_MAX_ITER, CP, FFT_SIZE, PILOT_AMPLITUDE,
@@ -59,15 +60,15 @@ fn modulate_with_params(payload: &[u8], p: &OfdmParams) -> Vec<f32> {
                 freq[FFT_SIZE - sc] = Complex32::new(PILOT_AMPLITUDE, 0.0);
                 continue;
             }
-            // Pack 2 bits (QPSK) for this SC.
+            // Pack bits_per_sc bits for this subcarrier and map to its constellation.
             let mut sym_bits = 0u8;
-            for b in 0..2 {
+            for b in 0..p.bits_per_sc {
                 if bit_idx < bits.len() {
                     sym_bits |= (bits[bit_idx] as u8) << b;
                     bit_idx += 1;
                 }
             }
-            let sym = qpsk_mod(sym_bits);
+            let sym = map_symbol(sym_bits, p.bits_per_sc);
             freq[sc] = sym;
             // Hermitian symmetry → real IFFT output.
             freq[FFT_SIZE - sc] = sym.conj();
@@ -88,7 +89,17 @@ fn modulate_with_params(payload: &[u8], p: &OfdmParams) -> Vec<f32> {
     // no-preamble waveform — then prepend the timing-acquisition preamble, itself
     // clipped separately so its high comb-PAPR cannot raise the data clip
     // threshold (which would otherwise degrade the data subcarriers).
-    let data = clip_iterative(&out, TARGET_PAPR_DB, CLIP_MAX_ITER);
+    //
+    // Only QPSK is clipped.  Clipping injects broadband distortion that the dense
+    // higher-order constellations cannot absorb — it breaks 64QAM even on a clean
+    // channel (its minimum distance is too small).  Higher-order OFDM instead keeps
+    // its natural ~12 dB PAPR and relies on TX leveling/backoff (the same backoff
+    // SSB rigs already apply), which is the strategy's premise for OFDM HOM.
+    let data = if p.bits_per_sc == 2 {
+        clip_iterative(&out, TARGET_PAPR_DB, CLIP_MAX_ITER)
+    } else {
+        out
+    };
     let mut preamble = clip_iterative(
         &build_preamble(p, &ifft, scale),
         TARGET_PAPR_DB,
@@ -150,19 +161,6 @@ fn build_preamble(
     out.extend_from_slice(&time[cp_start..]);
     out.extend_from_slice(&time);
     out
-}
-
-// ── QPSK constellation ────────────────────────────────────────────────────────
-
-const INV_SQRT2: f32 = std::f32::consts::FRAC_1_SQRT_2;
-
-fn qpsk_mod(bits: u8) -> Complex32 {
-    match bits & 0x3 {
-        0 => Complex32::new(INV_SQRT2, INV_SQRT2),
-        1 => Complex32::new(-INV_SQRT2, INV_SQRT2),
-        2 => Complex32::new(INV_SQRT2, -INV_SQRT2),
-        _ => Complex32::new(-INV_SQRT2, -INV_SQRT2),
-    }
 }
 
 // ── Bit packing ───────────────────────────────────────────────────────────────

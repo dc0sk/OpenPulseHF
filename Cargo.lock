@@ -3627,6 +3627,7 @@ name = "ofdm-plugin"
 version = "0.1.0"
 dependencies = [
  "num-complex",
+ "openpulse-channel",
  "openpulse-core",
  "openpulse-dsp",
  "rustfft",

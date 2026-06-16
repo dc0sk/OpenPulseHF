@@ -281,27 +281,49 @@ impl SessionProfile {
     /// (LS estimate + ZF) provides robustness against frequency-selective HF fading that
     /// single-carrier modes cannot achieve without an equalizer.
     ///
-    /// | SL  | Mode    | BW       | Gross bps |
-    /// |-----|---------|----------|-----------|
-    /// | SL5 | OFDM16  | ≈ 625 Hz | ≈ 889     |
-    /// | SL6 | OFDM52  | ≈ 2031 Hz| ≈ 2889    |
+    /// | SL  | Mode         | BW        | Gross bps |
+    /// |-----|--------------|-----------|-----------|
+    /// | SL5 | OFDM16       | ≈ 625 Hz  | ≈ 889     |
+    /// | SL6 | OFDM52       | ≈ 2031 Hz | ≈ 2889    |
+    /// | SL7 | OFDM52-8PSK  | ≈ 2031 Hz | ≈ 4333    |
+    /// | SL8 | OFDM52-16QAM | ≈ 2031 Hz | ≈ 5778    |
+    /// | SL9 | OFDM52-32QAM | ≈ 2031 Hz | ≈ 7222    |
+    /// | SL10| OFDM52-64QAM | ≈ 2031 Hz | ≈ 8667    |
+    ///
+    /// The higher-order rungs (SL7+) run FEC-protected (soft); OFDM's per-subcarrier
+    /// equalization handles frequency-selective HF fading better than SC-FDMA (no
+    /// DFT-despread noise enhancement), making this the high-throughput /
+    /// high-reliability HF path.  All rungs fit the 2700 Hz channel.
     pub fn hpx_ofdm_hf() -> Self {
         let mut modes = [None; 21];
         modes[SpeedLevel::Sl5 as usize] = Some("OFDM16");
         modes[SpeedLevel::Sl6 as usize] = Some("OFDM52");
+        modes[SpeedLevel::Sl7 as usize] = Some("OFDM52-8PSK");
+        modes[SpeedLevel::Sl8 as usize] = Some("OFDM52-16QAM");
+        modes[SpeedLevel::Sl9 as usize] = Some("OFDM52-32QAM");
+        modes[SpeedLevel::Sl10 as usize] = Some("OFDM52-64QAM");
         let mut snr_floors = [None; 21];
         snr_floors[SpeedLevel::Sl5 as usize] = Some(8.0_f32);
         snr_floors[SpeedLevel::Sl6 as usize] = Some(11.0_f32);
+        snr_floors[SpeedLevel::Sl7 as usize] = Some(14.0_f32);
+        snr_floors[SpeedLevel::Sl8 as usize] = Some(17.0_f32);
+        snr_floors[SpeedLevel::Sl9 as usize] = Some(22.0_f32);
+        snr_floors[SpeedLevel::Sl10 as usize] = Some(26.0_f32);
         let mut snr_ceilings = [None; 21];
         snr_ceilings[SpeedLevel::Sl5 as usize] = Some(14.0_f32);
-        // SL6 is the ceiling; no upgrade above it.
+        snr_ceilings[SpeedLevel::Sl6 as usize] = Some(18.0_f32);
+        snr_ceilings[SpeedLevel::Sl7 as usize] = Some(20.0_f32);
+        snr_ceilings[SpeedLevel::Sl8 as usize] = Some(24.0_f32);
+        snr_ceilings[SpeedLevel::Sl9 as usize] = Some(28.0_f32);
+        // SL10 (OFDM52-64QAM) is the ceiling; no upgrade above it.
         Self {
             modes,
             initial_level: SpeedLevel::Sl5,
             nack_threshold: 3,
             snr_floors,
             snr_ceilings,
-            ack_up_requires_snr_candidate_at: None,
+            // Gate admission to the densest rung behind a prior SNR-upgrade candidate.
+            ack_up_requires_snr_candidate_at: Some(SpeedLevel::Sl10),
         }
     }
 

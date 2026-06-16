@@ -4,6 +4,7 @@
 //! equalizer.
 
 pub mod acquisition;
+pub mod constellation;
 pub mod doppler_tracker;
 pub mod equalizer;
 pub mod farrow;

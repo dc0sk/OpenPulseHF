@@ -8,14 +8,29 @@ use crate::matrix::{ChannelSpec, TestCase, Tier, UseCase};
 
 const MULTICARRIER_MODES: &[&str] = &["OFDM16", "OFDM52", "SCFDMA16", "SCFDMA52"];
 
-/// SC-FDMA higher-order modulation modes (SCFDMA52 with denser constellations).
-/// Require higher minimum SNR than SCFDMA52-QPSK; min thresholds set in mode_min_snr_db().
+/// SC-FDMA higher-order modulation modes: the full-width SCFDMA52 family plus the
+/// narrowband SCFDMA26 fallback rungs (half width, ~+3 dB per-SC SNR).  All require
+/// higher minimum SNR than QPSK; thresholds set in mode_min_snr_db().
 const SCFDMA_HOM_MODES: &[&str] = &[
     "SCFDMA52-8PSK",
     "SCFDMA52-16QAM",
     "SCFDMA52-32QAM",
     "SCFDMA52-64QAM",
     "SCFDMA52-64QAM-P4",
+    "SCFDMA26-8PSK",
+    "SCFDMA26-16QAM",
+    "SCFDMA26-32QAM",
+];
+
+/// OFDM higher-order modulation modes (OFDM52 with denser constellations) — the
+/// high-throughput / high-reliability HF path (per-SC equalization handles
+/// frequency-selective fading without SC-FDMA's de-spread noise enhancement).
+/// Same min-SNR profile as the SC-FDMA HOM modes.
+const OFDM_HOM_MODES: &[&str] = &[
+    "OFDM52-8PSK",
+    "OFDM52-16QAM",
+    "OFDM52-32QAM",
+    "OFDM52-64QAM",
 ];
 
 const QAM64_MODES: &[&str] = &["64QAM500", "64QAM1000", "64QAM2000-RRC"];
@@ -97,10 +112,14 @@ pub fn mode_min_snr_db(mode: &str) -> f32 {
     }
     match mode {
         "8PSK500" | "8PSK1000-HF" | "OFDM52" | "SCFDMA52" => 15.0,
-        "SCFDMA52-8PSK" => 15.0,
-        "SCFDMA52-16QAM" => 20.0,
-        "SCFDMA52-32QAM" => 25.0,
-        "SCFDMA52-64QAM" | "SCFDMA52-64QAM-P4" => 30.0,
+        "SCFDMA52-8PSK" | "OFDM52-8PSK" => 15.0,
+        "SCFDMA52-16QAM" | "OFDM52-16QAM" => 20.0,
+        "SCFDMA52-32QAM" | "OFDM52-32QAM" => 25.0,
+        "SCFDMA52-64QAM" | "SCFDMA52-64QAM-P4" | "OFDM52-64QAM" => 30.0,
+        // Narrowband SCFDMA26 fallback: ~3 dB more robust than the SCFDMA52 family.
+        "SCFDMA26-8PSK" => 12.0,
+        "SCFDMA26-16QAM" => 17.0,
+        "SCFDMA26-32QAM" => 22.0,
         _ => 0.0,
     }
 }
@@ -137,6 +156,7 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
         .chain(QAM64_MODES.iter())
         .chain(MULTICARRIER_MODES.iter())
         .chain(SCFDMA_HOM_MODES.iter())
+        .chain(OFDM_HOM_MODES.iter())
         .chain(SMOKE_ONLY_MODES.iter())
         .copied()
         .collect();
@@ -317,7 +337,7 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
     //        SoftConcatenated included because the dense HOM modes operate under a
     //        soft code in practice (it is what closes them on a real link — see the
     //        --fec hardware loopback results); testing only None/Rs missed that path.
-    for mode in SCFDMA_HOM_MODES {
+    for mode in SCFDMA_HOM_MODES.iter().chain(OFDM_HOM_MODES.iter()) {
         for channel in &awgn_channels {
             if channel_snr_db(channel).is_some_and(|s| s < mode_min_snr_db(mode)) {
                 continue;
@@ -445,7 +465,7 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
         }
 
         // SC-FDMA higher-order × all propagation channels × {None, Rs} × 32 bytes
-        for mode in SCFDMA_HOM_MODES {
+        for mode in SCFDMA_HOM_MODES.iter().chain(OFDM_HOM_MODES.iter()) {
             for channel in &prop_channels {
                 for &fec in &[FecMode::None, FecMode::Rs] {
                     cases.push(raw_case(
