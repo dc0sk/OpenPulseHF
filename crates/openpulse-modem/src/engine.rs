@@ -75,7 +75,6 @@ struct ScanPlanner {
     min_frame_samples: usize,
     last_tried_end: usize,
     first_energy_pos: Option<usize>,
-    scan_reset_pending: bool,
     /// Elapsed-seconds timestamp of the last fired retry.
     last_retry_at_secs: Option<u64>,
 }
@@ -96,7 +95,6 @@ impl ScanPlanner {
             min_frame_samples,
             last_tried_end: 0,
             first_energy_pos: None,
-            scan_reset_pending: false,
             last_retry_at_secs: None,
         }
     }
@@ -106,22 +104,19 @@ impl ScanPlanner {
         self.first_energy_pos.is_some()
     }
 
-    /// Record a successful AFC settle at `pos` and schedule a scan reset so
-    /// the next decode pass starts from that position with converged AFC.
-    fn note_settled(&mut self, pos: usize) {
-        self.first_energy_pos = Some(pos);
-        self.scan_reset_pending = true;
+    /// The settled first-energy (≈ preamble) position, if settling has occurred.
+    fn first_energy_pos(&self) -> Option<usize> {
+        self.first_energy_pos
     }
 
-    /// Apply a pending scan reset (runs even when no new audio arrived so the
-    /// decode pass fires immediately against the already-accumulated buffer).
-    fn apply_pending_reset(&mut self) {
-        if self.scan_reset_pending {
-            self.scan_reset_pending = false;
-            if let Some(fep) = self.first_energy_pos {
-                self.last_tried_end = self.last_tried_end.min(fep);
-            }
-        }
+    /// Record a successful AFC settle at `pos` (the refined preamble onset).
+    ///
+    /// The decode from this position is driven by the dedicated first-energy
+    /// re-decode in the receive loop (which re-tries as the buffer grows), so we
+    /// do NOT rewind `last_tried_end`: rewinding made the broad scan re-decode a
+    /// huge range every time the buffer jumped, stalling the loop.
+    fn note_settled(&mut self, pos: usize) {
+        self.first_energy_pos = Some(pos);
     }
 
     /// Untried scan start positions for the current buffer, ending exactly at
@@ -214,6 +209,35 @@ impl EnergyGate {
         self.history.push_back(mean_sq);
         mean_sq >= thr
     }
+}
+
+/// Refine a coarse first-energy position to the actual signal onset.
+///
+/// The energy gate's wide window (`acq_samples`, ~32 symbols) trips up to a full
+/// window before the true onset — its tail catches the first signal samples — so
+/// the coarse position can sit a whole acquisition window ahead of the preamble,
+/// far beyond the demodulator's one-symbol timing search.  Scan symbol-length
+/// sub-windows across the gate span and return the first whose energy reaches a
+/// quarter of the span's peak (where the signal turns on), so the preamble lands
+/// within one symbol period of the returned position.
+fn refine_onset(buf: &[f32], start: usize, span: usize, step: usize) -> usize {
+    let end = (start + span).min(buf.len());
+    if step == 0 || end <= start + step {
+        return start;
+    }
+    let energy = |p: usize| -> f32 {
+        let e = (p + step).min(buf.len());
+        buf[p..e].iter().map(|s| s * s).sum::<f32>() / (e - p) as f32
+    };
+    let positions: Vec<usize> = (start..end).step_by(step).collect();
+    let peak = positions.iter().map(|&p| energy(p)).fold(0.0f32, f32::max);
+    if peak <= 0.0 {
+        return start;
+    }
+    positions
+        .into_iter()
+        .find(|&p| energy(p) >= peak * 0.25)
+        .unwrap_or(start)
 }
 
 pub struct ModemEngine {
@@ -924,12 +948,6 @@ impl ModemEngine {
                 debug!("received {} accumulated audio samples", accumulated.len());
             }
 
-            // After AFC settling, reset the scan back to the first energy position.
-            // This fires even when no new audio arrived so that the decode pass runs
-            // immediately against the already-accumulated buffer (avoids stalling when
-            // the audio backend returns empty after the initial fill, e.g. loopback).
-            planner.apply_pending_reset();
-
             // One-shot full-frame retry around the first-energy position.
             // Fires when accumulated ≥ fep + max_frame_samples.  By then the full
             // frame is in the buffer.  Retry positions span fep ± one symbol period
@@ -1045,9 +1063,41 @@ impl ModemEngine {
                 }
             }
 
-            // Scan start positions: covers both new positions added by the latest chunk
-            // and (after AFC reset) positions from the first-energy point onward.
-            if !accumulated.is_empty() {
+            // Once settling has located the preamble (first_energy_pos), re-decode
+            // from there on EVERY iteration with the current — possibly grown —
+            // buffer.  A long frame preceded by silence (e.g. BPSK31: ~12 s frame
+            // after the IRS startup wait) may not have fully arrived when the
+            // preamble position was first scanned, giving a truncated window ("no
+            // data symbols after preamble"); the broad scan then advances past it
+            // via commit_scan and never returns, so without this the frame never
+            // decodes.  Bounded to one decode per iteration.
+            if let Some(fep) = planner.first_energy_pos() {
+                let end = (fep + max_frame_samples).min(accumulated.len());
+                if end.saturating_sub(fep) >= min_frame_samples {
+                    let afc_before = self.afc_correction_hz;
+                    match self.decode_attempt(
+                        mode,
+                        AudioSamples {
+                            samples: accumulated[fep..end].to_vec(),
+                        },
+                        fec,
+                    ) {
+                        Ok(payload) => return Ok(payload),
+                        Err(err) => {
+                            last_err = Some(err);
+                            self.afc_correction_hz = afc_before;
+                        }
+                    }
+                }
+            }
+
+            // Broad scan to LOCATE the first signal energy and settle AFC.  Once
+            // settled, the first-energy re-decode above owns the decode (re-trying
+            // the preamble as the buffer grows), so the broad scan stops: continuing
+            // it would re-decode every forward position on a full-buffer window each
+            // iteration, starving the loop so the frame never finishes buffering.
+            // The T>=12 s full-buffer retry remains as a fallback for a bad settle.
+            if !accumulated.is_empty() && !planner.is_settled() {
                 'inner: for start in planner.scan_positions(accumulated.len()) {
                     // Fast energy gate: check the first 32 symbol periods at this
                     // position.  Silence costs < 0.1 ms; only emit the full
@@ -1104,9 +1154,10 @@ impl ModemEngine {
                             self.afc_correction_hz = 0.0;
                             continue;
                         }
-                        planner.note_settled(start);
+                        let onset = refine_onset(&accumulated, start, acq_samples, step);
+                        planner.note_settled(onset);
                         info!(
-                            "AFC settling done: correction={:.1}Hz buf_len={}",
+                            "AFC settling done: correction={:.1}Hz onset={onset} (coarse={start}) buf_len={}",
                             self.afc_correction_hz,
                             accumulated.len()
                         );
@@ -3406,14 +3457,16 @@ mod tests {
     }
 
     #[test]
-    fn scan_planner_reset_returns_to_first_energy_pos() {
+    fn scan_planner_settle_records_first_energy_without_rewind() {
         let mut p = ScanPlanner::new(32, 1056);
         p.commit_scan(50_000);
         p.note_settled(1234);
-        p.apply_pending_reset();
-        let next: Vec<usize> = p.scan_positions(50_000).take(1).collect();
-        assert_eq!(next.first(), Some(&1234));
+        // Settling records the first-energy position for the dedicated re-decode,
+        // but must NOT rewind the scan — rewinding made the broad scan re-decode
+        // the whole buffer each iteration and stalled the loop.
         assert!(p.is_settled());
+        assert_eq!(p.first_energy_pos(), Some(1234));
+        assert_eq!(p.scan_positions(50_000).next(), Some(50_000 - 1056));
     }
 
     #[test]
