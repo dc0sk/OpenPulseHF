@@ -87,6 +87,34 @@ impl SessionProfile {
         .collect()
     }
 
+    /// Canonical profile names accepted by [`SessionProfile::by_name`], in ladder order.
+    pub const PROFILE_NAMES: &'static [&'static str] = &[
+        "hpx500",
+        "hpx_hf",
+        "hpx_ofdm_hf",
+        "hpx_wideband",
+        "hpx_wideband_hd",
+        "hpx_narrowband",
+        "hpx_narrowband_hd",
+    ];
+
+    /// Construct a profile by name (case-insensitive; `-` and `_` are interchangeable).
+    ///
+    /// Returns `None` for an unrecognised name; see [`SessionProfile::PROFILE_NAMES`].
+    pub fn by_name(name: &str) -> Option<SessionProfile> {
+        let key = name.trim().to_ascii_lowercase().replace('-', "_");
+        match key.as_str() {
+            "hpx500" => Some(Self::hpx500()),
+            "hpx_hf" => Some(Self::hpx_hf()),
+            "hpx_ofdm_hf" => Some(Self::hpx_ofdm_hf()),
+            "hpx_wideband" => Some(Self::hpx_wideband()),
+            "hpx_wideband_hd" => Some(Self::hpx_wideband_hd()),
+            "hpx_narrowband" => Some(Self::hpx_narrowband()),
+            "hpx_narrowband_hd" => Some(Self::hpx_narrowband_hd()),
+            _ => None,
+        }
+    }
+
     /// HPX500 profile: 500 Hz class, BPSK/QPSK rate ladder (SL2–SL6).
     ///
     /// | SL  | Mode     |
