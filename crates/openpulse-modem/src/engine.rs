@@ -151,6 +151,15 @@ impl ScanPlanner {
     }
 }
 
+/// Settled AFC corrections below this magnitude (Hz) are treated as measurement
+/// noise and snapped to zero.  A short data-aided/blind estimate on a zero-offset
+/// frame lands a few tenths of a Hz off; applying that spurious correction breaks
+/// modes that re-fit carrier phase from the (now over-corrected) preamble — 8PSK's
+/// `carrier_phase_correct` enters a fragile drift-fit branch at ≥0.5 Hz.  Real HF
+/// offsets are tens to hundreds of Hz (the carrier-offset regression uses 15 Hz;
+/// the measured inter-rig offset is ~400 Hz), so this never suppresses a real one.
+const AFC_SETTLE_DEADBAND_HZ: f32 = 2.0;
+
 /// Result of [`ModemEngine::afc_mini_settle`].
 struct AfcSettleOutcome {
     /// Correction after the one-shot wide-scan anchor pass.
@@ -3179,10 +3188,17 @@ impl ModemEngine {
             self.update_afc_estimate(mode, window);
         }
         self.afc_step = saved_step;
+        let last_delta = (self.afc_correction_hz - prev).abs();
+        // Snap a sub-noise-floor correction to zero (see AFC_SETTLE_DEADBAND_HZ):
+        // applying a spurious few-tenths-of-a-Hz correction over-corrects a
+        // zero-offset frame and breaks 8PSK's preamble phase re-fit.
+        if self.afc_correction_hz.abs() < AFC_SETTLE_DEADBAND_HZ {
+            self.afc_correction_hz = 0.0;
+        }
         AfcSettleOutcome {
             anchor,
             fine: self.afc_correction_hz,
-            last_delta: (self.afc_correction_hz - prev).abs(),
+            last_delta,
         }
     }
 
