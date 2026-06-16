@@ -102,6 +102,11 @@ pub enum Commands {
         /// Estimated signal-to-noise ratio in dB.
         #[arg(long)]
         snr: f32,
+        /// Session profile (overrides config `[modem] profile`). One of: hpx500,
+        /// hpx_hf, hpx_ofdm_hf, hpx_wideband, hpx_wideband_hd, hpx_narrowband,
+        /// hpx_narrowband_hd.
+        #[arg(long)]
+        profile: Option<String>,
     },
     /// Export session performance metrics (throughput, FER, latency, SNR estimate).
     SessionMetrics {

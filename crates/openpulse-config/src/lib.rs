@@ -110,6 +110,11 @@ pub struct AudioConfig {
 pub struct ModemConfig {
     /// Default modulation mode (e.g. `"BPSK250"`).
     pub mode: String,
+    /// Adaptive session profile (e.g. `"hpx_hf"`, `"hpx_ofdm_hf"`).
+    ///
+    /// Selects the SpeedLevel→mode ladder the rate controller and mode advisor use.
+    /// See `SessionProfile::PROFILE_NAMES` in `openpulse-core`.
+    pub profile: String,
     /// PTT backend: `none`, `rts`, `dtr`, `vox`, or `rigctld`.
     pub ptt_backend: String,
 }
@@ -245,6 +250,7 @@ impl Default for ModemConfig {
     fn default() -> Self {
         Self {
             mode: "BPSK250".into(),
+            profile: "hpx_hf".into(),
             ptt_backend: "none".into(),
         }
     }
@@ -552,6 +558,11 @@ backend = "default"
 #            OFDM16, OFDM52, SCFDMA16, SCFDMA52, SCFDMA52-16QAM,
 #            SCFDMA52-64QAM, SCFDMA52-64QAM-P4, FSK4-ACK
 mode = "BPSK250"
+# Adaptive session profile (SpeedLevel ladder) used by the rate controller and
+# `openpulse mode-advisor`. Available: hpx500, hpx_hf, hpx_ofdm_hf, hpx_wideband,
+# hpx_wideband_hd, hpx_narrowband, hpx_narrowband_hd. hpx_ofdm_hf is the OFDM
+# higher-order (high-throughput/high-reliability) HF ladder.
+profile = "hpx_hf"
 # PTT backend: none | rts | dtr | vox | rigctld
 ptt_backend = "none"
 
@@ -735,6 +746,25 @@ mod tests {
         assert_eq!(cfg.station.grid_square, "AA00");
         assert_eq!(cfg.ardop.cmd_port, 8515);
         assert_eq!(cfg.modem.ptt_backend, "none");
+        assert_eq!(cfg.modem.profile, "hpx_hf");
+    }
+
+    #[test]
+    fn modem_profile_loads_and_template_parses() {
+        // Override the profile in a config file and confirm it round-trips.
+        let path = unique_tmp("profile");
+        {
+            let mut f = std::fs::File::create(&path).unwrap();
+            writeln!(f, "[modem]").unwrap();
+            writeln!(f, r#"profile = "hpx_ofdm_hf""#).unwrap();
+        }
+        let cfg = load_from(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(cfg.modem.profile, "hpx_ofdm_hf");
+
+        // The emitted template must parse and carry the documented default.
+        let parsed: OpenpulseConfig = toml::from_str(&init_template()).unwrap();
+        assert_eq!(parsed.modem.profile, "hpx_hf");
     }
 
     #[test]

@@ -186,3 +186,52 @@ fn hpx_wideband_hd_requires_snr_candidate_before_sl15_ack_up() {
     let wideband = SessionProfile::hpx_wideband();
     assert_eq!(wideband.ack_up_requires_snr_candidate_at(), None);
 }
+
+#[test]
+fn by_name_resolves_every_listed_profile() {
+    for name in SessionProfile::PROFILE_NAMES {
+        assert!(
+            SessionProfile::by_name(name).is_some(),
+            "PROFILE_NAMES entry {name:?} must resolve via by_name"
+        );
+    }
+}
+
+#[test]
+fn by_name_matches_constructors() {
+    assert_eq!(
+        SessionProfile::by_name("hpx500"),
+        Some(SessionProfile::hpx500())
+    );
+    assert_eq!(
+        SessionProfile::by_name("hpx_hf"),
+        Some(SessionProfile::hpx_hf())
+    );
+    assert_eq!(
+        SessionProfile::by_name("hpx_ofdm_hf"),
+        Some(SessionProfile::hpx_ofdm_hf())
+    );
+}
+
+#[test]
+fn by_name_normalises_case_and_separators() {
+    let canonical = SessionProfile::by_name("hpx_ofdm_hf");
+    assert!(canonical.is_some());
+    assert_eq!(SessionProfile::by_name("HPX-OFDM-HF"), canonical);
+    assert_eq!(SessionProfile::by_name("  Hpx_Ofdm-Hf  "), canonical);
+}
+
+#[test]
+fn by_name_ofdm_hf_exposes_the_hom_ladder() {
+    // The OFDM higher-order ladder (PR #407) must be reachable by name.
+    let p = SessionProfile::by_name("hpx_ofdm_hf").expect("ofdm-hf resolves");
+    assert_eq!(p.initial_level, SpeedLevel::Sl5);
+    assert_eq!(p.mode_for(SpeedLevel::Sl8), Some("OFDM52-16QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl10), Some("OFDM52-64QAM"));
+}
+
+#[test]
+fn by_name_rejects_unknown() {
+    assert_eq!(SessionProfile::by_name("nope"), None);
+    assert_eq!(SessionProfile::by_name(""), None);
+}

@@ -68,8 +68,8 @@ fn main() -> Result<()> {
         };
     }
 
-    if let Commands::ModeAdvisor { snr } = &cli.command {
-        return commands::mode_advisor::run(*snr);
+    if let Commands::ModeAdvisor { snr, profile } = &cli.command {
+        return commands::mode_advisor::run(*snr, profile.as_deref());
     }
 
     if let Commands::Daemon { addr, command } = &cli.command {

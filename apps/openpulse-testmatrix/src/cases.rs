@@ -379,6 +379,21 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
             tier,
         ));
     }
+    // The OFDM higher-order ladder starts at OFDM16 (8 dB floor) and cannot step below
+    // it, so skip AWGN channels weaker than that — unlike the BPSK31-floored ladders,
+    // a sub-floor channel would fail every rung. Clean (no SNR) is always included.
+    for channel in &awgn_channels {
+        if channel_snr_db(channel).is_some_and(|snr| snr < 8.0) {
+            continue;
+        }
+        cases.push(adaptive_case(
+            UseCase::AdaptiveHpxOfdmHf,
+            "HPX_OFDM_HF",
+            channel.clone(),
+            64,
+            tier,
+        ));
+    }
 
     // ── 7. Protocol loopbacks (clean only) ───────────────────────────────────────
     cases.push(proto_case(
