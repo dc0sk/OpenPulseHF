@@ -880,6 +880,17 @@ impl ModemEngine {
             max_frame_samples.saturating_mul(3)
         };
 
+        // AFC settling window.  It must span at least one data symbol past the
+        // preamble so the plugin's fine (IQ-squaring) estimator engages; on a
+        // pure preamble-length window (`acq_samples`) the estimator falls back to
+        // the coarse ±12.5 Hz Goertzel grid, whose ≤6.25 Hz residual is inside the
+        // faster BPSK modes' tolerance but exceeds BPSK31's ±7.8 Hz (= baud/4 for
+        // differential detection) — which is why 31.25-baud frames were
+        // undecodable while BPSK63/100/250 passed.  `min_frame_samples`
+        // (= preamble + 1 symbol) is exactly that fine-AFC threshold and is only
+        // one symbol longer than `acq_samples`, so settling cost is unchanged.
+        let afc_window = acq_samples.max(min_frame_samples);
+
         // Adaptive silence gate (absolute floor 1e-4 mean-square, raised above
         // an elevated band noise floor; see EnergyGate).  Silence is typically
         // < 2.5e-5 mean-square; a live BPSK carrier at 30 % full-scale gives
@@ -991,8 +1002,10 @@ impl ModemEngine {
                         // guard on |change| would incorrectly block signals at
                         // exactly fc (0 Hz offset) and signals at the Goertzel
                         // boundary (which saturate and accumulate).
-                        if gate_len >= acq_samples {
-                            let settle = self.afc_mini_settle(mode, &accumulated[start..gate_end]);
+                        let settle_end = (start + afc_window).min(accumulated.len());
+                        if settle_end - start >= afc_window {
+                            let settle =
+                                self.afc_mini_settle(mode, &accumulated[start..settle_end]);
                             // Stability guard: reject if the fine-track
                             // drifted >20 Hz from the anchor (unstable noise)
                             // or exceeded the Goertzel range.  The energy gate
@@ -1060,16 +1073,16 @@ impl ModemEngine {
                     // (1 − 0.3⁶) × 150 Hz ≈ 149.9 Hz — effectively one-shot for
                     // crystal errors up to ±300 Hz on 144 MHz (≈ ±2 ppm).
                     if !planner.is_settled() {
-                        // Use a short window (one preamble length = 1024 samples)
-                        // for AFC settling.  Using max_frame_samples (72960) makes
-                        // settling O(N²) in buffer length when the noise floor is
-                        // above ENERGY_GATE_THRESHOLD: every position fires the gate,
-                        // each runs 6 Goertzel passes on 72960 samples (≈ 170 ms),
-                        // and the scan falls hours behind the live audio.  A 1024-
-                        // sample window is 70× faster and still provides enough SNR
-                        // to locate the BPSK carrier when the signal is present.
-                        let settle_end = (start + acq_samples).min(accumulated.len());
-                        if settle_end - start < acq_samples {
+                        // Settle over `afc_window` (preamble + 1 symbol), NOT
+                        // max_frame_samples (72960): the latter makes settling
+                        // O(N²) in buffer length when the noise floor is above
+                        // ENERGY_GATE_THRESHOLD (every position fires the gate,
+                        // each runs 6 Goertzel passes on the full slice ≈ 170 ms)
+                        // and the scan falls behind live audio.  afc_window is
+                        // ~preamble-sized (fast) yet long enough to engage the
+                        // plugin's fine AFC stage — see its definition above.
+                        let settle_end = (start + afc_window).min(accumulated.len());
+                        if settle_end - start < afc_window {
                             continue;
                         }
                         let settle = self.afc_mini_settle(mode, &accumulated[start..settle_end]);

@@ -46,7 +46,11 @@ KILL_WAIT="${KILL_WAIT:-12}"                # seconds after TX before killing IR
 
 # ── Test matrix ────────────────────────────────────────────────────────────────
 # Quick tier: one case per mode family; fast enough for repeated regression checks.
-# BPSK31 excluded: 12 s frame exposes carrier phase accumulation at 31.25 baud (engine bug).
+# BPSK31 excluded (full-tier only) — still KNOWN-FAILING on this rig: its ~12 s frame
+#   is not reliably acquired; the decode scan never lands on the preamble (positions
+#   tried start well past it).  This is a long-frame acquisition issue, separate from
+#   the AFC carrier-offset path (whose one-symbol-short settling window was fixed in
+#   engine.rs `afc_window`).  Tracked as a follow-up.
 # QPSK500 excluded: AFC anchor fires at preamble start, retry misses by 200 samples (engine bug).
 QUICK_CASES=(
     "BPSK100|64"
