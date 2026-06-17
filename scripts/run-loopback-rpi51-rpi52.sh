@@ -58,12 +58,23 @@ KILL_WAIT="${KILL_WAIT:-12}"                # seconds after TX before killing IR
 #   that broke the decode at the true onset. The engine now refines the onset BEFORE
 #   settling AFC — see engine.rs (refine-onset-then-settle) and
 #   tests/qpsk500_acquisition.rs.
+# 8PSK500/1000 were previously held out (the carrier-offset acquisition gap: the demod
+#   failed through a real carrier offset). That gap is fixed (PR #417): a broken
+#   drift-fit branch in carrier_phase_correct was removed and the single-pass Costas
+#   replaced with a two-pass acquire/track decision-directed loop — see
+#   plugins/psk8/src/demodulate.rs and tests/psk8_carrier_offset.rs. The matched-card
+#   rig here is ~zero carrier offset (so it exercises 8PSK's zero-offset acquisition,
+#   which already passed on 2026-06-12); the carrier-offset case is covered in-process
+#   by psk8_carrier_offset.rs and matters most on-air / between different rigs. NOTE:
+#   8PSK1000 still has a narrowed offset gap at n=8 (some offsets settle AFC outside the
+#   tracker's pull-in range) — fine at zero offset, watch it on-air.
 QUICK_CASES=(
     "BPSK100|64"
     "BPSK250|64"
     "QPSK125|64"
     "QPSK250|64"
     "QPSK500|128"
+    "8PSK500|128"
 )
 
 # Full tier: broader coverage across baud rates and payload sizes.
@@ -76,6 +87,8 @@ FULL_CASES=(
     "QPSK250|64"
     "QPSK500|128"
     "QPSK1000|128"
+    "8PSK500|128"
+    "8PSK1000|128"
 )
 
 TIER="${TIER:-quick}"
