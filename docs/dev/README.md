@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/README.md
 status: living
-last_updated: 2026-05-17
+last_updated: 2026-06-17
 ---
 
 # Development and Planning Documentation
@@ -70,6 +70,8 @@ This index contains development-oriented, planning, architecture, protocol-spec,
 - [docs/dev/js8call-analysis.md](js8call-analysis.md): JS8Call analysis notes
 - [docs/dev/ofdm-research.md](ofdm-research.md): OFDM research notes
 - [docs/dev/freedv-auth-research.md](freedv-auth-research.md): authenticated FreeDV research notes
+- [docs/dev/references.md](references.md): external modem/DSP repos studied for technique
+- [docs/dev/reference-mining-plan.md](reference-mining-plan.md): prioritized idea catalog from a source-level scan of those repos (proposal)
 - [docs/dev/vara-parity-execution-board.md](vara-parity-execution-board.md): parity and execution board notes
 
 ## Historical and review artifacts

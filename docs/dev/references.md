@@ -16,6 +16,11 @@ We implement independently (OpenPulseHF is a from-scratch protocol); these infor
 *technique*, not code lifted wholesale. Note each project's licence before porting
 any code.
 
+> **Source-level scan (2026-06-17):** a full read of these repos' code — a
+> prioritized idea catalog (benefit/effort/licence/fit per idea) plus
+> recommendations and the SC-FDMA-low-PAPR analysis — is in
+> [reference-mining-plan.md](reference-mining-plan.md).
+
 ---
 
 ## gnuradio/gnuradio — the SDR reference toolkit
