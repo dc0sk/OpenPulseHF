@@ -565,7 +565,7 @@ pub fn qam64_demodulate_soft_gpu(
         .map(|(&i, &q)| (i, q))
         .collect();
 
-    let constellation: Vec<(f32, f32)> = (0..64u8).map(gray_map_64qam).collect();
+    let constellation: Vec<(f32, f32)> = (0..64u8).map(crate::modulate::gray_map_64qam).collect();
     let bit_table: Vec<u32> = (0..64u32).collect();
 
     if let Some(llrs) = openpulse_gpu::gpu_soft_demod(ctx, &syms, &constellation, &bit_table, 6) {
@@ -615,7 +615,7 @@ pub fn qam64_demodulate_gpu(
         let padded: Vec<f32> = mix
             .iter()
             .copied()
-            .chain(std::iter::repeat(0.0).take(group_delay))
+            .chain(std::iter::repeat_n(0.0, group_delay))
             .collect();
         let filtered = openpulse_gpu::gpu_rrc_fir(ctx, &padded, &coeffs)?;
         Some(filtered[group_delay..].to_vec())

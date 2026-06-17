@@ -314,7 +314,7 @@ fn bpsk_demodulate_rrc_gpu(
         let padded: Vec<f32> = mix
             .iter()
             .copied()
-            .chain(std::iter::repeat(0.0).take(group_delay))
+            .chain(std::iter::repeat_n(0.0, group_delay))
             .collect();
         let filtered = openpulse_gpu::gpu_rrc_fir(ctx, &padded, &coeffs)?;
         Some(filtered[group_delay..].to_vec())
