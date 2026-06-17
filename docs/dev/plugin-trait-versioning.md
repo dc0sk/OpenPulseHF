@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/plugin-trait-versioning.md
+doc: docs/dev/plugin-trait-versioning.md
 status: living
 last_updated: 2026-04-24
 ---

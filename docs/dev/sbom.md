@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/sbom.md
+doc: docs/dev/sbom.md
 status: living
 last_updated: 2026-04-23
 ---

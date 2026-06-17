@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/contributing-plugins.md
+doc: docs/dev/contributing-plugins.md
 status: living
 last_updated: 2026-04-24
 ---

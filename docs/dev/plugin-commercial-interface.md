@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/plugin-commercial-interface.md
+doc: docs/dev/plugin-commercial-interface.md
 status: living
 last_updated: 2026-05-09
 ---

@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/pki-tooling-rollout-plan.md
+doc: docs/dev/pki-tooling-rollout-plan.md
 status: living
 last_updated: 2026-04-24
 ---

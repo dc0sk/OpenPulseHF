@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/AGENTS.md
+doc: docs/dev/AGENTS.md
 status: living
 last_updated: 2026-04-25
 ---

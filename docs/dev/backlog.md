@@ -1,8 +1,8 @@
 ---
 project: openpulsehf
-doc: docs/backlog.md
+doc: docs/dev/backlog.md
 status: living
-last_updated: 2026-05-22
+last_updated: 2026-06-17
 ---
 
 # Backlog
@@ -10,6 +10,8 @@ last_updated: 2026-05-22
 All scheduled phases (1–9), far-future items (FF-1 through FF-13), FEC backlog items
 (BL-FEC-1 through BL-FEC-6), and all previously documented daemon wiring gaps are
 shipped and merged.  See `docs/dev/roadmap.md` for the full history with PR numbers.
+
+Completed research is archived in docs/dev/archive/ (FEC evaluation, waveform evaluation).
 
 ---
 
@@ -120,15 +122,17 @@ BER ≤ 0.01 at Eb/N0 = 2 dB for 256-bit blocks confirmed by `tests/turbo_ber.rs
 
 ---
 
-### Deferred (no target date)
+### In active execution
 
-| Item | Reason |
+| Item | Status |
 |---|---|
-| On-air regulatory validation (Phase 5.5-reg) | Requires licensed station and coordinated test schedule |
+| On-air regulatory validation (Phase 5.5-reg) | In active execution (see [onair-status.md](onair-status.md)) — started 2026-06-10 |
 
 #### On-air regulatory validation execution checklist
 
-When station access is available, run this checklist before marking Phase 5.5-reg complete.
+This checklist is being worked through as part of the active on-air execution; see
+[onair-status.md](onair-status.md) for current progress.  Run it to completion before
+marking Phase 5.5-reg complete.
 
 1. Operator and station readiness
   - Confirm licensed control operator is assigned for each test window.

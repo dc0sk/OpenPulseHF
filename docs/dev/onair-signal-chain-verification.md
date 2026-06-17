@@ -6,6 +6,8 @@ last_updated: 2026-06-10
 
 # On-Air Signal Chain Verification Plan
 
+> For the current investigation status, confirmed facts, and debugging root causes, see [`onair-status.md`](onair-status.md). This document is the preflight checklist to run before each test run.
+
 This document defines a reproducible, gate-based procedure for verifying the full on-air signal chain between the IC-9700 (Side A, DC0SK, rpi51) and the FT-991A (Side B, DD2ZM, dd2zm-landline) before any openpulse on-air test run.
 
 **Every gate must pass in order.** If a gate fails, stop, apply the corrective action, and re-run that gate from the top. Do not proceed to a later gate while an earlier one is failing.

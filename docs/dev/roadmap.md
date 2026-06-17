@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/roadmap.md
+doc: docs/dev/roadmap.md
 status: living
 last_updated: 2026-05-17
 ---
@@ -146,7 +146,7 @@ Phase 3.5-substitute (sound-loopback channel simulation) is done (PR #89):
 - 6 channel-loopback integration tests (clean, AWGN 20 dB, Watterson F1/F2, Gilbert-Elliott with/without FEC).
 - These replace on-air validation as the CI gate for loopback correctness.
 
-Remaining on-air items:
+Remaining on-air items (**in active execution as of 2026-06** — see [onair-status.md](onair-status.md)):
 - Conduct on-air tests on IARU-aligned frequencies for each supported bandwidth class.
 - Verify station identification behaviour at 10-minute intervals under long sessions.
 - Test relay node automatic control point interface.
@@ -203,8 +203,9 @@ Remaining on-air items:
 
 ## Phase 5 — Integration and Release Readiness (Completed)
 
-All Phase 5 items shipped. On-air regulatory validation (Phase 3.5) is
-explicitly postponed — no hardware gate blocks further development.
+All Phase 5 items shipped. On-air regulatory validation (Phase 5.5-reg) is
+**in active execution as of 2026-06** (see [onair-status.md](onair-status.md)); no
+hardware gate blocks further development.
 
 ### 5.1 — B2F session driver ✅ Done (PR #98)
 - `crates/openpulse-b2f-driver`: `B2fDriver`, `DataPort`, `CmdPort`; `run_iss()` / `run_irs()` lifecycle.
@@ -234,7 +235,7 @@ explicitly postponed — no hardware gate blocks further development.
 - `AudioSource` enum (`Synthetic` / `LiveCapture`); `run_live()` opens system input at 8 kHz mono.
 - Source combo disabled while running; panel labels reflect live mode.
 
-### 5.5-reg — Phase 3.5 on-air regulatory validation *(postponed — no target date)*
+### 5.5-reg — On-air regulatory validation *(in active execution, 2026-06 — see [onair-status.md](onair-status.md))*
 Conduct on-air tests on IARU-aligned frequencies, verify station ID at 10-minute intervals,
 test relay automatic control point interface, publish compliance report as release artefact.
 
@@ -807,7 +808,7 @@ Both modes: FFT=256, CP=32, QPSK per-subcarrier, centre 1500 Hz, iterative PAPR 
 - `crates/openpulse-core/src/profile.rs` — `hpx_ofdm_hf()` session profile (SL5=OFDM16, SL6=OFDM52)
 - `crates/openpulse-core/tests/session_profile.rs` — 3 new profile tests
 - `apps/openpulse-testbench/` — OFDM16 and OFDM52 modes wired into the testbench GUI with correct bandwidth markers and gross bps display
-- `docs/backlog-fec-improvements.md` — FEC backlog items (BL-FEC-1 through BL-FEC-6) from RS research session
+- `docs/dev/archive/backlog-fec-improvements.md` — FEC backlog items (BL-FEC-1 through BL-FEC-6) from RS research session
 
 **Previous research** (PR #135, `crates/openpulse-modem/src/ofdm_sim.rs`):
 The research showed PAPR reduction via iterative clipping degrades BER.  The production
@@ -1086,7 +1087,7 @@ attacks and synthetic voice injection are undetectable at the FreeDV layer.
 ### FF-12 — SC-FDMA waveform ✅ Done (PR #175)
 
 Analysis of five 5G-era multi-carrier schemes (FBMC, UFMC, GFDM, SC-FDMA, OFDMA) against HF
-radio constraints was conducted 2026-05-09.  See `docs/backlog-waveforms.md` for the full
+radio constraints was conducted 2026-05-09.  See `docs/dev/archive/backlog-waveforms.md` for the full
 analysis.
 
 **Conclusion**: SC-FDMA (DFT-spread OFDM) is the only scheme with a clear HF benefit:
@@ -1174,7 +1175,7 @@ single-carrier modes remain superseded by their `-RRC` variants.
 
 ## BL-FEC series — FEC codec improvements
 
-Incremental FEC improvements tracked in [`docs/backlog-fec-improvements.md`](backlog-fec-improvements.md).
+Incremental FEC improvements tracked in [`docs/dev/archive/backlog-fec-improvements.md`](archive/backlog-fec-improvements.md).
 
 | Item | Description | Status |
 |---|---|---|

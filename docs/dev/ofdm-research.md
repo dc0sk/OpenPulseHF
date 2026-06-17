@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/ofdm-research.md
+doc: docs/dev/ofdm-research.md
 status: living
 last_updated: 2026-05-08
 ---
