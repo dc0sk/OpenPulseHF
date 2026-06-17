@@ -56,7 +56,13 @@ impl QpskPlugin {
                 "QPSK1000-HF-RRC".to_string(),
                 "QPSK500-RRC".to_string(),
                 "QPSK1000-RRC".to_string(),
-                // UHF/VHF — 12.5 kHz narrowband (8 kHz audio, 2000 baud, ~2700 Hz BW)
+                // UHF/VHF — 12.5 kHz narrowband (8 kHz audio, 2000 baud, ~2700 Hz BW).
+                // Prefer QPSK2000-RRC: at 4 samples/symbol the plain (crossfade) pulse leaves
+                // a residual BER (~0.4% at 64 B, with perfect AFC) that fails no-FEC engine
+                // framing on realistic-length frames, and its engine AFC settle is unreliable
+                // (a spurious ~+3 Hz at zero offset).  -RRC has proper Nyquist shaping, is
+                // carrier-offset-robust, and is the operational 2000-baud mode (the HPX rate
+                // ladders use -RRC).  Plain QPSK2000 is retained for direct / FEC-protected use.
                 "QPSK2000".to_string(),
                 "QPSK2000-RRC".to_string(),
                 // UHF/VHF — 12.5 kHz HD (requires 48 kHz audio, 9600 baud, ~13 kHz BW)
