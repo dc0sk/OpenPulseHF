@@ -15,12 +15,15 @@
 //! two-pass decision-directed loop (pass 1 *acquires* the residual frequency, pass 2
 //! *tracks* it seeded — the structure 64QAM already uses) closes the characterized gap.
 //!
-//! These tests pin the characterized 25 Hz case (both modes), which the fix decodes
-//! reliably.  The fix also recovers many other offsets that previously all failed,
-//! but coverage is not yet complete: decode succeeds when the engine's AFC settle
-//! error falls inside the tracker's ~±1.5 Hz acquisition range, and that error varies
-//! with offset (worse for 8PSK1000 at n=8 samples/symbol).  Closing the remaining
-//! offsets needs a more reliable AFC settle — tracked as a narrowed gap in the memory.
+//! A follow-up then improved the 8PSK1000 n=8 settle: at 8 samples/symbol the
+//! consecutive-symbol data-aided AFC estimate is erratically ISI-biased (−1…+5 Hz vs
+//! offset), so it is now kept only as the wide-range anchor and small residuals are
+//! refined with a debiased half-split (ISI-robust vector-sum preamble halves) — see
+//! `afc_estimate_hz`.  This made the estimator accurate (sub-Hz at the fixed point)
+//! and lifted 8PSK1000 from ~3/9 to ~8/9 offsets; 8PSK500 became fully robust (all
+//! offsets, both payloads).  8PSK1000 stays MARGINAL at the edges though — decode
+//! there is payload-sensitive because the engine settle dynamics at n=8 leave a thin
+//! margin — so its gate below pins only the established +25 Hz case.
 
 use openpulse_audio::LoopbackBackend;
 use openpulse_modem::ModemEngine;
@@ -54,15 +57,19 @@ fn decodes_through_offset(mode: &str, offset_hz: f32) -> bool {
 }
 
 #[test]
-fn psk8_500_decodes_through_25hz_offset() {
-    assert!(
-        decodes_through_offset("8PSK500", 25.0),
-        "8PSK500 must decode through a 25 Hz carrier offset"
-    );
+fn psk8_500_decodes_through_offset() {
+    for offset in [25.0f32, -25.0, 50.0, -50.0] {
+        assert!(
+            decodes_through_offset("8PSK500", offset),
+            "8PSK500 must decode through a {offset} Hz carrier offset"
+        );
+    }
 }
 
 #[test]
 fn psk8_1000_decodes_through_25hz_offset() {
+    // n=8 is marginal/payload-sensitive at the edges (see module docs); pin only the
+    // established +25 Hz case. Broader (improved) coverage is in the matrix map.
     assert!(
         decodes_through_offset("8PSK1000", 25.0),
         "8PSK1000 must decode through a 25 Hz carrier offset"

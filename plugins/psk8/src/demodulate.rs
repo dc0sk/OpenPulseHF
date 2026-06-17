@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::f32::consts::PI;
+use std::sync::{Mutex, OnceLock};
 
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
@@ -12,21 +14,6 @@ use crate::modulate::{
     gray_map_8psk, preamble_symbols, samples_per_symbol, PREAMBLE_SYMS, RRC_SPAN_SYMBOLS, TAIL_SYMS,
 };
 use crate::parse_baud_rate;
-
-/// Estimate the residual carrier frequency offset from the known preamble.
-///
-/// Removes the preamble modulation (y[k] = z[k]·conj(e[k])) and measures the mean
-/// phase increment of the residual, which is proportional to the offset.  The
-/// designed (non-cyclic) preamble leaves a small ISI-induced bias of a few Hz; this
-/// is operationally negligible for the ±450 Hz AFC acquisition range and is absorbed
-/// by the downstream two-pass decision-directed loop in `carrier_pll_track`.
-fn estimate_frequency_offset_from_preamble(
-    i_syms: &[f32],
-    q_syms: &[f32],
-    baud_rate: f32,
-) -> Option<f32> {
-    estimate_cfo_data_aided(i_syms, q_syms, &preamble_symbols(), baud_rate)
-}
 
 pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
     let baud = parse_baud_rate(&config.mode).ok()?;
@@ -73,12 +60,95 @@ pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32
 
     let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
     let syms = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
-    if syms.len() < 2 {
+    if syms.len() < PREAMBLE_SYMS {
         return None;
     }
 
-    let (i_syms, q_syms): (Vec<f32>, Vec<f32>) = syms.into_iter().unzip();
-    estimate_frequency_offset_from_preamble(&i_syms, &q_syms, baud)
+    // Two-stage estimate.  The consecutive-symbol data-aided estimate has a wide
+    // range (±baud/2) but, at the 8PSK1000 oversampling (8 sps), the crossfade 1-lag
+    // ISI biases every increment *erratically* (−1…+5 Hz vs offset) — too much for
+    // the dense 45° grid's ~±1.5 Hz tolerance.  So: use data-aided only as the
+    // wide-range anchor; once it has driven the residual inside ±baud/16, refine with
+    // the ISI-robust half-split (vector-sum endpoints), debiased by its reading on a
+    // clean zero-offset preamble.  The half-split's structural bias is constant, so
+    // subtracting it leaves a sub-Hz estimate.
+    let (i_syms, q_syms): (Vec<f32>, Vec<f32>) = syms.iter().take(PREAMBLE_SYMS).copied().unzip();
+    let rough = estimate_cfo_data_aided(&i_syms, &q_syms, &preamble_symbols(), baud)?;
+    // Only refine SMALL residuals with the half-split: a large CFO ramp over the
+    // preamble degrades each half's vector sum, so the data-aided anchor must own the
+    // wide range.  baud/64 (≈15.6 Hz at 1000 baud) is comfortably inside the data-aided
+    // anchor's reach yet small enough that the half-split is accurate there.
+    if rough.abs() < baud / 64.0 {
+        let raw = estimate_cfo_half_split(&syms, baud)?;
+        let bias = half_split_bias(config, baud, n, fc, fs, cosine_overlap);
+        return Some(raw - bias);
+    }
+    Some(rough)
+}
+
+/// CFO from the phase difference between the two preamble halves.
+///
+/// Each half's phase is the ISI-robust vector-sum correlation `arg(Σ r·conj(e))`,
+/// whose bias is bounded by the preamble's small 1-lag autocorrelation — unlike the
+/// consecutive-symbol increments of `estimate_cfo_data_aided`, where the crossfade
+/// 1-lag ISI (large at the 8PSK1000 oversampling of 8 sps) biases every increment
+/// and the bias accumulates.  Range ±baud/16 (±62.5 Hz at 1000 baud).  Carries a
+/// constant structural bias (the clean preamble reads non-zero); see `half_split_bias`.
+fn estimate_cfo_half_split(syms: &[(f32, f32)], baud: f32) -> Option<f32> {
+    if syms.len() < PREAMBLE_SYMS {
+        return None;
+    }
+    let expected = preamble_symbols();
+    let half = PREAMBLE_SYMS / 2;
+    let p_a = preamble_corr_phase(syms, &expected, 0..half);
+    let p_b = preamble_corr_phase(syms, &expected, half..PREAMBLE_SYMS);
+    let mut dphi = p_b - p_a;
+    while dphi > PI {
+        dphi -= 2.0 * PI;
+    }
+    while dphi < -PI {
+        dphi += 2.0 * PI;
+    }
+    let k_a = (half - 1) as f32 / 2.0;
+    let k_b = half as f32 + (half - 1) as f32 / 2.0;
+    Some(dphi / (k_b - k_a) * baud / (2.0 * PI))
+}
+
+/// Structural half-split bias for a mode: the `estimate_cfo_half_split` reading on a
+/// clean, zero-offset modulated preamble (no CFO present), which the crossfade ISI
+/// makes non-zero.  Subtracting it debiases the live half-split estimate.  Computed
+/// once per mode and cached (the modulate+demod is cheap but called per scan step).
+fn half_split_bias(
+    config: &ModulationConfig,
+    baud: f32,
+    n: usize,
+    fc: f32,
+    fs: f32,
+    cosine_overlap: bool,
+) -> f32 {
+    static CACHE: OnceLock<Mutex<HashMap<String, f32>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock() {
+        if let Some(&b) = guard.get(&config.mode) {
+            return b;
+        }
+    }
+    let ref_cfg = ModulationConfig {
+        center_frequency: fc,
+        ..config.clone()
+    };
+    let bias = crate::modulate::psk8_modulate(&[0x5Au8; 32], &ref_cfg)
+        .ok()
+        .and_then(|sig| {
+            let timing = find_timing_offset(&sig, n, fc, fs, cosine_overlap);
+            let syms = demodulate_symbols(&sig, n, fc, fs, timing, cosine_overlap);
+            estimate_cfo_half_split(&syms, baud)
+        })
+        .unwrap_or(0.0);
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(config.mode.clone(), bias);
+    }
+    bias
 }
 
 pub fn psk8_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec<u8>, ModemError> {
