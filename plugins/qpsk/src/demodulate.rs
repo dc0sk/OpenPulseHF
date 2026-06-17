@@ -95,6 +95,35 @@ pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32
         return None;
     }
 
+    // RRC modes: estimate CFO on the matched-filtered baseband, not the passband
+    // Hann demod.  At the RRC modes' low oversampling (4 sps for QPSK2000-RRC) the
+    // Hann passband demod is badly mismatched and the CFO estimate under-corrected
+    // (~60% of the true offset), landing well outside the demod's ±1–2 Hz tolerance.
+    // 4th-power on the matched baseband (range ±baud/8, e.g. ±250 Hz at 2000 baud)
+    // covers the acquisition range and is accurate.
+    let rrc_alpha = if let PulseShape::Rrc { alpha } = config.pulse_shape {
+        Some(alpha)
+    } else if config.mode.ends_with("-RRC") {
+        Some(0.35f32)
+    } else {
+        None
+    };
+    if let Some(alpha) = rrc_alpha {
+        let (i_bb, q_bb) = rrc_baseband(samples, n, baud, fc, fs, alpha);
+        let timing = find_timing_offset_bb(&i_bb, &q_bb, n);
+        let (mut i_syms, mut q_syms) = (Vec::new(), Vec::new());
+        let mut pos = timing;
+        while pos < i_bb.len() {
+            i_syms.push(i_bb[pos]);
+            q_syms.push(q_bb[pos]);
+            pos += n;
+        }
+        if i_syms.len() < 2 {
+            return Some(0.0);
+        }
+        return Some(estimate_cfo_mth_power(&i_syms, &q_syms, baud, 4));
+    }
+
     let c = coarse_scan_preamble(samples, n, fc, fs, baud, cosine_overlap);
     let corrected_fc = fc + c;
     let timing = find_timing_offset(samples, n, corrected_fc, fs, cosine_overlap);
@@ -163,21 +192,22 @@ pub fn qpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
 }
 
 /// RRC demodulation: downmix → matched RRC filter → brute-force timing → sample.
-fn qpsk_demodulate_rrc(
+/// Downmix to baseband I/Q and apply the RRC matched filter — the shared front-end
+/// of the RRC demod and the RRC AFC estimate.
+fn rrc_baseband(
     samples: &[f32],
     n: usize,
     baud: f32,
     fc: f32,
     fs: f32,
     alpha: f32,
-) -> Vec<(f32, f32)> {
+) -> (Vec<f32>, Vec<f32>) {
     let two_pi = 2.0 * PI;
     let phase_step = two_pi * fc / fs;
     let num_taps = RRC_SPAN_SYMBOLS * n + 1;
     let coeffs = generate_rrc_coefficients(fs, baud, alpha, num_taps);
     let group_delay = (num_taps - 1) / 2;
 
-    // 1. Downmix to baseband I and Q in one pass.
     let mut i_mix = Vec::with_capacity(samples.len());
     let mut q_mix = Vec::with_capacity(samples.len());
     let mut phase = 0.0f32;
@@ -188,7 +218,6 @@ fn qpsk_demodulate_rrc(
         phase += phase_step;
     }
 
-    // 2. Apply RRC matched filter with group delay compensation.
     let rrc_filter = |mix: Vec<f32>| -> Vec<f32> {
         let padded: Vec<f32> = mix
             .iter()
@@ -199,8 +228,19 @@ fn qpsk_demodulate_rrc(
         let filtered = fir.apply(&padded);
         filtered[group_delay..].to_vec()
     };
-    let i_bb = rrc_filter(i_mix);
-    let q_bb = rrc_filter(q_mix);
+    (rrc_filter(i_mix), rrc_filter(q_mix))
+}
+
+fn qpsk_demodulate_rrc(
+    samples: &[f32],
+    n: usize,
+    baud: f32,
+    fc: f32,
+    fs: f32,
+    alpha: f32,
+) -> Vec<(f32, f32)> {
+    // 1+2. Downmix to baseband I/Q and apply the RRC matched filter.
+    let (i_bb, q_bb) = rrc_baseband(samples, n, baud, fc, fs, alpha);
 
     // 3. Coarse timing acquisition via preamble correlation (brute-force, same as Hann path).
     let initial_timing = find_timing_offset_bb(&i_bb, &q_bb, n);
