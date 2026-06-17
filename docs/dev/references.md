@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/references.md
 status: living
-last_updated: 2026-06-16
+last_updated: 2026-06-17
 ---
 
 # External references and inspirations
@@ -87,9 +87,44 @@ modem/framesync primitives generally (it also has FEC, equalizers, resamplers).
 
 ---
 
+## Rhizomatica/mercury — deployed HF OFDM data modem + ARQ (HERMES)
+
+<https://github.com/Rhizomatica/mercury> · GPL-3.0 / LGPL-2.1 (vendored FreeDV codec) · C
+
+A *fielded* HF data system — "a Digital Radio OFDM protocol for HF broadcast and
+peer-to-peer ARQ connections" for store-and-forward email/file transfer over HF in
+rural and emergency scenarios. Part of Rhizomatica's **HERMES** (High-frequency
+Emergency and Rural Multimedia Exchange System), funded by ARDC. Unlike the
+single-carrier DSP references above, Mercury is a full **OFDM + ARQ + application**
+stack — the closest analog to OpenPulseHF's *system* (HPX ARQ + B2F/Winlink), not
+just its DSP.
+
+Built on **FreeDV's OFDM modem** (David Rowe): `DATAC13` for signaling, `DATAC4`/
+`DATAC3`/`DATAC1` for payload, plus an experimental `FSK_LDPC` mode. We already
+interface FreeDV for authenticated voice (`openpulse-freedv-auth`), so the FreeDV
+DATAC modes are a shared reference point.
+
+**Inspirations:**
+- **Adaptive ARQ "gear-shifting" driven by link quality *and* backlog**, with
+  per-direction mode selection — comparable to our `RateAdapter`/HPX rate ladder, but
+  the queue-backlog input and asymmetric per-direction rate are ideas we don't use yet.
+- A connect/accept handshake with ACK/retry, keepalive, and controlled disconnect
+  over HF — a deployed ARQ design to compare against our HPX session state machine.
+- The FreeDV DATAC OFDM data modes as a proven HF-OFDM comparison for our OFDM
+  higher-order ladder (cyclic-prefix + pilot design rather than RRC + FLL).
+
+**Revisit for:** ARQ rate-adaptation policy (backlog-aware, per-direction), HF
+store-and-forward email protocol design (cf. B2F/Winlink), and the FreeDV DATAC OFDM
+modem parameters (CP length, pilot scheme).
+
+---
+
 ## Recurring lesson
 
-All three references use **RRC-shaped pulses** and a **dedicated frequency
+The three **single-carrier** references above (gnuradio, qo100-modem,
+SSB_HighSpeed_Modem) all use **RRC-shaped pulses** and a **dedicated frequency
 acquisition stage** (FLL or coarse preamble-correlation CFO) ahead of phase
 recovery. OpenPulseHF's rectangular-pulse PSK modes with a single Costas loop are
 the outlier; the carrier-offset robustness gaps (8PSK) trace directly to that.
+Mercury takes the other route entirely — **OFDM with cyclic prefix + pilots**
+instead of RRC + FLL — which is the architecture of our OFDM higher-order ladder.
