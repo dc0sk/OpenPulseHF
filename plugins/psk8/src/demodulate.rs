@@ -18,8 +18,8 @@ use crate::parse_baud_rate;
 /// Removes the preamble modulation (y[k] = z[k]·conj(e[k])) and measures the mean
 /// phase increment of the residual, which is proportional to the offset.  The
 /// designed (non-cyclic) preamble leaves a small ISI-induced bias of a few Hz; this
-/// is operationally negligible for the ±450 Hz AFC acquisition range and is removed
-/// by the downstream Costas PLL.
+/// is operationally negligible for the ±450 Hz AFC acquisition range and is absorbed
+/// by the downstream two-pass decision-directed loop in `carrier_pll_track`.
 fn estimate_frequency_offset_from_preamble(
     i_syms: &[f32],
     q_syms: &[f32],
@@ -461,45 +461,23 @@ fn preamble_corr_phase(
 /// φ₀ is always removed: on real hardware the carrier phase at frame start is
 /// effectively random, and the non-HF 8PSK path has no equalizer to absorb it, so
 /// without this every symbol decision would be rotated to a wrong constellation
-/// point.  A per-symbol drift term is additionally removed only when the engine
-/// signalled a real RF offset (`afc_correction_hz` ≥ 0.5 Hz); it is estimated from
-/// the phase difference between the two preamble halves (each via the robust
-/// vector-sum), which avoids fitting drift to preamble noise on clean paths.
-fn carrier_phase_correct(syms: &[(f32, f32)], afc_correction_hz: f32) -> Vec<(f32, f32)> {
+/// point.  φ₀ is the single ML phase over the whole preamble via the ISI-robust
+/// vector-sum correlation; residual frequency drift is left to the downstream
+/// Costas (`carrier_pll_track`), which is the proper tracker for it.
+///
+/// A 2-point "drift fit" (slope from the two 8-symbol preamble halves, extrapolated
+/// across the frame) was previously applied when the engine signalled an RF offset
+/// (`afc_correction_hz` ≥ 0.5).  It was **removed**: the 8-symbol baseline makes the
+/// half-to-half phase difference dominated by per-half ISI rather than true drift,
+/// so it extrapolated a spurious slope over the ~190 data symbols and broke decode
+/// even when the carrier frequency was already exactly correct — the actual cause of
+/// the 8PSK carrier-offset acquisition gap (an AFC-accurate frame still failed).
+fn carrier_phase_correct(syms: &[(f32, f32)], _afc_correction_hz: f32) -> Vec<(f32, f32)> {
     if syms.len() < PREAMBLE_SYMS {
         return syms.to_vec();
     }
     let expected = preamble_symbols();
 
-    if afc_correction_hz.abs() >= 0.5 {
-        // Drift present: anchor phase at each half's centroid and fit a line.
-        let half = PREAMBLE_SYMS / 2;
-        let p_a = preamble_corr_phase(syms, &expected, 0..half);
-        let p_b = preamble_corr_phase(syms, &expected, half..PREAMBLE_SYMS);
-        let k_a = (half - 1) as f32 / 2.0;
-        let k_b = half as f32 + (half - 1) as f32 / 2.0;
-        // Wrap the half-to-half phase difference into (−π, π].
-        let mut dphi = p_b - p_a;
-        while dphi > PI {
-            dphi -= 2.0 * PI;
-        }
-        while dphi < -PI {
-            dphi += 2.0 * PI;
-        }
-        let drift = dphi / (k_b - k_a);
-        let phase_0 = p_a - drift * k_a;
-        return syms
-            .iter()
-            .enumerate()
-            .map(|(k, &(i, q))| {
-                let theta = -(phase_0 + drift * k as f32);
-                let (s, c) = theta.sin_cos();
-                (i * c - q * s, i * s + q * c)
-            })
-            .collect();
-    }
-
-    // No drift: remove the single ML phase offset over the whole preamble.
     let phase_0 = preamble_corr_phase(syms, &expected, 0..PREAMBLE_SYMS);
     // Only correct a *gross* offset.  The job here is to resolve the random
     // hardware carrier phase (uniform over 360°); an offset already within roughly
@@ -517,24 +495,58 @@ fn carrier_phase_correct(syms: &[(f32, f32)], afc_correction_hz: f32) -> Vec<(f3
         .collect()
 }
 
-/// Track residual carrier frequency drift with a decision-directed 8PSK Costas PLL.
+/// One decision-directed 8PSK carrier-tracking pass seeded with an initial loop
+/// frequency (rad/symbol); returns the de-rotated symbols and the final frequency.
 ///
-/// `carrier_phase_correct` removes the static phase offset; a residual frequency
-/// offset (e.g. differing USB-audio crystal frequencies between two hosts) still
-/// produces a linear phase ramp that accumulates across the frame.  The 8th-order
-/// (psk_order = 3) PLL tracks that drift so the residual phase error stays within the
-/// ±22.5° 8PSK decision boundary.  The loop bandwidth is deliberately gentle (0.010,
-/// half the QPSK value): the 8th-power phase detector is noisier than QPSK's 4th, so
-/// a tighter loop would perturb clean signals enough to tip symbols at the
-/// 5-samples/symbol 8PSK9600 rate where the eye is already nearly closed by ISI.
+/// 8PSK is constant-modulus, so the phase error is `Im(r·conj(d))` for the nearest
+/// constellation point `d` (|d| = 1).  A second-order loop integrates it.
+fn dd_track_seeded(syms: &[(f32, f32)], loop_bw: f32, init_freq: f32) -> (Vec<(f32, f32)>, f32) {
+    let alpha = loop_bw;
+    let beta = loop_bw * loop_bw * 0.25;
+    let mut phase = 0.0f32;
+    let mut freq = init_freq;
+    let mut out = Vec::with_capacity(syms.len());
+    for &(i, q) in syms {
+        let (s, c) = (-phase).sin_cos();
+        let di = i * c - q * s;
+        let dq = i * s + q * c;
+        let (pi, pq) = psk8_map_decision(di, dq);
+        let err = dq * pi - di * pq; // Im(r·conj(d)), |d| = 1
+        out.push((di, dq));
+        freq += beta * err;
+        phase += freq + alpha * err;
+    }
+    (out, freq)
+}
+
+/// Track residual carrier frequency drift with a two-pass decision-directed 8PSK loop.
+///
+/// `carrier_phase_correct` removes the static phase offset, but a residual frequency
+/// offset still produces a linear phase ramp across the frame.  A single forward loop
+/// seeded at zero spends the early symbols *acquiring* that offset — and at the dense
+/// 45° 8PSK spacing those mis-rotated early symbols decide wrong and the loop never
+/// recovers (the prior single-pass Costas required the engine AFC to land within
+/// ±0.5 Hz, which its ~0.9 Hz preamble-ISI bias could not).  Pass 1 converges the
+/// offset over the whole frame; pass 2 re-runs the loop seeded with that frequency so
+/// every symbol, including the first, is de-rotated at the correct rate — the same
+/// structure 64QAM uses to absorb the identical AFC bias.  On a clean offset-free
+/// frame pass 1 converges to ~0 and pass 2 is a no-op, so nothing regresses.  The loop
+/// bandwidth stays gentle (0.010): the decision-directed detector is noisier on the
+/// dense grid, so a tighter loop would perturb marginal symbols.
 fn carrier_pll_track(syms: &[(f32, f32)]) -> Vec<(f32, f32)> {
-    let mut pll = CarrierPll::new(0.010, 3);
-    syms.iter()
-        .map(|&(i, q)| {
-            pll.update(i, q);
-            pll.correct(i, q)
-        })
-        .collect()
+    // Acquisition/tracking split: pass 1 runs a wider loop (0.05) so it can ACQUIRE
+    // the residual frequency within the short frame — the gentle tracking loop alone
+    // converges far too slowly to lock even a ~1 Hz residual over ~60–200 symbols,
+    // which is why the engine's AFC had to land within ±0.5 Hz (its ~0.9 Hz preamble-
+    // ISI bias could not).  Pass 2 re-runs the gentle loop (0.010) seeded with that
+    // frequency, so it tracks cleanly from the first symbol without the wide loop's
+    // self-noise.  On a clean offset-free frame pass 1 converges to ~0 and pass 2 is
+    // the original gentle loop, so clean / Watterson / weak-signal paths do not regress.
+    const ACQUIRE_BW: f32 = 0.05;
+    const TRACK_BW: f32 = 0.010;
+    let (_, freq) = dd_track_seeded(syms, ACQUIRE_BW, 0.0);
+    let (out, _) = dd_track_seeded(syms, TRACK_BW, freq);
+    out
 }
 
 fn demodulate_symbols(

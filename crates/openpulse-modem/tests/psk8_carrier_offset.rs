@@ -1,30 +1,33 @@
-//! Characterization (ignored): 8PSK acquisition through a real carrier offset.
+//! 8PSK acquisition through a real carrier offset.
 //!
-//! 8PSK500/1000 acquire and decode at *zero* carrier offset (the matched-card rig,
-//! fixed by the AFC deadband in the QPSK500/8PSK acquisition work) but FAIL through
-//! a realistic ~25 Hz offset, while BPSK/QPSK/64QAM all succeed. Run with
-//! `--ignored` to reproduce.
+//! 8PSK500/1000 acquired and decoded at *zero* carrier offset but FAILED through a
+//! realistic ~25 Hz offset, while BPSK/QPSK/64QAM all succeeded.
 //!
-//! Diagnosis (see also memory `8psk-carrier-offset-gap`): the engine's data-aided
-//! AFC settle lands ~0.9 Hz short for 8PSK (a non-cyclic-preamble ISI bias that
-//! cannot be iterated away — the estimator reads ~0.9 Hz low, so it converges with
-//! that residual). After the engine downconverts, the demod's per-symbol angle
-//! error sits at ~8-9° vs the ~7° baseline that decodes cleanly at zero offset —
-//! just over the edge for the dense 45° grid. Downstream tracking patches don't
-//! close it: a 2-pass Costas PLL gets within ~1-2° but the decision-directed loop
-//! cycle-slips on the fast-rotating grid; an 8th-power (M=8) blind CFO estimate is
-//! far too noisy (it produced a spurious −1.3 Hz on a *zero-offset* signal and made
-//! it worse). The real fix is upstream: reduce the AFC bias (cyclic/guard preamble
-//! or a debiased estimator) so the residual is ~0 like 64QAM's. That is a DSP
-//! redesign, not a bounded fix; 8PSK on-air is deferred and 8PSK is not in the
-//! hardware loopback matrix (BPSK+QPSK only).
+//! Root cause (corrected — see memory `8psk-carrier-offset-gap`): the earlier
+//! diagnosis blamed AFC-estimate precision, but a swept-AFC experiment showed the
+//! demod failed to decode the 25 Hz frame *even when the applied AFC correction was
+//! exactly right*.  The real bug was in `carrier_phase_correct`: when the engine
+//! signalled an RF offset (`afc_correction_hz` ≥ 0.5) it fit a per-symbol phase drift
+//! from the two 8-symbol preamble halves and extrapolated it across the whole frame.
+//! Over an 8-symbol baseline that slope is dominated by per-half ISI, not true drift,
+//! so it rotated the dense 45° constellation off its decision grid.  Removing that
+//! branch (static phase + Costas only) plus replacing the single-pass Costas with a
+//! two-pass decision-directed loop (pass 1 *acquires* the residual frequency, pass 2
+//! *tracks* it seeded — the structure 64QAM already uses) closes the characterized gap.
+//!
+//! These tests pin the characterized 25 Hz case (both modes), which the fix decodes
+//! reliably.  The fix also recovers many other offsets that previously all failed,
+//! but coverage is not yet complete: decode succeeds when the engine's AFC settle
+//! error falls inside the tracker's ~±1.5 Hz acquisition range, and that error varies
+//! with offset (worse for 8PSK1000 at n=8 samples/symbol).  Closing the remaining
+//! offsets needs a more reliable AFC settle — tracked as a narrowed gap in the memory.
 
 use openpulse_audio::LoopbackBackend;
 use openpulse_modem::ModemEngine;
 use psk8_plugin::Psk8Plugin;
 use std::time::Duration;
 
-fn decodes_through_offset(mode: &str, offset_hz: f32) {
+fn decodes_through_offset(mode: &str, offset_hz: f32) -> bool {
     let payload = b"8psk-carrier-offset-0123456789-abcdefghij-0123456789-abcdefghij";
 
     let tx_lb = LoopbackBackend::new();
@@ -44,20 +47,24 @@ fn decodes_through_offset(mode: &str, offset_hz: f32) {
     for chunk in frame.chunks(8000) {
         rx_shared.push_frame(chunk);
     }
-    let got = rx
-        .receive_with_timeout(mode, None, Duration::from_secs(10))
-        .unwrap_or_else(|e| panic!("{mode} must decode through a {offset_hz} Hz offset: {e}"));
-    assert_eq!(&got[..payload.len()], payload, "{mode} payload mismatch");
+    match rx.receive_with_timeout(mode, None, Duration::from_secs(10)) {
+        Ok(got) => got.len() >= payload.len() && &got[..payload.len()] == payload,
+        Err(_) => false,
+    }
 }
 
 #[test]
-#[ignore = "known gap: 8PSK AFC precision insufficient for a real carrier offset; needs a debiased-preamble redesign (see module docs / memory)"]
 fn psk8_500_decodes_through_25hz_offset() {
-    decodes_through_offset("8PSK500", 25.0);
+    assert!(
+        decodes_through_offset("8PSK500", 25.0),
+        "8PSK500 must decode through a 25 Hz carrier offset"
+    );
 }
 
 #[test]
-#[ignore = "known gap: 8PSK AFC precision insufficient for a real carrier offset; needs a debiased-preamble redesign (see module docs / memory)"]
 fn psk8_1000_decodes_through_25hz_offset() {
-    decodes_through_offset("8PSK1000", 25.0);
+    assert!(
+        decodes_through_offset("8PSK1000", 25.0),
+        "8PSK1000 must decode through a 25 Hz carrier offset"
+    );
 }
