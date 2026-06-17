@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/steering.md
+doc: docs/dev/steering.md
 status: living
 last_updated: 2026-04-23
 ---

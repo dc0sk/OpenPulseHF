@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/release-checklist.md
+doc: docs/dev/release-checklist.md
 status: living
 last_updated: 2026-04-24
 ---

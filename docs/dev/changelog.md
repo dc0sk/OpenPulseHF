@@ -1,11 +1,14 @@
 ---
 project: openpulsehf
-doc: docs/changelog.md
+doc: docs/dev/changelog.md
 status: living
-last_updated: 2026-05-16
+last_updated: 2026-06-17
 ---
 
 # Changelog
+
+> Phase/roadmap history lives in [roadmap.md](roadmap.md); this file tracks
+> user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
 
 ## Unreleased
 

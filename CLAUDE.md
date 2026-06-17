@@ -7,7 +7,7 @@ last_updated: 2026-05-27
 
 # CLAUDE.md — OpenPulseHF Agent Contract
 
-This file is the authoritative guide for any coding agent working in this repository. Read it before touching code. Mandatory agent safety rules are in `AGENTS.md` (root) and `docs/AGENTS.md`.
+This file is the authoritative guide for any coding agent working in this repository. Read it before touching code. Mandatory agent safety rules are in `AGENTS.md` (root) and `docs/dev/AGENTS.md`.
 
 ---
 
@@ -111,7 +111,7 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 
 ## Current phase and execution order
 
-**Completed**: Phases 1–9, Phase 7 (7.1–7.5), Phase 8 (8.1–8.3), FF series (FF-1 through FF-13), BL-FEC series (BL-FEC-1 through BL-FEC-6), all code stubs (PR #187–#189). See `docs/roadmap.md` for full history.
+**Completed**: Phases 1–9, Phase 7 (7.1–7.5), Phase 8 (8.1–8.3), FF series (FF-1 through FF-13), BL-FEC series (BL-FEC-1 through BL-FEC-6), all code stubs (PR #187–#189). See `docs/dev/roadmap.md` for full history.
 
 **Active tracks**:
 - No remaining scheduled implementation tracks.
@@ -164,7 +164,7 @@ Execute Phase 1 tasks in this order. Tasks within the same group are independent
 ### Group 2 — ✅ Complete
 
 **1.4 — Implement channel models** ✅ Done (PR #71)
-Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
+Full spec in `docs/dev/testbench-design.md` and `docs/dev/benchmark-harness.md`.
 
 **1.3 — Wire interleaver into `FecCodec` and `ModemEngine`** ✅ Done (PR #70)
 
@@ -212,7 +212,7 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 - `plugins/qpsk/src/lib.rs`: added `QPSK1000` mode (1000 baud, 8 samples/symbol @ 8 kHz)
 - `plugins/psk8/`: `Psk8Plugin` implementing `ModulationPlugin` for `"8PSK500"` and `"8PSK1000"`
   - Gray-coded 8PSK constellation (8 phases, 3 bits/symbol); Hann-windowed modulator; nearest-point IQ demodulator
-  - HPX2300 waveform decision: single-carrier chosen over OFDM (lower PAPR, no cyclic prefix, simpler AFC — see `docs/architecture.md`)
+  - HPX2300 waveform decision: single-carrier chosen over OFDM (lower PAPR, no cyclic prefix, simpler AFC — see `docs/dev/architecture.md`)
 - `crates/openpulse-core/src/profile.rs`: `SessionProfile` struct mapping `SpeedLevel` → mode string
   - `SessionProfile::hpx500()`: SL2=BPSK31, SL3=BPSK63, SL4=BPSK250, SL5=QPSK250, SL6=QPSK500; initial=SL2
   - `SessionProfile::hpx2300()`: SL8=QPSK500, SL9=QPSK1000, SL11=8PSK1000; initial=SL8
@@ -246,7 +246,7 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
   - Added `TrustFilter` enum (TrustedOnly, TrustedOrUnknown, Any) — wire codes per peer-query-relay-wire.md
   - Added `PeerCache::query(capability_mask, min_quality, trust_filter, max_results, now_ms)` — sorted by quality descending
 - `crates/openpulse-core/src/wire_query.rs`: OPHF binary envelope + peer query payloads
-  - `WireEnvelope`: encode/decode per docs/peer-query-relay-wire.md; header 104 B + payload + auth_tag 16 B
+  - `WireEnvelope`: encode/decode per docs/dev/peer-query-relay-wire.md; header 104 B + payload + auth_tag 16 B
   - `PeerQueryRequest` (msg_type 0x01): 17-byte fixed payload
   - `PeerQueryResponse` (msg_type 0x02): variable-length results with descriptor_signature
 - Integration tests: `tests/peer_descriptor_integration.rs` (9 tests); `tests/wire_query_integration.rs` (9 tests)
@@ -328,7 +328,7 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 - `crates/openpulse-core/src/conv.rs`: `ConvCodec` — rate-1/2, K=3 (4-state), generators G={7,5} octal, hard-decision Viterbi decoder; same `encode/decode` interface as `FecCodec`
 - Benchmark: at channel BER 1%, RS post-decode BER = 0.497 vs ConvCodec = 0.0004 (AWGN regime; RS fails because random errors exceed 16-byte/block capacity); CPU overhead 3.8×
 - Decision: **ACCEPTED** — ConvCodec is an optional alternative FEC for AWGN-dominant paths; RS+interleaver remains default for HF burst-error profiles
-- 6 integration tests in `crates/openpulse-core/tests/fec_comparison.rs`; decision documented in `docs/vara-research.md`
+- 6 integration tests in `crates/openpulse-core/tests/fec_comparison.rs`; decision documented in `docs/dev/vara-research.md`
 
 **Phase 3.3 — GPU compute acceleration for BPSK DSP** ✅ Done (PR #90)
 - `crates/openpulse-gpu/`: new crate — `GpuContext` (wgpu device + pre-compiled pipelines), WGSL kernels for BPSK modulation, IQ demodulation, and timing offset search
@@ -556,23 +556,23 @@ External modem/DSP references (gnuradio FLL band-edge, liquid-dsp framesync, dan
 
 | Topic | Document |
 |---|---|
-| Channel models (Watterson, Gilbert-Elliott) | `docs/benchmark-harness.md` |
-| Testbench design (channel models, DSP, UI) | `docs/testbench-design.md` |
-| WSJTX weak-signal techniques | `docs/wsjtx-analysis.md` |
-| JS8Call speed ladder and ARQ commands | `docs/js8call-analysis.md` |
-| VARA architecture and ACK taxonomy | `docs/vara-research.md` |
-| PACTOR Memory-ARQ, interleaver, FEC | `docs/pactor-research.md` |
-| ARDOP research | `docs/ardop-research.md` |
-| HPX waveform design | `docs/hpx-waveform-design.md` |
-| HPX state machine | `docs/hpx-session-state-machine.md` |
-| Peer query and relay wire format | `docs/peer-query-relay-wire.md` |
+| Channel models (Watterson, Gilbert-Elliott) | `docs/dev/benchmark-harness.md` |
+| Testbench design (channel models, DSP, UI) | `docs/dev/testbench-design.md` |
+| WSJTX weak-signal techniques | `docs/dev/wsjtx-analysis.md` |
+| JS8Call speed ladder and ARQ commands | `docs/dev/js8call-analysis.md` |
+| VARA architecture and ACK taxonomy | `docs/dev/vara-research.md` |
+| PACTOR Memory-ARQ, interleaver, FEC | `docs/dev/pactor-research.md` |
+| ARDOP research | `docs/dev/ardop-research.md` |
+| HPX waveform design | `docs/dev/hpx-waveform-design.md` |
+| HPX state machine | `docs/dev/hpx-session-state-machine.md` |
+| Peer query and relay wire format | `docs/dev/peer-query-relay-wire.md` |
 | Regulatory compliance | `docs/regulatory.md` |
-| Roadmap and phase gates | `docs/roadmap.md` |
-| Requirements | `docs/requirements.md` |
-| Architecture | `docs/architecture.md` |
-| PKI tooling | `docs/pki-tooling-architecture.md` |
+| Roadmap and phase gates | `docs/dev/roadmap.md` |
+| Requirements | `docs/dev/requirements.md` |
+| Architecture | `docs/dev/architecture.md` |
+| PKI tooling | `docs/dev/pki-tooling-architecture.md` |
 | CLI usage | `docs/cli-guide.md` |
-| Benchmark harness spec | `docs/benchmark-harness.md` |
+| Benchmark harness spec | `docs/dev/benchmark-harness.md` |
 | External modem/DSP references (FLL, liquid-dsp, qo100-modem) | `docs/dev/references.md` |
 | Loopback transports (virtual → hardware → on-air) | `docs/dev/virtual-loopback.md` |
-| Agent safety rules | `AGENTS.md`, `docs/AGENTS.md` |
+| Agent safety rules | `AGENTS.md`, `docs/dev/AGENTS.md` |

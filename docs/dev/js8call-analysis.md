@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/js8call-analysis.md
+doc: docs/dev/js8call-analysis.md
 status: living
 last_updated: 2026-05-02
 ---

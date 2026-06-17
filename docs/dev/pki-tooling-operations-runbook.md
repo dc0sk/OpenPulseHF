@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/pki-tooling-operations-runbook.md
+doc: docs/dev/pki-tooling-operations-runbook.md
 status: living
 last_updated: 2026-05-27
 ---

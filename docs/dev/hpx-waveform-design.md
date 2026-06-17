@@ -1,8 +1,8 @@
 ---
 project: openpulsehf
-doc: docs/hpx-waveform-design.md
+doc: docs/dev/hpx-waveform-design.md
 status: living
-last_updated: 2026-05-01
+last_updated: 2026-06-17
 ---
 
 # HPX Waveform Design
@@ -10,6 +10,17 @@ last_updated: 2026-05-01
 This document defines the waveform architecture for the HPX protocol family: the rate ladder, modulation class selection rationale, ACK frame design, and Memory-ARQ specification. It draws on the comparative analysis in docs/vara-research.md, docs/ardop-research.md, and docs/pactor-research.md.
 
 Parameters marked **[proposed]** are design targets requiring simulation validation before implementation. Parameters marked **[confirmed]** are derived from first principles or from validated incumbent designs.
+
+> **Implementation status (2026).** This is the original design ladder (notional speed
+> levels SL1–11 in design notation). The shipped profiles in
+> `crates/openpulse-core/src/profile.rs` (`hpx_hf`, `hpx_ofdm_hf`, `hpx_wideband_hd`, …)
+> realise it with the registered plugin modes — single-carrier BPSK/QPSK/8PSK/64QAM and
+> the OFDM / SC-FDMA multicarrier families. At higher baud the single-carrier modes use
+> **root-raised-cosine (`-RRC`) pulse shaping** for carrier-offset robustness: the
+> mid-2026 carrier-recovery work made the RRC modes plus 8PSK500/1000 acquire and decode
+> through a realistic ±50 Hz offset (the plain rectangular `QPSK2000`/`8PSK2000` are
+> RRC-superseded). See [architecture.md](architecture.md) and the
+> [README modulation-modes table](../../README.md#modulation-types).
 
 ---
 

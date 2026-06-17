@@ -1,11 +1,15 @@
 ---
 project: openpulsehf
-doc: docs/freedv-auth-research.md
-status: living
-last_updated: 2026-05-09
+doc: docs/dev/freedv-auth-research.md
+status: shipped
+last_updated: 2026-06-17
 ---
 
 # FF-11 — FreeDV Authenticated Voice Shim: Design Research
+
+> **Status: SHIPPED.** This is the original design-research note (predates implementation).
+> FF-11 shipped as the `openpulse-freedv-auth` crate (PR #162); the open questions below
+> were resolved during implementation. Kept for design rationale.
 
 ## Problem statement
 

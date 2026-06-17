@@ -9,7 +9,7 @@ last_updated: 2026-05-16
 
 This document describes how two licensed amateur radio operators set up their stations,
 verify the software stack, and execute a structured series of on-air tests using
-OpenPulseHF. All tests should be completed before any public release or Phase 3.5
+OpenPulseHF. All tests should be completed before any public release or the Phase 5.5-reg
 regulatory compliance report is filed.
 
 **Status:** Pending station setup by both operators.  
@@ -424,7 +424,7 @@ Log the exact times in the compliance report.
 
 ## 7. Compliance checklist
 
-Before filing the Phase 3.5 regulatory compliance report, confirm:
+Before filing the Phase 5.5-reg regulatory compliance report, confirm:
 
 - [ ] Occupied bandwidth measured with an SDR or spectrum analyser for each mode
 - [ ] BPSK31 ≤ 50 Hz, BPSK250 ≤ 260 Hz, QPSK500 ≤ 540 Hz, 64QAM500 ≤ 540 Hz, 64QAM2000-RRC ≤ 2700 Hz (±10%)

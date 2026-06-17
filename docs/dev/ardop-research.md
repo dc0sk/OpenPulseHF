@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/ardop-research.md
+doc: docs/dev/ardop-research.md
 status: living
 last_updated: 2026-05-01
 ---

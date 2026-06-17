@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/vara-research.md
+doc: docs/dev/vara-research.md
 status: living
 last_updated: 2026-05-01
 ---

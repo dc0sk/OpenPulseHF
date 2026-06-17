@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/peer-caching-relay.md
+doc: docs/dev/peer-caching-relay.md
 status: living
 last_updated: 2026-04-23
 ---

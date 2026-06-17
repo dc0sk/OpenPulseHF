@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/high-performance-mode.md
+doc: docs/dev/high-performance-mode.md
 status: living
 last_updated: 2026-04-23
 ---

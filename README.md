@@ -67,7 +67,7 @@ Capabilities that are firsts or near-firsts among open-source amateur digital-mo
 | # | Capability | Evidence / where to look |
 |---|---|---|
 | 1 | **Post-quantum in-band handshake** | ML-DSA-44 + ML-KEM-768 negotiated inside the ConReq/ConAck wire frames; Hybrid mode dual-signs with Ed25519 + ML-DSA-44 simultaneously (`crates/openpulse-core/src/pq_handshake.rs`) |
-| 2 | **SC-FDMA (LTE uplink waveform) on HF** | DFT-spread OFDM with DFT-CE pilot-aided channel estimation and MMSE equalization (`plugins/scfdma`). DFT-spread is the low-PAPR-capable structure; realizing the full PAPR advantage over OFDM needs a non-interleaved pilot scheme (tracked: roadmap FF-14 / mode-FEC guide §7) |
+| 2 | **SC-FDMA (LTE uplink waveform) on HF** | DFT-spread OFDM with DFT-CE pilot-aided channel estimation and MMSE equalization (`plugins/scfdma`). DFT-spread is the low-PAPR-capable structure; realizing the full PAPR advantage over OFDM would need a non-interleaved pilot scheme. That redesign (old roadmap FF-14) was dropped in favour of the **OFDM higher-order ladder** as the HF high-throughput path — see [mode/FEC guide §7](docs/mode-fec-ladder.md) |
 | 3 | **64QAM and SCFDMA-64QAM soft demodulation** | Gray-coded 64QAM max-log-MAP LLR demodulator; SCFDMA52-64QAM reaching 8 667 bps gross over a 2 kHz slice (`plugins/64qam`, `plugins/scfdma`) |
 | 4 | **Working LDPC belief propagation** | Rate-1/2 min-sum BP — not a passthrough stub; wired into `transmit_with_ldpc` / `receive_with_ldpc` in the modem engine (`crates/openpulse-core/src/ldpc.rs`) |
 | 5 | **LLR-accumulating Memory-ARQ** | Soft LLR values accumulated across retransmissions (PACTOR-style); mode switching on sustained NACK (`crates/openpulse-modem/src/arq_session.rs`) |
@@ -88,7 +88,11 @@ Capabilities that are firsts or near-firsts among open-source amateur digital-mo
 Sorted by occupied bandwidth (the mode-name number is the **baud** rate for
 single-carrier modes; SC-FDMA/OFDM are named by data-subcarrier count and span
 `total_SCs × 31.25 Hz`). The single-carrier modes also have `-RRC` (α = 0.35,
-~+35 % bandwidth) and `-HF` tuning variants not all listed here.
+~+35 % bandwidth) and `-HF` tuning variants not all listed here. The `-RRC`
+variants are the operational, carrier-offset-robust ones at 2000 baud: the plain
+rectangular `QPSK2000`/`8PSK2000` are registered but **RRC-superseded** (their
+crossfade pulse is ISI-limited at 4 samples/symbol — use `-RRC`). Wider
+99-subcarrier `OFDM99`/`SCFDMA99` variants (~3 kHz) also exist for VHF/UHF channels.
 
 | Mode | Plugin | Baud | Bits/sym | Gross&nbsp;bps | Occ.&nbsp;BW&nbsp;(Hz) | Waveform | Notes |
 |---|---|---|---|---|---|---|---|
@@ -111,6 +115,10 @@ single-carrier modes; SC-FDMA/OFDM are named by data-subcarrier count and span
 | 8PSK1000 | `psk8` | 1&nbsp;000 | 3 | 3&nbsp;000 | ~1&nbsp;100 | Single-carrier (+RRC/HF) | |
 | 64QAM1000 | `64qam` | 1&nbsp;000 | 6 | 6&nbsp;000 | ~1&nbsp;100 | Single-carrier | |
 | OFDM52 | `ofdm` | — | 2 | ~2&nbsp;889 | ~2&nbsp;031 | OFDM (52 SCs, QPSK) | ≡ SCFDMA52 throughput; OFDM trades PAPR for per-SC EQ |
+| OFDM52-8PSK | `ofdm` | — | 3 | ~4&nbsp;333 | ~2&nbsp;031 | OFDM (52 SCs, 8PSK) | OFDM higher-order ladder — the HF high-throughput path |
+| OFDM52-16QAM | `ofdm` | — | 4 | ~5&nbsp;778 | ~2&nbsp;031 | OFDM (52 SCs, 16QAM) | OFDM higher-order ladder |
+| OFDM52-32QAM | `ofdm` | — | 5 | ~7&nbsp;222 | ~2&nbsp;031 | OFDM (52 SCs, cross-32QAM) | OFDM higher-order ladder |
+| OFDM52-64QAM | `ofdm` | — | 6 | ~8&nbsp;667 | ~2&nbsp;031 | OFDM (52 SCs, 64QAM) | OFDM higher-order ladder |
 | SCFDMA52 | `scfdma` | — | 2 | ~2&nbsp;889 | ~2&nbsp;031 | SC-FDMA (52 SCs, QPSK) | Adaptive pilot density |
 | SCFDMA52-8PSK | `scfdma` | — | 3 | ~4&nbsp;333 | ~2&nbsp;031 | SC-FDMA (52 SCs, 8PSK) | |
 | SCFDMA52-16QAM | `scfdma` | — | 4 | ~5&nbsp;778 | ~2&nbsp;031 | SC-FDMA (52 SCs, 16QAM) | |
@@ -258,7 +266,7 @@ receiver sensitivity.  Each can be selected independently per mode.
 | **Soft-input FEC (LDPC / Turbo)** | Any mode with `supports_soft_demod()` | Coding gain vs. hard-decision FEC | Requires a plugin that returns genuine LLRs; engine warns if paired with hard-only plugin |
 
 **Rectangular pulse spectrum** for reference: first sidelobes −13 dB; classical full-Hann windowing
-improves this to −32 dB at the cost of ISI.  See [`docs/features.md`](features.md) for the
+improves this to −32 dB at the cost of ISI.  See [`docs/features.md`](docs/features.md) for the
 detailed crossfade and ISI analysis.
 
 ### Operator interfaces
@@ -382,7 +390,7 @@ Note: **plugins that statically link against `openpulse-core`** are derivative w
 and must be GPL-compatible.  The only supported path for proprietary DSP backends is to
 run them as a separate process and bridge data through one of the TCP interfaces above.
 
-See [`docs/non-gpl-interfacing.md`](non-gpl-interfacing.md) for the full interface
+See [`docs/non-gpl-interfacing.md`](docs/non-gpl-interfacing.md) for the full interface
 specifications including wire formats, authentication, and schema references.
 
 ---

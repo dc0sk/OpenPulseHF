@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/vara-parity-execution-board.md
+doc: docs/dev/vara-parity-execution-board.md
 status: living
 last_updated: 2026-05-17
 ---

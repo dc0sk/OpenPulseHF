@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/hpx-session-state-machine.md
+doc: docs/dev/hpx-session-state-machine.md
 status: living
 last_updated: 2026-04-24
 ---
