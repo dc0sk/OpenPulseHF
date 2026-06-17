@@ -23,11 +23,11 @@ const MODES: [&str; 17] = [
     "QPSK250",
     "QPSK500",
     "QPSK1000",
-    "QPSK2000", // rectangular 4 sps — fails even at 0 (known timing issue, not AFC)
+    "QPSK2000", // RRC-superseded: plain 4-sps pulse → residual BER fails no-FEC framing
     "QPSK2000-RRC",
     "8PSK500",
     "8PSK1000",
-    "8PSK2000", // rectangular 4 sps — fails even at 0 (known timing issue, not AFC)
+    "8PSK2000", // RRC-superseded: plain 4-sps pulse is ISI-limited (~5-13% BER), not an AFC gap
     "8PSK2000-RRC",
     "64QAM500",
     "64QAM1000",
