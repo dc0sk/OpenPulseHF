@@ -639,9 +639,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let gpu_out = bpsk_modulate_with_gpu(payload, &cfg, &ctx).unwrap();
 
         assert_eq!(cpu_out.len(), gpu_out.len(), "sample count mismatch");
+        // 1e-3 absolute: GPU f32 (different FMA/rounding order than the CPU path) can
+        // differ by ~1e-4 on near-zero RRC-tail samples; that is ~60 dB below the
+        // unit-scale signal and harmless. A real kernel divergence is O(0.1+).
         for (i, (cpu, gpu)) in cpu_out.iter().zip(gpu_out.iter()).enumerate() {
             assert!(
-                (cpu - gpu).abs() < 1e-4,
+                (cpu - gpu).abs() < 1e-3,
                 "sample[{i}]: cpu={cpu:.6}, gpu={gpu:.6}"
             );
         }
