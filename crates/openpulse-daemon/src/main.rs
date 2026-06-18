@@ -17,6 +17,7 @@ use openpulse_repeater::{CrossBandRepeater, RepeaterConfig};
 use bpsk_plugin::BpskPlugin;
 use fsk4_plugin::Fsk4Plugin;
 use ofdm_plugin::OfdmPlugin;
+use pilot_plugin::PilotPlugin;
 use psk8_plugin::Psk8Plugin;
 use qam64_plugin::Qam64Plugin;
 use qpsk_plugin::QpskPlugin;
@@ -80,6 +81,9 @@ async fn main() {
     engine
         .register_plugin(Box::new(ScFdmaPlugin::new()))
         .expect("failed to register SC-FDMA plugin");
+    engine
+        .register_plugin(Box::new(PilotPlugin::new()))
+        .expect("failed to register pilot-framed plugin");
 
     if cfg.audio.tx_limiter_threshold > 0.0 {
         engine.set_tx_limiter_threshold(cfg.audio.tx_limiter_threshold);

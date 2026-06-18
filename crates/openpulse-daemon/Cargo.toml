@@ -50,6 +50,7 @@ psk8-plugin      = { workspace = true }
 qam64-plugin     = { workspace = true }
 qpsk-plugin      = { workspace = true }
 scfdma-plugin    = { workspace = true }
+pilot-plugin     = { workspace = true }
 tracing-subscriber = { workspace = true }
 tokio            = { workspace = true, features = ["net", "io-util", "sync", "rt-multi-thread", "macros", "time"] }
 tokio-tungstenite = "0.23"

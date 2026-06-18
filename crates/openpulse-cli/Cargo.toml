@@ -32,6 +32,7 @@ ofdm-plugin     = { workspace = true }
 psk8-plugin     = { workspace = true }
 qam64-plugin    = { workspace = true }
 qpsk-plugin     = { workspace = true }
+pilot-plugin    = { workspace = true }
 scfdma-plugin   = { workspace = true }
 anyhow             = { workspace = true }
 clap               = { workspace = true }

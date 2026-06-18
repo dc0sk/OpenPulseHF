@@ -6,6 +6,7 @@ use bpsk_plugin::BpskPlugin;
 use fsk4_plugin::Fsk4Plugin;
 use ofdm_plugin::OfdmPlugin;
 use openpulse_modem::ModemEngine;
+use pilot_plugin::PilotPlugin;
 use psk8_plugin::Psk8Plugin;
 use qam64_plugin::Qam64Plugin;
 use qpsk_plugin::QpskPlugin;
@@ -34,5 +35,26 @@ pub fn register_all(engine: &mut ModemEngine) -> Result<()> {
     engine
         .register_plugin(Box::new(ScFdmaPlugin::new()))
         .context("failed to register SC-FDMA plugin")?;
+    engine
+        .register_plugin(Box::new(PilotPlugin::new()))
+        .context("failed to register pilot-framed plugin")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openpulse_audio::LoopbackBackend;
+
+    #[test]
+    fn pilot_modes_are_registered() {
+        let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        register_all(&mut engine).unwrap();
+        for mode in ["PILOT-QPSK500", "PILOT-8PSK500", "PILOT-16QAM500"] {
+            assert!(
+                engine.plugins().get(mode).is_some(),
+                "{mode} should be registered by register_all"
+            );
+        }
+    }
 }
