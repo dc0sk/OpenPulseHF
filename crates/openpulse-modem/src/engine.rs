@@ -436,6 +436,24 @@ impl ModemEngine {
         self.rate_policy.start_session(profile);
     }
 
+    /// A2 (backlog-aware gating): minimum queued TX bytes required before an
+    /// AckUp upgrade is acted on. `0` (default) disables the gate. Prevents
+    /// spending upgrade airtime when only a frame or two remain queued.
+    pub fn set_min_backlog_for_upgrade(&mut self, bytes: usize) {
+        self.rate_policy.set_min_backlog_for_upgrade(bytes);
+    }
+
+    /// A2: update the current queued TX backlog (bytes) used by the gate.
+    pub fn set_tx_backlog(&mut self, bytes: usize) {
+        self.rate_policy.set_tx_backlog(bytes);
+    }
+
+    /// A3 (anti-oscillation): suppress this many upgrade attempts after a
+    /// downgrade. `0` (default) disables the hold.
+    pub fn set_upgrade_hold_frames(&mut self, frames: u32) {
+        self.rate_policy.set_upgrade_hold_frames(frames);
+    }
+
     /// Apply a received ACK type to the TX-direction rate adapter.
     ///
     /// Returns [`RateEvent::Maintained`] when no adaptive session is active.
