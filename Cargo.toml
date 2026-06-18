@@ -21,6 +21,7 @@ members = [
     "plugins/bpsk",
     "plugins/fsk4",
     "plugins/ofdm",
+    "plugins/pilot",
     "plugins/psk8",
     "plugins/qpsk",
     "plugins/scfdma",
@@ -62,6 +63,7 @@ openpulse-qsy        = { path = "crates/openpulse-qsy" }
 bpsk-plugin       = { path = "plugins/bpsk" }
 fsk4-plugin       = { path = "plugins/fsk4" }
 ofdm-plugin       = { path = "plugins/ofdm" }
+pilot-plugin      = { path = "plugins/pilot" }
 psk8-plugin       = { path = "plugins/psk8" }
 qam64-plugin      = { path = "plugins/64qam" }
 qpsk-plugin       = { path = "plugins/qpsk" }

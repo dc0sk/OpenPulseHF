@@ -4260,6 +4260,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pilot-plugin"
+version = "0.1.0"
+dependencies = [
+ "num-complex",
+ "openpulse-core",
+ "openpulse-dsp",
+]
+
+[[package]]
 name = "pin-project"
 version = "1.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
