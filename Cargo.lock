@@ -4265,6 +4265,7 @@ version = "0.1.0"
 dependencies = [
  "num-complex",
  "openpulse-audio",
+ "openpulse-channel",
  "openpulse-core",
  "openpulse-dsp",
  "openpulse-modem",

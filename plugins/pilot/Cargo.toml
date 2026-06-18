@@ -15,3 +15,4 @@ num-complex    = { workspace = true }
 [dev-dependencies]
 openpulse-modem = { workspace = true }
 openpulse-audio = { workspace = true }
+openpulse-channel = { workspace = true }
