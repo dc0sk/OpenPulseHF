@@ -1,6 +1,12 @@
-//! SNR estimation for pilot-aided and reference-symbol demodulation.
+//! SNR estimation for adaptive threshold and rate decisions.
 //!
-//! Provides SNR measurement techniques for adaptive threshold decisions.
+//! Three techniques: pilot-aided ([`SnrEstimator::update_pilot_based`]),
+//! reference-energy ([`SnrEstimator::update_energy_based`]), and a **blind**
+//! noise-floor method ([`SnrEstimator::set_noise_floor_from_samples`] +
+//! [`SnrEstimator::snr_db_from_samples`]) that needs only a known-silent window
+//! (e.g. a gap `DcdState` reports idle) and the active burst — no pilots or
+//! reference symbols. Plus an [`es_n0_db`] bandwidth conversion and a
+//! rate-level hysteresis controller.
 
 use std::collections::VecDeque;
 
@@ -86,6 +92,46 @@ impl SnrEstimator {
         self.signal_power = 1.0;
         self.noise_power = 0.1;
     }
+
+    /// Set the noise-floor power directly from a known-silent window.
+    ///
+    /// Blind — no pilots or reference symbols: the mean-square of a window the
+    /// caller knows to contain only noise (e.g. a gap `DcdState` reports idle).
+    /// Pairs with [`snr_db_from_samples`](Self::snr_db_from_samples).
+    pub fn set_noise_floor_from_samples(&mut self, silent: &[f32]) {
+        if silent.is_empty() {
+            return;
+        }
+        let mean_sq = silent.iter().map(|&s| s * s).sum::<f32>() / silent.len() as f32;
+        self.noise_power = mean_sq.max(1e-9);
+    }
+
+    /// Blind SNR (dB) of an active burst against the stored noise floor.
+    ///
+    /// `SNR = (P_active − P_noise) / P_noise` (the qo100 noise-floor method).
+    /// Call [`set_noise_floor_from_samples`](Self::set_noise_floor_from_samples)
+    /// first. Floors at a large negative value when the burst is at or below the
+    /// noise floor.
+    pub fn snr_db_from_samples(&self, active: &[f32]) -> f32 {
+        if active.is_empty() {
+            return f32::NEG_INFINITY;
+        }
+        let p_active = active.iter().map(|&s| s * s).sum::<f32>() / active.len() as f32;
+        let signal = (p_active - self.noise_power).max(1e-9);
+        10.0 * (signal / self.noise_power).log10()
+    }
+}
+
+/// Convert a full-band SNR (dB) to Es/N0 (dB) given samples per symbol.
+///
+/// With noise spread over the sampled band (≈ `fs`) and signal energy over the
+/// symbol-rate band (`Rs = fs / sps`), `Es/N0 = SNR · (fs/Rs) = SNR · sps`, i.e.
+/// `Es/N0(dB) = SNR(dB) + 10·log₁₀(sps)` (the qo100 `Analysis.ipynb` relation).
+pub fn es_n0_db(snr_db: f32, samples_per_symbol: f32) -> f32 {
+    if samples_per_symbol <= 0.0 {
+        return snr_db;
+    }
+    snr_db + 10.0 * samples_per_symbol.log10()
 }
 
 /// Rate-level hysteresis controller.
@@ -221,6 +267,34 @@ mod tests {
             snr_db > 9.0 && snr_db < 11.0,
             "Should converge to ~10 dB: {}",
             snr_db
+        );
+    }
+
+    #[test]
+    fn blind_snr_from_noise_floor_and_active_burst() {
+        // Noise floor: constant |0.1| ⇒ power 0.01. Active burst: power 0.11 ⇒
+        // SNR_linear = (0.11 − 0.01)/0.01 = 10 ⇒ 10 dB.
+        let mut est = SnrEstimator::new(0.1);
+        let silence: Vec<f32> = (0..1000)
+            .map(|i| if i % 2 == 0 { 0.1 } else { -0.1 })
+            .collect();
+        est.set_noise_floor_from_samples(&silence);
+        let a = 0.11f32.sqrt();
+        let active: Vec<f32> = (0..1000).map(|i| if i % 2 == 0 { a } else { -a }).collect();
+        let snr = est.snr_db_from_samples(&active);
+        assert!(
+            (snr - 10.0).abs() < 0.5,
+            "blind SNR should be ~10 dB, got {snr}"
+        );
+    }
+
+    #[test]
+    fn es_n0_applies_sps_bandwidth_factor() {
+        // 10 dB full-band SNR at 8 samples/symbol ⇒ Es/N0 = 10 + 10·log10(8).
+        let e = es_n0_db(10.0, 8.0);
+        assert!(
+            (e - 19.03).abs() < 0.1,
+            "Es/N0 should be ~19.03 dB, got {e}"
         );
     }
 
