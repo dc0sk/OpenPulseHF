@@ -70,6 +70,10 @@ impl ModulationPlugin for PilotPlugin {
         demodulate::pilot_demodulate(samples, config)
     }
 
+    fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+        demodulate::pilot_estimate_afc_hz(samples, config)
+    }
+
     fn frame_geometry(&self, config: &ModulationConfig) -> Option<FrameGeometry> {
         let sps = modulate::samples_per_symbol(config).ok()?;
         let preamble_syms = PilotFrame::new().preamble_len();

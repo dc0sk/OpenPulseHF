@@ -4264,8 +4264,10 @@ name = "pilot-plugin"
 version = "0.1.0"
 dependencies = [
  "num-complex",
+ "openpulse-audio",
  "openpulse-core",
  "openpulse-dsp",
+ "openpulse-modem",
 ]
 
 [[package]]
