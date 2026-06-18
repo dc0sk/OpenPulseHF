@@ -40,7 +40,11 @@ impl PilotPlugin {
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 description: "Pilot-framed QPSK (in-band pilot-aided carrier tracking)".to_string(),
                 author: "OpenPulse".to_string(),
-                supported_modes: vec!["PILOT-QPSK500".to_string()],
+                supported_modes: vec![
+                    "PILOT-QPSK500".to_string(),
+                    "PILOT-8PSK500".to_string(),
+                    "PILOT-16QAM500".to_string(),
+                ],
                 trait_version_required: "1.0".to_string(),
             },
         }

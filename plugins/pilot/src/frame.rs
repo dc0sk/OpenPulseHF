@@ -23,8 +23,8 @@ use openpulse_dsp::constellation::{demap_symbol, map_symbol};
 use openpulse_dsp::pilot_tracker::PilotTracker;
 use openpulse_dsp::preamble::{PreambleConstellation, PreambleSpec, PreambleType};
 
-/// QPSK carries 2 bits per symbol.
-const QPSK_BITS: usize = 2;
+/// Default constellation: QPSK (2 bits/symbol).
+const DEFAULT_BITS_PER_SC: usize = 2;
 /// Preamble length in symbols (PN-63 truncated/cycled to this many).
 const PREAMBLE_SYMBOLS: usize = 48;
 /// Data-region pilot cadence: one known pilot every `PILOT_SPACING` symbols.
@@ -34,10 +34,11 @@ const PILOT: (f32, f32) = (1.0, 0.0);
 /// Pilot-tracker loop bandwidth.
 const LOOP_BW: f32 = 0.1;
 
-/// Pilot-framed QPSK symbol-level codec.
+/// Pilot-framed symbol-level codec (QPSK / 8PSK / 16QAM data; BPSK pilots).
 pub struct PilotFrame {
     preamble: Vec<(f32, f32)>,
     pilot_spacing: usize,
+    bits_per_sc: usize,
 }
 
 impl Default for PilotFrame {
@@ -47,8 +48,15 @@ impl Default for PilotFrame {
 }
 
 impl PilotFrame {
-    /// Construct with the default (PN-63 / spacing-16) frame parameters.
+    /// Construct with the default QPSK data constellation (2 bits/symbol).
     pub fn new() -> Self {
+        Self::with_bits(DEFAULT_BITS_PER_SC)
+    }
+
+    /// Construct with a chosen data constellation: `bits_per_sc` = 2 (QPSK),
+    /// 3 (8PSK), 4 (16QAM) — the shared [`openpulse_dsp::constellation`] orders.
+    /// Pilots and preamble stay BPSK regardless.
+    pub fn with_bits(bits_per_sc: usize) -> Self {
         let preamble = PreambleSpec::new(
             PreambleType::Pn63,
             PREAMBLE_SYMBOLS,
@@ -58,6 +66,7 @@ impl PilotFrame {
         Self {
             preamble,
             pilot_spacing: PILOT_SPACING,
+            bits_per_sc,
         }
     }
 
@@ -77,10 +86,10 @@ impl PilotFrame {
         self.pilot_spacing
     }
 
-    /// Encode payload bytes into frame symbols: preamble followed by the QPSK
-    /// data symbols with a known pilot inserted every `pilot_spacing` positions.
+    /// Encode payload bytes into frame symbols: preamble followed by the data
+    /// symbols with a known pilot inserted every `pilot_spacing` positions.
     pub fn encode(&self, payload: &[u8]) -> Vec<(f32, f32)> {
-        let data = bytes_to_qpsk(payload);
+        let data = bytes_to_symbols(payload, self.bits_per_sc);
         let mut frame = self.preamble.clone();
         let mut di = 0usize;
         let mut pos = 0usize;
@@ -111,43 +120,63 @@ impl PilotFrame {
         }
 
         // Track through the data region; pilots sit at every pilot_spacing-th
-        // position, mirroring `encode`.
+        // position, mirroring `encode`. Each data symbol is normalised by the
+        // pilot-referenced amplitude so the demapper sees native constellation
+        // scale — required for amplitude-bearing 16QAM, harmless for the
+        // constant-modulus PSK orders.
         let mut data_syms: Vec<(f32, f32)> = Vec::new();
         for (pos, &sym) in frame.iter().skip(plen).enumerate() {
             let is_pilot = pos.is_multiple_of(self.pilot_spacing);
             let corrected = tracker.process(sym, if is_pilot { Some(PILOT) } else { None });
             if !is_pilot {
-                data_syms.push(corrected);
+                let amp = tracker.amplitude().max(1e-6);
+                data_syms.push((corrected.0 / amp, corrected.1 / amp));
             }
         }
 
-        qpsk_to_bytes(&data_syms)
+        symbols_to_bytes(&data_syms, self.bits_per_sc)
     }
 }
 
-/// Pack payload bytes into QPSK symbols (4 symbols/byte, LSB-first 2-bit groups).
-fn bytes_to_qpsk(payload: &[u8]) -> Vec<(f32, f32)> {
-    let mut syms = Vec::with_capacity(payload.len() * 4);
-    for &b in payload {
-        for j in 0..4 {
-            let bits = (b >> (QPSK_BITS * j)) & 0b11;
-            let c = map_symbol(bits, QPSK_BITS);
-            syms.push((c.re, c.im));
+/// Pack payload bytes (LSB-first bit stream) into `bits_per_sc`-bit data symbols.
+/// A final partial symbol is zero-padded.
+fn bytes_to_symbols(payload: &[u8], bits_per_sc: usize) -> Vec<(f32, f32)> {
+    let total_bits = payload.len() * 8;
+    let nsyms = total_bits.div_ceil(bits_per_sc);
+    let mut syms = Vec::with_capacity(nsyms);
+    for s in 0..nsyms {
+        let mut bits = 0u8;
+        for b in 0..bits_per_sc {
+            let gb = s * bits_per_sc + b;
+            let bit = if gb < total_bits {
+                (payload[gb / 8] >> (gb % 8)) & 1
+            } else {
+                0
+            };
+            bits |= bit << b;
         }
+        let c = map_symbol(bits, bits_per_sc);
+        syms.push((c.re, c.im));
     }
     syms
 }
 
-/// Inverse of [`bytes_to_qpsk`]: demap QPSK symbols back into bytes.
-fn qpsk_to_bytes(syms: &[(f32, f32)]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(syms.len() / 4);
-    for chunk in syms.chunks(4) {
-        let mut b = 0u8;
-        for (j, &(re, im)) in chunk.iter().enumerate() {
-            let bits = demap_symbol(Complex32::new(re, im), QPSK_BITS) & 0b11;
-            b |= bits << (QPSK_BITS * j);
+/// Inverse of [`bytes_to_symbols`]: demap symbols into the LSB-first bit stream
+/// and pack whole bytes (a trailing partial byte from symbol padding is dropped).
+fn symbols_to_bytes(syms: &[(f32, f32)], bits_per_sc: usize) -> Vec<u8> {
+    let mut bits: Vec<u8> = Vec::with_capacity(syms.len() * bits_per_sc);
+    for &(re, im) in syms {
+        let v = demap_symbol(Complex32::new(re, im), bits_per_sc);
+        for b in 0..bits_per_sc {
+            bits.push((v >> b) & 1);
         }
-        out.push(b);
+    }
+    let nbytes = bits.len() / 8;
+    let mut out = vec![0u8; nbytes];
+    for (i, &bit) in bits.iter().take(nbytes * 8).enumerate() {
+        if bit != 0 {
+            out[i / 8] |= 1 << (i % 8);
+        }
     }
     out
 }
@@ -210,5 +239,45 @@ mod tests {
         let frame = f.encode(&payload());
         let rxd: Vec<(f32, f32)> = frame.iter().map(|&x| rot(x, 2.0)).collect();
         assert_eq!(f.decode(&rxd), payload());
+    }
+
+    /// Decode recovers `payload` as a prefix (dense orders may append a trailing
+    /// partial byte from symbol zero-padding).
+    fn assert_prefix(out: &[u8], p: &[u8]) {
+        assert!(
+            out.len() >= p.len() && &out[..p.len()] == p,
+            "decoded prefix mismatch (got {} bytes)",
+            out.len()
+        );
+    }
+
+    #[test]
+    fn clean_round_trip_8psk() {
+        let f = PilotFrame::with_bits(3);
+        let frame = f.encode(&payload());
+        assert_prefix(&f.decode(&frame), &payload());
+    }
+
+    #[test]
+    fn clean_round_trip_16qam() {
+        let f = PilotFrame::with_bits(4);
+        let frame = f.encode(&payload());
+        assert_prefix(&f.decode(&frame), &payload());
+    }
+
+    #[test]
+    fn round_trip_16qam_through_carrier_frequency_offset() {
+        // 16QAM is the dense canary: amplitude-bearing, so it exercises the
+        // pilot-referenced amplitude normalisation as well as phase/freq tracking.
+        let f = PilotFrame::with_bits(4);
+        let frame = f.encode(&payload());
+        let dphi = 0.01f32;
+        let phi0 = 0.6f32;
+        let rxd: Vec<(f32, f32)> = frame
+            .iter()
+            .enumerate()
+            .map(|(k, &x)| rot(x, phi0 + dphi * k as f32))
+            .collect();
+        assert_prefix(&f.decode(&rxd), &payload());
     }
 }
