@@ -305,6 +305,79 @@ pub fn estimate_decision_noise_var(symbols: &[Complex32], bits_per_sc: usize) ->
     (sum_min_dist / symbols.len() as f32).max(1e-6)
 }
 
+// ── 32APSK (DVB-S2 4+12+16 rings) ─────────────────────────────────────────────
+//
+// A 5-bit amplitude/phase constellation: inner 4PSK + mid 12PSK + outer 16PSK at
+// the DVB-S2 radius ratios (γ1=2.53, γ2=4.3) with the validated DVB-S2 bit
+// labeling (from daniestevez/qo100-modem). Lower envelope variance than
+// cross-32QAM — better on nonlinear PAs and fading — for the same 5 bits/symbol.
+// Distinct from `bits_per_sc = 5` (cross-32QAM); select it via these functions.
+
+const APSK32_GAMMA1: f32 = 2.53;
+const APSK32_GAMMA2: f32 = 4.3;
+/// DVB-S2 bit labels indexed by geometric order (outer 0..15, mid 0..11,
+/// inner 0..3); the value is the 5-bit label carried by that point.
+const APSK32_LABELS: [u8; 32] = [
+    24, 8, 25, 9, 13, 29, 12, 28, 30, 14, 31, 15, 11, 27, 10, 26, 16, 0, 1, 5, 4, 20, 22, 6, 7, 3,
+    2, 18, 17, 21, 23, 19,
+];
+
+/// The 32 `(label, point)` pairs of the DVB-S2 32APSK constellation (unit average power).
+pub fn apsk32_points() -> Vec<(u8, Complex32)> {
+    use std::f32::consts::PI;
+    let (g1, g2) = (APSK32_GAMMA1, APSK32_GAMMA2);
+    let power = (1.0 / (g2 * g2) + 3.0 * g1 * g1 / (g2 * g2) + 4.0) / 8.0;
+    let scale = 1.0 / power.sqrt();
+    let mut pts = Vec::with_capacity(32);
+    let mut idx = 0usize;
+    for k in 0..16 {
+        // Outer 16PSK at radius 1.
+        let a = PI / 8.0 * k as f32;
+        pts.push((APSK32_LABELS[idx], Complex32::from_polar(scale, a)));
+        idx += 1;
+    }
+    for k in 0..12 {
+        // Mid 12PSK at radius γ1/γ2.
+        let a = PI / 6.0 * k as f32 + PI / 12.0;
+        pts.push((
+            APSK32_LABELS[idx],
+            Complex32::from_polar(scale * g1 / g2, a),
+        ));
+        idx += 1;
+    }
+    for k in 0..4 {
+        // Inner 4PSK at radius 1/γ2.
+        let a = PI / 2.0 * k as f32 + PI / 4.0;
+        pts.push((APSK32_LABELS[idx], Complex32::from_polar(scale / g2, a)));
+        idx += 1;
+    }
+    pts
+}
+
+/// Map a 5-bit label to its 32APSK constellation point.
+pub fn map_apsk32(bits: u8) -> Complex32 {
+    let b = bits & 0x1f;
+    apsk32_points()
+        .into_iter()
+        .find(|(label, _)| *label == b)
+        .map(|(_, pt)| pt)
+        .unwrap_or_else(|| Complex32::new(0.0, 0.0))
+}
+
+/// Hard-decision demap: the 5-bit label of the nearest 32APSK point.
+pub fn demap_apsk32(c: Complex32) -> u8 {
+    apsk32_points()
+        .into_iter()
+        .min_by(|(_, a), (_, b)| (c - *a).norm_sqr().total_cmp(&(c - *b).norm_sqr()))
+        .map(|(label, _)| label)
+        .unwrap_or(0)
+}
+
+/// Per-bit max-log-MAP LLRs for a received 32APSK symbol (positive = bit 0).
+pub fn soft_apsk32(symbol: Complex32, noise_var: f32) -> Vec<f32> {
+    symbol_llrs(symbol, 5, noise_var, &apsk32_points())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,6 +406,56 @@ mod tests {
                 let recovered = demap_symbol(map_symbol(b, bps), bps);
                 assert_eq!(recovered, b, "bits_per_sc={bps} label {b} round-trip");
             }
+        }
+    }
+
+    #[test]
+    fn apsk32_round_trips_all_labels() {
+        for b in 0..32u8 {
+            assert_eq!(
+                demap_apsk32(map_apsk32(b)),
+                b,
+                "32APSK label {b} round-trip"
+            );
+        }
+    }
+
+    #[test]
+    fn apsk32_average_power_is_unit() {
+        let pts = apsk32_points();
+        assert_eq!(pts.len(), 32);
+        let avg = pts.iter().map(|(_, p)| p.norm_sqr()).sum::<f32>() / 32.0;
+        assert!((avg - 1.0).abs() < 0.01, "32APSK avg power {avg:.4}");
+    }
+
+    #[test]
+    fn apsk32_has_three_distinct_rings() {
+        let pts = apsk32_points();
+        let mut radii: Vec<f32> = pts.iter().map(|(_, p)| p.norm()).collect();
+        radii.sort_by(f32::total_cmp);
+        // 4 inner + 12 mid + 16 outer; the inner ring sits well inside the outer.
+        assert!(
+            radii[0] < radii[31] * 0.5,
+            "inner radius {} should be << outer {}",
+            radii[0],
+            radii[31]
+        );
+    }
+
+    #[test]
+    fn apsk32_soft_llrs_hard_slice_to_label() {
+        // Clean symbol: hard-slicing the soft LLRs (positive = bit 0) reproduces
+        // the label — pins map/soft consistency and the cross-plugin LLR sign.
+        for b in 0..32u8 {
+            let llrs = soft_apsk32(map_apsk32(b), 0.01);
+            assert_eq!(llrs.len(), 5);
+            let mut decoded = 0u8;
+            for (bit, &llr) in llrs.iter().enumerate() {
+                if llr <= 0.0 {
+                    decoded |= 1 << bit;
+                }
+            }
+            assert_eq!(decoded, b, "32APSK soft hard-slice label {b}");
         }
     }
 
