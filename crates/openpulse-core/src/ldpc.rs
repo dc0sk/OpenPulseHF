@@ -332,6 +332,43 @@ mod tests {
     }
 
     #[test]
+    fn ldpc_decode_invariant_to_global_llr_scaling() {
+        // Min-sum BP hard decisions depend only on LLR signs and *relative*
+        // magnitudes: scaling every channel LLR by a positive constant scales
+        // `total`, the extrinsics, and the min-abs check messages by the same
+        // factor, leaving every sign-based syndrome check (and thus the whole
+        // convergence trajectory) unchanged. This pins the verified finding that
+        // σ²/noise-variance normalisation of the LLRs is a *no-op* for this
+        // decoder on a homogeneous channel — it would only matter for a
+        // scale-sensitive decoder (tanh sum-product) or when combining LLRs of
+        // differing reliability. Guards against silently losing that property.
+        let c = make_codec();
+        let data: Vec<u8> = (0u8..128).collect();
+        let cw = c.encode(&data);
+
+        let mut llrs: Vec<f32> = cw
+            .iter()
+            .flat_map(|&b| (0..8u8).map(move |i| if (b >> i) & 1 == 0 { 5.0f32 } else { -5.0f32 }))
+            .collect();
+        // Single parity-bit flip that BP corrects (cf. the test below).
+        llrs[1024] = -llrs[1024];
+
+        let baseline = c.decode_soft(&llrs).expect("baseline decode converges");
+        assert_eq!(baseline, data);
+
+        for scale in [0.1f32, 10.0, 1000.0] {
+            let scaled: Vec<f32> = llrs.iter().map(|&l| l * scale).collect();
+            let got = c
+                .decode_soft(&scaled)
+                .expect("scaled decode should also converge");
+            assert_eq!(
+                got, baseline,
+                "min-sum decode must be invariant to global LLR scale {scale}"
+            );
+        }
+    }
+
+    #[test]
     fn ldpc_parity_bit_corrected_on_single_flip() {
         let c = make_codec();
         let data: Vec<u8> = (0u8..128).collect();
