@@ -87,6 +87,7 @@ async fn main() -> anyhow::Result<()> {
     engine.register_plugin(Box::new(psk8_plugin::Psk8Plugin::new()))?;
     engine.register_plugin(Box::new(qam64_plugin::Qam64Plugin::new()))?;
     engine.register_plugin(Box::new(scfdma_plugin::ScFdmaPlugin::new()))?;
+    engine.register_plugin(Box::new(pilot_plugin::PilotPlugin::new()))?;
     engine.enable_csma();
 
     let config = KissConfig {
