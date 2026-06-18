@@ -24,7 +24,7 @@ use openpulse_core::plugin::ModulationConfig;
 use openpulse_dsp::acquisition::{estimate_cfo_data_aided, goertzel_carrier_scan, IqMatchedFilter};
 
 use crate::frame::PilotFrame;
-use crate::modulate::{baud_for_mode, bits_per_sc_for_mode, preamble_template, samples_per_symbol};
+use crate::modulate::{baud_for_mode, pilot_frame_for_mode, preamble_template, samples_per_symbol};
 
 /// Locate the frame onset by phase-insensitive correlation against the passband
 /// preamble.
@@ -79,10 +79,10 @@ pub fn pilot_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Ve
         return Ok(Vec::new());
     };
 
-    let bits = bits_per_sc_for_mode(&config.mode)?;
+    let frame = pilot_frame_for_mode(&config.mode)?;
     let total_syms = samples.len().saturating_sub(onset) / sps;
     let symbols = integrate_and_dump(samples, onset, sps, total_syms, fc, fs);
-    Ok(PilotFrame::with_bits(bits).decode(&symbols))
+    Ok(frame.decode(&symbols))
 }
 
 /// Estimate the carrier frequency offset (Hz) for the engine's AFC stage.

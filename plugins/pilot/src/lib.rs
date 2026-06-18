@@ -44,6 +44,7 @@ impl PilotPlugin {
                     "PILOT-QPSK500".to_string(),
                     "PILOT-8PSK500".to_string(),
                     "PILOT-16QAM500".to_string(),
+                    "PILOT-32APSK500".to_string(),
                 ],
                 trait_version_required: "1.0".to_string(),
             },
@@ -80,11 +81,21 @@ impl ModulationPlugin for PilotPlugin {
 
     fn frame_geometry(&self, config: &ModulationConfig) -> Option<FrameGeometry> {
         let sps = modulate::samples_per_symbol(config).ok()?;
+        // Symbols per byte scales with the constellation order: denser modes pack
+        // a frame into FEWER, shorter symbols. Sizing `min_frame_samples` from
+        // QPSK's 4 sym/byte over-estimates the floor for dense modes, so the
+        // engine would wait for a slice longer than the actual (shorter) 32APSK/
+        // 16QAM frame and never decode it. Use the mode's real bits/symbol.
+        let bits = if config.mode.eq_ignore_ascii_case("PILOT-32APSK500") {
+            5
+        } else {
+            modulate::bits_per_sc_for_mode(&config.mode).ok()?
+        };
         let preamble_syms = PilotFrame::new().preamble_len();
-        // QPSK = 4 symbols/byte; pilots add ~1/(spacing-1) overhead.
-        let max_data_syms = 255 * 4;
+        let max_data_syms = (255usize * 8).div_ceil(bits); // 255-byte RS block
+        let min_data_syms = (42usize * 8).div_ceil(bits); // minimal HPX frame
         let max_syms = preamble_syms + max_data_syms + max_data_syms / 15 + 8;
-        let min_syms = preamble_syms + 42 * 4;
+        let min_syms = preamble_syms + min_data_syms;
         Some(FrameGeometry {
             symbol_period_samples: sps,
             preamble_samples: preamble_syms * sps,

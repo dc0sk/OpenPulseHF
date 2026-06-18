@@ -19,7 +19,7 @@
 //! multicarrier/PSK mode.
 
 use num_complex::Complex32;
-use openpulse_dsp::constellation::{demap_symbol, map_symbol};
+use openpulse_dsp::constellation::{demap_apsk32, demap_symbol, map_apsk32, map_symbol};
 use openpulse_dsp::pilot_tracker::PilotTracker;
 use openpulse_dsp::preamble::{PreambleConstellation, PreambleSpec, PreambleType};
 
@@ -34,11 +34,14 @@ const PILOT: (f32, f32) = (1.0, 0.0);
 /// Pilot-tracker loop bandwidth.
 const LOOP_BW: f32 = 0.1;
 
-/// Pilot-framed symbol-level codec (QPSK / 8PSK / 16QAM data; BPSK pilots).
+/// Pilot-framed symbol-level codec (QPSK / 8PSK / 16QAM / 32APSK data; BPSK pilots).
 pub struct PilotFrame {
     preamble: Vec<(f32, f32)>,
     pilot_spacing: usize,
     bits_per_sc: usize,
+    /// When set, the 5-bit data uses the DVB-S2 32APSK constellation instead of
+    /// the Gray cross-32QAM that `bits_per_sc = 5` otherwise selects.
+    apsk32: bool,
 }
 
 impl Default for PilotFrame {
@@ -57,6 +60,15 @@ impl PilotFrame {
     /// 3 (8PSK), 4 (16QAM) — the shared [`openpulse_dsp::constellation`] orders.
     /// Pilots and preamble stay BPSK regardless.
     pub fn with_bits(bits_per_sc: usize) -> Self {
+        Self::build(bits_per_sc, false)
+    }
+
+    /// Construct with DVB-S2 32APSK data (5 bits/symbol); pilots stay BPSK.
+    pub fn with_apsk32() -> Self {
+        Self::build(5, true)
+    }
+
+    fn build(bits_per_sc: usize, apsk32: bool) -> Self {
         let preamble = PreambleSpec::new(
             PreambleType::Pn63,
             PREAMBLE_SYMBOLS,
@@ -67,6 +79,7 @@ impl PilotFrame {
             preamble,
             pilot_spacing: PILOT_SPACING,
             bits_per_sc,
+            apsk32,
         }
     }
 
@@ -89,7 +102,7 @@ impl PilotFrame {
     /// Encode payload bytes into frame symbols: preamble followed by the data
     /// symbols with a known pilot inserted every `pilot_spacing` positions.
     pub fn encode(&self, payload: &[u8]) -> Vec<(f32, f32)> {
-        let data = bytes_to_symbols(payload, self.bits_per_sc);
+        let data = bytes_to_symbols(payload, self.bits_per_sc, self.apsk32);
         let mut frame = self.preamble.clone();
         let mut di = 0usize;
         let mut pos = 0usize;
@@ -134,13 +147,32 @@ impl PilotFrame {
             }
         }
 
-        symbols_to_bytes(&data_syms, self.bits_per_sc)
+        symbols_to_bytes(&data_syms, self.bits_per_sc, self.apsk32)
+    }
+}
+
+/// Map a `bits_per_sc`-bit label to a point, dispatching 32APSK vs Gray QAM/PSK.
+fn map_data(bits: u8, bits_per_sc: usize, apsk32: bool) -> (f32, f32) {
+    let c = if apsk32 {
+        map_apsk32(bits)
+    } else {
+        map_symbol(bits, bits_per_sc)
+    };
+    (c.re, c.im)
+}
+
+/// Demap a point to its `bits_per_sc`-bit label (32APSK vs Gray QAM/PSK).
+fn demap_data(re: f32, im: f32, bits_per_sc: usize, apsk32: bool) -> u8 {
+    if apsk32 {
+        demap_apsk32(Complex32::new(re, im))
+    } else {
+        demap_symbol(Complex32::new(re, im), bits_per_sc)
     }
 }
 
 /// Pack payload bytes (LSB-first bit stream) into `bits_per_sc`-bit data symbols.
 /// A final partial symbol is zero-padded.
-fn bytes_to_symbols(payload: &[u8], bits_per_sc: usize) -> Vec<(f32, f32)> {
+fn bytes_to_symbols(payload: &[u8], bits_per_sc: usize, apsk32: bool) -> Vec<(f32, f32)> {
     let total_bits = payload.len() * 8;
     let nsyms = total_bits.div_ceil(bits_per_sc);
     let mut syms = Vec::with_capacity(nsyms);
@@ -155,18 +187,17 @@ fn bytes_to_symbols(payload: &[u8], bits_per_sc: usize) -> Vec<(f32, f32)> {
             };
             bits |= bit << b;
         }
-        let c = map_symbol(bits, bits_per_sc);
-        syms.push((c.re, c.im));
+        syms.push(map_data(bits, bits_per_sc, apsk32));
     }
     syms
 }
 
 /// Inverse of [`bytes_to_symbols`]: demap symbols into the LSB-first bit stream
 /// and pack whole bytes (a trailing partial byte from symbol padding is dropped).
-fn symbols_to_bytes(syms: &[(f32, f32)], bits_per_sc: usize) -> Vec<u8> {
+fn symbols_to_bytes(syms: &[(f32, f32)], bits_per_sc: usize, apsk32: bool) -> Vec<u8> {
     let mut bits: Vec<u8> = Vec::with_capacity(syms.len() * bits_per_sc);
     for &(re, im) in syms {
-        let v = demap_symbol(Complex32::new(re, im), bits_per_sc);
+        let v = demap_data(re, im, bits_per_sc, apsk32);
         for b in 0..bits_per_sc {
             bits.push((v >> b) & 1);
         }
@@ -270,6 +301,29 @@ mod tests {
         // 16QAM is the dense canary: amplitude-bearing, so it exercises the
         // pilot-referenced amplitude normalisation as well as phase/freq tracking.
         let f = PilotFrame::with_bits(4);
+        let frame = f.encode(&payload());
+        let dphi = 0.01f32;
+        let phi0 = 0.6f32;
+        let rxd: Vec<(f32, f32)> = frame
+            .iter()
+            .enumerate()
+            .map(|(k, &x)| rot(x, phi0 + dphi * k as f32))
+            .collect();
+        assert_prefix(&f.decode(&rxd), &payload());
+    }
+
+    #[test]
+    fn clean_round_trip_apsk32() {
+        let f = PilotFrame::with_apsk32();
+        let frame = f.encode(&payload());
+        assert_prefix(&f.decode(&frame), &payload());
+    }
+
+    #[test]
+    fn round_trip_apsk32_through_carrier_frequency_offset() {
+        // 32APSK is amplitude-bearing across three rings: the hardest case for
+        // the pilot-referenced amplitude normalisation + carrier tracking.
+        let f = PilotFrame::with_apsk32();
         let frame = f.encode(&payload());
         let dphi = 0.01f32;
         let phi0 = 0.6f32;

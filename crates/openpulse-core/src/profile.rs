@@ -170,19 +170,23 @@ impl SessionProfile {
     /// | SL2 | PILOT-QPSK500  |
     /// | SL3 | PILOT-8PSK500  |
     /// | SL4 | PILOT-16QAM500 |
+    /// | SL5 | PILOT-32APSK500 |
     pub fn hpx_pilot() -> Self {
         let mut modes = [None; 21];
         modes[SpeedLevel::Sl2 as usize] = Some("PILOT-QPSK500");
         modes[SpeedLevel::Sl3 as usize] = Some("PILOT-8PSK500");
         modes[SpeedLevel::Sl4 as usize] = Some("PILOT-16QAM500");
+        modes[SpeedLevel::Sl5 as usize] = Some("PILOT-32APSK500");
         let mut snr_floors = [None; 21];
         snr_floors[SpeedLevel::Sl2 as usize] = Some(6.0_f32);
         snr_floors[SpeedLevel::Sl3 as usize] = Some(12.0_f32);
         snr_floors[SpeedLevel::Sl4 as usize] = Some(17.0_f32);
+        snr_floors[SpeedLevel::Sl5 as usize] = Some(23.0_f32);
         let mut snr_ceilings = [None; 21];
         snr_ceilings[SpeedLevel::Sl2 as usize] = Some(12.0_f32);
         snr_ceilings[SpeedLevel::Sl3 as usize] = Some(17.0_f32);
         snr_ceilings[SpeedLevel::Sl4 as usize] = Some(23.0_f32);
+        // SL5 (32APSK) is the top rung — no ceiling.
         Self {
             modes,
             initial_level: SpeedLevel::Sl2,

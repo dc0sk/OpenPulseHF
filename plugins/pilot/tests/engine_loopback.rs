@@ -18,7 +18,12 @@ fn engine() -> (ModemEngine, LoopbackBackend) {
     (e, shared)
 }
 
-const MODES: [&str; 3] = ["PILOT-QPSK500", "PILOT-8PSK500", "PILOT-16QAM500"];
+const MODES: [&str; 4] = [
+    "PILOT-QPSK500",
+    "PILOT-8PSK500",
+    "PILOT-16QAM500",
+    "PILOT-32APSK500",
+];
 
 fn decodes(mode: &str, offset_hz: f32) -> bool {
     let (mut tx, tx_shared) = engine();

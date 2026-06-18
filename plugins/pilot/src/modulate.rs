@@ -19,7 +19,7 @@ const TX_AMPLITUDE: f32 = 0.5;
 /// Baud rate for a pilot-framed mode string, e.g. `"PILOT-QPSK500"` → 500.
 pub fn baud_for_mode(mode: &str) -> Result<f32, ModemError> {
     match mode.to_ascii_uppercase().as_str() {
-        "PILOT-QPSK500" | "PILOT-8PSK500" | "PILOT-16QAM500" => Ok(500.0),
+        "PILOT-QPSK500" | "PILOT-8PSK500" | "PILOT-16QAM500" | "PILOT-32APSK500" => Ok(500.0),
         other => Err(ModemError::Configuration(format!(
             "pilot plugin: unsupported mode {other}"
         ))),
@@ -35,6 +35,14 @@ pub fn bits_per_sc_for_mode(mode: &str) -> Result<usize, ModemError> {
         other => Err(ModemError::Configuration(format!(
             "pilot plugin: unsupported mode {other}"
         ))),
+    }
+}
+
+/// Build the symbol-level codec for a mode (32APSK or Gray QPSK/8PSK/16QAM).
+pub fn pilot_frame_for_mode(mode: &str) -> Result<PilotFrame, ModemError> {
+    match mode.to_ascii_uppercase().as_str() {
+        "PILOT-32APSK500" => Ok(PilotFrame::with_apsk32()),
+        other => Ok(PilotFrame::with_bits(bits_per_sc_for_mode(other)?)),
     }
 }
 
@@ -76,8 +84,7 @@ pub fn pilot_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>
     let sps = samples_per_symbol(config)?;
     let fs = config.sample_rate as f32;
     let fc = config.center_frequency;
-    let bits = bits_per_sc_for_mode(&config.mode)?;
-    let symbols = PilotFrame::with_bits(bits).encode(data);
+    let symbols = pilot_frame_for_mode(&config.mode)?.encode(data);
     Ok(upconvert(&symbols, fc, fs, sps))
 }
 
