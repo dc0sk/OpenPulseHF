@@ -11,3 +11,7 @@ repository.workspace = true
 openpulse-core = { workspace = true }
 openpulse-dsp  = { workspace = true }
 num-complex    = { workspace = true }
+
+[dev-dependencies]
+openpulse-modem = { workspace = true }
+openpulse-audio = { workspace = true }
