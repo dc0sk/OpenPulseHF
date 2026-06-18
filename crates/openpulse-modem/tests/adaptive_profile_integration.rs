@@ -33,6 +33,31 @@ fn hpx500_starts_at_bpsk31() {
 }
 
 #[test]
+fn hpx_pilot_climbs_and_descends_the_rungs() {
+    let mut engine = make_engine();
+    engine.start_adaptive_session(SessionProfile::hpx_pilot());
+    assert_eq!(engine.current_adaptive_mode(), Some("PILOT-QPSK500"));
+
+    assert_eq!(
+        engine.apply_ack(AckType::AckUp),
+        RateEvent::Increased(SpeedLevel::Sl3)
+    );
+    assert_eq!(engine.current_adaptive_mode(), Some("PILOT-8PSK500"));
+
+    assert_eq!(
+        engine.apply_ack(AckType::AckUp),
+        RateEvent::Increased(SpeedLevel::Sl4)
+    );
+    assert_eq!(engine.current_adaptive_mode(), Some("PILOT-16QAM500"));
+
+    assert_eq!(
+        engine.apply_ack(AckType::AckDown),
+        RateEvent::Decreased(SpeedLevel::Sl3)
+    );
+    assert_eq!(engine.current_adaptive_mode(), Some("PILOT-8PSK500"));
+}
+
+#[test]
 fn ack_up_three_times_reaches_bpsk250() {
     let mut engine = make_engine();
     engine.start_adaptive_session(SessionProfile::hpx500());

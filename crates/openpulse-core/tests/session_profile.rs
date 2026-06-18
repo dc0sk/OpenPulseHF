@@ -23,6 +23,36 @@ fn hpx500_initial_level() {
 }
 
 #[test]
+fn hpx_pilot_mode_mapping() {
+    let p = SessionProfile::hpx_pilot();
+    assert_eq!(p.mode_for(SpeedLevel::Sl1), None);
+    assert_eq!(p.mode_for(SpeedLevel::Sl2), Some("PILOT-QPSK500"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl3), Some("PILOT-8PSK500"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl4), Some("PILOT-16QAM500"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl5), None);
+    assert_eq!(p.initial_level, SpeedLevel::Sl2);
+    assert_eq!(p.nack_threshold, 3);
+}
+
+#[test]
+fn hpx_pilot_by_name_and_thresholds() {
+    assert_eq!(
+        SessionProfile::by_name("hpx_pilot"),
+        Some(SessionProfile::hpx_pilot())
+    );
+    let p = SessionProfile::hpx_pilot();
+    assert_eq!(
+        p.defined_levels(),
+        vec![SpeedLevel::Sl2, SpeedLevel::Sl3, SpeedLevel::Sl4]
+    );
+    // Monotone, density-ordered SNR thresholds (QPSK < 8PSK < 16QAM).
+    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl2), Some(6.0));
+    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl3), Some(12.0));
+    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl4), Some(17.0));
+    assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl4), Some(23.0));
+}
+
+#[test]
 fn hpx_wideband_mode_mapping() {
     let p = SessionProfile::hpx_wideband();
     assert_eq!(p.mode_for(SpeedLevel::Sl1), None);
