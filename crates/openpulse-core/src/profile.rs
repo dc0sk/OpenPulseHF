@@ -90,6 +90,7 @@ impl SessionProfile {
     /// Canonical profile names accepted by [`SessionProfile::by_name`], in ladder order.
     pub const PROFILE_NAMES: &'static [&'static str] = &[
         "hpx500",
+        "hpx_pilot",
         "hpx_hf",
         "hpx_ofdm_hf",
         "hpx_wideband",
@@ -105,6 +106,7 @@ impl SessionProfile {
         let key = name.trim().to_ascii_lowercase().replace('-', "_");
         match key.as_str() {
             "hpx500" => Some(Self::hpx500()),
+            "hpx_pilot" => Some(Self::hpx_pilot()),
             "hpx_hf" => Some(Self::hpx_hf()),
             "hpx_ofdm_hf" => Some(Self::hpx_ofdm_hf()),
             "hpx_wideband" => Some(Self::hpx_wideband()),
@@ -146,6 +148,41 @@ impl SessionProfile {
         snr_ceilings[SpeedLevel::Sl4 as usize] = Some(11.0_f32);
         snr_ceilings[SpeedLevel::Sl5 as usize] = Some(14.0_f32);
         snr_ceilings[SpeedLevel::Sl6 as usize] = Some(18.0_f32);
+        Self {
+            modes,
+            initial_level: SpeedLevel::Sl2,
+            nack_threshold: 3,
+            snr_floors,
+            snr_ceilings,
+            ack_up_requires_snr_candidate_at: None,
+        }
+    }
+
+    /// HPX pilot profile: the pilot-framed waveform's adaptive ladder (SL2–SL4).
+    ///
+    /// Climbs constellation density on the same 500-baud pilot-framed carrier:
+    /// QPSK (most robust) → 8PSK → 16QAM (highest throughput). All three recover
+    /// the carrier from known in-band pilots, so the ladder stays usable on the
+    /// dual-clock / carrier-offset paths where the single-Costas ladders struggle.
+    ///
+    /// | SL  | Mode           |
+    /// |-----|----------------|
+    /// | SL2 | PILOT-QPSK500  |
+    /// | SL3 | PILOT-8PSK500  |
+    /// | SL4 | PILOT-16QAM500 |
+    pub fn hpx_pilot() -> Self {
+        let mut modes = [None; 21];
+        modes[SpeedLevel::Sl2 as usize] = Some("PILOT-QPSK500");
+        modes[SpeedLevel::Sl3 as usize] = Some("PILOT-8PSK500");
+        modes[SpeedLevel::Sl4 as usize] = Some("PILOT-16QAM500");
+        let mut snr_floors = [None; 21];
+        snr_floors[SpeedLevel::Sl2 as usize] = Some(6.0_f32);
+        snr_floors[SpeedLevel::Sl3 as usize] = Some(12.0_f32);
+        snr_floors[SpeedLevel::Sl4 as usize] = Some(17.0_f32);
+        let mut snr_ceilings = [None; 21];
+        snr_ceilings[SpeedLevel::Sl2 as usize] = Some(12.0_f32);
+        snr_ceilings[SpeedLevel::Sl3 as usize] = Some(17.0_f32);
+        snr_ceilings[SpeedLevel::Sl4 as usize] = Some(23.0_f32);
         Self {
             modes,
             initial_level: SpeedLevel::Sl2,
