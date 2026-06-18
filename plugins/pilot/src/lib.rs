@@ -1,21 +1,87 @@
 //! Pilot-framed waveform plugin for OpenPulse.
 //!
-//! A new modem waveform whose frames carry **known in-band pilot symbols** at a
-//! fixed cadence, so the receiver recovers the carrier with a
+//! A modem waveform whose frames carry **known in-band pilot symbols** at a fixed
+//! cadence, so the receiver recovers the carrier with a
 //! [`openpulse_dsp::pilot_tracker::PilotTracker`] driven only by known symbols.
 //! That data-aided loop is immune to the decision-directed cycle slips that limit
 //! the existing preamble-only single-Costas modes on dense constellations and
 //! through carrier offset — the convergent lesson from the qo100 / liquid-dsp /
 //! gnuradio references.
 //!
-//! Bring-up order (see `docs/dev/reference-mining-plan.md`, Tier 2):
-//! 1. **`frame` — the symbol-level pilot-framed codec (this module).** Maps bytes
-//!    to a preamble-plus-pilot-interleaved QPSK symbol stream and recovers them
-//!    through a carrier offset using the preamble-seeded, pilot-tracked loop.
-//! 2. *(next)* the passband audio `ModulationPlugin` impl (pulse shaping,
-//!    up/down-conversion, symbol timing) wrapping the `frame` codec, then engine
-//!    and profile integration.
+//! Layers:
+//! - [`frame`] — the symbol-level pilot-framed QPSK codec ([`PilotFrame`]).
+//! - [`modulate`] / [`demodulate`] — the passband audio chain (rectangular-pulse
+//!   QPSK upconvert; downconvert + integrate-and-dump + preamble onset).
+//! - [`PilotPlugin`] — the [`ModulationPlugin`] implementation.
+//!
+//! The POC mode is `PILOT-QPSK500` (rectangular pulse). Engine/profile
+//! integration and dense rungs follow (see `docs/dev/reference-mining-plan.md`).
 
+pub mod demodulate;
 pub mod frame;
+pub mod modulate;
 
 pub use frame::PilotFrame;
+
+use openpulse_core::error::ModemError;
+use openpulse_core::plugin::{FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo};
+
+/// Pilot-framed QPSK modulation plugin.
+pub struct PilotPlugin {
+    info: PluginInfo,
+}
+
+impl PilotPlugin {
+    /// Create the plugin with its registered modes.
+    pub fn new() -> Self {
+        Self {
+            info: PluginInfo {
+                name: "PILOT".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                description: "Pilot-framed QPSK (in-band pilot-aided carrier tracking)".to_string(),
+                author: "OpenPulse".to_string(),
+                supported_modes: vec!["PILOT-QPSK500".to_string()],
+                trait_version_required: "1.0".to_string(),
+            },
+        }
+    }
+}
+
+impl Default for PilotPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ModulationPlugin for PilotPlugin {
+    fn info(&self) -> &PluginInfo {
+        &self.info
+    }
+
+    fn modulate(&self, data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
+        modulate::pilot_modulate(data, config)
+    }
+
+    fn demodulate(
+        &self,
+        samples: &[f32],
+        config: &ModulationConfig,
+    ) -> Result<Vec<u8>, ModemError> {
+        demodulate::pilot_demodulate(samples, config)
+    }
+
+    fn frame_geometry(&self, config: &ModulationConfig) -> Option<FrameGeometry> {
+        let sps = modulate::samples_per_symbol(config).ok()?;
+        let preamble_syms = PilotFrame::new().preamble_len();
+        // QPSK = 4 symbols/byte; pilots add ~1/(spacing-1) overhead.
+        let max_data_syms = 255 * 4;
+        let max_syms = preamble_syms + max_data_syms + max_data_syms / 15 + 8;
+        let min_syms = preamble_syms + 42 * 4;
+        Some(FrameGeometry {
+            symbol_period_samples: sps,
+            preamble_samples: preamble_syms * sps,
+            min_frame_samples: min_syms * sps,
+            max_frame_samples: max_syms * sps,
+        })
+    }
+}

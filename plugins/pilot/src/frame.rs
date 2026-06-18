@@ -66,6 +66,12 @@ impl PilotFrame {
         self.preamble.len()
     }
 
+    /// The known preamble symbols (used by the passband layer to build the
+    /// onset-correlation template).
+    pub fn preamble(&self) -> &[(f32, f32)] {
+        &self.preamble
+    }
+
     /// Data-region pilot cadence (one pilot per this many symbols).
     pub fn pilot_spacing(&self) -> usize {
         self.pilot_spacing
