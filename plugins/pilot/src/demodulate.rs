@@ -24,7 +24,7 @@ use openpulse_core::plugin::ModulationConfig;
 use openpulse_dsp::acquisition::{estimate_cfo_data_aided, goertzel_carrier_scan, IqMatchedFilter};
 
 use crate::frame::PilotFrame;
-use crate::modulate::{baud_for_mode, preamble_template, samples_per_symbol};
+use crate::modulate::{baud_for_mode, bits_per_sc_for_mode, preamble_template, samples_per_symbol};
 
 /// Locate the frame onset by phase-insensitive correlation against the passband
 /// preamble.
@@ -79,17 +79,20 @@ pub fn pilot_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Ve
         return Ok(Vec::new());
     };
 
+    let bits = bits_per_sc_for_mode(&config.mode)?;
     let total_syms = samples.len().saturating_sub(onset) / sps;
     let symbols = integrate_and_dump(samples, onset, sps, total_syms, fc, fs);
-    Ok(PilotFrame::new().decode(&symbols))
+    Ok(PilotFrame::with_bits(bits).decode(&symbols))
 }
 
 /// Estimate the carrier frequency offset (Hz) for the engine's AFC stage.
 ///
 /// Two stages, mirroring the fielded single-carrier modes:
-/// 1. **Coarse** — a wide M-th-power Goertzel carrier scan (`m = 4`, the QPSK
-///    data dominates the settling window) over ±400 Hz. This is onset-free, so it
-///    works at large offsets where preamble correlation has decorrelated.
+/// 1. **Coarse** — a wide 2nd-power Goertzel scan over the *preamble portion*
+///    only. The preamble and pilots are BPSK regardless of the data
+///    constellation, so squaring leaves a clean line at 2·fc even for QAM data
+///    (whose M-th power is not a clean tone); the engine's energy-based onset
+///    makes the window start at the preamble. ±400 Hz / 12.5 Hz grid.
 /// 2. **Fine** — at the coarse-corrected carrier the preamble correlates cleanly;
 ///    a data-aided mean-phase-increment estimate refines the residual.
 ///
@@ -102,8 +105,13 @@ pub fn pilot_estimate_afc_hz(samples: &[f32], config: &ModulationConfig) -> Opti
     let fc = config.center_frequency;
     let baud = baud_for_mode(&config.mode).ok()?;
 
-    // 1. Coarse wide carrier scan (QPSK-dominant ⇒ 4th power), ±400 Hz / 12.5 Hz grid.
-    let coarse = goertzel_carrier_scan(samples, fs, fc, 4, 400.0, 12.5).unwrap_or(0.0);
+    let frame = PilotFrame::new(); // preamble is mode-independent (BPSK PN-63)
+    let preamble = frame.preamble();
+
+    // 1. Coarse 2nd-power scan over the (BPSK) preamble portion of the window.
+    let plen_samples = (preamble.len() * sps).min(samples.len());
+    let coarse =
+        goertzel_carrier_scan(&samples[..plen_samples], fs, fc, 2, 400.0, 12.5).unwrap_or(0.0);
 
     // 2. Fine data-aided refinement at the coarse-corrected carrier.
     let fc_coarse = fc + coarse;
@@ -111,8 +119,6 @@ pub fn pilot_estimate_afc_hz(samples: &[f32], config: &ModulationConfig) -> Opti
         center_frequency: fc_coarse,
         ..config.clone()
     };
-    let frame = PilotFrame::new();
-    let preamble = frame.preamble();
     let fine = find_onset(samples, &coarse_cfg)
         .map(|onset| integrate_and_dump(samples, onset, sps, preamble.len(), fc_coarse, fs))
         .filter(|syms| syms.len() >= preamble.len())
