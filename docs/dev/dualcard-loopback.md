@@ -105,17 +105,30 @@ Validated on this host (cards `Device`/`Device_1`, USB `07:00.3`/`07:00.4`,
 - PASS: SCFDMA52-8PSK, **SCFDMA52-16QAM** (16QAM was only flaky on the two-Pi rig).
 - FAIL: 64QAM500 — single-carrier dense QAM stays SNR-bound on the analog cable
   (consistent with prior two-Pi findings; not an SRO/sync issue).
-- N/A: the PILOT family — `soft-concatenated` does not fit the pilot
-  pilot-inserted frame geometry (the K=7 Viterbi stage reports "LLR slice too
-  short / length prefix exceeds available bits"), the same class of constraint
-  that excludes OFDM/SC-FDMA padded modes from the byte-exact FEC modes. Use LDPC.
+- FAIL (hardware only): the PILOT dense rungs (PILOT-8PSK500/16QAM500) — fail
+  **deterministically** (3/3, identical garbage length prefix) on the dual-card
+  cable with "LLR slice too short / length prefix exceeds available bits".
 
-**LDPC FEC (the pilot family's soft path)**
+  This is **not** a geometry incompatibility (an earlier revision of this doc
+  claimed it was — that was wrong). The pilot soft-concatenated path round-trips
+  cleanly in sim across *every* condition tested — clean loopback, AWGN to 18 dB,
+  pure SRO to 200 ppm, and combined SRO+AWGN (200 ppm / 15 dB) — for all three
+  dense rungs incl. PILOT-32APSK500. Regression: `pilot_hom_soft_concatenated_*`
+  in `crates/openpulse-modem/tests/fec_timeout_receive.rs`. The hardware-only,
+  deterministic failure is an unmodeled dual-clock effect (the two independent
+  ALSA 8k↔48k resamplers slip a sample, and the convolutional inner code loses
+  resync catastrophically — its length prefix decodes to garbage). **Use LDPC
+  for the pilot dense rungs on hardware** (below); it tolerates the slip because
+  it extracts a fixed-size block rather than reading a prefix off a continuous
+  bitstream.
+
+**LDPC FEC (the recommended pilot soft path on hardware)**
 - PASS: PILOT-8PSK500, PILOT-16QAM500, **PILOT-32APSK500** — LDPC drives the
   entire pilot ladder, including the densest rung that fails raw. This is the
   FEC the in-process `plugins/pilot/tests/soft_fec_loopback.rs` validates
   (rate-1/2 LDPC + rate-8/9 high-rate PEG LDPC), now confirmed over real audio.
 
 Net: the dual-card rig reproduces the two-Pi dual-clock results locally and, for
-SCFDMA52-16QAM, slightly exceeds them. Remaining hardware failure is 64QAM500
-(SNR-bound on the cable), not an SRO or code problem.
+SCFDMA52-16QAM, slightly exceeds them. Remaining hardware failures are 64QAM500
+(SNR-bound on the cable) and the pilot dense rungs under soft-concatenated
+(dual-clock resampler slip — use LDPC); neither is a static code/geometry bug.
