@@ -944,6 +944,18 @@ impl ModemEngine {
             }
         };
 
+        // A "long-frame" mode takes many seconds of real-time audio to buffer (the
+        // slow BPSK rungs: BPSK31 ≈ 12 s).  For these the settled full-buffer retry
+        // is skipped (its O(buffer) re-scan every 2 s outruns the read cadence and
+        // starves the loop so the frame never finishes buffering — the first-energy
+        // micro-sweep owns the decode instead).  Every other mode keeps the retry:
+        // the wideband multicarrier modes (SCFDMA/OFDM) in particular have short
+        // frames AND a marginal settle that the single-carrier first-energy path
+        // can't decode, so they depend on the retry's per-position re-acquisition.
+        // The raw (pre-FEC) geometry separates them cleanly: BPSK31/63/100 are
+        // >180k samples, every other mode <=75k.
+        let long_frame = max_frame_samples > 120_000;
+
         // FEC frames are larger than the un-coded frame the geometry describes
         // (conv rate-1/2 ≈ 2×, RS ≈ 1.15×); widen the per-attempt slice so the whole
         // coded frame is decoded rather than truncated at max_frame_samples.
@@ -1036,14 +1048,18 @@ impl ModemEngine {
             // (slice too short → CRC fails).  Re-firing every 2 s lets each
             // subsequent attempt use a longer accumulated buffer until the
             // frame fits and the decode succeeds.
-            // Only the FALLBACK for a missed settle: once settled, the first-energy
-            // re-decode below owns the decode.  Running this O(buffer) full re-scan
-            // every 2 s while settled starves the read loop on long frames (BPSK31:
-            // the scan of a multi-second buffer outlasts the read cadence, so the
-            // frame never finishes buffering) and re-decodes the fep micro-sweep is
-            // already covering — so skip it when settled.
+            // The full-buffer retry is the fallback for a missed settle.  For
+            // long-frame modes only, skip it once settled: its O(buffer) re-scan
+            // every 2 s outlasts the read cadence on a multi-second frame (BPSK31),
+            // starving the loop so the frame never finishes buffering — and the
+            // first-energy micro-sweep below already owns the decode there.  Other
+            // modes (notably wideband SCFDMA/OFDM, whose marginal settle the
+            // single-carrier micro-sweep can't decode) keep the retry; their short
+            // frames re-scan cheaply, so it never starves them.
             let elapsed_secs = start_time.elapsed().as_secs();
-            if !planner.is_settled() && planner.retry_due(elapsed_secs, accumulated.len()) {
+            if (!long_frame || !planner.is_settled())
+                && planner.retry_due(elapsed_secs, accumulated.len())
+            {
                 {
                     // Scan the entire accumulated buffer from the start.
                     // The AFC correction is kept from the settled value:
