@@ -10,6 +10,7 @@ pub mod doppler_tracker;
 pub mod equalizer;
 pub mod farrow;
 pub mod filter;
+pub mod freq_acquire;
 pub mod pilot_tracker;
 pub mod pll;
 pub mod preamble;
