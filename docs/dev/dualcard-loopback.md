@@ -96,18 +96,16 @@ Useful env overrides: `TX_DEVICE`/`RX_DEVICE`, `TX_CARD`/`RX_CARD`,
 Validated on this host (cards `Device`/`Device_1`, USB `07:00.3`/`07:00.4`,
 `CAPTURE_GAIN=16`) against current `main`.
 
-**No FEC — full tier** (`--full`, 14 cases)
-- PASS (12): BPSK63/100/250, QPSK125/250/500/1000, 8PSK500/1000, OFDM16/52,
-  SCFDMA16. OFDM52 and 8PSK500 occasionally need a retry in a long sweep but
-  pass reliably.
-- **SCFDMA52**: passes 2/2 in isolation (`--single-case`) — confirming the #392
-  per-symbol pilot SFO-deramp holds on a real *dual-clock* path — but is
-  **marginal** in sustained back-to-back sweeps (the widest mode, most
-  SRO/drift-sensitive); intermittently misses acquisition even with retries.
-- **BPSK31**: consistent FAIL ("invalid magic" at acquisition, 2/2). This is the
-  known engine scan/acquisition issue for its ~12 s frame — the demod decodes a
-  real capture fine; the gap is in onset acquisition, tracked separately and not
-  introduced by this rig.
+**No FEC — full tier** (`--full`, 14 cases): **14/14 PASS** — BPSK31/63/100,
+QPSK125/250/500/1000, 8PSK500/1000, OFDM16/52, SCFDMA16/52. (OFDM16/52 and
+8PSK500 occasionally take an extra retry in a long sweep but pass reliably.)
+- **BPSK31** was fixed by the forward-onset micro-sweep in the receive loop (its
+  settled onset lands ~1-2 symbols early on the analog turn-on, outside the
+  demod's one-symbol timing search — the slowest rung sits right at the boundary).
+- **SCFDMA52** decodes on a real *dual-clock* path, confirming the #392
+  per-symbol pilot SFO-deramp holds on hardware. The full-buffer retry it relies
+  on is preserved for short-frame modes (the BPSK31 fix only skips that retry for
+  the slow, long-frame BPSK rungs that would otherwise starve the read loop).
 
 **No FEC — pilot family** (`--single-case`)
 - PASS: PILOT-QPSK500, PILOT-8PSK500, PILOT-16QAM500.
