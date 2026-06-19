@@ -3931,6 +3931,7 @@ dependencies = [
  "openpulse-channel",
  "openpulse-core",
  "openpulse-dsp",
+ "pilot-plugin",
  "psk8-plugin",
  "qam64-plugin",
  "qpsk-plugin",

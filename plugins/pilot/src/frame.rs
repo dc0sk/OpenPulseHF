@@ -19,7 +19,10 @@
 //! multicarrier/PSK mode.
 
 use num_complex::Complex32;
-use openpulse_dsp::constellation::{demap_apsk32, demap_symbol, map_apsk32, map_symbol};
+use openpulse_dsp::constellation::{
+    apsk32_points, constellation_points, demap_apsk32, demap_symbol, map_apsk32, map_symbol,
+    symbol_llrs,
+};
 use openpulse_dsp::pilot_tracker::PilotTracker;
 use openpulse_dsp::preamble::{PreambleConstellation, PreambleSpec, PreambleType};
 
@@ -124,6 +127,28 @@ impl PilotFrame {
     /// Assumes symbol synchronisation (the passband layer provides timing and
     /// onset); `frame` must start at the first preamble symbol.
     pub fn decode(&self, frame: &[(f32, f32)]) -> Vec<u8> {
+        let data_syms = self.recover_data_syms(frame);
+        symbols_to_bytes(&data_syms, self.bits_per_sc, self.apsk32)
+    }
+
+    /// Soft-decision decode: recover the carrier exactly as [`decode`](Self::decode),
+    /// then emit per-bit max-log-MAP LLRs (positive = bit more likely 0) instead of
+    /// hard bytes. Hard-slicing the result (`bit = llr <= 0`, LSB-first) reproduces
+    /// [`decode`](Self::decode)'s bytes, matching the cross-plugin LLR convention.
+    pub fn decode_soft(&self, frame: &[(f32, f32)]) -> Vec<f32> {
+        let data_syms = self.recover_data_syms(frame);
+        symbols_to_llrs(&data_syms, self.bits_per_sc, self.apsk32)
+    }
+
+    /// Acquire on the fully-known preamble, track the residual through the data
+    /// region with the sparse pilots, and return the pilot-amplitude-normalised
+    /// data symbols (pilots removed). Shared by the hard and soft decoders so both
+    /// see identical symbols.
+    ///
+    /// Each data symbol is normalised by the pilot-referenced amplitude so the
+    /// demapper sees native constellation scale — required for amplitude-bearing
+    /// 16QAM/32APSK, harmless for the constant-modulus PSK orders.
+    fn recover_data_syms(&self, frame: &[(f32, f32)]) -> Vec<(f32, f32)> {
         let mut tracker = PilotTracker::new(LOOP_BW);
         let plen = self.preamble.len();
 
@@ -133,10 +158,7 @@ impl PilotFrame {
         }
 
         // Track through the data region; pilots sit at every pilot_spacing-th
-        // position, mirroring `encode`. Each data symbol is normalised by the
-        // pilot-referenced amplitude so the demapper sees native constellation
-        // scale — required for amplitude-bearing 16QAM, harmless for the
-        // constant-modulus PSK orders.
+        // position, mirroring `encode`.
         let mut data_syms: Vec<(f32, f32)> = Vec::new();
         for (pos, &sym) in frame.iter().skip(plen).enumerate() {
             let is_pilot = pos.is_multiple_of(self.pilot_spacing);
@@ -147,7 +169,7 @@ impl PilotFrame {
             }
         }
 
-        symbols_to_bytes(&data_syms, self.bits_per_sc, self.apsk32)
+        data_syms
     }
 }
 
@@ -210,6 +232,33 @@ fn symbols_to_bytes(syms: &[(f32, f32)], bits_per_sc: usize, apsk32: bool) -> Ve
         }
     }
     out
+}
+
+/// Soft counterpart of [`symbols_to_bytes`]: per-bit max-log-MAP LLRs (positive =
+/// bit more likely 0), in the same symbol-major, LSB-first-within-symbol order, so
+/// hard-slicing the LLRs (`bit = llr <= 0`) reproduces `symbols_to_bytes`'s bytes.
+/// The scale is raw distance differences (noise variance 1.0), matching the
+/// unnormalised per-plugin convention shared with the 8PSK/64QAM soft demods.
+fn symbols_to_llrs(syms: &[(f32, f32)], bits_per_sc: usize, apsk32: bool) -> Vec<f32> {
+    let points = if apsk32 {
+        apsk32_points()
+    } else {
+        constellation_points(bits_per_sc)
+    };
+    let mut llrs: Vec<f32> = Vec::with_capacity(syms.len() * bits_per_sc);
+    for &(re, im) in syms {
+        llrs.extend(symbol_llrs(
+            Complex32::new(re, im),
+            bits_per_sc,
+            1.0,
+            &points,
+        ));
+    }
+    // Match symbols_to_bytes, which packs only whole bytes (dropping a trailing
+    // partial byte from symbol zero-padding): trim to the same bit count.
+    let whole = (llrs.len() / 8) * 8;
+    llrs.truncate(whole);
+    llrs
 }
 
 #[cfg(test)]
@@ -333,5 +382,51 @@ mod tests {
             .map(|(k, &x)| rot(x, phi0 + dphi * k as f32))
             .collect();
         assert_prefix(&f.decode(&rxd), &payload());
+    }
+
+    /// Hard-slice an LLR stream into bytes (`bit = llr <= 0`, LSB-first).
+    fn hard_slice(llrs: &[f32]) -> Vec<u8> {
+        llrs.chunks(8)
+            .map(|c| {
+                c.iter()
+                    .enumerate()
+                    .fold(0u8, |a, (i, &l)| a | (u8::from(l <= 0.0) << i))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn decode_soft_hard_slice_matches_decode() {
+        // For every constellation, hard-slicing decode_soft's LLRs must reproduce
+        // decode()'s bytes exactly — pins the sign + bit order the FEC layer needs.
+        let frames = [
+            PilotFrame::with_bits(2),
+            PilotFrame::with_bits(3),
+            PilotFrame::with_bits(4),
+            PilotFrame::with_apsk32(),
+        ];
+        for f in &frames {
+            let frame = f.encode(&payload());
+            let hard = f.decode(&frame);
+            let soft = hard_slice(&f.decode_soft(&frame));
+            let n = hard.len().min(soft.len());
+            assert_eq!(soft[..n], hard[..n], "bits_per_sc={}", f.bits_per_sc);
+            assert!(n >= payload().len(), "decoded too few bytes ({n})");
+        }
+    }
+
+    #[test]
+    fn decode_soft_recovers_through_carrier_offset() {
+        // Soft LLRs must also be correct through a carrier offset (pilot tracking).
+        let f = PilotFrame::with_bits(3);
+        let frame = f.encode(&payload());
+        let (dphi, phi0) = (0.01f32, 0.6f32);
+        let rxd: Vec<(f32, f32)> = frame
+            .iter()
+            .enumerate()
+            .map(|(k, &x)| rot(x, phi0 + dphi * k as f32))
+            .collect();
+        let soft = hard_slice(&f.decode_soft(&rxd));
+        assert!(soft.len() >= payload().len() && soft[..payload().len()] == payload()[..]);
     }
 }

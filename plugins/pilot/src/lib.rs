@@ -75,6 +75,18 @@ impl ModulationPlugin for PilotPlugin {
         demodulate::pilot_demodulate(samples, config)
     }
 
+    fn demodulate_soft(
+        &self,
+        samples: &[f32],
+        config: &ModulationConfig,
+    ) -> Result<Vec<f32>, ModemError> {
+        demodulate::pilot_demodulate_soft(samples, config)
+    }
+
+    fn supports_soft_demod(&self) -> bool {
+        true
+    }
+
     fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
         demodulate::pilot_estimate_afc_hz(samples, config)
     }
