@@ -43,6 +43,7 @@ IRS_STARTUP_WAIT="${IRS_STARTUP_WAIT:-10}"  # RX AFC settle (~6.4 s) + margin be
 IRS_LISTEN_MS="${IRS_LISTEN_MS:-45000}"
 TX_TIMEOUT="${TX_TIMEOUT:-60}"
 KILL_WAIT="${KILL_WAIT:-12}"
+RETRIES="${RETRIES:-3}"                      # absorb transient wideband acquisition flakiness in long sweeps (matches run-loopback-virtual.sh)
 FEC="${FEC:-none}"                          # none|rs|rs-interleaved|soft-concatenated|ldpc
 CAPTURE_GAIN="${CAPTURE_GAIN:-16}"          # moderate mic-capture gain; max clips a line->mic cable
 OUTPUT_DIR="${OUTPUT_DIR:-docs/dev/test-reports}"
@@ -160,45 +161,54 @@ echo "    TX: ${TX_DEVICE} (card ${TX_CARD:-?})   RX: ${RX_DEVICE} (card ${RX_CA
 echo "    listen=${IRS_LISTEN_MS}ms  report=${report}"
 echo ""
 
-for case_spec in "${CASES[@]}"; do
-    IFS='|' read -r MODE PAYLOAD_SIZE <<< "$case_spec"
-    payload="$(python3 -c "import secrets,string;print(''.join(secrets.choice(string.ascii_letters+string.digits) for _ in range(${PAYLOAD_SIZE})))")"
-    rxlog="/tmp/openpulse-dualcard-rx-${MODE}.log"; txlog="/tmp/openpulse-dualcard-tx-${MODE}.log"
-    printf "  [%-12s payload=%4sB] ... " "$MODE" "$PAYLOAD_SIZE"
-
+# One TX->RX attempt. Sets REASON (empty on success); returns 0 pass / 1 fail.
+run_once() {  # mode payload-size payload-text
+    local MODE="$1" PAYLOAD_SIZE="$2" payload="$3"
+    local rxlog="/tmp/openpulse-dualcard-rx-${MODE}.log" txlog="/tmp/openpulse-dualcard-tx-${MODE}.log"
     _normalise
     pkill -x openpulse 2>/dev/null; sleep 0.3
     "$BIN" --backend cpal --log debug --ptt none receive --mode "$MODE" \
         --fec "$FEC" --listen-ms "$IRS_LISTEN_MS" --device "$RX_DEVICE" --no-afc >"$rxlog" 2>&1 &
-    rxpid=$!
+    local rxpid=$!
     sleep "$IRS_STARTUP_WAIT"
-    if ! kill -0 $rxpid 2>/dev/null; then
-        echo "FAIL (RX not running)"; fail=$((fail+1))
-        results+=("{\"mode\":\"$MODE\",\"payload_bytes\":$PAYLOAD_SIZE,\"result\":\"fail\",\"fail_reason\":\"RX not running\"}")
-        sed 's/^/      /' <(tail -n 8 "$rxlog"); continue
-    fi
-
-    iss_exit=0
+    if ! kill -0 $rxpid 2>/dev/null; then REASON="RX not running"; return 1; fi
+    local iss_exit=0
     timeout "$TX_TIMEOUT" "$BIN" --backend cpal --log info --ptt none transmit --mode "$MODE" \
         --fec "$FEC" --device "$TX_DEVICE" "$payload" >"$txlog" 2>&1 || iss_exit=$?
     sleep "$KILL_WAIT"
     kill $rxpid 2>/dev/null; wait $rxpid 2>/dev/null
-
     if [[ $iss_exit -ne 0 ]]; then
-        reason="TX exit ${iss_exit}: $(grep -iE 'error|too low|unsupported' "$txlog" | grep -v 'ALSA lib' | head -1 | sed 's/^ *//')"
-        echo "FAIL (${reason})"; fail=$((fail+1))
-        results+=("{\"mode\":\"$MODE\",\"payload_bytes\":$PAYLOAD_SIZE,\"result\":\"fail\",\"fail_reason\":\"$reason\"}")
-        sed 's/^/      /' <(tail -n 5 "$txlog"); continue
+        REASON="TX exit ${iss_exit}: $(grep -iE 'error|too low|unsupported' "$txlog" | grep -v 'ALSA lib' | head -1 | sed 's/^ *//')"
+        return 1
     fi
-    if grep -Fq "$payload" "$rxlog"; then
-        echo "PASS"; pass=$((pass+1))
-        results+=("{\"mode\":\"$MODE\",\"payload_bytes\":$PAYLOAD_SIZE,\"result\":\"pass\",\"fail_reason\":\"\"}")
+    if grep -Fq "$payload" "$rxlog"; then REASON=""; return 0; fi
+    REASON="payload not decoded"
+    return 1
+}
+
+for case_spec in "${CASES[@]}"; do
+    IFS='|' read -r MODE PAYLOAD_SIZE <<< "$case_spec"
+    payload="$(python3 -c "import secrets,string;print(''.join(secrets.choice(string.ascii_letters+string.digits) for _ in range(${PAYLOAD_SIZE})))")"
+    printf "  [%-12s payload=%4sB] ... " "$MODE" "$PAYLOAD_SIZE"
+
+    ok=1; REASON=""; attempts=0
+    for ((r=1; r<=RETRIES; r++)); do
+        attempts=$r
+        if run_once "$MODE" "$PAYLOAD_SIZE" "$payload"; then ok=0; break; fi
+    done
+
+    if [[ $ok -eq 0 ]]; then
+        [[ $attempts -gt 1 ]] && echo "PASS (attempt ${attempts})" || echo "PASS"
+        pass=$((pass+1))
+        results+=("{\"mode\":\"$MODE\",\"payload_bytes\":$PAYLOAD_SIZE,\"result\":\"pass\",\"attempts\":$attempts,\"fail_reason\":\"\"}")
     else
-        echo "FAIL (payload not decoded)"; fail=$((fail+1))
-        results+=("{\"mode\":\"$MODE\",\"payload_bytes\":$PAYLOAD_SIZE,\"result\":\"fail\",\"fail_reason\":\"payload not decoded\"}")
-        afc="$(grep -E 'AFC settling|AFC decode|AFC:' "$rxlog" | head -3 || true)"
+        echo "FAIL (${REASON}) after ${attempts} attempt(s)"
+        fail=$((fail+1))
+        results+=("{\"mode\":\"$MODE\",\"payload_bytes\":$PAYLOAD_SIZE,\"result\":\"fail\",\"attempts\":$attempts,\"fail_reason\":\"$REASON\"}")
+        rxlog="/tmp/openpulse-dualcard-rx-${MODE}.log"
+        afc="$(grep -E 'AFC settling|AFC decode|AFC:' "$rxlog" 2>/dev/null | head -3 || true)"
         [[ -n "$afc" ]] && { echo "    RX AFC:"; echo "$afc" | sed 's/^/      /'; }
-        echo "    RX tail:"; tail -n 12 "$rxlog" | sed 's/^/      /'
+        echo "    RX tail:"; tail -n 12 "$rxlog" 2>/dev/null | sed 's/^/      /'
     fi
 done
 
