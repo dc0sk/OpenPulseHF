@@ -78,6 +78,7 @@ pub fn run(
     snr: Option<f32>,
     frames: usize,
     payload_len: usize,
+    min_backlog: usize,
     seed: Option<u64>,
     json_out: bool,
 ) -> Result<()> {
@@ -95,6 +96,9 @@ pub fn run(
     plugins::register_all(&mut h.rx_engine)?;
     h.tx_engine.start_adaptive_session(profile.clone());
     h.rx_engine.start_adaptive_session(profile);
+    // A2 backlog gate (Mercury): withhold ACK-UP upgrades once the queue is too
+    // shallow to repay the airtime. Default 0 leaves the gate off.
+    h.tx_engine.set_min_backlog_for_upgrade(min_backlog);
 
     let payload: Vec<u8> = (0..payload_len).map(|i| i as u8).collect();
     let initial_mode = h
@@ -105,8 +109,13 @@ pub fn run(
     let initial_level = h.tx_engine.current_tx_level();
 
     if !json_out {
+        let gate = if min_backlog > 0 {
+            format!(" min_backlog={min_backlog}B")
+        } else {
+            String::new()
+        };
         println!(
-            "adaptive session: profile={name} channel={channel_name} frames={frames} payload={payload_len}B"
+            "adaptive session: profile={name} channel={channel_name} frames={frames} payload={payload_len}B{gate}"
         );
         println!(
             "  start: level={} mode={}",
@@ -153,6 +162,10 @@ pub fn run(
         } else {
             AckType::Nack
         };
+        // Auto-feed the real queue depth: bytes still to send after this frame.
+        // As the queue drains, the A2 gate withholds the final upgrade(s).
+        let backlog = frames.saturating_sub(i + 1) * payload_len;
+        h.tx_engine.set_tx_backlog(backlog);
         let rate_event = h.tx_engine.apply_ack(ack);
         let level_after = h.tx_engine.current_tx_level();
         let mode_after = h
@@ -173,6 +186,7 @@ pub fn run(
                     "mode": mode,
                     "decoded": decoded_ok,
                     "snr_db": channel_snr_db,
+                    "backlog": backlog,
                     "ack": ack_str(ack),
                     "rate_event": format!("{rate_event:?}"),
                     "level_after": level_str(level_after),
