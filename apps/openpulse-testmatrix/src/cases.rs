@@ -479,10 +479,14 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
             }
         }
 
-        // SC-FDMA higher-order × all propagation channels × {None, Rs} × 32 bytes
+        // SC-FDMA higher-order × all propagation channels × {None, Rs, SoftConcatenated}
+        // × 32 bytes. SoftConcatenated is the soft code these dense HOM modes run
+        // under in practice (it is what closes them on a real link — see the --fec
+        // hardware loopback results and the quick-tier sweep above); characterising
+        // them across the fading channels with only None/Rs missed that path.
         for mode in SCFDMA_HOM_MODES.iter().chain(OFDM_HOM_MODES.iter()) {
             for channel in &prop_channels {
-                for &fec in &[FecMode::None, FecMode::Rs] {
+                for &fec in &[FecMode::None, FecMode::Rs, FecMode::SoftConcatenated] {
                     cases.push(raw_case(
                         mode,
                         fec,
