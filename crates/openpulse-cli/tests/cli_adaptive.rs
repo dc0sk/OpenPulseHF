@@ -58,8 +58,33 @@ fn adaptive_json_emits_frames_and_summary() {
     cmd.assert()
         .success()
         .stdout(contains("\"frame\":0"))
+        // Auto-fed backlog: after frame 0 of 3 × 64 B, 2 × 64 = 128 B remain.
+        .stdout(contains("\"backlog\":128"))
         .stdout(contains("\"summary\":true"))
         .stdout(contains("\"profile\":\"hpx_hf\""));
+}
+
+/// The A2 backlog gate auto-feeds the draining queue, so the final ACK-UP arrives
+/// with the queue empty and is withheld — the ladder stops one rung short of the
+/// ungated SL8 reached by `adaptive_clean_climbs_the_ladder`.
+#[test]
+fn adaptive_backlog_gate_holds_final_upgrade() {
+    let mut cmd = Command::cargo_bin("openpulse").expect("binary should build");
+    cmd.args([
+        "adaptive",
+        "--profile",
+        "hpx_hf",
+        "--channel",
+        "clean",
+        "--frames",
+        "6",
+        "--min-backlog",
+        "64",
+    ]);
+    cmd.assert()
+        .success()
+        .stdout(contains("min_backlog=64B"))
+        .stdout(contains("final: level=SL7"));
 }
 
 #[test]

@@ -80,6 +80,11 @@ pub fn run(case: &TestCase, profile: SessionProfile) -> TestResult {
         } else {
             AckType::Nack
         };
+        // Report the draining queue depth (6 frames total) to the A2 backlog gate.
+        // The gate is off by default here, but this keeps the adaptive drivers'
+        // backlog accounting consistent.
+        let backlog = 5u8.saturating_sub(pass) as usize * case.payload_len;
+        h.tx_engine.set_tx_backlog(backlog);
         let _ = h.tx_engine.apply_ack(ack);
 
         if h.tx_engine.current_adaptive_mode().map(|s| s.to_string()) != Some(initial_mode.clone())

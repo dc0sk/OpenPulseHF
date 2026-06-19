@@ -72,6 +72,7 @@ fn main() -> Result<()> {
         snr,
         frames,
         payload_len,
+        min_backlog,
         seed,
         json,
     } = &cli.command
@@ -82,6 +83,7 @@ fn main() -> Result<()> {
             *snr,
             *frames,
             *payload_len,
+            *min_backlog,
             *seed,
             *json,
         );

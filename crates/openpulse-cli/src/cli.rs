@@ -165,6 +165,12 @@ pub enum Commands {
         /// Payload length per frame, in bytes.
         #[arg(long, default_value_t = 64)]
         payload_len: usize,
+        /// A2 backlog gate: minimum queued TX backlog (bytes) an ACK-UP must see
+        /// before it may upgrade the rate; 0 disables the gate. The session feeds
+        /// the shrinking backlog automatically as the frame queue drains, so the
+        /// final upgrade is withheld once too little data remains to benefit.
+        #[arg(long, default_value_t = 0)]
+        min_backlog: usize,
         /// Deterministic channel seed.
         #[arg(long)]
         seed: Option<u64>,
