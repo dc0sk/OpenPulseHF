@@ -87,10 +87,35 @@ drifts capture gain down after strong frames). Results are written as JSON to
 Useful env overrides: `TX_DEVICE`/`RX_DEVICE`, `TX_CARD`/`RX_CARD`,
 `CAPTURE_GAIN`, `FEC`, `IRS_LISTEN_MS`, `IRS_STARTUP_WAIT`, `OUTPUT_DIR`.
 
-## Status (2026-06-19, first bring-up)
+## Status (2026-06-19)
 
-Quick tier **7/7 PASS**: BPSK100, BPSK250, QPSK125, QPSK250, QPSK500, 8PSK500,
-SCFDMA16 — matching the single-clock-tolerant set from the two-Pi matrix. The
-wideband multicarrier and dense-QAM modes are the expected SRO-limited cases to
-exercise next (with FEC); the two-Pi findings predict SCFDMA52 passes post-#392
-and the HOM modes need narrow + soft FEC.
+Validated on this host (cards `Device`/`Device_1`, USB `07:00.3`/`07:00.4`,
+`CAPTURE_GAIN=16`) against current `main`.
+
+**No FEC**
+- PASS: BPSK100/250, QPSK125/250/500, 8PSK500, SCFDMA16 (quick tier 7/7).
+- PASS: **SCFDMA52** — the wideband multicarrier mode decodes on a real
+  *dual-clock* path, confirming the #392 per-symbol pilot SFO-deramp holds on
+  hardware (not just sim), without two machines.
+- PASS: PILOT-QPSK500, PILOT-8PSK500, PILOT-16QAM500.
+- FAIL: PILOT-32APSK500 — densest pilot constellation, SNR-bound raw; needs FEC.
+
+**Soft-concatenated FEC (RS + K=7 soft Viterbi)**
+- PASS: SCFDMA26-8PSK/16QAM/32QAM (narrow + soft FEC, matches the two-Pi rig).
+- PASS: SCFDMA52-8PSK, **SCFDMA52-16QAM** (16QAM was only flaky on the two-Pi rig).
+- FAIL: 64QAM500 — single-carrier dense QAM stays SNR-bound on the analog cable
+  (consistent with prior two-Pi findings; not an SRO/sync issue).
+- N/A: the PILOT family — `soft-concatenated` does not fit the pilot
+  pilot-inserted frame geometry (the K=7 Viterbi stage reports "LLR slice too
+  short / length prefix exceeds available bits"), the same class of constraint
+  that excludes OFDM/SC-FDMA padded modes from the byte-exact FEC modes. Use LDPC.
+
+**LDPC FEC (the pilot family's soft path)**
+- PASS: PILOT-8PSK500, PILOT-16QAM500, **PILOT-32APSK500** — LDPC drives the
+  entire pilot ladder, including the densest rung that fails raw. This is the
+  FEC the in-process `plugins/pilot/tests/soft_fec_loopback.rs` validates
+  (rate-1/2 LDPC + rate-8/9 high-rate PEG LDPC), now confirmed over real audio.
+
+Net: the dual-card rig reproduces the two-Pi dual-clock results locally and, for
+SCFDMA52-16QAM, slightly exceeds them. Remaining hardware failure is 64QAM500
+(SNR-bound on the cable), not an SRO or code problem.
