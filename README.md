@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: README.md
 status: living
-last_updated: 2026-06-17
+last_updated: 2026-06-19
 ---
 
 # OpenPulseHF
@@ -49,6 +49,7 @@ Several capabilities here are firsts or near-firsts in open-source amateur digit
 | **Post-quantum link security** | ML-DSA-44 signing + ML-KEM-768 key encapsulation negotiated in-band. Hybrid mode signs with both Ed25519 and ML-DSA-44 simultaneously. No other open HF modem does this. |
 | **SC-FDMA waveform on HF** | Single-Carrier FDMA (the LTE uplink waveform) brought to HF with DFT-CE pilot-aided channel estimation and MMSE equalization. (DFT-spread is the low-PAPR-capable structure; the current frequency-interleaved pilot scheme limits the realized PAPR — see [mode/FEC guide §7](docs/mode-fec-ladder.md).) |
 | **64QAM and SCFDMA-64QAM with soft demodulation** | Gray-coded 64QAM with max-log-MAP soft demodulator. Aggressive constellation for VHF/UHF links with proper soft FEC backing. |
+| **Pilot-framed carrier recovery** | A single-carrier waveform family (`PILOT-QPSK500`…`PILOT-32APSK500`, up to DVB-S2 32APSK) whose known in-band pilots drive carrier tracking instead of a decision-directed Costas loop — cycle-slip-immune on dense constellations and robust to soundcard sample-rate offset. |
 | **LDPC belief propagation** | Real rate-1/2 min-sum belief propagation — not a stub. First open-source HF software modem with working LDPC. |
 | **LLR-accumulating ARQ** | Soft LLR values accumulate across retransmissions (PACTOR-style Memory-ARQ), turning each retry into a soft combining gain. |
 | **GPU-accelerated DSP** | 6 wgpu compute kernels (BPSK modulate/demodulate, timing search, RRC FIR matched filter, 256-pt FFT, soft LLR demod) accelerating BPSK, QPSK, 8PSK, 64QAM, and SC-FDMA — all with automatic CPU fallback. See [GPU-accelerated features](#gpu-accelerated-features). |
@@ -70,7 +71,7 @@ Capabilities that are firsts or near-firsts among open-source amateur digital-mo
 | 2 | **SC-FDMA (LTE uplink waveform) on HF** | DFT-spread OFDM with DFT-CE pilot-aided channel estimation and MMSE equalization (`plugins/scfdma`). DFT-spread is the low-PAPR-capable structure; realizing the full PAPR advantage over OFDM would need a non-interleaved pilot scheme. That redesign (old roadmap FF-14) was dropped in favour of the **OFDM higher-order ladder** as the HF high-throughput path — see [mode/FEC guide §7](docs/mode-fec-ladder.md) |
 | 3 | **64QAM and SCFDMA-64QAM soft demodulation** | Gray-coded 64QAM max-log-MAP LLR demodulator; SCFDMA52-64QAM reaching 8 667 bps gross over a 2 kHz slice (`plugins/64qam`, `plugins/scfdma`) |
 | 4 | **Working LDPC belief propagation** | Rate-1/2 min-sum BP — not a passthrough stub; wired into `transmit_with_ldpc` / `receive_with_ldpc` in the modem engine (`crates/openpulse-core/src/ldpc.rs`) |
-| 5 | **LLR-accumulating Memory-ARQ** | Soft LLR values accumulated across retransmissions (PACTOR-style); mode switching on sustained NACK (`crates/openpulse-modem/src/arq_session.rs`) |
+| 5 | **LLR-accumulating Memory-ARQ** | Soft LLR values accumulated across retransmissions (PACTOR-style, `SoftCombiner` in `crates/openpulse-core/src/fec.rs`); HARQ retry/mode policy on sustained NACK (`crates/openpulse-modem/src/harq.rs`, `rate_policy.rs`) |
 | 6 | **GPU DSP across 5 modulation families** | 6 wgpu WGSL kernels (BPSK modulate/demodulate, timing search, RRC FIR, 256-pt FFT, soft demod) accelerating BPSK, QPSK, 8PSK, 64QAM, and SC-FDMA, each with CPU fallback — see [GPU-accelerated features](#gpu-accelerated-features) |
 | 7 | **Ed25519-signed QSY frequency agility** | Full initiator + responder state machines wired into the daemon; SNR-ranked channel-list negotiation; rig CAT via rigctld (`crates/openpulse-qsy`) |
 | 8 | **Zstd pre-trained compression dictionary** | Dictionary trained on amateur/Winlink traffic patterns; negotiated at session setup and covered by handshake signature (`crates/openpulse-core/src/compression.rs`) |
@@ -93,6 +94,10 @@ variants are the operational, carrier-offset-robust ones at 2000 baud: the plain
 rectangular `QPSK2000`/`8PSK2000` are registered but **RRC-superseded** (their
 crossfade pulse is ISI-limited at 4 samples/symbol — use `-RRC`). Wider
 99-subcarrier `OFDM99`/`SCFDMA99` variants (~3 kHz) also exist for VHF/UHF channels.
+The `PILOT-*` modes are a pilot-framed single-carrier family: known in-band pilot
+symbols drive carrier recovery (cycle-slip-immune, sample-rate-offset-robust)
+instead of a decision-directed Costas loop — see the
+[pilot-framed waveform](docs/dev/hpx-waveform-design.md#pilot-framed-waveform) note.
 
 | Mode | Plugin | Baud | Bits/sym | Gross&nbsp;bps | Occ.&nbsp;BW&nbsp;(Hz) | Waveform | Notes |
 |---|---|---|---|---|---|---|---|
@@ -106,6 +111,10 @@ crossfade pulse is ISI-limited at 4 samples/symbol — use `-RRC`). Wider
 | QPSK500 | `qpsk` | 500 | 2 | 1&nbsp;000 | ~550 | Single-carrier (+RRC) | |
 | 8PSK500 | `psk8` | 500 | 3 | 1&nbsp;500 | ~550 | Single-carrier (+RRC) | Gray-coded |
 | 64QAM500 | `64qam` | 500 | 6 | 3&nbsp;000 | ~550 | Single-carrier | |
+| PILOT-QPSK500 | `pilot` | 500 | 2 | 1&nbsp;000 | ~550 | Single-carrier (pilot-framed) | In-band pilots → cycle-slip-immune carrier tracking; SRO-robust |
+| PILOT-8PSK500 | `pilot` | 500 | 3 | 1&nbsp;500 | ~550 | Single-carrier (pilot-framed) | Gray-coded; pilot-aided |
+| PILOT-16QAM500 | `pilot` | 500 | 4 | 2&nbsp;000 | ~550 | Single-carrier (pilot-framed) | Pilot-amplitude-referenced demap |
+| PILOT-32APSK500 | `pilot` | 500 | 5 | 2&nbsp;500 | ~550 | Single-carrier (pilot-framed) | DVB-S2 32APSK geometry |
 | OFDM16 | `ofdm` | — | 2 | ~889 | ~625 | OFDM (16 SCs, QPSK) | LS + ZF; ≡ SCFDMA16 throughput |
 | SCFDMA16 | `scfdma` | — | 2 | ~889 | ~625 | SC-FDMA (16 SCs, QPSK) | DFT-CE + MMSE |
 | SCFDMA26-8PSK | `scfdma` | — | 3 | ~2&nbsp;167 | ~1&nbsp;000 | SC-FDMA (26 SCs, 8PSK) | Narrowband HOM (+3 dB/SC) |
@@ -175,6 +184,7 @@ Compression algorithm negotiated at session setup via `supported_compression` / 
 | **Block interleaver** | `openpulse-core` (fec.rs) | 1.0 | Disperses burst errors | Configurable depth; used with RS by default |
 | **Convolutional K=3** | `openpulse-core` (conv.rs) | 1/2 | AWGN-dominant paths | G={7,5}; hard-decision Viterbi; better than RS at random-error BER 1% |
 | **LDPC rate-1/2** | `openpulse-core` (ldpc.rs) | 1/2 | Highest coding gain | Min-sum belief propagation; configurable iterations; first open-source HF modem with working LDPC |
+| **LDPC high-rate (PEG)** | `openpulse-core` (ldpc.rs) | 8/9 (k=1024, n=1152) | Throughput on strong channels | Progressive Edge-Growth graph; soft-decision; auto-selected on dense high-SNR rungs (`FecMode::LdpcHighRate`) |
 | **Turbo (rate-1/3 PCCC)** | `openpulse-core` (turbo.rs) | 1/3 | Near-capacity on AWGN | RSC K=3, 3GPP QPP interleaver K=40–6144, Max-Log-MAP BCJR, 8 iterations, CRC-16 early exit |
 | **Concatenated RS + Conv** | `openpulse-core` | ~0.44 | Strong burst + AWGN | RS outer, Conv inner |
 | **Short-block FEC** | `openpulse-core` | varies | ACK/control frames | For FSK4-ACK and small control payloads |
@@ -197,7 +207,7 @@ All GPU functions return `Option<T>` — `None` triggers automatic CPU fallback.
 
 ### Adaptive rate profiles
 
-Six `SessionProfile` mappings from speed levels to modes, driven by ACK/NACK feedback
+Seven `SessionProfile` mappings from speed levels to modes, driven by ACK/NACK feedback
 and per-level SNR floor/ceiling gates:
 
 | Profile | SL range | Initial | Top mode | Target link |
@@ -208,6 +218,7 @@ and per-level SNR floor/ceiling gates:
 | `hpx_ofdm_hf` | SL5–SL6 | SL5 | OFDM52 | HF OFDM ladder |
 | `hpx_narrowband_hd` | SL8–SL9 | SL8 | 8PSK9600-RRC | VHF/UHF narrowband |
 | `hpx_wideband_hd` | SL12–SL15 | SL12 | 64QAM2000-RRC | VHF/UHF FM / satellite |
+| `hpx_pilot` | SL2–SL5 | SL2 | PILOT-32APSK500 | HF pilot-aided (cycle-slip-immune, SRO-robust) |
 
 `hpx_wideband_hd` requires SNR ≥ 16 dB and is not suitable for HF ionospheric paths.
 

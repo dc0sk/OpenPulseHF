@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/architecture.md
 status: living
-last_updated: 2026-06-17
+last_updated: 2026-06-19
 ---
 
 # Architecture
@@ -68,7 +68,8 @@ Note: this is an amplitude envelope shape applied per symbol, not a root-raised-
 ## Supported modulation modes
 
 The plugin registry spans BPSK, QPSK, 8PSK, 64QAM (single-carrier), FSK4 (ACK control
-channel), and the OFDM / SC-FDMA multicarrier families. For the authoritative per-mode
+channel), the OFDM / SC-FDMA multicarrier families, and the pilot-framed single-carrier
+family (`PILOT-*`). For the authoritative per-mode
 table (baud, bits/symbol, gross bps, occupied bandwidth) see the
 [README modulation-modes table](../../README.md#modulation-types); `openpulse modes`
 prints the live registry.
@@ -84,9 +85,14 @@ decision-directed carrier loop. The plain rectangular `QPSK2000`/`8PSK2000` are
 **RRC-superseded** — at 4 samples/symbol their crossfade pulse is ISI-limited; use the
 `-RRC` variants.
 
+The pilot-framed `PILOT-*` family takes a different route to carrier-offset robustness:
+known in-band pilots drive a data-aided carrier loop instead of a decision-directed one,
+which is cycle-slip-immune on dense constellations and sample-rate-offset robust without a
+Gardner timing loop — see [hpx-waveform-design.md](hpx-waveform-design.md#pilot-framed-waveform).
+
 ## HPX adaptive profiles
 
-HPX sessions select a modulation mode at runtime based on the current `SpeedLevel` reported by the `RateAdapter`. Three profiles are defined in `openpulse-core/src/profile.rs`:
+HPX sessions select a modulation mode at runtime based on the current `SpeedLevel` reported by the `RateAdapter`. Several profiles are defined in `openpulse-core/src/profile.rs`; the [README profiles table](../../README.md#adaptive-rate-profiles) and [mode-fec-ladder.md §4](../mode-fec-ladder.md) are the authoritative list. A few are shown below:
 
 ### `hpx500` — 500 Hz class
 
@@ -127,6 +133,19 @@ Single-carrier modulation was chosen over OFDM for this profile. Rationale: lowe
 | SL9 | QPSK1000  | |
 | SL10 | — | Reserved |
 | SL11 | 8PSK1000 | Ceiling — ~4000 Hz BW |
+
+### `hpx_pilot` — pilot-framed single-carrier profile (~550 Hz)
+
+A cycle-slip-immune, sample-rate-offset-robust ladder built on the pilot-framed
+`PILOT-*` waveform (pilot-aided carrier recovery; see
+[hpx-waveform-design.md](hpx-waveform-design.md#pilot-framed-waveform)).
+
+| SL  | Mode | Notes |
+|-----|------|-------|
+| SL2 | PILOT-QPSK500 | Initial level |
+| SL3 | PILOT-8PSK500 | |
+| SL4 | PILOT-16QAM500 | |
+| SL5 | PILOT-32APSK500 | Ceiling — DVB-S2 32APSK |
 
 ## Signed session handshake (Phase 2.3)
 

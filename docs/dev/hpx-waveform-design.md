@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/hpx-waveform-design.md
 status: living
-last_updated: 2026-06-17
+last_updated: 2026-06-19
 ---
 
 # HPX Waveform Design
@@ -76,6 +76,50 @@ This is a deliberate architectural divergence from VARA. The trade-off: slightly
 The rate ladder uses single-carrier for low speed levels and small OFDM for high speed levels, with the same 1.25-second ARQ cycle time across all levels. Transitions between modulation classes are transparent to the ARQ protocol: only the waveform changes.
 
 The ACK frame design (4FSK, independent of data modulation) ensures that rate adaptation signals survive across modulation class transitions without a separate control handshake.
+
+---
+
+## Pilot-framed waveform
+
+The `PILOT-*` modes (`plugins/pilot`) are an as-built single-carrier family that
+recovers the carrier differently from the BPSK/QPSK/8PSK modes above: instead of a
+decision-directed Costas loop, each frame carries **known in-band pilot symbols**
+at a fixed cadence and recovers phase, frequency, and amplitude from them.
+
+**Why.** A decision-directed loop derives its phase error from its own symbol
+decisions, so on a dense constellation (8PSK ±22.5°, 16QAM, 32APSK) a wrong
+decision feeds back a wrong correction — the loop cycle-slips by ±90°/±45° and the
+frame is lost. Driving the loop from *known* pilots removes that dependency: the
+error `e = y · conj(pilot)` is unambiguous regardless of the data constellation.
+This is the convergent lesson from the gnuradio / liquid-dsp / qo100 references — a
+dedicated pilot/known-symbol carrier-recovery stage.
+
+**Structure.**
+- A PN (m-sequence) BPSK preamble for onset detection and coarse CFO, then a data
+  region with a known BPSK pilot every 16 symbols.
+- Coarse CFO comes from an **m = 2 (squared) Goertzel scan over the BPSK preamble**.
+  The preamble and pilots are BPSK regardless of the data constellation, so squaring
+  yields a clean carrier line for every mode; an M-th-power scan keyed to the data
+  order would lock to spurious lines on 8PSK/16QAM.
+- The receiver tracks phase + frequency + a pilot-referenced **amplitude** with a
+  type-2 PLL driven only by the pilots. `PILOT-16QAM500` and `PILOT-32APSK500` are
+  amplitude-bearing, so the demapper normalises each data symbol by that pilot
+  amplitude before slicing (`PILOT-32APSK500` uses DVB-S2 32APSK geometry).
+
+**Properties.**
+- **Cycle-slip-immune** on dense constellations through carrier offset (decodes
+  through the engine to ±25 Hz).
+- **Sample-rate-offset robust** without a Gardner timing loop: integrate-and-dump
+  plus pilot tracking tolerate the dual-clock soundcard offset that defeats the
+  OFDM/SC-FDMA modes.
+- Cost is the pilot overhead (one known symbol per 16) and, today, **hard-decision
+  output only** — the pilot plugin has no `demodulate_soft`, so the family pairs
+  with the hard FEC codes (`Rs` / `RsInterleaved` / `RsStrong`), not the soft codes.
+
+**Modes and ladder.** `PILOT-QPSK500` → `PILOT-8PSK500` → `PILOT-16QAM500` →
+`PILOT-32APSK500` (all 500 baud, ~550 Hz). The `hpx_pilot` profile maps these to
+SL2–SL5 for an adaptive pilot-framed HF ladder. See the
+[mode/FEC guide](../mode-fec-ladder.md).
 
 ---
 
