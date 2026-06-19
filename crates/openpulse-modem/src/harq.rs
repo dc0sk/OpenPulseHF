@@ -27,6 +27,15 @@ pub struct HarqPolicy {
     pub fading_strong_db: f32,
     /// Fading depth threshold for soft-concatenated selection.
     pub fading_soft_db: f32,
+    /// SNR floor (dB) above which a soft-capable rung uses high-rate LDPC
+    /// (rate ≈8/9) on the first attempt instead of RS.  Sits above
+    /// `soft_snr_floor_db` so only genuinely strong channels trade redundancy
+    /// for throughput.
+    pub high_rate_ldpc_floor_db: f32,
+    /// Whether the active mode produces genuine soft LLRs.  Set per mode by the
+    /// engine; high-rate LDPC is selected only when `true`, since a
+    /// hard-decision plugin gains nothing from a soft code.
+    pub soft_capable: bool,
 }
 
 impl Default for HarqPolicy {
@@ -36,24 +45,42 @@ impl Default for HarqPolicy {
             soft_snr_floor_db: 21.0,
             fading_strong_db: 9.0,
             fading_soft_db: 7.0,
+            high_rate_ldpc_floor_db: 26.0,
+            soft_capable: false,
         }
     }
 }
 
 impl HarqPolicy {
+    /// Return a copy with `soft_capable` set — used by the engine to specialise
+    /// the default policy to the active mode's demodulator capability.
+    pub fn with_soft_capable(mut self, soft_capable: bool) -> Self {
+        self.soft_capable = soft_capable;
+        self
+    }
+
     /// Select FEC mode and ACK timeout from channel state and retry index.
     ///
     /// `retry_index`: 0 for first attempt, 1+ for retransmissions.
     pub fn select(&self, snr_db: f32, fading_depth_db: f32, retry_index: u8) -> HarqDecision {
+        // Highest tier: on the first attempt, a soft-capable rung on a strong,
+        // low-fade channel uses high-rate LDPC for throughput.  A failed attempt
+        // (retry ≥ 1) drops back to the protective ladder below.
+        let high_rate_ldpc = self.soft_capable
+            && retry_index == 0
+            && fading_depth_db < self.fading_soft_db
+            && snr_db >= self.high_rate_ldpc_floor_db;
+
         // Escalate coding strength across retries to improve delivery probability.
-        let base_mode =
-            if snr_db < self.strong_snr_floor_db || fading_depth_db >= self.fading_strong_db {
-                FecMode::RsStrong
-            } else if snr_db < self.soft_snr_floor_db || fading_depth_db >= self.fading_soft_db {
-                FecMode::SoftConcatenated
-            } else {
-                FecMode::Rs
-            };
+        let base_mode = if high_rate_ldpc {
+            FecMode::LdpcHighRate
+        } else if snr_db < self.strong_snr_floor_db || fading_depth_db >= self.fading_strong_db {
+            FecMode::RsStrong
+        } else if snr_db < self.soft_snr_floor_db || fading_depth_db >= self.fading_soft_db {
+            FecMode::SoftConcatenated
+        } else {
+            FecMode::Rs
+        };
 
         let fec_mode = match retry_index {
             0 => base_mode,
@@ -83,6 +110,7 @@ fn code_rate_for_fec(fec: FecMode) -> f32 {
         FecMode::RsStrong => 191.0 / 255.0,
         FecMode::SoftConcatenated => (223.0 / 255.0) * 0.5,
         FecMode::Ldpc => 0.5,
+        FecMode::LdpcHighRate => 1024.0 / 1152.0,
         FecMode::Turbo => 1.0 / 3.0,
     }
 }
@@ -125,5 +153,27 @@ mod tests {
         let a2 = policy.select(24.0, 1.0, 2);
         assert!(a1.fec_mode.strength() >= a0.fec_mode.strength());
         assert!(a2.fec_mode.strength() >= a1.fec_mode.strength());
+    }
+
+    #[test]
+    fn high_snr_soft_capable_selects_high_rate_ldpc() {
+        // Default policy (not soft-capable) keeps RS at high SNR — preserves the
+        // behaviour of mode-agnostic `select_harq_decision`.
+        let plain = HarqPolicy::default();
+        assert_eq!(plain.select(28.0, 1.0, 0).fec_mode, FecMode::Rs);
+
+        // A soft-capable mode on a strong, low-fade channel uses high-rate LDPC.
+        let soft = HarqPolicy::default().with_soft_capable(true);
+        assert_eq!(soft.select(28.0, 1.0, 0).fec_mode, FecMode::LdpcHighRate);
+
+        // Just below the high-rate floor it stays on the protective ladder.
+        assert_eq!(soft.select(25.0, 1.0, 0).fec_mode, FecMode::Rs);
+
+        // Deep fade vetoes the high-rate tier even on a soft-capable rung.
+        assert_ne!(soft.select(28.0, 10.0, 0).fec_mode, FecMode::LdpcHighRate);
+
+        // A failed first attempt drops back to more-protective coding.
+        let retry = soft.select(28.0, 1.0, 1).fec_mode;
+        assert!(retry.strength() > FecMode::LdpcHighRate.strength());
     }
 }

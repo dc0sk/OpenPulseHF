@@ -66,6 +66,11 @@ fn dispatch_ldpc() {
 }
 
 #[test]
+fn dispatch_ldpc_high_rate() {
+    roundtrip(FecMode::LdpcHighRate, "BPSK250");
+}
+
+#[test]
 fn dispatch_turbo() {
     roundtrip(FecMode::Turbo, "BPSK250");
 }
