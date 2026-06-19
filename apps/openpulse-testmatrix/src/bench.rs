@@ -202,7 +202,7 @@ pub fn run_bench(case: &TestCase, n_frames: usize) -> BenchResult {
                 .tx_engine
                 .transmit_with_soft_viterbi_fec(&wire, &case.mode, None),
             // ACK-frame-only or deferred — not applicable in bench.
-            FecMode::ShortRs | FecMode::Ldpc | FecMode::Turbo => break,
+            FecMode::ShortRs | FecMode::Ldpc | FecMode::LdpcHighRate | FecMode::Turbo => break,
         };
 
         // Route through channel regardless of TX outcome: on-air time is always consumed.
@@ -226,7 +226,7 @@ pub fn run_bench(case: &TestCase, n_frames: usize) -> BenchResult {
             FecMode::SoftConcatenated => {
                 h.rx_engine.receive_with_soft_viterbi_fec(&case.mode, None)
             }
-            FecMode::ShortRs | FecMode::Ldpc | FecMode::Turbo => break,
+            FecMode::ShortRs | FecMode::Ldpc | FecMode::LdpcHighRate | FecMode::Turbo => break,
         };
 
         let Ok(rx_raw) = rx_raw else { continue };
