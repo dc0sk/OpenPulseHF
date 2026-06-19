@@ -987,6 +987,12 @@ impl ModemEngine {
         // converge, by which point the scan has advanced past the preamble
         // start and can never re-decode it.
         let mut planner = ScanPlanner::new(step, min_frame_samples);
+        // Round-robin forward-onset offset for the first-energy re-decode (see the
+        // fep block below).  Persisted across iterations so each iteration tries
+        // exactly ONE onset — running all offsets per iteration starves the read
+        // loop (each BPSK31 decode is a full demod of a multi-second window), so
+        // the frame never finishes buffering.
+        let mut fep_offset_k = 0usize;
 
         loop {
             let chunk = stream
@@ -1030,8 +1036,14 @@ impl ModemEngine {
             // (slice too short → CRC fails).  Re-firing every 2 s lets each
             // subsequent attempt use a longer accumulated buffer until the
             // frame fits and the decode succeeds.
+            // Only the FALLBACK for a missed settle: once settled, the first-energy
+            // re-decode below owns the decode.  Running this O(buffer) full re-scan
+            // every 2 s while settled starves the read loop on long frames (BPSK31:
+            // the scan of a multi-second buffer outlasts the read cadence, so the
+            // frame never finishes buffering) and re-decodes the fep micro-sweep is
+            // already covering — so skip it when settled.
             let elapsed_secs = start_time.elapsed().as_secs();
-            if planner.retry_due(elapsed_secs, accumulated.len()) {
+            if !planner.is_settled() && planner.retry_due(elapsed_secs, accumulated.len()) {
                 {
                     // Scan the entire accumulated buffer from the start.
                     // The AFC correction is kept from the settled value:
@@ -1121,13 +1133,43 @@ impl ModemEngine {
             // via commit_scan and never returns, so without this the frame never
             // decodes.  Bounded to one decode per iteration.
             if let Some(fep) = planner.first_energy_pos() {
-                let end = (fep + max_frame_samples).min(accumulated.len());
-                if end.saturating_sub(fep) >= min_frame_samples {
+                // Forward onset micro-sweep.  The settled onset (`fep`) lands at or
+                // slightly before the true preamble, but the energy gate + refine
+                // can sit up to ~1-2 symbols early on a clean turn-on, and a
+                // demodulator only searches one symbol period for timing.  The
+                // decodable onset window is narrow (~2 symbols) and asymmetric — a
+                // start can be ~1.5 symbols early but barely a third of a symbol
+                // late — so the lowest baud rate (BPSK31, 256 samples/symbol) sits
+                // right at the boundary and fails on runs where the estimate lands
+                // a touch too early.  `fep` is never *after* the onset (the gate
+                // trips on the rising edge or before), so sweeping a few half-symbol
+                // steps FORWARD reliably lands one attempt inside the window.  The
+                // extra attempts only run once the frame is fully buffered (a short
+                // buffer fails "frame too short" for every forward offset too, so we
+                // skip the sweep in that case and just wait for more audio).
+                // Forward-onset micro-sweep, ONE offset per iteration.  The settled
+                // onset sits at or slightly before the true preamble (the gate trips
+                // on the rising edge or earlier), but the energy gate + refine can be
+                // up to ~1-2 symbols early on a clean turn-on, and the demodulator
+                // only searches one symbol period for timing.  The decodable onset
+                // window is narrow (~2 symbols) and asymmetric — a start may be ~1.5
+                // symbols early but barely a third late — so the lowest baud rate
+                // (BPSK31) sits at the boundary and fails on runs where the estimate
+                // lands a touch early.  Stepping a few half-symbols FORWARD lands one
+                // attempt in the window.  Critically this cycles ONE offset per
+                // iteration (not all at once): each BPSK31 decode demodulates a
+                // multi-second window, so sweeping every offset per read would starve
+                // the loop and the long frame would never finish buffering.
+                let half = (step / 2).max(1);
+                let onset = fep + (fep_offset_k % 9) * half;
+                fep_offset_k = fep_offset_k.wrapping_add(1);
+                let end = (onset + max_frame_samples).min(accumulated.len());
+                if end.saturating_sub(onset) >= min_frame_samples {
                     let afc_before = self.afc_correction_hz;
                     match self.decode_attempt(
                         mode,
                         AudioSamples {
-                            samples: accumulated[fep..end].to_vec(),
+                            samples: accumulated[onset..end].to_vec(),
                         },
                         fec,
                     ) {

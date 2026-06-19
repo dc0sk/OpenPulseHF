@@ -41,3 +41,37 @@ fn bpsk31_long_frame_with_leading_silence_decodes() {
         "decoded payload must match through incremental long-frame acquisition"
     );
 }
+
+#[test]
+fn bpsk31_long_frame_with_early_onset_decodes() {
+    // Reproduces the dual-card hardware failure: a real analog turn-on ramps the
+    // carrier up over ~1-2 symbols before the clean preamble, so the energy gate +
+    // refine_onset settle an onset a touch (~1-2 symbols) BEFORE the true preamble
+    // — outside the demodulator's one-symbol timing search.  A partial-amplitude
+    // carrier lead-in here puts the settled onset early the same way; the forward
+    // onset micro-sweep in the receive loop must step forward and still decode.
+    let loopback = LoopbackBackend::new();
+    let shared = loopback.clone_shared();
+    let mut engine = ModemEngine::new(Box::new(loopback));
+    engine.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+
+    let payload = b"psk31-early-onset";
+    engine.transmit(payload, "BPSK31", None).unwrap();
+    let frame = shared.drain_samples();
+    assert!(!frame.is_empty());
+
+    // ~5 s silence, then a ~1.5-symbol carrier lead-in at 0.6x amplitude (0.36x
+    // power — above refine_onset's 25%-of-peak edge, so the settle latches it ~1.5
+    // symbols ahead of the true preamble), then the clean frame.
+    shared.push_frame(&vec![0.0f32; 40000]);
+    let lead: Vec<f32> = frame[2000..2400].iter().map(|s| s * 0.6).collect();
+    shared.push_frame(&lead);
+    for chunk in frame.chunks(16000) {
+        shared.push_frame(chunk);
+    }
+
+    let got = engine
+        .receive_with_timeout("BPSK31", None, Duration::from_secs(10))
+        .expect("BPSK31 frame with an early settled onset must still decode");
+    assert_eq!(&got[..payload.len()], payload);
+}
