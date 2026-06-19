@@ -46,6 +46,17 @@ sensitive to residual per-subcarrier phase — handled by the per-symbol pilot
 a cleaner spectrum and better timing recovery; the plain (Hann/rectangular) 2000-baud
 modes close the eye at 4 samples/symbol and are superseded by their `-RRC` siblings.
 
+**Pilot-framed single-carrier (`PILOT-*`).** A third single-carrier family
+(`PILOT-QPSK500` → `PILOT-8PSK500` → `PILOT-16QAM500` → `PILOT-32APSK500`, all
+500 baud, ~550 Hz) carries known in-band pilot symbols at a fixed cadence and
+recovers the carrier from them with a data-aided loop, rather than a
+decision-directed Costas loop. That makes it immune to the ±90°/±45° cycle slips
+that limit dense PSK/QAM through carrier offset, and robust to soundcard
+sample-rate offset without a Gardner timing loop — at the cost of the pilot
+overhead. `PILOT-32APSK500` uses DVB-S2 32APSK (amplitude-bearing) geometry, with
+the demapper normalising by the pilot-referenced amplitude. See the
+[pilot-framed waveform](dev/hpx-waveform-design.md#pilot-framed-waveform) design note.
+
 ---
 
 ## 2. The FEC ladder (least → most powerful)
@@ -59,14 +70,17 @@ modes close the eye at 4 samples/symbol and are superseded by their `-RRC` sibli
 | `Concatenated` | Conv(½,K=3) + RS | ~0.44 | high (random) | hard | AWGN-dominant, no soft LLRs |
 | `SoftConcatenated` | Soft-Viterbi(K=7) + RS | ~0.44 | **highest practical** | **soft** | Dense modes on real links |
 | `Ldpc` | rate-1/2 LDPC (min-sum) | 0.50 | very high | **soft** | Short blocks (≤128 B), soft |
+| `LdpcHighRate` | rate-8/9 LDPC (PEG, min-sum) | 0.89 | moderate | **soft** | Dense rungs at high SNR — throughput-first soft code (auto-selected by the HARQ policy on soft-capable modes above ~26 dB) |
 | `Turbo` | rate-1/3 PCCC | 0.33 | very high | **soft** | Maximum robustness, low rate |
 
 Two rules of thumb:
 
-- **Soft beats hard by ~3–4 dB** when the modulation emits real LLRs. Every
-  OpenPulseHF data plugin provides `demodulate_soft`, so `SoftConcatenated` /
-  `Ldpc` / `Turbo` get genuine soft-decision gain — they are not equivalent to
-  their hard counterparts.
+- **Soft beats hard by ~3–4 dB** when the modulation emits real LLRs. Most
+  OpenPulseHF data plugins provide `demodulate_soft` (BPSK/QPSK/8PSK/64QAM and the
+  SC-FDMA/OFDM families), so `SoftConcatenated` / `Ldpc` / `LdpcHighRate` / `Turbo`
+  get genuine soft-decision gain on them. The pilot-framed `PILOT-*` family is
+  currently hard-decision, so it pairs with the hard codes (`Rs` / `RsInterleaved`
+  / `RsStrong`) until it grows a soft demodulator.
 - **Interleaving matters on HF.** Watterson/Gilbert-Elliott channels produce
   *bursts*; `RsInterleaved` spreads a burst across many RS codewords so it stays
   within per-block capacity, where bare `Rs` would fail on the same raw rate.
@@ -114,6 +128,7 @@ ceiling *and* a positive ACK arrives.
 | `hpx500` | Narrowband | BPSK31 → BPSK63 → BPSK250 → QPSK250 → QPSK500 | Robust, ≤600 Hz HF |
 | **`hpx_hf`** | **HF (≤2700 Hz)** | **BPSK31/63/250 → QPSK250/500 → 8PSK500 → SCFDMA52-{8PSK,16QAM,32QAM,64QAM}** | **Primary HF profile — the full HF-legal span** |
 | **`hpx_ofdm_hf`** | **HF multicarrier** | **OFDM16 → OFDM52 → OFDM52-{8PSK,16QAM,32QAM,64QAM} (SL5–10)** | **High-throughput / high-reliability HF — per-SC equalization on fades (§7)** |
+| `hpx_pilot` | HF pilot-aided | PILOT-QPSK500 → PILOT-8PSK500 → PILOT-16QAM500 → PILOT-32APSK500 (SL2–5; SNR floors 6/12/17/23 dB) | Cycle-slip-immune, sample-rate-offset-robust single-carrier ladder; pairs with hard-decision FEC (no pilot soft demod yet) |
 | `hpx_wideband_hd` | Wideband HD | SCFDMA26-{8PSK,16QAM,32QAM} (SL9–11 fallback) → SCFDMA52-{16QAM,32QAM,64QAM} → 64QAM2000-RRC (SL12–15) | >2700 Hz links; SL9–11 are the graceful-degradation rungs |
 | `hpx_wideband` / `hpx_narrowband` / `hpx_narrowband_hd` | Wide / post-1.0 | QPSK/8PSK 1000, 2000-RRC, 9600-RRC | FM / VHF / UHF or wider-than-HF; deferred (§8) |
 
