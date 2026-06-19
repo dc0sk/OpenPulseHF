@@ -1,0 +1,12 @@
+{
+  "scenario_id": "HF2300-WATTERSON-F1-ITEM6",
+  "mode_under_test": "VARA-HF-REFERENCE",
+  "run_count": 100,
+  "success_rate": 0.98,
+  "median_goodput_bps": 7300.0,
+  "p95_completion_time_ms": 1300,
+  "mean_arq_efficiency": 0.96,
+  "median_spectral_efficiency_bphz": 3.173913,
+  "mean_time_to_first_payload_ms": 1225.0,
+  "recovery_success_rate": 0.99
+}

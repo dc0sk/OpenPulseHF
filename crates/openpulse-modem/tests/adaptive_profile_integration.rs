@@ -33,6 +33,31 @@ fn hpx500_starts_at_bpsk31() {
 }
 
 #[test]
+fn hpx_pilot_climbs_and_descends_the_rungs() {
+    let mut engine = make_engine();
+    engine.start_adaptive_session(SessionProfile::hpx_pilot());
+    assert_eq!(engine.current_adaptive_mode(), Some("PILOT-QPSK500"));
+
+    assert_eq!(
+        engine.apply_ack(AckType::AckUp),
+        RateEvent::Increased(SpeedLevel::Sl3)
+    );
+    assert_eq!(engine.current_adaptive_mode(), Some("PILOT-8PSK500"));
+
+    assert_eq!(
+        engine.apply_ack(AckType::AckUp),
+        RateEvent::Increased(SpeedLevel::Sl4)
+    );
+    assert_eq!(engine.current_adaptive_mode(), Some("PILOT-16QAM500"));
+
+    assert_eq!(
+        engine.apply_ack(AckType::AckDown),
+        RateEvent::Decreased(SpeedLevel::Sl3)
+    );
+    assert_eq!(engine.current_adaptive_mode(), Some("PILOT-8PSK500"));
+}
+
+#[test]
 fn ack_up_three_times_reaches_bpsk250() {
     let mut engine = make_engine();
     engine.start_adaptive_session(SessionProfile::hpx500());
@@ -75,20 +100,37 @@ fn three_nacks_at_sl3_decrement_to_sl2() {
 }
 
 #[test]
-fn hpx2300_starts_at_qpsk500() {
+fn hpx_hf_starts_at_bpsk31() {
     let mut engine = make_engine();
-    engine.start_adaptive_session(SessionProfile::hpx2300());
+    engine.start_adaptive_session(SessionProfile::hpx_hf());
+    assert_eq!(engine.current_adaptive_mode(), Some("BPSK31"));
+}
+
+#[test]
+fn hpx_hf_ack_up_five_times_reaches_8psk500() {
+    let mut engine = make_engine();
+    engine.start_adaptive_session(SessionProfile::hpx_hf());
+    engine.apply_ack(AckType::AckUp); // SL2 → SL3 (BPSK63)
+    engine.apply_ack(AckType::AckUp); // SL3 → SL4 (BPSK250)
+    engine.apply_ack(AckType::AckUp); // SL4 → SL5 (QPSK250)
+    engine.apply_ack(AckType::AckUp); // SL5 → SL6 (QPSK500)
+    engine.apply_ack(AckType::AckUp); // SL6 → SL7 (8PSK500)
+    assert_eq!(engine.current_adaptive_mode(), Some("8PSK500"));
+}
+
+#[test]
+fn hpx_wideband_starts_at_qpsk500() {
+    let mut engine = make_engine();
+    engine.start_adaptive_session(SessionProfile::hpx_wideband());
     assert_eq!(engine.current_adaptive_mode(), Some("QPSK500"));
 }
 
 #[test]
-fn hpx2300_ack_up_reaches_8psk1000() {
+fn hpx_wideband_ack_up_reaches_8psk1000() {
     let mut engine = make_engine();
-    engine.start_adaptive_session(SessionProfile::hpx2300());
+    engine.start_adaptive_session(SessionProfile::hpx_wideband());
     engine.apply_ack(AckType::AckUp); // SL8 → SL9 (QPSK1000)
     assert_eq!(engine.current_adaptive_mode(), Some("QPSK1000"));
-    engine.apply_ack(AckType::AckUp); // SL9 → SL10 (reserved, None)
-    assert_eq!(engine.current_adaptive_mode(), None);
-    engine.apply_ack(AckType::AckUp); // SL10 → SL11 (8PSK1000)
+    engine.apply_ack(AckType::AckUp); // SL9 → SL11 (skip reserved SL10)
     assert_eq!(engine.current_adaptive_mode(), Some("8PSK1000"));
 }

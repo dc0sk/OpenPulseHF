@@ -1,8 +1,10 @@
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::str::FromStr;
 use x25519_dalek::{PublicKey, StaticSecret};
 
+/// How much an operator trusts a peer's public key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PublicKeyTrustLevel {
@@ -13,6 +15,7 @@ pub enum PublicKeyTrustLevel {
     Revoked,
 }
 
+/// Where a peer's certificate was received from, affecting trust scoring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CertificateSource {
@@ -20,6 +23,7 @@ pub enum CertificateSource {
     OverAir,
 }
 
+/// Session-level trust level derived from key trust, certificate source, and PSK validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ConnectionTrustLevel {
@@ -31,6 +35,19 @@ pub enum ConnectionTrustLevel {
     Verified,
 }
 
+impl FromStr for ConnectionTrustLevel {
+    type Err = String;
+
+    /// Parse a trust-level string, accepting both kebab-case (`"psk-verified"`) and
+    /// underscore variants (`"psk_verified"`).
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let normalised = s.to_ascii_lowercase().replace('_', "-");
+        serde_json::from_str::<Self>(&format!("\"{normalised}\""))
+            .map_err(|_| format!("unknown trust level: {s:?}"))
+    }
+}
+
+/// Signing algorithm negotiated during the HPX handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SigningMode {
@@ -44,6 +61,7 @@ pub enum SigningMode {
     Hybrid,
 }
 
+/// Station-level policy profile controlling which signing modes and trust levels are accepted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PolicyProfile {
@@ -52,6 +70,7 @@ pub enum PolicyProfile {
     Permissive,
 }
 
+/// Output of `classify_connection_trust`: the resolved trust level and its justification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrustDecision {
     pub decision: ConnectionTrustLevel,
@@ -61,6 +80,7 @@ pub struct TrustDecision {
     pub psk_validated: bool,
 }
 
+/// Combined handshake decision: selected signing mode, trust level, and active policy profile.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HandshakeDecision {
     pub selected_mode: SigningMode,
@@ -68,6 +88,7 @@ pub struct HandshakeDecision {
     pub policy_profile: PolicyProfile,
 }
 
+/// Errors returned by trust evaluation and key-derivation functions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrustError {
     NoMutualSigningMode,
@@ -76,6 +97,7 @@ pub enum TrustError {
     KeyDerivationFailed,
 }
 
+/// Session keys derived from X25519 DH + HKDF for a single HPX session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionKeys {
     pub hmac_key: [u8; 32],
@@ -83,6 +105,7 @@ pub struct SessionKeys {
     pub transcript_hash: [u8; 32],
 }
 
+/// Map raw key trust and certificate source to a `TrustDecision`.
 pub fn classify_connection_trust(
     key_trust: PublicKeyTrustLevel,
     certificate_source: CertificateSource,
@@ -126,6 +149,7 @@ pub fn classify_connection_trust(
     }
 }
 
+/// Return the set of `SigningMode`s permitted under `profile`.
 pub fn allowed_signing_modes(profile: PolicyProfile) -> &'static [SigningMode] {
     match profile {
         PolicyProfile::Strict => &[
@@ -161,6 +185,7 @@ fn mode_strength(mode: SigningMode) -> u8 {
     }
 }
 
+/// Select the strongest mutually supported `SigningMode` that satisfies `local_minimum`.
 pub fn select_signing_mode(
     profile: PolicyProfile,
     local_minimum: SigningMode,
@@ -185,6 +210,7 @@ pub fn select_signing_mode(
     Ok(selected)
 }
 
+/// Full handshake evaluation: select signing mode and classify connection trust.
 pub fn evaluate_handshake(
     profile: PolicyProfile,
     local_minimum_mode: SigningMode,
@@ -207,6 +233,7 @@ pub fn evaluate_handshake(
     })
 }
 
+/// Derive HMAC key, confirmation tag, and transcript hash from an X25519 DH exchange.
 pub fn derive_session_keys(
     local_private_key: [u8; 32],
     remote_public_key: [u8; 32],

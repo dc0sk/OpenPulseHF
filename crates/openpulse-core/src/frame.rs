@@ -1,4 +1,4 @@
-use crate::error::ModemError;
+use crate::error::{FrameError, ModemError};
 
 // Magic bytes that start every OpenPulse frame on the wire.
 const MAGIC: &[u8; 4] = b"OPLS";
@@ -28,11 +28,12 @@ pub struct Frame {
 impl Frame {
     /// Create a new frame.
     ///
-    /// # Panics
-    /// Panics if `payload.len() > 255`.
-    pub fn new(sequence: u16, payload: Vec<u8>) -> Self {
-        assert!(payload.len() <= 255, "payload must be ≤ 255 bytes");
-        Self { sequence, payload }
+    /// Returns `Err` if `payload.len() > 255`.
+    pub fn new(sequence: u16, payload: Vec<u8>) -> Result<Self, FrameError> {
+        if payload.len() > 255 {
+            return Err(FrameError::PayloadTooLarge(payload.len()));
+        }
+        Ok(Self { sequence, payload })
     }
 
     /// Serialise the frame to bytes ready for the modulator.
@@ -120,13 +121,13 @@ mod tests {
 
     #[test]
     fn round_trip_empty_payload() {
-        let f = Frame::new(0, vec![]);
+        let f = Frame::new(0, vec![]).unwrap();
         assert_eq!(Frame::decode(&f.encode()).unwrap(), f);
     }
 
     #[test]
     fn round_trip_with_payload() {
-        let f = Frame::new(1234, b"Hello, OpenPulse!".to_vec());
+        let f = Frame::new(1234, b"Hello, OpenPulse!".to_vec()).unwrap();
         let encoded = f.encode();
         let decoded = Frame::decode(&encoded).unwrap();
         assert_eq!(decoded.sequence, 1234);
@@ -135,14 +136,14 @@ mod tests {
 
     #[test]
     fn bad_magic_is_rejected() {
-        let mut bytes = Frame::new(0, b"test".to_vec()).encode();
+        let mut bytes = Frame::new(0, b"test".to_vec()).unwrap().encode();
         bytes[0] = 0xFF;
         assert!(Frame::decode(&bytes).is_err());
     }
 
     #[test]
     fn corrupted_crc_is_rejected() {
-        let mut bytes = Frame::new(0, b"test".to_vec()).encode();
+        let mut bytes = Frame::new(0, b"test".to_vec()).unwrap().encode();
         let last = bytes.len() - 1;
         bytes[last] ^= 0xFF;
         assert!(Frame::decode(&bytes).is_err());
@@ -151,8 +152,13 @@ mod tests {
     #[test]
     fn sequence_number_round_trips() {
         for seq in [0u16, 1, 0x00FF, 0xFF00, 0xFFFF] {
-            let f = Frame::new(seq, b"x".to_vec());
+            let f = Frame::new(seq, b"x".to_vec()).unwrap();
             assert_eq!(Frame::decode(&f.encode()).unwrap().sequence, seq);
         }
+    }
+
+    #[test]
+    fn oversized_payload_returns_err() {
+        assert!(Frame::new(0, vec![0u8; 256]).is_err());
     }
 }

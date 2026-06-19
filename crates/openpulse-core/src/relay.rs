@@ -1,21 +1,28 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::peer_cache::{PeerCache, TrustLevel};
+use crate::peer_cache::{PeerCache, TrustFilter, TrustLevel};
 use crate::wire_query::WireEnvelope;
 
 // ------------------------------------------------------------------
 // Errors
 // ------------------------------------------------------------------
 
+/// Errors returned by route validation functions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RelayRouteError {
+    /// Route slice is empty; at least one hop is required.
     EmptyRoute,
+    /// A peer_id appears more than once in the route (routing loop).
     LoopDetected { peer_id: String },
+    /// Route length exceeds the configured `max_hops` limit.
     TooManyHops { hops: usize, max_hops: usize },
+    /// An intermediate relay's peer_id was rejected by the trust policy.
     TrustPolicyRejected { peer_id: String },
+    /// No candidate route passed policy and loop checks.
     NoValidRoute,
 }
 
+/// Errors returned by `RelayForwarder::try_forward`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RelayForwardError {
     /// hop_index has reached hop_limit; message must be dropped.
@@ -24,6 +31,8 @@ pub enum RelayForwardError {
     DuplicateDetected,
     /// src_peer_id is denied by this node's trust policy.
     PolicyRejected { src_peer_id: [u8; 32] },
+    /// Replay-suppression table is at capacity; envelope dropped.
+    CapacityExceeded,
 }
 
 // ------------------------------------------------------------------
@@ -48,18 +57,24 @@ pub enum RelayEvent {
         session_id: u64,
         src_peer_id: [u8; 32],
     },
+    /// Envelope dropped because the replay-suppression table is full.
+    CapacityExceeded { session_id: u64 },
 }
 
 // ------------------------------------------------------------------
 // Trust policy
 // ------------------------------------------------------------------
 
+/// Trust policy applied at relay nodes to filter which originators may be forwarded.
 #[derive(Debug, Clone, Default)]
 pub struct RelayTrustPolicy {
     denied_relays: HashSet<String>,
+    /// Minimum trust level required to relay a frame.
+    pub min_trust_filter: TrustFilter,
 }
 
 impl RelayTrustPolicy {
+    /// Construct a policy that blocks the listed peer IDs; all others are allowed.
     pub fn deny_relays<I, S>(denied: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -67,9 +82,23 @@ impl RelayTrustPolicy {
     {
         Self {
             denied_relays: denied.into_iter().map(Into::into).collect(),
+            min_trust_filter: TrustFilter::default(),
         }
     }
 
+    /// Construct a policy with both a deny-list and a minimum trust level.
+    pub fn with_trust_filter<I, S>(denied: I, min_trust_filter: TrustFilter) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            denied_relays: denied.into_iter().map(Into::into).collect(),
+            min_trust_filter,
+        }
+    }
+
+    /// Return `true` if `relay_peer_id` is not on the deny list.
     pub fn allows(&self, relay_peer_id: &str) -> bool {
         !self.denied_relays.contains(relay_peer_id)
     }
@@ -79,6 +108,7 @@ impl RelayTrustPolicy {
 // Route validation (existing API, unchanged)
 // ------------------------------------------------------------------
 
+/// Validate that a route has no duplicate peer IDs and does not exceed `max_hops`.
 pub fn validate_route_no_loops(route: &[String], max_hops: usize) -> Result<(), RelayRouteError> {
     if route.is_empty() {
         return Err(RelayRouteError::EmptyRoute);
@@ -101,6 +131,7 @@ pub fn validate_route_no_loops(route: &[String], max_hops: usize) -> Result<(), 
     Ok(())
 }
 
+/// Validate a route for loops, hop count, and intermediate-relay trust policy.
 pub fn validate_route_with_policy(
     route: &[String],
     max_hops: usize,
@@ -123,6 +154,7 @@ pub fn validate_route_with_policy(
     Ok(())
 }
 
+/// Select the shortest valid route from `candidates` that passes loop and policy checks.
 pub fn select_best_valid_route(
     candidates: &[Vec<String>],
     max_hops: usize,
@@ -215,6 +247,13 @@ pub fn select_best_scored_route(
 // Relay forwarder
 // ------------------------------------------------------------------
 
+/// Hard cap on the replay-suppression table size.
+///
+/// A sender that rotates nonces faster than `ttl_ms` expires can otherwise
+/// grow the table without bound.  New envelopes are dropped when the cap is
+/// reached until TTL eviction frees space.
+const MAX_SEEN_ENTRIES: usize = 4096;
+
 /// Stateful relay forwarding node with duplicate suppression and hop limiting.
 ///
 /// Each received `WireEnvelope` is checked for:
@@ -234,6 +273,7 @@ pub struct RelayForwarder {
 }
 
 impl RelayForwarder {
+    /// Create a new forwarder with the given replay-suppression TTL and trust policy.
     pub fn new(ttl_ms: u64, policy: RelayTrustPolicy) -> Self {
         Self {
             policy,
@@ -266,7 +306,15 @@ impl RelayForwarder {
             });
         }
 
-        // 2. Duplicate suppression
+        // 2. Capacity guard — reject before inserting when the table is full.
+        if self.seen.len() >= MAX_SEEN_ENTRIES {
+            self.events.push(RelayEvent::CapacityExceeded {
+                session_id: envelope.session_id,
+            });
+            return Err(RelayForwardError::CapacityExceeded);
+        }
+
+        // 3. Duplicate suppression
         let key = (envelope.session_id, envelope.nonce);
         if self.seen.contains_key(&key) {
             self.events.push(RelayEvent::DuplicateSuppressed {
@@ -276,7 +324,7 @@ impl RelayForwarder {
             return Err(RelayForwardError::DuplicateDetected);
         }
 
-        // 3. Trust policy — check originating peer (src_peer_id)
+        // 4. Trust policy — check originating peer (src_peer_id)
         // Convert [u8;32] to a hex string for the policy lookup.
         let src_hex = hex_peer_id(&envelope.src_peer_id);
         if !self.policy.allows(&src_hex) {
@@ -459,6 +507,16 @@ mod tests {
             fwd.forward(&env, 1_000),
             Err(RelayForwardError::PolicyRejected { .. })
         ));
+    }
+
+    #[test]
+    fn forwarder_allows_non_denied_peer_when_deny_list_active() {
+        // deny 0xbb..bb; the test envelope src is 0xaa..aa — should forward normally
+        let denied_hex = hex_peer_id(&[0xbb; 32]);
+        let policy = RelayTrustPolicy::deny_relays([denied_hex]);
+        let mut fwd = RelayForwarder::new(60_000, policy);
+        let env = test_envelope(1, 3, 0); // src = 0xaa..aa
+        assert!(fwd.forward(&env, 1_000).is_ok());
     }
 
     #[test]

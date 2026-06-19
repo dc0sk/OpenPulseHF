@@ -87,4 +87,34 @@ pub trait AudioBackend: Send + Sync {
         device: Option<&str>,
         config: &AudioConfig,
     ) -> Result<Box<dyn AudioOutputStream>, AudioError>;
+
+    /// Open a stereo I/Q output stream (left = I, right = Q).
+    ///
+    /// Returns `None` when the backend does not support I/Q output; the caller
+    /// should fall back to [`open_output`](Self::open_output) in that case.
+    fn open_iq_output(
+        &self,
+        _device: Option<&str>,
+        _config: &AudioConfig,
+    ) -> Option<Result<Box<dyn AudioIqOutputStream>, AudioError>> {
+        None
+    }
+}
+
+// ── I/Q stream trait ──────────────────────────────────────────────────────────
+
+/// An open stereo I/Q playback stream (left = I, right = Q).
+///
+/// Used when the audio backend supports stereo output suitable for direct
+/// SDR upconversion.  Both sample slices passed to `write_iq` must have the
+/// same length.
+pub trait AudioIqOutputStream {
+    /// Write baseband I and Q samples.  Both slices must have the same length.
+    fn write_iq(&mut self, i: &[f32], q: &[f32]) -> Result<(), AudioError>;
+
+    /// Flush all buffered samples to the device.
+    fn flush(&mut self) -> Result<(), AudioError>;
+
+    /// Release underlying resources.
+    fn close(self: Box<Self>);
 }

@@ -1,0 +1,19 @@
+[rig]
+model = "yaesu-ft817"
+description = "Yaesu FT-817 binary CAT"
+baud = 4800
+data_bits = 8
+stop_bits = 2
+parity = "none"
+
+[commands.ptt_on]
+send = "00 00 00 00 08"
+response_bytes = 1
+
+[commands.ptt_off]
+send = "00 00 00 00 88"
+response_bytes = 1
+
+[commands.set_frequency]
+send = "{freq_bcd4_be} 01"
+response_bytes = 1

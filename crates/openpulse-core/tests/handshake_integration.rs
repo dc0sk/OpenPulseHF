@@ -1,5 +1,6 @@
 use ed25519_dalek::SigningKey;
 use openpulse_core::compression::CompressionAlgorithm;
+use openpulse_core::fec::FecMode;
 use openpulse_core::handshake::{
     verify_conack, verify_conreq, ConAck, ConReq, HandshakeError, InMemoryTrustStore,
 };
@@ -27,6 +28,7 @@ fn valid_conreq_accepted_trusted_peer() {
         vec![SigningMode::Normal],
         "sess-001",
         vec![],
+        vec![],
     )
     .unwrap();
 
@@ -45,6 +47,7 @@ fn valid_conreq_accepted_unknown_peer_permissive() {
         &make_seed(2),
         vec![SigningMode::Normal, SigningMode::Relaxed],
         "sess-002",
+        vec![],
         vec![],
     )
     .unwrap();
@@ -69,6 +72,7 @@ fn conreq_rejected_invalid_signature() {
         vec![SigningMode::Normal],
         "sess-003",
         vec![],
+        vec![],
     )
     .unwrap();
     req.signature[0] ^= 0xff; // corrupt
@@ -88,6 +92,7 @@ fn conreq_rejected_revoked_key() {
         &make_seed(1),
         vec![SigningMode::Normal],
         "sess-004",
+        vec![],
         vec![],
     )
     .unwrap();
@@ -109,6 +114,7 @@ fn conreq_rejected_no_mutual_mode_strict() {
         &make_seed(1),
         vec![SigningMode::Relaxed], // only offers Relaxed
         "sess-005",
+        vec![],
         vec![],
     )
     .unwrap();
@@ -134,6 +140,7 @@ fn valid_conack_accepted() {
         SigningMode::Normal,
         "sess-010",
         CompressionAlgorithm::None,
+        FecMode::None,
     )
     .unwrap();
 
@@ -143,6 +150,7 @@ fn valid_conack_accepted() {
     let decision = verify_conack(
         &ack,
         "sess-010",
+        &[],
         &[],
         &store,
         PolicyProfile::Balanced,
@@ -160,6 +168,7 @@ fn conack_rejected_session_id_mismatch() {
         SigningMode::Normal,
         "sess-010",
         CompressionAlgorithm::None,
+        FecMode::None,
     )
     .unwrap();
     let store = InMemoryTrustStore::new();
@@ -167,6 +176,7 @@ fn conack_rejected_session_id_mismatch() {
     let result = verify_conack(
         &ack,
         "sess-WRONG",
+        &[],
         &[],
         &store,
         PolicyProfile::Balanced,
@@ -186,6 +196,7 @@ fn conack_rejected_invalid_signature() {
         SigningMode::Normal,
         "sess-010",
         CompressionAlgorithm::None,
+        FecMode::None,
     )
     .unwrap();
     ack.signature[63] ^= 0x01; // corrupt last byte
@@ -194,6 +205,7 @@ fn conack_rejected_invalid_signature() {
     let result = verify_conack(
         &ack,
         "sess-010",
+        &[],
         &[],
         &store,
         PolicyProfile::Balanced,
@@ -215,6 +227,7 @@ fn full_handshake_round_trip() {
         vec![SigningMode::Normal, SigningMode::Paranoid],
         "sess-100",
         vec![],
+        vec![],
     )
     .unwrap();
 
@@ -231,6 +244,7 @@ fn full_handshake_round_trip() {
         req_decision.selected_mode,
         &req.session_id,
         CompressionAlgorithm::None,
+        FecMode::None,
     )
     .unwrap();
 
@@ -242,6 +256,7 @@ fn full_handshake_round_trip() {
         &ack,
         &req.session_id,
         &req.supported_compression,
+        &req.supported_fec_modes,
         &alice_store,
         PolicyProfile::Strict,
         SigningMode::Normal,
@@ -263,6 +278,7 @@ fn conreq_encode_decode_round_trip() {
         vec![SigningMode::Normal],
         "s1",
         vec![],
+        vec![],
     )
     .unwrap();
     let bytes = req.encode().expect("encode");
@@ -280,6 +296,7 @@ fn conack_encode_decode_round_trip() {
         SigningMode::Normal,
         "s1",
         CompressionAlgorithm::None,
+        FecMode::None,
     )
     .unwrap();
     let bytes = ack.encode().expect("encode");
@@ -297,9 +314,98 @@ fn conreq_decode_rejects_wrong_magic() {
         vec![SigningMode::Normal],
         "s1",
         vec![],
+        vec![],
     )
     .unwrap();
     let mut bytes = req.encode().expect("encode");
     bytes[0] = b'X'; // corrupt magic
     assert!(ConReq::decode(&bytes).is_err());
+}
+
+// ------------------------------------------------------------------
+// FecMode negotiation
+// ------------------------------------------------------------------
+
+#[test]
+fn conreq_carries_fec_modes_in_signature() {
+    let req = ConReq::create(
+        "W1AW",
+        &make_seed(20),
+        vec![SigningMode::Normal],
+        "sess-fec-1",
+        vec![],
+        vec![FecMode::Rs, FecMode::Concatenated],
+    )
+    .unwrap();
+
+    assert_eq!(
+        req.supported_fec_modes,
+        vec![FecMode::Rs, FecMode::Concatenated]
+    );
+
+    let store = InMemoryTrustStore::new();
+    verify_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Normal)
+        .expect("ConReq with FEC modes should verify");
+}
+
+#[test]
+fn negotiate_strongest_mutual_fec_mode() {
+    // Alice offers [Rs, Concatenated]; Bob accepts [RsInterleaved, Concatenated].
+    // Strongest mutual mode is Concatenated (strength 3).
+    let offered = [FecMode::Rs, FecMode::Concatenated];
+    let accepted = [FecMode::RsInterleaved, FecMode::Concatenated];
+    assert_eq!(
+        FecMode::negotiate(&offered, &accepted),
+        FecMode::Concatenated
+    );
+}
+
+#[test]
+fn fec_no_overlap_falls_back_to_none() {
+    // Alice offers [Rs]; Bob accepts [RsInterleaved] — no overlap.
+    let offered = [FecMode::Rs];
+    let accepted = [FecMode::RsInterleaved];
+    assert_eq!(FecMode::negotiate(&offered, &accepted), FecMode::None);
+}
+
+#[test]
+fn conack_rejected_when_fec_mode_not_offered() {
+    // Initiator advertises no FEC; responder selects Concatenated anyway.
+    let ack = ConAck::create(
+        "KD9XYZ",
+        &make_seed(30),
+        SigningMode::Normal,
+        "sess-fec-rej",
+        CompressionAlgorithm::None,
+        FecMode::Concatenated,
+    )
+    .unwrap();
+
+    let store = InMemoryTrustStore::new();
+    let result = verify_conack(
+        &ack,
+        "sess-fec-rej",
+        &[],
+        &[], // initiator offered no FEC modes
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+    );
+    assert!(
+        matches!(result, Err(HandshakeError::UnsupportedFecMode)),
+        "selecting an unoffered FEC mode must be rejected"
+    );
+}
+
+#[test]
+fn short_rs_negotiates_at_highest_strength() {
+    // Both peers offer [Rs, ShortRs]; negotiate() must select ShortRs (strength 4).
+    let offered = [FecMode::Rs, FecMode::ShortRs];
+    let accepted = [FecMode::Rs, FecMode::ShortRs, FecMode::RsInterleaved];
+    let selected = FecMode::negotiate(&offered, &accepted);
+    assert_eq!(
+        selected,
+        FecMode::ShortRs,
+        "ShortRs (strength 4) should win negotiation over Rs (strength 1)"
+    );
 }

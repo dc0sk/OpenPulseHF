@@ -1,7 +1,8 @@
 //! Gilbert-Elliott two-state Markov burst-error channel.
 
+use rand::Rng;
 use rand::SeedableRng;
-use rand_distr::{Distribution, Normal, Uniform};
+use rand_distr::StandardNormal;
 
 use crate::{ChannelError, ChannelModel, GilbertElliottConfig};
 
@@ -23,6 +24,16 @@ impl GilbertElliottChannel {
         if config.p_bg <= 0.0 || config.p_bg >= 1.0 {
             return Err(ChannelError::InvalidParameter(
                 "p_bg must be in (0, 1)".into(),
+            ));
+        }
+        if !config.snr_good_db.is_finite() {
+            return Err(ChannelError::InvalidParameter(
+                "snr_good_db must be finite".into(),
+            ));
+        }
+        if !config.snr_bad_db.is_finite() {
+            return Err(ChannelError::InvalidParameter(
+                "snr_bad_db must be finite".into(),
             ));
         }
         let rng = match config.seed {
@@ -50,14 +61,10 @@ impl ChannelModel for GilbertElliottChannel {
         let rms = if rms > 0.0 { rms } else { 1e-4 };
         let sigma_good = self.noise_sigma_for_snr(self.config.snr_good_db, rms);
         let sigma_bad = self.noise_sigma_for_snr(self.config.snr_bad_db, rms);
-        // Construct distributions once per block, not once per sample.
-        let dist_good = Normal::new(0.0f32, sigma_good).unwrap();
-        let dist_bad = Normal::new(0.0f32, sigma_bad).unwrap();
-        let uniform = Uniform::new(0.0f32, 1.0);
         input
             .iter()
             .map(|&s| {
-                let u = uniform.sample(&mut self.rng);
+                let u: f32 = self.rng.gen();
                 if self.in_bad {
                     if u < self.config.p_bg {
                         self.in_bad = false;
@@ -65,10 +72,10 @@ impl ChannelModel for GilbertElliottChannel {
                 } else if u < self.config.p_gb {
                     self.in_bad = true;
                 }
-                let n = if self.in_bad {
-                    dist_bad.sample(&mut self.rng)
+                let n: f32 = if self.in_bad {
+                    sigma_bad * self.rng.sample::<f32, _>(StandardNormal)
                 } else {
-                    dist_good.sample(&mut self.rng)
+                    sigma_good * self.rng.sample::<f32, _>(StandardNormal)
                 };
                 s + n
             })
@@ -78,12 +85,9 @@ impl ChannelModel for GilbertElliottChannel {
     fn generate_noise(&mut self, length: usize) -> Vec<f32> {
         let sigma_good = self.noise_sigma_for_snr(self.config.snr_good_db, 1.0);
         let sigma_bad = self.noise_sigma_for_snr(self.config.snr_bad_db, 1.0);
-        let dist_good = Normal::new(0.0f32, sigma_good).unwrap();
-        let dist_bad = Normal::new(0.0f32, sigma_bad).unwrap();
-        let uniform = Uniform::new(0.0f32, 1.0);
         (0..length)
             .map(|_| {
-                let u = uniform.sample(&mut self.rng);
+                let u: f32 = self.rng.gen();
                 if self.in_bad {
                     if u < self.config.p_bg {
                         self.in_bad = false;
@@ -92,9 +96,9 @@ impl ChannelModel for GilbertElliottChannel {
                     self.in_bad = true;
                 }
                 if self.in_bad {
-                    dist_bad.sample(&mut self.rng)
+                    sigma_bad * self.rng.sample::<f32, _>(StandardNormal)
                 } else {
-                    dist_good.sample(&mut self.rng)
+                    sigma_good * self.rng.sample::<f32, _>(StandardNormal)
                 }
             })
             .collect()

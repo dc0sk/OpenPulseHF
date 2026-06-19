@@ -13,6 +13,7 @@ pub mod gilbert_elliott;
 pub mod qrm;
 pub mod qrn;
 pub mod qsb;
+pub mod sro;
 pub mod watterson;
 
 // ── Error type ────────────────────────────────────────────────────────────────
@@ -293,6 +294,8 @@ pub enum ChannelModelConfig {
     Qsb(QsbConfig),
     Chirp(ChirpConfig),
     Composite(CompositeConfig),
+    /// Sample-rate offset (clock drift) between TX and RX, in ppm.
+    Sro(sro::SroConfig),
 }
 
 // ── Factory ───────────────────────────────────────────────────────────────────
@@ -346,6 +349,8 @@ pub fn build_channel(
         ChannelModelConfig::Composite(cfg) => {
             Ok(Box::new(composite::CompositeChannel::build(cfg, seed)?))
         }
+        // SRO is deterministic (no RNG); the seed parameter does not apply.
+        ChannelModelConfig::Sro(cfg) => Ok(Box::new(sro::SroChannel::new(cfg.clone())?)),
     }
 }
 

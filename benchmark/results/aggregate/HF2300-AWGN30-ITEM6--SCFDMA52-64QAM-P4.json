@@ -1,0 +1,12 @@
+{
+  "scenario_id": "HF2300-AWGN30-ITEM6",
+  "mode_under_test": "SCFDMA52-64QAM-P4",
+  "run_count": 50,
+  "success_rate": 1.0,
+  "median_goodput_bps": 2608.187134502924,
+  "p95_completion_time_ms": 684,
+  "mean_arq_efficiency": 1.0,
+  "median_spectral_efficiency_bphz": 1.133994406305619,
+  "mean_time_to_first_payload_ms": 684.0,
+  "recovery_success_rate": 1.0
+}

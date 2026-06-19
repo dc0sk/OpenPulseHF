@@ -15,29 +15,41 @@ path = "src/main.rs"
 default      = ["cpal-backend"]
 cpal-backend = ["openpulse-audio/cpal-backend"]
 serial       = ["openpulse-radio/serial"]
+generic-serial = ["openpulse-radio/generic-serial"]
 
 [dependencies]
-openpulse-core  = { workspace = true }
-openpulse-audio = { workspace = true }
-openpulse-modem = { workspace = true }
-openpulse-radio = { workspace = true }
+openpulse-core    = { workspace = true }
+openpulse-audio  = { workspace = true }
+openpulse-modem  = { workspace = true }
+openpulse-channel = { workspace = true }
+openpulse-radio  = { workspace = true }
+openpulse-config = { workspace = true }
+openpulse-daemon = { workspace = true }
+openpulse-qsy    = { workspace = true }
 bpsk-plugin     = { workspace = true }
 fsk4-plugin     = { workspace = true }
+ofdm-plugin     = { workspace = true }
 psk8-plugin     = { workspace = true }
+qam64-plugin    = { workspace = true }
 qpsk-plugin     = { workspace = true }
+pilot-plugin    = { workspace = true }
+scfdma-plugin   = { workspace = true }
 anyhow             = { workspace = true }
 clap               = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }
+tokio              = { workspace = true, features = ["sync"] }
 reqwest            = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 [dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.1"
 mockito = "1.6"
+tempfile = "3"
 pki-tooling = { path = "../../pki-tooling" }
+ed25519-dalek = "2.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres"] }
 axum = "0.8"

@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 
 use crate::compression::CompressionAlgorithm;
 use crate::error::ModemError;
+use crate::fec::FecMode;
 use crate::trust::{
     evaluate_handshake, CertificateSource, HandshakeDecision, PolicyProfile, PublicKeyTrustLevel,
     SigningMode, TrustError,
@@ -15,6 +16,7 @@ use crate::trust::{
 // Errors
 // ------------------------------------------------------------------
 
+/// Errors returned when creating or verifying a handshake frame.
 #[derive(Debug, thiserror::Error)]
 pub enum HandshakeError {
     #[error("invalid Ed25519 signature")]
@@ -27,6 +29,8 @@ pub enum HandshakeError {
     Encoding(String),
     #[error("responder selected a compression algorithm not offered by the initiator")]
     UnsupportedCompression,
+    #[error("responder selected a FEC mode not offered by the initiator")]
+    UnsupportedFecMode,
 }
 
 impl From<TrustError> for HandshakeError {
@@ -55,6 +59,7 @@ pub struct InMemoryTrustStore {
 }
 
 impl InMemoryTrustStore {
+    /// Create an empty trust store with no entries.
     pub fn new() -> Self {
         Self::default()
     }
@@ -105,6 +110,8 @@ struct ConReqBody {
     signing_modes: Vec<SigningMode>,
     session_id: String,
     supported_compression: Vec<CompressionAlgorithm>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    supported_fec_modes: Vec<FecMode>,
 }
 
 /// Connection request sent by the initiating station during Discovery.
@@ -120,6 +127,9 @@ pub struct ConReq {
     pub session_id: String,
     /// Compression algorithms the initiator supports (empty = none).
     pub supported_compression: Vec<CompressionAlgorithm>,
+    /// FEC modes the initiator supports (empty = none / raw).
+    #[serde(default)]
+    pub supported_fec_modes: Vec<FecMode>,
     /// Ed25519 signature over canonical JSON of the body fields (64 bytes).
     pub signature: Vec<u8>,
 }
@@ -134,6 +144,7 @@ impl ConReq {
         signing_modes: Vec<SigningMode>,
         session_id: &str,
         supported_compression: Vec<CompressionAlgorithm>,
+        supported_fec_modes: Vec<FecMode>,
     ) -> Result<Self, HandshakeError> {
         let signing_key = SigningKey::from_bytes(signing_key_seed);
         let verifying_key = signing_key.verifying_key();
@@ -144,6 +155,7 @@ impl ConReq {
             signing_modes: signing_modes.clone(),
             session_id: session_id.to_string(),
             supported_compression: supported_compression.clone(),
+            supported_fec_modes: supported_fec_modes.clone(),
         };
         let canonical =
             serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))?;
@@ -155,6 +167,7 @@ impl ConReq {
             signing_modes,
             session_id: session_id.to_string(),
             supported_compression,
+            supported_fec_modes,
             signature: sig.to_bytes().to_vec(),
         })
     }
@@ -166,10 +179,12 @@ impl ConReq {
             signing_modes: self.signing_modes.clone(),
             session_id: self.session_id.clone(),
             supported_compression: self.supported_compression.clone(),
+            supported_fec_modes: self.supported_fec_modes.clone(),
         };
         serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))
     }
 
+    /// Serialize to HSCQ wire frame: magic(4) + version(1) + length(4) + JSON.
     pub fn encode(&self) -> Result<Vec<u8>, ModemError> {
         let body = serde_json::to_vec(self)
             .map_err(|e| ModemError::Frame(format!("CONREQ encode failed: {e}")))?;
@@ -183,6 +198,7 @@ impl ConReq {
         Ok(out)
     }
 
+    /// Deserialize from a HSCQ wire frame.
     pub fn decode(bytes: &[u8]) -> Result<Self, ModemError> {
         let min = 9;
         if bytes.len() < min {
@@ -217,6 +233,12 @@ struct ConAckBody {
     selected_mode: SigningMode,
     session_id: String,
     selected_compression: CompressionAlgorithm,
+    #[serde(default, skip_serializing_if = "fec_mode_is_none")]
+    selected_fec_mode: FecMode,
+}
+
+fn fec_mode_is_none(m: &FecMode) -> bool {
+    *m == FecMode::None
 }
 
 /// Connection acknowledgment sent by the responder during Discovery.
@@ -233,6 +255,9 @@ pub struct ConAck {
     pub session_id: String,
     /// Compression algorithm selected for this session.
     pub selected_compression: CompressionAlgorithm,
+    /// FEC mode selected for this session.
+    #[serde(default)]
+    pub selected_fec_mode: FecMode,
     /// Ed25519 signature over canonical JSON of the body fields (64 bytes).
     pub signature: Vec<u8>,
 }
@@ -245,6 +270,7 @@ impl ConAck {
         selected_mode: SigningMode,
         session_id: &str,
         selected_compression: CompressionAlgorithm,
+        selected_fec_mode: FecMode,
     ) -> Result<Self, HandshakeError> {
         let signing_key = SigningKey::from_bytes(signing_key_seed);
         let verifying_key = signing_key.verifying_key();
@@ -255,6 +281,7 @@ impl ConAck {
             selected_mode,
             session_id: session_id.to_string(),
             selected_compression,
+            selected_fec_mode,
         };
         let canonical =
             serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))?;
@@ -266,6 +293,7 @@ impl ConAck {
             selected_mode,
             session_id: session_id.to_string(),
             selected_compression,
+            selected_fec_mode,
             signature: sig.to_bytes().to_vec(),
         })
     }
@@ -277,10 +305,12 @@ impl ConAck {
             selected_mode: self.selected_mode,
             session_id: self.session_id.clone(),
             selected_compression: self.selected_compression,
+            selected_fec_mode: self.selected_fec_mode,
         };
         serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))
     }
 
+    /// Serialize to HSAK wire frame: magic(4) + version(1) + length(4) + JSON.
     pub fn encode(&self) -> Result<Vec<u8>, ModemError> {
         let body = serde_json::to_vec(self)
             .map_err(|e| ModemError::Frame(format!("CONACK encode failed: {e}")))?;
@@ -294,6 +324,7 @@ impl ConAck {
         Ok(out)
     }
 
+    /// Deserialize from a HSAK wire frame.
     pub fn decode(bytes: &[u8]) -> Result<Self, ModemError> {
         let min = 9;
         if bytes.len() < min {
@@ -376,13 +407,15 @@ pub fn verify_conreq(
 ///
 /// `req_session_id` must match the session ID in the ConAck. `req_supported_compression`
 /// is the list advertised by the initiator; the responder's `selected_compression` must
-/// appear in that list (or be `None`, which is always allowed). Fails if the signature is
-/// invalid, the session ID does not match, compression is not mutually supported, or the
+/// appear in that list (or be `None`, which is always allowed). `req_supported_fec_modes`
+/// is similarly checked for `selected_fec_mode`. Fails if the signature is invalid, the
+/// session ID does not match, compression or FEC mode is not mutually supported, or the
 /// trust policy rejects the responder.
 pub fn verify_conack(
     ack: &ConAck,
     req_session_id: &str,
     req_supported_compression: &[CompressionAlgorithm],
+    req_supported_fec_modes: &[FecMode],
     trust_store: &dyn TrustStore,
     policy: PolicyProfile,
     local_min_mode: SigningMode,
@@ -398,6 +431,12 @@ pub fn verify_conack(
         && !req_supported_compression.contains(&ack.selected_compression)
     {
         return Err(HandshakeError::UnsupportedCompression);
+    }
+
+    if ack.selected_fec_mode != FecMode::None
+        && !req_supported_fec_modes.contains(&ack.selected_fec_mode)
+    {
+        return Err(HandshakeError::UnsupportedFecMode);
     }
 
     let canonical = ack.canonical_bytes()?;
@@ -437,6 +476,7 @@ pub(crate) fn sha256_bytes(data: &[u8]) -> [u8; 32] {
 mod tests {
     use super::*;
     use crate::compression::CompressionAlgorithm;
+    use crate::fec::FecMode;
 
     fn make_key(seed: u8) -> [u8; 32] {
         [seed; 32]
@@ -455,6 +495,7 @@ mod tests {
             vec![SigningMode::Normal],
             "session-abc",
             vec![],
+            vec![],
         )
         .unwrap();
         let encoded = req.encode().expect("encode");
@@ -472,6 +513,7 @@ mod tests {
             vec![SigningMode::Normal],
             "s1",
             vec![],
+            vec![],
         )
         .unwrap();
         let mut tampered = req.clone();
@@ -488,6 +530,7 @@ mod tests {
             SigningMode::Normal,
             "session-abc",
             CompressionAlgorithm::None,
+            FecMode::None,
         )
         .unwrap();
         let encoded = ack.encode().expect("encode");
@@ -503,6 +546,7 @@ mod tests {
             &make_key(1),
             vec![SigningMode::Normal],
             "s1",
+            vec![],
             vec![],
         )
         .unwrap();

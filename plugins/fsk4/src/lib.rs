@@ -22,7 +22,7 @@ pub mod demodulate;
 pub mod modulate;
 
 use openpulse_core::error::ModemError;
-use openpulse_core::plugin::{ModulationConfig, ModulationPlugin, PluginInfo};
+use openpulse_core::plugin::{FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo};
 
 /// Symbol rate for all FSK4 modes (baud).
 pub(crate) const BAUD: f32 = 100.0;
@@ -30,6 +30,18 @@ pub(crate) const BAUD: f32 = 100.0;
 // ── Fsk4Plugin ────────────────────────────────────────────────────────────────
 
 /// 4FSK ACK frame modulation plugin.
+///
+/// FSK4-ACK is the HPX control channel for ACK/NACK frames.  It intentionally
+/// provides only **hard-decision** demodulation — `demodulate_soft` is not
+/// overridden and therefore returns ±1.0 LLRs rather than genuine probability
+/// values.  This is acceptable because:
+///
+/// 1. The ACK channel always uses short-block FEC (`ShortFecCodec`) which is a
+///    hard-decision code.
+/// 2. FSK4-ACK is never used as a carrier for LDPC or turbo payloads.
+///
+/// `supports_soft_demod()` returns `false` so that `receive_with_fec_mode` can
+/// warn if this plugin is accidentally paired with a soft-FEC mode.
 pub struct Fsk4Plugin {
     info: PluginInfo,
 }
@@ -74,6 +86,19 @@ impl ModulationPlugin for Fsk4Plugin {
     ) -> Result<Vec<u8>, ModemError> {
         demodulate::fsk4_demodulate(samples, config)
     }
+
+    fn frame_geometry(&self, config: &ModulationConfig) -> Option<FrameGeometry> {
+        let n = (config.sample_rate as f32 / BAUD).round() as usize;
+        // FSK4-ACK has no preamble: a 5-byte AckFrame = 20 symbols.  The
+        // largest payload on this channel is an ACK + short-FEC overhead
+        // (≈ 40 bytes = 160 symbols); allow a full 64-byte bound + margin.
+        Some(FrameGeometry {
+            symbol_period_samples: n,
+            preamble_samples: n * 4,
+            min_frame_samples: n * 20,
+            max_frame_samples: n * 64 * 4 * 11 / 10,
+        })
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -88,6 +113,7 @@ mod tests {
             mode: "FSK4-ACK".to_string(),
             sample_rate: 8000,
             center_frequency: 1050.0,
+            ..ModulationConfig::default()
         }
     }
 

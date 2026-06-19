@@ -7,13 +7,15 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use openpulse_core::audio::{
-    AudioBackend, AudioConfig, AudioInputStream, AudioOutputStream, DeviceInfo,
+    AudioBackend, AudioConfig, AudioInputStream, AudioIqOutputStream, AudioOutputStream, DeviceInfo,
 };
 use openpulse_core::error::AudioError;
 
 // ── Shared sample buffer ──────────────────────────────────────────────────────
 
 type Buf = Arc<Mutex<VecDeque<f32>>>;
+type FrameQueue = Arc<Mutex<VecDeque<Vec<f32>>>>;
+type IqBuf = Arc<Mutex<Vec<(f32, f32)>>>;
 
 // ── LoopbackBackend ───────────────────────────────────────────────────────────
 
@@ -24,6 +26,8 @@ type Buf = Arc<Mutex<VecDeque<f32>>>;
 /// via [`LoopbackInputStream::read`].
 pub struct LoopbackBackend {
     buf: Buf,
+    frame_queue: FrameQueue,
+    iq_buf: IqBuf,
 }
 
 impl Default for LoopbackBackend {
@@ -37,17 +41,56 @@ impl LoopbackBackend {
     pub fn new() -> Self {
         Self {
             buf: Arc::new(Mutex::new(VecDeque::new())),
+            frame_queue: Arc::new(Mutex::new(VecDeque::new())),
+            iq_buf: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
-    /// Create a second [`LoopbackBackend`] that shares the same sample buffer.
+    /// Create a second [`LoopbackBackend`] that shares the same underlying buffer.
     ///
-    /// Audio written by one instance is immediately readable by the other,
+    /// Both instances read from and write to the same buffer — sharing is symmetric.
+    /// Samples written by either instance are immediately readable by either instance,
     /// enabling two-engine tests without real audio hardware.
     pub fn clone_shared(&self) -> Self {
         Self {
             buf: Arc::clone(&self.buf),
+            frame_queue: Arc::clone(&self.frame_queue),
+            iq_buf: Arc::clone(&self.iq_buf),
         }
+    }
+
+    /// Drain all samples currently sitting in the shared buffer.
+    ///
+    /// Used by [`ChannelSimHarness`] to intercept TX samples before the RX engine
+    /// reads them, so a channel model can be applied in between.
+    pub fn drain_samples(&self) -> Vec<f32> {
+        let mut guard = self.buf.lock().unwrap_or_else(|e| e.into_inner());
+        guard.drain(..).collect()
+    }
+
+    /// Inject samples into the shared buffer, making them available to the next `read()`.
+    ///
+    /// Used by [`ChannelSimHarness`] to deliver channel-processed samples to the RX engine.
+    pub fn fill_samples(&self, samples: &[f32]) {
+        let mut guard = self.buf.lock().unwrap_or_else(|e| e.into_inner());
+        guard.extend(samples.iter().copied());
+    }
+
+    /// Enqueue individual sample frames for sequential per-frame reads.
+    ///
+    /// Each frame pushed here will be returned by one `read()` call on the input
+    /// stream, in order.  Frames in the queue take priority over the flat `buf`.
+    /// Useful for multi-attempt receive tests where each attempt must see exactly
+    /// one frame's worth of samples.
+    pub fn push_frame(&self, samples: &[f32]) {
+        let mut guard = self.frame_queue.lock().unwrap_or_else(|e| e.into_inner());
+        guard.push_back(samples.to_vec());
+    }
+
+    /// Drain all I/Q pairs written via [`open_iq_output`](Self::open_iq_output).
+    pub fn drain_iq_samples(&self) -> Vec<(f32, f32)> {
+        let mut guard = self.iq_buf.lock().unwrap_or_else(|e| e.into_inner());
+        std::mem::take(&mut *guard)
     }
 }
 
@@ -73,6 +116,7 @@ impl AudioBackend for LoopbackBackend {
     ) -> Result<Box<dyn AudioInputStream>, AudioError> {
         Ok(Box::new(LoopbackInputStream {
             buf: Arc::clone(&self.buf),
+            frame_queue: Arc::clone(&self.frame_queue),
         }))
     }
 
@@ -85,6 +129,16 @@ impl AudioBackend for LoopbackBackend {
             buf: Arc::clone(&self.buf),
         }))
     }
+
+    fn open_iq_output(
+        &self,
+        _device: Option<&str>,
+        _config: &AudioConfig,
+    ) -> Option<Result<Box<dyn AudioIqOutputStream>, AudioError>> {
+        Some(Ok(Box::new(LoopbackIqOutputStream {
+            buf: Arc::clone(&self.iq_buf),
+        })))
+    }
 }
 
 // ── Loopback input stream ─────────────────────────────────────────────────────
@@ -92,11 +146,19 @@ impl AudioBackend for LoopbackBackend {
 /// Reads samples that were previously written to the loopback output.
 pub struct LoopbackInputStream {
     buf: Buf,
+    frame_queue: FrameQueue,
 }
 
 impl AudioInputStream for LoopbackInputStream {
     fn read(&mut self) -> Result<Vec<f32>, AudioError> {
-        let mut guard = self.buf.lock().expect("loopback buffer poisoned");
+        // If frames were queued via `push_frame`, pop one frame per read.
+        {
+            let mut q = self.frame_queue.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(frame) = q.pop_front() {
+                return Ok(frame);
+            }
+        }
+        let mut guard = self.buf.lock().unwrap_or_else(|e| e.into_inner());
         Ok(guard.drain(..).collect())
     }
 
@@ -112,8 +174,29 @@ pub struct LoopbackOutputStream {
 
 impl AudioOutputStream for LoopbackOutputStream {
     fn write(&mut self, samples: &[f32]) -> Result<(), AudioError> {
-        let mut guard = self.buf.lock().expect("loopback buffer poisoned");
+        let mut guard = self.buf.lock().unwrap_or_else(|e| e.into_inner());
         guard.extend(samples.iter().copied());
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), AudioError> {
+        Ok(())
+    }
+
+    fn close(self: Box<Self>) {}
+}
+
+// ── Loopback I/Q output stream ────────────────────────────────────────────────
+
+/// Collects I/Q pairs written via [`AudioIqOutputStream`] into an in-memory buffer.
+pub struct LoopbackIqOutputStream {
+    buf: IqBuf,
+}
+
+impl AudioIqOutputStream for LoopbackIqOutputStream {
+    fn write_iq(&mut self, i: &[f32], q: &[f32]) -> Result<(), AudioError> {
+        let mut guard = self.buf.lock().unwrap_or_else(|e| e.into_inner());
+        guard.extend(i.iter().zip(q.iter()).map(|(&iv, &qv)| (iv, qv)));
         Ok(())
     }
 
@@ -153,5 +236,28 @@ mod tests {
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].name, "loopback");
         assert!(devices[0].is_input && devices[0].is_output);
+    }
+
+    /// `push_frame` frames are returned one-per-read in order, taking priority
+    /// over samples placed via `fill_samples`.
+    #[test]
+    fn push_frame_returns_one_frame_per_read_in_order() {
+        let backend = LoopbackBackend::new();
+        let cfg = AudioConfig::default();
+
+        // Pre-fill the flat buffer — should not be returned until frame queue is drained.
+        backend.fill_samples(&[9.0, 9.0]);
+
+        backend.push_frame(&[1.0, 2.0]);
+        backend.push_frame(&[3.0, 4.0]);
+
+        let mut inp = backend.open_input(None, &cfg).unwrap();
+
+        // First read returns first queued frame.
+        assert_eq!(inp.read().unwrap(), vec![1.0, 2.0]);
+        // Second read returns second queued frame.
+        assert_eq!(inp.read().unwrap(), vec![3.0, 4.0]);
+        // Queue drained; next read returns the flat fill_samples data.
+        assert_eq!(inp.read().unwrap(), vec![9.0, 9.0]);
     }
 }

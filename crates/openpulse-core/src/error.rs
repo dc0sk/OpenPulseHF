@@ -1,5 +1,12 @@
 use thiserror::Error;
 
+/// Errors produced by the frame layer.
+#[derive(Debug, Error)]
+pub enum FrameError {
+    #[error("payload too large: {0} bytes (max 255)")]
+    PayloadTooLarge(usize),
+}
+
 /// Errors produced by the modem layer.
 #[derive(Debug, Error)]
 pub enum ModemError {
@@ -26,6 +33,9 @@ pub enum ModemError {
 
     #[error("channel busy: CSMA deferred transmission")]
     ChannelBusy,
+
+    #[error("ARQ failed: all {0} transmit attempts exhausted without acknowledgement")]
+    ArqMaxRetries(usize),
 }
 
 /// Errors produced by the plugin layer.

@@ -1,6 +1,10 @@
+use std::collections::HashMap;
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+/// State nodes in the HPX session state machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HpxState {
     Idle,
     Discovery,
@@ -12,7 +16,8 @@ pub enum HpxState {
     Failed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Events that drive `HpxState` transitions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HpxEvent {
     StartSession,
     LocalCancel,
@@ -31,6 +36,7 @@ pub enum HpxEvent {
     SignatureVerificationFailed,
 }
 
+/// Numeric reason codes embedded in `HpxTransition` for machine-readable diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum HpxReasonCode {
@@ -46,6 +52,7 @@ pub enum HpxReasonCode {
     Unclassified = 0xFF,
 }
 
+/// Audit record for a single state transition in an HPX session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HpxTransition {
     pub timestamp_ms: u64,
@@ -57,10 +64,12 @@ pub struct HpxTransition {
     pub session_id: Option<String>,
 }
 
+/// Errors returned by `HpxReactor::apply_event`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HpxStateError {
     InvalidTransition { state: HpxState, event: HpxEvent },
     TerminalState,
+    SessionNotFound(String),
 }
 
 impl fmt::Display for HpxStateError {
@@ -72,12 +81,16 @@ impl fmt::Display for HpxStateError {
             HpxStateError::TerminalState => {
                 write!(f, "HPX session is already in terminal failed state")
             }
+            HpxStateError::SessionNotFound(id) => {
+                write!(f, "HPX session not found: {id}")
+            }
         }
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct HpxSession {
+// ── Per-session state (owned by the reactor) ──────────────────────────────────
+
+struct SessionState {
     state: HpxState,
     session_id: Option<String>,
     recovery_attempts: u8,
@@ -85,17 +98,8 @@ pub struct HpxSession {
     transitions: Vec<HpxTransition>,
 }
 
-impl Default for HpxSession {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl HpxSession {
-    pub const MAX_RECOVERY_ATTEMPTS: u8 = 4;
-    pub const MAX_ARQ_RETRIES_PER_CHUNK: u8 = 6;
-
-    pub fn new() -> Self {
+impl SessionState {
+    fn new() -> Self {
         Self {
             state: HpxState::Idle,
             session_id: None,
@@ -104,58 +108,263 @@ impl HpxSession {
             transitions: Vec::new(),
         }
     }
+}
 
-    pub fn state(&self) -> HpxState {
-        self.state
+// ── Per-state handler functions ───────────────────────────────────────────────
+//
+// Each handler takes the event and returns the target (state, reason_code,
+// reason_string) or Err(HpxStateError) if the event is not valid in that state.
+// No session state is mutated inside a handler; all mutations happen in
+// `HpxReactor::dispatch` after the handler returns.
+
+type HandlerResult = Result<(HpxState, HpxReasonCode, String), HpxStateError>;
+
+fn ok(to: HpxState, msg: &str) -> HandlerResult {
+    Ok((to, HpxReasonCode::Success, msg.to_string()))
+}
+
+fn fail_inv(state: HpxState, event: HpxEvent) -> HandlerResult {
+    Err(HpxStateError::InvalidTransition { state, event })
+}
+
+fn handle_idle(event: HpxEvent) -> HandlerResult {
+    match event {
+        HpxEvent::StartSession => ok(HpxState::Discovery, "Session started"),
+        _ => fail_inv(HpxState::Idle, event),
+    }
+}
+
+fn handle_discovery(event: HpxEvent) -> HandlerResult {
+    match event {
+        HpxEvent::DiscoveryOk => ok(HpxState::Training, "Peer discovered and verified"),
+        HpxEvent::DiscoveryTimeout => Ok((
+            HpxState::Failed,
+            HpxReasonCode::Timeout,
+            "Discovery timeout".to_string(),
+        )),
+        HpxEvent::SignatureVerificationFailed => Ok((
+            HpxState::Failed,
+            HpxReasonCode::SignatureFailure,
+            "Discovery signature verification failed".to_string(),
+        )),
+        HpxEvent::LocalCancel => ok(HpxState::Teardown, "Local cancel during discovery"),
+        _ => fail_inv(HpxState::Discovery, event),
+    }
+}
+
+fn handle_training(event: HpxEvent) -> HandlerResult {
+    match event {
+        HpxEvent::TrainingOk => ok(HpxState::ActiveTransfer, "Training complete"),
+        HpxEvent::RelayRouteFound => ok(HpxState::RelayActive, "Relay route activated"),
+        HpxEvent::TrainingTimeout => Ok((
+            HpxState::Failed,
+            HpxReasonCode::Timeout,
+            "Training timeout".to_string(),
+        )),
+        HpxEvent::SignatureVerificationFailed => Ok((
+            HpxState::Failed,
+            HpxReasonCode::SignatureFailure,
+            "Training authentication failed".to_string(),
+        )),
+        HpxEvent::LocalCancel => ok(HpxState::Teardown, "Local cancel during training"),
+        _ => fail_inv(HpxState::Training, event),
+    }
+}
+
+fn handle_active_transfer(event: HpxEvent) -> HandlerResult {
+    match event {
+        HpxEvent::TransferComplete => ok(HpxState::Teardown, "Transfer complete"),
+        HpxEvent::TransferError => Ok((
+            HpxState::Recovery,
+            HpxReasonCode::RetriesExhausted,
+            "Transfer error, entering recovery".to_string(),
+        )),
+        HpxEvent::QualityDrop => Ok((
+            HpxState::Recovery,
+            HpxReasonCode::QualityDrop,
+            "Quality drop, entering recovery".to_string(),
+        )),
+        HpxEvent::RelayRouteFound => ok(HpxState::RelayActive, "Relay route activated"),
+        HpxEvent::SignatureVerificationFailed => Ok((
+            HpxState::Recovery,
+            HpxReasonCode::SignatureFailure,
+            "Frame authentication failed".to_string(),
+        )),
+        HpxEvent::LocalCancel => ok(HpxState::Teardown, "Local cancel during transfer"),
+        HpxEvent::RemoteTeardown => ok(HpxState::Teardown, "Remote teardown requested"),
+        _ => fail_inv(HpxState::ActiveTransfer, event),
+    }
+}
+
+fn handle_recovery(event: HpxEvent) -> HandlerResult {
+    match event {
+        HpxEvent::RecoveryOk => ok(HpxState::ActiveTransfer, "Recovery complete"),
+        HpxEvent::RecoveryTimeout => Ok((
+            HpxState::Failed,
+            HpxReasonCode::RecoveryTimeout,
+            "Recovery timeout".to_string(),
+        )),
+        HpxEvent::RelayRouteFound => ok(HpxState::RelayActive, "Relay route activated"),
+        HpxEvent::LocalCancel => ok(HpxState::Teardown, "Local cancel during recovery"),
+        _ => fail_inv(HpxState::Recovery, event),
+    }
+}
+
+fn handle_relay_active(event: HpxEvent) -> HandlerResult {
+    match event {
+        HpxEvent::TransferComplete => ok(HpxState::Teardown, "Relay transfer complete"),
+        HpxEvent::TrainingOk => ok(
+            HpxState::ActiveTransfer,
+            "Relay path confirmed, entering active transfer",
+        ),
+        HpxEvent::TransferError => Ok((
+            HpxState::Recovery,
+            HpxReasonCode::RetriesExhausted,
+            "Relay transfer error".to_string(),
+        )),
+        HpxEvent::RelayPolicyFailed => Ok((
+            HpxState::Failed,
+            HpxReasonCode::RelayPolicyFailed,
+            "Relay policy failed".to_string(),
+        )),
+        HpxEvent::LocalCancel => ok(HpxState::Teardown, "Local cancel during relay transfer"),
+        _ => fail_inv(HpxState::RelayActive, event),
+    }
+}
+
+fn handle_teardown(event: HpxEvent) -> HandlerResult {
+    match event {
+        HpxEvent::TransferComplete => ok(HpxState::Idle, "Teardown succeeded"),
+        HpxEvent::TransferError => Ok((
+            HpxState::Failed,
+            HpxReasonCode::ManifestVerificationFailed,
+            "Teardown failed".to_string(),
+        )),
+        _ => fail_inv(HpxState::Teardown, event),
+    }
+}
+
+// ── HpxReactor ────────────────────────────────────────────────────────────────
+
+/// Event-driven reactor managing one or more concurrent HPX sessions.
+///
+/// Each session is identified by a string key returned from [`HpxReactor::create_session`].
+/// Events are routed to per-state handler functions; no state mutation happens
+/// outside [`HpxReactor::dispatch`].
+pub struct HpxReactor {
+    sessions: HashMap<String, SessionState>,
+    next_id: u64,
+}
+
+impl Default for HpxReactor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HpxReactor {
+    /// Maximum consecutive recovery attempts before transitioning to Failed.
+    pub const MAX_RECOVERY_ATTEMPTS: u8 = 4;
+    /// Maximum ARQ retries per chunk before treating the chunk as unrecoverable.
+    pub const MAX_ARQ_RETRIES_PER_CHUNK: u8 = 6;
+
+    /// Create an empty reactor with no sessions.
+    pub fn new() -> Self {
+        Self {
+            sessions: HashMap::new(),
+            next_id: 0,
+        }
     }
 
-    pub fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
+    /// Allocate a new session and return its key.
+    pub fn create_session(&mut self) -> String {
+        let key = format!("s{:08x}", self.next_id);
+        self.next_id += 1;
+        self.sessions.insert(key.clone(), SessionState::new());
+        key
     }
 
-    pub fn transitions(&self) -> &[HpxTransition] {
-        &self.transitions
+    /// Return the current state of a session.
+    pub fn session_state(&self, key: &str) -> Option<HpxState> {
+        self.sessions.get(key).map(|s| s.state)
     }
 
-    pub fn record_arq_retry(&mut self) -> Result<(), HpxStateError> {
-        self.arq_retries_for_chunk = self.arq_retries_for_chunk.saturating_add(1);
-        if self.arq_retries_for_chunk > Self::MAX_ARQ_RETRIES_PER_CHUNK {
+    /// Return the wire-level session identifier assigned at `StartSession`.
+    pub fn session_wire_id(&self, key: &str) -> Option<&str> {
+        self.sessions.get(key)?.session_id.as_deref()
+    }
+
+    /// Return all recorded transitions for a session, in order.
+    pub fn transitions(&self, key: &str) -> Option<&[HpxTransition]> {
+        self.sessions.get(key).map(|s| s.transitions.as_slice())
+    }
+
+    /// Record an ARQ retry for a session.  Returns `Err` when retries are exhausted.
+    pub fn record_arq_retry(&mut self, key: &str) -> Result<(), HpxStateError> {
+        let s = self
+            .sessions
+            .get_mut(key)
+            .ok_or_else(|| HpxStateError::SessionNotFound(key.to_string()))?;
+        s.arq_retries_for_chunk = s.arq_retries_for_chunk.saturating_add(1);
+        if s.arq_retries_for_chunk > Self::MAX_ARQ_RETRIES_PER_CHUNK {
             return Err(HpxStateError::InvalidTransition {
-                state: self.state,
+                state: s.state,
                 event: HpxEvent::TransferError,
             });
         }
         Ok(())
     }
 
-    pub fn reset_arq_retry_counter(&mut self) {
-        self.arq_retries_for_chunk = 0;
+    /// Reset the ARQ retry counter for a session.
+    pub fn reset_arq_retry_counter(&mut self, key: &str) {
+        if let Some(s) = self.sessions.get_mut(key) {
+            s.arq_retries_for_chunk = 0;
+        }
     }
 
-    pub fn apply_event(
+    /// Dispatch `event` to the handler for the session's current state.
+    ///
+    /// All state mutation is performed here after the handler returns; handler
+    /// functions are pure (no side effects).
+    pub fn dispatch(
         &mut self,
+        key: &str,
         event: HpxEvent,
         timestamp_ms: u64,
     ) -> Result<HpxTransition, HpxStateError> {
-        if self.state == HpxState::Failed {
+        let s = self
+            .sessions
+            .get_mut(key)
+            .ok_or_else(|| HpxStateError::SessionNotFound(key.to_string()))?;
+
+        if s.state == HpxState::Failed {
             return Err(HpxStateError::TerminalState);
         }
 
-        let from_state = self.state;
-        let (to_state, reason_code, reason_string) = self.resolve_transition(event)?;
+        let from_state = s.state;
 
-        if matches!(event, HpxEvent::StartSession) && self.session_id.is_none() {
-            self.session_id = Some(format!(
-                "{:016x}-{:04x}",
-                timestamp_ms,
-                self.transitions.len()
-            ));
+        // Route to the per-state handler.
+        let (to_state, reason_code, reason_string) = match from_state {
+            HpxState::Idle => handle_idle(event),
+            HpxState::Discovery => handle_discovery(event),
+            HpxState::Training => handle_training(event),
+            HpxState::ActiveTransfer => handle_active_transfer(event),
+            HpxState::Recovery => handle_recovery(event),
+            HpxState::RelayActive => handle_relay_active(event),
+            HpxState::Teardown => handle_teardown(event),
+            HpxState::Failed => return Err(HpxStateError::TerminalState),
+        }?;
+
+        // ── Post-handler state bookkeeping ────────────────────────────────────
+
+        if matches!(event, HpxEvent::StartSession) && s.session_id.is_none() {
+            s.session_id = Some(format!("{:016x}-{:04x}", timestamp_ms, s.transitions.len()));
         }
 
         if to_state == HpxState::Recovery && from_state != HpxState::Recovery {
-            self.recovery_attempts = self.recovery_attempts.saturating_add(1);
-            if self.recovery_attempts > Self::MAX_RECOVERY_ATTEMPTS {
-                self.state = HpxState::Failed;
+            s.recovery_attempts = s.recovery_attempts.saturating_add(1);
+            if s.recovery_attempts > Self::MAX_RECOVERY_ATTEMPTS {
+                s.state = HpxState::Failed;
                 let transition = HpxTransition {
                     timestamp_ms,
                     from_state,
@@ -163,24 +372,24 @@ impl HpxSession {
                     event,
                     reason_code: HpxReasonCode::RecoveryAttemptsExhausted,
                     reason_string: "Recovery attempts exhausted".to_string(),
-                    session_id: self.session_id.clone(),
+                    session_id: s.session_id.clone(),
                 };
-                self.transitions.push(transition.clone());
+                s.transitions.push(transition.clone());
                 return Ok(transition);
             }
         }
 
         if to_state == HpxState::ActiveTransfer {
-            self.reset_arq_retry_counter();
+            s.arq_retries_for_chunk = 0;
         }
 
         if to_state == HpxState::Idle {
-            self.session_id = None;
-            self.recovery_attempts = 0;
-            self.reset_arq_retry_counter();
+            s.session_id = None;
+            s.recovery_attempts = 0;
+            s.arq_retries_for_chunk = 0;
         }
 
-        self.state = to_state;
+        s.state = to_state;
         let transition = HpxTransition {
             timestamp_ms,
             from_state,
@@ -188,175 +397,114 @@ impl HpxSession {
             event,
             reason_code,
             reason_string,
-            session_id: self.session_id.clone(),
+            session_id: s.session_id.clone(),
         };
-        self.transitions.push(transition.clone());
+        s.transitions.push(transition.clone());
         Ok(transition)
     }
+}
 
-    fn resolve_transition(
-        &self,
-        event: HpxEvent,
-    ) -> Result<(HpxState, HpxReasonCode, String), HpxStateError> {
-        let result = match (self.state, event) {
-            (HpxState::Idle, HpxEvent::StartSession) => (
-                HpxState::Discovery,
-                HpxReasonCode::Success,
-                "Session started".to_string(),
-            ),
+// ── HpxSession (backward-compat wrapper over HpxReactor) ─────────────────────
 
-            (HpxState::Discovery, HpxEvent::DiscoveryOk) => (
-                HpxState::Training,
-                HpxReasonCode::Success,
-                "Peer discovered and verified".to_string(),
-            ),
-            (HpxState::Discovery, HpxEvent::DiscoveryTimeout) => (
-                HpxState::Failed,
-                HpxReasonCode::Timeout,
-                "Discovery timeout".to_string(),
-            ),
-            (HpxState::Discovery, HpxEvent::SignatureVerificationFailed) => (
-                HpxState::Failed,
-                HpxReasonCode::SignatureFailure,
-                "Discovery signature verification failed".to_string(),
-            ),
-            (HpxState::Discovery, HpxEvent::LocalCancel) => (
-                HpxState::Teardown,
-                HpxReasonCode::Success,
-                "Local cancel during discovery".to_string(),
-            ),
+/// Single-session wrapper over [`HpxReactor`] with the original `HpxSession` API.
+///
+/// Maintains full backward compatibility: all callers that held an `HpxSession`
+/// continue to work without change.  Internally all state lives in the reactor.
+#[derive(Debug, Clone)]
+pub struct HpxSession {
+    reactor: HpxReactor,
+    key: String,
+}
 
-            (HpxState::Training, HpxEvent::TrainingOk) => (
-                HpxState::ActiveTransfer,
-                HpxReasonCode::Success,
-                "Training complete".to_string(),
-            ),
-            (HpxState::Training, HpxEvent::RelayRouteFound) => (
-                HpxState::RelayActive,
-                HpxReasonCode::Success,
-                "Relay route activated".to_string(),
-            ),
-            (HpxState::Training, HpxEvent::TrainingTimeout) => (
-                HpxState::Failed,
-                HpxReasonCode::Timeout,
-                "Training timeout".to_string(),
-            ),
-            (HpxState::Training, HpxEvent::SignatureVerificationFailed) => (
-                HpxState::Failed,
-                HpxReasonCode::SignatureFailure,
-                "Training authentication failed".to_string(),
-            ),
-            (HpxState::Training, HpxEvent::LocalCancel) => (
-                HpxState::Teardown,
-                HpxReasonCode::Success,
-                "Local cancel during training".to_string(),
-            ),
-
-            (HpxState::ActiveTransfer, HpxEvent::TransferComplete) => (
-                HpxState::Teardown,
-                HpxReasonCode::Success,
-                "Transfer complete".to_string(),
-            ),
-            (HpxState::ActiveTransfer, HpxEvent::TransferError) => (
-                HpxState::Recovery,
-                HpxReasonCode::RetriesExhausted,
-                "Transfer error, entering recovery".to_string(),
-            ),
-            (HpxState::ActiveTransfer, HpxEvent::QualityDrop) => (
-                HpxState::Recovery,
-                HpxReasonCode::QualityDrop,
-                "Quality drop, entering recovery".to_string(),
-            ),
-            (HpxState::ActiveTransfer, HpxEvent::RelayRouteFound) => (
-                HpxState::RelayActive,
-                HpxReasonCode::Success,
-                "Relay route activated".to_string(),
-            ),
-            (HpxState::ActiveTransfer, HpxEvent::SignatureVerificationFailed) => (
-                HpxState::Recovery,
-                HpxReasonCode::SignatureFailure,
-                "Frame authentication failed".to_string(),
-            ),
-            (HpxState::ActiveTransfer, HpxEvent::LocalCancel) => (
-                HpxState::Teardown,
-                HpxReasonCode::Success,
-                "Local cancel during transfer".to_string(),
-            ),
-            (HpxState::ActiveTransfer, HpxEvent::RemoteTeardown) => (
-                HpxState::Teardown,
-                HpxReasonCode::Success,
-                "Remote teardown requested".to_string(),
-            ),
-
-            (HpxState::Recovery, HpxEvent::RecoveryOk) => (
-                HpxState::ActiveTransfer,
-                HpxReasonCode::Success,
-                "Recovery complete".to_string(),
-            ),
-            (HpxState::Recovery, HpxEvent::RecoveryTimeout) => (
-                HpxState::Failed,
-                HpxReasonCode::RecoveryTimeout,
-                "Recovery timeout".to_string(),
-            ),
-            (HpxState::Recovery, HpxEvent::RelayRouteFound) => (
-                HpxState::RelayActive,
-                HpxReasonCode::Success,
-                "Relay route activated".to_string(),
-            ),
-            (HpxState::Recovery, HpxEvent::LocalCancel) => (
-                HpxState::Teardown,
-                HpxReasonCode::Success,
-                "Local cancel during recovery".to_string(),
-            ),
-
-            (HpxState::RelayActive, HpxEvent::TransferComplete) => (
-                HpxState::Teardown,
-                HpxReasonCode::Success,
-                "Relay transfer complete".to_string(),
-            ),
-            (HpxState::RelayActive, HpxEvent::TrainingOk) => (
-                HpxState::ActiveTransfer,
-                HpxReasonCode::Success,
-                "Relay path confirmed, entering active transfer".to_string(),
-            ),
-            (HpxState::RelayActive, HpxEvent::TransferError) => (
-                HpxState::Recovery,
-                HpxReasonCode::RetriesExhausted,
-                "Relay transfer error".to_string(),
-            ),
-            (HpxState::RelayActive, HpxEvent::RelayPolicyFailed) => (
-                HpxState::Failed,
-                HpxReasonCode::RelayPolicyFailed,
-                "Relay policy failed".to_string(),
-            ),
-            (HpxState::RelayActive, HpxEvent::LocalCancel) => (
-                HpxState::Teardown,
-                HpxReasonCode::Success,
-                "Local cancel during relay transfer".to_string(),
-            ),
-
-            (HpxState::Teardown, HpxEvent::TransferComplete) => (
-                HpxState::Idle,
-                HpxReasonCode::Success,
-                "Teardown succeeded".to_string(),
-            ),
-            (HpxState::Teardown, HpxEvent::TransferError) => (
-                HpxState::Failed,
-                HpxReasonCode::ManifestVerificationFailed,
-                "Teardown failed".to_string(),
-            ),
-
-            _ => {
-                return Err(HpxStateError::InvalidTransition {
-                    state: self.state,
-                    event,
-                });
-            }
-        };
-
-        Ok(result)
+impl Default for HpxSession {
+    fn default() -> Self {
+        Self::new()
     }
 }
+
+impl fmt::Debug for HpxReactor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HpxReactor")
+            .field("session_count", &self.sessions.len())
+            .finish()
+    }
+}
+
+impl Clone for HpxReactor {
+    fn clone(&self) -> Self {
+        // Clone the sessions map; each SessionState is re-created from its fields.
+        let sessions = self
+            .sessions
+            .iter()
+            .map(|(k, v)| {
+                let s = SessionState {
+                    state: v.state,
+                    session_id: v.session_id.clone(),
+                    recovery_attempts: v.recovery_attempts,
+                    arq_retries_for_chunk: v.arq_retries_for_chunk,
+                    transitions: v.transitions.clone(),
+                };
+                (k.clone(), s)
+            })
+            .collect();
+        Self {
+            sessions,
+            next_id: self.next_id,
+        }
+    }
+}
+
+impl HpxSession {
+    /// Re-export of `HpxReactor::MAX_RECOVERY_ATTEMPTS` for convenience.
+    pub const MAX_RECOVERY_ATTEMPTS: u8 = HpxReactor::MAX_RECOVERY_ATTEMPTS;
+    /// Re-export of `HpxReactor::MAX_ARQ_RETRIES_PER_CHUNK` for convenience.
+    pub const MAX_ARQ_RETRIES_PER_CHUNK: u8 = HpxReactor::MAX_ARQ_RETRIES_PER_CHUNK;
+
+    /// Create a new single-session facade backed by a fresh `HpxReactor`.
+    pub fn new() -> Self {
+        let mut reactor = HpxReactor::new();
+        let key = reactor.create_session();
+        Self { reactor, key }
+    }
+
+    /// Return the current HPX state of this session.
+    pub fn state(&self) -> HpxState {
+        self.reactor
+            .session_state(&self.key)
+            .unwrap_or(HpxState::Idle)
+    }
+
+    /// Return the wire-level session ID assigned at `StartSession`, if set.
+    pub fn session_id(&self) -> Option<&str> {
+        self.reactor.session_wire_id(&self.key)
+    }
+
+    /// Return the ordered list of state transitions recorded for this session.
+    pub fn transitions(&self) -> &[HpxTransition] {
+        self.reactor.transitions(&self.key).unwrap_or(&[])
+    }
+
+    /// Increment the ARQ retry counter; returns `Err` when the limit is exceeded.
+    pub fn record_arq_retry(&mut self) -> Result<(), HpxStateError> {
+        self.reactor.record_arq_retry(&self.key)
+    }
+
+    /// Reset the per-chunk ARQ retry counter after a successful chunk delivery.
+    pub fn reset_arq_retry_counter(&mut self) {
+        self.reactor.reset_arq_retry_counter(&self.key);
+    }
+
+    /// Drive the state machine with `event` at `timestamp_ms`.
+    pub fn apply_event(
+        &mut self,
+        event: HpxEvent,
+        timestamp_ms: u64,
+    ) -> Result<HpxTransition, HpxStateError> {
+        self.reactor.dispatch(&self.key, event, timestamp_ms)
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -466,5 +614,46 @@ mod tests {
         assert_eq!(s.state(), HpxState::RelayActive);
         s.apply_event(HpxEvent::TransferError, 4).unwrap();
         assert_eq!(s.state(), HpxState::Recovery);
+    }
+
+    // ── Reactor-specific tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn reactor_two_independent_sessions() {
+        let mut reactor = HpxReactor::new();
+        let s1 = reactor.create_session();
+        let s2 = reactor.create_session();
+
+        // Advance s1 to ActiveTransfer.
+        reactor.dispatch(&s1, HpxEvent::StartSession, 1).unwrap();
+        reactor.dispatch(&s1, HpxEvent::DiscoveryOk, 2).unwrap();
+        reactor.dispatch(&s1, HpxEvent::TrainingOk, 3).unwrap();
+
+        // s2 still Idle.
+        assert_eq!(reactor.session_state(&s1), Some(HpxState::ActiveTransfer));
+        assert_eq!(reactor.session_state(&s2), Some(HpxState::Idle));
+    }
+
+    #[test]
+    fn reactor_unknown_session_returns_error() {
+        let mut reactor = HpxReactor::new();
+        let err = reactor
+            .dispatch("nope", HpxEvent::StartSession, 0)
+            .unwrap_err();
+        assert!(matches!(err, HpxStateError::SessionNotFound(_)));
+    }
+
+    #[test]
+    fn reactor_terminal_state_rejects_events() {
+        let mut reactor = HpxReactor::new();
+        let key = reactor.create_session();
+        reactor.dispatch(&key, HpxEvent::StartSession, 1).unwrap();
+        reactor
+            .dispatch(&key, HpxEvent::DiscoveryTimeout, 2)
+            .unwrap(); // → Failed
+        let err = reactor
+            .dispatch(&key, HpxEvent::StartSession, 3)
+            .unwrap_err();
+        assert_eq!(err, HpxStateError::TerminalState);
     }
 }

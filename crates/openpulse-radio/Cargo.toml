@@ -5,11 +5,13 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "PTT controller trait and backends for OpenPulseHF (serial RTS/DTR, VOX, rigctld)"
+description = "PTT controller trait and backends for OpenPulseHF (serial RTS/DTR, VOX, rigctld, generic serial CAT)"
 
 [dependencies]
 thiserror.workspace = true
 tracing.workspace = true
+serde.workspace = true
+toml = { version = "0.8", default-features = false, features = ["parse"] }
 
 [target.'cfg(unix)'.dependencies]
 serialport = { version = "4.7", optional = true }
@@ -17,3 +19,4 @@ serialport = { version = "4.7", optional = true }
 [features]
 default = []
 serial = ["dep:serialport"]
+generic-serial = ["serial"]

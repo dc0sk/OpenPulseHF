@@ -1,0 +1,6 @@
+BEGIN;
+
+ALTER TABLE trust_bundles
+    ADD COLUMN IF NOT EXISTS service_pubkey TEXT NOT NULL DEFAULT '';
+
+COMMIT;

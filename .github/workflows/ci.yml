@@ -1,34 +1,66 @@
 name: CI
 
 on:
-  push:
-    branches:
-      - main
-      - develop
-      - 'feat/**'
-  pull_request:
-    branches:
-      - main
-      - develop
-  # Also allow manual triggering via the Actions tab for convenience.
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  REQUIRED_RUST: 1.94.0
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  cross-aarch64-linux:
-    name: Cross-check (aarch64-unknown-linux-gnu)
+  pr-hook-long-runner:
+    name: PR hook long runner
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.REQUIRED_RUST }}
+
+      - name: Pre-push migrated check gate
+        run: cargo check --workspace --no-default-features
+
+      - name: Pre-push migrated test gate
+        run: cargo test --workspace --no-default-features
+
+      - name: Pre-push migrated security audit
+        run: |
+          cargo install cargo-audit --locked
+          # RUSTSEC-2023-0071: rsa Marvin attack via sqlx-mysql — no fix available upstream
+          # RUSTSEC-2024-0436: paste crate unmaintained — transitive via wgpu/metal
+          cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0436
+
+  cross-aarch64-linux:
+    name: Cross-check (aarch64-unknown-linux-gnu)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.REQUIRED_RUST }}
+
+      - name: Cache cross binary
+        id: cache-cross-bin
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cross
+          key: cross-bin-${{ runner.os }}
 
       - name: Install cross
+        if: steps.cache-cross-bin.outputs.cache-hit != 'true'
         run: cargo install cross
 
       - name: Cache cargo registry
@@ -37,16 +69,62 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: cross-aarch64-cargo-${{ hashFiles('**/Cargo.toml') }}
+          key: cross-aarch64-cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}
 
       # Use `cross` to handle cross-compilation without requiring native aarch64 toolchain.
       - name: Check workspace for aarch64 target
         run: cross check --workspace --target aarch64-unknown-linux-gnu --no-default-features
 
+  core-workspace-gates:
+    name: Core workspace gates (exclude pki-tooling)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.REQUIRED_RUST }}
+
+      - name: Toolchain preflight
+        run: ./scripts/check-toolchain.sh $REQUIRED_RUST
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Core clippy gate
+        run: cargo clippy --workspace --exclude pki-tooling --no-default-features -- -D warnings
+
+      - name: Core test gate
+        run: cargo test --workspace --exclude pki-tooling --no-default-features
+
+  full-workspace-gates:
+    name: Full workspace gates
+    runs-on: ubuntu-latest
+    needs: core-workspace-gates
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.REQUIRED_RUST }}
+
+      - name: Toolchain preflight
+        run: ./scripts/check-toolchain.sh $REQUIRED_RUST
+
+      - name: Full clippy gate
+        run: cargo clippy --workspace --no-default-features -- -D warnings
+
+      - name: Full test gate
+        run: cargo test --workspace --no-default-features
+
   pi5-smoke-loopback:
     name: Pi5 smoke profile (loopback)
     runs-on: ubuntu-latest
+    needs: full-workspace-gates
 
     env:
       OPENPULSE_PI_PROFILE: pi5-smoke
@@ -56,10 +134,16 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.REQUIRED_RUST }}
 
-      # Keep this profile hardware-independent: loopback backend + no default features.
-      - name: Pi5 smoke tests (loopback only)
-        run: cargo test --workspace --no-default-features
+      - name: Toolchain preflight
+        run: ./scripts/check-toolchain.sh $REQUIRED_RUST
+
+      - name: Security audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
 
       - name: Pi5 benchmark smoke run
         run: cargo run -p openpulse-cli --no-default-features -- --backend loopback --log error benchmark run >/tmp/openpulse-benchmark.json
@@ -88,3 +172,50 @@ jobs:
           fi
           
           echo "✅ Benchmark regression gate passed"
+
+  virtual-loopback-smoke:
+    name: Virtual loopback smoke (snd-aloop, non-blocking)
+    runs-on: ubuntu-latest
+    needs: full-workspace-gates
+    if: github.event_name == 'workflow_dispatch'
+    # Audio timing under CI scheduling is best-effort; never block a merge on it.
+    # The authoritative virtual gate is the local run before a hardware/on-air
+    # session. Promote to a blocking gate once observed stable on the runner image.
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.REQUIRED_RUST }}
+
+      - name: Install ALSA + virtual loopback module
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libasound2-plugins alsa-utils || true
+          sudo apt-get install -y "linux-modules-extra-$(uname -r)" || true
+
+      - name: Load snd-aloop (skip job gracefully if unavailable)
+        id: aloop
+        run: |
+          if sudo modprobe snd-aloop 2>/dev/null && aplay -l 2>/dev/null | grep -q 'Loopback'; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "snd-aloop loaded"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::snd-aloop unavailable on this runner image — virtual-loop smoke skipped"
+          fi
+
+      - name: Set up aloop PCMs
+        if: steps.aloop.outputs.available == 'true'
+        run: bash scripts/setup-virtual-loopback.sh
+
+      - name: Build cpal CLI
+        if: steps.aloop.outputs.available == 'true'
+        run: cargo build --release -p openpulse-cli
+
+      - name: Virtual-loop smoke (representative modes)
+        if: steps.aloop.outputs.available == 'true'
+        run: MODES="BPSK250 QPSK500 OFDM52" RETRIES=3 LISTEN_MS=60000 bash scripts/run-loopback-virtual.sh

@@ -1,0 +1,11 @@
+[package]
+name = "openpulse-b2f"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+flate2.workspace = true
+oxiarc-lzhuf.workspace = true
+tracing.workspace = true

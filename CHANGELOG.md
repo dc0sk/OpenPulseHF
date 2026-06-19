@@ -1,0 +1,119 @@
+# Changelog
+
+All notable changes to OpenPulseHF are documented here.
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+---
+
+## [Unreleased]
+
+### Added
+- Turbo codec: rate-1/3 PCCC with RSC K=3 component codes (G1={1,1,1} G2={1,0,1}),
+  3GPP QPP interleaver (K=40–6144), Max-Log-MAP BCJR, 8 iterations, CRC-16 early exit;
+  `FecMode::Turbo` wired into `transmit_with_fec_mode` / `receive_with_fec_mode` (#337).
+- On-device calibration wizard: `openpulse calibrate audio|ptt|afc` subcommands; all
+  three run against the loopback backend with no hardware required; `--output <path>`
+  writes a machine-readable JSON summary (#336).
+- SC-FDMA adaptive pilot density via coherence-BW estimation: `AdaptivePilotState`
+  (EMA α=0.3), `ScFdmaParams::with_pilot_density()`, `estimate_coh_bw_hz()` (#335).
+- `QsyIncoming` `ControlEvent` variant: emitted when the daemon receives a `QSY_REQ`
+  frame over RF, surfacing the incoming token and candidate count to panel clients.
+- SC-FDMA GPU soft demodulator (`scfdma_demodulate_soft_gpu`): batches all per-symbol
+  256-pt FFTs in a single wgpu dispatch; channel estimation, MMSE equalization, IDFT,
+  and LLR computation remain on CPU. `ScFdmaPlugin::demodulate_soft` dispatches to it
+  when built with the `gpu` feature.
+- Token length bound (max 64 bytes) in the QSY frame decoder, rejecting oversized tokens
+  before they reach session state.
+- E2E `qsy_initiator_req_drives_responder_session_and_emits_event` test: encodes a real
+  `QSY_REQ` from an initiator `QsySession`, feeds it to `process_received_bytes`, and
+  asserts both session creation and the `QsyIncoming` broadcast event.
+- GPU RRC FIR convolution kernel (`rrc_fir.wgsl`/`rrc_fir.rs`) and 256-point complex
+  FFT/IFFT kernel (`fft256.wgsl`/`fft256.rs`) in `openpulse-gpu`; wired into BPSK,
+  64QAM, 8PSK, and SC-FDMA plugins via `#[cfg(feature = "gpu")]` dispatch (#325).
+
+### Fixed
+- Turbo codec: `WrappedTurboCodecTest` log-domain underflow at low SNR; `alpha`/`beta`
+  arrays use `f32::NEG_INFINITY` sentinels; BER test passes at Eb/N0 = 2 dB (#339).
+- Calibration wizard: AFC calibration exit criteria widened from ±0.5 Hz to ±2.0 Hz
+  to match BPSK31 AFC convergence time; test no longer flaky (#338).
+
+### Changed
+- SC-FDMA `ScFdmaPlugin` gains `gpu` feature flag (optional `openpulse-gpu` dep) and
+  `with_gpu()` constructor for both hard and soft demodulation paths.
+
+---
+
+## [0.2.0] — 2026-05-20
+
+### Added
+- GPU soft-demodulation kernels for 64QAM and 8PSK via wgpu (`gpu_soft_demod`);
+  `Qam64Plugin::with_gpu` and `Psk8Plugin::with_gpu` constructors (#324).
+- QSY responder path: `process_received_bytes` wires incoming RF frames into a
+  `QsySession`; `execute_qsy_actions` refactored into a shared helper used by both
+  initiator and responder roles (#322).
+- SNR fill in `accept_qsy`: `engine.last_rx_snr_db()` now supplies observed SNR to
+  QSY channel-selection scoring instead of a uniform 0.0 dB (#322).
+- QSY RF wiring: `AcceptQsy` command triggers `QsySession::new_initiator()` and
+  transmits `QSY_REQ`/`QSY_LIST` frames via the modem engine (#321).
+- `CrossBandRepeater` thread wired into `EnableRepeater`/`DisableRepeater` daemon
+  commands (#321).
+- SC-FDMA DFT-CE pilot-aided channel estimation; SCFDMA52-16QAM, SCFDMA52-32QAM,
+  SCFDMA52-64QAM, SCFDMA52-64QAM-P4 modes; MMSE equalization (#316).
+- ARQ retry loop with soft LLR accumulation across retransmissions; runtime mode
+  switching between registered plugins (#318).
+- SC-FDMA HOM modes (SCFDMA52-8PSK, SCFDMA52-32QAM); QPSK2000-RRC Quick tier;
+  daemon PTT controller wired from config (#319).
+- `hpx_wideband_hd()` profile updated to SL12–SL15 (SCFDMA52-16QAM → 64QAM2000-RRC);
+  ACK-UP gate at SL14 protecting SL15 admission (#320).
+- B2F Type C ISS sending: `queue_message_type_c()` with `compress_lzhuf_winlink` (#320).
+- `hpx_narrowband_hd()` profile (SL8=QPSK9600-RRC, SL9=8PSK9600-RRC); QPSK2000-RRC
+  and 8PSK2000-RRC narrow-HD modes (#319).
+- SCFDMA52-64QAM promoted to `hpx_wideband_hd` SL14 (#320).
+- QSY enable toggle and bandplan selector in panel and TUI (#295).
+
+### Changed
+- Daemon PTT controller skips dispatch on PTT hardware assertion failure (#319).
+- `BandplanPolicy::default()` uses `HamIaruRegion1` instead of deprecated `HamIaru`.
+- Bandplan guardrails recognise `-RRC` waveform variants and `SCFDMA52-64QAM-P4`.
+
+---
+
+## [0.1.0] — 2026-05-01
+
+### Added
+- Plugin-based modem architecture in a Cargo workspace.
+- BPSK31/63/100/250, QPSK125/250/500/1000, 8PSK500/1000, 64QAM500/1000/2000-RRC
+  modulation plugins.
+- FSK4-ACK control channel plugin.
+- `openpulse-gpu`: wgpu-backed BPSK DSP kernels (modulation, IQ demodulation, timing
+  search); CPU fallback when GPU unavailable.
+- `openpulse-core`: RS(255,223) and RS(255,191) FEC, block interleaver, convolutional
+  codec, concatenated FEC, short-block FEC, Memory-ARQ soft combining, LDPC rate-1/2
+  min-sum BP.
+- HPX state machine (`HpxSession`/`HpxReactor`), `RateAdapter`, adaptive session
+  profiles `hpx500()`, `hpx2300()`, `hpx_narrowband()`, `hpx_wideband_hd()`.
+- SAR (segmentation and reassembly), ACK taxonomy, rate adaptation, relay forwarding,
+  peer cache, compression (LZ4), post-quantum handshake (ML-DSA-44 + ML-KEM-768).
+- `openpulse-channel`: Watterson fading, Gilbert-Elliott burst channel, AWGN, QRN/QRM.
+- `openpulse-radio`: PTT backends (NoOp, RTS/DTR, VOX, rigctld), `RigctldController`.
+- `openpulse-ardop`: ARDOP-compatible TCP TNC interface, `openpulse-tnc` binary.
+- `openpulse-kiss`: KISS/AX.25 TNC interface, `openpulse-kisstnc` binary.
+- `openpulse-b2f`: B2F/Winlink protocol state machine; LZHUF and gzip codecs.
+- `openpulse-b2f-driver`: ISS/IRS session driver; e2e loopback tests.
+- `openpulse-gateway`: Direct TCP Winlink CMS gateway, `openpulse-gateway` binary.
+- `openpulse-daemon`: Unified background daemon with control port, event broadcast,
+  modem engine, PTT, QSY, repeater, and B2F message store.
+- `openpulse-qsy`: QSY frequency-agility protocol; wire frame codec, Ed25519 signing,
+  `QsySession` state machine, `QsyScanner`.
+- `openpulse-mesh`: Mesh broadcast daemon with beacon re-broadcast.
+- `openpulse-repeater`: Digipeater/relay node.
+- `openpulse-config`: Typed TOML configuration management.
+- `openpulse-tui`: ratatui TUI frontend (HPX state, AFC/rate meters, DCD energy bar).
+- `openpulse-panel`: egui/eframe operator panel GUI connecting to the daemon control port.
+- `openpulse-testbench`: egui signal-path testbench with 7 channel models.
+- `openpulse-testmatrix`: Automated mode × channel test matrix runner.
+- `openpulse-cli`: CLI binary with transmit, receive, monitor, benchmark, config, and
+  manifest subcommands.
+- PKI tooling: key management, trust store, bundle signing, PKI web service.
+- CSMA/DCD channel access; AFC loop; LMS/DFE adaptive equalizer on RRC paths.
+- loopback-based CI test suite; cross-compile check for aarch64 (Raspberry Pi).

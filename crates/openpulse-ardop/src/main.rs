@@ -1,0 +1,181 @@
+use clap::Parser;
+use openpulse_ardop::{ArdopConfig, ArdopServer};
+use openpulse_audio::loopback::LoopbackBackend;
+use openpulse_core::relay::{RelayForwarder, RelayTrustPolicy};
+use openpulse_core::trust_store_file::load_trust_store_from_file;
+use openpulse_modem::ModemEngine;
+use openpulse_radio::{NoOpPtt, PttController, RigctldPtt, VoxPtt};
+
+#[cfg(feature = "cpal")]
+use openpulse_audio::CpalBackend;
+
+#[derive(Parser)]
+#[command(
+    name = "openpulse-tnc",
+    about = "OpenPulse ARDOP-compatible TNC",
+    long_about = "OpenPulse ARDOP-compatible TNC.",
+    author,
+    version
+)]
+struct Cli {
+    /// ARDOP command port (overrides config file).
+    #[arg(long)]
+    cmd_port: Option<u16>,
+
+    /// ARDOP data port (overrides config file).
+    #[arg(long)]
+    data_port: Option<u16>,
+
+    /// Modulation mode (overrides config file).
+    #[arg(long)]
+    mode: Option<String>,
+
+    /// Bind address (overrides config file).
+    #[arg(long)]
+    bind: Option<String>,
+
+    /// Audio backend: default | cpal | loopback (overrides config file).
+    #[arg(long)]
+    backend: Option<String>,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+
+    let mut cfg = openpulse_config::load()?;
+
+    // CLI flags override config file values.
+    if let Some(p) = cli.cmd_port {
+        cfg.ardop.cmd_port = p;
+    }
+    if let Some(p) = cli.data_port {
+        cfg.ardop.data_port = p;
+    }
+    if let Some(m) = cli.mode {
+        cfg.modem.mode = m;
+    }
+    if let Some(b) = cli.bind {
+        cfg.ardop.bind_addr = b;
+    }
+    if let Some(b) = cli.backend {
+        cfg.audio.backend = b;
+    }
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&cfg.logging.level)),
+        )
+        .init();
+
+    let audio: Box<dyn openpulse_core::audio::AudioBackend> = match cfg.audio.backend.as_str() {
+        "loopback" => Box::new(LoopbackBackend::default()),
+        #[cfg(feature = "cpal")]
+        "cpal" | "default" => Box::new(CpalBackend::new()),
+        #[cfg(not(feature = "cpal"))]
+        "cpal" => {
+            tracing::warn!(
+                "cpal backend not compiled in (build with --features cpal); using loopback"
+            );
+            Box::new(LoopbackBackend::default())
+        }
+        #[cfg(not(feature = "cpal"))]
+        "default" => Box::new(LoopbackBackend::default()),
+        name => {
+            anyhow::bail!("unknown audio backend '{name}' — use 'default', 'cpal', or 'loopback'")
+        }
+    };
+
+    let mut engine = ModemEngine::new(audio);
+    engine.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))?;
+    engine.register_plugin(Box::new(fsk4_plugin::Fsk4Plugin::new()))?;
+    engine.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))?;
+    engine.register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))?;
+    engine.register_plugin(Box::new(psk8_plugin::Psk8Plugin::new()))?;
+    engine.register_plugin(Box::new(qam64_plugin::Qam64Plugin::new()))?;
+    engine.register_plugin(Box::new(scfdma_plugin::ScFdmaPlugin::new()))?;
+    engine.register_plugin(Box::new(pilot_plugin::PilotPlugin::new()))?;
+
+    let config = ArdopConfig {
+        bind_addr: cfg.ardop.bind_addr.clone(),
+        command_port: cfg.ardop.cmd_port,
+        data_port: cfg.ardop.data_port,
+        mode: cfg.modem.mode.clone(),
+        loopback: false,
+    };
+
+    tracing::info!(
+        "OpenPulse TNC listening on {}:{} (cmd) / {}:{} (data)",
+        config.bind_addr,
+        config.command_port,
+        config.bind_addr,
+        config.data_port,
+    );
+
+    let trust_store = if !cfg.trust.store_path.is_empty() {
+        match load_trust_store_from_file(std::path::Path::new(&cfg.trust.store_path)) {
+            Ok(store) => {
+                tracing::info!(path = %cfg.trust.store_path, "trust store loaded");
+                store
+            }
+            Err(e) => {
+                tracing::warn!(path = %cfg.trust.store_path, error = %e, "failed to load trust store; starting with empty store");
+                Default::default()
+            }
+        }
+    } else {
+        Default::default()
+    };
+
+    let relay_forwarder = if cfg.relay.enabled {
+        let policy = if cfg.relay.deny_list.is_empty() {
+            RelayTrustPolicy::default()
+        } else {
+            RelayTrustPolicy::deny_relays(cfg.relay.deny_list.iter().map(|s| s.as_str()))
+        };
+        let ttl_ms = cfg.relay.store_forward_ttl_s.saturating_mul(1000);
+        let fwd = RelayForwarder::new(ttl_ms, policy);
+        tracing::info!(
+            max_hops = cfg.relay.max_hops,
+            deny_count = cfg.relay.deny_list.len(),
+            ttl_s = cfg.relay.store_forward_ttl_s,
+            "relay forwarding enabled"
+        );
+        Some(fwd)
+    } else {
+        None
+    };
+
+    ArdopServer::with_trust_relay_ptt(
+        engine,
+        config,
+        trust_store,
+        relay_forwarder,
+        build_ptt(&cfg),
+    )
+    .run()
+    .await?;
+    Ok(())
+}
+
+fn build_ptt(cfg: &openpulse_config::OpenpulseConfig) -> Box<dyn PttController + Send> {
+    match cfg.modem.ptt_backend.as_str() {
+        "vox" => Box::new(VoxPtt::new()),
+        "rigctld" => match RigctldPtt::connect(&cfg.radio.rigctld_addr) {
+            Ok(p) => {
+                tracing::info!(addr = %cfg.radio.rigctld_addr, "rigctld PTT connected");
+                Box::new(p)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "rigctld PTT connect failed; using NoOpPtt");
+                Box::new(NoOpPtt::new())
+            }
+        },
+        "none" | "" => Box::new(NoOpPtt::new()),
+        other => {
+            tracing::warn!(backend = other, "unknown PTT backend; using NoOpPtt");
+            Box::new(NoOpPtt::new())
+        }
+    }
+}

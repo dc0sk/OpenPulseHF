@@ -7,6 +7,7 @@ use crate::handshake::sha256_bytes;
 // Errors
 // ------------------------------------------------------------------
 
+/// Errors returned when creating or verifying a `PeerDescriptor`.
 #[derive(Debug, thiserror::Error)]
 pub enum PeerDescriptorError {
     #[error("invalid descriptor signature")]

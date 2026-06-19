@@ -1,0 +1,61 @@
+[package]
+name    = "openpulse-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "NDJSON-over-TCP control port for the OpenPulseHF server daemon"
+
+[[bin]]
+name = "openpulse-server"
+path = "src/main.rs"
+
+[package.metadata.deb]
+name = "openpulse-server"
+maintainer = "OpenPulse Contributors"
+copyright = "2025 OpenPulse Contributors"
+license-file = ["../../LICENSE", "4"]
+extended-description = "OpenPulseHF daemon: NDJSON control port and WebSocket endpoint for the operator GUI"
+depends = "$auto"
+section = "hamradio"
+priority = "optional"
+
+[features]
+# Enable real audio hardware support (CPAL backend).  Off by default so CI builds
+# don't require ALSA/CoreAudio headers.  For production: cargo build --features cpal
+cpal = ["openpulse-audio/cpal-backend"]
+
+[dependencies]
+# Protocol types only; compiles for all targets including WASM.
+openpulse-core   = { workspace = true }
+openpulse-modem  = { workspace = true }
+serde            = { workspace = true, features = ["derive"] }
+serde_json       = { workspace = true }
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Server runtime; not needed when openpulse-daemon is used as a protocol library in WASM.
+openpulse-radio   = { workspace = true }
+openpulse-audio   = { workspace = true }
+openpulse-config  = { workspace = true }
+openpulse-channel = { workspace = true }
+openpulse-qsy     = { workspace = true }
+openpulse-repeater = { workspace = true }
+bpsk-plugin      = { workspace = true }
+fsk4-plugin      = { workspace = true }
+ofdm-plugin      = { workspace = true }
+psk8-plugin      = { workspace = true }
+qam64-plugin     = { workspace = true }
+qpsk-plugin      = { workspace = true }
+scfdma-plugin    = { workspace = true }
+pilot-plugin     = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio            = { workspace = true, features = ["net", "io-util", "sync", "rt-multi-thread", "macros", "time"] }
+tokio-tungstenite = "0.23"
+futures-util     = { version = "0.3", default-features = false, features = ["sink", "std"] }
+
+[dev-dependencies]
+openpulse-audio  = { workspace = true }
+bpsk-plugin      = { workspace = true }

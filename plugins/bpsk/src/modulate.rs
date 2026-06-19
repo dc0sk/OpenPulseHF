@@ -4,13 +4,15 @@
 //!
 //! ```text
 //! bytes → bits (LSB-first) → NRZI encode → symbols (+1/−1)
-//!       → raised-cosine pulse shaping → carrier mix → audio samples
+//!       → overlapping half-Hann crossfade → carrier mix → audio samples
 //! ```
 
 use std::f32::consts::PI;
 
 use openpulse_core::error::ModemError;
-use openpulse_core::plugin::ModulationConfig;
+use openpulse_core::plugin::{ModulationConfig, PulseShape};
+use openpulse_dsp::filter::FirFilter;
+use openpulse_dsp::rrc::generate_rrc_coefficients;
 
 use crate::parse_baud_rate;
 
@@ -18,8 +20,62 @@ use crate::parse_baud_rate;
 pub const PREAMBLE_SYMS: usize = 32;
 /// Number of tail symbols appended after data to let the signal decay.
 pub const TAIL_SYMS: usize = 8;
+pub(crate) const RRC_SPAN_SYMBOLS: usize = 8;
 
 // ── Public entry point ────────────────────────────────────────────────────────
+
+fn rrc_alpha_for(config: &ModulationConfig) -> Option<f32> {
+    if let PulseShape::Rrc { alpha } = config.pulse_shape {
+        Some(alpha)
+    } else if config.mode.ends_with("-RRC") {
+        Some(0.35f32)
+    } else {
+        None
+    }
+}
+
+/// Compute the shaped baseband amplitude envelope for BPSK.
+///
+/// Returns the Hann-crossfaded (or RRC-impulse) baseband signal before
+/// carrier multiplication.  For Hann path, the carrier would be
+/// `out[k] * cos(2π·fc·k/fs)`.  For RRC path, caller must apply the RRC
+/// FIR filter and then upconvert.
+fn bpsk_baseband(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
+    let baud = parse_baud_rate(&config.mode)?;
+    let fs = config.sample_rate as f32;
+    let n = samples_per_symbol(fs, baud)?;
+
+    let mut bits: Vec<bool> = Vec::new();
+    for i in 0..PREAMBLE_SYMS {
+        bits.push(i % 2 == 0);
+    }
+    bits.extend(bytes_to_bits(data));
+    bits.extend(std::iter::repeat_n(false, TAIL_SYMS));
+
+    let symbols = nrzi_encode(&bits);
+    let total = symbols.len() * n;
+    let mut out = vec![0.0f32; total];
+
+    for (sym_idx, &phase_neg) in symbols.iter().enumerate() {
+        let a_curr = if phase_neg { -1.0f32 } else { 1.0f32 };
+        let sym_start = sym_idx * n;
+
+        if rrc_alpha_for(config).is_some() {
+            out[sym_start] = a_curr;
+        } else {
+            let a_next = symbols
+                .get(sym_idx + 1)
+                .map(|&neg| if neg { -1.0f32 } else { 1.0f32 })
+                .unwrap_or(0.0f32);
+            for i in 0..n {
+                let w_tail = 0.5 * (1.0 + (PI * i as f32 / n as f32).cos());
+                let w_head = 1.0 - w_tail;
+                out[sym_start + i] = a_curr * w_tail + a_next * w_head;
+            }
+        }
+    }
+    Ok(out)
+}
 
 /// Modulate `data` bytes to a vector of normalised PCM samples.
 pub fn bpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
@@ -28,42 +84,67 @@ pub fn bpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
     let fc = config.center_frequency;
     let n = samples_per_symbol(fs, baud)?;
 
-    // Build the bit stream: preamble (all 1s → alternating phases) + data + tail
-    let mut bits: Vec<bool> = Vec::new();
-    // Preamble: alternating 1/0 bits so NRZI gives +1,-1,+1,−1 …
-    for i in 0..PREAMBLE_SYMS {
-        bits.push(i % 2 == 0); // 1,0,1,0,...
+    let bb = bpsk_baseband(data, config)?;
+
+    // Apply carrier: real output = I_bb * cos(2π·fc·t), Q = 0.
+    if let Some(alpha) = rrc_alpha_for(config) {
+        let num_taps = RRC_SPAN_SYMBOLS * n + 1;
+        let coeffs = generate_rrc_coefficients(fs, baud, alpha, num_taps);
+        let group_delay = (num_taps - 1) / 2;
+        let mut fir = FirFilter::new(coeffs);
+        let padded: Vec<f32> = bb
+            .iter()
+            .copied()
+            .chain(std::iter::repeat_n(0.0, group_delay))
+            .collect();
+        let filtered = fir.apply(&padded);
+        let two_pi = 2.0 * PI;
+        Ok(filtered[group_delay..]
+            .iter()
+            .enumerate()
+            .map(|(k, &bb)| bb * (two_pi * fc * k as f32 / fs).cos())
+            .collect())
+    } else {
+        Ok(bb
+            .iter()
+            .enumerate()
+            .map(|(k, &amp)| {
+                let t = k as f32 / fs;
+                amp * (2.0 * PI * fc * t).cos()
+            })
+            .collect())
     }
-    bits.extend(bytes_to_bits(data));
-    // Tail: all zeros (no phase change) so signal fades smoothly
-    bits.extend(std::iter::repeat_n(false, TAIL_SYMS));
+}
 
-    // NRZI encode
-    let symbols = nrzi_encode(&bits);
+/// Return baseband I and Q samples for BPSK (Q is always zero).
+///
+/// BPSK is a purely in-phase modulation: the baseband I channel carries the
+/// shaped amplitude envelope (±1 after NRZI) and the Q channel is identically
+/// zero.
+pub fn bpsk_modulate_iq(
+    data: &[u8],
+    config: &ModulationConfig,
+) -> Result<(Vec<f32>, Vec<f32>), ModemError> {
+    let baud = parse_baud_rate(&config.mode)?;
+    let fs = config.sample_rate as f32;
+    let n = samples_per_symbol(fs, baud)?;
 
-    // Render samples
-    let total = symbols.len() * n;
-    let mut out = vec![0.0f32; total];
-    let two_pi = 2.0 * PI;
-
-    for (sym_idx, &phase_neg) in symbols.iter().enumerate() {
-        let amplitude = if phase_neg { -1.0f32 } else { 1.0f32 };
-        let sym_start = sym_idx * n;
-
-        for i in 0..n {
-            // Raised-cosine (Hann) amplitude envelope – smoothly ramps 0→1→0
-            // across the symbol period, eliminating abrupt phase-change clicks.
-            let envelope = 0.5 * (1.0 - (two_pi * i as f32 / n as f32).cos());
-
-            // The global sample index determines the carrier phase.
-            let t = (sym_start + i) as f32 / fs;
-            let carrier = (two_pi * fc * t).cos();
-
-            out[sym_start + i] = amplitude * envelope * carrier;
-        }
+    let mut i_bb = bpsk_baseband(data, config)?;
+    if let Some(alpha) = rrc_alpha_for(config) {
+        let num_taps = RRC_SPAN_SYMBOLS * n + 1;
+        let coeffs = generate_rrc_coefficients(fs, baud, alpha, num_taps);
+        let group_delay = (num_taps - 1) / 2;
+        let mut fir = FirFilter::new(coeffs);
+        let padded: Vec<f32> = i_bb
+            .iter()
+            .copied()
+            .chain(std::iter::repeat_n(0.0, group_delay))
+            .collect();
+        let filtered = fir.apply(&padded);
+        i_bb = filtered[group_delay..].to_vec();
     }
-
-    Ok(out)
+    let q_bb = vec![0.0f32; i_bb.len()];
+    Ok((i_bb, q_bb))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -104,6 +185,37 @@ pub(crate) fn samples_per_symbol(sample_rate: f32, baud: f32) -> Result<usize, M
         )));
     }
     Ok(n)
+}
+
+/// GPU-accelerated modulation: byte→bit→NRZI on CPU, sample rendering on GPU.
+#[cfg(feature = "gpu")]
+pub fn bpsk_modulate_with_gpu(
+    data: &[u8],
+    config: &ModulationConfig,
+    ctx: &openpulse_gpu::GpuContext,
+) -> Result<Vec<f32>, ModemError> {
+    // RRC path requires FIR filtering; fall back to CPU.
+    if matches!(config.pulse_shape, PulseShape::Rrc { .. }) || config.mode.ends_with("-RRC") {
+        return bpsk_modulate(data, config);
+    }
+
+    let baud = parse_baud_rate(&config.mode)?;
+    let fs = config.sample_rate as f32;
+    let fc = config.center_frequency;
+    let n = samples_per_symbol(fs, baud)?;
+
+    let mut bits: Vec<bool> = Vec::new();
+    for i in 0..PREAMBLE_SYMS {
+        bits.push(i % 2 == 0);
+    }
+    bits.extend(bytes_to_bits(data));
+    bits.extend(std::iter::repeat_n(false, TAIL_SYMS));
+
+    let symbols = nrzi_encode(&bits);
+    match openpulse_gpu::bpsk_modulate_gpu(ctx, &symbols, n, fc, fs) {
+        Some(out) => Ok(out),
+        None => bpsk_modulate(data, config),
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -295,7 +407,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         let input_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("syms-input"),
-            size: (bits.len() * std::mem::size_of::<u32>()) as u64,
+            size: std::mem::size_of_val(bits) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -444,6 +556,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             mode: "BPSK100".to_string(),
             sample_rate: 8000,
             center_frequency: 1500.0,
+            ..ModulationConfig::default()
         };
         let data = b"Hi";
         let samples = bpsk_modulate(data, &cfg).unwrap();
@@ -457,7 +570,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let cfg = ModulationConfig::default();
         let samples = bpsk_modulate(b"test", &cfg).unwrap();
         for &s in &samples {
-            assert!(s >= -1.0 && s <= 1.0, "sample {s} out of range");
+            assert!((-1.0..=1.0).contains(&s), "sample {s} out of range");
         }
     }
 
@@ -502,6 +615,38 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         assert_eq!(gpu_syms.len(), cpu_syms.len());
         for (cpu, gpu) in cpu_syms.iter().zip(gpu_syms.iter()) {
             assert!((cpu - gpu).abs() <= 1e-6, "cpu={cpu}, gpu={gpu}");
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn gpu_modulate_matches_cpu() {
+        use openpulse_core::plugin::ModulationConfig;
+        let cfg = ModulationConfig {
+            mode: "BPSK250".to_string(),
+            sample_rate: 8000,
+            center_frequency: 1500.0,
+            ..ModulationConfig::default()
+        };
+        let payload = b"Hello";
+
+        let cpu_out = bpsk_modulate(payload, &cfg).unwrap();
+
+        let Some(ctx) = openpulse_gpu::GpuContext::init() else {
+            eprintln!("skipping gpu_modulate_matches_cpu: no compatible adapter");
+            return;
+        };
+        let gpu_out = bpsk_modulate_with_gpu(payload, &cfg, &ctx).unwrap();
+
+        assert_eq!(cpu_out.len(), gpu_out.len(), "sample count mismatch");
+        // 1e-3 absolute: GPU f32 (different FMA/rounding order than the CPU path) can
+        // differ by ~1e-4 on near-zero RRC-tail samples; that is ~60 dB below the
+        // unit-scale signal and harmless. A real kernel divergence is O(0.1+).
+        for (i, (cpu, gpu)) in cpu_out.iter().zip(gpu_out.iter()).enumerate() {
+            assert!(
+                (cpu - gpu).abs() < 1e-3,
+                "sample[{i}]: cpu={cpu:.6}, gpu={gpu:.6}"
+            );
         }
     }
 }

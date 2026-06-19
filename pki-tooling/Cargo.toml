@@ -10,13 +10,15 @@ serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "json", "macros", "migrate"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "uuid", "json", "macros", "migrate"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 sha2 = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 ed25519-dalek = "2.0"
 base64 = "0.22"
 thiserror = "1"
+rand = "0.8"
+subtle = "2"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

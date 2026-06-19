@@ -1,0 +1,180 @@
+//! SC-FDMA modulation: payload → DFT-spread IFFT frames → samples.
+//!
+//! Unlike OFDM, no PAPR clipping is needed: DFT precoding spreads each
+//! symbol across all data subcarriers so the transmitted signal resembles
+//! a single-carrier waveform (3–4 dB lower PAPR than plain OFDM).
+
+use num_complex::Complex32;
+use openpulse_core::len_prefix::{encode_len_prefix, LEN_PREFIX_BYTES};
+use rustfft::FftPlanner;
+
+use crate::channel::is_pilot;
+use crate::params::{params_for_mode, ScFdmaParams, CP, FFT_SIZE, PILOT_AMPLITUDE, SYM_LEN};
+
+const PREAMBLE_SYMBOLS: usize = 4;
+const PREAMBLE_PATTERN: &[u8] = b"SCFDMA-SYNC-ACQ";
+
+pub fn scfdma_modulate(payload: &[u8], mode: &str) -> Vec<f32> {
+    let p = params_for_mode(mode).expect("caller must validate mode before scfdma_modulate");
+    let mut out = modulate_with_params(&preamble_payload(&p), &p);
+    out.extend(modulate_with_params(payload, &p));
+    out
+}
+
+/// Return interleaved I/Q samples at complex baseband (fc = 0 Hz).
+///
+/// SC-FDMA uses Hermitian symmetry so the IFFT output is real; the Q channel is
+/// identically zero.  Interleaved layout: [I₀, Q₀, I₁, Q₁, …].
+pub fn scfdma_modulate_iq(payload: &[u8], mode: &str) -> Vec<f32> {
+    let real = scfdma_modulate(payload, mode);
+    real.iter().flat_map(|&s| [s, 0.0_f32]).collect()
+}
+
+pub(crate) fn preamble_payload(p: &ScFdmaParams) -> Vec<u8> {
+    let bytes = (p.bits_per_symbol() * PREAMBLE_SYMBOLS) / 8;
+    PREAMBLE_PATTERN
+        .iter()
+        .copied()
+        .cycle()
+        .take(bytes)
+        .collect()
+}
+
+pub(crate) fn modulate_with_params(payload: &[u8], p: &ScFdmaParams) -> Vec<f32> {
+    // Prepend the majority-protected length prefix (3 LE copies).
+    let len_bytes = encode_len_prefix(payload.len() as u16);
+    let mut data = Vec::with_capacity(LEN_PREFIX_BYTES + payload.len());
+    data.extend_from_slice(&len_bytes);
+    data.extend_from_slice(payload);
+
+    let bits = bytes_to_bits(&data);
+    let bits_per_sym = p.bits_per_symbol();
+    let n_syms = if bits_per_sym == 0 {
+        1
+    } else {
+        bits.len().div_ceil(bits_per_sym)
+    };
+
+    let mut planner = FftPlanner::<f32>::new();
+    // N_data-point DFT for precoding (may be non-power-of-two; rustfft handles it).
+    let dft = planner.plan_fft_forward(p.n_data);
+    // 256-point IFFT to convert frequency domain to time domain.
+    let ifft = planner.plan_fft_inverse(FFT_SIZE);
+
+    let dft_scale = 1.0 / (p.n_data as f32).sqrt();
+    let ifft_scale = 1.0 / (FFT_SIZE as f32).sqrt();
+
+    let mut out = Vec::with_capacity(n_syms * SYM_LEN);
+    let mut bit_idx = 0usize;
+
+    for _ in 0..n_syms {
+        // Step 1: map N_data data subcarrier symbols using the selected constellation.
+        let mut data_syms: Vec<Complex32> = (0..p.n_data)
+            .map(|_| {
+                let mut sym_bits = 0u8;
+                for b in 0..p.bits_per_sc {
+                    if bit_idx < bits.len() {
+                        sym_bits |= (bits[bit_idx] as u8) << b;
+                        bit_idx += 1;
+                    }
+                }
+                map_symbol(sym_bits, p.bits_per_sc)
+            })
+            .collect();
+
+        // Step 2: DFT(N_data) — spread each symbol across all data subcarriers.
+        dft.process(&mut data_syms);
+        let spread: Vec<Complex32> = data_syms.iter().map(|c| c * dft_scale).collect();
+
+        // Step 3: Place spread symbols and pilots in the 256-bin frequency domain.
+        let mut freq = vec![Complex32::new(0.0, 0.0); FFT_SIZE];
+        let mut data_idx = 0usize;
+        for sc in p.first_sc..=p.last_sc {
+            if is_pilot(p, sc) {
+                freq[sc] = Complex32::new(PILOT_AMPLITUDE, 0.0);
+                freq[FFT_SIZE - sc] = Complex32::new(PILOT_AMPLITUDE, 0.0);
+            } else {
+                let sym = spread[data_idx];
+                data_idx += 1;
+                freq[sc] = sym;
+                freq[FFT_SIZE - sc] = sym.conj(); // Hermitian symmetry → real output
+            }
+        }
+
+        // Step 4: IFFT(256) → real time-domain samples.
+        ifft.process(&mut freq);
+        let time: Vec<f32> = freq.iter().map(|c| c.re * ifft_scale).collect();
+
+        // Step 5: Prepend cyclic prefix (last CP samples).
+        let cp_start = FFT_SIZE - CP;
+        out.extend_from_slice(&time[cp_start..]);
+        out.extend_from_slice(&time);
+        // No PAPR clipping — DFT precoding keeps PAPR inherently low.
+    }
+
+    out
+}
+
+// ── Constellation mapping (shared with all multicarrier plugins) ──────────────
+//
+// The Gray map, hard demapper, and soft-LLR math live in
+// `openpulse_dsp::constellation` (QPSK/8PSK/16QAM/32QAM-cross/64QAM, byte-for-byte
+// the mapping these modes were validated against).
+use openpulse_dsp::constellation::map_symbol;
+
+// ── Bit packing ───────────────────────────────────────────────────────────────
+
+pub fn bytes_to_bits(bytes: &[u8]) -> Vec<bool> {
+    let mut bits = Vec::with_capacity(bytes.len() * 8);
+    for &b in bytes {
+        for shift in 0..8u8 {
+            bits.push((b >> shift) & 1 == 1);
+        }
+    }
+    bits
+}
+
+/// Measure PAPR in dB.
+pub fn measure_papr(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let peak_sq = samples.iter().map(|&s| s * s).fold(0.0_f32, f32::max);
+    let mean_sq = samples.iter().map(|&s| s * s).sum::<f32>() / samples.len() as f32;
+    if mean_sq < 1e-12 {
+        return 0.0;
+    }
+    10.0 * (peak_sq / mean_sq).log10()
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::demodulate::scfdma_demodulate;
+
+    // Constellation-property tests (unit power, point distinctness, Gray round-trips)
+    // live with the shared mapper in `openpulse_dsp::constellation`.
+
+    #[test]
+    fn scfdma52_iq_i_channel_matches_modulate() {
+        let payload = b"IQ test payload";
+        let iq = scfdma_modulate_iq(payload, "SCFDMA52");
+        let real = scfdma_modulate(payload, "SCFDMA52");
+        assert_eq!(iq.len(), real.len() * 2);
+        let i_ch: Vec<f32> = iq.iter().step_by(2).copied().collect();
+        assert_eq!(i_ch, real, "I channel must match scfdma_modulate output");
+        let q_ch: Vec<f32> = iq.iter().skip(1).step_by(2).copied().collect();
+        assert!(q_ch.iter().all(|&q| q == 0.0), "Q channel must be zero");
+    }
+
+    #[test]
+    fn scfdma52_iq_round_trip() {
+        let payload = b"round trip IQ scfdma52";
+        let iq = scfdma_modulate_iq(payload, "SCFDMA52");
+        let i_ch: Vec<f32> = iq.iter().step_by(2).copied().collect();
+        let decoded = scfdma_demodulate(&i_ch, "SCFDMA52").expect("demodulate");
+        assert_eq!(decoded, payload);
+    }
+}

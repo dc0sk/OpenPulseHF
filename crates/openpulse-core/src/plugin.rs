@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{ModemError, PluginError};
 
 /// Current plugin trait version.
-/// Format: "<major>.<minor>.<patch>"
+/// Format: `<major>.<minor>.<patch>`
 pub const PLUGIN_TRAIT_VERSION: &str = "1.0.0";
 
 // ── Plugin metadata ───────────────────────────────────────────────────────────
@@ -21,11 +21,33 @@ pub struct PluginInfo {
     pub author: String,
     /// List of mode strings this plugin handles, e.g. `["BPSK31", "BPSK100"]`.
     pub supported_modes: Vec<String>,
-    /// Plugin trait version requirement, e.g. `"1.0"` (format: "<major>.<minor>").
+    /// Plugin trait version requirement, e.g. `"1.0"` (format: `<major>.<minor>`).
     /// The plugin is compatible with the framework if:
     /// - framework major version == plugin major version, AND
     /// - framework minor version >= plugin minor version
     pub trait_version_required: String,
+}
+
+// ── Pulse shaping ─────────────────────────────────────────────────────────────
+
+/// Amplitude envelope applied during symbol modulation.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum PulseShape {
+    /// 50% overlapping raised-cosine crossfade between adjacent symbols.
+    /// Default for all modes; equivalent to PSK31 shaping for pure BPSK.
+    #[default]
+    Hann,
+    /// Independent sin² amplitude envelope per symbol (0 → 1 → 0 per period).
+    /// Forces amplitude zero at every symbol boundary; achieves null-to-null BW ≈ 2×Rs.
+    /// Used by `-HF` mode aliases for HF-legal operation at high baud rates.
+    CosineOverlap,
+    /// Square-root raised-cosine (SRRC) FIR pulse shaping.
+    /// Occupied bandwidth ≈ (1 + alpha) × Rs Hz; requires a matched RRC RX filter.
+    /// Used by `-RRC` mode aliases.
+    Rrc {
+        /// RRC rolloff factor α ∈ [0, 1]; 0.35 is the default for `-RRC` modes.
+        alpha: f32,
+    },
 }
 
 // ── Modulation configuration ──────────────────────────────────────────────────
@@ -39,6 +61,14 @@ pub struct ModulationConfig {
     pub sample_rate: u32,
     /// Mode string that selects parameters inside the plugin, e.g. `"BPSK31"`.
     pub mode: String,
+    /// Pulse-shaping envelope; plugins select this based on the mode string.
+    pub pulse_shape: PulseShape,
+    /// AFC correction already applied to `center_frequency` by the engine, in Hz.
+    ///
+    /// Non-zero when the engine ran AFC settling before this decode attempt.
+    /// Plugins may use this to decide whether carrier-phase drift correction
+    /// is appropriate (e.g. QPSK only corrects drift when AFC is active).
+    pub afc_correction_hz: f32,
 }
 
 impl Default for ModulationConfig {
@@ -47,8 +77,35 @@ impl Default for ModulationConfig {
             center_frequency: 1500.0,
             sample_rate: 8000,
             mode: "BPSK100".to_string(),
+            pulse_shape: PulseShape::Hann,
+            afc_correction_hz: 0.0,
         }
     }
+}
+
+// ── Frame geometry ────────────────────────────────────────────────────────────
+
+/// Mode-specific frame dimensions used by the receive engine to size its scan
+/// step, energy-gate window, and per-attempt demodulation slice.
+///
+/// All values are in samples at the config's sample rate.  Before this struct
+/// existed the engine guessed these from trailing digits of the mode name —
+/// wrong for every mode whose name does not end in its baud rate (OFDM52's 52
+/// is a subcarrier count; SCFDMA52-64QAM-P4 parsed as 4 baud) — and assumed a
+/// 32-symbol preamble (true only for BPSK).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameGeometry {
+    /// Scan step: one symbol period (serial-tone modes) or one block-symbol
+    /// length (OFDM/SC-FDMA).
+    pub symbol_period_samples: usize,
+    /// Acquisition span the demodulator needs near the slice front (preamble
+    /// or sync sequence).
+    pub preamble_samples: usize,
+    /// Minimum slice length that can hold one decodable minimal frame.
+    pub min_frame_samples: usize,
+    /// Slice length that bounds one demodulation attempt: the largest frame
+    /// this mode emits (255-byte RS block) plus margin.
+    pub max_frame_samples: usize,
 }
 
 // ── Plugin trait ──────────────────────────────────────────────────────────────
@@ -69,6 +126,70 @@ pub trait ModulationPlugin: Send + Sync {
     fn demodulate(&self, samples: &[f32], config: &ModulationConfig)
         -> Result<Vec<u8>, ModemError>;
 
+    /// Decode audio samples and return per-bit soft log-likelihood ratios.
+    ///
+    /// # LLR convention
+    ///
+    /// - **Sign**: positive = bit more likely 0, negative = bit more likely 1.
+    ///   Hard-slicing every LLR (`bit = llr <= 0`) MUST reproduce exactly the
+    ///   byte stream returned by [`demodulate`](Self::demodulate) on the same
+    ///   input (bit order LSB-first within each byte).  This is enforced by
+    ///   the cross-plugin conformance test `llr_convention_conformance` in
+    ///   `openpulse-modem`.
+    /// - **Scale**: per-plugin and NOT normalised across plugins — BPSK emits
+    ///   raw differential dot products, OFDM emits |H|²-weighted projections,
+    ///   8PSK emits max-log-MAP distance differences.  Within one plugin the
+    ///   scale is monotone in reliability (required by `snr_from_llrs` and by
+    ///   per-frame soft combining).  Cross-MODE soft combining (e.g. ARQ
+    ///   retransmission in a different mode) must therefore weight per frame
+    ///   — `combine_llrs_weighted` with per-frame noise metrics — rather than
+    ///   adding raw LLRs from different plugins.
+    ///
+    /// Plugins that know their internal soft values (BPSK I-channel
+    /// correlation, QPSK I/Q projections) should override this for maximum
+    /// coding gain (~1–2 dB).
+    ///
+    /// The default falls back to [`demodulate`](Self::demodulate) and maps each
+    /// hard-decided bit to ±1.0.
+    fn demodulate_soft(
+        &self,
+        samples: &[f32],
+        config: &ModulationConfig,
+    ) -> Result<Vec<f32>, ModemError> {
+        let bytes = self.demodulate(samples, config)?;
+        let llrs = bytes
+            .iter()
+            .flat_map(|&b| (0..8u8).map(move |i| if (b >> i) & 1 == 0 { 1.0f32 } else { -1.0f32 }))
+            .collect();
+        Ok(llrs)
+    }
+
+    /// Frame geometry for `config.mode`, used by the receive engine to size
+    /// its scan step, energy-gate window, and demodulation slices.
+    ///
+    /// Returns `None` (the default) when the plugin does not describe its
+    /// geometry; the engine then falls back to a mode-name heuristic that is
+    /// only correct for modes named after their baud rate with a 32-symbol
+    /// preamble.  Every production plugin should override this.
+    fn frame_geometry(&self, _config: &ModulationConfig) -> Option<FrameGeometry> {
+        None
+    }
+
+    /// Return `true` if this plugin produces genuine soft LLRs from
+    /// [`demodulate_soft`](Self::demodulate_soft).
+    ///
+    /// Plugins that override `demodulate_soft` with proper LLR computation
+    /// (e.g. matched-filter projections, per-subcarrier FFT magnitude) should
+    /// override this to return `true`.  The default `false` indicates the
+    /// fallback ±1.0 hard-decision output, which provides no iteration gain
+    /// to soft-input FEC decoders such as LDPC and turbo.
+    ///
+    /// The modem engine logs a warning when a soft-FEC mode is paired with a
+    /// plugin that returns `false`.
+    fn supports_soft_demod(&self) -> bool {
+        false
+    }
+
     /// Return `true` when this plugin can handle `mode` (case-insensitive).
     fn supports_mode(&self, mode: &str) -> bool {
         self.info()
@@ -83,6 +204,26 @@ pub trait ModulationPlugin: Send + Sync {
     /// short.  The default implementation returns `None`.
     fn estimate_afc_hz(&self, _samples: &[f32], _config: &ModulationConfig) -> Option<f32> {
         None
+    }
+
+    /// Encode `data` bytes and return baseband I and Q sample vectors.
+    ///
+    /// The returned vectors have the same length.  `I` maps to the left
+    /// channel and `Q` to the right channel of a stereo audio output, which
+    /// an SDR upconverts directly to RF with exact sideband suppression.
+    ///
+    /// The default implementation wraps [`modulate`](Self::modulate) via a
+    /// Hilbert-transform baseband shift.  Plugins with a native complex-baseband
+    /// path (BPSK, QPSK) override this for efficiency and accuracy.
+    fn modulate_iq(
+        &self,
+        data: &[u8],
+        config: &ModulationConfig,
+    ) -> Result<(Vec<f32>, Vec<f32>), ModemError> {
+        let real = self.modulate(data, config)?;
+        let (i_bb, q_bb) =
+            crate::iq::hilbert_iq(&real, config.center_frequency, config.sample_rate as f32);
+        Ok((i_bb, q_bb))
     }
 }
 
@@ -132,9 +273,19 @@ impl PluginRegistry {
             PluginError::InvalidTraitVersionFormat(info.trait_version_required.clone())
         })?;
 
-        let framework_parts: Vec<&str> = PLUGIN_TRAIT_VERSION.split('.').collect();
-        let framework_major = framework_parts[0].parse::<u32>().unwrap();
-        let framework_minor = framework_parts[1].parse::<u32>().unwrap();
+        let (fw_major_str, fw_rest) = PLUGIN_TRAIT_VERSION.split_once('.').ok_or_else(|| {
+            PluginError::InvalidTraitVersionFormat(PLUGIN_TRAIT_VERSION.to_string())
+        })?;
+        let framework_major = fw_major_str.parse::<u32>().map_err(|_| {
+            PluginError::InvalidTraitVersionFormat(PLUGIN_TRAIT_VERSION.to_string())
+        })?;
+        let framework_minor = fw_rest
+            .split_once('.')
+            .map_or(fw_rest, |(m, _)| m)
+            .parse::<u32>()
+            .map_err(|_| {
+                PluginError::InvalidTraitVersionFormat(PLUGIN_TRAIT_VERSION.to_string())
+            })?;
 
         // Compatible if: framework major == plugin major AND framework minor >= plugin minor
         if plugin_major != framework_major || framework_minor < plugin_minor {

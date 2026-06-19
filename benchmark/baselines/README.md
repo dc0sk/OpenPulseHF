@@ -25,6 +25,12 @@ Suggested naming:
 Example:
 
 - HF500-NOM-01--HPX500.json
+- HF2300-WATTERSON-F1-ITEM6--VARA-HF-REFERENCE.json
+
+Item 6 direct parity reference:
+
+- `HF2300-WATTERSON-F1-ITEM6--VARA-HF-REFERENCE.json` captures the VARA reference point used by Item 6 parity tracking (7536 bps, 1.25 s cycle envelope).
+- The matching scenario descriptor is `benchmark/scenarios/HF2300-WATTERSON-F1-ITEM6.yaml`.
 
 Notes:
 

@@ -7,27 +7,22 @@
 
 use bpsk_plugin::BpskPlugin;
 use openpulse_audio::LoopbackBackend;
-use openpulse_modem::diagnostics::SessionDiagnostics;
 use openpulse_modem::engine::ModemEngine;
 
 /// Test fixture for BPSK loopback scenarios.
 struct BpskFixture {
     engine: ModemEngine,
-    diagnostics: SessionDiagnostics,
 }
 
 impl BpskFixture {
-    fn new(session_id: &str, peer: &str) -> Self {
+    fn new(_session_id: &str, _peer: &str) -> Self {
         let audio = Box::new(LoopbackBackend::new());
         let mut engine = ModemEngine::new(audio);
         engine
             .register_plugin(Box::new(BpskPlugin::new()))
             .expect("BPSK registration");
 
-        Self {
-            engine,
-            diagnostics: SessionDiagnostics::new(session_id, peer),
-        }
+        Self { engine }
     }
 
     fn hpx_state_str(&self) -> String {

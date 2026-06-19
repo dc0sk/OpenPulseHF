@@ -194,6 +194,7 @@ pub fn load_trust_store_at(path: &Path) -> Result<LocalTrustStore> {
             records: vec![],
         });
     }
+    validate_trust_store_permissions(path)?;
     let content = fs::read_to_string(path)
         .with_context(|| format!("failed to read trust store file {}", path.display()))?;
     let store: LocalTrustStore = serde_json::from_str(&content)
@@ -208,7 +209,72 @@ pub fn persist_trust_store_at(path: &Path, store: &LocalTrustStore) -> Result<()
     }
     fs::write(path, serde_json::to_string_pretty(store)?)
         .with_context(|| format!("failed to write trust store file {}", path.display()))?;
+    enforce_trust_store_permissions(path)?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn validate_trust_store_permissions(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = fs::metadata(path)
+        .with_context(|| format!("failed to stat trust store file {}", path.display()))?
+        .permissions()
+        .mode()
+        & 0o777;
+    if mode & 0o077 != 0 {
+        anyhow::bail!(
+            "unsafe trust store permissions on {}: {:o} (expected owner-only, e.g. 600)",
+            path.display(),
+            mode
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_trust_store_permissions(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn enforce_trust_store_permissions(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).with_context(|| {
+        format!(
+            "failed to set secure permissions on trust store file {}",
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn enforce_trust_store_permissions(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+// ── Manifest persistence ──────────────────────────────────────────────────────
+
+pub fn manifest_file_path(session_id: &str) -> PathBuf {
+    config_dir_path()
+        .join("manifests")
+        .join(format!("{session_id}.json"))
+}
+
+pub fn load_manifest(
+    session_id: &str,
+) -> Result<Option<openpulse_core::manifest::TransferManifest>> {
+    let path = manifest_file_path(session_id);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read manifest file {}", path.display()))?;
+    let manifest = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse manifest file {}", path.display()))?;
+    Ok(Some(manifest))
 }
 
 // ── Policy profile persistence ────────────────────────────────────────────────
@@ -320,6 +386,9 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
     #[test]
     fn publication_state_mapping_matches_policy_expectations() {
         assert_eq!(
@@ -409,6 +478,66 @@ mod tests {
         persist_trust_store_at(&path, &store).expect("persist trust store");
         let loaded = load_trust_store_at(&path).expect("load trust store");
         assert_eq!(loaded, store);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trust_store_persist_enforces_owner_only_mode() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "openpulse-cli-trust-store-perms-{}-{}",
+            std::process::id(),
+            nonce
+        ));
+        let path = root.join("trust-store.json");
+
+        let store = LocalTrustStore {
+            schema_version: "1.0.0".to_string(),
+            records: vec![],
+        };
+
+        persist_trust_store_at(&path, &store).expect("persist trust store");
+
+        let mode = fs::metadata(&path)
+            .expect("stat trust store")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trust_store_load_rejects_group_or_world_permissions() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "openpulse-cli-trust-store-unsafe-perms-{}-{}",
+            std::process::id(),
+            nonce
+        ));
+        let path = root.join("trust-store.json");
+
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(&path, "{\"schema_version\":\"1.0.0\",\"records\":[]}")
+            .expect("write trust store");
+        fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("set insecure mode");
+
+        let err = load_trust_store_at(&path).expect_err("should reject unsafe mode");
+        assert!(
+            err.to_string().contains("unsafe trust store permissions"),
+            "unexpected error: {err}"
+        );
 
         let _ = fs::remove_dir_all(root);
     }

@@ -3,12 +3,17 @@
 pub mod demodulate;
 pub mod modulate;
 
+#[cfg(feature = "gpu")]
+use std::sync::Arc;
+
 use openpulse_core::error::ModemError;
-use openpulse_core::plugin::{ModulationConfig, ModulationPlugin, PluginInfo};
+use openpulse_core::plugin::{FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo};
 
 /// 8PSK modulation plugin.
 pub struct Psk8Plugin {
     info: PluginInfo,
+    #[cfg(feature = "gpu")]
+    gpu: Option<Arc<openpulse_gpu::GpuContext>>,
 }
 
 impl Default for Psk8Plugin {
@@ -18,17 +23,51 @@ impl Default for Psk8Plugin {
 }
 
 impl Psk8Plugin {
-    /// Create the plugin.
+    /// Create the plugin with CPU-only DSP.
     pub fn new() -> Self {
         Self {
-            info: PluginInfo {
-                name: "8PSK".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                description: "8-Phase-Shift Keying with Gray-mapped tribits".to_string(),
-                author: "OpenPulse Contributors".to_string(),
-                supported_modes: vec!["8PSK500".to_string(), "8PSK1000".to_string()],
-                trait_version_required: "1.0".to_string(),
-            },
+            info: Self::make_info(),
+            #[cfg(feature = "gpu")]
+            gpu: None,
+        }
+    }
+
+    /// Create the plugin with GPU-accelerated soft demodulation.
+    #[cfg(feature = "gpu")]
+    pub fn with_gpu(ctx: Arc<openpulse_gpu::GpuContext>) -> Self {
+        Self {
+            info: Self::make_info(),
+            gpu: Some(ctx),
+        }
+    }
+
+    fn make_info() -> PluginInfo {
+        PluginInfo {
+            name: "8PSK".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            description: "8-Phase-Shift Keying with Gray-mapped tribits".to_string(),
+            author: "OpenPulse Contributors".to_string(),
+            supported_modes: vec![
+                "8PSK500".to_string(),
+                "8PSK1000".to_string(),
+                "8PSK1000-HF".to_string(),
+                "8PSK1000-HF-RRC".to_string(),
+                "8PSK500-RRC".to_string(),
+                "8PSK1000-RRC".to_string(),
+                // UHF/VHF — 12.5 kHz narrowband (8 kHz audio, 2000 baud, ~2700 Hz BW).
+                // Use 8PSK2000-RRC: at 4 samples/symbol the plain (crossfade) pulse leaves the
+                // dense 45° 8PSK grid ISI-limited (~5-13% raw BER even on short frames, with
+                // perfect AFC) — not an acquisition bug but a pulse-shaping limit that RRC's
+                // Nyquist shaping solves.  -RRC is carrier-offset-robust and is the operational
+                // 2000-baud mode (HPX rate ladders use it).  Plain 8PSK2000 is retained for
+                // compatibility but is not viable for engine / on-air decode.
+                "8PSK2000".to_string(),
+                "8PSK2000-RRC".to_string(),
+                // UHF/VHF — 12.5 kHz HD (requires 48 kHz audio, 9600 baud, ~13 kHz BW)
+                "8PSK9600".to_string(),
+                "8PSK9600-RRC".to_string(),
+            ],
+            trait_version_required: "1.0".to_string(),
         }
     }
 }
@@ -47,13 +86,65 @@ impl ModulationPlugin for Psk8Plugin {
         samples: &[f32],
         config: &ModulationConfig,
     ) -> Result<Vec<u8>, ModemError> {
+        #[cfg(feature = "gpu")]
+        if let Some(ref ctx) = self.gpu {
+            if let Some(result) = demodulate::psk8_demodulate_gpu(samples, config, ctx) {
+                return result;
+            }
+        }
         demodulate::psk8_demodulate(samples, config)
+    }
+
+    fn demodulate_soft(
+        &self,
+        samples: &[f32],
+        config: &ModulationConfig,
+    ) -> Result<Vec<f32>, ModemError> {
+        #[cfg(feature = "gpu")]
+        if let Some(ref ctx) = self.gpu {
+            return demodulate::psk8_demodulate_soft_gpu(samples, config, ctx);
+        }
+        demodulate::psk8_demodulate_soft(samples, config)
+    }
+
+    fn frame_geometry(&self, config: &ModulationConfig) -> Option<FrameGeometry> {
+        let baud = parse_baud_rate(&config.mode).ok()?;
+        let n = modulate::samples_per_symbol(config.sample_rate as f32, baud).ok()?;
+        const BITS_PER_SYMBOL: usize = 3;
+        // Largest frame: full 255-byte RS block + envelope, plus 10% margin.
+        let max_data_syms = (260usize * 8).div_ceil(BITS_PER_SYMBOL);
+        let frame_syms = modulate::PREAMBLE_SYMS + max_data_syms + modulate::TAIL_SYMS;
+        Some(FrameGeometry {
+            symbol_period_samples: n,
+            preamble_samples: n * modulate::PREAMBLE_SYMS,
+            min_frame_samples: n * (modulate::PREAMBLE_SYMS + 1),
+            max_frame_samples: n * frame_syms * 11 / 10,
+        })
+    }
+
+    fn supports_soft_demod(&self) -> bool {
+        true
+    }
+
+    fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+        demodulate::afc_estimate_hz(samples, config)
     }
 }
 
-/// Parse numeric baud rate from the trailing digits of modes such as "8PSK500".
+/// Parse numeric baud rate from the trailing digits of modes such as "8PSK500", "8PSK1000-HF", "8PSK500-RRC", or "8PSK1000-HF-RRC".
+///
+/// Suffixes "-HF" and "-RRC" are stripped repeatedly until neither appears at the end, which
+/// handles composite variants such as "8PSK1000-HF-RRC" regardless of suffix ordering.
 pub(crate) fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
-    let trailing: String = mode
+    let mut base = mode;
+    loop {
+        let stripped = base.trim_end_matches("-HF").trim_end_matches("-RRC");
+        if stripped == base {
+            break;
+        }
+        base = stripped;
+    }
+    let trailing: String = base
         .chars()
         .rev()
         .take_while(|c| c.is_ascii_digit())
@@ -64,6 +155,8 @@ pub(crate) fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
     match trailing.as_str() {
         "500" => Ok(500.0),
         "1000" => Ok(1000.0),
+        "2000" => Ok(2000.0),
+        "9600" => Ok(9600.0),
         _ => Err(ModemError::Configuration(format!(
             "unknown baud rate in mode '{mode}'"
         ))),
@@ -73,13 +166,26 @@ pub(crate) fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openpulse_core::plugin::ModulationPlugin;
+    use openpulse_core::plugin::{ModulationPlugin, PulseShape};
 
     #[test]
     fn parse_modes() {
         assert!((parse_baud_rate("8PSK500").unwrap() - 500.0).abs() < 1e-6);
         assert!((parse_baud_rate("8PSK1000").unwrap() - 1000.0).abs() < 1e-6);
+        assert!((parse_baud_rate("8PSK1000-HF").unwrap() - 1000.0).abs() < 1e-6);
+        assert!((parse_baud_rate("8PSK2000").unwrap() - 2000.0).abs() < 1e-6);
+        assert!((parse_baud_rate("8PSK9600").unwrap() - 9600.0).abs() < 1e-6);
+        assert!((parse_baud_rate("8PSK9600-RRC").unwrap() - 9600.0).abs() < 1e-6);
+        // Composite HF-RRC suffix: order must not matter.
+        assert!((parse_baud_rate("8PSK1000-HF-RRC").unwrap() - 1000.0).abs() < 1e-6);
+        assert!((parse_baud_rate("8PSK500-HF-RRC").unwrap() - 500.0).abs() < 1e-6);
         assert!(parse_baud_rate("8PSK").is_err());
+    }
+
+    #[test]
+    fn supported_modes_include_composite_hf_rrc() {
+        let plugin = Psk8Plugin::new();
+        assert!(plugin.supports_mode("8PSK1000-HF-RRC"));
     }
 
     #[test]
@@ -106,5 +212,239 @@ mod tests {
         let samples = plugin.modulate(payload, &cfg).expect("modulate");
         let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
         assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    #[test]
+    fn psk8_1000_hf_loopback() {
+        let plugin = Psk8Plugin::new();
+        let cfg = ModulationConfig {
+            mode: "8PSK1000-HF".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"8PSK1000-HF round-trip";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    #[test]
+    fn afc_estimate_near_zero_on_carrier_match() {
+        let plugin = Psk8Plugin::new();
+        let tx_cfg = ModulationConfig {
+            mode: "8PSK1000".to_string(),
+            center_frequency: 1500.0,
+            ..ModulationConfig::default()
+        };
+        let rx_cfg = tx_cfg.clone();
+        let samples = plugin.modulate(b"afc psk8", &tx_cfg).expect("modulate");
+        let est = plugin
+            .estimate_afc_hz(&samples, &rx_cfg)
+            .expect("afc estimate");
+        // The designed (non-cyclic) preamble leaves a ~3 Hz ISI bias in the
+        // preamble-correlation AFC estimate — negligible for the ±450 Hz AFC range
+        // and removed downstream by the Costas PLL.
+        assert!(est.abs() < 6.0, "expected near-zero AFC, got {est:.2} Hz");
+    }
+
+    #[test]
+    fn afc_estimate_tracks_positive_offset() {
+        let plugin = Psk8Plugin::new();
+        let tx_cfg = ModulationConfig {
+            mode: "8PSK1000".to_string(),
+            center_frequency: 1520.0,
+            ..ModulationConfig::default()
+        };
+        let rx_cfg = ModulationConfig {
+            mode: "8PSK1000".to_string(),
+            center_frequency: 1500.0,
+            ..ModulationConfig::default()
+        };
+        let samples = plugin.modulate(b"afc psk8", &tx_cfg).expect("modulate");
+        let est = plugin
+            .estimate_afc_hz(&samples, &rx_cfg)
+            .expect("afc estimate");
+        assert!(
+            (est - 20.0).abs() < 6.0,
+            "expected about +20 Hz AFC, got {est:.2} Hz"
+        );
+    }
+
+    /// Composite "8PSK1000-HF-RRC" loopback exercises the full parse → modulate →
+    /// demodulate path through the fixed suffix-stripping logic; previously this
+    /// mode would cause parse_baud_rate to error before reaching LMS equalization.
+    #[test]
+    fn psk8_1000_hf_rrc_loopback() {
+        let plugin = Psk8Plugin::new();
+        let cfg = ModulationConfig {
+            mode: "8PSK1000-HF-RRC".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"composite HF-RRC mode";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    #[test]
+    fn psk8_500_rrc_loopback() {
+        let plugin = Psk8Plugin::new();
+        let cfg = ModulationConfig {
+            mode: "8PSK500-RRC".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"8PSK RRC loopback";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    #[test]
+    fn psk8_1000_rrc_loopback() {
+        let plugin = Psk8Plugin::new();
+        let cfg = ModulationConfig {
+            mode: "8PSK1000-RRC".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"8PSK1000 RRC loopback";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    /// 8PSK2000 clean loopback at 8 kHz (4 samples/symbol).
+    #[test]
+    fn psk8_2000_loopback() {
+        let plugin = Psk8Plugin::new();
+        let cfg = ModulationConfig {
+            mode: "8PSK2000".to_string(),
+            // Hann ISI at n=4 is too large for 8PSK's 22.5° margins; CosineOverlap
+            // zeros at boundaries, eliminating ISI.  fc must be an integer multiple
+            // of baud (2000 Hz → 1 cycle/symbol) for perfect I/Q orthogonality at n=4.
+            pulse_shape: PulseShape::CosineOverlap,
+            center_frequency: 2000.0,
+            ..ModulationConfig::default()
+        };
+        let payload = b"8PSK2000 VHF narrowband";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    /// 8PSK2000-RRC clean loopback at 8 kHz with Gardner + Costas PLL.
+    #[test]
+    fn psk8_2000_rrc_loopback() {
+        let plugin = Psk8Plugin::new();
+        let cfg = ModulationConfig {
+            mode: "8PSK2000-RRC".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"8PSK2000-RRC 12.5 kHz PMR";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    /// 8PSK9600 clean loopback at 48 kHz (5 samples/symbol, ~13 kHz BW).
+    #[test]
+    fn psk8_9600_loopback_48k() {
+        let plugin = Psk8Plugin::new();
+        let cfg = ModulationConfig {
+            mode: "8PSK9600".to_string(),
+            sample_rate: 48000,
+            center_frequency: 12000.0,
+            ..ModulationConfig::default()
+        };
+        let payload = b"8PSK9600 12.5 kHz HD";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    /// 8PSK9600-RRC loopback at 48 kHz with Gardner + Costas PLL.
+    #[test]
+    fn psk8_9600_rrc_loopback_48k() {
+        let plugin = Psk8Plugin::new();
+        let cfg = ModulationConfig {
+            mode: "8PSK9600-RRC".to_string(),
+            sample_rate: 48000,
+            center_frequency: 12000.0,
+            ..ModulationConfig::default()
+        };
+        let payload = b"8PSK9600-RRC fills 12.5 kHz";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    /// The carrier phase at the start of a received frame is effectively random on
+    /// hardware (USB-audio buffer fill).  Decoding must be invariant to it.  Prepending
+    /// 0..8 silent samples sweeps the carrier start phase in 67.5° steps at 1500 Hz /
+    /// 8 kHz; every offset must decode bit-exact for both the crossfade and RRC paths.
+    #[test]
+    fn psk8_decode_invariant_to_carrier_phase() {
+        let plugin = Psk8Plugin::new();
+        let payload: Vec<u8> = (0u8..48).collect();
+        for mode in ["8PSK500", "8PSK1000", "8PSK500-RRC", "8PSK1000-RRC"] {
+            let cfg = ModulationConfig {
+                mode: mode.to_string(),
+                center_frequency: 1500.0,
+                ..ModulationConfig::default()
+            };
+            let signal = plugin.modulate(&payload, &cfg).expect("modulate");
+            for pad in 0..8usize {
+                let mut samples = vec![0.0f32; pad];
+                samples.extend_from_slice(&signal);
+                let recovered = plugin.demodulate(&samples, &cfg).expect("demodulate");
+                assert!(
+                    recovered.len() >= payload.len() && recovered[..payload.len()] == payload[..],
+                    "{mode}: wrong decode at carrier phase offset pad={pad}"
+                );
+            }
+        }
+    }
+
+    /// Max-log-MAP soft LLRs must agree with hard decisions and be strictly more
+    /// confident than the ±1.0 fallback on a clean loopback.
+    #[test]
+    fn soft_demodulate_500_sign_and_magnitude() {
+        let plugin = Psk8Plugin::new();
+        let cfg = ModulationConfig {
+            mode: "8PSK500".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload = b"soft LLR 8PSK check";
+        let samples = plugin.modulate(payload, &cfg).expect("modulate");
+        let hard_bytes = plugin.demodulate(&samples, &cfg).expect("demodulate");
+        let llrs = plugin
+            .demodulate_soft(&samples, &cfg)
+            .expect("demodulate_soft");
+
+        // LLR count must equal hard byte count × 8.
+        assert_eq!(llrs.len(), hard_bytes.len() * 8);
+
+        // Sign of each LLR must agree with the hard decision.
+        for (byte_idx, &byte) in hard_bytes.iter().enumerate() {
+            for bit in 0..8usize {
+                let hard_bit = (byte >> bit) & 1;
+                let llr = llrs[byte_idx * 8 + bit];
+                // LLR > 0 ↔ bit=0 more likely.
+                if hard_bit == 0 {
+                    assert!(
+                        llr > 0.0,
+                        "byte {byte_idx} bit {bit}: expected positive LLR for 0, got {llr}"
+                    );
+                } else {
+                    assert!(
+                        llr < 0.0,
+                        "byte {byte_idx} bit {bit}: expected negative LLR for 1, got {llr}"
+                    );
+                }
+                // LLR must be a real soft value, not degenerate zero.
+                assert!(
+                    llr.abs() > 0.01,
+                    "byte {byte_idx} bit {bit}: LLR magnitude {llr} too small"
+                );
+            }
+        }
     }
 }

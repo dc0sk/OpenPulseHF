@@ -1,0 +1,817 @@
+//! Structured TOML configuration for OpenPulse TNC binaries.
+//!
+//! Reads `~/.config/openpulse/config.toml` and returns an [`OpenpulseConfig`]
+//! with built-in defaults applied for any missing fields.
+//!
+//! Precedence: CLI flag overrides > config file > built-in defaults.
+
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("failed to read config file: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("failed to parse config file: {0}")]
+    Parse(#[from] toml::de::Error),
+    #[error("identity key file has wrong length (expected 32 bytes)")]
+    IdentityKeyLength,
+}
+
+/// Top-level configuration.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
+pub struct OpenpulseConfig {
+    pub station: StationConfig,
+    pub audio: AudioConfig,
+    pub modem: ModemConfig,
+    pub radio: RadioConfig,
+    pub repeater: RepeaterConfig,
+    pub ardop: ArdopConfig,
+    pub kiss: KissConfig,
+    pub logging: LoggingConfig,
+    pub relay: RelayConfig,
+    pub trust: TrustConfig,
+    pub mesh: MeshConfig,
+    pub qsy: QsyConfig,
+    pub daemon: DaemonConfig,
+}
+
+/// `openpulse-daemon` runtime settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct DaemonConfig {
+    /// Bind address for the TCP control port.
+    pub tcp_bind_addr: String,
+    /// TCP control port (default 9000).
+    pub tcp_port: u16,
+    /// Bind address for the WebSocket control port.
+    pub websocket_bind_addr: String,
+    /// WebSocket control port (default 9001).
+    pub websocket_port: u16,
+    /// Modem-engine receive ticker interval (ms). Lower = more responsive QSY, higher CPU.
+    pub receive_tick_ms: u64,
+}
+
+/// QSY frequency-agility settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct QsyConfig {
+    /// When false, all incoming QSY_REQ frames are rejected.
+    pub enabled: bool,
+    /// Trust levels whose QSY_REQ frames are accepted.
+    /// Accepted values: "rejected", "low", "unverified", "reduced", "psk_verified", "verified"
+    /// (kebab-case variants are also accepted).
+    pub allow_trustlevels: Vec<String>,
+    /// Bandplan mode for QSY and operating-mode guardrails.
+    pub bandplan_mode: String,
+    /// Enable bandplan awareness checks before selecting QSY frequencies.
+    pub bandplan_awareness_enabled: bool,
+    /// Enforce per-segment maximum occupied channel width.
+    pub enforce_max_channel_width: bool,
+    /// Enforce convention-bound digital/data segments.
+    pub enforce_segment_conventions: bool,
+    /// Candidate frequencies to scan during QSY negotiation (Hz).
+    pub candidate_freqs_hz: Vec<u64>,
+    /// Time to dwell on each candidate frequency while reading the S-meter (ms).
+    pub scan_dwell_ms: u64,
+    /// Seconds after QSY_ACK before both stations switch frequency.
+    pub switchover_offset_s: u64,
+    /// Allow invoking the rig's integrated tuner when SWR is high.
+    pub allow_integrated_tuner_on_high_swr: bool,
+}
+
+/// Station identity.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct StationConfig {
+    pub callsign: String,
+    pub grid_square: String,
+}
+
+/// Audio backend selection.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct AudioConfig {
+    /// Audio backend: `cpal` (real hardware), `loopback` (testing), or
+    /// `default` (use cpal if compiled in, loopback otherwise).
+    pub backend: String,
+    /// Soft-limiter threshold applied to TX audio before the output backend.
+    /// Each sample `s` becomes `threshold * tanh(s / threshold)`.
+    /// Set to `0.0` (default) to disable. Typical value: `1.5 * RMS`.
+    pub tx_limiter_threshold: f32,
+}
+
+/// Modem defaults shared by all TNC binaries.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ModemConfig {
+    /// Default modulation mode (e.g. `"BPSK250"`).
+    pub mode: String,
+    /// Adaptive session profile (e.g. `"hpx_hf"`, `"hpx_ofdm_hf"`).
+    ///
+    /// Selects the SpeedLevel→mode ladder the rate controller and mode advisor use.
+    /// See `SessionProfile::PROFILE_NAMES` in `openpulse-core`.
+    pub profile: String,
+    /// PTT backend: `none`, `rts`, `dtr`, `vox`, or `rigctld`.
+    pub ptt_backend: String,
+}
+
+/// Per-rig CAT settings (used in `[radio.rig_a]` / `[radio.rig_b]` sections).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct RigConfig {
+    /// rigctld TCP address for this rig (default `"127.0.0.1:4532"`).
+    pub rigctld_addr: String,
+    /// CAT backend: `"rigctld"` (default) or `"generic"` (TOML-scripted serial).
+    pub backend: String,
+    /// Serial port path for the `"generic"` backend (e.g. `"/dev/ttyUSB0"`).
+    pub serial_port: String,
+    /// Path to the TOML rig-definition file for the `"generic"` backend.
+    pub rig_file: String,
+}
+
+/// Rig CAT control settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct RadioConfig {
+    /// rigctld TCP address for single-rig PTT-only use (default `"127.0.0.1:4532"`).
+    pub rigctld_addr: String,
+    /// Primary rig (RX/TX for normal operation and cross-band relay receive).
+    pub rig_a: RigConfig,
+    /// Secondary rig (TX for cross-band relay).  `None` if not configured.
+    pub rig_b: Option<RigConfig>,
+}
+
+/// Cross-band repeater settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct RepeaterConfig {
+    /// Enable the cross-band repeater.  Requires `[radio.rig_a]` and `[radio.rig_b]`.
+    pub enabled: bool,
+    /// Modulation mode used for both RX (rig_a) and TX (rig_b).
+    pub mode: String,
+    /// Milliseconds to hold PTT after the last byte is transmitted (half-duplex only).
+    pub tx_hang_ms: u64,
+    /// When true, PTT is held for the entire relay session.  `tx_hang_ms` is ignored.
+    pub full_duplex: bool,
+}
+
+/// ARDOP TNC service settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ArdopConfig {
+    pub bind_addr: String,
+    pub cmd_port: u16,
+    pub data_port: u16,
+}
+
+/// KISS TNC service settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct KissConfig {
+    pub bind_addr: String,
+    pub port: u16,
+}
+
+/// Logging configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct LoggingConfig {
+    /// `tracing` level filter: `error`, `warn`, `info`, `debug`, or `trace`.
+    pub level: String,
+}
+
+/// Multi-hop relay settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct RelayConfig {
+    pub enabled: bool,
+    pub max_hops: u8,
+    /// Store-and-forward frame TTL in seconds. Read by `openpulse-daemon`'s relay forwarder.
+    pub store_forward_ttl_s: u64,
+    /// Peer IDs (lower-hex, 64 chars each) whose frames are dropped at the first relay hop.
+    pub deny_list: Vec<String>,
+}
+
+/// Trust store settings.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
+pub struct TrustConfig {
+    /// Path to the local trust store. Empty string uses the platform default.
+    pub store_path: String,
+}
+
+/// Mesh daemon settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct MeshConfig {
+    /// Enable the mesh relay daemon.
+    pub enabled: bool,
+    /// Maximum relay hop count (envelope dropped when hop_index reaches this).
+    pub max_hops: u8,
+    /// Relay trust policy string: `"strict"`, `"balanced"`, or `"permissive"`.
+    /// Reserved for future trust-level filtering; `RelayTrustPolicy` currently
+    /// models a deny-list of peer IDs and does not yet enforce this value.
+    pub relay_policy: String,
+    /// Store-and-forward frame TTL in seconds. Read by `openpulse-mesh` daemon.
+    pub store_forward_ttl_s: u64,
+    /// Peer discovery beacon interval in seconds; 0 disables beacons.
+    pub beacon_interval_s: u64,
+    /// Maximum entries in the local peer cache.
+    pub peer_cache_capacity: usize,
+    /// Peer cache entry TTL in seconds.
+    pub peer_cache_ttl_s: u64,
+}
+
+// ── Defaults ──────────────────────────────────────────────────────────────────
+
+impl Default for StationConfig {
+    fn default() -> Self {
+        Self {
+            callsign: "N0CALL".into(),
+            grid_square: "AA00".into(),
+        }
+    }
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            backend: "default".into(),
+            tx_limiter_threshold: 0.0,
+        }
+    }
+}
+
+impl Default for ModemConfig {
+    fn default() -> Self {
+        Self {
+            mode: "BPSK250".into(),
+            profile: "hpx_hf".into(),
+            ptt_backend: "none".into(),
+        }
+    }
+}
+
+impl Default for RigConfig {
+    fn default() -> Self {
+        Self {
+            rigctld_addr: "127.0.0.1:4532".into(),
+            backend: "rigctld".into(),
+            serial_port: String::new(),
+            rig_file: String::new(),
+        }
+    }
+}
+
+impl Default for RadioConfig {
+    fn default() -> Self {
+        Self {
+            rigctld_addr: "127.0.0.1:4532".into(),
+            rig_a: RigConfig::default(),
+            rig_b: None,
+        }
+    }
+}
+
+impl Default for RepeaterConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: "BPSK250".into(),
+            tx_hang_ms: 500,
+            full_duplex: false,
+        }
+    }
+}
+
+impl Default for ArdopConfig {
+    fn default() -> Self {
+        Self {
+            bind_addr: "127.0.0.1".into(),
+            cmd_port: 8515,
+            data_port: 8516,
+        }
+    }
+}
+
+impl Default for KissConfig {
+    fn default() -> Self {
+        Self {
+            bind_addr: "127.0.0.1".into(),
+            port: 8100,
+        }
+    }
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            level: "info".into(),
+        }
+    }
+}
+
+impl Default for RelayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_hops: 3,
+            store_forward_ttl_s: 300,
+            deny_list: Vec::new(),
+        }
+    }
+}
+
+impl Default for MeshConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_hops: 3,
+            relay_policy: "balanced".into(),
+            store_forward_ttl_s: 300,
+            beacon_interval_s: 60,
+            peer_cache_capacity: 256,
+            peer_cache_ttl_s: 3600,
+        }
+    }
+}
+
+impl Default for QsyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allow_trustlevels: vec!["verified".into(), "psk_verified".into()],
+            bandplan_mode: "ham-iaru-r1".into(),
+            bandplan_awareness_enabled: true,
+            enforce_max_channel_width: true,
+            enforce_segment_conventions: true,
+            candidate_freqs_hz: vec![],
+            scan_dwell_ms: 500,
+            switchover_offset_s: 5,
+            allow_integrated_tuner_on_high_swr: false,
+        }
+    }
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        Self {
+            tcp_bind_addr: "127.0.0.1".into(),
+            tcp_port: 9000,
+            websocket_bind_addr: "127.0.0.1".into(),
+            websocket_port: 9001,
+            receive_tick_ms: 50,
+        }
+    }
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/// Returns the platform-standard config file path.
+///
+/// On Linux: `~/.config/openpulse/config.toml`
+/// On macOS: `~/Library/Application Support/openpulse/config.toml`
+/// On Windows: `%APPDATA%\openpulse\config.toml`
+pub fn default_config_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("openpulse").join("config.toml"))
+}
+
+/// Load config from the platform-standard path. Returns `OpenpulseConfig::default()`
+/// if the file does not exist.
+pub fn load() -> Result<OpenpulseConfig, ConfigError> {
+    match default_config_path() {
+        Some(path) => load_from(&path),
+        None => Ok(OpenpulseConfig::default()),
+    }
+}
+
+/// Load config from `path`. Returns `OpenpulseConfig::default()` if the file does
+/// not exist.
+pub fn load_from(path: &Path) -> Result<OpenpulseConfig, ConfigError> {
+    if !path.exists() {
+        return Ok(OpenpulseConfig::default());
+    }
+    let content = std::fs::read_to_string(path)?;
+    let config: OpenpulseConfig = toml::from_str(&content)?;
+    Ok(config)
+}
+
+/// Load or generate the node's 32-byte Ed25519 signing key seed.
+///
+/// Reads `identity.key` from the platform config directory (`~/.config/openpulse/`).
+/// If absent, generates a fresh random seed, persists it, then returns it.
+/// The caller derives `peer_id = SigningKey::from_bytes(&seed).verifying_key().to_bytes()`.
+pub fn load_or_generate_identity() -> Result<[u8; 32], ConfigError> {
+    let path = default_identity_path().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "cannot determine config directory",
+        )
+    })?;
+    load_identity_from(&path)
+}
+
+/// Load or generate an identity seed at an explicit path (useful in tests).
+pub fn load_identity_from(path: &Path) -> Result<[u8; 32], ConfigError> {
+    if path.exists() {
+        let bytes = std::fs::read(path)?;
+        if bytes.len() != 32 {
+            return Err(ConfigError::IdentityKeyLength);
+        }
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&bytes);
+        return Ok(seed);
+    }
+
+    use rand::RngCore;
+    let mut seed = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut seed);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    // Create with owner-only permissions atomically on Unix to avoid a window
+    // where the file exists with broader umask-derived permissions.
+    #[cfg(unix)]
+    {
+        use std::io::{ErrorKind, Write};
+        use std::os::unix::fs::OpenOptionsExt;
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+        {
+            Ok(mut f) => f.write_all(&seed)?,
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                // Another process won the race and already created the file.
+                let bytes = std::fs::read(path)?;
+                if bytes.len() != 32 {
+                    return Err(ConfigError::IdentityKeyLength);
+                }
+                seed.copy_from_slice(&bytes);
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    #[cfg(not(unix))]
+    std::fs::write(path, seed)?;
+    Ok(seed)
+}
+/// Returns the platform-standard identity key file path.
+///
+/// On Linux: `~/.config/openpulse/identity.key`
+fn default_identity_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("openpulse").join("identity.key"))
+}
+
+/// Persist updated QSY settings to the platform config file.
+///
+/// Loads the existing config (falling back to defaults), updates the QSY
+/// fields, then rewrites the file. Returns an error when the config directory
+/// cannot be determined.
+pub fn save_qsy_config(
+    qsy_enabled: bool,
+    bandplan_mode: &str,
+    allow_integrated_tuner_on_high_swr: bool,
+) -> Result<(), ConfigError> {
+    let path = match default_config_path() {
+        Some(p) => p,
+        None => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "cannot determine config directory",
+            )
+            .into())
+        }
+    };
+    save_qsy_config_to_path(
+        &path,
+        qsy_enabled,
+        bandplan_mode,
+        allow_integrated_tuner_on_high_swr,
+    )
+}
+
+/// Persist updated QSY settings to an explicit config path.
+///
+/// This is used by tests and tooling that need deterministic file locations.
+pub fn save_qsy_config_to_path(
+    path: &Path,
+    qsy_enabled: bool,
+    bandplan_mode: &str,
+    allow_integrated_tuner_on_high_swr: bool,
+) -> Result<(), ConfigError> {
+    let mut cfg = load_from(path).unwrap_or_default();
+    cfg.qsy.enabled = qsy_enabled;
+    cfg.qsy.allow_integrated_tuner_on_high_swr = allow_integrated_tuner_on_high_swr;
+    if bandplan_mode == "unrestricted" {
+        cfg.qsy.bandplan_awareness_enabled = false;
+    } else {
+        cfg.qsy.bandplan_awareness_enabled = true;
+        cfg.qsy.bandplan_mode = bandplan_mode.to_string();
+    }
+    let toml_str =
+        toml::to_string_pretty(&cfg).map_err(|e| std::io::Error::other(e.to_string()))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, toml_str)?;
+    Ok(())
+}
+
+/// Returns a commented TOML configuration template for `openpulse config init`.
+pub fn init_template() -> String {
+    r#"# OpenPulse configuration file
+# Generated by: openpulse config init
+#
+# Place this file at:
+#   Linux/BSDs : ~/.config/openpulse/config.toml
+#   macOS      : ~/Library/Application Support/openpulse/config.toml
+#   Windows    : %APPDATA%\openpulse\config.toml
+#
+# All fields are optional; built-in defaults are used for any missing values.
+
+[station]
+# Your amateur radio callsign.
+callsign = "N0CALL"
+# Maidenhead grid square locator.
+grid_square = "AA00"
+
+[audio]
+# Audio backend: default | cpal | loopback
+#   default  — use cpal if compiled in, loopback otherwise (recommended)
+#   cpal     — always use the real sound card (error if not compiled in)
+#   loopback — software loopback for testing only, no audio hardware required
+backend = "default"
+# Soft TX limiter threshold (0.0 = disabled). Typical value: 1.5 × RMS of the
+# modulated signal. Prevents ADC clipping and reduces PA non-linearity on peaks.
+# tx_limiter_threshold = 0.0
+
+[modem]
+# Default modulation mode used when no --mode flag is provided.
+# Available: BPSK31, BPSK63, BPSK100, BPSK250, QPSK125, QPSK250, QPSK500,
+#            QPSK1000, 8PSK500, 8PSK1000, 64QAM500, 64QAM1000, 64QAM2000-RRC,
+#            OFDM16, OFDM52, SCFDMA16, SCFDMA52, SCFDMA52-16QAM,
+#            SCFDMA52-64QAM, SCFDMA52-64QAM-P4, FSK4-ACK
+mode = "BPSK250"
+# Adaptive session profile (SpeedLevel ladder) used by the rate controller and
+# `openpulse mode-advisor`. Available: hpx500, hpx_hf, hpx_ofdm_hf, hpx_wideband,
+# hpx_wideband_hd, hpx_narrowband, hpx_narrowband_hd. hpx_ofdm_hf is the OFDM
+# higher-order (high-throughput/high-reliability) HF ladder.
+profile = "hpx_hf"
+# PTT backend: none | rts | dtr | vox | rigctld
+ptt_backend = "none"
+
+[radio]
+# rigctld TCP address for single-rig PTT-only use.
+rigctld_addr = "127.0.0.1:4532"
+
+# Primary rig (RX/TX for normal operation; also the receive side of cross-band relay).
+[radio.rig_a]
+rigctld_addr = "127.0.0.1:4532"
+# CAT backend: "rigctld" (default) or "generic" (TOML-scripted serial).
+# backend = "rigctld"
+# Serial port path and rig-definition file for the "generic" backend.
+# serial_port = "/dev/ttyUSB0"
+# rig_file = "~/.config/openpulse/rigs/icom-ic7300.toml"
+
+# Secondary rig (TX side of cross-band relay).  Uncomment to enable dual-rig.
+# [radio.rig_b]
+# rigctld_addr = "127.0.0.1:4533"
+
+[repeater]
+# Enable the cross-band repeater (requires [radio.rig_a] and [radio.rig_b]).
+enabled = false
+# Modulation mode used for both RX (rig_a) and TX (rig_b).
+mode = "BPSK250"
+# Milliseconds to hold PTT after the last byte is transmitted (half-duplex only).
+tx_hang_ms = 500
+# Hold PTT for the entire relay session instead of per-frame assert/release.
+# full_duplex = false
+
+[ardop]
+# IP address the ARDOP TNC listens on.
+bind_addr = "127.0.0.1"
+# ARDOP command port.
+cmd_port = 8515
+# ARDOP data port.
+data_port = 8516
+
+[kiss]
+# IP address the KISS TNC listens on.
+bind_addr = "127.0.0.1"
+# KISS TCP port.
+port = 8100
+
+[logging]
+# Log verbosity: error | warn | info | debug | trace
+level = "info"
+
+[relay]
+# Enable multi-hop relay forwarding (used by openpulse-daemon).
+enabled = false
+# Maximum relay hop count.
+max_hops = 3
+# Store-and-forward frame TTL in seconds (read by openpulse-daemon relay forwarder).
+store_forward_ttl_s = 300
+
+[mesh]
+# Enable the openpulse-mesh daemon relay stack (used by openpulse-mesh binary).
+enabled = false
+# Maximum relay hop count before a frame is dropped.
+max_hops = 3
+# Relay trust policy: strict | balanced | permissive
+relay_policy = "balanced"
+# Store-and-forward frame TTL in seconds (read by openpulse-mesh binary).
+store_forward_ttl_s = 300
+# Peer discovery beacon interval in seconds.
+beacon_interval_s = 60
+# Maximum peer cache entries.
+peer_cache_capacity = 256
+# Peer cache entry TTL in seconds.
+peer_cache_ttl_s = 3600
+
+[trust]
+# Path to the local trust store file. Empty = platform default.
+store_path = ""
+
+[daemon]
+# TCP control port (openpulse-daemon).
+tcp_bind_addr = "127.0.0.1"
+tcp_port = 9000
+# WebSocket control port (openpulse-daemon).
+websocket_bind_addr = "127.0.0.1"
+websocket_port = 9001
+# Modem receive ticker interval (ms). Lower = more responsive RF reception, higher CPU.
+receive_tick_ms = 50
+
+# [qsy]
+# Enable QSY frequency-agility negotiation.  Requires hamlib rigctld configured in [radio].
+# enabled = false
+# Trust levels allowed to initiate QSY with this station.
+# allow_trustlevels = ["verified", "psk_verified"]
+# Bandplan-awareness mode: ham-iaru-r1 | ham-iaru-r2 | ham-iaru-r3
+# bandplan_mode = "ham-iaru-r1"
+# Enforce bandplan guardrails for QSY (enabled by default).
+# Set to false only as an explicit responsible-operator compliance override.
+# bandplan_awareness_enabled = true
+# Enforce per-segment occupied bandwidth limits for the active modem mode.
+# enforce_max_channel_width = true
+# Enforce convention-bound digital/data segments.
+# enforce_segment_conventions = true
+# Candidate frequencies to evaluate during a QSY scan (Hz).
+# candidate_freqs_hz = [14070000, 14074000, 14077000]
+# How long to dwell on each candidate while reading the S-meter (ms).
+# scan_dwell_ms = 500
+# Seconds between QSY_ACK and the actual frequency switch.
+# switchover_offset_s = 5
+# Allow integrated tuner operation when high SWR is detected.
+# allow_integrated_tuner_on_high_swr = false
+"#
+    .to_string()
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn unique_tmp(suffix: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "openpulse_cfg_{}_{}.toml",
+            std::process::id(),
+            suffix
+        ))
+    }
+
+    #[test]
+    fn load_defaults_when_no_file() {
+        let path = unique_tmp("defaults");
+        let _ = std::fs::remove_file(&path);
+        let cfg = load_from(&path).unwrap();
+        assert_eq!(cfg.station.callsign, "N0CALL");
+        assert_eq!(cfg.ardop.cmd_port, 8515);
+        assert_eq!(cfg.ardop.data_port, 8516);
+        assert_eq!(cfg.kiss.port, 8100);
+        assert_eq!(cfg.modem.mode, "BPSK250");
+        assert_eq!(cfg.logging.level, "info");
+        assert!(!cfg.relay.enabled);
+        assert_eq!(cfg.relay.max_hops, 3);
+    }
+
+    #[test]
+    fn cli_override_pattern() {
+        // CLI flag > config > default: simulate by loading config then applying
+        // an Option<T> override, the pattern used by TNC binaries.
+        let path = unique_tmp("override");
+        {
+            let mut f = std::fs::File::create(&path).unwrap();
+            writeln!(f, "[ardop]").unwrap();
+            writeln!(f, "cmd_port = 9000").unwrap();
+            writeln!(f, "data_port = 9001").unwrap();
+        }
+        let mut cfg = load_from(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(cfg.ardop.cmd_port, 9000);
+
+        // CLI flag supplied → overrides config value.
+        let cli_cmd_port: Option<u16> = Some(7777);
+        if let Some(p) = cli_cmd_port {
+            cfg.ardop.cmd_port = p;
+        }
+        assert_eq!(cfg.ardop.cmd_port, 7777);
+        // Unset CLI flag → config value retained.
+        assert_eq!(cfg.ardop.data_port, 9001);
+    }
+
+    #[test]
+    fn missing_fields_get_defaults() {
+        let path = unique_tmp("partial");
+        {
+            let mut f = std::fs::File::create(&path).unwrap();
+            // Only set callsign; everything else should come from Default.
+            writeln!(f, "[station]").unwrap();
+            writeln!(f, r#"callsign = "K1ABC""#).unwrap();
+        }
+        let cfg = load_from(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(cfg.station.callsign, "K1ABC");
+        // Fields not in the file use built-in defaults.
+        assert_eq!(cfg.station.grid_square, "AA00");
+        assert_eq!(cfg.ardop.cmd_port, 8515);
+        assert_eq!(cfg.modem.ptt_backend, "none");
+        assert_eq!(cfg.modem.profile, "hpx_hf");
+    }
+
+    #[test]
+    fn modem_profile_loads_and_template_parses() {
+        // Override the profile in a config file and confirm it round-trips.
+        let path = unique_tmp("profile");
+        {
+            let mut f = std::fs::File::create(&path).unwrap();
+            writeln!(f, "[modem]").unwrap();
+            writeln!(f, r#"profile = "hpx_ofdm_hf""#).unwrap();
+        }
+        let cfg = load_from(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(cfg.modem.profile, "hpx_ofdm_hf");
+
+        // The emitted template must parse and carry the documented default.
+        let parsed: OpenpulseConfig = toml::from_str(&init_template()).unwrap();
+        assert_eq!(parsed.modem.profile, "hpx_hf");
+    }
+
+    #[test]
+    fn load_twice_returns_same_seed() {
+        // Use a unique temp dir to avoid polluting the real config directory.
+        let tmp = std::env::temp_dir().join(format!("openpulse_id_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let key_path = tmp.join("identity.key");
+        let _ = std::fs::remove_file(&key_path);
+
+        // First call creates the key file.
+        let seed1 = load_identity_from(&key_path).unwrap();
+        assert_eq!(seed1.len(), 32);
+        // Second call reads the same seed.
+        let seed2 = load_identity_from(&key_path).unwrap();
+        assert_eq!(seed1, seed2);
+
+        let _ = std::fs::remove_file(&key_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[test]
+    fn save_qsy_config_to_path_persists_unrestricted_mode() {
+        let path = unique_tmp("qsy_unrestricted");
+        let _ = std::fs::remove_file(&path);
+
+        save_qsy_config_to_path(&path, true, "unrestricted", true).unwrap();
+
+        let cfg = load_from(&path).unwrap();
+        assert!(cfg.qsy.enabled);
+        assert!(!cfg.qsy.bandplan_awareness_enabled);
+        assert!(cfg.qsy.allow_integrated_tuner_on_high_swr);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn save_qsy_config_to_path_persists_bandplan_mode() {
+        let path = unique_tmp("qsy_bandplan");
+        let _ = std::fs::remove_file(&path);
+
+        save_qsy_config_to_path(&path, true, "ham-iaru-r2", false).unwrap();
+
+        let cfg = load_from(&path).unwrap();
+        assert!(cfg.qsy.enabled);
+        assert!(cfg.qsy.bandplan_awareness_enabled);
+        assert_eq!(cfg.qsy.bandplan_mode, "ham-iaru-r2");
+        assert!(!cfg.qsy.allow_integrated_tuner_on_high_swr);
+        let _ = std::fs::remove_file(&path);
+    }
+}

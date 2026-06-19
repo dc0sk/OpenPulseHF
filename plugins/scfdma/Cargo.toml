@@ -1,0 +1,21 @@
+[package]
+name        = "scfdma-plugin"
+description = "SC-FDMA (DFT-spread OFDM) modulation plugin for OpenPulse (FF-12)"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+
+[features]
+gpu = ["dep:openpulse-gpu"]
+
+[dependencies]
+openpulse-core = { workspace = true }
+openpulse-dsp  = { workspace = true }
+rustfft        = { workspace = true }
+num-complex    = { workspace = true }
+openpulse-gpu  = { workspace = true, optional = true }
+
+[dev-dependencies]
+openpulse-channel = { workspace = true }

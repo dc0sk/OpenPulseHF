@@ -119,12 +119,11 @@ impl AudioBackend for CpalBackend {
                 .default_input_device()
                 .ok_or_else(|| AudioError::DeviceNotFound("no default input device".into()))?,
             Some(name) => {
-                let all = self
+                let mut all = self
                     .host
                     .input_devices()
                     .map_err(|e| AudioError::Stream(e.to_string()))?;
-                all.filter(|d| d.name().ok().as_deref() == Some(name))
-                    .next()
+                all.find(|d| d.name().ok().as_deref() == Some(name))
                     .ok_or_else(|| AudioError::DeviceNotFound(name.to_string()))?
             }
         };
@@ -145,7 +144,9 @@ impl AudioBackend for CpalBackend {
             .build_input_stream(
                 &stream_config,
                 move |data: &[f32], _| {
-                    let mut guard = buf_write.lock().expect("cpal buffer poisoned");
+                    // Recover from a poisoned lock: another thread panicked while
+                    // holding it, but the VecDeque is still in a usable state.
+                    let mut guard = buf_write.lock().unwrap_or_else(|p| p.into_inner());
                     guard.extend(data.iter().copied());
                 },
                 |err| warn!("cpal input error: {err}"),
@@ -178,12 +179,11 @@ impl AudioBackend for CpalBackend {
                 .default_output_device()
                 .ok_or_else(|| AudioError::DeviceNotFound("no default output device".into()))?,
             Some(name) => {
-                let all = self
+                let mut all = self
                     .host
                     .output_devices()
                     .map_err(|e| AudioError::Stream(e.to_string()))?;
-                all.filter(|d| d.name().ok().as_deref() == Some(name))
-                    .next()
+                all.find(|d| d.name().ok().as_deref() == Some(name))
                     .ok_or_else(|| AudioError::DeviceNotFound(name.to_string()))?
             }
         };
@@ -204,7 +204,7 @@ impl AudioBackend for CpalBackend {
             .build_output_stream(
                 &stream_config,
                 move |output: &mut [f32], _| {
-                    let mut guard = buf_read.lock().expect("cpal buffer poisoned");
+                    let mut guard = buf_read.lock().unwrap_or_else(|p| p.into_inner());
                     for sample in output.iter_mut() {
                         *sample = guard.pop_front().unwrap_or(0.0);
                     }
@@ -214,17 +214,21 @@ impl AudioBackend for CpalBackend {
             )
             .map_err(|e| AudioError::Stream(e.to_string()))?;
 
-        stream
-            .play()
-            .map_err(|e| AudioError::Stream(e.to_string()))?;
+        // Do NOT play() yet. Starting the stream before any samples are buffered
+        // makes the output callback fire against an empty queue and underrun
+        // (audible at the frame start, and flaky for slow/bursty modes). Playback
+        // is started lazily on the first write(), once the frame is buffered.
         debug!(
-            "opened cpal output stream on '{}'",
+            "opened cpal output stream on '{}' (playback deferred to first write)",
             dev.name().unwrap_or_default()
         );
 
         Ok(Box::new(CpalOutputStream {
-            _stream: stream,
+            stream,
+            started: false,
             buf,
+            sample_rate_hz: config.sample_rate,
+            channels: config.channels,
         }))
     }
 }
@@ -240,14 +244,14 @@ pub struct CpalInputStream {
 impl AudioInputStream for CpalInputStream {
     fn read(&mut self) -> Result<Vec<f32>, AudioError> {
         // Poll the buffer; only sleep when it is empty to avoid unnecessary latency.
-        let mut guard = self.buf.lock().expect("cpal buffer poisoned");
+        let mut guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
         if !guard.is_empty() {
             return Ok(guard.drain(..).collect());
         }
         drop(guard);
         // Buffer is empty – give the driver a moment to fill it.
         std::thread::sleep(Duration::from_millis(10));
-        let mut guard = self.buf.lock().expect("cpal buffer poisoned");
+        let mut guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
         Ok(guard.drain(..).collect())
     }
 
@@ -260,30 +264,74 @@ impl AudioInputStream for CpalInputStream {
 
 /// Writes to a live cpal playback stream.
 pub struct CpalOutputStream {
-    _stream: Stream,
+    stream: Stream,
+    /// Playback is started lazily on the first write so the queue is non-empty
+    /// when the output callback first fires (prevents the startup underrun).
+    started: bool,
     buf: Arc<Mutex<VecDeque<f32>>>,
+    sample_rate_hz: u32,
+    channels: u16,
 }
 
 impl AudioOutputStream for CpalOutputStream {
     fn write(&mut self, samples: &[f32]) -> Result<(), AudioError> {
-        let mut guard = self.buf.lock().expect("cpal buffer poisoned");
-        guard.extend(samples.iter().copied());
+        {
+            let mut guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
+            guard.extend(samples.iter().copied());
+        }
+        // Start playback only once the queue holds data (drop the buffer lock
+        // first — the output callback also takes it).
+        if !self.started {
+            self.stream
+                .play()
+                .map_err(|e| AudioError::Stream(e.to_string()))?;
+            self.started = true;
+        }
         Ok(())
     }
 
     fn flush(&mut self) -> Result<(), AudioError> {
-        // Wait until the driver has consumed all buffered samples, up to 5 s.
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        // Append a short trailing-silence pad so the last data samples are never at
+        // the buffer boundary: the frame tail plays fully, and the unavoidable
+        // pull-based end-of-stream underrun lands in silence rather than clipping the
+        // final symbols. ~32 ms is plenty and adds negligible TX time.
+        {
+            let pad = ((self.sample_rate_hz as usize) * (self.channels.max(1) as usize)) / 32;
+            let mut guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
+            if !guard.is_empty() {
+                guard.extend(std::iter::repeat_n(0.0_f32, pad));
+            }
+        }
+        // Wait until the driver has consumed all buffered samples.
+        // Timeout adapts to queued audio length so slow modes can fully drain.
+        let queued_samples = {
+            let guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
+            guard.len()
+        };
+        let samples_per_second = (self.sample_rate_hz as f64) * (self.channels as f64);
+        let queued_seconds = if samples_per_second > 0.0 {
+            (queued_samples as f64) / samples_per_second
+        } else {
+            0.0
+        };
+        let timeout_seconds = (queued_seconds + 3.0).clamp(5.0, 60.0);
+        let deadline = std::time::Instant::now() + Duration::from_secs_f64(timeout_seconds);
         loop {
             std::thread::sleep(Duration::from_millis(10));
-            let guard = self.buf.lock().expect("cpal buffer poisoned");
+            let guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
             if guard.is_empty() {
+                // The software queue is empty, but the soundcard's hardware
+                // output buffer may still hold up to ~2688 samples at 48 kHz
+                // (≈ 6 BPSK symbols at 8 kHz).  Sleep for 200 ms to let the
+                // hardware buffer drain before the caller closes the stream.
+                std::thread::sleep(Duration::from_millis(200));
                 return Ok(());
             }
             if std::time::Instant::now() >= deadline {
-                return Err(AudioError::Stream(
-                    "flush timeout: output buffer did not drain within 5 s".into(),
-                ));
+                return Err(AudioError::Stream(format!(
+                    "flush timeout: output buffer did not drain within {:.1} s",
+                    timeout_seconds
+                )));
             }
         }
     }

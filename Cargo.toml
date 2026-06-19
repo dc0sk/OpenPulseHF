@@ -7,18 +7,40 @@ members = [
     "crates/openpulse-cli",
     "crates/openpulse-channel",
     "crates/openpulse-radio",
+    "crates/openpulse-repeater",
+    "crates/openpulse-gpu",
+    "crates/openpulse-ardop",
+    "crates/openpulse-kiss",
+    "crates/openpulse-b2f",
+    "crates/openpulse-b2f-driver",
+    "crates/openpulse-config",
+    "crates/openpulse-gateway",
+    "crates/openpulse-tui",
+    "crates/openpulse-mesh",
+    "plugins/64qam",
     "plugins/bpsk",
     "plugins/fsk4",
+    "plugins/ofdm",
+    "plugins/pilot",
     "plugins/psk8",
     "plugins/qpsk",
+    "plugins/scfdma",
     "pki-tooling",
+    "apps/openpulse-testbench",
+    "apps/openpulse-testmatrix",
+    "apps/openpulse-panel",
+    "crates/openpulse-daemon",
+    "crates/openpulse-dsp",
+    "crates/openpulse-qsy",
+    "crates/openpulse-freedv-auth",
+    "tools/openpulse-dict-trainer",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
-authors = ["OpenPulse Contributors"]
+authors = ["Simon Keimer (DC0SK)"]
 repository = "https://github.com/dc0sk/OpenPulse"
 
 [workspace.dependencies]
@@ -27,10 +49,25 @@ openpulse-audio   = { path = "crates/openpulse-audio", default-features = false 
 openpulse-modem   = { path = "crates/openpulse-modem" }
 openpulse-channel = { path = "crates/openpulse-channel" }
 openpulse-radio   = { path = "crates/openpulse-radio" }
+openpulse-repeater = { path = "crates/openpulse-repeater" }
+openpulse-gpu     = { path = "crates/openpulse-gpu" }
+openpulse-ardop   = { path = "crates/openpulse-ardop" }
+openpulse-b2f     = { path = "crates/openpulse-b2f" }
+openpulse-b2f-driver = { path = "crates/openpulse-b2f-driver" }
+openpulse-config     = { path = "crates/openpulse-config" }
+openpulse-gateway    = { path = "crates/openpulse-gateway" }
+openpulse-mesh       = { path = "crates/openpulse-mesh" }
+openpulse-daemon     = { path = "crates/openpulse-daemon" }
+openpulse-dsp        = { path = "crates/openpulse-dsp" }
+openpulse-qsy        = { path = "crates/openpulse-qsy" }
 bpsk-plugin       = { path = "plugins/bpsk" }
 fsk4-plugin       = { path = "plugins/fsk4" }
+ofdm-plugin       = { path = "plugins/ofdm" }
+pilot-plugin      = { path = "plugins/pilot" }
 psk8-plugin       = { path = "plugins/psk8" }
+qam64-plugin      = { path = "plugins/64qam" }
 qpsk-plugin       = { path = "plugins/qpsk" }
+scfdma-plugin     = { path = "plugins/scfdma" }
 
 thiserror          = "2.0"
 anyhow             = "1.0"
@@ -44,3 +81,16 @@ crossbeam-channel  = "0.5"
 rand               = { version = "0.8", features = ["std_rng"] }
 rand_distr         = "0.4"
 rustfft            = "6.2"
+wgpu               = "0.20"
+bytemuck           = { version = "1.16", features = ["derive"] }
+pollster           = "0.4"
+criterion          = { version = "0.5", features = ["html_reports"] }
+tokio              = { version = "1", features = ["net", "io-util", "sync", "rt-multi-thread", "macros", "time"] }
+ratatui            = "0.30"
+crossterm          = "0.28"
+flate2             = "1.0"
+oxiarc-lzhuf       = "0.2.7"
+sha2               = "0.10"
+eframe             = { version = "0.29", default-features = false, features = ["default_fonts", "glow"] }
+egui               = "0.29"
+egui_plot          = "0.29"

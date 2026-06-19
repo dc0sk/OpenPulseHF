@@ -7,9 +7,10 @@
 //! ## Wire layout (5 bytes)
 //!
 //! ```text
-//! byte 0: ACK type [2:0], reserved [7:3]
+//! byte 0: ACK type [2:0], has_reverse_ack [3], reserved [7:4]
 //! bytes 1–2: session_hash u16 big-endian  (anti-collision)
-//! byte 3: reserved (zero)
+//! byte 3: reverse_ack [2:0] when has_reverse_ack=1, else 0  (backward-compatible: old
+//!         receivers ignore this byte; CRC still validates)
 //! byte 4: CRC-8/SMBUS over bytes 0–3
 //! ```
 
@@ -66,6 +67,12 @@ pub struct AckFrame {
     pub ack_type: AckType,
     /// 16-bit FNV-1a hash of the session ID for anti-collision filtering.
     pub session_hash: u16,
+    /// Sender's assessment of the *incoming* path quality (reverse direction).
+    ///
+    /// When set, the sender piggybacks its own RX quality report so the peer
+    /// can update its own [`crate::rate::RateAdapter`] for the reverse direction without a separate frame.
+    /// `None` encodes as byte 3 = 0 (backward compatible with old receivers).
+    pub reverse_ack: Option<AckType>,
 }
 
 impl AckFrame {
@@ -74,18 +81,28 @@ impl AckFrame {
         Self {
             ack_type,
             session_hash: Self::hash_session_id(session_id),
+            reverse_ack: None,
+        }
+    }
+
+    /// Create a frame that also carries a reverse-direction quality report.
+    pub fn new_with_reverse(ack_type: AckType, session_id: &str, reverse_ack: AckType) -> Self {
+        Self {
+            ack_type,
+            session_hash: Self::hash_session_id(session_id),
+            reverse_ack: Some(reverse_ack),
         }
     }
 
     /// Encode to the 5-byte wire representation.
     pub fn encode(&self) -> [u8; 5] {
-        let mut b = [0u8; 5];
-        b[0] = self.ack_type as u8;
-        b[1] = (self.session_hash >> 8) as u8;
-        b[2] = self.session_hash as u8;
-        b[3] = 0;
-        b[4] = crc8(&b[..4]);
-        b
+        let has_rev = self.reverse_ack.is_some() as u8;
+        let b0 = (self.ack_type as u8) | (has_rev << 3);
+        let sh = self.session_hash.to_be_bytes();
+        let b3 = self.reverse_ack.map_or(0, |a| a as u8);
+        let payload = [b0, sh[0], sh[1], b3];
+        let crc = crc8(&payload);
+        [b0, sh[0], sh[1], b3, crc]
     }
 
     /// Decode from the 5-byte wire representation.
@@ -98,10 +115,17 @@ impl AckFrame {
             });
         }
         let ack_type = AckType::from_u8(b[0] & 0x07)?;
+        let has_rev = (b[0] >> 3) & 1 != 0;
         let session_hash = ((b[1] as u16) << 8) | b[2] as u16;
+        let reverse_ack = if has_rev {
+            Some(AckType::from_u8(b[3] & 0x07)?)
+        } else {
+            None
+        };
         Ok(Self {
             ack_type,
             session_hash,
+            reverse_ack,
         })
     }
 
@@ -154,6 +178,7 @@ mod tests {
             let f = AckFrame {
                 ack_type: t,
                 session_hash: 0xABCD,
+                reverse_ack: None,
             };
             let b = f.encode();
             assert_eq!(AckFrame::decode(&b).unwrap(), f);
@@ -161,10 +186,30 @@ mod tests {
     }
 
     #[test]
+    fn ack_frame_with_reverse_ack_round_trips() {
+        let f = AckFrame::new_with_reverse(AckType::AckOk, "sess", AckType::AckUp);
+        let b = f.encode();
+        let decoded = AckFrame::decode(&b).unwrap();
+        assert_eq!(decoded.ack_type, AckType::AckOk);
+        assert_eq!(decoded.reverse_ack, Some(AckType::AckUp));
+    }
+
+    #[test]
+    fn ack_frame_without_reverse_ack_is_backward_compatible() {
+        // A frame with no reverse_ack must have byte 0 bit 3 = 0 and byte 3 = 0,
+        // matching the old wire format exactly.
+        let f = AckFrame::new(AckType::AckDown, "sess");
+        let b = f.encode();
+        assert_eq!(b[0] & 0x08, 0, "has_reverse_ack flag must be 0");
+        assert_eq!(b[3], 0, "byte 3 must be 0 without reverse_ack");
+    }
+
+    #[test]
     fn ack_frame_crc_mismatch_detected() {
         let mut b = AckFrame {
             ack_type: AckType::AckOk,
             session_hash: 0,
+            reverse_ack: None,
         }
         .encode();
         b[4] ^= 0xFF;
@@ -194,5 +239,6 @@ mod tests {
     fn new_constructor_hashes_session_id() {
         let f = AckFrame::new(AckType::AckUp, "session-xyz");
         assert_eq!(f.session_hash, AckFrame::hash_session_id("session-xyz"));
+        assert_eq!(f.reverse_ack, None);
     }
 }

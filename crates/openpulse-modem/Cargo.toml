@@ -8,13 +8,23 @@ authors.workspace    = true
 repository.workspace = true
 
 [dependencies]
-openpulse-core  = { workspace = true }
-openpulse-audio = { workspace = true }
-bpsk-plugin     = { workspace = true }
-tracing         = { workspace = true }
-rand            = { workspace = true }
-serde           = { workspace = true, features = ["derive"] }
-serde_json      = { workspace = true }
+openpulse-core    = { workspace = true }
+openpulse-audio   = { workspace = true }
+openpulse-channel = { workspace = true }
+openpulse-dsp     = { workspace = true }
+bpsk-plugin       = { workspace = true }
+qpsk-plugin       = { workspace = true }
+tracing           = { workspace = true }
+rand              = { workspace = true }
+rustfft           = { workspace = true }
+serde             = { workspace = true, features = ["derive"] }
+serde_json        = { workspace = true }
+tokio             = { version = "1", default-features = false, features = ["sync"] }
 
 [dev-dependencies]
-qpsk-plugin = { workspace = true }
+psk8-plugin = { workspace = true }
+fsk4-plugin = { workspace = true }
+scfdma-plugin = { workspace = true }
+qam64-plugin = { workspace = true }
+ofdm-plugin = { workspace = true }
+pilot-plugin = { workspace = true }

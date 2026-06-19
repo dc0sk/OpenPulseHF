@@ -1,5 +1,6 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
+use std::time::Duration;
 
 use crate::{PttController, PttError};
 
@@ -13,9 +14,17 @@ pub struct RigctldPtt {
     asserted: bool,
 }
 
+const RIGCTLD_TIMEOUT: Duration = Duration::from_secs(5);
+
 impl RigctldPtt {
     pub fn connect(addr: &str) -> Result<Self, PttError> {
         let stream = TcpStream::connect(addr).map_err(PttError::Io)?;
+        stream
+            .set_read_timeout(Some(RIGCTLD_TIMEOUT))
+            .map_err(PttError::Io)?;
+        stream
+            .set_write_timeout(Some(RIGCTLD_TIMEOUT))
+            .map_err(PttError::Io)?;
         let reader = BufReader::new(stream.try_clone().map_err(PttError::Io)?);
         Ok(Self {
             stream,

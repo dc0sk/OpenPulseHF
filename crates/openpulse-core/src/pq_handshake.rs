@@ -4,7 +4,7 @@ use ed25519_dalek::{
 };
 use ml_dsa::{
     signature::{Keypair as MlDsaKeypair, Signer as MlSigner, Verifier as MlVerifier},
-    EncodedVerifyingKey, KeyGen, MlDsa44,
+    EncodedVerifyingKey, MlDsa44, SigningKey as MlDsaSigningKey,
 };
 use ml_kem::{
     kem::{Decapsulate, Encapsulate, KeyExport},
@@ -23,18 +23,24 @@ use crate::trust::{
 // Size constants (verified against FIPS 203/204)
 // ------------------------------------------------------------------
 
+/// Byte length of an ML-DSA-44 verifying key.
 pub const ML_DSA_44_PUBKEY_SIZE: usize = 1312;
+/// Byte length of an ML-DSA-44 signature.
 pub const ML_DSA_44_SIG_SIZE: usize = 2420;
+/// Byte length of an ML-KEM-768 encapsulation key.
 pub const ML_KEM_768_EK_SIZE: usize = 1184;
 /// ML-KEM-768 decapsulation key in d||z seed form (64 bytes).
 pub const ML_KEM_768_DK_SIZE: usize = 64;
+/// Byte length of an ML-KEM-768 ciphertext.
 pub const ML_KEM_768_CT_SIZE: usize = 1088;
+/// Byte length of the ML-KEM-768 shared secret.
 pub const ML_KEM_768_SS_SIZE: usize = 32;
 
 // ------------------------------------------------------------------
 // Error type
 // ------------------------------------------------------------------
 
+/// Errors returned during post-quantum handshake creation or verification.
 #[derive(Debug, thiserror::Error)]
 pub enum PqHandshakeError {
     #[error("invalid ML-DSA-44 public key")]
@@ -134,7 +140,7 @@ pub struct PqConAck {
 pub fn generate_ml_dsa_44_keypair() -> (Vec<u8>, Vec<u8>) {
     let mut seed_bytes = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut seed_bytes);
-    let sk = MlDsa44::from_seed(&ml_dsa::Seed::from(seed_bytes));
+    let sk = MlDsaSigningKey::<MlDsa44>::from_seed(&ml_dsa::Seed::from(seed_bytes));
     let vk_encoded = sk.verifying_key().encode();
     let vk_bytes: Vec<u8> = vk_encoded.to_vec();
     (seed_bytes.to_vec(), vk_bytes)
@@ -147,8 +153,7 @@ pub fn generate_ml_kem_768_keypair() -> (Vec<u8>, Vec<u8>) {
     let dk = DecapsulationKey::<MlKem768>::from_seed(MlKemSeed::from(seed_bytes));
     let ek_encoded = dk.encapsulation_key().to_bytes();
     let ek_bytes: Vec<u8> = ek_encoded.to_vec();
-    let dk_seed = dk.to_seed().expect("freshly generated key has seed");
-    let dk_bytes: Vec<u8> = dk_seed.to_vec();
+    let dk_bytes: Vec<u8> = seed_bytes.to_vec();
     (dk_bytes, ek_bytes)
 }
 
@@ -160,7 +165,7 @@ fn ml_dsa_sign(signing_key_seed: &[u8], message: &[u8]) -> Result<Vec<u8>, PqHan
     let seed_arr: [u8; 32] = signing_key_seed
         .try_into()
         .map_err(|_| PqHandshakeError::InvalidPublicKey)?;
-    let sk = MlDsa44::from_seed(&ml_dsa::Seed::from(seed_arr));
+    let sk = MlDsaSigningKey::<MlDsa44>::from_seed(&ml_dsa::Seed::from(seed_arr));
     let sig: ml_dsa::Signature<MlDsa44> = sk.sign(message);
     let sig_encoded = sig.encode();
     Ok(sig_encoded.to_vec())
@@ -234,7 +239,7 @@ pub fn create_pq_conreq(
     let seed_arr: [u8; 32] = pq_signing_key
         .try_into()
         .map_err(|_| PqHandshakeError::InvalidPublicKey)?;
-    let mldsa_sk = MlDsa44::from_seed(&ml_dsa::Seed::from(seed_arr));
+    let mldsa_sk = MlDsaSigningKey::<MlDsa44>::from_seed(&ml_dsa::Seed::from(seed_arr));
     let pq_pubkey_encoded = mldsa_sk.verifying_key().encode();
     let pq_pubkey: Vec<u8> = pq_pubkey_encoded.to_vec();
 
@@ -285,7 +290,7 @@ pub fn create_pq_conack(
     let seed_arr: [u8; 32] = pq_signing_key
         .try_into()
         .map_err(|_| PqHandshakeError::InvalidPublicKey)?;
-    let mldsa_sk = MlDsa44::from_seed(&ml_dsa::Seed::from(seed_arr));
+    let mldsa_sk = MlDsaSigningKey::<MlDsa44>::from_seed(&ml_dsa::Seed::from(seed_arr));
     let pq_pubkey_encoded = mldsa_sk.verifying_key().encode();
     let pq_pubkey: Vec<u8> = pq_pubkey_encoded.to_vec();
 

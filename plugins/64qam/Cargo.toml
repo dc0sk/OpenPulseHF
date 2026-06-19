@@ -1,0 +1,17 @@
+[package]
+name        = "qam64-plugin"
+description = "64QAM modulation/demodulation plugin for OpenPulse"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+
+[features]
+gpu = ["dep:openpulse-gpu"]
+
+[dependencies]
+openpulse-core = { workspace = true }
+openpulse-dsp  = { workspace = true }
+openpulse-gpu  = { workspace = true, optional = true }
+num-complex    = { workspace = true }

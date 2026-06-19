@@ -1,0 +1,30 @@
+[package]
+name = "openpulse-testbench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "openpulse-testbench"
+path = "src/main.rs"
+
+[features]
+cpal = ["openpulse-audio/cpal-backend"]
+
+[dependencies]
+openpulse-core.workspace    = true
+openpulse-audio.workspace   = true
+openpulse-channel.workspace = true
+bpsk-plugin.workspace       = true
+qpsk-plugin.workspace       = true
+psk8-plugin.workspace       = true
+qam64-plugin.workspace      = true
+fsk4-plugin.workspace       = true
+ofdm-plugin.workspace       = true
+scfdma-plugin.workspace     = true
+crossbeam-channel.workspace = true
+eframe.workspace            = true
+egui.workspace              = true
+egui_plot.workspace         = true
+tracing.workspace           = true
+tracing-subscriber.workspace = true

@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! ┌─────────────────────┬──────────────────────────────────────────────────┐
-//! │ original length (4B)│  data (padded to BLOCK_DATA multiples)          │
+//! │ original length (4B)│  data (padded to BLOCK_DATA_STANDARD multiples)   │
 //! └─────────────────────┴──────────────────────────────────────────────────┘
 //!       ↓  split into 223-byte chunks, RS-encode each
 //! ┌──────────────┬──────────────────────────────────────────────────────────┐
@@ -18,38 +18,150 @@
 //! ```
 
 use reed_solomon::{Decoder, Encoder};
+use serde::{Deserialize, Serialize};
 
 use crate::error::ModemError;
 
-/// ECC bytes appended per 255-byte RS block.
+/// Which FEC scheme is applied above the modulation layer.
+///
+/// Used in the HPX handshake to negotiate FEC between two stations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FecMode {
+    /// No FEC — raw transmit/receive.
+    #[default]
+    None,
+    /// Reed-Solomon RS(255,223) only.
+    Rs,
+    /// Reed-Solomon with stride interleaver (burst-error dispersion).
+    RsInterleaved,
+    /// Concatenated: Conv(rate-1/2) inner + RS outer (DVB-S architecture).
+    ///
+    /// Conv layer reduces random-noise BER; RS corrects residual Viterbi
+    /// burst failures.  Total overhead ≈ 2.28× raw payload.
+    Concatenated,
+    /// Short-block RS for ACK and control frames (no padding, no length prefix).
+    ///
+    /// Encodes a payload of up to 247 bytes into `payload.len() + 8` bytes
+    /// (8 ECC bytes, t=4, corrects up to 4 byte errors).  A 5-byte FSK4-ACK
+    /// frame becomes 13 bytes — versus 255 bytes with the standard RS codec.
+    ShortRs,
+    /// Strong RS: RS(255,191) with t=32 (64 ECC bytes per block).
+    ///
+    /// Corrects up to 32 byte errors per block — double the standard t=16
+    /// capacity.  Use on AWGN-dominant paths where ≥ 1% raw BER is expected.
+    /// Overhead: 25% ECC bytes per block vs. 14% for the standard codec.
+    RsStrong,
+    /// Soft-decision concatenated: K=7 Conv (soft Viterbi) inner + RS(255,223) outer.
+    ///
+    /// The inner K=7 decoder receives true LLRs from the demodulator instead of
+    /// hard bits, gaining ~5 dB over the hard-decision `Concatenated` mode.
+    /// The RS outer code corrects residual Viterbi burst failures.
+    /// Overhead: ≈ 2.28× raw payload (same as `Concatenated`).
+    SoftConcatenated,
+    /// Rate-1/2 LDPC (k=1024, n=2048) via min-sum belief propagation.
+    ///
+    /// CPU implementation lives in `openpulse_core::ldpc::LdpcCodec`.
+    /// A GPU-accelerated path via `openpulse-gpu` is reserved for future work.
+    Ldpc,
+    /// High-rate LDPC, rate ≈8/9 (k=1024, n=1152), via Progressive Edge-Growth.
+    ///
+    /// For the dense, high-SNR rungs (8PSK / 16QAM / 32APSK), where the channel
+    /// can afford minimal redundancy: a soft-decision code at nearly the RS code
+    /// rate but with real coding gain (waterfall ≈4 dB Es/N0).  CPU implementation
+    /// is `openpulse_core::ldpc::LdpcCodec::high_rate`.  Requires a soft-capable
+    /// demodulator — paired with a hard-decision plugin it gains nothing over RS.
+    LdpcHighRate,
+    /// Rate-1/3 PCCC turbo code (3GPP QPP interleaver, Max-Log-MAP BCJR, 8 iterations).
+    ///
+    /// Higher coding gain than LDPC for short block sizes (≤ 256 bits).
+    Turbo,
+}
+
+impl FecMode {
+    /// Numeric strength for negotiation; higher = stronger / preferred.
+    pub fn strength(self) -> u8 {
+        match self {
+            FecMode::None => 0,
+            // High-rate LDPC carries the least redundancy of any FEC mode
+            // (rate ≈8/9), so it is the weakest non-None option for negotiation:
+            // a peer falls back to it only when no more-protective mode is mutual.
+            FecMode::LdpcHighRate => 1,
+            FecMode::Rs => 2,
+            FecMode::RsInterleaved => 3,
+            FecMode::Concatenated => 4,
+            FecMode::ShortRs => 5,
+            FecMode::RsStrong => 6,
+            FecMode::SoftConcatenated => 7,
+            FecMode::Ldpc => 8,
+            FecMode::Turbo => 9,
+        }
+    }
+
+    /// Select the strongest mode that appears in both slices.
+    /// Returns `FecMode::None` if there is no overlap between `offered` and `accepted`.
+    pub fn negotiate(offered: &[FecMode], accepted: &[FecMode]) -> FecMode {
+        offered
+            .iter()
+            .filter(|m| accepted.contains(m))
+            .copied()
+            .max_by_key(|m| m.strength())
+            .unwrap_or(FecMode::None)
+    }
+}
+
+/// ECC bytes appended per 255-byte RS block (standard codec, t=16).
 pub const FEC_ECC_LEN: usize = 32;
 
-/// Data bytes per RS block (255 − ECC_LEN).
-const BLOCK_DATA: usize = 255 - FEC_ECC_LEN;
+/// ECC bytes appended per 255-byte RS block by the strong codec (t=32).
+pub const FEC_ECC_LEN_STRONG: usize = 64;
 
-/// Total bytes per encoded RS block.
+/// Total bytes per encoded RS block (always 255 — GF(2^8) block size).
 const BLOCK_TOTAL: usize = 255;
 
 /// Byte width of the big-endian original-length prefix.
 const PREFIX_LEN: usize = 4;
 
+/// Data bytes per block for the standard codec (255 − 32 = 223).
+///
+/// Used by unit tests that hard-code exact block boundaries.
+pub const BLOCK_DATA_STANDARD: usize = BLOCK_TOTAL - FEC_ECC_LEN;
+
 /// Reed-Solomon codec.
 ///
-/// Construct with [`FecCodec::new`] or [`Default`].  The same codec instance
-/// can be reused for multiple encode/decode operations.
+/// Construct with [`FecCodec::new`] (t=16, standard) or [`FecCodec::strong`]
+/// (t=32, AWGN-robust).  The same codec instance can be reused for multiple
+/// encode/decode operations.
 pub struct FecCodec {
+    ecc_len: usize,
     encoder: Encoder,
     decoder: Decoder,
 }
 
 impl FecCodec {
-    /// Create a new codec with the default ECC configuration (ECC_LEN = 32,
-    /// corrects up to 16 byte errors per 255-byte block).
+    /// Create a codec with `ECC_LEN = 32` (RS(255,223), t=16, corrects up to
+    /// 16 byte errors per 255-byte block).
     pub fn new() -> Self {
+        Self::with_ecc_len(FEC_ECC_LEN)
+    }
+
+    /// Create a codec with `ECC_LEN = 64` (RS(255,191), t=32, corrects up to
+    /// 32 byte errors per 255-byte block).  Use when AWGN produces more than
+    /// ~16 byte errors per block (≥ 1% raw BER on a 255-byte block).
+    pub fn strong() -> Self {
+        Self::with_ecc_len(FEC_ECC_LEN_STRONG)
+    }
+
+    fn with_ecc_len(ecc_len: usize) -> Self {
         Self {
-            encoder: Encoder::new(FEC_ECC_LEN),
-            decoder: Decoder::new(FEC_ECC_LEN),
+            ecc_len,
+            encoder: Encoder::new(ecc_len),
+            decoder: Decoder::new(ecc_len),
         }
+    }
+
+    fn block_data(&self) -> usize {
+        BLOCK_TOTAL - self.ecc_len
     }
 
     /// Encode `data` into a sequence of RS-protected 255-byte blocks.
@@ -57,6 +169,7 @@ impl FecCodec {
     /// A 4-byte big-endian length prefix is prepended before blocking so the
     /// decoder can strip trailing padding without side-channel information.
     pub fn encode(&self, data: &[u8]) -> Vec<u8> {
+        let block_data = self.block_data();
         let orig_len = data.len() as u32;
 
         // Prefix + data.
@@ -64,14 +177,14 @@ impl FecCodec {
         input.extend_from_slice(&orig_len.to_be_bytes());
         input.extend_from_slice(data);
 
-        // Pad up to the next multiple of BLOCK_DATA.
-        let padded_len = input.len().div_ceil(BLOCK_DATA) * BLOCK_DATA;
+        // Pad up to the next multiple of block_data.
+        let padded_len = input.len().div_ceil(block_data) * block_data;
         input.resize(padded_len, 0u8);
 
-        let n_blocks = input.len() / BLOCK_DATA;
+        let n_blocks = input.len() / block_data;
         let mut out = Vec::with_capacity(n_blocks * BLOCK_TOTAL);
 
-        for chunk in input.chunks(BLOCK_DATA) {
+        for chunk in input.chunks(block_data) {
             let encoded = self.encoder.encode(chunk);
             out.extend_from_slice(&encoded);
         }
@@ -87,9 +200,11 @@ impl FecCodec {
     ///
     /// Returns [`ModemError::Fec`] when:
     /// - The input length is not a multiple of 255.
-    /// - A block has more than `ECC_LEN / 2 = 16` byte errors.
+    /// - A block has more than `ecc_len / 2` byte errors.
     /// - The embedded length prefix is inconsistent with decoded content.
     pub fn decode(&self, data: &[u8]) -> Result<Vec<u8>, ModemError> {
+        let block_data = self.block_data();
+
         if data.is_empty() || !data.len().is_multiple_of(BLOCK_TOTAL) {
             return Err(ModemError::Fec(format!(
                 "FEC data length {} is not a non-zero multiple of {BLOCK_TOTAL}",
@@ -97,15 +212,13 @@ impl FecCodec {
             )));
         }
 
-        let mut decoded = Vec::with_capacity(data.len() / BLOCK_TOTAL * BLOCK_DATA);
+        let mut decoded = Vec::with_capacity(data.len() / BLOCK_TOTAL * block_data);
 
         for (i, block) in data.chunks(BLOCK_TOTAL).enumerate() {
             let corrected = self.decoder.correct(block, None).map_err(|e| {
                 ModemError::Fec(format!("RS correction failed at block {i}: {e:?}"))
             })?;
-            // The corrected buffer is BLOCK_TOTAL bytes; we only keep the data
-            // portion (first BLOCK_DATA bytes) — the ECC bytes are trailing.
-            decoded.extend_from_slice(&corrected[..BLOCK_DATA]);
+            decoded.extend_from_slice(&corrected[..block_data]);
         }
 
         // Read original length from 4-byte big-endian prefix.
@@ -114,7 +227,10 @@ impl FecCodec {
                 "decoded data too short to contain length prefix".into(),
             ));
         }
-        let orig_len = u32::from_be_bytes(decoded[..PREFIX_LEN].try_into().unwrap()) as usize;
+        let prefix: [u8; PREFIX_LEN] = decoded[..PREFIX_LEN]
+            .try_into()
+            .map_err(|_| ModemError::Fec("length-prefix slice conversion failed".into()))?;
+        let orig_len = u32::from_be_bytes(prefix) as usize;
 
         let end = PREFIX_LEN + orig_len;
         if decoded.len() < end {
@@ -129,6 +245,84 @@ impl FecCodec {
 }
 
 impl Default for FecCodec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ── Short-block RS codec ──────────────────────────────────────────────────────
+
+/// ECC bytes appended by [`ShortFecCodec`] (default instance).  t = 4, corrects
+/// up to 4 byte errors per payload.
+pub const SHORT_FEC_ECC_LEN: usize = 8;
+
+/// Short-block Reed-Solomon codec for ACK and control frames.
+///
+/// Unlike [`FecCodec`], this codec operates on a single payload without block
+/// padding or a length prefix.  Output is exactly `payload.len() + ecc_len` bytes,
+/// making it practical for small fixed-size frames (e.g. 5-byte FSK4-ACK → 13 bytes).
+///
+/// Maximum input per call: `255 - ecc_len` bytes (247 bytes for the default
+/// `ecc_len = 8`).
+pub struct ShortFecCodec {
+    ecc_len: usize,
+    encoder: Encoder,
+    decoder: Decoder,
+}
+
+impl ShortFecCodec {
+    /// Create a codec with [`SHORT_FEC_ECC_LEN`] ECC bytes (t = 4).
+    pub fn new() -> Self {
+        Self::with_ecc_len(SHORT_FEC_ECC_LEN)
+    }
+
+    /// Create a codec with a custom ECC byte count (must be in 1..=254).
+    pub fn with_ecc_len(ecc_len: usize) -> Self {
+        assert!(
+            (1..=254).contains(&ecc_len),
+            "ShortFecCodec: ecc_len must be 1..=254, got {ecc_len}"
+        );
+        Self {
+            ecc_len,
+            encoder: Encoder::new(ecc_len),
+            decoder: Decoder::new(ecc_len),
+        }
+    }
+
+    /// Encode `data` → `data.len() + ecc_len` bytes.
+    pub fn encode(&self, data: &[u8]) -> Result<Vec<u8>, ModemError> {
+        let max = 255 - self.ecc_len; // safe: ecc_len ≤ 254 by construction
+        if data.len() > max {
+            return Err(ModemError::Fec(format!(
+                "ShortFecCodec: payload {} bytes exceeds maximum {max}",
+                data.len()
+            )));
+        }
+        Ok(self.encoder.encode(data).to_vec())
+    }
+
+    /// Decode and error-correct `encoded`, returning the original data bytes.
+    ///
+    /// `encoded.len()` must be greater than `ecc_len`; the data portion is
+    /// `encoded.len() - ecc_len` bytes.
+    pub fn decode(&self, encoded: &[u8]) -> Result<Vec<u8>, ModemError> {
+        if encoded.len() <= self.ecc_len {
+            return Err(ModemError::Fec(format!(
+                "ShortFecCodec: encoded length {} ≤ ecc_len {}",
+                encoded.len(),
+                self.ecc_len
+            )));
+        }
+        let data_len = encoded.len() - self.ecc_len;
+        let corrected = self
+            .decoder
+            .correct(encoded, None)
+            .map_err(|e| ModemError::Fec(format!("ShortFecCodec: RS correction failed: {e:?}")))?;
+        Ok(corrected[..data_len].to_vec())
+    }
+}
+
+impl Default for ShortFecCodec {
     fn default() -> Self {
         Self::new()
     }
@@ -213,11 +407,393 @@ impl Interleaver {
     }
 }
 
+// ── Memory-ARQ soft combiner ──────────────────────────────────────────────────
+
+/// Element-wise sample accumulator for Memory-ARQ maximal-ratio combining.
+///
+/// Each call to [`push`](Self::push) adds a received sample buffer to the
+/// accumulator.  [`combine`](Self::combine) returns the element-wise mean,
+/// which coherently averages noise and reinforces the signal component.
+///
+/// Combining N identical retransmissions improves effective SNR by ~3 dB per
+/// doubling of N (10 log₁₀ N dB total).  No wire-protocol change is required —
+/// the sender simply retransmits the same frame; only the receiver accumulates.
+pub struct SoftCombiner {
+    accumulator: Vec<f32>,
+    count: usize,
+}
+
+impl SoftCombiner {
+    /// Create an empty combiner.
+    pub fn new() -> Self {
+        Self {
+            accumulator: Vec::new(),
+            count: 0,
+        }
+    }
+
+    /// Accumulate `samples` into the combiner.
+    ///
+    /// On the first call the buffer is cloned; subsequent calls add element-wise
+    /// up to the shorter of the two lengths (trailing samples of the longer
+    /// buffer are discarded to guard against framing drift).
+    pub fn push(&mut self, samples: &[f32]) {
+        if self.accumulator.is_empty() {
+            self.accumulator = samples.to_vec();
+        } else {
+            let len = self.accumulator.len().min(samples.len());
+            self.accumulator.truncate(len);
+            for (a, &s) in self.accumulator.iter_mut().zip(samples) {
+                *a += s;
+            }
+        }
+        self.count += 1;
+    }
+
+    /// Return the element-wise mean of all pushed sample buffers.
+    ///
+    /// Returns an empty `Vec` if no buffers have been pushed.
+    pub fn combine(&self) -> Vec<f32> {
+        if self.count == 0 {
+            return Vec::new();
+        }
+        let n = self.count as f32;
+        self.accumulator.iter().map(|&s| s / n).collect()
+    }
+
+    /// Number of sample buffers accumulated so far.
+    pub fn count(&self) -> usize {
+        self.count
+    }
+
+    /// Reset to the empty state.
+    pub fn reset(&mut self) {
+        self.accumulator.clear();
+        self.count = 0;
+    }
+}
+
+impl Default for SoftCombiner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ── Weighted LLR combiner ─────────────────────────────────────────────────────
+
+/// Combine multiple soft-demodulated LLR vectors using inverse-noise-variance weighting.
+///
+/// Each attempt is a pair of `(llrs, noise_var)` where `noise_var` is the estimated
+/// per-frame noise variance.  Frames with lower noise (higher confidence) receive
+/// proportionally higher weight.
+///
+/// If `noise_var` is zero or negative it is clamped to `f32::MIN_POSITIVE` so the
+/// call never panics.  If `attempts` is empty an empty vector is returned.
+///
+/// **Length mismatch**: the output length is truncated to the shortest input LLR vector.
+/// This guards against framing drift while preserving the most-reliable samples, but
+/// callers should ensure all attempts produce the same number of LLRs to avoid
+/// discarding information from longer vectors.
+pub fn combine_llrs_weighted(attempts: &[(&[f32], f32)]) -> Vec<f32> {
+    if attempts.is_empty() {
+        return Vec::new();
+    }
+    let len = attempts.iter().map(|(l, _)| l.len()).min().unwrap_or(0);
+    if len == 0 {
+        return Vec::new();
+    }
+    let mut out = vec![0.0f32; len];
+    let mut weight_sum = 0.0f32;
+    for (llrs, noise_var) in attempts {
+        let w = 1.0 / noise_var.max(f32::MIN_POSITIVE);
+        weight_sum += w;
+        for (o, &l) in out.iter_mut().zip(llrs.iter()) {
+            *o += w * l;
+        }
+    }
+    if weight_sum > 0.0 {
+        for o in &mut out {
+            *o /= weight_sum;
+        }
+    }
+    out
+}
+
+/// Fixed wire size (bytes) for Window-ARQ failed-range feedback.
+pub const WINDOW_ARQ_FEEDBACK_SIZE: usize = 8;
+
+/// Maximum number of byte ranges encoded in a Window-ARQ feedback frame.
+pub const WINDOW_ARQ_MAX_RANGES: usize = 2;
+
+/// A contiguous byte range inside a protected frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ByteRange {
+    /// Start byte offset from the beginning of the protected frame.
+    pub start: u16,
+    /// Number of bytes in the range (max 255 by wire format design).
+    ///
+    /// Callers must split larger contiguous failures into multiple ranges.
+    pub len: u8,
+}
+
+impl ByteRange {
+    fn end_exclusive(self) -> usize {
+        self.start as usize + self.len as usize
+    }
+}
+
+/// Receiver feedback for selective Window-ARQ retries.
+///
+/// The codec uses a fixed 8-byte wire format:
+/// `count(1) | range0(start_le:2,len:1) | range1(start_le:2,len:1) | pad(1)`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowArqFeedback {
+    /// Non-overlapping failed byte ranges sorted by `start`.
+    pub ranges: Vec<ByteRange>,
+}
+
+impl WindowArqFeedback {
+    /// Build and validate a feedback object.
+    pub fn new(mut ranges: Vec<ByteRange>) -> Result<Self, ModemError> {
+        // Canonicalise construction to sorted order.
+        ranges.sort_by_key(|r| r.start);
+        Self::validate_ranges(&ranges, true)?;
+        Ok(Self { ranges })
+    }
+
+    fn validate_ranges(ranges: &[ByteRange], require_sorted: bool) -> Result<(), ModemError> {
+        if ranges.len() > WINDOW_ARQ_MAX_RANGES {
+            return Err(ModemError::Frame(format!(
+                "window-arq feedback supports at most {WINDOW_ARQ_MAX_RANGES} ranges"
+            )));
+        }
+        if ranges.iter().any(|r| r.len == 0) {
+            return Err(ModemError::Frame(
+                "window-arq feedback range length must be >= 1".into(),
+            ));
+        }
+        for pair in ranges.windows(2) {
+            let left = pair[0];
+            let right = pair[1];
+            if require_sorted && left.start > right.start {
+                return Err(ModemError::Frame(
+                    "window-arq feedback ranges must be sorted by start".into(),
+                ));
+            }
+            if left.end_exclusive() > right.start as usize {
+                return Err(ModemError::Frame(
+                    "window-arq feedback ranges must not overlap".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Return the total number of failed bytes represented by `ranges`.
+    pub fn failed_byte_count(&self) -> usize {
+        self.ranges.iter().map(|r| r.len as usize).sum()
+    }
+
+    /// Encode feedback to a fixed-size 8-byte wire frame.
+    pub fn encode(&self) -> Result<[u8; WINDOW_ARQ_FEEDBACK_SIZE], ModemError> {
+        if self.ranges.len() > WINDOW_ARQ_MAX_RANGES {
+            return Err(ModemError::Frame(format!(
+                "window-arq feedback supports at most {WINDOW_ARQ_MAX_RANGES} ranges"
+            )));
+        }
+        let mut out = [0u8; WINDOW_ARQ_FEEDBACK_SIZE];
+        out[0] = self.ranges.len() as u8;
+        for (i, range) in self.ranges.iter().enumerate() {
+            let off = 1 + i * 3;
+            out[off..off + 2].copy_from_slice(&range.start.to_le_bytes());
+            out[off + 2] = range.len;
+        }
+        Ok(out)
+    }
+
+    /// Decode a fixed-size 8-byte feedback wire frame.
+    pub fn decode(encoded: &[u8]) -> Result<Self, ModemError> {
+        if encoded.len() != WINDOW_ARQ_FEEDBACK_SIZE {
+            return Err(ModemError::Frame(format!(
+                "window-arq feedback must be exactly {WINDOW_ARQ_FEEDBACK_SIZE} bytes, got {}",
+                encoded.len()
+            )));
+        }
+        let count = encoded[0] as usize;
+        if count > WINDOW_ARQ_MAX_RANGES {
+            return Err(ModemError::Frame(format!(
+                "window-arq feedback range count {count} exceeds max {WINDOW_ARQ_MAX_RANGES}"
+            )));
+        }
+
+        let mut ranges = Vec::with_capacity(count);
+        for i in 0..count {
+            let off = 1 + i * 3;
+            let start = u16::from_le_bytes([encoded[off], encoded[off + 1]]);
+            let len = encoded[off + 2];
+            ranges.push(ByteRange { start, len });
+        }
+        Self::validate_ranges(&ranges, true)?;
+        Ok(Self { ranges })
+    }
+}
+
+/// Encode a selective retransmit packet containing only failed byte ranges.
+///
+/// Wire format: `MAGIC(1)=0xA5 | count(1) | repeated(start_le:2,len:1,data:len)`.
+///
+/// Packet overhead is `2 + 3*N` bytes (`N` = number of ranges).  Therefore,
+/// the "<=120% of failed bytes" criterion is not universal for tiny failure
+/// sets; callers should apply that gate only when failed bytes are large enough
+/// to amortize header/range descriptors.
+pub fn encode_window_retransmit(
+    protected_frame: &[u8],
+    feedback: &WindowArqFeedback,
+) -> Result<Vec<u8>, ModemError> {
+    let mut out = Vec::with_capacity(2 + feedback.ranges.len() * 3 + feedback.failed_byte_count());
+    out.push(0xA5);
+    out.push(feedback.ranges.len() as u8);
+
+    for range in &feedback.ranges {
+        let start = range.start as usize;
+        let end = range.end_exclusive();
+        if end > protected_frame.len() {
+            return Err(ModemError::Frame(format!(
+                "window-arq range [{start}, {end}) exceeds frame length {}",
+                protected_frame.len()
+            )));
+        }
+        out.extend_from_slice(&range.start.to_le_bytes());
+        out.push(range.len);
+        out.extend_from_slice(&protected_frame[start..end]);
+    }
+
+    Ok(out)
+}
+
+/// Apply a selective retransmit packet to an existing protected frame buffer.
+pub fn apply_window_retransmit(
+    protected_frame: &mut [u8],
+    retransmit_packet: &[u8],
+) -> Result<(), ModemError> {
+    if retransmit_packet.len() < 2 {
+        return Err(ModemError::Frame(
+            "window-arq packet too short for header".into(),
+        ));
+    }
+    if retransmit_packet[0] != 0xA5 {
+        return Err(ModemError::Frame("window-arq packet bad magic".into()));
+    }
+    let count = retransmit_packet[1] as usize;
+    if count > WINDOW_ARQ_MAX_RANGES {
+        return Err(ModemError::Frame(format!(
+            "window-arq packet range count {count} exceeds max {WINDOW_ARQ_MAX_RANGES}"
+        )));
+    }
+
+    let mut cursor = 2usize;
+    for _ in 0..count {
+        if cursor + 3 > retransmit_packet.len() {
+            return Err(ModemError::Frame(
+                "window-arq packet truncated at range header".into(),
+            ));
+        }
+        let start =
+            u16::from_le_bytes([retransmit_packet[cursor], retransmit_packet[cursor + 1]]) as usize;
+        let len = retransmit_packet[cursor + 2] as usize;
+        cursor += 3;
+
+        let end = start + len;
+        if cursor + len > retransmit_packet.len() {
+            return Err(ModemError::Frame(
+                "window-arq packet truncated at range payload".into(),
+            ));
+        }
+        if end > protected_frame.len() {
+            return Err(ModemError::Frame(format!(
+                "window-arq patch range [{start}, {end}) exceeds frame length {}",
+                protected_frame.len()
+            )));
+        }
+
+        protected_frame[start..end].copy_from_slice(&retransmit_packet[cursor..cursor + len]);
+        cursor += len;
+    }
+
+    if cursor != retransmit_packet.len() {
+        return Err(ModemError::Frame(
+            "window-arq packet has trailing bytes".into(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Combine soft LLR attempts only inside failed byte ranges.
+///
+/// Outside `feedback.ranges`, values from the first attempt are preserved.
+///
+/// Assumes an LLR layout of exactly 8 bit-LLRs per protected byte (LSB-first),
+/// i.e. byte offsets are converted to LLR offsets by multiplying by 8.
+pub fn combine_llrs_weighted_in_ranges(
+    attempts: &[(&[f32], f32)],
+    feedback: &WindowArqFeedback,
+) -> Vec<f32> {
+    if attempts.is_empty() {
+        return Vec::new();
+    }
+    let len = attempts.iter().map(|(l, _)| l.len()).min().unwrap_or(0);
+    if len == 0 {
+        return Vec::new();
+    }
+
+    let mut out = attempts[0].0[..len].to_vec();
+
+    for range in &feedback.ranges {
+        let start = (range.start as usize).saturating_mul(8).min(len);
+        let end = start
+            .saturating_add((range.len as usize).saturating_mul(8))
+            .min(len);
+        if start >= end {
+            continue;
+        }
+
+        let mut slices: Vec<(&[f32], f32)> = Vec::with_capacity(attempts.len());
+        for (llrs, noise_var) in attempts {
+            slices.push((&llrs[start..end], *noise_var));
+        }
+        let combined = combine_llrs_weighted(&slices);
+        out[start..end].copy_from_slice(&combined);
+    }
+
+    out
+}
+
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fec_mode_strength_ordering() {
+        // High-rate LDPC is the weakest non-None mode (least redundancy).
+        assert!(FecMode::LdpcHighRate.strength() > FecMode::None.strength());
+        assert!(FecMode::Rs.strength() > FecMode::LdpcHighRate.strength());
+        assert!(FecMode::RsInterleaved.strength() > FecMode::Rs.strength());
+        assert!(FecMode::Concatenated.strength() > FecMode::RsInterleaved.strength());
+        assert!(FecMode::RsStrong.strength() > FecMode::Concatenated.strength());
+        assert!(FecMode::SoftConcatenated.strength() > FecMode::RsStrong.strength());
+        assert!(FecMode::Ldpc.strength() > FecMode::SoftConcatenated.strength());
+        assert!(FecMode::Turbo.strength() > FecMode::Ldpc.strength());
+    }
+
+    #[test]
+    fn fec_mode_negotiate_picks_strongest_common() {
+        let offered = [FecMode::None, FecMode::Rs, FecMode::SoftConcatenated];
+        let accepted = [FecMode::None, FecMode::Rs, FecMode::Ldpc];
+        assert_eq!(FecMode::negotiate(&offered, &accepted), FecMode::Rs);
+    }
 
     #[test]
     fn round_trip_empty() {
@@ -243,8 +819,8 @@ mod tests {
 
     #[test]
     fn round_trip_exact_block() {
-        // Payload that fills exactly one block (BLOCK_DATA - PREFIX_LEN = 219 bytes).
-        let payload = vec![0x42u8; BLOCK_DATA - PREFIX_LEN];
+        // Payload that fills exactly one block (BLOCK_DATA_STANDARD - PREFIX_LEN = 219 bytes).
+        let payload = vec![0x42u8; BLOCK_DATA_STANDARD - PREFIX_LEN];
         let codec = FecCodec::new();
         let enc = codec.encode(&payload);
         assert_eq!(enc.len(), BLOCK_TOTAL);
@@ -288,8 +864,8 @@ mod tests {
         let mut enc = codec.encode(payload);
 
         // Corrupt 17 bytes (one more than the correction capacity).
-        for i in 0..17 {
-            enc[i] ^= 0xFF;
+        for item in enc.iter_mut().take(17) {
+            *item ^= 0xFF;
         }
 
         assert!(
@@ -348,12 +924,183 @@ mod tests {
         // Inject DEFAULT_INTERLEAVER_DEPTH consecutive byte errors starting at offset 10.
         let mut corrupted = interleaved.clone();
         let burst_start = 10;
-        for i in burst_start..burst_start + DEFAULT_INTERLEAVER_DEPTH {
-            corrupted[i] ^= 0xFF;
+        for item in corrupted
+            .iter_mut()
+            .skip(burst_start)
+            .take(DEFAULT_INTERLEAVER_DEPTH)
+        {
+            *item ^= 0xFF;
         }
 
         let deinterleaved = il.deinterleave(&corrupted);
         let recovered = codec.decode(&deinterleaved).unwrap();
         assert_eq!(recovered, payload);
+    }
+
+    // ── combine_llrs_weighted tests ───────────────────────────────────────────
+
+    #[test]
+    fn combine_llrs_weighted_empty_returns_empty() {
+        assert!(combine_llrs_weighted(&[]).is_empty());
+    }
+
+    #[test]
+    fn combine_llrs_weighted_single_attempt_is_identity() {
+        let llrs = [1.0f32, -2.0, 3.0];
+        let out = combine_llrs_weighted(&[(&llrs, 1.0)]);
+        assert_eq!(out.len(), 3);
+        for (o, &e) in out.iter().zip(llrs.iter()) {
+            assert!((o - e).abs() < 1e-5, "expected {e} got {o}");
+        }
+    }
+
+    #[test]
+    fn combine_llrs_weighted_equal_weights_is_mean() {
+        // Two attempts, equal noise_var → result should equal element-wise mean.
+        let a = [2.0f32, -4.0];
+        let b = [4.0f32, -2.0];
+        let out = combine_llrs_weighted(&[(&a, 1.0), (&b, 1.0)]);
+        assert_eq!(out.len(), 2);
+        assert!((out[0] - 3.0).abs() < 1e-5);
+        assert!((out[1] - (-3.0)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn combine_llrs_weighted_higher_weight_dominates() {
+        // Attempt A: noise_var=0.1 (high confidence, high weight)
+        // Attempt B: noise_var=10.0 (low confidence, low weight)
+        // Result should be closer to A than B.
+        let a = [10.0f32];
+        let b = [-10.0f32];
+        let out = combine_llrs_weighted(&[(&a, 0.1), (&b, 10.0)]);
+        assert_eq!(out.len(), 1);
+        assert!(out[0] > 0.0, "high-confidence positive LLR should dominate");
+    }
+
+    #[test]
+    fn combine_llrs_weighted_length_mismatch_truncates_to_shorter() {
+        // Shorter vector determines output length; trailing samples of the
+        // longer vector are dropped (documented truncation behaviour).
+        let a = [1.0f32, 2.0, 3.0];
+        let b = [1.0f32, 2.0];
+        let out = combine_llrs_weighted(&[(&a, 1.0), (&b, 1.0)]);
+        assert_eq!(out.len(), 2, "output truncated to min length");
+    }
+
+    #[test]
+    fn window_arq_feedback_codec_is_fixed_8_bytes_round_trip() {
+        let fb = WindowArqFeedback::new(vec![
+            ByteRange { start: 12, len: 8 },
+            ByteRange { start: 64, len: 16 },
+        ])
+        .unwrap();
+        let encoded = fb.encode().unwrap();
+        assert_eq!(encoded.len(), WINDOW_ARQ_FEEDBACK_SIZE);
+        let decoded = WindowArqFeedback::decode(&encoded).unwrap();
+        assert_eq!(decoded, fb);
+    }
+
+    #[test]
+    fn window_arq_feedback_rejects_invalid_ranges() {
+        let overlap = WindowArqFeedback::new(vec![
+            ByteRange { start: 10, len: 10 },
+            ByteRange { start: 15, len: 3 },
+        ]);
+        assert!(overlap.is_err());
+
+        let zero = WindowArqFeedback::new(vec![ByteRange { start: 2, len: 0 }]);
+        assert!(zero.is_err());
+    }
+
+    #[test]
+    fn window_arq_feedback_decode_rejects_unsorted_wire_order() {
+        // count=2, range0 starts after range1.
+        let encoded = [
+            2, // count
+            40, 0, 5, // r0: start=40 len=5
+            10, 0, 5, // r1: start=10 len=5 (unsorted)
+            0, // pad
+        ];
+        let decoded = WindowArqFeedback::decode(&encoded);
+        assert!(decoded.is_err());
+    }
+
+    #[test]
+    fn window_retransmit_payload_stays_within_120_percent_for_50_percent_loss() {
+        let protected: Vec<u8> = (0u16..255).map(|v| (v & 0xFF) as u8).collect();
+        let feedback = WindowArqFeedback::new(vec![
+            ByteRange { start: 0, len: 64 },
+            ByteRange {
+                start: 128,
+                len: 64,
+            },
+        ])
+        .unwrap();
+
+        let packet = encode_window_retransmit(&protected, &feedback).unwrap();
+        let failed = feedback.failed_byte_count() as f32;
+        let ratio = packet.len() as f32 / failed;
+        assert!(
+            ratio <= 1.20,
+            "window retransmit ratio {ratio:.3} exceeds 1.20 limit"
+        );
+    }
+
+    #[test]
+    fn window_retransmit_small_failed_sets_can_exceed_120_percent() {
+        let protected: Vec<u8> = (0u16..32).map(|v| (v & 0xFF) as u8).collect();
+        let feedback = WindowArqFeedback::new(vec![
+            ByteRange { start: 3, len: 1 },
+            ByteRange { start: 9, len: 1 },
+        ])
+        .unwrap();
+
+        let packet = encode_window_retransmit(&protected, &feedback).unwrap();
+        let failed = feedback.failed_byte_count() as f32;
+        let ratio = packet.len() as f32 / failed;
+        assert!(
+            ratio > 1.20,
+            "expected tiny-failure ratio > 1.20, got {ratio}"
+        );
+    }
+
+    #[test]
+    fn apply_window_retransmit_patches_only_selected_ranges() {
+        let original: Vec<u8> = (0u16..80).map(|v| (v & 0xFF) as u8).collect();
+        let mut repaired = original.clone();
+        let mut updated = original.clone();
+
+        for b in &mut updated[10..20] {
+            *b ^= 0x5A;
+        }
+        for b in &mut updated[40..50] {
+            *b ^= 0xA5;
+        }
+
+        let fb = WindowArqFeedback::new(vec![
+            ByteRange { start: 10, len: 10 },
+            ByteRange { start: 40, len: 10 },
+        ])
+        .unwrap();
+
+        let packet = encode_window_retransmit(&updated, &fb).unwrap();
+        apply_window_retransmit(&mut repaired, &packet).unwrap();
+        assert_eq!(repaired, updated);
+    }
+
+    #[test]
+    fn combine_llrs_weighted_in_ranges_keeps_unselected_bits_from_first_attempt() {
+        let first = vec![1.0f32; 32];
+        let second = vec![-1.0f32; 32];
+        let fb = WindowArqFeedback::new(vec![ByteRange { start: 2, len: 1 }]).unwrap();
+
+        let out = combine_llrs_weighted_in_ranges(&[(&first, 1.0), (&second, 1.0)], &fb);
+
+        // Byte 0..1 unchanged from first attempt.
+        assert!(out[..16].iter().all(|&v| (v - 1.0).abs() < 1e-6));
+        // Byte 2 (bits 16..24) averaged.
+        assert!(out[16..24].iter().all(|&v| v.abs() < 1e-6));
+        // Remaining bits unchanged from first attempt.
+        assert!(out[24..].iter().all(|&v| (v - 1.0).abs() < 1e-6));
     }
 }

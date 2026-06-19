@@ -1,7 +1,13 @@
 /target/
+**/target/
 pki-tooling/target/
-Cargo.lock
 *.swp
 *.bak
 .DS_Store
 docs/VARA Doc/
+
+# Ephemeral per-run loopback reports written by scripts/run-loopback-*.sh.
+# Structured matrix archives (*/test-reports/archive/, latest/, on-air/) and any
+# deliberately-committed records remain tracked; force-add (-f) to keep a new one.
+docs/dev/test-reports/loopback-*.json
+docs/test-reports/loopback-*.json

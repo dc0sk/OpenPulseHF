@@ -4,9 +4,15 @@
 //! together to provide simple `transmit` and `receive` operations.
 
 pub mod benchmark;
+pub mod channel_sim;
 pub mod diagnostics;
 pub mod engine;
 pub mod envelope_codec;
+pub mod event;
+pub mod harq;
+pub mod ofdm_sim;
 pub mod pipeline;
+mod rate_policy;
 
 pub use engine::ModemEngine;
+pub use event::EngineEvent;

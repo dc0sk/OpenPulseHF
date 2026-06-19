@@ -33,9 +33,14 @@ pub enum WireMsgType {
     RelayHopAck = 0x06,
     RelayRouteUpdate = 0x07,
     RelayRouteReject = 0x08,
+    /// Signed remote rig-control command (Phase 7.5).
+    RigCtrlCmd = 0x09,
+    /// One-to-many unacknowledged broadcast frame (Phase 9.5).
+    BroadcastFrame = 0x0A,
 }
 
 impl WireMsgType {
+    /// Map a wire byte to the corresponding variant; returns `None` for unknown values.
     pub fn from_u8(v: u8) -> Option<Self> {
         match v {
             0x01 => Some(Self::PeerQueryRequest),
@@ -46,6 +51,8 @@ impl WireMsgType {
             0x06 => Some(Self::RelayHopAck),
             0x07 => Some(Self::RelayRouteUpdate),
             0x08 => Some(Self::RelayRouteReject),
+            0x09 => Some(Self::RigCtrlCmd),
+            0x0A => Some(Self::BroadcastFrame),
             _ => None,
         }
     }
@@ -56,6 +63,35 @@ const VERSION: u8 = 1;
 /// Byte count of fixed envelope fields excluding payload and auth_tag.
 const HEADER_SIZE: usize = 104;
 const AUTH_TAG_SIZE: usize = 16;
+
+fn read_u64(bytes: &[u8], off: usize) -> Result<u64, WireQueryError> {
+    Ok(u64::from_be_bytes(
+        bytes[off..off + 8]
+            .try_into()
+            .map_err(|_| WireQueryError::MalformedPayload)?,
+    ))
+}
+
+fn read_u32(bytes: &[u8], off: usize) -> Result<u32, WireQueryError> {
+    Ok(u32::from_be_bytes(
+        bytes[off..off + 4]
+            .try_into()
+            .map_err(|_| WireQueryError::MalformedPayload)?,
+    ))
+}
+
+fn read_u16(bytes: &[u8], off: usize) -> Result<u16, WireQueryError> {
+    if bytes.len() < off + 2 {
+        return Err(WireQueryError::MalformedPayload);
+    }
+    Ok(u16::from_be_bytes([bytes[off], bytes[off + 1]]))
+}
+
+fn read_arr32(bytes: &[u8], off: usize) -> Result<[u8; 32], WireQueryError> {
+    bytes[off..off + 32]
+        .try_into()
+        .map_err(|_| WireQueryError::MalformedPayload)
+}
 
 /// Outer envelope wrapping all OPHF control-plane messages.
 ///
@@ -76,6 +112,7 @@ pub struct WireEnvelope {
 }
 
 impl WireEnvelope {
+    /// Serialize to `OPHF` wire format: header (104 bytes) + payload + auth_tag (16 bytes).
     pub fn encode(&self) -> Result<Vec<u8>, WireQueryError> {
         let payload_len = self.payload.len();
         if payload_len > u16::MAX as usize {
@@ -99,6 +136,7 @@ impl WireEnvelope {
         Ok(buf)
     }
 
+    /// Deserialize from `OPHF` wire format; checks magic, msg_type, and payload length.
     pub fn decode(bytes: &[u8]) -> Result<Self, WireQueryError> {
         if bytes.len() < HEADER_SIZE + AUTH_TAG_SIZE {
             return Err(WireQueryError::BufferTooShort);
@@ -109,15 +147,17 @@ impl WireEnvelope {
         // bytes[4] = version; forward-compatible: parse but don't reject unknown versions here
         let msg_type =
             WireMsgType::from_u8(bytes[5]).ok_or(WireQueryError::UnknownMsgType(bytes[5]))?;
-        let flags = u16::from_be_bytes([bytes[6], bytes[7]]);
-        let session_id = u64::from_be_bytes(bytes[8..16].try_into().unwrap());
-        let src_peer_id: [u8; 32] = bytes[16..48].try_into().unwrap();
-        let dst_peer_id: [u8; 32] = bytes[48..80].try_into().unwrap();
-        let nonce: [u8; 12] = bytes[80..92].try_into().unwrap();
-        let timestamp_ms = u64::from_be_bytes(bytes[92..100].try_into().unwrap());
+        let flags = read_u16(bytes, 6)?;
+        let session_id = read_u64(bytes, 8)?;
+        let src_peer_id = read_arr32(bytes, 16)?;
+        let dst_peer_id = read_arr32(bytes, 48)?;
+        let nonce: [u8; 12] = bytes[80..92]
+            .try_into()
+            .map_err(|_| WireQueryError::MalformedPayload)?;
+        let timestamp_ms = read_u64(bytes, 92)?;
         let hop_limit = bytes[100];
         let hop_index = bytes[101];
-        let payload_len = u16::from_be_bytes([bytes[102], bytes[103]]) as usize;
+        let payload_len = read_u16(bytes, 102)? as usize;
 
         let payload_start = 104;
         let payload_end = payload_start + payload_len;
@@ -128,7 +168,9 @@ impl WireEnvelope {
         }
 
         let payload = bytes[payload_start..payload_end].to_vec();
-        let auth_tag: [u8; 16] = bytes[payload_end..auth_tag_end].try_into().unwrap();
+        let auth_tag: [u8; 16] = bytes[payload_end..auth_tag_end]
+            .try_into()
+            .map_err(|_| WireQueryError::MalformedPayload)?;
 
         Ok(Self {
             msg_type,
@@ -169,6 +211,7 @@ impl PeerQueryRequest {
     /// Encoded size in bytes.
     pub const SIZE: usize = 17;
 
+    /// Serialize to the 17-byte wire layout.
     pub fn encode(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(Self::SIZE);
         buf.extend_from_slice(&self.query_id.to_be_bytes());
@@ -179,13 +222,14 @@ impl PeerQueryRequest {
         buf
     }
 
+    /// Deserialize from the 17-byte wire layout.
     pub fn decode(bytes: &[u8]) -> Result<Self, WireQueryError> {
         if bytes.len() < Self::SIZE {
             return Err(WireQueryError::MalformedPayload);
         }
         Ok(Self {
-            query_id: u64::from_be_bytes(bytes[0..8].try_into().unwrap()),
-            capability_mask: u32::from_be_bytes(bytes[8..12].try_into().unwrap()),
+            query_id: read_u64(bytes, 0)?,
+            capability_mask: read_u32(bytes, 8)?,
             min_link_quality: u16::from_be_bytes([bytes[12], bytes[13]]),
             trust_filter: bytes[14],
             max_results: u16::from_be_bytes([bytes[15], bytes[16]]),
@@ -230,10 +274,10 @@ impl PeerQueryResult {
         if bytes.len() < 79 {
             return Err(WireQueryError::MalformedPayload);
         }
-        let peer_id: [u8; 32] = bytes[0..32].try_into().unwrap();
-        let callsign_hash: [u8; 32] = bytes[32..64].try_into().unwrap();
-        let capability_mask = u32::from_be_bytes(bytes[64..68].try_into().unwrap());
-        let last_seen_ms = u64::from_be_bytes(bytes[68..76].try_into().unwrap());
+        let peer_id = read_arr32(bytes, 0)?;
+        let callsign_hash = read_arr32(bytes, 32)?;
+        let capability_mask = read_u32(bytes, 64)?;
+        let last_seen_ms = read_u64(bytes, 68)?;
         let trust_state = bytes[76];
         let sig_len = u16::from_be_bytes([bytes[77], bytes[78]]) as usize;
         let sig_end = 79 + sig_len;
@@ -263,6 +307,7 @@ pub struct PeerQueryResponse {
 }
 
 impl PeerQueryResponse {
+    /// Serialize to the variable-length wire layout.
     pub fn encode(&self) -> Result<Vec<u8>, WireQueryError> {
         let result_count = self.results.len();
         if result_count > u16::MAX as usize {
@@ -277,11 +322,12 @@ impl PeerQueryResponse {
         Ok(buf)
     }
 
+    /// Deserialize from the variable-length wire layout.
     pub fn decode(bytes: &[u8]) -> Result<Self, WireQueryError> {
         if bytes.len() < 10 {
             return Err(WireQueryError::MalformedPayload);
         }
-        let query_id = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
+        let query_id = read_u64(bytes, 0)?;
         let result_count = u16::from_be_bytes([bytes[8], bytes[9]]) as usize;
 
         let mut offset = 10;
@@ -318,6 +364,7 @@ pub struct RelayDataChunk {
 }
 
 impl RelayDataChunk {
+    /// Serialize to the variable-length wire layout.
     pub fn encode(&self) -> Result<Vec<u8>, WireQueryError> {
         let sig_len = self.chunk_signature.len();
         let data_len = self.chunk_data.len();
@@ -337,17 +384,18 @@ impl RelayDataChunk {
         Ok(buf)
     }
 
+    /// Deserialize from the variable-length wire layout.
     pub fn decode(bytes: &[u8]) -> Result<Self, WireQueryError> {
         // Fixed: 8+4+4+2+32+32 = 82 bytes before sig_len
         if bytes.len() < 84 {
             return Err(WireQueryError::MalformedPayload);
         }
-        let transfer_id = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
-        let chunk_seq = u32::from_be_bytes(bytes[8..12].try_into().unwrap());
-        let total_chunks = u32::from_be_bytes(bytes[12..16].try_into().unwrap());
+        let transfer_id = read_u64(bytes, 0)?;
+        let chunk_seq = read_u32(bytes, 8)?;
+        let total_chunks = read_u32(bytes, 12)?;
         let chunk_len = u16::from_be_bytes([bytes[16], bytes[17]]) as usize;
-        let chunk_hash: [u8; 32] = bytes[18..50].try_into().unwrap();
-        let e2e_manifest_hash: [u8; 32] = bytes[50..82].try_into().unwrap();
+        let chunk_hash = read_arr32(bytes, 18)?;
+        let e2e_manifest_hash = read_arr32(bytes, 50)?;
         let sig_len = u16::from_be_bytes([bytes[82], bytes[83]]) as usize;
         let sig_end = 84 + sig_len;
         if bytes.len() < sig_end + chunk_len {
@@ -381,6 +429,7 @@ pub enum AckStatus {
 }
 
 impl AckStatus {
+    /// Map a wire byte to the corresponding variant; returns `None` for unknown values.
     pub fn from_u8(v: u8) -> Option<Self> {
         match v {
             0x00 => Some(Self::Ok),
@@ -406,8 +455,10 @@ pub struct RelayHopAck {
 }
 
 impl RelayHopAck {
+    /// Encoded size in bytes.
     pub const SIZE: usize = 49;
 
+    /// Serialize to the 49-byte wire layout.
     pub fn encode(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(Self::SIZE);
         buf.extend_from_slice(&self.transfer_id.to_be_bytes());
@@ -419,13 +470,14 @@ impl RelayHopAck {
         buf
     }
 
+    /// Deserialize from the 49-byte wire layout.
     pub fn decode(bytes: &[u8]) -> Result<Self, WireQueryError> {
         if bytes.len() < Self::SIZE {
             return Err(WireQueryError::MalformedPayload);
         }
-        let transfer_id = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
-        let chunk_seq = u32::from_be_bytes(bytes[8..12].try_into().unwrap());
-        let hop_peer_id: [u8; 32] = bytes[12..44].try_into().unwrap();
+        let transfer_id = read_u64(bytes, 0)?;
+        let chunk_seq = read_u32(bytes, 8)?;
+        let hop_peer_id = read_arr32(bytes, 12)?;
         let ack_status = AckStatus::from_u8(bytes[44]).ok_or(WireQueryError::MalformedPayload)?;
         let retry_after_ms = u16::from_be_bytes([bytes[45], bytes[46]]);
         let reason_code = u16::from_be_bytes([bytes[47], bytes[48]]);
@@ -456,6 +508,7 @@ pub enum WireTrustState {
 }
 
 impl WireTrustState {
+    /// Map a wire byte to the corresponding variant; returns `None` for unknown values.
     pub fn from_u8(v: u8) -> Option<Self> {
         match v {
             0x00 => Some(Self::Trusted),
@@ -492,6 +545,7 @@ pub struct RouteHop {
 }
 
 impl RouteHop {
+    /// Encoded size in bytes.
     pub const SIZE: usize = 37;
 
     fn encode(&self) -> [u8; Self::SIZE] {
@@ -508,7 +562,7 @@ impl RouteHop {
             return Err(WireQueryError::MalformedPayload);
         }
         Ok(Self {
-            hop_peer_id: bytes[0..32].try_into().unwrap(),
+            hop_peer_id: read_arr32(bytes, 0)?,
             hop_trust_state: bytes[32],
             estimated_latency_ms: u16::from_be_bytes([bytes[33], bytes[34]]),
             estimated_reliability_permille: u16::from_be_bytes([bytes[35], bytes[36]]),
@@ -530,8 +584,10 @@ pub struct RouteDiscoveryRequest {
 }
 
 impl RouteDiscoveryRequest {
+    /// Encoded size in bytes.
     pub const SIZE: usize = 47;
 
+    /// Serialize to the 47-byte wire layout.
     pub fn encode(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(Self::SIZE);
         buf.extend_from_slice(&self.route_query_id.to_be_bytes());
@@ -542,15 +598,16 @@ impl RouteDiscoveryRequest {
         buf
     }
 
+    /// Deserialize from the 47-byte wire layout.
     pub fn decode(bytes: &[u8]) -> Result<Self, WireQueryError> {
         if bytes.len() < Self::SIZE {
             return Err(WireQueryError::MalformedPayload);
         }
         Ok(Self {
-            route_query_id: u64::from_be_bytes(bytes[0..8].try_into().unwrap()),
-            destination_peer_id: bytes[8..40].try_into().unwrap(),
+            route_query_id: read_u64(bytes, 0)?,
+            destination_peer_id: read_arr32(bytes, 8)?,
             max_hops: bytes[40],
-            required_capability_mask: u32::from_be_bytes(bytes[41..45].try_into().unwrap()),
+            required_capability_mask: read_u32(bytes, 41)?,
             policy_flags: u16::from_be_bytes([bytes[45], bytes[46]]),
         })
     }
@@ -562,8 +619,8 @@ impl RouteDiscoveryRequest {
 
 /// Payload for msg_type 0x04 — route_discovery_response.
 ///
-/// Variable: route_query_id(8) | route_id(8) | hop_count(1) |
-///           hops[hop_count × 37] | sig_len(2) | route_signature[sig_len].
+/// Variable layout: `route_query_id(8) | route_id(8) | hop_count(1) |`
+/// `hops[hop_count × 37] | sig_len(2) | route_signature[sig_len]`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteDiscoveryResponse {
     pub route_query_id: u64,
@@ -573,6 +630,7 @@ pub struct RouteDiscoveryResponse {
 }
 
 impl RouteDiscoveryResponse {
+    /// Serialize to the variable-length wire layout.
     pub fn encode(&self) -> Result<Vec<u8>, WireQueryError> {
         if self.hops.len() > 8 {
             return Err(WireQueryError::HopCountExceeded);
@@ -593,13 +651,14 @@ impl RouteDiscoveryResponse {
         Ok(buf)
     }
 
+    /// Deserialize from the variable-length wire layout.
     pub fn decode(bytes: &[u8]) -> Result<Self, WireQueryError> {
         // Minimum: 8 + 8 + 1 + 0 hops + 2 sig_len = 19 bytes
         if bytes.len() < 19 {
             return Err(WireQueryError::MalformedPayload);
         }
-        let route_query_id = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
-        let route_id = u64::from_be_bytes(bytes[8..16].try_into().unwrap());
+        let route_query_id = read_u64(bytes, 0)?;
+        let route_id = read_u64(bytes, 8)?;
         let hop_count = bytes[16] as usize;
 
         let hops_end = 17 + hop_count * RouteHop::SIZE;
@@ -633,9 +692,9 @@ impl RouteDiscoveryResponse {
 
 /// Payload for msg_type 0x07 — relay_route_update.
 ///
-/// Variable: route_id(8) | previous_hop_count(1) | new_hop_count(1) |
-///           route_change_reason(2) | replacement_hops[new_hop_count × 37] |
-///           sig_len(2) | route_update_signature[sig_len].
+/// Variable layout: `route_id(8) | previous_hop_count(1) | new_hop_count(1) |`
+/// `route_change_reason(2) | replacement_hops[new_hop_count × 37] |`
+/// `sig_len(2) | route_update_signature[sig_len]`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelayRouteUpdate {
     pub route_id: u64,
@@ -646,6 +705,7 @@ pub struct RelayRouteUpdate {
 }
 
 impl RelayRouteUpdate {
+    /// Serialize to the variable-length wire layout.
     pub fn encode(&self) -> Result<Vec<u8>, WireQueryError> {
         if self.replacement_hops.len() > u8::MAX as usize {
             return Err(WireQueryError::HopCountExceeded);
@@ -668,12 +728,13 @@ impl RelayRouteUpdate {
         Ok(buf)
     }
 
+    /// Deserialize from the variable-length wire layout.
     pub fn decode(bytes: &[u8]) -> Result<Self, WireQueryError> {
         // Minimum: 8 + 1 + 1 + 2 + 0 hops + 2 sig_len = 14 bytes
         if bytes.len() < 14 {
             return Err(WireQueryError::MalformedPayload);
         }
-        let route_id = u64::from_be_bytes(bytes[0..8].try_into().unwrap());
+        let route_id = read_u64(bytes, 0)?;
         let previous_hop_count = bytes[8];
         let new_hop_count = bytes[9] as usize;
         let route_change_reason = u16::from_be_bytes([bytes[10], bytes[11]]);
@@ -723,8 +784,10 @@ pub struct RelayRouteReject {
 }
 
 impl RelayRouteReject {
+    /// Encoded size in bytes.
     pub const SIZE: usize = 45;
 
+    /// Serialize to the 45-byte wire layout.
     pub fn encode(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(Self::SIZE);
         buf.extend_from_slice(&self.route_id.to_be_bytes());
@@ -735,18 +798,82 @@ impl RelayRouteReject {
         buf
     }
 
+    /// Deserialize from the 45-byte wire layout.
     pub fn decode(bytes: &[u8]) -> Result<Self, WireQueryError> {
         if bytes.len() < Self::SIZE {
             return Err(WireQueryError::MalformedPayload);
         }
         Ok(Self {
-            route_id: u64::from_be_bytes(bytes[0..8].try_into().unwrap()),
-            reject_hop_peer_id: bytes[8..40].try_into().unwrap(),
+            route_id: read_u64(bytes, 0)?,
+            reject_hop_peer_id: read_arr32(bytes, 8)?,
             reason_code: u16::from_be_bytes([bytes[40], bytes[41]]),
             trust_decision: bytes[42],
             policy_reference: u16::from_be_bytes([bytes[43], bytes[44]]),
         })
     }
+}
+
+// ------------------------------------------------------------------
+// broadcast_frame payload (msg_type 0x0A)
+// ------------------------------------------------------------------
+
+/// Payload for msg_type 0x0A — broadcast_frame.
+///
+/// Header: callsign_hash(4) | seq(2) | ttl(1) | flags(1) = 8 bytes,
+/// followed by variable-length payload bytes.
+/// No ACK is expected; no session state is required.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BroadcastFrame {
+    /// FNV-1a hash of the sender's callsign (for display / dedup without full identity).
+    pub callsign_hash: u32,
+    /// Sender-local sequence number for duplicate suppression.
+    pub seq: u16,
+    /// Remaining TTL hops; relay nodes decrement before re-transmitting.
+    pub ttl: u8,
+    /// Reserved flags byte (0 for now).
+    pub flags: u8,
+    /// Arbitrary payload bytes (station ID text, position, network announcement, …).
+    pub payload: Vec<u8>,
+}
+
+impl BroadcastFrame {
+    /// Byte count of the fixed header before the payload bytes.
+    pub const HEADER_SIZE: usize = 8;
+
+    /// Serialize to the variable-length wire layout.
+    pub fn encode(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(Self::HEADER_SIZE + self.payload.len());
+        buf.extend_from_slice(&self.callsign_hash.to_be_bytes());
+        buf.extend_from_slice(&self.seq.to_be_bytes());
+        buf.push(self.ttl);
+        buf.push(self.flags);
+        buf.extend_from_slice(&self.payload);
+        buf
+    }
+
+    /// Deserialize from the variable-length wire layout.
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireQueryError> {
+        if bytes.len() < Self::HEADER_SIZE {
+            return Err(WireQueryError::MalformedPayload);
+        }
+        Ok(Self {
+            callsign_hash: read_u32(bytes, 0)?,
+            seq: u16::from_be_bytes([bytes[4], bytes[5]]),
+            ttl: bytes[6],
+            flags: bytes[7],
+            payload: bytes[8..].to_vec(),
+        })
+    }
+}
+
+/// Compute an FNV-1a 32-bit hash of a callsign string (uppercase, trimmed).
+pub fn callsign_hash(callsign: &str) -> u32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in callsign.trim().to_uppercase().bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    h
 }
 
 #[cfg(test)]
@@ -883,5 +1010,41 @@ mod tests {
         let decoded = PeerQueryResponse::decode(&payload).unwrap();
         assert_eq!(decoded.query_id, 99);
         assert!(decoded.results.is_empty());
+    }
+
+    #[test]
+    fn broadcast_frame_round_trip() {
+        let frame = BroadcastFrame {
+            callsign_hash: callsign_hash("KX0ABC"),
+            seq: 42,
+            ttl: 3,
+            flags: 0,
+            payload: b"hello mesh".to_vec(),
+        };
+        let enc = frame.encode();
+        assert_eq!(enc.len(), BroadcastFrame::HEADER_SIZE + 10);
+        let dec = BroadcastFrame::decode(&enc).unwrap();
+        assert_eq!(dec, frame);
+    }
+
+    #[test]
+    fn broadcast_frame_ttl_decrement_in_place() {
+        let mut frame = BroadcastFrame {
+            callsign_hash: callsign_hash("W1AW"),
+            seq: 1,
+            ttl: 2,
+            flags: 0,
+            payload: vec![0xDE, 0xAD],
+        };
+        frame.ttl -= 1;
+        assert_eq!(frame.ttl, 1);
+        let dec = BroadcastFrame::decode(&frame.encode()).unwrap();
+        assert_eq!(dec.ttl, 1);
+    }
+
+    #[test]
+    fn callsign_hash_case_insensitive() {
+        assert_eq!(callsign_hash("kx0abc"), callsign_hash("KX0ABC"));
+        assert_eq!(callsign_hash(" W1AW "), callsign_hash("W1AW"));
     }
 }

@@ -12,7 +12,7 @@ pub fn run(command: BenchmarkCommands) -> Result<i32> {
             max_mean_transitions,
         } => {
             let corpus = standard_corpus();
-            let report = run_benchmark(&corpus);
+            let report = run_benchmark(corpus);
 
             println!("{}", serde_json::to_string_pretty(&report)?);
 

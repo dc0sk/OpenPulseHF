@@ -1,6 +1,8 @@
 use openpulse_core::compression::{
     compress, compress_if_smaller, decompress, CompressionAlgorithm, MAX_DECOMPRESSED_SIZE,
+    ZSTD_DICT_ID,
 };
+use openpulse_core::fec::FecMode;
 use openpulse_core::handshake::{
     verify_conack, verify_conreq, ConAck, ConReq, HandshakeError, InMemoryTrustStore,
 };
@@ -79,6 +81,7 @@ fn conreq_carries_supported_compression_in_signature() {
         vec![SigningMode::Normal],
         "sess-comp-1",
         vec![CompressionAlgorithm::Lz4],
+        vec![],
     )
     .unwrap();
 
@@ -98,6 +101,7 @@ fn conack_carries_selected_compression_in_signature() {
         SigningMode::Normal,
         "sess-comp-2",
         CompressionAlgorithm::Lz4,
+        FecMode::None,
     )
     .unwrap();
 
@@ -108,6 +112,7 @@ fn conack_carries_selected_compression_in_signature() {
         &ack,
         "sess-comp-2",
         &[CompressionAlgorithm::Lz4],
+        &[],
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
@@ -124,6 +129,7 @@ fn full_negotiation_round_trip_with_lz4() {
         vec![SigningMode::Normal],
         "sess-comp-3",
         vec![CompressionAlgorithm::Lz4],
+        vec![],
     )
     .unwrap();
 
@@ -159,6 +165,7 @@ fn full_negotiation_round_trip_with_lz4() {
         req_decision.selected_mode,
         &req.session_id,
         selected_compression,
+        FecMode::None,
     )
     .unwrap();
 
@@ -176,6 +183,7 @@ fn full_negotiation_round_trip_with_lz4() {
         &ack,
         &req.session_id,
         &req.supported_compression,
+        &[],
         &alice_store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
@@ -190,6 +198,7 @@ fn compression_field_tampering_invalidates_signature() {
         &make_seed(5),
         vec![SigningMode::Normal],
         "sess-comp-4",
+        vec![],
         vec![],
     )
     .unwrap();
@@ -226,6 +235,7 @@ fn conack_rejected_when_compression_not_offered() {
         SigningMode::Normal,
         "sess-comp-5",
         CompressionAlgorithm::Lz4,
+        FecMode::None,
     )
     .unwrap();
 
@@ -234,6 +244,7 @@ fn conack_rejected_when_compression_not_offered() {
         &ack,
         "sess-comp-5",
         &[], // initiator offered nothing
+        &[],
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
@@ -242,4 +253,147 @@ fn conack_rejected_when_compression_not_offered() {
         matches!(result, Err(HandshakeError::UnsupportedCompression)),
         "selecting an unoffered compression must be rejected"
     );
+}
+
+// ------------------------------------------------------------------
+// Group 4: Zstd dictionary compression
+// ------------------------------------------------------------------
+
+#[test]
+fn zstd_round_trip() {
+    let payload = b"Date: Thu, 01 May 2026 14:23:00 +0000\r\nFrom: N0CALL@winlink.org\r\nTo: W1AW@winlink.org\r\nSubject: Check-in\r\n\r\nAll OK. Grid FN31.\r\n";
+    let algo = CompressionAlgorithm::Zstd(ZSTD_DICT_ID);
+    let compressed = compress(payload, algo);
+    let recovered = decompress(&compressed, algo).unwrap();
+    assert_eq!(recovered.as_slice(), payload.as_slice());
+}
+
+#[test]
+fn zstd_compresses_structured_payload() {
+    // A typical Winlink-style header should shrink with the HPX dictionary.
+    let payload = b"Date: Fri, 02 May 2026 09:10:00 +0000\r\nFrom: KD9ABC@winlink.org\r\nTo: WB4GHI@winlink.org\r\nSubject: Weekly traffic net\r\nMime-Version: 1.0\r\nContent-Type: text/plain\r\n\r\nTraffic net check-in. Grid: EM60. No traffic.\r\n";
+    let compressed = compress(payload, CompressionAlgorithm::Zstd(ZSTD_DICT_ID));
+    assert!(
+        compressed.len() < payload.len(),
+        "structured payload should compress (compressed={}, original={})",
+        compressed.len(),
+        payload.len(),
+    );
+}
+
+#[test]
+fn zstd_decompression_oom_guard() {
+    // 4-byte BE size prefix that exceeds MAX_DECOMPRESSED_SIZE must be rejected.
+    use openpulse_core::compression::CompressionError;
+    let oversized = (MAX_DECOMPRESSED_SIZE as u32 + 1).to_be_bytes();
+    let garbage: Vec<u8> = oversized.iter().copied().chain([0u8; 8]).collect();
+    let result = decompress(&garbage, CompressionAlgorithm::Zstd(ZSTD_DICT_ID));
+    assert!(
+        matches!(
+            result,
+            Err(CompressionError::DecompressedSizeTooLarge { .. })
+        ),
+        "oversized size prefix must be rejected before allocation"
+    );
+}
+
+#[test]
+fn zstd_dict_id_mismatch_rejected_in_negotiation() {
+    // Bob selects Zstd with a wrong dict ID — Alice only offered ZSTD_DICT_ID.
+    let wrong_id = ZSTD_DICT_ID.wrapping_add(1);
+    let req = ConReq::create(
+        "W1AW",
+        &make_seed(11),
+        vec![SigningMode::Normal],
+        "sess-zstd-mismatch",
+        vec![
+            CompressionAlgorithm::Lz4,
+            CompressionAlgorithm::Zstd(ZSTD_DICT_ID),
+        ],
+        vec![],
+    )
+    .unwrap();
+
+    let ack = ConAck::create(
+        "KD9XYZ",
+        &make_seed(12),
+        SigningMode::Normal,
+        "sess-zstd-mismatch",
+        CompressionAlgorithm::Zstd(wrong_id),
+        FecMode::None,
+    )
+    .unwrap();
+
+    let store = InMemoryTrustStore::new();
+    let result = verify_conack(
+        &ack,
+        "sess-zstd-mismatch",
+        &req.supported_compression,
+        &[],
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+    );
+    assert!(
+        matches!(result, Err(HandshakeError::UnsupportedCompression)),
+        "wrong dict ID must be rejected as unsupported compression"
+    );
+}
+
+#[test]
+fn zstd_full_negotiation_round_trip() {
+    // Alice advertises [Lz4, Zstd(DICT_ID)]; Bob selects Zstd.
+    let req = ConReq::create(
+        "W1AW",
+        &make_seed(13),
+        vec![SigningMode::Normal],
+        "sess-zstd-ok",
+        vec![
+            CompressionAlgorithm::Lz4,
+            CompressionAlgorithm::Zstd(ZSTD_DICT_ID),
+        ],
+        vec![],
+    )
+    .unwrap();
+
+    let mut bob_store = InMemoryTrustStore::new();
+    bob_store.add_trusted(
+        "W1AW",
+        ed25519_dalek::SigningKey::from_bytes(&make_seed(13))
+            .verifying_key()
+            .to_bytes(),
+    );
+    verify_conreq(
+        &req,
+        &bob_store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+    )
+    .unwrap();
+
+    let ack = ConAck::create(
+        "KD9XYZ",
+        &make_seed(14),
+        SigningMode::Normal,
+        "sess-zstd-ok",
+        CompressionAlgorithm::Zstd(ZSTD_DICT_ID),
+        FecMode::None,
+    )
+    .unwrap();
+    assert_eq!(
+        ack.selected_compression,
+        CompressionAlgorithm::Zstd(ZSTD_DICT_ID)
+    );
+
+    let alice_store = InMemoryTrustStore::new();
+    verify_conack(
+        &ack,
+        &req.session_id,
+        &req.supported_compression,
+        &[],
+        &alice_store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+    )
+    .expect("Zstd negotiation should succeed");
 }

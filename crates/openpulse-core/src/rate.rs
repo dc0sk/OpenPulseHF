@@ -28,9 +28,33 @@ use serde::{Deserialize, Serialize};
 
 use crate::ack::AckType;
 
+// ── RateTrigger ───────────────────────────────────────────────────────────────
+
+/// What triggered a [`RateEvent`] in the rate adapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RateTrigger {
+    AckUp,
+    AckDown,
+    NackDecrement,
+    ChirpFallback,
+    /// SNR dropped below the per-level floor; proactive step-down fired.
+    SnrFloor,
+    /// SNR rose above the per-level ceiling; upgrade candidate flagged.
+    SnrCeiling,
+}
+
 // ── SpeedLevel ────────────────────────────────────────────────────────────────
 
-/// HPX adaptive rate speed level (SL1 = slowest / most robust, SL11 = fastest).
+/// HPX adaptive rate speed level (SL1 = slowest / most robust, SL20 = fastest).
+///
+/// | SL  | HPX profile    | Example mode         |
+/// |-----|----------------|----------------------|
+/// | SL1 | Fallback       | Chirp / minimum rate |
+/// | SL2–SL7  | HPX500/HF  | BPSK31 … 8PSK500    |
+/// | SL8–SL11 | HPX2300    | QPSK500 … 8PSK1000  |
+/// | SL12–SL14 | Wideband HD| 64QAM500/1000/2000 |
+/// | SL15–SL20 | Reserved   | (future expansion)  |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum SpeedLevel {
@@ -45,10 +69,19 @@ pub enum SpeedLevel {
     Sl9 = 9,
     Sl10 = 10,
     Sl11 = 11,
+    Sl12 = 12,
+    Sl13 = 13,
+    Sl14 = 14,
+    Sl15 = 15,
+    Sl16 = 16,
+    Sl17 = 17,
+    Sl18 = 18,
+    Sl19 = 19,
+    Sl20 = 20,
 }
 
 impl SpeedLevel {
-    /// Increment by one step, clamping at `Sl11`.
+    /// Increment by one step, clamping at `Sl20`.
     pub fn step_up(self) -> Self {
         match self {
             Self::Sl1 => Self::Sl2,
@@ -61,7 +94,16 @@ impl SpeedLevel {
             Self::Sl8 => Self::Sl9,
             Self::Sl9 => Self::Sl10,
             Self::Sl10 => Self::Sl11,
-            Self::Sl11 => Self::Sl11,
+            Self::Sl11 => Self::Sl12,
+            Self::Sl12 => Self::Sl13,
+            Self::Sl13 => Self::Sl14,
+            Self::Sl14 => Self::Sl15,
+            Self::Sl15 => Self::Sl16,
+            Self::Sl16 => Self::Sl17,
+            Self::Sl17 => Self::Sl18,
+            Self::Sl18 => Self::Sl19,
+            Self::Sl19 => Self::Sl20,
+            Self::Sl20 => Self::Sl20,
         }
     }
 
@@ -79,6 +121,15 @@ impl SpeedLevel {
             Self::Sl9 => Self::Sl8,
             Self::Sl10 => Self::Sl9,
             Self::Sl11 => Self::Sl10,
+            Self::Sl12 => Self::Sl11,
+            Self::Sl13 => Self::Sl12,
+            Self::Sl14 => Self::Sl13,
+            Self::Sl15 => Self::Sl14,
+            Self::Sl16 => Self::Sl15,
+            Self::Sl17 => Self::Sl16,
+            Self::Sl18 => Self::Sl17,
+            Self::Sl19 => Self::Sl18,
+            Self::Sl20 => Self::Sl19,
         }
     }
 }
@@ -86,7 +137,7 @@ impl SpeedLevel {
 // ── RateEvent ─────────────────────────────────────────────────────────────────
 
 /// Outcome of a single [`RateAdapter::apply_ack`] call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RateEvent {
     /// Speed level is unchanged.
     Maintained,
@@ -122,6 +173,8 @@ pub struct RateAdapter {
     /// Number of consecutive NACKs that triggers a speed-level decrease.
     /// Default: 3.
     pub nack_threshold: u8,
+    /// Set when SNR crosses the per-level ceiling; cleared on the next ACK-UP step.
+    snr_upgrade_candidate: bool,
 }
 
 impl RateAdapter {
@@ -131,6 +184,7 @@ impl RateAdapter {
             current: initial,
             consecutive_nack: 0,
             nack_threshold: 3,
+            snr_upgrade_candidate: false,
         }
     }
 
@@ -155,6 +209,7 @@ impl RateAdapter {
             }
             AckType::AckUp => {
                 self.consecutive_nack = 0;
+                self.snr_upgrade_candidate = false;
                 let next = self.current.step_up();
                 if next != self.current {
                     self.current = next;
@@ -202,6 +257,97 @@ impl RateAdapter {
     pub fn reset_nack_counter(&mut self) {
         self.consecutive_nack = 0;
     }
+
+    /// Apply a raw SNR hint for proactive rate adaptation.
+    ///
+    /// If `snr_db < floor_db` the adapter steps down immediately (before any NACK)
+    /// and returns `Some(event)`.  If `snr_db > ceiling_db` the upgrade-candidate
+    /// flag is set (the next [`apply_ack`](Self::apply_ack) call with `AckUp` will
+    /// clear it) and `None` is returned — no immediate level change.  Otherwise
+    /// `None` is returned.
+    ///
+    /// Pass `floor_db = f32::NEG_INFINITY` and/or `ceiling_db = f32::INFINITY` to
+    /// disable the respective check for a given level.
+    pub fn apply_snr_hint(
+        &mut self,
+        snr_db: f32,
+        floor_db: f32,
+        ceiling_db: f32,
+    ) -> Option<RateEvent> {
+        if snr_db < floor_db {
+            self.consecutive_nack = 0;
+            self.snr_upgrade_candidate = false;
+            if self.current == SpeedLevel::Sl2 {
+                self.current = SpeedLevel::Sl1;
+                Some(RateEvent::ChirpFallback)
+            } else if self.current > SpeedLevel::Sl1 {
+                self.current = self.current.step_down();
+                Some(RateEvent::Decreased(self.current))
+            } else {
+                None
+            }
+        } else if snr_db > ceiling_db {
+            self.snr_upgrade_candidate = true;
+            None
+        } else {
+            None
+        }
+    }
+
+    /// Returns `true` if the SNR ceiling has been crossed and an upgrade is ready.
+    pub fn is_snr_upgrade_candidate(&self) -> bool {
+        self.snr_upgrade_candidate
+    }
+}
+
+// ── BiDirRateAdapter ──────────────────────────────────────────────────────────
+
+/// Bidirectional rate adapter: independent TX and RX speed-level tracking.
+///
+/// On HF, SNR is rarely symmetric.  A→B and B→A paths each adapt independently
+/// based on their own quality feedback.  `tx` tracks our outgoing path quality
+/// (as reported by the peer via `AckType`); `rx` tracks the incoming path quality
+/// (as reported by the peer via `AckFrame::reverse_ack`).
+pub struct BiDirRateAdapter {
+    /// Outgoing path (our TX → peer RX) rate adapter.
+    pub tx: RateAdapter,
+    /// Incoming path (peer TX → our RX) rate adapter.
+    pub rx: RateAdapter,
+}
+
+impl BiDirRateAdapter {
+    /// Create a new bidirectional adapter with both directions starting at `initial`.
+    pub fn new(initial: SpeedLevel, nack_threshold: u8) -> Self {
+        let make = |level| {
+            let mut a = RateAdapter::new(level);
+            a.nack_threshold = nack_threshold;
+            a
+        };
+        Self {
+            tx: make(initial),
+            rx: make(initial),
+        }
+    }
+
+    /// Apply the peer's assessment of *our* TX path and return the rate event.
+    pub fn apply_ack(&mut self, ack: AckType) -> RateEvent {
+        self.tx.apply_ack(ack)
+    }
+
+    /// Apply the peer's self-reported RX quality (from `AckFrame::reverse_ack`).
+    pub fn apply_reverse_ack(&mut self, ack: AckType) -> RateEvent {
+        self.rx.apply_ack(ack)
+    }
+
+    /// Current TX speed level.
+    pub fn tx_level(&self) -> SpeedLevel {
+        self.tx.speed_level()
+    }
+
+    /// Current RX speed level.
+    pub fn rx_level(&self) -> SpeedLevel {
+        self.rx.speed_level()
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -221,10 +367,10 @@ mod tests {
     }
 
     #[test]
-    fn ack_up_clamps_at_sl11() {
-        let mut a = RateAdapter::new(SpeedLevel::Sl11);
+    fn ack_up_clamps_at_sl20() {
+        let mut a = RateAdapter::new(SpeedLevel::Sl20);
         assert_eq!(a.apply_ack(AckType::AckUp), RateEvent::Maintained);
-        assert_eq!(a.speed_level(), SpeedLevel::Sl11);
+        assert_eq!(a.speed_level(), SpeedLevel::Sl20);
     }
 
     #[test]
@@ -300,5 +446,31 @@ mod tests {
         assert_eq!(a.apply_ack(AckType::Qrt), RateEvent::Qrt);
         assert_eq!(a.apply_ack(AckType::Abort), RateEvent::Abort);
         assert_eq!(a.speed_level(), SpeedLevel::Sl4);
+    }
+
+    #[test]
+    fn bidir_tx_and_rx_adapt_independently() {
+        let mut bd = BiDirRateAdapter::new(SpeedLevel::Sl5, 3);
+        // TX path gets NACKs → steps down.
+        bd.apply_ack(AckType::Nack);
+        bd.apply_ack(AckType::Nack);
+        bd.apply_ack(AckType::Nack);
+        // RX path gets ACK-UP → steps up.
+        bd.apply_reverse_ack(AckType::AckUp);
+        bd.apply_reverse_ack(AckType::AckUp);
+        assert!(bd.tx_level() < bd.rx_level(), "TX should be lower than RX");
+    }
+
+    #[test]
+    fn bidir_tx_nack_does_not_affect_rx() {
+        let mut bd = BiDirRateAdapter::new(SpeedLevel::Sl6, 3);
+        bd.apply_ack(AckType::Nack);
+        bd.apply_ack(AckType::Nack);
+        bd.apply_ack(AckType::Nack);
+        assert_eq!(
+            bd.rx_level(),
+            SpeedLevel::Sl6,
+            "RX should be unaffected by TX NACKs"
+        );
     }
 }

@@ -7,6 +7,7 @@ use crate::handshake::sha256_bytes;
 // Errors
 // ------------------------------------------------------------------
 
+/// Errors returned when signing or verifying a `TransferManifest`.
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestError {
     #[error("invalid manifest signature")]
@@ -15,6 +16,8 @@ pub enum ManifestError {
     InvalidKey,
     #[error("encoding error: {0}")]
     Encoding(String),
+    #[error("payload hash mismatch")]
+    PayloadHashMismatch,
 }
 
 // ------------------------------------------------------------------
@@ -88,7 +91,8 @@ impl TransferManifest {
 ///
 /// Returns `Ok(())` if the signature is valid.  The caller is responsible for
 /// also verifying that `manifest.payload_hash` matches the locally computed
-/// hash of the received data.
+/// hash of the received data.  Prefer [`verify_manifest_with_payload`] to
+/// perform both checks in one call.
 pub fn verify_manifest(
     manifest: &TransferManifest,
     pubkey_bytes: &[u8; 32],
@@ -103,6 +107,24 @@ pub fn verify_manifest(
     let canonical = manifest.canonical_bytes()?;
     key.verify(&canonical, &sig)
         .map_err(|_| ManifestError::InvalidSignature)
+}
+
+/// Verify a manifest's signature **and** check that `payload` hashes to the
+/// value recorded in the manifest.
+///
+/// This is the preferred verification entry point — it is fail-closed in that
+/// a valid signature over a tampered hash cannot produce `Ok(())`.
+pub fn verify_manifest_with_payload(
+    manifest: &TransferManifest,
+    pubkey_bytes: &[u8; 32],
+    payload: &[u8],
+) -> Result<(), ManifestError> {
+    verify_manifest(manifest, pubkey_bytes)?;
+    let actual = sha256_bytes(payload).to_vec();
+    if actual != manifest.payload_hash {
+        return Err(ManifestError::PayloadHashMismatch);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -139,6 +161,29 @@ mod tests {
         let mut m = TransferManifest::sign(b"data", "W1AW", &make_seed(3)).unwrap();
         m.payload_hash[0] ^= 0xff; // corrupt the hash
         let result = verify_manifest(&m, &pubkey_for(3));
+        assert!(matches!(result, Err(ManifestError::InvalidSignature)));
+    }
+
+    #[test]
+    fn verify_with_payload_passes_on_correct_data() {
+        let payload = b"hello from W1AW";
+        let m = TransferManifest::sign(payload, "W1AW", &make_seed(3)).unwrap();
+        verify_manifest_with_payload(&m, &pubkey_for(3), payload).expect("should pass");
+    }
+
+    #[test]
+    fn verify_with_payload_rejects_tampered_payload() {
+        let payload = b"hello from W1AW";
+        let m = TransferManifest::sign(payload, "W1AW", &make_seed(3)).unwrap();
+        let result = verify_manifest_with_payload(&m, &pubkey_for(3), b"tampered data!!");
+        assert!(matches!(result, Err(ManifestError::PayloadHashMismatch)));
+    }
+
+    #[test]
+    fn verify_with_payload_rejects_wrong_pubkey() {
+        let payload = b"hello from W1AW";
+        let m = TransferManifest::sign(payload, "W1AW", &make_seed(3)).unwrap();
+        let result = verify_manifest_with_payload(&m, &pubkey_for(4), payload);
         assert!(matches!(result, Err(ManifestError::InvalidSignature)));
     }
 }

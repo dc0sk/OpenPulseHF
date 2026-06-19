@@ -6,6 +6,8 @@ use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
+use base64::{engine::general_purpose::STANDARD, Engine};
+use ed25519_dalek::Signer;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, Postgres, QueryBuilder, Row};
@@ -15,6 +17,17 @@ use uuid::Uuid;
 struct ApiMessage {
     status: &'static str,
     detail: String,
+}
+
+fn db_error_response(detail: &'static str, err: &sqlx::Error) -> (StatusCode, Json<ApiMessage>) {
+    tracing::error!(error = ?err, detail, "database operation failed");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ApiMessage {
+            status: "db_error",
+            detail: detail.to_string(),
+        }),
+    )
 }
 
 #[derive(Deserialize)]
@@ -109,7 +122,19 @@ struct RevocationResponse {
     created_at: String,
 }
 
-#[derive(Serialize, FromRow)]
+#[derive(FromRow)]
+struct TrustBundleRow {
+    schema_version: String,
+    bundle_id: String,
+    generated_at: String,
+    issuer_instance_id: String,
+    signing_algorithms: serde_json::Value,
+    records: serde_json::Value,
+    bundle_signature: String,
+    service_pubkey: String,
+}
+
+#[derive(Serialize)]
 struct TrustBundleResponse {
     schema_version: String,
     bundle_id: String,
@@ -118,6 +143,22 @@ struct TrustBundleResponse {
     signing_algorithms: serde_json::Value,
     records: serde_json::Value,
     bundle_signature: String,
+    service_pubkey: String,
+}
+
+impl TrustBundleRow {
+    fn into_response(self) -> TrustBundleResponse {
+        TrustBundleResponse {
+            schema_version: self.schema_version,
+            bundle_id: self.bundle_id,
+            generated_at: self.generated_at,
+            issuer_instance_id: self.issuer_instance_id,
+            signing_algorithms: self.signing_algorithms,
+            records: self.records,
+            bundle_signature: self.bundle_signature,
+            service_pubkey: self.service_pubkey,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -144,7 +185,6 @@ pub struct PublishTrustBundleRequest {
     pub issuer_instance_id: String,
     pub signing_algorithms: serde_json::Value,
     pub records: serde_json::Value,
-    pub bundle_signature: String,
 }
 
 #[derive(Serialize)]
@@ -219,14 +259,7 @@ pub async fn get_identity(
             }),
         )
             .into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("database query failed: {err}"),
-            }),
-        )
-            .into_response(),
+        Err(err) => db_error_response("database query failed", &err).into_response(),
     }
 }
 
@@ -260,14 +293,7 @@ pub async fn lookup_identity(
     let built = qb.build_query_as::<IdentityRecordResponse>();
     match built.fetch_all(&state.db).await {
         Ok(records) => (StatusCode::OK, Json(records)).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("identity lookup failed: {err}"),
-            }),
-        )
-            .into_response(),
+        Err(err) => db_error_response("identity lookup failed", &err).into_response(),
     }
 }
 
@@ -361,19 +387,12 @@ pub async fn list_revocations(
     let built = qb.build_query_as::<RevocationResponse>();
     match built.fetch_all(&state.db).await {
         Ok(records) => (StatusCode::OK, Json(records)).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("revocation lookup failed: {err}"),
-            }),
-        )
-            .into_response(),
+        Err(err) => db_error_response("revocation lookup failed", &err).into_response(),
     }
 }
 
 pub async fn get_current_trust_bundle(State(state): State<AppState>) -> impl IntoResponse {
-    let result = sqlx::query_as::<_, TrustBundleResponse>(
+    let result = sqlx::query_as::<_, TrustBundleRow>(
         "SELECT
             schema_version,
             bundle_id,
@@ -381,7 +400,8 @@ pub async fn get_current_trust_bundle(State(state): State<AppState>) -> impl Int
             issuer_instance_id,
             signing_algorithms,
             records,
-            bundle_signature
+            bundle_signature,
+            service_pubkey
          FROM trust_bundles
          WHERE is_current = TRUE
          ORDER BY generated_at DESC
@@ -391,7 +411,7 @@ pub async fn get_current_trust_bundle(State(state): State<AppState>) -> impl Int
     .await;
 
     match result {
-        Ok(Some(bundle)) => (StatusCode::OK, Json(bundle)).into_response(),
+        Ok(Some(row)) => (StatusCode::OK, Json(row.into_response())).into_response(),
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(ApiMessage {
@@ -400,14 +420,7 @@ pub async fn get_current_trust_bundle(State(state): State<AppState>) -> impl Int
             }),
         )
             .into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("trust bundle query failed: {err}"),
-            }),
-        )
-            .into_response(),
+        Err(err) => db_error_response("trust bundle query failed", &err).into_response(),
     }
 }
 
@@ -415,7 +428,7 @@ pub async fn get_trust_bundle(
     State(state): State<AppState>,
     Path(bundle_id): Path<String>,
 ) -> impl IntoResponse {
-    let result = sqlx::query_as::<_, TrustBundleResponse>(
+    let result = sqlx::query_as::<_, TrustBundleRow>(
         "SELECT
             schema_version,
             bundle_id,
@@ -423,7 +436,8 @@ pub async fn get_trust_bundle(
             issuer_instance_id,
             signing_algorithms,
             records,
-            bundle_signature
+            bundle_signature,
+            service_pubkey
          FROM trust_bundles
          WHERE bundle_id = $1",
     )
@@ -432,7 +446,7 @@ pub async fn get_trust_bundle(
     .await;
 
     match result {
-        Ok(Some(bundle)) => (StatusCode::OK, Json(bundle)).into_response(),
+        Ok(Some(row)) => (StatusCode::OK, Json(row.into_response())).into_response(),
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(ApiMessage {
@@ -441,14 +455,7 @@ pub async fn get_trust_bundle(
             }),
         )
             .into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("trust bundle query failed: {err}"),
-            }),
-        )
-            .into_response(),
+        Err(err) => db_error_response("trust bundle query failed", &err).into_response(),
     }
 }
 
@@ -515,19 +522,11 @@ pub async fn create_submission(
         "payload_kind": payload_kind,
         "has_detached_signature": has_detached_signature
     });
+    let submitter_identity = derive_submitter_identity(&req);
 
     let mut tx = match state.db.begin().await {
         Ok(tx) => tx,
-        Err(err) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiMessage {
-                    status: "db_error",
-                    detail: format!("failed to begin transaction: {err}"),
-                }),
-            )
-                .into_response()
-        }
+        Err(err) => return db_error_response("failed to begin transaction", &err).into_response(),
     };
 
     let insert = sqlx::query(
@@ -541,7 +540,7 @@ pub async fn create_submission(
         ) VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(&submission_id)
-    .bind("api:anonymous")
+    .bind(&submitter_identity)
     .bind("pending")
     .bind(&artifact_uri)
     .bind(detached_signature_uri)
@@ -575,7 +574,7 @@ pub async fn create_submission(
             .bind("submission.created")
             .bind("submission")
             .bind(&submission_id)
-            .bind("api:anonymous")
+            .bind(&submitter_identity)
             .bind(request_id)
             .bind(payload_hash)
             .bind(payload)
@@ -583,25 +582,11 @@ pub async fn create_submission(
             .await;
 
             if let Err(err) = insert_audit {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ApiMessage {
-                        status: "db_error",
-                        detail: format!("failed to insert audit event: {err}"),
-                    }),
-                )
-                    .into_response();
+                return db_error_response("failed to insert audit event", &err).into_response();
             }
 
             if let Err(err) = tx.commit().await {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ApiMessage {
-                        status: "db_error",
-                        detail: format!("failed to commit transaction: {err}"),
-                    }),
-                )
-                    .into_response();
+                return db_error_response("failed to commit transaction", &err).into_response();
             }
 
             (
@@ -614,14 +599,7 @@ pub async fn create_submission(
             )
                 .into_response()
         }
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("failed to persist submission: {err}"),
-            }),
-        )
-            .into_response(),
+        Err(err) => db_error_response("failed to persist submission", &err).into_response(),
     }
 }
 
@@ -655,14 +633,7 @@ pub async fn get_submission(
             }),
         )
             .into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("database query failed: {err}"),
-            }),
-        )
-            .into_response(),
+        Err(err) => db_error_response("database query failed", &err).into_response(),
     }
 }
 
@@ -701,14 +672,7 @@ pub async fn get_moderation_queue(
     let built = qb.build_query_as::<ModerationQueueItem>();
     match built.fetch_all(&state.db).await {
         Ok(queue) => (StatusCode::OK, Json(queue)).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("moderation queue query failed: {err}"),
-            }),
-        )
-            .into_response(),
+        Err(err) => db_error_response("moderation queue query failed", &err).into_response(),
     }
 }
 
@@ -749,16 +713,7 @@ pub async fn post_moderation_decision(
 
     let mut tx = match state.db.begin().await {
         Ok(tx) => tx,
-        Err(err) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiMessage {
-                    status: "db_error",
-                    detail: format!("failed to begin transaction: {err}"),
-                }),
-            )
-                .into_response()
-        }
+        Err(err) => return db_error_response("failed to begin transaction", &err).into_response(),
     };
 
     let update = sqlx::query(
@@ -776,16 +731,7 @@ pub async fn post_moderation_decision(
 
     let updated_rows = match update {
         Ok(res) => res.rows_affected(),
-        Err(err) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiMessage {
-                    status: "db_error",
-                    detail: format!("failed to update submission: {err}"),
-                }),
-            )
-                .into_response()
-        }
+        Err(err) => return db_error_response("failed to update submission", &err).into_response(),
     };
 
     if updated_rows == 0 {
@@ -820,14 +766,7 @@ pub async fn post_moderation_decision(
     .await;
 
     if let Err(err) = insert_event {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("failed to insert moderation event: {err}"),
-            }),
-        )
-            .into_response();
+        return db_error_response("failed to insert moderation event", &err).into_response();
     }
 
     let audit_event_id = Uuid::new_v4().to_string();
@@ -862,25 +801,11 @@ pub async fn post_moderation_decision(
     .await;
 
     if let Err(err) = insert_audit {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("failed to insert audit event: {err}"),
-            }),
-        )
-            .into_response();
+        return db_error_response("failed to insert audit event", &err).into_response();
     }
 
     if let Err(err) = tx.commit().await {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("failed to commit transaction: {err}"),
-            }),
-        )
-            .into_response();
+        return db_error_response("failed to commit transaction", &err).into_response();
     }
 
     (
@@ -907,14 +832,7 @@ pub async fn create_revocation(
             Ok(Some((status, body))) => return (status, Json(body)).into_response(),
             Ok(None) => {}
             Err(err) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ApiMessage {
-                        status: "db_error",
-                        detail: format!("failed to read request tracking: {err}"),
-                    }),
-                )
-                    .into_response();
+                return db_error_response("failed to read request tracking", &err).into_response();
             }
         }
     }
@@ -971,14 +889,7 @@ pub async fn create_revocation(
                 .into_response();
         }
         Err(err) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiMessage {
-                    status: "db_error",
-                    detail: format!("failed to verify record: {err}"),
-                }),
-            )
-                .into_response();
+            return db_error_response("failed to verify record", &err).into_response();
         }
         Ok(Some(_)) => {} // record exists, proceed
     }
@@ -987,16 +898,7 @@ pub async fn create_revocation(
 
     let mut tx = match state.db.begin().await {
         Ok(tx) => tx,
-        Err(err) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiMessage {
-                    status: "db_error",
-                    detail: format!("failed to begin transaction: {err}"),
-                }),
-            )
-                .into_response()
-        }
+        Err(err) => return db_error_response("failed to begin transaction", &err).into_response(),
     };
 
     // Insert revocation
@@ -1022,14 +924,7 @@ pub async fn create_revocation(
     .await;
 
     if let Err(err) = insert_revocation {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("failed to insert revocation: {err}"),
-            }),
-        )
-            .into_response();
+        return db_error_response("failed to insert revocation", &err).into_response();
     }
 
     // Insert audit event
@@ -1066,25 +961,11 @@ pub async fn create_revocation(
     .await;
 
     if let Err(err) = insert_audit {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("failed to insert audit event: {err}"),
-            }),
-        )
-            .into_response();
+        return db_error_response("failed to insert audit event", &err).into_response();
     }
 
     if let Err(err) = tx.commit().await {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("failed to commit transaction: {err}"),
-            }),
-        )
-            .into_response();
+        return db_error_response("failed to commit transaction", &err).into_response();
     }
 
     // Query back the created_at timestamp
@@ -1136,14 +1017,7 @@ pub async fn publish_trust_bundle(
             Ok(Some((status, body))) => return (status, Json(body)).into_response(),
             Ok(None) => {}
             Err(err) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ApiMessage {
-                        status: "db_error",
-                        detail: format!("failed to read request tracking: {err}"),
-                    }),
-                )
-                    .into_response();
+                return db_error_response("failed to read request tracking", &err).into_response();
             }
         }
     }
@@ -1152,13 +1026,12 @@ pub async fn publish_trust_bundle(
     if req.schema_version.trim().is_empty()
         || req.generated_at.trim().is_empty()
         || req.issuer_instance_id.trim().is_empty()
-        || req.bundle_signature.trim().is_empty()
     {
         return (
             StatusCode::BAD_REQUEST,
             Json(ApiMessage {
                 status: "validation_error",
-                detail: "all fields (schema_version, generated_at, issuer_instance_id, signing_algorithms, records, bundle_signature) are required and non-empty".to_string(),
+                detail: "all fields (schema_version, generated_at, issuer_instance_id, signing_algorithms, records) are required and non-empty".to_string(),
             }),
         )
             .into_response();
@@ -1182,18 +1055,33 @@ pub async fn publish_trust_bundle(
 
     let bundle_id = Uuid::new_v4().to_string();
 
-    let mut tx = match state.db.begin().await {
-        Ok(tx) => tx,
+    let canonical = match crate::verification::bundle_canonical_body(
+        &bundle_id,
+        &req.schema_version,
+        &req.issuer_instance_id,
+        &req.signing_algorithms,
+        &req.records,
+    ) {
+        Ok(canonical) => canonical,
         Err(err) => {
+            tracing::error!(error = ?err, "failed to canonicalize trust bundle payload");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiMessage {
-                    status: "db_error",
-                    detail: format!("failed to begin transaction: {err}"),
+                    status: "internal_error",
+                    detail: "failed to prepare trust bundle signature payload".to_string(),
                 }),
             )
-                .into_response()
+                .into_response();
         }
+    };
+    let sig = state.signing_key.sign(&canonical);
+    let bundle_signature = STANDARD.encode(sig.to_bytes());
+    let service_pubkey = STANDARD.encode(state.signing_key.verifying_key().to_bytes());
+
+    let mut tx = match state.db.begin().await {
+        Ok(tx) => tx,
+        Err(err) => return db_error_response("failed to begin transaction", &err).into_response(),
     };
 
     // Insert trust bundle (is_current = false)
@@ -1206,8 +1094,9 @@ pub async fn publish_trust_bundle(
             signing_algorithms,
             records,
             bundle_signature,
+            service_pubkey,
             is_current
-         ) VALUES ($1, $2, $3::timestamptz, $4, $5, $6, $7, $8)",
+         ) VALUES ($1, $2, $3::timestamptz, $4, $5, $6, $7, $8, $9)",
     )
     .bind(&bundle_id)
     .bind(&req.schema_version)
@@ -1215,20 +1104,14 @@ pub async fn publish_trust_bundle(
     .bind(&req.issuer_instance_id)
     .bind(&req.signing_algorithms)
     .bind(&req.records)
-    .bind(&req.bundle_signature)
+    .bind(&bundle_signature)
+    .bind(&service_pubkey)
     .bind(false) // initially not current
     .execute(&mut *tx)
     .await;
 
     if let Err(err) = insert_bundle {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("failed to insert trust bundle: {err}"),
-            }),
-        )
-            .into_response();
+        return db_error_response("failed to insert trust bundle", &err).into_response();
     }
 
     // Insert audit event
@@ -1264,25 +1147,11 @@ pub async fn publish_trust_bundle(
     .await;
 
     if let Err(err) = insert_audit {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("failed to insert audit event: {err}"),
-            }),
-        )
-            .into_response();
+        return db_error_response("failed to insert audit event", &err).into_response();
     }
 
     if let Err(err) = tx.commit().await {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("failed to commit transaction: {err}"),
-            }),
-        )
-            .into_response();
+        return db_error_response("failed to commit transaction", &err).into_response();
     }
 
     // Query back the created_at timestamp
@@ -1340,30 +1209,14 @@ pub async fn promote_trust_bundle(
             Ok(Some((status, body))) => return (status, Json(body)).into_response(),
             Ok(None) => {}
             Err(err) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ApiMessage {
-                        status: "db_error",
-                        detail: format!("failed to read request tracking: {err}"),
-                    }),
-                )
-                    .into_response();
+                return db_error_response("failed to read request tracking", &err).into_response();
             }
         }
     }
 
     let mut tx = match state.db.begin().await {
         Ok(tx) => tx,
-        Err(err) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiMessage {
-                    status: "db_error",
-                    detail: format!("failed to begin transaction: {err}"),
-                }),
-            )
-                .into_response()
-        }
+        Err(err) => return db_error_response("failed to begin transaction", &err).into_response(),
     };
 
     let exists = match sqlx::query("SELECT bundle_id FROM trust_bundles WHERE bundle_id = $1")
@@ -1374,14 +1227,7 @@ pub async fn promote_trust_bundle(
         Ok(Some(_)) => true,
         Ok(None) => false,
         Err(err) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiMessage {
-                    status: "db_error",
-                    detail: format!("failed to query trust bundle: {err}"),
-                }),
-            )
-                .into_response();
+            return db_error_response("failed to query trust bundle", &err).into_response();
         }
     };
 
@@ -1409,14 +1255,7 @@ pub async fn promote_trust_bundle(
             .execute(&mut *tx)
             .await
     {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("failed to clear current trust bundle: {err}"),
-            }),
-        )
-            .into_response();
+        return db_error_response("failed to clear current trust bundle", &err).into_response();
     }
 
     if let Err(err) = sqlx::query("UPDATE trust_bundles SET is_current = true WHERE bundle_id = $1")
@@ -1424,14 +1263,7 @@ pub async fn promote_trust_bundle(
         .execute(&mut *tx)
         .await
     {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("failed to promote trust bundle: {err}"),
-            }),
-        )
-            .into_response();
+        return db_error_response("failed to promote trust bundle", &err).into_response();
     }
 
     let audit_event_id = Uuid::new_v4().to_string();
@@ -1464,25 +1296,11 @@ pub async fn promote_trust_bundle(
     .execute(&mut *tx)
     .await
     {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("failed to insert audit event: {err}"),
-            }),
-        )
-            .into_response();
+        return db_error_response("failed to insert audit event", &err).into_response();
     }
 
     if let Err(err) = tx.commit().await {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("failed to commit transaction: {err}"),
-            }),
-        )
-            .into_response();
+        return db_error_response("failed to commit transaction", &err).into_response();
     }
 
     let promoted_at = match sqlx::query("SELECT created_at FROM trust_bundles WHERE bundle_id = $1")
@@ -1621,15 +1439,19 @@ pub async fn create_session_audit_event(
             }),
         )
             .into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiMessage {
-                status: "db_error",
-                detail: format!("failed to insert session audit event: {err}"),
-            }),
-        )
-            .into_response(),
+        Err(err) => db_error_response("failed to insert session audit event", &err).into_response(),
     }
+}
+
+pub async fn get_signing_key(State(state): State<AppState>) -> impl IntoResponse {
+    let pubkey = STANDARD.encode(state.signing_key.verifying_key().to_bytes());
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "algorithm": "ed25519",
+            "pubkey": pubkey,
+        })),
+    )
 }
 
 fn json_kind(value: &serde_json::Value) -> &'static str {
@@ -1686,6 +1508,22 @@ fn validate_signed_payload_conformance(req: &SubmissionRequest) -> Result<(), St
     }
 
     Ok(())
+}
+
+fn derive_submitter_identity(req: &SubmissionRequest) -> String {
+    if matches!(
+        req.payload_type.trim(),
+        "signed_handshake" | "signed_manifest"
+    ) {
+        if let Some(pubkey) = req.payload.get("pubkey").and_then(|value| value.as_str()) {
+            if pubkey.starts_with("pubkey:") {
+                return pubkey.to_string();
+            }
+            return format!("pubkey:{pubkey}");
+        }
+    }
+
+    "api:anonymous".to_string()
 }
 
 fn payload_sha256(payload: &serde_json::Value) -> String {
@@ -1795,4 +1633,38 @@ async fn track_request(
     .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn derive_submitter_identity_uses_pubkey_for_signed_payloads() {
+        let req = SubmissionRequest {
+            payload_type: "signed_manifest".to_string(),
+            payload: json!({
+                "pubkey": "pubkey:abc123",
+                "session_id": "session-1",
+                "signed_at": "2026-05-26T00:00:00Z",
+                "manifest_hash": "deadbeef",
+                "chunk_count": 3,
+            }),
+            detached_signature: Some("sig".to_string()),
+        };
+
+        assert_eq!(derive_submitter_identity(&req), "pubkey:abc123");
+    }
+
+    #[test]
+    fn derive_submitter_identity_falls_back_to_anonymous_for_unsigned_payloads() {
+        let req = SubmissionRequest {
+            payload_type: "raw_message".to_string(),
+            payload: json!({"message": "hello"}),
+            detached_signature: None,
+        };
+
+        assert_eq!(derive_submitter_identity(&req), "api:anonymous");
+    }
 }

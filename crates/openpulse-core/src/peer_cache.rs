@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 
+/// Trust level assigned to a cached peer by the local node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TrustLevel {
     Unknown,
@@ -9,16 +10,18 @@ pub enum TrustLevel {
 }
 
 /// Filter criterion applied to `PeerCache::query` for the trust dimension.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TrustFilter {
     /// Only return peers with `PskVerified` or `Verified` trust.
     TrustedOnly,
     /// Return peers with any trust level except `Reduced`.
     TrustedOrUnknown,
     /// No trust filter — return all peers regardless of trust level.
+    #[default]
     Any,
 }
 
+/// One entry in the peer cache: identity, capabilities, and link-quality metrics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerRecord {
     pub peer_id: String,
@@ -27,8 +30,12 @@ pub struct PeerRecord {
     pub trust_level: TrustLevel,
     pub revision: u64,
     pub updated_at_ms: u64,
+    /// SHA-256 of the peer's callsign; populated when received in a query response.
+    /// All-zeros means the callsign hash is unknown.
+    pub callsign_hash: [u8; 32],
 }
 
+/// LRU-with-TTL cache of recently observed peers and their link metrics.
 #[derive(Debug, Clone)]
 pub struct PeerCache {
     capacity: usize,
@@ -38,6 +45,7 @@ pub struct PeerCache {
 }
 
 impl PeerCache {
+    /// Create an empty cache with the given capacity and TTL.
     pub fn new(capacity: usize, ttl_ms: u64) -> Self {
         Self {
             capacity,
@@ -47,20 +55,55 @@ impl PeerCache {
         }
     }
 
+    /// Number of live entries currently in the cache.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    /// Return `true` if the cache has no live entries.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
+    /// Insert or update a peer record; returns `true` if the cache was modified.
     pub fn upsert(&mut self, incoming: PeerRecord, now_ms: u64) -> bool {
         self.evict_expired(now_ms);
 
         match self.entries.get(&incoming.peer_id) {
-            Some(existing) if !Self::should_replace(existing, &incoming) => false,
-            _ => {
+            Some(existing) if !Self::should_replace(existing, &incoming) => {
+                // The incoming record is stale in terms of quality/revision, but if it
+                // carries a callsign_hash the existing entry doesn't have, update just that.
+                if existing.callsign_hash == [0u8; 32] && incoming.callsign_hash != [0u8; 32] {
+                    let peer_id = incoming.peer_id.clone();
+                    let updated = PeerRecord {
+                        callsign_hash: incoming.callsign_hash,
+                        ..existing.clone()
+                    };
+                    self.entries.insert(peer_id, updated);
+                    return true;
+                }
+                false
+            }
+            Some(existing) => {
+                // Carry forward a known callsign_hash so subsequent updates don't erase it.
+                let callsign_hash = if incoming.callsign_hash != [0u8; 32] {
+                    incoming.callsign_hash
+                } else {
+                    existing.callsign_hash
+                };
+                let peer_id = incoming.peer_id.clone();
+                self.entries.insert(
+                    peer_id.clone(),
+                    PeerRecord {
+                        callsign_hash,
+                        ..incoming
+                    },
+                );
+                self.touch_lru(&peer_id);
+                self.evict_over_capacity();
+                true
+            }
+            None => {
                 let peer_id = incoming.peer_id.clone();
                 self.entries.insert(peer_id.clone(), incoming);
                 self.touch_lru(&peer_id);
@@ -70,6 +113,7 @@ impl PeerCache {
         }
     }
 
+    /// Look up a peer by ID, bumping its LRU position; returns `None` if expired or absent.
     pub fn get(&mut self, peer_id: &str, now_ms: u64) -> Option<&PeerRecord> {
         self.evict_expired(now_ms);
         if self.entries.contains_key(peer_id) {
@@ -123,11 +167,12 @@ impl PeerCache {
             .cloned()
             .collect();
 
-        results.sort_by(|a, b| b.route_quality.cmp(&a.route_quality));
+        results.sort_by_key(|r| std::cmp::Reverse(r.route_quality));
         results.truncate(max_results);
         results
     }
 
+    /// Remove all entries that have exceeded their TTL; returns the eviction count.
     pub fn evict_expired(&mut self, now_ms: u64) -> usize {
         let before = self.entries.len();
         self.entries
@@ -196,6 +241,7 @@ mod tests {
             trust_level,
             revision,
             updated_at_ms,
+            callsign_hash: [0u8; 32],
         }
     }
 
@@ -336,5 +382,56 @@ mod tests {
         }
         let results = cache.query(0, 0, TrustFilter::Any, 3, 1_000);
         assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn callsign_hash_preserved_when_replacement_has_zeros() {
+        let mut cache = PeerCache::new(16, 10_000);
+        let hash = [0xab; 32];
+        let mut r = rec("peer-a", 0, 90, TrustLevel::Verified, 1, 1_000);
+        r.callsign_hash = hash;
+        assert!(cache.upsert(r, 1_000));
+
+        // Newer record with higher quality but no callsign_hash — hash must survive.
+        let r2 = rec("peer-a", 0, 200, TrustLevel::Verified, 2, 2_000);
+        assert!(cache.upsert(r2, 2_000));
+        assert_eq!(cache.peek("peer-a").unwrap().callsign_hash, hash);
+    }
+
+    #[test]
+    fn callsign_hash_overwritten_by_non_zero_incoming() {
+        let mut cache = PeerCache::new(16, 10_000);
+        let hash_old = [0xaa; 32];
+        let hash_new = [0xbb; 32];
+        let mut r = rec("peer-a", 0, 90, TrustLevel::Verified, 1, 1_000);
+        r.callsign_hash = hash_old;
+        cache.upsert(r, 1_000);
+
+        let mut r2 = rec("peer-a", 0, 200, TrustLevel::Verified, 2, 2_000);
+        r2.callsign_hash = hash_new;
+        cache.upsert(r2, 2_000);
+        assert_eq!(cache.peek("peer-a").unwrap().callsign_hash, hash_new);
+    }
+
+    #[test]
+    fn callsign_hash_updated_even_when_record_is_otherwise_stale() {
+        let mut cache = PeerCache::new(16, 10_000);
+        // Insert a high-quality record with no callsign_hash.
+        cache.upsert(rec("peer-a", 0, 200, TrustLevel::Verified, 5, 2_000), 2_000);
+
+        // Incoming is lower quality/older — normally rejected — but carries a hash.
+        let mut stale = rec("peer-a", 0, 50, TrustLevel::Unknown, 1, 1_000);
+        stale.callsign_hash = [0xcc; 32];
+        assert!(
+            cache.upsert(stale, 2_000),
+            "should return true for hash-only update"
+        );
+        assert_eq!(
+            cache.peek("peer-a").unwrap().callsign_hash,
+            [0xcc; 32],
+            "callsign_hash should be stored even from stale record"
+        );
+        // Quality and trust from the original record must be unchanged.
+        assert_eq!(cache.peek("peer-a").unwrap().route_quality, 200);
     }
 }

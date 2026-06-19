@@ -11,15 +11,17 @@ repository.workspace  = true
 thiserror  = { workspace = true }
 serde      = { workspace = true }
 serde_json = { workspace = true }
+tracing    = { workspace = true }
 hkdf          = "0.12"
 sha2          = "0.10"
 x25519-dalek  = { version = "2.0", features = ["static_secrets"] }
 ed25519-dalek = { version = "2.0", features = ["rand_core"] }
 reed-solomon  = "0.2"
-ml-dsa        = { version = "0.1.0-rc.9", features = ["rand_core"] }
-ml-kem        = { version = "0.3", features = ["getrandom"] }
+ml-dsa        = { version = "=0.1.0-rc.11", features = ["rand_core"] }
+ml-kem        = { version = "=0.3.0", features = ["getrandom"] }
 rand          = "0.8"
 lz4_flex      = "0.11"
+zstd          = "0.13"
 
 [dev-dependencies]
 cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }

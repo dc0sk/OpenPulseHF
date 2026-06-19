@@ -1,0 +1,17 @@
+{
+  "timestamp": "2026-06-06T074850",
+  "git_sha": "1a7f102",
+  "tier": "quick",
+    "iss_station": "dc0sk@dc0sk-rpi51",
+    "irs_station": "dd2zm@dd2zm-landline",
+    "callsign_iss": "DC0SK",
+    "callsign_irs": "DD2ZM",
+  "freq_hz": 144650000,
+    "rig_mode_a": "PKTUSB",
+    "rig_mode_b": "PKTUSB",
+  "first_pass_note": "2m only, low power, agreed test window",
+  "total": 3,
+  "pass": 0,
+  "fail": 3,
+  "cases": [{"mode":"BPSK250","fec":"none","payload_bytes":64,"result":"fail","fail_reason":"IRS: payload not observed in receiver output","iss_exit":0,"telemetry_iss_ptt_on":"na","telemetry_iss_pcm_playback":"na","telemetry_iss_alc_nonzero":"na","telemetry_iss_rfm_nonzero":"na","telemetry_irs_strength_max":"na"},{"mode":"BPSK250","fec":"rs","payload_bytes":64,"result":"fail","fail_reason":"IRS: payload not observed in receiver output","iss_exit":0,"telemetry_iss_ptt_on":"na","telemetry_iss_pcm_playback":"na","telemetry_iss_alc_nonzero":"na","telemetry_iss_rfm_nonzero":"na","telemetry_irs_strength_max":"na"},{"mode":"BPSK250","fec":"soft_concatenated","payload_bytes":64,"result":"fail","fail_reason":"IRS: payload not observed in receiver output","iss_exit":0,"telemetry_iss_ptt_on":"na","telemetry_iss_pcm_playback":"na","telemetry_iss_alc_nonzero":"na","telemetry_iss_rfm_nonzero":"na","telemetry_irs_strength_max":"na"}]
+}

@@ -1,0 +1,13 @@
+[package]
+name        = "openpulse-dsp"
+description = "DSP primitives: FIR filter, RRC coefficients, Gardner timing recovery, Costas PLL"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+
+[dependencies]
+tracing.workspace     = true
+rustfft.workspace     = true
+num-complex.workspace = true

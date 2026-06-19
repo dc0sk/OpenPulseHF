@@ -1,12 +1,15 @@
 use std::f32::consts::PI;
 
 use openpulse_core::error::ModemError;
-use openpulse_core::plugin::ModulationConfig;
+use openpulse_core::plugin::{ModulationConfig, PulseShape};
+use openpulse_dsp::filter::FirFilter;
+use openpulse_dsp::rrc::generate_rrc_coefficients;
 
 use crate::parse_baud_rate;
 
 pub const PREAMBLE_SYMS: usize = 16;
 pub const TAIL_SYMS: usize = 8;
+pub(crate) const RRC_SPAN_SYMBOLS: usize = 8;
 
 const INV_SQRT_2: f32 = 0.70710677;
 
@@ -33,6 +36,16 @@ pub fn psk8_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
     let fc = config.center_frequency;
     let n = samples_per_symbol(fs, baud)?;
 
+    let cosine_overlap =
+        config.pulse_shape == PulseShape::CosineOverlap || config.mode.ends_with("-HF");
+    let rrc_alpha = if let PulseShape::Rrc { alpha } = config.pulse_shape {
+        Some(alpha)
+    } else if config.mode.ends_with("-RRC") {
+        Some(0.35f32)
+    } else {
+        None
+    };
+
     let mut symbols = preamble_symbols();
     symbols.extend(bytes_to_symbols(data));
     symbols.extend(std::iter::repeat_n(
@@ -42,17 +55,82 @@ pub fn psk8_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
 
     let total = symbols.len() * n;
     let mut out = vec![0.0f32; total];
+    // For RRC: keep separate baseband I and Q impulse streams.
+    let mut bb_i = if rrc_alpha.is_some() {
+        vec![0.0f32; total]
+    } else {
+        vec![]
+    };
+    let mut bb_q = if rrc_alpha.is_some() {
+        vec![0.0f32; total]
+    } else {
+        vec![]
+    };
     let two_pi = 2.0 * PI;
 
     for (sym_idx, &(i_amp, q_amp)) in symbols.iter().enumerate() {
         let sym_start = sym_idx * n;
-        for i in 0..n {
-            let envelope = 0.5 * (1.0 - (two_pi * i as f32 / n as f32).cos());
-            let t = (sym_start + i) as f32 / fs;
-            let c = (two_pi * fc * t).cos();
-            let s = (two_pi * fc * t).sin();
-            out[sym_start + i] = envelope * (i_amp * c - q_amp * s);
+        if rrc_alpha.is_some() {
+            // RRC path: baseband impulse at symbol start; carrier applied after
+            // RRC filtering below.
+            bb_i[sym_start] = i_amp;
+            bb_q[sym_start] = q_amp;
+        } else if cosine_overlap {
+            for i in 0..n {
+                // sin²(πi/n): 0 at boundaries, peaks at 1 at midpoint.
+                let amp = 0.5 * (1.0 - (2.0 * PI * i as f32 / n as f32).cos());
+                let t = (sym_start + i) as f32 / fs;
+                let c = (two_pi * fc * t).cos();
+                let s = (two_pi * fc * t).sin();
+                out[sym_start + i] = (i_amp * c - q_amp * s) * amp;
+            }
+        } else {
+            let (i_next, q_next) = symbols.get(sym_idx + 1).copied().unwrap_or((0.0, 0.0));
+            for i in 0..n {
+                let w_tail = 0.5 * (1.0 + (PI * i as f32 / n as f32).cos());
+                let w_head = 1.0 - w_tail;
+                let t = (sym_start + i) as f32 / fs;
+                let c = (two_pi * fc * t).cos();
+                let s = (two_pi * fc * t).sin();
+                let env_i = i_amp * w_tail + i_next * w_head;
+                let env_q = q_amp * w_tail + q_next * w_head;
+                out[sym_start + i] = env_i * c - env_q * s;
+            }
         }
+    }
+
+    // Apply RRC TX filter if requested (operates on baseband), then upconvert.
+    if let Some(alpha) = rrc_alpha {
+        let num_taps = RRC_SPAN_SYMBOLS * n + 1;
+        let coeffs = generate_rrc_coefficients(fs, baud, alpha, num_taps);
+        let group_delay = (num_taps - 1) / 2;
+
+        let filter_bb = |bb: Vec<f32>| -> Vec<f32> {
+            let padded: Vec<f32> = bb
+                .iter()
+                .copied()
+                .chain(std::iter::repeat_n(0.0, group_delay))
+                .collect();
+            let mut fir = FirFilter::new(coeffs.clone());
+            let filtered = fir.apply(&padded);
+            filtered[group_delay..].to_vec()
+        };
+
+        let i_filt = filter_bb(bb_i);
+        let q_filt = filter_bb(bb_q);
+
+        // Upconvert shaped baseband I/Q to bandpass.
+        out = i_filt
+            .iter()
+            .zip(q_filt.iter())
+            .enumerate()
+            .map(|(k, (&bi, &bq))| {
+                let t = k as f32 / fs;
+                let c = (two_pi * fc * t).cos();
+                let s = (two_pi * fc * t).sin();
+                bi * c - bq * s
+            })
+            .collect();
     }
 
     Ok(out)
@@ -91,19 +169,31 @@ pub(crate) fn samples_per_symbol(sample_rate: f32, baud: f32) -> Result<usize, M
 }
 
 pub(crate) fn preamble_symbols() -> Vec<(f32, f32)> {
-    let pattern = [
-        gray_map_8psk(false, false, false),
-        gray_map_8psk(false, false, true),
-        gray_map_8psk(false, true, true),
-        gray_map_8psk(false, true, false),
-        gray_map_8psk(true, true, false),
-        gray_map_8psk(true, true, true),
-        gray_map_8psk(true, false, true),
-        gray_map_8psk(true, false, false),
+    // Designed low-autocorrelation sequence over all 8 phases (each used twice).
+    //
+    // The previous pattern walked the constellation in constant +45° steps, so the
+    // 1-lag autocorrelation R₁ ≈ 16.  With the crossfade modulator this made the
+    // squared-complex timing correlation nearly flat across all sample offsets, so
+    // the correct offset could not be distinguished from the d=n-1 ISI alias and the
+    // decode failed whenever the unknown carrier phase landed near 90°.
+    //
+    // This order (found by search) has peak aperiodic autocorrelation sidelobe ≈2.2
+    // and R₁ ≈1.2 versus the mainlobe 16, giving an unambiguous timing peak for any
+    // carrier phase.  All 8 constellation points appear exactly twice for supervised
+    // LMS training diversity, and there are no adjacent repeats.  Phase-index order:
+    //   [90,0,270,180,90,135,45,180,0,45,135,225,315,225,270,315]°
+    let pts = [
+        gray_map_8psk(false, false, false), // idx 0 →   0°
+        gray_map_8psk(false, false, true),  // idx 1 →  45°
+        gray_map_8psk(false, true, true),   // idx 2 →  90°
+        gray_map_8psk(false, true, false),  // idx 3 → 135°
+        gray_map_8psk(true, true, false),   // idx 4 → 180°
+        gray_map_8psk(true, true, true),    // idx 5 → 225°
+        gray_map_8psk(true, false, true),   // idx 6 → 270°
+        gray_map_8psk(true, false, false),  // idx 7 → 315°
     ];
-    (0..PREAMBLE_SYMS)
-        .map(|i| pattern[i % pattern.len()])
-        .collect()
+    const PHASE_IDX: [usize; PREAMBLE_SYMS] = [2, 0, 6, 4, 2, 3, 1, 4, 0, 1, 3, 5, 7, 5, 6, 7];
+    PHASE_IDX.iter().map(|&k| pts[k]).collect()
 }
 
 #[cfg(test)]
