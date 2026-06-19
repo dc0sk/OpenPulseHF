@@ -6,7 +6,8 @@ on the previous one passing:
 | Rung | Transport | Script | When |
 |---|---|---|---|
 | 1 | **Virtual** (snd-aloop, single clock, no analog) | `scripts/run-loopback-virtual.sh` | **default — every run** |
-| 2 | **Hardware** (two Pis, two soundcards, cable + ground-loop isolator) | `scripts/run-loopback-rpi51-rpi52.sh` | on request |
+| 2a | **Dual-card** (two USB soundcards on one host, cable) | `scripts/run-loopback-dualcard.sh` | dual-clock check, no second machine — see [dualcard-loopback.md](dualcard-loopback.md) |
+| 2b | **Two Pis** (two soundcards, cable + ground-loop isolator) | `scripts/run-loopback-rpi51-rpi52.sh` | on request |
 | 3 | **On-air** (real rigs / RF) | `scripts/run-onair-*.sh` | after rungs 1 and 2 pass |
 
 The three differ by exactly which real-world effects they add:
