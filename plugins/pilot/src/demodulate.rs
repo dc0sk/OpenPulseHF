@@ -85,6 +85,28 @@ pub fn pilot_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Ve
     Ok(frame.decode(&symbols))
 }
 
+/// Soft-decision counterpart of [`pilot_demodulate`]: same onset/downconvert/
+/// integrate-and-dump and pilot-tracked carrier recovery, but emits per-bit LLRs
+/// (positive = bit more likely 0) for the soft FEC decoders. Hard-slicing the
+/// LLRs reproduces [`pilot_demodulate`]'s bytes.
+pub fn pilot_demodulate_soft(
+    samples: &[f32],
+    config: &ModulationConfig,
+) -> Result<Vec<f32>, ModemError> {
+    let sps = samples_per_symbol(config)?;
+    let fs = config.sample_rate as f32;
+    let fc = config.center_frequency;
+
+    let Some(onset) = find_onset(samples, config) else {
+        return Ok(Vec::new());
+    };
+
+    let frame = pilot_frame_for_mode(&config.mode)?;
+    let total_syms = samples.len().saturating_sub(onset) / sps;
+    let symbols = integrate_and_dump(samples, onset, sps, total_syms, fc, fs);
+    Ok(frame.decode_soft(&symbols))
+}
+
 /// Estimate the carrier frequency offset (Hz) for the engine's AFC stage.
 ///
 /// Two stages, mirroring the fielded single-carrier modes:
