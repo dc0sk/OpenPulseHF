@@ -81,22 +81,35 @@ FEC=soft-concatenated scripts/run-loopback-dualcard.sh --single-case "SCFDMA26-1
 Both ends run locally as two cpal CLI processes. The RX receiver starts first and
 the TX waits `IRS_STARTUP_WAIT` (10 s) so the frame lands after the ~6.4 s AFC
 settling window. Per case the mixers are re-normalised (the C-Media hardware AGC
-drifts capture gain down after strong frames). Results are written as JSON to
-`docs/dev/test-reports/loopback-dualcard-<tier>-<ts>.json`.
+drifts capture gain down after strong frames) and each case is attempted up to
+`RETRIES` (3) times — the wideband modes (OFDM52, SCFDMA52) intermittently miss
+acquisition in long back-to-back sweeps even though they pass in isolation, so a
+single attempt understates them. Results are written as JSON to
+`docs/dev/test-reports/loopback-dualcard-<tier>-<ts>.json` (each case records its
+`attempts`).
 
 Useful env overrides: `TX_DEVICE`/`RX_DEVICE`, `TX_CARD`/`RX_CARD`,
-`CAPTURE_GAIN`, `FEC`, `IRS_LISTEN_MS`, `IRS_STARTUP_WAIT`, `OUTPUT_DIR`.
+`CAPTURE_GAIN`, `FEC`, `RETRIES`, `IRS_LISTEN_MS`, `IRS_STARTUP_WAIT`, `OUTPUT_DIR`.
 
 ## Status (2026-06-19)
 
 Validated on this host (cards `Device`/`Device_1`, USB `07:00.3`/`07:00.4`,
 `CAPTURE_GAIN=16`) against current `main`.
 
-**No FEC**
-- PASS: BPSK100/250, QPSK125/250/500, 8PSK500, SCFDMA16 (quick tier 7/7).
-- PASS: **SCFDMA52** — the wideband multicarrier mode decodes on a real
-  *dual-clock* path, confirming the #392 per-symbol pilot SFO-deramp holds on
-  hardware (not just sim), without two machines.
+**No FEC — full tier** (`--full`, 14 cases)
+- PASS (12): BPSK63/100/250, QPSK125/250/500/1000, 8PSK500/1000, OFDM16/52,
+  SCFDMA16. OFDM52 and 8PSK500 occasionally need a retry in a long sweep but
+  pass reliably.
+- **SCFDMA52**: passes 2/2 in isolation (`--single-case`) — confirming the #392
+  per-symbol pilot SFO-deramp holds on a real *dual-clock* path — but is
+  **marginal** in sustained back-to-back sweeps (the widest mode, most
+  SRO/drift-sensitive); intermittently misses acquisition even with retries.
+- **BPSK31**: consistent FAIL ("invalid magic" at acquisition, 2/2). This is the
+  known engine scan/acquisition issue for its ~12 s frame — the demod decodes a
+  real capture fine; the gap is in onset acquisition, tracked separately and not
+  introduced by this rig.
+
+**No FEC — pilot family** (`--single-case`)
 - PASS: PILOT-QPSK500, PILOT-8PSK500, PILOT-16QAM500.
 - FAIL: PILOT-32APSK500 — densest pilot constellation, SNR-bound raw; needs FEC.
 
