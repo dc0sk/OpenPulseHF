@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/features.md
 status: living
-last_updated: 2026-05-12
+last_updated: 2026-06-19
 ---
 
 # OpenPulseHF — Feature Reference
@@ -38,29 +38,21 @@ is pending, and — for non-obvious algorithms — the mathematics behind the de
 
 ## Waveform Modes
 
-| Mode | Baud rate | Bits/sym | BW (Hz) | Eff. throughput | Status |
-|------|-----------|----------|---------|-----------------|--------|
-| BPSK31 | 31.25 | 1 | ~50 | ~19 bps | ✅ |
-| BPSK63 | 62.5 | 1 | ~70 | ~38 bps | ✅ |
-| BPSK100 | 100 | 1 | ~110 | ~60 bps | ✅ |
-| BPSK250 | 250 | 1 | ~260 | ~150 bps | ✅ |
-| BPSK250-RRC | 250 | 1 | ~340 | ~150 bps | ✅ |
-| QPSK125 | 125 | 2 | ~140 | ~150 bps | ✅ |
-| QPSK250 | 250 | 2 | ~270 | ~300 bps | ✅ |
-| QPSK500 | 500 | 2 | ~540 | ~600 bps | ✅ |
-| QPSK1000 | 1000 | 2 | ~1100 | ~1200 bps | ✅ |
-| QPSK1000-HF | 1000 | 2 | ~1100 | ~1200 bps | ✅ |
-| QPSK500-RRC | 500 | 2 | ~675 | ~600 bps | ✅ |
-| QPSK1000-RRC | 1000 | 2 | ~1350 | ~1200 bps | ✅ |
-| 8PSK500 | 500 | 3 | ~540 | ~900 bps | ✅ |
-| 8PSK500-RRC | 500 | 3 | ~675 | ~900 bps | ✅ |
-| 8PSK1000 | 1000 | 3 | ~1100 | ~1800 bps | ✅ |
-| 8PSK1000-HF | 1000 | 3 | ~1100 | ~1800 bps | ✅ |
-| 8PSK1000-RRC | 1000 | 3 | ~1350 | ~1800 bps | ✅ |
-| 64QAM500 | 500 | 6 | ~540 | ~1800 bps | ✅ |
-| 64QAM1000 | 1000 | 6 | ~1100 | ~3600 bps | ✅ |
-| 64QAM2000-RRC | 2000 | 6 | ~2700 | ~7200 bps | ✅ |
-| FSK4-ACK | 100 | 2 | ~400 | ACK frames only | ✅ |
+OpenPulseHF ships modulation modes across 8 plugin families (BPSK, QPSK, 8PSK,
+64QAM, FSK4, OFDM, SC-FDMA, Pilot), including `-RRC`/`-HF` single-carrier variants and the
+OFDM/SC-FDMA higher-order ladders. The authoritative per-mode table — baud,
+bits/symbol, gross bps, occupied bandwidth — is the
+[README modulation-modes table](../README.md#modulation-types); the HF mode/FEC
+selection ladder is in [mode-fec-ladder.md](mode-fec-ladder.md). `openpulse modes`
+prints the live registry. (Plain rectangular `QPSK2000`/`8PSK2000` are registered but
+RRC-superseded — use `-RRC`.)
+
+The **Pilot** family (`PILOT-QPSK500`/`8PSK500`/`16QAM500`/`32APSK500`, `plugins/pilot`)
+is a pilot-framed single-carrier waveform: known in-band pilot symbols drive carrier
+recovery instead of a decision-directed Costas loop, making it cycle-slip-immune on
+dense constellations and robust to soundcard sample-rate offset. See the
+[pilot-framed waveform](dev/hpx-waveform-design.md#pilot-framed-waveform) note and the
+`hpx_pilot` adaptive profile.
 
 All modes target an 8 kHz audio sample rate and a nominal 1500 Hz carrier, fitting
 within a standard SSB passband.  Effective throughput figures are approximate; overhead
@@ -311,7 +303,9 @@ The `RateAdapter` state machine maps ACK events to speed level transitions acros
 
 ### Adaptive profiles
 
-Three pre-configured profiles map speed levels to modulation modes:
+Several `SessionProfile` ladders map speed levels to modulation modes; the
+[README profiles table](../README.md#adaptive-rate-profiles) is the authoritative
+list. Examples:
 
 **HPX500** (narrowband, ~500 Hz occupied bandwidth):
 
@@ -346,6 +340,18 @@ Power Ratio (PAPR ≈ 0 dB for single-carrier vs ≈ 6–10 dB for OFDM), simple
 
 `hpx_wideband_hd` is intended for clear VHF/UHF paths or quiet 10 m conditions; 64QAM
 requires an SNR of approximately 20–25 dB for reliable operation.
+
+**HPX Pilot** (`hpx_pilot`, pilot-framed single-carrier, ~550 Hz):
+
+| Speed Level | Mode | Bits/sym |
+|-------------|------|----------|
+| SL2 | PILOT-QPSK500 | 2 |
+| SL3 | PILOT-8PSK500 | 3 |
+| SL4 | PILOT-16QAM500 | 4 |
+| SL5 | PILOT-32APSK500 | 5 |
+
+`hpx_pilot` climbs a cycle-slip-immune, sample-rate-offset-robust ladder
+(see the [pilot-framed waveform](dev/hpx-waveform-design.md#pilot-framed-waveform) note).
 
 ---
 

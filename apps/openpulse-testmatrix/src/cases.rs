@@ -379,6 +379,21 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
             tier,
         ));
     }
+    // The OFDM higher-order ladder starts at OFDM16 (8 dB floor) and cannot step below
+    // it, so skip AWGN channels weaker than that — unlike the BPSK31-floored ladders,
+    // a sub-floor channel would fail every rung. Clean (no SNR) is always included.
+    for channel in &awgn_channels {
+        if channel_snr_db(channel).is_some_and(|snr| snr < 8.0) {
+            continue;
+        }
+        cases.push(adaptive_case(
+            UseCase::AdaptiveHpxOfdmHf,
+            "HPX_OFDM_HF",
+            channel.clone(),
+            64,
+            tier,
+        ));
+    }
 
     // ── 7. Protocol loopbacks (clean only) ───────────────────────────────────────
     cases.push(proto_case(
@@ -464,10 +479,14 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
             }
         }
 
-        // SC-FDMA higher-order × all propagation channels × {None, Rs} × 32 bytes
+        // SC-FDMA higher-order × all propagation channels × {None, Rs, SoftConcatenated}
+        // × 32 bytes. SoftConcatenated is the soft code these dense HOM modes run
+        // under in practice (it is what closes them on a real link — see the --fec
+        // hardware loopback results and the quick-tier sweep above); characterising
+        // them across the fading channels with only None/Rs missed that path.
         for mode in SCFDMA_HOM_MODES.iter().chain(OFDM_HOM_MODES.iter()) {
             for channel in &prop_channels {
-                for &fec in &[FecMode::None, FecMode::Rs] {
+                for &fec in &[FecMode::None, FecMode::Rs, FecMode::SoftConcatenated] {
                     cases.push(raw_case(
                         mode,
                         fec,

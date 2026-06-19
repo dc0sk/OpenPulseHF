@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/implementation-matrix.md
+doc: docs/dev/implementation-matrix.md
 status: living
 last_updated: 2026-05-17
 ---
@@ -49,4 +49,4 @@ surface and the strongest integration-test evidence currently in-tree.
 
 | Feature | Primary implementation | Validation evidence | Status |
 |---|---|---|---|
-| On-air regulatory validation report (Phase 5.5-reg) | Process/documentation workflow | `docs/on-air_testplan.md` defines procedure; `scripts/onair-generate-report.sh` and `scripts/onair-bundle-evidence.sh` provide the report scaffold | Partial (scaffold shipped; field report still pending) |
+| On-air regulatory validation report (Phase 5.5-reg) | Process/documentation workflow | `docs/on-air_testplan.md` defines procedure; `scripts/onair-generate-report.sh` and `scripts/onair-bundle-evidence.sh` provide the report scaffold | In progress (scaffold shipped; on-air field validation in active execution as of 2026-06 — see `docs/dev/onair-status.md`) |

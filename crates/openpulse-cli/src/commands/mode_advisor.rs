@@ -3,7 +3,7 @@ use anyhow::Result;
 use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::SpeedLevel;
 
-fn speed_level_label(level: SpeedLevel) -> &'static str {
+pub(crate) fn speed_level_label(level: SpeedLevel) -> &'static str {
     match level {
         SpeedLevel::Sl1 => "SL1",
         SpeedLevel::Sl2 => "SL2",
@@ -28,10 +28,17 @@ fn speed_level_label(level: SpeedLevel) -> &'static str {
     }
 }
 
-fn recommend_hf_level(profile: &SessionProfile, snr_db: f32) -> (SpeedLevel, String) {
-    let mut selected = SpeedLevel::Sl2;
+fn recommend_hf_level(
+    profile: &SessionProfile,
+    profile_name: &str,
+    snr_db: f32,
+) -> (SpeedLevel, String) {
+    let levels = profile.defined_levels();
+    // Floor at the most robust rung the profile actually defines (e.g. SL5 for
+    // hpx_ofdm_hf), not a hard-coded SL2 that some profiles never map.
+    let mut selected = levels.first().copied().unwrap_or(SpeedLevel::Sl2);
 
-    for level in profile.defined_levels() {
+    for &level in &levels {
         let Some(floor_db) = profile.snr_floor_for_level(level) else {
             continue;
         };
@@ -42,12 +49,12 @@ fn recommend_hf_level(profile: &SessionProfile, snr_db: f32) -> (SpeedLevel, Str
 
     let reason = if let Some(floor_db) = profile.snr_floor_for_level(selected) {
         format!(
-            "Using HPX HF profile floor: snr_db={snr_db:.1} meets {} floor ({floor_db:.1} dB).",
+            "Using profile '{profile_name}' floor: snr_db={snr_db:.1} meets {} floor ({floor_db:.1} dB).",
             speed_level_label(selected)
         )
     } else {
         format!(
-            "Using HPX HF profile defaults: snr_db={snr_db:.1} mapped to {}.",
+            "Using profile '{profile_name}' defaults: snr_db={snr_db:.1} mapped to {}.",
             speed_level_label(selected)
         )
     };
@@ -55,19 +62,39 @@ fn recommend_hf_level(profile: &SessionProfile, snr_db: f32) -> (SpeedLevel, Str
     (selected, reason)
 }
 
-pub fn run(snr_db: f32) -> Result<()> {
-    let profile = SessionProfile::hpx_hf();
-    let (level, reason) = recommend_hf_level(&profile, snr_db);
+/// Recommend a speed level and mode for `snr_db` using the selected session profile.
+///
+/// Profile resolution order: explicit `--profile` flag > config `[modem] profile` >
+/// built-in default (`hpx_hf`).
+pub fn run(snr_db: f32, profile_override: Option<&str>) -> Result<()> {
+    let name = resolve_profile_name(profile_override);
+    let profile = SessionProfile::by_name(&name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown session profile {name:?}; valid profiles: {}",
+            SessionProfile::PROFILE_NAMES.join(", ")
+        )
+    })?;
+    let (level, reason) = recommend_hf_level(&profile, &name, snr_db);
     let mode = profile.mode_for(level).unwrap_or("UNMAPPED");
 
     println!(
-        "snr_db={snr_db:.1} recommended_speed_level={} recommended_mode={} reason=\"{}\"",
+        "profile={name} snr_db={snr_db:.1} recommended_speed_level={} recommended_mode={} reason=\"{}\"",
         speed_level_label(level),
         mode,
         reason
     );
 
     Ok(())
+}
+
+/// Profile name from the CLI override, else config `[modem] profile`, else the default.
+fn resolve_profile_name(profile_override: Option<&str>) -> String {
+    if let Some(name) = profile_override {
+        return name.to_string();
+    }
+    openpulse_config::load()
+        .map(|cfg| cfg.modem.profile)
+        .unwrap_or_else(|_| "hpx_hf".to_string())
 }
 
 #[cfg(test)]
@@ -93,8 +120,27 @@ mod tests {
         ];
 
         for (snr, expected_level) in cases {
-            let (level, _) = recommend_hf_level(&profile, snr);
+            let (level, _) = recommend_hf_level(&profile, "hpx_hf", snr);
             assert_eq!(level, expected_level, "snr={snr}");
         }
+    }
+
+    #[test]
+    fn ofdm_hf_profile_recommends_ofdm_modes() {
+        let profile = SessionProfile::by_name("hpx_ofdm_hf").expect("ofdm-hf resolves");
+        // Below the lowest rung's floor → floor at the most robust defined rung (SL5),
+        // not an unmapped SL2.
+        let (low, _) = recommend_hf_level(&profile, "hpx_ofdm_hf", 0.0);
+        assert_eq!(low, SpeedLevel::Sl5);
+        assert_eq!(profile.mode_for(low), Some("OFDM16"));
+        // High SNR → the densest OFDM rung.
+        let (high, _) = recommend_hf_level(&profile, "hpx_ofdm_hf", 30.0);
+        assert_eq!(high, SpeedLevel::Sl10);
+        assert_eq!(profile.mode_for(high), Some("OFDM52-64QAM"));
+    }
+
+    #[test]
+    fn explicit_override_takes_precedence() {
+        assert_eq!(resolve_profile_name(Some("hpx_ofdm_hf")), "hpx_ofdm_hf");
     }
 }

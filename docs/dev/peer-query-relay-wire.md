@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/peer-query-relay-wire.md
+doc: docs/dev/peer-query-relay-wire.md
 status: living
 last_updated: 2026-04-23
 ---

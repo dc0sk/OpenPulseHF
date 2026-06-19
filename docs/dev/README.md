@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/README.md
 status: living
-last_updated: 2026-05-17
+last_updated: 2026-06-17
 ---
 
 # Development and Planning Documentation
@@ -13,8 +13,8 @@ This index contains development-oriented, planning, architecture, protocol-spec,
 
 - [docs/dev/roadmap.md](roadmap.md): phased execution history and roadmap status
 - [docs/dev/backlog.md](backlog.md): open and deferred follow-up work
-- [docs/dev/backlog-fec-improvements.md](backlog-fec-improvements.md): FEC follow-up backlog
-- [docs/dev/backlog-waveforms.md](backlog-waveforms.md): waveform follow-up backlog
+- [docs/dev/archive/backlog-fec-improvements.md](archive/backlog-fec-improvements.md): FEC follow-up backlog (frozen research)
+- [docs/dev/archive/backlog-waveforms.md](archive/backlog-waveforms.md): waveform follow-up backlog (frozen research)
 - [docs/dev/requirements.md](requirements.md): functional and non-functional requirements
 - [docs/dev/changelog.md](changelog.md): internal change history
 - [docs/dev/release-checklist.md](release-checklist.md): release and tagging procedure
@@ -44,6 +44,8 @@ This index contains development-oriented, planning, architecture, protocol-spec,
 - [docs/dev/AGENTS.md](AGENTS.md): agent safeguards and recovery countermeasures
 - [docs/dev/sbom.md](sbom.md): software bill of materials policy
 - [docs/dev/memories.md](memories.md): distilled lessons and operator notes
+- [docs/dev/onair-status.md](onair-status.md): on-air validation status, blockers, and debugging findings (Phase 5.5-reg)
+- [docs/dev/onair-signal-chain-verification.md](onair-signal-chain-verification.md): RF signal-chain preflight checklist
 
 ## PKI tooling
 
@@ -68,6 +70,8 @@ This index contains development-oriented, planning, architecture, protocol-spec,
 - [docs/dev/js8call-analysis.md](js8call-analysis.md): JS8Call analysis notes
 - [docs/dev/ofdm-research.md](ofdm-research.md): OFDM research notes
 - [docs/dev/freedv-auth-research.md](freedv-auth-research.md): authenticated FreeDV research notes
+- [docs/dev/references.md](references.md): external modem/DSP repos studied for technique
+- [docs/dev/reference-mining-plan.md](reference-mining-plan.md): prioritized idea catalog from a source-level scan of those repos (proposal)
 - [docs/dev/vara-parity-execution-board.md](vara-parity-execution-board.md): parity and execution board notes
 
 ## Historical and review artifacts

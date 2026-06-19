@@ -54,7 +54,13 @@ impl Psk8Plugin {
                 "8PSK1000-HF-RRC".to_string(),
                 "8PSK500-RRC".to_string(),
                 "8PSK1000-RRC".to_string(),
-                // UHF/VHF — 12.5 kHz narrowband (8 kHz audio, 2000 baud, ~2700 Hz BW)
+                // UHF/VHF — 12.5 kHz narrowband (8 kHz audio, 2000 baud, ~2700 Hz BW).
+                // Use 8PSK2000-RRC: at 4 samples/symbol the plain (crossfade) pulse leaves the
+                // dense 45° 8PSK grid ISI-limited (~5-13% raw BER even on short frames, with
+                // perfect AFC) — not an acquisition bug but a pulse-shaping limit that RRC's
+                // Nyquist shaping solves.  -RRC is carrier-offset-robust and is the operational
+                // 2000-baud mode (HPX rate ladders use it).  Plain 8PSK2000 is retained for
+                // compatibility but is not viable for engine / on-air decode.
                 "8PSK2000".to_string(),
                 "8PSK2000-RRC".to_string(),
                 // UHF/VHF — 12.5 kHz HD (requires 48 kHz audio, 9600 baud, ~13 kHz BW)

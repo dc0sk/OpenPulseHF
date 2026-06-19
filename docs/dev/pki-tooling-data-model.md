@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/pki-tooling-data-model.md
+doc: docs/dev/pki-tooling-data-model.md
 status: living
 last_updated: 2026-04-24
 ---

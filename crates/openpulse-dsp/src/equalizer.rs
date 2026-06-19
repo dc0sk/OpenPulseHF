@@ -25,6 +25,11 @@ pub struct LmsEqualizer {
     /// frames can drift to a wrong self-consistent equilibrium (gain creep,
     /// Q-channel contamination on real constellations) even on clean input.
     dd_adapt: bool,
+    /// When `Some(eps)`, use a normalised (NLMS) step `mu / (eps + ‖regressor‖²)`
+    /// so the effective step is independent of input level — robust to the
+    /// 20–40 dB amplitude fading of HF paths. `None` (default) is classic
+    /// constant-step LMS.
+    nlms_eps: Option<f32>,
     // Forward tap weights (complex: (re, im) per tap)
     w_fwd_re: Vec<f32>,
     w_fwd_im: Vec<f32>,
@@ -65,12 +70,23 @@ impl LmsEqualizer {
             dec_re: VecDeque::from(vec![0.0f32; dfe_len.max(1)]),
             dec_im: VecDeque::from(vec![0.0f32; dfe_len.max(1)]),
             dd_adapt: true,
+            nlms_eps: None,
         }
     }
 
     /// Disable decision-directed weight adaptation (train-then-freeze).
     pub fn with_frozen_dd(mut self) -> Self {
         self.dd_adapt = false;
+        self
+    }
+
+    /// Enable normalised LMS (NLMS): scale the step by the inverse regressor
+    /// energy, `mu / (eps + ‖x‖²)`, so convergence rate is independent of signal
+    /// level. `eps` regularises the divide for near-silent input (e.g. `1e-3`).
+    /// Prevents the runaway step (and the sluggish convergence) that plain LMS
+    /// suffers when the input amplitude swings over a fade.
+    pub fn with_nlms(mut self, eps: f32) -> Self {
+        self.nlms_eps = Some(eps.max(0.0));
         self
     }
 
@@ -115,6 +131,30 @@ impl LmsEqualizer {
 
     /// LMS weight update given error `(e_re, e_im)`.
     fn lms_update(&mut self, e_re: f32, e_im: f32) {
+        // NLMS: normalise the step by the regressor energy (forward delay line
+        // plus DFE decisions when present) so the effective step is amplitude
+        // independent. Plain LMS uses the constant step `mu`.
+        let step = match self.nlms_eps {
+            Some(eps) => {
+                let mut energy: f32 = self
+                    .buf_re
+                    .iter()
+                    .zip(self.buf_im.iter())
+                    .map(|(&r, &im)| r * r + im * im)
+                    .sum();
+                if self.dfe_len > 0 {
+                    energy += self
+                        .dec_re
+                        .iter()
+                        .zip(self.dec_im.iter())
+                        .map(|(&r, &im)| r * r + im * im)
+                        .sum::<f32>();
+                }
+                self.mu / (eps + energy)
+            }
+            None => self.mu,
+        };
+
         for (i, (w_re, w_im)) in self
             .w_fwd_re
             .iter_mut()
@@ -123,9 +163,9 @@ impl LmsEqualizer {
         {
             let x_re = self.buf_re[i];
             let x_im = self.buf_im[i];
-            // w += μ * e * conj(x)
-            *w_re += self.mu * (e_re * x_re + e_im * x_im);
-            *w_im += self.mu * (e_im * x_re - e_re * x_im);
+            // w += step * e * conj(x)
+            *w_re += step * (e_re * x_re + e_im * x_im);
+            *w_im += step * (e_im * x_re - e_re * x_im);
         }
         for (i, (w_re, w_im)) in self
             .w_dfe_re
@@ -135,8 +175,8 @@ impl LmsEqualizer {
         {
             let d_re = self.dec_re[i];
             let d_im = self.dec_im[i];
-            *w_re += self.mu * (e_re * d_re + e_im * d_im);
-            *w_im += self.mu * (e_im * d_re - e_re * d_im);
+            *w_re += step * (e_re * d_re + e_im * d_im);
+            *w_im += step * (e_im * d_re - e_re * d_im);
         }
 
         // Divergence guard: decision-directed adaptation over long frames can
@@ -389,6 +429,34 @@ mod tests {
             off_first < 1e-6,
             "non-first taps should be zero after reset"
         );
+    }
+
+    #[test]
+    fn nlms_step_is_amplitude_invariant() {
+        // NLMS normalises by the regressor energy, so the same μ converges at the
+        // same rate across a wide input-level span — where plain LMS's effective
+        // step (μ·‖x‖²) would be unstable at high level and sluggish at low level.
+        // (Larger swings are handled by the companion AGC in front; the energy
+        // guard caps the equalizer to near-unity channels, so we stay in range.)
+        fn final_err(gain: f32) -> f32 {
+            let n = 200;
+            let desired = vec![1.0f32; n];
+            let zeros = vec![0.0f32; n];
+            let input = vec![gain; n]; // constant-gain channel on a +1 stream
+            let mut eq = LmsEqualizer::new(5, 0, 0.5).with_nlms(1e-3);
+            let (out, _) = eq.process_frame(&input, &zeros, &desired, &zeros, |i, _| {
+                (if i >= 0.0 { 1.0 } else { -1.0 }, 0.0)
+            });
+            (1.0 - out[n - 1]).abs()
+        }
+
+        for gain in [0.4f32, 1.0, 4.0] {
+            let e = final_err(gain);
+            assert!(
+                e < 0.05,
+                "NLMS should converge at input gain {gain}: final err {e}"
+            );
+        }
     }
 
     #[test]

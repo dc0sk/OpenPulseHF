@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/wsjtx-analysis.md
+doc: docs/dev/wsjtx-analysis.md
 status: living
 last_updated: 2026-05-02
 ---

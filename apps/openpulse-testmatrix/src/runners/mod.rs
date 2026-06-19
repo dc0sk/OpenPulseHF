@@ -47,6 +47,7 @@ pub fn run_case(case: &TestCase) -> TestResult {
         UseCase::AdaptiveHpx500 => adaptive::run(case, SessionProfile::hpx500()),
         UseCase::AdaptiveHpxHf => adaptive::run(case, SessionProfile::hpx_hf()),
         UseCase::AdaptiveHpxWideband => adaptive::run(case, SessionProfile::hpx_wideband()),
+        UseCase::AdaptiveHpxOfdmHf => adaptive::run(case, SessionProfile::hpx_ofdm_hf()),
         UseCase::Ardop => ardop::run(case),
         UseCase::Kiss => kiss::run(case),
         UseCase::B2f => b2f::run(case),

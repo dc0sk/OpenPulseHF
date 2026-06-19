@@ -62,6 +62,17 @@ pub fn run(case: &TestCase) -> TestResult {
             }
             h.tx_engine.transmit_with_ldpc(&wire_payload, mode, None)
         }
+        FecMode::LdpcHighRate => {
+            // High-rate LDPC shares the rate-1/2 single-block limit (info = 128 bytes).
+            if wire_payload.len() > 112 {
+                return skip(
+                    case,
+                    "LDPC payload too large for single block (max 112 bytes user data; LDPC_MAX_INFO_BYTES=128)",
+                );
+            }
+            h.tx_engine
+                .transmit_with_ldpc_high_rate(&wire_payload, mode, None)
+        }
         FecMode::Turbo => h.tx_engine.transmit_with_turbo(&wire_payload, mode, None),
     };
 
@@ -80,6 +91,7 @@ pub fn run(case: &TestCase) -> TestResult {
         FecMode::Concatenated => h.rx_engine.receive_with_concatenated_fec(mode, None),
         FecMode::ShortRs => unreachable!("skipped in TX branch"),
         FecMode::Ldpc => h.rx_engine.receive_with_ldpc(mode, None),
+        FecMode::LdpcHighRate => h.rx_engine.receive_with_ldpc_high_rate(mode, None),
         FecMode::RsStrong => h.rx_engine.receive_with_strong_fec(mode, None),
         FecMode::SoftConcatenated => h.rx_engine.receive_with_soft_viterbi_fec(mode, None),
         FecMode::Turbo => h.rx_engine.receive_with_turbo(mode, None),

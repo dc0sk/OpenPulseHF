@@ -64,6 +64,14 @@ pub enum FecMode {
     /// CPU implementation lives in `openpulse_core::ldpc::LdpcCodec`.
     /// A GPU-accelerated path via `openpulse-gpu` is reserved for future work.
     Ldpc,
+    /// High-rate LDPC, rate ≈8/9 (k=1024, n=1152), via Progressive Edge-Growth.
+    ///
+    /// For the dense, high-SNR rungs (8PSK / 16QAM / 32APSK), where the channel
+    /// can afford minimal redundancy: a soft-decision code at nearly the RS code
+    /// rate but with real coding gain (waterfall ≈4 dB Es/N0).  CPU implementation
+    /// is `openpulse_core::ldpc::LdpcCodec::high_rate`.  Requires a soft-capable
+    /// demodulator — paired with a hard-decision plugin it gains nothing over RS.
+    LdpcHighRate,
     /// Rate-1/3 PCCC turbo code (3GPP QPP interleaver, Max-Log-MAP BCJR, 8 iterations).
     ///
     /// Higher coding gain than LDPC for short block sizes (≤ 256 bits).
@@ -75,14 +83,18 @@ impl FecMode {
     pub fn strength(self) -> u8 {
         match self {
             FecMode::None => 0,
-            FecMode::Rs => 1,
-            FecMode::RsInterleaved => 2,
-            FecMode::Concatenated => 3,
-            FecMode::ShortRs => 4,
-            FecMode::RsStrong => 5,
-            FecMode::SoftConcatenated => 6,
-            FecMode::Ldpc => 7,
-            FecMode::Turbo => 8,
+            // High-rate LDPC carries the least redundancy of any FEC mode
+            // (rate ≈8/9), so it is the weakest non-None option for negotiation:
+            // a peer falls back to it only when no more-protective mode is mutual.
+            FecMode::LdpcHighRate => 1,
+            FecMode::Rs => 2,
+            FecMode::RsInterleaved => 3,
+            FecMode::Concatenated => 4,
+            FecMode::ShortRs => 5,
+            FecMode::RsStrong => 6,
+            FecMode::SoftConcatenated => 7,
+            FecMode::Ldpc => 8,
+            FecMode::Turbo => 9,
         }
     }
 
@@ -765,7 +777,9 @@ mod tests {
 
     #[test]
     fn fec_mode_strength_ordering() {
-        assert!(FecMode::Rs.strength() > FecMode::None.strength());
+        // High-rate LDPC is the weakest non-None mode (least redundancy).
+        assert!(FecMode::LdpcHighRate.strength() > FecMode::None.strength());
+        assert!(FecMode::Rs.strength() > FecMode::LdpcHighRate.strength());
         assert!(FecMode::RsInterleaved.strength() > FecMode::Rs.strength());
         assert!(FecMode::Concatenated.strength() > FecMode::RsInterleaved.strength());
         assert!(FecMode::RsStrong.strength() > FecMode::Concatenated.strength());

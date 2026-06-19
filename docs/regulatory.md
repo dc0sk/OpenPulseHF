@@ -120,6 +120,22 @@ Unlike FCC Part 97, CEPT does not impose a blanket 300-baud symbol rate limit. I
 
 OpenPulseHF implication: QPSK500 and future HPX modes are likely compliant with most EU administrations from a symbol rate perspective; the binding constraint is occupied bandwidth.
 
+### EU/CEPT transmitter power — country-specific limits
+
+CEPT harmonises at approximately **1 kW ERP** for HF amateur operation, but individual administrations enforce lower national limits. The binding figure for an operator is always the national limit of the jurisdiction in which the station is operated (for visiting operators under T/R 61-01, the limit of the *visited* country applies).
+
+| Country | 80–10 m HF limit | Notes |
+|---------|------------------|-------|
+| Germany | 750 W | Most restrictive of the listed EU nations |
+| Spain | 750 W | Reduced limit |
+| France | 1 kW | Standard CEPT |
+| Netherlands | 1 kW | Standard |
+| Italy | 1 kW | Standard |
+| Poland | 1 kW | Standard |
+| United Kingdom | 1 kW | See Ofcom section below |
+
+For cross-border mobile operation the most restrictive applicable limit must be used (for example, a station roaming into Germany must respect the 750 W limit regardless of its home-country licence).
+
 ### Germany — Amateurfunkverordnung (AFuV) and BNetzA
 
 The German amateur radio regulation (AFuV, implementing the Amateurfunkgesetz) and BNetzA (Federal Network Agency) guidance are particularly specific:
@@ -139,7 +155,9 @@ Current conditions of particular relevance:
 - Automatic/unattended operation: permitted under the Full licence subject to the station being under the control of the licensee and identifiable.
 - The Ofcom licence permits use of the CEPT T/R 61-01 visiting procedure for visiting licensees from most countries, meaning foreign operators with a valid CEPT licence can operate in the UK.
 
-UK-specific OpenPulseHF note: identification interval of 15 minutes (not 10) should be the default when operating from a UK station. The implementation should allow the identification interval to be configured.
+UK-specific OpenPulseHF note: identification interval of 15 minutes (not 10) should be the default when operating from a UK station. The implementation should allow the identification interval to be configured. (Some secondary guidance has cited a 20-minute interval for the UK; operators should treat 15 minutes as the conservative default and verify the current Ofcom Amateur Licence terms, which take precedence.)
+
+UK transmitter power: Ofcom permits up to **1 kW ERP** on the HF amateur bands, with no reduction applied in UK territory (in contrast to some EU national limits above).
 
 ### France — ANFR
 
@@ -178,6 +196,59 @@ OpenPulseHF should publish recommended dial frequencies for each supported bandw
 ### Non-interference obligation
 
 IARU band plans carry no legal force, but interference complaints between amateurs are handled by national administrations. Operators using OpenPulseHF in segments not aligned with the IARU plan risk complaints. The documentation and CLI should suggest IARU-aligned frequencies as defaults where possible.
+
+---
+
+## Amateur HF band allocations by jurisdiction
+
+The following per-jurisdiction allocation tables consolidate the band ranges, permitted emission classes, power limits, and notable per-band constraints relevant to OpenPulseHF operation. Allocations change; these tables are a starting point and must be verified against the current national table before use.
+
+### United States — FCC Part 97 HF allocations
+
+| Band | Frequency range | Mode | Data | Licence class | Notes |
+|------|-----------------|------|------|---------------|-------|
+| 160 m | 1.800–2.000 MHz | CW, USB | Allowed | General | Limited use outside US |
+| 80 m | 3.500–4.000 MHz | CW, USB, LSB | Allowed | General | Split between CW and phone |
+| 40 m | 7.000–7.300 MHz | CW, USB, LSB | Allowed | General | CW-preferred below 7.100 |
+| 30 m | 10.100–10.150 MHz | CW, USB, Data | Data only | General | No phone; narrowband (200 Hz BW) |
+| 20 m | 14.000–14.350 MHz | CW, USB | Allowed | General | CW-preferred region |
+| 17 m | 18.068–18.168 MHz | CW, USB | Allowed | General | Narrowband region above 18.110 |
+| 15 m | 21.000–21.450 MHz | CW, USB | Allowed | General | CW-preferred below 21.200 |
+| 12 m | 24.890–24.990 MHz | CW, USB | Allowed | General | Narrowband region above 24.930 |
+| 10 m | 28.000–29.700 MHz | CW, USB, SSB | Allowed | Technician+ | FM and SSB permitted |
+| 6 m | 50.000–54.000 MHz | CW, USB, FM, SSB | Allowed | Technician+ | VHF; USB above 50.125 MHz |
+
+FCC HF power limit is 1.5 kW PEP for most bands (see §97.313 above); automatically controlled digital stations are capped at 100 W PEP in most cases.
+
+### European Union — CEPT/ECC harmonised HF allocations
+
+| Band | Frequency range | Primary allocation | Max power (ERP) | Notes |
+|------|-----------------|--------------------|-----------------|-------|
+| 160 m | 1.810–2.000 MHz | AM, CW, SSB, Data | 1 kW | Varies by country; some limit to 500 W |
+| 80 m | 3.500–3.800 MHz | CW, SSB, Data | 1 kW | Phone typically 3.600–3.800 |
+| 40 m | 7.000–7.100 MHz | CW, Data | 1 kW | 7.100–7.200: CW + SSB split |
+| 30 m | 10.100–10.150 MHz | Data, CW | 1 kW | No phone; narrowband (200 Hz BW) |
+| 20 m | 14.000–14.100 MHz | CW, Data | 1 kW | Phone: 14.100–14.350 |
+| 17 m | 18.068–18.168 MHz | CW, SSB, Data | 1 kW | Narrowband above 18.110 |
+| 15 m | 21.000–21.110 MHz | CW, Data | 1 kW | Phone: 21.110–21.450 |
+| 12 m | 24.890–24.990 MHz | CW, SSB, Data | 1 kW | Narrowband above 24.930 |
+| 10 m | 28.000–29.700 MHz | CW, SSB, Data, FM | 1 kW | Most liberal allocation |
+
+The 1 kW ERP figure is the CEPT harmonised maximum; national limits may be lower (see the country-specific power table above).
+
+### United Kingdom — Ofcom HF allocations
+
+| Band | Frequency range | Max power (ERP) | Additional rules | Notes |
+|------|-----------------|-----------------|------------------|-------|
+| 160 m | 1.810–2.000 MHz | 1 kW | QSO record-keeping | Allocation only; many stations inactive |
+| 80 m | 3.500–3.800 MHz | 1 kW | — | Primary HF band |
+| 40 m | 7.000–7.100 MHz | 1 kW | — | CW-preferred below 7.030 |
+| 30 m | 10.100–10.150 MHz | 1 kW | Narrowband (200 Hz BW) | Data mode preferred |
+| 20 m | 14.000–14.100 MHz | 1 kW | — | CW-preferred below 14.100 |
+| 17 m | 18.068–18.168 MHz | 1 kW | Narrowband (200 Hz BW) | Coordination encouraged |
+| 15 m | 21.000–21.110 MHz | 1 kW | — | CW-preferred below 21.110 |
+| 12 m | 24.890–24.990 MHz | 1 kW | Narrowband (200 Hz BW) | Limited activity |
+| 10 m | 28.000–29.700 MHz | 1 kW | — | Most active 28.000–28.500 (FM) |
 
 ---
 

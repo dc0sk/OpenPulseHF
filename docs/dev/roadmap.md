@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/roadmap.md
+doc: docs/dev/roadmap.md
 status: living
 last_updated: 2026-05-17
 ---
@@ -146,7 +146,7 @@ Phase 3.5-substitute (sound-loopback channel simulation) is done (PR #89):
 - 6 channel-loopback integration tests (clean, AWGN 20 dB, Watterson F1/F2, Gilbert-Elliott with/without FEC).
 - These replace on-air validation as the CI gate for loopback correctness.
 
-Remaining on-air items:
+Remaining on-air items (**in active execution as of 2026-06** — see [onair-status.md](onair-status.md)):
 - Conduct on-air tests on IARU-aligned frequencies for each supported bandwidth class.
 - Verify station identification behaviour at 10-minute intervals under long sessions.
 - Test relay node automatic control point interface.
@@ -203,8 +203,9 @@ Remaining on-air items:
 
 ## Phase 5 — Integration and Release Readiness (Completed)
 
-All Phase 5 items shipped. On-air regulatory validation (Phase 3.5) is
-explicitly postponed — no hardware gate blocks further development.
+All Phase 5 items shipped. On-air regulatory validation (Phase 5.5-reg) is
+**in active execution as of 2026-06** (see [onair-status.md](onair-status.md)); no
+hardware gate blocks further development.
 
 ### 5.1 — B2F session driver ✅ Done (PR #98)
 - `crates/openpulse-b2f-driver`: `B2fDriver`, `DataPort`, `CmdPort`; `run_iss()` / `run_irs()` lifecycle.
@@ -234,7 +235,7 @@ explicitly postponed — no hardware gate blocks further development.
 - `AudioSource` enum (`Synthetic` / `LiveCapture`); `run_live()` opens system input at 8 kHz mono.
 - Source combo disabled while running; panel labels reflect live mode.
 
-### 5.5-reg — Phase 3.5 on-air regulatory validation *(postponed — no target date)*
+### 5.5-reg — On-air regulatory validation *(in active execution, 2026-06 — see [onair-status.md](onair-status.md))*
 Conduct on-air tests on IARU-aligned frequencies, verify station ID at 10-minute intervals,
 test relay automatic control point interface, publish compliance report as release artefact.
 
@@ -807,7 +808,7 @@ Both modes: FFT=256, CP=32, QPSK per-subcarrier, centre 1500 Hz, iterative PAPR 
 - `crates/openpulse-core/src/profile.rs` — `hpx_ofdm_hf()` session profile (SL5=OFDM16, SL6=OFDM52)
 - `crates/openpulse-core/tests/session_profile.rs` — 3 new profile tests
 - `apps/openpulse-testbench/` — OFDM16 and OFDM52 modes wired into the testbench GUI with correct bandwidth markers and gross bps display
-- `docs/backlog-fec-improvements.md` — FEC backlog items (BL-FEC-1 through BL-FEC-6) from RS research session
+- `docs/dev/archive/backlog-fec-improvements.md` — FEC backlog items (BL-FEC-1 through BL-FEC-6) from RS research session
 
 **Previous research** (PR #135, `crates/openpulse-modem/src/ofdm_sim.rs`):
 The research showed PAPR reduction via iterative clipping degrades BER.  The production
@@ -1086,7 +1087,7 @@ attacks and synthetic voice injection are undetectable at the FreeDV layer.
 ### FF-12 — SC-FDMA waveform ✅ Done (PR #175)
 
 Analysis of five 5G-era multi-carrier schemes (FBMC, UFMC, GFDM, SC-FDMA, OFDMA) against HF
-radio constraints was conducted 2026-05-09.  See `docs/backlog-waveforms.md` for the full
+radio constraints was conducted 2026-05-09.  See `docs/dev/archive/backlog-waveforms.md` for the full
 analysis.
 
 **Conclusion**: SC-FDMA (DFT-spread OFDM) is the only scheme with a clear HF benefit:
@@ -1141,35 +1142,30 @@ degrade gracefully to `RadioError::Unsupported` when the rig file omits the comm
 
 ---
 
-### FF-14 — SC-FDMA PAPR: non-interleaved pilot redesign *(backlog, no target date)*
+### FF-14 — SC-FDMA PAPR: non-interleaved pilot redesign *(SUPERSEDED by the OFDM HOM ladder, PR #407)*
 
-The mode spectral-efficiency audit is **done** — see `docs/mode-fec-ladder.md` §7. It found:
-- OFDM16/52 are *not* less efficient than SC-FDMA (they share the exact FFT/CP/SC geometry,
-  ~889/~2889 bps; earlier ~444/~1444 figures were wrong). OFDM is **redundant** with
-  SC-FDMA on a flat channel; it stays only as the per-subcarrier-EQ option for
-  frequency-selective fades, not as a throughput rung. No profile pruning needed.
-- The remaining real work: **SC-FDMA's PAPR advantage is not realized.** Measured PAPR is
-  ~11–12 dB for both OFDM and SC-FDMA, where DFT-spread should give ~4–6 dB. Root cause:
-  pilots are **frequency-interleaved every 5th subcarrier**, which breaks the contiguous
-  DFT-spread mapping and restores OFDM-like PAPR.
+**Dropped 2026-06-16.** The premise — that de-interleaving the pilots would recover ~6–8 dB
+of PAPR and make SC-FDMA the dense-mode workhorse — did not hold. A prototype measured the
+*realized* gain from contiguous pilots at only **~3.8 dB** (12.7 → ~8.9 dB): OpenPulseHF's
+SC-FDMA is a **real-valued passband** signal (Hermitian symmetry, 1500 Hz centre), and the
+~3 dB real-bandpass penalty floors it well above textbook complex-baseband SC-FDMA. Single-
+carrier `64QAM2000-RRC` already has lower PAPR (~6.6 dB) *and* out-throughputs
+`SCFDMA52-64QAM`, so SC-FDMA is **dominated** — no PAPR edge, and worse frequency-selective
+fade handling (DFT-despread noise enhancement) than OFDM.
 
-**Why it matters**: the modulator emits an unnormalised ~2.8-peak waveform; with the TX
-limiter off by default it hard-clips at the DAC, and that clipping EVM is the dominant
-dense-mode limiter on the hardware rig (QPSK survives it, 16QAM+ do not — soft FEC and
-narrowing are the current workarounds). The rig is *not* thermal-noise-limited (~39 dB SNR
-available). Peak-normalising instead of clipping is not a free win — a 12 dB-PAPR signal
-peak-limited to 1.0 loses ~8 dB of average power (and can drop below the RX energy gate),
-so the genuine fix is to **reduce PAPR**, not just rescale.
+**Replacement — the OFDM higher-order ladder** (PR #407, `docs/mode-fec-ladder.md` §4/§7):
+OFDM's CP + per-subcarrier equalization handle HF multipath natively (no despread penalty),
+the industry choice for HF data (VARA HF, Mercury, ARDOP). Shipped: shared
+`openpulse-dsp::constellation` (Gray map / hard-demap / max-log-MAP soft-LLR, QPSK..64QAM);
+OFDM modes `OFDM52-{8PSK,16QAM,32QAM,64QAM}`; `hpx_ofdm_hf` extended SL5→SL10. PAPR is
+managed by **TX leveling, not clipping** — clipping is QPSK-only (it shreds dense
+constellations) and HOM frames are **peak-normalized to a DAC-safe 0.9**. Validated on the
+rpi51↔rpi52 hardware loopback: OFDM52-16QAM (uncoded + soft FEC) and OFDM52-64QAM all decode;
+OFDM52-16QAM + soft FEC decodes a Watterson Good-F1 channel through the engine.
 
-**Task**:
-- Move pilots out of the DFT-spread data span — block/time-multiplexed pilot symbols or
-  superimposed pilots — and update `dft_ce_estimate` to match; re-validate decode + PAPR.
-- Alternatively/additionally a PAPR-reduction stage (clip-and-filter or tone reservation).
-- Interim: deliberate TX level management (never ship |sample|>1.0 to the backend); tune
-  the existing `tx_limiter_threshold` / `tx_attenuation_db` against the dense modes on the
-  hardware rig.
-- Validation is hardware-gated (the PAPR/clipping penalty only manifests at a peak-limited
-  DAC; the in-process loopback is float and does not clip).
+**SC-FDMA stays as-is** — a working, hardware-validated dense-multicarrier path and the
+source the OFDM HOM ladder reused for its constellation code; kept, not retired, not invested
+in further.
 
 **Other audit notes** (no action, documented for completeness): SCFDMA52-64QAM-P4 trades
 throughput for dense pilots (high-Doppler use, not dominated); plain rectangular 2000-baud
@@ -1179,7 +1175,7 @@ single-carrier modes remain superseded by their `-RRC` variants.
 
 ## BL-FEC series — FEC codec improvements
 
-Incremental FEC improvements tracked in [`docs/backlog-fec-improvements.md`](backlog-fec-improvements.md).
+Incremental FEC improvements tracked in [`docs/dev/archive/backlog-fec-improvements.md`](archive/backlog-fec-improvements.md).
 
 | Item | Description | Status |
 |---|---|---|

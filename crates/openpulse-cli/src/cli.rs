@@ -102,6 +102,11 @@ pub enum Commands {
         /// Estimated signal-to-noise ratio in dB.
         #[arg(long)]
         snr: f32,
+        /// Session profile (overrides config `[modem] profile`). One of: hpx500,
+        /// hpx_hf, hpx_ofdm_hf, hpx_wideband, hpx_wideband_hd, hpx_narrowband,
+        /// hpx_narrowband_hd.
+        #[arg(long)]
+        profile: Option<String>,
     },
     /// Export session performance metrics (throughput, FER, latency, SNR estimate).
     SessionMetrics {
@@ -138,6 +143,47 @@ pub enum Commands {
         /// Modulation mode to drive the receive loop.
         #[arg(short, long, default_value = "BPSK100")]
         mode: String,
+    },
+    /// Run an adaptive rate-control session over a simulated channel and report
+    /// each speed-level transition (loopback/channel-sim; no hardware required).
+    Adaptive {
+        /// Session profile (overrides config `[modem] profile`). One of: hpx500,
+        /// hpx_hf, hpx_ofdm_hf, hpx_wideband, hpx_wideband_hd, hpx_narrowband,
+        /// hpx_narrowband_hd.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Channel model: clean, awgn, watterson-good-f1, watterson-poor-f1.
+        #[arg(long, default_value = "clean")]
+        channel: String,
+        /// AWGN SNR in dB (used by `--channel awgn`, and as the rate-adapter SNR
+        /// hint when the receiver cannot measure one).
+        #[arg(long)]
+        snr: Option<f32>,
+        /// Number of frames to send.
+        #[arg(long, default_value_t = 8)]
+        frames: usize,
+        /// Payload length per frame, in bytes.
+        #[arg(long, default_value_t = 64)]
+        payload_len: usize,
+        /// A2 backlog gate: minimum queued TX backlog (bytes) an ACK-UP must see
+        /// before it may upgrade the rate; 0 disables the gate. The session feeds
+        /// the shrinking backlog automatically as the frame queue drains, so the
+        /// final upgrade is withheld once too little data remains to benefit.
+        #[arg(long, default_value_t = 0)]
+        min_backlog: usize,
+        /// Deterministic channel seed.
+        #[arg(long)]
+        seed: Option<u64>,
+        /// Emit newline-delimited JSON instead of human-readable lines.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reliable two-way ARQ over the modem (FSK4 ACK return + retransmit).
+    ///
+    /// Targets VOX or wired/full-duplex audio paths (keying is per transmission).
+    Arq {
+        #[command(subcommand)]
+        command: ArqCommands,
     },
     /// Configuration management.
     Config {
@@ -403,6 +449,46 @@ pub enum DiagnoseCommands {
 pub enum ConfigCommands {
     /// Write a commented configuration template to stdout.
     Init,
+}
+
+#[derive(Subcommand)]
+pub enum ArqCommands {
+    /// ISS: transmit a payload with ARQ, retransmitting until ACK.
+    Send {
+        /// Payload text to send.
+        #[arg(short, long)]
+        payload: String,
+        /// Modulation mode (start mode when --profile is set).
+        #[arg(short, long, default_value = "BPSK250")]
+        mode: String,
+        /// Adaptive session profile (enables rate stepping). See PROFILE_NAMES.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Maximum retransmissions before giving up.
+        #[arg(long, default_value_t = 3)]
+        retries: usize,
+        /// Audio device name (backend-specific).
+        #[arg(short, long)]
+        device: Option<String>,
+    },
+    /// IRS: receive data frames and ACK each (NACK on decode failure).
+    Listen {
+        /// Modulation mode (fallback when no adaptive session is active).
+        #[arg(short, long, default_value = "BPSK250")]
+        mode: String,
+        /// Adaptive session profile (enables rate stepping). See PROFILE_NAMES.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Number of frames to receive before exiting.
+        #[arg(long, default_value_t = 1)]
+        frames: usize,
+        /// Session identifier echoed in ACK frames.
+        #[arg(long, default_value = "openpulse-arq")]
+        session: String,
+        /// Audio device name (backend-specific).
+        #[arg(short, long)]
+        device: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

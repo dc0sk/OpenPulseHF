@@ -3665,6 +3665,7 @@ dependencies = [
  "openpulse-core",
  "openpulse-modem",
  "openpulse-radio",
+ "pilot-plugin",
  "psk8-plugin",
  "qam64-plugin",
  "qpsk-plugin",
@@ -3731,12 +3732,14 @@ dependencies = [
  "mockito",
  "ofdm-plugin",
  "openpulse-audio",
+ "openpulse-channel",
  "openpulse-config",
  "openpulse-core",
  "openpulse-daemon",
  "openpulse-modem",
  "openpulse-qsy",
  "openpulse-radio",
+ "pilot-plugin",
  "pki-tooling",
  "predicates",
  "psk8-plugin",
@@ -3802,6 +3805,7 @@ dependencies = [
  "openpulse-qsy",
  "openpulse-radio",
  "openpulse-repeater",
+ "pilot-plugin",
  "psk8-plugin",
  "qam64-plugin",
  "qpsk-plugin",
@@ -3884,6 +3888,7 @@ dependencies = [
  "openpulse-core",
  "openpulse-modem",
  "openpulse-radio",
+ "pilot-plugin",
  "psk8-plugin",
  "qam64-plugin",
  "qpsk-plugin",
@@ -3926,6 +3931,7 @@ dependencies = [
  "openpulse-channel",
  "openpulse-core",
  "openpulse-dsp",
+ "pilot-plugin",
  "psk8-plugin",
  "qam64-plugin",
  "qpsk-plugin",
@@ -4259,6 +4265,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pilot-plugin"
+version = "0.1.0"
+dependencies = [
+ "num-complex",
+ "openpulse-audio",
+ "openpulse-channel",
+ "openpulse-core",
+ "openpulse-dsp",
+ "openpulse-modem",
+]
+
+[[package]]
 name = "pin-project"
 version = "1.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4528,6 +4546,7 @@ checksum = "e0c5ccf5294c6ccd63a74f1565028353830a9c2f5eb0c682c355c471726a6e3f"
 name = "qam64-plugin"
 version = "0.1.0"
 dependencies = [
+ "num-complex",
  "openpulse-core",
  "openpulse-dsp",
  "openpulse-gpu",

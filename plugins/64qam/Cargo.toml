@@ -14,3 +14,4 @@ gpu = ["dep:openpulse-gpu"]
 openpulse-core = { workspace = true }
 openpulse-dsp  = { workspace = true }
 openpulse-gpu  = { workspace = true, optional = true }
+num-complex    = { workspace = true }

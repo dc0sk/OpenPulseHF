@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/openpulse-manual.md
 status: living
-last_updated: 2026-05-17
+last_updated: 2026-06-19
 ---
 
 # OpenPulseHF Complete Manual
@@ -54,59 +54,18 @@ OpenPulseHF is a Rust workspace implementing:
 
 ### 1.2 Mode and Waveform Specification
 
-Current modulation catalog (38 modes across 7 plugin families):
+The modulation catalog spans 8 plugin families:
 
-#### BPSK plugin (5 modes)
-- `BPSK31`
-- `BPSK63`
-- `BPSK100`
-- `BPSK250`
-- `BPSK250-RRC`
+- **BPSK** (`bpsk`) — BPSK31/63/100/250 (+`-RRC`); weak-signal to narrowband HF.
+- **QPSK** (`qpsk`) — QPSK125/250/500/1000/2000/9600 with `-RRC` and `-HF` variants.
+- **8PSK** (`psk8`) — 8PSK500/1000/2000/9600 with `-RRC`/`-HF` variants; Gray-coded.
+- **64QAM** (`64qam`) — 64QAM500/1000/2000-RRC; max-log-MAP soft demodulator.
+- **FSK4** (`fsk4`) — FSK4-ACK; the ACK control channel only.
+- **OFDM** (`ofdm`) — OFDM16/52 (QPSK) plus the OFDM52 higher-order ladder (8PSK/16QAM/32QAM/64QAM — the HF high-throughput path) and wideband OFDM99.
+- **SC-FDMA** (`scfdma`) — SCFDMA16/52 (QPSK), the SCFDMA26/52 higher-order ladders, SCFDMA52-64QAM(-P4), and wideband SCFDMA99.
+- **Pilot** (`pilot`) — PILOT-QPSK500/8PSK500/16QAM500/32APSK500; pilot-framed single-carrier with pilot-aided carrier recovery (cycle-slip-immune, sample-rate-offset-robust); the `hpx_pilot` profile ladder.
 
-#### QPSK plugin (12 modes)
-- `QPSK125`
-- `QPSK250`
-- `QPSK500`
-- `QPSK1000`
-- `QPSK1000-HF`
-- `QPSK1000-HF-RRC`
-- `QPSK500-RRC`
-- `QPSK1000-RRC`
-- `QPSK2000`
-- `QPSK2000-RRC`
-- `QPSK9600`
-- `QPSK9600-RRC`
-
-#### 8PSK plugin (10 modes)
-- `8PSK500`
-- `8PSK1000`
-- `8PSK1000-HF`
-- `8PSK1000-HF-RRC`
-- `8PSK500-RRC`
-- `8PSK1000-RRC`
-- `8PSK2000`
-- `8PSK2000-RRC`
-- `8PSK9600`
-- `8PSK9600-RRC`
-
-#### 64QAM plugin (3 modes)
-- `64QAM500`
-- `64QAM1000`
-- `64QAM2000-RRC`
-
-#### FSK4 plugin (1 mode)
-- `FSK4-ACK`
-
-#### OFDM plugin (2 modes)
-- `OFDM16`
-- `OFDM52`
-
-#### SC-FDMA plugin (5 modes)
-- `SCFDMA16`
-- `SCFDMA52`
-- `SCFDMA52-16QAM`
-- `SCFDMA52-64QAM`
-- `SCFDMA52-64QAM-P4`
+The plain rectangular `QPSK2000`/`8PSK2000` are registered but **RRC-superseded** (use `-RRC`). For the authoritative per-mode table (baud, bits/symbol, gross bps, occupied bandwidth) see the [README modulation-modes table](../README.md#modulation-types); for the HF mode/FEC selection ladder see [mode-fec-ladder.md](mode-fec-ladder.md). `openpulse modes` prints the live registry.
 
 ### 1.3 FEC Specification
 
@@ -118,7 +77,9 @@ Available FEC/session protection modes include:
 - ShortRS
 - RsStrong
 - SoftConcatenated
-- LDPC iterative decoder path (engine dispatch available)
+- LDPC (rate-1/2 min-sum belief propagation; soft input)
+- LDPC high-rate (rate-8/9 PEG; soft; auto-selected on dense high-SNR rungs)
+- Turbo (rate-1/3 PCCC; soft)
 
 Operational guidance:
 - HF bursty channels usually favor RS/RS-Interleaved/concatenated profiles.

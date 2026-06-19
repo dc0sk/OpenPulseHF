@@ -19,7 +19,7 @@ use openpulse_core::fec::{
 };
 use openpulse_core::frame::Frame;
 use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
-use openpulse_core::ldpc::{IterativeDecoder, LdpcCodec, LDPC_CODEWORD_BYTES, LDPC_MAX_INFO_BYTES};
+use openpulse_core::ldpc::{IterativeDecoder, LdpcCodec};
 use openpulse_core::plugin::{ModulationConfig, PluginRegistry};
 use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::RateEvent;
@@ -150,6 +150,15 @@ impl ScanPlanner {
         ready
     }
 }
+
+/// Settled AFC corrections below this magnitude (Hz) are treated as measurement
+/// noise and snapped to zero.  A short data-aided/blind estimate on a zero-offset
+/// frame lands a few tenths of a Hz off; applying that spurious correction breaks
+/// modes that re-fit carrier phase from the (now over-corrected) preamble — 8PSK's
+/// `carrier_phase_correct` enters a fragile drift-fit branch at ≥0.5 Hz.  Real HF
+/// offsets are tens to hundreds of Hz (the carrier-offset regression uses 15 Hz;
+/// the measured inter-rig offset is ~400 Hz), so this never suppresses a real one.
+const AFC_SETTLE_DEADBAND_HZ: f32 = 2.0;
 
 /// Result of [`ModemEngine::afc_mini_settle`].
 struct AfcSettleOutcome {
@@ -427,6 +436,24 @@ impl ModemEngine {
         self.rate_policy.start_session(profile);
     }
 
+    /// A2 (backlog-aware gating): minimum queued TX bytes required before an
+    /// AckUp upgrade is acted on. `0` (default) disables the gate. Prevents
+    /// spending upgrade airtime when only a frame or two remain queued.
+    pub fn set_min_backlog_for_upgrade(&mut self, bytes: usize) {
+        self.rate_policy.set_min_backlog_for_upgrade(bytes);
+    }
+
+    /// A2: update the current queued TX backlog (bytes) used by the gate.
+    pub fn set_tx_backlog(&mut self, bytes: usize) {
+        self.rate_policy.set_tx_backlog(bytes);
+    }
+
+    /// A3 (anti-oscillation): suppress this many upgrade attempts after a
+    /// downgrade. `0` (default) disables the hold.
+    pub fn set_upgrade_hold_frames(&mut self, frames: u32) {
+        self.rate_policy.set_upgrade_hold_frames(frames);
+    }
+
     /// Apply a received ACK type to the TX-direction rate adapter.
     ///
     /// Returns [`RateEvent::Maintained`] when no adaptive session is active.
@@ -514,6 +541,28 @@ impl ModemEngine {
         retry_index: u8,
     ) -> HarqDecision {
         HarqPolicy::default().select(snr_db, fading_depth_db, retry_index)
+    }
+
+    /// HARQ decision specialised to `mode`'s demodulator capability.
+    ///
+    /// Identical to [`select_harq_decision`](Self::select_harq_decision) except
+    /// the high-rate-LDPC tier may engage when the mode's plugin produces genuine
+    /// soft LLRs (the dense rungs).  Unknown modes fall back to hard-only.
+    pub fn select_harq_decision_for_mode(
+        &self,
+        mode: &str,
+        snr_db: f32,
+        fading_depth_db: f32,
+        retry_index: u8,
+    ) -> HarqDecision {
+        let soft_capable = self
+            .plugins
+            .get(mode)
+            .map(|p| p.supports_soft_demod())
+            .unwrap_or(false);
+        HarqPolicy::default()
+            .with_soft_capable(soft_capable)
+            .select(snr_db, fading_depth_db, retry_index)
     }
 
     /// Returns the current HPX state for this engine session.
@@ -938,6 +987,12 @@ impl ModemEngine {
         // converge, by which point the scan has advanced past the preamble
         // start and can never re-decode it.
         let mut planner = ScanPlanner::new(step, min_frame_samples);
+        // Round-robin forward-onset offset for the first-energy re-decode (see the
+        // fep block below).  Persisted across iterations so each iteration tries
+        // exactly ONE onset — running all offsets per iteration starves the read
+        // loop (each BPSK31 decode is a full demod of a multi-second window), so
+        // the frame never finishes buffering.
+        let mut fep_offset_k = 0usize;
 
         loop {
             let chunk = stream
@@ -981,8 +1036,14 @@ impl ModemEngine {
             // (slice too short → CRC fails).  Re-firing every 2 s lets each
             // subsequent attempt use a longer accumulated buffer until the
             // frame fits and the decode succeeds.
+            // Only the FALLBACK for a missed settle: once settled, the first-energy
+            // re-decode below owns the decode.  Running this O(buffer) full re-scan
+            // every 2 s while settled starves the read loop on long frames (BPSK31:
+            // the scan of a multi-second buffer outlasts the read cadence, so the
+            // frame never finishes buffering) and re-decodes the fep micro-sweep is
+            // already covering — so skip it when settled.
             let elapsed_secs = start_time.elapsed().as_secs();
-            if planner.retry_due(elapsed_secs, accumulated.len()) {
+            if !planner.is_settled() && planner.retry_due(elapsed_secs, accumulated.len()) {
                 {
                     // Scan the entire accumulated buffer from the start.
                     // The AFC correction is kept from the settled value:
@@ -1072,13 +1133,43 @@ impl ModemEngine {
             // via commit_scan and never returns, so without this the frame never
             // decodes.  Bounded to one decode per iteration.
             if let Some(fep) = planner.first_energy_pos() {
-                let end = (fep + max_frame_samples).min(accumulated.len());
-                if end.saturating_sub(fep) >= min_frame_samples {
+                // Forward onset micro-sweep.  The settled onset (`fep`) lands at or
+                // slightly before the true preamble, but the energy gate + refine
+                // can sit up to ~1-2 symbols early on a clean turn-on, and a
+                // demodulator only searches one symbol period for timing.  The
+                // decodable onset window is narrow (~2 symbols) and asymmetric — a
+                // start can be ~1.5 symbols early but barely a third of a symbol
+                // late — so the lowest baud rate (BPSK31, 256 samples/symbol) sits
+                // right at the boundary and fails on runs where the estimate lands
+                // a touch too early.  `fep` is never *after* the onset (the gate
+                // trips on the rising edge or before), so sweeping a few half-symbol
+                // steps FORWARD reliably lands one attempt inside the window.  The
+                // extra attempts only run once the frame is fully buffered (a short
+                // buffer fails "frame too short" for every forward offset too, so we
+                // skip the sweep in that case and just wait for more audio).
+                // Forward-onset micro-sweep, ONE offset per iteration.  The settled
+                // onset sits at or slightly before the true preamble (the gate trips
+                // on the rising edge or earlier), but the energy gate + refine can be
+                // up to ~1-2 symbols early on a clean turn-on, and the demodulator
+                // only searches one symbol period for timing.  The decodable onset
+                // window is narrow (~2 symbols) and asymmetric — a start may be ~1.5
+                // symbols early but barely a third late — so the lowest baud rate
+                // (BPSK31) sits at the boundary and fails on runs where the estimate
+                // lands a touch early.  Stepping a few half-symbols FORWARD lands one
+                // attempt in the window.  Critically this cycles ONE offset per
+                // iteration (not all at once): each BPSK31 decode demodulates a
+                // multi-second window, so sweeping every offset per read would starve
+                // the loop and the long frame would never finish buffering.
+                let half = (step / 2).max(1);
+                let onset = fep + (fep_offset_k % 9) * half;
+                fep_offset_k = fep_offset_k.wrapping_add(1);
+                let end = (onset + max_frame_samples).min(accumulated.len());
+                if end.saturating_sub(onset) >= min_frame_samples {
                     let afc_before = self.afc_correction_hz;
                     match self.decode_attempt(
                         mode,
                         AudioSamples {
-                            samples: accumulated[fep..end].to_vec(),
+                            samples: accumulated[onset..end].to_vec(),
                         },
                         fec,
                     ) {
@@ -1123,30 +1214,41 @@ impl ModemEngine {
                     // (1 − 0.3⁶) × 150 Hz ≈ 149.9 Hz — effectively one-shot for
                     // crystal errors up to ±300 Hz on 144 MHz (≈ ±2 ppm).
                     if !planner.is_settled() {
-                        // Settle over `afc_window` (preamble + 1 symbol), NOT
-                        // max_frame_samples (72960): the latter makes settling
-                        // O(N²) in buffer length when the noise floor is above
-                        // ENERGY_GATE_THRESHOLD (every position fires the gate,
-                        // each runs 6 Goertzel passes on the full slice ≈ 170 ms)
+                        // Refine the coarse gate position to the true signal onset
+                        // BEFORE settling AFC.  The energy gate can trip up to a full
+                        // acquisition window early, with the signal entering only at the
+                        // window tail (e.g. QPSK500: the gate trips ~240 samples before
+                        // the frame).  Settling at the coarse position then runs the
+                        // carrier estimator over a mostly-silent window, which yields a
+                        // confident-but-bogus correction (QPSK500: a stable ~257 Hz from
+                        // ~2 signal symbols, last_delta≈0 so it passes the convergence
+                        // guard) that breaks the decode at the correct onset.  Settling
+                        // from the onset keeps the window on signal.
+                        let onset = refine_onset(&accumulated, start, acq_samples, step);
+                        // Settle over `afc_window` (preamble + 1 symbol) from the onset,
+                        // NOT max_frame_samples: the latter makes settling O(N²) in buffer
+                        // length when the noise floor is above the gate (every position
+                        // fires the gate, each runs 6 Goertzel passes on the full slice)
                         // and the scan falls behind live audio.  afc_window is
-                        // ~preamble-sized (fast) yet long enough to engage the
-                        // plugin's fine AFC stage — see its definition above.
-                        let settle_end = (start + afc_window).min(accumulated.len());
-                        if settle_end - start < afc_window {
+                        // ~preamble-sized (fast) yet long enough to engage the plugin's
+                        // fine AFC stage — see its definition above.
+                        let settle_end = (onset + afc_window).min(accumulated.len());
+                        if settle_end - onset < afc_window {
+                            // The onset's signal window is not fully buffered yet; wait for
+                            // the next read (the broad scan re-runs as the buffer grows).
                             continue;
                         }
-                        let settle = self.afc_mini_settle(mode, &accumulated[start..settle_end]);
-                        // Stability check: the final fine pass must have
-                        // converged (small last delta), the fine track must
-                        // agree with the anchor within 20 Hz (real carrier),
-                        // and the magnitude must not exceed the Goertzel
-                        // acquisition range.
+                        let settle = self.afc_mini_settle(mode, &accumulated[onset..settle_end]);
+                        // Stability check: the final fine pass must have converged (small
+                        // last delta), the fine track must agree with the anchor within
+                        // 20 Hz (real carrier), and the magnitude must not exceed the
+                        // Goertzel acquisition range.
                         let converged =
                             settle.last_delta < 5.0 && (settle.fine - settle.anchor).abs() <= 20.0;
                         let plausible = settle.fine.abs() <= AFC_MAX_CORRECTION_HZ;
                         if !converged || !plausible {
                             debug!(
-                                "AFC settling rejected at pos={start}: \
+                                "AFC settling rejected at onset={onset} (coarse={start}): \
                                  converged={converged} plausible={plausible} \
                                  correction={:.1}Hz",
                                 self.afc_correction_hz
@@ -1154,7 +1256,6 @@ impl ModemEngine {
                             self.afc_correction_hz = 0.0;
                             continue;
                         }
-                        let onset = refine_onset(&accumulated, start, acq_samples, step);
                         planner.note_settled(onset);
                         info!(
                             "AFC settling done: correction={:.1}Hz onset={onset} (coarse={start}) buf_len={}",
@@ -1328,7 +1429,7 @@ impl ModemEngine {
 
         let soft = matches!(
             fec,
-            FecMode::SoftConcatenated | FecMode::Ldpc | FecMode::Turbo
+            FecMode::SoftConcatenated | FecMode::Ldpc | FecMode::LdpcHighRate | FecMode::Turbo
         );
 
         // Soft codecs consume LLRs; hard codecs consume demodulated wire bytes.
@@ -1383,8 +1484,12 @@ impl ModemEngine {
             }
             FecMode::Ldpc => {
                 let llrs = llrs.unwrap();
-                let ldpc_llrs = &llrs[..(LDPC_CODEWORD_BYTES * 8).min(llrs.len())];
-                let info = LdpcCodec::new().decode_soft(ldpc_llrs)?;
+                let info = decode_ldpc_llrs(&LdpcCodec::new(), &llrs)?;
+                self.route_wire_stage(PipelineStage::DemodulateDecode, WirePayload { bytes: info })?
+            }
+            FecMode::LdpcHighRate => {
+                let llrs = llrs.unwrap();
+                let info = decode_ldpc_llrs(&LdpcCodec::high_rate(), &llrs)?;
                 self.route_wire_stage(PipelineStage::DemodulateDecode, WirePayload { bytes: info })?
             }
             other => {
@@ -1548,6 +1653,38 @@ impl ModemEngine {
             }
         }
         Err(ModemError::ArqMaxRetries(attempts))
+    }
+
+    /// IRS side of an ARQ exchange: receive one data frame and reply with an ACK.
+    ///
+    /// Receives at the current RX adaptive mode when a session is active, else at
+    /// `mode`. On a clean decode it replies with the SNR-derived [`AckType`] (always
+    /// [`AckType::AckOk`] without an adaptive session) and returns the payload; on
+    /// decode failure it replies [`AckType::Nack`] and returns the error, so the
+    /// transmitting [`transmit_arq`](Self::transmit_arq) peer retransmits.
+    ///
+    /// This is the reliable, fixed-mode counterpart to `transmit_arq`. Adaptive
+    /// rate-stepping in the RX direction (keeping the IRS RX level in lockstep with
+    /// the ISS TX level across an `AckUp`) is layered on top separately.
+    pub fn respond_arq(
+        &mut self,
+        mode: &str,
+        session_id: &str,
+        device: Option<&str>,
+    ) -> Result<Vec<u8>, ModemError> {
+        let rx_mode = self.current_rx_mode().unwrap_or(mode).to_owned();
+        match self.receive_with_ack_hint(&rx_mode, device) {
+            Ok((payload, ack_type)) => {
+                let ack = AckFrame::new(ack_type, session_id);
+                self.transmit_ack_with_short_fec(&ack, device)?;
+                Ok(payload)
+            }
+            Err(e) => {
+                let nack = AckFrame::new(AckType::Nack, session_id);
+                let _ = self.transmit_ack_with_short_fec(&nack, device);
+                Err(e)
+            }
+        }
     }
 
     /// Like [`transmit`](Self::transmit) but wraps the encoded frame bytes
@@ -2123,17 +2260,44 @@ impl ModemEngine {
         mode: &str,
         device: Option<&str>,
     ) -> Result<(), ModemError> {
+        self.transmit_with_ldpc_codec(data, mode, &LdpcCodec::new(), device)
+    }
+
+    /// Transmit with high-rate LDPC FEC (rate ≈8/9, 1024 info bits → 1152 codeword
+    /// bits) for the dense, high-SNR rungs (8PSK / 16QAM / 32APSK).
+    ///
+    /// TX chain: frame encode → LDPC encode (128 B → 144 B) → modulate → emit.
+    /// Same single-block limit (≤ 128 bytes) as [`transmit_with_ldpc`](Self::transmit_with_ldpc).
+    pub fn transmit_with_ldpc_high_rate(
+        &mut self,
+        data: &[u8],
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<(), ModemError> {
+        self.transmit_with_ldpc_codec(data, mode, &LdpcCodec::high_rate(), device)
+    }
+
+    /// Transmit one frame through the given LDPC codec preset.  Shared by the
+    /// rate-1/2 and high-rate public methods; the single-block limit comes from
+    /// the codec's own `info_bytes()`.
+    fn transmit_with_ldpc_codec(
+        &mut self,
+        data: &[u8],
+        mode: &str,
+        codec: &LdpcCodec,
+        device: Option<&str>,
+    ) -> Result<(), ModemError> {
         self.csma_check()?;
 
         let frame_wire = self.stage_encode_frame(data)?;
-        if frame_wire.bytes.len() > LDPC_MAX_INFO_BYTES {
+        if frame_wire.bytes.len() > codec.info_bytes() {
             return Err(ModemError::Frame(format!(
                 "LDPC: encoded frame {} B exceeds one-block limit of {} B; split payload at call site",
                 frame_wire.bytes.len(),
-                LDPC_MAX_INFO_BYTES,
+                codec.info_bytes(),
             )));
         }
-        let codeword = LdpcCodec::new().encode(&frame_wire.bytes);
+        let codeword = codec.encode(&frame_wire.bytes);
         let fec_wire = WirePayload { bytes: codeword };
         let fec_wire = self.route_wire_stage(PipelineStage::EncodeModulate, fec_wire)?;
 
@@ -2165,6 +2329,30 @@ impl ModemEngine {
     pub fn receive_with_ldpc(
         &mut self,
         mode: &str,
+        device: Option<&str>,
+    ) -> Result<Vec<u8>, ModemError> {
+        self.receive_with_ldpc_codec(mode, &LdpcCodec::new(), device)
+    }
+
+    /// Receive with high-rate LDPC FEC (rate ≈8/9) for the dense, high-SNR rungs.
+    ///
+    /// Mirror of [`receive_with_ldpc`](Self::receive_with_ldpc) with the
+    /// [`LdpcCodec::high_rate`] preset.
+    pub fn receive_with_ldpc_high_rate(
+        &mut self,
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<Vec<u8>, ModemError> {
+        self.receive_with_ldpc_codec(mode, &LdpcCodec::high_rate(), device)
+    }
+
+    /// Receive one frame through the given LDPC codec preset.  Shared by the
+    /// rate-1/2 and high-rate public methods; the LLR slice length comes from the
+    /// codec's own `codeword_bytes()`.
+    fn receive_with_ldpc_codec(
+        &mut self,
+        mode: &str,
+        codec: &LdpcCodec,
         device: Option<&str>,
     ) -> Result<Vec<u8>, ModemError> {
         let samples = self.stage_capture_input(device)?;
@@ -2201,9 +2389,8 @@ impl ModemEngine {
             });
         }
 
-        // LDPC block is LDPC_CODEWORD_BYTES × 8 coded bits; trim any excess LLRs.
-        let ldpc_llrs = &llrs[..(LDPC_CODEWORD_BYTES * 8).min(llrs.len())];
-        let info_bytes = LdpcCodec::new().decode_soft(ldpc_llrs)?;
+        // LDPC block is codeword_bytes × 8 coded bits; trim any excess LLRs.
+        let info_bytes = decode_ldpc_llrs(codec, &llrs)?;
 
         let corrected_wire = WirePayload { bytes: info_bytes };
         let corrected_wire =
@@ -2749,7 +2936,8 @@ impl ModemEngine {
         retry_index: u8,
         device: Option<&str>,
     ) -> Result<HarqDecision, ModemError> {
-        let decision = self.select_harq_decision(snr_db, fading_depth_db, retry_index);
+        let decision =
+            self.select_harq_decision_for_mode(mode, snr_db, fading_depth_db, retry_index);
         self.transmit_with_fec_mode(data, mode, decision.fec_mode, device)?;
         Ok(decision)
     }
@@ -2766,7 +2954,8 @@ impl ModemEngine {
         retry_index: u8,
         device: Option<&str>,
     ) -> Result<(Vec<u8>, HarqDecision), ModemError> {
-        let decision = self.select_harq_decision(snr_db, fading_depth_db, retry_index);
+        let decision =
+            self.select_harq_decision_for_mode(mode, snr_db, fading_depth_db, retry_index);
         let payload = self.receive_with_fec_mode(mode, decision.fec_mode, device)?;
         Ok((payload, decision))
     }
@@ -2805,6 +2994,7 @@ impl ModemEngine {
             FecMode::RsStrong => self.transmit_with_strong_fec(data, mode, device),
             FecMode::SoftConcatenated => self.transmit_with_soft_viterbi_fec(data, mode, device),
             FecMode::Ldpc => self.transmit_with_ldpc(data, mode, device),
+            FecMode::LdpcHighRate => self.transmit_with_ldpc_high_rate(data, mode, device),
             FecMode::Turbo => self.transmit_with_turbo(data, mode, device),
         }
     }
@@ -2826,7 +3016,7 @@ impl ModemEngine {
         // produces hard-decision ±1.0 LLRs — the decoder gains nothing.
         let is_soft_fec = matches!(
             fec,
-            FecMode::SoftConcatenated | FecMode::Ldpc | FecMode::Turbo
+            FecMode::SoftConcatenated | FecMode::Ldpc | FecMode::LdpcHighRate | FecMode::Turbo
         );
         if is_soft_fec {
             if let Some(plugin) = self.plugins.get(mode) {
@@ -2851,6 +3041,7 @@ impl ModemEngine {
             FecMode::RsStrong => self.receive_with_strong_fec(mode, device),
             FecMode::SoftConcatenated => self.receive_with_soft_viterbi_fec(mode, device),
             FecMode::Ldpc => self.receive_with_ldpc(mode, device),
+            FecMode::LdpcHighRate => self.receive_with_ldpc_high_rate(mode, device),
             FecMode::Turbo => self.receive_with_turbo(mode, device),
         }
     }
@@ -3137,10 +3328,17 @@ impl ModemEngine {
             self.update_afc_estimate(mode, window);
         }
         self.afc_step = saved_step;
+        let last_delta = (self.afc_correction_hz - prev).abs();
+        // Snap a sub-noise-floor correction to zero (see AFC_SETTLE_DEADBAND_HZ):
+        // applying a spurious few-tenths-of-a-Hz correction over-corrects a
+        // zero-offset frame and breaks 8PSK's preamble phase re-fit.
+        if self.afc_correction_hz.abs() < AFC_SETTLE_DEADBAND_HZ {
+            self.afc_correction_hz = 0.0;
+        }
         AfcSettleOutcome {
             anchor,
             fine: self.afc_correction_hz,
-            last_delta: (self.afc_correction_hz - prev).abs(),
+            last_delta,
         }
     }
 
@@ -3230,6 +3428,14 @@ fn nonce_from_seq(seq: u16) -> [u8; 12] {
     let mut n = [0u8; 12];
     n[..2].copy_from_slice(&seq.to_le_bytes());
     n
+}
+
+/// Decode one LDPC codeword from a soft-LLR stream, trimming to the codec's own
+/// codeword length so both the rate-1/2 and high-rate (rate ≈8/9) presets share
+/// one slice rule.
+fn decode_ldpc_llrs(codec: &LdpcCodec, llrs: &[f32]) -> Result<Vec<u8>, ModemError> {
+    let n_bits = codec.codeword_bytes() * 8;
+    codec.decode_soft(&llrs[..n_bits.min(llrs.len())])
 }
 
 fn minimum_trust_for_profile(profile: PolicyProfile) -> ConnectionTrustLevel {

@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::f32::consts::PI;
+use std::sync::{Mutex, OnceLock};
 
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
@@ -13,21 +15,6 @@ use crate::modulate::{
 };
 use crate::parse_baud_rate;
 
-/// Estimate the residual carrier frequency offset from the known preamble.
-///
-/// Removes the preamble modulation (y[k] = z[k]·conj(e[k])) and measures the mean
-/// phase increment of the residual, which is proportional to the offset.  The
-/// designed (non-cyclic) preamble leaves a small ISI-induced bias of a few Hz; this
-/// is operationally negligible for the ±450 Hz AFC acquisition range and is removed
-/// by the downstream Costas PLL.
-fn estimate_frequency_offset_from_preamble(
-    i_syms: &[f32],
-    q_syms: &[f32],
-    baud_rate: f32,
-) -> Option<f32> {
-    estimate_cfo_data_aided(i_syms, q_syms, &preamble_symbols(), baud_rate)
-}
-
 pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
     let baud = parse_baud_rate(&config.mode).ok()?;
     let fs = config.sample_rate as f32;
@@ -40,14 +27,128 @@ pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32
         return None;
     }
 
+    // RRC modes: estimate CFO on the matched-filtered baseband preamble, not the
+    // passband Hann demod.  At the RRC modes' low oversampling (4 sps for
+    // 8PSK2000-RRC) the Hann passband demod is badly mismatched and the estimate is
+    // erratic (e.g. a spurious +25 Hz lock at zero offset), landing outside the RRC
+    // demod's tolerance.  Data-aided on the matched preamble (range ±baud/2) is
+    // accurate; the downstream Costas absorbs the small residual ISI bias.
+    let rrc_alpha = if let PulseShape::Rrc { alpha } = config.pulse_shape {
+        Some(alpha)
+    } else if config.mode.ends_with("-RRC") {
+        Some(0.35f32)
+    } else {
+        None
+    };
+    if let Some(alpha) = rrc_alpha {
+        let (i_bb, q_bb) = rrc_baseband(samples, n, baud, fc, fs, alpha);
+        let timing = find_timing_offset_bb_iq(&i_bb, &q_bb, n);
+        let (mut i_syms, mut q_syms) = (Vec::new(), Vec::new());
+        let mut pos = timing;
+        while pos < i_bb.len() && i_syms.len() < PREAMBLE_SYMS {
+            i_syms.push(i_bb[pos]);
+            q_syms.push(q_bb[pos]);
+            pos += n;
+        }
+        if i_syms.len() < 2 {
+            return Some(0.0);
+        }
+        return Some(
+            estimate_cfo_data_aided(&i_syms, &q_syms, &preamble_symbols(), baud).unwrap_or(0.0),
+        );
+    }
+
     let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
     let syms = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
-    if syms.len() < 2 {
+    if syms.len() < PREAMBLE_SYMS {
         return None;
     }
 
-    let (i_syms, q_syms): (Vec<f32>, Vec<f32>) = syms.into_iter().unzip();
-    estimate_frequency_offset_from_preamble(&i_syms, &q_syms, baud)
+    // Two-stage estimate.  The consecutive-symbol data-aided estimate has a wide
+    // range (±baud/2) but, at the 8PSK1000 oversampling (8 sps), the crossfade 1-lag
+    // ISI biases every increment *erratically* (−1…+5 Hz vs offset) — too much for
+    // the dense 45° grid's ~±1.5 Hz tolerance.  So: use data-aided only as the
+    // wide-range anchor; once it has driven the residual inside ±baud/16, refine with
+    // the ISI-robust half-split (vector-sum endpoints), debiased by its reading on a
+    // clean zero-offset preamble.  The half-split's structural bias is constant, so
+    // subtracting it leaves a sub-Hz estimate.
+    let (i_syms, q_syms): (Vec<f32>, Vec<f32>) = syms.iter().take(PREAMBLE_SYMS).copied().unzip();
+    let rough = estimate_cfo_data_aided(&i_syms, &q_syms, &preamble_symbols(), baud)?;
+    // Only refine SMALL residuals with the half-split: a large CFO ramp over the
+    // preamble degrades each half's vector sum, so the data-aided anchor must own the
+    // wide range.  baud/64 (≈15.6 Hz at 1000 baud) is comfortably inside the data-aided
+    // anchor's reach yet small enough that the half-split is accurate there.
+    if rough.abs() < baud / 64.0 {
+        let raw = estimate_cfo_half_split(&syms, baud)?;
+        let bias = half_split_bias(config, baud, n, fc, fs, cosine_overlap);
+        return Some(raw - bias);
+    }
+    Some(rough)
+}
+
+/// CFO from the phase difference between the two preamble halves.
+///
+/// Each half's phase is the ISI-robust vector-sum correlation `arg(Σ r·conj(e))`,
+/// whose bias is bounded by the preamble's small 1-lag autocorrelation — unlike the
+/// consecutive-symbol increments of `estimate_cfo_data_aided`, where the crossfade
+/// 1-lag ISI (large at the 8PSK1000 oversampling of 8 sps) biases every increment
+/// and the bias accumulates.  Range ±baud/16 (±62.5 Hz at 1000 baud).  Carries a
+/// constant structural bias (the clean preamble reads non-zero); see `half_split_bias`.
+fn estimate_cfo_half_split(syms: &[(f32, f32)], baud: f32) -> Option<f32> {
+    if syms.len() < PREAMBLE_SYMS {
+        return None;
+    }
+    let expected = preamble_symbols();
+    let half = PREAMBLE_SYMS / 2;
+    let p_a = preamble_corr_phase(syms, &expected, 0..half);
+    let p_b = preamble_corr_phase(syms, &expected, half..PREAMBLE_SYMS);
+    let mut dphi = p_b - p_a;
+    while dphi > PI {
+        dphi -= 2.0 * PI;
+    }
+    while dphi < -PI {
+        dphi += 2.0 * PI;
+    }
+    let k_a = (half - 1) as f32 / 2.0;
+    let k_b = half as f32 + (half - 1) as f32 / 2.0;
+    Some(dphi / (k_b - k_a) * baud / (2.0 * PI))
+}
+
+/// Structural half-split bias for a mode: the `estimate_cfo_half_split` reading on a
+/// clean, zero-offset modulated preamble (no CFO present), which the crossfade ISI
+/// makes non-zero.  Subtracting it debiases the live half-split estimate.  Computed
+/// once per mode and cached (the modulate+demod is cheap but called per scan step).
+fn half_split_bias(
+    config: &ModulationConfig,
+    baud: f32,
+    n: usize,
+    fc: f32,
+    fs: f32,
+    cosine_overlap: bool,
+) -> f32 {
+    static CACHE: OnceLock<Mutex<HashMap<String, f32>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock() {
+        if let Some(&b) = guard.get(&config.mode) {
+            return b;
+        }
+    }
+    let ref_cfg = ModulationConfig {
+        center_frequency: fc,
+        ..config.clone()
+    };
+    let bias = crate::modulate::psk8_modulate(&[0x5Au8; 32], &ref_cfg)
+        .ok()
+        .and_then(|sig| {
+            let timing = find_timing_offset(&sig, n, fc, fs, cosine_overlap);
+            let syms = demodulate_symbols(&sig, n, fc, fs, timing, cosine_overlap);
+            estimate_cfo_half_split(&syms, baud)
+        })
+        .unwrap_or(0.0);
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(config.mode.clone(), bias);
+    }
+    bias
 }
 
 pub fn psk8_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec<u8>, ModemError> {
@@ -208,7 +309,7 @@ pub fn psk8_demodulate_gpu(
         let padded: Vec<f32> = mix
             .iter()
             .copied()
-            .chain(std::iter::repeat(0.0).take(group_delay))
+            .chain(std::iter::repeat_n(0.0, group_delay))
             .collect();
         let filtered = openpulse_gpu::gpu_rrc_fir(ctx, &padded, &coeffs)?;
         Some(filtered[group_delay..].to_vec())
@@ -266,20 +367,21 @@ pub fn psk8_demodulate_soft_gpu(
 }
 
 /// RRC demodulation: downmix → matched RRC filter → brute-force timing → sample.
-fn psk8_demodulate_rrc(
+/// Downmix to baseband I/Q and apply the RRC matched filter — the shared front-end
+/// of the RRC demod and the RRC AFC estimate.
+fn rrc_baseband(
     samples: &[f32],
     n: usize,
     baud: f32,
     fc: f32,
     fs: f32,
     alpha: f32,
-) -> Vec<(f32, f32)> {
+) -> (Vec<f32>, Vec<f32>) {
     let two_pi = 2.0 * PI;
     let num_taps = RRC_SPAN_SYMBOLS * n + 1;
     let coeffs = generate_rrc_coefficients(fs, baud, alpha, num_taps);
     let group_delay = (num_taps - 1) / 2;
 
-    // 1. Downmix to baseband I and Q.
     let i_mix: Vec<f32> = samples
         .iter()
         .enumerate()
@@ -291,7 +393,6 @@ fn psk8_demodulate_rrc(
         .map(|(k, &s)| -s * (two_pi * fc * k as f32 / fs).sin() * 2.0)
         .collect();
 
-    // 2. Apply RRC matched filter with group delay compensation.
     let rrc_filter = |mix: Vec<f32>| -> Vec<f32> {
         let padded: Vec<f32> = mix
             .iter()
@@ -302,8 +403,19 @@ fn psk8_demodulate_rrc(
         let filtered = fir.apply(&padded);
         filtered[group_delay..].to_vec()
     };
-    let i_bb = rrc_filter(i_mix);
-    let q_bb = rrc_filter(q_mix);
+    (rrc_filter(i_mix), rrc_filter(q_mix))
+}
+
+fn psk8_demodulate_rrc(
+    samples: &[f32],
+    n: usize,
+    baud: f32,
+    fc: f32,
+    fs: f32,
+    alpha: f32,
+) -> Vec<(f32, f32)> {
+    // 1+2. Downmix to baseband I/Q and apply the RRC matched filter.
+    let (i_bb, q_bb) = rrc_baseband(samples, n, baud, fc, fs, alpha);
 
     // 3. Coarse timing acquisition via IQ preamble correlation (brute-force).
     let initial_timing = find_timing_offset_bb_iq(&i_bb, &q_bb, n);
@@ -461,45 +573,23 @@ fn preamble_corr_phase(
 /// φ₀ is always removed: on real hardware the carrier phase at frame start is
 /// effectively random, and the non-HF 8PSK path has no equalizer to absorb it, so
 /// without this every symbol decision would be rotated to a wrong constellation
-/// point.  A per-symbol drift term is additionally removed only when the engine
-/// signalled a real RF offset (`afc_correction_hz` ≥ 0.5 Hz); it is estimated from
-/// the phase difference between the two preamble halves (each via the robust
-/// vector-sum), which avoids fitting drift to preamble noise on clean paths.
-fn carrier_phase_correct(syms: &[(f32, f32)], afc_correction_hz: f32) -> Vec<(f32, f32)> {
+/// point.  φ₀ is the single ML phase over the whole preamble via the ISI-robust
+/// vector-sum correlation; residual frequency drift is left to the downstream
+/// Costas (`carrier_pll_track`), which is the proper tracker for it.
+///
+/// A 2-point "drift fit" (slope from the two 8-symbol preamble halves, extrapolated
+/// across the frame) was previously applied when the engine signalled an RF offset
+/// (`afc_correction_hz` ≥ 0.5).  It was **removed**: the 8-symbol baseline makes the
+/// half-to-half phase difference dominated by per-half ISI rather than true drift,
+/// so it extrapolated a spurious slope over the ~190 data symbols and broke decode
+/// even when the carrier frequency was already exactly correct — the actual cause of
+/// the 8PSK carrier-offset acquisition gap (an AFC-accurate frame still failed).
+fn carrier_phase_correct(syms: &[(f32, f32)], _afc_correction_hz: f32) -> Vec<(f32, f32)> {
     if syms.len() < PREAMBLE_SYMS {
         return syms.to_vec();
     }
     let expected = preamble_symbols();
 
-    if afc_correction_hz.abs() >= 0.5 {
-        // Drift present: anchor phase at each half's centroid and fit a line.
-        let half = PREAMBLE_SYMS / 2;
-        let p_a = preamble_corr_phase(syms, &expected, 0..half);
-        let p_b = preamble_corr_phase(syms, &expected, half..PREAMBLE_SYMS);
-        let k_a = (half - 1) as f32 / 2.0;
-        let k_b = half as f32 + (half - 1) as f32 / 2.0;
-        // Wrap the half-to-half phase difference into (−π, π].
-        let mut dphi = p_b - p_a;
-        while dphi > PI {
-            dphi -= 2.0 * PI;
-        }
-        while dphi < -PI {
-            dphi += 2.0 * PI;
-        }
-        let drift = dphi / (k_b - k_a);
-        let phase_0 = p_a - drift * k_a;
-        return syms
-            .iter()
-            .enumerate()
-            .map(|(k, &(i, q))| {
-                let theta = -(phase_0 + drift * k as f32);
-                let (s, c) = theta.sin_cos();
-                (i * c - q * s, i * s + q * c)
-            })
-            .collect();
-    }
-
-    // No drift: remove the single ML phase offset over the whole preamble.
     let phase_0 = preamble_corr_phase(syms, &expected, 0..PREAMBLE_SYMS);
     // Only correct a *gross* offset.  The job here is to resolve the random
     // hardware carrier phase (uniform over 360°); an offset already within roughly
@@ -517,24 +607,58 @@ fn carrier_phase_correct(syms: &[(f32, f32)], afc_correction_hz: f32) -> Vec<(f3
         .collect()
 }
 
-/// Track residual carrier frequency drift with a decision-directed 8PSK Costas PLL.
+/// One decision-directed 8PSK carrier-tracking pass seeded with an initial loop
+/// frequency (rad/symbol); returns the de-rotated symbols and the final frequency.
 ///
-/// `carrier_phase_correct` removes the static phase offset; a residual frequency
-/// offset (e.g. differing USB-audio crystal frequencies between two hosts) still
-/// produces a linear phase ramp that accumulates across the frame.  The 8th-order
-/// (psk_order = 3) PLL tracks that drift so the residual phase error stays within the
-/// ±22.5° 8PSK decision boundary.  The loop bandwidth is deliberately gentle (0.010,
-/// half the QPSK value): the 8th-power phase detector is noisier than QPSK's 4th, so
-/// a tighter loop would perturb clean signals enough to tip symbols at the
-/// 5-samples/symbol 8PSK9600 rate where the eye is already nearly closed by ISI.
+/// 8PSK is constant-modulus, so the phase error is `Im(r·conj(d))` for the nearest
+/// constellation point `d` (|d| = 1).  A second-order loop integrates it.
+fn dd_track_seeded(syms: &[(f32, f32)], loop_bw: f32, init_freq: f32) -> (Vec<(f32, f32)>, f32) {
+    let alpha = loop_bw;
+    let beta = loop_bw * loop_bw * 0.25;
+    let mut phase = 0.0f32;
+    let mut freq = init_freq;
+    let mut out = Vec::with_capacity(syms.len());
+    for &(i, q) in syms {
+        let (s, c) = (-phase).sin_cos();
+        let di = i * c - q * s;
+        let dq = i * s + q * c;
+        let (pi, pq) = psk8_map_decision(di, dq);
+        let err = dq * pi - di * pq; // Im(r·conj(d)), |d| = 1
+        out.push((di, dq));
+        freq += beta * err;
+        phase += freq + alpha * err;
+    }
+    (out, freq)
+}
+
+/// Track residual carrier frequency drift with a two-pass decision-directed 8PSK loop.
+///
+/// `carrier_phase_correct` removes the static phase offset, but a residual frequency
+/// offset still produces a linear phase ramp across the frame.  A single forward loop
+/// seeded at zero spends the early symbols *acquiring* that offset — and at the dense
+/// 45° 8PSK spacing those mis-rotated early symbols decide wrong and the loop never
+/// recovers (the prior single-pass Costas required the engine AFC to land within
+/// ±0.5 Hz, which its ~0.9 Hz preamble-ISI bias could not).  Pass 1 converges the
+/// offset over the whole frame; pass 2 re-runs the loop seeded with that frequency so
+/// every symbol, including the first, is de-rotated at the correct rate — the same
+/// structure 64QAM uses to absorb the identical AFC bias.  On a clean offset-free
+/// frame pass 1 converges to ~0 and pass 2 is a no-op, so nothing regresses.  The loop
+/// bandwidth stays gentle (0.010): the decision-directed detector is noisier on the
+/// dense grid, so a tighter loop would perturb marginal symbols.
 fn carrier_pll_track(syms: &[(f32, f32)]) -> Vec<(f32, f32)> {
-    let mut pll = CarrierPll::new(0.010, 3);
-    syms.iter()
-        .map(|&(i, q)| {
-            pll.update(i, q);
-            pll.correct(i, q)
-        })
-        .collect()
+    // Acquisition/tracking split: pass 1 runs a wider loop (0.05) so it can ACQUIRE
+    // the residual frequency within the short frame — the gentle tracking loop alone
+    // converges far too slowly to lock even a ~1 Hz residual over ~60–200 symbols,
+    // which is why the engine's AFC had to land within ±0.5 Hz (its ~0.9 Hz preamble-
+    // ISI bias could not).  Pass 2 re-runs the gentle loop (0.010) seeded with that
+    // frequency, so it tracks cleanly from the first symbol without the wide loop's
+    // self-noise.  On a clean offset-free frame pass 1 converges to ~0 and pass 2 is
+    // the original gentle loop, so clean / Watterson / weak-signal paths do not regress.
+    const ACQUIRE_BW: f32 = 0.05;
+    const TRACK_BW: f32 = 0.010;
+    let (_, freq) = dd_track_seeded(syms, ACQUIRE_BW, 0.0);
+    let (out, _) = dd_track_seeded(syms, TRACK_BW, freq);
+    out
 }
 
 fn demodulate_symbols(

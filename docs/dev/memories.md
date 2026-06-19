@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/memories.md
+doc: docs/dev/memories.md
 status: living
 last_updated: 2026-04-23
 ---

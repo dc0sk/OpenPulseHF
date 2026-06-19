@@ -14,6 +14,7 @@ pub enum UseCase {
     AdaptiveHpx500,
     AdaptiveHpxHf,
     AdaptiveHpxWideband,
+    AdaptiveHpxOfdmHf,
     Ardop,
     Kiss,
     B2f,
@@ -26,6 +27,7 @@ impl UseCase {
             Self::AdaptiveHpx500 => "adaptive_hpx500",
             Self::AdaptiveHpxHf => "adaptive_hpx_hf",
             Self::AdaptiveHpxWideband => "adaptive_hpx_wideband",
+            Self::AdaptiveHpxOfdmHf => "adaptive_hpx_ofdm_hf",
             Self::Ardop => "ardop",
             Self::Kiss => "kiss",
             Self::B2f => "b2f",
@@ -101,6 +103,7 @@ pub fn fec_label(fec_mode: FecMode) -> &'static str {
         FecMode::RsStrong => "rs_strong",
         FecMode::SoftConcatenated => "soft_concat",
         FecMode::Ldpc => "ldpc",
+        FecMode::LdpcHighRate => "ldpc_hr",
         FecMode::Turbo => "turbo",
     }
 }

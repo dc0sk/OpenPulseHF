@@ -7,7 +7,7 @@ last_updated: 2026-05-27
 
 # CLAUDE.md — OpenPulseHF Agent Contract
 
-This file is the authoritative guide for any coding agent working in this repository. Read it before touching code. Mandatory agent safety rules are in `AGENTS.md` (root) and `docs/AGENTS.md`.
+This file is the authoritative guide for any coding agent working in this repository. Read it before touching code. Mandatory agent safety rules are in `AGENTS.md` (root) and `docs/dev/AGENTS.md`.
 
 ---
 
@@ -111,7 +111,7 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 
 ## Current phase and execution order
 
-**Completed**: Phases 1–9, Phase 7 (7.1–7.5), Phase 8 (8.1–8.3), FF series (FF-1 through FF-13), BL-FEC series (BL-FEC-1 through BL-FEC-6), all code stubs (PR #187–#189). See `docs/roadmap.md` for full history.
+**Completed**: Phases 1–9, Phase 7 (7.1–7.5), Phase 8 (8.1–8.3), FF series (FF-1 through FF-13), BL-FEC series (BL-FEC-1 through BL-FEC-6), all code stubs (PR #187–#189). See `docs/dev/roadmap.md` for full history.
 
 **Active tracks**:
 - No remaining scheduled implementation tracks.
@@ -164,7 +164,7 @@ Execute Phase 1 tasks in this order. Tasks within the same group are independent
 ### Group 2 — ✅ Complete
 
 **1.4 — Implement channel models** ✅ Done (PR #71)
-Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
+Full spec in `docs/dev/testbench-design.md` and `docs/dev/benchmark-harness.md`.
 
 **1.3 — Wire interleaver into `FecCodec` and `ModemEngine`** ✅ Done (PR #70)
 
@@ -212,7 +212,7 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 - `plugins/qpsk/src/lib.rs`: added `QPSK1000` mode (1000 baud, 8 samples/symbol @ 8 kHz)
 - `plugins/psk8/`: `Psk8Plugin` implementing `ModulationPlugin` for `"8PSK500"` and `"8PSK1000"`
   - Gray-coded 8PSK constellation (8 phases, 3 bits/symbol); Hann-windowed modulator; nearest-point IQ demodulator
-  - HPX2300 waveform decision: single-carrier chosen over OFDM (lower PAPR, no cyclic prefix, simpler AFC — see `docs/architecture.md`)
+  - HPX2300 waveform decision: single-carrier chosen over OFDM (lower PAPR, no cyclic prefix, simpler AFC — see `docs/dev/architecture.md`)
 - `crates/openpulse-core/src/profile.rs`: `SessionProfile` struct mapping `SpeedLevel` → mode string
   - `SessionProfile::hpx500()`: SL2=BPSK31, SL3=BPSK63, SL4=BPSK250, SL5=QPSK250, SL6=QPSK500; initial=SL2
   - `SessionProfile::hpx2300()`: SL8=QPSK500, SL9=QPSK1000, SL11=8PSK1000; initial=SL8
@@ -246,7 +246,7 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
   - Added `TrustFilter` enum (TrustedOnly, TrustedOrUnknown, Any) — wire codes per peer-query-relay-wire.md
   - Added `PeerCache::query(capability_mask, min_quality, trust_filter, max_results, now_ms)` — sorted by quality descending
 - `crates/openpulse-core/src/wire_query.rs`: OPHF binary envelope + peer query payloads
-  - `WireEnvelope`: encode/decode per docs/peer-query-relay-wire.md; header 104 B + payload + auth_tag 16 B
+  - `WireEnvelope`: encode/decode per docs/dev/peer-query-relay-wire.md; header 104 B + payload + auth_tag 16 B
   - `PeerQueryRequest` (msg_type 0x01): 17-byte fixed payload
   - `PeerQueryResponse` (msg_type 0x02): variable-length results with descriptor_signature
 - Integration tests: `tests/peer_descriptor_integration.rs` (9 tests); `tests/wire_query_integration.rs` (9 tests)
@@ -328,7 +328,7 @@ Full spec in `docs/testbench-design.md` and `docs/benchmark-harness.md`.
 - `crates/openpulse-core/src/conv.rs`: `ConvCodec` — rate-1/2, K=3 (4-state), generators G={7,5} octal, hard-decision Viterbi decoder; same `encode/decode` interface as `FecCodec`
 - Benchmark: at channel BER 1%, RS post-decode BER = 0.497 vs ConvCodec = 0.0004 (AWGN regime; RS fails because random errors exceed 16-byte/block capacity); CPU overhead 3.8×
 - Decision: **ACCEPTED** — ConvCodec is an optional alternative FEC for AWGN-dominant paths; RS+interleaver remains default for HF burst-error profiles
-- 6 integration tests in `crates/openpulse-core/tests/fec_comparison.rs`; decision documented in `docs/vara-research.md`
+- 6 integration tests in `crates/openpulse-core/tests/fec_comparison.rs`; decision documented in `docs/dev/vara-research.md`
 
 **Phase 3.3 — GPU compute acceleration for BPSK DSP** ✅ Done (PR #90)
 - `crates/openpulse-gpu/`: new crate — `GpuContext` (wgpu device + pre-compiled pipelines), WGSL kernels for BPSK modulation, IQ demodulation, and timing offset search
@@ -528,25 +528,51 @@ For any new Phase 1 feature: write the test first, confirm it fails, implement u
 
 ---
 
+## DSP acquisition & carrier-recovery playbook
+
+Blind acquisition — recovering timing, frequency, **and** phase simultaneously from a 16-symbol preamble — is the single most-churned and most-misdiagnosed area of the modem (60+ AFC/carrier commits). These are hard-won, load-bearing practices; read them before touching any plugin's demod or the engine acquisition path.
+
+1. **Diagnose an "AFC" failure with the swept-applied-correction experiment FIRST.** When a mode won't acquire through an offset, modulate at `fc+Δ`, then demodulate with a *manually swept* `afc_correction_hz` (and matching `center_frequency`). If it fails even at the exactly-correct Δ, the estimator/AFC is **innocent** — the bug is in timing, onset, or the carrier tracker. This one check relocated the 8PSK gap (PR #417) from "AFC precision" (where earlier sessions spent days on FLL / preamble-redesign / liquid-dsp ports) to a broken drift-fit branch in `carrier_phase_correct`.
+
+2. **AFC is the usual suspect, rarely the culprit.** The acquisition chain is `energy gate → refine_onset → afc_mini_settle → decode → carrier tracker` (`crates/openpulse-modem/src/engine.rs`); a weakness in *any* link reads as "doesn't decode → must be AFC." Historically these were: onset landing (BPSK31 #406, QPSK500 #413), timing metric at 90° carrier phase (`5dded08`/`866b085`), sample-rate offset on the dual-clock rig (#391/#392/#397), and carrier tracking (8PSK #417) — **not** the AFC estimate.
+
+3. **Settle AFC on the refined-onset window, never the coarse energy-gate window** (it may be mostly silence → a confident-but-bogus estimate, e.g. QPSK500's spurious ~257 Hz). And **don't apply sub-noise-floor (<2 Hz) settled corrections** (`AFC_SETTLE_DEADBAND_HZ` in `engine.rs`).
+
+4. **Carrier recovery is acquire-then-track, not one loop.** A gentle (low-BW) loop holds lock but **cannot acquire** even a ~1 Hz residual over a short (~60–200 symbol) frame. Use two passes: pass 1 wide BW to acquire the frequency, pass 2 narrow BW *seeded* with it to track cleanly. 64QAM (`dd_carrier_track_2pass`) and 8PSK (`dd_track_seeded`, #417) both do this. A single high-BW loop fixes the offset but regresses clean/dense modes (8PSK9600) — the split keeps both.
+
+5. **Don't try to extract sub-Hz CFO from the 16-symbol preamble by a magnitude-peak frequency search.** Its frequency resolution is only ~baud/16 (31–62 Hz) and the magnitude metric is sidelobe-ridden; a coarse scan locks to spurious peaks (−100…−256 Hz observed). Use a scan only for *coarse* acquisition; leave the fine residual to the 2-pass tracker. The data-aided mean-phase-increment estimator is the precise stage (ISI-biased ~0.9 Hz, which the tracker now absorbs).
+
+6. **Dense constellations are the regression canaries.** 8PSK (±22.5° margin) and 64QAM surface every timing/phase/AFC weakness that BPSK/QPSK hide. Validate acquisition changes against them, not just BPSK.
+
+7. **Rebuild BOTH ends for any loopback test** — the preamble sequence and frame geometry are shared protocol; a one-sided rebuild fails silently with "invalid magic."
+
+8. **Test FEC-protected modes WITH their FEC.** Dense modes (SCFDMA-HOM, 64QAM) only ever run FEC-protected, so a no-FEC loopback is an unrealistic bar — use the loopback `FEC=` env / CLI `--fec`. Soft FEC (~+6 dB) was the bigger lever that the loopback had never exercised.
+
+External modem/DSP references (gnuradio FLL band-edge, liquid-dsp framesync, daniestevez/qo100-modem) are catalogued in `docs/dev/references.md`. Recurring lesson: those references all use **RRC pulse shaping + a dedicated frequency-acquisition stage**; our rectangular single-Costas PSK is the outlier, which is why band-edge techniques don't drop in cleanly.
+
+---
+
 ## Key documents by topic
 
 | Topic | Document |
 |---|---|
-| Channel models (Watterson, Gilbert-Elliott) | `docs/benchmark-harness.md` |
-| Testbench design (channel models, DSP, UI) | `docs/testbench-design.md` |
-| WSJTX weak-signal techniques | `docs/wsjtx-analysis.md` |
-| JS8Call speed ladder and ARQ commands | `docs/js8call-analysis.md` |
-| VARA architecture and ACK taxonomy | `docs/vara-research.md` |
-| PACTOR Memory-ARQ, interleaver, FEC | `docs/pactor-research.md` |
-| ARDOP research | `docs/ardop-research.md` |
-| HPX waveform design | `docs/hpx-waveform-design.md` |
-| HPX state machine | `docs/hpx-session-state-machine.md` |
-| Peer query and relay wire format | `docs/peer-query-relay-wire.md` |
+| Channel models (Watterson, Gilbert-Elliott) | `docs/dev/benchmark-harness.md` |
+| Testbench design (channel models, DSP, UI) | `docs/dev/testbench-design.md` |
+| WSJTX weak-signal techniques | `docs/dev/wsjtx-analysis.md` |
+| JS8Call speed ladder and ARQ commands | `docs/dev/js8call-analysis.md` |
+| VARA architecture and ACK taxonomy | `docs/dev/vara-research.md` |
+| PACTOR Memory-ARQ, interleaver, FEC | `docs/dev/pactor-research.md` |
+| ARDOP research | `docs/dev/ardop-research.md` |
+| HPX waveform design | `docs/dev/hpx-waveform-design.md` |
+| HPX state machine | `docs/dev/hpx-session-state-machine.md` |
+| Peer query and relay wire format | `docs/dev/peer-query-relay-wire.md` |
 | Regulatory compliance | `docs/regulatory.md` |
-| Roadmap and phase gates | `docs/roadmap.md` |
-| Requirements | `docs/requirements.md` |
-| Architecture | `docs/architecture.md` |
-| PKI tooling | `docs/pki-tooling-architecture.md` |
+| Roadmap and phase gates | `docs/dev/roadmap.md` |
+| Requirements | `docs/dev/requirements.md` |
+| Architecture | `docs/dev/architecture.md` |
+| PKI tooling | `docs/dev/pki-tooling-architecture.md` |
 | CLI usage | `docs/cli-guide.md` |
-| Benchmark harness spec | `docs/benchmark-harness.md` |
-| Agent safety rules | `AGENTS.md`, `docs/AGENTS.md` |
+| Benchmark harness spec | `docs/dev/benchmark-harness.md` |
+| External modem/DSP references (FLL, liquid-dsp, qo100-modem) | `docs/dev/references.md` |
+| Loopback transports (virtual → hardware → on-air) | `docs/dev/virtual-loopback.md` |
+| Agent safety rules | `AGENTS.md`, `docs/dev/AGENTS.md` |

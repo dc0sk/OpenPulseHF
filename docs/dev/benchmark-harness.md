@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/benchmark-harness.md
+doc: docs/dev/benchmark-harness.md
 status: living
 last_updated: 2026-05-01
 ---

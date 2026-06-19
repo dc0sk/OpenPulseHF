@@ -25,6 +25,17 @@ pub(crate) struct RateAdaptationPolicy {
     rate_adapter: Option<BiDirRateAdapter>,
     session_profile: Option<SessionProfile>,
     last_rx_snr_db: Option<f32>,
+    /// A2 (Mercury backlog-aware gating): minimum queued TX bytes required before
+    /// an AckUp upgrade is acted on. `0` disables the gate (default).  Prevents
+    /// spending MODE_REQ/upgrade airtime when only a frame or two remain queued.
+    min_backlog_for_upgrade: usize,
+    /// A2: current queued TX backlog in bytes, fed by the engine.
+    tx_backlog_bytes: usize,
+    /// A3 (Mercury anti-oscillation hold): number of upgrade attempts to suppress
+    /// after a downgrade. `0` disables the hold (default).
+    upgrade_hold_frames: u32,
+    /// A3: remaining suppressed upgrade attempts.
+    upgrade_hold_remaining: u32,
 }
 
 impl RateAdaptationPolicy {
@@ -33,7 +44,28 @@ impl RateAdaptationPolicy {
             rate_adapter: None,
             session_profile: None,
             last_rx_snr_db: None,
+            min_backlog_for_upgrade: 0,
+            tx_backlog_bytes: 0,
+            upgrade_hold_frames: 0,
+            upgrade_hold_remaining: 0,
         }
+    }
+
+    /// A2: set the minimum queued-byte backlog that justifies acting on an AckUp
+    /// upgrade (`0` disables the gate).
+    pub fn set_min_backlog_for_upgrade(&mut self, bytes: usize) {
+        self.min_backlog_for_upgrade = bytes;
+    }
+
+    /// A2: update the current queued TX backlog (bytes) used by the gate.
+    pub fn set_tx_backlog(&mut self, bytes: usize) {
+        self.tx_backlog_bytes = bytes;
+    }
+
+    /// A3: set how many upgrade attempts are suppressed after a downgrade
+    /// (`0` disables the anti-oscillation hold).
+    pub fn set_upgrade_hold_frames(&mut self, frames: u32) {
+        self.upgrade_hold_frames = frames;
     }
 
     pub fn start_session(&mut self, profile: SessionProfile) {
@@ -107,34 +139,63 @@ impl RateAdaptationPolicy {
     }
 
     fn decide_rate_change(&mut self, ack: AckType, hold_ack_up: bool) -> RateEvent {
-        let profile = self.session_profile.clone();
-        let Some(adapter) = self.rate_adapter.as_mut() else {
-            return RateEvent::Maintained;
-        };
-        if hold_ack_up {
-            return RateEvent::Maintained;
-        }
-        if ack != AckType::AckUp {
-            return adapter.apply_ack(ack);
-        }
-        let Some(profile) = profile.as_ref() else {
-            return adapter.apply_ack(ack);
-        };
-        let current = adapter.tx_level();
-        let Some(target) = Self::next_mapped_level_above(profile, current) else {
-            return RateEvent::Maintained;
-        };
-        let mut last_event = RateEvent::Maintained;
-        while adapter.tx_level() < target {
-            last_event = adapter.apply_ack(AckType::AckUp);
-            if matches!(last_event, RateEvent::Maintained) {
-                break;
+        // A3 re-upgrade hold + A2 backlog gate: suppress AckUp upgrades that
+        // should not act yet, before touching the adapter. Both default off.
+        if ack == AckType::AckUp {
+            if self.upgrade_hold_remaining > 0 {
+                self.upgrade_hold_remaining -= 1;
+                return RateEvent::Maintained;
+            }
+            if self.min_backlog_for_upgrade > 0
+                && self.tx_backlog_bytes < self.min_backlog_for_upgrade
+            {
+                return RateEvent::Maintained;
             }
         }
-        match last_event {
-            RateEvent::Increased(_) => RateEvent::Increased(adapter.tx_level()),
-            other => other,
+
+        let hold_frames = self.upgrade_hold_frames;
+        let profile = self.session_profile.clone();
+        let event = {
+            let Some(adapter) = self.rate_adapter.as_mut() else {
+                return RateEvent::Maintained;
+            };
+            if hold_ack_up {
+                RateEvent::Maintained
+            } else if ack != AckType::AckUp {
+                adapter.apply_ack(ack)
+            } else if let Some(profile) = profile.as_ref() {
+                let current = adapter.tx_level();
+                match Self::next_mapped_level_above(profile, current) {
+                    None => RateEvent::Maintained,
+                    Some(target) => {
+                        let mut last_event = RateEvent::Maintained;
+                        while adapter.tx_level() < target {
+                            last_event = adapter.apply_ack(AckType::AckUp);
+                            if matches!(last_event, RateEvent::Maintained) {
+                                break;
+                            }
+                        }
+                        match last_event {
+                            RateEvent::Increased(_) => RateEvent::Increased(adapter.tx_level()),
+                            other => other,
+                        }
+                    }
+                }
+            } else {
+                adapter.apply_ack(ack)
+            }
+        };
+
+        // A3: arm the re-upgrade hold whenever the rate steps down.
+        if hold_frames > 0
+            && matches!(
+                event,
+                RateEvent::Decreased(_) | RateEvent::NackDecrement(_) | RateEvent::ChirpFallback
+            )
+        {
+            self.upgrade_hold_remaining = hold_frames;
         }
+        event
     }
 
     fn should_hold_ack_up_without_snr_candidate(&self, ack: AckType) -> bool {
@@ -315,5 +376,57 @@ mod tests {
         assert_eq!(p.last_rx_snr_db(), None);
         p.record_rx_snr(12.5);
         assert_eq!(p.last_rx_snr_db(), Some(12.5));
+    }
+
+    #[test]
+    fn a2_backlog_gate_suppresses_upgrade_until_enough_queued() {
+        let mut p = RateAdaptationPolicy::new();
+        p.start_session(SessionProfile::hpx500()); // starts at SL2
+        p.set_min_backlog_for_upgrade(64);
+        p.set_tx_backlog(10);
+        let (ev, _) = p.apply_ack(AckType::AckUp);
+        assert!(
+            matches!(ev, RateEvent::Maintained),
+            "low backlog must not spend upgrade airtime"
+        );
+        assert_eq!(p.current_tx_level(), Some(SpeedLevel::Sl2));
+        // Enough queued now → the upgrade is acted on.
+        p.set_tx_backlog(200);
+        let (ev, _) = p.apply_ack(AckType::AckUp);
+        assert!(matches!(ev, RateEvent::Increased(SpeedLevel::Sl3)));
+    }
+
+    #[test]
+    fn a3_hold_suppresses_reupgrade_after_downgrade() {
+        let mut p = RateAdaptationPolicy::new();
+        p.start_session(SessionProfile::hpx500());
+        p.set_upgrade_hold_frames(2);
+        // Climb SL2 → SL4.
+        p.apply_ack(AckType::AckUp);
+        p.apply_ack(AckType::AckUp);
+        assert_eq!(p.current_tx_level(), Some(SpeedLevel::Sl4));
+        // A downgrade arms the anti-oscillation hold.
+        let (ev, _) = p.apply_ack(AckType::AckDown);
+        assert!(matches!(ev, RateEvent::Decreased(SpeedLevel::Sl3)));
+        // The next two AckUps are suppressed.
+        for _ in 0..2 {
+            let (ev, _) = p.apply_ack(AckType::AckUp);
+            assert!(matches!(ev, RateEvent::Maintained));
+            assert_eq!(p.current_tx_level(), Some(SpeedLevel::Sl3));
+        }
+        // The hold has expired; the third AckUp is acted on.
+        let (ev, _) = p.apply_ack(AckType::AckUp);
+        assert!(matches!(ev, RateEvent::Increased(SpeedLevel::Sl4)));
+    }
+
+    #[test]
+    fn gates_off_by_default_allow_immediate_reupgrade() {
+        let mut p = RateAdaptationPolicy::new();
+        p.start_session(SessionProfile::hpx500());
+        p.apply_ack(AckType::AckUp);
+        p.apply_ack(AckType::AckUp); // SL4
+        p.apply_ack(AckType::AckDown); // SL3
+        let (ev, _) = p.apply_ack(AckType::AckUp); // no hold configured → immediate
+        assert!(matches!(ev, RateEvent::Increased(SpeedLevel::Sl4)));
     }
 }

@@ -159,6 +159,7 @@ fn write_summary(dir: &Path, results: &[TestResult], meta: &RunMeta) {
         UseCase::AdaptiveHpx500,
         UseCase::AdaptiveHpxHf,
         UseCase::AdaptiveHpxWideband,
+        UseCase::AdaptiveHpxOfdmHf,
         UseCase::Ardop,
         UseCase::Kiss,
         UseCase::B2f,

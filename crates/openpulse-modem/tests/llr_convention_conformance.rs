@@ -80,6 +80,26 @@ fn llr_convention_conformance() {
             "SCFDMA52",
             1500.0,
         ),
+        (
+            Box::new(pilot_plugin::PilotPlugin::new()),
+            "PILOT-QPSK500",
+            1500.0,
+        ),
+        (
+            Box::new(pilot_plugin::PilotPlugin::new()),
+            "PILOT-8PSK500",
+            1500.0,
+        ),
+        (
+            Box::new(pilot_plugin::PilotPlugin::new()),
+            "PILOT-16QAM500",
+            1500.0,
+        ),
+        (
+            Box::new(pilot_plugin::PilotPlugin::new()),
+            "PILOT-32APSK500",
+            1500.0,
+        ),
     ];
     for (plugin, mode, fc) in &cases {
         assert_conformance(plugin.as_ref(), mode, *fc);
