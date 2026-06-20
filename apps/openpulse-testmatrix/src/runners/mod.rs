@@ -14,6 +14,7 @@ pub fn register_all(engine: &mut ModemEngine) {
     use bpsk_plugin::BpskPlugin;
     use fsk4_plugin::Fsk4Plugin;
     use ofdm_plugin::OfdmPlugin;
+    use pilot_plugin::PilotPlugin;
     use psk8_plugin::Psk8Plugin;
     use qam64_plugin::Qam64Plugin;
     use qpsk_plugin::QpskPlugin;
@@ -39,6 +40,9 @@ pub fn register_all(engine: &mut ModemEngine) {
     engine
         .register_plugin(Box::new(ScFdmaPlugin::new()))
         .expect("register ScFdmaPlugin");
+    engine
+        .register_plugin(Box::new(PilotPlugin::new()))
+        .expect("register PilotPlugin");
 }
 
 pub fn run_case(case: &TestCase) -> TestResult {
