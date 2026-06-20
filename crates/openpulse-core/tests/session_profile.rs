@@ -36,6 +36,34 @@ fn hpx_pilot_mode_mapping() {
 }
 
 #[test]
+fn hpx_pilot_rrc_is_the_narrowband_sibling() {
+    let rect = SessionProfile::hpx_pilot();
+    let rrc = SessionProfile::hpx_pilot_rrc();
+    assert_eq!(SessionProfile::by_name("hpx_pilot_rrc"), Some(rrc.clone()));
+    // Same ladder shape on the -RRC variants.
+    assert_eq!(rrc.mode_for(SpeedLevel::Sl2), Some("PILOT-QPSK500-RRC"));
+    assert_eq!(rrc.mode_for(SpeedLevel::Sl3), Some("PILOT-8PSK500-RRC"));
+    assert_eq!(rrc.mode_for(SpeedLevel::Sl4), Some("PILOT-16QAM500-RRC"));
+    assert_eq!(rrc.mode_for(SpeedLevel::Sl5), Some("PILOT-32APSK500-RRC"));
+    // Identical control: same levels, initial, thresholds — only the pulse differs.
+    assert_eq!(rrc.defined_levels(), rect.defined_levels());
+    assert_eq!(rrc.initial_level, rect.initial_level);
+    assert_eq!(rrc.nack_threshold, rect.nack_threshold);
+    for sl in rrc.defined_levels() {
+        assert_eq!(
+            rrc.snr_floor_for_level(sl),
+            rect.snr_floor_for_level(sl),
+            "floor {sl:?}"
+        );
+        assert_eq!(
+            rrc.snr_ceiling_for_level(sl),
+            rect.snr_ceiling_for_level(sl),
+            "ceiling {sl:?}"
+        );
+    }
+}
+
+#[test]
 fn hpx_pilot_by_name_and_thresholds() {
     assert_eq!(
         SessionProfile::by_name("hpx_pilot"),
