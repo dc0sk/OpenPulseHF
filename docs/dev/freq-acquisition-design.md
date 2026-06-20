@@ -114,3 +114,38 @@ Realistic phasing:
 Phase 1 is a clean, low-risk standalone module; the risk concentrates in phase 2
 (touching the receive acquisition loop — the same loop stabilized in #455/#458, so
 the dual-card full tier must gate every change there).
+
+## Status
+
+- **Phase 1 — DONE** (PR #460): `openpulse_dsp::freq_acquire::acquire()` — the
+  standalone joint timing/CFO/phase/gain estimator. PR #461 switched its API to
+  `(f32, f32)` tuples (no num-complex on callers) and added the
+  `freq_acquire_accuracy` characterization.
+
+- **Phase 2 (wire into `afc_mini_settle`) — TRIED, REVERTED. Net-negative; do not
+  pursue this integration.** Two measurements settled it:
+  1. *Estimator accuracy* (`freq_acquire_accuracy.rs`): freq_acquire is far more
+     accurate than the per-plugin `estimate_afc_hz` — BPSK/QPSK are already fine
+     (<2 Hz), but 8PSK500 has 35–48 Hz error (448 Hz at +200) and 64QAM up to
+     7 Hz, which freq_acquire cuts to <2.5 Hz. This *looked* like a strong case.
+  2. *End-to-end decode* (the thing that matters): wiring the accurate estimate
+     into the settle CFO **regressed** 8PSK500 (9/9 across ±50 Hz → fails 4 cells)
+     and improved essentially nothing (the OFF column is already near-perfect).
+
+  **Root cause** (a clean confirmation of the DSP playbook's "AFC is the usual
+  suspect, rarely the culprit"): the dense-mode demods do their **own** carrier
+  acquisition from the preamble (8PSK's 2-pass DD tracker, #417; 64QAM's
+  `dd_carrier_track_2pass`) and expect `afc_correction ≈ 0`. The old estimator's
+  deadbanded ~0 value is *exactly* what lets the tracker pull in the full offset;
+  feeding it an *accurate* −39 Hz pre-correction double-corrects and breaks it.
+  freq_acquire's estimate was verified accurate at the failing cells (−38.8 to
+  −40.6 Hz for −40), so this is not an estimator bug — the **AFC-settle is simply
+  the wrong place**. The carrier-offset gaps this design targeted were already
+  closed by the per-demod tracker work (#413/#417/#420).
+
+  **If freq_acquire is to earn its place**, it needs a different role than AFC
+  pre-correction — e.g. directly *seeding* a per-demod tracker (replacing its
+  blind pull-in), serving modes that lack a robust tracker, or providing the
+  detection metric/timing — not feeding `afc_correction_hz`. That is a separate
+  investigation, not a continuation of this one. The module and its
+  characterization remain as the validated estimator for whoever takes that on.
