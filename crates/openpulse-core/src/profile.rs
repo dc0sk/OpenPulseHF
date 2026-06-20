@@ -91,6 +91,7 @@ impl SessionProfile {
     pub const PROFILE_NAMES: &'static [&'static str] = &[
         "hpx500",
         "hpx_pilot",
+        "hpx_pilot_rrc",
         "hpx_hf",
         "hpx_ofdm_hf",
         "hpx_wideband",
@@ -107,6 +108,7 @@ impl SessionProfile {
         match key.as_str() {
             "hpx500" => Some(Self::hpx500()),
             "hpx_pilot" => Some(Self::hpx_pilot()),
+            "hpx_pilot_rrc" => Some(Self::hpx_pilot_rrc()),
             "hpx_hf" => Some(Self::hpx_hf()),
             "hpx_ofdm_hf" => Some(Self::hpx_ofdm_hf()),
             "hpx_wideband" => Some(Self::hpx_wideband()),
@@ -195,6 +197,22 @@ impl SessionProfile {
             snr_ceilings,
             ack_up_requires_snr_candidate_at: None,
         }
+    }
+
+    /// HPX pilot profile, narrowband (RRC pulse): same QPSK→8PSK→16QAM→32APSK
+    /// ladder as [`hpx_pilot`](Self::hpx_pilot) but on the `-RRC` variants, which
+    /// occupy ~half the bandwidth (~(1+α)·baud ≈ 675 Hz). The matched RRC filter
+    /// gives the same Eb/N0 as the rectangular pulse, so the per-constellation SNR
+    /// thresholds are unchanged; the win is spectral occupancy. RRC samples at a
+    /// point (vs the rectangular integrate-and-dump averaging over the symbol), so
+    /// prefer [`hpx_pilot`](Self::hpx_pilot) when the link is dual-clock/SRO-heavy.
+    pub fn hpx_pilot_rrc() -> Self {
+        let mut p = Self::hpx_pilot();
+        p.modes[SpeedLevel::Sl2 as usize] = Some("PILOT-QPSK500-RRC");
+        p.modes[SpeedLevel::Sl3 as usize] = Some("PILOT-8PSK500-RRC");
+        p.modes[SpeedLevel::Sl4 as usize] = Some("PILOT-16QAM500-RRC");
+        p.modes[SpeedLevel::Sl5 as usize] = Some("PILOT-32APSK500-RRC");
+        p
     }
 
     /// HPX HF profile: the full HF-compliant rate ladder (SL2–SL11), up to SCFDMA52-64QAM.
