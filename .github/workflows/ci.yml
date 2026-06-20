@@ -121,6 +121,38 @@ jobs:
       - name: Full test gate
         run: cargo test --workspace --no-default-features
 
+  gpu-feature-gates:
+    name: GPU feature gates (compile + lint)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.REQUIRED_RUST }}
+
+      - name: Toolchain preflight
+        run: ./scripts/check-toolchain.sh $REQUIRED_RUST
+
+      # The per-plugin `gpu` feature is never compiled by the --no-default-features
+      # gates above, so its `#[cfg(feature = "gpu")]` paths rot silently (PR #424
+      # found a build break + clippy + flaky-test issue only reachable here). This
+      # job compiles and lints the GPU paths on every change. It does NOT run the
+      # GPU tests — CI runners have no wgpu adapter, so those would only exercise
+      # the CPU fallback; compile + lint is the rot guard.
+      - name: GPU feature build gate
+        run: >
+          cargo build --no-default-features --features gpu
+          -p bpsk-plugin -p qpsk-plugin -p psk8-plugin -p qam64-plugin -p scfdma-plugin
+
+      - name: GPU feature clippy gate
+        run: >
+          cargo clippy --no-default-features --features gpu
+          -p bpsk-plugin -p qpsk-plugin -p psk8-plugin -p qam64-plugin -p scfdma-plugin
+          -- -D warnings
+
   pi5-smoke-loopback:
     name: Pi5 smoke profile (loopback)
     runs-on: ubuntu-latest
