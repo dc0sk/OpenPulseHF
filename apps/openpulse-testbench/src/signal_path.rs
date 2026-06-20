@@ -12,14 +12,14 @@ use openpulse_core::compression::{compress, decompress, CompressionAlgorithm};
 use openpulse_core::fec::{FecCodec, FecMode};
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
 use openpulse_core::soft_viterbi::SoftViterbiCodec;
+use openpulse_modem::channel_sim::ChannelSimHarness;
+use openpulse_modem::ModemEngine;
 use psk8_plugin::Psk8Plugin;
 use qam64_plugin::Qam64Plugin;
 use qpsk_plugin::QpskPlugin;
 use scfdma_plugin::ScFdmaPlugin;
 
-#[cfg(feature = "cpal")]
-use crate::state::AudioSource;
-use crate::state::{AppConfig, NoiseModel, Tap, TestStats};
+use crate::state::{mode_fec_incompatible, AppConfig, AudioSource, NoiseModel, Tap, TestStats};
 
 /// Base pattern repeated to fill the configured payload size.
 const PATTERN: &[u8] = b"OpenPulseHF testbench v0.1 test!";
@@ -142,11 +142,21 @@ pub fn spawn_signal_thread(
     stats: Arc<RwLock<TestStats>>,
     stop_rx: crossbeam_channel::Receiver<()>,
 ) -> std::thread::JoinHandle<()> {
-    #[cfg(feature = "cpal")]
-    if config.read().unwrap().audio_source == AudioSource::LiveCapture {
-        return std::thread::spawn(move || run_live(config, taps, stats, stop_rx));
+    let source = config.read().unwrap().audio_source.clone();
+    match source {
+        AudioSource::VirtualLoop => {
+            std::thread::spawn(move || run_virtual(config, taps, stats, stop_rx))
+        }
+        #[cfg(feature = "cpal")]
+        AudioSource::LiveCapture => {
+            std::thread::spawn(move || run_live(config, taps, stats, stop_rx))
+        }
+        #[cfg(feature = "cpal")]
+        AudioSource::HardwareLoop => {
+            std::thread::spawn(move || run_hardware(config, taps, stats, stop_rx))
+        }
+        AudioSource::Synthetic => std::thread::spawn(move || run(config, taps, stats, stop_rx)),
     }
-    std::thread::spawn(move || run(config, taps, stats, stop_rx))
 }
 
 fn make_plugin(mode: &str) -> Box<dyn ModulationPlugin> {
@@ -324,6 +334,187 @@ fn run(
     }
 }
 
+/// Register the modulation plugins the testbench ships with on a modem engine.
+fn register_engine_plugins(engine: &mut ModemEngine) {
+    let _ = engine.register_plugin(Box::new(BpskPlugin::new()));
+    let _ = engine.register_plugin(Box::new(QpskPlugin::new()));
+    let _ = engine.register_plugin(Box::new(Psk8Plugin::new()));
+    let _ = engine.register_plugin(Box::new(Qam64Plugin::new()));
+    let _ = engine.register_plugin(Box::new(Fsk4Plugin::new()));
+    let _ = engine.register_plugin(Box::new(OfdmPlugin::new()));
+    let _ = engine.register_plugin(Box::new(ScFdmaPlugin::new()));
+}
+
+/// Transmit through the engine, dispatching on the FEC mode the testbench exposes.
+fn engine_transmit(
+    engine: &mut ModemEngine,
+    data: &[u8],
+    mode: &str,
+    fec: FecMode,
+) -> Result<(), openpulse_core::error::ModemError> {
+    match fec {
+        FecMode::Rs | FecMode::RsInterleaved => engine.transmit_with_fec(data, mode, None),
+        FecMode::RsStrong => engine.transmit_with_strong_fec(data, mode, None),
+        FecMode::SoftConcatenated => engine.transmit_with_soft_viterbi_fec(data, mode, None),
+        _ => engine.transmit(data, mode, None),
+    }
+    .map(|_| ())
+}
+
+/// Receive through the engine, dispatching on the FEC mode the testbench exposes.
+fn engine_receive(
+    engine: &mut ModemEngine,
+    mode: &str,
+    fec: FecMode,
+) -> Result<Vec<u8>, openpulse_core::error::ModemError> {
+    match fec {
+        FecMode::Rs | FecMode::RsInterleaved => engine.receive_with_fec(mode, None),
+        FecMode::RsStrong => engine.receive_with_strong_fec(mode, None),
+        FecMode::SoftConcatenated => engine.receive_with_soft_viterbi_fec(mode, None),
+        _ => engine.receive(mode, None),
+    }
+}
+
+/// The testmatrix virtual loop: two real `ModemEngine`s routed through a channel
+/// model via `ChannelSimHarness`. Visualizes the true TX, post-channel, and decoded
+/// signals — the same path the `openpulse-testmatrix` raw-modem runner exercises.
+fn run_virtual(
+    config: Arc<RwLock<AppConfig>>,
+    taps: [Tap; 4],
+    stats: Arc<RwLock<TestStats>>,
+    stop_rx: crossbeam_channel::Receiver<()>,
+) {
+    let mut current = config.read().unwrap().clone();
+
+    let mut harness = ChannelSimHarness::new();
+    register_engine_plugins(&mut harness.tx_engine);
+    register_engine_plugins(&mut harness.rx_engine);
+
+    let seed = current.seed_str.parse::<u64>().ok();
+    let mut channel = match build_channel(&make_channel_config(&current), seed) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("virtual loop: failed to build channel model: {e}");
+            return;
+        }
+    };
+
+    let mut ps = [
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+    ];
+    let mut run_count: u64 = 0;
+
+    loop {
+        if stop_rx
+            .recv_timeout(std::time::Duration::from_millis(20))
+            .is_ok()
+        {
+            break;
+        }
+
+        let new_cfg = config.read().unwrap().clone();
+        if new_cfg != current {
+            if new_cfg.noise_model != current.noise_model
+                || new_cfg.snr_db != current.snr_db
+                || new_cfg.seed_str != current.seed_str
+            {
+                let seed = new_cfg.seed_str.parse::<u64>().ok();
+                match build_channel(&make_channel_config(&new_cfg), seed) {
+                    Ok(c) => channel = c,
+                    Err(e) => {
+                        tracing::error!("virtual loop: failed to rebuild channel model: {e}");
+                        break;
+                    }
+                }
+            }
+            current = new_cfg;
+        }
+
+        run_count += 1;
+        let min_db = current.min_db;
+        let max_db = current.max_db;
+        let mode = current.mode.clone();
+        let fec_mode = if mode_fec_incompatible(&mode) {
+            FecMode::None
+        } else {
+            current.fec_mode
+        };
+        let payload = make_payload(current.payload_size, run_count);
+
+        // Compress before transmit (mirrors the testmatrix raw-modem runner).
+        let (wire_payload, actual_algo) = match current.compression {
+            CompressionAlgorithm::None => (payload.clone(), CompressionAlgorithm::None),
+            algo => {
+                let c = compress(&payload, algo);
+                if c.len() < payload.len() {
+                    (c, algo)
+                } else {
+                    (payload.clone(), CompressionAlgorithm::None)
+                }
+            }
+        };
+        let compress_ratio = wire_payload.len() as f64 / payload.len() as f64;
+
+        if let Err(e) = engine_transmit(&mut harness.tx_engine, &wire_payload, &mode, fec_mode) {
+            tracing::warn!("virtual loop: transmit error: {e}");
+            stats.write().unwrap().push_event(format!("TX error: {e}"));
+            continue;
+        }
+
+        let (tx_samples, channel_output) = harness.route_tapped(channel.as_mut());
+
+        // Realized impairment: post-channel minus pre-channel (additive component).
+        let n = tx_samples.len().min(channel_output.len());
+        let noise: Vec<f32> = (0..n).map(|i| channel_output[i] - tx_samples[i]).collect();
+
+        push_tap(&taps[0], &mut ps[0], &tx_samples, min_db, max_db);
+        push_tap(&taps[1], &mut ps[1], &noise, min_db, max_db);
+        push_tap(&taps[2], &mut ps[2], &channel_output, min_db, max_db);
+
+        let rx_result = match engine_receive(&mut harness.rx_engine, &mode, fec_mode) {
+            Ok(raw) => decompress(&raw, actual_algo).map_err(|_| {
+                openpulse_core::error::ModemError::Demodulation("decompress failed".into())
+            }),
+            Err(e) => Err(e),
+        };
+
+        // tap[3]: clean pre-channel reference when the link delivered the payload, else silence.
+        let decode_ok = matches!(&rx_result, Ok(p) if *p == payload);
+        let rx_samples = if decode_ok {
+            tx_samples.clone()
+        } else {
+            vec![0.0_f32; tx_samples.len()]
+        };
+        push_tap(&taps[3], &mut ps[3], &rx_samples, min_db, max_db);
+
+        // IQ scatter from the actual post-channel signal the RX engine demodulated.
+        push_iq_symbols(
+            &taps[3],
+            &channel_output,
+            1500.0,
+            8000.0,
+            mode_symbol_rate(&mode),
+        );
+
+        let snr_db = estimate_snr_db(&tx_samples, &noise);
+        // The engine handles FEC internally, so per-RS-block correction counts are not
+        // available here; pass fec_is_active=false to skip that accounting.
+        update_stats(
+            &stats,
+            &rx_result,
+            false,
+            &[],
+            None,
+            compress_ratio,
+            &payload,
+            snr_db,
+        );
+    }
+}
+
 #[cfg(feature = "cpal")]
 fn run_live(
     config: Arc<RwLock<AppConfig>>,
@@ -438,6 +629,139 @@ fn run_live(
     }
 
     input.close();
+}
+
+/// Dual-card hardware loop: modulate a frame out one soundcard (TX) and capture
+/// from another (RX), visualizing both ends of the real analog loopback.
+#[cfg(feature = "cpal")]
+fn run_hardware(
+    config: Arc<RwLock<AppConfig>>,
+    taps: [Tap; 4],
+    stats: Arc<RwLock<TestStats>>,
+    stop_rx: crossbeam_channel::Receiver<()>,
+) {
+    use openpulse_audio::CpalBackend;
+    use openpulse_core::audio::{AudioBackend as _, AudioConfig as HwConfig};
+
+    let mut current = config.read().unwrap().clone();
+    let backend = CpalBackend::new();
+    let hw_cfg = HwConfig::default(); // 8 kHz mono
+
+    let mut output = match backend.open_output(current.output_device.as_deref(), &hw_cfg) {
+        Ok(s) => s,
+        Err(e) => {
+            let msg = format!("hardware loop: TX output open failed: {e}");
+            tracing::error!("{msg}");
+            stats.write().unwrap().push_event(msg);
+            return;
+        }
+    };
+    let mut input = match backend.open_input(current.input_device.as_deref(), &hw_cfg) {
+        Ok(s) => s,
+        Err(e) => {
+            let msg = format!("hardware loop: RX input open failed: {e}");
+            tracing::error!("{msg}");
+            stats.write().unwrap().push_event(msg);
+            output.close();
+            return;
+        }
+    };
+
+    let mut plugin = make_plugin(&current.mode);
+    let mut mod_config = make_mod_config(&current);
+    let mut fec = TestbenchFec::from_mode(current.fec_mode);
+    let mut tx_samples = build_tx_ref(plugin.as_ref(), &mod_config, &fec);
+
+    let mut ps = [
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+    ];
+
+    loop {
+        if stop_rx.try_recv().is_ok() {
+            break;
+        }
+
+        let new_cfg = config.read().unwrap().clone();
+        if new_cfg.mode != current.mode || new_cfg.fec_mode != current.fec_mode {
+            plugin = make_plugin(&new_cfg.mode);
+            mod_config = make_mod_config(&new_cfg);
+            fec = TestbenchFec::from_mode(new_cfg.fec_mode);
+            tx_samples = build_tx_ref(plugin.as_ref(), &mod_config, &fec);
+        }
+        current = new_cfg;
+
+        let min_db = current.min_db;
+        let max_db = current.max_db;
+
+        // Discard any stale captured audio so this iteration's capture lines up with
+        // the frame we are about to transmit.
+        let _ = input.read();
+
+        // Transmit one frame out card A; flush() blocks until it has fully played,
+        // which also paces the loop and prevents the output buffer from growing.
+        if let Err(e) = output.write(&tx_samples) {
+            tracing::warn!("hardware loop: output write error: {e}");
+        }
+        let _ = output.flush();
+
+        push_tap(&taps[0], &mut ps[0], &tx_samples, min_db, max_db);
+
+        // Read what card B captured during playback.
+        let captured = match input.read() {
+            Ok(s) if !s.is_empty() => s,
+            Ok(_) => continue,
+            Err(e) => {
+                tracing::warn!("hardware loop: capture error: {e}");
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                continue;
+            }
+        };
+        push_tap(&taps[2], &mut ps[2], &captured, min_db, max_db);
+
+        // tap[3]: demodulate the captured audio.
+        let decoded_opt = fec.decode_soft(plugin.as_ref(), &captured, &mod_config);
+        let rx_result: Result<Vec<u8>, openpulse_core::error::ModemError> = match decoded_opt {
+            Some((_, post_rs)) => Ok(post_rs),
+            None => Err(openpulse_core::error::ModemError::Demodulation(
+                "decode failed".into(),
+            )),
+        };
+        let rx_samples = match &rx_result {
+            Ok(b) => plugin
+                .modulate(b, &mod_config)
+                .unwrap_or_else(|_| vec![0.0_f32; captured.len()]),
+            Err(_) => vec![0.0_f32; captured.len()],
+        };
+        push_tap(&taps[3], &mut ps[3], &rx_samples, min_db, max_db);
+        push_iq_symbols(
+            &taps[3],
+            &captured,
+            1500.0,
+            8000.0,
+            mode_symbol_rate(&current.mode),
+        );
+
+        // Count decode success/fail only — no BER against PAYLOAD in the hardware loop.
+        {
+            let mut s = stats.write().unwrap();
+            s.runs += 1;
+            if rx_result.is_ok() {
+                s.ok += 1;
+            } else {
+                s.fail += 1;
+                if s.fail <= 10 || s.fail.is_multiple_of(100) {
+                    let msg = format!("Run {}: no signal decoded", s.runs);
+                    s.push_event(msg);
+                }
+            }
+        }
+    }
+
+    input.close();
+    output.close();
 }
 
 #[cfg(feature = "cpal")]
@@ -697,6 +1021,40 @@ mod tests {
             assert!(gen > 0, "tap[{i}] generation should be > 0, got {gen}");
         }
         assert!(stats.read().unwrap().runs > 0, "runs should be > 0");
+    }
+
+    #[test]
+    fn run_virtual_produces_tap_updates() {
+        let mut cfg = AppConfig::default();
+        cfg.audio_source = crate::state::AudioSource::VirtualLoop;
+        cfg.mode = "BPSK250".into();
+        let config = Arc::new(RwLock::new(cfg));
+        let make_tap = || Arc::new(RwLock::new(TapData::new()));
+        let taps: [Tap; 4] = [make_tap(), make_tap(), make_tap(), make_tap()];
+        let stats = Arc::new(RwLock::new(TestStats::new()));
+        let (stop_tx, stop_rx) = crossbeam_channel::bounded(1);
+
+        let taps_clone = taps.clone();
+        let stats_clone = Arc::clone(&stats);
+        let config_clone = Arc::clone(&config);
+        let handle = std::thread::spawn(move || {
+            run_virtual(config_clone, taps_clone, stats_clone, stop_rx);
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        let _ = stop_tx.send(());
+        handle.join().expect("virtual-loop thread should not panic");
+
+        for (i, tap) in taps.iter().enumerate() {
+            let gen = tap.read().unwrap().generation;
+            assert!(gen > 0, "virtual-loop tap[{i}] generation should be > 0");
+        }
+        let s = stats.read().unwrap();
+        assert!(s.runs > 0, "virtual loop should record runs");
+        assert!(
+            s.ok > 0,
+            "clean BPSK250 virtual loop should decode at least one frame"
+        );
     }
 
     #[test]

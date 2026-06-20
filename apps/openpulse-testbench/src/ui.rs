@@ -5,10 +5,9 @@ use openpulse_core::compression::{CompressionAlgorithm, ZSTD_DICT_ID};
 use openpulse_core::fec::FecMode;
 
 use crate::colormap::plasma;
-#[cfg(feature = "cpal")]
-use crate::state::AudioSource;
 use crate::state::{
-    fec_payload_limit, mode_fec_incompatible, AppConfig, AppState, NoiseModel, Tap, ALL_MODES,
+    fec_payload_limit, mode_fec_incompatible, AppConfig, AppState, AudioSource, NoiseModel, Tap,
+    ALL_MODES,
 };
 
 const SPECTRUM_H: f32 = 170.0;
@@ -46,63 +45,109 @@ pub fn draw_toolbar(
 
         ui.separator();
 
+        ui.add_enabled_ui(!state.running, |ui| {
+            ui.label("Source:");
+            egui::ComboBox::from_id_salt("source_combo")
+                .selected_text(state.config.audio_source.label())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut state.config.audio_source,
+                        AudioSource::Synthetic,
+                        "Synthetic",
+                    );
+                    ui.selectable_value(
+                        &mut state.config.audio_source,
+                        AudioSource::VirtualLoop,
+                        "Virtual loop",
+                    );
+                    #[cfg(feature = "cpal")]
+                    ui.selectable_value(
+                        &mut state.config.audio_source,
+                        AudioSource::LiveCapture,
+                        "Live Audio",
+                    );
+                    #[cfg(feature = "cpal")]
+                    ui.selectable_value(
+                        &mut state.config.audio_source,
+                        AudioSource::HardwareLoop,
+                        "Hardware loop",
+                    );
+                })
+                .response
+                .on_hover_text(
+                    "Synthetic: direct-plugin frame through a simulated channel\n\
+                     Virtual loop: two real ModemEngines through ChannelSimHarness (testmatrix path)\n\
+                     Live Audio: captured directly from one sound card\n\
+                     Hardware loop: modulate out one card, capture from another (dual-card)",
+                );
+        });
+
+        // Capture-device selector — for live audio and the hardware-loop RX side.
         #[cfg(feature = "cpal")]
-        {
+        if matches!(
+            state.config.audio_source,
+            AudioSource::LiveCapture | AudioSource::HardwareLoop
+        ) {
             ui.add_enabled_ui(!state.running, |ui| {
-                ui.label("Source:");
-                egui::ComboBox::from_id_salt("source_combo")
-                    .selected_text(state.config.audio_source.label())
+                ui.label("In:");
+                let devices = state.input_devices.clone();
+                let mut sel = state.config.input_device.clone();
+                let sel_text = sel.clone().unwrap_or_else(|| "(default)".to_string());
+                egui::ComboBox::from_id_salt("device_combo")
+                    .selected_text(sel_text)
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut state.config.audio_source,
-                            AudioSource::Synthetic,
-                            "Synthetic",
-                        );
-                        ui.selectable_value(
-                            &mut state.config.audio_source,
-                            AudioSource::LiveCapture,
-                            "Live Audio",
-                        );
+                        ui.selectable_value(&mut sel, None, "(default)");
+                        for dev in &devices {
+                            ui.selectable_value(&mut sel, Some(dev.clone()), dev);
+                        }
                     })
                     .response
                     .on_hover_text(
-                        "Synthetic: generated test frame through a simulated channel\n\
-                         Live Audio: captured directly from your sound card",
+                        "Capture device — choose aloop_rx to scope the virtual loopback, \
+                         the second card for the dual-card hardware loop, or your radio's input",
                     );
+                state.config.input_device = sel;
+                if ui
+                    .small_button("⟳")
+                    .on_hover_text("Re-scan input devices")
+                    .clicked()
+                {
+                    state.refresh_input_devices();
+                }
             });
-
-            // Capture-device selector — only meaningful for live audio.
-            if state.config.audio_source == AudioSource::LiveCapture {
-                ui.add_enabled_ui(!state.running, |ui| {
-                    ui.label("Device:");
-                    let devices = state.input_devices.clone();
-                    let mut sel = state.config.input_device.clone();
-                    let sel_text = sel.clone().unwrap_or_else(|| "(default)".to_string());
-                    egui::ComboBox::from_id_salt("device_combo")
-                        .selected_text(sel_text)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut sel, None, "(default)");
-                            for dev in &devices {
-                                ui.selectable_value(&mut sel, Some(dev.clone()), dev);
-                            }
-                        })
-                        .response
-                        .on_hover_text(
-                            "Capture device for live audio — choose aloop_rx to scope the \
-                             virtual loopback, or your radio's soundcard input",
-                        );
-                    state.config.input_device = sel;
-                    if ui
-                        .small_button("⟳")
-                        .on_hover_text("Re-scan input devices")
-                        .clicked()
-                    {
-                        state.refresh_input_devices();
-                    }
-                });
-            }
-            ui.separator();
         }
+
+        // Playback-device selector — only the hardware loop transmits audio.
+        #[cfg(feature = "cpal")]
+        if state.config.audio_source == AudioSource::HardwareLoop {
+            ui.add_enabled_ui(!state.running, |ui| {
+                ui.label("Out:");
+                let devices = state.output_devices.clone();
+                let mut sel = state.config.output_device.clone();
+                let sel_text = sel.clone().unwrap_or_else(|| "(default)".to_string());
+                egui::ComboBox::from_id_salt("out_device_combo")
+                    .selected_text(sel_text)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut sel, None, "(default)");
+                        for dev in &devices {
+                            ui.selectable_value(&mut sel, Some(dev.clone()), dev);
+                        }
+                    })
+                    .response
+                    .on_hover_text(
+                        "Playback device for the TX side of the dual-card hardware loop",
+                    );
+                state.config.output_device = sel;
+                if ui
+                    .small_button("⟳")
+                    .on_hover_text("Re-scan output devices")
+                    .clicked()
+                {
+                    state.refresh_output_devices();
+                }
+            });
+        }
+        ui.separator();
 
         ui.label("Mode:");
         egui::ComboBox::from_id_salt("mode_combo")
@@ -115,8 +160,13 @@ pub fn draw_toolbar(
             .response
             .on_hover_text("Modulation mode and symbol rate (BPSK = binary PSK, QPSK = quadrature PSK)");
 
+        // Real-audio sources (live capture / hardware loop) have no simulated channel,
+        // compression, or payload-size knob; the virtual loop and synthetic path do.
         #[cfg(feature = "cpal")]
-        let is_live = state.config.audio_source == AudioSource::LiveCapture;
+        let is_live = matches!(
+            state.config.audio_source,
+            AudioSource::LiveCapture | AudioSource::HardwareLoop
+        );
         #[cfg(not(feature = "cpal"))]
         let is_live = false;
 

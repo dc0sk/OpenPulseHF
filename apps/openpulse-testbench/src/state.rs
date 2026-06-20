@@ -24,22 +24,46 @@ fn enumerate_input_devices() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Enumerate playback-capable device names for the hardware-loop TX device selector.
+#[cfg(feature = "cpal")]
+fn enumerate_output_devices() -> Vec<String> {
+    CpalBackend::new()
+        .list_devices()
+        .map(|devs| {
+            devs.into_iter()
+                .filter(|d| d.is_output)
+                .map(|d| d.name)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 // ── Audio source selector ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AudioSource {
+    /// Direct-plugin synthetic channel (modulate → channel model → demodulate).
     Synthetic,
+    /// The testmatrix virtual loop: two real `ModemEngine`s routed through a
+    /// channel model via `ChannelSimHarness`. No audio hardware required.
+    VirtualLoop,
+    /// Live capture from a single soundcard input.
     #[cfg(feature = "cpal")]
     LiveCapture,
+    /// Dual-card hardware loop: modulate out one card, capture from another.
+    #[cfg(feature = "cpal")]
+    HardwareLoop,
 }
 
 impl AudioSource {
-    #[cfg_attr(not(feature = "cpal"), allow(dead_code))]
     pub fn label(&self) -> &'static str {
         match self {
             AudioSource::Synthetic => "Synthetic",
+            AudioSource::VirtualLoop => "Virtual loop",
             #[cfg(feature = "cpal")]
             AudioSource::LiveCapture => "Live Audio",
+            #[cfg(feature = "cpal")]
+            AudioSource::HardwareLoop => "Hardware loop",
         }
     }
 }
@@ -91,9 +115,12 @@ pub struct AppConfig {
     pub max_db: f32,
     #[cfg_attr(not(feature = "cpal"), allow(dead_code))]
     pub audio_source: AudioSource,
-    /// Capture device for live audio; `None` selects the system default. cpal-only.
+    /// Capture device for live audio / hardware loop; `None` = system default. cpal-only.
     #[cfg_attr(not(feature = "cpal"), allow(dead_code))]
     pub input_device: Option<String>,
+    /// Playback device for the hardware loop TX side; `None` = system default. cpal-only.
+    #[cfg_attr(not(feature = "cpal"), allow(dead_code))]
+    pub output_device: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -110,6 +137,7 @@ impl Default for AppConfig {
             max_db: 0.0,
             audio_source: AudioSource::Synthetic,
             input_device: None,
+            output_device: None,
         }
     }
 }
@@ -298,6 +326,9 @@ pub struct AppState {
     /// Cached capture-device names for the live-audio selector (cpal-only).
     #[cfg(feature = "cpal")]
     pub input_devices: Vec<String>,
+    /// Cached playback-device names for the hardware-loop TX selector (cpal-only).
+    #[cfg(feature = "cpal")]
+    pub output_devices: Vec<String>,
 }
 
 impl AppState {
@@ -312,6 +343,8 @@ impl AppState {
             shared_config: None,
             #[cfg(feature = "cpal")]
             input_devices: enumerate_input_devices(),
+            #[cfg(feature = "cpal")]
+            output_devices: enumerate_output_devices(),
         }
     }
 
@@ -327,5 +360,11 @@ impl AppState {
     #[cfg(feature = "cpal")]
     pub fn refresh_input_devices(&mut self) {
         self.input_devices = enumerate_input_devices();
+    }
+
+    /// Re-scan the available playback devices (cpal-only).
+    #[cfg(feature = "cpal")]
+    pub fn refresh_output_devices(&mut self) {
+        self.output_devices = enumerate_output_devices();
     }
 }

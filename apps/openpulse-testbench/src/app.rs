@@ -1,9 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use crate::signal_path::spawn_signal_thread;
-use crate::state::AppState;
-#[cfg(feature = "cpal")]
-use crate::state::AudioSource;
+use crate::state::{AppState, AudioSource};
 use crate::ui::{draw_signal_panel, draw_stats, draw_toolbar};
 
 pub struct TestbenchApp {
@@ -97,24 +95,26 @@ impl eframe::App for TestbenchApp {
 
         let config = self.state.config.clone();
         egui::CentralPanel::default().show(ctx, |ui| {
-            #[cfg(feature = "cpal")]
-            let panel_names = if self.state.config.audio_source == AudioSource::LiveCapture {
-                ["TX (ref)", "(silent)", "Captured", "Demodulated"]
-            } else {
-                [
+            let panel_names = match self.state.config.audio_source {
+                #[cfg(feature = "cpal")]
+                AudioSource::LiveCapture => ["TX (ref)", "(silent)", "Captured", "Demodulated"],
+                #[cfg(feature = "cpal")]
+                AudioSource::HardwareLoop => {
+                    ["TX (out)", "(silent)", "Captured (in)", "Demodulated"]
+                }
+                AudioSource::VirtualLoop => [
+                    "TX (clean)",
+                    "Channel impairment",
+                    "Post-channel",
+                    "RX (decoded)",
+                ],
+                AudioSource::Synthetic => [
                     "TX (clean)",
                     "Noise channel",
                     "Mixed (TX+noise)",
                     "RX (decoded)",
-                ]
+                ],
             };
-            #[cfg(not(feature = "cpal"))]
-            let panel_names = [
-                "TX (clean)",
-                "Noise channel",
-                "Mixed (TX+noise)",
-                "RX (decoded)",
-            ];
             let available_width = ui.available_width();
             let col_width = available_width / 4.0;
 
