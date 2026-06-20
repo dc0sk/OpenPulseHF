@@ -35,6 +35,19 @@ const OFDM_HOM_MODES: &[&str] = &[
 
 const QAM64_MODES: &[&str] = &["64QAM500", "64QAM1000", "64QAM2000-RRC"];
 
+/// Pilot-framed single-carrier family — a representative slice (the 500-baud
+/// ladder, both pulse shapes, plus a 1000-baud throughput rung). Pilot-aided
+/// carrier recovery; soft-capable (so they run under LDPC too).
+const PILOT_MODES: &[&str] = &[
+    "PILOT-QPSK500",
+    "PILOT-8PSK500",
+    "PILOT-16QAM500",
+    "PILOT-32APSK500",
+    "PILOT-QPSK500-RRC",
+    "PILOT-16QAM500-RRC",
+    "PILOT-16QAM1000",
+];
+
 // All HF modes (≤2700 Hz BW, 8 kHz audio, suitable for standard test matrix).
 const HF_FAST_MODES: &[&str] = &[
     "BPSK250",
@@ -109,6 +122,19 @@ pub fn mode_min_snr_db(mode: &str) -> f32 {
     }
     if mode.starts_with("64QAM") {
         return 20.0;
+    }
+    // Pilot family: per-constellation floors (same as the hpx_pilot profile), baud
+    // and pulse-shape independent (the matched filter gives the same Es/N0).
+    if mode.starts_with("PILOT-") {
+        if mode.contains("32APSK") {
+            return 23.0;
+        } else if mode.contains("16QAM") {
+            return 17.0;
+        } else if mode.contains("8PSK") {
+            return 12.0;
+        } else if mode.contains("QPSK") {
+            return 6.0;
+        }
     }
     match mode {
         "8PSK500" | "8PSK1000-HF" | "OFDM52" | "SCFDMA52" => 15.0,
@@ -343,6 +369,27 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
                 continue;
             }
             for &fec in &[FecMode::None, FecMode::Rs, FecMode::SoftConcatenated] {
+                cases.push(raw_case(
+                    mode,
+                    fec,
+                    CompressionAlgorithm::None,
+                    channel.clone(),
+                    32,
+                    tier,
+                ));
+            }
+        }
+    }
+
+    // ── 5c. Pilot-framed family × clean+AWGN × {None, Rs, Ldpc} × 32 bytes ────────
+    //        Pilot is soft-capable, so Ldpc (rate-1/2) is its realistic dense-rung
+    //        code; Rs is the hard baseline. Gated on the per-constellation floor.
+    for mode in PILOT_MODES {
+        for channel in &awgn_channels {
+            if channel_snr_db(channel).is_some_and(|s| s < mode_min_snr_db(mode)) {
+                continue;
+            }
+            for &fec in &[FecMode::None, FecMode::Rs, FecMode::Ldpc] {
                 cases.push(raw_case(
                     mode,
                     fec,
