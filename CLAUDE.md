@@ -96,6 +96,7 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 | `openpulse-testbench` | `apps/openpulse-testbench` | egui/eframe signal-path testbench: 4-column waterfall/spectrum/scatter, 7 channel models |
 | `openpulse-panel` | `apps/openpulse-panel` | Operator panel GUI (egui; connects to openpulse-daemon control port) |
 | `openpulse-testmatrix` | `apps/openpulse-testmatrix` | Automated mode × channel test matrix runner |
+| `openpulse-linksim` | `apps/openpulse-linksim` | Two-station bidirectional ARQ link simulator (lib + CLI): effective two-way transfer rate under simulated SNR/noise, with FSK4 ACKs, turnaround, retransmission, and over-the-air rate adaptation |
 | `pki-tooling` | `pki-tooling` | Key management, trust store, bundle signing, PKI web service |
 
 ### Plugins
