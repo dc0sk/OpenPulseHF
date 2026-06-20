@@ -15,6 +15,9 @@ const SPECTRUM_H: f32 = 170.0;
 const WATERFALL_H: f32 = 200.0;
 const SCATTER_H: f32 = 170.0;
 const SNR_PLOT_H: f32 = 80.0;
+/// Minimum scale applied to the per-column section heights when the central
+/// panel is too short to fit spectrum + waterfall (+ scatter) at full size.
+const MIN_SECTION_SCALE: f32 = 0.4;
 
 // ── Toolbar ───────────────────────────────────────────────────────────────────
 
@@ -510,6 +513,16 @@ pub fn draw_signal_panel(
         (t.latest_spectrum.clone(), t.generation)
     };
 
+    // Budget the column's vertical space so spectrum + waterfall (+ scatter) always fit
+    // within the available height; shrink all sections together when the panel is short.
+    let avail_h = ui.available_height();
+    let scatter_ideal = if show_scatter { SCATTER_H } else { 0.0 };
+    let ideal_total = SPECTRUM_H + WATERFALL_H + scatter_ideal + 12.0;
+    let scale = (avail_h / ideal_total).clamp(MIN_SECTION_SCALE, 1.0);
+    let spectrum_h = SPECTRUM_H * scale;
+    let waterfall_h = WATERFALL_H * scale;
+    let scatter_h = scatter_ideal * scale;
+
     // Spectrum line plot
     let plot_points: PlotPoints = spectrum
         .iter()
@@ -522,7 +535,7 @@ pub fn draw_signal_panel(
         .collect();
 
     Plot::new(format!("spectrum_{label}"))
-        .height(SPECTRUM_H)
+        .height(spectrum_h)
         .allow_zoom(false)
         .allow_drag(false)
         .include_x(0.0)
@@ -560,31 +573,39 @@ pub fn draw_signal_panel(
             plot_ui.vline(VLine::new(right).color(bw_color).name("BW"));
         });
 
-    // Waterfall texture
-    if gen != *last_gen {
+    // Waterfall texture — rebuilt only when the tap produced a new generation.
+    if gen != *last_gen || texture.is_none() {
         let t = tap.read().unwrap();
         let image = build_waterfall_image(&t.waterfall, config.min_db, config.max_db);
         match texture {
-            Some(tex) => tex.set(image, egui::TextureOptions::default()),
+            Some(tex) => tex.set(image, egui::TextureOptions::LINEAR),
             None => {
                 *texture = Some(ui.ctx().load_texture(
                     format!("wf_{label}"),
                     image,
-                    egui::TextureOptions::default(),
+                    egui::TextureOptions::LINEAR,
                 ));
             }
         }
         *last_gen = gen;
     }
 
-    if let Some(tex) = texture.as_ref() {
-        let size = egui::vec2(ui.available_width(), WATERFALL_H);
-        ui.add(egui::Image::new(egui::load::SizedTexture::new(
-            tex.id(),
-            size,
-        )));
-    } else {
-        ui.allocate_space(egui::vec2(ui.available_width(), WATERFALL_H));
+    // Draw the waterfall by painting the texture directly into an explicitly
+    // allocated rect. This is deterministic regardless of the `Image` widget's
+    // fit/aspect heuristics, which previously left the waterfall un-rendered.
+    let wf_size = egui::vec2(ui.available_width(), waterfall_h);
+    let (wf_rect, _) = ui.allocate_exact_size(wf_size, egui::Sense::hover());
+    if ui.is_rect_visible(wf_rect) {
+        if let Some(tex) = texture.as_ref() {
+            ui.painter().image(
+                tex.id(),
+                wf_rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        } else {
+            ui.painter().rect_filled(wf_rect, 0.0, egui::Color32::BLACK);
+        }
     }
 
     // IQ scatter plot — shown only for the RX tap when enabled.
@@ -597,7 +618,7 @@ pub fn draw_signal_panel(
                 .collect()
         };
         Plot::new(format!("scatter_{label}"))
-            .height(SCATTER_H)
+            .height(scatter_h)
             .allow_zoom(false)
             .allow_drag(false)
             .data_aspect(1.0)
