@@ -88,6 +88,40 @@ fn hpx_pilot_fast_is_the_high_throughput_ladder() {
 }
 
 #[test]
+fn hpx_pilot_fast_rrc_combines_throughput_and_narrowband() {
+    let fast_rrc = SessionProfile::hpx_pilot_fast_rrc();
+    assert_eq!(
+        SessionProfile::by_name("hpx_pilot_fast_rrc"),
+        Some(fast_rrc.clone())
+    );
+    assert_eq!(
+        fast_rrc.mode_for(SpeedLevel::Sl2),
+        Some("PILOT-QPSK1000-RRC")
+    );
+    assert_eq!(
+        fast_rrc.mode_for(SpeedLevel::Sl3),
+        Some("PILOT-8PSK1000-RRC")
+    );
+    assert_eq!(
+        fast_rrc.mode_for(SpeedLevel::Sl4),
+        Some("PILOT-16QAM1000-RRC")
+    );
+    assert_eq!(
+        fast_rrc.mode_for(SpeedLevel::Sl5),
+        Some("PILOT-32APSK1000-RRC")
+    );
+    // Same per-symbol floors as the base pilot ladder.
+    let base = SessionProfile::hpx_pilot();
+    for sl in fast_rrc.defined_levels() {
+        assert_eq!(
+            fast_rrc.snr_floor_for_level(sl),
+            base.snr_floor_for_level(sl),
+            "floor {sl:?}"
+        );
+    }
+}
+
+#[test]
 fn hpx_pilot_by_name_and_thresholds() {
     assert_eq!(
         SessionProfile::by_name("hpx_pilot"),

@@ -59,6 +59,12 @@ impl PilotPlugin {
                     "PILOT-8PSK1000-RRC".to_string(),
                     "PILOT-16QAM1000-RRC".to_string(),
                     "PILOT-32APSK1000-RRC".to_string(),
+                    // 2000-baud rungs (RRC only — rectangular 2000 would alias past
+                    // Nyquist; RRC keeps it to ~(1+α)·2000 ≈ 2700 Hz). 4 sps at 8 kHz.
+                    "PILOT-QPSK2000-RRC".to_string(),
+                    "PILOT-8PSK2000-RRC".to_string(),
+                    "PILOT-16QAM2000-RRC".to_string(),
+                    "PILOT-32APSK2000-RRC".to_string(),
                 ],
                 trait_version_required: "1.0".to_string(),
             },
