@@ -11,9 +11,11 @@ use openpulse_channel::{
 use openpulse_core::compression::{compress, decompress, CompressionAlgorithm};
 use openpulse_core::fec::{FecCodec, FecMode};
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+use openpulse_core::profile::SessionProfile;
 use openpulse_core::soft_viterbi::SoftViterbiCodec;
 use openpulse_modem::channel_sim::ChannelSimHarness;
 use openpulse_modem::ModemEngine;
+use pilot_plugin::PilotPlugin;
 use psk8_plugin::Psk8Plugin;
 use qam64_plugin::Qam64Plugin;
 use qpsk_plugin::QpskPlugin;
@@ -150,6 +152,9 @@ pub fn spawn_signal_thread(
         AudioSource::TestMatrix => {
             std::thread::spawn(move || run_testmatrix(config, taps, stats, stop_rx))
         }
+        AudioSource::AdaptiveLadder => {
+            std::thread::spawn(move || run_adaptive_ladder(config, taps, stats, stop_rx))
+        }
         #[cfg(feature = "cpal")]
         AudioSource::LiveCapture => {
             std::thread::spawn(move || run_live(config, taps, stats, stop_rx))
@@ -175,10 +180,37 @@ fn make_plugin(mode: &str) -> Box<dyn ModulationPlugin> {
         Box::new(OfdmPlugin::new())
     } else if mode.starts_with("SCFDMA") {
         Box::new(ScFdmaPlugin::new())
+    } else if mode.starts_with("PILOT") {
+        Box::new(PilotPlugin::new())
     } else {
         // QPSK* and any other unrecognised mode
         Box::new(QpskPlugin::new())
     }
+}
+
+/// Measure a mode's steady-state payload bit rate (bps) from the modulator.
+///
+/// Two-point differencing of the sample count for two payload sizes cancels the fixed
+/// preamble, leaving the true per-payload-byte rate (which for pilot / OFDM / SC-FDMA
+/// modes correctly includes their periodic pilot/CP overhead). Returns `None` if the
+/// mode cannot be modulated.
+pub fn measure_mode_rate(mode: &str) -> Option<f64> {
+    let plugin = make_plugin(mode);
+    let cfg = ModulationConfig {
+        mode: mode.into(),
+        center_frequency: 1500.0,
+        sample_rate: 8000,
+        ..ModulationConfig::default()
+    };
+    let (n1, n2) = (128usize, 256usize);
+    let p1: Vec<u8> = (0..n1).map(|i| i as u8).collect();
+    let p2: Vec<u8> = (0..n2).map(|i| i as u8).collect();
+    let s1 = plugin.modulate(&p1, &cfg).ok()?.len();
+    let s2 = plugin.modulate(&p2, &cfg).ok()?.len();
+    if s2 <= s1 {
+        return None;
+    }
+    Some((n2 - n1) as f64 * 8.0 * 8000.0 / (s2 - s1) as f64)
 }
 
 fn make_mod_config(config: &AppConfig) -> ModulationConfig {
@@ -346,6 +378,7 @@ fn register_engine_plugins(engine: &mut ModemEngine) {
     let _ = engine.register_plugin(Box::new(Fsk4Plugin::new()));
     let _ = engine.register_plugin(Box::new(OfdmPlugin::new()));
     let _ = engine.register_plugin(Box::new(ScFdmaPlugin::new()));
+    let _ = engine.register_plugin(Box::new(PilotPlugin::new()));
 }
 
 /// Transmit through the engine, dispatching on the FEC mode the testbench exposes.
@@ -723,6 +756,138 @@ fn run_testmatrix(
                 case_ok,
                 FRAMES_PER_CASE,
             ));
+        }
+    }
+
+    stats.write().unwrap().matrix_current = None;
+}
+
+/// Run a SessionProfile's adaptive ladder through the virtual loop, stepping the speed
+/// level up/down against the live SNR so the rate-adaptation ladder can be demonstrated.
+fn run_adaptive_ladder(
+    config: Arc<RwLock<AppConfig>>,
+    taps: [Tap; 4],
+    stats: Arc<RwLock<TestStats>>,
+    stop_rx: crossbeam_channel::Receiver<()>,
+) {
+    let mut current = config.read().unwrap().clone();
+    let mut profile_name = current.profile.clone();
+    let mut profile = SessionProfile::by_name(&profile_name).unwrap_or_else(SessionProfile::hpx500);
+    let mut levels = profile.defined_levels();
+    if levels.is_empty() {
+        stats
+            .write()
+            .unwrap()
+            .push_event(format!("profile '{profile_name}' has no levels"));
+        return;
+    }
+
+    let mut harness = ChannelSimHarness::new();
+    register_engine_plugins(&mut harness.tx_engine);
+    register_engine_plugins(&mut harness.rx_engine);
+
+    let seed = current.seed_str.parse::<u64>().ok();
+    let mut channel = match build_channel(&make_channel_config(&current), seed) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("adaptive ladder: failed to build channel: {e}");
+            return;
+        }
+    };
+
+    let mut ps = [
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+    ];
+    let mut idx = 0usize; // start at the most robust level and climb
+    let mut run_count: u64 = 0;
+
+    loop {
+        if stop_rx
+            .recv_timeout(std::time::Duration::from_millis(120))
+            .is_ok()
+        {
+            break;
+        }
+
+        let new_cfg = config.read().unwrap().clone();
+        if new_cfg.profile != profile_name {
+            profile_name = new_cfg.profile.clone();
+            profile = SessionProfile::by_name(&profile_name).unwrap_or_else(SessionProfile::hpx500);
+            levels = profile.defined_levels();
+            idx = 0;
+            if levels.is_empty() {
+                stats
+                    .write()
+                    .unwrap()
+                    .push_event(format!("profile '{profile_name}' has no levels"));
+                break;
+            }
+        }
+        if new_cfg.noise_model != current.noise_model
+            || new_cfg.snr_db != current.snr_db
+            || new_cfg.seed_str != current.seed_str
+        {
+            let seed = new_cfg.seed_str.parse::<u64>().ok();
+            if let Ok(c) = build_channel(&make_channel_config(&new_cfg), seed) {
+                channel = c;
+            }
+        }
+        current = new_cfg;
+
+        let level = levels[idx];
+        let mode = profile.mode_for(level).unwrap_or("BPSK250").to_string();
+        let fec = if fec_locked(&mode, true) {
+            FecMode::None
+        } else {
+            FecMode::Rs
+        };
+
+        // Publish the current case before transmitting (the frame can take a while for
+        // slow modes), so the status reflects what is on air right now.
+        let snr = current.snr_db;
+        let floor = profile.snr_floor_for_level(level);
+        let ceiling = profile.snr_ceiling_for_level(level);
+        let floor_s = floor
+            .map(|f| format!("{f:.0}"))
+            .unwrap_or_else(|| "—".into());
+        let ceil_s = ceiling
+            .map(|c| format!("{c:.0}"))
+            .unwrap_or_else(|| "—".into());
+        stats.write().unwrap().matrix_current = Some(format!(
+            "{profile_name} | SL{} {} | SNR {snr:.0} dB (floor {floor_s} / ceil {ceil_s}) | {}/{} levels",
+            level as usize,
+            mode,
+            idx + 1,
+            levels.len(),
+        ));
+
+        run_count += 1;
+        let ok = virtual_frame(
+            &mut harness,
+            channel.as_mut(),
+            &mode,
+            fec,
+            CompressionAlgorithm::None,
+            current.payload_size,
+            run_count,
+            &taps,
+            &mut ps,
+            &stats,
+            current.min_db,
+            current.max_db,
+        );
+
+        // SNR-driven step with hysteresis from the profile's own floor/ceiling thresholds;
+        // also step down immediately on a decode failure.
+        let step_down = !ok || floor.is_some_and(|f| snr < f);
+        let step_up = ceiling.is_some_and(|c| snr >= c);
+        if step_down && idx > 0 {
+            idx -= 1;
+        } else if step_up && idx + 1 < levels.len() {
+            idx += 1;
         }
     }
 
@@ -1269,6 +1434,64 @@ mod tests {
             s.ok > 0,
             "clean BPSK250 virtual loop should decode at least one frame"
         );
+    }
+
+    #[test]
+    fn all_modes_have_measured_rates() {
+        // Every advertised mode must modulate and yield a positive steady-state rate —
+        // this also proves make_plugin routes every mode (including pilot) to a plugin.
+        for &mode in crate::state::ALL_MODES {
+            let r = measure_mode_rate(mode);
+            assert!(
+                r.is_some_and(|v| v > 0.0),
+                "{mode}: no positive measured rate ({r:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn run_adaptive_ladder_produces_updates_and_status() {
+        let mut cfg = AppConfig::default();
+        cfg.audio_source = crate::state::AudioSource::AdaptiveLadder;
+        // hpx_wideband starts at QPSK500 (fast frames) so the test doesn't wait on a
+        // huge BPSK31+RS buffer; hpx500 works in the app but is slow for a unit test.
+        cfg.profile = "hpx_wideband".into();
+        cfg.noise_model = NoiseModel::Awgn;
+        cfg.snr_db = 30.0; // high SNR → the ladder should climb
+        let config = Arc::new(RwLock::new(cfg));
+        let make_tap = || Arc::new(RwLock::new(TapData::new()));
+        let taps: [Tap; 4] = [make_tap(), make_tap(), make_tap(), make_tap()];
+        let stats = Arc::new(RwLock::new(TestStats::new()));
+        let (stop_tx, stop_rx) = crossbeam_channel::bounded(1);
+
+        let taps_clone = taps.clone();
+        let stats_clone = Arc::clone(&stats);
+        let config_clone = Arc::clone(&config);
+        let handle = std::thread::spawn(move || {
+            run_adaptive_ladder(config_clone, taps_clone, stats_clone, stop_rx);
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        {
+            let s = stats.read().unwrap();
+            assert!(s.matrix_current.is_some(), "ladder status should be set");
+            assert!(
+                s.active_mode.is_some(),
+                "ladder should set the running mode"
+            );
+        }
+        let _ = stop_tx.send(());
+        handle
+            .join()
+            .expect("adaptive-ladder thread should not panic");
+
+        for (i, tap) in taps.iter().enumerate() {
+            assert!(
+                tap.read().unwrap().generation > 0,
+                "ladder tap[{i}] generation should be > 0"
+            );
+        }
+        assert!(stats.read().unwrap().runs > 0, "ladder should record runs");
     }
 
     #[test]

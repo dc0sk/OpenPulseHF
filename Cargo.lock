@@ -4018,6 +4018,7 @@ dependencies = [
  "openpulse-channel",
  "openpulse-core",
  "openpulse-modem",
+ "pilot-plugin",
  "psk8-plugin",
  "qam64-plugin",
  "qpsk-plugin",

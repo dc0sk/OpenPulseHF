@@ -3,6 +3,7 @@ use egui_plot::{Line, Plot, PlotPoints, Points, VLine};
 use openpulse_channel::dsp::{FREQ_BINS, WATERFALL_ROWS};
 use openpulse_core::compression::{CompressionAlgorithm, ZSTD_DICT_ID};
 use openpulse_core::fec::FecMode;
+use openpulse_core::profile::SessionProfile;
 
 use crate::colormap::plasma;
 use crate::state::{fec_locked, AppConfig, AppState, AudioSource, NoiseModel, Tap, ALL_MODES};
@@ -56,6 +57,11 @@ pub fn draw_toolbar(
                         AudioSource::TestMatrix,
                         "Test matrix",
                     );
+                    ui.selectable_value(
+                        &mut state.config.audio_source,
+                        AudioSource::AdaptiveLadder,
+                        "Adaptive ladder",
+                    );
                     #[cfg(feature = "cpal")]
                     ui.selectable_value(
                         &mut state.config.audio_source,
@@ -77,6 +83,26 @@ pub fn draw_toolbar(
                      Hardware loop: modulate out one card, capture from another (dual-card)",
                 );
         });
+
+        // Profile selector — drives the adaptive-ladder demo.
+        if state.config.audio_source == AudioSource::AdaptiveLadder {
+            ui.add_enabled_ui(!state.running, |ui| {
+                ui.label("Profile:");
+                egui::ComboBox::from_id_salt("profile_combo")
+                    .selected_text(&state.config.profile)
+                    .show_ui(ui, |ui| {
+                        for &name in SessionProfile::PROFILE_NAMES {
+                            ui.selectable_value(&mut state.config.profile, name.into(), name);
+                        }
+                    })
+                    .response
+                    .on_hover_text(
+                        "Adaptive speed-level ladder to demonstrate — the mode steps up/down \
+                         against the SNR slider using this profile's floor/ceiling thresholds",
+                    );
+            });
+            ui.separator();
+        }
 
         // Capture-device selector — for live audio and the hardware-loop RX side.
         #[cfg(feature = "cpal")]
@@ -145,11 +171,15 @@ pub fn draw_toolbar(
         }
         ui.separator();
 
-        // Test matrix drives the mode/channel/FEC itself, so those pickers are disabled.
-        let is_matrix = state.config.audio_source == AudioSource::TestMatrix;
+        // Test matrix and adaptive ladder drive the mode/FEC themselves, so those pickers
+        // are disabled. (The ladder still uses the SNR slider, so channel controls stay.)
+        let mode_driven = matches!(
+            state.config.audio_source,
+            AudioSource::TestMatrix | AudioSource::AdaptiveLadder
+        );
 
         ui.label("Mode:");
-        ui.add_enabled_ui(!is_matrix, |ui| {
+        ui.add_enabled_ui(!mode_driven, |ui| {
             egui::ComboBox::from_id_salt("mode_combo")
                 .selected_text(&state.config.mode)
                 .show_ui(ui, |ui| {
@@ -164,8 +194,8 @@ pub fn draw_toolbar(
         });
 
         // Real-audio sources (live capture / hardware loop) and the test matrix have no
-        // user-set simulated channel, compression, or payload-size knob; the virtual loop
-        // and synthetic path do.
+        // user-set simulated channel, compression, or payload-size knob. The synthetic,
+        // virtual-loop and adaptive-ladder paths do (the ladder is driven by the SNR slider).
         #[cfg(feature = "cpal")]
         let is_live = matches!(
             state.config.audio_source,
@@ -173,7 +203,7 @@ pub fn draw_toolbar(
         );
         #[cfg(not(feature = "cpal"))]
         let is_live = false;
-        let is_live = is_live || is_matrix;
+        let is_live = is_live || state.config.audio_source == AudioSource::TestMatrix;
 
         if !is_live {
             ui.separator();
@@ -218,13 +248,13 @@ pub fn draw_toolbar(
         // direct-plugin synthetic / live / hardware path; FSK4-ACK never carries FEC.
         let engine_path = matches!(
             state.config.audio_source,
-            AudioSource::VirtualLoop | AudioSource::TestMatrix
+            AudioSource::VirtualLoop | AudioSource::TestMatrix | AudioSource::AdaptiveLadder
         );
         let fec_incompatible = fec_locked(&state.config.mode, engine_path);
         if fec_incompatible {
             state.config.fec_mode = FecMode::None;
         }
-        ui.add_enabled_ui(!fec_incompatible && !is_matrix, |ui| {
+        ui.add_enabled_ui(!fec_incompatible && !mode_driven, |ui| {
             ui.label("FEC:");
             egui::ComboBox::from_id_salt("fec_combo")
                 .selected_text(fec_mode_label(state.config.fec_mode))
@@ -261,7 +291,12 @@ pub fn draw_toolbar(
 
         // Cap payload so one frame's modulated audio stays within a watchable duration —
         // otherwise slow modes (e.g. BPSK31) generate minutes of samples and stall.
-        let payload_cap = max_payload_for_mode(&state.config.mode);
+        let mode_rate = state
+            .rate_table
+            .get(&state.config.mode)
+            .copied()
+            .unwrap_or(0.0);
+        let payload_cap = max_payload_for_mode(mode_rate);
         state.config.payload_size = state.config.payload_size.min(payload_cap);
 
         if !is_live {
@@ -334,75 +369,43 @@ pub fn draw_toolbar(
 
 // ── Statistics bar ────────────────────────────────────────────────────────────
 
-fn gross_bps(mode: &str) -> f64 {
-    match mode {
-        "BPSK31" => 31.25,
-        "BPSK63" => 62.5,
-        "BPSK100" => 100.0,
-        "BPSK250" => 250.0,
-        "QPSK125" => 250.0,      // 125 baud × 2 bits/symbol
-        "QPSK250" => 500.0,      // 250 baud × 2 bits/symbol
-        "QPSK500" => 1000.0,     // 500 baud × 2 bits/symbol
-        "QPSK1000" => 2000.0,    // 1000 baud × 2 bits/symbol
-        "QPSK1000-HF" => 2000.0, // same rate, narrower BW via cosine overlap
-        "8PSK500" => 1500.0,     // 500 baud × 3 bits/symbol
-        "8PSK1000" => 3000.0,    // 1000 baud × 3 bits/symbol
-        "8PSK1000-HF" => 3000.0, // same rate, narrower BW via cosine overlap
-        "BPSK250-RRC" => 250.0,
-        "QPSK500-RRC" => 1000.0,
-        "QPSK1000-RRC" => 2000.0,
-        "8PSK500-RRC" => 1500.0,
-        "8PSK1000-RRC" => 3000.0,
-        "64QAM500" => 3000.0,                  // 500 baud × 6 bits/symbol
-        "64QAM1000" => 6000.0,                 // 1000 baud × 6 bits/symbol
-        "64QAM2000-RRC" => 12000.0,            // 2000 baud × 6 bits/symbol
-        "QPSK2000" | "QPSK2000-RRC" => 4000.0, // 2000 baud × 2 bits/symbol
-        "8PSK2000" | "8PSK2000-RRC" => 6000.0, // 2000 baud × 3 bits/symbol
-        "FSK4-ACK" => 200.0,                   // 100 baud × 2 bits/symbol (4-tone)
-        // OFDM/SC-FDMA: n_data × 2 bits × (8000 / 288) symbol/s
-        "OFDM16" | "SCFDMA16" => 889.0, // 16 × 2 × 8000/288 ≈ 889 bps
-        "OFDM52" | "SCFDMA52" => 2889.0, // 52 × 2 × 8000/288 ≈ 2889 bps
-        _ => 0.0,
-    }
-}
-
 /// Largest payload (bytes) that keeps one frame's modulated audio within a watchable
 /// duration, so slow modes (e.g. BPSK31) don't stall the signal thread at large payloads.
-fn max_payload_for_mode(mode: &str) -> usize {
+/// `rate_bps` is the mode's measured steady-state payload rate (0 = unknown → no cap).
+fn max_payload_for_mode(rate_bps: f64) -> usize {
     const MAX_AUDIO_SEC: f64 = 8.0;
-    let gross = gross_bps(mode); // air-rate bits/sec
-    if gross <= 0.0 {
+    if rate_bps <= 0.0 {
         return 2048;
     }
-    let cap = (MAX_AUDIO_SEC * gross / 8.0) as usize;
+    let cap = (MAX_AUDIO_SEC * rate_bps / 8.0) as usize;
     cap.clamp(16, 2048)
 }
 
 fn mode_symbol_rate_hz(mode: &str) -> f64 {
     match mode {
-        "BPSK31" => 31.25,
-        "BPSK63" => 62.5,
-        "BPSK100" => 100.0,
-        "BPSK250" => 250.0,
-        "QPSK125" => 125.0,
-        "QPSK250" => 250.0,
-        "QPSK500" => 500.0,
-        "QPSK1000" | "QPSK1000-HF" => 1000.0,
-        "8PSK500" => 500.0,
-        "8PSK1000" | "8PSK1000-HF" => 1000.0,
-        "BPSK250-RRC" => 250.0,
-        "QPSK500-RRC" => 500.0,
-        "QPSK1000-RRC" => 1000.0,
-        "8PSK500-RRC" => 500.0,
-        "8PSK1000-RRC" => 1000.0,
-        "64QAM500" => 500.0,
-        "64QAM1000" => 1000.0,
-        "64QAM2000-RRC" => 2000.0,
-        "QPSK2000" | "QPSK2000-RRC" => 2000.0,
-        "8PSK2000" | "8PSK2000-RRC" => 2000.0,
-        "FSK4-ACK" => 100.0,
-        _ => 250.0,
+        "BPSK31" => return 31.25,
+        "BPSK63" => return 62.5,
+        "FSK4-ACK" => return 100.0,
+        _ => {}
     }
+    // The baud is the last integer run in the name (constellation digits like 16/32/64
+    // come first; the trailing -RRC/-HF/-P4 suffixes carry no further symbol-rate digits).
+    // e.g. QPSK1000-HF-RRC → 1000, PILOT-16QAM500-RRC → 500, 64QAM2000-RRC → 2000.
+    // OFDM/SC-FDMA modes use their own bandwidth special-case and never reach here.
+    let mut last: Option<f64> = None;
+    let mut cur = String::new();
+    for ch in mode.chars() {
+        if ch.is_ascii_digit() {
+            cur.push(ch);
+        } else if !cur.is_empty() {
+            last = cur.parse().ok();
+            cur.clear();
+        }
+    }
+    if !cur.is_empty() {
+        last = cur.parse().ok();
+    }
+    last.unwrap_or(250.0)
 }
 
 fn fmt_bps(bps: f64) -> String {
@@ -469,7 +472,7 @@ pub fn draw_stats(ui: &mut Ui, state: &AppState) {
     let fec_active = state.config.fec_mode != FecMode::None;
     if let Some(label) = &stats.matrix_current {
         ui.horizontal(|ui| {
-            ui.strong("Matrix:");
+            ui.strong("Status:");
             ui.label(egui::RichText::new(label).color(egui::Color32::from_rgb(120, 200, 255)));
         });
     }
@@ -505,7 +508,7 @@ pub fn draw_stats(ui: &mut Ui, state: &AppState) {
         } else {
             state.config.fec_mode
         };
-        let gross = gross_bps(&rate_mode);
+        let gross = state.rate_table.get(&rate_mode).copied().unwrap_or(0.0);
         let net = net_bps(gross, rate_fec);
         let window_total = stats.rate_window.len();
         let window_ok = stats.rate_window.iter().filter(|(_, b)| *b > 0).count();
@@ -623,13 +626,16 @@ pub fn draw_spectrum_cell(ui: &mut Ui, label: &str, tap: &Tap, config: &AppConfi
             // -HF / 8PSK: cosine overlap shaping, null-to-null BW ≈ 2×Rs → half = Rs.
             // Everything else: Hann windowing, null-to-null BW ≈ 4×Rs → half = 2×Rs.
             let sr = mode_symbol_rate_hz(&config.mode);
-            let bw_half = if config.mode == "FSK4-ACK" {
+            let m = config.mode.as_str();
+            let bw_half = if m == "FSK4-ACK" {
                 150.0
-            } else if config.mode == "OFDM16" || config.mode == "SCFDMA16" {
+            } else if m.starts_with("OFDM16") || m.starts_with("SCFDMA16") {
                 312.5
-            } else if config.mode == "OFDM52" || config.mode == "SCFDMA52" {
+            } else if m.starts_with("SCFDMA26") {
+                507.8 // half-width SC-FDMA (26 subcarriers)
+            } else if m.starts_with("OFDM52") || m.starts_with("SCFDMA52") {
                 1015.6
-            } else if config.mode.starts_with("8PSK") || config.mode.ends_with("-HF") {
+            } else if m.starts_with("8PSK") || m.contains("-HF") {
                 sr
             } else {
                 2.0 * sr

@@ -23,6 +23,7 @@ qam64-plugin.workspace      = true
 fsk4-plugin.workspace       = true
 ofdm-plugin.workspace       = true
 scfdma-plugin.workspace     = true
+pilot-plugin.workspace      = true
 crossbeam-channel.workspace = true
 eframe.workspace            = true
 egui.workspace              = true

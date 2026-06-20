@@ -50,6 +50,9 @@ pub enum AudioSource {
     /// Runs a full mode × channel × FEC matrix through the virtual loop, advancing
     /// case by case so the whole testmatrix can be watched. No audio hardware required.
     TestMatrix,
+    /// Runs a SessionProfile's adaptive speed-level ladder through the virtual loop,
+    /// stepping the mode up/down against the live SNR so the ladder can be demonstrated.
+    AdaptiveLadder,
     /// Live capture from a single soundcard input.
     #[cfg(feature = "cpal")]
     LiveCapture,
@@ -64,6 +67,7 @@ impl AudioSource {
             AudioSource::Synthetic => "Synthetic",
             AudioSource::VirtualLoop => "Virtual loop",
             AudioSource::TestMatrix => "Test matrix",
+            AudioSource::AdaptiveLadder => "Adaptive ladder",
             #[cfg(feature = "cpal")]
             AudioSource::LiveCapture => "Live Audio",
             #[cfg(feature = "cpal")]
@@ -109,6 +113,8 @@ impl NoiseModel {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppConfig {
     pub mode: String,
+    /// SessionProfile name for the AdaptiveLadder source (see `SessionProfile::PROFILE_NAMES`).
+    pub profile: String,
     pub noise_model: NoiseModel,
     pub snr_db: f32,
     pub fec_mode: FecMode,
@@ -131,6 +137,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             mode: "BPSK250".into(),
+            profile: "hpx500".into(),
             noise_model: NoiseModel::Awgn,
             snr_db: 15.0,
             fec_mode: FecMode::None,
@@ -163,45 +170,82 @@ pub fn fec_locked(mode: &str, engine_path: bool) -> bool {
     false
 }
 
+/// Every mode the testbench can drive at 8 kHz — the union of all registered plugins'
+/// `supported_modes`, excluding the 9600-baud modes (which need 48 kHz).
+/// Keep in sync with plugins/{bpsk,qpsk,psk8,64qam,ofdm,scfdma,pilot,fsk4}/src/lib.rs.
 pub const ALL_MODES: &[&str] = &[
-    // BPSK — HF narrow-band
+    // BPSK (bpsk-plugin)
     "BPSK31",
     "BPSK63",
     "BPSK100",
     "BPSK250",
-    // QPSK — HF narrow-band
+    "BPSK250-RRC",
+    // QPSK (qpsk-plugin)
     "QPSK125",
     "QPSK250",
     "QPSK500",
+    "QPSK500-RRC",
     "QPSK1000",
     "QPSK1000-HF",
-    // 8PSK — HF narrow-band
+    "QPSK1000-HF-RRC",
+    "QPSK1000-RRC",
+    "QPSK2000",
+    "QPSK2000-RRC",
+    // 8PSK (psk8-plugin)
     "8PSK500",
+    "8PSK500-RRC",
     "8PSK1000",
     "8PSK1000-HF",
-    // 64QAM — HF / full SSB passband (6 bits/sym, up to ~7200 bps eff.)
+    "8PSK1000-HF-RRC",
+    "8PSK1000-RRC",
+    "8PSK2000",
+    "8PSK2000-RRC",
+    // 64QAM (64qam-plugin)
     "64QAM500",
     "64QAM1000",
     "64QAM2000-RRC",
-    // UHF/VHF narrowband — 2000 baud, 8 kHz audio (12.5 kHz channel)
-    "QPSK2000",
-    "QPSK2000-RRC",
-    "8PSK2000",
-    "8PSK2000-RRC",
-    // RRC variants — HF modes with Root Raised Cosine pulse shaping
-    "BPSK250-RRC",
-    "QPSK500-RRC",
-    "QPSK1000-RRC",
-    "8PSK500-RRC",
-    "8PSK1000-RRC",
-    // ACK channel
-    "FSK4-ACK",
-    // Multi-carrier
+    // OFDM (ofdm-plugin)
     "OFDM16",
     "OFDM52",
+    "OFDM52-8PSK",
+    "OFDM52-16QAM",
+    "OFDM52-32QAM",
+    "OFDM52-64QAM",
+    // SC-FDMA (scfdma-plugin)
     "SCFDMA16",
     "SCFDMA52",
-    // Note: QPSK9600 / 8PSK9600 require 48 kHz sample rate and are not available
+    "SCFDMA52-8PSK",
+    "SCFDMA52-16QAM",
+    "SCFDMA52-32QAM",
+    "SCFDMA52-64QAM",
+    "SCFDMA52-64QAM-P4",
+    "SCFDMA26-8PSK",
+    "SCFDMA26-16QAM",
+    "SCFDMA26-32QAM",
+    // Pilot-framed (pilot-plugin)
+    "PILOT-QPSK500",
+    "PILOT-8PSK500",
+    "PILOT-16QAM500",
+    "PILOT-32APSK500",
+    "PILOT-QPSK500-RRC",
+    "PILOT-8PSK500-RRC",
+    "PILOT-16QAM500-RRC",
+    "PILOT-32APSK500-RRC",
+    "PILOT-QPSK1000",
+    "PILOT-8PSK1000",
+    "PILOT-16QAM1000",
+    "PILOT-32APSK1000",
+    "PILOT-QPSK1000-RRC",
+    "PILOT-8PSK1000-RRC",
+    "PILOT-16QAM1000-RRC",
+    "PILOT-32APSK1000-RRC",
+    "PILOT-QPSK2000-RRC",
+    "PILOT-8PSK2000-RRC",
+    "PILOT-16QAM2000-RRC",
+    "PILOT-32APSK2000-RRC",
+    // ACK channel (fsk4-plugin)
+    "FSK4-ACK",
+    // Note: QPSK9600 / 8PSK9600 (and their -RRC) require 48 kHz and are not available
     //       in the testbench (which uses 8 kHz).
 ];
 
@@ -343,6 +387,9 @@ pub struct AppState {
     pub running: bool,
     /// Shared config Arc written by the UI each frame; read by the signal thread.
     pub shared_config: Option<Arc<RwLock<AppConfig>>>,
+    /// Measured steady-state payload bit rate (bps) per mode, computed once at startup
+    /// from the actual modulators so the readout is correct for every mode.
+    pub rate_table: std::collections::HashMap<String, f64>,
     /// Cached capture-device names for the live-audio selector (cpal-only).
     #[cfg(feature = "cpal")]
     pub input_devices: Vec<String>,
@@ -354,6 +401,10 @@ pub struct AppState {
 impl AppState {
     pub fn new() -> Self {
         let make_tap = || Arc::new(RwLock::new(TapData::new()));
+        let rate_table = ALL_MODES
+            .iter()
+            .filter_map(|&m| crate::signal_path::measure_mode_rate(m).map(|r| (m.to_string(), r)))
+            .collect();
         Self {
             config: AppConfig::default(),
             stats: Arc::new(RwLock::new(TestStats::new())),
@@ -361,6 +412,7 @@ impl AppState {
             stop_tx: None,
             running: false,
             shared_config: None,
+            rate_table,
             #[cfg(feature = "cpal")]
             input_devices: enumerate_input_devices(),
             #[cfg(feature = "cpal")]

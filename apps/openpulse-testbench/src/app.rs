@@ -104,7 +104,9 @@ impl eframe::App for TestbenchApp {
                 AudioSource::HardwareLoop => {
                     ["TX (out)", "(silent)", "Captured (in)", "Demodulated"]
                 }
-                AudioSource::VirtualLoop | AudioSource::TestMatrix => [
+                AudioSource::VirtualLoop
+                | AudioSource::TestMatrix
+                | AudioSource::AdaptiveLadder => [
                     "TX (clean)",
                     "Channel impairment",
                     "Post-channel",
