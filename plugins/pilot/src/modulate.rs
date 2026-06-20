@@ -38,33 +38,65 @@ pub fn base_mode(mode: &str) -> String {
         .unwrap_or(upper)
 }
 
-/// Baud rate for a pilot-framed mode string, e.g. `"PILOT-QPSK500"` → 500.
-pub fn baud_for_mode(mode: &str) -> Result<f32, ModemError> {
-    match base_mode(mode).as_str() {
-        "PILOT-QPSK500" | "PILOT-8PSK500" | "PILOT-16QAM500" | "PILOT-32APSK500" => Ok(500.0),
-        other => Err(ModemError::Configuration(format!(
-            "pilot plugin: unsupported mode {other}"
-        ))),
+/// Parse a pilot mode into `(constellation, bits/symbol, baud)`, stripping any
+/// `-RRC` suffix. Mode form is `PILOT-<CONST><BAUD>`, e.g. `PILOT-8PSK1000` →
+/// (`"8PSK"`, 3, 1000). The constellation names contain digits (8PSK/16QAM/
+/// 32APSK), so the known prefix is matched first and the *remainder* is the baud.
+fn parse_pilot_mode(mode: &str) -> Result<(&'static str, usize, f32), ModemError> {
+    let base = base_mode(mode);
+    let body = base.strip_prefix("PILOT-").ok_or_else(|| {
+        ModemError::Configuration(format!("pilot plugin: unsupported mode {mode}"))
+    })?;
+    let (constellation, bits, rest) = if let Some(r) = body.strip_prefix("QPSK") {
+        ("QPSK", 2, r)
+    } else if let Some(r) = body.strip_prefix("8PSK") {
+        ("8PSK", 3, r)
+    } else if let Some(r) = body.strip_prefix("16QAM") {
+        ("16QAM", 4, r)
+    } else if let Some(r) = body.strip_prefix("32APSK") {
+        ("32APSK", 5, r)
+    } else {
+        return Err(ModemError::Configuration(format!(
+            "pilot plugin: unknown constellation in mode {mode}"
+        )));
+    };
+    let baud: f32 = rest
+        .parse()
+        .map_err(|_| ModemError::Configuration(format!("pilot plugin: bad baud in mode {mode}")))?;
+    if baud <= 0.0 {
+        return Err(ModemError::Configuration(format!(
+            "pilot plugin: non-positive baud in mode {mode}"
+        )));
     }
+    Ok((constellation, bits, baud))
 }
 
-/// Data-constellation order (bits/symbol) for a mode: QPSK=2, 8PSK=3, 16QAM=4.
+/// Baud rate for a pilot-framed mode string, e.g. `"PILOT-QPSK500"` → 500.
+pub fn baud_for_mode(mode: &str) -> Result<f32, ModemError> {
+    Ok(parse_pilot_mode(mode)?.2)
+}
+
+/// Data bits per symbol for a mode, including 32APSK=5 (frame-sizing).
+pub fn data_bits_per_symbol(mode: &str) -> Result<usize, ModemError> {
+    Ok(parse_pilot_mode(mode)?.1)
+}
+
+/// Data-constellation order (bits/symbol) for a Gray mode: QPSK=2, 8PSK=3,
+/// 16QAM=4. Errors for 32APSK, which uses the dedicated APSK codec.
 pub fn bits_per_sc_for_mode(mode: &str) -> Result<usize, ModemError> {
-    match base_mode(mode).as_str() {
-        "PILOT-QPSK500" => Ok(2),
-        "PILOT-8PSK500" => Ok(3),
-        "PILOT-16QAM500" => Ok(4),
-        other => Err(ModemError::Configuration(format!(
-            "pilot plugin: unsupported mode {other}"
+    match parse_pilot_mode(mode)? {
+        ("32APSK", _, _) => Err(ModemError::Configuration(format!(
+            "pilot plugin: {mode} uses the APSK codec, not a Gray bits/symbol"
         ))),
+        (_, bits, _) => Ok(bits),
     }
 }
 
 /// Build the symbol-level codec for a mode (32APSK or Gray QPSK/8PSK/16QAM).
 pub fn pilot_frame_for_mode(mode: &str) -> Result<PilotFrame, ModemError> {
-    match base_mode(mode).as_str() {
-        "PILOT-32APSK500" => Ok(PilotFrame::with_apsk32()),
-        other => Ok(PilotFrame::with_bits(bits_per_sc_for_mode(other)?)),
+    match parse_pilot_mode(mode)? {
+        ("32APSK", _, _) => Ok(PilotFrame::with_apsk32()),
+        (_, bits, _) => Ok(PilotFrame::with_bits(bits)),
     }
 }
 
@@ -168,4 +200,39 @@ pub fn pilot_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>
 /// Build the passband onset-correlation template (the upconverted preamble).
 pub fn preamble_template(config: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
     symbols_to_passband(PilotFrame::new().preamble(), config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_constellation_and_baud_across_variants() {
+        // Constellation names contain digits (8PSK/16QAM/32APSK); the baud is the
+        // trailing remainder, and -RRC must not affect parsing.
+        for (mode, bits, baud) in [
+            ("PILOT-QPSK500", 2usize, 500.0f32),
+            ("PILOT-8PSK500", 3, 500.0),
+            ("PILOT-16QAM500", 4, 500.0),
+            ("PILOT-32APSK500", 5, 500.0),
+            ("PILOT-QPSK1000", 2, 1000.0),
+            ("PILOT-8PSK1000", 3, 1000.0),
+            ("PILOT-16QAM1000-RRC", 4, 1000.0),
+            ("PILOT-32APSK1000-RRC", 5, 1000.0),
+        ] {
+            assert_eq!(data_bits_per_symbol(mode).unwrap(), bits, "{mode} bits");
+            assert_eq!(baud_for_mode(mode).unwrap(), baud, "{mode} baud");
+        }
+        // -RRC detection + base stripping.
+        assert!(is_rrc_mode("PILOT-8PSK1000-RRC"));
+        assert!(!is_rrc_mode("PILOT-8PSK1000"));
+        assert_eq!(base_mode("PILOT-8PSK1000-RRC"), "PILOT-8PSK1000");
+        // bits_per_sc_for_mode errors on 32APSK (dedicated codec), ok otherwise.
+        assert_eq!(bits_per_sc_for_mode("PILOT-16QAM1000").unwrap(), 4);
+        assert!(bits_per_sc_for_mode("PILOT-32APSK1000").is_err());
+        // Unknown constellation / bad baud are errors, not panics.
+        assert!(baud_for_mode("PILOT-FSK500").is_err());
+        assert!(baud_for_mode("PILOT-QPSKxyz").is_err());
+        assert!(baud_for_mode("BPSK250").is_err());
+    }
 }

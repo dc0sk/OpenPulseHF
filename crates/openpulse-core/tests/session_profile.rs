@@ -64,6 +64,30 @@ fn hpx_pilot_rrc_is_the_narrowband_sibling() {
 }
 
 #[test]
+fn hpx_pilot_fast_is_the_high_throughput_ladder() {
+    let base = SessionProfile::hpx_pilot();
+    let fast = SessionProfile::hpx_pilot_fast();
+    assert_eq!(
+        SessionProfile::by_name("hpx_pilot_fast"),
+        Some(fast.clone())
+    );
+    assert_eq!(fast.mode_for(SpeedLevel::Sl2), Some("PILOT-QPSK1000"));
+    assert_eq!(fast.mode_for(SpeedLevel::Sl3), Some("PILOT-8PSK1000"));
+    assert_eq!(fast.mode_for(SpeedLevel::Sl4), Some("PILOT-16QAM1000"));
+    assert_eq!(fast.mode_for(SpeedLevel::Sl5), Some("PILOT-32APSK1000"));
+    // Same per-symbol (Es/N0) thresholds and control as the 500-baud ladder.
+    assert_eq!(fast.defined_levels(), base.defined_levels());
+    assert_eq!(fast.initial_level, base.initial_level);
+    for sl in fast.defined_levels() {
+        assert_eq!(
+            fast.snr_floor_for_level(sl),
+            base.snr_floor_for_level(sl),
+            "floor {sl:?}"
+        );
+    }
+}
+
+#[test]
 fn hpx_pilot_by_name_and_thresholds() {
     assert_eq!(
         SessionProfile::by_name("hpx_pilot"),

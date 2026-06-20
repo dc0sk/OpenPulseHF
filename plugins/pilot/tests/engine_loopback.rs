@@ -94,3 +94,30 @@ fn engine_loopback_rrc_through_carrier_offset() {
         }
     }
 }
+
+const BAUD1000_MODES: [&str; 8] = [
+    "PILOT-QPSK1000",
+    "PILOT-8PSK1000",
+    "PILOT-16QAM1000",
+    "PILOT-32APSK1000",
+    "PILOT-QPSK1000-RRC",
+    "PILOT-8PSK1000-RRC",
+    "PILOT-16QAM1000-RRC",
+    "PILOT-32APSK1000-RRC",
+];
+
+#[test]
+fn engine_loopback_baud1000() {
+    // 1000-baud rungs: 8 samples/symbol at 8 kHz. Clean + a carrier offset through
+    // the engine AFC chain, both rectangular and RRC.
+    for mode in BAUD1000_MODES {
+        assert!(
+            decodes(mode, 0.0),
+            "{mode} must decode through the engine (clean)"
+        );
+        assert!(
+            decodes(mode, 25.0),
+            "{mode} must decode through +25 Hz (engine AFC)"
+        );
+    }
+}
