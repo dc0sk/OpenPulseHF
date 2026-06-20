@@ -102,3 +102,26 @@ fn none_path_unchanged() {
     let payload = b"no-fec timeout path still works";
     assert!(roundtrip("BPSK250", FecMode::None, 20.0, payload));
 }
+
+#[test]
+fn concatenated_timeout() {
+    // Concatenated (Conv½ + RS, hard) now works through the scanning timeout path.
+    let payload = b"fec timeout receive: concatenated over BPSK250";
+    assert!(roundtrip("BPSK250", FecMode::Concatenated, 15.0, payload));
+}
+
+#[test]
+fn rs_strong_timeout() {
+    let payload = b"fec timeout receive: rs-strong over BPSK250";
+    assert!(roundtrip("BPSK250", FecMode::RsStrong, 15.0, payload));
+}
+
+#[test]
+fn turbo_timeout_does_not_decode() {
+    // Turbo is a fixed-block code (QPP block = llrs.len()/3), so the scanning
+    // receive can't feed it the exact LLR count — it's single-shot only. (The
+    // prior bug was wasting a soft demodulation on it before failing; it is now
+    // excluded from the soft set and rejected by the dispatch.)
+    let payload = b"turbo single-shot only";
+    assert!(!roundtrip("BPSK250", FecMode::Turbo, 20.0, payload));
+}

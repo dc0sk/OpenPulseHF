@@ -1443,9 +1443,14 @@ impl ModemEngine {
             ..ModulationConfig::default()
         };
 
+        // Turbo is a soft code but a *fixed-block* one (the QPP interleaver block
+        // size is `llrs.len()/3`), so the scanning slice's trailing-noise LLRs make
+        // the block size wrong — it can't decode through this path and is rejected
+        // below. It is deliberately excluded here so it does not pay for a soft
+        // demodulation it cannot use.
         let soft = matches!(
             fec,
-            FecMode::SoftConcatenated | FecMode::Ldpc | FecMode::LdpcHighRate | FecMode::Turbo
+            FecMode::SoftConcatenated | FecMode::Ldpc | FecMode::LdpcHighRate
         );
 
         // Soft codecs consume LLRs; hard codecs consume demodulated wire bytes.
@@ -1508,6 +1513,25 @@ impl ModemEngine {
                 let info = decode_ldpc_llrs(&LdpcCodec::high_rate(), &llrs)?;
                 self.route_wire_stage(PipelineStage::DemodulateDecode, WirePayload { bytes: info })?
             }
+            FecMode::Concatenated => {
+                let wire =
+                    self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire.unwrap())?;
+                let conv = ConvCodec::new().decode(&wire.bytes)?;
+                WirePayload {
+                    bytes: FecCodec::new().decode(&conv)?,
+                }
+            }
+            FecMode::RsStrong => {
+                let wire =
+                    self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire.unwrap())?;
+                WirePayload {
+                    bytes: FecCodec::strong().decode(&wire.bytes)?,
+                }
+            }
+            // ShortRs (byte-exact, no length prefix) and Turbo (fixed QPP block size
+            // = llrs.len()/3) both need the exact frame length, which the scanning
+            // receive can't guarantee (trailing-noise samples inflate the count), so
+            // they stay single-shot.
             other => {
                 return Err(ModemError::Demodulation(format!(
                     "FEC mode {other:?} is not supported by the timeout receive; \
