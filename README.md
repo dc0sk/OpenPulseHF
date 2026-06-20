@@ -140,6 +140,10 @@ instead of a decision-directed Costas loop — see the
 | _QPSK9600-RRC_ | `qpsk` | 9&nbsp;600 | 2 | 19&nbsp;200 | ~13&nbsp;000 | Single-carrier + RRC | **Deferred (post-1.0)** — VHF/UHF, needs ≥38.4 kHz Fs |
 | _8PSK9600-RRC_ | `psk8` | 9&nbsp;600 | 3 | 28&nbsp;800 | ~13&nbsp;000 | Single-carrier + RRC | **Deferred (post-1.0)** — VHF/UHF, needs ≥38.4 kHz Fs |
 
+Each `PILOT-*` mode above also has a `-RRC` variant (~half the occupied bandwidth) and
+`1000` / `2000-RRC` baud rungs — e.g. `PILOT-16QAM1000-RRC` (16QAM, 1000 baud, RRC) — all
+selectable by name and surfaced by the `hpx_pilot{,_rrc,_fast,_fast_rrc}` profiles.
+
 The mode/FEC selection ladder and which combinations are usable on HF is documented in [docs/mode-fec-ladder.md](docs/mode-fec-ladder.md).
 
 ### MAC / channel access types
@@ -207,20 +211,26 @@ All GPU functions return `Option<T>` — `None` triggers automatic CPU fallback.
 
 ### Adaptive rate profiles
 
-Seven `SessionProfile` mappings from speed levels to modes, driven by ACK/NACK feedback
+Eleven `SessionProfile` mappings from speed levels to modes, driven by ACK/NACK feedback
 and per-level SNR floor/ceiling gates:
 
 | Profile | SL range | Initial | Top mode | Target link |
 |---|---|---|---|---|
-| `hpx_hf` | SL2–SL8 | SL2 | SCFDMA52-8PSK | HF ionospheric |
-| `hpx_narrowband` | SL8–SL11 | SL8 | 8PSK2000-RRC | Narrowband HF / VHF |
-| `hpx_wideband` | SL8–SL11 | SL8 | 8PSK1000 | Wideband HF |
-| `hpx_ofdm_hf` | SL5–SL6 | SL5 | OFDM52 | HF OFDM ladder |
-| `hpx_narrowband_hd` | SL8–SL9 | SL8 | 8PSK9600-RRC | VHF/UHF narrowband |
-| `hpx_wideband_hd` | SL12–SL15 | SL12 | 64QAM2000-RRC | VHF/UHF FM / satellite |
+| `hpx500` | SL2–SL6 | SL2 | QPSK500 | Robust narrowband (≤600 Hz) |
+| `hpx_hf` | SL2–SL11 | SL2 | SCFDMA52-64QAM | Primary HF (full ≤2700 Hz span) |
+| `hpx_ofdm_hf` | SL5–SL10 | SL5 | OFDM52-64QAM | HF OFDM higher-order ladder |
 | `hpx_pilot` | SL2–SL5 | SL2 | PILOT-32APSK500 | HF pilot-aided (cycle-slip-immune, SRO-robust) |
+| `hpx_pilot_rrc` | SL2–SL5 | SL2 | PILOT-32APSK500-RRC | Pilot, narrowband (RRC, ~half band) |
+| `hpx_pilot_fast` | SL2–SL5 | SL2 | PILOT-32APSK1000 | Pilot, high-throughput (1000 baud) |
+| `hpx_pilot_fast_rrc` | SL2–SL5 | SL2 | PILOT-32APSK1000-RRC | Pilot, fast + narrowband |
+| `hpx_wideband` | SL8–SL11 | SL8 | 8PSK1000 | Wideband HF |
+| `hpx_narrowband` | SL8–SL11 | SL8 | 8PSK2000-RRC | Narrowband HF / VHF |
+| `hpx_narrowband_hd` | SL8–SL9 | SL8 | 8PSK9600-RRC | VHF/UHF narrowband |
+| `hpx_wideband_hd` | SL9–SL15 | SL12 | 64QAM2000-RRC | VHF/UHF FM / satellite |
 
-`hpx_wideband_hd` requires SNR ≥ 16 dB and is not suitable for HF ionospheric paths.
+`hpx_wideband_hd` requires SNR ≥ 16 dB and is not suitable for HF ionospheric paths. The
+four `hpx_pilot*` profiles share one carrier architecture and per-symbol SNR floors,
+trading bandwidth (rect vs `-RRC`) against throughput (500 vs 1000 baud).
 
 ### Protocol and interfaces
 

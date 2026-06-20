@@ -112,13 +112,21 @@ dedicated pilot/known-symbol carrier-recovery stage.
 - **Sample-rate-offset robust** without a Gardner timing loop: integrate-and-dump
   plus pilot tracking tolerate the dual-clock soundcard offset that defeats the
   OFDM/SC-FDMA modes.
-- Cost is the pilot overhead (one known symbol per 16) and, today, **hard-decision
-  output only** — the pilot plugin has no `demodulate_soft`, so the family pairs
-  with the hard FEC codes (`Rs` / `RsInterleaved` / `RsStrong`), not the soft codes.
+- Cost is the pilot overhead (one known symbol per 16). The plugin emits per-bit
+  max-log-MAP LLRs (`demodulate_soft`) from the pilot-normalised symbols, so the
+  family is soft-capable: the HARQ policy auto-selects high-rate LDPC on its dense
+  rungs, in addition to the hard codes (`Rs` / `RsInterleaved` / `RsStrong`).
 
-**Modes and ladder.** `PILOT-QPSK500` → `PILOT-8PSK500` → `PILOT-16QAM500` →
-`PILOT-32APSK500` (all 500 baud, ~550 Hz). The `hpx_pilot` profile maps these to
-SL2–SL5 for an adaptive pilot-framed HF ladder. See the
+**Modes and ladder.** The base ladder is `PILOT-QPSK500` → `PILOT-8PSK500` →
+`PILOT-16QAM500` → `PILOT-32APSK500` (500 baud, ~550 Hz), which the `hpx_pilot`
+profile maps to SL2–SL5. Each `PILOT-*` mode also has a `-RRC` variant (root-
+raised-cosine, ~half the occupied bandwidth) and `1000` / `2000-RRC` baud rungs,
+parsed generically from the mode string (`PILOT-<CONST><BAUD>[-RRC]`). Four
+adaptive profiles span the bandwidth × throughput grid on the same carrier:
+`hpx_pilot` (500 rect), `hpx_pilot_rrc` (500 narrowband), `hpx_pilot_fast`
+(1000 throughput), `hpx_pilot_fast_rrc` (1000 throughput + narrowband) — all with
+the same per-symbol Es/N0 floors. The pilot family is also soft-capable (per-bit
+LLRs), so the dense rungs auto-select high-rate LDPC. See the
 [mode/FEC guide](../mode-fec-ladder.md).
 
 ---

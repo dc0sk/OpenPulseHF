@@ -47,14 +47,26 @@ a cleaner spectrum and better timing recovery; the plain (Hann/rectangular) 2000
 modes close the eye at 4 samples/symbol and are superseded by their `-RRC` siblings.
 
 **Pilot-framed single-carrier (`PILOT-*`).** A third single-carrier family
-(`PILOT-QPSK500` → `PILOT-8PSK500` → `PILOT-16QAM500` → `PILOT-32APSK500`, all
-500 baud, ~550 Hz) carries known in-band pilot symbols at a fixed cadence and
-recovers the carrier from them with a data-aided loop, rather than a
-decision-directed Costas loop. That makes it immune to the ±90°/±45° cycle slips
-that limit dense PSK/QAM through carrier offset, and robust to soundcard
+(`PILOT-{QPSK,8PSK,16QAM,32APSK}<baud>`) carries known in-band pilot symbols at a
+fixed cadence and recovers the carrier from them with a data-aided loop, rather
+than a decision-directed Costas loop. That makes it immune to the ±90°/±45° cycle
+slips that limit dense PSK/QAM through carrier offset, and robust to soundcard
 sample-rate offset without a Gardner timing loop — at the cost of the pilot
-overhead. `PILOT-32APSK500` uses DVB-S2 32APSK (amplitude-bearing) geometry, with
-the demapper normalising by the pilot-referenced amplitude. See the
+overhead. `PILOT-32APSK*` uses DVB-S2 32APSK (amplitude-bearing) geometry, with
+the demapper normalising by the pilot-referenced amplitude.
+
+The family spans two pulse shapes and three baud rates:
+
+- **Pulse:** the default **rectangular** pulse (integrate-and-dump; the most
+  SRO-tolerant, since it averages over the whole symbol) and the **`-RRC`**
+  variants (root-raised-cosine, ~half the occupied bandwidth — measured
+  out-of-band power 9.9 % → 0.0 % — but it samples at a point, so slightly less
+  SRO-tolerant).
+- **Baud:** `500` (~675 Hz RRC), `1000` (2× throughput, 8 samples/symbol), and
+  `2000-RRC` (RRC-only — rectangular 2000 baud would alias past Nyquist; ~2700 Hz,
+  HF channel edge).
+
+So e.g. `PILOT-16QAM1000-RRC` is 16QAM, 1000 baud, RRC-shaped. See the
 [pilot-framed waveform](dev/hpx-waveform-design.md#pilot-framed-waveform) design note.
 
 ---
@@ -79,8 +91,8 @@ Two rules of thumb:
   OpenPulseHF data plugins provide `demodulate_soft` (BPSK/QPSK/8PSK/64QAM and the
   SC-FDMA/OFDM families), so `SoftConcatenated` / `Ldpc` / `LdpcHighRate` / `Turbo`
   get genuine soft-decision gain on them. The pilot-framed `PILOT-*` family is
-  currently hard-decision, so it pairs with the hard codes (`Rs` / `RsInterleaved`
-  / `RsStrong`) until it grows a soft demodulator.
+  also soft-capable (per-bit max-log-MAP LLRs from the pilot-normalised symbols),
+  so the HARQ policy auto-selects high-rate LDPC for its dense rungs too.
 - **Interleaving matters on HF.** Watterson/Gilbert-Elliott channels produce
   *bursts*; `RsInterleaved` spreads a burst across many RS codewords so it stays
   within per-block capacity, where bare `Rs` would fail on the same raw rate.
@@ -128,9 +140,17 @@ ceiling *and* a positive ACK arrives.
 | `hpx500` | Narrowband | BPSK31 → BPSK63 → BPSK250 → QPSK250 → QPSK500 | Robust, ≤600 Hz HF |
 | **`hpx_hf`** | **HF (≤2700 Hz)** | **BPSK31/63/250 → QPSK250/500 → 8PSK500 → SCFDMA52-{8PSK,16QAM,32QAM,64QAM}** | **Primary HF profile — the full HF-legal span** |
 | **`hpx_ofdm_hf`** | **HF multicarrier** | **OFDM16 → OFDM52 → OFDM52-{8PSK,16QAM,32QAM,64QAM} (SL5–10)** | **High-throughput / high-reliability HF — per-SC equalization on fades (§7)** |
-| `hpx_pilot` | HF pilot-aided | PILOT-QPSK500 → PILOT-8PSK500 → PILOT-16QAM500 → PILOT-32APSK500 (SL2–5; SNR floors 6/12/17/23 dB) | Cycle-slip-immune, sample-rate-offset-robust single-carrier ladder; pairs with hard-decision FEC (no pilot soft demod yet) |
+| `hpx_pilot` | HF pilot-aided | PILOT-QPSK500 → PILOT-8PSK500 → PILOT-16QAM500 → PILOT-32APSK500 (SL2–5; SNR floors 6/12/17/23 dB) | Cycle-slip-immune, sample-rate-offset-robust single-carrier ladder; soft-capable (auto-selects high-rate LDPC on the dense rungs) |
+| `hpx_pilot_rrc` | HF pilot, narrowband | same ladder on the `-RRC` variants | ~half the bandwidth (RRC); same per-symbol floors. Prefer `hpx_pilot` when SRO-heavy |
+| `hpx_pilot_fast` | HF pilot, high-throughput | PILOT-{QPSK,8PSK,16QAM,32APSK}**1000** (SL2–5) | 2× bits/s at the same per-symbol floors; ~2× bandwidth |
+| `hpx_pilot_fast_rrc` | HF pilot, fast + narrowband | the 1000-baud ladder on `-RRC` | 2× throughput **and** ~half-band (~1350 Hz) |
 | `hpx_wideband_hd` | Wideband HD | SCFDMA26-{8PSK,16QAM,32QAM} (SL9–11 fallback) → SCFDMA52-{16QAM,32QAM,64QAM} → 64QAM2000-RRC (SL12–15) | >2700 Hz links; SL9–11 are the graceful-degradation rungs |
 | `hpx_wideband` / `hpx_narrowband` / `hpx_narrowband_hd` | Wide / post-1.0 | QPSK/8PSK 1000, 2000-RRC, 9600-RRC | FM / VHF / UHF or wider-than-HF; deferred (§8) |
+
+The four `hpx_pilot*` profiles share one carrier architecture and the same
+per-symbol (Es/N0) SNR floors; they trade **bandwidth** (rect vs `-RRC`) against
+**throughput** (500 vs 1000 baud). `PILOT-*2000-RRC` rungs exist as selectable
+modes but are not yet in an adaptive profile.
 
 For dense multicarrier throughput on HF, **`hpx_ofdm_hf` (OFDM HOM) is preferred over the
 SCFDMA52 rungs in `hpx_hf`** — OFDM handles frequency-selective fading better and the
