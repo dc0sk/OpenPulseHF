@@ -306,92 +306,209 @@ fn make_payload(frame: usize, attempt: u32, size: usize) -> Vec<u8> {
         .collect()
 }
 
-/// Run one two-station link and return the effective-throughput result.
-pub fn run_link(params: &LinkParams) -> LinkResult {
-    let profile =
-        SessionProfile::by_name(&params.profile_name).unwrap_or_else(SessionProfile::hpx_hf);
+/// Signals and outcome of one simulated frame (the last attempt's waveforms), for live
+/// visualization. Sample vectors are at 8 kHz.
+#[derive(Debug, Clone)]
+pub struct FrameStep {
+    pub frame: usize,
+    pub level: u8,
+    pub mode: String,
+    pub attempts: u32,
+    pub delivered: bool,
+    pub est_snr_db: f32,
+    /// ACK type Station B decided to send.
+    pub ack_sent: AckType,
+    /// ACK type Station A actually decoded (may differ / be Nack if the ACK was lost).
+    pub ack_received: AckType,
+    /// Station A's transmitted data waveform (pre-channel).
+    pub forward_tx: Vec<f32>,
+    /// Data waveform as received at Station B (post forward channel).
+    pub forward_rx: Vec<f32>,
+    /// Station B's transmitted ACK waveform (pre-channel).
+    pub ack_tx: Vec<f32>,
+    /// ACK waveform as received at Station A (post reverse channel).
+    pub ack_rx: Vec<f32>,
+    /// Running effective two-way goodput through this frame (bps).
+    pub effective_bps_so_far: f64,
+    /// This frame's on-air time (forward + ACK + turnaround over all its attempts), seconds.
+    pub frame_air_s: f64,
+    /// Payload bytes delivered by this frame (0 if it failed) — for windowed throughput.
+    pub delivered_bytes: usize,
+    /// Speed level the link will use for the next frame.
+    pub next_level: u8,
+}
 
-    let mut fwd = ChannelSimHarness::new();
-    register_all(&mut fwd.tx_engine);
-    register_all(&mut fwd.rx_engine);
-    let mut rev = ChannelSimHarness::new();
-    register_all(&mut rev.tx_engine);
-    register_all(&mut rev.rx_engine);
+/// Step-able two-station link simulation. Drive it with [`step`](Self::step); each call
+/// runs one frame (all attempts) and returns the last attempt's waveforms plus the outcome.
+/// [`set_conditions`](Self::set_conditions) swaps the channels live (for an interactive SNR
+/// control). [`run_link`] runs one to completion and returns the aggregate.
+pub struct LinkSim {
+    params: LinkParams,
+    profile: SessionProfile,
+    levels: Vec<SpeedLevel>,
+    idx: usize,
+    consecutive_nack: u32,
+    nack_threshold: u32,
+    fwd: ChannelSimHarness,
+    rev: ChannelSimHarness,
+    fwd_ch: Box<dyn openpulse_channel::ChannelModel>,
+    rev_ch: Box<dyn openpulse_channel::ChannelModel>,
+    fwd_label: String,
+    rev_label: String,
+    frame: usize,
+    total_air_s: f64,
+    bytes_delivered: usize,
+    frames_delivered: usize,
+    level_sum: u64,
+    level_count: u64,
+    records: Vec<FrameRecord>,
+}
 
-    let mut fwd_ch = build_channel(&params.forward.to_config(params.seed), Some(params.seed))
-        .expect("forward channel");
-    let mut rev_ch = build_channel(
-        &params.reverse.to_config(params.seed ^ 0x5555),
-        Some(params.seed ^ 0x5555),
-    )
-    .expect("reverse channel");
+impl LinkSim {
+    /// Build a fresh simulation from `params`.
+    pub fn new(params: &LinkParams) -> Self {
+        let profile =
+            SessionProfile::by_name(&params.profile_name).unwrap_or_else(SessionProfile::hpx_hf);
 
-    // Drive the level over the profile's defined ladder (the global RateAdapter clamps to
-    // SL1–SL11, which can leave a profile's sub-range; we bound it to the profile here while
-    // mirroring its AckUp / AckDown / NACK-threshold policy).
-    let levels = profile.defined_levels();
-    if levels.is_empty() {
-        return LinkResult::empty(params);
+        let mut fwd = ChannelSimHarness::new();
+        register_all(&mut fwd.tx_engine);
+        register_all(&mut fwd.rx_engine);
+        let mut rev = ChannelSimHarness::new();
+        register_all(&mut rev.tx_engine);
+        register_all(&mut rev.rx_engine);
+
+        let fwd_ch = build_channel(&params.forward.to_config(params.seed), Some(params.seed))
+            .expect("forward channel");
+        let rev_ch = build_channel(
+            &params.reverse.to_config(params.seed ^ 0x5555),
+            Some(params.seed ^ 0x5555),
+        )
+        .expect("reverse channel");
+
+        // Drive the level over the profile's defined ladder (the global RateAdapter clamps to
+        // SL1–SL11, which can leave a profile's sub-range; bound to the profile here while
+        // mirroring its AckUp / AckDown / NACK-threshold policy).
+        let levels = profile.defined_levels();
+        let idx = levels
+            .iter()
+            .position(|&l| l == profile.initial_level)
+            .unwrap_or(0);
+        let nack_threshold = profile.nack_threshold.max(1) as u32;
+
+        Self {
+            fwd_label: params.forward.label(),
+            rev_label: params.reverse.label(),
+            params: params.clone(),
+            profile,
+            levels,
+            idx,
+            consecutive_nack: 0,
+            nack_threshold,
+            fwd,
+            rev,
+            fwd_ch,
+            rev_ch,
+            frame: 0,
+            total_air_s: 0.0,
+            bytes_delivered: 0,
+            frames_delivered: 0,
+            level_sum: 0,
+            level_count: 0,
+            records: Vec::with_capacity(params.total_frames),
+        }
     }
-    let mut idx = levels
-        .iter()
-        .position(|&l| l == profile.initial_level)
-        .unwrap_or(0);
-    let nack_threshold = profile.nack_threshold.max(1) as u32;
-    let mut consecutive_nack = 0u32;
 
-    let mut total_air_s = 0.0;
-    let mut bytes_delivered = 0usize;
-    let mut frames_delivered = 0usize;
-    let mut level_sum = 0u64;
-    let mut level_count = 0u64;
-    let mut records = Vec::with_capacity(params.total_frames);
+    /// Number of frames processed so far.
+    pub fn frames_done(&self) -> usize {
+        self.frame
+    }
 
-    for frame in 0..params.total_frames {
+    /// Total frames this run will attempt.
+    pub fn total_frames(&self) -> usize {
+        self.params.total_frames
+    }
+
+    /// Speed level the next frame will use.
+    pub fn current_level(&self) -> u8 {
+        self.levels.get(self.idx).map(|&l| l as u8).unwrap_or(0)
+    }
+
+    /// Swap the forward / reverse channel conditions live (e.g. from an SNR slider).
+    pub fn set_conditions(&mut self, forward: ChannelSpec, reverse: ChannelSpec) {
+        if let Ok(c) = build_channel(&forward.to_config(self.params.seed), Some(self.params.seed)) {
+            self.fwd_ch = c;
+            self.fwd_label = forward.label();
+            self.params.forward = forward;
+        }
+        if let Ok(c) = build_channel(
+            &reverse.to_config(self.params.seed ^ 0x5555),
+            Some(self.params.seed ^ 0x5555),
+        ) {
+            self.rev_ch = c;
+            self.rev_label = reverse.label();
+            self.params.reverse = reverse;
+        }
+    }
+
+    /// Run one frame (all attempts). Returns `None` once `total_frames` is reached.
+    pub fn step(&mut self) -> Option<FrameStep> {
+        if self.levels.is_empty() || self.frame >= self.params.total_frames {
+            return None;
+        }
+        let frame = self.frame;
         let mut attempts = 0u32;
         let mut delivered = false;
         let mut fwd_air = 0.0;
         let mut ack_air = 0.0;
-        let mut last_level = levels[idx];
+        let mut last_level = self.levels[self.idx];
         let mut last_snr = 0.0_f32;
         let mut last_mode = String::new();
+        let mut ack_sent = AckType::Nack;
+        let mut ack_received = AckType::Nack;
+        let (mut forward_tx, mut forward_rx, mut ack_tx, mut ack_rx) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
 
-        while attempts < params.max_attempts {
+        while attempts < self.params.max_attempts {
             attempts += 1;
-            let level = levels[idx];
+            let level = self.levels[self.idx];
             last_level = level;
-            level_sum += level as u64;
-            level_count += 1;
-            let mode = profile
+            self.level_sum += level as u64;
+            self.level_count += 1;
+            let mode = self
+                .profile
                 .mode_for(level)
                 .expect("defined_levels yields mapped modes")
                 .to_string();
             last_mode = mode.clone();
-            let fec = fec_for(&mode, params.fec);
-            let payload = make_payload(frame, attempts, params.payload_bytes_per_frame);
+            let fec = fec_for(&mode, self.params.fec);
+            let payload = make_payload(frame, attempts, self.params.payload_bytes_per_frame);
 
             // Forward A→B.
-            if engine_transmit(&mut fwd.tx_engine, &payload, &mode, fec).is_err() {
-                // Treat a TX build error as a lost frame attempt.
+            if engine_transmit(&mut self.fwd.tx_engine, &payload, &mode, fec).is_err() {
                 continue;
             }
-            let (tx_s, rx_s) = fwd.route_tapped(fwd_ch.as_mut());
+            let (tx_s, rx_s) = self.fwd.route_tapped(self.fwd_ch.as_mut());
             fwd_air += tx_s.len() as f64 / SAMPLE_RATE;
             let snr = estimate_snr_db(&tx_s, &rx_s);
             last_snr = snr;
-            let decode_ok = engine_receive(&mut fwd.rx_engine, &mode, fec)
+            let decode_ok = engine_receive(&mut self.fwd.rx_engine, &mode, fec)
                 .map(|d| d == payload)
                 .unwrap_or(false);
+            forward_tx = tx_s;
+            forward_rx = rx_s;
 
             // B→A ACK (real FSK4 frame through the reverse channel).
-            let ack_type = decide_ack(decode_ok, snr, &profile, level);
-            let ack_bytes = AckFrame::new(ack_type, SESSION_ID).encode();
-            let received_ack =
-                if engine_transmit(&mut rev.tx_engine, &ack_bytes, ACK_MODE, FecMode::None).is_ok()
+            ack_sent = decide_ack(decode_ok, snr, &self.profile, level);
+            let ack_bytes = AckFrame::new(ack_sent, SESSION_ID).encode();
+            ack_received =
+                if engine_transmit(&mut self.rev.tx_engine, &ack_bytes, ACK_MODE, FecMode::None)
+                    .is_ok()
                 {
-                    let (ack_s, _) = rev.route_tapped(rev_ch.as_mut());
+                    let (ack_s, ack_o) = self.rev.route_tapped(self.rev_ch.as_mut());
                     ack_air += ack_s.len() as f64 / SAMPLE_RATE;
-                    engine_receive(&mut rev.rx_engine, ACK_MODE, FecMode::None)
+                    ack_tx = ack_s;
+                    ack_rx = ack_o;
+                    engine_receive(&mut self.rev.rx_engine, ACK_MODE, FecMode::None)
                         .ok()
                         .filter(|b| b.len() >= 5)
                         .and_then(|b| {
@@ -400,30 +517,28 @@ pub fn run_link(params: &LinkParams) -> LinkResult {
                             AckFrame::decode(&arr).ok()
                         })
                         .map(|f| f.ack_type)
-                        // A heard nothing decodable → implicit NACK (retransmit).
                         .unwrap_or(AckType::Nack)
                 } else {
                     AckType::Nack
                 };
 
-            // Apply the ACK to the profile-bounded level index (mirrors RateAdapter policy).
-            match received_ack {
+            match ack_received {
                 AckType::AckUp => {
-                    consecutive_nack = 0;
-                    if idx + 1 < levels.len() {
-                        idx += 1;
+                    self.consecutive_nack = 0;
+                    if self.idx + 1 < self.levels.len() {
+                        self.idx += 1;
                     }
                 }
                 AckType::AckDown => {
-                    consecutive_nack = 0;
-                    idx = idx.saturating_sub(1);
+                    self.consecutive_nack = 0;
+                    self.idx = self.idx.saturating_sub(1);
                 }
-                AckType::AckOk => consecutive_nack = 0,
+                AckType::AckOk => self.consecutive_nack = 0,
                 AckType::Nack => {
-                    consecutive_nack += 1;
-                    if consecutive_nack >= nack_threshold {
-                        consecutive_nack = 0;
-                        idx = idx.saturating_sub(1);
+                    self.consecutive_nack += 1;
+                    if self.consecutive_nack >= self.nack_threshold {
+                        self.consecutive_nack = 0;
+                        self.idx = self.idx.saturating_sub(1);
                     }
                 }
                 _ => {}
@@ -436,53 +551,95 @@ pub fn run_link(params: &LinkParams) -> LinkResult {
         }
 
         if delivered {
-            frames_delivered += 1;
-            bytes_delivered += params.payload_bytes_per_frame;
+            self.frames_delivered += 1;
+            self.bytes_delivered += self.params.payload_bytes_per_frame;
         }
-        // On-air time: every attempt costs a forward slot + ACK slot + two turnarounds.
-        total_air_s += fwd_air + ack_air + 2.0 * params.turnaround_s * attempts as f64;
+        let frame_air_s = fwd_air + ack_air + 2.0 * self.params.turnaround_s * attempts as f64;
+        self.total_air_s += frame_air_s;
 
-        records.push(FrameRecord {
+        self.records.push(FrameRecord {
             frame,
             level: last_level as u8,
-            mode: last_mode,
+            mode: last_mode.clone(),
             attempts,
             delivered,
             forward_air_s: fwd_air,
             ack_air_s: ack_air,
             est_snr_db: last_snr,
         });
-    }
+        self.frame += 1;
 
-    let effective_bps = if total_air_s > 0.0 {
-        bytes_delivered as f64 * 8.0 / total_air_s
-    } else {
-        0.0
-    };
-    let avg_level = if level_count > 0 {
-        level_sum as f64 / level_count as f64
-    } else {
-        0.0
-    };
-
-    LinkResult {
-        profile: params.profile_name.clone(),
-        forward: params.forward.label(),
-        reverse: params.reverse.label(),
-        frames_attempted: params.total_frames,
-        frames_delivered,
-        bytes_delivered,
-        total_air_s,
-        effective_bps,
-        delivery_ratio: if params.total_frames > 0 {
-            frames_delivered as f64 / params.total_frames as f64
+        let effective_bps_so_far = if self.total_air_s > 0.0 {
+            self.bytes_delivered as f64 * 8.0 / self.total_air_s
         } else {
             0.0
-        },
-        avg_level,
-        final_level: levels[idx] as u8,
-        records,
+        };
+
+        Some(FrameStep {
+            frame,
+            level: last_level as u8,
+            mode: last_mode,
+            attempts,
+            delivered,
+            est_snr_db: last_snr,
+            ack_sent,
+            ack_received,
+            forward_tx,
+            forward_rx,
+            ack_tx,
+            ack_rx,
+            effective_bps_so_far,
+            frame_air_s,
+            delivered_bytes: if delivered {
+                self.params.payload_bytes_per_frame
+            } else {
+                0
+            },
+            next_level: self.current_level(),
+        })
     }
+
+    /// Aggregate result for the frames processed so far.
+    pub fn result(&self) -> LinkResult {
+        if self.levels.is_empty() {
+            return LinkResult::empty(&self.params);
+        }
+        let effective_bps = if self.total_air_s > 0.0 {
+            self.bytes_delivered as f64 * 8.0 / self.total_air_s
+        } else {
+            0.0
+        };
+        let avg_level = if self.level_count > 0 {
+            self.level_sum as f64 / self.level_count as f64
+        } else {
+            0.0
+        };
+        LinkResult {
+            profile: self.params.profile_name.clone(),
+            forward: self.fwd_label.clone(),
+            reverse: self.rev_label.clone(),
+            frames_attempted: self.params.total_frames,
+            frames_delivered: self.frames_delivered,
+            bytes_delivered: self.bytes_delivered,
+            total_air_s: self.total_air_s,
+            effective_bps,
+            delivery_ratio: if self.params.total_frames > 0 {
+                self.frames_delivered as f64 / self.params.total_frames as f64
+            } else {
+                0.0
+            },
+            avg_level,
+            final_level: self.current_level(),
+            records: self.records.clone(),
+        }
+    }
+}
+
+/// Run one two-station link to completion and return the effective-throughput result.
+pub fn run_link(params: &LinkParams) -> LinkResult {
+    let mut sim = LinkSim::new(params);
+    while sim.step().is_some() {}
+    sim.result()
 }
 
 #[cfg(test)]

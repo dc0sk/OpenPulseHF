@@ -38,8 +38,21 @@ cargo run -p openpulse-linksim -- --profile hpx_hf --channel watterson-moderate 
 Channels: `clean`, `awgn`, `watterson-good`, `watterson-moderate`, `watterson-poor`,
 `gilbert-elliott`. FEC: `none`, `rs`, `rs-strong`, `soft`.
 
+## GUI (live visualizer)
+
+```bash
+cargo run -p openpulse-linksim --features gui --bin openpulse-linksim-gui
+```
+
+Side-by-side **Station A | Channel | Station B**: A's clean data TX (left), the noisy
+on-air signal (middle), and B's FSK4 ACK response (right) — each with a live spectrum +
+waterfall. The toolbar selects the profile / channel / FEC and an **SNR slider that adjusts
+the channel live**, so you can watch the ladder adapt and the bottom plot track the
+effective two-way transfer rate over time. Runs continuously on a background thread over the
+same `LinkSim` engine.
+
 ## Library
 
-`run_link(&LinkParams) -> LinkResult` is the headless core (no audio hardware). See
-`LinkParams` / `LinkResult` / `ChannelSpec`. A live egui visualization is planned on top of
-this same engine.
+`LinkSim` is a step-able simulation (`new` / `step` → `FrameStep` / `set_conditions` /
+`result`); `run_link(&LinkParams) -> LinkResult` runs one to completion. Headless, no audio
+hardware. See `LinkParams` / `LinkResult` / `FrameStep` / `ChannelSpec`.

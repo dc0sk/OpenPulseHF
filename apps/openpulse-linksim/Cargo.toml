@@ -15,6 +15,14 @@ path = "src/lib.rs"
 name = "openpulse-linksim"
 path = "src/main.rs"
 
+[[bin]]
+name = "openpulse-linksim-gui"
+path = "src/gui.rs"
+required-features = ["gui"]
+
+[features]
+gui = ["dep:eframe", "dep:egui", "dep:egui_plot"]
+
 [dependencies]
 openpulse-core    = { workspace = true }
 openpulse-modem   = { workspace = true }
@@ -30,3 +38,6 @@ pilot-plugin      = { workspace = true }
 clap              = { workspace = true }
 serde             = { workspace = true }
 serde_json        = { workspace = true }
+eframe            = { workspace = true, optional = true }
+egui              = { workspace = true, optional = true }
+egui_plot         = { workspace = true, optional = true }

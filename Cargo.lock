@@ -3906,6 +3906,9 @@ version = "0.1.0"
 dependencies = [
  "bpsk-plugin",
  "clap",
+ "eframe",
+ "egui",
+ "egui_plot",
  "fsk4-plugin",
  "ofdm-plugin",
  "openpulse-channel",
