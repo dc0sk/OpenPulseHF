@@ -47,10 +47,12 @@ selection ladder is in [mode-fec-ladder.md](mode-fec-ladder.md). `openpulse mode
 prints the live registry. (Plain rectangular `QPSK2000`/`8PSK2000` are registered but
 RRC-superseded — use `-RRC`.)
 
-The **Pilot** family (`PILOT-QPSK500`/`8PSK500`/`16QAM500`/`32APSK500`, `plugins/pilot`)
-is a pilot-framed single-carrier waveform: known in-band pilot symbols drive carrier
-recovery instead of a decision-directed Costas loop, making it cycle-slip-immune on
-dense constellations and robust to soundcard sample-rate offset. See the
+The **Pilot** family (`PILOT-{QPSK,8PSK,16QAM,32APSK}{500,1000}` plus their `-RRC`
+variants and `2000-RRC`, `plugins/pilot`) is a pilot-framed single-carrier waveform:
+known in-band pilot symbols drive carrier recovery instead of a decision-directed
+Costas loop, making it cycle-slip-immune on dense constellations and robust to
+soundcard sample-rate offset. It is soft-capable, and spans four adaptive profiles
+(`hpx_pilot{,_rrc,_fast,_fast_rrc}`) trading bandwidth against throughput. See the
 [pilot-framed waveform](dev/hpx-waveform-design.md#pilot-framed-waveform) note and the
 `hpx_pilot` adaptive profile.
 
@@ -626,10 +628,14 @@ Xastir).
 
 ## GPU Compute Acceleration
 
-✅ **Implemented** (opt-in, `--features gpu`) — `crates/openpulse-gpu/`, `plugins/bpsk/`
-
-Three WGSL compute shaders execute on any wgpu-compatible GPU (Vulkan, Metal, DX12,
-WebGPU):
+✅ **Implemented** (opt-in, per-plugin `--features gpu`) — `crates/openpulse-gpu/`,
+wired into **5 plugins**: `bpsk`, `qpsk`, `psk8`, `64qam`, `scfdma` (OFDM has no GPU
+path). Six WGSL compute kernels run on any wgpu-compatible GPU (Vulkan, Metal, DX12,
+WebGPU): `bpsk_modulate`, `bpsk_demodulate`, `timing_search` (the BPSK trio),
+`rrc_fir` (the RRC matched filter, BPSK/QPSK/8PSK/64QAM), `soft_demod` (8PSK/64QAM
+soft LLRs), and `fft256` (SC-FDMA batched FFT). The GPU is API-only (`with_gpu`),
+exercised by tests; a CI job (`gpu-feature-gates`) builds + lints the feature so it
+doesn't rot. The BPSK modulate path, as one example, is three stages:
 
 1. **Byte-to-bit expansion**: 64-thread workgroups extract LSB-first bits from input
    bytes in parallel.

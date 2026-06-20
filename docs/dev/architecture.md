@@ -42,7 +42,7 @@ Future plugins (for example QPSK or ARDOP-compatible modes) should implement Mod
 
 ### Single-carrier versus OFDM
 
-OpenPulseHF uses single-carrier phase-shift keying for all current modes. VARA HF and PACTOR-3/4 both use OFDM. This is a deliberate choice with the following rationale:
+OpenPulseHF's original/default waveforms are single-carrier phase-shift keying; VARA HF and PACTOR-3/4 use OFDM. The single-carrier choice (rationale below) is still the robust default, but **OFDM and SC-FDMA multicarrier families have since shipped** (`plugins/ofdm`, `plugins/scfdma`; the `hpx_ofdm_hf`/`hpx_wideband_hd` ladders) for HF high-throughput on frequency-selective fades — see the OFDM-over-SC-FDMA decision in `mode-fec-ladder.md` §7. Rationale for the single-carrier default:
 
 **Advantages of single-carrier for this project:**
 - Peak-to-Average Power Ratio (PAPR) is near 0 dB for BPSK and approximately 3–4 dB for QPSK. OFDM with many subcarriers produces PAPR of 9–12 dB. Low PAPR means OpenPulseHF can transmit at rated power from any linear amplifier without back-off, which is critical for portable and QRP operation.
@@ -124,7 +124,7 @@ Peaks at SL7 = 8PSK500 (1500 bps gross, ~2000 Hz BW with Hann windowing). Legal 
 
 Exceeds the 2700 Hz HF channel-width limit at SL9–SL11. Legal on FM voice channels, satellite, and UHF/VHF links. **Do not use on HF amateur allocations.**
 
-Single-carrier modulation was chosen over OFDM for this profile. Rationale: lower PAPR (near 0 dB for 8PSK vs 9–12 dB for OFDM), no cyclic prefix overhead, simpler AFC, and architectural consistency with `hpx500`. OFDM is deferred to FF-4 if multipath gain measurements justify the added receiver complexity.
+Single-carrier modulation was chosen as the default for this profile. Rationale: lower PAPR (near 0 dB for 8PSK vs 9–12 dB for OFDM), no cyclic prefix overhead, simpler AFC, and architectural consistency with `hpx500`. (OFDM was subsequently shipped under FF-4 — `plugins/ofdm` + the `hpx_ofdm_hf` ladder — as the preferred dense-multicarrier HF path; see `mode-fec-ladder.md` §7.)
 
 | SL  | Mode      | Notes |
 |-----|-----------|-------|

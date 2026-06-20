@@ -1297,12 +1297,17 @@ After the fix, BPSK250 + RS FEC + block interleaver correctly decodes through Go
 
 | Profile | SL range | Initial | Top mode |
 |---|---|---|---|
-| `hpx_hf` | SL2–SL8 | SL2 | SCFDMA52-8PSK |
-| `hpx_narrowband` | SL8–SL11 | SL8 | 8PSK2000-RRC |
+| `hpx500` | SL2–SL6 | SL2 | QPSK500 |
+| `hpx_hf` | SL2–SL11 | SL2 | SCFDMA52-64QAM |
+| `hpx_ofdm_hf` | SL5–SL10 | SL5 | OFDM52-64QAM |
+| `hpx_pilot` | SL2–SL5 | SL2 | PILOT-32APSK500 |
+| `hpx_pilot_rrc` | SL2–SL5 | SL2 | PILOT-32APSK500-RRC |
+| `hpx_pilot_fast` | SL2–SL5 | SL2 | PILOT-32APSK1000 |
+| `hpx_pilot_fast_rrc` | SL2–SL5 | SL2 | PILOT-32APSK1000-RRC |
 | `hpx_wideband` | SL8–SL11 | SL8 | 8PSK1000 |
-| `hpx_ofdm_hf` | SL5–SL6 | SL5 | OFDM52 |
+| `hpx_narrowband` | SL8–SL11 | SL8 | 8PSK2000-RRC |
 | `hpx_narrowband_hd` | SL8–SL9 | SL8 | 8PSK9600-RRC |
-| `hpx_wideband_hd` | SL12–SL15 | SL12 | 64QAM2000-RRC |
+| `hpx_wideband_hd` | SL9–SL15 | SL12 | 64QAM2000-RRC |
 
 ### Mode-to-plugin mapping
 
@@ -1311,12 +1316,13 @@ After the fix, BPSK250 + RS FEC + block interleaver correctly decodes through Go
 | BPSK31/63/250 | bpsk-plugin | hpx_hf SL2–SL4 |
 | QPSK250/500 | qpsk-plugin | hpx_hf SL5–SL6 |
 | 8PSK500 | psk8-plugin | hpx_hf SL7 |
-| SCFDMA52-8PSK | scfdma-plugin | hpx_hf SL8 |
+| SCFDMA52-8PSK/16QAM/32QAM/64QAM | scfdma-plugin | hpx_hf SL8–SL11 |
 | QPSK500/1000 | qpsk-plugin | hpx_narrowband SL8–SL9, hpx_wideband SL8–SL9 |
 | QPSK2000-RRC | qpsk-plugin | hpx_narrowband SL10 |
 | 8PSK2000-RRC | psk8-plugin | hpx_narrowband SL11 |
 | 8PSK1000 | psk8-plugin | hpx_wideband SL11 |
-| OFDM16/OFDM52 | ofdm-plugin | hpx_ofdm_hf SL5–SL6 |
+| OFDM16/OFDM52/OFDM52-8PSK/16QAM/32QAM/64QAM | ofdm-plugin | hpx_ofdm_hf SL5–SL10 |
+| PILOT-QPSK/8PSK/16QAM/32APSK500(/1000)(-RRC) | pilot-plugin | hpx_pilot / _rrc / _fast / _fast_rrc SL2–SL5 |
 | QPSK9600-RRC | qpsk-plugin | hpx_narrowband_hd SL8 |
 | 8PSK9600-RRC | psk8-plugin | hpx_narrowband_hd SL9 |
 | SCFDMA52-16QAM | scfdma-plugin | hpx_wideband_hd SL12 |
