@@ -41,6 +41,22 @@ fn clean_loopback_bpsk250() {
     assert_eq!(rx, payload);
 }
 
+/// `route_tapped` returns the pre-channel TX and post-channel samples while still
+/// delivering to the RX engine (used by the testbench virtual-loop visualization).
+#[test]
+fn route_tapped_exposes_tx_and_channel_samples() {
+    let mut h = make_harness();
+    let payload = b"route_tapped payload";
+    let mut channel = AwgnChannel::new(AwgnConfig::new(30.0, Some(7))).unwrap();
+    h.tx_engine.transmit(payload, "BPSK250", None).unwrap();
+    let (tx, out) = h.route_tapped(&mut channel);
+    assert!(!tx.is_empty(), "tapped TX samples should be non-empty");
+    assert_eq!(tx.len(), out.len(), "AWGN is additive: equal sample counts");
+    assert_ne!(tx, out, "AWGN must perturb the samples");
+    let rx = h.rx_engine.receive("BPSK250", None).unwrap();
+    assert_eq!(rx, payload, "RX engine still decodes after route_tapped");
+}
+
 /// AWGN at 20 dB SNR: high SNR; byte recovery expected.
 #[test]
 fn awgn_bpsk31_snr20db() {

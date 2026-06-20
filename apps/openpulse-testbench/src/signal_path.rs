@@ -11,15 +11,17 @@ use openpulse_channel::{
 use openpulse_core::compression::{compress, decompress, CompressionAlgorithm};
 use openpulse_core::fec::{FecCodec, FecMode};
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+use openpulse_core::profile::SessionProfile;
 use openpulse_core::soft_viterbi::SoftViterbiCodec;
+use openpulse_modem::channel_sim::ChannelSimHarness;
+use openpulse_modem::ModemEngine;
+use pilot_plugin::PilotPlugin;
 use psk8_plugin::Psk8Plugin;
 use qam64_plugin::Qam64Plugin;
 use qpsk_plugin::QpskPlugin;
 use scfdma_plugin::ScFdmaPlugin;
 
-#[cfg(feature = "cpal")]
-use crate::state::AudioSource;
-use crate::state::{AppConfig, NoiseModel, Tap, TestStats};
+use crate::state::{fec_locked, AppConfig, AudioSource, NoiseModel, Tap, TestStats};
 
 /// Base pattern repeated to fill the configured payload size.
 const PATTERN: &[u8] = b"OpenPulseHF testbench v0.1 test!";
@@ -142,11 +144,27 @@ pub fn spawn_signal_thread(
     stats: Arc<RwLock<TestStats>>,
     stop_rx: crossbeam_channel::Receiver<()>,
 ) -> std::thread::JoinHandle<()> {
-    #[cfg(feature = "cpal")]
-    if config.read().unwrap().audio_source == AudioSource::LiveCapture {
-        return std::thread::spawn(move || run_live(config, taps, stats, stop_rx));
+    let source = config.read().unwrap().audio_source.clone();
+    match source {
+        AudioSource::VirtualLoop => {
+            std::thread::spawn(move || run_virtual(config, taps, stats, stop_rx))
+        }
+        AudioSource::TestMatrix => {
+            std::thread::spawn(move || run_testmatrix(config, taps, stats, stop_rx))
+        }
+        AudioSource::AdaptiveLadder => {
+            std::thread::spawn(move || run_adaptive_ladder(config, taps, stats, stop_rx))
+        }
+        #[cfg(feature = "cpal")]
+        AudioSource::LiveCapture => {
+            std::thread::spawn(move || run_live(config, taps, stats, stop_rx))
+        }
+        #[cfg(feature = "cpal")]
+        AudioSource::HardwareLoop => {
+            std::thread::spawn(move || run_hardware(config, taps, stats, stop_rx))
+        }
+        AudioSource::Synthetic => std::thread::spawn(move || run(config, taps, stats, stop_rx)),
     }
-    std::thread::spawn(move || run(config, taps, stats, stop_rx))
 }
 
 fn make_plugin(mode: &str) -> Box<dyn ModulationPlugin> {
@@ -162,10 +180,37 @@ fn make_plugin(mode: &str) -> Box<dyn ModulationPlugin> {
         Box::new(OfdmPlugin::new())
     } else if mode.starts_with("SCFDMA") {
         Box::new(ScFdmaPlugin::new())
+    } else if mode.starts_with("PILOT") {
+        Box::new(PilotPlugin::new())
     } else {
         // QPSK* and any other unrecognised mode
         Box::new(QpskPlugin::new())
     }
+}
+
+/// Measure a mode's steady-state payload bit rate (bps) from the modulator.
+///
+/// Two-point differencing of the sample count for two payload sizes cancels the fixed
+/// preamble, leaving the true per-payload-byte rate (which for pilot / OFDM / SC-FDMA
+/// modes correctly includes their periodic pilot/CP overhead). Returns `None` if the
+/// mode cannot be modulated.
+pub fn measure_mode_rate(mode: &str) -> Option<f64> {
+    let plugin = make_plugin(mode);
+    let cfg = ModulationConfig {
+        mode: mode.into(),
+        center_frequency: 1500.0,
+        sample_rate: 8000,
+        ..ModulationConfig::default()
+    };
+    let (n1, n2) = (128usize, 256usize);
+    let p1: Vec<u8> = (0..n1).map(|i| i as u8).collect();
+    let p2: Vec<u8> = (0..n2).map(|i| i as u8).collect();
+    let s1 = plugin.modulate(&p1, &cfg).ok()?.len();
+    let s2 = plugin.modulate(&p2, &cfg).ok()?.len();
+    if s2 <= s1 {
+        return None;
+    }
+    Some((n2 - n1) as f64 * 8.0 * 8000.0 / (s2 - s1) as f64)
 }
 
 fn make_mod_config(config: &AppConfig) -> ModulationConfig {
@@ -324,6 +369,531 @@ fn run(
     }
 }
 
+/// Register the modulation plugins the testbench ships with on a modem engine.
+fn register_engine_plugins(engine: &mut ModemEngine) {
+    let _ = engine.register_plugin(Box::new(BpskPlugin::new()));
+    let _ = engine.register_plugin(Box::new(QpskPlugin::new()));
+    let _ = engine.register_plugin(Box::new(Psk8Plugin::new()));
+    let _ = engine.register_plugin(Box::new(Qam64Plugin::new()));
+    let _ = engine.register_plugin(Box::new(Fsk4Plugin::new()));
+    let _ = engine.register_plugin(Box::new(OfdmPlugin::new()));
+    let _ = engine.register_plugin(Box::new(ScFdmaPlugin::new()));
+    let _ = engine.register_plugin(Box::new(PilotPlugin::new()));
+}
+
+/// Transmit through the engine, dispatching on the FEC mode the testbench exposes.
+fn engine_transmit(
+    engine: &mut ModemEngine,
+    data: &[u8],
+    mode: &str,
+    fec: FecMode,
+) -> Result<(), openpulse_core::error::ModemError> {
+    match fec {
+        FecMode::Rs | FecMode::RsInterleaved => engine.transmit_with_fec(data, mode, None),
+        FecMode::RsStrong => engine.transmit_with_strong_fec(data, mode, None),
+        FecMode::SoftConcatenated => engine.transmit_with_soft_viterbi_fec(data, mode, None),
+        _ => engine.transmit(data, mode, None),
+    }
+    .map(|_| ())
+}
+
+/// Receive through the engine, dispatching on the FEC mode the testbench exposes.
+fn engine_receive(
+    engine: &mut ModemEngine,
+    mode: &str,
+    fec: FecMode,
+) -> Result<Vec<u8>, openpulse_core::error::ModemError> {
+    match fec {
+        FecMode::Rs | FecMode::RsInterleaved => engine.receive_with_fec(mode, None),
+        FecMode::RsStrong => engine.receive_with_strong_fec(mode, None),
+        FecMode::SoftConcatenated => engine.receive_with_soft_viterbi_fec(mode, None),
+        _ => engine.receive(mode, None),
+    }
+}
+
+/// The testmatrix virtual loop: two real `ModemEngine`s routed through a channel
+/// model via `ChannelSimHarness`. Visualizes the true TX, post-channel, and decoded
+/// signals — the same path the `openpulse-testmatrix` raw-modem runner exercises.
+fn run_virtual(
+    config: Arc<RwLock<AppConfig>>,
+    taps: [Tap; 4],
+    stats: Arc<RwLock<TestStats>>,
+    stop_rx: crossbeam_channel::Receiver<()>,
+) {
+    let mut current = config.read().unwrap().clone();
+
+    let mut harness = ChannelSimHarness::new();
+    register_engine_plugins(&mut harness.tx_engine);
+    register_engine_plugins(&mut harness.rx_engine);
+
+    let seed = current.seed_str.parse::<u64>().ok();
+    let mut channel = match build_channel(&make_channel_config(&current), seed) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("virtual loop: failed to build channel model: {e}");
+            return;
+        }
+    };
+
+    let mut ps = [
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+    ];
+    let mut run_count: u64 = 0;
+
+    loop {
+        if stop_rx
+            .recv_timeout(std::time::Duration::from_millis(20))
+            .is_ok()
+        {
+            break;
+        }
+
+        let new_cfg = config.read().unwrap().clone();
+        if new_cfg != current {
+            if new_cfg.noise_model != current.noise_model
+                || new_cfg.snr_db != current.snr_db
+                || new_cfg.seed_str != current.seed_str
+            {
+                let seed = new_cfg.seed_str.parse::<u64>().ok();
+                match build_channel(&make_channel_config(&new_cfg), seed) {
+                    Ok(c) => channel = c,
+                    Err(e) => {
+                        tracing::error!("virtual loop: failed to rebuild channel model: {e}");
+                        break;
+                    }
+                }
+            }
+            current = new_cfg;
+        }
+
+        run_count += 1;
+        let mode = current.mode.clone();
+        // Engine path: only FSK4-ACK can't carry FEC; OFDM / SC-FDMA can (the engine frames it).
+        let fec_mode = if fec_locked(&mode, true) {
+            FecMode::None
+        } else {
+            current.fec_mode
+        };
+        virtual_frame(
+            &mut harness,
+            channel.as_mut(),
+            &mode,
+            fec_mode,
+            current.compression,
+            current.payload_size,
+            run_count,
+            &taps,
+            &mut ps,
+            &stats,
+            current.min_db,
+            current.max_db,
+        );
+    }
+}
+
+/// Run a single virtual-loop frame: transmit → route through `channel` → receive,
+/// updating all four taps and the statistics. Returns whether the payload decoded.
+#[allow(clippy::too_many_arguments)]
+fn virtual_frame(
+    harness: &mut ChannelSimHarness,
+    channel: &mut dyn openpulse_channel::ChannelModel,
+    mode: &str,
+    fec_mode: FecMode,
+    compression: CompressionAlgorithm,
+    payload_size: usize,
+    run_count: u64,
+    taps: &[Tap; 4],
+    ps: &mut [PowerSpectrum; 4],
+    stats: &Arc<RwLock<TestStats>>,
+    min_db: f32,
+    max_db: f32,
+) -> bool {
+    let payload = make_payload(payload_size, run_count);
+
+    let (wire_payload, actual_algo) = match compression {
+        CompressionAlgorithm::None => (payload.clone(), CompressionAlgorithm::None),
+        algo => {
+            let c = compress(&payload, algo);
+            if c.len() < payload.len() {
+                (c, algo)
+            } else {
+                (payload.clone(), CompressionAlgorithm::None)
+            }
+        }
+    };
+    let compress_ratio = wire_payload.len() as f64 / payload.len() as f64;
+
+    if let Err(e) = engine_transmit(&mut harness.tx_engine, &wire_payload, mode, fec_mode) {
+        tracing::warn!("virtual frame: transmit error: {e}");
+        stats.write().unwrap().push_event(format!("TX error: {e}"));
+        return false;
+    }
+
+    let (tx_samples, channel_output) = harness.route_tapped(channel);
+
+    // Realized impairment: post-channel minus pre-channel (additive component).
+    let n = tx_samples.len().min(channel_output.len());
+    let noise: Vec<f32> = (0..n).map(|i| channel_output[i] - tx_samples[i]).collect();
+
+    push_tap(&taps[0], &mut ps[0], &tx_samples, min_db, max_db);
+    push_tap(&taps[1], &mut ps[1], &noise, min_db, max_db);
+    push_tap(&taps[2], &mut ps[2], &channel_output, min_db, max_db);
+
+    let rx_result = match engine_receive(&mut harness.rx_engine, mode, fec_mode) {
+        Ok(raw) => decompress(&raw, actual_algo).map_err(|_| {
+            openpulse_core::error::ModemError::Demodulation("decompress failed".into())
+        }),
+        Err(e) => Err(e),
+    };
+
+    // tap[3]: clean pre-channel reference when the link delivered the payload, else silence.
+    let decode_ok = matches!(&rx_result, Ok(p) if *p == payload);
+    let rx_samples = if decode_ok {
+        tx_samples.clone()
+    } else {
+        vec![0.0_f32; tx_samples.len()]
+    };
+    push_tap(&taps[3], &mut ps[3], &rx_samples, min_db, max_db);
+    push_iq_symbols(
+        &taps[3],
+        &channel_output,
+        1500.0,
+        8000.0,
+        mode_symbol_rate(mode),
+    );
+
+    let snr_db = estimate_snr_db(&tx_samples, &noise);
+    update_stats(
+        stats,
+        &rx_result,
+        false,
+        &[],
+        None,
+        compress_ratio,
+        &payload,
+        snr_db,
+    );
+    {
+        // Record the actually-running mode/FEC so the bitrate readout is correct even
+        // when it differs from the (frozen) UI selection, e.g. during a matrix sweep.
+        let mut s = stats.write().unwrap();
+        s.active_mode = Some(mode.to_string());
+        s.active_fec = fec_mode;
+    }
+    decode_ok
+}
+
+/// One test-matrix case: a mode × channel × FEC combination.
+struct MatrixCase {
+    mode: &'static str,
+    channel_label: &'static str,
+    channel: ChannelModelConfig,
+    fec: FecMode,
+}
+
+/// Build a representative mode × channel × FEC matrix to sweep in TestMatrix mode.
+fn build_matrix_cases() -> Vec<MatrixCase> {
+    // Modes spanning the constellation orders the testbench can exercise.
+    const MODES: &[&str] = &[
+        "BPSK250",
+        "QPSK500",
+        "8PSK1000",
+        "64QAM1000",
+        "OFDM52",
+        "SCFDMA52",
+    ];
+    // Channels: clean (high-SNR AWGN), two AWGN SNRs, and a Watterson F1 fade.
+    let channels: [(&str, ChannelModelConfig); 4] = [
+        (
+            "clean",
+            ChannelModelConfig::Awgn(AwgnConfig {
+                snr_db: 50.0,
+                seed: None,
+            }),
+        ),
+        (
+            "AWGN 20 dB",
+            ChannelModelConfig::Awgn(AwgnConfig {
+                snr_db: 20.0,
+                seed: None,
+            }),
+        ),
+        (
+            "AWGN 10 dB",
+            ChannelModelConfig::Awgn(AwgnConfig {
+                snr_db: 10.0,
+                seed: None,
+            }),
+        ),
+        ("Watterson F1 20 dB", {
+            let mut cfg = WattersonConfig::moderate_f1(None);
+            cfg.snr_db = 20.0;
+            ChannelModelConfig::Watterson(cfg)
+        }),
+    ];
+
+    let mut cases = Vec::new();
+    for &mode in MODES {
+        // Engine path frames the payload, so OFDM / SC-FDMA carry RS; only FSK4-ACK can't.
+        let fecs: &[FecMode] = if fec_locked(mode, true) {
+            &[FecMode::None]
+        } else {
+            &[FecMode::None, FecMode::Rs]
+        };
+        for (label, channel) in &channels {
+            for &fec in fecs {
+                cases.push(MatrixCase {
+                    mode,
+                    channel_label: label,
+                    channel: channel.clone(),
+                    fec,
+                });
+            }
+        }
+    }
+    cases
+}
+
+/// Sweep the full mode × channel × FEC matrix through the virtual loop, advancing
+/// case by case and visualizing each in the 4-tap view.
+fn run_testmatrix(
+    config: Arc<RwLock<AppConfig>>,
+    taps: [Tap; 4],
+    stats: Arc<RwLock<TestStats>>,
+    stop_rx: crossbeam_channel::Receiver<()>,
+) {
+    const FRAMES_PER_CASE: u64 = 4;
+
+    let cases = build_matrix_cases();
+    let total = cases.len();
+
+    let mut harness = ChannelSimHarness::new();
+    register_engine_plugins(&mut harness.tx_engine);
+    register_engine_plugins(&mut harness.rx_engine);
+
+    let mut ps = [
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+    ];
+    let mut run_count: u64 = 0;
+    let payload_size = config.read().unwrap().payload_size;
+
+    'sweep: loop {
+        for (idx, case) in cases.iter().enumerate() {
+            if stop_rx.try_recv().is_ok() {
+                break 'sweep;
+            }
+
+            let (min_db, max_db) = {
+                let c = config.read().unwrap();
+                (c.min_db, c.max_db)
+            };
+
+            let mut channel = match build_channel(&case.channel, None) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("test matrix: channel build failed for {}: {e}", case.mode);
+                    continue;
+                }
+            };
+
+            let fec_label = match case.fec {
+                FecMode::Rs => "RS",
+                _ => "no FEC",
+            };
+            stats.write().unwrap().matrix_current = Some(format!(
+                "[{}/{}] {} | {} | {}",
+                idx + 1,
+                total,
+                case.mode,
+                case.channel_label,
+                fec_label,
+            ));
+
+            let mut case_ok = 0u64;
+            for _ in 0..FRAMES_PER_CASE {
+                if stop_rx.try_recv().is_ok() {
+                    break 'sweep;
+                }
+                run_count += 1;
+                if virtual_frame(
+                    &mut harness,
+                    channel.as_mut(),
+                    case.mode,
+                    case.fec,
+                    CompressionAlgorithm::None,
+                    payload_size,
+                    run_count,
+                    &taps,
+                    &mut ps,
+                    &stats,
+                    min_db,
+                    max_db,
+                ) {
+                    case_ok += 1;
+                }
+                // Brief dwell so each case is watchable rather than flashing past.
+                if stop_rx
+                    .recv_timeout(std::time::Duration::from_millis(60))
+                    .is_ok()
+                {
+                    break 'sweep;
+                }
+            }
+
+            stats.write().unwrap().push_event(format!(
+                "[{}/{}] {} | {} | {}: {}/{} ok",
+                idx + 1,
+                total,
+                case.mode,
+                case.channel_label,
+                fec_label,
+                case_ok,
+                FRAMES_PER_CASE,
+            ));
+        }
+    }
+
+    stats.write().unwrap().matrix_current = None;
+}
+
+/// Run a SessionProfile's adaptive ladder through the virtual loop, stepping the speed
+/// level up/down against the live SNR so the rate-adaptation ladder can be demonstrated.
+fn run_adaptive_ladder(
+    config: Arc<RwLock<AppConfig>>,
+    taps: [Tap; 4],
+    stats: Arc<RwLock<TestStats>>,
+    stop_rx: crossbeam_channel::Receiver<()>,
+) {
+    let mut current = config.read().unwrap().clone();
+    let mut profile_name = current.profile.clone();
+    let mut profile = SessionProfile::by_name(&profile_name).unwrap_or_else(SessionProfile::hpx500);
+    let mut levels = profile.defined_levels();
+    if levels.is_empty() {
+        stats
+            .write()
+            .unwrap()
+            .push_event(format!("profile '{profile_name}' has no levels"));
+        return;
+    }
+
+    let mut harness = ChannelSimHarness::new();
+    register_engine_plugins(&mut harness.tx_engine);
+    register_engine_plugins(&mut harness.rx_engine);
+
+    let seed = current.seed_str.parse::<u64>().ok();
+    let mut channel = match build_channel(&make_channel_config(&current), seed) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("adaptive ladder: failed to build channel: {e}");
+            return;
+        }
+    };
+
+    let mut ps = [
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+    ];
+    let mut idx = 0usize; // start at the most robust level and climb
+    let mut run_count: u64 = 0;
+
+    loop {
+        if stop_rx
+            .recv_timeout(std::time::Duration::from_millis(120))
+            .is_ok()
+        {
+            break;
+        }
+
+        let new_cfg = config.read().unwrap().clone();
+        if new_cfg.profile != profile_name {
+            profile_name = new_cfg.profile.clone();
+            profile = SessionProfile::by_name(&profile_name).unwrap_or_else(SessionProfile::hpx500);
+            levels = profile.defined_levels();
+            idx = 0;
+            if levels.is_empty() {
+                stats
+                    .write()
+                    .unwrap()
+                    .push_event(format!("profile '{profile_name}' has no levels"));
+                break;
+            }
+        }
+        if new_cfg.noise_model != current.noise_model
+            || new_cfg.snr_db != current.snr_db
+            || new_cfg.seed_str != current.seed_str
+        {
+            let seed = new_cfg.seed_str.parse::<u64>().ok();
+            if let Ok(c) = build_channel(&make_channel_config(&new_cfg), seed) {
+                channel = c;
+            }
+        }
+        current = new_cfg;
+
+        let level = levels[idx];
+        let mode = profile.mode_for(level).unwrap_or("BPSK250").to_string();
+        let fec = if fec_locked(&mode, true) {
+            FecMode::None
+        } else {
+            FecMode::Rs
+        };
+
+        // Publish the current case before transmitting (the frame can take a while for
+        // slow modes), so the status reflects what is on air right now.
+        let snr = current.snr_db;
+        let floor = profile.snr_floor_for_level(level);
+        let ceiling = profile.snr_ceiling_for_level(level);
+        let floor_s = floor
+            .map(|f| format!("{f:.0}"))
+            .unwrap_or_else(|| "—".into());
+        let ceil_s = ceiling
+            .map(|c| format!("{c:.0}"))
+            .unwrap_or_else(|| "—".into());
+        stats.write().unwrap().matrix_current = Some(format!(
+            "{profile_name} | SL{} {} | SNR {snr:.0} dB (floor {floor_s} / ceil {ceil_s}) | {}/{} levels",
+            level as usize,
+            mode,
+            idx + 1,
+            levels.len(),
+        ));
+
+        run_count += 1;
+        let ok = virtual_frame(
+            &mut harness,
+            channel.as_mut(),
+            &mode,
+            fec,
+            CompressionAlgorithm::None,
+            current.payload_size,
+            run_count,
+            &taps,
+            &mut ps,
+            &stats,
+            current.min_db,
+            current.max_db,
+        );
+
+        // SNR-driven step with hysteresis from the profile's own floor/ceiling thresholds;
+        // also step down immediately on a decode failure.
+        let step_down = !ok || floor.is_some_and(|f| snr < f);
+        let step_up = ceiling.is_some_and(|c| snr >= c);
+        if step_down && idx > 0 {
+            idx -= 1;
+        } else if step_up && idx + 1 < levels.len() {
+            idx += 1;
+        }
+    }
+
+    stats.write().unwrap().matrix_current = None;
+}
+
 #[cfg(feature = "cpal")]
 fn run_live(
     config: Arc<RwLock<AppConfig>>,
@@ -438,6 +1008,139 @@ fn run_live(
     }
 
     input.close();
+}
+
+/// Dual-card hardware loop: modulate a frame out one soundcard (TX) and capture
+/// from another (RX), visualizing both ends of the real analog loopback.
+#[cfg(feature = "cpal")]
+fn run_hardware(
+    config: Arc<RwLock<AppConfig>>,
+    taps: [Tap; 4],
+    stats: Arc<RwLock<TestStats>>,
+    stop_rx: crossbeam_channel::Receiver<()>,
+) {
+    use openpulse_audio::CpalBackend;
+    use openpulse_core::audio::{AudioBackend as _, AudioConfig as HwConfig};
+
+    let mut current = config.read().unwrap().clone();
+    let backend = CpalBackend::new();
+    let hw_cfg = HwConfig::default(); // 8 kHz mono
+
+    let mut output = match backend.open_output(current.output_device.as_deref(), &hw_cfg) {
+        Ok(s) => s,
+        Err(e) => {
+            let msg = format!("hardware loop: TX output open failed: {e}");
+            tracing::error!("{msg}");
+            stats.write().unwrap().push_event(msg);
+            return;
+        }
+    };
+    let mut input = match backend.open_input(current.input_device.as_deref(), &hw_cfg) {
+        Ok(s) => s,
+        Err(e) => {
+            let msg = format!("hardware loop: RX input open failed: {e}");
+            tracing::error!("{msg}");
+            stats.write().unwrap().push_event(msg);
+            output.close();
+            return;
+        }
+    };
+
+    let mut plugin = make_plugin(&current.mode);
+    let mut mod_config = make_mod_config(&current);
+    let mut fec = TestbenchFec::from_mode(current.fec_mode);
+    let mut tx_samples = build_tx_ref(plugin.as_ref(), &mod_config, &fec);
+
+    let mut ps = [
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+    ];
+
+    loop {
+        if stop_rx.try_recv().is_ok() {
+            break;
+        }
+
+        let new_cfg = config.read().unwrap().clone();
+        if new_cfg.mode != current.mode || new_cfg.fec_mode != current.fec_mode {
+            plugin = make_plugin(&new_cfg.mode);
+            mod_config = make_mod_config(&new_cfg);
+            fec = TestbenchFec::from_mode(new_cfg.fec_mode);
+            tx_samples = build_tx_ref(plugin.as_ref(), &mod_config, &fec);
+        }
+        current = new_cfg;
+
+        let min_db = current.min_db;
+        let max_db = current.max_db;
+
+        // Discard any stale captured audio so this iteration's capture lines up with
+        // the frame we are about to transmit.
+        let _ = input.read();
+
+        // Transmit one frame out card A; flush() blocks until it has fully played,
+        // which also paces the loop and prevents the output buffer from growing.
+        if let Err(e) = output.write(&tx_samples) {
+            tracing::warn!("hardware loop: output write error: {e}");
+        }
+        let _ = output.flush();
+
+        push_tap(&taps[0], &mut ps[0], &tx_samples, min_db, max_db);
+
+        // Read what card B captured during playback.
+        let captured = match input.read() {
+            Ok(s) if !s.is_empty() => s,
+            Ok(_) => continue,
+            Err(e) => {
+                tracing::warn!("hardware loop: capture error: {e}");
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                continue;
+            }
+        };
+        push_tap(&taps[2], &mut ps[2], &captured, min_db, max_db);
+
+        // tap[3]: demodulate the captured audio.
+        let decoded_opt = fec.decode_soft(plugin.as_ref(), &captured, &mod_config);
+        let rx_result: Result<Vec<u8>, openpulse_core::error::ModemError> = match decoded_opt {
+            Some((_, post_rs)) => Ok(post_rs),
+            None => Err(openpulse_core::error::ModemError::Demodulation(
+                "decode failed".into(),
+            )),
+        };
+        let rx_samples = match &rx_result {
+            Ok(b) => plugin
+                .modulate(b, &mod_config)
+                .unwrap_or_else(|_| vec![0.0_f32; captured.len()]),
+            Err(_) => vec![0.0_f32; captured.len()],
+        };
+        push_tap(&taps[3], &mut ps[3], &rx_samples, min_db, max_db);
+        push_iq_symbols(
+            &taps[3],
+            &captured,
+            1500.0,
+            8000.0,
+            mode_symbol_rate(&current.mode),
+        );
+
+        // Count decode success/fail only — no BER against PAYLOAD in the hardware loop.
+        {
+            let mut s = stats.write().unwrap();
+            s.runs += 1;
+            if rx_result.is_ok() {
+                s.ok += 1;
+            } else {
+                s.fail += 1;
+                if s.fail <= 10 || s.fail.is_multiple_of(100) {
+                    let msg = format!("Run {}: no signal decoded", s.runs);
+                    s.push_event(msg);
+                }
+            }
+        }
+    }
+
+    input.close();
+    output.close();
 }
 
 #[cfg(feature = "cpal")]
@@ -697,6 +1400,150 @@ mod tests {
             assert!(gen > 0, "tap[{i}] generation should be > 0, got {gen}");
         }
         assert!(stats.read().unwrap().runs > 0, "runs should be > 0");
+    }
+
+    #[test]
+    fn run_virtual_produces_tap_updates() {
+        let mut cfg = AppConfig::default();
+        cfg.audio_source = crate::state::AudioSource::VirtualLoop;
+        cfg.mode = "BPSK250".into();
+        let config = Arc::new(RwLock::new(cfg));
+        let make_tap = || Arc::new(RwLock::new(TapData::new()));
+        let taps: [Tap; 4] = [make_tap(), make_tap(), make_tap(), make_tap()];
+        let stats = Arc::new(RwLock::new(TestStats::new()));
+        let (stop_tx, stop_rx) = crossbeam_channel::bounded(1);
+
+        let taps_clone = taps.clone();
+        let stats_clone = Arc::clone(&stats);
+        let config_clone = Arc::clone(&config);
+        let handle = std::thread::spawn(move || {
+            run_virtual(config_clone, taps_clone, stats_clone, stop_rx);
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        let _ = stop_tx.send(());
+        handle.join().expect("virtual-loop thread should not panic");
+
+        for (i, tap) in taps.iter().enumerate() {
+            let gen = tap.read().unwrap().generation;
+            assert!(gen > 0, "virtual-loop tap[{i}] generation should be > 0");
+        }
+        let s = stats.read().unwrap();
+        assert!(s.runs > 0, "virtual loop should record runs");
+        assert!(
+            s.ok > 0,
+            "clean BPSK250 virtual loop should decode at least one frame"
+        );
+    }
+
+    #[test]
+    fn all_modes_have_measured_rates() {
+        // Every advertised mode must modulate and yield a positive steady-state rate —
+        // this also proves make_plugin routes every mode (including pilot) to a plugin.
+        for &mode in crate::state::ALL_MODES {
+            let r = measure_mode_rate(mode);
+            assert!(
+                r.is_some_and(|v| v > 0.0),
+                "{mode}: no positive measured rate ({r:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn run_adaptive_ladder_produces_updates_and_status() {
+        let mut cfg = AppConfig::default();
+        cfg.audio_source = crate::state::AudioSource::AdaptiveLadder;
+        // hpx_wideband starts at QPSK500 (fast frames) so the test doesn't wait on a
+        // huge BPSK31+RS buffer; hpx500 works in the app but is slow for a unit test.
+        cfg.profile = "hpx_wideband".into();
+        cfg.noise_model = NoiseModel::Awgn;
+        cfg.snr_db = 30.0; // high SNR → the ladder should climb
+        let config = Arc::new(RwLock::new(cfg));
+        let make_tap = || Arc::new(RwLock::new(TapData::new()));
+        let taps: [Tap; 4] = [make_tap(), make_tap(), make_tap(), make_tap()];
+        let stats = Arc::new(RwLock::new(TestStats::new()));
+        let (stop_tx, stop_rx) = crossbeam_channel::bounded(1);
+
+        let taps_clone = taps.clone();
+        let stats_clone = Arc::clone(&stats);
+        let config_clone = Arc::clone(&config);
+        let handle = std::thread::spawn(move || {
+            run_adaptive_ladder(config_clone, taps_clone, stats_clone, stop_rx);
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        {
+            let s = stats.read().unwrap();
+            assert!(s.matrix_current.is_some(), "ladder status should be set");
+            assert!(
+                s.active_mode.is_some(),
+                "ladder should set the running mode"
+            );
+        }
+        let _ = stop_tx.send(());
+        handle
+            .join()
+            .expect("adaptive-ladder thread should not panic");
+
+        for (i, tap) in taps.iter().enumerate() {
+            assert!(
+                tap.read().unwrap().generation > 0,
+                "ladder tap[{i}] generation should be > 0"
+            );
+        }
+        assert!(stats.read().unwrap().runs > 0, "ladder should record runs");
+    }
+
+    #[test]
+    fn matrix_cases_cover_modes_and_channels() {
+        let cases = build_matrix_cases();
+        assert!(!cases.is_empty(), "matrix should have cases");
+        // On the engine path every swept mode carries both None and Rs, incl. OFDM/SC-FDMA.
+        assert!(cases
+            .iter()
+            .any(|c| c.mode == "OFDM52" && c.fec == FecMode::None));
+        assert!(cases
+            .iter()
+            .any(|c| c.mode == "OFDM52" && c.fec == FecMode::Rs));
+        assert!(cases
+            .iter()
+            .any(|c| c.mode == "BPSK250" && c.fec == FecMode::Rs));
+    }
+
+    #[test]
+    fn run_testmatrix_produces_tap_updates_and_status() {
+        let mut cfg = AppConfig::default();
+        cfg.audio_source = crate::state::AudioSource::TestMatrix;
+        let config = Arc::new(RwLock::new(cfg));
+        let make_tap = || Arc::new(RwLock::new(TapData::new()));
+        let taps: [Tap; 4] = [make_tap(), make_tap(), make_tap(), make_tap()];
+        let stats = Arc::new(RwLock::new(TestStats::new()));
+        let (stop_tx, stop_rx) = crossbeam_channel::bounded(1);
+
+        let taps_clone = taps.clone();
+        let stats_clone = Arc::clone(&stats);
+        let config_clone = Arc::clone(&config);
+        let handle = std::thread::spawn(move || {
+            run_testmatrix(config_clone, taps_clone, stats_clone, stop_rx);
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        {
+            // While running, the current-case label should be populated.
+            let s = stats.read().unwrap();
+            assert!(
+                s.matrix_current.is_some(),
+                "matrix status should be set while running"
+            );
+        }
+        let _ = stop_tx.send(());
+        handle.join().expect("test-matrix thread should not panic");
+
+        for (i, tap) in taps.iter().enumerate() {
+            let gen = tap.read().unwrap().generation;
+            assert!(gen > 0, "matrix tap[{i}] generation should be > 0");
+        }
+        assert!(stats.read().unwrap().runs > 0, "matrix should record runs");
     }
 
     #[test]

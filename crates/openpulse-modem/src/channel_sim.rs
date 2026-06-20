@@ -73,6 +73,18 @@ impl ChannelSimHarness {
         n
     }
 
+    /// Like [`route`](Self::route) but also returns the drained TX samples and the
+    /// post-channel samples, for visualization or diagnostics.
+    ///
+    /// Returns `(tx_samples, channel_output)`. The RX engine is filled with
+    /// `channel_output`, identical to [`route`](Self::route).
+    pub fn route_tapped(&mut self, channel: &mut dyn ChannelModel) -> (Vec<f32>, Vec<f32>) {
+        let samples = self.tx_loopback.drain_samples();
+        let processed = channel.apply(&samples);
+        self.rx_loopback.fill_samples(&processed);
+        (samples, processed)
+    }
+
     /// Route TX samples with no channel distortion (clean passthrough).
     ///
     /// Returns the number of TX samples routed (same semantics as [`route`](Self::route)).
