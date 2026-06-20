@@ -22,9 +22,14 @@ use std::f32::consts::PI;
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::ModulationConfig;
 use openpulse_dsp::acquisition::{estimate_cfo_data_aided, goertzel_carrier_scan, IqMatchedFilter};
+use openpulse_dsp::filter::FirFilter;
+use openpulse_dsp::rrc::generate_rrc_coefficients;
 
 use crate::frame::PilotFrame;
-use crate::modulate::{baud_for_mode, pilot_frame_for_mode, preamble_template, samples_per_symbol};
+use crate::modulate::{
+    baud_for_mode, is_rrc_mode, pilot_frame_for_mode, preamble_template, samples_per_symbol,
+    RRC_ALPHA, RRC_SPAN_SYMBOLS,
+};
 
 /// Locate the frame onset by phase-insensitive correlation against the passband
 /// preamble.
@@ -69,11 +74,76 @@ fn integrate_and_dump(
     symbols
 }
 
+/// Matched-filter symbol recovery for the RRC variants: coherently downconvert to
+/// baseband, apply the matched root-raised-cosine filter, and sample at the symbol
+/// instants (`onset + group_delay + k·sps`). The RRC matched filter replaces the
+/// rectangular integrate-and-dump; pilot tracking still recovers the carrier.
+fn matched_symbols_rrc(
+    samples: &[f32],
+    onset: usize,
+    sps: usize,
+    count: usize,
+    fc: f32,
+    fs: f32,
+    baud: f32,
+) -> Vec<(f32, f32)> {
+    let two_pi = 2.0 * PI;
+    let mut bb_i = Vec::with_capacity(samples.len());
+    let mut bb_q = Vec::with_capacity(samples.len());
+    for (n, &x) in samples.iter().enumerate() {
+        let t = n as f32 / fs;
+        bb_i.push(2.0 * x * (two_pi * fc * t).cos());
+        bb_q.push(2.0 * x * -(two_pi * fc * t).sin());
+    }
+
+    let num_taps = RRC_SPAN_SYMBOLS * sps + 1;
+    let coeffs = generate_rrc_coefficients(fs, baud, RRC_ALPHA, num_taps);
+    let group_delay = (num_taps - 1) / 2;
+    // Pad by the group delay so the symbol-instant samples (shifted by the matched
+    // filter's delay) are all in range.
+    let filter_bb = |bb: Vec<f32>| -> Vec<f32> {
+        let padded: Vec<f32> = bb
+            .into_iter()
+            .chain(std::iter::repeat_n(0.0, group_delay))
+            .collect();
+        FirFilter::new(coeffs.clone()).apply(&padded)
+    };
+    let fi = filter_bb(bb_i);
+    let fq = filter_bb(bb_q);
+
+    let mut symbols = Vec::with_capacity(count);
+    for k in 0..count {
+        let idx = onset + group_delay + k * sps;
+        if idx >= fi.len() {
+            break;
+        }
+        symbols.push((fi[idx], fq[idx]));
+    }
+    symbols
+}
+
+/// Recover complex symbols from `onset`, dispatching on the mode's pulse shape:
+/// rectangular integrate-and-dump or RRC matched filter.
+fn recover_symbols(
+    samples: &[f32],
+    onset: usize,
+    sps: usize,
+    count: usize,
+    config: &ModulationConfig,
+) -> Vec<(f32, f32)> {
+    let fs = config.sample_rate as f32;
+    let fc = config.center_frequency;
+    if is_rrc_mode(&config.mode) {
+        let baud = baud_for_mode(&config.mode).unwrap_or(500.0);
+        matched_symbols_rrc(samples, onset, sps, count, fc, fs, baud)
+    } else {
+        integrate_and_dump(samples, onset, sps, count, fc, fs)
+    }
+}
+
 /// Demodulate pilot-framed QPSK passband audio back to bytes.
 pub fn pilot_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec<u8>, ModemError> {
     let sps = samples_per_symbol(config)?;
-    let fs = config.sample_rate as f32;
-    let fc = config.center_frequency;
 
     let Some(onset) = find_onset(samples, config) else {
         return Ok(Vec::new());
@@ -81,7 +151,7 @@ pub fn pilot_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Ve
 
     let frame = pilot_frame_for_mode(&config.mode)?;
     let total_syms = samples.len().saturating_sub(onset) / sps;
-    let symbols = integrate_and_dump(samples, onset, sps, total_syms, fc, fs);
+    let symbols = recover_symbols(samples, onset, sps, total_syms, config);
     Ok(frame.decode(&symbols))
 }
 
@@ -94,8 +164,6 @@ pub fn pilot_demodulate_soft(
     config: &ModulationConfig,
 ) -> Result<Vec<f32>, ModemError> {
     let sps = samples_per_symbol(config)?;
-    let fs = config.sample_rate as f32;
-    let fc = config.center_frequency;
 
     let Some(onset) = find_onset(samples, config) else {
         return Ok(Vec::new());
@@ -103,7 +171,7 @@ pub fn pilot_demodulate_soft(
 
     let frame = pilot_frame_for_mode(&config.mode)?;
     let total_syms = samples.len().saturating_sub(onset) / sps;
-    let symbols = integrate_and_dump(samples, onset, sps, total_syms, fc, fs);
+    let symbols = recover_symbols(samples, onset, sps, total_syms, config);
     Ok(frame.decode_soft(&symbols))
 }
 
@@ -142,7 +210,7 @@ pub fn pilot_estimate_afc_hz(samples: &[f32], config: &ModulationConfig) -> Opti
         ..config.clone()
     };
     let fine = find_onset(samples, &coarse_cfg)
-        .map(|onset| integrate_and_dump(samples, onset, sps, preamble.len(), fc_coarse, fs))
+        .map(|onset| recover_symbols(samples, onset, sps, preamble.len(), &coarse_cfg))
         .filter(|syms| syms.len() >= preamble.len())
         .and_then(|syms| {
             let i: Vec<f32> = syms.iter().map(|&(i, _)| i).collect();
