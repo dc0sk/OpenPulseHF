@@ -45,6 +45,11 @@ impl PilotPlugin {
                     "PILOT-8PSK500".to_string(),
                     "PILOT-16QAM500".to_string(),
                     "PILOT-32APSK500".to_string(),
+                    // RRC-pulse variants: ~half the occupied bandwidth.
+                    "PILOT-QPSK500-RRC".to_string(),
+                    "PILOT-8PSK500-RRC".to_string(),
+                    "PILOT-16QAM500-RRC".to_string(),
+                    "PILOT-32APSK500-RRC".to_string(),
                 ],
                 trait_version_required: "1.0".to_string(),
             },
@@ -98,7 +103,7 @@ impl ModulationPlugin for PilotPlugin {
         // QPSK's 4 sym/byte over-estimates the floor for dense modes, so the
         // engine would wait for a slice longer than the actual (shorter) 32APSK/
         // 16QAM frame and never decode it. Use the mode's real bits/symbol.
-        let bits = if config.mode.eq_ignore_ascii_case("PILOT-32APSK500") {
+        let bits = if modulate::base_mode(&config.mode) == "PILOT-32APSK500" {
             5
         } else {
             modulate::bits_per_sc_for_mode(&config.mode).ok()?

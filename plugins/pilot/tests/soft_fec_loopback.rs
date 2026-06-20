@@ -50,3 +50,17 @@ fn rate_half_ldpc_over_pilot_16qam500() {
         .expect("receive rate-1/2 LDPC over PILOT-16QAM500");
     assert_eq!(&got[..payload.len()], payload);
 }
+
+#[test]
+fn soft_fec_over_pilot_rrc() {
+    // The RRC variants are also soft-capable (recover_symbols feeds the matched
+    // RRC filter output to the same per-bit LLR demapper): narrowband + coding.
+    let mut e = engine();
+    let payload = b"pilot soft-FEC over the narrowband RRC variant";
+    e.transmit_with_fec_mode(payload, "PILOT-16QAM500-RRC", FecMode::Ldpc, None)
+        .expect("transmit rate-1/2 LDPC over PILOT-16QAM500-RRC");
+    let got = e
+        .receive_with_fec_mode("PILOT-16QAM500-RRC", FecMode::Ldpc, None)
+        .expect("receive rate-1/2 LDPC over PILOT-16QAM500-RRC");
+    assert_eq!(&got[..payload.len()], payload);
+}

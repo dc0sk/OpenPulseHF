@@ -65,3 +65,32 @@ fn engine_loopback_through_carrier_offset() {
         }
     }
 }
+
+const RRC_MODES: [&str; 4] = [
+    "PILOT-QPSK500-RRC",
+    "PILOT-8PSK500-RRC",
+    "PILOT-16QAM500-RRC",
+    "PILOT-32APSK500-RRC",
+];
+
+#[test]
+fn engine_loopback_rrc_clean() {
+    for mode in RRC_MODES {
+        assert!(
+            decodes(mode, 0.0),
+            "{mode} must decode through the engine at zero offset"
+        );
+    }
+}
+
+#[test]
+fn engine_loopback_rrc_through_carrier_offset() {
+    for mode in RRC_MODES {
+        for offset in [25.0f32, -25.0] {
+            assert!(
+                decodes(mode, offset),
+                "{mode} must decode through {offset} Hz (engine AFC)"
+            );
+        }
+    }
+}
