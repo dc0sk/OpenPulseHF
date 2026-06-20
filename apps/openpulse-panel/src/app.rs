@@ -14,30 +14,83 @@ use crate::ui::{
     draw_spectrum_pane, ComposeState,
 };
 
+// Keep in sync with each plugin's `supported_modes` metadata
+// (plugins/{bpsk,qpsk,psk8,64qam,ofdm,scfdma,pilot,fsk4}/src/lib.rs).
 const MODES: &[&str] = &[
+    // BPSK (bpsk-plugin)
     "BPSK31",
     "BPSK63",
     "BPSK100",
     "BPSK250",
+    "BPSK250-RRC",
+    // QPSK (qpsk-plugin)
     "QPSK125",
     "QPSK250",
     "QPSK500",
+    "QPSK500-RRC",
     "QPSK1000",
+    "QPSK1000-HF",
+    "QPSK1000-HF-RRC",
+    "QPSK1000-RRC",
+    "QPSK2000",
     "QPSK2000-RRC",
+    "QPSK9600",
     "QPSK9600-RRC",
+    // 8PSK (psk8-plugin)
     "8PSK500",
+    "8PSK500-RRC",
     "8PSK1000",
+    "8PSK1000-HF",
+    "8PSK1000-HF-RRC",
+    "8PSK1000-RRC",
+    "8PSK2000",
     "8PSK2000-RRC",
+    "8PSK9600",
     "8PSK9600-RRC",
+    // 64QAM (64qam-plugin)
     "64QAM500",
     "64QAM1000",
     "64QAM2000-RRC",
+    // OFDM (ofdm-plugin)
     "OFDM16",
     "OFDM52",
+    "OFDM52-8PSK",
+    "OFDM52-16QAM",
+    "OFDM52-32QAM",
+    "OFDM52-64QAM",
+    // SC-FDMA (scfdma-plugin)
+    "SCFDMA16",
+    "SCFDMA52",
     "SCFDMA52-8PSK",
     "SCFDMA52-16QAM",
     "SCFDMA52-32QAM",
     "SCFDMA52-64QAM",
+    "SCFDMA52-64QAM-P4",
+    "SCFDMA26-8PSK",
+    "SCFDMA26-16QAM",
+    "SCFDMA26-32QAM",
+    // Pilot-framed (pilot-plugin)
+    "PILOT-QPSK500",
+    "PILOT-8PSK500",
+    "PILOT-16QAM500",
+    "PILOT-32APSK500",
+    "PILOT-QPSK500-RRC",
+    "PILOT-8PSK500-RRC",
+    "PILOT-16QAM500-RRC",
+    "PILOT-32APSK500-RRC",
+    "PILOT-QPSK1000",
+    "PILOT-8PSK1000",
+    "PILOT-16QAM1000",
+    "PILOT-32APSK1000",
+    "PILOT-QPSK1000-RRC",
+    "PILOT-8PSK1000-RRC",
+    "PILOT-16QAM1000-RRC",
+    "PILOT-32APSK1000-RRC",
+    "PILOT-QPSK2000-RRC",
+    "PILOT-8PSK2000-RRC",
+    "PILOT-16QAM2000-RRC",
+    "PILOT-32APSK2000-RRC",
+    // ACK channel (fsk4-plugin)
     "FSK4-ACK",
 ];
 
