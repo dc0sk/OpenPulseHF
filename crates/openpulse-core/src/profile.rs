@@ -93,6 +93,7 @@ impl SessionProfile {
         "hpx_pilot",
         "hpx_pilot_rrc",
         "hpx_pilot_fast",
+        "hpx_pilot_fast_rrc",
         "hpx_hf",
         "hpx_ofdm_hf",
         "hpx_wideband",
@@ -111,6 +112,7 @@ impl SessionProfile {
             "hpx_pilot" => Some(Self::hpx_pilot()),
             "hpx_pilot_rrc" => Some(Self::hpx_pilot_rrc()),
             "hpx_pilot_fast" => Some(Self::hpx_pilot_fast()),
+            "hpx_pilot_fast_rrc" => Some(Self::hpx_pilot_fast_rrc()),
             "hpx_hf" => Some(Self::hpx_hf()),
             "hpx_ofdm_hf" => Some(Self::hpx_ofdm_hf()),
             "hpx_wideband" => Some(Self::hpx_wideband()),
@@ -231,6 +233,22 @@ impl SessionProfile {
         p.modes[SpeedLevel::Sl3 as usize] = Some("PILOT-8PSK1000");
         p.modes[SpeedLevel::Sl4 as usize] = Some("PILOT-16QAM1000");
         p.modes[SpeedLevel::Sl5 as usize] = Some("PILOT-32APSK1000");
+        p
+    }
+
+    /// HPX pilot profile, high-throughput **and** narrowband (1000-baud RRC): the
+    /// 1000-baud ladder of [`hpx_pilot_fast`](Self::hpx_pilot_fast) on the `-RRC`
+    /// variants, so it gets the 2× throughput while keeping the RRC's ~half-band
+    /// occupancy (~(1+α)·1000 ≈ 1350 Hz vs the rectangular 1000-baud's wide sinc).
+    /// Same per-symbol Es/N0 floors. The combined choice when bandwidth matters but
+    /// the link can carry 1000 baud; [`hpx_pilot`](Self::hpx_pilot) stays the
+    /// SRO-robust pick (RRC samples at a point — see `hpx_pilot_rrc`).
+    pub fn hpx_pilot_fast_rrc() -> Self {
+        let mut p = Self::hpx_pilot();
+        p.modes[SpeedLevel::Sl2 as usize] = Some("PILOT-QPSK1000-RRC");
+        p.modes[SpeedLevel::Sl3 as usize] = Some("PILOT-8PSK1000-RRC");
+        p.modes[SpeedLevel::Sl4 as usize] = Some("PILOT-16QAM1000-RRC");
+        p.modes[SpeedLevel::Sl5 as usize] = Some("PILOT-32APSK1000-RRC");
         p
     }
 
