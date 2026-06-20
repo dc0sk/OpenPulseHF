@@ -49,8 +49,8 @@ pub struct Acquisition {
 /// onset to keep the per-τ FFT cost down. Returns `None` if the inputs are too
 /// short to hold the preamble at any searched offset.
 pub fn acquire(
-    rx: &[Complex32],
-    preamble: &[Complex32],
+    rx: &[(f32, f32)],
+    preamble: &[(f32, f32)],
     search_start: usize,
     search_end: usize,
 ) -> Option<Acquisition> {
@@ -58,10 +58,18 @@ pub fn acquire(
     if l < 2 || rx.len() < l {
         return None;
     }
+    // Public API is (I, Q) tuples (matching `acquisition.rs` and the engine/plugin
+    // callers, none of which depend on num-complex); convert to the internal
+    // complex representation the FFT needs.
+    let rx: Vec<Complex32> = rx.iter().map(|&(i, q)| Complex32::new(i, q)).collect();
     let last_tau = rx.len() - l; // last τ that still fits the whole preamble
     let lo = search_start.min(last_tau);
     let hi = search_end.min(last_tau + 1).max(lo + 1);
 
+    let preamble: Vec<Complex32> = preamble
+        .iter()
+        .map(|&(i, q)| Complex32::new(i, q))
+        .collect();
     let preamble_energy: f32 = preamble.iter().map(|p| p.norm_sqr()).sum();
     if preamble_energy <= 0.0 {
         return None;
@@ -160,14 +168,14 @@ mod tests {
     use super::*;
     use std::f32::consts::PI;
 
-    /// A length-`l` constant-modulus (BPSK ±1) pseudo-random preamble.
-    fn make_preamble(l: usize) -> Vec<Complex32> {
+    /// A length-`l` constant-modulus (BPSK ±1) pseudo-random preamble (I, Q).
+    fn make_preamble(l: usize) -> Vec<(f32, f32)> {
         let mut state = 0x2A_u32;
         (0..l)
             .map(|_| {
                 state = state.wrapping_mul(1103515245).wrapping_add(12345);
                 let bit = (state >> 16) & 1;
-                Complex32::new(if bit == 0 { 1.0 } else { -1.0 }, 0.0)
+                (if bit == 0 { 1.0 } else { -1.0 }, 0.0)
             })
             .collect()
     }
@@ -175,7 +183,7 @@ mod tests {
     /// Embed `preamble` at `offset` in a noise window, with applied CFO/phase/gain.
     #[allow(clippy::too_many_arguments)]
     fn synth(
-        preamble: &[Complex32],
+        preamble: &[(f32, f32)],
         total: usize,
         offset: usize,
         cfo: f32,
@@ -183,20 +191,22 @@ mod tests {
         gain: f32,
         noise: f32,
         seed: u32,
-    ) -> Vec<Complex32> {
+    ) -> Vec<(f32, f32)> {
         let mut state = seed;
         let mut rng = || {
             state = state.wrapping_mul(1103515245).wrapping_add(12345);
             ((state >> 8) & 0xFFFF) as f32 / 65535.0 - 0.5
         };
-        let mut rx = vec![Complex32::new(0.0, 0.0); total];
+        let mut rx = vec![(0.0f32, 0.0f32); total];
         for s in rx.iter_mut() {
-            *s = Complex32::new(rng() * noise, rng() * noise);
+            *s = (rng() * noise, rng() * noise);
         }
-        for (n, &p) in preamble.iter().enumerate() {
+        for (n, &(pr, pi)) in preamble.iter().enumerate() {
             let ph = 2.0 * PI * cfo * n as f32 + phase;
-            let rot = Complex32::new(ph.cos(), ph.sin());
-            rx[offset + n] += p * rot * gain;
+            let (sn, cs) = ph.sin_cos();
+            // (pr + j·pi)·(cs + j·sn)·gain
+            rx[offset + n].0 += (pr * cs - pi * sn) * gain;
+            rx[offset + n].1 += (pr * sn + pi * cs) * gain;
         }
         rx
     }
@@ -264,7 +274,7 @@ mod tests {
     #[test]
     fn too_short_returns_none() {
         let pre = make_preamble(256);
-        assert!(acquire(&[Complex32::new(1.0, 0.0); 10], &pre, 0, 10).is_none());
+        assert!(acquire(&[(1.0f32, 0.0f32); 10], &pre, 0, 10).is_none());
         assert!(acquire(&[], &pre, 0, 0).is_none());
     }
 
