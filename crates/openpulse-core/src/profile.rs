@@ -92,6 +92,7 @@ impl SessionProfile {
         "hpx500",
         "hpx_pilot",
         "hpx_pilot_rrc",
+        "hpx_pilot_fast",
         "hpx_hf",
         "hpx_ofdm_hf",
         "hpx_wideband",
@@ -109,6 +110,7 @@ impl SessionProfile {
             "hpx500" => Some(Self::hpx500()),
             "hpx_pilot" => Some(Self::hpx_pilot()),
             "hpx_pilot_rrc" => Some(Self::hpx_pilot_rrc()),
+            "hpx_pilot_fast" => Some(Self::hpx_pilot_fast()),
             "hpx_hf" => Some(Self::hpx_hf()),
             "hpx_ofdm_hf" => Some(Self::hpx_ofdm_hf()),
             "hpx_wideband" => Some(Self::hpx_wideband()),
@@ -212,6 +214,23 @@ impl SessionProfile {
         p.modes[SpeedLevel::Sl3 as usize] = Some("PILOT-8PSK500-RRC");
         p.modes[SpeedLevel::Sl4 as usize] = Some("PILOT-16QAM500-RRC");
         p.modes[SpeedLevel::Sl5 as usize] = Some("PILOT-32APSK500-RRC");
+        p
+    }
+
+    /// HPX pilot profile, high-throughput (1000 baud): same constellation ladder
+    /// as [`hpx_pilot`](Self::hpx_pilot) on the 1000-baud rungs — 2× the bits/s at
+    /// each step (8 samples/symbol at 8 kHz). The SNR thresholds are the same: they
+    /// are per-symbol (Es/N0) floors set by the constellation, which the engine
+    /// measures from the LLRs after the matched filter — so they don't move with
+    /// baud. The cost of the faster rungs is ~2× occupied bandwidth and the wider
+    /// noise bandwidth (the channel must actually deliver that Es/N0); prefer
+    /// [`hpx_pilot`](Self::hpx_pilot) on bandwidth- or power-limited links.
+    pub fn hpx_pilot_fast() -> Self {
+        let mut p = Self::hpx_pilot();
+        p.modes[SpeedLevel::Sl2 as usize] = Some("PILOT-QPSK1000");
+        p.modes[SpeedLevel::Sl3 as usize] = Some("PILOT-8PSK1000");
+        p.modes[SpeedLevel::Sl4 as usize] = Some("PILOT-16QAM1000");
+        p.modes[SpeedLevel::Sl5 as usize] = Some("PILOT-32APSK1000");
         p
     }
 

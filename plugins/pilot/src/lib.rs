@@ -50,6 +50,15 @@ impl PilotPlugin {
                     "PILOT-8PSK500-RRC".to_string(),
                     "PILOT-16QAM500-RRC".to_string(),
                     "PILOT-32APSK500-RRC".to_string(),
+                    // 1000-baud rungs: 2× throughput (8 samples/symbol at 8 kHz).
+                    "PILOT-QPSK1000".to_string(),
+                    "PILOT-8PSK1000".to_string(),
+                    "PILOT-16QAM1000".to_string(),
+                    "PILOT-32APSK1000".to_string(),
+                    "PILOT-QPSK1000-RRC".to_string(),
+                    "PILOT-8PSK1000-RRC".to_string(),
+                    "PILOT-16QAM1000-RRC".to_string(),
+                    "PILOT-32APSK1000-RRC".to_string(),
                 ],
                 trait_version_required: "1.0".to_string(),
             },
@@ -103,11 +112,7 @@ impl ModulationPlugin for PilotPlugin {
         // QPSK's 4 sym/byte over-estimates the floor for dense modes, so the
         // engine would wait for a slice longer than the actual (shorter) 32APSK/
         // 16QAM frame and never decode it. Use the mode's real bits/symbol.
-        let bits = if modulate::base_mode(&config.mode) == "PILOT-32APSK500" {
-            5
-        } else {
-            modulate::bits_per_sc_for_mode(&config.mode).ok()?
-        };
+        let bits = modulate::data_bits_per_symbol(&config.mode).ok()?;
         let preamble_syms = PilotFrame::new().preamble_len();
         let max_data_syms = (255usize * 8).div_ceil(bits); // 255-byte RS block
         let min_data_syms = (42usize * 8).div_ceil(bits); // minimal HPX frame
