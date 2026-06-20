@@ -10,13 +10,7 @@ use crate::state::{
     ALL_MODES,
 };
 
-const SPECTRUM_H: f32 = 170.0;
-const WATERFALL_H: f32 = 200.0;
-const SCATTER_H: f32 = 170.0;
 const SNR_PLOT_H: f32 = 80.0;
-/// Minimum scale applied to the per-column section heights when the central
-/// panel is too short to fit spectrum + waterfall (+ scatter) at full size.
-const MIN_SECTION_SCALE: f32 = 0.4;
 
 // ── Toolbar ───────────────────────────────────────────────────────────────────
 
@@ -59,6 +53,11 @@ pub fn draw_toolbar(
                         &mut state.config.audio_source,
                         AudioSource::VirtualLoop,
                         "Virtual loop",
+                    );
+                    ui.selectable_value(
+                        &mut state.config.audio_source,
+                        AudioSource::TestMatrix,
+                        "Test matrix",
                     );
                     #[cfg(feature = "cpal")]
                     ui.selectable_value(
@@ -149,19 +148,27 @@ pub fn draw_toolbar(
         }
         ui.separator();
 
-        ui.label("Mode:");
-        egui::ComboBox::from_id_salt("mode_combo")
-            .selected_text(&state.config.mode)
-            .show_ui(ui, |ui| {
-                for &mode in ALL_MODES {
-                    ui.selectable_value(&mut state.config.mode, mode.into(), mode);
-                }
-            })
-            .response
-            .on_hover_text("Modulation mode and symbol rate (BPSK = binary PSK, QPSK = quadrature PSK)");
+        // Test matrix drives the mode/channel/FEC itself, so those pickers are disabled.
+        let is_matrix = state.config.audio_source == AudioSource::TestMatrix;
 
-        // Real-audio sources (live capture / hardware loop) have no simulated channel,
-        // compression, or payload-size knob; the virtual loop and synthetic path do.
+        ui.label("Mode:");
+        ui.add_enabled_ui(!is_matrix, |ui| {
+            egui::ComboBox::from_id_salt("mode_combo")
+                .selected_text(&state.config.mode)
+                .show_ui(ui, |ui| {
+                    for &mode in ALL_MODES {
+                        ui.selectable_value(&mut state.config.mode, mode.into(), mode);
+                    }
+                })
+                .response
+                .on_hover_text(
+                    "Modulation mode and symbol rate (BPSK = binary PSK, QPSK = quadrature PSK)",
+                );
+        });
+
+        // Real-audio sources (live capture / hardware loop) and the test matrix have no
+        // user-set simulated channel, compression, or payload-size knob; the virtual loop
+        // and synthetic path do.
         #[cfg(feature = "cpal")]
         let is_live = matches!(
             state.config.audio_source,
@@ -169,6 +176,7 @@ pub fn draw_toolbar(
         );
         #[cfg(not(feature = "cpal"))]
         let is_live = false;
+        let is_live = is_live || is_matrix;
 
         if !is_live {
             ui.separator();
@@ -213,7 +221,7 @@ pub fn draw_toolbar(
         if fec_incompatible {
             state.config.fec_mode = FecMode::None;
         }
-        ui.add_enabled_ui(!fec_incompatible, |ui| {
+        ui.add_enabled_ui(!fec_incompatible && !is_matrix, |ui| {
             ui.label("FEC:");
             egui::ComboBox::from_id_salt("fec_combo")
                 .selected_text(fec_mode_label(state.config.fec_mode))
@@ -444,6 +452,12 @@ fn fec_net_tooltip(fec_mode: FecMode) -> &'static str {
 pub fn draw_stats(ui: &mut Ui, state: &AppState) {
     let stats = state.stats.read().unwrap();
     let fec_active = state.config.fec_mode != FecMode::None;
+    if let Some(label) = &stats.matrix_current {
+        ui.horizontal(|ui| {
+            ui.strong("Matrix:");
+            ui.label(egui::RichText::new(label).color(egui::Color32::from_rgb(120, 200, 255)));
+        });
+    }
     ui.horizontal(|ui| {
         ui.label(format!("Runs: {}", stats.runs));
         ui.separator();
@@ -547,33 +561,11 @@ pub fn draw_stats(ui: &mut Ui, state: &AppState) {
     }
 }
 
-// ── Signal path panel ─────────────────────────────────────────────────────────
+// ── Signal-path cells (one column of the 2×4 grid) ────────────────────────────
 
-pub fn draw_signal_panel(
-    ui: &mut Ui,
-    label: &str,
-    tap: &Tap,
-    texture: &mut Option<egui::TextureHandle>,
-    last_gen: &mut u64,
-    config: &AppConfig,
-    show_scatter: bool,
-) {
-    let (spectrum, gen) = {
-        let t = tap.read().unwrap();
-        (t.latest_spectrum.clone(), t.generation)
-    };
-
-    // Budget the column's vertical space so spectrum + waterfall (+ scatter) always fit
-    // within the available height; shrink all sections together when the panel is short.
-    let avail_h = ui.available_height();
-    let scatter_ideal = if show_scatter { SCATTER_H } else { 0.0 };
-    let ideal_total = SPECTRUM_H + WATERFALL_H + scatter_ideal + 12.0;
-    let scale = (avail_h / ideal_total).clamp(MIN_SECTION_SCALE, 1.0);
-    let spectrum_h = SPECTRUM_H * scale;
-    let waterfall_h = WATERFALL_H * scale;
-    let scatter_h = scatter_ideal * scale;
-
-    // Spectrum line plot
+/// Draw one spectrum cell at a fixed height (top grid row).
+pub fn draw_spectrum_cell(ui: &mut Ui, label: &str, tap: &Tap, config: &AppConfig, height: f32) {
+    let spectrum = tap.read().unwrap().latest_spectrum.clone();
     let plot_points: PlotPoints = spectrum
         .iter()
         .enumerate()
@@ -585,7 +577,7 @@ pub fn draw_signal_panel(
         .collect();
 
     Plot::new(format!("spectrum_{label}"))
-        .height(spectrum_h)
+        .height(height)
         .allow_zoom(false)
         .allow_drag(false)
         .include_x(0.0)
@@ -622,8 +614,22 @@ pub fn draw_signal_panel(
             plot_ui.vline(VLine::new(left).color(bw_color).name("BW"));
             plot_ui.vline(VLine::new(right).color(bw_color).name("BW"));
         });
+}
 
-    // Waterfall texture — rebuilt only when the tap produced a new generation.
+/// Draw one waterfall cell at a fixed height (bottom grid row).
+///
+/// The texture is painted into an explicitly allocated rect, so it renders
+/// deterministically inside the row's known-visible area.
+pub fn draw_waterfall_cell(
+    ui: &mut Ui,
+    label: &str,
+    tap: &Tap,
+    texture: &mut Option<egui::TextureHandle>,
+    last_gen: &mut u64,
+    config: &AppConfig,
+    height: f32,
+) {
+    let gen = tap.read().unwrap().generation;
     if gen != *last_gen || texture.is_none() {
         let t = tap.read().unwrap();
         let image = build_waterfall_image(&t.waterfall, config.min_db, config.max_db);
@@ -640,56 +646,51 @@ pub fn draw_signal_panel(
         *last_gen = gen;
     }
 
-    // Draw the waterfall by painting the texture directly into an explicitly
-    // allocated rect. This is deterministic regardless of the `Image` widget's
-    // fit/aspect heuristics, which previously left the waterfall un-rendered.
-    let wf_size = egui::vec2(ui.available_width(), waterfall_h);
+    let wf_size = egui::vec2(ui.available_width(), height);
     let (wf_rect, _) = ui.allocate_exact_size(wf_size, egui::Sense::hover());
-    if ui.is_rect_visible(wf_rect) {
-        if let Some(tex) = texture.as_ref() {
-            ui.painter().image(
-                tex.id(),
-                wf_rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                egui::Color32::WHITE,
-            );
-        } else {
-            ui.painter().rect_filled(wf_rect, 0.0, egui::Color32::BLACK);
-        }
+    if let Some(tex) = texture.as_ref() {
+        ui.painter().image(
+            tex.id(),
+            wf_rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    } else {
+        ui.painter().rect_filled(wf_rect, 0.0, egui::Color32::BLACK);
     }
+}
 
-    // IQ scatter plot — shown only for the RX tap when enabled.
-    if show_scatter {
-        let iq: Vec<[f64; 2]> = {
-            let t = tap.read().unwrap();
-            t.iq_symbols
-                .iter()
-                .map(|&(i, q)| [i as f64, q as f64])
-                .collect()
-        };
-        Plot::new(format!("scatter_{label}"))
-            .height(scatter_h)
-            .allow_zoom(false)
-            .allow_drag(false)
-            .data_aspect(1.0)
-            .include_x(-2.0)
-            .include_x(2.0)
-            .include_y(-2.0)
-            .include_y(2.0)
-            .x_axis_label("I")
-            .y_axis_label("Q")
-            .label_formatter(|_, v| format!("I={:.2} Q={:.2}", v.x, v.y))
-            .show(ui, |plot_ui| {
-                if !iq.is_empty() {
-                    let pts: PlotPoints = iq.into_iter().collect();
-                    plot_ui.points(
-                        Points::new(pts)
-                            .color(egui::Color32::from_rgba_unmultiplied(255, 220, 50, 180))
-                            .radius(1.5),
-                    );
-                }
-            });
-    }
+/// Draw one IQ-scatter cell at a fixed height (used for the RX column only).
+pub fn draw_scatter_cell(ui: &mut Ui, label: &str, tap: &Tap, height: f32) {
+    let iq: Vec<[f64; 2]> = {
+        let t = tap.read().unwrap();
+        t.iq_symbols
+            .iter()
+            .map(|&(i, q)| [i as f64, q as f64])
+            .collect()
+    };
+    Plot::new(format!("scatter_{label}"))
+        .height(height)
+        .allow_zoom(false)
+        .allow_drag(false)
+        .data_aspect(1.0)
+        .include_x(-2.0)
+        .include_x(2.0)
+        .include_y(-2.0)
+        .include_y(2.0)
+        .x_axis_label("I")
+        .y_axis_label("Q")
+        .label_formatter(|_, v| format!("I={:.2} Q={:.2}", v.x, v.y))
+        .show(ui, |plot_ui| {
+            if !iq.is_empty() {
+                let pts: PlotPoints = iq.into_iter().collect();
+                plot_ui.points(
+                    Points::new(pts)
+                        .color(egui::Color32::from_rgba_unmultiplied(255, 220, 50, 180))
+                        .radius(1.5),
+                );
+            }
+        });
 }
 
 fn build_waterfall_image(

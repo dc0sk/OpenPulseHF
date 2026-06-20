@@ -147,6 +147,9 @@ pub fn spawn_signal_thread(
         AudioSource::VirtualLoop => {
             std::thread::spawn(move || run_virtual(config, taps, stats, stop_rx))
         }
+        AudioSource::TestMatrix => {
+            std::thread::spawn(move || run_testmatrix(config, taps, stats, stop_rx))
+        }
         #[cfg(feature = "cpal")]
         AudioSource::LiveCapture => {
             std::thread::spawn(move || run_live(config, taps, stats, stop_rx))
@@ -434,85 +437,288 @@ fn run_virtual(
         }
 
         run_count += 1;
-        let min_db = current.min_db;
-        let max_db = current.max_db;
         let mode = current.mode.clone();
         let fec_mode = if mode_fec_incompatible(&mode) {
             FecMode::None
         } else {
             current.fec_mode
         };
-        let payload = make_payload(current.payload_size, run_count);
-
-        // Compress before transmit (mirrors the testmatrix raw-modem runner).
-        let (wire_payload, actual_algo) = match current.compression {
-            CompressionAlgorithm::None => (payload.clone(), CompressionAlgorithm::None),
-            algo => {
-                let c = compress(&payload, algo);
-                if c.len() < payload.len() {
-                    (c, algo)
-                } else {
-                    (payload.clone(), CompressionAlgorithm::None)
-                }
-            }
-        };
-        let compress_ratio = wire_payload.len() as f64 / payload.len() as f64;
-
-        if let Err(e) = engine_transmit(&mut harness.tx_engine, &wire_payload, &mode, fec_mode) {
-            tracing::warn!("virtual loop: transmit error: {e}");
-            stats.write().unwrap().push_event(format!("TX error: {e}"));
-            continue;
-        }
-
-        let (tx_samples, channel_output) = harness.route_tapped(channel.as_mut());
-
-        // Realized impairment: post-channel minus pre-channel (additive component).
-        let n = tx_samples.len().min(channel_output.len());
-        let noise: Vec<f32> = (0..n).map(|i| channel_output[i] - tx_samples[i]).collect();
-
-        push_tap(&taps[0], &mut ps[0], &tx_samples, min_db, max_db);
-        push_tap(&taps[1], &mut ps[1], &noise, min_db, max_db);
-        push_tap(&taps[2], &mut ps[2], &channel_output, min_db, max_db);
-
-        let rx_result = match engine_receive(&mut harness.rx_engine, &mode, fec_mode) {
-            Ok(raw) => decompress(&raw, actual_algo).map_err(|_| {
-                openpulse_core::error::ModemError::Demodulation("decompress failed".into())
-            }),
-            Err(e) => Err(e),
-        };
-
-        // tap[3]: clean pre-channel reference when the link delivered the payload, else silence.
-        let decode_ok = matches!(&rx_result, Ok(p) if *p == payload);
-        let rx_samples = if decode_ok {
-            tx_samples.clone()
-        } else {
-            vec![0.0_f32; tx_samples.len()]
-        };
-        push_tap(&taps[3], &mut ps[3], &rx_samples, min_db, max_db);
-
-        // IQ scatter from the actual post-channel signal the RX engine demodulated.
-        push_iq_symbols(
-            &taps[3],
-            &channel_output,
-            1500.0,
-            8000.0,
-            mode_symbol_rate(&mode),
-        );
-
-        let snr_db = estimate_snr_db(&tx_samples, &noise);
-        // The engine handles FEC internally, so per-RS-block correction counts are not
-        // available here; pass fec_is_active=false to skip that accounting.
-        update_stats(
+        virtual_frame(
+            &mut harness,
+            channel.as_mut(),
+            &mode,
+            fec_mode,
+            current.compression,
+            current.payload_size,
+            run_count,
+            &taps,
+            &mut ps,
             &stats,
-            &rx_result,
-            false,
-            &[],
-            None,
-            compress_ratio,
-            &payload,
-            snr_db,
+            current.min_db,
+            current.max_db,
         );
     }
+}
+
+/// Run a single virtual-loop frame: transmit → route through `channel` → receive,
+/// updating all four taps and the statistics. Returns whether the payload decoded.
+#[allow(clippy::too_many_arguments)]
+fn virtual_frame(
+    harness: &mut ChannelSimHarness,
+    channel: &mut dyn openpulse_channel::ChannelModel,
+    mode: &str,
+    fec_mode: FecMode,
+    compression: CompressionAlgorithm,
+    payload_size: usize,
+    run_count: u64,
+    taps: &[Tap; 4],
+    ps: &mut [PowerSpectrum; 4],
+    stats: &Arc<RwLock<TestStats>>,
+    min_db: f32,
+    max_db: f32,
+) -> bool {
+    let payload = make_payload(payload_size, run_count);
+
+    let (wire_payload, actual_algo) = match compression {
+        CompressionAlgorithm::None => (payload.clone(), CompressionAlgorithm::None),
+        algo => {
+            let c = compress(&payload, algo);
+            if c.len() < payload.len() {
+                (c, algo)
+            } else {
+                (payload.clone(), CompressionAlgorithm::None)
+            }
+        }
+    };
+    let compress_ratio = wire_payload.len() as f64 / payload.len() as f64;
+
+    if let Err(e) = engine_transmit(&mut harness.tx_engine, &wire_payload, mode, fec_mode) {
+        tracing::warn!("virtual frame: transmit error: {e}");
+        stats.write().unwrap().push_event(format!("TX error: {e}"));
+        return false;
+    }
+
+    let (tx_samples, channel_output) = harness.route_tapped(channel);
+
+    // Realized impairment: post-channel minus pre-channel (additive component).
+    let n = tx_samples.len().min(channel_output.len());
+    let noise: Vec<f32> = (0..n).map(|i| channel_output[i] - tx_samples[i]).collect();
+
+    push_tap(&taps[0], &mut ps[0], &tx_samples, min_db, max_db);
+    push_tap(&taps[1], &mut ps[1], &noise, min_db, max_db);
+    push_tap(&taps[2], &mut ps[2], &channel_output, min_db, max_db);
+
+    let rx_result = match engine_receive(&mut harness.rx_engine, mode, fec_mode) {
+        Ok(raw) => decompress(&raw, actual_algo).map_err(|_| {
+            openpulse_core::error::ModemError::Demodulation("decompress failed".into())
+        }),
+        Err(e) => Err(e),
+    };
+
+    // tap[3]: clean pre-channel reference when the link delivered the payload, else silence.
+    let decode_ok = matches!(&rx_result, Ok(p) if *p == payload);
+    let rx_samples = if decode_ok {
+        tx_samples.clone()
+    } else {
+        vec![0.0_f32; tx_samples.len()]
+    };
+    push_tap(&taps[3], &mut ps[3], &rx_samples, min_db, max_db);
+    push_iq_symbols(
+        &taps[3],
+        &channel_output,
+        1500.0,
+        8000.0,
+        mode_symbol_rate(mode),
+    );
+
+    let snr_db = estimate_snr_db(&tx_samples, &noise);
+    update_stats(
+        stats,
+        &rx_result,
+        false,
+        &[],
+        None,
+        compress_ratio,
+        &payload,
+        snr_db,
+    );
+    decode_ok
+}
+
+/// One test-matrix case: a mode × channel × FEC combination.
+struct MatrixCase {
+    mode: &'static str,
+    channel_label: &'static str,
+    channel: ChannelModelConfig,
+    fec: FecMode,
+}
+
+/// Build a representative mode × channel × FEC matrix to sweep in TestMatrix mode.
+fn build_matrix_cases() -> Vec<MatrixCase> {
+    // Modes spanning the constellation orders the testbench can exercise.
+    const MODES: &[&str] = &[
+        "BPSK250",
+        "QPSK500",
+        "8PSK1000",
+        "64QAM1000",
+        "OFDM52",
+        "SCFDMA52",
+    ];
+    // Channels: clean (high-SNR AWGN), two AWGN SNRs, and a Watterson F1 fade.
+    let channels: [(&str, ChannelModelConfig); 4] = [
+        (
+            "clean",
+            ChannelModelConfig::Awgn(AwgnConfig {
+                snr_db: 50.0,
+                seed: None,
+            }),
+        ),
+        (
+            "AWGN 20 dB",
+            ChannelModelConfig::Awgn(AwgnConfig {
+                snr_db: 20.0,
+                seed: None,
+            }),
+        ),
+        (
+            "AWGN 10 dB",
+            ChannelModelConfig::Awgn(AwgnConfig {
+                snr_db: 10.0,
+                seed: None,
+            }),
+        ),
+        ("Watterson F1 20 dB", {
+            let mut cfg = WattersonConfig::moderate_f1(None);
+            cfg.snr_db = 20.0;
+            ChannelModelConfig::Watterson(cfg)
+        }),
+    ];
+
+    let mut cases = Vec::new();
+    for &mode in MODES {
+        // OFDM / SC-FDMA cannot carry the RS block FEC in this path; sweep None only.
+        let fecs: &[FecMode] = if mode_fec_incompatible(mode) {
+            &[FecMode::None]
+        } else {
+            &[FecMode::None, FecMode::Rs]
+        };
+        for (label, channel) in &channels {
+            for &fec in fecs {
+                cases.push(MatrixCase {
+                    mode,
+                    channel_label: label,
+                    channel: channel.clone(),
+                    fec,
+                });
+            }
+        }
+    }
+    cases
+}
+
+/// Sweep the full mode × channel × FEC matrix through the virtual loop, advancing
+/// case by case and visualizing each in the 4-tap view.
+fn run_testmatrix(
+    config: Arc<RwLock<AppConfig>>,
+    taps: [Tap; 4],
+    stats: Arc<RwLock<TestStats>>,
+    stop_rx: crossbeam_channel::Receiver<()>,
+) {
+    const FRAMES_PER_CASE: u64 = 4;
+
+    let cases = build_matrix_cases();
+    let total = cases.len();
+
+    let mut harness = ChannelSimHarness::new();
+    register_engine_plugins(&mut harness.tx_engine);
+    register_engine_plugins(&mut harness.rx_engine);
+
+    let mut ps = [
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+        PowerSpectrum::new(),
+    ];
+    let mut run_count: u64 = 0;
+    let payload_size = config.read().unwrap().payload_size;
+
+    'sweep: loop {
+        for (idx, case) in cases.iter().enumerate() {
+            if stop_rx.try_recv().is_ok() {
+                break 'sweep;
+            }
+
+            let (min_db, max_db) = {
+                let c = config.read().unwrap();
+                (c.min_db, c.max_db)
+            };
+
+            let mut channel = match build_channel(&case.channel, None) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("test matrix: channel build failed for {}: {e}", case.mode);
+                    continue;
+                }
+            };
+
+            let fec_label = match case.fec {
+                FecMode::Rs => "RS",
+                _ => "no FEC",
+            };
+            stats.write().unwrap().matrix_current = Some(format!(
+                "[{}/{}] {} | {} | {}",
+                idx + 1,
+                total,
+                case.mode,
+                case.channel_label,
+                fec_label,
+            ));
+
+            let mut case_ok = 0u64;
+            for _ in 0..FRAMES_PER_CASE {
+                if stop_rx.try_recv().is_ok() {
+                    break 'sweep;
+                }
+                run_count += 1;
+                if virtual_frame(
+                    &mut harness,
+                    channel.as_mut(),
+                    case.mode,
+                    case.fec,
+                    CompressionAlgorithm::None,
+                    payload_size,
+                    run_count,
+                    &taps,
+                    &mut ps,
+                    &stats,
+                    min_db,
+                    max_db,
+                ) {
+                    case_ok += 1;
+                }
+                // Brief dwell so each case is watchable rather than flashing past.
+                if stop_rx
+                    .recv_timeout(std::time::Duration::from_millis(60))
+                    .is_ok()
+                {
+                    break 'sweep;
+                }
+            }
+
+            stats.write().unwrap().push_event(format!(
+                "[{}/{}] {} | {} | {}: {}/{} ok",
+                idx + 1,
+                total,
+                case.mode,
+                case.channel_label,
+                fec_label,
+                case_ok,
+                FRAMES_PER_CASE,
+            ));
+        }
+    }
+
+    stats.write().unwrap().matrix_current = None;
 }
 
 #[cfg(feature = "cpal")]
@@ -1055,6 +1261,58 @@ mod tests {
             s.ok > 0,
             "clean BPSK250 virtual loop should decode at least one frame"
         );
+    }
+
+    #[test]
+    fn matrix_cases_cover_modes_and_channels() {
+        let cases = build_matrix_cases();
+        assert!(!cases.is_empty(), "matrix should have cases");
+        // OFDM/SC-FDMA appear with no-FEC only; PSK/QAM appear with both None and Rs.
+        assert!(cases
+            .iter()
+            .any(|c| c.mode == "OFDM52" && c.fec == FecMode::None));
+        assert!(!cases
+            .iter()
+            .any(|c| c.mode == "OFDM52" && c.fec == FecMode::Rs));
+        assert!(cases
+            .iter()
+            .any(|c| c.mode == "BPSK250" && c.fec == FecMode::Rs));
+    }
+
+    #[test]
+    fn run_testmatrix_produces_tap_updates_and_status() {
+        let mut cfg = AppConfig::default();
+        cfg.audio_source = crate::state::AudioSource::TestMatrix;
+        let config = Arc::new(RwLock::new(cfg));
+        let make_tap = || Arc::new(RwLock::new(TapData::new()));
+        let taps: [Tap; 4] = [make_tap(), make_tap(), make_tap(), make_tap()];
+        let stats = Arc::new(RwLock::new(TestStats::new()));
+        let (stop_tx, stop_rx) = crossbeam_channel::bounded(1);
+
+        let taps_clone = taps.clone();
+        let stats_clone = Arc::clone(&stats);
+        let config_clone = Arc::clone(&config);
+        let handle = std::thread::spawn(move || {
+            run_testmatrix(config_clone, taps_clone, stats_clone, stop_rx);
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        {
+            // While running, the current-case label should be populated.
+            let s = stats.read().unwrap();
+            assert!(
+                s.matrix_current.is_some(),
+                "matrix status should be set while running"
+            );
+        }
+        let _ = stop_tx.send(());
+        handle.join().expect("test-matrix thread should not panic");
+
+        for (i, tap) in taps.iter().enumerate() {
+            let gen = tap.read().unwrap().generation;
+            assert!(gen > 0, "matrix tap[{i}] generation should be > 0");
+        }
+        assert!(stats.read().unwrap().runs > 0, "matrix should record runs");
     }
 
     #[test]

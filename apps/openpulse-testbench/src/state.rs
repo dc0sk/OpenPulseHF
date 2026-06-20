@@ -47,6 +47,9 @@ pub enum AudioSource {
     /// The testmatrix virtual loop: two real `ModemEngine`s routed through a
     /// channel model via `ChannelSimHarness`. No audio hardware required.
     VirtualLoop,
+    /// Runs a full mode × channel × FEC matrix through the virtual loop, advancing
+    /// case by case so the whole testmatrix can be watched. No audio hardware required.
+    TestMatrix,
     /// Live capture from a single soundcard input.
     #[cfg(feature = "cpal")]
     LiveCapture,
@@ -60,6 +63,7 @@ impl AudioSource {
         match self {
             AudioSource::Synthetic => "Synthetic",
             AudioSource::VirtualLoop => "Virtual loop",
+            AudioSource::TestMatrix => "Test matrix",
             #[cfg(feature = "cpal")]
             AudioSource::LiveCapture => "Live Audio",
             #[cfg(feature = "cpal")]
@@ -216,6 +220,8 @@ pub struct TestStats {
     pub snr_history: VecDeque<(std::time::Instant, f32)>,
     /// Most recent SNR estimate (dB); `None` before the first frame.
     pub current_snr_db: Option<f32>,
+    /// Current test-matrix case description (TestMatrix source only); `None` otherwise.
+    pub matrix_current: Option<String>,
 }
 
 impl TestStats {
@@ -233,6 +239,7 @@ impl TestStats {
             event_log: VecDeque::new(),
             snr_history: VecDeque::new(),
             current_snr_db: None,
+            matrix_current: None,
         }
     }
 
