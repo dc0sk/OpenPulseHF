@@ -1,0 +1,32 @@
+[package]
+name        = "openpulse-linksim"
+description = "Two-station bidirectional ARQ link simulator: proves effective two-way transfer rates under simulated SNR / noise conditions"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+
+[lib]
+name = "openpulse_linksim"
+path = "src/lib.rs"
+
+[[bin]]
+name = "openpulse-linksim"
+path = "src/main.rs"
+
+[dependencies]
+openpulse-core    = { workspace = true }
+openpulse-modem   = { workspace = true }
+openpulse-channel = { workspace = true }
+bpsk-plugin       = { workspace = true }
+qpsk-plugin       = { workspace = true }
+psk8-plugin       = { workspace = true }
+qam64-plugin      = { workspace = true }
+fsk4-plugin       = { workspace = true }
+ofdm-plugin       = { workspace = true }
+scfdma-plugin     = { workspace = true }
+pilot-plugin      = { workspace = true }
+clap              = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
