@@ -85,6 +85,7 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 | `openpulse-mesh` | `crates/openpulse-mesh` | Mesh broadcast daemon; beacon re-broadcast with TTL, `openpulse-mesh` binary |
 | `openpulse-repeater` | `crates/openpulse-repeater` | Digipeater / relay node; configurable filter and forwarding policy |
 | `openpulse-daemon` | `crates/openpulse-daemon` | Unified background daemon aggregating modem, PTT, and control-protocol services |
+| `openpulse-freedv-auth` | `crates/openpulse-freedv-auth` | External shim adding Ed25519 frame signing to FreeDV via the codec2 data channel (FF-11) |
 
 ### UI and tooling layer
 
@@ -106,6 +107,9 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 | `psk8-plugin` | `plugins/psk8` | 8PSK500/1000 modulation plugin |
 | `qam64-plugin` | `plugins/64qam` | 64QAM500/1000/2000-RRC modulation plugin; Gray-coded 8×8 PAM-8; soft demodulator |
 | `fsk4-plugin` | `plugins/fsk4` | FSK4-ACK modulation plugin (ACK channel) |
+| `ofdm-plugin` | `plugins/ofdm` | OFDM16/52 + OFDM52-{8PSK,16QAM,32QAM,64QAM} multicarrier; Schmidl-Cox preamble, LS channel est + ZF equalization; soft demod |
+| `scfdma-plugin` | `plugins/scfdma` | SC-FDMA16/52 + SCFDMA52/26-{8PSK,16QAM,32QAM,64QAM} single-carrier-FDM; DFT-CE pilot channel est + MMSE; per-symbol SFO deramp; soft demod |
+| `pilot-plugin` | `plugins/pilot` | Pilot-framed `PILOT-{QPSK,8PSK,16QAM,32APSK}{500,1000}` (+ `-RRC`, + `2000-RRC`); pilot-aided carrier recovery (cycle-slip-immune, SRO-robust); soft demod; 32APSK = DVB-S2 |
 
 ---
 
@@ -124,7 +128,7 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 - `crates/openpulse-daemon/src/lib.rs`: CrossBandRepeater wiring — pre-built in `main.rs`; `EnableRepeater` spawns thread via `run_full_duplex`; `DisableRepeater` stops and joins it (PR #321)
 - `apps/openpulse-panel/src/app.rs`: mode list updated to include RRC modes added in #319 and correct SCFDMA names (PR #321)
 - `plugins/scfdma`: DFT-CE pilot-aided channel estimation; SCFDMA52-16QAM, SCFDMA52-32QAM (cross-32QAM), SCFDMA52-64QAM, SCFDMA52-64QAM-P4 modes; MMSE equalization (PR #316)
-- `crates/openpulse-modem/src/arq_session.rs`: `ArqSession` — ARQ retry loop with soft LLR accumulation across retransmissions; runtime mode switching between registered plugins (PR #318)
+- `crates/openpulse-modem/src/arq_session.rs` (since refactored — the ARQ/HARQ logic now lives in `harq.rs` + `rate_policy.rs`): `ArqSession` — ARQ retry loop with soft LLR accumulation across retransmissions; runtime mode switching between registered plugins (PR #318)
 - `crates/openpulse-core/src/profile.rs`: `hpx_narrowband_hd()` profile — SL8=QPSK9600-RRC, SL9=8PSK9600-RRC; `hpx_narrowband()` gains QPSK2000-RRC (SL10) and 8PSK2000-RRC (SL11) (PR #319)
 - `plugins/qpsk`: `QPSK2000-RRC` and `QPSK9600-RRC` modes; `plugins/psk8`: `8PSK2000-RRC` and `8PSK9600-RRC` modes (PR #319)
 - `crates/openpulse-daemon/src/main.rs`: PTT controller wired from config; `apply_command_to_engine` skips dispatch on PTT hardware assertion failure (PR #319)
