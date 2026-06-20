@@ -146,15 +146,21 @@ impl Default for AppConfig {
     }
 }
 
-/// Returns `true` for modes where FEC cannot be applied in the direct-plugin testbench path.
-pub fn mode_fec_incompatible(mode: &str) -> bool {
-    mode == "FSK4-ACK" || mode.starts_with("OFDM") || mode.starts_with("SCFDMA")
-}
-
-/// Returns `None` for all modes: `FecCodec` splits arbitrarily large payloads across
-/// N×255-byte RS blocks, so there is no single-block cap to enforce.
-pub fn fec_payload_limit(_mode: FecMode) -> Option<usize> {
-    None
+/// Whether the FEC picker is locked (forced to `None`) for this mode on a given path.
+///
+/// `engine_path` is `true` for the virtual loop / test matrix (real `ModemEngine`s, which
+/// frame the payload before modulation) and `false` for the direct-plugin synthetic / live /
+/// hardware paths. FSK4-ACK never carries FEC; OFDM / SC-FDMA carry it only on the engine path
+/// — on the direct-plugin path their demodulators emit padded byte counts that are not
+/// multiples of 255, which the RS block decoder requires.
+pub fn fec_locked(mode: &str, engine_path: bool) -> bool {
+    if mode == "FSK4-ACK" {
+        return true;
+    }
+    if mode.starts_with("OFDM") || mode.starts_with("SCFDMA") {
+        return !engine_path;
+    }
+    false
 }
 
 pub const ALL_MODES: &[&str] = &[
@@ -222,6 +228,11 @@ pub struct TestStats {
     pub current_snr_db: Option<f32>,
     /// Current test-matrix case description (TestMatrix source only); `None` otherwise.
     pub matrix_current: Option<String>,
+    /// Mode actually running in the signal thread; drives the bitrate readout so it is
+    /// correct even when it differs from the (frozen) UI selection, e.g. in TestMatrix.
+    pub active_mode: Option<String>,
+    /// FEC actually running in the signal thread (pairs with `active_mode`).
+    pub active_fec: FecMode,
 }
 
 impl TestStats {
@@ -240,6 +251,8 @@ impl TestStats {
             snr_history: VecDeque::new(),
             current_snr_db: None,
             matrix_current: None,
+            active_mode: None,
+            active_fec: FecMode::None,
         }
     }
 

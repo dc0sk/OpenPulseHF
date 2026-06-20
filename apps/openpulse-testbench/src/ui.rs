@@ -5,10 +5,7 @@ use openpulse_core::compression::{CompressionAlgorithm, ZSTD_DICT_ID};
 use openpulse_core::fec::FecMode;
 
 use crate::colormap::plasma;
-use crate::state::{
-    fec_payload_limit, mode_fec_incompatible, AppConfig, AppState, AudioSource, NoiseModel, Tap,
-    ALL_MODES,
-};
+use crate::state::{fec_locked, AppConfig, AppState, AudioSource, NoiseModel, Tap, ALL_MODES};
 
 const SNR_PLOT_H: f32 = 80.0;
 
@@ -217,7 +214,13 @@ pub fn draw_toolbar(
 
         ui.separator();
 
-        let fec_incompatible = mode_fec_incompatible(&state.config.mode);
+        // OFDM / SC-FDMA carry FEC on the engine (virtual-loop) path but not the
+        // direct-plugin synthetic / live / hardware path; FSK4-ACK never carries FEC.
+        let engine_path = matches!(
+            state.config.audio_source,
+            AudioSource::VirtualLoop | AudioSource::TestMatrix
+        );
+        let fec_incompatible = fec_locked(&state.config.mode, engine_path);
         if fec_incompatible {
             state.config.fec_mode = FecMode::None;
         }
@@ -244,9 +247,10 @@ pub fn draw_toolbar(
                     "FEC unavailable for FSK4-ACK — fixed 5-byte ACK payload has no room\n\
                      for RS parity bytes"
                 } else if fec_incompatible {
-                    "FEC unavailable for OFDM / SC-FDMA — their internal 2-byte length\n\
-                     prefix causes byte counts that are not multiples of 255, which the\n\
-                     RS block decoder requires"
+                    "FEC unavailable for OFDM / SC-FDMA on the direct-plugin path — their\n\
+                     padded byte counts are not multiples of 255 (required by the RS block\n\
+                     decoder). Switch the source to Virtual loop, where the engine frames\n\
+                     the payload and FEC works."
                 } else {
                     "Forward error correction mode\n\
                      RS(255,223): corrects up to 16 byte errors/block (rate ≈ 87.5 %)\n\
@@ -255,10 +259,10 @@ pub fn draw_toolbar(
                 });
         });
 
-        // Clamp payload size when FEC is active: must fit within one RS block.
-        if let Some(limit) = fec_payload_limit(state.config.fec_mode) {
-            state.config.payload_size = state.config.payload_size.min(limit);
-        }
+        // Cap payload so one frame's modulated audio stays within a watchable duration —
+        // otherwise slow modes (e.g. BPSK31) generate minutes of samples and stall.
+        let payload_cap = max_payload_for_mode(&state.config.mode);
+        state.config.payload_size = state.config.payload_size.min(payload_cap);
 
         if !is_live {
             ui.separator();
@@ -297,18 +301,17 @@ pub fn draw_toolbar(
             ui.separator();
 
             ui.label("Payload:");
-            let payload_max = fec_payload_limit(state.config.fec_mode).unwrap_or(2048);
             ui.add(
-                egui::Slider::new(&mut state.config.payload_size, 1..=payload_max)
+                egui::Slider::new(&mut state.config.payload_size, 1..=payload_cap)
                     .suffix(" B")
                     .logarithmic(true),
             )
-            .on_hover_text(
+            .on_hover_text(format!(
                 "Payload size in bytes per simulated frame\n\
                  Larger payloads are more compressible with LZ4/Zstd\n\
-                 Maximum capped at 219 B (RS / Soft-Conv+RS) or 187 B (RS Strong) when\n\
-                 FEC is active — RS block data capacity minus 4-byte length prefix",
-            );
+                 Maximum ({payload_cap} B) is capped per mode so one frame's audio stays\n\
+                 short — slow modes generate far more samples per byte",
+            ));
         }
 
         ui.separator();
@@ -361,6 +364,18 @@ fn gross_bps(mode: &str) -> f64 {
         "OFDM52" | "SCFDMA52" => 2889.0, // 52 × 2 × 8000/288 ≈ 2889 bps
         _ => 0.0,
     }
+}
+
+/// Largest payload (bytes) that keeps one frame's modulated audio within a watchable
+/// duration, so slow modes (e.g. BPSK31) don't stall the signal thread at large payloads.
+fn max_payload_for_mode(mode: &str) -> usize {
+    const MAX_AUDIO_SEC: f64 = 8.0;
+    let gross = gross_bps(mode); // air-rate bits/sec
+    if gross <= 0.0 {
+        return 2048;
+    }
+    let cap = (MAX_AUDIO_SEC * gross / 8.0) as usize;
+    cap.clamp(16, 2048)
 }
 
 fn mode_symbol_rate_hz(mode: &str) -> f64 {
@@ -479,8 +494,19 @@ pub fn draw_stats(ui: &mut Ui, state: &AppState) {
         }
         ui.separator();
 
-        let gross = gross_bps(&state.config.mode);
-        let net = net_bps(gross, state.config.fec_mode);
+        // Use the actually-running mode/FEC (set by the signal thread) so the rate is
+        // correct even when it differs from the UI selection, e.g. during a matrix sweep.
+        let rate_mode = stats
+            .active_mode
+            .clone()
+            .unwrap_or_else(|| state.config.mode.clone());
+        let rate_fec = if stats.active_mode.is_some() {
+            stats.active_fec
+        } else {
+            state.config.fec_mode
+        };
+        let gross = gross_bps(&rate_mode);
+        let net = net_bps(gross, rate_fec);
         let window_total = stats.rate_window.len();
         let window_ok = stats.rate_window.iter().filter(|(_, b)| *b > 0).count();
         let success_rate = if window_total > 0 {
@@ -495,7 +521,7 @@ pub fn draw_stats(ui: &mut Ui, state: &AppState) {
             .on_hover_text("Raw air-link bit rate (symbol rate × bits per symbol)");
         ui.separator();
         ui.label(format!("Net: {}", fmt_bps(net)))
-            .on_hover_text(fec_net_tooltip(state.config.fec_mode));
+            .on_hover_text(fec_net_tooltip(rate_fec));
         ui.separator();
         ui.label(format!("Effective: {}", fmt_bps(effective_bps)))
             .on_hover_text(format!(

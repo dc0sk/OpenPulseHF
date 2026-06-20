@@ -19,7 +19,7 @@ use qam64_plugin::Qam64Plugin;
 use qpsk_plugin::QpskPlugin;
 use scfdma_plugin::ScFdmaPlugin;
 
-use crate::state::{mode_fec_incompatible, AppConfig, AudioSource, NoiseModel, Tap, TestStats};
+use crate::state::{fec_locked, AppConfig, AudioSource, NoiseModel, Tap, TestStats};
 
 /// Base pattern repeated to fill the configured payload size.
 const PATTERN: &[u8] = b"OpenPulseHF testbench v0.1 test!";
@@ -438,7 +438,8 @@ fn run_virtual(
 
         run_count += 1;
         let mode = current.mode.clone();
-        let fec_mode = if mode_fec_incompatible(&mode) {
+        // Engine path: only FSK4-ACK can't carry FEC; OFDM / SC-FDMA can (the engine frames it).
+        let fec_mode = if fec_locked(&mode, true) {
             FecMode::None
         } else {
             current.fec_mode
@@ -542,6 +543,13 @@ fn virtual_frame(
         &payload,
         snr_db,
     );
+    {
+        // Record the actually-running mode/FEC so the bitrate readout is correct even
+        // when it differs from the (frozen) UI selection, e.g. during a matrix sweep.
+        let mut s = stats.write().unwrap();
+        s.active_mode = Some(mode.to_string());
+        s.active_fec = fec_mode;
+    }
     decode_ok
 }
 
@@ -596,8 +604,8 @@ fn build_matrix_cases() -> Vec<MatrixCase> {
 
     let mut cases = Vec::new();
     for &mode in MODES {
-        // OFDM / SC-FDMA cannot carry the RS block FEC in this path; sweep None only.
-        let fecs: &[FecMode] = if mode_fec_incompatible(mode) {
+        // Engine path frames the payload, so OFDM / SC-FDMA carry RS; only FSK4-ACK can't.
+        let fecs: &[FecMode] = if fec_locked(mode, true) {
             &[FecMode::None]
         } else {
             &[FecMode::None, FecMode::Rs]
@@ -1267,11 +1275,11 @@ mod tests {
     fn matrix_cases_cover_modes_and_channels() {
         let cases = build_matrix_cases();
         assert!(!cases.is_empty(), "matrix should have cases");
-        // OFDM/SC-FDMA appear with no-FEC only; PSK/QAM appear with both None and Rs.
+        // On the engine path every swept mode carries both None and Rs, incl. OFDM/SC-FDMA.
         assert!(cases
             .iter()
             .any(|c| c.mode == "OFDM52" && c.fec == FecMode::None));
-        assert!(!cases
+        assert!(cases
             .iter()
             .any(|c| c.mode == "OFDM52" && c.fec == FecMode::Rs));
         assert!(cases
