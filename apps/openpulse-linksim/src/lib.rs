@@ -414,7 +414,8 @@ impl LinkSim {
             frames_delivered: 0,
             level_sum: 0,
             level_count: 0,
-            records: Vec::with_capacity(params.total_frames),
+            // Cap the preallocation — total_frames may be usize::MAX for a continuous run.
+            records: Vec::with_capacity(params.total_frames.min(4096)),
         }
     }
 
@@ -557,6 +558,10 @@ impl LinkSim {
         let frame_air_s = fwd_air + ack_air + 2.0 * self.params.turnaround_s * attempts as f64;
         self.total_air_s += frame_air_s;
 
+        // Bound memory for continuous (usize::MAX) runs; keeps the most recent records.
+        if self.records.len() >= 8192 {
+            self.records.remove(0);
+        }
         self.records.push(FrameRecord {
             frame,
             level: last_level as u8,

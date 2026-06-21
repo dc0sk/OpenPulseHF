@@ -100,7 +100,7 @@ fn spawn_sim(
         while running.load(Ordering::Relaxed) {
             // Snapshot params (and the generation we built against) for this run.
             let (mut sim, gen, mut chan, mut snr) = {
-                let c = controls.lock().unwrap();
+                let c = controls.lock().unwrap_or_else(|e| e.into_inner());
                 (LinkSim::new(&c.params()), c.generation, c.channel, c.snr_db)
             };
             loop {
@@ -109,7 +109,7 @@ fn spawn_sim(
                 }
                 // Apply live changes (or rebuild on a structural change).
                 {
-                    let c = controls.lock().unwrap();
+                    let c = controls.lock().unwrap_or_else(|e| e.into_inner());
                     if c.generation != gen {
                         break; // structural change → rebuild on the next outer iteration
                     }
@@ -229,7 +229,7 @@ impl LinkApp {
         self.stop();
         self.reset_history();
         {
-            let mut c = self.controls.lock().unwrap();
+            let mut c = self.controls.lock().unwrap_or_else(|e| e.into_inner());
             c.generation = c.generation.wrapping_add(1);
             c.profile = self.ui_profile.clone();
             c.channel = self.ui_channel;
@@ -265,7 +265,7 @@ impl LinkApp {
 
     /// Push UI changes to the shared controls. SNR is live; structural fields bump generation.
     fn sync_controls(&mut self) {
-        let mut c = self.controls.lock().unwrap();
+        let mut c = self.controls.lock().unwrap_or_else(|e| e.into_inner());
         c.snr_db = self.ui_snr;
         c.channel = self.ui_channel;
         let structural_changed = c.profile != self.ui_profile
