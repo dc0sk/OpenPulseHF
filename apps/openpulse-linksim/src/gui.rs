@@ -13,6 +13,7 @@ use std::thread::JoinHandle;
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
 use openpulse_channel::dsp::{PowerSpectrum, WaterfallBuffer, FREQ_BINS, WATERFALL_ROWS};
+use openpulse_core::compression::{CompressionAlgorithm, ZSTD_DICT_ID};
 use openpulse_core::fec::FecMode;
 use openpulse_core::profile::SessionProfile;
 use openpulse_linksim::{ChannelSpec, FrameStep, LinkParams, LinkSim};
@@ -72,6 +73,7 @@ struct Controls {
     snr_db: f32,
     payload: usize,
     fec: FecMode,
+    compression: CompressionAlgorithm,
     turnaround: f64,
 }
 
@@ -84,6 +86,7 @@ impl Controls {
             payload_bytes_per_frame: self.payload,
             total_frames: usize::MAX, // run continuously; the UI keeps a rolling window
             fec: self.fec,
+            compression: self.compression,
             turnaround_s: self.turnaround,
             max_attempts: 6,
             seed: 0x1234_5678,
@@ -178,6 +181,7 @@ struct LinkApp {
     ui_snr: f32,
     ui_payload: usize,
     ui_fec: FecMode,
+    ui_compression: CompressionAlgorithm,
     ui_turnaround: f64,
 
     panels: [PanelView; 3], // 0 = A TX, 1 = Channel, 2 = B ACK
@@ -202,6 +206,7 @@ impl LinkApp {
                 snr_db: 15.0,
                 payload: 64,
                 fec: FecMode::Rs,
+                compression: CompressionAlgorithm::None,
                 turnaround: 0.25,
             })),
             running: Arc::new(AtomicBool::new(false)),
@@ -212,6 +217,7 @@ impl LinkApp {
             ui_snr: 15.0,
             ui_payload: 64,
             ui_fec: FecMode::Rs,
+            ui_compression: CompressionAlgorithm::None,
             ui_turnaround: 0.25,
             panels: [PanelView::new(), PanelView::new(), PanelView::new()],
             last: None,
@@ -236,6 +242,7 @@ impl LinkApp {
             c.snr_db = self.ui_snr;
             c.payload = self.ui_payload;
             c.fec = self.ui_fec;
+            c.compression = self.ui_compression;
             c.turnaround = self.ui_turnaround;
         }
         self.running.store(true, Ordering::Relaxed);
@@ -271,11 +278,13 @@ impl LinkApp {
         let structural_changed = c.profile != self.ui_profile
             || c.payload != self.ui_payload
             || c.fec != self.ui_fec
+            || c.compression != self.ui_compression
             || (c.turnaround - self.ui_turnaround).abs() > f64::EPSILON;
         if structural_changed {
             c.profile = self.ui_profile.clone();
             c.payload = self.ui_payload;
             c.fec = self.ui_fec;
+            c.compression = self.ui_compression;
             c.turnaround = self.ui_turnaround;
             c.generation = c.generation.wrapping_add(1);
         }
@@ -486,6 +495,31 @@ impl eframe::App for LinkApp {
                         ui.selectable_value(&mut self.ui_fec, FecMode::SoftConcatenated, "Soft");
                     });
                 ui.separator();
+                ui.label("Compress:");
+                egui::ComboBox::from_id_salt("compress")
+                    .selected_text(match self.ui_compression {
+                        CompressionAlgorithm::None => "None",
+                        CompressionAlgorithm::Lz4 => "LZ4",
+                        CompressionAlgorithm::Zstd(_) => "Zstd",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut self.ui_compression,
+                            CompressionAlgorithm::None,
+                            "None",
+                        );
+                        ui.selectable_value(
+                            &mut self.ui_compression,
+                            CompressionAlgorithm::Lz4,
+                            "LZ4",
+                        );
+                        ui.selectable_value(
+                            &mut self.ui_compression,
+                            CompressionAlgorithm::Zstd(ZSTD_DICT_ID),
+                            "Zstd",
+                        );
+                    });
+                ui.separator();
                 ui.label("Payload:");
                 ui.add(egui::Slider::new(&mut self.ui_payload, 8..=512).suffix(" B"));
                 ui.separator();
@@ -497,15 +531,21 @@ impl eframe::App for LinkApp {
         egui::TopBottomPanel::bottom("stats")
             .min_height(180.0)
             .show(ctx, |ui| {
-                if let Some(fs) = &self.last {
-                    ui.horizontal(|ui| {
-                        let (bits, air): (usize, f64) = self
-                            .window
-                            .iter()
-                            .fold((0, 0.0), |(b, a), &(fb, fa)| (b + fb, a + fa));
-                        let eff = if air > 0.0 { bits as f64 / air } else { 0.0 };
-                        ui.strong(format!("Effective: {}", fmt_bps(eff)));
-                        ui.separator();
+                let (bits, air): (usize, f64) = self
+                    .window
+                    .iter()
+                    .fold((0, 0.0), |(b, a), &(fb, fa)| (b + fb, a + fa));
+                let eff = if air > 0.0 { bits as f64 / air } else { 0.0 };
+                ui.horizontal(|ui| {
+                    // Effective two-way rate — always shown (the headline status readout).
+                    ui.label(
+                        egui::RichText::new(format!("Effective: {}", fmt_bps(eff)))
+                            .strong()
+                            .size(16.0)
+                            .color(egui::Color32::from_rgb(120, 220, 255)),
+                    );
+                    ui.separator();
+                    if let Some(fs) = &self.last {
                         ui.label(format!("Frame {}", self.frame_counter));
                         ui.separator();
                         let dr = if self.attempted > 0 {
@@ -530,10 +570,10 @@ impl eframe::App for LinkApp {
                                 format!("{} attempts", fs.attempts),
                             );
                         }
-                    });
-                } else {
-                    ui.label("Press ▶ Run to start the link.");
-                }
+                    } else {
+                        ui.label("Press ▶ Run to start the link.");
+                    }
+                });
 
                 let eff: PlotPoints = self.eff_hist.iter().copied().collect();
                 let lvl: PlotPoints = self

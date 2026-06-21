@@ -18,6 +18,7 @@ use openpulse_channel::{
     build_channel, AwgnConfig, ChannelModelConfig, GilbertElliottConfig, QsbConfig, WattersonConfig,
 };
 use openpulse_core::ack::{AckFrame, AckType};
+use openpulse_core::compression::{compress, decompress, CompressionAlgorithm};
 use openpulse_core::fec::FecMode;
 use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::SpeedLevel;
@@ -27,6 +28,10 @@ use openpulse_modem::ModemEngine;
 const SAMPLE_RATE: f64 = 8000.0;
 const ACK_MODE: &str = "FSK4-ACK";
 const SESSION_ID: &str = "LINKSIM0";
+/// Max bytes per modem frame. The frame length field is 8-bit (≤255 payload); 200 keeps the
+/// framed bytes within one RS(255,223) block. Larger link payloads are sent as a burst of
+/// these chunks (a simple block-ACK ARQ).
+const FRAME_CHUNK: usize = 200;
 
 /// A channel condition for one direction of the link.
 #[derive(Debug, Clone)]
@@ -119,6 +124,8 @@ pub struct LinkParams {
     pub total_frames: usize,
     /// FEC applied to data frames.
     pub fec: FecMode,
+    /// Payload compression applied before FEC (raises the effective rate on compressible data).
+    pub compression: CompressionAlgorithm,
     /// Half-duplex turnaround time per direction switch (seconds) — PTT + sync settle.
     pub turnaround_s: f64,
     /// Maximum transmission attempts per frame before giving up.
@@ -136,6 +143,7 @@ impl Default for LinkParams {
             payload_bytes_per_frame: 64,
             total_frames: 40,
             fec: FecMode::Rs,
+            compression: CompressionAlgorithm::None,
             turnaround_s: 0.25,
             max_attempts: 6,
             seed: 0xC0FFEE,
@@ -297,13 +305,32 @@ fn decide_ack(
     AckType::AckOk
 }
 
+/// A compressible, frame-distinct payload so the compression modes show a real advantage.
 fn make_payload(frame: usize, attempt: u32, size: usize) -> Vec<u8> {
-    let salt = (frame as u64)
-        .wrapping_mul(1103515245)
-        .wrapping_add(attempt as u64);
-    (0..size)
-        .map(|i| (i as u64 ^ salt).to_le_bytes()[i % 8])
-        .collect()
+    let header = format!("OpenPulseHF linksim frame {frame} attempt {attempt}; ");
+    const PAT: &[u8] = b"the quick brown fox jumps over the lazy dog. ";
+    let mut v = Vec::with_capacity(size + PAT.len());
+    v.extend_from_slice(header.as_bytes());
+    while v.len() < size {
+        v.extend_from_slice(PAT);
+    }
+    v.truncate(size.max(1));
+    v
+}
+
+/// Compress per the selected algorithm, falling back to no compression if it doesn't shrink.
+fn maybe_compress(payload: &[u8], algo: CompressionAlgorithm) -> (Vec<u8>, CompressionAlgorithm) {
+    match algo {
+        CompressionAlgorithm::None => (payload.to_vec(), CompressionAlgorithm::None),
+        a => {
+            let c = compress(payload, a);
+            if c.len() < payload.len() {
+                (c, a)
+            } else {
+                (payload.to_vec(), CompressionAlgorithm::None)
+            }
+        }
+    }
 }
 
 /// Signals and outcome of one simulated frame (the last attempt's waveforms), for live
@@ -484,19 +511,44 @@ impl LinkSim {
             let fec = fec_for(&mode, self.params.fec);
             let payload = make_payload(frame, attempts, self.params.payload_bytes_per_frame);
 
-            // Forward A→B.
-            if engine_transmit(&mut self.fwd.tx_engine, &payload, &mode, fec).is_err() {
-                continue;
+            // Compress, then send the wire bytes as a burst of ≤FRAME_CHUNK modem frames
+            // (the frame length field is 8-bit). The link frame is delivered only if every
+            // chunk decodes — a simple block-ACK ARQ.
+            let (wire, algo) = maybe_compress(&payload, self.params.compression);
+            let mut received = Vec::with_capacity(wire.len());
+            let mut snr_acc = 0.0_f32;
+            let mut chunk_count = 0u32;
+            let mut burst_ok = true;
+            for chunk in wire.chunks(FRAME_CHUNK) {
+                if engine_transmit(&mut self.fwd.tx_engine, chunk, &mode, fec).is_err() {
+                    burst_ok = false;
+                    break;
+                }
+                let (tx_s, rx_s) = self.fwd.route_tapped(self.fwd_ch.as_mut());
+                fwd_air += tx_s.len() as f64 / SAMPLE_RATE;
+                snr_acc += estimate_snr_db(&tx_s, &rx_s);
+                chunk_count += 1;
+                forward_tx = tx_s;
+                forward_rx = rx_s;
+                match engine_receive(&mut self.fwd.rx_engine, &mode, fec) {
+                    Ok(b) if b == chunk => received.extend_from_slice(&b),
+                    _ => {
+                        burst_ok = false;
+                        break;
+                    }
+                }
             }
-            let (tx_s, rx_s) = self.fwd.route_tapped(self.fwd_ch.as_mut());
-            fwd_air += tx_s.len() as f64 / SAMPLE_RATE;
-            let snr = estimate_snr_db(&tx_s, &rx_s);
+            let snr = if chunk_count > 0 {
+                snr_acc / chunk_count as f32
+            } else {
+                0.0
+            };
             last_snr = snr;
-            let decode_ok = engine_receive(&mut self.fwd.rx_engine, &mode, fec)
-                .map(|d| d == payload)
-                .unwrap_or(false);
-            forward_tx = tx_s;
-            forward_rx = rx_s;
+            let decode_ok = burst_ok
+                && received == wire
+                && decompress(&received, algo)
+                    .map(|d| d == payload)
+                    .unwrap_or(false);
 
             // B→A ACK (real FSK4 frame through the reverse channel).
             ack_sent = decide_ack(decode_ok, snr, &self.profile, level);
@@ -660,6 +712,7 @@ mod tests {
             payload_bytes_per_frame: 32,
             total_frames: 12,
             fec: FecMode::Rs,
+            compression: CompressionAlgorithm::None,
             turnaround_s: 0.2,
             max_attempts: 4,
             seed: 1,
@@ -688,6 +741,7 @@ mod tests {
             payload_bytes_per_frame: 64,
             total_frames: 8,
             fec: FecMode::None,
+            compression: CompressionAlgorithm::None,
             turnaround_s: 0.25,
             max_attempts: 3,
             seed: 7,
@@ -725,6 +779,49 @@ mod tests {
             "a very noisy link must not outperform a clean one ({:.0} vs {:.0})",
             noisy.effective_bps,
             clean.effective_bps
+        );
+    }
+
+    #[test]
+    fn large_payload_chunks_and_delivers() {
+        // > 255 bytes must not stall: it is sent as a burst of chunks and still delivered.
+        let r = run_link(&LinkParams {
+            profile_name: "hpx_wideband".into(), // starts fast (QPSK500), avoids slow BPSK31
+            forward: ChannelSpec::Clean,
+            reverse: ChannelSpec::Clean,
+            payload_bytes_per_frame: 600,
+            total_frames: 4,
+            fec: FecMode::Rs,
+            seed: 11,
+            ..LinkParams::default()
+        });
+        assert_eq!(r.frames_delivered, 4, "all large-payload frames delivered");
+        assert!(r.effective_bps > 0.0);
+    }
+
+    #[test]
+    fn compression_raises_effective_rate() {
+        let base = LinkParams {
+            profile_name: "hpx_wideband".into(),
+            forward: ChannelSpec::Clean,
+            reverse: ChannelSpec::Clean,
+            payload_bytes_per_frame: 400,
+            total_frames: 4,
+            fec: FecMode::Rs,
+            seed: 5,
+            ..LinkParams::default()
+        };
+        let plain = run_link(&base);
+        let zipped = run_link(&LinkParams {
+            compression: CompressionAlgorithm::Lz4,
+            ..base.clone()
+        });
+        // make_payload is highly compressible repeating text, so LZ4 must raise goodput.
+        assert!(
+            zipped.effective_bps > plain.effective_bps,
+            "compressed {:.0} should exceed plain {:.0}",
+            zipped.effective_bps,
+            plain.effective_bps
         );
     }
 }
