@@ -58,6 +58,9 @@ pub enum ChannelSpec {
     GilbertElliott(f32),
     /// Slow QSB amplitude fading on an AWGN floor at the given SNR (dB).
     Qsb(f32),
+    /// Frequency-flat Rayleigh fading (1 Hz Doppler, carrier-phase realistic, no multipath)
+    /// at the given SNR (dB).
+    FlatFading(f32),
 }
 
 impl ChannelSpec {
@@ -100,6 +103,9 @@ impl ChannelSpec {
                 fade_depth: 0.6,
                 sample_rate: 8000,
             }),
+            ChannelSpec::FlatFading(snr) => ChannelModelConfig::FlatFading(
+                openpulse_channel::flat_fading::FlatFadingConfig::moderate(snr, Some(seed)),
+            ),
         }
     }
 
@@ -113,6 +119,7 @@ impl ChannelSpec {
             ChannelSpec::WattersonPoorF1(s) => format!("Watt-Poor-F1 {s:.0}dB"),
             ChannelSpec::GilbertElliott(s) => format!("G-E {s:.0}dB"),
             ChannelSpec::Qsb(s) => format!("QSB {s:.0}dB"),
+            ChannelSpec::FlatFading(s) => format!("FlatFade {s:.0}dB"),
         }
     }
 }

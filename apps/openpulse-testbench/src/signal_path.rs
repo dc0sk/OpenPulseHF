@@ -1328,6 +1328,9 @@ fn make_channel_config(config: &AppConfig) -> ChannelModelConfig {
             cfg.snr_db = snr;
             ChannelModelConfig::Watterson(cfg)
         }
+        NoiseModel::FlatFading => ChannelModelConfig::FlatFading(
+            openpulse_channel::flat_fading::FlatFadingConfig::moderate(snr, None),
+        ),
         NoiseModel::Qrn => ChannelModelConfig::Qrn(QrnConfig {
             gaussian_snr_db: snr,
             impulse_rate_hz: 5.0,

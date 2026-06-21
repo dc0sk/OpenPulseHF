@@ -34,6 +34,7 @@ enum ChannelKind {
     WattersonModerate,
     WattersonPoor,
     GilbertElliott,
+    FlatFading,
 }
 
 impl ChannelKind {
@@ -45,6 +46,7 @@ impl ChannelKind {
             ChannelKind::WattersonModerate => ChannelSpec::WattersonModerateF1(snr),
             ChannelKind::WattersonPoor => ChannelSpec::WattersonPoorF1(snr),
             ChannelKind::GilbertElliott => ChannelSpec::GilbertElliott(snr),
+            ChannelKind::FlatFading => ChannelSpec::FlatFading(snr),
         }
     }
 }

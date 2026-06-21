@@ -31,16 +31,18 @@ enum ChannelKind {
     WattersonModerate,
     WattersonPoor,
     GilbertElliott,
+    FlatFading,
 }
 
 impl ChannelKind {
-    const ALL: [ChannelKind; 6] = [
+    const ALL: [ChannelKind; 7] = [
         ChannelKind::Clean,
         ChannelKind::Awgn,
         ChannelKind::WattersonGood,
         ChannelKind::WattersonModerate,
         ChannelKind::WattersonPoor,
         ChannelKind::GilbertElliott,
+        ChannelKind::FlatFading,
     ];
     fn label(self) -> &'static str {
         match self {
@@ -50,6 +52,7 @@ impl ChannelKind {
             ChannelKind::WattersonModerate => "Watterson Moderate-F1",
             ChannelKind::WattersonPoor => "Watterson Poor-F1",
             ChannelKind::GilbertElliott => "Gilbert-Elliott",
+            ChannelKind::FlatFading => "Flat Fading (1 Hz)",
         }
     }
     fn spec(self, snr: f32) -> ChannelSpec {
@@ -60,6 +63,7 @@ impl ChannelKind {
             ChannelKind::WattersonModerate => ChannelSpec::WattersonModerateF1(snr),
             ChannelKind::WattersonPoor => ChannelSpec::WattersonPoorF1(snr),
             ChannelKind::GilbertElliott => ChannelSpec::GilbertElliott(snr),
+            ChannelKind::FlatFading => ChannelSpec::FlatFading(snr),
         }
     }
 }
