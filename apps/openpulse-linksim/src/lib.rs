@@ -14,6 +14,9 @@
 //! retransmissions, yielding the **effective two-way transfer rate** — the goodput a
 //! station actually achieves under the simulated conditions, not the raw modem rate.
 
+#[cfg(feature = "serve")]
+pub mod serve;
+
 use openpulse_channel::{
     build_channel, AwgnConfig, ChannelModelConfig, GilbertElliottConfig, QsbConfig, WattersonConfig,
 };

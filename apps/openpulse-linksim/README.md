@@ -51,6 +51,28 @@ the channel live**, so you can watch the ladder adapt and the bottom plot track 
 effective two-way transfer rate over time. Runs continuously on a background thread over the
 same `LinkSim` engine.
 
+## Serve the operator panel (`openpulse-panel`)
+
+The simulator can speak the **`openpulse-daemon` control protocol**, so an *unmodified*
+`openpulse-panel` connects to it exactly as it would to a real station — no daemon, modem,
+or audio hardware required:
+
+```bash
+# Terminal 1 — run the sim as a fake daemon
+cargo run -p openpulse-linksim --features serve -- \
+    --serve 127.0.0.1:9000 --profile hpx_hf --channel awgn --snr 12
+
+# Terminal 2 — point the panel at it
+cargo run -p openpulse-panel        # Server: 127.0.0.1:9000 → Connect
+```
+
+The panel then shows the live simulated link: the speed-level ladder climbing/dropping, HPX
+session state, effective-bps / compression / signal metrics, and the on-air waterfall (the
+FFT of the post-channel received waveform). It emits the same NDJSON `ControlEvent` stream
+interleaved with binary `OPSP` spectrum frames a real daemon does. Operator-only controls
+(messages, QSY, rig CAT, PTT, RF-connect) are inert — there is no real peer. `--serve-fps`
+paces the waterfall scroll.
+
 ## Library
 
 `LinkSim` is a step-able simulation (`new` / `step` → `FrameStep` / `set_conditions` /

@@ -115,6 +115,14 @@ struct Cli {
     /// Emit JSON instead of a table.
     #[arg(long)]
     json: bool,
+    /// Serve the openpulse-daemon control protocol on this address (e.g. 127.0.0.1:9000)
+    /// so an unmodified openpulse-panel can connect and visualize a live simulation.
+    /// Requires building with `--features serve`.
+    #[arg(long, value_name = "ADDR")]
+    serve: Option<String>,
+    /// Waterfall scroll rate (frames/second) for `--serve`.
+    #[arg(long, default_value = "20")]
+    serve_fps: u32,
 }
 
 fn parse_sweep(s: &str) -> Result<Vec<f32>, String> {
@@ -154,6 +162,25 @@ fn params_for(cli: &Cli, snr: f32) -> LinkParams {
     }
 }
 
+#[cfg(feature = "serve")]
+fn serve_mode(cli: &Cli, addr: &str) {
+    let mut params = params_for(cli, cli.snr);
+    params.total_frames = usize::MAX; // run continuously until the panel disconnects
+    if let Err(e) = openpulse_linksim::serve::serve(addr, &params, cli.serve_fps) {
+        eprintln!("linksim serve error: {e}");
+        std::process::exit(1);
+    }
+}
+
+#[cfg(not(feature = "serve"))]
+fn serve_mode(_cli: &Cli, _addr: &str) {
+    eprintln!(
+        "--serve requires the `serve` feature: \
+         cargo run -p openpulse-linksim --features serve -- --serve <ADDR>"
+    );
+    std::process::exit(2);
+}
+
 fn fmt_bps(bps: f64) -> String {
     if bps >= 1000.0 {
         format!("{:.2} kbps", bps / 1000.0)
@@ -177,6 +204,11 @@ fn print_row(r: &LinkResult) {
 
 fn main() {
     let cli = Cli::parse();
+
+    if let Some(addr) = cli.serve.clone() {
+        serve_mode(&cli, &addr);
+        return;
+    }
 
     let snrs = match &cli.sweep {
         Some(s) => match parse_sweep(s) {
