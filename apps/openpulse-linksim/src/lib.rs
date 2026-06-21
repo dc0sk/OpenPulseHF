@@ -421,6 +421,8 @@ pub struct FrameStep {
     pub effective_bps_so_far: f64,
     /// This frame's on-air time (forward + ACK + turnaround over all its attempts), seconds.
     pub frame_air_s: f64,
+    /// User payload bytes attempted this frame (before compression / FEC).
+    pub payload_bytes: usize,
     /// Payload bytes delivered by this frame (0 if it failed) — for windowed throughput.
     pub delivered_bytes: usize,
     /// compressed wire bytes / original payload bytes (≤ 1 when compression helped).
@@ -713,6 +715,7 @@ impl LinkSim {
             ack_rx,
             effective_bps_so_far,
             frame_air_s,
+            payload_bytes: self.params.payload_bytes_per_frame,
             delivered_bytes: if delivered {
                 self.params.payload_bytes_per_frame
             } else {

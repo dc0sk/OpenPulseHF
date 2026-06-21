@@ -205,6 +205,10 @@ struct LinkApp {
     disp_net: f64,
     disp_eff: f64,
     disp_goodput: f64,
+
+    /// Fan-out hub feeding connected `openpulse-panel` clients (when launched with `--serve`).
+    #[cfg(feature = "serve")]
+    hub: Option<openpulse_linksim::serve::FrameHub>,
 }
 
 impl LinkApp {
@@ -244,6 +248,8 @@ impl LinkApp {
             disp_net: 0.0,
             disp_eff: 0.0,
             disp_goodput: 0.0,
+            #[cfg(feature = "serve")]
+            hub: None,
         }
     }
 
@@ -314,6 +320,12 @@ impl LinkApp {
             }
         }
         for fs in steps {
+            // Feed any connected openpulse-panel clients from the same live frame.
+            #[cfg(feature = "serve")]
+            if let Some(h) = &self.hub {
+                h.publish(&fs);
+            }
+
             self.panels[0].push(&fs.forward_tx);
             self.panels[1].push(&fs.forward_rx);
             self.panels[2].push(&fs.ack_tx);
@@ -565,6 +577,20 @@ impl eframe::App for LinkApp {
                 ui.separator();
                 ui.label("Turnaround:");
                 ui.add(egui::Slider::new(&mut self.ui_turnaround, 0.0..=1.0).suffix(" s"));
+
+                #[cfg(feature = "serve")]
+                if let Some(h) = &self.hub {
+                    let n = h.client_count();
+                    let (color, text) = if n > 0 {
+                        (egui::Color32::GREEN, format!("● panel ×{n}"))
+                    } else {
+                        (egui::Color32::DARK_GRAY, "○ panel".to_string())
+                    };
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(egui::RichText::new(text).color(color))
+                            .on_hover_text("Connected openpulse-panel clients");
+                    });
+                }
             });
         });
 
@@ -703,7 +729,36 @@ impl eframe::App for LinkApp {
     }
 }
 
+/// Parse `--serve <ADDR>` (or `--serve=<ADDR>`) and, if present, start the panel server
+/// thread. Returns the [`FrameHub`] the GUI publishes into.
+#[cfg(feature = "serve")]
+fn start_panel_server() -> Option<openpulse_linksim::serve::FrameHub> {
+    use openpulse_linksim::serve::{serve_hub, FrameHub};
+    let mut args = std::env::args().skip(1);
+    let mut addr = None;
+    while let Some(a) = args.next() {
+        if a == "--serve" {
+            addr = args.next();
+        } else if let Some(rest) = a.strip_prefix("--serve=") {
+            addr = Some(rest.to_string());
+        }
+    }
+    let addr = addr?;
+    eprintln!("linksim-gui: serving panel protocol on {addr} — connect openpulse-panel there");
+    let hub = FrameHub::new();
+    let h = hub.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = serve_hub(&addr, h) {
+            eprintln!("linksim-gui: panel server error: {e}");
+        }
+    });
+    Some(hub)
+}
+
 fn main() -> eframe::Result<()> {
+    #[cfg(feature = "serve")]
+    let hub = start_panel_server();
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("OpenPulse Two-Station Link Simulator")
@@ -713,6 +768,14 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "openpulse-linksim-gui",
         options,
-        Box::new(|_cc| Ok(Box::new(LinkApp::new()))),
+        Box::new(move |_cc| {
+            #[allow(unused_mut)]
+            let mut app = LinkApp::new();
+            #[cfg(feature = "serve")]
+            {
+                app.hub = hub;
+            }
+            Ok(Box::new(app))
+        }),
     )
 }

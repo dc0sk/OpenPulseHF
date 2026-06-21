@@ -55,23 +55,33 @@ same `LinkSim` engine.
 
 The simulator can speak the **`openpulse-daemon` control protocol**, so an *unmodified*
 `openpulse-panel` connects to it exactly as it would to a real station — no daemon, modem,
-or audio hardware required:
+or audio hardware required. It emits the same NDJSON `ControlEvent` stream interleaved with
+binary `OPSP` spectrum frames a real daemon does (speed-level ladder, HPX session state,
+effective-bps / compression / signal metrics, and the on-air waterfall). Operator-only
+controls (messages, QSY, rig CAT, PTT, RF-connect) are inert — there is no real peer.
+
+There are two ways to serve it:
+
+**A. Both windows from one simulation (the demo).** Launch the linksim GUI with `--serve`:
+the GUI window *and* the panel are driven by the **same** live `LinkSim`, so the GUI's SNR
+slider / profile / FEC controls drive the panel too, in lock-step. A `● panel ×N` indicator
+in the GUI toolbar shows connected panels.
 
 ```bash
-# Terminal 1 — run the sim as a fake daemon
-cargo run -p openpulse-linksim --features serve -- \
-    --serve 127.0.0.1:9000 --profile hpx_hf --channel awgn --snr 12
+# Terminal 1 — the GUI window, also serving the panel
+cargo run -p openpulse-linksim --features "gui serve" --bin openpulse-linksim-gui -- --serve 127.0.0.1:9000
 
-# Terminal 2 — point the panel at it
+# Terminal 2 — the operator panel, fed by the same sim
 cargo run -p openpulse-panel        # Server: 127.0.0.1:9000 → Connect
 ```
 
-The panel then shows the live simulated link: the speed-level ladder climbing/dropping, HPX
-session state, effective-bps / compression / signal metrics, and the on-air waterfall (the
-FFT of the post-channel received waveform). It emits the same NDJSON `ControlEvent` stream
-interleaved with binary `OPSP` spectrum frames a real daemon does. Operator-only controls
-(messages, QSY, rig CAT, PTT, RF-connect) are inert — there is no real peer. `--serve-fps`
-paces the waterfall scroll.
+**B. Headless server (no GUI).** Run the CLI as a fake daemon; `--serve-fps` paces the
+waterfall scroll. Useful when you only want the panel.
+
+```bash
+cargo run -p openpulse-linksim --features serve -- \
+    --serve 127.0.0.1:9000 --profile hpx_hf --channel awgn --snr 12
+```
 
 ## Library
 

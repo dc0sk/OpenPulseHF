@@ -1,27 +1,25 @@
-//! Integration test for the daemon-protocol serve mode.
+//! Integration tests for the daemon-protocol serve mode.
 //!
-//! Starts the server on an ephemeral port, connects a raw TCP client (standing in for
-//! `openpulse-panel`), and asserts it receives both a parseable `ControlEvent` JSON line
-//! and a binary `OPSP` spectrum frame.
+//! Both the owned-sim path (`serve_on`) and the external-hub path (`serve_hub_on`) start a
+//! server on an ephemeral port, connect a raw TCP client (standing in for `openpulse-panel`),
+//! and assert it receives both a parseable `ControlEvent` JSON line and a binary `OPSP`
+//! spectrum frame.
 
 #![cfg(feature = "serve")]
 
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
 use openpulse_core::compression::CompressionAlgorithm;
 use openpulse_core::fec::FecMode;
-use openpulse_linksim::{serve::serve_on, ChannelSpec, LinkParams};
+use openpulse_linksim::serve::{serve_hub_on, serve_on, FrameHub};
+use openpulse_linksim::{ChannelSpec, LinkParams, LinkSim};
 
-#[test]
-fn panel_client_receives_events_and_spectrum() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-    let addr = listener.local_addr().expect("local addr");
-
-    // hpx_wideband starts at a fast mode (QPSK500), so frames are short and JSON events
-    // arrive promptly. usize::MAX runs continuously until the client disconnects.
-    let params = LinkParams {
+fn demo_params() -> LinkParams {
+    // hpx_wideband starts at a fast mode (QPSK500), so frames are short and events arrive
+    // promptly. usize::MAX runs continuously until the client disconnects.
+    LinkParams {
         profile_name: "hpx_wideband".into(),
         forward: ChannelSpec::Awgn(20.0),
         reverse: ChannelSpec::Awgn(25.0),
@@ -32,13 +30,12 @@ fn panel_client_receives_events_and_spectrum() {
         turnaround_s: 0.2,
         max_attempts: 4,
         seed: 99,
-    };
+    }
+}
 
-    std::thread::spawn(move || {
-        let _ = serve_on(listener, &params, 50);
-    });
-
-    let mut stream = TcpStream::connect(addr).expect("connect");
+/// Read from `stream` until both a JSON `ControlEvent` and an `OPSP` spectrum frame are seen
+/// (or the deadline passes). Asserts every JSON line parses and carries a `type` tag.
+fn assert_receives_events_and_spectrum(mut stream: TcpStream) {
     stream
         .set_read_timeout(Some(Duration::from_millis(500)))
         .unwrap();
@@ -49,7 +46,7 @@ fn panel_client_receives_events_and_spectrum() {
     let mut buf: Vec<u8> = Vec::new();
     let mut saw_json = false;
     let mut saw_spectrum = false;
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = Instant::now() + Duration::from_secs(10);
 
     while Instant::now() < deadline && !(saw_json && saw_spectrum) {
         let mut tmp = [0u8; 8192];
@@ -102,4 +99,43 @@ fn panel_client_receives_events_and_spectrum() {
         saw_spectrum,
         "client should receive at least one spectrum frame"
     );
+}
+
+#[test]
+fn owned_sim_client_receives_events_and_spectrum() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local addr");
+    let params = demo_params();
+    std::thread::spawn(move || {
+        let _ = serve_on(listener, &params, 50);
+    });
+
+    let stream = TcpStream::connect(addr).expect("connect");
+    assert_receives_events_and_spectrum(stream);
+}
+
+#[test]
+fn hub_client_receives_published_frames() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local addr");
+    let hub = FrameHub::new();
+
+    let server_hub = hub.clone();
+    std::thread::spawn(move || {
+        let _ = serve_hub_on(listener, server_hub);
+    });
+
+    // Drive a LinkSim and publish each frame to the hub — the external-producer pattern the
+    // GUI uses. Runs until the test process exits.
+    let pub_hub = hub.clone();
+    std::thread::spawn(move || {
+        let mut sim = LinkSim::new(&demo_params());
+        while let Some(fs) = sim.step() {
+            pub_hub.publish(&fs);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    });
+
+    let stream = TcpStream::connect(addr).expect("connect");
+    assert_receives_events_and_spectrum(stream);
 }
