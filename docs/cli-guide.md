@@ -5,7 +5,7 @@ status: living
 last_updated: 2026-05-02
 ---
 
-# CLI Guide - openpulse (v0.1.0)
+# CLI Guide - openpulse (v0.2.0)
 
 ## Build prerequisites
 

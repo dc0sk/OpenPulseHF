@@ -1,6 +1,7 @@
 [package]
 name        = "openpulse-linksim"
 description = "Two-station bidirectional ARQ link simulator: proves effective two-way transfer rates under simulated SNR / noise conditions"
+default-run = "openpulse-linksim"
 version.workspace    = true
 edition.workspace    = true
 license.workspace    = true
@@ -14,6 +15,14 @@ path = "src/lib.rs"
 [[bin]]
 name = "openpulse-linksim"
 path = "src/main.rs"
+
+[[bin]]
+name = "openpulse-linksim-gui"
+path = "src/gui.rs"
+required-features = ["gui"]
+
+[features]
+gui = ["dep:eframe", "dep:egui", "dep:egui_plot"]
 
 [dependencies]
 openpulse-core    = { workspace = true }
@@ -30,3 +39,6 @@ pilot-plugin      = { workspace = true }
 clap              = { workspace = true }
 serde             = { workspace = true }
 serde_json        = { workspace = true }
+eframe            = { workspace = true, optional = true }
+egui              = { workspace = true, optional = true }
+egui_plot         = { workspace = true, optional = true }

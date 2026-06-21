@@ -5,8 +5,26 @@
 //! overhead, turnaround, retransmission, and over-the-air rate adaptation.
 
 use clap::{Parser, ValueEnum};
+use openpulse_core::compression::{CompressionAlgorithm, ZSTD_DICT_ID};
 use openpulse_core::fec::FecMode;
 use openpulse_linksim::{run_link, ChannelSpec, LinkParams, LinkResult};
+
+#[derive(Clone, Copy, ValueEnum)]
+enum CompressionArg {
+    None,
+    Lz4,
+    Zstd,
+}
+
+impl From<CompressionArg> for CompressionAlgorithm {
+    fn from(a: CompressionArg) -> Self {
+        match a {
+            CompressionArg::None => CompressionAlgorithm::None,
+            CompressionArg::Lz4 => CompressionAlgorithm::Lz4,
+            CompressionArg::Zstd => CompressionAlgorithm::Zstd(ZSTD_DICT_ID),
+        }
+    }
+}
 
 #[derive(Clone, Copy, ValueEnum)]
 enum ChannelKind {
@@ -70,6 +88,9 @@ struct Cli {
     /// FEC for data frames.
     #[arg(long, value_enum, default_value = "rs")]
     fec: FecArg,
+    /// Payload compression applied before FEC.
+    #[arg(long, value_enum, default_value = "none")]
+    compression: CompressionArg,
     /// Payload bytes per data frame.
     #[arg(long, default_value = "64")]
     payload: usize,
@@ -126,6 +147,7 @@ fn params_for(cli: &Cli, snr: f32) -> LinkParams {
         payload_bytes_per_frame: cli.payload,
         total_frames: cli.frames,
         fec: cli.fec.into(),
+        compression: cli.compression.into(),
         turnaround_s: cli.turnaround,
         max_attempts: cli.max_attempts,
         seed: cli.seed,
