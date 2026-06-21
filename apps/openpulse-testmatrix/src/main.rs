@@ -239,6 +239,10 @@ fn main() {
             "Known limitations (registered, not exercised): {}",
             cases::KNOWN_LIMITATION_MODES.join(", ")
         );
+        println!(
+            "Deferred pilot variants (registered, not yet in quick matrix): {}",
+            cases::PILOT_POST_V1_MODES.join(", ")
+        );
 
         write_reports(
             &results,
