@@ -3913,6 +3913,7 @@ dependencies = [
  "ofdm-plugin",
  "openpulse-channel",
  "openpulse-core",
+ "openpulse-daemon",
  "openpulse-modem",
  "pilot-plugin",
  "psk8-plugin",

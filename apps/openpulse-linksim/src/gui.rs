@@ -16,10 +16,7 @@ use openpulse_channel::dsp::{PowerSpectrum, WaterfallBuffer, FREQ_BINS, WATERFAL
 use openpulse_core::compression::{CompressionAlgorithm, ZSTD_DICT_ID};
 use openpulse_core::fec::FecMode;
 use openpulse_core::profile::SessionProfile;
-use openpulse_linksim::{
-    fec_code_rate, mode_gross_bps, ChannelSpec, FrameStep, LinkParams, LinkSim,
-};
-use std::collections::HashMap;
+use openpulse_linksim::{ChannelSpec, FrameStep, LinkParams, LinkSim};
 
 const MIN_DB: f32 = -100.0;
 const MAX_DB: f32 = 0.0;
@@ -197,14 +194,17 @@ struct LinkApp {
     frame_counter: usize,
     delivered: usize,
     attempted: usize,
-    /// Measured gross bps per mode (filled lazily as modes appear).
-    rate_cache: HashMap<String, f64>,
-    // Current bitrate readout (testbench-style): Gross = mode rate, Net = Gross × code rate,
-    // Effective = Net × compression advantage × success. Goodput = measured two-way rate.
+    // Current bitrate readout (testbench-style, computed by the sim): Gross = mode rate,
+    // Net = Gross × code rate, Effective = Net × compression advantage × success. Goodput =
+    // measured two-way rate.
     disp_gross: f64,
     disp_net: f64,
     disp_eff: f64,
     disp_goodput: f64,
+
+    /// Fan-out hub feeding connected `openpulse-panel` clients (when launched with `--serve`).
+    #[cfg(feature = "serve")]
+    hub: Option<openpulse_linksim::serve::FrameHub>,
 }
 
 impl LinkApp {
@@ -239,11 +239,12 @@ impl LinkApp {
             frame_counter: 0,
             delivered: 0,
             attempted: 0,
-            rate_cache: HashMap::new(),
             disp_gross: 0.0,
             disp_net: 0.0,
             disp_eff: 0.0,
             disp_goodput: 0.0,
+            #[cfg(feature = "serve")]
+            hub: None,
         }
     }
 
@@ -314,15 +315,15 @@ impl LinkApp {
             }
         }
         for fs in steps {
+            // Feed any connected openpulse-panel clients from the same live frame.
+            #[cfg(feature = "serve")]
+            if let Some(h) = &self.hub {
+                h.publish(&fs);
+            }
+
             self.panels[0].push(&fs.forward_tx);
             self.panels[1].push(&fs.forward_rx);
             self.panels[2].push(&fs.ack_tx);
-
-            if !self.rate_cache.contains_key(&fs.mode) {
-                if let Some(r) = mode_gross_bps(&fs.mode) {
-                    self.rate_cache.insert(fs.mode.clone(), r);
-                }
-            }
 
             self.frame_counter += 1;
             self.attempted += 1;
@@ -334,25 +335,16 @@ impl LinkApp {
             while self.window.len() > WINDOW {
                 self.window.pop_front();
             }
-            // Windowed frame-success rate and measured two-way goodput.
-            let win_total = self.window.len();
+            // Measured wall-clock two-way goodput over the rolling window.
             let (win_bits, win_air): (usize, f64) = self
                 .window
                 .iter()
                 .fold((0, 0.0), |(b, a), &(fb, fa)| (b + fb, a + fa));
-            let win_ok = self.window.iter().filter(|(b, _)| *b > 0).count();
-            let success = if win_total > 0 {
-                win_ok as f64 / win_total as f64
-            } else {
-                0.0
-            };
-            // Testbench-style rates for the current mode.
-            let gross = self.rate_cache.get(&fs.mode).copied().unwrap_or(0.0);
-            let net = gross * fec_code_rate(self.ui_fec);
-            let compress_adv = 1.0 / fs.compress_ratio.max(1e-9);
-            self.disp_gross = gross;
-            self.disp_net = net;
-            self.disp_eff = net * compress_adv * success;
+            // Rates come from the sim (the same values fed to the panel, so the two windows
+            // display identical Gross / Net / Effective figures).
+            self.disp_gross = fs.gross_bps;
+            self.disp_net = fs.net_bps;
+            self.disp_eff = fs.effective_bps;
             self.disp_goodput = if win_air > 0.0 {
                 win_bits as f64 / win_air
             } else {
@@ -565,6 +557,20 @@ impl eframe::App for LinkApp {
                 ui.separator();
                 ui.label("Turnaround:");
                 ui.add(egui::Slider::new(&mut self.ui_turnaround, 0.0..=1.0).suffix(" s"));
+
+                #[cfg(feature = "serve")]
+                if let Some(h) = &self.hub {
+                    let n = h.client_count();
+                    let (color, text) = if n > 0 {
+                        (egui::Color32::GREEN, format!("● panel ×{n}"))
+                    } else {
+                        (egui::Color32::DARK_GRAY, "○ panel".to_string())
+                    };
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(egui::RichText::new(text).color(color))
+                            .on_hover_text("Connected openpulse-panel clients");
+                    });
+                }
             });
         });
 
@@ -703,7 +709,36 @@ impl eframe::App for LinkApp {
     }
 }
 
+/// Parse `--serve <ADDR>` (or `--serve=<ADDR>`) and, if present, start the panel server
+/// thread. Returns the [`FrameHub`] the GUI publishes into.
+#[cfg(feature = "serve")]
+fn start_panel_server() -> Option<openpulse_linksim::serve::FrameHub> {
+    use openpulse_linksim::serve::{serve_hub, FrameHub};
+    let mut args = std::env::args().skip(1);
+    let mut addr = None;
+    while let Some(a) = args.next() {
+        if a == "--serve" {
+            addr = args.next();
+        } else if let Some(rest) = a.strip_prefix("--serve=") {
+            addr = Some(rest.to_string());
+        }
+    }
+    let addr = addr?;
+    eprintln!("linksim-gui: serving panel protocol on {addr} — connect openpulse-panel there");
+    let hub = FrameHub::new();
+    let h = hub.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = serve_hub(&addr, h) {
+            eprintln!("linksim-gui: panel server error: {e}");
+        }
+    });
+    Some(hub)
+}
+
 fn main() -> eframe::Result<()> {
+    #[cfg(feature = "serve")]
+    let hub = start_panel_server();
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("OpenPulse Two-Station Link Simulator")
@@ -713,6 +748,14 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "openpulse-linksim-gui",
         options,
-        Box::new(|_cc| Ok(Box::new(LinkApp::new()))),
+        Box::new(move |_cc| {
+            #[allow(unused_mut)]
+            let mut app = LinkApp::new();
+            #[cfg(feature = "serve")]
+            {
+                app.hub = hub;
+            }
+            Ok(Box::new(app))
+        }),
     )
 }

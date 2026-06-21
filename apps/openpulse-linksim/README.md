@@ -51,6 +51,45 @@ the channel live**, so you can watch the ladder adapt and the bottom plot track 
 effective two-way transfer rate over time. Runs continuously on a background thread over the
 same `LinkSim` engine.
 
+## Serve the operator panel (`openpulse-panel`)
+
+The simulator can speak the **`openpulse-daemon` control protocol**, so an *unmodified*
+`openpulse-panel` connects to it exactly as it would to a real station — no daemon, modem,
+or audio hardware required. It emits the same NDJSON `ControlEvent` stream interleaved with
+binary `OPSP` spectrum frames a real daemon does (speed-level ladder, HPX session state,
+effective-bps / compression / signal metrics, and the on-air waterfall). The panel's
+`Effective` reading uses the same definition as the linksim GUI (Net × compression × frame
+success), so the two windows agree.
+
+The panel is a **monitor** here: operator-only controls (messages, QSY, rig CAT, PTT,
+RF-connect) are inert (no real peer), and its mode selector has no effect because the link is
+adaptive — the **profile / ladder is driven from the linksim GUI** (or the `--profile` flag in
+headless mode), and the sim steps the mode up and down on its own. The panel has no profile
+concept because the daemon control protocol exposes modes, not profiles.
+
+There are two ways to serve it:
+
+**A. Both windows from one simulation (the demo).** Launch the linksim GUI with `--serve`:
+the GUI window *and* the panel are driven by the **same** live `LinkSim`, so the GUI's SNR
+slider / profile / FEC controls drive the panel too, in lock-step. A `● panel ×N` indicator
+in the GUI toolbar shows connected panels.
+
+```bash
+# Terminal 1 — the GUI window, also serving the panel
+cargo run -p openpulse-linksim --features "gui serve" --bin openpulse-linksim-gui -- --serve 127.0.0.1:9000
+
+# Terminal 2 — the operator panel, fed by the same sim
+cargo run -p openpulse-panel        # Server: 127.0.0.1:9000 → Connect
+```
+
+**B. Headless server (no GUI).** Run the CLI as a fake daemon; `--serve-fps` paces the
+waterfall scroll. Useful when you only want the panel.
+
+```bash
+cargo run -p openpulse-linksim --features serve -- \
+    --serve 127.0.0.1:9000 --profile hpx_hf --channel awgn --snr 12
+```
+
 ## Library
 
 `LinkSim` is a step-able simulation (`new` / `step` → `FrameStep` / `set_conditions` /
