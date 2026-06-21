@@ -14,14 +14,15 @@ type Complex32 = Complex<f32>;
 
 /// Generate `n` complex Doppler-shaped Rayleigh fading envelope samples (E[|h|²] = 1).
 ///
-/// Uses a single FFT of length ≥ n (next power of two) so all samples within the call share
-/// a single coherent realization — correct temporal correlation across the full signal length
-/// rather than independent states at fixed block boundaries.
+/// The fading process is band-limited to the Doppler spread, so it is generated at a low
+/// internal rate `fs_env ≫ doppler` and linearly interpolated up to the signal rate. At the
+/// signal rate the envelope is hugely oversampled relative to its bandwidth (e.g. a 0.1 Hz
+/// process at 8 kHz), so interpolation is essentially exact — while the shaping FFT stays
+/// small. Generating directly at the signal rate would force a ~2^18 FFT for F1's 0.1 Hz
+/// (bin_width must be ≤ doppler/2), which dominated channel CPU.
 ///
-/// For low Doppler spreads (e.g. F1 = 0.1 Hz) the signal-length FFT alone yields a sub-bin
-/// shaping filter (σ_bins ≪ 1) that would collapse to the 0.5 floor and produce a near-constant
-/// envelope. The FFT is therefore enlarged so σ_bins ≥ `TARGET_SIGMA_BINS`, up to `MAX_FFT`
-/// samples (~2 MB of `Complex<f32>`).
+/// A single coherent realization spans the whole call (one shaping FFT), so the temporal
+/// correlation is correct across the full length rather than resetting at block boundaries.
 pub(crate) fn doppler_envelope(
     rng: &mut StdRng,
     planner: &mut FftPlanner<f32>,
@@ -30,15 +31,24 @@ pub(crate) fn doppler_envelope(
     sample_rate: u32,
 ) -> Vec<Complex32> {
     const TARGET_SIGMA_BINS: f32 = 2.0;
-    const MAX_FFT: usize = 1 << 18;
-    let signal_fft = n.next_power_of_two().max(4);
+    const MAX_FFT: usize = 1 << 16;
     let sr = sample_rate as f32;
+
+    // Low internal rate: ≥ ~8 samples per Doppler cycle, floored at 50 Hz, capped at the
+    // signal rate (decim = 1, i.e. no decimation, only if doppler is absurdly high).
+    let fs_env = (doppler_spread_hz * 8.0).clamp(50.0, sr);
+    let decim = sr / fs_env;
+    // Low-rate sample count covering the n high-rate samples (+2 guard for the interp tail).
+    let n_env = ((n as f32 / decim).ceil() as usize + 2).max(4);
+
+    let signal_fft = n_env.next_power_of_two().max(4);
     let required_fft = if doppler_spread_hz > 1e-4 {
-        (TARGET_SIGMA_BINS * sr / doppler_spread_hz).ceil() as usize
+        (TARGET_SIGMA_BINS * fs_env / doppler_spread_hz).ceil() as usize
     } else {
         signal_fft
     };
     let fft_size = signal_fft.max(required_fft.next_power_of_two().min(MAX_FFT));
+
     // Random complex Gaussian spectrum.
     let mut spec: Vec<Complex<f32>> = (0..fft_size)
         .map(|_| {
@@ -49,11 +59,9 @@ pub(crate) fn doppler_envelope(
         })
         .collect();
 
-    // Gaussian Doppler shaping: sigma = doppler_hz / bin_width. `fft_size` is sized above so
-    // σ_bins ≥ TARGET_SIGMA_BINS for non-trivial Doppler; the 0.5 floor remains as
-    // defense-in-depth for the doppler≈0 case and for the MAX_FFT cap.
-    let sigma_bins = (doppler_spread_hz / (sr / fft_size as f32)).max(0.5);
-
+    // Gaussian Doppler shaping at the fs_env bin scale; the 0.5 floor is defense-in-depth for
+    // the doppler≈0 case and the MAX_FFT cap.
+    let sigma_bins = (doppler_spread_hz / (fs_env / fft_size as f32)).max(0.5);
     let filter_energy: f32 = (0..fft_size)
         .map(|k| {
             let freq = if k <= fft_size / 2 {
@@ -64,28 +72,37 @@ pub(crate) fn doppler_envelope(
             (-0.5 * (freq / sigma_bins).powi(2)).exp().powi(2)
         })
         .sum::<f32>();
-
     for (k, s) in spec.iter_mut().enumerate() {
         let freq = if k <= fft_size / 2 {
             k as f32
         } else {
             k as f32 - fft_size as f32
         };
-        let h = (-0.5 * (freq / sigma_bins).powi(2)).exp();
-        *s *= h;
+        *s *= (-0.5 * (freq / sigma_bins).powi(2)).exp();
     }
 
-    // IFFT to time domain.
     let ifft = planner.plan_fft_inverse(fft_size);
     ifft.process(&mut spec);
 
-    // Normalize to unit mean-square. For rustfft's unnormalized IFFT, each time-domain sample
-    // satisfies E[|h[n]|^2] = Σ_k E[|X[k]|^2] = 2·filter_energy (independent of fft_size — the
-    // 1/N from Parseval cancels the N from the unnormalized transform).
+    // Normalize to unit mean-square (the 1/N from Parseval cancels rustfft's unnormalized
+    // IFFT, so E[|h|²] = 2·filter_energy independent of fft_size).
     let scale = 1.0 / (2.0 * filter_energy).sqrt();
-    spec[..n]
+    let env_lo: Vec<Complex32> = spec[..n_env]
         .iter()
         .map(|c| Complex32::new(c.re * scale, c.im * scale))
+        .collect();
+
+    // Linear-interpolate the low-rate envelope up to n samples at the signal rate.
+    let last = env_lo.len() - 1;
+    (0..n)
+        .map(|i| {
+            let pos = i as f32 / decim;
+            let j = pos.floor() as usize;
+            let frac = pos - j as f32;
+            let a = env_lo[j.min(last)];
+            let b = env_lo[(j + 1).min(last)];
+            Complex32::new(a.re + (b.re - a.re) * frac, a.im + (b.im - a.im) * frac)
+        })
         .collect()
 }
 
