@@ -20,6 +20,7 @@ use openpulse_channel::{
 use openpulse_core::ack::{AckFrame, AckType};
 use openpulse_core::compression::{compress, decompress, CompressionAlgorithm};
 use openpulse_core::fec::FecMode;
+use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
 use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::SpeedLevel;
 use openpulse_modem::channel_sim::ChannelSimHarness;
@@ -260,6 +261,64 @@ fn engine_receive(
         FecMode::RsStrong => engine.receive_with_strong_fec(mode, None),
         FecMode::SoftConcatenated => engine.receive_with_soft_viterbi_fec(mode, None),
         _ => engine.receive(mode, None),
+    }
+}
+
+fn make_plugin(mode: &str) -> Box<dyn ModulationPlugin> {
+    use bpsk_plugin::BpskPlugin;
+    use fsk4_plugin::Fsk4Plugin;
+    use ofdm_plugin::OfdmPlugin;
+    use pilot_plugin::PilotPlugin;
+    use psk8_plugin::Psk8Plugin;
+    use qam64_plugin::Qam64Plugin;
+    use qpsk_plugin::QpskPlugin;
+    use scfdma_plugin::ScFdmaPlugin;
+    if mode.starts_with("BPSK") {
+        Box::new(BpskPlugin::new())
+    } else if mode.starts_with("64QAM") {
+        Box::new(Qam64Plugin::new())
+    } else if mode.starts_with("8PSK") {
+        Box::new(Psk8Plugin::new())
+    } else if mode == "FSK4-ACK" {
+        Box::new(Fsk4Plugin::new())
+    } else if mode.starts_with("OFDM") {
+        Box::new(OfdmPlugin::new())
+    } else if mode.starts_with("SCFDMA") {
+        Box::new(ScFdmaPlugin::new())
+    } else if mode.starts_with("PILOT") {
+        Box::new(PilotPlugin::new())
+    } else {
+        Box::new(QpskPlugin::new())
+    }
+}
+
+/// A mode's gross (raw) payload bit rate (bps), measured from the modulator by two-point
+/// payload differencing (cancels fixed preamble). `None` if the mode can't be modulated.
+pub fn mode_gross_bps(mode: &str) -> Option<f64> {
+    let plugin = make_plugin(mode);
+    let cfg = ModulationConfig {
+        mode: mode.into(),
+        center_frequency: 1500.0,
+        sample_rate: 8000,
+        ..ModulationConfig::default()
+    };
+    let s1 = plugin.modulate(&[0x5A; 128], &cfg).ok()?.len();
+    let s2 = plugin.modulate(&[0x5A; 256], &cfg).ok()?.len();
+    if s2 <= s1 {
+        return None;
+    }
+    Some(128.0 * 8.0 * SAMPLE_RATE / (s2 - s1) as f64)
+}
+
+/// FEC code rate (net/gross) for a mode's payload after FEC overhead.
+pub fn fec_code_rate(fec: FecMode) -> f64 {
+    match fec {
+        FecMode::None | FecMode::ShortRs | FecMode::Ldpc => 1.0,
+        FecMode::Rs | FecMode::RsInterleaved => 223.0 / 255.0,
+        FecMode::RsStrong => 191.0 / 255.0,
+        FecMode::Concatenated | FecMode::SoftConcatenated => 223.0 / 255.0 * 0.5,
+        FecMode::LdpcHighRate => 1024.0 / 1152.0,
+        FecMode::Turbo => 1.0 / 3.0,
     }
 }
 

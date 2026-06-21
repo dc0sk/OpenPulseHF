@@ -16,7 +16,10 @@ use openpulse_channel::dsp::{PowerSpectrum, WaterfallBuffer, FREQ_BINS, WATERFAL
 use openpulse_core::compression::{CompressionAlgorithm, ZSTD_DICT_ID};
 use openpulse_core::fec::FecMode;
 use openpulse_core::profile::SessionProfile;
-use openpulse_linksim::{ChannelSpec, FrameStep, LinkParams, LinkSim};
+use openpulse_linksim::{
+    fec_code_rate, mode_gross_bps, ChannelSpec, FrameStep, LinkParams, LinkSim,
+};
+use std::collections::HashMap;
 
 const MIN_DB: f32 = -100.0;
 const MAX_DB: f32 = 0.0;
@@ -194,6 +197,8 @@ struct LinkApp {
     frame_counter: usize,
     delivered: usize,
     attempted: usize,
+    /// Measured gross bps per mode (filled lazily as modes appear).
+    rate_cache: HashMap<String, f64>,
 }
 
 impl LinkApp {
@@ -228,6 +233,7 @@ impl LinkApp {
             frame_counter: 0,
             delivered: 0,
             attempted: 0,
+            rate_cache: HashMap::new(),
         }
     }
 
@@ -301,6 +307,12 @@ impl LinkApp {
             self.panels[0].push(&fs.forward_tx);
             self.panels[1].push(&fs.forward_rx);
             self.panels[2].push(&fs.ack_tx);
+
+            if !self.rate_cache.contains_key(&fs.mode) {
+                if let Some(r) = mode_gross_bps(&fs.mode) {
+                    self.rate_cache.insert(fs.mode.clone(), r);
+                }
+            }
 
             self.frame_counter += 1;
             self.attempted += 1;
@@ -536,13 +548,32 @@ impl eframe::App for LinkApp {
                     .iter()
                     .fold((0, 0.0), |(b, a), &(fb, fa)| (b + fb, a + fa));
                 let eff = if air > 0.0 { bits as f64 / air } else { 0.0 };
+                // Gross = current mode's raw rate; Net = Gross × FEC code rate; Effective =
+                // measured two-way goodput (includes compression, FEC, ACK, turnaround, retries).
+                let gross = self
+                    .last
+                    .as_ref()
+                    .and_then(|fs| self.rate_cache.get(&fs.mode).copied())
+                    .unwrap_or(0.0);
+                let net = gross * fec_code_rate(self.ui_fec);
                 ui.horizontal(|ui| {
-                    // Effective two-way rate — always shown (the headline status readout).
+                    ui.label(format!("Gross: {}", fmt_bps(gross)))
+                        .on_hover_text("Current mode's raw payload bit rate (symbol rate × bits/symbol)");
+                    ui.separator();
+                    ui.label(format!("Net: {}", fmt_bps(net)))
+                        .on_hover_text("Gross minus FEC overhead (gross × code rate)");
+                    ui.separator();
+                    // Effective two-way rate — the headline status readout (incl. compression,
+                    // FEC, ACK overhead, turnaround and retransmissions).
                     ui.label(
                         egui::RichText::new(format!("Effective: {}", fmt_bps(eff)))
                             .strong()
                             .size(16.0)
                             .color(egui::Color32::from_rgb(120, 220, 255)),
+                    )
+                    .on_hover_text(
+                        "Measured two-way goodput: delivered payload bits / on-air time.\n\
+                         Includes compression gain, FEC overhead, ACK + turnaround, and retransmits.",
                     );
                     ui.separator();
                     if let Some(fs) = &self.last {
