@@ -332,7 +332,7 @@ mod tests {
         let rotated = crate::demodulate::quadrature(&frame);
         let mut buf = vec![0.0f32; 173];
         buf.extend(rotated.iter().map(|&v| -v));
-        buf.extend(std::iter::repeat(0.0).take(300));
+        buf.extend(std::iter::repeat_n(0.0, 300));
         let rx = plugin.demodulate(&buf, &mod_config("SCFDMA52")).unwrap();
         assert_eq!(rx.as_slice(), payload.as_ref());
     }
