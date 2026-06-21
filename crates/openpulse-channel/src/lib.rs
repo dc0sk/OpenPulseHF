@@ -18,6 +18,62 @@ pub mod qsb;
 pub mod sro;
 pub mod watterson;
 
+// ── SNR estimation ────────────────────────────────────────────────────────────
+
+/// Estimate the additive-noise SNR (dB) between a clean `reference` and a faded + noisy
+/// `received` signal.
+///
+/// A naive `|ref|² / |ref − received|²` counts the *multiplicative* fading as noise, so on
+/// any fading channel it collapses to ~−3 dB regardless of the actual SNR. This removes a
+/// per-window complex channel gain (estimated from the analytic signals, so both amplitude
+/// and carrier-phase rotation are taken out) before measuring the residual, yielding the true
+/// additive SNR. For an AWGN channel the gain is ≈ 1 and the estimate matches the configured
+/// SNR. The estimate uses at most the first `MAX_SAMPLES` samples to bound FFT cost.
+pub fn estimate_additive_snr_db(reference: &[f32], received: &[f32]) -> f32 {
+    use rustfft::num_complex::Complex;
+    use rustfft::FftPlanner;
+
+    const MAX_SAMPLES: usize = 8192;
+    const WINDOW: usize = 256;
+    let n = reference.len().min(received.len()).min(MAX_SAMPLES);
+    if n == 0 {
+        return 0.0;
+    }
+    // Reuse the (Hilbert) analytic-signal helper; gain estimation needs the quadrature rail.
+    let mut planner = FftPlanner::<f32>::new();
+    let a_ref = fading::analytic_signal(&mut planner, &reference[..n]);
+    let a_rcv = fading::analytic_signal(&mut planner, &received[..n]);
+
+    let mut sig = 0.0f64;
+    let mut noise = 0.0f64;
+    let mut w = 0;
+    while w < n {
+        let end = (w + WINDOW).min(n);
+        // Per-window least-squares complex gain g = ⟨a_rcv, a_ref*⟩ / ⟨a_ref, a_ref*⟩.
+        let mut num = Complex::<f32>::new(0.0, 0.0);
+        let mut den = 0.0f32;
+        for i in w..end {
+            num += a_rcv[i] * a_ref[i].conj();
+            den += a_ref[i].norm_sqr();
+        }
+        let g = if den > 1e-9 {
+            num / den
+        } else {
+            Complex::new(0.0, 0.0)
+        };
+        for i in w..end {
+            let s = g * a_ref[i];
+            sig += s.norm_sqr() as f64;
+            noise += (a_rcv[i] - s).norm_sqr() as f64;
+        }
+        w = end;
+    }
+    if noise < 1e-12 {
+        return 60.0;
+    }
+    (10.0 * (sig / noise).log10()) as f32
+}
+
 // ── Error type ────────────────────────────────────────────────────────────────
 
 /// Errors produced by channel model construction and operation.
@@ -384,5 +440,38 @@ mod tests {
     fn channel_error_display() {
         let e = ChannelError::InvalidParameter("snr_db must be finite".into());
         assert!(e.to_string().contains("snr_db must be finite"));
+    }
+
+    #[test]
+    fn additive_snr_matches_awgn_and_ignores_fading() {
+        let n = 8000usize;
+        let tx: Vec<f32> = (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * 1500.0 * i as f32 / 8000.0).sin())
+            .collect();
+
+        // (a) AWGN at a known SNR: the estimate should track it (no fading gain to remove).
+        let mut awgn = build_channel(
+            &ChannelModelConfig::Awgn(AwgnConfig {
+                snr_db: 15.0,
+                seed: Some(1),
+            }),
+            Some(1),
+        )
+        .unwrap();
+        let rx = awgn.apply(&tx);
+        let s = estimate_additive_snr_db(&tx, &rx);
+        assert!((s - 15.0).abs() < 4.0, "AWGN SNR estimate {s} should be near 15 dB");
+
+        // (b) Watterson fading at high SNR: the naive |tx-rx|² metric collapses to ~-3 dB;
+        // removing the fading gain must leave a high additive SNR instead.
+        let mut wc = WattersonConfig::good_f1(Some(2));
+        wc.snr_db = 40.0;
+        let mut wch = build_channel(&ChannelModelConfig::Watterson(wc), Some(2)).unwrap();
+        let faded = wch.apply(&tx);
+        let fs = estimate_additive_snr_db(&tx, &faded);
+        assert!(
+            fs > 15.0,
+            "faded high-SNR estimate {fs} dB must stay high (not fading-dominated)"
+        );
     }
 }

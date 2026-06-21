@@ -336,23 +336,13 @@ pub fn fec_code_rate(fec: FecMode) -> f64 {
     }
 }
 
-/// Estimate SNR (dB) from the clean reference and the realized post-channel signal.
+/// Estimate the additive-noise SNR (dB) from the clean reference and the realized
+/// post-channel signal. Delegates to [`openpulse_channel::estimate_additive_snr_db`], which
+/// removes the multiplicative fading gain first — a naive `|tx|²/|tx-rx|²` counts fading as
+/// noise and collapses to ~-3 dB on any fading channel, which would pin the rate adapter at
+/// the profile floor regardless of the real SNR.
 fn estimate_snr_db(tx: &[f32], rx: &[f32]) -> f32 {
-    let n = tx.len().min(rx.len());
-    if n == 0 {
-        return 0.0;
-    }
-    let sig: f32 = tx[..n].iter().map(|x| x * x).sum::<f32>() / n as f32;
-    let noise: f32 = tx[..n]
-        .iter()
-        .zip(&rx[..n])
-        .map(|(a, b)| (a - b) * (a - b))
-        .sum::<f32>()
-        / n as f32;
-    if noise < 1e-12 {
-        return 60.0;
-    }
-    10.0 * (sig / noise).log10()
+    openpulse_channel::estimate_additive_snr_db(tx, rx)
 }
 
 /// Station B's ACK decision from the decode result and the estimated per-frame SNR.
