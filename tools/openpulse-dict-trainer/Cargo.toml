@@ -1,6 +1,6 @@
 [package]
 name = "openpulse-dict-trainer"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Offline tool: trains a zstd dictionary from a corpus of HPX/Winlink messages"
 publish = false
