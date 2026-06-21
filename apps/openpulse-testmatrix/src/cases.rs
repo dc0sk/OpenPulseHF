@@ -97,6 +97,28 @@ pub const KNOWN_LIMITATION_MODES: &[&str] = &["8PSK2000"];
 pub const WIDEBAND_POST_V1_MODES: &[&str] =
     &["QPSK9600", "QPSK9600-RRC", "8PSK9600", "8PSK9600-RRC"];
 
+/// Higher-rate pilot-framed variants registered by `pilot-plugin` but not yet in the quick
+/// matrix. The matrix covers a representative baseline subset (`PILOT_MODES`: the 500-baud
+/// family plus PILOT-16QAM1000); the 1000/2000-baud variants and the remaining 500-RRC
+/// variants exist in the plugin but are not yet swept. Listed here so they are explicitly
+/// tracked rather than silently excluded (see the coverage regression test); promote into
+/// `PILOT_MODES` as quick-matrix pilot coverage is broadened. Roadmap: V1.x pilot ladder.
+pub const PILOT_POST_V1_MODES: &[&str] = &[
+    "PILOT-8PSK500-RRC",
+    "PILOT-32APSK500-RRC",
+    "PILOT-QPSK1000",
+    "PILOT-8PSK1000",
+    "PILOT-32APSK1000",
+    "PILOT-QPSK1000-RRC",
+    "PILOT-8PSK1000-RRC",
+    "PILOT-16QAM1000-RRC",
+    "PILOT-32APSK1000-RRC",
+    "PILOT-QPSK2000-RRC",
+    "PILOT-8PSK2000-RRC",
+    "PILOT-16QAM2000-RRC",
+    "PILOT-32APSK2000-RRC",
+];
+
 // Modes that are slow enough that large case counts are impractical.
 const HF_SLOW_MODES: &[&str] = &["BPSK31", "BPSK63", "BPSK100"];
 
@@ -668,6 +690,7 @@ mod coverage_tests {
         let accounted: BTreeSet<String> = WIDEBAND_POST_V1_MODES
             .iter()
             .chain(KNOWN_LIMITATION_MODES.iter())
+            .chain(PILOT_POST_V1_MODES.iter())
             .map(|s| s.to_string())
             .collect();
         let missing: Vec<String> = registered_modes()
@@ -690,6 +713,7 @@ mod coverage_tests {
         for m in WIDEBAND_POST_V1_MODES
             .iter()
             .chain(KNOWN_LIMITATION_MODES.iter())
+            .chain(PILOT_POST_V1_MODES.iter())
         {
             assert!(
                 !covered.contains(*m),
@@ -706,6 +730,7 @@ mod coverage_tests {
         for m in WIDEBAND_POST_V1_MODES
             .iter()
             .chain(KNOWN_LIMITATION_MODES.iter())
+            .chain(PILOT_POST_V1_MODES.iter())
         {
             assert!(
                 registered.contains(*m),
