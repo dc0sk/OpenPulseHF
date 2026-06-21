@@ -141,6 +141,26 @@ impl WattersonChannel {
             .collect()
     }
 
+    /// Analytic signal of a real input via the FFT Hilbert method (re = input, im = Hilbert).
+    fn analytic(&mut self, x: &[f32]) -> Vec<Complex32> {
+        let n = x.len();
+        let mut buf: Vec<Complex32> = x.iter().map(|&v| Complex32::new(v, 0.0)).collect();
+        self.planner.plan_fft_forward(n).process(&mut buf);
+        let half = n.div_ceil(2); // index of the first negative-frequency bin
+        for v in buf.iter_mut().take(half).skip(1) {
+            *v *= 2.0; // double the positive frequencies
+        }
+        for v in buf.iter_mut().skip(half) {
+            *v = Complex32::new(0.0, 0.0); // zero the negative frequencies
+        }
+        self.planner.plan_fft_inverse(n).process(&mut buf);
+        let scale = 1.0 / n as f32;
+        for v in buf.iter_mut() {
+            *v *= scale;
+        }
+        buf
+    }
+
     /// Apply Watterson fading to complex baseband input using one coherent
     /// channel realization for both I and Q rails.
     pub fn apply_complex(&mut self, i_in: &[f32], q_in: &[f32]) -> (Vec<f32>, Vec<f32>) {
@@ -211,23 +231,22 @@ impl ChannelModel for WattersonChannel {
             1e-4
         };
 
-        // Use the real part of the complex fading coefficient (× √2 for unit mean-square).
-        // The complex Gaussian envelope encodes a random carrier phase in its argument.
-        // Using only the magnitude (norm) discards this phase, creating deterministic
-        // frequency-domain nulls when the delay phase (2π·fc·τ) happens to equal an odd
-        // multiple of π.  Using the real part randomises the sign, breaking static nulls.
-        let sqrt2 = std::f32::consts::SQRT_2;
+        // Apply each ray's complex gain to the analytic signal: out = Re{ analytic(s) · h }.
+        // This rotates the carrier phase by arg(h) and scales by the Rayleigh magnitude |h|.
+        // Multiplying the real passband signal by Re{h} directly (the previous approach) drops
+        // the quadrature term, so the signal was annihilated whenever arg(h) ≈ ±90° — a deep
+        // fade independent of |h| or SNR, with spurious sign inversions. The analytic-signal
+        // form preserves |h| and turns a 90° gain into a harmless carrier-phase rotation.
+        let analytic = self.analytic(input);
         let mut out = vec![0.0f32; n];
         for i in 0..n {
-            // Ray 0: direct path; effective amplitude = Re[h0] × √2.
-            let ray0 = input[i] * env0[i].re * sqrt2;
-            // Ray 1: delayed path (zero-padded for samples before the buffer).
+            let ray0 = analytic[i] * env0[i];
             let ray1 = if i >= delay_samples {
-                input[i - delay_samples] * env1[i].re * sqrt2
+                analytic[i - delay_samples] * env1[i]
             } else {
-                0.0
+                Complex32::new(0.0, 0.0)
             };
-            out[i] = ray0 + ray1 + noise_sigma * self.rng.sample::<f32, _>(StandardNormal);
+            out[i] = (ray0 + ray1).re + noise_sigma * self.rng.sample::<f32, _>(StandardNormal);
         }
         out
     }
@@ -276,6 +295,76 @@ mod tests {
             cv > 0.10,
             "coefficient of variation {:.3} should be > 0.10 (non-trivial fading)",
             cv
+        );
+    }
+
+    /// The analytic-signal helper must reconstruct the input on the real rail and produce a
+    /// near-constant magnitude envelope for a pure tone (the Hilbert pair of a sinusoid).
+    #[test]
+    fn analytic_signal_recovers_real_and_flat_envelope() {
+        let cfg = WattersonConfig::good_f1(Some(1));
+        let mut ch = WattersonChannel::new(cfg).unwrap();
+        let n = 4096usize;
+        let tone: Vec<f32> = (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * 1500.0 * i as f32 / 8000.0).sin())
+            .collect();
+        let a = ch.analytic(&tone);
+
+        // Real part reconstructs the input.
+        let re_err = a
+            .iter()
+            .zip(&tone)
+            .map(|(c, &s)| (c.re - s).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            re_err < 1e-3,
+            "analytic.re must equal input (max err {re_err})"
+        );
+
+        // Magnitude of a tone's analytic signal is flat (ignore FFT edge transients).
+        let mid = &a[256..n - 256];
+        let mean = mid.iter().map(|c| c.norm()).sum::<f32>() / mid.len() as f32;
+        let cv = (mid.iter().map(|c| (c.norm() - mean).powi(2)).sum::<f32>() / mid.len() as f32)
+            .sqrt()
+            / mean;
+        assert!(
+            cv < 0.05,
+            "tone analytic envelope should be flat (CV {cv:.3})"
+        );
+    }
+
+    /// Regression guard for the dropped-quadrature bug: flat fading (no multipath) must scale
+    /// a tone by the Rayleigh magnitude |h|, which rarely approaches zero — NOT by Re{h},
+    /// which collapses to ~0 whenever the carrier phase lands near ±90°. The old `s·Re{h}`
+    /// path deep-faded ~16% of realizations below 0.2× even at high SNR; the analytic-signal
+    /// path keeps that fraction small.
+    #[test]
+    fn flat_fading_does_not_phase_annihilate() {
+        let n = 1000usize; // ~0.13 s — short vs the coherence time below, so |h| ≈ const per call
+        let tone: Vec<f32> = (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * 1500.0 * i as f32 / 8000.0).sin())
+            .collect();
+        let in_rms = (tone.iter().map(|s| s * s).sum::<f32>() / n as f32).sqrt();
+
+        let mut deep = 0;
+        let seeds = 40u64;
+        for seed in 0..seeds {
+            let mut cfg = WattersonConfig::good_f1(Some(seed));
+            cfg.doppler_spread_hz = 0.5; // ~1 s coherence ≫ the 0.13 s window; keeps envelope FFT small
+            cfg.delay_spread_ms = 0.0; // flat fade only — isolate the per-sample gain
+            cfg.snr_db = 60.0; // negligible additive noise
+            let mut ch = WattersonChannel::new(cfg).unwrap();
+            let out = ch.apply(&tone);
+            let out_rms = (out.iter().map(|s| s * s).sum::<f32>() / n as f32).sqrt();
+            if out_rms / in_rms < 0.2 {
+                deep += 1;
+            }
+        }
+        // Rayleigh |h| dips below 0.2 only ~4% of the time; allow generous slack. The buggy
+        // Re{h} path produced ~16% and would fail this bound.
+        assert!(
+            deep <= seeds as usize / 10,
+            "{deep}/{seeds} flat-fade realizations collapsed below 0.2× — phase annihilation regressed"
         );
     }
 
