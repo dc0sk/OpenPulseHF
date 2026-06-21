@@ -17,6 +17,8 @@
 #[cfg(feature = "serve")]
 pub mod serve;
 
+use std::collections::{HashMap, VecDeque};
+
 use openpulse_channel::{
     build_channel, AwgnConfig, ChannelModelConfig, GilbertElliottConfig, QsbConfig, WattersonConfig,
 };
@@ -36,6 +38,8 @@ const SESSION_ID: &str = "LINKSIM0";
 /// framed bytes within one RS(255,223) block. Larger link payloads are sent as a burst of
 /// these chunks (a simple block-ACK ARQ).
 const FRAME_CHUNK: usize = 200;
+/// Window (frames) over which the rolling frame-success rate is averaged for the rate model.
+const RATE_WINDOW: usize = 24;
 
 /// A channel condition for one direction of the link.
 #[derive(Debug, Clone)]
@@ -419,6 +423,15 @@ pub struct FrameStep {
     pub ack_rx: Vec<f32>,
     /// Running effective two-way goodput through this frame (bps).
     pub effective_bps_so_far: f64,
+    /// Current mode's gross (raw) payload bit rate (bps).
+    pub gross_bps: f64,
+    /// Net bit rate after FEC overhead (gross × code rate).
+    pub net_bps: f64,
+    /// Testbench-style effective rate: net × compression advantage × windowed frame-success.
+    /// This is the headline figure shared with the GUI display and the panel feed.
+    pub effective_bps: f64,
+    /// Windowed frame-success rate (delivered / attempted over the recent window).
+    pub success_rate: f64,
     /// This frame's on-air time (forward + ACK + turnaround over all its attempts), seconds.
     pub frame_air_s: f64,
     /// User payload bytes attempted this frame (before compression / FEC).
@@ -455,6 +468,10 @@ pub struct LinkSim {
     level_sum: u64,
     level_count: u64,
     records: Vec<FrameRecord>,
+    /// Measured gross bps per mode (filled lazily; modulation measurement is not free).
+    rate_cache: HashMap<String, f64>,
+    /// Rolling delivered/failed flags for the windowed frame-success rate.
+    success_window: VecDeque<bool>,
 }
 
 impl LinkSim {
@@ -509,6 +526,8 @@ impl LinkSim {
             level_count: 0,
             // Cap the preallocation — total_frames may be usize::MAX for a continuous run.
             records: Vec::with_capacity(params.total_frames.min(4096)),
+            rate_cache: HashMap::new(),
+            success_window: VecDeque::with_capacity(RATE_WINDOW),
         }
     }
 
@@ -700,6 +719,27 @@ impl LinkSim {
             0.0
         };
 
+        // Testbench-style rate model (shared by the GUI display and the panel feed so they
+        // agree): Gross = mode rate, Net = Gross × code rate, Effective = Net × compression
+        // advantage × windowed frame-success.
+        self.success_window.push_back(delivered);
+        while self.success_window.len() > RATE_WINDOW {
+            self.success_window.pop_front();
+        }
+        let success_rate = if self.success_window.is_empty() {
+            0.0
+        } else {
+            self.success_window.iter().filter(|&&d| d).count() as f64
+                / self.success_window.len() as f64
+        };
+        let gross_bps = *self
+            .rate_cache
+            .entry(last_mode.clone())
+            .or_insert_with(|| mode_gross_bps(&last_mode).unwrap_or(0.0));
+        let net_bps = gross_bps * fec_code_rate(self.params.fec);
+        let compress_adv = 1.0 / last_compress_ratio.max(1e-9);
+        let effective_bps = net_bps * compress_adv * success_rate;
+
         Some(FrameStep {
             frame,
             level: last_level as u8,
@@ -714,6 +754,10 @@ impl LinkSim {
             ack_tx,
             ack_rx,
             effective_bps_so_far,
+            gross_bps,
+            net_bps,
+            effective_bps,
+            success_rate,
             frame_air_s,
             payload_bytes: self.params.payload_bytes_per_frame,
             delivered_bytes: if delivered {

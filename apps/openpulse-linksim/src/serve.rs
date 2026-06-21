@@ -271,12 +271,13 @@ fn emit_frame_events(
         )?;
     }
 
-    let attempts = step.attempts.max(1);
     send_event(
         writer,
         &ControlEvent::Metrics {
-            effective_bps: step.effective_bps_so_far as f32,
-            ecc_rate: Some((attempts - 1) as f32 / attempts as f32),
+            // Headline effective rate shared with the GUI display so the two windows agree.
+            effective_bps: step.effective_bps as f32,
+            // Windowed frame-failure rate — a stand-in for FEC stress that tracks conditions.
+            ecc_rate: Some((1.0 - step.success_rate) as f32),
             compress_ratio: Some(step.compress_ratio as f32),
             afc_correction_hz: 0.0,
             signal_strength_dbm: Some((-120.0 + step.est_snr_db) as i32),

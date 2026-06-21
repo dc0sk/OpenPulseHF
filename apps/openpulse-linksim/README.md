@@ -57,8 +57,15 @@ The simulator can speak the **`openpulse-daemon` control protocol**, so an *unmo
 `openpulse-panel` connects to it exactly as it would to a real station — no daemon, modem,
 or audio hardware required. It emits the same NDJSON `ControlEvent` stream interleaved with
 binary `OPSP` spectrum frames a real daemon does (speed-level ladder, HPX session state,
-effective-bps / compression / signal metrics, and the on-air waterfall). Operator-only
-controls (messages, QSY, rig CAT, PTT, RF-connect) are inert — there is no real peer.
+effective-bps / compression / signal metrics, and the on-air waterfall). The panel's
+`Effective` reading uses the same definition as the linksim GUI (Net × compression × frame
+success), so the two windows agree.
+
+The panel is a **monitor** here: operator-only controls (messages, QSY, rig CAT, PTT,
+RF-connect) are inert (no real peer), and its mode selector has no effect because the link is
+adaptive — the **profile / ladder is driven from the linksim GUI** (or the `--profile` flag in
+headless mode), and the sim steps the mode up and down on its own. The panel has no profile
+concept because the daemon control protocol exposes modes, not profiles.
 
 There are two ways to serve it:
 
