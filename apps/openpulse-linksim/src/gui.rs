@@ -199,6 +199,12 @@ struct LinkApp {
     attempted: usize,
     /// Measured gross bps per mode (filled lazily as modes appear).
     rate_cache: HashMap<String, f64>,
+    // Current bitrate readout (testbench-style): Gross = mode rate, Net = Gross × code rate,
+    // Effective = Net × compression advantage × success. Goodput = measured two-way rate.
+    disp_gross: f64,
+    disp_net: f64,
+    disp_eff: f64,
+    disp_goodput: f64,
 }
 
 impl LinkApp {
@@ -234,6 +240,10 @@ impl LinkApp {
             delivered: 0,
             attempted: 0,
             rate_cache: HashMap::new(),
+            disp_gross: 0.0,
+            disp_net: 0.0,
+            disp_eff: 0.0,
+            disp_goodput: 0.0,
         }
     }
 
@@ -319,19 +329,37 @@ impl LinkApp {
             if fs.delivered {
                 self.delivered += 1;
             }
-            // Windowed effective rate.
             self.window
                 .push_back((fs.delivered_bytes * 8, fs.frame_air_s));
             while self.window.len() > WINDOW {
                 self.window.pop_front();
             }
-            let (bits, air): (usize, f64) = self
+            // Windowed frame-success rate and measured two-way goodput.
+            let win_total = self.window.len();
+            let (win_bits, win_air): (usize, f64) = self
                 .window
                 .iter()
                 .fold((0, 0.0), |(b, a), &(fb, fa)| (b + fb, a + fa));
-            let eff = if air > 0.0 { bits as f64 / air } else { 0.0 };
+            let win_ok = self.window.iter().filter(|(b, _)| *b > 0).count();
+            let success = if win_total > 0 {
+                win_ok as f64 / win_total as f64
+            } else {
+                0.0
+            };
+            // Testbench-style rates for the current mode.
+            let gross = self.rate_cache.get(&fs.mode).copied().unwrap_or(0.0);
+            let net = gross * fec_code_rate(self.ui_fec);
+            let compress_adv = 1.0 / fs.compress_ratio.max(1e-9);
+            self.disp_gross = gross;
+            self.disp_net = net;
+            self.disp_eff = net * compress_adv * success;
+            self.disp_goodput = if win_air > 0.0 {
+                win_bits as f64 / win_air
+            } else {
+                0.0
+            };
             let x = self.frame_counter as f64;
-            push_hist(&mut self.eff_hist, [x, eff]);
+            push_hist(&mut self.eff_hist, [x, self.disp_eff]);
             push_hist(&mut self.snr_hist, [x, fs.est_snr_db as f64]);
             push_hist(&mut self.level_hist, [x, fs.level as f64]);
             self.last = Some(fs);
@@ -543,38 +571,32 @@ impl eframe::App for LinkApp {
         egui::TopBottomPanel::bottom("stats")
             .min_height(180.0)
             .show(ctx, |ui| {
-                let (bits, air): (usize, f64) = self
-                    .window
-                    .iter()
-                    .fold((0, 0.0), |(b, a), &(fb, fa)| (b + fb, a + fa));
-                let eff = if air > 0.0 { bits as f64 / air } else { 0.0 };
-                // Gross = current mode's raw rate; Net = Gross × FEC code rate; Effective =
-                // measured two-way goodput (includes compression, FEC, ACK, turnaround, retries).
-                let gross = self
-                    .last
-                    .as_ref()
-                    .and_then(|fs| self.rate_cache.get(&fs.mode).copied())
-                    .unwrap_or(0.0);
-                let net = gross * fec_code_rate(self.ui_fec);
                 ui.horizontal(|ui| {
-                    ui.label(format!("Gross: {}", fmt_bps(gross)))
-                        .on_hover_text("Current mode's raw payload bit rate (symbol rate × bits/symbol)");
+                    ui.label(format!("Gross: {}", fmt_bps(self.disp_gross)))
+                        .on_hover_text(
+                            "Current mode's raw payload bit rate (symbol rate × bits/symbol)",
+                        );
                     ui.separator();
-                    ui.label(format!("Net: {}", fmt_bps(net)))
+                    ui.label(format!("Net: {}", fmt_bps(self.disp_net)))
                         .on_hover_text("Gross minus FEC overhead (gross × code rate)");
                     ui.separator();
-                    // Effective two-way rate — the headline status readout (incl. compression,
-                    // FEC, ACK overhead, turnaround and retransmissions).
+                    // Effective (testbench-style): Net × compression advantage × frame success.
                     ui.label(
-                        egui::RichText::new(format!("Effective: {}", fmt_bps(eff)))
+                        egui::RichText::new(format!("Effective: {}", fmt_bps(self.disp_eff)))
                             .strong()
                             .size(16.0)
                             .color(egui::Color32::from_rgb(120, 220, 255)),
                     )
                     .on_hover_text(
-                        "Measured two-way goodput: delivered payload bits / on-air time.\n\
-                         Includes compression gain, FEC overhead, ACK + turnaround, and retransmits.",
+                        "Net × compression advantage × frame success rate.\n\
+                         (Same definition as the testbench's Effective.)",
                     );
+                    ui.separator();
+                    ui.label(format!("2-way: {}", fmt_bps(self.disp_goodput)))
+                        .on_hover_text(
+                            "Measured wall-clock two-way goodput: delivered payload bits / on-air \
+                             time, including ACK frames and half-duplex turnaround.",
+                        );
                     ui.separator();
                     if let Some(fs) = &self.last {
                         ui.label(format!("Frame {}", self.frame_counter));

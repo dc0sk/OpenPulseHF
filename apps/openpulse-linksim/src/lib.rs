@@ -420,6 +420,8 @@ pub struct FrameStep {
     pub frame_air_s: f64,
     /// Payload bytes delivered by this frame (0 if it failed) — for windowed throughput.
     pub delivered_bytes: usize,
+    /// compressed wire bytes / original payload bytes (≤ 1 when compression helped).
+    pub compress_ratio: f64,
     /// Speed level the link will use for the next frame.
     pub next_level: u8,
 }
@@ -550,6 +552,7 @@ impl LinkSim {
         let mut last_level = self.levels[self.idx];
         let mut last_snr = 0.0_f32;
         let mut last_mode = String::new();
+        let mut last_compress_ratio = 1.0_f64;
         let mut ack_sent = AckType::Nack;
         let mut ack_received = AckType::Nack;
         let (mut forward_tx, mut forward_rx, mut ack_tx, mut ack_rx) =
@@ -574,6 +577,7 @@ impl LinkSim {
             // (the frame length field is 8-bit). The link frame is delivered only if every
             // chunk decodes — a simple block-ACK ARQ.
             let (wire, algo) = maybe_compress(&payload, self.params.compression);
+            last_compress_ratio = wire.len() as f64 / payload.len().max(1) as f64;
             let mut received = Vec::with_capacity(wire.len());
             let mut snr_acc = 0.0_f32;
             let mut chunk_count = 0u32;
@@ -711,6 +715,7 @@ impl LinkSim {
             } else {
                 0
             },
+            compress_ratio: last_compress_ratio,
             next_level: self.current_level(),
         })
     }
