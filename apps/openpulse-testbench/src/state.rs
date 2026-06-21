@@ -83,6 +83,7 @@ pub enum NoiseModel {
     Awgn,
     GilbertElliott,
     Watterson,
+    FlatFading,
     Qrn,
     Qrm,
     Qsb,
@@ -95,6 +96,7 @@ impl NoiseModel {
             NoiseModel::Awgn => "AWGN",
             NoiseModel::GilbertElliott => "Gilbert-Elliott",
             NoiseModel::Watterson => "Watterson",
+            NoiseModel::FlatFading => "Flat Fading",
             NoiseModel::Qrn => "QRN",
             NoiseModel::Qrm => "QRM",
             NoiseModel::Qsb => "QSB",
@@ -104,7 +106,16 @@ impl NoiseModel {
 
     pub fn all() -> &'static [NoiseModel] {
         use NoiseModel::*;
-        &[Awgn, GilbertElliott, Watterson, Qrn, Qrm, Qsb, Chirp]
+        &[
+            Awgn,
+            GilbertElliott,
+            Watterson,
+            FlatFading,
+            Qrn,
+            Qrm,
+            Qsb,
+            Chirp,
+        ]
     }
 }
 

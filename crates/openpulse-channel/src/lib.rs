@@ -9,6 +9,8 @@ pub mod awgn;
 pub mod chirp;
 pub mod composite;
 pub mod dsp;
+mod fading;
+pub mod flat_fading;
 pub mod gilbert_elliott;
 pub mod qrm;
 pub mod qrn;
@@ -296,6 +298,8 @@ pub enum ChannelModelConfig {
     Composite(CompositeConfig),
     /// Sample-rate offset (clock drift) between TX and RX, in ppm.
     Sro(sro::SroConfig),
+    /// Frequency-flat Rayleigh fading with realistic carrier-phase rotation (no multipath).
+    FlatFading(flat_fading::FlatFadingConfig),
 }
 
 // ── Factory ───────────────────────────────────────────────────────────────────
@@ -351,6 +355,13 @@ pub fn build_channel(
         }
         // SRO is deterministic (no RNG); the seed parameter does not apply.
         ChannelModelConfig::Sro(cfg) => Ok(Box::new(sro::SroChannel::new(cfg.clone())?)),
+        ChannelModelConfig::FlatFading(cfg) => {
+            let mut c = cfg.clone();
+            if seed.is_some() {
+                c.seed = seed;
+            }
+            Ok(Box::new(flat_fading::FlatFadingChannel::new(c)?))
+        }
     }
 }
 
