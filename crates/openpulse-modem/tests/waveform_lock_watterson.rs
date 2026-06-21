@@ -8,29 +8,10 @@
 use openpulse_channel::awgn::AwgnChannel;
 use openpulse_channel::watterson::WattersonChannel;
 use openpulse_channel::{AwgnConfig, ChannelModel, WattersonConfig};
+use openpulse_dsp::acquisition::IqMatchedFilter;
 use openpulse_dsp::pll::CarrierPll;
 use openpulse_dsp::preamble::{PreambleDetector, PreambleType};
 use std::f32::consts::PI;
-
-fn normalized_abs_correlation(reference: &[f32], received: &[f32]) -> f32 {
-    if reference.is_empty() || received.is_empty() || reference.len() != received.len() {
-        return 0.0;
-    }
-
-    let dot = reference
-        .iter()
-        .zip(received.iter())
-        .map(|(&a, &b)| a * b)
-        .sum::<f32>();
-    let ref_norm = reference.iter().map(|v| v * v).sum::<f32>().sqrt();
-    let rx_norm = received.iter().map(|v| v * v).sum::<f32>().sqrt();
-
-    if ref_norm < 1e-8 || rx_norm < 1e-8 {
-        0.0
-    } else {
-        (dot / (ref_norm * rx_norm)).abs()
-    }
-}
 
 fn lock_rate_with_channel(
     channel: &mut dyn ChannelModel,
@@ -43,25 +24,20 @@ fn lock_rate_with_channel(
     tx_frame.extend_from_slice(preamble);
     tx_frame.extend(std::iter::repeat_n(0.0_f32, guard));
 
-    let search_start = guard.saturating_sub(12);
-    let search_end = guard + 12;
+    // Carrier-phase-invariant matched filter (I/Q via the template's Hilbert companion).
+    // A real-only correlation collapses to ~0 when the channel rotates the carrier ~90°,
+    // which a physical fading channel does; this is the detector the dsp crate documents
+    // for passband / rotated-symbol acquisition.
+    let mf = IqMatchedFilter::new(preamble.to_vec());
+    let search_bound = guard + 12;
     let mut lock_count = 0usize;
 
     for _ in 0..frames {
         let distorted = channel.apply(&tx_frame);
-        let mut best_mag = 0.0_f32;
-
-        for offset in search_start..=search_end {
-            if offset + preamble.len() > distorted.len() {
-                break;
+        if let Some(res) = mf.search(&distorted, search_bound) {
+            if res.rho >= corr_threshold {
+                lock_count += 1;
             }
-            let slice = &distorted[offset..offset + preamble.len()];
-            let mag = normalized_abs_correlation(preamble, slice);
-            best_mag = best_mag.max(mag);
-        }
-
-        if best_mag >= corr_threshold {
-            lock_count += 1;
         }
     }
 
