@@ -20,9 +20,11 @@ use openpulse_core::fec::{
 use openpulse_core::frame::Frame;
 use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
 use openpulse_core::ldpc::{IterativeDecoder, LdpcCodec};
+use openpulse_core::ota_rate::{OtaRateController, RxOutcome};
 use openpulse_core::plugin::{ModulationConfig, PluginRegistry};
 use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::RateEvent;
+use openpulse_core::rate::SpeedLevel;
 use openpulse_core::signed_envelope::SignedEnvelope;
 use openpulse_core::soft_viterbi::SoftViterbiCodec;
 use openpulse_core::trust::{
@@ -271,6 +273,13 @@ pub struct ModemEngine {
     /// Audio centre frequency used for modulation and demodulation (Hz).
     center_frequency: f32,
     rate_policy: RateAdaptationPolicy,
+    /// Receiver-led OTA rate controller (per-direction lockstep); `None` until
+    /// [`start_ota_session`](ModemEngine::start_ota_session) is called.
+    ota: Option<OtaRateController>,
+    /// Externally-supplied RX SNR estimate (dB) for OTA adaptive decisions.
+    /// When `None`, the weak LLR-magnitude proxy is used. A real estimator
+    /// (or a channel-sim harness) should feed this for meaningful stepping.
+    rx_snr_estimate: Option<f32>,
     dcd: DcdState,
     csma_enabled: bool,
     csma_persistence: f32,
@@ -307,6 +316,8 @@ impl ModemEngine {
             afc_step: 0.1,
             center_frequency: 1500.0,
             rate_policy: RateAdaptationPolicy::new(),
+            ota: None,
+            rx_snr_estimate: None,
             dcd: DcdState::new(0.01, 800), // 100 ms hold at 8 kHz
             csma_enabled: false,
             csma_persistence: 0.3,
@@ -528,6 +539,178 @@ impl ModemEngine {
         if let Some(payload) = self.rate_policy.apply_snr_hint(snr_db) {
             self.emit_rate_change(payload);
         }
+    }
+
+    // ── Receiver-led OTA adaptive rate-stepping ────────────────────────────────
+
+    /// Start a receiver-led, per-direction OTA rate session for `profile`.
+    ///
+    /// Pairs [`respond_arq_ota`](Self::respond_arq_ota) (data receiver, leads its
+    /// direction) with [`apply_ota_ack`](Self::apply_ota_ack) +
+    /// [`ota_tx_mode`](Self::ota_tx_mode) (data sender, follows the peer).
+    pub fn start_ota_session(&mut self, profile: SessionProfile) {
+        self.ota = Some(OtaRateController::new(profile));
+    }
+
+    /// Mode string the local station should transmit data at under the OTA session.
+    pub fn ota_tx_mode(&self) -> Option<&str> {
+        self.ota.as_ref().and_then(|o| o.tx_mode())
+    }
+
+    /// Current OTA TX speed level (the level the peer last recommended to us).
+    pub fn ota_tx_level(&self) -> Option<SpeedLevel> {
+        self.ota.as_ref().map(|o| o.tx_level())
+    }
+
+    /// Absolute level we are currently recommending to the peer (goes in our ACK).
+    pub fn ota_rx_recommended_level(&self) -> Option<SpeedLevel> {
+        self.ota.as_ref().map(|o| o.rx_recommended_level())
+    }
+
+    /// Highest level we have actually decoded (the lockstep anchor).
+    pub fn ota_rx_confirmed_level(&self) -> Option<SpeedLevel> {
+        self.ota.as_ref().map(|o| o.rx_confirmed_level())
+    }
+
+    /// Supply an external RX SNR estimate (dB) for OTA adaptive decisions, or
+    /// `None` to fall back to the (weak) LLR-magnitude proxy.
+    ///
+    /// `snr_from_llrs` is only a relative confidence indicator — on a clean path
+    /// it reports ≈ −2 dB — so a real SNR estimator or a channel-sim harness that
+    /// knows the true SNR should feed this for the rate ladder to climb.
+    pub fn set_rx_snr_estimate(&mut self, snr_db: Option<f32>) {
+        self.rx_snr_estimate = snr_db;
+    }
+
+    /// Sender side: adopt the peer's absolute `recommended_level` from a received ACK.
+    ///
+    /// A no-op when the frame carries no recommendation or no OTA session is active.
+    /// The absolute target means a lost ACK never desyncs — the next ACK re-states it.
+    pub fn apply_ota_ack(&mut self, frame: &AckFrame) {
+        if let (Some(o), Some(level)) = (self.ota.as_mut(), frame.recommended_level) {
+            o.adopt_recommendation(level);
+        }
+    }
+
+    /// Receiver side: capture one data frame, demodulate with the OTA candidate
+    /// fallback, reply with an ACK carrying the absolute `recommended_level`, and
+    /// return the payload.
+    ///
+    /// Tries the candidate modes (`{recommended, confirmed}`, recommended first) on
+    /// the *same* captured buffer, so a sender that has not yet adopted our last
+    /// recommendation (lost ACK) is still decoded at the confirmed level. On total
+    /// decode failure it replies `Nack` (still carrying the current recommendation)
+    /// and returns the decode error.
+    pub fn respond_arq_ota(
+        &mut self,
+        session_id: &str,
+        device: Option<&str>,
+    ) -> Result<Vec<u8>, ModemError> {
+        let candidates: Vec<(SpeedLevel, String)> = self
+            .ota
+            .as_ref()
+            .ok_or_else(|| ModemError::Configuration("no OTA session active".into()))?
+            .rx_candidates()
+            .into_iter()
+            .map(|(l, m)| (l, m.to_string()))
+            .collect();
+
+        let samples = self.stage_capture_input(device)?;
+        let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+
+        let prev_busy = self.dcd.is_busy();
+        self.dcd.update(&samples.samples);
+        if self.dcd.is_busy() != prev_busy {
+            let _ = self.event_tx.send(EngineEvent::DcdChange {
+                busy: self.dcd.is_busy(),
+                energy: self.dcd.energy(),
+            });
+        }
+
+        // AFC accumulates across calls, so a failed wrong-mode candidate would
+        // poison the correct candidate's correction. Isolate each attempt: reset to
+        // the pre-frame AFC before every try, keeping only the successful update.
+        let afc_before = self.afc_correction_hz;
+        let mut decoded: Option<(Vec<u8>, f32, SpeedLevel, String)> = None;
+        let mut last_err: Option<ModemError> = None;
+        for (level, mode) in &candidates {
+            self.afc_correction_hz = afc_before;
+            match self.try_decode_at(&samples.samples, mode) {
+                Ok((payload, snr)) => {
+                    decoded = Some((payload, snr, *level, mode.clone()));
+                    break;
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+
+        let snr_override = self.rx_snr_estimate;
+        let ota = self
+            .ota
+            .as_mut()
+            .ok_or_else(|| ModemError::Configuration("no OTA session active".into()))?;
+        let (rx_ack, decoded) = match decoded {
+            Some((payload, measured_snr, level, mode)) => {
+                let snr = snr_override.unwrap_or(measured_snr);
+                let ack = ota.on_rx_frame(RxOutcome::Decoded(level), snr);
+                (ack, Some((payload, mode)))
+            }
+            None => {
+                let ack = ota.on_rx_frame(RxOutcome::Failed, 0.0);
+                (ack, None)
+            }
+        };
+
+        let ack_frame = AckFrame::new(rx_ack.ack_type, session_id)
+            .with_recommended_level(rx_ack.recommended_level);
+        self.transmit_ack_with_short_fec(&ack_frame, device)?;
+
+        match decoded {
+            Some((payload, mode)) => {
+                let _ = self.event_tx.send(EngineEvent::FrameReceived {
+                    mode,
+                    bytes: payload.len(),
+                });
+                Ok(payload)
+            }
+            None => Err(last_err.unwrap_or_else(|| {
+                ModemError::Configuration("OTA receive: no candidate decoded".into())
+            })),
+        }
+    }
+
+    /// Demodulate + decode the already-captured `samples` at `mode`, returning the
+    /// frame payload and the SNR estimate. Used by the OTA candidate fallback.
+    fn try_decode_at(&mut self, samples: &[f32], mode: &str) -> Result<(Vec<u8>, f32), ModemError> {
+        self.update_afc_estimate(mode, samples);
+        let mod_cfg = ModulationConfig {
+            mode: mode.to_string(),
+            center_frequency: self.center_frequency + self.afc_correction_hz,
+            afc_correction_hz: self.afc_correction_hz,
+            ..ModulationConfig::default()
+        };
+        let plugin = self
+            .plugins
+            .get(mode)
+            .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+        let llrs = plugin.demodulate_soft(samples, &mod_cfg)?;
+        let snr_db = RateAdaptationPolicy::snr_from_llrs(&llrs);
+
+        let wire_bytes: Vec<u8> = llrs
+            .chunks(8)
+            .map(|byte_llrs| {
+                byte_llrs
+                    .iter()
+                    .enumerate()
+                    .fold(0u8, |acc, (i, &llr)| acc | (u8::from(llr <= 0.0) << i))
+            })
+            .collect();
+
+        let wire = WirePayload { bytes: wire_bytes };
+        let wire = self.route_wire_stage(PipelineStage::DemodulateDecode, wire)?;
+        let frame = self.stage_decode_frame(&wire)?;
+        let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
+        Ok((frame.payload, snr_db))
     }
 
     /// Select HARQ retry parameters from SNR/fading state.
