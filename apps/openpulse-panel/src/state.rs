@@ -89,6 +89,20 @@ pub struct PanelState {
     pub open_message_body: Option<String>,
     /// ID of the message whose body is loaded in `open_message_body`.
     pub open_message_id: Option<u64>,
+    /// Whether a receiver-led OTA adaptive session is active (from `OtaStatus`).
+    pub ota_active: bool,
+    /// OTA TX mode string (e.g. `"QPSK500"`).
+    pub ota_tx_mode: Option<String>,
+    /// OTA TX speed level name (e.g. `"SL6"`).
+    pub ota_tx_level: Option<String>,
+    /// OTA TX FEC scheme name (e.g. `"ldpc"`).
+    pub ota_tx_fec: String,
+    /// Level we recommend to the peer for our RX direction.
+    pub ota_rx_recommended_level: Option<String>,
+    /// Highest level we have actually decoded (lockstep anchor).
+    pub ota_rx_confirmed_level: Option<String>,
+    /// Whether OTA is locked to a fixed level (manual override).
+    pub ota_is_locked: bool,
 }
 
 impl Default for PanelState {
@@ -127,6 +141,13 @@ impl Default for PanelState {
             inbox: Vec::new(),
             open_message_body: None,
             open_message_id: None,
+            ota_active: false,
+            ota_tx_mode: None,
+            ota_tx_level: None,
+            ota_tx_fec: "—".into(),
+            ota_rx_recommended_level: None,
+            ota_rx_confirmed_level: None,
+            ota_is_locked: false,
         }
     }
 }

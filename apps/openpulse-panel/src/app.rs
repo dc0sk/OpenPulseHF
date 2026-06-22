@@ -458,6 +458,41 @@ impl eframe::App for PanelApp {
 
                 ui.separator();
 
+                // ── OTA adaptive rate ─────────────────────────────────────────
+                {
+                    let (active, tx_level, tx_mode, tx_fec, rec, locked) = {
+                        let s = self.shared.lock().unwrap();
+                        (
+                            s.ota_active,
+                            s.ota_tx_level.clone(),
+                            s.ota_tx_mode.clone(),
+                            s.ota_tx_fec.clone(),
+                            s.ota_rx_recommended_level.clone(),
+                            s.ota_is_locked,
+                        )
+                    };
+                    if active {
+                        let txl = tx_level.clone().unwrap_or_else(|| "—".into());
+                        let txm = tx_mode.unwrap_or_else(|| "—".into());
+                        let rec_s = rec.unwrap_or_else(|| "—".into());
+                        ui.label(format!("OTA: {txl} {txm}/{tx_fec} (rec {rec_s})"));
+                        let lock_label = if locked { "🔒 Unlock" } else { "Lock" };
+                        if ui.button(lock_label).clicked() {
+                            if locked {
+                                self.send(ControlCommand::OtaUnlock);
+                            } else {
+                                self.send(ControlCommand::OtaLockLevel {
+                                    level: tx_level.unwrap_or_else(|| "SL2".into()),
+                                });
+                            }
+                        }
+                    } else {
+                        ui.label(RichText::new("OTA: off").color(Color32::GRAY));
+                    }
+                }
+
+                ui.separator();
+
                 // ── TX attenuation ────────────────────────────────────────────
                 ui.label("TX Atten:");
                 if ui
