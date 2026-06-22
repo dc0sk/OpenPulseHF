@@ -341,8 +341,22 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
         ControlEvent::CommandError { command, reason } => {
             st.push_log(format!("CMD ERROR {command}: {reason}"));
         }
-        // OTA status display + controls land in the panel GUI follow-up; ignored here
-        // so the daemon/protocol wiring can land without an unverified UI change.
-        ControlEvent::OtaStatus { .. } => {}
+        ControlEvent::OtaStatus {
+            active,
+            tx_mode,
+            tx_level,
+            tx_fec,
+            rx_recommended_level,
+            rx_confirmed_level,
+            is_locked,
+        } => {
+            st.ota_active = active;
+            st.ota_tx_mode = tx_mode;
+            st.ota_tx_level = tx_level;
+            st.ota_tx_fec = tx_fec;
+            st.ota_rx_recommended_level = rx_recommended_level;
+            st.ota_rx_confirmed_level = rx_confirmed_level;
+            st.ota_is_locked = is_locked;
+        }
     }
 }
