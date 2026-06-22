@@ -739,11 +739,12 @@ impl ModemEngine {
 
         // SNR for the receiver decision: prefer an external estimate; else the M2M4
         // moment estimator on the captured envelope (a real absolute SNR, unlike the
-        // mean-|LLR| proxy). Works whether or not a candidate decoded.
+        // mean-|LLR| proxy), silence-gated to the active burst. Works whether or not
+        // a candidate decoded.
         let snr = self.rx_snr_estimate.unwrap_or_else(|| {
             let fc = self.center_frequency + self.afc_correction_hz;
             let fs = AudioConfig::default().sample_rate as f32;
-            openpulse_core::snr_estimate::m2m4_snr_db_from_real(&samples.samples, fc, fs)
+            openpulse_core::snr_estimate::m2m4_snr_db_gated_from_real(&samples.samples, fc, fs)
         });
 
         let ota = self
@@ -1853,7 +1854,14 @@ impl ModemEngine {
             .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
 
         let llrs = plugin.demodulate_soft(&samples.samples, &mod_cfg)?;
-        let snr_db = RateAdaptationPolicy::snr_from_llrs(&llrs);
+        // Absolute SNR for the rate decision: silence-gated M2M4 on the captured
+        // envelope (the mean-|LLR| proxy reads ~-2 dB on a clean path and can't drive
+        // the ladder).
+        let snr_db = openpulse_core::snr_estimate::m2m4_snr_db_gated_from_real(
+            &samples.samples,
+            self.center_frequency + self.afc_correction_hz,
+            AudioConfig::default().sample_rate as f32,
+        );
         self.rate_policy.record_rx_snr(snr_db);
 
         let wire_bytes: Vec<u8> = llrs
