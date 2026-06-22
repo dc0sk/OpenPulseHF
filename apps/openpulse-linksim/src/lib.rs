@@ -437,6 +437,8 @@ pub struct FrameStep {
     pub delivered_bytes: usize,
     /// compressed wire bytes / original payload bytes (≤ 1 when compression helped).
     pub compress_ratio: f64,
+    /// Wall-clock time spent in the modem decode (engine receive) for this frame, in ms.
+    pub decode_ms: f64,
     /// Speed level the link will use for the next frame.
     pub next_level: u8,
 }
@@ -576,6 +578,7 @@ impl LinkSim {
         let mut last_compress_ratio = 1.0_f64;
         let mut ack_sent = AckType::Nack;
         let mut ack_received = AckType::Nack;
+        let mut decode_ns: u128 = 0;
         let (mut forward_tx, mut forward_rx, mut ack_tx, mut ack_rx) =
             (Vec::new(), Vec::new(), Vec::new(), Vec::new());
 
@@ -614,7 +617,10 @@ impl LinkSim {
                 chunk_count += 1;
                 forward_tx = tx_s;
                 forward_rx = rx_s;
-                match engine_receive(&mut self.fwd.rx_engine, &mode, fec) {
+                let decode_start = std::time::Instant::now();
+                let decoded = engine_receive(&mut self.fwd.rx_engine, &mode, fec);
+                decode_ns += decode_start.elapsed().as_nanos();
+                match decoded {
                     Ok(b) if b == chunk => received.extend_from_slice(&b),
                     _ => {
                         burst_ok = false;
@@ -763,6 +769,7 @@ impl LinkSim {
                 0
             },
             compress_ratio: last_compress_ratio,
+            decode_ms: decode_ns as f64 / 1.0e6,
             next_level: self.current_level(),
         })
     }

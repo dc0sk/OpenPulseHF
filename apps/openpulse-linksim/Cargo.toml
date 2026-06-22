@@ -25,13 +25,14 @@ required-features = ["gui"]
 gui = ["dep:eframe", "dep:egui", "dep:egui_plot"]
 # Serve the openpulse-daemon control protocol so an unmodified openpulse-panel can
 # connect to a live simulation. Pulls in openpulse-daemon for the wire types.
-serve = ["dep:openpulse-daemon"]
+serve = ["dep:openpulse-daemon", "dep:sysinfo"]
 
 [dependencies]
 openpulse-core    = { workspace = true }
 openpulse-modem   = { workspace = true }
 openpulse-channel = { workspace = true }
 openpulse-daemon  = { workspace = true, optional = true }
+sysinfo           = { version = "0.30", default-features = false, optional = true }
 bpsk-plugin       = { workspace = true }
 qpsk-plugin       = { workspace = true }
 psk8-plugin       = { workspace = true }

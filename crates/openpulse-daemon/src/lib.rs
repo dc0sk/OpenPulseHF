@@ -78,22 +78,18 @@ pub struct MetricsSnapshot {
 type SharedMetrics = Arc<Mutex<MetricsSnapshot>>;
 
 /// Sample the daemon process's CPU and memory load. Returns
-/// `(cpu_percent_of_all_cores, ram_mib, ram_percent_of_total)`.
+/// `(cpu_percent, ram_mib, ram_percent_of_total)`, where CPU is the conventional process
+/// reading (100% = one core fully used; may exceed 100% for a multi-threaded process).
 #[cfg(not(target_arch = "wasm32"))]
-fn sample_process_resources(
-    sys: &mut sysinfo::System,
-    pid: sysinfo::Pid,
-    n_cpus: f32,
-) -> (f32, f32, f32) {
+fn sample_process_resources(sys: &mut sysinfo::System, pid: sysinfo::Pid) -> (f32, f32, f32) {
     sys.refresh_memory();
     sys.refresh_process(pid);
     let total = sys.total_memory().max(1) as f32;
     match sys.process(pid) {
         Some(p) => {
-            let cpu = (p.cpu_usage() / n_cpus.max(1.0)).clamp(0.0, 100.0);
             let rss = p.memory() as f32;
             (
-                cpu,
+                p.cpu_usage().max(0.0),
                 rss / (1024.0 * 1024.0),
                 (rss / total * 100.0).clamp(0.0, 100.0),
             )
@@ -399,9 +395,8 @@ impl ControlServer {
             // Host-resource sampling state (daemon process).
             let mut sys = sysinfo::System::new();
             let pid = sysinfo::Pid::from_u32(std::process::id());
-            let n_cpus = std::thread::available_parallelism()
-                .map(|n| n.get() as f32)
-                .unwrap_or(1.0);
+            // Prime the CPU baseline so the first emit reports a real delta, not 0.
+            sys.refresh_process(pid);
             let mut gpu_available = true;
             loop {
                 interval.tick().await;
@@ -419,8 +414,7 @@ impl ControlServer {
                     signal_strength_dbm: None,
                 });
 
-                let (cpu_percent, ram_mb, ram_percent) =
-                    sample_process_resources(&mut sys, pid, n_cpus);
+                let (cpu_percent, ram_mb, ram_percent) = sample_process_resources(&mut sys, pid);
                 let gpu_percent =
                     tokio::task::block_in_place(|| read_gpu_utilization(&mut gpu_available));
                 let _ = ev_metrics.send(ControlEvent::SystemMetrics {

@@ -3932,6 +3932,7 @@ dependencies = [
  "scfdma-plugin",
  "serde",
  "serde_json",
+ "sysinfo",
 ]
 
 [[package]]

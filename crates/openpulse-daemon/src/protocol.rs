@@ -126,7 +126,7 @@ pub enum ControlEvent {
     },
     /// Periodic host-resource snapshot for the OpenPulse daemon process (default 1 Hz).
     SystemMetrics {
-        /// Daemon-process CPU load, normalised to % of all cores (0–100).
+        /// Daemon-process CPU load, conventional process % (100 = one core; may exceed 100).
         cpu_percent: f32,
         /// Daemon-process resident memory in MiB.
         ram_mb: f32,
