@@ -55,6 +55,7 @@ tracing-subscriber = { workspace = true }
 tokio            = { workspace = true, features = ["net", "io-util", "sync", "rt-multi-thread", "macros", "time"] }
 tokio-tungstenite = "0.23"
 futures-util     = { version = "0.3", default-features = false, features = ["sink", "std"] }
+sysinfo          = { version = "0.30", default-features = false }
 
 [dev-dependencies]
 openpulse-audio  = { workspace = true }

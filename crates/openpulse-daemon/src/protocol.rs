@@ -124,6 +124,19 @@ pub enum ControlEvent {
         afc_correction_hz: f32,
         signal_strength_dbm: Option<i32>,
     },
+    /// Periodic host-resource snapshot for the OpenPulse daemon process (default 1 Hz).
+    SystemMetrics {
+        /// Daemon-process CPU load, normalised to % of all cores (0–100).
+        cpu_percent: f32,
+        /// Daemon-process resident memory in MiB.
+        ram_mb: f32,
+        /// Daemon-process RAM as a % of total system memory (0–100).
+        ram_percent: f32,
+        /// Best-effort system GPU utilisation (0–100); `None` when no source is available.
+        gpu_percent: Option<f32>,
+        /// Smoothed modem receive-path decode latency in milliseconds.
+        decode_latency_ms: f32,
+    },
     /// Periodic rig CAT status snapshot (default 2 Hz, only when rig configured).
     RigStatus {
         rig: String,

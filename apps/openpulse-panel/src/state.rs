@@ -46,6 +46,16 @@ pub struct PanelState {
     pub compress_ratio: f32,
     /// Signal strength in dBm (from `Metrics` or `RigStatus`).
     pub signal_strength_dbm: Option<i32>,
+    /// Daemon-process CPU load, % of all cores (from `SystemMetrics`).
+    pub cpu_percent: f32,
+    /// Daemon-process resident memory in MiB (from `SystemMetrics`).
+    pub ram_mb: f32,
+    /// Daemon-process RAM as % of total system memory (from `SystemMetrics`).
+    pub ram_percent: f32,
+    /// Best-effort system GPU utilisation %, `None` when unavailable (from `SystemMetrics`).
+    pub gpu_percent: Option<f32>,
+    /// Smoothed modem decode latency in ms (from `SystemMetrics`).
+    pub decode_latency_ms: f32,
     /// Latest rig A CAT status.
     pub rig_a: Option<RigSnapshot>,
     /// Latest rig B CAT status.
@@ -96,6 +106,11 @@ impl Default for PanelState {
             ecc_rate: 0.0,
             compress_ratio: 1.0,
             signal_strength_dbm: None,
+            cpu_percent: 0.0,
+            ram_mb: 0.0,
+            ram_percent: 0.0,
+            gpu_percent: None,
+            decode_latency_ms: 0.0,
             rig_a: None,
             rig_b: None,
             event_log: VecDeque::new(),

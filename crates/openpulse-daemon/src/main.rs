@@ -342,9 +342,11 @@ async fn main() {
                 let mode = handle.active_mode.lock().await.clone();
                 // block_in_place: engine.receive() is synchronous; LoopbackBackend returns
                 // immediately. A real audio backend would block until samples are available.
+                let decode_start = std::time::Instant::now();
                 let bytes = tokio::task::block_in_place(|| {
                     engine.receive(&mode, None).unwrap_or_default()
                 });
+                let decode_ms = decode_start.elapsed().as_secs_f32() * 1000.0;
                 if !bytes.is_empty() {
                     process_received_bytes(
                         &bytes,
@@ -361,6 +363,14 @@ async fn main() {
                     let mut m = handle.shared_metrics.lock().await;
                     m.afc_correction_hz = engine.last_afc_offset_hz().unwrap_or(0.0);
                     m.total_rx_bytes += bytes.len() as u64;
+                    // EWMA of decode latency, sampled only when a frame was actually decoded.
+                    if !bytes.is_empty() {
+                        m.decode_latency_ms = if m.decode_latency_ms <= 0.0 {
+                            decode_ms
+                        } else {
+                            m.decode_latency_ms * 0.8 + decode_ms * 0.2
+                        };
+                    }
                 }
             }
         }

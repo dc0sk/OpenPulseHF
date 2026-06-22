@@ -70,10 +70,63 @@ pub struct MetricsSnapshot {
     pub afc_correction_hz: f32,
     /// Cumulative bytes decoded from the RF receive path.
     pub total_rx_bytes: u64,
+    /// Smoothed (EWMA) modem receive-path decode latency in milliseconds.
+    pub decode_latency_ms: f32,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 type SharedMetrics = Arc<Mutex<MetricsSnapshot>>;
+
+/// Sample the daemon process's CPU and memory load. Returns
+/// `(cpu_percent_of_all_cores, ram_mib, ram_percent_of_total)`.
+#[cfg(not(target_arch = "wasm32"))]
+fn sample_process_resources(
+    sys: &mut sysinfo::System,
+    pid: sysinfo::Pid,
+    n_cpus: f32,
+) -> (f32, f32, f32) {
+    sys.refresh_memory();
+    sys.refresh_process(pid);
+    let total = sys.total_memory().max(1) as f32;
+    match sys.process(pid) {
+        Some(p) => {
+            let cpu = (p.cpu_usage() / n_cpus.max(1.0)).clamp(0.0, 100.0);
+            let rss = p.memory() as f32;
+            (
+                cpu,
+                rss / (1024.0 * 1024.0),
+                (rss / total * 100.0).clamp(0.0, 100.0),
+            )
+        }
+        None => (0.0, 0.0, 0.0),
+    }
+}
+
+/// Best-effort system GPU utilisation (0–100). Queries NVIDIA via `nvidia-smi`; on a host with
+/// no such tool (or a non-NVIDIA GPU) it marks `available` false so subsequent ticks don't keep
+/// spawning a failing process, and returns `None`.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_gpu_utilization(available: &mut bool) -> Option<f32> {
+    if !*available {
+        return None;
+    }
+    let out = std::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=utilization.gpu",
+            "--format=csv,noheader,nounits",
+        ])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .next()
+            .and_then(|l| l.trim().parse::<f32>().ok()),
+        _ => {
+            *available = false;
+            None
+        }
+    }
+}
 
 /// Mutable daemon runtime state touched by side-effectful control commands.
 #[cfg(not(target_arch = "wasm32"))]
@@ -337,17 +390,24 @@ impl ControlServer {
             }
         });
 
-        // Background task: periodic Metrics events at 1 Hz.
+        // Background task: periodic Metrics + SystemMetrics events at 1 Hz.
         let ev_metrics = Arc::clone(&ev_tx);
         let metrics_snap = Arc::clone(&shared_metrics);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(1));
             let mut last_bytes: u64 = 0;
+            // Host-resource sampling state (daemon process).
+            let mut sys = sysinfo::System::new();
+            let pid = sysinfo::Pid::from_u32(std::process::id());
+            let n_cpus = std::thread::available_parallelism()
+                .map(|n| n.get() as f32)
+                .unwrap_or(1.0);
+            let mut gpu_available = true;
             loop {
                 interval.tick().await;
-                let (afc, new_bytes) = {
+                let (afc, new_bytes, decode_latency_ms) = {
                     let m = metrics_snap.lock().await;
-                    (m.afc_correction_hz, m.total_rx_bytes)
+                    (m.afc_correction_hz, m.total_rx_bytes, m.decode_latency_ms)
                 };
                 let effective_bps = (new_bytes.saturating_sub(last_bytes) * 8) as f32;
                 last_bytes = new_bytes;
@@ -357,6 +417,18 @@ impl ControlServer {
                     compress_ratio: None,
                     afc_correction_hz: afc,
                     signal_strength_dbm: None,
+                });
+
+                let (cpu_percent, ram_mb, ram_percent) =
+                    sample_process_resources(&mut sys, pid, n_cpus);
+                let gpu_percent =
+                    tokio::task::block_in_place(|| read_gpu_utilization(&mut gpu_available));
+                let _ = ev_metrics.send(ControlEvent::SystemMetrics {
+                    cpu_percent,
+                    ram_mb,
+                    ram_percent,
+                    gpu_percent,
+                    decode_latency_ms,
                 });
             }
         });
