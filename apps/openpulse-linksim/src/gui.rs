@@ -406,7 +406,9 @@ fn waterfall_image(wf: &WaterfallBuffer) -> egui::ColorImage {
     let n = rows.len();
     let mut pixels = Vec::with_capacity(FREQ_BINS * WATERFALL_ROWS);
     for tex_row in 0..WATERFALL_ROWS {
-        let age = WATERFALL_ROWS - 1 - tex_row;
+        // Newest row (rows[0]) at the top so the waterfall scrolls top-to-bottom; older rows
+        // (and the empty tail before the buffer fills) fall below.
+        let age = tex_row;
         if age < n {
             for &v in &rows[age] {
                 pixels.push(plasma(v));

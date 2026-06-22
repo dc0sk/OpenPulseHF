@@ -734,11 +734,10 @@ fn build_waterfall_image(
     let n_rows = rows.len();
     let mut pixels = Vec::with_capacity(FREQ_BINS * WATERFALL_ROWS);
 
-    // Texture top = oldest; texture bottom = newest.
-    // rows[0] = newest, rows[n_rows-1] = oldest.
+    // Newest row (rows[0]) at the top so the waterfall scrolls top-to-bottom (matching the
+    // operator panel and linksim); older rows and the empty tail fall below.
     for tex_row in 0..WATERFALL_ROWS {
-        // data_age=0 is newest (tex_row=WATERFALL_ROWS-1)
-        let data_age = WATERFALL_ROWS - 1 - tex_row;
+        let data_age = tex_row;
         if data_age < n_rows {
             for &intensity in &rows[data_age] {
                 pixels.push(plasma(intensity));
