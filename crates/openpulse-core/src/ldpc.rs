@@ -150,6 +150,21 @@ impl LdpcCodec {
     pub fn codeword_bytes(&self) -> usize {
         (self.k + self.m) / 8
     }
+
+    /// Number of information bits `k`.
+    pub fn k(&self) -> usize {
+        self.k
+    }
+
+    /// Number of parity-check rows `m`.
+    pub fn m(&self) -> usize {
+        self.m
+    }
+
+    /// Tanner-graph adjacency: for each check, the variable indices it connects to.
+    pub fn check_to_vars(&self) -> &[Vec<usize>] {
+        &self.check_to_vars
+    }
 }
 
 /// Progressive Edge-Growth construction of the info-part Tanner graph.
