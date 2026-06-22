@@ -264,7 +264,9 @@ fn register_all(engine: &mut ModemEngine) {
     let _ = reg!(Qam64Plugin);
     let _ = engine.register_plugin(Box::new(Fsk4Plugin::new()));
     let _ = engine.register_plugin(Box::new(OfdmPlugin::new()));
-    let _ = reg!(ScFdmaPlugin);
+    // SC-FDMA stays on CPU: its small per-frame 256-pt FFTs are ~1.2–1.3× slower on the GPU
+    // (dispatch/readback overhead dominates at HF frame sizes).
+    let _ = engine.register_plugin(Box::new(ScFdmaPlugin::new()));
     let _ = engine.register_plugin(Box::new(PilotPlugin::new()));
 }
 

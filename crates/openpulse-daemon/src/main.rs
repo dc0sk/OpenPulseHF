@@ -106,7 +106,11 @@ async fn main() {
     register_gpu_plugin!(Psk8Plugin, "failed to register 8PSK plugin");
     register_gpu_plugin!(Qam64Plugin, "failed to register 64QAM plugin");
     register_gpu_plugin!(QpskPlugin, "failed to register QPSK plugin");
-    register_gpu_plugin!(ScFdmaPlugin, "failed to register SC-FDMA plugin");
+    // SC-FDMA uses the CPU path: its small per-frame 256-pt FFTs are measured ~1.2–1.3× slower
+    // on the GPU (dispatch+readback overhead exceeds the tiny FFT benefit at HF frame sizes).
+    engine
+        .register_plugin(Box::new(ScFdmaPlugin::new()))
+        .expect("failed to register SC-FDMA plugin");
     engine
         .register_plugin(Box::new(PilotPlugin::new()))
         .expect("failed to register pilot-framed plugin");
