@@ -138,6 +138,21 @@ impl SpeedLevel {
         self as u8
     }
 
+    /// Human/config name, e.g. `"SL8"`.
+    pub fn name(self) -> String {
+        format!("SL{}", self as u8)
+    }
+
+    /// Parse a name like `"SL8"` / `"sl8"` / `"8"` into a [`SpeedLevel`].
+    pub fn from_name(s: &str) -> Option<Self> {
+        let t = s.trim();
+        let digits = t
+            .strip_prefix("SL")
+            .or_else(|| t.strip_prefix("sl"))
+            .unwrap_or(t);
+        digits.parse::<u8>().ok().and_then(Self::from_u8)
+    }
+
     /// Decode a wire code (1–20) into a [`SpeedLevel`]; `None` if out of range.
     pub fn from_u8(v: u8) -> Option<Self> {
         use SpeedLevel::*;

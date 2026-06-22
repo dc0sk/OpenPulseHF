@@ -6,8 +6,8 @@ use openpulse_core::audio::AudioBackend;
 use openpulse_core::relay::{RelayForwarder, RelayTrustPolicy};
 use openpulse_core::trust_store_file::load_trust_store_from_file;
 use openpulse_daemon::{
-    apply_command_to_engine, check_ptt_watchdog, process_received_bytes, ws, ControlServer,
-    RuntimeControlState,
+    apply_command_to_engine, check_ptt_watchdog, ota_status_event, process_received_bytes, ws,
+    ControlServer, RuntimeControlState,
 };
 use openpulse_modem::ModemEngine;
 use openpulse_qsy::session::QsyPolicy;
@@ -121,6 +121,46 @@ async fn main() {
             threshold = cfg.audio.tx_limiter_threshold,
             "TX soft-limiter enabled"
         );
+    }
+
+    // Receiver-led OTA adaptive rate-stepping (opt-in via [modem] ota_enabled).
+    if cfg.modem.ota_enabled {
+        let profile_name = if cfg.modem.ota_profile.is_empty() {
+            cfg.modem.profile.as_str()
+        } else {
+            cfg.modem.ota_profile.as_str()
+        };
+        match openpulse_core::profile::SessionProfile::by_name(profile_name) {
+            Some(profile) => {
+                engine.start_ota_session(profile);
+                let parse = openpulse_core::rate::SpeedLevel::from_name;
+                let min = (!cfg.modem.ota_min_level.is_empty())
+                    .then(|| parse(&cfg.modem.ota_min_level))
+                    .flatten();
+                let max = (!cfg.modem.ota_max_level.is_empty())
+                    .then(|| parse(&cfg.modem.ota_max_level))
+                    .flatten();
+                if min.is_some() || max.is_some() {
+                    engine.ota_set_level_bounds(min, max);
+                }
+                if !cfg.modem.ota_lock_level.is_empty() {
+                    if let Some(l) = parse(&cfg.modem.ota_lock_level) {
+                        engine.ota_lock_level(l);
+                    }
+                }
+                if cfg.modem.ota_min_backlog > 0 {
+                    engine.set_min_backlog_for_upgrade(cfg.modem.ota_min_backlog);
+                }
+                if cfg.modem.ota_upgrade_hold_frames > 0 {
+                    engine.set_upgrade_hold_frames(cfg.modem.ota_upgrade_hold_frames);
+                }
+                tracing::info!(profile = profile_name, "OTA adaptive rate-stepping enabled");
+            }
+            None => tracing::warn!(
+                profile = profile_name,
+                "OTA enabled but profile unknown; OTA not started"
+            ),
+        }
     }
 
     // Pre-build the cross-band repeater so it is ready when EnableRepeater fires.
@@ -320,6 +360,9 @@ async fn main() {
     // can react to incoming RF frames without operator commands.
     let mut rx_ticker =
         tokio::time::interval(std::time::Duration::from_millis(cfg.daemon.receive_tick_ms));
+    // Emit OTA status roughly once per second (when an OTA session is active).
+    let ota_status_period = (1000 / cfg.daemon.receive_tick_ms.max(1)).max(1);
+    let mut ota_status_tick: u64 = 0;
     loop {
         tokio::select! {
             biased;
@@ -401,6 +444,11 @@ async fn main() {
                             m.decode_latency_ms * 0.8 + decode_ms * 0.2
                         };
                     }
+                }
+                // Periodic OTA status broadcast (~1 Hz) while a session is active.
+                ota_status_tick += 1;
+                if engine.ota_active() && ota_status_tick.is_multiple_of(ota_status_period) {
+                    let _ = handle.event_tx.send(ota_status_event(&engine));
                 }
             }
         }

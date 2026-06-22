@@ -117,6 +117,21 @@ pub struct ModemConfig {
     pub profile: String,
     /// PTT backend: `none`, `rts`, `dtr`, `vox`, or `rigctld`.
     pub ptt_backend: String,
+    /// Receiver-led OTA adaptive rate-stepping. When `true`, the daemon starts an
+    /// OTA session at launch and drives it on the RX path.
+    pub ota_enabled: bool,
+    /// OTA session profile; falls back to [`profile`](Self::profile) when empty.
+    pub ota_profile: String,
+    /// Lowest OTA speed level (e.g. `"SL3"`); empty = the profile's natural floor.
+    pub ota_min_level: String,
+    /// Highest OTA speed level (e.g. `"SL10"`); empty = the profile's natural cap.
+    pub ota_max_level: String,
+    /// Lock OTA to a fixed speed level (e.g. `"SL6"`); empty = adapt normally.
+    pub ota_lock_level: String,
+    /// A2 gate: minimum queued TX bytes before an upgrade is acted on (0 = off).
+    pub ota_min_backlog: usize,
+    /// A3 gate: suppress this many upgrades after a downgrade (0 = off).
+    pub ota_upgrade_hold_frames: u32,
 }
 
 /// Per-rig CAT settings (used in `[radio.rig_a]` / `[radio.rig_b]` sections).
@@ -252,6 +267,13 @@ impl Default for ModemConfig {
             mode: "BPSK250".into(),
             profile: "hpx_hf".into(),
             ptt_backend: "none".into(),
+            ota_enabled: false,
+            ota_profile: String::new(),
+            ota_min_level: String::new(),
+            ota_max_level: String::new(),
+            ota_lock_level: String::new(),
+            ota_min_backlog: 0,
+            ota_upgrade_hold_frames: 0,
         }
     }
 }
@@ -565,6 +587,21 @@ mode = "BPSK250"
 profile = "hpx_hf"
 # PTT backend: none | rts | dtr | vox | rigctld
 ptt_backend = "none"
+# Receiver-led OTA adaptive rate-stepping. When true the daemon starts an OTA
+# session at launch and drives it on the RX path (the data receiver leads the
+# rate per direction; the sender follows an absolute recommendation in the ACK).
+ota_enabled = false
+# OTA session profile; empty falls back to `profile` above.
+ota_profile = ""
+# Clamp the OTA ladder. Empty = the profile's natural floor/cap. e.g. "SL3" / "SL10".
+ota_min_level = ""
+ota_max_level = ""
+# Lock OTA to a fixed level (manual override); empty = adapt normally. e.g. "SL6".
+ota_lock_level = ""
+# A2 gate: minimum queued TX bytes before an upgrade is acted on (0 = off).
+ota_min_backlog = 0
+# A3 gate: suppress this many upgrade attempts after a downgrade (0 = off).
+ota_upgrade_hold_frames = 0
 
 [radio]
 # rigctld TCP address for single-rig PTT-only use.
