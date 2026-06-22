@@ -191,6 +191,23 @@ pub enum ControlEvent {
         /// Human-readable failure detail.
         reason: String,
     },
+    /// Receiver-led OTA adaptive rate-stepping status (periodic / on change).
+    OtaStatus {
+        /// Whether an OTA session is active.
+        active: bool,
+        /// Mode string the local station transmits data at (`None` if no session).
+        tx_mode: Option<String>,
+        /// Current TX speed level name (e.g. `"SL8"`).
+        tx_level: Option<String>,
+        /// FEC scheme at the current TX level (e.g. `"none"`, `"ldpc"`).
+        tx_fec: String,
+        /// Absolute level we recommend to the peer for our RX direction.
+        rx_recommended_level: Option<String>,
+        /// Highest level we have actually decoded (lockstep anchor).
+        rx_confirmed_level: Option<String>,
+        /// Whether the session is locked to a fixed level (manual override).
+        is_locked: bool,
+    },
 }
 
 /// Command sent from a client to the server.
@@ -246,6 +263,19 @@ pub enum ControlCommand {
     GetMessage { id: u64 },
     /// Delete a stored message by ID.
     DeleteMessage { id: u64 },
+    /// Start a receiver-led OTA adaptive session with the named profile.
+    StartOtaSession { profile: String },
+    /// Stop the active OTA session.
+    StopOtaSession,
+    /// Clamp the OTA ladder to `[min, max]` (each `None`/empty = profile bound).
+    OtaSetLevelBounds {
+        min_level: Option<String>,
+        max_level: Option<String>,
+    },
+    /// Lock OTA to a fixed speed level (manual override).
+    OtaLockLevel { level: String },
+    /// Release the OTA level lock and resume adapting.
+    OtaUnlock,
 }
 
 /// Per-command response.
@@ -269,5 +299,50 @@ impl CommandResponse {
             ok: false,
             error: Some(msg.into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod ota_protocol_tests {
+    use super::*;
+
+    #[test]
+    fn ota_commands_round_trip_via_json() {
+        let cmds = vec![
+            ControlCommand::StartOtaSession {
+                profile: "hpx_modcod".into(),
+            },
+            ControlCommand::StopOtaSession,
+            ControlCommand::OtaSetLevelBounds {
+                min_level: Some("SL3".into()),
+                max_level: Some("SL10".into()),
+            },
+            ControlCommand::OtaLockLevel {
+                level: "SL6".into(),
+            },
+            ControlCommand::OtaUnlock,
+        ];
+        for c in cmds {
+            let json = serde_json::to_string(&c).unwrap();
+            let back: ControlCommand = serde_json::from_str(&json).unwrap();
+            assert_eq!(format!("{c:?}"), format!("{back:?}"));
+        }
+    }
+
+    #[test]
+    fn ota_status_event_round_trips_and_tags_snake_case() {
+        let ev = ControlEvent::OtaStatus {
+            active: true,
+            tx_mode: Some("QPSK500".into()),
+            tx_level: Some("SL6".into()),
+            tx_fec: "ldpc".into(),
+            rx_recommended_level: Some("SL7".into()),
+            rx_confirmed_level: Some("SL6".into()),
+            is_locked: false,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("\"type\":\"ota_status\""), "tag: {json}");
+        let back: ControlEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(format!("{ev:?}"), format!("{back:?}"));
     }
 }

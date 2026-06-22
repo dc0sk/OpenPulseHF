@@ -1365,6 +1365,54 @@ pub async fn apply_command_to_engine(
             runtime_state.repeater_enabled = false;
             let _ = event_tx.send(ControlEvent::RepeaterChanged { enabled: false });
         }
+        ControlCommand::StartOtaSession { profile } => {
+            match openpulse_core::profile::SessionProfile::by_name(profile) {
+                Some(p) => {
+                    engine.start_ota_session(p);
+                    let _ = event_tx.send(ota_status_event(engine));
+                }
+                None => {
+                    let _ = event_tx.send(ControlEvent::CommandError {
+                        command: "start_ota_session".to_string(),
+                        reason: format!("unknown profile '{profile}'"),
+                    });
+                }
+            }
+        }
+        ControlCommand::StopOtaSession => {
+            engine.stop_ota_session();
+            let _ = event_tx.send(ota_status_event(engine));
+        }
+        ControlCommand::OtaSetLevelBounds {
+            min_level,
+            max_level,
+        } => {
+            let parse = |o: &Option<String>| {
+                o.as_deref()
+                    .filter(|s| !s.is_empty())
+                    .and_then(openpulse_core::rate::SpeedLevel::from_name)
+            };
+            engine.ota_set_level_bounds(parse(min_level), parse(max_level));
+            let _ = event_tx.send(ota_status_event(engine));
+        }
+        ControlCommand::OtaLockLevel { level } => {
+            match openpulse_core::rate::SpeedLevel::from_name(level) {
+                Some(l) => {
+                    engine.ota_lock_level(l);
+                    let _ = event_tx.send(ota_status_event(engine));
+                }
+                None => {
+                    let _ = event_tx.send(ControlEvent::CommandError {
+                        command: "ota_lock_level".to_string(),
+                        reason: format!("invalid level '{level}'"),
+                    });
+                }
+            }
+        }
+        ControlCommand::OtaUnlock => {
+            engine.ota_unlock();
+            let _ = event_tx.send(ota_status_event(engine));
+        }
         // No live-modem side effects for these commands in the engine path.
         // They are handled by dispatch-only paths or request-response control flow.
         ControlCommand::SubscribeSpectrum { .. }
@@ -1372,6 +1420,19 @@ pub async fn apply_command_to_engine(
         | ControlCommand::ListMessages
         | ControlCommand::GetMessage { .. }
         | ControlCommand::DeleteMessage { .. } => {}
+    }
+}
+
+/// Build an [`ControlEvent::OtaStatus`] snapshot from the engine's current OTA state.
+pub fn ota_status_event(engine: &ModemEngine) -> ControlEvent {
+    ControlEvent::OtaStatus {
+        active: engine.ota_active(),
+        tx_mode: engine.ota_tx_mode().map(|s| s.to_string()),
+        tx_level: engine.ota_tx_level().map(|l| l.name()),
+        tx_fec: format!("{:?}", engine.ota_tx_fec()).to_lowercase(),
+        rx_recommended_level: engine.ota_rx_recommended_level().map(|l| l.name()),
+        rx_confirmed_level: engine.ota_rx_confirmed_level().map(|l| l.name()),
+        is_locked: engine.ota_is_locked(),
     }
 }
 
@@ -1386,6 +1447,86 @@ mod command_apply_tests {
         let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
         engine.register_plugin(Box::new(BpskPlugin::new())).unwrap();
         engine
+    }
+
+    #[tokio::test]
+    async fn ota_commands_start_lock_and_report_status() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(32);
+        let ev_tx = Arc::new(tx);
+        let mut rs = RuntimeControlState::default();
+
+        // Start an OTA session.
+        apply_command_to_engine(
+            &ControlCommand::StartOtaSession {
+                profile: "hpx500".into(),
+            },
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut rs,
+        )
+        .await;
+        assert!(engine.ota_active());
+        assert_eq!(engine.ota_tx_level().map(|l| l.name()), Some("SL2".into()));
+
+        // Lock to SL4 → status reflects the lock.
+        apply_command_to_engine(
+            &ControlCommand::OtaLockLevel {
+                level: "SL4".into(),
+            },
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut rs,
+        )
+        .await;
+        assert!(engine.ota_is_locked());
+        assert_eq!(engine.ota_tx_level().map(|l| l.name()), Some("SL4".into()));
+
+        // An OtaStatus event was emitted with the locked state.
+        let mut saw_locked_status = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let ControlEvent::OtaStatus {
+                is_locked,
+                tx_level,
+                ..
+            } = ev
+            {
+                if is_locked && tx_level.as_deref() == Some("SL4") {
+                    saw_locked_status = true;
+                }
+            }
+        }
+        assert!(
+            saw_locked_status,
+            "expected an OtaStatus event with the SL4 lock"
+        );
+
+        // Unlock + stop.
+        apply_command_to_engine(
+            &ControlCommand::OtaUnlock,
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut rs,
+        )
+        .await;
+        assert!(!engine.ota_is_locked());
+        apply_command_to_engine(
+            &ControlCommand::StopOtaSession,
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut rs,
+        )
+        .await;
+        assert!(!engine.ota_active());
     }
 
     #[tokio::test]

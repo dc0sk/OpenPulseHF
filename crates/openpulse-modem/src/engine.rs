@@ -552,6 +552,16 @@ impl ModemEngine {
         self.ota = Some(OtaRateController::new(profile));
     }
 
+    /// Stop the active OTA session (drops the controller). No-op if none active.
+    pub fn stop_ota_session(&mut self) {
+        self.ota = None;
+    }
+
+    /// Whether a receiver-led OTA session is active.
+    pub fn ota_active(&self) -> bool {
+        self.ota.is_some()
+    }
+
     /// Mode string the local station should transmit data at under the OTA session.
     pub fn ota_tx_mode(&self) -> Option<&str> {
         self.ota.as_ref().and_then(|o| o.tx_mode())
