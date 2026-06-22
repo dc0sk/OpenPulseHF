@@ -56,6 +56,68 @@ pub fn m2m4_snr_db_from_real(samples: &[f32], fc: f32, fs: f32) -> f32 {
     m2m4_snr_db(&i, &q)
 }
 
+/// Window (samples) for the smoothed envelope used by the active-region detector.
+const VAD_SMOOTH_WIN: usize = 64;
+/// Active-region boundary threshold as a fraction of the peak smoothed power.
+const VAD_THRESHOLD: f32 = 0.1;
+
+/// Find the `[start, end)` span of the active signal burst in `power` (per-sample
+/// envelope power), trimming leading/trailing silence.
+///
+/// Boundary detection uses a smoothed envelope crossing [`VAD_THRESHOLD`]×peak; the
+/// returned span is contiguous, so M2M4 moments computed over it keep the burst's
+/// internal noise statistics (only *silence* is removed, never within-burst dips).
+fn active_span(power: &[f32]) -> (usize, usize) {
+    let n = power.len();
+    if n <= VAD_SMOOTH_WIN {
+        return (0, n);
+    }
+    // Smoothed power via a moving average (box filter).
+    let mut smooth = vec![0.0f32; n];
+    let mut acc = 0.0f32;
+    for k in 0..n {
+        acc += power[k];
+        if k >= VAD_SMOOTH_WIN {
+            acc -= power[k - VAD_SMOOTH_WIN];
+        }
+        let span = (k + 1).min(VAD_SMOOTH_WIN) as f32;
+        smooth[k] = acc / span;
+    }
+    let peak = smooth.iter().copied().fold(0.0f32, f32::max);
+    if peak <= 0.0 {
+        return (0, n);
+    }
+    let thr = VAD_THRESHOLD * peak;
+    let start = smooth.iter().position(|&p| p >= thr).unwrap_or(0);
+    let end = smooth.iter().rposition(|&p| p >= thr).map_or(n, |i| i + 1);
+    if end > start {
+        (start, end)
+    } else {
+        (0, n)
+    }
+}
+
+/// Silence-gated M2M4 SNR estimate (dB) from baseband I/Q.
+///
+/// Trims leading/trailing silence (via [`active_span`]) before computing the
+/// moments, so a captured frame surrounded by silence is not biased low. The active
+/// span is kept whole — within-burst noise statistics are preserved.
+pub fn m2m4_snr_db_gated(i: &[f32], q: &[f32]) -> f32 {
+    let n = i.len().min(q.len());
+    if n < 2 {
+        return SNR_FLOOR_DB;
+    }
+    let power: Vec<f32> = (0..n).map(|k| i[k] * i[k] + q[k] * q[k]).collect();
+    let (s, e) = active_span(&power);
+    m2m4_snr_db(&i[s..e], &q[s..e])
+}
+
+/// Silence-gated M2M4 SNR estimate (dB) from a real passband buffer.
+pub fn m2m4_snr_db_gated_from_real(samples: &[f32], fc: f32, fs: f32) -> f32 {
+    let (i, q) = hilbert_iq(samples, fc, fs);
+    m2m4_snr_db_gated(&i, &q)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,6 +177,34 @@ mod tests {
     fn empty_and_silent_inputs_return_floor() {
         assert_eq!(m2m4_snr_db(&[], &[]), SNR_FLOOR_DB);
         assert_eq!(m2m4_snr_db(&[0.0; 64], &[0.0; 64]), SNR_FLOOR_DB);
+    }
+
+    #[test]
+    fn gating_removes_silence_bias() {
+        let mut rng = StdRng::seed_from_u64(3);
+        let (i, q) = psk_iq_with_awgn(8_000, 12.0, &mut rng);
+        // Pad the burst with equal leading + trailing silence.
+        let pad = vec![0.0f32; 6_000];
+        let mut pi = pad.clone();
+        pi.extend_from_slice(&i);
+        pi.extend_from_slice(&pad);
+        let mut pq = pad.clone();
+        pq.extend_from_slice(&q);
+        pq.extend_from_slice(&pad);
+
+        let ungated = m2m4_snr_db(&pi, &pq);
+        let gated = m2m4_snr_db_gated(&pi, &pq);
+        let burst = m2m4_snr_db(&i, &q);
+        // Silence drags the ungated estimate well below the true burst SNR; the gated
+        // estimate recovers it (close to the burst-only value).
+        assert!(
+            gated > ungated + 2.0,
+            "gated {gated:.1} should beat ungated {ungated:.1}"
+        );
+        assert!(
+            (gated - burst).abs() <= 2.5,
+            "gated {gated:.1} should track the burst-only estimate {burst:.1}"
+        );
     }
 
     #[test]
