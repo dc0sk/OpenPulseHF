@@ -687,13 +687,14 @@ impl ModemEngine {
             }
         }
 
-        // SNR for the receiver decision: prefer an external estimate; else fall back
-        // to the (weak) LLR proxy from a soft demod of the decoded mode.
-        let snr = match (self.rx_snr_estimate, decoded.as_ref()) {
-            (Some(s), _) => s,
-            (None, Some((_, _, mode))) => self.llr_proxy_snr(&samples.samples, mode),
-            (None, None) => 0.0,
-        };
+        // SNR for the receiver decision: prefer an external estimate; else the M2M4
+        // moment estimator on the captured envelope (a real absolute SNR, unlike the
+        // mean-|LLR| proxy). Works whether or not a candidate decoded.
+        let snr = self.rx_snr_estimate.unwrap_or_else(|| {
+            let fc = self.center_frequency + self.afc_correction_hz;
+            let fs = AudioConfig::default().sample_rate as f32;
+            openpulse_core::snr_estimate::m2m4_snr_db_from_real(&samples.samples, fc, fs)
+        });
 
         let ota = self
             .ota
@@ -726,24 +727,6 @@ impl ModemEngine {
                 ModemError::Configuration("OTA receive: no candidate decoded".into())
             })),
         }
-    }
-
-    /// Weak LLR-magnitude SNR proxy for `samples` at `mode`: a soft demod whose mean
-    /// |LLR| maps to a dB figure. Only a relative confidence indicator (≈ −2 dB on a
-    /// clean path) — used as the OTA receiver-decision fallback when no external SNR
-    /// estimate is supplied. Returns 0.0 if the mode has no plugin or soft demod fails.
-    fn llr_proxy_snr(&self, samples: &[f32], mode: &str) -> f32 {
-        let mod_cfg = ModulationConfig {
-            mode: mode.to_string(),
-            center_frequency: self.center_frequency + self.afc_correction_hz,
-            afc_correction_hz: self.afc_correction_hz,
-            ..ModulationConfig::default()
-        };
-        self.plugins
-            .get(mode)
-            .and_then(|p| p.demodulate_soft(samples, &mod_cfg).ok())
-            .map(|llrs| RateAdaptationPolicy::snr_from_llrs(&llrs))
-            .unwrap_or(0.0)
     }
 
     /// Select HARQ retry parameters from SNR/fading state.

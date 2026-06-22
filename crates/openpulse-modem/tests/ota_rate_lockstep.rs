@@ -115,6 +115,27 @@ fn climbs_on_clean_channel_no_loss() {
 }
 
 #[test]
+fn climbs_using_the_builtin_m2m4_snr_estimator() {
+    // Clear the external SNR seam so the engine must derive SNR itself (M2M4 on the
+    // captured envelope). Unlike the old mean-|LLR| proxy (≈ −2 dB → no climb), the
+    // M2M4 estimate of the real loopback frame reads ~10 dB — a realistic finite
+    // value (frame transitions are not a pure constant-modulus tone) — which drives
+    // the ladder up to a mid rung without any externally-supplied estimate.
+    let levels = run_exchange_cfg(
+        12,
+        0.0,
+        |_| true,
+        |_iss, irs| {
+            irs.set_rx_snr_estimate(None);
+        },
+    );
+    assert!(
+        *levels.last().unwrap() >= SpeedLevel::Sl4,
+        "M2M4 estimator should drive a meaningful climb on a clean channel: {levels:?}"
+    );
+}
+
+#[test]
 fn never_desyncs_with_periodic_ack_loss() {
     // Every 3rd ACK is lost. respond_arq_ota's `.expect()` inside run_exchange
     // fires if a desync ever causes a decode failure — so reaching the end proves
