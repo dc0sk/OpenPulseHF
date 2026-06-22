@@ -22,11 +22,15 @@ section = "hamradio"
 priority = "optional"
 
 [features]
+# GPU acceleration is ON by default: the GPU-capable plugins use the GPU when an adapter is
+# available, falling back to CPU otherwise. Build --no-default-features for a lean CPU-only
+# build (CI, headless servers, WASM protocol use).
+default = ["gpu"]
 # Enable real audio hardware support (CPAL backend).  Off by default so CI builds
 # don't require ALSA/CoreAudio headers.  For production: cargo build --features cpal
 cpal = ["openpulse-audio/cpal-backend"]
-# Enable wgpu GPU acceleration for the GPU-capable plugins, and report our-kernel GPU load in
-# SystemMetrics.  Off by default (not in CI).  Build: cargo build --features gpu
+# wgpu GPU acceleration for the GPU-capable plugins; reports our-kernel GPU load in
+# SystemMetrics. Auto-detected at runtime (GpuContext::init).
 gpu = [
     "dep:openpulse-gpu",
     "bpsk-plugin/gpu",

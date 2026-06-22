@@ -223,14 +223,19 @@ struct ClientState {
 
 /// Samples the linksim process's CPU/RAM and emits a `SystemMetrics` event ~1 Hz, so the
 /// panel's resource bars reflect the work the simulation is doing (the GUI/serve share one
-/// process). Decode latency is an EWMA of the sim's per-frame modem-decode time; GPU is the
-/// best-effort system source (the sim runs no GPU kernels of its own).
+/// process). Decode latency is an EWMA of the sim's per-frame modem-decode time. GPU load
+/// reports the time our wgpu kernels actually spent (gpu feature), else a best-effort system
+/// source.
 struct ResourceMonitor {
     sys: sysinfo::System,
     pid: sysinfo::Pid,
     gpu_available: bool,
     decode_ewma: f32,
     last_emit: Instant,
+    #[cfg(feature = "gpu")]
+    last_gpu_busy: u64,
+    #[cfg(feature = "gpu")]
+    last_gpu_instant: Instant,
 }
 
 impl ResourceMonitor {
@@ -245,6 +250,10 @@ impl ResourceMonitor {
             gpu_available: true,
             decode_ewma: 0.0,
             last_emit: Instant::now(),
+            #[cfg(feature = "gpu")]
+            last_gpu_busy: openpulse_gpu::gpu_busy_nanos(),
+            #[cfg(feature = "gpu")]
+            last_gpu_instant: Instant::now(),
         }
     }
 
@@ -254,6 +263,29 @@ impl ResourceMonitor {
         } else {
             self.decode_ewma * 0.8 + ms * 0.2
         };
+    }
+
+    /// GPU load: prefer the time our wgpu kernels spent this interval; fall back to the system
+    /// source when the gpu feature is off or no kernels ran (CPU path / no adapter).
+    fn sample_gpu(&mut self) -> Option<f32> {
+        #[cfg(feature = "gpu")]
+        {
+            let now_busy = openpulse_gpu::gpu_busy_nanos();
+            let now = Instant::now();
+            let busy = now_busy.saturating_sub(self.last_gpu_busy) as f64;
+            let elapsed = now.duration_since(self.last_gpu_instant).as_nanos() as f64;
+            self.last_gpu_busy = now_busy;
+            self.last_gpu_instant = now;
+            let kernel_pct = if elapsed > 0.0 {
+                (busy / elapsed * 100.0).clamp(0.0, 100.0) as f32
+            } else {
+                0.0
+            };
+            if kernel_pct > 0.05 {
+                return Some(kernel_pct);
+            }
+        }
+        read_gpu_utilization(&mut self.gpu_available)
     }
 
     fn maybe_emit(&mut self, writer: &mut TcpStream) -> io::Result<()> {
@@ -275,7 +307,7 @@ impl ResourceMonitor {
             }
             None => (0.0, 0.0, 0.0),
         };
-        let gpu_percent = read_gpu_utilization(&mut self.gpu_available);
+        let gpu_percent = self.sample_gpu();
         send_event(
             writer,
             &ControlEvent::SystemMetrics {

@@ -12,6 +12,8 @@ name = "openpulse-panel"
 path = "src/main.rs"
 
 [dependencies]
+# Protocol types only; the workspace dep sets default-features=false so the daemon's GPU/native
+# code stays out of the panel's WASM build.
 openpulse-daemon  = { workspace = true }
 openpulse-modem   = { workspace = true }
 serde_json        = { workspace = true }

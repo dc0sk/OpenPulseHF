@@ -3925,6 +3925,7 @@ dependencies = [
  "openpulse-channel",
  "openpulse-core",
  "openpulse-daemon",
+ "openpulse-gpu",
  "openpulse-modem",
  "pilot-plugin",
  "psk8-plugin",
