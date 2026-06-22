@@ -557,6 +557,15 @@ impl ModemEngine {
         self.ota.as_ref().and_then(|o| o.tx_mode())
     }
 
+    /// FEC scheme to transmit data with at the current OTA TX level (MODCOD).
+    /// Returns [`FecMode::None`] when no OTA session is active.
+    pub fn ota_tx_fec(&self) -> FecMode {
+        self.ota
+            .as_ref()
+            .map(|o| o.tx_fec())
+            .unwrap_or(FecMode::None)
+    }
+
     /// Current OTA TX speed level (the level the peer last recommended to us).
     pub fn ota_tx_level(&self) -> Option<SpeedLevel> {
         self.ota.as_ref().map(|o| o.tx_level())
@@ -636,13 +645,13 @@ impl ModemEngine {
         session_id: &str,
         device: Option<&str>,
     ) -> Result<Vec<u8>, ModemError> {
-        let candidates: Vec<(SpeedLevel, String)> = self
+        let candidates: Vec<(SpeedLevel, String, FecMode)> = self
             .ota
             .as_ref()
             .ok_or_else(|| ModemError::Configuration("no OTA session active".into()))?
             .rx_candidates()
             .into_iter()
-            .map(|(l, m)| (l, m.to_string()))
+            .map(|(l, m, f)| (l, m.to_string(), f))
             .collect();
 
         let samples = self.stage_capture_input(device)?;
@@ -660,33 +669,43 @@ impl ModemEngine {
         // AFC accumulates across calls, so a failed wrong-mode candidate would
         // poison the correct candidate's correction. Isolate each attempt: reset to
         // the pre-frame AFC before every try, keeping only the successful update.
+        // Each candidate carries its own MODCOD FEC, applied via decode_attempt.
         let afc_before = self.afc_correction_hz;
-        let mut decoded: Option<(Vec<u8>, f32, SpeedLevel, String)> = None;
+        let mut decoded: Option<(Vec<u8>, SpeedLevel, String)> = None;
         let mut last_err: Option<ModemError> = None;
-        for (level, mode) in &candidates {
+        for (level, mode, fec) in &candidates {
             self.afc_correction_hz = afc_before;
-            match self.try_decode_at(&samples.samples, mode) {
-                Ok((payload, snr)) => {
-                    decoded = Some((payload, snr, *level, mode.clone()));
+            let slice = AudioSamples {
+                samples: samples.samples.clone(),
+            };
+            match self.decode_attempt(mode, slice, *fec) {
+                Ok(payload) => {
+                    decoded = Some((payload, *level, mode.clone()));
                     break;
                 }
                 Err(e) => last_err = Some(e),
             }
         }
 
-        let snr_override = self.rx_snr_estimate;
+        // SNR for the receiver decision: prefer an external estimate; else fall back
+        // to the (weak) LLR proxy from a soft demod of the decoded mode.
+        let snr = match (self.rx_snr_estimate, decoded.as_ref()) {
+            (Some(s), _) => s,
+            (None, Some((_, _, mode))) => self.llr_proxy_snr(&samples.samples, mode),
+            (None, None) => 0.0,
+        };
+
         let ota = self
             .ota
             .as_mut()
             .ok_or_else(|| ModemError::Configuration("no OTA session active".into()))?;
         let (rx_ack, decoded) = match decoded {
-            Some((payload, measured_snr, level, mode)) => {
-                let snr = snr_override.unwrap_or(measured_snr);
+            Some((payload, level, mode)) => {
                 let ack = ota.on_rx_frame(RxOutcome::Decoded(level), snr);
                 (ack, Some((payload, mode)))
             }
             None => {
-                let ack = ota.on_rx_frame(RxOutcome::Failed, 0.0);
+                let ack = ota.on_rx_frame(RxOutcome::Failed, snr);
                 (ack, None)
             }
         };
@@ -709,38 +728,22 @@ impl ModemEngine {
         }
     }
 
-    /// Demodulate + decode the already-captured `samples` at `mode`, returning the
-    /// frame payload and the SNR estimate. Used by the OTA candidate fallback.
-    fn try_decode_at(&mut self, samples: &[f32], mode: &str) -> Result<(Vec<u8>, f32), ModemError> {
-        self.update_afc_estimate(mode, samples);
+    /// Weak LLR-magnitude SNR proxy for `samples` at `mode`: a soft demod whose mean
+    /// |LLR| maps to a dB figure. Only a relative confidence indicator (≈ −2 dB on a
+    /// clean path) — used as the OTA receiver-decision fallback when no external SNR
+    /// estimate is supplied. Returns 0.0 if the mode has no plugin or soft demod fails.
+    fn llr_proxy_snr(&self, samples: &[f32], mode: &str) -> f32 {
         let mod_cfg = ModulationConfig {
             mode: mode.to_string(),
             center_frequency: self.center_frequency + self.afc_correction_hz,
             afc_correction_hz: self.afc_correction_hz,
             ..ModulationConfig::default()
         };
-        let plugin = self
-            .plugins
+        self.plugins
             .get(mode)
-            .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
-        let llrs = plugin.demodulate_soft(samples, &mod_cfg)?;
-        let snr_db = RateAdaptationPolicy::snr_from_llrs(&llrs);
-
-        let wire_bytes: Vec<u8> = llrs
-            .chunks(8)
-            .map(|byte_llrs| {
-                byte_llrs
-                    .iter()
-                    .enumerate()
-                    .fold(0u8, |acc, (i, &llr)| acc | (u8::from(llr <= 0.0) << i))
-            })
-            .collect();
-
-        let wire = WirePayload { bytes: wire_bytes };
-        let wire = self.route_wire_stage(PipelineStage::DemodulateDecode, wire)?;
-        let frame = self.stage_decode_frame(&wire)?;
-        let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
-        Ok((frame.payload, snr_db))
+            .and_then(|p| p.demodulate_soft(samples, &mod_cfg).ok())
+            .map(|llrs| RateAdaptationPolicy::snr_from_llrs(&llrs))
+            .unwrap_or(0.0)
     }
 
     /// Select HARQ retry parameters from SNR/fading state.

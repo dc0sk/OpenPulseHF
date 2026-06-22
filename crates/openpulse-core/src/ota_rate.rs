@@ -23,6 +23,7 @@
 //! engine drives it by reporting which candidate decoded and the measured SNR.
 
 use crate::ack::AckType;
+use crate::fec::FecMode;
 use crate::profile::SessionProfile;
 use crate::rate::SpeedLevel;
 
@@ -189,6 +190,11 @@ impl OtaRateController {
         self.profile.mode_for(self.tx_level)
     }
 
+    /// FEC scheme we should transmit data with at the current TX level (MODCOD).
+    pub fn tx_fec(&self) -> FecMode {
+        self.profile.fec_for(self.tx_level)
+    }
+
     // ── RX side (we lead) ──────────────────────────────────────────────────────
 
     /// Current absolute level we are recommending to the peer.
@@ -207,15 +213,23 @@ impl OtaRateController {
     /// The lockstep invariant guarantees this set covers whatever the sender is
     /// using: the recommended level (if it adopted our last ACK) or the confirmed
     /// level (if that ACK was lost). At most two entries.
-    pub fn rx_candidates(&self) -> Vec<(SpeedLevel, &'static str)> {
+    pub fn rx_candidates(&self) -> Vec<(SpeedLevel, &'static str, FecMode)> {
         let mut out = Vec::with_capacity(2);
         if let Some(m) = self.profile.mode_for(self.rx_recommended) {
-            out.push((self.rx_recommended, m));
+            out.push((
+                self.rx_recommended,
+                m,
+                self.profile.fec_for(self.rx_recommended),
+            ));
         }
         if self.rx_confirmed != self.rx_recommended {
             if let Some(m) = self.profile.mode_for(self.rx_confirmed) {
-                if !out.iter().any(|&(l, _)| l == self.rx_confirmed) {
-                    out.push((self.rx_confirmed, m));
+                if !out.iter().any(|&(l, _, _)| l == self.rx_confirmed) {
+                    out.push((
+                        self.rx_confirmed,
+                        m,
+                        self.profile.fec_for(self.rx_confirmed),
+                    ));
                 }
             }
         }
@@ -224,7 +238,10 @@ impl OtaRateController {
 
     /// Mode strings to attempt when demodulating the next data frame, most-likely first.
     pub fn rx_candidate_modes(&self) -> Vec<&'static str> {
-        self.rx_candidates().into_iter().map(|(_, m)| m).collect()
+        self.rx_candidates()
+            .into_iter()
+            .map(|(_, m, _)| m)
+            .collect()
     }
 
     /// Update RX state from a demodulation outcome and measured SNR, and return the

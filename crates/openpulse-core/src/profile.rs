@@ -1,5 +1,6 @@
 //! HPX session profiles: SpeedLevel-to-mode-string mappings for each bandwidth class.
 
+use crate::fec::FecMode;
 use crate::rate::SpeedLevel;
 
 /// Profile-entry policy for promoting SC-FDMA QAM rungs into the HPX HF ladder.
@@ -32,6 +33,9 @@ pub struct SessionProfile {
     snr_ceilings: [Option<f32>; 21],
     /// If set, ACK-UP at this level requires a prior SNR upgrade candidate.
     ack_up_requires_snr_candidate_at: Option<SpeedLevel>,
+    /// Per-level FEC scheme (MODCOD). `None` = no FEC for that level. Indexed by
+    /// SpeedLevel discriminant (1–20); index 0 unused.
+    fec_modes: [Option<FecMode>; 21],
 }
 
 impl SessionProfile {
@@ -73,6 +77,12 @@ impl SessionProfile {
         self.ack_up_requires_snr_candidate_at
     }
 
+    /// Return the FEC scheme for `level` (MODCOD). Defaults to [`FecMode::None`]
+    /// for levels without an explicit FEC assignment.
+    pub fn fec_for(&self, level: SpeedLevel) -> FecMode {
+        self.fec_modes[level as usize].unwrap_or(FecMode::None)
+    }
+
     /// Return all speed levels that have a mode string defined in this profile, in
     /// ascending order.  Useful for building profile-driven recommendation tables
     /// without hard-coding a fixed level range.
@@ -90,6 +100,7 @@ impl SessionProfile {
     /// Canonical profile names accepted by [`SessionProfile::by_name`], in ladder order.
     pub const PROFILE_NAMES: &'static [&'static str] = &[
         "hpx500",
+        "hpx_modcod",
         "hpx_pilot",
         "hpx_pilot_rrc",
         "hpx_pilot_fast",
@@ -109,6 +120,7 @@ impl SessionProfile {
         let key = name.trim().to_ascii_lowercase().replace('-', "_");
         match key.as_str() {
             "hpx500" => Some(Self::hpx500()),
+            "hpx_modcod" => Some(Self::hpx_modcod()),
             "hpx_pilot" => Some(Self::hpx_pilot()),
             "hpx_pilot_rrc" => Some(Self::hpx_pilot_rrc()),
             "hpx_pilot_fast" => Some(Self::hpx_pilot_fast()),
@@ -161,6 +173,61 @@ impl SessionProfile {
             snr_floors,
             snr_ceilings,
             ack_up_requires_snr_candidate_at: None,
+            fec_modes: [None; 21],
+        }
+    }
+
+    /// HPX MODCOD profile: a 500 Hz ladder that adapts **modulation × FEC** together
+    /// (DVB-S2 / WiFi-MCS style), interleaving FEC rungs between modulation steps so
+    /// the link can trade coding gain for throughput at fine granularity.
+    ///
+    /// | SL  | Mode     | FEC   | note                         |
+    /// |-----|----------|-------|------------------------------|
+    /// | SL2 | BPSK250  | LDPC  | most robust (rate-1/2 soft)  |
+    /// | SL3 | BPSK250  | RS    | same mod, lighter coding     |
+    /// | SL4 | QPSK250  | LDPC  | denser mod, strong coding    |
+    /// | SL5 | QPSK250  | RS    | same mod, lighter coding     |
+    /// | SL6 | QPSK500  | RS    | fastest mod, coded           |
+    /// | SL7 | QPSK500  | none  | peak throughput, uncoded     |
+    pub fn hpx_modcod() -> Self {
+        let mut modes = [None; 21];
+        modes[SpeedLevel::Sl2 as usize] = Some("BPSK250");
+        modes[SpeedLevel::Sl3 as usize] = Some("BPSK250");
+        modes[SpeedLevel::Sl4 as usize] = Some("QPSK250");
+        modes[SpeedLevel::Sl5 as usize] = Some("QPSK250");
+        modes[SpeedLevel::Sl6 as usize] = Some("QPSK500");
+        modes[SpeedLevel::Sl7 as usize] = Some("QPSK500");
+
+        let mut fec_modes = [None; 21];
+        fec_modes[SpeedLevel::Sl2 as usize] = Some(FecMode::Ldpc);
+        fec_modes[SpeedLevel::Sl3 as usize] = Some(FecMode::Rs);
+        fec_modes[SpeedLevel::Sl4 as usize] = Some(FecMode::Ldpc);
+        fec_modes[SpeedLevel::Sl5 as usize] = Some(FecMode::Rs);
+        fec_modes[SpeedLevel::Sl6 as usize] = Some(FecMode::Rs);
+        fec_modes[SpeedLevel::Sl7 as usize] = Some(FecMode::None);
+
+        let mut snr_floors = [None; 21];
+        let mut snr_ceilings = [None; 21];
+        for (lvl, (floor, ceil)) in [
+            (SpeedLevel::Sl2, (1.0, 6.0)),
+            (SpeedLevel::Sl3, (4.0, 9.0)),
+            (SpeedLevel::Sl4, (7.0, 12.0)),
+            (SpeedLevel::Sl5, (10.0, 15.0)),
+            (SpeedLevel::Sl6, (13.0, 18.0)),
+            (SpeedLevel::Sl7, (16.0, 21.0)),
+        ] {
+            snr_floors[lvl as usize] = Some(floor);
+            snr_ceilings[lvl as usize] = Some(ceil);
+        }
+
+        Self {
+            modes,
+            initial_level: SpeedLevel::Sl2,
+            nack_threshold: 3,
+            snr_floors,
+            snr_ceilings,
+            ack_up_requires_snr_candidate_at: None,
+            fec_modes,
         }
     }
 
@@ -200,6 +267,7 @@ impl SessionProfile {
             snr_floors,
             snr_ceilings,
             ack_up_requires_snr_candidate_at: None,
+            fec_modes: [None; 21],
         }
     }
 
@@ -319,6 +387,7 @@ impl SessionProfile {
             // Guard admission to the densest rung (64QAM) behind a prior SNR upgrade
             // candidate, mirroring hpx_wideband_hd.
             ack_up_requires_snr_candidate_at: Some(SpeedLevel::Sl11),
+            fec_modes: [None; 21],
         }
     }
 
@@ -358,6 +427,7 @@ impl SessionProfile {
             snr_floors,
             snr_ceilings,
             ack_up_requires_snr_candidate_at: None,
+            fec_modes: [None; 21],
         }
     }
 
@@ -396,6 +466,7 @@ impl SessionProfile {
             snr_floors,
             snr_ceilings,
             ack_up_requires_snr_candidate_at: None,
+            fec_modes: [None; 21],
         }
     }
 
@@ -448,6 +519,7 @@ impl SessionProfile {
             snr_ceilings,
             // Gate admission to the densest rung behind a prior SNR-upgrade candidate.
             ack_up_requires_snr_candidate_at: Some(SpeedLevel::Sl10),
+            fec_modes: [None; 21],
         }
     }
 
@@ -478,6 +550,7 @@ impl SessionProfile {
             snr_floors,
             snr_ceilings,
             ack_up_requires_snr_candidate_at: None,
+            fec_modes: [None; 21],
         }
     }
 
@@ -530,6 +603,7 @@ impl SessionProfile {
             snr_floors,
             snr_ceilings,
             ack_up_requires_snr_candidate_at: Some(SpeedLevel::Sl14),
+            fec_modes: [None; 21],
         }
     }
 }
