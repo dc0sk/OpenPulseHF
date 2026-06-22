@@ -487,7 +487,7 @@ impl eframe::App for PanelApp {
                             }
                         }
                     } else {
-                        ui.label(RichText::new("OTA: off").color(Color32::DARK_GRAY));
+                        ui.label(RichText::new("OTA: off").color(Color32::GRAY));
                     }
                 }
 
