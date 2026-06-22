@@ -238,6 +238,19 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
                 st.ecc_history.pop_back();
             }
         }
+        ControlEvent::SystemMetrics {
+            cpu_percent,
+            ram_mb,
+            ram_percent,
+            gpu_percent,
+            decode_latency_ms,
+        } => {
+            st.cpu_percent = cpu_percent;
+            st.ram_mb = ram_mb;
+            st.ram_percent = ram_percent;
+            st.gpu_percent = gpu_percent;
+            st.decode_latency_ms = decode_latency_ms;
+        }
         ControlEvent::RigStatus {
             rig,
             freq_hz,

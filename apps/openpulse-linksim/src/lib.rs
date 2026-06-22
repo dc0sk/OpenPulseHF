@@ -221,6 +221,15 @@ impl LinkResult {
     }
 }
 
+/// One process-wide GPU context shared by every engine's GPU-capable plugins (created lazily;
+/// `None` when no adapter is available). Only present with the `gpu` feature.
+#[cfg(feature = "gpu")]
+fn shared_gpu_context() -> Option<&'static std::sync::Arc<openpulse_gpu::GpuContext>> {
+    use std::sync::OnceLock;
+    static CTX: OnceLock<Option<std::sync::Arc<openpulse_gpu::GpuContext>>> = OnceLock::new();
+    CTX.get_or_init(openpulse_gpu::GpuContext::init).as_ref()
+}
+
 fn register_all(engine: &mut ModemEngine) {
     use bpsk_plugin::BpskPlugin;
     use fsk4_plugin::Fsk4Plugin;
@@ -230,13 +239,32 @@ fn register_all(engine: &mut ModemEngine) {
     use qam64_plugin::Qam64Plugin;
     use qpsk_plugin::QpskPlugin;
     use scfdma_plugin::ScFdmaPlugin;
-    let _ = engine.register_plugin(Box::new(BpskPlugin::new()));
-    let _ = engine.register_plugin(Box::new(QpskPlugin::new()));
-    let _ = engine.register_plugin(Box::new(Psk8Plugin::new()));
-    let _ = engine.register_plugin(Box::new(Qam64Plugin::new()));
+
+    // GPU-capable plugins use the shared GpuContext when built `--features gpu` and an adapter
+    // is available; otherwise the CPU path. Non-GPU plugins (FSK4/OFDM/pilot) always use `new`.
+    #[cfg(feature = "gpu")]
+    macro_rules! reg {
+        ($P:ident) => {
+            match shared_gpu_context() {
+                Some(c) => engine.register_plugin(Box::new($P::with_gpu(c.clone()))),
+                None => engine.register_plugin(Box::new($P::new())),
+            }
+        };
+    }
+    #[cfg(not(feature = "gpu"))]
+    macro_rules! reg {
+        ($P:ident) => {
+            engine.register_plugin(Box::new($P::new()))
+        };
+    }
+
+    let _ = reg!(BpskPlugin);
+    let _ = reg!(QpskPlugin);
+    let _ = reg!(Psk8Plugin);
+    let _ = reg!(Qam64Plugin);
     let _ = engine.register_plugin(Box::new(Fsk4Plugin::new()));
     let _ = engine.register_plugin(Box::new(OfdmPlugin::new()));
-    let _ = engine.register_plugin(Box::new(ScFdmaPlugin::new()));
+    let _ = reg!(ScFdmaPlugin);
     let _ = engine.register_plugin(Box::new(PilotPlugin::new()));
 }
 
@@ -437,6 +465,8 @@ pub struct FrameStep {
     pub delivered_bytes: usize,
     /// compressed wire bytes / original payload bytes (≤ 1 when compression helped).
     pub compress_ratio: f64,
+    /// Wall-clock time spent in the modem decode (engine receive) for this frame, in ms.
+    pub decode_ms: f64,
     /// Speed level the link will use for the next frame.
     pub next_level: u8,
 }
@@ -576,6 +606,7 @@ impl LinkSim {
         let mut last_compress_ratio = 1.0_f64;
         let mut ack_sent = AckType::Nack;
         let mut ack_received = AckType::Nack;
+        let mut decode_ns: u128 = 0;
         let (mut forward_tx, mut forward_rx, mut ack_tx, mut ack_rx) =
             (Vec::new(), Vec::new(), Vec::new(), Vec::new());
 
@@ -614,7 +645,10 @@ impl LinkSim {
                 chunk_count += 1;
                 forward_tx = tx_s;
                 forward_rx = rx_s;
-                match engine_receive(&mut self.fwd.rx_engine, &mode, fec) {
+                let decode_start = std::time::Instant::now();
+                let decoded = engine_receive(&mut self.fwd.rx_engine, &mode, fec);
+                decode_ns += decode_start.elapsed().as_nanos();
+                match decoded {
                     Ok(b) if b == chunk => received.extend_from_slice(&b),
                     _ => {
                         burst_ok = false;
@@ -763,6 +797,7 @@ impl LinkSim {
                 0
             },
             compress_ratio: last_compress_ratio,
+            decode_ms: decode_ns as f64 / 1.0e6,
             next_level: self.current_level(),
         })
     }

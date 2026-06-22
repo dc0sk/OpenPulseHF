@@ -16,7 +16,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use openpulse_channel::dsp::{PowerSpectrum, FFT_SIZE};
 use openpulse_core::hpx::{HpxEvent, HpxState};
@@ -138,6 +138,7 @@ fn handle_owned_client(stream: TcpStream, params: LinkParams, fps: u32) -> io::R
     let mut sim = LinkSim::new(&params);
     let mut spectrum = PowerSpectrum::new();
     let mut st = ClientState::default();
+    let mut monitor = ResourceMonitor::new();
     let row_dt = Duration::from_millis((1000 / fps.max(1)).clamp(20, 200) as u64);
 
     loop {
@@ -157,6 +158,8 @@ fn handle_owned_client(stream: TcpStream, params: LinkParams, fps: u32) -> io::R
             }
         };
         emit_frame_events(&mut writer, &step, &mut st)?;
+        monitor.record_decode(step.decode_ms as f32);
+        monitor.maybe_emit(&mut writer)?;
 
         // On-air waterfall: window the received forward waveform, pacing one row per row_dt.
         let mut sent_any = false;
@@ -187,6 +190,7 @@ fn handle_hub_client(stream: TcpStream, frames: Receiver<FrameStep>) -> io::Resu
 
     let mut spectrum = PowerSpectrum::new();
     let mut st = ClientState::default();
+    let mut monitor = ResourceMonitor::new();
 
     loop {
         if stop_rx.try_recv().is_ok() {
@@ -203,6 +207,8 @@ fn handle_hub_client(stream: TcpStream, frames: Receiver<FrameStep>) -> io::Resu
             Err(RecvTimeoutError::Disconnected) => return Ok(()), // producer stopped
         };
         emit_frame_events(&mut writer, &step, &mut st)?;
+        monitor.record_decode(step.decode_ms as f32);
+        monitor.maybe_emit(&mut writer)?;
         // One representative spectrum row per frame — matches the GUI waterfall cadence.
         send_spectrum(&mut writer, &spectrum.compute(&step.forward_rx))?;
     }
@@ -213,6 +219,129 @@ fn handle_hub_client(stream: TcpStream, frames: Receiver<FrameStep>) -> io::Resu
 struct ClientState {
     last_mode: String,
     last_level: u8,
+}
+
+/// Samples the linksim process's CPU/RAM and emits a `SystemMetrics` event ~1 Hz, so the
+/// panel's resource bars reflect the work the simulation is doing (the GUI/serve share one
+/// process). Decode latency is an EWMA of the sim's per-frame modem-decode time. GPU load
+/// reports the time our wgpu kernels actually spent (gpu feature), else a best-effort system
+/// source.
+struct ResourceMonitor {
+    sys: sysinfo::System,
+    pid: sysinfo::Pid,
+    gpu_available: bool,
+    decode_ewma: f32,
+    last_emit: Instant,
+    #[cfg(feature = "gpu")]
+    last_gpu_busy: u64,
+    #[cfg(feature = "gpu")]
+    last_gpu_instant: Instant,
+}
+
+impl ResourceMonitor {
+    fn new() -> Self {
+        let mut sys = sysinfo::System::new();
+        let pid = sysinfo::Pid::from_u32(std::process::id());
+        // Prime the CPU baseline so the first emit (≥1 s later) reports a real delta, not 0.
+        sys.refresh_process(pid);
+        Self {
+            sys,
+            pid,
+            gpu_available: true,
+            decode_ewma: 0.0,
+            last_emit: Instant::now(),
+            #[cfg(feature = "gpu")]
+            last_gpu_busy: openpulse_gpu::gpu_busy_nanos(),
+            #[cfg(feature = "gpu")]
+            last_gpu_instant: Instant::now(),
+        }
+    }
+
+    fn record_decode(&mut self, ms: f32) {
+        self.decode_ewma = if self.decode_ewma <= 0.0 {
+            ms
+        } else {
+            self.decode_ewma * 0.8 + ms * 0.2
+        };
+    }
+
+    /// GPU load: prefer the time our wgpu kernels spent this interval; fall back to the system
+    /// source when the gpu feature is off or no kernels ran (CPU path / no adapter).
+    fn sample_gpu(&mut self) -> Option<f32> {
+        #[cfg(feature = "gpu")]
+        {
+            let now_busy = openpulse_gpu::gpu_busy_nanos();
+            let now = Instant::now();
+            let busy = now_busy.saturating_sub(self.last_gpu_busy) as f64;
+            let elapsed = now.duration_since(self.last_gpu_instant).as_nanos() as f64;
+            self.last_gpu_busy = now_busy;
+            self.last_gpu_instant = now;
+            let kernel_pct = if elapsed > 0.0 {
+                (busy / elapsed * 100.0).clamp(0.0, 100.0) as f32
+            } else {
+                0.0
+            };
+            if kernel_pct > 0.05 {
+                return Some(kernel_pct);
+            }
+        }
+        read_gpu_utilization(&mut self.gpu_available)
+    }
+
+    fn maybe_emit(&mut self, writer: &mut TcpStream) -> io::Result<()> {
+        if self.last_emit.elapsed() < Duration::from_secs(1) {
+            return Ok(());
+        }
+        self.last_emit = Instant::now();
+        self.sys.refresh_memory();
+        self.sys.refresh_process(self.pid);
+        let total = self.sys.total_memory().max(1) as f32;
+        let (cpu_percent, ram_mb, ram_percent) = match self.sys.process(self.pid) {
+            Some(p) => {
+                let rss = p.memory() as f32;
+                (
+                    p.cpu_usage().max(0.0),
+                    rss / (1024.0 * 1024.0),
+                    (rss / total * 100.0).clamp(0.0, 100.0),
+                )
+            }
+            None => (0.0, 0.0, 0.0),
+        };
+        let gpu_percent = self.sample_gpu();
+        send_event(
+            writer,
+            &ControlEvent::SystemMetrics {
+                cpu_percent,
+                ram_mb,
+                ram_percent,
+                gpu_percent,
+                decode_latency_ms: self.decode_ewma,
+            },
+        )
+    }
+}
+
+/// Best-effort system GPU utilisation via `nvidia-smi`; `None` (and stops trying) when absent.
+fn read_gpu_utilization(available: &mut bool) -> Option<f32> {
+    if !*available {
+        return None;
+    }
+    let out = std::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=utilization.gpu",
+            "--format=csv,noheader,nounits",
+        ])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .next()
+            .and_then(|l| l.trim().parse::<f32>().ok()),
+        _ => {
+            *available = false;
+            None
+        }
+    }
 }
 
 /// Translate one [`FrameStep`] into the daemon `ControlEvent`s the panel renders.

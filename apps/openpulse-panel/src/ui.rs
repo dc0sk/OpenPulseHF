@@ -358,8 +358,70 @@ pub fn draw_session_status(ui: &mut Ui, st: &PanelState) {
             });
 
         ui.add_space(4.0);
+        draw_resource_bars(ui, st);
+
+        ui.add_space(4.0);
         draw_ber_trend(ui, st);
     });
+}
+
+/// Four horizontal bar graphs for the OpenPulse daemon's CPU / GPU / RAM / decode latency.
+fn draw_resource_bars(ui: &mut Ui, st: &PanelState) {
+    ui.label(RichText::new("Resources").strong());
+
+    let bar = |ui: &mut Ui, label: &str, fraction: f32, text: String, color: Color32| {
+        ui.horizontal(|ui| {
+            ui.add_sized(
+                [56.0, 16.0],
+                egui::Label::new(RichText::new(label).color(Color32::GRAY)),
+            );
+            ui.add(
+                egui::ProgressBar::new(fraction.clamp(0.0, 1.0))
+                    .desired_width(180.0)
+                    .fill(color)
+                    .text(text),
+            );
+        });
+    };
+
+    // CPU and GPU shade green→amber→red with load; RAM/latency use neutral blues.
+    let heat = |frac: f32| {
+        if frac < 0.6 {
+            Color32::from_rgb(80, 170, 90)
+        } else if frac < 0.85 {
+            Color32::from_rgb(210, 170, 60)
+        } else {
+            Color32::from_rgb(210, 80, 70)
+        }
+    };
+
+    let cpu = st.cpu_percent / 100.0;
+    bar(ui, "CPU", cpu, format!("{:.0}%", st.cpu_percent), heat(cpu));
+
+    match st.gpu_percent {
+        Some(g) => bar(ui, "GPU", g / 100.0, format!("{g:.0}%"), heat(g / 100.0)),
+        None => bar(ui, "GPU", 0.0, "n/a".into(), Color32::from_gray(90)),
+    }
+
+    let ram = st.ram_percent / 100.0;
+    bar(
+        ui,
+        "RAM",
+        ram,
+        format!("{:.0} MiB ({:.1}%)", st.ram_mb, st.ram_percent),
+        Color32::from_rgb(80, 140, 200),
+    );
+
+    // Decode latency: scale the bar against a 100 ms full-scale; label shows the real value.
+    const LATENCY_FULL_SCALE_MS: f32 = 100.0;
+    let lat = st.decode_latency_ms / LATENCY_FULL_SCALE_MS;
+    bar(
+        ui,
+        "Decode",
+        lat,
+        format!("{:.1} ms", st.decode_latency_ms),
+        heat(lat),
+    );
 }
 
 fn kv(ui: &mut Ui, key: &str, val: &str) {

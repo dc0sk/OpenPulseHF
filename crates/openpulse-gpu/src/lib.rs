@@ -18,7 +18,36 @@ pub use modulate::bpsk_modulate_gpu;
 pub use rrc_fir::gpu_rrc_fir;
 pub use soft_demod::gpu_soft_demod;
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+
+/// Cumulative wall-clock nanoseconds spent in GPU kernel calls, accumulated process-wide.
+static GPU_BUSY_NANOS: AtomicU64 = AtomicU64::new(0);
+
+/// Total nanoseconds spent in GPU kernel dispatches since process start (process-wide).
+///
+/// Read the delta across an interval to derive GPU-busy utilisation (busy_ns / interval_ns).
+/// Stays 0 when no GPU kernels run — e.g. CPU-only builds, or when `GpuContext::init` returned
+/// `None` and callers took the CPU fallback path.
+pub fn gpu_busy_nanos() -> u64 {
+    GPU_BUSY_NANOS.load(Ordering::Relaxed)
+}
+
+/// RAII guard that adds its lifetime to [`gpu_busy_nanos`]. One is placed at the top of each
+/// GPU kernel entry point so the submit + readback wait time is accounted as GPU-busy.
+pub(crate) struct GpuBusyTimer(std::time::Instant);
+
+impl GpuBusyTimer {
+    pub(crate) fn start() -> Self {
+        Self(std::time::Instant::now())
+    }
+}
+
+impl Drop for GpuBusyTimer {
+    fn drop(&mut self) {
+        GPU_BUSY_NANOS.fetch_add(self.0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    }
+}
 
 /// Errors from GPU context initialisation.
 #[derive(Debug, thiserror::Error)]

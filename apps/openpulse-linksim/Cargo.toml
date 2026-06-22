@@ -22,16 +22,31 @@ path = "src/gui.rs"
 required-features = ["gui"]
 
 [features]
+# GPU acceleration is on by default: the GPU-capable plugins use the GPU when an adapter is
+# available, falling back to CPU otherwise (build --no-default-features for a lean CPU-only
+# build, e.g. CI). gui/serve remain opt-in.
+default = ["gpu"]
 gui = ["dep:eframe", "dep:egui", "dep:egui_plot"]
 # Serve the openpulse-daemon control protocol so an unmodified openpulse-panel can
 # connect to a live simulation. Pulls in openpulse-daemon for the wire types.
-serve = ["dep:openpulse-daemon"]
+serve = ["dep:openpulse-daemon", "dep:sysinfo"]
+# wgpu GPU acceleration for the GPU-capable plugins (auto-detected at runtime).
+gpu = [
+    "dep:openpulse-gpu",
+    "bpsk-plugin/gpu",
+    "qpsk-plugin/gpu",
+    "psk8-plugin/gpu",
+    "qam64-plugin/gpu",
+    "scfdma-plugin/gpu",
+]
 
 [dependencies]
 openpulse-core    = { workspace = true }
 openpulse-modem   = { workspace = true }
 openpulse-channel = { workspace = true }
 openpulse-daemon  = { workspace = true, optional = true }
+openpulse-gpu     = { workspace = true, optional = true }
+sysinfo           = { version = "0.30", default-features = false, optional = true }
 bpsk-plugin       = { workspace = true }
 qpsk-plugin       = { workspace = true }
 psk8-plugin       = { workspace = true }

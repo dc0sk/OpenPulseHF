@@ -19,6 +19,8 @@ struct FftParams {
 ///
 /// Returns `None` on any GPU error or if `data.len()` is not a multiple of 512.
 pub fn gpu_fft256_batch(ctx: &GpuContext, data: &[f32], forward: bool) -> Option<Vec<f32>> {
+    // Account GPU dispatch+wait time toward the process-wide GPU-busy counter.
+    let _gpu_busy = crate::GpuBusyTimer::start();
     if data.is_empty() {
         return Some(Vec::new());
     }

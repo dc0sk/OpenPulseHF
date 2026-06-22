@@ -58,7 +58,10 @@ openpulse-b2f-driver = { path = "crates/openpulse-b2f-driver" }
 openpulse-config     = { path = "crates/openpulse-config" }
 openpulse-gateway    = { path = "crates/openpulse-gateway" }
 openpulse-mesh       = { path = "crates/openpulse-mesh" }
-openpulse-daemon     = { path = "crates/openpulse-daemon" }
+# default-features = false: consumers (panel, linksim) use only the protocol types, so they
+# don't pull the daemon's default `gpu`/native code. The daemon binary itself still builds with
+# its own default features (GPU on).
+openpulse-daemon     = { path = "crates/openpulse-daemon", default-features = false }
 openpulse-dsp        = { path = "crates/openpulse-dsp" }
 openpulse-qsy        = { path = "crates/openpulse-qsy" }
 bpsk-plugin       = { path = "plugins/bpsk" }
