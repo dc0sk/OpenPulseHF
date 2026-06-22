@@ -55,6 +55,13 @@ pub struct OtaRateController {
     rx_consecutive_nack: u8,
     // TX direction (we are the data sender and follow the peer):
     tx_level: SpeedLevel,
+    // Operator controls:
+    /// Lowest level adaptation may use (`None` = the profile's lowest mapped level).
+    min_level: Option<SpeedLevel>,
+    /// Highest level adaptation may use (`None` = the profile's highest mapped level).
+    max_level: Option<SpeedLevel>,
+    /// When set, both directions are pinned to this level and adaptation is off.
+    locked: Option<SpeedLevel>,
 }
 
 impl OtaRateController {
@@ -75,47 +82,100 @@ impl OtaRateController {
             rx_confirmed: initial,
             rx_consecutive_nack: 0,
             tx_level: initial,
+            min_level: None,
+            max_level: None,
+            locked: None,
         }
     }
 
-    // ── Mapped-level navigation ────────────────────────────────────────────────
+    // ── Operator controls ──────────────────────────────────────────────────────
+
+    /// Clamp adaptation to `[min, max]` (each `None` = the profile's natural bound).
+    /// Current levels are immediately snapped into the new range.
+    pub fn set_level_bounds(&mut self, min: Option<SpeedLevel>, max: Option<SpeedLevel>) {
+        self.min_level = min;
+        self.max_level = max;
+        self.rx_recommended = self.clamp_mapped(self.rx_recommended);
+        self.rx_confirmed = self.clamp_mapped(self.rx_confirmed);
+        self.tx_level = self.clamp_mapped(self.tx_level);
+    }
+
+    /// Pin both directions to `level` and stop adapting (a manual override).
+    pub fn lock_level(&mut self, level: SpeedLevel) {
+        let l = self.clamp_mapped(level);
+        self.locked = Some(l);
+        self.tx_level = l;
+        self.rx_recommended = l;
+        self.rx_confirmed = l;
+    }
+
+    /// Release a [`lock_level`](Self::lock_level) and resume adapting from the current level.
+    pub fn unlock(&mut self) {
+        self.locked = None;
+    }
+
+    /// Whether a manual level lock is in effect.
+    pub fn is_locked(&self) -> bool {
+        self.locked.is_some()
+    }
+
+    // ── Mapped-level navigation (bounds-aware) ─────────────────────────────────
+
+    fn lo(&self) -> SpeedLevel {
+        self.min_level
+            .unwrap_or_else(|| *self.levels.first().unwrap_or(&SpeedLevel::Sl1))
+    }
+
+    fn hi(&self) -> SpeedLevel {
+        self.max_level
+            .unwrap_or_else(|| *self.levels.last().unwrap_or(&SpeedLevel::Sl1))
+    }
 
     fn next_mapped(&self, level: SpeedLevel) -> SpeedLevel {
+        let hi = self.hi();
         self.levels
             .iter()
             .copied()
-            .find(|&l| l > level)
-            .unwrap_or(level)
+            .find(|&l| l > level && l <= hi)
+            .unwrap_or_else(|| self.clamp_mapped(level))
     }
 
     fn prev_mapped(&self, level: SpeedLevel) -> SpeedLevel {
+        let lo = self.lo();
         self.levels
             .iter()
             .copied()
             .rev()
-            .find(|&l| l < level)
-            .unwrap_or(level)
+            .find(|&l| l < level && l >= lo)
+            .unwrap_or_else(|| self.clamp_mapped(level))
     }
 
     fn clamp_mapped(&self, level: SpeedLevel) -> SpeedLevel {
-        if self.levels.contains(&level) {
-            level
-        } else {
-            // Snap down to the nearest mapped level at or below `level`.
-            self.levels
-                .iter()
-                .copied()
-                .rev()
-                .find(|&l| l <= level)
-                .or_else(|| self.levels.first().copied())
-                .unwrap_or(level)
+        let (lo, hi) = (self.lo(), self.hi());
+        let bounded = level.max(lo).min(hi);
+        if self.levels.contains(&bounded) {
+            return bounded;
         }
+        // Snap to the nearest mapped level at or below `bounded`, staying within [lo, hi].
+        self.levels
+            .iter()
+            .copied()
+            .rev()
+            .find(|&l| l <= bounded && l >= lo)
+            .or_else(|| self.levels.iter().copied().find(|&l| l >= lo && l <= hi))
+            .unwrap_or(bounded)
     }
 
     // ── TX side (we follow the peer) ───────────────────────────────────────────
 
     /// Adopt the peer's absolute rate recommendation as our TX level.
+    ///
+    /// Ignored while locked (the manual override wins); otherwise clamped into the
+    /// configured `[min, max]` bounds.
     pub fn adopt_recommendation(&mut self, level: SpeedLevel) {
+        if self.locked.is_some() {
+            return;
+        }
         self.tx_level = self.clamp_mapped(level);
     }
 
@@ -170,6 +230,17 @@ impl OtaRateController {
     /// Update RX state from a demodulation outcome and measured SNR, and return the
     /// ACK the receiver should send (type + absolute recommendation).
     pub fn on_rx_frame(&mut self, outcome: RxOutcome, snr_db: f32) -> RxAck {
+        // While locked, keep both directions pinned and recommend the locked level.
+        if let Some(l) = self.locked {
+            let ack_type = match outcome {
+                RxOutcome::Failed => AckType::Nack,
+                RxOutcome::Decoded(_) => AckType::AckOk,
+            };
+            return RxAck {
+                ack_type,
+                recommended_level: l,
+            };
+        }
         match outcome {
             RxOutcome::Failed => {
                 self.rx_consecutive_nack = self.rx_consecutive_nack.saturating_add(1);
@@ -354,6 +425,71 @@ mod tests {
             c.rx_confirmed < before,
             "rate should step down after the NACK threshold"
         );
+    }
+
+    #[test]
+    fn max_level_clamp_caps_the_climb() {
+        let mut c = ctrl();
+        c.set_level_bounds(None, Some(SpeedLevel::Sl4));
+        let mut sender_tx = c.tx_level();
+        for _ in 0..30 {
+            let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), HIGH_SNR);
+            sender_tx = ack.recommended_level;
+        }
+        assert!(
+            c.rx_confirmed <= SpeedLevel::Sl4,
+            "must not climb past the max bound: {:?}",
+            c.rx_confirmed
+        );
+        assert!(
+            c.rx_recommended <= SpeedLevel::Sl4,
+            "recommendation must respect the max bound"
+        );
+    }
+
+    #[test]
+    fn min_level_clamp_floors_the_descent() {
+        let mut c = ctrl();
+        // Climb up, then set a floor and hammer with failures.
+        let mut sender_tx = c.tx_level();
+        for _ in 0..10 {
+            let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), HIGH_SNR);
+            sender_tx = ack.recommended_level;
+        }
+        c.set_level_bounds(Some(SpeedLevel::Sl4), None);
+        assert!(
+            c.rx_confirmed >= SpeedLevel::Sl4,
+            "bounds snap current level up to the floor"
+        );
+        for _ in 0..30 {
+            let _ = c.on_rx_frame(RxOutcome::Failed, LOW_SNR);
+        }
+        assert!(
+            c.rx_recommended >= SpeedLevel::Sl4,
+            "must not drop below the min bound: {:?}",
+            c.rx_recommended
+        );
+    }
+
+    #[test]
+    fn lock_pins_both_directions_and_ignores_peer() {
+        let mut c = ctrl();
+        c.lock_level(SpeedLevel::Sl4);
+        assert!(c.is_locked());
+        assert_eq!(c.tx_level(), SpeedLevel::Sl4);
+        assert_eq!(c.rx_recommended_level(), SpeedLevel::Sl4);
+        // RX decisions stay pinned regardless of SNR.
+        let ack = c.on_rx_frame(RxOutcome::Decoded(SpeedLevel::Sl4), HIGH_SNR);
+        assert_eq!(ack.recommended_level, SpeedLevel::Sl4);
+        assert_eq!(c.rx_recommended_level(), SpeedLevel::Sl4);
+        // Peer recommendations are ignored while locked.
+        c.adopt_recommendation(SpeedLevel::Sl6);
+        assert_eq!(c.tx_level(), SpeedLevel::Sl4);
+        // Unlocking resumes adaptation.
+        c.unlock();
+        assert!(!c.is_locked());
+        c.adopt_recommendation(SpeedLevel::Sl5);
+        assert_eq!(c.tx_level(), SpeedLevel::Sl5);
     }
 
     #[test]
