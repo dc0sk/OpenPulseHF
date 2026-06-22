@@ -281,6 +281,30 @@ pub enum DaemonCommands {
         #[arg(long)]
         bandplan_mode: Option<String>,
     },
+    /// Start a receiver-led OTA adaptive rate session with the named profile.
+    OtaStart {
+        /// Session profile (e.g. hpx_hf, hpx_modcod).
+        #[arg(long)]
+        profile: String,
+    },
+    /// Stop the active OTA session.
+    OtaStop,
+    /// Clamp the OTA ladder to a min/max level (e.g. SL3 / SL10). Omit for profile bound.
+    OtaBounds {
+        #[arg(long)]
+        min: Option<String>,
+        #[arg(long)]
+        max: Option<String>,
+    },
+    /// Lock OTA to a fixed level (manual override; e.g. SL6).
+    OtaLock {
+        #[arg(long)]
+        level: String,
+    },
+    /// Release the OTA level lock and resume adapting.
+    OtaUnlock,
+    /// Print one OTA status snapshot as JSON.
+    OtaStatus,
 }
 
 #[derive(Subcommand)]

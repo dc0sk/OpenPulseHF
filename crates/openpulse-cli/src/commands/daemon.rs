@@ -85,7 +85,66 @@ pub fn run(addr: &str, cmd: DaemonCommands) -> Result<i32> {
             None,
         ),
         DaemonCommands::SubscribeSpectrum { fps, frames } => subscribe_spectrum(addr, fps, frames),
+        DaemonCommands::OtaStart { profile } => {
+            simple(addr, ControlCommand::StartOtaSession { profile })
+        }
+        DaemonCommands::OtaStop => simple(addr, ControlCommand::StopOtaSession),
+        DaemonCommands::OtaBounds { min, max } => simple(
+            addr,
+            ControlCommand::OtaSetLevelBounds {
+                min_level: min,
+                max_level: max,
+            },
+        ),
+        DaemonCommands::OtaLock { level } => simple(addr, ControlCommand::OtaLockLevel { level }),
+        DaemonCommands::OtaUnlock => simple(addr, ControlCommand::OtaUnlock),
+        DaemonCommands::OtaStatus => ota_status(addr),
     }
+}
+
+/// Trigger an OtaStatus broadcast (via a no-op bounds command) and print the first
+/// `OtaStatus` event the daemon emits.
+fn ota_status(addr: &str) -> Result<i32> {
+    let (events, resp) = run_command(
+        addr,
+        &ControlCommand::OtaSetLevelBounds {
+            min_level: None,
+            max_level: None,
+        },
+    )?;
+    if !resp.ok {
+        eprintln!(
+            "error: {}",
+            resp.error.unwrap_or_else(|| "unknown".to_string())
+        );
+        return Ok(1);
+    }
+    for ev in events {
+        if let ControlEvent::OtaStatus {
+            active,
+            tx_mode,
+            tx_level,
+            tx_fec,
+            rx_recommended_level,
+            rx_confirmed_level,
+            is_locked,
+        } = ev
+        {
+            let out = serde_json::json!({
+                "active": active,
+                "tx_mode": tx_mode,
+                "tx_level": tx_level,
+                "tx_fec": tx_fec,
+                "rx_recommended_level": rx_recommended_level,
+                "rx_confirmed_level": rx_confirmed_level,
+                "is_locked": is_locked,
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+            return Ok(0);
+        }
+    }
+    eprintln!("error: daemon returned no OTA status");
+    Ok(1)
 }
 
 fn simple(addr: &str, cmd: ControlCommand) -> Result<i32> {
@@ -342,6 +401,34 @@ mod tests {
         assert!(resp.ok);
         let parsed: ControlCommand = serde_json::from_str(req.trim()).unwrap();
         assert!(matches!(parsed, ControlCommand::ConnectPeer { callsign } if callsign == "W1AW"));
+    }
+
+    #[test]
+    fn ota_start_sends_start_session_command() {
+        let (addr, handle) = mock_daemon(vec![r#"{"ok":true}"#.into()]);
+        let (_events, resp) = run_command(
+            &addr,
+            &ControlCommand::StartOtaSession {
+                profile: "hpx_modcod".into(),
+            },
+        )
+        .unwrap();
+        let req = handle.join().unwrap();
+        assert!(resp.ok);
+        let parsed: ControlCommand = serde_json::from_str(req.trim()).unwrap();
+        assert!(
+            matches!(parsed, ControlCommand::StartOtaSession { profile } if profile == "hpx_modcod")
+        );
+    }
+
+    #[test]
+    fn ota_status_parses_status_event() {
+        let (addr, _) = mock_daemon(vec![
+            r#"{"type":"ota_status","active":true,"tx_mode":"QPSK500","tx_level":"SL6","tx_fec":"ldpc","rx_recommended_level":"SL7","rx_confirmed_level":"SL6","is_locked":true}"#
+                .into(),
+            r#"{"ok":true}"#.into(),
+        ]);
+        assert_eq!(ota_status(&addr).unwrap(), 0);
     }
 
     #[test]
