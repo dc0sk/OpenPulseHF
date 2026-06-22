@@ -7,16 +7,22 @@
 //! ## Wire layout (5 bytes)
 //!
 //! ```text
-//! byte 0: ACK type [2:0], has_reverse_ack [3], reserved [7:4]
+//! byte 0: ACK type [2:0], has_reverse_ack [3], has_recommended_level [4], reserved [7:5]
 //! bytes 1–2: session_hash u16 big-endian  (anti-collision)
-//! byte 3: reverse_ack [2:0] when has_reverse_ack=1, else 0  (backward-compatible: old
-//!         receivers ignore this byte; CRC still validates)
+//! byte 3: recommended_level [7:3] (SpeedLevel 1–20 when has_recommended_level=1, else 0),
+//!         reverse_ack [2:0] (when has_reverse_ack=1, else 0)
+//!         — backward-compatible: old receivers ignore this byte; CRC still validates
 //! byte 4: CRC-8/SMBUS over bytes 0–3
 //! ```
+//!
+//! `recommended_level` is the receiver-led, absolute target the data receiver wants
+//! the sender to transmit at (OTA rate lockstep).  Absolute (not a relative step) so a
+//! lost ACK can't accumulate drift: the next ACK simply re-states the target.
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::AckError;
+use crate::rate::SpeedLevel;
 
 // ── AckType ───────────────────────────────────────────────────────────────────
 
@@ -71,8 +77,11 @@ pub struct AckFrame {
     ///
     /// When set, the sender piggybacks its own RX quality report so the peer
     /// can update its own [`crate::rate::RateAdapter`] for the reverse direction without a separate frame.
-    /// `None` encodes as byte 3 = 0 (backward compatible with old receivers).
+    /// `None` encodes as byte 3 low bits = 0 (backward compatible with old receivers).
     pub reverse_ack: Option<AckType>,
+    /// Receiver-led absolute rate target: the speed level the data receiver wants
+    /// the sender to transmit at next (OTA rate lockstep).  `None` for legacy frames.
+    pub recommended_level: Option<SpeedLevel>,
 }
 
 impl AckFrame {
@@ -82,6 +91,7 @@ impl AckFrame {
             ack_type,
             session_hash: Self::hash_session_id(session_id),
             reverse_ack: None,
+            recommended_level: None,
         }
     }
 
@@ -91,15 +101,25 @@ impl AckFrame {
             ack_type,
             session_hash: Self::hash_session_id(session_id),
             reverse_ack: Some(reverse_ack),
+            recommended_level: None,
         }
+    }
+
+    /// Builder: attach a receiver-led absolute rate recommendation.
+    pub fn with_recommended_level(mut self, level: SpeedLevel) -> Self {
+        self.recommended_level = Some(level);
+        self
     }
 
     /// Encode to the 5-byte wire representation.
     pub fn encode(&self) -> [u8; 5] {
         let has_rev = self.reverse_ack.is_some() as u8;
-        let b0 = (self.ack_type as u8) | (has_rev << 3);
+        let has_rec = self.recommended_level.is_some() as u8;
+        let b0 = (self.ack_type as u8) | (has_rev << 3) | (has_rec << 4);
         let sh = self.session_hash.to_be_bytes();
-        let b3 = self.reverse_ack.map_or(0, |a| a as u8);
+        let rev = self.reverse_ack.map_or(0, |a| a as u8) & 0x07;
+        let rec = self.recommended_level.map_or(0, |l| l.as_u8()) & 0x1F;
+        let b3 = (rec << 3) | rev;
         let payload = [b0, sh[0], sh[1], b3];
         let crc = crc8(&payload);
         [b0, sh[0], sh[1], b3, crc]
@@ -116,9 +136,16 @@ impl AckFrame {
         }
         let ack_type = AckType::from_u8(b[0] & 0x07)?;
         let has_rev = (b[0] >> 3) & 1 != 0;
+        let has_rec = (b[0] >> 4) & 1 != 0;
         let session_hash = ((b[1] as u16) << 8) | b[2] as u16;
         let reverse_ack = if has_rev {
             Some(AckType::from_u8(b[3] & 0x07)?)
+        } else {
+            None
+        };
+        let recommended_level = if has_rec {
+            let code = (b[3] >> 3) & 0x1F;
+            Some(SpeedLevel::from_u8(code).ok_or(AckError::InvalidSpeedLevel(code))?)
         } else {
             None
         };
@@ -126,6 +153,7 @@ impl AckFrame {
             ack_type,
             session_hash,
             reverse_ack,
+            recommended_level,
         })
     }
 
@@ -179,6 +207,7 @@ mod tests {
                 ack_type: t,
                 session_hash: 0xABCD,
                 reverse_ack: None,
+                recommended_level: None,
             };
             let b = f.encode();
             assert_eq!(AckFrame::decode(&b).unwrap(), f);
@@ -192,6 +221,46 @@ mod tests {
         let decoded = AckFrame::decode(&b).unwrap();
         assert_eq!(decoded.ack_type, AckType::AckOk);
         assert_eq!(decoded.reverse_ack, Some(AckType::AckUp));
+    }
+
+    #[test]
+    fn ack_frame_recommended_level_round_trips() {
+        use crate::rate::SpeedLevel;
+        for lvl in [
+            SpeedLevel::Sl1,
+            SpeedLevel::Sl8,
+            SpeedLevel::Sl15,
+            SpeedLevel::Sl20,
+        ] {
+            let f = AckFrame::new(AckType::AckOk, "sess").with_recommended_level(lvl);
+            let b = f.encode();
+            let d = AckFrame::decode(&b).unwrap();
+            assert_eq!(d.recommended_level, Some(lvl));
+            assert_eq!(d.ack_type, AckType::AckOk);
+        }
+    }
+
+    #[test]
+    fn ack_frame_recommended_level_coexists_with_reverse_ack() {
+        use crate::rate::SpeedLevel;
+        let f = AckFrame::new_with_reverse(AckType::AckUp, "sess", AckType::AckDown)
+            .with_recommended_level(SpeedLevel::Sl11);
+        let d = AckFrame::decode(&f.encode()).unwrap();
+        assert_eq!(d.ack_type, AckType::AckUp);
+        assert_eq!(d.reverse_ack, Some(AckType::AckDown));
+        assert_eq!(d.recommended_level, Some(SpeedLevel::Sl11));
+    }
+
+    #[test]
+    fn ack_frame_without_recommended_level_keeps_high_bits_clear() {
+        let f = AckFrame::new(AckType::AckOk, "sess");
+        let b = f.encode();
+        assert_eq!(b[0] & 0x10, 0, "has_recommended_level flag must be 0");
+        assert_eq!(
+            b[3] & 0xF8,
+            0,
+            "byte 3 high bits must be 0 without a recommendation"
+        );
     }
 
     #[test]
@@ -210,6 +279,7 @@ mod tests {
             ack_type: AckType::AckOk,
             session_hash: 0,
             reverse_ack: None,
+            recommended_level: None,
         }
         .encode();
         b[4] ^= 0xFF;

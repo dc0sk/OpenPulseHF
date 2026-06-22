@@ -132,6 +132,39 @@ impl SpeedLevel {
             Self::Sl20 => Self::Sl19,
         }
     }
+
+    /// Wire code (1–20). Inverse of [`SpeedLevel::from_u8`].
+    pub fn as_u8(self) -> u8 {
+        self as u8
+    }
+
+    /// Decode a wire code (1–20) into a [`SpeedLevel`]; `None` if out of range.
+    pub fn from_u8(v: u8) -> Option<Self> {
+        use SpeedLevel::*;
+        Some(match v {
+            1 => Sl1,
+            2 => Sl2,
+            3 => Sl3,
+            4 => Sl4,
+            5 => Sl5,
+            6 => Sl6,
+            7 => Sl7,
+            8 => Sl8,
+            9 => Sl9,
+            10 => Sl10,
+            11 => Sl11,
+            12 => Sl12,
+            13 => Sl13,
+            14 => Sl14,
+            15 => Sl15,
+            16 => Sl16,
+            17 => Sl17,
+            18 => Sl18,
+            19 => Sl19,
+            20 => Sl20,
+            _ => return None,
+        })
+    }
 }
 
 // ── RateEvent ─────────────────────────────────────────────────────────────────
