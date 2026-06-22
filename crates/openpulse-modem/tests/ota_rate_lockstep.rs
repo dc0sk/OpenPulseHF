@@ -39,11 +39,23 @@ fn run_exchange(
     rx_snr_db: f32,
     ack_delivered: impl Fn(usize) -> bool,
 ) -> Vec<SpeedLevel> {
+    run_exchange_cfg(frames, rx_snr_db, ack_delivered, |_iss, _irs| {})
+}
+
+/// As [`run_exchange`], but `configure` runs against both engines after the OTA
+/// session starts (e.g. to clamp or lock the ladder).
+fn run_exchange_cfg(
+    frames: usize,
+    rx_snr_db: f32,
+    ack_delivered: impl Fn(usize) -> bool,
+    configure: impl Fn(&mut ModemEngine, &mut ModemEngine),
+) -> Vec<SpeedLevel> {
     let payload = b"over-the-air adaptive rate-stepping lockstep payload";
     let session = "ota-lockstep";
     let (mut iss, iss_lb) = make_engine();
     let (mut irs, irs_lb) = make_engine();
     irs.set_rx_snr_estimate(Some(rx_snr_db));
+    configure(&mut iss, &mut irs);
 
     let mut tx_levels = Vec::with_capacity(frames);
     for i in 0..frames {
@@ -111,6 +123,53 @@ fn never_desyncs_with_periodic_ack_loss() {
     assert!(
         *levels.last().unwrap() > SpeedLevel::Sl2,
         "should still climb despite periodic ACK loss: {levels:?}"
+    );
+}
+
+#[test]
+fn max_level_bound_caps_the_climb_over_the_wire() {
+    // Cap the ladder at SL4 (BPSK250); the IRS leads, so it must clamp its
+    // recommendation, and the ISS must never be driven past SL4.
+    let levels = run_exchange_cfg(
+        12,
+        GOOD_SNR,
+        |_| true,
+        |iss, irs| {
+            iss.ota_set_level_bounds(None, Some(SpeedLevel::Sl4));
+            irs.ota_set_level_bounds(None, Some(SpeedLevel::Sl4));
+        },
+    );
+    let last = *levels.last().unwrap();
+    assert!(
+        last > SpeedLevel::Sl2,
+        "should still climb up to the cap: {levels:?}"
+    );
+    assert!(
+        levels.iter().all(|&l| l <= SpeedLevel::Sl4),
+        "TX level must never exceed the max bound: {levels:?}"
+    );
+    assert_eq!(
+        last,
+        SpeedLevel::Sl4,
+        "should climb to and hold at the cap: {levels:?}"
+    );
+}
+
+#[test]
+fn locked_level_holds_over_the_wire() {
+    // Lock both ends at SL3; the rate must never move despite good SNR.
+    let levels = run_exchange_cfg(
+        8,
+        GOOD_SNR,
+        |_| true,
+        |iss, irs| {
+            iss.ota_lock_level(SpeedLevel::Sl3);
+            irs.ota_lock_level(SpeedLevel::Sl3);
+        },
+    );
+    assert!(
+        levels.iter().all(|&l| l == SpeedLevel::Sl3),
+        "locked link must hold its level: {levels:?}"
     );
 }
 

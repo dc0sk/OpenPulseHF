@@ -582,6 +582,36 @@ impl ModemEngine {
         self.rx_snr_estimate = snr_db;
     }
 
+    /// Clamp the OTA rate ladder to `[min, max]` (each `None` = the profile bound).
+    ///
+    /// Use to cap the top rung (regulatory bandwidth / robustness) or floor the bottom.
+    /// No-op without an active OTA session.
+    pub fn ota_set_level_bounds(&mut self, min: Option<SpeedLevel>, max: Option<SpeedLevel>) {
+        if let Some(o) = self.ota.as_mut() {
+            o.set_level_bounds(min, max);
+        }
+    }
+
+    /// Pin the OTA session to a fixed level (manual override; stops adapting).
+    /// No-op without an active OTA session.
+    pub fn ota_lock_level(&mut self, level: SpeedLevel) {
+        if let Some(o) = self.ota.as_mut() {
+            o.lock_level(level);
+        }
+    }
+
+    /// Release an OTA level lock and resume adapting. No-op without a session.
+    pub fn ota_unlock(&mut self) {
+        if let Some(o) = self.ota.as_mut() {
+            o.unlock();
+        }
+    }
+
+    /// Whether the OTA session is locked to a fixed level.
+    pub fn ota_is_locked(&self) -> bool {
+        self.ota.as_ref().is_some_and(|o| o.is_locked())
+    }
+
     /// Sender side: adopt the peer's absolute `recommended_level` from a received ACK.
     ///
     /// A no-op when the frame carries no recommendation or no OTA session is active.
