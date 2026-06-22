@@ -29,6 +29,8 @@ pub fn gpu_soft_demod(
     bit_table: &[u32],
     bits_per_sym: u32,
 ) -> Option<Vec<f32>> {
+    // Account GPU dispatch+wait time toward the process-wide GPU-busy counter.
+    let _gpu_busy = crate::GpuBusyTimer::start();
     if symbols.is_empty() {
         return Some(Vec::new());
     }

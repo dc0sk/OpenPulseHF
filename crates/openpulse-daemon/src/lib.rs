@@ -398,6 +398,11 @@ impl ControlServer {
             // Prime the CPU baseline so the first emit reports a real delta, not 0.
             sys.refresh_process(pid);
             let mut gpu_available = true;
+            // Our-kernel GPU-busy tracking (only meaningful with the `gpu` feature).
+            #[cfg(feature = "gpu")]
+            let mut last_gpu_busy = openpulse_gpu::gpu_busy_nanos();
+            #[cfg(feature = "gpu")]
+            let mut last_gpu_instant = std::time::Instant::now();
             loop {
                 interval.tick().await;
                 let (afc, new_bytes, decode_latency_ms) = {
@@ -415,6 +420,30 @@ impl ControlServer {
                 });
 
                 let (cpu_percent, ram_mb, ram_percent) = sample_process_resources(&mut sys, pid);
+
+                // GPU load: prefer the time our wgpu kernels actually spent on the GPU this
+                // interval; fall back to a best-effort system source when the gpu feature is
+                // off or no kernels ran (CPU path / no adapter).
+                #[cfg(feature = "gpu")]
+                let gpu_percent = {
+                    let now_busy = openpulse_gpu::gpu_busy_nanos();
+                    let now = std::time::Instant::now();
+                    let busy = now_busy.saturating_sub(last_gpu_busy) as f64;
+                    let elapsed = now.duration_since(last_gpu_instant).as_nanos() as f64;
+                    last_gpu_busy = now_busy;
+                    last_gpu_instant = now;
+                    let kernel_pct = if elapsed > 0.0 {
+                        (busy / elapsed * 100.0).clamp(0.0, 100.0) as f32
+                    } else {
+                        0.0
+                    };
+                    if kernel_pct > 0.05 {
+                        Some(kernel_pct)
+                    } else {
+                        tokio::task::block_in_place(|| read_gpu_utilization(&mut gpu_available))
+                    }
+                };
+                #[cfg(not(feature = "gpu"))]
                 let gpu_percent =
                     tokio::task::block_in_place(|| read_gpu_utilization(&mut gpu_available));
                 let _ = ev_metrics.send(ControlEvent::SystemMetrics {

@@ -60,27 +60,53 @@ async fn main() {
     };
 
     let mut engine = ModemEngine::new(build_audio_backend(&cfg.audio.backend));
-    engine
-        .register_plugin(Box::new(BpskPlugin::new()))
-        .expect("failed to register BPSK plugin");
+
+    // Optional GPU acceleration: with `--features gpu` and a compatible adapter, the GPU-capable
+    // plugins share one GpuContext; otherwise (or when no adapter is found) they use the CPU path.
+    #[cfg(feature = "gpu")]
+    let gpu_ctx = {
+        let ctx = openpulse_gpu::GpuContext::init();
+        match &ctx {
+            Some(_) => tracing::info!("GPU acceleration enabled"),
+            None => tracing::warn!(
+                "GPU acceleration requested but no compatible adapter found; using CPU path"
+            ),
+        }
+        ctx
+    };
+
+    // Register a GPU-capable plugin: `with_gpu` when a context is available, else `new`.
+    #[cfg(feature = "gpu")]
+    macro_rules! register_gpu_plugin {
+        ($Plugin:ident, $msg:expr) => {
+            engine
+                .register_plugin(match &gpu_ctx {
+                    Some(c) => Box::new($Plugin::with_gpu(c.clone())),
+                    None => Box::new($Plugin::new()),
+                })
+                .expect($msg)
+        };
+    }
+    #[cfg(not(feature = "gpu"))]
+    macro_rules! register_gpu_plugin {
+        ($Plugin:ident, $msg:expr) => {
+            engine
+                .register_plugin(Box::new($Plugin::new()))
+                .expect($msg)
+        };
+    }
+
+    register_gpu_plugin!(BpskPlugin, "failed to register BPSK plugin");
     engine
         .register_plugin(Box::new(Fsk4Plugin::new()))
         .expect("failed to register FSK4 plugin");
     engine
         .register_plugin(Box::new(OfdmPlugin::new()))
         .expect("failed to register OFDM plugin");
-    engine
-        .register_plugin(Box::new(Psk8Plugin::new()))
-        .expect("failed to register 8PSK plugin");
-    engine
-        .register_plugin(Box::new(Qam64Plugin::new()))
-        .expect("failed to register 64QAM plugin");
-    engine
-        .register_plugin(Box::new(QpskPlugin::new()))
-        .expect("failed to register QPSK plugin");
-    engine
-        .register_plugin(Box::new(ScFdmaPlugin::new()))
-        .expect("failed to register SC-FDMA plugin");
+    register_gpu_plugin!(Psk8Plugin, "failed to register 8PSK plugin");
+    register_gpu_plugin!(Qam64Plugin, "failed to register 64QAM plugin");
+    register_gpu_plugin!(QpskPlugin, "failed to register QPSK plugin");
+    register_gpu_plugin!(ScFdmaPlugin, "failed to register SC-FDMA plugin");
     engine
         .register_plugin(Box::new(PilotPlugin::new()))
         .expect("failed to register pilot-framed plugin");

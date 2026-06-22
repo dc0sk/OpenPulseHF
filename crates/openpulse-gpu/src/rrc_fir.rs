@@ -19,6 +19,8 @@ struct FirParams {
 ///
 /// Returns `None` on any GPU error; caller must fall back to the CPU path.
 pub fn gpu_rrc_fir(ctx: &GpuContext, samples: &[f32], coeffs: &[f32]) -> Option<Vec<f32>> {
+    // Account GPU dispatch+wait time toward the process-wide GPU-busy counter.
+    let _gpu_busy = crate::GpuBusyTimer::start();
     if samples.is_empty() {
         return Some(Vec::new());
     }

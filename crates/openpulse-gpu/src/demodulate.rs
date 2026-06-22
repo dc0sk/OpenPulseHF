@@ -44,6 +44,8 @@ pub fn bpsk_iq_demod_gpu(
     sample_rate: f32,
     offset: usize,
 ) -> Option<(Vec<f32>, Vec<f32>)> {
+    // Account GPU dispatch+wait time toward the process-wide GPU-busy counter.
+    let _gpu_busy = crate::GpuBusyTimer::start();
     if samples.is_empty() || samples_per_sym == 0 {
         return Some((Vec::new(), Vec::new()));
     }
@@ -166,6 +168,8 @@ pub fn timing_offset_search_gpu(
     fc: f32,
     sample_rate: f32,
 ) -> Option<usize> {
+    // Account GPU dispatch+wait time toward the process-wide GPU-busy counter.
+    let _gpu_busy = crate::GpuBusyTimer::start();
     let n_offsets = samples_per_sym;
     if samples.is_empty() || n_offsets == 0 {
         return Some(0);

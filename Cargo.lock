@@ -3810,6 +3810,7 @@ dependencies = [
  "openpulse-channel",
  "openpulse-config",
  "openpulse-core",
+ "openpulse-gpu",
  "openpulse-modem",
  "openpulse-qsy",
  "openpulse-radio",

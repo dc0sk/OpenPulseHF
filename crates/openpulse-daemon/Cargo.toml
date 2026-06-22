@@ -25,6 +25,16 @@ priority = "optional"
 # Enable real audio hardware support (CPAL backend).  Off by default so CI builds
 # don't require ALSA/CoreAudio headers.  For production: cargo build --features cpal
 cpal = ["openpulse-audio/cpal-backend"]
+# Enable wgpu GPU acceleration for the GPU-capable plugins, and report our-kernel GPU load in
+# SystemMetrics.  Off by default (not in CI).  Build: cargo build --features gpu
+gpu = [
+    "dep:openpulse-gpu",
+    "bpsk-plugin/gpu",
+    "qpsk-plugin/gpu",
+    "psk8-plugin/gpu",
+    "qam64-plugin/gpu",
+    "scfdma-plugin/gpu",
+]
 
 [dependencies]
 # Protocol types only; compiles for all targets including WASM.
@@ -56,6 +66,7 @@ tokio            = { workspace = true, features = ["net", "io-util", "sync", "rt
 tokio-tungstenite = "0.23"
 futures-util     = { version = "0.3", default-features = false, features = ["sink", "std"] }
 sysinfo          = { version = "0.30", default-features = false }
+openpulse-gpu    = { workspace = true, optional = true }
 
 [dev-dependencies]
 openpulse-audio  = { workspace = true }
