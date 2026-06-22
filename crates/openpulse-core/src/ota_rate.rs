@@ -141,24 +141,30 @@ impl OtaRateController {
         self.rx_confirmed
     }
 
-    /// Modes to attempt when demodulating the next data frame, most-likely first.
+    /// `(level, mode)` candidates to attempt when demodulating the next data
+    /// frame, most-likely first.
     ///
     /// The lockstep invariant guarantees this set covers whatever the sender is
     /// using: the recommended level (if it adopted our last ACK) or the confirmed
     /// level (if that ACK was lost). At most two entries.
-    pub fn rx_candidate_modes(&self) -> Vec<&'static str> {
-        let mut modes = Vec::with_capacity(2);
+    pub fn rx_candidates(&self) -> Vec<(SpeedLevel, &'static str)> {
+        let mut out = Vec::with_capacity(2);
         if let Some(m) = self.profile.mode_for(self.rx_recommended) {
-            modes.push(m);
+            out.push((self.rx_recommended, m));
         }
         if self.rx_confirmed != self.rx_recommended {
             if let Some(m) = self.profile.mode_for(self.rx_confirmed) {
-                if !modes.contains(&m) {
-                    modes.push(m);
+                if !out.iter().any(|&(l, _)| l == self.rx_confirmed) {
+                    out.push((self.rx_confirmed, m));
                 }
             }
         }
-        modes
+        out
+    }
+
+    /// Mode strings to attempt when demodulating the next data frame, most-likely first.
+    pub fn rx_candidate_modes(&self) -> Vec<&'static str> {
+        self.rx_candidates().into_iter().map(|(_, m)| m).collect()
     }
 
     /// Update RX state from a demodulation outcome and measured SNR, and return the
