@@ -65,6 +65,9 @@ pub enum AckError {
 
     #[error("CRC mismatch: expected {expected:#04x}, got {got:#04x}")]
     CrcMismatch { expected: u8, got: u8 },
+
+    #[error("invalid recommended speed-level code {0}")]
+    InvalidSpeedLevel(u8),
 }
 
 /// Errors produced by the SAR sub-layer.

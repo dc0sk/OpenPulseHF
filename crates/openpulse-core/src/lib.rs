@@ -18,6 +18,7 @@ pub mod iq;
 pub mod ldpc;
 pub mod len_prefix;
 pub mod manifest;
+pub mod ota_rate;
 pub mod peer_cache;
 pub mod peer_descriptor;
 pub mod plugin;
