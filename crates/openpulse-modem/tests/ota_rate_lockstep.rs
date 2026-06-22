@@ -195,6 +195,27 @@ fn locked_level_holds_over_the_wire() {
 }
 
 #[test]
+fn transmit_arq_ota_errors_without_session() {
+    // A bare engine with no OTA session must reject transmit_arq_ota.
+    let backend = LoopbackBackend::new();
+    let mut e = ModemEngine::new(Box::new(backend.clone_shared()));
+    e.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+    e.register_plugin(Box::new(Fsk4Plugin::new())).unwrap();
+    assert!(e.transmit_arq_ota(b"hello", None, 0).is_err());
+}
+
+#[test]
+fn transmit_arq_ota_exhausts_retries_without_ack_responder() {
+    // OTA session active but no peer answers: each attempt transmits then fails to
+    // decode an FSK4 ACK (its loopback holds the data frame, not an ACK) → retries
+    // exhaust and the call errors. (The happy path needs a real ACK responder/peer.)
+    let (mut iss, _lb) = make_engine();
+    assert!(iss
+        .transmit_arq_ota(b"over-the-air payload", None, 2)
+        .is_err());
+}
+
+#[test]
 fn never_desyncs_with_every_other_ack_lost() {
     let levels = run_exchange(20, GOOD_SNR, |i| i % 2 == 0);
     // Still climbs (slower), and crucially never errors on decode.

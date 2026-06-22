@@ -641,6 +641,46 @@ impl ModemEngine {
         }
     }
 
+    /// Sender side (ISS): one-call OTA data frame — transmit at the current OTA
+    /// mode+FEC, wait for the FSK4-ACK, adopt the peer's `recommended_level`, and
+    /// retry on Nack / missing ACK.
+    ///
+    /// The half-duplex counterpart to [`respond_arq_ota`](Self::respond_arq_ota):
+    /// it transmits then listens on the same device, so it suits a real radio (or a
+    /// loopback that feeds TX back to RX) where the peer answers in-band. Returns the
+    /// adopted TX [`SpeedLevel`] on success, or [`ModemError::ArqMaxRetries`] after
+    /// `1 + max_retries` attempts. Always adopts a `recommended_level` carried by any
+    /// ACK (even a Nack) so the absolute target can never drift.
+    pub fn transmit_arq_ota(
+        &mut self,
+        data: &[u8],
+        device: Option<&str>,
+        max_retries: usize,
+    ) -> Result<SpeedLevel, ModemError> {
+        let attempts = 1 + max_retries;
+        let mut last_err: Option<ModemError> = None;
+        for _ in 0..attempts {
+            let mode = self
+                .ota_tx_mode()
+                .ok_or_else(|| ModemError::Configuration("no OTA session active".into()))?
+                .to_owned();
+            let fec = self.ota_tx_fec();
+            self.transmit_with_fec_mode(data, &mode, fec, device)?;
+            match self.receive_ack_with_short_fec(device) {
+                Ok(ack) => {
+                    self.apply_ota_ack(&ack);
+                    if ack.ack_type != AckType::Nack {
+                        return self.ota_tx_level().ok_or_else(|| {
+                            ModemError::Configuration("no OTA session active".into())
+                        });
+                    }
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+        Err(last_err.unwrap_or(ModemError::ArqMaxRetries(attempts)))
+    }
+
     /// Receiver side: capture one data frame, demodulate with the OTA candidate
     /// fallback, reply with an ACK carrying the absolute `recommended_level`, and
     /// return the payload.
