@@ -8,6 +8,7 @@
 
 pub mod demodulate;
 pub mod fft256;
+pub mod ldpc_bp;
 pub mod modulate;
 pub mod rrc_fir;
 pub mod soft_demod;

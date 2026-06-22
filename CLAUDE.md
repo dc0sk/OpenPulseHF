@@ -579,5 +579,6 @@ External modem/DSP references (gnuradio FLL band-edge, liquid-dsp framesync, dan
 | CLI usage | `docs/cli-guide.md` |
 | Benchmark harness spec | `docs/dev/benchmark-harness.md` |
 | External modem/DSP references (FLL, liquid-dsp, qo100-modem) | `docs/dev/references.md` |
+| GPU LDPC BP prototype findings | `docs/dev/gpu-ldpc-prototype.md` |
 | Loopback transports (virtual → hardware → on-air) | `docs/dev/virtual-loopback.md` |
 | Agent safety rules | `AGENTS.md`, `docs/dev/AGENTS.md` |
