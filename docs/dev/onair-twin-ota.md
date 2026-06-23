@@ -102,8 +102,12 @@ spectrum + waterfall; PTT toggling per frame.
   it to hear the ACK (the OTA send path); the IRS keys only to ACK. Verify your
   rig's PTT actually keys (RTS/DTR/CAT per `*_PTT_TYPE`) before trusting a flat
   ladder.
-- Tick-vs-frame capture: the daemon receive tick reads soundcard windows; very
-  long frames may need a couple of ticks to assemble. If decode is flaky on air,
-  start with a slower `START_MODE`/profile and a clean channel.
+- Frame capture: the daemon now **accumulates** captured audio across receive
+  ticks while a carrier is present and decodes the whole burst once the carrier
+  drops (`ModemEngine::capture_burst`), so a long frame spanning many ticks is
+  assembled correctly. The carrier-present test is the per-window RMS vs the DCD
+  squelch — if the band noise floor sits *above* the squelch the carrier never
+  "drops" and the burst only flushes at the 30 s safety cap; pick a quieter
+  frequency or expect the daemon's DCD threshold to need raising for that band.
 - Regulatory: you are responsible for legal frequency, bandwidth, power, and
   identification — see [regulatory.md](../regulatory.md).
