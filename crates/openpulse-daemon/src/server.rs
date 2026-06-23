@@ -501,6 +501,13 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         };
                     }
                 }
+                // Feed the spectrum/waterfall tap with the engine's most recent audio
+                // window (RX capture, or the last TX). Without this the broadcast task
+                // FFTs the zero-initialised tap and the panel shows a flat spectrum.
+                let audio = engine.last_audio();
+                if !audio.is_empty() {
+                    *handle.spectrum_tap.write().await = audio.to_vec();
+                }
                 // Periodic OTA status broadcast (~1 Hz) while a session is active.
                 ota_status_tick += 1;
                 if engine.ota_active() && ota_status_tick.is_multiple_of(ota_status_period) {
