@@ -375,8 +375,13 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
         } else {
             Default::default()
         },
+        dcd_squelch_default: cfg.modem.dcd_squelch,
+        dcd_squelch_bands: cfg.modem.dcd_squelch_bands.clone(),
         ..RuntimeControlState::default()
     };
+
+    // Apply the default DCD squelch at startup; per-band overrides kick in on retune.
+    engine.set_dcd_squelch(cfg.modem.dcd_squelch);
 
     // Execute side-effectful commands against the live modem engine.
     // The receive ticker polls the modem for decoded bytes so the QSY responder path

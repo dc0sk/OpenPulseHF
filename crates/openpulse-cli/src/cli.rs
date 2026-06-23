@@ -317,6 +317,11 @@ pub enum DaemonCommands {
         /// conservative | balanced | aggressive
         preset: String,
     },
+    /// Set the DCD/squelch RMS threshold at runtime (e.g. 0.05 on a noisy band).
+    SetDcdSquelch {
+        /// RMS threshold (0.0–1.0); raise above the band noise floor.
+        threshold: f32,
+    },
     /// Print one OTA status snapshot as JSON.
     OtaStatus,
 }

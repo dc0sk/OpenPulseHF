@@ -379,6 +379,35 @@ fn find_ham_iaru_band(freq_hz: u64) -> Option<HamBand> {
         .find(|band| (band.min_hz..=band.max_hz).contains(&freq_hz))
 }
 
+/// Amateur band label (e.g. `"20m"`, `"2m"`) for a frequency, or `None` if it
+/// falls outside the known HF/VHF/UHF amateur ranges.
+///
+/// Used to resolve per-band settings (e.g. the DCD squelch threshold). Covers the
+/// HF bands plus the common VHF/UHF bands; the ranges are generous (whole band,
+/// not just the data segment) so a dial frequency anywhere in the band resolves.
+pub fn band_label_for_hz(freq_hz: u64) -> Option<&'static str> {
+    const LABELLED: &[(u64, u64, &str)] = &[
+        (1_800_000, 2_000_000, "160m"),
+        (3_500_000, 4_000_000, "80m"),
+        (5_330_000, 5_410_000, "60m"),
+        (7_000_000, 7_300_000, "40m"),
+        (10_100_000, 10_150_000, "30m"),
+        (14_000_000, 14_350_000, "20m"),
+        (18_068_000, 18_168_000, "17m"),
+        (21_000_000, 21_450_000, "15m"),
+        (24_890_000, 24_990_000, "12m"),
+        (28_000_000, 29_700_000, "10m"),
+        (50_000_000, 54_000_000, "6m"),
+        (144_000_000, 148_000_000, "2m"),
+        (222_000_000, 225_000_000, "1.25m"),
+        (420_000_000, 450_000_000, "70cm"),
+    ];
+    LABELLED
+        .iter()
+        .find(|(lo, hi, _)| (*lo..=*hi).contains(&freq_hz))
+        .map(|(_, _, label)| *label)
+}
+
 fn shared_base_digital_segments() -> &'static [DigitalSegment; 9] {
     &[
         DigitalSegment {
@@ -487,6 +516,17 @@ fn find_region3_segment(freq_hz: u64) -> Option<DigitalSegment> {
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn band_label_resolves_hf_and_vhf() {
+        assert_eq!(band_label_for_hz(14_070_000), Some("20m"));
+        assert_eq!(band_label_for_hz(7_040_000), Some("40m"));
+        assert_eq!(band_label_for_hz(144_640_000), Some("2m"));
+        assert_eq!(band_label_for_hz(432_100_000), Some("70cm"));
+        // Between bands (WARC gap / out of amateur range) → None.
+        assert_eq!(band_label_for_hz(5_000_000), None);
+        assert_eq!(band_label_for_hz(100_000_000), None);
+    }
 
     #[test]
     fn ham_iaru_accepts_known_good_pair() {
