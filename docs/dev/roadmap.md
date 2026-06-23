@@ -787,6 +787,9 @@ the long-deferred "adaptive rate-stepping over the air (RX lockstep)" item.
   is active; `SendMessage` drives `transmit_arq_ota_within` with the real-radio
   **ISS PTT turnaround** (key TX → release → listen for ACK) so the ladder steps
   under traffic (#501, #512, #513).
+- Aggressiveness preset (`conservative`/`balanced`/`aggressive`) bundling the
+  A2/A3 hysteresis gates into one operator control — config `[modem]
+  ota_aggressiveness`, `OtaSetAggressiveness` command, CLI (#517).
 
 ### 10.3 — Twin-station validation rig ✅ Done
 - `server::run` extracted from the binary with an injectable audio backend (#507).
@@ -810,11 +813,20 @@ the long-deferred "adaptive rate-stepping over the air (RX lockstep)" item.
   cpal, OTA rate-stepping over the air, observed in `openpulse-twinview` (#515).
   On-air execution is the operator's step (no radios/cpal in CI).
 
+### 10.7 — Live-audio operability hardening ✅ Done
+- Burst capture: the daemon RX tick now accumulates audio across ticks while a
+  carrier is present and decodes the whole burst on carrier-drop
+  (`ModemEngine::capture_burst` + `decode_burst`/`ota_decode_burst`), so a frame
+  spanning many tick windows on a streaming cpal backend is assembled correctly
+  (the in-process bridge delivered frames atomically and hid this) (#518).
+- DCD squelch exposed: `[modem] dcd_squelch` default + `[modem.dcd_squelch_bands]`
+  per-band map, resolved on retune via `bandplan::band_label_for_hz`, plus a
+  `SetDcdSquelch` runtime command/CLI — so a band's noise floor doesn't read as a
+  permanent carrier and stall the burst flush (#519).
+
 ### 10.6 — Remaining follow-ons (deferred)
 - Dual-station hardware validation of the OTA ladder (rpi51↔rpi52) per the runbooks.
 - Streaming-`Agc` rollout to the PSK ladder with active-span gating.
-- Real-audio frame assembly across receive ticks (the in-process bridge delivers
-  frames atomically; live cpal may split a long frame across ticks).
 
 ---
 
