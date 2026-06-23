@@ -293,6 +293,7 @@ detailed crossfade and ISI analysis.
 | Interface | Description |
 |---|---|
 | **Operator panel** (`openpulse-panel`) | Full egui/eframe GUI connecting to the daemon via TCP control port; mode selection, PTT, QSY management, message store, live status |
+| **Twin-station view** (`openpulse-twinview`) | egui both-directions viewer — one window over two daemons; per-station spectrum/waterfall + rate/OTA/HPX readouts, so both link directions show at once |
 | **TUI** (`openpulse-tui`) | ratatui terminal UI — HPX state (colour-coded), AFC/rate meters, DCD energy bar, scrollable transitions log |
 | **CLI** (`openpulse-cli`) | Full-featured command-line interface: transmit, receive, benchmark, monitor, config init, calibrate (audio/PTT/AFC) |
 | **Signal testbench** (`openpulse-testbench`) | egui 4-column live view: TX / channel / mixed / RX; waterfall, spectrum, scatter; 7 channel models; SNR slider |
@@ -370,6 +371,7 @@ pass with this flag. Never add tests that require real audio hardware.
 | `crates/openpulse-cli` | CLI binary: transmit, receive, benchmark, monitor NDJSON events, config init |
 | `crates/openpulse-tui` | ratatui TUI: HPX state, AFC/rate meters, DCD energy bar, transitions log |
 | `apps/openpulse-panel` | egui operator panel GUI connecting to daemon control port |
+| `apps/openpulse-twinview` | egui both-directions viewer over two daemons (twin-station rig) |
 | `apps/openpulse-testbench` | egui signal-path testbench: 4-column waterfall/spectrum/scatter, 7 channel models |
 | `apps/openpulse-testmatrix` | Automated mode × channel test matrix runner |
 | `pki-tooling` | Ed25519 trust-bundle signing service with PostgreSQL persistence |

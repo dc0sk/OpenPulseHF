@@ -1061,6 +1061,7 @@ rig. Examples use real flags, subcommands, and environment variables only.
 | `openpulse-gateway` | openpulse-gateway | Direct TCP Winlink CMS gateway (no radio) | n/a |
 | `openpulse-mesh` | openpulse-mesh | Mesh broadcast/relay daemon | `--features cpal` |
 | `openpulse-panel` | openpulse-panel | egui operator panel (connects to the daemon) | n/a (control client) |
+| `openpulse-twinview` | openpulse-twinview | egui both-directions viewer over two daemons | n/a (control client) |
 | `openpulse-testbench` | openpulse-testbench | egui 4-column signal-path scope | `--features cpal` (live capture) |
 | `openpulse-testmatrix` | openpulse-testmatrix | Mode × channel test-matrix runner (no audio) | n/a |
 | `openpulse-linksim` | openpulse-linksim | Two-station ARQ link simulator (CLI) | n/a |
@@ -1167,6 +1168,17 @@ cargo build --release -p openpulse-panel
 openpulse-panel    # then click Connect (default 127.0.0.1:9000); no CLI args
 ```
 
+#### `openpulse-twinview`
+
+```bash
+cargo build --release -p openpulse-twinview
+openpulse-twinview                              # 127.0.0.1:9000 + 127.0.0.1:9002
+openpulse-twinview 127.0.0.1:9000 127.0.0.1:9002
+```
+One window, two columns — each column is a station's live spectrum/waterfall +
+rate/OTA/HPX readouts, so **both directions** of a bridged twin-station link are
+visible at once (the left station's TX level is the A→B rate, the right is B→A).
+
 #### `openpulse-testbench`
 
 ```bash
@@ -1255,6 +1267,7 @@ cargo test -p openpulse-daemon --no-default-features --test twin_daemon_bridge
 TWIN_SNR_DB=12 cargo run -p openpulse-daemon --example twin_station
 #   then: openpulse-panel → Connect 127.0.0.1:9000 (station A)
 #         openpulse-panel → Connect 127.0.0.1:9002 (station B)
+#   or one combined window over both:  openpulse-twinview
 ```
 
 #### A3. Twin-station rig over real audio (snd-aloop)

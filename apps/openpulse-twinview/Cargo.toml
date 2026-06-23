@@ -1,0 +1,21 @@
+[package]
+name    = "openpulse-twinview"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Combined both-directions viewer: one window over two openpulse-server daemons (the twin-station rig)"
+
+[[bin]]
+name = "openpulse-twinview"
+path = "src/main.rs"
+
+[dependencies]
+# Protocol types only (default-features=false keeps the daemon's native/GPU code out).
+openpulse-daemon   = { workspace = true }
+openpulse-modem    = { workspace = true }
+serde_json         = { workspace = true }
+eframe.workspace   = true
+egui.workspace     = true
+egui_plot.workspace = true
