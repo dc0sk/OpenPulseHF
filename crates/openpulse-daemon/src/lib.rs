@@ -1467,6 +1467,9 @@ pub async fn apply_command_to_engine(
                 });
             }
         }
+        ControlCommand::SetCessb { enabled } => {
+            engine.set_cessb_enabled(*enabled);
+        }
         // No live-modem side effects for these commands in the engine path.
         // They are handled by dispatch-only paths or request-response control flow.
         ControlCommand::SubscribeSpectrum { .. }
