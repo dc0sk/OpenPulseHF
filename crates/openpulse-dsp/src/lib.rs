@@ -5,6 +5,7 @@
 
 pub mod acquisition;
 pub mod agc;
+pub mod cessb;
 pub mod constellation;
 pub mod doppler_tracker;
 pub mod equalizer;
