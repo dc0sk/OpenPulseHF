@@ -1164,13 +1164,37 @@ pub async fn apply_command_to_engine(
             }
         }
         ControlCommand::SendMessage { body, .. } => {
-            let mode = active_mode.lock().await.clone();
-            if let Err(err) = engine.transmit(body.as_bytes(), &mode, None) {
-                tracing::warn!(mode = %mode, error = %err, "daemon rf dispatch failed for SendMessage");
-                let _ = event_tx.send(ControlEvent::CommandError {
-                    command: "send_message".to_string(),
-                    reason: format!("rf dispatch failed in mode '{mode}': {err}"),
+            if engine.ota_active() {
+                // Receiver-led OTA send: transmit at the OTA mode+FEC, wait for the
+                // peer's ACK, and adopt its absolute recommended_level — this is what
+                // steps the rate ladder. block_in_place because the ACK turnaround
+                // blocks (re-capturing) for up to a few seconds. PTT is a no-op on the
+                // twin rig; real-radio ISS PTT turnaround is a separate bring-up item.
+                let result = tokio::task::block_in_place(|| {
+                    engine.transmit_arq_ota_within(body.as_bytes(), None, 3, 4000)
                 });
+                match result {
+                    Ok(level) => {
+                        tracing::info!(?level, "OTA send adopted recommended level");
+                        let _ = event_tx.send(ota_status_event(engine));
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "OTA send failed");
+                        let _ = event_tx.send(ControlEvent::CommandError {
+                            command: "send_message".to_string(),
+                            reason: format!("OTA send failed: {err}"),
+                        });
+                    }
+                }
+            } else {
+                let mode = active_mode.lock().await.clone();
+                if let Err(err) = engine.transmit(body.as_bytes(), &mode, None) {
+                    tracing::warn!(mode = %mode, error = %err, "daemon rf dispatch failed for SendMessage");
+                    let _ = event_tx.send(ControlEvent::CommandError {
+                        command: "send_message".to_string(),
+                        reason: format!("rf dispatch failed in mode '{mode}': {err}"),
+                    });
+                }
             }
         }
         ControlCommand::SetFreq { rig, freq_hz } => {

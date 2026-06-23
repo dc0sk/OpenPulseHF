@@ -1282,6 +1282,13 @@ ADDR2=127.0.0.1:9002 scripts/twin-traffic.sh     # both directions (A→B and B�
 INTERVAL=1 SIZE=128 COUNT=20 scripts/twin-traffic.sh   # 20 rounds, 128-byte bodies
 ```
 
+With `OTA=1` the traffic also **animates the rate ladder**: a `send_message` on an
+OTA-active daemon transmits via the receiver-led OTA path (transmit at the OTA
+mode → wait for the peer's ACK → adopt its absolute recommended level), so the TX
+level climbs as the peer's recommendation rises. Drive **one direction** for a
+clean ladder demo (no `ADDR2`); the receiving station's panel shows its
+recommendation, the sender's shows its TX level stepping up.
+
 Single shared clock here (snd-aloop). For a true two-clock test, point
 `A_DEVICE`/`B_DEVICE` at two USB cards (see the dual-card rig in F).
 
