@@ -152,6 +152,14 @@ pub struct RigConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RadioConfig {
+    /// CAT (frequency/mode) backend: `"rigctld"` (default) or `"none"`.
+    ///
+    /// `"none"` runs with no CAT control at all — no rigctld connection is
+    /// attempted — for a TRX that Hamlib/rigctld does not support. The operator
+    /// sets frequency manually on the radio; PTT still works via the
+    /// `[modem] ptt_backend` selection (`vox`/`rts`/`dtr`). Frequency-control
+    /// commands (set-freq, QSY retune) are rejected while CAT is disabled.
+    pub cat_backend: String,
     /// rigctld TCP address for single-rig PTT-only use (default `"127.0.0.1:4532"`).
     pub rigctld_addr: String,
     /// Primary rig (RX/TX for normal operation and cross-band relay receive).
@@ -292,6 +300,7 @@ impl Default for RigConfig {
 impl Default for RadioConfig {
     fn default() -> Self {
         Self {
+            cat_backend: "rigctld".into(),
             rigctld_addr: "127.0.0.1:4532".into(),
             rig_a: RigConfig::default(),
             rig_b: None,
@@ -604,6 +613,12 @@ ota_min_backlog = 0
 ota_upgrade_hold_frames = 0
 
 [radio]
+# CAT (frequency/mode) backend: "rigctld" (default) or "none".
+# "none" runs with no CAT control — no rigctld connection is attempted — for a
+# TRX that Hamlib/rigctld does not support. Set frequency manually on the radio;
+# PTT still works via [modem] ptt_backend (vox/rts/dtr). Set-freq and QSY retune
+# are rejected while CAT is disabled.
+cat_backend = "rigctld"
 # rigctld TCP address for single-rig PTT-only use.
 rigctld_addr = "127.0.0.1:4532"
 
@@ -740,6 +755,21 @@ mod tests {
         assert_eq!(cfg.logging.level, "info");
         assert!(!cfg.relay.enabled);
         assert_eq!(cfg.relay.max_hops, 3);
+        // CAT defaults to rigctld for backward compatibility.
+        assert_eq!(cfg.radio.cat_backend, "rigctld");
+    }
+
+    #[test]
+    fn cat_backend_none_parses() {
+        let path = unique_tmp("cat-none");
+        {
+            let mut f = std::fs::File::create(&path).unwrap();
+            writeln!(f, "[radio]").unwrap();
+            writeln!(f, r#"cat_backend = "none""#).unwrap();
+        }
+        let cfg = load_from(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(cfg.radio.cat_backend, "none");
     }
 
     #[test]

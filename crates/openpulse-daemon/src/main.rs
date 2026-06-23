@@ -274,15 +274,24 @@ async fn main() {
 
     tracing::info!("openpulse-server WebSocket control port listening on {ws_bind}");
 
-    let mut rig_controller = match RigctldController::connect(&cfg.radio.rigctld_addr) {
-        Ok(controller) => Some(controller),
-        Err(err) => {
-            tracing::warn!(
-                addr = %cfg.radio.rigctld_addr,
-                error = %err,
-                "rigctld connect failed; set_freq commands will emit command_error"
-            );
-            None
+    // CAT backend selection. "none" runs with no CAT control for a TRX that
+    // rigctld/Hamlib does not support — no connection is attempted, the operator
+    // tunes manually, and frequency-control commands are rejected. PTT is
+    // independent (see build_ptt_controller / [modem] ptt_backend).
+    let mut rig_controller = if cfg.radio.cat_backend.eq_ignore_ascii_case("none") {
+        tracing::info!("CAT disabled (cat_backend = \"none\"); manual frequency control");
+        None
+    } else {
+        match RigctldController::connect(&cfg.radio.rigctld_addr) {
+            Ok(controller) => Some(controller),
+            Err(err) => {
+                tracing::warn!(
+                    addr = %cfg.radio.rigctld_addr,
+                    error = %err,
+                    "rigctld connect failed; set_freq commands will emit command_error"
+                );
+                None
+            }
         }
     };
     let mut ptt_controller: Option<Box<dyn PttController>> =
