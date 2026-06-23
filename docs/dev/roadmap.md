@@ -824,9 +824,27 @@ the long-deferred "adaptive rate-stepping over the air (RX lockstep)" item.
   `SetDcdSquelch` runtime command/CLI — so a band's noise floor doesn't read as a
   permanent carrier and stall the burst flush (#519).
 
+### 10.8 — CE-SSB TX envelope conditioning ✅ Done
+- Controlled-Envelope SSB conditioner (Hershberger W9GR, QEX 2014; public domain):
+  `openpulse_dsp::cessb` look-ahead peak-stretcher raises average TX power at fixed
+  PEP without overshoot. Prototyped + measured in channel-sim (#521):
+  **OFDM52 +1.6/+2.7/+3.8 dB at 2.5/2.0/1.5×rms clip, ZERO BER cost**; ~0 dB and real
+  EVM on single-carrier 64QAM; 0 dB on near-constant-envelope BPSK.
+- Wired as an optional, **default-on, per-mode** TX conditioner gated to high-PAPR
+  multicarrier (`cessb_benefits`: OFDM*/SCFDMA* only; no-op elsewhere): applied in
+  `stage_emit_output` after attenuation, before the tanh limiter, with a peak-restore
+  rescale. `[modem] cessb_enabled` config, `ControlCommand::SetCessb` + `openpulse
+  daemon set-cessb` CLI, panel "CE-SSB: ON/OFF" toolbar toggle (#522, #523).
+- Verification note: virtual/channel-sim covers decode integrity; the average-power
+  gain at fixed PEP is a PA-domain effect no audio loopback (virtual or hardware) can
+  show — it folds into the deferred on-air validation (wattmeter PEP-vs-avg + SDR
+  spectral-mask check for envelope-conditioning regrowth).
+
 ### 10.6 — Remaining follow-ons (deferred)
 - Dual-station hardware validation of the OTA ladder (rpi51↔rpi52) per the runbooks.
 - Streaming-`Agc` rollout to the PSK ladder with active-span gating.
+- On-air CE-SSB measurement: confirm the ~2–4 dB average-power gain on a real PA and
+  check occupied-bandwidth/spectral mask (folds into on-air regulatory validation).
 
 ---
 
