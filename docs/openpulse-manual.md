@@ -1366,7 +1366,14 @@ scripts/run-onair-ic9700-ft991a.sh supervise --quick --label 2m-test
 # Lab599 TX500 (Pi) ↔ KX3 (local), HF
 source docs/config/onair-tx500-kx3-local.example.sh
 scripts/run-onair-tx500-kx3.sh supervise --full
+
+# Twin-OTA: two real daemons + OTA adaptive rate-stepping over the air, watched in
+# openpulse-twinview (the real-radio counterpart of the in-process twin rig).
+source docs/config/onair-twin-ota.example.sh
+scripts/run-onair-twin-ota.sh supervise        # then attach openpulse-twinview
 ```
+The twin-OTA scenario is daemon-based (two `openpulse-server` over rigctld CAT+PTT
+with cpal audio) — see [docs/dev/onair-twin-ota.md](dev/onair-twin-ota.md).
 Supporting scripts: `onair-preflight.sh` (env/binary/callsign checks),
 `run-onair-validation-flow.sh` (preflight → matrix → bundle → report),
 `onair-generate-report.sh` (Phase 5.5-reg markdown), `onair-bundle-evidence.sh`

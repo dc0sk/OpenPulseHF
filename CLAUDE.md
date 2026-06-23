@@ -581,5 +581,6 @@ External modem/DSP references (gnuradio FLL band-edge, liquid-dsp framesync, dan
 | External modem/DSP references (FLL, liquid-dsp, qo100-modem) | `docs/dev/references.md` |
 | GPU LDPC BP prototype findings | `docs/dev/gpu-ldpc-prototype.md` |
 | OTA adaptive rate-stepping hardware validation | `docs/dev/ota-hardware-validation.md` |
+| On-air twin-OTA scenario (two daemons + twinview over RF) | `docs/dev/onair-twin-ota.md` |
 | Loopback transports (virtual → hardware → on-air) | `docs/dev/virtual-loopback.md` |
 | Agent safety rules | `AGENTS.md`, `docs/dev/AGENTS.md` |
