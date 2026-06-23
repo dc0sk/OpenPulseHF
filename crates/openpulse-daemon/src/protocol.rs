@@ -284,6 +284,9 @@ pub enum ControlCommand {
         min_backlog: Option<usize>,
         upgrade_hold_frames: Option<u32>,
     },
+    /// Apply an aggressiveness preset (`conservative`/`balanced`/`aggressive`) that
+    /// sets the A2/A3 hysteresis gates together — one knob instead of two.
+    OtaSetAggressiveness { preset: String },
 }
 
 /// Per-command response.
@@ -332,6 +335,9 @@ mod ota_protocol_tests {
             ControlCommand::OtaSetHysteresis {
                 min_backlog: Some(128),
                 upgrade_hold_frames: Some(3),
+            },
+            ControlCommand::OtaSetAggressiveness {
+                preset: "aggressive".into(),
             },
         ];
         for c in cmds {

@@ -151,6 +151,22 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 if cfg.modem.ota_upgrade_hold_frames > 0 {
                     engine.set_upgrade_hold_frames(cfg.modem.ota_upgrade_hold_frames);
                 }
+                // The aggressiveness preset, when set, sets both A2/A3 gates and so
+                // takes precedence over the individual knobs above.
+                if !cfg.modem.ota_aggressiveness.is_empty() {
+                    match openpulse_core::rate::OtaAggressiveness::from_name(
+                        &cfg.modem.ota_aggressiveness,
+                    ) {
+                        Some(p) => {
+                            engine.set_ota_aggressiveness(p);
+                            tracing::info!(preset = p.name(), "OTA aggressiveness preset applied");
+                        }
+                        None => tracing::warn!(
+                            value = %cfg.modem.ota_aggressiveness,
+                            "unknown ota_aggressiveness preset; ignored"
+                        ),
+                    }
+                }
                 tracing::info!(profile = profile_name, "OTA adaptive rate-stepping enabled");
             }
             None => tracing::warn!(

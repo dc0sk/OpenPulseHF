@@ -44,6 +44,55 @@ pub enum RateTrigger {
     SnrCeiling,
 }
 
+// ── OtaAggressiveness ─────────────────────────────────────────────────────────
+
+/// Operator preset bundling the OTA anti-oscillation (hysteresis) knobs into one
+/// choice, so an operator picks a behaviour instead of tuning A2/A3 individually.
+///
+/// Maps to `(min_backlog_for_upgrade, upgrade_hold_frames)`:
+/// - `Aggressive` — `(0, 0)`: upgrade as soon as the channel allows, no
+///   re-upgrade hold after a downgrade. Climbs fast, may flap on a marginal link.
+/// - `Balanced` — `(64, 2)`: a small backlog gate and a short hold (default feel).
+/// - `Conservative` — `(256, 4)`: only upgrade with real backlog, and hold off
+///   re-upgrading for several frames after a drop. Stable, slow to climb back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OtaAggressiveness {
+    Conservative,
+    Balanced,
+    Aggressive,
+}
+
+impl OtaAggressiveness {
+    /// The `(min_backlog_for_upgrade_bytes, upgrade_hold_frames)` this preset sets.
+    pub fn knobs(self) -> (usize, u32) {
+        match self {
+            OtaAggressiveness::Aggressive => (0, 0),
+            OtaAggressiveness::Balanced => (64, 2),
+            OtaAggressiveness::Conservative => (256, 4),
+        }
+    }
+
+    /// Parse a preset name (case-insensitive): `conservative` | `balanced` | `aggressive`.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "conservative" => Some(OtaAggressiveness::Conservative),
+            "balanced" => Some(OtaAggressiveness::Balanced),
+            "aggressive" => Some(OtaAggressiveness::Aggressive),
+            _ => None,
+        }
+    }
+
+    /// The preset's lowercase name.
+    pub fn name(self) -> &'static str {
+        match self {
+            OtaAggressiveness::Conservative => "conservative",
+            OtaAggressiveness::Balanced => "balanced",
+            OtaAggressiveness::Aggressive => "aggressive",
+        }
+    }
+}
+
 // ── SpeedLevel ────────────────────────────────────────────────────────────────
 
 /// HPX adaptive rate speed level (SL1 = slowest / most robust, SL20 = fastest).
@@ -403,6 +452,29 @@ impl BiDirRateAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ota_aggressiveness_knobs_and_parse() {
+        assert_eq!(OtaAggressiveness::Aggressive.knobs(), (0, 0));
+        assert_eq!(OtaAggressiveness::Balanced.knobs(), (64, 2));
+        assert_eq!(OtaAggressiveness::Conservative.knobs(), (256, 4));
+        // Conservative gates harder than balanced gates harder than aggressive.
+        assert!(OtaAggressiveness::Conservative.knobs() > OtaAggressiveness::Balanced.knobs());
+        assert!(OtaAggressiveness::Balanced.knobs() > OtaAggressiveness::Aggressive.knobs());
+
+        for p in [
+            OtaAggressiveness::Conservative,
+            OtaAggressiveness::Balanced,
+            OtaAggressiveness::Aggressive,
+        ] {
+            assert_eq!(OtaAggressiveness::from_name(p.name()), Some(p));
+        }
+        assert_eq!(
+            OtaAggressiveness::from_name("  AGGRESSIVE "),
+            Some(OtaAggressiveness::Aggressive)
+        );
+        assert_eq!(OtaAggressiveness::from_name("nope"), None);
+    }
 
     #[test]
     fn ack_up_increases_speed_level() {

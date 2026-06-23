@@ -1107,6 +1107,7 @@ openpulse config init > ~/.config/openpulse/config.toml
 openpulse daemon --addr 127.0.0.1:9000 ota-start --profile hpx_modcod
 openpulse daemon ota-bounds --min SL3 --max SL10
 openpulse daemon ota-hysteresis --min-backlog 128 --upgrade-hold-frames 3
+openpulse daemon ota-aggressiveness balanced   # conservative|balanced|aggressive (sets A2/A3 together)
 openpulse daemon ota-lock --level SL6
 openpulse daemon ota-status   # JSON snapshot
 ```

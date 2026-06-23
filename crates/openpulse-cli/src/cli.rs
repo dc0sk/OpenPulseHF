@@ -312,6 +312,11 @@ pub enum DaemonCommands {
         #[arg(long)]
         upgrade_hold_frames: Option<u32>,
     },
+    /// Apply an aggressiveness preset (sets the A2/A3 gates together).
+    OtaAggressiveness {
+        /// conservative | balanced | aggressive
+        preset: String,
+    },
     /// Print one OTA status snapshot as JSON.
     OtaStatus,
 }

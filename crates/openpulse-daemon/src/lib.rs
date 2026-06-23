@@ -1436,6 +1436,19 @@ pub async fn apply_command_to_engine(
                 engine.set_upgrade_hold_frames(*f);
             }
         }
+        ControlCommand::OtaSetAggressiveness { preset } => {
+            match openpulse_core::rate::OtaAggressiveness::from_name(preset) {
+                Some(p) => engine.set_ota_aggressiveness(p),
+                None => {
+                    let _ = event_tx.send(ControlEvent::CommandError {
+                        command: "ota_set_aggressiveness".to_string(),
+                        reason: format!(
+                            "unknown preset '{preset}' (conservative|balanced|aggressive)"
+                        ),
+                    });
+                }
+            }
+        }
         // No live-modem side effects for these commands in the engine path.
         // They are handled by dispatch-only paths or request-response control flow.
         ControlCommand::SubscribeSpectrum { .. }
@@ -1588,6 +1601,52 @@ mod command_apply_tests {
         .await;
         assert!(engine.ota_active());
         assert_eq!(engine.ota_tx_level(), level_before);
+    }
+
+    #[tokio::test]
+    async fn ota_set_aggressiveness_valid_and_invalid() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let mut rs = RuntimeControlState::default();
+
+        // A valid preset dispatches cleanly (no CommandError).
+        apply_command_to_engine(
+            &ControlCommand::OtaSetAggressiveness {
+                preset: "aggressive".into(),
+            },
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut rs,
+        )
+        .await;
+        assert!(
+            rx.try_recv().is_err(),
+            "valid preset must not emit an event"
+        );
+
+        // An unknown preset emits a CommandError.
+        apply_command_to_engine(
+            &ControlCommand::OtaSetAggressiveness {
+                preset: "turbo".into(),
+            },
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut rs,
+        )
+        .await;
+        match rx.try_recv() {
+            Ok(ControlEvent::CommandError { command, reason }) => {
+                assert_eq!(command, "ota_set_aggressiveness");
+                assert!(reason.contains("turbo"));
+            }
+            other => panic!("expected CommandError, got {other:?}"),
+        }
     }
 
     #[tokio::test]

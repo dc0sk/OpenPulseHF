@@ -108,6 +108,9 @@ pub fn run(addr: &str, cmd: DaemonCommands) -> Result<i32> {
                 upgrade_hold_frames,
             },
         ),
+        DaemonCommands::OtaAggressiveness { preset } => {
+            simple(addr, ControlCommand::OtaSetAggressiveness { preset })
+        }
         DaemonCommands::OtaStatus => ota_status(addr),
     }
 }
