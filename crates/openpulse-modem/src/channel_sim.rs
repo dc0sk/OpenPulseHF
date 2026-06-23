@@ -13,6 +13,26 @@ use openpulse_channel::ChannelModel;
 
 use crate::ModemEngine;
 
+/// Route one station's pending TX samples through `channel` into another
+/// station's RX buffer.
+///
+/// The plugin-agnostic channel-bridge primitive for harnesses that own two
+/// independent engines (e.g. a bidirectional OTA link or a future interactive
+/// twin-station rig): drain `src`'s loopback, apply the channel, fill `dst`'s
+/// loopback. Returns the number of samples routed. Unlike
+/// [`ChannelSimHarness::route`] this operates on externally-owned backends so a
+/// forward and a reverse direction can each carry their own channel model.
+pub fn bridge_through(
+    src: &LoopbackBackend,
+    dst: &LoopbackBackend,
+    channel: &mut dyn ChannelModel,
+) -> usize {
+    let samples = src.drain_samples();
+    let n = samples.len();
+    dst.fill_samples(&channel.apply(&samples));
+    n
+}
+
 /// A one-way test harness that routes TX samples through a pluggable channel model into an RX engine.
 ///
 /// Each call to [`route`](Self::route) drains the TX loopback buffer, applies
