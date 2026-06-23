@@ -216,6 +216,54 @@ fn transmit_arq_ota_exhausts_retries_without_ack_responder() {
 }
 
 #[test]
+fn poll_ota_rx_idle_window_returns_none() {
+    // No samples in the loopback → the idle gate must suppress the ACK so the
+    // daemon never keys PTT to answer silence.
+    let (mut irs, _lb) = make_engine();
+    let res = irs.poll_ota_rx("ota", None).expect("poll must not error");
+    assert!(
+        res.is_none(),
+        "an idle window must not produce an ACK to send"
+    );
+}
+
+#[test]
+fn poll_ota_rx_decodes_and_yields_ack_to_transmit() {
+    // The daemon split: poll_ota_rx decodes WITHOUT transmitting, returns the ACK
+    // for the caller to key PTT around. Transmitting it separately reproduces the
+    // same receiver-led climb as respond_arq_ota.
+    let payload = b"poll-ota-rx split path payload";
+    let (mut iss, iss_lb) = make_engine();
+    let (mut irs, irs_lb) = make_engine();
+    irs.set_rx_snr_estimate(Some(GOOD_SNR));
+
+    for i in 0..6 {
+        let tx_mode = iss.ota_tx_mode().unwrap().to_owned();
+        iss.transmit(payload, &tx_mode, None).unwrap();
+        route(&iss_lb, &irs_lb);
+
+        let res = irs
+            .poll_ota_rx("ota", None)
+            .expect("poll must not error")
+            .expect("an energetic window must decode-attempt");
+        assert_eq!(
+            res.payload.as_deref(),
+            Some(&payload[..]),
+            "payload corrupted at frame {i}"
+        );
+        // Caller transmits the ACK the poll built (PTT keyed around this on radio).
+        irs.transmit_ack_with_short_fec(&res.ack, None).unwrap();
+        route(&irs_lb, &iss_lb);
+        let ack = iss.receive_ack_with_short_fec(None).unwrap();
+        iss.apply_ota_ack(&ack);
+    }
+    assert!(
+        iss.ota_tx_level().unwrap() > SpeedLevel::Sl2,
+        "the split poll path should still climb on a clean channel"
+    );
+}
+
+#[test]
 fn never_desyncs_with_every_other_ack_lost() {
     let levels = run_exchange(20, GOOD_SNR, |i| i % 2 == 0);
     // Still climbs (slower), and crucially never errors on decode.

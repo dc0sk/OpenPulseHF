@@ -139,8 +139,8 @@ pub trait ModulationPlugin: Send + Sync {
     /// - **Scale**: per-plugin and NOT normalised across plugins — BPSK emits
     ///   raw differential dot products, OFDM emits |H|²-weighted projections,
     ///   8PSK emits max-log-MAP distance differences.  Within one plugin the
-    ///   scale is monotone in reliability (required by `snr_from_llrs` and by
-    ///   per-frame soft combining).  Cross-MODE soft combining (e.g. ARQ
+    ///   scale is monotone in reliability (required by per-frame soft
+    ///   combining).  Cross-MODE soft combining (e.g. ARQ
     ///   retransmission in a different mode) must therefore weight per frame
     ///   — `combine_llrs_weighted` with per-frame noise metrics — rather than
     ///   adding raw LLRs from different plugins.

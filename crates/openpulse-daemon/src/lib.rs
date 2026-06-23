@@ -1413,6 +1413,17 @@ pub async fn apply_command_to_engine(
             engine.ota_unlock();
             let _ = event_tx.send(ota_status_event(engine));
         }
+        ControlCommand::OtaSetHysteresis {
+            min_backlog,
+            upgrade_hold_frames,
+        } => {
+            if let Some(b) = min_backlog {
+                engine.set_min_backlog_for_upgrade(*b);
+            }
+            if let Some(f) = upgrade_hold_frames {
+                engine.set_upgrade_hold_frames(*f);
+            }
+        }
         // No live-modem side effects for these commands in the engine path.
         // They are handled by dispatch-only paths or request-response control flow.
         ControlCommand::SubscribeSpectrum { .. }
@@ -1527,6 +1538,44 @@ mod command_apply_tests {
         )
         .await;
         assert!(!engine.ota_active());
+    }
+
+    #[tokio::test]
+    async fn ota_set_hysteresis_dispatches_without_disturbing_session() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, _) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let mut rs = RuntimeControlState::default();
+
+        apply_command_to_engine(
+            &ControlCommand::StartOtaSession {
+                profile: "hpx500".into(),
+            },
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut rs,
+        )
+        .await;
+        let level_before = engine.ota_tx_level();
+
+        // Tuning the anti-oscillation gates must not touch the level or the session.
+        apply_command_to_engine(
+            &ControlCommand::OtaSetHysteresis {
+                min_backlog: Some(256),
+                upgrade_hold_frames: Some(4),
+            },
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut rs,
+        )
+        .await;
+        assert!(engine.ota_active());
+        assert_eq!(engine.ota_tx_level(), level_before);
     }
 
     #[tokio::test]

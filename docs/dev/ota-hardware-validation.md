@@ -12,28 +12,31 @@ single-clock and hardware-free.
 
 ## What is already in place (no hardware needed)
 
-- Engine: `start_ota_session` / `respond_arq_ota` / `transmit_arq_ota` /
-  `apply_ota_ack`, the lockstep candidate fallback, and the M2M4 RX SNR estimator.
+- Engine: `start_ota_session` / `respond_arq_ota` / `poll_ota_rx` /
+  `transmit_arq_ota` / `apply_ota_ack`, the lockstep candidate fallback, and the
+  M2M4 RX SNR estimator.
 - Daemon: starts an OTA session from `[modem] ota_enabled` and applies
-  bounds/lock/A2/A3 from config; emits `OtaStatus` ~1 Hz.
-- Control: `openpulse daemon ota-start|ota-stop|ota-bounds|ota-lock|ota-unlock|ota-status`;
+  bounds/lock/A2/A3 from config; emits `OtaStatus` ~1 Hz. **The RX tick now routes
+  to OTA when a session is active** — see below.
+- Control: `openpulse daemon ota-start|ota-stop|ota-bounds|ota-lock|ota-unlock|ota-hysteresis|ota-status`;
   panel toolbar OTA line + Lock/Unlock (PR #497).
 
-## Prerequisite bring-up step (one code change, validate with hardware in the loop)
+## RX→OTA routing (now wired — validate with hardware in the loop)
 
-The daemon's RX tick currently calls `engine.receive(mode)` (passive listen). For
-the daemon to *drive* OTA on a real link, the RX path must route to
-`respond_arq_ota` (which decodes with the candidate fallback **and transmits an
-FSK4 ACK** — i.e. it keys PTT). This was deliberately deferred from the daemon
-wiring PR because the ACK transmit is half-duplex and needs a peer + PTT timing to
-validate.
+The daemon's RX tick routes to OTA automatically: when `engine.ota_active()`, it
+calls `engine.poll_ota_rx(session_id, None)` instead of `engine.receive(...)`.
+`poll_ota_rx` captures one window, and **only if the window carries energy** (an
+idle squelch gate so the daemon never keys PTT to ACK silence) it decodes with the
+candidate fallback and returns the decoded payload plus the ACK frame to send
+**without transmitting it**. The daemon then asserts PTT via the configured
+`PttController`, transmits the ACK with `transmit_ack_with_short_fec`, and releases
+PTT — so a half-duplex radio receives with PTT down and only keys to answer.
 
-Bring-up: in `crates/openpulse-daemon/src/main.rs`, in the `rx_ticker` branch, when
-`engine.ota_active()`, call `engine.respond_arq_ota(session_id, None)` instead of
-`engine.receive(...)`, asserting/releasing PTT around it via the configured
-`PttController`. On the data-sending station, drive `engine.transmit_arq_ota(...)`
-from the message/transmit path. Do this with the two stations connected so the PTT
-keying and turnaround can be observed and tuned (CSMA, ACK timeout).
+What still needs hardware/peer validation (not code): the **turnaround timing** —
+PTT key-up delay, ACK timeout, and CSMA against a real peer. On the data-sending
+station, drive `engine.transmit_arq_ota(...)` from the message/transmit path and
+observe the keying with both stations connected. The session id stamped into the
+ACK is the station callsign (`[station] callsign`), falling back to `"ota"`.
 
 ## Station setup
 

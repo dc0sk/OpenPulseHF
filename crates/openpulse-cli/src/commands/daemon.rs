@@ -98,6 +98,16 @@ pub fn run(addr: &str, cmd: DaemonCommands) -> Result<i32> {
         ),
         DaemonCommands::OtaLock { level } => simple(addr, ControlCommand::OtaLockLevel { level }),
         DaemonCommands::OtaUnlock => simple(addr, ControlCommand::OtaUnlock),
+        DaemonCommands::OtaHysteresis {
+            min_backlog,
+            upgrade_hold_frames,
+        } => simple(
+            addr,
+            ControlCommand::OtaSetHysteresis {
+                min_backlog,
+                upgrade_hold_frames,
+            },
+        ),
         DaemonCommands::OtaStatus => ota_status(addr),
     }
 }
