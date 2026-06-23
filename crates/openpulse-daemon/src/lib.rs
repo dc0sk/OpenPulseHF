@@ -15,6 +15,10 @@ pub mod protocol;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ws;
 
+/// Daemon run loop (extracted from the `openpulse-server` binary) — native only.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod server;
+
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
