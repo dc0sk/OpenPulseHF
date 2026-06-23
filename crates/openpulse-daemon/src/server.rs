@@ -52,6 +52,11 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     };
 
     let mut engine = ModemEngine::new(modem_backend);
+    // Pin all audio I/O to a named device when configured (e.g. an snd-aloop PCM
+    // for the real-audio twin-station rig). Empty = the backend default device.
+    if !cfg.audio.device.is_empty() {
+        engine.set_default_device(Some(cfg.audio.device.clone()));
+    }
 
     // Optional GPU acceleration: with `--features gpu` and a compatible adapter, the GPU-capable
     // plugins share one GpuContext; otherwise (or when no adapter is found) they use the CPU path.
