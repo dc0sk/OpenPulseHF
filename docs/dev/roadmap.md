@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/roadmap.md
 status: living
-last_updated: 2026-05-17
+last_updated: 2026-06-23
 ---
 
 # Roadmap
@@ -761,6 +761,63 @@ Phase 6.3 (mesh daemon)
 
 ---
 
+## Phase 10 — Receiver-led OTA adaptation and twin-station validation (2026-06)
+
+Over-the-air adaptive rate-stepping wired end to end through the daemon, plus a
+full-stack, hardware-free validation rig and its real-radio scenario. This closes
+the long-deferred "adaptive rate-stepping over the air (RX lockstep)" item.
+
+### 10.1 — Receiver-led OTA rate-stepping ✅ Done
+- `openpulse-core::ota_rate::OtaRateController` — per-direction lockstep: the data
+  receiver leads, shipping an **absolute** `recommended_level` in the ACK; the
+  sender follows. Lockstep invariant: the receiver advances at most one mapped
+  step above the highest level it actually decoded, so a lost ACK never desyncs
+  (PRs #489, #490).
+- `AckFrame.recommended_level` packed into free bits; `SpeedLevel::as_u8/from_u8/name/from_name`.
+- Engine: `start_ota_session`/`respond_arq_ota`/`apply_ota_ack`/`transmit_arq_ota`;
+  AFC-isolated 2-mode candidate fallback; MODCOD profile `hpx_modcod` with per-level FEC.
+- Operator controls (#492): level bounds, lock/unlock, A2 backlog gate, A3 re-upgrade hold.
+- M2M4 RX SNR estimator (#494) + silence VAD gating (#499) replacing the weak LLR proxy.
+
+### 10.2 — Daemon OTA wiring ✅ Done
+- Config `[modem] ota_*`; control protocol `StartOtaSession`/`StopOtaSession`/
+  `OtaSetLevelBounds`/`OtaLockLevel`/`OtaUnlock`/`OtaSetHysteresis` + `OtaStatus`
+  events; CLI `openpulse daemon ota-*`; panel toolbar OTA line + lock (#495–#500, #497).
+- RX tick routes to `poll_ota_rx` (idle-gated, PTT-sequenced ACK) when a session
+  is active; `SendMessage` drives `transmit_arq_ota_within` with the real-radio
+  **ISS PTT turnaround** (key TX → release → listen for ACK) so the ladder steps
+  under traffic (#501, #512, #513).
+
+### 10.3 — Twin-station validation rig ✅ Done
+- `server::run` extracted from the binary with an injectable audio backend (#507).
+- `openpulse_daemon::twin::spawn_bridged_pair` — two REAL daemons bridged through a
+  channel model in one process; `LoopbackBackend::new_split()` (no self-loop);
+  headless deterministic test + `examples/twin_station.rs` (#508).
+- Real-audio substrate: `[audio] device` + `ModemEngine::set_default_device`;
+  `scripts/setup-twin-loopback.sh` + `run-twin-station-audio.sh` (snd-aloop) (#509).
+- `scripts/twin-traffic.sh` random-data traffic generator (#510).
+- Spectrum-tap fix: the daemon now feeds real audio to the spectrum broadcast, so
+  panels show live spectrum/waterfall instead of an FFT of silence (#511).
+- `apps/openpulse-twinview` — combined both-directions viewer over two daemons (#514).
+
+### 10.4 — Engine AGC (data-aided) ✅ Done
+- 64QAM corner-preamble data-aided AGC for input-level robustness (no-op at unity
+  level); the streaming `dsp::Agc` PSK-ladder rollout remains a follow-on (#503).
+
+### 10.5 — On-air twin-OTA scenario ✅ Done (operator-run)
+- `docs/config/onair-twin-ota.example.sh` + `scripts/run-onair-twin-ota.sh` +
+  runbook `docs/dev/onair-twin-ota.md`: two real daemons over rigctld CAT+PTT and
+  cpal, OTA rate-stepping over the air, observed in `openpulse-twinview` (#515).
+  On-air execution is the operator's step (no radios/cpal in CI).
+
+### 10.6 — Remaining follow-ons (deferred)
+- Dual-station hardware validation of the OTA ladder (rpi51↔rpi52) per the runbooks.
+- Streaming-`Agc` rollout to the PSK ladder with active-span gating.
+- Real-audio frame assembly across receive ticks (the in-process bridge delivers
+  frames atomically; live cpal may split a long frame across ticks).
+
+---
+
 ## Far-future items
 
 Features deliberately deferred beyond Phase 9.  Each item requires significant design
@@ -1338,14 +1395,14 @@ After the fix, BPSK250 + RS FEC + block interleaver correctly decodes through Go
 | SCFDMA52-64QAM-P4 | scfdma-plugin | Dense-pilot research variant; no profile slot |
 | 64QAM500 / 64QAM1000 | 64qam-plugin | No profile home |
 
-### Open daemon-level implementation gaps (2026-05-19)
+### Daemon-level implementation gaps (2026-05-19 — both resolved 2026, PR #321)
 
-Found during implementation audit. Both are graceful (events are still emitted; no crash).
+Found during implementation audit; both have since been wired.
 
-| Gap | Location | Severity |
+| Gap | Location | Status |
 |---|---|---|
-| `accept_qsy` records decision but does not invoke `QsySession` or transmit RF QSY frames | `crates/openpulse-daemon/src/lib.rs:759` | gap |
-| `enable_repeater` sets flag and emits event but does not spawn CrossBandRepeater audio routing thread | `crates/openpulse-daemon/src/lib.rs:820` | gap |
+| `accept_qsy` records decision but does not invoke `QsySession` or transmit RF QSY frames | `crates/openpulse-daemon/src/lib.rs` | ✅ Done (PR #321) — `QsySession` wired into `AcceptQsy`; QSY_REQ/QSY_LIST transmitted via the modem engine |
+| `enable_repeater` sets flag and emits event but does not spawn CrossBandRepeater audio routing thread | `crates/openpulse-daemon/src/lib.rs` | ✅ Done (PR #321) — `EnableRepeater` spawns the repeater thread via `run_full_duplex`; `DisableRepeater` stops and joins it |
 
 ### Features shipped (no longer deferred)
 
