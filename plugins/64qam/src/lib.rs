@@ -161,6 +161,28 @@ mod tests {
     }
 
     #[test]
+    fn qam64_decodes_at_non_unity_input_level() {
+        // Data-aided AGC (corner-preamble reference) must recover the frame across a
+        // wide input-level range — the inter-station level spread / QSB fading an AGC
+        // exists to remove. Without it the absolute PAM-8 demap and the DD carrier
+        // loop's amplitude decisions both fail away from the unity (loopback) scale.
+        let plugin = Qam64Plugin::new();
+        let data = b"64QAM level-robustness via corner-preamble AGC";
+        for mode in ["64QAM500", "64QAM1000", "64QAM2000-RRC"] {
+            let samples = plugin.modulate(data, &cfg(mode)).unwrap();
+            for scale in [0.2f32, 0.5, 2.0, 5.0] {
+                let scaled: Vec<f32> = samples.iter().map(|&s| s * scale).collect();
+                let recovered = plugin.demodulate(&scaled, &cfg(mode)).unwrap();
+                assert_eq!(
+                    &recovered[..data.len()],
+                    data,
+                    "mode {mode} failed to decode at input scale {scale}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn qam64_1000_loopback() {
         let plugin = Qam64Plugin::new();
         let data = b"64QAM 1000 baud test";

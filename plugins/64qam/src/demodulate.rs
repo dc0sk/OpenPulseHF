@@ -159,6 +159,44 @@ fn dd_carrier_track_2pass(i_syms: &[f32], q_syms: &[f32], loop_bw: f32) -> (Vec<
     (i_out, q_out)
 }
 
+/// Data-aided AGC: scale the symbol stream so the corner-preamble power matches
+/// the transmitted constellation scale.
+///
+/// The soft LLR engine (fixed `noise_var`), the absolute PAM-8 thresholds, and the
+/// decision-directed carrier loop (whose error uses decided amplitudes) all assume
+/// the transmitted amplitude scale. But the symbol integrators are proportional to
+/// input amplitude and do not normalise, so inter-station level spread and QSB
+/// fading on HF — exactly the level variation an AGC exists to remove — mis-scale
+/// every symbol and break the dense-grid demap. The known equal-magnitude corner
+/// preamble is the amplitude reference. At a matched (loopback) level the gain is
+/// ≈ 1, so this is a no-op there and cannot regress the existing loopback paths.
+fn normalize_to_constellation(i_syms: &[f32], q_syms: &[f32]) -> (Vec<f32>, Vec<f32>) {
+    let expected = preamble_symbols();
+    let n = expected.len().min(i_syms.len()).min(q_syms.len());
+    let gain = if n == 0 {
+        1.0
+    } else {
+        let ref_pow: f32 = expected[..n]
+            .iter()
+            .map(|(i, q)| i * i + q * q)
+            .sum::<f32>()
+            / n as f32;
+        let recv_pow: f32 = (0..n)
+            .map(|k| i_syms[k] * i_syms[k] + q_syms[k] * q_syms[k])
+            .sum::<f32>()
+            / n as f32;
+        if recv_pow > 1e-12 && ref_pow > 0.0 {
+            (ref_pow / recv_pow).sqrt()
+        } else {
+            1.0
+        }
+    };
+    (
+        i_syms.iter().map(|&x| x * gain).collect(),
+        q_syms.iter().map(|&x| x * gain).collect(),
+    )
+}
+
 // ── IQ demodulation (rectangular integration path) ───────────────────────────
 //
 // Deliberately rectangular, NOT the half-Hann window used by the PSK plugins:
@@ -454,6 +492,9 @@ pub fn qam64_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Ve
         demodulate_iq(samples, n, fc, fs, offset)
     };
     let (i_syms, q_syms) = carrier_phase_correct(&i_syms, &q_syms, config.afc_correction_hz);
+    // Data-aided AGC: normalise the symbol level to the constellation scale before
+    // the amplitude-sensitive DD carrier loop and demap (no-op at a matched level).
+    let (i_syms, q_syms) = normalize_to_constellation(&i_syms, &q_syms);
     // Track residual carrier frequency drift across the frame (hardware crystal
     // offset); static phase correction alone cannot follow it on the dense grid.
     let (i_syms, q_syms) = dd_carrier_track_2pass(&i_syms, &q_syms, 0.01);
@@ -497,6 +538,9 @@ pub fn qam64_demodulate_soft(
         demodulate_iq(samples, n, fc, fs, offset)
     };
     let (i_syms, q_syms) = carrier_phase_correct(&i_syms, &q_syms, config.afc_correction_hz);
+    // Data-aided AGC: normalise the symbol level to the constellation scale before
+    // the amplitude-sensitive DD carrier loop and demap (no-op at a matched level).
+    let (i_syms, q_syms) = normalize_to_constellation(&i_syms, &q_syms);
     // Track residual carrier frequency drift across the frame (hardware crystal
     // offset); static phase correction alone cannot follow it on the dense grid.
     let (i_syms, q_syms) = dd_carrier_track_2pass(&i_syms, &q_syms, 0.01);
@@ -547,6 +591,9 @@ pub fn qam64_demodulate_soft_gpu(
         demodulate_iq(samples, n, fc, fs, offset)
     };
     let (i_syms, q_syms) = carrier_phase_correct(&i_syms, &q_syms, config.afc_correction_hz);
+    // Data-aided AGC: normalise the symbol level to the constellation scale before
+    // the amplitude-sensitive DD carrier loop and demap (no-op at a matched level).
+    let (i_syms, q_syms) = normalize_to_constellation(&i_syms, &q_syms);
     // Track residual carrier frequency drift across the frame (hardware crystal
     // offset); static phase correction alone cannot follow it on the dense grid.
     let (i_syms, q_syms) = dd_carrier_track_2pass(&i_syms, &q_syms, 0.01);
