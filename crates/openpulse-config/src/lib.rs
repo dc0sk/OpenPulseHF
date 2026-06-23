@@ -136,6 +136,10 @@ pub struct ModemConfig {
     pub ota_min_backlog: usize,
     /// A3 gate: suppress this many upgrades after a downgrade (0 = off).
     pub ota_upgrade_hold_frames: u32,
+    /// Aggressiveness preset (`conservative`/`balanced`/`aggressive`) that sets the
+    /// A2/A3 gates together; empty = use the individual `ota_min_backlog` /
+    /// `ota_upgrade_hold_frames` values above. The preset, when set, takes precedence.
+    pub ota_aggressiveness: String,
 }
 
 /// Per-rig CAT settings (used in `[radio.rig_a]` / `[radio.rig_b]` sections).
@@ -287,6 +291,7 @@ impl Default for ModemConfig {
             ota_lock_level: String::new(),
             ota_min_backlog: 0,
             ota_upgrade_hold_frames: 0,
+            ota_aggressiveness: String::new(),
         }
     }
 }
@@ -620,6 +625,10 @@ ota_lock_level = ""
 ota_min_backlog = 0
 # A3 gate: suppress this many upgrade attempts after a downgrade (0 = off).
 ota_upgrade_hold_frames = 0
+# Aggressiveness preset: conservative | balanced | aggressive. Sets the A2/A3
+# gates together (one knob instead of two). Empty = use the two values above.
+# Takes precedence over ota_min_backlog / ota_upgrade_hold_frames when set.
+ota_aggressiveness = ""
 
 [radio]
 # CAT (frequency/mode) backend: "rigctld" (default) or "none".
@@ -826,6 +835,7 @@ mod tests {
         assert_eq!(cfg.ardop.cmd_port, 8515);
         assert_eq!(cfg.modem.ptt_backend, "none");
         assert_eq!(cfg.modem.profile, "hpx_hf");
+        assert_eq!(cfg.modem.ota_aggressiveness, ""); // empty = use individual A2/A3 knobs
     }
 
     #[test]

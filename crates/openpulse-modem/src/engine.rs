@@ -23,6 +23,7 @@ use openpulse_core::ldpc::{IterativeDecoder, LdpcCodec};
 use openpulse_core::ota_rate::{OtaRateController, RxOutcome};
 use openpulse_core::plugin::{ModulationConfig, PluginRegistry};
 use openpulse_core::profile::SessionProfile;
+use openpulse_core::rate::OtaAggressiveness;
 use openpulse_core::rate::RateEvent;
 use openpulse_core::rate::SpeedLevel;
 use openpulse_core::signed_envelope::SignedEnvelope;
@@ -523,6 +524,15 @@ impl ModemEngine {
     /// downgrade. `0` (default) disables the hold.
     pub fn set_upgrade_hold_frames(&mut self, frames: u32) {
         self.rate_policy.set_upgrade_hold_frames(frames);
+    }
+
+    /// Apply an [`OtaAggressiveness`] preset: sets the A2 backlog gate and the A3
+    /// re-upgrade hold together so an operator picks one behaviour instead of
+    /// tuning both knobs.
+    pub fn set_ota_aggressiveness(&mut self, preset: OtaAggressiveness) {
+        let (min_backlog, hold) = preset.knobs();
+        self.rate_policy.set_min_backlog_for_upgrade(min_backlog);
+        self.rate_policy.set_upgrade_hold_frames(hold);
     }
 
     /// Apply a received ACK type to the TX-direction rate adapter.
