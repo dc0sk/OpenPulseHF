@@ -132,6 +132,7 @@ pub struct PanelApp {
     // Toolbar state.
     selected_mode: String,
     repeater_enabled: bool,
+    cessb_enabled: bool,
     tx_atten_db: f32,
 
     // RF peer connect.
@@ -176,6 +177,9 @@ impl PanelApp {
             transport_kind: TransportKind::WebSocket,
             selected_mode: "BPSK250".into(),
             repeater_enabled: false,
+            // Default-on mirrors the daemon's `[modem] cessb_enabled = true`; the
+            // master switch is a no-op for non-multicarrier modes regardless.
+            cessb_enabled: true,
             tx_atten_db: 0.0,
             peer_callsign_input: String::new(),
             config_open: false,
@@ -454,6 +458,26 @@ impl eframe::App for PanelApp {
                     } else {
                         self.send(ControlCommand::DisableRepeater);
                     }
+                }
+
+                // ── CE-SSB envelope conditioning (multicarrier modes only) ────
+                let cessb_label = if self.cessb_enabled {
+                    "CE-SSB: ON"
+                } else {
+                    "CE-SSB: OFF"
+                };
+                if ui
+                    .button(cessb_label)
+                    .on_hover_text(
+                        "Controlled-Envelope SSB raises average TX power at fixed PEP on \
+                         high-PAPR multicarrier modes (OFDM/SC-FDMA). No-op for single-carrier modes.",
+                    )
+                    .clicked()
+                {
+                    self.cessb_enabled = !self.cessb_enabled;
+                    self.send(ControlCommand::SetCessb {
+                        enabled: self.cessb_enabled,
+                    });
                 }
 
                 ui.separator();
