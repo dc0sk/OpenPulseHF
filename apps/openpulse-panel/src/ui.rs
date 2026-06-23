@@ -473,7 +473,7 @@ fn fmt_time_utc(secs: u64) -> String {
     format!("{h:02}:{m:02}Z")
 }
 
-/// Floating messages window: inbox list on the left, reader + compose on the right.
+/// Messages pane: inbox list + reader on the left, compose on the right.
 pub fn draw_messages_window(ui: &mut Ui, st: &PanelState, cs: &mut ComposeState<'_>) {
     ui.columns(2, |cols| {
         // ── Left column: inbox list ───────────────────────────────────────

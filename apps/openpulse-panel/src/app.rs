@@ -109,6 +109,13 @@ fn bandplan_label(mode: &str) -> &'static str {
         .unwrap_or("Unrestricted")
 }
 
+/// Which pane is shown in the bottom tabbed area.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BottomTab {
+    Events,
+    Messages,
+}
+
 pub struct PanelApp {
     /// Shared state read on every repaint.
     shared: Arc<Mutex<PanelState>>,
@@ -143,8 +150,8 @@ pub struct PanelApp {
     config_draft: DaemonConfig,
     config_fetch_pending: bool,
 
-    // Messages window.
-    messages_open: bool,
+    // Bottom tabbed pane: Event Log + Messages.
+    bottom_tab: BottomTab,
     compose_to: String,
     compose_subject: String,
     compose_body: String,
@@ -193,7 +200,7 @@ impl PanelApp {
                 allow_tuner_on_high_swr: false,
             },
             config_fetch_pending: false,
-            messages_open: false,
+            bottom_tab: BottomTab::Events,
             compose_to: String::new(),
             compose_subject: String::new(),
             compose_body: String::new(),
@@ -546,11 +553,15 @@ impl eframe::App for PanelApp {
                 } else {
                     "✉ Messages".into()
                 };
-                if ui.selectable_label(self.messages_open, msg_label).clicked() {
-                    self.messages_open = !self.messages_open;
-                    if self.messages_open {
+                let on_messages = self.bottom_tab == BottomTab::Messages;
+                if ui.selectable_label(on_messages, msg_label).clicked() {
+                    // Toggle the bottom pane between Messages and Events.
+                    self.bottom_tab = if on_messages {
+                        BottomTab::Events
+                    } else {
                         self.send(ControlCommand::ListMessages);
-                    }
+                        BottomTab::Messages
+                    };
                 }
 
                 // ── QSY buttons ───────────────────────────────────────────────
@@ -592,13 +603,85 @@ impl eframe::App for PanelApp {
             });
         }
 
-        // ── Event log (bottom) ───────────────────────────────────────────────
-        egui::TopBottomPanel::bottom("event_log")
+        // ── Bottom tabbed pane: Event Log + Messages ─────────────────────────
+        let mut request_list = false;
+        let mut msg_close = false;
+        let mut get_msg_id: Option<u64> = None;
+        let mut send_msg: Option<(String, String, String)> = None;
+        let mut delete_msg_id: Option<u64> = None;
+
+        egui::TopBottomPanel::bottom("bottom_pane")
+            .resizable(true)
             .min_height(120.0)
+            .default_height(180.0)
             .show(ctx, |ui| {
                 let st = self.shared.lock().unwrap();
-                draw_event_log(ui, &st);
+                let unread = st.inbox.len();
+                let msg_tab_label = if unread > 0 {
+                    format!("✉ Messages ({unread})")
+                } else {
+                    "✉ Messages".to_string()
+                };
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Events, "Event Log");
+                    if ui
+                        .selectable_label(self.bottom_tab == BottomTab::Messages, msg_tab_label)
+                        .clicked()
+                        && self.bottom_tab != BottomTab::Messages
+                    {
+                        self.bottom_tab = BottomTab::Messages;
+                        request_list = true;
+                    }
+                });
+                ui.separator();
+                match self.bottom_tab {
+                    BottomTab::Events => draw_event_log(ui, &st),
+                    BottomTab::Messages => draw_messages_window(
+                        ui,
+                        &st,
+                        &mut ComposeState {
+                            to: &mut self.compose_to,
+                            subject: &mut self.compose_subject,
+                            body: &mut self.compose_body,
+                            close: &mut msg_close,
+                            get_msg_id: &mut get_msg_id,
+                            send_msg: &mut send_msg,
+                            delete_msg_id: &mut delete_msg_id,
+                        },
+                    ),
+                }
             });
+
+        if request_list {
+            self.send(ControlCommand::ListMessages);
+        }
+        if msg_close {
+            self.bottom_tab = BottomTab::Events;
+        }
+        if let Some(id) = get_msg_id {
+            self.send(ControlCommand::GetMessage { id });
+        }
+        if let Some((to, subject, body)) = send_msg {
+            self.send(ControlCommand::SendMessage { to, subject, body });
+            self.compose_to.clear();
+            self.compose_subject.clear();
+            self.compose_body.clear();
+        }
+        if let Some(id) = delete_msg_id {
+            if self.send(ControlCommand::DeleteMessage { id }) {
+                let mut st = self.shared.lock().unwrap();
+                st.inbox.retain(|m| m.id != id);
+                if st.open_message_id == Some(id) {
+                    st.open_message_id = None;
+                    st.open_message_body = None;
+                }
+            } else {
+                self.shared
+                    .lock()
+                    .unwrap()
+                    .push_log("delete failed: channel full or disconnected".into());
+            }
+        }
 
         // Rebuild waterfall texture only when new spectrum data has arrived.
         {
@@ -640,62 +723,6 @@ impl eframe::App for PanelApp {
                 self.tx_atten_db = cfg.tx_attenuation_db;
                 self.config_draft = cfg;
                 self.config_fetch_pending = false;
-            }
-        }
-
-        // ── Messages window ──────────────────────────────────────────────────
-        if self.messages_open {
-            let mut close = false;
-            let mut get_msg_id: Option<u64> = None;
-            let mut send_msg: Option<(String, String, String)> = None;
-            let mut delete_msg_id: Option<u64> = None;
-
-            egui::Window::new("Messages")
-                .resizable(true)
-                .collapsible(false)
-                .default_size([540.0, 400.0])
-                .show(ctx, |ui| {
-                    draw_messages_window(
-                        ui,
-                        &self.shared.lock().unwrap(),
-                        &mut ComposeState {
-                            to: &mut self.compose_to,
-                            subject: &mut self.compose_subject,
-                            body: &mut self.compose_body,
-                            close: &mut close,
-                            get_msg_id: &mut get_msg_id,
-                            send_msg: &mut send_msg,
-                            delete_msg_id: &mut delete_msg_id,
-                        },
-                    );
-                });
-
-            if close {
-                self.messages_open = false;
-            }
-            if let Some(id) = get_msg_id {
-                self.send(ControlCommand::GetMessage { id });
-            }
-            if let Some((to, subject, body)) = send_msg {
-                self.send(ControlCommand::SendMessage { to, subject, body });
-                self.compose_to.clear();
-                self.compose_subject.clear();
-                self.compose_body.clear();
-            }
-            if let Some(id) = delete_msg_id {
-                if self.send(ControlCommand::DeleteMessage { id }) {
-                    let mut st = self.shared.lock().unwrap();
-                    st.inbox.retain(|m| m.id != id);
-                    if st.open_message_id == Some(id) {
-                        st.open_message_id = None;
-                        st.open_message_body = None;
-                    }
-                } else {
-                    self.shared
-                        .lock()
-                        .unwrap()
-                        .push_log("delete failed: channel full or disconnected".into());
-                }
             }
         }
 
