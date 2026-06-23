@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/openpulse-manual.md
 status: living
-last_updated: 2026-06-19
+last_updated: 2026-06-23
 ---
 
 # OpenPulseHF Complete Manual
@@ -31,6 +31,7 @@ Safety and compliance note:
 10. [Chapter 10: Glossary and References](#chapter-10-glossary-and-references)
 11. [Chapter 11: Compliance Notes](#chapter-11-compliance-notes)
 12. [Chapter 12: Configuration File Overview](#chapter-12-configuration-file-overview)
+13. [Chapter 13: Binary and Test-Rig Reference](#chapter-13-binary-and-test-rig-reference)
 
 ---
 
@@ -1024,6 +1025,285 @@ Purpose:
 
 Example file:
 - [docs/config/openpulse-panel.Trunk.toml](config/openpulse-panel.Trunk.toml)
+
+---
+
+## Chapter 13: Binary and Test-Rig Reference
+
+A consolidated, example-first reference for every shipped binary and every test
+rig. Examples use real flags, subcommands, and environment variables only.
+
+### 13.0 Build conventions
+
+- **Audio feature flags differ per crate.** The CLI defaults to hardware audio;
+  every other audio binary is loopback-only unless its feature is enabled:
+  - `openpulse` (CLI): `cpal-backend` is **on by default** → plain
+    `cargo build -p openpulse-cli` has hardware audio; add `--no-default-features`
+    for loopback/CI. Optional `serial` (RTS/DTR PTT) and `generic-serial` (scripted CAT).
+  - `openpulse-tui`: feature `cpal-backend` (off by default).
+  - `openpulse-tnc`, `openpulse-kisstnc`, `openpulse-mesh`, `openpulse-server`,
+    `openpulse-testbench`: feature `cpal` (off by default; `openpulse-server` also has `gpu` on by default).
+  - `openpulse-gateway`, `openpulse-dict-trainer`, `pki-tooling`: no audio feature.
+  - `openpulse-linksim`: features `gui` and `serve` (both opt-in; `gpu` on by default).
+- **CI / hardware-free** builds and tests always pass `--no-default-features`.
+- Released binaries land in `target/release/`. The examples below assume the
+  binary is on `PATH` (or prefix with `./target/release/`).
+
+### 13.1 Binary reference
+
+| Binary | Crate | Role | Hardware-audio build |
+|---|---|---|---|
+| `openpulse` | openpulse-cli | CLI: transmit/receive, ARQ, adaptive, diagnostics, daemon control | `cargo build --release -p openpulse-cli` (default) |
+| `openpulse-tui` | openpulse-tui | Live terminal dashboard (HPX/AFC/rate/DCD) | `--features cpal-backend` |
+| `openpulse-server` | openpulse-daemon | Background daemon; NDJSON control on TCP 9000 / WS 9001 | `--features cpal` |
+| `openpulse-tnc` | openpulse-ardop | ARDOP-compatible TCP TNC (Pat/Winlink) | `--features cpal` |
+| `openpulse-kisstnc` | openpulse-kiss | KISS/AX.25 TCP TNC | `--features cpal` |
+| `openpulse-gateway` | openpulse-gateway | Direct TCP Winlink CMS gateway (no radio) | n/a |
+| `openpulse-mesh` | openpulse-mesh | Mesh broadcast/relay daemon | `--features cpal` |
+| `openpulse-panel` | openpulse-panel | egui operator panel (connects to the daemon) | n/a (control client) |
+| `openpulse-testbench` | openpulse-testbench | egui 4-column signal-path scope | `--features cpal` (live capture) |
+| `openpulse-testmatrix` | openpulse-testmatrix | Mode × channel test-matrix runner (no audio) | n/a |
+| `openpulse-linksim` | openpulse-linksim | Two-station ARQ link simulator (CLI) | n/a |
+| `openpulse-linksim-gui` | openpulse-linksim | Live link visualiser | `--features gui` |
+| `openpulse-dict-trainer` | openpulse-dict-trainer | Offline zstd dictionary trainer | n/a |
+| `pki-tooling` | pki-tooling | PKI trust-bundle signing HTTP service | n/a |
+
+#### `openpulse` (CLI)
+
+Global flags: `--backend <default|loopback|cpal>`, `--log <level>`, `--ptt <none|rts|dtr|vox|rigctld>`, `--rig <addr|port>`, `--rig-file <toml>`, `--max-power <watts>`, `--pki-url <url>`.
+
+```bash
+# Local loopback transmit / receive (no hardware)
+openpulse --backend loopback transmit "Hello World" --mode BPSK250 --fec rs
+openpulse --backend loopback receive --mode BPSK250 --listen-ms 5000 --fec rs
+
+# Inventory
+openpulse modes        # list modulation modes
+openpulse devices      # list audio devices
+
+# Mode recommendation for a measured SNR (no hardware)
+openpulse mode-advisor --snr 12.0 --profile hpx_hf
+
+# Adaptive rate-control over a simulated channel (no hardware)
+openpulse adaptive --profile hpx_hf --channel awgn --snr 6.0 --frames 8 --json
+
+# Reliable two-way ARQ (FSK4 ACK + retransmit)
+openpulse arq listen --mode BPSK250 --frames 5 --profile hpx_hf   # station 2
+openpulse arq send --payload "Test message" --mode BPSK250 --retries 3   # station 1
+
+# Stream engine events as NDJSON; benchmark regression gate
+openpulse monitor --mode BPSK250 | jq .
+openpulse --backend loopback --log error benchmark run
+
+# On-device calibration (audio level, PTT latency, AFC)
+openpulse --ptt rts --rig /dev/ttyUSB0 calibrate ptt --output ptt.json
+
+# Identity / trust / config
+openpulse trust list
+openpulse config init > ~/.config/openpulse/config.toml
+
+# Control a running openpulse-server daemon (OTA adaptive rate-stepping)
+openpulse daemon --addr 127.0.0.1:9000 ota-start --profile hpx_modcod
+openpulse daemon ota-bounds --min SL3 --max SL10
+openpulse daemon ota-hysteresis --min-backlog 128 --upgrade-hold-frames 3
+openpulse daemon ota-lock --level SL6
+openpulse daemon ota-status   # JSON snapshot
+```
+
+#### `openpulse-tui`
+
+```bash
+# Loopback dashboard (default backend); requires a real callsign in config.toml
+openpulse-tui --mode BPSK250
+# Hardware audio
+openpulse-tui --backend cpal --mode QPSK500 --log info
+```
+Keys: `q`/Ctrl+C quit · `p` pause · ↑/↓ scroll · `Q` toggle QSY · `b` cycle bandplan · `t` toggle tuner-on-high-SWR.
+
+#### `openpulse-server` (daemon)
+
+Config-file driven (`~/.config/openpulse/config.toml`); no CLI flags. Reads
+`[daemon]` (TCP 9000, WS 9001, `receive_tick_ms` 50), `[modem]` (incl. `ota_*`),
+`[audio]`, `[radio]` (incl. `cat_backend`), `[repeater]`, `[qsy]`, `[relay]`, `[trust]`.
+
+```bash
+# Production (real audio + GPU auto-detect)
+cargo build --release -p openpulse-daemon --features cpal
+openpulse-server          # serves control on 127.0.0.1:9000 (TCP) and :9001 (WS)
+# Pair with the panel or the CLI daemon subcommands above.
+```
+
+#### `openpulse-tnc` (ARDOP) and `openpulse-kisstnc` (KISS)
+
+CLI flags override `config.toml`; `RUST_LOG` sets verbosity.
+
+```bash
+# ARDOP TNC for Pat (cmd 8515 / data 8516)
+openpulse-tnc --bind 0.0.0.0 --cmd-port 8515 --data-port 8516 --mode QPSK500 --backend cpal
+
+# KISS/AX.25 TNC (TCP 8100)
+openpulse-kisstnc --bind 127.0.0.1 --port 8100 --mode BPSK500 --backend cpal
+```
+
+#### `openpulse-gateway` (Winlink CMS, no radio)
+
+```bash
+openpulse-gateway --host cms.winlink.org --port 8772 --callsign N0CALL \
+  send --to K5ABC --subject "Test" --message "Hello over OpenPulse"
+# Omit --message to read the body from stdin.
+```
+
+#### `openpulse-mesh`
+
+```bash
+# Requires [mesh] enabled = true in config.toml
+openpulse-mesh --mode BPSK500 --max-hops 5 --backend cpal
+```
+
+#### `openpulse-panel`
+
+```bash
+cargo build --release -p openpulse-panel
+openpulse-panel    # then click Connect (default 127.0.0.1:9000); no CLI args
+```
+
+#### `openpulse-testbench`
+
+```bash
+cargo build --release -p openpulse-testbench            # synthetic source
+cargo build --release -p openpulse-testbench --features cpal   # + live audio capture
+openpulse-testbench
+```
+
+#### `openpulse-testmatrix`
+
+```bash
+cargo build --release -p openpulse-testmatrix
+openpulse-testmatrix                              # quick tier → docs/test-reports/
+openpulse-testmatrix --full --output ./reports    # all channels × payloads
+openpulse-testmatrix --bench-only --bench-frames 100 --bench-payload 200
+```
+
+#### `openpulse-linksim` and `openpulse-linksim-gui`
+
+```bash
+# Single run: QPSK ladder on AWGN 15 dB, RS FEC, 128-byte payloads
+openpulse-linksim --profile hpx_hf --channel awgn --fec rs --payload 128 --frames 40 --snr 15.0
+# SNR sweep with a table, then JSON
+openpulse-linksim --channel watterson-moderate --sweep "10.0:20.0:1.0"
+openpulse-linksim --snr 20.0 --json
+# Feed an unmodified panel from the simulated link (build --features serve)
+openpulse-linksim --serve 127.0.0.1:9000 --serve-fps 20 --snr 12.0
+# Live GUI (build --features gui)
+openpulse-linksim-gui
+```
+
+#### `openpulse-dict-trainer`
+
+```bash
+openpulse-dict-trainer                                   # built-in corpus → zstd-hpx-dict.bin
+openpulse-dict-trainer --corpus-dir ./messages --output ./my-dict.bin --dict-size 8192
+```
+
+#### `pki-tooling` (HTTP service)
+
+```bash
+export DATABASE_URL="postgresql://pki:secret@localhost/pki_db"
+export PKI_API_KEY="my-api-key"
+export PKI_SIGNING_KEY="<base64 32-byte ed25519 seed>"   # or PKI_ALLOW_EPHEMERAL_KEY=true (dev only)
+export PKI_BIND_ADDR="127.0.0.1:8080"
+pki-tooling
+```
+
+### 13.2 Test rigs
+
+Listed loosest-to-tightest coupling to hardware. The first two need no radio; all
+write JSON reports under `docs/dev/test-reports/`. See also
+[docs/dev/virtual-loopback.md](dev/virtual-loopback.md) and
+[docs/dev/ota-hardware-validation.md](dev/ota-hardware-validation.md).
+
+#### A. In-process channel-sim harness (no audio hardware)
+
+The hardware-free rig: two `ModemEngine`s bridged through an `openpulse_channel`
+model. `ChannelSimHarness::route()` is one-way; `channel_sim::bridge_through(src,
+dst, channel)` is the plugin-agnostic primitive for bidirectional harnesses (a
+forward and a reverse channel). Used by the integration tests
+`ota_channel_adaptation.rs` (real OTA rate-stepping under AWGN/Watterson),
+`channel_loopback*.rs`, and `sro_confirmation.rs`.
+
+```bash
+cargo test -p openpulse-modem --no-default-features --test ota_channel_adaptation
+cargo test -p openpulse-modem --no-default-features --test channel_loopback_multimode
+```
+
+#### B. Test matrix (no audio hardware)
+
+```bash
+scripts/run-test-matrix.sh           # quick tier (~30 s)
+scripts/run-test-matrix-full.sh      # full tier (all channels × payloads)
+# Reports archived under docs/dev/test-reports/archive/<timestamp>-<git-sha>/
+```
+
+#### C. Virtual single-clock loopback (snd-aloop, one host, no radio)
+
+Real cpal+ALSA+resampler path with one shared clock — isolates DSP/code from
+analog and dual-clock effects. The default transport before any hardware run.
+
+```bash
+scripts/setup-virtual-loopback.sh        # loads snd-aloop; writes aloop_tx/aloop_rx to ~/.asoundrc (sudo)
+cargo build --release -p openpulse-cli   # cpal default
+MODES="BPSK250 QPSK500" scripts/run-loopback-virtual.sh
+```
+Key vars: `MODES`, `LISTEN_MS` (120000), `PAYLOAD_BYTES` (32), `RETRIES` (3),
+`PRE_WAIT`/`POST_WAIT` (AFC settle margins), `OUTPUT_DIR`.
+
+#### D. Dual-card hardware loopback (two USB cards, one host)
+
+Two independent soundcard clocks + an analog cable — reproduces the dual-clock
+sample-rate-offset that breaks wideband/dense-QAM modes, without a second machine.
+
+```bash
+scripts/setup-dualcard-loopback.sh       # resolves both USB cards; disables AGC; sets capture gain
+cargo build --release -p openpulse-cli
+scripts/run-loopback-dualcard.sh --quick
+FEC=soft-concatenated scripts/run-loopback-dualcard.sh --single-case "SCFDMA26-16QAM|64"
+```
+**Gotcha:** `CAPTURE_GAIN=16` (not max). At 16 the modem TX peaks ~0.79 FS
+unclipped; higher clips line-level input. Other vars: `TX_BYPATH`/`RX_BYPATH`,
+`TIER` (quick/full), `FEC`, `IRS_LISTEN_MS`.
+
+#### E. RPi station-pair loopback (two Pis over SSH + cable)
+
+Two-machine, two-clock, analog-cable scenario — the pre-on-air regression gate.
+
+```bash
+scripts/deploy-rpi-pair.sh               # cross-compiles aarch64, rsyncs binaries to both stations
+scripts/run-loopback-rpi51-rpi52.sh --quick
+scripts/run-loopback-rpi51-rpi52.sh --full
+```
+Key vars: `ISS_SSH`/`IRS_SSH` (TX/RX stations), `ISS_DEVICE`/`IRS_DEVICE`
+(`plughw:CARD=Device,DEV=0`), `IRS_STARTUP_WAIT`, `TX_TIMEOUT`, `FEC`, `TIER`.
+
+#### F. On-air rigs (real RF)
+
+Profiles live in `docs/config/onair-*.example.sh`; callsigns must not be `N0CALL`.
+The FT-991A must use **CAT PTT** (`B_PTT_TYPE="CAT"`), not RTS.
+
+```bash
+# IC-9700 (TX) ↔ FT-991A (RX), 2 m, dual-SSH
+source docs/config/onair-ic9700-ft991a.example.sh
+scripts/run-onair-ic9700-ft991a.sh supervise --quick --label 2m-test
+
+# Lab599 TX500 (Pi) ↔ KX3 (local), HF
+source docs/config/onair-tx500-kx3-local.example.sh
+scripts/run-onair-tx500-kx3.sh supervise --full
+```
+Supporting scripts: `onair-preflight.sh` (env/binary/callsign checks),
+`run-onair-validation-flow.sh` (preflight → matrix → bundle → report),
+`onair-generate-report.sh` (Phase 5.5-reg markdown), `onair-bundle-evidence.sh`
+(timestamped evidence dir with `metadata.json`, SHA-256, git SHA). Key on-air
+vars: `A_SSH`/`B_SSH`, `CALLSIGN_A`/`CALLSIGN_B`, `*_HAMLIB_MODEL`, `*_CAT_PORT`,
+`*_PTT_TYPE`, `TEST_FREQ_HZ` (band-enforced), `A_RFPOWER`/`B_RFPOWER` (default 0.05).
 
 ---
 
