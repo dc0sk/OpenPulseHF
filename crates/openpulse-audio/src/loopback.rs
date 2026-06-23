@@ -21,11 +21,19 @@ type IqBuf = Arc<Mutex<Vec<(f32, f32)>>>;
 
 /// A virtual audio backend that routes output samples directly to input.
 ///
-/// Both the input and output streams share the same sample buffer.  Samples
-/// written via [`LoopbackOutputStream::write`] can immediately be read back
-/// via [`LoopbackInputStream::read`].
+/// In the default (self-loop) mode the input and output streams share one sample
+/// buffer, so samples written via [`LoopbackOutputStream::write`] can immediately
+/// be read back via [`LoopbackInputStream::read`]. In split mode
+/// ([`new_split`](Self::new_split)) the TX (output) and RX (input) buffers are
+/// distinct, so a backend does **not** receive its own transmissions — required
+/// when one engine both transmits and receives and an external bridge moves TX→RX
+/// (the twin-station rig).
 pub struct LoopbackBackend {
-    buf: Buf,
+    /// Output/TX buffer: written by `write`, drained by [`drain_samples`](Self::drain_samples).
+    out_buf: Buf,
+    /// Input/RX buffer: read by `read`, filled by [`fill_samples`](Self::fill_samples).
+    /// In self-loop mode this is the same `Arc` as `out_buf`.
+    in_buf: Buf,
     frame_queue: FrameQueue,
     iq_buf: IqBuf,
 }
@@ -37,42 +45,62 @@ impl Default for LoopbackBackend {
 }
 
 impl LoopbackBackend {
-    /// Create a new loopback backend with an empty buffer.
+    /// Create a self-looping loopback backend: output is read straight back as input.
     pub fn new() -> Self {
+        let buf: Buf = Arc::new(Mutex::new(VecDeque::new()));
         Self {
-            buf: Arc::new(Mutex::new(VecDeque::new())),
+            out_buf: Arc::clone(&buf),
+            in_buf: buf,
             frame_queue: Arc::new(Mutex::new(VecDeque::new())),
             iq_buf: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
-    /// Create a second [`LoopbackBackend`] that shares the same underlying buffer.
+    /// Create a split loopback backend with **separate** TX and RX buffers.
     ///
-    /// Both instances read from and write to the same buffer — sharing is symmetric.
-    /// Samples written by either instance are immediately readable by either instance,
-    /// enabling two-engine tests without real audio hardware.
+    /// A backend in this mode does not loop its own output back to its input:
+    /// `write` goes to the TX buffer (read out via [`drain_samples`](Self::drain_samples))
+    /// and `read` consumes the RX buffer (supplied via [`fill_samples`](Self::fill_samples)).
+    /// Use when an external bridge moves one station's TX into another's RX, e.g. two
+    /// daemons sharing a simulated channel.
+    pub fn new_split() -> Self {
+        Self {
+            out_buf: Arc::new(Mutex::new(VecDeque::new())),
+            in_buf: Arc::new(Mutex::new(VecDeque::new())),
+            frame_queue: Arc::new(Mutex::new(VecDeque::new())),
+            iq_buf: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Create a second [`LoopbackBackend`] that shares the same underlying buffers.
+    ///
+    /// Both instances read/write the same TX and RX buffers (and frame queue / IQ
+    /// buffer), enabling two-engine tests without real audio hardware. Sharing
+    /// preserves the original's self-loop vs split mode.
     pub fn clone_shared(&self) -> Self {
         Self {
-            buf: Arc::clone(&self.buf),
+            out_buf: Arc::clone(&self.out_buf),
+            in_buf: Arc::clone(&self.in_buf),
             frame_queue: Arc::clone(&self.frame_queue),
             iq_buf: Arc::clone(&self.iq_buf),
         }
     }
 
-    /// Drain all samples currently sitting in the shared buffer.
+    /// Drain all samples currently sitting in the TX (output) buffer.
     ///
-    /// Used by [`ChannelSimHarness`] to intercept TX samples before the RX engine
-    /// reads them, so a channel model can be applied in between.
+    /// Used by [`ChannelSimHarness`] and the twin-station bridge to intercept TX
+    /// samples before the RX engine reads them, so a channel model can be applied.
     pub fn drain_samples(&self) -> Vec<f32> {
-        let mut guard = self.buf.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.out_buf.lock().unwrap_or_else(|e| e.into_inner());
         guard.drain(..).collect()
     }
 
-    /// Inject samples into the shared buffer, making them available to the next `read()`.
+    /// Inject samples into the RX (input) buffer, making them available to the next `read()`.
     ///
-    /// Used by [`ChannelSimHarness`] to deliver channel-processed samples to the RX engine.
+    /// Used by [`ChannelSimHarness`] and the twin-station bridge to deliver
+    /// channel-processed samples to the RX engine.
     pub fn fill_samples(&self, samples: &[f32]) {
-        let mut guard = self.buf.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.in_buf.lock().unwrap_or_else(|e| e.into_inner());
         guard.extend(samples.iter().copied());
     }
 
@@ -115,7 +143,7 @@ impl AudioBackend for LoopbackBackend {
         _config: &AudioConfig,
     ) -> Result<Box<dyn AudioInputStream>, AudioError> {
         Ok(Box::new(LoopbackInputStream {
-            buf: Arc::clone(&self.buf),
+            buf: Arc::clone(&self.in_buf),
             frame_queue: Arc::clone(&self.frame_queue),
         }))
     }
@@ -126,7 +154,7 @@ impl AudioBackend for LoopbackBackend {
         _config: &AudioConfig,
     ) -> Result<Box<dyn AudioOutputStream>, AudioError> {
         Ok(Box::new(LoopbackOutputStream {
-            buf: Arc::clone(&self.buf),
+            buf: Arc::clone(&self.out_buf),
         }))
     }
 
@@ -227,6 +255,23 @@ mod tests {
 
         let samples = inp.read().unwrap();
         assert_eq!(samples, vec![0.1, 0.2, 0.3]);
+    }
+
+    #[test]
+    fn split_mode_does_not_self_loop() {
+        let backend = LoopbackBackend::new_split();
+        let cfg = AudioConfig::default();
+        let mut out = backend.open_output(None, &cfg).unwrap();
+        let mut inp = backend.open_input(None, &cfg).unwrap();
+
+        out.write(&[0.1, 0.2]).unwrap();
+        // No self-loop: the input side stays empty until something fills it.
+        assert!(inp.read().unwrap().is_empty());
+        // The written samples are available on the TX side for a bridge to move.
+        assert_eq!(backend.drain_samples(), vec![0.1, 0.2]);
+        // fill_samples delivers to the RX side only.
+        backend.fill_samples(&[0.5, 0.6]);
+        assert_eq!(inp.read().unwrap(), vec![0.5, 0.6]);
     }
 
     #[test]

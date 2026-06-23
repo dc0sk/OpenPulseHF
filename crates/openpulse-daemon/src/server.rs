@@ -37,10 +37,7 @@ use scfdma_plugin::ScFdmaPlugin;
 /// binary passes the config-selected backend; a harness passes a
 /// [`LoopbackBackend`] whose sample tap it bridges to a second daemon. Returns
 /// `Err` only on a fatal startup misconfiguration.
-pub async fn run(
-    cfg: OpenpulseConfig,
-    modem_backend: Box<dyn AudioBackend>,
-) -> Result<(), String> {
+pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> Result<(), String> {
     let mode = cfg.modem.mode.clone();
     let station_id = (
         cfg.station.callsign.clone(),

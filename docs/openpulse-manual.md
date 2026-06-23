@@ -1236,6 +1236,27 @@ cargo test -p openpulse-modem --no-default-features --test ota_channel_adaptatio
 cargo test -p openpulse-modem --no-default-features --test channel_loopback_multimode
 ```
 
+#### A2. Twin-station rig — two REAL daemons bridged (no audio hardware)
+
+The full-stack counterpart to the engine-level harness: two real `openpulse-server`
+daemons run in one process and are bridged through a channel at the `LoopbackBackend`
+sample tap (forward = A→B, reverse = B→A, each its own model). Both run the **real**
+stack — `RateAdapter`, `HpxReactor`, OTA, QSY — so on-air bugs in those paths
+surface here, unlike `openpulse-linksim` (which reimplements the policy layers).
+`openpulse_daemon::twin::spawn_bridged_pair` wires it; each daemon binds its own
+control port so two real `openpulse-panel`s can attach (one per direction). The
+loopbacks use `LoopbackBackend::new_split()` so a daemon never receives its own TX.
+
+```bash
+# Headless deterministic round-trip across the bridge (CI):
+cargo test -p openpulse-daemon --no-default-features --test twin_daemon_bridge
+
+# Live rig for two-panel visualization (Ctrl+C to stop):
+TWIN_SNR_DB=12 cargo run -p openpulse-daemon --example twin_station
+#   then: openpulse-panel → Connect 127.0.0.1:9000 (station A)
+#         openpulse-panel → Connect 127.0.0.1:9002 (station B)
+```
+
 #### B. Test matrix (no audio hardware)
 
 ```bash
