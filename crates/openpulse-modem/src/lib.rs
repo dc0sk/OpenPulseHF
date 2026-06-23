@@ -14,5 +14,5 @@ pub mod ofdm_sim;
 pub mod pipeline;
 mod rate_policy;
 
-pub use engine::ModemEngine;
+pub use engine::{ModemEngine, OtaRxResult};
 pub use event::EngineEvent;

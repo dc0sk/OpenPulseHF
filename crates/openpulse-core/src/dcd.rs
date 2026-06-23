@@ -67,6 +67,11 @@ impl DcdState {
         self.current_energy
     }
 
+    /// RMS amplitude threshold above which the channel is considered busy.
+    pub fn threshold(&self) -> f32 {
+        self.threshold
+    }
+
     /// Force the DCD into the busy state; useful in tests to inject carrier
     /// presence without going through the audio pipeline.
     pub fn force_busy(&mut self) {

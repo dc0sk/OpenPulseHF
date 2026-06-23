@@ -276,6 +276,14 @@ pub enum ControlCommand {
     OtaLockLevel { level: String },
     /// Release the OTA level lock and resume adapting.
     OtaUnlock,
+    /// Tune the rate-adaptation hysteresis (anti-oscillation) gates at runtime.
+    /// `min_backlog` (bytes) gates AckUp upgrades on queued TX backlog; `0`
+    /// disables. `upgrade_hold_frames` suppresses re-upgrades after a downgrade;
+    /// `0` disables. Each `None` leaves the current value unchanged.
+    OtaSetHysteresis {
+        min_backlog: Option<usize>,
+        upgrade_hold_frames: Option<u32>,
+    },
 }
 
 /// Per-command response.
@@ -321,6 +329,10 @@ mod ota_protocol_tests {
                 level: "SL6".into(),
             },
             ControlCommand::OtaUnlock,
+            ControlCommand::OtaSetHysteresis {
+                min_backlog: Some(128),
+                upgrade_hold_frames: Some(3),
+            },
         ];
         for c in cmds {
             let json = serde_json::to_string(&c).unwrap();

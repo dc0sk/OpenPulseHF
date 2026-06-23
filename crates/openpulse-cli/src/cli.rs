@@ -303,6 +303,15 @@ pub enum DaemonCommands {
     },
     /// Release the OTA level lock and resume adapting.
     OtaUnlock,
+    /// Tune the rate-adaptation hysteresis (anti-oscillation) gates at runtime.
+    OtaHysteresis {
+        /// Min queued TX backlog (bytes) before acting on an upgrade; 0 disables.
+        #[arg(long)]
+        min_backlog: Option<usize>,
+        /// Upgrade attempts to suppress after a downgrade; 0 disables.
+        #[arg(long)]
+        upgrade_hold_frames: Option<u32>,
+    },
     /// Print one OTA status snapshot as JSON.
     OtaStatus,
 }

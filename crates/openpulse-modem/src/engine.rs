@@ -251,6 +251,22 @@ fn refine_onset(buf: &[f32], start: usize, span: usize, step: usize) -> usize {
         .unwrap_or(start)
 }
 
+/// Internal return of [`ModemEngine::ota_decode_and_ack`]: the decoded
+/// payload+mode (if any), the ACK frame to send, and the last decode error.
+type OtaDecodeOutcome = (Option<(Vec<u8>, String)>, AckFrame, Option<ModemError>);
+
+/// Outcome of one daemon-facing OTA receive poll ([`ModemEngine::poll_ota_rx`]):
+/// the decode result plus the ACK frame the caller must transmit back.
+#[derive(Debug, Clone)]
+pub struct OtaRxResult {
+    /// Decoded payload, or `None` when every candidate failed (the ACK is a Nack).
+    pub payload: Option<Vec<u8>>,
+    /// ACK frame to transmit back to the sender (key PTT around the transmit).
+    pub ack: AckFrame,
+    /// Mode string a candidate decoded at, for event reporting.
+    pub mode: Option<String>,
+}
+
 pub struct ModemEngine {
     audio: Box<dyn AudioBackend>,
     plugins: PluginRegistry,
@@ -592,11 +608,11 @@ impl ModemEngine {
     }
 
     /// Supply an external RX SNR estimate (dB) for OTA adaptive decisions, or
-    /// `None` to fall back to the (weak) LLR-magnitude proxy.
+    /// `None` to fall back to the built-in silence-gated M2M4 moment estimator on
+    /// the captured envelope.
     ///
-    /// `snr_from_llrs` is only a relative confidence indicator — on a clean path
-    /// it reports ≈ −2 dB — so a real SNR estimator or a channel-sim harness that
-    /// knows the true SNR should feed this for the rate ladder to climb.
+    /// A channel-sim harness that knows the true SNR can feed it here to bypass
+    /// the on-air estimate; otherwise the M2M4 estimate drives the rate ladder.
     pub fn set_rx_snr_estimate(&mut self, snr_db: Option<f32>) {
         self.rx_snr_estimate = snr_db;
     }
@@ -695,18 +711,72 @@ impl ModemEngine {
         session_id: &str,
         device: Option<&str>,
     ) -> Result<Vec<u8>, ModemError> {
-        let candidates: Vec<(SpeedLevel, String, FecMode)> = self
-            .ota
-            .as_ref()
-            .ok_or_else(|| ModemError::Configuration("no OTA session active".into()))?
-            .rx_candidates()
-            .into_iter()
-            .map(|(l, m, f)| (l, m.to_string(), f))
-            .collect();
-
         let samples = self.stage_capture_input(device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+        self.ota_update_dcd(&samples);
 
+        let (decoded, ack_frame, last_err) = self.ota_decode_and_ack(&samples, session_id)?;
+        self.transmit_ack_with_short_fec(&ack_frame, device)?;
+
+        match decoded {
+            Some((payload, mode)) => {
+                let _ = self.event_tx.send(EngineEvent::FrameReceived {
+                    mode,
+                    bytes: payload.len(),
+                });
+                Ok(payload)
+            }
+            None => Err(last_err.unwrap_or_else(|| {
+                ModemError::Configuration("OTA receive: no candidate decoded".into())
+            })),
+        }
+    }
+
+    /// Daemon-facing OTA receive poll: capture one window and, **only if the
+    /// channel carries energy**, run the receiver-led decode and return the
+    /// decoded payload plus the ACK frame to transmit. Returns `Ok(None)` on an
+    /// idle window so the caller never keys PTT to ACK silence.
+    ///
+    /// Unlike [`respond_arq_ota`](Self::respond_arq_ota) this does **not** transmit
+    /// the ACK: a half-duplex caller keys PTT around
+    /// `transmit_ack_with_short_fec(&result.ack)` so the radio receives with PTT
+    /// released and only keys to answer. The idle gate uses the immediate-window
+    /// RMS (not the held DCD busy flag) so the trailing DCD hold after a burst does
+    /// not trigger a spurious ACK on silence.
+    pub fn poll_ota_rx(
+        &mut self,
+        session_id: &str,
+        device: Option<&str>,
+    ) -> Result<Option<OtaRxResult>, ModemError> {
+        let samples = self.stage_capture_input(device)?;
+        let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+        self.ota_update_dcd(&samples);
+
+        if samples.samples.is_empty() || self.dcd.energy() < self.dcd.threshold() {
+            return Ok(None);
+        }
+
+        let (decoded, ack, last_err) = self.ota_decode_and_ack(&samples, session_id)?;
+        let (payload, mode) = match decoded {
+            Some((p, m)) => (Some(p), Some(m)),
+            None => {
+                if let Some(e) = &last_err {
+                    debug!("poll_ota_rx: energetic window failed to decode: {e}");
+                }
+                (None, None)
+            }
+        };
+        if let Some(p) = &payload {
+            let _ = self.event_tx.send(EngineEvent::FrameReceived {
+                mode: mode.clone().unwrap_or_default(),
+                bytes: p.len(),
+            });
+        }
+        Ok(Some(OtaRxResult { payload, ack, mode }))
+    }
+
+    /// Update DCD from a captured window, emitting a `DcdChange` event on a flip.
+    fn ota_update_dcd(&mut self, samples: &AudioSamples) {
         let prev_busy = self.dcd.is_busy();
         self.dcd.update(&samples.samples);
         if self.dcd.is_busy() != prev_busy {
@@ -715,6 +785,26 @@ impl ModemEngine {
                 energy: self.dcd.energy(),
             });
         }
+    }
+
+    /// Shared OTA receive core: run the candidate-fallback decode on an already
+    /// captured window, update the receiver-led controller, and build the ACK frame
+    /// to send back. Captures and transmits nothing — callers own those, so the
+    /// daemon can key PTT only around the ACK transmit. Returns the decoded
+    /// payload+mode (if any), the ACK frame, and the last decode error.
+    fn ota_decode_and_ack(
+        &mut self,
+        samples: &AudioSamples,
+        session_id: &str,
+    ) -> Result<OtaDecodeOutcome, ModemError> {
+        let candidates: Vec<(SpeedLevel, String, FecMode)> = self
+            .ota
+            .as_ref()
+            .ok_or_else(|| ModemError::Configuration("no OTA session active".into()))?
+            .rx_candidates()
+            .into_iter()
+            .map(|(l, m, f)| (l, m.to_string(), f))
+            .collect();
 
         // AFC accumulates across calls, so a failed wrong-mode candidate would
         // poison the correct candidate's correction. Isolate each attempt: reset to
@@ -761,23 +851,9 @@ impl ModemEngine {
                 (ack, None)
             }
         };
-
         let ack_frame = AckFrame::new(rx_ack.ack_type, session_id)
             .with_recommended_level(rx_ack.recommended_level);
-        self.transmit_ack_with_short_fec(&ack_frame, device)?;
-
-        match decoded {
-            Some((payload, mode)) => {
-                let _ = self.event_tx.send(EngineEvent::FrameReceived {
-                    mode,
-                    bytes: payload.len(),
-                });
-                Ok(payload)
-            }
-            None => Err(last_err.unwrap_or_else(|| {
-                ModemError::Configuration("OTA receive: no candidate decoded".into())
-            })),
-        }
+        Ok((decoded, ack_frame, last_err))
     }
 
     /// Select HARQ retry parameters from SNR/fading state.
@@ -1608,7 +1684,15 @@ impl ModemEngine {
             // soft pass failed — both share the same acquisition front end).
             if plugin.supports_soft_demod() {
                 let llrs = plugin.demodulate_soft(&samples.samples, &mod_cfg)?;
-                let snr = RateAdaptationPolicy::snr_from_llrs(&llrs);
+                // Absolute RX SNR for rate adaptation: silence-gated M2M4 on the
+                // captured envelope. The old mean-|LLR| proxy reads ≈ −2 dB on a
+                // clean path (it is only a relative confidence indicator) and so
+                // can't drive the SNR-hint ladder; M2M4 is a real dB estimate.
+                let snr = openpulse_core::snr_estimate::m2m4_snr_db_gated_from_real(
+                    &samples.samples,
+                    self.center_frequency + self.afc_correction_hz,
+                    AudioConfig::default().sample_rate as f32,
+                );
                 let wire_bytes: Vec<u8> = llrs
                     .chunks(8)
                     .map(|byte_llrs| {

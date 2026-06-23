@@ -299,17 +299,6 @@ impl RateAdaptationPolicy {
     pub fn current_tx_level(&self) -> Option<SpeedLevel> {
         self.rate_adapter.as_ref().map(|a| a.tx_level())
     }
-
-    /// Estimate receive-path SNR (dB) from LLR magnitudes.
-    ///
-    /// Uses `mean(|llr|) / 2` as a linear SNR proxy; clamps to [-5, 40] dB.
-    pub fn snr_from_llrs(llrs: &[f32]) -> f32 {
-        if llrs.is_empty() {
-            return 0.0;
-        }
-        let mean_abs = llrs.iter().map(|l| l.abs()).sum::<f32>() / llrs.len() as f32;
-        (10.0 * (mean_abs / 2.0).max(1e-6).log10()).clamp(-5.0, 40.0)
-    }
 }
 
 #[cfg(test)]
@@ -353,21 +342,6 @@ mod tests {
     fn select_rx_ack_type_without_session_returns_ok() {
         let mut p = RateAdaptationPolicy::new();
         assert_eq!(p.select_rx_ack_type(10.0), AckType::AckOk);
-    }
-
-    #[test]
-    fn snr_from_llrs_empty_is_zero() {
-        assert_eq!(RateAdaptationPolicy::snr_from_llrs(&[]), 0.0);
-    }
-
-    #[test]
-    fn snr_from_llrs_clamps_range() {
-        // Tiny LLRs floor at -5 dB.
-        let lo = RateAdaptationPolicy::snr_from_llrs(&[0.0; 16]);
-        assert!((-5.0 - 1e-3..=-5.0 + 1e-3).contains(&lo));
-        // Huge LLRs ceiling at 40 dB.
-        let hi = RateAdaptationPolicy::snr_from_llrs(&[1e9; 4]);
-        assert!((hi - 40.0).abs() < 1e-3);
     }
 
     #[test]

@@ -363,6 +363,13 @@ async fn main() {
     // Emit OTA status roughly once per second (when an OTA session is active).
     let ota_status_period = (1000 / cfg.daemon.receive_tick_ms.max(1)).max(1);
     let mut ota_status_tick: u64 = 0;
+    // Session id stamped into OTA ACK frames (a hash field; the sender does not
+    // gate on it). The callsign keeps it stable and station-meaningful.
+    let ota_session_id = if cfg.station.callsign.is_empty() {
+        "ota".to_string()
+    } else {
+        cfg.station.callsign.clone()
+    };
     loop {
         tokio::select! {
             biased;
@@ -413,12 +420,54 @@ async fn main() {
                     }
                 }
                 let mode = handle.active_mode.lock().await.clone();
-                // block_in_place: engine.receive() is synchronous; LoopbackBackend returns
-                // immediately. A real audio backend would block until samples are available.
+                // block_in_place: engine receive/transmit are synchronous; LoopbackBackend
+                // returns immediately. A real audio backend blocks until samples arrive.
                 let decode_start = std::time::Instant::now();
-                let bytes = tokio::task::block_in_place(|| {
-                    engine.receive(&mode, None).unwrap_or_default()
-                });
+                let bytes = if engine.ota_active() {
+                    // Receiver-led OTA: decode without keying, then key PTT only to
+                    // answer with the ACK carrying our absolute recommended_level.
+                    match tokio::task::block_in_place(|| engine.poll_ota_rx(&ota_session_id, None)) {
+                        Ok(Some(res)) => {
+                            let mut keyed = true;
+                            if let Some(ref mut ptt) = ptt_controller {
+                                if let Err(e) = ptt.assert_ptt() {
+                                    tracing::warn!("OTA ACK PTT assert failed: {e}");
+                                    keyed = false;
+                                }
+                            }
+                            if keyed {
+                                let _ = handle
+                                    .event_tx
+                                    .send(openpulse_daemon::protocol::ControlEvent::PttChanged {
+                                        active: true,
+                                    });
+                                if let Err(e) = tokio::task::block_in_place(|| {
+                                    engine.transmit_ack_with_short_fec(&res.ack, None)
+                                }) {
+                                    tracing::warn!("OTA ACK transmit failed: {e}");
+                                }
+                                if let Some(ref mut ptt) = ptt_controller {
+                                    if let Err(e) = ptt.release_ptt() {
+                                        tracing::warn!("OTA ACK PTT release failed: {e}");
+                                    }
+                                }
+                                let _ = handle
+                                    .event_tx
+                                    .send(openpulse_daemon::protocol::ControlEvent::PttChanged {
+                                        active: false,
+                                    });
+                            }
+                            res.payload.unwrap_or_default()
+                        }
+                        Ok(None) => Vec::new(),
+                        Err(e) => {
+                            tracing::debug!("OTA RX poll error: {e}");
+                            Vec::new()
+                        }
+                    }
+                } else {
+                    tokio::task::block_in_place(|| engine.receive(&mode, None).unwrap_or_default())
+                };
                 let decode_ms = decode_start.elapsed().as_secs_f32() * 1000.0;
                 if !bytes.is_empty() {
                     process_received_bytes(
