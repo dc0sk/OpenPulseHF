@@ -405,7 +405,25 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     }
                     _ => {}
                 }
-                if !ptt_hard_failed {
+                // OTA ISS send with real-radio PTT turnaround: when a session is
+                // active, a SendMessage drives the receiver-led OTA send here (where
+                // the PTT controller lives) — key PTT for the data frame, release it,
+                // then listen for the peer's ACK and adopt its recommendation. Handled
+                // here rather than in apply_command_to_engine so PTT is sequenced
+                // around the half-duplex turnaround.
+                let mut ota_send_handled = false;
+                if let crate::Command::SendMessage { body, .. } = &cmd {
+                    if engine.ota_active() {
+                        ota_send_handled = true;
+                        ota_send_with_ptt(
+                            &mut engine,
+                            &mut ptt_controller,
+                            &handle.event_tx,
+                            body.as_bytes(),
+                        );
+                    }
+                }
+                if !ptt_hard_failed && !ota_send_handled {
                     apply_command_to_engine(
                         &cmd,
                         &mut engine,
@@ -514,6 +532,72 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     let _ = handle.event_tx.send(ota_status_event(&engine));
                 }
             }
+        }
+    }
+}
+
+/// Receiver-led OTA send with the real-radio half-duplex PTT turnaround.
+///
+/// For each of up to `1 + MAX_RETRIES` attempts: key PTT, transmit the data frame
+/// at the current OTA mode+FEC, **release PTT**, then listen for the peer's FSK4
+/// ACK (PTT down) and adopt its absolute `recommended_level` — which steps the
+/// rate ladder. Splitting the transmit from the ACK listen (vs the bundled
+/// `transmit_arq_ota`) is what lets PTT be keyed only for the TX, so the radio can
+/// hear the ACK. PTT is a no-op on the twin rig (NoOpPtt); on a real rig this is
+/// the correct turnaround. The long phases run under `block_in_place` so the
+/// blocking turnaround does not stall the daemon's async runtime.
+fn ota_send_with_ptt(
+    engine: &mut ModemEngine,
+    ptt_controller: &mut Option<Box<dyn PttController>>,
+    event_tx: &std::sync::Arc<tokio::sync::broadcast::Sender<crate::protocol::ControlEvent>>,
+    body: &[u8],
+) {
+    use crate::protocol::ControlEvent;
+    use openpulse_core::ack::AckType;
+    const MAX_RETRIES: usize = 3;
+    const ACK_TIMEOUT_MS: u64 = 4000;
+
+    for _ in 0..=MAX_RETRIES {
+        let Some(mode) = engine.ota_tx_mode().map(|m| m.to_owned()) else {
+            return; // no OTA session
+        };
+        let fec = engine.ota_tx_fec();
+
+        // Key PTT for the data frame.
+        if let Some(ptt) = ptt_controller.as_mut() {
+            if let Err(e) = ptt.assert_ptt() {
+                tracing::warn!("OTA send PTT assert failed: {e}");
+                return;
+            }
+        }
+        let _ = event_tx.send(ControlEvent::PttChanged { active: true });
+        let tx =
+            tokio::task::block_in_place(|| engine.transmit_with_fec_mode(body, &mode, fec, None));
+        // Release PTT before listening (half-duplex turnaround).
+        if let Some(ptt) = ptt_controller.as_mut() {
+            if let Err(e) = ptt.release_ptt() {
+                tracing::warn!("OTA send PTT release failed: {e}");
+            }
+        }
+        let _ = event_tx.send(ControlEvent::PttChanged { active: false });
+
+        if let Err(e) = tx {
+            tracing::warn!(error = %e, "OTA data transmit failed");
+            continue;
+        }
+
+        // Listen for the ACK with PTT down; adopt the peer's recommended level.
+        match tokio::task::block_in_place(|| {
+            engine.receive_ack_with_short_fec_within(None, ACK_TIMEOUT_MS)
+        }) {
+            Ok(ack) => {
+                engine.apply_ota_ack(&ack);
+                let _ = event_tx.send(ota_status_event(engine));
+                if ack.ack_type != AckType::Nack {
+                    return;
+                }
+            }
+            Err(e) => tracing::debug!(error = %e, "OTA ACK not received within window"),
         }
     }
 }
