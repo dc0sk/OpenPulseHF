@@ -163,6 +163,10 @@ pub struct RuntimeControlState {
     pub trust_store: InMemoryTrustStore,
     /// Optional relay forwarder; `Some` when `[relay] enabled = true` in config.
     pub relay_forwarder: Option<RelayForwarder>,
+    /// Fallback DCD/squelch RMS threshold when no per-band override matches.
+    pub dcd_squelch_default: f32,
+    /// Per-band DCD/squelch overrides (band label → threshold), applied on retune.
+    pub dcd_squelch_bands: std::collections::BTreeMap<String, f32>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -184,6 +188,8 @@ impl Default for RuntimeControlState {
             ptt_max_duration: Duration::from_secs(180),
             trust_store: InMemoryTrustStore::default(),
             relay_forwarder: None,
+            dcd_squelch_default: 0.01,
+            dcd_squelch_bands: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -1196,6 +1202,8 @@ pub async fn apply_command_to_engine(
 
             match controller.set_frequency(*freq_hz) {
                 Ok(()) => {
+                    // Restore the per-band DCD squelch for the new frequency.
+                    apply_band_squelch(engine, runtime_state, *freq_hz);
                     let _ = event_tx.send(ControlEvent::RigStatus {
                         rig: rig.clone(),
                         freq_hz: *freq_hz,
@@ -1449,6 +1457,16 @@ pub async fn apply_command_to_engine(
                 }
             }
         }
+        ControlCommand::SetDcdSquelch { threshold } => {
+            if threshold.is_finite() && *threshold >= 0.0 {
+                engine.set_dcd_squelch(*threshold);
+            } else {
+                let _ = event_tx.send(ControlEvent::CommandError {
+                    command: "set_dcd_squelch".to_string(),
+                    reason: format!("invalid threshold {threshold}"),
+                });
+            }
+        }
         // No live-modem side effects for these commands in the engine path.
         // They are handled by dispatch-only paths or request-response control flow.
         ControlCommand::SubscribeSpectrum { .. }
@@ -1457,6 +1475,18 @@ pub async fn apply_command_to_engine(
         | ControlCommand::GetMessage { .. }
         | ControlCommand::DeleteMessage { .. } => {}
     }
+}
+
+/// Resolve the DCD squelch for `freq_hz` (per-band override → default) and apply it.
+pub fn apply_band_squelch(
+    engine: &mut ModemEngine,
+    runtime_state: &RuntimeControlState,
+    freq_hz: u64,
+) {
+    let threshold = openpulse_qsy::bandplan::band_label_for_hz(freq_hz)
+        .and_then(|label| runtime_state.dcd_squelch_bands.get(label).copied())
+        .unwrap_or(runtime_state.dcd_squelch_default);
+    engine.set_dcd_squelch(threshold);
 }
 
 /// Build an [`ControlEvent::OtaStatus`] snapshot from the engine's current OTA state.
@@ -1601,6 +1631,28 @@ mod command_apply_tests {
         .await;
         assert!(engine.ota_active());
         assert_eq!(engine.ota_tx_level(), level_before);
+    }
+
+    #[test]
+    fn apply_band_squelch_uses_per_band_override_else_default() {
+        let mut engine = test_engine();
+        let mut rs = RuntimeControlState {
+            dcd_squelch_default: 0.01,
+            ..RuntimeControlState::default()
+        };
+        rs.dcd_squelch_bands.insert("40m".into(), 0.05);
+
+        // 40m is in the map → its override applies.
+        apply_band_squelch(&mut engine, &rs, 7_040_000);
+        assert!((engine.dcd_squelch() - 0.05).abs() < 1e-6);
+
+        // 20m is not in the map → fall back to the default.
+        apply_band_squelch(&mut engine, &rs, 14_070_000);
+        assert!((engine.dcd_squelch() - 0.01).abs() < 1e-6);
+
+        // Out-of-band frequency → default.
+        apply_band_squelch(&mut engine, &rs, 5_000_000);
+        assert!((engine.dcd_squelch() - 0.01).abs() < 1e-6);
     }
 
     #[tokio::test]

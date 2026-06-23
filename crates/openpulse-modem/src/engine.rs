@@ -2271,6 +2271,19 @@ impl ModemEngine {
         self.tx_attenuation_db
     }
 
+    /// Set the DCD/squelch RMS threshold — the carrier-present level used by
+    /// channel-busy detection, CSMA, and [`capture_burst`](Self::capture_burst)'s
+    /// burst-flush. Raise it on a noisy band so the noise floor doesn't read as a
+    /// permanent carrier; call on frequency change to restore the per-band value.
+    pub fn set_dcd_squelch(&mut self, threshold: f32) {
+        self.dcd.set_threshold(threshold);
+    }
+
+    /// Return the current DCD/squelch RMS threshold.
+    pub fn dcd_squelch(&self) -> f32 {
+        self.dcd.threshold()
+    }
+
     /// Set the soft TX limiter threshold (0.0 disables the limiter).
     pub fn set_tx_limiter_threshold(&mut self, threshold: f32) {
         self.tx_limiter_threshold = threshold;

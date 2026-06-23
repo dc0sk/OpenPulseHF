@@ -287,6 +287,9 @@ pub enum ControlCommand {
     /// Apply an aggressiveness preset (`conservative`/`balanced`/`aggressive`) that
     /// sets the A2/A3 hysteresis gates together — one knob instead of two.
     OtaSetAggressiveness { preset: String },
+    /// Set the DCD/squelch RMS threshold at runtime (e.g. to clear a band's noise
+    /// floor). Holds until the next retune re-applies the per-band/default value.
+    SetDcdSquelch { threshold: f32 },
 }
 
 /// Per-command response.
@@ -339,6 +342,7 @@ mod ota_protocol_tests {
             ControlCommand::OtaSetAggressiveness {
                 preset: "aggressive".into(),
             },
+            ControlCommand::SetDcdSquelch { threshold: 0.05 },
         ];
         for c in cmds {
             let json = serde_json::to_string(&c).unwrap();

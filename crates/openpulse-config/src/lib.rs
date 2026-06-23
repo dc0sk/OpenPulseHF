@@ -140,6 +140,14 @@ pub struct ModemConfig {
     /// A2/A3 gates together; empty = use the individual `ota_min_backlog` /
     /// `ota_upgrade_hold_frames` values above. The preset, when set, takes precedence.
     pub ota_aggressiveness: String,
+    /// Default DCD/squelch RMS threshold (carrier-present level for channel-busy
+    /// detection, CSMA, and burst-capture flush). Raise it above a band's noise
+    /// floor. Applied at startup and as the fallback when no per-band value matches.
+    pub dcd_squelch: f32,
+    /// Per-band DCD/squelch override, keyed by band label (`"20m"`, `"2m"`, …).
+    /// When the rig tunes into a listed band, that threshold is applied; otherwise
+    /// `dcd_squelch` is used. Empty (default) = always use `dcd_squelch`.
+    pub dcd_squelch_bands: std::collections::BTreeMap<String, f32>,
 }
 
 /// Per-rig CAT settings (used in `[radio.rig_a]` / `[radio.rig_b]` sections).
@@ -292,6 +300,8 @@ impl Default for ModemConfig {
             ota_min_backlog: 0,
             ota_upgrade_hold_frames: 0,
             ota_aggressiveness: String::new(),
+            dcd_squelch: 0.01, // matches the engine's built-in DcdState default
+            dcd_squelch_bands: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -629,6 +639,16 @@ ota_upgrade_hold_frames = 0
 # gates together (one knob instead of two). Empty = use the two values above.
 # Takes precedence over ota_min_backlog / ota_upgrade_hold_frames when set.
 ota_aggressiveness = ""
+# DCD/squelch RMS threshold (carrier-present level for channel-busy detection,
+# CSMA, and burst-capture flush). Raise above a band's noise floor if the carrier
+# never appears to "drop". Applied at startup and as the per-band fallback.
+dcd_squelch = 0.01
+# Optional per-band squelch overrides (band label → threshold). When the rig tunes
+# into a listed band the matching value is applied; otherwise dcd_squelch is used.
+# [modem.dcd_squelch_bands]
+# "40m" = 0.05
+# "20m" = 0.02
+# "2m"  = 0.01
 
 [radio]
 # CAT (frequency/mode) backend: "rigctld" (default) or "none".
@@ -781,6 +801,24 @@ mod tests {
     }
 
     #[test]
+    fn dcd_squelch_per_band_parses() {
+        let path = unique_tmp("dcd-squelch");
+        {
+            let mut f = std::fs::File::create(&path).unwrap();
+            writeln!(f, "[modem]").unwrap();
+            writeln!(f, "dcd_squelch = 0.02").unwrap();
+            writeln!(f, "[modem.dcd_squelch_bands]").unwrap();
+            writeln!(f, r#""40m" = 0.05"#).unwrap();
+            writeln!(f, r#""2m" = 0.015"#).unwrap();
+        }
+        let cfg = load_from(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!((cfg.modem.dcd_squelch - 0.02).abs() < 1e-6);
+        assert_eq!(cfg.modem.dcd_squelch_bands.get("40m").copied(), Some(0.05));
+        assert_eq!(cfg.modem.dcd_squelch_bands.get("2m").copied(), Some(0.015));
+    }
+
+    #[test]
     fn cat_backend_none_parses() {
         let path = unique_tmp("cat-none");
         {
@@ -836,6 +874,8 @@ mod tests {
         assert_eq!(cfg.modem.ptt_backend, "none");
         assert_eq!(cfg.modem.profile, "hpx_hf");
         assert_eq!(cfg.modem.ota_aggressiveness, ""); // empty = use individual A2/A3 knobs
+        assert!((cfg.modem.dcd_squelch - 0.01).abs() < 1e-6);
+        assert!(cfg.modem.dcd_squelch_bands.is_empty());
     }
 
     #[test]

@@ -72,6 +72,11 @@ impl DcdState {
         self.threshold
     }
 
+    /// Set the RMS busy/squelch threshold (e.g. per band, to clear the noise floor).
+    pub fn set_threshold(&mut self, threshold: f32) {
+        self.threshold = threshold;
+    }
+
     /// Force the DCD into the busy state; useful in tests to inject carrier
     /// presence without going through the audio pipeline.
     pub fn force_busy(&mut self) {
@@ -115,6 +120,19 @@ mod tests {
         // No more update() calls — busy flag must still expire.
         std::thread::sleep(Duration::from_millis(20));
         assert!(!dcd.is_busy(), "busy flag must clear via wall clock");
+    }
+
+    #[test]
+    fn set_threshold_changes_busy_decision() {
+        let mut dcd = DcdState::new(0.01, 800);
+        dcd.update(&vec![0.05f32; 1000]);
+        assert!(dcd.is_busy(), "0.05 RMS is above the 0.01 squelch");
+        // Raise the squelch above the signal: the same level no longer reads busy.
+        let mut dcd2 = DcdState::new(0.01, 800);
+        dcd2.set_threshold(0.1);
+        assert_eq!(dcd2.threshold(), 0.1);
+        dcd2.update(&vec![0.05f32; 1000]);
+        assert!(!dcd2.is_busy(), "0.05 RMS is below the raised 0.1 squelch");
     }
 
     #[test]

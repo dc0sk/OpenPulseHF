@@ -111,6 +111,9 @@ pub fn run(addr: &str, cmd: DaemonCommands) -> Result<i32> {
         DaemonCommands::OtaAggressiveness { preset } => {
             simple(addr, ControlCommand::OtaSetAggressiveness { preset })
         }
+        DaemonCommands::SetDcdSquelch { threshold } => {
+            simple(addr, ControlCommand::SetDcdSquelch { threshold })
+        }
         DaemonCommands::OtaStatus => ota_status(addr),
     }
 }
