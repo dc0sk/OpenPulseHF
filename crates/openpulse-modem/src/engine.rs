@@ -316,7 +316,16 @@ pub struct ModemEngine {
     /// Lets a daemon pin its engine to a specific capture/playback device (e.g. an
     /// `snd-aloop` PCM) without threading the name through every transmit/receive.
     default_device: Option<String>,
+    /// Most recent audio window the engine captured (RX) or emitted (TX), bounded
+    /// to [`SPECTRUM_TAP_MAX`] samples. A spectrum/waterfall consumer (e.g. the
+    /// daemon's control-port broadcast) reads this so the FFT is of real audio, not
+    /// silence. Empty until the first transmit/receive.
+    last_audio: Vec<f32>,
 }
+
+/// Cap on the [`ModemEngine::last_audio`] window — a few FFT frames is plenty for a
+/// representative spectrum row and bounds the per-call clone.
+const SPECTRUM_TAP_MAX: usize = 16384;
 
 impl ModemEngine {
     /// Create a new engine backed by the given audio backend.
@@ -349,7 +358,27 @@ impl ModemEngine {
             max_power_watts: 0.0, // 0.0 means no limit
             tx_session_log: TxSessionLog::new("UNKNOWN"),
             default_device: None,
+            last_audio: Vec::new(),
         }
+    }
+
+    /// Most recent audio window the engine captured (RX) or emitted (TX).
+    ///
+    /// Bounded to the last [`SPECTRUM_TAP_MAX`] samples; empty until the first
+    /// transmit/receive. Intended for a spectrum/waterfall tap so the FFT sees real
+    /// audio rather than silence.
+    pub fn last_audio(&self) -> &[f32] {
+        &self.last_audio
+    }
+
+    /// Record the most recent audio window for the spectrum tap (keeps the tail).
+    fn record_audio(&mut self, samples: &[f32]) {
+        if samples.is_empty() {
+            return;
+        }
+        let start = samples.len().saturating_sub(SPECTRUM_TAP_MAX);
+        self.last_audio.clear();
+        self.last_audio.extend_from_slice(&samples[start..]);
     }
 
     /// Pin all audio I/O to `device` (by backend device name) when a per-call
@@ -3676,6 +3705,7 @@ impl ModemEngine {
             tanh_limit(&mut write_samples, threshold);
         }
 
+        self.record_audio(&write_samples); // TX window for the spectrum/waterfall tap
         stream
             .write(&write_samples)
             .map_err(|e| ModemError::Audio(e.to_string()))?;
@@ -3697,6 +3727,7 @@ impl ModemEngine {
         let samples = stream
             .read()
             .map_err(|e| ModemError::Audio(e.to_string()))?;
+        self.record_audio(&samples); // RX window for the spectrum/waterfall tap
         Ok(AudioSamples { samples })
     }
 
@@ -3864,6 +3895,28 @@ mod tests {
         engine.transmit(b"Hello", "BPSK100", None).unwrap();
         let received = engine.receive("BPSK100", None).unwrap();
         assert_eq!(received, b"Hello");
+    }
+
+    #[test]
+    fn last_audio_window_is_populated_for_the_spectrum_tap() {
+        // The spectrum/waterfall tap reads last_audio(); it must hold real samples
+        // after a transmit (TX window) and after a receive (RX window), not stay
+        // empty — otherwise the daemon FFTs silence and the panel is flat.
+        let mut engine = make_engine();
+        assert!(
+            engine.last_audio().is_empty(),
+            "no audio captured/emitted yet"
+        );
+        engine.transmit(b"spectrum", "BPSK100", None).unwrap();
+        assert!(
+            !engine.last_audio().is_empty(),
+            "transmit must populate the spectrum-tap window"
+        );
+        let _ = engine.receive("BPSK100", None).unwrap();
+        assert!(
+            !engine.last_audio().is_empty(),
+            "receive must populate the spectrum-tap window"
+        );
     }
 
     #[test]
