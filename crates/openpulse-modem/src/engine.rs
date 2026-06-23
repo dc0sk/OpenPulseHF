@@ -330,7 +330,18 @@ pub struct ModemEngine {
     /// Whether [`capture_burst`](ModemEngine::capture_burst) is mid-burst (carrier
     /// was present on a prior tick and not yet flushed).
     rx_capturing: bool,
+    /// Master enable for CE-SSB TX envelope conditioning. Default on; it only acts
+    /// on modes that benefit (multicarrier — see [`cessb_benefits`]), so it is a
+    /// no-op for single-carrier modes regardless.
+    cessb_enabled: bool,
 }
+
+/// CE-SSB TX conditioning clip level as a multiple of the RMS envelope. 2.0×
+/// recovered ~2.7 dB average power on OFDM at zero BER cost in the channel-sim
+/// measurement (`tests/cessb_power_evm.rs`).
+const CESSB_CLIP_RATIO: f32 = 2.0;
+/// Peak-stretcher look-ahead window (samples) for CE-SSB TX conditioning.
+const CESSB_LOOKAHEAD: usize = 16;
 
 /// Safety cap on the [`ModemEngine::capture_burst`] accumulator (~30 s at 8 kHz):
 /// if a carrier never "drops" (e.g. DCD threshold below the noise floor) the burst
@@ -375,7 +386,54 @@ impl ModemEngine {
             last_audio: Vec::new(),
             rx_burst: Vec::new(),
             rx_capturing: false,
+            cessb_enabled: true,
         }
+    }
+
+    /// Enable/disable CE-SSB TX envelope conditioning (master switch). It still
+    /// only acts on modes that benefit ([`cessb_benefits`](Self::cessb_benefits)).
+    pub fn set_cessb_enabled(&mut self, enabled: bool) {
+        self.cessb_enabled = enabled;
+    }
+
+    /// Whether CE-SSB TX conditioning is enabled (master switch).
+    pub fn cessb_enabled(&self) -> bool {
+        self.cessb_enabled
+    }
+
+    /// Whether `mode` benefits from CE-SSB conditioning — the high-PAPR
+    /// multicarrier waveforms (OFDM, SC-FDMA). Single-carrier PSK/QAM and
+    /// constant-envelope modes do not (clipping there costs EVM for no power gain).
+    pub fn cessb_benefits(mode: &str) -> bool {
+        let m = mode.to_ascii_uppercase();
+        m.starts_with("OFDM") || m.starts_with("SCFDMA")
+    }
+
+    /// Apply CE-SSB envelope conditioning to a real passband TX block and rescale
+    /// to the original peak, so the freed headroom becomes average power at the same
+    /// PEP. Returns the input unchanged if the envelope is degenerate.
+    fn cessb_condition_tx(&self, samples: &[f32]) -> Vec<f32> {
+        let fs = AudioConfig::default().sample_rate as f32;
+        let (i, q) = openpulse_core::iq::hilbert_iq(samples, self.center_frequency, fs);
+        let env = openpulse_dsp::cessb::envelope(&i, &q);
+        let rms_env = (env.iter().map(|e| e * e).sum::<f32>() / env.len().max(1) as f32).sqrt();
+        if rms_env <= f32::MIN_POSITIVE {
+            return samples.to_vec();
+        }
+        let level = CESSB_CLIP_RATIO * rms_env;
+        let gain = openpulse_dsp::cessb::peak_stretch_gain(&env, level, CESSB_LOOKAHEAD);
+        let mut out = openpulse_dsp::cessb::apply_gain(samples, &gain);
+        // Restore the original peak: the average-power gain is realised by scaling
+        // the now-lower-PAPR signal back up to the same peak (PEP).
+        let p0 = samples.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
+        let p1 = out.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
+        if p0 > 0.0 && p1 > f32::MIN_POSITIVE {
+            let scale = p0 / p1;
+            for x in &mut out {
+                *x *= scale;
+            }
+        }
+        out
     }
 
     /// Most recent audio window the engine captured (RX) or emitted (TX).
@@ -1287,7 +1345,7 @@ impl ModemEngine {
             samples.samples.len()
         );
 
-        self.stage_emit_output(device, &samples)?;
+        self.stage_emit_output(device, mode, &samples)?;
 
         // Log transmission metadata for regulatory compliance
         self.update_tx_session_callsign();
@@ -2368,7 +2426,7 @@ impl ModemEngine {
             self.stage_modulate_payload(plugin, mode, &outbound)?
         };
         let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
-        self.stage_emit_output(device, &samples)?;
+        self.stage_emit_output(device, mode, &samples)?;
 
         let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
             mode: mode.to_string(),
@@ -2407,7 +2465,7 @@ impl ModemEngine {
             self.stage_modulate_payload(plugin, mode, &fec_wire)?
         };
         let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
-        self.stage_emit_output(device, &samples)?;
+        self.stage_emit_output(device, mode, &samples)?;
         let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
             mode: mode.to_string(),
             bytes: fec_wire.bytes.len(),
@@ -2494,7 +2552,7 @@ impl ModemEngine {
             self.stage_modulate_payload(plugin, mode, &il_wire)?
         };
         let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
-        self.stage_emit_output(device, &samples)?;
+        self.stage_emit_output(device, mode, &samples)?;
         let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
             mode: mode.to_string(),
             bytes: il_wire.bytes.len(),
@@ -2587,7 +2645,7 @@ impl ModemEngine {
             self.stage_modulate_payload(plugin, mode, &fec_wire)?
         };
         let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
-        self.stage_emit_output(device, &samples)?;
+        self.stage_emit_output(device, mode, &samples)?;
         let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
             mode: mode.to_string(),
             bytes: fec_wire.bytes.len(),
@@ -2678,7 +2736,7 @@ impl ModemEngine {
             self.stage_modulate_payload(plugin, mode, &fec_wire)?
         };
         let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
-        self.stage_emit_output(device, &samples)?;
+        self.stage_emit_output(device, mode, &samples)?;
         let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
             mode: mode.to_string(),
             bytes: fec_wire.bytes.len(),
@@ -2767,7 +2825,7 @@ impl ModemEngine {
             self.stage_modulate_payload(plugin, mode, &fec_wire)?
         };
         let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
-        self.stage_emit_output(device, &samples)?;
+        self.stage_emit_output(device, mode, &samples)?;
         let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
             mode: mode.to_string(),
             bytes: fec_wire.bytes.len(),
@@ -2890,7 +2948,7 @@ impl ModemEngine {
             self.stage_modulate_payload(plugin, mode, &fec_wire)?
         };
         let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
-        self.stage_emit_output(device, &samples)?;
+        self.stage_emit_output(device, mode, &samples)?;
         let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
             mode: mode.to_string(),
             bytes: fec_wire.bytes.len(),
@@ -3017,7 +3075,7 @@ impl ModemEngine {
             self.stage_modulate_payload(plugin, mode, &fec_wire)?
         };
         let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
-        self.stage_emit_output(device, &samples)?;
+        self.stage_emit_output(device, mode, &samples)?;
         let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
             mode: mode.to_string(),
             bytes: fec_wire.bytes.len(),
@@ -3413,7 +3471,7 @@ impl ModemEngine {
             self.stage_modulate_payload(plugin, mode, &wire)?
         };
         let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
-        self.stage_emit_output(device, &samples)?;
+        self.stage_emit_output(device, mode, &samples)?;
 
         let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
             mode: mode.to_string(),
@@ -3640,7 +3698,7 @@ impl ModemEngine {
             self.stage_modulate_payload(plugin, mode, &wire)?
         };
         let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
-        self.stage_emit_output(device, &samples)
+        self.stage_emit_output(device, mode, &samples)
     }
 
     /// Demodulate FSK4-ACK, ShortFecCodec decode (13 → 5 bytes), return `AckFrame`.
@@ -3771,7 +3829,7 @@ impl ModemEngine {
             self.stage_modulate_payload(plugin, mode, &wire)?
         };
         let samples = self.route_audio_stage(PipelineStage::OutputEmit, samples)?;
-        self.stage_emit_output(device, &samples)?;
+        self.stage_emit_output(device, mode, &samples)?;
         let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
             mode: mode.to_string(),
             bytes: wire.bytes.len(),
@@ -3859,6 +3917,7 @@ impl ModemEngine {
     fn stage_emit_output(
         &mut self,
         device: Option<&str>,
+        mode: &str,
         samples: &AudioSamples,
     ) -> Result<(), ModemError> {
         let _stage = PipelineStage::OutputEmit;
@@ -3875,6 +3934,12 @@ impl ModemEngine {
         } else {
             samples.samples.iter().map(|s| s * atten_linear).collect()
         };
+        // CE-SSB envelope conditioning: only for high-PAPR modes that benefit
+        // (multicarrier), and only when enabled. Raises average power at the same
+        // peak; a no-op for single-carrier modes. See `cessb_condition_tx`.
+        if self.cessb_enabled && Self::cessb_benefits(mode) {
+            write_samples = self.cessb_condition_tx(&write_samples);
+        }
         let threshold = self.tx_limiter_threshold;
         if threshold > 0.0 {
             tanh_limit(&mut write_samples, threshold);

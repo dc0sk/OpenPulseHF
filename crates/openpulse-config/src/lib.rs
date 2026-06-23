@@ -148,6 +148,10 @@ pub struct ModemConfig {
     /// When the rig tunes into a listed band, that threshold is applied; otherwise
     /// `dcd_squelch` is used. Empty (default) = always use `dcd_squelch`.
     pub dcd_squelch_bands: std::collections::BTreeMap<String, f32>,
+    /// CE-SSB TX envelope conditioning (raises average power at a fixed peak on
+    /// high-PAPR multicarrier modes). Default `true`; it only acts on modes that
+    /// benefit (OFDM/SC-FDMA), so it is a no-op for single-carrier modes.
+    pub cessb_enabled: bool,
 }
 
 /// Per-rig CAT settings (used in `[radio.rig_a]` / `[radio.rig_b]` sections).
@@ -302,6 +306,7 @@ impl Default for ModemConfig {
             ota_aggressiveness: String::new(),
             dcd_squelch: 0.01, // matches the engine's built-in DcdState default
             dcd_squelch_bands: std::collections::BTreeMap::new(),
+            cessb_enabled: true,
         }
     }
 }
@@ -649,6 +654,9 @@ dcd_squelch = 0.01
 # "40m" = 0.05
 # "20m" = 0.02
 # "2m"  = 0.01
+# CE-SSB TX envelope conditioning: raises average power at a fixed peak on
+# high-PAPR multicarrier modes (OFDM/SC-FDMA). No-op for single-carrier modes.
+cessb_enabled = true
 
 [radio]
 # CAT (frequency/mode) backend: "rigctld" (default) or "none".

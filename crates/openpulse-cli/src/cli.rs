@@ -322,6 +322,12 @@ pub enum DaemonCommands {
         /// RMS threshold (0.0–1.0); raise above the band noise floor.
         threshold: f32,
     },
+    /// Enable/disable CE-SSB TX envelope conditioning (multicarrier modes only).
+    SetCessb {
+        /// true to enable, false to disable.
+        #[arg(action = clap::ArgAction::Set)]
+        enabled: bool,
+    },
     /// Print one OTA status snapshot as JSON.
     OtaStatus,
 }

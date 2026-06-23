@@ -290,6 +290,9 @@ pub enum ControlCommand {
     /// Set the DCD/squelch RMS threshold at runtime (e.g. to clear a band's noise
     /// floor). Holds until the next retune re-applies the per-band/default value.
     SetDcdSquelch { threshold: f32 },
+    /// Enable/disable CE-SSB TX envelope conditioning (master switch). Only acts on
+    /// high-PAPR multicarrier modes; a no-op for single-carrier modes regardless.
+    SetCessb { enabled: bool },
 }
 
 /// Per-command response.
@@ -343,6 +346,7 @@ mod ota_protocol_tests {
                 preset: "aggressive".into(),
             },
             ControlCommand::SetDcdSquelch { threshold: 0.05 },
+            ControlCommand::SetCessb { enabled: false },
         ];
         for c in cmds {
             let json = serde_json::to_string(&c).unwrap();

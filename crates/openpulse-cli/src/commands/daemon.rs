@@ -114,6 +114,7 @@ pub fn run(addr: &str, cmd: DaemonCommands) -> Result<i32> {
         DaemonCommands::SetDcdSquelch { threshold } => {
             simple(addr, ControlCommand::SetDcdSquelch { threshold })
         }
+        DaemonCommands::SetCessb { enabled } => simple(addr, ControlCommand::SetCessb { enabled }),
         DaemonCommands::OtaStatus => ota_status(addr),
     }
 }

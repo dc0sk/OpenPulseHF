@@ -120,6 +120,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
         );
     }
 
+    engine.set_cessb_enabled(cfg.modem.cessb_enabled);
+    tracing::info!(cessb = cfg.modem.cessb_enabled, "CE-SSB TX conditioning");
+
     // Receiver-led OTA adaptive rate-stepping (opt-in via [modem] ota_enabled).
     if cfg.modem.ota_enabled {
         let profile_name = if cfg.modem.ota_profile.is_empty() {
