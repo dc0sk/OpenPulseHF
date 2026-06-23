@@ -35,6 +35,11 @@ fn clean_awgn(seed: u64) -> Box<AwgnChannel> {
     Box::new(AwgnChannel::new(AwgnConfig::new(40.0, Some(seed))).unwrap())
 }
 
+/// Parse a `"SLn"` level name to its number (e.g. `"SL4"` → 4); 0 if unparseable.
+fn level_num(name: &str) -> u8 {
+    name.trim_start_matches("SL").parse().unwrap_or(0)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn message_crosses_the_bridge_between_two_real_daemons() {
     let pair = spawn_bridged_pair(
@@ -93,5 +98,80 @@ async fn message_crosses_the_bridge_between_two_real_daemons() {
     assert!(
         got.is_ok(),
         "daemon B never decoded the frame daemon A transmitted across the bridge"
+    );
+}
+
+fn ota_cfg(callsign: &str, tcp_port: u16, ws_port: u16) -> OpenpulseConfig {
+    let mut c = cfg(callsign, tcp_port, ws_port);
+    c.modem.ota_enabled = true;
+    c.modem.ota_profile = "hpx500".into();
+    c
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn ota_ladder_steps_under_traffic_between_two_real_daemons() {
+    // Both daemons run a receiver-led OTA session. Driving SendMessage on A makes A
+    // the ISS (transmit at the OTA mode → wait for B's ACK → adopt its absolute
+    // recommended_level); B's receive tick is the IRS (decode → ACK with a
+    // recommendation). Over several frames A's TX level must climb above the SL2
+    // floor — i.e. the rate ladder moves, which is what the panel renders.
+    let pair = spawn_bridged_pair(
+        ota_cfg("OTAA", 19020, 19021),
+        ota_cfg("OTAB", 19022, 19023),
+        clean_awgn(11),
+        clean_awgn(12),
+        Duration::from_millis(10),
+    )
+    .await;
+
+    let a = TcpStream::connect(pair.addr_a).await.unwrap();
+    let (a_read, mut a_write) = a.into_split();
+    let mut a_reader = BufReader::new(a_read);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let send = serde_json::to_string(&ControlCommand::SendMessage {
+        to: "OTAB".into(),
+        subject: "t".into(),
+        body: "ota ladder traffic frame".into(),
+    })
+    .unwrap()
+        + "\n";
+
+    // Drive ~10 OTA sends and track the highest TX level OtaStatus reports.
+    let max_level = timeout(Duration::from_secs(40), async {
+        let mut max_seen = 2u8; // SL2 floor
+        for _ in 0..10 {
+            a_write.write_all(send.as_bytes()).await.unwrap();
+            // Read until the post-send OtaStatus (or any) reports a tx_level.
+            let round = timeout(Duration::from_secs(6), async {
+                loop {
+                    let mut buf = String::new();
+                    if a_reader.read_line(&mut buf).await.unwrap() == 0 {
+                        continue;
+                    }
+                    let line = buf.trim();
+                    if let Ok(ControlEvent::OtaStatus {
+                        tx_level: Some(lvl),
+                        ..
+                    }) = serde_json::from_str::<ControlEvent>(line)
+                    {
+                        return level_num(&lvl);
+                    }
+                }
+            })
+            .await;
+            if let Ok(n) = round {
+                max_seen = max_seen.max(n);
+            }
+        }
+        max_seen
+    })
+    .await;
+
+    pair.shutdown();
+    let max_level = max_level.expect("timed out driving OTA traffic");
+    assert!(
+        max_level > 2,
+        "OTA rate ladder should step above the SL2 floor under traffic; reached SL{max_level}"
     );
 }

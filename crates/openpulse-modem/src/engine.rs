@@ -717,6 +717,27 @@ impl ModemEngine {
         device: Option<&str>,
         max_retries: usize,
     ) -> Result<SpeedLevel, ModemError> {
+        // Single-shot ACK receive (timeout 0): the ACK is already in the buffer for
+        // synchronous in-process callers (tests). The daemon uses the timeout form.
+        self.transmit_arq_ota_within(data, device, max_retries, 0)
+    }
+
+    /// As [`transmit_arq_ota`](Self::transmit_arq_ota), but each attempt waits up to
+    /// `ack_timeout_ms` for the FSK4-ACK to arrive (re-capturing on the device until
+    /// it decodes or the deadline passes). `0` = single-shot (the original behaviour).
+    ///
+    /// Needed by a free-running daemon: after the data frame is transmitted, the
+    /// peer's ACK only returns after its own receive tick + the channel round-trip,
+    /// so a single immediate read misses it. With a timeout the sender owns the RX
+    /// for the turnaround and adopts the peer's absolute `recommended_level` — which
+    /// is what steps the rate ladder.
+    pub fn transmit_arq_ota_within(
+        &mut self,
+        data: &[u8],
+        device: Option<&str>,
+        max_retries: usize,
+        ack_timeout_ms: u64,
+    ) -> Result<SpeedLevel, ModemError> {
         let attempts = 1 + max_retries;
         let mut last_err: Option<ModemError> = None;
         for _ in 0..attempts {
@@ -726,7 +747,7 @@ impl ModemEngine {
                 .to_owned();
             let fec = self.ota_tx_fec();
             self.transmit_with_fec_mode(data, &mode, fec, device)?;
-            match self.receive_ack_with_short_fec(device) {
+            match self.receive_ack_with_short_fec_within(device, ack_timeout_ms) {
                 Ok(ack) => {
                     self.apply_ota_ack(&ack);
                     if ack.ack_type != AckType::Nack {
@@ -3494,6 +3515,31 @@ impl ModemEngine {
     }
 
     /// Demodulate FSK4-ACK, ShortFecCodec decode (13 → 5 bytes), return `AckFrame`.
+    /// Receive an FSK4 short-FEC ACK, re-capturing until it decodes or `timeout_ms`
+    /// elapses. `0` falls back to a single immediate read
+    /// ([`receive_ack_with_short_fec`](Self::receive_ack_with_short_fec)).
+    pub fn receive_ack_with_short_fec_within(
+        &mut self,
+        device: Option<&str>,
+        timeout_ms: u64,
+    ) -> Result<AckFrame, ModemError> {
+        if timeout_ms == 0 {
+            return self.receive_ack_with_short_fec(device);
+        }
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        loop {
+            match self.receive_ack_with_short_fec(device) {
+                Ok(ack) => return Ok(ack),
+                Err(e) => {
+                    if Instant::now() >= deadline {
+                        return Err(e);
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(30));
+        }
+    }
+
     pub fn receive_ack_with_short_fec(
         &mut self,
         device: Option<&str>,
