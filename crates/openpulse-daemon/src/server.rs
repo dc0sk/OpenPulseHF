@@ -461,53 +461,63 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     }
                 }
                 let mode = handle.active_mode.lock().await.clone();
-                // block_in_place: engine receive/transmit are synchronous; LoopbackBackend
+                // block_in_place: engine capture/transmit are synchronous; LoopbackBackend
                 // returns immediately. A real audio backend blocks until samples arrive.
                 let decode_start = std::time::Instant::now();
-                let bytes = if engine.ota_active() {
-                    // Receiver-led OTA: decode without keying, then key PTT only to
-                    // answer with the ACK carrying our absolute recommended_level.
-                    match tokio::task::block_in_place(|| engine.poll_ota_rx(&ota_session_id, None)) {
-                        Ok(Some(res)) => {
-                            let mut keyed = true;
-                            if let Some(ref mut ptt) = ptt_controller {
-                                if let Err(e) = ptt.assert_ptt() {
-                                    tracing::warn!("OTA ACK PTT assert failed: {e}");
-                                    keyed = false;
-                                }
-                            }
-                            if keyed {
-                                let _ = handle
-                                    .event_tx
-                                    .send(crate::protocol::ControlEvent::PttChanged {
-                                        active: true,
-                                    });
-                                if let Err(e) = tokio::task::block_in_place(|| {
-                                    engine.transmit_ack_with_short_fec(&res.ack, None)
-                                }) {
-                                    tracing::warn!("OTA ACK transmit failed: {e}");
-                                }
+                // Accumulate a full burst before decoding: on a streaming (cpal) backend
+                // one frame spans many tick windows, so decoding a single partial window
+                // can't acquire it. capture_burst returns Some only when the carrier drops.
+                let burst = tokio::task::block_in_place(|| engine.capture_burst(None));
+                let bytes = match burst {
+                    Ok(Some(burst)) if engine.ota_active() => {
+                        // Receiver-led OTA: decode the burst, then key PTT only to answer
+                        // with the ACK carrying our absolute recommended_level.
+                        match tokio::task::block_in_place(|| {
+                            engine.ota_decode_burst(&burst, &ota_session_id)
+                        }) {
+                            Ok(res) => {
+                                let mut keyed = true;
                                 if let Some(ref mut ptt) = ptt_controller {
-                                    if let Err(e) = ptt.release_ptt() {
-                                        tracing::warn!("OTA ACK PTT release failed: {e}");
+                                    if let Err(e) = ptt.assert_ptt() {
+                                        tracing::warn!("OTA ACK PTT assert failed: {e}");
+                                        keyed = false;
                                     }
                                 }
-                                let _ = handle
-                                    .event_tx
-                                    .send(crate::protocol::ControlEvent::PttChanged {
-                                        active: false,
-                                    });
+                                if keyed {
+                                    let _ = handle.event_tx.send(
+                                        crate::protocol::ControlEvent::PttChanged { active: true },
+                                    );
+                                    if let Err(e) = tokio::task::block_in_place(|| {
+                                        engine.transmit_ack_with_short_fec(&res.ack, None)
+                                    }) {
+                                        tracing::warn!("OTA ACK transmit failed: {e}");
+                                    }
+                                    if let Some(ref mut ptt) = ptt_controller {
+                                        if let Err(e) = ptt.release_ptt() {
+                                            tracing::warn!("OTA ACK PTT release failed: {e}");
+                                        }
+                                    }
+                                    let _ = handle.event_tx.send(
+                                        crate::protocol::ControlEvent::PttChanged { active: false },
+                                    );
+                                }
+                                res.payload.unwrap_or_default()
                             }
-                            res.payload.unwrap_or_default()
-                        }
-                        Ok(None) => Vec::new(),
-                        Err(e) => {
-                            tracing::debug!("OTA RX poll error: {e}");
-                            Vec::new()
+                            Err(e) => {
+                                tracing::debug!("OTA burst decode error: {e}");
+                                Vec::new()
+                            }
                         }
                     }
-                } else {
-                    tokio::task::block_in_place(|| engine.receive(&mode, None).unwrap_or_default())
+                    Ok(Some(burst)) => {
+                        tokio::task::block_in_place(|| engine.decode_burst(&mode, &burst))
+                            .unwrap_or_default()
+                    }
+                    Ok(None) => Vec::new(),
+                    Err(e) => {
+                        tracing::debug!("RX capture error: {e}");
+                        Vec::new()
+                    }
                 };
                 let decode_ms = decode_start.elapsed().as_secs_f32() * 1000.0;
                 if !bytes.is_empty() {

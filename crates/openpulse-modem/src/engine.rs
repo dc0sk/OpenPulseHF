@@ -322,7 +322,20 @@ pub struct ModemEngine {
     /// daemon's control-port broadcast) reads this so the FFT is of real audio, not
     /// silence. Empty until the first transmit/receive.
     last_audio: Vec<f32>,
+    /// [`capture_burst`](ModemEngine::capture_burst) accumulator: samples gathered
+    /// across receive ticks while a carrier is present, flushed for decode when it
+    /// drops. Lets a tick-based daemon assemble a full frame from a streaming
+    /// (cpal) backend instead of decoding one partial tick window.
+    rx_burst: Vec<f32>,
+    /// Whether [`capture_burst`](ModemEngine::capture_burst) is mid-burst (carrier
+    /// was present on a prior tick and not yet flushed).
+    rx_capturing: bool,
 }
+
+/// Safety cap on the [`ModemEngine::capture_burst`] accumulator (~30 s at 8 kHz):
+/// if a carrier never "drops" (e.g. DCD threshold below the noise floor) the burst
+/// is force-flushed rather than growing without bound.
+const BURST_MAX_SAMPLES: usize = 240_000;
 
 /// Cap on the [`ModemEngine::last_audio`] window — a few FFT frames is plenty for a
 /// representative spectrum row and bounds the per-call clone.
@@ -360,6 +373,8 @@ impl ModemEngine {
             tx_session_log: TxSessionLog::new("UNKNOWN"),
             default_device: None,
             last_audio: Vec::new(),
+            rx_burst: Vec::new(),
+            rx_capturing: false,
         }
     }
 
@@ -860,6 +875,97 @@ impl ModemEngine {
                 energy: self.dcd.energy(),
             });
         }
+    }
+
+    /// Tick-based burst capture for a free-running daemon over a streaming audio
+    /// backend: accumulate captured samples while a carrier is present and return
+    /// the **whole burst** once the carrier drops (or a safety cap is hit), else
+    /// `None` while still accumulating or idle.
+    ///
+    /// On a real (cpal) backend a single frame spans many short receive-tick
+    /// windows; decoding one partial window can't acquire the frame. Buffering the
+    /// burst and decoding it as one unit — via [`decode_burst`](Self::decode_burst)
+    /// or [`ota_decode_burst`](Self::ota_decode_burst) — fixes that. The
+    /// in-process loopback delivers a frame atomically, so it flushes on the next
+    /// (quiet) tick. Carrier presence is the per-window RMS vs the DCD squelch.
+    pub fn capture_burst(
+        &mut self,
+        device: Option<&str>,
+    ) -> Result<Option<AudioSamples>, ModemError> {
+        let samples = self.stage_capture_input(device)?;
+        let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+        self.ota_update_dcd(&samples);
+
+        let n = samples.samples.len();
+        let rms = if n == 0 {
+            0.0
+        } else {
+            (samples.samples.iter().map(|s| s * s).sum::<f32>() / n as f32).sqrt()
+        };
+
+        if n > 0 && rms >= self.dcd.threshold() {
+            // Carrier present: keep accumulating this burst.
+            self.rx_burst.extend_from_slice(&samples.samples);
+            self.rx_capturing = true;
+            if self.rx_burst.len() >= BURST_MAX_SAMPLES {
+                self.rx_capturing = false;
+                return Ok(Some(AudioSamples {
+                    samples: std::mem::take(&mut self.rx_burst),
+                }));
+            }
+            Ok(None)
+        } else if self.rx_capturing && !self.rx_burst.is_empty() {
+            // Carrier dropped after a burst → the frame is complete; flush it.
+            self.rx_capturing = false;
+            Ok(Some(AudioSamples {
+                samples: std::mem::take(&mut self.rx_burst),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Decode a captured burst (from [`capture_burst`](Self::capture_burst)) as a
+    /// data frame in `mode`.
+    pub fn decode_burst(
+        &mut self,
+        mode: &str,
+        burst: &AudioSamples,
+    ) -> Result<Vec<u8>, ModemError> {
+        self.receive_from_samples(
+            mode,
+            AudioSamples {
+                samples: burst.samples.clone(),
+            },
+        )
+    }
+
+    /// Decode a captured burst with the OTA candidate fallback and build the ACK to
+    /// send back (does not transmit it) — the burst-input counterpart of
+    /// [`poll_ota_rx`](Self::poll_ota_rx) for a daemon using
+    /// [`capture_burst`](Self::capture_burst).
+    pub fn ota_decode_burst(
+        &mut self,
+        burst: &AudioSamples,
+        session_id: &str,
+    ) -> Result<OtaRxResult, ModemError> {
+        let (decoded, ack, last_err) = self.ota_decode_and_ack(burst, session_id)?;
+        let (payload, mode) = match decoded {
+            Some((p, m)) => (Some(p), Some(m)),
+            None => {
+                if let Some(e) = &last_err {
+                    debug!("ota_decode_burst: burst failed to decode: {e}");
+                }
+                (None, None)
+            }
+        };
+        if let Some(p) = &payload {
+            let _ = self.event_tx.send(EngineEvent::FrameReceived {
+                mode: mode.clone().unwrap_or_default(),
+                bytes: p.len(),
+            });
+        }
+        Ok(OtaRxResult { payload, ack, mode })
     }
 
     /// Shared OTA receive core: run the candidate-fallback decode on an already
@@ -3951,6 +4057,41 @@ mod tests {
         engine.transmit(b"Hello", "BPSK100", None).unwrap();
         let received = engine.receive("BPSK100", None).unwrap();
         assert_eq!(received, b"Hello");
+    }
+
+    #[test]
+    fn capture_burst_accumulates_fragmented_frame_then_decodes() {
+        // Simulate a streaming backend delivering one frame across several tick
+        // windows: capture_burst must accumulate (returning None) until the carrier
+        // drops, then flush the whole burst so decode_burst recovers the payload.
+        let tx_lb = LoopbackBackend::new();
+        let mut tx = ModemEngine::new(Box::new(tx_lb.clone_shared()));
+        tx.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+        tx.transmit(b"burst capture", "BPSK250", None).unwrap();
+        let frame = tx_lb.drain_samples();
+        assert!(!frame.is_empty());
+
+        let rx_lb = LoopbackBackend::new_split();
+        let mut rx = ModemEngine::new(Box::new(rx_lb.clone_shared()));
+        rx.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+
+        // Feed the frame in 4 fragments across 4 ticks — each must keep accumulating.
+        let chunk = frame.len() / 4 + 1;
+        for frag in frame.chunks(chunk) {
+            rx_lb.fill_samples(frag);
+            assert!(
+                rx.capture_burst(None).unwrap().is_none(),
+                "mid-burst tick must keep accumulating"
+            );
+        }
+        // A quiet tick (no carrier) flushes the complete burst.
+        let burst = rx
+            .capture_burst(None)
+            .unwrap()
+            .expect("carrier drop must flush the accumulated burst");
+        assert_eq!(burst.samples.len(), frame.len(), "burst is the whole frame");
+        let decoded = rx.decode_burst("BPSK250", &burst).unwrap();
+        assert_eq!(&decoded[..b"burst capture".len()], b"burst capture");
     }
 
     #[test]
