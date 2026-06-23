@@ -19,6 +19,10 @@ pub mod ws;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod server;
 
+/// Twin-station rig: two real daemons bridged through a channel — native only.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod twin;
+
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
