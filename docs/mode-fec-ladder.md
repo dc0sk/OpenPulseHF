@@ -1,3 +1,10 @@
+---
+project: openpulsehf
+doc: docs/mode-fec-ladder.md
+status: living
+last_updated: 2026-06-23
+---
+
 # Mode and FEC ladder — how the modem chooses a waveform and a code
 
 OpenPulseHF picks an operating point along **two independent axes**:
