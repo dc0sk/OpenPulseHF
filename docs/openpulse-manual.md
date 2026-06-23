@@ -1273,6 +1273,15 @@ scripts/run-twin-station-audio.sh        # builds --features cpal, starts both d
 OTA=1 MODE=QPSK500 scripts/run-twin-station-audio.sh   # with OTA rate-stepping
 ```
 
+Generate continuous traffic to watch in the panels (sends random-data messages to
+a daemon's control port in a loop; works for the in-process rig too):
+
+```bash
+scripts/twin-traffic.sh                          # 127.0.0.1:9000 → TWIN-B, every 2 s
+ADDR2=127.0.0.1:9002 scripts/twin-traffic.sh     # both directions (A→B and B→A)
+INTERVAL=1 SIZE=128 COUNT=20 scripts/twin-traffic.sh   # 20 rounds, 128-byte bodies
+```
+
 Single shared clock here (snd-aloop). For a true two-clock test, point
 `A_DEVICE`/`B_DEVICE` at two USB cards (see the dual-card rig in F).
 
