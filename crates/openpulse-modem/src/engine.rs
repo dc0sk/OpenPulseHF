@@ -312,6 +312,10 @@ pub struct ModemEngine {
     max_power_watts: f32,
     /// Transmission metadata log for regulatory compliance (station_id, timestamps).
     tx_session_log: TxSessionLog,
+    /// Default audio device name used when a per-call `device` is `None`.
+    /// Lets a daemon pin its engine to a specific capture/playback device (e.g. an
+    /// `snd-aloop` PCM) without threading the name through every transmit/receive.
+    default_device: Option<String>,
 }
 
 impl ModemEngine {
@@ -344,7 +348,18 @@ impl ModemEngine {
             tx_limiter_threshold: 0.0,
             max_power_watts: 0.0, // 0.0 means no limit
             tx_session_log: TxSessionLog::new("UNKNOWN"),
+            default_device: None,
         }
+    }
+
+    /// Pin all audio I/O to `device` (by backend device name) when a per-call
+    /// `device` argument is `None`. Pass `None` to clear (use the backend default).
+    ///
+    /// Used by the daemon to bind one engine to a specific full-duplex device — the
+    /// real-audio twin-station rig points station A at one `snd-aloop` PCM and
+    /// station B at the crossed PCM so the kernel routes A↔B.
+    pub fn set_default_device(&mut self, device: Option<String>) {
+        self.default_device = device;
     }
 
     /// Subscribe to the real-time engine event stream.
@@ -1155,7 +1170,7 @@ impl ModemEngine {
         let audio_cfg = AudioConfig::default();
         let mut stream = self
             .audio
-            .open_iq_output(device, &audio_cfg)
+            .open_iq_output(device.or(self.default_device.as_deref()), &audio_cfg)
             .ok_or_else(|| {
                 ModemError::Configuration("audio backend does not support IQ output".to_string())
             })?
@@ -1219,7 +1234,7 @@ impl ModemEngine {
         let audio_cfg = AudioConfig::default();
         let mut stream = self
             .audio
-            .open_input(device, &audio_cfg)
+            .open_input(device.or(self.default_device.as_deref()), &audio_cfg)
             .map_err(|e| ModemError::Audio(e.to_string()))?;
 
         let deadline = Instant::now() + listen_for;
@@ -3647,7 +3662,7 @@ impl ModemEngine {
         let audio_cfg = AudioConfig::default();
         let mut stream = self
             .audio
-            .open_output(device, &audio_cfg)
+            .open_output(device.or(self.default_device.as_deref()), &audio_cfg)
             .map_err(|e| ModemError::Audio(e.to_string()))?;
 
         let atten_linear = 10.0f32.powf(self.tx_attenuation_db / 20.0);
@@ -3676,7 +3691,7 @@ impl ModemEngine {
         let audio_cfg = AudioConfig::default();
         let mut stream = self
             .audio
-            .open_input(device, &audio_cfg)
+            .open_input(device.or(self.default_device.as_deref()), &audio_cfg)
             .map_err(|e| ModemError::Audio(e.to_string()))?;
 
         let samples = stream
@@ -3846,6 +3861,19 @@ mod tests {
     #[test]
     fn transmit_then_receive() {
         let mut engine = make_engine();
+        engine.transmit(b"Hello", "BPSK100", None).unwrap();
+        let received = engine.receive("BPSK100", None).unwrap();
+        assert_eq!(received, b"Hello");
+    }
+
+    #[test]
+    fn default_device_is_used_as_fallback_without_breaking_loopback() {
+        // The default-device fallback (per-call None → engine default) must route
+        // through the same open path; LoopbackBackend ignores the device name, so a
+        // round-trip with a default device set still succeeds. This guards the
+        // `device.or(self.default_device...)` plumbing the real-audio rig relies on.
+        let mut engine = make_engine();
+        engine.set_default_device(Some("snd-aloop-pcm".into()));
         engine.transmit(b"Hello", "BPSK100", None).unwrap();
         let received = engine.receive("BPSK100", None).unwrap();
         assert_eq!(received, b"Hello");

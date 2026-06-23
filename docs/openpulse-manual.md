@@ -1257,6 +1257,25 @@ TWIN_SNR_DB=12 cargo run -p openpulse-daemon --example twin_station
 #         openpulse-panel → Connect 127.0.0.1:9002 (station B)
 ```
 
+#### A3. Twin-station rig over real audio (snd-aloop)
+
+Same two real daemons, but routed through the real cpal+ALSA+resampler path
+instead of an in-process channel, so it also covers the audio stack where
+on-air-specific bugs live (resampler, sample format, and — on the dual-card rig —
+true dual-clock). Each daemon runs as its own `openpulse-server` process with the
+cpal backend pinned to a full-duplex `snd-aloop` PCM via `[audio] device`; the
+kernel cross-links station A's PCM to B's and back. Two real panels attach as
+above (control ports 9000 / 9002).
+
+```bash
+scripts/setup-twin-loopback.sh          # snd-aloop + aloop_a/aloop_b PCMs (sudo)
+scripts/run-twin-station-audio.sh        # builds --features cpal, starts both daemons
+OTA=1 MODE=QPSK500 scripts/run-twin-station-audio.sh   # with OTA rate-stepping
+```
+
+Single shared clock here (snd-aloop). For a true two-clock test, point
+`A_DEVICE`/`B_DEVICE` at two USB cards (see the dual-card rig in F).
+
 #### B. Test matrix (no audio hardware)
 
 ```bash

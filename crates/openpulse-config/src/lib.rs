@@ -98,6 +98,10 @@ pub struct AudioConfig {
     /// Audio backend: `cpal` (real hardware), `loopback` (testing), or
     /// `default` (use cpal if compiled in, loopback otherwise).
     pub backend: String,
+    /// Audio device name (cpal backend). Empty = the system default device.
+    /// Pin a specific full-duplex device here to target an `snd-aloop` PCM — the
+    /// real-audio twin-station rig sets station A and B to crossed PCMs.
+    pub device: String,
     /// Soft-limiter threshold applied to TX audio before the output backend.
     /// Each sample `s` becomes `threshold * tanh(s / threshold)`.
     /// Set to `0.0` (default) to disable. Typical value: `1.5 * RMS`.
@@ -264,6 +268,7 @@ impl Default for AudioConfig {
     fn default() -> Self {
         Self {
             backend: "default".into(),
+            device: String::new(),
             tx_limiter_threshold: 0.0,
         }
     }
@@ -578,6 +583,10 @@ grid_square = "AA00"
 #   cpal     — always use the real sound card (error if not compiled in)
 #   loopback — software loopback for testing only, no audio hardware required
 backend = "default"
+# Audio device name for the cpal backend. Empty = the system default device.
+# Pin a specific device (e.g. an snd-aloop PCM) to target a fixed full-duplex
+# device — the real-audio twin-station rig sets stations A and B to crossed PCMs.
+device = ""
 # Soft TX limiter threshold (0.0 = disabled). Typical value: 1.5 × RMS of the
 # modulated signal. Prevents ADC clipping and reduces PA non-linearity on peaks.
 # tx_limiter_threshold = 0.0
@@ -757,6 +766,9 @@ mod tests {
         assert_eq!(cfg.relay.max_hops, 3);
         // CAT defaults to rigctld for backward compatibility.
         assert_eq!(cfg.radio.cat_backend, "rigctld");
+        // Audio device defaults to empty (system default device).
+        assert_eq!(cfg.audio.backend, "default");
+        assert_eq!(cfg.audio.device, "");
     }
 
     #[test]
