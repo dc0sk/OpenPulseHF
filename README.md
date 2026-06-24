@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: README.md
 status: living
-last_updated: 2026-06-19
+last_updated: 2026-06-24
 ---
 
 # OpenPulseHF
@@ -34,6 +34,8 @@ DB1IUA for helping stuffing the budget sink-hole.
 ---
 ## Status
 
+24th of June '26, added CE-SSB transmit envelope conditioning (per-mode, default-on for the high-PAPR OFDM/SC-FDMA modes). The average-power gain at fixed PEP is confirmed on-air (+1.18 dB on 2 m via an FT-991A), matching the channel-sim prediction, and a software ACPR check shows the conditioner adds negligible spectral regrowth. The operator panel now carries a CE-SSB toggle and a tabbed Messages/Event-Log pane.
+
 9th of June '26, the soundsystem bugs have been fixed and validated, now returning to on-air tests.
 
 As of 6th of June '26, I'm  busy with on-air-testing and fixing a lot of bugs and some misconceptions. Mostly related to Linux' soundsystems.
@@ -55,9 +57,11 @@ Several capabilities here are firsts or near-firsts in open-source amateur digit
 | **GPU-accelerated DSP** | 6 wgpu compute kernels (BPSK modulate/demodulate, timing search, RRC FIR matched filter, 256-pt FFT, soft LLR demod) accelerating BPSK, QPSK, 8PSK, 64QAM, and SC-FDMA — all with automatic CPU fallback. See [GPU-accelerated features](#gpu-accelerated-features). |
 | **QSY frequency agility** | Ed25519-signed QSY_REQ/LIST/VOTE/ACK wire protocol. Initiator and responder roles wired into the daemon; rig CAT control via rigctld. |
 | **FreeDV authenticated voice** | Ed25519-signed authentication beacons transmitted via the FreeDV Qt-GUI UDP data port (`openpulse-freedv-auth`); no FreeDV fork required. |
+| **CE-SSB conditioning for data modes** | Controlled-Envelope SSB (Hershberger W9GR, QEX 2014) — a voice-SSB technique — applied as an adaptive, per-mode TX conditioner that raises average power at fixed PEP on high-PAPR multicarrier modes (OFDM/SC-FDMA). Confirmed **+1.18 dB on-air**, with a software ACPR check showing negligible spectral regrowth. Believed to be the first open-source HF *data* modem to do this. |
 
-On-air regulatory validation has not been completed. All tests use loopback and
-simulated-channel paths only.
+On-air regulatory validation (spectral mask) has not been completed. Except for the
+CE-SSB average-power confirmation above, all tests use loopback and simulated-channel
+paths only.
 
 ---
 
@@ -79,6 +83,7 @@ Capabilities that are firsts or near-firsts among open-source amateur digital-mo
 | 10 | **Cross-band full-duplex repeater** | `CrossBandRepeater` runs in a daemon-managed thread; `EnableRepeater`/`DisableRepeater` control commands; trust-policy filtering on forwarded frames (`crates/openpulse-repeater`) |
 | 11 | **Mesh broadcast daemon with authenticated beacons** | TTL-limited re-broadcast; (session_id, nonce) duplicate suppression; beacon payloads carry signed peer descriptors where the peer ID *is* the Ed25519 verifying key (`crates/openpulse-mesh`) |
 | 12 | **FreeDV frame signing via codec2 data channel** | External shim adding Ed25519 per-frame signatures to FreeDV voice transmissions using the codec2 embedded data channel; no FreeDV fork required |
+| 13 | **CE-SSB envelope conditioning for digital waveforms** | Hershberger's Controlled-Envelope SSB (QEX 2014) — long used in *voice* SSB (WDSP/Thetis) — applied here as a per-mode, default-on adaptive TX conditioner for high-PAPR multicarrier *data* modes (OFDM/SC-FDMA). Raises average TX power at fixed PEP: +1.6/+2.7/+3.8 dB in channel-sim (OFDM52 at 2.5/2.0/1.5×rms, zero BER cost) and **+1.18 dB confirmed on-air** (FT-991A, 2 m, 20 W via attenuator); software ACPR shows negligible spectral regrowth at the operating point. Believed to be the first open-source HF data modem to apply CE-SSB (`crates/openpulse-dsp/src/cessb.rs`, `ModemEngine::cessb_benefits`) |
 
 ---
 
@@ -264,11 +269,13 @@ trading bandwidth (rect vs `-RRC`) against throughput (500 vs 1000 baud).
 
 ### Filtering and signal enhancement
 
-Options that reduce out-of-band emissions, suppress spectral sidelobes, or improve
-receiver sensitivity.  Each can be selected independently per mode.
+Options that reduce out-of-band emissions, suppress spectral sidelobes, improve
+receiver sensitivity, or raise transmit power efficiency.  Each can be selected
+independently per mode.
 
 | Technique | Where | Sidelobe / benefit | Notes |
 |---|---|---|---|
+| **CE-SSB envelope conditioning** (`openpulse_dsp::cessb`) | TX; high-PAPR multicarrier (OFDM/SC-FDMA), default-on | +1.6/+2.7/+3.8 dB avg power at fixed PEP (2.5/2.0/1.5×rms); negligible OOB regrowth | Look-ahead peak-stretcher; gated by `cessb_benefits` (no-op on single-carrier/BPSK); +1.18 dB confirmed on-air; panel "CE-SSB" toggle + `SetCessb` control |
 | **Half-Hann overlapping crossfade** (`PulseShape::Hann`) | All single-carrier modes (default) | ~−32 dB first sidelobe | 50 % symbol overlap; no ISI at SNR > 3 dB; CPU path only |
 | **Cosine overlap** (`PulseShape::CosineOverlap`) | Single-carrier alternative | ~−32 dB; null-to-null BW ≈ 2×Rs | Lower spectral leakage than rectangular; GPU-compatible |
 | **Root Raised Cosine (SRRC) FIR** (`PulseShape::Rrc`) | `-RRC` mode suffix (QPSK, 8PSK, 64QAM) | ~−35 dB OOB; excess BW = 35 % | α = 0.35 rolloff; taps configurable; ISI-free by matched-filter design |
@@ -292,7 +299,7 @@ detailed crossfade and ISI analysis.
 
 | Interface | Description |
 |---|---|
-| **Operator panel** (`openpulse-panel`) | Full egui/eframe GUI connecting to the daemon via TCP control port; mode selection, PTT, QSY management, message store, live status |
+| **Operator panel** (`openpulse-panel`) | Full egui/eframe GUI connecting to the daemon via TCP control port; mode selection, PTT, QSY management, CE-SSB toggle, tabbed Messages / Event-Log pane, live status |
 | **Twin-station view** (`openpulse-twinview`) | egui both-directions viewer — one window over two daemons; per-station spectrum/waterfall + rate/OTA/HPX readouts, so both link directions show at once |
 | **TUI** (`openpulse-tui`) | ratatui terminal UI — HPX state (colour-coded), AFC/rate meters, DCD energy bar, scrollable transitions log |
 | **CLI** (`openpulse-cli`) | Full-featured command-line interface: transmit, receive, benchmark, monitor, config init, calibrate (audio/PTT/AFC) |
@@ -346,7 +353,7 @@ pass with this flag. Never add tests that require real audio hardware.
 | `crates/openpulse-modem` | `ModemEngine`, `PipelineScheduler`, `ArqSession` (LLR-accumulating retry), benchmark harness, CSMA/DCD, channel sim harness |
 | `crates/openpulse-channel` | Channel simulation: Watterson, Gilbert-Elliott, QRN/QRM/QSB/Chirp |
 | `crates/openpulse-radio` | `PttController` trait: NoOp, SerialRtsDtr, Vox, Rigctld; `RigctldController` for CAT |
-| `crates/openpulse-dsp` | RRC filter, PLL, Gardner timing recovery, LMS/DFE adaptive equalizer |
+| `crates/openpulse-dsp` | RRC filter, PLL, Gardner timing recovery, LMS/DFE adaptive equalizer, CE-SSB envelope conditioner |
 | `crates/openpulse-config` | Typed TOML configuration with CLI-override precedence |
 | `crates/openpulse-gpu` | wgpu-backed BPSK DSP kernels; CPU fallback; `gpu` feature flag |
 
