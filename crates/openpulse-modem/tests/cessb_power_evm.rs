@@ -83,6 +83,7 @@ fn ber(recovered: &Result<Vec<u8>, openpulse_core::error::ModemError>, payload: 
     }
 }
 
+#[derive(Clone, Copy)]
 struct Row {
     ratio: f32,
     power_gain_db: f32,
@@ -193,4 +194,54 @@ fn cessb_power_vs_evm_across_modes() {
         gain_at(&bpsk, 1.5) < 0.3,
         "a near-constant-envelope signal has little for CE-SSB to clip"
     );
+}
+
+/// The engine's CE-SSB operating point: `CESSB_CLIP_RATIO` in `engine.rs`.
+const OPERATING_RATIO: f32 = 2.0;
+/// Raw-BER ceiling the OFDM-HOM EVM cost must stay under at the operating point.
+/// These modes only ever run FEC-protected (soft FEC ≈ +6 dB), so a sub-1% raw
+/// BER is comfortably absorbed; above it the clip would be eating into the FEC
+/// margin rather than just trading PAPR headroom.
+const FEC_ABSORBABLE_BER: f64 = 0.01;
+
+/// Does CE-SSB still pay off on the dense-subcarrier OFDM-HOM variants that
+/// `ModemEngine::cessb_benefits` enables alongside QPSK OFDM52? Answer (locks the
+/// gate): yes. They stay high-PAPR multicarrier, so the average-power gain holds
+/// (unlike single-carrier QAM, which gets ~0 dB — see `cessb_power_vs_evm_across_modes`);
+/// the tighter constellations add a small EVM cost that pure-QPSK OFDM does not,
+/// but at the 2.0×rms operating point it stays well within FEC's reach.
+#[test]
+fn cessb_benefits_hold_on_ofdm_hom() {
+    use ofdm_plugin::OfdmPlugin;
+
+    let at_operating = |rows: &[Row]| -> Row {
+        let r = rows
+            .iter()
+            .find(|r| (r.ratio - OPERATING_RATIO).abs() < 1e-3)
+            .expect("operating-ratio row present");
+        Row { ..*r }
+    };
+
+    // SNRs scale with constellation density so the AWGN BER columns stay meaningful.
+    let hom = [
+        ("OFDM52-8PSK", 18.0f32),
+        ("OFDM52-16QAM", 22.0),
+        ("OFDM52-32QAM", 24.0),
+        ("OFDM52-64QAM", 26.0),
+    ];
+    for (mode, snr) in hom {
+        let row = at_operating(&report(mode, &OfdmPlugin::new(), snr));
+        // The multicarrier PAPR benefit survives the denser subcarriers.
+        assert!(
+            row.power_gain_db > 0.5,
+            "{mode}: CE-SSB should still recover average power at the operating point (got {:.2} dB)",
+            row.power_gain_db
+        );
+        // The EVM the clip injects stays small enough for the mode's FEC to absorb.
+        assert!(
+            row.ber_clean < FEC_ABSORBABLE_BER,
+            "{mode}: CE-SSB EVM at the operating point must stay FEC-absorbable (raw BER {:.4})",
+            row.ber_clean
+        );
+    }
 }

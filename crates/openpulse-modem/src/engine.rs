@@ -404,6 +404,12 @@ impl ModemEngine {
     /// Whether `mode` benefits from CE-SSB conditioning — the high-PAPR
     /// multicarrier waveforms (OFDM, SC-FDMA). Single-carrier PSK/QAM and
     /// constant-envelope modes do not (clipping there costs EVM for no power gain).
+    ///
+    /// The dense-subcarrier OFDM-HOM variants (`OFDM52-{8PSK,16QAM,32QAM,64QAM}`)
+    /// are deliberately included: they stay high-PAPR multicarrier, so the
+    /// average-power gain holds; the small EVM they add at the 2.0×rms operating
+    /// point stays FEC-absorbable. Verified in `tests/cessb_power_evm.rs`
+    /// (`cessb_benefits_hold_on_ofdm_hom`).
     pub fn cessb_benefits(mode: &str) -> bool {
         let m = mode.to_ascii_uppercase();
         m.starts_with("OFDM") || m.starts_with("SCFDMA")
