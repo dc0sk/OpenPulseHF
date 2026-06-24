@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/openpulse-manual.md
 status: living
-last_updated: 2026-06-23
+last_updated: 2026-06-24
 ---
 
 # OpenPulseHF Complete Manual
@@ -62,8 +62,8 @@ The modulation catalog spans 8 plugin families:
 - **8PSK** (`psk8`) — 8PSK500/1000/2000/9600 with `-RRC`/`-HF` variants; Gray-coded.
 - **64QAM** (`64qam`) — 64QAM500/1000/2000-RRC; max-log-MAP soft demodulator.
 - **FSK4** (`fsk4`) — FSK4-ACK; the ACK control channel only.
-- **OFDM** (`ofdm`) — OFDM16/52 (QPSK) plus the OFDM52 higher-order ladder (8PSK/16QAM/32QAM/64QAM — the HF high-throughput path) and wideband OFDM99.
-- **SC-FDMA** (`scfdma`) — SCFDMA16/52 (QPSK), the SCFDMA26/52 higher-order ladders, SCFDMA52-64QAM(-P4), and wideband SCFDMA99.
+- **OFDM** (`ofdm`) — OFDM16/52 (QPSK) plus the OFDM52 higher-order ladder (8PSK/16QAM/32QAM/64QAM — the HF high-throughput path).
+- **SC-FDMA** (`scfdma`) — SCFDMA16/52 (QPSK), the SCFDMA26/52 higher-order ladders, SCFDMA52-64QAM(-P4).
 - **Pilot** (`pilot`) — `PILOT-{QPSK,8PSK,16QAM,32APSK}{500,1000}` plus their `-RRC` variants and `2000-RRC`; pilot-framed single-carrier with pilot-aided carrier recovery (cycle-slip-immune, sample-rate-offset-robust); soft-capable. Four ladders: `hpx_pilot` (500 rect), `hpx_pilot_rrc` (narrowband), `hpx_pilot_fast` (1000 baud), `hpx_pilot_fast_rrc` (fast + narrowband).
 
 The plain rectangular `QPSK2000`/`8PSK2000` are registered but **RRC-superseded** (use `-RRC`). For the authoritative per-mode table (baud, bits/symbol, gross bps, occupied bandwidth) see the [README modulation-modes table](../README.md#modulation-types); for the HF mode/FEC selection ladder see [mode-fec-ladder.md](mode-fec-ladder.md). `openpulse modes` prints the live registry.

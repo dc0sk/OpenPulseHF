@@ -97,8 +97,7 @@ single-carrier modes; SC-FDMA/OFDM are named by data-subcarrier count and span
 ~+35 % bandwidth) and `-HF` tuning variants not all listed here. The `-RRC`
 variants are the operational, carrier-offset-robust ones at 2000 baud: the plain
 rectangular `QPSK2000`/`8PSK2000` are registered but **RRC-superseded** (their
-crossfade pulse is ISI-limited at 4 samples/symbol — use `-RRC`). Wider
-99-subcarrier `OFDM99`/`SCFDMA99` variants (~3 kHz) also exist for VHF/UHF channels.
+crossfade pulse is ISI-limited at 4 samples/symbol — use `-RRC`).
 The `PILOT-*` modes are a pilot-framed single-carrier family: known in-band pilot
 symbols drive carrier recovery (cycle-slip-immune, sample-rate-offset-robust)
 instead of a decision-directed Costas loop — see the
