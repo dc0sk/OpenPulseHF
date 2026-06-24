@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/roadmap.md
 status: living
-last_updated: 2026-06-23
+last_updated: 2026-06-24
 ---
 
 # Roadmap
@@ -835,6 +835,13 @@ the long-deferred "adaptive rate-stepping over the air (RX lockstep)" item.
   `stage_emit_output` after attenuation, before the tanh limiter, with a peak-restore
   rescale. `[modem] cessb_enabled` config, `ControlCommand::SetCessb` + `openpulse
   daemon set-cessb` CLI, panel "CE-SSB: ON/OFF" toolbar toggle (#522, #523).
+- OFDM-HOM gate confirmed: the dense-subcarrier variants
+  `OFDM52-{8PSK,16QAM,32QAM,64QAM}` stay high-PAPR multicarrier, so the
+  average-power gain holds (unlike single-carrier QAM, ~0 dB); they add a small EVM
+  cost pure-QPSK OFDM does not (raw BER ≈ 0.0007–0.0039 at the 2.0×rms operating
+  point) that stays FEC-absorbable. `cessb_benefits` enabling all OFDM*/SCFDMA* is
+  therefore correct as-is — no narrowing. Locked by `cessb_benefits_hold_on_ofdm_hom`
+  in `tests/cessb_power_evm.rs`.
 - Verification note: virtual/channel-sim covers decode integrity; the average-power
   gain at fixed PEP is a PA-domain effect no audio loopback (virtual or hardware) can
   show — it folds into the deferred on-air validation (wattmeter PEP-vs-avg + SDR
