@@ -859,10 +859,20 @@ the long-deferred "adaptive rate-stepping over the air (RX lockstep)" item.
   **CE-SSB ON does not worsen the spectral mask**: ACPR lower Δ−1.0 dB (cleaner), upper
   Δ−0.1 dB, 99% OBW Δ−46 Hz — all negligible/benign. Front-end linearity validated
   across a 32 dB level change (shoulders-dBc constant ⇒ real TX, not SDR IMD). With the
-  +1.18 dB average-power gain, this confirms **CE-SSB raises average power without
-  increasing PA splatter** — the ideal outcome. (Absolute ACPR includes the OFDM
+  +1.18 dB average-power gain, this confirms on QPSK OFDM **CE-SSB raises average power
+  without increasing PA splatter** — the ideal outcome. (Absolute ACPR includes the OFDM
   signal's own skirts; the meaningful result is the OFF-vs-ON delta. Measurement floor
   −34 dBc.)
+- OFDM-HOM on-air nuance — the dense variants `OFDM52-{8PSK,16QAM,32QAM,64QAM}` DO show
+  on-air regrowth with CE-SSB ON (ACPR-lower Δ +1.2/+2.8/+4.2/+0.7 dB), but it is **PA
+  compression, not the conditioner** (its digital output is clean on all HOM modes,
+  ±0.7 dB). CE-SSB raises the peaky HOM signals' average power a lot (+2.4…+7 dB), so at
+  *full* drive the PA overdrives. A 32QAM-ON drive sweep: ACPR −21.7 dBc @ALC 61 (full)
+  → **−29.1 dBc @ALC ~31 (~35% drive)**, with output power essentially unchanged
+  (PO 36→32) — i.e. the extra drive above proper level is pure splatter, no power.
+  **Operator guidance: with CE-SSB on dense HOM, set audio drive for moderate ALC
+  (~30–40, standard data-mode practice); don't slam the ALC.** Then CE-SSB on HOM is
+  clean *and* keeps its power.
 
 ### 10.6 — Remaining follow-ons (deferred)
 - Dual-station hardware validation of the OTA ladder (rpi51↔rpi52) per the runbooks.

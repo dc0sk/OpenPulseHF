@@ -184,10 +184,21 @@ measurement (`cessb_acpr_spectral_regrowth`, Welch PSD) shows **−0.46 dB** out
 and no 99% OBW widening at the operating ratio, versus **+5 dB** out-of-band and a
 ~960 Hz OBW blow-up for a naive hard clip at the same level. This was also **confirmed
 on real RF** (SDRplay RSP2pro off-air capture of the FT-991A's OFDM52, CE-SSB OFF/ON
-A/B at 20 W): CE-SSB ON does not worsen the spectral mask (ACPR lower Δ−1.0 dB,
-upper Δ−0.1 dB, 99% OBW Δ−46 Hz — all negligible), with front-end linearity validated
-across a 32 dB level change. Together with the +1.18 dB on-air average-power gain, this
-confirms CE-SSB **raises average power without increasing PA splatter**.
+A/B at 20 W): on QPSK OFDM, CE-SSB ON does not worsen the spectral mask (ACPR lower
+Δ−1.0 dB, upper Δ−0.1 dB, 99% OBW Δ−46 Hz — all negligible), with front-end linearity
+validated across a 32 dB level change. Together with the +1.18 dB on-air average-power
+gain, on QPSK OFDM CE-SSB **raises average power without increasing PA splatter**.
+
+**Dense OFDM-HOM and drive backoff.** The denser variants
+(`OFDM52-{8PSK,16QAM,32QAM,64QAM}`) are peakier, so CE-SSB raises their average power
+much more (+2.4…+7 dB digital). On-air this *does* show added regrowth (ACPR-lower
+Δ +1.2…+4.2 dB) — but it is **PA compression, not the conditioner** (whose digital
+output stays clean on all HOM modes, ±0.7 dB). It is therefore drive-dependent: a
+32QAM-ON drive sweep went from −21.7 dBc ACPR at slammed ALC (~61) to **−29.1 dBc at
+moderate ALC (~31)** with essentially the same output power — the over-drive above
+proper level is pure splatter. **Practical guidance:** with CE-SSB on dense HOM, set
+audio drive for moderate ALC (standard data-mode practice, don't slam it); CE-SSB then
+keeps its power gain while staying spectrally clean.
 
 To our knowledge this is the first open-source HF **data** modem to apply CE-SSB — a
 technique previously confined to voice SSB — as an adaptive per-mode conditioner on
