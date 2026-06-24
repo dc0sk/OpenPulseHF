@@ -182,8 +182,12 @@ same peak.
 conditioner adds negligible out-of-band regrowth: a software ACPR / occupied-bandwidth
 measurement (`cessb_acpr_spectral_regrowth`, Welch PSD) shows **−0.46 dB** out-of-band
 and no 99% OBW widening at the operating ratio, versus **+5 dB** out-of-band and a
-~960 Hz OBW blow-up for a naive hard clip at the same level. The remaining
-PA-compression spectral-mask check on real RF is deferred until an SDR is available.
+~960 Hz OBW blow-up for a naive hard clip at the same level. This was also **confirmed
+on real RF** (SDRplay RSP2pro off-air capture of the FT-991A's OFDM52, CE-SSB OFF/ON
+A/B at 20 W): CE-SSB ON does not worsen the spectral mask (ACPR lower Δ−1.0 dB,
+upper Δ−0.1 dB, 99% OBW Δ−46 Hz — all negligible), with front-end linearity validated
+across a 32 dB level change. Together with the +1.18 dB on-air average-power gain, this
+confirms CE-SSB **raises average power without increasing PA splatter**.
 
 To our knowledge this is the first open-source HF **data** modem to apply CE-SSB — a
 technique previously confined to voice SSB — as an adaptive per-mode conditioner on

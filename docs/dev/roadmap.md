@@ -853,17 +853,22 @@ the long-deferred "adaptive rate-stepping over the air (RX lockstep)" item.
   in `tests/cessb_power_evm.rs`): Welch PSD of CE-SSB on vs off OFDM52 shows the
   conditioner is spectrally benign at the 2.0×rms operating ratio (out-of-band
   regrowth −0.46 dB, no 99% OBW widening, shoulder −0.85 dB), self-validated against a
-  naive hard clip that splatters clearly more (+5 dB OOB, OBW 2133→3094 Hz). The
-  remaining **PA-compression splatter on real RF is deferred until an SDR is available**
-  (minimisable meanwhile by keeping drive below ALC).
+  naive hard clip that splatters clearly more (+5 dB OOB, OBW 2133→3094 Hz).
+- PA-compression spectral mask — **DONE on real RF** (SDRplay RSP2pro, off-air capture
+  of the FT-991A's 144.6 MHz OFDM52, CE-SSB OFF/ON A/B, 3 bursts each at 20 W).
+  **CE-SSB ON does not worsen the spectral mask**: ACPR lower Δ−1.0 dB (cleaner), upper
+  Δ−0.1 dB, 99% OBW Δ−46 Hz — all negligible/benign. Front-end linearity validated
+  across a 32 dB level change (shoulders-dBc constant ⇒ real TX, not SDR IMD). With the
+  +1.18 dB average-power gain, this confirms **CE-SSB raises average power without
+  increasing PA splatter** — the ideal outcome. (Absolute ACPR includes the OFDM
+  signal's own skirts; the meaningful result is the OFF-vs-ON delta. Measurement floor
+  −34 dBc.)
 
 ### 10.6 — Remaining follow-ons (deferred)
 - Dual-station hardware validation of the OTA ladder (rpi51↔rpi52) per the runbooks.
 - Streaming-`Agc` rollout to the PSK ladder with active-span gating.
-- On-air CE-SSB PA-compression splatter check — **deferred until an SDR is available**.
-  The average-power gain is confirmed on real RF and the conditioner's own DSP regrowth
-  is already covered in software (both §10.8); the SDR is needed only for the PA-domain
-  splatter at the raised average power.
+- (CE-SSB on-air validation is now complete — average-power gain *and* spectral mask
+  both confirmed on real RF; see §10.8.)
 
 ---
 
