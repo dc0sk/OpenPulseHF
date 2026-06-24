@@ -1098,6 +1098,11 @@ openpulse --backend loopback --log error benchmark run
 
 # On-device calibration (audio level, PTT latency, AFC)
 openpulse --ptt rts --rig /dev/ttyUSB0 calibrate ptt --output ptt.json
+# Guided ALC drive tuning (keys the TX — needs --features cpal + rigctld; use a dummy load).
+# Steps TX attenuation until the rig's ALC sits in a moderate band, so CE-SSB on dense
+# OFDM-HOM doesn't over-drive the PA into splatter. Live ALC also shows in the panel
+# (daemon polls the rig at [radio] meter_poll_ms).
+openpulse --rig 127.0.0.1:4532 calibrate drive --mode OFDM52 --target-alc-lo 0.3 --target-alc-hi 0.5
 
 # Identity / trust / config
 openpulse trust list
