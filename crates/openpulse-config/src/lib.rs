@@ -182,6 +182,11 @@ pub struct RadioConfig {
     pub cat_backend: String,
     /// rigctld TCP address for single-rig PTT-only use (default `"127.0.0.1:4532"`).
     pub rigctld_addr: String,
+    /// Rig meter (ALC/power-out/SWR) poll interval in milliseconds, emitted as
+    /// `RigStatus` events for live operator drive-tuning. `0` disables polling.
+    /// Default `500` (2 Hz). Uses a dedicated rigctld connection, so it never
+    /// contends with PTT/frequency commands. Raise it for rigs with slow CAT.
+    pub meter_poll_ms: u64,
     /// Primary rig (RX/TX for normal operation and cross-band relay receive).
     pub rig_a: RigConfig,
     /// Secondary rig (TX for cross-band relay).  `None` if not configured.
@@ -327,6 +332,7 @@ impl Default for RadioConfig {
         Self {
             cat_backend: "rigctld".into(),
             rigctld_addr: "127.0.0.1:4532".into(),
+            meter_poll_ms: 500,
             rig_a: RigConfig::default(),
             rig_b: None,
         }
@@ -667,6 +673,9 @@ cessb_enabled = true
 cat_backend = "rigctld"
 # rigctld TCP address for single-rig PTT-only use.
 rigctld_addr = "127.0.0.1:4532"
+# Rig meter (ALC / power-out / SWR) poll interval in ms, surfaced as live RigStatus
+# events for drive tuning. 0 disables. Uses a separate rigctld connection.
+meter_poll_ms = 500
 
 # Primary rig (RX/TX for normal operation; also the receive side of cross-band relay).
 [radio.rig_a]
@@ -803,6 +812,8 @@ mod tests {
         assert_eq!(cfg.relay.max_hops, 3);
         // CAT defaults to rigctld for backward compatibility.
         assert_eq!(cfg.radio.cat_backend, "rigctld");
+        // Rig meter polling defaults to 2 Hz (500 ms).
+        assert_eq!(cfg.radio.meter_poll_ms, 500);
         // Audio device defaults to empty (system default device).
         assert_eq!(cfg.audio.backend, "default");
         assert_eq!(cfg.audio.device, "");

@@ -310,6 +310,61 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
             }
         }
     };
+
+    // Live rig-meter poll task (operator drive-tuning aid): a *dedicated* rigctld
+    // connection polls ALC / power-out / SWR and emits `RigStatus` events so the
+    // panel can show live ALC while the operator sets drive. The separate
+    // connection means it never contends with the PTT/frequency command path.
+    // `[radio] meter_poll_ms = 0` disables it.
+    if !cfg.radio.cat_backend.eq_ignore_ascii_case("none") && cfg.radio.meter_poll_ms > 0 {
+        match RigctldController::connect(&cfg.radio.rigctld_addr) {
+            Ok(mut poll_rig) => {
+                let ev = handle.event_tx.clone();
+                let interval = std::time::Duration::from_millis(cfg.radio.meter_poll_ms);
+                tokio::task::spawn_blocking(move || {
+                    use crate::protocol::ControlEvent;
+                    let mut freq = poll_rig.get_frequency().unwrap_or(0);
+                    let mut mode = poll_rig
+                        .get_mode()
+                        .map(|m| m.as_str().to_string())
+                        .unwrap_or_default();
+                    let mut tick: u32 = 0;
+                    loop {
+                        std::thread::sleep(interval);
+                        // Frequency/mode change rarely — refresh ~every 10 cycles;
+                        // poll the meters every cycle.
+                        if tick.is_multiple_of(10) {
+                            if let Ok(f) = poll_rig.get_frequency() {
+                                freq = f;
+                            }
+                            if let Ok(m) = poll_rig.get_mode() {
+                                mode = m.as_str().to_string();
+                            }
+                        }
+                        tick = tick.wrapping_add(1);
+                        let _ = ev.send(ControlEvent::RigStatus {
+                            rig: "rigctld".into(),
+                            freq_hz: freq,
+                            mode: mode.clone(),
+                            power_w: poll_rig.get_power_out().ok(),
+                            alc: poll_rig.get_alc().ok(),
+                            swr: poll_rig.get_swr().ok(),
+                        });
+                    }
+                });
+                tracing::info!(
+                    interval_ms = cfg.radio.meter_poll_ms,
+                    "rig meter poll task started (live ALC/power/SWR)"
+                );
+            }
+            Err(err) => tracing::warn!(
+                addr = %cfg.radio.rigctld_addr,
+                error = %err,
+                "rig meter poll: second rigctld connection failed; live meters disabled"
+            ),
+        }
+    }
+
     let mut ptt_controller: Option<Box<dyn PttController>> =
         build_ptt_controller(&cfg.modem.ptt_backend, &cfg.radio.rigctld_addr);
 
