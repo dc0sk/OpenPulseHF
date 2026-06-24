@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/features.md
 status: living
-last_updated: 2026-06-19
+last_updated: 2026-06-24
 ---
 
 # OpenPulseHF — Feature Reference
@@ -17,7 +17,7 @@ is pending, and — for non-obvious algorithms — the mathematics behind the de
 ## Table of Contents
 
 1. [Waveform Modes](#waveform-modes)
-2. [Pulse Shaping and Sidelobe Suppression](#pulse-shaping-and-sidelobe-suppression)
+2. [Pulse Shaping, Sidelobe Suppression, and Envelope Conditioning](#pulse-shaping-sidelobe-suppression-and-envelope-conditioning)
 3. [Automatic Frequency Control (AFC)](#automatic-frequency-control-afc)
 4. [Forward Error Correction](#forward-error-correction)
 5. [Adaptive Rate Control](#adaptive-rate-control)
@@ -86,7 +86,7 @@ decision error produces at most one bit error rather than two or three.
 
 ---
 
-## Pulse Shaping and Sidelobe Suppression
+## Pulse Shaping, Sidelobe Suppression, and Envelope Conditioning
 
 ✅ **Implemented** — `plugins/bpsk/src/modulate.rs`, `demodulate.rs`
 
@@ -134,6 +134,60 @@ Hann windowing but without the ISI penalty that full windowing creates.
 ✅ When compiled with `--features gpu`, modulation sample rendering is offloaded to the
 GPU via `wgpu` compute shaders (WGSL).  The CPU still handles bit-to-symbol mapping
 (NRZI encoding); only the per-sample carrier multiplication is GPU-accelerated.
+
+### CE-SSB transmit envelope conditioning
+
+✅ **Implemented** — `crates/openpulse-dsp/src/cessb.rs`; `ModemEngine::cessb_benefits`
+/ `cessb_condition_tx` in `crates/openpulse-modem/src/engine.rs`
+
+High-PAPR multicarrier waveforms (OFDM, SC-FDMA) spend most of their time well below
+their peak envelope — the peak-to-average power ratio is ~10–12 dB. Because an SSB
+transmitter is **peak-power (PEP) limited**, that idle headroom is wasted average
+power. Controlled-Envelope SSB (Hershberger, W9GR, *QEX* Nov/Dec 2014; public domain)
+recovers it with a **look-ahead peak-stretcher** that gently compresses the complex
+envelope toward a target level, raising average power at a fixed peak without the
+overshoot a naive limiter would produce.
+
+OpenPulseHF applies CE-SSB as an **optional, default-on, per-mode TX conditioner**,
+gated by `ModemEngine::cessb_benefits` to the high-PAPR multicarrier families
+(`OFDM*`, `SCFDMA*`). It is a no-op for single-carrier PSK/QAM — whose
+amplitude-sensitive constellations would only pay EVM for no power gain — and for
+near-constant-envelope BPSK (nothing to clip). It runs in `stage_emit_output` after TX
+attenuation and before the tanh limiter, with a peak-restore rescale so the freed
+headroom becomes average power at the same PEP. A `[modem] cessb_enabled` config flag,
+the `SetCessb` control command (`openpulse daemon set-cessb`), and a panel "CE-SSB"
+toggle expose the master switch at runtime.
+
+**Algorithm.** From the analytic envelope `e[n] = |hilbert(s)[n]|`, `peak_stretch_gain`
+derives a per-sample gain `g[n] ≤ 1` that holds the windowed-maximum envelope at the
+clip level `L = ratio × rms(e)` over a look-ahead window (16 samples); `apply_gain`
+multiplies it into the passband. The look-ahead makes the gain **band-limited** rather
+than a hard sample-by-sample clip, which is what keeps spectral regrowth low. The
+engine operating ratio is 2.0×rms.
+
+**Measured benefit (channel-sim, `tests/cessb_power_evm.rs`).** On OFDM52, CE-SSB
+recovers **+1.6 / +2.7 / +3.8 dB** average power at 2.5 / 2.0 / 1.5×rms clip, at **zero
+BER cost** (QPSK subcarriers absorb the clip). Single-carrier 64QAM gains ~0 dB and
+pays real EVM; constant-envelope BPSK gains 0 dB — confirming the per-mode gate. The
+dense OFDM-HOM variants (`OFDM52-{8PSK,16QAM,32QAM,64QAM}`) keep the multicarrier gain
+with only a small, FEC-absorbable EVM cost (`cessb_benefits_hold_on_ofdm_hom`).
+
+**On-air confirmation.** On a real FT-991A (2 m, 20 W into a 20 dB / 20 W attenuator),
+an interleaved CE-SSB OFF/ON A/B of gapless OFDM52 measured **+1.18 dB** average-power
+gain on the rig's PO meter — matching the +1.2 dB digital-domain prediction for that
+signal — with the ALC meter unchanged between ON and OFF, i.e. the gain arrives at the
+same peak.
+
+**Spectral cleanliness.** Because the peak-stretch gain is band-limited, the
+conditioner adds negligible out-of-band regrowth: a software ACPR / occupied-bandwidth
+measurement (`cessb_acpr_spectral_regrowth`, Welch PSD) shows **−0.46 dB** out-of-band
+and no 99% OBW widening at the operating ratio, versus **+5 dB** out-of-band and a
+~960 Hz OBW blow-up for a naive hard clip at the same level. The remaining
+PA-compression spectral-mask check on real RF is deferred until an SDR is available.
+
+To our knowledge this is the first open-source HF **data** modem to apply CE-SSB — a
+technique previously confined to voice SSB — as an adaptive per-mode conditioner on
+digital multicarrier waveforms.
 
 ---
 
