@@ -40,9 +40,23 @@ fn rig_widget(ui: &mut Ui, label: &str, snap: Option<&RigSnapshot>) {
                 ui.label(RichText::new(format!("SWR {swr:.1}")).color(color));
             }
             if let Some(alc) = s.alc {
-                if alc > 0.5 {
-                    ui.label(RichText::new(format!("ALC {alc:.2}")).color(Color32::YELLOW));
-                }
+                // Always show ALC so it can be used as a drive-tuning aid: keep it in
+                // the lower-moderate range. Over-driving the ALC causes spectral
+                // splatter — most pronounced with CE-SSB on dense OFDM-HOM modes.
+                let (color, tag) = if alc > 0.7 {
+                    (Color32::RED, " ⚠")
+                } else if alc > 0.4 {
+                    (Color32::YELLOW, "")
+                } else {
+                    (Color32::GREEN, "")
+                };
+                ui.label(RichText::new(format!("ALC {alc:.2}{tag}")).color(color))
+                    .on_hover_text(
+                        "Keep ALC in the lower-moderate range while transmitting. \
+                         Over-driving (red) causes spectral splatter — worst with \
+                         CE-SSB on dense OFDM-HOM modes. Trim the TX Atten slider \
+                         (or the rig's data gain) until ALC sits green/low-yellow.",
+                    );
             }
         }
     }

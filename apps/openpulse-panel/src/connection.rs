@@ -266,10 +266,12 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
                 alc,
                 swr,
             };
-            if rig == "a" {
-                st.rig_a = Some(snap);
-            } else {
+            // The primary rig (single-rig CAT identifies itself as "rigctld") maps to
+            // slot A; only an explicit "b" (cross-band secondary) goes to slot B.
+            if rig == "b" {
                 st.rig_b = Some(snap);
+            } else {
+                st.rig_a = Some(snap);
             }
         }
         ControlEvent::PttChanged { active } => {
