@@ -842,16 +842,26 @@ the long-deferred "adaptive rate-stepping over the air (RX lockstep)" item.
   point) that stays FEC-absorbable. `cessb_benefits` enabling all OFDM*/SCFDMA* is
   therefore correct as-is — no narrowing. Locked by `cessb_benefits_hold_on_ofdm_hom`
   in `tests/cessb_power_evm.rs`.
-- Verification note: virtual/channel-sim covers decode integrity; the average-power
-  gain at fixed PEP is a PA-domain effect no audio loopback (virtual or hardware) can
-  show — it folds into the deferred on-air validation (wattmeter PEP-vs-avg + SDR
-  spectral-mask check for envelope-conditioning regrowth).
+- Verification note: virtual/channel-sim covers decode integrity. The average-power
+  gain at fixed PEP is a PA-domain effect no audio loopback can show — **now confirmed
+  on real RF** (rpi53 + FT-991A, 20 W via a 20 dB/20 W attenuator on 144.6 MHz):
+  interleaved OFF/ON A/B of gapless OFDM52 measured **+1.18 dB** average-power gain on
+  the rig's PO meter, matching the channel-sim prediction (+1.2 dB for this payload at
+  the 2.0×rms operating point), with ALC unchanged between ON/OFF (gain at equal peak
+  = the CE-SSB signature).
+- Remaining on-air check — **spectral mask / clipping regrowth — deferred until an SDR
+  is available**. No-hardware alternative: a software ACPR / occupied-bandwidth PSD
+  (Welch) of CE-SSB on vs off isolates the *conditioner's* own DSP regrowth (the part
+  our code owns) and is the more controlled test; only the PA-compression component
+  (minimisable by keeping drive below ALC) truly needs the SDR.
 
 ### 10.6 — Remaining follow-ons (deferred)
 - Dual-station hardware validation of the OTA ladder (rpi51↔rpi52) per the runbooks.
 - Streaming-`Agc` rollout to the PSK ladder with active-span gating.
-- On-air CE-SSB measurement: confirm the ~2–4 dB average-power gain on a real PA and
-  check occupied-bandwidth/spectral mask (folds into on-air regulatory validation).
+- On-air CE-SSB spectral-mask / clipping-regrowth check — **deferred until an SDR is
+  available** (the average-power gain is already confirmed on real RF, see §10.8). A
+  software ACPR/occupied-bandwidth PSD is the no-hardware alternative for the
+  conditioner's own regrowth; the SDR is only needed for PA-compression splatter.
 
 ---
 
