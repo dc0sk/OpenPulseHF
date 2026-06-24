@@ -7,7 +7,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-06-24
+
 ### Added
+- Controlled-Envelope SSB (CE-SSB) TX envelope conditioning (`openpulse_dsp::cessb`):
+  look-ahead peak-stretcher that raises average TX power at fixed PEP on high-PAPR
+  multicarrier modes. Per-mode, default-on (`ModemEngine::cessb_benefits` → `OFDM*`/
+  `SCFDMA*`); `[modem] cessb_enabled` config, `SetCessb` control command, `openpulse
+  daemon set-cessb` CLI, and a panel "CE-SSB" toggle. Channel-sim +1.6/+2.7/+3.8 dB on
+  OFDM52 at zero BER cost; confirmed **+1.18 dB on-air** (FT-991A). Software ACPR and an
+  on-air SDR spectral-mask check (SDRplay RSP2pro) show no added splatter on QPSK OFDM;
+  on dense OFDM-HOM the larger average-power boost only splatters if the PA's ALC is
+  over-driven, so set audio drive for moderate ALC (#521–#533).
+- `cessb_benefits_hold_on_ofdm_hom` and `cessb_acpr_spectral_regrowth` measurement tests
+  for the per-mode gate and the conditioner's (negligible) spectral regrowth.
+- Operator panel: Messages presented as a tab alongside the Event Log in the bottom pane.
+
+### Added (earlier, since 0.2.0)
 - Turbo codec: rate-1/3 PCCC with RSC K=3 component codes (G1={1,1,1} G2={1,0,1}),
   3GPP QPP interleaver (K=40–6144), Max-Log-MAP BCJR, 8 iterations, CRC-16 early exit;
   `FecMode::Turbo` wired into `transmit_with_fec_mode` / `receive_with_fec_mode` (#337).

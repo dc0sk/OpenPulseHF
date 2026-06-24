@@ -34,7 +34,7 @@ DB1IUA for helping stuffing the budget sink-hole.
 ---
 ## Status
 
-24th of June '26, added CE-SSB transmit envelope conditioning (per-mode, default-on for the high-PAPR OFDM/SC-FDMA modes). The average-power gain at fixed PEP is confirmed on-air (+1.18 dB on 2 m via an FT-991A), matching the channel-sim prediction, and a software ACPR check shows the conditioner adds negligible spectral regrowth. The operator panel now carries a CE-SSB toggle and a tabbed Messages/Event-Log pane.
+**v0.2.1 (24th of June '26)** — headline feature: CE-SSB transmit envelope conditioning (per-mode, default-on for the high-PAPR OFDM/SC-FDMA modes). The average-power gain at fixed PEP is confirmed on-air (+1.18 dB on 2 m via an FT-991A), matching the channel-sim prediction; software ACPR and an on-air SDR spectral-mask check show no added splatter on QPSK OFDM (dense OFDM-HOM stays clean at normal data-mode drive). The operator panel now carries a CE-SSB toggle and a tabbed Messages/Event-Log pane.
 
 9th of June '26, the soundsystem bugs have been fixed and validated, now returning to on-air tests.
 
