@@ -138,7 +138,10 @@ sleep 3
 # panel shows live energy + decoded frames.
 echo "==> transmitting ${MODE} bursts out ${TX_DEVICE} every ${INTERVAL}s (FEC none)."
 i=0
-rand_body() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$SIZE"; }
+# head is the producer (reads SIZE bytes then exits 0) and tr the consumer, so the
+# pipe never closes early — avoids the SIGPIPE that `tr … | head -c` trips under
+# `set -o pipefail`. tr drops non-alphanumerics, so the body may be a bit shorter.
+rand_body() { head -c "$SIZE" /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9'; }
 while :; do
     i=$((i + 1))
     payload="HWLOOP $MODE SEQ$(printf '%03d' "$i") $(rand_body)"

@@ -8,7 +8,7 @@ use tracing::{debug, info};
 
 use openpulse_core::ack::AckFrame;
 use openpulse_core::ack::AckType;
-use openpulse_core::audio::{AudioBackend, AudioConfig};
+use openpulse_core::audio::{AudioBackend, AudioConfig, AudioInputStream};
 use openpulse_core::conv::ConvCodec;
 use openpulse_core::dcd::DcdState;
 use openpulse_core::error::{ModemError, PluginError};
@@ -957,6 +957,51 @@ impl ModemEngine {
         device: Option<&str>,
     ) -> Result<Option<AudioSamples>, ModemError> {
         let samples = self.stage_capture_input(device)?;
+        self.accumulate_routed(samples)
+    }
+
+    /// Open a capture stream on `device` (or the engine's default device) for a
+    /// caller that will own it across receive ticks and feed each `read()` to
+    /// [`accumulate_capture`](Self::accumulate_capture). Returning the stream keeps
+    /// it on the caller's thread — required for a streaming (cpal) backend, whose
+    /// callback only fills its buffer while the stream is held open. A
+    /// [`LoopbackBackend`](openpulse_audio::LoopbackBackend) stream clones the same
+    /// shared buffers, so this is equivalent to per-tick reopen there.
+    pub fn open_capture_stream(
+        &self,
+        device: Option<&str>,
+    ) -> Result<Box<dyn AudioInputStream>, ModemError> {
+        let audio_cfg = AudioConfig::default();
+        self.audio
+            .open_input(device.or(self.default_device.as_deref()), &audio_cfg)
+            .map_err(|e| ModemError::Audio(e.to_string()))
+    }
+
+    /// Burst-accumulate samples the CALLER already captured from a persistent input
+    /// stream, returning a complete burst when the carrier drops (same contract as
+    /// [`capture_burst`](Self::capture_burst)).
+    ///
+    /// cpal is a callback backend whose stream needs tens of ms to start delivering
+    /// after `play()`; reopening it every tick (as `capture_burst` does) never warms
+    /// up on real hardware, so the buffer stays empty and no carrier is ever seen. A
+    /// tick-based caller on a real audio backend should instead open one input
+    /// stream, keep it open, and feed each `read()` here — the daemon receive loop
+    /// does this. Records the spectrum/waterfall tap from these samples.
+    pub fn accumulate_capture(
+        &mut self,
+        samples: Vec<f32>,
+    ) -> Result<Option<AudioSamples>, ModemError> {
+        self.record_audio(&samples); // RX window for the spectrum/waterfall tap
+        self.accumulate_routed(AudioSamples { samples })
+    }
+
+    /// Shared burst gather/flush over already-captured samples: route the input
+    /// pipeline + DCD, accumulate while the carrier is present (per-window RMS vs the
+    /// DCD squelch), and flush the whole burst when it drops or the cap is hit.
+    fn accumulate_routed(
+        &mut self,
+        samples: AudioSamples,
+    ) -> Result<Option<AudioSamples>, ModemError> {
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
         self.ota_update_dcd(&samples);
 
@@ -989,19 +1034,98 @@ impl ModemEngine {
         }
     }
 
-    /// Decode a captured burst (from [`capture_burst`](Self::capture_burst)) as a
-    /// data frame in `mode`.
+    /// Onset-scan geometry for `mode`: (scan step, acquisition window, min frame
+    /// samples, max frame samples). Prefers the plugin's `frame_geometry`; falls back
+    /// to trailing-digit baud with a 32-symbol preamble for unregistered plugins.
+    fn frame_scan_geometry(&self, mode: &str, sample_rate: u32) -> (usize, usize, usize, usize) {
+        let geometry = self.plugins.get(mode).and_then(|p| {
+            p.frame_geometry(&ModulationConfig {
+                mode: mode.to_string(),
+                sample_rate,
+                ..ModulationConfig::default()
+            })
+        });
+        match geometry {
+            Some(g) => (
+                g.symbol_period_samples.max(1),
+                g.preamble_samples.max(g.symbol_period_samples).max(1),
+                g.min_frame_samples.max(1),
+                g.max_frame_samples.max(g.min_frame_samples),
+            ),
+            None => {
+                let step = {
+                    let baud: u32 = mode
+                        .trim_end_matches("-RRC")
+                        .bytes()
+                        .rev()
+                        .take_while(|b| b.is_ascii_digit())
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .fold(0u32, |acc, b| acc * 10 + (b - b'0') as u32);
+                    if baud > 0 {
+                        (sample_rate as f32 / baud as f32).round() as usize
+                    } else {
+                        32
+                    }
+                };
+                (step, step * 32, step * 33, step * 2280)
+            }
+        }
+    }
+
+    /// Decode a captured burst (from [`capture_burst`](Self::capture_burst) or
+    /// [`accumulate_capture`](Self::accumulate_capture)) as a data frame in `mode`.
+    ///
+    /// A DCD-detected burst is not sample-accurate, and the engine's single-window
+    /// demod settles AFC on the window start (DSP playbook §3), so decoding only from
+    /// sample 0 usually misframes. Scan onset offsets across the captured lead-in —
+    /// reusing the same `decode_attempt` + frame geometry as the live timeout
+    /// receiver — and return the first frame that validates.
     pub fn decode_burst(
         &mut self,
         mode: &str,
         burst: &AudioSamples,
     ) -> Result<Vec<u8>, ModemError> {
-        self.receive_from_samples(
-            mode,
-            AudioSamples {
-                samples: burst.samples.clone(),
-            },
-        )
+        let sr = AudioConfig::default().sample_rate;
+        let (step, acq_samples, min_frame_samples, max_frame_samples) =
+            self.frame_scan_geometry(mode, sr);
+        let n = burst.samples.len();
+        if n < min_frame_samples {
+            // Too short to hold a frame: one direct attempt for the error/SNR path.
+            return self.receive_from_samples(
+                mode,
+                AudioSamples {
+                    samples: burst.samples.clone(),
+                },
+            );
+        }
+        let step = step.max(1);
+        // The carrier onset sits within the captured lead-in; scan up to a few
+        // acquisition windows past sample 0 (bounded so a noise burst can't spin).
+        let scan_end = (n - min_frame_samples).min(acq_samples.saturating_mul(4));
+        let mut start = 0usize;
+        let last_err = loop {
+            let end = (start + max_frame_samples).min(n);
+            let afc_before = self.afc_correction_hz;
+            match self.decode_attempt(
+                mode,
+                AudioSamples {
+                    samples: burst.samples[start..end].to_vec(),
+                },
+                FecMode::None,
+            ) {
+                Ok(payload) => return Ok(payload),
+                Err(e) => {
+                    self.afc_correction_hz = afc_before; // undo the failed attempt's AFC drift
+                    if start >= scan_end {
+                        break e;
+                    }
+                    start = (start + step).min(scan_end);
+                }
+            }
+        };
+        Err(last_err)
     }
 
     /// Decode a captured burst with the OTA candidate fallback and build the ACK to
@@ -4176,6 +4300,68 @@ mod tests {
         assert_eq!(burst.samples.len(), frame.len(), "burst is the whole frame");
         let decoded = rx.decode_burst("BPSK250", &burst).unwrap();
         assert_eq!(&decoded[..b"burst capture".len()], b"burst capture");
+    }
+
+    #[test]
+    fn accumulate_capture_streams_burst_and_feeds_spectrum_tap() {
+        // The daemon owns ONE persistent input stream (a per-tick reopen never warms
+        // up cpal) and feeds each read() to accumulate_capture. Verify it accumulates
+        // across reads, flushes on carrier drop, decodes, and feeds the spectrum tap.
+        let tx_lb = LoopbackBackend::new();
+        let mut tx = ModemEngine::new(Box::new(tx_lb.clone_shared()));
+        tx.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+        tx.transmit(b"streamed burst", "BPSK250", None).unwrap();
+        let frame = tx_lb.drain_samples();
+        assert!(!frame.is_empty());
+
+        let mut rx = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        rx.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+        assert!(rx.last_audio().is_empty(), "no audio captured yet");
+
+        let chunk = frame.len() / 4 + 1;
+        for frag in frame.chunks(chunk) {
+            assert!(
+                rx.accumulate_capture(frag.to_vec()).unwrap().is_none(),
+                "mid-burst read must keep accumulating"
+            );
+        }
+        assert!(
+            !rx.last_audio().is_empty(),
+            "accumulate_capture must feed the spectrum/waterfall tap"
+        );
+        // A silent read (carrier dropped) flushes the complete burst.
+        let burst = rx
+            .accumulate_capture(vec![0.0; 256])
+            .unwrap()
+            .expect("carrier drop must flush the accumulated burst");
+        assert_eq!(burst.samples.len(), frame.len(), "burst is the whole frame");
+        let decoded = rx.decode_burst("BPSK250", &burst).unwrap();
+        assert_eq!(&decoded[..b"streamed burst".len()], b"streamed burst");
+    }
+
+    #[test]
+    fn decode_burst_scans_onset_when_frame_not_at_sample_zero() {
+        // A DCD-detected hardware burst starts before the true frame onset, so the
+        // engine's single-window demod (which settles AFC on the window start)
+        // misframes from sample 0. decode_burst must scan onset offsets to recover it.
+        let tx_lb = LoopbackBackend::new();
+        let mut tx = ModemEngine::new(Box::new(tx_lb.clone_shared()));
+        tx.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+        tx.transmit(b"onset scan", "BPSK250", None).unwrap();
+        let frame = tx_lb.drain_samples();
+        assert!(!frame.is_empty());
+
+        let mut rx = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        rx.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+
+        // Prepend lead-in (one BPSK250 symbol period = 32 samples × 3) so the frame
+        // onset is not at sample 0; decoding only from 0 would fail.
+        let mut buf = vec![0.0f32; 32 * 3];
+        buf.extend_from_slice(&frame);
+        let decoded = rx
+            .decode_burst("BPSK250", &AudioSamples { samples: buf })
+            .expect("onset scan must recover a frame that does not start at sample 0");
+        assert_eq!(&decoded[..b"onset scan".len()], b"onset scan");
     }
 
     #[test]
