@@ -14,7 +14,7 @@ use crate::{
 };
 use openpulse_audio::LoopbackBackend;
 use openpulse_config::OpenpulseConfig;
-use openpulse_core::audio::AudioBackend;
+use openpulse_core::audio::{AudioBackend, AudioInputStream};
 use openpulse_core::relay::{RelayForwarder, RelayTrustPolicy};
 use openpulse_core::trust_store_file::load_trust_store_from_file;
 use openpulse_modem::ModemEngine;
@@ -456,6 +456,13 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     } else {
         cfg.station.callsign.clone()
     };
+    // Hold ONE capture stream open across receive ticks: cpal is a callback backend
+    // whose buffer only fills while the stream is held open, so reopening it every
+    // tick (~20 Hz) never warms up on real hardware and decodes nothing. Opened
+    // lazily and reopened on read error (e.g. device unplugged); a LoopbackBackend
+    // stream clones shared buffers, so this is equivalent to per-tick reopen there.
+    let capture_device = (!cfg.audio.device.is_empty()).then(|| cfg.audio.device.clone());
+    let mut rx_stream: Option<Box<dyn AudioInputStream>> = None;
     loop {
         tokio::select! {
             biased;
@@ -529,8 +536,26 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 let decode_start = std::time::Instant::now();
                 // Accumulate a full burst before decoding: on a streaming (cpal) backend
                 // one frame spans many tick windows, so decoding a single partial window
-                // can't acquire it. capture_burst returns Some only when the carrier drops.
-                let burst = tokio::task::block_in_place(|| engine.capture_burst(None));
+                // can't acquire it. Read the held-open capture stream and accumulate;
+                // accumulate_capture returns Some only when the carrier drops.
+                let burst = tokio::task::block_in_place(|| {
+                    if rx_stream.is_none() {
+                        rx_stream = Some(engine.open_capture_stream(capture_device.as_deref())?);
+                    }
+                    let read = match rx_stream.as_mut() {
+                        Some(s) => s.read(),
+                        None => return Ok(None),
+                    };
+                    match read {
+                        Ok(samples) => engine.accumulate_capture(samples),
+                        Err(e) => {
+                            // Drop the stream so the next tick reopens it.
+                            rx_stream = None;
+                            tracing::debug!(error = %e, "capture read failed; reopening");
+                            Ok(None)
+                        }
+                    }
+                });
                 let bytes = match burst {
                     Ok(Some(burst)) if engine.ota_active() => {
                         // Receiver-led OTA: decode the burst, then key PTT only to answer
