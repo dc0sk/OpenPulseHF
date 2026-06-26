@@ -227,6 +227,9 @@ struct LinkApp {
     audio_written: u64,
     audio_start: Instant,
 
+    // Bundled OpenPulseHF QR code, decoded to a texture on first paint.
+    qr_tex: Option<egui::TextureHandle>,
+
     panels: [PanelView; 3], // 0 = A TX, 1 = B RX (decoded), 2 = ACK
     last: Option<FrameStep>,
     // rolling history (frame index, windowed eff bps, snr, level)
@@ -282,6 +285,7 @@ impl LinkApp {
             audio_out: None,
             audio_written: 0,
             audio_start: Instant::now(),
+            qr_tex: None,
             // Seed the PRNG from wall-clock nanos so successive launches differ.
             rng_state: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -393,6 +397,35 @@ impl LinkApp {
                 self.audio_written += n as u64;
             }
         }
+    }
+
+    /// The bundled QR-code texture, decoded once on first use. NEAREST filtering keeps the
+    /// QR modules crisp when scaled down. Returns `None` if the PNG fails to decode.
+    fn qr_texture(&mut self, ctx: &egui::Context) -> Option<egui::TextureHandle> {
+        if let Some(t) = &self.qr_tex {
+            return Some(t.clone());
+        }
+        let bytes: &[u8] = include_bytes!("../../../docs/OpenPulseHF.png");
+        let mut reader = png::Decoder::new(std::io::Cursor::new(bytes))
+            .read_info()
+            .ok()?;
+        let mut buf = vec![0u8; reader.output_buffer_size()?];
+        let info = reader.next_frame(&mut buf).ok()?;
+        let rgba = match info.color_type {
+            png::ColorType::Rgba => buf[..info.buffer_size()].to_vec(),
+            png::ColorType::Rgb => buf[..info.buffer_size()]
+                .chunks_exact(3)
+                .flat_map(|p| [p[0], p[1], p[2], 255])
+                .collect(),
+            _ => return None, // QR is RGB/RGBA; other formats aren't expected
+        };
+        let img = egui::ColorImage::from_rgba_unmultiplied(
+            [info.width as usize, info.height as usize],
+            &rgba,
+        );
+        let tex = ctx.load_texture("openpulse_qr", img, egui::TextureOptions::NEAREST);
+        self.qr_tex = Some(tex.clone());
+        Some(tex)
     }
 
     /// A uniform random number in [0, 1) from an internal SplitMix64 (no external dep).
@@ -758,19 +791,35 @@ impl eframe::App for LinkApp {
                     self.ui_cessb = !self.ui_cessb;
                 }
 
-                #[cfg(feature = "serve")]
-                if let Some(h) = &self.hub {
-                    let n = h.client_count();
-                    let (color, text) = if n > 0 {
-                        (egui::Color32::GREEN, format!("● panel ×{n}"))
-                    } else {
-                        (egui::Color32::DARK_GRAY, "○ panel".to_string())
-                    };
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let qr = self.qr_texture(ui.ctx());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // OpenPulseHF QR — small in the toolbar, scannable on hover.
+                    if let Some(tex) = &qr {
+                        ui.add(egui::Image::new(egui::load::SizedTexture::new(
+                            tex.id(),
+                            egui::vec2(40.0, 40.0),
+                        )))
+                        .on_hover_ui(|ui| {
+                            ui.label("OpenPulseHF");
+                            ui.add(egui::Image::new(egui::load::SizedTexture::new(
+                                tex.id(),
+                                egui::vec2(200.0, 200.0),
+                            )));
+                        });
+                        ui.separator();
+                    }
+                    #[cfg(feature = "serve")]
+                    if let Some(h) = &self.hub {
+                        let n = h.client_count();
+                        let (color, text) = if n > 0 {
+                            (egui::Color32::GREEN, format!("● panel ×{n}"))
+                        } else {
+                            (egui::Color32::DARK_GRAY, "○ panel".to_string())
+                        };
                         ui.label(egui::RichText::new(text).color(color))
                             .on_hover_text("Connected openpulse-panel clients");
-                    });
-                }
+                    }
+                });
             });
         });
 

@@ -22,6 +22,8 @@ hardware is required to build or test.
 
 **Author:** Simon Keimer · [DC0SK](https://github.com/dc0sk)
 
+<img src="docs/OpenPulseHF.png" alt="OpenPulseHF QR code" width="180">
+
 ---
 ## Supporters
 

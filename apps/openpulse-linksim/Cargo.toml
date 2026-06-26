@@ -27,8 +27,9 @@ required-features = ["gui"]
 # build, e.g. CI). gui/serve remain opt-in.
 default = ["gpu"]
 # The GUI can monitor the TX audio on the default playback device, so it pulls in the
-# cpal-backed audio output. (gui is opt-in and not in CI's default build.)
-gui = ["dep:eframe", "dep:egui", "dep:egui_plot", "dep:openpulse-audio"]
+# cpal-backed audio output. `png` decodes the bundled QR code. (gui is opt-in and not in
+# CI's default build.)
+gui = ["dep:eframe", "dep:egui", "dep:egui_plot", "dep:openpulse-audio", "dep:png"]
 # Serve the openpulse-daemon control protocol so an unmodified openpulse-panel can
 # connect to a live simulation. Pulls in openpulse-daemon for the wire types.
 serve = ["dep:openpulse-daemon", "dep:sysinfo"]
@@ -64,3 +65,4 @@ serde_json        = { workspace = true }
 eframe            = { workspace = true, optional = true }
 egui              = { workspace = true, optional = true }
 egui_plot         = { workspace = true, optional = true }
+png               = { version = "0.18", optional = true }
