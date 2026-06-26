@@ -79,6 +79,7 @@ struct Controls {
     fec: FecMode,
     compression: CompressionAlgorithm,
     turnaround: f64,
+    cessb: bool,
 }
 
 impl Controls {
@@ -94,6 +95,7 @@ impl Controls {
             turnaround_s: self.turnaround,
             max_attempts: 6,
             seed: 0x1234_5678,
+            cessb_enabled: self.cessb,
         }
     }
 }
@@ -106,9 +108,15 @@ fn spawn_sim(
     let handle = std::thread::spawn(move || {
         while running.load(Ordering::Relaxed) {
             // Snapshot params (and the generation we built against) for this run.
-            let (mut sim, gen, mut chan, mut snr) = {
+            let (mut sim, gen, mut chan, mut snr, mut cessb) = {
                 let c = controls.lock().unwrap_or_else(|e| e.into_inner());
-                (LinkSim::new(&c.params()), c.generation, c.channel, c.snr_db)
+                (
+                    LinkSim::new(&c.params()),
+                    c.generation,
+                    c.channel,
+                    c.snr_db,
+                    c.cessb,
+                )
             };
             loop {
                 if !running.load(Ordering::Relaxed) {
@@ -124,6 +132,10 @@ fn spawn_sim(
                         chan = c.channel;
                         snr = c.snr_db;
                         sim.set_conditions(chan.spec(snr), chan.spec(snr + 5.0));
+                    }
+                    if c.cessb != cessb {
+                        cessb = c.cessb;
+                        sim.set_cessb(cessb);
                     }
                 }
                 match sim.step() {
@@ -187,6 +199,7 @@ struct LinkApp {
     ui_fec: FecMode,
     ui_compression: CompressionAlgorithm,
     ui_turnaround: f64,
+    ui_cessb: bool,
 
     panels: [PanelView; 3], // 0 = A TX, 1 = Channel, 2 = B ACK
     last: Option<FrameStep>,
@@ -223,6 +236,7 @@ impl LinkApp {
                 fec: FecMode::Rs,
                 compression: CompressionAlgorithm::None,
                 turnaround: 0.25,
+                cessb: true,
             })),
             running: Arc::new(AtomicBool::new(false)),
             rx: None,
@@ -234,6 +248,7 @@ impl LinkApp {
             ui_fec: FecMode::Rs,
             ui_compression: CompressionAlgorithm::None,
             ui_turnaround: 0.25,
+            ui_cessb: true,
             panels: [PanelView::new(), PanelView::new(), PanelView::new()],
             last: None,
             eff_hist: VecDeque::new(),
@@ -296,6 +311,7 @@ impl LinkApp {
         let mut c = self.controls.lock().unwrap_or_else(|e| e.into_inner());
         c.snr_db = self.ui_snr;
         c.channel = self.ui_channel;
+        c.cessb = self.ui_cessb; // live — applied without a rebuild (like SNR)
         let structural_changed = c.profile != self.ui_profile
             || c.payload != self.ui_payload
             || c.fec != self.ui_fec
@@ -563,6 +579,29 @@ impl eframe::App for LinkApp {
                 ui.separator();
                 ui.label("Turnaround:");
                 ui.add(egui::Slider::new(&mut self.ui_turnaround, 0.0..=1.0).suffix(" s"));
+                ui.separator();
+                // CE-SSB TX conditioning toggle (live, like SNR). Only acts on the modes
+                // ModemEngine::cessb_benefits enables (OFDM QPSK/8PSK) — a no-op elsewhere.
+                let (cessb_label, cessb_color) = if self.ui_cessb {
+                    ("CE-SSB: ON", egui::Color32::from_rgb(0x4c, 0xaf, 0x50))
+                } else {
+                    ("CE-SSB: OFF", egui::Color32::DARK_GRAY)
+                };
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new(cessb_label).color(egui::Color32::WHITE),
+                        )
+                        .fill(cessb_color),
+                    )
+                    .on_hover_text(
+                        "CE-SSB TX envelope conditioning (average-power gain at fixed peak).\n\
+                         Only affects OFDM QPSK/8PSK; a no-op on other modes.",
+                    )
+                    .clicked()
+                {
+                    self.ui_cessb = !self.ui_cessb;
+                }
 
                 #[cfg(feature = "serve")]
                 if let Some(h) = &self.hub {

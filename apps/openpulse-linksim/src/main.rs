@@ -93,6 +93,9 @@ struct Cli {
     /// Payload compression applied before FEC.
     #[arg(long, value_enum, default_value = "none")]
     compression: CompressionArg,
+    /// Disable CE-SSB TX envelope conditioning (on by default; only affects OFDM QPSK/8PSK).
+    #[arg(long)]
+    no_cessb: bool,
     /// Payload bytes per data frame.
     #[arg(long, default_value = "64")]
     payload: usize,
@@ -161,6 +164,7 @@ fn params_for(cli: &Cli, snr: f32) -> LinkParams {
         turnaround_s: cli.turnaround,
         max_attempts: cli.max_attempts,
         seed: cli.seed,
+        cessb_enabled: !cli.no_cessb,
     }
 }
 
