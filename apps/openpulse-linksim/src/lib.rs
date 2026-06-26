@@ -147,6 +147,9 @@ pub struct LinkParams {
     pub max_attempts: u32,
     /// RNG seed for reproducible channel realizations.
     pub seed: u64,
+    /// CE-SSB TX envelope conditioning (default on, matching the engine). Only acts on the
+    /// modes `ModemEngine::cessb_benefits` enables (OFDM QPSK/8PSK); a no-op elsewhere.
+    pub cessb_enabled: bool,
 }
 
 impl Default for LinkParams {
@@ -162,6 +165,7 @@ impl Default for LinkParams {
             turnaround_s: 0.25,
             max_attempts: 6,
             seed: 0xC0FFEE,
+            cessb_enabled: true,
         }
     }
 }
@@ -516,6 +520,10 @@ impl LinkSim {
         register_all(&mut rev.tx_engine);
         register_all(&mut rev.rx_engine);
 
+        // CE-SSB lives on the transmitting engines (applied in `stage_emit_output`).
+        fwd.tx_engine.set_cessb_enabled(params.cessb_enabled);
+        rev.tx_engine.set_cessb_enabled(params.cessb_enabled);
+
         let fwd_ch = build_channel(&params.forward.to_config(params.seed), Some(params.seed))
             .expect("forward channel");
         let rev_ch = build_channel(
@@ -573,6 +581,18 @@ impl LinkSim {
     /// Speed level the next frame will use.
     pub fn current_level(&self) -> u8 {
         self.levels.get(self.idx).map(|&l| l as u8).unwrap_or(0)
+    }
+
+    /// Toggle CE-SSB TX envelope conditioning live (e.g. from a GUI button) without a rebuild.
+    pub fn set_cessb(&mut self, enabled: bool) {
+        self.params.cessb_enabled = enabled;
+        self.fwd.tx_engine.set_cessb_enabled(enabled);
+        self.rev.tx_engine.set_cessb_enabled(enabled);
+    }
+
+    /// Whether CE-SSB TX conditioning is currently enabled.
+    pub fn cessb_enabled(&self) -> bool {
+        self.params.cessb_enabled
     }
 
     /// Swap the forward / reverse channel conditions live (e.g. from an SNR slider).
@@ -864,6 +884,7 @@ mod tests {
             turnaround_s: 0.2,
             max_attempts: 4,
             seed: 1,
+            cessb_enabled: true,
         };
         let r = run_link(&params);
         assert_eq!(
@@ -876,6 +897,22 @@ mod tests {
             r.final_level as usize >= SpeedLevel::Sl2 as usize,
             "level should not drop below the floor on a clean channel"
         );
+    }
+
+    #[test]
+    fn cessb_toggle_reflects_in_linksim() {
+        // The GUI/CLI CE-SSB toggle drives `LinkParams.cessb_enabled` into the TX engines;
+        // `set_cessb` flips it live. Lock that the LinkSim honours and reports the setting.
+        let params = LinkParams {
+            cessb_enabled: false,
+            ..LinkParams::default()
+        };
+        let mut sim = LinkSim::new(&params);
+        assert!(!sim.cessb_enabled(), "param should propagate to the sim");
+        sim.set_cessb(true);
+        assert!(sim.cessb_enabled(), "live toggle should enable it");
+        sim.set_cessb(false);
+        assert!(!sim.cessb_enabled(), "live toggle should disable it");
     }
 
     #[test]
@@ -893,6 +930,7 @@ mod tests {
             turnaround_s: 0.25,
             max_attempts: 3,
             seed: 7,
+            cessb_enabled: true,
         };
         let r = run_link(&params);
         assert!(r.frames_delivered > 0);
