@@ -496,6 +496,10 @@ pub struct FrameStep {
     pub success_rate: f64,
     /// This frame's on-air time (forward + ACK + turnaround over all its attempts), seconds.
     pub frame_air_s: f64,
+    /// This frame's forward (data) air time only, seconds — the share of `frame_air_s` not
+    /// spent on the ACK or half-duplex turnaround. The two-way goodput is the effective
+    /// (forward) rate scaled by `forward_air_s / frame_air_s`.
+    pub forward_air_s: f64,
     /// User payload bytes attempted this frame (before compression / FEC).
     pub payload_bytes: usize,
     /// Payload bytes delivered by this frame (0 if it failed) — for windowed throughput.
@@ -843,6 +847,7 @@ impl LinkSim {
             effective_bps,
             success_rate,
             frame_air_s,
+            forward_air_s: fwd_air,
             payload_bytes: self.params.payload_bytes_per_frame,
             delivered_bytes: if delivered {
                 self.params.payload_bytes_per_frame
@@ -901,6 +906,39 @@ pub fn run_link(params: &LinkParams) -> LinkResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_step_exposes_forward_air_for_two_way_derivation() {
+        // The GUI derives the two-way goodput as Effective × (forward_air / total_air); that
+        // duty factor must be a real fraction in (0, 1], and the derived rate ≤ Effective.
+        let mut sim = LinkSim::new(&LinkParams {
+            forward: ChannelSpec::Clean,
+            reverse: ChannelSpec::Clean,
+            payload_bytes_per_frame: 200,
+            total_frames: 5,
+            turnaround_s: 0.25,
+            ..LinkParams::default()
+        });
+        let mut saw = false;
+        while let Some(fs) = sim.step() {
+            assert!(fs.forward_air_s > 0.0, "forward air must be positive");
+            assert!(
+                fs.forward_air_s <= fs.frame_air_s + 1e-9,
+                "forward air {} must not exceed total air {}",
+                fs.forward_air_s,
+                fs.frame_air_s
+            );
+            // With a non-zero turnaround + ACK, the duty cycle is strictly below 1.
+            let duty = fs.forward_air_s / fs.frame_air_s;
+            assert!(duty < 1.0, "half-duplex duty {duty} should be < 1");
+            assert!(
+                fs.effective_bps * duty <= fs.effective_bps + 1e-9,
+                "derived two-way must not exceed effective"
+            );
+            saw = true;
+        }
+        assert!(saw, "expected at least one frame");
+    }
 
     #[test]
     fn payload_varies_per_frame_yet_compresses() {

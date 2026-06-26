@@ -3,7 +3,8 @@
 //! Side-by-side **Station A | Channel | Station B**: A's clean data TX on the left, the
 //! noisy on-air signal in the middle, and B's FSK4 ACK response on the right. A background
 //! thread runs the [`openpulse_linksim`] engine frame-by-frame; the SNR slider adjusts the
-//! channel live, and the bottom plot tracks the effective two-way transfer rate over time.
+//! channel live, and the bottom strip plots the effective transfer rate and the estimated
+//! SNR over time, side by side.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,8 +13,10 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use egui_plot::{Line, Plot, PlotPoints};
+use egui_plot::{Line, Plot, PlotPoint, PlotPoints, Text};
+use openpulse_audio::CpalBackend;
 use openpulse_channel::dsp::{PowerSpectrum, WaterfallBuffer, FREQ_BINS, WATERFALL_ROWS};
+use openpulse_core::audio::{AudioBackend, AudioConfig, AudioOutputStream};
 use openpulse_core::compression::{CompressionAlgorithm, ZSTD_DICT_ID};
 use openpulse_core::fec::FecMode;
 use openpulse_core::profile::SessionProfile;
@@ -26,6 +29,12 @@ const WINDOW: usize = 24; // windowed-throughput averaging window (frames)
 /// SNR slider bounds (dB) — shared by the slider and the randomize feature.
 const SNR_MIN: f32 = -10.0;
 const SNR_MAX: f32 = 35.0;
+/// TX-audio monitor: cap on the buffered lead (s). Each frame writes only enough to top
+/// the buffer up to this, so the audio stays within this much of the spectrum instead of
+/// falling seconds behind on long (slow-mode) bursts.
+const AUDIO_BUFFER_TARGET_S: f64 = 0.2;
+/// TX-audio monitor playback gain (the modem waveform is near full-scale; keep it kind).
+const AUDIO_MONITOR_GAIN: f32 = 0.5;
 
 #[derive(Clone, Copy, PartialEq)]
 enum ChannelKind {
@@ -212,13 +221,22 @@ struct LinkApp {
     next_snr_change: Option<Instant>,
     rng_state: u64,
 
+    // TX-audio monitor: copy the forward (data TX) waveform to the default playback device.
+    ui_audio_monitor: bool,
+    audio_out: Option<Box<dyn AudioOutputStream>>,
+    audio_written: u64,
+    audio_start: Instant,
+
+    // Bundled OpenPulseHF QR code, decoded to a texture on first paint.
+    qr_tex: Option<egui::TextureHandle>,
+
     panels: [PanelView; 3], // 0 = A TX, 1 = B RX (decoded), 2 = ACK
     last: Option<FrameStep>,
     // rolling history (frame index, windowed eff bps, snr, level)
     eff_hist: VecDeque<[f64; 2]>,
     snr_hist: VecDeque<[f64; 2]>,
     level_hist: VecDeque<[f64; 2]>,
-    window: VecDeque<(usize, f64)>, // (delivered_bits, air_s) for windowed rate
+    window: VecDeque<(f64, f64)>, // (forward_air_s, total_air_s) → half-duplex duty cycle
     frame_counter: usize,
     delivered: usize,
     attempted: usize,
@@ -263,6 +281,11 @@ impl LinkApp {
             ui_randomize: false,
             random_snr: 15.0,
             next_snr_change: None,
+            ui_audio_monitor: false,
+            audio_out: None,
+            audio_written: 0,
+            audio_start: Instant::now(),
+            qr_tex: None,
             // Seed the PRNG from wall-clock nanos so successive launches differ.
             rng_state: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -313,6 +336,7 @@ impl LinkApp {
         if let Some(h) = self.handle.take() {
             let _ = h.join();
         }
+        self.audio_out = None; // stop monitoring TX audio when the sim stops
     }
 
     fn reset_history(&mut self) {
@@ -324,6 +348,84 @@ impl LinkApp {
         self.delivered = 0;
         self.attempted = 0;
         self.last = None;
+    }
+
+    /// Copy a frame's forward (data TX) waveform to the default playback device when the
+    /// monitor is on. Opens the cpal output lazily and drops frames when more than
+    /// [`AUDIO_BUFFER_TARGET_S`] is already buffered, so it stays near real time.
+    fn feed_audio_monitor(&mut self, fs: &FrameStep) {
+        if !self.ui_audio_monitor {
+            self.audio_out = None; // closed while off
+            return;
+        }
+        if self.audio_out.is_none() {
+            match CpalBackend::new().open_output(None, &AudioConfig::default()) {
+                Ok(stream) => {
+                    self.audio_out = Some(stream);
+                    self.audio_written = 0;
+                    self.audio_start = Instant::now();
+                }
+                Err(_) => {
+                    // No usable output device — turn the toggle back off rather than retry.
+                    self.ui_audio_monitor = false;
+                    return;
+                }
+            }
+        }
+        if fs.forward_tx.is_empty() {
+            return;
+        }
+        // Keep audio in step with the spectrum: cap the buffered lead at AUDIO_BUFFER_TARGET_S.
+        // A single TX burst can be seconds long, so write only enough to top the buffer up to
+        // the target and drop the rest — otherwise the audio falls seconds behind the visuals.
+        let sr = AudioConfig::default().sample_rate as f64;
+        let lead_s = self.audio_written as f64 / sr - self.audio_start.elapsed().as_secs_f64();
+        let room_s = AUDIO_BUFFER_TARGET_S - lead_s;
+        if room_s <= 0.0 {
+            return;
+        }
+        let n = fs.forward_tx.len().min((room_s * sr) as usize);
+        if n == 0 {
+            return;
+        }
+        let scaled: Vec<f32> = fs.forward_tx[..n]
+            .iter()
+            .map(|&s| (s * AUDIO_MONITOR_GAIN).clamp(-1.0, 1.0))
+            .collect();
+        if let Some(out) = &mut self.audio_out {
+            if out.write(&scaled).is_ok() {
+                self.audio_written += n as u64;
+            }
+        }
+    }
+
+    /// The bundled QR-code texture, decoded once on first use. NEAREST filtering keeps the
+    /// QR modules crisp when scaled down. Returns `None` if the PNG fails to decode.
+    fn qr_texture(&mut self, ctx: &egui::Context) -> Option<egui::TextureHandle> {
+        if let Some(t) = &self.qr_tex {
+            return Some(t.clone());
+        }
+        let bytes: &[u8] = include_bytes!("../../../docs/OpenPulseHF.png");
+        let mut reader = png::Decoder::new(std::io::Cursor::new(bytes))
+            .read_info()
+            .ok()?;
+        let mut buf = vec![0u8; reader.output_buffer_size()?];
+        let info = reader.next_frame(&mut buf).ok()?;
+        let rgba = match info.color_type {
+            png::ColorType::Rgba => buf[..info.buffer_size()].to_vec(),
+            png::ColorType::Rgb => buf[..info.buffer_size()]
+                .chunks_exact(3)
+                .flat_map(|p| [p[0], p[1], p[2], 255])
+                .collect(),
+            _ => return None, // QR is RGB/RGBA; other formats aren't expected
+        };
+        let img = egui::ColorImage::from_rgba_unmultiplied(
+            [info.width as usize, info.height as usize],
+            &rgba,
+        );
+        let tex = ctx.load_texture("openpulse_qr", img, egui::TextureOptions::NEAREST);
+        self.qr_tex = Some(tex.clone());
+        Some(tex)
     }
 
     /// A uniform random number in [0, 1) from an internal SplitMix64 (no external dep).
@@ -407,30 +509,33 @@ impl LinkApp {
             if fs.delivered {
                 self.delivered += 1;
             }
-            self.window
-                .push_back((fs.delivered_bytes * 8, fs.frame_air_s));
+            self.window.push_back((fs.forward_air_s, fs.frame_air_s));
             while self.window.len() > WINDOW {
                 self.window.pop_front();
             }
-            // Measured wall-clock two-way goodput over the rolling window.
-            let (win_bits, win_air): (usize, f64) = self
-                .window
-                .iter()
-                .fold((0, 0.0), |(b, a), &(fb, fa)| (b + fb, a + fa));
             // Rates come from the sim (the same values fed to the panel, so the two windows
             // display identical Gross / Net / Effective figures).
             self.disp_gross = fs.gross_bps;
             self.disp_net = fs.net_bps;
             self.disp_eff = fs.effective_bps;
-            self.disp_goodput = if win_air > 0.0 {
-                win_bits as f64 / win_air
+            // Two-way goodput is DERIVED from the Effective (forward) rate, derated by the
+            // half-duplex duty cycle: forward air time / total air time (total includes the
+            // ACK frame and turnaround). Windowed so it tracks the recent ACK/turnaround mix.
+            let (win_fwd, win_total): (f64, f64) = self
+                .window
+                .iter()
+                .fold((0.0, 0.0), |(f, t), &(ff, ft)| (f + ff, t + ft));
+            let duty = if win_total > 0.0 {
+                win_fwd / win_total
             } else {
                 0.0
             };
+            self.disp_goodput = self.disp_eff * duty;
             let x = self.frame_counter as f64;
             push_hist(&mut self.eff_hist, [x, self.disp_eff]);
             push_hist(&mut self.snr_hist, [x, fs.est_snr_db as f64]);
             push_hist(&mut self.level_hist, [x, fs.level as f64]);
+            self.feed_audio_monitor(&fs);
             self.last = Some(fs);
         }
     }
@@ -584,6 +689,11 @@ impl eframe::App for LinkApp {
                         "Jump the SNR to a new random value every 1–5 seconds, never below \
                          the SNR slider (which acts as the floor).",
                     );
+                ui.checkbox(&mut self.ui_audio_monitor, "🔊 TX audio")
+                    .on_hover_text(
+                        "Copy the forward (data TX) waveform to the default playback device. \
+                         Off by default.",
+                    );
                 ui.separator();
                 ui.label("Profile:");
                 egui::ComboBox::from_id_salt("profile")
@@ -723,8 +833,9 @@ impl eframe::App for LinkApp {
                     ui.separator();
                     ui.label(format!("2-way: {}", fmt_bps(self.disp_goodput)))
                         .on_hover_text(
-                            "Measured wall-clock two-way goodput: delivered payload bits / on-air \
-                             time, including ACK frames and half-duplex turnaround.",
+                            "Two-way goodput, derived from Effective × half-duplex duty cycle \
+                             (forward air time / total air time, where total includes the ACK \
+                             frame and turnaround).",
                         );
                     ui.separator();
                     if let Some(fs) = &self.last {
@@ -757,35 +868,99 @@ impl eframe::App for LinkApp {
                     }
                 });
 
-                let eff: PlotPoints = self.eff_hist.iter().copied().collect();
-                let lvl: PlotPoints = self
-                    .level_hist
-                    .iter()
-                    .map(|&[x, y]| [x, y * 200.0])
-                    .collect();
-                Plot::new("eff_plot")
-                    .height(120.0)
-                    .allow_zoom(false)
-                    .allow_drag(false)
-                    .y_axis_label("bps")
-                    .show(ui, |p| {
-                        p.line(
-                            Line::new(eff)
-                                .color(egui::Color32::from_rgb(80, 180, 255))
-                                .name("effective bps"),
-                        );
-                        p.line(
-                            Line::new(lvl)
-                                .color(egui::Color32::from_rgba_unmultiplied(255, 180, 50, 120))
-                                .name("speed level ×200"),
-                        );
-                    });
+                // Bitrate (left) and SNR (right) share the bottom strip. SNR is in dB on a very
+                // different scale than bps, so it gets its own plot/axis rather than being
+                // squashed onto the bitrate axis.
+                ui.columns(2, |cols| {
+                    let eff: PlotPoints = self.eff_hist.iter().copied().collect();
+                    let lvl: PlotPoints = self
+                        .level_hist
+                        .iter()
+                        .map(|&[x, y]| [x, y * 200.0])
+                        .collect();
+                    let mode = self
+                        .last
+                        .as_ref()
+                        .map(|fs| fs.mode.clone())
+                        .unwrap_or_default();
+                    let snr_label = self
+                        .last
+                        .as_ref()
+                        .map(|fs| format!("{:.1} dB", fs.est_snr_db))
+                        .unwrap_or_default();
+                    Plot::new("eff_plot")
+                        .height(120.0)
+                        .allow_zoom(false)
+                        .allow_drag(false)
+                        .y_axis_label("bps")
+                        .show(&mut cols[0], |p| {
+                            // Current mode as a faint watermark behind the traces.
+                            if !mode.is_empty() {
+                                let b = p.plot_bounds();
+                                let cx = (b.min()[0] + b.max()[0]) * 0.5;
+                                let cy = (b.min()[1] + b.max()[1]) * 0.5;
+                                p.text(
+                                    Text::new(
+                                        PlotPoint::new(cx, cy),
+                                        egui::RichText::new(&mode)
+                                            .size(34.0)
+                                            .color(egui::Color32::from_gray(90)),
+                                    )
+                                    .name(""),
+                                );
+                            }
+                            p.line(
+                                Line::new(eff)
+                                    .color(egui::Color32::from_rgb(80, 180, 255))
+                                    .name("effective bps"),
+                            );
+                            p.line(
+                                Line::new(lvl)
+                                    .color(egui::Color32::from_rgba_unmultiplied(255, 180, 50, 120))
+                                    .name("speed level ×200"),
+                            );
+                        });
+
+                    let snr: PlotPoints = self.snr_hist.iter().copied().collect();
+                    Plot::new("snr_plot")
+                        .height(120.0)
+                        .allow_zoom(false)
+                        .allow_drag(false)
+                        .y_axis_label("SNR (dB)")
+                        .include_y(0.0)
+                        .show(&mut cols[1], |p| {
+                            // Current SNR as a faint watermark behind the trace.
+                            if !snr_label.is_empty() {
+                                let b = p.plot_bounds();
+                                let cx = (b.min()[0] + b.max()[0]) * 0.5;
+                                let cy = (b.min()[1] + b.max()[1]) * 0.5;
+                                p.text(
+                                    Text::new(
+                                        PlotPoint::new(cx, cy),
+                                        egui::RichText::new(&snr_label)
+                                            .size(34.0)
+                                            .color(egui::Color32::from_gray(90)),
+                                    )
+                                    .name(""),
+                                );
+                            }
+                            p.line(
+                                Line::new(snr)
+                                    .color(egui::Color32::from_rgb(120, 230, 120))
+                                    .name("est SNR dB"),
+                            );
+                        });
+                });
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            let qr = self.qr_texture(ui.ctx());
+            let qr_side = 160.0_f32; // 4× the old toolbar size
+                                     // Reserve a band at the bottom for the centered QR so the columns don't eat it.
+            let cols_h = (ui.available_height() - qr_side - 14.0).max(200.0);
             let col_w = ui.available_width() / 3.0;
-            let spectrum_h = (ui.available_height() * 0.42).clamp(120.0, 320.0);
-            let waterfall_h = (ui.available_height() * 0.42).clamp(100.0, 320.0);
+            let spectrum_h = (cols_h * 0.45).clamp(110.0, 320.0);
+            let waterfall_h = (cols_h * 0.40).clamp(90.0, 320.0);
             let subtitle = self
                 .last
                 .as_ref()
@@ -797,7 +972,7 @@ impl eframe::App for LinkApp {
                 "decode FAIL"
             };
             ui.horizontal(|ui| {
-                ui.allocate_ui(egui::vec2(col_w, ui.available_height()), |ui| {
+                ui.allocate_ui(egui::vec2(col_w, cols_h), |ui| {
                     draw_panel(
                         ui,
                         "Station A → data TX",
@@ -807,7 +982,7 @@ impl eframe::App for LinkApp {
                         waterfall_h,
                     );
                 });
-                ui.allocate_ui(egui::vec2(col_w, ui.available_height()), |ui| {
+                ui.allocate_ui(egui::vec2(col_w, cols_h), |ui| {
                     // The decoded-data view: B's received signal (mode-dependent + noise), which
                     // is what actually gets demodulated — so the "decoded" status belongs here.
                     draw_panel(
@@ -819,7 +994,7 @@ impl eframe::App for LinkApp {
                         waterfall_h,
                     );
                 });
-                ui.allocate_ui(egui::vec2(col_w, ui.available_height()), |ui| {
+                ui.allocate_ui(egui::vec2(col_w, cols_h), |ui| {
                     // The ACK is always FSK4-ACK regardless of the data mode (by design), so this
                     // column is intentionally mode-invariant — labelled FSK4 to make that clear.
                     draw_panel(
@@ -832,6 +1007,18 @@ impl eframe::App for LinkApp {
                     );
                 });
             });
+
+            // OpenPulseHF QR, centered below the waterfalls.
+            if let Some(tex) = &qr {
+                ui.add_space(6.0);
+                ui.vertical_centered(|ui| {
+                    ui.add(egui::Image::new(egui::load::SizedTexture::new(
+                        tex.id(),
+                        egui::vec2(qr_side, qr_side),
+                    )))
+                    .on_hover_text("OpenPulseHF");
+                });
+            }
         });
     }
 }
