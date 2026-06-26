@@ -13,7 +13,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use egui_plot::{Line, Plot, PlotPoints};
+use egui_plot::{Line, Plot, PlotPoint, PlotPoints, Text};
 use openpulse_audio::CpalBackend;
 use openpulse_channel::dsp::{PowerSpectrum, WaterfallBuffer, FREQ_BINS, WATERFALL_ROWS};
 use openpulse_core::audio::{AudioBackend, AudioConfig, AudioOutputStream};
@@ -29,9 +29,10 @@ const WINDOW: usize = 24; // windowed-throughput averaging window (frames)
 /// SNR slider bounds (dB) — shared by the slider and the randomize feature.
 const SNR_MIN: f32 = -10.0;
 const SNR_MAX: f32 = 35.0;
-/// TX-audio monitor: target buffered lead (s). Frames are dropped past this so the
-/// monitor stays near real time instead of accumulating seconds of latency.
-const AUDIO_BUFFER_TARGET_S: f64 = 0.4;
+/// TX-audio monitor: cap on the buffered lead (s). Each frame writes only enough to top
+/// the buffer up to this, so the audio stays within this much of the spectrum instead of
+/// falling seconds behind on long (slow-mode) bursts.
+const AUDIO_BUFFER_TARGET_S: f64 = 0.2;
 /// TX-audio monitor playback gain (the modem waveform is near full-scale; keep it kind).
 const AUDIO_MONITOR_GAIN: f32 = 0.5;
 
@@ -370,21 +371,26 @@ impl LinkApp {
         if fs.forward_tx.is_empty() {
             return;
         }
-        // Throttle to ~real time: drop this frame if we are already ahead by the target lead.
+        // Keep audio in step with the spectrum: cap the buffered lead at AUDIO_BUFFER_TARGET_S.
+        // A single TX burst can be seconds long, so write only enough to top the buffer up to
+        // the target and drop the rest — otherwise the audio falls seconds behind the visuals.
         let sr = AudioConfig::default().sample_rate as f64;
-        let buffered_lead =
-            self.audio_written as f64 / sr - self.audio_start.elapsed().as_secs_f64();
-        if buffered_lead > AUDIO_BUFFER_TARGET_S {
+        let lead_s = self.audio_written as f64 / sr - self.audio_start.elapsed().as_secs_f64();
+        let room_s = AUDIO_BUFFER_TARGET_S - lead_s;
+        if room_s <= 0.0 {
             return;
         }
-        let scaled: Vec<f32> = fs
-            .forward_tx
+        let n = fs.forward_tx.len().min((room_s * sr) as usize);
+        if n == 0 {
+            return;
+        }
+        let scaled: Vec<f32> = fs.forward_tx[..n]
             .iter()
             .map(|&s| (s * AUDIO_MONITOR_GAIN).clamp(-1.0, 1.0))
             .collect();
         if let Some(out) = &mut self.audio_out {
             if out.write(&scaled).is_ok() {
-                self.audio_written += scaled.len() as u64;
+                self.audio_written += n as u64;
             }
         }
     }
@@ -839,12 +845,32 @@ impl eframe::App for LinkApp {
                         .iter()
                         .map(|&[x, y]| [x, y * 200.0])
                         .collect();
+                    let mode = self
+                        .last
+                        .as_ref()
+                        .map(|fs| fs.mode.clone())
+                        .unwrap_or_default();
                     Plot::new("eff_plot")
                         .height(120.0)
                         .allow_zoom(false)
                         .allow_drag(false)
                         .y_axis_label("bps")
                         .show(&mut cols[0], |p| {
+                            // Current mode as a faint watermark behind the traces.
+                            if !mode.is_empty() {
+                                let b = p.plot_bounds();
+                                let cx = (b.min()[0] + b.max()[0]) * 0.5;
+                                let cy = (b.min()[1] + b.max()[1]) * 0.5;
+                                p.text(
+                                    Text::new(
+                                        PlotPoint::new(cx, cy),
+                                        egui::RichText::new(&mode)
+                                            .size(34.0)
+                                            .color(egui::Color32::from_gray(90)),
+                                    )
+                                    .name(""),
+                                );
+                            }
                             p.line(
                                 Line::new(eff)
                                     .color(egui::Color32::from_rgb(80, 180, 255))
