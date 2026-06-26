@@ -218,7 +218,7 @@ struct LinkApp {
     eff_hist: VecDeque<[f64; 2]>,
     snr_hist: VecDeque<[f64; 2]>,
     level_hist: VecDeque<[f64; 2]>,
-    window: VecDeque<(usize, f64)>, // (delivered_bits, air_s) for windowed rate
+    window: VecDeque<(f64, f64)>, // (forward_air_s, total_air_s) → half-duplex duty cycle
     frame_counter: usize,
     delivered: usize,
     attempted: usize,
@@ -407,26 +407,28 @@ impl LinkApp {
             if fs.delivered {
                 self.delivered += 1;
             }
-            self.window
-                .push_back((fs.delivered_bytes * 8, fs.frame_air_s));
+            self.window.push_back((fs.forward_air_s, fs.frame_air_s));
             while self.window.len() > WINDOW {
                 self.window.pop_front();
             }
-            // Measured wall-clock two-way goodput over the rolling window.
-            let (win_bits, win_air): (usize, f64) = self
-                .window
-                .iter()
-                .fold((0, 0.0), |(b, a), &(fb, fa)| (b + fb, a + fa));
             // Rates come from the sim (the same values fed to the panel, so the two windows
             // display identical Gross / Net / Effective figures).
             self.disp_gross = fs.gross_bps;
             self.disp_net = fs.net_bps;
             self.disp_eff = fs.effective_bps;
-            self.disp_goodput = if win_air > 0.0 {
-                win_bits as f64 / win_air
+            // Two-way goodput is DERIVED from the Effective (forward) rate, derated by the
+            // half-duplex duty cycle: forward air time / total air time (total includes the
+            // ACK frame and turnaround). Windowed so it tracks the recent ACK/turnaround mix.
+            let (win_fwd, win_total): (f64, f64) = self
+                .window
+                .iter()
+                .fold((0.0, 0.0), |(f, t), &(ff, ft)| (f + ff, t + ft));
+            let duty = if win_total > 0.0 {
+                win_fwd / win_total
             } else {
                 0.0
             };
+            self.disp_goodput = self.disp_eff * duty;
             let x = self.frame_counter as f64;
             push_hist(&mut self.eff_hist, [x, self.disp_eff]);
             push_hist(&mut self.snr_hist, [x, fs.est_snr_db as f64]);
@@ -723,8 +725,9 @@ impl eframe::App for LinkApp {
                     ui.separator();
                     ui.label(format!("2-way: {}", fmt_bps(self.disp_goodput)))
                         .on_hover_text(
-                            "Measured wall-clock two-way goodput: delivered payload bits / on-air \
-                             time, including ACK frames and half-duplex turnaround.",
+                            "Two-way goodput, derived from Effective × half-duplex duty cycle \
+                             (forward air time / total air time, where total includes the ACK \
+                             frame and turnaround).",
                         );
                     ui.separator();
                     if let Some(fs) = &self.last {
