@@ -850,6 +850,11 @@ impl eframe::App for LinkApp {
                         .as_ref()
                         .map(|fs| fs.mode.clone())
                         .unwrap_or_default();
+                    let snr_label = self
+                        .last
+                        .as_ref()
+                        .map(|fs| format!("{:.1} dB", fs.est_snr_db))
+                        .unwrap_or_default();
                     Plot::new("eff_plot")
                         .height(120.0)
                         .allow_zoom(false)
@@ -891,6 +896,21 @@ impl eframe::App for LinkApp {
                         .y_axis_label("SNR (dB)")
                         .include_y(0.0)
                         .show(&mut cols[1], |p| {
+                            // Current SNR as a faint watermark behind the trace.
+                            if !snr_label.is_empty() {
+                                let b = p.plot_bounds();
+                                let cx = (b.min()[0] + b.max()[0]) * 0.5;
+                                let cy = (b.min()[1] + b.max()[1]) * 0.5;
+                                p.text(
+                                    Text::new(
+                                        PlotPoint::new(cx, cy),
+                                        egui::RichText::new(&snr_label)
+                                            .size(34.0)
+                                            .color(egui::Color32::from_gray(90)),
+                                    )
+                                    .name(""),
+                                );
+                            }
                             p.line(
                                 Line::new(snr)
                                     .color(egui::Color32::from_rgb(120, 230, 120))
