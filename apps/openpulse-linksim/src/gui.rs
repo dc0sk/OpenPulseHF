@@ -14,7 +14,9 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
+use openpulse_audio::CpalBackend;
 use openpulse_channel::dsp::{PowerSpectrum, WaterfallBuffer, FREQ_BINS, WATERFALL_ROWS};
+use openpulse_core::audio::{AudioBackend, AudioConfig, AudioOutputStream};
 use openpulse_core::compression::{CompressionAlgorithm, ZSTD_DICT_ID};
 use openpulse_core::fec::FecMode;
 use openpulse_core::profile::SessionProfile;
@@ -27,6 +29,11 @@ const WINDOW: usize = 24; // windowed-throughput averaging window (frames)
 /// SNR slider bounds (dB) — shared by the slider and the randomize feature.
 const SNR_MIN: f32 = -10.0;
 const SNR_MAX: f32 = 35.0;
+/// TX-audio monitor: target buffered lead (s). Frames are dropped past this so the
+/// monitor stays near real time instead of accumulating seconds of latency.
+const AUDIO_BUFFER_TARGET_S: f64 = 0.4;
+/// TX-audio monitor playback gain (the modem waveform is near full-scale; keep it kind).
+const AUDIO_MONITOR_GAIN: f32 = 0.5;
 
 #[derive(Clone, Copy, PartialEq)]
 enum ChannelKind {
@@ -213,6 +220,12 @@ struct LinkApp {
     next_snr_change: Option<Instant>,
     rng_state: u64,
 
+    // TX-audio monitor: copy the forward (data TX) waveform to the default playback device.
+    ui_audio_monitor: bool,
+    audio_out: Option<Box<dyn AudioOutputStream>>,
+    audio_written: u64,
+    audio_start: Instant,
+
     panels: [PanelView; 3], // 0 = A TX, 1 = B RX (decoded), 2 = ACK
     last: Option<FrameStep>,
     // rolling history (frame index, windowed eff bps, snr, level)
@@ -264,6 +277,10 @@ impl LinkApp {
             ui_randomize: false,
             random_snr: 15.0,
             next_snr_change: None,
+            ui_audio_monitor: false,
+            audio_out: None,
+            audio_written: 0,
+            audio_start: Instant::now(),
             // Seed the PRNG from wall-clock nanos so successive launches differ.
             rng_state: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -314,6 +331,7 @@ impl LinkApp {
         if let Some(h) = self.handle.take() {
             let _ = h.join();
         }
+        self.audio_out = None; // stop monitoring TX audio when the sim stops
     }
 
     fn reset_history(&mut self) {
@@ -325,6 +343,50 @@ impl LinkApp {
         self.delivered = 0;
         self.attempted = 0;
         self.last = None;
+    }
+
+    /// Copy a frame's forward (data TX) waveform to the default playback device when the
+    /// monitor is on. Opens the cpal output lazily and drops frames when more than
+    /// [`AUDIO_BUFFER_TARGET_S`] is already buffered, so it stays near real time.
+    fn feed_audio_monitor(&mut self, fs: &FrameStep) {
+        if !self.ui_audio_monitor {
+            self.audio_out = None; // closed while off
+            return;
+        }
+        if self.audio_out.is_none() {
+            match CpalBackend::new().open_output(None, &AudioConfig::default()) {
+                Ok(stream) => {
+                    self.audio_out = Some(stream);
+                    self.audio_written = 0;
+                    self.audio_start = Instant::now();
+                }
+                Err(_) => {
+                    // No usable output device — turn the toggle back off rather than retry.
+                    self.ui_audio_monitor = false;
+                    return;
+                }
+            }
+        }
+        if fs.forward_tx.is_empty() {
+            return;
+        }
+        // Throttle to ~real time: drop this frame if we are already ahead by the target lead.
+        let sr = AudioConfig::default().sample_rate as f64;
+        let buffered_lead =
+            self.audio_written as f64 / sr - self.audio_start.elapsed().as_secs_f64();
+        if buffered_lead > AUDIO_BUFFER_TARGET_S {
+            return;
+        }
+        let scaled: Vec<f32> = fs
+            .forward_tx
+            .iter()
+            .map(|&s| (s * AUDIO_MONITOR_GAIN).clamp(-1.0, 1.0))
+            .collect();
+        if let Some(out) = &mut self.audio_out {
+            if out.write(&scaled).is_ok() {
+                self.audio_written += scaled.len() as u64;
+            }
+        }
     }
 
     /// A uniform random number in [0, 1) from an internal SplitMix64 (no external dep).
@@ -434,6 +496,7 @@ impl LinkApp {
             push_hist(&mut self.eff_hist, [x, self.disp_eff]);
             push_hist(&mut self.snr_hist, [x, fs.est_snr_db as f64]);
             push_hist(&mut self.level_hist, [x, fs.level as f64]);
+            self.feed_audio_monitor(&fs);
             self.last = Some(fs);
         }
     }
@@ -586,6 +649,11 @@ impl eframe::App for LinkApp {
                     .on_hover_text(
                         "Jump the SNR to a new random value every 1–5 seconds, never below \
                          the SNR slider (which acts as the floor).",
+                    );
+                ui.checkbox(&mut self.ui_audio_monitor, "🔊 TX audio")
+                    .on_hover_text(
+                        "Copy the forward (data TX) waveform to the default playback device. \
+                         Off by default.",
                     );
                 ui.separator();
                 ui.label("Profile:");

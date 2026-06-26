@@ -26,7 +26,9 @@ required-features = ["gui"]
 # available, falling back to CPU otherwise (build --no-default-features for a lean CPU-only
 # build, e.g. CI). gui/serve remain opt-in.
 default = ["gpu"]
-gui = ["dep:eframe", "dep:egui", "dep:egui_plot"]
+# The GUI can monitor the TX audio on the default playback device, so it pulls in the
+# cpal-backed audio output. (gui is opt-in and not in CI's default build.)
+gui = ["dep:eframe", "dep:egui", "dep:egui_plot", "dep:openpulse-audio"]
 # Serve the openpulse-daemon control protocol so an unmodified openpulse-panel can
 # connect to a live simulation. Pulls in openpulse-daemon for the wire types.
 serve = ["dep:openpulse-daemon", "dep:sysinfo"]
@@ -44,6 +46,7 @@ gpu = [
 openpulse-core    = { workspace = true }
 openpulse-modem   = { workspace = true }
 openpulse-channel = { workspace = true }
+openpulse-audio   = { workspace = true, optional = true, features = ["cpal-backend"] }
 openpulse-daemon  = { workspace = true, optional = true }
 openpulse-gpu     = { workspace = true, optional = true }
 sysinfo           = { version = "0.30", default-features = false, optional = true }
