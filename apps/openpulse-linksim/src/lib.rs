@@ -402,14 +402,45 @@ fn decide_ack(
     AckType::AckOk
 }
 
-/// A compressible, frame-distinct payload so the compression modes show a real advantage.
+/// A frame-distinct, highly compressible payload. The old code repeated one global pattern,
+/// so every frame was near-identical (only a tiny header changed) and the modulated TX
+/// waveform looked frozen (spectrum/waterfall stalled). Instead, build a *frame-specific*
+/// phrase from a seeded word draw, then repeat it to fill: highly compressible within a frame
+/// (so the compression modes still show their advantage) yet different every frame, so the
+/// TX bytes — and thus the waveform — change frame-to-frame and the view keeps moving.
 fn make_payload(frame: usize, attempt: u32, size: usize) -> Vec<u8> {
-    let header = format!("OpenPulseHF linksim frame {frame} attempt {attempt}; ");
-    const PAT: &[u8] = b"the quick brown fox jumps over the lazy dog. ";
-    let mut v = Vec::with_capacity(size + PAT.len());
-    v.extend_from_slice(header.as_bytes());
+    const WORDS: &[&str] = &[
+        "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "pack", "my", "box",
+        "with", "five", "dozen", "liquor", "jugs", "sphinx", "black", "quartz", "judge", "vow",
+        "how", "vexingly", "daft", "zebras", "waltz", "nymphs", "for", "glory", "amateur", "radio",
+        "packet", "modem", "signal", "carrier", "frame", "data", "link", "fade", "noise",
+    ];
+    // SplitMix64 seeded by (frame, attempt) — deterministic per frame, reproducible across runs.
+    let mut state = 0x9E37_79B9_7F4A_7C15u64
+        ^ (frame as u64).wrapping_mul(0xD1B5_4A32_D192_ED03)
+        ^ (attempt as u64)
+            .wrapping_add(1)
+            .wrapping_mul(0xCBF2_9CE4_8422_2325);
+    let mut next = move || {
+        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    };
+
+    // A frame-unique phrase: header + a handful of seeded words.
+    let mut phrase = format!("OpenPulseHF linksim frame {frame} attempt {attempt}: ");
+    for _ in 0..(6 + (next() % 6)) {
+        phrase.push_str(WORDS[(next() as usize) % WORDS.len()]);
+        phrase.push(' ');
+    }
+    let phrase = phrase.as_bytes();
+
+    // Repeat it to fill — the in-frame repetition keeps it compressible.
+    let mut v = Vec::with_capacity(size + phrase.len());
     while v.len() < size {
-        v.extend_from_slice(PAT);
+        v.extend_from_slice(phrase);
     }
     v.truncate(size.max(1));
     v
@@ -870,6 +901,32 @@ pub fn run_link(params: &LinkParams) -> LinkResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn payload_varies_per_frame_yet_compresses() {
+        // Distinct frames keep the TX waveform (and its spectrum) moving…
+        let a = make_payload(1, 0, 512);
+        let b = make_payload(2, 0, 512);
+        let c = make_payload(1, 1, 512);
+        assert_eq!(a.len(), 512);
+        assert_ne!(a, b, "different frames must differ");
+        assert_ne!(a, c, "different attempts of a frame must differ");
+        // Most of the bytes change frame-to-frame, so the waveform visibly moves.
+        let differing = a.iter().zip(b.iter()).filter(|(x, y)| x != y).count();
+        assert!(
+            differing > a.len() / 2,
+            "frames should differ in most bytes (got {differing}/{})",
+            a.len()
+        );
+        // …while staying compressible so the compression modes still show an advantage.
+        let z = compress(&a, CompressionAlgorithm::Lz4);
+        assert!(
+            z.len() * 2 < a.len(),
+            "repeated-phrase payload should compress well (got {} -> {})",
+            a.len(),
+            z.len()
+        );
+    }
 
     #[test]
     fn clean_channel_delivers_all_and_climbs() {
