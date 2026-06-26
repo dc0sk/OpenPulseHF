@@ -204,15 +204,23 @@ const OPERATING_RATIO: f32 = 2.0;
 /// margin rather than just trading PAPR headroom.
 const FEC_ABSORBABLE_BER: f64 = 0.01;
 
-/// Does CE-SSB still pay off on the dense-subcarrier OFDM-HOM variants that
-/// `ModemEngine::cessb_benefits` enables alongside QPSK OFDM52? Answer (locks the
-/// gate): yes. They stay high-PAPR multicarrier, so the average-power gain holds
-/// (unlike single-carrier QAM, which gets ~0 dB — see `cessb_power_vs_evm_across_modes`);
-/// the tighter constellations add a small EVM cost that pure-QPSK OFDM does not,
-/// but at the 2.0×rms operating point it stays well within FEC's reach.
+/// CE-SSB pays off on the lower-order OFDM-HOM variant (8PSK) that
+/// `ModemEngine::cessb_benefits` keeps enabled alongside QPSK OFDM52: it stays
+/// high-PAPR multicarrier so the average-power gain holds (unlike single-carrier
+/// QAM, which gets ~0 dB — see `cessb_power_vs_evm_across_modes`), and the EVM the
+/// clip injects stays well within FEC's reach at the 2.0×rms operating point.
+///
+/// The denser rungs (≥16QAM) are GATED OFF: this raw-BER-at-operating-point metric
+/// reads favourable for them, but end-to-end decode through the real engine+channel
+/// path breaks (16QAM on Watterson Good-F1 0/16; 32QAM 0/20, 64QAM 3/20 vs ≥20/20
+/// off; SCFDMA likewise) — the clip's EVM breaks acquisition/equalisation, not just
+/// the slicer. So this test asserts the benefit holds for the mode that remains
+/// enabled, and asserts the gate excludes the denser ones. See
+/// `ModemEngine::cessb_benefits`.
 #[test]
-fn cessb_benefits_hold_on_ofdm_hom() {
+fn cessb_benefits_hold_on_low_order_ofdm_hom() {
     use ofdm_plugin::OfdmPlugin;
+    use openpulse_modem::ModemEngine;
 
     let at_operating = |rows: &[Row]| -> Row {
         let r = rows
@@ -222,26 +230,31 @@ fn cessb_benefits_hold_on_ofdm_hom() {
         Row { ..*r }
     };
 
-    // SNRs scale with constellation density so the AWGN BER columns stay meaningful.
-    let hom = [
-        ("OFDM52-8PSK", 18.0f32),
-        ("OFDM52-16QAM", 22.0),
-        ("OFDM52-32QAM", 24.0),
-        ("OFDM52-64QAM", 26.0),
-    ];
-    for (mode, snr) in hom {
-        let row = at_operating(&report(mode, &OfdmPlugin::new(), snr));
-        // The multicarrier PAPR benefit survives the denser subcarriers.
+    let mode = "OFDM52-8PSK";
+    assert!(
+        ModemEngine::cessb_benefits(mode),
+        "{mode} must stay enabled"
+    );
+    let row = at_operating(&report(mode, &OfdmPlugin::new(), 18.0));
+    // The multicarrier PAPR benefit survives the denser subcarriers.
+    assert!(
+        row.power_gain_db > 0.5,
+        "{mode}: CE-SSB should still recover average power at the operating point (got {:.2} dB)",
+        row.power_gain_db
+    );
+    // The EVM the clip injects stays small enough for the mode's FEC to absorb.
+    assert!(
+        row.ber_clean < FEC_ABSORBABLE_BER,
+        "{mode}: CE-SSB EVM at the operating point must stay FEC-absorbable (raw BER {:.4})",
+        row.ber_clean
+    );
+
+    // Denser rungs are gated off — favourable raw BER notwithstanding, real-path decode
+    // breaks (see `openpulse-linksim/tests/cessb_ab.rs`).
+    for mode in ["OFDM52-16QAM", "OFDM52-32QAM", "OFDM52-64QAM"] {
         assert!(
-            row.power_gain_db > 0.5,
-            "{mode}: CE-SSB should still recover average power at the operating point (got {:.2} dB)",
-            row.power_gain_db
-        );
-        // The EVM the clip injects stays small enough for the mode's FEC to absorb.
-        assert!(
-            row.ber_clean < FEC_ABSORBABLE_BER,
-            "{mode}: CE-SSB EVM at the operating point must stay FEC-absorbable (raw BER {:.4})",
-            row.ber_clean
+            !ModemEngine::cessb_benefits(mode),
+            "{mode} must be gated off (real-path decode collapses under CE-SSB)"
         );
     }
 }

@@ -401,18 +401,35 @@ impl ModemEngine {
         self.cessb_enabled
     }
 
-    /// Whether `mode` benefits from CE-SSB conditioning — the high-PAPR
-    /// multicarrier waveforms (OFDM, SC-FDMA). Single-carrier PSK/QAM and
-    /// constant-envelope modes do not (clipping there costs EVM for no power gain).
+    /// Whether `mode` benefits from CE-SSB conditioning — only the high-PAPR
+    /// **OFDM** waveforms up to 8PSK. Two exclusions, both decided by end-to-end
+    /// decode through the real engine+channel path, not synthetic raw-BER:
     ///
-    /// The dense-subcarrier OFDM-HOM variants (`OFDM52-{8PSK,16QAM,32QAM,64QAM}`)
-    /// are deliberately included: they stay high-PAPR multicarrier, so the
-    /// average-power gain holds; the small EVM they add at the 2.0×rms operating
-    /// point stays FEC-absorbable. Verified in `tests/cessb_power_evm.rs`
-    /// (`cessb_benefits_hold_on_ofdm_hom`).
+    /// 1. **SC-FDMA is excluded entirely.** Despite its multicarrier subcarrier
+    ///    structure it is a *single-carrier* FDM waveform, low-PAPR by construction,
+    ///    so CE-SSB recovers only ~⅓ of OFDM's average-power gain (2.6 vs 8.5 dB at
+    ///    the 2.0×rms operating point on the 64QAM rung) while its EVM alone injects
+    ///    ~0.5 % raw BER — collapsing decode of SCFDMA52-{32,64}QAM (5/30 vs 30/30
+    ///    through AWGN 35 dB).
+    /// 2. **OFDM ≥16QAM is excluded.** Their decision regions are too tight for the
+    ///    CE-SSB EVM. 32/64QAM collapse outright (OFDM52-32QAM 0/20, -64QAM 3/20 vs
+    ///    20/20 off, soft FEC through AWGN); 16QAM is marginal — it survives easy
+    ///    AWGN but breaks on the realistic HF fading path (OFDM52-16QAM soft-FEC
+    ///    Watterson Good-F1: 0/16 on vs 16/16 off; uncoded AWGN 20 dB: 0/20 vs
+    ///    20/20). The earlier `cessb_benefits_hold_on_ofdm_hom` claim measured raw
+    ///    BER at a fixed operating point and missed the acquisition/decode failure
+    ///    on the real path (DSP playbook: validate FEC-protected modes WITH FEC,
+    ///    and against the fading channel — dense constellations are the canaries).
+    ///
+    /// CE-SSB stays on for OFDM QPSK (`OFDM16`/`OFDM52`) and 8PSK, where it is
+    /// decode-validated net-positive (8PSK soft-FEC Watterson Good-F1: 8/8 on).
+    /// Measured in `openpulse-linksim/tests/cessb_ab.rs` and `tests/cessb_power_evm.rs`.
     pub fn cessb_benefits(mode: &str) -> bool {
         let m = mode.to_ascii_uppercase();
-        m.starts_with("OFDM") || m.starts_with("SCFDMA")
+        if !m.starts_with("OFDM") {
+            return false;
+        }
+        !(m.contains("16QAM") || m.contains("32QAM") || m.contains("64QAM") || m.contains("32APSK"))
     }
 
     /// Apply CE-SSB envelope conditioning to a real passband TX block and rescale
