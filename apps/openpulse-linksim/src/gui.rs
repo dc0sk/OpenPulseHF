@@ -791,35 +791,19 @@ impl eframe::App for LinkApp {
                     self.ui_cessb = !self.ui_cessb;
                 }
 
-                let qr = self.qr_texture(ui.ctx());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // OpenPulseHF QR — small in the toolbar, scannable on hover.
-                    if let Some(tex) = &qr {
-                        ui.add(egui::Image::new(egui::load::SizedTexture::new(
-                            tex.id(),
-                            egui::vec2(40.0, 40.0),
-                        )))
-                        .on_hover_ui(|ui| {
-                            ui.label("OpenPulseHF");
-                            ui.add(egui::Image::new(egui::load::SizedTexture::new(
-                                tex.id(),
-                                egui::vec2(200.0, 200.0),
-                            )));
-                        });
-                        ui.separator();
-                    }
-                    #[cfg(feature = "serve")]
-                    if let Some(h) = &self.hub {
-                        let n = h.client_count();
-                        let (color, text) = if n > 0 {
-                            (egui::Color32::GREEN, format!("● panel ×{n}"))
-                        } else {
-                            (egui::Color32::DARK_GRAY, "○ panel".to_string())
-                        };
+                #[cfg(feature = "serve")]
+                if let Some(h) = &self.hub {
+                    let n = h.client_count();
+                    let (color, text) = if n > 0 {
+                        (egui::Color32::GREEN, format!("● panel ×{n}"))
+                    } else {
+                        (egui::Color32::DARK_GRAY, "○ panel".to_string())
+                    };
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(egui::RichText::new(text).color(color))
                             .on_hover_text("Connected openpulse-panel clients");
-                    }
-                });
+                    });
+                }
             });
         });
 
@@ -970,9 +954,13 @@ impl eframe::App for LinkApp {
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            let qr = self.qr_texture(ui.ctx());
+            let qr_side = 160.0_f32; // 4× the old toolbar size
+                                     // Reserve a band at the bottom for the centered QR so the columns don't eat it.
+            let cols_h = (ui.available_height() - qr_side - 14.0).max(200.0);
             let col_w = ui.available_width() / 3.0;
-            let spectrum_h = (ui.available_height() * 0.42).clamp(120.0, 320.0);
-            let waterfall_h = (ui.available_height() * 0.42).clamp(100.0, 320.0);
+            let spectrum_h = (cols_h * 0.45).clamp(110.0, 320.0);
+            let waterfall_h = (cols_h * 0.40).clamp(90.0, 320.0);
             let subtitle = self
                 .last
                 .as_ref()
@@ -984,7 +972,7 @@ impl eframe::App for LinkApp {
                 "decode FAIL"
             };
             ui.horizontal(|ui| {
-                ui.allocate_ui(egui::vec2(col_w, ui.available_height()), |ui| {
+                ui.allocate_ui(egui::vec2(col_w, cols_h), |ui| {
                     draw_panel(
                         ui,
                         "Station A → data TX",
@@ -994,7 +982,7 @@ impl eframe::App for LinkApp {
                         waterfall_h,
                     );
                 });
-                ui.allocate_ui(egui::vec2(col_w, ui.available_height()), |ui| {
+                ui.allocate_ui(egui::vec2(col_w, cols_h), |ui| {
                     // The decoded-data view: B's received signal (mode-dependent + noise), which
                     // is what actually gets demodulated — so the "decoded" status belongs here.
                     draw_panel(
@@ -1006,7 +994,7 @@ impl eframe::App for LinkApp {
                         waterfall_h,
                     );
                 });
-                ui.allocate_ui(egui::vec2(col_w, ui.available_height()), |ui| {
+                ui.allocate_ui(egui::vec2(col_w, cols_h), |ui| {
                     // The ACK is always FSK4-ACK regardless of the data mode (by design), so this
                     // column is intentionally mode-invariant — labelled FSK4 to make that clear.
                     draw_panel(
@@ -1019,6 +1007,18 @@ impl eframe::App for LinkApp {
                     );
                 });
             });
+
+            // OpenPulseHF QR, centered below the waterfalls.
+            if let Some(tex) = &qr {
+                ui.add_space(6.0);
+                ui.vertical_centered(|ui| {
+                    ui.add(egui::Image::new(egui::load::SizedTexture::new(
+                        tex.id(),
+                        egui::vec2(qr_side, qr_side),
+                    )))
+                    .on_hover_text("OpenPulseHF");
+                });
+            }
         });
     }
 }
