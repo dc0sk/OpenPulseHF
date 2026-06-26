@@ -3,7 +3,8 @@
 //! Side-by-side **Station A | Channel | Station B**: A's clean data TX on the left, the
 //! noisy on-air signal in the middle, and B's FSK4 ACK response on the right. A background
 //! thread runs the [`openpulse_linksim`] engine frame-by-frame; the SNR slider adjusts the
-//! channel live, and the bottom plot tracks the effective two-way transfer rate over time.
+//! channel live, and the bottom strip plots the effective transfer rate and the estimated
+//! SNR over time, side by side.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -760,29 +761,49 @@ impl eframe::App for LinkApp {
                     }
                 });
 
-                let eff: PlotPoints = self.eff_hist.iter().copied().collect();
-                let lvl: PlotPoints = self
-                    .level_hist
-                    .iter()
-                    .map(|&[x, y]| [x, y * 200.0])
-                    .collect();
-                Plot::new("eff_plot")
-                    .height(120.0)
-                    .allow_zoom(false)
-                    .allow_drag(false)
-                    .y_axis_label("bps")
-                    .show(ui, |p| {
-                        p.line(
-                            Line::new(eff)
-                                .color(egui::Color32::from_rgb(80, 180, 255))
-                                .name("effective bps"),
-                        );
-                        p.line(
-                            Line::new(lvl)
-                                .color(egui::Color32::from_rgba_unmultiplied(255, 180, 50, 120))
-                                .name("speed level ×200"),
-                        );
-                    });
+                // Bitrate (left) and SNR (right) share the bottom strip. SNR is in dB on a very
+                // different scale than bps, so it gets its own plot/axis rather than being
+                // squashed onto the bitrate axis.
+                ui.columns(2, |cols| {
+                    let eff: PlotPoints = self.eff_hist.iter().copied().collect();
+                    let lvl: PlotPoints = self
+                        .level_hist
+                        .iter()
+                        .map(|&[x, y]| [x, y * 200.0])
+                        .collect();
+                    Plot::new("eff_plot")
+                        .height(120.0)
+                        .allow_zoom(false)
+                        .allow_drag(false)
+                        .y_axis_label("bps")
+                        .show(&mut cols[0], |p| {
+                            p.line(
+                                Line::new(eff)
+                                    .color(egui::Color32::from_rgb(80, 180, 255))
+                                    .name("effective bps"),
+                            );
+                            p.line(
+                                Line::new(lvl)
+                                    .color(egui::Color32::from_rgba_unmultiplied(255, 180, 50, 120))
+                                    .name("speed level ×200"),
+                            );
+                        });
+
+                    let snr: PlotPoints = self.snr_hist.iter().copied().collect();
+                    Plot::new("snr_plot")
+                        .height(120.0)
+                        .allow_zoom(false)
+                        .allow_drag(false)
+                        .y_axis_label("SNR (dB)")
+                        .include_y(0.0)
+                        .show(&mut cols[1], |p| {
+                            p.line(
+                                Line::new(snr)
+                                    .color(egui::Color32::from_rgb(120, 230, 120))
+                                    .name("est SNR dB"),
+                            );
+                        });
+                });
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
