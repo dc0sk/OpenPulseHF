@@ -16,12 +16,22 @@ fn engine_with(plugin: impl openpulse_core::plugin::ModulationPlugin + 'static) 
 }
 
 #[test]
-fn benefits_only_multicarrier_modes() {
+fn benefits_only_low_order_ofdm_modes() {
     assert!(ModemEngine::cessb_benefits("OFDM52"));
-    assert!(ModemEngine::cessb_benefits("OFDM52-16QAM"));
+    assert!(ModemEngine::cessb_benefits("OFDM52-8PSK"));
     assert!(ModemEngine::cessb_benefits("ofdm16"));
-    assert!(ModemEngine::cessb_benefits("SCFDMA52"));
-    assert!(ModemEngine::cessb_benefits("SCFDMA52-64QAM"));
+
+    // OFDM ≥16QAM: decision regions too tight for the clip EVM — real-path decode
+    // breaks (16QAM on Watterson Good-F1 0/16; 32QAM 0/20, 64QAM 3/20 vs ≥20/20 off),
+    // so gate off.
+    assert!(!ModemEngine::cessb_benefits("OFDM52-16QAM"));
+    assert!(!ModemEngine::cessb_benefits("OFDM52-32QAM"));
+    assert!(!ModemEngine::cessb_benefits("OFDM52-64QAM"));
+
+    // SC-FDMA is single-carrier-FDM (low-PAPR by construction): CE-SSB buys little
+    // power but its EVM collapses the dense rungs, so it must be excluded.
+    assert!(!ModemEngine::cessb_benefits("SCFDMA52"));
+    assert!(!ModemEngine::cessb_benefits("SCFDMA52-64QAM"));
 
     assert!(!ModemEngine::cessb_benefits("BPSK250"));
     assert!(!ModemEngine::cessb_benefits("QPSK500"));
