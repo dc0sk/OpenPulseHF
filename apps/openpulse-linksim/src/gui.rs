@@ -9,6 +9,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
@@ -22,6 +23,9 @@ const MIN_DB: f32 = -100.0;
 const MAX_DB: f32 = 0.0;
 const HIST: usize = 600; // rolling plot history (frames)
 const WINDOW: usize = 24; // windowed-throughput averaging window (frames)
+/// SNR slider bounds (dB) — shared by the slider and the randomize feature.
+const SNR_MIN: f32 = -10.0;
+const SNR_MAX: f32 = 35.0;
 
 #[derive(Clone, Copy, PartialEq)]
 enum ChannelKind {
@@ -201,7 +205,14 @@ struct LinkApp {
     ui_turnaround: f64,
     ui_cessb: bool,
 
-    panels: [PanelView; 3], // 0 = A TX, 1 = Channel, 2 = B ACK
+    // Randomize-SNR feature: when on, the applied SNR jumps to a new random value in
+    // [slider, SNR_MAX] every 1–5 s. The slider stays put and acts as the floor.
+    ui_randomize: bool,
+    random_snr: f32,
+    next_snr_change: Option<Instant>,
+    rng_state: u64,
+
+    panels: [PanelView; 3], // 0 = A TX, 1 = B RX (decoded), 2 = ACK
     last: Option<FrameStep>,
     // rolling history (frame index, windowed eff bps, snr, level)
     eff_hist: VecDeque<[f64; 2]>,
@@ -249,6 +260,15 @@ impl LinkApp {
             ui_compression: CompressionAlgorithm::None,
             ui_turnaround: 0.25,
             ui_cessb: true,
+            ui_randomize: false,
+            random_snr: 15.0,
+            next_snr_change: None,
+            // Seed the PRNG from wall-clock nanos so successive launches differ.
+            rng_state: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0x9E37_79B9_7F4A_7C15)
+                | 1,
             panels: [PanelView::new(), PanelView::new(), PanelView::new()],
             last: None,
             eff_hist: VecDeque::new(),
@@ -306,10 +326,45 @@ impl LinkApp {
         self.last = None;
     }
 
+    /// A uniform random number in [0, 1) from an internal SplitMix64 (no external dep).
+    fn rand_unit(&mut self) -> f32 {
+        self.rng_state = self.rng_state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.rng_state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        // Top 24 bits → a float in [0, 1).
+        ((z >> 40) as f32) / ((1u32 << 24) as f32)
+    }
+
+    /// When "Randomize" is on, jump the applied SNR to a fresh random value every 1–5 s,
+    /// never below the slider's current value (the slider acts as the floor and stays put).
+    fn tick_randomize(&mut self, now: Instant) {
+        if !self.ui_randomize {
+            self.next_snr_change = None;
+            self.random_snr = self.ui_snr; // mirror the floor while idle
+            return;
+        }
+        if self.next_snr_change.is_none_or(|t| now >= t) {
+            let snr = self.ui_snr + self.rand_unit() * (SNR_MAX - self.ui_snr);
+            self.random_snr = (snr * 2.0).round() / 2.0; // 0.5 dB steps
+            let secs = 1.0 + self.rand_unit() as f64 * 4.0; // 1–5 s
+            self.next_snr_change = Some(now + Duration::from_secs_f64(secs));
+        } else if self.random_snr < self.ui_snr {
+            // Slider raised above the current draw between ticks → honor the floor now.
+            self.random_snr = self.ui_snr;
+        }
+    }
+
     /// Push UI changes to the shared controls. SNR is live; structural fields bump generation.
     fn sync_controls(&mut self) {
         let mut c = self.controls.lock().unwrap_or_else(|e| e.into_inner());
-        c.snr_db = self.ui_snr;
+        // When randomizing, apply the random draw (≥ the slider floor); otherwise the slider.
+        c.snr_db = if self.ui_randomize {
+            self.random_snr
+        } else {
+            self.ui_snr
+        };
         c.channel = self.ui_channel;
         c.cessb = self.ui_cessb; // live — applied without a rebuild (like SNR)
         let structural_changed = c.profile != self.ui_profile
@@ -343,7 +398,9 @@ impl LinkApp {
 
             self.panels[0].push(&fs.forward_tx);
             self.panels[1].push(&fs.forward_rx);
-            self.panels[2].push(&fs.ack_tx);
+            // The return ACK as heard back at A (post reverse channel) — using the noisy RX
+            // (not the clean TX) so the waterfall actually moves frame-to-frame.
+            self.panels[2].push(&fs.ack_rx);
 
             self.frame_counter += 1;
             self.attempted += 1;
@@ -501,10 +558,15 @@ fn draw_panel(
 
 impl eframe::App for LinkApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Randomize the SNR (if enabled) before syncing, so a new value reaches the sim this frame.
+        self.tick_randomize(Instant::now());
         if self.running.load(Ordering::Relaxed) {
             self.sync_controls();
             self.drain();
             ctx.request_repaint();
+        } else if self.ui_randomize {
+            // Keep the timer alive while idle so the randomized SNR still updates every 1–5 s.
+            ctx.request_repaint_after(Duration::from_millis(200));
         }
 
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
@@ -517,6 +579,11 @@ impl eframe::App for LinkApp {
                 } else if ui.button("▶ Run").clicked() {
                     self.start();
                 }
+                ui.checkbox(&mut self.ui_randomize, "🎲 Randomize")
+                    .on_hover_text(
+                        "Jump the SNR to a new random value every 1–5 seconds, never below \
+                         the SNR slider (which acts as the floor).",
+                    );
                 ui.separator();
                 ui.label("Profile:");
                 egui::ComboBox::from_id_salt("profile")
@@ -536,8 +603,19 @@ impl eframe::App for LinkApp {
                         }
                     });
                 ui.separator();
-                ui.label("SNR:");
-                ui.add(egui::Slider::new(&mut self.ui_snr, -10.0..=35.0).suffix(" dB"));
+                ui.label(if self.ui_randomize {
+                    "SNR floor:"
+                } else {
+                    "SNR:"
+                });
+                ui.add(egui::Slider::new(&mut self.ui_snr, SNR_MIN..=SNR_MAX).suffix(" dB"));
+                if self.ui_randomize {
+                    ui.label(
+                        egui::RichText::new(format!("🎲 {:.1} dB", self.random_snr))
+                            .color(egui::Color32::from_rgb(0x4c, 0xaf, 0x50)),
+                    )
+                    .on_hover_text("Current randomized SNR applied to the channel.");
+                }
                 ui.separator();
                 ui.label("FEC:");
                 egui::ComboBox::from_id_salt("fec")
@@ -713,6 +791,11 @@ impl eframe::App for LinkApp {
                 .as_ref()
                 .map(|fs| (fs.mode.clone(), fs.delivered, fs.ack_sent))
                 .unwrap_or_else(|| ("—".into(), false, openpulse_core::ack::AckType::AckOk));
+            let decoded = if subtitle.1 {
+                "decoded OK"
+            } else {
+                "decode FAIL"
+            };
             ui.horizontal(|ui| {
                 ui.allocate_ui(egui::vec2(col_w, ui.available_height()), |ui| {
                     draw_panel(
@@ -725,25 +808,24 @@ impl eframe::App for LinkApp {
                     );
                 });
                 ui.allocate_ui(egui::vec2(col_w, ui.available_height()), |ui| {
+                    // The decoded-data view: B's received signal (mode-dependent + noise), which
+                    // is what actually gets demodulated — so the "decoded" status belongs here.
                     draw_panel(
                         ui,
-                        "Channel (on air)",
-                        "forward signal + noise",
+                        "Station B ← data RX",
+                        &format!("{} + noise · {decoded}", subtitle.0),
                         &mut self.panels[1],
                         spectrum_h,
                         waterfall_h,
                     );
                 });
                 ui.allocate_ui(egui::vec2(col_w, ui.available_height()), |ui| {
-                    let decoded = if subtitle.1 {
-                        "decoded OK"
-                    } else {
-                        "decode FAIL"
-                    };
+                    // The ACK is always FSK4-ACK regardless of the data mode (by design), so this
+                    // column is intentionally mode-invariant — labelled FSK4 to make that clear.
                     draw_panel(
                         ui,
-                        "Station B ← ACK TX",
-                        &format!("{decoded} → ACK {:?}", subtitle.2),
+                        "ACK (B→A, FSK4)",
+                        &format!("ACK {:?} + noise", subtitle.2),
                         &mut self.panels[2],
                         spectrum_h,
                         waterfall_h,
