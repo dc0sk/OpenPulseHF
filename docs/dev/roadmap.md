@@ -1523,6 +1523,28 @@ config you can set that does nothing — all sit in `[radio]`:
 The field docs + TOML template now mark these accurately so the config no longer looks wired when
 it isn't; the underlying feature/refactor decisions are tracked here.
 
+### Signed handshake not wired into the daemon connect (finding 2026-06-27)
+
+Investigating "peer GRIDSQUARE from the handshake" surfaced a larger gap: the Ed25519 signed
+handshake (`ConReq`/`ConAck` in `openpulse-core/src/handshake.rs`) is a **tested library primitive
+that the daemon never exchanges**. `ModemEngine::begin_secure_session` (the `ConnectPeer` path) is a
+**local trust evaluation** (`evaluate_handshake` over the provided params) — it does not send a
+`ConReq` or verify a peer's `ConAck` over RF. `ConReq`/`ConAck` are referenced only by the
+handshake library + its tests, nowhere in the daemon.
+
+Consequences:
+- No authenticated peer identity (or grid) is exchanged on air in normal daemon operation — the
+  peer callsign comes from the local `ConnectPeer` argument, not a verified handshake.
+- "Peer GRIDSQUARE from the handshake" (logbook richer-fields item B) is therefore **blocked** on
+  first wiring the signed `ConReq`/`ConAck` exchange into the daemon connect flow — a substantial
+  feature, not a field add. Adding a grid field to the unused primitive now would be a new
+  "defined-but-not-consumed" gap, so it was deliberately NOT done.
+- Interim for the logbook grid: the `[logbook.peer_grids]` config map (shipped, item A).
+
+Real fix (no target date): wire the over-the-air signed handshake (initiator `ConReq` → responder
+verify + `ConAck` → initiator verify) into the daemon's `ConnectPeer`/RF path, storing the verified
+peer identity (and an optional grid field) on the engine; then the logbook reads the verified grid.
+
 ### Planned: automatic ADIF logbook (opt-in, no target date)
 
 A station logbook that records each contact in **ADIF** (Amateur Data Interchange Format) so logs

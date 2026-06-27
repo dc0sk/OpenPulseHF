@@ -9,6 +9,24 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-27 — Logbook peer GRIDSQUARE via handshake (B): blocked, finding recorded
+
+- **Requirement/change:** carry the worked station's grid in the signed handshake so the logbook
+  fills `GRIDSQUARE` from a verified, on-air source (the richer-fields item B, follow-on to A).
+- **Investigation:** the Ed25519 signed handshake (`ConReq`/`ConAck`, `openpulse-core/src/
+  handshake.rs`) is a tested library primitive that the **daemon never exchanges**. The
+  `ConnectPeer` path runs `ModemEngine::begin_secure_session`, a *local* trust evaluation
+  (`evaluate_handshake` over locally-supplied params) — it sends no `ConReq` and verifies no peer
+  `ConAck` over RF. `ConReq`/`ConAck` are referenced only by the handshake lib + its tests.
+- **Decision:** B is blocked on a larger prerequisite — wiring the over-the-air signed
+  `ConReq`→`ConAck` exchange into the daemon connect — not a field add. Adding a grid field to a
+  primitive the daemon never exchanges would create a fresh "defined-but-not-consumed" gap (the
+  exact anti-pattern the TNC/config audits just removed), so it was deliberately NOT done. The
+  config `[logbook.peer_grids]` map (A, shipped) remains the interim source.
+- **Implementation:** none (no speculative surface). Finding + real-fix path recorded in
+  `docs/dev/roadmap.md` ("Signed handshake not wired into the daemon connect").
+- **Test results:** docs-only; workspace gates unaffected (no code change).
+
 ## 2026-06-27 — Logbook peer GRIDSQUARE via config map (A)
 
 - **Requirement/change:** populate the ADIF `GRIDSQUARE` (worked station's grid). The audit found
