@@ -511,6 +511,21 @@ impl SessionProfile {
         snr_ceilings[SpeedLevel::Sl8 as usize] = Some(24.0_f32);
         snr_ceilings[SpeedLevel::Sl9 as usize] = Some(28.0_f32);
         // SL10 (OFDM52-64QAM) is the ceiling; no upgrade above it.
+        // Per-level FEC, measured by clean loopback (see the OFDM-HOM probe in the PR):
+        //   - OFDM16 / OFDM52 (SL5/SL6) decode unprotected and *break* under full RS (a padded
+        //     255-byte block spans too many OFDM symbols to reassemble) → leave them FEC-free.
+        //   - OFDM52-8PSK (SL7) *fails* unprotected even on a clean channel and needs FEC; the
+        //     denser rungs (SL8–SL10) decode either way → protect SL7–SL10 with RS.
+        // Without this the session stalls at SL6 and never reaches the dense rungs.
+        let mut fec_modes = [None; 21];
+        for sl in [
+            SpeedLevel::Sl7,
+            SpeedLevel::Sl8,
+            SpeedLevel::Sl9,
+            SpeedLevel::Sl10,
+        ] {
+            fec_modes[sl as usize] = Some(FecMode::Rs);
+        }
         Self {
             modes,
             initial_level: SpeedLevel::Sl5,
@@ -519,7 +534,7 @@ impl SessionProfile {
             snr_ceilings,
             // Gate admission to the densest rung behind a prior SNR-upgrade candidate.
             ack_up_requires_snr_candidate_at: Some(SpeedLevel::Sl10),
-            fec_modes: [None; 21],
+            fec_modes,
         }
     }
 
