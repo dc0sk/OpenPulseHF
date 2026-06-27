@@ -594,6 +594,11 @@ async fn handle_client(
 
 /// Dispatch one command; returns `true` when the write failed and the loop should exit.
 #[cfg(not(target_arch = "wasm32"))]
+// TCP control-port command handler. The request-response commands below (those that return data,
+// not just an ok) are handled inline; everything else falls to `dispatch_command`. The WebSocket
+// path in `ws.rs` mirrors this exact inline set — KEEP THE TWO IN SYNC: a request-response command
+// added here but not in `ws.rs` (or vice versa) silently falls to `dispatch_command` on the other
+// transport and returns no data. (Audited 2026-06-27: both transports are at parity.)
 async fn handle_command(
     cmd: ControlCommand,
     write_half: &mut tokio::net::tcp::OwnedWriteHalf,
