@@ -99,6 +99,11 @@ impl ModulationPlugin for Fsk4Plugin {
             max_frame_samples: n * 64 * 4 * 11 / 10,
         })
     }
+
+    fn occupied_bandwidth_hz(&self, mode: &str) -> Option<f32> {
+        // 4 tones at fc ± 50 and fc ± 150 Hz → 300 Hz occupied.
+        mode.eq_ignore_ascii_case("FSK4-ACK").then_some(300.0)
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

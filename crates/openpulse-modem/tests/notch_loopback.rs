@@ -78,3 +78,36 @@ fn notch_is_off_by_default_and_toggles() {
     h.rx_engine.disable_notch();
     assert!(!h.rx_engine.is_notch_enabled());
 }
+
+#[test]
+fn persistence_surfaces_in_band_interferer_for_qsy() {
+    use openpulse_audio::LoopbackBackend;
+    use openpulse_modem::ModemEngine;
+
+    let backend = LoopbackBackend::new();
+    let handle = backend.clone_shared();
+    let mut engine = ModemEngine::new(Box::new(backend));
+    engine.register_plugin(Box::new(QpskPlugin::new())).unwrap();
+    engine.enable_notch();
+    engine.set_notch_persistence(3);
+
+    // A lone in-band CW tone (1500 Hz = QPSK500 centre) with no own signal present: each capture
+    // is observed as silence, so after enough blocks it is confirmed as an in-band interferer —
+    // which a notch can't remove, so it is surfaced for QSY.
+    let tone: Vec<f32> = (0..8192)
+        .map(|i| 0.2 * (2.0 * std::f32::consts::PI * 1500.0 * i as f32 / 8000.0).sin())
+        .collect();
+    for _ in 0..4 {
+        handle.fill_samples(&tone);
+        let _ = engine.receive("QPSK500", None); // demod fails on a pure tone; the capture is observed
+    }
+
+    assert!(
+        engine
+            .in_band_interferers()
+            .iter()
+            .any(|&f| (f - 1500.0).abs() < 15.0),
+        "a persistent in-band tone should be flagged for QSY, got {:?}",
+        engine.in_band_interferers()
+    );
+}

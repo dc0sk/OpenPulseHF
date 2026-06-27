@@ -160,6 +160,10 @@ pub struct ModemConfig {
     pub notch_max: usize,
     /// Notch sharpness (BW ≈ f0 / q).
     pub notch_q: f32,
+    /// Notch persistence: a tone must appear in this many signal-absent (silence) blocks before
+    /// it counts as a confirmed external interferer. `0` (default) disables persistence tracking.
+    /// When on, the notch nulls confirmed externals robustly and logs in-band ones as QSY hints.
+    pub notch_persistence: u32,
 }
 
 /// Per-rig CAT settings (used in `[radio.rig_a]` / `[radio.rig_b]` sections).
@@ -323,6 +327,7 @@ impl Default for ModemConfig {
             notch_enabled: false,
             notch_max: 10,
             notch_q: 25.0,
+            notch_persistence: 0,
         }
     }
 }
@@ -681,6 +686,10 @@ notch_enabled = false
 # Max simultaneous notches, and notch sharpness (bandwidth ~= f0 / notch_q).
 notch_max = 10
 notch_q = 25.0
+# Persistence: a tone must appear in this many silence (signal-absent) blocks before it
+# is treated as a confirmed external interferer. 0 = off. When on, externally-confirmed
+# tones are notched robustly and confirmed in-band tones are logged as QSY hints.
+notch_persistence = 0
 
 [radio]
 # CAT (frequency/mode) backend: "rigctld" (default) or "none".
@@ -839,6 +848,7 @@ mod tests {
         assert!(!cfg.modem.notch_enabled);
         assert_eq!(cfg.modem.notch_max, 10);
         assert_eq!(cfg.modem.notch_q, 25.0);
+        assert_eq!(cfg.modem.notch_persistence, 0);
     }
 
     #[test]

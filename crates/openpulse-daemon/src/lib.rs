@@ -1470,6 +1470,13 @@ pub async fn apply_command_to_engine(
         ControlCommand::SetCessb { enabled } => {
             engine.set_cessb_enabled(*enabled);
         }
+        ControlCommand::SetNotch { enabled } => {
+            if *enabled {
+                engine.enable_notch();
+            } else {
+                engine.disable_notch();
+            }
+        }
         // No live-modem side effects for these commands in the engine path.
         // They are handled by dispatch-only paths or request-response control flow.
         ControlCommand::SubscribeSpectrum { .. }

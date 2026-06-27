@@ -328,6 +328,12 @@ pub enum DaemonCommands {
         #[arg(action = clap::ArgAction::Set)]
         enabled: bool,
     },
+    /// Enable/disable the receiver-side automatic notch (removes out-of-band CW interference).
+    SetNotch {
+        /// true to enable, false to disable.
+        #[arg(action = clap::ArgAction::Set)]
+        enabled: bool,
+    },
     /// Print one OTA status snapshot as JSON.
     OtaStatus,
 }
