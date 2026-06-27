@@ -33,6 +33,8 @@ DD2ZM for providing access to a remote controllable station for testing.
 
 DB1IUA for helping stuffing the budget sink-hole.
 
+Notfunk Deutschland e.V. for providing space on their booth at HAM RADIO 2026.
+
 ---
 ## Status
 
