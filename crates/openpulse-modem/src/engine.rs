@@ -1283,12 +1283,8 @@ impl ModemEngine {
                 (None, None)
             }
         };
-        if let Some(p) = &payload {
-            let _ = self.event_tx.send(EngineEvent::FrameReceived {
-                mode: mode.clone().unwrap_or_default(),
-                bytes: p.len(),
-            });
-        }
+        // `FrameReceived` is already emitted by the inner `decode_attempt` → `receive_from_samples`
+        // on a successful decode; emitting again here double-counted it on the OTA path only.
         Ok(OtaRxResult { payload, ack, mode })
     }
 
@@ -1612,15 +1608,7 @@ impl ModemEngine {
         );
 
         self.stage_emit_output(device, mode, &samples)?;
-
-        // Log transmission metadata for regulatory compliance
-        self.update_tx_session_callsign();
-        let tx_seq = self.sequence.wrapping_sub(1);
-        let metadata = TxMetadata::new(&self.callsign, mode, self.max_power_watts, tx_seq);
-        self.tx_session_log
-            .log_frame(metadata.clone())
-            .map_err(|err| ModemError::Configuration(err.to_string()))?;
-        debug!("logged TX metadata: {}", metadata.to_log_line());
+        // (Regulatory TX logging now happens for every frame inside `stage_emit_output`.)
 
         let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
             mode: mode.to_string(),
@@ -2310,6 +2298,18 @@ impl ModemEngine {
                 )
             }
         };
+
+        // Feed the rate policy an absolute RX SNR whenever soft demod ran — same as the no-FEC
+        // path (`receive_from_samples`) and `receive_with_ack_hint`. Without this, an adaptive
+        // session that uses FEC got no SNR feedback (the FEC receive path skipped it).
+        if llrs.is_some() {
+            let snr_db = openpulse_core::snr_estimate::m2m4_snr_db_gated_from_real(
+                &samples.samples,
+                self.center_frequency + self.afc_correction_hz,
+                AudioConfig::default().sample_rate as f32,
+            );
+            self.rate_policy.record_rx_snr(snr_db);
+        }
 
         self.update_afc_estimate(mode, &samples.samples);
         if let Some(hz) = self.last_afc_offset_hz {
@@ -4218,6 +4218,16 @@ impl ModemEngine {
         stream
             .flush()
             .map_err(|e| ModemError::Audio(e.to_string()))?;
+
+        // Regulatory compliance log lives at this single emit seam, so EVERY transmitted frame
+        // (data, FEC, ACK, retransmit, QSY, …) is recorded — not just the plain `transmit()` path.
+        self.update_tx_session_callsign();
+        let tx_seq = self.sequence.wrapping_sub(1);
+        let metadata = TxMetadata::new(&self.callsign, mode, self.max_power_watts, tx_seq);
+        self.tx_session_log
+            .log_frame(metadata.clone())
+            .map_err(|err| ModemError::Configuration(err.to_string()))?;
+        debug!("logged TX metadata: {}", metadata.to_log_line());
 
         Ok(())
     }
