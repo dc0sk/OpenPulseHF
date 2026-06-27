@@ -194,13 +194,16 @@ pub struct ModemConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RigConfig {
-    /// rigctld TCP address for this rig (default `"127.0.0.1:4532"`).
+    /// rigctld TCP address for this rig (default `"127.0.0.1:4532"`). The only field the daemon
+    /// currently consumes (via `[radio.rig_b]` for the cross-band repeater's TX PTT).
     pub rigctld_addr: String,
-    /// CAT backend: `"rigctld"` (default) or `"generic"` (TOML-scripted serial).
+    /// **Reserved — not yet implemented.** Intended CAT backend selector
+    /// (`"rigctld"` / `"generic"`); the daemon only ever uses rigctld today, so this is unread.
+    /// See `docs/dev/roadmap.md` → "Config/feature gaps".
     pub backend: String,
-    /// Serial port path for the `"generic"` backend (e.g. `"/dev/ttyUSB0"`).
+    /// **Reserved — not yet implemented.** Serial port for the unbuilt `"generic"` CAT backend.
     pub serial_port: String,
-    /// Path to the TOML rig-definition file for the `"generic"` backend.
+    /// **Reserved — not yet implemented.** Rig-definition file for the unbuilt `"generic"` backend.
     pub rig_file: String,
 }
 
@@ -223,7 +226,9 @@ pub struct RadioConfig {
     /// Default `500` (2 Hz). Uses a dedicated rigctld connection, so it never
     /// contends with PTT/frequency commands. Raise it for rigs with slow CAT.
     pub meter_poll_ms: u64,
-    /// Primary rig (RX/TX for normal operation and cross-band relay receive).
+    /// **Currently unused.** The primary rig is configured via the top-level `[radio] rigctld_addr`
+    /// above (what the daemon's CAT/PTT and the repeater's RX side actually read); `[radio.rig_a]`
+    /// is never consumed. Kept for the planned multi-rig refactor — see roadmap "Config/feature gaps".
     pub rig_a: RigConfig,
     /// Secondary rig (TX for cross-band relay).  `None` if not configured.
     pub rig_b: Option<RigConfig>,
@@ -729,21 +734,17 @@ rigctld_addr = "127.0.0.1:4532"
 # events for drive tuning. 0 disables. Uses a separate rigctld connection.
 meter_poll_ms = 500
 
-# Primary rig (RX/TX for normal operation; also the receive side of cross-band relay).
-[radio.rig_a]
-rigctld_addr = "127.0.0.1:4532"
-# CAT backend: "rigctld" (default) or "generic" (TOML-scripted serial).
-# backend = "rigctld"
-# Serial port path and rig-definition file for the "generic" backend.
-# serial_port = "/dev/ttyUSB0"
-# rig_file = "~/.config/openpulse/rigs/icom-ic7300.toml"
+# [radio.rig_a] is currently UNUSED — the primary rig is the top-level [radio] rigctld_addr above.
+# The "generic"/serial CAT backend (backend/serial_port/rig_file) is documented but NOT YET wired;
+# only rigctld is implemented. Both are tracked in roadmap "Config/feature gaps".
 
-# Secondary rig (TX side of cross-band relay).  Uncomment to enable dual-rig.
+# Secondary rig: the daemon reads ONLY its rigctld_addr, for the cross-band repeater's TX PTT.
+# Uncomment to enable the repeater's second rig.
 # [radio.rig_b]
 # rigctld_addr = "127.0.0.1:4533"
 
 [repeater]
-# Enable the cross-band repeater (requires [radio.rig_a] and [radio.rig_b]).
+# Enable the cross-band repeater (RX uses the top-level [radio] rig; TX uses [radio.rig_b]).
 enabled = false
 # Modulation mode used for both RX (rig_a) and TX (rig_b).
 mode = "BPSK250"
