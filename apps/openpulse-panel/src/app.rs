@@ -142,6 +142,8 @@ pub struct PanelApp {
     cessb_enabled: bool,
     notch_enabled: bool,
     tx_atten_db: f32,
+    dcd_squelch: f32,
+    ota_profile: String,
 
     // RF peer connect.
     peer_callsign_input: String,
@@ -191,6 +193,9 @@ impl PanelApp {
             // Default-off mirrors the daemon's `[modem] notch_enabled = false`.
             notch_enabled: false,
             tx_atten_db: 0.0,
+            // Mirrors the engine/`[modem] dcd_squelch` default.
+            dcd_squelch: 0.01,
+            ota_profile: "hpx_hf".into(),
             peer_callsign_input: String::new(),
             config_open: false,
             config_draft: DaemonConfig {
@@ -541,8 +546,25 @@ impl eframe::App for PanelApp {
                                 });
                             }
                         }
+                        if ui.button("Stop").on_hover_text("End the OTA session").clicked() {
+                            self.send(ControlCommand::StopOtaSession);
+                        }
                     } else {
                         ui.label(RichText::new("OTA: off").color(Color32::GRAY));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.ota_profile)
+                                .desired_width(90.0)
+                                .hint_text("profile"),
+                        );
+                        if ui
+                            .button("Start OTA")
+                            .on_hover_text("Start a receiver-led OTA adaptive-rate session")
+                            .clicked()
+                        {
+                            self.send(ControlCommand::StartOtaSession {
+                                profile: self.ota_profile.clone(),
+                            });
+                        }
                     }
                 }
 
@@ -561,6 +583,24 @@ impl eframe::App for PanelApp {
                     self.send(ControlCommand::SetTxAttenuation {
                         db: self.tx_atten_db,
                         band: None,
+                    });
+                }
+
+                // ── DCD / squelch threshold ───────────────────────────────────
+                ui.label("Squelch:");
+                if ui
+                    .add(
+                        egui::Slider::new(&mut self.dcd_squelch, 0.0_f32..=0.2_f32)
+                            .fixed_decimals(3),
+                    )
+                    .on_hover_text(
+                        "DCD/squelch RMS threshold: raise above a noisy band's floor so the \
+                         carrier-present detector doesn't latch busy.",
+                    )
+                    .changed()
+                {
+                    self.send(ControlCommand::SetDcdSquelch {
+                        threshold: self.dcd_squelch,
                     });
                 }
 
