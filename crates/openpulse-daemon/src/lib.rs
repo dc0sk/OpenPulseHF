@@ -9,6 +9,7 @@
 //! spectrum frames interleaved with the NDJSON event stream on the same
 //! connection.  See [`protocol::encode_spectrum_frame`] for the wire format.
 
+pub mod logbook;
 pub mod protocol;
 
 /// WebSocket control endpoint — native server builds only.
@@ -167,6 +168,10 @@ pub struct RuntimeControlState {
     pub dcd_squelch_default: f32,
     /// Per-band DCD/squelch overrides (band label → threshold), applied on retune.
     pub dcd_squelch_bands: std::collections::BTreeMap<String, f32>,
+    /// Automatic ADIF logbook (opt-in); records one QSO per connect→disconnect.
+    pub logbook: crate::logbook::Logbook,
+    /// Most recent CAT frequency (Hz) set via `SetFreq`, stamped into the logbook QSO.
+    pub last_freq_hz: Option<u64>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -190,6 +195,8 @@ impl Default for RuntimeControlState {
             relay_forwarder: None,
             dcd_squelch_default: 0.01,
             dcd_squelch_bands: std::collections::BTreeMap::new(),
+            logbook: crate::logbook::Logbook::default(),
+            last_freq_hz: None,
         }
     }
 }
@@ -1197,6 +1204,13 @@ pub async fn apply_command_to_engine(
                         peer: Some(callsign.clone()),
                     });
 
+                    // Open a logbook QSO (finalized + appended on disconnect).
+                    let mode = active_mode.lock().await.clone();
+                    let freq = runtime_state.last_freq_hz;
+                    runtime_state
+                        .logbook
+                        .begin_qso(callsign, &mode, freq, now_ms);
+
                     let token = format!("qsy-{now_ms}");
                     runtime_state.qsy_pending_token = Some(token.clone());
                     let _ = event_tx.send(ControlEvent::QsyPending { token });
@@ -1217,6 +1231,10 @@ pub async fn apply_command_to_engine(
             match engine.end_secure_session(now_ms) {
                 Ok(()) => {
                     runtime_state.qsy_pending_token = None;
+                    // Finalize + append the logbook QSO (opt-in; failures don't affect the session).
+                    if let Err(e) = runtime_state.logbook.end_qso(now_ms) {
+                        tracing::warn!(error = %e, "logbook: failed to append ADIF record");
+                    }
                     let _ = event_tx.send(ControlEvent::RfConnectionChanged {
                         connected: false,
                         peer: None,
@@ -1263,6 +1281,7 @@ pub async fn apply_command_to_engine(
 
             match controller.set_frequency(*freq_hz) {
                 Ok(()) => {
+                    runtime_state.last_freq_hz = Some(*freq_hz);
                     // Restore the per-band DCD squelch for the new frequency.
                     apply_band_squelch(engine, runtime_state, *freq_hz);
                     let _ = event_tx.send(ControlEvent::RigStatus {
@@ -2015,6 +2034,47 @@ mod command_apply_tests {
             }
             other => panic!("expected QsyDecision, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn connect_then_disconnect_writes_an_adif_logbook_record() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("QPSK500".to_string()));
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(32);
+        let ev_tx = Arc::new(tx);
+
+        let path = std::env::temp_dir().join(format!("opadif-it-{}.adi", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut runtime_state = RuntimeControlState {
+            logbook: crate::logbook::Logbook::new(true, path.to_str().unwrap(), "DL0XYZ", "AA00aa"),
+            last_freq_hz: Some(14_070_000),
+            ..RuntimeControlState::default()
+        };
+
+        for cmd in [
+            ControlCommand::ConnectPeer {
+                callsign: "DL1ABC".to_string(),
+            },
+            ControlCommand::DisconnectPeer,
+        ] {
+            apply_command_to_engine(
+                &cmd,
+                &mut engine,
+                &active_mode,
+                &ev_tx,
+                None,
+                &mut runtime_state,
+            )
+            .await;
+        }
+
+        let body = std::fs::read_to_string(&path).expect("logbook file written");
+        assert!(body.contains("<CALL:6>DL1ABC"));
+        assert!(body.contains("<BAND:3>20m"));
+        assert!(body.contains("<SUBMODE:7>QPSK500"));
+        assert!(body.contains("<STATION_CALLSIGN:6>DL0XYZ"));
+        assert_eq!(body.matches("<EOR>").count(), 1);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
