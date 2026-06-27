@@ -9,6 +9,22 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-27 — Config-schema completeness audit (defined-but-not-consumed)
+
+- **Requirement/change:** audit another surface for the seam-gap class — config fields that exist
+  (and are in the TOML template) but are never read, so setting them does nothing.
+- **Design decision:** 72/79 fields consumed; the 7 dead ones are all in `[radio]` —
+  `[radio.rig_a]` (never read; the primary rig is the top-level `[radio]`) and the `"generic"` CAT
+  backend (`backend`/`serial_port`/`rig_file`, documented in the manual but unimplemented). Don't
+  remove documented/planned schema and don't undertake the feature in an audit; instead mark them
+  accurately so the config stops looking wired, and record the real fixes in the roadmap.
+- **Implementation:** `crates/openpulse-config/src/lib.rs` (field docs + TOML template mark
+  rig_a "currently unused" and the generic-backend fields "reserved — not yet implemented";
+  corrected the repeater comment); `docs/dev/roadmap.md` "Config/feature gaps" entry.
+- **Tests/results:** `openpulse-config` 9/9 (template still parses), clippy 0. The recently-added
+  `[modem] notch_*`, `[qsy] auto_qsy_on_interference`, `[logbook] *` fields were each confirmed
+  consumed by the daemon during the audit.
+
 ## 2026-06-27 — Auto-QSY end-to-end validation
 
 - **Requirement/change:** validate the notch → in-band-interferer → auto-QSY loop end to end

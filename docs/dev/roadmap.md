@@ -1492,6 +1492,20 @@ CLI, and **`SetDcdSquelch`** in the panel. The OTA hysteresis/aggressiveness/bou
 is intentional (panel offers the simplified lock/unlock instead). Newly-added `SetNotch`, plus
 CE-SSB and repeater, are reachable from all three surfaces. Not yet scheduled.
 
+### Config/feature gaps — defined but not consumed (audit 2026-06-27)
+
+Audited every `OpenpulseConfig` field for a reader (the "defined but not consumed" gap). 72 of 79
+fields are consumed; the recently-added notch/QSY/logbook fields are all wired. The dead ones —
+config you can set that does nothing — all sit in `[radio]`:
+
+| Field(s) | Why dead | Resolution |
+|---|---|---|
+| `[radio.rig_a]` (whole `RigConfig`) | The daemon configures the primary rig via the **top-level** `[radio] rigctld_addr`; `cfg.radio.rig_a` is never read. | Marked "currently unused" in docs/template. Real fix = a multi-rig refactor (use `rig_a` for the primary), or drop `rig_a`. |
+| `RigConfig.backend` / `serial_port` / `rig_file` | The `"generic"`/serial CAT backend is **documented in the manual** (`docs/openpulse-manual.md`, example rig profiles) but **never implemented** — the daemon only ever uses rigctld, so these are unread. | Marked "reserved — not yet implemented" in docs/template. Real fix = implement the generic CAT backend, or remove it from the manual + schema. |
+
+The field docs + TOML template now mark these accurately so the config no longer looks wired when
+it isn't; the underlying feature/refactor decisions are tracked here.
+
 ### Planned: automatic ADIF logbook (opt-in, no target date)
 
 A station logbook that records each contact in **ADIF** (Amateur Data Interchange Format) so logs
