@@ -9,6 +9,22 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-27 — WS-vs-TCP control-port parity audit (no gap)
+
+- **Requirement/change:** audit another surface — does a `ControlCommand` reach the daemon on the
+  TCP control port but not the WebSocket port (or vice versa)?
+- **Finding:** **parity holds.** Both `lib.rs::handle_command` (TCP) and `ws.rs` parse the same
+  `ControlCommand` enum, handle the identical 6 request-response commands inline (SubscribeSpectrum,
+  GetConfig, ListMessages, GetMessage, SendMessage, DeleteMessage), and route everything else
+  through the same `dispatch_command` → `apply_command_to_engine`. No command is reachable on one
+  transport but not the other.
+- **Design decision:** no code gap to fix; the only risk is *future* divergence (the two inline
+  chains are duplicated). Added cross-referencing "keep in sync" comments to both handlers as a
+  tripwire; a full consolidation into one shared request-response handler is noted as future
+  hardening (low priority — no current gap).
+- **Implementation:** comments in `crates/openpulse-daemon/src/lib.rs` and `ws.rs`.
+- **Test results:** daemon builds; fmt clean; no behavior change.
+
 ## 2026-06-27 — CE-SSB gated off for OFDM-HOM (8PSK+) — a real ~6 dB regression
 
 - **Requirement/change:** investigate the CE-SSB-on-OFDM cost surfaced while greening the baseline

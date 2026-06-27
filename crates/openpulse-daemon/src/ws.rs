@@ -186,6 +186,11 @@ async fn handle_ws_client(stream: TcpStream, ctx: WsClientCtx) {
                             }
                         };
 
+                        // Request-response commands handled inline; everything else falls to
+                        // `dispatch_command`. This inline set MUST stay in sync with the TCP path
+                        // (`lib.rs::handle_command`) — a request-response command added to one
+                        // transport but not the other returns no data on the other. (Parity
+                        // audited 2026-06-27.)
                         if let ControlCommand::SubscribeSpectrum { fps } = &cmd {
                             let fps = (*fps).clamp(1, 100);
                             if let Some(h) = spectrum_task.take() {
