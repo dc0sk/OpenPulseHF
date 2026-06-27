@@ -2294,6 +2294,71 @@ mod command_apply_tests {
     }
 
     #[tokio::test]
+    async fn auto_qsy_end_to_end_initiator_to_responder_over_rf() {
+        use bpsk_plugin::BpskPlugin;
+        use openpulse_modem::channel_sim::ChannelSimHarness;
+
+        // Station A (tx_engine) detects the interferer and auto-initiates QSY; Station B (rx_engine)
+        // receives the QSY_REQ over the (clean) channel and opens a responder session — the full
+        // notch → in-band-interferer → auto-QSY → RF handoff loop, deterministically.
+        let mut h = ChannelSimHarness::new();
+        h.tx_engine
+            .register_plugin(Box::new(BpskPlugin::new()))
+            .unwrap();
+        h.rx_engine
+            .register_plugin(Box::new(BpskPlugin::new()))
+            .unwrap();
+
+        // A: confirm a persistent in-band tone via the streaming capture path.
+        h.tx_engine.enable_notch();
+        h.tx_engine.set_notch_persistence(3);
+        let tone: Vec<f32> = (0..8192)
+            .map(|i| 0.2 * (2.0 * std::f32::consts::PI * 1500.0 * i as f32 / 8000.0).sin())
+            .collect();
+        for _ in 0..4 {
+            let _ = h
+                .tx_engine
+                .accumulate_capture(Some("BPSK250"), tone.clone());
+        }
+        assert!(!h.tx_engine.in_band_interferers().is_empty());
+
+        // A: auto-QSY → transmits QSY_REQ into the TX loopback.
+        let mode_a: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx_a, _rx_a) = broadcast::channel::<ControlEvent>(16);
+        let ev_a = Arc::new(tx_a);
+        let mut rs_a = RuntimeControlState {
+            qsy_candidate_freqs: vec![14_070_000, 14_077_000],
+            ..RuntimeControlState::default()
+        };
+        maybe_qsy_on_interference(true, &mut rs_a, None, &ev_a, &mode_a, &mut h.tx_engine).await;
+        assert!(rs_a.qsy_session.is_some(), "A should have initiated QSY");
+
+        // Carry A's transmitted QSY_REQ across the (clean) channel to B and decode it.
+        h.route_clean();
+        let bytes = h.rx_engine.receive("BPSK250", None).unwrap_or_default();
+        assert!(
+            String::from_utf8_lossy(&bytes).contains("QSY_REQ"),
+            "B should receive A's QSY_REQ, got {:?}",
+            String::from_utf8_lossy(&bytes)
+        );
+
+        // B: the decoded QSY_REQ drives a responder session.
+        let mode_b: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx_b, mut rx_b) = broadcast::channel::<ControlEvent>(16);
+        let ev_b = Arc::new(tx_b);
+        let mut rs_b = RuntimeControlState::default();
+        process_received_bytes(&bytes, &mut rs_b, None, &ev_b, &mode_b, &mut h.rx_engine).await;
+        assert!(
+            rs_b.qsy_session.is_some(),
+            "B should open a responder session from A's auto-QSY QSY_REQ"
+        );
+        assert!(
+            matches!(rx_b.try_recv(), Ok(ControlEvent::QsyIncoming { .. })),
+            "B should emit QsyIncoming"
+        );
+    }
+
+    #[tokio::test]
     async fn auto_qsy_noop_when_disabled_or_session_in_flight() {
         let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
         let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
