@@ -242,3 +242,40 @@ fn awgn_15db_bpsk250_ldpc() {
         .unwrap();
     assert_eq!(&rx[..payload.len()], payload);
 }
+
+/// Regression guard: with CE-SSB on by default, OFDM52-8PSK + RS must decode at its operating SNR.
+/// Before gating 8PSK out of `cessb_benefits`, CE-SSB's clipping distortion made this fail
+/// entirely (0/N) at 12–16 dB; gated off, it decodes.
+#[test]
+fn ofdm52_8psk_rs_decodes_at_operating_snr_with_default_cessb() {
+    use ofdm_plugin::OfdmPlugin;
+    let payload: Vec<u8> = (0..64u8).collect();
+    let mut ok = 0;
+    let trials = 8;
+    for seed in 0..trials {
+        let mut h = ChannelSimHarness::new();
+        h.tx_engine
+            .register_plugin(Box::new(OfdmPlugin::new()))
+            .unwrap();
+        h.rx_engine
+            .register_plugin(Box::new(OfdmPlugin::new()))
+            .unwrap();
+        // CE-SSB left at its default (enabled) — the point of the guard.
+        h.tx_engine
+            .transmit_with_fec_mode(&payload, "OFDM52-8PSK", FecMode::Rs, None)
+            .unwrap();
+        let mut ch = AwgnChannel::new(AwgnConfig::new(16.0, Some(seed))).unwrap();
+        let _ = h.route_tapped(&mut ch);
+        if h.rx_engine
+            .receive_with_fec_mode("OFDM52-8PSK", FecMode::Rs, None)
+            .map(|d| d == payload)
+            .unwrap_or(false)
+        {
+            ok += 1;
+        }
+    }
+    assert!(
+        ok >= trials - 1,
+        "OFDM52-8PSK+RS should decode at 16 dB with default CE-SSB (got {ok}/{trials})"
+    );
+}

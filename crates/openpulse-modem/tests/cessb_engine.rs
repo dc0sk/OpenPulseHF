@@ -17,13 +17,15 @@ fn engine_with(plugin: impl openpulse_core::plugin::ModulationPlugin + 'static) 
 
 #[test]
 fn benefits_only_low_order_ofdm_modes() {
+    // Only QPSK-subcarrier OFDM: CE-SSB is genuinely zero-EVM-cost there (peak-fair BER 0→0).
     assert!(ModemEngine::cessb_benefits("OFDM52"));
-    assert!(ModemEngine::cessb_benefits("OFDM52-8PSK"));
     assert!(ModemEngine::cessb_benefits("ofdm16"));
 
-    // OFDM ≥16QAM: decision regions too tight for the clip EVM — real-path decode
-    // breaks (16QAM on Watterson Good-F1 0/16; 32QAM 0/20, 64QAM 3/20 vs ≥20/20 off),
-    // so gate off.
+    // Every higher-order OFDM constellation (8PSK and up) is gated off — the clip EVM exceeds
+    // the tighter decision regions and real-path decode breaks at the operating SNR. 8PSK: a
+    // marginal-SNR AWGN sweep goes 12/12 → 0/12 with CE-SSB on (peak-fair BER 0.0000→0.0026);
+    // 16QAM on Watterson Good-F1 0/16; 32QAM 0/20; 64QAM 3/20 vs ≥20/20 off.
+    assert!(!ModemEngine::cessb_benefits("OFDM52-8PSK"));
     assert!(!ModemEngine::cessb_benefits("OFDM52-16QAM"));
     assert!(!ModemEngine::cessb_benefits("OFDM52-32QAM"));
     assert!(!ModemEngine::cessb_benefits("OFDM52-64QAM"));

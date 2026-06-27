@@ -230,31 +230,36 @@ fn cessb_benefits_hold_on_low_order_ofdm_hom() {
         Row { ..*r }
     };
 
-    let mode = "OFDM52-8PSK";
+    // QPSK-subcarrier OFDM is where CE-SSB pays off: real average-power gain at zero EVM cost.
+    let mode = "OFDM52";
     assert!(
         ModemEngine::cessb_benefits(mode),
         "{mode} must stay enabled"
     );
     let row = at_operating(&report(mode, &OfdmPlugin::new(), 18.0));
-    // The multicarrier PAPR benefit survives the denser subcarriers.
     assert!(
         row.power_gain_db > 0.5,
-        "{mode}: CE-SSB should still recover average power at the operating point (got {:.2} dB)",
+        "{mode}: CE-SSB should recover average power at the operating point (got {:.2} dB)",
         row.power_gain_db
     );
-    // The EVM the clip injects stays small enough for the mode's FEC to absorb.
     assert!(
         row.ber_clean < FEC_ABSORBABLE_BER,
-        "{mode}: CE-SSB EVM at the operating point must stay FEC-absorbable (raw BER {:.4})",
+        "{mode}: CE-SSB EVM must stay FEC-absorbable (raw BER {:.4})",
         row.ber_clean
     );
 
-    // Denser rungs are gated off — favourable raw BER notwithstanding, real-path decode
-    // breaks (see `openpulse-linksim/tests/cessb_ab.rs`).
-    for mode in ["OFDM52-16QAM", "OFDM52-32QAM", "OFDM52-64QAM"] {
+    // Every higher-order OFDM constellation is gated off — favourable raw BER notwithstanding,
+    // real-path decode breaks at the operating SNR. (8PSK: a marginal-SNR sweep goes 12/12 → 0/12
+    // with CE-SSB on; see also `openpulse-linksim/tests/cessb_ab.rs` for the denser rungs.)
+    for mode in [
+        "OFDM52-8PSK",
+        "OFDM52-16QAM",
+        "OFDM52-32QAM",
+        "OFDM52-64QAM",
+    ] {
         assert!(
             !ModemEngine::cessb_benefits(mode),
-            "{mode} must be gated off (real-path decode collapses under CE-SSB)"
+            "{mode} must be gated off (CE-SSB clipping distortion collapses real-path decode)"
         );
     }
 }

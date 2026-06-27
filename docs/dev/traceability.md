@@ -9,6 +9,27 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-27 — CE-SSB gated off for OFDM-HOM (8PSK+) — a real ~6 dB regression
+
+- **Requirement/change:** investigate the CE-SSB-on-OFDM cost surfaced while greening the baseline
+  (CE-SSB clipping corrupted OFDM52+full-RS on a clean channel). Does it hurt any *shipped*
+  OFDM-HOM+RS rung at marginal SNR?
+- **Finding:** yes — CE-SSB was **net-harmful on OFDM-HOM**. `cessb_benefits` gated off 16QAM+ but
+  still applied CE-SSB to **OFDM52-8PSK** (the shipped `hpx_ofdm_hf` SL7 rung, default-on). The
+  peak-fair `cessb_power_evm` shows OFDM52-8PSK BER **0.0000 → 0.0026** (power gain doesn't recover
+  the in-band clipping distortion), and a marginal-SNR AWGN sweep has it fail entirely with CE-SSB
+  on (**12/12 → 0/12 at 12–16 dB**), decoding once gated off. CE-SSB is genuinely zero-cost only on
+  the QPSK-subcarrier OFDM (OFDM16/OFDM52, BER 0→0). The team's own gating principle —
+  "favourable raw BER notwithstanding, real-path decode breaks" — applies to 8PSK too.
+- **Design decision:** add `8PSK` to the `cessb_benefits` exclusion (CE-SSB now applies only to
+  QPSK-OFDM). The on-air +1.2 dB power result was on QPSK-OFDM and is unaffected.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`cessb_benefits`).
+- **Tests:** updated `cessb_power_evm::cessb_benefits_hold_*` and `cessb_engine::benefits_only_*`
+  to assert 8PSK gated off; new real-path guard
+  `channel_loopback::ofdm52_8psk_rs_decodes_at_operating_snr_with_default_cessb`.
+- **Test results:** new guard 8/8 at 16 dB; cessb suites pass; full workspace **no failures**;
+  clippy 0.
+
 ## 2026-06-27 — Config-schema completeness audit (defined-but-not-consumed)
 
 - **Requirement/change:** audit another surface for the seam-gap class — config fields that exist

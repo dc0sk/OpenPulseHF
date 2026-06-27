@@ -544,7 +544,16 @@ impl ModemEngine {
         if !m.starts_with("OFDM") {
             return false;
         }
-        !(m.contains("16QAM") || m.contains("32QAM") || m.contains("64QAM") || m.contains("32APSK"))
+        // Only the QPSK-subcarrier OFDM modes (OFDM16, OFDM52) tolerate the clip. Every
+        // higher-order constellation is gated off: the in-band clipping distortion exceeds the
+        // tighter decision margins, costing several dB — peak-fair `cessb_power_evm` shows
+        // OFDM52-8PSK going BER 0.0000→0.0026, and a marginal-SNR sweep has it fail entirely with
+        // CE-SSB on (12/12 → 0/12 at 12–16 dB) but decode once gated off.
+        !(m.contains("8PSK")
+            || m.contains("16QAM")
+            || m.contains("32QAM")
+            || m.contains("64QAM")
+            || m.contains("32APSK"))
     }
 
     /// Apply CE-SSB envelope conditioning to a real passband TX block and rescale
