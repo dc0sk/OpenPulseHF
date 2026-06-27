@@ -9,6 +9,20 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-27 — Auto-QSY end-to-end validation
+
+- **Requirement/change:** validate the notch → in-band-interferer → auto-QSY loop end to end
+  (the capstone of the notch arc, previously only unit-tested piecewise).
+- **Design decision:** the TCP twin daemon harness can't inject a *standalone* interferer (channel
+  models transform a signal, they don't generate a tone into B's silence), so validate the full
+  logical loop deterministically via `ChannelSimHarness`: Station A confirms a persistent in-band
+  tone through `accumulate_capture`, auto-QSY transmits a real `QSY_REQ`, it crosses the channel,
+  Station B decodes it and `process_received_bytes` opens a responder session (+ `QsyIncoming`).
+- **Implementation:** test only — `crates/openpulse-daemon/src/lib.rs`
+  `auto_qsy_end_to_end_initiator_to_responder_over_rf`.
+- **Tests/results:** the new test passes; daemon lib **29/29**; clippy 0; fmt clean. Remaining: a
+  two-station **on-air** run (rpi53 + FT-991A / SDR) — genuine hardware, not reproducible here.
+
 ## 2026-06-27 — Automatic ADIF logbook (opt-in)
 
 - **Requirement/change:** the roadmap-recorded feature — a per-QSO station log in ADIF for import
