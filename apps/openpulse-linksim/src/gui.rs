@@ -109,6 +109,7 @@ impl Controls {
             max_attempts: 6,
             seed: 0x1234_5678,
             cessb_enabled: self.cessb,
+            notch: None,
         }
     }
 }
@@ -733,8 +734,25 @@ impl eframe::App for LinkApp {
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut self.ui_fec, FecMode::None, "None");
                         ui.selectable_value(&mut self.ui_fec, FecMode::Rs, "RS");
+                        ui.selectable_value(
+                            &mut self.ui_fec,
+                            FecMode::RsInterleaved,
+                            "RS Interleaved",
+                        );
                         ui.selectable_value(&mut self.ui_fec, FecMode::RsStrong, "RS Strong");
-                        ui.selectable_value(&mut self.ui_fec, FecMode::SoftConcatenated, "Soft");
+                        ui.selectable_value(
+                            &mut self.ui_fec,
+                            FecMode::Concatenated,
+                            "Concatenated",
+                        );
+                        ui.selectable_value(
+                            &mut self.ui_fec,
+                            FecMode::SoftConcatenated,
+                            "Soft (Conv+RS)",
+                        );
+                        ui.selectable_value(&mut self.ui_fec, FecMode::Ldpc, "LDPC r1/2");
+                        ui.selectable_value(&mut self.ui_fec, FecMode::LdpcHighRate, "LDPC r8/9");
+                        ui.selectable_value(&mut self.ui_fec, FecMode::Turbo, "Turbo r1/3");
                     });
                 ui.separator();
                 ui.label("Compress:");
