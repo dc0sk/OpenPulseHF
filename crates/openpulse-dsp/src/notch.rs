@@ -234,6 +234,12 @@ impl NotchBank {
         self.persistence.tracks.retain(|_, &mut v| v > 0);
     }
 
+    /// Forget all accumulated persistence state (e.g. after a QSY to a new frequency, where the
+    /// previously-confirmed interferers no longer apply).
+    pub fn clear_persistence(&mut self) {
+        self.persistence.tracks.clear();
+    }
+
     fn confirmed_external(&self) -> Vec<f32> {
         if self.persistence.min_silence_hits == 0 {
             return Vec::new();

@@ -1024,6 +1024,67 @@ pub async fn process_received_bytes(
     }
 }
 
+/// Auto-initiate a QSY when the receiver notch confirms a persistent **in-band** interferer — one
+/// a notch can't remove. Called from the main loop after each receive tick. No-op unless
+/// `auto_enabled`, the engine reports an in-band interferer, candidate frequencies are configured,
+/// and no QSY negotiation is already in flight. Reuses the standard initiator path
+/// ([`QsySession::initiate`] + [`execute_qsy_actions`]), so the peer responds over RF as usual.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn maybe_qsy_on_interference(
+    auto_enabled: bool,
+    runtime_state: &mut RuntimeControlState,
+    rig_controller: Option<&mut RigctldController>,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+    active_mode: &SharedMode,
+    engine: &mut ModemEngine,
+) {
+    if !auto_enabled || runtime_state.qsy_session.is_some() {
+        return;
+    }
+    if engine.in_band_interferers().is_empty() {
+        return;
+    }
+    let interferers: Vec<f32> = engine.in_band_interferers().to_vec();
+    let candidates = runtime_state.qsy_candidate_freqs.clone();
+    if candidates.is_empty() {
+        tracing::warn!(
+            ?interferers,
+            "in-band interference confirmed but no QSY candidates configured (qsy.candidate_freqs_hz); cannot auto-QSY"
+        );
+        // Clear so the warning doesn't repeat every tick until the tracker decays.
+        engine.clear_in_band_interferers();
+        return;
+    }
+
+    tracing::warn!(
+        ?interferers,
+        "in-band interference confirmed — auto-initiating QSY"
+    );
+    let mut session =
+        QsySession::new_initiator().with_switchover_offset_s(runtime_state.qsy_switchover_offset_s);
+    let actions = match session.initiate(candidates) {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::warn!(error = %e, "auto-QSY initiate failed");
+            return;
+        }
+    };
+    let mode = active_mode.lock().await.clone();
+    execute_qsy_actions(
+        actions,
+        &mut session,
+        engine,
+        rig_controller,
+        event_tx,
+        &mode,
+        runtime_state.qsy_scan_dwell_ms,
+    )
+    .await;
+    runtime_state.qsy_session = Some(session);
+    // The old interferer no longer applies once we move; start fresh so we don't re-trigger.
+    engine.clear_in_band_interferers();
+}
+
 fn maybe_relay_forward(
     payload: &[u8],
     mode: &str,
@@ -2112,6 +2173,87 @@ mod command_apply_tests {
             }
             other => panic!("expected CommandError, got {other:?}"),
         }
+    }
+
+    /// Drive a persistent in-band CW tone through the streaming capture path until the notch
+    /// persistence tracker confirms it, leaving `in_band_interferers()` populated.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn engine_with_confirmed_in_band_interferer(min_hits: u32) -> ModemEngine {
+        let mut engine = test_engine();
+        engine.enable_notch();
+        engine.set_notch_persistence(min_hits);
+        // 1500 Hz = engine centre; BPSK250 occupied 500 Hz → protected band ~1250–1750.
+        let tone: Vec<f32> = (0..8192)
+            .map(|i| 0.2 * (2.0 * std::f32::consts::PI * 1500.0 * i as f32 / 8000.0).sin())
+            .collect();
+        for _ in 0..(min_hits + 1) {
+            let _ = engine.accumulate_capture(Some("BPSK250"), tone.clone());
+        }
+        assert!(
+            !engine.in_band_interferers().is_empty(),
+            "persistence should confirm the in-band tone"
+        );
+        engine
+    }
+
+    #[tokio::test]
+    async fn auto_qsy_on_interference_initiates_session_and_transmits_req() {
+        let mut engine = engine_with_confirmed_in_band_interferer(3);
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let mut runtime_state = RuntimeControlState::default();
+        runtime_state.qsy_candidate_freqs = vec![14_070_000, 14_077_000];
+
+        maybe_qsy_on_interference(
+            true,
+            &mut runtime_state,
+            None,
+            &ev_tx,
+            &active_mode,
+            &mut engine,
+        )
+        .await;
+
+        assert!(
+            runtime_state.qsy_session.is_some(),
+            "a confirmed in-band interferer should auto-initiate a QSY session"
+        );
+        assert!(
+            engine.in_band_interferers().is_empty(),
+            "the hint should be cleared so it does not re-trigger every tick"
+        );
+        let bytes = engine.receive("BPSK250", None).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            text.contains("QSY_REQ") || text.contains("QSY_LIST"),
+            "expected a QSY frame in the modem output, got: {text:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_qsy_noop_when_disabled_or_session_in_flight() {
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+
+        // Disabled → no session even with a confirmed interferer and candidates.
+        let mut engine = engine_with_confirmed_in_band_interferer(2);
+        let mut rs = RuntimeControlState::default();
+        rs.qsy_candidate_freqs = vec![14_070_000];
+        maybe_qsy_on_interference(false, &mut rs, None, &ev_tx, &active_mode, &mut engine).await;
+        assert!(rs.qsy_session.is_none(), "disabled must not initiate");
+
+        // A negotiation already in flight → don't start another.
+        let mut engine2 = engine_with_confirmed_in_band_interferer(2);
+        let mut rs2 = RuntimeControlState::default();
+        rs2.qsy_candidate_freqs = vec![14_070_000];
+        rs2.qsy_session = Some(QsySession::new_initiator());
+        maybe_qsy_on_interference(true, &mut rs2, None, &ev_tx, &active_mode, &mut engine2).await;
+        assert!(
+            !engine2.in_band_interferers().is_empty(),
+            "an in-flight session must leave the hint untouched"
+        );
     }
 
     #[tokio::test]
