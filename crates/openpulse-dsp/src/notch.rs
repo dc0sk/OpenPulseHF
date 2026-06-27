@@ -168,6 +168,13 @@ impl NotchBank {
             .collect();
     }
 
+    /// Update the protected passband (Hz) the auto-detector must never notch — the receiver's
+    /// own channel. Set `lo >= hi` to disable protection.
+    pub fn set_protect_band(&mut self, lo_hz: f32, hi_hz: f32) {
+        self.params.protect_lo_hz = lo_hz;
+        self.params.protect_hi_hz = hi_hz;
+    }
+
     /// Centre frequencies of the currently active notches (Hz).
     pub fn active_freqs(&self) -> Vec<f32> {
         self.biquads.iter().map(|b| b.f0).collect()

@@ -129,6 +129,11 @@ impl ModulationPlugin for Psk8Plugin {
     fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
         demodulate::afc_estimate_hz(samples, config)
     }
+
+    fn occupied_bandwidth_hz(&self, mode: &str) -> Option<f32> {
+        // Rectangular main-lobe null-to-null = 2×baud; a safe over-estimate for the RRC path.
+        parse_baud_rate(mode).ok().map(|b| 2.0 * b)
+    }
 }
 
 /// Parse numeric baud rate from the trailing digits of modes such as "8PSK500", "8PSK1000-HF", "8PSK500-RRC", or "8PSK1000-HF-RRC".

@@ -65,8 +65,21 @@ cargo run -p openpulse-linksim --no-default-features --example notch_experiment
 
 - **Equalizer:** nothing to add. Optionally revisit per-mode LMS tuning separately.
 - **Notch:** worth productionizing **for out-of-band interference**, gated on a protected
-  passband sized to the active mode's occupied bandwidth. Open design choices before wiring it
-  into the live demod path: (a) source the protect band from the running mode's bandwidth;
-  (b) consider temporal-persistence detection (a CW interferer persists across frames; own-signal
-  data lines do not) so protection can be relaxed; (c) in-band interference should trigger QSY,
-  not a notch.
+  passband sized to the active mode's occupied bandwidth.
+
+## Productionized (engine integration)
+
+The receiver notch is now wired into `ModemEngine`, opt-in and off by default:
+
+- `ModulationPlugin::occupied_bandwidth_hz(mode)` reports a mode's occupied bandwidth
+  (2×baud for BPSK/QPSK/8PSK; `None` elsewhere). The engine sizes the protected band
+  `center ± bw/2` per captured block, with a configurable fallback when the mode can't report it.
+- `ModemEngine::enable_notch()` / `disable_notch()` / `configure_notch(max, q, fallback_bw)`;
+  applied in `stage_capture_input` so every receive path (incl. OTA/burst) is covered.
+- Config: `[modem] notch_enabled` (default false), `notch_max`, `notch_q`; wired in the daemon.
+- Gate test: `crates/openpulse-modem/tests/notch_loopback.rs` —
+  `notch_recovers_decode_against_out_of_band_qrm` (off fails, on decodes through a strong tone).
+
+Still open: (a) temporal-persistence detection (a CW interferer persists across frames;
+own-signal lines do not) so protection can be relaxed; (b) in-band interference should trigger
+QSY, not a notch; (c) report `occupied_bandwidth_hz` for the multicarrier plugins.

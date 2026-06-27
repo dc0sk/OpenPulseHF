@@ -145,6 +145,11 @@ impl ModulationPlugin for BpskPlugin {
         demodulate::afc_estimate_hz(samples, config)
     }
 
+    fn occupied_bandwidth_hz(&self, mode: &str) -> Option<f32> {
+        // Rectangular main-lobe null-to-null = 2×baud; a safe over-estimate for the RRC path.
+        parse_baud_rate(mode).ok().map(|b| 2.0 * b)
+    }
+
     fn modulate_iq(
         &self,
         data: &[u8],

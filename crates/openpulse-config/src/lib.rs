@@ -152,6 +152,14 @@ pub struct ModemConfig {
     /// high-PAPR multicarrier modes). Default `true`; it only acts on modes that
     /// benefit (OFDM/SC-FDMA), so it is a no-op for single-carrier modes.
     pub cessb_enabled: bool,
+    /// Receiver-side automatic notch: removes out-of-band CW interference (QRM) before demod.
+    /// Default `false`. The protected band tracks the active mode so the signal is never
+    /// notched; an in-band interferer still can't be removed (that is a QSY case).
+    pub notch_enabled: bool,
+    /// Max simultaneous notches.
+    pub notch_max: usize,
+    /// Notch sharpness (BW ≈ f0 / q).
+    pub notch_q: f32,
 }
 
 /// Per-rig CAT settings (used in `[radio.rig_a]` / `[radio.rig_b]` sections).
@@ -312,6 +320,9 @@ impl Default for ModemConfig {
             dcd_squelch: 0.01, // matches the engine's built-in DcdState default
             dcd_squelch_bands: std::collections::BTreeMap::new(),
             cessb_enabled: true,
+            notch_enabled: false,
+            notch_max: 10,
+            notch_q: 25.0,
         }
     }
 }
@@ -663,6 +674,13 @@ dcd_squelch = 0.01
 # CE-SSB TX envelope conditioning: raises average power at a fixed peak on
 # high-PAPR multicarrier modes (OFDM/SC-FDMA). No-op for single-carrier modes.
 cessb_enabled = true
+# Receiver-side automatic notch: removes out-of-band CW interference (QRM) before
+# demod. The protected band tracks the active mode, so the signal is never notched;
+# an in-band interferer can't be removed this way (that is a QSY case). Default off.
+notch_enabled = false
+# Max simultaneous notches, and notch sharpness (bandwidth ~= f0 / notch_q).
+notch_max = 10
+notch_q = 25.0
 
 [radio]
 # CAT (frequency/mode) backend: "rigctld" (default) or "none".
@@ -817,6 +835,10 @@ mod tests {
         // Audio device defaults to empty (system default device).
         assert_eq!(cfg.audio.backend, "default");
         assert_eq!(cfg.audio.device, "");
+        // Receiver auto-notch is opt-in.
+        assert!(!cfg.modem.notch_enabled);
+        assert_eq!(cfg.modem.notch_max, 10);
+        assert_eq!(cfg.modem.notch_q, 25.0);
     }
 
     #[test]
