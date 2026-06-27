@@ -44,8 +44,11 @@ The interfaces below all sit on the safe side of one or both of those boundaries
 - **Command port** (default 8515) — ASCII line protocol.  Compatible with
   [Pat](https://getpat.io/), Winlink Express, JS8Call, and any ARDOP-aware application.
   Supported commands: `VERSION`, `MYID`, `LISTEN`, `CONNECT`, `DISCONNECT`, `ABORT`,
-  `STATE`, `BUFFER`, `PTT`, `GRIDSQUARE`, `ARQBW`, `ARQTIMEOUT`, `CWID`, `SENDID`,
-  `FECSEND`, `FECRCV`, `CONNECT_MESH`, `WAVEFORM`, `PING`, `CLOSE`.
+  `STATE`, `BUFFER`, `PTT`, `FECSEND`, `FECRCV`, `CONNECT_MESH`, `WAVEFORM`, `PING`, `CLOSE`.
+  Accepted for client compatibility but **not applied** (validated + echoed only):
+  `GRIDSQUARE` (informational), `ARQBW` / `ARQTIMEOUT` (OpenPulseHF self-manages bandwidth and
+  timeout via its adaptive rate ladder, not a host hint). `CWID` / `SENDID` are stubs (warn-logged).
+  See `docs/dev/roadmap.md` → "TNC command-surface audit".
 - **Data port** (default 8516) — binary `u16 BE` length-prefixed frames in both
   directions.  Send a 2-byte big-endian length followed by that many payload bytes;
   receive frames in the same format.
