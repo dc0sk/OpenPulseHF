@@ -5,6 +5,7 @@
 //! in audio or DSP libraries.
 
 pub mod ack;
+pub mod adif;
 pub mod audio;
 pub mod compression;
 pub mod conv;

@@ -458,8 +458,17 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
         },
         dcd_squelch_default: cfg.modem.dcd_squelch,
         dcd_squelch_bands: cfg.modem.dcd_squelch_bands.clone(),
+        logbook: crate::logbook::Logbook::new(
+            cfg.logbook.enabled,
+            &cfg.logbook.adif_path,
+            &cfg.station.callsign,
+            &cfg.station.grid_square,
+        ),
         ..RuntimeControlState::default()
     };
+    if cfg.logbook.enabled {
+        tracing::info!(path = %cfg.logbook.adif_path, "ADIF logbook enabled");
+    }
 
     // Apply the default DCD squelch at startup; per-band overrides kick in on retune.
     engine.set_dcd_squelch(cfg.modem.dcd_squelch);

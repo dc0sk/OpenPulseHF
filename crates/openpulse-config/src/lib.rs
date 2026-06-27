@@ -37,6 +37,26 @@ pub struct OpenpulseConfig {
     pub mesh: MeshConfig,
     pub qsy: QsyConfig,
     pub daemon: DaemonConfig,
+    pub logbook: LogbookConfig,
+}
+
+/// Automatic ADIF logbook settings (opt-in; one record per completed contact).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct LogbookConfig {
+    /// Append an ADIF record per QSO (a connect→disconnect session). Default `false`.
+    pub enabled: bool,
+    /// Path to the `.adi` logbook file (created with a header on first write).
+    pub adif_path: String,
+}
+
+impl Default for LogbookConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            adif_path: "~/.local/share/openpulse/openpulse.adi".into(),
+        }
+    }
 }
 
 /// `openpulse-daemon` runtime settings.
@@ -813,6 +833,13 @@ receive_tick_ms = 50
 # Auto-initiate a QSY when the receiver notch confirms a persistent in-band interferer (one a
 # notch can't remove). Requires [modem] notch_enabled + notch_persistence > 0 and candidate_freqs_hz.
 # auto_qsy_on_interference = false
+
+[logbook]
+# Automatic ADIF logbook: append one record per completed contact (a connect→disconnect
+# session) so logs import into standard logging software / LoTW / eQSL. Opt-in.
+enabled = false
+# Path to the .adi file (a header is written on first record).
+adif_path = "~/.local/share/openpulse/openpulse.adi"
 "#
     .to_string()
 }
@@ -859,6 +886,9 @@ mod tests {
         assert_eq!(cfg.modem.notch_persistence, 0);
         // Auto-QSY on interference is opt-in.
         assert!(!cfg.qsy.auto_qsy_on_interference);
+        // ADIF logbook is opt-in.
+        assert!(!cfg.logbook.enabled);
+        assert!(cfg.logbook.adif_path.ends_with(".adi"));
     }
 
     #[test]

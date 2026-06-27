@@ -9,6 +9,27 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-27 — Automatic ADIF logbook (opt-in)
+
+- **Requirement/change:** the roadmap-recorded feature — a per-QSO station log in ADIF for import
+  into logging software / LoTW / eQSL, opt-in.
+- **Design decision:** per-QSO (a connect→disconnect session), distinct from the per-frame
+  `TxSessionLog`. ADIF writer in `openpulse-core` (pure, no time crate — Hinnant civil-date for
+  UTC); a daemon `Logbook` helper holds in-flight QSO state and appends on disconnect, decoupled
+  from the RF loop (io errors are logged, never propagated). Sourced from the `ConnectPeer`
+  callsign, the active mode (→ `SUBMODE`, `MODE=DYNAMIC`), the last `SetFreq` (→ `FREQ`/`BAND`),
+  UTC connect/disconnect timestamps, and station callsign/grid from config.
+- **Implementation:** `crates/openpulse-core/src/adif.rs` (`AdifRecord`/`to_adif`, `utc_date_time`,
+  `band_for_mhz`, header); `crates/openpulse-config` (`[logbook] enabled`/`adif_path`);
+  `crates/openpulse-daemon/src/logbook.rs` (`Logbook`); daemon `ConnectPeer`/`DisconnectPeer`/
+  `SetFreq` hooks + `server.rs` build from config.
+- **Tests:** ADIF unit tests (record render, band map, UTC format, header); `Logbook` unit tests
+  (write/append-no-dup-header, disabled/no-pending no-op); daemon integration
+  (`connect_then_disconnect_writes_an_adif_logbook_record`); config default.
+- **Test results:** core adif 4/4, daemon logbook+integration pass, full workspace **no failures**,
+  `clippy --all-targets` **0 errors**. Follow-up: a control command + CLI/panel toggle/export
+  (config-driven for now).
+
 ## 2026-06-27 — Green the test/clippy baseline (3 red items)
 
 - **Requirement/change:** make `cargo test --workspace` and `clippy --all-targets` green (they had
