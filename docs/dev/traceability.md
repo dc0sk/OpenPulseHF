@@ -9,6 +9,23 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-27 — Adaptive-profile FEC audit (+ a permanent gate)
+
+- **Requirement/change:** audit every adaptive profile's FEC assignment for the `cli_adaptive`
+  bug class (a profile assigning no/wrong FEC to a mode that needs it — `hpx_ofdm_hf` had OFDM52-8PSK
+  with no FEC).
+- **Finding:** all 12 profiles are now **correct** — every modulatable rung decodes a clean loopback
+  with its assigned FEC. The only rungs that don't decode are `hpx_narrowband_hd`'s SL8/SL9
+  (QPSK9600-RRC / 8PSK9600-RRC), which can't modulate at 8 kHz — but `profile.rs` already documents
+  that profile as **requiring a 48 kHz audio path**, so that's by design, not a gap.
+- **Design decision:** promote the audit probe into a permanent CI gate rather than a one-off — it
+  would have caught the `cli_adaptive` bug. The gate iterates every profile × rung, asserts clean
+  decode with the assigned FEC, and pins the count of known-unmodulatable (48 kHz) rungs at 2 so a
+  new unreachable rung trips it.
+- **Implementation:** `crates/openpulse-modem/tests/channel_loopback.rs`
+  `every_profile_rung_decodes_clean_with_its_fec` (no source change — the profiles were correct).
+- **Test results:** gate passes; clippy 0.
+
 ## 2026-06-27 — ADIF logbook follow-ups (runtime toggle + parity + richer fields)
 
 - **Requirement/change:** complete the ADIF logbook — a runtime `SetLogbook` control with CLI/panel

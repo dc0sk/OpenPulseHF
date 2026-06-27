@@ -279,3 +279,81 @@ fn ofdm52_8psk_rs_decodes_at_operating_snr_with_default_cessb() {
         "OFDM52-8PSK+RS should decode at 16 dB with default CE-SSB (got {ok}/{trials})"
     );
 }
+
+/// Regression gate for the whole adaptive-profile FEC surface: every defined rung of every
+/// profile must decode a clean loopback with the FEC the profile assigns it — the gap that shipped
+/// as the `cli_adaptive` bug (hpx_ofdm_hf assigned no FEC to OFDM52-8PSK, which needs it). The only
+/// permitted exception is a rung that can't modulate at the engine's 8 kHz rate: hpx_narrowband_hd's
+/// 9600-baud rungs, which `profile.rs` documents as requiring a **48 kHz audio path** (a different
+/// pipeline, not the 8 kHz daemon). The count is pinned so a new unmodulatable rung trips this.
+#[test]
+fn every_profile_rung_decodes_clean_with_its_fec() {
+    use openpulse_core::profile::SessionProfile;
+    fn reg(e: &mut openpulse_modem::ModemEngine) {
+        e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+            .ok();
+        e.register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))
+            .ok();
+        e.register_plugin(Box::new(psk8_plugin::Psk8Plugin::new()))
+            .ok();
+        e.register_plugin(Box::new(qam64_plugin::Qam64Plugin::new()))
+            .ok();
+        e.register_plugin(Box::new(fsk4_plugin::Fsk4Plugin::new()))
+            .ok();
+        e.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
+            .ok();
+        e.register_plugin(Box::new(scfdma_plugin::ScFdmaPlugin::new()))
+            .ok();
+        e.register_plugin(Box::new(pilot_plugin::PilotPlugin::new()))
+            .ok();
+    }
+    let payload: Vec<u8> = (0..64u8).collect();
+    let mut known_unmodulatable = 0;
+    for name in SessionProfile::PROFILE_NAMES {
+        let p = SessionProfile::by_name(name).unwrap();
+        for level in p.defined_levels() {
+            let Some(mode) = p.mode_for(level) else {
+                continue;
+            };
+            if mode == "FSK4-ACK" {
+                continue; // ACK channel, not a data rung
+            }
+            let fec = p.fec_for(level);
+            let mut h = ChannelSimHarness::new();
+            reg(&mut h.tx_engine);
+            reg(&mut h.rx_engine);
+            match h
+                .tx_engine
+                .transmit_with_fec_mode(&payload, mode, fec, None)
+            {
+                Err(_) => {
+                    assert!(
+                        mode.contains("9600"),
+                        "{name}/{level:?} {mode} ({fec:?}) failed to modulate but is not a known \
+                         >8 kHz mode — a profile rung that can't transmit",
+                    );
+                    known_unmodulatable += 1;
+                }
+                Ok(()) => {
+                    h.route_clean();
+                    let ok = h
+                        .rx_engine
+                        .receive_with_fec_mode(mode, fec, None)
+                        .map(|d| d == payload)
+                        .unwrap_or(false);
+                    assert!(
+                        ok,
+                        "{name}/{level:?} {mode} does NOT decode a clean loopback with its assigned \
+                         FEC {fec:?} — wrong/missing FEC for this rung",
+                    );
+                }
+            }
+        }
+    }
+    // hpx_narrowband_hd's QPSK9600-RRC + 8PSK9600-RRC — lock the count so a NEW unmodulatable rung
+    // (or a fix to these) trips this and gets a deliberate look.
+    assert_eq!(
+        known_unmodulatable, 2,
+        "expected exactly the 2 known >8 kHz rungs (hpx_narrowband_hd 9600); got {known_unmodulatable}"
+    );
+}
