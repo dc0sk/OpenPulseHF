@@ -3928,6 +3928,7 @@ dependencies = [
  "openpulse-channel",
  "openpulse-core",
  "openpulse-daemon",
+ "openpulse-dsp",
  "openpulse-gpu",
  "openpulse-modem",
  "pilot-plugin",

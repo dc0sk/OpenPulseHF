@@ -7,7 +7,7 @@
 use clap::{Parser, ValueEnum};
 use openpulse_core::compression::{CompressionAlgorithm, ZSTD_DICT_ID};
 use openpulse_core::fec::FecMode;
-use openpulse_linksim::{run_link, ChannelSpec, LinkParams, LinkResult};
+use openpulse_linksim::{run_link, ChannelSpec, LinkNotch, LinkParams, LinkResult};
 
 #[derive(Clone, Copy, ValueEnum)]
 enum CompressionArg {
@@ -35,6 +35,8 @@ enum ChannelKind {
     WattersonPoor,
     GilbertElliott,
     FlatFading,
+    /// QRM (CW-tone interference); tones come from `--qrm-tones`, the SNR is the noise floor.
+    Qrm,
 }
 
 impl ChannelKind {
@@ -47,8 +49,36 @@ impl ChannelKind {
             ChannelKind::WattersonPoor => ChannelSpec::WattersonPoorF1(snr),
             ChannelKind::GilbertElliott => ChannelSpec::GilbertElliott(snr),
             ChannelKind::FlatFading => ChannelSpec::FlatFading(snr),
+            // QRM tones are supplied separately (see `forward_spec`); as a plain `spec` (used by
+            // the ACK path) it degrades to its noise floor with no interfering tones.
+            ChannelKind::Qrm => ChannelSpec::Awgn(snr),
         }
     }
+}
+
+/// Parse "freq:amp,freq:amp,…" into `(frequency_hz, amplitude)` tone pairs.
+fn parse_tones(s: &str) -> Result<Vec<(f32, f32)>, String> {
+    s.split(',')
+        .filter(|p| !p.trim().is_empty())
+        .map(|p| {
+            let (f, a) = p
+                .split_once(':')
+                .ok_or_else(|| format!("tone '{p}' must be freq:amp"))?;
+            let f: f32 = f.trim().parse().map_err(|_| format!("bad freq in '{p}'"))?;
+            let a: f32 = a.trim().parse().map_err(|_| format!("bad amp in '{p}'"))?;
+            Ok((f, a))
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum NotchArg {
+    /// No notch (baseline).
+    Off,
+    /// Blindly auto-detect interferers each frame.
+    Auto,
+    /// Notch exactly the `--qrm-tones` frequencies (ideal-detection upper bound).
+    Oracle,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -100,6 +130,23 @@ struct Cli {
     /// FEC for data frames.
     #[arg(long, value_enum, default_value = "rs")]
     fec: FecArg,
+    /// QRM interfering tones as "freq:amp" pairs (amp relative to signal RMS), e.g.
+    /// "1500:1.0,1800:0.6". Only used when --channel qrm.
+    #[arg(long, default_value = "1500:1.0")]
+    qrm_tones: String,
+    /// Receiver automatic notch on the forward data path.
+    #[arg(long, value_enum, default_value = "off")]
+    notch: NotchArg,
+    /// Maximum simultaneous notches.
+    #[arg(long, default_value = "10")]
+    notch_max: usize,
+    /// Notch sharpness (BW ≈ f0 / Q).
+    #[arg(long, default_value = "25.0")]
+    notch_q: f32,
+    /// Protected passband "lo:hi" (Hz) the auto-notch must never touch (the receiver's own
+    /// channel, centred at 1500 Hz). Empty disables protection.
+    #[arg(long, default_value = "1100:1900")]
+    notch_protect: String,
     /// Payload compression applied before FEC.
     #[arg(long, value_enum, default_value = "none")]
     compression: CompressionArg,
@@ -160,11 +207,54 @@ fn parse_sweep(s: &str) -> Result<Vec<f32>, String> {
     Ok(v)
 }
 
+fn forward_spec(cli: &Cli, snr: f32) -> ChannelSpec {
+    match cli.channel {
+        ChannelKind::Qrm => ChannelSpec::Qrm {
+            snr_floor_db: snr,
+            tones: parse_tones(&cli.qrm_tones).unwrap_or_else(|e| {
+                eprintln!("--qrm-tones: {e}");
+                std::process::exit(2);
+            }),
+        },
+        k => k.spec(snr),
+    }
+}
+
+fn parse_band(s: &str) -> Option<(f32, f32)> {
+    let (lo, hi) = s.split_once(':')?;
+    Some((lo.trim().parse().ok()?, hi.trim().parse().ok()?))
+}
+
+fn notch_for(cli: &Cli) -> Option<LinkNotch> {
+    let protect = parse_band(&cli.notch_protect);
+    let mk = |auto: bool, oracle_freqs: Vec<f32>| {
+        Some(LinkNotch {
+            auto,
+            oracle_freqs,
+            max_notches: cli.notch_max,
+            q: cli.notch_q,
+            protect,
+        })
+    };
+    match cli.notch {
+        NotchArg::Off => None,
+        NotchArg::Auto => mk(true, Vec::new()),
+        NotchArg::Oracle => {
+            let freqs = parse_tones(&cli.qrm_tones)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(f, _)| f)
+                .collect();
+            mk(false, freqs)
+        }
+    }
+}
+
 fn params_for(cli: &Cli, snr: f32) -> LinkParams {
     let reverse_kind = cli.reverse_channel.unwrap_or(cli.channel);
     LinkParams {
         profile_name: cli.profile.clone(),
-        forward: cli.channel.spec(snr),
+        forward: forward_spec(cli, snr),
         // Give the ACK path a few dB more headroom than the data path, as is typical.
         reverse: reverse_kind.spec(snr + 5.0),
         payload_bytes_per_frame: cli.payload,
@@ -175,6 +265,7 @@ fn params_for(cli: &Cli, snr: f32) -> LinkParams {
         max_attempts: cli.max_attempts,
         seed: cli.seed,
         cessb_enabled: !cli.no_cessb,
+        notch: notch_for(cli),
     }
 }
 

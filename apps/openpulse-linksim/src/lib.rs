@@ -20,7 +20,8 @@ pub mod serve;
 use std::collections::{HashMap, VecDeque};
 
 use openpulse_channel::{
-    build_channel, AwgnConfig, ChannelModelConfig, GilbertElliottConfig, QsbConfig, WattersonConfig,
+    build_channel, AwgnConfig, ChannelModel, ChannelModelConfig, GilbertElliottConfig, QrmConfig,
+    QsbConfig, ToneConfig, WattersonConfig,
 };
 use openpulse_core::ack::{AckFrame, AckType};
 use openpulse_core::compression::{compress, decompress, CompressionAlgorithm};
@@ -28,6 +29,7 @@ use openpulse_core::fec::FecMode;
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
 use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::SpeedLevel;
+use openpulse_dsp::notch::{NotchBank, NotchMode, NotchParams};
 use openpulse_modem::channel_sim::ChannelSimHarness;
 use openpulse_modem::ModemEngine;
 
@@ -61,6 +63,13 @@ pub enum ChannelSpec {
     /// Frequency-flat Rayleigh fading (1 Hz Doppler, carrier-phase realistic, no multipath)
     /// at the given SNR (dB).
     FlatFading(f32),
+    /// QRM (man-made interference): phase-coherent CW tones over an AWGN floor. `tones` are
+    /// `(frequency_hz, amplitude)` pairs where amplitude is relative to the signal RMS
+    /// (1.0 ≈ 0 dB signal-to-interference). The thing an automatic notch filter removes.
+    Qrm {
+        snr_floor_db: f32,
+        tones: Vec<(f32, f32)>,
+    },
 }
 
 impl ChannelSpec {
@@ -106,6 +115,21 @@ impl ChannelSpec {
             ChannelSpec::FlatFading(snr) => ChannelModelConfig::FlatFading(
                 openpulse_channel::flat_fading::FlatFadingConfig::moderate(*snr, Some(seed)),
             ),
+            ChannelSpec::Qrm {
+                snr_floor_db,
+                tones,
+            } => ChannelModelConfig::Qrm(QrmConfig {
+                tones: tones
+                    .iter()
+                    .map(|&(frequency_hz, amplitude)| ToneConfig {
+                        frequency_hz,
+                        amplitude,
+                    })
+                    .collect(),
+                noise_floor_snr_db: Some(*snr_floor_db),
+                sample_rate: 8000,
+                seed: Some(seed),
+            }),
         }
     }
 
@@ -120,7 +144,69 @@ impl ChannelSpec {
             ChannelSpec::GilbertElliott(s) => format!("G-E {s:.0}dB"),
             ChannelSpec::Qsb(s) => format!("QSB {s:.0}dB"),
             ChannelSpec::FlatFading(s) => format!("FlatFade {s:.0}dB"),
+            ChannelSpec::Qrm {
+                snr_floor_db,
+                tones,
+            } => format!("QRM {}t {snr_floor_db:.0}dB", tones.len()),
         }
+    }
+}
+
+/// Receiver-side automatic notch configuration (the experiment's device under test).
+#[derive(Debug, Clone)]
+pub struct LinkNotch {
+    /// `true` = blindly auto-detect interferers each frame; `false` = use `oracle_freqs`
+    /// (the ideal-detection upper bound, to separate "is notching worth it" from
+    /// "can we detect the tone").
+    pub auto: bool,
+    /// Fixed notch centre frequencies (Hz) used when `auto == false`.
+    pub oracle_freqs: Vec<f32>,
+    /// Maximum simultaneous notches.
+    pub max_notches: usize,
+    /// Notch sharpness (BW ≈ f0 / q).
+    pub q: f32,
+    /// Protected passband `(lo, hi)` Hz the auto-detector must never notch (the receiver's own
+    /// channel). `None` disables protection. Ignored in oracle mode.
+    pub protect: Option<(f32, f32)>,
+}
+
+impl LinkNotch {
+    fn build_bank(&self) -> NotchBank {
+        let (protect_lo_hz, protect_hi_hz) = self.protect.unwrap_or((0.0, 0.0));
+        let mut bank = NotchBank::new(NotchParams {
+            sample_rate: SAMPLE_RATE as f32,
+            max_notches: self.max_notches,
+            q: self.q,
+            protect_lo_hz,
+            protect_hi_hz,
+            ..NotchParams::default()
+        });
+        if self.auto {
+            bank.set_mode(NotchMode::Auto);
+        } else {
+            bank.set_mode(NotchMode::Fixed);
+            bank.set_notch_freqs(&self.oracle_freqs);
+        }
+        bank
+    }
+}
+
+/// Wraps a forward channel with a receiver-side notch bank applied to the post-channel
+/// samples — i.e. the notch sits in front of the demodulator, exactly where it would in a
+/// real receiver.
+struct NotchedChannel<'a> {
+    inner: &'a mut dyn ChannelModel,
+    notch: &'a mut NotchBank,
+}
+
+impl ChannelModel for NotchedChannel<'_> {
+    fn apply(&mut self, input: &[f32]) -> Vec<f32> {
+        let out = self.inner.apply(input);
+        self.notch.process_block(&out)
+    }
+
+    fn generate_noise(&mut self, length: usize) -> Vec<f32> {
+        self.inner.generate_noise(length)
     }
 }
 
@@ -150,6 +236,8 @@ pub struct LinkParams {
     /// CE-SSB TX envelope conditioning (default on, matching the engine). Only acts on the
     /// modes `ModemEngine::cessb_benefits` enables (OFDM QPSK/8PSK); a no-op elsewhere.
     pub cessb_enabled: bool,
+    /// Receiver-side automatic notch on the forward data path. `None` = no notch (baseline).
+    pub notch: Option<LinkNotch>,
 }
 
 impl Default for LinkParams {
@@ -166,6 +254,7 @@ impl Default for LinkParams {
             max_attempts: 6,
             seed: 0xC0FFEE,
             cessb_enabled: true,
+            notch: None,
         }
     }
 }
@@ -530,6 +619,8 @@ pub struct LinkSim {
     rev: ChannelSimHarness,
     fwd_ch: Box<dyn openpulse_channel::ChannelModel>,
     rev_ch: Box<dyn openpulse_channel::ChannelModel>,
+    /// Receiver notch bank for the forward path (`None` = baseline, no notch).
+    fwd_notch: Option<NotchBank>,
     fwd_label: String,
     rev_label: String,
     frame: usize,
@@ -579,6 +670,7 @@ impl LinkSim {
             .position(|&l| l == profile.initial_level)
             .unwrap_or(0);
         let nack_threshold = profile.nack_threshold.max(1) as u32;
+        let fwd_notch = params.notch.as_ref().map(LinkNotch::build_bank);
 
         Self {
             fwd_label: params.forward.label(),
@@ -593,6 +685,7 @@ impl LinkSim {
             rev,
             fwd_ch,
             rev_ch,
+            fwd_notch,
             frame: 0,
             total_air_s: 0.0,
             bytes_delivered: 0,
@@ -699,7 +792,16 @@ impl LinkSim {
                     burst_ok = false;
                     break;
                 }
-                let (tx_s, rx_s) = self.fwd.route_tapped(self.fwd_ch.as_mut());
+                let (tx_s, rx_s) = match self.fwd_notch.as_mut() {
+                    Some(nb) => {
+                        let mut wrapped = NotchedChannel {
+                            inner: self.fwd_ch.as_mut(),
+                            notch: nb,
+                        };
+                        self.fwd.route_tapped(&mut wrapped)
+                    }
+                    None => self.fwd.route_tapped(self.fwd_ch.as_mut()),
+                };
                 fwd_air += tx_s.len() as f64 / SAMPLE_RATE;
                 snr_acc += estimate_snr_db(&tx_s, &rx_s);
                 chunk_count += 1;
@@ -932,6 +1034,62 @@ mod tests {
         }
     }
 
+    fn qrm_run(notch: Option<LinkNotch>) -> LinkResult {
+        run_link(&LinkParams {
+            profile_name: "hpx_wideband_hd".into(),
+            forward: ChannelSpec::Qrm {
+                snr_floor_db: 20.0,
+                tones: vec![(2900.0, 1.5)],
+            },
+            reverse: ChannelSpec::Awgn(25.0),
+            payload_bytes_per_frame: 200,
+            total_frames: 12,
+            fec: FecMode::Rs,
+            seed: 49_374,
+            notch,
+            ..LinkParams::default()
+        })
+    }
+
+    fn out_of_band_notch(auto: bool) -> Option<LinkNotch> {
+        Some(LinkNotch {
+            auto,
+            oracle_freqs: vec![2900.0],
+            max_notches: 10,
+            q: 25.0,
+            protect: Some((400.0, 2600.0)),
+        })
+    }
+
+    #[test]
+    fn oracle_notch_beats_baseline_against_out_of_band_qrm() {
+        // A CW interferer just outside the occupied band degrades the link; notching it on its
+        // known frequency must raise effective throughput well above the no-notch baseline.
+        let off = qrm_run(None);
+        let oracle = qrm_run(out_of_band_notch(false));
+        assert!(
+            oracle.effective_bps > off.effective_bps * 1.15,
+            "oracle notch {:.0} should clearly beat baseline {:.0}",
+            oracle.effective_bps,
+            off.effective_bps
+        );
+    }
+
+    #[test]
+    fn auto_notch_with_band_protection_does_no_harm() {
+        // Blind per-frame detection, told to protect the receiver's own occupied band, must not
+        // notch the signal: it should at least match the baseline (and typically the oracle) on
+        // an out-of-band interferer — the core safety property surfaced by the experiment.
+        let off = qrm_run(None);
+        let auto = qrm_run(out_of_band_notch(true));
+        assert!(
+            auto.effective_bps >= off.effective_bps * 0.98,
+            "protected auto-notch {:.0} must not fall below baseline {:.0}",
+            auto.effective_bps,
+            off.effective_bps
+        );
+    }
+
     #[test]
     fn fec_code_rate_matches_real_overhead() {
         // Regression: Ldpc rate-1/2 was mislabelled as 1.0, inflating its modelled goodput 2×.
@@ -1014,6 +1172,7 @@ mod tests {
             max_attempts: 4,
             seed: 1,
             cessb_enabled: true,
+            notch: None,
         };
         let r = run_link(&params);
         assert_eq!(
@@ -1060,6 +1219,7 @@ mod tests {
             max_attempts: 3,
             seed: 7,
             cessb_enabled: true,
+            notch: None,
         };
         let r = run_link(&params);
         assert!(r.frames_delivered > 0);
