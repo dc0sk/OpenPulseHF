@@ -81,6 +81,10 @@ pub struct QsyConfig {
     pub switchover_offset_s: u64,
     /// Allow invoking the rig's integrated tuner when SWR is high.
     pub allow_integrated_tuner_on_high_swr: bool,
+    /// Auto-initiate a QSY when the receiver notch confirms a persistent **in-band** interferer
+    /// (one a notch can't remove). Requires `[modem] notch_enabled` + `notch_persistence > 0` and
+    /// `candidate_freqs_hz`. Default false.
+    pub auto_qsy_on_interference: bool,
 }
 
 /// Station identity.
@@ -431,6 +435,7 @@ impl Default for QsyConfig {
             scan_dwell_ms: 500,
             switchover_offset_s: 5,
             allow_integrated_tuner_on_high_swr: false,
+            auto_qsy_on_interference: false,
         }
     }
 }
@@ -805,6 +810,9 @@ receive_tick_ms = 50
 # switchover_offset_s = 5
 # Allow integrated tuner operation when high SWR is detected.
 # allow_integrated_tuner_on_high_swr = false
+# Auto-initiate a QSY when the receiver notch confirms a persistent in-band interferer (one a
+# notch can't remove). Requires [modem] notch_enabled + notch_persistence > 0 and candidate_freqs_hz.
+# auto_qsy_on_interference = false
 "#
     .to_string()
 }
@@ -849,6 +857,8 @@ mod tests {
         assert_eq!(cfg.modem.notch_max, 10);
         assert_eq!(cfg.modem.notch_q, 25.0);
         assert_eq!(cfg.modem.notch_persistence, 0);
+        // Auto-QSY on interference is opt-in.
+        assert!(!cfg.qsy.auto_qsy_on_interference);
     }
 
     #[test]

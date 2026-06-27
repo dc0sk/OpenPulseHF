@@ -95,5 +95,20 @@ Gate tests (`crates/openpulse-modem/tests/notch_loopback.rs`):
 `notch_recovers_decode_against_out_of_band_qrm` (off fails, on decodes through a strong tone) and
 `persistence_surfaces_in_band_interferer_for_qsy`; plus `NotchBank` persistence unit tests.
 
-Still open: the daemon doesn't yet *act* on the QSY hint (auto-retune) — it logs it; wiring it to
-the `openpulse-qsy` subsystem is the remaining integration.
+### Auto-QSY on in-band interference
+
+The QSY hint is now wired into `openpulse-qsy`. When notch persistence confirms an in-band
+interferer, the daemon auto-initiates a QSY negotiation (opt-in via `[qsy]
+auto_qsy_on_interference`, which needs `[modem] notch_enabled` + `notch_persistence > 0` and
+`candidate_freqs_hz`):
+
+- The notch + persistence `observe` now also run on the daemon's streaming capture path
+  (`ModemEngine::accumulate_capture`, mode-threaded) — previously only the `receive()` family
+  applied them, so the daemon never populated the hint.
+- `maybe_qsy_on_interference()` (daemon main loop, every tick) reuses the standard initiator path
+  (`QsySession::initiate` + `execute_qsy_actions`), so the peer responds over RF as usual. It
+  self-gates on config / candidates / an in-flight session, and clears the hint
+  (`ModemEngine::clear_in_band_interferers`) after firing so it doesn't re-trigger.
+
+Gate tests: `auto_qsy_on_interference_initiates_session_and_transmits_req` and
+`auto_qsy_noop_when_disabled_or_session_in_flight` (daemon).

@@ -452,6 +452,13 @@ impl ModemEngine {
         &self.notch_in_band_interferers
     }
 
+    /// Forget the confirmed in-band interferers and the notch persistence state — e.g. after a
+    /// QSY to a new frequency, where the old interferers no longer apply.
+    pub fn clear_in_band_interferers(&mut self) {
+        self.notch_in_band_interferers.clear();
+        self.notch_bank.clear_persistence();
+    }
+
     /// Centre frequencies (Hz) of the notches placed on the most recent captured block.
     pub fn notch_active_freqs(&self) -> Vec<f32> {
         self.notch_bank.active_freqs()
@@ -1099,9 +1106,17 @@ impl ModemEngine {
     /// does this. Records the spectrum/waterfall tap from these samples.
     pub fn accumulate_capture(
         &mut self,
+        mode: Option<&str>,
         samples: Vec<f32>,
     ) -> Result<Option<AudioSamples>, ModemError> {
-        self.record_audio(&samples); // RX window for the spectrum/waterfall tap
+        self.record_audio(&samples); // RX window (raw channel audio) for the spectrum/waterfall tap
+                                     // Receiver front end: this streaming path does not go through `stage_capture_input`
+                                     // (`capture_burst` does), so apply the notch + persistence observe here for the daemon.
+        let samples = if self.notch_enabled {
+            self.apply_rx_notch(mode, samples)
+        } else {
+            samples
+        };
         self.accumulate_routed(AudioSamples { samples })
     }
 
@@ -4441,7 +4456,9 @@ mod tests {
         let chunk = frame.len() / 4 + 1;
         for frag in frame.chunks(chunk) {
             assert!(
-                rx.accumulate_capture(frag.to_vec()).unwrap().is_none(),
+                rx.accumulate_capture(None, frag.to_vec())
+                    .unwrap()
+                    .is_none(),
                 "mid-burst read must keep accumulating"
             );
         }
@@ -4451,7 +4468,7 @@ mod tests {
         );
         // A silent read (carrier dropped) flushes the complete burst.
         let burst = rx
-            .accumulate_capture(vec![0.0; 256])
+            .accumulate_capture(None, vec![0.0; 256])
             .unwrap()
             .expect("carrier drop must flush the accumulated burst");
         assert_eq!(burst.samples.len(), frame.len(), "burst is the whole frame");

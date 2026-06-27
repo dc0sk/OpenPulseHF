@@ -9,8 +9,8 @@
 //! comes from `[daemon]` in the config, so two daemons just use distinct ports.
 
 use crate::{
-    apply_command_to_engine, check_ptt_watchdog, ota_status_event, process_received_bytes, ws,
-    ControlServer, RuntimeControlState,
+    apply_command_to_engine, check_ptt_watchdog, maybe_qsy_on_interference, ota_status_event,
+    process_received_bytes, ws, ControlServer, RuntimeControlState,
 };
 use openpulse_audio::LoopbackBackend;
 use openpulse_config::OpenpulseConfig;
@@ -136,6 +136,15 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
         persistence = cfg.modem.notch_persistence,
         "receiver auto-notch"
     );
+
+    // Auto-QSY on a confirmed in-band interferer needs notch persistence to populate the hint.
+    let qsy_auto_on_interference = cfg.qsy.auto_qsy_on_interference;
+    if qsy_auto_on_interference && !(cfg.modem.notch_enabled && cfg.modem.notch_persistence > 0) {
+        tracing::warn!(
+            "qsy.auto_qsy_on_interference is set but requires [modem] notch_enabled = true and \
+             notch_persistence > 0 to detect in-band interferers; it will not trigger"
+        );
+    }
 
     // Receiver-led OTA adaptive rate-stepping (opt-in via [modem] ota_enabled).
     if cfg.modem.ota_enabled {
@@ -561,7 +570,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         None => return Ok(None),
                     };
                     match read {
-                        Ok(samples) => engine.accumulate_capture(samples),
+                        Ok(samples) => engine.accumulate_capture(Some(&mode), samples),
                         Err(e) => {
                             // Drop the stream so the next tick reopens it.
                             rx_stream = None;
@@ -633,6 +642,18 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     )
                     .await;
                 }
+                // Auto-QSY if the notch persistence tracker confirmed an in-band interferer this
+                // tick (one a notch can't remove). Runs every tick — interference shows during
+                // silence too — and self-gates on config / candidates / an in-flight session.
+                maybe_qsy_on_interference(
+                    qsy_auto_on_interference,
+                    &mut runtime_state,
+                    rig_controller.as_mut(),
+                    &handle.event_tx,
+                    &handle.active_mode,
+                    &mut engine,
+                )
+                .await;
                 // Refresh live metrics so the periodic metrics task can broadcast real values.
                 {
                     let mut m = handle.shared_metrics.lock().await;
