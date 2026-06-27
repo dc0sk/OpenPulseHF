@@ -1468,6 +1468,49 @@ Found during implementation audit; both have since been wired.
 | `accept_qsy` records decision but does not invoke `QsySession` or transmit RF QSY frames | `crates/openpulse-daemon/src/lib.rs` | ✅ Done (PR #321) — `QsySession` wired into `AcceptQsy`; QSY_REQ/QSY_LIST transmitted via the modem engine |
 | `enable_repeater` sets flag and emits event but does not spawn CrossBandRepeater audio routing thread | `crates/openpulse-daemon/src/lib.rs` | ✅ Done (PR #321) — `EnableRepeater` spawns the repeater thread via `run_full_duplex`; `DisableRepeater` stops and joins it |
 
+### Control-surface parity gaps (audit 2026-06-27)
+
+Audited every `ControlCommand` variant for reachability across the three surfaces (daemon
+handler / CLI `daemon` subcommand / panel GUI button) — the "wired at one seam, not all" lens
+applied to the control surface. All 28 variants are handled by the daemon (no dead commands).
+The reachability gaps:
+
+| Command | Daemon | CLI | Panel | Assessment |
+|---|---|---|---|---|
+| `SendMessage` | ✓ | ✗ | ✓ | **Gap** — no scriptable/headless send |
+| `SetMode` | ✓ | ✗ | ✓ | **Gap** — no programmatic mode change |
+| `PttAssert` / `PttRelease` | ✓ | ✗ | ✓ | **Gap** — CLI can't key/unkey |
+| `AcceptQsy` / `RejectQsy` | ✓ | ✗ | ✓ | **Gap** — CLI can't answer a QSY |
+| `SetFreq` | ✓ | ✗ | ✗ | reachable only via config |
+| `SetDcdSquelch` | ✓ | ✓ | ✗ | **Gap** — GUI can't tune squelch live |
+| `StartOtaSession` / `StopOtaSession` | ✓ | ✓ | ✗ | panel only locks/unlocks an active session |
+| `OtaSetLevelBounds` / `OtaSetHysteresis` / `OtaSetAggressiveness` | ✓ | ✓ | ✗ | expert OTA tuning, CLI-only by design |
+
+Highest-value to close (real two-way operability, not expert-only): **`SendMessage`** and
+**`SetMode`** in the CLI (headless/scriptable operation), **PTT** + **QSY accept/reject** in the
+CLI, and **`SetDcdSquelch`** in the panel. The OTA hysteresis/aggressiveness/bounds CLI-only split
+is intentional (panel offers the simplified lock/unlock instead). Newly-added `SetNotch`, plus
+CE-SSB and repeater, are reachable from all three surfaces. Not yet scheduled.
+
+### Planned: automatic ADIF logbook (opt-in, no target date)
+
+A station logbook that records each contact in **ADIF** (Amateur Data Interchange Format) so logs
+import into standard logging software / LoTW / eQSL. Opt-in via a new `[logbook]` config section
+(`enabled = false` default, `adif_path = "~/.local/share/openpulse/openpulse.adi"`).
+
+- **QSO source:** derive a record per completed contact, not per frame — keyed on the
+  handshake / `ConnectPeer` peer callsign (CONREQ identity), with frequency/band from CAT
+  (`RigctldController`), `mode` from the active modem mode, UTC start/end timestamps, and
+  RST/SNR from the rate-policy SNR estimate. Distinct from `TxSessionLog` (per-frame regulatory
+  audit) — the logbook is per-QSO.
+- **Fields:** `CALL`, `QSO_DATE` / `TIME_ON` / `TIME_OFF`, `BAND` / `FREQ`, `MODE` / `SUBMODE`,
+  `RST_SENT` / `RST_RCVD`, `STATION_CALLSIGN`, `MY_GRIDSQUARE` / `GRIDSQUARE`, `COMMENT`
+  (effective rate / final speed level).
+- **Surface:** `[logbook]` config toggle + a control command with CLI/panel parity (per the audit
+  above). Append-on-QSO-complete; must never block the modem path.
+- **Open questions:** ADIF version (3.1.x), how to map HPX modes to ADIF `MODE` / `SUBMODE`
+  (a custom `DYNAMIC` vs. per-mode), and whether to also log FreeDV / Winlink sessions.
+
 ### Features shipped (no longer deferred)
 
 - LDPC: real rate-1/2 min-sum belief propagation shipped in PR #187. The "LDPC stub" entry below is obsolete.
