@@ -249,6 +249,31 @@ pub enum DaemonCommands {
     ConnectPeer { callsign: String },
     /// Disconnect the current RF peer connection.
     DisconnectPeer,
+    /// Switch the active modem mode at runtime (e.g. BPSK250, QPSK500).
+    SetMode { mode: String },
+    /// Tune a rig's frequency (Hz). `rig` is the rig label (e.g. a, b).
+    SetFreq {
+        #[arg(long, default_value = "a")]
+        rig: String,
+        freq_hz: u64,
+    },
+    /// Assert PTT (key the transmitter).
+    PttAssert,
+    /// Release PTT (unkey the transmitter).
+    PttRelease,
+    /// Accept a pending incoming QSY negotiation by token.
+    AcceptQsy { token: String },
+    /// Reject a pending incoming QSY negotiation by token.
+    RejectQsy { token: String },
+    /// Queue an outgoing message to a peer callsign for RF delivery.
+    SendMessage {
+        #[arg(long)]
+        to: String,
+        #[arg(long, default_value = "")]
+        subject: String,
+        #[arg(long)]
+        body: String,
+    },
     /// Print the full inbox listing as JSON.
     ListMessages,
     /// Fetch the full body of a single message by ID.

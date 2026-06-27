@@ -65,6 +65,17 @@ pub fn run(addr: &str, cmd: DaemonCommands) -> Result<i32> {
             simple(addr, ControlCommand::ConnectPeer { callsign })
         }
         DaemonCommands::DisconnectPeer => simple(addr, ControlCommand::DisconnectPeer),
+        DaemonCommands::SetMode { mode } => simple(addr, ControlCommand::SetMode { mode }),
+        DaemonCommands::SetFreq { rig, freq_hz } => {
+            simple(addr, ControlCommand::SetFreq { rig, freq_hz })
+        }
+        DaemonCommands::PttAssert => simple(addr, ControlCommand::PttAssert),
+        DaemonCommands::PttRelease => simple(addr, ControlCommand::PttRelease),
+        DaemonCommands::AcceptQsy { token } => simple(addr, ControlCommand::AcceptQsy { token }),
+        DaemonCommands::RejectQsy { token } => simple(addr, ControlCommand::RejectQsy { token }),
+        DaemonCommands::SendMessage { to, subject, body } => {
+            simple(addr, ControlCommand::SendMessage { to, subject, body })
+        }
         DaemonCommands::EnableRepeater => simple(addr, ControlCommand::EnableRepeater),
         DaemonCommands::DisableRepeater => simple(addr, ControlCommand::DisableRepeater),
         DaemonCommands::DeleteMessage { id } => simple(addr, ControlCommand::DeleteMessage { id }),
