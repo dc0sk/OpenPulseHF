@@ -1407,9 +1407,11 @@ mod tests {
 
     #[test]
     fn run_virtual_produces_tap_updates() {
-        let mut cfg = AppConfig::default();
-        cfg.audio_source = crate::state::AudioSource::VirtualLoop;
-        cfg.mode = "BPSK250".into();
+        let cfg = AppConfig {
+            audio_source: crate::state::AudioSource::VirtualLoop,
+            mode: "BPSK250".into(),
+            ..Default::default()
+        };
         let config = Arc::new(RwLock::new(cfg));
         let make_tap = || Arc::new(RwLock::new(TapData::new()));
         let taps: [Tap; 4] = [make_tap(), make_tap(), make_tap(), make_tap()];
@@ -1454,12 +1456,14 @@ mod tests {
 
     #[test]
     fn run_adaptive_ladder_produces_updates_and_status() {
-        let mut cfg = AppConfig::default();
-        cfg.audio_source = crate::state::AudioSource::AdaptiveLadder;
         // hpx_wideband starts at QPSK500 (fast frames) so the test doesn't wait on a
         // huge BPSK31+RS buffer; hpx500 works in the app but is slow for a unit test.
-        cfg.profile = "hpx_wideband".into();
-        cfg.noise_model = NoiseModel::Awgn;
+        let mut cfg = AppConfig {
+            audio_source: crate::state::AudioSource::AdaptiveLadder,
+            profile: "hpx_wideband".into(),
+            noise_model: NoiseModel::Awgn,
+            ..Default::default()
+        };
         cfg.snr_db = 30.0; // high SNR → the ladder should climb
         let config = Arc::new(RwLock::new(cfg));
         let make_tap = || Arc::new(RwLock::new(TapData::new()));
@@ -1515,8 +1519,10 @@ mod tests {
 
     #[test]
     fn run_testmatrix_produces_tap_updates_and_status() {
-        let mut cfg = AppConfig::default();
-        cfg.audio_source = crate::state::AudioSource::TestMatrix;
+        let cfg = AppConfig {
+            audio_source: crate::state::AudioSource::TestMatrix,
+            ..Default::default()
+        };
         let config = Arc::new(RwLock::new(cfg));
         let make_tap = || Arc::new(RwLock::new(TapData::new()));
         let taps: [Tap; 4] = [make_tap(), make_tap(), make_tap(), make_tap()];

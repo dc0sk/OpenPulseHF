@@ -89,6 +89,8 @@ pub fn run(
             SessionProfile::PROFILE_NAMES.join(", ")
         )
     })?;
+    // Kept to apply the profile's per-level FEC each frame (`profile` is moved into the engines).
+    let fec_profile = profile.clone();
     let (mut channel, channel_snr_db) = build_channel(channel_name, snr, seed)?;
 
     let mut h = ChannelSimHarness::new();
@@ -136,12 +138,19 @@ pub fn run(
             .unwrap_or(&initial_mode)
             .to_string();
 
-        h.tx_engine.transmit(&payload, &mode, None)?;
+        // Apply the profile's per-level FEC — dense modes (e.g. OFDM-HOM) only decode protected.
+        let fec = h
+            .tx_engine
+            .current_tx_level()
+            .map(|l| fec_profile.fec_for(l))
+            .unwrap_or(openpulse_core::fec::FecMode::None);
+        h.tx_engine
+            .transmit_with_fec_mode(&payload, &mode, fec, None)?;
         total_tx_samples += match channel.as_deref_mut() {
             Some(ch) => h.route(ch),
             None => h.route_clean(),
         };
-        let decoded_ok = match h.rx_engine.receive(&mode, None) {
+        let decoded_ok = match h.rx_engine.receive_with_fec_mode(&mode, fec, None) {
             Ok(data) => {
                 total_bytes_rx += data.len();
                 data == payload
