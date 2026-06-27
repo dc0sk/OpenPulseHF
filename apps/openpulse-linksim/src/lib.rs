@@ -65,35 +65,35 @@ pub enum ChannelSpec {
 
 impl ChannelSpec {
     fn to_config(&self, seed: u64) -> ChannelModelConfig {
-        match *self {
+        match self {
             // "Clean" is modelled as very-high-SNR AWGN so all directions share one path type.
             ChannelSpec::Clean => ChannelModelConfig::Awgn(AwgnConfig {
                 snr_db: 60.0,
                 seed: Some(seed),
             }),
             ChannelSpec::Awgn(snr) => ChannelModelConfig::Awgn(AwgnConfig {
-                snr_db: snr,
+                snr_db: *snr,
                 seed: Some(seed),
             }),
             ChannelSpec::WattersonGoodF1(snr) => {
                 let mut c = WattersonConfig::good_f1(Some(seed));
-                c.snr_db = snr;
+                c.snr_db = *snr;
                 ChannelModelConfig::Watterson(c)
             }
             ChannelSpec::WattersonModerateF1(snr) => {
                 let mut c = WattersonConfig::moderate_f1(Some(seed));
-                c.snr_db = snr;
+                c.snr_db = *snr;
                 ChannelModelConfig::Watterson(c)
             }
             ChannelSpec::WattersonPoorF1(snr) => {
                 let mut c = WattersonConfig::poor_f1(Some(seed));
-                c.snr_db = snr;
+                c.snr_db = *snr;
                 ChannelModelConfig::Watterson(c)
             }
             ChannelSpec::GilbertElliott(snr) => {
                 let mut c = GilbertElliottConfig::moderate(Some(seed));
-                c.snr_good_db = snr;
-                c.snr_bad_db = snr - 15.0;
+                c.snr_good_db = *snr;
+                c.snr_bad_db = *snr - 15.0;
                 ChannelModelConfig::GilbertElliott(c)
             }
             // QSB is multiplicative slow fading (no additive noise); the SNR label is
@@ -104,7 +104,7 @@ impl ChannelSpec {
                 sample_rate: 8000,
             }),
             ChannelSpec::FlatFading(snr) => ChannelModelConfig::FlatFading(
-                openpulse_channel::flat_fading::FlatFadingConfig::moderate(snr, Some(seed)),
+                openpulse_channel::flat_fading::FlatFadingConfig::moderate(*snr, Some(seed)),
             ),
         }
     }
@@ -290,13 +290,9 @@ fn engine_transmit(
     mode: &str,
     fec: FecMode,
 ) -> Result<(), openpulse_core::error::ModemError> {
-    match fec {
-        FecMode::Rs | FecMode::RsInterleaved => engine.transmit_with_fec(data, mode, None),
-        FecMode::RsStrong => engine.transmit_with_strong_fec(data, mode, None),
-        FecMode::SoftConcatenated => engine.transmit_with_soft_viterbi_fec(data, mode, None),
-        _ => engine.transmit(data, mode, None),
-    }
-    .map(|_| ())
+    // Use the engine's canonical dispatch so every FecMode is honoured (the old private
+    // match silently fell back to *no* FEC for Ldpc/LdpcHighRate/Turbo/Concatenated).
+    engine.transmit_with_fec_mode(data, mode, fec, None)
 }
 
 fn engine_receive(
@@ -304,12 +300,7 @@ fn engine_receive(
     mode: &str,
     fec: FecMode,
 ) -> Result<Vec<u8>, openpulse_core::error::ModemError> {
-    match fec {
-        FecMode::Rs | FecMode::RsInterleaved => engine.receive_with_fec(mode, None),
-        FecMode::RsStrong => engine.receive_with_strong_fec(mode, None),
-        FecMode::SoftConcatenated => engine.receive_with_soft_viterbi_fec(mode, None),
-        _ => engine.receive(mode, None),
-    }
+    engine.receive_with_fec_mode(mode, fec, None)
 }
 
 fn make_plugin(mode: &str) -> Box<dyn ModulationPlugin> {
@@ -361,12 +352,24 @@ pub fn mode_gross_bps(mode: &str) -> Option<f64> {
 /// FEC code rate (net/gross) for a mode's payload after FEC overhead.
 pub fn fec_code_rate(fec: FecMode) -> f64 {
     match fec {
-        FecMode::None | FecMode::ShortRs | FecMode::Ldpc => 1.0,
+        FecMode::None | FecMode::ShortRs => 1.0,
         FecMode::Rs | FecMode::RsInterleaved => 223.0 / 255.0,
         FecMode::RsStrong => 191.0 / 255.0,
         FecMode::Concatenated | FecMode::SoftConcatenated => 223.0 / 255.0 * 0.5,
+        FecMode::Ldpc => 0.5, // rate-1/2 (k=1024, n=2048)
         FecMode::LdpcHighRate => 1024.0 / 1152.0,
         FecMode::Turbo => 1.0 / 3.0,
+    }
+}
+
+/// Max user bytes per modem frame for a given FEC mode. LDPC encodes one block per call
+/// (k = 1024 bits = 128 info bytes including the ~10-byte frame envelope), so the data chunk
+/// must stay well under that or the engine rejects the oversized block; every other mode
+/// uses the full [`FRAME_CHUNK`].
+fn frame_chunk_for(fec: FecMode) -> usize {
+    match fec {
+        FecMode::Ldpc | FecMode::LdpcHighRate => 100,
+        _ => FRAME_CHUNK,
     }
 }
 
@@ -691,7 +694,7 @@ impl LinkSim {
             let mut snr_acc = 0.0_f32;
             let mut chunk_count = 0u32;
             let mut burst_ok = true;
-            for chunk in wire.chunks(FRAME_CHUNK) {
+            for chunk in wire.chunks(frame_chunk_for(fec)) {
                 if engine_transmit(&mut self.fwd.tx_engine, chunk, &mode, fec).is_err() {
                     burst_ok = false;
                     break;
@@ -906,6 +909,37 @@ pub fn run_link(params: &LinkParams) -> LinkResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ldpc_and_turbo_decode_through_a_clean_link() {
+        // These modes used to silently fall back to *no* FEC in the linksim's private
+        // dispatch; route through the engine's canonical FecMode dispatch and confirm they
+        // actually deliver (so the dropdown entries are real, not cosmetic).
+        for fec in [FecMode::Ldpc, FecMode::LdpcHighRate, FecMode::Turbo] {
+            let r = run_link(&LinkParams {
+                forward: ChannelSpec::Clean,
+                reverse: ChannelSpec::Clean,
+                payload_bytes_per_frame: 64,
+                total_frames: 6,
+                fec,
+                ..LinkParams::default()
+            });
+            assert_eq!(
+                r.delivery_ratio, 1.0,
+                "{fec:?} should deliver every frame on a clean channel"
+            );
+            assert!(r.effective_bps > 0.0, "{fec:?} produced zero goodput");
+        }
+    }
+
+    #[test]
+    fn fec_code_rate_matches_real_overhead() {
+        // Regression: Ldpc rate-1/2 was mislabelled as 1.0, inflating its modelled goodput 2×.
+        assert!((fec_code_rate(FecMode::Ldpc) - 0.5).abs() < 1e-9);
+        assert!((fec_code_rate(FecMode::Turbo) - 1.0 / 3.0).abs() < 1e-9);
+        assert!(fec_code_rate(FecMode::None) > fec_code_rate(FecMode::Rs));
+        assert!(fec_code_rate(FecMode::Rs) > fec_code_rate(FecMode::Concatenated));
+    }
 
     #[test]
     fn frame_step_exposes_forward_air_for_two_way_derivation() {

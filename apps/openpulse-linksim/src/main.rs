@@ -55,8 +55,13 @@ impl ChannelKind {
 enum FecArg {
     None,
     Rs,
+    RsInterleaved,
     RsStrong,
+    Concatenated,
     Soft,
+    Ldpc,
+    LdpcHighRate,
+    Turbo,
 }
 
 impl From<FecArg> for FecMode {
@@ -64,8 +69,13 @@ impl From<FecArg> for FecMode {
         match a {
             FecArg::None => FecMode::None,
             FecArg::Rs => FecMode::Rs,
+            FecArg::RsInterleaved => FecMode::RsInterleaved,
             FecArg::RsStrong => FecMode::RsStrong,
+            FecArg::Concatenated => FecMode::Concatenated,
             FecArg::Soft => FecMode::SoftConcatenated,
+            FecArg::Ldpc => FecMode::Ldpc,
+            FecArg::LdpcHighRate => FecMode::LdpcHighRate,
+            FecArg::Turbo => FecMode::Turbo,
         }
     }
 }
