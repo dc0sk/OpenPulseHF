@@ -9,6 +9,22 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-27 — ADIF logbook follow-ups (runtime toggle + parity + richer fields)
+
+- **Requirement/change:** complete the ADIF logbook — a runtime `SetLogbook` control with CLI/panel
+  parity (config-only before), and richer fields (RST/COMMENT from the RX SNR).
+- **Design decision:** mirror the `SetNotch`/`SetCessb` pattern (control command + thin CLI
+  `simple()` wrapper + panel toggle). `Logbook::set_enabled` for runtime control. At disconnect,
+  read `engine.last_rx_snr_db()` → `RST_RCVD` (coarse SNR→RST bucket) + a `COMMENT` carrying the
+  mode and SNR. Peer `GRIDSQUARE` from the handshake deferred — not exposed on the engine yet.
+- **Implementation:** `crates/openpulse-daemon/src/logbook.rs` (`set_enabled`/`is_enabled`,
+  `end_qso(now_ms, rx_snr_db)`, `rst_from_snr`); `protocol.rs` `SetLogbook`; `lib.rs` handler +
+  disconnect passes the SNR; CLI `daemon set-logbook`; panel `Logbook: ON/OFF` toggle.
+- **Tests:** logbook unit (runtime-toggle writes, RST/COMMENT present, `rst_from_snr` buckets);
+  existing connect→disconnect integration still passes; CLI parse.
+- **Test results:** daemon lib + logbook **all pass**; CLI `set-logbook` parses; clippy 0; full
+  workspace green. Panel button → held for visual confirm.
+
 ## 2026-06-27 — WS-vs-TCP control-port parity audit (no gap)
 
 - **Requirement/change:** audit another surface — does a `ControlCommand` reach the daemon on the

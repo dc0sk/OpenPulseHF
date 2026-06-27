@@ -359,6 +359,12 @@ pub enum DaemonCommands {
         #[arg(action = clap::ArgAction::Set)]
         enabled: bool,
     },
+    /// Enable/disable the automatic ADIF logbook (one record per connect→disconnect).
+    SetLogbook {
+        /// true to enable, false to disable.
+        #[arg(action = clap::ArgAction::Set)]
+        enabled: bool,
+    },
     /// Print one OTA status snapshot as JSON.
     OtaStatus,
 }
