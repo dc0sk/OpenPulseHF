@@ -9,6 +9,23 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-27 — ARDOP/KISS TNC command-surface audit
+
+- **Requirement/change:** audit the ARDOP + KISS TNCs for the "accepted/advertised but not applied"
+  gap class (a command the TNC accepts but no-ops, or a doc claim the code doesn't honour).
+- **Finding:** ARDOP — `GRIDSQUARE`/`ARQBW`/`ARQTIMEOUT` are validated + echoed but never read by
+  the engine (the modem self-manages bandwidth/timeout via its adaptive ladder); `CWID`/`SENDID`
+  are honest warn-logged stubs. KISS — only `KISS_DATA` is applied; the 6 control frames
+  (TXDELAY/P/SlotTime/TXtail/FullDuplex/SetHardware) were *silently* dropped.
+- **Design decision:** the no-ops are defensible (self-managed rate/PTT) but were silently
+  misleading. Make them honest, don't implement host-driven control speculatively, track the real
+  wiring. KISS: log dropped control frames (`debug!`) instead of silent. ARDOP: code comment +
+  corrected `docs/non-gpl-interfacing.md` (split "implemented" vs "accepted-not-applied" vs "stub").
+  Roadmap "TNC command-surface audit" records the real-wiring follow-ups.
+- **Implementation:** `crates/openpulse-kiss/src/server.rs` (log); `crates/openpulse-ardop/src/
+  command.rs` (comment); `docs/non-gpl-interfacing.md`; `docs/dev/roadmap.md`.
+- **Test results:** ardop + kiss build; clippy 0; no behavior change beyond a debug log.
+
 ## 2026-06-27 — Adaptive-profile FEC audit (+ a permanent gate)
 
 - **Requirement/change:** audit every adaptive profile's FEC assignment for the `cli_adaptive`

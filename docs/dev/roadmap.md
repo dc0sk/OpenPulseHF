@@ -1492,6 +1492,23 @@ CLI, and **`SetDcdSquelch`** in the panel. The OTA hysteresis/aggressiveness/bou
 is intentional (panel offers the simplified lock/unlock instead). Newly-added `SetNotch`, plus
 CE-SSB and repeater, are reachable from all three surfaces. Not yet scheduled.
 
+### TNC command-surface audit (2026-06-27)
+
+Audited the ARDOP + KISS TNCs for the "accepted/advertised but not applied" gap class.
+
+**ARDOP** (`crates/openpulse-ardop/src/command.rs`): 15 commands are fully implemented; 3 are
+accepted + validated + echoed but **not applied** to the modem — `GRIDSQUARE` (informational),
+`ARQBW` and `ARQTIMEOUT` (stored, never read by the engine: OpenPulseHF self-manages bandwidth and
+session timeout via its adaptive rate ladder, not a host hint). `CWID` / `SENDID` are honest stubs
+(warn-logged). Now documented as such (code comment + `docs/non-gpl-interfacing.md`). Real fix, if
+host-driven ARQ control is ever wanted: wire `ARQBW`/`ARQTIMEOUT` into `transmit_arq`.
+
+**KISS** (`crates/openpulse-kiss/src/server.rs`): only `KISS_DATA` (0x00) is applied; the control
+frames (TXDELAY 0x01, P 0x02, SlotTime 0x03, TXtail 0x04, FullDuplex 0x05, SetHardware 0x06) were
+**silently** dropped. They're advisory PTT/CSMA-timing hints and this TNC manages PTT/channel access
+itself, so dropping is acceptable per the KISS spec — now logged (`debug!`) instead of silent. Real
+fix, if host TX-timing control is wanted: honor TXDELAY/TXtail/P/SlotTime.
+
 ### Config/feature gaps — defined but not consumed (audit 2026-06-27)
 
 Audited every `OpenpulseConfig` field for a reader (the "defined but not consumed" gap). 72 of 79
