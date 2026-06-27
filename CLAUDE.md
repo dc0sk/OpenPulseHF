@@ -517,6 +517,16 @@ For any new Phase 1 feature: write the test first, confirm it fails, implement u
 - Every PR that adds a feature must include at least one test
 - Link the roadmap task in the PR description
 
+### Traceability (required for substantive changes)
+Carry the full chain in the commit message and PR body, and append an entry to
+`docs/dev/traceability.md`:
+
+**requirement/change → architecture/design decision (+ rationale) → implementation (files/functions) → tests → test results (actually run).**
+
+- The "tests → results" link must be a real run (pass/fail counts), never "covered" asserted from a callers-grep.
+- Keep the acceptance-criteria table above current (requirement ↔ acceptance test).
+- Don't build a separate heavyweight matrix that rots — bake the chain into the artifacts that already travel with the change (commits, PRs, the `traceability.md` ledger, the acceptance table).
+
 ---
 
 ## Known sharp edges
