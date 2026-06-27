@@ -2193,6 +2193,8 @@ mod command_apply_tests {
             !engine.in_band_interferers().is_empty(),
             "persistence should confirm the in-band tone"
         );
+        // The notch must have actually run on the daemon's streaming (accumulate_capture) path.
+        assert!(engine.notch_blocks_processed() > 0);
         engine
     }
 

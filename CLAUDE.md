@@ -531,6 +531,10 @@ For any new Phase 1 feature: write the test first, confirm it fails, implement u
 
 **SAR is now implemented** (`crates/openpulse-core/src/sar.rs`). Objects up to 64 005 bytes can be segmented into 255-byte frame payloads and reassembled. PQ handshake (Phase 3.1) is unblocked.
 
+**RX capture has two entry families — wire RX front-end DSP at the seam, not a caller.** Captured audio reaches demod by two distinct routes: the `receive*` family (`stage_capture_input` → `receive_from_samples`) and the **daemon's streaming path** (`accumulate_capture` → `accumulate_routed`, the one `server::run`'s `rx_ticker` actually uses). They both funnel through exactly one shared seam: **`route_audio_stage(PipelineStage::InputCapture)`** (~19 call sites). The receiver notch lives there so every path gets it by construction; `ModemEngine::notch_blocks_processed()` is a tripwire that stays 0 if an enabled feature never runs on a path. The original notch bug put the transform in `stage_capture_input` only, so it covered the `receive`-family tests but never ran in the daemon. Lesson: a receiver/transmitter front-end transform belongs at the single pipeline-stage seam, and must be tested through the **production entry function** (`accumulate_capture` / the `twin` harness), not only `ChannelSimHarness`/`receive()`.
+
+**Cross-cutting RX/TX feature checklist (avoids the gap above).** When adding a feature that must run on *every* receive or transmit: (1) trace **top-down from the binary** — `server::run`'s `rx_ticker`/`tx` path, not just the engine API — to find what the running daemon actually calls; (2) place the transform at the single shared seam (`route_audio_stage(InputCapture)` for RX), never in one of the many caller functions; (3) never claim "covers all paths" from a callers-grep — prove it with a test that **fails without the wiring**; (4) add a runtime tripwire (a processed-block counter) and assert it increments on the production path; (5) add at least one test through the production entry (`accumulate_capture` or the `twin` daemon harness), not only the convenience seam.
+
 ---
 
 ## DSP acquisition & carrier-recovery playbook

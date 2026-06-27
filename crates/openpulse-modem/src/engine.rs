@@ -347,6 +347,12 @@ pub struct ModemEngine {
     /// Confirmed in-band interferers (Hz) from the notch persistence tracker — a notch can't
     /// remove these, so they are QSY (move-frequency) candidates. Empty unless persistence is on.
     notch_in_band_interferers: Vec<f32>,
+    /// Active mode for the receiver front end, set by the capture entry points and read at the
+    /// `PipelineStage::InputCapture` notch seam (where the mode isn't otherwise in scope).
+    rx_mode: Option<String>,
+    /// Count of capture blocks the notch processed — a tripwire: an enabled notch that never runs
+    /// on a given path (e.g. a new capture path that skips the InputCapture seam) leaves this at 0.
+    notch_blocks_processed: u64,
 }
 
 /// CE-SSB TX conditioning clip level as a multiple of the RMS envelope. 2.0×
@@ -406,6 +412,8 @@ impl ModemEngine {
             ),
             notch_fallback_bw_hz: 2000.0,
             notch_in_band_interferers: Vec::new(),
+            rx_mode: None,
+            notch_blocks_processed: 0,
         }
     }
 
@@ -424,6 +432,13 @@ impl ModemEngine {
     /// Whether the receiver-side automatic notch is enabled.
     pub fn is_notch_enabled(&self) -> bool {
         self.notch_enabled
+    }
+
+    /// Number of capture blocks the notch has processed. A tripwire for the "feature wired at a
+    /// seam the runtime path skips" class of gap: if the notch is enabled but this stays 0 while
+    /// the daemon runs, the receive path isn't reaching the front-end seam.
+    pub fn notch_blocks_processed(&self) -> u64 {
+        self.notch_blocks_processed
     }
 
     /// Configure the notch bank: max simultaneous notches, sharpness `q` (BW ≈ f0/q), and the
@@ -1110,13 +1125,9 @@ impl ModemEngine {
         samples: Vec<f32>,
     ) -> Result<Option<AudioSamples>, ModemError> {
         self.record_audio(&samples); // RX window (raw channel audio) for the spectrum/waterfall tap
-                                     // Receiver front end: this streaming path does not go through `stage_capture_input`
-                                     // (`capture_burst` does), so apply the notch + persistence observe here for the daemon.
-        let samples = if self.notch_enabled {
-            self.apply_rx_notch(mode, samples)
-        } else {
-            samples
-        };
+                                     // The notch is applied once, at the single `PipelineStage::InputCapture` seam in
+                                     // `route_audio_stage` (reached via `accumulate_routed` below); just record the mode here.
+        self.rx_mode = mode.map(|m| m.to_string());
         self.accumulate_routed(AudioSamples { samples })
     }
 
@@ -4227,12 +4238,9 @@ impl ModemEngine {
             .read()
             .map_err(|e| ModemError::Audio(e.to_string()))?;
         self.record_audio(&samples); // RX window (raw channel audio) for the spectrum/waterfall tap
-                                     // Receiver front end: remove out-of-band CW interference before demod.
-        let samples = if self.notch_enabled {
-            self.apply_rx_notch(mode, samples)
-        } else {
-            samples
-        };
+                                     // Record the mode for the receiver front end; the notch is applied once, at the single
+                                     // `PipelineStage::InputCapture` seam in `route_audio_stage`, which every receive path hits.
+        self.rx_mode = mode.map(|m| m.to_string());
         Ok(AudioSamples { samples })
     }
 
@@ -4340,9 +4348,21 @@ impl ModemEngine {
         stage: PipelineStage,
         payload: AudioSamples,
     ) -> Result<AudioSamples, ModemError> {
-        self.scheduler
+        let routed = self
+            .scheduler
             .route_audio(stage, payload)
-            .map_err(|e| ModemError::Configuration(e.to_string()))
+            .map_err(|e| ModemError::Configuration(e.to_string()))?;
+        // The receiver front end lives at this single seam: every capture path funnels its raw
+        // samples through `route_audio_stage(InputCapture)` exactly once, so placing the notch
+        // here (rather than in any one capture entry function) covers them all by construction.
+        if stage == PipelineStage::InputCapture && self.notch_enabled {
+            self.notch_blocks_processed = self.notch_blocks_processed.wrapping_add(1);
+            let mode = self.rx_mode.clone();
+            return Ok(AudioSamples {
+                samples: self.apply_rx_notch(mode.as_deref(), routed.samples),
+            });
+        }
+        Ok(routed)
     }
 
     fn route_decoded_stage(

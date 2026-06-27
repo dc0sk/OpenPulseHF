@@ -80,6 +80,36 @@ fn notch_is_off_by_default_and_toggles() {
 }
 
 #[test]
+fn notch_runs_on_the_daemon_streaming_capture_path() {
+    // Regression guard for the gap where the notch was wired only into `stage_capture_input`
+    // (the `receive()` family) and never ran on the daemon's streaming path
+    // (`accumulate_capture` → `accumulate_routed`). Both now funnel through the single
+    // `route_audio_stage(InputCapture)` seam; this drives the daemon's exact call and asserts
+    // the front end actually executed via the tripwire counter.
+    use openpulse_audio::LoopbackBackend;
+    use openpulse_modem::ModemEngine;
+
+    let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+    engine.register_plugin(Box::new(QpskPlugin::new())).unwrap();
+
+    // Notch disabled: the seam is a no-op, counter stays at 0.
+    let samples: Vec<f32> = (0..4096).map(|i| (i as f32 * 0.01).sin()).collect();
+    let _ = engine.accumulate_capture(Some(MODE), samples.clone());
+    assert_eq!(engine.notch_blocks_processed(), 0);
+
+    // Notch enabled: the daemon path must reach the front-end seam every block.
+    engine.enable_notch();
+    for _ in 0..3 {
+        let _ = engine.accumulate_capture(Some(MODE), samples.clone());
+    }
+    assert!(
+        engine.notch_blocks_processed() >= 3,
+        "notch must run on the accumulate_capture (daemon) path, counter = {}",
+        engine.notch_blocks_processed()
+    );
+}
+
+#[test]
 fn persistence_surfaces_in_band_interferer_for_qsy() {
     use openpulse_audio::LoopbackBackend;
     use openpulse_modem::ModemEngine;
