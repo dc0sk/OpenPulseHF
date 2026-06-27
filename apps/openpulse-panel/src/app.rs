@@ -144,6 +144,7 @@ pub struct PanelApp {
     tx_atten_db: f32,
     dcd_squelch: f32,
     ota_profile: String,
+    freq_khz: f64,
 
     // RF peer connect.
     peer_callsign_input: String,
@@ -196,6 +197,7 @@ impl PanelApp {
             // Mirrors the engine/`[modem] dcd_squelch` default.
             dcd_squelch: 0.01,
             ota_profile: "hpx_hf".into(),
+            freq_khz: 14_070.0,
             peer_callsign_input: String::new(),
             config_open: false,
             config_draft: DaemonConfig {
@@ -457,6 +459,26 @@ impl eframe::App for PanelApp {
                             }
                         }
                     });
+
+                // ── Frequency (CAT tune via rigctld) ──────────────────────────
+                ui.label("Freq:");
+                ui.add(
+                    egui::DragValue::new(&mut self.freq_khz)
+                        .speed(1.0)
+                        .range(1500.0..=30_000.0)
+                        .fixed_decimals(3)
+                        .suffix(" kHz"),
+                );
+                if ui
+                    .button("Tune")
+                    .on_hover_text("Set the rig frequency via CAT (rigctld)")
+                    .clicked()
+                {
+                    self.send(ControlCommand::SetFreq {
+                        rig: "rigctld".into(),
+                        freq_hz: (self.freq_khz * 1000.0).round() as u64,
+                    });
+                }
 
                 ui.separator();
 

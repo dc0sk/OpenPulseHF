@@ -9,6 +9,22 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-27 — SetFreq panel control + CLI rig-default fix
+
+- **Requirement/change:** make CAT `SetFreq` reachable from the panel (the one parity item left
+  panel-only after the prior round), and fix the CLI `set-freq` default that the daemon rejects.
+- **Design decision:** the daemon's `SetFreq` handler only accepts `rig == "rigctld"` (single CAT
+  target), not the display rig_a/rig_b labels — so no rig selector is needed. Panel: a `Freq:`
+  DragValue in **kHz** (operator-ergonomic, HF-ranged 1500–30000) + a `Tune` button sending
+  `freq_hz = round(kHz × 1000)` with `rig = "rigctld"`, placed next to the Mode selector. CLI:
+  change the `set-freq --rig` default from the invalid `a` to `rigctld`.
+- **Implementation:** `apps/openpulse-panel/src/app.rs` (Freq DragValue + Tune → `SetFreq`; new
+  `freq_khz` field, default 14070.0); `crates/openpulse-cli/src/cli.rs` (`set-freq` default rig).
+- **Tests:** panel build + clippy/fmt (GUI confirmed visually before merge); CLI build + `set-freq`
+  parse/connection-stage reachability.
+- **Test results:** panel builds, **0 clippy errors**, fmt clean; CLI builds, fmt clean, `set-freq`
+  parses and reaches the connect stage. (PR #562.)
+
 ## 2026-06-27 — Control-surface parity (CLI + panel)
 
 - **Requirement/change:** the control-surface audit (`docs/dev/roadmap.md` → "Control-surface
