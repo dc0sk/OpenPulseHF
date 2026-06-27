@@ -123,6 +123,18 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     engine.set_cessb_enabled(cfg.modem.cessb_enabled);
     tracing::info!(cessb = cfg.modem.cessb_enabled, "CE-SSB TX conditioning");
 
+    // Receiver-side automatic notch for out-of-band CW interference (opt-in).
+    if cfg.modem.notch_enabled {
+        engine.configure_notch(cfg.modem.notch_max, cfg.modem.notch_q, 2000.0);
+        engine.enable_notch();
+    }
+    tracing::info!(
+        notch = cfg.modem.notch_enabled,
+        max = cfg.modem.notch_max,
+        q = cfg.modem.notch_q,
+        "receiver auto-notch"
+    );
+
     // Receiver-led OTA adaptive rate-stepping (opt-in via [modem] ota_enabled).
     if cfg.modem.ota_enabled {
         let profile_name = if cfg.modem.ota_profile.is_empty() {

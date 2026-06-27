@@ -126,6 +126,11 @@ impl ModulationPlugin for QpskPlugin {
         demodulate::afc_estimate_hz(samples, config)
     }
 
+    fn occupied_bandwidth_hz(&self, mode: &str) -> Option<f32> {
+        // Rectangular main-lobe null-to-null = 2×baud; a safe over-estimate for the RRC path.
+        parse_baud_rate(mode).ok().map(|b| 2.0 * b)
+    }
+
     fn modulate_iq(
         &self,
         data: &[u8],
@@ -203,6 +208,15 @@ mod tests {
     fn supported_modes_include_composite_hf_rrc() {
         let plugin = QpskPlugin::new();
         assert!(plugin.supports_mode("QPSK1000-HF-RRC"));
+    }
+
+    #[test]
+    fn occupied_bandwidth_is_twice_baud() {
+        use openpulse_core::plugin::ModulationPlugin;
+        let plugin = QpskPlugin::new();
+        assert_eq!(plugin.occupied_bandwidth_hz("QPSK500"), Some(1000.0));
+        assert_eq!(plugin.occupied_bandwidth_hz("QPSK250-RRC"), Some(500.0));
+        assert_eq!(plugin.occupied_bandwidth_hz("not-a-mode"), None);
     }
 
     #[test]

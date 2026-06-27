@@ -206,6 +206,13 @@ pub trait ModulationPlugin: Send + Sync {
         None
     }
 
+    /// Occupied RF bandwidth (Hz) of `mode`, used to size a receiver notch's protected band
+    /// so it never notches this signal.  `None` if the plugin can't report it (the caller then
+    /// falls back to a conservative default).  Default implementation returns `None`.
+    fn occupied_bandwidth_hz(&self, _mode: &str) -> Option<f32> {
+        None
+    }
+
     /// Encode `data` bytes and return baseband I and Q sample vectors.
     ///
     /// The returned vectors have the same length.  `I` maps to the left

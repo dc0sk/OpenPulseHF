@@ -334,6 +334,16 @@ pub struct ModemEngine {
     /// on modes that benefit (multicarrier — see [`cessb_benefits`]), so it is a
     /// no-op for single-carrier modes regardless.
     cessb_enabled: bool,
+    /// Receiver-side automatic notch on captured audio (default off). Removes out-of-band CW
+    /// interference (QRM) before demod; its protected band tracks the active mode's occupied
+    /// bandwidth so the signal is never notched. See `docs/dev/notch-equalizer-experiment.md`.
+    notch_enabled: bool,
+    /// The notch bank, used only while `notch_enabled`.
+    notch_bank: openpulse_dsp::notch::NotchBank,
+    /// Protected-band full bandwidth (Hz) used when the active mode can't report its occupied
+    /// bandwidth (e.g. multicarrier modes, or a mode-agnostic capture); ± half this around the
+    /// carrier is never notched.
+    notch_fallback_bw_hz: f32,
 }
 
 /// CE-SSB TX conditioning clip level as a multiple of the RMS envelope. 2.0×
@@ -387,7 +397,59 @@ impl ModemEngine {
             rx_burst: Vec::new(),
             rx_capturing: false,
             cessb_enabled: true,
+            notch_enabled: false,
+            notch_bank: openpulse_dsp::notch::NotchBank::new(
+                openpulse_dsp::notch::NotchParams::default(),
+            ),
+            notch_fallback_bw_hz: 2000.0,
         }
+    }
+
+    /// Enable the receiver-side automatic notch (removes out-of-band CW interference before
+    /// demod). Off by default. The protected band tracks the active mode so the signal is never
+    /// notched; an in-band interferer still can't be removed (that is a QSY case).
+    pub fn enable_notch(&mut self) {
+        self.notch_enabled = true;
+    }
+
+    /// Disable the receiver-side automatic notch.
+    pub fn disable_notch(&mut self) {
+        self.notch_enabled = false;
+    }
+
+    /// Whether the receiver-side automatic notch is enabled.
+    pub fn is_notch_enabled(&self) -> bool {
+        self.notch_enabled
+    }
+
+    /// Configure the notch bank: max simultaneous notches, sharpness `q` (BW ≈ f0/q), and the
+    /// protected-band fallback bandwidth (Hz) used when the active mode can't report its own.
+    pub fn configure_notch(&mut self, max_notches: usize, q: f32, fallback_bw_hz: f32) {
+        use openpulse_dsp::notch::{NotchBank, NotchParams};
+        self.notch_bank = NotchBank::new(NotchParams {
+            max_notches,
+            q,
+            ..NotchParams::default()
+        });
+        self.notch_fallback_bw_hz = fallback_bw_hz;
+    }
+
+    /// Centre frequencies (Hz) of the notches placed on the most recent captured block.
+    pub fn notch_active_freqs(&self) -> Vec<f32> {
+        self.notch_bank.active_freqs()
+    }
+
+    /// Apply the receiver notch to a captured block: protect the active mode's occupied band
+    /// (so the signal is never notched), then null out-of-band CW interferers.
+    fn apply_rx_notch(&mut self, mode: Option<&str>, samples: Vec<f32>) -> Vec<f32> {
+        let center = self.center_frequency + self.afc_correction_hz;
+        let bw = mode
+            .and_then(|m| self.plugins.get(m).and_then(|p| p.occupied_bandwidth_hz(m)))
+            .unwrap_or(self.notch_fallback_bw_hz);
+        let half = bw / 2.0;
+        self.notch_bank
+            .set_protect_band((center - half).max(0.0), center + half);
+        self.notch_bank.process_block(&samples)
     }
 
     /// Enable/disable CE-SSB TX envelope conditioning (master switch). It still
@@ -882,7 +944,7 @@ impl ModemEngine {
         session_id: &str,
         device: Option<&str>,
     ) -> Result<Vec<u8>, ModemError> {
-        let samples = self.stage_capture_input(device)?;
+        let samples = self.stage_capture_input(None, device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
         self.ota_update_dcd(&samples);
 
@@ -919,7 +981,7 @@ impl ModemEngine {
         session_id: &str,
         device: Option<&str>,
     ) -> Result<Option<OtaRxResult>, ModemError> {
-        let samples = self.stage_capture_input(device)?;
+        let samples = self.stage_capture_input(None, device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
         self.ota_update_dcd(&samples);
 
@@ -973,7 +1035,7 @@ impl ModemEngine {
         &mut self,
         device: Option<&str>,
     ) -> Result<Option<AudioSamples>, ModemError> {
-        let samples = self.stage_capture_input(device)?;
+        let samples = self.stage_capture_input(None, device)?;
         self.accumulate_routed(samples)
     }
 
@@ -1566,7 +1628,7 @@ impl ModemEngine {
     ///
     /// Pass `device = None` to use the backend's default input device.
     pub fn receive(&mut self, mode: &str, device: Option<&str>) -> Result<Vec<u8>, ModemError> {
-        let samples = self.stage_capture_input(device)?;
+        let samples = self.stage_capture_input(Some(mode), device)?;
         self.receive_from_samples(mode, samples)
     }
 
@@ -2290,7 +2352,7 @@ impl ModemEngine {
         mode: &str,
         device: Option<&str>,
     ) -> Result<(Vec<u8>, AckType), ModemError> {
-        let samples = self.stage_capture_input(device)?;
+        let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
@@ -2627,7 +2689,7 @@ impl ModemEngine {
         mode: &str,
         device: Option<&str>,
     ) -> Result<Vec<u8>, ModemError> {
-        let samples = self.stage_capture_input(device)?;
+        let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
@@ -2714,7 +2776,7 @@ impl ModemEngine {
         device: Option<&str>,
         interleaver_depth: usize,
     ) -> Result<Vec<u8>, ModemError> {
-        let samples = self.stage_capture_input(device)?;
+        let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
@@ -2808,7 +2870,7 @@ impl ModemEngine {
         mode: &str,
         device: Option<&str>,
     ) -> Result<Vec<u8>, ModemError> {
-        let samples = self.stage_capture_input(device)?;
+        let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
@@ -2899,7 +2961,7 @@ impl ModemEngine {
         mode: &str,
         device: Option<&str>,
     ) -> Result<Vec<u8>, ModemError> {
-        let samples = self.stage_capture_input(device)?;
+        let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
@@ -2988,7 +3050,7 @@ impl ModemEngine {
         mode: &str,
         device: Option<&str>,
     ) -> Result<Vec<u8>, ModemError> {
-        let samples = self.stage_capture_input(device)?;
+        let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
@@ -3135,7 +3197,7 @@ impl ModemEngine {
         codec: &LdpcCodec,
         device: Option<&str>,
     ) -> Result<Vec<u8>, ModemError> {
-        let samples = self.stage_capture_input(device)?;
+        let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
@@ -3238,7 +3300,7 @@ impl ModemEngine {
         mode: &str,
         device: Option<&str>,
     ) -> Result<Vec<u8>, ModemError> {
-        let samples = self.stage_capture_input(device)?;
+        let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
@@ -3323,7 +3385,7 @@ impl ModemEngine {
         }
         let mut combiner = SoftCombiner::new();
         for _ in 0..n_frames {
-            let samples = self.stage_capture_input(device)?;
+            let samples = self.stage_capture_input(Some(mode), device)?;
             let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
             let prev_busy = self.dcd.is_busy();
@@ -3405,7 +3467,7 @@ impl ModemEngine {
         let mut attempts: Vec<(Vec<f32>, f32)> = Vec::with_capacity(n_frames);
 
         for i in 0..n_frames {
-            let samples = self.stage_capture_input(device)?;
+            let samples = self.stage_capture_input(Some(mode), device)?;
             let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
             let prev_busy = self.dcd.is_busy();
@@ -3510,7 +3572,7 @@ impl ModemEngine {
         let mut attempts: Vec<(Vec<f32>, f32)> = Vec::with_capacity(n_frames);
 
         for i in 0..n_frames {
-            let samples = self.stage_capture_input(device)?;
+            let samples = self.stage_capture_input(Some(mode), device)?;
             let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
             let prev_busy = self.dcd.is_busy();
@@ -3638,7 +3700,7 @@ impl ModemEngine {
         mode: &str,
         device: Option<&str>,
     ) -> Result<Vec<u8>, ModemError> {
-        let samples = self.stage_capture_input(device)?;
+        let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
@@ -3878,7 +3940,7 @@ impl ModemEngine {
         &mut self,
         device: Option<&str>,
     ) -> Result<AckFrame, ModemError> {
-        let samples = self.stage_capture_input(device)?;
+        let samples = self.stage_capture_input(None, device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
@@ -3991,7 +4053,7 @@ impl ModemEngine {
         mode: &str,
         device: Option<&str>,
     ) -> Result<Vec<u8>, ModemError> {
-        let samples = self.stage_capture_input(device)?;
+        let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
@@ -4103,7 +4165,11 @@ impl ModemEngine {
         Ok(())
     }
 
-    fn stage_capture_input(&mut self, device: Option<&str>) -> Result<AudioSamples, ModemError> {
+    fn stage_capture_input(
+        &mut self,
+        mode: Option<&str>,
+        device: Option<&str>,
+    ) -> Result<AudioSamples, ModemError> {
         let _stage = PipelineStage::InputCapture;
         let audio_cfg = AudioConfig::default();
         let mut stream = self
@@ -4114,7 +4180,13 @@ impl ModemEngine {
         let samples = stream
             .read()
             .map_err(|e| ModemError::Audio(e.to_string()))?;
-        self.record_audio(&samples); // RX window for the spectrum/waterfall tap
+        self.record_audio(&samples); // RX window (raw channel audio) for the spectrum/waterfall tap
+                                     // Receiver front end: remove out-of-band CW interference before demod.
+        let samples = if self.notch_enabled {
+            self.apply_rx_notch(mode, samples)
+        } else {
+            samples
+        };
         Ok(AudioSamples { samples })
     }
 
