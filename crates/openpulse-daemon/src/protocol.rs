@@ -296,6 +296,8 @@ pub enum ControlCommand {
     /// Enable/disable the receiver-side automatic notch (removes out-of-band CW interference
     /// before demod; the protected band tracks the active mode so the signal is never notched).
     SetNotch { enabled: bool },
+    /// Enable/disable the automatic ADIF logbook at runtime (one record per connect→disconnect).
+    SetLogbook { enabled: bool },
 }
 
 /// Per-command response.

@@ -141,6 +141,7 @@ pub struct PanelApp {
     repeater_enabled: bool,
     cessb_enabled: bool,
     notch_enabled: bool,
+    logbook_enabled: bool,
     tx_atten_db: f32,
     dcd_squelch: f32,
     ota_profile: String,
@@ -193,6 +194,8 @@ impl PanelApp {
             cessb_enabled: true,
             // Default-off mirrors the daemon's `[modem] notch_enabled = false`.
             notch_enabled: false,
+            // Default-off mirrors the daemon's `[logbook] enabled = false`.
+            logbook_enabled: false,
             tx_atten_db: 0.0,
             // Mirrors the engine/`[modem] dcd_squelch` default.
             dcd_squelch: 0.01,
@@ -535,6 +538,26 @@ impl eframe::App for PanelApp {
                     self.notch_enabled = !self.notch_enabled;
                     self.send(ControlCommand::SetNotch {
                         enabled: self.notch_enabled,
+                    });
+                }
+
+                // ── ADIF logbook toggle ───────────────────────────────────────
+                let log_label = if self.logbook_enabled {
+                    "Logbook: ON"
+                } else {
+                    "Logbook: OFF"
+                };
+                if ui
+                    .button(log_label)
+                    .on_hover_text(
+                        "Automatic ADIF logbook: append one record per contact (connect→disconnect) \
+                         to the configured .adi file, for import into logging software / LoTW / eQSL.",
+                    )
+                    .clicked()
+                {
+                    self.logbook_enabled = !self.logbook_enabled;
+                    self.send(ControlCommand::SetLogbook {
+                        enabled: self.logbook_enabled,
                     });
                 }
 

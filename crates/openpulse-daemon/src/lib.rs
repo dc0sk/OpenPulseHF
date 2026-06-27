@@ -1237,7 +1237,8 @@ pub async fn apply_command_to_engine(
                 Ok(()) => {
                     runtime_state.qsy_pending_token = None;
                     // Finalize + append the logbook QSO (opt-in; failures don't affect the session).
-                    if let Err(e) = runtime_state.logbook.end_qso(now_ms) {
+                    let rx_snr = engine.last_rx_snr_db();
+                    if let Err(e) = runtime_state.logbook.end_qso(now_ms, rx_snr) {
                         tracing::warn!(error = %e, "logbook: failed to append ADIF record");
                     }
                     let _ = event_tx.send(ControlEvent::RfConnectionChanged {
@@ -1561,6 +1562,9 @@ pub async fn apply_command_to_engine(
             } else {
                 engine.disable_notch();
             }
+        }
+        ControlCommand::SetLogbook { enabled } => {
+            runtime_state.logbook.set_enabled(*enabled);
         }
         // No live-modem side effects for these commands in the engine path.
         // They are handled by dispatch-only paths or request-response control flow.
