@@ -47,6 +47,7 @@ gpu = [
 openpulse-core    = { workspace = true }
 openpulse-modem   = { workspace = true }
 openpulse-channel = { workspace = true }
+openpulse-dsp     = { workspace = true }
 openpulse-audio   = { workspace = true, optional = true, features = ["cpal-backend"] }
 openpulse-daemon  = { workspace = true, optional = true }
 openpulse-gpu     = { workspace = true, optional = true }

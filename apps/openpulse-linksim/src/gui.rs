@@ -109,6 +109,7 @@ impl Controls {
             max_attempts: 6,
             seed: 0x1234_5678,
             cessb_enabled: self.cessb,
+            notch: None,
         }
     }
 }
