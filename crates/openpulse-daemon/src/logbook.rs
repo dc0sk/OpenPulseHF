@@ -15,6 +15,7 @@ struct Pending {
     start_ms: u64,
     submode: String,
     freq_hz: Option<u64>,
+    gridsquare: Option<String>,
 }
 
 /// Per-station ADIF logbook state.
@@ -24,6 +25,9 @@ pub struct Logbook {
     path: String,
     station_callsign: String,
     my_grid: String,
+    /// callsign (lowercased) → grid, to fill the worked station's `GRIDSQUARE` from config when
+    /// it isn't exchanged on air.
+    peer_grids: std::collections::BTreeMap<String, String>,
     pending: Option<Pending>,
 }
 
@@ -44,17 +48,28 @@ fn expand_home(path: &str) -> String {
 impl Logbook {
     /// Build from config. `station_callsign`/`my_grid` populate the `STATION_CALLSIGN` /
     /// `MY_GRIDSQUARE` fields; a default `N0CALL` callsign is treated as unset.
-    pub fn new(enabled: bool, path: &str, station_callsign: &str, my_grid: &str) -> Self {
+    pub fn new(
+        enabled: bool,
+        path: &str,
+        station_callsign: &str,
+        my_grid: &str,
+        peer_grids: &std::collections::BTreeMap<String, String>,
+    ) -> Self {
         let station_callsign = if station_callsign == "N0CALL" {
             String::new()
         } else {
             station_callsign.to_string()
         };
+        let peer_grids = peer_grids
+            .iter()
+            .map(|(k, v)| (k.to_lowercase(), v.clone()))
+            .collect();
         Self {
             enabled,
             path: expand_home(path),
             station_callsign,
             my_grid: my_grid.to_string(),
+            peer_grids,
             pending: None,
         }
     }
@@ -69,13 +84,16 @@ impl Logbook {
         self.enabled
     }
 
-    /// Record the start of a QSO (a successful connect). Overwrites any prior pending QSO.
+    /// Record the start of a QSO (a successful connect). Overwrites any prior pending QSO. The
+    /// worked station's grid is looked up from the configured `peer_grids` map (case-insensitive).
     pub fn begin_qso(&mut self, peer: &str, submode: &str, freq_hz: Option<u64>, now_ms: u64) {
+        let gridsquare = self.peer_grids.get(&peer.to_lowercase()).cloned();
         self.pending = Some(Pending {
             peer: peer.to_string(),
             start_ms: now_ms,
             submode: submode.to_string(),
             freq_hz,
+            gridsquare,
         });
     }
 
@@ -117,6 +135,7 @@ impl Logbook {
             rst_rcvd,
             station_callsign: nonempty(&self.station_callsign),
             my_gridsquare: nonempty(&self.my_grid),
+            gridsquare: p.gridsquare,
             comment: Some(comment),
             ..Default::default()
         };
@@ -159,12 +178,28 @@ fn append(path: &str, record: &str) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    fn grids<const N: usize>(
+        pairs: [(&str, &str); N],
+    ) -> std::collections::BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
     #[test]
     fn writes_a_record_on_connect_then_disconnect() {
         let dir = std::env::temp_dir().join(format!("opadif-{}", std::process::id()));
         let path = dir.join("log.adi");
         let _ = std::fs::remove_file(&path);
-        let mut lb = Logbook::new(true, path.to_str().unwrap(), "DL0XYZ", "AA00aa");
+        // Case-insensitive peer-grid lookup → the worked station's GRIDSQUARE.
+        let mut lb = Logbook::new(
+            true,
+            path.to_str().unwrap(),
+            "DL0XYZ",
+            "AA00aa",
+            &grids([("dl1abc", "JO31aa")]), // lowercase key; connect uses uppercase
+        );
 
         lb.begin_qso("DL1ABC", "QPSK500", Some(14_070_000), 1_700_000_000_000);
         let wrote = lb.end_qso(1_700_000_300_000, Some(14.0)).unwrap();
@@ -180,6 +215,8 @@ mod tests {
         // RX SNR 14 dB → RST 579 + a COMMENT carrying the mode and SNR.
         assert!(body.contains("<RST_RCVD:3>579"));
         assert!(body.contains("RX SNR 14 dB"));
+        // Worked station's grid from the config lookup (matched case-insensitively).
+        assert!(body.contains("<GRIDSQUARE:6>JO31aa"));
 
         // A second QSO appends (no duplicate header).
         lb.begin_qso("OZ2DEF", "BPSK250", None, 1_700_001_000_000);
@@ -192,11 +229,23 @@ mod tests {
 
     #[test]
     fn disabled_or_no_pending_writes_nothing() {
-        let mut off = Logbook::new(false, "/nonexistent/should-not-write.adi", "X", "");
+        let mut off = Logbook::new(
+            false,
+            "/nonexistent/should-not-write.adi",
+            "X",
+            "",
+            &grids([]),
+        );
         off.begin_qso("A", "BPSK250", None, 1);
         assert!(!off.end_qso(2, None).unwrap()); // disabled → no write, no error
 
-        let mut on = Logbook::new(true, "/nonexistent/should-not-write.adi", "X", "");
+        let mut on = Logbook::new(
+            true,
+            "/nonexistent/should-not-write.adi",
+            "X",
+            "",
+            &grids([]),
+        );
         assert!(!on.end_qso(2, None).unwrap()); // no pending → nothing
     }
 
@@ -205,7 +254,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("opadif-toggle-{}.adi", std::process::id()));
         let _ = std::fs::remove_file(&path);
         // Built disabled (config), then enabled at runtime via SetLogbook.
-        let mut lb = Logbook::new(false, path.to_str().unwrap(), "X", "");
+        let mut lb = Logbook::new(false, path.to_str().unwrap(), "X", "", &grids([]));
         assert!(!lb.is_enabled());
         lb.set_enabled(true);
         assert!(lb.is_enabled());

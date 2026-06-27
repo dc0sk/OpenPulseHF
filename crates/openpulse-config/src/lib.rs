@@ -48,6 +48,9 @@ pub struct LogbookConfig {
     pub enabled: bool,
     /// Path to the `.adi` logbook file (created with a header on first write).
     pub adif_path: String,
+    /// Optional callsign → Maidenhead grid lookup, used to fill the worked station's `GRIDSQUARE`
+    /// when the peer's grid isn't exchanged on air. Keys are matched case-insensitively.
+    pub peer_grids: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for LogbookConfig {
@@ -55,6 +58,7 @@ impl Default for LogbookConfig {
         Self {
             enabled: false,
             adif_path: "~/.local/share/openpulse/openpulse.adi".into(),
+            peer_grids: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -841,6 +845,9 @@ receive_tick_ms = 50
 enabled = false
 # Path to the .adi file (a header is written on first record).
 adif_path = "~/.local/share/openpulse/openpulse.adi"
+# Optional callsign → grid lookup to fill the worked station's GRIDSQUARE (case-insensitive).
+# [logbook.peer_grids]
+# "DL1ABC" = "JO31aa"
 "#
     .to_string()
 }
@@ -890,6 +897,7 @@ mod tests {
         // ADIF logbook is opt-in.
         assert!(!cfg.logbook.enabled);
         assert!(cfg.logbook.adif_path.ends_with(".adi"));
+        assert!(cfg.logbook.peer_grids.is_empty());
     }
 
     #[test]

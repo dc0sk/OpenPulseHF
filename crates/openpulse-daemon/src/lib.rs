@@ -2055,7 +2055,13 @@ mod command_apply_tests {
         let path = std::env::temp_dir().join(format!("opadif-it-{}.adi", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let mut runtime_state = RuntimeControlState {
-            logbook: crate::logbook::Logbook::new(true, path.to_str().unwrap(), "DL0XYZ", "AA00aa"),
+            logbook: crate::logbook::Logbook::new(
+                true,
+                path.to_str().unwrap(),
+                "DL0XYZ",
+                "AA00aa",
+                &std::collections::BTreeMap::from([("dl1abc".to_string(), "JO31aa".to_string())]),
+            ),
             last_freq_hz: Some(14_070_000),
             ..RuntimeControlState::default()
         };
@@ -2082,6 +2088,7 @@ mod command_apply_tests {
         assert!(body.contains("<BAND:3>20m"));
         assert!(body.contains("<SUBMODE:7>QPSK500"));
         assert!(body.contains("<STATION_CALLSIGN:6>DL0XYZ"));
+        assert!(body.contains("<GRIDSQUARE:6>JO31aa")); // worked station's grid from peer_grids
         assert_eq!(body.matches("<EOR>").count(), 1);
         let _ = std::fs::remove_file(&path);
     }
