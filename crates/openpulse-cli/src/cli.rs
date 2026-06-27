@@ -251,9 +251,9 @@ pub enum DaemonCommands {
     DisconnectPeer,
     /// Switch the active modem mode at runtime (e.g. BPSK250, QPSK500).
     SetMode { mode: String },
-    /// Tune a rig's frequency (Hz). `rig` is the rig label (e.g. a, b).
+    /// Tune the rig frequency (Hz) via CAT. `rig` is the control target (currently `rigctld`).
     SetFreq {
-        #[arg(long, default_value = "a")]
+        #[arg(long, default_value = "rigctld")]
         rig: String,
         freq_hz: u64,
     },
