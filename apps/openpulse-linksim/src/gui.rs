@@ -1008,15 +1008,55 @@ impl eframe::App for LinkApp {
                 });
             });
 
-            // OpenPulseHF QR, centered below the waterfalls.
+            // Branding band below the waterfalls: big "OpenPulseHF" on the left, the QR
+            // centered, and a two-line tagline on the right.
             if let Some(tex) = &qr {
                 ui.add_space(6.0);
-                ui.vertical_centered(|ui| {
+                let band_w = ui.available_width();
+                let side_w = ((band_w - qr_side) / 2.0).max(0.0);
+                ui.horizontal(|ui| {
+                    // Left: large wordmark + sub-line filling its half, pushed toward the QR.
+                    ui.allocate_ui(egui::vec2(side_w, qr_side), |ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.add_space(16.0);
+                            ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                                ui.label(
+                                    egui::RichText::new("OpenPulseHF")
+                                        .size(56.0)
+                                        .strong()
+                                        .color(egui::Color32::from_gray(220)),
+                                );
+                                ui.label(
+                                    egui::RichText::new("software-based data modem")
+                                        .size(18.0)
+                                        .color(egui::Color32::from_gray(180)),
+                                );
+                            });
+                        });
+                    });
+                    // Center: the QR itself.
                     ui.add(egui::Image::new(egui::load::SizedTexture::new(
                         tex.id(),
                         egui::vec2(qr_side, qr_side),
                     )))
                     .on_hover_text("OpenPulseHF");
+                    // Right: two-line tagline, left-aligned and vertically centered.
+                    ui.allocate_ui(egui::vec2(side_w, qr_side), |ui| {
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.add_space(16.0);
+                            ui.vertical(|ui| {
+                                ui.label(
+                                    egui::RichText::new("Free & Opensource").size(24.0).strong(),
+                                );
+                                ui.label(
+                                    egui::RichText::new(
+                                        "advanced features over existing solutions",
+                                    )
+                                    .size(18.0),
+                                );
+                            });
+                        });
+                    });
                 });
             }
         });
