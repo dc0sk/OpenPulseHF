@@ -271,6 +271,10 @@ impl ModulationPlugin for ScFdmaPlugin {
         let spectra = crate::channel::compute_pilot_spectra(samples, &p);
         crate::channel::cfo_from_spectra(&spectra, &p)
     }
+
+    fn occupied_bandwidth_hz(&self, mode: &str) -> Option<f32> {
+        params_for_mode(mode).map(|p| p.total_sc() as f32 * crate::params::SC_SPACING_HZ)
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

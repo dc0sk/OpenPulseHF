@@ -293,6 +293,9 @@ pub enum ControlCommand {
     /// Enable/disable CE-SSB TX envelope conditioning (master switch). Only acts on
     /// high-PAPR multicarrier modes; a no-op for single-carrier modes regardless.
     SetCessb { enabled: bool },
+    /// Enable/disable the receiver-side automatic notch (removes out-of-band CW interference
+    /// before demod; the protected band tracks the active mode so the signal is never notched).
+    SetNotch { enabled: bool },
 }
 
 /// Per-command response.

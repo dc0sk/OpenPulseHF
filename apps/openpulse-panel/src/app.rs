@@ -140,6 +140,7 @@ pub struct PanelApp {
     selected_mode: String,
     repeater_enabled: bool,
     cessb_enabled: bool,
+    notch_enabled: bool,
     tx_atten_db: f32,
 
     // RF peer connect.
@@ -187,6 +188,8 @@ impl PanelApp {
             // Default-on mirrors the daemon's `[modem] cessb_enabled = true`; the
             // master switch is a no-op for non-multicarrier modes regardless.
             cessb_enabled: true,
+            // Default-off mirrors the daemon's `[modem] notch_enabled = false`.
+            notch_enabled: false,
             tx_atten_db: 0.0,
             peer_callsign_input: String::new(),
             config_open: false,
@@ -484,6 +487,27 @@ impl eframe::App for PanelApp {
                     self.cessb_enabled = !self.cessb_enabled;
                     self.send(ControlCommand::SetCessb {
                         enabled: self.cessb_enabled,
+                    });
+                }
+
+                // ── Receiver auto-notch (removes out-of-band CW interference) ────
+                let notch_label = if self.notch_enabled {
+                    "Notch: ON"
+                } else {
+                    "Notch: OFF"
+                };
+                if ui
+                    .button(notch_label)
+                    .on_hover_text(
+                        "Receiver automatic notch: removes out-of-band CW interference (QRM) \
+                         before demod. The protected band tracks the active mode, so your own \
+                         signal is never notched; an in-band interferer needs a QSY, not a notch.",
+                    )
+                    .clicked()
+                {
+                    self.notch_enabled = !self.notch_enabled;
+                    self.send(ControlCommand::SetNotch {
+                        enabled: self.notch_enabled,
                     });
                 }
 

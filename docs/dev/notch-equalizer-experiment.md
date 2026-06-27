@@ -71,15 +71,29 @@ cargo run -p openpulse-linksim --no-default-features --example notch_experiment
 
 The receiver notch is now wired into `ModemEngine`, opt-in and off by default:
 
-- `ModulationPlugin::occupied_bandwidth_hz(mode)` reports a mode's occupied bandwidth
-  (2×baud for BPSK/QPSK/8PSK; `None` elsewhere). The engine sizes the protected band
-  `center ± bw/2` per captured block, with a configurable fallback when the mode can't report it.
+- `ModulationPlugin::occupied_bandwidth_hz(mode)` reports a mode's occupied bandwidth. Implemented
+  for **every** modulation plugin: 2×baud for BPSK/QPSK/8PSK/64QAM/pilot, subcarrier-span for
+  OFDM/SC-FDMA, 300 Hz for FSK4-ACK. The engine sizes the protected band `center ± bw/2` per
+  captured block, with a configurable fallback when a mode can't report it.
 - `ModemEngine::enable_notch()` / `disable_notch()` / `configure_notch(max, q, fallback_bw)`;
   applied in `stage_capture_input` so every receive path (incl. OTA/burst) is covered.
-- Config: `[modem] notch_enabled` (default false), `notch_max`, `notch_q`; wired in the daemon.
-- Gate test: `crates/openpulse-modem/tests/notch_loopback.rs` —
-  `notch_recovers_decode_against_out_of_band_qrm` (off fails, on decodes through a strong tone).
+- Config: `[modem] notch_enabled` (default false), `notch_max`, `notch_q`, `notch_persistence`.
+- **User controls**: a `Notch: ON/OFF` toggle on the operator panel, an `openpulse daemon
+  set-notch <bool>` CLI command, and the `SetNotch { enabled }` control-protocol command.
 
-Still open: (a) temporal-persistence detection (a CW interferer persists across frames;
-own-signal lines do not) so protection can be relaxed; (b) in-band interference should trigger
-QSY, not a notch; (c) report `occupied_bandwidth_hz` for the multicarrier plugins.
+### Persistence & QSY trigger
+
+`NotchBank` persistence (opt-in via `set_persistence(n)` / `[modem] notch_persistence`)
+distinguishes a genuine external interferer from the modem's own spectral lines by *occupancy*:
+while the receiver's own wideband signal fills the protected band the block is skipped; a lone CW
+tone (however loud) does not fill it, so it is tracked across blocks. A tone confirmed over `n`
+such blocks is external — notched if out of band, or surfaced via
+`ModemEngine::in_band_interferers()` (and a warn log) as a **QSY** candidate if in band, since a
+notch can't remove it without harming the signal.
+
+Gate tests (`crates/openpulse-modem/tests/notch_loopback.rs`):
+`notch_recovers_decode_against_out_of_band_qrm` (off fails, on decodes through a strong tone) and
+`persistence_surfaces_in_band_interferer_for_qsy`; plus `NotchBank` persistence unit tests.
+
+Still open: the daemon doesn't yet *act* on the QSY hint (auto-retune) — it logs it; wiring it to
+the `openpulse-qsy` subsystem is the remaining integration.

@@ -126,12 +126,14 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     // Receiver-side automatic notch for out-of-band CW interference (opt-in).
     if cfg.modem.notch_enabled {
         engine.configure_notch(cfg.modem.notch_max, cfg.modem.notch_q, 2000.0);
+        engine.set_notch_persistence(cfg.modem.notch_persistence);
         engine.enable_notch();
     }
     tracing::info!(
         notch = cfg.modem.notch_enabled,
         max = cfg.modem.notch_max,
         q = cfg.modem.notch_q,
+        persistence = cfg.modem.notch_persistence,
         "receiver auto-notch"
     );
 

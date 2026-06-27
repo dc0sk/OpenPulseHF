@@ -344,6 +344,9 @@ pub struct ModemEngine {
     /// bandwidth (e.g. multicarrier modes, or a mode-agnostic capture); ± half this around the
     /// carrier is never notched.
     notch_fallback_bw_hz: f32,
+    /// Confirmed in-band interferers (Hz) from the notch persistence tracker — a notch can't
+    /// remove these, so they are QSY (move-frequency) candidates. Empty unless persistence is on.
+    notch_in_band_interferers: Vec<f32>,
 }
 
 /// CE-SSB TX conditioning clip level as a multiple of the RMS envelope. 2.0×
@@ -402,6 +405,7 @@ impl ModemEngine {
                 openpulse_dsp::notch::NotchParams::default(),
             ),
             notch_fallback_bw_hz: 2000.0,
+            notch_in_band_interferers: Vec::new(),
         }
     }
 
@@ -434,13 +438,29 @@ impl ModemEngine {
         self.notch_fallback_bw_hz = fallback_bw_hz;
     }
 
+    /// Enable notch persistence/silence tracking: a tone must appear in this many signal-absent
+    /// blocks before it counts as a confirmed external interferer. 0 disables it (default). This
+    /// lets the notch null externally-confirmed tones robustly, and surfaces in-band ones via
+    /// [`in_band_interferers`](Self::in_band_interferers) for QSY.
+    pub fn set_notch_persistence(&mut self, min_silence_hits: u32) {
+        self.notch_bank.set_persistence(min_silence_hits);
+    }
+
+    /// Confirmed in-band interferers (Hz): a notch can't remove these without harming the signal,
+    /// so they are QSY (move-frequency) candidates. Empty unless notch persistence is enabled.
+    pub fn in_band_interferers(&self) -> &[f32] {
+        &self.notch_in_band_interferers
+    }
+
     /// Centre frequencies (Hz) of the notches placed on the most recent captured block.
     pub fn notch_active_freqs(&self) -> Vec<f32> {
         self.notch_bank.active_freqs()
     }
 
     /// Apply the receiver notch to a captured block: protect the active mode's occupied band
-    /// (so the signal is never notched), then null out-of-band CW interferers.
+    /// (so the signal is never notched), then null out-of-band CW interferers. When persistence
+    /// is on, feed the block to the silence tracker and surface any confirmed in-band interferer
+    /// (a QSY case the notch can't fix).
     fn apply_rx_notch(&mut self, mode: Option<&str>, samples: Vec<f32>) -> Vec<f32> {
         let center = self.center_frequency + self.afc_correction_hz;
         let bw = mode
@@ -449,6 +469,17 @@ impl ModemEngine {
         let half = bw / 2.0;
         self.notch_bank
             .set_protect_band((center - half).max(0.0), center + half);
+
+        // Persistence: the bank classifies the block (our wideband signal fills the protected
+        // band; a lone CW tone does not), so it can tell an external interferer from our own lines.
+        self.notch_bank.observe(&samples);
+        let in_band = self.notch_bank.in_band_interferers();
+        if in_band != self.notch_in_band_interferers {
+            if !in_band.is_empty() {
+                tracing::warn!(freqs_hz = ?in_band, "in-band interference confirmed; a notch cannot remove it — QSY recommended");
+            }
+            self.notch_in_band_interferers = in_band;
+        }
         self.notch_bank.process_block(&samples)
     }
 

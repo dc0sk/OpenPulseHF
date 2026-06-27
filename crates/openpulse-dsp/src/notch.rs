@@ -129,6 +129,21 @@ impl NotchBiquad {
     }
 }
 
+/// Quantization (Hz) for the persistence tracker's frequency keys.
+const PERSIST_BIN_HZ: f32 = 10.0;
+
+/// Tracks how persistently a tone appears across signal-absent (silence) blocks. A CW interferer
+/// is present even when the receiver's own signal is not; the modem's own preamble/pulse spectral
+/// lines are not. So a tone confirmed during silence is genuinely external — and can be notched
+/// (out of band) or flagged for QSY (in band) without the per-block false-positive risk.
+#[derive(Default)]
+struct Persistence {
+    /// Silence blocks a tone must appear in before it counts as confirmed. 0 = disabled.
+    min_silence_hits: u32,
+    /// freq key (Hz / PERSIST_BIN_HZ, rounded) → accumulated silence-hit score.
+    tracks: std::collections::HashMap<i32, u32>,
+}
+
 /// Automatic multi-notch interference canceller.
 pub struct NotchBank {
     params: NotchParams,
@@ -136,6 +151,7 @@ pub struct NotchBank {
     biquads: Vec<NotchBiquad>,
     planner: FftPlanner<f32>,
     window: Vec<f32>,
+    persistence: Persistence,
 }
 
 impl NotchBank {
@@ -148,6 +164,7 @@ impl NotchBank {
             biquads: Vec::new(),
             planner: FftPlanner::new(),
             window,
+            persistence: Persistence::default(),
         }
     }
 
@@ -180,6 +197,75 @@ impl NotchBank {
         self.biquads.iter().map(|b| b.f0).collect()
     }
 
+    /// Enable persistence/silence tracking: a tone must appear in this many signal-absent
+    /// (silence) blocks before it counts as a confirmed external interferer. 0 disables it
+    /// (default). Confirmed externals are notched even if a single block's detection misses them,
+    /// and in-band ones are surfaced via [`in_band_interferers`](Self::in_band_interferers).
+    pub fn set_persistence(&mut self, min_silence_hits: u32) {
+        self.persistence.min_silence_hits = min_silence_hits;
+        if min_silence_hits == 0 {
+            self.persistence.tracks.clear();
+        }
+    }
+
+    /// Feed a captured block to the persistence tracker. The bank classifies the block itself:
+    /// while the receiver's own (wideband) signal fills the protected band the block is skipped;
+    /// otherwise the tones it contains are external (present independent of our transmission) and
+    /// accrue toward confirmation. Requires a protected band to be set (via the engine per mode).
+    pub fn observe(&mut self, block: &[f32]) {
+        if self.persistence.min_silence_hits == 0 || block.is_empty() {
+            return;
+        }
+        let mag_db = self.spectrum_db(block);
+        if self.band_filled(&mag_db) {
+            return; // our own signal is present — don't track its spectral lines as interferers
+        }
+        let peaks = self.peaks_from_spectrum(&mag_db, false);
+        let cap = self.persistence.min_silence_hits * 2;
+        // Decay every track by one, then credit the tones seen this silence block (+2 net).
+        for v in self.persistence.tracks.values_mut() {
+            *v = v.saturating_sub(1);
+        }
+        for f in peaks {
+            let key = (f / PERSIST_BIN_HZ).round() as i32;
+            let e = self.persistence.tracks.entry(key).or_insert(0);
+            *e = (*e + 2).min(cap);
+        }
+        self.persistence.tracks.retain(|_, &mut v| v > 0);
+    }
+
+    fn confirmed_external(&self) -> Vec<f32> {
+        if self.persistence.min_silence_hits == 0 {
+            return Vec::new();
+        }
+        self.persistence
+            .tracks
+            .iter()
+            .filter(|(_, &v)| v >= self.persistence.min_silence_hits)
+            .map(|(&k, _)| k as f32 * PERSIST_BIN_HZ)
+            .collect()
+    }
+
+    fn in_band(&self, f: f32) -> bool {
+        self.params.protect_lo_hz < self.params.protect_hi_hz
+            && f >= self.params.protect_lo_hz
+            && f <= self.params.protect_hi_hz
+    }
+
+    /// Confirmed external interferers (Hz) — seen during silence, so independent of our TX.
+    pub fn external_interferers(&self) -> Vec<f32> {
+        self.confirmed_external()
+    }
+
+    /// Confirmed external interferers inside the protected band (Hz). A notch can't remove these
+    /// without harming the signal, so they are QSY (move-frequency) candidates, not notch targets.
+    pub fn in_band_interferers(&self) -> Vec<f32> {
+        self.confirmed_external()
+            .into_iter()
+            .filter(|&f| self.in_band(f))
+            .collect()
+    }
+
     /// Process one block: in [`NotchMode::Auto`] re-detect interferers first, then apply the
     /// notch cascade. State is reset per block (each modem frame is an independent realisation),
     /// primed to the first sample so no startup step transient corrupts the preamble.
@@ -188,7 +274,19 @@ impl NotchBank {
             return Vec::new();
         }
         if self.mode == NotchMode::Auto {
-            let freqs = self.detect_freqs(block);
+            let mut freqs = self.detect_freqs(block);
+            // Add confirmed external interferers that sit out of band (persistence path): a notch
+            // there is safe and these are robustly external even if this block's detection missed.
+            for f in self.confirmed_external() {
+                if !self.in_band(f)
+                    && freqs
+                        .iter()
+                        .all(|&p| (p - f).abs() >= self.params.min_spacing_hz)
+                {
+                    freqs.push(f);
+                }
+            }
+            freqs.truncate(self.params.max_notches);
             self.set_notch_freqs(&freqs);
         }
         if self.biquads.is_empty() {
@@ -207,25 +305,68 @@ impl NotchBank {
         buf
     }
 
-    /// Detect up to `max_notches` narrowband interferers in a block by local spectral prominence.
+    /// Detect up to `max_notches` narrowband interferers in a block by local spectral prominence,
+    /// honouring the protected passband.
     pub fn detect_freqs(&mut self, block: &[f32]) -> Vec<f32> {
-        let n = self.params.fft_size;
+        self.detect_peaks(block, true)
+    }
+
+    /// Detect sharp spectral peaks. With `respect_protect`, peaks inside the protected passband are
+    /// skipped; without it, every prominent tone (incl. in-band) is returned — used by the
+    /// persistence tracker, which must see in-band interferers to flag them for QSY.
+    fn detect_peaks(&mut self, block: &[f32], respect_protect: bool) -> Vec<f32> {
         if block.is_empty() {
             return Vec::new();
         }
-        // Windowed, zero-padded copy into the FFT buffer.
+        let mag_db = self.spectrum_db(block);
+        self.peaks_from_spectrum(&mag_db, respect_protect)
+    }
+
+    /// Half-spectrum magnitude (dB) of a Hann-windowed, zero-padded block.
+    fn spectrum_db(&mut self, block: &[f32]) -> Vec<f32> {
+        let n = self.params.fft_size;
         let mut buf = vec![Complex32::new(0.0, 0.0); n];
         let take = block.len().min(n);
         for i in 0..take {
             buf[i] = Complex32::new(block[i] * self.window[i], 0.0);
         }
         self.planner.plan_fft_forward(n).process(&mut buf);
-
-        let half = n / 2;
-        let mag_db: Vec<f32> = (0..half)
+        (0..n / 2)
             .map(|k| 20.0 * (buf[k].norm() + 1e-9).log10())
-            .collect();
+            .collect()
+    }
 
+    /// True when the protected band is substantially *filled* — characteristic of the receiver's
+    /// own wideband signal, as opposed to noise or a lone CW tone (which lights only a few bins,
+    /// however loud). Used to gate persistence: tones are only tracked when our signal is absent.
+    fn band_filled(&self, mag_db: &[f32]) -> bool {
+        let (lo, hi) = (self.params.protect_lo_hz, self.params.protect_hi_hz);
+        if lo >= hi {
+            return false;
+        }
+        let bin_hz = self.params.sample_rate / self.params.fft_size as f32;
+        let last = mag_db.len().saturating_sub(1);
+        let glo = (self.params.guard_lo_hz / bin_hz).ceil() as usize;
+        let ghi = ((self.params.guard_hi_hz / bin_hz).floor() as usize).min(last);
+        if ghi <= glo {
+            return false;
+        }
+        let mut floor: Vec<f32> = mag_db[glo..=ghi].to_vec();
+        floor.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let noise = floor[floor.len() / 2];
+        let plo = (lo / bin_hz).ceil() as usize;
+        let phi = ((hi / bin_hz).floor() as usize).min(last);
+        if phi <= plo {
+            return false;
+        }
+        let active = (plo..=phi).filter(|&k| mag_db[k] > noise + 6.0).count();
+        active as f32 / (phi - plo + 1) as f32 > 0.4
+    }
+
+    /// Pick interferer frequencies from a precomputed magnitude spectrum by local prominence.
+    fn peaks_from_spectrum(&self, mag_db: &[f32], respect_protect: bool) -> Vec<f32> {
+        let n = self.params.fft_size;
+        let half = n / 2;
         let fs = self.params.sample_rate;
         let bin_hz = fs / n as f32;
         let lo_bin = (self.params.guard_lo_hz / bin_hz).ceil() as usize;
@@ -242,12 +383,10 @@ impl NotchBank {
             if k < inner || k + inner >= half {
                 continue;
             }
-            // Never notch inside the receiver's own protected passband.
+            // Never notch inside the receiver's own protected passband (unless detecting raw
+            // peaks for the persistence tracker, which must see in-band tones to flag QSY).
             let f = k as f32 * bin_hz;
-            if self.params.protect_lo_hz < self.params.protect_hi_hz
-                && f >= self.params.protect_lo_hz
-                && f <= self.params.protect_hi_hz
-            {
+            if respect_protect && self.in_band(f) {
                 continue;
             }
             // Local maximum within ±inner.
@@ -395,6 +534,77 @@ mod tests {
                 .any(|&f| (f - 2400.0).abs() < 30.0),
             "a tone outside the protected band must still be detected"
         );
+    }
+
+    /// A block that fills a band with many closely-spaced tones (stand-in for our wideband signal).
+    fn wideband(lo: f32, hi: f32, n: usize) -> Vec<f32> {
+        let mut v = vec![0.0f32; n];
+        let mut f = lo;
+        while f <= hi {
+            for (i, s) in v.iter_mut().enumerate() {
+                *s += 0.2 * (2.0 * std::f32::consts::PI * f * i as f32 / FS).sin();
+            }
+            f += 40.0;
+        }
+        v
+    }
+
+    #[test]
+    fn persistence_confirms_an_external_tone_seen_during_silence() {
+        let mut bank = NotchBank::new(NotchParams::default());
+        bank.set_persistence(3);
+        // A 1300 Hz tone over a quiet band (our signal absent) → confirmed external.
+        let silence_tone = tone(1300.0, 0.5, 8192);
+        for _ in 0..3 {
+            bank.observe(&silence_tone);
+        }
+        assert!(
+            bank.external_interferers()
+                .iter()
+                .any(|&f| (f - 1300.0).abs() < PERSIST_BIN_HZ),
+            "tone seen across 3 silence blocks should be confirmed external, got {:?}",
+            bank.external_interferers()
+        );
+    }
+
+    #[test]
+    fn persistence_flags_in_band_interferer_for_qsy() {
+        let params = NotchParams {
+            protect_lo_hz: 1200.0,
+            protect_hi_hz: 1800.0,
+            ..NotchParams::default()
+        };
+        let mut bank = NotchBank::new(params);
+        bank.set_persistence(2);
+        // A lone tone INSIDE the protected band over an otherwise-quiet band → QSY candidate.
+        let in_band = tone(1500.0, 0.5, 8192);
+        for _ in 0..2 {
+            bank.observe(&in_band);
+        }
+        assert!(
+            bank.in_band_interferers()
+                .iter()
+                .any(|&f| (f - 1500.0).abs() < PERSIST_BIN_HZ),
+            "an in-band silence tone should be flagged for QSY, got {:?}",
+            bank.in_band_interferers()
+        );
+    }
+
+    #[test]
+    fn persistence_ignores_blocks_while_our_signal_fills_the_band() {
+        let params = NotchParams {
+            protect_lo_hz: 1000.0,
+            protect_hi_hz: 2000.0,
+            ..NotchParams::default()
+        };
+        let mut bank = NotchBank::new(params);
+        bank.set_persistence(2);
+        // Our own signal fills 1000–2000 Hz → blocks are skipped, nothing is confirmed.
+        let sig = wideband(1000.0, 2000.0, 8192);
+        for _ in 0..5 {
+            bank.observe(&sig);
+        }
+        assert!(bank.external_interferers().is_empty());
     }
 
     #[test]

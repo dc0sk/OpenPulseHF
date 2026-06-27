@@ -119,9 +119,14 @@ impl ModulationPlugin for Qam64Plugin {
     fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
         demodulate::afc_estimate_hz(samples, config)
     }
+
+    fn occupied_bandwidth_hz(&self, mode: &str) -> Option<f32> {
+        // Single-carrier: rectangular main-lobe null-to-null = 2×baud (safe over-estimate for RRC).
+        parse_baud_rate(mode).ok().map(|b| 2.0 * b)
+    }
 }
 
-fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
+pub(crate) fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
     // Mode format: "64QAM<baud>" or "64QAM<baud>-RRC". Extract the numeric suffix after "QAM".
     let base = mode.trim_end_matches("-RRC");
     let baud_str = base

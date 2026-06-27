@@ -165,6 +165,10 @@ impl ModulationPlugin for OfdmPlugin {
         let p = params_for_mode(&config.mode)?;
         crate::channel::estimate_cfo_hz(samples, &p)
     }
+
+    fn occupied_bandwidth_hz(&self, mode: &str) -> Option<f32> {
+        params_for_mode(mode).map(|p| p.occupied_bw_hz())
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -183,6 +187,15 @@ mod tests {
             sample_rate: 8000,
             ..ModulationConfig::default()
         }
+    }
+
+    #[test]
+    fn occupied_bandwidth_tracks_subcarrier_span() {
+        let p = OfdmPlugin::new();
+        // OFDM16 spans 20 SCs × 31.25 Hz = 625 Hz; OFDM52 spans 65 × 31.25 = 2031.25 Hz.
+        assert!((p.occupied_bandwidth_hz("OFDM16").unwrap() - 625.0).abs() < 1.0);
+        assert!((p.occupied_bandwidth_hz("OFDM52").unwrap() - 2031.25).abs() < 1.0);
+        assert_eq!(p.occupied_bandwidth_hz("not-a-mode"), None);
     }
 
     // The engine previously parsed OFDM52's subcarrier count as "52 baud";
@@ -509,7 +522,7 @@ mod tests {
             buf.push(((seed >> 8) as f32 / u32::MAX as f32 - 0.5) * 0.01);
         }
         buf.extend_from_slice(&frame);
-        buf.extend(std::iter::repeat(0.0).take(300));
+        buf.extend(std::iter::repeat_n(0.0, 300));
 
         let rx = plugin.demodulate(&buf, &mod_config("OFDM52")).unwrap();
         assert_eq!(rx.as_slice(), payload.as_slice());

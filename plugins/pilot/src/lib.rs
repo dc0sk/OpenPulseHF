@@ -111,6 +111,11 @@ impl ModulationPlugin for PilotPlugin {
         demodulate::pilot_estimate_afc_hz(samples, config)
     }
 
+    fn occupied_bandwidth_hz(&self, mode: &str) -> Option<f32> {
+        // Single-carrier pilot-framed: rectangular main-lobe = 2×baud (safe over-estimate for RRC).
+        modulate::baud_for_mode(mode).ok().map(|b| 2.0 * b)
+    }
+
     fn frame_geometry(&self, config: &ModulationConfig) -> Option<FrameGeometry> {
         let sps = modulate::samples_per_symbol(config).ok()?;
         // Symbols per byte scales with the constellation order: denser modes pack
