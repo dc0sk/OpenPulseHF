@@ -9,6 +9,20 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-27 — Logbook peer GRIDSQUARE via config map (A)
+
+- **Requirement/change:** populate the ADIF `GRIDSQUARE` (worked station's grid). The audit found
+  the grid is NOT carried by the handshake/peer-cache/engine today, so "from the handshake" needs a
+  protocol change (tracked as B). Deliver the outcome now via a config lookup.
+- **Design decision:** a `[logbook.peer_grids]` callsign→grid map (case-insensitive), consulted at
+  `begin_qso` by peer callsign — what most logging software does. Composes with B later (the
+  handshake-exchanged grid would take precedence over the map).
+- **Implementation:** `openpulse-config` `LogbookConfig.peer_grids`; `logbook.rs` (lookup at
+  begin_qso → `Pending.gridsquare` → `GRIDSQUARE`); `server.rs` passes the map; TOML template.
+- **Tests:** logbook unit (GRIDSQUARE from a lowercase-key map + uppercase connect), daemon
+  integration (`connect_then_disconnect…` asserts `<GRIDSQUARE>`), config default (empty map).
+- **Test results:** logbook 5/5, daemon integration passes, config 9/9, clippy 0.
+
 ## 2026-06-27 — ARDOP/KISS TNC command-surface audit
 
 - **Requirement/change:** audit the ARDOP + KISS TNCs for the "accepted/advertised but not applied"

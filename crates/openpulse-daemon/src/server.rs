@@ -463,6 +463,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
             &cfg.logbook.adif_path,
             &cfg.station.callsign,
             &cfg.station.grid_square,
+            &cfg.logbook.peer_grids,
         ),
         ..RuntimeControlState::default()
     };
