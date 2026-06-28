@@ -9,6 +9,24 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-28 — Host-driven TNC control (ARQBW/ARQTIMEOUT): blocked, finding recorded
+
+- **Requirement/change:** wire the ARDOP `ARQBW`/`ARQTIMEOUT` host hints into the engine for real,
+  replacing the accepted-but-ignored no-ops the #571 audit flagged.
+- **Investigation:** same blocked class as the signed handshake (B). `crates/openpulse-ardop/src/
+  main.rs` never calls `start_adaptive_session`/`start_ota_session`, so `current_tx_level()` is
+  always `None` and `worker_loop` always runs the **fixed-mode** path — the adaptive ARQ ladder is
+  dormant. `ARQBW` has no ladder to cap; `ARQTIMEOUT` has no ARQ connection to time out (the worker
+  does single-shot `receive(mode, None)`). The only bandwidth-cap lever (`ota_set_level_bounds`)
+  targets the **OTA** controller, but the worker's adaptive path reads the **rate_policy** controller
+  — different mechanisms; no rate_policy bandwidth cap exists.
+- **Decision:** wiring no-ops into the dead fields would re-create the "defined-but-not-consumed" gap
+  the audit removed, so it was deliberately NOT done. Real fix is a feature (TNC runs an adaptive ARQ
+  session + rate_policy bandwidth cap + connection timeout), recorded in `docs/dev/roadmap.md` under
+  the TNC command-surface audit.
+- **Implementation:** none (no speculative surface); roadmap finding only.
+- **Test results:** docs-only; workspace gates unaffected.
+
 ## 2026-06-28 — Linksim: I/Q constellation views flanking the QR branding band
 
 - **Requirement/change:** show a constellation diagram for Station A to the left of the QR code and
