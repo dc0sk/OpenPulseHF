@@ -350,18 +350,16 @@ rig-less demo to get a first impression of the GUIs and the adaptive modem. None
 of it transmits on the air.
 
 ```bash
-# Two-station ARQ link simulator — fully self-contained: it simulates BOTH
-# stations over a virtual HF channel. No radio, daemon, or config needed.
-# Tweak the SNR / channel model / mode live and watch the rate ladder adapt.
-cargo run -p openpulse-linksim --features gui
+# Two-station ARQ link simulator GUI — fully self-contained: it simulates BOTH
+# stations over a virtual HF channel. No radio, daemon, or config needed. Tweak
+# the SNR / channel model / mode live and watch the rate ladder adapt.
+cargo run -p openpulse-linksim --features gui --bin openpulse-linksim-gui
 
-# Operator panel GUI — connects to a running daemon. The daemon runs rig-less on
-# the loopback audio backend (no sound card / radio), so this is still a demo:
-mkdir -p ~/.config/openpulse
-cargo run -p openpulse-cli --no-default-features -- config init > ~/.config/openpulse/config.toml
-#   ...then set [station].callsign in that file (the daemon refuses to start as N0CALL).
-cargo run --bin openpulse-server     # background daemon, loopback backend by default
-cargo run -p openpulse-panel         # in another terminal → Connect (default 127.0.0.1:9000)
+# Want the operator panel too? The simulator stands in for the daemon — add
+# --serve so it speaks the panel control protocol, then connect the panel to it
+# (no daemon, radio, or config). Press Run in the simulator so it streams frames.
+cargo run -p openpulse-linksim --features "gui,serve" --bin openpulse-linksim-gui -- --serve 127.0.0.1:9000
+cargo run -p openpulse-panel   # in another terminal → Connect (default 127.0.0.1:9000)
 ```
 
 For real on-air operation (sound card / radio, CAT/PTT), build the relevant binary
