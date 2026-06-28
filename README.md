@@ -343,6 +343,31 @@ cargo test --workspace --exclude pki-tooling --no-default-features
 The `--no-default-features` flag disables the CPAL audio backend. All tests must
 pass with this flag. Never add tests that require real audio hardware.
 
+### Try it without a radio (demo / first impression)
+
+**No radio, sound card, or station is required for any of this** — it is purely a
+rig-less demo to get a first impression of the GUIs and the adaptive modem. None
+of it transmits on the air.
+
+```bash
+# Two-station ARQ link simulator — fully self-contained: it simulates BOTH
+# stations over a virtual HF channel. No radio, daemon, or config needed.
+# Tweak the SNR / channel model / mode live and watch the rate ladder adapt.
+cargo run -p openpulse-linksim --features gui
+
+# Operator panel GUI — connects to a running daemon. The daemon runs rig-less on
+# the loopback audio backend (no sound card / radio), so this is still a demo:
+mkdir -p ~/.config/openpulse
+cargo run -p openpulse-cli --no-default-features -- config init > ~/.config/openpulse/config.toml
+#   ...then set [station].callsign in that file (the daemon refuses to start as N0CALL).
+cargo run --bin openpulse-server     # background daemon, loopback backend by default
+cargo run -p openpulse-panel         # in another terminal → Connect (default 127.0.0.1:9000)
+```
+
+For real on-air operation (sound card / radio, CAT/PTT), build the relevant binary
+with `--features cpal` and configure `~/.config/openpulse/config.toml` — see the
+on-air test plan in `docs/on-air_testplan.md`.
+
 ---
 
 ## Repository layout
