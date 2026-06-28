@@ -354,6 +354,10 @@ struct LinkApp {
     audio_written: u64,
     audio_start: Instant,
 
+    // Per-visualization toggles (toolbar): show the waterfalls / the I/Q constellations.
+    ui_show_waterfall: bool,
+    ui_show_constellation: bool,
+
     // Bundled OpenPulseHF QR code, decoded to a texture on first paint.
     qr_tex: Option<egui::TextureHandle>,
 
@@ -412,6 +416,8 @@ impl LinkApp {
             audio_out: None,
             audio_written: 0,
             audio_start: Instant::now(),
+            ui_show_waterfall: true,
+            ui_show_constellation: true,
             qr_tex: None,
             // Seed the PRNG from wall-clock nanos so successive launches differ.
             rng_state: std::time::SystemTime::now()
@@ -740,6 +746,7 @@ fn draw_panel(
     panel: &mut PanelView,
     spectrum_h: f32,
     waterfall_h: f32,
+    show_waterfall: bool,
 ) {
     ui.vertical(|ui| {
         ui.strong(title);
@@ -762,6 +769,9 @@ fn draw_panel(
                 p.line(Line::new(pts).color(egui::Color32::from_rgb(100, 200, 100)));
             });
 
+        if !show_waterfall {
+            return;
+        }
         if panel.generation != panel.last_gen || panel.tex.is_none() {
             let img = waterfall_image(&panel.wf);
             match &mut panel.tex {
@@ -824,6 +834,11 @@ impl eframe::App for LinkApp {
                         "Copy the forward (data TX) waveform to the default playback device. \
                          Off by default.",
                     );
+                ui.separator();
+                ui.checkbox(&mut self.ui_show_waterfall, "🌊 Waterfall")
+                    .on_hover_text("Show the per-column waterfall under each spectrum.");
+                ui.checkbox(&mut self.ui_show_constellation, "✦ Constellation")
+                    .on_hover_text("Show the Station A / Station B I/Q constellation diagrams.");
                 ui.separator();
                 ui.label("Profile:");
                 egui::ComboBox::from_id_salt("profile")
@@ -1118,6 +1133,7 @@ impl eframe::App for LinkApp {
             } else {
                 "decode FAIL"
             };
+            let show_wf = self.ui_show_waterfall;
             ui.horizontal(|ui| {
                 ui.allocate_ui(egui::vec2(col_w, cols_h), |ui| {
                     draw_panel(
@@ -1127,23 +1143,12 @@ impl eframe::App for LinkApp {
                         &mut self.panels[0],
                         spectrum_h,
                         waterfall_h,
+                        show_wf,
                     );
                 });
                 ui.allocate_ui(egui::vec2(col_w, cols_h), |ui| {
-                    // The decoded-data view: B's received signal (mode-dependent + noise), which
-                    // is what actually gets demodulated — so the "decoded" status belongs here.
-                    draw_panel(
-                        ui,
-                        "Station B ← data RX",
-                        &format!("{} + noise · {decoded}", subtitle.0),
-                        &mut self.panels[1],
-                        spectrum_h,
-                        waterfall_h,
-                    );
-                });
-                ui.allocate_ui(egui::vec2(col_w, cols_h), |ui| {
-                    // The ACK is always FSK4-ACK regardless of the data mode (by design), so this
-                    // column is intentionally mode-invariant — labelled FSK4 to make that clear.
+                    // Middle column: the ACK (B→A). Always FSK4-ACK regardless of the data mode (by
+                    // design), so it is intentionally mode-invariant — labelled FSK4 to make that clear.
                     draw_panel(
                         ui,
                         "ACK (B→A, FSK4)",
@@ -1151,6 +1156,21 @@ impl eframe::App for LinkApp {
                         &mut self.panels[2],
                         spectrum_h,
                         waterfall_h,
+                        show_wf,
+                    );
+                });
+                ui.allocate_ui(egui::vec2(col_w, cols_h), |ui| {
+                    // Far-right column: B's received data signal (mode-dependent + noise), which is
+                    // what actually gets demodulated — so the "decoded" status belongs here. Grouped
+                    // on the right with Station B's I/Q constellation below.
+                    draw_panel(
+                        ui,
+                        "Station B ← data RX",
+                        &format!("{} + noise · {decoded}", subtitle.0),
+                        &mut self.panels[1],
+                        spectrum_h,
+                        waterfall_h,
+                        show_wf,
                     );
                 });
             });
@@ -1161,19 +1181,23 @@ impl eframe::App for LinkApp {
             if let Some(tex) = &qr {
                 ui.add_space(6.0);
                 let band_w = ui.available_width();
-                // Two constellation squares + the QR take 3×qr_side; the rest splits between the
-                // two text blocks flanking the QR.
-                let text_w = ((band_w - 3.0 * qr_side) / 2.0).max(0.0);
+                let show_const = self.ui_show_constellation;
+                // With both constellations shown the QR + 2 squares take 3×qr_side; otherwise just
+                // the QR. The remainder splits between the two text blocks flanking the QR.
+                let denom = if show_const { 3.0 } else { 1.0 };
+                let text_w = ((band_w - denom * qr_side) / 2.0).max(0.0);
                 ui.horizontal(|ui| {
                     // Far left: Station A (clean data TX) constellation.
-                    constellation_plot(
-                        ui,
-                        "const_a",
-                        "Station A — I/Q (TX)",
-                        &self.panels[0].iq,
-                        qr_side,
-                        egui::Color32::from_rgb(120, 200, 255),
-                    );
+                    if show_const {
+                        constellation_plot(
+                            ui,
+                            "const_a",
+                            "Station A — I/Q (TX)",
+                            &self.panels[0].iq,
+                            qr_side,
+                            egui::Color32::from_rgb(120, 200, 255),
+                        );
+                    }
                     // Left text (closest to the QR): wordmark + sub-line, pushed toward the QR.
                     ui.allocate_ui(egui::vec2(text_w, qr_side), |ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1216,15 +1240,18 @@ impl eframe::App for LinkApp {
                             });
                         });
                     });
-                    // Far right: Station B (post-channel data RX) constellation.
-                    constellation_plot(
-                        ui,
-                        "const_b",
-                        "Station B — I/Q (RX)",
-                        &self.panels[1].iq,
-                        qr_side,
-                        egui::Color32::from_rgb(255, 170, 110),
-                    );
+                    // Far right: Station B (post-channel data RX) constellation, aligned under the
+                    // far-right B-RX column.
+                    if show_const {
+                        constellation_plot(
+                            ui,
+                            "const_b",
+                            "Station B — I/Q (RX)",
+                            &self.panels[1].iq,
+                            qr_side,
+                            egui::Color32::from_rgb(255, 170, 110),
+                        );
+                    }
                 });
             }
         });
