@@ -1240,16 +1240,24 @@ impl eframe::App for LinkApp {
                             });
                         });
                     });
-                    // Far right: Station B (post-channel data RX) constellation, aligned under the
-                    // far-right B-RX column.
+                    // Far right: Station B (post-channel data RX) constellation, flush against the
+                    // window's right edge. Anchoring it in a right-to-left region pins it to the
+                    // border regardless of item-spacing/rounding in the row above (which otherwise
+                    // leaves a gap on the right).
                     if show_const {
-                        constellation_plot(
-                            ui,
-                            "const_b",
-                            "Station B — I/Q (RX)",
-                            &self.panels[1].iq,
-                            qr_side,
-                            egui::Color32::from_rgb(255, 170, 110),
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), qr_side),
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                constellation_plot(
+                                    ui,
+                                    "const_b",
+                                    "Station B — I/Q (RX)",
+                                    &self.panels[1].iq,
+                                    qr_side,
+                                    egui::Color32::from_rgb(255, 170, 110),
+                                );
+                            },
                         );
                     }
                 });
