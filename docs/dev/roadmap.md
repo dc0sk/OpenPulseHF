@@ -1509,6 +1509,30 @@ frames (TXDELAY 0x01, P 0x02, SlotTime 0x03, TXtail 0x04, FullDuplex 0x05, SetHa
 itself, so dropping is acceptable per the KISS spec — now logged (`debug!`) instead of silent. Real
 fix, if host TX-timing control is wanted: honor TXDELAY/TXtail/P/SlotTime.
 
+#### Why "wire ARQBW/ARQTIMEOUT for real" is blocked (deeper investigation 2026-06-28)
+
+Attempting the real wiring surfaced that it's the same class of gap as the signed-handshake one: the
+**ARDOP TNC never drives the adaptive session the host hints would bound.**
+- `crates/openpulse-ardop/src/main.rs` builds a `ModemEngine` and registers plugins but never calls
+  `start_adaptive_session` / `start_ota_session`. So `current_tx_level()` is always `None` and
+  `worker_loop` (`bridge.rs`) always takes the **fixed-`mode` path** (`transmit`/`receive`), never
+  the adaptive `transmit_arq` / `receive_with_ack_hint` branch. The rate ladder is dormant.
+- So `ARQBW` (a Hz cap on the ladder) has no ladder to cap, and `ARQTIMEOUT` (an ARQ connection
+  timeout) has no ARQ session/connection to time out — the worker does single-shot per-frame
+  `receive(mode, None)`.
+- Worse, the only existing bandwidth-cap lever, `ModemEngine::ota_set_level_bounds`, targets the
+  **OTA** controller (`self.ota`), whereas the worker's `current_tx_level()` reads the **rate_policy**
+  controller (`start_adaptive_session`) — different mechanisms. There is no rate_policy bandwidth cap
+  to wire `ARQBW` to today.
+
+Wiring a no-op into these dead fields would just re-create the "defined-but-not-consumed" gap the
+2026-06-27 audit removed, so it was deliberately NOT done. **Real fix (a feature, not a wire):**
+(1) make the ARDOP TNC optionally run an adaptive ARQ session (opt-in config → `start_adaptive_session`,
+activating the worker's existing adaptive branch); (2) add a rate_policy bandwidth cap
+(`SessionProfile` mode→occupied-bandwidth via `openpulse-qsy::bandplan::occupied_bandwidth_hz`) and a
+connection-timeout loop; (3) then `ARQBW`→cap and `ARQTIMEOUT`→timeout become real. Tracked here; not
+scheduled.
+
 ### Config/feature gaps — defined but not consumed (audit 2026-06-27)
 
 Audited every `OpenpulseConfig` field for a reader (the "defined but not consumed" gap). 72 of 79
