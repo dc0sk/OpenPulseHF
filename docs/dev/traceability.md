@@ -9,6 +9,26 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-28 — Linksim: I/Q constellation views flanking the QR branding band
+
+- **Requirement/change:** show a constellation diagram for Station A to the left of the QR code and
+  one for Station B to the right, keeping the text closest to the QR.
+- **Design decision:** the `FrameStep` carries only real passband waveforms, so derive baseband I/Q
+  via the existing `openpulse_core::iq::hilbert_iq` (fc=1500 Hz, fs=8 kHz — the `ModemEngine`
+  defaults), trim the 31-sample group-delay edges, RMS-normalize, and decimate to ≤700 points — the
+  same "viz straight from passband samples" approach the spectrum/waterfall already use. Map
+  Station A = `forward_tx` (clean TX, panel 0), Station B = `forward_rx` (post-channel RX, panel 1),
+  giving a clean-vs-noisy contrast that matches the app's "Station A | Channel | Station B" framing.
+  Branding band reordered to `[const A | wordmark | QR | tagline | const B]` so the text stays
+  nearest the QR and the constellations sit on the outer edges.
+- **Implementation:** `apps/openpulse-linksim/src/gui.rs` — `PanelView.iq`, `baseband_iq()`,
+  `constellation_plot()` (egui_plot `Points`, fixed unit bounds, no axes/grid), branding-band
+  rewrite.
+- **Tests:** GUI visualization (no unit test); `baseband_iq` reuses the unit-tested `hilbert_iq`.
+- **Test results:** `cargo build -p openpulse-linksim --features gui` green; `cargo clippy -p
+  openpulse-linksim --features gui --all-targets` 0 warnings. Visual confirmation pending (held for
+  the user before merge, per the GUI-change rule).
+
 ## 2026-06-27 — Logbook peer GRIDSQUARE via handshake (B): blocked, finding recorded
 
 - **Requirement/change:** carry the worked station's grid in the signed handshake so the logbook
