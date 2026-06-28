@@ -345,6 +345,263 @@ impl PanelApp {
             self.shared.lock().unwrap().connected = false;
         }
     }
+
+    /// Right-hand controls column: Mode, frequency, feature toggles, OTA, TX/squelch sliders,
+    /// and the Config/Messages/QSY actions — everything except the connection, PTT, and RF-connect
+    /// controls, which stay in the top toolbar.
+    fn draw_controls(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                // ── Mode selector ─────────────────────────────────────────────
+                ui.horizontal(|ui| {
+                    ui.label("Mode:");
+                    egui::ComboBox::from_id_salt("mode_combo")
+                        .selected_text(&self.selected_mode)
+                        .show_ui(ui, |ui| {
+                            for &m in MODES {
+                                if ui
+                                    .selectable_value(&mut self.selected_mode, m.into(), m)
+                                    .changed()
+                                {
+                                    self.send(ControlCommand::SetMode {
+                                        mode: self.selected_mode.clone(),
+                                    });
+                                }
+                            }
+                        });
+                });
+
+                // ── Frequency (CAT tune via rigctld) ──────────────────────────
+                ui.horizontal(|ui| {
+                    ui.label("Freq:");
+                    ui.add(
+                        egui::DragValue::new(&mut self.freq_khz)
+                            .speed(1.0)
+                            .range(1500.0..=30_000.0)
+                            .fixed_decimals(3)
+                            .suffix(" kHz"),
+                    );
+                    if ui
+                        .button("Tune")
+                        .on_hover_text("Set the rig frequency via CAT (rigctld)")
+                        .clicked()
+                    {
+                        self.send(ControlCommand::SetFreq {
+                            rig: "rigctld".into(),
+                            freq_hz: (self.freq_khz * 1000.0).round() as u64,
+                        });
+                    }
+                });
+
+                ui.separator();
+
+                // ── Feature toggles ───────────────────────────────────────────
+                let rep_label = if self.repeater_enabled {
+                    "Repeater: ON"
+                } else {
+                    "Repeater: OFF"
+                };
+                if ui.button(rep_label).clicked() {
+                    self.repeater_enabled = !self.repeater_enabled;
+                    if self.repeater_enabled {
+                        self.send(ControlCommand::EnableRepeater);
+                    } else {
+                        self.send(ControlCommand::DisableRepeater);
+                    }
+                }
+
+                let cessb_label = if self.cessb_enabled {
+                    "CE-SSB: ON"
+                } else {
+                    "CE-SSB: OFF"
+                };
+                if ui
+                    .button(cessb_label)
+                    .on_hover_text(
+                        "Controlled-Envelope SSB raises average TX power at fixed PEP on \
+                         high-PAPR multicarrier modes (OFDM/SC-FDMA). No-op for single-carrier modes.",
+                    )
+                    .clicked()
+                {
+                    self.cessb_enabled = !self.cessb_enabled;
+                    self.send(ControlCommand::SetCessb {
+                        enabled: self.cessb_enabled,
+                    });
+                }
+
+                let notch_label = if self.notch_enabled {
+                    "Notch: ON"
+                } else {
+                    "Notch: OFF"
+                };
+                if ui
+                    .button(notch_label)
+                    .on_hover_text(
+                        "Receiver automatic notch: removes out-of-band CW interference (QRM) \
+                         before demod. The protected band tracks the active mode, so your own \
+                         signal is never notched; an in-band interferer needs a QSY, not a notch.",
+                    )
+                    .clicked()
+                {
+                    self.notch_enabled = !self.notch_enabled;
+                    self.send(ControlCommand::SetNotch {
+                        enabled: self.notch_enabled,
+                    });
+                }
+
+                let log_label = if self.logbook_enabled {
+                    "Logbook: ON"
+                } else {
+                    "Logbook: OFF"
+                };
+                if ui
+                    .button(log_label)
+                    .on_hover_text(
+                        "Automatic ADIF logbook: append one record per contact (connect→disconnect) \
+                         to the configured .adi file, for import into logging software / LoTW / eQSL.",
+                    )
+                    .clicked()
+                {
+                    self.logbook_enabled = !self.logbook_enabled;
+                    self.send(ControlCommand::SetLogbook {
+                        enabled: self.logbook_enabled,
+                    });
+                }
+
+                ui.separator();
+
+                // ── OTA adaptive rate ─────────────────────────────────────────
+                {
+                    let (active, tx_level, tx_mode, tx_fec, rec, locked) = {
+                        let s = self.shared.lock().unwrap();
+                        (
+                            s.ota_active,
+                            s.ota_tx_level.clone(),
+                            s.ota_tx_mode.clone(),
+                            s.ota_tx_fec.clone(),
+                            s.ota_rx_recommended_level.clone(),
+                            s.ota_is_locked,
+                        )
+                    };
+                    if active {
+                        let txl = tx_level.clone().unwrap_or_else(|| "—".into());
+                        let txm = tx_mode.unwrap_or_else(|| "—".into());
+                        let rec_s = rec.unwrap_or_else(|| "—".into());
+                        ui.label(format!("OTA: {txl} {txm}/{tx_fec} (rec {rec_s})"));
+                        ui.horizontal(|ui| {
+                            let lock_label = if locked { "🔒 Unlock" } else { "Lock" };
+                            if ui.button(lock_label).clicked() {
+                                if locked {
+                                    self.send(ControlCommand::OtaUnlock);
+                                } else {
+                                    self.send(ControlCommand::OtaLockLevel {
+                                        level: tx_level.unwrap_or_else(|| "SL2".into()),
+                                    });
+                                }
+                            }
+                            if ui.button("Stop").on_hover_text("End the OTA session").clicked() {
+                                self.send(ControlCommand::StopOtaSession);
+                            }
+                        });
+                    } else {
+                        ui.label(RichText::new("OTA: off").color(Color32::GRAY));
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.ota_profile)
+                                    .desired_width(90.0)
+                                    .hint_text("profile"),
+                            );
+                            if ui
+                                .button("Start OTA")
+                                .on_hover_text("Start a receiver-led OTA adaptive-rate session")
+                                .clicked()
+                            {
+                                self.send(ControlCommand::StartOtaSession {
+                                    profile: self.ota_profile.clone(),
+                                });
+                            }
+                        });
+                    }
+                }
+
+                ui.separator();
+
+                // ── TX attenuation ────────────────────────────────────────────
+                ui.label("TX Atten:");
+                if ui
+                    .add(
+                        egui::Slider::new(&mut self.tx_atten_db, -30.0_f32..=0.0_f32)
+                            .suffix(" dB")
+                            .fixed_decimals(1),
+                    )
+                    .changed()
+                {
+                    self.send(ControlCommand::SetTxAttenuation {
+                        db: self.tx_atten_db,
+                        band: None,
+                    });
+                }
+
+                // ── DCD / squelch threshold ───────────────────────────────────
+                ui.label("Squelch:");
+                if ui
+                    .add(
+                        egui::Slider::new(&mut self.dcd_squelch, 0.0_f32..=0.2_f32)
+                            .fixed_decimals(3),
+                    )
+                    .on_hover_text(
+                        "DCD/squelch RMS threshold: raise above a noisy band's floor so the \
+                         carrier-present detector doesn't latch busy.",
+                    )
+                    .changed()
+                {
+                    self.send(ControlCommand::SetDcdSquelch {
+                        threshold: self.dcd_squelch,
+                    });
+                }
+
+                ui.separator();
+
+                // ── Config + Messages toggles ─────────────────────────────────
+                if ui.selectable_label(self.config_open, "⚙ Config").clicked() {
+                    self.config_open = !self.config_open;
+                }
+
+                let unread = self.shared.lock().unwrap().inbox.len();
+                let msg_label = if unread > 0 {
+                    format!("✉ Messages ({})", unread)
+                } else {
+                    "✉ Messages".into()
+                };
+                let on_messages = self.bottom_tab == BottomTab::Messages;
+                if ui.selectable_label(on_messages, msg_label).clicked() {
+                    self.bottom_tab = if on_messages {
+                        BottomTab::Events
+                    } else {
+                        self.send(ControlCommand::ListMessages);
+                        BottomTab::Messages
+                    };
+                }
+
+                // ── QSY buttons (when a request is pending) ────────────────────
+                let qsy_token = self.shared.lock().unwrap().pending_qsy_token.clone();
+                if let Some(token) = qsy_token {
+                    ui.separator();
+                    ui.label(RichText::new("QSY pending").color(Color32::YELLOW));
+                    ui.horizontal(|ui| {
+                        if ui.button("Accept QSY").clicked() {
+                            self.send(ControlCommand::AcceptQsy {
+                                token: token.clone(),
+                            });
+                        }
+                        if ui.button("Reject QSY").clicked() {
+                            self.send(ControlCommand::RejectQsy { token });
+                        }
+                    });
+                }
+            });
+    }
 }
 
 impl eframe::App for PanelApp {
@@ -441,250 +698,6 @@ impl eframe::App for PanelApp {
                         self.send(ControlCommand::ConnectPeer {
                             callsign: self.peer_callsign_input.trim().to_uppercase(),
                         });
-                    }
-                }
-
-                ui.separator();
-
-                // ── Mode selector ─────────────────────────────────────────────
-                ui.label("Mode:");
-                egui::ComboBox::from_id_salt("mode_combo")
-                    .selected_text(&self.selected_mode)
-                    .show_ui(ui, |ui| {
-                        for &m in MODES {
-                            if ui
-                                .selectable_value(&mut self.selected_mode, m.into(), m)
-                                .changed()
-                            {
-                                self.send(ControlCommand::SetMode {
-                                    mode: self.selected_mode.clone(),
-                                });
-                            }
-                        }
-                    });
-
-                // ── Frequency (CAT tune via rigctld) ──────────────────────────
-                ui.label("Freq:");
-                ui.add(
-                    egui::DragValue::new(&mut self.freq_khz)
-                        .speed(1.0)
-                        .range(1500.0..=30_000.0)
-                        .fixed_decimals(3)
-                        .suffix(" kHz"),
-                );
-                if ui
-                    .button("Tune")
-                    .on_hover_text("Set the rig frequency via CAT (rigctld)")
-                    .clicked()
-                {
-                    self.send(ControlCommand::SetFreq {
-                        rig: "rigctld".into(),
-                        freq_hz: (self.freq_khz * 1000.0).round() as u64,
-                    });
-                }
-
-                ui.separator();
-
-                // ── Repeater toggle ───────────────────────────────────────────
-                let rep_label = if self.repeater_enabled {
-                    "Repeater: ON"
-                } else {
-                    "Repeater: OFF"
-                };
-                if ui.button(rep_label).clicked() {
-                    self.repeater_enabled = !self.repeater_enabled;
-                    if self.repeater_enabled {
-                        self.send(ControlCommand::EnableRepeater);
-                    } else {
-                        self.send(ControlCommand::DisableRepeater);
-                    }
-                }
-
-                // ── CE-SSB envelope conditioning (multicarrier modes only) ────
-                let cessb_label = if self.cessb_enabled {
-                    "CE-SSB: ON"
-                } else {
-                    "CE-SSB: OFF"
-                };
-                if ui
-                    .button(cessb_label)
-                    .on_hover_text(
-                        "Controlled-Envelope SSB raises average TX power at fixed PEP on \
-                         high-PAPR multicarrier modes (OFDM/SC-FDMA). No-op for single-carrier modes.",
-                    )
-                    .clicked()
-                {
-                    self.cessb_enabled = !self.cessb_enabled;
-                    self.send(ControlCommand::SetCessb {
-                        enabled: self.cessb_enabled,
-                    });
-                }
-
-                // ── Receiver auto-notch (removes out-of-band CW interference) ────
-                let notch_label = if self.notch_enabled {
-                    "Notch: ON"
-                } else {
-                    "Notch: OFF"
-                };
-                if ui
-                    .button(notch_label)
-                    .on_hover_text(
-                        "Receiver automatic notch: removes out-of-band CW interference (QRM) \
-                         before demod. The protected band tracks the active mode, so your own \
-                         signal is never notched; an in-band interferer needs a QSY, not a notch.",
-                    )
-                    .clicked()
-                {
-                    self.notch_enabled = !self.notch_enabled;
-                    self.send(ControlCommand::SetNotch {
-                        enabled: self.notch_enabled,
-                    });
-                }
-
-                // ── ADIF logbook toggle ───────────────────────────────────────
-                let log_label = if self.logbook_enabled {
-                    "Logbook: ON"
-                } else {
-                    "Logbook: OFF"
-                };
-                if ui
-                    .button(log_label)
-                    .on_hover_text(
-                        "Automatic ADIF logbook: append one record per contact (connect→disconnect) \
-                         to the configured .adi file, for import into logging software / LoTW / eQSL.",
-                    )
-                    .clicked()
-                {
-                    self.logbook_enabled = !self.logbook_enabled;
-                    self.send(ControlCommand::SetLogbook {
-                        enabled: self.logbook_enabled,
-                    });
-                }
-
-                ui.separator();
-
-                // ── OTA adaptive rate ─────────────────────────────────────────
-                {
-                    let (active, tx_level, tx_mode, tx_fec, rec, locked) = {
-                        let s = self.shared.lock().unwrap();
-                        (
-                            s.ota_active,
-                            s.ota_tx_level.clone(),
-                            s.ota_tx_mode.clone(),
-                            s.ota_tx_fec.clone(),
-                            s.ota_rx_recommended_level.clone(),
-                            s.ota_is_locked,
-                        )
-                    };
-                    if active {
-                        let txl = tx_level.clone().unwrap_or_else(|| "—".into());
-                        let txm = tx_mode.unwrap_or_else(|| "—".into());
-                        let rec_s = rec.unwrap_or_else(|| "—".into());
-                        ui.label(format!("OTA: {txl} {txm}/{tx_fec} (rec {rec_s})"));
-                        let lock_label = if locked { "🔒 Unlock" } else { "Lock" };
-                        if ui.button(lock_label).clicked() {
-                            if locked {
-                                self.send(ControlCommand::OtaUnlock);
-                            } else {
-                                self.send(ControlCommand::OtaLockLevel {
-                                    level: tx_level.unwrap_or_else(|| "SL2".into()),
-                                });
-                            }
-                        }
-                        if ui.button("Stop").on_hover_text("End the OTA session").clicked() {
-                            self.send(ControlCommand::StopOtaSession);
-                        }
-                    } else {
-                        ui.label(RichText::new("OTA: off").color(Color32::GRAY));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.ota_profile)
-                                .desired_width(90.0)
-                                .hint_text("profile"),
-                        );
-                        if ui
-                            .button("Start OTA")
-                            .on_hover_text("Start a receiver-led OTA adaptive-rate session")
-                            .clicked()
-                        {
-                            self.send(ControlCommand::StartOtaSession {
-                                profile: self.ota_profile.clone(),
-                            });
-                        }
-                    }
-                }
-
-                ui.separator();
-
-                // ── TX attenuation ────────────────────────────────────────────
-                ui.label("TX Atten:");
-                if ui
-                    .add(
-                        egui::Slider::new(&mut self.tx_atten_db, -30.0_f32..=0.0_f32)
-                            .suffix(" dB")
-                            .fixed_decimals(1),
-                    )
-                    .changed()
-                {
-                    self.send(ControlCommand::SetTxAttenuation {
-                        db: self.tx_atten_db,
-                        band: None,
-                    });
-                }
-
-                // ── DCD / squelch threshold ───────────────────────────────────
-                ui.label("Squelch:");
-                if ui
-                    .add(
-                        egui::Slider::new(&mut self.dcd_squelch, 0.0_f32..=0.2_f32)
-                            .fixed_decimals(3),
-                    )
-                    .on_hover_text(
-                        "DCD/squelch RMS threshold: raise above a noisy band's floor so the \
-                         carrier-present detector doesn't latch busy.",
-                    )
-                    .changed()
-                {
-                    self.send(ControlCommand::SetDcdSquelch {
-                        threshold: self.dcd_squelch,
-                    });
-                }
-
-                // ── Config toggle ─────────────────────────────────────────────
-                ui.separator();
-                if ui.selectable_label(self.config_open, "⚙ Config").clicked() {
-                    self.config_open = !self.config_open;
-                }
-
-                // ── Messages toggle ───────────────────────────────────────────
-                let unread = self.shared.lock().unwrap().inbox.len();
-                let msg_label = if unread > 0 {
-                    format!("✉ Messages ({})", unread)
-                } else {
-                    "✉ Messages".into()
-                };
-                let on_messages = self.bottom_tab == BottomTab::Messages;
-                if ui.selectable_label(on_messages, msg_label).clicked() {
-                    // Toggle the bottom pane between Messages and Events.
-                    self.bottom_tab = if on_messages {
-                        BottomTab::Events
-                    } else {
-                        self.send(ControlCommand::ListMessages);
-                        BottomTab::Messages
-                    };
-                }
-
-                // ── QSY buttons ───────────────────────────────────────────────
-                let qsy_token = self.shared.lock().unwrap().pending_qsy_token.clone();
-                if let Some(token) = qsy_token {
-                    ui.separator();
-                    ui.label(RichText::new("QSY pending").color(egui::Color32::YELLOW));
-                    if ui.button("Accept QSY").clicked() {
-                        self.send(ControlCommand::AcceptQsy {
-                            token: token.clone(),
-                        });
-                    }
-                    if ui.button("Reject QSY").clicked() {
-                        self.send(ControlCommand::RejectQsy { token });
                     }
                 }
 
@@ -814,13 +827,25 @@ impl eframe::App for PanelApp {
             }
         }
 
-        // ── Central: spectrum left | session status right ────────────────────
+        // ── Right column: operational controls (everything except connection /
+        //    PTT / RF-connect, which stay in the top toolbar) ─────────────────
+        egui::SidePanel::right("controls_panel")
+            .resizable(true)
+            .default_width(240.0)
+            .show(ctx, |ui| {
+                self.draw_controls(ui);
+            });
+
+        // ── Central: spectrum + waterfall, with session status stacked below ──
         egui::CentralPanel::default().show(ctx, |ui| {
             let st = self.shared.lock().unwrap();
-            ui.columns(2, |cols| {
-                draw_spectrum_pane(&mut cols[0], &st, self.waterfall_tex.as_ref());
-                draw_session_status(&mut cols[1], &st);
-            });
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    draw_spectrum_pane(ui, &st, self.waterfall_tex.as_ref());
+                    ui.separator();
+                    draw_session_status(ui, &st);
+                });
         });
 
         // ── Config window ────────────────────────────────────────────────────

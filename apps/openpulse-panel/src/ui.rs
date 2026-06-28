@@ -95,10 +95,10 @@ pub fn draw_spectrum_pane(
                 });
         }
 
-        // Waterfall texture.
+        // Waterfall texture — full width, matching the spectrum plot above.
         ui.label(RichText::new("Waterfall").strong());
         if let Some(tex) = waterfall_tex {
-            let size = egui::vec2(ui.available_width().min(512.0), 64.0);
+            let size = egui::vec2(ui.available_width(), 96.0);
             ui.image((tex.id(), size));
         } else {
             ui.label(RichText::new("waiting for waterfall…").color(Color32::DARK_GRAY));
