@@ -127,6 +127,7 @@ pub fn run(addr: &str, cmd: DaemonCommands) -> Result<i32> {
         }
         DaemonCommands::SetCessb { enabled } => simple(addr, ControlCommand::SetCessb { enabled }),
         DaemonCommands::SetNotch { enabled } => simple(addr, ControlCommand::SetNotch { enabled }),
+        DaemonCommands::SetAgc { enabled } => simple(addr, ControlCommand::SetAgc { enabled }),
         DaemonCommands::SetLogbook { enabled } => {
             simple(addr, ControlCommand::SetLogbook { enabled })
         }
