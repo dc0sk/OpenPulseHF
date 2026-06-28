@@ -13,7 +13,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use egui_plot::{Line, Plot, PlotPoint, PlotPoints, Text};
+use egui_plot::{Line, Plot, PlotPoint, PlotPoints, Points, Text};
 use openpulse_audio::CpalBackend;
 use openpulse_channel::dsp::{PowerSpectrum, WaterfallBuffer, FREQ_BINS, WATERFALL_ROWS};
 use openpulse_core::audio::{AudioBackend, AudioConfig, AudioOutputStream};
@@ -172,6 +172,8 @@ struct PanelView {
     ps: PowerSpectrum,
     wf: WaterfallBuffer,
     spectrum: Vec<f32>,
+    /// Normalized baseband I/Q scatter of the most recent waveform, for the constellation view.
+    iq: Vec<[f64; 2]>,
     generation: u64,
     tex: Option<egui::TextureHandle>,
     last_gen: u64,
@@ -183,6 +185,7 @@ impl PanelView {
             ps: PowerSpectrum::new(),
             wf: WaterfallBuffer::new(WATERFALL_ROWS),
             spectrum: vec![MIN_DB; FREQ_BINS],
+            iq: Vec::new(),
             generation: 0,
             tex: None,
             last_gen: u64::MAX,
@@ -195,8 +198,74 @@ impl PanelView {
         let spec = self.ps.compute(samples);
         self.wf.push(&spec, MIN_DB, MAX_DB);
         self.spectrum = spec;
+        self.iq = baseband_iq(samples);
         self.generation += 1;
     }
+}
+
+/// Normalized baseband I/Q scatter for the constellation view, via Hilbert downconversion of the
+/// 1500 Hz passband at 8 kHz. The filter group-delay edges are trimmed and the cloud is decimated
+/// to keep the plot light. Returns points scaled so the RMS magnitude is ≈ 1.0.
+fn baseband_iq(samples: &[f32]) -> Vec<[f64; 2]> {
+    const FC: f32 = 1500.0; // ModemEngine default center frequency
+    const FS: f32 = 8000.0;
+    const EDGE: usize = 31; // hilbert_iq group-delay artifact margin
+    const MAX_POINTS: usize = 700;
+    let (i_bb, q_bb) = openpulse_core::iq::hilbert_iq(samples, FC, FS);
+    let n = i_bb.len();
+    if n <= 2 * EDGE {
+        return Vec::new();
+    }
+    let (lo, hi) = (EDGE, n - EDGE);
+    let used = hi - lo;
+    let mut sumsq = 0.0f64;
+    for k in lo..hi {
+        sumsq += (i_bb[k] as f64).powi(2) + (q_bb[k] as f64).powi(2);
+    }
+    let rms = (sumsq / used as f64).sqrt().max(1e-9);
+    let step = (used / MAX_POINTS).max(1);
+    (lo..hi)
+        .step_by(step)
+        .map(|k| [i_bb[k] as f64 / rms, q_bb[k] as f64 / rms])
+        .collect()
+}
+
+/// A square I/Q constellation scatter (title above, fixed unit-ish bounds, no axes/grid).
+fn constellation_plot(
+    ui: &mut egui::Ui,
+    id: &str,
+    title: &str,
+    points: &[[f64; 2]],
+    side: f32,
+    color: egui::Color32,
+) {
+    ui.allocate_ui(egui::vec2(side, side), |ui| {
+        ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(title)
+                    .size(13.0)
+                    .strong()
+                    .color(egui::Color32::from_gray(200)),
+            );
+            let pts: PlotPoints = points.iter().copied().collect();
+            Plot::new(id)
+                .width(side)
+                .height((side - 22.0).max(40.0))
+                .data_aspect(1.0)
+                .show_axes([false, false])
+                .show_grid(false)
+                .allow_zoom(false)
+                .allow_drag(false)
+                .allow_scroll(false)
+                .include_x(-1.8)
+                .include_x(1.8)
+                .include_y(-1.8)
+                .include_y(1.8)
+                .show(ui, |p| {
+                    p.points(Points::new(pts).radius(1.2).color(color));
+                });
+        });
+    });
 }
 
 struct LinkApp {
@@ -1026,17 +1095,29 @@ impl eframe::App for LinkApp {
                 });
             });
 
-            // Branding band below the waterfalls: big "OpenPulseHF" on the left, the QR
-            // centered, and a two-line tagline on the right.
+            // Branding band below the waterfalls: Station A's I/Q constellation on the far left,
+            // the wordmark, the QR centered, the tagline, and Station B's I/Q constellation on the
+            // far right. The text stays closest to the QR; the constellations sit on the edges.
             if let Some(tex) = &qr {
                 ui.add_space(6.0);
                 let band_w = ui.available_width();
-                let side_w = ((band_w - qr_side) / 2.0).max(0.0);
+                // Two constellation squares + the QR take 3×qr_side; the rest splits between the
+                // two text blocks flanking the QR.
+                let text_w = ((band_w - 3.0 * qr_side) / 2.0).max(0.0);
                 ui.horizontal(|ui| {
-                    // Left: large wordmark + sub-line filling its half, pushed toward the QR.
-                    ui.allocate_ui(egui::vec2(side_w, qr_side), |ui| {
+                    // Far left: Station A (clean data TX) constellation.
+                    constellation_plot(
+                        ui,
+                        "const_a",
+                        "Station A — I/Q (TX)",
+                        &self.panels[0].iq,
+                        qr_side,
+                        egui::Color32::from_rgb(120, 200, 255),
+                    );
+                    // Left text (closest to the QR): wordmark + sub-line, pushed toward the QR.
+                    ui.allocate_ui(egui::vec2(text_w, qr_side), |ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.add_space(16.0);
+                            ui.add_space(12.0);
                             ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
                                 ui.label(
                                     egui::RichText::new("OpenPulseHF")
@@ -1058,10 +1139,10 @@ impl eframe::App for LinkApp {
                         egui::vec2(qr_side, qr_side),
                     )))
                     .on_hover_text("OpenPulseHF");
-                    // Right: two-line tagline, left-aligned and vertically centered.
-                    ui.allocate_ui(egui::vec2(side_w, qr_side), |ui| {
+                    // Right text (closest to the QR): tagline, left-aligned and vertically centered.
+                    ui.allocate_ui(egui::vec2(text_w, qr_side), |ui| {
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            ui.add_space(16.0);
+                            ui.add_space(12.0);
                             ui.vertical(|ui| {
                                 ui.label(
                                     egui::RichText::new("Free & Opensource").size(24.0).strong(),
@@ -1075,6 +1156,15 @@ impl eframe::App for LinkApp {
                             });
                         });
                     });
+                    // Far right: Station B (post-channel data RX) constellation.
+                    constellation_plot(
+                        ui,
+                        "const_b",
+                        "Station B — I/Q (RX)",
+                        &self.panels[1].iq,
+                        qr_side,
+                        egui::Color32::from_rgb(255, 170, 110),
+                    );
                 });
             }
         });
