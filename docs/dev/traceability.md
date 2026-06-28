@@ -9,6 +9,25 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-28 — Linksim: regroup Station B views + waterfall/constellation toggles
+
+- **Requirement/change:** swap the Station B RX spectrum/waterfall with the ACK/NACK
+  spectrum/waterfall; keep Station B's constellation at the far right; add controls to
+  enable/disable the waterfalls and the constellation diagrams.
+- **Design decision:** swap the middle and far-right signal columns so the column order is
+  `[A TX | ACK (B→A) | B RX]` — grouping all of Station B's RX views (spectrum, waterfall, and the
+  far-right I/Q constellation in the branding band) on the right, with the ACK in the middle. Two
+  toolbar checkboxes (`ui_show_waterfall`, `ui_show_constellation`, both default on): `draw_panel`
+  gains a `show_waterfall` flag (early-returns after the spectrum when off); the branding band
+  conditionally renders the two `constellation_plot`s and recomputes the flanking text width
+  (`3×qr_side` → `1×qr_side`) so the QR stays centered when constellations are hidden.
+- **Implementation:** `apps/openpulse-linksim/src/gui.rs` — toolbar checkboxes; column swap
+  (panels[2] ACK middle, panels[1] B RX far right); `draw_panel(.., show_waterfall)`; gated
+  branding band.
+- **Tests:** GUI layout/visualization (no unit test); existing gui unit tests unaffected.
+- **Test results:** `cargo build/clippy/test -p openpulse-linksim --features gui` green (3/3 gui
+  unit tests). Visual confirmation pending (held before merge per the GUI-change rule).
+
 ## 2026-06-28 — Linksim: symbol-spaced (crisp-dot) constellations
 
 - **Requirement/change:** sharpen the I/Q constellations (#574) from a full-rate cloud to discrete
