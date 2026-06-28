@@ -9,6 +9,26 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-28 — Panel: controls to a right side-panel; status below the waterfall
+
+- **Requirement/change:** move the right-column (session status) elements below the waterfall; make
+  the waterfall as wide as the spectrum; move all controls except connection / PTT / callsign+Connect-RF
+  into the right column.
+- **Design decision:** keep only connection (transport/server/Connect), PTT, RF-connect
+  (callsign/Connect RF), and the connection indicator in the top toolbar. Everything else (Mode,
+  Freq/Tune, Repeater, CE-SSB, Notch, Logbook, OTA, TX Atten, Squelch, Config, Messages, QSY) moves
+  to a resizable right `SidePanel` rendered by a new `PanelApp::draw_controls`. The `CentralPanel`
+  drops its 2-column split and stacks the spectrum pane (now full width) then the session status
+  below it, inside a vertical `ScrollArea`. Waterfall widened to the full pane width (was capped at
+  512 px) in `draw_spectrum_pane`.
+- **Implementation:** `apps/openpulse-panel/src/app.rs` — toolbar slimmed; `draw_controls` method;
+  right `SidePanel` + stacked `CentralPanel`. `apps/openpulse-panel/src/ui.rs` — waterfall size to
+  `available_width × 96`.
+- **Tests:** GUI layout (no unit test).
+- **Test results:** `cargo fmt -p openpulse-panel --check` clean; `cargo build -p openpulse-panel`
+  green; `cargo clippy -p openpulse-panel --all-targets -- -D warnings` 0 warnings. Visual
+  confirmation pending (held before merge per the GUI-change rule).
+
 ## 2026-06-28 — Linksim: regroup Station B views + waterfall/constellation toggles
 
 - **Requirement/change:** swap the Station B RX spectrum/waterfall with the ACK/NACK
