@@ -876,7 +876,13 @@ the long-deferred "adaptive rate-stepping over the air (RX lockstep)" item.
 
 ### 10.6 — Remaining follow-ons (deferred)
 - Dual-station hardware validation of the OTA ladder (rpi51↔rpi52) per the runbooks.
-- Streaming-`Agc` rollout to the PSK ladder with active-span gating.
+- Streaming-`Agc` rollout to the PSK ladder with active-span gating — ✅ **Done (2026-06-28)**.
+  Opt-in receiver AGC at the single `route_audio_stage(InputCapture)` seam (default off, after the
+  notch), active-span gated via `Agc::lock`/`unlock` on the DCD squelch so leading silence can't
+  ramp the gain. Engine API `enable_agc`/`disable_agc`/`configure_agc`/`agc_gain_db` +
+  `agc_blocks_processed` tripwire; daemon `SetAgc` control + CLI `daemon set-agc`. Tests:
+  `crates/openpulse-modem/tests/agc_loopback.rs` (4). Panel toggle parity is the only remaining
+  follow-up (GUI).
 - (CE-SSB on-air validation is now complete — average-power gain *and* spectral mask
   both confirmed on real RF; see §10.8.)
 

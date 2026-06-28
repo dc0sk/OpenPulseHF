@@ -353,6 +353,15 @@ pub struct ModemEngine {
     /// Count of capture blocks the notch processed — a tripwire: an enabled notch that never runs
     /// on a given path (e.g. a new capture path that skips the InputCapture seam) leaves this at 0.
     notch_blocks_processed: u64,
+    /// Receiver-side streaming AGC on captured audio (default off). Normalises the level so the
+    /// PSK/QAM ladder sees a consistent amplitude despite QSB fading and inter-station spread.
+    /// Active-span gated: the gain only adapts on carrier-present blocks (RMS ≥ DCD threshold) and
+    /// is frozen through silence, so a long leading gap can't ramp it to its clamp before the burst.
+    agc_enabled: bool,
+    /// The AGC loop, used only while `agc_enabled`.
+    agc: openpulse_dsp::agc::Agc,
+    /// Count of capture blocks the AGC processed — same tripwire role as `notch_blocks_processed`.
+    agc_blocks_processed: u64,
 }
 
 /// CE-SSB TX conditioning clip level as a multiple of the RMS envelope. 2.0×
@@ -414,6 +423,10 @@ impl ModemEngine {
             notch_in_band_interferers: Vec::new(),
             rx_mode: None,
             notch_blocks_processed: 0,
+            agc_enabled: false,
+            // target RMS 0.3 (headroom below ±1.0), slow loop (α=0.02), ±40 dB clamp.
+            agc: openpulse_dsp::agc::Agc::new(0.3, 0.02, 40.0),
+            agc_blocks_processed: 0,
         }
     }
 
@@ -503,6 +516,58 @@ impl ModemEngine {
             self.notch_in_band_interferers = in_band;
         }
         self.notch_bank.process_block(&samples)
+    }
+
+    /// Enable the receiver-side streaming AGC (level normalisation before demod). Off by default.
+    pub fn enable_agc(&mut self) {
+        self.agc_enabled = true;
+    }
+
+    /// Disable the receiver-side streaming AGC.
+    pub fn disable_agc(&mut self) {
+        self.agc_enabled = false;
+        self.agc.reset();
+    }
+
+    /// Whether the receiver-side streaming AGC is enabled.
+    pub fn is_agc_enabled(&self) -> bool {
+        self.agc_enabled
+    }
+
+    /// Configure the AGC loop: target output RMS, adaptation rate `bandwidth` (α in (0,1]), and the
+    /// symmetric gain clamp in dB. Resets the loop. See [`openpulse_dsp::agc::Agc::new`].
+    pub fn configure_agc(&mut self, target_rms: f32, bandwidth: f32, max_gain_db: f32) {
+        self.agc = openpulse_dsp::agc::Agc::new(target_rms, bandwidth, max_gain_db);
+    }
+
+    /// Number of capture blocks the AGC has processed — a tripwire for the "feature wired at a seam
+    /// the runtime path skips" class of gap (see [`Self::notch_blocks_processed`]).
+    pub fn agc_blocks_processed(&self) -> u64 {
+        self.agc_blocks_processed
+    }
+
+    /// Current AGC gain in dB (0 dB = unity). A readout of the active-span loop state.
+    pub fn agc_gain_db(&self) -> f32 {
+        self.agc.gain_db()
+    }
+
+    /// Apply the streaming AGC to one capture block, active-span gated: the gain only adapts on
+    /// carrier-present blocks (RMS ≥ DCD squelch) and is frozen through silence, so a long leading
+    /// gap can't ramp the gain to its clamp before the burst arrives.
+    fn apply_rx_agc(&mut self, mut samples: Vec<f32>) -> Vec<f32> {
+        let n = samples.len();
+        let rms = if n == 0 {
+            0.0
+        } else {
+            (samples.iter().map(|s| s * s).sum::<f32>() / n as f32).sqrt()
+        };
+        if rms >= self.dcd.threshold() {
+            self.agc.unlock();
+        } else {
+            self.agc.lock();
+        }
+        self.agc.process(&mut samples);
+        samples
     }
 
     /// Enable/disable CE-SSB TX envelope conditioning (master switch). It still
@@ -4372,14 +4437,21 @@ impl ModemEngine {
             .route_audio(stage, payload)
             .map_err(|e| ModemError::Configuration(e.to_string()))?;
         // The receiver front end lives at this single seam: every capture path funnels its raw
-        // samples through `route_audio_stage(InputCapture)` exactly once, so placing the notch
-        // here (rather than in any one capture entry function) covers them all by construction.
-        if stage == PipelineStage::InputCapture && self.notch_enabled {
-            self.notch_blocks_processed = self.notch_blocks_processed.wrapping_add(1);
-            let mode = self.rx_mode.clone();
-            return Ok(AudioSamples {
-                samples: self.apply_rx_notch(mode.as_deref(), routed.samples),
-            });
+        // samples through `route_audio_stage(InputCapture)` exactly once, so placing front-end
+        // transforms here (rather than in any one capture entry function) covers them all by
+        // construction. Order: notch (remove interference) → AGC (normalise the cleaned level).
+        if stage == PipelineStage::InputCapture {
+            let mut samples = routed.samples;
+            if self.notch_enabled {
+                self.notch_blocks_processed = self.notch_blocks_processed.wrapping_add(1);
+                let mode = self.rx_mode.clone();
+                samples = self.apply_rx_notch(mode.as_deref(), samples);
+            }
+            if self.agc_enabled {
+                self.agc_blocks_processed = self.agc_blocks_processed.wrapping_add(1);
+                samples = self.apply_rx_agc(samples);
+            }
+            return Ok(AudioSamples { samples });
         }
         Ok(routed)
     }

@@ -9,6 +9,29 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-28 — Streaming AGC rollout to the PSK ladder (active-span gated)
+
+- **Requirement/change:** roadmap 10.6 — roll the existing `openpulse-dsp::agc::Agc` out as a
+  receiver front-end level normaliser for the PSK/QAM ladder, with active-span gating.
+- **Design decision:** place it at the **single `route_audio_stage(InputCapture)` seam** (after the
+  notch: remove interference, then normalise) so every capture path — `receive*` family and the
+  daemon's `accumulate_capture` streaming path — gets it by construction. Opt-in (default off), like
+  the notch, so dense-mode canaries can't regress unless enabled. The AGC's own docs forbid running
+  on the raw capture (leading silence ramps the gain to its clamp); satisfied via **active-span
+  gating** — `Agc::lock()` freezes the gain on sub-squelch (silent) blocks, `unlock()` adapts on
+  carrier-present blocks (RMS ≥ DCD threshold). Tripwire counter mirrors the notch's. Exposed for the
+  running daemon (no dead capability): `ControlCommand::SetAgc` + CLI `daemon set-agc`.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`agc`/`agc_enabled`/
+  `agc_blocks_processed` fields, `enable_agc`/`disable_agc`/`configure_agc`/`is_agc_enabled`/
+  `agc_gain_db`/`agc_blocks_processed`, `apply_rx_agc`, seam wiring); `openpulse-daemon`
+  `protocol.rs` + `lib.rs` (`SetAgc`); `openpulse-cli` `cli.rs` + `commands/daemon.rs` (`SetAgc`).
+- **Tests:** `crates/openpulse-modem/tests/agc_loopback.rs` — off-by-default+toggle; tripwire on the
+  `accumulate_capture` (daemon) path; active-span gating (gain ~0 dB through silence, boosts a weak
+  carrier); decode of a ~30 dB-attenuated QPSK500 frame with AGC on.
+- **Test results:** `agc_loopback` 4/4; full `openpulse-modem --no-default-features` suite green;
+  `notch_loopback` 4/4 (notch path unchanged); workspace build (excl. pki-tooling) green; clippy
+  (modem/daemon/cli) 0 warnings.
+
 ## 2026-06-28 — Host-driven TNC control (ARQBW/ARQTIMEOUT): blocked, finding recorded
 
 - **Requirement/change:** wire the ARDOP `ARQBW`/`ARQTIMEOUT` host hints into the engine for real,

@@ -1563,6 +1563,13 @@ pub async fn apply_command_to_engine(
                 engine.disable_notch();
             }
         }
+        ControlCommand::SetAgc { enabled } => {
+            if *enabled {
+                engine.enable_agc();
+            } else {
+                engine.disable_agc();
+            }
+        }
         ControlCommand::SetLogbook { enabled } => {
             runtime_state.logbook.set_enabled(*enabled);
         }
