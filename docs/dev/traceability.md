@@ -9,6 +9,23 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-28 — Linksim: symbol-spaced (crisp-dot) constellations
+
+- **Requirement/change:** sharpen the I/Q constellations (#574) from a full-rate cloud to discrete
+  per-symbol dots so the clean-TX vs noisy-RX contrast reads as a real constellation.
+- **Design decision:** parse samples/symbol from the mode's trailing baud (`samples_per_symbol`,
+  order/suffix-stripped; `None` for OFDM/SCFDMA/PILOT/FSK which have no PSK symbol grid), then
+  sample the Hilbert baseband once per symbol at the **best timing phase** (peak mean magnitude —
+  symbol centers carry full amplitude, transitions dip). No full timing/carrier recovery — a cheap
+  estimate that's honest about being a viz, not a demod. Multicarrier/FSK keep the full-rate cloud.
+- **Implementation:** `apps/openpulse-linksim/src/gui.rs` — `samples_per_symbol()`, `baseband_iq()`
+  best-phase symbol-spaced path, `PanelView::push(samples, sps)`, `sps` threaded from `fs.mode`.
+- **Tests:** `apps/openpulse-linksim/src/gui.rs` unit tests (gui feature): baud parsing
+  (order/suffix/multicarrier cases), and symbol-spaced-vs-cloud (far fewer points + tighter
+  Q-spread on synthetic BPSK).
+- **Test results:** `cargo test -p openpulse-linksim --features gui --bin openpulse-linksim-gui`
+  3/3 pass; `cargo clippy -p openpulse-linksim --features gui --all-targets` 0 warnings.
+
 ## 2026-06-28 — Streaming AGC rollout to the PSK ladder (active-span gated)
 
 - **Requirement/change:** roadmap 10.6 — roll the existing `openpulse-dsp::agc::Agc` out as a

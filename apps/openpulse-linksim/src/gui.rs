@@ -191,22 +191,53 @@ impl PanelView {
             last_gen: u64::MAX,
         }
     }
-    fn push(&mut self, samples: &[f32]) {
+    fn push(&mut self, samples: &[f32], sps: usize) {
         if samples.is_empty() {
             return;
         }
         let spec = self.ps.compute(samples);
         self.wf.push(&spec, MIN_DB, MAX_DB);
         self.spectrum = spec;
-        self.iq = baseband_iq(samples);
+        self.iq = baseband_iq(samples, sps);
         self.generation += 1;
     }
 }
 
+/// Samples per symbol for a single-carrier PSK/QAM mode at 8 kHz, parsed from the mode name's
+/// trailing baud number (e.g. `BPSK250` → 32, `8PSK1000` → 8, `64QAM2000-RRC` → 4). Returns `None`
+/// for multicarrier/pilot/FSK modes, whose passband I/Q has no clean PSK symbol grid.
+fn samples_per_symbol(mode: &str) -> Option<usize> {
+    const FS: f32 = 8000.0;
+    let m = mode.to_ascii_uppercase();
+    if m.starts_with("OFDM") || m.starts_with("SCFDMA") || m.starts_with("PILOT") || m.starts_with("FSK")
+    {
+        return None;
+    }
+    // Baud = the final run of digits before any `-RRC`/`-P4` suffix (clearing on each letter keeps
+    // only the trailing run, so the leading order digit of `8PSK`/`64QAM` is discarded).
+    let base = m.split('-').next().unwrap_or(&m);
+    let mut baud_str = String::new();
+    for c in base.chars() {
+        if c.is_ascii_digit() {
+            baud_str.push(c);
+        } else {
+            baud_str.clear();
+        }
+    }
+    let baud: f32 = baud_str.parse().ok()?;
+    if baud <= 0.0 {
+        return None;
+    }
+    let sps = (FS / baud).round() as usize;
+    (sps >= 2).then_some(sps)
+}
+
 /// Normalized baseband I/Q scatter for the constellation view, via Hilbert downconversion of the
-/// 1500 Hz passband at 8 kHz. The filter group-delay edges are trimmed and the cloud is decimated
-/// to keep the plot light. Returns points scaled so the RMS magnitude is ≈ 1.0.
-fn baseband_iq(samples: &[f32]) -> Vec<[f64; 2]> {
+/// 1500 Hz passband at 8 kHz. The filter group-delay edges are trimmed. When `sps` (samples per
+/// symbol) is ≥ 2 the cloud is sampled once per symbol at the best timing phase — discrete dots
+/// (clean on TX, noise-smeared on RX); otherwise a fixed decimation of the full-rate I/Q cloud is
+/// returned. Points are scaled so the RMS magnitude is ≈ 1.0.
+fn baseband_iq(samples: &[f32], sps: usize) -> Vec<[f64; 2]> {
     const FC: f32 = 1500.0; // ModemEngine default center frequency
     const FS: f32 = 8000.0;
     const EDGE: usize = 31; // hilbert_iq group-delay artifact margin
@@ -217,16 +248,42 @@ fn baseband_iq(samples: &[f32]) -> Vec<[f64; 2]> {
         return Vec::new();
     }
     let (lo, hi) = (EDGE, n - EDGE);
-    let used = hi - lo;
-    let mut sumsq = 0.0f64;
-    for k in lo..hi {
-        sumsq += (i_bb[k] as f64).powi(2) + (q_bb[k] as f64).powi(2);
+    let mag2 = |k: usize| (i_bb[k] as f64).powi(2) + (q_bb[k] as f64).powi(2);
+
+    let indices: Vec<usize> = if sps >= 2 {
+        // Symbol-spaced sampling at the phase whose samples carry the most energy: symbol centers
+        // hold full amplitude while transitions dip, so peak mean magnitude ≈ best timing.
+        let best_phase = (0..sps)
+            .max_by(|&a, &b| {
+                let e = |p: usize| {
+                    let pts: Vec<usize> = (lo + p..hi).step_by(sps).collect();
+                    let s: f64 = pts.iter().map(|&k| mag2(k)).sum();
+                    if pts.is_empty() {
+                        0.0
+                    } else {
+                        s / pts.len() as f64
+                    }
+                };
+                e(a).total_cmp(&e(b))
+            })
+            .unwrap_or(0);
+        (lo + best_phase..hi).step_by(sps).collect()
+    } else {
+        let step = ((hi - lo) / MAX_POINTS).max(1);
+        (lo..hi).step_by(step).collect()
+    };
+
+    if indices.is_empty() {
+        return Vec::new();
     }
-    let rms = (sumsq / used as f64).sqrt().max(1e-9);
-    let step = (used / MAX_POINTS).max(1);
-    (lo..hi)
+    let rms = (indices.iter().map(|&k| mag2(k)).sum::<f64>() / indices.len() as f64)
+        .sqrt()
+        .max(1e-9);
+    let step = (indices.len() / MAX_POINTS).max(1);
+    indices
+        .iter()
         .step_by(step)
-        .map(|k| [i_bb[k] as f64 / rms, q_bb[k] as f64 / rms])
+        .map(|&k| [i_bb[k] as f64 / rms, q_bb[k] as f64 / rms])
         .collect()
 }
 
@@ -568,11 +625,14 @@ impl LinkApp {
                 h.publish(&fs);
             }
 
-            self.panels[0].push(&fs.forward_tx);
-            self.panels[1].push(&fs.forward_rx);
+            // Symbol-spaced constellation decimation for the single-carrier data mode (panels 0/1);
+            // the FSK4 ACK (panel 2) has no PSK symbol grid, so it keeps the full-rate I/Q cloud.
+            let sps = samples_per_symbol(&fs.mode).unwrap_or(0);
+            self.panels[0].push(&fs.forward_tx, sps);
+            self.panels[1].push(&fs.forward_rx, sps);
             // The return ACK as heard back at A (post reverse channel) — using the noisy RX
             // (not the clean TX) so the waterfall actually moves frame-to-frame.
-            self.panels[2].push(&fs.ack_rx);
+            self.panels[2].push(&fs.ack_rx, 0);
 
             self.frame_counter += 1;
             self.attempted += 1;
@@ -1220,4 +1280,63 @@ fn main() -> eframe::Result<()> {
             Ok(Box::new(app))
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{baseband_iq, samples_per_symbol};
+
+    #[test]
+    fn samples_per_symbol_uses_trailing_baud() {
+        assert_eq!(samples_per_symbol("BPSK250"), Some(32)); // 8000/250
+        assert_eq!(samples_per_symbol("QPSK500"), Some(16));
+        assert_eq!(samples_per_symbol("8PSK1000"), Some(8)); // leading order digit ignored
+        assert_eq!(samples_per_symbol("64QAM2000-RRC"), Some(4)); // suffix + order stripped
+        assert_eq!(samples_per_symbol("QPSK2000-RRC"), Some(4));
+    }
+
+    #[test]
+    fn samples_per_symbol_skips_multicarrier_and_fsk() {
+        assert_eq!(samples_per_symbol("OFDM52-8PSK"), None);
+        assert_eq!(samples_per_symbol("SCFDMA52-16QAM"), None);
+        assert_eq!(samples_per_symbol("PILOT-QPSK500"), None);
+        assert_eq!(samples_per_symbol("FSK4-ACK"), None);
+    }
+
+    #[test]
+    fn symbol_spaced_constellation_is_tighter_than_the_cloud() {
+        // A clean BPSK-like passband: 1500 Hz carrier, phase flipped every 32 samples (250 baud).
+        let fs = 8000.0f32;
+        let fc = 1500.0f32;
+        let sps = 32usize;
+        let mut samples = Vec::new();
+        for sym in 0..60 {
+            let phase = if sym % 2 == 0 { 0.0 } else { std::f32::consts::PI };
+            for k in 0..sps {
+                let t = (sym * sps + k) as f32;
+                samples.push((2.0 * std::f32::consts::PI * fc / fs * t + phase).cos());
+            }
+        }
+        let cloud = baseband_iq(&samples, 0);
+        let dots = baseband_iq(&samples, sps);
+        assert!(!dots.is_empty() && !cloud.is_empty());
+        // Structural: one point per symbol, far fewer than the full-rate cloud.
+        assert!(
+            dots.len() * 4 < cloud.len(),
+            "symbol-spaced {} points should be far fewer than the cloud's {}",
+            dots.len(),
+            cloud.len()
+        );
+        // BPSK symbol-spaced points sit on the ±I axis → small |Q| spread; the full-rate cloud
+        // sweeps the transition arcs → larger |Q| spread.
+        let q_spread = |pts: &[[f64; 2]]| {
+            (pts.iter().map(|p| p[1] * p[1]).sum::<f64>() / pts.len() as f64).sqrt()
+        };
+        assert!(
+            q_spread(&dots) < q_spread(&cloud),
+            "symbol-spaced Q spread {:.3} should be under the cloud's {:.3}",
+            q_spread(&dots),
+            q_spread(&cloud)
+        );
+    }
 }
