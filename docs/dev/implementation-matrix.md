@@ -2,13 +2,18 @@
 project: openpulsehf
 doc: docs/dev/implementation-matrix.md
 status: living
-last_updated: 2026-05-17
+last_updated: 2026-06-29
 ---
 
 # Implementation Matrix
 
 This matrix maps major user-facing and protocol features to the primary implementation
 surface and the strongest integration-test evidence currently in-tree.
+
+> For the full numbered, cross-linked traceability (REQ-IDs ↔ CAP-IDs, with design decisions,
+> tests, results, supporting assets, and PRs), see
+> [traceability-matrix.md](steering/traceability-matrix.md). This page is the quick
+> feature → implementation → test summary.
 
 ## Core protocol and security
 
