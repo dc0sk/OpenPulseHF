@@ -881,8 +881,9 @@ the long-deferred "adaptive rate-stepping over the air (RX lockstep)" item.
   notch), active-span gated via `Agc::lock`/`unlock` on the DCD squelch so leading silence can't
   ramp the gain. Engine API `enable_agc`/`disable_agc`/`configure_agc`/`agc_gain_db` +
   `agc_blocks_processed` tripwire; daemon `SetAgc` control + CLI `daemon set-agc`. Tests:
-  `crates/openpulse-modem/tests/agc_loopback.rs` (4). Panel toggle parity is the only remaining
-  follow-up (GUI).
+  `crates/openpulse-modem/tests/agc_loopback.rs` (4). Panel toggle parity ✅ **Done (2026-06-29)** —
+  `apps/openpulse-panel/src/app.rs` adds an `AGC: ON/OFF` button in the controls column (mirrors the
+  Notch/CE-SSB toggles, default off) that sends `ControlCommand::SetAgc`.
 - (CE-SSB on-air validation is now complete — average-power gain *and* spectral mask
   both confirmed on real RF; see §10.8.)
 
@@ -1481,22 +1482,25 @@ handler / CLI `daemon` subcommand / panel GUI button) — the "wired at one seam
 applied to the control surface. All 28 variants are handled by the daemon (no dead commands).
 The reachability gaps:
 
-| Command | Daemon | CLI | Panel | Assessment |
+Original audit (2026-06-27) gap rows, all since **closed** (status as of 2026-06-29):
+
+| Command | Daemon | CLI | Panel | Status |
 |---|---|---|---|---|
-| `SendMessage` | ✓ | ✗ | ✓ | **Gap** — no scriptable/headless send |
-| `SetMode` | ✓ | ✗ | ✓ | **Gap** — no programmatic mode change |
-| `PttAssert` / `PttRelease` | ✓ | ✗ | ✓ | **Gap** — CLI can't key/unkey |
-| `AcceptQsy` / `RejectQsy` | ✓ | ✗ | ✓ | **Gap** — CLI can't answer a QSY |
-| `SetFreq` | ✓ | ✗ | ✗ | reachable only via config |
-| `SetDcdSquelch` | ✓ | ✓ | ✗ | **Gap** — GUI can't tune squelch live |
+| `SendMessage` | ✓ | ✓ | ✓ | ✅ closed — `daemon send-message` (`cli.rs`) |
+| `SetMode` | ✓ | ✓ | ✓ | ✅ closed — `daemon set-mode` |
+| `PttAssert` / `PttRelease` | ✓ | ✓ | ✓ | ✅ closed — `daemon ptt-assert` / `ptt-release` |
+| `AcceptQsy` / `RejectQsy` | ✓ | ✓ | ✓ | ✅ closed — `daemon accept-qsy` / `reject-qsy` |
+| `SetFreq` | ✓ | ✓ | ✗ | ✅ CLI-reachable — `daemon set-freq` (panel via config) |
+| `SetDcdSquelch` | ✓ | ✓ | ✓ | ✅ closed — panel Squelch slider |
+| `SetAgc` | ✓ | ✓ | ✓ | ✅ closed — panel `AGC: ON/OFF` toggle (2026-06-29) |
 | `StartOtaSession` / `StopOtaSession` | ✓ | ✓ | ✗ | panel only locks/unlocks an active session |
 | `OtaSetLevelBounds` / `OtaSetHysteresis` / `OtaSetAggressiveness` | ✓ | ✓ | ✗ | expert OTA tuning, CLI-only by design |
 
-Highest-value to close (real two-way operability, not expert-only): **`SendMessage`** and
-**`SetMode`** in the CLI (headless/scriptable operation), **PTT** + **QSY accept/reject** in the
-CLI, and **`SetDcdSquelch`** in the panel. The OTA hysteresis/aggressiveness/bounds CLI-only split
-is intentional (panel offers the simplified lock/unlock instead). Newly-added `SetNotch`, plus
-CE-SSB and repeater, are reachable from all three surfaces. Not yet scheduled.
+All the reachability gaps the audit flagged are now closed: the CLI gained `send-message`,
+`set-mode`, `ptt-assert`/`ptt-release`, `accept-qsy`/`reject-qsy`; the panel gained the live Squelch
+slider and (2026-06-29) the `AGC: ON/OFF` toggle. The OTA hysteresis/aggressiveness/bounds CLI-only
+split is intentional (the panel offers the simplified lock/unlock instead). No control-surface
+parity gaps remain.
 
 ### TNC command-surface audit (2026-06-27)
 

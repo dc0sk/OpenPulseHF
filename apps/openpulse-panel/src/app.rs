@@ -141,6 +141,7 @@ pub struct PanelApp {
     repeater_enabled: bool,
     cessb_enabled: bool,
     notch_enabled: bool,
+    agc_enabled: bool,
     logbook_enabled: bool,
     tx_atten_db: f32,
     dcd_squelch: f32,
@@ -194,6 +195,8 @@ impl PanelApp {
             cessb_enabled: true,
             // Default-off mirrors the daemon's `[modem] notch_enabled = false`.
             notch_enabled: false,
+            // Default-off mirrors the daemon's `[modem] agc_enabled = false`.
+            agc_enabled: false,
             // Default-off mirrors the daemon's `[logbook] enabled = false`.
             logbook_enabled: false,
             tx_atten_db: 0.0,
@@ -447,6 +450,27 @@ impl PanelApp {
                     self.notch_enabled = !self.notch_enabled;
                     self.send(ControlCommand::SetNotch {
                         enabled: self.notch_enabled,
+                    });
+                }
+
+                let agc_label = if self.agc_enabled {
+                    "AGC: ON"
+                } else {
+                    "AGC: OFF"
+                };
+                if ui
+                    .button(agc_label)
+                    .on_hover_text(
+                        "Receiver streaming AGC: normalises the captured level before demod. \
+                         Active-span gated on the squelch, so leading silence can't ramp the gain. \
+                         Helps weak or level-varying signals; leave off when the input is already \
+                         well-levelled.",
+                    )
+                    .clicked()
+                {
+                    self.agc_enabled = !self.agc_enabled;
+                    self.send(ControlCommand::SetAgc {
+                        enabled: self.agc_enabled,
                     });
                 }
 

@@ -9,6 +9,28 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-29 — Panel: AGC on/off toggle (control-surface parity)
+
+- **Requirement/change:** close the last open control-surface parity gap — the receiver streaming
+  AGC (`ControlCommand::SetAgc`, shipped 2026-06-28 in the daemon + CLI) had no panel button, so the
+  GUI operator couldn't toggle it. (Re-audit found the CLI `SendMessage`/`SetMode`/PTT/QSY-accept/
+  reject gaps and the panel Squelch gap from the 2026-06-27 audit were already closed; AGC was the
+  only one left.)
+- **Design decision:** mirror the existing Notch/CE-SSB/Logbook toggle pattern exactly — a single
+  `AGC: ON/OFF` button in the right-hand controls column that flips local `agc_enabled` and sends
+  `ControlCommand::SetAgc { enabled }`. Default off, matching the daemon's `[modem] agc_enabled`
+  default and the engine's opt-in AGC. No new state machinery; one bool field + one button.
+- **Implementation:** `apps/openpulse-panel/src/app.rs` — `agc_enabled: bool` field (default false),
+  `AGC: ON/OFF` button next to the Notch toggle in `draw_controls`, with hover text noting the
+  active-span gating. Stale docs corrected: roadmap §10.6 "panel toggle parity" marked done; the
+  control-surface parity table updated to show all flagged gaps closed.
+- **Tests:** GUI toggle (no unit test — the `SetAgc` daemon/engine path is covered by
+  `crates/openpulse-modem/tests/agc_loopback.rs`).
+- **Test results:** `cargo build -p openpulse-panel --no-default-features` green;
+  `cargo clippy -p openpulse-panel --no-default-features --all-targets -- -D warnings` 0 warnings;
+  `cargo fmt -p openpulse-panel --check` clean. Visual confirmation pending (held before merge per
+  the GUI-change rule).
+
 ## 2026-06-29 — Docs: sort `docs/dev/` into topic subfolders + fix all references
 
 - **Requirement/change:** the loose files under `docs/dev/` were moved into four topic
