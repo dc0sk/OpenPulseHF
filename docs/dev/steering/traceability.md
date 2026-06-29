@@ -9,6 +9,18 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-29 — CLI: `daemon set-tx-attenuation` (control-surface parity)
+
+- **Requirement/change:** a wiring-gap audit found `SetTxAttenuation` reachable from the panel but
+  not the CLI — the one remaining single-client control-surface asymmetry (not a dead command; the
+  daemon handles it). Add the CLI subcommand for headless/scripted operation.
+- **Design decision:** mirror the established `simple(addr, ControlCommand::…)` pattern — a
+  `SetTxAttenuation { db, band }` `DaemonCommands` variant (`band` optional, `--band`) forwarding the
+  existing control command. No daemon/protocol change.
+- **Implementation:** `crates/openpulse-cli/src/cli.rs` (variant) + `crates/openpulse-cli/src/commands/daemon.rs` (arm).
+- **Tests:** covered by the existing CLI command-dispatch suite (29 + integration); no new logic to unit-test beyond the forward.
+- **Test results (run):** `cargo build/clippy -p openpulse-cli --no-default-features --all-targets -D warnings` clean; `cargo test -p openpulse-cli --no-default-features` all green; `fmt` clean.
+
 ## 2026-06-29 — Generic serial CAT backend wired into the daemon
 
 - **Requirement/change:** make the already-built-but-unreachable generic serial CAT backend

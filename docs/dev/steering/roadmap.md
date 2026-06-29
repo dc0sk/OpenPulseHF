@@ -1493,6 +1493,7 @@ Original audit (2026-06-27) gap rows, all since **closed** (status as of 2026-06
 | `SetFreq` | ✓ | ✓ | ✗ | ✅ CLI-reachable — `daemon set-freq` (panel via config) |
 | `SetDcdSquelch` | ✓ | ✓ | ✓ | ✅ closed — panel Squelch slider |
 | `SetAgc` | ✓ | ✓ | ✓ | ✅ closed — panel `AGC: ON/OFF` toggle (2026-06-29) |
+| `SetTxAttenuation` | ✓ | ✓ | ✓ | ✅ closed — CLI `daemon set-tx-attenuation` (2026-06-29; a wiring-gap audit found it panel-only) |
 | `StartOtaSession` / `StopOtaSession` | ✓ | ✓ | ✗ | panel only locks/unlocks an active session |
 | `OtaSetLevelBounds` / `OtaSetHysteresis` / `OtaSetAggressiveness` | ✓ | ✓ | ✗ | expert OTA tuning, CLI-only by design |
 

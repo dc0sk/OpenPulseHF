@@ -131,6 +131,9 @@ pub fn run(addr: &str, cmd: DaemonCommands) -> Result<i32> {
         DaemonCommands::SetLogbook { enabled } => {
             simple(addr, ControlCommand::SetLogbook { enabled })
         }
+        DaemonCommands::SetTxAttenuation { db, band } => {
+            simple(addr, ControlCommand::SetTxAttenuation { db, band })
+        }
         DaemonCommands::OtaStatus => ota_status(addr),
     }
 }

@@ -371,6 +371,14 @@ pub enum DaemonCommands {
         #[arg(action = clap::ArgAction::Set)]
         enabled: bool,
     },
+    /// Set the TX attenuation (dB; 0 = none) for the current band, or a named band.
+    SetTxAttenuation {
+        /// Attenuation in dB (0.0 = no attenuation).
+        db: f32,
+        /// Optional band label (e.g. `20m`); omit to apply to the current band.
+        #[arg(long)]
+        band: Option<String>,
+    },
     /// Print one OTA status snapshot as JSON.
     OtaStatus,
 }
