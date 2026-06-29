@@ -320,3 +320,136 @@ impl PluginRegistry {
         self.plugins.iter().map(|p| p.info()).collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal plugin for exercising the registry + trait defaults.
+    struct FakePlugin {
+        info: PluginInfo,
+        bytes: Vec<u8>,
+    }
+
+    impl FakePlugin {
+        fn new(name: &str, modes: &[&str], trait_req: &str) -> Self {
+            Self {
+                info: PluginInfo {
+                    name: name.to_string(),
+                    version: "1.0.0".to_string(),
+                    description: "test plugin".to_string(),
+                    author: "test".to_string(),
+                    supported_modes: modes.iter().map(|s| s.to_string()).collect(),
+                    trait_version_required: trait_req.to_string(),
+                },
+                bytes: vec![0xA5, 0x3C],
+            }
+        }
+        fn boxed(name: &str, modes: &[&str], trait_req: &str) -> Box<dyn ModulationPlugin> {
+            Box::new(Self::new(name, modes, trait_req))
+        }
+    }
+
+    impl ModulationPlugin for FakePlugin {
+        fn info(&self) -> &PluginInfo {
+            &self.info
+        }
+        fn modulate(&self, data: &[u8], _c: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
+            Ok(data.iter().map(|&b| b as f32).collect())
+        }
+        fn demodulate(&self, _s: &[f32], _c: &ModulationConfig) -> Result<Vec<u8>, ModemError> {
+            Ok(self.bytes.clone())
+        }
+    }
+
+    #[test]
+    fn register_then_lookup_is_case_insensitive_and_misses_are_none() {
+        let mut reg = PluginRegistry::new();
+        reg.register(FakePlugin::boxed("BPSK", &["BPSK31", "BPSK100"], "1.0"))
+            .unwrap();
+        assert!(reg.get("BPSK31").is_some());
+        assert!(
+            reg.get("bpsk100").is_some(),
+            "lookup must be case-insensitive"
+        );
+        assert!(reg.get("QPSK500").is_none(), "unknown mode must miss");
+        assert_eq!(reg.list().len(), 1);
+    }
+
+    #[test]
+    fn later_registration_shadows_earlier_for_the_same_mode() {
+        let mut reg = PluginRegistry::new();
+        reg.register(FakePlugin::boxed("OLD", &["BPSK31"], "1.0"))
+            .unwrap();
+        reg.register(FakePlugin::boxed("NEW", &["BPSK31"], "1.0"))
+            .unwrap();
+        // `get` walks registrations in reverse, so the newer plugin wins.
+        assert_eq!(reg.get("BPSK31").unwrap().info().name, "NEW");
+        assert_eq!(reg.list().len(), 2);
+    }
+
+    #[test]
+    fn compatible_trait_version_registers() {
+        let mut reg = PluginRegistry::new();
+        // Framework is 1.0.0; a plugin requiring "1.0" is compatible.
+        assert!(reg.register(FakePlugin::boxed("OK", &["X"], "1.0")).is_ok());
+    }
+
+    #[test]
+    fn incompatible_major_trait_version_is_rejected() {
+        let mut reg = PluginRegistry::new();
+        let err = reg
+            .register(FakePlugin::boxed("FUTURE", &["X"], "2.0"))
+            .unwrap_err();
+        assert!(matches!(err, PluginError::IncompatibleTraitVersion { .. }));
+    }
+
+    #[test]
+    fn higher_minor_than_framework_is_rejected() {
+        let mut reg = PluginRegistry::new();
+        // Framework minor is 0; a plugin requiring minor 5 needs a newer framework.
+        let err = reg
+            .register(FakePlugin::boxed("NEWER", &["X"], "1.5"))
+            .unwrap_err();
+        assert!(matches!(err, PluginError::IncompatibleTraitVersion { .. }));
+    }
+
+    #[test]
+    fn malformed_trait_version_is_rejected() {
+        let mut reg = PluginRegistry::new();
+        for bad in ["1", "1.0.0", "x.y", ""] {
+            let err = reg
+                .register(FakePlugin::boxed("BAD", &["X"], bad))
+                .unwrap_err();
+            assert!(
+                matches!(err, PluginError::InvalidTraitVersionFormat(_)),
+                "version {bad:?} should be a format error"
+            );
+        }
+    }
+
+    #[test]
+    fn default_demodulate_soft_hard_slices_back_to_demodulate() {
+        // The default soft path maps each bit to ±1.0; hard-slicing (bit = llr <= 0,
+        // LSB-first) must reproduce the demodulate() byte stream exactly.
+        let p = FakePlugin::new("BPSK", &["BPSK31"], "1.0");
+        let cfg = ModulationConfig::default();
+        let hard = p.demodulate(&[], &cfg).unwrap();
+        let llrs = p.demodulate_soft(&[], &cfg).unwrap();
+        assert_eq!(llrs.len(), hard.len() * 8);
+        let resliced: Vec<u8> = llrs
+            .chunks(8)
+            .map(|byte| {
+                byte.iter()
+                    .enumerate()
+                    .fold(0u8, |acc, (i, &llr)| acc | (u8::from(llr <= 0.0) << i))
+            })
+            .collect();
+        assert_eq!(resliced, hard);
+        // Defaults for the opt-in trait hooks.
+        assert!(!p.supports_soft_demod());
+        assert!(p.frame_geometry(&cfg).is_none());
+        assert!(p.estimate_afc_hz(&[], &cfg).is_none());
+        assert!(p.occupied_bandwidth_hz("BPSK31").is_none());
+    }
+}
