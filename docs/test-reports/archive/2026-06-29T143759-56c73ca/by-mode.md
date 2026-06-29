@@ -1,15 +1,15 @@
 ---
 title: "OpenPulseHF Test Matrix — By Mode"
-date: "2026-06-29T15:12:02Z"
-git_commit: "76de87e"
-git_commit_full: "76de87e18f18027cf13f5879bba387b173877bf5"
+date: "2026-06-29T14:37:59Z"
+git_commit: "56c73ca"
+git_commit_full: "56c73ca757937bd2bf942bab52bf3df797f42be2"
 git_dirty: true
 workspace_version: "0.3.0"
 tier: "quick"
-total_cases: 555
+total_cases: 562
 passed: 555
-failed: 0
-duration_s: 85.5
+failed: 7
+duration_s: 86.1
 generator: "openpulse-testmatrix"
 crates_tested:
   - "bpsk-plugin"
@@ -32,7 +32,7 @@ crates_tested:
 
 # Results by Mode
 
-**Run:** commit `76de87e` ⚠ dirty — v0.3.0 — 2026-06-29 15:12:02 UTC
+**Run:** commit `56c73ca` ⚠ dirty — v0.3.0 — 2026-06-29 14:37:59 UTC
 
 | Mode | awgn_10dB | awgn_20dB | clean | Total |
 |---|---|---|---|---|
@@ -56,8 +56,8 @@ crates_tested:
 | **HPX_HF** | ✓ 1/1 | ✓ 1/1 | ✓ 1/1 | **3/3** |
 | **HPX_OFDM_HF** | ✓ 1/1 | ✓ 1/1 | ✓ 1/1 | **3/3** |
 | **HPX_WIDEBAND** | ✓ 1/1 | ✓ 1/1 | ✓ 1/1 | **3/3** |
-| **OFDM16** | — | ✓ 3/3 | ✓ 4/4 | **7/7** |
-| **OFDM52** | — | ✓ 1/1 | ✓ 2/2 | **3/3** |
+| **OFDM16** | ✗ 0/3 | ✓ 3/3 | ✓ 4/4 | **7/10** |
+| **OFDM52** | — | ✗ 1/3 | ✗ 2/4 | **3/7** |
 | **OFDM52-16QAM** | — | ✓ 3/3 | ✓ 3/3 | **6/6** |
 | **OFDM52-32QAM** | — | — | ✓ 3/3 | **3/3** |
 | **OFDM52-64QAM** | — | — | ✓ 3/3 | **3/3** |
