@@ -263,6 +263,12 @@ pub struct ArdopConfig {
     pub bind_addr: String,
     pub cmd_port: u16,
     pub data_port: u16,
+    /// Opt-in: run an adaptive ARQ session so the rate ladder, ARQBW, and ARQTIMEOUT take effect.
+    /// Default false (fixed-mode operation, the historical behaviour).
+    pub enable_adaptive_arq: bool,
+    /// Session profile name for the adaptive ARQ ladder (e.g. `hpx500`, `hpx_hf`). Empty falls
+    /// back to `hpx500`.
+    pub adaptive_profile: String,
 }
 
 /// KISS TNC service settings.
@@ -410,6 +416,8 @@ impl Default for ArdopConfig {
             bind_addr: "127.0.0.1".into(),
             cmd_port: 8515,
             data_port: 8516,
+            enable_adaptive_arq: false,
+            adaptive_profile: "hpx500".into(),
         }
     }
 }
@@ -773,6 +781,11 @@ bind_addr = "127.0.0.1"
 cmd_port = 8515
 # ARDOP data port.
 data_port = 8516
+# Opt-in: run an adaptive ARQ session so the rate ladder + host ARQBW/ARQTIMEOUT take effect.
+# Default false = fixed-mode operation (ARQBW/ARQTIMEOUT are accepted-and-echoed no-ops).
+enable_adaptive_arq = false
+# Session profile for the adaptive ladder (e.g. hpx500, hpx_hf); empty falls back to hpx500.
+adaptive_profile = "hpx500"
 
 [kiss]
 # IP address the KISS TNC listens on.

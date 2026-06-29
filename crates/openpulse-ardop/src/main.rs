@@ -97,6 +97,26 @@ async fn main() -> anyhow::Result<()> {
     engine.register_plugin(Box::new(scfdma_plugin::ScFdmaPlugin::new()))?;
     engine.register_plugin(Box::new(pilot_plugin::PilotPlugin::new()))?;
 
+    // Opt-in adaptive ARQ: starting the session activates the worker's adaptive TX/RX path
+    // (transmit_arq / receive_with_ack_hint) and makes ARQBW/ARQTIMEOUT effective.
+    if cfg.ardop.enable_adaptive_arq {
+        let name = if cfg.ardop.adaptive_profile.is_empty() {
+            "hpx500"
+        } else {
+            &cfg.ardop.adaptive_profile
+        };
+        match openpulse_core::profile::SessionProfile::by_name(name) {
+            Some(profile) => {
+                engine.start_adaptive_session(profile);
+                tracing::info!(profile = %name, "adaptive ARQ session enabled");
+            }
+            None => tracing::warn!(
+                profile = %name,
+                "unknown adaptive_profile; adaptive ARQ not started (fixed-mode operation)"
+            ),
+        }
+    }
+
     let config = ArdopConfig {
         bind_addr: cfg.ardop.bind_addr.clone(),
         command_port: cfg.ardop.cmd_port,

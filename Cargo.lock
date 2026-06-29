@@ -3673,6 +3673,7 @@ dependencies = [
  "openpulse-config",
  "openpulse-core",
  "openpulse-modem",
+ "openpulse-qsy",
  "openpulse-radio",
  "pilot-plugin",
  "psk8-plugin",

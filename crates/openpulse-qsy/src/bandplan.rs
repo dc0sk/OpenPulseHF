@@ -275,6 +275,22 @@ fn find_segment_for_region(freq_hz: u64, region: ItuRegion) -> Option<DigitalSeg
     }
 }
 
+/// Highest speed level among `modes` whose occupied bandwidth fits within `max_hz`.
+///
+/// `modes` is the active profile's `(level, mode)` pairs (any order). Modes with an unknown
+/// bandwidth are skipped. Returns `None` when no listed mode fits (the caller should keep the
+/// session at its floor). Used to map an ARDOP `ARQBW` host cap onto the adaptive ladder.
+pub fn max_speed_level_for_bandwidth(
+    modes: &[(openpulse_core::rate::SpeedLevel, &str)],
+    max_hz: u32,
+) -> Option<openpulse_core::rate::SpeedLevel> {
+    modes
+        .iter()
+        .filter(|(_, mode)| occupied_bandwidth_hz(mode).is_some_and(|bw| bw <= max_hz))
+        .map(|(level, _)| *level)
+        .max()
+}
+
 /// Conservative occupied-bandwidth estimates used for policy checks.
 pub fn occupied_bandwidth_hz(mode: &str) -> Option<u32> {
     match mode {
@@ -713,5 +729,38 @@ mod tests {
     fn region1_accepts_rrc_mode_when_bandwidth_is_known() {
         let policy = BandplanPolicy::default();
         assert!(policy.validate_frequency(14_074_000, "QPSK500-RRC").is_ok());
+    }
+
+    #[test]
+    fn max_speed_level_for_bandwidth_maps_hz_cap_to_a_level() {
+        use openpulse_core::rate::SpeedLevel;
+        // hpx500 ladder: SL2 BPSK31(100) SL3 BPSK63(150) SL4 BPSK250(500) SL5 QPSK250(700) SL6 QPSK500(1400).
+        let modes = [
+            (SpeedLevel::Sl2, "BPSK31"),
+            (SpeedLevel::Sl3, "BPSK63"),
+            (SpeedLevel::Sl4, "BPSK250"),
+            (SpeedLevel::Sl5, "QPSK250"),
+            (SpeedLevel::Sl6, "QPSK500"),
+        ];
+        // 500 Hz cap → BPSK250 (SL4) is the widest that fits.
+        assert_eq!(
+            max_speed_level_for_bandwidth(&modes, 500),
+            Some(SpeedLevel::Sl4)
+        );
+        // 700 Hz cap → QPSK250 (SL5) now fits; QPSK500 (1400) does not.
+        assert_eq!(
+            max_speed_level_for_bandwidth(&modes, 700),
+            Some(SpeedLevel::Sl5)
+        );
+        // 2000 Hz cap → everything fits → the top level.
+        assert_eq!(
+            max_speed_level_for_bandwidth(&modes, 2000),
+            Some(SpeedLevel::Sl6)
+        );
+        // Below the narrowest mode → nothing fits.
+        assert_eq!(max_speed_level_for_bandwidth(&modes, 50), None);
+        // Unknown-bandwidth modes are skipped, not treated as zero-width.
+        let unknown = [(SpeedLevel::Sl2, "NO-SUCH-MODE")];
+        assert_eq!(max_speed_level_for_bandwidth(&unknown, 9999), None);
     }
 }

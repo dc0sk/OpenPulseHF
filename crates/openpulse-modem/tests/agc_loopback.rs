@@ -113,7 +113,10 @@ fn agc_preserves_decode_on_a_low_level_signal() {
     rx_handle.fill_samples(&samples);
     let decoded = rx.receive(MODE, None).unwrap_or_default();
 
-    assert_eq!(decoded, payload, "AGC-on decode of a low-level frame must match");
+    assert_eq!(
+        decoded, payload,
+        "AGC-on decode of a low-level frame must match"
+    );
     assert!(
         rx.agc_blocks_processed() > 0,
         "the AGC must have run on the receive path"
