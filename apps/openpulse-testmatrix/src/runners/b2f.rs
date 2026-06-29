@@ -123,8 +123,8 @@ fn run_b2f_pair(case: &TestCase, body: Vec<u8>) -> Result<Vec<DecodedMessage>, S
     };
 
     let irs_thread = thread::spawn(move || {
-        let cmd = TcpStream::connect(irs_cmd_addr).map_err(|e| e.to_string())?;
-        let data = TcpStream::connect(irs_data_addr).map_err(|e| e.to_string())?;
+        let cmd = connect_with_timeout(irs_cmd_addr)?;
+        let data = connect_with_timeout(irs_data_addr)?;
         let mut driver = B2fDriver::new(cmd, data).map_err(|e| e.to_string())?;
         driver
             .run_irs("K2DEF", Duration::from_secs(30))
@@ -132,8 +132,8 @@ fn run_b2f_pair(case: &TestCase, body: Vec<u8>) -> Result<Vec<DecodedMessage>, S
     });
 
     {
-        let cmd = TcpStream::connect(iss_cmd_addr).map_err(|e| e.to_string())?;
-        let data = TcpStream::connect(iss_data_addr).map_err(|e| e.to_string())?;
+        let cmd = connect_with_timeout(iss_cmd_addr)?;
+        let data = connect_with_timeout(iss_data_addr)?;
         let mut iss_driver = B2fDriver::new(cmd, data).map_err(|e| e.to_string())?;
         iss_driver
             .run_iss("K1ABC", "K2DEF", vec![(header, body)])
@@ -184,6 +184,25 @@ fn relay_frame(
 }
 
 // ── Infrastructure ─────────────────────────────────────────────────────────────
+
+/// Per-read/write socket timeout for the B2F drivers. A B2F session over a channel that can't
+/// decode (e.g. low-SNR AWGN) drops frames, so a driver read would otherwise block forever and
+/// hang the whole matrix; with a timeout the driver maps the socket `TimedOut`/`WouldBlock` to
+/// `DriverError::Timeout`, so such a case fails fast instead. Generous vs the ms-scale relay so it
+/// never trips a legitimate exchange.
+const B2F_IO_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// Connect to `addr` and set read + write timeouts so no driver I/O can block indefinitely.
+fn connect_with_timeout(addr: SocketAddr) -> Result<TcpStream, String> {
+    let stream = TcpStream::connect(addr).map_err(|e| e.to_string())?;
+    stream
+        .set_read_timeout(Some(B2F_IO_TIMEOUT))
+        .map_err(|e| e.to_string())?;
+    stream
+        .set_write_timeout(Some(B2F_IO_TIMEOUT))
+        .map_err(|e| e.to_string())?;
+    Ok(stream)
+}
 
 fn spawn_data_server(
     outgoing: SyncSender<Vec<u8>>,
