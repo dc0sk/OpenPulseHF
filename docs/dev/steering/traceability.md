@@ -9,6 +9,32 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-30 — testmatrix: full-tier completes + OFDM52 raw-framing exclusion generalised
+
+- **Requirement/change:** the `--full` tier must run end-to-end and its Clean/high-SNR failures must
+  reflect only genuine results, not case-generator artifacts. Two defects blocked that: the B2F
+  runner hung at low SNR, and the `OFDM_RAW_FRAMING_ONLY` exclusion covered only one of three
+  case-gen sites that pair plain OFDM52 with RS-family FEC.
+- **Design decision:** (a) give the B2F driver streams a socket read/write timeout so a non-decoding
+  channel fast-fails instead of blocking forever (the driver maps `TimedOut`/`WouldBlock` →
+  `DriverError::Timeout`); (b) lift the per-site `if OFDM_RAW_FRAMING_ONLY.contains(..)` check into a
+  single `raw_framing_excludes(mode, fec)` predicate and apply it at *every* site that pairs a
+  raw-framing-only mode with FEC, so the padded-frame × 255-byte-RS-block limitation can never leak a
+  spurious RS-decode failure again. Keep the legitimate OFDM52 no-FEC-at-floor failure visible.
+- **Implementation:** `connect_with_timeout` + `B2F_IO_TIMEOUT = 8 s` in
+  `apps/openpulse-testmatrix/src/runners/b2f.rs` (PR #600); `raw_framing_excludes` predicate applied
+  at the multicarrier×prop and large-payload sections in `apps/openpulse-testmatrix/src/cases.rs`.
+- **Tests:** `apps/openpulse-testmatrix` unit suite (coverage regression test still requires OFDM52
+  to appear in a raw case) — 12 pass; clippy `-D warnings` + `cargo fmt --all --check` clean.
+- **Test results:** quick tier **555/555, 0 fail** (gate at `docs/test-reports/latest`, unchanged).
+  Full tier **6022 cases, 3465 pass, 2557 fail, 21.3 s**, exit 0 — completes without hanging; the
+  regression-suspect zone (Clean / AWGN ≥ 20) dropped from 5 failures to 1 (the kept no-FEC
+  OFDM52 large-payload point); the lone B2F failure is now the intended fast-timeout at 0 dB.
+  Characterization snapshot committed under `docs/test-reports/full` (with a README marking it as
+  non-gate data).
+
+---
+
 ## 2026-06-29 — CLI: `daemon set-tx-attenuation` (control-surface parity)
 
 - **Requirement/change:** a wiring-gap audit found `SetTxAttenuation` reachable from the panel but

@@ -17,6 +17,14 @@ const MULTICARRIER_MODES: &[&str] = &["OFDM16", "OFDM52", "SCFDMA16", "SCFDMA52"
 /// one (the coverage regression test still requires the mode to appear in a raw-modem case).
 const OFDM_RAW_FRAMING_ONLY: &[&str] = &["OFDM52"];
 
+/// True when `mode`'s padded framing can't round-trip `fec` because it breaks the hard 255-byte
+/// RS block boundary (see [`OFDM_RAW_FRAMING_ONLY`]). Only `FecMode::None` survives, so every
+/// case-gen site that pairs a raw-framing-only mode with FEC must skip the RS-family modes —
+/// otherwise they surface as spurious RS-decode failures even on a clean channel.
+fn raw_framing_excludes(mode: &str, fec: FecMode) -> bool {
+    OFDM_RAW_FRAMING_ONLY.contains(&mode) && fec != FecMode::None
+}
+
 /// SC-FDMA higher-order modulation modes: the full-width SCFDMA52 family plus the
 /// narrowband SCFDMA26 fallback rungs (half width, ~+3 dB per-SC SNR).  All require
 /// higher minimum SNR than QPSK; thresholds set in mode_min_snr_db().
@@ -552,6 +560,9 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
                     FecMode::RsInterleaved,
                     FecMode::SoftConcatenated,
                 ] {
+                    if raw_framing_excludes(mode, fec) {
+                        continue;
+                    }
                     cases.push(raw_case(
                         mode,
                         fec,
@@ -595,6 +606,9 @@ pub fn build_cases(tier: Tier) -> Vec<TestCase> {
         for mode in &["BPSK250", "QPSK500", "8PSK500", "OFDM52", "SCFDMA52"] {
             for channel in &large_channels {
                 for &fec in &[FecMode::None, FecMode::Rs, FecMode::SoftConcatenated] {
+                    if raw_framing_excludes(mode, fec) {
+                        continue;
+                    }
                     cases.push(raw_case(
                         mode,
                         fec,
