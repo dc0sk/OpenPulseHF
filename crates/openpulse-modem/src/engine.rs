@@ -362,6 +362,9 @@ pub struct ModemEngine {
     agc: openpulse_dsp::agc::Agc,
     /// Count of capture blocks the AGC processed — same tripwire role as `notch_blocks_processed`.
     agc_blocks_processed: u64,
+    /// Count of capture blocks the DC block processed — tripwire for the always-on DC removal
+    /// (REQ-PHY-02); stays 0 if a capture path ever skips the InputCapture seam.
+    dc_blocks_processed: u64,
 }
 
 /// CE-SSB TX conditioning clip level as a multiple of the RMS envelope. 2.0×
@@ -427,6 +430,7 @@ impl ModemEngine {
             // target RMS 0.3 (headroom below ±1.0), slow loop (α=0.02), ±40 dB clamp.
             agc: openpulse_dsp::agc::Agc::new(0.3, 0.02, 40.0),
             agc_blocks_processed: 0,
+            dc_blocks_processed: 0,
         }
     }
 
@@ -544,6 +548,12 @@ impl ModemEngine {
     /// the runtime path skips" class of gap (see [`Self::notch_blocks_processed`]).
     pub fn agc_blocks_processed(&self) -> u64 {
         self.agc_blocks_processed
+    }
+
+    /// Number of capture blocks the DC block (REQ-PHY-02) has processed — a tripwire that the
+    /// always-on DC removal runs on every receive path (it lives at the single InputCapture seam).
+    pub fn dc_blocks_processed(&self) -> u64 {
+        self.dc_blocks_processed
     }
 
     /// Current AGC gain in dB (0 dB = unity). A readout of the active-span loop state.
@@ -4454,6 +4464,14 @@ impl ModemEngine {
         // construction. Order: notch (remove interference) → AGC (normalise the cleaned level).
         if stage == PipelineStage::InputCapture {
             let mut samples = routed.samples;
+            // REQ-PHY-02: remove DC bias (SSB audio paths / soundcard offset) before demod.
+            // Per-burst mean subtraction is a transient-free high-pass at ~1/burst Hz (≪10 Hz for
+            // any real burst): the heterodyne PSK/QAM demods already reject a 0 Hz offset, but the
+            // DCD/CSMA energy gate and AGC use mean-square/RMS, which a DC offset inflates — so this
+            // de-biases those. A constant shift leaves all AC content (carrier band) bit-identical,
+            // so it never perturbs acquisition; on a zero-DC signal (loopback) the mean is ~0 → no-op.
+            self.dc_blocks_processed = self.dc_blocks_processed.wrapping_add(1);
+            samples = apply_dc_block(samples);
             if self.notch_enabled {
                 self.notch_blocks_processed = self.notch_blocks_processed.wrapping_add(1);
                 let mode = self.rx_mode.clone();
@@ -4499,6 +4517,27 @@ fn minimum_trust_for_profile(profile: PolicyProfile) -> ConnectionTrustLevel {
         PolicyProfile::Balanced => ConnectionTrustLevel::PskVerified,
         PolicyProfile::Permissive => ConnectionTrustLevel::Reduced,
     }
+}
+
+/// Remove the DC component of a captured burst by subtracting its mean (REQ-PHY-02).
+///
+/// This is a transient-free high-pass at ≈ `sample_rate / len` Hz — far below 10 Hz for any real
+/// burst. A constant offset is the only thing removed, so the carrier-band (AC) content is
+/// bit-identical and demodulation/acquisition is unaffected; on a near-zero-DC signal the mean is
+/// ~0 and this is a no-op. Its value is de-biasing the mean-square energy the DCD/CSMA gate and the
+/// AGC RMS compute, which a soundcard/SSB DC offset would otherwise inflate.
+fn apply_dc_block(mut samples: Vec<f32>) -> Vec<f32> {
+    let n = samples.len();
+    if n == 0 {
+        return samples;
+    }
+    let mean = samples.iter().sum::<f32>() / n as f32;
+    if mean != 0.0 {
+        for s in samples.iter_mut() {
+            *s -= mean;
+        }
+    }
+    samples
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
