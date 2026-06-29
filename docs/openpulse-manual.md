@@ -167,6 +167,17 @@ openpulse --backend loopback transmit "ARDOP-path smoke test" --mode BPSK250
 
 Use this smoke test to validate equivalent modem behavior before connecting external ARDOP-compatible clients through dedicated bridge services.
 
+**Adaptive ARQ (opt-in).** By default the ARDOP TNC runs fixed-mode, and the host hints `ARQBW` /
+`ARQTIMEOUT` are accepted-and-echoed but inert. Enable the adaptive ARQ session to make them
+effective — the rate ladder then adapts, `ARQBW` caps it to a max occupied bandwidth, and
+`ARQTIMEOUT` drops an idle connection:
+
+```toml
+[ardop]
+enable_adaptive_arq = true       # default false (fixed-mode)
+adaptive_profile = "hpx500"      # ladder profile; empty falls back to hpx500
+```
+
 ### 2.6 KISS TNC Drop-In Path
 
 ```bash
@@ -573,6 +584,34 @@ Behavior highlights:
 - Half duplex: assert PTT around each forwarded frame
 - Full duplex mode available (`full_duplex = true`) with session-level PTT handling
 
+> **Note — CAT backend selection lives at the top-level `[radio]`.** The daemon configures the
+> primary rig's CAT from the top-level `[radio]` block, not from `[radio.rig_a]` (which is reserved
+> for the planned multi-rig refactor). To use a rig Hamlib/rigctld doesn't support, select the
+> generic serial CAT backend there (see [§4.4.1](#441-generic-serial-cat-backend) and [§12.4](#124-radio-cat-rig-definition-files)).
+
+#### 4.4.1 Generic serial CAT backend
+
+For a transceiver not supported by Hamlib/rigctld, drive CAT directly over a serial port with a
+TOML-scripted command set. Requires a build with the `generic-serial` feature (Unix only).
+
+```toml
+[radio]
+cat_backend = "generic"               # "rigctld" (default) | "generic" | "none"
+serial_port = "/dev/ttyUSB0"          # the rig's CAT serial device
+rig_file    = "docs/config/rig-icom-ic7300.toml"   # command templates + serial params
+```
+
+Build and run:
+
+```bash
+cargo build --release -p openpulse-daemon --features generic-serial
+```
+
+Notes:
+- Rig-definition TOML format and examples: [§12.4](#124-radio-cat-rig-definition-files).
+- Rig meters (ALC/power/SWR) are rigctld-only; with the generic backend the panel shows no live meters.
+- `cat_backend = "none"` disables CAT entirely (manual tuning); PTT still works via `[modem] ptt_backend`.
+
 Usage examples:
 
 ```bash
@@ -603,6 +642,24 @@ Integration note:
 Capabilities:
 - Classical signed handshake + manifest
 - PQ-capable and hybrid handshake variants
+- **Over-the-air signed handshake on connect (daemon).** A `ConnectPeer` initiates a signed
+  `ConReq`/`ConAck` exchange over RF: the initiator transmits a signed `ConReq` (SAR-fragmented,
+  since the frame exceeds one modem frame), the responder verifies it and replies with a signed
+  `ConAck`, and the initiator verifies that. The verified peer identity (callsign + Maidenhead grid)
+  is stored and emitted as a `PeerVerified` event; the verified grid is written to the ADIF logbook
+  QSO (ahead of the `[logbook.peer_grids]` fallback). An unanswered handshake times out after 30 s.
+
+Station signing key:
+
+```toml
+[station]
+callsign = "N0CALL"
+grid_square = "AA00"
+# 32-byte Ed25519 identity seed used to sign CONREQ/CONACK frames. Empty = the platform default
+# (~/.config/openpulse/identity.key), generated on first run. Set an explicit path to give
+# co-located stations (e.g. the twin-station rig) distinct identities.
+identity_key_path = ""
+```
 
 Examples:
 
@@ -1014,6 +1071,10 @@ Example file:
 Purpose:
 - Defines model-specific serial/CAT command templates for the `generic` rig backend.
 
+Selecting the generic backend (the daemon **does** consume these — see [§4.4.1](#441-generic-serial-cat-backend)):
+- Set `[radio] cat_backend = "generic"`, `serial_port`, and `rig_file` to a definition file below.
+- Build the daemon with `--features generic-serial` (Unix only).
+
 Example files:
 - [docs/config/rig-icom-ic7300.toml](config/rig-icom-ic7300.toml)
 - [docs/config/rig-yaesu-ft817.toml](config/rig-yaesu-ft817.toml)
@@ -1114,8 +1175,16 @@ openpulse daemon ota-bounds --min SL3 --max SL10
 openpulse daemon ota-hysteresis --min-backlog 128 --upgrade-hold-frames 3
 openpulse daemon ota-aggressiveness balanced   # conservative|balanced|aggressive (sets A2/A3 together)
 openpulse daemon set-dcd-squelch 0.05          # raise the squelch above a noisy band's floor
+openpulse daemon set-tx-attenuation 6          # TX attenuation dB for the current band (0 = none)
+openpulse daemon set-tx-attenuation 6 --band 20m   # ...or a named band
 openpulse daemon ota-lock --level SL6
 openpulse daemon ota-status   # JSON snapshot
+
+# Other runtime toggles reachable from the daemon CLI (all also available in the panel):
+openpulse daemon set-agc true        # receiver streaming AGC (normalise level before demod)
+openpulse daemon set-notch true      # receiver auto-notch (out-of-band CW interference)
+openpulse daemon set-cessb true      # CE-SSB TX conditioning (multicarrier modes)
+openpulse daemon set-logbook true    # automatic ADIF logbook (one record per QSO)
 ```
 
 #### `openpulse-tui`
