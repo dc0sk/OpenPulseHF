@@ -9,6 +9,39 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-29 — Generic serial CAT backend wired into the daemon
+
+- **Requirement/change:** make the already-built-but-unreachable generic serial CAT backend
+  (`GenericSerialCat`, FF-13) selectable from the daemon. The machinery (TOML rig definitions,
+  `CatController` trait, serial transport) existed and was tested, but the daemon only ever built a
+  concrete `RigctldController` and honoured `cat_backend = "rigctld"`.
+- **Design decision:** give the daemon a backend-agnostic CAT handle. `RigctldController` gained the
+  `CatController` impl its trait doc already claimed (delegating to its inherent methods). The daemon
+  selects via a concrete `CatBackend` enum (`Rigctld` | `Generic`, the latter feature-gated) rather
+  than `Box<dyn CatController>` — a boxed trait object tripped the `Drop`-in-loop borrow checker at
+  the per-tick reborrow sites, whereas the concrete enum reborrows cleanly like the original
+  `Option<RigctldController>`. `server::build_cat_controller` maps `[radio] cat_backend` →
+  `none`/`generic`/`rigctld`; the generic arm reads top-level `[radio] serial_port` + `rig_file` and
+  is gated by the daemon `generic-serial` feature (→ `openpulse-radio/generic-serial`, Unix). The 4
+  daemon rig-control signatures became `Option<&mut (dyn CatController + Send)>`. Meter polling stays
+  rigctld-only (its own connection). `rig_a` stays reserved for the multi-rig refactor (docs
+  corrected to stop implying the generic fields there are wired — the top-level ones are).
+- **Implementation:** `crates/openpulse-radio/src/rig_controller.rs` (`impl CatController for
+  RigctldController`); `crates/openpulse-radio/src/cat_controller.rs` (doc); `crates/openpulse-config/
+  src/lib.rs` (`RadioConfig.serial_port` / `rig_file` + template + corrected `rig_a`/`RigConfig`
+  docs); `crates/openpulse-daemon/Cargo.toml` (`generic-serial` feature); `crates/openpulse-daemon/
+  src/server.rs` (`CatBackend` enum + `CatController` impl + `build_cat_controller`; call sites →
+  `as_mut().map(... as &mut dyn ...)`); `crates/openpulse-daemon/src/lib.rs` (rig param types +
+  import).
+- **Tests:** `server.rs` `cat_backend_tests` — `cat_backend = "none"` yields no controller;
+  `cat_backend = "generic"` with no rig file yields no controller and no panic (covers feature-on
+  open-failure and feature-off branches). `GenericSerialCat` itself is covered by its existing
+  `MockTransport` tests.
+- **Test results (run):** `cargo build -p openpulse-daemon --no-default-features` and
+  `--features generic-serial` both green; `cargo test -p openpulse-daemon --no-default-features
+  cat_backend_tests` 2/2; config tests green. `clippy -D warnings` clean; `fmt` clean on touched
+  crates.
+
 ## 2026-06-29 — ARDOP adaptive ARQ session + real ARQBW/ARQTIMEOUT
 
 - **Requirement/change:** make the ARDOP host hints `ARQBW` and `ARQTIMEOUT` real instead of

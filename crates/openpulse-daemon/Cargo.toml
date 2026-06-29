@@ -29,6 +29,8 @@ default = ["gpu"]
 # Enable real audio hardware support (CPAL backend).  Off by default so CI builds
 # don't require ALSA/CoreAudio headers.  For production: cargo build --features cpal
 cpal = ["openpulse-audio/cpal-backend"]
+# Generic TOML-scripted serial CAT backend (cat_backend = "generic"); Unix-only.
+generic-serial = ["openpulse-radio/generic-serial"]
 # wgpu GPU acceleration for the GPU-capable plugins; reports our-kernel GPU load in
 # SystemMetrics. Auto-detected at runtime (GpuContext::init).
 gpu = [

@@ -1570,11 +1570,19 @@ config you can set that does nothing — all sit in `[radio]`:
 
 | Field(s) | Why dead | Resolution |
 |---|---|---|
-| `[radio.rig_a]` (whole `RigConfig`) | The daemon configures the primary rig via the **top-level** `[radio] rigctld_addr`; `cfg.radio.rig_a` is never read. | Marked "currently unused" in docs/template. Real fix = a multi-rig refactor (use `rig_a` for the primary), or drop `rig_a`. |
-| `RigConfig.backend` / `serial_port` / `rig_file` | The `"generic"`/serial CAT backend is **documented in the manual** (`docs/openpulse-manual.md`, example rig profiles) but **never implemented** — the daemon only ever uses rigctld, so these are unread. | Marked "reserved — not yet implemented" in docs/template. Real fix = implement the generic CAT backend, or remove it from the manual + schema. |
+| `[radio.rig_a]` (whole `RigConfig`) | The daemon configures the primary rig via the **top-level** `[radio]`; `cfg.radio.rig_a` is never read. | Still reserved for the planned multi-rig refactor; docs/template mark it accurately. |
+| `RigConfig.backend` / `serial_port` / `rig_file` (the `rig_a` copies) | Per-rig copies, unread; the daemon reads the top-level `[radio]` equivalents. | ✅ Generic CAT now wired at the **top level** — see below. The `rig_a` copies stay reserved for multi-rig. |
+
+**Generic serial CAT backend wired ✅ Done (2026-06-29).** `cat_backend = "generic"` (top-level
+`[radio]`, with `serial_port` + `rig_file`) now drives the previously-unreachable `GenericSerialCat`
+(FF-13). `RigctldController` gained a real `CatController` impl (the trait doc had claimed it); the
+daemon holds a `CatBackend` enum (rigctld | generic) behind `Option`, selected by
+`server::build_cat_controller`, gated by the daemon `generic-serial` feature (Unix). Meter polling
+stays rigctld-only (separate connection). Tests: `cat_backend_tests` (none → no controller; generic
+without a rig file → no controller, no panic).
 
 The field docs + TOML template now mark these accurately so the config no longer looks wired when
-it isn't; the underlying feature/refactor decisions are tracked here.
+it isn't; the underlying multi-rig refactor remains tracked here.
 
 ### Signed handshake wired into the daemon connect ✅ Done (2026-06-29)
 
