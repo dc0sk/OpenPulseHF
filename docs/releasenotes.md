@@ -21,60 +21,70 @@ last_updated: 2026-06-29
 - Generic serial CAT: drive a transceiver that Hamlib/rigctld doesn't support by setting
   `[radio] cat_backend = "generic"` with a serial port and a rig-definition TOML (build
   with `--features generic-serial`, Unix).
-- Operator panel: new AGC on/off toggle for the receiver streaming AGC, alongside the
-  existing Notch / CE-SSB / Logbook toggles and the squelch slider.
+- Automatic ADIF logbook (opt-in, `[logbook]`): one record per contact
+  (connect→disconnect), with the worked station's grid taken from the verified handshake
+  or a `[logbook.peer_grids]` config map. Runtime `SetLogbook` toggle (CLI + panel).
+- Receiver auto-notch productionized into the engine: multicarrier-aware, with persistence
+  and user controls, plus automatic QSY on a confirmed in-band interferer a notch can't
+  remove.
+- Operator panel rework: controls moved to a resizable right side-panel with a full-width
+  waterfall and the session status below it; new AGC on/off toggle alongside the
+  Notch / CE-SSB / Logbook toggles and the squelch slider. Full control-surface parity
+  across daemon / CLI / panel.
+- linksim: I/Q constellation views (symbol-spaced crisp dots) flanking a QR-branded info
+  band, regrouped Station B views with waterfall/constellation toggles, a CE-SSB toggle,
+  an SNR plot, extra FEC modes (LDPC / Turbo / RS-Strong / Concatenated), and a `--serve`
+  mode so the operator panel can attach to a live simulation with no radio.
 - New CLI command `openpulse daemon set-tx-attenuation <db> [--band <label>]` for
   headless/scripted TX-attenuation control.
+- Fix: CE-SSB is now gated off for dense OFDM higher-order modes (8PSK and above), where
+  it caused a ~6 dB decode regression.
 
-- Bandplan guardrails now recognize active `-RRC` waveform variants and
-  `SCFDMA52-64QAM-P4` in occupied-bandwidth checks, preventing valid
-  transmissions from being rejected as unknown operating modes.
-- `BandplanPolicy::default()` now uses `HamIaruRegion1` instead of the
-  deprecated `HamIaru` ruleset variant.
-- Region 3 bandplan validation now exposes an explicit warning path when it
-  uses Region 1 allocations as a conservative proxy.
-- TX compliance logs now reject cross-station frame metadata instead of
-  silently mixing different callsigns into a single session log.
-- Session metrics now publish throughput as an explicit upper-bound proxy and
-  include a dedicated note field to avoid interpreting it as exact payload
-  throughput.
+## v0.2.2 — 2026-06-25
 
-- Added BL-TP-7 SC-FDMA pilot-density Doppler review coverage in
-  `plugins/scfdma/tests/pilot_density_review.rs`, validating dense-pilot
-  (`SCFDMA52-64QAM-P4`) robustness against sparse-pilot
-  (`SCFDMA52-64QAM`) under deterministic Watterson channels.
-- On-air orchestration scripts now support `--help` and print usage text for
-  unknown flags:
-  `scripts/onair-preflight.sh`, `scripts/run-onair-tests.sh`,
-  and `scripts/onair-bundle-evidence.sh`.
-- Evidence bundles now include repository-state traceability:
-  `metadata.json` carries `git_dirty`, and bundles include
-  `git-status.short.txt`.
+- Live rig-meter polling (ALC / power-out / SWR) over a dedicated rigctld connection,
+  surfaced as panel status for drive tuning.
+- Guided ALC drive tuning: `openpulse calibrate drive` steps TX attenuation until the
+  rig's ALC sits in a target band (keeps CE-SSB on dense OFDM-HOM from over-driving the PA).
+- On-air SDR spectral-measurement toolset (scripts) and a one-shot twin-station demo.
 
-- `qpsk-plugin` demodulation now uses lower-overhead carrier/downmix loops
-  (single-pass sin/cos evaluation and phase-step accumulation), reducing CPU
-  cost in symbol extraction paths.
-- `QPSK1000-HF` adaptive equalizer profile is now pinned to `mu=0.015` to match
-  validated Watterson characterization and in-code documentation.
-- Added `scripts/onair-preflight.sh` to validate on-air readiness locally
-  (required tooling, callsign/config sanity, and expected release binaries).
-- `scripts/run-onair-tests.sh` now executes local preflight by default,
-  with `--no-preflight` available for explicitly pre-validated sessions.
-- On-air report JSON now records preflight execution metadata
-  (`preflight.ran` and `preflight.mode`) for compliance evidence trails.
-- Added `scripts/onair-bundle-evidence.sh` to create structured evidence bundles
-  for on-air validation runs (metadata + report + config snapshot + notes).
-- Evidence bundles now support strict validation flags to require report, config,
-  and preflight metadata for compliance capture.
+## v0.2.1 — 2026-06-24
 
-- Adaptive-rate ACK-UP progression now skips unmapped reserved profile rungs,
-  avoiding transitions into `None` mode mappings during active sessions.
-- The SNR-gated admission path remains limited to HPX wideband-HD SL13 -> SL14;
-  non-wideband profiles keep expected ACK-UP progression.
+- CE-SSB transmit envelope conditioning (controlled-envelope SSB, Hershberger W9GR, QEX
+  2014): an adaptive, per-mode, default-on TX conditioner for the high-PAPR multicarrier
+  modes (OFDM / SC-FDMA) that raises average TX power at fixed PEP. `[modem] cessb_enabled`,
+  a `SetCessb` control command, `openpulse daemon set-cessb`, and a panel toggle.
+  Channel-sim **+1.6 / +2.7 / +3.8 dB** average power on OFDM52 at zero BER cost; on-air
+  confirmed **+1.18 dB** (FT-991A). Believed to be the first open-source HF *data* modem to do this.
+- Operator panel: Messages presented as a tab alongside the Event Log.
 
-- Project docs are now organized under docs/ with a consistent format.
-- Pull requests now run docs frontmatter validation checks.
-- Docs touched in pull requests now receive automatic last_updated stamping.
+## v0.2.0 — 2026-06-21
+
+- Two-station link simulator (`openpulse-linksim`, new crate): proves the **effective
+  two-way transfer rate** under simulated SNR / noise / fading — real forward data frames
+  through a channel, real FSK4 ACKs over a reverse channel, over-the-air rate adaptation
+  along a profile ladder, and honest goodput accounting (forward + ACK air time +
+  turnaround over retransmissions). CLI sweep → effective-rate table/JSON; GUI with live
+  spectra/waterfalls and an SNR slider.
+- Signal-path testbench: explicit 2×4 spectrum/waterfall grid (fixes unrendered
+  waterfalls), all modes with **measured** per-mode bitrates, and new sources — virtual
+  loop, dual-card hardware loop, test-matrix runner, and an adaptive-ladder view.
+- Bandplan guardrails now recognize active `-RRC` variants and `SCFDMA52-64QAM-P4` in
+  occupied-bandwidth checks; `BandplanPolicy::default()` uses `HamIaruRegion1`; Region 3
+  exposes an explicit conservative-proxy warning.
+- TX compliance logs reject cross-station frame metadata; session metrics publish
+  throughput as an explicit upper-bound proxy with a dedicated note field.
+- BL-TP-7 SC-FDMA pilot-density Doppler review coverage (dense vs sparse pilots under
+  deterministic Watterson channels).
+- `qpsk-plugin` demodulation uses lower-overhead carrier/downmix loops; the `QPSK1000-HF`
+  equalizer profile is pinned to `mu=0.015` to match validated Watterson characterization.
+- On-air orchestration scripts (`onair-preflight.sh`, `run-onair-tests.sh`,
+  `onair-bundle-evidence.sh`) with `--help`, default local preflight, preflight metadata
+  in reports, and structured evidence bundles (incl. repo-state traceability).
+- Adaptive-rate ACK-UP progression skips unmapped reserved profile rungs; SNR-gated
+  admission limited to HPX wideband-HD SL13→SL14.
+- Project docs organized under `docs/` with consistent frontmatter; PR docs validation and
+  automatic `last_updated` stamping.
 
 ## v0.1.0
 
