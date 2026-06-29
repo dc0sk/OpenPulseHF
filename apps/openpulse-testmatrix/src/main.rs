@@ -7,13 +7,15 @@ mod report;
 mod runners;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use chrono::Utc;
 use clap::Parser;
+use rayon::prelude::*;
 
 use crate::cases::build_cases;
-use crate::matrix::Tier;
+use crate::matrix::{TestCase, TestResult, Tier, UseCase};
 use crate::report::{write_reports, RunMeta};
 use crate::runners::run_case;
 
@@ -209,19 +211,48 @@ fn main() {
         println!("Running {} test cases (tier: {:?})", total, tier);
 
         let start = Instant::now();
-        let mut results = Vec::with_capacity(total);
 
-        for (i, case) in cases.iter().enumerate() {
+        // Most cases are pure-CPU (each runner builds its own engine + fixed-seed channel) and run
+        // across the Rayon pool. The TCP-based use cases (ARDOP/KISS/B2F) each spin a tokio runtime
+        // and a loopback TNC on a shared port, so running them concurrently collides on the port and
+        // deadlocks — they run serially. Results are written back by original index, so the report
+        // stays byte-for-byte deterministic regardless of completion order.
+        let done = AtomicUsize::new(0);
+        let run_one = |case: &TestCase| -> TestResult {
             let result = run_case(case);
+            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             let status = if result.passed { "PASS" } else { "FAIL" };
             println!(
-                "[{:3}/{total}] {status} {} ({}ms)",
-                i + 1,
+                "[{n:4}/{total}] {status} {} ({}ms)",
                 case.id(),
                 result.duration_ms
             );
-            results.push(result);
+            result
+        };
+        let is_serial =
+            |c: &TestCase| matches!(c.use_case, UseCase::Ardop | UseCase::Kiss | UseCase::B2f);
+
+        let mut slots: Vec<Option<TestResult>> = (0..total).map(|_| None).collect();
+        // Parallel: every non-TCP case.
+        let parallel: Vec<(usize, TestResult)> = cases
+            .par_iter()
+            .enumerate()
+            .filter(|(_, c)| !is_serial(c))
+            .map(|(i, c)| (i, run_one(c)))
+            .collect();
+        for (i, r) in parallel {
+            slots[i] = Some(r);
         }
+        // Serial: the TCP/tokio cases, in order.
+        for (i, c) in cases.iter().enumerate() {
+            if is_serial(c) {
+                slots[i] = Some(run_one(c));
+            }
+        }
+        let results: Vec<TestResult> = slots
+            .into_iter()
+            .map(|r| r.expect("every case produced a result"))
+            .collect();
 
         let elapsed = start.elapsed();
         let passed = results.iter().filter(|r| r.passed).count();

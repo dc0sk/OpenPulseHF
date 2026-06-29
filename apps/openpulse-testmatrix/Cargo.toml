@@ -33,3 +33,4 @@ serde_json           = { workspace = true }
 clap                 = { workspace = true }
 tokio                = { workspace = true }
 chrono               = { version = "0.4", features = ["serde"] }
+rayon                = "1"

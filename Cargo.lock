@@ -4092,6 +4092,7 @@ dependencies = [
  "psk8-plugin",
  "qam64-plugin",
  "qpsk-plugin",
+ "rayon",
  "scfdma-plugin",
  "serde",
  "serde_json",
