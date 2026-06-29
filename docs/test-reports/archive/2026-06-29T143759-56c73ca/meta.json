@@ -1,11 +1,11 @@
 {
-  "date": "2026-06-29T15:12:02.735676770Z",
-  "git_commit": "76de87e",
-  "git_commit_full": "76de87e18f18027cf13f5879bba387b173877bf5",
+  "date": "2026-06-29T14:37:59.371205657Z",
+  "git_commit": "56c73ca",
+  "git_commit_full": "56c73ca757937bd2bf942bab52bf3df797f42be2",
   "git_dirty": true,
   "workspace_version": "0.3.0",
   "tier": "quick",
-  "duration_secs": 85.501977621,
+  "duration_secs": 86.071766518,
   "crates_tested": [
     "bpsk-plugin",
     "fsk4-plugin",
