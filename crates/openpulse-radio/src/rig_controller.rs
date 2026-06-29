@@ -188,3 +188,17 @@ impl PttController for RigctldController {
         self.ptt_asserted
     }
 }
+
+impl crate::cat_controller::CatController for RigctldController {
+    fn set_frequency(&mut self, hz: u64) -> Result<(), RadioError> {
+        RigctldController::set_frequency(self, hz)
+    }
+
+    fn get_frequency(&mut self) -> Result<u64, RadioError> {
+        RigctldController::get_frequency(self)
+    }
+
+    fn set_mode(&mut self, mode: &RigMode) -> Result<(), RadioError> {
+        RigctldController::set_mode(self, mode)
+    }
+}

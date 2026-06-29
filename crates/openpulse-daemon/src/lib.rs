@@ -57,7 +57,7 @@ use openpulse_qsy::session::{QsyAction, QsyPolicy, QsySession};
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_qsy::ConnectionTrustLevel;
 #[cfg(not(target_arch = "wasm32"))]
-use openpulse_radio::RigctldController;
+use openpulse_radio::CatController;
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_repeater::CrossBandRepeater;
 #[cfg(not(target_arch = "wasm32"))]
@@ -891,7 +891,7 @@ async fn execute_qsy_actions(
     actions: Vec<QsyAction>,
     session: &mut QsySession,
     engine: &mut ModemEngine,
-    mut rig_controller: Option<&mut RigctldController>,
+    mut rig_controller: Option<&mut (dyn CatController + Send)>,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
     mode: &str,
     scan_dwell_ms: u64,
@@ -1025,7 +1025,7 @@ pub fn check_ptt_watchdog(
 pub async fn process_received_bytes(
     bytes: &[u8],
     runtime_state: &mut RuntimeControlState,
-    rig_controller: Option<&mut RigctldController>,
+    rig_controller: Option<&mut (dyn CatController + Send)>,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
     active_mode: &SharedMode,
     engine: &mut ModemEngine,
@@ -1304,7 +1304,7 @@ pub fn expire_pending_handshake(
 pub async fn maybe_qsy_on_interference(
     auto_enabled: bool,
     runtime_state: &mut RuntimeControlState,
-    rig_controller: Option<&mut RigctldController>,
+    rig_controller: Option<&mut (dyn CatController + Send)>,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
     active_mode: &SharedMode,
     engine: &mut ModemEngine,
@@ -1403,7 +1403,7 @@ pub async fn apply_command_to_engine(
     engine: &mut ModemEngine,
     active_mode: &SharedMode,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
-    rig_controller: Option<&mut RigctldController>,
+    rig_controller: Option<&mut (dyn CatController + Send)>,
     runtime_state: &mut RuntimeControlState,
 ) {
     match cmd {

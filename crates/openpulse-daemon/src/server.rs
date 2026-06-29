@@ -20,7 +20,9 @@ use openpulse_core::relay::{RelayForwarder, RelayTrustPolicy};
 use openpulse_core::trust_store_file::load_trust_store_from_file;
 use openpulse_modem::ModemEngine;
 use openpulse_qsy::session::QsyPolicy;
-use openpulse_radio::{NoOpPtt, PttController, RigctldController, RigctldPtt, VoxPtt};
+use openpulse_radio::{
+    CatController, NoOpPtt, PttController, RigctldController, RigctldPtt, VoxPtt,
+};
 use openpulse_repeater::{CrossBandRepeater, RepeaterConfig};
 
 use bpsk_plugin::BpskPlugin;
@@ -318,22 +320,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     // rigctld/Hamlib does not support — no connection is attempted, the operator
     // tunes manually, and frequency-control commands are rejected. PTT is
     // independent (see build_ptt_controller / [modem] ptt_backend).
-    let mut rig_controller = if cfg.radio.cat_backend.eq_ignore_ascii_case("none") {
-        tracing::info!("CAT disabled (cat_backend = \"none\"); manual frequency control");
-        None
-    } else {
-        match RigctldController::connect(&cfg.radio.rigctld_addr) {
-            Ok(controller) => Some(controller),
-            Err(err) => {
-                tracing::warn!(
-                    addr = %cfg.radio.rigctld_addr,
-                    error = %err,
-                    "rigctld connect failed; set_freq commands will emit command_error"
-                );
-                None
-            }
-        }
-    };
+    let mut rig_controller = build_cat_controller(&cfg.radio);
 
     // Live rig-meter poll task (operator drive-tuning aid): a *dedicated* rigctld
     // connection polls ALC / power-out / SWR and emits `RigStatus` events so the
@@ -574,7 +561,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         &mut engine,
                         &handle.active_mode,
                         &handle.event_tx,
-                        rig_controller.as_mut(),
+                        rig_controller.as_mut().map(|c| c as &mut (dyn CatController + Send)),
                         &mut runtime_state,
                     )
                     .await;
@@ -671,7 +658,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     process_received_bytes(
                         &bytes,
                         &mut runtime_state,
-                        rig_controller.as_mut(),
+                        rig_controller.as_mut().map(|c| c as &mut (dyn CatController + Send)),
                         &handle.event_tx,
                         &handle.active_mode,
                         &mut engine,
@@ -684,7 +671,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 maybe_qsy_on_interference(
                     qsy_auto_on_interference,
                     &mut runtime_state,
-                    rig_controller.as_mut(),
+                    rig_controller.as_mut().map(|c| c as &mut (dyn CatController + Send)),
                     &handle.event_tx,
                     &handle.active_mode,
                     &mut engine,
@@ -813,6 +800,88 @@ pub fn build_audio_backend(backend: &str) -> Box<dyn AudioBackend> {
     Box::new(LoopbackBackend::default())
 }
 
+/// CAT controller backend chosen at startup. A concrete enum (not a `Box<dyn>`) so the daemon can
+/// reborrow it each loop iteration without the trait-object `Drop`-in-loop borrow-checker snag.
+pub enum CatBackend {
+    /// hamlib `rigctld` over TCP.
+    Rigctld(RigctldController),
+    /// TOML-scripted serial CAT (Unix; `generic-serial` feature).
+    #[cfg(feature = "generic-serial")]
+    Generic(openpulse_radio::GenericSerialCat),
+}
+
+impl CatController for CatBackend {
+    fn set_frequency(&mut self, hz: u64) -> Result<(), openpulse_radio::RadioError> {
+        match self {
+            CatBackend::Rigctld(c) => c.set_frequency(hz),
+            #[cfg(feature = "generic-serial")]
+            CatBackend::Generic(c) => c.set_frequency(hz),
+        }
+    }
+    fn get_frequency(&mut self) -> Result<u64, openpulse_radio::RadioError> {
+        match self {
+            CatBackend::Rigctld(c) => c.get_frequency(),
+            #[cfg(feature = "generic-serial")]
+            CatBackend::Generic(c) => c.get_frequency(),
+        }
+    }
+    fn set_mode(
+        &mut self,
+        mode: &openpulse_radio::RigMode,
+    ) -> Result<(), openpulse_radio::RadioError> {
+        match self {
+            CatBackend::Rigctld(c) => c.set_mode(mode),
+            #[cfg(feature = "generic-serial")]
+            CatBackend::Generic(c) => c.set_mode(mode),
+        }
+    }
+}
+
+/// Build the CAT (frequency/mode) controller selected by `[radio] cat_backend`:
+/// `"none"` → no CAT; `"generic"` → TOML-scripted serial (requires the `generic-serial` feature);
+/// anything else → rigctld over TCP. Returns `None` (manual tuning) on a connect/open failure.
+pub fn build_cat_controller(radio: &openpulse_config::RadioConfig) -> Option<CatBackend> {
+    match radio.cat_backend.to_ascii_lowercase().as_str() {
+        "none" => {
+            tracing::info!("CAT disabled (cat_backend = \"none\"); manual frequency control");
+            None
+        }
+        "generic" => {
+            #[cfg(feature = "generic-serial")]
+            {
+                match openpulse_radio::GenericSerialCat::open(&radio.serial_port, &radio.rig_file) {
+                    Ok(c) => {
+                        tracing::info!(port = %radio.serial_port, rig_file = %radio.rig_file,
+                            "generic serial CAT backend opened");
+                        Some(CatBackend::Generic(c))
+                    }
+                    Err(err) => {
+                        tracing::warn!(port = %radio.serial_port, error = %err,
+                            "generic serial CAT open failed; set_freq commands will emit command_error");
+                        None
+                    }
+                }
+            }
+            #[cfg(not(feature = "generic-serial"))]
+            {
+                tracing::warn!(
+                    "cat_backend = \"generic\" requires the `generic-serial` build feature; \
+                     CAT disabled (manual frequency control)"
+                );
+                None
+            }
+        }
+        _ => match RigctldController::connect(&radio.rigctld_addr) {
+            Ok(controller) => Some(CatBackend::Rigctld(controller)),
+            Err(err) => {
+                tracing::warn!(addr = %radio.rigctld_addr, error = %err,
+                    "rigctld connect failed; set_freq commands will emit command_error");
+                None
+            }
+        },
+    }
+}
+
 fn build_ptt_controller(backend: &str, rigctld_addr: &str) -> Option<Box<dyn PttController>> {
     match backend {
         "none" => Some(Box::new(NoOpPtt::new())),
@@ -839,5 +908,33 @@ fn build_ptt_controller(backend: &str, rigctld_addr: &str) -> Option<Box<dyn Ptt
             tracing::warn!(backend = %other, "unknown PTT backend; PTT disabled");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod cat_backend_tests {
+    use super::build_cat_controller;
+    use openpulse_config::RadioConfig;
+
+    #[test]
+    fn cat_backend_none_yields_no_controller() {
+        let radio = RadioConfig {
+            cat_backend: "none".into(),
+            ..RadioConfig::default()
+        };
+        assert!(build_cat_controller(&radio).is_none());
+    }
+
+    #[test]
+    fn cat_backend_generic_without_a_rig_file_yields_no_controller() {
+        // With the feature off this warns and returns None; with it on, opening an empty
+        // serial_port/rig_file fails and also returns None. Either way: no controller, no panic.
+        let radio = RadioConfig {
+            cat_backend: "generic".into(),
+            serial_port: String::new(),
+            rig_file: String::new(),
+            ..RadioConfig::default()
+        };
+        assert!(build_cat_controller(&radio).is_none());
     }
 }

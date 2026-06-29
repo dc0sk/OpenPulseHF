@@ -205,13 +205,14 @@ pub struct RigConfig {
     /// rigctld TCP address for this rig (default `"127.0.0.1:4532"`). The only field the daemon
     /// currently consumes (via `[radio.rig_b]` for the cross-band repeater's TX PTT).
     pub rigctld_addr: String,
-    /// **Reserved — not yet implemented.** Intended CAT backend selector
-    /// (`"rigctld"` / `"generic"`); the daemon only ever uses rigctld today, so this is unread.
-    /// See `docs/dev/steering/roadmap.md` → "Config/feature gaps".
+    /// **Reserved (multi-rig).** Per-rig CAT backend selector; the daemon reads the *top-level*
+    /// `[radio] cat_backend` (`"rigctld"` / `"generic"` / `"none"`), not this per-rig copy.
     pub backend: String,
-    /// **Reserved — not yet implemented.** Serial port for the unbuilt `"generic"` CAT backend.
+    /// **Reserved (multi-rig).** The active generic-backend serial port is the *top-level*
+    /// `[radio] serial_port`; this per-rig copy is unread until the multi-rig refactor.
     pub serial_port: String,
-    /// **Reserved — not yet implemented.** Rig-definition file for the unbuilt `"generic"` backend.
+    /// **Reserved (multi-rig).** The active generic-backend rig file is the *top-level*
+    /// `[radio] rig_file`; this per-rig copy is unread until the multi-rig refactor.
     pub rig_file: String,
 }
 
@@ -219,16 +220,21 @@ pub struct RigConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RadioConfig {
-    /// CAT (frequency/mode) backend: `"rigctld"` (default) or `"none"`.
+    /// CAT (frequency/mode) backend: `"rigctld"` (default), `"generic"`, or `"none"`.
     ///
-    /// `"none"` runs with no CAT control at all — no rigctld connection is
-    /// attempted — for a TRX that Hamlib/rigctld does not support. The operator
-    /// sets frequency manually on the radio; PTT still works via the
-    /// `[modem] ptt_backend` selection (`vox`/`rts`/`dtr`). Frequency-control
-    /// commands (set-freq, QSY retune) are rejected while CAT is disabled.
+    /// `"none"` runs with no CAT control at all — no connection is attempted — for a TRX that
+    /// Hamlib/rigctld does not support. `"generic"` drives a TOML-scripted serial rig (the
+    /// `serial_port` and `rig_file` below); it requires the daemon to be built with the
+    /// `generic-serial` feature and is Unix-only. The operator sets frequency manually if CAT is
+    /// unavailable; PTT still works via the `[modem] ptt_backend` selection (`vox`/`rts`/`dtr`).
     pub cat_backend: String,
     /// rigctld TCP address for single-rig PTT-only use (default `"127.0.0.1:4532"`).
     pub rigctld_addr: String,
+    /// Serial device for the `"generic"` CAT backend (e.g. `/dev/ttyUSB0`). Unused for rigctld/none.
+    pub serial_port: String,
+    /// Rig-definition TOML for the `"generic"` CAT backend (command templates + serial params).
+    /// See `docs/config/rig-*.toml`. Unused for rigctld/none.
+    pub rig_file: String,
     /// Rig meter (ALC/power-out/SWR) poll interval in milliseconds, emitted as
     /// `RigStatus` events for live operator drive-tuning. `0` disables polling.
     /// Default `500` (2 Hz). Uses a dedicated rigctld connection, so it never
@@ -392,6 +398,8 @@ impl Default for RadioConfig {
         Self {
             cat_backend: "rigctld".into(),
             rigctld_addr: "127.0.0.1:4532".into(),
+            serial_port: String::new(),
+            rig_file: String::new(),
             meter_poll_ms: 500,
             rig_a: RigConfig::default(),
             rig_b: None,
@@ -751,13 +759,17 @@ notch_persistence = 0
 cat_backend = "rigctld"
 # rigctld TCP address for single-rig PTT-only use.
 rigctld_addr = "127.0.0.1:4532"
+# "generic" CAT backend (TOML-scripted serial; requires the `generic-serial` build feature, Unix):
+serial_port = ""           # e.g. /dev/ttyUSB0
+rig_file = ""              # e.g. docs/config/rig-icom-ic7300.toml
 # Rig meter (ALC / power-out / SWR) poll interval in ms, surfaced as live RigStatus
 # events for drive tuning. 0 disables. Uses a separate rigctld connection.
 meter_poll_ms = 500
 
-# [radio.rig_a] is currently UNUSED — the primary rig is the top-level [radio] rigctld_addr above.
-# The "generic"/serial CAT backend (backend/serial_port/rig_file) is documented but NOT YET wired;
-# only rigctld is implemented. Both are tracked in roadmap "Config/feature gaps".
+# The "generic" serial CAT backend IS wired: set cat_backend = "generic" with the top-level
+# serial_port + rig_file above (build with --features generic-serial, Unix only).
+# [radio.rig_a] remains UNUSED — the primary rig is the top-level [radio] config above; rig_a is
+# reserved for the planned multi-rig refactor (roadmap "Config/feature gaps").
 
 # Secondary rig: the daemon reads ONLY its rigctld_addr, for the cross-band repeater's TX PTT.
 # Uncomment to enable the repeater's second rig.
