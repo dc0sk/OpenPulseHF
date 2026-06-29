@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: README.md
 status: living
-last_updated: 2026-06-24
+last_updated: 2026-06-29
 ---
 
 # OpenPulseHF
@@ -17,6 +17,7 @@ the core modem engine. All tests run against a deterministic loopback backend; n
 hardware is required to build or test.
 
 [![CI](https://github.com/dc0sk/OpenPulseHF/actions/workflows/ci.yml/badge.svg)](https://github.com/dc0sk/OpenPulseHF/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/dc0sk/OpenPulseHF?label=release)](https://github.com/dc0sk/OpenPulseHF/releases/latest)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Donate via PayPal](https://img.shields.io/badge/Donate-PayPal-blue.svg?logo=paypal)](https://www.paypal.com/donate/?hosted_button_id=WY9U4MQ3ZAQWC)
 
@@ -37,6 +38,8 @@ Notfunk Deutschland e.V. for providing space on their booth at HAM RADIO 2026.
 
 ---
 ## Status
+
+**🎉 v0.3.0 released (29th of June '26)** — [release notes](https://github.com/dc0sk/OpenPulseHF/releases/tag/v0.3.0). Headline: the daemon now runs a **signed handshake over the air on connect** — it exchanges and verifies an Ed25519 `ConReq`/`ConAck`, stores the peer's verified callsign + Maidenhead grid, and writes the verified grid to an **automatic ADIF logbook**. Also new: **opt-in ARDOP adaptive ARQ** (making the host `ARQBW`/`ARQTIMEOUT` hints real), a **generic serial CAT backend** for rigs Hamlib doesn't support, a reworked **operator panel** (right-hand controls, full-width waterfall, AGC toggle) with full daemon/CLI/panel control parity, receiver **auto-notch + auto-QSY** on in-band interference, and linksim I/Q constellation views with a `--serve` mode so the panel can attach with no radio.
 
 **v0.2.1 (24th of June '26)** — headline feature: CE-SSB transmit envelope conditioning (per-mode, default-on for the high-PAPR OFDM/SC-FDMA modes). The average-power gain at fixed PEP is confirmed on-air (+1.18 dB on 2 m via an FT-991A), matching the channel-sim prediction; software ACPR and an on-air SDR spectral-mask check show no added splatter on QPSK OFDM (dense OFDM-HOM stays clean at normal data-mode drive). The operator panel now carries a CE-SSB toggle and a tabbed Messages/Event-Log pane.
 
