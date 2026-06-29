@@ -10,6 +10,10 @@ last_updated: 2026-04-24
 **Version**: 1.0.0  
 **Status**: Normative specification for HPX mode (v2.0+)
 
+> Companion specs: [Protocol & Handshake Wire Specification](design/protocol-wire-spec.md) (the
+> byte layouts of the frames this state machine drives) and the
+> [Peer Query and Relay Wire Schema](peer-query-relay-wire.md).
+
 ---
 
 ## Executive Summary
