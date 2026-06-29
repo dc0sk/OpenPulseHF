@@ -15,7 +15,7 @@
 //! - [`PilotPlugin`] — the [`ModulationPlugin`] implementation.
 //!
 //! The POC mode is `PILOT-QPSK500` (rectangular pulse). Engine/profile
-//! integration and dense rungs follow (see `docs/dev/reference-mining-plan.md`).
+//! integration and dense rungs follow (see `docs/dev/research/reference-mining-plan.md`).
 
 pub mod demodulate;
 pub mod frame;

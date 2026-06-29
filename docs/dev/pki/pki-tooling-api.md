@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/dev/pki-tooling-api.md
+doc: docs/dev/pki/pki-tooling-api.md
 status: living
 last_updated: 2026-04-24
 ---

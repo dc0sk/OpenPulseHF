@@ -154,7 +154,7 @@ python digital_oob.py ofdm_off_8k.wav ofdm_on_8k.wav OFDM52
   → −29.1 dBc at moderate ALC, with the same output power. **Set audio drive for
   moderate ALC** and CE-SSB on HOM stays clean while keeping its power.
 
-See [`docs/dev/roadmap.md`](../../docs/dev/roadmap.md) §10.8 for the full record.
+See [`docs/dev/steering/roadmap.md`](../../docs/dev/steering/roadmap.md) §10.8 for the full record.
 
 ## Files
 

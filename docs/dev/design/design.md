@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/dev/design.md
+doc: docs/dev/design/design.md
 status: living
 last_updated: 2026-04-23
 ---

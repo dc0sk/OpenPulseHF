@@ -86,7 +86,7 @@ notes it requires a licensed station.
 
 ### DOC-06 — Roadmap current-phase statement matches code · Severity: Pass
 
-**File:** `docs/dev/roadmap.md`
+**File:** `docs/dev/steering/roadmap.md`
 
 The roadmap correctly states all scheduled phases (1–9) and FF series are complete.
 The "active tracks" section reflects the actual state (no remaining scheduled tracks).

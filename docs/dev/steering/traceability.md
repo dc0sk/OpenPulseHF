@@ -9,6 +9,36 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-29 — Docs: sort `docs/dev/` into topic subfolders + fix all references
+
+- **Requirement/change:** the loose files under `docs/dev/` were moved into four topic
+  subfolders — `design/` (architecture, design, freq-acquisition-design, hpx-waveform-design,
+  testbench-design), `pki/` (the 11 `pki-tooling-*` docs), `research/` (ardop/freedv-auth/js8call/
+  ofdm/pactor research, reference-mining-plan, references, vara-research, wsjtx-analysis), and
+  `steering/` (backlog, changelog, roadmap, traceability). All inbound and outbound references had
+  to follow the move so no link or doc-path breaks.
+- **Design decision:** keep the moves as `git mv` renames (history-preserving) and rewrite every
+  reference in two classes: (1) full-path mentions `docs/dev/<base>` → `docs/dev/<subdir>/<base>`
+  across the whole tree (markdown link text, `doc:` frontmatter self-pointers, and `.rs` doc/line
+  comments); (2) relative markdown link *targets* fixed per linking-file location — the dev README
+  index (`](base.md)` → `](subdir/base.md)`), the manual's `dev/<base>` targets, and the moved
+  files' own outgoing relative links that gained/needed a directory level
+  (`../mode-fec-ladder.md` → `../../mode-fec-ladder.md`, siblings via `../`).
+- **Implementation:** 29 `git mv` renames; a 29-substitution `sed` script applied to all tracked
+  text files for class (1); targeted per-file `sed` for class (2) in `docs/dev/README.md`,
+  `docs/openpulse-manual.md`, `docs/{features,mode-fec-ladder}.md`,
+  `docs/dev/{hpx-session-state-machine,vara-parity-execution-board}.md`,
+  `docs/dev/reviews/review-26050{8,17}.md`, and the moved `design/`/`steering/` files. Five `.rs`
+  doc-comment path mentions updated (`openpulse-ardop`, `openpulse-config`, `openpulse-dsp`,
+  `openpulse-kiss`, `pilot` plugin) — comment-only, no code change.
+- **Tests:** a Python link-integrity walker that resolves every relative `.md` link target against
+  the filesystem; a basename grep for any surviving old `docs/dev/<base>` path.
+- **Test results:** old-path grep → 0 hits. Link walker → only 3 broken links remain
+  (`docs/README.md` → `marketing/{banner,flyer,presentation}.md`), which are pre-existing (those
+  targets were never committed) and unrelated to this move. `cargo fmt --all --check` shows 5
+  pre-existing deviations, all in files outside this change set (`gui.rs`, `channel/lib.rs`,
+  `agc_loopback.rs`, `verification.rs`); no new fmt regression (rustfmt does not reflow comments).
+
 ## 2026-06-28 — Panel: controls to a right side-panel; status below the waterfall
 
 - **Requirement/change:** move the right-column (session status) elements below the waterfall; make
@@ -101,7 +131,7 @@ and the actually-observed results per change.
   — different mechanisms; no rate_policy bandwidth cap exists.
 - **Decision:** wiring no-ops into the dead fields would re-create the "defined-but-not-consumed" gap
   the audit removed, so it was deliberately NOT done. Real fix is a feature (TNC runs an adaptive ARQ
-  session + rate_policy bandwidth cap + connection timeout), recorded in `docs/dev/roadmap.md` under
+  session + rate_policy bandwidth cap + connection timeout), recorded in `docs/dev/steering/roadmap.md` under
   the TNC command-surface audit.
 - **Implementation:** none (no speculative surface); roadmap finding only.
 - **Test results:** docs-only; workspace gates unaffected.
@@ -141,7 +171,7 @@ and the actually-observed results per change.
   exact anti-pattern the TNC/config audits just removed), so it was deliberately NOT done. The
   config `[logbook.peer_grids]` map (A, shipped) remains the interim source.
 - **Implementation:** none (no speculative surface). Finding + real-fix path recorded in
-  `docs/dev/roadmap.md` ("Signed handshake not wired into the daemon connect").
+  `docs/dev/steering/roadmap.md` ("Signed handshake not wired into the daemon connect").
 - **Test results:** docs-only; workspace gates unaffected (no code change).
 
 ## 2026-06-27 — Logbook peer GRIDSQUARE via config map (A)
@@ -172,7 +202,7 @@ and the actually-observed results per change.
   corrected `docs/non-gpl-interfacing.md` (split "implemented" vs "accepted-not-applied" vs "stub").
   Roadmap "TNC command-surface audit" records the real-wiring follow-ups.
 - **Implementation:** `crates/openpulse-kiss/src/server.rs` (log); `crates/openpulse-ardop/src/
-  command.rs` (comment); `docs/non-gpl-interfacing.md`; `docs/dev/roadmap.md`.
+  command.rs` (comment); `docs/non-gpl-interfacing.md`; `docs/dev/steering/roadmap.md`.
 - **Test results:** ardop + kiss build; clippy 0; no behavior change beyond a debug log.
 
 ## 2026-06-27 — Adaptive-profile FEC audit (+ a permanent gate)
@@ -256,7 +286,7 @@ and the actually-observed results per change.
   accurately so the config stops looking wired, and record the real fixes in the roadmap.
 - **Implementation:** `crates/openpulse-config/src/lib.rs` (field docs + TOML template mark
   rig_a "currently unused" and the generic-backend fields "reserved — not yet implemented";
-  corrected the repeater comment); `docs/dev/roadmap.md` "Config/feature gaps" entry.
+  corrected the repeater comment); `docs/dev/steering/roadmap.md` "Config/feature gaps" entry.
 - **Tests/results:** `openpulse-config` 9/9 (template still parses), clippy 0. The recently-added
   `[modem] notch_*`, `[qsy] auto_qsy_on_interference`, `[logbook] *` fields were each confirmed
   consumed by the daemon during the audit.
@@ -338,7 +368,7 @@ and the actually-observed results per change.
 
 ## 2026-06-27 — Control-surface parity (CLI + panel)
 
-- **Requirement/change:** the control-surface audit (`docs/dev/roadmap.md` → "Control-surface
+- **Requirement/change:** the control-surface audit (`docs/dev/steering/roadmap.md` → "Control-surface
   parity gaps") found `ControlCommand`s reachable from one surface but not another: CLI couldn't
   `SendMessage` / `SetMode` / PTT / accept-reject QSY; panel couldn't `SetDcdSquelch` / start-stop
   OTA. Close the real two-way-operability gaps.
