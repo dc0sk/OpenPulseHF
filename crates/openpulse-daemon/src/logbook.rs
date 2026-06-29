@@ -97,6 +97,18 @@ impl Logbook {
         });
     }
 
+    /// Override the in-flight QSO's worked-station grid with one proven on air (e.g. from a
+    /// verified handshake), taking precedence over the config `peer_grids` fallback. No-op when
+    /// there is no pending QSO or `grid` is empty.
+    pub fn set_pending_peer_grid(&mut self, grid: &str) {
+        if grid.is_empty() {
+            return;
+        }
+        if let Some(p) = self.pending.as_mut() {
+            p.gridsquare = Some(grid.to_string());
+        }
+    }
+
     /// Finalize the pending QSO (a disconnect) and append an ADIF record. `rx_snr_db` is the
     /// receiver's last SNR estimate, used to fill `RST_RCVD` + a `COMMENT`. Returns `Ok(true)` when
     /// a record was written, `Ok(false)` when there was nothing to write or the logbook is disabled.

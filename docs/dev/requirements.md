@@ -162,6 +162,6 @@ Regulatory compliance is a hard requirement for any transmission on amateur radi
 
 ## Documentation requirements
 
-- Version bumps require updates to docs/changelog.md and docs/releasenotes.md.
+- Version bumps require updates to docs/dev/steering/changelog.md and docs/releasenotes.md.
 - Docs files under docs/ must pass frontmatter validation in CI.
 - HPX benchmark assumptions and result summaries must be captured in docs/high-performance-mode.md.

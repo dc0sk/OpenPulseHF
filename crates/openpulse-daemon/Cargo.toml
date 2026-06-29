@@ -55,6 +55,7 @@ openpulse-radio   = { workspace = true }
 openpulse-audio   = { workspace = true }
 openpulse-config  = { workspace = true }
 openpulse-channel = { workspace = true }
+rand             = { workspace = true }
 openpulse-qsy     = { workspace = true }
 openpulse-repeater = { workspace = true }
 bpsk-plugin      = { workspace = true }
