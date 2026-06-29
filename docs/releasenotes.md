@@ -9,6 +9,8 @@ last_updated: 2026-06-29
 
 ## Unreleased
 
+## v0.3.0 — 2026-06-29
+
 - Authenticated connections: when you connect to a peer, the daemon now exchanges a
   signed handshake over the air and verifies the peer's identity and Maidenhead grid.
   The verified grid is written to your ADIF logbook. Set your station signing key with
