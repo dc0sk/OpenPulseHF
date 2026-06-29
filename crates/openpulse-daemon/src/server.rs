@@ -9,8 +9,9 @@
 //! comes from `[daemon]` in the config, so two daemons just use distinct ports.
 
 use crate::{
-    apply_command_to_engine, check_ptt_watchdog, maybe_qsy_on_interference, ota_status_event,
-    process_received_bytes, ws, ControlServer, RuntimeControlState,
+    apply_command_to_engine, check_ptt_watchdog, expire_pending_handshake,
+    maybe_qsy_on_interference, ota_status_event, process_received_bytes, ws, ControlServer,
+    RuntimeControlState,
 };
 use openpulse_audio::LoopbackBackend;
 use openpulse_config::OpenpulseConfig;
@@ -424,9 +425,34 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
         None
     };
 
+    // Station identity seed for signing handshake (CONREQ/CONACK) frames. An explicit path lets
+    // co-located stations (the twin rig) hold distinct identities; empty uses the platform default.
+    let station_seed = {
+        let loaded = if cfg.station.identity_key_path.is_empty() {
+            openpulse_config::load_or_generate_identity()
+        } else {
+            openpulse_config::load_identity_from(std::path::Path::new(
+                &cfg.station.identity_key_path,
+            ))
+        };
+        match loaded {
+            Ok(seed) => seed,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to load station identity key; handshake frames will use an ephemeral key");
+                let mut seed = [0u8; 32];
+                use rand::RngCore;
+                rand::rngs::OsRng.fill_bytes(&mut seed);
+                seed
+            }
+        }
+    };
+
     let mut runtime_state = RuntimeControlState {
         repeater_enabled: cfg.repeater.enabled,
         repeater: Some(repeater),
+        station_seed,
+        local_callsign: cfg.station.callsign.clone(),
+        local_grid: cfg.station.grid_square.clone(),
         qsy_candidate_freqs: cfg.qsy.candidate_freqs_hz.clone(),
         qsy_switchover_offset_s: u32::try_from(cfg.qsy.switchover_offset_s).unwrap_or_else(|_| {
             tracing::warn!(
@@ -664,6 +690,8 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     &mut engine,
                 )
                 .await;
+                // Abandon a signed handshake whose CONACK never arrived (timeout).
+                expire_pending_handshake(&mut runtime_state, &handle.event_tx);
                 // Refresh live metrics so the periodic metrics task can broadcast real values.
                 {
                     let mut m = handle.shared_metrics.lock().await;

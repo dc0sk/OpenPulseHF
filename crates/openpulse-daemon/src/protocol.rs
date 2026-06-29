@@ -153,6 +153,12 @@ pub enum ControlEvent {
         connected: bool,
         peer: Option<String>,
     },
+    /// A peer identity was proven by a verified signed handshake (CONREQ/CONACK).
+    PeerVerified {
+        callsign: String,
+        /// Maidenhead grid the peer advertised in the handshake (empty = none).
+        grid: String,
+    },
     /// Repeater runtime state changed.
     RepeaterChanged { enabled: bool },
     /// New pending QSY proposal token available for operator decision.

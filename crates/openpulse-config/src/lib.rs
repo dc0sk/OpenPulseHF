@@ -117,6 +117,10 @@ pub struct QsyConfig {
 pub struct StationConfig {
     pub callsign: String,
     pub grid_square: String,
+    /// Path to the 32-byte Ed25519 identity seed used to sign handshake (CONREQ/CONACK) frames.
+    /// Empty = the platform default (`~/.config/openpulse/identity.key`); set an explicit path to
+    /// give co-located stations (e.g. the twin-station rig) distinct identities.
+    pub identity_key_path: String,
 }
 
 /// Audio backend selection.
@@ -326,6 +330,7 @@ impl Default for StationConfig {
         Self {
             callsign: "N0CALL".into(),
             grid_square: "AA00".into(),
+            identity_key_path: String::new(),
         }
     }
 }
@@ -652,6 +657,10 @@ pub fn init_template() -> String {
 callsign = "N0CALL"
 # Maidenhead grid square locator.
 grid_square = "AA00"
+# Path to the 32-byte Ed25519 identity seed used to sign handshake (CONREQ/CONACK) frames.
+# Empty = the platform default (~/.config/openpulse/identity.key), generated on first run.
+# Set an explicit path to give co-located stations (e.g. the twin rig) distinct identities.
+identity_key_path = ""
 
 [audio]
 # Audio backend: default | cpal | loopback

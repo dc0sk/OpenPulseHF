@@ -9,6 +9,48 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-29 — Signed handshake over RF into the daemon connect (+ verified logbook grid)
+
+- **Requirement/change:** wire the Ed25519 signed `ConReq`/`ConAck` handshake into the daemon's
+  `ConnectPeer`/RF path (it was a tested library primitive the daemon never exchanged — `ConnectPeer`
+  was a local trust eval), store the verified peer identity, and feed the verified grid to the ADIF
+  logbook (closing logbook item B). The keystone that also unblocks host-driven ARQ bounds.
+- **Design decision:** *additive* exchange, not a rewrite of connect — `begin_secure_session` still
+  runs; `ConnectPeer` additionally signs+sends a `ConReq` and records a `PendingHandshake`. Frames
+  are ~530 B > the 255 B modem-frame cap, so they're **SAR-fragmented** (`sar_encode`) on TX and
+  reassembled (`SarReassembler`) on RX; the reassembly is a fall-through after relay/QSY dispatch
+  (handshake fragments are binary, not QSY ASCII / relay envelopes) and is confirmed by the
+  reassembled `HSCQ`/`HSAK` magic, so no wire marker is needed (which wouldn't fit anyway). The
+  responder verifies + replies `ConAck` + records the peer; the initiator verifies the `ConAck`
+  against its in-flight `ConReq` (session-id gated) + records the peer + clears pending. Grid is a
+  `skip_serializing_if`-empty signed field on `ConReq`/`ConAck` so legacy zero-grid frames and their
+  signatures stay byte-identical; added `create_with_grid` constructors leaving the 25 existing
+  `create` callers untouched. Station key from `[station] identity_key_path` (default
+  `~/.config/openpulse/identity.key`, auto-generated; explicit path lets the twin rig hold distinct
+  identities). New `ControlEvent::PeerVerified`; 30 s CONACK timeout via `expire_pending_handshake`.
+  Verification uses `PolicyProfile::Permissive` (signature proves key possession; first-seen peers
+  still connect, mirroring the optimistic `ConnectPeer`).
+- **Implementation:** `crates/openpulse-core/src/handshake.rs` (grid field + `create_with_grid`);
+  `crates/openpulse-config/src/lib.rs` (`StationConfig.identity_key_path` + template);
+  `crates/openpulse-daemon/src/lib.rs` (`PendingHandshake`/`VerifiedPeer`, `RuntimeControlState`
+  fields incl. `handshake_sar`, `transmit_handshake_frame`, `try_reassemble_handshake`,
+  `handle_inbound_conreq`/`handle_inbound_conack`, `record_verified_peer`,
+  `expire_pending_handshake`, `ConnectPeer` CONREQ send, RX dispatch);
+  `crates/openpulse-daemon/src/logbook.rs` (`set_pending_peer_grid`);
+  `crates/openpulse-daemon/src/server.rs` (load identity seed at startup; expiry tick);
+  `crates/openpulse-daemon/src/protocol.rs` + `apps/openpulse-panel/src/connection.rs`
+  (`PeerVerified` event + panel log).
+- **Tests:** `crates/openpulse-core/src/handshake.rs` inline (grid round-trip, grid is
+  signature-covered, empty-grid byte-identical to legacy); `crates/openpulse-daemon/src/lib.rs`
+  `handshake_rf_tests` (responder reassembles+verifies+records; initiator verifies+stamps logbook
+  grid into the ADIF record; mismatched-session CONACK ignored; ConnectPeer initiates; full-size SAR
+  fragment survives BPSK250; pending-handshake timeout).
+- **Test results (run):** `cargo test -p openpulse-core -p openpulse-config -p openpulse-daemon
+  --no-default-features` → all green (core lib 226, handshake_integration 17, daemon lib incl.
+  `handshake_rf_tests` 6, config 16, …; 0 failed). `cargo clippy -p openpulse-core -p
+  openpulse-config -p openpulse-daemon -p openpulse-panel --no-default-features --all-targets -D
+  warnings` → 0 warnings. `cargo fmt` clean on the touched crates.
+
 ## 2026-06-29 — Panel: AGC on/off toggle (control-surface parity)
 
 - **Requirement/change:** close the last open control-surface parity gap — the receiver streaming

@@ -36,10 +36,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_channel::dsp::PowerSpectrum;
 #[cfg(not(target_arch = "wasm32"))]
-use openpulse_core::handshake::{InMemoryTrustStore, TrustStore};
+use openpulse_core::handshake::{
+    verify_conack, verify_conreq, ConAck, ConReq, InMemoryTrustStore, TrustStore,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_core::relay::RelayForwarder;
-use openpulse_core::trust::{CertificateSource, PublicKeyTrustLevel, SigningMode};
+#[cfg(not(target_arch = "wasm32"))]
+use openpulse_core::sar::{sar_encode, SarReassembler};
+use openpulse_core::trust::{CertificateSource, PolicyProfile, PublicKeyTrustLevel, SigningMode};
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_modem::engine::SecureSessionParams;
 #[cfg(not(target_arch = "wasm32"))]
@@ -172,7 +176,45 @@ pub struct RuntimeControlState {
     pub logbook: crate::logbook::Logbook,
     /// Most recent CAT frequency (Hz) set via `SetFreq`, stamped into the logbook QSO.
     pub last_freq_hz: Option<u64>,
+    /// 32-byte Ed25519 seed identifying this station; signs outgoing CONREQ/CONACK frames.
+    pub station_seed: [u8; 32],
+    /// Local callsign advertised as the handshake `station_id`.
+    pub local_callsign: String,
+    /// Local Maidenhead grid advertised in the handshake (empty = not advertised).
+    pub local_grid: String,
+    /// Outstanding CONREQ awaiting a CONACK (initiator role); `None` when idle.
+    pub pending_handshake: Option<PendingHandshake>,
+    /// Most recently verified peer identity from a completed signed handshake.
+    pub verified_peer: Option<VerifiedPeer>,
+    /// Reassembles inbound SAR-fragmented handshake frames (CONREQ/CONACK exceed one modem frame).
+    pub handshake_sar: SarReassembler,
 }
+
+/// An in-flight CONREQ the daemon sent and is awaiting a CONACK for.
+#[derive(Clone, Debug)]
+pub struct PendingHandshake {
+    /// Session id echoed by the peer's CONACK.
+    pub session_id: String,
+    /// Callsign the operator asked to connect to.
+    pub peer_callsign: String,
+    /// When the CONREQ went out, for timeout expiry.
+    pub started_at: Instant,
+}
+
+/// A peer identity proven by a verified Ed25519 handshake signature.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedPeer {
+    /// Peer station id (callsign) from the signed frame.
+    pub callsign: String,
+    /// Peer Maidenhead grid from the signed frame (empty = not advertised).
+    pub grid: String,
+    /// Peer Ed25519 verifying-key bytes.
+    pub pubkey: Vec<u8>,
+}
+
+/// Timeout after which an unanswered CONREQ is abandoned.
+#[cfg(not(target_arch = "wasm32"))]
+pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Default for RuntimeControlState {
@@ -197,6 +239,12 @@ impl Default for RuntimeControlState {
             dcd_squelch_bands: std::collections::BTreeMap::new(),
             logbook: crate::logbook::Logbook::default(),
             last_freq_hz: None,
+            station_seed: [0u8; 32],
+            local_callsign: String::new(),
+            local_grid: String::new(),
+            pending_handshake: None,
+            verified_peer: None,
+            handshake_sar: SarReassembler::new(HANDSHAKE_TIMEOUT),
         }
     }
 }
@@ -986,14 +1034,18 @@ pub async fn process_received_bytes(
         return;
     }
     let mode = active_mode.lock().await.clone();
+
     // Attempt relay forwarding on the raw bytes before QSY parsing: WireEnvelope frames
     // are binary and would be dropped by the UTF-8 early return below.
     maybe_relay_forward(bytes, &mode, runtime_state, engine);
 
-    let Ok(text) = std::str::from_utf8(bytes) else {
-        return;
-    };
-    let Ok(frame) = decode_qsy_frame(text.trim()) else {
+    // QSY frames are ASCII; a non-QSY, non-relay binary frame is a candidate handshake SAR
+    // fragment (CONREQ/CONACK exceed one 255-byte modem frame, so they arrive fragmented).
+    let qsy_frame = std::str::from_utf8(bytes)
+        .ok()
+        .and_then(|text| decode_qsy_frame(text.trim()).ok());
+    let Some(frame) = qsy_frame else {
+        try_reassemble_handshake(bytes, runtime_state, event_tx, &mode, engine);
         return;
     };
 
@@ -1033,6 +1085,213 @@ pub async fn process_received_bytes(
             .await;
         }
         Err(e) => tracing::warn!(error = %e, "qsy responder: apply frame failed"),
+    }
+}
+
+/// Session key for the handshake SAR reassembler. One handshake is in flight per peer connection,
+/// and a node only ever receives one frame type at a time (initiator→CONACK, responder→CONREQ).
+#[cfg(not(target_arch = "wasm32"))]
+const HANDSHAKE_SAR_SESSION: &str = "handshake";
+
+/// SAR-fragment a signed handshake frame (CONREQ/CONACK are ~500 B, over the 255 B modem-frame
+/// cap) and transmit each fragment. The receiver reassembles them in [`try_reassemble_handshake`].
+#[cfg(not(target_arch = "wasm32"))]
+fn transmit_handshake_frame(engine: &mut ModemEngine, mode: &str, frame: &[u8]) {
+    let fragments = match sar_encode(0, frame) {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(error = %e, "handshake: SAR encode failed");
+            return;
+        }
+    };
+    for frag in fragments {
+        if let Err(e) = engine.transmit(&frag, mode, None) {
+            tracing::warn!(error = %e, "handshake: fragment transmit failed");
+        }
+    }
+}
+
+/// Feed a non-QSY, non-relay frame into the handshake SAR reassembler; on a completed segment,
+/// dispatch the reassembled CONREQ/CONACK (confirmed by its HSCQ/HSAK magic). Stray frames create
+/// at most a short-lived reassembly slot that the periodic [`expire_pending_handshake`] clears.
+#[cfg(not(target_arch = "wasm32"))]
+fn try_reassemble_handshake(
+    bytes: &[u8],
+    runtime_state: &mut RuntimeControlState,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+    mode: &str,
+    engine: &mut ModemEngine,
+) {
+    let assembled = match runtime_state
+        .handshake_sar
+        .ingest(HANDSHAKE_SAR_SESSION, bytes)
+    {
+        Ok(Some(full)) => full,
+        Ok(None) => return,
+        Err(_) => return, // not a well-formed SAR fragment; ignore
+    };
+    if assembled.starts_with(b"HSCQ") {
+        handle_inbound_conreq(&assembled, runtime_state, event_tx, mode, engine);
+    } else if assembled.starts_with(b"HSAK") {
+        handle_inbound_conack(&assembled, runtime_state, event_tx);
+    } else {
+        tracing::debug!("handshake: reassembled segment has no CONREQ/CONACK magic; dropping");
+    }
+}
+
+/// Responder side of the signed handshake: verify an inbound CONREQ, reply with a signed
+/// CONACK over RF, and record the proven peer identity (callsign + grid + pubkey). Verification
+/// failures are logged and dropped (no reply), so an unverifiable frame can't open a session.
+#[cfg(not(target_arch = "wasm32"))]
+fn handle_inbound_conreq(
+    bytes: &[u8],
+    runtime_state: &mut RuntimeControlState,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+    mode: &str,
+    engine: &mut ModemEngine,
+) {
+    let req = match ConReq::decode(bytes) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "handshake: CONREQ decode failed");
+            return;
+        }
+    };
+    // Permissive policy: the signature proves key possession; trust classification is recorded
+    // but an unknown (first-seen) peer is still allowed to connect, mirroring `ConnectPeer`.
+    if let Err(e) = verify_conreq(
+        &req,
+        &runtime_state.trust_store,
+        PolicyProfile::Permissive,
+        SigningMode::Normal,
+    ) {
+        tracing::warn!(peer = %req.station_id, error = %e, "handshake: CONREQ verification rejected");
+        return;
+    }
+
+    // Reply with a signed CONACK echoing the session id and advertising our grid.
+    match ConAck::create_with_grid(
+        &runtime_state.local_callsign,
+        &runtime_state.station_seed,
+        SigningMode::Normal,
+        &req.session_id,
+        openpulse_core::compression::CompressionAlgorithm::None,
+        openpulse_core::fec::FecMode::None,
+        &runtime_state.local_grid,
+    ) {
+        Ok(ack) => match ack.encode() {
+            Ok(frame) => transmit_handshake_frame(engine, mode, &frame),
+            Err(e) => tracing::warn!(error = %e, "handshake: CONACK encode failed"),
+        },
+        Err(e) => tracing::warn!(error = %e, "handshake: CONACK create failed"),
+    }
+
+    record_verified_peer(
+        runtime_state,
+        event_tx,
+        &req.station_id,
+        &req.station_grid,
+        &req.pubkey,
+    );
+}
+
+/// Initiator side of the signed handshake: verify the peer's CONACK against the in-flight CONREQ,
+/// then record the proven peer identity and clear the pending handshake.
+#[cfg(not(target_arch = "wasm32"))]
+fn handle_inbound_conack(
+    bytes: &[u8],
+    runtime_state: &mut RuntimeControlState,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+) {
+    let ack = match ConAck::decode(bytes) {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::warn!(error = %e, "handshake: CONACK decode failed");
+            return;
+        }
+    };
+    let Some(pending) = runtime_state.pending_handshake.clone() else {
+        tracing::debug!("handshake: CONACK received with no pending CONREQ; ignoring");
+        return;
+    };
+    // The CONACK must echo our CONREQ's session id. `verify_conack` also re-checks this, but
+    // gating here avoids tearing down a pending handshake on an unrelated peer's CONACK.
+    if ack.session_id != pending.session_id {
+        tracing::debug!(
+            got = %ack.session_id,
+            want = %pending.session_id,
+            "handshake: CONACK session id mismatch; ignoring"
+        );
+        return;
+    }
+    if let Err(e) = verify_conack(
+        &ack,
+        &pending.session_id,
+        &[],
+        &[],
+        &runtime_state.trust_store,
+        PolicyProfile::Permissive,
+        SigningMode::Normal,
+    ) {
+        tracing::warn!(peer = %ack.station_id, error = %e, "handshake: CONACK verification rejected");
+        runtime_state.pending_handshake = None;
+        return;
+    }
+    record_verified_peer(
+        runtime_state,
+        event_tx,
+        &ack.station_id,
+        &ack.station_grid,
+        &ack.pubkey,
+    );
+    runtime_state.pending_handshake = None;
+}
+
+/// Store a freshly-verified peer identity, stamp the verified grid onto the in-flight logbook QSO,
+/// and emit a `PeerVerified` event for clients.
+#[cfg(not(target_arch = "wasm32"))]
+fn record_verified_peer(
+    runtime_state: &mut RuntimeControlState,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+    callsign: &str,
+    grid: &str,
+    pubkey: &[u8],
+) {
+    runtime_state.verified_peer = Some(VerifiedPeer {
+        callsign: callsign.to_string(),
+        grid: grid.to_string(),
+        pubkey: pubkey.to_vec(),
+    });
+    // Prefer the on-air verified grid over the config peer_grids fallback for this QSO.
+    if !grid.is_empty() {
+        runtime_state.logbook.set_pending_peer_grid(grid);
+    }
+    tracing::info!(peer = %callsign, grid = %grid, "handshake: peer identity verified");
+    let _ = event_tx.send(ControlEvent::PeerVerified {
+        callsign: callsign.to_string(),
+        grid: grid.to_string(),
+    });
+}
+
+/// Abandon an unanswered CONREQ once [`HANDSHAKE_TIMEOUT`] elapses. Called from the daemon
+/// receive loop each tick; emits a `CommandError` so the operator sees the handshake gave up.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn expire_pending_handshake(
+    runtime_state: &mut RuntimeControlState,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+) {
+    // Drop stale partial reassemblies (e.g. a handshake that lost a fragment).
+    runtime_state.handshake_sar.expire();
+    if let Some(p) = &runtime_state.pending_handshake {
+        if p.started_at.elapsed() >= HANDSHAKE_TIMEOUT {
+            let peer = p.peer_callsign.clone();
+            runtime_state.pending_handshake = None;
+            tracing::warn!(peer = %peer, "handshake: CONACK timed out; no verified identity");
+            let _ = event_tx.send(ControlEvent::CommandError {
+                command: "connect_peer".to_string(),
+                reason: format!("handshake timed out awaiting CONACK from {peer}"),
+            });
+        }
     }
 }
 
@@ -1219,6 +1478,33 @@ pub async fn apply_command_to_engine(
                     let token = format!("qsy-{now_ms}");
                     runtime_state.qsy_pending_token = Some(token.clone());
                     let _ = event_tx.send(ControlEvent::QsyPending { token });
+
+                    // Initiate the signed handshake over RF: send a CONREQ and await the
+                    // peer's CONACK (verified in `process_received_bytes`). Additive to the
+                    // local trust eval above — the connection upgrades to "verified" on CONACK.
+                    let session_id = format!("{}-{now_ms}", runtime_state.local_callsign);
+                    match ConReq::create_with_grid(
+                        &runtime_state.local_callsign,
+                        &runtime_state.station_seed,
+                        vec![SigningMode::Normal],
+                        &session_id,
+                        vec![],
+                        vec![],
+                        &runtime_state.local_grid,
+                    ) {
+                        Ok(req) => match req.encode() {
+                            Ok(frame) => {
+                                transmit_handshake_frame(engine, &mode, &frame);
+                                runtime_state.pending_handshake = Some(PendingHandshake {
+                                    session_id,
+                                    peer_callsign: callsign.clone(),
+                                    started_at: Instant::now(),
+                                });
+                            }
+                            Err(e) => tracing::warn!(error = %e, "handshake: CONREQ encode failed"),
+                        },
+                        Err(e) => tracing::warn!(error = %e, "handshake: CONREQ create failed"),
+                    }
                 }
                 Err(err) => {
                     let _ = event_tx.send(ControlEvent::CommandError {
@@ -2666,5 +2952,277 @@ mod command_apply_tests {
         let mut state = RuntimeControlState::default();
         let fired = check_ptt_watchdog(&mut state, &ev_tx);
         assert!(!fired, "watchdog must not fire when PTT is not active");
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod handshake_rf_tests {
+    use super::*;
+    use bpsk_plugin::BpskPlugin;
+    use openpulse_audio::LoopbackBackend;
+    use openpulse_core::compression::CompressionAlgorithm;
+    use openpulse_core::fec::FecMode;
+    use tokio::sync::Mutex;
+
+    fn bpsk_engine() -> ModemEngine {
+        let mut e = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        e.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+        e
+    }
+
+    fn mode() -> SharedMode {
+        Arc::new(Mutex::new("BPSK250".to_string()))
+    }
+
+    /// The responder reassembles a fragmented, signed CONREQ from RF, records the proven peer
+    /// identity (callsign + grid + pubkey), and emits `PeerVerified`.
+    #[tokio::test]
+    async fn responder_verifies_conreq_fragments_and_records_peer() {
+        let conreq = ConReq::create_with_grid(
+            "W1AW",
+            &[1u8; 32],
+            vec![SigningMode::Normal],
+            "W1AW-1700000000000",
+            vec![],
+            vec![],
+            "FN31pr",
+        )
+        .unwrap();
+        let frags = sar_encode(0, &conreq.encode().unwrap()).unwrap();
+        assert!(frags.len() > 1, "a CONREQ exceeds one modem frame");
+
+        let mut eng = bpsk_engine();
+        let mode = mode();
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+        let mut rs = RuntimeControlState {
+            local_callsign: "K2XYZ".into(),
+            local_grid: "EM69".into(),
+            station_seed: [2u8; 32],
+            ..RuntimeControlState::default()
+        };
+
+        for (i, frag) in frags.iter().enumerate() {
+            process_received_bytes(frag, &mut rs, None, &ev, &mode, &mut eng).await;
+            if i + 1 < frags.len() {
+                assert!(
+                    rs.verified_peer.is_none(),
+                    "must not verify before all fragments arrive"
+                );
+            }
+        }
+
+        let vp = rs
+            .verified_peer
+            .expect("peer verified after final fragment");
+        assert_eq!(vp.callsign, "W1AW");
+        assert_eq!(vp.grid, "FN31pr");
+        assert_eq!(vp.pubkey, conreq.pubkey);
+        assert!(
+            matches!(rx.try_recv(), Ok(ControlEvent::PeerVerified { callsign, grid })
+                if callsign == "W1AW" && grid == "FN31pr"),
+            "PeerVerified event should be emitted"
+        );
+    }
+
+    /// The initiator verifies the peer's CONACK against its in-flight CONREQ, records the verified
+    /// peer, clears the pending handshake, and stamps the verified grid onto the logbook QSO.
+    #[tokio::test]
+    async fn initiator_verifies_conack_and_stamps_logbook_grid() {
+        let tmp = std::env::temp_dir().join(format!("ophs-init-{}.adi", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+
+        let mut rs = RuntimeControlState {
+            local_callsign: "W1AW".into(),
+            local_grid: "FN31".into(),
+            station_seed: [1u8; 32],
+            pending_handshake: Some(PendingHandshake {
+                session_id: "W1AW-1".into(),
+                peer_callsign: "K2XYZ".into(),
+                started_at: Instant::now(),
+            }),
+            ..RuntimeControlState::default()
+        };
+        rs.logbook = crate::logbook::Logbook::new(
+            true,
+            tmp.to_str().unwrap(),
+            "W1AW",
+            "FN31",
+            &Default::default(),
+        );
+        rs.logbook
+            .begin_qso("K2XYZ", "BPSK250", Some(14_070_000), 1_700_000_000_000);
+
+        let conack = ConAck::create_with_grid(
+            "K2XYZ",
+            &[2u8; 32],
+            SigningMode::Normal,
+            "W1AW-1",
+            CompressionAlgorithm::None,
+            FecMode::None,
+            "EM69",
+        )
+        .unwrap();
+        let frags = sar_encode(0, &conack.encode().unwrap()).unwrap();
+
+        let mut eng = bpsk_engine();
+        let mode = mode();
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+        for frag in &frags {
+            process_received_bytes(frag, &mut rs, None, &ev, &mode, &mut eng).await;
+        }
+
+        let vp = rs.verified_peer.clone().expect("verified");
+        assert_eq!(vp.callsign, "K2XYZ");
+        assert_eq!(vp.grid, "EM69");
+        assert!(
+            rs.pending_handshake.is_none(),
+            "pending handshake cleared on verified CONACK"
+        );
+
+        // The verified on-air grid (EM69) must land in the ADIF QSO record.
+        rs.logbook.end_qso(1_700_000_300_000, Some(10.0)).unwrap();
+        let body = std::fs::read_to_string(&tmp).unwrap();
+        assert!(
+            body.contains("<GRIDSQUARE:4>EM69"),
+            "ADIF should carry the verified grid; got: {body}"
+        );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// A CONACK whose session id doesn't match the in-flight CONREQ is ignored: no peer is
+    /// recorded and the pending handshake is preserved (so the real CONACK can still complete it).
+    #[tokio::test]
+    async fn conack_with_mismatched_session_is_ignored() {
+        let mut rs = RuntimeControlState {
+            local_callsign: "W1AW".into(),
+            station_seed: [1u8; 32],
+            pending_handshake: Some(PendingHandshake {
+                session_id: "W1AW-1".into(),
+                peer_callsign: "K2XYZ".into(),
+                started_at: Instant::now(),
+            }),
+            ..RuntimeControlState::default()
+        };
+        let conack = ConAck::create(
+            "K2XYZ",
+            &[2u8; 32],
+            SigningMode::Normal,
+            "SOME-OTHER-SESSION",
+            CompressionAlgorithm::None,
+            FecMode::None,
+        )
+        .unwrap();
+        let frags = sar_encode(0, &conack.encode().unwrap()).unwrap();
+
+        let mut eng = bpsk_engine();
+        let mode = mode();
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+        for frag in &frags {
+            process_received_bytes(frag, &mut rs, None, &ev, &mode, &mut eng).await;
+        }
+        assert!(
+            rs.verified_peer.is_none(),
+            "mismatched session must not verify"
+        );
+        assert!(
+            rs.pending_handshake.is_some(),
+            "mismatched CONACK must not clear the pending handshake"
+        );
+    }
+
+    /// `ConnectPeer` initiates the signed handshake: it records a pending handshake keyed on a
+    /// session id derived from the local callsign.
+    #[tokio::test]
+    async fn connect_peer_initiates_signed_handshake() {
+        let mut eng = bpsk_engine();
+        let mode = mode();
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+        let mut rs = RuntimeControlState {
+            local_callsign: "W1AW".into(),
+            local_grid: "FN31".into(),
+            station_seed: [1u8; 32],
+            ..RuntimeControlState::default()
+        };
+        apply_command_to_engine(
+            &ControlCommand::ConnectPeer {
+                callsign: "K2XYZ".into(),
+            },
+            &mut eng,
+            &mode,
+            &ev,
+            None,
+            &mut rs,
+        )
+        .await;
+        let p = rs
+            .pending_handshake
+            .expect("pending handshake set by ConnectPeer");
+        assert_eq!(p.peer_callsign, "K2XYZ");
+        assert!(p.session_id.starts_with("W1AW-"));
+    }
+
+    /// A CONREQ SAR fragment (a full 255-byte modem frame) survives a real BPSK250 round trip.
+    #[test]
+    fn max_size_handshake_fragment_survives_bpsk_round_trip() {
+        use openpulse_modem::channel_sim::ChannelSimHarness;
+        let mut h = ChannelSimHarness::new();
+        h.tx_engine
+            .register_plugin(Box::new(BpskPlugin::new()))
+            .unwrap();
+        h.rx_engine
+            .register_plugin(Box::new(BpskPlugin::new()))
+            .unwrap();
+        let conreq = ConReq::create_with_grid(
+            "W1AW",
+            &[1u8; 32],
+            vec![SigningMode::Normal],
+            "W1AW-1700000000000",
+            vec![],
+            vec![],
+            "FN31pr",
+        )
+        .unwrap();
+        let frag = sar_encode(0, &conreq.encode().unwrap()).unwrap().remove(0);
+        assert_eq!(
+            frag.len(),
+            255,
+            "first fragment should be a full modem frame"
+        );
+        h.tx_engine.transmit(&frag, "BPSK250", None).unwrap();
+        h.route_clean();
+        let rx = h.rx_engine.receive("BPSK250", None).unwrap_or_default();
+        assert_eq!(
+            rx, frag,
+            "a CONREQ SAR fragment must survive BPSK250 transport"
+        );
+    }
+
+    /// An unanswered CONREQ is abandoned after the timeout, emitting a `CommandError`.
+    #[test]
+    fn pending_handshake_expires_after_timeout() {
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+        let mut rs = RuntimeControlState {
+            pending_handshake: Some(PendingHandshake {
+                session_id: "s".into(),
+                peer_callsign: "K2XYZ".into(),
+                started_at: Instant::now() - HANDSHAKE_TIMEOUT - Duration::from_secs(1),
+            }),
+            ..RuntimeControlState::default()
+        };
+        expire_pending_handshake(&mut rs, &ev);
+        assert!(
+            rs.pending_handshake.is_none(),
+            "stale handshake must be dropped"
+        );
+        assert!(
+            matches!(rx.try_recv(), Ok(ControlEvent::CommandError { command, .. })
+                if command == "connect_peer"),
+            "expiry should emit a connect_peer CommandError"
+        );
     }
 }

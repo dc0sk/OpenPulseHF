@@ -281,6 +281,17 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
             st.rf_connected = connected;
             st.rf_peer = peer;
         }
+        ControlEvent::PeerVerified { callsign, grid } => {
+            if grid.is_empty() {
+                st.push_log(format!(
+                    "Peer {callsign} identity verified (signed handshake)"
+                ));
+            } else {
+                st.push_log(format!(
+                    "Peer {callsign} verified (signed handshake), grid {grid}"
+                ));
+            }
+        }
         ControlEvent::RepeaterChanged { enabled } => {
             st.repeater_enabled = enabled;
             st.push_log(format!(

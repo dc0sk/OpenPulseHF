@@ -112,6 +112,9 @@ struct ConReqBody {
     supported_compression: Vec<CompressionAlgorithm>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     supported_fec_modes: Vec<FecMode>,
+    // Empty grid is skipped so legacy zero-grid frames (and their signatures) are byte-identical.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    station_grid: String,
 }
 
 /// Connection request sent by the initiating station during Discovery.
@@ -130,12 +133,15 @@ pub struct ConReq {
     /// FEC modes the initiator supports (empty = none / raw).
     #[serde(default)]
     pub supported_fec_modes: Vec<FecMode>,
+    /// Maidenhead grid locator the initiator announces (empty = not advertised).
+    #[serde(default)]
+    pub station_grid: String,
     /// Ed25519 signature over canonical JSON of the body fields (64 bytes).
     pub signature: Vec<u8>,
 }
 
 impl ConReq {
-    /// Create and sign a new CONREQ.
+    /// Create and sign a new CONREQ (no grid advertised).
     ///
     /// `signing_key_seed` is the 32-byte Ed25519 seed (private key scalar).
     pub fn create(
@@ -145,6 +151,28 @@ impl ConReq {
         session_id: &str,
         supported_compression: Vec<CompressionAlgorithm>,
         supported_fec_modes: Vec<FecMode>,
+    ) -> Result<Self, HandshakeError> {
+        Self::create_with_grid(
+            station_id,
+            signing_key_seed,
+            signing_modes,
+            session_id,
+            supported_compression,
+            supported_fec_modes,
+            "",
+        )
+    }
+
+    /// Create and sign a new CONREQ advertising a Maidenhead grid locator.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_with_grid(
+        station_id: &str,
+        signing_key_seed: &[u8; 32],
+        signing_modes: Vec<SigningMode>,
+        session_id: &str,
+        supported_compression: Vec<CompressionAlgorithm>,
+        supported_fec_modes: Vec<FecMode>,
+        station_grid: &str,
     ) -> Result<Self, HandshakeError> {
         let signing_key = SigningKey::from_bytes(signing_key_seed);
         let verifying_key = signing_key.verifying_key();
@@ -156,6 +184,7 @@ impl ConReq {
             session_id: session_id.to_string(),
             supported_compression: supported_compression.clone(),
             supported_fec_modes: supported_fec_modes.clone(),
+            station_grid: station_grid.to_string(),
         };
         let canonical =
             serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))?;
@@ -168,6 +197,7 @@ impl ConReq {
             session_id: session_id.to_string(),
             supported_compression,
             supported_fec_modes,
+            station_grid: station_grid.to_string(),
             signature: sig.to_bytes().to_vec(),
         })
     }
@@ -180,6 +210,7 @@ impl ConReq {
             session_id: self.session_id.clone(),
             supported_compression: self.supported_compression.clone(),
             supported_fec_modes: self.supported_fec_modes.clone(),
+            station_grid: self.station_grid.clone(),
         };
         serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))
     }
@@ -235,6 +266,9 @@ struct ConAckBody {
     selected_compression: CompressionAlgorithm,
     #[serde(default, skip_serializing_if = "fec_mode_is_none")]
     selected_fec_mode: FecMode,
+    // Empty grid is skipped so legacy zero-grid frames (and their signatures) are byte-identical.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    station_grid: String,
 }
 
 fn fec_mode_is_none(m: &FecMode) -> bool {
@@ -258,12 +292,15 @@ pub struct ConAck {
     /// FEC mode selected for this session.
     #[serde(default)]
     pub selected_fec_mode: FecMode,
+    /// Maidenhead grid locator the responder announces (empty = not advertised).
+    #[serde(default)]
+    pub station_grid: String,
     /// Ed25519 signature over canonical JSON of the body fields (64 bytes).
     pub signature: Vec<u8>,
 }
 
 impl ConAck {
-    /// Create and sign a new CONACK in response to `req`.
+    /// Create and sign a new CONACK in response to `req` (no grid advertised).
     pub fn create(
         station_id: &str,
         signing_key_seed: &[u8; 32],
@@ -271,6 +308,28 @@ impl ConAck {
         session_id: &str,
         selected_compression: CompressionAlgorithm,
         selected_fec_mode: FecMode,
+    ) -> Result<Self, HandshakeError> {
+        Self::create_with_grid(
+            station_id,
+            signing_key_seed,
+            selected_mode,
+            session_id,
+            selected_compression,
+            selected_fec_mode,
+            "",
+        )
+    }
+
+    /// Create and sign a new CONACK advertising a Maidenhead grid locator.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_with_grid(
+        station_id: &str,
+        signing_key_seed: &[u8; 32],
+        selected_mode: SigningMode,
+        session_id: &str,
+        selected_compression: CompressionAlgorithm,
+        selected_fec_mode: FecMode,
+        station_grid: &str,
     ) -> Result<Self, HandshakeError> {
         let signing_key = SigningKey::from_bytes(signing_key_seed);
         let verifying_key = signing_key.verifying_key();
@@ -282,6 +341,7 @@ impl ConAck {
             session_id: session_id.to_string(),
             selected_compression,
             selected_fec_mode,
+            station_grid: station_grid.to_string(),
         };
         let canonical =
             serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))?;
@@ -294,6 +354,7 @@ impl ConAck {
             session_id: session_id.to_string(),
             selected_compression,
             selected_fec_mode,
+            station_grid: station_grid.to_string(),
             signature: sig.to_bytes().to_vec(),
         })
     }
@@ -306,6 +367,7 @@ impl ConAck {
             session_id: self.session_id.clone(),
             selected_compression: self.selected_compression,
             selected_fec_mode: self.selected_fec_mode,
+            station_grid: self.station_grid.clone(),
         };
         serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))
     }
@@ -520,6 +582,90 @@ mod tests {
         tampered.station_id = "EVIL".to_string();
         let canonical = tampered.canonical_bytes().unwrap();
         assert!(!verify_ed25519(&req.pubkey, &canonical, &req.signature));
+    }
+
+    #[test]
+    fn conreq_grid_round_trips_and_is_signature_covered() {
+        let req = ConReq::create_with_grid(
+            "W1AW",
+            &make_key(1),
+            vec![SigningMode::Normal],
+            "s-grid",
+            vec![],
+            vec![],
+            "FN31pr",
+        )
+        .unwrap();
+        // Survives the wire round-trip.
+        let decoded = ConReq::decode(&req.encode().unwrap()).unwrap();
+        assert_eq!(decoded.station_grid, "FN31pr");
+        // Self-verifies.
+        assert!(verify_ed25519(
+            &req.pubkey,
+            &req.canonical_bytes().unwrap(),
+            &req.signature
+        ));
+        // Tampering the grid breaks the signature (grid is covered).
+        let mut tampered = req.clone();
+        tampered.station_grid = "JO62".to_string();
+        assert!(!verify_ed25519(
+            &req.pubkey,
+            &tampered.canonical_bytes().unwrap(),
+            &req.signature
+        ));
+    }
+
+    #[test]
+    fn conack_grid_round_trips_and_is_signature_covered() {
+        let ack = ConAck::create_with_grid(
+            "KD9XYZ",
+            &make_key(2),
+            SigningMode::Normal,
+            "s-grid",
+            CompressionAlgorithm::None,
+            FecMode::None,
+            "EM69",
+        )
+        .unwrap();
+        let decoded = ConAck::decode(&ack.encode().unwrap()).unwrap();
+        assert_eq!(decoded.station_grid, "EM69");
+        let mut tampered = ack.clone();
+        tampered.station_grid = "AA00".to_string();
+        assert!(!verify_ed25519(
+            &ack.pubkey,
+            &tampered.canonical_bytes().unwrap(),
+            &ack.signature
+        ));
+    }
+
+    #[test]
+    fn empty_grid_conreq_is_byte_identical_to_legacy() {
+        // A default-grid frame must serialize identically to the pre-grid wire format
+        // so existing signatures and decoders are unaffected.
+        let with_helper = ConReq::create(
+            "W1AW",
+            &make_key(1),
+            vec![SigningMode::Normal],
+            "s1",
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let with_grid_empty = ConReq::create_with_grid(
+            "W1AW",
+            &make_key(1),
+            vec![SigningMode::Normal],
+            "s1",
+            vec![],
+            vec![],
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            with_helper.encode().unwrap(),
+            with_grid_empty.encode().unwrap()
+        );
+        assert_eq!(with_helper.signature, with_grid_empty.signature);
     }
 
     #[test]

@@ -1557,7 +1557,23 @@ config you can set that does nothing — all sit in `[radio]`:
 The field docs + TOML template now mark these accurately so the config no longer looks wired when
 it isn't; the underlying feature/refactor decisions are tracked here.
 
-### Signed handshake not wired into the daemon connect (finding 2026-06-27)
+### Signed handshake wired into the daemon connect ✅ Done (2026-06-29)
+
+**Resolved.** The daemon now exchanges the Ed25519 signed handshake over RF on connect:
+`ConnectPeer` signs a `ConReq` (with the station's grid) and transmits it SAR-fragmented (the
+~530 B frame exceeds the 255 B modem-frame cap); the responder reassembles it in
+`process_received_bytes`, verifies it, replies with a signed `ConAck` (also SAR-fragmented), and
+records the proven peer identity; the initiator verifies the `ConAck` against its in-flight
+`ConReq` and records the verified peer. The verified grid is stamped onto the in-flight ADIF QSO
+(taking precedence over the `[logbook.peer_grids]` config fallback), so **logbook item B (peer
+GRIDSQUARE from the handshake) is now delivered**. Station key from `[station] identity_key_path`
+(default `~/.config/openpulse/identity.key`, auto-generated). New `ControlEvent::PeerVerified`;
+30 s CONACK timeout. Grid is a `skip_serializing_if`-empty field on `ConReq`/`ConAck` so legacy
+zero-grid frames stay byte-identical. Tests: `handshake_rf_tests` (6, daemon) +
+`handshake::tests` grid coverage (3, core). The exchange is **additive** to the existing local
+trust eval — `begin_secure_session` still runs; the connection upgrades to "verified" on CONACK.
+
+Original finding (2026-06-27), for history:
 
 Investigating "peer GRIDSQUARE from the handshake" surfaced a larger gap: the Ed25519 signed
 handshake (`ConReq`/`ConAck` in `openpulse-core/src/handshake.rs`) is a **tested library primitive
@@ -1579,7 +1595,14 @@ Real fix (no target date): wire the over-the-air signed handshake (initiator `Co
 verify + `ConAck` → initiator verify) into the daemon's `ConnectPeer`/RF path, storing the verified
 peer identity (and an optional grid field) on the engine; then the logbook reads the verified grid.
 
-### Planned: automatic ADIF logbook (opt-in, no target date)
+### Automatic ADIF logbook (opt-in) ✅ Shipped
+
+**Done.** `crates/openpulse-core/src/adif.rs` (`AdifRecord` + ADIF 3.1.4 rendering, band mapping)
+and `crates/openpulse-daemon/src/logbook.rs` (`Logbook` — `begin_qso` on connect, `end_qso`
+appends on disconnect) with `[logbook]` config (`enabled`, `adif_path`, `peer_grids`) and runtime
+`SetLogbook` parity across daemon/CLI/panel. The worked-station `GRIDSQUARE` comes from the verified
+handshake when available (see the handshake item above), falling back to the `[logbook.peer_grids]`
+config map. Original design notes below for history.
 
 A station logbook that records each contact in **ADIF** (Amateur Data Interchange Format) so logs
 import into standard logging software / LoTW / eQSL. Opt-in via a new `[logbook]` config section
