@@ -199,11 +199,12 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
             }
         },
 
-        // GRIDSQUARE / ARQBW / ARQTIMEOUT are accepted + validated + echoed for client (Pat)
-        // compatibility, but NOT applied to the modem: OpenPulseHF manages bandwidth and session
-        // timeout via its own adaptive rate ladder (HPX/OTA), not a host hint, and the grid is
-        // informational. Stored only for the echo-back. See the 2026-06-27 TNC command-surface
-        // audit in docs/dev/steering/roadmap.md — wiring host-driven ARQBW/ARQTIMEOUT is tracked there.
+        // GRIDSQUARE is informational (stored for echo-back only). ARQBW and ARQTIMEOUT are stored
+        // here and *applied by the worker loop* (bridge.rs) when an adaptive ARQ session is active
+        // (`[ardop] enable_adaptive_arq = true`): ARQBW caps the adaptive ladder via
+        // `set_arq_max_tx_level`, and ARQTIMEOUT drops an idle connection. With adaptive ARQ off
+        // (the default, fixed-mode operation) there is no ladder/connection to bound, so they remain
+        // accepted-and-echoed no-ops. See docs/dev/steering/roadmap.md (TNC command-surface audit).
         "GRIDSQUARE" => {
             if let Some(grid) = parts.get(1).filter(|s| !s.is_empty()) {
                 if !is_valid_gridsquare(grid) {

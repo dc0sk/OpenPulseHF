@@ -1519,7 +1519,26 @@ frames (TXDELAY 0x01, P 0x02, SlotTime 0x03, TXtail 0x04, FullDuplex 0x05, SetHa
 itself, so dropping is acceptable per the KISS spec — now logged (`debug!`) instead of silent. Real
 fix, if host TX-timing control is wanted: honor TXDELAY/TXtail/P/SlotTime.
 
-#### Why "wire ARQBW/ARQTIMEOUT for real" is blocked (deeper investigation 2026-06-28)
+#### ARQBW/ARQTIMEOUT now real ✅ Done (2026-06-29)
+
+**Resolved** by building the feature the blocked-finding below called for:
+1. **Opt-in adaptive ARQ session** — `[ardop] enable_adaptive_arq` (+ `adaptive_profile`); `main.rs`
+   calls `start_adaptive_session`, so `current_tx_level()` is `Some` and the worker takes the
+   adaptive `transmit_arq` / `receive_with_ack_hint` branch instead of fixed-mode.
+2. **rate_policy bandwidth cap** — `RateAdapter::clamp_to` / `BiDirRateAdapter::clamp_to`;
+   `RateAdaptationPolicy::set_max_tx_level` (clamps now + enforces on AckUp);
+   `ModemEngine::set_arq_max_tx_level` + `adaptive_profile_modes`;
+   `openpulse_qsy::bandplan::max_speed_level_for_bandwidth` maps a Hz cap to a max level.
+3. **ARQBW → cap, ARQTIMEOUT → disconnect** — the `bridge.rs` worker applies the ARQBW cap when it
+   changes and drops an idle connection after ARQTIMEOUT seconds of no successful exchange.
+
+With adaptive ARQ **off** (the default), there is no ladder/connection to bound, so the host hints
+stay accepted-and-echoed no-ops (not a "defined-but-not-consumed" gap — they act the moment a
+session is enabled). Tests: `arq_max_tx_level_caps_the_adaptive_ladder` +
+`arq_max_tx_level_clamps_an_already_high_session` (modem), `max_speed_level_for_bandwidth_maps_hz_cap_to_a_level`
+(qsy). Original blocked-finding (2026-06-28) kept below for history.
+
+#### Why "wire ARQBW/ARQTIMEOUT for real" was blocked (deeper investigation 2026-06-28)
 
 Attempting the real wiring surfaced that it's the same class of gap as the signed-handshake one: the
 **ARDOP TNC never drives the adaptive session the host hints would bound.**

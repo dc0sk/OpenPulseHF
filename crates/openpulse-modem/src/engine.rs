@@ -793,6 +793,18 @@ impl ModemEngine {
         self.rate_policy.start_session(profile);
     }
 
+    /// Cap the adaptive ladder at `max` (host/bandwidth limit, e.g. ARDOP `ARQBW`); `None` clears
+    /// the cap. The active session is clamped immediately and future AckUp steps respect it.
+    pub fn set_arq_max_tx_level(&mut self, max: Option<openpulse_core::rate::SpeedLevel>) {
+        self.rate_policy.set_max_tx_level(max);
+    }
+
+    /// The active adaptive profile's defined `(level, mode)` pairs (ascending), for mapping a
+    /// bandwidth cap in Hz to a max speed level. Empty when no adaptive session is active.
+    pub fn adaptive_profile_modes(&self) -> Vec<(openpulse_core::rate::SpeedLevel, &'static str)> {
+        self.rate_policy.defined_modes()
+    }
+
     /// A2 (backlog-aware gating): minimum queued TX bytes required before an
     /// AckUp upgrade is acted on. `0` (default) disables the gate. Prevents
     /// spending upgrade airtime when only a frame or two remain queued.

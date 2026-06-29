@@ -118,6 +118,10 @@ pub fn spawn_worker(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Recei
 }
 
 fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<Vec<u8>>) {
+    // Last successful ARQ exchange, for the ARQTIMEOUT inactivity disconnect.
+    let mut last_activity = std::time::Instant::now();
+    // Last applied ARQBW cap (Hz); 0 = none applied yet, so the first real value always applies.
+    let mut last_arq_bw: u16 = 0;
     loop {
         // Snapshot the current mode once per iteration to avoid holding the lock across I/O.
         let mode = bridge
@@ -125,6 +129,42 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
+
+        // Apply the ARQBW host cap to the adaptive ladder when it changes (no-op when no adaptive
+        // session is active, since `adaptive_profile_modes()` is then empty).
+        if let Ok(bw) = bridge.arq_bw.try_read().map(|g| *g) {
+            if bw != last_arq_bw {
+                let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
+                if engine.current_tx_level().is_some() {
+                    let modes = engine.adaptive_profile_modes();
+                    let cap =
+                        openpulse_qsy::bandplan::max_speed_level_for_bandwidth(&modes, bw as u32);
+                    engine.set_arq_max_tx_level(cap);
+                    tracing::debug!(arq_bw_hz = bw, ?cap, "applied ARQBW cap to adaptive ladder");
+                }
+                drop(engine);
+                last_arq_bw = bw;
+            }
+        }
+
+        // ARQTIMEOUT: drop an idle connection after `arq_timeout` seconds with no successful
+        // exchange. Uses non-blocking lock access since this is a sync worker over tokio RwLocks.
+        if let Ok(timeout_s) = bridge.arq_timeout.try_read().map(|g| *g) {
+            let connected = matches!(
+                bridge.state.try_read().as_deref(),
+                Ok(TncState::Connected { .. })
+            );
+            if connected
+                && last_activity.elapsed() >= std::time::Duration::from_secs(timeout_s as u64)
+            {
+                if let Ok(mut st) = bridge.state.try_write() {
+                    *st = TncState::Disc;
+                }
+                let _ = bridge.event_tx.send("DISCONNECTED".to_string());
+                tracing::info!(timeout_s, "ARQ connection timed out (ARQTIMEOUT)");
+                last_activity = std::time::Instant::now();
+            }
+        }
 
         while let Ok(data) = tx_data_rx.try_recv() {
             let len = data.len();
@@ -143,6 +183,7 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                     match engine.transmit_arq(&data, &mode, None, 3) {
                         Ok(rate_event) => {
                             tracing::debug!(rate_event = ?rate_event, "ARQ TX succeeded");
+                            last_activity = std::time::Instant::now();
                         }
                         Err(e) => {
                             tracing::warn!("ARQ TX failed: {e}");
@@ -219,6 +260,7 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
             };
             drop(engine);
             if let Some(rx) = received {
+                last_activity = std::time::Instant::now();
                 maybe_relay_forward(&bridge, &rx, &mode);
                 if !rx.is_empty() {
                     let _ = bridge.rx_data_tx.send(rx);

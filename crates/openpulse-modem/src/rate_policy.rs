@@ -36,6 +36,9 @@ pub(crate) struct RateAdaptationPolicy {
     upgrade_hold_frames: u32,
     /// A3: remaining suppressed upgrade attempts.
     upgrade_hold_remaining: u32,
+    /// Host/bandwidth cap (e.g. ARDOP `ARQBW`): the TX/RX level is never raised above this.
+    /// `None` = no cap (the profile's own ceiling applies).
+    max_tx_level: Option<SpeedLevel>,
 }
 
 impl RateAdaptationPolicy {
@@ -48,7 +51,30 @@ impl RateAdaptationPolicy {
             tx_backlog_bytes: 0,
             upgrade_hold_frames: 0,
             upgrade_hold_remaining: 0,
+            max_tx_level: None,
         }
+    }
+
+    /// Set (or clear) the host/bandwidth cap and immediately clamp the active session to it.
+    pub fn set_max_tx_level(&mut self, max: Option<SpeedLevel>) {
+        self.max_tx_level = max;
+        if let (Some(m), Some(adapter)) = (max, self.rate_adapter.as_mut()) {
+            adapter.clamp_to(m);
+        }
+    }
+
+    /// The active profile's defined `(level, mode)` pairs, ascending — used to map a bandwidth cap
+    /// (Hz) to a max speed level. Empty when no session is active.
+    pub fn defined_modes(&self) -> Vec<(SpeedLevel, &'static str)> {
+        self.session_profile
+            .as_ref()
+            .map(|p| {
+                p.defined_levels()
+                    .into_iter()
+                    .filter_map(|l| p.mode_for(l).map(|m| (l, m)))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// A2: set the minimum queued-byte backlog that justifies acting on an AckUp
@@ -114,7 +140,17 @@ impl RateAdaptationPolicy {
         direction: Option<RateDirection>,
     ) -> (RateEvent, Option<RateChangePayload>) {
         let hold_ack_up = self.should_hold_ack_up_without_snr_candidate(ack);
-        let rate_event = self.decide_rate_change(ack, hold_ack_up);
+        let mut rate_event = self.decide_rate_change(ack, hold_ack_up);
+        // Enforce the host/bandwidth cap: an AckUp must not raise TX above the cap.
+        if let Some(max) = self.max_tx_level {
+            if let Some(adapter) = self.rate_adapter.as_mut() {
+                let tx_capped = adapter.tx.clamp_to(max);
+                adapter.rx.clamp_to(max);
+                if tx_capped && matches!(rate_event, RateEvent::Increased(_)) {
+                    rate_event = RateEvent::Maintained;
+                }
+            }
+        }
         let speed_level = self
             .rate_adapter
             .as_ref()

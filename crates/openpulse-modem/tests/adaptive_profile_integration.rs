@@ -58,6 +58,55 @@ fn hpx_pilot_climbs_and_descends_the_rungs() {
 }
 
 #[test]
+fn arq_max_tx_level_caps_the_adaptive_ladder() {
+    // hpx500: SL2 BPSK31 → SL3 BPSK63 → SL4 BPSK250 → SL5 QPSK250 → SL6 QPSK500.
+    let mut engine = make_engine();
+    engine.start_adaptive_session(SessionProfile::hpx500());
+    assert_eq!(engine.current_adaptive_mode(), Some("BPSK31"));
+
+    // Cap the ladder at SL4 (BPSK250) — an ARQBW host limit.
+    engine.set_arq_max_tx_level(Some(SpeedLevel::Sl4));
+
+    // No amount of AckUp may climb past the cap.
+    for _ in 0..8 {
+        engine.apply_ack(AckType::AckUp);
+    }
+    assert_eq!(
+        engine.current_adaptive_mode(),
+        Some("BPSK250"),
+        "the ladder must not climb above the SL4 cap"
+    );
+    assert_eq!(engine.current_tx_level(), Some(SpeedLevel::Sl4));
+
+    // Clearing the cap restores upward mobility.
+    engine.set_arq_max_tx_level(None);
+    engine.apply_ack(AckType::AckUp);
+    assert_eq!(
+        engine.current_adaptive_mode(),
+        Some("QPSK250"),
+        "clearing the cap lets the ladder climb again"
+    );
+}
+
+#[test]
+fn arq_max_tx_level_clamps_an_already_high_session() {
+    // A cap set after the ladder has already climbed must drag it back down immediately.
+    let mut engine = make_engine();
+    engine.start_adaptive_session(SessionProfile::hpx500());
+    for _ in 0..6 {
+        engine.apply_ack(AckType::AckUp); // climb toward the top (SL6 QPSK500)
+    }
+    assert_eq!(engine.current_adaptive_mode(), Some("QPSK500"));
+
+    engine.set_arq_max_tx_level(Some(SpeedLevel::Sl3));
+    assert_eq!(
+        engine.current_adaptive_mode(),
+        Some("BPSK63"),
+        "setting a cap below the current level clamps immediately"
+    );
+}
+
+#[test]
 fn ack_up_three_times_reaches_bpsk250() {
     let mut engine = make_engine();
     engine.start_adaptive_session(SessionProfile::hpx500());

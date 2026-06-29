@@ -9,6 +9,41 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-06-29 — ARDOP adaptive ARQ session + real ARQBW/ARQTIMEOUT
+
+- **Requirement/change:** make the ARDOP host hints `ARQBW` and `ARQTIMEOUT` real instead of
+  stored-and-ignored. Blocked because the TNC never started an adaptive session (so the rate ladder
+  was dormant and there was nothing to bound), and the only bandwidth lever targeted the OTA
+  controller, not the rate_policy one the worker reads.
+- **Design decision:** (1) opt-in `[ardop] enable_adaptive_arq` (+ `adaptive_profile`) → `main.rs`
+  calls `start_adaptive_session`, flipping the worker to its existing adaptive `transmit_arq` /
+  `receive_with_ack_hint` branch (default off = unchanged fixed-mode behaviour). (2) A rate_policy
+  bandwidth cap distinct from the OTA bounds: `RateAdapter::clamp_to` never raises the level;
+  `RateAdaptationPolicy::set_max_tx_level` clamps the active session immediately and re-clamps after
+  every ack so AckUp can't climb past the cap (an `Increased` event past the cap is reported as
+  `Maintained`). The Hz→level map lives in `openpulse-qsy::bandplan` (`max_speed_level_for_bandwidth`)
+  — kept out of `openpulse-modem` (no qsy dep / cycle); the ARDOP worker owns the mapping. (3) The
+  worker applies the ARQBW cap when it changes and disconnects an idle connection after ARQTIMEOUT
+  seconds, using non-blocking `try_read`/`try_write` on the tokio RwLocks from the sync worker.
+- **Implementation:** `crates/openpulse-core/src/rate.rs` (`clamp_to` on `RateAdapter` +
+  `BiDirRateAdapter`); `crates/openpulse-modem/src/rate_policy.rs` (`max_tx_level`,
+  `set_max_tx_level`, `defined_modes`, clamp in `apply_ack_internal`); `crates/openpulse-modem/src/
+  engine.rs` (`set_arq_max_tx_level`, `adaptive_profile_modes`); `crates/openpulse-qsy/src/
+  bandplan.rs` (`max_speed_level_for_bandwidth`); `crates/openpulse-config/src/lib.rs`
+  (`ArdopConfig.enable_adaptive_arq` / `adaptive_profile` + template);
+  `crates/openpulse-ardop/src/main.rs` (start session), `bridge.rs` (worker cap + ARQTIMEOUT +
+  activity tracking), `command.rs` (comment now reflects applied behaviour); ardop gains an
+  `openpulse-qsy` dep.
+- **Tests:** `adaptive_profile_integration.rs` — `arq_max_tx_level_caps_the_adaptive_ladder`
+  (AckUp×8 can't pass an SL4 cap; clearing it climbs again) + `arq_max_tx_level_clamps_an_already_high_session`
+  (cap below current level clamps immediately); `bandplan.rs` —
+  `max_speed_level_for_bandwidth_maps_hz_cap_to_a_level` (500/700/2000 Hz caps, below-floor `None`,
+  unknown-mode skip).
+- **Test results (run):** `cargo test -p openpulse-core -p openpulse-modem -p openpulse-qsy -p
+  openpulse-config -p openpulse-ardop --no-default-features` → green (modem-adaptive 13, qsy 28,
+  ardop 22, core lib 226, modem lib 45, …; 0 failed). `cargo clippy …-D warnings` 0 warnings; `fmt`
+  clean on touched crates; full workspace (sans pki) builds.
+
 ## 2026-06-29 — Signed handshake over RF into the daemon connect (+ verified logbook grid)
 
 - **Requirement/change:** wire the Ed25519 signed `ConReq`/`ConAck` handshake into the daemon's

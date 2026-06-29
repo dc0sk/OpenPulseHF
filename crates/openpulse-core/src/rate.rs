@@ -355,6 +355,17 @@ impl RateAdapter {
         self.consecutive_nack = 0;
     }
 
+    /// Clamp the current level down to `max` (a bandwidth/host cap). Never raises the level.
+    /// Returns `true` when the level changed.
+    pub fn clamp_to(&mut self, max: SpeedLevel) -> bool {
+        if self.current > max {
+            self.current = max;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Apply a raw SNR hint for proactive rate adaptation.
     ///
     /// If `snr_db < floor_db` the adapter steps down immediately (before any NACK)
@@ -444,6 +455,13 @@ impl BiDirRateAdapter {
     /// Current RX speed level.
     pub fn rx_level(&self) -> SpeedLevel {
         self.rx.speed_level()
+    }
+
+    /// Clamp both directions down to `max` (a bandwidth/host cap). Returns `true` if either changed.
+    pub fn clamp_to(&mut self, max: SpeedLevel) -> bool {
+        let tx = self.tx.clamp_to(max);
+        let rx = self.rx.clamp_to(max);
+        tx || rx
     }
 }
 
