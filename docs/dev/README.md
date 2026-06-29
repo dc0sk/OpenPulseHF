@@ -30,6 +30,7 @@ This index contains development-oriented, planning, architecture, protocol-spec,
 - [docs/dev/benchmark-harness.md](benchmark-harness.md): benchmark scenarios and regression gates
 - [docs/dev/design/testbench-design.md](design/testbench-design.md): signal-path testbench design
 - [docs/dev/implementation-matrix.md](implementation-matrix.md): docs-to-implementation coverage matrix
+- [docs/dev/steering/traceability-matrix.md](steering/traceability-matrix.md): full numbered end-to-end traceability matrix (REQ-IDs ↔ CAP-IDs → design → impl → tests → results → assets → PRs)
 - [docs/dev/peer-caching-relay.md](peer-caching-relay.md): peer cache and relay behavior
 - [docs/dev/peer-query-relay-wire.md](peer-query-relay-wire.md): wire-level query and relay envelope schema
 

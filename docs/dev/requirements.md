@@ -2,10 +2,15 @@
 project: openpulsehf
 doc: docs/dev/requirements.md
 status: living
-last_updated: 2026-05-17
+last_updated: 2026-06-29
 ---
 
 # Requirements
+
+> **Numbered REQ-IDs and end-to-end traceability** (requirement → capability → design
+> decision → implementation → tests → result → assets → PRs) live in
+> [traceability-matrix.md](steering/traceability-matrix.md). Each requirement below maps to a
+> `REQ-<CAT>-NN` ID in that matrix's Requirements table.
 
 ## Functional requirements
 
