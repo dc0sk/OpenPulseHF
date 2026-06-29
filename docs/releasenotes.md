@@ -2,12 +2,27 @@
 project: openpulsehf
 doc: docs/releasenotes.md
 status: living
-last_updated: 2026-05-16
+last_updated: 2026-06-29
 ---
 
 # Release Notes
 
 ## Unreleased
+
+- Authenticated connections: when you connect to a peer, the daemon now exchanges a
+  signed handshake over the air and verifies the peer's identity and Maidenhead grid.
+  The verified grid is written to your ADIF logbook. Set your station signing key with
+  `[station] identity_key_path` (an Ed25519 seed; auto-generated on first run).
+- ARDOP adaptive ARQ (opt-in): set `[ardop] enable_adaptive_arq = true` to let the rate
+  ladder adapt over the link and make the host `ARQBW` (bandwidth cap) and `ARQTIMEOUT`
+  (idle disconnect) hints take effect. Off by default (fixed-mode, unchanged behaviour).
+- Generic serial CAT: drive a transceiver that Hamlib/rigctld doesn't support by setting
+  `[radio] cat_backend = "generic"` with a serial port and a rig-definition TOML (build
+  with `--features generic-serial`, Unix).
+- Operator panel: new AGC on/off toggle for the receiver streaming AGC, alongside the
+  existing Notch / CE-SSB / Logbook toggles and the squelch slider.
+- New CLI command `openpulse daemon set-tx-attenuation <db> [--band <label>]` for
+  headless/scripted TX-attenuation control.
 
 - Bandplan guardrails now recognize active `-RRC` waveform variants and
   `SCFDMA52-64QAM-P4` in occupied-bandwidth checks, preventing valid
