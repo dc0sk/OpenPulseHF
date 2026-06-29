@@ -11,6 +11,10 @@ last_updated: 2026-04-23
 
 This document defines an initial wire-level message schema for peer discovery queries, route discovery, and multi-hop relay transfer envelopes.
 
+> Companion specs: the [Protocol & Handshake Wire Specification](design/protocol-wire-spec.md)
+> (base frame, SAR, signed handshake, ACK) and the
+> [HPX Session State Machine Specification](hpx-session-state-machine.md).
+
 ## Design goals
 
 - Keep control-plane messages compact and versioned.

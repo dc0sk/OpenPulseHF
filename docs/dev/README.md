@@ -25,6 +25,7 @@ This index contains development-oriented, planning, architecture, protocol-spec,
 - [docs/dev/design/architecture.md](design/architecture.md): system architecture and boundaries
 - [docs/dev/design/design.md](design/design.md): product design principles
 - [docs/dev/high-performance-mode.md](high-performance-mode.md): HPX mode analysis
+- [docs/dev/design/protocol-wire-spec.md](design/protocol-wire-spec.md): byte-level data-plane frame + signed-handshake wire specification (base frame, SAR, CONREQ/CONACK, PQ handshake, ACK, manifest, negotiated params)
 - [docs/dev/hpx-session-state-machine.md](hpx-session-state-machine.md): HPX lifecycle and conformance
 - [docs/dev/design/hpx-waveform-design.md](design/hpx-waveform-design.md): waveform and profile rationale
 - [docs/dev/benchmark-harness.md](benchmark-harness.md): benchmark scenarios and regression gates

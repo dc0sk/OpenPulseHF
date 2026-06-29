@@ -584,6 +584,7 @@ External modem/DSP references (gnuradio FLL band-edge, liquid-dsp framesync, dan
 | ARDOP research | `docs/dev/research/ardop-research.md` |
 | HPX waveform design | `docs/dev/design/hpx-waveform-design.md` |
 | HPX state machine | `docs/dev/hpx-session-state-machine.md` |
+| Protocol & handshake wire format (frame/SAR/CONREQ/CONACK/ACK/manifest) | `docs/dev/design/protocol-wire-spec.md` |
 | Peer query and relay wire format | `docs/dev/peer-query-relay-wire.md` |
 | Regulatory compliance | `docs/regulatory.md` |
 | Roadmap and phase gates | `docs/dev/steering/roadmap.md` |
