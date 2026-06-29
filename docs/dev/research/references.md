@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/dev/references.md
+doc: docs/dev/research/references.md
 status: living
 last_updated: 2026-06-17
 ---

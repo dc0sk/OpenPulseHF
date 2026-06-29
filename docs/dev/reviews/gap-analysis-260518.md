@@ -91,13 +91,13 @@ The gateway rejects `N0CALL` before any transmission (`main.rs:264`). The daemon
 A test explicitly asserts these modes stay below the BER gate on Watterson channels and therefore remain excluded from the session profile. This is an intentional deferral but represents a capability gap for wideband SC-FDMA.
 
 - Deferral test: [`plugins/scfdma/tests/pilot_channel_estimation.rs:364`](../../../plugins/scfdma/tests/pilot_channel_estimation.rs#L364) (`scfdma_qam_modes_remain_deferred_on_watterson_profile_entry_matrix`)
-- Roadmap entry: `docs/dev/roadmap.md` deferred section
+- Roadmap entry: `docs/dev/steering/roadmap.md` deferred section
 
 ### 9. Phase 5.5-reg on-air validation not executed
 
 The roadmap marks Phase 5.5-reg as deferred with no target date. The on-air test plan exists (`docs/on-air_testplan.md`) but there is no execution report, no compliance checklist sign-off, and no evidence of real RF testing. Using the modem on amateur radio frequencies without completing this phase carries regulatory risk.
 
-- Roadmap: `docs/dev/roadmap.md:237`
+- Roadmap: `docs/dev/steering/roadmap.md:237`
 - Test plan: `docs/on-air_testplan.md`
 
 ---

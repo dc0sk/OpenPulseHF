@@ -434,6 +434,6 @@ But **must** adhere to:
 ## References
 
 - [OpenPulse High-Performance Mode](high-performance-mode.md)
-- [PKI Trust Policy](pki-tooling-trust-policy.md)
-- [Modem Engine Architecture](architecture.md)
+- [PKI Trust Policy](pki/pki-tooling-trust-policy.md)
+- [Modem Engine Architecture](design/architecture.md)
 

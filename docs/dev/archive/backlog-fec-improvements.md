@@ -7,7 +7,7 @@ last_updated: 2026-05-09
 
 # FEC Improvements Backlog
 
-**Frozen research summary (2026-05-09).** Archived; see docs/dev/backlog.md for live open work.
+**Frozen research summary (2026-05-09).** Archived; see docs/dev/steering/backlog.md for live open work.
 
 Research conducted 2026-05-09. Current state: RS(255,223) as primary, K=3 ConvCodec as
 optional alternative; concatenated Conv+RS, short-block RS, strong RS(255,191), and

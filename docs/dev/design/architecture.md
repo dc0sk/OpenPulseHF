@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/dev/architecture.md
+doc: docs/dev/design/architecture.md
 status: living
 last_updated: 2026-06-19
 ---
@@ -92,7 +92,7 @@ Gardner timing loop — see [hpx-waveform-design.md](hpx-waveform-design.md#pilo
 
 ## HPX adaptive profiles
 
-HPX sessions select a modulation mode at runtime based on the current `SpeedLevel` reported by the `RateAdapter`. Several profiles are defined in `openpulse-core/src/profile.rs`; the [README profiles table](../../README.md#adaptive-rate-profiles) and [mode-fec-ladder.md §4](../mode-fec-ladder.md) are the authoritative list. A few are shown below:
+HPX sessions select a modulation mode at runtime based on the current `SpeedLevel` reported by the `RateAdapter`. Several profiles are defined in `openpulse-core/src/profile.rs`; the [README profiles table](../../README.md#adaptive-rate-profiles) and [mode-fec-ladder.md §4](../../mode-fec-ladder.md) are the authoritative list. A few are shown below:
 
 ### `hpx500` — 500 Hz class
 

@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/dev/changelog.md
+doc: docs/dev/steering/changelog.md
 status: living
 last_updated: 2026-06-17
 ---

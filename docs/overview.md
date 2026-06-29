@@ -17,7 +17,7 @@ OpenPulseHF is inspired by established HF digital mode ecosystems including:
 - PACTOR
 - ARDOP
 
-See docs/dev/vara-research.md for a public-source technical summary of VARA-related findings collected during project research.
+See docs/dev/research/vara-research.md for a public-source technical summary of VARA-related findings collected during project research.
 
 ## Project shape
 
@@ -29,4 +29,4 @@ OpenPulseHF is implemented as a Cargo workspace with split responsibilities:
 - CLI frontend
 - Modulation plugins
 
-See docs/dev/architecture.md for crate-level detail and data flow.
+See docs/dev/design/architecture.md for crate-level detail and data flow.

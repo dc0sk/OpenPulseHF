@@ -105,7 +105,7 @@ crossfade pulse is ISI-limited at 4 samples/symbol — use `-RRC`).
 The `PILOT-*` modes are a pilot-framed single-carrier family: known in-band pilot
 symbols drive carrier recovery (cycle-slip-immune, sample-rate-offset-robust)
 instead of a decision-directed Costas loop — see the
-[pilot-framed waveform](docs/dev/hpx-waveform-design.md#pilot-framed-waveform) note.
+[pilot-framed waveform](docs/dev/design/hpx-waveform-design.md#pilot-framed-waveform) note.
 
 | Mode | Plugin | Baud | Bits/sym | Gross&nbsp;bps | Occ.&nbsp;BW&nbsp;(Hz) | Waveform | Notes |
 |---|---|---|---|---|---|---|---|

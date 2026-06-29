@@ -48,7 +48,7 @@ The interfaces below all sit on the safe side of one or both of those boundaries
   Accepted for client compatibility but **not applied** (validated + echoed only):
   `GRIDSQUARE` (informational), `ARQBW` / `ARQTIMEOUT` (OpenPulseHF self-manages bandwidth and
   timeout via its adaptive rate ladder, not a host hint). `CWID` / `SENDID` are stubs (warn-logged).
-  See `docs/dev/roadmap.md` → "TNC command-surface audit".
+  See `docs/dev/steering/roadmap.md` → "TNC command-surface audit".
 - **Data port** (default 8516) — binary `u16 BE` length-prefixed frames in both
   directions.  Send a 2-byte big-endian length followed by that many payload bytes;
   receive frames in the same format.

@@ -53,7 +53,7 @@ known in-band pilot symbols drive carrier recovery instead of a decision-directe
 Costas loop, making it cycle-slip-immune on dense constellations and robust to
 soundcard sample-rate offset. It is soft-capable, and spans four adaptive profiles
 (`hpx_pilot{,_rrc,_fast,_fast_rrc}`) trading bandwidth against throughput. See the
-[pilot-framed waveform](dev/hpx-waveform-design.md#pilot-framed-waveform) note and the
+[pilot-framed waveform](dev/design/hpx-waveform-design.md#pilot-framed-waveform) note and the
 `hpx_pilot` adaptive profile.
 
 All modes target an 8 kHz audio sample rate and a nominal 1500 Hz carrier, fitting
@@ -422,7 +422,7 @@ requires an SNR of approximately 20–25 dB for reliable operation.
 | SL5 | PILOT-32APSK500 | 5 |
 
 `hpx_pilot` climbs a cycle-slip-immune, sample-rate-offset-robust ladder
-(see the [pilot-framed waveform](dev/hpx-waveform-design.md#pilot-framed-waveform) note).
+(see the [pilot-framed waveform](dev/design/hpx-waveform-design.md#pilot-framed-waveform) note).
 
 ---
 

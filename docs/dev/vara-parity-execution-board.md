@@ -456,10 +456,10 @@ None
 
 ## Related Documents
 
-- [VARA Research](vara-research.md) — VARA 4.x architecture and FEC analysis.
-- [PACTOR Research](pactor-research.md) — PACTOR-4 multipath and soft-combine.
+- [VARA Research](research/vara-research.md) — VARA 4.x architecture and FEC analysis.
+- [PACTOR Research](research/pactor-research.md) — PACTOR-4 multipath and soft-combine.
 - [Benchmark Harness](benchmark-harness.md) — Testmatrix scenario definition.
-- [HPX Waveform Design](hpx-waveform-design.md) — SC-FDMA52 design rationale.
+- [HPX Waveform Design](design/hpx-waveform-design.md) — SC-FDMA52 design rationale.
 - [On-Air Test Plan](../on-air_testplan.md) — Field deployment checklist.
 - [Regulatory](../regulatory.md) — FCC/CEPT/Ofcom compliance overview.
 

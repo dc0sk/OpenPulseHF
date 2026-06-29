@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/dev/pactor-research.md
+doc: docs/dev/research/pactor-research.md
 status: living
 last_updated: 2026-05-01
 ---

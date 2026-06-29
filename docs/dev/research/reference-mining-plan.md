@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/dev/reference-mining-plan.md
+doc: docs/dev/research/reference-mining-plan.md
 status: proposal — awaiting review/decision
 last_updated: 2026-06-17
 ---

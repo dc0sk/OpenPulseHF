@@ -217,7 +217,7 @@ Operational integration checklist:
 - Treat missing/invalid beacons as identity failures for policy-sensitive operation.
 
 Reference material:
-- Research and design notes: [docs/dev/freedv-auth-research.md](dev/freedv-auth-research.md)
+- Research and design notes: [docs/dev/research/freedv-auth-research.md](dev/research/freedv-auth-research.md)
 - Implementation crate: `crates/openpulse-freedv-auth`
 - Integration tests: `crates/openpulse-freedv-auth/tests/freedv_auth_integration.rs`
 
@@ -295,8 +295,8 @@ curl -sS -X PATCH "http://127.0.0.1:8080/api/v1/trust-bundles/${bundle_id}/promo
 
 For full endpoint contracts and operational guidance, see:
 - [docs/non-gpl-interfacing.md](non-gpl-interfacing.md#pki-tooling-rest-api)
-- [docs/dev/pki-tooling-api.md](dev/pki-tooling-api.md)
-- [docs/dev/pki-tooling-operations-runbook.md](dev/pki-tooling-operations-runbook.md)
+- [docs/dev/pki/pki-tooling-api.md](dev/pki/pki-tooling-api.md)
+- [docs/dev/pki/pki-tooling-operations-runbook.md](dev/pki/pki-tooling-operations-runbook.md)
 
 ---
 
@@ -917,10 +917,10 @@ General protocol and DSP references:
 - FCC Part 97 eCFR: https://www.ecfr.gov/current/title-47/chapter-I/subchapter-D/part-97
 
 Project-local references:
-- Architecture: [docs/dev/architecture.md](dev/architecture.md)
+- Architecture: [docs/dev/design/architecture.md](dev/design/architecture.md)
 - Features: [docs/features.md](features.md)
 - CLI guide: [docs/cli-guide.md](cli-guide.md)
-- Roadmap: [docs/dev/roadmap.md](dev/roadmap.md)
+- Roadmap: [docs/dev/steering/roadmap.md](dev/steering/roadmap.md)
 - Plugin collaboration: [docs/dev/contributing-plugins.md](dev/contributing-plugins.md)
 - Commercial interface: [docs/dev/plugin-commercial-interface.md](dev/plugin-commercial-interface.md)
 - Regulatory analysis: [docs/regulatory.md](regulatory.md)

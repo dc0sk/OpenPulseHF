@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/dev/testbench-design.md
+doc: docs/dev/design/testbench-design.md
 status: living
 last_updated: 2026-05-02
 ---

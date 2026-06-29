@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/dev/pki-tooling-trust-policy.md
+doc: docs/dev/pki/pki-tooling-trust-policy.md
 status: living
 last_updated: 2026-04-24
 ---

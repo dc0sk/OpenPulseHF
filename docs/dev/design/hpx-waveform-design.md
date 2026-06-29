@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/dev/hpx-waveform-design.md
+doc: docs/dev/design/hpx-waveform-design.md
 status: living
 last_updated: 2026-06-19
 ---
@@ -127,7 +127,7 @@ adaptive profiles span the bandwidth × throughput grid on the same carrier:
 (1000 throughput), `hpx_pilot_fast_rrc` (1000 throughput + narrowband) — all with
 the same per-symbol Es/N0 floors. The pilot family is also soft-capable (per-bit
 LLRs), so the dense rungs auto-select high-rate LDPC. See the
-[mode/FEC guide](../mode-fec-ladder.md).
+[mode/FEC guide](../../mode-fec-ladder.md).
 
 ---
 

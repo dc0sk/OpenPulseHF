@@ -1,7 +1,7 @@
 //! Dedicated burst frequency-acquisition stage (qdetector-style).
 //!
 //! Recovers timing, carrier-frequency offset, phase, and gain *jointly* from one
-//! known preamble, in two passes (see `docs/dev/freq-acquisition-design.md`):
+//! known preamble, in two passes (see `docs/dev/design/freq-acquisition-design.md`):
 //!
 //! 1. **Coarse (joint timing + CFO).** For each candidate timing τ, de-rotate the
 //!    received window by the known preamble (`rx[τ+n]·conj(p[n])`) and take an

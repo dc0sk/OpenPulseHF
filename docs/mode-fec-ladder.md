@@ -74,7 +74,7 @@ The family spans two pulse shapes and three baud rates:
   HF channel edge).
 
 So e.g. `PILOT-16QAM1000-RRC` is 16QAM, 1000 baud, RRC-shaped. See the
-[pilot-framed waveform](dev/hpx-waveform-design.md#pilot-framed-waveform) design note.
+[pilot-framed waveform](dev/design/hpx-waveform-design.md#pilot-framed-waveform) design note.
 
 ---
 

@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/dev/roadmap.md
+doc: docs/dev/steering/roadmap.md
 status: living
 last_updated: 2026-06-24
 ---
@@ -146,7 +146,7 @@ Phase 3.5-substitute (sound-loopback channel simulation) is done (PR #89):
 - 6 channel-loopback integration tests (clean, AWGN 20 dB, Watterson F1/F2, Gilbert-Elliott with/without FEC).
 - These replace on-air validation as the CI gate for loopback correctness.
 
-Remaining on-air items (**in active execution as of 2026-06** — see [onair-status.md](onair-status.md)):
+Remaining on-air items (**in active execution as of 2026-06** — see [onair-status.md](../onair-status.md)):
 - Conduct on-air tests on IARU-aligned frequencies for each supported bandwidth class.
 - Verify station identification behaviour at 10-minute intervals under long sessions.
 - Test relay node automatic control point interface.
@@ -204,7 +204,7 @@ Remaining on-air items (**in active execution as of 2026-06** — see [onair-sta
 ## Phase 5 — Integration and Release Readiness (Completed)
 
 All Phase 5 items shipped. On-air regulatory validation (Phase 5.5-reg) is
-**in active execution as of 2026-06** (see [onair-status.md](onair-status.md)); no
+**in active execution as of 2026-06** (see [onair-status.md](../onair-status.md)); no
 hardware gate blocks further development.
 
 ### 5.1 — B2F session driver ✅ Done (PR #98)
@@ -235,7 +235,7 @@ hardware gate blocks further development.
 - `AudioSource` enum (`Synthetic` / `LiveCapture`); `run_live()` opens system input at 8 kHz mono.
 - Source combo disabled while running; panel labels reflect live mode.
 
-### 5.5-reg — On-air regulatory validation *(in active execution, 2026-06 — see [onair-status.md](onair-status.md))*
+### 5.5-reg — On-air regulatory validation *(in active execution, 2026-06 — see [onair-status.md](../onair-status.md))*
 Conduct on-air tests on IARU-aligned frequencies, verify station ID at 10-minute intervals,
 test relay automatic control point interface, publish compliance report as release artefact.
 
@@ -1302,7 +1302,7 @@ single-carrier modes remain superseded by their `-RRC` variants.
 
 ## BL-FEC series — FEC codec improvements
 
-Incremental FEC improvements tracked in [`docs/dev/archive/backlog-fec-improvements.md`](archive/backlog-fec-improvements.md).
+Incremental FEC improvements tracked in [`docs/dev/archive/backlog-fec-improvements.md`](../archive/backlog-fec-improvements.md).
 
 | Item | Description | Status |
 |---|---|---|

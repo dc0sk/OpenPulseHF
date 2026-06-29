@@ -1,7 +1,7 @@
 # Design proposal: dedicated frequency-acquisition stage
 
 **Status:** proposal for review — not implemented. Addresses the #1 finding of
-[reference-mining-plan.md](reference-mining-plan.md) (task T2.1).
+[reference-mining-plan.md](../research/reference-mining-plan.md) (task T2.1).
 
 ## Problem
 
@@ -95,7 +95,7 @@ data justifies it.
 - **In-process** channel-sim sweeps (AWGN × CFO, SRO × CFO) for the regression
   floor; the dense modes (8PSK, 64QAM) are the canaries.
 - **Dual-card hardware** full tier (the dual-clock regression guard — see
-  [dualcard-loopback.md](dualcard-loopback.md)); these real-time acquisition
+  [dualcard-loopback.md](../dualcard-loopback.md)); these real-time acquisition
   behaviours don't reproduce in-process.
 - Gate: no regression vs the current per-mode AFC settle on any passing
   mode/offset, and a measurable widening of the acquired-CFO range on the modes

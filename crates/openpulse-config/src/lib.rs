@@ -203,7 +203,7 @@ pub struct RigConfig {
     pub rigctld_addr: String,
     /// **Reserved — not yet implemented.** Intended CAT backend selector
     /// (`"rigctld"` / `"generic"`); the daemon only ever uses rigctld today, so this is unread.
-    /// See `docs/dev/roadmap.md` → "Config/feature gaps".
+    /// See `docs/dev/steering/roadmap.md` → "Config/feature gaps".
     pub backend: String,
     /// **Reserved — not yet implemented.** Serial port for the unbuilt `"generic"` CAT backend.
     pub serial_port: String,
