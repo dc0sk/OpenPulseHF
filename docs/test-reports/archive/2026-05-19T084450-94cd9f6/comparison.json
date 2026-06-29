@@ -1,5 +1,32 @@
 {
   "old_meta": {
+    "date": "2026-05-19T08:37:18.911081917Z",
+    "git_commit": "94cd9f6",
+    "git_commit_full": "94cd9f69bb1383ff8f7adaad52e16a71ab563eeb",
+    "git_dirty": true,
+    "workspace_version": "0.1.0",
+    "tier": "quick",
+    "duration_secs": 110.953811761,
+    "crates_tested": [
+      "bpsk-plugin",
+      "fsk4-plugin",
+      "ofdm-plugin",
+      "openpulse-ardop",
+      "openpulse-audio",
+      "openpulse-b2f",
+      "openpulse-b2f-driver",
+      "openpulse-channel",
+      "openpulse-core",
+      "openpulse-dsp",
+      "openpulse-kiss",
+      "openpulse-modem",
+      "psk8-plugin",
+      "qam64-plugin",
+      "qpsk-plugin",
+      "scfdma-plugin"
+    ]
+  },
+  "new_meta": {
     "date": "2026-05-19T08:44:50.352623878Z",
     "git_commit": "94cd9f6",
     "git_commit_full": "94cd9f69bb1383ff8f7adaad52e16a71ab563eeb",
@@ -26,39 +53,12 @@
       "scfdma-plugin"
     ]
   },
-  "new_meta": {
-    "date": "2026-06-29T14:37:59.371205657Z",
-    "git_commit": "56c73ca",
-    "git_commit_full": "56c73ca757937bd2bf942bab52bf3df797f42be2",
-    "git_dirty": true,
-    "workspace_version": "0.3.0",
-    "tier": "quick",
-    "duration_secs": 86.071766518,
-    "crates_tested": [
-      "bpsk-plugin",
-      "fsk4-plugin",
-      "ofdm-plugin",
-      "openpulse-ardop",
-      "openpulse-audio",
-      "openpulse-b2f",
-      "openpulse-b2f-driver",
-      "openpulse-channel",
-      "openpulse-core",
-      "openpulse-dsp",
-      "openpulse-kiss",
-      "openpulse-modem",
-      "psk8-plugin",
-      "qam64-plugin",
-      "qpsk-plugin",
-      "scfdma-plugin"
-    ]
-  },
   "summary": {
-    "regressions": 7,
+    "regressions": 0,
     "fixed": 0,
-    "new_cases": 141,
-    "removed": 6,
-    "unchanged": 414
+    "new_cases": 6,
+    "removed": 0,
+    "unchanged": 421
   },
   "diffs": [
     {
@@ -95,24 +95,6 @@
       "id": "adaptive_hpx_hf/HPX_HF/none/nocomp/clean/64B",
       "status": "unchanged",
       "old_passed": true,
-      "new_passed": true
-    },
-    {
-      "id": "adaptive_hpx_ofdm_hf/HPX_OFDM_HF/none/nocomp/awgn_10dB/64B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "adaptive_hpx_ofdm_hf/HPX_OFDM_HF/none/nocomp/awgn_20dB/64B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "adaptive_hpx_ofdm_hf/HPX_OFDM_HF/none/nocomp/clean/64B",
-      "status": "new_case",
-      "old_passed": null,
       "new_passed": true
     },
     {
@@ -273,15 +255,15 @@
     },
     {
       "id": "raw_modem/64QAM2000-RRC/none/nocomp/awgn_20dB/128B",
-      "status": "removed",
+      "status": "unchanged",
       "old_passed": false,
-      "new_passed": null
+      "new_passed": false
     },
     {
       "id": "raw_modem/64QAM2000-RRC/none/nocomp/awgn_20dB/223B",
-      "status": "removed",
+      "status": "unchanged",
       "old_passed": false,
-      "new_passed": null
+      "new_passed": false
     },
     {
       "id": "raw_modem/64QAM2000-RRC/none/nocomp/clean/128B",
@@ -315,15 +297,15 @@
     },
     {
       "id": "raw_modem/64QAM2000-RRC/rs/nocomp/awgn_20dB/128B",
-      "status": "removed",
+      "status": "unchanged",
       "old_passed": true,
-      "new_passed": null
+      "new_passed": true
     },
     {
       "id": "raw_modem/64QAM2000-RRC/rs/nocomp/awgn_20dB/223B",
-      "status": "removed",
+      "status": "unchanged",
       "old_passed": true,
-      "new_passed": null
+      "new_passed": true
     },
     {
       "id": "raw_modem/64QAM2000-RRC/rs/nocomp/clean/128B",
@@ -345,15 +327,15 @@
     },
     {
       "id": "raw_modem/64QAM2000-RRC/rs_il/nocomp/awgn_20dB/128B",
-      "status": "removed",
+      "status": "unchanged",
       "old_passed": true,
-      "new_passed": null
+      "new_passed": true
     },
     {
       "id": "raw_modem/64QAM2000-RRC/rs_il/nocomp/awgn_20dB/223B",
-      "status": "removed",
+      "status": "unchanged",
       "old_passed": true,
-      "new_passed": null
+      "new_passed": true
     },
     {
       "id": "raw_modem/64QAM2000-RRC/rs_il/nocomp/clean/128B",
@@ -467,144 +449,6 @@
       "id": "raw_modem/64QAM500/rs_il/nocomp/clean/223B",
       "status": "unchanged",
       "old_passed": true,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/none/lz4/clean/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/none/nocomp/awgn_10dB/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/none/nocomp/awgn_10dB/223B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/none/nocomp/awgn_20dB/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/none/nocomp/awgn_20dB/223B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/none/nocomp/clean/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/none/nocomp/clean/223B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/none/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/none/zstd/clean/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/rs/lz4/clean/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/rs/nocomp/awgn_10dB/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/rs/nocomp/awgn_10dB/223B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/rs/nocomp/awgn_20dB/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/rs/nocomp/awgn_20dB/223B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/rs/nocomp/clean/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/rs/nocomp/clean/223B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/rs/zstd/clean/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/rs_il/nocomp/awgn_10dB/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/rs_il/nocomp/awgn_10dB/223B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/rs_il/nocomp/awgn_20dB/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/rs_il/nocomp/awgn_20dB/223B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/rs_il/nocomp/clean/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK1000-HF-RRC/rs_il/nocomp/clean/223B",
-      "status": "new_case",
-      "old_passed": null,
       "new_passed": true
     },
     {
@@ -848,18 +692,6 @@
       "new_passed": true
     },
     {
-      "id": "raw_modem/8PSK1000/none/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/8PSK2000-RRC/none/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
       "id": "raw_modem/8PSK500-RRC/none/lz4/clean/128B",
       "status": "unchanged",
       "old_passed": true,
@@ -1005,14 +837,14 @@
     },
     {
       "id": "raw_modem/8PSK500/ldpc/nocomp/awgn_20dB/32B",
-      "status": "unchanged",
-      "old_passed": true,
+      "status": "new_case",
+      "old_passed": null,
       "new_passed": true
     },
     {
       "id": "raw_modem/8PSK500/ldpc/nocomp/clean/32B",
-      "status": "unchanged",
-      "old_passed": true,
+      "status": "new_case",
+      "old_passed": null,
       "new_passed": true
     },
     {
@@ -1287,14 +1119,14 @@
     },
     {
       "id": "raw_modem/BPSK250/ldpc/nocomp/awgn_20dB/32B",
-      "status": "unchanged",
-      "old_passed": true,
+      "status": "new_case",
+      "old_passed": null,
       "new_passed": true
     },
     {
       "id": "raw_modem/BPSK250/ldpc/nocomp/clean/32B",
-      "status": "unchanged",
-      "old_passed": true,
+      "status": "new_case",
+      "old_passed": null,
       "new_passed": true
     },
     {
@@ -1460,18 +1292,6 @@
       "new_passed": true
     },
     {
-      "id": "raw_modem/BPSK250/turbo/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/BPSK250/turbo/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
       "id": "raw_modem/BPSK31/none/nocomp/clean/32B",
       "status": "unchanged",
       "old_passed": true,
@@ -1497,9 +1317,9 @@
     },
     {
       "id": "raw_modem/OFDM16/none/nocomp/awgn_10dB/128B",
-      "status": "regressed",
+      "status": "unchanged",
       "old_passed": true,
-      "new_passed": false
+      "new_passed": true
     },
     {
       "id": "raw_modem/OFDM16/none/nocomp/awgn_20dB/128B",
@@ -1521,9 +1341,9 @@
     },
     {
       "id": "raw_modem/OFDM16/rs/nocomp/awgn_10dB/128B",
-      "status": "regressed",
+      "status": "unchanged",
       "old_passed": true,
-      "new_passed": false
+      "new_passed": true
     },
     {
       "id": "raw_modem/OFDM16/rs/nocomp/awgn_20dB/128B",
@@ -1539,9 +1359,9 @@
     },
     {
       "id": "raw_modem/OFDM16/rs_il/nocomp/awgn_10dB/128B",
-      "status": "regressed",
+      "status": "unchanged",
       "old_passed": true,
-      "new_passed": false
+      "new_passed": true
     },
     {
       "id": "raw_modem/OFDM16/rs_il/nocomp/awgn_20dB/128B",
@@ -1553,114 +1373,6 @@
       "id": "raw_modem/OFDM16/rs_il/nocomp/clean/128B",
       "status": "unchanged",
       "old_passed": true,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/OFDM52-16QAM/none/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/OFDM52-16QAM/none/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/OFDM52-16QAM/rs/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/OFDM52-16QAM/rs/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/OFDM52-16QAM/soft_concat/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/OFDM52-16QAM/soft_concat/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/OFDM52-32QAM/none/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/OFDM52-32QAM/rs/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/OFDM52-32QAM/soft_concat/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/OFDM52-64QAM/none/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/OFDM52-64QAM/rs/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/OFDM52-64QAM/soft_concat/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/OFDM52-8PSK/none/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/OFDM52-8PSK/none/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/OFDM52-8PSK/rs/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/OFDM52-8PSK/rs/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/OFDM52-8PSK/soft_concat/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/OFDM52-8PSK/soft_concat/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
       "new_passed": true
     },
     {
@@ -1683,434 +1395,26 @@
     },
     {
       "id": "raw_modem/OFDM52/rs/nocomp/awgn_20dB/128B",
-      "status": "regressed",
+      "status": "unchanged",
       "old_passed": true,
-      "new_passed": false
+      "new_passed": true
     },
     {
       "id": "raw_modem/OFDM52/rs/nocomp/clean/128B",
-      "status": "regressed",
+      "status": "unchanged",
       "old_passed": true,
-      "new_passed": false
+      "new_passed": true
     },
     {
       "id": "raw_modem/OFDM52/rs_il/nocomp/awgn_20dB/128B",
-      "status": "regressed",
+      "status": "unchanged",
       "old_passed": true,
-      "new_passed": false
+      "new_passed": true
     },
     {
       "id": "raw_modem/OFDM52/rs_il/nocomp/clean/128B",
-      "status": "regressed",
+      "status": "unchanged",
       "old_passed": true,
-      "new_passed": false
-    },
-    {
-      "id": "raw_modem/PILOT-16QAM1000/ldpc/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-16QAM1000/ldpc/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-16QAM1000/none/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-16QAM1000/none/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-16QAM1000/rs/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-16QAM1000/rs/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-16QAM500-RRC/ldpc/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-16QAM500-RRC/ldpc/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-16QAM500-RRC/none/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-16QAM500-RRC/none/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-16QAM500-RRC/rs/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-16QAM500-RRC/rs/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-16QAM500/ldpc/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-16QAM500/ldpc/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-16QAM500/none/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-16QAM500/none/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-16QAM500/rs/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-16QAM500/rs/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-32APSK500/ldpc/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-32APSK500/none/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-32APSK500/rs/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-8PSK500/ldpc/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-8PSK500/ldpc/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-8PSK500/none/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-8PSK500/none/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-8PSK500/rs/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-8PSK500/rs/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-QPSK500-RRC/ldpc/nocomp/awgn_10dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-QPSK500-RRC/ldpc/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-QPSK500-RRC/ldpc/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-QPSK500-RRC/none/nocomp/awgn_10dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-QPSK500-RRC/none/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-QPSK500-RRC/none/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-QPSK500-RRC/rs/nocomp/awgn_10dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-QPSK500-RRC/rs/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-QPSK500-RRC/rs/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-QPSK500/ldpc/nocomp/awgn_10dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-QPSK500/ldpc/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-QPSK500/ldpc/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-QPSK500/none/nocomp/awgn_10dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-QPSK500/none/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-QPSK500/none/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-QPSK500/rs/nocomp/awgn_10dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-QPSK500/rs/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/PILOT-QPSK500/rs/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/none/lz4/clean/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/none/nocomp/awgn_10dB/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/none/nocomp/awgn_10dB/223B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/none/nocomp/awgn_20dB/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/none/nocomp/awgn_20dB/223B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/none/nocomp/clean/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/none/nocomp/clean/223B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/none/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/none/zstd/clean/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/rs/lz4/clean/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/rs/nocomp/awgn_10dB/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/rs/nocomp/awgn_10dB/223B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/rs/nocomp/awgn_20dB/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/rs/nocomp/awgn_20dB/223B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/rs/nocomp/clean/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/rs/nocomp/clean/223B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/rs/zstd/clean/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/rs_il/nocomp/awgn_10dB/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/rs_il/nocomp/awgn_10dB/223B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/rs_il/nocomp/awgn_20dB/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/rs_il/nocomp/awgn_20dB/223B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/rs_il/nocomp/clean/128B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000-HF-RRC/rs_il/nocomp/clean/223B",
-      "status": "new_case",
-      "old_passed": null,
       "new_passed": true
     },
     {
@@ -2387,12 +1691,6 @@
       "id": "raw_modem/QPSK1000-RRC/rs_il/nocomp/clean/223B",
       "status": "unchanged",
       "old_passed": true,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK1000/none/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
       "new_passed": true
     },
     {
@@ -2967,14 +2265,14 @@
     },
     {
       "id": "raw_modem/QPSK500/ldpc/nocomp/awgn_20dB/32B",
-      "status": "unchanged",
-      "old_passed": true,
+      "status": "new_case",
+      "old_passed": null,
       "new_passed": true
     },
     {
       "id": "raw_modem/QPSK500/ldpc/nocomp/clean/32B",
-      "status": "unchanged",
-      "old_passed": true,
+      "status": "new_case",
+      "old_passed": null,
       "new_passed": true
     },
     {
@@ -3140,18 +2438,6 @@
       "new_passed": true
     },
     {
-      "id": "raw_modem/QPSK500/turbo/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/QPSK500/turbo/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
       "id": "raw_modem/SCFDMA16/none/nocomp/awgn_10dB/128B",
       "status": "unchanged",
       "old_passed": true,
@@ -3212,96 +2498,6 @@
       "new_passed": true
     },
     {
-      "id": "raw_modem/SCFDMA26-16QAM/none/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/SCFDMA26-16QAM/none/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/SCFDMA26-16QAM/rs/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/SCFDMA26-16QAM/rs/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/SCFDMA26-16QAM/soft_concat/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/SCFDMA26-16QAM/soft_concat/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/SCFDMA26-32QAM/none/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/SCFDMA26-32QAM/rs/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/SCFDMA26-32QAM/soft_concat/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/SCFDMA26-8PSK/none/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/SCFDMA26-8PSK/none/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/SCFDMA26-8PSK/rs/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/SCFDMA26-8PSK/rs/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/SCFDMA26-8PSK/soft_concat/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/SCFDMA26-8PSK/soft_concat/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
       "id": "raw_modem/SCFDMA52-16QAM/none/nocomp/awgn_20dB/32B",
       "status": "unchanged",
       "old_passed": true,
@@ -3326,18 +2522,6 @@
       "new_passed": true
     },
     {
-      "id": "raw_modem/SCFDMA52-16QAM/soft_concat/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/SCFDMA52-16QAM/soft_concat/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
       "id": "raw_modem/SCFDMA52-32QAM/none/nocomp/clean/32B",
       "status": "unchanged",
       "old_passed": true,
@@ -3347,12 +2531,6 @@
       "id": "raw_modem/SCFDMA52-32QAM/rs/nocomp/clean/32B",
       "status": "unchanged",
       "old_passed": true,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/SCFDMA52-32QAM/soft_concat/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
       "new_passed": true
     },
     {
@@ -3368,12 +2546,6 @@
       "new_passed": true
     },
     {
-      "id": "raw_modem/SCFDMA52-64QAM-P4/soft_concat/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
       "id": "raw_modem/SCFDMA52-64QAM/none/nocomp/clean/32B",
       "status": "unchanged",
       "old_passed": true,
@@ -3383,12 +2555,6 @@
       "id": "raw_modem/SCFDMA52-64QAM/rs/nocomp/clean/32B",
       "status": "unchanged",
       "old_passed": true,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/SCFDMA52-64QAM/soft_concat/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
       "new_passed": true
     },
     {
@@ -3413,18 +2579,6 @@
       "id": "raw_modem/SCFDMA52-8PSK/rs/nocomp/clean/32B",
       "status": "unchanged",
       "old_passed": true,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/SCFDMA52-8PSK/soft_concat/nocomp/awgn_20dB/32B",
-      "status": "new_case",
-      "old_passed": null,
-      "new_passed": true
-    },
-    {
-      "id": "raw_modem/SCFDMA52-8PSK/soft_concat/nocomp/clean/32B",
-      "status": "new_case",
-      "old_passed": null,
       "new_passed": true
     },
     {
