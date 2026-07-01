@@ -121,6 +121,10 @@ pub struct StationConfig {
     /// Empty = the platform default (`~/.config/openpulse/identity.key`); set an explicit path to
     /// give co-located stations (e.g. the twin-station rig) distinct identities.
     pub identity_key_path: String,
+    /// Periodic station-ID interval in seconds (REQ-REG-10). While transmitting, the daemon keys up
+    /// and sends the callsign at least this often. `600` = every 10 minutes (US Part 97 default);
+    /// `0` disables auto-ID (operator IDs manually). A pure-receive station never keys up regardless.
+    pub auto_id_interval_secs: u64,
 }
 
 /// Audio backend selection.
@@ -343,6 +347,7 @@ impl Default for StationConfig {
             callsign: "N0CALL".into(),
             grid_square: "AA00".into(),
             identity_key_path: String::new(),
+            auto_id_interval_secs: 600,
         }
     }
 }
@@ -677,6 +682,10 @@ grid_square = "AA00"
 # Empty = the platform default (~/.config/openpulse/identity.key), generated on first run.
 # Set an explicit path to give co-located stations (e.g. the twin rig) distinct identities.
 identity_key_path = ""
+# Periodic station-ID interval in seconds (regulatory: e.g. US Part 97 = every 10 minutes).
+# While transmitting, the daemon keys up and sends your callsign at least this often.
+# 0 disables auto-ID (you identify manually). A pure-receive station never keys up regardless.
+auto_id_interval_secs = 600
 
 [audio]
 # Audio backend: default | cpal | loopback

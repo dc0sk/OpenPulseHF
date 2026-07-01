@@ -17,6 +17,7 @@ use openpulse_audio::LoopbackBackend;
 use openpulse_config::OpenpulseConfig;
 use openpulse_core::audio::{AudioBackend, AudioInputStream};
 use openpulse_core::relay::{RelayForwarder, RelayTrustPolicy};
+use openpulse_core::station_id::StationIdTimer;
 use openpulse_core::trust_store_file::load_trust_store_from_file;
 use openpulse_modem::ModemEngine;
 use openpulse_qsy::session::QsyPolicy;
@@ -509,6 +510,26 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     // stream clones shared buffers, so this is equivalent to per-tick reopen there.
     let capture_device = (!cfg.audio.device.is_empty()).then(|| cfg.audio.device.clone());
     let mut rx_stream: Option<Box<dyn AudioInputStream>> = None;
+    // Periodic station identification (REQ-REG-10): while transmitting, key up and send the
+    // callsign at least every `auto_id_interval_secs`. The pure `StationIdTimer` is fed a
+    // monotonic ms clock (`id_start`) and armed by polling the engine's `frames_transmitted`
+    // delta, so no `note_tx()` call has to be threaded through every transmit site. Disabled
+    // when the interval is 0 or the callsign is unset/default (never auto-ID as N0CALL).
+    let id_start = std::time::Instant::now();
+    let mut id_timer =
+        StationIdTimer::new(cfg.station.auto_id_interval_secs.saturating_mul(1000), 0);
+    let id_callsign = cfg.station.callsign.trim().to_string();
+    let auto_id_active = id_timer.is_enabled()
+        && !id_callsign.is_empty()
+        && !id_callsign.eq_ignore_ascii_case("N0CALL");
+    let mut tx_frames_seen = engine.frames_transmitted();
+    if auto_id_active {
+        tracing::info!(
+            interval_s = cfg.station.auto_id_interval_secs,
+            callsign = %id_callsign,
+            "periodic station ID enabled"
+        );
+    }
     loop {
         tokio::select! {
             biased;
@@ -704,6 +725,59 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 ota_status_tick += 1;
                 if engine.ota_active() && ota_status_tick.is_multiple_of(ota_status_period) {
                     let _ = handle.event_tx.send(ota_status_event(&engine));
+                }
+                // Periodic station ID (REQ-REG-10). Arm from the TX-frame delta (any data/ACK/
+                // retransmit we emitted since the last poll), and when the interval has elapsed
+                // with activity, key PTT and send the callsign in the active mode. Re-baseline the
+                // counter afterwards so the ID frame itself is not counted as further TX activity.
+                if auto_id_active {
+                    let tx_now = engine.frames_transmitted();
+                    if tx_now != tx_frames_seen {
+                        id_timer.note_tx();
+                        tx_frames_seen = tx_now;
+                    }
+                    let now_ms = id_start.elapsed().as_millis() as u64;
+                    if id_timer.id_due(now_ms) {
+                        let id_mode = handle.active_mode.lock().await.clone();
+                        let id_body = format!("DE {id_callsign}");
+                        let mut keyed = true;
+                        if let Some(ref mut ptt) = ptt_controller {
+                            if let Err(e) = ptt.assert_ptt() {
+                                tracing::warn!(error = %e, "station-ID PTT assert failed");
+                                keyed = false;
+                            }
+                        }
+                        if keyed {
+                            let _ = handle
+                                .event_tx
+                                .send(crate::protocol::ControlEvent::PttChanged { active: true });
+                            match tokio::task::block_in_place(|| {
+                                engine.transmit(id_body.as_bytes(), &id_mode, None)
+                            }) {
+                                Ok(()) => tracing::info!(
+                                    callsign = %id_callsign,
+                                    mode = %id_mode,
+                                    "transmitted periodic station ID"
+                                ),
+                                Err(e) => tracing::warn!(
+                                    error = %e, mode = %id_mode, "station-ID transmit failed"
+                                ),
+                            }
+                            if let Some(ref mut ptt) = ptt_controller {
+                                if let Err(e) = ptt.release_ptt() {
+                                    tracing::warn!(error = %e, "station-ID PTT release failed");
+                                }
+                            }
+                            let _ = handle
+                                .event_tx
+                                .send(crate::protocol::ControlEvent::PttChanged { active: false });
+                        }
+                        // Advance the interval regardless of PTT success (a persistent hardware
+                        // fault is surfaced by the warning above, not by per-tick retry spam), and
+                        // exclude the just-sent ID frame from arming the next interval.
+                        id_timer.mark_identified(now_ms);
+                        tx_frames_seen = engine.frames_transmitted();
+                    }
                 }
             }
         }

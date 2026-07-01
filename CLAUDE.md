@@ -480,6 +480,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | Gilbert-Elliott mean burst length | `cargo test -p openpulse-channel` (add in `gilbert_elliott.rs`) |
 | Watterson fading envelope non-trivial | `cargo test -p openpulse-channel` (add in `watterson.rs`) |
 | PTT assert/release ≤ 50 ms | `cargo test -p openpulse-radio` (add timing test in `noop.rs`) |
+| Periodic station ID at interval (REQ-REG-10) | `cargo test -p openpulse-core --lib station_id` + `cargo test -p openpulse-modem --test station_id_txcount` |
 | CI multi-platform green | ✅ Both jobs pass (PR #67 re-enabled) |
 
 For any new Phase 1 feature: write the test first, confirm it fails, implement until it passes. Do not mark a task done if its test does not exist.

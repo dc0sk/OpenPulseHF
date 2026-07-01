@@ -9,6 +9,38 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-01 — feature: periodic station-ID timer (REQ-REG-10, new CAP-66)
+
+- **Requirement/change:** REQ-REG-10 (station identification at required intervals in the digital
+  mode) was reclassified a ⚠ gap by the gap rescan — the ARDOP `CWID`/`SENDID` commands are stubs and
+  no auto-ID path existed. Implement the missing periodic auto-ID so a running station identifies
+  itself on air at the regulatory interval while transmitting.
+- **Design decision:** (a) a **pure `StationIdTimer` state machine** in `openpulse-core` (interval +
+  TX-armed + reset over an injected ms clock) so the regulatory semantics are deterministic and
+  unit-testable — ID fires only when the station has transmitted since the last ID *and* the interval
+  elapsed, so a pure-receive station never keys up. (b) Arm it from the **engine's `frames_transmitted`
+  counter** incremented once at the single TX seam (`stage_emit_output`, where regulatory TX logging
+  already lives) — the daemon polls the delta rather than threading a `note_tx()` through every
+  transmit call site, and re-baselines after IDing so the ID frame itself doesn't re-arm the timer.
+  (c) On due, the daemon keys PTT, sends `DE <callsign>` in the **active mode** (guaranteed-registered,
+  and the mode the peer is already decoding), releases PTT — mirroring the OTA-ACK PTT turnaround.
+  (d) `[station] auto_id_interval_secs` (default 600 s = US Part 97 10-minute rule; 0 disables; never
+  auto-ID as the default `N0CALL`).
+- **Implementation:** `crates/openpulse-core/src/station_id.rs` (+ `pub mod` in `lib.rs`);
+  `frames_transmitted` field/increment/getter in `crates/openpulse-modem/src/engine.rs`;
+  `auto_id_interval_secs` in `crates/openpulse-config/src/lib.rs` (+ Default + template);
+  rx-ticker wiring in `crates/openpulse-daemon/src/server.rs`.
+- **Tests:** `cargo test -p openpulse-core --lib station_id` — 7 pass (disabled/0-interval, not-due
+  without TX, not-due-early, due-at-interval, reset-disarms, re-arm-after-next-interval,
+  repeated-TX-one-ID-per-interval); `cargo test -p openpulse-modem --test station_id_txcount` — 1 pass
+  (counter bumps per emit, never on receive); `cargo clippy -p openpulse-core -p openpulse-config
+  -p openpulse-modem -p openpulse-daemon -- -D warnings` + `cargo fmt --all --check` clean; daemon
+  suite 2/2, config suite green.
+- **Test results:** station_id 7/7, station_id_txcount 1/1, daemon 2/2, clippy+fmt clean. REQ-REG-10:
+  ⚠ gap → ✅ covered (CAP-66).
+
+---
+
 ## 2026-07-01 — traceability fix: station-ID coverage corrected (gap rescan)
 
 - **Requirement/change:** a project-wide gap rescan (TODO/FIXME/stub/dead-code/deferred sweep) found
