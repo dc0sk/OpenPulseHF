@@ -115,6 +115,12 @@ struct ConReqBody {
     // Empty grid is skipped so legacy zero-grid frames (and their signatures) are byte-identical.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     station_grid: String,
+    // Active OTA rate-ladder identity (name + fingerprint of the level→mode/FEC mapping). Skipped
+    // when unset so legacy/no-OTA frames stay byte-identical for signature compatibility.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    profile_name: String,
+    #[serde(default, skip_serializing_if = "u64_is_zero")]
+    profile_fingerprint: u64,
 }
 
 /// Connection request sent by the initiating station during Discovery.
@@ -136,6 +142,12 @@ pub struct ConReq {
     /// Maidenhead grid locator the initiator announces (empty = not advertised).
     #[serde(default)]
     pub station_grid: String,
+    /// Active OTA rate-ladder name (empty = no adaptive OTA advertised).
+    #[serde(default)]
+    pub profile_name: String,
+    /// Fingerprint of the active OTA ladder mapping (0 = none). See `SessionProfile::fingerprint`.
+    #[serde(default)]
+    pub profile_fingerprint: u64,
     /// Ed25519 signature over canonical JSON of the body fields (64 bytes).
     pub signature: Vec<u8>,
 }
@@ -163,7 +175,7 @@ impl ConReq {
         )
     }
 
-    /// Create and sign a new CONREQ advertising a Maidenhead grid locator.
+    /// Create and sign a new CONREQ advertising a Maidenhead grid locator (no OTA profile).
     #[allow(clippy::too_many_arguments)]
     pub fn create_with_grid(
         station_id: &str,
@@ -173,6 +185,33 @@ impl ConReq {
         supported_compression: Vec<CompressionAlgorithm>,
         supported_fec_modes: Vec<FecMode>,
         station_grid: &str,
+    ) -> Result<Self, HandshakeError> {
+        Self::create_full(
+            station_id,
+            signing_key_seed,
+            signing_modes,
+            session_id,
+            supported_compression,
+            supported_fec_modes,
+            station_grid,
+            "",
+            0,
+        )
+    }
+
+    /// Create and sign a CONREQ advertising the grid AND the active OTA rate-ladder identity
+    /// (`profile_name` + `profile_fingerprint`), so the peer can detect a diverged ladder.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_full(
+        station_id: &str,
+        signing_key_seed: &[u8; 32],
+        signing_modes: Vec<SigningMode>,
+        session_id: &str,
+        supported_compression: Vec<CompressionAlgorithm>,
+        supported_fec_modes: Vec<FecMode>,
+        station_grid: &str,
+        profile_name: &str,
+        profile_fingerprint: u64,
     ) -> Result<Self, HandshakeError> {
         let signing_key = SigningKey::from_bytes(signing_key_seed);
         let verifying_key = signing_key.verifying_key();
@@ -185,6 +224,8 @@ impl ConReq {
             supported_compression: supported_compression.clone(),
             supported_fec_modes: supported_fec_modes.clone(),
             station_grid: station_grid.to_string(),
+            profile_name: profile_name.to_string(),
+            profile_fingerprint,
         };
         let canonical =
             serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))?;
@@ -198,6 +239,8 @@ impl ConReq {
             supported_compression,
             supported_fec_modes,
             station_grid: station_grid.to_string(),
+            profile_name: profile_name.to_string(),
+            profile_fingerprint,
             signature: sig.to_bytes().to_vec(),
         })
     }
@@ -211,6 +254,8 @@ impl ConReq {
             supported_compression: self.supported_compression.clone(),
             supported_fec_modes: self.supported_fec_modes.clone(),
             station_grid: self.station_grid.clone(),
+            profile_name: self.profile_name.clone(),
+            profile_fingerprint: self.profile_fingerprint,
         };
         serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))
     }
@@ -269,10 +314,19 @@ struct ConAckBody {
     // Empty grid is skipped so legacy zero-grid frames (and their signatures) are byte-identical.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     station_grid: String,
+    // Responder's active OTA rate-ladder identity; skipped when unset for signature compatibility.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    profile_name: String,
+    #[serde(default, skip_serializing_if = "u64_is_zero")]
+    profile_fingerprint: u64,
 }
 
 fn fec_mode_is_none(m: &FecMode) -> bool {
     *m == FecMode::None
+}
+
+fn u64_is_zero(v: &u64) -> bool {
+    *v == 0
 }
 
 /// Connection acknowledgment sent by the responder during Discovery.
@@ -295,6 +349,12 @@ pub struct ConAck {
     /// Maidenhead grid locator the responder announces (empty = not advertised).
     #[serde(default)]
     pub station_grid: String,
+    /// Responder's active OTA rate-ladder name (empty = no adaptive OTA advertised).
+    #[serde(default)]
+    pub profile_name: String,
+    /// Fingerprint of the responder's active OTA ladder mapping (0 = none).
+    #[serde(default)]
+    pub profile_fingerprint: u64,
     /// Ed25519 signature over canonical JSON of the body fields (64 bytes).
     pub signature: Vec<u8>,
 }
@@ -320,7 +380,7 @@ impl ConAck {
         )
     }
 
-    /// Create and sign a new CONACK advertising a Maidenhead grid locator.
+    /// Create and sign a new CONACK advertising a Maidenhead grid locator (no OTA profile).
     #[allow(clippy::too_many_arguments)]
     pub fn create_with_grid(
         station_id: &str,
@@ -330,6 +390,33 @@ impl ConAck {
         selected_compression: CompressionAlgorithm,
         selected_fec_mode: FecMode,
         station_grid: &str,
+    ) -> Result<Self, HandshakeError> {
+        Self::create_full(
+            station_id,
+            signing_key_seed,
+            selected_mode,
+            session_id,
+            selected_compression,
+            selected_fec_mode,
+            station_grid,
+            "",
+            0,
+        )
+    }
+
+    /// Create and sign a CONACK advertising the grid AND the responder's active OTA rate-ladder
+    /// identity (`profile_name` + `profile_fingerprint`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_full(
+        station_id: &str,
+        signing_key_seed: &[u8; 32],
+        selected_mode: SigningMode,
+        session_id: &str,
+        selected_compression: CompressionAlgorithm,
+        selected_fec_mode: FecMode,
+        station_grid: &str,
+        profile_name: &str,
+        profile_fingerprint: u64,
     ) -> Result<Self, HandshakeError> {
         let signing_key = SigningKey::from_bytes(signing_key_seed);
         let verifying_key = signing_key.verifying_key();
@@ -342,6 +429,8 @@ impl ConAck {
             selected_compression,
             selected_fec_mode,
             station_grid: station_grid.to_string(),
+            profile_name: profile_name.to_string(),
+            profile_fingerprint,
         };
         let canonical =
             serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))?;
@@ -355,6 +444,8 @@ impl ConAck {
             selected_compression,
             selected_fec_mode,
             station_grid: station_grid.to_string(),
+            profile_name: profile_name.to_string(),
+            profile_fingerprint,
             signature: sig.to_bytes().to_vec(),
         })
     }
@@ -368,6 +459,8 @@ impl ConAck {
             selected_compression: self.selected_compression,
             selected_fec_mode: self.selected_fec_mode,
             station_grid: self.station_grid.clone(),
+            profile_name: self.profile_name.clone(),
+            profile_fingerprint: self.profile_fingerprint,
         };
         serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))
     }

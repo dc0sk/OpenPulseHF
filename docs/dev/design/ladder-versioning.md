@@ -44,11 +44,14 @@ changes iff the mapping changes, so it detects ladder drift automatically — a 
 
 - The daemon logs its active ladder fingerprint at OTA startup (`ladder_fingerprint=…`). Operators can
   diff it across two stations to confirm they will interoperate.
-- **Follow-up (handshake guard):** the signed handshake (`ConReq`/`ConAck`) will advertise
-  `(profile_name, ladder_fingerprint)`. On a completed handshake with a mismatched fingerprint the
-  daemon disables OTA rate-stepping for that peer and falls back to a fixed mode — detection instead
-  of silent desync. OTA without a handshake keeps working (the guard only fires on a *positive*
-  mismatch), preserving today's behaviour.
+- **Handshake guard (shipped):** the signed `ConReq`/`ConAck` advertise `(profile_name,
+  profile_fingerprint)` in the signature-covered body (skip-serialized when unset, so un-advertised
+  frames stay byte-identical to legacy — full signature compatibility). On a completed handshake the
+  daemon compares the peer's fingerprint to ours and records `VerifiedPeer.profile_compatible`. On a
+  **positive mismatch** (both sides advertised, fingerprints differ) it disables OTA rate-stepping for
+  that peer (`RuntimeControlState::ota_suppressed_by_peer` → fixed-mode fallback for both TX and RX) —
+  detection instead of silent desync. OTA **without** a handshake, or with a compatible / un-advertised
+  peer, is unaffected (the guard fires only on a positive mismatch), preserving today's behaviour.
 
 ## Chosen approach (2026-07-01)
 

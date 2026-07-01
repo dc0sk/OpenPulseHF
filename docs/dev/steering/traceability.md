@@ -9,6 +9,35 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-01 — feature: handshake ladder-compatibility guard (CAP-01/CAP-33, backward compat inc. 2)
+
+- **Requirement/change:** increment 2 of the freeze+version+handshake-guard strategy — detect a
+  diverged OTA rate ladder on air and fall back to fixed mode instead of silently desyncing on
+  `recommended_level`.
+- **Design decision:** the signed `ConReq`/`ConAck` now advertise `(profile_name, profile_fingerprint)`
+  in the **signature-covered** body, using the existing `skip_serializing_if` pattern so an
+  un-advertised frame (name "", fp 0) produces byte-identical canonical JSON → **full signature
+  compatibility with legacy/pre-guard peers**. Threaded via new `create_full` constructors; the old
+  `create`/`create_with_grid` delegate with empty profile (zero caller churn). On handshake completion
+  the daemon compares the peer's fingerprint to `local_ota_ladder` and stores
+  `VerifiedPeer.profile_compatible`; a **positive mismatch** (both advertised, differ) flips
+  `ota_suppressed_by_peer()` which gates BOTH the OTA send and OTA decode branches → fixed-mode
+  fallback. Undetermined (either side un-advertised) or matching → OTA unaffected, so
+  OTA-without-handshake keeps working.
+- **Implementation:** `profile_name`/`profile_fingerprint` on `ConReq`/`ConReqBody`/`ConAck`/`ConAckBody`
+  + `create_full` + `canonical_bytes` in `crates/openpulse-core/src/handshake.rs`; `VerifiedPeer.profile_compatible`,
+  `RuntimeControlState.local_ota_ladder` + `ota_suppressed_by_peer()`, `record_verified_peer` compat
+  check, and `create_full` at the connect/accept sites in `crates/openpulse-daemon/src/lib.rs`;
+  `local_ota_ladder` set at OTA start + both OTA branches gated in `crates/openpulse-daemon/src/server.rs`.
+- **Tests:** `handshake_integration` — profile round-trips wire, tamper of the fingerprint fails the
+  signature, un-advertised frame signs identically to legacy (3 new; 20 total). Daemon
+  `ladder_fingerprint_mismatch_suppresses_ota` — match→compatible, differ→suppressed, un-advertised /
+  no-local→undetermined. Core all green, daemon all green, clippy `-D warnings` + fmt clean, workspace builds.
+- **Test results:** handshake 20/20, daemon guard test pass + suites green; no regression to the signed
+  handshake (all pq/compression/handshake tests still pass) — un-advertised frames remain byte-identical.
+
+---
+
 ## 2026-07-01 — feature: rate-ladder fingerprint + freeze-versioning discipline (CAP-37, backward compat)
 
 - **Requirement/change:** the OTA ACK carries a bare `recommended_level`; its meaning depends on both
