@@ -356,32 +356,49 @@ impl SessionProfile {
         modes[SpeedLevel::Sl9 as usize] = Some("SCFDMA52-16QAM");
         modes[SpeedLevel::Sl10 as usize] = Some("SCFDMA52-32QAM");
         modes[SpeedLevel::Sl11 as usize] = Some("SCFDMA52-64QAM");
+        // Per-level FEC (MODCOD). The upper ladder was previously raw (`fec_modes: [None; 21]`),
+        // which is why 8PSK500 needed 18 dB and the dense SCFDMA rungs were unusable. Assigned from
+        // the AWGN calibration sweep (`tests/snr_floor_calibration.rs`): 8PSK500 gets *light* RS (keeps
+        // its net rate ~1312 bps, above QPSK500's 1000, so it stays a faster rung) and the dense
+        // SCFDMA rungs get soft-concatenated FEC (they only run FEC-protected).
+        let mut fec_modes = [None; 21];
+        fec_modes[SpeedLevel::Sl7 as usize] = Some(FecMode::Rs);
+        fec_modes[SpeedLevel::Sl8 as usize] = Some(FecMode::SoftConcatenated);
+        fec_modes[SpeedLevel::Sl9 as usize] = Some(FecMode::SoftConcatenated);
+        fec_modes[SpeedLevel::Sl10 as usize] = Some(FecMode::SoftConcatenated);
+        fec_modes[SpeedLevel::Sl11 as usize] = Some(FecMode::SoftConcatenated);
+        // SNR floors — the SNR/step pairs the fast-downshift jumps to. Lower rungs (SL2–6, no FEC)
+        // kept as measured-conservative (fading margin). Upper rungs recalibrated *with their FEC*
+        // and set monotonic with ~2–3 dB fading margin over the AWGN measurement (in parens):
+        //   SL7 8PSK500+RS (meas 9), SL8 SCFDMA52-8PSK+SC (9), SL9 SCFDMA52-16QAM+SC (12),
+        //   SL10 SCFDMA52-32QAM+SC (17), SL11 SCFDMA52-64QAM+SC (15). This kills the old 18 dB
+        //   duplicate (SL7/SL9), fills the 11→16 gap (8PSK500 now a real 12 dB rung), and keeps the
+        //   ladder monotonic. NOTE: cross-32QAM (SL10) AWGN-measures *harder* than 64QAM (SL11) — a
+        //   soft-demod weakness; floors are forced monotonic (SL10<SL11) as 64QAM is denser and needs
+        //   more on fading. Re-run the calibration sweep if the DSP changes.
         let mut snr_floors = [None; 21];
         snr_floors[SpeedLevel::Sl2 as usize] = Some(3.0_f32);
         snr_floors[SpeedLevel::Sl3 as usize] = Some(4.0_f32);
         snr_floors[SpeedLevel::Sl4 as usize] = Some(5.0_f32);
         snr_floors[SpeedLevel::Sl5 as usize] = Some(9.0_f32);
         snr_floors[SpeedLevel::Sl6 as usize] = Some(11.0_f32);
-        // SL7 (8PSK500, no FEC) recalibrated 14 → 18 dB: the AWGN sweep in
-        // `tests/snr_floor_calibration.rs` shows it only decodes reliably at ≥18 dB, so the old
-        // 14 dB floor was optimistic — it made the rate controller recommend 8PSK500 at ~15 dB
-        // where it can't decode (the "6 retries to find the step" symptom). The lower rungs measured
-        // at/below their configured floors (conservative = fading margin), so only SL7 was wrong.
-        snr_floors[SpeedLevel::Sl7 as usize] = Some(18.0_f32);
-        snr_floors[SpeedLevel::Sl8 as usize] = Some(16.0_f32);
-        snr_floors[SpeedLevel::Sl9 as usize] = Some(18.0_f32);
-        snr_floors[SpeedLevel::Sl10 as usize] = Some(22.0_f32);
-        snr_floors[SpeedLevel::Sl11 as usize] = Some(28.0_f32);
+        snr_floors[SpeedLevel::Sl7 as usize] = Some(12.0_f32);
+        snr_floors[SpeedLevel::Sl8 as usize] = Some(14.0_f32);
+        snr_floors[SpeedLevel::Sl9 as usize] = Some(16.0_f32);
+        snr_floors[SpeedLevel::Sl10 as usize] = Some(20.0_f32);
+        snr_floors[SpeedLevel::Sl11 as usize] = Some(22.0_f32);
+        // Ceilings gate the cautious one-step upshift; set just above each rung's floor and monotonic
+        // so every new rung is actually reachable on the way up (ceiling(L) ≥ floor(L+1)).
         let mut snr_ceilings = [None; 21];
         snr_ceilings[SpeedLevel::Sl2 as usize] = Some(8.0_f32);
         snr_ceilings[SpeedLevel::Sl3 as usize] = Some(9.0_f32);
         snr_ceilings[SpeedLevel::Sl4 as usize] = Some(11.0_f32);
-        snr_ceilings[SpeedLevel::Sl5 as usize] = Some(14.0_f32);
-        snr_ceilings[SpeedLevel::Sl6 as usize] = Some(18.0_f32);
-        snr_ceilings[SpeedLevel::Sl7 as usize] = Some(20.0_f32);
-        snr_ceilings[SpeedLevel::Sl8 as usize] = Some(18.0_f32);
-        snr_ceilings[SpeedLevel::Sl9 as usize] = Some(22.0_f32);
-        snr_ceilings[SpeedLevel::Sl10 as usize] = Some(28.0_f32);
+        snr_ceilings[SpeedLevel::Sl5 as usize] = Some(12.0_f32);
+        snr_ceilings[SpeedLevel::Sl6 as usize] = Some(13.0_f32);
+        snr_ceilings[SpeedLevel::Sl7 as usize] = Some(15.0_f32);
+        snr_ceilings[SpeedLevel::Sl8 as usize] = Some(17.0_f32);
+        snr_ceilings[SpeedLevel::Sl9 as usize] = Some(21.0_f32);
+        snr_ceilings[SpeedLevel::Sl10 as usize] = Some(23.0_f32);
         // SL11 (SCFDMA52-64QAM) is the ceiling of hpx_hf; no upgrade above it.
         Self {
             modes,
@@ -392,7 +409,7 @@ impl SessionProfile {
             // Guard admission to the densest rung (64QAM) behind a prior SNR upgrade
             // candidate, mirroring hpx_wideband_hd.
             ack_up_requires_snr_candidate_at: Some(SpeedLevel::Sl11),
-            fec_modes: [None; 21],
+            fec_modes,
         }
     }
 
