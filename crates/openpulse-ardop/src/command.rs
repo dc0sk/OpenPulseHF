@@ -246,16 +246,25 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
 
         "CWID" => match parts.get(1).map(|s| s.to_uppercase()).as_deref() {
             Some("TRUE") => {
-                tracing::warn!("CWID TRUE received but CW ID transmission is not implemented; stub response only");
+                bridge
+                    .cwid_enabled
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 vec!["CWID TRUE".into()]
             }
-            _ => vec!["CWID FALSE".into()],
+            _ => {
+                bridge
+                    .cwid_enabled
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+                vec!["CWID FALSE".into()]
+            }
         },
 
         "SENDID" => {
-            tracing::warn!(
-                "SENDID received but ID frame transmission is not implemented; stub response only"
-            );
+            // Request a one-shot ID; the worker keys PTT and sends it at the next frame boundary
+            // (empty TX queue) — in the active mode, plus a Morse CW ID when CWID is on.
+            bridge
+                .id_requested
+                .store(true, std::sync::atomic::Ordering::Relaxed);
             vec!["SENDID".into()]
         }
 
@@ -316,4 +325,59 @@ fn is_valid_gridsquare(s: &str) -> bool {
         && b[2].is_ascii_digit()
         && b[3].is_ascii_digit()
         && (b.len() == 4 || (b[4].is_ascii_alphabetic() && b[5].is_ascii_alphabetic()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openpulse_audio::LoopbackBackend;
+    use openpulse_core::handshake::InMemoryTrustStore;
+    use openpulse_modem::ModemEngine;
+    use std::sync::atomic::Ordering;
+
+    fn test_bridge() -> Arc<ModemBridge> {
+        let engine = ModemEngine::new(Box::new(LoopbackBackend::default()));
+        let (bridge, _rx) = ModemBridge::new(
+            engine,
+            "BPSK250".into(),
+            false,
+            InMemoryTrustStore::default(),
+            None,
+        );
+        bridge
+    }
+
+    // `SENDID` now arms a real one-shot ID (was a warn-logged stub); the host response is unchanged,
+    // so Pat/ARIM stay compatible — the command surface fulfils its contract instead of no-opping.
+    #[tokio::test]
+    async fn sendid_sets_the_oneshot_flag_and_keeps_the_response() {
+        let bridge = test_bridge();
+        assert!(!bridge.id_requested.load(Ordering::Relaxed));
+        let resp = dispatch("SENDID", &bridge).await;
+        assert_eq!(resp, vec!["SENDID".to_string()], "host response unchanged");
+        assert!(
+            bridge.id_requested.load(Ordering::Relaxed),
+            "SENDID must arm the one-shot ID"
+        );
+    }
+
+    #[tokio::test]
+    async fn cwid_true_false_toggles_the_flag_and_keeps_the_response() {
+        let bridge = test_bridge();
+        assert!(!bridge.cwid_enabled.load(Ordering::Relaxed));
+
+        let resp = dispatch("CWID TRUE", &bridge).await;
+        assert_eq!(resp, vec!["CWID TRUE".to_string()]);
+        assert!(
+            bridge.cwid_enabled.load(Ordering::Relaxed),
+            "CWID TRUE enables CW ID"
+        );
+
+        let resp = dispatch("CWID FALSE", &bridge).await;
+        assert_eq!(resp, vec!["CWID FALSE".to_string()]);
+        assert!(
+            !bridge.cwid_enabled.load(Ordering::Relaxed),
+            "CWID FALSE disables CW ID"
+        );
+    }
 }

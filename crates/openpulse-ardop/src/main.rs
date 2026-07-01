@@ -123,6 +123,8 @@ async fn main() -> anyhow::Result<()> {
         data_port: cfg.ardop.data_port,
         mode: cfg.modem.mode.clone(),
         loopback: false,
+        auto_id_interval_secs: cfg.station.auto_id_interval_secs,
+        auto_id_signoff_idle_secs: cfg.station.auto_id_signoff_idle_secs,
     };
 
     tracing::info!(

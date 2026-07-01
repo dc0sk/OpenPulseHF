@@ -9,6 +9,38 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-01 — feature: ARDOP station ID + real SENDID/CWID (REQ-REG-10, CAP-39/CAP-66)
+
+- **Requirement/change:** the auto-ID from CAP-66 covered only the daemon path; the **ARDOP TNC**
+  (Pat → `openpulse-tnc`) had no auto-ID and its `CWID`/`SENDID` commands were honest warn-logged
+  stubs — a REQ-REG-10 gap for that entry point. Wire the ID timer into the ARDOP worker and make the
+  two commands real, without breaking ARDOP host compatibility.
+- **Design decision:** (a) run the CAP-66 `StationIdTimer` (interval + sign-off) inside the ARDOP
+  worker loop, firing **only at a frame boundary** (empty TX queue) so an ID never splits an
+  in-progress transfer — the discipline real ARDOP TNCs use; armed via the engine `frames_transmitted`
+  delta. (b) `SENDID` → arm a one-shot ID the worker sends at the next boundary; `CWID TRUE/FALSE` →
+  toggle a Morse-CW-append flag — **host responses unchanged**, so the command surface *fulfils* its
+  ARDOP contract instead of no-opping (more compatible, not less). The emitted ID is OpenPulseHF's own
+  PHY (`DE <call>` in the active mode, + optional CW): the ARDOP layer is a TCP shim, never an ARDOP
+  waveform, so there is no on-air ARDOP interop to break. (c) CW ID is a real feature, not a dead flag:
+  a pure `cw_id::CwId` Morse generator (keyed-sine, PARIS timing, click-free ramps) + an engine
+  `emit_cw_id` that routes through the single TX seam. (d) Reuse `[station] auto_id_*`; plumb via the
+  ardop `ArdopConfig` (+ `bridge.set_auto_id`).
+- **Implementation:** `crates/openpulse-core/src/cw_id.rs` (+ `pub mod`); `emit_cw_id` +
+  `frames_transmitted` in `crates/openpulse-modem/src/engine.rs`; ARDOP worker frame-boundary ID +
+  `set_auto_id` + `id_requested`/`cwid_enabled` in `crates/openpulse-ardop/src/bridge.rs`; `SENDID`/
+  `CWID` handlers in `command.rs`; `ArdopConfig` fields (`lib.rs`, populated from `[station]` in
+  `main.rs`); `..Default::default()` in the testmatrix/integration `ArdopConfig` literals.
+- **Tests:** `cw_id` 8/8 (Morse table, PARIS unit/dash/inter-char/word timing, amplitude bounds,
+  empty); ardop `command` 2/2 (SENDID arms one-shot + response unchanged; CWID toggles flag + response
+  unchanged); `station_id_txcount` 2/2 (incl. `emit_cw_id` counts one frame, no-op CW doesn't);
+  ardop integration 22/22 (compatibility intact); clippy `-D warnings` + fmt clean; full workspace
+  builds.
+- **Test results:** cw_id 8/8, ardop lib 2/2 + integration 22/22, station_id_txcount 2/2, no
+  regressions in core/modem/config. REQ-REG-10 now holds on the ARDOP TNC path as well as the daemon.
+
+---
+
 ## 2026-07-01 — feature: end-of-exchange (sign-off) station ID (REQ-REG-10, CAP-66)
 
 - **Requirement/change:** §97.119 requires ID **at the end** of a communication as well as every 10

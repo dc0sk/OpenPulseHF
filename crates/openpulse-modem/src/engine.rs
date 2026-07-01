@@ -470,6 +470,19 @@ impl ModemEngine {
         self.frames_transmitted
     }
 
+    /// Emit a Morse CW station identification (keyed sine) for `text` through the single TX seam —
+    /// used to honour the ARDOP `CWID` option alongside the digital ID. Counts as a transmitted
+    /// frame (`frames_transmitted`). No-op (returns `Ok`) when `text` has no renderable characters.
+    pub fn emit_cw_id(&mut self, text: &str, device: Option<&str>) -> Result<(), ModemError> {
+        let fs = AudioConfig::default().sample_rate;
+        let samples = openpulse_core::cw_id::CwId::default().samples(text, fs);
+        if samples.is_empty() {
+            return Ok(());
+        }
+        let routed = self.route_audio_stage(PipelineStage::OutputEmit, AudioSamples { samples })?;
+        self.stage_emit_output(device, "CW", &routed)
+    }
+
     /// Configure the notch bank: max simultaneous notches, sharpness `q` (BW ≈ f0/q), and the
     /// protected-band fallback bandwidth (Hz) used when the active mode can't report its own.
     pub fn configure_notch(&mut self, max_notches: usize, q: f32, fallback_bw_hz: f32) {
