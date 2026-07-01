@@ -517,7 +517,8 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     // when the interval is 0 or the callsign is unset/default (never auto-ID as N0CALL).
     let id_start = std::time::Instant::now();
     let mut id_timer =
-        StationIdTimer::new(cfg.station.auto_id_interval_secs.saturating_mul(1000), 0);
+        StationIdTimer::new(cfg.station.auto_id_interval_secs.saturating_mul(1000), 0)
+            .with_signoff_idle_ms(cfg.station.auto_id_signoff_idle_secs.saturating_mul(1000));
     let id_callsign = cfg.station.callsign.trim().to_string();
     let auto_id_active = id_timer.is_enabled()
         && !id_callsign.is_empty()
@@ -726,18 +727,26 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 if engine.ota_active() && ota_status_tick.is_multiple_of(ota_status_period) {
                     let _ = handle.event_tx.send(ota_status_event(&engine));
                 }
-                // Periodic station ID (REQ-REG-10). Arm from the TX-frame delta (any data/ACK/
-                // retransmit we emitted since the last poll), and when the interval has elapsed
-                // with activity, key PTT and send the callsign in the active mode. Re-baseline the
+                // Station ID (REQ-REG-10). Arm from the TX-frame delta (any data/ACK/retransmit we
+                // emitted since the last poll), then key PTT and send the callsign in the active mode
+                // when either trigger is due: the 10-min *interval* ID during a communication, or the
+                // *sign-off* ID once the channel has gone quiet at the end of one. Re-baseline the
                 // counter afterwards so the ID frame itself is not counted as further TX activity.
                 if auto_id_active {
+                    let now_ms = id_start.elapsed().as_millis() as u64;
                     let tx_now = engine.frames_transmitted();
                     if tx_now != tx_frames_seen {
-                        id_timer.note_tx();
+                        id_timer.note_tx(now_ms);
                         tx_frames_seen = tx_now;
                     }
-                    let now_ms = id_start.elapsed().as_millis() as u64;
-                    if id_timer.id_due(now_ms) {
+                    let id_reason = if id_timer.id_due(now_ms) {
+                        Some("interval")
+                    } else if id_timer.signoff_due(now_ms) {
+                        Some("sign-off")
+                    } else {
+                        None
+                    };
+                    if let Some(reason) = id_reason {
                         let id_mode = handle.active_mode.lock().await.clone();
                         let id_body = format!("DE {id_callsign}");
                         let mut keyed = true;
@@ -757,7 +766,8 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                 Ok(()) => tracing::info!(
                                     callsign = %id_callsign,
                                     mode = %id_mode,
-                                    "transmitted periodic station ID"
+                                    kind = reason,
+                                    "transmitted station ID"
                                 ),
                                 Err(e) => tracing::warn!(
                                     error = %e, mode = %id_mode, "station-ID transmit failed"
@@ -772,9 +782,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                 .event_tx
                                 .send(crate::protocol::ControlEvent::PttChanged { active: false });
                         }
-                        // Advance the interval regardless of PTT success (a persistent hardware
-                        // fault is surfaced by the warning above, not by per-tick retry spam), and
-                        // exclude the just-sent ID frame from arming the next interval.
+                        // Advance regardless of PTT success (a persistent hardware fault is surfaced by
+                        // the warning above, not by per-tick retry spam), and exclude the just-sent ID
+                        // frame from arming the next ID.
                         id_timer.mark_identified(now_ms);
                         tx_frames_seen = engine.frames_transmitted();
                     }

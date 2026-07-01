@@ -123,8 +123,13 @@ pub struct StationConfig {
     pub identity_key_path: String,
     /// Periodic station-ID interval in seconds (REQ-REG-10). While transmitting, the daemon keys up
     /// and sends the callsign at least this often. `600` = every 10 minutes (US Part 97 default);
-    /// `0` disables auto-ID (operator IDs manually). A pure-receive station never keys up regardless.
+    /// `0` disables auto-ID entirely (operator IDs manually). A pure-receive station never keys up.
     pub auto_id_interval_secs: u64,
+    /// End-of-exchange (sign-off) ID: seconds of TX quiet after the station has transmitted before a
+    /// final ID is sent (REQ-REG-10 "at the end of a communication"). `10` = ID ~10 s after the last
+    /// transmission of an exchange; `0` disables the sign-off ID (interval ID only). Only active when
+    /// `auto_id_interval_secs > 0`.
+    pub auto_id_signoff_idle_secs: u64,
 }
 
 /// Audio backend selection.
@@ -348,6 +353,7 @@ impl Default for StationConfig {
             grid_square: "AA00".into(),
             identity_key_path: String::new(),
             auto_id_interval_secs: 600,
+            auto_id_signoff_idle_secs: 10,
         }
     }
 }
@@ -684,8 +690,12 @@ grid_square = "AA00"
 identity_key_path = ""
 # Periodic station-ID interval in seconds (regulatory: e.g. US Part 97 = every 10 minutes).
 # While transmitting, the daemon keys up and sends your callsign at least this often.
-# 0 disables auto-ID (you identify manually). A pure-receive station never keys up regardless.
+# 0 disables auto-ID entirely (you identify manually). A pure-receive station never keys up.
 auto_id_interval_secs = 600
+# End-of-exchange (sign-off) ID: seconds of transmit quiet before a final ID is sent after you
+# have transmitted (regulatory "identify at the end of a communication"). 10 = ID ~10 s after the
+# last transmission of an exchange; 0 disables the sign-off ID (interval ID only).
+auto_id_signoff_idle_secs = 10
 
 [audio]
 # Audio backend: default | cpal | loopback
