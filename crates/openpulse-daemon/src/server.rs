@@ -150,6 +150,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
         );
     }
 
+    // Our active OTA ladder identity `(name, fingerprint)`, advertised in the signed handshake so a
+    // peer running a diverged ladder is detected (then OTA is suppressed). `None` when OTA is off.
+    let mut ota_ladder_identity: Option<(String, u64)> = None;
     // Receiver-led OTA adaptive rate-stepping (opt-in via [modem] ota_enabled).
     if cfg.modem.ota_enabled {
         let profile_name = if cfg.modem.ota_profile.is_empty() {
@@ -164,6 +167,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 // that mapping (not local floors); operators can diff it across stations, and the
                 // handshake guard (follow-up) will negotiate it. See docs/dev/design/ladder-versioning.md.
                 let fingerprint = profile.fingerprint();
+                ota_ladder_identity = Some((profile_name.to_string(), fingerprint));
                 engine.start_ota_session(profile);
                 let parse = openpulse_core::rate::SpeedLevel::from_name;
                 let min = (!cfg.modem.ota_min_level.is_empty())
@@ -481,6 +485,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
         },
         dcd_squelch_default: cfg.modem.dcd_squelch,
         dcd_squelch_bands: cfg.modem.dcd_squelch_bands.clone(),
+        local_ota_ladder: ota_ladder_identity,
         logbook: crate::logbook::Logbook::new(
             cfg.logbook.enabled,
             &cfg.logbook.adif_path,
@@ -576,7 +581,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 // around the half-duplex turnaround.
                 let mut ota_send_handled = false;
                 if let crate::Command::SendMessage { body, .. } = &cmd {
-                    if engine.ota_active() {
+                    // Suppress adaptive OTA (fixed-mode fallback) when a verified peer's rate ladder
+                    // differs from ours — a `recommended_level` would otherwise mean different modes.
+                    if engine.ota_active() && !runtime_state.ota_suppressed_by_peer() {
                         ota_send_handled = true;
                         ota_send_with_ptt(
                             &mut engine,
@@ -634,7 +641,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     }
                 });
                 let bytes = match burst {
-                    Ok(Some(burst)) if engine.ota_active() => {
+                    Ok(Some(burst)) if engine.ota_active() && !runtime_state.ota_suppressed_by_peer() => {
                         // Receiver-led OTA: decode the burst, then key PTT only to answer
                         // with the ACK carrying our absolute recommended_level.
                         match tokio::task::block_in_place(|| {

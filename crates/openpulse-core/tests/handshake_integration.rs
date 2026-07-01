@@ -409,3 +409,98 @@ fn short_rs_negotiates_at_highest_strength() {
         "ShortRs (strength 4) should win negotiation over Rs (strength 1)"
     );
 }
+
+// ------------------------------------------------------------------
+// OTA rate-ladder identity advertisement (backward-compat guard)
+// ------------------------------------------------------------------
+
+#[test]
+fn conreq_advertises_profile_and_survives_wire_roundtrip() {
+    let req = ConReq::create_full(
+        "W1AW",
+        &make_seed(1),
+        vec![SigningMode::Normal],
+        "sess-prof",
+        vec![],
+        vec![],
+        "",
+        "hpx_hf",
+        0xABCD_1234_5678_9F01,
+    )
+    .unwrap();
+
+    // Wire round-trip preserves the advertised ladder identity.
+    let decoded = ConReq::decode(&req.encode().unwrap()).unwrap();
+    assert_eq!(decoded.profile_name, "hpx_hf");
+    assert_eq!(decoded.profile_fingerprint, 0xABCD_1234_5678_9F01);
+
+    // Signature (which covers the profile fields) still verifies.
+    let mut store = InMemoryTrustStore::new();
+    store.add_trusted("W1AW", pubkey_for(1));
+    verify_conreq(
+        &decoded,
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+    )
+    .expect("advertised-profile CONREQ must verify");
+}
+
+#[test]
+fn tampering_the_advertised_fingerprint_invalidates_the_signature() {
+    let mut req = ConReq::create_full(
+        "W1AW",
+        &make_seed(1),
+        vec![SigningMode::Normal],
+        "sess-tamper",
+        vec![],
+        vec![],
+        "",
+        "hpx_hf",
+        0x1111_2222_3333_4444,
+    )
+    .unwrap();
+
+    // A man-in-the-middle swaps the advertised ladder fingerprint after signing.
+    req.profile_fingerprint = 0x9999_8888_7777_6666;
+
+    let mut store = InMemoryTrustStore::new();
+    store.add_trusted("W1AW", pubkey_for(1));
+    let result = verify_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Normal);
+    assert!(
+        matches!(result, Err(HandshakeError::InvalidSignature)),
+        "tampered profile fingerprint must fail signature verification, got {result:?}"
+    );
+}
+
+#[test]
+fn unadvertised_conreq_stays_signature_compatible_with_legacy() {
+    // A frame with no advertised profile (via the legacy `create`) must produce the SAME signed
+    // bytes as one built through `create_full` with empty/zero profile — proving the skip-serialized
+    // fields keep old and new peers byte-identical.
+    let legacy = ConReq::create(
+        "W1AW",
+        &make_seed(1),
+        vec![SigningMode::Normal],
+        "sess-compat",
+        vec![],
+        vec![],
+    )
+    .unwrap();
+    let explicit_empty = ConReq::create_full(
+        "W1AW",
+        &make_seed(1),
+        vec![SigningMode::Normal],
+        "sess-compat",
+        vec![],
+        vec![],
+        "",
+        "",
+        0,
+    )
+    .unwrap();
+    assert_eq!(
+        legacy.signature, explicit_empty.signature,
+        "empty-profile frame must sign identically to a legacy frame"
+    );
+}

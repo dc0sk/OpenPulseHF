@@ -188,6 +188,18 @@ pub struct RuntimeControlState {
     pub verified_peer: Option<VerifiedPeer>,
     /// Reassembles inbound SAR-fragmented handshake frames (CONREQ/CONACK exceed one modem frame).
     pub handshake_sar: SarReassembler,
+    /// Our active OTA rate-ladder identity `(profile_name, fingerprint)`, set at OTA startup. Used to
+    /// advertise our ladder in the handshake and to detect a diverged peer ladder. `None` = no OTA.
+    pub local_ota_ladder: Option<(String, u64)>,
+}
+
+impl RuntimeControlState {
+    /// True when a verified peer's OTA ladder is known to differ from ours — OTA rate-stepping must
+    /// be suppressed (fixed-mode fallback) so a `recommended_level` can't mean different modes.
+    /// OTA without a handshake, or with a compatible/undetermined peer, is unaffected.
+    pub fn ota_suppressed_by_peer(&self) -> bool {
+        matches!(&self.verified_peer, Some(p) if p.profile_compatible == Some(false))
+    }
 }
 
 /// An in-flight CONREQ the daemon sent and is awaiting a CONACK for.
@@ -210,6 +222,10 @@ pub struct VerifiedPeer {
     pub grid: String,
     /// Peer Ed25519 verifying-key bytes.
     pub pubkey: Vec<u8>,
+    /// Whether the peer's advertised OTA rate ladder matches ours: `Some(true)` = compatible,
+    /// `Some(false)` = the ladders diverged (OTA adaptation is unsafe → suppressed), `None` = not
+    /// determinable (we or the peer advertised no OTA ladder). See `docs/dev/design/ladder-versioning.md`.
+    pub profile_compatible: Option<bool>,
 }
 
 /// Timeout after which an unanswered CONREQ is abandoned.
@@ -245,6 +261,7 @@ impl Default for RuntimeControlState {
             pending_handshake: None,
             verified_peer: None,
             handshake_sar: SarReassembler::new(HANDSHAKE_TIMEOUT),
+            local_ota_ladder: None,
         }
     }
 }
@@ -1169,8 +1186,12 @@ fn handle_inbound_conreq(
         return;
     }
 
-    // Reply with a signed CONACK echoing the session id and advertising our grid.
-    match ConAck::create_with_grid(
+    // Reply with a signed CONACK echoing the session id and advertising our grid + OTA ladder.
+    let (ota_name, ota_fp) = runtime_state
+        .local_ota_ladder
+        .clone()
+        .unwrap_or_else(|| (String::new(), 0));
+    match ConAck::create_full(
         &runtime_state.local_callsign,
         &runtime_state.station_seed,
         SigningMode::Normal,
@@ -1178,6 +1199,8 @@ fn handle_inbound_conreq(
         openpulse_core::compression::CompressionAlgorithm::None,
         openpulse_core::fec::FecMode::None,
         &runtime_state.local_grid,
+        &ota_name,
+        ota_fp,
     ) {
         Ok(ack) => match ack.encode() {
             Ok(frame) => transmit_handshake_frame(engine, mode, &frame),
@@ -1192,6 +1215,8 @@ fn handle_inbound_conreq(
         &req.station_id,
         &req.station_grid,
         &req.pubkey,
+        &req.profile_name,
+        req.profile_fingerprint,
     );
 }
 
@@ -1243,6 +1268,8 @@ fn handle_inbound_conack(
         &ack.station_id,
         &ack.station_grid,
         &ack.pubkey,
+        &ack.profile_name,
+        ack.profile_fingerprint,
     );
     runtime_state.pending_handshake = None;
 }
@@ -1250,17 +1277,42 @@ fn handle_inbound_conack(
 /// Store a freshly-verified peer identity, stamp the verified grid onto the in-flight logbook QSO,
 /// and emit a `PeerVerified` event for clients.
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
 fn record_verified_peer(
     runtime_state: &mut RuntimeControlState,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
     callsign: &str,
     grid: &str,
     pubkey: &[u8],
+    peer_profile_name: &str,
+    peer_profile_fingerprint: u64,
 ) {
+    // Ladder-compatibility guard: compare the peer's advertised OTA ladder identity to ours. Only a
+    // definite mismatch (both sides advertised, fingerprints differ) suppresses OTA — an unadvertised
+    // side leaves it undetermined (None), so OTA-without-handshake keeps working.
+    let profile_compatible = match (&runtime_state.local_ota_ladder, peer_profile_fingerprint) {
+        (Some((_, local_fp)), peer_fp) if peer_fp != 0 => Some(*local_fp == peer_fp),
+        _ => None,
+    };
+    if profile_compatible == Some(false) {
+        let local_fp = runtime_state
+            .local_ota_ladder
+            .as_ref()
+            .map(|(_, fp)| *fp)
+            .unwrap_or(0);
+        tracing::warn!(
+            peer = %callsign,
+            peer_profile = %peer_profile_name,
+            peer_fingerprint = format!("{peer_profile_fingerprint:016x}"),
+            local_fingerprint = format!("{local_fp:016x}"),
+            "handshake: peer OTA rate ladder differs from ours; disabling adaptive OTA (fixed mode)"
+        );
+    }
     runtime_state.verified_peer = Some(VerifiedPeer {
         callsign: callsign.to_string(),
         grid: grid.to_string(),
         pubkey: pubkey.to_vec(),
+        profile_compatible,
     });
     // Prefer the on-air verified grid over the config peer_grids fallback for this QSO.
     if !grid.is_empty() {
@@ -1483,7 +1535,11 @@ pub async fn apply_command_to_engine(
                     // peer's CONACK (verified in `process_received_bytes`). Additive to the
                     // local trust eval above — the connection upgrades to "verified" on CONACK.
                     let session_id = format!("{}-{now_ms}", runtime_state.local_callsign);
-                    match ConReq::create_with_grid(
+                    let (ota_name, ota_fp) = runtime_state
+                        .local_ota_ladder
+                        .clone()
+                        .unwrap_or_else(|| (String::new(), 0));
+                    match ConReq::create_full(
                         &runtime_state.local_callsign,
                         &runtime_state.station_seed,
                         vec![SigningMode::Normal],
@@ -1491,6 +1547,8 @@ pub async fn apply_command_to_engine(
                         vec![],
                         vec![],
                         &runtime_state.local_grid,
+                        &ota_name,
+                        ota_fp,
                     ) {
                         Ok(req) => match req.encode() {
                             Ok(frame) => {
@@ -1985,6 +2043,71 @@ mod command_apply_tests {
         )
         .await;
         assert!(!engine.ota_active());
+    }
+
+    #[test]
+    fn ladder_fingerprint_mismatch_suppresses_ota() {
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let mut rs = RuntimeControlState {
+            local_ota_ladder: Some(("hpx_hf".into(), 0xAAAA_AAAA_AAAA_AAAA)),
+            ..RuntimeControlState::default()
+        };
+        let key = [7u8; 32];
+
+        // Matching fingerprint → compatible, OTA not suppressed.
+        record_verified_peer(
+            &mut rs,
+            &ev_tx,
+            "W1AW",
+            "",
+            &key,
+            "hpx_hf",
+            0xAAAA_AAAA_AAAA_AAAA,
+        );
+        assert_eq!(
+            rs.verified_peer.as_ref().unwrap().profile_compatible,
+            Some(true)
+        );
+        assert!(!rs.ota_suppressed_by_peer());
+
+        // Diverged ladder (different fingerprint) → incompatible, OTA suppressed.
+        record_verified_peer(
+            &mut rs,
+            &ev_tx,
+            "W1AW",
+            "",
+            &key,
+            "hpx_hf",
+            0xBBBB_BBBB_BBBB_BBBB,
+        );
+        assert_eq!(
+            rs.verified_peer.as_ref().unwrap().profile_compatible,
+            Some(false)
+        );
+        assert!(
+            rs.ota_suppressed_by_peer(),
+            "diverged ladder must suppress OTA"
+        );
+
+        // Peer advertised no ladder (fp=0) → undetermined, NOT suppressed (OTA-without-handshake case).
+        record_verified_peer(&mut rs, &ev_tx, "W1AW", "", &key, "", 0);
+        assert_eq!(rs.verified_peer.as_ref().unwrap().profile_compatible, None);
+        assert!(!rs.ota_suppressed_by_peer());
+
+        // We have no local OTA ladder → undetermined even if the peer advertises one.
+        rs.local_ota_ladder = None;
+        record_verified_peer(
+            &mut rs,
+            &ev_tx,
+            "W1AW",
+            "",
+            &key,
+            "hpx_hf",
+            0xAAAA_AAAA_AAAA_AAAA,
+        );
+        assert_eq!(rs.verified_peer.as_ref().unwrap().profile_compatible, None);
+        assert!(!rs.ota_suppressed_by_peer());
     }
 
     #[tokio::test]
