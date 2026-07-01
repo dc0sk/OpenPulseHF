@@ -66,6 +66,45 @@ impl PowerSpectrum {
             .collect()
     }
 
+    /// Welch power spectrum (dBFS): average the power of up to `max_segments` Hann-windowed
+    /// `FFT_SIZE` segments spread evenly across `samples`. Unlike [`compute`](Self::compute) — which
+    /// only windows the first `FFT_SIZE` samples (a fixed preamble for a framed burst, so its trace
+    /// is static) — this covers the whole burst, so the estimate reflects the actual modulated data.
+    /// The averaging is bounded (not a full-burst average, which would converge to a static
+    /// envelope) so a finite-sample variance remains and the trace varies naturally frame-to-frame.
+    /// Falls back to [`compute`](Self::compute) when the burst is shorter than one segment.
+    pub fn compute_welch(&mut self, samples: &[f32], max_segments: usize) -> Vec<f32> {
+        if samples.len() <= FFT_SIZE {
+            return self.compute(samples);
+        }
+        // Half-overlapped windows that fit, capped at `max_segments` to keep some variance.
+        let fit = 1 + (samples.len() - FFT_SIZE) / (FFT_SIZE / 2);
+        let n_seg = fit.min(max_segments.max(1)).max(1);
+        let last_start = samples.len() - FFT_SIZE;
+        let fft = self.planner.plan_fft_forward(FFT_SIZE);
+        let mut acc = vec![0.0f32; FREQ_BINS];
+        let mut buf = vec![Complex::new(0.0f32, 0.0); FFT_SIZE];
+        for s in 0..n_seg {
+            // Evenly space the segment starts from 0 to the last full-segment position.
+            let start = if n_seg == 1 {
+                0
+            } else {
+                last_start * s / (n_seg - 1)
+            };
+            for (i, b) in buf.iter_mut().enumerate() {
+                *b = Complex::new(samples[start + i] * self.window[i], 0.0);
+            }
+            fft.process(&mut buf);
+            for (a, c) in acc.iter_mut().zip(buf.iter().take(FREQ_BINS)) {
+                *a += c.norm_sqr();
+            }
+        }
+        let scale = 1.0 / (n_seg as f32 * FFT_SIZE as f32);
+        acc.iter()
+            .map(|&p| 10.0 * (p * scale).max(1e-12).log10())
+            .collect()
+    }
+
     /// Bin index for a given frequency at the configured sample rate.
     pub fn freq_to_bin(freq_hz: f32, sample_rate: u32) -> usize {
         ((freq_hz / sample_rate as f32) * FFT_SIZE as f32).round() as usize
@@ -159,5 +198,54 @@ mod tests {
     #[test]
     fn freq_to_bin_1500hz() {
         assert_eq!(PowerSpectrum::freq_to_bin(1500.0, 8000), 192);
+    }
+
+    #[test]
+    fn welch_tracks_a_tone() {
+        // A Welch PSD of a 1500 Hz tone still peaks at bin 192 (it's a valid PSD estimate).
+        let mut ps = PowerSpectrum::new();
+        let tone: Vec<f32> = (0..FFT_SIZE * 4)
+            .map(|i| (2.0 * std::f32::consts::PI * 1500.0 * i as f32 / 8000.0).sin())
+            .collect();
+        let spectrum = ps.compute_welch(&tone, 6);
+        let peak_bin = spectrum
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .map(|(i, _)| i)
+            .unwrap();
+        assert_eq!(peak_bin, 192, "1500 Hz tone should peak at bin 192");
+    }
+
+    #[test]
+    fn welch_reflects_the_whole_burst_not_just_the_prefix() {
+        // Two bursts that share an identical first-FFT_SIZE prefix (the "preamble") but differ
+        // afterwards: `compute` sees only the prefix so it returns identical spectra (the frozen
+        // trace), while `compute_welch` covers the whole burst so it differs — the mechanism that
+        // makes the linksim TX spectrum breathe over the real random data (no synthetic jitter).
+        let mut ps = PowerSpectrum::new();
+        let prefix: Vec<f32> = (0..FFT_SIZE)
+            .map(|i| (2.0 * std::f32::consts::PI * 1500.0 * i as f32 / 8000.0).sin())
+            .collect();
+        let mut a = prefix.clone();
+        let mut b = prefix.clone();
+        // Different "data" tails (different tones) after the shared prefix.
+        for i in 0..FFT_SIZE * 3 {
+            let t = (FFT_SIZE + i) as f32 / 8000.0;
+            a.push((2.0 * std::f32::consts::PI * 1200.0 * t).sin());
+            b.push((2.0 * std::f32::consts::PI * 1800.0 * t).sin());
+        }
+        // `compute` only windows the shared prefix → identical.
+        assert_eq!(
+            ps.compute(&a),
+            ps.compute(&b),
+            "prefix-only spectra should match"
+        );
+        // `compute_welch` covers the differing tails → differs.
+        assert_ne!(
+            ps.compute_welch(&a, 6),
+            ps.compute_welch(&b, 6),
+            "whole-burst Welch spectra should differ when the data differs"
+        );
     }
 }
