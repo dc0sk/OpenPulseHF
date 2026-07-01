@@ -460,7 +460,10 @@ mod tests {
         .unwrap();
         let rx = awgn.apply(&tx);
         let s = estimate_additive_snr_db(&tx, &rx);
-        assert!((s - 15.0).abs() < 4.0, "AWGN SNR estimate {s} should be near 15 dB");
+        assert!(
+            (s - 15.0).abs() < 4.0,
+            "AWGN SNR estimate {s} should be near 15 dB"
+        );
 
         // (b) Watterson fading at high SNR: the naive |tx-rx|² metric collapses to ~-3 dB;
         // removing the fading gain must leave a high additive SNR instead.

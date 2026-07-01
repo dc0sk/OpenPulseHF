@@ -169,11 +169,9 @@ mod tests {
         sig_b64.push(if last == 'A' { 'B' } else { 'A' });
         assert!(matches!(
             verify_submission_signature(&payload, &sig_b64),
-            Err(
-                VerificationError::InvalidSignature
-                    | VerificationError::InvalidSignatureEncoding
-                    | VerificationError::InvalidSignatureLength
-            )
+            Err(VerificationError::InvalidSignature
+                | VerificationError::InvalidSignatureEncoding
+                | VerificationError::InvalidSignatureLength)
         ));
     }
 

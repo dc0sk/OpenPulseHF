@@ -209,7 +209,10 @@ impl PanelView {
 fn samples_per_symbol(mode: &str) -> Option<usize> {
     const FS: f32 = 8000.0;
     let m = mode.to_ascii_uppercase();
-    if m.starts_with("OFDM") || m.starts_with("SCFDMA") || m.starts_with("PILOT") || m.starts_with("FSK")
+    if m.starts_with("OFDM")
+        || m.starts_with("SCFDMA")
+        || m.starts_with("PILOT")
+        || m.starts_with("FSK")
     {
         return None;
     }
@@ -1346,7 +1349,11 @@ mod tests {
         let sps = 32usize;
         let mut samples = Vec::new();
         for sym in 0..60 {
-            let phase = if sym % 2 == 0 { 0.0 } else { std::f32::consts::PI };
+            let phase = if sym % 2 == 0 {
+                0.0
+            } else {
+                std::f32::consts::PI
+            };
             for k in 0..sps {
                 let t = (sym * sps + k) as f32;
                 samples.push((2.0 * std::f32::consts::PI * fc / fs * t + phase).cos());
