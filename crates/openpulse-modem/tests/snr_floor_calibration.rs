@@ -9,14 +9,18 @@
 //!   * `calibrate_snr_floors_watterson` — the same rungs over Watterson **fading** (good_f1 +
 //!     moderate_f1). AWGN floors are a lower bound; fading raises them.
 //!
-//! **Fading-calibration caveats (read before trusting the Watterson numbers):**
+//! **Fading-calibration interpretation (read before using the Watterson numbers):**
 //!   1. Fading is seed-sensitive — a fraction of realizations deep-fade the whole frame and can't
 //!      decode at ANY SNR (irreducible outage), so the fading target is 50 % (majority), not 90 %.
-//!   2. KNOWN ANOMALY: in this harness the SCFDMA rungs fail through even mild (good_f1) fading while
-//!      the single-carrier PSK rungs decode — the *opposite* of expected (SCFDMA has CP + equalization).
-//!      This points to a harness/SCFDMA-fading interaction that needs dedicated debugging before the
-//!      Watterson floors are trustworthy. The single-carrier data (good_f1 ~6–9 dB; moderate_f1 fails)
-//!      is credible: the no-FEC/light-FEC narrowband rungs are slow-fading-only.
+//!   2. The SCFDMA-QAM rungs (SL9–11: SCFDMA52-16/32/64QAM) fail through Watterson fading — this is
+//!      CORRECT and BY DESIGN, not a harness bug:
+//!      `plugins/scfdma/tests/pilot_channel_estimation.rs::scfdma_qam_modes_unsuitable_for_hf_watterson_profiles`
+//!      asserts these dense modes fail the HF fading gate (they are high-throughput top rungs for
+//!      *good* HF conditions, and `hpx_hf` keeps them because they fit the 2.7 kHz channel; the
+//!      adaptive ladder downshifts OFF them on a fading path). So the SCFDMA-QAM rungs have NO fading
+//!      floor to calibrate — only AWGN. Meaningful fading floors exist only for the low-order rungs.
+//!   3. The single-carrier no-FEC/light-FEC rungs (QPSK250/500, 8PSK500+RS) are slow-fading-only:
+//!      good_f1 ~6–9 dB, but moderate_f1 (1 Hz Doppler) fails at any SNR (no equalizer / weak FEC).
 //!
 //! Run on demand (full modulate→channel→demodulate sweeps, so ignored by default):
 //!
