@@ -124,6 +124,61 @@ modem parameters (CP length, pilot scheme).
 
 ---
 
+## CE-SSB and polar-SSB transmit conditioning
+
+Sources studied for the TX signal-conditioning path (`openpulse_dsp::cessb`,
+`ModemEngine::cessb_benefits`). These informed the *per-mode gate* — not code lifted
+wholesale — and one was explicitly weighed and **rejected** for a data modem.
+
+- **David L. Hershberger, W9GR — "Controlled Envelope Single Sideband"**, QEX
+  Nov/Dec 2014 (pp. 3–13) + Jan/Feb 2016 external-processing follow-up. The origin of
+  CE-SSB: a **baseband RF clipper → band-limit filter → overshoot compensator** chain
+  that drives SSB modulator overshoot from ~61 % to ~1.3 % (~2.5× average power at
+  fixed PEP). This is the method `openpulse_dsp::cessb` is named after.
+  <http://www.arrl.org/files/file/QEX_Next_Issue/2014/Nov-Dec_2014/Hershberger_QEX_11_14.pdf>
+- **Ron Economos, W6RZ — `drmpeg/gr-cessb`** (GNU Radio OOT, GPL-3.0). A concrete
+  reference impl of the Hershberger chain: `clipper_cc` (memoryless magnitude clip,
+  `mag ← min(mag, clip)`, phase preserved) → band-pass filter → `stretcher_cc`
+  (overshoot compensator: windowed-max envelope over ±2 samples, then divide by
+  `1 + 2·overshoot` where `overshoot = max(0, env·2√2 − 1)`), run at high oversampling
+  and typically iterated twice. <https://github.com/drmpeg/gr-cessb>
+  - **Considered and REJECTED for our data path.** The Hershberger/gr-cessb loop is
+    tuned for *voice* SSB, where a few percent in-band distortion is inaudible and
+    average-power/loudness is the objective. Its clip→filter→compensate loop injects
+    **more** in-band EVM than our single-stage look-ahead limiter, which is exactly the
+    quantity that breaks our dense data constellations (8PSK/QAM: tight decision
+    regions). Adopting the aggressive iterative loop would *worsen* the very modes our
+    gate already excludes. Our `cessb.rs` therefore stays a **single-pass look-ahead
+    peak-stretch** (smooth gain from a windowed-max envelope, applied at passband, no
+    hard-clip-then-refilter) — splatter-free by construction and gentler on EVM.
+- **Kahn, 1952 — Envelope Elimination and Restoration (EER)**; **K1LI/K1KP — "The
+  Polar Explorer"**, QEX Mar/Apr 2017; **PE1NNZ — "Direct SSB generation on a PLL"**
+  (2013); **Dave's Hacks, Feb 2025 — polar modulation for uSDX/QMX**. The **polar/EER**
+  family: split the signal into `A = √(I²+Q²)` and `φ = atan2(Q, I)`, differentiate φ
+  for instantaneous frequency, and drive a switching (Class-E) PA's frequency +
+  amplitude directly at RF. <https://www.pe1nnz.nl.eu.org/2013/05/direct-ssb-generation-on-pll.html>
+  · <https://daveshacks.blogspot.com/2025/02>
+  - **Not applicable to the current soundcard→linear-SSB-rig path** (the rig's linear PA
+    already does this). Relevant only if we ever add a **direct-RF backend** for
+    Class-E radios (QMX/uSDX) — a new hardware target, not a modem-DSP change.
+  - **What we DID take — the theoretical basis for the per-mode gate.** Dave's Hacks
+    derives, for a two-tone sum, `A = √(a² + 2ab·cos(Δω·t) + b²)`: as the two amplitudes
+    approach equality the envelope passes through zero and the **instantaneous frequency
+    goes discontinuous/unbounded**, so faithful reproduction needs the phase/amplitude
+    paths to carry ~5× the signal bandwidth. This is the *equal-amplitude singularity*,
+    and it is precisely why envelope conditioning helps high-PAPR OFDM-QPSK (a
+    near-Gaussian envelope that rarely nulls hard) but hurts single-carrier QAM and
+    higher-order OFDM subcarriers (constellations that transit near the origin, where
+    the envelope nulls and the phase jumps). It converts our empirically-tuned
+    `cessb_benefits` gate into a **principled** one: benefit ⇔ high-PAPR envelope **and**
+    loose decision margins. See `ModemEngine::cessb_benefits`.
+
+- **FreeDV 700D symbol diversity** (`drowe67/codec2`) — an idea we do *not* yet use:
+  transmit each carrier's symbol twice across the band for a weak-signal mode below the
+  current SL floor. Distinct lever from FEC; parked for a future weak-signal rung.
+
+---
+
 ## Recurring lesson
 
 The three **single-carrier** references above (gnuradio, qo100-modem,

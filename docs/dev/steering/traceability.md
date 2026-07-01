@@ -9,6 +9,36 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-01 — CE-SSB: principled per-mode gate rationale + reference mining (no behaviour change)
+
+- **Requirement/change:** a reference-mining pass (Hershberger CE-SSB QEX 2014/2016, `drmpeg/gr-cessb`,
+  Kahn EER 1952, "The Polar Explorer" QEX 2017, PE1NNZ direct-SSB, *Dave's Hacks* 2025 polar
+  modulation) asked whether we should adopt the iterative clip→filter→overshoot-compensate loop, and
+  found the `cessb_benefits` gate documented by contradictory comments (header + two tests claimed
+  8PSK "benefits/stays on", while the code and `cessb_power_evm` assert 8PSK is gated OFF).
+- **Design decision:** (a) **keep** the single-pass look-ahead peak-stretch limiter and **reject** the
+  Hershberger/gr-cessb iterative clip-filter loop for the *data* path — it injects more in-band EVM,
+  the exact quantity that breaks our dense constellations (tuned for voice, not tight slicers).
+  (b) Convert the empirical gate into a **principled** one using the equal-amplitude-singularity
+  derivation (*Dave's Hacks*): CE-SSB benefits ⇔ high-PAPR envelope (rare hard nulls) **and** loose
+  decision margins — true for QPSK-subcarrier OFDM, false for 8PSK/QAM/APSK and single-carrier QAM
+  (constellations transit the origin → envelope nulls → phase discontinuity → EVM). Gate *logic*
+  unchanged; only its documentation is corrected and grounded. (c) Catalogue the sources in
+  `references.md`, including the polar/EER family as inspiration for a possible future direct-RF
+  (QMX/uSDX Class-E) backend — explicitly out of scope for the current soundcard→linear-rig path.
+- **Implementation:** rewrote the `ModemEngine::cessb_benefits` doc comment
+  (`crates/openpulse-modem/src/engine.rs`) and corrected the stale 8PSK claims in
+  `apps/openpulse-linksim/tests/cessb_ab.rs` and `crates/openpulse-modem/tests/cessb_power_evm.rs`;
+  added a "CE-SSB and polar-SSB transmit conditioning" section to `docs/dev/research/references.md`.
+- **Tests:** `cargo test -p openpulse-modem --no-default-features --test cessb_power_evm` — 3 pass;
+  `cargo test -p openpulse-linksim --no-default-features --test cessb_ab` — 3 pass;
+  `cargo clippy -p openpulse-modem --no-default-features -- -D warnings` clean. Comment-only change;
+  the gate's behaviour (and thus every other CE-SSB test) is unaffected.
+- **Test results:** cessb_power_evm 3/3, cessb_ab 3/3, clippy clean. No behaviour delta — the edits
+  align the docs with the already-validated gate and record the rejected alternative.
+
+---
+
 ## 2026-06-30 — testmatrix: full-tier completes + OFDM52 raw-framing exclusion generalised
 
 - **Requirement/change:** the `--full` tier must run end-to-end and its Clean/high-SNR failures must
