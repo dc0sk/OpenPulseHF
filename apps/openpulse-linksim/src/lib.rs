@@ -3,12 +3,14 @@
 //! Models a realistic half-duplex HF exchange between two stations through independent
 //! forward (A→B) and reverse (B→A) channel realizations:
 //!
-//! - Station A transmits data frames at the current speed level (a [`SessionProfile`] ladder).
-//! - Station B decodes, estimates the per-frame SNR, and returns a real FSK4 ACK frame
-//!   (`AckOk` / `AckUp` / `AckDown` / `Nack`) through the reverse channel.
-//! - Station A steps the speed level up/down its [`SessionProfile`] ladder from the ACKs
-//!   (mirroring the `RateAdapter` AckUp/AckDown/NACK-threshold policy, bounded to the
-//!   profile's defined levels), and retransmits on NACK (or a lost ACK) up to a retry limit.
+//! - Station A transmits data frames at the controller's TX speed level, using that level's
+//!   mode **and** its per-level MODCOD FEC from the [`SessionProfile`].
+//! - Station B decodes, estimates the per-frame SNR, and feeds the outcome to the **shared
+//!   receiver-led [`OtaRateController`]** (the same one the real OTA path uses), which returns an
+//!   absolute `recommended_level` (with fast-downshift). B ships it in a real FSK4 `AckFrame`.
+//! - Station A adopts the received `recommended_level` (a lost ACK leaves TX unchanged — lockstep),
+//!   and retransmits on NACK up to a retry limit. Rate control is not reimplemented here; the
+//!   controller is the single source of truth, so ladder/FEC/downshift fixes apply automatically.
 //!
 //! The simulator accounts for forward air time, ACK air time, turnaround, and
 //! retransmissions, yielding the **effective two-way transfer rate** — the goodput a
@@ -26,6 +28,7 @@ use openpulse_channel::{
 use openpulse_core::ack::{AckFrame, AckType};
 use openpulse_core::compression::{compress, decompress, CompressionAlgorithm};
 use openpulse_core::fec::FecMode;
+use openpulse_core::ota_rate::{OtaRateController, RxOutcome};
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
 use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::SpeedLevel;
@@ -223,7 +226,8 @@ pub struct LinkParams {
     pub payload_bytes_per_frame: usize,
     /// Number of data frames to attempt to deliver.
     pub total_frames: usize,
-    /// FEC applied to data frames.
+    /// Fallback FEC for ladder rungs the profile leaves unprotected (`fec_for(level) == None`).
+    /// Rungs with a per-level MODCOD FEC use the profile's FEC (via the controller), not this.
     pub fec: FecMode,
     /// Payload compression applied before FEC (raises the effective rate on compressible data).
     pub compression: CompressionAlgorithm,
@@ -471,29 +475,6 @@ fn estimate_snr_db(tx: &[f32], rx: &[f32]) -> f32 {
     openpulse_channel::estimate_additive_snr_db(tx, rx)
 }
 
-/// Station B's ACK decision from the decode result and the estimated per-frame SNR.
-fn decide_ack(
-    decode_ok: bool,
-    snr_db: f32,
-    profile: &SessionProfile,
-    level: SpeedLevel,
-) -> AckType {
-    if !decode_ok {
-        return AckType::Nack;
-    }
-    if let Some(floor) = profile.snr_floor_for_level(level) {
-        if snr_db < floor {
-            return AckType::AckDown;
-        }
-    }
-    if let Some(ceiling) = profile.snr_ceiling_for_level(level) {
-        if snr_db >= ceiling {
-            return AckType::AckUp;
-        }
-    }
-    AckType::AckOk
-}
-
 /// A frame-distinct, highly compressible payload. The old code repeated one global pattern,
 /// so every frame was near-identical (only a tiny header changed) and the modulated TX
 /// waveform looked frozen (spectrum/waterfall stalled). Instead, build a *frame-specific*
@@ -610,11 +591,11 @@ pub struct FrameStep {
 /// control). [`run_link`] runs one to completion and returns the aggregate.
 pub struct LinkSim {
     params: LinkParams,
-    profile: SessionProfile,
     levels: Vec<SpeedLevel>,
-    idx: usize,
-    consecutive_nack: u32,
-    nack_threshold: u32,
+    /// Shared receiver-led rate controller — the single source of truth for level stepping
+    /// (absolute `recommended_level` + fast-downshift) and per-level MODCOD FEC, matching the
+    /// real OTA path (`ModemEngine`'s `OtaRateController`). Replaces the former one-step idx policy.
+    ota: OtaRateController,
     fwd: ChannelSimHarness,
     rev: ChannelSimHarness,
     fwd_ch: Box<dyn openpulse_channel::ChannelModel>,
@@ -661,26 +642,19 @@ impl LinkSim {
         )
         .expect("reverse channel");
 
-        // Drive the level over the profile's defined ladder (the global RateAdapter clamps to
-        // SL1–SL11, which can leave a profile's sub-range; bound to the profile here while
-        // mirroring its AckUp / AckDown / NACK-threshold policy).
+        // Drive the level via the shared receiver-led OtaRateController (same controller the real
+        // OTA path uses): it owns the fast-downshift, the absolute recommended_level, and the
+        // per-level MODCOD FEC over the profile's defined ladder.
         let levels = profile.defined_levels();
-        let idx = levels
-            .iter()
-            .position(|&l| l == profile.initial_level)
-            .unwrap_or(0);
-        let nack_threshold = profile.nack_threshold.max(1) as u32;
+        let ota = OtaRateController::new(profile);
         let fwd_notch = params.notch.as_ref().map(LinkNotch::build_bank);
 
         Self {
             fwd_label: params.forward.label(),
             rev_label: params.reverse.label(),
             params: params.clone(),
-            profile,
             levels,
-            idx,
-            consecutive_nack: 0,
-            nack_threshold,
+            ota,
             fwd,
             rev,
             fwd_ch,
@@ -711,7 +685,7 @@ impl LinkSim {
 
     /// Speed level the next frame will use.
     pub fn current_level(&self) -> u8 {
-        self.levels.get(self.idx).map(|&l| l as u8).unwrap_or(0)
+        self.ota.tx_level() as u8
     }
 
     /// Toggle CE-SSB TX envelope conditioning live (e.g. from a GUI button) without a rebuild.
@@ -753,7 +727,7 @@ impl LinkSim {
         let mut delivered = false;
         let mut fwd_air = 0.0;
         let mut ack_air = 0.0;
-        let mut last_level = self.levels[self.idx];
+        let mut last_level = self.ota.tx_level();
         let mut last_snr = 0.0_f32;
         let mut last_mode = String::new();
         let mut last_compress_ratio = 1.0_f64;
@@ -765,17 +739,22 @@ impl LinkSim {
 
         while attempts < self.params.max_attempts {
             attempts += 1;
-            let level = self.levels[self.idx];
+            let level = self.ota.tx_level();
             last_level = level;
             self.level_sum += level as u64;
             self.level_count += 1;
             let mode = self
-                .profile
-                .mode_for(level)
+                .ota
+                .tx_mode()
                 .expect("defined_levels yields mapped modes")
                 .to_string();
             last_mode = mode.clone();
-            let fec = fec_for(&mode, self.params.fec);
+            // Per-level MODCOD FEC from the profile (via the controller); for rungs the profile
+            // leaves unprotected (`None`) fall back to the sim's `params.fec` knob.
+            let fec = match self.ota.tx_fec() {
+                FecMode::None => fec_for(&mode, self.params.fec),
+                f => f,
+            };
             let payload = make_payload(frame, attempts, self.params.payload_bytes_per_frame);
 
             // Compress, then send the wire bytes as a burst of ≤FRAME_CHUNK modem frames
@@ -830,10 +809,21 @@ impl LinkSim {
                     .map(|d| d == payload)
                     .unwrap_or(false);
 
-            // B→A ACK (real FSK4 frame through the reverse channel).
-            ack_sent = decide_ack(decode_ok, snr, &self.profile, level);
-            let ack_bytes = AckFrame::new(ack_sent, SESSION_ID).encode();
-            ack_received =
+            // Receiver B: feed the frame outcome to the shared controller, which returns the
+            // ACK type *and* the absolute receiver-led target level (with fast-downshift).
+            let outcome = if decode_ok {
+                RxOutcome::Decoded(level)
+            } else {
+                RxOutcome::Failed
+            };
+            let rx_ack = self.ota.on_rx_frame(outcome, snr);
+            ack_sent = rx_ack.ack_type;
+
+            // B→A ACK (real FSK4 frame through the reverse channel), carrying `recommended_level`.
+            let ack_bytes = AckFrame::new(ack_sent, SESSION_ID)
+                .with_recommended_level(rx_ack.recommended_level)
+                .encode();
+            let decoded_ack =
                 if engine_transmit(&mut self.rev.tx_engine, &ack_bytes, ACK_MODE, FecMode::None)
                     .is_ok()
                 {
@@ -849,32 +839,18 @@ impl LinkSim {
                             arr.copy_from_slice(&b[..5]);
                             AckFrame::decode(&arr).ok()
                         })
-                        .map(|f| f.ack_type)
-                        .unwrap_or(AckType::Nack)
                 } else {
-                    AckType::Nack
+                    None
                 };
+            ack_received = decoded_ack
+                .as_ref()
+                .map(|f| f.ack_type)
+                .unwrap_or(AckType::Nack);
 
-            match ack_received {
-                AckType::AckUp => {
-                    self.consecutive_nack = 0;
-                    if self.idx + 1 < self.levels.len() {
-                        self.idx += 1;
-                    }
-                }
-                AckType::AckDown => {
-                    self.consecutive_nack = 0;
-                    self.idx = self.idx.saturating_sub(1);
-                }
-                AckType::AckOk => self.consecutive_nack = 0,
-                AckType::Nack => {
-                    self.consecutive_nack += 1;
-                    if self.consecutive_nack >= self.nack_threshold {
-                        self.consecutive_nack = 0;
-                        self.idx = self.idx.saturating_sub(1);
-                    }
-                }
-                _ => {}
+            // Sender A adopts the receiver's absolute target only if the ACK arrived; a lost ACK
+            // leaves the TX level unchanged (lockstep), exactly like the real OTA path.
+            if let Some(rec) = decoded_ack.and_then(|f| f.recommended_level) {
+                self.ota.adopt_recommendation(rec);
             }
 
             if decode_ok {
@@ -1297,6 +1273,46 @@ mod tests {
             "compressed {:.0} should exceed plain {:.0}",
             zipped.effective_bps,
             plain.effective_bps
+        );
+    }
+
+    #[test]
+    fn fast_downshift_drops_multiple_levels_via_ota_controller() {
+        // Proves linksim routes rate control through the shared OtaRateController: climb on a clean
+        // channel, then collapse the SNR — the controller must fast-downshift MORE than one rung in
+        // a single frame. The former one-step AckDown / NACK-threshold policy could only step down
+        // by one, so this assertion fails without the OtaRateController wiring.
+        let mut sim = LinkSim::new(&LinkParams {
+            profile_name: "hpx_hf".into(),
+            forward: ChannelSpec::Clean,
+            reverse: ChannelSpec::Clean,
+            payload_bytes_per_frame: 64,
+            total_frames: 400,
+            seed: 7,
+            ..LinkParams::default()
+        });
+
+        // Climb the ladder on the clean channel (cautious one-step-up per frame).
+        let mut peak = sim.current_level();
+        for _ in 0..80 {
+            if sim.step().is_none() {
+                break;
+            }
+            peak = peak.max(sim.current_level());
+        }
+        assert!(
+            peak >= SpeedLevel::Sl6 as u8,
+            "should climb well up the hpx_hf ladder on a clean link, peaked at SL{peak}"
+        );
+
+        // Collapse the forward SNR; a single frame must now drop several rungs at once.
+        let before = sim.current_level();
+        sim.set_conditions(ChannelSpec::Awgn(1.0), ChannelSpec::Clean);
+        sim.step();
+        let after = sim.current_level();
+        assert!(
+            before.saturating_sub(after) > 1,
+            "fast-downshift should drop >1 rung in one frame: SL{before} -> SL{after}"
         );
     }
 }
