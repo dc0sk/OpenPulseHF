@@ -12,7 +12,24 @@ so a large failure count is expected and is the point: it maps where each wavefo
 
 - `summary.md` — totals and metadata.
 - `by-channel.md`, `by-mode.md`, `by-usecase.md` — pass/fail breakdowns.
-- `results.csv` / `raw.json` — every case.
+- `results.csv` / `raw.json` — every case. The CSV `result` column is a self-documenting
+  `pass` / `fail` / `skip` string (it used to be a pair of `1`/`0` `passed`,`skipped` columns, which
+  invited misreading in ad-hoc analysis).
+
+## Where the 2542 failures are (this run: 3480/6022)
+
+The failure count is dominated by **fading and burst** channels — the whole point of the sweep:
+
+| channel family | failures | note |
+|---|---|---|
+| Watterson (ionospheric fading) | 1427 | good_f1 → extreme; most modes fail past their Doppler/delay margin |
+| Gilbert-Elliott (burst) | 806 | light → severe burst errors |
+| AWGN (low SNR) | 163 | concentrated at ≤ 5 dB (0 dB: 67/121, 5 dB: 34/121); ≥ 10 dB ≈ all pass |
+| QRN / QRM / QSB / chirp | 146 | impulse/tone/fade/sweeper impairment sweeps |
+
+At **benign conditions (clean + AWGN ≥ 20 dB) the pass rate is 956/957 (99.9 %)** — the lone exception
+is OFDM52 no-FEC at AWGN 20 dB / 223 B (a marginal no-FEC-at-large-payload case; passes at ≥ 25 dB).
+So the ~2542 failures are the expected map of *where each waveform stops working*, not defects.
 
 ## Expected-failure classes (not regressions)
 

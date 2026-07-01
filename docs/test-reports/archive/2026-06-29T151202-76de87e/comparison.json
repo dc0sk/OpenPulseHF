@@ -1,5 +1,32 @@
 {
   "old_meta": {
+    "date": "2026-06-29T14:37:59.371205657Z",
+    "git_commit": "56c73ca",
+    "git_commit_full": "56c73ca757937bd2bf942bab52bf3df797f42be2",
+    "git_dirty": true,
+    "workspace_version": "0.3.0",
+    "tier": "quick",
+    "duration_secs": 86.071766518,
+    "crates_tested": [
+      "bpsk-plugin",
+      "fsk4-plugin",
+      "ofdm-plugin",
+      "openpulse-ardop",
+      "openpulse-audio",
+      "openpulse-b2f",
+      "openpulse-b2f-driver",
+      "openpulse-channel",
+      "openpulse-core",
+      "openpulse-dsp",
+      "openpulse-kiss",
+      "openpulse-modem",
+      "psk8-plugin",
+      "qam64-plugin",
+      "qpsk-plugin",
+      "scfdma-plugin"
+    ]
+  },
+  "new_meta": {
     "date": "2026-06-29T15:12:02.735676770Z",
     "git_commit": "76de87e",
     "git_commit_full": "76de87e18f18027cf13f5879bba387b173877bf5",
@@ -26,38 +53,11 @@
       "scfdma-plugin"
     ]
   },
-  "new_meta": {
-    "date": "2026-07-01T21:04:43.305005737Z",
-    "git_commit": "8e2d35c",
-    "git_commit_full": "8e2d35c63365de7f2bb3593d346f22c11d89b6e9",
-    "git_dirty": true,
-    "workspace_version": "0.3.0",
-    "tier": "quick",
-    "duration_secs": 14.791155938,
-    "crates_tested": [
-      "bpsk-plugin",
-      "fsk4-plugin",
-      "ofdm-plugin",
-      "openpulse-ardop",
-      "openpulse-audio",
-      "openpulse-b2f",
-      "openpulse-b2f-driver",
-      "openpulse-channel",
-      "openpulse-core",
-      "openpulse-dsp",
-      "openpulse-kiss",
-      "openpulse-modem",
-      "psk8-plugin",
-      "qam64-plugin",
-      "qpsk-plugin",
-      "scfdma-plugin"
-    ]
-  },
   "summary": {
     "regressions": 0,
     "fixed": 0,
     "new_cases": 0,
-    "removed": 0,
+    "removed": 7,
     "unchanged": 555
   },
   "diffs": [
@@ -1460,6 +1460,12 @@
       "new_passed": true
     },
     {
+      "id": "raw_modem/OFDM16/none/nocomp/awgn_10dB/128B",
+      "status": "removed",
+      "old_passed": false,
+      "new_passed": null
+    },
+    {
       "id": "raw_modem/OFDM16/none/nocomp/awgn_20dB/128B",
       "status": "unchanged",
       "old_passed": true,
@@ -1478,6 +1484,12 @@
       "new_passed": true
     },
     {
+      "id": "raw_modem/OFDM16/rs/nocomp/awgn_10dB/128B",
+      "status": "removed",
+      "old_passed": false,
+      "new_passed": null
+    },
+    {
       "id": "raw_modem/OFDM16/rs/nocomp/awgn_20dB/128B",
       "status": "unchanged",
       "old_passed": true,
@@ -1488,6 +1500,12 @@
       "status": "unchanged",
       "old_passed": true,
       "new_passed": true
+    },
+    {
+      "id": "raw_modem/OFDM16/rs_il/nocomp/awgn_10dB/128B",
+      "status": "removed",
+      "old_passed": false,
+      "new_passed": null
     },
     {
       "id": "raw_modem/OFDM16/rs_il/nocomp/awgn_20dB/128B",
@@ -1626,6 +1644,30 @@
       "status": "unchanged",
       "old_passed": true,
       "new_passed": true
+    },
+    {
+      "id": "raw_modem/OFDM52/rs/nocomp/awgn_20dB/128B",
+      "status": "removed",
+      "old_passed": false,
+      "new_passed": null
+    },
+    {
+      "id": "raw_modem/OFDM52/rs/nocomp/clean/128B",
+      "status": "removed",
+      "old_passed": false,
+      "new_passed": null
+    },
+    {
+      "id": "raw_modem/OFDM52/rs_il/nocomp/awgn_20dB/128B",
+      "status": "removed",
+      "old_passed": false,
+      "new_passed": null
+    },
+    {
+      "id": "raw_modem/OFDM52/rs_il/nocomp/clean/128B",
+      "status": "removed",
+      "old_passed": false,
+      "new_passed": null
     },
     {
       "id": "raw_modem/PILOT-16QAM1000/ldpc/nocomp/awgn_20dB/32B",
