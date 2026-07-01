@@ -129,7 +129,9 @@ struct FrameUpdate {
 }
 
 /// Compute one panel's spectrum + baseband I/Q on the worker thread (reuses `ps`'s FFT planner).
-fn compute_panel(ps: &mut PowerSpectrum, samples: &[f32], sps: usize) -> PanelData {
+/// The spectrum FFT feeds the always-drawn spectrum/waterfall; the Hilbert `baseband_iq` is skipped
+/// when `want_iq` is false (the constellation view is hidden), saving the transform + phase search.
+fn compute_panel(ps: &mut PowerSpectrum, samples: &[f32], sps: usize, want_iq: bool) -> PanelData {
     if samples.is_empty() {
         return PanelData {
             spectrum: Vec::new(),
@@ -138,13 +140,18 @@ fn compute_panel(ps: &mut PowerSpectrum, samples: &[f32], sps: usize) -> PanelDa
     }
     PanelData {
         spectrum: ps.compute(samples),
-        iq: baseband_iq(samples, sps),
+        iq: if want_iq {
+            baseband_iq(samples, sps)
+        } else {
+            Vec::new()
+        },
     }
 }
 
 fn spawn_sim(
     controls: Arc<Mutex<Controls>>,
     running: Arc<AtomicBool>,
+    show_constellation: Arc<AtomicBool>,
 ) -> (mpsc::Receiver<FrameUpdate>, JoinHandle<()>) {
     let (tx, rx) = mpsc::channel::<FrameUpdate>();
     let handle = std::thread::spawn(move || {
@@ -189,12 +196,14 @@ fn spawn_sim(
                 match sim.step() {
                     Some(fs) => {
                         // Do the visualization DSP (FFT + Hilbert I/Q) here, off the UI thread.
+                        // Skip the I/Q Hilbert entirely when the constellation view is hidden.
+                        let want_iq = show_constellation.load(Ordering::Relaxed);
                         let sps = samples_per_symbol(&fs.mode).unwrap_or(0);
                         let panels = [
-                            compute_panel(&mut spectra[0], &fs.forward_tx, sps),
-                            compute_panel(&mut spectra[1], &fs.forward_rx, sps),
+                            compute_panel(&mut spectra[0], &fs.forward_tx, sps, want_iq),
+                            compute_panel(&mut spectra[1], &fs.forward_rx, sps, want_iq),
                             // The FSK4 ACK (panel 2) has no PSK symbol grid → full-rate I/Q cloud.
-                            compute_panel(&mut spectra[2], &fs.ack_rx, 0),
+                            compute_panel(&mut spectra[2], &fs.ack_rx, 0, want_iq),
                         ];
                         if tx.send(FrameUpdate { step: fs, panels }).is_err() {
                             return;
@@ -372,6 +381,9 @@ fn constellation_plot(
 struct LinkApp {
     controls: Arc<Mutex<Controls>>,
     running: Arc<AtomicBool>,
+    /// Mirrors `ui_show_constellation` for the sim worker, so it can skip the I/Q Hilbert when the
+    /// constellation view is hidden. Lock-free (read every worker frame).
+    show_constellation: Arc<AtomicBool>,
     rx: Option<mpsc::Receiver<FrameUpdate>>,
     handle: Option<JoinHandle<()>>,
 
@@ -443,6 +455,7 @@ impl LinkApp {
                 cessb: true,
             })),
             running: Arc::new(AtomicBool::new(false)),
+            show_constellation: Arc::new(AtomicBool::new(true)),
             rx: None,
             handle: None,
             ui_profile: "hpx_hf".into(),
@@ -502,7 +515,11 @@ impl LinkApp {
             c.turnaround = self.ui_turnaround;
         }
         self.running.store(true, Ordering::Relaxed);
-        let (rx, handle) = spawn_sim(Arc::clone(&self.controls), Arc::clone(&self.running));
+        let (rx, handle) = spawn_sim(
+            Arc::clone(&self.controls),
+            Arc::clone(&self.running),
+            Arc::clone(&self.show_constellation),
+        );
         self.rx = Some(rx);
         self.handle = Some(handle);
     }
@@ -849,6 +866,9 @@ impl eframe::App for LinkApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Randomize the SNR (if enabled) before syncing, so a new value reaches the sim this frame.
         self.tick_randomize(Instant::now());
+        // Mirror the constellation toggle so the worker can skip the I/Q Hilbert when it's hidden.
+        self.show_constellation
+            .store(self.ui_show_constellation, Ordering::Relaxed);
         if self.running.load(Ordering::Relaxed) {
             self.sync_controls();
             self.drain();
