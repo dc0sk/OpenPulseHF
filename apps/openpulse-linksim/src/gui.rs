@@ -114,12 +114,46 @@ impl Controls {
     }
 }
 
+/// Precomputed per-panel visualization (spectrum + I/Q scatter) for one signal column. Built on the
+/// sim worker so the UI thread never runs an FFT or Hilbert transform. An empty `spectrum` means
+/// "no update this frame" (the source waveform was empty), matching the old early-return.
+struct PanelData {
+    spectrum: Vec<f32>,
+    iq: Vec<[f64; 2]>,
+}
+
+/// A completed sim frame together with its precomputed visualization DSP for the three panels.
+struct FrameUpdate {
+    step: FrameStep,
+    panels: [PanelData; 3],
+}
+
+/// Compute one panel's spectrum + baseband I/Q on the worker thread (reuses `ps`'s FFT planner).
+fn compute_panel(ps: &mut PowerSpectrum, samples: &[f32], sps: usize) -> PanelData {
+    if samples.is_empty() {
+        return PanelData {
+            spectrum: Vec::new(),
+            iq: Vec::new(),
+        };
+    }
+    PanelData {
+        spectrum: ps.compute(samples),
+        iq: baseband_iq(samples, sps),
+    }
+}
+
 fn spawn_sim(
     controls: Arc<Mutex<Controls>>,
     running: Arc<AtomicBool>,
-) -> (mpsc::Receiver<FrameStep>, JoinHandle<()>) {
-    let (tx, rx) = mpsc::channel::<FrameStep>();
+) -> (mpsc::Receiver<FrameUpdate>, JoinHandle<()>) {
+    let (tx, rx) = mpsc::channel::<FrameUpdate>();
     let handle = std::thread::spawn(move || {
+        // Persistent FFT planners for the three panels (TX / RX / ACK), reused across frames.
+        let mut spectra = [
+            PowerSpectrum::new(),
+            PowerSpectrum::new(),
+            PowerSpectrum::new(),
+        ];
         while running.load(Ordering::Relaxed) {
             // Snapshot params (and the generation we built against) for this run.
             let (mut sim, gen, mut chan, mut snr, mut cessb) = {
@@ -154,7 +188,15 @@ fn spawn_sim(
                 }
                 match sim.step() {
                     Some(fs) => {
-                        if tx.send(fs).is_err() {
+                        // Do the visualization DSP (FFT + Hilbert I/Q) here, off the UI thread.
+                        let sps = samples_per_symbol(&fs.mode).unwrap_or(0);
+                        let panels = [
+                            compute_panel(&mut spectra[0], &fs.forward_tx, sps),
+                            compute_panel(&mut spectra[1], &fs.forward_rx, sps),
+                            // The FSK4 ACK (panel 2) has no PSK symbol grid → full-rate I/Q cloud.
+                            compute_panel(&mut spectra[2], &fs.ack_rx, 0),
+                        ];
+                        if tx.send(FrameUpdate { step: fs, panels }).is_err() {
                             return;
                         }
                     }
@@ -167,9 +209,9 @@ fn spawn_sim(
     (rx, handle)
 }
 
-/// One visualized signal column.
+/// One visualized signal column. The spectrum/I/Q DSP is done on the sim worker; this only holds
+/// the latest results and the waterfall ring buffer (a cheap row push) for rendering.
 struct PanelView {
-    ps: PowerSpectrum,
     wf: WaterfallBuffer,
     spectrum: Vec<f32>,
     /// Normalized baseband I/Q scatter of the most recent waveform, for the constellation view.
@@ -182,7 +224,6 @@ struct PanelView {
 impl PanelView {
     fn new() -> Self {
         Self {
-            ps: PowerSpectrum::new(),
             wf: WaterfallBuffer::new(WATERFALL_ROWS),
             spectrum: vec![MIN_DB; FREQ_BINS],
             iq: Vec::new(),
@@ -191,14 +232,14 @@ impl PanelView {
             last_gen: u64::MAX,
         }
     }
-    fn push(&mut self, samples: &[f32], sps: usize) {
-        if samples.is_empty() {
+    /// Store precomputed panel DSP from the worker; empty spectrum = no update this frame.
+    fn apply(&mut self, pd: PanelData) {
+        if pd.spectrum.is_empty() {
             return;
         }
-        let spec = self.ps.compute(samples);
-        self.wf.push(&spec, MIN_DB, MAX_DB);
-        self.spectrum = spec;
-        self.iq = baseband_iq(samples, sps);
+        self.wf.push(&pd.spectrum, MIN_DB, MAX_DB);
+        self.spectrum = pd.spectrum;
+        self.iq = pd.iq;
         self.generation += 1;
     }
 }
@@ -331,7 +372,7 @@ fn constellation_plot(
 struct LinkApp {
     controls: Arc<Mutex<Controls>>,
     running: Arc<AtomicBool>,
-    rx: Option<mpsc::Receiver<FrameStep>>,
+    rx: Option<mpsc::Receiver<FrameUpdate>>,
     handle: Option<JoinHandle<()>>,
 
     // UI-editable mirror of the controls.
@@ -621,27 +662,27 @@ impl LinkApp {
     }
 
     fn drain(&mut self) {
-        let mut steps = Vec::new();
+        let mut updates = Vec::new();
         if let Some(rx) = &self.rx {
-            while let Ok(fs) = rx.try_recv() {
-                steps.push(fs);
+            while let Ok(fu) = rx.try_recv() {
+                updates.push(fu);
             }
         }
-        for fs in steps {
+        for fu in updates {
+            let FrameUpdate {
+                step: fs,
+                panels: [p0, p1, p2],
+            } = fu;
             // Feed any connected openpulse-panel clients from the same live frame.
             #[cfg(feature = "serve")]
             if let Some(h) = &self.hub {
                 h.publish(&fs);
             }
 
-            // Symbol-spaced constellation decimation for the single-carrier data mode (panels 0/1);
-            // the FSK4 ACK (panel 2) has no PSK symbol grid, so it keeps the full-rate I/Q cloud.
-            let sps = samples_per_symbol(&fs.mode).unwrap_or(0);
-            self.panels[0].push(&fs.forward_tx, sps);
-            self.panels[1].push(&fs.forward_rx, sps);
-            // The return ACK as heard back at A (post reverse channel) — using the noisy RX
-            // (not the clean TX) so the waterfall actually moves frame-to-frame.
-            self.panels[2].push(&fs.ack_rx, 0);
+            // Panel DSP was already computed on the worker — just store it (no FFT/Hilbert here).
+            self.panels[0].apply(p0);
+            self.panels[1].apply(p1);
+            self.panels[2].apply(p2);
 
             self.frame_counter += 1;
             self.attempted += 1;
