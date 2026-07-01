@@ -1,15 +1,15 @@
 ---
 title: "OpenPulseHF Test Matrix — Summary"
-date: "2026-06-29T22:01:35Z"
-git_commit: "6b85aad"
-git_commit_full: "6b85aaddfec2e30917f5e01cdc53a5e18088b5a4"
-git_dirty: true
+date: "2026-07-01T20:44:29Z"
+git_commit: "82cfbc5"
+git_commit_full: "82cfbc5be399783f428b559436adefbd721fdd6b"
+git_dirty: false
 workspace_version: "0.3.0"
 tier: "full"
 total_cases: 6022
-passed: 3465
-failed: 2557
-duration_s: 21.3
+passed: 3480
+failed: 2542
+duration_s: 230.7
 generator: "openpulse-testmatrix"
 crates_tested:
   - "bpsk-plugin"
@@ -32,15 +32,15 @@ crates_tested:
 
 # Test Matrix Summary
 
-**Run:** commit `6b85aad` ⚠ dirty — v0.3.0 — 2026-06-29 22:01:35 UTC
+**Run:** commit `82cfbc5` — v0.3.0 — 2026-07-01 20:44:29 UTC
 
-**3465/6022 cases passed** in 21.3s
+**3480/6022 cases passed** in 230.7s
 
 ## By Use Case
 
 | Use Case | Passed | Total | Skipped | Pass Rate |
 |---|---|---|---|---|
-| raw_modem | 3415 | 5968 | 0 | 57% |
+| raw_modem | 3430 | 5968 | 0 | 57% |
 | adaptive_hpx500 | 11 | 11 | 0 | 100% |
 | adaptive_hpx_hf | 11 | 11 | 0 | 100% |
 | adaptive_hpx_wideband | 8 | 11 | 0 | 72% |
@@ -104,4 +104,4 @@ crates_tested:
 | `raw_modem/8PSK1000-HF-RRC/none/nocomp/ge_severe/32B` | RX error: frame encoding/decoding error: invalid magic |
 | `raw_modem/8PSK1000-HF-RRC/none/nocomp/qrn_light/128B` | RX error: frame encoding/decoding error: CRC mismatch (expected 0xc164, got 0x7bb7) |
 
-*…and 2507 more failures. See `raw.json` for full list.*
+*…and 2492 more failures. See `raw.json` for full list.*
