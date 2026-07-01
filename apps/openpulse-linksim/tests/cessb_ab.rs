@@ -101,7 +101,8 @@ fn cessb_default_does_not_break_dense_ofdm() {
     }
 }
 
-/// CE-SSB stays ENABLED (and harmless) on the OFDM 8PSK rung it benefits.
+/// CE-SSB default (on) must be a no-op on the OFDM 8PSK rung — the gate excludes it
+/// (its ±22.5° margins can't absorb the clip EVM), so it decodes as if CE-SSB were off.
 #[test]
 fn cessb_default_keeps_low_order_ofdm_decoding() {
     use ofdm_plugin::OfdmPlugin;

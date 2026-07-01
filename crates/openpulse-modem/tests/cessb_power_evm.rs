@@ -204,13 +204,13 @@ const OPERATING_RATIO: f32 = 2.0;
 /// margin rather than just trading PAPR headroom.
 const FEC_ABSORBABLE_BER: f64 = 0.01;
 
-/// CE-SSB pays off on the lower-order OFDM-HOM variant (8PSK) that
-/// `ModemEngine::cessb_benefits` keeps enabled alongside QPSK OFDM52: it stays
-/// high-PAPR multicarrier so the average-power gain holds (unlike single-carrier
-/// QAM, which gets ~0 dB — see `cessb_power_vs_evm_across_modes`), and the EVM the
-/// clip injects stays well within FEC's reach at the 2.0×rms operating point.
+/// CE-SSB pays off on the QPSK-subcarrier OFDM waveform (`OFDM52`) that
+/// `ModemEngine::cessb_benefits` keeps enabled: it stays high-PAPR multicarrier so the
+/// average-power gain holds (unlike single-carrier QAM, which gets ~0 dB — see
+/// `cessb_power_vs_evm_across_modes`), and the EVM the clip injects stays well within
+/// FEC's reach at the 2.0×rms operating point.
 ///
-/// The denser rungs (≥16QAM) are GATED OFF: this raw-BER-at-operating-point metric
+/// The denser rungs (8PSK and ≥16QAM) are GATED OFF: this raw-BER-at-operating-point metric
 /// reads favourable for them, but end-to-end decode through the real engine+channel
 /// path breaks (16QAM on Watterson Good-F1 0/16; 32QAM 0/20, 64QAM 3/20 vs ≥20/20
 /// off; SCFDMA likewise) — the clip's EVM breaks acquisition/equalisation, not just

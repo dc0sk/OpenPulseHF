@@ -591,9 +591,10 @@ impl ModemEngine {
         self.cessb_enabled
     }
 
-    /// Whether `mode` benefits from CE-SSB conditioning — only the high-PAPR
-    /// **OFDM** waveforms up to 8PSK. Two exclusions, both decided by end-to-end
-    /// decode through the real engine+channel path, not synthetic raw-BER:
+    /// Whether `mode` benefits from CE-SSB conditioning — **only the QPSK-subcarrier
+    /// OFDM waveforms** (`OFDM16`, `OFDM52`). Every denser constellation and every
+    /// single-carrier waveform is excluded, each decided by end-to-end decode through
+    /// the real engine+channel path, not synthetic raw-BER:
     ///
     /// 1. **SC-FDMA is excluded entirely.** Despite its multicarrier subcarrier
     ///    structure it is a *single-carrier* FDM waveform, low-PAPR by construction,
@@ -611,8 +612,17 @@ impl ModemEngine {
     ///    on the real path (DSP playbook: validate FEC-protected modes WITH FEC,
     ///    and against the fading channel — dense constellations are the canaries).
     ///
-    /// CE-SSB stays on for OFDM QPSK (`OFDM16`/`OFDM52`) and 8PSK, where it is
-    /// decode-validated net-positive (8PSK soft-FEC Watterson Good-F1: 8/8 on).
+    /// The exclusions all trace to one principle: **CE-SSB trades in-band EVM for
+    /// average-power gain, and that trade only wins where the envelope is high-PAPR
+    /// *and* the decision margins are loose.** QPSK-subcarrier OFDM sums ~52 carriers
+    /// into a near-Gaussian envelope that rarely nulls hard, so envelope limiting costs
+    /// almost no EVM; higher-order (8PSK/QAM/APSK) subcarriers and single-carrier QAM
+    /// transit near the constellation origin, where the envelope passes through zero and
+    /// the instantaneous phase goes discontinuous (the "equal-amplitude" singularity —
+    /// *Dave's Hacks*, Feb 2025, catalogued in `docs/dev/research/references.md`).
+    /// Limiting that envelope injects EVM their tighter slicers can't absorb, so CE-SSB
+    /// is gated OFF for them — 8PSK included (a marginal-SNR sweep goes 12/12 → 0/12
+    /// with CE-SSB on, and decodes only once gated off).
     /// Measured in `openpulse-linksim/tests/cessb_ab.rs` and `tests/cessb_power_evm.rs`.
     pub fn cessb_benefits(mode: &str) -> bool {
         let m = mode.to_ascii_uppercase();
