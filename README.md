@@ -222,12 +222,13 @@ All GPU functions return `Option<T>` — `None` triggers automatic CPU fallback.
 
 ### Adaptive rate profiles
 
-Eleven `SessionProfile` mappings from speed levels to modes, driven by ACK/NACK feedback
+Twelve `SessionProfile` mappings from speed levels to modes, driven by ACK/NACK feedback
 and per-level SNR floor/ceiling gates:
 
 | Profile | SL range | Initial | Top mode | Target link |
 |---|---|---|---|---|
 | `hpx500` | SL2–SL6 | SL2 | QPSK500 | Robust narrowband (≤600 Hz) |
+| `hpx_modcod` | SL2–SL7 | SL2 | QPSK500 | MODCOD demo: modulation × FEC (BPSK250/QPSK250/QPSK500 × LDPC/RS/none) |
 | `hpx_hf` | SL2–SL11 | SL2 | SCFDMA52-64QAM | Primary HF (full ≤2700 Hz span) |
 | `hpx_ofdm_hf` | SL5–SL10 | SL5 | OFDM52-64QAM | HF OFDM higher-order ladder |
 | `hpx_pilot` | SL2–SL5 | SL2 | PILOT-32APSK500 | HF pilot-aided (cycle-slip-immune, SRO-robust) |
@@ -261,7 +262,7 @@ trading bandwidth (rect vs `-RRC`) against throughput (500 vs 1000 baud).
 
 - **Ed25519** handshake signing + transfer manifest signing/verification
 - **ML-DSA-44 + ML-KEM-768** post-quantum handshake — Hybrid (Ed25519 + ML-DSA-44) and PQ-only modes
-- **Three trust profiles**: OpenTrust, Balanced, Strict — configurable per deployment
+- **Three trust profiles**: Permissive, Balanced, Strict — configurable per deployment
 - **PKI service** — Ed25519 trust-bundle signing with PostgreSQL persistence
 - **Signed peer descriptors** — self-authenticating identity; peer ID is the verifying key bytes
 - **FreeDV frame signing** (`crates/openpulse-freedv-auth`) — Ed25519 signatures over the codec2 embedded data channel; authenticates voice transmissions without modifying FreeDV itself
