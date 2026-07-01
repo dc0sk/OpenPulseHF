@@ -196,8 +196,10 @@ fn spawn_sim(
                 match sim.step() {
                     Some(fs) => {
                         // Do the visualization DSP (FFT + Hilbert I/Q) here, off the UI thread.
-                        // Skip the I/Q Hilbert entirely when the constellation view is hidden.
-                        let want_iq = show_constellation.load(Ordering::Relaxed);
+                        // Skip the I/Q Hilbert when the constellation is hidden or the mode has no
+                        // meaningful constellation (multicarrier / FSK).
+                        let want_iq = show_constellation.load(Ordering::Relaxed)
+                            && constellation_makes_sense(&fs.mode);
                         let sps = samples_per_symbol(&fs.mode).unwrap_or(0);
                         let panels = [
                             compute_panel(&mut spectra[0], &fs.forward_tx, sps, want_iq),
@@ -283,6 +285,14 @@ fn samples_per_symbol(mode: &str) -> Option<usize> {
     }
     let sps = (FS / baud).round() as usize;
     (sps >= 2).then_some(sps)
+}
+
+/// Whether an I/Q constellation is meaningful for `mode`. True for single-carrier PSK/QAM (a coherent
+/// constellation at the 1500 Hz carrier); false for multicarrier (OFDM / SC-FDMA — the summed
+/// subcarriers form a Gaussian blob, not a constellation) and FSK (frequency-keyed, no I/Q grid).
+fn constellation_makes_sense(mode: &str) -> bool {
+    let m = mode.to_ascii_uppercase();
+    !(m.starts_with("OFDM") || m.starts_with("SCFDMA") || m.starts_with("FSK"))
 }
 
 /// Normalized baseband I/Q scatter for the constellation view, via Hilbert downconversion of the
@@ -1245,7 +1255,10 @@ impl eframe::App for LinkApp {
             if let Some(tex) = &qr {
                 ui.add_space(6.0);
                 let band_w = ui.available_width();
-                let show_const = self.ui_show_constellation;
+                // Only show constellations for modes where they mean something (single-carrier
+                // PSK/QAM); multicarrier (OFDM/SC-FDMA) and FSK render a meaningless blob.
+                let show_const =
+                    self.ui_show_constellation && constellation_makes_sense(&subtitle.0);
                 // With both constellations shown the QR + 2 squares take 3×qr_side; otherwise just
                 // the QR. The remainder splits between the two text blocks flanking the QR.
                 let denom = if show_const { 3.0 } else { 1.0 };
