@@ -35,6 +35,7 @@ pub mod signing;
 pub mod snr_estimate;
 pub mod snr_hysteresis;
 pub mod soft_viterbi;
+pub mod station_id;
 pub mod trust;
 pub mod trust_store_file;
 pub mod turbo;

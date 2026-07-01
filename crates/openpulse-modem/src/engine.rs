@@ -365,6 +365,10 @@ pub struct ModemEngine {
     /// Count of capture blocks the DC block processed — tripwire for the always-on DC removal
     /// (REQ-PHY-02); stays 0 if a capture path ever skips the InputCapture seam.
     dc_blocks_processed: u64,
+    /// Monotonic count of frames emitted at the single TX seam (`stage_emit_output`) — every
+    /// transmit path (data, FEC, ACK, retransmit, QSY, ID) increments it once. A pollable
+    /// TX-activity signal for the daemon's periodic station-ID timer (REQ-REG-10).
+    frames_transmitted: u64,
 }
 
 /// CE-SSB TX conditioning clip level as a multiple of the RMS envelope. 2.0×
@@ -431,6 +435,7 @@ impl ModemEngine {
             agc: openpulse_dsp::agc::Agc::new(0.3, 0.02, 40.0),
             agc_blocks_processed: 0,
             dc_blocks_processed: 0,
+            frames_transmitted: 0,
         }
     }
 
@@ -456,6 +461,13 @@ impl ModemEngine {
     /// the daemon runs, the receive path isn't reaching the front-end seam.
     pub fn notch_blocks_processed(&self) -> u64 {
         self.notch_blocks_processed
+    }
+
+    /// Monotonic count of frames emitted at the TX seam. The daemon polls the delta to detect
+    /// transmit activity for the periodic station-ID timer (REQ-REG-10) without threading a
+    /// `note_tx()` call through every transmit call site.
+    pub fn frames_transmitted(&self) -> u64 {
+        self.frames_transmitted
     }
 
     /// Configure the notch bank: max simultaneous notches, sharpness `q` (BW ≈ f0/q), and the
@@ -4334,6 +4346,7 @@ impl ModemEngine {
             .log_frame(metadata.clone())
             .map_err(|err| ModemError::Configuration(err.to_string()))?;
         debug!("logged TX metadata: {}", metadata.to_log_line());
+        self.frames_transmitted = self.frames_transmitted.wrapping_add(1);
 
         Ok(())
     }
