@@ -104,6 +104,9 @@ mod tests {
     #[test]
     fn recommends_expected_levels_for_thresholds() {
         let profile = SessionProfile::hpx_hf();
+        // Thresholds track the recalibrated hpx_hf SNR floors (SL2=3, SL3=4, SL4=5, SL5=9, SL6=11,
+        // SL7=12, SL8=14, SL9=16, SL10=17, SL11=22); recommend_hf_level picks the highest rung whose
+        // floor ≤ snr. Keep in sync if the profile floors change.
         let cases = [
             (-1.0, SpeedLevel::Sl2),
             (2.9, SpeedLevel::Sl2),
@@ -115,8 +118,16 @@ mod tests {
             (9.0, SpeedLevel::Sl5),
             (10.9, SpeedLevel::Sl5),
             (11.0, SpeedLevel::Sl6),
-            (13.9, SpeedLevel::Sl6),
-            (14.0, SpeedLevel::Sl7),
+            (11.9, SpeedLevel::Sl6),
+            (12.0, SpeedLevel::Sl7),
+            (13.9, SpeedLevel::Sl7),
+            (14.0, SpeedLevel::Sl8),
+            (15.9, SpeedLevel::Sl8),
+            (16.0, SpeedLevel::Sl9),
+            (16.9, SpeedLevel::Sl9),
+            (17.0, SpeedLevel::Sl10),
+            (21.9, SpeedLevel::Sl10),
+            (22.0, SpeedLevel::Sl11),
         ];
 
         for (snr, expected_level) in cases {
