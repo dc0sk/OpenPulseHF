@@ -1649,6 +1649,28 @@ import into standard logging software / LoTW / eQSL. Opt-in via a new `[logbook]
 - **Open questions:** ADIF version (3.1.x), how to map HPX modes to ADIF `MODE` / `SUBMODE`
   (a custom `DYNAMIC` vs. per-mode), and whether to also log FreeDV / Winlink sessions.
 
+### Weak-signal symbol-diversity mode (deferred — from SSB reference mining 2026-07-01)
+
+Flagged from the FreeDV/codec2 reference pass (see `docs/dev/research/references.md` →
+*CE-SSB and polar-SSB transmit conditioning*). FreeDV **700D** transmits each carrier's
+symbol **twice** across the band ("frequency diversity"), so the receiver combines two
+independent fading realisations before slicing. This is a distinct SNR lever from FEC
+(it buys diversity, not coding gain) and would give the ladder a rung **below** its
+current SL floor for deep-fade / very-weak-signal HF.
+
+- **Idea:** an optional lowest-rate mode (candidate `SL1`-adjacent) that repeats each
+  data symbol on a second, band-separated carrier and does maximal-ratio (or equal-gain)
+  combining at the receiver before demodulation — trading throughput for a few dB of
+  fading margin the FEC alone doesn't provide.
+- **Fit:** slots naturally under the OFDM path (per-subcarrier repetition + combine) or
+  as a dedicated diversity waveform; complements, does not replace, the RS/LDPC/soft-FEC
+  stack.
+- **Open questions:** carrier spacing for decorrelated fading vs. occupied bandwidth;
+  combine metric (MRC needs per-carrier SNR estimates from the pilots); where it sits on
+  the `RateAdapter` ladder (a true sub-floor rung vs. a separate "weak-signal" profile);
+  and whether the gain over just dropping to BPSK31 + soft-FEC is worth the complexity.
+- **Status:** unscheduled; no target date. Parked here so the diversity lever isn't lost.
+
 ### Features shipped (no longer deferred)
 
 - LDPC: real rate-1/2 min-sum belief propagation shipped in PR #187. The "LDPC stub" entry below is obsolete.
