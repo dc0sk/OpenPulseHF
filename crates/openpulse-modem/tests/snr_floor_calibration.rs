@@ -1,20 +1,33 @@
 //! SNR-floor calibration harness — the "quick simulation run" that derives the working SNR/step
 //! pairs the OTA fast-downshift jumps to (`SessionProfile::snr_floor_for_level`).
 //!
-//! Sweeps AWGN SNR for each (mode, FEC) rung and finds the lowest SNR at which it decodes reliably —
+//! Sweeps SNR for each (mode, FEC) rung and finds the lowest SNR at which it decodes reliably —
 //! the empirical floor. Prints a table so the constants in `profile.rs` can be validated or retuned
-//! from data instead of guesswork. Two `#[ignore]` sweeps:
-//!   * `calibrate_snr_floors_hpx_hf` — every hpx_hf rung with the FEC the profile assigns it.
-//!   * `calibrate_candidate_fec_rungs` — candidate (mode, FEC) pairs under consideration.
+//! from data instead of guesswork. Three `#[ignore]` sweeps:
+//!   * `calibrate_snr_floors_hpx_hf` — every hpx_hf rung over AWGN with its assigned FEC.
+//!   * `calibrate_candidate_fec_rungs` — candidate (mode, FEC) pairs under consideration (AWGN).
+//!   * `calibrate_snr_floors_watterson` — the same rungs over Watterson **fading** (good_f1 +
+//!     moderate_f1). AWGN floors are a lower bound; fading raises them.
 //!
-//! Run on demand (full modulate→AWGN→demodulate sweeps, so ignored by default):
+//! **Fading-calibration caveats (read before trusting the Watterson numbers):**
+//!   1. Fading is seed-sensitive — a fraction of realizations deep-fade the whole frame and can't
+//!      decode at ANY SNR (irreducible outage), so the fading target is 50 % (majority), not 90 %.
+//!   2. KNOWN ANOMALY: in this harness the SCFDMA rungs fail through even mild (good_f1) fading while
+//!      the single-carrier PSK rungs decode — the *opposite* of expected (SCFDMA has CP + equalization).
+//!      This points to a harness/SCFDMA-fading interaction that needs dedicated debugging before the
+//!      Watterson floors are trustworthy. The single-carrier data (good_f1 ~6–9 dB; moderate_f1 fails)
+//!      is credible: the no-FEC/light-FEC narrowband rungs are slow-fading-only.
+//!
+//! Run on demand (full modulate→channel→demodulate sweeps, so ignored by default):
 //!
 //! ```text
 //! cargo test -p openpulse-modem --no-default-features --test snr_floor_calibration -- --ignored --nocapture
 //! ```
 
 use bpsk_plugin::BpskPlugin;
-use openpulse_channel::{awgn::AwgnChannel, AwgnConfig};
+use openpulse_channel::{
+    awgn::AwgnChannel, watterson::WattersonChannel, AwgnConfig, WattersonConfig,
+};
 use openpulse_core::fec::FecMode;
 use openpulse_core::profile::SessionProfile;
 use openpulse_modem::channel_sim::ChannelSimHarness;
@@ -60,6 +73,73 @@ fn decode_rate(mode: &str, fec: FecMode, snr_db: f32, frames: u32) -> f32 {
         }
     }
     ok as f32 / frames as f32
+}
+
+/// Success rate of `frames` FEC-protected round-trips through a Watterson fading channel (fresh
+/// fading realisation per frame) at additive `snr_db`. `make_cfg` fixes the fading profile.
+fn decode_rate_watterson(
+    mode: &str,
+    fec: FecMode,
+    snr_db: f32,
+    frames: u32,
+    make_cfg: fn(f32, Option<u64>) -> WattersonConfig,
+) -> f32 {
+    let payload = b"OTA SNR floor calibration payload, sixty-four bytes total AAAA";
+    let mut ok = 0u32;
+    for f in 0..frames {
+        let mut h = harness();
+        if h.tx_engine
+            .transmit_with_fec_mode(payload, mode, fec, None)
+            .is_err()
+        {
+            continue;
+        }
+        let mut ch = match WattersonChannel::new(make_cfg(snr_db, Some(2000 + f as u64))) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        h.route(&mut ch);
+        if h.rx_engine
+            .receive_with_fec_mode(mode, fec, None)
+            .map(|d| d == payload)
+            .unwrap_or(false)
+        {
+            ok += 1;
+        }
+    }
+    ok as f32 / frames as f32
+}
+
+/// A Watterson config for a given additive SNR, keeping the profile's fading params.
+fn watterson_good_f1(snr_db: f32, seed: Option<u64>) -> WattersonConfig {
+    let mut c = WattersonConfig::good_f1(seed);
+    c.snr_db = snr_db;
+    c
+}
+fn watterson_moderate_f1(snr_db: f32, seed: Option<u64>) -> WattersonConfig {
+    let mut c = WattersonConfig::moderate_f1(seed);
+    c.snr_db = snr_db;
+    c
+}
+
+/// Lowest fading SNR in `[lo, hi]` at which `mode`+`fec` decodes ≥ `target`.
+fn min_decodable_snr_watterson(
+    mode: &str,
+    fec: FecMode,
+    lo: f32,
+    hi: f32,
+    frames: u32,
+    target: f32,
+    make_cfg: fn(f32, Option<u64>) -> WattersonConfig,
+) -> Option<f32> {
+    let mut snr = lo;
+    while snr <= hi {
+        if decode_rate_watterson(mode, fec, snr, frames, make_cfg) >= target {
+            return Some(snr);
+        }
+        snr += 1.0;
+    }
+    None
 }
 
 /// Lowest SNR in `[lo, hi]` dB (1 dB grid) at which `mode`+`fec` decodes ≥ `target`.
@@ -124,6 +204,54 @@ fn calibrate_snr_floors_hpx_hf() {
         );
     }
     println!("=== end hpx_hf calibration ===\n");
+}
+
+#[test]
+#[ignore = "fading calibration sweep; run manually with --ignored --nocapture"]
+fn calibrate_snr_floors_watterson() {
+    const FRAMES: u32 = 16;
+    // Fading is seed-sensitive: a fraction of realizations deep-fade the whole frame and can't decode
+    // at ANY SNR (an irreducible outage), so a 90 % target is unreachable under Watterson. The fading
+    // "floor" is where a MAJORITY of fades decode — use a 50 % target (cf. the seed-window pattern in
+    // `channel_loopback.rs`).
+    const TARGET: f32 = 0.50;
+    let profile = SessionProfile::hpx_hf();
+    println!(
+        "\n=== hpx_hf Watterson fading calibration (50% target — fading has an outage floor) ==="
+    );
+    println!("level mode             fec               cfg_dB  gF1_dB  mF1_dB  gap(mF1-cfg)");
+    for level in profile.defined_levels() {
+        let Some(mode) = profile.mode_for(level) else {
+            continue;
+        };
+        // Skip the low-baud BPSK rungs (SL2–4): their multi-second frames make the per-frame fading
+        // FFT prohibitively slow, and they are the trivially-robust ladder floor — the fading margin
+        // that matters for rate decisions is on QPSK250 upward.
+        if mode.starts_with("BPSK") {
+            continue;
+        }
+        let fec = profile.fec_for(level);
+        // Fading only *raises* the floor, so anchor the search at the AWGN floor (bounded window).
+        let anchor = profile.snr_floor_for_level(level).unwrap_or(0.0);
+        let (lo, hi) = (anchor - 3.0, anchor + 16.0);
+        let good =
+            min_decodable_snr_watterson(mode, fec, lo, hi, FRAMES, TARGET, watterson_good_f1);
+        let mod1 =
+            min_decodable_snr_watterson(mode, fec, lo, hi, FRAMES, TARGET, watterson_moderate_f1);
+        let cfg = profile.snr_floor_for_level(level);
+        let gap = match (cfg, mod1) {
+            (Some(c), Some(m)) => format!("{:+.0}", m - c),
+            _ => "-".into(),
+        };
+        let fmt = |v: Option<f32>| v.map(|x| format!("{x:.0}")).unwrap_or_else(|| ">40".into());
+        println!(
+            "{level:<5?} {mode:<16} {fec:<16?} {:>7} {:>7} {:>7}  {gap}",
+            cfg.map(|c| format!("{c:.0}")).unwrap_or_else(|| "-".into()),
+            fmt(good),
+            fmt(mod1),
+        );
+    }
+    println!("=== end Watterson calibration — set floors to cover moderate_f1 (mF1) ===\n");
 }
 
 #[test]
