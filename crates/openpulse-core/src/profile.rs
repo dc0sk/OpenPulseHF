@@ -56,6 +56,33 @@ impl SessionProfile {
         self.modes[level as usize]
     }
 
+    /// A stable hash of the **wire-relevant** ladder mapping — the `(level → mode, level → FEC)`
+    /// pairs — used to detect when two stations' ladders diverge (e.g. across code versions) so a
+    /// `recommended_level` never means different things at the two ends.
+    ///
+    /// Deliberately EXCLUDES local-only policy (SNR floors/ceilings, `nack_threshold`): two peers
+    /// with the same modes+FEC but recalibrated floors still interoperate on air, so a floor tweak
+    /// must NOT change the fingerprint. Only a mode/FEC/step change does. FNV-1a over the mapping.
+    pub fn fingerprint(&self) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a offset basis
+        let mut mix = |byte: u8| {
+            h ^= byte as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3); // FNV prime
+        };
+        for lvl in self.defined_levels() {
+            mix(lvl as u8);
+            if let Some(m) = self.mode_for(lvl) {
+                for b in m.as_bytes() {
+                    mix(*b);
+                }
+            }
+            mix(0xff); // mode/FEC separator
+            mix(self.fec_for(lvl) as u8);
+            mix(0xfe); // per-level separator
+        }
+        h
+    }
+
     /// Return the SNR floor (dB) for `level`, or `None` if no threshold is defined.
     ///
     /// When measured SNR drops below this, the rate adapter steps down immediately
