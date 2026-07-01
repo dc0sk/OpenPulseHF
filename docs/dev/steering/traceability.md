@@ -9,6 +9,33 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-01 — feature: end-of-exchange (sign-off) station ID (REQ-REG-10, CAP-66)
+
+- **Requirement/change:** §97.119 requires ID **at the end** of a communication as well as every 10
+  minutes during it. The initial CAP-66 (below) covered only the interval trigger; add the sign-off ID.
+- **Design decision:** extend `StationIdTimer` with an **idle-based** end-of-exchange trigger rather
+  than hooking a specific teardown path (DISCONNECT / OTA-end): after the station has transmitted,
+  once the channel is quiet for `signoff_idle_ms` the exchange has wound down → send a final ID. Idle
+  detection is mode-agnostic (covers plain sends, ARQ, OTA, handshakes uniformly) and reuses the same
+  TX-armed/`mark_identified` state as the interval trigger, so the two never double-fire and a
+  pure-receive station still never keys up. `note_tx` now stamps the last-TX time; the interval and
+  sign-off triggers coexist (a long continuous exchange fires the interval ID; going quiet fires the
+  sign-off). New knob `[station] auto_id_signoff_idle_secs` (default 10 s; 0 disables sign-off only,
+  keeping interval ID). Daemon checks `id_due` then `signoff_due` each tick and logs the `kind`.
+- **Implementation:** `crates/openpulse-core/src/station_id.rs` — `signoff_idle_ms` field,
+  `with_signoff_idle_ms` builder, `signoff_due`, `note_tx(now_ms)` (records last-TX time);
+  `auto_id_signoff_idle_secs` in `crates/openpulse-config/src/lib.rs` (+ Default + template);
+  `crates/openpulse-daemon/src/server.rs` computes `now_ms` first, arms via `note_tx(now_ms)`, fires
+  on `id_due || signoff_due`.
+- **Tests:** `cargo test -p openpulse-core --lib station_id` — **12 pass** (7 interval + 5 sign-off:
+  disabled-when-idle-0, due-after-idle, later-TX-pushes-deadline, disarms-after-ID, interval+sign-off
+  coexist on a long-then-quiet exchange); `station_id_txcount` 1/1; daemon 2/2; config 9/9; clippy
+  `-D warnings` + fmt clean; full workspace builds.
+- **Test results:** station_id 12/12, all gates green. REQ-REG-10 now covers both interval and
+  end-of-exchange ID.
+
+---
+
 ## 2026-07-01 — feature: periodic station-ID timer (REQ-REG-10, new CAP-66)
 
 - **Requirement/change:** REQ-REG-10 (station identification at required intervals in the digital
