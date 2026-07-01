@@ -9,6 +9,30 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-01 — feature: rate-ladder fingerprint + freeze-versioning discipline (CAP-37, backward compat)
+
+- **Requirement/change:** the OTA ACK carries a bare `recommended_level`; its meaning depends on both
+  stations running the same `SessionProfile` mapping. Any mode/FEC/step change (e.g. #611 adding FEC
+  to hpx_hf) silently breaks interop across code versions. Establish the "freeze + version + handshake
+  guard" strategy the user chose.
+- **Design decision:** (increment 1 of 2) add a **ladder fingerprint** — `SessionProfile::fingerprint()`,
+  an FNV-1a hash over ONLY the wire-relevant `(level → mode, level → FEC)` mapping. Local policy (SNR
+  floors/ceilings, nack_threshold) is excluded by construction, so a floor recalibration does NOT break
+  compatibility — only a mode/FEC/step change does. Adopt the **freeze discipline** (a published ladder
+  is a wire contract; changes ship as a new named profile, never mutate in place) documented in
+  `docs/dev/design/ladder-versioning.md`. Consumed now via observability: the daemon logs its active
+  `ladder_fingerprint` at OTA startup so operators can diff it across stations. **Increment 2 (next):**
+  advertise `(profile_name, fingerprint)` in the signed handshake and disable OTA (fixed-mode fallback)
+  on a positive mismatch — detection instead of silent desync, while OTA-without-handshake keeps working.
+- **Implementation:** `SessionProfile::fingerprint()` in `crates/openpulse-core/src/profile.rs`;
+  `ladder_fingerprint` log at OTA start in `crates/openpulse-daemon/src/server.rs`; design doc
+  `docs/dev/design/ladder-versioning.md`.
+- **Tests:** `crates/openpulse-core/tests/session_profile.rs` — fingerprint deterministic + distinguishes
+  profiles + tracks mode/FEC mapping (2 new; 29 total pass); clippy `-D warnings` + fmt clean; daemon builds.
+- **Test results:** session_profile 29/29 (2 new fingerprint tests), daemon builds, gates clean.
+
+---
+
 ## 2026-07-01 — fix: hpx_hf FEC-protected upper ladder + calibrated floors (CAP-37)
 
 - **Requirement/change:** raising SL7's floor to 18 dB (prior entry) exposed a duplicate (SL7=SL9=18)

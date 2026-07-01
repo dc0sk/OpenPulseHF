@@ -358,3 +358,41 @@ fn by_name_rejects_unknown() {
     assert_eq!(SessionProfile::by_name("nope"), None);
     assert_eq!(SessionProfile::by_name(""), None);
 }
+
+// ── Ladder fingerprint (backward-compat guard) ────────────────────────────────
+
+#[test]
+fn fingerprint_is_deterministic_and_distinguishes_profiles() {
+    let a = SessionProfile::hpx_hf();
+    // Same definition → identical fingerprint (stable across builds/instances).
+    assert_eq!(a.fingerprint(), SessionProfile::hpx_hf().fingerprint());
+    // Different ladders → different fingerprints.
+    assert_ne!(
+        SessionProfile::hpx_hf().fingerprint(),
+        SessionProfile::hpx500().fingerprint()
+    );
+    assert_ne!(
+        SessionProfile::hpx500().fingerprint(),
+        SessionProfile::hpx_modcod().fingerprint()
+    );
+}
+
+#[test]
+fn fingerprint_tracks_mode_and_fec_mapping() {
+    // The fingerprint reads only the (level → mode, level → FEC) mapping (see `fingerprint()`), so
+    // two profiles with different modes/FEC differ, and the value is a stable u64 (non-zero for a
+    // populated ladder) suitable for advertising in the handshake.
+    let hf = SessionProfile::hpx_hf();
+    assert_ne!(
+        hf.fingerprint(),
+        0,
+        "a populated ladder has a non-trivial fingerprint"
+    );
+    // hpx_hf and hpx_ofdm_hf share some level numbers but map them to different modes → distinct.
+    assert_ne!(
+        hf.fingerprint(),
+        SessionProfile::by_name("hpx_ofdm_hf")
+            .unwrap()
+            .fingerprint()
+    );
+}

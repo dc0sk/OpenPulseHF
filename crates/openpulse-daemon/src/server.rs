@@ -159,6 +159,11 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
         };
         match openpulse_core::profile::SessionProfile::by_name(profile_name) {
             Some(profile) => {
+                // Ladder identity for backward-compat: two stations must run the same (mode, FEC)
+                // mapping for `recommended_level` to mean the same thing. The fingerprint captures
+                // that mapping (not local floors); operators can diff it across stations, and the
+                // handshake guard (follow-up) will negotiate it. See docs/dev/design/ladder-versioning.md.
+                let fingerprint = profile.fingerprint();
                 engine.start_ota_session(profile);
                 let parse = openpulse_core::rate::SpeedLevel::from_name;
                 let min = (!cfg.modem.ota_min_level.is_empty())
@@ -197,7 +202,11 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         ),
                     }
                 }
-                tracing::info!(profile = profile_name, "OTA adaptive rate-stepping enabled");
+                tracing::info!(
+                    profile = profile_name,
+                    ladder_fingerprint = format!("{fingerprint:016x}"),
+                    "OTA adaptive rate-stepping enabled"
+                );
             }
             None => tracing::warn!(
                 profile = profile_name,
