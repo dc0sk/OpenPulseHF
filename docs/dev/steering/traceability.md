@@ -9,6 +9,27 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-01 — housekeeping: rustfmt cleanup, FreeDV-diversity flag, traceability sync (docs/chore)
+
+- **Requirement/change:** two follow-ons after the CE-SSB reference-mining PR (#602). (a) `cargo fmt
+  --all -- --check` was failing on three files unrelated to any recent feature, so the workspace
+  format gate was red on main. (b) The FreeDV 700D symbol-diversity idea surfaced by the mining pass
+  needed a durable home, and the traceability matrix needed to reflect #602/#603.
+- **Design decision:** (a) reformat the three offending files with `cargo fmt --all` (pure whitespace/
+  line-wrapping, no logic touched) to restore the gate. (b) Record FreeDV 700D-style frequency
+  diversity (repeat each carrier's symbol on a band-separated carrier + combine before slicing — a
+  fading-margin lever distinct from FEC, a candidate sub-floor rung) as an unscheduled *Far-future
+  item* in the roadmap so the lever isn't lost; no target date, no CAP yet. (c) Keep the matrix
+  current per the standing rule: refine CAP-24's rationale, add a "Resolved 2026-07-01" subsection.
+- **Implementation:** `cargo fmt` on `apps/openpulse-linksim/src/gui.rs`,
+  `crates/openpulse-channel/src/lib.rs`, `pki-tooling/src/verification.rs` (PR #603); a deferred
+  design entry in `docs/dev/steering/roadmap.md` (PR #603); CAP-24 row + "Resolved 2026-07-01"
+  subsection + `last_updated` bump in `docs/dev/steering/traceability-matrix.md` (PR #604).
+- **Tests:** no code-logic change. `cargo fmt --all -- --check` — clean on main after #603.
+- **Test results:** fmt gate green; PRs #603 and #604 merged. Docs/chore only, no behaviour delta.
+
+---
+
 ## 2026-07-01 — CE-SSB: principled per-mode gate rationale + reference mining (no behaviour change)
 
 - **Requirement/change:** a reference-mining pass (Hershberger CE-SSB QEX 2014/2016, `drmpeg/gr-cessb`,
