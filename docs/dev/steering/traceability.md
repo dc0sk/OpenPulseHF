@@ -9,6 +9,38 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-01 — feature: asymmetric fast-downshift + SNR-floor calibration (CAP-33)
+
+- **Requirement/change:** at the HamRadio-2026 demo the receiver-led rate ladder took **up to 6
+  retries** to reach a decodable mode after an SNR drop — it only stepped down one rung per
+  `nack_threshold` failures. Make the downshift instant and SNR-directed, keep the upshift cautious,
+  and validate the SNR/step thresholds the jump relies on.
+- **Design decision:** (a) **asymmetric stepping** in `OtaRateController::on_rx_frame`: add a
+  `level_for_snr(snr)` direct lookup (highest mapped rung whose `snr_floor ≤ SNR`); on a marginal
+  decode *or* a low-SNR NACK, jump `rx_recommended` straight to that rung (possibly several steps
+  down) instead of crawling; **upshift unchanged** — one proven mapped step, gated on the confirmed
+  level's ceiling, never trusting an optimistic SNR to leap up. A transient failure at *good* SNR
+  keeps the existing consecutive-NACK hysteresis (a blip can't drop the rate). (b) **Desync-safe:**
+  the fast-down only moves `rx_recommended`; `rx_confirmed` (the just-decoded level) stays in
+  `rx_candidates`, so a lost downshift ACK can't desync — the decode-path lockstep theorem holds
+  unchanged. (c) **Calibration harness** (`tests/snr_floor_calibration.rs`, `--ignored`) sweeps AWGN
+  SNR per rung to derive the empirical floors — the "quick simulation run." Running it caught **SL7
+  (8PSK500, no FEC) mis-set at 14 dB vs 18 dB measured** — exactly the optimistic floor that made the
+  controller recommend a mode ~4 dB below where it decodes; fixed to 18 dB. Lower rungs measured
+  at/below their configured floors (conservative = fading margin), so only SL7 was wrong.
+- **Implementation:** `level_for_snr` + asymmetric `on_rx_frame` in `crates/openpulse-core/src/ota_rate.rs`;
+  SL7 floor 14 → 18 in `crates/openpulse-core/src/profile.rs`; new
+  `crates/openpulse-modem/tests/snr_floor_calibration.rs`.
+- **Tests:** `cargo test -p openpulse-core --lib ota_rate` — **15 pass** (new: fast-downshift on first
+  low-SNR NACK, multi-step low-SNR downshift, cautious one-step upshift, transient-failure hysteresis;
+  updated: asymmetric invariant; preserved: never-desync-under-ACK-loss, climb, clamps, lock). Full
+  core lib **255 pass**; all openpulse-modem test binaries green; calibration sweep run manually
+  (produced the SL7 finding); clippy `-D warnings` + fmt clean; workspace builds.
+- **Test results:** ota_rate 15/15, core 255/255, modem suites green, calibration sweep ran. The
+  6-retry down-stepping is replaced by a single-round jump to the SNR-adequate rung.
+
+---
+
 ## 2026-07-01 — feature: ARDOP station ID + real SENDID/CWID (REQ-REG-10, CAP-39/CAP-66)
 
 - **Requirement/change:** the auto-ID from CAP-66 covered only the daemon path; the **ARDOP TNC**
