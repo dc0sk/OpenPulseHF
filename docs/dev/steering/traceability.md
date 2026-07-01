@@ -9,6 +9,37 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-01 — fix: hpx_hf FEC-protected upper ladder + calibrated floors (CAP-37)
+
+- **Requirement/change:** raising SL7's floor to 18 dB (prior entry) exposed a duplicate (SL7=SL9=18)
+  and a gap (nothing usable 11→16 dB). Root cause: **`hpx_hf` assigned no per-level FEC at all**
+  (`fec_modes: [None; 21]`) — the OTA ladder ran raw, so 8PSK500 needed 18 dB and the dense SCFDMA
+  rungs were effectively unusable. Do the two follow-ups (calibrate the SCFDMA rungs; give 8PSK500 a
+  FEC variant) and rebuild the upper ladder coherently.
+- **Design decision:** assign per-level FEC and recalibrate floors from the AWGN sweep with the FEC in
+  place. **SL7 8PSK500 → light RS** (measured 9 dB; net ~1312 bps stays *above* QPSK500's 1000 bps, so
+  it remains a faster rung — chosen over SoftConcatenated which measured 6 dB but would make it
+  net-slower than QPSK500 and misplace it). **SL8–11 SCFDMA → SoftConcatenated** (dense modes only run
+  FEC-protected; measured 8PSK 9 / 16QAM 12 / 32QAM 17 / 64QAM 15 dB). Floors set monotonic with ~2–3
+  dB fading margin (SL7 12, SL8 14, SL9 16, SL10 20, SL11 22) → kills the 18 dB duplicate, fills the
+  11→16 gap (8PSK500 now a real 12 dB rung), keeps the ladder monotonic; ceilings lowered so each new
+  rung is reachable on the cautious upshift. **Findings surfaced by the sweep, documented in-code:**
+  (1) cross-32QAM (SL10) AWGN-measures *harder* than 64QAM (SL11) — a soft-demod weakness; floors
+  forced monotonic since 64QAM is denser and needs more on fading. (2) With FEC, the wideband SCFDMA
+  rungs decode below the narrowband PSK rungs on AWGN (bandwidth advantage) — expected; `level_for_snr`
+  picks the highest adequate rung so dominated rungs are simply never selected.
+- **Implementation:** `fec_modes` + recalibrated `snr_floors`/`snr_ceilings` in
+  `crates/openpulse-core/src/profile.rs::hpx_hf`; calibration harness extended to sweep the FEC rungs
+  (SCFDMA plugin registered, per-rung FEC) in `crates/openpulse-modem/tests/snr_floor_calibration.rs`.
+- **Tests:** core lib **255/255**, adaptive_profile_integration **13/13**, ota_rate_lockstep **3/3**,
+  modcod_ladder **10/10**, full openpulse-modem suite green (58 result lines, 0 failed); clippy
+  `-D warnings` + fmt clean; workspace builds. Calibration sweeps run manually to derive the floors.
+- **Test results:** all suites green; the FEC assignment is transparent to the lockstep/adaptive tests
+  (they exercise stepping via SNR extremes). hpx_hf upper ladder is now FEC-protected, gap-free, and
+  duplicate-free with data-derived floors.
+
+---
+
 ## 2026-07-01 — feature: asymmetric fast-downshift + SNR-floor calibration (CAP-33)
 
 - **Requirement/change:** at the HamRadio-2026 demo the receiver-led rate ladder took **up to 6
