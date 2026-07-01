@@ -1,15 +1,15 @@
 ---
 title: "OpenPulseHF Test Matrix — By Channel"
-date: "2026-07-01T21:04:43Z"
-git_commit: "8e2d35c"
-git_commit_full: "8e2d35c63365de7f2bb3593d346f22c11d89b6e9"
+date: "2026-06-29T15:12:02Z"
+git_commit: "76de87e"
+git_commit_full: "76de87e18f18027cf13f5879bba387b173877bf5"
 git_dirty: true
 workspace_version: "0.3.0"
 tier: "quick"
 total_cases: 555
 passed: 555
 failed: 0
-duration_s: 14.8
+duration_s: 85.5
 generator: "openpulse-testmatrix"
 crates_tested:
   - "bpsk-plugin"
@@ -32,7 +32,7 @@ crates_tested:
 
 # Results by Channel
 
-**Run:** commit `8e2d35c` ⚠ dirty — v0.3.0 — 2026-07-01 21:04:43 UTC
+**Run:** commit `76de87e` ⚠ dirty — v0.3.0 — 2026-06-29 15:12:02 UTC
 
 | Channel | 64QAM1000 | 64QAM2000-RRC | 64QAM500 | 8PSK1000 | 8PSK1000-HF | 8PSK1000-HF-RRC | 8PSK1000-RRC | 8PSK2000-RRC | 8PSK500 | 8PSK500-RRC | BPSK100 | BPSK250 | BPSK250-RRC | BPSK31 | BPSK63 | FSK4-ACK | HPX500 | HPX_HF | HPX_OFDM_HF | HPX_WIDEBAND | OFDM16 | OFDM52 | OFDM52-16QAM | OFDM52-32QAM | OFDM52-64QAM | OFDM52-8PSK | PILOT-16QAM1000 | PILOT-16QAM500 | PILOT-16QAM500-RRC | PILOT-32APSK500 | PILOT-8PSK500 | PILOT-QPSK500 | PILOT-QPSK500-RRC | QPSK1000 | QPSK1000-HF | QPSK1000-HF-RRC | QPSK1000-RRC | QPSK125 | QPSK2000 | QPSK2000-RRC | QPSK250 | QPSK500 | QPSK500-RRC | SCFDMA16 | SCFDMA26-16QAM | SCFDMA26-32QAM | SCFDMA26-8PSK | SCFDMA52 | SCFDMA52-16QAM | SCFDMA52-32QAM | SCFDMA52-64QAM | SCFDMA52-64QAM-P4 | SCFDMA52-8PSK | Total |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|

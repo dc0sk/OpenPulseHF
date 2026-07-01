@@ -390,8 +390,10 @@ fn write_csv(dir: &Path, results: &[TestResult], meta: &RunMeta) {
     let mut out = String::new();
     // run_date and run_commit are included as the first two columns so every row
     // is self-contained when multiple CSV files are concatenated for analysis.
+    // `result` is a self-documenting `pass`/`fail`/`skip` string (was the pair of 1/0 `passed`,
+    // `skipped` columns, which invited misreading `1`/`0` as `true`/`false` in ad-hoc analysis).
     out.push_str(
-        "run_date,run_commit,use_case,mode,fec,compression,channel,snr_db,payload_bytes,passed,skipped,ber,effective_bps,duration_ms,note\n",
+        "run_date,run_commit,use_case,mode,fec,compression,channel,snr_db,payload_bytes,result,ber,effective_bps,duration_ms,note\n",
     );
 
     let run_date = meta.date.format("%Y-%m-%dT%H:%M:%SZ").to_string();
@@ -414,8 +416,15 @@ fn write_csv(dir: &Path, results: &[TestResult], meta: &RunMeta) {
             .map(|b| format!("{b:.1}"))
             .unwrap_or_default();
         let note = r.note.as_deref().unwrap_or("").replace('"', "\"\"");
+        let result = if r.skipped {
+            "skip"
+        } else if r.passed {
+            "pass"
+        } else {
+            "fail"
+        };
         out.push_str(&format!(
-            "{run_date},{run_commit},{},{},{},{},{},{},{},{},{},{},{},{},\"{}\"\n",
+            "{run_date},{run_commit},{},{},{},{},{},{},{},{result},{},{},{},\"{}\"\n",
             r.case.use_case.label(),
             r.case.mode,
             fec_label(r.case.fec_mode),
@@ -423,8 +432,6 @@ fn write_csv(dir: &Path, results: &[TestResult], meta: &RunMeta) {
             r.case.channel.label(),
             snr_db,
             r.case.payload_len,
-            r.passed as u8,
-            r.skipped as u8,
             ber,
             eff_bps,
             r.duration_ms,

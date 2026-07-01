@@ -1,15 +1,15 @@
 ---
 title: "OpenPulseHF Test Matrix — Summary"
-date: "2026-07-01T20:44:29Z"
-git_commit: "82cfbc5"
-git_commit_full: "82cfbc5be399783f428b559436adefbd721fdd6b"
-git_dirty: false
+date: "2026-07-01T21:09:08Z"
+git_commit: "8e2d35c"
+git_commit_full: "8e2d35c63365de7f2bb3593d346f22c11d89b6e9"
+git_dirty: true
 workspace_version: "0.3.0"
 tier: "full"
 total_cases: 6022
 passed: 3480
 failed: 2542
-duration_s: 230.7
+duration_s: 234.7
 generator: "openpulse-testmatrix"
 crates_tested:
   - "bpsk-plugin"
@@ -32,9 +32,9 @@ crates_tested:
 
 # Test Matrix Summary
 
-**Run:** commit `82cfbc5` — v0.3.0 — 2026-07-01 20:44:29 UTC
+**Run:** commit `8e2d35c` ⚠ dirty — v0.3.0 — 2026-07-01 21:09:08 UTC
 
-**3480/6022 cases passed** in 230.7s
+**3480/6022 cases passed** in 234.7s
 
 ## By Use Case
 
