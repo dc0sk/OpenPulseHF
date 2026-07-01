@@ -53,6 +53,17 @@ changes iff the mapping changes, so it detects ladder drift automatically — a 
   detection instead of silent desync. OTA **without** a handshake, or with a compatible / un-advertised
   peer, is unaffected (the guard fires only on a positive mismatch), preserving today's behaviour.
 
+### Compatibility characteristic (same as the earlier `grid`/`fec`/`compression` fields)
+
+`skip_serializing_if` makes the canonical JSON byte-identical to a legacy frame **only when the field
+is unset** (name `""`, fp `0`). When a station *does* advertise a ladder, the signed canonical
+includes the new fields, so a **pre-#615 verifier — which can't reconstruct those fields — will fail
+the signature** and reject the frame. This is the established trade-off for every additive signed
+field here, and it degrades gracefully: the signed handshake is *additive* (the local `ConnectPeer`
+trust eval and un-guarded OTA still run), so a new advertising station and an old station simply fall
+back to today's un-verified, un-guarded behaviour rather than mis-decoding. Two pre-#615 peers, two
+post-#615 peers, and old→new(non-advertising) all verify normally.
+
 ## Chosen approach (2026-07-01)
 
 Among the options considered — (A) freeze + version + handshake guard, (B) self-describing rate frames
