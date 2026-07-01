@@ -9,6 +9,31 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-01 — fix: 2D-Gray remap of cross-32QAM constellation (CAP-20, fixes SL10>SL11 inversion)
+
+- **Requirement/change:** the calibration sweeps found SCFDMA52-32QAM (SL10) AWGN-measured *harder*
+  (17 dB) than the denser SCFDMA52-64QAM (SL11, 15 dB) — physically backwards, dominating SL10. Root
+  cause: `qam32()` applied a **1D Gray code over a 2D raster** (`QAM32_SPATIAL[gray5_to_natural(label)]`),
+  which is not a 2D-Gray mapping — Euclidean-adjacent points differed by ~2 bits vs 64QAM's clean
+  product-Gray (~1). Pre-release, so remapped in place (user's call — no ladder diversity before release).
+- **Design decision:** replace with a **direct label→point table** (`QAM32_BY_LABEL`) optimised by
+  simulated annealing (`tests/qam32_gray_optimizer.rs`) to minimise total Hamming distance between
+  Euclidean-nearest-neighbour points: **avg 2.04 → 1.36 bits/neighbour** (near-optimal for a
+  non-rectangular cross constellation; bit-4 cleanly splits the I half-planes). Dropped the
+  `gray5_to_natural`/`natural5_to_gray` indirection for QAM32 (map/demod index the table directly). The
+  soft demod follows automatically via `constellation_points`.
+- **Implementation:** `QAM32_BY_LABEL` + `qam32`/`qam32_demod` rewrite in
+  `crates/openpulse-dsp/src/constellation.rs`; SL10 floor 20→17 in `crates/openpulse-core/src/profile.rs`
+  (32QAM is now honestly, not forcibly, below SL11); optimizer tool + a low-Hamming regression test.
+- **Tests:** `qam32_nearest_neighbours_are_low_hamming` (locks avg < 1.6); existing round-trip
+  (`hard_demap_round_trips_all_constellations`) + bijection (`all_points_distinct`) still pass; scfdma
+  plugin suite green. Calibration re-run: **SCFDMA52-32QAM 17 → 9 dB AWGN** — now more robust than
+  64QAM, inversion fixed. Clippy `-D warnings` + fmt clean, workspace builds.
+- **Test results:** dsp/scfdma/core suites green; 32QAM AWGN floor 17→9 dB (8 dB gain); ladder now
+  physically monotonic (SL9 16QAM < SL10 32QAM < SL11 64QAM) instead of forced.
+
+---
+
 ## 2026-07-01 — feature: handshake ladder-compatibility guard (CAP-01/CAP-33, backward compat inc. 2)
 
 - **Requirement/change:** increment 2 of the freeze+version+handshake-guard strategy — detect a

@@ -266,7 +266,8 @@ fn calibrate_candidate_fec_rungs() {
     // The FEC-protected hpx_hf upper ladder (mode, FEC) as assigned in `SessionProfile::hpx_hf`:
     // 8PSK500 gets *light* RS (keeps it a faster rung than QPSK500 while filling the 11→16 gap); the
     // dense SCFDMA rungs get soft-concatenated FEC (they only run FEC-protected). Re-run to re-derive
-    // the floors if the DSP changes; cross-32QAM (SL10) AWGN-measures harder than 64QAM (SL11).
+    // the floors if the DSP changes. (The old cross-32QAM inversion — SL10 measuring harder than
+    // SL11 — was fixed at the root by the 2D-Gray remap in #616: 32QAM dropped 17→9 dB AWGN.)
     let candidates = [
         ("8PSK500", FecMode::Rs),
         ("SCFDMA52-8PSK", FecMode::SoftConcatenated),

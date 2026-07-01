@@ -397,12 +397,13 @@ impl SessionProfile {
         // SNR floors — the SNR/step pairs the fast-downshift jumps to. Lower rungs (SL2–6, no FEC)
         // kept as measured-conservative (fading margin). Upper rungs recalibrated *with their FEC*
         // and set monotonic with ~2–3 dB fading margin over the AWGN measurement (in parens):
-        //   SL7 8PSK500+RS (meas 9), SL8 SCFDMA52-8PSK+SC (9), SL9 SCFDMA52-16QAM+SC (12),
-        //   SL10 SCFDMA52-32QAM+SC (17), SL11 SCFDMA52-64QAM+SC (15). This kills the old 18 dB
-        //   duplicate (SL7/SL9), fills the 11→16 gap (8PSK500 now a real 12 dB rung), and keeps the
-        //   ladder monotonic. NOTE: cross-32QAM (SL10) AWGN-measures *harder* than 64QAM (SL11) — a
-        //   soft-demod weakness; floors are forced monotonic (SL10<SL11) as 64QAM is denser and needs
-        //   more on fading. Re-run the calibration sweep if the DSP changes.
+        //   SL7 8PSK500+RS (meas 9), SL8 SCFDMA52-8PSK+SC (9), SL9 SCFDMA52-16QAM+SC (11),
+        //   SL10 SCFDMA52-32QAM+SC (9 — see below), SL11 SCFDMA52-64QAM+SC (15). This kills the old
+        //   18 dB duplicate (SL7/SL9), fills the 11→16 gap (8PSK500 now a real 12 dB rung), and keeps
+        //   the ladder monotonic. The old cross-32QAM soft-demod weakness (SL10 measured *harder* than
+        //   64QAM) was FIXED at the root by the 2D-Gray constellation remap (PR #616): SCFDMA52-32QAM
+        //   dropped 17→9 dB AWGN, so it is now genuinely more robust than 64QAM and its floor is
+        //   honestly (not forcibly) below SL11's. Re-run the calibration sweep if the DSP changes.
         let mut snr_floors = [None; 21];
         snr_floors[SpeedLevel::Sl2 as usize] = Some(3.0_f32);
         snr_floors[SpeedLevel::Sl3 as usize] = Some(4.0_f32);
@@ -412,7 +413,9 @@ impl SessionProfile {
         snr_floors[SpeedLevel::Sl7 as usize] = Some(12.0_f32);
         snr_floors[SpeedLevel::Sl8 as usize] = Some(14.0_f32);
         snr_floors[SpeedLevel::Sl9 as usize] = Some(16.0_f32);
-        snr_floors[SpeedLevel::Sl10 as usize] = Some(20.0_f32);
+        // SL10 (32QAM) lowered 20→17 after the Gray remap (#616) made it decode at 9 dB AWGN — still
+        // ≥ SL9 for level-monotonicity, with fading margin (SCFDMA-QAM is good-conditions-only on HF).
+        snr_floors[SpeedLevel::Sl10 as usize] = Some(17.0_f32);
         snr_floors[SpeedLevel::Sl11 as usize] = Some(22.0_f32);
         // Ceilings gate the cautious one-step upshift; set just above each rung's floor and monotonic
         // so every new rung is actually reachable on the way up (ceiling(L) ≥ floor(L+1)).

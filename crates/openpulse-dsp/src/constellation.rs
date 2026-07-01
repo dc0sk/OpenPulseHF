@@ -16,41 +16,45 @@ const QAM64_SCALE: f32 = 0.154_303_35; // 1/sqrt(42)
 /// 1/√20 — normalisation scale for cross-32QAM (unit mean power).
 pub const QAM32_SCALE: f32 = 0.223_606_8;
 
-/// Raster-scan ordering of the 32 cross-32QAM points: Q=5 → −5, I=−5 → +5.
-/// The four corners (|I|=5 and |Q|=5) are absent (36 − 4 = 32).
-pub const QAM32_SPATIAL: [(i8, i8); 32] = [
-    (-3, 5),
-    (-1, 5),
-    (1, 5),
-    (3, 5),
-    (-5, 3),
-    (-3, 3),
-    (-1, 3),
-    (1, 3),
-    (3, 3),
-    (5, 3),
-    (-5, 1),
-    (-3, 1),
-    (-1, 1),
-    (1, 1),
-    (3, 1),
-    (5, 1),
-    (-5, -1),
-    (-3, -1),
-    (-1, -1),
-    (1, -1),
-    (3, -1),
-    (5, -1),
-    (-5, -3),
-    (-3, -3),
-    (-1, -3),
-    (1, -3),
-    (3, -3),
-    (5, -3),
-    (-3, -5),
-    (-1, -5),
-    (1, -5),
-    (3, -5),
+/// Cross-32QAM constellation as a **direct label→point table** (index = 5-bit label). Optimised for
+/// 2D-Gray: the labels minimise the total Hamming distance between Euclidean-adjacent points
+/// (avg **1.36** bits/nearest-neighbour vs 2.04 for the old 1D-Gray-over-2D-raster mapping), which is
+/// what the soft demod's LLRs and the bit-error rate depend on. Derived by simulated annealing in
+/// `tests/qam32_gray_optimizer.rs` — re-run that to regenerate. The four corners (|I|=|Q|=5) are
+/// absent (36 − 4 = 32). Bit 4 (MSB) cleanly separates the I<0 / I>0 half-planes.
+pub const QAM32_BY_LABEL: [(i8, i8); 32] = [
+    (-1, 3),  // 00000
+    (-1, 5),  // 00001
+    (-1, 1),  // 00010
+    (-1, -1), // 00011
+    (-3, 3),  // 00100
+    (-3, 5),  // 00101
+    (-3, 1),  // 00110
+    (-3, -1), // 00111
+    (-3, -5), // 01000
+    (-3, -3), // 01001
+    (-1, -5), // 01010
+    (-1, -3), // 01011
+    (-5, 3),  // 01100
+    (-5, -3), // 01101
+    (-5, 1),  // 01110
+    (-5, -1), // 01111
+    (1, 3),   // 10000
+    (1, 5),   // 10001
+    (1, 1),   // 10010
+    (1, -1),  // 10011
+    (3, 3),   // 10100
+    (3, 5),   // 10101
+    (3, 1),   // 10110
+    (3, -1),  // 10111
+    (3, -5),  // 11000
+    (3, -3),  // 11001
+    (1, -5),  // 11010
+    (1, -3),  // 11011
+    (5, 3),   // 11100
+    (5, -3),  // 11101
+    (5, 1),   // 11110
+    (5, -1),  // 11111
 ];
 
 // ── Gray-code helpers ──────────────────────────────────────────────────────────
@@ -133,7 +137,7 @@ fn qam16(bits: u8) -> Complex32 {
 }
 
 fn qam32(bits: u8) -> Complex32 {
-    let (i, q) = QAM32_SPATIAL[gray5_to_natural(bits) as usize];
+    let (i, q) = QAM32_BY_LABEL[(bits & 0x1f) as usize];
     Complex32::new(i as f32 * QAM32_SCALE, q as f32 * QAM32_SCALE)
 }
 
@@ -190,16 +194,17 @@ fn qam64_demod(c: Complex32) -> u8 {
 }
 
 fn qam32_demod(c: Complex32) -> u8 {
-    let mut best_idx = 0u8;
+    // The table is label-indexed, so the nearest point's index IS its label.
+    let mut best_label = 0u8;
     let mut best_d = f32::INFINITY;
-    for (idx, &(i, q)) in QAM32_SPATIAL.iter().enumerate() {
+    for (label, &(i, q)) in QAM32_BY_LABEL.iter().enumerate() {
         let d = (c.re - i as f32 * QAM32_SCALE).powi(2) + (c.im - q as f32 * QAM32_SCALE).powi(2);
         if d < best_d {
             best_d = d;
-            best_idx = idx as u8;
+            best_label = label as u8;
         }
     }
-    natural5_to_gray(best_idx)
+    best_label
 }
 
 /// Nearest PAM-4 Gray code for a real amplitude (thresholds at 0 and ±2×scale).
@@ -503,5 +508,29 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn qam32_nearest_neighbours_are_low_hamming() {
+        // Lock in the 2D-Gray optimization of the cross-32QAM label→point table: adjacent points must
+        // differ by few bits (the old 1D-Gray-over-raster mapping averaged ~2.0; the optimized table
+        // ~1.36). This is what the soft LLRs / BER depend on; guards against regressing the mapping.
+        let pts = constellation_points(5);
+        let step = 2.0 * QAM32_SCALE; // nearest-neighbour spacing in normalized units
+        let tol = step * 0.1;
+        let (mut total, mut count) = (0.0f32, 0.0f32);
+        for i in 0..pts.len() {
+            for j in (i + 1)..pts.len() {
+                if ((pts[i].1 - pts[j].1).norm() - step).abs() < tol {
+                    total += (pts[i].0 ^ pts[j].0).count_ones() as f32;
+                    count += 1.0;
+                }
+            }
+        }
+        let avg = total / count;
+        assert!(
+            avg < 1.6,
+            "cross-32QAM nearest-neighbour avg Hamming {avg:.3} too high — mapping regressed?"
+        );
     }
 }
