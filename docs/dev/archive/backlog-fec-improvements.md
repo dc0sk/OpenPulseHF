@@ -81,7 +81,7 @@ Generators: G0=0o133, G1=0o171 (NASA/3GPP standard).  64 states.  Branch metric 
 
 **What was delivered:**
 - `SoftViterbiCodec` in `soft_viterbi.rs` — K=7 rate-1/2 encoder + soft-decision Viterbi decoder; `decode_soft()` returns `Result<Vec<u8>, ModemError>`; traceback from state 0 (flush-terminated trellis)
-- `ModulationPlugin::demodulate_soft()` default method in `plugin.rs` — hard ±1.0 fallback; BPSK overrides with real differential dot products; QPSK overrides with I/Q projections; 8PSK uses hard fallback + TODO for max-log-MAP
+- `ModulationPlugin::demodulate_soft()` default method in `plugin.rs` — hard ±1.0 fallback; BPSK overrides with real differential dot products; QPSK overrides with I/Q projections; 8PSK uses hard fallback + TODO for max-log-MAP (TODO since **resolved** — max-log-MAP `demodulate_soft()` shipped in PR #187–#192, `plugins/psk8/src/demodulate.rs:162`)
 - `FecMode::SoftConcatenated` (strength 6): K=7 soft Conv inner + RS(255,223) outer
 - `transmit_with_soft_viterbi_fec` / `receive_with_soft_viterbi_fec` in `ModemEngine`
 - Integration tests: round-trip, 5% BER soft vs hard comparison, coding gain over uncoded, soft vs hard at low SNR

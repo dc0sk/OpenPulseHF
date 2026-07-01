@@ -9,6 +9,30 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-01 — traceability fix: station-ID coverage corrected (gap rescan)
+
+- **Requirement/change:** a project-wide gap rescan (TODO/FIXME/stub/dead-code/deferred sweep) found
+  the matrix overstated station-ID coverage: CAP-39 claimed the ARDOP `CWID`/`SENDID` commands
+  "provide station ID" and covered REQ-REG-05 (decodable ID) + REQ-REG-10 (interval ID), but both
+  commands are honest warn-logged stubs (`crates/openpulse-ardop/src/command.rs:249,257`) — they
+  accept+echo but transmit no CW-ID/ID-frame, and no independent auto-ID path exists in the codebase.
+- **Design decision:** correct the record, not the code (the code is a deliberate, documented stub —
+  not a defect). REQ-REG-05 is genuinely met on air by the **signed-handshake callsign** (the ConReq
+  `station_id` rides RF, decodable by the receiver, #584) → re-attribute REQ-REG-05 to **CAP-01**.
+  REQ-REG-10 needs a **periodic auto-ID timer that does not exist** → reclassify ✅ covered → ⚠ **gap**
+  and add it to the deferred REQ-REG regulatory set (Phase 5.5-reg). Clear CAP-39's `Implements` to
+  `—` and document the stub status inline.
+- **Implementation:** `docs/dev/steering/traceability-matrix.md` — REQ-REG-05 row → CAP-01; REQ-REG-10
+  row → `—`/⚠ gap; CAP-01 `Implements` += REQ-REG-05 (+ design note on the on-air callsign);
+  CAP-39 `Implements` → `—` (+ stub note); REQ-REG gap bullet gains `/10`; "Resolved 2026-07-01"
+  subsection bullet. Also cleared a stale TODO in `docs/dev/archive/backlog-fec-improvements.md`
+  (8PSK max-log-MAP soft demod was shipped in #187–#192, not still a TODO).
+- **Tests:** docs-only; structural re-check confirms REQ↔CAP agree both directions (REQ-REG-05↔CAP-01,
+  REQ-REG-10 uncovered like the other ⚠ REG rows) and no dangling CAP-39 REG links remain.
+- **Test results:** matrix structural invariants hold; no code touched, so no behaviour delta.
+
+---
+
 ## 2026-07-01 — housekeeping: rustfmt cleanup, FreeDV-diversity flag, traceability sync (docs/chore)
 
 - **Requirement/change:** two follow-ons after the CE-SSB reference-mining PR (#602). (a) `cargo fmt
