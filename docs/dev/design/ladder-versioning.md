@@ -25,7 +25,15 @@ detection today.
 
 ## Policy: freeze published ladders; version changes
 
-**A published ladder is a wire contract. Do not mutate it in place.**
+**Pre-first-release (now):** there is no shipped release, so there are no in-field peers to stay
+compatible with. The ladder — including a mode's internal DSP (constellation, pulse shaping) — may be
+**reworked in place** as often as needed; the goal is to reach the first release with a *single*
+ladder, not a versioned family. Every station rebuilds from source, so no diversity exists. (Example:
+PR #616 re-Gray-coded the cross-32QAM constellation in place — a wire change the fingerprint does *not*
+detect, since it hashes mode *strings*, not a mode's internal DSP. Fine pre-release; see the caveat
+below.)
+
+**At and after the first release, a published ladder is a wire contract. Do not mutate it in place.**
 
 - Changing any `(level → mode)` or `(level → FEC)` entry of a shipped profile, or adding/removing a
   step, is a **breaking wire change**. It must ship as a **new named profile** (e.g. `hpx_hf_v2`),
@@ -44,6 +52,11 @@ changes iff the mapping changes, so it detects ladder drift automatically — a 
 
 - The daemon logs its active ladder fingerprint at OTA startup (`ladder_fingerprint=…`). Operators can
   diff it across two stations to confirm they will interoperate.
+- **Caveat — the fingerprint covers mode *strings*, not a mode's internal DSP.** Two builds that map
+  `SL10 → "SCFDMA52-32QAM"` fingerprint the same even if the *constellation bit-mapping or pulse
+  shaping* of that mode changed on the wire (as in #616). Pre-release that's harmless; **post-release,
+  a mode's PHY is also frozen** — a wire-affecting DSP change to a shipped mode must ship under a new
+  mode name (so the fingerprint moves), exactly like a ladder change ships under a new profile name.
 - **Handshake guard (shipped):** the signed `ConReq`/`ConAck` advertise `(profile_name,
   profile_fingerprint)` in the signature-covered body (skip-serialized when unset, so un-advertised
   frames stay byte-identical to legacy — full signature compatibility). On a completed handshake the
