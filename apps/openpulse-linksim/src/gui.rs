@@ -24,6 +24,9 @@ use openpulse_linksim::{ChannelSpec, FrameStep, LinkParams, LinkSim};
 
 const MIN_DB: f32 = -100.0;
 const MAX_DB: f32 = 0.0;
+/// Welch segments averaged for each panel's spectrum: enough to read the envelope, few enough that
+/// the finite-sample variance keeps the trace visibly "breathing" over the actual modulated data.
+const SPECTRUM_WELCH_SEGMENTS: usize = 6;
 const HIST: usize = 600; // rolling plot history (frames)
 const WINDOW: usize = 24; // windowed-throughput averaging window (frames)
 /// SNR slider bounds (dB) — shared by the slider and the randomize feature.
@@ -139,7 +142,9 @@ fn compute_panel(ps: &mut PowerSpectrum, samples: &[f32], sps: usize, want_iq: b
         };
     }
     PanelData {
-        spectrum: ps.compute(samples),
+        // Welch PSD over the whole burst (not just the fixed preamble window), so the trace
+        // reflects the actual random modulated data and breathes naturally frame-to-frame.
+        spectrum: ps.compute_welch(samples, SPECTRUM_WELCH_SEGMENTS),
         iq: if want_iq {
             baseband_iq(samples, sps)
         } else {
