@@ -167,6 +167,25 @@ impl OtaRateController {
             .unwrap_or(bounded)
     }
 
+    /// Highest mapped level within `[lo, hi]` the measured SNR supports — the "SNR-adequate"
+    /// level, per the profile's per-level `snr_floor` thresholds. A level with no floor (the
+    /// most robust rungs) is always adequate; when the SNR is below even the lowest floor this
+    /// falls back to `lo`. This is the direct SNR→level lookup the fast downshift jumps to.
+    fn level_for_snr(&self, snr_db: f32) -> SpeedLevel {
+        let (lo, hi) = (self.lo(), self.hi());
+        self.levels
+            .iter()
+            .copied()
+            .filter(|&l| l >= lo && l <= hi)
+            .filter(|&l| {
+                self.profile
+                    .snr_floor_for_level(l)
+                    .is_none_or(|f| snr_db >= f)
+            })
+            .max()
+            .unwrap_or(lo)
+    }
+
     // ── TX side (we follow the peer) ───────────────────────────────────────────
 
     /// Adopt the peer's absolute rate recommendation as our TX level.
@@ -260,11 +279,26 @@ impl OtaRateController {
         }
         match outcome {
             RxOutcome::Failed => {
-                self.rx_consecutive_nack = self.rx_consecutive_nack.saturating_add(1);
-                if self.rx_consecutive_nack >= self.profile.nack_threshold {
+                // Asymmetric fast downshift: if the SNR estimate already explains the failure
+                // (the SNR-adequate level is below what we're recommending), jump the
+                // recommendation straight there instead of crawling down one rung per NACK
+                // threshold — the "6 retries to find the step" symptom. `rx_confirmed` stays put
+                // as the fallback candidate so a lost downshift ACK can't desync the receiver
+                // (`rx_candidates` still covers whatever the sender is transmitting).
+                let snr_level = self.level_for_snr(snr_db);
+                if snr_level < self.rx_recommended {
                     self.rx_consecutive_nack = 0;
-                    self.rx_confirmed = self.prev_mapped(self.rx_confirmed);
-                    self.rx_recommended = self.rx_confirmed;
+                    self.rx_recommended = snr_level;
+                } else {
+                    // SNR doesn't explain the failure (a transient fade or collision at an
+                    // otherwise-adequate SNR): keep the consecutive-NACK hysteresis so a single
+                    // blip can't drop the rate, stepping the anchor down one rung at the threshold.
+                    self.rx_consecutive_nack = self.rx_consecutive_nack.saturating_add(1);
+                    if self.rx_consecutive_nack >= self.profile.nack_threshold {
+                        self.rx_consecutive_nack = 0;
+                        self.rx_confirmed = self.prev_mapped(self.rx_confirmed);
+                        self.rx_recommended = self.rx_confirmed;
+                    }
                 }
                 RxAck {
                     ack_type: AckType::Nack,
@@ -277,13 +311,20 @@ impl OtaRateController {
                 // adopted it, else the fallback level).
                 self.rx_confirmed = self.clamp_mapped(level);
 
-                // Choose the next recommendation: at most one mapped step from the
-                // freshly confirmed anchor, gated by the per-level SNR thresholds.
-                let floor = self.profile.snr_floor_for_level(self.rx_confirmed);
-                let ceiling = self.profile.snr_ceiling_for_level(self.rx_confirmed);
-                self.rx_recommended = if floor.is_some_and(|f| snr_db < f) {
-                    self.prev_mapped(self.rx_confirmed)
-                } else if ceiling.is_some_and(|c| snr_db >= c) {
+                // Asymmetric recommendation from the SNR-adequate level:
+                //  • fast DOWN — if SNR can't support the confirmed level, jump straight to the
+                //    SNR-adequate rung (possibly several steps); the just-decoded `rx_confirmed`
+                //    stays in the candidate set, so this is desync-safe.
+                //  • cautious UP — never trust an optimistic SNR to leap up: climb one proven
+                //    mapped step only, and only once SNR clears the confirmed level's ceiling.
+                let snr_level = self.level_for_snr(snr_db);
+                self.rx_recommended = if snr_level < self.rx_confirmed {
+                    snr_level
+                } else if self
+                    .profile
+                    .snr_ceiling_for_level(self.rx_confirmed)
+                    .is_some_and(|c| snr_db >= c)
+                {
                     self.next_mapped(self.rx_confirmed)
                 } else {
                     self.rx_confirmed
@@ -339,9 +380,9 @@ mod tests {
     }
 
     #[test]
-    fn recommendation_stays_within_one_mapped_step_of_confirmed() {
+    fn recommendation_is_at_most_one_step_above_confirmed_but_may_drop_further() {
         let mut c = ctrl();
-        // Drive a varied SNR sequence; the invariant must hold after every frame.
+        // Drive a varied SNR sequence; the asymmetric invariant must hold after every frame.
         let snrs = [
             HIGH_SNR, HIGH_SNR, LOW_SNR, HIGH_SNR, 0.0, HIGH_SNR, LOW_SNR,
         ];
@@ -350,11 +391,13 @@ mod tests {
             let _ = c.on_rx_frame(RxOutcome::Decoded(c.rx_confirmed), snr);
             let conf = c.rx_confirmed;
             let rec = c.rx_recommended;
-            // rec ∈ {prev(conf), conf, next(conf)}.
+            // Cautious UP: never more than one mapped step above the confirmed anchor.
             assert!(
-                rec == conf || rec == c.next_mapped(conf) || rec == c.prev_mapped(conf),
-                "rec {rec:?} more than one mapped step from confirmed {conf:?}"
+                rec <= c.next_mapped(conf),
+                "rec {rec:?} more than one step above confirmed {conf:?}"
             );
+            // Fast DOWN: may drop multiple steps, but never below the configured floor.
+            assert!(rec >= c.lo(), "rec {rec:?} below the floor {:?}", c.lo());
         }
     }
 
@@ -424,9 +467,36 @@ mod tests {
     }
 
     #[test]
-    fn steps_down_after_consecutive_nacks() {
+    fn fast_downshift_on_the_first_low_snr_failure() {
+        // The HamRadio-2026 symptom: it took ~6 retries (one rung per NACK threshold) to reach a
+        // decodable rate. A single low-SNR failure must now drop the recommendation straight to the
+        // SNR-adequate floor — no crawl.
         let mut c = ctrl();
-        // Climb up first so there's room to fall.
+        let mut sender_tx = c.tx_level();
+        for _ in 0..10 {
+            let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), HIGH_SNR);
+            sender_tx = ack.recommended_level;
+        }
+        let before = c.rx_recommended;
+        assert!(
+            before > c.levels[0],
+            "precondition: climbed above the floor"
+        );
+        let ack = c.on_rx_frame(RxOutcome::Failed, LOW_SNR);
+        assert_eq!(ack.ack_type, AckType::Nack);
+        assert_eq!(
+            c.rx_recommended,
+            c.lo(),
+            "one low-SNR NACK jumps straight to the SNR-floor level"
+        );
+        assert!(c.rx_recommended < before);
+    }
+
+    #[test]
+    fn transient_failure_at_good_snr_keeps_the_nack_hysteresis() {
+        // A failure while the SNR is still adequate (collision / momentary fade) must NOT fast-drop;
+        // the consecutive-NACK hysteresis steps the anchor down one rung only at the threshold.
+        let mut c = ctrl();
         let mut sender_tx = c.tx_level();
         for _ in 0..10 {
             let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), HIGH_SNR);
@@ -434,13 +504,19 @@ mod tests {
         }
         let before = c.rx_confirmed;
         assert!(before > c.levels[0]);
-        for _ in 0..c.profile.nack_threshold {
-            let ack = c.on_rx_frame(RxOutcome::Failed, LOW_SNR);
+        for i in 0..c.profile.nack_threshold {
+            let ack = c.on_rx_frame(RxOutcome::Failed, HIGH_SNR);
             assert_eq!(ack.ack_type, AckType::Nack);
+            if i + 1 < c.profile.nack_threshold {
+                assert_eq!(
+                    c.rx_confirmed, before,
+                    "must not drop before the NACK threshold at good SNR"
+                );
+            }
         }
         assert!(
             c.rx_confirmed < before,
-            "rate should step down after the NACK threshold"
+            "steps down one rung at the NACK threshold"
         );
     }
 
@@ -510,17 +586,46 @@ mod tests {
     }
 
     #[test]
-    fn low_snr_recommends_step_down() {
+    fn low_snr_fast_downshifts_past_a_single_step() {
         let mut c = ctrl();
-        // Climb a couple steps so a down-step is possible.
+        // Climb several steps so a multi-step drop is possible.
         let mut sender_tx = c.tx_level();
         for _ in 0..6 {
             let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), HIGH_SNR);
             sender_tx = ack.recommended_level;
         }
         let conf = c.rx_confirmed;
+        assert!(
+            conf > c.next_mapped(c.lo()),
+            "precondition: climbed ≥2 steps above the floor"
+        );
+        // A decoded frame at very low SNR drops the recommendation straight to the SNR-adequate
+        // floor — several steps, not one.
         let ack = c.on_rx_frame(RxOutcome::Decoded(conf), LOW_SNR);
         assert_eq!(ack.ack_type, AckType::AckDown);
-        assert!(ack.recommended_level < conf);
+        assert_eq!(
+            ack.recommended_level,
+            c.lo(),
+            "jumps to the SNR floor level"
+        );
+        assert!(
+            c.lo() < c.prev_mapped(conf),
+            "the drop went below a single step (multi-step downshift)"
+        );
+    }
+
+    #[test]
+    fn cautious_upshift_still_climbs_one_step_only() {
+        // The up direction is unchanged: even at unbounded SNR the recommendation advances by at
+        // most one mapped step per confirmed decode (never leaps to the SNR-adequate top).
+        let mut c = ctrl();
+        let conf = c.rx_confirmed;
+        let ack = c.on_rx_frame(RxOutcome::Decoded(conf), HIGH_SNR);
+        assert_eq!(ack.ack_type, AckType::AckUp);
+        assert_eq!(
+            ack.recommended_level,
+            c.next_mapped(conf),
+            "up-shift is one proven step, not a jump to the SNR-adequate ceiling"
+        );
     }
 }

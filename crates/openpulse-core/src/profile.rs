@@ -362,7 +362,12 @@ impl SessionProfile {
         snr_floors[SpeedLevel::Sl4 as usize] = Some(5.0_f32);
         snr_floors[SpeedLevel::Sl5 as usize] = Some(9.0_f32);
         snr_floors[SpeedLevel::Sl6 as usize] = Some(11.0_f32);
-        snr_floors[SpeedLevel::Sl7 as usize] = Some(14.0_f32);
+        // SL7 (8PSK500, no FEC) recalibrated 14 → 18 dB: the AWGN sweep in
+        // `tests/snr_floor_calibration.rs` shows it only decodes reliably at ≥18 dB, so the old
+        // 14 dB floor was optimistic — it made the rate controller recommend 8PSK500 at ~15 dB
+        // where it can't decode (the "6 retries to find the step" symptom). The lower rungs measured
+        // at/below their configured floors (conservative = fading margin), so only SL7 was wrong.
+        snr_floors[SpeedLevel::Sl7 as usize] = Some(18.0_f32);
         snr_floors[SpeedLevel::Sl8 as usize] = Some(16.0_f32);
         snr_floors[SpeedLevel::Sl9 as usize] = Some(18.0_f32);
         snr_floors[SpeedLevel::Sl10 as usize] = Some(22.0_f32);
