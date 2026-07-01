@@ -42,3 +42,22 @@ fn frames_transmitted_counts_emits_and_not_receives() {
         "a second transmit must advance the counter further"
     );
 }
+
+#[test]
+fn emit_cw_id_transmits_and_counts_as_a_frame() {
+    let mut e = engine();
+    let before = e.frames_transmitted();
+    e.emit_cw_id("W1AW", None).expect("CW ID emit");
+    assert_eq!(
+        e.frames_transmitted(),
+        before + 1,
+        "a CW ID emit is one TX frame at the seam"
+    );
+    // Nothing renderable → no emit, no count.
+    e.emit_cw_id("###", None).expect("empty CW ID is a no-op");
+    assert_eq!(
+        e.frames_transmitted(),
+        before + 1,
+        "no-op CW ID must not count"
+    );
+}

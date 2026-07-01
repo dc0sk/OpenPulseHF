@@ -36,6 +36,10 @@ pub struct ArdopConfig {
     /// When `true`, TX data is echoed back as RX data without going through
     /// the modem engine.  Useful for protocol-level integration tests.
     pub loopback: bool,
+    /// Periodic auto-ID interval in seconds (REQ-REG-10); `0` disables auto-ID. From `[station]`.
+    pub auto_id_interval_secs: u64,
+    /// End-of-exchange (sign-off) ID idle in seconds; `0` disables the sign-off ID. From `[station]`.
+    pub auto_id_signoff_idle_secs: u64,
 }
 
 impl Default for ArdopConfig {
@@ -46,6 +50,8 @@ impl Default for ArdopConfig {
             data_port: 8516,
             mode: "BPSK250".into(),
             loopback: false,
+            auto_id_interval_secs: 0,
+            auto_id_signoff_idle_secs: 0,
         }
     }
 }
@@ -92,6 +98,10 @@ impl ArdopServer {
             trust_store,
             relay_forwarder,
             ptt,
+        );
+        bridge.set_auto_id(
+            config.auto_id_interval_secs,
+            config.auto_id_signoff_idle_secs,
         );
         spawn_worker(bridge.clone(), tx_data_rx);
         Self { bridge, config }

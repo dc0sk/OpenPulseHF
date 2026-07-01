@@ -50,6 +50,7 @@ async fn run_async(case: &TestCase) -> Result<Vec<u8>, String> {
         data_port,
         mode: case.mode.clone(),
         loopback: true,
+        ..Default::default()
     };
     let server = ArdopServer::new(engine, config);
     tokio::spawn(async move {

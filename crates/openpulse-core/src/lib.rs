@@ -9,6 +9,7 @@ pub mod adif;
 pub mod audio;
 pub mod compression;
 pub mod conv;
+pub mod cw_id;
 pub mod dcd;
 pub mod error;
 pub mod fec;

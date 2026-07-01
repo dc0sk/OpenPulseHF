@@ -22,6 +22,7 @@ async fn start_server(loopback: bool) -> (u16, u16) {
         data_port,
         mode: "BPSK250".into(),
         loopback,
+        ..Default::default()
     };
     let server = ArdopServer::new(engine, config);
     tokio::spawn(async move {

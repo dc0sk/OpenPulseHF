@@ -1,10 +1,11 @@
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{broadcast, RwLock};
 
 use openpulse_core::ack::{AckFrame, AckType};
 use openpulse_core::handshake::InMemoryTrustStore;
 use openpulse_core::relay::RelayForwarder;
+use openpulse_core::station_id::StationIdTimer;
 use openpulse_modem::ModemEngine;
 use openpulse_radio::{NoOpPtt, PttController};
 
@@ -44,6 +45,15 @@ pub struct ModemBridge {
     pub relay_forwarder: Option<Arc<std::sync::Mutex<RelayForwarder>>>,
     /// PTT controller for hardware transmit gating; `NoOpPtt` when not configured.
     pub ptt: Arc<std::sync::Mutex<Box<dyn PttController + Send>>>,
+    /// Periodic auto-ID interval in seconds (REQ-REG-10); `0` disables auto-ID. Set via
+    /// [`set_auto_id`](Self::set_auto_id) before the worker starts.
+    pub auto_id_interval_secs: Arc<AtomicU64>,
+    /// End-of-exchange (sign-off) ID idle in seconds; `0` disables the sign-off ID.
+    pub auto_id_signoff_idle_secs: Arc<AtomicU64>,
+    /// Host asked for an immediate ID via `SENDID` — a one-shot the worker consumes.
+    pub id_requested: Arc<AtomicBool>,
+    /// Append a Morse CW ID after the digital ID (the ARDOP `CWID` option).
+    pub cwid_enabled: Arc<AtomicBool>,
 }
 
 impl ModemBridge {
@@ -94,8 +104,22 @@ impl ModemBridge {
             trust_store: Arc::new(trust_store),
             relay_forwarder: relay_forwarder.map(|f| Arc::new(std::sync::Mutex::new(f))),
             ptt: Arc::new(std::sync::Mutex::new(ptt)),
+            auto_id_interval_secs: Arc::new(AtomicU64::new(0)),
+            auto_id_signoff_idle_secs: Arc::new(AtomicU64::new(0)),
+            id_requested: Arc::new(AtomicBool::new(false)),
+            cwid_enabled: Arc::new(AtomicBool::new(false)),
         });
         (bridge, tx_data_rx)
+    }
+
+    /// Configure periodic + end-of-exchange auto-ID (REQ-REG-10). Call before the worker
+    /// starts; `interval_secs == 0` disables auto-ID, `signoff_idle_secs == 0` disables only
+    /// the sign-off ID. `SENDID` (one-shot) and `CWID` (CW append) work regardless.
+    pub fn set_auto_id(&self, interval_secs: u64, signoff_idle_secs: u64) {
+        self.auto_id_interval_secs
+            .store(interval_secs, Ordering::Relaxed);
+        self.auto_id_signoff_idle_secs
+            .store(signoff_idle_secs, Ordering::Relaxed);
     }
 
     /// Push an unsolicited event line to all connected command clients.
@@ -122,6 +146,28 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
     let mut last_activity = std::time::Instant::now();
     // Last applied ARQBW cap (Hz); 0 = none applied yet, so the first real value always applies.
     let mut last_arq_bw: u16 = 0;
+    // Station-ID timer (REQ-REG-10): interval + end-of-exchange sign-off, armed by the engine's
+    // TX-frame delta and fired only at a frame boundary (an empty TX queue). Interval/idle are read
+    // once at startup from the bridge (set via `set_auto_id`); `SENDID`/`CWID` are polled live.
+    let id_start = std::time::Instant::now();
+    let mut id_timer = StationIdTimer::new(
+        bridge
+            .auto_id_interval_secs
+            .load(Ordering::Relaxed)
+            .saturating_mul(1000),
+        0,
+    )
+    .with_signoff_idle_ms(
+        bridge
+            .auto_id_signoff_idle_secs
+            .load(Ordering::Relaxed)
+            .saturating_mul(1000),
+    );
+    let mut tx_frames_seen = bridge
+        .engine
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .frames_transmitted();
     loop {
         // Snapshot the current mode once per iteration to avoid holding the lock across I/O.
         let mode = bridge
@@ -129,6 +175,46 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
+
+        // Station ID at a frame boundary: only on the real RF path and only when nothing is queued
+        // for TX (so an ID never splits an in-progress transfer). A host `SENDID` is a one-shot; the
+        // interval and sign-off timers arm from the engine's TX-frame delta.
+        if !bridge.loopback && bridge.tx_pending.load(Ordering::Relaxed) == 0 {
+            let now_ms = id_start.elapsed().as_millis() as u64;
+            let tx_now = bridge
+                .engine
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .frames_transmitted();
+            if tx_now != tx_frames_seen {
+                id_timer.note_tx(now_ms);
+                tx_frames_seen = tx_now;
+            }
+            let one_shot = bridge.id_requested.swap(false, Ordering::Relaxed);
+            if one_shot || id_timer.id_due(now_ms) || id_timer.signoff_due(now_ms) {
+                let callsign = bridge
+                    .callsign
+                    .try_read()
+                    .map(|c| c.clone())
+                    .unwrap_or_default();
+                if callsign.is_empty() {
+                    if one_shot {
+                        tracing::debug!("SENDID requested but no MYID callsign set; skipping");
+                    }
+                } else {
+                    let cwid = bridge.cwid_enabled.load(Ordering::Relaxed);
+                    transmit_station_id(&bridge, &mode, &callsign, cwid);
+                    // Advance regardless of TX success (a persistent PTT fault is logged, not retried
+                    // per-tick), and re-baseline so the ID frame(s) don't re-arm the timer.
+                    id_timer.mark_identified(now_ms);
+                    tx_frames_seen = bridge
+                        .engine
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .frames_transmitted();
+                }
+            }
+        }
 
         // Apply the ARQBW host cap to the adaptive ladder when it changes (no-op when no adaptive
         // session is active, since `adaptive_profile_modes()` is then empty).
@@ -270,6 +356,43 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
 
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+}
+
+/// Transmit a station identification: key PTT (worker-driven, unlike host-keyed data TX), send the
+/// digital `DE <callsign>` ID in the active mode, optionally append a Morse CW ID (`CWID`), release
+/// PTT. Best-effort — failures are logged, not propagated, so the worker keeps running.
+fn transmit_station_id(bridge: &ModemBridge, mode: &str, callsign: &str, cwid: bool) {
+    let keyed = bridge
+        .ptt
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .assert_ptt()
+        .is_ok();
+    if !keyed {
+        tracing::warn!("station-ID PTT assert failed; skipping ID");
+        return;
+    }
+    {
+        let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
+        let body = format!("DE {callsign}");
+        if let Err(e) = engine.transmit(body.as_bytes(), mode, None) {
+            tracing::warn!("station-ID transmit failed: {e}");
+        }
+        if cwid {
+            if let Err(e) = engine.emit_cw_id(callsign, None) {
+                tracing::warn!("station-ID CW transmit failed: {e}");
+            }
+        }
+    }
+    if let Err(e) = bridge
+        .ptt
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .release_ptt()
+    {
+        tracing::warn!("station-ID PTT release failed: {e}");
+    }
+    tracing::info!(callsign, mode, cwid, "transmitted station ID (ARDOP)");
 }
 
 fn do_receive(bridge: &ModemBridge, mode: &str) -> Option<Vec<u8>> {
