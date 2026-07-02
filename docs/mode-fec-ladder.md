@@ -304,6 +304,15 @@ power survives a peak-limited transmitter). Representative measurements:
 - **SC-FDMA stays as-is** — a working, hardware-validated dense-multicarrier path and the
   source of the shared constellation code (`openpulse_dsp::constellation`) the OFDM HOM
   ladder reuses. Kept, not retired; not invested in further.
+- **`SCFDMA52-LP` low-PAPR demonstrator (added later).** A localized QPSK variant that confirms
+  the root cause above: it drops the interleaved pilots for one contiguous 61-SC data block plus
+  a 4-pilot block (single-tap flat-channel CE), keeping the DFT-spread envelope single-carrier-like.
+  Measured **mean PAPR 11.9 → 10.3 dB (~1.6 dB)** over 16 payloads, decoding on AWGN. It is a
+  *demonstrator only* (registered, in no profile): flat-channel single-tap CE, so no
+  frequency-selective HF fading; and the residual ~10 dB (vs a true single carrier's ~6–7 dB) is
+  the real-valued-passband + rectangular-LFDMA ceiling. Reaching the single-carrier lows would need
+  IFDMA (distributed) mapping or RRC subcarrier shaping — a larger redesign, still dominated by
+  `64QAM2000-RRC` on throughput, so it stays a demonstrator, consistent with the FF-14 decision.
 - No single-carrier mode is dominated; the plain rectangular 2000-baud modes remain
   superseded by their `-RRC` variants (documented in §1).
 

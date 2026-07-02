@@ -136,6 +136,18 @@ fn scfdma52_16qam_awgn_20db() {
     assert_eq!(rx, payload);
 }
 
+/// SCFDMA52-LP (low-PAPR localized, all-data, flat single-tap CE) over AWGN at 20 dB: byte recovery.
+#[test]
+fn scfdma52_lp_awgn_20db() {
+    let mut h = make_harness_scfdma();
+    let payload = b"scfdma52-lp low-papr awgn demonstrator payload";
+    let mut channel = AwgnChannel::new(AwgnConfig::new(20.0, Some(30))).unwrap();
+    h.tx_engine.transmit(payload, "SCFDMA52-LP", None).unwrap();
+    h.route(&mut channel);
+    let rx = h.rx_engine.receive("SCFDMA52-LP", None).unwrap();
+    assert_eq!(rx, payload);
+}
+
 /// SCFDMA52-64QAM over AWGN at 25 dB SNR: byte recovery expected with MMSE equalization.
 #[test]
 fn scfdma52_64qam_awgn_25db() {

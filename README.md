@@ -140,6 +140,7 @@ instead of a decision-directed Costas loop — see the
 | OFDM52-32QAM | `ofdm` | — | 5 | ~7&nbsp;222 | ~2&nbsp;031 | OFDM (52 SCs, cross-32QAM) | OFDM higher-order ladder |
 | OFDM52-64QAM | `ofdm` | — | 6 | ~8&nbsp;667 | ~2&nbsp;031 | OFDM (52 SCs, 64QAM) | OFDM higher-order ladder |
 | SCFDMA52 | `scfdma` | — | 2 | ~2&nbsp;889 | ~2&nbsp;031 | SC-FDMA (52 SCs, QPSK) | Adaptive pilot density |
+| SCFDMA52-LP | `scfdma` | — | 2 | ~3&nbsp;389 | ~2&nbsp;031 | SC-FDMA (61 SCs, localized) | **Low-PAPR** demonstrator (~1.6 dB lower mean PAPR: 11.9→10.3); localized all-data + 4 block pilots, single-tap flat-channel CE; AWGN/flat only, not in any profile |
 | SCFDMA52-8PSK | `scfdma` | — | 3 | ~4&nbsp;333 | ~2&nbsp;031 | SC-FDMA (52 SCs, 8PSK) | |
 | SCFDMA52-16QAM | `scfdma` | — | 4 | ~5&nbsp;778 | ~2&nbsp;031 | SC-FDMA (52 SCs, 16QAM) | |
 | SCFDMA52-32QAM | `scfdma` | — | 5 | ~7&nbsp;222 | ~2&nbsp;031 | SC-FDMA (52 SCs, cross-32QAM) | |
