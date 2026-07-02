@@ -80,11 +80,16 @@ pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32
     Some(rough)
 }
 
-/// Global coarse-CFO grid search: re-demodulate the raw preamble at each candidate centre and
-/// return the offset that maximises the phase-insensitive preamble correlation. Global (not
-/// hill-climbing), so it cannot lock a spurious fixed point the way the symbol-domain anchor +
-/// iterative settle do at dense low-oversampling modes (8PSK1000, 8 sps). Covers ±baud/8 at a
-/// ~baud/100 step, comfortably inside the half-split's ±baud/64 refinement reach.
+/// Global two-stage coarse-CFO grid search: re-demodulate the raw preamble at each candidate centre
+/// and return the offset that maximises the phase-insensitive preamble correlation. Global (not
+/// hill-climbing), so it cannot lock a spurious fixed point the way the symbol-domain 1-lag anchor +
+/// iterative settle do at dense low-oversampling modes (8PSK1000, 8 sps).
+///
+/// Covers the full **±baud/2** acquisition range (matching the previous data-aided anchor and the
+/// engine's ~±450 Hz inter-rig expectation) without a per-candidate blow-up: a coarse scan at a step
+/// below the 16-symbol correlation main-lobe width (baud/16) locates the peak region, then a fine
+/// scan at ~baud/100 around it lands within the half-split's ±baud/64 *gate* so the settle refines to
+/// sub-Hz. (Half-split RANGE is ±baud/16; the gate that engages it is |rough| < baud/64.)
 fn coarse_cfo_grid(
     samples: &[f32],
     n: usize,
@@ -97,19 +102,34 @@ fn coarse_cfo_grid(
     // Demod only the preamble region (+ margin) for speed.
     let span = ((PREAMBLE_SYMS + 4) * n).min(samples.len());
     let pre = &samples[..span];
-    let step = (baud / 100.0).max(1.0); // ~10 Hz at 1000 baud
-    let n_steps = (baud / 8.0 / step).round() as i32; // ±baud/8
-    let (mut best_f, mut best_corr) = (0.0f32, -1.0f32);
-    for i in -n_steps..=n_steps {
-        let f = i as f32 * step;
+    let score = |f: f32| -> f32 {
         let timing = find_timing_offset(pre, n, fc + f, fs, cosine_overlap);
         let syms = demodulate_symbols(pre, n, fc + f, fs, timing, cosine_overlap);
         if syms.len() < PREAMBLE_SYMS {
-            continue;
+            return -1.0;
         }
-        let corr = preamble_corr_sq(&syms[..PREAMBLE_SYMS], &expected);
-        if corr > best_corr {
-            best_corr = corr;
+        preamble_corr_sq(&syms[..PREAMBLE_SYMS], &expected)
+    };
+    // Stage 1: coarse scan over ±baud/2 at ~baud/24 (< main lobe baud/16 → cannot skip the peak).
+    let coarse_step = (baud / 24.0).max(1.0);
+    let coarse_n = (baud / 2.0 / coarse_step).round() as i32;
+    let (mut best_f, mut best) = (0.0f32, -1.0f32);
+    for i in -coarse_n..=coarse_n {
+        let f = i as f32 * coarse_step;
+        let s = score(f);
+        if s > best {
+            best = s;
+            best_f = f;
+        }
+    }
+    // Stage 2: fine scan ±coarse_step around the coarse peak at ~baud/100.
+    let fine_step = (baud / 100.0).max(0.5);
+    let fine_n = (coarse_step / fine_step).ceil() as i32;
+    for i in -fine_n..=fine_n {
+        let f = best_f + i as f32 * fine_step;
+        let s = score(f);
+        if s > best {
+            best = s;
             best_f = f;
         }
     }
