@@ -5,20 +5,22 @@
 //!
 //!   cargo test -p openpulse-modem --no-default-features --test psk8_1000_afc_diag -- --ignored --nocapture
 //!
-//! FINDINGS (2026-07-02 spike). 8PSK1000 = 7/9; the 2 failures have TWO distinct causes:
-//!  1. **+40 / −50 Hz (some payloads): AFC settle locks a SPURIOUS fixed point.** `perfect_afc`
-//!     decodes; the real path's `afc_mini_settle` overshoots (e.g. true +40 → settled_afc +82.3,
-//!     residual −133). The `afc_fixed_point_sweep` (psk8-plugin) shows `afc_estimate_hz` is accurate
-//!     in ≈[−45,+30] Hz but ERRATIC beyond (±10–14 Hz), so the settle iterates onto a false zero.
-//!     At +40 BOTH sub-estimators are unusable: the data-aided one from the n=8 crossfade ISI bias,
-//!     AND the half-split one because the ~0.25 rad/symbol ramp is ~4 rad over each 16-symbol half,
-//!     collapsing its vector sum — so widening the half-split gate (`rough < baud/64`) CANNOT fix it.
-//!  2. **−10 Hz (payload 0): demod fails EVEN WITH PERFECT AFC** → an onset/timing issue at n=8,
-//!     payload-sensitive (payload 1 decodes at −10), independent of the AFC.
-//! CONCLUSION: no safe parameter fix (the ACQUIRE_BW lever regressed 7/9→5/9; the half-split-gate
-//! lever is disproven above). The real fix is a dedicated **FFT-based coarse frequency-acquisition
-//! stage** for n=8 (the #1 reference-mining gap), replacing the erratic data-aided anchor with an
-//! unambiguous wide-range estimate — a redesign, not a tweak. These probes ground that work.
+//! FINDINGS (2026-07-02 spike). Baseline 8PSK1000 = 7/9; the 2 failures had TWO distinct causes.
+//! CAUSE A (+40 / −50 Hz): the AFC settle locked a SPURIOUS fixed point — `perfect_afc` decoded but
+//! the real `afc_mini_settle` overshot (true +40 → settled_afc +82.3, residual −133). The
+//! `afc_fixed_point_sweep` (psk8-plugin) showed `afc_estimate_hz` accurate in ≈[−45,+30] Hz but
+//! ERRATIC beyond (±10–14 Hz), so the settle iterated onto a false zero. At +40 BOTH sub-estimators
+//! were unusable — the data-aided one from the n=8 crossfade ISI bias, and the half-split one because
+//! the ~0.25 rad/symbol ramp is ~4 rad over each 16-symbol half (its vector sum collapses) — so
+//! widening the half-split gate could NOT fix it.
+//! CAUSE B (−10 Hz, payload 0): the demod fails EVEN WITH PERFECT AFC — an onset/timing issue at n=8,
+//! payload-sensitive (payload 1 decodes at −10), independent of the AFC.
+//! RESOLUTION (Cause A FIXED): the data-aided anchor was replaced by a global grid-search coarse-CFO
+//! stage (`coarse_cfo_grid` in psk8) — re-demod the raw preamble at each candidate centre, pick the
+//! max preamble correlation. As a global search over the RAW samples it can't lock a spurious fixed
+//! point. (A symbol-domain FFT anchor was tried first and rejected: the demodulated symbols are
+//! themselves corrupted at large CFO, so the search must be over raw samples.) Result: 8PSK1000
+//! 7/9 → 8/9 (+40 decodes), 8PSK500 / 8PSK2000-RRC unchanged at 9/9. Cause B remains (separate).
 
 use openpulse_audio::LoopbackBackend;
 use openpulse_modem::ModemEngine;

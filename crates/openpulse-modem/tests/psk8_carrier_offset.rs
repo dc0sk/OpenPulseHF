@@ -67,11 +67,14 @@ fn psk8_500_decodes_through_offset() {
 }
 
 #[test]
-fn psk8_1000_decodes_through_25hz_offset() {
-    // n=8 is marginal/payload-sensitive at the edges (see module docs); pin only the
-    // established +25 Hz case. Broader (improved) coverage is in the matrix map.
-    assert!(
-        decodes_through_offset("8PSK1000", 25.0),
-        "8PSK1000 must decode through a 25 Hz carrier offset"
-    );
+fn psk8_1000_decodes_through_offsets() {
+    // The FFT/grid-search coarse-CFO anchor (replacing the erratic n=8 data-aided anchor) fixed the
+    // +40 Hz spurious AFC fixed point, lifting 8PSK1000 to 8/9 offsets. Pin the established +25 Hz
+    // case and the newly-fixed +40 Hz case. (−10 Hz stays a separate onset/timing gap; matrix map.)
+    for offset in [25.0f32, 40.0] {
+        assert!(
+            decodes_through_offset("8PSK1000", offset),
+            "8PSK1000 must decode through a {offset} Hz carrier offset"
+        );
+    }
 }
