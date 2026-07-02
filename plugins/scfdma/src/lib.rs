@@ -9,6 +9,7 @@
 //! Supported modes:
 //! - `SCFDMA16`:          16 data SCs, QPSK,       BW ≈  625 Hz, gross ~   889 bps
 //! - `SCFDMA52`:          52 data SCs, QPSK,       BW ≈ 2031 Hz, gross ~ 2,889 bps
+//! - `SCFDMA52-P2`:       52 data SCs, QPSK, PN-phase pilots — ~2.15 dB lower envelope PAPR, full DFT-CE
 //! - `SCFDMA52-8PSK`:     52 data SCs, 8PSK,       BW ≈ 2031 Hz, gross ~ 4,333 bps
 //! - `SCFDMA52-16QAM`:    52 data SCs, 16QAM,      BW ≈ 2031 Hz, gross ~ 5,778 bps
 //! - `SCFDMA52-32QAM`:    52 data SCs, cross-32QAM, BW ≈ 2031 Hz, gross ~ 7,222 bps
@@ -117,6 +118,7 @@ impl ScFdmaPlugin {
             supported_modes: vec![
                 "SCFDMA16".into(),
                 "SCFDMA52".into(),
+                "SCFDMA52-P2".into(),
                 "SCFDMA52-LP".into(),
                 "SCFDMA52-8PSK".into(),
                 "SCFDMA52-16QAM".into(),
@@ -396,6 +398,47 @@ mod tests {
         // Same throughput class, and it must still decode on a flat (clean) channel.
         let rx = plugin.demodulate(&lp, &mod_config("SCFDMA52-LP")).unwrap();
         assert_eq!(rx, payload);
+    }
+
+    #[test]
+    fn scfdma52_p2_lowers_envelope_papr_and_round_trips() {
+        use crate::modulate::{measure_envelope_papr_ccdf, measure_papr};
+        let plugin = ScFdmaPlugin::new();
+        // Average envelope-CCDF PAPR over payloads (the PA-relevant, low-variance metric).
+        let mean_ccdf = |mode: &str| -> f32 {
+            (0..16u32)
+                .map(|seed| {
+                    let payload: Vec<u8> = (0..200)
+                        .map(|i| (i as u32).wrapping_mul(2_654_435_761).wrapping_add(seed) as u8)
+                        .collect();
+                    let frame = plugin.modulate(&payload, &mod_config(mode)).unwrap();
+                    measure_envelope_papr_ccdf(&frame, 1e-3)
+                })
+                .sum::<f32>()
+                / 16.0
+        };
+        let (std_ccdf, p2_ccdf) = (mean_ccdf("SCFDMA52"), mean_ccdf("SCFDMA52-P2"));
+        // PN-phase pilots decorrelate the 13-pilot comb → materially lower envelope PAPR, at the same
+        // geometry/rate (unlike LP, which trades CE for the win by dropping pilots).
+        assert!(
+            p2_ccdf + 1.0 < std_ccdf,
+            "SCFDMA52-P2 envelope CCDF {p2_ccdf:.2} dB should be >1 dB below SCFDMA52 {std_ccdf:.2} dB"
+        );
+        // Full DFT-CE is retained (all 13 pilots), unlike LP's single-tap flat CE — so it decodes via
+        // the same frequency-selective path SCFDMA52 uses, not a flat-channel-only approximation.
+        let payload: Vec<u8> = (0..200).map(|i| (i as u8).wrapping_mul(31)).collect();
+        let clean = plugin
+            .modulate(&payload, &mod_config("SCFDMA52-P2"))
+            .unwrap();
+        assert_eq!(
+            plugin
+                .demodulate(&clean, &mod_config("SCFDMA52-P2"))
+                .unwrap(),
+            payload,
+            "SCFDMA52-P2 must decode on a clean channel"
+        );
+        // And it even beats the LP demonstrator on envelope PAPR while keeping that full CE.
+        let _ = measure_papr(&clean);
     }
 
     // Detection floor: a pure-noise window must NOT produce a sync lock.

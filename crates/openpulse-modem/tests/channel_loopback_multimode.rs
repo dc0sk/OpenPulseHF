@@ -136,6 +136,18 @@ fn scfdma52_16qam_awgn_20db() {
     assert_eq!(rx, payload);
 }
 
+/// SCFDMA52-P2 (PN-phase pilots, low envelope PAPR, full DFT-CE) over AWGN at 20 dB: byte recovery.
+#[test]
+fn scfdma52_p2_awgn_20db() {
+    let mut h = make_harness_scfdma();
+    let payload = b"scfdma52-p2 pn-phase pilot low-papr awgn decode payload";
+    let mut channel = AwgnChannel::new(AwgnConfig::new(20.0, Some(30))).unwrap();
+    h.tx_engine.transmit(payload, "SCFDMA52-P2", None).unwrap();
+    h.route(&mut channel);
+    let rx = h.rx_engine.receive("SCFDMA52-P2", None).unwrap();
+    assert_eq!(rx, payload);
+}
+
 /// SCFDMA52-LP (low-PAPR localized, all-data, flat single-tap CE) over AWGN at 20 dB: byte recovery.
 #[test]
 fn scfdma52_lp_awgn_20db() {

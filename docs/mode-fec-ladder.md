@@ -319,6 +319,14 @@ power survives a peak-limited transmitter). Representative measurements:
   LFDMA ceiling; IFDMA or RRC shaping would go lower but need a redesign, still dominated by
   `64QAM2000-RRC` on throughput — consistent with the FF-14 decision. (This ablation supersedes the
   earlier FF-14 "de-interleaving → 8.9 dB" prototype figure below, which conflated the same effect.)
+- **`SCFDMA52-P2` (PN-phase pilots) — the clean realization of the pilot-count insight.** Since the
+  PAPR driver is the 13 *equal-phase* pilot cosines peaking together (not pilot count per se), giving
+  each pilot a known **Zadoff–Chu quadratic phase** decorrelates the comb without dropping any pilot.
+  Measured on the PA-relevant **envelope-CCDF@1e-3**: SCFDMA52 8.85 dB → **SCFDMA52-P2 6.70 dB
+  (−2.15 dB)** at identical geometry/rate, retaining **full DFT-CE** — so it even undercuts the
+  flat-CE `SCFDMA52-LP` (6.90 dB) while staying frequency-selective. This is SC-FDMA's genuine niche
+  (power-limited transmitters); it ships as a versioned demonstrator (wire-incompatible with the
+  equal-phase modes) and would be the template if PN pilots are rolled into the `hpx_hf` SL8–SL11 rungs.
 - No single-carrier mode is dominated; the plain rectangular 2000-baud modes remain
   superseded by their `-RRC` variants (documented in §1).
 

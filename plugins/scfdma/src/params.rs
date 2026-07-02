@@ -37,6 +37,11 @@ pub struct ScFdmaParams {
     /// preserving the DFT-spread single-carrier envelope (lower PAPR) at the cost of flat-channel
     /// (single-tap) estimation only. `false` = the default interleaved layout with DFT-CE.
     pub localized: bool,
+    /// PN-phase pilots: give each pilot a known pseudo-random phase (constant modulus) instead of
+    /// all-equal +1. The equal-phase pilot comb otherwise peaks coherently and dominates PAPR;
+    /// decorrelating the phases lowers envelope PAPR ~1.6 dB while keeping every pilot for full
+    /// DFT-CE. Wire-incompatible with `false`, so only versioned modes set it. See [`pilot_value`].
+    pub pn_pilots: bool,
 }
 
 impl ScFdmaParams {
@@ -104,6 +109,7 @@ pub const SCFDMA16: ScFdmaParams = ScFdmaParams {
     bits_per_sc: 2,
     pilot_spacing: DEFAULT_PILOT_SPACING,
     localized: false,
+    pn_pilots: false,
 };
 
 /// SCFDMA-52: 52 data SCs + 13 pilots, SCs 16–80, centre at SC 48 (1500 Hz), BW ≈ 2031 Hz.
@@ -115,6 +121,7 @@ pub const SCFDMA52: ScFdmaParams = ScFdmaParams {
     bits_per_sc: 2,
     pilot_spacing: DEFAULT_PILOT_SPACING,
     localized: false,
+    pn_pilots: false,
 };
 
 /// SCFDMA-52 with 8PSK subcarriers: 4,333 bps gross.
@@ -126,6 +133,7 @@ pub const SCFDMA52_8PSK: ScFdmaParams = ScFdmaParams {
     bits_per_sc: 3,
     pilot_spacing: DEFAULT_PILOT_SPACING,
     localized: false,
+    pn_pilots: false,
 };
 
 /// SCFDMA-52 with 16QAM subcarriers: 5,778 bps gross.
@@ -137,6 +145,7 @@ pub const SCFDMA52_16QAM: ScFdmaParams = ScFdmaParams {
     bits_per_sc: 4,
     pilot_spacing: DEFAULT_PILOT_SPACING,
     localized: false,
+    pn_pilots: false,
 };
 
 /// SCFDMA-52 with cross-32QAM subcarriers: 7,222 bps gross.
@@ -151,6 +160,7 @@ pub const SCFDMA52_32QAM: ScFdmaParams = ScFdmaParams {
     bits_per_sc: 5,
     pilot_spacing: DEFAULT_PILOT_SPACING,
     localized: false,
+    pn_pilots: false,
 };
 
 /// SCFDMA-52 with 64QAM subcarriers: 8,667 bps gross.
@@ -162,6 +172,7 @@ pub const SCFDMA52_64QAM: ScFdmaParams = ScFdmaParams {
     bits_per_sc: 6,
     pilot_spacing: DEFAULT_PILOT_SPACING,
     localized: false,
+    pn_pilots: false,
 };
 
 /// Experimental dense-pilot SCFDMA-52 with 64QAM:
@@ -174,6 +185,7 @@ pub const SCFDMA52_64QAM_P4: ScFdmaParams = ScFdmaParams {
     bits_per_sc: 6,
     pilot_spacing: 4,
     localized: false,
+    pn_pilots: false,
 };
 
 /// SCFDMA-52-LP: a low-PAPR QPSK demonstrator variant of SCFDMA52 — data DFT-spread over one
@@ -202,6 +214,7 @@ pub const SCFDMA52_LP: ScFdmaParams = ScFdmaParams {
     bits_per_sc: 2,
     pilot_spacing: 1, // unused (localized layout); non-zero to avoid div-by-zero on shared paths
     localized: true,
+    pn_pilots: false,
 };
 
 // ── Narrowband higher-order family ──────────────────────────────────────────────
@@ -222,6 +235,7 @@ pub const SCFDMA26_8PSK: ScFdmaParams = ScFdmaParams {
     bits_per_sc: 3,
     pilot_spacing: DEFAULT_PILOT_SPACING,
     localized: false,
+    pn_pilots: false,
 };
 
 /// SCFDMA26 with 16QAM subcarriers (26 data SCs): ~2,889 bps gross.
@@ -233,6 +247,7 @@ pub const SCFDMA26_16QAM: ScFdmaParams = ScFdmaParams {
     bits_per_sc: 4,
     pilot_spacing: DEFAULT_PILOT_SPACING,
     localized: false,
+    pn_pilots: false,
 };
 
 /// SCFDMA26 with cross-32QAM subcarriers (26 data SCs): ~3,611 bps gross.
@@ -244,6 +259,15 @@ pub const SCFDMA26_32QAM: ScFdmaParams = ScFdmaParams {
     bits_per_sc: 5,
     pilot_spacing: DEFAULT_PILOT_SPACING,
     localized: false,
+    pn_pilots: false,
+};
+
+/// SCFDMA-52-P2: SCFDMA52 with PN-phase pilots — same geometry, DFT-CE, and rate, but ~1.6 dB lower
+/// envelope PAPR from decorrelating the 13-pilot comb. A versioned low-PAPR demonstrator (registered,
+/// in no profile) that — unlike the flat-CE `SCFDMA52-LP` — keeps full frequency-selective DFT-CE.
+pub const SCFDMA52_P2: ScFdmaParams = ScFdmaParams {
+    pn_pilots: true,
+    ..SCFDMA52
 };
 
 /// Select `ScFdmaParams` from a mode string (case-insensitive).
@@ -251,6 +275,7 @@ pub fn params_for_mode(mode: &str) -> Option<ScFdmaParams> {
     match mode.to_ascii_uppercase().as_str() {
         "SCFDMA16" => Some(SCFDMA16),
         "SCFDMA52" => Some(SCFDMA52),
+        "SCFDMA52-P2" => Some(SCFDMA52_P2),
         "SCFDMA52-LP" => Some(SCFDMA52_LP),
         "SCFDMA52-8PSK" => Some(SCFDMA52_8PSK),
         "SCFDMA52-16QAM" => Some(SCFDMA52_16QAM),

@@ -8,8 +8,8 @@ use num_complex::Complex32;
 use openpulse_core::len_prefix::{encode_len_prefix, LEN_PREFIX_BYTES};
 use rustfft::FftPlanner;
 
-use crate::channel::is_pilot;
-use crate::params::{params_for_mode, ScFdmaParams, CP, FFT_SIZE, PILOT_AMPLITUDE, SYM_LEN};
+use crate::channel::{is_pilot, pilot_value};
+use crate::params::{params_for_mode, ScFdmaParams, CP, FFT_SIZE, SYM_LEN};
 
 const PREAMBLE_SYMBOLS: usize = 4;
 const PREAMBLE_PATTERN: &[u8] = b"SCFDMA-SYNC-ACQ";
@@ -89,10 +89,13 @@ pub(crate) fn modulate_with_params(payload: &[u8], p: &ScFdmaParams) -> Vec<f32>
         // Step 3: Place spread symbols and pilots in the 256-bin frequency domain.
         let mut freq = vec![Complex32::new(0.0, 0.0); FFT_SIZE];
         let mut data_idx = 0usize;
+        let mut pilot_idx = 0usize;
         for sc in p.first_sc..=p.last_sc {
             if is_pilot(p, sc) {
-                freq[sc] = Complex32::new(PILOT_AMPLITUDE, 0.0);
-                freq[FFT_SIZE - sc] = Complex32::new(PILOT_AMPLITUDE, 0.0);
+                let pv = pilot_value(p, pilot_idx); // real +1, or PN-phased when p.pn_pilots
+                pilot_idx += 1;
+                freq[sc] = pv;
+                freq[FFT_SIZE - sc] = pv.conj(); // Hermitian symmetry → real output
             } else {
                 let sym = spread[data_idx];
                 data_idx += 1;
