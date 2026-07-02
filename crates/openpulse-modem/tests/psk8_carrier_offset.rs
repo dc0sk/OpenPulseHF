@@ -26,9 +26,38 @@
 //! margin — so its gate below pins only the established +25 Hz case.
 
 use openpulse_audio::LoopbackBackend;
+use openpulse_channel::{awgn::AwgnChannel, AwgnConfig, ChannelModel};
 use openpulse_modem::ModemEngine;
 use psk8_plugin::Psk8Plugin;
 use std::time::Duration;
+
+/// Like [`decodes_through_offset`] but adds AWGN to the frame — validates that carrier acquisition
+/// (the coarse-CFO grid search) survives noise, not just clean loopback.
+fn decodes_through_offset_awgn(mode: &str, offset_hz: f32, snr_db: f32) -> bool {
+    let payload = b"8psk-carrier-offset-awgn-0123456789-abcdefghij-0123456789-abc";
+    let tx_lb = LoopbackBackend::new();
+    let tx_shared = tx_lb.clone_shared();
+    let mut tx = ModemEngine::new(Box::new(tx_lb));
+    tx.register_plugin(Box::new(Psk8Plugin::new())).unwrap();
+    tx.set_center_frequency(1500.0 + offset_hz);
+    tx.transmit(payload, mode, None).unwrap();
+    let mut frame = tx_shared.drain_samples();
+    let mut ch = AwgnChannel::new(AwgnConfig::new(snr_db, Some(7))).unwrap();
+    frame = ch.apply(&frame);
+
+    let rx_lb = LoopbackBackend::new();
+    let rx_shared = rx_lb.clone_shared();
+    let mut rx = ModemEngine::new(Box::new(rx_lb));
+    rx.register_plugin(Box::new(Psk8Plugin::new())).unwrap();
+    rx_shared.push_frame(&vec![0.0f32; 40000]);
+    for chunk in frame.chunks(8000) {
+        rx_shared.push_frame(chunk);
+    }
+    match rx.receive_with_timeout(mode, None, Duration::from_secs(10)) {
+        Ok(got) => got.len() >= payload.len() && &got[..payload.len()] == payload,
+        Err(_) => false,
+    }
+}
 
 fn decodes_through_offset(mode: &str, offset_hz: f32) -> bool {
     let payload = b"8psk-carrier-offset-0123456789-abcdefghij-0123456789-abcdefghij";
@@ -77,4 +106,15 @@ fn psk8_1000_decodes_through_offsets() {
             "8PSK1000 must decode through a {offset} Hz carrier offset"
         );
     }
+}
+
+#[test]
+fn psk8_1000_plus40hz_offset_acquires_under_awgn() {
+    // The grid-search coarse-CFO fix targeted +40 Hz; validate it acquires UNDER NOISE, not just on
+    // clean loopback (the concern a clean offset matrix can't see). 8PSK1000 no-FEC needs ~30 dB, so
+    // test at 30 dB — where the acquisition, not the SNR, is what's under test.
+    assert!(
+        decodes_through_offset_awgn("8PSK1000", 40.0, 30.0),
+        "8PSK1000 must acquire + decode a +40 Hz carrier offset through AWGN 30 dB"
+    );
 }
