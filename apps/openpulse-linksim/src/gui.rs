@@ -125,12 +125,6 @@ struct PanelData {
     iq: Vec<[f64; 2]>,
 }
 
-/// A completed sim frame together with its precomputed visualization DSP for the three panels.
-struct FrameUpdate {
-    step: FrameStep,
-    panels: [PanelData; 3],
-}
-
 /// The I/Q scatter for `mode`'s waveform. Multicarrier (OFDM / SC-FDMA) runs the real receiver
 /// front-end (FFT → channel-est → equalize) via the plugin to recover the true QAM constellation;
 /// single-carrier modes use the passband Hilbert `baseband_iq`; FSK has no constellation. Returns
@@ -180,21 +174,43 @@ fn compute_panel(
     }
 }
 
+/// Snapshot params + apply live channel/CE-SSB changes for a worker's `LinkSim`, returning `false`
+/// on a structural (generation) change so the caller rebuilds. Shared by the sim and viz workers.
+fn sync_worker_sim(
+    sim: &mut LinkSim,
+    controls: &Arc<Mutex<Controls>>,
+    gen: u64,
+    chan: &mut ChannelKind,
+    snr: &mut f32,
+    cessb: &mut bool,
+) -> bool {
+    let c = controls.lock().unwrap_or_else(|e| e.into_inner());
+    if c.generation != gen {
+        return false;
+    }
+    if c.channel != *chan || (c.snr_db - *snr).abs() > f32::EPSILON {
+        *chan = c.channel;
+        *snr = c.snr_db;
+        sim.set_conditions(chan.spec(*snr), chan.spec(*snr + 5.0));
+    }
+    if c.cessb != *cessb {
+        *cessb = c.cessb;
+        sim.set_cessb(*cessb);
+    }
+    true
+}
+
+/// Throughput/rate worker: runs the full ARQ `sim.step()` at its natural (mode-dependent) rate and
+/// sends each `FrameStep` (stats/rate/level + the real audio for the monitor). Publishes the active
+/// mode into `current_mode` for the decoupled visualizer.
 fn spawn_sim(
     controls: Arc<Mutex<Controls>>,
     running: Arc<AtomicBool>,
-    show_constellation: Arc<AtomicBool>,
-) -> (mpsc::Receiver<FrameUpdate>, JoinHandle<()>) {
-    let (tx, rx) = mpsc::channel::<FrameUpdate>();
+    current_mode: Arc<Mutex<String>>,
+) -> (mpsc::Receiver<FrameStep>, JoinHandle<()>) {
+    let (tx, rx) = mpsc::channel::<FrameStep>();
     let handle = std::thread::spawn(move || {
-        // Persistent FFT planners for the three panels (TX / RX / ACK), reused across frames.
-        let mut spectra = [
-            PowerSpectrum::new(),
-            PowerSpectrum::new(),
-            PowerSpectrum::new(),
-        ];
         while running.load(Ordering::Relaxed) {
-            // Snapshot params (and the generation we built against) for this run.
             let (mut sim, gen, mut chan, mut snr, mut cessb) = {
                 let c = controls.lock().unwrap_or_else(|e| e.into_inner());
                 (
@@ -209,42 +225,85 @@ fn spawn_sim(
                 if !running.load(Ordering::Relaxed) {
                     return;
                 }
-                // Apply live changes (or rebuild on a structural change).
-                {
-                    let c = controls.lock().unwrap_or_else(|e| e.into_inner());
-                    if c.generation != gen {
-                        break; // structural change → rebuild on the next outer iteration
-                    }
-                    if c.channel != chan || (c.snr_db - snr).abs() > f32::EPSILON {
-                        chan = c.channel;
-                        snr = c.snr_db;
-                        sim.set_conditions(chan.spec(snr), chan.spec(snr + 5.0));
-                    }
-                    if c.cessb != cessb {
-                        cessb = c.cessb;
-                        sim.set_cessb(cessb);
-                    }
+                if !sync_worker_sim(&mut sim, &controls, gen, &mut chan, &mut snr, &mut cessb) {
+                    break; // structural change → rebuild
                 }
                 match sim.step() {
                     Some(fs) => {
-                        // Do the visualization DSP (FFT + I/Q) here, off the UI thread. The I/Q
-                        // source is mode-aware (real equalized symbols for multicarrier, Hilbert for
-                        // single-carrier, none for FSK) — see `constellation_iq`.
-                        let want_iq = show_constellation.load(Ordering::Relaxed);
-                        let sps = samples_per_symbol(&fs.mode).unwrap_or(0);
-                        let panels = [
-                            compute_panel(&mut spectra[0], &fs.forward_tx, sps, want_iq, &fs.mode),
-                            compute_panel(&mut spectra[1], &fs.forward_rx, sps, want_iq, &fs.mode),
-                            // Panel 2 is always the FSK4 ACK → no constellation (blanked by mode).
-                            compute_panel(&mut spectra[2], &fs.ack_rx, 0, want_iq, "FSK4-ACK"),
-                        ];
-                        if tx.send(FrameUpdate { step: fs, panels }).is_err() {
+                        *current_mode.lock().unwrap_or_else(|e| e.into_inner()) = fs.mode.clone();
+                        if tx.send(fs).is_err() {
                             return;
                         }
                     }
-                    None => break, // continuous run shouldn't hit this (total_frames = MAX)
+                    None => break,
                 }
                 std::thread::sleep(std::time::Duration::from_millis(40));
+            }
+        }
+    });
+    (rx, handle)
+}
+
+/// Visualization worker: at a steady ~18 fps it renders the spectrum/waterfall (and, when enabled,
+/// the constellation) from a cheap `viz_burst` (modulate + channel, NO demod) in the mode the sim
+/// worker is currently on. Decoupled from the heavy full-frame sim so the display stays smooth even
+/// for SC-FDMA, whose per-frame demod (DFT-CE/MMSE/IDFT) is ~12× a single-carrier frame.
+fn spawn_viz(
+    controls: Arc<Mutex<Controls>>,
+    running: Arc<AtomicBool>,
+    show_constellation: Arc<AtomicBool>,
+    current_mode: Arc<Mutex<String>>,
+) -> (mpsc::Receiver<[PanelData; 3]>, JoinHandle<()>) {
+    let (tx, rx) = mpsc::channel::<[PanelData; 3]>();
+    let handle = std::thread::spawn(move || {
+        let mut spectra = [
+            PowerSpectrum::new(),
+            PowerSpectrum::new(),
+            PowerSpectrum::new(),
+        ];
+        while running.load(Ordering::Relaxed) {
+            let (mut sim, gen, mut chan, mut snr, mut cessb) = {
+                let c = controls.lock().unwrap_or_else(|e| e.into_inner());
+                (
+                    LinkSim::new(&c.params()),
+                    c.generation,
+                    c.channel,
+                    c.snr_db,
+                    c.cessb,
+                )
+            };
+            loop {
+                if !running.load(Ordering::Relaxed) {
+                    return;
+                }
+                if !sync_worker_sim(&mut sim, &controls, gen, &mut chan, &mut snr, &mut cessb) {
+                    break;
+                }
+                // Follow the sim's live mode; fall back to this sim's initial mode until the first
+                // real frame lands.
+                let mode = {
+                    let m = current_mode
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone();
+                    if m.is_empty() {
+                        sim.current_mode()
+                    } else {
+                        m
+                    }
+                };
+                let (tx_a, rx_a, ack_a) = sim.viz_burst(&mode);
+                let want_iq = show_constellation.load(Ordering::Relaxed);
+                let sps = samples_per_symbol(&mode).unwrap_or(0);
+                let panels = [
+                    compute_panel(&mut spectra[0], &tx_a, sps, want_iq, &mode),
+                    compute_panel(&mut spectra[1], &rx_a, sps, want_iq, &mode),
+                    compute_panel(&mut spectra[2], &ack_a, 0, want_iq, "FSK4-ACK"),
+                ];
+                if tx.send(panels).is_err() {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
         }
     });
@@ -416,11 +475,17 @@ fn constellation_plot(
 struct LinkApp {
     controls: Arc<Mutex<Controls>>,
     running: Arc<AtomicBool>,
-    /// Mirrors `ui_show_constellation` for the sim worker, so it can skip the I/Q Hilbert when the
-    /// constellation view is hidden. Lock-free (read every worker frame).
+    /// Mirrors `ui_show_constellation` for the viz worker, so it can skip the I/Q extraction when
+    /// the constellation view is hidden. Lock-free (read every viz frame).
     show_constellation: Arc<AtomicBool>,
-    rx: Option<mpsc::Receiver<FrameUpdate>>,
+    /// The sim worker's live mode, read by the viz worker to render the matching waveform.
+    current_mode: Arc<Mutex<String>>,
+    /// Throughput/rate frames from the sim worker.
+    rx: Option<mpsc::Receiver<FrameStep>>,
+    /// Spectrum/waterfall/constellation panels from the decoupled viz worker.
+    rx_viz: Option<mpsc::Receiver<[PanelData; 3]>>,
     handle: Option<JoinHandle<()>>,
+    handle_viz: Option<JoinHandle<()>>,
 
     // UI-editable mirror of the controls.
     ui_profile: String,
@@ -490,11 +555,14 @@ impl LinkApp {
                 cessb: true,
             })),
             running: Arc::new(AtomicBool::new(false)),
-            // Constellation off by default — its per-frame plotting (800 pts × 2 panels) and the
-            // multicarrier equalize-per-frame extraction are the heaviest UI work; opt-in via toolbar.
+            // Constellation off by default — its per-frame plotting and the multicarrier
+            // equalize-per-frame extraction are the heaviest work; opt-in via toolbar.
             show_constellation: Arc::new(AtomicBool::new(false)),
+            current_mode: Arc::new(Mutex::new(String::new())),
             rx: None,
+            rx_viz: None,
             handle: None,
+            handle_viz: None,
             ui_profile: "hpx_hf".into(),
             ui_channel: ChannelKind::Awgn,
             ui_snr: 5.0,
@@ -551,20 +619,33 @@ impl LinkApp {
             c.compression = self.ui_compression;
             c.turnaround = self.ui_turnaround;
         }
+        *self.current_mode.lock().unwrap_or_else(|e| e.into_inner()) = String::new();
         self.running.store(true, Ordering::Relaxed);
         let (rx, handle) = spawn_sim(
             Arc::clone(&self.controls),
             Arc::clone(&self.running),
+            Arc::clone(&self.current_mode),
+        );
+        let (rx_viz, handle_viz) = spawn_viz(
+            Arc::clone(&self.controls),
+            Arc::clone(&self.running),
             Arc::clone(&self.show_constellation),
+            Arc::clone(&self.current_mode),
         );
         self.rx = Some(rx);
+        self.rx_viz = Some(rx_viz);
         self.handle = Some(handle);
+        self.handle_viz = Some(handle_viz);
     }
 
     fn stop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
         self.rx = None;
+        self.rx_viz = None;
         if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+        if let Some(h) = self.handle_viz.take() {
             let _ = h.join();
         }
         self.audio_out = None; // stop monitoring TX audio when the sim stops
@@ -716,27 +797,32 @@ impl LinkApp {
     }
 
     fn drain(&mut self) {
-        let mut updates = Vec::new();
-        if let Some(rx) = &self.rx {
-            while let Ok(fu) = rx.try_recv() {
-                updates.push(fu);
+        // Spectrum/waterfall/constellation panels from the decoupled viz worker (steady cadence).
+        let mut viz = Vec::new();
+        if let Some(rx) = &self.rx_viz {
+            while let Ok(p) = rx.try_recv() {
+                viz.push(p);
             }
         }
-        for fu in updates {
-            let FrameUpdate {
-                step: fs,
-                panels: [p0, p1, p2],
-            } = fu;
+        for [p0, p1, p2] in viz {
+            self.panels[0].apply(p0);
+            self.panels[1].apply(p1);
+            self.panels[2].apply(p2);
+        }
+
+        // Throughput/rate frames from the sim worker (natural, mode-dependent cadence).
+        let mut steps = Vec::new();
+        if let Some(rx) = &self.rx {
+            while let Ok(fs) = rx.try_recv() {
+                steps.push(fs);
+            }
+        }
+        for fs in steps {
             // Feed any connected openpulse-panel clients from the same live frame.
             #[cfg(feature = "serve")]
             if let Some(h) = &self.hub {
                 h.publish(&fs);
             }
-
-            // Panel DSP was already computed on the worker — just store it (no FFT/Hilbert here).
-            self.panels[0].apply(p0);
-            self.panels[1].apply(p1);
-            self.panels[2].apply(p2);
 
             self.frame_counter += 1;
             self.attempted += 1;

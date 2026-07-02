@@ -45,6 +45,9 @@ const SESSION_ID: &str = "LINKSIM0";
 const FRAME_CHUNK: usize = 200;
 /// Window (frames) over which the rolling frame-success rate is averaged for the rate model.
 const RATE_WINDOW: usize = 24;
+/// Payload size for the decoupled visualization burst — small (audio-only, no demod), just enough
+/// signal for the spectrum/waterfall regardless of mode.
+const VIZ_PAYLOAD_BYTES: usize = 64;
 
 /// A channel condition for one direction of the link.
 #[derive(Debug, Clone)]
@@ -686,6 +689,34 @@ impl LinkSim {
     /// Speed level the next frame will use.
     pub fn current_level(&self) -> u8 {
         self.ota.tx_level() as u8
+    }
+
+    /// The mode the adaptive controller is currently transmitting (for the decoupled visualizer).
+    pub fn current_mode(&self) -> String {
+        self.ota.tx_mode().unwrap_or_default().to_string()
+    }
+
+    /// Cheap visualization burst: modulate a short payload in `mode` and pass it through the forward
+    /// and reverse channels **without demodulating** (the demod's per-symbol DFT-CE / MMSE / IDFT is
+    /// the expensive stage, ~12× the cost of a single-carrier frame for SC-FDMA). Returns
+    /// `(forward_tx clean, forward_rx post-channel, ack_rx)` audio so the spectrum/waterfall can be
+    /// refreshed at a steady rate decoupled from the heavy full-frame throughput sim.
+    pub fn viz_burst(&mut self, mode: &str) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+        let payload = make_payload(0, 1, VIZ_PAYLOAD_BYTES);
+        let (tx, rx) =
+            if engine_transmit(&mut self.fwd.tx_engine, &payload, mode, FecMode::None).is_ok() {
+                self.fwd.route_tapped(self.fwd_ch.as_mut())
+            } else {
+                (Vec::new(), Vec::new())
+            };
+        let ack = AckFrame::new(AckType::AckOk, SESSION_ID).encode();
+        let ack_rx =
+            if engine_transmit(&mut self.rev.tx_engine, &ack, ACK_MODE, FecMode::None).is_ok() {
+                self.rev.route_tapped(self.rev_ch.as_mut()).1
+            } else {
+                Vec::new()
+            };
+        (tx, rx, ack_rx)
     }
 
     /// Toggle CE-SSB TX envelope conditioning live (e.g. from a GUI button) without a rebuild.
