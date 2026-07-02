@@ -140,6 +140,7 @@ instead of a decision-directed Costas loop — see the
 | OFDM52-32QAM | `ofdm` | — | 5 | ~7&nbsp;222 | ~2&nbsp;031 | OFDM (52 SCs, cross-32QAM) | OFDM higher-order ladder |
 | OFDM52-64QAM | `ofdm` | — | 6 | ~8&nbsp;667 | ~2&nbsp;031 | OFDM (52 SCs, 64QAM) | OFDM higher-order ladder |
 | SCFDMA52 | `scfdma` | — | 2 | ~2&nbsp;889 | ~2&nbsp;031 | SC-FDMA (52 SCs, QPSK) | Adaptive pilot density |
+| SCFDMA52-P2 | `scfdma` | — | 2 | ~2&nbsp;889 | ~2&nbsp;031 | SC-FDMA (52 SCs, PN pilots) | **Low-PAPR** SCFDMA52: Zadoff-Chu-phase pilots cut envelope-CCDF PAPR ~2.15 dB (8.85→6.70) at the same geometry/rate **and keep full DFT-CE** (beats the flat-CE SCFDMA52-LP); demonstrator, not in any profile |
 | SCFDMA52-LP | `scfdma` | — | 2 | ~3&nbsp;389 | ~2&nbsp;031 | SC-FDMA (61 SCs, localized) | **Low-PAPR** demonstrator (~2 dB lower mean PAPR: 11.9→9.7 — mostly from 4 pilots vs 13, only ~0.5 dB from localization); single-tap flat-channel CE ⇒ AWGN/flat/well-timed **only** (silently mis-decodes on selectivity/tilt/timing error), not in any profile |
 | SCFDMA52-8PSK | `scfdma` | — | 3 | ~4&nbsp;333 | ~2&nbsp;031 | SC-FDMA (52 SCs, 8PSK) | |
 | SCFDMA52-16QAM | `scfdma` | — | 4 | ~5&nbsp;778 | ~2&nbsp;031 | SC-FDMA (52 SCs, 16QAM) | |

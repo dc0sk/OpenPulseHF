@@ -54,9 +54,16 @@ pub fn deramp_timing(p: &ScFdmaParams, freq: &mut [Complex32]) {
     if pilots.len() < 2 {
         return;
     }
+    // De-phase the known pilot symbols first (identity for non-PN modes), leaving channel phase only,
+    // so the adjacent-pilot conjugate products measure the timing ramp, not the known pilot phases.
+    let dephased: Vec<Complex32> = pilots
+        .iter()
+        .enumerate()
+        .map(|(k, &sc)| freq[sc] * pilot_value(p, k).conj())
+        .collect();
     let mut acc = Complex32::new(0.0, 0.0);
-    for w in pilots.windows(2) {
-        acc += freq[w[1]] * freq[w[0]].conj();
+    for w in dephased.windows(2) {
+        acc += w[1] * w[0].conj();
     }
     if acc.norm_sqr() < 1e-12 {
         return;
@@ -85,6 +92,26 @@ pub fn is_pilot(p: &ScFdmaParams, sc: usize) -> bool {
     offset % p.pilot_spacing == (p.pilot_spacing - 1)
 }
 
+/// Deterministic constant-modulus pilot phase (radians) for pilot ordinal `k`, shared TX/RX.
+///
+/// A Zadoff–Chu quadratic phase `π·k·(k+1)/13` (root 1): its ideal autocorrelation spreads the pilot
+/// comb's energy uniformly in time instead of letting the 13 equal-phase cosines peak together, which
+/// is the pilot PAPR driver. Constant modulus keeps the channel-estimate division well-conditioned.
+fn pilot_pn_phase(k: usize) -> f32 {
+    std::f32::consts::PI * (k * (k + 1)) as f32 / 13.0
+}
+
+/// The known complex pilot symbol for pilot ordinal `k` under `p`: constant-modulus
+/// [`PILOT_AMPLITUDE`], real +1 for the default modes, PN-phased when `p.pn_pilots`.
+pub fn pilot_value(p: &ScFdmaParams, k: usize) -> Complex32 {
+    if p.pn_pilots {
+        let (s, c) = pilot_pn_phase(k).sin_cos();
+        Complex32::new(PILOT_AMPLITUDE * c, PILOT_AMPLITUDE * s)
+    } else {
+        Complex32::new(PILOT_AMPLITUDE, 0.0)
+    }
+}
+
 /// Least-squares channel estimate at each pilot SC, linearly interpolated
 /// across all data SCs.
 ///
@@ -95,8 +122,9 @@ pub fn ls_estimate(p: &ScFdmaParams, freq: &[Complex32]) -> Vec<Complex32> {
 
     let known: Vec<(usize, Complex32)> = pilots
         .iter()
-        .map(|&sc| {
-            let h = freq[sc] / Complex32::new(PILOT_AMPLITUDE, 0.0);
+        .enumerate()
+        .map(|(k, &sc)| {
+            let h = freq[sc] / pilot_value(p, k);
             (sc - p.first_sc, h)
         })
         .collect();
@@ -150,8 +178,8 @@ pub fn flat_channel_estimate(p: &ScFdmaParams, freq: &[Complex32]) -> Vec<Comple
         return vec![Complex32::new(1.0, 0.0); total];
     }
     let mut acc = Complex32::new(0.0, 0.0);
-    for &sc in &pilots {
-        acc += freq[sc] / Complex32::new(PILOT_AMPLITUDE, 0.0);
+    for (k, &sc) in pilots.iter().enumerate() {
+        acc += freq[sc] / pilot_value(p, k);
     }
     let h = acc / pilots.len() as f32;
     vec![h; total]
@@ -195,7 +223,8 @@ pub fn dft_ce_estimate(
     // --- Step 1: LS at pilot SCs ---
     let mut h_pilot: Vec<Complex32> = pilots
         .iter()
-        .map(|&sc| freq[sc] / Complex32::new(PILOT_AMPLITUDE, 0.0))
+        .enumerate()
+        .map(|(k, &sc)| freq[sc] / pilot_value(p, k))
         .collect();
 
     // --- Step 2: IDFT(P) → P-point warped CIR h'[l] ---
@@ -304,10 +333,11 @@ pub fn estimate_noise_var(p: &ScFdmaParams, freq: &[Complex32], h_est: &[Complex
     }
     let sum: f32 = pilots
         .iter()
-        .map(|&sc| {
+        .enumerate()
+        .map(|(k, &sc)| {
             let rel = sc - p.first_sc;
             let received = freq[sc];
-            let predicted = h_est[rel] * Complex32::new(PILOT_AMPLITUDE, 0.0);
+            let predicted = h_est[rel] * pilot_value(p, k);
             let diff = received - predicted;
             diff.norm_sqr()
         })
@@ -452,7 +482,8 @@ pub(crate) fn coh_bw_from_spectra(spectra: &[Vec<Complex32>], p: &ScFdmaParams) 
     for freq in spectra {
         let h: Vec<Complex32> = pilots
             .iter()
-            .map(|&k| freq[k] / Complex32::new(PILOT_AMPLITUDE, 0.0))
+            .enumerate()
+            .map(|(k, &sc)| freq[sc] / pilot_value(p, k))
             .collect();
         for i in 0..n_pilots - 1 {
             r1_num += h[i].conj() * h[i + 1];
