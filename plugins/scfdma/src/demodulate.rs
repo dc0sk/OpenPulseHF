@@ -9,7 +9,7 @@ use crate::channel::{
 };
 use crate::modulate::{modulate_with_params, preamble_payload};
 use crate::params::PILOT_AMPLITUDE;
-use crate::params::{params_for_mode, ScFdmaParams, CP, FFT_SIZE, SYM_LEN};
+use crate::params::{params_for_mode, ScFdmaParams, CP, FFT_SIZE, SAMPLE_RATE, SYM_LEN};
 use openpulse_dsp::constellation::{
     constellation_points, demap_symbol, estimate_decision_noise_var, symbol_llrs,
 };
@@ -26,6 +26,30 @@ use openpulse_core::len_prefix::{
 #[cfg(test)]
 pub(crate) use openpulse_dsp::acquisition::quadrature;
 use openpulse_dsp::acquisition::IqMatchedFilter;
+
+/// Frequency-shift a real passband signal DOWN by `delta_hz`, bringing a signal centred at
+/// `1500 + delta_hz` back to the nominal 1500 Hz the demodulator's fixed subcarrier bins expect.
+///
+/// The engine supplies its settled AFC correction as `center_frequency - 1500` (the measured dial
+/// offset); applying it here — instead of rejecting a non-nominal centre — lets SC-FDMA acquire
+/// off-frequency signals (its own ±4 Hz sync tolerance otherwise fails on any real dial error).
+/// Uses the analytic-signal (Hilbert) mix `Re{(s + j·H{s})·e^{-jθ}}` so the shift is image-free.
+pub fn mix_to_nominal(samples: &[f32], delta_hz: f32) -> Vec<f32> {
+    if delta_hz.abs() < 0.05 {
+        return samples.to_vec();
+    }
+    let h = openpulse_dsp::acquisition::quadrature(samples);
+    let w = std::f32::consts::TAU * delta_hz / SAMPLE_RATE as f32;
+    samples
+        .iter()
+        .zip(h.iter())
+        .enumerate()
+        .map(|(n, (&s, &hs))| {
+            let (sin, cos) = (w * n as f32).sin_cos();
+            s * cos + hs * sin
+        })
+        .collect()
+}
 
 pub fn scfdma_demodulate(samples: &[f32], mode: &str) -> Result<Vec<u8>, ModemError> {
     let p = params_for_mode(mode).ok_or_else(|| {

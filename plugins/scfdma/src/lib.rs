@@ -39,6 +39,11 @@ use crate::demodulate::{scfdma_demodulate, scfdma_demodulate_soft};
 use crate::modulate::{scfdma_modulate, scfdma_modulate_iq};
 use crate::params::{params_for_mode, SAMPLE_RATE, SYM_LEN};
 
+/// Max dial offset the demodulator will mix back to nominal before treating the centre as a
+/// misconfiguration. ~2 subcarriers — comfortably covers real HF dial error and the engine's
+/// settled AFC range, while still rejecting a grossly wrong centre.
+const MAX_OFFSET_HZ: f32 = 60.0;
+
 /// SC-FDMA plugin supporting SCFDMA16 and SCFDMA52 modes.
 pub struct ScFdmaPlugin {
     info: PluginInfo,
@@ -201,19 +206,23 @@ impl ModulationPlugin for ScFdmaPlugin {
                 config.sample_rate
             )));
         }
-        if (config.center_frequency - 1500.0).abs() > 1.0 {
+        // Use (don't reject) the engine's AFC-corrected centre: mix the dial offset back to nominal
+        // so SC-FDMA can acquire off-frequency signals (its own sync tolerates only ~±4 Hz).
+        let delta = config.center_frequency - 1500.0;
+        if delta.abs() > MAX_OFFSET_HZ {
             return Err(ModemError::Configuration(format!(
-                "SC-FDMA plugin: center_frequency {:.1} not supported; must be 1500.0 Hz",
+                "SC-FDMA plugin: center_frequency {:.1} Hz too far from 1500 (|Δ| ≤ {MAX_OFFSET_HZ})",
                 config.center_frequency
             )));
         }
+        let corrected = demodulate::mix_to_nominal(samples, delta);
         #[cfg(feature = "gpu")]
         if let Some(ref ctx) = self.gpu {
-            if let Some(result) = demodulate::scfdma_demodulate_gpu(samples, &config.mode, ctx) {
+            if let Some(result) = demodulate::scfdma_demodulate_gpu(&corrected, &config.mode, ctx) {
                 return Ok(result);
             }
         }
-        scfdma_demodulate(samples, &config.mode)
+        scfdma_demodulate(&corrected, &config.mode)
     }
 
     fn demodulate_soft(
@@ -233,21 +242,24 @@ impl ModulationPlugin for ScFdmaPlugin {
                 config.sample_rate
             )));
         }
-        if (config.center_frequency - 1500.0).abs() > 1.0 {
+        let delta = config.center_frequency - 1500.0;
+        if delta.abs() > MAX_OFFSET_HZ {
             return Err(ModemError::Configuration(format!(
-                "SC-FDMA plugin: center_frequency {:.1} not supported; must be 1500.0 Hz",
+                "SC-FDMA plugin: center_frequency {:.1} Hz too far from 1500 (|Δ| ≤ {MAX_OFFSET_HZ})",
                 config.center_frequency
             )));
         }
+        let corrected = demodulate::mix_to_nominal(samples, delta);
         #[cfg(feature = "gpu")]
         if let Some(ref ctx) = self.gpu {
-            if let Some(result) = demodulate::scfdma_demodulate_soft_gpu(samples, &config.mode, ctx)
+            if let Some(result) =
+                demodulate::scfdma_demodulate_soft_gpu(&corrected, &config.mode, ctx)
             {
                 return Ok(result);
             }
         }
 
-        scfdma_demodulate_soft(samples, &config.mode)
+        scfdma_demodulate_soft(&corrected, &config.mode)
     }
 
     fn frame_geometry(&self, config: &ModulationConfig) -> Option<FrameGeometry> {
@@ -277,7 +289,13 @@ impl ModulationPlugin for ScFdmaPlugin {
     /// explicitly on windows known to contain a frame.
     fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
         let p = params_for_mode(&config.mode)?;
-        let spectra = crate::channel::compute_pilot_spectra(samples, &p);
+        // Estimate the RESIDUAL after the engine's already-applied correction (in
+        // `center_frequency`): mix that offset out first, so the iterative AFC settle converges.
+        // Returning the absolute offset each pass — ignoring the applied correction — makes the
+        // settle accumulate/diverge instead. Identity before any correction is applied.
+        let corrected =
+            crate::demodulate::mix_to_nominal(samples, config.center_frequency - 1500.0);
+        let spectra = crate::channel::compute_pilot_spectra(&corrected, &p);
         crate::channel::cfo_from_spectra(&spectra, &p)
     }
 
