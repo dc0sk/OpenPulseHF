@@ -304,15 +304,21 @@ power survives a peak-limited transmitter). Representative measurements:
 - **SC-FDMA stays as-is** — a working, hardware-validated dense-multicarrier path and the
   source of the shared constellation code (`openpulse_dsp::constellation`) the OFDM HOM
   ladder reuses. Kept, not retired; not invested in further.
-- **`SCFDMA52-LP` low-PAPR demonstrator (added later).** A localized QPSK variant that confirms
-  the root cause above: it drops the interleaved pilots for one contiguous 61-SC data block plus
-  a 4-pilot block (single-tap flat-channel CE), keeping the DFT-spread envelope single-carrier-like.
-  Measured **mean PAPR 11.9 → 10.3 dB (~1.6 dB)** over 16 payloads, decoding on AWGN. It is a
-  *demonstrator only* (registered, in no profile): flat-channel single-tap CE, so no
-  frequency-selective HF fading; and the residual ~10 dB (vs a true single carrier's ~6–7 dB) is
-  the real-valued-passband + rectangular-LFDMA ceiling. Reaching the single-carrier lows would need
-  IFDMA (distributed) mapping or RRC subcarrier shaping — a larger redesign, still dominated by
-  `64QAM2000-RRC` on throughput, so it stays a demonstrator, consistent with the FF-14 decision.
+- **`SCFDMA52-LP` low-PAPR demonstrator (added later) — and what it actually shows.** A localized
+  QPSK variant with one contiguous 61-SC data block + a 4-pilot block (single-tap flat-channel CE).
+  Measured **mean PAPR 11.9 → 9.7 dB (~2 dB)** over 16 payloads, decoding on AWGN. **Its ablation
+  actually CORRECTS the root-cause story in item 3 above:** ~3/4 of the win is carrying **fewer
+  pilot tones** (4 vs 13 — 13 equal-phase pilot cosines peak together), and only ~0.5 dB is the
+  localized contiguous mapping; contiguous data *with* 13 pilots recovers ~0 dB. So the dominant
+  PAPR lever is pilot **count/power**, not interleaved **placement** — a sparse-interleaved 4-pilot
+  SCFDMA52 would reach most of the same PAPR *with* an interpolatable channel estimate. The cost of
+  the 4-block-pilot single-tap CE is fragility: it needs a flat, well-timed channel (skips deramp;
+  extrapolates one gain ~1.9 kHz down-band), so on selectivity / a ±1-sample timing error / SSB
+  tilt it silently mis-decodes. Hence a *demonstrator only* (registered, in no profile). The
+  residual ~10 dB (vs a true single carrier's ~6–7 dB) is the real-valued-passband + rectangular-
+  LFDMA ceiling; IFDMA or RRC shaping would go lower but need a redesign, still dominated by
+  `64QAM2000-RRC` on throughput — consistent with the FF-14 decision. (This ablation supersedes the
+  earlier FF-14 "de-interleaving → 8.9 dB" prototype figure below, which conflated the same effect.)
 - No single-carrier mode is dominated; the plain rectangular 2000-baud modes remain
   superseded by their `-RRC` variants (documented in §1).
 

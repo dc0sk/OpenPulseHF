@@ -153,9 +153,66 @@ pub fn measure_papr(samples: &[f32]) -> f32 {
 mod tests {
     use super::*;
     use crate::demodulate::scfdma_demodulate;
+    use crate::params::{ScFdmaParams, SCFDMA52, SCFDMA52_LP};
 
     // Constellation-property tests (unit power, point distinctness, Gray round-trips)
     // live with the shared mapper in `openpulse_dsp::constellation`.
+
+    /// Attribution guard for SCFDMA52-LP's PAPR win: it is MOSTLY pilot dilution (4 vs 13 pilots),
+    /// NOT the localized contiguous mapping. Locks the honest narrative against drift.
+    #[test]
+    fn papr_ablation() {
+        let papr = |p: &ScFdmaParams| -> f32 {
+            (0..16u32)
+                .map(|seed| {
+                    let payload: Vec<u8> = (0..200)
+                        .map(|i| {
+                            ((i as u32)
+                                .wrapping_mul(2_654_435_761)
+                                .wrapping_add(seed * 7)) as u8
+                        })
+                        .collect();
+                    measure_papr(&modulate_with_params(&payload, p))
+                })
+                .sum::<f32>()
+                / 16.0
+        };
+        // Controls: 4 interleaved pilots (non-contiguous data), and 13 block pilots (contiguous).
+        let four_interleaved = ScFdmaParams {
+            n_data: 61,
+            n_pilots: 4,
+            pilot_spacing: 16,
+            ..SCFDMA52
+        };
+        let thirteen_block = ScFdmaParams {
+            localized: true,
+            ..SCFDMA52
+        };
+        let (p13i, p4i, p13b, plp) = (
+            papr(&SCFDMA52),
+            papr(&four_interleaved),
+            papr(&thirteen_block),
+            papr(&SCFDMA52_LP),
+        );
+        // Dropping 13→4 pilots (mapping still interleaved) captures most of the reduction...
+        let dilution = p13i - p4i;
+        // ...while localizing the data (4 interleaved → 4 block) adds only a little.
+        let localization = p4i - plp;
+        assert!(
+            dilution > 1.0,
+            "pilot dilution should give >1 dB: {dilution:.2}"
+        );
+        assert!(
+            dilution > localization,
+            "pilot dilution ({dilution:.2}) must dominate localization ({localization:.2})"
+        );
+        // Contiguous data WITH 13 pilots recovers ~nothing — refutes "interleaved pilots are the
+        // PAPR root cause": pilot count, not placement, dominates.
+        assert!(
+            p13b > p13i - 0.5,
+            "contiguous-data + 13 pilots ({p13b:.2}) should be ~= interleaved ({p13i:.2}), not lower"
+        );
+    }
 
     #[test]
     fn scfdma52_iq_i_channel_matches_modulate() {

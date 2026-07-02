@@ -12,9 +12,10 @@ use crate::params::{
 /// Return the absolute SC indices of all pilot subcarriers for `p`.
 pub fn pilot_positions(p: &ScFdmaParams) -> Vec<usize> {
     if p.localized {
-        // Localized (low-PAPR) layout: pilots are a contiguous block at the high edge, so the
-        // `n_data` data SCs form one contiguous block [first_sc .. first_pilot) — that contiguity
-        // is what keeps the DFT-spread signal single-carrier-like (low PAPR).
+        // Localized (low-PAPR-demonstrator) layout: pilots are a contiguous block at the high edge,
+        // so the `n_data` data SCs form one contiguous block [first_sc .. first_pilot). The
+        // contiguity adds only ~0.5 dB of PAPR reduction (the bulk of SCFDMA52-LP's win is the
+        // smaller pilot COUNT, not the mapping — see the `papr_ablation` test / `SCFDMA52_LP` docs).
         let first_pilot = p.last_sc + 1 - p.n_pilots;
         return (first_pilot..=p.last_sc).collect();
     }
