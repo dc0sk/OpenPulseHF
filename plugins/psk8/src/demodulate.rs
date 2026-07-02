@@ -64,26 +64,56 @@ pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32
         return None;
     }
 
-    // Two-stage estimate.  The consecutive-symbol data-aided estimate has a wide
-    // range (±baud/2) but, at the 8PSK1000 oversampling (8 sps), the crossfade 1-lag
-    // ISI biases every increment *erratically* (−1…+5 Hz vs offset) — too much for
-    // the dense 45° grid's ~±1.5 Hz tolerance.  So: use data-aided only as the
-    // wide-range anchor; once it has driven the residual inside ±baud/16, refine with
-    // the ISI-robust half-split (vector-sum endpoints), debiased by its reading on a
-    // clean zero-offset preamble.  The half-split's structural bias is constant, so
-    // subtracting it leaves a sub-Hz estimate.
-    let (i_syms, q_syms): (Vec<f32>, Vec<f32>) = syms.iter().take(PREAMBLE_SYMS).copied().unzip();
-    let rough = estimate_cfo_data_aided(&i_syms, &q_syms, &preamble_symbols(), baud)?;
-    // Only refine SMALL residuals with the half-split: a large CFO ramp over the
-    // preamble degrades each half's vector sum, so the data-aided anchor must own the
-    // wide range.  baud/64 (≈15.6 Hz at 1000 baud) is comfortably inside the data-aided
-    // anchor's reach yet small enough that the half-split is accurate there.
+    // Two-stage estimate.  Wide-range ANCHOR = a GLOBAL grid search (`coarse_cfo_grid`): re-demod
+    // the raw preamble at each candidate centre and take the one that maximises the preamble
+    // correlation.  The 1-lag consecutive-symbol data-aided estimate is erratic beyond ~30 Hz at the
+    // 8PSK1000 oversampling (8 sps) — its crossfade ISI bias, AND the preamble demod itself is
+    // corrupted at large CFO — so a hill-climbing settle locks a spurious fixed point (true +40 →
+    // +82 Hz; see the psk8_1000_afc_diag probe).  A global grid over the raw samples can't stick.
+    // Once the anchor drives the residual inside ±baud/64, refine with the ISI-robust half-split.
+    let rough = coarse_cfo_grid(samples, n, fc, fs, cosine_overlap, baud);
     if rough.abs() < baud / 64.0 {
         let raw = estimate_cfo_half_split(&syms, baud)?;
         let bias = half_split_bias(config, baud, n, fc, fs, cosine_overlap);
         return Some(raw - bias);
     }
     Some(rough)
+}
+
+/// Global coarse-CFO grid search: re-demodulate the raw preamble at each candidate centre and
+/// return the offset that maximises the phase-insensitive preamble correlation. Global (not
+/// hill-climbing), so it cannot lock a spurious fixed point the way the symbol-domain anchor +
+/// iterative settle do at dense low-oversampling modes (8PSK1000, 8 sps). Covers ±baud/8 at a
+/// ~baud/100 step, comfortably inside the half-split's ±baud/64 refinement reach.
+fn coarse_cfo_grid(
+    samples: &[f32],
+    n: usize,
+    fc: f32,
+    fs: f32,
+    cosine_overlap: bool,
+    baud: f32,
+) -> f32 {
+    let expected = preamble_symbols();
+    // Demod only the preamble region (+ margin) for speed.
+    let span = ((PREAMBLE_SYMS + 4) * n).min(samples.len());
+    let pre = &samples[..span];
+    let step = (baud / 100.0).max(1.0); // ~10 Hz at 1000 baud
+    let n_steps = (baud / 8.0 / step).round() as i32; // ±baud/8
+    let (mut best_f, mut best_corr) = (0.0f32, -1.0f32);
+    for i in -n_steps..=n_steps {
+        let f = i as f32 * step;
+        let timing = find_timing_offset(pre, n, fc + f, fs, cosine_overlap);
+        let syms = demodulate_symbols(pre, n, fc + f, fs, timing, cosine_overlap);
+        if syms.len() < PREAMBLE_SYMS {
+            continue;
+        }
+        let corr = preamble_corr_sq(&syms[..PREAMBLE_SYMS], &expected);
+        if corr > best_corr {
+            best_corr = corr;
+            best_f = f;
+        }
+    }
+    best_f
 }
 
 /// CFO from the phase difference between the two preamble halves.
