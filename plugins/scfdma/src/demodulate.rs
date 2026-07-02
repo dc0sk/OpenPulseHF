@@ -160,6 +160,71 @@ fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Result<Vec<u8>, 
     Ok(raw[LEN_PREFIX_BYTES..LEN_PREFIX_BYTES + take].to_vec())
 }
 
+/// Equalized, de-spread constellation symbols for display — the real QAM scatter the receiver
+/// recovers (FFT → DFT-CE → MMSE → IDFT), normalized to RMS ≈ 1 and capped in point count. Returns
+/// `None` if the mode is unknown or sync fails. Display-only (mirrors the demod front-end); does not
+/// touch the decode path.
+pub fn scfdma_constellation(samples: &[f32], mode: &str) -> Option<Vec<(f32, f32)>> {
+    let p = params_for_mode(mode)?;
+    let sync = modulate_with_params(&preamble_payload(&p), &p);
+    if samples.len() < sync.len() + SYM_LEN {
+        return None;
+    }
+    let offset = find_sync_offset(samples, &sync)?;
+    let payload_start = offset + sync.len();
+    if payload_start >= samples.len() {
+        return None;
+    }
+    let samples = &samples[payload_start..];
+    let n_syms = samples.len() / SYM_LEN;
+    if n_syms == 0 {
+        return None;
+    }
+
+    let mut planner = FftPlanner::<f32>::new();
+    let fft = planner.plan_fft_forward(FFT_SIZE);
+    let idft = planner.plan_fft_inverse(p.n_data);
+    let ce_idft = planner.plan_fft_inverse(p.n_pilots);
+    let fft_scale = 1.0 / (FFT_SIZE as f32).sqrt();
+    let idft_scale = 1.0 / (p.n_data as f32).sqrt();
+
+    let mut syms: Vec<Complex32> = Vec::with_capacity(n_syms * p.n_data);
+    for sym_idx in 0..n_syms {
+        let start = sym_idx * SYM_LEN + CP;
+        if start + FFT_SIZE > samples.len() {
+            break;
+        }
+        let mut freq: Vec<Complex32> = samples[start..start + FFT_SIZE]
+            .iter()
+            .map(|&s| Complex32::new(s * fft_scale, 0.0))
+            .collect();
+        fft.process(&mut freq);
+        deramp_timing(&p, &mut freq);
+        let h_est = dft_ce_estimate(&p, &freq, &*ce_idft);
+        let noise_var = estimate_noise_var(&p, &freq, &h_est);
+        let mut equalized = mmse_equalize(&p, &freq, &h_est, noise_var);
+        idft.process(&mut equalized);
+        syms.extend(equalized.iter().map(|c| c * idft_scale));
+    }
+    Some(normalize_constellation_for_display(&syms))
+}
+
+/// Normalize equalized symbols to RMS ≈ 1 and subsample to a bounded point count for plotting.
+pub(crate) fn normalize_constellation_for_display(syms: &[Complex32]) -> Vec<(f32, f32)> {
+    const MAX_POINTS: usize = 800;
+    if syms.is_empty() {
+        return Vec::new();
+    }
+    let rms = (syms.iter().map(|c| c.norm_sqr()).sum::<f32>() / syms.len() as f32)
+        .sqrt()
+        .max(1e-9);
+    let step = (syms.len() / MAX_POINTS).max(1);
+    syms.iter()
+        .step_by(step)
+        .map(|c| (c.re / rms, c.im / rms))
+        .collect()
+}
+
 fn demodulate_soft_with_params(
     samples: &[f32],
     p: &ScFdmaParams,

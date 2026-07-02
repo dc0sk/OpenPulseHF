@@ -131,10 +131,41 @@ struct FrameUpdate {
     panels: [PanelData; 3],
 }
 
-/// Compute one panel's spectrum + baseband I/Q on the worker thread (reuses `ps`'s FFT planner).
-/// The spectrum FFT feeds the always-drawn spectrum/waterfall; the Hilbert `baseband_iq` is skipped
-/// when `want_iq` is false (the constellation view is hidden), saving the transform + phase search.
-fn compute_panel(ps: &mut PowerSpectrum, samples: &[f32], sps: usize, want_iq: bool) -> PanelData {
+/// The I/Q scatter for `mode`'s waveform. Multicarrier (OFDM / SC-FDMA) runs the real receiver
+/// front-end (FFT → channel-est → equalize) via the plugin to recover the true QAM constellation;
+/// single-carrier modes use the passband Hilbert `baseband_iq`; FSK has no constellation. Returns
+/// empty if the constellation is hidden, the mode has none, or a multicarrier frame failed to sync.
+fn constellation_iq(mode: &str, samples: &[f32], sps: usize, want_iq: bool) -> Vec<[f64; 2]> {
+    if !want_iq {
+        return Vec::new();
+    }
+    let m = mode.to_ascii_uppercase();
+    let to_f64 = |pts: Vec<(f32, f32)>| pts.iter().map(|&(i, q)| [i as f64, q as f64]).collect();
+    if m.starts_with("FSK") {
+        Vec::new()
+    } else if m.starts_with("SCFDMA") {
+        scfdma_plugin::demodulate::scfdma_constellation(samples, mode)
+            .map(to_f64)
+            .unwrap_or_default()
+    } else if m.starts_with("OFDM") {
+        ofdm_plugin::demodulate::ofdm_constellation(samples, mode)
+            .map(to_f64)
+            .unwrap_or_default()
+    } else {
+        baseband_iq(samples, sps)
+    }
+}
+
+/// Compute one panel's spectrum + I/Q on the worker thread (reuses `ps`'s FFT planner), off the UI
+/// thread. The spectrum FFT feeds the always-drawn spectrum/waterfall; the I/Q source is mode-aware
+/// (see [`constellation_iq`]) and skipped entirely when `want_iq` is false.
+fn compute_panel(
+    ps: &mut PowerSpectrum,
+    samples: &[f32],
+    sps: usize,
+    want_iq: bool,
+    mode: &str,
+) -> PanelData {
     if samples.is_empty() {
         return PanelData {
             spectrum: Vec::new(),
@@ -145,11 +176,7 @@ fn compute_panel(ps: &mut PowerSpectrum, samples: &[f32], sps: usize, want_iq: b
         // Welch PSD over the whole burst (not just the fixed preamble window), so the trace
         // reflects the actual random modulated data and breathes naturally frame-to-frame.
         spectrum: ps.compute_welch(samples, SPECTRUM_WELCH_SEGMENTS),
-        iq: if want_iq {
-            baseband_iq(samples, sps)
-        } else {
-            Vec::new()
-        },
+        iq: constellation_iq(mode, samples, sps, want_iq),
     }
 }
 
@@ -200,17 +227,16 @@ fn spawn_sim(
                 }
                 match sim.step() {
                     Some(fs) => {
-                        // Do the visualization DSP (FFT + Hilbert I/Q) here, off the UI thread.
-                        // Skip the I/Q Hilbert when the constellation is hidden or the mode has no
-                        // meaningful constellation (multicarrier / FSK).
-                        let want_iq = show_constellation.load(Ordering::Relaxed)
-                            && constellation_makes_sense(&fs.mode);
+                        // Do the visualization DSP (FFT + I/Q) here, off the UI thread. The I/Q
+                        // source is mode-aware (real equalized symbols for multicarrier, Hilbert for
+                        // single-carrier, none for FSK) — see `constellation_iq`.
+                        let want_iq = show_constellation.load(Ordering::Relaxed);
                         let sps = samples_per_symbol(&fs.mode).unwrap_or(0);
                         let panels = [
-                            compute_panel(&mut spectra[0], &fs.forward_tx, sps, want_iq),
-                            compute_panel(&mut spectra[1], &fs.forward_rx, sps, want_iq),
-                            // The FSK4 ACK (panel 2) has no PSK symbol grid → full-rate I/Q cloud.
-                            compute_panel(&mut spectra[2], &fs.ack_rx, 0, want_iq),
+                            compute_panel(&mut spectra[0], &fs.forward_tx, sps, want_iq, &fs.mode),
+                            compute_panel(&mut spectra[1], &fs.forward_rx, sps, want_iq, &fs.mode),
+                            // Panel 2 is always the FSK4 ACK → no constellation (blanked by mode).
+                            compute_panel(&mut spectra[2], &fs.ack_rx, 0, want_iq, "FSK4-ACK"),
                         ];
                         if tx.send(FrameUpdate { step: fs, panels }).is_err() {
                             return;
@@ -290,14 +316,6 @@ fn samples_per_symbol(mode: &str) -> Option<usize> {
     }
     let sps = (FS / baud).round() as usize;
     (sps >= 2).then_some(sps)
-}
-
-/// Whether an I/Q constellation is meaningful for `mode`. True for single-carrier PSK/QAM (a coherent
-/// constellation at the 1500 Hz carrier); false for multicarrier (OFDM / SC-FDMA — the summed
-/// subcarriers form a Gaussian blob, not a constellation) and FSK (frequency-keyed, no I/Q grid).
-fn constellation_makes_sense(mode: &str) -> bool {
-    let m = mode.to_ascii_uppercase();
-    !(m.starts_with("OFDM") || m.starts_with("SCFDMA") || m.starts_with("FSK"))
 }
 
 /// Normalized baseband I/Q scatter for the constellation view, via Hilbert downconversion of the
@@ -1260,10 +1278,10 @@ impl eframe::App for LinkApp {
             if let Some(tex) = &qr {
                 ui.add_space(6.0);
                 let band_w = ui.available_width();
-                // Only show constellations for modes where they mean something (single-carrier
-                // PSK/QAM); multicarrier (OFDM/SC-FDMA) and FSK render a meaningless blob.
-                let show_const =
-                    self.ui_show_constellation && constellation_makes_sense(&subtitle.0);
+                // Every data mode now has a meaningful constellation (single-carrier via Hilbert,
+                // multicarrier via the plugin's equalized symbols); a mode/frame that yields none
+                // (e.g. a multicarrier frame that failed to sync) just self-blanks its scatter.
+                let show_const = self.ui_show_constellation;
                 // With both constellations shown the QR + 2 squares take 3×qr_side; otherwise just
                 // the QR. The remainder splits between the two text blocks flanking the QR.
                 let denom = if show_const { 3.0 } else { 1.0 };
