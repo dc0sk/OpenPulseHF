@@ -111,6 +111,7 @@ impl ScFdmaPlugin {
             supported_modes: vec![
                 "SCFDMA16".into(),
                 "SCFDMA52".into(),
+                "SCFDMA52-LP".into(),
                 "SCFDMA52-8PSK".into(),
                 "SCFDMA52-16QAM".into(),
                 "SCFDMA52-32QAM".into(),
@@ -367,6 +368,27 @@ mod tests {
             .demodulate(&samples, &mod_config("SCFDMA52"))
             .unwrap();
         assert_eq!(rx.as_slice(), payload.as_ref());
+    }
+
+    #[test]
+    fn scfdma52_lp_lowers_papr_and_round_trips() {
+        use crate::modulate::measure_papr;
+        let plugin = ScFdmaPlugin::new();
+        let payload: Vec<u8> = (0..200).map(|i| (i as u8).wrapping_mul(31)).collect();
+        let std = plugin.modulate(&payload, &mod_config("SCFDMA52")).unwrap();
+        let lp = plugin
+            .modulate(&payload, &mod_config("SCFDMA52-LP"))
+            .unwrap();
+        let (papr_std, papr_lp) = (measure_papr(&std), measure_papr(&lp));
+        // The localized all-data layout (no in-band pilot tones) keeps the DFT-spread envelope
+        // single-carrier-like → measurably lower PAPR than interleaved-pilot SCFDMA52.
+        assert!(
+            papr_lp + 1.0 < papr_std,
+            "SCFDMA52-LP PAPR {papr_lp:.2} dB should be >1 dB below SCFDMA52 {papr_std:.2} dB"
+        );
+        // Same throughput class, and it must still decode on a flat (clean) channel.
+        let rx = plugin.demodulate(&lp, &mod_config("SCFDMA52-LP")).unwrap();
+        assert_eq!(rx, payload);
     }
 
     // Detection floor: a pure-noise window must NOT produce a sync lock.

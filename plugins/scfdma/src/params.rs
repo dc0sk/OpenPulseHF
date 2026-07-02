@@ -31,8 +31,12 @@ pub struct ScFdmaParams {
     pub n_pilots: usize,
     /// Bits carried per data subcarrier per SC-FDMA symbol (2=QPSK, 3=8PSK, 4=16QAM, 5=32QAM, 6=64QAM).
     pub bits_per_sc: usize,
-    /// Pilot spacing in occupied subcarriers.
+    /// Pilot spacing in occupied subcarriers (interleaved layout only).
     pub pilot_spacing: usize,
+    /// Localized (low-PAPR) layout: data occupies one CONTIGUOUS block and pilots a second block,
+    /// preserving the DFT-spread single-carrier envelope (lower PAPR) at the cost of flat-channel
+    /// (single-tap) estimation only. `false` = the default interleaved layout with DFT-CE.
+    pub localized: bool,
 }
 
 impl ScFdmaParams {
@@ -93,6 +97,7 @@ pub const SCFDMA16: ScFdmaParams = ScFdmaParams {
     n_pilots: 4,
     bits_per_sc: 2,
     pilot_spacing: DEFAULT_PILOT_SPACING,
+    localized: false,
 };
 
 /// SCFDMA-52: 52 data SCs + 13 pilots, SCs 16–80, centre at SC 48 (1500 Hz), BW ≈ 2031 Hz.
@@ -103,6 +108,7 @@ pub const SCFDMA52: ScFdmaParams = ScFdmaParams {
     n_pilots: 13,
     bits_per_sc: 2,
     pilot_spacing: DEFAULT_PILOT_SPACING,
+    localized: false,
 };
 
 /// SCFDMA-52 with 8PSK subcarriers: 4,333 bps gross.
@@ -113,6 +119,7 @@ pub const SCFDMA52_8PSK: ScFdmaParams = ScFdmaParams {
     n_pilots: 13,
     bits_per_sc: 3,
     pilot_spacing: DEFAULT_PILOT_SPACING,
+    localized: false,
 };
 
 /// SCFDMA-52 with 16QAM subcarriers: 5,778 bps gross.
@@ -123,6 +130,7 @@ pub const SCFDMA52_16QAM: ScFdmaParams = ScFdmaParams {
     n_pilots: 13,
     bits_per_sc: 4,
     pilot_spacing: DEFAULT_PILOT_SPACING,
+    localized: false,
 };
 
 /// SCFDMA-52 with cross-32QAM subcarriers: 7,222 bps gross.
@@ -136,6 +144,7 @@ pub const SCFDMA52_32QAM: ScFdmaParams = ScFdmaParams {
     n_pilots: 13,
     bits_per_sc: 5,
     pilot_spacing: DEFAULT_PILOT_SPACING,
+    localized: false,
 };
 
 /// SCFDMA-52 with 64QAM subcarriers: 8,667 bps gross.
@@ -146,6 +155,7 @@ pub const SCFDMA52_64QAM: ScFdmaParams = ScFdmaParams {
     n_pilots: 13,
     bits_per_sc: 6,
     pilot_spacing: DEFAULT_PILOT_SPACING,
+    localized: false,
 };
 
 /// Experimental dense-pilot SCFDMA-52 with 64QAM:
@@ -157,6 +167,27 @@ pub const SCFDMA52_64QAM_P4: ScFdmaParams = ScFdmaParams {
     n_pilots: 16,
     bits_per_sc: 6,
     pilot_spacing: 4,
+    localized: false,
+};
+
+/// SCFDMA-52-LP: low-PAPR **localized** QPSK variant of SCFDMA52. The data occupies one contiguous
+/// 61-SC block [16..76], which keeps the DFT-spread signal single-carrier-like — **~1.6 dB lower
+/// mean PAPR** than the interleaved-pilot SCFDMA52 (11.9 → 10.3 dB over 16 payloads), worth ~1.6 dB
+/// average power at a fixed-PEP linear PA. Just 4 pilots sit in a contiguous block [77..80] and are
+/// estimated **single-tap** (one complex gain averaged over the block), so the mode assumes a **flat
+/// channel** (AWGN / a constant gain-phase response) and is not for frequency-selective HF fading;
+/// it is registered but kept out of every adaptive profile. Fewer pilots also give it more data SCs
+/// than SCFDMA52 (~3389 vs 2889 bps) at the same 2031 Hz width. The residual ~10 dB PAPR (vs a true
+/// single carrier's ~6–7 dB) is the real-valued passband + rectangular LFDMA ceiling; IFDMA or RRC
+/// subcarrier shaping would go lower but need a larger redesign.
+pub const SCFDMA52_LP: ScFdmaParams = ScFdmaParams {
+    first_sc: 16,
+    last_sc: 80,
+    n_data: 61,
+    n_pilots: 4,
+    bits_per_sc: 2,
+    pilot_spacing: 1, // unused (localized layout); non-zero to avoid div-by-zero on shared paths
+    localized: true,
 };
 
 // ── Narrowband higher-order family ──────────────────────────────────────────────
@@ -176,6 +207,7 @@ pub const SCFDMA26_8PSK: ScFdmaParams = ScFdmaParams {
     n_pilots: 6,
     bits_per_sc: 3,
     pilot_spacing: DEFAULT_PILOT_SPACING,
+    localized: false,
 };
 
 /// SCFDMA26 with 16QAM subcarriers (26 data SCs): ~2,889 bps gross.
@@ -186,6 +218,7 @@ pub const SCFDMA26_16QAM: ScFdmaParams = ScFdmaParams {
     n_pilots: 6,
     bits_per_sc: 4,
     pilot_spacing: DEFAULT_PILOT_SPACING,
+    localized: false,
 };
 
 /// SCFDMA26 with cross-32QAM subcarriers (26 data SCs): ~3,611 bps gross.
@@ -196,6 +229,7 @@ pub const SCFDMA26_32QAM: ScFdmaParams = ScFdmaParams {
     n_pilots: 6,
     bits_per_sc: 5,
     pilot_spacing: DEFAULT_PILOT_SPACING,
+    localized: false,
 };
 
 /// Select `ScFdmaParams` from a mode string (case-insensitive).
@@ -203,6 +237,7 @@ pub fn params_for_mode(mode: &str) -> Option<ScFdmaParams> {
     match mode.to_ascii_uppercase().as_str() {
         "SCFDMA16" => Some(SCFDMA16),
         "SCFDMA52" => Some(SCFDMA52),
+        "SCFDMA52-LP" => Some(SCFDMA52_LP),
         "SCFDMA52-8PSK" => Some(SCFDMA52_8PSK),
         "SCFDMA52-16QAM" => Some(SCFDMA52_16QAM),
         "SCFDMA52-32QAM" => Some(SCFDMA52_32QAM),
@@ -231,6 +266,21 @@ mod tests {
         assert_eq!(SCFDMA52.total_sc(), 65);
         assert_eq!(SCFDMA52.n_data + SCFDMA52.n_pilots, 65);
         assert_eq!(SCFDMA52.bits_per_symbol(), 104);
+    }
+
+    #[test]
+    fn scfdma52_lp_geometry() {
+        assert_eq!(SCFDMA52_LP.total_sc(), 65);
+        assert_eq!(SCFDMA52_LP.n_data, 61);
+        assert_eq!(SCFDMA52_LP.n_pilots, 4);
+        assert_eq!(SCFDMA52_LP.n_data + SCFDMA52_LP.n_pilots, 65);
+        // Localized: pilots a contiguous block at the high edge, data contiguous below it.
+        let pilots = crate::channel::pilot_positions(&SCFDMA52_LP);
+        assert_eq!(pilots, vec![77, 78, 79, 80]);
+        assert!(!crate::channel::is_pilot(&SCFDMA52_LP, 16)); // data block start
+        assert!(!crate::channel::is_pilot(&SCFDMA52_LP, 76)); // data block end
+        assert!(crate::channel::is_pilot(&SCFDMA52_LP, 77)); // pilot block start
+        assert!(crate::channel::is_pilot(&SCFDMA52_LP, 80)); // pilot block end
     }
 
     #[test]

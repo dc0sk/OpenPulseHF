@@ -4,8 +4,8 @@ use num_complex::Complex32;
 use rustfft::FftPlanner;
 
 use crate::channel::{
-    deramp_timing, dft_ce_estimate, estimate_noise_var, estimate_rician_k_linear, mmse_equalize,
-    mmse_llr_noise_var, pilot_positions,
+    deramp_timing, dft_ce_estimate, estimate_noise_var, estimate_rician_k_linear,
+    flat_channel_estimate, mmse_equalize, mmse_llr_noise_var, pilot_positions,
 };
 use crate::modulate::{modulate_with_params, preamble_payload};
 use crate::params::PILOT_AMPLITUDE;
@@ -130,7 +130,11 @@ fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Result<Vec<u8>, 
         deramp_timing(p, &mut freq);
 
         // Step 2: DFT-domain channel estimation + MMSE equalization.
-        let h_est = dft_ce_estimate(p, &freq, &*ce_idft);
+        let h_est = if p.localized {
+            flat_channel_estimate(p, &freq)
+        } else {
+            dft_ce_estimate(p, &freq, &*ce_idft)
+        };
         let noise_var = estimate_noise_var(p, &freq, &h_est);
         let mut equalized = mmse_equalize(p, &freq, &h_est, noise_var);
 
@@ -200,7 +204,11 @@ pub fn scfdma_constellation(samples: &[f32], mode: &str) -> Option<Vec<(f32, f32
             .collect();
         fft.process(&mut freq);
         deramp_timing(&p, &mut freq);
-        let h_est = dft_ce_estimate(&p, &freq, &*ce_idft);
+        let h_est = if p.localized {
+            flat_channel_estimate(&p, &freq)
+        } else {
+            dft_ce_estimate(&p, &freq, &*ce_idft)
+        };
         let noise_var = estimate_noise_var(&p, &freq, &h_est);
         let mut equalized = mmse_equalize(&p, &freq, &h_est, noise_var);
         idft.process(&mut equalized);
@@ -284,7 +292,11 @@ fn demodulate_soft_with_params(
         // de-spreading (mirrors the OFDM path); critical for SC-FDMA under SRO.
         deramp_timing(p, &mut freq);
 
-        let h_est = dft_ce_estimate(p, &freq, &*ce_idft);
+        let h_est = if p.localized {
+            flat_channel_estimate(p, &freq)
+        } else {
+            dft_ce_estimate(p, &freq, &*ce_idft)
+        };
         let pilot_noise_var = estimate_noise_var(p, &freq, &h_est).max(1e-6);
 
         // Rician K for SoftFrameMetrics: reuse pre-allocated buffer to avoid per-symbol allocation.
@@ -456,7 +468,11 @@ pub fn scfdma_demodulate_soft_gpu(
             .map(|k| Complex32::new(gpu_out[base + k * 2], gpu_out[base + k * 2 + 1]))
             .collect();
 
-        let h_est = dft_ce_estimate(&p, &freq, &*ce_idft);
+        let h_est = if p.localized {
+            flat_channel_estimate(&p, &freq)
+        } else {
+            dft_ce_estimate(&p, &freq, &*ce_idft)
+        };
         let pilot_noise_var = estimate_noise_var(&p, &freq, &h_est).max(1e-6);
 
         for (buf, &sc) in h_pilots_buf.iter_mut().zip(pilot_scs.iter()) {
@@ -552,7 +568,11 @@ pub fn scfdma_demodulate_gpu(
             .map(|k| Complex32::new(gpu_out[base + k * 2], gpu_out[base + k * 2 + 1]))
             .collect();
 
-        let h_est = dft_ce_estimate(&p, &freq, &*ce_idft);
+        let h_est = if p.localized {
+            flat_channel_estimate(&p, &freq)
+        } else {
+            dft_ce_estimate(&p, &freq, &*ce_idft)
+        };
         let noise_var = estimate_noise_var(&p, &freq, &h_est);
         let mut equalized = mmse_equalize(&p, &freq, &h_est, noise_var);
 

@@ -11,6 +11,13 @@ use crate::params::{
 
 /// Return the absolute SC indices of all pilot subcarriers for `p`.
 pub fn pilot_positions(p: &ScFdmaParams) -> Vec<usize> {
+    if p.localized {
+        // Localized (low-PAPR) layout: pilots are a contiguous block at the high edge, so the
+        // `n_data` data SCs form one contiguous block [first_sc .. first_pilot) — that contiguity
+        // is what keeps the DFT-spread signal single-carrier-like (low PAPR).
+        let first_pilot = p.last_sc + 1 - p.n_pilots;
+        return (first_pilot..=p.last_sc).collect();
+    }
     if p.pilot_spacing == 0 {
         return vec![];
     }
@@ -37,6 +44,11 @@ pub fn pilot_positions(p: &ScFdmaParams) -> Vec<usize> {
 /// before channel estimation. On a clean (offset-free) channel the slope is ~0
 /// and this is a near-identity.
 pub fn deramp_timing(p: &ScFdmaParams, freq: &mut [Complex32]) {
+    if p.localized {
+        // The block-pilot layout has no evenly-spaced pilots to fit a ramp; the localized mode is a
+        // flat-channel (offset-free) demonstrator, so skip deramp entirely.
+        return;
+    }
     let pilots = pilot_positions(p);
     if pilots.len() < 2 {
         return;
@@ -58,10 +70,14 @@ pub fn deramp_timing(p: &ScFdmaParams, freq: &mut [Complex32]) {
 
 /// `true` when absolute SC index `sc` is a pilot for this mode.
 pub fn is_pilot(p: &ScFdmaParams, sc: usize) -> bool {
-    if p.pilot_spacing == 0 {
+    if sc < p.first_sc || sc > p.last_sc {
         return false;
     }
-    if sc < p.first_sc || sc > p.last_sc {
+    if p.localized {
+        // Contiguous pilot block at the high edge.
+        return sc >= p.last_sc + 1 - p.n_pilots;
+    }
+    if p.pilot_spacing == 0 {
         return false;
     }
     let offset = sc - p.first_sc;
@@ -118,6 +134,26 @@ pub fn ls_estimate(p: &ScFdmaParams, freq: &[Complex32]) -> Vec<Complex32> {
     }
 
     h_est
+}
+
+/// Single-tap (flat-channel) estimate for the localized low-PAPR layout.
+///
+/// The block-pilot layout has no interpolation grid, so estimate one complex channel gain by
+/// averaging over the contiguous pilot block and apply it to every SC.  Exact on a flat channel
+/// (AWGN / mild fading); the localized mode does not attempt frequency-selective equalization.
+/// Returns estimates indexed by `sc - first_sc` (length = `p.total_sc()`).
+pub fn flat_channel_estimate(p: &ScFdmaParams, freq: &[Complex32]) -> Vec<Complex32> {
+    let total = p.total_sc();
+    let pilots = pilot_positions(p);
+    if pilots.is_empty() {
+        return vec![Complex32::new(1.0, 0.0); total];
+    }
+    let mut acc = Complex32::new(0.0, 0.0);
+    for &sc in &pilots {
+        acc += freq[sc] / Complex32::new(PILOT_AMPLITUDE, 0.0);
+    }
+    let h = acc / pilots.len() as f32;
+    vec![h; total]
 }
 
 /// DFT-domain channel estimation (DFT-CE).
