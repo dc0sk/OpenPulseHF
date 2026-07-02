@@ -134,7 +134,11 @@ pub fn bytes_to_bits(bytes: &[u8]) -> Vec<bool> {
     bits
 }
 
-/// Measure PAPR in dB.
+/// Measure PAPR in dB on the real passband signal (peak/mean over the record).
+///
+/// NOTE: this is a real-bandpass record-max — it bakes in ~3 dB of carrier term (a constant-envelope
+/// tone reads ~3 dB, not 0) and is a high-variance single sample. For PA-relevant PAPR use
+/// [`measure_envelope_papr_ccdf`], which is what low-PAPR mode decisions should be judged on.
 pub fn measure_papr(samples: &[f32]) -> f32 {
     if samples.is_empty() {
         return 0.0;
@@ -147,6 +151,34 @@ pub fn measure_papr(samples: &[f32]) -> f32 {
     10.0 * (peak_sq / mean_sq).log10()
 }
 
+/// PA-relevant PAPR in dB: the complex-envelope power exceeded with probability `quantile` (the CCDF
+/// point), over the mean envelope power.
+///
+/// The instantaneous envelope is `|x + j·H{x}|` (analytic signal via the FFT Hilbert transform), so
+/// this removes the carrier term that inflates [`measure_papr`] by ~3 dB and gives the quantity a
+/// linear PA actually backs off against. Using a CCDF quantile (e.g. 1e-3) instead of the record max
+/// makes it low-variance and length-robust. Over an SSB radio the transmitted audio is real, so this
+/// captures the true envelope excursion without needing an IQ/complex-baseband path.
+pub fn measure_envelope_papr_ccdf(samples: &[f32], quantile: f32) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let q = openpulse_dsp::acquisition::quadrature(samples);
+    let mut inst: Vec<f32> = samples
+        .iter()
+        .zip(q.iter())
+        .map(|(&i, &qq)| i * i + qq * qq)
+        .collect();
+    let mean = inst.iter().sum::<f32>() / inst.len() as f32;
+    if mean < 1e-12 {
+        return 0.0;
+    }
+    inst.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let quantile = quantile.clamp(0.0, 1.0);
+    let idx = (((1.0 - quantile) * inst.len() as f32) as usize).min(inst.len() - 1);
+    10.0 * (inst[idx] / mean).log10()
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -157,6 +189,35 @@ mod tests {
 
     // Constellation-property tests (unit power, point distinctness, Gray round-trips)
     // live with the shared mapper in `openpulse_dsp::constellation`.
+
+    /// The envelope-CCDF metric strips the carrier term that inflates the real-passband max: a
+    /// constant-envelope tone reads ~0 dB envelope-CCDF but ~3 dB real-passband, and SCFDMA52's
+    /// envelope PAPR sits well below its real-passband number.
+    #[test]
+    fn envelope_ccdf_removes_carrier_bakein() {
+        // 1500 Hz tone at 8 kHz — constant envelope.
+        let tone: Vec<f32> = (0..8000)
+            .map(|n| (std::f32::consts::TAU * 1500.0 * n as f32 / 8000.0).sin())
+            .collect();
+        let real = measure_papr(&tone);
+        let env = measure_envelope_papr_ccdf(&tone, 1e-3);
+        assert!(
+            real > 2.5,
+            "real-passband tone PAPR should be ~3 dB: {real:.2}"
+        );
+        assert!(
+            env.abs() < 0.7,
+            "constant-envelope tone CCDF should be ~0 dB: {env:.2}"
+        );
+
+        // A real SCFDMA52 frame: the PA-relevant envelope figure is well below the real-passband max.
+        let payload = b"envelope ccdf vs real passband papr for scfdma52";
+        let frame = scfdma_modulate(payload, "SCFDMA52");
+        assert!(
+            measure_envelope_papr_ccdf(&frame, 1e-3) < measure_papr(&frame) - 1.5,
+            "envelope CCDF should be materially below the real-passband max"
+        );
+    }
 
     /// Attribution guard for SCFDMA52-LP's PAPR win: it is MOSTLY pilot dilution (4 vs 13 pilots),
     /// NOT the localized contiguous mapping. Locks the honest narrative against drift.
