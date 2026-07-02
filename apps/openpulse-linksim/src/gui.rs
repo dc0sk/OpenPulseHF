@@ -327,7 +327,9 @@ fn baseband_iq(samples: &[f32], sps: usize) -> Vec<[f64; 2]> {
     const FC: f32 = 1500.0; // ModemEngine default center frequency
     const FS: f32 = 8000.0;
     const EDGE: usize = 31; // hilbert_iq group-delay artifact margin
-    const MAX_POINTS: usize = 700;
+                            // Kept modest: egui re-plots every visible point each UI frame, so a large scatter is the
+                            // dominant constellation-render cost. 256 shows the structure without lagging the UI.
+    const MAX_POINTS: usize = 256;
     let (i_bb, q_bb) = openpulse_core::iq::hilbert_iq(samples, FC, FS);
     let n = i_bb.len();
     if n <= 2 * EDGE {
@@ -907,7 +909,10 @@ impl eframe::App for LinkApp {
         if self.running.load(Ordering::Relaxed) {
             self.sync_controls();
             self.drain();
-            ctx.request_repaint();
+            // Cap the redraw at ~30 fps rather than repainting unbounded: the sim only produces
+            // ~25 frames/s, so a faster UI rate just re-tessellates the plots (spectrum + up to two
+            // constellations) for nothing and starves input handling. 30 fps stays smooth.
+            ctx.request_repaint_after(Duration::from_millis(33));
         } else if self.ui_randomize {
             // Keep the timer alive while idle so the randomized SNR still updates every 1–5 s.
             ctx.request_repaint_after(Duration::from_millis(200));

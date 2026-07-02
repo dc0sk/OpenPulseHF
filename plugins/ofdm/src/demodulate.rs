@@ -262,7 +262,7 @@ pub fn ofdm_constellation(samples: &[f32], mode: &str) -> Option<Vec<(f32, f32)>
 
 /// Normalize equalized symbols to RMS ≈ 1 and subsample to a bounded point count for plotting.
 fn normalize_constellation_for_display(syms: &[Complex32]) -> Vec<(f32, f32)> {
-    const MAX_POINTS: usize = 800;
+    const MAX_POINTS: usize = 256;
     if syms.is_empty() {
         return Vec::new();
     }
