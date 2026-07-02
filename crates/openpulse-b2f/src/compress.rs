@@ -8,12 +8,20 @@
 //!   original-length prefix.  Self-contained but not wire-compatible with
 //!   external Winlink software (RMS Express, RMS Gateway).
 //! - `compress_lzhuf_winlink` / `decompress_lzhuf_winlink`: 4-byte LE
-//!   original-length prefix followed by raw LH5 bytes.  Wire-compatible with
-//!   Winlink Type C implementations (RMS Express, RMS Gateway), which use LE
-//!   byte order for the length header.
+//!   original-length prefix followed by raw LH5 bytes — the classic Okumura
+//!   `LZHUF.C` length-header convention.
 //! - `decompress_lzhuf_compat`: decode helper that accepts either prefix format
 //!   (chooses a plausible first attempt, then falls back) for mixed-version
 //!   interoperability.
+//!
+//! **External Winlink Type C compatibility is UNVERIFIED.** These round-trip
+//! cleanly between two OpenPulseHF stations, but interop with real RMS
+//! Express / RMS Gateway has never been tested against a captured Winlink Type C
+//! blob, and two things are uncertain: (1) the length-prefix convention, and
+//! (2) the LZHUF variant — this uses LHA `LH5` (via `oxiarc-lzhuf`), whereas FBB
+//! historically used the classic Okumura LZHUF, a *different* bitstream. Closing
+//! the gap requires a real Winlink Type C test vector to confirm both. Not a
+//! production risk today: the CMS gateway sends Type D (Gzip), not Type C.
 
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use oxiarc_lzhuf::{decode_lzh, encode_lzh, LzhMethod};
