@@ -63,6 +63,12 @@ impl ScFdmaParams {
     ///
     /// `n_pilots` and `n_data` are recomputed to preserve `total_sc()`.
     pub fn with_pilot_density(self, coh_bw_hz: f32) -> Self {
+        // The localized layout has a fixed block-pilot geometry; the interleaved-spacing recompute
+        // below would corrupt it (recomputing n_pilots while `localized` stays true → TX/RX layout
+        // mismatch). Adaptive pilot density does not apply to the flat-CE demonstrator.
+        if self.localized {
+            return self;
+        }
         let new_spacing = if coh_bw_hz < 100.0 {
             4
         } else if coh_bw_hz > 300.0 {
@@ -170,16 +176,24 @@ pub const SCFDMA52_64QAM_P4: ScFdmaParams = ScFdmaParams {
     localized: false,
 };
 
-/// SCFDMA-52-LP: low-PAPR **localized** QPSK variant of SCFDMA52. The data occupies one contiguous
-/// 61-SC block [16..76], which keeps the DFT-spread signal single-carrier-like — **~1.6 dB lower
-/// mean PAPR** than the interleaved-pilot SCFDMA52 (11.9 → 10.3 dB over 16 payloads), worth ~1.6 dB
-/// average power at a fixed-PEP linear PA. Just 4 pilots sit in a contiguous block [77..80] and are
-/// estimated **single-tap** (one complex gain averaged over the block), so the mode assumes a **flat
-/// channel** (AWGN / a constant gain-phase response) and is not for frequency-selective HF fading;
-/// it is registered but kept out of every adaptive profile. Fewer pilots also give it more data SCs
-/// than SCFDMA52 (~3389 vs 2889 bps) at the same 2031 Hz width. The residual ~10 dB PAPR (vs a true
-/// single carrier's ~6–7 dB) is the real-valued passband + rectangular LFDMA ceiling; IFDMA or RRC
-/// subcarrier shaping would go lower but need a larger redesign.
+/// SCFDMA-52-LP: a low-PAPR QPSK demonstrator variant of SCFDMA52 — data DFT-spread over one
+/// contiguous 61-SC block [16..76] with just 4 pilots in a block [77..80], single-tap (flat-channel)
+/// estimated. Measures **~2 dB lower mean PAPR** than SCFDMA52 (11.9 → 9.7 dB over 16 payloads).
+///
+/// HONEST ATTRIBUTION (proven by the `papr_ablation` test): ~3/4 of that win comes from carrying
+/// FEWER pilot tones (4 vs SCFDMA52's 13 — thirteen equal-phase pilot cosines peak together), and
+/// only ~0.5 dB from the localized contiguous mapping itself; contiguous data WITH 13 pilots gives
+/// ~0 dB. So the common "interleaved pilots break the single-carrier envelope" story is mostly wrong
+/// — pilot COUNT/power dominates PAPR here, not placement. (An interleaved 4-pilot SCFDMA52 would
+/// reach most of the same PAPR *and* keep an interpolatable channel estimate.)
+///
+/// The 4-block-pilot + single-tap CE is FRAGILE beyond a truly flat, well-timed channel: it assumes
+/// flat gain/phase AND ~zero residual timing offset (deramp is skipped) AND no passband tilt. Under
+/// frequency selectivity, a ±1-sample sync error, or SSB tilt it can SILENTLY mis-decode (no error).
+/// Hence a demonstrator only: registered but in NO adaptive profile, AWGN/flat/well-timed only.
+/// Fewer pilots also raise gross rate to ~3389 bps (vs 2889) — but that's the pilot trade, not the
+/// localization. The residual ~10 dB (vs a true single carrier's ~6–7 dB) is the real-valued
+/// passband + rectangular-LFDMA ceiling.
 pub const SCFDMA52_LP: ScFdmaParams = ScFdmaParams {
     first_sc: 16,
     last_sc: 80,

@@ -77,6 +77,12 @@ impl ScFdmaPlugin {
         let Some(p) = params_for_mode(mode) else {
             return;
         };
+        // The localized block-pilot layout (4 adjacent pilots, ~31 Hz aperture) would pin the
+        // coherence-bandwidth estimate high and pollute the shared adaptive state for other modes;
+        // adaptive pilot density does not apply to the flat-CE demonstrator.
+        if p.localized {
+            return;
+        }
         let spectra = crate::channel::compute_pilot_spectra(samples, &p);
         if let Some(coh_bw) = crate::channel::coh_bw_from_spectra(&spectra, &p) {
             self.adaptive
@@ -380,8 +386,9 @@ mod tests {
             .modulate(&payload, &mod_config("SCFDMA52-LP"))
             .unwrap();
         let (papr_std, papr_lp) = (measure_papr(&std), measure_papr(&lp));
-        // The localized all-data layout (no in-band pilot tones) keeps the DFT-spread envelope
-        // single-carrier-like → measurably lower PAPR than interleaved-pilot SCFDMA52.
+        // SCFDMA52-LP measures lower PAPR than SCFDMA52 — mostly from carrying 4 pilots instead of
+        // 13 (the localized contiguous mapping itself adds only ~0.5 dB; see the `papr_ablation`
+        // test and the SCFDMA52_LP docs for the honest attribution).
         assert!(
             papr_lp + 1.0 < papr_std,
             "SCFDMA52-LP PAPR {papr_lp:.2} dB should be >1 dB below SCFDMA52 {papr_std:.2} dB"
