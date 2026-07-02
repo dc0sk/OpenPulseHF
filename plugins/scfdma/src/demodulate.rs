@@ -51,6 +51,37 @@ pub fn mix_to_nominal(samples: &[f32], delta_hz: f32) -> Vec<f32> {
         .collect()
 }
 
+/// EMA-smooth the channel estimate across symbols (temporal averaging of CE noise on slow/static
+/// channels). Resets when the raw estimate jumps relative to the running one — a fast fade or the
+/// first symbol — so it never smears a genuine channel change. Returns the estimate to equalize with;
+/// callers keep the *raw* estimate for `estimate_noise_var` so the debias (which assumes the residual
+/// is only the fit-rejected noise) stays valid.
+fn smooth_ce(ema: &mut Option<Vec<Complex32>>, raw: &[Complex32]) -> Vec<Complex32> {
+    const ALPHA: f32 = 0.5; // ~2-symbol memory
+    const JUMP_REL: f32 = 0.35; // reset if ||raw-ema||²/||ema||² exceeds this
+    match ema {
+        Some(prev) if prev.len() == raw.len() => {
+            let (mut dnum, mut dden) = (0.0f32, 0.0f32);
+            for (r, p) in raw.iter().zip(prev.iter()) {
+                dnum += (r - p).norm_sqr();
+                dden += p.norm_sqr();
+            }
+            if dden <= 1e-9 || dnum / dden > JUMP_REL {
+                prev.copy_from_slice(raw);
+            } else {
+                for (p, r) in prev.iter_mut().zip(raw.iter()) {
+                    *p = *r * ALPHA + *p * (1.0 - ALPHA);
+                }
+            }
+            prev.clone()
+        }
+        _ => {
+            *ema = Some(raw.to_vec());
+            raw.to_vec()
+        }
+    }
+}
+
 pub fn scfdma_demodulate(samples: &[f32], mode: &str) -> Result<Vec<u8>, ModemError> {
     let p = params_for_mode(mode).ok_or_else(|| {
         ModemError::Configuration(format!("SC-FDMA plugin: unknown mode '{mode}'"))
@@ -135,6 +166,7 @@ fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Result<Vec<u8>, 
     let idft_scale = 1.0 / (p.n_data as f32).sqrt();
 
     let mut bits: Vec<bool> = Vec::with_capacity(n_syms * p.bits_per_symbol());
+    let mut ema_h: Option<Vec<Complex32>> = None;
 
     for sym_idx in 0..n_syms {
         let start = sym_idx * SYM_LEN + CP;
@@ -153,13 +185,15 @@ fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Result<Vec<u8>, 
         // de-spreading (mirrors the OFDM path); critical for SC-FDMA under SRO.
         deramp_timing(p, &mut freq);
 
-        // Step 2: DFT-domain channel estimation + MMSE equalization.
-        let h_est = if p.localized {
+        // Step 2: channel estimation + MMSE equalization. Noise var from the RAW per-symbol estimate
+        // (keeps the debias valid); the EMA-smoothed estimate equalizes to average CE noise.
+        let raw_h = if p.localized {
             flat_channel_estimate(p, &freq)
         } else {
             dft_ce_estimate(p, &freq, &*ce_idft)
         };
-        let noise_var = estimate_noise_var(p, &freq, &h_est);
+        let noise_var = estimate_noise_var(p, &freq, &raw_h);
+        let h_est = smooth_ce(&mut ema_h, &raw_h);
         let mut equalized = mmse_equalize(p, &freq, &h_est, noise_var);
 
         // Step 3: IDFT(N_data) — undo DFT precoding; scale to preserve energy.
@@ -299,6 +333,7 @@ fn demodulate_soft_with_params(
     let mut metric_symbols = 0usize;
     let pilot_scs = pilot_positions(p);
     let mut h_pilots_buf = vec![Complex32::new(0.0, 0.0); pilot_scs.len()];
+    let mut ema_h: Option<Vec<Complex32>> = None;
 
     for sym_idx in 0..n_syms {
         let start = sym_idx * SYM_LEN + CP;
@@ -316,12 +351,15 @@ fn demodulate_soft_with_params(
         // de-spreading (mirrors the OFDM path); critical for SC-FDMA under SRO.
         deramp_timing(p, &mut freq);
 
-        let h_est = if p.localized {
+        let raw_h = if p.localized {
             flat_channel_estimate(p, &freq)
         } else {
             dft_ce_estimate(p, &freq, &*ce_idft)
         };
-        let pilot_noise_var = estimate_noise_var(p, &freq, &h_est).max(1e-6);
+        // Noise var from the RAW (per-symbol) estimate keeps the debias assumption valid; the
+        // EMA-smoothed estimate is used for equalization to average CE noise across symbols.
+        let pilot_noise_var = estimate_noise_var(p, &freq, &raw_h).max(1e-6);
+        let h_est = smooth_ce(&mut ema_h, &raw_h);
 
         // Rician K for SoftFrameMetrics: reuse pre-allocated buffer to avoid per-symbol allocation.
         for (buf, &sc) in h_pilots_buf.iter_mut().zip(pilot_scs.iter()) {
@@ -618,4 +656,60 @@ pub fn scfdma_demodulate_gpu(
     let available = raw.len() - LEN_PREFIX_BYTES;
     let take = payload_len.min(available);
     Some(raw[LEN_PREFIX_BYTES..LEN_PREFIX_BYTES + take].to_vec())
+}
+
+#[cfg(test)]
+mod ema_tests {
+    use super::*;
+    use crate::channel::{dft_ce_estimate, pilot_positions, pilot_value};
+    use crate::params::SCFDMA52;
+    use rustfft::FftPlanner;
+
+    /// #4 justification: on a static channel, EMA-smoothing the per-symbol CE across symbols reduces
+    /// CE noise vs the raw per-symbol estimate — the benefit that helps long frames on slow channels.
+    #[test]
+    fn ema_smoothing_reduces_static_ce_noise() {
+        let p = SCFDMA52;
+        let pilots = pilot_positions(&p);
+        let mut planner = FftPlanner::<f32>::new();
+        let idft = planner.plan_fft_inverse(p.n_pilots);
+        let mut st = 0x2468u64;
+        let mut lcg = || {
+            st = st.wrapping_mul(6364136223846793005).wrapping_add(1);
+            ((st >> 40) as f32) / ((1u64 << 24) as f32)
+        };
+        let sigma = 0.2f32;
+        let (mut raw_mse, mut sm_mse, mut n) = (0.0f32, 0.0f32, 0usize);
+        for _ in 0..64 {
+            let mut ema: Option<Vec<Complex32>> = None;
+            for sym in 0..16 {
+                let mut freq = vec![Complex32::new(0.0, 0.0); FFT_SIZE];
+                for (k, &sc) in pilots.iter().enumerate() {
+                    let (u1, u2) = (lcg().max(1e-6), lcg());
+                    let m = (-2.0 * (sigma * sigma / 2.0) * u1.ln()).sqrt();
+                    let a = std::f32::consts::TAU * u2;
+                    freq[sc] = pilot_value(&p, k) + Complex32::new(m * a.cos(), m * a.sin());
+                }
+                let raw = dft_ce_estimate(&p, &freq, idft.as_ref());
+                let sm = smooth_ce(&mut ema, &raw);
+                if sym >= 2 {
+                    for sc in p.first_sc..=p.last_sc {
+                        raw_mse += (raw[sc - p.first_sc] - Complex32::new(1.0, 0.0)).norm_sqr();
+                        sm_mse += (sm[sc - p.first_sc] - Complex32::new(1.0, 0.0)).norm_sqr();
+                    }
+                    n += p.total_sc();
+                }
+            }
+        }
+        let raw_db = 10.0 * (raw_mse / n as f32).log10();
+        let sm_db = 10.0 * (sm_mse / n as f32).log10();
+        println!(
+            "static CE-MSE: raw={raw_db:.2}dB  ema={sm_db:.2}dB  gain={:.2}dB",
+            raw_db - sm_db
+        );
+        assert!(
+            sm_db < raw_db - 1.0,
+            "EMA CE-MSE {sm_db:.2}dB should beat raw {raw_db:.2}dB by >1 dB"
+        );
+    }
 }
