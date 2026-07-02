@@ -289,9 +289,14 @@ pub fn zf_equalize(p: &ScFdmaParams, freq: &[Complex32], h_est: &[Complex32]) ->
 
 /// Estimate noise variance from pilot residuals.
 ///
-/// Computes the mean squared error between the received pilots and the
-/// LS channel estimate applied to the known pilot amplitude.  This gives a
-/// per-symbol noise power estimate used to regularise MMSE equalization.
+/// Computes the mean squared error between the received pilots and the channel estimate applied to
+/// the known pilot amplitude, then DEBIASES it. The estimate is fitted to the same pilot
+/// observations it is measured against, so the raw residual is only the noise component the fit
+/// *rejects*, not the full noise power: DFT-CE keeps `l_max` of `P` CIR taps → residual retains
+/// `(P−l_max)/P` of the noise; the localized single-tap (flat) CE keeps 1 → residual retains
+/// `(P−1)/P`. Un-debiased this under-reports σ² by ~5 dB for SCFDMA52 (P=13, l_max=9 → ×3.25),
+/// under-regularising MMSE and over-confidence in the soft LLRs at exactly the low-SNR/flat regime
+/// where soft-FEC and HARQ weighting live. This σ² feeds `mmse_equalize` and `mmse_llr_noise_var`.
 pub fn estimate_noise_var(p: &ScFdmaParams, freq: &[Complex32], h_est: &[Complex32]) -> f32 {
     let pilots = pilot_positions(p);
     if pilots.is_empty() {
@@ -307,7 +312,22 @@ pub fn estimate_noise_var(p: &ScFdmaParams, freq: &[Complex32], h_est: &[Complex
             diff.norm_sqr()
         })
         .sum();
-    (sum / pilots.len() as f32).max(1e-6)
+    let raw = sum / pilots.len() as f32;
+    // Debias for the noise degrees of freedom the estimator consumes.
+    let p_n = pilots.len();
+    let dof = if p.localized {
+        p_n.saturating_sub(1) // one averaged gain
+    } else {
+        // DFT-CE keeps l_max = ceil(CP·total / FFT_SIZE) taps (same formula as dft_ce_estimate).
+        let l_max = (CP * p.total_sc()).div_ceil(FFT_SIZE).clamp(1, p_n);
+        p_n.saturating_sub(l_max)
+    };
+    let debias = if dof == 0 {
+        1.0 // no rejected component to scale up from (degenerate); leave the raw residual
+    } else {
+        p_n as f32 / dof as f32
+    };
+    (raw * debias).max(1e-6)
 }
 
 /// Estimate the Rician K-factor (linear ratio) from per-subcarrier channel taps.
@@ -514,7 +534,52 @@ pub fn estimate_cfo_hz(samples: &[f32], p: &ScFdmaParams) -> Option<f32> {
 #[allow(clippy::needless_range_loop)]
 mod tests {
     use super::*;
-    use crate::params::{SCFDMA16, SCFDMA52};
+    use crate::params::{SCFDMA16, SCFDMA52, SCFDMA52_LP};
+
+    /// The debiased noise-var estimate recovers the true σ² (flat channel), where the raw pilot
+    /// residual would under-report it by the DFT-CE projection factor (P/(P−l_max) = 13/4 ≈ 3.25×).
+    #[test]
+    fn estimate_noise_var_is_unbiased() {
+        // Deterministic Box–Muller complex noise from a small LCG (no rng dep).
+        let mut state: u64 = 0x1234_5678_9abc_def0;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((state >> 33) as f32) / ((1u64 << 31) as f32) // ~U[0,1)
+        };
+        for (p, tol) in [(SCFDMA52, 0.18f32), (SCFDMA52_LP, 0.18)] {
+            let sigma2 = 0.04f32; // true per-bin complex noise power
+            let mut planner = FftPlanner::<f32>::new();
+            let ce_idft = planner.plan_fft_inverse(p.n_pilots);
+            let pilots = pilot_positions(&p);
+            let mut acc = 0.0f32;
+            let trials = 4000;
+            for _ in 0..trials {
+                let mut freq = vec![Complex32::new(0.0, 0.0); FFT_SIZE];
+                for &sc in &pilots {
+                    // h_true = 1 (flat) → received = A + noise.
+                    let (u1, u2) = (next().max(1e-6), next());
+                    let mag = (-2.0 * (sigma2 / 2.0) * u1.ln()).sqrt();
+                    let ang = std::f32::consts::TAU * u2;
+                    freq[sc] = Complex32::new(PILOT_AMPLITUDE + mag * ang.cos(), mag * ang.sin());
+                }
+                let h_est = if p.localized {
+                    flat_channel_estimate(&p, &freq)
+                } else {
+                    dft_ce_estimate(&p, &freq, ce_idft.as_ref())
+                };
+                acc += estimate_noise_var(&p, &freq, &h_est);
+            }
+            let est = acc / trials as f32;
+            let rel_err = (est - sigma2).abs() / sigma2;
+            assert!(
+                rel_err < tol,
+                "localized={}: debiased est {est:.4} vs true {sigma2:.4} (rel err {rel_err:.2})",
+                p.localized
+            );
+        }
+    }
 
     #[test]
     fn scfdma16_pilot_positions() {
