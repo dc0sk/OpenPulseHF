@@ -322,6 +322,23 @@ mod tests {
         assert_eq!(rx.as_slice(), payload.as_ref());
     }
 
+    #[test]
+    fn constellation_recovers_clean_equalized_symbols() {
+        use crate::demodulate::scfdma_constellation;
+        let plugin = ScFdmaPlugin::new();
+        let mode = "SCFDMA52-16QAM";
+        let audio = plugin.modulate(&[0x5Au8; 48], &mod_config(mode)).unwrap();
+        let pts = scfdma_constellation(&audio, mode).expect("constellation on a clean signal");
+        assert!(!pts.is_empty(), "recovers equalized data symbols");
+        let rms = (pts.iter().map(|&(i, q)| i * i + q * q).sum::<f32>() / pts.len() as f32).sqrt();
+        assert!((rms - 1.0).abs() < 0.4, "normalized to RMS≈1, got {rms}");
+        assert!(pts.iter().all(|&(i, q)| i.is_finite() && q.is_finite()));
+        assert!(
+            scfdma_constellation(&audio, "FSK4-ACK").is_none(),
+            "unknown mode yields no constellation"
+        );
+    }
+
     // Acquisition over the async-audio loopback condition: an arbitrary carrier
     // phase (here the worst case, ~90°, applied as the Hilbert transform of the
     // real passband frame) plus a non-symbol-aligned leading offset.  A bare real

@@ -254,6 +254,23 @@ mod tests {
         assert_eq!(rx.as_slice(), payload.as_ref());
     }
 
+    #[test]
+    fn constellation_recovers_clean_equalized_symbols() {
+        use crate::demodulate::ofdm_constellation;
+        let plugin = OfdmPlugin::new();
+        let payload = b"OFDM52 constellation extraction test payload, plenty of symbols here";
+        let audio = plugin.modulate(payload, &mod_config("OFDM52")).unwrap();
+        let pts = ofdm_constellation(&audio, "OFDM52").expect("constellation on a clean signal");
+        assert!(!pts.is_empty(), "recovers equalized subcarrier symbols");
+        let rms = (pts.iter().map(|&(i, q)| i * i + q * q).sum::<f32>() / pts.len() as f32).sqrt();
+        assert!((rms - 1.0).abs() < 0.4, "normalized to RMS≈1, got {rms}");
+        assert!(pts.iter().all(|&(i, q)| i.is_finite() && q.is_finite()));
+        assert!(
+            ofdm_constellation(&audio, "FSK4-ACK").is_none(),
+            "unknown mode yields no constellation"
+        );
+    }
+
     // 2. OFDM52 clean loopback
     #[test]
     fn ofdm52_loopback_clean() {
