@@ -27,6 +27,9 @@ const MAX_DB: f32 = 0.0;
 /// Welch segments averaged for each panel's spectrum: enough to read the envelope, few enough that
 /// the finite-sample variance keeps the trace visibly "breathing" over the actual modulated data.
 const SPECTRUM_WELCH_SEGMENTS: usize = 6;
+/// Refresh the (heavy, multicarrier) I/Q constellation every Nth viz tick so it never slows the
+/// spectrum/waterfall; the scatter is cached between refreshes. ~18 fps / 4 ≈ 4.5 fps constellation.
+const CONSTELLATION_STRIDE: u32 = 4;
 const HIST: usize = 600; // rolling plot history (frames)
 const WINDOW: usize = 24; // windowed-throughput averaging window (frames)
 /// SNR slider bounds (dB) — shared by the slider and the randomize feature.
@@ -150,27 +153,34 @@ fn constellation_iq(mode: &str, samples: &[f32], sps: usize, want_iq: bool) -> V
     }
 }
 
-/// Compute one panel's spectrum + I/Q on the worker thread (reuses `ps`'s FFT planner), off the UI
-/// thread. The spectrum FFT feeds the always-drawn spectrum/waterfall; the I/Q source is mode-aware
-/// (see [`constellation_iq`]) and skipped entirely when `want_iq` is false.
-fn compute_panel(
+/// Build one viz panel on the worker thread. The spectrum (cheap Welch PSD over the whole burst, so
+/// it breathes over the real data) is computed every call and keeps the full viz cadence. The I/Q
+/// scatter is refreshed only on `refresh_iq` ticks — the multicarrier extraction is heavy (~14 ms),
+/// so throttling it (see `CONSTELLATION_STRIDE`) keeps the spectrum smooth even with the
+/// constellation on — and cached in `last_iq` between refreshes so it stays displayed.
+fn viz_panel(
     ps: &mut PowerSpectrum,
     samples: &[f32],
     sps: usize,
-    want_iq: bool,
     mode: &str,
+    refresh_iq: bool,
+    want_iq: bool,
+    last_iq: &mut Vec<[f64; 2]>,
 ) -> PanelData {
     if samples.is_empty() {
         return PanelData {
             spectrum: Vec::new(),
-            iq: Vec::new(),
+            iq: last_iq.clone(),
         };
     }
+    if refresh_iq {
+        *last_iq = constellation_iq(mode, samples, sps, true);
+    } else if !want_iq {
+        last_iq.clear();
+    }
     PanelData {
-        // Welch PSD over the whole burst (not just the fixed preamble window), so the trace
-        // reflects the actual random modulated data and breathes naturally frame-to-frame.
         spectrum: ps.compute_welch(samples, SPECTRUM_WELCH_SEGMENTS),
-        iq: constellation_iq(mode, samples, sps, want_iq),
+        iq: last_iq.clone(),
     }
 }
 
@@ -261,6 +271,10 @@ fn spawn_viz(
             PowerSpectrum::new(),
             PowerSpectrum::new(),
         ];
+        // Cached I/Q per panel + a tick counter, so the constellation refreshes on a slower stride
+        // than the spectrum (persist across sim rebuilds).
+        let mut last_iq: [Vec<[f64; 2]>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+        let mut tick: u32 = 0;
         while running.load(Ordering::Relaxed) {
             let (mut sim, gen, mut chan, mut snr, mut cessb) = {
                 let c = controls.lock().unwrap_or_else(|e| e.into_inner());
@@ -294,13 +308,39 @@ fn spawn_viz(
                 };
                 let (tx_a, rx_a, ack_a) = sim.viz_burst(&mode);
                 let want_iq = show_constellation.load(Ordering::Relaxed);
+                let refresh_iq = want_iq && tick.is_multiple_of(CONSTELLATION_STRIDE);
+                tick = tick.wrapping_add(1);
                 let sps = samples_per_symbol(&mode).unwrap_or(0);
-                let panels = [
-                    compute_panel(&mut spectra[0], &tx_a, sps, want_iq, &mode),
-                    compute_panel(&mut spectra[1], &rx_a, sps, want_iq, &mode),
-                    compute_panel(&mut spectra[2], &ack_a, 0, want_iq, "FSK4-ACK"),
-                ];
-                if tx.send(panels).is_err() {
+                // Sequential (not an array literal) so the disjoint &mut borrows of spectra/last_iq
+                // don't overlap.
+                let p0 = viz_panel(
+                    &mut spectra[0],
+                    &tx_a,
+                    sps,
+                    &mode,
+                    refresh_iq,
+                    want_iq,
+                    &mut last_iq[0],
+                );
+                let p1 = viz_panel(
+                    &mut spectra[1],
+                    &rx_a,
+                    sps,
+                    &mode,
+                    refresh_iq,
+                    want_iq,
+                    &mut last_iq[1],
+                );
+                let p2 = viz_panel(
+                    &mut spectra[2],
+                    &ack_a,
+                    0,
+                    "FSK4-ACK",
+                    refresh_iq,
+                    want_iq,
+                    &mut last_iq[2],
+                );
+                if tx.send([p0, p1, p2]).is_err() {
                     return;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
