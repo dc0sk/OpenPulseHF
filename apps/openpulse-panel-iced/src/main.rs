@@ -5,7 +5,10 @@
 //! the K4remote look&feel. Shows synthetic demo data; the daemon wiring is a later increment.
 
 mod app;
+mod connection;
+mod state;
 mod theme;
+mod transport;
 mod ui;
 
 use app::App;

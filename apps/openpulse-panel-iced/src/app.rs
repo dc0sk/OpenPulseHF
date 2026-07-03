@@ -1,125 +1,275 @@
-//! Application state, update loop, and theme wiring for the iced operator panel (REQ-UX-04).
+//! Application state, update loop, connection lifecycle, and theme wiring for the iced operator
+//! panel (REQ-UX-04).
 //!
-//! This is the first scaffold increment: it renders the fixed vertical stack (spectrum → waterfall
-//! → ladder → additional info → controls) with selectable Dark/Light/Contrast/System themes. The
-//! panel is not yet wired to the daemon; it shows synthetic demo data so the look&feel and theme
-//! switching can be exercised. The daemon connection replaces `demo_*` in a later increment.
+//! The panel connects to the daemon control port (reusing the egui panel's transport/connection/
+//! state core), reads a shared `PanelState` updated by the background thread, and sends
+//! `ControlCommand`s. The view renders the fixed vertical stack — spectrum → waterfall → ladder →
+//! additional info → controls — with selectable Dark/Light/Contrast/System themes.
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crossbeam_channel::Sender;
 use iced::{Subscription, Task, Theme};
+use openpulse_daemon::protocol::ControlCommand;
 
+use crate::connection::{self, TransportKind};
+use crate::state::PanelState;
 use crate::theme::{role_rgb, shade_rgb, ColorRole, EffectiveTheme, Shade, ThemeMode};
 use crate::ui;
 
-/// Number of spectrum/waterfall bins.
-pub const BINS: usize = 240;
-/// Number of waterfall history rows (newest first).
-pub const WF_ROWS: usize = 48;
 /// Speed-level rungs shown on the ladder (SL1..=SLN).
-pub const LADDER_RUNGS: u8 = 12;
+pub const LADDER_RUNGS: u8 = 20;
 
 /// Top-level panel application state.
 pub struct App {
-    /// Selected theme (Dark/Light/Contrast/System).
+    // --- theme ---
     pub theme_mode: ThemeMode,
-    /// Detected OS dark preference, used to resolve the `System` theme.
     pub system_is_dark: bool,
 
-    // --- synthetic demo state (placeholder until the daemon is wired in) ---
+    // --- daemon connection ---
+    pub shared: Arc<Mutex<PanelState>>,
+    pub cmd_tx: Option<Sender<ControlCommand>>,
+    pub stop_tx: Option<Sender<()>>,
+    /// Control-port address (TCP host:port).
+    pub addr: String,
+
+    // --- UI-local input state (not part of PanelState) ---
+    pub mode_sel: String,
+    pub freq_khz: String,
+    pub peer_call: String,
+    pub ota_profile: String,
+    pub tx_atten_db: f32,
+    pub squelch: f32,
+    /// Optimistic local mirrors for toggles the daemon doesn't echo in PanelState.
+    pub cessb_on: bool,
+    pub notch_on: bool,
+    pub agc_on: bool,
+    pub logbook_on: bool,
+
     pub tick: u32,
-    /// Latest spectrum trace, dBm per bin.
-    pub spectrum: Vec<f32>,
-    /// Waterfall rows, newest first, dBm per bin.
-    pub waterfall: Vec<Vec<f32>>,
-    /// Current ladder rung (1..=LADDER_RUNGS).
-    pub current_sl: u8,
-    /// Current mode label.
-    pub mode: &'static str,
-    /// Estimated SNR (dB).
-    pub snr_db: f32,
-    /// Session state label.
-    pub state: &'static str,
-    /// Transmit indicator.
-    pub tx: bool,
-    /// Connection indicator.
-    pub connected: bool,
 }
 
 /// UI messages.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum Message {
-    /// Cycle Dark → Light → Contrast → System.
     ToggleTheme,
-    /// Animation/refresh tick.
     Tick,
-    /// Toggle the (demo) transmit indicator.
-    ToggleTx,
-    /// Toggle the (demo) connection.
-    ToggleConnect,
+    AddrChanged(String),
+    ConnectToggle,
+    Ptt,
+    ModeSelected(String),
+    FreqChanged(String),
+    TuneFreq,
+    PeerCallChanged(String),
+    ConnectPeer,
+    DisconnectPeer,
+    ToggleRepeater,
+    ToggleCessb,
+    ToggleNotch,
+    ToggleAgc,
+    ToggleLogbook,
+    AttenChanged(f32),
+    SquelchChanged(f32),
+    AcceptQsy,
+    RejectQsy,
+    OtaProfileChanged(String),
+    StartOta,
+    StopOta,
+    OtaLockToggle,
 }
 
 impl App {
-    /// Construct the app and its initial task.
     pub fn new() -> (Self, Task<Message>) {
-        let mut app = App {
+        let app = App {
             theme_mode: ThemeMode::default(),
-            system_is_dark: detect_system_dark(),
+            system_is_dark: crate::ui::detect_system_dark(),
+            shared: Arc::new(Mutex::new(PanelState::default())),
+            cmd_tx: None,
+            stop_tx: None,
+            addr: "127.0.0.1:9000".into(),
+            mode_sel: "BPSK250".into(),
+            freq_khz: "14100.000".into(),
+            peer_call: String::new(),
+            ota_profile: "hpx_hf".into(),
+            tx_atten_db: 0.0,
+            squelch: 0.02,
+            cessb_on: false,
+            notch_on: false,
+            agc_on: false,
+            logbook_on: false,
             tick: 0,
-            spectrum: synth_spectrum(0),
-            waterfall: vec![vec![-110.0; BINS]; WF_ROWS],
-            current_sl: 5,
-            mode: "QPSK500",
-            snr_db: 14.0,
-            state: "Idle",
-            tx: false,
-            connected: false,
         };
-        // Seed a few waterfall rows so it isn't blank on first paint.
-        for t in 0..WF_ROWS as u32 {
-            app.waterfall[t as usize] = synth_spectrum(t);
-        }
         (app, Task::none())
+    }
+
+    /// Whether a connection worker is currently spawned.
+    pub fn is_connected(&self) -> bool {
+        self.cmd_tx.is_some()
+    }
+
+    fn send(&self, cmd: ControlCommand) {
+        if let Some(tx) = &self.cmd_tx {
+            let _ = tx.try_send(cmd);
+        }
+    }
+
+    fn connect(&mut self) {
+        let (stop_tx, stop_rx) = crossbeam_channel::bounded(1);
+        let cmd_tx = connection::spawn(
+            self.addr.clone(),
+            TransportKind::Tcp,
+            self.shared.clone(),
+            stop_rx,
+        );
+        self.stop_tx = Some(stop_tx);
+        self.cmd_tx = Some(cmd_tx);
+    }
+
+    fn disconnect(&mut self) {
+        if let Some(tx) = self.stop_tx.take() {
+            let _ = tx.send(());
+        }
+        self.cmd_tx = None;
+        if let Ok(mut st) = self.shared.lock() {
+            st.connected = false;
+        }
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::ToggleTheme => self.theme_mode = self.theme_mode.next(),
-            Message::Tick => {
-                self.tick = self.tick.wrapping_add(1);
-                self.spectrum = synth_spectrum(self.tick);
-                self.waterfall.insert(0, self.spectrum.clone());
-                self.waterfall.truncate(WF_ROWS);
-                if self.connected {
-                    // Gently wander the demo readouts so the ladder/info feel live.
-                    self.snr_db = 14.0 + 6.0 * ((self.tick as f32) * 0.05).sin();
-                    self.current_sl = 3 + ((self.snr_db as i32 - 8).clamp(0, 8) as u8);
-                    self.current_sl = self.current_sl.clamp(1, LADDER_RUNGS);
+            Message::Tick => self.tick = self.tick.wrapping_add(1),
+            Message::AddrChanged(a) => self.addr = a,
+            Message::ConnectToggle => {
+                if self.is_connected() {
+                    self.disconnect();
+                } else {
+                    self.connect();
                 }
             }
-            Message::ToggleTx => self.tx = !self.tx,
-            Message::ToggleConnect => {
-                self.connected = !self.connected;
-                self.state = if self.connected { "Connected" } else { "Idle" };
-                if !self.connected {
-                    self.tx = false;
+            Message::Ptt => {
+                let active = self.shared.lock().map(|s| s.ptt_active).unwrap_or(false);
+                self.send(if active {
+                    ControlCommand::PttRelease
+                } else {
+                    ControlCommand::PttAssert
+                });
+            }
+            Message::ModeSelected(m) => {
+                self.mode_sel = m.clone();
+                self.send(ControlCommand::SetMode { mode: m });
+            }
+            Message::FreqChanged(v) => self.freq_khz = v,
+            Message::TuneFreq => {
+                if let Ok(khz) = self.freq_khz.trim().parse::<f64>() {
+                    self.send(ControlCommand::SetFreq {
+                        rig: "rigctld".into(),
+                        freq_hz: (khz * 1000.0) as u64,
+                    });
+                }
+            }
+            Message::PeerCallChanged(c) => self.peer_call = c,
+            Message::ConnectPeer => {
+                let call = self.peer_call.trim().to_uppercase();
+                if !call.is_empty() {
+                    self.send(ControlCommand::ConnectPeer { callsign: call });
+                }
+            }
+            Message::DisconnectPeer => self.send(ControlCommand::DisconnectPeer),
+            Message::ToggleRepeater => {
+                let on = self
+                    .shared
+                    .lock()
+                    .map(|s| s.repeater_enabled)
+                    .unwrap_or(false);
+                self.send(if on {
+                    ControlCommand::DisableRepeater
+                } else {
+                    ControlCommand::EnableRepeater
+                });
+            }
+            Message::ToggleCessb => {
+                self.cessb_on = !self.cessb_on;
+                self.send(ControlCommand::SetCessb {
+                    enabled: self.cessb_on,
+                });
+            }
+            Message::ToggleNotch => {
+                self.notch_on = !self.notch_on;
+                self.send(ControlCommand::SetNotch {
+                    enabled: self.notch_on,
+                });
+            }
+            Message::ToggleAgc => {
+                self.agc_on = !self.agc_on;
+                self.send(ControlCommand::SetAgc {
+                    enabled: self.agc_on,
+                });
+            }
+            Message::ToggleLogbook => {
+                self.logbook_on = !self.logbook_on;
+                self.send(ControlCommand::SetLogbook {
+                    enabled: self.logbook_on,
+                });
+            }
+            Message::AttenChanged(db) => {
+                self.tx_atten_db = db;
+                self.send(ControlCommand::SetTxAttenuation { db, band: None });
+            }
+            Message::SquelchChanged(t) => {
+                self.squelch = t;
+                self.send(ControlCommand::SetDcdSquelch { threshold: t });
+            }
+            Message::AcceptQsy => {
+                if let Some(token) = self.pending_qsy() {
+                    self.send(ControlCommand::AcceptQsy { token });
+                }
+            }
+            Message::RejectQsy => {
+                if let Some(token) = self.pending_qsy() {
+                    self.send(ControlCommand::RejectQsy { token });
+                }
+            }
+            Message::OtaProfileChanged(p) => self.ota_profile = p,
+            Message::StartOta => self.send(ControlCommand::StartOtaSession {
+                profile: self.ota_profile.clone(),
+            }),
+            Message::StopOta => self.send(ControlCommand::StopOtaSession),
+            Message::OtaLockToggle => {
+                let (locked, level) = self
+                    .shared
+                    .lock()
+                    .map(|s| (s.ota_is_locked, s.ota_tx_level.clone()))
+                    .unwrap_or((false, None));
+                if locked {
+                    self.send(ControlCommand::OtaUnlock);
+                } else {
+                    self.send(ControlCommand::OtaLockLevel {
+                        level: level.unwrap_or_else(|| "SL2".into()),
+                    });
                 }
             }
         }
         Task::none()
     }
 
-    pub fn subscription(&self) -> Subscription<Message> {
-        iced::time::every(Duration::from_millis(120)).map(|_| Message::Tick)
+    fn pending_qsy(&self) -> Option<String> {
+        self.shared
+            .lock()
+            .ok()
+            .and_then(|s| s.pending_qsy_token.clone())
     }
 
-    /// The concrete theme resolved for this frame (`System` → OS preference).
+    pub fn subscription(&self) -> Subscription<Message> {
+        // ~10 Hz refresh so live spectrum/metrics repaint from the shared state.
+        iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick)
+    }
+
     pub fn effective_theme(&self) -> EffectiveTheme {
         self.theme_mode.effective(self.system_is_dark)
     }
 
-    /// The iced base theme: background + semantic accents from the active palette, so default
-    /// widget chrome and text colours match the stack's styled surfaces.
     pub fn theme(&self) -> Theme {
         let eff = self.effective_theme();
         let c = |rgb: (u8, u8, u8)| iced::Color::from_rgb8(rgb.0, rgb.1, rgb.2);
@@ -138,45 +288,4 @@ impl App {
     pub fn view(&self) -> iced::Element<'_, Message> {
         ui::view(self)
     }
-}
-
-/// A synthetic spectrum trace (dBm per bin): a noise floor plus a couple of moving signal humps —
-/// stand-in demo data so the panel renders and the themes can be compared until the daemon is wired.
-fn synth_spectrum(tick: u32) -> Vec<f32> {
-    let t = tick as f32;
-    (0..BINS)
-        .map(|i| {
-            let x = i as f32 / BINS as f32;
-            // Deterministic pseudo-noise floor.
-            let n = (((i as u32).wrapping_mul(2654435761).wrapping_add(tick)) >> 24) as f32 / 255.0;
-            let floor = -112.0 + n * 6.0;
-            // Two humps that drift across the window.
-            let c1 = 0.30 + 0.05 * (t * 0.03).sin();
-            let c2 = 0.68 + 0.04 * (t * 0.021 + 1.0).cos();
-            let hump =
-                |c: f32, amp: f32, w: f32| amp * (-((x - c) * (x - c)) / (2.0 * w * w)).exp();
-            floor + hump(c1, 70.0, 0.02) + hump(c2, 55.0, 0.035)
-        })
-        .collect()
-}
-
-/// Best-effort detection of the OS dark/light preference for the `System` theme. Defaults to dark
-/// when it can't tell (matches the panel's default).
-pub fn detect_system_dark() -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        if let Ok(out) = std::process::Command::new("gsettings")
-            .args(["get", "org.gnome.desktop.interface", "color-scheme"])
-            .output()
-        {
-            let s = String::from_utf8_lossy(&out.stdout).to_lowercase();
-            if s.contains("dark") {
-                return true;
-            }
-            if s.contains("light") {
-                return false;
-            }
-        }
-    }
-    true
 }

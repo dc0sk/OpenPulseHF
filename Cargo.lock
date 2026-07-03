@@ -4882,7 +4882,13 @@ dependencies = [
 name = "openpulse-panel-iced"
 version = "0.3.0"
 dependencies = [
+ "crossbeam-channel",
+ "ewebsock",
  "iced",
+ "openpulse-daemon",
+ "openpulse-modem",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

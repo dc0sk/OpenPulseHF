@@ -11,3 +11,9 @@ path = "src/main.rs"
 
 [dependencies]
 iced = { version = "0.13", features = ["canvas", "tokio"] }
+openpulse-daemon = { workspace = true }
+openpulse-modem = { workspace = true }
+serde_json = { workspace = true }
+crossbeam-channel = { workspace = true }
+tracing = { workspace = true }
+ewebsock = "0.6"
