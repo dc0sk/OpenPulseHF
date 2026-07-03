@@ -23,11 +23,7 @@ use crate::state::{PanelState, RigSnapshot, ECC_HISTORY_LEN, WATERFALL_ROWS};
 use crate::transport::{RecvMsg, TcpTransport, Transport, WsTransport};
 
 /// Whether to use raw TCP or WebSocket transport.
-///
-/// The iced panel currently connects over `Tcp`; the `WebSocket` arm is retained from the shared
-/// transport core (a TCP/WS selector is a later parity increment).
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum TransportKind {
     #[cfg(not(target_arch = "wasm32"))]
     Tcp,

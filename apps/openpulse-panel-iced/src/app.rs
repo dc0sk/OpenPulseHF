@@ -43,8 +43,10 @@ pub struct App {
     pub shared: Arc<Mutex<PanelState>>,
     pub cmd_tx: Option<Sender<ControlCommand>>,
     pub stop_tx: Option<Sender<()>>,
-    /// Control-port address (TCP host:port).
+    /// Control-port address (`host:port` for TCP, `ws://host:port` for WebSocket).
     pub addr: String,
+    /// Selected transport (TCP or WebSocket).
+    pub transport_kind: TransportKind,
 
     // --- UI-local input state (not part of PanelState) ---
     pub mode_sel: String,
@@ -78,6 +80,7 @@ pub enum Message {
     ToggleTheme,
     Tick,
     AddrChanged(String),
+    SelectTransport(bool),
     ConnectToggle,
     Ptt,
     ModeSelected(String),
@@ -127,6 +130,7 @@ impl App {
             cmd_tx: None,
             stop_tx: None,
             addr: "127.0.0.1:9000".into(),
+            transport_kind: TransportKind::Tcp,
             mode_sel: "BPSK250".into(),
             freq_khz: "14100.000".into(),
             peer_call: String::new(),
@@ -163,7 +167,7 @@ impl App {
         let (stop_tx, stop_rx) = crossbeam_channel::bounded(1);
         let cmd_tx = connection::spawn(
             self.addr.clone(),
-            TransportKind::Tcp,
+            self.transport_kind.clone(),
             self.shared.clone(),
             stop_rx,
         );
@@ -197,6 +201,19 @@ impl App {
                 }
             }
             Message::AddrChanged(a) => self.addr = a,
+            Message::SelectTransport(ws) => {
+                self.transport_kind = if ws {
+                    TransportKind::WebSocket
+                } else {
+                    TransportKind::Tcp
+                };
+                // Offer a sensible default address for the chosen scheme.
+                if ws && !self.addr.starts_with("ws") {
+                    self.addr = "ws://127.0.0.1:9001".into();
+                } else if !ws && self.addr.starts_with("ws") {
+                    self.addr = "127.0.0.1:9000".into();
+                }
+            }
             Message::ConnectToggle => {
                 if self.is_connected() {
                     self.disconnect();

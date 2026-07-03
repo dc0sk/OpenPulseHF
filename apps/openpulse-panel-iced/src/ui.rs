@@ -12,6 +12,7 @@ use iced::{
 };
 
 use crate::app::{App, Message, LADDER_RUNGS};
+use crate::connection::TransportKind;
 use crate::state::RigSnapshot;
 use crate::theme::{role_rgb, shade_rgb, ColorRole, EffectiveTheme, Shade};
 
@@ -154,6 +155,7 @@ struct Snap {
     inbox: Vec<crate::state::MessageSummary>,
     open_msg_id: Option<u64>,
     open_msg_body: Option<String>,
+    ecc_history: Vec<f32>,
 }
 
 pub fn view(app: &App) -> Element<'_, Message> {
@@ -196,6 +198,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
             inbox: st.inbox.clone(),
             open_msg_id: st.open_message_id,
             open_msg_body: st.open_message_body.clone(),
+            ecc_history: st.ecc_history.iter().cloned().collect(),
         }
     };
 
@@ -405,6 +408,23 @@ fn info_widget(snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
     if let Some(r) = &snap.rig_b {
         col = col.push(info_row(eff, "Rig B", &fmt_rig(r), ColorRole::RxValue));
     }
+    // ECC-rate trend (rolling ~2 min).
+    col = col
+        .push(
+            Text::new("ECC rate (2 min)")
+                .size(11)
+                .color(role(eff, ColorRole::Inactive)),
+        )
+        .push(
+            Canvas::new(EccTrend {
+                hist: snap.ecc_history.clone(),
+                bg: shade(eff, Shade::Track),
+                line: role(eff, ColorRole::Caution),
+                grid: shade(eff, Shade::Edge),
+            })
+            .width(Length::Fill)
+            .height(Length::Fixed(56.0)),
+        );
     col.into()
 }
 
@@ -415,9 +435,21 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
         ColorRole::Inactive
     };
     // Connection row.
+    let transports: &[&str] = &["TCP", "WS"];
+    let tsel = if matches!(app.transport_kind, TransportKind::WebSocket) {
+        "WS"
+    } else {
+        "TCP"
+    };
     let conn = Row::new()
         .spacing(8)
         .align_y(Alignment::Center)
+        .push(
+            pick_list(transports, Some(tsel), |s: &str| {
+                Message::SelectTransport(s == "WS")
+            })
+            .text_size(13),
+        )
         .push(
             text_input("host:port", &app.addr)
                 .on_input(Message::AddrChanged)
@@ -1146,6 +1178,56 @@ impl canvas::Program<Message> for SpectrumTrace {
             });
             frame.stroke(
                 &trace,
+                Stroke::default().with_width(1.5).with_color(self.line),
+            );
+        }
+        vec![frame.into_geometry()]
+    }
+}
+
+/// ECC-rate trend line plot (newest sample at the right), 0–10 % full-scale.
+struct EccTrend {
+    hist: Vec<f32>,
+    bg: Color,
+    line: Color,
+    grid: Color,
+}
+
+impl canvas::Program<Message> for EccTrend {
+    type State = ();
+    fn draw(
+        &self,
+        _s: &(),
+        renderer: &Renderer,
+        _t: &Theme,
+        bounds: Rectangle,
+        _c: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        let (w, h) = (bounds.width, bounds.height);
+        frame.fill_rectangle(Point::ORIGIN, Size::new(w, h), self.bg);
+        let mid = Path::line(Point::new(0.0, h / 2.0), Point::new(w, h / 2.0));
+        frame.stroke(
+            &mid,
+            Stroke::default().with_width(1.0).with_color(self.grid),
+        );
+        // `hist` is newest-first; draw oldest → newest left to right, 0..0.10 mapped to full height.
+        let n = self.hist.len();
+        if n > 1 {
+            let full = 0.10f32;
+            let path = Path::new(|b| {
+                for (i, &v) in self.hist.iter().rev().enumerate() {
+                    let x = i as f32 / (n - 1) as f32 * w;
+                    let y = (1.0 - (v / full).clamp(0.0, 1.0)) * h;
+                    if i == 0 {
+                        b.move_to(Point::new(x, y));
+                    } else {
+                        b.line_to(Point::new(x, y));
+                    }
+                }
+            });
+            frame.stroke(
+                &path,
                 Stroke::default().with_width(1.5).with_color(self.line),
             );
         }
