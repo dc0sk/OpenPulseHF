@@ -1,0 +1,13 @@
+[package]
+name = "openpulse-panel-iced"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Operator panel (iced re-implementation, REQ-UX-04): vertical stack — spectrum, waterfall, ladder, info, controls — with Dark/Light/Contrast/System themes."
+
+[[bin]]
+name = "openpulse-panel-iced"
+path = "src/main.rs"
+
+[dependencies]
+iced = { version = "0.13", features = ["canvas", "tokio"] }
