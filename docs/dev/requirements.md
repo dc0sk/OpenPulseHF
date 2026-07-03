@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/requirements.md
 status: living
-last_updated: 2026-06-29
+last_updated: 2026-07-03
 ---
 
 # Requirements
@@ -164,6 +164,10 @@ Regulatory compliance is a hard requirement for any transmission on amateur radi
 - CLI usage and docs must stay aligned across releases.
 - New user-facing options must be documented in docs/cli-guide.md.
 - README usage examples should stay current with implemented behavior.
+- The operator panel application (`apps/openpulse-panel`) shall be re-implemented on the `iced` GUI
+  toolkit (replacing egui/eframe), presenting a single vertical stack of panels in this fixed
+  top-to-bottom order: (1) spectrum, (2) waterfall, (3) ladder (adaptive rate/mode), (4) additional
+  info, (5) controls. (REQ-UX-04)
 
 ## Documentation requirements
 
