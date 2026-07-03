@@ -151,6 +151,9 @@ struct Snap {
     spectrum: Vec<f32>,
     waterfall: Vec<Vec<f32>>,
     log: Vec<String>,
+    inbox: Vec<crate::state::MessageSummary>,
+    open_msg_id: Option<u64>,
+    open_msg_body: Option<String>,
 }
 
 pub fn view(app: &App) -> Element<'_, Message> {
@@ -190,17 +193,27 @@ pub fn view(app: &App) -> Element<'_, Message> {
             spectrum: st.spectrum_bins.clone(),
             waterfall: st.spectrum_history.iter().cloned().collect(),
             log: st.event_log.iter().take(60).cloned().collect(),
+            inbox: st.inbox.clone(),
+            open_msg_id: st.open_message_id,
+            open_msg_body: st.open_message_body.clone(),
         }
     };
 
-    let stack = Column::new()
+    let mut stack = Column::new()
         .spacing(8)
         .padding(10)
         .push(panel(eff, "Spectrum", spectrum_widget(&snap, eff)))
         .push(panel(eff, "Waterfall", waterfall_widget(&snap, eff)))
         .push(panel(eff, "Ladder", ladder_widget(&snap, eff)))
         .push(panel(eff, "Additional info", info_widget(&snap, eff)))
-        .push(panel(eff, "Controls", controls_widget(app, &snap, eff)))
+        .push(panel(eff, "Controls", controls_widget(app, &snap, eff)));
+
+    if app.show_config {
+        stack = stack.push(panel(eff, "Daemon config", config_widget(app, eff)));
+    }
+
+    let stack = stack
+        .push(panel(eff, "Messages", messages_widget(app, &snap, eff)))
         .push(panel(eff, "Event log", log_widget(&snap, eff)));
 
     let scroll = scrollable(stack).height(Length::Fill);
@@ -614,11 +627,20 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
         );
     }
 
-    // Theme toggle.
+    // Config toggle + theme toggle.
     col = col.push(
         Row::new()
             .spacing(8)
             .push(Space::with_width(Length::Fill))
+            .push(neutral_btn(
+                eff,
+                if app.show_config {
+                    "Hide config"
+                } else {
+                    "Config"
+                },
+                Message::ToggleConfig,
+            ))
             .push(neutral_btn(
                 eff,
                 &format!("Theme: {}", app.theme_mode.label()),
@@ -626,6 +648,235 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
             )),
     );
     col.into()
+}
+
+fn messages_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
+    let header = Row::new()
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .push(
+            Text::new(format!("Inbox ({})", snap.inbox.len()))
+                .size(13)
+                .color(role(eff, ColorRole::RxValue)),
+        )
+        .push(neutral_btn(eff, "Refresh", Message::RefreshInbox));
+
+    let mut list = Column::new().spacing(3);
+    for m in &snap.inbox {
+        let open = snap.open_msg_id == Some(m.id);
+        let label = format!("{} {} — {}", hhmm(m.timestamp_secs), m.from, m.subject);
+        let accent = if open {
+            ColorRole::Signal
+        } else {
+            ColorRole::Inactive
+        };
+        let row = Row::new()
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .push(link_btn(eff, &label, Message::OpenMsg(m.id), accent))
+            .push(Space::with_width(Length::Fill))
+            .push(link_btn(
+                eff,
+                "✕",
+                Message::DeleteMsg(m.id),
+                ColorRole::TxActive,
+            ));
+        list = list.push(row);
+    }
+    let inbox = scrollable(list).height(Length::Fixed(120.0));
+
+    let reader: Element<Message> = match &snap.open_msg_body {
+        Some(body) => Container::new(
+            Text::new(body.clone())
+                .size(12)
+                .color(role(eff, ColorRole::RxValue)),
+        )
+        .padding(8)
+        .width(Length::Fill)
+        .style(move |_t: &Theme| container::Style {
+            background: Some(Background::Color(shade(eff, Shade::Track))),
+            border: Border {
+                color: shade(eff, Shade::Edge),
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into(),
+        None => Space::with_height(Length::Fixed(0.0)).into(),
+    };
+
+    let can_send = !app.msg_to.trim().is_empty()
+        && !app.msg_subject.trim().is_empty()
+        && !app.msg_body.trim().is_empty();
+    let send = accent_btn(
+        eff,
+        "Send",
+        Message::SendMsg,
+        if can_send {
+            ColorRole::Locked
+        } else {
+            ColorRole::Inactive
+        },
+    );
+    let compose = Column::new()
+        .spacing(5)
+        .push(
+            Text::new("Compose")
+                .size(12)
+                .color(role(eff, ColorRole::Inactive)),
+        )
+        .push(
+            Row::new()
+                .spacing(6)
+                .push(
+                    text_input("CALLSIGN", &app.msg_to)
+                        .on_input(Message::MsgTo)
+                        .size(13)
+                        .width(Length::Fixed(120.0)),
+                )
+                .push(
+                    text_input("subject", &app.msg_subject)
+                        .on_input(Message::MsgSubject)
+                        .size(13)
+                        .width(Length::Fill),
+                ),
+        )
+        .push(
+            text_input("Message body…", &app.msg_body)
+                .on_input(Message::MsgBody)
+                .size(13),
+        )
+        .push(Row::new().push(Space::with_width(Length::Fill)).push(send));
+
+    Column::new()
+        .spacing(8)
+        .push(header)
+        .push(inbox)
+        .push(reader)
+        .push(compose)
+        .into()
+}
+
+fn config_widget(app: &App, eff: EffectiveTheme) -> Element<'static, Message> {
+    let c = &app.config_draft;
+    let bandplans: &[&str] = &["unrestricted", "ham-iaru-r1", "ham-iaru-r2", "ham-iaru-r3"];
+    let bp_sel = bandplans
+        .iter()
+        .copied()
+        .find(|&b| b == c.bandplan_mode.as_str());
+    let mode_sel = MODES.iter().copied().find(|&m| m == c.mode.as_str());
+
+    Column::new()
+        .spacing(6)
+        .push(
+            Row::new()
+                .spacing(8)
+                .push(neutral_btn(eff, "Fetch", Message::FetchConfig))
+                .push(accent_btn(
+                    eff,
+                    "Apply",
+                    Message::ApplyConfig,
+                    ColorRole::Locked,
+                )),
+        )
+        .push(info_row(
+            eff,
+            "Callsign",
+            if c.callsign.is_empty() {
+                "—"
+            } else {
+                &c.callsign
+            },
+            ColorRole::RxValue,
+        ))
+        .push(info_row(
+            eff,
+            "Grid",
+            if c.grid_square.is_empty() {
+                "—"
+            } else {
+                &c.grid_square
+            },
+            ColorRole::RxValue,
+        ))
+        .push(
+            Row::new()
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .push(
+                    Text::new("Mode")
+                        .size(13)
+                        .width(Length::Fixed(78.0))
+                        .color(role(eff, ColorRole::Inactive)),
+                )
+                .push(
+                    pick_list(MODES, mode_sel, |m: &str| Message::CfgMode(m.to_string()))
+                        .text_size(13),
+                ),
+        )
+        .push(slider_row(
+            eff,
+            &format!("TX atten {:.1} dB", c.tx_attenuation_db),
+            -30.0..=0.0,
+            c.tx_attenuation_db,
+            Message::CfgAtten,
+        ))
+        .push(
+            Row::new()
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .push(
+                    Text::new("Bandplan")
+                        .size(13)
+                        .width(Length::Fixed(78.0))
+                        .color(role(eff, ColorRole::Inactive)),
+                )
+                .push(
+                    pick_list(bandplans, bp_sel, |b: &str| {
+                        Message::CfgBandplan(b.to_string())
+                    })
+                    .text_size(13),
+                ),
+        )
+        .push(toggle_btn(
+            eff,
+            "QSY",
+            c.qsy_enabled,
+            Message::CfgQsy(!c.qsy_enabled),
+        ))
+        .push(toggle_btn(
+            eff,
+            "Tune on high SWR",
+            c.allow_tuner_on_high_swr,
+            Message::CfgTuneSwr(!c.allow_tuner_on_high_swr),
+        ))
+        .into()
+}
+
+/// A text-only "link" button (no background) in a role colour.
+fn link_btn<'a>(
+    eff: EffectiveTheme,
+    label: &str,
+    msg: Message,
+    r: ColorRole,
+) -> Button<'a, Message> {
+    let col = role(eff, r);
+    Button::new(Text::new(label.to_string()).size(12).color(col))
+        .padding([2, 4])
+        .on_press(msg)
+        .style(move |_t: &Theme, _s: button::Status| button::Style {
+            background: None,
+            text_color: col,
+            ..button::Style::default()
+        })
+}
+
+/// UTC time-of-day `HH:MMZ` from a Unix timestamp.
+fn hhmm(ts: u64) -> String {
+    let h = (ts / 3600) % 24;
+    let m = (ts / 60) % 60;
+    format!("{h:02}:{m:02}Z")
 }
 
 fn log_widget(snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {

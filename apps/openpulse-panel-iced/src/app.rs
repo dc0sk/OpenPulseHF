@@ -14,9 +14,21 @@ use iced::{Subscription, Task, Theme};
 use openpulse_daemon::protocol::ControlCommand;
 
 use crate::connection::{self, TransportKind};
-use crate::state::PanelState;
+use crate::state::{DaemonConfig, PanelState};
 use crate::theme::{role_rgb, shade_rgb, ColorRole, EffectiveTheme, Shade, ThemeMode};
 use crate::ui;
+
+fn default_config() -> DaemonConfig {
+    DaemonConfig {
+        callsign: String::new(),
+        grid_square: String::new(),
+        mode: "BPSK250".into(),
+        tx_attenuation_db: 0.0,
+        qsy_enabled: false,
+        bandplan_mode: "unrestricted".into(),
+        allow_tuner_on_high_swr: false,
+    }
+}
 
 /// Speed-level rungs shown on the ladder (SL1..=SLN).
 pub const LADDER_RUNGS: u8 = 20;
@@ -46,6 +58,16 @@ pub struct App {
     pub notch_on: bool,
     pub agc_on: bool,
     pub logbook_on: bool,
+
+    // --- messages ---
+    pub msg_to: String,
+    pub msg_subject: String,
+    pub msg_body: String,
+
+    // --- config editor ---
+    pub show_config: bool,
+    pub config_draft: DaemonConfig,
+    pub config_fetch_pending: bool,
 
     pub tick: u32,
 }
@@ -77,6 +99,23 @@ pub enum Message {
     StartOta,
     StopOta,
     OtaLockToggle,
+    // messages
+    MsgTo(String),
+    MsgSubject(String),
+    MsgBody(String),
+    SendMsg,
+    RefreshInbox,
+    OpenMsg(u64),
+    DeleteMsg(u64),
+    // config
+    ToggleConfig,
+    FetchConfig,
+    ApplyConfig,
+    CfgMode(String),
+    CfgAtten(f32),
+    CfgQsy(bool),
+    CfgBandplan(String),
+    CfgTuneSwr(bool),
 }
 
 impl App {
@@ -98,6 +137,12 @@ impl App {
             notch_on: false,
             agc_on: false,
             logbook_on: false,
+            msg_to: String::new(),
+            msg_subject: String::new(),
+            msg_body: String::new(),
+            show_config: false,
+            config_draft: default_config(),
+            config_fetch_pending: false,
             tick: 0,
         };
         (app, Task::none())
@@ -139,7 +184,18 @@ impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::ToggleTheme => self.theme_mode = self.theme_mode.next(),
-            Message::Tick => self.tick = self.tick.wrapping_add(1),
+            Message::Tick => {
+                self.tick = self.tick.wrapping_add(1);
+                // Config fetch is async: once the daemon's ConfigData arrives, seed the draft.
+                if self.config_fetch_pending {
+                    if let Ok(st) = self.shared.lock() {
+                        if let Some(cfg) = &st.daemon_config {
+                            self.config_draft = cfg.clone();
+                            self.config_fetch_pending = false;
+                        }
+                    }
+                }
+            }
             Message::AddrChanged(a) => self.addr = a,
             Message::ConnectToggle => {
                 if self.is_connected() {
@@ -250,6 +306,61 @@ impl App {
                     });
                 }
             }
+            // --- messages ---
+            Message::MsgTo(v) => self.msg_to = v,
+            Message::MsgSubject(v) => self.msg_subject = v,
+            Message::MsgBody(v) => self.msg_body = v,
+            Message::SendMsg => {
+                let (to, subject, body) = (
+                    self.msg_to.trim().to_uppercase(),
+                    self.msg_subject.trim().to_string(),
+                    self.msg_body.clone(),
+                );
+                if !to.is_empty() && !subject.is_empty() && !body.is_empty() {
+                    self.send(ControlCommand::SendMessage { to, subject, body });
+                    self.msg_to.clear();
+                    self.msg_subject.clear();
+                    self.msg_body.clear();
+                }
+            }
+            Message::RefreshInbox => self.send(ControlCommand::ListMessages),
+            Message::OpenMsg(id) => self.send(ControlCommand::GetMessage { id }),
+            Message::DeleteMsg(id) => {
+                self.send(ControlCommand::DeleteMessage { id });
+                if let Ok(mut st) = self.shared.lock() {
+                    st.inbox.retain(|m| m.id != id);
+                    if st.open_message_id == Some(id) {
+                        st.open_message_id = None;
+                        st.open_message_body = None;
+                    }
+                }
+            }
+            // --- config ---
+            Message::ToggleConfig => {
+                self.show_config = !self.show_config;
+                if self.show_config {
+                    if let Ok(mut st) = self.shared.lock() {
+                        st.daemon_config = None;
+                    }
+                    self.config_fetch_pending = true;
+                    self.send(ControlCommand::GetConfig);
+                }
+            }
+            Message::FetchConfig => {
+                if let Ok(mut st) = self.shared.lock() {
+                    st.daemon_config = None;
+                }
+                self.config_fetch_pending = true;
+                self.send(ControlCommand::GetConfig);
+            }
+            Message::ApplyConfig => self.send(ControlCommand::SetConfig {
+                config: self.config_draft.clone(),
+            }),
+            Message::CfgMode(m) => self.config_draft.mode = m,
+            Message::CfgAtten(db) => self.config_draft.tx_attenuation_db = db,
+            Message::CfgQsy(b) => self.config_draft.qsy_enabled = b,
+            Message::CfgBandplan(b) => self.config_draft.bandplan_mode = b,
+            Message::CfgTuneSwr(b) => self.config_draft.allow_tuner_on_high_swr = b,
         }
         Task::none()
     }
