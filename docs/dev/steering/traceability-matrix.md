@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/steering/traceability-matrix.md
 status: living
-last_updated: 2026-07-01
+last_updated: 2026-07-03
 ---
 
 # Traceability matrix
@@ -144,6 +144,7 @@ the testmatrix quick tier at commit `76de87e`, dated 2026-06-29 (555/555 pass, 0
 | REQ-UX-01 | Compatibility/UX | CLI usage and docs aligned across releases | CAP-56 | ✅ covered |
 | REQ-UX-02 | Compatibility/UX | New user-facing options documented in `docs/cli-guide.md` | CAP-56 | ✅ covered |
 | REQ-UX-03 | Compatibility/UX | README usage examples kept current | CAP-56 | ✅ covered |
+| REQ-UX-04 | Compatibility/UX | Operator panel (`apps/openpulse-panel`) re-implemented on `iced`, laid out as a vertical stack: spectrum → waterfall → ladder → additional info → controls | — | 🔲 planned (not yet implemented) |
 | REQ-DOC-01 | Documentation | Version bumps update changelog + release notes | — | ⚠ gap |
 | REQ-DOC-02 | Documentation | Docs pass frontmatter validation in CI | — | ⚠ gap |
 | REQ-DOC-03 | Documentation | HPX benchmark assumptions/results captured in `docs/high-performance-mode.md` | CAP-53, CAP-61 | ✅ covered |
@@ -257,6 +258,7 @@ the testmatrix quick tier at commit `76de87e`, dated 2026-06-29 (555/555 pass, 0
 - **REQ-NFR-01** (workspace buildability on Linux/macOS CI): CI/infra requirement with no covering capability; the "CI multi-platform green" acceptance entry has no test files (asserted done via PR #67).
 - **REQ-NFR-13** (RPi 4/5 performance measured and published in benchmark artifacts): no capability and no test/artifact evidences RPi-specific published perf numbers; on-air/hardware artifacts are informational only.
 - **REQ-REG-01/02/03/04/07/08/09/11/12** (regulatory compliance, 300-baud limit enforcement, operator frequency/mode selection, published decode spec, CEPT/national doc statements, HPX2300 occupied-bandwidth validation): documentation/operator-responsibility/on-air-validation requirements with no enforcing capability; Phase 5.5-reg on-air regulatory validation is deferred (no target date). (REQ-REG-05 decodable ID is met by the signed-handshake callsign, CAP-01; **REQ-REG-10 periodic-interval ID is now implemented** by the auto-ID timer, CAP-66 — no longer a gap.)
+- **REQ-UX-04** (operator panel re-implemented on `iced` as a vertical stack: spectrum → waterfall → ladder → additional info → controls): newly recorded requirement, not yet implemented; the panel today is egui/eframe (`apps/openpulse-panel`). Planned re-implementation — no covering capability yet.
 - **REQ-PERF-05/06** (no proprietary-compatibility claims without evidence; legal review before VARA/PACTOR-4 compatibility work): policy/governance requirements with no implementable capability.
 - **REQ-DOC-01/02** (version-bump docs gate; doc frontmatter validation in CI): enforced by scripts (`check-version-bump-docs.sh`, `stamp-doc-last-updated.sh`, `validate-doc-frontmatter.sh`) rather than any capability — no CAP-ID covers them.
 
