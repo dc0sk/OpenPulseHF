@@ -11,12 +11,12 @@ This index contains development-oriented, planning, architecture, protocol-spec,
 
 ## Planning and release governance
 
-- [docs/dev/steering/roadmap.md](steering/roadmap.md): phased execution history and roadmap status
-- [docs/dev/steering/backlog.md](steering/backlog.md): open and deferred follow-up work
+- [docs/dev/project/roadmap.md](project/roadmap.md): phased execution history and roadmap status
+- [docs/dev/project/backlog.md](project/backlog.md): open and deferred follow-up work
 - [docs/dev/archive/backlog-fec-improvements.md](archive/backlog-fec-improvements.md): FEC follow-up backlog (frozen research)
 - [docs/dev/archive/backlog-waveforms.md](archive/backlog-waveforms.md): waveform follow-up backlog (frozen research)
 - [docs/dev/requirements.md](requirements.md): functional and non-functional requirements
-- [docs/dev/steering/changelog.md](steering/changelog.md): internal change history
+- [docs/dev/project/changelog.md](project/changelog.md): internal change history
 - [docs/dev/release-checklist.md](release-checklist.md): release and tagging procedure
 - [docs/dev/steering.md](steering.md): governance and decision ownership
 
@@ -31,7 +31,7 @@ This index contains development-oriented, planning, architecture, protocol-spec,
 - [docs/dev/benchmark-harness.md](benchmark-harness.md): benchmark scenarios and regression gates
 - [docs/dev/design/testbench-design.md](design/testbench-design.md): signal-path testbench design
 - [docs/dev/implementation-matrix.md](implementation-matrix.md): docs-to-implementation coverage matrix
-- [docs/dev/steering/traceability-matrix.md](steering/traceability-matrix.md): full numbered end-to-end traceability matrix (REQ-IDs ↔ CAP-IDs → design → impl → tests → results → assets → PRs)
+- [docs/dev/project/traceability-matrix.md](project/traceability-matrix.md): full numbered end-to-end traceability matrix (REQ-IDs ↔ CAP-IDs → design → impl → tests → results → assets → PRs)
 - [docs/dev/peer-caching-relay.md](peer-caching-relay.md): peer cache and relay behavior
 - [docs/dev/peer-query-relay-wire.md](peer-query-relay-wire.md): wire-level query and relay envelope schema
 

@@ -12,7 +12,7 @@ surface and the strongest integration-test evidence currently in-tree.
 
 > For the full numbered, cross-linked traceability (REQ-IDs ↔ CAP-IDs, with design decisions,
 > tests, results, supporting assets, and PRs), see
-> [traceability-matrix.md](steering/traceability-matrix.md). This page is the quick
+> [traceability-matrix.md](project/traceability-matrix.md). This page is the quick
 > feature → implementation → test summary.
 
 ## Core protocol and security

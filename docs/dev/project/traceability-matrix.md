@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/dev/steering/traceability-matrix.md
+doc: docs/dev/project/traceability-matrix.md
 status: living
 last_updated: 2026-07-04
 ---
@@ -313,7 +313,7 @@ Three items, all documentation/housekeeping — no capability behaviour changed:
   workspace `fmt --check` gate is now clean on main.
 - **Weak-signal symbol-diversity flag (PR #603).** FreeDV 700D-style frequency diversity (repeat each
   carrier's symbol on a band-separated carrier + combine before slicing — a fading-margin lever
-  distinct from FEC) recorded as an unscheduled *Far-future item* in `docs/dev/steering/roadmap.md`
+  distinct from FEC) recorded as an unscheduled *Far-future item* in `docs/dev/project/roadmap.md`
   so the potential sub-floor rung isn't lost. No CAP yet (deferred, no target date).
 - **Station-ID coverage corrected (gap rescan).** A gap rescan found CAP-39 claimed the ARDOP
   `CWID`/`SENDID` commands "provide station ID" and covered REQ-REG-05 + REQ-REG-10, but both are

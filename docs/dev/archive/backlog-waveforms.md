@@ -7,7 +7,7 @@ last_updated: 2026-05-09
 
 # Waveform / Multi-Carrier Scheme Backlog
 
-**Frozen research summary (2026-05-09).** Archived; see docs/dev/steering/backlog.md for live open work.
+**Frozen research summary (2026-05-09).** Archived; see docs/dev/project/backlog.md for live open work.
 
 Research conducted 2026-05-09. Current state: OFDM (FF-4) with iterative PAPR clipping, LS channel estimation, ZF equalization.
 

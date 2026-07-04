@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/dev/steering/changelog.md
+doc: docs/dev/project/changelog.md
 status: living
 last_updated: 2026-06-29
 ---
@@ -22,7 +22,7 @@ last_updated: 2026-06-29
 - **Operator Panel**: AGC on/off toggle (PR #583); controls moved to a resizable right side-panel with a full-width waterfall and status below it (PR #579); `SetFreq` panel control; control-surface parity closed on both CLI and panel sides; `daemon set-tx-attenuation` (PR #587).
 - **linksim**: I/Q constellation views with symbol-spaced (crisp-dot) sampling (PRs #574/#575), regrouped Station B views with waterfall/constellation toggles (PR #578), QR-branded info band, CE-SSB toggle, SNR plot, LDPC/Turbo/RS-Strong/Concatenated FEC modes, and a `--serve` mode so the panel attaches with no radio (PRs #580/#581).
 - **Fix**: CE-SSB is gated off for dense OFDM higher-order modes (8PSK and above), where it caused a ~6 dB decode regression.
-- **Docs**: Sorted `docs/dev/` into topic subfolders (`design/`, `pki/`, `research/`, `steering/`) with all references updated (PR #582); manual + changelog + release notes brought current (PRs #588, #589).
+- **Docs**: Sorted `docs/dev/` into topic subfolders (`design/`, `pki/`, `research/`, `project/`) with all references updated (PR #582); manual + changelog + release notes brought current (PRs #588, #589).
 
 ## v0.2.2 — 2026-06-25
 

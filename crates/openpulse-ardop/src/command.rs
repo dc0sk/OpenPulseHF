@@ -204,7 +204,7 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
         // (`[ardop] enable_adaptive_arq = true`): ARQBW caps the adaptive ladder via
         // `set_arq_max_tx_level`, and ARQTIMEOUT drops an idle connection. With adaptive ARQ off
         // (the default, fixed-mode operation) there is no ladder/connection to bound, so they remain
-        // accepted-and-echoed no-ops. See docs/dev/steering/roadmap.md (TNC command-surface audit).
+        // accepted-and-echoed no-ops. See docs/dev/project/roadmap.md (TNC command-surface audit).
         "GRIDSQUARE" => {
             if let Some(grid) = parts.get(1).filter(|s| !s.is_empty()) {
                 if !is_valid_gridsquare(grid) {

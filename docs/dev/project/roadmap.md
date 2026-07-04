@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/dev/steering/roadmap.md
+doc: docs/dev/project/roadmap.md
 status: living
 last_updated: 2026-06-24
 ---

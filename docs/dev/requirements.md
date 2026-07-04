@@ -9,7 +9,7 @@ last_updated: 2026-07-04
 
 > **Numbered REQ-IDs and end-to-end traceability** (requirement → capability → design
 > decision → implementation → tests → result → assets → PRs) live in
-> [traceability-matrix.md](steering/traceability-matrix.md). Each requirement below maps to a
+> [traceability-matrix.md](project/traceability-matrix.md). Each requirement below maps to a
 > `REQ-<CAT>-NN` ID in that matrix's Requirements table.
 
 ## Functional requirements
@@ -171,6 +171,6 @@ Regulatory compliance is a hard requirement for any transmission on amateur radi
 
 ## Documentation requirements
 
-- Version bumps require updates to docs/dev/steering/changelog.md and docs/releasenotes.md.
+- Version bumps require updates to docs/dev/project/changelog.md and docs/releasenotes.md.
 - Docs files under docs/ must pass frontmatter validation in CI.
 - HPX benchmark assumptions and result summaries must be captured in docs/high-performance-mode.md.
