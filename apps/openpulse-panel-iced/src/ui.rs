@@ -202,22 +202,45 @@ pub fn view(app: &App) -> Element<'_, Message> {
         }
     };
 
+    // Additional info + Controls side by side.
+    let info_controls = Row::new()
+        .spacing(8)
+        .width(Length::Fill)
+        .push(
+            Container::new(panel(eff, "Additional info", info_widget(&snap, eff)))
+                .width(Length::FillPortion(1)),
+        )
+        .push(
+            Container::new(panel(eff, "Controls", controls_widget(app, &snap, eff)))
+                .width(Length::FillPortion(1)),
+        );
+
+    // Messages + Event log side by side.
+    let messages_log = Row::new()
+        .spacing(8)
+        .width(Length::Fill)
+        .push(
+            Container::new(panel(eff, "Messages", messages_widget(app, &snap, eff)))
+                .width(Length::FillPortion(1)),
+        )
+        .push(
+            Container::new(panel(eff, "Event log", log_widget(&snap, eff)))
+                .width(Length::FillPortion(1)),
+        );
+
     let mut stack = Column::new()
         .spacing(8)
         .padding(10)
         .push(panel(eff, "Spectrum", spectrum_widget(&snap, eff)))
         .push(panel(eff, "Waterfall", waterfall_widget(&snap, eff)))
         .push(panel(eff, "Ladder", ladder_widget(&snap, eff)))
-        .push(panel(eff, "Additional info", info_widget(&snap, eff)))
-        .push(panel(eff, "Controls", controls_widget(app, &snap, eff)));
+        .push(info_controls);
 
     if app.show_config {
         stack = stack.push(panel(eff, "Daemon config", config_widget(app, eff)));
     }
 
-    let stack = stack
-        .push(panel(eff, "Messages", messages_widget(app, &snap, eff)))
-        .push(panel(eff, "Event log", log_widget(&snap, eff)));
+    let stack = stack.push(messages_log);
 
     let scroll = scrollable(stack).height(Length::Fill);
 
