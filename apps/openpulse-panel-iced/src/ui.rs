@@ -4,8 +4,8 @@
 
 use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path, Stroke};
 use iced::widget::{
-    button, container, pick_list, scrollable, slider, text_input, Button, Column, Container, Row,
-    Space, Text,
+    button, container, pick_list, scrollable, slider, text_input, tooltip, Button, Column,
+    Container, Row, Space, Text,
 };
 use iced::{
     mouse, Alignment, Background, Border, Color, Element, Length, Point, Rectangle, Renderer, Size,
@@ -95,6 +95,13 @@ const PROFILES: &[&str] = &[
 const TOP_DB: f32 = 0.0;
 const RANGE_DB: f32 = 120.0;
 
+/// Spectrum / waterfall canvas heights.
+const SPECTRUM_H: f32 = 140.0;
+const WATERFALL_H: f32 = 120.0;
+/// Lower tabbed panel height ≈ the spectrum + waterfall panels stacked (their canvases plus each
+/// panel's title/padding/border chrome, plus the inter-panel spacing).
+const LOWER_PANEL_H: f32 = SPECTRUM_H + WATERFALL_H + 2.0 * 41.0 + 8.0;
+
 /// Best-effort OS dark/light detection for the `System` theme.
 pub fn detect_system_dark() -> bool {
     #[cfg(target_os = "linux")]
@@ -133,6 +140,35 @@ fn lerp(a: Color, b: Color, t: f32) -> Color {
 }
 fn dbm_to_y(db: f32, h: f32) -> f32 {
     ((TOP_DB - db) / RANGE_DB * h).clamp(0.0, h)
+}
+
+/// Wrap an interactive widget in a hover tooltip describing its purpose.
+fn tip<'a>(
+    el: impl Into<Element<'a, Message>>,
+    text: &'static str,
+    eff: EffectiveTheme,
+) -> Element<'a, Message> {
+    tooltip(
+        el,
+        Container::new(
+            Text::new(text)
+                .size(12)
+                .color(role(eff, ColorRole::RxValue)),
+        )
+        .padding([4, 8])
+        .style(move |_t: &Theme| container::Style {
+            background: Some(Background::Color(shade(eff, Shade::ControlHover))),
+            border: Border {
+                color: shade(eff, Shade::Edge),
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..container::Style::default()
+        }),
+        tooltip::Position::Top,
+    )
+    .gap(6)
+    .into()
 }
 
 /// Owned snapshot of the shared state, so the view builds its `Element` without holding the lock.
@@ -279,7 +315,7 @@ fn spectrum_widget(snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message
         grid: shade(eff, Shade::Edge),
     })
     .width(Length::Fill)
-    .height(Length::Fixed(140.0))
+    .height(Length::Fixed(SPECTRUM_H))
     .into()
 }
 
@@ -291,7 +327,7 @@ fn waterfall_widget(snap: &Snap, eff: EffectiveTheme) -> Element<'static, Messag
         high: role(eff, ColorRole::Caution),
     })
     .width(Length::Fill)
-    .height(Length::Fixed(120.0))
+    .height(Length::Fixed(WATERFALL_H))
     .into()
 }
 
@@ -494,39 +530,47 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
                 "Disconnect RF",
                 Message::DisconnectPeer,
                 ColorRole::TxActive,
+                "Tear down the current RF peer link",
             ))
     } else {
         Row::new()
             .spacing(8)
             .align_y(Alignment::Center)
-            .push(
+            .push(tip(
                 text_input("CALLSIGN", &app.peer_call)
                     .on_input(Message::PeerCallChanged)
                     .size(13)
                     .width(Length::Fixed(110.0)),
-            )
+                "Peer callsign to call over RF",
+                eff,
+            ))
             .push(accent_btn(
                 eff,
                 "Connect RF",
                 Message::ConnectPeer,
                 ColorRole::Locked,
+                "Call the entered peer over RF via the TNC",
             ))
     };
     let conn = Row::new()
         .spacing(8)
         .align_y(Alignment::Center)
-        .push(
+        .push(tip(
             pick_list(transports, Some(tsel), |s: &str| {
                 Message::SelectTransport(s == "WS")
             })
             .text_size(13),
-        )
-        .push(
+            "Control-port transport: raw TCP or WebSocket",
+            eff,
+        ))
+        .push(tip(
             text_input("host:port", &app.addr)
                 .on_input(Message::AddrChanged)
                 .size(13)
                 .width(Length::Fixed(150.0)),
-        )
+            "Daemon control-port address (host:port for TCP, ws://… for WS)",
+            eff,
+        ))
         .push(accent_btn(
             eff,
             if app.is_connected() {
@@ -540,6 +584,7 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
             } else {
                 ColorRole::Locked
             },
+            "Connect to / disconnect from the daemon control port",
         ))
         .push(peer)
         .push(Text::new("●").size(13).color(role(eff, dot)))
@@ -553,6 +598,7 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
             } else {
                 ColorRole::Inactive
             },
+            "Key / unkey the transmitter (PTT)",
         ));
 
     // Mode + frequency.
@@ -560,14 +606,25 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
     let mode_freq = Row::new()
         .spacing(8)
         .align_y(Alignment::Center)
-        .push(pick_list(MODES, sel, |m: &str| Message::ModeSelected(m.to_string())).text_size(13))
-        .push(
+        .push(tip(
+            pick_list(MODES, sel, |m: &str| Message::ModeSelected(m.to_string())).text_size(13),
+            "Set the active modem mode",
+            eff,
+        ))
+        .push(tip(
             text_input("kHz", &app.freq_khz)
                 .on_input(Message::FreqChanged)
                 .size(13)
                 .width(Length::Fixed(90.0)),
-        )
-        .push(neutral_btn(eff, "Tune", Message::TuneFreq));
+            "Frequency in kHz; press Tune to apply",
+            eff,
+        ))
+        .push(neutral_btn(
+            eff,
+            "Tune",
+            Message::TuneFreq,
+            "Set the rig frequency (kHz) via CAT / rigctld",
+        ));
 
     // Feature toggles (Repeater lives in the Config panel now).
     let toggles = Row::new()
@@ -577,26 +634,42 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
             "CE-SSB",
             app.cessb_on,
             Message::ToggleCessb,
+            "CE-SSB TX envelope conditioning (multicarrier modes only)",
         ))
-        .push(toggle_btn(eff, "Notch", app.notch_on, Message::ToggleNotch))
-        .push(toggle_btn(eff, "AGC", app.agc_on, Message::ToggleAgc))
+        .push(toggle_btn(
+            eff,
+            "Notch",
+            app.notch_on,
+            Message::ToggleNotch,
+            "Receiver auto-notch: removes out-of-band CW interference before demod",
+        ))
+        .push(toggle_btn(
+            eff,
+            "AGC",
+            app.agc_on,
+            Message::ToggleAgc,
+            "Receiver streaming AGC: normalises capture level before demod",
+        ))
         .push(toggle_btn(
             eff,
             "Logbook",
             app.logbook_on,
             Message::ToggleLogbook,
+            "Automatic ADIF logbook: one record per connect → disconnect",
         ))
         .push(toggle_btn(
             eff,
             "QSY",
             app.config_draft.qsy_enabled,
             Message::CfgQsy(!app.config_draft.qsy_enabled),
+            "Enable the QSY frequency-agility protocol (applied via Config → Apply)",
         ))
         .push(toggle_btn(
             eff,
             "Tune@SWR",
             app.config_draft.allow_tuner_on_high_swr,
             Message::CfgTuneSwr(!app.config_draft.allow_tuner_on_high_swr),
+            "Allow the tuner to operate at high SWR (applied via Config → Apply)",
         ));
 
     // Sliders: TX attenuation and squelch, side by side.
@@ -609,6 +682,7 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
             -30.0..=0.0,
             app.tx_atten_db,
             Message::AttenChanged,
+            "Transmit attenuation for the current band (dB)",
         ))
         .push(slider_row(
             eff,
@@ -616,6 +690,7 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
             0.0..=0.2,
             app.squelch,
             Message::SquelchChanged,
+            "DCD / squelch RMS threshold — raise to clear a noisy band floor",
         ));
 
     // OTA.
@@ -641,12 +716,14 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
                 eff,
                 if snap.ota_is_locked { "Unlock" } else { "Lock" },
                 Message::OtaLockToggle,
+                "Lock the OTA ladder to the current level, or release it to adapt",
             ))
             .push(accent_btn(
                 eff,
                 "Stop",
                 Message::StopOta,
                 ColorRole::TxActive,
+                "Stop the active OTA adaptive session",
             ))
     } else {
         let prof_sel = PROFILES
@@ -656,17 +733,20 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
         Row::new()
             .spacing(8)
             .align_y(Alignment::Center)
-            .push(
+            .push(tip(
                 pick_list(PROFILES, prof_sel, |p: &str| {
                     Message::OtaProfileChanged(p.to_string())
                 })
                 .text_size(13),
-            )
+                "OTA adaptive-session profile (rate ladder)",
+                eff,
+            ))
             .push(accent_btn(
                 eff,
                 "Start OTA",
                 Message::StartOta,
                 ColorRole::Locked,
+                "Start a receiver-led OTA adaptive session with the chosen profile",
             ))
     };
 
@@ -687,6 +767,7 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
             eff,
             &format!("Theme: {}", app.theme_mode.label()),
             Message::ToggleTheme,
+            "Cycle the theme: Dark → Light → Contrast → System",
         ));
 
     // Line 3: sliders side by side, then OTA.
@@ -715,12 +796,14 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
                     "Accept",
                     Message::AcceptQsy,
                     ColorRole::Locked,
+                    "Accept the pending QSY frequency proposal",
                 ))
                 .push(accent_btn(
                     eff,
                     "Reject",
                     Message::RejectQsy,
                     ColorRole::TxActive,
+                    "Reject the pending QSY frequency proposal",
                 )),
         );
     }
@@ -729,14 +812,14 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
 
 /// Additional info / Daemon config / Messages / Event log as one tabbed panel.
 fn tabbed_lower(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
-    let tab_btn = |label: &str, tab: Tab| -> Element<'static, Message> {
+    let tab_btn = |label: &str, tab: Tab, tip_text: &'static str| -> Element<'static, Message> {
         let active = app.active_tab == tab;
         let (bg, fg) = if active {
             (role(eff, ColorRole::Signal), shade(eff, Shade::Bg))
         } else {
             (shade(eff, Shade::Control), role(eff, ColorRole::Inactive))
         };
-        Button::new(Text::new(label.to_string()).size(12).color(fg))
+        let btn = Button::new(Text::new(label.to_string()).size(12).color(fg))
             .padding([4, 12])
             .on_press(Message::SelectTab(tab))
             .style(move |_t: &Theme, _s: button::Status| button::Style {
@@ -748,29 +831,46 @@ fn tabbed_lower(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static,
                     radius: 4.0.into(),
                 },
                 ..button::Style::default()
-            })
-            .into()
+            });
+        tip(btn, tip_text, eff)
     };
     let header = Row::new()
         .spacing(4)
-        .push(tab_btn("Additional info", Tab::Info))
-        .push(tab_btn("Daemon config", Tab::Config))
-        .push(tab_btn("Messages", Tab::Messages))
-        .push(tab_btn("Event log", Tab::Log));
+        .push(tab_btn(
+            "Additional info",
+            Tab::Info,
+            "Live session, signal, and resource readouts",
+        ))
+        .push(tab_btn(
+            "Daemon config",
+            Tab::Config,
+            "View and edit the daemon configuration",
+        ))
+        .push(tab_btn(
+            "Messages",
+            Tab::Messages,
+            "Inbox and message composer",
+        ))
+        .push(tab_btn(
+            "Event log",
+            Tab::Log,
+            "Scrolling log of engine and session events",
+        ));
     let content = match app.active_tab {
         Tab::Info => info_widget(snap, eff),
         Tab::Config => config_widget(app, snap, eff),
         Tab::Messages => messages_widget(app, snap, eff),
         Tab::Log => log_widget(snap, eff),
     };
-    // The content box fills the remaining space, so every tab renders at the same height.
+    // The content box fills the panel, so every tab renders at the same height.
     let content_box = Container::new(content)
         .width(Length::Fill)
         .height(Length::Fill);
     let body = Column::new().spacing(8).push(header).push(content_box);
+    // Fixed height ≈ the spectrum + waterfall panels stacked.
     Container::new(body)
         .width(Length::Fill)
-        .height(Length::Fill)
+        .height(Length::Fixed(LOWER_PANEL_H))
         .padding(10)
         .style(move |_t: &Theme| container::Style {
             background: Some(Background::Color(shade(eff, Shade::Panel))),
@@ -793,7 +893,12 @@ fn messages_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
                 .size(13)
                 .color(role(eff, ColorRole::RxValue)),
         )
-        .push(neutral_btn(eff, "Refresh", Message::RefreshInbox));
+        .push(neutral_btn(
+            eff,
+            "Refresh",
+            Message::RefreshInbox,
+            "Reload the message inbox from the daemon",
+        ));
 
     let mut list = Column::new().spacing(3);
     for m in &snap.inbox {
@@ -807,13 +912,20 @@ fn messages_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
         let row = Row::new()
             .spacing(6)
             .align_y(Alignment::Center)
-            .push(link_btn(eff, &label, Message::OpenMsg(m.id), accent))
+            .push(link_btn(
+                eff,
+                &label,
+                Message::OpenMsg(m.id),
+                accent,
+                "Open this message",
+            ))
             .push(Space::with_width(Length::Fill))
             .push(link_btn(
                 eff,
                 "✕",
                 Message::DeleteMsg(m.id),
                 ColorRole::TxActive,
+                "Delete this message",
             ));
         list = list.push(row);
     }
@@ -852,6 +964,7 @@ fn messages_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
         } else {
             ColorRole::Inactive
         },
+        "Send the composed message (needs To, Subject, and Body)",
     );
     let compose = Column::new()
         .spacing(5)
@@ -863,24 +976,30 @@ fn messages_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
         .push(
             Row::new()
                 .spacing(6)
-                .push(
+                .push(tip(
                     text_input("CALLSIGN", &app.msg_to)
                         .on_input(Message::MsgTo)
                         .size(13)
                         .width(Length::Fixed(120.0)),
-                )
-                .push(
+                    "Recipient callsign",
+                    eff,
+                ))
+                .push(tip(
                     text_input("subject", &app.msg_subject)
                         .on_input(Message::MsgSubject)
                         .size(13)
                         .width(Length::Fill),
-                ),
+                    "Message subject",
+                    eff,
+                )),
         )
-        .push(
+        .push(tip(
             text_input("Message body…", &app.msg_body)
                 .on_input(Message::MsgBody)
                 .size(13),
-        )
+            "Message body",
+            eff,
+        ))
         .push(Row::new().push(Space::with_width(Length::Fill)).push(send));
 
     Column::new()
@@ -907,12 +1026,18 @@ fn config_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static
             Row::new()
                 .spacing(8)
                 .align_y(Alignment::Center)
-                .push(neutral_btn(eff, "Fetch", Message::FetchConfig))
+                .push(neutral_btn(
+                    eff,
+                    "Fetch",
+                    Message::FetchConfig,
+                    "Re-read the daemon configuration into the editor",
+                ))
                 .push(accent_btn(
                     eff,
                     "Apply",
                     Message::ApplyConfig,
                     ColorRole::Locked,
+                    "Apply the edited configuration to the daemon (SetConfig)",
                 ))
                 .push(Space::with_width(Length::Fill))
                 .push(toggle_btn(
@@ -920,6 +1045,7 @@ fn config_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static
                     "Repeater",
                     snap.repeater_enabled,
                     Message::ToggleRepeater,
+                    "Enable / disable the cross-band repeater",
                 )),
         )
         .push(info_row(
@@ -952,10 +1078,12 @@ fn config_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static
                         .width(Length::Fixed(78.0))
                         .color(role(eff, ColorRole::Inactive)),
                 )
-                .push(
+                .push(tip(
                     pick_list(MODES, mode_sel, |m: &str| Message::CfgMode(m.to_string()))
                         .text_size(13),
-                ),
+                    "Configured default modem mode (applied on Apply)",
+                    eff,
+                )),
         )
         .push(slider_row(
             eff,
@@ -963,6 +1091,7 @@ fn config_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static
             -30.0..=0.0,
             c.tx_attenuation_db,
             Message::CfgAtten,
+            "Configured TX attenuation (applied on Apply)",
         ))
         .push(
             Row::new()
@@ -974,12 +1103,14 @@ fn config_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static
                         .width(Length::Fixed(78.0))
                         .color(role(eff, ColorRole::Inactive)),
                 )
-                .push(
+                .push(tip(
                     pick_list(bandplans, bp_sel, |b: &str| {
                         Message::CfgBandplan(b.to_string())
                     })
                     .text_size(13),
-                ),
+                    "Bandplan guardrail (unrestricted / IARU R1–R3)",
+                    eff,
+                )),
         )
         .into()
 }
@@ -990,16 +1121,18 @@ fn link_btn<'a>(
     label: &str,
     msg: Message,
     r: ColorRole,
-) -> Button<'a, Message> {
+    tip_text: &'static str,
+) -> Element<'a, Message> {
     let col = role(eff, r);
-    Button::new(Text::new(label.to_string()).size(12).color(col))
+    let btn = Button::new(Text::new(label.to_string()).size(12).color(col))
         .padding([2, 4])
         .on_press(msg)
         .style(move |_t: &Theme, _s: button::Status| button::Style {
             background: None,
             text_color: col,
             ..button::Style::default()
-        })
+        });
+    tip(btn, tip_text, eff)
 }
 
 /// UTC time-of-day `HH:MMZ` from a Unix timestamp.
@@ -1095,6 +1228,7 @@ fn slider_row<'a>(
     range: std::ops::RangeInclusive<f32>,
     value: f32,
     on_change: impl Fn(f32) -> Message + 'a,
+    tip_text: &'static str,
 ) -> Element<'a, Message> {
     Row::new()
         .spacing(8)
@@ -1105,7 +1239,11 @@ fn slider_row<'a>(
                 .width(Length::Fixed(120.0))
                 .color(role(eff, ColorRole::Inactive)),
         )
-        .push(slider(range, value, on_change).width(Length::Fixed(160.0)))
+        .push(tip(
+            slider(range, value, on_change).width(Length::Fixed(160.0)),
+            tip_text,
+            eff,
+        ))
         .into()
 }
 
@@ -1143,11 +1281,12 @@ fn accent_btn<'a>(
     label: &str,
     msg: Message,
     accent: ColorRole,
-) -> Button<'a, Message> {
+    tip_text: &'static str,
+) -> Element<'a, Message> {
     let bg = role(eff, accent);
     let text = shade(eff, Shade::Bg);
     let edge = shade(eff, Shade::Edge);
-    Button::new(Text::new(label.to_string()).size(13).color(text))
+    let btn = Button::new(Text::new(label.to_string()).size(13).color(text))
         .padding([6, 11])
         .on_press(msg)
         .style(move |_t: &Theme, status: button::Status| {
@@ -1165,15 +1304,21 @@ fn accent_btn<'a>(
                 },
                 ..button::Style::default()
             }
-        })
+        });
+    tip(btn, tip_text, eff)
 }
 
-fn neutral_btn<'a>(eff: EffectiveTheme, label: &str, msg: Message) -> Button<'a, Message> {
+fn neutral_btn<'a>(
+    eff: EffectiveTheme,
+    label: &str,
+    msg: Message,
+    tip_text: &'static str,
+) -> Element<'a, Message> {
     let rest = shade(eff, Shade::Control);
     let hover = shade(eff, Shade::ControlHover);
     let text = role(eff, ColorRole::RxValue);
     let edge = shade(eff, Shade::Edge);
-    Button::new(Text::new(label.to_string()).size(13).color(text))
+    let btn = Button::new(Text::new(label.to_string()).size(13).color(text))
         .padding([6, 11])
         .on_press(msg)
         .style(move |_t: &Theme, status: button::Status| {
@@ -1191,10 +1336,17 @@ fn neutral_btn<'a>(eff: EffectiveTheme, label: &str, msg: Message) -> Button<'a,
                 },
                 ..button::Style::default()
             }
-        })
+        });
+    tip(btn, tip_text, eff)
 }
 
-fn toggle_btn<'a>(eff: EffectiveTheme, label: &str, on: bool, msg: Message) -> Button<'a, Message> {
+fn toggle_btn<'a>(
+    eff: EffectiveTheme,
+    label: &str,
+    on: bool,
+    msg: Message,
+    tip_text: &'static str,
+) -> Element<'a, Message> {
     let accent = if on {
         ColorRole::Locked
     } else {
@@ -1205,6 +1357,7 @@ fn toggle_btn<'a>(eff: EffectiveTheme, label: &str, on: bool, msg: Message) -> B
         &format!("{label}: {}", if on { "ON" } else { "off" }),
         msg,
         accent,
+        tip_text,
     )
 }
 
