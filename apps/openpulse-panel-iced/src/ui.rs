@@ -1,5 +1,6 @@
-//! The panel view: a fixed vertical stack — spectrum → waterfall → ladder → additional info →
-//! controls (REQ-UX-04) — rendered from the live `PanelState` with the active theme's palette.
+//! The panel view (REQ-UX-04), rendered from the live `PanelState` with the active theme's palette:
+//! a controls band on top, then spectrum → waterfall → ladder, an Additional-info | Daemon-config
+//! row, and a tabbed Messages / Event-log panel.
 
 use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path, Stroke};
 use iced::widget::{
@@ -11,7 +12,7 @@ use iced::{
     Theme,
 };
 
-use crate::app::{App, Message, LADDER_RUNGS};
+use crate::app::{App, Message, Tab, LADDER_RUNGS};
 use crate::connection::TransportKind;
 use crate::state::RigSnapshot;
 use crate::theme::{role_rgb, shade_rgb, ColorRole, EffectiveTheme, Shade};
@@ -202,8 +203,8 @@ pub fn view(app: &App) -> Element<'_, Message> {
         }
     };
 
-    // Additional info + Controls side by side.
-    let info_controls = Row::new()
+    // Additional info + Daemon config side by side (config took the controls' old slot).
+    let info_config = Row::new()
         .spacing(8)
         .width(Length::Fill)
         .push(
@@ -211,36 +212,21 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 .width(Length::FillPortion(1)),
         )
         .push(
-            Container::new(panel(eff, "Controls", controls_widget(app, &snap, eff)))
+            Container::new(panel(eff, "Daemon config", config_widget(app, &snap, eff)))
                 .width(Length::FillPortion(1)),
         );
 
-    // Messages + Event log side by side.
-    let messages_log = Row::new()
-        .spacing(8)
-        .width(Length::Fill)
-        .push(
-            Container::new(panel(eff, "Messages", messages_widget(app, &snap, eff)))
-                .width(Length::FillPortion(1)),
-        )
-        .push(
-            Container::new(panel(eff, "Event log", log_widget(&snap, eff)))
-                .width(Length::FillPortion(1)),
-        );
-
-    let mut stack = Column::new()
+    let stack = Column::new()
         .spacing(8)
         .padding(10)
+        // Controls band across the top.
+        .push(panel(eff, "Controls", controls_widget(app, &snap, eff)))
         .push(panel(eff, "Spectrum", spectrum_widget(&snap, eff)))
         .push(panel(eff, "Waterfall", waterfall_widget(&snap, eff)))
         .push(panel(eff, "Ladder", ladder_widget(&snap, eff)))
-        .push(info_controls);
-
-    if app.show_config {
-        stack = stack.push(panel(eff, "Daemon config", config_widget(app, eff)));
-    }
-
-    let stack = stack.push(messages_log);
+        .push(info_config)
+        // Messages / Event log as one tabbed panel.
+        .push(tabbed_messages_log(app, &snap, eff));
 
     let scroll = scrollable(stack).height(Length::Fill);
 
@@ -520,15 +506,9 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
         )
         .push(neutral_btn(eff, "Tune", Message::TuneFreq));
 
-    // Feature toggles.
+    // Feature toggles (Repeater lives in the Config panel now).
     let toggles = Row::new()
         .spacing(6)
-        .push(toggle_btn(
-            eff,
-            "Repeater",
-            snap.repeater_enabled,
-            Message::ToggleRepeater,
-        ))
         .push(toggle_btn(
             eff,
             "CE-SSB",
@@ -544,9 +524,10 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
             Message::ToggleLogbook,
         ));
 
-    // Sliders: TX attenuation and squelch.
-    let sliders = Column::new()
-        .spacing(6)
+    // Sliders: TX attenuation and squelch, side by side.
+    let sliders = Row::new()
+        .spacing(16)
+        .align_y(Alignment::Center)
         .push(slider_row(
             eff,
             &format!("TX atten {:.1} dB", app.tx_atten_db),
@@ -647,14 +628,35 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
             ))
     };
 
-    let mut col = Column::new()
-        .spacing(8)
+    // Line 1: connection + PTT, then mode/frequency, on one horizontal band.
+    let line1 = Row::new()
+        .spacing(12)
+        .align_y(Alignment::Center)
         .push(conn)
-        .push(mode_freq)
+        .push(mode_freq);
+
+    // Line 2: feature toggles, then the theme toggle on the right.
+    let line2 = Row::new()
+        .spacing(8)
+        .align_y(Alignment::Center)
         .push(toggles)
+        .push(Space::with_width(Length::Fill))
+        .push(neutral_btn(
+            eff,
+            &format!("Theme: {}", app.theme_mode.label()),
+            Message::ToggleTheme,
+        ));
+
+    // Line 3: sliders side by side, then RF peer + OTA.
+    let line3 = Row::new()
+        .spacing(16)
+        .align_y(Alignment::Center)
         .push(sliders)
+        .push(Space::with_width(Length::Fill))
         .push(peer)
         .push(ota);
+
+    let mut col = Column::new().spacing(8).push(line1).push(line2).push(line3);
 
     // QSY decision (only when a proposal is pending).
     if snap.pending_qsy.is_some() {
@@ -681,28 +683,55 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
                 )),
         );
     }
-
-    // Config toggle + theme toggle.
-    col = col.push(
-        Row::new()
-            .spacing(8)
-            .push(Space::with_width(Length::Fill))
-            .push(neutral_btn(
-                eff,
-                if app.show_config {
-                    "Hide config"
-                } else {
-                    "Config"
-                },
-                Message::ToggleConfig,
-            ))
-            .push(neutral_btn(
-                eff,
-                &format!("Theme: {}", app.theme_mode.label()),
-                Message::ToggleTheme,
-            )),
-    );
     col.into()
+}
+
+/// Messages and Event log as one tabbed panel.
+fn tabbed_messages_log(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
+    let tab_btn = |label: &str, tab: Tab| -> Element<'static, Message> {
+        let active = app.active_tab == tab;
+        let (bg, fg) = if active {
+            (role(eff, ColorRole::Signal), shade(eff, Shade::Bg))
+        } else {
+            (shade(eff, Shade::Control), role(eff, ColorRole::Inactive))
+        };
+        Button::new(Text::new(label.to_string()).size(12).color(fg))
+            .padding([4, 12])
+            .on_press(Message::SelectTab(tab))
+            .style(move |_t: &Theme, _s: button::Status| button::Style {
+                background: Some(Background::Color(bg)),
+                text_color: fg,
+                border: Border {
+                    color: shade(eff, Shade::Edge),
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..button::Style::default()
+            })
+            .into()
+    };
+    let header = Row::new()
+        .spacing(4)
+        .push(tab_btn("Messages", Tab::Messages))
+        .push(tab_btn("Event log", Tab::Log));
+    let content = match app.active_tab {
+        Tab::Messages => messages_widget(app, snap, eff),
+        Tab::Log => log_widget(snap, eff),
+    };
+    let body = Column::new().spacing(8).push(header).push(content);
+    Container::new(body)
+        .width(Length::Fill)
+        .padding(10)
+        .style(move |_t: &Theme| container::Style {
+            background: Some(Background::Color(shade(eff, Shade::Panel))),
+            border: Border {
+                color: shade(eff, Shade::Edge),
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
 }
 
 fn messages_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
@@ -813,7 +842,7 @@ fn messages_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
         .into()
 }
 
-fn config_widget(app: &App, eff: EffectiveTheme) -> Element<'static, Message> {
+fn config_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
     let c = &app.config_draft;
     let bandplans: &[&str] = &["unrestricted", "ham-iaru-r1", "ham-iaru-r2", "ham-iaru-r3"];
     let bp_sel = bandplans
@@ -827,12 +856,20 @@ fn config_widget(app: &App, eff: EffectiveTheme) -> Element<'static, Message> {
         .push(
             Row::new()
                 .spacing(8)
+                .align_y(Alignment::Center)
                 .push(neutral_btn(eff, "Fetch", Message::FetchConfig))
                 .push(accent_btn(
                     eff,
                     "Apply",
                     Message::ApplyConfig,
                     ColorRole::Locked,
+                ))
+                .push(Space::with_width(Length::Fill))
+                .push(toggle_btn(
+                    eff,
+                    "Repeater",
+                    snap.repeater_enabled,
+                    Message::ToggleRepeater,
                 )),
         )
         .push(info_row(
