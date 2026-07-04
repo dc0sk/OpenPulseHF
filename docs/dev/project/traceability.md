@@ -254,7 +254,7 @@ and the actually-observed results per change.
   REQ-REG-10 needs a **periodic auto-ID timer that does not exist** → reclassify ✅ covered → ⚠ **gap**
   and add it to the deferred REQ-REG regulatory set (Phase 5.5-reg). Clear CAP-39's `Implements` to
   `—` and document the stub status inline.
-- **Implementation:** `docs/dev/steering/traceability-matrix.md` — REQ-REG-05 row → CAP-01; REQ-REG-10
+- **Implementation:** `docs/dev/project/traceability-matrix.md` — REQ-REG-05 row → CAP-01; REQ-REG-10
   row → `—`/⚠ gap; CAP-01 `Implements` += REQ-REG-05 (+ design note on the on-air callsign);
   CAP-39 `Implements` → `—` (+ stub note); REQ-REG gap bullet gains `/10`; "Resolved 2026-07-01"
   subsection bullet. Also cleared a stale TODO in `docs/dev/archive/backlog-fec-improvements.md`
@@ -279,8 +279,8 @@ and the actually-observed results per change.
   current per the standing rule: refine CAP-24's rationale, add a "Resolved 2026-07-01" subsection.
 - **Implementation:** `cargo fmt` on `apps/openpulse-linksim/src/gui.rs`,
   `crates/openpulse-channel/src/lib.rs`, `pki-tooling/src/verification.rs` (PR #603); a deferred
-  design entry in `docs/dev/steering/roadmap.md` (PR #603); CAP-24 row + "Resolved 2026-07-01"
-  subsection + `last_updated` bump in `docs/dev/steering/traceability-matrix.md` (PR #604).
+  design entry in `docs/dev/project/roadmap.md` (PR #603); CAP-24 row + "Resolved 2026-07-01"
+  subsection + `last_updated` bump in `docs/dev/project/traceability-matrix.md` (PR #604).
 - **Tests:** no code-logic change. `cargo fmt --all -- --check` — clean on main after #603.
 - **Test results:** fmt gate green; PRs #603 and #604 merged. Docs/chore only, no behaviour delta.
 
@@ -492,7 +492,7 @@ and the actually-observed results per change.
   subfolders — `design/` (architecture, design, freq-acquisition-design, hpx-waveform-design,
   testbench-design), `pki/` (the 11 `pki-tooling-*` docs), `research/` (ardop/freedv-auth/js8call/
   ofdm/pactor research, reference-mining-plan, references, vara-research, wsjtx-analysis), and
-  `steering/` (backlog, changelog, roadmap, traceability). All inbound and outbound references had
+  `project/` (backlog, changelog, roadmap, traceability). All inbound and outbound references had
   to follow the move so no link or doc-path breaks.
 - **Design decision:** keep the moves as `git mv` renames (history-preserving) and rewrite every
   reference in two classes: (1) full-path mentions `docs/dev/<base>` → `docs/dev/<subdir>/<base>`
@@ -505,7 +505,7 @@ and the actually-observed results per change.
   text files for class (1); targeted per-file `sed` for class (2) in `docs/dev/README.md`,
   `docs/openpulse-manual.md`, `docs/{features,mode-fec-ladder}.md`,
   `docs/dev/{hpx-session-state-machine,vara-parity-execution-board}.md`,
-  `docs/dev/reviews/review-26050{8,17}.md`, and the moved `design/`/`steering/` files. Five `.rs`
+  `docs/dev/reviews/review-26050{8,17}.md`, and the moved `design/`/`project/` files. Five `.rs`
   doc-comment path mentions updated (`openpulse-ardop`, `openpulse-config`, `openpulse-dsp`,
   `openpulse-kiss`, `pilot` plugin) — comment-only, no code change.
 - **Tests:** a Python link-integrity walker that resolves every relative `.md` link target against
@@ -608,7 +608,7 @@ and the actually-observed results per change.
   — different mechanisms; no rate_policy bandwidth cap exists.
 - **Decision:** wiring no-ops into the dead fields would re-create the "defined-but-not-consumed" gap
   the audit removed, so it was deliberately NOT done. Real fix is a feature (TNC runs an adaptive ARQ
-  session + rate_policy bandwidth cap + connection timeout), recorded in `docs/dev/steering/roadmap.md` under
+  session + rate_policy bandwidth cap + connection timeout), recorded in `docs/dev/project/roadmap.md` under
   the TNC command-surface audit.
 - **Implementation:** none (no speculative surface); roadmap finding only.
 - **Test results:** docs-only; workspace gates unaffected.
@@ -648,7 +648,7 @@ and the actually-observed results per change.
   exact anti-pattern the TNC/config audits just removed), so it was deliberately NOT done. The
   config `[logbook.peer_grids]` map (A, shipped) remains the interim source.
 - **Implementation:** none (no speculative surface). Finding + real-fix path recorded in
-  `docs/dev/steering/roadmap.md` ("Signed handshake not wired into the daemon connect").
+  `docs/dev/project/roadmap.md` ("Signed handshake not wired into the daemon connect").
 - **Test results:** docs-only; workspace gates unaffected (no code change).
 
 ## 2026-06-27 — Logbook peer GRIDSQUARE via config map (A)
@@ -679,7 +679,7 @@ and the actually-observed results per change.
   corrected `docs/non-gpl-interfacing.md` (split "implemented" vs "accepted-not-applied" vs "stub").
   Roadmap "TNC command-surface audit" records the real-wiring follow-ups.
 - **Implementation:** `crates/openpulse-kiss/src/server.rs` (log); `crates/openpulse-ardop/src/
-  command.rs` (comment); `docs/non-gpl-interfacing.md`; `docs/dev/steering/roadmap.md`.
+  command.rs` (comment); `docs/non-gpl-interfacing.md`; `docs/dev/project/roadmap.md`.
 - **Test results:** ardop + kiss build; clippy 0; no behavior change beyond a debug log.
 
 ## 2026-06-27 — Adaptive-profile FEC audit (+ a permanent gate)
@@ -763,7 +763,7 @@ and the actually-observed results per change.
   accurately so the config stops looking wired, and record the real fixes in the roadmap.
 - **Implementation:** `crates/openpulse-config/src/lib.rs` (field docs + TOML template mark
   rig_a "currently unused" and the generic-backend fields "reserved — not yet implemented";
-  corrected the repeater comment); `docs/dev/steering/roadmap.md` "Config/feature gaps" entry.
+  corrected the repeater comment); `docs/dev/project/roadmap.md` "Config/feature gaps" entry.
 - **Tests/results:** `openpulse-config` 9/9 (template still parses), clippy 0. The recently-added
   `[modem] notch_*`, `[qsy] auto_qsy_on_interference`, `[logbook] *` fields were each confirmed
   consumed by the daemon during the audit.
@@ -845,7 +845,7 @@ and the actually-observed results per change.
 
 ## 2026-06-27 — Control-surface parity (CLI + panel)
 
-- **Requirement/change:** the control-surface audit (`docs/dev/steering/roadmap.md` → "Control-surface
+- **Requirement/change:** the control-surface audit (`docs/dev/project/roadmap.md` → "Control-surface
   parity gaps") found `ControlCommand`s reachable from one surface but not another: CLI couldn't
   `SendMessage` / `SetMode` / PTT / accept-reject QSY; panel couldn't `SetDcdSquelch` / start-stop
   OTA. Close the real two-way-operability gaps.

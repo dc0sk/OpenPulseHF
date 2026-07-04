@@ -116,7 +116,7 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 
 ## Current phase and execution order
 
-**Completed**: Phases 1–9, Phase 7 (7.1–7.5), Phase 8 (8.1–8.3), FF series (FF-1 through FF-13), BL-FEC series (BL-FEC-1 through BL-FEC-6), all code stubs (PR #187–#189). See `docs/dev/steering/roadmap.md` for full history.
+**Completed**: Phases 1–9, Phase 7 (7.1–7.5), Phase 8 (8.1–8.3), FF series (FF-1 through FF-13), BL-FEC series (BL-FEC-1 through BL-FEC-6), all code stubs (PR #187–#189). See `docs/dev/project/roadmap.md` for full history.
 
 **Active tracks**:
 - No remaining scheduled implementation tracks.
@@ -520,7 +520,7 @@ For any new Phase 1 feature: write the test first, confirm it fails, implement u
 
 ### Traceability (required for substantive changes)
 Carry the full chain in the commit message and PR body, and append an entry to
-`docs/dev/steering/traceability.md`:
+`docs/dev/project/traceability.md`:
 
 **requirement/change → architecture/design decision (+ rationale) → implementation (files/functions) → tests → test results (actually run).**
 
@@ -588,7 +588,7 @@ External modem/DSP references (gnuradio FLL band-edge, liquid-dsp framesync, dan
 | Protocol & handshake wire format (frame/SAR/CONREQ/CONACK/ACK/manifest) | `docs/dev/design/protocol-wire-spec.md` |
 | Peer query and relay wire format | `docs/dev/peer-query-relay-wire.md` |
 | Regulatory compliance | `docs/regulatory.md` |
-| Roadmap and phase gates | `docs/dev/steering/roadmap.md` |
+| Roadmap and phase gates | `docs/dev/project/roadmap.md` |
 | Requirements | `docs/dev/requirements.md` |
 | Architecture | `docs/dev/design/architecture.md` |
 | PKI tooling | `docs/dev/pki/pki-tooling-architecture.md` |

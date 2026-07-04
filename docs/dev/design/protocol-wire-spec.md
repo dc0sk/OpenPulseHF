@@ -16,7 +16,7 @@ session handshake**. It complements the two companion specs:
   envelope (peer query, route discovery, relay control). Not repeated here.
 
 The authoritative source is always the code; this document pins the layouts and links each to its
-module. Capability IDs (CAP-NN) refer to [traceability-matrix.md](../steering/traceability-matrix.md).
+module. Capability IDs (CAP-NN) refer to [traceability-matrix.md](../project/traceability-matrix.md).
 
 ## Conventions
 
@@ -241,4 +241,4 @@ Signing modes `Normal` / `Psk` / `Pq` / `Hybrid` (increasing strength; PQ=4, Hyb
 | Session lifecycle (states, transitions, timing) | [hpx-session-state-machine.md](../hpx-session-state-machine.md) |
 | Peer query / route discovery / relay control (`OPHF`) | [peer-query-relay-wire.md](../peer-query-relay-wire.md) |
 | Base frame / SAR / handshake / ACK / manifest byte layouts | this document + the cited `crates/openpulse-core/src/*.rs` |
-| Capability → implementation → tests | [traceability-matrix.md](../steering/traceability-matrix.md) |
+| Capability → implementation → tests | [traceability-matrix.md](../project/traceability-matrix.md) |

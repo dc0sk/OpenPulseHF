@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/dev/steering/backlog.md
+doc: docs/dev/project/backlog.md
 status: living
 last_updated: 2026-06-17
 ---
@@ -9,7 +9,7 @@ last_updated: 2026-06-17
 
 All scheduled phases (1–9), far-future items (FF-1 through FF-13), FEC backlog items
 (BL-FEC-1 through BL-FEC-6), and all previously documented daemon wiring gaps are
-shipped and merged.  See `docs/dev/steering/roadmap.md` for the full history with PR numbers.
+shipped and merged.  See `docs/dev/project/roadmap.md` for the full history with PR numbers.
 
 Completed research is archived in docs/dev/archive/ (FEC evaluation, waveform evaluation).
 
@@ -155,7 +155,7 @@ marking Phase 5.5-reg complete.
 5. Completion criteria
   - No unresolved compliance exceptions.
   - Stable on-air sessions across the required matrix.
-  - Follow-up docs updated: `docs/dev/steering/roadmap.md`, `docs/releasenotes.md`, and compliance notes.
+  - Follow-up docs updated: `docs/dev/project/roadmap.md`, `docs/releasenotes.md`, and compliance notes.
 
 ---
 
@@ -175,5 +175,5 @@ marking Phase 5.5-reg complete.
 - Daemon QSY RF wiring: `QsySession` wired into `AcceptQsy`; QSY_REQ/LIST frames transmitted; `process_received_bytes` drives responder role (PR #321).
 - Daemon CrossBandRepeater wiring: `EnableRepeater`/`DisableRepeater` daemon commands (PR #321).
 
-For full completion history (Phases 0-9, FF series, BL-FEC series), use `docs/dev/steering/roadmap.md`.
+For full completion history (Phases 0-9, FF series, BL-FEC series), use `docs/dev/project/roadmap.md`.
 

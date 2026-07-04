@@ -977,7 +977,7 @@ Project-local references:
 - Architecture: [docs/dev/design/architecture.md](dev/design/architecture.md)
 - Features: [docs/features.md](features.md)
 - CLI guide: [docs/cli-guide.md](cli-guide.md)
-- Roadmap: [docs/dev/steering/roadmap.md](dev/steering/roadmap.md)
+- Roadmap: [docs/dev/project/roadmap.md](dev/project/roadmap.md)
 - Plugin collaboration: [docs/dev/contributing-plugins.md](dev/contributing-plugins.md)
 - Commercial interface: [docs/dev/plugin-commercial-interface.md](dev/plugin-commercial-interface.md)
 - Regulatory analysis: [docs/regulatory.md](regulatory.md)
