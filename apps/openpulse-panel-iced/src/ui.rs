@@ -222,17 +222,18 @@ pub fn view(app: &App) -> Element<'_, Message> {
     let stack = Column::new()
         .spacing(8)
         .padding(10)
+        .width(Length::Fill)
+        .height(Length::Fill)
         // Controls band across the top.
         .push(panel(eff, "Controls", controls_widget(app, &snap, eff)))
         .push(panel(eff, "Spectrum", spectrum_widget(&snap, eff)))
         .push(panel(eff, "Waterfall", waterfall_widget(&snap, eff)))
         .push(panel(eff, "Ladder", ladder_widget(&snap, eff)))
-        // Additional info / Daemon config / Messages / Event log as one tabbed panel.
+        // Additional info / Daemon config / Messages / Event log as one tabbed panel that
+        // fills the remaining height, so every tab is the same size.
         .push(tabbed_lower(app, &snap, eff));
 
-    let scroll = scrollable(stack).height(Length::Fill);
-
-    Container::new(scroll)
+    Container::new(stack)
         .width(Length::Fill)
         .height(Length::Fill)
         .style(move |_t: &Theme| container::Style {
@@ -478,6 +479,39 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
     } else {
         "TCP"
     };
+    // RF peer — sits on the connection row, right of Connect.
+    let peer = if snap.rf_connected {
+        Row::new()
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .push(
+                Text::new(format!("RF: {}", snap.rf_peer.clone().unwrap_or_default()))
+                    .size(13)
+                    .color(role(eff, ColorRole::Locked)),
+            )
+            .push(accent_btn(
+                eff,
+                "Disconnect RF",
+                Message::DisconnectPeer,
+                ColorRole::TxActive,
+            ))
+    } else {
+        Row::new()
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .push(
+                text_input("CALLSIGN", &app.peer_call)
+                    .on_input(Message::PeerCallChanged)
+                    .size(13)
+                    .width(Length::Fixed(110.0)),
+            )
+            .push(accent_btn(
+                eff,
+                "Connect RF",
+                Message::ConnectPeer,
+                ColorRole::Locked,
+            ))
+    };
     let conn = Row::new()
         .spacing(8)
         .align_y(Alignment::Center)
@@ -507,6 +541,7 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
                 ColorRole::Locked
             },
         ))
+        .push(peer)
         .push(Text::new("●").size(13).color(role(eff, dot)))
         .push(Space::with_width(Length::Fill))
         .push(accent_btn(
@@ -583,43 +618,6 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
             Message::SquelchChanged,
         ));
 
-    // RF peer.
-    let peer = if snap.rf_connected {
-        Row::new()
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .push(
-                Text::new(format!(
-                    "RF peer: {}",
-                    snap.rf_peer.clone().unwrap_or_default()
-                ))
-                .size(13)
-                .color(role(eff, ColorRole::Locked)),
-            )
-            .push(accent_btn(
-                eff,
-                "Disconnect RF",
-                Message::DisconnectPeer,
-                ColorRole::TxActive,
-            ))
-    } else {
-        Row::new()
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .push(
-                text_input("CALLSIGN", &app.peer_call)
-                    .on_input(Message::PeerCallChanged)
-                    .size(13)
-                    .width(Length::Fixed(120.0)),
-            )
-            .push(accent_btn(
-                eff,
-                "Connect RF",
-                Message::ConnectPeer,
-                ColorRole::Locked,
-            ))
-    };
-
     // OTA.
     let ota = if snap.ota_active {
         let status = format!(
@@ -691,13 +689,12 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
             Message::ToggleTheme,
         ));
 
-    // Line 3: sliders side by side, then RF peer + OTA.
+    // Line 3: sliders side by side, then OTA.
     let line3 = Row::new()
         .spacing(16)
         .align_y(Alignment::Center)
         .push(sliders)
         .push(Space::with_width(Length::Fill))
-        .push(peer)
         .push(ota);
 
     let mut col = Column::new().spacing(8).push(line1).push(line2).push(line3);
@@ -766,9 +763,14 @@ fn tabbed_lower(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static,
         Tab::Messages => messages_widget(app, snap, eff),
         Tab::Log => log_widget(snap, eff),
     };
-    let body = Column::new().spacing(8).push(header).push(content);
+    // The content box fills the remaining space, so every tab renders at the same height.
+    let content_box = Container::new(content)
+        .width(Length::Fill)
+        .height(Length::Fill);
+    let body = Column::new().spacing(8).push(header).push(content_box);
     Container::new(body)
         .width(Length::Fill)
+        .height(Length::Fill)
         .padding(10)
         .style(move |_t: &Theme| container::Style {
             background: Some(Background::Color(shade(eff, Shade::Panel))),
@@ -1016,7 +1018,7 @@ fn log_widget(snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
                 .color(role(eff, ColorRole::Inactive)),
         );
     }
-    scrollable(col).height(Length::Fixed(120.0)).into()
+    scrollable(col).height(Length::Fill).into()
 }
 
 // --- small widget helpers ---------------------------------------------------
