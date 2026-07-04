@@ -165,7 +165,7 @@ fn tip<'a>(
             },
             ..container::Style::default()
         }),
-        tooltip::Position::Top,
+        tooltip::Position::FollowCursor,
     )
     .gap(6)
     .into()
