@@ -330,8 +330,10 @@ fn ladder_widget(snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> 
 }
 
 fn info_widget(snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
-    let mut col = Column::new().spacing(4);
-    col = col
+    // Column 1 — session.
+    let col1 = Column::new()
+        .spacing(4)
+        .push(col_title(eff, "Session"))
         .push(info_row(eff, "Mode", &snap.mode, ColorRole::Signal))
         .push(info_row(
             eff,
@@ -357,7 +359,12 @@ fn info_widget(snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
             "Compress",
             &format!("{:.2}×", snap.compress_ratio),
             ColorRole::RxValue,
-        ))
+        ));
+
+    // Column 2 — signal.
+    let mut col2 = Column::new()
+        .spacing(4)
+        .push(col_title(eff, "Signal"))
         .push(info_row(
             eff,
             "AFC",
@@ -380,17 +387,19 @@ fn info_widget(snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
             (snap.dcd_energy * 20.0).clamp(0.0, 1.0),
             ColorRole::Signal,
         ));
-
     if let Some(dbm) = snap.signal_strength_dbm {
-        col = col.push(info_row(
+        col2 = col2.push(info_row(
             eff,
             "S-meter",
             &format!("{dbm} dBm"),
             ColorRole::Signal,
         ));
     }
-    // Resources
-    col = col
+
+    // Column 3 — resources + rigs.
+    let mut col3 = Column::new()
+        .spacing(4)
+        .push(col_title(eff, "Resources"))
         .push(bar_row(
             eff,
             "CPU",
@@ -404,23 +413,32 @@ fn info_widget(snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
             ColorRole::Signal,
         ));
     if let Some(g) = snap.gpu_percent {
-        col = col.push(bar_row(eff, "GPU", g / 100.0, heat_role(g)));
+        col3 = col3.push(bar_row(eff, "GPU", g / 100.0, heat_role(g)));
     }
-    col = col.push(info_row(
+    col3 = col3.push(info_row(
         eff,
         "Decode",
         &format!("{:.1} ms", snap.decode_latency_ms),
         ColorRole::RxValue,
     ));
-
     if let Some(r) = &snap.rig_a {
-        col = col.push(info_row(eff, "Rig A", &fmt_rig(r), ColorRole::RxValue));
+        col3 = col3.push(info_row(eff, "Rig A", &fmt_rig(r), ColorRole::RxValue));
     }
     if let Some(r) = &snap.rig_b {
-        col = col.push(info_row(eff, "Rig B", &fmt_rig(r), ColorRole::RxValue));
+        col3 = col3.push(info_row(eff, "Rig B", &fmt_rig(r), ColorRole::RxValue));
     }
-    // ECC-rate trend (rolling ~2 min).
-    col = col
+
+    let columns = Row::new()
+        .spacing(24)
+        .width(Length::Fill)
+        .push(col1.width(Length::FillPortion(1)))
+        .push(col2.width(Length::FillPortion(1)))
+        .push(col3.width(Length::FillPortion(1)));
+
+    Column::new()
+        .spacing(8)
+        .push(columns)
+        // ECC-rate trend (rolling ~2 min), full width below the columns.
         .push(
             Text::new("ECC rate (2 min)")
                 .size(11)
@@ -435,8 +453,16 @@ fn info_widget(snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
             })
             .width(Length::Fill)
             .height(Length::Fixed(56.0)),
-        );
-    col.into()
+        )
+        .into()
+}
+
+/// Small uppercase heading for an info column.
+fn col_title(eff: EffectiveTheme, label: &str) -> Element<'static, Message> {
+    Text::new(label.to_uppercase())
+        .size(10)
+        .color(role(eff, ColorRole::Signal))
+        .into()
 }
 
 fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
