@@ -18,7 +18,7 @@ This index contains development-oriented, planning, architecture, protocol-spec,
 - [docs/dev/requirements.md](requirements.md): functional and non-functional requirements
 - [docs/dev/project/changelog.md](project/changelog.md): internal change history
 - [docs/dev/release-checklist.md](release-checklist.md): release and tagging procedure
-- [docs/dev/steering.md](steering.md): governance and decision ownership
+- [docs/dev/project.md](project.md): project-management roof — index of the `project/` tracking docs plus governance and decision ownership
 
 ## Architecture and implementation
 
