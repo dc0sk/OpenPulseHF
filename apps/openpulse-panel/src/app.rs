@@ -1,974 +1,425 @@
-//! Main application struct and eframe::App implementation.
+//! Application state, update loop, connection lifecycle, and theme wiring for the iced operator
+//! panel (REQ-UX-04).
+//!
+//! The panel connects to the daemon control port (reusing the egui panel's transport/connection/
+//! state core), reads a shared `PanelState` updated by the background thread, and sends
+//! `ControlCommand`s. The view renders the fixed vertical stack — spectrum → waterfall → ladder →
+//! additional info → controls — with selectable Dark/Light/Contrast/System themes.
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-#[cfg(not(target_arch = "wasm32"))]
 use crossbeam_channel::Sender;
-use egui::{Color32, RichText};
+use iced::{Subscription, Task, Theme};
 use openpulse_daemon::protocol::ControlCommand;
 
 use crate::connection::{self, TransportKind};
 use crate::state::{DaemonConfig, PanelState};
-use crate::ui::{
-    build_waterfall_image, draw_event_log, draw_messages_window, draw_rig_bar, draw_session_status,
-    draw_spectrum_pane, ComposeState,
-};
+use crate::theme::{role_rgb, shade_rgb, ColorRole, EffectiveTheme, Shade, ThemeMode};
+use crate::ui;
 
-// Keep in sync with each plugin's `supported_modes` metadata
-// (plugins/{bpsk,qpsk,psk8,64qam,ofdm,scfdma,pilot,fsk4}/src/lib.rs).
-const MODES: &[&str] = &[
-    // BPSK (bpsk-plugin)
-    "BPSK31",
-    "BPSK63",
-    "BPSK100",
-    "BPSK250",
-    "BPSK250-RRC",
-    // QPSK (qpsk-plugin)
-    "QPSK125",
-    "QPSK250",
-    "QPSK500",
-    "QPSK500-RRC",
-    "QPSK1000",
-    "QPSK1000-HF",
-    "QPSK1000-HF-RRC",
-    "QPSK1000-RRC",
-    "QPSK2000",
-    "QPSK2000-RRC",
-    "QPSK9600",
-    "QPSK9600-RRC",
-    // 8PSK (psk8-plugin)
-    "8PSK500",
-    "8PSK500-RRC",
-    "8PSK1000",
-    "8PSK1000-HF",
-    "8PSK1000-HF-RRC",
-    "8PSK1000-RRC",
-    "8PSK2000",
-    "8PSK2000-RRC",
-    "8PSK9600",
-    "8PSK9600-RRC",
-    // 64QAM (64qam-plugin)
-    "64QAM500",
-    "64QAM1000",
-    "64QAM2000-RRC",
-    // OFDM (ofdm-plugin)
-    "OFDM16",
-    "OFDM52",
-    "OFDM52-8PSK",
-    "OFDM52-16QAM",
-    "OFDM52-32QAM",
-    "OFDM52-64QAM",
-    // SC-FDMA (scfdma-plugin)
-    "SCFDMA16",
-    "SCFDMA52",
-    "SCFDMA52-8PSK",
-    "SCFDMA52-16QAM",
-    "SCFDMA52-32QAM",
-    "SCFDMA52-64QAM",
-    "SCFDMA52-64QAM-P4",
-    "SCFDMA26-8PSK",
-    "SCFDMA26-16QAM",
-    "SCFDMA26-32QAM",
-    // Pilot-framed (pilot-plugin)
-    "PILOT-QPSK500",
-    "PILOT-8PSK500",
-    "PILOT-16QAM500",
-    "PILOT-32APSK500",
-    "PILOT-QPSK500-RRC",
-    "PILOT-8PSK500-RRC",
-    "PILOT-16QAM500-RRC",
-    "PILOT-32APSK500-RRC",
-    "PILOT-QPSK1000",
-    "PILOT-8PSK1000",
-    "PILOT-16QAM1000",
-    "PILOT-32APSK1000",
-    "PILOT-QPSK1000-RRC",
-    "PILOT-8PSK1000-RRC",
-    "PILOT-16QAM1000-RRC",
-    "PILOT-32APSK1000-RRC",
-    "PILOT-QPSK2000-RRC",
-    "PILOT-8PSK2000-RRC",
-    "PILOT-16QAM2000-RRC",
-    "PILOT-32APSK2000-RRC",
-    // ACK channel (fsk4-plugin)
-    "FSK4-ACK",
-];
-
-const BANDPLAN_OPTIONS: &[(&str, &str)] = &[
-    ("unrestricted", "Unrestricted"),
-    ("ham-iaru-r1", "IARU Region 1"),
-    ("ham-iaru-r2", "IARU Region 2"),
-    ("ham-iaru-r3", "IARU Region 3"),
-];
-
-fn bandplan_label(mode: &str) -> &'static str {
-    BANDPLAN_OPTIONS
-        .iter()
-        .find(|(k, _)| *k == mode)
-        .map(|(_, l)| *l)
-        .unwrap_or("Unrestricted")
+fn default_config() -> DaemonConfig {
+    DaemonConfig {
+        callsign: String::new(),
+        grid_square: String::new(),
+        mode: "BPSK250".into(),
+        tx_attenuation_db: 0.0,
+        qsy_enabled: false,
+        bandplan_mode: "unrestricted".into(),
+        allow_tuner_on_high_swr: false,
+    }
 }
 
-/// Which pane is shown in the bottom tabbed area.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum BottomTab {
-    Events,
+/// Speed-level rungs shown on the ladder (SL1..=SLN).
+pub const LADDER_RUNGS: u8 = 20;
+
+/// Which of the lower panel's tabs is shown (Info → Config → Messages → Event log).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Tab {
+    Info,
+    Config,
+    #[default]
     Messages,
+    Log,
 }
 
-pub struct PanelApp {
-    /// Shared state read on every repaint.
-    shared: Arc<Mutex<PanelState>>,
+/// Top-level panel application state.
+pub struct App {
+    // --- theme ---
+    pub theme_mode: ThemeMode,
+    pub system_is_dark: bool,
 
-    // Native-only: background connection thread channels.
-    #[cfg(not(target_arch = "wasm32"))]
-    cmd_tx: Option<Sender<ControlCommand>>,
-    #[cfg(not(target_arch = "wasm32"))]
-    stop_tx: Option<crossbeam_channel::Sender<()>>,
+    // --- daemon connection ---
+    pub shared: Arc<Mutex<PanelState>>,
+    pub cmd_tx: Option<Sender<ControlCommand>>,
+    pub stop_tx: Option<Sender<()>>,
+    /// Control-port address (`host:port` for TCP, `ws://host:port` for WebSocket).
+    pub addr: String,
+    /// Selected transport (TCP or WebSocket).
+    pub transport_kind: TransportKind,
 
-    // WASM-only: inline WebSocket transport.
-    #[cfg(target_arch = "wasm32")]
-    wasm_sender: Option<ewebsock::WsSender>,
-    #[cfg(target_arch = "wasm32")]
-    wasm_receiver: Option<ewebsock::WsReceiver>,
+    // --- UI-local input state (not part of PanelState) ---
+    pub mode_sel: String,
+    pub freq_khz: String,
+    pub peer_call: String,
+    pub ota_profile: String,
+    pub tx_atten_db: f32,
+    pub squelch: f32,
+    /// Optimistic local mirrors for toggles the daemon doesn't echo in PanelState.
+    pub cessb_on: bool,
+    pub notch_on: bool,
+    pub agc_on: bool,
+    pub logbook_on: bool,
 
-    // Connection config.
-    server_addr: String,
-    transport_kind: TransportKind,
+    // --- messages ---
+    pub msg_to: String,
+    pub msg_subject: String,
+    pub msg_body: String,
 
-    // Toolbar state.
-    selected_mode: String,
-    repeater_enabled: bool,
-    cessb_enabled: bool,
-    notch_enabled: bool,
-    agc_enabled: bool,
-    logbook_enabled: bool,
-    tx_atten_db: f32,
-    dcd_squelch: f32,
-    ota_profile: String,
-    freq_khz: f64,
+    // --- config editor ---
+    pub config_draft: DaemonConfig,
+    pub config_fetch_pending: bool,
 
-    // RF peer connect.
-    peer_callsign_input: String,
+    /// Active Messages/Log tab.
+    pub active_tab: Tab,
 
-    // Config window.
-    config_open: bool,
-    config_draft: DaemonConfig,
-    config_fetch_pending: bool,
-
-    // Bottom tabbed pane: Event Log + Messages.
-    bottom_tab: BottomTab,
-    compose_to: String,
-    compose_subject: String,
-    compose_body: String,
-
-    // Waterfall texture; only rebuilt when spectrum_generation changes.
-    waterfall_tex: Option<egui::TextureHandle>,
-    waterfall_generation: u64,
+    pub tick: u32,
 }
 
-impl PanelApp {
-    pub fn new() -> Self {
-        Self {
+/// UI messages.
+#[derive(Debug, Clone)]
+pub enum Message {
+    ToggleTheme,
+    Tick,
+    SelectTab(Tab),
+    AddrChanged(String),
+    SelectTransport(bool),
+    ConnectToggle,
+    Ptt,
+    ModeSelected(String),
+    FreqChanged(String),
+    TuneFreq,
+    PeerCallChanged(String),
+    ConnectPeer,
+    DisconnectPeer,
+    ToggleRepeater,
+    ToggleCessb,
+    ToggleNotch,
+    ToggleAgc,
+    ToggleLogbook,
+    AttenChanged(f32),
+    SquelchChanged(f32),
+    AcceptQsy,
+    RejectQsy,
+    OtaProfileChanged(String),
+    StartOta,
+    StopOta,
+    OtaLockToggle,
+    // messages
+    MsgTo(String),
+    MsgSubject(String),
+    MsgBody(String),
+    SendMsg,
+    RefreshInbox,
+    OpenMsg(u64),
+    DeleteMsg(u64),
+    // config
+    FetchConfig,
+    ApplyConfig,
+    CfgMode(String),
+    CfgAtten(f32),
+    CfgQsy(bool),
+    CfgBandplan(String),
+    CfgTuneSwr(bool),
+}
+
+impl App {
+    pub fn new() -> (Self, Task<Message>) {
+        let app = App {
+            theme_mode: ThemeMode::default(),
+            system_is_dark: crate::ui::detect_system_dark(),
             shared: Arc::new(Mutex::new(PanelState::default())),
-            #[cfg(not(target_arch = "wasm32"))]
             cmd_tx: None,
-            #[cfg(not(target_arch = "wasm32"))]
             stop_tx: None,
-            #[cfg(target_arch = "wasm32")]
-            wasm_sender: None,
-            #[cfg(target_arch = "wasm32")]
-            wasm_receiver: None,
-            // WASM only supports WebSocket; default to the WS endpoint.
-            #[cfg(target_arch = "wasm32")]
-            server_addr: "ws://127.0.0.1:9001".into(),
-            #[cfg(not(target_arch = "wasm32"))]
-            server_addr: "127.0.0.1:9000".into(),
-            #[cfg(not(target_arch = "wasm32"))]
+            addr: "127.0.0.1:9000".into(),
             transport_kind: TransportKind::Tcp,
-            #[cfg(target_arch = "wasm32")]
-            transport_kind: TransportKind::WebSocket,
-            selected_mode: "BPSK250".into(),
-            repeater_enabled: false,
-            // Default-on mirrors the daemon's `[modem] cessb_enabled = true`; the
-            // master switch is a no-op for non-multicarrier modes regardless.
-            cessb_enabled: true,
-            // Default-off mirrors the daemon's `[modem] notch_enabled = false`.
-            notch_enabled: false,
-            // Default-off mirrors the daemon's `[modem] agc_enabled = false`.
-            agc_enabled: false,
-            // Default-off mirrors the daemon's `[logbook] enabled = false`.
-            logbook_enabled: false,
-            tx_atten_db: 0.0,
-            // Mirrors the engine/`[modem] dcd_squelch` default.
-            dcd_squelch: 0.01,
+            mode_sel: "BPSK250".into(),
+            freq_khz: "14100.000".into(),
+            peer_call: String::new(),
             ota_profile: "hpx_hf".into(),
-            freq_khz: 14_070.0,
-            peer_callsign_input: String::new(),
-            config_open: false,
-            config_draft: DaemonConfig {
-                callsign: String::new(),
-                grid_square: String::new(),
-                mode: "BPSK250".into(),
-                tx_attenuation_db: 0.0,
-                qsy_enabled: false,
-                bandplan_mode: "unrestricted".into(),
-                allow_tuner_on_high_swr: false,
-            },
+            tx_atten_db: 0.0,
+            squelch: 0.02,
+            cessb_on: false,
+            notch_on: false,
+            agc_on: false,
+            logbook_on: false,
+            msg_to: String::new(),
+            msg_subject: String::new(),
+            msg_body: String::new(),
+            config_draft: default_config(),
             config_fetch_pending: false,
-            bottom_tab: BottomTab::Events,
-            compose_to: String::new(),
-            compose_subject: String::new(),
-            compose_body: String::new(),
-            waterfall_tex: None,
-            waterfall_generation: u64::MAX,
+            active_tab: Tab::default(),
+            tick: 0,
+        };
+        (app, Task::none())
+    }
+
+    /// Whether a connection worker is currently spawned.
+    pub fn is_connected(&self) -> bool {
+        self.cmd_tx.is_some()
+    }
+
+    fn send(&self, cmd: ControlCommand) {
+        if let Some(tx) = &self.cmd_tx {
+            let _ = tx.try_send(cmd);
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn connect(&mut self) {
         let (stop_tx, stop_rx) = crossbeam_channel::bounded(1);
         let cmd_tx = connection::spawn(
-            self.server_addr.clone(),
+            self.addr.clone(),
             self.transport_kind.clone(),
-            Arc::clone(&self.shared),
+            self.shared.clone(),
             stop_rx,
         );
         self.stop_tx = Some(stop_tx);
         self.cmd_tx = Some(cmd_tx);
+        // Pull the daemon config so the always-visible Config panel populates.
+        self.config_fetch_pending = true;
+        self.send(ControlCommand::GetConfig);
     }
 
-    #[cfg(target_arch = "wasm32")]
-    fn connect(&mut self) {
-        let url = if self.server_addr.starts_with("ws") {
-            self.server_addr.clone()
-        } else {
-            format!("ws://{}", self.server_addr)
-        };
-        match ewebsock::connect(url, ewebsock::Options::default()) {
-            Ok((mut sender, receiver)) => {
-                if let Ok(s) = serde_json::to_string(&ControlCommand::SubscribeSpectrum { fps: 20 })
-                {
-                    sender.send(ewebsock::WsMessage::Text(s));
-                }
-                self.wasm_sender = Some(sender);
-                self.wasm_receiver = Some(receiver);
-                let mut st = self.shared.lock().unwrap();
-                st.push_log(format!("connecting to {}", self.server_addr));
-            }
-            Err(e) => {
-                self.shared
-                    .lock()
-                    .unwrap()
-                    .push_log(format!("WS connect error: {e}"));
-            }
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn disconnect_daemon(&mut self) {
+    fn disconnect(&mut self) {
         if let Some(tx) = self.stop_tx.take() {
             let _ = tx.send(());
         }
         self.cmd_tx = None;
-        self.shared.lock().unwrap().connected = false;
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn disconnect_daemon(&mut self) {
-        self.wasm_sender = None;
-        self.wasm_receiver = None;
-        self.shared.lock().unwrap().connected = false;
-    }
-
-    /// Returns `true` if the command was successfully enqueued.
-    fn send(&mut self, cmd: ControlCommand) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            if let Some(tx) = &self.cmd_tx {
-                return tx.try_send(cmd).is_ok();
-            }
-            false
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            if let Some(sender) = &mut self.wasm_sender {
-                if let Ok(s) = serde_json::to_string(&cmd) {
-                    sender.send(ewebsock::WsMessage::Text(s));
-                    return true;
-                }
-            }
-            false
+        if let Ok(mut st) = self.shared.lock() {
+            st.connected = false;
         }
     }
 
-    /// On WASM, drain inbound WebSocket messages from the main thread.
-    #[cfg(target_arch = "wasm32")]
-    fn poll_wasm(&mut self) {
-        let mut disconnected = false;
-        if let Some(receiver) = &mut self.wasm_receiver {
-            loop {
-                match receiver.try_recv() {
-                    None => break,
-                    Some(ewebsock::WsEvent::Opened) => {
-                        self.shared.lock().unwrap().connected = true;
-                        self.shared
-                            .lock()
-                            .unwrap()
-                            .push_log(format!("connected to {}", self.server_addr));
-                    }
-                    Some(ewebsock::WsEvent::Message(ewebsock::WsMessage::Text(line))) => {
-                        if !line.is_empty() {
-                            connection::apply_event(&line, &self.shared);
+    pub fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::ToggleTheme => self.theme_mode = self.theme_mode.next(),
+            Message::SelectTab(t) => self.active_tab = t,
+            Message::Tick => {
+                self.tick = self.tick.wrapping_add(1);
+                // Config fetch is async: once the daemon's ConfigData arrives, seed the draft.
+                if self.config_fetch_pending {
+                    if let Ok(st) = self.shared.lock() {
+                        if let Some(cfg) = &st.daemon_config {
+                            self.config_draft = cfg.clone();
+                            self.config_fetch_pending = false;
                         }
-                    }
-                    Some(ewebsock::WsEvent::Message(ewebsock::WsMessage::Binary(bytes))) => {
-                        connection::apply_spectrum(&bytes, &self.shared);
-                    }
-                    Some(ewebsock::WsEvent::Message(_)) => {}
-                    Some(ewebsock::WsEvent::Error(e)) => {
-                        self.shared
-                            .lock()
-                            .unwrap()
-                            .push_log(format!("WS error: {e}"));
-                        disconnected = true;
-                        break;
-                    }
-                    Some(ewebsock::WsEvent::Closed) => {
-                        self.shared.lock().unwrap().push_log("disconnected".into());
-                        disconnected = true;
-                        break;
                     }
                 }
             }
-        }
-        if disconnected {
-            self.wasm_sender = None;
-            self.wasm_receiver = None;
-            self.shared.lock().unwrap().connected = false;
-        }
-    }
-
-    /// Right-hand controls column: Mode, frequency, feature toggles, OTA, TX/squelch sliders,
-    /// and the Config/Messages/QSY actions — everything except the connection, PTT, and RF-connect
-    /// controls, which stay in the top toolbar.
-    fn draw_controls(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                // ── Mode selector ─────────────────────────────────────────────
-                ui.horizontal(|ui| {
-                    ui.label("Mode:");
-                    egui::ComboBox::from_id_salt("mode_combo")
-                        .selected_text(&self.selected_mode)
-                        .show_ui(ui, |ui| {
-                            for &m in MODES {
-                                if ui
-                                    .selectable_value(&mut self.selected_mode, m.into(), m)
-                                    .changed()
-                                {
-                                    self.send(ControlCommand::SetMode {
-                                        mode: self.selected_mode.clone(),
-                                    });
-                                }
-                            }
-                        });
-                });
-
-                // ── Frequency (CAT tune via rigctld) ──────────────────────────
-                ui.horizontal(|ui| {
-                    ui.label("Freq:");
-                    ui.add(
-                        egui::DragValue::new(&mut self.freq_khz)
-                            .speed(1.0)
-                            .range(1500.0..=30_000.0)
-                            .fixed_decimals(3)
-                            .suffix(" kHz"),
-                    );
-                    if ui
-                        .button("Tune")
-                        .on_hover_text("Set the rig frequency via CAT (rigctld)")
-                        .clicked()
-                    {
-                        self.send(ControlCommand::SetFreq {
-                            rig: "rigctld".into(),
-                            freq_hz: (self.freq_khz * 1000.0).round() as u64,
-                        });
-                    }
-                });
-
-                ui.separator();
-
-                // ── Feature toggles ───────────────────────────────────────────
-                let rep_label = if self.repeater_enabled {
-                    "Repeater: ON"
+            Message::AddrChanged(a) => self.addr = a,
+            Message::SelectTransport(ws) => {
+                self.transport_kind = if ws {
+                    TransportKind::WebSocket
                 } else {
-                    "Repeater: OFF"
+                    TransportKind::Tcp
                 };
-                if ui.button(rep_label).clicked() {
-                    self.repeater_enabled = !self.repeater_enabled;
-                    if self.repeater_enabled {
-                        self.send(ControlCommand::EnableRepeater);
-                    } else {
-                        self.send(ControlCommand::DisableRepeater);
-                    }
+                // Offer a sensible default address for the chosen scheme.
+                if ws && !self.addr.starts_with("ws") {
+                    self.addr = "ws://127.0.0.1:9001".into();
+                } else if !ws && self.addr.starts_with("ws") {
+                    self.addr = "127.0.0.1:9000".into();
                 }
-
-                let cessb_label = if self.cessb_enabled {
-                    "CE-SSB: ON"
+            }
+            Message::ConnectToggle => {
+                if self.is_connected() {
+                    self.disconnect();
                 } else {
-                    "CE-SSB: OFF"
-                };
-                if ui
-                    .button(cessb_label)
-                    .on_hover_text(
-                        "Controlled-Envelope SSB raises average TX power at fixed PEP on \
-                         high-PAPR multicarrier modes (OFDM/SC-FDMA). No-op for single-carrier modes.",
-                    )
-                    .clicked()
-                {
-                    self.cessb_enabled = !self.cessb_enabled;
-                    self.send(ControlCommand::SetCessb {
-                        enabled: self.cessb_enabled,
-                    });
-                }
-
-                let notch_label = if self.notch_enabled {
-                    "Notch: ON"
-                } else {
-                    "Notch: OFF"
-                };
-                if ui
-                    .button(notch_label)
-                    .on_hover_text(
-                        "Receiver automatic notch: removes out-of-band CW interference (QRM) \
-                         before demod. The protected band tracks the active mode, so your own \
-                         signal is never notched; an in-band interferer needs a QSY, not a notch.",
-                    )
-                    .clicked()
-                {
-                    self.notch_enabled = !self.notch_enabled;
-                    self.send(ControlCommand::SetNotch {
-                        enabled: self.notch_enabled,
-                    });
-                }
-
-                let agc_label = if self.agc_enabled {
-                    "AGC: ON"
-                } else {
-                    "AGC: OFF"
-                };
-                if ui
-                    .button(agc_label)
-                    .on_hover_text(
-                        "Receiver streaming AGC: normalises the captured level before demod. \
-                         Active-span gated on the squelch, so leading silence can't ramp the gain. \
-                         Helps weak or level-varying signals; leave off when the input is already \
-                         well-levelled.",
-                    )
-                    .clicked()
-                {
-                    self.agc_enabled = !self.agc_enabled;
-                    self.send(ControlCommand::SetAgc {
-                        enabled: self.agc_enabled,
-                    });
-                }
-
-                let log_label = if self.logbook_enabled {
-                    "Logbook: ON"
-                } else {
-                    "Logbook: OFF"
-                };
-                if ui
-                    .button(log_label)
-                    .on_hover_text(
-                        "Automatic ADIF logbook: append one record per contact (connect→disconnect) \
-                         to the configured .adi file, for import into logging software / LoTW / eQSL.",
-                    )
-                    .clicked()
-                {
-                    self.logbook_enabled = !self.logbook_enabled;
-                    self.send(ControlCommand::SetLogbook {
-                        enabled: self.logbook_enabled,
-                    });
-                }
-
-                ui.separator();
-
-                // ── OTA adaptive rate ─────────────────────────────────────────
-                {
-                    let (active, tx_level, tx_mode, tx_fec, rec, locked) = {
-                        let s = self.shared.lock().unwrap();
-                        (
-                            s.ota_active,
-                            s.ota_tx_level.clone(),
-                            s.ota_tx_mode.clone(),
-                            s.ota_tx_fec.clone(),
-                            s.ota_rx_recommended_level.clone(),
-                            s.ota_is_locked,
-                        )
-                    };
-                    if active {
-                        let txl = tx_level.clone().unwrap_or_else(|| "—".into());
-                        let txm = tx_mode.unwrap_or_else(|| "—".into());
-                        let rec_s = rec.unwrap_or_else(|| "—".into());
-                        ui.label(format!("OTA: {txl} {txm}/{tx_fec} (rec {rec_s})"));
-                        ui.horizontal(|ui| {
-                            let lock_label = if locked { "🔒 Unlock" } else { "Lock" };
-                            if ui.button(lock_label).clicked() {
-                                if locked {
-                                    self.send(ControlCommand::OtaUnlock);
-                                } else {
-                                    self.send(ControlCommand::OtaLockLevel {
-                                        level: tx_level.unwrap_or_else(|| "SL2".into()),
-                                    });
-                                }
-                            }
-                            if ui.button("Stop").on_hover_text("End the OTA session").clicked() {
-                                self.send(ControlCommand::StopOtaSession);
-                            }
-                        });
-                    } else {
-                        ui.label(RichText::new("OTA: off").color(Color32::GRAY));
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.ota_profile)
-                                    .desired_width(90.0)
-                                    .hint_text("profile"),
-                            );
-                            if ui
-                                .button("Start OTA")
-                                .on_hover_text("Start a receiver-led OTA adaptive-rate session")
-                                .clicked()
-                            {
-                                self.send(ControlCommand::StartOtaSession {
-                                    profile: self.ota_profile.clone(),
-                                });
-                            }
-                        });
-                    }
-                }
-
-                ui.separator();
-
-                // ── TX attenuation ────────────────────────────────────────────
-                ui.label("TX Atten:");
-                if ui
-                    .add(
-                        egui::Slider::new(&mut self.tx_atten_db, -30.0_f32..=0.0_f32)
-                            .suffix(" dB")
-                            .fixed_decimals(1),
-                    )
-                    .changed()
-                {
-                    self.send(ControlCommand::SetTxAttenuation {
-                        db: self.tx_atten_db,
-                        band: None,
-                    });
-                }
-
-                // ── DCD / squelch threshold ───────────────────────────────────
-                ui.label("Squelch:");
-                if ui
-                    .add(
-                        egui::Slider::new(&mut self.dcd_squelch, 0.0_f32..=0.2_f32)
-                            .fixed_decimals(3),
-                    )
-                    .on_hover_text(
-                        "DCD/squelch RMS threshold: raise above a noisy band's floor so the \
-                         carrier-present detector doesn't latch busy.",
-                    )
-                    .changed()
-                {
-                    self.send(ControlCommand::SetDcdSquelch {
-                        threshold: self.dcd_squelch,
-                    });
-                }
-
-                ui.separator();
-
-                // ── Config + Messages toggles ─────────────────────────────────
-                if ui.selectable_label(self.config_open, "⚙ Config").clicked() {
-                    self.config_open = !self.config_open;
-                }
-
-                let unread = self.shared.lock().unwrap().inbox.len();
-                let msg_label = if unread > 0 {
-                    format!("✉ Messages ({})", unread)
-                } else {
-                    "✉ Messages".into()
-                };
-                let on_messages = self.bottom_tab == BottomTab::Messages;
-                if ui.selectable_label(on_messages, msg_label).clicked() {
-                    self.bottom_tab = if on_messages {
-                        BottomTab::Events
-                    } else {
-                        self.send(ControlCommand::ListMessages);
-                        BottomTab::Messages
-                    };
-                }
-
-                // ── QSY buttons (when a request is pending) ────────────────────
-                let qsy_token = self.shared.lock().unwrap().pending_qsy_token.clone();
-                if let Some(token) = qsy_token {
-                    ui.separator();
-                    ui.label(RichText::new("QSY pending").color(Color32::YELLOW));
-                    ui.horizontal(|ui| {
-                        if ui.button("Accept QSY").clicked() {
-                            self.send(ControlCommand::AcceptQsy {
-                                token: token.clone(),
-                            });
-                        }
-                        if ui.button("Reject QSY").clicked() {
-                            self.send(ControlCommand::RejectQsy { token });
-                        }
-                    });
-                }
-            });
-    }
-}
-
-impl eframe::App for PanelApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // WASM: drain inbound WebSocket events before drawing.
-        #[cfg(target_arch = "wasm32")]
-        self.poll_wasm();
-
-        // Always repaint while connected to show live events.
-        let connected = self.shared.lock().unwrap().connected;
-        let repeater_enabled = self.shared.lock().unwrap().repeater_enabled;
-        self.repeater_enabled = repeater_enabled;
-        if connected {
-            ctx.request_repaint_after(std::time::Duration::from_millis(100));
-        }
-
-        // ── Toolbar ──────────────────────────────────────────────────────────
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                // Transport picker — TCP only available on native; WASM always uses WS.
-                #[cfg(not(target_arch = "wasm32"))]
-                egui::ComboBox::from_id_salt("transport")
-                    .selected_text(match self.transport_kind {
-                        TransportKind::Tcp => "TCP",
-                        TransportKind::WebSocket => "WS",
-                    })
-                    .width(40.0)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.transport_kind, TransportKind::Tcp, "TCP");
-                        ui.selectable_value(
-                            &mut self.transport_kind,
-                            TransportKind::WebSocket,
-                            "WS",
-                        );
-                    });
-                #[cfg(target_arch = "wasm32")]
-                ui.label("WS");
-
-                ui.label("Server:");
-                ui.add(egui::TextEdit::singleline(&mut self.server_addr).desired_width(160.0));
-
-                if connected {
-                    if ui.button("Disconnect").clicked() {
-                        self.disconnect_daemon();
-                    }
-                } else if ui.button("Connect").clicked() {
                     self.connect();
                 }
-
-                ui.separator();
-
-                // ── PTT button ────────────────────────────────────────────────
-                let ptt_now = self.shared.lock().unwrap().ptt_active;
-                let (ptt_color, ptt_label) = if ptt_now {
-                    (Color32::RED, "● PTT")
-                } else {
-                    (Color32::DARK_GRAY, "○ PTT")
-                };
-                let ptt_btn = ui.add(
-                    egui::Button::new(RichText::new(ptt_label).color(ptt_color))
-                        .min_size(egui::vec2(60.0, 0.0)),
-                );
-                if ptt_btn.clicked() {
-                    if ptt_now {
-                        self.send(ControlCommand::PttRelease);
-                    } else {
-                        self.send(ControlCommand::PttAssert);
-                    }
-                }
-
-                ui.separator();
-
-                // ── RF peer connect ───────────────────────────────────────────
-                let rf_connected = self.shared.lock().unwrap().rf_connected;
-                if rf_connected {
-                    let peer = self
-                        .shared
-                        .lock()
-                        .unwrap()
-                        .rf_peer
-                        .clone()
-                        .unwrap_or_default();
-                    ui.label(RichText::new(format!("RF: {peer}")).color(Color32::GREEN));
-                    if ui.button("Disconnect RF").clicked() {
-                        self.send(ControlCommand::DisconnectPeer);
-                    }
-                } else {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.peer_callsign_input)
-                            .hint_text("CALLSIGN")
-                            .desired_width(80.0),
-                    );
-                    if ui.button("Connect RF").clicked() && !self.peer_callsign_input.is_empty() {
-                        self.send(ControlCommand::ConnectPeer {
-                            callsign: self.peer_callsign_input.trim().to_uppercase(),
-                        });
-                    }
-                }
-
-                // ── Connection indicator ──────────────────────────────────────
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (color, label) = if connected {
-                        (egui::Color32::GREEN, "●  Connected")
-                    } else {
-                        (egui::Color32::RED, "●  Disconnected")
-                    };
-                    ui.label(RichText::new(label).color(color));
-                });
-            });
-        });
-
-        // ── Rig status bar ───────────────────────────────────────────────────
-        let has_rigs = {
-            let st = self.shared.lock().unwrap();
-            st.rig_a.is_some() || st.rig_b.is_some()
-        };
-        if has_rigs {
-            egui::TopBottomPanel::top("rig_bar").show(ctx, |ui| {
-                let st = self.shared.lock().unwrap();
-                draw_rig_bar(ui, &st);
-            });
-        }
-
-        // ── Bottom tabbed pane: Event Log + Messages ─────────────────────────
-        let mut request_list = false;
-        let mut msg_close = false;
-        let mut get_msg_id: Option<u64> = None;
-        let mut send_msg: Option<(String, String, String)> = None;
-        let mut delete_msg_id: Option<u64> = None;
-
-        egui::TopBottomPanel::bottom("bottom_pane")
-            .resizable(true)
-            .min_height(120.0)
-            .default_height(180.0)
-            .show(ctx, |ui| {
-                let st = self.shared.lock().unwrap();
-                let unread = st.inbox.len();
-                let msg_tab_label = if unread > 0 {
-                    format!("✉ Messages ({unread})")
-                } else {
-                    "✉ Messages".to_string()
-                };
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Events, "Event Log");
-                    if ui
-                        .selectable_label(self.bottom_tab == BottomTab::Messages, msg_tab_label)
-                        .clicked()
-                        && self.bottom_tab != BottomTab::Messages
-                    {
-                        self.bottom_tab = BottomTab::Messages;
-                        request_list = true;
-                    }
-                });
-                ui.separator();
-                match self.bottom_tab {
-                    BottomTab::Events => draw_event_log(ui, &st),
-                    BottomTab::Messages => draw_messages_window(
-                        ui,
-                        &st,
-                        &mut ComposeState {
-                            to: &mut self.compose_to,
-                            subject: &mut self.compose_subject,
-                            body: &mut self.compose_body,
-                            close: &mut msg_close,
-                            get_msg_id: &mut get_msg_id,
-                            send_msg: &mut send_msg,
-                            delete_msg_id: &mut delete_msg_id,
-                        },
-                    ),
-                }
-            });
-
-        if request_list {
-            self.send(ControlCommand::ListMessages);
-        }
-        if msg_close {
-            self.bottom_tab = BottomTab::Events;
-        }
-        if let Some(id) = get_msg_id {
-            self.send(ControlCommand::GetMessage { id });
-        }
-        if let Some((to, subject, body)) = send_msg {
-            self.send(ControlCommand::SendMessage { to, subject, body });
-            self.compose_to.clear();
-            self.compose_subject.clear();
-            self.compose_body.clear();
-        }
-        if let Some(id) = delete_msg_id {
-            if self.send(ControlCommand::DeleteMessage { id }) {
-                let mut st = self.shared.lock().unwrap();
-                st.inbox.retain(|m| m.id != id);
-                if st.open_message_id == Some(id) {
-                    st.open_message_id = None;
-                    st.open_message_body = None;
-                }
-            } else {
-                self.shared
-                    .lock()
-                    .unwrap()
-                    .push_log("delete failed: channel full or disconnected".into());
             }
-        }
-
-        // Rebuild waterfall texture only when new spectrum data has arrived.
-        {
-            let st = self.shared.lock().unwrap();
-            if st.spectrum_generation != self.waterfall_generation
-                && !st.spectrum_history.is_empty()
-            {
-                let image = build_waterfall_image(&st.spectrum_history);
-                self.waterfall_generation = st.spectrum_generation;
-                drop(st);
-                match &mut self.waterfall_tex {
-                    Some(tex) => tex.set(image, egui::TextureOptions::NEAREST),
-                    None => {
-                        self.waterfall_tex = Some(ctx.load_texture(
-                            "waterfall",
-                            image,
-                            egui::TextureOptions::NEAREST,
-                        ));
-                    }
-                }
-            }
-        }
-
-        // ── Right column: operational controls (everything except connection /
-        //    PTT / RF-connect, which stay in the top toolbar) ─────────────────
-        egui::SidePanel::right("controls_panel")
-            .resizable(true)
-            .default_width(240.0)
-            .show(ctx, |ui| {
-                self.draw_controls(ui);
-            });
-
-        // ── Central: spectrum + waterfall, with session status stacked below ──
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let st = self.shared.lock().unwrap();
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    draw_spectrum_pane(ui, &st, self.waterfall_tex.as_ref());
-                    ui.separator();
-                    draw_session_status(ui, &st);
+            Message::Ptt => {
+                let active = self.shared.lock().map(|s| s.ptt_active).unwrap_or(false);
+                self.send(if active {
+                    ControlCommand::PttRelease
+                } else {
+                    ControlCommand::PttAssert
                 });
-        });
-
-        // ── Config window ────────────────────────────────────────────────────
-        // Populate draft when the GetConfig response arrives.
-        // Also sync toolbar controls so they reflect the daemon's actual state.
-        if self.config_fetch_pending {
-            if let Some(cfg) = self.shared.lock().unwrap().daemon_config.clone() {
-                self.selected_mode = cfg.mode.clone();
-                self.tx_atten_db = cfg.tx_attenuation_db;
-                self.config_draft = cfg;
-                self.config_fetch_pending = false;
             }
-        }
-
-        if self.config_open {
-            egui::Window::new("Daemon Config")
-                .resizable(true)
-                .collapsible(false)
-                .default_size([320.0, 220.0])
-                .show(ctx, |ui| {
-                    egui::Grid::new("cfg_grid")
-                        .num_columns(2)
-                        .spacing([8.0, 4.0])
-                        .show(ui, |ui| {
-                            ui.label("Callsign:");
-                            ui.label(&self.config_draft.callsign);
-                            ui.end_row();
-
-                            ui.label("Grid square:");
-                            ui.label(&self.config_draft.grid_square);
-                            ui.end_row();
-
-                            ui.label("Mode:");
-                            egui::ComboBox::from_id_salt("cfg_mode")
-                                .selected_text(&self.config_draft.mode)
-                                .show_ui(ui, |ui| {
-                                    for &m in MODES {
-                                        ui.selectable_value(
-                                            &mut self.config_draft.mode,
-                                            m.into(),
-                                            m,
-                                        );
-                                    }
-                                });
-                            ui.end_row();
-
-                            ui.label("TX Atten:");
-                            ui.add(
-                                egui::Slider::new(
-                                    &mut self.config_draft.tx_attenuation_db,
-                                    -30.0_f32..=0.0_f32,
-                                )
-                                .suffix(" dB")
-                                .fixed_decimals(1),
-                            );
-                            ui.end_row();
-
-                            ui.label("QSY:");
-                            ui.checkbox(&mut self.config_draft.qsy_enabled, "Enabled");
-                            ui.end_row();
-
-                            ui.label("Bandplan:");
-                            egui::ComboBox::from_id_salt("cfg_bandplan")
-                                .selected_text(bandplan_label(&self.config_draft.bandplan_mode))
-                                .show_ui(ui, |ui| {
-                                    for &(key, label) in BANDPLAN_OPTIONS {
-                                        ui.selectable_value(
-                                            &mut self.config_draft.bandplan_mode,
-                                            key.into(),
-                                            label,
-                                        );
-                                    }
-                                });
-                            ui.end_row();
-
-                            ui.label("Tune on high SWR:");
-                            ui.checkbox(&mut self.config_draft.allow_tuner_on_high_swr, "Allowed");
-                            ui.end_row();
-                        });
-
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        if ui.button("Fetch").clicked() {
-                            // Clear stale snapshot so the pending check only resolves
-                            // on the new response, not an old one.
-                            self.shared.lock().unwrap().daemon_config = None;
-                            self.send(ControlCommand::GetConfig);
-                            self.config_fetch_pending = true;
-                        }
-                        if ui.button("Apply").clicked() {
-                            self.send(ControlCommand::SetConfig {
-                                config: self.config_draft.clone(),
-                            });
-                        }
-                        if ui.button("Close").clicked() {
-                            self.config_open = false;
-                        }
+            Message::ModeSelected(m) => {
+                self.mode_sel = m.clone();
+                self.send(ControlCommand::SetMode { mode: m });
+            }
+            Message::FreqChanged(v) => self.freq_khz = v,
+            Message::TuneFreq => {
+                if let Ok(khz) = self.freq_khz.trim().parse::<f64>() {
+                    self.send(ControlCommand::SetFreq {
+                        rig: "rigctld".into(),
+                        freq_hz: (khz * 1000.0) as u64,
                     });
+                }
+            }
+            Message::PeerCallChanged(c) => self.peer_call = c,
+            Message::ConnectPeer => {
+                let call = self.peer_call.trim().to_uppercase();
+                if !call.is_empty() {
+                    self.send(ControlCommand::ConnectPeer { callsign: call });
+                }
+            }
+            Message::DisconnectPeer => self.send(ControlCommand::DisconnectPeer),
+            Message::ToggleRepeater => {
+                let on = self
+                    .shared
+                    .lock()
+                    .map(|s| s.repeater_enabled)
+                    .unwrap_or(false);
+                self.send(if on {
+                    ControlCommand::DisableRepeater
+                } else {
+                    ControlCommand::EnableRepeater
                 });
+            }
+            Message::ToggleCessb => {
+                self.cessb_on = !self.cessb_on;
+                self.send(ControlCommand::SetCessb {
+                    enabled: self.cessb_on,
+                });
+            }
+            Message::ToggleNotch => {
+                self.notch_on = !self.notch_on;
+                self.send(ControlCommand::SetNotch {
+                    enabled: self.notch_on,
+                });
+            }
+            Message::ToggleAgc => {
+                self.agc_on = !self.agc_on;
+                self.send(ControlCommand::SetAgc {
+                    enabled: self.agc_on,
+                });
+            }
+            Message::ToggleLogbook => {
+                self.logbook_on = !self.logbook_on;
+                self.send(ControlCommand::SetLogbook {
+                    enabled: self.logbook_on,
+                });
+            }
+            Message::AttenChanged(db) => {
+                self.tx_atten_db = db;
+                self.send(ControlCommand::SetTxAttenuation { db, band: None });
+            }
+            Message::SquelchChanged(t) => {
+                self.squelch = t;
+                self.send(ControlCommand::SetDcdSquelch { threshold: t });
+            }
+            Message::AcceptQsy => {
+                if let Some(token) = self.pending_qsy() {
+                    self.send(ControlCommand::AcceptQsy { token });
+                }
+            }
+            Message::RejectQsy => {
+                if let Some(token) = self.pending_qsy() {
+                    self.send(ControlCommand::RejectQsy { token });
+                }
+            }
+            Message::OtaProfileChanged(p) => self.ota_profile = p,
+            Message::StartOta => self.send(ControlCommand::StartOtaSession {
+                profile: self.ota_profile.clone(),
+            }),
+            Message::StopOta => self.send(ControlCommand::StopOtaSession),
+            Message::OtaLockToggle => {
+                let (locked, level) = self
+                    .shared
+                    .lock()
+                    .map(|s| (s.ota_is_locked, s.ota_tx_level.clone()))
+                    .unwrap_or((false, None));
+                if locked {
+                    self.send(ControlCommand::OtaUnlock);
+                } else {
+                    self.send(ControlCommand::OtaLockLevel {
+                        level: level.unwrap_or_else(|| "SL2".into()),
+                    });
+                }
+            }
+            // --- messages ---
+            Message::MsgTo(v) => self.msg_to = v,
+            Message::MsgSubject(v) => self.msg_subject = v,
+            Message::MsgBody(v) => self.msg_body = v,
+            Message::SendMsg => {
+                let (to, subject, body) = (
+                    self.msg_to.trim().to_uppercase(),
+                    self.msg_subject.trim().to_string(),
+                    self.msg_body.clone(),
+                );
+                if !to.is_empty() && !subject.is_empty() && !body.is_empty() {
+                    self.send(ControlCommand::SendMessage { to, subject, body });
+                    self.msg_to.clear();
+                    self.msg_subject.clear();
+                    self.msg_body.clear();
+                }
+            }
+            Message::RefreshInbox => self.send(ControlCommand::ListMessages),
+            Message::OpenMsg(id) => self.send(ControlCommand::GetMessage { id }),
+            Message::DeleteMsg(id) => {
+                self.send(ControlCommand::DeleteMessage { id });
+                if let Ok(mut st) = self.shared.lock() {
+                    st.inbox.retain(|m| m.id != id);
+                    if st.open_message_id == Some(id) {
+                        st.open_message_id = None;
+                        st.open_message_body = None;
+                    }
+                }
+            }
+            // --- config ---
+            Message::FetchConfig => {
+                if let Ok(mut st) = self.shared.lock() {
+                    st.daemon_config = None;
+                }
+                self.config_fetch_pending = true;
+                self.send(ControlCommand::GetConfig);
+            }
+            Message::ApplyConfig => self.send(ControlCommand::SetConfig {
+                config: self.config_draft.clone(),
+            }),
+            Message::CfgMode(m) => self.config_draft.mode = m,
+            Message::CfgAtten(db) => self.config_draft.tx_attenuation_db = db,
+            Message::CfgQsy(b) => self.config_draft.qsy_enabled = b,
+            Message::CfgBandplan(b) => self.config_draft.bandplan_mode = b,
+            Message::CfgTuneSwr(b) => self.config_draft.allow_tuner_on_high_swr = b,
         }
+        Task::none()
+    }
+
+    fn pending_qsy(&self) -> Option<String> {
+        self.shared
+            .lock()
+            .ok()
+            .and_then(|s| s.pending_qsy_token.clone())
+    }
+
+    pub fn subscription(&self) -> Subscription<Message> {
+        // ~10 Hz refresh so live spectrum/metrics repaint from the shared state.
+        iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick)
+    }
+
+    pub fn effective_theme(&self) -> EffectiveTheme {
+        self.theme_mode.effective(self.system_is_dark)
+    }
+
+    pub fn theme(&self) -> Theme {
+        let eff = self.effective_theme();
+        let c = |rgb: (u8, u8, u8)| iced::Color::from_rgb8(rgb.0, rgb.1, rgb.2);
+        Theme::custom(
+            format!("OpenPulse {}", self.theme_mode.label()),
+            iced::theme::Palette {
+                background: c(shade_rgb(eff, Shade::Bg)),
+                text: c(role_rgb(eff, ColorRole::RxValue)),
+                primary: c(role_rgb(eff, ColorRole::Signal)),
+                success: c(role_rgb(eff, ColorRole::Locked)),
+                danger: c(role_rgb(eff, ColorRole::TxActive)),
+            },
+        )
+    }
+
+    pub fn view(&self) -> iced::Element<'_, Message> {
+        ui::view(self)
     }
 }

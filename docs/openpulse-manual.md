@@ -1079,13 +1079,14 @@ Example files:
 - [docs/config/rig-icom-ic7300.toml](config/rig-icom-ic7300.toml)
 - [docs/config/rig-yaesu-ft817.toml](config/rig-yaesu-ft817.toml)
 
-### 12.5 OpenPulse Panel Trunk Config
+### 12.5 OpenPulse Panel
 
-Purpose:
-- Configures local host/port and optional WebSocket proxy for the `openpulse-panel` web UI.
-
-Example file:
-- [docs/config/openpulse-panel.Trunk.toml](config/openpulse-panel.Trunk.toml)
+- `openpulse-panel` is a native desktop app (iced). It takes no config file and no CLI
+  arguments: launch it, enter the daemon control-port address in the connection field
+  (default `127.0.0.1:9000`, TCP; `ws://…:9001` for WebSocket), and click Connect.
+- Themes (Dark / Light / Contrast / System) are selectable at runtime from the controls band;
+  every control has a hover tooltip. The former egui/eframe panel — including its `Trunk`
+  web build — was retired in 2026-07 (REQ-UX-04).
 
 ---
 
@@ -1121,7 +1122,7 @@ rig. Examples use real flags, subcommands, and environment variables only.
 | `openpulse-kisstnc` | openpulse-kiss | KISS/AX.25 TCP TNC | `--features cpal` |
 | `openpulse-gateway` | openpulse-gateway | Direct TCP Winlink CMS gateway (no radio) | n/a |
 | `openpulse-mesh` | openpulse-mesh | Mesh broadcast/relay daemon | `--features cpal` |
-| `openpulse-panel` | openpulse-panel | egui operator panel (connects to the daemon) | n/a (control client) |
+| `openpulse-panel` | openpulse-panel | iced operator panel (connects to the daemon) | n/a (control client) |
 | `openpulse-twinview` | openpulse-twinview | egui both-directions viewer over two daemons | n/a (control client) |
 | `openpulse-testbench` | openpulse-testbench | egui 4-column signal-path scope | `--features cpal` (live capture) |
 | `openpulse-testmatrix` | openpulse-testmatrix | Mode × channel test-matrix runner (no audio) | n/a |

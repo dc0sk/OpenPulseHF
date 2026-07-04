@@ -14,4 +14,3 @@ Files:
 - `openpulse-kx3.toml`: example OpenPulse runtime config for the KX3 station.
 - `rig-icom-ic7300.toml`: generic CAT profile example for Icom IC-7300.
 - `rig-yaesu-ft817.toml`: generic CAT profile example for Yaesu FT-817.
-- `openpulse-panel.Trunk.toml`: Trunk config for the `openpulse-panel` web UI.

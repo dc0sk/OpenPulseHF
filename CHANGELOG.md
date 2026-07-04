@@ -7,7 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [0.2.1] — 2026-06-24
+### Changed
+- Operator panel (`openpulse-panel`) re-implemented on **iced** and made the default,
+  retiring the egui/eframe version (REQ-UX-04). New layout: a controls band, live
+  spectrum + waterfall + rate ladder, and a tabbed lower panel (Additional info /
+  Daemon config / Messages / Event log). Adds selectable **Dark / Light / Contrast /
+  System** themes (theme core is iced-free and unit-tested) and hover tooltips on every
+  control; reuses the previous panel's transport/connection/state core. The binary name
+  is unchanged (`openpulse-panel`); the former egui web (`Trunk`) build is gone.
 
 ### Added
 - Controlled-Envelope SSB (CE-SSB) TX envelope conditioning (`openpulse_dsp::cessb`):

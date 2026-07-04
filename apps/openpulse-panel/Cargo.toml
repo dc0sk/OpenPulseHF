@@ -1,38 +1,19 @@
 [package]
-name    = "openpulse-panel"
+name = "openpulse-panel"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-authors.workspace = true
-repository.workspace = true
-description = "Operator UI panel for OpenPulseHF: connects to openpulse-server control port"
+description = "Operator UI panel for OpenPulseHF (iced): controls band, spectrum, waterfall, ladder, and a tabbed info/config/messages/log panel, with Dark/Light/Contrast/System themes; connects to the openpulse-daemon control port."
 
 [[bin]]
 name = "openpulse-panel"
 path = "src/main.rs"
 
 [dependencies]
-# Protocol types only; the workspace dep sets default-features=false so the daemon's GPU/native
-# code stays out of the panel's WASM build.
-openpulse-daemon  = { workspace = true }
-openpulse-modem   = { workspace = true }
-serde_json        = { workspace = true }
-eframe.workspace  = true
-egui.workspace    = true
-egui_plot.workspace = true
-tracing.workspace = true
-ewebsock          = "0.6"
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-crossbeam-channel    = { workspace = true }
-tracing-subscriber   = { workspace = true }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-# Both getrandom versions need their WASM JS backends enabled; they are pulled
-# in transitively through openpulse-core's crypto dependencies.
-getrandom            = { version = "0.2", features = ["js"] }
-getrandom-v04        = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
-wasm-bindgen         = "0.2"
-wasm-bindgen-futures = "0.4"
-console_error_panic_hook = "0.1"
-web-sys              = { version = "0.3", features = ["Document", "Element", "HtmlCanvasElement", "Window"] }
+iced = { version = "0.13", features = ["canvas", "tokio"] }
+openpulse-daemon = { workspace = true }
+openpulse-modem = { workspace = true }
+serde_json = { workspace = true }
+crossbeam-channel = { workspace = true }
+tracing = { workspace = true }
+ewebsock = "0.6"
