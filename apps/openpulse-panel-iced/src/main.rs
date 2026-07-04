@@ -18,8 +18,8 @@ pub fn main() -> iced::Result {
         .subscription(App::subscription)
         .theme(App::theme)
         .window(iced::window::Settings {
-            size: iced::Size::new(1100.0, 950.0),
-            min_size: Some(iced::Size::new(1100.0, 950.0)),
+            size: iced::Size::new(1176.0, 967.0),
+            min_size: Some(iced::Size::new(1176.0, 967.0)),
             ..Default::default()
         })
         .run_with(App::new)
