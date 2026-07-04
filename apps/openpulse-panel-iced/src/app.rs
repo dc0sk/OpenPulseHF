@@ -33,10 +33,12 @@ fn default_config() -> DaemonConfig {
 /// Speed-level rungs shown on the ladder (SL1..=SLN).
 pub const LADDER_RUNGS: u8 = 20;
 
-/// Which of the paired Messages / Event-log tabs is shown.
+/// Which of the lower panel's tabs is shown (Info → Config → Messages → Event log).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
     #[default]
+    Info,
+    Config,
     Messages,
     Log,
 }

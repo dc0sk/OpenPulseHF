@@ -165,9 +165,9 @@ Regulatory compliance is a hard requirement for any transmission on amateur radi
 - New user-facing options must be documented in docs/cli-guide.md.
 - README usage examples should stay current with implemented behavior.
 - The operator panel application (`apps/openpulse-panel`) shall be re-implemented on the `iced` GUI
-  toolkit (replacing egui/eframe), presenting the operating surface as a scrollable stack of panels:
-  a controls band, spectrum, waterfall, ladder (adaptive rate/mode), an additional-info + daemon-
-  config row, and a tabbed messages / event-log panel. (REQ-UX-04)
+  toolkit (replacing egui/eframe), presenting the operating surface as a scrollable stack: a controls
+  band, spectrum, waterfall, ladder (adaptive rate/mode), and a tabbed lower panel (additional info /
+  daemon config / messages / event log). (REQ-UX-04)
 
 ## Documentation requirements
 
