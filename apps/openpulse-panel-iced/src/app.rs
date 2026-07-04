@@ -36,9 +36,9 @@ pub const LADDER_RUNGS: u8 = 20;
 /// Which of the lower panel's tabs is shown (Info → Config → Messages → Event log).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
-    #[default]
     Info,
     Config,
+    #[default]
     Messages,
     Log,
 }
