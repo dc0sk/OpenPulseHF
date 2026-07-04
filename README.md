@@ -308,7 +308,7 @@ detailed crossfade and ISI analysis.
 
 | Interface | Description |
 |---|---|
-| **Operator panel** (`openpulse-panel`) | Full egui/eframe GUI connecting to the daemon via TCP control port; mode selection, PTT, QSY management, CE-SSB toggle, tabbed Messages / Event-Log pane, live status |
+| **Operator panel** (`openpulse-panel`) | Full **iced** GUI connecting to the daemon control port (TCP/WS): a controls band (connection, PTT, mode/frequency, RF peer, feature toggles, TX-atten/squelch, OTA, QSY), live spectrum + waterfall + rate ladder, and a tabbed lower panel (Additional info / Daemon config / Messages / Event log). Dark/Light/Contrast/System themes; hover tooltips on every control |
 | **Twin-station view** (`openpulse-twinview`) | egui both-directions viewer — one window over two daemons; per-station spectrum/waterfall + rate/OTA/HPX readouts, so both link directions show at once |
 | **TUI** (`openpulse-tui`) | ratatui terminal UI — HPX state (colour-coded), AFC/rate meters, DCD energy bar, scrollable transitions log |
 | **CLI** (`openpulse-cli`) | Full-featured command-line interface: transmit, receive, benchmark, monitor, config init, calibrate (audio/PTT/AFC) |
@@ -409,7 +409,7 @@ on-air test plan in `docs/on-air_testplan.md`.
 |---|---|
 | `crates/openpulse-cli` | CLI binary: transmit, receive, benchmark, monitor NDJSON events, config init |
 | `crates/openpulse-tui` | ratatui TUI: HPX state, AFC/rate meters, DCD energy bar, transitions log |
-| `apps/openpulse-panel` | egui operator panel GUI connecting to daemon control port |
+| `apps/openpulse-panel` | iced operator panel GUI connecting to the daemon control port (Dark/Light/Contrast/System themes) |
 | `apps/openpulse-twinview` | egui both-directions viewer over two daemons (twin-station rig) |
 | `apps/openpulse-testbench` | egui signal-path testbench: 4-column waterfall/spectrum/scatter, 7 channel models |
 | `apps/openpulse-testmatrix` | Automated mode × channel test matrix runner |

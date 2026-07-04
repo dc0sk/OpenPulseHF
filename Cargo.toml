@@ -29,7 +29,6 @@ members = [
     "apps/openpulse-testbench",
     "apps/openpulse-testmatrix",
     "apps/openpulse-panel",
-    "apps/openpulse-panel-iced",
     "apps/openpulse-twinview",
     "apps/openpulse-linksim",
     "crates/openpulse-daemon",
