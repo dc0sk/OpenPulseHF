@@ -1,6 +1,6 @@
 //! The panel view (REQ-UX-04), rendered from the live `PanelState` with the active theme's palette:
-//! a controls band on top, then spectrum → waterfall → ladder, an Additional-info | Daemon-config
-//! row, and a tabbed Messages / Event-log panel.
+//! a controls band on top, then spectrum → waterfall → ladder, and a tabbed lower panel
+//! (Additional info / Daemon config / Messages / Event log).
 
 use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path, Stroke};
 use iced::widget::{
@@ -73,6 +73,22 @@ const MODES: &[&str] = &[
     "PILOT-8PSK500-RRC",
     "PILOT-16QAM500-RRC",
     "PILOT-32APSK500-RRC",
+];
+
+/// OTA adaptive-session profiles (`SessionProfile::by_name`).
+const PROFILES: &[&str] = &[
+    "hpx500",
+    "hpx_hf",
+    "hpx_ofdm_hf",
+    "hpx_narrowband",
+    "hpx_narrowband_hd",
+    "hpx_wideband",
+    "hpx_wideband_hd",
+    "hpx_modcod",
+    "hpx_pilot",
+    "hpx_pilot_rrc",
+    "hpx_pilot_fast",
+    "hpx_pilot_fast_rrc",
 ];
 
 // Spectrum window (dBFS): 0 dB at the top down to −120 dB.
@@ -203,19 +219,6 @@ pub fn view(app: &App) -> Element<'_, Message> {
         }
     };
 
-    // Additional info + Daemon config side by side (config took the controls' old slot).
-    let info_config = Row::new()
-        .spacing(8)
-        .width(Length::Fill)
-        .push(
-            Container::new(panel(eff, "Additional info", info_widget(&snap, eff)))
-                .width(Length::FillPortion(1)),
-        )
-        .push(
-            Container::new(panel(eff, "Daemon config", config_widget(app, &snap, eff)))
-                .width(Length::FillPortion(1)),
-        );
-
     let stack = Column::new()
         .spacing(8)
         .padding(10)
@@ -224,9 +227,8 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .push(panel(eff, "Spectrum", spectrum_widget(&snap, eff)))
         .push(panel(eff, "Waterfall", waterfall_widget(&snap, eff)))
         .push(panel(eff, "Ladder", ladder_widget(&snap, eff)))
-        .push(info_config)
-        // Messages / Event log as one tabbed panel.
-        .push(tabbed_messages_log(app, &snap, eff));
+        // Additional info / Daemon config / Messages / Event log as one tabbed panel.
+        .push(tabbed_lower(app, &snap, eff));
 
     let scroll = scrollable(stack).height(Length::Fill);
 
@@ -522,6 +524,18 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
             "Logbook",
             app.logbook_on,
             Message::ToggleLogbook,
+        ))
+        .push(toggle_btn(
+            eff,
+            "QSY",
+            app.config_draft.qsy_enabled,
+            Message::CfgQsy(!app.config_draft.qsy_enabled),
+        ))
+        .push(toggle_btn(
+            eff,
+            "Tune@SWR",
+            app.config_draft.allow_tuner_on_high_swr,
+            Message::CfgTuneSwr(!app.config_draft.allow_tuner_on_high_swr),
         ));
 
     // Sliders: TX attenuation and squelch, side by side.
@@ -611,14 +625,18 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
                 ColorRole::TxActive,
             ))
     } else {
+        let prof_sel = PROFILES
+            .iter()
+            .copied()
+            .find(|&p| p == app.ota_profile.as_str());
         Row::new()
             .spacing(8)
             .align_y(Alignment::Center)
             .push(
-                text_input("profile", &app.ota_profile)
-                    .on_input(Message::OtaProfileChanged)
-                    .size(13)
-                    .width(Length::Fixed(110.0)),
+                pick_list(PROFILES, prof_sel, |p: &str| {
+                    Message::OtaProfileChanged(p.to_string())
+                })
+                .text_size(13),
             )
             .push(accent_btn(
                 eff,
@@ -686,8 +704,8 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
     col.into()
 }
 
-/// Messages and Event log as one tabbed panel.
-fn tabbed_messages_log(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
+/// Additional info / Daemon config / Messages / Event log as one tabbed panel.
+fn tabbed_lower(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
     let tab_btn = |label: &str, tab: Tab| -> Element<'static, Message> {
         let active = app.active_tab == tab;
         let (bg, fg) = if active {
@@ -712,9 +730,13 @@ fn tabbed_messages_log(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'
     };
     let header = Row::new()
         .spacing(4)
+        .push(tab_btn("Additional info", Tab::Info))
+        .push(tab_btn("Daemon config", Tab::Config))
         .push(tab_btn("Messages", Tab::Messages))
         .push(tab_btn("Event log", Tab::Log));
     let content = match app.active_tab {
+        Tab::Info => info_widget(snap, eff),
+        Tab::Config => config_widget(app, snap, eff),
         Tab::Messages => messages_widget(app, snap, eff),
         Tab::Log => log_widget(snap, eff),
     };
@@ -931,18 +953,6 @@ fn config_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static
                     .text_size(13),
                 ),
         )
-        .push(toggle_btn(
-            eff,
-            "QSY",
-            c.qsy_enabled,
-            Message::CfgQsy(!c.qsy_enabled),
-        ))
-        .push(toggle_btn(
-            eff,
-            "Tune on high SWR",
-            c.allow_tuner_on_high_swr,
-            Message::CfgTuneSwr(!c.allow_tuner_on_high_swr),
-        ))
         .into()
 }
 
