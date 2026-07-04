@@ -33,6 +33,14 @@ fn default_config() -> DaemonConfig {
 /// Speed-level rungs shown on the ladder (SL1..=SLN).
 pub const LADDER_RUNGS: u8 = 20;
 
+/// Which of the paired Messages / Event-log tabs is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Tab {
+    #[default]
+    Messages,
+    Log,
+}
+
 /// Top-level panel application state.
 pub struct App {
     // --- theme ---
@@ -67,9 +75,11 @@ pub struct App {
     pub msg_body: String,
 
     // --- config editor ---
-    pub show_config: bool,
     pub config_draft: DaemonConfig,
     pub config_fetch_pending: bool,
+
+    /// Active Messages/Log tab.
+    pub active_tab: Tab,
 
     pub tick: u32,
 }
@@ -79,6 +89,7 @@ pub struct App {
 pub enum Message {
     ToggleTheme,
     Tick,
+    SelectTab(Tab),
     AddrChanged(String),
     SelectTransport(bool),
     ConnectToggle,
@@ -111,7 +122,6 @@ pub enum Message {
     OpenMsg(u64),
     DeleteMsg(u64),
     // config
-    ToggleConfig,
     FetchConfig,
     ApplyConfig,
     CfgMode(String),
@@ -144,9 +154,9 @@ impl App {
             msg_to: String::new(),
             msg_subject: String::new(),
             msg_body: String::new(),
-            show_config: false,
             config_draft: default_config(),
             config_fetch_pending: false,
+            active_tab: Tab::default(),
             tick: 0,
         };
         (app, Task::none())
@@ -173,6 +183,9 @@ impl App {
         );
         self.stop_tx = Some(stop_tx);
         self.cmd_tx = Some(cmd_tx);
+        // Pull the daemon config so the always-visible Config panel populates.
+        self.config_fetch_pending = true;
+        self.send(ControlCommand::GetConfig);
     }
 
     fn disconnect(&mut self) {
@@ -188,6 +201,7 @@ impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::ToggleTheme => self.theme_mode = self.theme_mode.next(),
+            Message::SelectTab(t) => self.active_tab = t,
             Message::Tick => {
                 self.tick = self.tick.wrapping_add(1);
                 // Config fetch is async: once the daemon's ConfigData arrives, seed the draft.
@@ -353,16 +367,6 @@ impl App {
                 }
             }
             // --- config ---
-            Message::ToggleConfig => {
-                self.show_config = !self.show_config;
-                if self.show_config {
-                    if let Ok(mut st) = self.shared.lock() {
-                        st.daemon_config = None;
-                    }
-                    self.config_fetch_pending = true;
-                    self.send(ControlCommand::GetConfig);
-                }
-            }
             Message::FetchConfig => {
                 if let Ok(mut st) = self.shared.lock() {
                     st.daemon_config = None;
