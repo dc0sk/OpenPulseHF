@@ -9,6 +9,27 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-05 — feature: audit-mode control-event capture (REQ-OBS-01, CAP-67 slice 2)
+
+- **Requirement/change:** the daemon's `ControlEvent` stream (engine events, metrics, PTT/RF/QSY/OTA
+  state) was only observable by a live connected client — nothing recorded it, so a run couldn't be
+  replayed for analysis. Second slice of the observability/audit-mode plan (backlog item 10).
+- **Design decision:** add an opt-in `[observability]` config section (`audit_mode`, `archive_dir`)
+  and, when on, spawn a recorder task that **subscribes to the same `broadcast` channel clients use**
+  (`handle.event_tx.subscribe()`) and appends each event as NDJSON to `<archive_dir>/events.ndjson`.
+  Tapping the existing broadcast means no new event plumbing and no live client required. Open-failure
+  is non-fatal (warn + disable); each line is flushed so an abrupt exit keeps prior events; a lagged
+  receiver logs the skip count rather than crashing. `~` in `archive_dir` reuses
+  `openpulse_config::logging::expand_tilde`.
+- **Implementation:** `crates/openpulse-daemon/src/audit.rs` (`EventRecorder::open`/`record`,
+  `spawn_event_recorder`); `pub mod audit` in `lib.rs`; wired in `server::run` right after the control
+  ports bind; `ObservabilityConfig` + `observability` field in `openpulse-config`; `[observability]`
+  documented in both config templates.
+- **Tests:** `openpulse-daemon` unit tests — `recorder_writes_one_json_line_per_event` (one valid-JSON
+  line per event) and `recorder_appends_across_reopens` (reopen appends, does not truncate).
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features audit` → **2 passed / 0
+  failed**; `openpulse-config` 12/12; `clippy -D warnings` + fmt clean on both crates.
+
 ## 2026-07-05 — feature: persistent rolling file logging (REQ-OBS-02, CAP-67 slice 1)
 
 - **Requirement/change:** users had no way to persist logs to disk — `tracing` went to stdout only,

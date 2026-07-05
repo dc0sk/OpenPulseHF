@@ -51,6 +51,12 @@ level = "info"
 # RUST_LOG still overrides `level`.
 # file = "~/.local/share/openpulse/openpulse.log"
 
+[observability]
+# Audit mode (REQ-OBS-01): when enabled, openpulse-daemon records its control-event stream
+# to <archive_dir>/events.ndjson for later analysis. Off by default. `~` is expanded.
+audit_mode = false
+archive_dir = "~/.local/share/openpulse/audit"
+
 [relay]
 enabled = false
 max_hops = 3
