@@ -113,6 +113,18 @@ pub enum Commands {
         #[command(flatten)]
         opts: DiagnosticOptions,
     },
+    /// Package audit-mode artifacts (events.ndjson, snapshot.json, logs) into a .tar.gz (REQ-OBS-03).
+    AuditBundle {
+        /// Audit archive dir (default: `[observability] archive_dir` from config).
+        #[arg(long)]
+        archive_dir: Option<String>,
+        /// Output directory for the bundle (default: `<archive_dir>/bundles`).
+        #[arg(long)]
+        output: Option<String>,
+        /// Optional label appended to the bundle file name.
+        #[arg(long)]
+        label: Option<String>,
+    },
     /// Identity diagnostics.
     Identity {
         #[command(subcommand)]

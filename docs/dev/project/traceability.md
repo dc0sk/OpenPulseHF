@@ -9,6 +9,28 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-05 — feature: `openpulse audit-bundle` command (REQ-OBS-03, CAP-67 slice 4)
+
+- **Requirement/change:** the audit artifacts (`events.ndjson`, `snapshot.json`, rolled logs) were
+  produced but had to be collected by hand for handoff. Final slice of the observability/audit-mode
+  plan (backlog item 10); generalises the RF-test-only `onair-bundle-evidence.sh` to everyday runs.
+- **Design decision:** a new CLI subcommand packages everything into a single `.tar.gz` (via `tar` +
+  `flate2`) with a `metadata.json` manifest (schema, timestamp, version, file list + sizes). The
+  packaging core `create_bundle(BundleSpec, dest)` takes injected version/timestamp so it is pure and
+  round-trip-testable; the `run` wrapper resolves the archive dir + rolled log files from config
+  (`[observability] archive_dir`, `[logging] file`), both overridable by flags. Handled as an
+  early-return command (no engine/audio backend needed).
+- **Implementation:** `crates/openpulse-cli/src/commands/audit_bundle.rs` (`BundleSpec`,
+  `create_bundle`, `collect_log_files`, `run`); `AuditBundle` variant in `cli.rs` + early dispatch in
+  `main.rs`; `flate2`/`tar` added to the CLI (+ `tar` to workspace deps).
+- **Tests:** `bundle_contains_archive_files_and_metadata` — builds a bundle from a temp archive, then
+  **gz-decodes the tar** and asserts `metadata.json` + `events.ndjson` + `snapshot.json` entries and
+  the `audit-bundle-<ts>-<label>.tar.gz` name.
+- **Test results:** `cargo test -p openpulse-cli --no-default-features audit_bundle` → **1 passed**;
+  full CLI suite otherwise green (30/30 unit + others); clippy `-D warnings` + fmt clean; workspace
+  check green. (Pre-existing, unrelated: `cli_mode_advisor` fails on `main` — hpx_hf@12 dB yields SL7,
+  the test expects SL6 — a profile/test drift, not touched here.)
+
 ## 2026-07-05 — feature: audit-mode startup snapshot.json (REQ-OBS-01, CAP-67 slice 3)
 
 - **Requirement/change:** the captured event stream had no anchoring context — which config, version,

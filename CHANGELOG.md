@@ -8,12 +8,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- Audit-mode control-event capture + startup snapshot (REQ-OBS-01, slices 2–3 of the
-  observability/audit-mode plan): opt-in `[observability] audit_mode` makes `openpulse-daemon`
-  record its control-event stream (engine events, metrics, PTT/RF/QSY/OTA state) as NDJSON to
-  `<archive_dir>/events.ndjson` — tapping the same broadcast clients subscribe to, so no live
-  client is needed — and write `<archive_dir>/snapshot.json` at startup (version, git SHA, OS/arch,
-  and the running config with secret values redacted). Off by default.
+- Observability / audit mode (REQ-OBS-01/02/03) — the full opt-in capability: `[observability]
+  audit_mode` makes `openpulse-daemon` record its control-event stream (engine events, metrics,
+  PTT/RF/QSY/OTA state) as NDJSON to `<archive_dir>/events.ndjson` (tapping the same broadcast
+  clients subscribe to — no live client needed) and write `<archive_dir>/snapshot.json` at startup
+  (version, git SHA, OS/arch, and the running config with secret values redacted); and a new
+  `openpulse audit-bundle` command packages the archive + rolled logs into a single `.tar.gz` (with
+  a `metadata.json` manifest) for handoff to a developer. Off by default.
 - Persistent rotating file logging (REQ-OBS-02, first slice of the observability/audit-mode
   plan): opt-in `[logging] file` config path; a shared `openpulse_config::logging::init_tracing()`
   helper tees `tracing` to a daily-rolled, non-blocking file appender in addition to stdout (level
