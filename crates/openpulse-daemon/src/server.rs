@@ -330,10 +330,14 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
 
     tracing::info!("openpulse-server WebSocket control port listening on {ws_bind}");
 
-    // Audit mode (REQ-OBS-01): record the control-event stream to <archive_dir>/events.ndjson,
-    // tapping the same broadcast channel clients subscribe to — no live client required.
+    // Audit mode (REQ-OBS-01): write a startup snapshot, then record the control-event stream to
+    // <archive_dir>/events.ndjson, tapping the same broadcast channel clients subscribe to — no
+    // live client required.
     if cfg.observability.audit_mode {
         let dir = openpulse_config::logging::expand_tilde(&cfg.observability.archive_dir);
+        if let Err(e) = crate::audit::write_startup_snapshot(&dir, &cfg) {
+            tracing::warn!(error = %e, "audit: failed to write snapshot.json");
+        }
         crate::audit::spawn_event_recorder(dir, handle.event_tx.subscribe());
     }
 

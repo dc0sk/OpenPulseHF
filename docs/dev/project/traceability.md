@@ -9,6 +9,26 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-05 — feature: audit-mode startup snapshot.json (REQ-OBS-01, CAP-67 slice 3)
+
+- **Requirement/change:** the captured event stream had no anchoring context — which config, version,
+  and host produced it. Third slice of the observability/audit-mode plan (backlog item 10).
+- **Design decision:** on daemon startup in audit mode, write `<archive_dir>/snapshot.json` with
+  version/build/runtime metadata (version, git SHA via `OPENPULSE_GIT_SHA` build env, OS/arch, capture
+  time) plus the running config **with secret string values redacted**. Redaction walks the serialized
+  config JSON and blanks values under secret-looking keys (`*_key`, `secret`, `password`, `passphrase`,
+  `token`, `seed`) while preserving public identifiers like `key_id`/`pubkey`. Metadata is injected
+  into `build_snapshot` so the builder is pure/testable; the write wrapper is best-effort (warns, never
+  fatal).
+- **Implementation:** `crates/openpulse-daemon/src/audit.rs` — `is_secret_key`, `redact_secrets`,
+  `build_snapshot`, `write_startup_snapshot`; wired in `server::run` (audit-mode block, before the
+  event recorder).
+- **Tests:** `redact_blanks_secret_keys_but_keeps_identifiers` (redacts `signing_key`/`api_key`/nested
+  `password`/`seed`, keeps `key_id`/`pubkey`/`port`); `snapshot_has_metadata_and_config` (schema +
+  version + git SHA + config section).
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features audit` → **4 passed / 0
+  failed**; clippy `-D warnings` + fmt clean.
+
 ## 2026-07-05 — feature: audit-mode control-event capture (REQ-OBS-01, CAP-67 slice 2)
 
 - **Requirement/change:** the daemon's `ControlEvent` stream (engine events, metrics, PTT/RF/QSY/OTA
