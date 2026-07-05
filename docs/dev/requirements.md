@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/requirements.md
 status: living
-last_updated: 2026-07-04
+last_updated: 2026-07-05
 ---
 
 # Requirements
@@ -168,6 +168,20 @@ Regulatory compliance is a hard requirement for any transmission on amateur radi
   toolkit (replacing egui/eframe), presenting the operating surface as a scrollable stack: a controls
   band, spectrum, waterfall, ladder (adaptive rate/mode), and a tabbed lower panel (additional info /
   daemon config / messages / event log). (REQ-UX-04)
+
+## Observability and diagnostics requirements
+
+- OpenPulse shall provide an opt-in observability/audit mode that persists logs and structured
+  events to disk, so a run can be analysed after the fact without a live client attached. Audit
+  mode is off by default and enabled via configuration. (REQ-OBS-01)
+- Long-running binaries (at minimum `openpulse-daemon`) shall support persistent, rotating
+  file logging in addition to stdout, enabled via a `[logging]` config path, with the resolved
+  log path visible at startup. Log level continues to honour `RUST_LOG` over config over default.
+  (REQ-OBS-02)
+- OpenPulse shall provide a single command to collect a diagnostic bundle — recent logs, the
+  latest session diagnostics/metrics, a config snapshot with secrets redacted, and
+  version/git/system metadata — packaged for handoff to a developer, generalising the existing
+  on-air `bundle-evidence` script to everyday runs. (REQ-OBS-03)
 
 ## Documentation requirements
 
