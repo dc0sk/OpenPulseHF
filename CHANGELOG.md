@@ -21,6 +21,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   precedence unchanged: `RUST_LOG` > config > default). Wired into `openpulse-daemon`; `~` in the
   path is expanded. Off by default.
 
+### Fixed
+- `cli_mode_advisor` integration test asserted stale speed-level expectations (12 dB → SL6,
+  15 dB → SL7) that predated the FEC-protected `hpx_hf` upper-ladder recalibration; corrected to
+  the current floors (12 → SL7/8PSK500, 14 → SL8/SCFDMA52-8PSK, 16 → SL9) and extended. The SL7
+  11→16 dB gap-filler was reassessed with fresh AWGN + fading sweeps: **8PSK500+RS kept** — a swap
+  to the pilot-aided `PILOT-8PSK500` was measured and rejected (it wins on AWGN but loses good_f1
+  fading). Added a `calibrate_pilot_gap_candidate` calibration sweep to keep this re-derivable.
+
 ### Changed
 - Operator panel (`openpulse-panel`) re-implemented on **iced** and made the default,
   retiring the egui/eframe version (REQ-UX-04). New layout: a controls band, live

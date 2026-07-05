@@ -3,11 +3,13 @@
 //!
 //! Sweeps SNR for each (mode, FEC) rung and finds the lowest SNR at which it decodes reliably —
 //! the empirical floor. Prints a table so the constants in `profile.rs` can be validated or retuned
-//! from data instead of guesswork. Three `#[ignore]` sweeps:
+//! from data instead of guesswork. Four `#[ignore]` sweeps:
 //!   * `calibrate_snr_floors_hpx_hf` — every hpx_hf rung over AWGN with its assigned FEC.
 //!   * `calibrate_candidate_fec_rungs` — candidate (mode, FEC) pairs under consideration (AWGN).
 //!   * `calibrate_snr_floors_watterson` — the same rungs over Watterson **fading** (good_f1 +
 //!     moderate_f1). AWGN floors are a lower bound; fading raises them.
+//!   * `calibrate_pilot_gap_candidate` — the SL7 (11→16 dB) gap-filler reassessment: 8PSK500+RS
+//!     vs the pilot-aided PILOT-8PSK500 across AWGN + both fading profiles (2026-07-05).
 //!
 //! **Fading-calibration interpretation (read before using the Watterson numbers):**
 //!   1. Fading is seed-sensitive — a fraction of realizations deep-fade the whole frame and can't
@@ -35,6 +37,7 @@ use openpulse_channel::{
 use openpulse_core::fec::FecMode;
 use openpulse_core::profile::SessionProfile;
 use openpulse_modem::channel_sim::ChannelSimHarness;
+use pilot_plugin::PilotPlugin;
 use psk8_plugin::Psk8Plugin;
 use qpsk_plugin::QpskPlugin;
 use scfdma_plugin::ScFdmaPlugin;
@@ -46,6 +49,7 @@ fn harness() -> ChannelSimHarness {
         eng.register_plugin(Box::new(QpskPlugin::new())).unwrap();
         eng.register_plugin(Box::new(Psk8Plugin::new())).unwrap();
         eng.register_plugin(Box::new(ScFdmaPlugin::new())).unwrap();
+        eng.register_plugin(Box::new(PilotPlugin::new())).unwrap();
     }
     h
 }
@@ -285,4 +289,35 @@ fn calibrate_candidate_fec_rungs() {
         print_row("cand", mode, fec, None, meas);
     }
     println!("=== end candidate calibration — set fec_modes + snr_floors from meas_dB ===\n");
+}
+
+/// Reassessment of the SL7 (11→16 dB) gap-filler: does the cycle-slip-immune, pilot-aided
+/// `PILOT-8PSK500` retain a *finite* moderate_f1 (1 Hz Doppler) floor where the decision-directed
+/// `8PSK500` fails at any SNR? If so it is the more robust occupant of the slot. AWGN uses 90 %;
+/// fading uses 50 % (irreducible outage — see the module notes).
+#[test]
+#[ignore]
+fn calibrate_pilot_gap_candidate() {
+    const FRAMES: u32 = 20;
+    let candidates = [("8PSK500", FecMode::Rs), ("PILOT-8PSK500", FecMode::Rs)];
+    println!("\n=== SL7 gap-filler reassessment (AWGN 90% / fading 50%) ===");
+    println!("      mode             awgn_dB  gF1_dB  mF1_dB");
+    let fmt = |v: Option<f32>| {
+        v.map(|x| format!("{x:.0}"))
+            .unwrap_or_else(|| ">lim".into())
+    };
+    for (mode, fec) in candidates {
+        let awgn = min_decodable_snr(mode, fec, 4.0, 40.0, FRAMES, 0.90);
+        let gf1 =
+            min_decodable_snr_watterson(mode, fec, 4.0, 30.0, FRAMES, 0.50, watterson_good_f1);
+        let mf1 =
+            min_decodable_snr_watterson(mode, fec, 4.0, 30.0, FRAMES, 0.50, watterson_moderate_f1);
+        println!(
+            "cand  {mode:<16} {:>7} {:>7} {:>7}",
+            fmt(awgn),
+            fmt(gf1),
+            fmt(mf1)
+        );
+    }
+    println!("=== end SL7 gap-filler reassessment ===\n");
 }

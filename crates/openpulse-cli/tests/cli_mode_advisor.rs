@@ -2,7 +2,11 @@ use assert_cmd::Command;
 use predicates::str::contains;
 
 #[test]
-fn mode_advisor_outputs_expected_levels_for_10_snr_values() {
+fn mode_advisor_outputs_expected_levels_across_hpx_hf_ladder() {
+    // Expected (SNR dB → level, mode) against the hpx_hf floors in `profile.rs`
+    // (SL6=11, SL7=12, SL8=14, SL9=16 …). The advisor picks the highest rung whose floor is met,
+    // so a probe *at* a floor lands on that rung. 8PSK500 is the deliberate 12 dB gap-filler
+    // (a pilot swap was measured and rejected — it loses good_f1 fading; see profile.rs).
     let cases = [
         (0.0, "SL2", "BPSK31"),
         (2.5, "SL2", "BPSK31"),
@@ -12,8 +16,10 @@ fn mode_advisor_outputs_expected_levels_for_10_snr_values() {
         (8.5, "SL4", "BPSK250"),
         (9.5, "SL5", "QPSK250"),
         (10.5, "SL5", "QPSK250"),
-        (12.0, "SL6", "QPSK500"),
-        (15.0, "SL7", "8PSK500"),
+        (11.5, "SL6", "QPSK500"),
+        (12.0, "SL7", "8PSK500"),
+        (14.0, "SL8", "SCFDMA52-8PSK"),
+        (16.0, "SL9", "SCFDMA52-16QAM"),
     ];
 
     for (snr, level, mode) in cases {
