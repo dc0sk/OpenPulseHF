@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/backlog.md
 status: living
-last_updated: 2026-06-17
+last_updated: 2026-07-05
 ---
 
 # Backlog
@@ -53,6 +53,33 @@ Why:
 - protects operators from automatic tuner actions unless they explicitly allow it
 - avoids repeated manual interventions during high-SWR conditions
 - keeps QSY workflows consistent with preflight SWR safety policy
+
+### 10 — Observability / audit mode (REQ-OBS-01..03)
+
+Give users an opt-in way to persist logs and structured events to disk during a run and collect a
+diagnostic bundle to hand to a developer, so gaps/bugs/errors can be analysed after the fact. Today
+the building blocks exist but are scattered (human-readable logs to stdout only; `openpulse monitor`
+NDJSON must be piped by hand; the daemon event stream isn't recorded server-side; `session-metrics`
+is pull-only; the `onair-bundle-evidence.sh` collector is RF-test-specific).
+
+Scope (sliced smallest-risk first):
+
+1. **Persistent rotating file logging (REQ-OBS-02):** `[logging] file` config path; a shared
+   `openpulse_config::logging::init_tracing()` helper that tees `tracing` to a daily-rolled,
+   non-blocking file appender in addition to stdout; wire the daemon first, then the other binaries.
+2. **Event-stream capture (REQ-OBS-01):** when audit mode is on, the daemon records its own
+   `ControlEvent`/`EngineEvent` stream to `events.ndjson` and auto-dumps `SessionDiagnostics` per
+   session — no live client required.
+3. **Startup snapshot (REQ-OBS-01):** write `snapshot.json` (config with secrets redacted, version,
+   git SHA, system info) into the archive dir at startup.
+4. **`openpulse audit-bundle` command (REQ-OBS-03):** package logs + events + session diagnostics +
+   snapshot into a single archive, generalising `onair-bundle-evidence.sh` to everyday runs.
+
+Why:
+
+- users can currently only reconstruct a run by manually orchestrating several commands/scripts;
+- traces vanish on restart (no on-disk log), and failed sessions leave no crash/error archive;
+- a one-switch audit mode + one-command bundle turns "it broke" into an analysable artifact.
 
 ### 1 — FreeDV frame signing (FF-11) ✅ Already shipped
 
