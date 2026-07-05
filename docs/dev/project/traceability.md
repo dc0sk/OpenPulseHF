@@ -27,8 +27,11 @@ and the actually-observed results per change.
   sweep; `cli_mode_advisor.rs` cases corrected and extended into SL8/SL9.
 - **Tests:** `cli_mode_advisor` 3/3 pass (verified against live advisor output at 11.5/12/14/16 dB). Manual
   sweeps: hpx_hf AWGN (SL7 meas 9), Watterson baseline (8PSK500+RS gF1 7, mF1 fail), gap candidate
-  (8PSK500+RS 9/7/fail vs PILOT-8PSK500+RS 7/fail/fail).
-- **Test results:** `cli_mode_advisor` green; fmt clean; openpulse-core builds (comment-only). The three
+  (8PSK500+RS 9/7/fail vs PILOT-8PSK500+RS 7/fail/fail). **Firmed up at 60 frames** via a good_f1
+  point-rate probe: 8PSK500+RS decodes **62/70/70 %** at 10/14/18 dB vs PILOT-8PSK500+RS **28/32/32 %** —
+  both plateau above ~14 dB (irreducible fading outage), and the pilot never reaches the 50 % majority
+  threshold, so its swap is decisively rejected.
+- **Test results:** `cli_mode_advisor` green; fmt clean; openpulse-core builds (comment-only). The four
   `#[ignore]` sweeps re-run on demand.
 
 ## 2026-07-05 — feature: `openpulse audit-bundle` command (REQ-OBS-03, CAP-67 slice 4)
