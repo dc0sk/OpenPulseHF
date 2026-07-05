@@ -8,13 +8,6 @@ use openpulse_daemon::server::{build_audio_backend, run};
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
-        )
-        .init();
-
     let cfg = match openpulse_config::load() {
         Ok(c) => c,
         Err(e) => {
@@ -22,6 +15,11 @@ async fn main() {
             std::process::exit(1);
         }
     };
+
+    // Init tracing from config: stdout plus an optional persistent rolling file log
+    // (REQ-OBS-02). Bind the guard for the whole process so buffered file logs flush.
+    let _log_guard = openpulse_config::logging::init_tracing(&cfg.logging);
+
     if cfg.station.callsign.trim().eq_ignore_ascii_case("N0CALL") {
         tracing::error!(
             "invalid callsign N0CALL in configuration; set [station].callsign before starting daemon"

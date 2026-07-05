@@ -46,6 +46,10 @@ port = 8100
 
 [logging]
 level = "info"
+# Optional persistent log file (REQ-OBS-02): logs are also appended to a daily-rolled
+# file (<path>.YYYY-MM-DD) in addition to stdout. `~` is expanded. Read by openpulse-daemon.
+# RUST_LOG still overrides `level`.
+# file = "~/.local/share/openpulse/openpulse.log"
 
 [relay]
 enabled = false
