@@ -9,6 +9,7 @@
 //! spectrum frames interleaved with the NDJSON event stream on the same
 //! connection.  See [`protocol::encode_spectrum_frame`] for the wire format.
 
+pub mod audit;
 pub mod logbook;
 pub mod protocol;
 

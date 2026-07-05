@@ -40,6 +40,27 @@ pub struct OpenpulseConfig {
     pub qsy: QsyConfig,
     pub daemon: DaemonConfig,
     pub logbook: LogbookConfig,
+    pub observability: ObservabilityConfig,
+}
+
+/// Observability / audit-mode settings (REQ-OBS-01). Opt-in; off by default.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ObservabilityConfig {
+    /// Enable audit mode: the daemon records its control-event stream (and, in later
+    /// slices, per-session diagnostics + a startup snapshot) under `archive_dir`.
+    pub audit_mode: bool,
+    /// Directory for audit artifacts (`events.ndjson`, …). `~` is expanded.
+    pub archive_dir: String,
+}
+
+impl Default for ObservabilityConfig {
+    fn default() -> Self {
+        Self {
+            audit_mode: false,
+            archive_dir: "~/.local/share/openpulse/audit".into(),
+        }
+    }
 }
 
 /// Automatic ADIF logbook settings (opt-in; one record per completed contact).
@@ -838,6 +859,12 @@ level = "info"
 # daily-rolled file (<path>.YYYY-MM-DD) in addition to stdout. `~` is expanded.
 # Read by openpulse-daemon. RUST_LOG still overrides `level`.
 # file = "~/.local/share/openpulse/openpulse.log"
+
+[observability]
+# Audit mode (REQ-OBS-01): when enabled, openpulse-daemon records its control-event
+# stream to <archive_dir>/events.ndjson for later analysis. Off by default. `~` expanded.
+audit_mode = false
+archive_dir = "~/.local/share/openpulse/audit"
 
 [relay]
 # Enable multi-hop relay forwarding (used by openpulse-daemon).
