@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub mod logging;
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("failed to read config file: {0}")]
@@ -300,6 +302,10 @@ pub struct KissConfig {
 pub struct LoggingConfig {
     /// `tracing` level filter: `error`, `warn`, `info`, `debug`, or `trace`.
     pub level: String,
+    /// Optional log file path (REQ-OBS-02). When set, logs are also appended to a
+    /// daily-rolled file next to this path, in addition to stdout. `~` is expanded.
+    #[serde(default)]
+    pub file: Option<String>,
 }
 
 /// Multi-hop relay settings.
@@ -454,6 +460,7 @@ impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
             level: "info".into(),
+            file: None,
         }
     }
 }
@@ -827,6 +834,10 @@ port = 8100
 [logging]
 # Log verbosity: error | warn | info | debug | trace
 level = "info"
+# Optional persistent log file (REQ-OBS-02). When set, logs are appended to a
+# daily-rolled file (<path>.YYYY-MM-DD) in addition to stdout. `~` is expanded.
+# Read by openpulse-daemon. RUST_LOG still overrides `level`.
+# file = "~/.local/share/openpulse/openpulse.log"
 
 [relay]
 # Enable multi-hop relay forwarding (used by openpulse-daemon).

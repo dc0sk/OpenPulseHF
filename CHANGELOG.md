@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Persistent rotating file logging (REQ-OBS-02, first slice of the observability/audit-mode
+  plan): opt-in `[logging] file` config path; a shared `openpulse_config::logging::init_tracing()`
+  helper tees `tracing` to a daily-rolled, non-blocking file appender in addition to stdout (level
+  precedence unchanged: `RUST_LOG` > config > default). Wired into `openpulse-daemon`; `~` in the
+  path is expanded. Off by default.
+
 ### Changed
 - Operator panel (`openpulse-panel`) re-implemented on **iced** and made the default,
   retiring the egui/eframe version (REQ-UX-04). New layout: a controls band, live

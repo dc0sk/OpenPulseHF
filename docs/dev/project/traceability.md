@@ -9,6 +9,30 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-05 — feature: persistent rolling file logging (REQ-OBS-02, CAP-67 slice 1)
+
+- **Requirement/change:** users had no way to persist logs to disk — `tracing` went to stdout only,
+  so a run's logs vanished on restart and couldn't be handed to a developer. First slice of the
+  REQ-OBS observability/audit-mode plan (backlog item 10).
+- **Design decision:** put the log-init helper in `openpulse-config` (owner of `LoggingConfig`,
+  depended on by every binary) instead of duplicating subscriber setup per binary. Opt-in via
+  `[logging] file`; a daily-rolled, non-blocking (`tracing-appender`) file layer is composed
+  alongside the existing stdout layer; level precedence unchanged (`RUST_LOG` > `cfg.level`). The
+  non-blocking appender returns a `WorkerGuard` the caller must hold — flagged `#[must_use]` so a
+  dropped guard (which would lose buffered lines) is a compile-time warning. Wired the daemon first
+  (the long-running process); config load moved before tracing init so the path is config-driven.
+- **Implementation:** `crates/openpulse-config/src/logging.rs` (`expand_tilde`, `file_writer`,
+  `init_tracing`); `LoggingConfig.file: Option<String>` (default None) in `lib.rs`; daemon `main.rs`
+  loads config then calls `init_tracing` and binds the guard; `tracing`/`tracing-subscriber`/
+  `tracing-appender` added to the config crate (+ `tracing-appender` to workspace deps); `[logging]
+  file` documented in both config templates.
+- **Tests:** `openpulse-config` unit tests — `logging_config_file_defaults_to_none`,
+  `expand_tilde_expands_home_and_passes_through`, `file_writer_creates_dir_and_writes_a_line`
+  (writes a marker through a scoped subscriber, drops the guard, asserts the rolled file has it).
+- **Test results:** `cargo test -p openpulse-config --no-default-features` → **12 passed / 0 failed**.
+  Daemon builds; `clippy -D warnings` + fmt clean on openpulse-config + openpulse-daemon;
+  `cargo check --workspace --exclude pki-tooling --no-default-features` green.
+
 ## 2026-07-01 — fix: 2D-Gray remap of cross-32QAM constellation (CAP-20, fixes SL10>SL11 inversion)
 
 - **Requirement/change:** the calibration sweeps found SCFDMA52-32QAM (SL10) AWGN-measured *harder*
