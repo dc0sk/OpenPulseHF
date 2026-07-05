@@ -97,6 +97,23 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if let Commands::AuditBundle {
+        archive_dir,
+        output,
+        label,
+    } = &cli.command
+    {
+        let code = commands::audit_bundle::run(
+            archive_dir.as_deref(),
+            output.as_deref(),
+            label.as_deref(),
+        )?;
+        if code != 0 {
+            std::process::exit(code);
+        }
+        return Ok(());
+    }
+
     if let Commands::Calibrate { command, output } = &cli.command {
         // Validate --backend consistently even though calibrate uses loopback internally.
         match cli.backend.as_str() {
@@ -264,6 +281,7 @@ fn main() -> Result<()> {
         Commands::Config { .. } => unreachable!("handled above"),
         Commands::Calibrate { .. } => unreachable!("handled above"),
         Commands::Daemon { .. } => unreachable!("handled above"),
+        Commands::AuditBundle { .. } => unreachable!("handled above"),
     }
 
     if exit_code != 0 {

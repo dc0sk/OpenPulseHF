@@ -63,6 +63,17 @@ Notes:
 - `session log --follow` tails the persisted session log for a bounded polling window and is intended for cross-invocation debugging.
 - `session start`, `session resume`, and `session end` update the persisted session log so follow mode can observe lifecycle changes across CLI invocations.
 
+## Audit bundle (REQ-OBS-03)
+
+- openpulse audit-bundle
+- openpulse audit-bundle --archive-dir <DIR> --output <DIR> --label <NAME>
+
+Notes:
+- Packages the audit-mode artifacts into a single `.tar.gz` (with a `metadata.json` manifest) for handoff to a developer, and prints the bundle path.
+- Includes everything under the audit `archive_dir` (`events.ndjson`, `snapshot.json`, …) plus the daily-rolled log files that share the configured `[logging] file` prefix (under `logs/`).
+- Defaults come from config: `[observability] archive_dir` and `[logging] file`; `--archive-dir` / `--output` override. Default output is `<archive_dir>/bundles/`.
+- Requires the daemon to have run with `[observability] audit_mode = true` first (else the archive dir won't exist).
+
 ## Benchmark
 
 - openpulse benchmark run

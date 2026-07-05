@@ -1,5 +1,6 @@
 pub mod adaptive;
 pub mod arq;
+pub mod audit_bundle;
 pub mod bandplan_guard;
 pub mod beacon;
 pub mod benchmark;
