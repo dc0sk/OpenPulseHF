@@ -404,6 +404,12 @@ impl SessionProfile {
         //   64QAM) was FIXED at the root by the 2D-Gray constellation remap (PR #616): SCFDMA52-32QAM
         //   dropped 17→9 dB AWGN, so it is now genuinely more robust than 64QAM and its floor is
         //   honestly (not forcibly) below SL11's. Re-run the calibration sweep if the DSP changes.
+        //   SL7 gap-filler REASSESSED 2026-07-05 (with a Fable second opinion): a swap to the
+        //   cycle-slip-immune PILOT-8PSK500 was measured against 8PSK500+RS and REJECTED — pilot wins
+        //   on AWGN (7 vs 9 dB) but *loses* good_f1 fading (fails where 8PSK500+RS decodes at 7 dB);
+        //   both fail moderate_f1, as does the whole single-carrier segment (QPSK250/500 too), so the
+        //   ladder downshifts past it by design. 8PSK500+RS stays the SL7 gap-filler. See the
+        //   `calibrate_pilot_gap_candidate` sweep in tests/snr_floor_calibration.rs.
         let mut snr_floors = [None; 21];
         snr_floors[SpeedLevel::Sl2 as usize] = Some(3.0_f32);
         snr_floors[SpeedLevel::Sl3 as usize] = Some(4.0_f32);

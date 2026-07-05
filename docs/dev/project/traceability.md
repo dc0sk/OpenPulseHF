@@ -9,6 +9,28 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-05 — reassess: hpx_hf SL7 (11→16 dB) gap-filler — keep 8PSK500+RS; fix stale mode-advisor test
+
+- **Requirement/change:** revisit (with a Fable second opinion) the SL7 rung that fills the 11→16 dB
+  throughput gap in `hpx_hf`. A prior finding (a mode needing ~6 retries in linksim) had motivated the
+  FEC-protected upper ladder + floor recalibration, which opened the gap; `8PSK500+RS @ 12 dB` was
+  chosen to fill it. The `cli_mode_advisor` integration test was also failing on `main`.
+- **Design decision:** measured `8PSK500+RS` vs the cycle-slip-immune, pilot-aided `PILOT-8PSK500`
+  across AWGN + Watterson fading (new `calibrate_pilot_gap_candidate` sweep). Result: pilot wins on
+  AWGN (7 vs 9 dB) but **loses good_f1 fading** — it fails where 8PSK500+RS decodes at 7 dB; both fail
+  moderate_f1, as does the whole single-carrier segment (QPSK250/500), which the ladder downshifts past
+  by design. So **keep 8PSK500+RS @ 12.0 dB** (no profile change). Separately, the `cli_mode_advisor`
+  cases `(12.0→SL6)` and `(15.0→SL7)` were **stale** against the recalibrated floors (SL7=12, SL8=14):
+  the advisor correctly returns SL7/8PSK500 at 12.0 and SL8/SCFDMA52-8PSK at 14.0.
+- **Implementation:** no profile logic change; `profile.rs` comment records the pilot eval+rejection;
+  `tests/snr_floor_calibration.rs` gains `PilotPlugin` registration + the `calibrate_pilot_gap_candidate`
+  sweep; `cli_mode_advisor.rs` cases corrected and extended into SL8/SL9.
+- **Tests:** `cli_mode_advisor` 3/3 pass (verified against live advisor output at 11.5/12/14/16 dB). Manual
+  sweeps: hpx_hf AWGN (SL7 meas 9), Watterson baseline (8PSK500+RS gF1 7, mF1 fail), gap candidate
+  (8PSK500+RS 9/7/fail vs PILOT-8PSK500+RS 7/fail/fail).
+- **Test results:** `cli_mode_advisor` green; fmt clean; openpulse-core builds (comment-only). The three
+  `#[ignore]` sweeps re-run on demand.
+
 ## 2026-07-05 — feature: `openpulse audit-bundle` command (REQ-OBS-03, CAP-67 slice 4)
 
 - **Requirement/change:** the audit artifacts (`events.ndjson`, `snapshot.json`, rolled logs) were
