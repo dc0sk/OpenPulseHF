@@ -9,6 +9,25 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-06 — feature: OS keychain secret-store backend (REQ-SEC-CTL-03, CAP-68 slice 3)
+
+- **Requirement/change:** prefer the OS secret store for the control-channel PSK + identity material
+  when available, with the file keystore as fallback. Third slice of the control-channel security plan.
+- **Design decision:** a `SecretStore` trait (`get`/`set`/`delete`) with two backends: `FileStore`
+  (wraps the slice-2 `FileKeystore`, re-saves on each mutation) and `KeychainStore` (`keyring` 3;
+  `sync-secret-service` + `crypto-rust` on Linux, `apple-native`/`windows-native` elsewhere). `keyring`
+  is an **optional** dep behind a default-on `keychain` feature, so CI's `--no-default-features` keeps
+  the D-Bus/secret-service dep out of headless workspace builds. `KeychainStore::available()` probes
+  reachability so a caller can fall back to a file store on a headless host.
+- **Implementation:** `crates/openpulse-keystore/src/store.rs` (`SecretStore`, `FileStore`,
+  `KeychainStore`); `keyring` target deps + `keychain` feature; `KeystoreError::Keychain`.
+- **Tests:** `file_store_get_set_delete_round_trip` (persists through the master password);
+  `keychain_round_trip` is `#[ignore]` (needs a live secret service).
+- **Test results:** openpulse-keystore **5/5** (`--no-default-features`); builds + clippy `-D warnings`
+  clean with `--features keychain` too; fmt clean. *Rot note:* the keychain path isn't exercised by
+  CI's `--no-default-features` build (feature off) — a `--features keychain` build/clippy job would
+  prevent rot (cf. the `gpu` feature).
+
 ## 2026-07-06 — feature: master-password file keystore (REQ-SEC-CTL-04, CAP-68 slice 2)
 
 - **Requirement/change:** secrets (the control-channel PSK, and eventually identity material) need

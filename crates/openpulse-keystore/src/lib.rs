@@ -40,7 +40,14 @@ pub enum KeystoreError {
     Cipher,
     #[error("keystore payload error: {0}")]
     Payload(#[from] serde_json::Error),
+    #[error("system keychain error: {0}")]
+    Keychain(String),
 }
+
+mod store;
+#[cfg(feature = "keychain")]
+pub use store::KeychainStore;
+pub use store::{FileStore, SecretStore};
 
 /// A master-password-encrypted store of named secrets, persisted to a single file.
 pub struct FileKeystore {

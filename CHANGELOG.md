@@ -22,6 +22,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   path is expanded. Off by default.
 
 ### Security
+- OS keychain secret-store backend (REQ-SEC-CTL-03, third slice of the control-channel security
+  plan): a `SecretStore` trait in `openpulse-keystore` with a `KeychainStore` (OS Secret Service /
+  Keychain / Credential Manager via `keyring`, default-on `keychain` feature) and a `FileStore`
+  fallback wrapping the master-password keystore. `KeychainStore::available()` lets a caller fall
+  back on headless hosts.
 - Master-password file keystore (REQ-SEC-CTL-04, second slice of the control-channel security
   plan): new `openpulse-keystore` crate — `FileKeystore` encrypts named secrets at rest under an
   operator master password (Argon2id KDF → ChaCha20-Poly1305 AEAD), with a fresh salt+nonce per

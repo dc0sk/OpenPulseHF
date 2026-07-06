@@ -5,6 +5,12 @@ edition.workspace = true
 license.workspace = true
 description = "Secret storage for OpenPulse: a master-password-encrypted file keystore (Argon2id + ChaCha20-Poly1305), with an OS-keychain backend."
 
+[features]
+# `keychain` is default-on for normal builds; CI's `--no-default-features` drops the OS
+# secret-service dependency so headless workspace builds stay lean.
+default = ["keychain"]
+keychain = ["dep:keyring"]
+
 [dependencies]
 openpulse-config = { workspace = true }
 thiserror        = { workspace = true }
@@ -12,3 +18,21 @@ serde_json       = { workspace = true }
 rand             = { workspace = true }
 argon2           = { workspace = true }
 chacha20poly1305 = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies.keyring]
+version = "3"
+optional = true
+default-features = false
+features = ["sync-secret-service", "crypto-rust"]
+
+[target.'cfg(target_os = "macos")'.dependencies.keyring]
+version = "3"
+optional = true
+default-features = false
+features = ["apple-native"]
+
+[target.'cfg(target_os = "windows")'.dependencies.keyring]
+version = "3"
+optional = true
+default-features = false
+features = ["windows-native"]
