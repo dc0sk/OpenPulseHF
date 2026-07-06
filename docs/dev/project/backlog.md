@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/backlog.md
 status: living
-last_updated: 2026-07-05
+last_updated: 2026-07-06
 ---
 
 # Backlog
@@ -80,6 +80,39 @@ Why:
 - users can currently only reconstruct a run by manually orchestrating several commands/scripts;
 - traces vanish on restart (no on-disk log), and failed sessions leave no crash/error archive;
 - a one-switch audit mode + one-command bundle turns "it broke" into an analysable artifact.
+
+### 11 — Control-channel security (REQ-SEC-CTL-01..05)
+
+Authenticate + encrypt the daemon ↔ panel/client control channel, and give secrets a safe home. Today
+the control port (TCP :9000 / WS :9001) is plaintext with no auth — safe on the default loopback bind,
+but wide open (transmitter control!) if bound to a non-loopback address for remote operation. K4remote's
+TLS-PSK client is the reference. Full design + threat model in
+[docs/dev/design/control-channel-security.md](../design/control-channel-security.md).
+
+Scope (sliced smallest-risk first):
+
+1. **Shared file-permission helper (REQ-SEC-CTL-05):** lift the owner-only `0600`/`0700`
+   validate+enforce logic out of `openpulse-cli/src/state.rs` into a shared module; apply it to the
+   identity key + trust store on **both** daemon (server) and clients (client) — refuse group/world-
+   readable secret files, set owner-only on write.
+2. **File keystore + master password (REQ-SEC-CTL-04):** Argon2id KDF + AEAD (ChaCha20-Poly1305)
+   keystore; master password never persisted; owner-only files via slice 1.
+3. **System keychain backend (REQ-SEC-CTL-03):** `keyring`-backed store (Secret Service / macOS
+   Keychain / Windows Credential Manager) behind a trait; falls back to the file keystore.
+4. **TLS-PSK transport (REQ-SEC-CTL-01/02):** rustls external-PSK server (daemon) + client (panel);
+   required on non-loopback bind, optional on loopback; transmitter-keying commands fail closed for
+   unauthenticated clients.
+
+Each slice ships behind config, off by default. **Open decisions to confirm before coding:** TLS-PSK vs
+PSK-token; Argon2id + ChaCha20-Poly1305 primitives; whether the panel prompts for the master password
+in-UI or reads the OS keychain only.
+
+Why:
+
+- the control channel commands the transmitter; on a non-loopback bind it is unauthenticated and
+  unencrypted — a safety/regulatory hazard (unauthorised emission), not just a confidentiality one;
+- the RF link is heavily secured while this, the more network-exposed surface, is not;
+- operators want to run the panel from another machine (the WebSocket transport already anticipates it).
 
 ### 1 — FreeDV frame signing (FF-11) ✅ Already shipped
 
