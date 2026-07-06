@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub mod logging;
+pub mod secret_file;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -20,6 +21,10 @@ pub enum ConfigError {
     Parse(#[from] toml::de::Error),
     #[error("identity key file has wrong length (expected 32 bytes)")]
     IdentityKeyLength,
+    #[error(
+        "insecure permissions on secret file {path}: {mode:o} (expected owner-only, e.g. 600)"
+    )]
+    InsecureSecretPermissions { path: String, mode: u32 },
 }
 
 /// Top-level configuration.
@@ -590,6 +595,8 @@ pub fn load_or_generate_identity() -> Result<[u8; 32], ConfigError> {
 /// Load or generate an identity seed at an explicit path (useful in tests).
 pub fn load_identity_from(path: &Path) -> Result<[u8; 32], ConfigError> {
     if path.exists() {
+        // Refuse a group/world-readable identity key (REQ-SEC-CTL-05).
+        secret_file::validate_owner_only(path)?;
         let bytes = std::fs::read(path)?;
         if bytes.len() != 32 {
             return Err(ConfigError::IdentityKeyLength);
@@ -1101,6 +1108,28 @@ mod tests {
         // Second call reads the same seed.
         let seed2 = load_identity_from(&key_path).unwrap();
         assert_eq!(seed1, seed2);
+
+        let _ = std::fs::remove_file(&key_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_identity_refuses_group_readable_key() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = std::env::temp_dir().join(format!("openpulse_id_perm_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let key_path = tmp.join("identity.key");
+        std::fs::write(&key_path, [7u8; 32]).unwrap();
+        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+        assert!(
+            matches!(
+                load_identity_from(&key_path),
+                Err(ConfigError::InsecureSecretPermissions { .. })
+            ),
+            "a group-readable identity key must be refused (REQ-SEC-CTL-05)"
+        );
 
         let _ = std::fs::remove_file(&key_path);
         let _ = std::fs::remove_dir(&tmp);
