@@ -9,6 +9,24 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-06 — feature: master-password file keystore (REQ-SEC-CTL-04, CAP-68 slice 2)
+
+- **Requirement/change:** secrets (the control-channel PSK, and eventually identity material) need
+  at-rest encryption on hosts without a usable system secret store. Second slice of the
+  control-channel security plan (backlog item 11).
+- **Design decision:** a **new crate `openpulse-keystore`** so the crypto deps stay out of the
+  headless TNC binaries (only the daemon/panel/cli will depend on it). `FileKeystore` encrypts a JSON
+  map of `key-id → secret` under a master password: **Argon2id** KDF (default params) →
+  **ChaCha20-Poly1305** AEAD; fresh random salt + nonce per save; the master is held in memory only
+  and never persisted. The file is owner-only (reuses `secret_file` from slice 1). Layout:
+  `OPKS | v1 | salt(16) | nonce(12) | ciphertext(+16-byte tag)`. Confirmed primitives (TLS-PSK;
+  Argon2id + ChaCha20-Poly1305).
+- **Implementation:** `crates/openpulse-keystore` (`FileKeystore` create/open/get/set/remove/save,
+  `KeystoreError`); workspace member + `argon2`/`chacha20poly1305` deps.
+- **Tests:** `round_trip_with_correct_master`, `wrong_master_is_rejected` (AEAD auth failure →
+  `Decrypt`), `tampered_ciphertext_is_rejected`, `saved_file_is_owner_only`.
+- **Test results:** openpulse-keystore **4/4**; clippy `-D warnings` + fmt clean.
+
 ## 2026-07-06 — feature: shared owner-only secret-file permission checks (REQ-SEC-CTL-05, CAP-68 slice 1)
 
 - **Requirement/change:** secret files weren't uniformly permission-checked on load — the daemon's

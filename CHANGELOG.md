@@ -22,6 +22,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   path is expanded. Off by default.
 
 ### Security
+- Master-password file keystore (REQ-SEC-CTL-04, second slice of the control-channel security
+  plan): new `openpulse-keystore` crate — `FileKeystore` encrypts named secrets at rest under an
+  operator master password (Argon2id KDF → ChaCha20-Poly1305 AEAD), with a fresh salt+nonce per
+  save, the master held only in memory, and an owner-only file. For hosts without a system secret
+  store.
 - Shared owner-only permission checks on secret files (REQ-SEC-CTL-05, first slice of the
   control-channel security plan): `openpulse_config::secret_file` validates that key/secret files
   are owner-only (`0600`) on load and enforces it on write. Wired into the identity-key read path
