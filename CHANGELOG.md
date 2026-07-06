@@ -21,6 +21,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   precedence unchanged: `RUST_LOG` > config > default). Wired into `openpulse-daemon`; `~` in the
   path is expanded. Off by default.
 
+### Security
+- Shared owner-only permission checks on secret files (REQ-SEC-CTL-05, first slice of the
+  control-channel security plan): `openpulse_config::secret_file` validates that key/secret files
+  are owner-only (`0600`) on load and enforces it on write. Wired into the identity-key read path
+  (so the daemon and CLI now **refuse a group/world-readable `identity.key`**) and the CLI trust
+  store now delegates to the shared helper.
+
 ### Fixed
 - `cli_mode_advisor` integration test asserted stale speed-level expectations (12 dB → SL6,
   15 dB → SL7) that predated the FEC-protected `hpx_hf` upper-ladder recalibration; corrected to

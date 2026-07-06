@@ -213,46 +213,15 @@ pub fn persist_trust_store_at(path: &Path, store: &LocalTrustStore) -> Result<()
     Ok(())
 }
 
-#[cfg(unix)]
 fn validate_trust_store_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mode = fs::metadata(path)
-        .with_context(|| format!("failed to stat trust store file {}", path.display()))?
-        .permissions()
-        .mode()
-        & 0o777;
-    if mode & 0o077 != 0 {
-        anyhow::bail!(
-            "unsafe trust store permissions on {}: {:o} (expected owner-only, e.g. 600)",
-            path.display(),
-            mode
-        );
-    }
-    Ok(())
+    // Shared owner-only check used by both server and clients (REQ-SEC-CTL-05).
+    openpulse_config::secret_file::validate_owner_only(path)
+        .with_context(|| format!("unsafe trust store permissions on {}", path.display()))
 }
 
-#[cfg(not(unix))]
-fn validate_trust_store_permissions(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
 fn enforce_trust_store_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).with_context(|| {
-        format!(
-            "failed to set secure permissions on trust store file {}",
-            path.display()
-        )
-    })?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn enforce_trust_store_permissions(_path: &Path) -> Result<()> {
-    Ok(())
+    openpulse_config::secret_file::enforce_owner_only(path)
+        .with_context(|| format!("failed to secure trust store file {}", path.display()))
 }
 
 // ── Manifest persistence ──────────────────────────────────────────────────────

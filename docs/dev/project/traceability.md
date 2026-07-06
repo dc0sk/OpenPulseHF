@@ -9,6 +9,26 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-06 — feature: shared owner-only secret-file permission checks (REQ-SEC-CTL-05, CAP-68 slice 1)
+
+- **Requirement/change:** secret files weren't uniformly permission-checked on load — the daemon's
+  identity-key read path accepted a group/world-readable key. First slice of the control-channel
+  security plan (backlog item 11); the only REQ-SEC-CTL slice not blocked on the auth-scheme decision.
+- **Design decision:** lift the owner-only `0600`/`0700` validate+enforce logic (previously inline in
+  `openpulse-cli`'s trust store) into a shared `openpulse_config::secret_file` module used by **both
+  server and clients**; validate-on-load refuses group/world-accessible secret files, enforce-on-write
+  sets `0600`. New `ConfigError::InsecureSecretPermissions`. Non-Unix = documented no-op.
+- **Implementation:** `crates/openpulse-config/src/secret_file.rs` (`validate_owner_only`,
+  `enforce_owner_only`); wired into `load_identity_from`'s read path — covers the **daemon (server)**
+  via `load_or_generate_identity` (`server.rs:444`) and the CLI; `openpulse-cli`'s
+  `validate_trust_store_permissions` / `enforce_trust_store_permissions` now **delegate** to the shared
+  helper (removes the duplicated cfg-gated logic).
+- **Tests:** `secret_file` unit tests (accepts `0600`, rejects `0640`/`0604`; enforce sets `0600`);
+  `load_identity_refuses_group_readable_key`; existing `trust_store_persist_enforces_owner_only_mode`
+  still passes.
+- **Test results:** openpulse-config **15/15**, openpulse-cli suites green; clippy `-D warnings` + fmt
+  clean; `cargo check --workspace --exclude pki-tooling --no-default-features` green.
+
 ## 2026-07-05 — reassess: hpx_hf SL7 (11→16 dB) gap-filler — keep 8PSK500+RS; fix stale mode-advisor test
 
 - **Requirement/change:** revisit (with a Fable second opinion) the SL7 rung that fills the 11→16 dB
