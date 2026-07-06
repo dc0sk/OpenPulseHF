@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/requirements.md
 status: living
-last_updated: 2026-07-05
+last_updated: 2026-07-06
 ---
 
 # Requirements
@@ -119,6 +119,35 @@ last_updated: 2026-07-05
 
 - ML-DSA-44 signatures are 2420 bytes. ML-KEM-768 public keys are 1184 bytes. Both exceed the current 255-byte frame payload limit.
 - In-band post-quantum handshake messages cannot be carried in the current wire format without a segmentation and reassembly (SAR) sub-layer.
+
+## Control-channel security requirements
+
+The daemon control channel (TCP + WebSocket, ports 9000/9001) carries operator commands — PTT,
+frequency/mode, transmit, messaging — between the daemon (server) and the operator panel and other
+clients. It is distinct from the on-air/RF peer link (secured separately, above); today it is
+plaintext with no authentication, bound to loopback by default. The reference is K4remote's TLS-PSK
+client. See `docs/dev/design/control-channel-security.md` for the design and threat model.
+
+- The control channel must support mutual authentication and on-the-wire encryption using a
+  pre-shared key (PSK). (REQ-SEC-CTL-01)
+- When the daemon binds to any non-loopback address, an authenticated + encrypted channel must be
+  required; unauthenticated plaintext is permitted only on a loopback (`127.0.0.1`/`::1`) bind.
+  Transmitter-keying commands (PTT, transmit) must never be accepted from an unauthenticated client
+  on a non-loopback bind — fail closed. (REQ-SEC-CTL-02)
+- Secrets (the control-channel PSK, station identity keys) should be storable in the operating
+  system's secret store — Secret Service / GNOME Keyring / KWallet on Linux, Keychain on macOS,
+  Credential Manager on Windows — as the preferred backend when available, for both the daemon
+  (server) and the clients. (REQ-SEC-CTL-03)
+- A file-based keystore must be available as a fallback for hosts without a usable system secret
+  store, encrypting secrets at rest under an operator master password (memory-hard KDF, e.g.
+  Argon2id, plus authenticated encryption). The master password must never be written to disk in
+  plaintext. (REQ-SEC-CTL-04)
+- Any file holding key or secret material (identity key, trust store, keystore, PSK file) must be
+  owner-only: `0600` for files, `0700` for the containing directory. Both the daemon (server) and the
+  panel and other clients (client) must validate permissions when loading such a file and refuse to
+  read one that is group- or world-accessible, and must set owner-only permissions on write. This
+  generalises the existing `validate_trust_store_permissions` / `enforce_trust_store_permissions` in
+  `openpulse-cli` to every secret file on both sides. (REQ-SEC-CTL-05)
 - SAR must be designed and implemented before in-band PQ handshake requirements can be satisfied.
 - PQ signature transport requirements are therefore sequentially dependent on SAR delivery; planning must reflect this ordering.
 - Out-of-band or application-layer PQ key distribution (for example via the PKI tooling) may proceed independently of SAR.
