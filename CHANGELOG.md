@@ -22,6 +22,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   path is expanded. Off by default.
 
 ### Security
+- Control-channel PSK link-security core (REQ-SEC-CTL-01/02, fourth slice of the control-channel
+  security plan): new `openpulse-linksec` crate — a pure-Rust **Noise `NNpsk0`** channel
+  (`NoiseHandshake`/`NoiseTransport`; X25519 + ChaCha20-Poly1305 + BLAKE2s via `snow`) giving PSK
+  mutual authentication + AEAD encryption with forward secrecy, plus the non-loopback `auth_required`
+  gate and a `[control_security]` config section. **Pivoted from TLS-PSK** — rustls has no external
+  PSK and OpenSSL would add a C dependency. The transport wiring into the daemon/panel is a separate,
+  live-validated step (the channel is still plaintext until then, safe on the default loopback bind).
 - OS keychain secret-store backend (REQ-SEC-CTL-03, third slice of the control-channel security
   plan): a `SecretStore` trait in `openpulse-keystore` with a `KeychainStore` (OS Secret Service /
   Keychain / Credential Manager via `keyring`, default-on `keychain` feature) and a `FileStore`

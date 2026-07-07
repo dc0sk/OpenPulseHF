@@ -1,0 +1,10 @@
+[package]
+name = "openpulse-linksec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Control-channel link security for OpenPulse: a PSK-authenticated, encrypted Noise channel and the non-loopback auth gate (REQ-SEC-CTL-01/02)."
+
+[dependencies]
+thiserror = { workspace = true }
+snow      = { workspace = true }

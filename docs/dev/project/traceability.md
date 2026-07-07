@@ -9,6 +9,30 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-07 — feature: control-channel PSK link-security core (REQ-SEC-CTL-01/02, CAP-68 slice 4-core)
+
+- **Requirement/change:** the control channel needs PSK mutual auth + on-wire encryption, mandatory on
+  a non-loopback bind. Fourth slice of the control-channel security plan (backlog item 11).
+- **Design decision — pivot:** the confirmed plan was TLS-PSK-via-rustls, but **rustls has no
+  external/raw TLS-PSK support** (it is certificate-focused), and OpenSSL (K4remote's route) would add a
+  C dependency to an otherwise pure-Rust workspace. Pivoted to the **Noise protocol**
+  (`Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s` via `snow`): both endpoints prove knowledge of the 32-byte
+  PSK during the handshake (mutual auth) and then exchange ChaCha20-Poly1305 messages with forward
+  secrecy — no certificates, no C dep. Implemented **transport-agnostically** (byte-buffer
+  `NoiseHandshake`/`NoiseTransport`) so the same primitive serves the sync CLI and the async
+  daemon/panel. The `auth_required(bind, require_auth)` gate encodes REQ-SEC-CTL-02 (mandatory on
+  non-loopback). Config `[control_security]` (`require_auth`, `psk_key_id`) added.
+- **Implementation:** new crate `crates/openpulse-linksec` (`NoiseHandshake`, `NoiseTransport`,
+  `is_loopback_bind`, `auth_required`, `LinkSecError`); `ControlSecurityConfig` + `[control_security]`
+  template in `openpulse-config`; design doc updated with the pivot rationale.
+- **Tests:** `matching_psk_handshakes_and_round_trips` (bidirectional), `mismatched_psk_fails_handshake`,
+  `tampered_ciphertext_is_rejected`, `oversized_plaintext_is_rejected`, `loopback_detection_and_gate`
+  (IPv4/IPv6/`localhost`/`[::1]:port` + the gate policy).
+- **Test results:** openpulse-linksec **5/5**; openpulse-config still 15/15; clippy `-D warnings` + fmt
+  clean; workspace check green. **Remaining:** wire the handshake+framing into the daemon TCP/WS server
+  + panel client and enforce fail-closed PTT — a separate, live-validated change (the wire is still
+  plaintext until then, safe on the default loopback bind).
+
 ## 2026-07-06 — feature: OS keychain secret-store backend (REQ-SEC-CTL-03, CAP-68 slice 3)
 
 - **Requirement/change:** prefer the OS secret store for the control-channel PSK + identity material

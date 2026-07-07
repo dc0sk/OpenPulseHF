@@ -46,6 +46,28 @@ pub struct OpenpulseConfig {
     pub daemon: DaemonConfig,
     pub logbook: LogbookConfig,
     pub observability: ObservabilityConfig,
+    pub control_security: ControlSecurityConfig,
+}
+
+/// Control-channel link security (REQ-SEC-CTL-01/02). Auth is always required on a non-loopback
+/// daemon bind; `require_auth` forces it on loopback too.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ControlSecurityConfig {
+    /// Force PSK auth + encryption even on a loopback bind. On a non-loopback bind auth is
+    /// mandatory regardless (see `openpulse_linksec::auth_required`).
+    pub require_auth: bool,
+    /// Keystore key id holding the 32-byte control-channel PSK (see `openpulse-keystore`).
+    pub psk_key_id: String,
+}
+
+impl Default for ControlSecurityConfig {
+    fn default() -> Self {
+        Self {
+            require_auth: false,
+            psk_key_id: "control-psk".into(),
+        }
+    }
 }
 
 /// Observability / audit-mode settings (REQ-OBS-01). Opt-in; off by default.
@@ -872,6 +894,13 @@ level = "info"
 # stream to <archive_dir>/events.ndjson for later analysis. Off by default. `~` expanded.
 audit_mode = false
 archive_dir = "~/.local/share/openpulse/audit"
+
+[control_security]
+# Control-channel PSK auth + encryption (REQ-SEC-CTL-01/02). Auth is ALWAYS required when the
+# daemon binds to a non-loopback address; `require_auth` forces it on loopback too. The PSK is a
+# 32-byte secret stored in the keystore under `psk_key_id`.
+require_auth = false
+psk_key_id = "control-psk"
 
 [relay]
 # Enable multi-hop relay forwarding (used by openpulse-daemon).
