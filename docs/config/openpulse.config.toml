@@ -57,6 +57,13 @@ level = "info"
 audit_mode = false
 archive_dir = "~/.local/share/openpulse/audit"
 
+[control_security]
+# Control-channel PSK auth + encryption (REQ-SEC-CTL-01/02). Auth is ALWAYS required on a
+# non-loopback daemon bind; `require_auth` forces it on loopback too. The 32-byte PSK lives in the
+# keystore under `psk_key_id`.
+require_auth = false
+psk_key_id = "control-psk"
+
 [relay]
 enabled = false
 max_hops = 3

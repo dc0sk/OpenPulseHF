@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/control-channel-security.md
 status: living
-last_updated: 2026-07-06
+last_updated: 2026-07-07
 ---
 
 # Control-channel security (REQ-SEC-CTL)
@@ -32,13 +32,19 @@ password — protocol-mandated. We choose our own scheme since the control proto
 | Option | Encrypts wire | Authenticates | Effort | Notes |
 |---|---|---|---|---|
 | 1. PSK token over existing TCP/WS | ✗ | ✓ | low | Client sends a shared secret on connect; daemon rejects unauthenticated clients. Stops unauthorised control but stays plaintext. |
-| **2. TLS-PSK (recommended)** | ✓ | ✓ | medium | rustls TLS 1.3 external PSK — one shared key, no certificates. Closest to the K4 model; encrypts + authenticates together. |
-| 3. TLS + token / Noise | ✓ | ✓ | high | More machinery than this needs. |
+| 2. TLS-PSK (rustls) | ✓ | ✓ | — | **Not viable:** rustls has no external/raw TLS-PSK support (it is certificate-focused). |
+| 3. TLS-PSK (OpenSSL) | ✓ | ✓ | high | K4remote's choice, but adds a C dependency (OpenSSL) to an otherwise pure-Rust workspace + a packaging burden (K4remote needs a `vendored-tls` feature). |
+| **4. Noise NNpsk0 (chosen)** | ✓ | ✓ | medium | Pure-Rust (`snow`); a PSK-only handshake gives mutual auth + forward secrecy + AEAD from one 32-byte key, no certificates. |
 
-**Recommendation: option 2 (TLS-PSK via rustls).** One PSK, no cert lifecycle, TLS 1.3 confidentiality
-+ integrity, and it maps directly onto the K4remote precedent. Gate it: **required on a non-loopback
-bind; optional on loopback** (`REQ-SEC-CTL-02`). Transmitter-keying commands fail closed for
-unauthenticated clients on a non-loopback bind.
+**Decision: option 4 — Noise `Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s` via `snow`.** The original plan
+was TLS-PSK-via-rustls, but rustls does not implement external PSK; OpenSSL would drag in a C dep. The
+Noise NNpsk0 pattern delivers exactly what this channel needs — both endpoints prove knowledge of the
+shared PSK during the handshake (mutual authentication), then exchange ChaCha20-Poly1305-encrypted
+messages with forward secrecy — with no certificate lifecycle and no C dependency. Implemented
+transport-agnostically in `crates/openpulse-linksec` (`NoiseHandshake` / `NoiseTransport`) so the same
+primitive drives the sync CLI and the async daemon/panel. Gate it: **auth required on a non-loopback
+bind; optional on loopback** (`auth_required()` / `REQ-SEC-CTL-02`); transmitter-keying commands fail
+closed for unauthenticated clients on a non-loopback bind.
 
 ## Key storage
 
@@ -72,14 +78,17 @@ accessible file; on write, **enforce** owner-only. Generalise the existing prece
 2. **File keystore + master password** — Argon2id + AEAD keystore type with `open(master)` / `store` /
    `load`, owner-only files via slice 1. Unit-tested round-trip + wrong-password rejection.
 3. **System keychain backend** — `keyring`-backed store behind a trait; fall back to slice 2.
-4. **TLS-PSK transport** — rustls external-PSK server (daemon) + client (panel); config
-   (`[control_security]`): `require_auth`, PSK source (keychain/keystore key id). Enforce the
-   non-loopback gate + fail-closed PTT.
+4. **Noise-PSK transport** — `crates/openpulse-linksec` (`NoiseHandshake`/`NoiseTransport`, NNpsk0)
+   + the `auth_required` gate + `[control_security]` config (`require_auth`, `psk_key_id`) shipped;
+   **remaining:** wire the handshake+framing into the daemon TCP/WS server and the panel client, and
+   enforce fail-closed PTT for unauthenticated clients. This transport integration touches the live
+   networking and is done as a separate, live-validated step.
 
 Each slice ships behind config, off by default, with the traceability chain (CAP-68).
 
-## Open decisions (confirm before implementing)
+## Resolved decisions
 
-- Auth scheme: **TLS-PSK** (recommended) vs PSK-token-only.
-- KDF/AEAD primitives for the file keystore: **Argon2id + ChaCha20-Poly1305** (proposed).
-- Whether the panel (iced) prompts for the master password in-UI or reads it from the OS keychain only.
+- Auth scheme: **Noise NNpsk0** (rustls has no external PSK; OpenSSL would add a C dep). *Shipped.*
+- Keystore KDF/AEAD: **Argon2id + ChaCha20-Poly1305**. *Shipped (slice 2).*
+- Panel master password: read the OS keychain first, prompt in-UI only as a fallback. *For the
+  transport-wiring step.*
