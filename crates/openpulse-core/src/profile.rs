@@ -423,18 +423,20 @@ impl SessionProfile {
         // ≥ SL9 for level-monotonicity, with fading margin (SCFDMA-QAM is good-conditions-only on HF).
         snr_floors[SpeedLevel::Sl10 as usize] = Some(17.0_f32);
         snr_floors[SpeedLevel::Sl11 as usize] = Some(22.0_f32);
-        // Ceilings gate the cautious one-step upshift; set just above each rung's floor and monotonic
-        // so every new rung is actually reachable on the way up (ceiling(L) ≥ floor(L+1)).
+        // Ceilings gate the cautious one-step upshift. Normalized to a uniform +2 dB hysteresis over
+        // the next rung's floor — `ceiling(L) = floor(L+1) + 2` — so every rung dwells the same margin
+        // before climbing (the old table mixed +1 and +4 dB, over-dwelling the lowest-throughput rungs;
+        // pre-release, so no ladder-interop concern). Reachability holds (ceiling(L) > floor(L+1)).
         let mut snr_ceilings = [None; 21];
-        snr_ceilings[SpeedLevel::Sl2 as usize] = Some(8.0_f32);
-        snr_ceilings[SpeedLevel::Sl3 as usize] = Some(9.0_f32);
-        snr_ceilings[SpeedLevel::Sl4 as usize] = Some(11.0_f32);
-        snr_ceilings[SpeedLevel::Sl5 as usize] = Some(12.0_f32);
-        snr_ceilings[SpeedLevel::Sl6 as usize] = Some(13.0_f32);
-        snr_ceilings[SpeedLevel::Sl7 as usize] = Some(15.0_f32);
-        snr_ceilings[SpeedLevel::Sl8 as usize] = Some(17.0_f32);
-        snr_ceilings[SpeedLevel::Sl9 as usize] = Some(21.0_f32);
-        snr_ceilings[SpeedLevel::Sl10 as usize] = Some(23.0_f32);
+        snr_ceilings[SpeedLevel::Sl2 as usize] = Some(6.0_f32); // floor(SL3)=4 +2
+        snr_ceilings[SpeedLevel::Sl3 as usize] = Some(7.0_f32); // floor(SL4)=5 +2
+        snr_ceilings[SpeedLevel::Sl4 as usize] = Some(11.0_f32); // floor(SL5)=9 +2
+        snr_ceilings[SpeedLevel::Sl5 as usize] = Some(13.0_f32); // floor(SL6)=11 +2
+        snr_ceilings[SpeedLevel::Sl6 as usize] = Some(14.0_f32); // floor(SL7)=12 +2
+        snr_ceilings[SpeedLevel::Sl7 as usize] = Some(16.0_f32); // floor(SL8)=14 +2
+        snr_ceilings[SpeedLevel::Sl8 as usize] = Some(18.0_f32); // floor(SL9)=16 +2
+        snr_ceilings[SpeedLevel::Sl9 as usize] = Some(19.0_f32); // floor(SL10)=17 +2
+        snr_ceilings[SpeedLevel::Sl10 as usize] = Some(24.0_f32); // floor(SL11)=22 +2
         // SL11 (SCFDMA52-64QAM) is the ceiling of hpx_hf; no upgrade above it.
         Self {
             modes,

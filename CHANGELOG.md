@@ -76,6 +76,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   fading). Added a `calibrate_pilot_gap_candidate` calibration sweep to keep this re-derivable.
 
 ### Changed
+- `hpx_hf` adaptive-ladder upshift ceilings normalized to a uniform `ceiling(L) = floor(L+1) + 2 dB`
+  hysteresis (the old table mixed +1 and +4 dB, over-dwelling the lowest-throughput rungs), so the
+  ladder climbs off the slow rungs sooner. Data-only; the SNR→mode mapping (floor-based) is unchanged.
 - Operator panel (`openpulse-panel`) re-implemented on **iced** and made the default,
   retiring the egui/eframe version (REQ-UX-04). New layout: a controls band, live
   spectrum + waterfall + rate ladder, and a tabbed lower panel (Additional info /
