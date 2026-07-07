@@ -9,6 +9,21 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-08 — fix: SC-FDMA hard-demod MMSE amplitude bias (research #1 / P4)
+
+- **Requirement/change:** SC-FDMA hard-demod QAM was biased toward the origin — the soft path divides
+  equalized symbols by the MMSE attenuation `alpha_avg` to restore unit-constellation scale, but the
+  hard path did not, so 16/32/64QAM outer-ring hard decisions were systematically wrong near threshold.
+  Found by the Fable SC-FDMA review (`docs/dev/research/scfdma-improvements.md`, P4).
+- **Design decision:** mirror the soft path in the hard demod — compute `alpha_avg` via
+  `mmse_llr_noise_var` and divide before demap. PSK is angle-only (unaffected); QAM benefits. RX-only,
+  no wire change; pre-release so no interop concern regardless.
+- **Implementation:** `plugins/scfdma/src/demodulate.rs` hard-demod path (also `.max(1e-6)` on the
+  noise var to match the soft path).
+- **Tests:** new `scfdma52_16qam_hard_demod_no_amplitude_bias` (20 dB AWGN, 3 seeds); the full
+  scfdma suite still green.
+- **Test results:** scfdma-plugin **58 + 12 loopback + others all pass**; clippy `-D warnings` + fmt clean.
+
 ## 2026-07-07 — feature: panel Noise transport wiring (REQ-SEC-CTL-01/02, CAP-68 slice 4-panel)
 
 - **Requirement/change:** complete the client half — the panel's TCP transport performs the PSK Noise

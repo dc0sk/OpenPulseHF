@@ -192,13 +192,19 @@ fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Result<Vec<u8>, 
         } else {
             dft_ce_estimate(p, &freq, &*ce_idft)
         };
-        let noise_var = estimate_noise_var(p, &freq, &raw_h);
+        let noise_var = estimate_noise_var(p, &freq, &raw_h).max(1e-6);
         let h_est = smooth_ce(&mut ema_h, &raw_h);
+        // MMSE attenuates by `alpha_avg`; undo it before demapping so QAM hard decisions are not
+        // biased toward the origin (mirrors the soft path — PSK is angle-only, so unaffected there).
+        let (_, alpha_avg) = mmse_llr_noise_var(p, &h_est, noise_var);
         let mut equalized = mmse_equalize(p, &freq, &h_est, noise_var);
 
         // Step 3: IDFT(N_data) — undo DFT precoding; scale to preserve energy.
         idft.process(&mut equalized);
-        let data_syms: Vec<Complex32> = equalized.iter().map(|c| c * idft_scale).collect();
+        let data_syms: Vec<Complex32> = equalized
+            .iter()
+            .map(|c| c * idft_scale / alpha_avg)
+            .collect();
 
         // Step 4: Demap recovered symbols according to the constellation order.
         for sym in &data_syms {
