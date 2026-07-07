@@ -9,6 +9,29 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-07 — feature: sync + async Noise socket channels (REQ-SEC-CTL-01/02, CAP-68 slice 4-transport)
+
+- **Requirement/change:** turn the byte-buffer Noise core into actual socket channels the daemon
+  (async) and panel (sync) can use, and prove them over real sockets. Continues slice 4.
+- **Design decision:** two thin adapters over the same `NoiseHandshake`/`NoiseTransport` core, sharing a
+  `u32`-BE-length-prefixed, message-oriented wire framing (fits the control protocol's NDJSON lines +
+  binary spectrum frames): `sync_channel::SyncNoise` (blocking `Read`+`Write`, for the std panel/CLI)
+  and `async_channel::AsyncNoise` (tokio `AsyncRead`+`AsyncWrite`, behind a non-default `tokio` feature
+  so CI `--no-default-features` stays lean). `AsyncNoise::into_split` yields concurrently-usable
+  write/read halves sharing the transport via a brief per-message `Mutex` (Noise send/recv nonces are
+  independent) — matching the daemon's `select!` loop that writes events while reading commands.
+- **Implementation:** `crates/openpulse-linksec/src/sync_channel.rs`, `.../async_channel.rs`; `tokio`
+  optional dep + feature; `MAX_FRAME`, `LinkSecError::Io`/`FrameTooLarge`.
+- **Tests:** over **real TCP sockets** (127.0.0.1:0) — sync: handshake + round-trip, wrong-PSK rejected
+  (server fails closed), frame helpers; async: same + `split_halves_round_trip`.
+- **Test results:** openpulse-linksec **8/8** (`--no-default-features`), **11/11** (`--features tokio`);
+  clippy `-D warnings` both feature states + fmt clean; workspace check green.
+- **Remaining:** wire these into the daemon `handle_client`/`handle_command` connection loop (a wide,
+  `ws.rs`-mirrored, concurrency-sensitive refactor) + the panel `transport.rs`, load the PSK from the
+  keystore, and enforce fail-closed drop on a failed handshake — done with a live daemon+panel, since
+  the GUI/live path can't be runtime-validated here. WebSocket is a distinct framing (TCP is the
+  default/primary).
+
 ## 2026-07-07 — feature: control-channel PSK link-security core (REQ-SEC-CTL-01/02, CAP-68 slice 4-core)
 
 - **Requirement/change:** the control channel needs PSK mutual auth + on-wire encryption, mandatory on

@@ -22,6 +22,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   path is expanded. Off by default.
 
 ### Security
+- Control-channel Noise socket channels (REQ-SEC-CTL-01/02): `openpulse-linksec` gains
+  `sync_channel::SyncNoise` (blocking, for the panel/CLI) and `async_channel::AsyncNoise` (tokio,
+  `tokio` feature, with `into_split` for concurrent read/write, for the daemon) — a `u32`-length-framed
+  PSK-authenticated encrypted message channel, tested over real TCP sockets (handshake, round-trip,
+  wrong-PSK-fails-closed). The daemon/panel connection-loop wiring is the remaining, live-validated step.
 - Control-channel PSK link-security core (REQ-SEC-CTL-01/02, fourth slice of the control-channel
   security plan): new `openpulse-linksec` crate — a pure-Rust **Noise `NNpsk0`** channel
   (`NoiseHandshake`/`NoiseTransport`; X25519 + ChaCha20-Poly1305 + BLAKE2s via `snow`) giving PSK

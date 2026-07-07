@@ -7,9 +7,11 @@
 //! secrecy. rustls is not used because it has no external/raw TLS-PSK support; OpenSSL (K4remote's
 //! choice) would add a C dependency to an otherwise pure-Rust workspace.
 //!
-//! This crate is transport-agnostic: [`NoiseHandshake`] and [`NoiseTransport`] operate on byte
-//! buffers, so the caller does the framing/I-O (sync or async). Transport wiring into the daemon and
-//! panel is a separate, live-validated step.
+//! Layers: [`NoiseHandshake`]/[`NoiseTransport`] are the transport-agnostic byte-buffer core;
+//! [`sync_channel::SyncNoise`] (blocking, for the panel/CLI) and [`async_channel::AsyncNoise`]
+//! (tokio, `tokio` feature, for the daemon — with `into_split` for concurrent read/write) add the
+//! `u32`-length-framed socket channel on top. Wiring these into the daemon connection loop + panel
+//! transport is a separate, live-validated step.
 
 use thiserror::Error;
 
@@ -22,6 +24,9 @@ pub const PSK_LEN: usize = 32;
 /// Max plaintext per [`NoiseTransport::encrypt`] call (Noise message limit minus the 16-byte tag).
 pub const MAX_PLAINTEXT: usize = 65535 - 16;
 
+/// Max encrypted frame length accepted on the wire (plaintext + tag, plus a small margin).
+pub const MAX_FRAME: usize = MAX_PLAINTEXT + 16;
+
 /// Errors from the link-security layer.
 #[derive(Debug, Error)]
 pub enum LinkSecError {
@@ -29,7 +34,15 @@ pub enum LinkSecError {
     Noise(String),
     #[error("message too large ({0} > {MAX_PLAINTEXT} bytes)")]
     TooLarge(usize),
+    #[error("link io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("oversized frame on the wire ({0} > {MAX_FRAME} bytes)")]
+    FrameTooLarge(usize),
 }
+
+#[cfg(feature = "tokio")]
+pub mod async_channel;
+pub mod sync_channel;
 
 fn noise(e: snow::Error) -> LinkSecError {
     LinkSecError::Noise(e.to_string())
