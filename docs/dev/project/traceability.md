@@ -9,6 +9,23 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-08 — improve: hpx_hf ceiling hysteresis normalization (research #2, agility)
+
+- **Requirement/change:** `hpx_hf` upshift ceilings were inconsistent (+4 dB over the next rung's floor
+  at SL2/3/9, +1 dB elsewhere), so the lowest-throughput rungs over-dwelt before climbing. From the
+  Fable ladder review (`docs/dev/research/ladder-granularity.md`, agility #4).
+- **Design decision:** normalize to a uniform `ceiling(L) = floor(L+1) + 2 dB`. Pure data change to
+  `snr_ceilings`; the mode-advisor is floor-based (unaffected); **pre-release, so no ladder-interop
+  concern**. Reachability preserved (ceiling > next floor); ceilings stay monotonic.
+- **Implementation:** `crates/openpulse-core/src/profile.rs` — `hpx_hf` `snr_ceilings` (SL2 8→6, SL3
+  9→7, SL5 12→13, SL6 13→14, SL7 15→16, SL8 17→18, SL9 21→19, SL10 23→24; SL4 unchanged).
+- **Tests:** openpulse-core 7 lib + session_profile + rate suites green; openpulse-modem rate/OTA/
+  adaptive suites green; clippy `-D warnings` clean.
+- **Test results:** core + modem green. **Pre-existing unrelated failure noted:**
+  `weighted_llr_combining_at_least_2_db_gain_over_equal_weight` (an SNR-threshold gate on SC-FDMA *soft*
+  combining) fails on clean `main` independent of this change and of the P4 hard-path fix — flagged for
+  separate investigation, not introduced here.
+
 ## 2026-07-08 — fix: SC-FDMA hard-demod MMSE amplitude bias (research #1 / P4)
 
 - **Requirement/change:** SC-FDMA hard-demod QAM was biased toward the origin — the soft path divides
