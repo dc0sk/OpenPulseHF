@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/backlog.md
 status: living
-last_updated: 2026-07-06
+last_updated: 2026-07-08
 ---
 
 # Backlog
@@ -113,6 +113,28 @@ Why:
   unencrypted — a safety/regulatory hazard (unauthorised emission), not just a confidentiality one;
 - the RF link is heavily secured while this, the more network-exposed surface, is not;
 - operators want to run the panel from another machine (the WebSocket transport already anticipates it).
+
+### 12 — Wide-channel (VHF/UHF) 12.5/25 kHz support (REQ-BW-01..07) — release 1.x
+
+Extend the modem beyond its ~2.7 kHz HF SSB channel to 12.5 kHz and 25 kHz VHF/UHF-class channels.
+Targeted at a future **1.x** release. Feasibility + phased action list in
+[docs/dev/design/wide-channel-extension.md](../design/wide-channel-extension.md).
+
+Phase 0 (decisions, blocking): pick the RF path (direct-IQ SDR vs linear wide exciter vs
+constant-envelope 4FSK), target sample rates, wideband strategy (clock-scaling vs new FFT layout),
+PAPR/PA-linearity, and AFC budget at VHF/UHF. Phase 1: sample-rate generalization (parameterize the
+engine off the hard-coded 8 kHz; unblocks `hpx_narrowband_hd`). Phase 2: wide modes (clock-scaled
+OFDM/SC-FDMA at 48/96 kHz; RX-IQ path) + `hpx_wide12`/`hpx_wide25` ladders. Phase 3: VHF/UHF bandplan
++ regulatory + a mobile-fading channel model + recalibrated floors.
+
+Why:
+
+- much groundwork already exists (rate-parameterized single-carrier plugins, 9600-baud modes, the TX
+  IQ seam, and `hpx_narrowband_hd`), but 8 kHz is de-facto hard-coded in the engine so the wide
+  profiles cannot run;
+- the deepest question is RF architecture, not code — a wide linear waveform passes neither an SSB
+  rig's 3 kHz path nor an FM class-C PA, so a direct-IQ SDR path (RX half missing) or linear exciter
+  is required. This must be decided before implementation.
 
 ### 1 — FreeDV frame signing (FF-11) ✅ Already shipped
 

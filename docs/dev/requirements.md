@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/requirements.md
 status: living
-last_updated: 2026-07-06
+last_updated: 2026-07-08
 ---
 
 # Requirements
@@ -211,6 +211,34 @@ Regulatory compliance is a hard requirement for any transmission on amateur radi
   latest session diagnostics/metrics, a config snapshot with secrets redacted, and
   version/git/system metadata — packaged for handoff to a developer, generalising the existing
   on-air `bundle-evidence` script to everyday runs. (REQ-OBS-03)
+
+## Wide-channel (VHF/UHF) requirements — release 1.x
+
+Extending the modem from its ~2.7 kHz HF SSB channel to 12.5 kHz and 25 kHz VHF/UHF-class channels.
+Targeted at a future **1.x** release; not part of the current line. Design and phased action list in
+`docs/dev/design/wide-channel-extension.md`. These requirements are gated on the RF-architecture
+decision (REQ-BW-01).
+
+- The audio sample rate shall be configurable rather than fixed at 8 kHz: the modem engine and all
+  rate-parameterized DSP must run at a `[audio] sample_rate` selected from at least {8000, 48000,
+  96000} Hz, defaulting to 8000. (REQ-BW-02)
+- The system shall support wide modes occupying up to ~12.5 kHz at a 48 kHz audio path (e.g.
+  clock-scaled OFDM/SC-FDMA and the existing 9600-baud RRC modes), reachable via the adaptive ladder.
+  (REQ-BW-03)
+- The system shall support wide modes occupying up to ~25 kHz, via a 96 kHz real-audio path or a
+  48 kHz complex-IQ path. (REQ-BW-04)
+- The system shall provide a direct-IQ receive path (complementing the existing IQ transmit seam) so
+  wide operation can use an SDR front-end rather than a bandwidth-limited soundcard/SSB path.
+  (REQ-BW-05)
+- Bandplan awareness shall be extended to VHF/UHF bands (6 m/2 m/1.25 m/70 cm) with per-segment
+  occupied-bandwidth limits (12.5/25 kHz where regionally permitted) and channel-raster-aligned QSY.
+  (REQ-BW-06)
+- Wide-mode SNR floors shall be calibrated against a VHF/UHF mobile-fading channel model (flat
+  Rayleigh/Rician + vehicle Doppler) with an explicitly documented SNR reference bandwidth. (REQ-BW-07)
+- **RF-architecture decision (blocking):** the wide path shall use a direct-IQ SDR path and/or a
+  linear wide exciter; a constant-envelope (e.g. 4FSK) wide mode family is an optional fallback for
+  class-C FM transmitters. This decision governs all of REQ-BW-02..07 and must be recorded before
+  implementation. (REQ-BW-01)
 
 ## Documentation requirements
 
