@@ -9,6 +9,31 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-07 — feature: panel Noise transport wiring (REQ-SEC-CTL-01/02, CAP-68 slice 4-panel)
+
+- **Requirement/change:** complete the client half — the panel's TCP transport performs the PSK Noise
+  handshake + encrypted framing, so the operator↔daemon control link works end to end with auth on.
+- **Design decision:** the panel's `try_recv` is a **non-blocking poll** (50 ms read timeout),
+  incompatible with `SyncNoise`'s blocking `read_exact` framing. So the panel keeps its own **resumable
+  partial-frame reader**: `connect()` does a bounded blocking initiator handshake over the raw stream,
+  then switches to the 50 ms poll; `try_recv_noise` accumulates ciphertext across polls and a pure
+  `take_frame` helper assembles a complete `u32`-length-framed message, which is decrypted and demuxed
+  (`OPSP` magic → binary, else text). Sends encrypt one message each. Activated by `OPENPULSE_CONTROL_PSK`
+  (same env as the daemon); WebSocket stays plaintext (matches the daemon's WS).
+- **Implementation:** `apps/openpulse-panel/src/transport.rs` — `NoiseCtx`, `control_psk_from_env`,
+  `framed_write`/`framed_read_blocking`, `take_frame`, `demux_message`, the `connect` handshake and
+  `try_recv_noise`; `openpulse-linksec` dep.
+- **Tests:** transport unit tests — `take_frame_assembles_across_partial_reads` (prefix + body split
+  across polls, plus two back-to-back frames), `take_frame_rejects_oversized_length`,
+  `demux_classifies_opsp_and_text`. (The panel is a binary crate — no integration-test target — so the
+  end-to-end path is covered by the daemon-side `control_auth` integration test, the linksec real-TCP
+  tests, and live validation.)
+- **Test results:** panel **8/8** (5 theme + 3 transport); clippy `-D warnings` + fmt clean; workspace
+  check green.
+- **End-to-end:** with `OPENPULSE_CONTROL_PSK` set on both sides + `require_auth` (or a non-loopback
+  bind), the panel and daemon now speak the encrypted Noise channel over TCP. WebSocket + keystore-backed
+  PSK loading remain as follow-ups.
+
 ## 2026-07-07 — feature: daemon control-channel Noise wiring + fail-closed gate (REQ-SEC-CTL-01/02, CAP-68 slice 4-daemon)
 
 - **Requirement/change:** enforce PSK auth + encryption on the daemon's **TCP** control channel, and

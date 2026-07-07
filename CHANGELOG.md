@@ -22,6 +22,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   path is expanded. Off by default.
 
 ### Security
+- Operator panel control-channel encryption (REQ-SEC-CTL-01/02): the panel's TCP transport now
+  performs the PSK Noise initiator handshake and routes commands/events/spectrum through the encrypted
+  channel when `OPENPULSE_CONTROL_PSK` is set — with a resumable partial-frame reader so it fits the
+  panel's non-blocking poll. Combined with the daemon-side wiring, the operator↔daemon control link is
+  now authenticated + encrypted end-to-end over TCP (WebSocket + keystore-backed PSK loading follow).
 - Daemon control-channel PSK authentication + encryption over TCP (REQ-SEC-CTL-01/02): the daemon's
   TCP control server now performs a Noise responder handshake per connection when auth is required
   (`[control_security] require_auth`, or any non-loopback bind), routing all commands/events/spectrum
