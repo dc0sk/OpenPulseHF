@@ -5,6 +5,15 @@ edition.workspace = true
 license.workspace = true
 description = "Control-channel link security for OpenPulse: a PSK-authenticated, encrypted Noise channel and the non-loopback auth gate (REQ-SEC-CTL-01/02)."
 
+[features]
+# `tokio` adds the async socket channel used by the daemon; the sync channel (panel) and the core
+# primitives are always available. Off by default so CI's --no-default-features stays lean.
+tokio = ["dep:tokio"]
+
 [dependencies]
 thiserror = { workspace = true }
 snow      = { workspace = true }
+tokio     = { workspace = true, optional = true, features = ["net", "io-util", "sync", "rt"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["net", "io-util", "sync", "rt", "macros", "rt-multi-thread"] }
