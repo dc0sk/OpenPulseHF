@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/traceability-matrix.md
 status: living
-last_updated: 2026-07-07
+last_updated: 2026-07-08
 ---
 
 # Traceability matrix
@@ -156,6 +156,13 @@ the testmatrix quick tier at commit `76de87e`, dated 2026-06-29 (555/555 pass, 0
 | REQ-SEC-CTL-03 | Control-channel security | Secrets storable in the OS system secret store (server + client) | CAP-68 | ✅ covered — `openpulse-keystore` `SecretStore`: `KeychainStore` (keyring) + `FileStore` fallback |
 | REQ-SEC-CTL-04 | Control-channel security | File keystore fallback, encrypted under an operator master password | CAP-68 | ✅ covered — `openpulse-keystore` `FileKeystore` (Argon2id + ChaCha20-Poly1305) |
 | REQ-SEC-CTL-05 | Control-channel security | Owner-only (0600/0700) permission validate+enforce on every secret file, server + client | CAP-68 | ✅ covered — shared `openpulse_config::secret_file` (validate/enforce) wired into the identity key (daemon + CLI) + trust store |
+| REQ-BW-01 | Wide channel (1.x) | RF-architecture decision (direct-IQ SDR / linear exciter / 4FSK) governs all wide work | CAP-69 | 📝 planned (release 1.x, backlog item 12, Phase 0) |
+| REQ-BW-02 | Wide channel (1.x) | Configurable audio sample rate {8000,48000,96000}, engine off the hard-coded 8 kHz | CAP-69 | 📝 planned (Phase 1) |
+| REQ-BW-03 | Wide channel (1.x) | ~12.5 kHz wide modes at 48 kHz audio via the adaptive ladder | CAP-69 | 📝 planned (Phase 2) |
+| REQ-BW-04 | Wide channel (1.x) | ~25 kHz wide modes via 96 kHz real audio or 48 kHz complex IQ | CAP-69 | 📝 planned (Phase 2) |
+| REQ-BW-05 | Wide channel (1.x) | Direct-IQ receive path (complements the existing IQ transmit seam) | CAP-69 | 📝 planned (Phase 2) |
+| REQ-BW-06 | Wide channel (1.x) | VHF/UHF bandplan tables + occupied-BW limits + channel-raster QSY | CAP-69 | 📝 planned (Phase 3) |
+| REQ-BW-07 | Wide channel (1.x) | Wide-mode floors calibrated vs a VHF/UHF mobile-fading model, explicit SNR reference BW | CAP-69 | 📝 planned (Phase 3) |
 
 ## Capabilities & end-to-end traceability (CAP-IDs)
 
@@ -231,6 +238,8 @@ the testmatrix quick tier at commit `76de87e`, dated 2026-06-29 (555/555 pass, 0
 
 | CAP-68 | Control-channel security (auth/encryption + key storage) | REQ-SEC-CTL-01, REQ-SEC-CTL-02, REQ-SEC-CTL-03, REQ-SEC-CTL-04, REQ-SEC-CTL-05 | Close the asymmetry where the RF link is secured but the transmitter-commanding control channel (TCP :9000 / WS :9001) is plaintext + unauthenticated. Sliced smallest-risk-first (backlog item 11): (1) shared owner-only `0600`/`0700` permission validate+enforce on every secret file, server + client (generalises `openpulse-cli`'s `validate_trust_store_permissions`); (2) Argon2id + AEAD file keystore under a master password; (3) `keyring`-backed OS secret store with file fallback; (4) rustls TLS-PSK transport, required on non-loopback bind, TX-keying fail-closed. Off by default; K4remote TLS-PSK is the reference. | **slices 1–2 shipped:** (1, REQ-SEC-CTL-05) `openpulse-config/src/secret_file.rs` owner-only validate/enforce wired into `load_identity_from` (daemon + CLI) + trust store; (2, REQ-SEC-CTL-04) crate `openpulse-keystore` `FileKeystore` — Argon2id + ChaCha20-Poly1305; (3, REQ-SEC-CTL-03) `SecretStore` + `KeychainStore` + `FileStore`; (4, REQ-SEC-CTL-01/02) `openpulse-linksec` Noise NNpsk0 core + `auth_required` gate + `[control_security]` config + `SyncNoise` (panel) / `AsyncNoise` (daemon, `tokio` feature, split halves) socket channels tested over real TCP — **pivoted from rustls-TLS-PSK to Noise/snow**. **Daemon + panel TCP both wired + tested** — daemon `ClientWriter`/`ClientReader` + `AsyncNoise` responder + fail-closed gate; panel `transport.rs` initiator handshake + resumable `take_frame` reader; PSK via `OPENPULSE_CONTROL_PSK`. WebSocket + keystore-backed PSK remaining | slice 1: `secret_file` unit tests + `load_identity_refuses_group_readable_key`; slice 2: keystore round-trip/wrong-master/tamper/owner-only; slice 3: `file_store_get_set_delete_round_trip`; slice 4: linksec core 5 + socket channels (sync 3, async 3) + daemon integration `control_auth.rs` (real client ↔ real server) + panel transport unit tests (resumable `take_frame`, oversized-reject, demux) | slices 1–4 pass: openpulse-config 15/15, openpulse-keystore 5/5, openpulse-linksec 8/8 (11/11 `tokio`), openpulse-daemon 44 lib + 2 auth + 13 control_port + openpulse-panel 8/8 green; clippy `-D warnings` (all feature states) + fmt clean | `docs/dev/design/control-channel-security.md`, K4remote (reference) | — |
 
+| CAP-69 | Wide-channel (VHF/UHF) 12.5/25 kHz support | REQ-BW-01, REQ-BW-02, REQ-BW-03, REQ-BW-04, REQ-BW-05, REQ-BW-06, REQ-BW-07 | Extend the modem beyond ~2.7 kHz HF SSB to 12.5/25 kHz VHF/UHF channels (release 1.x). Phased: (0) RF-architecture decision, (1) sample-rate generalization off the hard-coded 8 kHz, (2) wide OFDM/SC-FDMA modes + RX-IQ path + `hpx_wide12`/`hpx_wide25`, (3) VHF/UHF bandplan/regulatory + mobile-fading calibration. Much groundwork exists (rate-parameterized single-carrier plugins, 9600-baud modes, TX IQ seam, `hpx_narrowband_hd`); the deepest question is RF architecture. | _planned (1.x)_ — design in `docs/dev/design/wide-channel-extension.md` | _planned_ — 48/96 kHz engine loopback per mode family; mobile-fading calibration sweeps | — (not started) | `docs/dev/design/wide-channel-extension.md` | — |
+
 ## Supporting assets index
 
 ### Config examples (`docs/config/`)
@@ -273,6 +282,7 @@ the testmatrix quick tier at commit `76de87e`, dated 2026-06-29 (555/555 pass, 0
 - **REQ-OBS-01/02/03** — ✅ **covered** by CAP-67 (all 4 slices shipped 2026-07-05): persistent file logging, `events.ndjson` capture, startup `snapshot.json`, and the `openpulse audit-bundle` command. No longer a gap.
 - **REQ-SEC-CTL-03/04/05** — ✅ **covered** (CAP-68 slices 1–3, 2026-07-06): shared owner-only secret-file checks, the `openpulse-keystore` Argon2id/ChaCha20-Poly1305 master-password file keystore, and the OS keychain `SecretStore` backend (file fallback).
 - **REQ-SEC-CTL-01/02** (control-channel auth + encryption): CAP-68, **partial** (slice 4): the `openpulse-linksec` Noise NNpsk0 core, the non-loopback `auth_required` gate, `[control_security]` config, and the `SyncNoise`/`AsyncNoise` socket channels (tested over real TCP, incl. wrong-PSK-fails-closed) are shipped. ✅ **Daemon + panel TCP both wired + tested** (daemon fails closed on unauthenticated/wrong-PSK + refuses to start without a PSK; the panel does the initiator handshake with a resumable frame reader; plaintext loopback path unbroken). Enabled by `OPENPULSE_CONTROL_PSK` on both sides. Remaining follow-ups: WebSocket (still plaintext), keystore-backed PSK loading. (Scheme pivoted from rustls-TLS-PSK to Noise/snow.)
+- **REQ-BW-01..07** (wide-channel 12.5/25 kHz, VHF/UHF): CAP-69, **planned for release 1.x** (backlog item 12), design in `docs/dev/design/wide-channel-extension.md`. Not started; gated on the RF-architecture decision (REQ-BW-01). Out of scope for the current line.
 
 ### Capabilities lacking catalogued tests
 - **CAP-43** (Direct TCP Winlink CMS gateway): no test file in the TESTS inventory — only an inline `gateway_round_trip` unit test in `main.rs`, not catalogued.
