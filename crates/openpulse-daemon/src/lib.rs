@@ -324,6 +324,9 @@ pub struct ControlServerConfig {
     pub initial_qsy_enabled: bool,
     pub initial_bandplan_mode: String,
     pub initial_allow_tuner_on_high_swr: bool,
+    /// Control-channel PSK: `Some` requires each client to complete a Noise handshake
+    /// (REQ-SEC-CTL-01/02); `None` runs the plaintext path (loopback default).
+    pub control_psk: Option<[u8; openpulse_linksec::PSK_LEN]>,
 }
 
 /// Maximum number of messages kept in memory; oldest are evicted when full.
@@ -554,6 +557,7 @@ impl ControlServer {
         let tap_a = Arc::clone(&spectrum_tap);
         let sid_a = Arc::clone(&station_id);
         let store_a = Arc::clone(&message_store);
+        let control_psk = config.control_psk;
         tokio::spawn(async move {
             loop {
                 match listener.accept().await {
@@ -572,7 +576,7 @@ impl ControlServer {
                             message_store: Arc::clone(&store_a),
                         };
                         let rx = ev_tx_a.subscribe();
-                        tokio::spawn(handle_client(stream, rx, ctx));
+                        tokio::spawn(handle_client(stream, rx, ctx, control_psk));
                     }
                     Err(e) => tracing::warn!("control port accept error: {e}"),
                 }
@@ -597,13 +601,85 @@ impl ControlServer {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// Mode-aware control-connection writer: plaintext (loopback) or a PSK-authenticated Noise channel.
+enum ClientWriter {
+    Plain(tokio::net::tcp::OwnedWriteHalf),
+    Noise(openpulse_linksec::async_channel::NoiseWriteHalf<tokio::io::WriteHalf<TcpStream>>),
+}
+
+impl ClientWriter {
+    /// Write one JSON value as a protocol message (a `\n`-terminated line on the plaintext path;
+    /// a length-framed Noise message on the authenticated path).
+    async fn write_json<T: serde::Serialize>(&mut self, v: &T) -> Result<(), ()> {
+        let s = serde_json::to_string(v).map_err(|_| ())?;
+        match self {
+            ClientWriter::Plain(w) => {
+                let mut line = s;
+                line.push('\n');
+                w.write_all(line.as_bytes()).await.map_err(|_| ())
+            }
+            ClientWriter::Noise(w) => w.send(s.as_bytes()).await.map_err(|_| ()),
+        }
+    }
+
+    /// Write one raw binary frame (e.g. a spectrum frame).
+    async fn write_frame(&mut self, bytes: &[u8]) -> Result<(), ()> {
+        match self {
+            ClientWriter::Plain(w) => w.write_all(bytes).await.map_err(|_| ()),
+            ClientWriter::Noise(w) => w.send(bytes).await.map_err(|_| ()),
+        }
+    }
+}
+
+/// Mode-aware control-connection reader yielding one NDJSON command per message.
+enum ClientReader {
+    Plain(tokio::io::Lines<BufReader<tokio::net::tcp::OwnedReadHalf>>),
+    Noise(openpulse_linksec::async_channel::NoiseReadHalf<tokio::io::ReadHalf<TcpStream>>),
+}
+
+impl ClientReader {
+    /// Next command line: `Ok(Some(line))`, `Ok(None)` on clean close, `Err(())` on error.
+    async fn next_command(&mut self) -> Result<Option<String>, ()> {
+        match self {
+            ClientReader::Plain(l) => l.next_line().await.map_err(|_| ()),
+            ClientReader::Noise(r) => match r.recv().await {
+                Ok(bytes) => String::from_utf8(bytes).map(Some).map_err(|_| ()),
+                Err(_) => Ok(None),
+            },
+        }
+    }
+}
+
 async fn handle_client(
     stream: TcpStream,
     mut ev_rx: broadcast::Receiver<ControlEvent>,
     ctx: ClientCtx,
+    control_psk: Option<[u8; openpulse_linksec::PSK_LEN]>,
 ) {
-    let (read_half, mut write_half) = stream.into_split();
-    let mut lines = BufReader::new(read_half).lines();
+    // When a PSK is configured (non-loopback bind or require_auth), the client must complete the
+    // Noise handshake; a wrong/absent PSK drops the connection before any command is processed
+    // (fail closed, REQ-SEC-CTL-02). Otherwise the channel is plaintext (loopback default).
+    let (mut reader, mut write_half) = match control_psk {
+        Some(psk) => {
+            match openpulse_linksec::async_channel::AsyncNoise::responder(stream, &psk).await {
+                Ok(ch) => {
+                    let (w, r) = ch.into_split();
+                    (ClientReader::Noise(r), ClientWriter::Noise(w))
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "control client failed the PSK handshake; dropping (fail closed)");
+                    return;
+                }
+            }
+        }
+        None => {
+            let (read_half, write_half) = stream.into_split();
+            (
+                ClientReader::Plain(BufReader::new(read_half).lines()),
+                ClientWriter::Plain(write_half),
+            )
+        }
+    };
 
     let (spec_frame_tx, mut spec_frame_rx) = mpsc::channel::<Vec<u8>>(4);
     let mut spectrum_task: Option<tokio::task::JoinHandle<()>> = None;
@@ -611,17 +687,12 @@ async fn handle_client(
     loop {
         tokio::select! {
             Some(frame) = spec_frame_rx.recv() => {
-                if write_half.write_all(&frame).await.is_err() { break; }
+                if write_half.write_frame(&frame).await.is_err() { break; }
             }
             result = ev_rx.recv() => {
                 match result {
                     Ok(ev) => {
-                        let mut line = match serde_json::to_string(&ev) {
-                            Ok(s) => s,
-                            Err(_) => continue,
-                        };
-                        line.push('\n');
-                        if write_half.write_all(line.as_bytes()).await.is_err() { break; }
+                        if write_half.write_json(&ev).await.is_err() { break; }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!(lost = n, "TCP client event receiver lagged; events dropped");
@@ -630,7 +701,7 @@ async fn handle_client(
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
-            result = lines.next_line() => {
+            result = reader.next_command() => {
                 match result {
                     Ok(Some(line)) if !line.trim().is_empty() => {
                         let cmd: ControlCommand = match serde_json::from_str(line.trim()) {
@@ -667,7 +738,7 @@ async fn handle_client(
 // transport and returns no data. (Audited 2026-06-27: both transports are at parity.)
 async fn handle_command(
     cmd: ControlCommand,
-    write_half: &mut tokio::net::tcp::OwnedWriteHalf,
+    write_half: &mut ClientWriter,
     spec_frame_tx: &mpsc::Sender<Vec<u8>>,
     spectrum_task: &mut Option<tokio::task::JoinHandle<()>>,
     ctx: &ClientCtx,
@@ -847,13 +918,8 @@ async fn handle_command(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn send_json<T: serde::Serialize>(
-    writer: &mut tokio::net::tcp::OwnedWriteHalf,
-    value: &T,
-) -> Result<(), std::io::Error> {
-    let mut s = serde_json::to_string(value).unwrap_or_default();
-    s.push('\n');
-    writer.write_all(s.as_bytes()).await
+async fn send_json<T: serde::Serialize>(writer: &mut ClientWriter, value: &T) -> Result<(), ()> {
+    writer.write_json(value).await
 }
 
 /// Apply state-mutating commands and forward all commands to the caller.

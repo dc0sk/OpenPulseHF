@@ -22,6 +22,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   path is expanded. Off by default.
 
 ### Security
+- Daemon control-channel PSK authentication + encryption over TCP (REQ-SEC-CTL-01/02): the daemon's
+  TCP control server now performs a Noise responder handshake per connection when auth is required
+  (`[control_security] require_auth`, or any non-loopback bind), routing all commands/events/spectrum
+  frames through the encrypted channel; a wrong or absent handshake **drops the connection (fail
+  closed)**, and the daemon **refuses to start** if auth is required but no PSK is set. The 32-byte PSK
+  comes from `OPENPULSE_CONTROL_PSK` (64 hex). The default loopback path stays plaintext (unchanged).
+  Integration-tested against a real client. *Behavior change:* a non-loopback bind without a PSK now
+  fails to start instead of running plaintext. (Panel client, WebSocket, and keystore-backed PSK
+  loading follow.)
 - Control-channel Noise socket channels (REQ-SEC-CTL-01/02): `openpulse-linksec` gains
   `sync_channel::SyncNoise` (blocking, for the panel/CLI) and `async_channel::AsyncNoise` (tokio,
   `tokio` feature, with `into_split` for concurrent read/write, for the daemon) — a `u32`-length-framed

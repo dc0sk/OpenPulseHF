@@ -4928,6 +4928,7 @@ dependencies = [
  "openpulse-config",
  "openpulse-core",
  "openpulse-gpu",
+ "openpulse-linksec",
  "openpulse-modem",
  "openpulse-qsy",
  "openpulse-radio",

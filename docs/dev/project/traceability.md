@@ -9,6 +9,30 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-07 — feature: daemon control-channel Noise wiring + fail-closed gate (REQ-SEC-CTL-01/02, CAP-68 slice 4-daemon)
+
+- **Requirement/change:** enforce PSK auth + encryption on the daemon's **TCP** control channel, and
+  fail closed on a non-loopback bind. The security-critical server half of slice 4.
+- **Design decision:** mode-aware `ClientWriter`/`ClientReader` in `handle_client` — plaintext
+  (loopback default, unchanged) or an `AsyncNoise` responder (authenticated); a failed/absent handshake
+  drops the connection before any command runs. The gate is `openpulse_linksec::auth_required(bind,
+  require_auth)`; when auth is required but no PSK is provided the daemon **refuses to start**. PSK
+  currently from `OPENPULSE_CONTROL_PSK` (64 hex) — keystore-backed loading is the follow-up. `ws.rs`
+  is independent (it uses `dispatch_command`, not `handle_command`), so it was untouched — **WebSocket
+  stays plaintext for now** (distinct framing; TCP is the default/primary path).
+- **Implementation:** `lib.rs` `ClientWriter`/`ClientReader` + `handle_client` handshake/split + all
+  writes via `send_json`/`write_frame` + `ControlServerConfig.control_psk`; `server.rs` gate +
+  `load_control_psk`; `[control_security]` config comment.
+- **Tests:** `crates/openpulse-daemon/tests/control_auth.rs` — a **real `AsyncNoise` client ↔ real
+  `ControlServer`** over TCP: `noise_client_exchanges_encrypted_messages` (encrypted round-trip,
+  decrypt-command + encrypt-response) and `wrong_psk_client_is_dropped` (fail closed).
+- **Test results:** daemon **44 lib + 2 auth + 13 control_port + 5 spectrum** (+ others) all green — the
+  plaintext path is unbroken; clippy `-D warnings` + fmt clean.
+- **Behavior change (intended):** a non-loopback bind **without** a PSK now refuses to start (was:
+  silent plaintext) — the fail-closed guarantee of REQ-SEC-CTL-02.
+- **Remaining:** panel `transport.rs` (its non-blocking poll needs a resumable framed-Noise reader),
+  WebSocket, and keystore-backed PSK loading — the panel/GUI path can't be runtime-validated here.
+
 ## 2026-07-07 — feature: sync + async Noise socket channels (REQ-SEC-CTL-01/02, CAP-68 slice 4-transport)
 
 - **Requirement/change:** turn the byte-buffer Noise core into actual socket channels the daemon

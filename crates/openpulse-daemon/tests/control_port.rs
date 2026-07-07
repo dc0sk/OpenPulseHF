@@ -29,6 +29,7 @@ async fn spawn_server(engine: &ModemEngine) -> (SocketAddr, ControlServerHandle)
             initial_qsy_enabled: false,
             initial_bandplan_mode: "unrestricted".into(),
             initial_allow_tuner_on_high_swr: false,
+            control_psk: None,
         },
         Some(&mut addr),
     )
@@ -263,6 +264,7 @@ async fn set_tx_attenuation_updates_shared_state() {
             initial_qsy_enabled: false,
             initial_bandplan_mode: "unrestricted".into(),
             initial_allow_tuner_on_high_swr: false,
+            control_psk: None,
         },
         Some(&mut addr),
     )
@@ -312,6 +314,7 @@ async fn get_config_returns_config_data_and_ok() {
             initial_qsy_enabled: false,
             initial_bandplan_mode: "unrestricted".into(),
             initial_allow_tuner_on_high_swr: false,
+            control_psk: None,
         },
         Some(&mut addr),
     )
@@ -373,6 +376,7 @@ async fn set_config_updates_mode_and_attenuation_atomically() {
             initial_qsy_enabled: false,
             initial_bandplan_mode: "unrestricted".into(),
             initial_allow_tuner_on_high_swr: false,
+            control_psk: None,
         },
         Some(&mut addr),
     )

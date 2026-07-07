@@ -31,6 +31,7 @@ async fn spawn_server(engine: &ModemEngine) -> (SocketAddr, ControlServerHandle)
             initial_qsy_enabled: false,
             initial_bandplan_mode: "unrestricted".into(),
             initial_allow_tuner_on_high_swr: false,
+            control_psk: None,
         },
         Some(&mut addr),
     )

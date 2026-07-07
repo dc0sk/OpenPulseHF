@@ -897,8 +897,10 @@ archive_dir = "~/.local/share/openpulse/audit"
 
 [control_security]
 # Control-channel PSK auth + encryption (REQ-SEC-CTL-01/02). Auth is ALWAYS required when the
-# daemon binds to a non-loopback address; `require_auth` forces it on loopback too. The PSK is a
-# 32-byte secret stored in the keystore under `psk_key_id`.
+# daemon binds to a non-loopback address; `require_auth` forces it on loopback too. When auth is
+# required the daemon refuses to start without a PSK (fail closed). The 32-byte PSK is currently
+# supplied via the OPENPULSE_CONTROL_PSK env var (64 hex chars); keystore-backed loading under
+# `psk_key_id` is the follow-up.
 require_auth = false
 psk_key_id = "control-psk"
 

@@ -56,6 +56,7 @@ tracing.workspace = true
 openpulse-radio   = { workspace = true }
 openpulse-audio   = { workspace = true }
 openpulse-config  = { workspace = true }
+openpulse-linksec = { workspace = true, features = ["tokio"] }
 openpulse-channel = { workspace = true }
 rand             = { workspace = true }
 openpulse-qsy     = { workspace = true }
