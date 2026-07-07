@@ -65,6 +65,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   store now delegates to the shared helper.
 
 ### Fixed
+- SC-FDMA hard-demodulation QAM amplitude bias: the hard demod now divides equalized symbols by the
+  MMSE attenuation factor before demapping (mirroring the soft path), so 16/32/64QAM outer-ring hard
+  decisions are no longer pushed toward the origin near threshold. RX-only; PSK unaffected.
 - `cli_mode_advisor` integration test asserted stale speed-level expectations (12 dB → SL6,
   15 dB → SL7) that predated the FEC-protected `hpx_hf` upper-ladder recalibration; corrected to
   the current floors (12 → SL7/8PSK500, 14 → SL8/SCFDMA52-8PSK, 16 → SL9) and extended. The SL7

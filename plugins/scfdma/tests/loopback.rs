@@ -131,6 +131,24 @@ fn scfdma52_16qam_awgn_snr25db() {
 }
 
 #[test]
+fn scfdma52_16qam_hard_demod_no_amplitude_bias() {
+    // Hard-demod QAM is sensitive to the MMSE attenuation: without the `alpha_avg` correction
+    // (which the soft path applies and the hard path now mirrors) the outer 16QAM rings are pushed
+    // toward the origin and mis-decode near threshold. This decodes cleanly at a tighter SNR.
+    let plugin = ScFdmaPlugin::new();
+    let payload: Vec<u8> = (0u8..128).collect();
+    let samples = plugin.modulate(&payload, &cfg("SCFDMA52-16QAM")).unwrap();
+    for seed in [0x1111_2222_u64, 0x3333_4444, 0x5555_6666] {
+        let noisy = add_awgn(&samples, 20.0, seed);
+        let rx = plugin.demodulate(&noisy, &cfg("SCFDMA52-16QAM")).unwrap();
+        assert_eq!(
+            rx, payload,
+            "hard-demod SCFDMA52-16QAM should decode at 20 dB SNR (seed {seed:#x})"
+        );
+    }
+}
+
+#[test]
 fn scfdma52_64qam_awgn_snr30db() {
     let plugin = ScFdmaPlugin::new();
     let payload: Vec<u8> = (0u8..128).collect();
