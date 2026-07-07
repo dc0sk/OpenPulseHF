@@ -292,6 +292,28 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     .parse()
     .map_err(|e| format!("invalid daemon.websocket_bind_addr/websocket_port: {e}"))?;
 
+    // Control-channel auth (REQ-SEC-CTL-01/02): required on a non-loopback bind, or when configured.
+    // Fail closed — refuse to start if auth is required but no PSK is provided.
+    let require_auth = openpulse_linksec::auth_required(
+        &cfg.daemon.tcp_bind_addr,
+        cfg.control_security.require_auth,
+    );
+    let control_psk = match load_control_psk() {
+        Ok(psk) => psk,
+        Err(e) => return Err(e),
+    };
+    if require_auth && control_psk.is_none() {
+        return Err(format!(
+            "control channel requires authentication (bind {} / require_auth={}) but no PSK is set — \
+             set OPENPULSE_CONTROL_PSK to 64 hex chars (32 bytes)",
+            cfg.daemon.tcp_bind_addr, cfg.control_security.require_auth
+        ));
+    }
+    let control_psk = if require_auth { control_psk } else { None };
+    if control_psk.is_some() {
+        tracing::info!("control channel: PSK authentication + encryption enabled (Noise)");
+    }
+
     let mut handle = ControlServer::spawn(
         tcp_bind,
         &engine,
@@ -301,6 +323,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
             initial_qsy_enabled,
             initial_bandplan_mode,
             initial_allow_tuner_on_high_swr,
+            control_psk,
         },
         None,
     )
@@ -892,6 +915,30 @@ fn ota_send_with_ptt(
 /// `"cpal"` and `"default"` use [`CpalBackend`] when the `cpal` feature is compiled in.
 /// All other values (and `"cpal"`/`"default"` without the feature) fall back to
 /// [`LoopbackBackend`].  Production builds should be compiled with `--features cpal`.
+/// Load the control-channel PSK from `OPENPULSE_CONTROL_PSK` (64 hex chars = 32 bytes).
+///
+/// This is the initial, testable source; keystore-backed loading (`openpulse-keystore`) is the
+/// production follow-up. Returns `Ok(None)` when the variable is unset.
+fn load_control_psk() -> Result<Option<[u8; openpulse_linksec::PSK_LEN]>, String> {
+    let hex = match std::env::var("OPENPULSE_CONTROL_PSK") {
+        Ok(h) => h,
+        Err(_) => return Ok(None),
+    };
+    let hex = hex.trim();
+    if hex.len() != openpulse_linksec::PSK_LEN * 2 {
+        return Err(format!(
+            "OPENPULSE_CONTROL_PSK must be {} hex chars (32 bytes)",
+            openpulse_linksec::PSK_LEN * 2
+        ));
+    }
+    let mut out = [0u8; openpulse_linksec::PSK_LEN];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
+            .map_err(|_| "OPENPULSE_CONTROL_PSK is not valid hex".to_string())?;
+    }
+    Ok(Some(out))
+}
+
 pub fn build_audio_backend(backend: &str) -> Box<dyn AudioBackend> {
     #[cfg(feature = "cpal")]
     {
