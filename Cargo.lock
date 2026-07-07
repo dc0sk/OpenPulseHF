@@ -5135,6 +5135,7 @@ dependencies = [
  "ewebsock",
  "iced",
  "openpulse-daemon",
+ "openpulse-linksec",
  "openpulse-modem",
  "serde_json",
  "tracing",
