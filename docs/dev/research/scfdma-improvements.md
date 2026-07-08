@@ -108,7 +108,7 @@ path gained the `/alpha_avg` de-bias).
 | ~~P4~~ | ~~Fix the hard-demod MMSE amplitude bias + GPU-path divergence~~ | **Done** — CPU hard path in PR #679, GPU paths folded into the CE change | S | None | — |
 | **P5** | **Second-pass decision-directed CE** — re-spread sliced symbols as virtual pilots → 100% density for a 2nd CE/equalize pass | ~1–2 dB under frequency-selective fading; removes the CE-noise floor | M (L for full turbo-CE) | error propagation (gate on 1st-pass quality) | `IterativeDecoder` trait exists |
 | **P6** | **LDPC on the dense rungs (SL8–SL11)** — swap `SoftConcatenated` for `LdpcHighRate`/`Ldpc`, keep the interleaver | ~1–3 dB vs RS soft-concat at the same rate; lowers the ladder floors; exploits the max-log LLRs already emitted | M (calibration, not DSP) | Low–Med | `LdpcCodec` + engine plumbing exist |
-| **P7** | **Frequency-domain iterative block DFE (IBDFE)** after MMSE — cancel residual ISI at spectral notches over 1–2 iterations | 1–2 dB on frequency-selective (Watterson) channels for 16/64QAM | M/L | Med (convergence < ~10 dB) | ~100 lines; `dft`/`idft` plans in scope |
+| ~~P7~~ | ~~Frequency-domain iterative block DFE (IBDFE)~~ | **Built, measured, REJECTED.** Real on a static deterministic notch (+~1 dB), *nothing* on Watterson. See below | M/L | — | — |
 | **P8** | **TX windowing + CP tuning** — raised-cosine edge windowing (WOLA); optionally halve CP 32→16 samples | Windowing = adjacent-channel/regulatory hygiene; CP-16 = +5.9% throughput | S (S but wire-incompatible for CP) | Low (windowing); Med (CP) | — |
 
 **Deprioritized:** π/2-BPSK pilot shaping (value is PAPR of TDM pilots; PAPR work was dropped) and
@@ -152,6 +152,47 @@ TDM DMRS pilot symbols (the per-symbol comb tracks Doppler strictly better; not 
    cannot be recovered from them at all. Calibrating them — `estimate_decision_noise_var` already exists
    — is worth ~1 dB of HARQ combining gain on graded attempt sets.
 
+## Rejected — P7, frequency-domain IBDFE (2026-07-08)
+
+Implemented in full per the design in this doc's history: soft-feedback (Tüchler) IBDFE, two iterations,
+feedforward `C_k = Ĥ*/(σ² + v̄|Ĥ|²)`, feedback `B_k = C_kĤ_k − μ`, posterior soft symbols re-spread with the
+transmitter's DFT convention, flat-channel and `v̄ > 0.5` entry gates, and a strict no-harm acceptance gate
+on the measured decision residual. Iteration 0 collapses exactly to the existing MMSE path.
+
+**It works — the loop does what it says.** Per-symbol decision residual drops ~5× on the first accepted
+iteration; uncoded BER on a static two-ray channel roughly halves (SCFDMA52-16QAM, `x[n] + 0.9·x[n−4]`,
+16 dB: 0.027 → 0.019).
+
+**It does not pay.** Coded frame success, `SoftConcatenated`:
+
+| channel | rung | before | after |
+|---|---|---|---|
+| static `1 + 0.9·z⁻⁴`, 10 dB | SCFDMA52-16QAM | 0.42 | **0.62** |
+| static `1 + 0.9·z⁻⁴`, 12 dB | SCFDMA52-32QAM | 0.04 | **0.12** |
+| Watterson `good_f1`, 12 dB (100 frames) | SCFDMA52-16QAM | 0.77 | 0.78 |
+| Watterson `moderate_f1`, 12 dB (100 frames) | SCFDMA52-16QAM | 0.26 | 0.29 |
+| Watterson `moderate_f1`, 24 dB (100 frames) | SCFDMA52 | 0.79 | 0.78 |
+
+Every Watterson cell is inside Monte-Carlo noise (σ ≈ 0.05 at 100 frames). The gate fires on 26 % of
+symbols and accepts ~1.1 iterations on each of those, so it is running, not being skipped.
+
+**Why the MC bound didn't convert.** The 2.7–3.8 dB of MMSE→matched-filter-bound headroom is real, but it
+is a *SINR* bound on symbols the equalizer can still see. Watterson's frame failures are **deep-fade
+outages**, not SINR-limited symbols: no equalizer recovers a frame whose channel spent the burst in a null.
+The static two-ray channel — where the notch is deterministic and every frame sees it — is exactly the case
+where the bound converts, and there IBDFE delivers. HF does not look like that.
+
+**The trap, for anyone who tries again.** The refined pass has its own model variance
+`[σ²Σ|C|² + v̄Σ|B|² + Σ|C|²ε²]/μ²`. It is **wrong**, and wrong in the dangerous direction. It assumes `v̄` is
+the true posterior symbol variance and that the feedback error is independent of the noise; neither holds
+(`v̄` comes from max-log LLRs, which are optimistic, and `x̄` is built from the same noise realisation it is
+subtracted from). Using it made the refined LLRs **90× over-confident** at `|L| ≈ 12`
+(`plugins/scfdma/tests/llr_reliability.rs`), and confidently-wrong bits cost the soft Viterbi more than the
+cancellation gained it — coded frame success did not move *at all*. Scaling iteration 0's variance by the
+measured residual ratio `δ_i/δ_0` halves the over-confidence to 20× and still fails the gate. The only
+calibration-safe choice is to keep iteration 0's variance untouched: **claim the improvement in the symbol
+estimates, not in their confidence.** Every coded number above was taken that way.
+
 ## Do next (top 3)
 
 Order revised twice. The flat Watterson curve was **not** notch smearing (falsified: the selective-vs-flat
@@ -166,14 +207,23 @@ noise). It was **two sync bugs**:
   therefore gone — the causal EMA's lag was measured to cost *nothing* (disabling `smooth_ce` entirely
   left the flat-fade numbers bit-identical).
 
-1. **P7 — IBDFE** (M/L): unblocked by #8. Its domain is `moderate_f1` (SCFDMA52-16QAM still at 0.45) and
-   the 8–20 dB `good_f1` window, not `good_f1` at 32 dB (now 0.97).
-2. **P5 — second-pass decision-directed CE** (M): now that the LLRs are calibrated, its soft-symbol
-   feedback has a sound reliability estimate. Shares the machinery P7 needs.
-3. **P2 — CPE removal + non-causal CE smoothing** (S/M): demoted. Its motivating measurement was the sync
-   bug of PR #689; deleting `smooth_ce` entirely left the flat-fade numbers bit-identical. Re-measure
-   before building: what remains of the Doppler dependence is intra-symbol Doppler (ICI), which no
-   channel-estimate smoothing addresses.
+**Every equalizer-side item on this list is now spent.** What limits SC-FDMA on HF is not the equalizer:
+it is **deep-fade outage** over a frame. `moderate_f1` sits at 0.26–0.49 for SCFDMA52-16QAM and no
+per-frame receiver technique moves it, because the frames that fail spent the burst in a null. The
+remaining levers are all *diversity* levers, and they live above the plugin:
+
+1. **Memory-ARQ / HARQ soft combining across retransmissions.** Already shipped (`combine_llrs_map`,
+   PR #686) and already calibrated (#687, #690). Independent fade states are the only thing that recovers
+   an outage frame. Measure `receive_with_llr_combining` over `moderate_f1` retransmissions and, if it
+   pays, wire it into the ARQ path as the default for the dense rungs.
+2. **Ladder downshift**, which `hpx_hf` already does. The `moderate_f1` numbers are what the SNR-floor
+   fading margin exists to avoid.
+3. **P5 — second-pass decision-directed CE** (M): the one remaining plugin-side idea, and it shares P7's
+   feedback structure — so expect P7's result. Measure the *coded* frame success on Watterson before
+   building anything, and read the P7 write-up above first.
+
+**P2** stays demoted: its motivating measurement was the sync bug of PR #689, and deleting `smooth_ce`
+entirely left the flat-fade numbers bit-identical.
 
 **P7 (IBDFE) after those.** Its honest headroom, from a 20 000-draw Monte-Carlo of the MMSE-vs-matched-
 filter bound (`SINR_mmse = N/Σ(1/(1+γ_k)) − 1` vs `SINR_mfb = (1/N)Σγ_k`, two-ray d=4 over the 52 data

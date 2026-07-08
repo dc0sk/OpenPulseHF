@@ -9,6 +9,52 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-08 — research: P7 (frequency-domain IBDFE) built, measured, rejected
+
+- **Requirement/change:** research item P7, "frequency-domain iterative block DFE after MMSE — cancel
+  residual ISI at spectral notches. 1–2 dB on frequency-selective (Watterson) channels for 16/64QAM."
+  Unblocked by PR #690's LLR calibration, which its feedback-reliability estimate depends on.
+- **Implementation (built, then reverted):** soft-feedback (Tüchler) IBDFE in `plugins/scfdma/src/demodulate.rs`
+  — a shared `equalize_despread` seam for the hard, soft and both GPU paths; feedforward
+  `C_k = Ĥ*/(σ² + v̄|Ĥ|²)`, bias `μ = (1/N)ΣC_kĤ_k`, feedback `B_k = C_kĤ_k − μ`, `Z_k = C_kY_k − B_kX̄_k`;
+  posterior soft symbols `x̄_m, v_m` from `symbol_llrs` re-spread with the transmitter's DFT convention;
+  two iterations; flat-channel (`var(α)/ᾱ² < 0.01`) and `v̄ > 0.5` entry gates; strict no-harm acceptance on
+  the measured decision residual. Iteration 0 collapses exactly to the existing MMSE path.
+- **Test results — the loop works.** Per-symbol decision residual drops ~5× on the first accepted iteration;
+  uncoded BER on a static two-ray channel roughly halves (SCFDMA52-16QAM, `x[n] + 0.9·x[n−4]`, 16 dB:
+  0.027 → 0.019). Coded frame success (`SoftConcatenated`):
+
+  | channel | rung | before | after |
+  |---|---|---|---|
+  | static `1 + 0.9·z⁻⁴` @10 dB | SCFDMA52-16QAM | 0.42 | **0.62** |
+  | static `1 + 0.9·z⁻⁴` @12 dB | SCFDMA52-32QAM | 0.04 | **0.12** |
+  | Watterson `good_f1` @12 dB (100 frames) | SCFDMA52-16QAM | 0.77 | 0.78 |
+  | Watterson `moderate_f1` @12 dB (100 frames) | SCFDMA52-16QAM | 0.26 | 0.29 |
+  | Watterson `moderate_f1` @24 dB (100 frames) | SCFDMA52 | 0.79 | 0.78 |
+
+  Every Watterson cell is inside Monte-Carlo noise (σ ≈ 0.05 at 100 frames). The gate fires on 26 % of
+  symbols and accepts ~1.1 iterations on each, so it is running, not being skipped.
+- **Decision: rejected, code reverted.** The 2.7–3.8 dB MMSE→matched-filter-bound headroom is real but is a
+  *SINR* bound on symbols the equalizer can still see. Watterson's frame failures are **deep-fade outages**,
+  not SINR-limited symbols. The static two-ray channel — deterministic notch, every frame sees it — is
+  exactly where the bound converts, and there IBDFE delivers ~1 dB. HF does not look like that. Shipping it
+  would add 2× per-symbol CPU on a quarter of symbols for no measurable gain on the channels the ladder runs.
+- **The trap, recorded for any future attempt:** the refined pass's own model variance
+  `[σ²Σ|C|² + v̄Σ|B|² + Σ|C|²ε²]/μ²` is **wrong in the dangerous direction**. It assumes `v̄` is the true
+  posterior symbol variance and that the feedback error is independent of the noise; neither holds. Using it
+  made the refined LLRs **90× over-confident** (caught by `plugins/scfdma/tests/llr_reliability.rs`, added in
+  PR #690), and confidently-wrong bits cost the soft Viterbi more than the cancellation gained it — coded
+  frame success did not move at all. Scaling iteration 0's variance by `δ_i/δ_0` halves the over-confidence
+  to 20× and still fails the gate. The only calibration-safe choice: keep iteration 0's variance and claim
+  the improvement in the symbol *estimates*, not in their confidence. Every coded number above was taken
+  that way. Had `llr_reliability` not existed, this would have shipped as a 90×-miscalibrated equalizer with
+  a plausible uncoded-BER story.
+- **Roadmap consequence:** every equalizer-side item is now spent. What limits SC-FDMA on HF is deep-fade
+  outage over a frame, and the remaining levers are *diversity* levers above the plugin — Memory-ARQ / HARQ
+  soft combining across retransmissions (`combine_llrs_map`, already shipped and calibrated) and the ladder
+  downshift `hpx_hf` already performs. P5 (second-pass decision-directed CE) shares P7's feedback structure
+  and should be expected to share its result; measure coded frame success on Watterson before building it.
+
 ## 2026-07-08 — feat(profile): high-rate-LDPC top rungs SL16–SL19 (research item P6)
 
 - **Requirement/change:** research item P6, "LDPC on the dense rungs — swap `SoftConcatenated` for
