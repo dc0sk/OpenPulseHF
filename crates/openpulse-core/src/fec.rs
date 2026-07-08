@@ -481,11 +481,23 @@ impl Default for SoftCombiner {
 
 // ── Weighted LLR combiner ─────────────────────────────────────────────────────
 
-/// Combine multiple soft-demodulated LLR vectors using inverse-noise-variance weighting.
+/// Combine soft-demodulated LLR vectors that are **not** already scaled by their noise variance.
 ///
-/// Each attempt is a pair of `(llrs, noise_var)` where `noise_var` is the estimated
-/// per-frame noise variance.  Frames with lower noise (higher confidence) receive
-/// proportionally higher weight.
+/// Each attempt is a pair of `(llrs, noise_var)` and gets weight `1/noise_var`.
+///
+/// # When this is the wrong function
+///
+/// A true log-likelihood ratio `log P(b=0|y) / P(b=1|y)` already carries `1/σ²` — see
+/// `openpulse_dsp::constellation::symbol_llrs`, which divides every distance by `noise_var`. For
+/// independent observations of the same bit, the MAP combine of true LLRs is their plain **sum**:
+/// use [`combine_llrs_map`]. Passing `noise_var = σ²` here on top of already-calibrated LLRs applies
+/// `σ⁻²` twice, over-weighting the best attempt and discarding information from the others.
+///
+/// The general weight is the *calibration correction* `σ̂²_used_inside_the_LLR / σ²_true`, which is
+/// `1` for a calibrated demodulator. This function exists for the demodulators whose LLRs carry an
+/// arbitrary, noise-blind scale — the ±1.0 hard-decision fallback, and the plugins that pass
+/// `noise_var = 1.0` to `symbol_llrs` (see the `ModulationPlugin::demodulate_soft` LLR-scale
+/// contract, which does not normalise across plugins).
 ///
 /// If `noise_var` is zero or negative it is clamped to `f32::MIN_POSITIVE` so the
 /// call never panics.  If `attempts` is empty an empty vector is returned.
@@ -514,6 +526,65 @@ pub fn combine_llrs_weighted(attempts: &[(&[f32], f32)]) -> Vec<f32> {
     if weight_sum > 0.0 {
         for o in &mut out {
             *o /= weight_sum;
+        }
+    }
+    out
+}
+
+/// Combine calibrated LLR vectors from repeated observations of the same bits: their plain **sum**.
+///
+/// For independent observations, log-likelihood ratios add. The sum is therefore the exact MAP
+/// combine — and, because each LLR already carries `1/σ²`, it *is* inverse-noise weighting. No
+/// per-attempt weight is needed or wanted; see [`combine_llrs_weighted`] for the uncalibrated case.
+///
+/// The magnitude grows with the attempt count (K-fold confidence), which is the correct posterior.
+/// Consumers that only take the sign are unaffected.
+///
+/// **Length mismatch**: the output is truncated to the shortest input, as in [`combine_llrs_weighted`].
+pub fn combine_llrs_map(attempts: &[&[f32]]) -> Vec<f32> {
+    let len = attempts.iter().map(|l| l.len()).min().unwrap_or(0);
+    if len == 0 {
+        return Vec::new();
+    }
+    let mut out = vec![0.0f32; len];
+    for llrs in attempts {
+        for (o, &l) in out.iter_mut().zip(llrs.iter()) {
+            *o += l;
+        }
+    }
+    out
+}
+
+/// [`combine_llrs_map`] applied only inside `feedback.ranges`; the first attempt is preserved elsewhere.
+///
+/// The combined ranges are divided by the attempt count so the whole vector stays on the
+/// single-attempt LLR scale that the preserved region uses.
+///
+/// Assumes an LLR layout of exactly 8 bit-LLRs per protected byte (LSB-first),
+/// i.e. byte offsets are converted to LLR offsets by multiplying by 8.
+pub fn combine_llrs_map_in_ranges(attempts: &[&[f32]], feedback: &WindowArqFeedback) -> Vec<f32> {
+    if attempts.is_empty() {
+        return Vec::new();
+    }
+    let len = attempts.iter().map(|l| l.len()).min().unwrap_or(0);
+    if len == 0 {
+        return Vec::new();
+    }
+    let mut out = attempts[0][..len].to_vec();
+    let inv_n = 1.0 / attempts.len() as f32;
+
+    for range in &feedback.ranges {
+        let start = (range.start as usize).saturating_mul(8).min(len);
+        let end = start
+            .saturating_add((range.len as usize).saturating_mul(8))
+            .min(len);
+        if start >= end {
+            continue;
+        }
+        let slices: Vec<&[f32]> = attempts.iter().map(|l| &l[start..end]).collect();
+        let combined = combine_llrs_map(&slices);
+        for (o, c) in out[start..end].iter_mut().zip(combined.iter()) {
+            *o = c * inv_n;
         }
     }
     out
@@ -774,6 +845,130 @@ pub fn combine_llrs_weighted_in_ranges(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Calibrated LLRs already carry `1/σ²`, so summing them IS inverse-noise weighting. Weighting
+    /// the sum again by `1/σ²` (the shape `1 / mean(|LLR|)` produces) applies σ⁻² twice and recovers
+    /// fewer bits from a graded-SNR attempt set. This pins the bug the engine used to ship.
+    #[test]
+    fn map_combine_beats_double_inverse_noise_weighting_on_calibrated_llrs() {
+        // Three observations of the same 256 bits at σ² = 1, 4, 16 (i.e. 0, −6, −12 dB).
+        // A calibrated LLR is (2/σ²)·y for a ±1 BPSK symbol y = x + n.
+        let sigmas2 = [1.0f32, 4.0, 16.0];
+        let mut state = 0x5EEDu64;
+        let mut next_gauss = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let u1 = (((state >> 11) as f64) / ((1u64 << 53) as f64)).clamp(1e-12, 1.0);
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let u2 = ((state >> 11) as f64) / ((1u64 << 53) as f64);
+            ((-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()) as f32
+        };
+
+        let n = 4096;
+        let truth: Vec<bool> = (0..n).map(|i| i % 3 == 0).collect();
+        let llrs: Vec<Vec<f32>> = sigmas2
+            .iter()
+            .map(|s2| {
+                truth
+                    .iter()
+                    .map(|&b| {
+                        let x = if b { -1.0 } else { 1.0 };
+                        let y = x + s2.sqrt() * next_gauss();
+                        2.0 * y / s2 // the true LLR: positive => bit 0
+                    })
+                    .collect()
+            })
+            .collect();
+
+        let refs: Vec<&[f32]> = llrs.iter().map(|l| l.as_slice()).collect();
+        let map = combine_llrs_map(&refs);
+
+        // The old engine weight: 1 / mean(|LLR|), which for calibrated LLRs is ∝ σ².
+        let weighted_refs: Vec<(&[f32], f32)> = llrs
+            .iter()
+            .map(|l| {
+                let mean_abs = l.iter().map(|v| v.abs()).sum::<f32>() / l.len() as f32;
+                (l.as_slice(), 1.0 / mean_abs)
+            })
+            .collect();
+        let double = combine_llrs_weighted(&weighted_refs);
+
+        let correct = |v: &[f32]| {
+            v.iter()
+                .zip(truth.iter())
+                .filter(|(l, &b)| (**l < 0.0) == b)
+                .count()
+        };
+        let (map_ok, double_ok) = (correct(&map), correct(&double));
+        assert!(
+            map_ok > double_ok,
+            "MAP sum of calibrated LLRs must beat double inverse-noise weighting: \
+             map={map_ok} double_weighted={double_ok} of {n}"
+        );
+    }
+
+    /// `combine_llrs_weighted` is still the right tool for LLRs that carry no noise scaling —
+    /// there, the weight is the only place reliability can enter.
+    #[test]
+    fn weighted_combine_beats_map_sum_on_uncalibrated_llrs() {
+        // Same observations, but the demodulator forgot to divide by σ² (emits 2·y).
+        let sigmas2 = [1.0f32, 16.0];
+        let n = 4096;
+        let truth: Vec<bool> = (0..n).map(|i| i % 3 == 0).collect();
+        let mut state = 0x5EEDu64;
+        let mut next_gauss = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let u1 = (((state >> 11) as f64) / ((1u64 << 53) as f64)).clamp(1e-12, 1.0);
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let u2 = ((state >> 11) as f64) / ((1u64 << 53) as f64);
+            ((-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()) as f32
+        };
+        let llrs: Vec<Vec<f32>> = sigmas2
+            .iter()
+            .map(|s2| {
+                truth
+                    .iter()
+                    .map(|&b| {
+                        let x = if b { -1.0 } else { 1.0 };
+                        2.0 * (x + s2.sqrt() * next_gauss())
+                    })
+                    .collect()
+            })
+            .collect();
+
+        let refs: Vec<&[f32]> = llrs.iter().map(|l| l.as_slice()).collect();
+        let map = combine_llrs_map(&refs);
+        let weighted: Vec<(&[f32], f32)> = llrs
+            .iter()
+            .zip(sigmas2.iter())
+            .map(|(l, &s2)| (l.as_slice(), s2))
+            .collect();
+        let wt = combine_llrs_weighted(&weighted);
+
+        let correct = |v: &[f32]| {
+            v.iter()
+                .zip(truth.iter())
+                .filter(|(l, &b)| (**l < 0.0) == b)
+                .count()
+        };
+        assert!(
+            correct(&wt) > correct(&map),
+            "with uncalibrated LLRs the σ²-weighted combine must beat the plain sum: \
+             weighted={} map={} of {n}",
+            correct(&wt),
+            correct(&map)
+        );
+    }
+
+    #[test]
+    fn map_combine_is_the_llr_sum() {
+        let a = [1.0f32, -2.0, 3.0];
+        let b = [0.5f32, -0.5, -4.0];
+        assert_eq!(combine_llrs_map(&[&a, &b]), vec![1.5, -2.5, -1.0]);
+        assert!(combine_llrs_map(&[]).is_empty());
+        // Truncates to the shortest input.
+        let c = [1.0f32];
+        assert_eq!(combine_llrs_map(&[&a, &c]).len(), 1);
+    }
 
     #[test]
     fn fec_mode_strength_ordering() {

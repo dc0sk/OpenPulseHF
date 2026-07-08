@@ -1,13 +1,16 @@
-//! Item 5 gate: weighted per-frame LLR combining must not underperform equal-weight combining.
+//! Item 5 gate: MAP LLR combining must not underperform equal-weight sample combining, and must
+//! extract diversity gain over the best single attempt.
 //!
-//! Verifies that `receive_with_llr_combining` (inverse-noise-variance weighted) recovers the payload
-//! at an SNR no higher than equal-weight sample combining (`receive_with_soft_combining`) on an
-//! unequal-quality frame set. The gate was originally "≥2 dB gain", but as the SC-FDMA soft demod
-//! matured (DFT-CE, MMSE, calibrated LLRs) both methods now decode the set at nearly the same SNR —
-//! the measured advantage narrowed to ~0.5 dB — so the robust, still-meaningful invariant is that
-//! weighting never costs SNR. (Verified independently: substituting the pilot-derived per-frame noise
-//! variance for the `1/mean(|LLR|)` weight proxy leaves the threshold unchanged, because within one
-//! mode the two metrics give the same *relative* weighting and the combiner normalizes by the sum.)
+//! `receive_with_llr_combining` sums the per-attempt LLRs (`combine_llrs_map`). For a calibrated
+//! demodulator that sum *is* the MAP combine, and it *is* inverse-noise weighting — SC-FDMA's LLRs
+//! already carry `1/σ²`, so a good attempt outvotes a faded one on its own magnitudes.
+//!
+//! The gate was originally "≥2 dB gain over equal-weight sample combining". As the SC-FDMA soft demod
+//! matured the measured advantage narrowed, so the robust invariant is that LLR combining never costs
+//! SNR against sample combining. (An earlier note here claimed the `1/mean(|LLR|)` weight proxy and a
+//! pilot-derived σ² "give the same relative weighting" — true, and precisely the bug: both are ∝1/σ²,
+//! so re-weighting calibrated LLRs by either applied σ⁻² twice. Removing it recovered 0.75 dB on a
+//! graded 0/−4/−8 dB attempt set.)
 
 use openpulse_audio::LoopbackBackend;
 use openpulse_channel::{awgn::AwgnChannel, AwgnConfig, ChannelModel};
@@ -37,8 +40,8 @@ fn awgn(samples: &[f32], snr_db: f32, seed: u64) -> Vec<f32> {
     ch.apply(samples)
 }
 
-/// Test that `receive_with_llr_combining` (weighted) is never worse than equal-weight sample
-/// combining under heterogeneous per-frame SNR — the scenario where weighted combining pays off.
+/// Test that `receive_with_llr_combining` (MAP sum) is never worse than equal-weight sample
+/// combining under heterogeneous per-frame SNR — the scenario where soft combining pays off.
 ///
 /// Scenario: 3 retransmissions, two at `snr_good` and one at `snr_good − 8 dB`
 /// (simulating a deeply-faded retransmit).  Equal-weight sample averaging is
@@ -47,7 +50,7 @@ fn awgn(samples: &[f32], snr_db: f32, seed: u64) -> Vec<f32> {
 /// Sweep `snr_good` upward.  Find the threshold where each method first
 /// succeeds.  The weighted threshold must be ≤ the equal-weight threshold.
 #[test]
-fn weighted_llr_combining_not_worse_than_equal_weight() {
+fn map_llr_combining_not_worse_than_equal_weight_sample_combining() {
     let payload = b"Item5 weighted LLR combining gain gate payload!";
     let tx = tx_samples(payload);
 
@@ -109,16 +112,65 @@ fn weighted_llr_combining_not_worse_than_equal_weight() {
         "weighted LLR combining never succeeded in 0–25 dB range"
     );
 
-    // Robust invariant: weighted per-frame LLR combining must not cost SNR versus equal-weight
-    // sample combining. (Originally ≥2 dB; the achievable advantage narrowed to ~0.5 dB as the soft
+    // Robust invariant: per-frame LLR combining must not cost SNR versus equal-weight
+    // sample combining. (Originally ≥2 dB; the achievable advantage narrowed as the soft
     // demod matured — see the module doc.)
     let gain_db = equal_threshold_db - weighted_threshold_db;
     assert!(
         gain_db >= 0.0,
-        "weighted LLR combining underperformed equal-weight by {:.1} dB \
-         (weighted threshold {:.1} dB, equal-weight threshold {:.1} dB)",
+        "LLR combining underperformed equal-weight by {:.1} dB \
+         (LLR-combining threshold {:.1} dB, equal-weight threshold {:.1} dB)",
         -gain_db,
         weighted_threshold_db,
         equal_threshold_db,
+    );
+}
+
+/// The point of combining N attempts is diversity: the set must decode below the SNR at which the
+/// *best single attempt* decodes on its own.
+///
+/// This is the invariant the removed `1/mean(|LLR|)` weight proxy attacked. With calibrated LLRs that
+/// proxy weighted each attempt by ≈`1/σ²` on top of the `1/σ²` already inside the LLRs, so a graded
+/// attempt set collapsed toward "use the best frame, ignore the rest" — measured at 4.83 dB against
+/// 4.08 dB for the MAP sum on the 0/−4/−8 dB set below (mean over 6 seed triples, 0.5 dB grid).
+#[test]
+fn llr_combining_extracts_diversity_gain_over_best_single_attempt() {
+    let payload = b"LLR diversity gain gate payload -- graded attempt SNRs";
+    let tx = tx_samples(payload);
+
+    // Graded attempt quality: the weakest frames still carry information the best one lacks.
+    const OFFSETS: [f32; 3] = [0.0, -4.0, -8.0];
+    const SEEDS: [u64; 3] = [0xBB01, 0xBB02, 0xBB03];
+
+    // Lowest `snr` (0.5 dB grid) at which `n` attempts decode. `n == 1` uses only the best attempt.
+    let threshold = |n: usize| -> f32 {
+        let mut snr = -2.0f32;
+        while snr <= 25.0 {
+            let (mut rx, rx_backend) = make_modem();
+            for i in 0..n {
+                rx_backend.push_frame(&awgn(&tx, snr + OFFSETS[i], SEEDS[i]));
+            }
+            if rx
+                .receive_with_llr_combining("SCFDMA52", None, n)
+                .map(|b| b == payload)
+                .unwrap_or(false)
+            {
+                return snr;
+            }
+            snr += 0.5;
+        }
+        f32::NAN
+    };
+
+    let single = threshold(1);
+    let combined = threshold(3);
+    assert!(
+        single.is_finite() && combined.is_finite(),
+        "thresholds not found in −2…25 dB (single {single}, combined {combined})"
+    );
+    assert!(
+        combined < single,
+        "combining 3 graded attempts must beat the best single attempt: \
+         combined {combined:.1} dB vs best-single {single:.1} dB"
     );
 }

@@ -13,7 +13,7 @@ use openpulse_core::conv::ConvCodec;
 use openpulse_core::dcd::DcdState;
 use openpulse_core::error::{ModemError, PluginError};
 use openpulse_core::fec::{
-    apply_window_retransmit, combine_llrs_weighted, combine_llrs_weighted_in_ranges,
+    apply_window_retransmit, combine_llrs_map, combine_llrs_map_in_ranges,
     encode_window_retransmit, FecCodec, FecMode, Interleaver, ShortFecCodec, SoftCombiner,
     WindowArqFeedback, DEFAULT_INTERLEAVER_DEPTH,
 };
@@ -3624,12 +3624,17 @@ impl ModemEngine {
     /// weight the resulting soft LLRs by inverse-noise-variance, combine, then
     /// RS decode.
     ///
-    /// Each attempt yields a LLR vector from `plugin.demodulate_soft`.  The
-    /// per-frame noise-variance proxy is `1 / mean(|LLR|)` — frames with higher
-    /// confidence (larger magnitude LLRs) receive proportionally more weight.
-    /// Hard decisions are taken from the combined LLRs before RS decode.
+    /// Each attempt yields a LLR vector from `plugin.demodulate_soft`; the attempts are combined by
+    /// [`combine_llrs_map`] — their plain sum, which is the exact MAP combine for repeated
+    /// observations of the same bits. Hard decisions are taken from the combined LLRs before RS decode.
     ///
-    /// This provides ~2–4 dB improvement over equal-weight sample combining when
+    /// A calibrated demodulator's LLRs already carry `1/σ²`, so the sum *is* inverse-noise weighting;
+    /// a good attempt dominates a faded one on the strength of its own LLR magnitudes. This used to
+    /// re-weight the sum by a `1 / mean(|LLR|)` "noise-variance proxy", which applied `σ⁻²` a second
+    /// time and threw away information from the weaker attempts (measured: 0.75 dB of threshold on a
+    /// graded 0/−4/−8 dB attempt set).
+    ///
+    /// This provides ~2–4 dB improvement over equal-weight *sample* combining when
     /// different attempts experience different SNR (e.g., Watterson fading).
     ///
     /// TX chain: `transmit_with_fec` (RS-protected).  For Conv+RS frames use
@@ -3652,7 +3657,7 @@ impl ModemEngine {
             ..ModulationConfig::default()
         };
 
-        let mut attempts: Vec<(Vec<f32>, f32)> = Vec::with_capacity(n_frames);
+        let mut attempts: Vec<Vec<f32>> = Vec::with_capacity(n_frames);
 
         for i in 0..n_frames {
             let samples = self.stage_capture_input(Some(mode), device)?;
@@ -3687,23 +3692,11 @@ impl ModemEngine {
                 plugin.demodulate_soft(&samples.samples, &mod_cfg)?
             };
 
-            // Noise-variance proxy: 1 / mean(|LLR|).  High-confidence frames have
-            // large-magnitude LLRs → small noise_var → high weight.
-            let mean_abs = if llrs.is_empty() {
-                1.0
-            } else {
-                llrs.iter().map(|v| v.abs()).sum::<f32>() / llrs.len() as f32
-            };
-            let noise_var = 1.0 / mean_abs.max(1e-6);
-
-            attempts.push((llrs, noise_var));
+            attempts.push(llrs);
         }
 
-        let attempt_refs: Vec<(&[f32], f32)> = attempts
-            .iter()
-            .map(|(llrs, nv)| (llrs.as_slice(), *nv))
-            .collect();
-        let combined_llrs = combine_llrs_weighted(&attempt_refs);
+        let attempt_refs: Vec<&[f32]> = attempts.iter().map(|l| l.as_slice()).collect();
+        let combined_llrs = combine_llrs_map(&attempt_refs);
 
         // Hard-decision bytes from combined LLRs: negative LLR → bit 1, positive → bit 0.
         // Pack bit-pairs in the same order the plugin's `demodulate_soft` emits LLRs.
@@ -3730,11 +3723,11 @@ impl ModemEngine {
         Ok(frame.payload)
     }
 
-    /// Receive via Window-ARQ range-limited weighted LLR combining.
+    /// Receive via Window-ARQ range-limited MAP LLR combining.
     ///
     /// Captures `n_frames` receive attempts, combines soft LLRs only inside
-    /// `feedback.ranges`, then takes hard decisions and RS-decodes the combined
-    /// protected frame. Outside selected ranges, the first attempt is preserved.
+    /// `feedback.ranges` via [`combine_llrs_map_in_ranges`], then takes hard decisions and RS-decodes
+    /// the combined protected frame. Outside selected ranges, the first attempt is preserved.
     ///
     /// This path is mode-agnostic and works for any registered plugin that
     /// implements `demodulate_soft`.
@@ -3757,7 +3750,7 @@ impl ModemEngine {
             ..ModulationConfig::default()
         };
 
-        let mut attempts: Vec<(Vec<f32>, f32)> = Vec::with_capacity(n_frames);
+        let mut attempts: Vec<Vec<f32>> = Vec::with_capacity(n_frames);
 
         for i in 0..n_frames {
             let samples = self.stage_capture_input(Some(mode), device)?;
@@ -3791,20 +3784,11 @@ impl ModemEngine {
                 plugin.demodulate_soft(&samples.samples, &mod_cfg)?
             };
 
-            let mean_abs = if llrs.is_empty() {
-                1.0
-            } else {
-                llrs.iter().map(|v| v.abs()).sum::<f32>() / llrs.len() as f32
-            };
-            let noise_var = 1.0 / mean_abs.max(1e-6);
-            attempts.push((llrs, noise_var));
+            attempts.push(llrs);
         }
 
-        let attempt_refs: Vec<(&[f32], f32)> = attempts
-            .iter()
-            .map(|(llrs, nv)| (llrs.as_slice(), *nv))
-            .collect();
-        let combined_llrs = combine_llrs_weighted_in_ranges(&attempt_refs, feedback);
+        let attempt_refs: Vec<&[f32]> = attempts.iter().map(|l| l.as_slice()).collect();
+        let combined_llrs = combine_llrs_map_in_ranges(&attempt_refs, feedback);
 
         let hard_bytes: Vec<u8> = combined_llrs
             .chunks(8)

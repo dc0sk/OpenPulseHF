@@ -144,6 +144,13 @@ pub trait ModulationPlugin: Send + Sync {
     ///   retransmission in a different mode) must therefore weight per frame
     ///   — `combine_llrs_weighted` with per-frame noise metrics — rather than
     ///   adding raw LLRs from different plugins.
+    /// - **Calibration**: a plugin whose LLRs are *true* log-likelihood ratios divides every distance
+    ///   by its estimated σ² (SC-FDMA and OFDM do; `symbol_llrs`' `noise_var` argument).  Repeated
+    ///   observations of the same bits in the same mode are then combined by summing —
+    ///   `combine_llrs_map` — never by weighting again with `1/σ²`, which would apply σ⁻² twice.
+    ///   Plugins that pass `noise_var = 1.0` (64QAM), emit raw correlations (BPSK/QPSK), or fall back
+    ///   to ±1.0 carry no noise information at all: their `mean(|LLR|)` is flat in SNR, so a weight
+    ///   derived from it conveys nothing.  Calibrating them is worth ~1 dB of HARQ combining gain.
     ///
     /// Plugins that know their internal soft values (BPSK I-channel
     /// correlation, QPSK I/Q projections) should override this for maximum

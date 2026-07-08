@@ -131,10 +131,14 @@ TDM DMRS pilot symbols (the per-symbol comb tracks Doppler strictly better; not 
    additive noise, while CE error adds 37–48 % to the true post-despread error variance. The LLRs are
    therefore ~1.5 dB over-confident, by a slightly SNR-dependent amount. Fixable from the solver:
    add `trace(R Rᴴ)·σ²_h / total_sc`.
-9. **`combine_llrs_weighted` double-counts** (`openpulse-core/src/fec.rs`, and the `1.0/mean_abs` proxy
-   at `openpulse-modem/src/engine.rs`): `symbol_llrs` already divides by σ̂², so weighting the sum again
-   by `1/σ̂²` applies σ⁻⁴. Pre-existing, ships, and costs diversity gain when HARQ attempts differ in
-   SNR. Not an SC-FDMA bug — fix in the engine.
+9. ~~`combine_llrs_weighted` double-counts~~ — **fixed** (`combine_llrs_map`, PR #686). The engine's
+   `1.0/mean_abs` weight proxy applied σ⁻² on top of the σ⁻² already inside a calibrated LLR. Worth
+   0.75 dB of threshold on a graded 0/−4/−8 dB HARQ attempt set.
+10. **Most plugins emit uncalibrated LLRs.** SC-FDMA and OFDM divide by their estimated σ²; 64QAM passes
+   `noise_var = 1.0`, BPSK/QPSK emit raw correlations, and the trait default emits ±1.0. Their
+   `mean(|LLR|)` is flat in SNR (measured: 1.00× across 8→24 dB), so a per-attempt reliability weight
+   cannot be recovered from them at all. Calibrating them — `estimate_decision_noise_var` already exists
+   — is worth ~1 dB of HARQ combining gain on graded attempt sets.
 
 ## Do next (top 3)
 
