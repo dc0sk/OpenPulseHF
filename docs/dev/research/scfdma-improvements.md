@@ -120,9 +120,13 @@ TDM DMRS pilot symbols (the per-symbol comb tracks Doppler strictly better; not 
 2. ~~GPU paths skip `deramp_timing` + CE smoothing~~ — fixed; both enter `FrameFront::from_spectra`.
 3. **Causal EMA CE lags phase under residual CFO/Doppler** — a ~1 Hz residual never trips the jump-reset
    yet steadily rotates the estimate; **no intra-frame CFO/CPE tracking at all** (P2, still open).
-4. **Watterson fading remains a weak regime** — the dense rungs now decode 27–32 % of good_f1 frames
-   under soft FEC (was ~3 %) but still miss the 90 % HF gate. What is left really *is* SC-FDE
-   notch-smearing plus deep-fade outage (P7 / Memory-ARQ), not a CE defect.
+4. ~~Watterson fading remains a weak regime~~ — **mostly a sync bug** (PR #688). `find_sync_offset` took
+   the matched-filter *argmax*, which on a two-ray channel sits on the delayed ray about half the time;
+   a late FFT window start pulls the next symbol in, and the cyclic prefix only protects an **early**
+   start. Backing the offset off 8 samples took `good_f1` frame success from 9.19 to 29.57 (of 42) with
+   the AWGN sweep bit-for-bit unchanged. What is left is the exact-null case (equal-power rays erase a
+   subcarrier outright, and the DFT de-spread smears the erasure over every symbol) plus deep-fade
+   outage — *that* is P7 / Memory-ARQ territory.
 5. **Sync fragility** — ±4 Hz own tolerance; `estimate_cfo_hz` aliases beyond ±13.9 Hz; the `rho=0.15`
    detection floor is untested against fading/impulse noise.
 6. **Adaptive pilot density can't deploy** (no negotiation) — wire it or delete it (footgun).
@@ -142,15 +146,29 @@ TDM DMRS pilot symbols (the per-symbol comb tracks Doppler strictly better; not 
 
 ## Do next (top 3)
 
-1. **P7 — frequency-domain IBDFE** (M/L): with the CE fixed, the *remaining* Watterson gap really is
-   notch-smearing. This is now the top lever for the dense rungs on fading paths.
-2. **P1 — wire in `freq_acquire`** (M): a finished, tested module sits unused while the waveform lives
-   with ±4 Hz sync tolerance and an iterative AFC crutch; largest robustness win per new line.
-3. **P6 — LDPC on the dense rungs** (M): no new DSP — the codec + engine plumbing exist; 1–3 dB of
-   ladder-floor improvement for calibration effort, and it makes the eventual P5 turbo-CE loop matter.
+Order revised after the PR-#688 diagnosis. The flat Watterson curve was **not** notch smearing; a
+factorial experiment (selective/flat × 32 dB/60 dB) showed the selective-vs-flat gap was 0.50 at 32 dB
+and **0.51 at 60 dB** — a noise-enhancement mechanism cannot survive the removal of noise. It was late
+sync (fixed) plus fade *dynamics* (P2, still open: flat-fade success at 60 dB is 1.00 at 0.01 Hz Doppler
+and 0.78 at 0.1 Hz).
 
-Also cheap and now well-motivated: **#8** (LLRs are ~1.5 dB over-confident because `llr_noise_var` omits
-CE error) and **P2's CPE half** (the two-pass front end it needed now exists).
+1. **P2 — CPE removal + non-causal CE smoothing** (S/M): owns the Doppler-scaling loss the sync fix does
+   not touch. The two-pass front end (`FrameFront`) it needed now exists.
+2. **#8 — LLR calibration** (S): `mmse_llr_noise_var` models only the additive noise. It is missing the
+   channel-estimate error (`ε²_k = σ²_h · Σ_j |recon[k·P+j]|²`, read straight off `CeSolver::recon`) and
+   the residual-ISI term `var(α)` — on a selective channel at high SNR the LLRs are over-confident by up
+   to ~20 dB, which is what lets a few smeared symbols poison the soft Viterbi. Also a prerequisite for
+   P7's feedback-reliability estimate.
+3. **P6 — LDPC on the dense rungs** (M): no new DSP — the codec + engine plumbing exist; 1–3 dB of
+   ladder-floor improvement, on *every* channel including AWGN.
+
+**P7 (IBDFE) after those.** Its honest headroom, from a 20 000-draw Monte-Carlo of the MMSE-vs-matched-
+filter bound (`SINR_mmse = N/Σ(1/(1+γ_k)) − 1` vs `SINR_mfb = (1/N)Σγ_k`, two-ray d=4 over the 52 data
+SCs): median gain 2.7 dB at 8 dB SNR rising to 3.8 dB above 24 dB, of which a 2-iteration soft-feedback
+implementation captures 60–80 %. At 32 dB on `good_f1` it buys ~nothing (MMSE outage there is 10⁻⁴); its
+real domain is the 8–20 dB window and `moderate_f1`, where a 1 ms spread puts 2–3 notches in band and the
+current MMSE has a noiseless BER floor of 0.31. Building it before P2 and #8 would tune it on top of
+mis-calibrated LLRs and test as "barely helps".
 
 ## Method note
 

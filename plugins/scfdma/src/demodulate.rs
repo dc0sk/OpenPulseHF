@@ -557,6 +557,9 @@ fn demodulate_soft_with_params(
 /// the detection floor — on a no-signal window the unnormalised argmax is an
 /// arbitrary noise offset, and demodulating from it produces garbage bytes
 /// (including a random length prefix) at full frame cost.
+///
+/// The accepted offset is backed off `SYNC_EARLY_BIAS` samples ahead of the correlation peak, so the
+/// FFT window never starts late on a multipath channel; see the body.
 fn find_sync_offset(samples: &[f32], sync: &[f32]) -> Option<usize> {
     if samples.len() <= sync.len() {
         return None;
@@ -572,7 +575,29 @@ fn find_sync_offset(samples: &[f32], sync: &[f32]) -> Option<usize> {
     if result.rho < DETECTION_FLOOR_RHO {
         return None;
     }
-    Some(result.offset)
+
+    // Start EARLY of the correlation peak, never on it.
+    //
+    // The matched filter takes the argmax, which on a multipath channel sits on whichever ray is
+    // instantaneously strongest — the *delayed* one about half the time. A late window start pulls
+    // samples of the next symbol into the FFT. The cyclic prefix only protects an **early** start:
+    // there the window merely begins inside the symbol's own prefix, a circular shift, i.e. a linear
+    // phase ramp across subcarriers that `deramp_timing` removes. `DelayCe`'s basis is two-sided, so
+    // its reach is unaffected. The budget is `CP − delay_spread` (32 − ~16 samples).
+    //
+    // `ofdm::find_first_data_body` solves the same problem by scanning back for the earliest
+    // correlation tap above 0.20 × the peak. That does not port here: OFDM brackets its scan with a
+    // Schmidl–Cox coarse detection, so the scan window always contains signal, whereas SC-FDMA searches
+    // from the front of a slice that may begin with silence — and a *normalised* correlation against a
+    // partially-silent window inflates, so the earliest-tap rule latches onto noise. Measured: it broke
+    // the noiseless clean channel outright (BER 0.68).
+    //
+    // Measured, noiseless static two-ray `x[n] + a·x[n−d]`, a = 1.0: SCFDMA52-16QAM BER 1.000 → 0.000
+    // at d = 4, QPSK 0.098 → 0.000 at d = 4 and 0.121 → 0.000 at d = 8. Watterson `good_f1` frame
+    // success (60 frames, soft FEC) 0.27 → 0.72 on SCFDMA52-16QAM; the AWGN sweep is bit-for-bit
+    // unchanged, so this costs nothing on a flat channel.
+    const SYNC_EARLY_BIAS: usize = 8;
+    Some(result.offset.saturating_sub(SYNC_EARLY_BIAS))
 }
 
 // ── Constellation demapping (shared) ──────────────────────────────────────────
