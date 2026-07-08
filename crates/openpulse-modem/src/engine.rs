@@ -3280,10 +3280,10 @@ impl ModemEngine {
 
     /// Transmit with rate-1/2 LDPC FEC (1024 info bits → 2048 codeword bits, min-sum BP).
     ///
-    /// TX chain: frame encode → LDPC encode (128 B → 256 B) → modulate → emit.
+    /// TX chain: frame encode → LDPC encode (128 B → 256 B per block) → modulate → emit.
     ///
-    /// The encoded frame must fit in one LDPC block (≤ 128 bytes).  For larger
-    /// payloads split them at the session layer before calling this method.
+    /// The encoded frame is split across as many LDPC blocks as it needs; a `Frame`'s payload length
+    /// is a `u8`, so that is at most three.
     pub fn transmit_with_ldpc(
         &mut self,
         data: &[u8],
@@ -3296,8 +3296,7 @@ impl ModemEngine {
     /// Transmit with high-rate LDPC FEC (rate ≈8/9, 1024 info bits → 1152 codeword
     /// bits) for the dense, high-SNR rungs (8PSK / 16QAM / 32APSK).
     ///
-    /// TX chain: frame encode → LDPC encode (128 B → 144 B) → modulate → emit.
-    /// Same single-block limit (≤ 128 bytes) as [`transmit_with_ldpc`](Self::transmit_with_ldpc).
+    /// TX chain: frame encode → LDPC encode (128 B → 144 B per block) → modulate → emit.
     pub fn transmit_with_ldpc_high_rate(
         &mut self,
         data: &[u8],
@@ -3308,8 +3307,12 @@ impl ModemEngine {
     }
 
     /// Transmit one frame through the given LDPC codec preset.  Shared by the
-    /// rate-1/2 and high-rate public methods; the single-block limit comes from
-    /// the codec's own `info_bytes()`.
+    /// rate-1/2 and high-rate public methods.
+    ///
+    /// The frame is split into `info_bytes()`-sized blocks, each encoded independently and the
+    /// codewords concatenated.  A `Frame`'s payload length is a `u8`, so the wire frame never exceeds
+    /// 265 bytes and this is at most three blocks.  The final block is zero-padded; `Frame::decode`
+    /// reads its own length field, so the padding is discarded on receive.
     fn transmit_with_ldpc_codec(
         &mut self,
         data: &[u8],
@@ -3320,14 +3323,7 @@ impl ModemEngine {
         self.csma_check()?;
 
         let frame_wire = self.stage_encode_frame(data)?;
-        if frame_wire.bytes.len() > codec.info_bytes() {
-            return Err(ModemError::Frame(format!(
-                "LDPC: encoded frame {} B exceeds one-block limit of {} B; split payload at call site",
-                frame_wire.bytes.len(),
-                codec.info_bytes(),
-            )));
-        }
-        let codeword = codec.encode(&frame_wire.bytes);
+        let codeword = encode_ldpc_blocks(codec, &frame_wire.bytes);
         let fec_wire = WirePayload { bytes: codeword };
         let fec_wire = self.route_wire_stage(PipelineStage::EncodeModulate, fec_wire)?;
 
@@ -3983,8 +3979,7 @@ impl ModemEngine {
     /// `FecMode::None` maps to plain [`transmit`](Self::transmit).
     /// `FecMode::RsInterleaved` and `FecMode::Concatenated` use
     /// [`DEFAULT_INTERLEAVER_DEPTH`].
-    /// `FecMode::Ldpc` calls [`transmit_with_ldpc`](Self::transmit_with_ldpc) and
-    /// is subject to the same single-block limit.
+    /// `FecMode::Ldpc` calls [`transmit_with_ldpc`](Self::transmit_with_ldpc).
     /// `FecMode::ShortRs` is supported for both ACK frames (5-byte fixed) and
     /// data frames (≤ 223 bytes). Data frames are dispatched to
     /// [`transmit_with_short_fec_data`](Self::transmit_with_short_fec_data);
@@ -4526,9 +4521,36 @@ fn nonce_from_seq(seq: u16) -> [u8; 12] {
 /// Decode one LDPC codeword from a soft-LLR stream, trimming to the codec's own
 /// codeword length so both the rate-1/2 and high-rate (rate ≈8/9) presets share
 /// one slice rule.
+/// Encode `info` as a sequence of independent LDPC blocks, zero-padding the last one.
+fn encode_ldpc_blocks(codec: &LdpcCodec, info: &[u8]) -> Vec<u8> {
+    let k = codec.info_bytes();
+    let mut out = Vec::with_capacity(info.len().div_ceil(k) * codec.codeword_bytes());
+    for chunk in info.chunks(k) {
+        let mut block = chunk.to_vec();
+        block.resize(k, 0);
+        out.extend_from_slice(&codec.encode(&block));
+    }
+    out
+}
+
+/// Decode a concatenated LDPC codeword stream back to its information bytes.
+///
+/// The block count comes from the LLR count: the soft demodulators return exactly the transmitted
+/// bit count (their length prefix trims the modulation padding). Trailing LLRs that do not complete a
+/// block are dropped — a whole block is the smallest decodable unit.
 fn decode_ldpc_llrs(codec: &LdpcCodec, llrs: &[f32]) -> Result<Vec<u8>, ModemError> {
     let n_bits = codec.codeword_bytes() * 8;
-    codec.decode_soft(&llrs[..n_bits.min(llrs.len())])
+    if llrs.len() < n_bits {
+        return Err(ModemError::Fec(format!(
+            "LDPC: {} LLRs is less than one {n_bits}-bit codeword",
+            llrs.len()
+        )));
+    }
+    let mut out = Vec::with_capacity((llrs.len() / n_bits) * codec.info_bytes());
+    for block in llrs.chunks_exact(n_bits) {
+        out.extend_from_slice(&codec.decode_soft(block)?);
+    }
+    Ok(out)
 }
 
 fn minimum_trust_for_profile(profile: PolicyProfile) -> ConnectionTrustLevel {

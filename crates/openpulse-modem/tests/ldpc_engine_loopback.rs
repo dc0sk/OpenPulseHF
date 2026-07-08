@@ -36,17 +36,23 @@ fn ldpc_bpsk250_clean_loopback() {
     assert_eq!(&recovered[..payload.len()], payload);
 }
 
+/// A frame larger than one 128-byte LDPC block is split across blocks, not rejected. The largest
+/// possible frame is 265 bytes (`Frame`'s payload length is a `u8`), i.e. three blocks.
 #[test]
-fn ldpc_rejects_frame_larger_than_one_block() {
-    let mut engine = ldpc_engine();
-    // A payload large enough that stage_encode_frame output exceeds 128 bytes.
-    // Frame overhead (header + CRC) is ~8 bytes, so 125 bytes of user data overflows.
-    let payload = vec![0xABu8; 125];
-    let result = engine.transmit_with_ldpc(&payload, "BPSK250", None);
-    assert!(
-        result.is_err(),
-        "expected error for payload exceeding one LDPC block"
-    );
+fn ldpc_round_trips_a_frame_spanning_several_blocks() {
+    for len in [117usize, 118, 125, 200, 255] {
+        let mut engine = ldpc_engine();
+        let payload: Vec<u8> = (0..len)
+            .map(|i| (i.wrapping_mul(37) & 0xff) as u8)
+            .collect();
+        engine
+            .transmit_with_ldpc(&payload, "BPSK250", None)
+            .unwrap_or_else(|e| panic!("transmit {len} B: {e}"));
+        let recovered = engine
+            .receive_with_ldpc("BPSK250", None)
+            .unwrap_or_else(|e| panic!("receive {len} B: {e}"));
+        assert_eq!(recovered, payload, "{len}-byte payload");
+    }
 }
 
 #[test]
@@ -76,17 +82,22 @@ fn ldpc_high_rate_8psk500_dense_loopback() {
     assert_eq!(&recovered[..payload.len()], payload);
 }
 
+/// High-rate LDPC shares the 128-byte info block, so it splits at the same boundaries.
 #[test]
-fn ldpc_high_rate_shares_one_block_limit() {
-    // High-rate LDPC has the same 128-byte info block as the rate-1/2 codec,
-    // so the single-block gate must reject the same oversized frame.
-    let mut engine = ldpc_engine();
-    let payload = vec![0xABu8; 125];
-    let result = engine.transmit_with_ldpc_high_rate(&payload, "BPSK250", None);
-    assert!(
-        result.is_err(),
-        "high-rate LDPC must reject a frame exceeding one block"
-    );
+fn ldpc_high_rate_round_trips_a_frame_spanning_several_blocks() {
+    for len in [117usize, 118, 125, 255] {
+        let mut engine = ldpc_engine();
+        let payload: Vec<u8> = (0..len)
+            .map(|i| (i.wrapping_mul(53) & 0xff) as u8)
+            .collect();
+        engine
+            .transmit_with_ldpc_high_rate(&payload, "BPSK250", None)
+            .unwrap_or_else(|e| panic!("transmit {len} B: {e}"));
+        let recovered = engine
+            .receive_with_ldpc_high_rate("BPSK250", None)
+            .unwrap_or_else(|e| panic!("receive {len} B: {e}"));
+        assert_eq!(recovered, payload, "{len}-byte payload");
+    }
 }
 
 #[test]
