@@ -183,7 +183,22 @@ fn hpx_hf_mode_mapping() {
     assert_eq!(p.mode_for(SpeedLevel::Sl13), Some("SCFDMA52-32QAM"));
     assert_eq!(p.mode_for(SpeedLevel::Sl14), Some("SCFDMA52-64QAM-P4"));
     assert_eq!(p.mode_for(SpeedLevel::Sl15), Some("SCFDMA52-64QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl16), None);
+    // SL16–SL19: the same four dense modes at high-rate LDPC (r≈8/9) — MODCOD pairs of SL12–SL15.
+    // 64QAM is the densest constellation the plugin has, so above SL15 the only remaining lever on
+    // throughput is code rate.
+    assert_eq!(p.mode_for(SpeedLevel::Sl16), Some("SCFDMA52-16QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl17), Some("SCFDMA52-32QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl18), Some("SCFDMA52-64QAM-P4"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl19), Some("SCFDMA52-64QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl20), None);
+    assert_eq!(
+        p.fec_for(SpeedLevel::Sl16),
+        openpulse_core::fec::FecMode::LdpcHighRate
+    );
+    assert_eq!(
+        p.fec_for(SpeedLevel::Sl19),
+        openpulse_core::fec::FecMode::LdpcHighRate
+    );
     // SL6/SL7 are the same mode at different FEC — a proper MODCOD rung, not a duplicate.
     assert_eq!(p.fec_for(SpeedLevel::Sl6), openpulse_core::fec::FecMode::Rs);
     assert_eq!(
@@ -404,5 +419,43 @@ fn fingerprint_tracks_mode_and_fec_mapping() {
         SessionProfile::by_name("hpx_ofdm_hf")
             .unwrap()
             .fingerprint()
+    );
+}
+
+/// The ladder is only meaningful if climbing it always costs SNR and always buys throughput. Floors
+/// must strictly increase, and each ceiling must be exactly `floor(next) + 2` (the uniform upshift
+/// hysteresis normalised in PR #680).
+#[test]
+fn hpx_hf_floors_are_monotonic_and_ceilings_follow_the_hysteresis_rule() {
+    let p = SessionProfile::hpx_hf();
+    let rungs: Vec<SpeedLevel> = p
+        .defined_levels()
+        .into_iter()
+        .filter(|l| p.mode_for(*l).is_some())
+        .collect();
+
+    for pair in rungs.windows(2) {
+        let (lo, hi) = (pair[0], pair[1]);
+        let (f_lo, f_hi) = (
+            p.snr_floor_for_level(lo).expect("floor"),
+            p.snr_floor_for_level(hi).expect("floor"),
+        );
+        assert!(
+            f_hi > f_lo,
+            "floor({hi:?}) = {f_hi} must exceed floor({lo:?}) = {f_lo}"
+        );
+        let ceiling = p.snr_ceiling_for_level(lo).expect("ceiling");
+        assert!(
+            (ceiling - (f_hi + 2.0)).abs() < 1e-6,
+            "ceiling({lo:?}) = {ceiling} must be floor({hi:?}) + 2 = {}",
+            f_hi + 2.0
+        );
+    }
+
+    let top = *rungs.last().expect("rungs");
+    assert_eq!(top, SpeedLevel::Sl19);
+    assert!(
+        p.snr_ceiling_for_level(top).is_none(),
+        "the top rung has no ceiling to climb past"
     );
 }
