@@ -9,6 +9,44 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-08 — fix(engine): decode each HARQ attempt standalone before combining them
+
+- **Requirement/change:** the P7 rejection (PR #693) concluded that what limits SC-FDMA on HF is deep-fade
+  outage over a frame, and that the only remaining levers are *diversity* levers above the plugin. The
+  first of those is HARQ soft combining across retransmissions, whose machinery was already shipped
+  (`combine_llrs_map`, PR #686) and calibrated (#687, #690). This measures it and fixes what it found.
+- **Measurement — neither strategy dominates.** Frame success over Watterson `moderate_f1`, three
+  independent fade realisations, RS FEC, 60 trials:
+
+  | rung | SNR | plain ARQ retry | soft combining alone | union of both |
+  |---|---|---|---|---|
+  | SCFDMA52-16QAM | 20 dB | 0.28 | 0.40 | **0.50** |
+  | SCFDMA52-16QAM | 28 dB | 0.43 | 0.48 | **0.67** |
+  | SCFDMA52 | 12 dB | 0.87 | 0.88 | **0.95** |
+  | SCFDMA52 | 20 dB | 0.97 | **0.95** | **1.00** |
+  | SCFDMA52 | 28 dB | 0.97 | **0.97** | **1.00** |
+
+  Combining wins where every attempt is partially ruined and they carry complementary information (the dense
+  rungs in outage). Plain retry wins where one attempt is simply clean and summing it with two ruined ones
+  dilutes it — note SCFDMA52 at 20 dB, where **combining alone is *worse* than not combining at all**.
+- **Design decision:** take the union. `receive_with_llr_combining` now RS-decodes each attempt **on its
+  own** first, and only if every attempt fails does it sum the LLRs and decode the combination. Each
+  standalone trial is one RS decode over LLRs already in memory, so the union costs almost nothing and its
+  success is a strict superset of either strategy. The trials must not move state: only the winner runs
+  `route_decoded_stage(HpxStateUpdate)` and emits `FrameReceived`.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` — `receive_with_llr_combining`, plus a shared
+  `hard_decide` helper (the LLR→bytes packing was inline and is now used twice).
+- **Tests:** new `crates/openpulse-modem/tests/harq_fade_diversity.rs`.
+  `combining_beats_plain_retry_on_a_fading_channel` (SCFDMA52-16QAM, `moderate_f1` @28 dB: the engine must
+  beat plain retry by >0.10) and `combining_never_loses_a_frame_plain_retry_would_have_kept` (SCFDMA52 at
+  12/20/28 dB: the engine must never fall below plain retry). **Both fail on the pristine tree** — the first
+  at 0.48 vs 0.45, the second at 0.95 vs 0.97, which is the regression the union removes.
+- **Test results:** full workspace `--exclude pki-tooling --no-default-features`: **1557 passed, 0 failed**.
+  clippy `-D warnings --all-targets` + fmt clean.
+- **Method note:** "soft combining is better than retrying" is the kind of claim that reads as obviously
+  true and is measurably false half the time. The union is only free because both baselines were measured
+  separately first.
+
 ## 2026-07-08 — research: P7 (frequency-domain IBDFE) built, measured, rejected
 
 - **Requirement/change:** research item P7, "frequency-domain iterative block DFE after MMSE — cancel
