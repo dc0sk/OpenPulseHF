@@ -8,7 +8,9 @@
 //! SC-FDMA rung decoded a flat 2–7 % of Watterson `good_f1` frames at *every* SNR from 8 to 32 dB. The
 //! flatness was the tell: a noise-enhancement mechanism cannot survive the removal of noise.
 
-use openpulse_channel::{awgn::AwgnChannel, AwgnConfig, ChannelModel};
+use openpulse_channel::{
+    awgn::AwgnChannel, watterson::WattersonChannel, AwgnConfig, ChannelModel, WattersonConfig,
+};
 use openpulse_core::fec::FecMode;
 use openpulse_modem::channel_sim::ChannelSimHarness;
 use scfdma_plugin::ScFdmaPlugin;
@@ -117,4 +119,60 @@ fn decodes_a_stronger_delayed_ray_inside_the_cyclic_prefix() {
 fn a_stronger_direct_ray_still_decodes() {
     assert!(decode_rate("SCFDMA52", 1.0, 0.5, 4, 24.0, 20) >= 0.90);
     assert!(decode_rate("SCFDMA52-16QAM", 1.0, 0.5, 4, 24.0, 20) >= 0.90);
+}
+
+/// A frame whose *preamble* lands in a fade must still be acquired.
+///
+/// A **flat** Rayleigh fade (no delay spread) at 60 dB SNR: there is no noise and no frequency
+/// selectivity, so a receiver that loses frames here has an acquisition bug and nothing else.
+/// `IqMatchedFilter::search`'s unnormalised argmax deliberately prefers a high-energy window — but when
+/// the preamble itself is the faded part, that hands the frame to a data-region window that merely
+/// shares the pilot comb. Measured at ρ = 0.994 (energy 19.4) for the true offset against ρ = 0.657
+/// (energy 83.0) at offset +4896, which won.
+///
+/// Before `find_sync_offset` switched to `search_normalized`, SCFDMA52-16QAM decoded 0.47 of these
+/// frames at 0.5 Hz Doppler and SCFDMA52 decoded 0.75.
+#[test]
+fn acquires_a_frame_whose_preamble_is_faded() {
+    const FRAMES: u32 = 40;
+
+    let rate = |mode: &str, doppler: f32| -> f32 {
+        let mut ok = 0u32;
+        for f in 0..FRAMES {
+            let mut h = harness();
+            h.tx_engine
+                .transmit_with_fec_mode(PAYLOAD, mode, FecMode::SoftConcatenated, None)
+                .unwrap();
+            let mut cfg = WattersonConfig::good_f1(Some(2000 + f as u64));
+            cfg.snr_db = 60.0; // no noise
+            cfg.delay_spread_ms = 0.0; // no frequency selectivity
+            cfg.doppler_spread_hz = doppler;
+            let Ok(mut ch) = WattersonChannel::new(cfg) else {
+                continue;
+            };
+            h.route(&mut ch);
+            if h.rx_engine
+                .receive_with_fec_mode(mode, FecMode::SoftConcatenated, None)
+                .map(|got| got == PAYLOAD)
+                .unwrap_or(false)
+            {
+                ok += 1;
+            }
+        }
+        ok as f32 / FRAMES as f32
+    };
+
+    for (mode, doppler) in [
+        ("SCFDMA52", 0.5f32),
+        ("SCFDMA52", 0.1),
+        ("SCFDMA52-16QAM", 0.5),
+        ("SCFDMA52-16QAM", 0.1),
+    ] {
+        let r = rate(mode, doppler);
+        assert!(
+            r >= 0.90,
+            "{mode}: flat fade at {doppler} Hz Doppler, 60 dB SNR (no noise, no selectivity) decoded \
+             only {r:.2} of frames — sync is losing the faded preamble to a higher-energy data window"
+        );
+    }
 }

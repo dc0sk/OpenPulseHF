@@ -120,13 +120,14 @@ TDM DMRS pilot symbols (the per-symbol comb tracks Doppler strictly better; not 
 2. ~~GPU paths skip `deramp_timing` + CE smoothing~~ — fixed; both enter `FrameFront::from_spectra`.
 3. **Causal EMA CE lags phase under residual CFO/Doppler** — a ~1 Hz residual never trips the jump-reset
    yet steadily rotates the estimate; **no intra-frame CFO/CPE tracking at all** (P2, still open).
-4. ~~Watterson fading remains a weak regime~~ — **mostly a sync bug** (PR #688). `find_sync_offset` took
-   the matched-filter *argmax*, which on a two-ray channel sits on the delayed ray about half the time;
-   a late FFT window start pulls the next symbol in, and the cyclic prefix only protects an **early**
-   start. Backing the offset off 8 samples took `good_f1` frame success from 9.19 to 29.57 (of 42) with
-   the AWGN sweep bit-for-bit unchanged. What is left is the exact-null case (equal-power rays erase a
-   subcarrier outright, and the DFT de-spread smears the erasure over every symbol) plus deep-fade
-   outage — *that* is P7 / Memory-ARQ territory.
+4. ~~Watterson fading remains a weak regime~~ — **two sync bugs** (PRs #688, #689), not a waveform limit.
+   (a) `find_sync_offset` took the matched-filter *argmax*, which on a two-ray channel sits on the delayed
+   ray about half the time; a late FFT window start pulls the next symbol in, and the cyclic prefix only
+   protects an **early** start. (b) That argmax was over the *unnormalised* score, so a faded preamble
+   lost to a higher-energy data window. Together they took `good_f1` frame success from 9.19 to 31.40
+   (of 42) with the AWGN sweep bit-for-bit unchanged. What is left is the exact-null case (equal-power
+   rays erase a subcarrier outright, and the DFT de-spread smears the erasure over every symbol) plus
+   deep-fade outage — *that* is P7 / Memory-ARQ territory.
 5. **Sync fragility** — ±4 Hz own tolerance; `estimate_cfo_hz` aliases beyond ±13.9 Hz; the `rho=0.15`
    detection floor is untested against fading/impulse noise.
 6. **Adaptive pilot density can't deploy** (no negotiation) — wire it or delete it (footgun).
@@ -146,21 +147,28 @@ TDM DMRS pilot symbols (the per-symbol comb tracks Doppler strictly better; not 
 
 ## Do next (top 3)
 
-Order revised after the PR-#688 diagnosis. The flat Watterson curve was **not** notch smearing; a
-factorial experiment (selective/flat × 32 dB/60 dB) showed the selective-vs-flat gap was 0.50 at 32 dB
-and **0.51 at 60 dB** — a noise-enhancement mechanism cannot survive the removal of noise. It was late
-sync (fixed) plus fade *dynamics* (P2, still open: flat-fade success at 60 dB is 1.00 at 0.01 Hz Doppler
-and 0.78 at 0.1 Hz).
+Order revised twice. The flat Watterson curve was **not** notch smearing (falsified: the selective-vs-flat
+gap was 0.50 at 32 dB and 0.51 at 60 dB — a noise-enhancement mechanism cannot survive the removal of
+noise). It was **two sync bugs**:
 
-1. **P2 — CPE removal + non-causal CE smoothing** (S/M): owns the Doppler-scaling loss the sync fix does
-   not touch. The two-pass front end (`FrameFront`) it needed now exists.
-2. **#8 — LLR calibration** (S): `mmse_llr_noise_var` models only the additive noise. It is missing the
+- **PR #688** — the matched filter's argmax lands on the *delayed* ray half the time (late FFT window).
+- **PR #689** — the argmax is over the *unnormalised* score, which prefers a high-energy window. When the
+  preamble itself is in a fade, that hands the frame to a data-region window that merely shares the pilot
+  comb. This is what looked like "fade dynamics" and was slated as P2: **flat**-fade success at 60 dB (no
+  noise, no selectivity) was 0.47 for SCFDMA52-16QAM at 0.5 Hz Doppler; it is now 0.93. P2's premise is
+  therefore gone — the causal EMA's lag was measured to cost *nothing* (disabling `smooth_ce` entirely
+  left the flat-fade numbers bit-identical).
+
+1. **#8 — LLR calibration** (S): `mmse_llr_noise_var` models only the additive noise. It is missing the
    channel-estimate error (`ε²_k = σ²_h · Σ_j |recon[k·P+j]|²`, read straight off `CeSolver::recon`) and
    the residual-ISI term `var(α)` — on a selective channel at high SNR the LLRs are over-confident by up
    to ~20 dB, which is what lets a few smeared symbols poison the soft Viterbi. Also a prerequisite for
    P7's feedback-reliability estimate.
-3. **P6 — LDPC on the dense rungs** (M): no new DSP — the codec + engine plumbing exist; 1–3 dB of
+2. **P6 — LDPC on the dense rungs** (M): no new DSP — the codec + engine plumbing exist; 1–3 dB of
    ladder-floor improvement, on *every* channel including AWGN.
+3. **P2 — CPE removal + non-causal CE smoothing** (S/M): demoted. Its motivating measurement was the sync
+   bug. Re-measure before building: what remains of the Doppler dependence is intra-symbol Doppler (ICI),
+   which no channel-estimate smoothing addresses.
 
 **P7 (IBDFE) after those.** Its honest headroom, from a 20 000-draw Monte-Carlo of the MMSE-vs-matched-
 filter bound (`SINR_mmse = N/Σ(1/(1+γ_k)) − 1` vs `SINR_mfb = (1/N)Σγ_k`, two-ray d=4 over the 52 data
