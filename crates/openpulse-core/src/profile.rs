@@ -427,6 +427,7 @@ impl SessionProfile {
         // the next rung's floor — `ceiling(L) = floor(L+1) + 2` — so every rung dwells the same margin
         // before climbing (the old table mixed +1 and +4 dB, over-dwelling the lowest-throughput rungs;
         // pre-release, so no ladder-interop concern). Reachability holds (ceiling(L) > floor(L+1)).
+        // SL11 (SCFDMA52-64QAM) is the top rung — no ceiling, no upgrade candidate above it.
         let mut snr_ceilings = [None; 21];
         snr_ceilings[SpeedLevel::Sl2 as usize] = Some(6.0_f32); // floor(SL3)=4 +2
         snr_ceilings[SpeedLevel::Sl3 as usize] = Some(7.0_f32); // floor(SL4)=5 +2
@@ -437,7 +438,6 @@ impl SessionProfile {
         snr_ceilings[SpeedLevel::Sl8 as usize] = Some(18.0_f32); // floor(SL9)=16 +2
         snr_ceilings[SpeedLevel::Sl9 as usize] = Some(19.0_f32); // floor(SL10)=17 +2
         snr_ceilings[SpeedLevel::Sl10 as usize] = Some(24.0_f32); // floor(SL11)=22 +2
-                                                                  // SL11 (SCFDMA52-64QAM) is the ceiling of hpx_hf; no upgrade above it.
         Self {
             modes,
             initial_level: SpeedLevel::Sl2,
