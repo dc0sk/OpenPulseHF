@@ -156,14 +156,17 @@ fn hpx_hf_starts_at_bpsk31() {
 }
 
 #[test]
-fn hpx_hf_ack_up_five_times_reaches_8psk500() {
+fn hpx_hf_ack_up_seven_times_reaches_8psk500() {
+    // Finer ladder (research #2): 8PSK500 moved SL7 → SL9, so it now takes 7 ACK-UPs from SL2.
     let mut engine = make_engine();
     engine.start_adaptive_session(SessionProfile::hpx_hf());
     engine.apply_ack(AckType::AckUp); // SL2 → SL3 (BPSK63)
-    engine.apply_ack(AckType::AckUp); // SL3 → SL4 (BPSK250)
-    engine.apply_ack(AckType::AckUp); // SL4 → SL5 (QPSK250)
-    engine.apply_ack(AckType::AckUp); // SL5 → SL6 (QPSK500)
-    engine.apply_ack(AckType::AckUp); // SL6 → SL7 (8PSK500)
+    engine.apply_ack(AckType::AckUp); // SL3 → SL4 (BPSK100)
+    engine.apply_ack(AckType::AckUp); // SL4 → SL5 (BPSK250)
+    engine.apply_ack(AckType::AckUp); // SL5 → SL6 (QPSK250+Rs)
+    engine.apply_ack(AckType::AckUp); // SL6 → SL7 (QPSK250)
+    engine.apply_ack(AckType::AckUp); // SL7 → SL8 (QPSK500)
+    engine.apply_ack(AckType::AckUp); // SL8 → SL9 (8PSK500)
     assert_eq!(engine.current_adaptive_mode(), Some("8PSK500"));
 }
 

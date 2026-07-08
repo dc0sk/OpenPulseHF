@@ -167,19 +167,29 @@ fn hpx_wideband_initial_level() {
 fn hpx_hf_mode_mapping() {
     let p = SessionProfile::hpx_hf();
     assert_eq!(p.mode_for(SpeedLevel::Sl1), None);
+    // Finer ladder (research #2): BPSK100 + QPSK250+Rs + SCFDMA26-32QAM + SCFDMA52-64QAM-P4 inserts.
     assert_eq!(p.mode_for(SpeedLevel::Sl2), Some("BPSK31"));
     assert_eq!(p.mode_for(SpeedLevel::Sl3), Some("BPSK63"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl4), Some("BPSK250"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl5), Some("QPSK250"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl6), Some("QPSK500"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl7), Some("8PSK500"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl8), Some("SCFDMA52-8PSK"));
-    // SL9–SL11: higher-order SC-FDMA, all ≤2 kHz (HF-legal).
-    assert_eq!(p.mode_for(SpeedLevel::Sl9), Some("SCFDMA52-16QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl10), Some("SCFDMA52-32QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl11), Some("SCFDMA52-64QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl12), None);
-    assert_eq!(p.mode_for(SpeedLevel::Sl13), None);
+    assert_eq!(p.mode_for(SpeedLevel::Sl4), Some("BPSK100"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl5), Some("BPSK250"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl6), Some("QPSK250")); // + Rs (MODCOD)
+    assert_eq!(p.mode_for(SpeedLevel::Sl7), Some("QPSK250")); // uncoded
+    assert_eq!(p.mode_for(SpeedLevel::Sl8), Some("QPSK500"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl9), Some("8PSK500"));
+    // SL10–SL15: SC-FDMA rungs, all ≤2 kHz (HF-legal).
+    assert_eq!(p.mode_for(SpeedLevel::Sl10), Some("SCFDMA26-32QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl11), Some("SCFDMA52-8PSK"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl12), Some("SCFDMA52-16QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl13), Some("SCFDMA52-32QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl14), Some("SCFDMA52-64QAM-P4"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl15), Some("SCFDMA52-64QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl16), None);
+    // SL6/SL7 are the same mode at different FEC — a proper MODCOD rung, not a duplicate.
+    assert_eq!(p.fec_for(SpeedLevel::Sl6), openpulse_core::fec::FecMode::Rs);
+    assert_eq!(
+        p.fec_for(SpeedLevel::Sl7),
+        openpulse_core::fec::FecMode::None
+    );
 }
 
 #[test]

@@ -368,85 +368,108 @@ impl SessionProfile {
     /// | SL10 | SCFDMA52-32QAM |
     /// | SL11 | SCFDMA52-64QAM |
     pub fn hpx_hf() -> Self {
+        // Finer HF ladder (research #2, docs/dev/research/ladder-granularity.md). Fills the old
+        // throughput cliffs and SNR dead-zones with existing (previously unused) modes plus two MODCOD
+        // rungs, keeping every rung ≤ ~2 kHz occupied (well within the 2700 Hz HF channel). Pre-release,
+        // so the SL re-index carries no ladder-interop concern.
+        //
+        // | SL | Mode              | FEC | net bps | floor | note                                  |
+        // |----|-------------------|-----|---------|-------|---------------------------------------|
+        // |  2 | BPSK31            | —   |     31  |   3   |                                       |
+        // |  3 | BPSK63            | —   |     62  |   4   |                                       |
+        // |  4 | BPSK100           | —   |    100  |  4.5  | breaks the 62→250 bps cliff           |
+        // |  5 | BPSK250           | —   |    250  |   5   |                                       |
+        // |  6 | QPSK250           | Rs  |    437  |   7   | MODCOD rung fills the 5→9 dB dead-zone|
+        // |  7 | QPSK250           | —   |    500  |   9   |                                       |
+        // |  8 | QPSK500           | —   |   1000  |  11   |                                       |
+        // |  9 | 8PSK500           | Rs  |   1312  |  12   |                                       |
+        // | 10 | SCFDMA26-32QAM    | SC  |   1579  |  13   | ~1 kHz FDE-robust rung                |
+        // | 11 | SCFDMA52-8PSK     | SC  |   1895  |  14   |                                       |
+        // | 12 | SCFDMA52-16QAM    | SC  |   2527  |  16   |                                       |
+        // | 13 | SCFDMA52-32QAM    | SC  |   3159  |  17   |                                       |
+        // | 14 | SCFDMA52-64QAM-P4 | SC  |   3571  |  19   | dense pilots split the 17→22 dB gap   |
+        // | 15 | SCFDMA52-64QAM    | SC  |   3790  |  22   |                                       |
+        //
+        // All SC-FDMA rungs are ≤2 kHz occupied, so they belong on the HF ladder rather than a separate
+        // "wideband" profile. The narrowband SCFDMA26-* fallbacks also live in `hpx_wideband_hd`.
         let mut modes = [None; 21];
         modes[SpeedLevel::Sl2 as usize] = Some("BPSK31");
         modes[SpeedLevel::Sl3 as usize] = Some("BPSK63");
-        modes[SpeedLevel::Sl4 as usize] = Some("BPSK250");
-        modes[SpeedLevel::Sl5 as usize] = Some("QPSK250");
-        modes[SpeedLevel::Sl6 as usize] = Some("QPSK500");
-        modes[SpeedLevel::Sl7 as usize] = Some("8PSK500");
-        modes[SpeedLevel::Sl8 as usize] = Some("SCFDMA52-8PSK");
-        // SL9–SL11: the higher-order SC-FDMA modes are all ≤2 kHz occupied (well within
-        // the 2700 Hz HF channel), so they belong on the HF ladder rather than a separate
-        // "wideband" profile. They run FEC-protected (soft-concatenated). The narrowband
-        // SCFDMA26-* fallbacks live in `hpx_wideband_hd` for SNR-marginal links.
-        modes[SpeedLevel::Sl9 as usize] = Some("SCFDMA52-16QAM");
-        modes[SpeedLevel::Sl10 as usize] = Some("SCFDMA52-32QAM");
-        modes[SpeedLevel::Sl11 as usize] = Some("SCFDMA52-64QAM");
-        // Per-level FEC (MODCOD). The upper ladder was previously raw (`fec_modes: [None; 21]`),
-        // which is why 8PSK500 needed 18 dB and the dense SCFDMA rungs were unusable. Assigned from
-        // the AWGN calibration sweep (`tests/snr_floor_calibration.rs`): 8PSK500 gets *light* RS (keeps
-        // its net rate ~1312 bps, above QPSK500's 1000, so it stays a faster rung) and the dense
-        // SCFDMA rungs get soft-concatenated FEC (they only run FEC-protected).
+        modes[SpeedLevel::Sl4 as usize] = Some("BPSK100");
+        modes[SpeedLevel::Sl5 as usize] = Some("BPSK250");
+        modes[SpeedLevel::Sl6 as usize] = Some("QPSK250");
+        modes[SpeedLevel::Sl7 as usize] = Some("QPSK250");
+        modes[SpeedLevel::Sl8 as usize] = Some("QPSK500");
+        modes[SpeedLevel::Sl9 as usize] = Some("8PSK500");
+        modes[SpeedLevel::Sl10 as usize] = Some("SCFDMA26-32QAM");
+        modes[SpeedLevel::Sl11 as usize] = Some("SCFDMA52-8PSK");
+        modes[SpeedLevel::Sl12 as usize] = Some("SCFDMA52-16QAM");
+        modes[SpeedLevel::Sl13 as usize] = Some("SCFDMA52-32QAM");
+        modes[SpeedLevel::Sl14 as usize] = Some("SCFDMA52-64QAM-P4");
+        modes[SpeedLevel::Sl15 as usize] = Some("SCFDMA52-64QAM");
+        // Per-level FEC (MODCOD). SL6 = coded QPSK250 (Rs) — a robustness rung that trades ~13%
+        // throughput for a ~2 dB lower floor than the uncoded SL7. SL9 8PSK500 keeps *light* RS (net
+        // ~1312 bps, above QPSK500's 1000, so it stays a faster rung). The dense SC-FDMA rungs get
+        // soft-concatenated FEC (they only ever run FEC-protected). Assigned from the AWGN sweeps in
+        // `tests/snr_floor_calibration.rs`.
         let mut fec_modes = [None; 21];
-        fec_modes[SpeedLevel::Sl7 as usize] = Some(FecMode::Rs);
-        fec_modes[SpeedLevel::Sl8 as usize] = Some(FecMode::SoftConcatenated);
-        fec_modes[SpeedLevel::Sl9 as usize] = Some(FecMode::SoftConcatenated);
+        fec_modes[SpeedLevel::Sl6 as usize] = Some(FecMode::Rs);
+        fec_modes[SpeedLevel::Sl9 as usize] = Some(FecMode::Rs);
         fec_modes[SpeedLevel::Sl10 as usize] = Some(FecMode::SoftConcatenated);
         fec_modes[SpeedLevel::Sl11 as usize] = Some(FecMode::SoftConcatenated);
-        // SNR floors — the SNR/step pairs the fast-downshift jumps to. Lower rungs (SL2–6, no FEC)
-        // kept as measured-conservative (fading margin). Upper rungs recalibrated *with their FEC*
-        // and set monotonic with ~2–3 dB fading margin over the AWGN measurement (in parens):
-        //   SL7 8PSK500+RS (meas 9), SL8 SCFDMA52-8PSK+SC (9), SL9 SCFDMA52-16QAM+SC (11),
-        //   SL10 SCFDMA52-32QAM+SC (9 — see below), SL11 SCFDMA52-64QAM+SC (15). This kills the old
-        //   18 dB duplicate (SL7/SL9), fills the 11→16 gap (8PSK500 now a real 12 dB rung), and keeps
-        //   the ladder monotonic. The old cross-32QAM soft-demod weakness (SL10 measured *harder* than
-        //   64QAM) was FIXED at the root by the 2D-Gray constellation remap (PR #616): SCFDMA52-32QAM
-        //   dropped 17→9 dB AWGN, so it is now genuinely more robust than 64QAM and its floor is
-        //   honestly (not forcibly) below SL11's. Re-run the calibration sweep if the DSP changes.
-        //   SL7 gap-filler REASSESSED 2026-07-05 (with a Fable second opinion): a swap to the
-        //   cycle-slip-immune PILOT-8PSK500 was measured against 8PSK500+RS and REJECTED — pilot wins
-        //   on AWGN (7 vs 9 dB) but *loses* good_f1 fading (fails where 8PSK500+RS decodes at 7 dB);
-        //   both fail moderate_f1, as does the whole single-carrier segment (QPSK250/500 too), so the
-        //   ladder downshifts past it by design. 8PSK500+RS stays the SL7 gap-filler. See the
-        //   `calibrate_pilot_gap_candidate` sweep in tests/snr_floor_calibration.rs.
+        fec_modes[SpeedLevel::Sl12 as usize] = Some(FecMode::SoftConcatenated);
+        fec_modes[SpeedLevel::Sl13 as usize] = Some(FecMode::SoftConcatenated);
+        fec_modes[SpeedLevel::Sl14 as usize] = Some(FecMode::SoftConcatenated);
+        fec_modes[SpeedLevel::Sl15 as usize] = Some(FecMode::SoftConcatenated);
+        // SNR floors — the SNR/step pairs the fast-downshift jumps to; monotonic across the finer
+        // ladder. Placed between neighbours from the AWGN sweeps (`calibrate_ladder_gap_fillers` +
+        // `calibrate_snr_floors_hpx_hf`, lower bounds in parens) with the low-order rungs' fading
+        // margin: SL4 BPSK100 (≤0), SL6 QPSK250+Rs (4), SL9 8PSK500+Rs (9), SL10 SCFDMA26-32QAM+SC (8),
+        // SL11 SCFDMA52-8PSK+SC (8), SL12 SCFDMA52-16QAM+SC (9), SL13 SCFDMA52-32QAM+SC (8 — 2D-Gray
+        // remap #616), SL14 SCFDMA52-64QAM-P4+SC (17), SL15 SCFDMA52-64QAM+SC (15). The whole
+        // single-carrier segment fails moderate_f1 fading by design (the ladder downshifts past it).
+        // Re-run both sweeps if the DSP changes.
         let mut snr_floors = [None; 21];
         snr_floors[SpeedLevel::Sl2 as usize] = Some(3.0_f32);
         snr_floors[SpeedLevel::Sl3 as usize] = Some(4.0_f32);
-        snr_floors[SpeedLevel::Sl4 as usize] = Some(5.0_f32);
-        snr_floors[SpeedLevel::Sl5 as usize] = Some(9.0_f32);
-        snr_floors[SpeedLevel::Sl6 as usize] = Some(11.0_f32);
-        snr_floors[SpeedLevel::Sl7 as usize] = Some(12.0_f32);
-        snr_floors[SpeedLevel::Sl8 as usize] = Some(14.0_f32);
-        snr_floors[SpeedLevel::Sl9 as usize] = Some(16.0_f32);
-        // SL10 (32QAM) lowered 20→17 after the Gray remap (#616) made it decode at 9 dB AWGN — still
-        // ≥ SL9 for level-monotonicity, with fading margin (SCFDMA-QAM is good-conditions-only on HF).
-        snr_floors[SpeedLevel::Sl10 as usize] = Some(17.0_f32);
-        snr_floors[SpeedLevel::Sl11 as usize] = Some(22.0_f32);
-        // Ceilings gate the cautious one-step upshift. Normalized to a uniform +2 dB hysteresis over
-        // the next rung's floor — `ceiling(L) = floor(L+1) + 2` — so every rung dwells the same margin
-        // before climbing (the old table mixed +1 and +4 dB, over-dwelling the lowest-throughput rungs;
-        // pre-release, so no ladder-interop concern). Reachability holds (ceiling(L) > floor(L+1)).
-        // SL11 (SCFDMA52-64QAM) is the top rung — no ceiling, no upgrade candidate above it.
+        snr_floors[SpeedLevel::Sl4 as usize] = Some(4.5_f32);
+        snr_floors[SpeedLevel::Sl5 as usize] = Some(5.0_f32);
+        snr_floors[SpeedLevel::Sl6 as usize] = Some(7.0_f32);
+        snr_floors[SpeedLevel::Sl7 as usize] = Some(9.0_f32);
+        snr_floors[SpeedLevel::Sl8 as usize] = Some(11.0_f32);
+        snr_floors[SpeedLevel::Sl9 as usize] = Some(12.0_f32);
+        snr_floors[SpeedLevel::Sl10 as usize] = Some(13.0_f32);
+        snr_floors[SpeedLevel::Sl11 as usize] = Some(14.0_f32);
+        snr_floors[SpeedLevel::Sl12 as usize] = Some(16.0_f32);
+        snr_floors[SpeedLevel::Sl13 as usize] = Some(17.0_f32);
+        snr_floors[SpeedLevel::Sl14 as usize] = Some(19.0_f32);
+        snr_floors[SpeedLevel::Sl15 as usize] = Some(22.0_f32);
+        // Ceilings gate the cautious one-step upshift: a uniform +2 dB hysteresis over the next rung's
+        // floor — `ceiling(L) = floor(L+1) + 2` — so every rung dwells the same margin before climbing.
+        // Reachability holds (ceiling(L) > floor(L+1)). SL15 is the top rung — no ceiling.
         let mut snr_ceilings = [None; 21];
         snr_ceilings[SpeedLevel::Sl2 as usize] = Some(6.0_f32); // floor(SL3)=4 +2
-        snr_ceilings[SpeedLevel::Sl3 as usize] = Some(7.0_f32); // floor(SL4)=5 +2
-        snr_ceilings[SpeedLevel::Sl4 as usize] = Some(11.0_f32); // floor(SL5)=9 +2
-        snr_ceilings[SpeedLevel::Sl5 as usize] = Some(13.0_f32); // floor(SL6)=11 +2
-        snr_ceilings[SpeedLevel::Sl6 as usize] = Some(14.0_f32); // floor(SL7)=12 +2
-        snr_ceilings[SpeedLevel::Sl7 as usize] = Some(16.0_f32); // floor(SL8)=14 +2
-        snr_ceilings[SpeedLevel::Sl8 as usize] = Some(18.0_f32); // floor(SL9)=16 +2
-        snr_ceilings[SpeedLevel::Sl9 as usize] = Some(19.0_f32); // floor(SL10)=17 +2
-        snr_ceilings[SpeedLevel::Sl10 as usize] = Some(24.0_f32); // floor(SL11)=22 +2
+        snr_ceilings[SpeedLevel::Sl3 as usize] = Some(6.5_f32); // floor(SL4)=4.5 +2
+        snr_ceilings[SpeedLevel::Sl4 as usize] = Some(7.0_f32); // floor(SL5)=5 +2
+        snr_ceilings[SpeedLevel::Sl5 as usize] = Some(9.0_f32); // floor(SL6)=7 +2
+        snr_ceilings[SpeedLevel::Sl6 as usize] = Some(11.0_f32); // floor(SL7)=9 +2
+        snr_ceilings[SpeedLevel::Sl7 as usize] = Some(13.0_f32); // floor(SL8)=11 +2
+        snr_ceilings[SpeedLevel::Sl8 as usize] = Some(14.0_f32); // floor(SL9)=12 +2
+        snr_ceilings[SpeedLevel::Sl9 as usize] = Some(15.0_f32); // floor(SL10)=13 +2
+        snr_ceilings[SpeedLevel::Sl10 as usize] = Some(16.0_f32); // floor(SL11)=14 +2
+        snr_ceilings[SpeedLevel::Sl11 as usize] = Some(18.0_f32); // floor(SL12)=16 +2
+        snr_ceilings[SpeedLevel::Sl12 as usize] = Some(19.0_f32); // floor(SL13)=17 +2
+        snr_ceilings[SpeedLevel::Sl13 as usize] = Some(21.0_f32); // floor(SL14)=19 +2
+        snr_ceilings[SpeedLevel::Sl14 as usize] = Some(24.0_f32); // floor(SL15)=22 +2
         Self {
             modes,
             initial_level: SpeedLevel::Sl2,
             nack_threshold: 3,
             snr_floors,
             snr_ceilings,
-            // Guard admission to the densest rung (64QAM) behind a prior SNR upgrade
+            // Guard admission to the densest rung (SL15, 64QAM) behind a prior SNR upgrade
             // candidate, mirroring hpx_wideband_hd.
-            ack_up_requires_snr_candidate_at: Some(SpeedLevel::Sl11),
+            ack_up_requires_snr_candidate_at: Some(SpeedLevel::Sl15),
             fec_modes,
         }
     }

@@ -104,30 +104,38 @@ mod tests {
     #[test]
     fn recommends_expected_levels_for_thresholds() {
         let profile = SessionProfile::hpx_hf();
-        // Thresholds track the recalibrated hpx_hf SNR floors (SL2=3, SL3=4, SL4=5, SL5=9, SL6=11,
-        // SL7=12, SL8=14, SL9=16, SL10=17, SL11=22); recommend_hf_level picks the highest rung whose
-        // floor ≤ snr. Keep in sync if the profile floors change.
+        // Thresholds track the finer hpx_hf SNR floors (research #2): SL2=3 SL3=4 SL4=4.5 SL5=5 SL6=7
+        // SL7=9 SL8=11 SL9=12 SL10=13 SL11=14 SL12=16 SL13=17 SL14=19 SL15=22. recommend_hf_level picks
+        // the highest rung whose floor ≤ snr. Keep in sync if the profile floors change.
         let cases = [
             (-1.0, SpeedLevel::Sl2),
             (2.9, SpeedLevel::Sl2),
             (3.0, SpeedLevel::Sl2),
             (3.9, SpeedLevel::Sl2),
             (4.0, SpeedLevel::Sl3),
-            (5.0, SpeedLevel::Sl4),
-            (8.9, SpeedLevel::Sl4),
-            (9.0, SpeedLevel::Sl5),
-            (10.9, SpeedLevel::Sl5),
-            (11.0, SpeedLevel::Sl6),
-            (11.9, SpeedLevel::Sl6),
-            (12.0, SpeedLevel::Sl7),
-            (13.9, SpeedLevel::Sl7),
-            (14.0, SpeedLevel::Sl8),
-            (15.9, SpeedLevel::Sl8),
-            (16.0, SpeedLevel::Sl9),
-            (16.9, SpeedLevel::Sl9),
-            (17.0, SpeedLevel::Sl10),
-            (21.9, SpeedLevel::Sl10),
-            (22.0, SpeedLevel::Sl11),
+            (4.5, SpeedLevel::Sl4),
+            (4.9, SpeedLevel::Sl4),
+            (5.0, SpeedLevel::Sl5),
+            (6.9, SpeedLevel::Sl5),
+            (7.0, SpeedLevel::Sl6),
+            (8.9, SpeedLevel::Sl6),
+            (9.0, SpeedLevel::Sl7),
+            (10.9, SpeedLevel::Sl7),
+            (11.0, SpeedLevel::Sl8),
+            (11.9, SpeedLevel::Sl8),
+            (12.0, SpeedLevel::Sl9),
+            (12.9, SpeedLevel::Sl9),
+            (13.0, SpeedLevel::Sl10),
+            (13.9, SpeedLevel::Sl10),
+            (14.0, SpeedLevel::Sl11),
+            (15.9, SpeedLevel::Sl11),
+            (16.0, SpeedLevel::Sl12),
+            (16.9, SpeedLevel::Sl12),
+            (17.0, SpeedLevel::Sl13),
+            (18.9, SpeedLevel::Sl13),
+            (19.0, SpeedLevel::Sl14),
+            (21.9, SpeedLevel::Sl14),
+            (22.0, SpeedLevel::Sl15),
         ];
 
         for (snr, expected_level) in cases {
