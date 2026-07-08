@@ -321,3 +321,25 @@ fn calibrate_pilot_gap_candidate() {
     }
     println!("=== end SL7 gap-filler reassessment ===\n");
 }
+
+/// Focused AWGN floors for the finer-`hpx_hf` gap-filler candidates
+/// (research #2, `docs/dev/research/ladder-granularity.md`). AWGN is a lower bound; fading raises it.
+///
+/// Run: `cargo test -p openpulse-modem --no-default-features --test snr_floor_calibration \
+///   -- --ignored --nocapture calibrate_ladder_gap_fillers`
+#[test]
+#[ignore]
+fn calibrate_ladder_gap_fillers() {
+    println!("\n=== hpx_hf gap-filler candidates (AWGN, ≥90% of 16 frames) ===");
+    let candidates: &[(&str, FecMode, f32, f32)] = &[
+        ("BPSK31", FecMode::Rs, 0.0, 12.0),
+        ("BPSK100", FecMode::None, 0.0, 14.0),
+        ("QPSK250", FecMode::Rs, 2.0, 16.0),
+        ("SCFDMA26-32QAM", FecMode::SoftConcatenated, 8.0, 24.0),
+        ("SCFDMA52-64QAM-P4", FecMode::SoftConcatenated, 12.0, 32.0),
+    ];
+    for (mode, fec, lo, hi) in candidates {
+        let meas = min_decodable_snr(mode, *fec, *lo, *hi, 16, 0.9);
+        print_row("gap", mode, *fec, None, meas);
+    }
+}

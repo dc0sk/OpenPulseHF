@@ -437,7 +437,7 @@ impl SessionProfile {
         snr_ceilings[SpeedLevel::Sl8 as usize] = Some(18.0_f32); // floor(SL9)=16 +2
         snr_ceilings[SpeedLevel::Sl9 as usize] = Some(19.0_f32); // floor(SL10)=17 +2
         snr_ceilings[SpeedLevel::Sl10 as usize] = Some(24.0_f32); // floor(SL11)=22 +2
-        // SL11 (SCFDMA52-64QAM) is the ceiling of hpx_hf; no upgrade above it.
+                                                                  // SL11 (SCFDMA52-64QAM) is the ceiling of hpx_hf; no upgrade above it.
         Self {
             modes,
             initial_level: SpeedLevel::Sl2,
