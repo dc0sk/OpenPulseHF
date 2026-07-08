@@ -114,6 +114,21 @@ pub const KNOWN_LIMITATION_MODES: &[&str] = &["8PSK2000"];
 pub const WIDEBAND_POST_V1_MODES: &[&str] =
     &["QPSK9600", "QPSK9600-RRC", "8PSK9600", "8PSK9600-RRC"];
 
+/// SC-FDMA PAPR demonstrators: registered by `scfdma-plugin`, deliberately in NO adaptive profile,
+/// and therefore not swept by the channel matrix.
+///
+/// - `SCFDMA52-LP`: localized block-pilot layout with a single-tap (flat) channel estimate. It assumes
+///   flat gain/phase, near-zero residual timing offset, and no passband tilt; under frequency
+///   selectivity or a ±1-sample sync error it can SILENTLY mis-decode. Sweeping it over the matrix's
+///   propagation channels would assert behaviour the mode does not claim.
+/// - `SCFDMA52-P2`: SCFDMA52 with PN-phase pilots — identical geometry, rate and channel estimator,
+///   ~1.6 dB lower envelope PAPR. A versioned waveform experiment, not a rung.
+///
+/// Both carry plugin-level coverage (PAPR bound + clean round-trip) in `plugins/scfdma/src/lib.rs`.
+/// Listed here so they are explicitly tracked rather than silently excluded (see the coverage
+/// regression test); promote `SCFDMA52-P2` into `MULTICARRIER_MODES` if it ever enters a profile.
+pub const DEMONSTRATOR_MODES: &[&str] = &["SCFDMA52-LP", "SCFDMA52-P2"];
+
 /// Higher-rate pilot-framed variants registered by `pilot-plugin` but not yet in the quick
 /// matrix. The matrix covers a representative baseline subset (`PILOT_MODES`: the 500-baud
 /// family plus PILOT-16QAM1000); the 1000/2000-baud variants and the remaining 500-RRC
@@ -721,6 +736,7 @@ mod coverage_tests {
             .iter()
             .chain(KNOWN_LIMITATION_MODES.iter())
             .chain(PILOT_POST_V1_MODES.iter())
+            .chain(DEMONSTRATOR_MODES.iter())
             .map(|s| s.to_string())
             .collect();
         let missing: Vec<String> = registered_modes()
@@ -731,7 +747,7 @@ mod coverage_tests {
             missing.is_empty(),
             "registered modes with no matrix coverage and not explicitly accounted for \
              (add to a mode list in cases.rs, or to WIDEBAND_POST_V1_MODES / \
-             KNOWN_LIMITATION_MODES): {missing:?}"
+             KNOWN_LIMITATION_MODES / DEMONSTRATOR_MODES): {missing:?}"
         );
     }
 
@@ -744,6 +760,7 @@ mod coverage_tests {
             .iter()
             .chain(KNOWN_LIMITATION_MODES.iter())
             .chain(PILOT_POST_V1_MODES.iter())
+            .chain(DEMONSTRATOR_MODES.iter())
         {
             assert!(
                 !covered.contains(*m),
@@ -761,6 +778,7 @@ mod coverage_tests {
             .iter()
             .chain(KNOWN_LIMITATION_MODES.iter())
             .chain(PILOT_POST_V1_MODES.iter())
+            .chain(DEMONSTRATOR_MODES.iter())
         {
             assert!(
                 registered.contains(*m),

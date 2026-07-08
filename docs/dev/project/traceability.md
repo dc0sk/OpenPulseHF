@@ -9,6 +9,28 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-08 — test(testmatrix): account for the SC-FDMA PAPR demonstrator modes
+
+- **Requirement/change:** `every_registered_mode_is_covered_or_deferred` was red on `main` (verified by
+  stashing): `SCFDMA52-LP` and `SCFDMA52-P2` are registered by `scfdma-plugin` but appear in no matrix
+  mode list and no excused list. The test exists precisely to forbid that silent omission.
+- **Design decision:** neither mode belongs in the sweep, and neither is a "known limitation" (both pass a
+  clean round-trip). `SCFDMA52-LP` is a localized block-pilot demonstrator whose single-tap flat CE can
+  *silently* mis-decode under frequency selectivity or a ±1-sample sync error — sweeping it over the
+  matrix's propagation channels would assert behaviour the mode does not claim. `SCFDMA52-P2` is a
+  PN-pilot low-PAPR variant of SCFDMA52 with identical geometry, rate and estimator. So: a new explicit
+  `DEMONSTRATOR_MODES` list, chained into all three coverage tests and printed in the run summary
+  alongside the other excused lists, rather than a fourth silent exclusion.
+- **Implementation:** `apps/openpulse-testmatrix/src/cases.rs` — `DEMONSTRATOR_MODES` + the three
+  coverage tests; `apps/openpulse-testmatrix/src/main.rs` — reported in the run summary.
+- **Tests:** `cases::coverage_tests::{every_registered_mode_is_covered_or_deferred,
+  deferred_and_known_limitation_modes_generate_no_cases, excused_modes_exist_in_registry}` — the last of
+  these keeps the new list from rotting into naming a removed mode.
+- **Test results:** `openpulse-testmatrix` 6/6 + 12/12 green (was 5/6). Quick matrix run: **555/555
+  passed, 0 failed**, and the summary now lists the demonstrators. Full workspace
+  (`--exclude pki-tooling --no-default-features`): **1540 passed, 0 failed**. clippy `-D warnings
+  --all-targets` + fmt clean.
+
 ## 2026-07-08 — fix(scfdma): delay-basis Wiener channel estimator (DFT-CE was wrong on selective channels)
 
 - **Requirement/change:** while building a before/after harness for research items P2/P3/P4
