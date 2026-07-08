@@ -9,6 +9,53 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-08 — feat(profile): high-rate-LDPC top rungs SL16–SL19 (research item P6)
+
+- **Requirement/change:** research item P6, "LDPC on the dense rungs — swap `SoftConcatenated` for
+  `LdpcHighRate`/`Ldpc`, ~1–3 dB vs RS soft-concat at the same rate". Enabled by the multi-block LDPC of
+  PR #691.
+- **The premise was wrong, and the measurement says so.** LDPC is not "the same rate" as
+  `SoftConcatenated` — it is 2.03× the rate (r≈8/9 against r≈0.437) and therefore *costs* SNR rather than
+  saving it. Measured AWGN floors (62-byte payload, 90 % frame success, 32 frames/point, 1 dB grid):
+
+  | mode | `SoftConcatenated` | `LdpcHighRate` | Δ |
+  |---|---|---|---|
+  | SCFDMA26-32QAM | 5 dB | 11 dB | +6 |
+  | SCFDMA52-8PSK | 5 | 10 | +5 |
+  | SCFDMA52-16QAM | 7 | 14 | +7 |
+  | SCFDMA52-32QAM | 8 | 15 | +7 |
+  | SCFDMA52-64QAM-P4 | 15 | 19 | +4 |
+  | SCFDMA52-64QAM | 13 | 21 | +8 |
+
+  ~6 dB for 2× the rate is a *worse* trade than climbing one modulation order (8PSK→16QAM buys 1.33× for
+  ~2 dB). So wherever a denser constellation still exists, `SoftConcatenated` on it wins, and a swap
+  would have *lowered* throughput at every rung's operating SNR.
+- **Design decision:** the exception is the **top**. 64QAM is the densest constellation the SC-FDMA plugin
+  has, so above SL15 the only remaining lever on throughput is code rate. Add SL16–SL19 as MODCOD pairs of
+  SL12–SL15 at `LdpcHighRate` — exactly the pattern SL6/SL7 already use for QPSK250. Floors carry the same
+  +9 dB fading margin over their measured AWGN floor that SL11–SL13 and SL15 do (14/15/19/21 → 23/24/28/30),
+  and ceilings follow the uniform `ceiling(L) = floor(L+1) + 2` rule from PR #680. The ACK-UP admission
+  gate moves from SL15 to the new densest rung SL19. Pre-release, so the `fingerprint()` change carries no
+  ladder-interop concern.
+- **Implementation:** `crates/openpulse-core/src/profile.rs` — `hpx_hf()` modes/fec_modes/floors/ceilings/
+  gate, plus the measurement table and the reasoning in the body comment.
+- **Tests:** new `crates/openpulse-modem/tests/ldpc_ladder_rungs.rs` —
+  `ldpc_top_rungs_decode_at_their_calibrated_awgn_floor` (each new rung ≥ 85 % frame success at the AWGN
+  SNR it was placed from) and `scfdma_rungs_never_lengthen_the_air_time_and_ldpc_shortens_it_sharply`
+  (airtime monotone over SL10–SL19, and every LDPC rung ≥ 25 % shorter than SL15 — the claim that
+  justifies their higher floors). New `session_profile::hpx_hf_floors_are_monotonic_and_ceilings_follow_the_hysteresis_rule`.
+  `channel_loopback.rs` already round-trips every defined rung of every profile, so SL16–SL19 are covered
+  there by construction.
+- **Test results:** ladder top rate **3790 → 7710 bps**. New rungs (mode, FEC, gross×rate, floor):
+  SL16 SCFDMA52-16QAM+LHR 5141 bps @23 dB, SL17 SCFDMA52-32QAM+LHR 6426 @24, SL18 SCFDMA52-64QAM-P4+LHR
+  7265 @28, SL19 SCFDMA52-64QAM+LHR 7710 @30. Full workspace `--exclude pki-tooling
+  --no-default-features`: **1555 passed, 0 failed**; quick test matrix 555/555. clippy `-D warnings
+  --all-targets` + fmt clean.
+- **Honest note:** SL18 and SL19 tie on airtime for any payload a `u8` length can express — 64QAM-P4 carries
+  16 pilots to 64QAM's 13, so its gross rate is only 6 % lower, below the resolution of a whole number of
+  SC-FDMA symbols. The pair earns two rungs on P4's fading robustness (denser pilot comb), exactly as
+  SL14/SL15 already do. The test asserts non-increasing airtime rather than pretending otherwise.
+
 ## 2026-07-08 — feat(engine): multi-block LDPC (unblocks research item P6)
 
 - **Requirement/change:** research item P6 is "LDPC on the dense rungs". It was blocked: the engine's LDPC
