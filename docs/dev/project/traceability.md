@@ -9,6 +9,45 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-08 — fix(engine): MAP LLR combining (the HARQ weight applied σ⁻² twice)
+
+- **Requirement/change:** follow-up from PR #685. `receive_with_llr_combining` and
+  `receive_with_window_arq` derived a per-attempt weight from a `noise_var = 1 / mean(|LLR|)` proxy and
+  fed it to `combine_llrs_weighted` (weight `1/noise_var`). For a calibrated demodulator this applies
+  **σ⁻⁴**: `openpulse_dsp::constellation::symbol_llrs` already divides every distance by its `noise_var`,
+  so the emitted LLR is a true log-likelihood ratio and its magnitude is already ∝ 1/σ².
+- **Root cause, measured:** `mean(|LLR|)` vs SNR, 8→24 dB (ideal for a calibrated plugin: 1×, 2.51×,
+  6.31×, 15.8×, 39.8×). SC-FDMA: 1×, 2.51×, 6.36×, 16.05×, **40.42×** — exactly ∝1/σ², so the proxy
+  weight is a second 1/σ². OFDM: 26.54× (also calibrated, sub-linear). 64QAM (`noise_var = 1.0`), 8PSK,
+  BPSK, QPSK: **1.00× at every SNR** — flat, so the proxy conveys *no* reliability information there.
+  The proxy was therefore harmful exactly where it "worked" and inert everywhere else.
+- **Design decision:** for independent observations of the same bits, log-likelihood ratios **add**. The
+  plain sum is the exact MAP combine, and for calibrated LLRs it *is* inverse-noise weighting. Add
+  `combine_llrs_map` / `combine_llrs_map_in_ranges` and use them in the engine. `combine_llrs_weighted`
+  is kept — it remains correct for LLRs that carry an arbitrary noise-blind scale — with its doc
+  rewritten to state the contract (the weight is a *calibration correction*, `1` for a calibrated
+  demodulator) and to point at `combine_llrs_map`. Calibrating the remaining plugins is left as a
+  separate ~1 dB improvement, recorded in the research doc.
+- **Implementation:** `crates/openpulse-core/src/fec.rs` — `combine_llrs_map`,
+  `combine_llrs_map_in_ranges`, `combine_llrs_weighted` doc; `crates/openpulse-core/src/plugin.rs` —
+  LLR *calibration* contract added to `demodulate_soft`; `crates/openpulse-modem/src/engine.rs` —
+  both call sites, weight proxy deleted.
+- **Tests:** `openpulse-core::fec::{map_combine_beats_double_inverse_noise_weighting_on_calibrated_llrs,
+  weighted_combine_beats_map_sum_on_uncalibrated_llrs, map_combine_is_the_llr_sum}` — the first two pin
+  *both* directions of the contract, so neither combiner can be misapplied again.
+  `crates/openpulse-modem/tests/llr_combining_gain.rs` — new
+  `llr_combining_extracts_diversity_gain_over_best_single_attempt`; the module doc's claim that the
+  proxy and a pilot-derived σ² "give the same relative weighting" is corrected (true, and precisely the
+  bug).
+- **Test results:** engine threshold on a graded 0/−4/−8 dB three-attempt set, SCFDMA52, mean over 6 seed
+  triples on a 0.5 dB grid: **4.83 → 4.08 dB (0.75 dB gain)**. Equal-SNR and single-deep-fade sets are
+  unchanged within the grid step (a −14 dB attempt is nearly information-free, so over-suppressing it
+  costs little). 64QAM (uncalibrated) unchanged except the deep-fade set, 20.83 → 20.42 dB. All existing
+  HARQ/ARQ suites green (`llr_combining_gain`, `window_arq_*`, `scfdma_memory_arq`,
+  `harq_retry_watterson_integration`, `harq_rate_selection_watterson`, `arq_retry_integration`,
+  `two_way_arq`). Full workspace `--exclude pki-tooling --no-default-features`: **1544 passed, 0 failed**.
+  clippy `-D warnings --all-targets` + fmt clean.
+
 ## 2026-07-08 — test(testmatrix): account for the SC-FDMA PAPR demonstrator modes
 
 - **Requirement/change:** `every_registered_mode_is_covered_or_deferred` was red on `main` (verified by
