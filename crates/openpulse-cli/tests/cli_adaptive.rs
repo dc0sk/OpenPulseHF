@@ -2,7 +2,7 @@ use assert_cmd::Command;
 use predicates::str::contains;
 
 /// Over a clean channel every frame decodes, so the ladder climbs one rung per
-/// ACK-UP: from SL2 (BPSK31), six frames reach SL8 (SCFDMA52-8PSK).
+/// ACK-UP: from SL2 (BPSK31), six frames reach SL8 (QPSK500) on the finer ladder.
 #[test]
 fn adaptive_clean_climbs_the_ladder() {
     let mut cmd = Command::cargo_bin("openpulse").expect("binary should build");
@@ -20,7 +20,7 @@ fn adaptive_clean_climbs_the_ladder() {
         .stdout(contains("profile=hpx_hf"))
         .stdout(contains("start: level=SL2 mode=BPSK31"))
         .stdout(contains("→ SL3 (BPSK63)"))
-        .stdout(contains("final: level=SL8 mode=SCFDMA52-8PSK"));
+        .stdout(contains("final: level=SL8 mode=QPSK500"));
 }
 
 /// The OFDM higher-order ladder is reachable and climbs to its densest rung.

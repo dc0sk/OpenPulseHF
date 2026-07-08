@@ -38,6 +38,10 @@ could carry ~2× with lighter coding); no coded weak-signal rung below 3 dB.
 
 ## Proposed finer `hpx_hf` ladder
 
+> **Status: ✅ implemented 2026-07-08** — `hpx_hf()` now runs SL2→SL15 (dropping only the two top
+> LDPC rungs, which wait on SC-FDMA P6). Floors measured via the AWGN sweeps below; the clean adaptive
+> climb decodes every rung SL2→SL15. The table below is the as-shipped ladder.
+
 All rungs ≤ ~2.7 kHz; `SpeedLevel` already spans SL1–SL20, so there is headroom.
 
 | SL | Mode | FEC | ~net bps | ~floor | note |

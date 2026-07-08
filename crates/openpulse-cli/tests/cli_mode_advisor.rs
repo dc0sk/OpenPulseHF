@@ -3,23 +3,25 @@ use predicates::str::contains;
 
 #[test]
 fn mode_advisor_outputs_expected_levels_across_hpx_hf_ladder() {
-    // Expected (SNR dB → level, mode) against the hpx_hf floors in `profile.rs`
-    // (SL6=11, SL7=12, SL8=14, SL9=16 …). The advisor picks the highest rung whose floor is met,
-    // so a probe *at* a floor lands on that rung. 8PSK500 is the deliberate 12 dB gap-filler
-    // (a pilot swap was measured and rejected — it loses good_f1 fading; see profile.rs).
+    // Expected (SNR dB → level, mode) against the finer hpx_hf floors in `profile.rs` (research #2):
+    // SL2=3 SL3=4 SL4=4.5 SL5=5 SL6=7 SL7=9 SL8=11 SL9=12 SL10=13 SL11=14 SL12=16 SL13=17 SL14=19
+    // SL15=22. The advisor picks the highest rung whose floor is met, so a probe *at* a floor lands on
+    // that rung. SL6/SL7 are QPSK250 at different FEC (coded gap-filler vs uncoded).
     let cases = [
         (0.0, "SL2", "BPSK31"),
-        (2.5, "SL2", "BPSK31"),
         (3.5, "SL2", "BPSK31"),
-        (4.5, "SL3", "BPSK63"),
-        (5.5, "SL4", "BPSK250"),
-        (8.5, "SL4", "BPSK250"),
-        (9.5, "SL5", "QPSK250"),
-        (10.5, "SL5", "QPSK250"),
-        (11.5, "SL6", "QPSK500"),
-        (12.0, "SL7", "8PSK500"),
-        (14.0, "SL8", "SCFDMA52-8PSK"),
-        (16.0, "SL9", "SCFDMA52-16QAM"),
+        (4.5, "SL4", "BPSK100"),
+        (5.5, "SL5", "BPSK250"),
+        (8.5, "SL6", "QPSK250"),
+        (9.5, "SL7", "QPSK250"),
+        (11.5, "SL8", "QPSK500"),
+        (12.0, "SL9", "8PSK500"),
+        (13.0, "SL10", "SCFDMA26-32QAM"),
+        (14.0, "SL11", "SCFDMA52-8PSK"),
+        (16.0, "SL12", "SCFDMA52-16QAM"),
+        (17.0, "SL13", "SCFDMA52-32QAM"),
+        (19.0, "SL14", "SCFDMA52-64QAM-P4"),
+        (22.0, "SL15", "SCFDMA52-64QAM"),
     ];
 
     for (snr, level, mode) in cases {

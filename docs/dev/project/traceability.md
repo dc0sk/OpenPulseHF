@@ -9,6 +9,26 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-08 — feat: finer hpx_hf ladder (research #2, granularity)
+
+- **Requirement/change:** fill the `hpx_hf` throughput cliffs and SNR dead-zones. Rewrote the SL2→SL11
+  ladder into SL2→SL15 by inserting existing (previously unused) modes plus a MODCOD rung: **BPSK100**
+  (SL4, breaks the 62→250 bps cliff), **QPSK250+Rs** (SL6, fills the 5→9 dB dead-zone), **SCFDMA26-32QAM**
+  (SL10, ~1 kHz FDE-robust rung), **SCFDMA52-64QAM-P4** (SL14, splits the 17→22 dB gap).
+- **Design decision:** floors placed monotonic between neighbours from the AWGN sweeps
+  (`calibrate_ladder_gap_fillers` + `calibrate_snr_floors_hpx_hf`, lower bounds) with the low-order
+  rungs' fading margin; ceilings = `floor(L+1)+2`. SL6/SL7 are QPSK250 coded/uncoded — a proper MODCOD
+  pair, not a duplicate. The ACK-UP admission gate moved to the new top rung SL15. **Pre-release, so the
+  SL re-index carries no ladder-interop concern** (the profile fingerprint changes intentionally).
+- **Implementation:** `crates/openpulse-core/src/profile.rs` — `hpx_hf()` (modes, fec_modes, floors,
+  ceilings, gate).
+- **Tests:** `session_profile` (mode mapping + MODCOD-pair FEC), `cli_mode_advisor` (integration + the
+  `recommend_hf_level` unit test), `adaptive_profile_integration` (7-ACK climb to 8PSK500), `cli_adaptive`
+  (clean climb to SL8) all updated. **End-to-end:** a clean adaptive climb decodes every rung SL2→SL15
+  (14/14 frames, including the inserted SCFDMA26-32QAM and SCFDMA52-64QAM-P4).
+- **Test results:** openpulse-core + openpulse-cli + full openpulse-modem suites green; clippy
+  `-D warnings` + fmt clean.
+
 ## 2026-07-08 — fix: recalibrate the LLR-combining-gain baseline test (restore green `main`)
 
 - **Requirement/change:** `weighted_llr_combining_at_least_2_db_gain_over_equal_weight` was failing on

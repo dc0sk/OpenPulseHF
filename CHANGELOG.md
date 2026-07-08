@@ -81,6 +81,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   fading). Added a `calibrate_pilot_gap_candidate` calibration sweep to keep this re-derivable.
 
 ### Changed
+- Finer `hpx_hf` adaptive ladder: rewrote SL2→SL11 into **SL2→SL15**, filling the throughput cliffs and
+  SNR dead-zones with previously-unused modes plus a MODCOD rung — BPSK100 (breaks the 62→250 bps cliff),
+  QPSK250+Rs (fills the 5→9 dB dead-zone), SCFDMA26-32QAM (~1 kHz FDE-robust rung), SCFDMA52-64QAM-P4
+  (splits the 17→22 dB gap). Floors measured from AWGN calibration sweeps; every rung decodes end-to-end
+  on a clean adaptive climb. Pre-release, so the ladder re-index carries no interop concern.
 - `hpx_hf` adaptive-ladder upshift ceilings normalized to a uniform `ceiling(L) = floor(L+1) + 2 dB`
   hysteresis (the old table mixed +1 and +4 dB, over-dwelling the lowest-throughput rungs), so the
   ladder climbs off the slow rungs sooner. Data-only; the SNR→mode mapping (floor-based) is unchanged.
