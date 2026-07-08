@@ -569,9 +569,17 @@ fn find_sync_offset(samples: &[f32], sync: &[f32]) -> Option<usize> {
     // ≲ 0.1 with a multi-symbol template; a real (even band-limited, faded)
     // preamble correlates well above this.
     const DETECTION_FLOOR_RHO: f32 = 0.15;
+    // A window must carry at least this fraction of the mean window energy for its ρ to be trusted;
+    // below it, ρ is the ratio of two vanishing quantities. 1 % admits a 20 dB preamble fade.
+    const MIN_WINDOW_ENERGY_FRAC: f32 = 0.01;
 
+    // Argmax over the NORMALISED correlation, not the unnormalised score. When the preamble itself
+    // lands in a fade, its window energy is low and `search`'s energy-favouring argmax hands the frame
+    // to a data-region window that merely shares the pilot comb. Measured under a flat Watterson fade:
+    // ρ = 0.994 at the true offset (window energy 19.4) versus ρ = 0.657 at offset +4896 (energy 83.0),
+    // which won on energy and left the demodulator with 4 symbols instead of 21.
     let filt = IqMatchedFilter::new(sync.to_vec());
-    let result = filt.search(samples, SEARCH_CAP)?;
+    let result = filt.search_normalized(samples, SEARCH_CAP, MIN_WINDOW_ENERGY_FRAC)?;
     if result.rho < DETECTION_FLOOR_RHO {
         return None;
     }

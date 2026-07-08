@@ -9,6 +9,45 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-08 — fix(scfdma): acquire on the normalised correlation, not the unnormalised score
+
+- **Requirement/change:** after PR #688 the SC-FDMA rungs still lost frames under fading in a way that
+  scaled with Doppler. The research doc (item P2) attributed it to fade *dynamics* — the causal
+  `smooth_ce` EMA lagging a moving channel.
+- **Root cause — P2's premise was also wrong.** A **flat** Rayleigh fade (delay spread 0) at 60 dB SNR
+  isolates dynamics from both noise and selectivity, and SCFDMA52-16QAM decoded only 0.47 of frames at
+  0.5 Hz Doppler. Disabling `smooth_ce` entirely left that number **bit-identical**, so the EMA lag costs
+  nothing. Tracing the failures: `demodulate_soft` was returning 784 LLRs instead of 4160 because
+  `find_sync_offset` locked at offset **4896** — 17 symbols into the frame. `IqMatchedFilter::search`
+  takes the argmax of the *unnormalised* correlation score, documented as favouring "high-correlation and
+  high-energy alignment, so a deep-fade low-energy window cannot win". When the **preamble** is the faded
+  part that is exactly backwards: measured ρ = 0.994 at the true offset (window energy 19.4) against
+  ρ = 0.657 at +4896 (energy 83.0), and the higher-energy window won. SC-FDMA's preamble template is a
+  full frame of SC-FDMA symbols carrying the same pilot comb as the data, so data-region windows correlate
+  with it.
+- **Design decision:** argmax over the **normalised** correlation ρ, which is amplitude-invariant and so
+  unmoved by the fade. New `IqMatchedFilter::search_normalized(samples, bound, min_energy_frac)`;
+  `search` is left alone for its existing callers. The energy floor (1 % of the mean window energy over
+  the search range — admits a 20 dB preamble fade) is what keeps ρ meaningful: on a near-silent window
+  both numerator and denominator vanish and ρ is numerical noise. No extra cost — the loop already
+  computed both score and energy per offset.
+- **Implementation:** `crates/openpulse-dsp/src/acquisition.rs` — `IqMatchedFilter::search_normalized`;
+  `plugins/scfdma/src/demodulate.rs` — `find_sync_offset` + `MIN_WINDOW_ENERGY_FRAC`.
+- **Tests:** `crates/openpulse-modem/tests/scfdma_multipath_timing.rs` —
+  `acquires_a_frame_whose_preamble_is_faded`: flat Rayleigh fade at 60 dB SNR (no noise, no selectivity),
+  so a lost frame can only be an acquisition bug. Fails on the pristine tree at 0.75 (SCFDMA52, 0.5 Hz).
+  `scfdma52_rejects_noise_no_false_sync` still passes, so the ρ argmax has not weakened false-lock
+  rejection.
+- **Test results:** flat fade at 60 dB, 40 frames — SCFDMA52-16QAM 0.5 Hz **0.47 → 0.93**, 0.1 Hz
+  0.77 → 0.98; SCFDMA52 0.5 Hz 0.75 → 1.00. `scfdma_ce_sweep` (60 frames/point): Watterson `good_f1` sum
+  **29.57 → 31.40 of 42**; at 32 dB SCFDMA52-16QAM 0.72 → **0.97**, SCFDMA26-32QAM 0.97 → 1.00,
+  52-8PSK 0.93 → 0.97, 52-64QAM 0.83 → 0.87. `moderate_f1` @32 dB: SCFDMA52 0.45 → 0.73, 16QAM 0.22 →
+  0.45. The AWGN sweep is **bit-for-bit unchanged**. Full workspace `--exclude pki-tooling
+  --no-default-features`: **1551 passed, 0 failed**. clippy `-D warnings --all-targets` + fmt clean.
+- **Method note:** third accepted explanation falsified in a row, each time by removing the impairment the
+  explanation depends on. Notch smearing dies at 60 dB SNR. CE-lag dies when `smooth_ce` is deleted and
+  nothing changes. Delete the mechanism; if the number doesn't move, it was never the mechanism.
+
 ## 2026-07-08 — fix(scfdma): lock sync ahead of the correlation peak, not on it
 
 - **Requirement/change:** after PR #685 the SC-FDMA rungs still decoded a *flat* 12–32 % of Watterson

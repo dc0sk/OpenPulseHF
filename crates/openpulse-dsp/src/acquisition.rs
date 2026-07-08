@@ -130,6 +130,62 @@ impl IqMatchedFilter {
         })
     }
 
+    /// Search offsets `0..=bound` for the maximum **normalised** correlation ρ, ignoring windows
+    /// whose energy is below `min_energy_frac` of the mean window energy over the search range.
+    ///
+    /// Prefer this to [`search`](Self::search) whenever the signal may fade *during the preamble*.
+    /// `search`'s unnormalised argmax deliberately favours high-energy alignment, on the reasoning
+    /// that "a deep-fade low-energy window cannot win" — but when the preamble itself is the faded
+    /// part, that is exactly backwards. Measured on SC-FDMA under a flat Watterson fade: at the true
+    /// offset ρ = 0.994 with window energy 19.4, while a data-region window 4896 samples later scored
+    /// higher on energy alone with ρ = 0.657, and the demodulator locked onto it. ρ is amplitude
+    /// invariant, so it is unmoved by the fade.
+    ///
+    /// The energy floor is what keeps ρ meaningful: on a near-silent window both numerator and
+    /// denominator vanish and ρ is numerical noise.
+    ///
+    /// Returns `None` when the slice is shorter than the template or no window clears the floor.
+    pub fn search_normalized(
+        &self,
+        samples: &[f32],
+        bound: usize,
+        min_energy_frac: f32,
+    ) -> Option<IqSearchResult> {
+        if samples.len() < self.template.len() || self.template.is_empty() {
+            return None;
+        }
+        let max_offset = (samples.len() - self.template.len()).min(bound);
+
+        let mut scored: Vec<(f32, f32)> = Vec::with_capacity(max_offset + 1);
+        let mut energy_sum = 0.0f64;
+        for offset in 0..=max_offset {
+            let (score, energy) = self.score_at(samples, offset);
+            energy_sum += energy as f64;
+            scored.push((score, energy));
+        }
+        let mean_energy = (energy_sum / (max_offset + 1) as f64) as f32;
+        let floor = mean_energy * min_energy_frac;
+
+        let mut best_offset = None;
+        let mut best_rho = f32::NEG_INFINITY;
+        for (offset, &(score, energy)) in scored.iter().enumerate() {
+            if energy < floor {
+                continue;
+            }
+            let rho = score.sqrt() / ((energy * self.t_energy).sqrt() + 1e-12);
+            if rho > best_rho {
+                best_rho = rho;
+                best_offset = Some(offset);
+            }
+        }
+        let offset = best_offset?;
+        Some(IqSearchResult {
+            offset,
+            score: scored[offset].0,
+            rho: best_rho,
+        })
+    }
+
     /// Normalised correlation ρ for every offset in `lo..=hi` (clamped).
     ///
     /// Used by multipath-aware acquisition (e.g. OFDM leading-path selection)
