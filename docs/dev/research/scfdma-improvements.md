@@ -132,10 +132,17 @@ TDM DMRS pilot symbols (the per-symbol comb tracks Doppler strictly better; not 
    detection floor is untested against fading/impulse noise.
 6. **Adaptive pilot density can't deploy** (no negotiation) — wire it or delete it (footgun).
 7. **`SCFDMA52-LP` mis-decode risk** is documented but the mode stays user-selectable.
-8. **`llr_noise_var` ignores channel-estimate error** — `mmse_llr_noise_var` models only the post-MMSE
-   additive noise, while CE error adds 37–48 % to the true post-despread error variance. The LLRs are
-   therefore ~1.5 dB over-confident, by a slightly SNR-dependent amount. Fixable from the solver:
-   add `trace(R Rᴴ)·σ²_h / total_sc`.
+8. ~~`llr_noise_var` ignores channel-estimate error~~ — **fixed** (PR #690). It also ignored the
+   residual-ISI term `var(α_k)`. Measured over-confidence at 12 dB, SCFDMA52-16QAM: bits with `|L| ≈ 6`
+   were wrong 9× more often than `1/(1+e^{|L|})` promises, and `|L| ≈ 12` **71×**. Both terms added;
+   worst-bin ratio now ≤ 2.3×, the residue being the max-log-MAP approximation itself.
+   **Honest result: no measured decode or HARQ gain.** Soft Viterbi, min-sum LDPC and max-log turbo are
+   scale-invariant, and the missing terms are close to a per-frame constant, so a 71× calibration error
+   was invisible to every frame-success metric. The AWGN and Watterson sweeps are unchanged to within
+   Monte-Carlo noise (`good_f1` sum 31.40 → 31.42 of 42). It ships as a correctness fix and as the
+   prerequisite for P7, whose feedback reliability `v̄` is an *expectation over the constellation given
+   the LLRs* — with 71×-over-confident LLRs that expectation would drive the equalizer into an
+   error-propagation spiral.
 9. ~~`combine_llrs_weighted` double-counts~~ — **fixed** (`combine_llrs_map`, PR #686). The engine's
    `1.0/mean_abs` weight proxy applied σ⁻² on top of the σ⁻² already inside a calibrated LLR. Worth
    0.75 dB of threshold on a graded 0/−4/−8 dB HARQ attempt set.
@@ -159,16 +166,15 @@ noise). It was **two sync bugs**:
   therefore gone — the causal EMA's lag was measured to cost *nothing* (disabling `smooth_ce` entirely
   left the flat-fade numbers bit-identical).
 
-1. **#8 — LLR calibration** (S): `mmse_llr_noise_var` models only the additive noise. It is missing the
-   channel-estimate error (`ε²_k = σ²_h · Σ_j |recon[k·P+j]|²`, read straight off `CeSolver::recon`) and
-   the residual-ISI term `var(α)` — on a selective channel at high SNR the LLRs are over-confident by up
-   to ~20 dB, which is what lets a few smeared symbols poison the soft Viterbi. Also a prerequisite for
-   P7's feedback-reliability estimate.
-2. **P6 — LDPC on the dense rungs** (M): no new DSP — the codec + engine plumbing exist; 1–3 dB of
-   ladder-floor improvement, on *every* channel including AWGN.
+1. **P6 — LDPC on the dense rungs** (M): no new DSP — the codec + engine plumbing exist; 1–3 dB of
+   ladder-floor improvement, on *every* channel including AWGN. Now the only item on this list with a
+   measured decode gain attached to it.
+2. **P7 — IBDFE** (M/L): unblocked by #8. Its domain is `moderate_f1` (SCFDMA52-16QAM still at 0.45) and
+   the 8–20 dB `good_f1` window, not `good_f1` at 32 dB (now 0.97).
 3. **P2 — CPE removal + non-causal CE smoothing** (S/M): demoted. Its motivating measurement was the sync
-   bug. Re-measure before building: what remains of the Doppler dependence is intra-symbol Doppler (ICI),
-   which no channel-estimate smoothing addresses.
+   bug of PR #689; deleting `smooth_ce` entirely left the flat-fade numbers bit-identical. Re-measure
+   before building: what remains of the Doppler dependence is intra-symbol Doppler (ICI), which no
+   channel-estimate smoothing addresses.
 
 **P7 (IBDFE) after those.** Its honest headroom, from a 20 000-draw Monte-Carlo of the MMSE-vs-matched-
 filter bound (`SINR_mmse = N/Σ(1/(1+γ_k)) − 1` vs `SINR_mfb = (1/N)Σγ_k`, two-ray d=4 over the 52 data

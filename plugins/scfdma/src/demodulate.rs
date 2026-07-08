@@ -102,6 +102,17 @@ struct FrameFront {
     chan_power: f32,
 }
 
+/// Per-subcarrier channel-estimate error variance `ε²_k`, or an empty slice for the localized layout.
+///
+/// Frame-constant: it depends only on the estimator's noise gain and the frame's σ². Feeds
+/// [`mmse_llr_noise_var`], which without it treats the channel estimate as exact.
+fn ce_error_var(front: &FrameFront, solver: Option<&CeSolver>) -> Vec<f32> {
+    match solver {
+        Some(s) => s.ce_error_var_per_sc(front.noise_var),
+        None => Vec::new(),
+    }
+}
+
 impl FrameFront {
     /// FFT every complete symbol in `samples` (already advanced past the preamble), then
     /// [`FrameFront::from_spectra`].
@@ -327,6 +338,7 @@ fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Result<Vec<u8>, 
         ));
     }
     let solver = front.solver(p, &ce);
+    let ce_err = ce_error_var(&front, solver.as_ref());
 
     let mut bits: Vec<bool> = Vec::with_capacity(n_syms * p.bits_per_symbol());
     let mut ema_h: Option<Vec<Complex32>> = None;
@@ -339,7 +351,7 @@ fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Result<Vec<u8>, 
         let h_est = smooth_ce(&mut ema_h, &raw_h);
         // MMSE attenuates by `alpha_avg`; undo it before demapping so QAM hard decisions are not
         // biased toward the origin (mirrors the soft path — PSK is angle-only, so unaffected there).
-        let (_, alpha_avg) = mmse_llr_noise_var(p, &h_est, noise_var);
+        let (_, alpha_avg) = mmse_llr_noise_var(p, &h_est, noise_var, &ce_err);
         let mut equalized = mmse_equalize(p, freq, &h_est, noise_var);
 
         // Step 3: IDFT(N_data) — undo DFT precoding; scale to preserve energy.
@@ -468,6 +480,7 @@ fn demodulate_soft_with_params(
         ));
     }
     let solver = front.solver(p, &ce);
+    let ce_err = ce_error_var(&front, solver.as_ref());
 
     let points = constellation_points(p.bits_per_sc);
     let mut llrs = Vec::with_capacity(n_syms * p.bits_per_symbol());
@@ -491,7 +504,7 @@ fn demodulate_soft_with_params(
         let k_linear = estimate_rician_k_linear(&h_pilots_buf);
         let k_db = 10.0 * (k_linear + 1e-6).log10();
 
-        let (llr_noise_var, alpha_avg) = mmse_llr_noise_var(p, &h_est, pilot_noise_var);
+        let (llr_noise_var, alpha_avg) = mmse_llr_noise_var(p, &h_est, pilot_noise_var, &ce_err);
         let mut equalized = mmse_equalize(p, freq, &h_est, pilot_noise_var);
 
         idft.process(&mut equalized);
@@ -689,6 +702,7 @@ pub fn scfdma_demodulate_soft_gpu(
         return None;
     }
     let solver = front.solver(&p, &ce);
+    let ce_err = ce_error_var(&front, solver.as_ref());
 
     let points = constellation_points(p.bits_per_sc);
     let mut all_llrs: Vec<f32> = Vec::with_capacity(actual_syms * p.bits_per_symbol());
@@ -699,7 +713,7 @@ pub fn scfdma_demodulate_soft_gpu(
         let pilot_noise_var = front.noise_var_for(&p, solver.as_ref(), freq, &raw_h);
         let h_est = smooth_ce(&mut ema_h, &raw_h);
 
-        let (llr_noise_var, alpha_avg) = mmse_llr_noise_var(&p, &h_est, pilot_noise_var);
+        let (llr_noise_var, alpha_avg) = mmse_llr_noise_var(&p, &h_est, pilot_noise_var, &ce_err);
         let mut equalized = mmse_equalize(&p, freq, &h_est, pilot_noise_var);
 
         idft.process(&mut equalized);
@@ -793,6 +807,7 @@ pub fn scfdma_demodulate_gpu(
         return None;
     }
     let solver = front.solver(&p, &ce);
+    let ce_err = ce_error_var(&front, solver.as_ref());
 
     let mut bits: Vec<bool> = Vec::with_capacity(actual_syms * p.bits_per_symbol());
     let mut ema_h: Option<Vec<Complex32>> = None;
@@ -802,7 +817,7 @@ pub fn scfdma_demodulate_gpu(
         let noise_var = front.noise_var_for(&p, solver.as_ref(), freq, &raw_h);
         let h_est = smooth_ce(&mut ema_h, &raw_h);
         // Undo the MMSE amplitude bias before demapping, as the CPU hard path does.
-        let (_, alpha_avg) = mmse_llr_noise_var(&p, &h_est, noise_var);
+        let (_, alpha_avg) = mmse_llr_noise_var(&p, &h_est, noise_var, &ce_err);
         let mut equalized = mmse_equalize(&p, freq, &h_est, noise_var);
 
         idft.process(&mut equalized);

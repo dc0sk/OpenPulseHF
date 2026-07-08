@@ -379,6 +379,9 @@ pub struct CeSolver {
     pilot_values: Vec<Complex32>,
     /// `total × P`, row-major: `h_est = recon · h_pilot_ls`.
     recon: Vec<Complex32>,
+    /// `Σ_k |recon[rel][k]|²` per subcarrier — the estimator's noise gain, and hence its error variance
+    /// once multiplied by the pilot-observation noise variance.
+    recon_row_energy: Vec<f32>,
     residual_debias: f32,
 }
 
@@ -492,11 +495,21 @@ impl DelayCe {
                 recon[rel * n_pilots + k] = Complex32::new(acc.re as f32, acc.im as f32);
             }
         }
+        let recon_row_energy = (0..self.total)
+            .map(|rel| {
+                recon[rel * n_pilots..(rel + 1) * n_pilots]
+                    .iter()
+                    .map(|c| c.norm_sqr())
+                    .sum()
+            })
+            .collect();
+
         CeSolver {
             total: self.total,
             pilots: self.pilots.clone(),
             pilot_values: self.pilot_values.clone(),
             recon,
+            recon_row_energy,
             residual_debias,
         }
     }
@@ -525,6 +538,16 @@ impl CeSolver {
     /// Factor that turns this fit's mean pilot residual into an unbiased σ². See [`residual_debias`].
     pub fn noise_debias(&self) -> f32 {
         self.residual_debias
+    }
+
+    /// Per-subcarrier channel-estimate error variance `ε²_k`, for a frame with per-bin noise `noise_var`.
+    ///
+    /// `ĥ = R·h_pilot` and the pilot observations carry noise of variance `σ²_h = σ² / |pilot|²`, so the
+    /// estimate's own error variance at subcarrier `k` is `σ²_h · Σ_j |R[k][j]|²`. This is what
+    /// [`mmse_llr_noise_var`] needs to stop pretending the channel estimate is exact.
+    pub fn ce_error_var_per_sc(&self, noise_var: f32) -> Vec<f32> {
+        let sigma2_h = noise_var / (PILOT_AMPLITUDE * PILOT_AMPLITUDE);
+        self.recon_row_energy.iter().map(|e| sigma2_h * e).collect()
     }
 }
 
@@ -634,11 +657,29 @@ fn ridge_pseudo_inverse(
 ///
 /// Returns `(llr_noise_var, alpha_avg)` where `alpha_avg` is the mean MMSE signal attenuation
 /// across data SCs.  Dividing equalized symbols by `alpha_avg` restores unit-constellation
-/// scale; `llr_noise_var` is then the correctly calibrated noise floor for min-log-MAP LLRs.
-pub fn mmse_llr_noise_var(p: &ScFdmaParams, h_est: &[Complex32], noise_var: f32) -> (f32, f32) {
+/// scale; `llr_noise_var` is then the calibrated noise floor for max-log-MAP LLRs.
+///
+/// Three terms, only the first of which this used to model:
+/// 1. **additive noise** through the equalizer, `σ²·|C_k|²`;
+/// 2. **residual ISI**, `var(α_k)` — the DFT de-spread averages the per-SC gains, so their *spread*
+///    survives as self-interference. Zero on a flat channel; dominant at a spectral notch;
+/// 3. **channel-estimate error**, `|C_k|²·ε²_k` from [`CeSolver::ce_error_var_per_sc`].
+///
+/// Omitting 2 and 3 made the LLRs over-confident: at 12 dB on a flat channel the measured error rate
+/// among bits with `|L| ≈ 6` was 9× what `1/(1+e^{|L|})` promises, and 71× at `|L| ≈ 12`. A *uniform*
+/// error is harmless (soft Viterbi is scale-invariant) — what costs is that the missing terms vary per
+/// symbol, so faded and clean symbols were weighted against each other wrongly.
+pub fn mmse_llr_noise_var(
+    p: &ScFdmaParams,
+    h_est: &[Complex32],
+    noise_var: f32,
+    ce_error_var: &[f32],
+) -> (f32, f32) {
     let sigma2 = noise_var;
     let mut alpha_sum = 0.0f32;
+    let mut alpha_sq_sum = 0.0f32;
     let mut eff_var_sum = 0.0f32;
+    let mut ce_sum = 0.0f32;
     let mut count = 0usize;
 
     for (rel, h) in h_est.iter().enumerate() {
@@ -648,10 +689,14 @@ pub fn mmse_llr_noise_var(p: &ScFdmaParams, h_est: &[Complex32], noise_var: f32)
         let h_sq = h.norm_sqr();
         let denom = (h_sq + sigma2).max(1e-9);
         let alpha = h_sq / denom;
-        // MMSE output noise per SC: σ² × |H|² / (|H|² + σ²)²
-        let eff_var = sigma2 * h_sq / (denom * denom).max(1e-12);
+        // MMSE equalizer tap: |C_k|² = |Ĥ_k|² / (|Ĥ_k|² + σ²)².
+        let c_sq = h_sq / (denom * denom).max(1e-12);
+        // MMSE output noise per SC: σ² × |C_k|².
+        eff_var_sum += sigma2 * c_sq;
+        // Channel-estimate error passes through the same tap: |C_k|² × ε²_k.
+        ce_sum += c_sq * ce_error_var.get(rel).copied().unwrap_or(0.0);
         alpha_sum += alpha;
-        eff_var_sum += eff_var;
+        alpha_sq_sum += alpha * alpha;
         count += 1;
     }
 
@@ -659,11 +704,17 @@ pub fn mmse_llr_noise_var(p: &ScFdmaParams, h_est: &[Complex32], noise_var: f32)
         return (sigma2, 1.0);
     }
 
-    let alpha_avg = (alpha_sum / count as f32).max(1e-6);
-    let eff_var_avg = eff_var_sum / count as f32;
-    // After dividing symbols by alpha_avg, effective noise variance is:
-    // σ²_LLR = eff_var_avg / alpha_avg²
-    let llr_noise_var = (eff_var_avg / (alpha_avg * alpha_avg)).max(1e-6);
+    let n = count as f32;
+    let alpha_avg = (alpha_sum / n).max(1e-6);
+    let eff_var_avg = eff_var_sum / n;
+    let ce_avg = ce_sum / n;
+    // Residual ISI. The DFT de-spread averages the per-SC gains, so only their *spread* survives as
+    // self-interference: E|α_k − ᾱ|² = E[α²] − ᾱ². Zero on a flat channel, and the dominant term at a
+    // spectral notch — which is exactly where the LLRs used to claim certainty they did not have.
+    let alpha_var = (alpha_sq_sum / n - alpha_avg * alpha_avg).max(0.0);
+    // After dividing symbols by alpha_avg, effective noise variance is the sum of the three terms
+    // scaled by 1/ᾱ².
+    let llr_noise_var = ((eff_var_avg + alpha_var + ce_avg) / (alpha_avg * alpha_avg)).max(1e-6);
     (llr_noise_var, alpha_avg)
 }
 
