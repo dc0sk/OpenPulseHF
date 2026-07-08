@@ -4,8 +4,9 @@ use num_complex::Complex32;
 use rustfft::FftPlanner;
 
 use crate::channel::{
-    deramp_timing, dft_ce_estimate, estimate_noise_var, estimate_rician_k_linear,
-    flat_channel_estimate, mmse_equalize, mmse_llr_noise_var, pilot_positions,
+    deramp_timing, estimate_noise_var, estimate_rician_k_linear, flat_ce_debias,
+    flat_channel_estimate, mmse_equalize, mmse_llr_noise_var, pilot_comb_noise_var,
+    pilot_diff_noise_var, pilot_positions, CeSolver, DelayCe,
 };
 use crate::modulate::{modulate_with_params, preamble_payload};
 use crate::params::PILOT_AMPLITUDE;
@@ -82,6 +83,155 @@ fn smooth_ce(ema: &mut Option<Vec<Complex32>>, raw: &[Complex32]) -> Vec<Complex
     }
 }
 
+/// One symbol's frequency-domain observation: the de-ramped `FFT_SIZE`-point spectrum.
+type SymbolSpectrum = Vec<Complex32>;
+
+/// Frame-level front end shared by every demodulation path: locate the payload, FFT and de-ramp each
+/// symbol, then measure the noise variance **once for the whole frame**.
+///
+/// A single symbol's noise estimate has only a handful of degrees of freedom (~50 % relative error),
+/// but σ² is a property of the receiver, not of the symbol. Averaging it across the frame is free
+/// variance reduction, and it matters twice over: it sets the Wiener ridge of the channel estimator,
+/// and `symbol_llrs` divides by it — a per-symbol σ² mis-weights whole symbols against each other in
+/// the soft-Viterbi metric and in the majority-protected length prefix.
+struct FrameFront {
+    spectra: Vec<SymbolSpectrum>,
+    /// Frame-mean per-bin noise variance.
+    noise_var: f32,
+    /// Frame-mean pilot power, the ridge's reference.
+    chan_power: f32,
+}
+
+impl FrameFront {
+    /// FFT every complete symbol in `samples` (already advanced past the preamble), then
+    /// [`FrameFront::from_spectra`].
+    fn new(samples: &[f32], p: &ScFdmaParams, ce: Option<&DelayCe>) -> Self {
+        let mut planner = FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_forward(FFT_SIZE);
+        let fft_scale = 1.0 / (FFT_SIZE as f32).sqrt();
+        let n_syms = samples.len() / SYM_LEN;
+
+        let mut spectra = Vec::with_capacity(n_syms);
+        for sym_idx in 0..n_syms {
+            let start = sym_idx * SYM_LEN + CP;
+            if start + FFT_SIZE > samples.len() {
+                break;
+            }
+            let mut freq: Vec<Complex32> = samples[start..start + FFT_SIZE]
+                .iter()
+                .map(|&s| Complex32::new(s * fft_scale, 0.0))
+                .collect();
+            fft.process(&mut freq);
+            spectra.push(freq);
+        }
+        Self::from_spectra(spectra, p, ce)
+    }
+
+    /// De-ramp already-transformed spectra and measure the frame's noise and channel power.
+    ///
+    /// The GPU paths batch the FFT on device and enter here, so they cannot silently drift from the
+    /// CPU front end (they used to skip `deramp_timing` entirely — a divergence that only appeared
+    /// under sample-rate offset).
+    ///
+    /// σ² is the **smaller** of two estimators that fail in opposite directions: the comb estimator
+    /// over-reports on channels with delay spread (leakage into its noise taps), the adjacent-symbol
+    /// difference over-reports under fast fading and residual carrier offset. Neither can be trusted
+    /// alone; the minimum is right whenever at least one of the two assumptions holds.
+    fn from_spectra(
+        mut spectra: Vec<SymbolSpectrum>,
+        p: &ScFdmaParams,
+        ce: Option<&DelayCe>,
+    ) -> Self {
+        for freq in &mut spectra {
+            // Remove the per-symbol sampling-frequency-offset phase ramp before de-spreading
+            // (mirrors the OFDM path); critical for SC-FDMA under SRO.
+            deramp_timing(p, freq);
+        }
+
+        let Some(ce) = ce else {
+            return Self {
+                spectra,
+                noise_var: 1e-6,
+                chan_power: 1.0,
+            };
+        };
+
+        let (mut comb_sum, mut comb_n) = (0.0f32, 0usize);
+        let (mut cp_sum, mut cp_n) = (0.0f32, 0usize);
+        for freq in &spectra {
+            if let Some(nv) = pilot_comb_noise_var(p, freq) {
+                comb_sum += nv;
+                comb_n += 1;
+            }
+            cp_sum += ce.channel_power(freq);
+            cp_n += 1;
+        }
+        let (mut diff_sum, mut diff_n) = (0.0f32, 0usize);
+        for pair in spectra.windows(2) {
+            if let Some(nv) = pilot_diff_noise_var(p, &pair[0], &pair[1]) {
+                diff_sum += nv;
+                diff_n += 1;
+            }
+        }
+
+        let comb = (comb_n > 0).then(|| comb_sum / comb_n as f32);
+        let diff = (diff_n > 0).then(|| diff_sum / diff_n as f32);
+        let noise_var = match (comb, diff) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(a), None) | (None, Some(a)) => a,
+            (None, None) => 1e-6,
+        }
+        .max(1e-9);
+        let chan_power = if cp_n > 0 {
+            (cp_sum / cp_n as f32).max(1e-12)
+        } else {
+            1.0
+        };
+        Self {
+            spectra,
+            noise_var,
+            chan_power,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.spectra.is_empty()
+    }
+
+    /// Wiener channel-estimate solver for this frame, or `None` for the flat (localized) layout.
+    fn solver(&self, p: &ScFdmaParams, ce: &DelayCe) -> Option<CeSolver> {
+        (!p.localized).then(|| ce.solver(self.noise_var, self.chan_power))
+    }
+
+    /// Per-symbol channel estimate and the σ² to equalize and compute LLRs with.
+    fn estimate(
+        &self,
+        p: &ScFdmaParams,
+        solver: Option<&CeSolver>,
+        freq: &[Complex32],
+    ) -> Vec<Complex32> {
+        match solver {
+            Some(s) => s.estimate(freq),
+            None => flat_channel_estimate(p, freq),
+        }
+    }
+
+    /// Frame σ² for equalization. The localized path has no comb, so it falls back to the
+    /// (per-symbol) pilot-residual estimator at its own debias.
+    fn noise_var_for(
+        &self,
+        p: &ScFdmaParams,
+        solver: Option<&CeSolver>,
+        freq: &[Complex32],
+        h: &[Complex32],
+    ) -> f32 {
+        match solver {
+            Some(_) => self.noise_var,
+            None => estimate_noise_var(p, freq, h, flat_ce_debias(p)).max(1e-6),
+        }
+    }
+}
+
 pub fn scfdma_demodulate(samples: &[f32], mode: &str) -> Result<Vec<u8>, ModemError> {
     let p = params_for_mode(mode).ok_or_else(|| {
         ModemError::Configuration(format!("SC-FDMA plugin: unknown mode '{mode}'"))
@@ -102,8 +252,15 @@ pub fn scfdma_demodulate_soft(samples: &[f32], mode: &str) -> Result<Vec<f32>, M
 /// Per-frame quality metrics produced during soft demodulation.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SoftFrameMetrics {
-    /// Mean pilot-residual noise variance across demodulated symbols.
+    /// Mean decision-residual noise variance across demodulated symbols.
+    ///
+    /// A distance-to-nearest-constellation-point metric, so it *saturates* once symbol errors are
+    /// common: it can only ever under-report a change in noise power. Use [`Self::mean_pilot_noise_var`]
+    /// when a calibrated noise measurement is wanted.
     pub mean_noise_var: f32,
+    /// Frame noise variance measured from the pilots — a direct, non-saturating noise-power estimate,
+    /// and the σ² the LLRs were scaled by.
+    pub mean_pilot_noise_var: f32,
     /// Mean estimated Rician K-factor in dB across symbols.
     pub mean_rician_k_db: f32,
     /// Number of symbols included in the metric averages.
@@ -156,48 +313,34 @@ fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Result<Vec<u8>, 
     }
 
     let mut planner = FftPlanner::<f32>::new();
-    let fft = planner.plan_fft_forward(FFT_SIZE);
     // N_data-point IDFT to undo DFT precoding.
     let idft = planner.plan_fft_inverse(p.n_data);
-    // P-point IDFT for DFT-CE pilot CIR estimation — planned once, reused per symbol.
-    let ce_idft = planner.plan_fft_inverse(p.n_pilots);
-
-    let fft_scale = 1.0 / (FFT_SIZE as f32).sqrt();
     let idft_scale = 1.0 / (p.n_data as f32).sqrt();
+
+    // Pilot → subcarrier interpolator; the mode-constant part is built once, the Wiener solver once
+    // per frame (it depends on the frame's noise-to-channel-power ratio).
+    let ce = DelayCe::new(p);
+    let front = FrameFront::new(samples, p, (!p.localized).then_some(&ce));
+    if front.is_empty() {
+        return Err(ModemError::Demodulation(
+            "SC-FDMA frame truncated after sync".into(),
+        ));
+    }
+    let solver = front.solver(p, &ce);
 
     let mut bits: Vec<bool> = Vec::with_capacity(n_syms * p.bits_per_symbol());
     let mut ema_h: Option<Vec<Complex32>> = None;
 
-    for sym_idx in 0..n_syms {
-        let start = sym_idx * SYM_LEN + CP;
-        if start + FFT_SIZE > samples.len() {
-            break;
-        }
-
-        // Step 1: FFT(256) on the symbol body.
-        let mut freq: Vec<Complex32> = samples[start..start + FFT_SIZE]
-            .iter()
-            .map(|&s| Complex32::new(s * fft_scale, 0.0))
-            .collect();
-        fft.process(&mut freq);
-
-        // Remove the per-symbol sampling-frequency-offset phase ramp before
-        // de-spreading (mirrors the OFDM path); critical for SC-FDMA under SRO.
-        deramp_timing(p, &mut freq);
-
-        // Step 2: channel estimation + MMSE equalization. Noise var from the RAW per-symbol estimate
-        // (keeps the debias valid); the EMA-smoothed estimate equalizes to average CE noise.
-        let raw_h = if p.localized {
-            flat_channel_estimate(p, &freq)
-        } else {
-            dft_ce_estimate(p, &freq, &*ce_idft)
-        };
-        let noise_var = estimate_noise_var(p, &freq, &raw_h).max(1e-6);
+    for freq in &front.spectra {
+        // Step 2: channel estimation + MMSE equalization. The EMA-smoothed estimate equalizes so CE
+        // noise averages across symbols on a slow channel.
+        let raw_h = front.estimate(p, solver.as_ref(), freq);
+        let noise_var = front.noise_var_for(p, solver.as_ref(), freq, &raw_h);
         let h_est = smooth_ce(&mut ema_h, &raw_h);
         // MMSE attenuates by `alpha_avg`; undo it before demapping so QAM hard decisions are not
         // biased toward the origin (mirrors the soft path — PSK is angle-only, so unaffected there).
         let (_, alpha_avg) = mmse_llr_noise_var(p, &h_est, noise_var);
-        let mut equalized = mmse_equalize(p, &freq, &h_est, noise_var);
+        let mut equalized = mmse_equalize(p, freq, &h_est, noise_var);
 
         // Step 3: IDFT(N_data) — undo DFT precoding; scale to preserve energy.
         idft.process(&mut equalized);
@@ -250,31 +393,20 @@ pub fn scfdma_constellation(samples: &[f32], mode: &str) -> Option<Vec<(f32, f32
     }
 
     let mut planner = FftPlanner::<f32>::new();
-    let fft = planner.plan_fft_forward(FFT_SIZE);
     let idft = planner.plan_fft_inverse(p.n_data);
-    let ce_idft = planner.plan_fft_inverse(p.n_pilots);
-    let fft_scale = 1.0 / (FFT_SIZE as f32).sqrt();
     let idft_scale = 1.0 / (p.n_data as f32).sqrt();
+    let ce = DelayCe::new(&p);
+    let front = FrameFront::new(samples, &p, (!p.localized).then_some(&ce));
+    if front.is_empty() {
+        return None;
+    }
+    let solver = front.solver(&p, &ce);
 
     let mut syms: Vec<Complex32> = Vec::with_capacity(n_syms * p.n_data);
-    for sym_idx in 0..n_syms {
-        let start = sym_idx * SYM_LEN + CP;
-        if start + FFT_SIZE > samples.len() {
-            break;
-        }
-        let mut freq: Vec<Complex32> = samples[start..start + FFT_SIZE]
-            .iter()
-            .map(|&s| Complex32::new(s * fft_scale, 0.0))
-            .collect();
-        fft.process(&mut freq);
-        deramp_timing(&p, &mut freq);
-        let h_est = if p.localized {
-            flat_channel_estimate(&p, &freq)
-        } else {
-            dft_ce_estimate(&p, &freq, &*ce_idft)
-        };
-        let noise_var = estimate_noise_var(&p, &freq, &h_est);
-        let mut equalized = mmse_equalize(&p, &freq, &h_est, noise_var);
+    for freq in &front.spectra {
+        let h_est = front.estimate(&p, solver.as_ref(), freq);
+        let noise_var = front.noise_var_for(&p, solver.as_ref(), freq, &h_est);
+        let mut equalized = mmse_equalize(&p, freq, &h_est, noise_var);
         idft.process(&mut equalized);
         syms.extend(equalized.iter().map(|c| c * idft_scale));
     }
@@ -325,12 +457,17 @@ fn demodulate_soft_with_params(
     }
 
     let mut planner = FftPlanner::<f32>::new();
-    let fft = planner.plan_fft_forward(FFT_SIZE);
     let idft = planner.plan_fft_inverse(p.n_data);
-    let ce_idft = planner.plan_fft_inverse(p.n_pilots);
-
-    let fft_scale = 1.0 / (FFT_SIZE as f32).sqrt();
     let idft_scale = 1.0 / (p.n_data as f32).sqrt();
+
+    let ce = DelayCe::new(p);
+    let front = FrameFront::new(samples, p, (!p.localized).then_some(&ce));
+    if front.is_empty() {
+        return Err(ModemError::Demodulation(
+            "SC-FDMA frame truncated after sync".into(),
+        ));
+    }
+    let solver = front.solver(p, &ce);
 
     let points = constellation_points(p.bits_per_sc);
     let mut llrs = Vec::with_capacity(n_syms * p.bits_per_symbol());
@@ -341,30 +478,10 @@ fn demodulate_soft_with_params(
     let mut h_pilots_buf = vec![Complex32::new(0.0, 0.0); pilot_scs.len()];
     let mut ema_h: Option<Vec<Complex32>> = None;
 
-    for sym_idx in 0..n_syms {
-        let start = sym_idx * SYM_LEN + CP;
-        if start + FFT_SIZE > samples.len() {
-            break;
-        }
-
-        let mut freq: Vec<Complex32> = samples[start..start + FFT_SIZE]
-            .iter()
-            .map(|&s| Complex32::new(s * fft_scale, 0.0))
-            .collect();
-        fft.process(&mut freq);
-
-        // Remove the per-symbol sampling-frequency-offset phase ramp before
-        // de-spreading (mirrors the OFDM path); critical for SC-FDMA under SRO.
-        deramp_timing(p, &mut freq);
-
-        let raw_h = if p.localized {
-            flat_channel_estimate(p, &freq)
-        } else {
-            dft_ce_estimate(p, &freq, &*ce_idft)
-        };
-        // Noise var from the RAW (per-symbol) estimate keeps the debias assumption valid; the
-        // EMA-smoothed estimate is used for equalization to average CE noise across symbols.
-        let pilot_noise_var = estimate_noise_var(p, &freq, &raw_h).max(1e-6);
+    for freq in &front.spectra {
+        let freq = freq.as_slice();
+        let raw_h = front.estimate(p, solver.as_ref(), freq);
+        let pilot_noise_var = front.noise_var_for(p, solver.as_ref(), freq, &raw_h);
         let h_est = smooth_ce(&mut ema_h, &raw_h);
 
         // Rician K for SoftFrameMetrics: reuse pre-allocated buffer to avoid per-symbol allocation.
@@ -375,7 +492,7 @@ fn demodulate_soft_with_params(
         let k_db = 10.0 * (k_linear + 1e-6).log10();
 
         let (llr_noise_var, alpha_avg) = mmse_llr_noise_var(p, &h_est, pilot_noise_var);
-        let mut equalized = mmse_equalize(p, &freq, &h_est, pilot_noise_var);
+        let mut equalized = mmse_equalize(p, freq, &h_est, pilot_noise_var);
 
         idft.process(&mut equalized);
         // Divide by alpha_avg to restore unit-constellation scale after MMSE bias.
@@ -415,6 +532,7 @@ fn demodulate_soft_with_params(
         llrs: llrs[LEN_PREFIX_BITS..LEN_PREFIX_BITS + take].to_vec(),
         metrics: SoftFrameMetrics {
             mean_noise_var: noise_sum / metric_symbols.max(1) as f32,
+            mean_pilot_noise_var: front.noise_var,
             mean_rician_k_db: k_db_sum / metric_symbols.max(1) as f32,
             symbols_used: metric_symbols,
         },
@@ -522,33 +640,34 @@ pub fn scfdma_demodulate_soft_gpu(
 
     let mut planner = rustfft::FftPlanner::<f32>::new();
     let idft = planner.plan_fft_inverse(p.n_data);
-    let ce_idft = planner.plan_fft_inverse(p.n_pilots);
     let idft_scale = 1.0 / (p.n_data as f32).sqrt();
 
+    let ce = DelayCe::new(&p);
+    let spectra: Vec<SymbolSpectrum> = (0..actual_syms)
+        .map(|sym_idx| {
+            let base = sym_idx * FFT_SIZE * 2;
+            (0..FFT_SIZE)
+                .map(|k| Complex32::new(gpu_out[base + k * 2], gpu_out[base + k * 2 + 1]))
+                .collect()
+        })
+        .collect();
+    let front = FrameFront::from_spectra(spectra, &p, (!p.localized).then_some(&ce));
+    if front.is_empty() {
+        return None;
+    }
+    let solver = front.solver(&p, &ce);
+
     let points = constellation_points(p.bits_per_sc);
-    let pilot_scs = crate::channel::pilot_positions(&p);
-    let mut h_pilots_buf = vec![Complex32::new(0.0, 0.0); pilot_scs.len()];
     let mut all_llrs: Vec<f32> = Vec::with_capacity(actual_syms * p.bits_per_symbol());
+    let mut ema_h: Option<Vec<Complex32>> = None;
 
-    for sym_idx in 0..actual_syms {
-        let base = sym_idx * FFT_SIZE * 2;
-        let freq: Vec<Complex32> = (0..FFT_SIZE)
-            .map(|k| Complex32::new(gpu_out[base + k * 2], gpu_out[base + k * 2 + 1]))
-            .collect();
-
-        let h_est = if p.localized {
-            flat_channel_estimate(&p, &freq)
-        } else {
-            dft_ce_estimate(&p, &freq, &*ce_idft)
-        };
-        let pilot_noise_var = estimate_noise_var(&p, &freq, &h_est).max(1e-6);
-
-        for (buf, &sc) in h_pilots_buf.iter_mut().zip(pilot_scs.iter()) {
-            *buf = freq[sc] / Complex32::new(crate::params::PILOT_AMPLITUDE, 0.0);
-        }
+    for freq in &front.spectra {
+        let raw_h = front.estimate(&p, solver.as_ref(), freq);
+        let pilot_noise_var = front.noise_var_for(&p, solver.as_ref(), freq, &raw_h);
+        let h_est = smooth_ce(&mut ema_h, &raw_h);
 
         let (llr_noise_var, alpha_avg) = mmse_llr_noise_var(&p, &h_est, pilot_noise_var);
-        let mut equalized = mmse_equalize(&p, &freq, &h_est, pilot_noise_var);
+        let mut equalized = mmse_equalize(&p, freq, &h_est, pilot_noise_var);
 
         idft.process(&mut equalized);
         let data_syms: Vec<Complex32> = equalized
@@ -625,27 +744,39 @@ pub fn scfdma_demodulate_gpu(
     // Reconstruct Complex32 frequency bins per symbol and run CPU equalization.
     let mut planner = rustfft::FftPlanner::<f32>::new();
     let idft = planner.plan_fft_inverse(p.n_data);
-    let ce_idft = planner.plan_fft_inverse(p.n_pilots);
     let idft_scale = 1.0 / (p.n_data as f32).sqrt();
 
+    let ce = DelayCe::new(&p);
+    let spectra: Vec<SymbolSpectrum> = (0..actual_syms)
+        .map(|sym_idx| {
+            let base = sym_idx * FFT_SIZE * 2;
+            (0..FFT_SIZE)
+                .map(|k| Complex32::new(gpu_out[base + k * 2], gpu_out[base + k * 2 + 1]))
+                .collect()
+        })
+        .collect();
+    let front = FrameFront::from_spectra(spectra, &p, (!p.localized).then_some(&ce));
+    if front.is_empty() {
+        return None;
+    }
+    let solver = front.solver(&p, &ce);
+
     let mut bits: Vec<bool> = Vec::with_capacity(actual_syms * p.bits_per_symbol());
+    let mut ema_h: Option<Vec<Complex32>> = None;
 
-    for sym_idx in 0..actual_syms {
-        let base = sym_idx * FFT_SIZE * 2;
-        let freq: Vec<Complex32> = (0..FFT_SIZE)
-            .map(|k| Complex32::new(gpu_out[base + k * 2], gpu_out[base + k * 2 + 1]))
-            .collect();
-
-        let h_est = if p.localized {
-            flat_channel_estimate(&p, &freq)
-        } else {
-            dft_ce_estimate(&p, &freq, &*ce_idft)
-        };
-        let noise_var = estimate_noise_var(&p, &freq, &h_est);
-        let mut equalized = mmse_equalize(&p, &freq, &h_est, noise_var);
+    for freq in &front.spectra {
+        let raw_h = front.estimate(&p, solver.as_ref(), freq);
+        let noise_var = front.noise_var_for(&p, solver.as_ref(), freq, &raw_h);
+        let h_est = smooth_ce(&mut ema_h, &raw_h);
+        // Undo the MMSE amplitude bias before demapping, as the CPU hard path does.
+        let (_, alpha_avg) = mmse_llr_noise_var(&p, &h_est, noise_var);
+        let mut equalized = mmse_equalize(&p, freq, &h_est, noise_var);
 
         idft.process(&mut equalized);
-        let data_syms: Vec<Complex32> = equalized.iter().map(|c| c * idft_scale).collect();
+        let data_syms: Vec<Complex32> = equalized
+            .iter()
+            .map(|c| c * idft_scale / alpha_avg)
+            .collect();
 
         for sym in &data_syms {
             let b = demap_symbol(*sym, p.bits_per_sc);
@@ -667,9 +798,8 @@ pub fn scfdma_demodulate_gpu(
 #[cfg(test)]
 mod ema_tests {
     use super::*;
-    use crate::channel::{dft_ce_estimate, pilot_positions, pilot_value};
-    use crate::params::SCFDMA52;
-    use rustfft::FftPlanner;
+    use crate::channel::{pilot_positions, pilot_value, DelayCe};
+    use crate::params::{PILOT_AMPLITUDE, SCFDMA52};
 
     /// #4 justification: on a static channel, EMA-smoothing the per-symbol CE across symbols reduces
     /// CE noise vs the raw per-symbol estimate — the benefit that helps long frames on slow channels.
@@ -677,14 +807,16 @@ mod ema_tests {
     fn ema_smoothing_reduces_static_ce_noise() {
         let p = SCFDMA52;
         let pilots = pilot_positions(&p);
-        let mut planner = FftPlanner::<f32>::new();
-        let idft = planner.plan_fft_inverse(p.n_pilots);
+        let sigma = 0.2f32;
+        let ce = DelayCe::new(&p).solver(
+            sigma * sigma,
+            PILOT_AMPLITUDE * PILOT_AMPLITUDE + sigma * sigma,
+        );
         let mut st = 0x2468u64;
         let mut lcg = || {
             st = st.wrapping_mul(6364136223846793005).wrapping_add(1);
             ((st >> 40) as f32) / ((1u64 << 24) as f32)
         };
-        let sigma = 0.2f32;
         let (mut raw_mse, mut sm_mse, mut n) = (0.0f32, 0.0f32, 0usize);
         for _ in 0..64 {
             let mut ema: Option<Vec<Complex32>> = None;
@@ -696,7 +828,7 @@ mod ema_tests {
                     let a = std::f32::consts::TAU * u2;
                     freq[sc] = pilot_value(&p, k) + Complex32::new(m * a.cos(), m * a.sin());
                 }
-                let raw = dft_ce_estimate(&p, &freq, idft.as_ref());
+                let raw = ce.estimate(&freq);
                 let sm = smooth_ce(&mut ema, &raw);
                 if sym >= 2 {
                     for sc in p.first_sc..=p.last_sc {

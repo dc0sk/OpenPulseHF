@@ -14,13 +14,14 @@
 //! **Fading-calibration interpretation (read before using the Watterson numbers):**
 //!   1. Fading is seed-sensitive — a fraction of realizations deep-fade the whole frame and can't
 //!      decode at ANY SNR (irreducible outage), so the fading target is 50 % (majority), not 90 %.
-//!   2. The SCFDMA-QAM rungs (SL9–11: SCFDMA52-16/32/64QAM) fail through Watterson fading — this is
-//!      CORRECT and BY DESIGN, not a harness bug:
-//!      `plugins/scfdma/tests/pilot_channel_estimation.rs::scfdma_qam_modes_unsuitable_for_hf_watterson_profiles`
-//!      asserts these dense modes fail the HF fading gate (they are high-throughput top rungs for
-//!      *good* HF conditions, and `hpx_hf` keeps them because they fit the 2.7 kHz channel; the
-//!      adaptive ladder downshifts OFF them on a fading path). So the SCFDMA-QAM rungs have NO fading
-//!      floor to calibrate — only AWGN. Meaningful fading floors exist only for the low-order rungs.
+//!   2. The SCFDMA-QAM rungs do not reach the 90 % HF fading gate, so they have no fading floor to
+//!      calibrate — only AWGN. They are high-throughput top rungs for *good* HF conditions and the
+//!      adaptive ladder downshifts off them on a fading path.
+//!      **This was overstated before 2026-07-08**: those rungs used to decode ~0 % of Watterson frames
+//!      at *any* SNR, which was read as "correct and by design". It was a channel-estimator bug — the
+//!      DFT-CE mis-reconstructed every frequency-selective channel (see `plugins/scfdma/src/channel.rs`
+//!      → `DelayCe`). With the delay-basis estimator they decode ~12–32 % of good_f1 frames under soft
+//!      FEC, still short of the gate. A floor of "no SNR works" is a bug signature, not a design fact.
 //!   3. The single-carrier no-FEC/light-FEC rungs (QPSK250/500, 8PSK500+RS) are slow-fading-only:
 //!      good_f1 ~6–9 dB, but moderate_f1 (1 Hz Doppler) fails at any SNR (no equalizer / weak FEC).
 //!

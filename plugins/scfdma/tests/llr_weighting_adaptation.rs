@@ -61,39 +61,90 @@ fn add_awgn(samples: &[f32], snr_db: f32, seed: u64) -> Vec<f32> {
         .collect()
 }
 
+/// Mean decision-residual σ̂², mean pilot σ̂², and the mean noise power actually injected, over
+/// `frames` AWGN realisations at `snr_db`.
+///
+/// The realised noise power is measured rather than assumed: `add_awgn`'s Box–Muller draws its two
+/// uniforms from consecutive states of a plain LCG, so a realisation's power — and its spectrum, which
+/// is what a pilot-bin estimator sees — departs from the nominal by several percent. Callers must also
+/// pass the *same* `seed_base` at both SNRs, so the two runs share one noise shape and differ only in
+/// scale; otherwise the shape difference alone moves the ratio by ~0.5 dB.
+fn mean_noise_metrics(
+    tx: &[f32],
+    mode: &str,
+    snr_db: f32,
+    seed_base: u64,
+    frames: usize,
+) -> (f32, f32, f32) {
+    let (mut decision, mut pilot, mut injected) = (0.0f32, 0.0f32, 0.0f32);
+    for i in 0..frames {
+        let rx = add_awgn(tx, snr_db, seed_base + i as u64);
+        injected += rx
+            .iter()
+            .zip(tx.iter())
+            .map(|(r, t)| (r - t) * (r - t))
+            .sum::<f32>()
+            / tx.len() as f32;
+        let m = scfdma_demodulate_soft_with_metrics(&rx, mode)
+            .unwrap_or_else(|e| panic!("soft demod at {snr_db} dB: {e}"));
+        decision += m.metrics.mean_noise_var;
+        pilot += m.metrics.mean_pilot_noise_var;
+    }
+    let n = frames as f32;
+    (decision / n, pilot / n, injected / n)
+}
+
+/// The pilot-derived σ̂² is a *direct* noise-power measurement — no constellation, no channel estimate —
+/// so `σ̂² / (injected noise power)` must be the same constant at every SNR. This is the invariant the
+/// whole LLR scale rests on: `symbol_llrs` divides by σ̂².
+///
+/// The constant itself is not 1: σ̂² is the smaller of two estimators that fail in opposite directions,
+/// and taking the minimum of two unbiased estimates biases the result low by a fixed fraction.
 #[test]
-fn adaptive_noise_variance_estimator_awgn_relative_delta_within_point75_db() {
+fn pilot_noise_variance_is_proportional_to_injected_noise_power() {
     let plugin = ScFdmaPlugin::new();
     let payload: Vec<u8> = (0..96).map(|v| v as u8).collect();
-    let tx = plugin
-        .modulate(&payload, &cfg("SCFDMA52-64QAM-P4"))
-        .unwrap();
-
-    let mut noise20 = 0.0f32;
-    let mut noise28 = 0.0f32;
+    let mode = "SCFDMA52-64QAM-P4";
+    let tx = plugin.modulate(&payload, &cfg(mode)).unwrap();
     let frames = 20usize;
 
-    for i in 0..frames {
-        let rx20 = add_awgn(&tx, 20.0, 0x1000 + i as u64);
-        let rx28 = add_awgn(&tx, 28.0, 0x2000 + i as u64);
+    let (_, pilot20, injected20) = mean_noise_metrics(&tx, mode, 20.0, 0x1000, frames);
+    let (_, pilot28, injected28) = mean_noise_metrics(&tx, mode, 28.0, 0x1000, frames);
 
-        let m20 = scfdma_demodulate_soft_with_metrics(&rx20, "SCFDMA52-64QAM-P4")
-            .expect("soft demod at 20 dB");
-        let m28 = scfdma_demodulate_soft_with_metrics(&rx28, "SCFDMA52-64QAM-P4")
-            .expect("soft demod at 28 dB");
-
-        noise20 += m20.metrics.mean_noise_var;
-        noise28 += m28.metrics.mean_noise_var;
-    }
-
-    noise20 /= frames as f32;
-    noise28 /= frames as f32;
-
-    let measured_delta_db = 10.0 * (noise20 / noise28).log10();
-    let expected_delta_db = 8.0;
+    let scale20 = pilot20 / injected20;
+    let scale28 = pilot28 / injected28;
+    let drift_db = 10.0 * (scale20 / scale28).log10();
     assert!(
-        (measured_delta_db - expected_delta_db).abs() <= 0.75,
-        "noise-variance estimator should track AWGN deltas within ±0.75 dB: measured={measured_delta_db:.2} dB expected={expected_delta_db:.2} dB"
+        drift_db.abs() <= 0.3,
+        "pilot σ̂² must be linear in noise power across 8 dB: σ̂²/σ² was {scale20:.4} at 20 dB and {scale28:.4} at 28 dB ({drift_db:+.2} dB drift)"
+    );
+}
+
+/// `mean_noise_var` is a distance-to-nearest-symbol residual, so it can only ever *under*-report a
+/// change in noise power: once symbol errors are common the residual is clipped by the Voronoi cell
+/// (d²min/6 = 0.0159 for 64QAM). And a Wiener channel estimate's MSE is sub-linear in σ² by
+/// construction — its ridge shrinks with the noise. Both effects bound the measurement strictly below
+/// the 8 dB of applied noise change; only the upper bound and monotonicity are receiver properties.
+///
+/// An earlier `8.0 ± 0.75 dB` assertion here was passing only because the DFT-CE it was calibrated
+/// against had an MSE strictly proportional to σ² (a fixed tap truncation, no SNR-dependent shrinkage).
+#[test]
+fn decision_noise_variance_tracks_awgn_monotonically_without_over_reporting() {
+    let plugin = ScFdmaPlugin::new();
+    let payload: Vec<u8> = (0..96).map(|v| v as u8).collect();
+    let mode = "SCFDMA52-64QAM-P4";
+    let tx = plugin.modulate(&payload, &cfg(mode)).unwrap();
+    let frames = 20usize;
+
+    let (decision20, _, injected20) = mean_noise_metrics(&tx, mode, 20.0, 0x1000, frames);
+    let (decision28, _, injected28) = mean_noise_metrics(&tx, mode, 28.0, 0x1000, frames);
+
+    // Compare against the noise actually injected, not the nominal 8 dB (see `mean_noise_metrics`).
+    let applied_db = 10.0 * (injected20 / injected28).log10();
+    let measured_delta_db = 10.0 * (decision20 / decision28).log10();
+    assert!(
+        measured_delta_db > 5.0 && measured_delta_db <= applied_db + 0.3,
+        "decision-residual noise must track {applied_db:.2} dB of AWGN monotonically and never over-report it: measured={measured_delta_db:.2} dB"
     );
 }
 
@@ -128,8 +179,18 @@ fn rician_k_estimator_tracks_watterson_f1_in_typical_range() {
     );
 }
 
+/// Combining independent HARQ attempts must beat the best single attempt — that is the diversity gain
+/// the whole soft-combining path exists for.
+///
+/// It also pins down *how* to combine. `symbol_llrs` already divides by σ̂², so each attempt's LLRs are
+/// inverse-noise scaled and their plain **sum** is the MAP combine. Re-weighting that sum by
+/// `1/mean_noise_var` (what [`combine_llrs_weighted`] does) applies σ⁻² a second time, so it cannot
+/// beat the equal-weight sum; the two agree to within the residual mis-calibration of `llr_noise_var`
+/// (which models the post-MMSE additive noise but not the channel-estimate error). An earlier
+/// assertion here demanded `weighted >= equal` and only passed because the pre-Wiener per-symbol σ²
+/// left the LLR scale wrong enough for a second weighting to help.
 #[test]
-fn soft_combine_weighted_by_inverse_noise_beats_equal_weight() {
+fn soft_combining_beats_best_single_attempt_and_double_weighting_is_a_wash() {
     let plugin = ScFdmaPlugin::new();
     let mode = "SCFDMA52-64QAM-P4";
     let payload: Vec<u8> = (0u8..96).collect();
@@ -138,7 +199,20 @@ fn soft_combine_weighted_by_inverse_noise_beats_equal_weight() {
 
     let mut eq_correct = 0usize;
     let mut wt_correct = 0usize;
+    let mut best_single_correct = 0usize;
     let mut total_bits = 0usize;
+
+    let correct_bits = |llrs: &[f32]| -> usize {
+        let Some(bytes) = llrs_to_payload_bytes(llrs, payload.len()) else {
+            return 0;
+        };
+        let bits = bytes_to_bits(&bytes);
+        payload_bits
+            .iter()
+            .enumerate()
+            .filter(|(idx, b)| bits.get(*idx) == Some(*b))
+            .count()
+    };
 
     for frame in 0..30usize {
         let snrs = [12.0f32, 16.0f32, 20.0f32];
@@ -157,6 +231,7 @@ fn soft_combine_weighted_by_inverse_noise_beats_equal_weight() {
             continue;
         }
 
+        // Equal weight == a plain LLR sum up to a positive constant, so it is sign-identical to it.
         let mut eq = vec![0.0f32; min_len];
         for (llr, _) in &attempts {
             for (dst, src) in eq.iter_mut().zip(llr.iter().take(min_len)) {
@@ -170,28 +245,24 @@ fn soft_combine_weighted_by_inverse_noise_beats_equal_weight() {
             .collect();
         let wt = combine_llrs_weighted(&refs);
 
-        let eq_bytes = llrs_to_payload_bytes(&eq, payload.len()).unwrap();
-        let wt_bytes = llrs_to_payload_bytes(&wt, payload.len()).unwrap();
-
-        let eq_bits = bytes_to_bits(&eq_bytes);
-        let wt_bits = bytes_to_bits(&wt_bytes);
-
-        eq_correct += payload_bits
+        eq_correct += correct_bits(&eq);
+        wt_correct += correct_bits(&wt);
+        best_single_correct += attempts
             .iter()
-            .enumerate()
-            .filter(|(idx, b)| eq_bits.get(*idx) == Some(*b))
-            .count();
-        wt_correct += payload_bits
-            .iter()
-            .enumerate()
-            .filter(|(idx, b)| wt_bits.get(*idx) == Some(*b))
-            .count();
+            .map(|(llr, _)| correct_bits(&llr[..min_len]))
+            .max()
+            .unwrap_or(0);
         total_bits += payload.len() * 8;
     }
 
     assert!(total_bits > 0);
     assert!(
-        wt_correct >= eq_correct,
-        "weighted LLR combine should not underperform equal-weight combine: weighted={wt_correct} equal={eq_correct}"
+        eq_correct > best_single_correct,
+        "the MAP (equal-weight) combine must beat the best single attempt: combined={eq_correct} best_single={best_single_correct}"
+    );
+    let rel = (wt_correct as f32 - eq_correct as f32) / total_bits as f32;
+    assert!(
+        rel.abs() < 2e-3,
+        "double inverse-noise weighting should be a wash against the MAP combine, not a win or a loss: {rel:+.5} (weighted={wt_correct} equal={eq_correct})"
     );
 }

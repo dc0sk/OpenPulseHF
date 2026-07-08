@@ -9,6 +9,61 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-08 — fix(scfdma): delay-basis Wiener channel estimator (DFT-CE was wrong on selective channels)
+
+- **Requirement/change:** while building a before/after harness for research items P2/P3/P4
+  (`docs/dev/research/scfdma-improvements.md`), the SC-FDMA demodulator was found to fail on a
+  **noiseless, static, inside-the-cyclic-prefix two-ray channel** (`1 + a·z^-d`, d ≤ 8, CP = 32): hard BER
+  floors of 0.20 (QPSK) / 0.26 (8PSK) / 0.36 (16QAM) at 90 dB SNR. Every SC-FDMA rung decoded only 2–7 %
+  of Watterson `good_f1` frames, flat from 8 to 32 dB. The repo recorded that as "correct and by design".
+- **Root cause:** `dft_ce_estimate` IDFT'd the 13 pilot-comb LS observations, kept the first `l_max = 9`
+  taps, and re-evaluated. (1) Its delay grid is `N_FFT/(P·pilot_spacing) ≈ 3.94 samples` — the comb spans
+  only the 65 occupied subcarriers, not all 256 FFT bins — so off-grid delays leak across every tap and
+  truncation discards the leakage; `deramp_timing` re-centres the impulse response first, making the
+  post-deramp delays essentially always off-grid. (2) Taps `l > P/2` are negative delays but were
+  reconstructed as large positive ones. Measured channel-estimate MSE on a known two-ray response:
+  −16.5 dB (d=1) / −14.3 dB (d=2) against −66/−71 dB for a physical delay basis.
+- **Design decision:** replace with `channel::DelayCe` — `L ≤ 13` complex taps at fixed sample delays
+  (spacing 5/3, symmetric about zero), evaluated at the true period `N_FFT`. Three deliberate choices:
+  (a) **f64 construction** — adjacent-delay steering vectors are near-collinear over a 65-subcarrier
+  aperture (`AᴴA` off-diagonals reach 0.98 of the diagonal) and the normal equations lose an f32 mantissa;
+  (b) a **Wiener ridge with an exponential delay-power prior** (`ridge_j = σ²_h·Σw/(w_j·P_ch)`,
+  `w_j = exp(−|τ_j|/1.5)`) — plain LS on that basis amplifies pilot noise and cost 4–6 dB of AWGN frame
+  success, and a *flat* prior costs ~6 dB at reach ±10, while the exponential prior removes the cost so
+  reach and AWGN stop trading; (c) a σ² **no channel estimate can bias** — the minimum of a comb
+  out-of-window-tap estimator (guard-banded) and a CPE-removed adjacent-symbol pilot difference, which
+  fail in opposite directions (delay spread vs Doppler/CFO). Folded in: research P3 (frame-mean σ²) and
+  the remainder of P4 (both GPU paths now enter the shared `FrameFront::from_spectra`, so they can no
+  longer skip `deramp_timing`; the GPU hard path gained the `/alpha_avg` de-bias).
+- **Implementation:** `plugins/scfdma/src/channel.rs` — `DelayCe`, `CeSolver`, `delay_taps`,
+  `pilot_comb_noise_var`, `pilot_diff_noise_var`, `ridge_pseudo_inverse`, `residual_debias`;
+  `estimate_noise_var` now takes an explicit debias and serves only the localized layout.
+  `plugins/scfdma/src/demodulate.rs` — new `FrameFront` two-pass front end shared by the hard, soft,
+  constellation and both GPU paths; `SoftFrameMetrics.mean_pilot_noise_var` added.
+- **Tests:** new `crates/openpulse-modem/tests/scfdma_ce_sweep.rs` (`#[ignore]` before/after harness:
+  decode rate vs SNR for every SC-FDMA rung of `hpx_hf`, AWGN + Watterson good_f1).
+  `plugins/scfdma/tests/llr_weighting_adaptation.rs` re-stated on invariants that hold for a *correct*
+  receiver: `pilot_noise_variance_is_proportional_to_injected_noise_power` (σ̂² measured against the noise
+  actually injected, not the nominal SNR — the harness's Box–Muller draws correlated uniforms from one
+  LCG, so a realisation's power and spectrum drift a few percent), `decision_noise_variance_tracks_awgn_
+  monotonically_without_over_reporting` (a nearest-point residual saturates and a Wiener CE's MSE is
+  sub-linear in σ², so only the upper bound is a receiver property), and
+  `soft_combining_beats_best_single_attempt_and_double_weighting_is_a_wash` (`symbol_llrs` already divides
+  by σ̂², so the equal-weight sum *is* the MAP combine; the old `weighted ≥ equal` assertion passed only
+  because the pre-Wiener per-symbol σ² left the LLR scale wrong enough for a second weighting to help).
+  Stale "fails Watterson by design" commentary corrected in `snr_floor_calibration.rs` and
+  `pilot_channel_estimation.rs` (their assertions still hold and still pass).
+- **Test results:** `cargo test --workspace --exclude pki-tooling --no-default-features` → **1325 passed,
+  0 failed** (one pre-existing failure, `openpulse-testmatrix::every_registered_mode_is_covered_or_deferred`,
+  reproduces on a pristine tree). clippy `-D warnings --all-targets` clean; fmt clean. Sweep
+  (60 frames/point, soft-concatenated FEC), old → new: static two-ray BER sum 10.4 → **1.90**; AWGN frame
+  success sum 39.00 → **41.32** of 54 (SCFDMA52-8PSK 90 % floor 8→6 dB, 16QAM 10→8 dB, others unchanged);
+  Watterson good_f1 sum 1.58 → **9.19** of 42 (dense rungs 0.03 → 0.27–0.32 at 32 dB).
+- **Known follow-ups (not in this change):** `mmse_llr_noise_var` omits channel-estimate error, so LLRs are
+  ~1.5 dB over-confident; and `combine_llrs_weighted` (plus the `1.0/mean_abs` proxy in
+  `openpulse-modem/src/engine.rs`) applies σ⁻⁴ because `symbol_llrs` already carries 1/σ̂² — a pre-existing
+  shipped defect that costs HARQ diversity gain when attempts differ in SNR.
+
 ## 2026-07-08 — feat: finer hpx_hf ladder (research #2, granularity)
 
 - **Requirement/change:** fill the `hpx_hf` throughput cliffs and SNR dead-zones. Rewrote the SL2→SL11

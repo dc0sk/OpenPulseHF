@@ -2,8 +2,8 @@
 //!
 //! Pilot layout is identical to OFDM: every 5th SC starting at first_sc+4.
 
-use num_complex::Complex32;
-use rustfft::{Fft, FftPlanner};
+use num_complex::{Complex32, Complex64};
+use rustfft::FftPlanner;
 
 use crate::params::{
     ScFdmaParams, CP, FFT_SIZE, PILOT_AMPLITUDE, SAMPLE_RATE, SC_SPACING_HZ, SYM_LEN,
@@ -185,81 +185,449 @@ pub fn flat_channel_estimate(p: &ScFdmaParams, freq: &[Complex32]) -> Vec<Comple
     vec![h; total]
 }
 
-/// DFT-domain channel estimation (DFT-CE).
+/// Spacing of the CE basis's delay taps, in samples (0.21 ms at 8 kHz).
+const CE_TAP_STEP_SAMPLES: f64 = 5.0 / 3.0;
+
+/// Most delay taps the basis ever uses. A mode with fewer pilots uses fewer taps at the same spacing
+/// — it loses *reach*, not resolution. Spreading a small tap set across the full reach instead makes
+/// the basis unresolvably coarse for its aperture and costs the 6-pilot SCFDMA26 modes ~2 dB near
+/// their floor (measured: 0.17 → 0.62 frame success at 4 dB on SCFDMA26-32QAM).
+const CE_MAX_TAPS: usize = 13;
+
+/// Longest channel delay the full basis models, in samples: 10 = 1.25 ms at 8 kHz. Because
+/// [`deramp_timing`] re-centres the impulse response on its energy centroid, the basis is two-sided
+/// and covers a ~2.5 ms delay spread — past the CCIR "poor" HF profile, inside the 32-sample cyclic
+/// prefix. The reach is free of AWGN cost only because of [`CE_PRIOR_TAU_RMS`]; do not widen one
+/// without re-measuring the other (`cargo test -p openpulse-modem --test scfdma_ce_sweep -- --ignored`).
+const MAX_CE_DELAY_SAMPLES: f64 = CE_TAP_STEP_SAMPLES * (CE_MAX_TAPS as f64 - 1.0) / 2.0;
+
+/// Extra delay margin, in units of the pilot comb's own tap spacing, before a comb tap is treated as
+/// noise. Without it the noise window abuts the channel window, and a channel tap sitting between two
+/// comb taps Dirichlet-leaks straight into the "noise" set: a single ray at the window edge puts >50 %
+/// of its comb energy there, so σ² saturates at an apparent ~8 dB SNR on any selective channel — which
+/// over-ridges the estimator, over-regularises MMSE, and de-rates every LLR.
+const NOISE_GUARD_TAPS: f32 = 1.5;
+
+/// RMS delay of the estimator's exponential power-delay prior, in samples (≈ 0.19 ms at 8 kHz).
 ///
-/// Replaces LS + linear interpolation with IDFT → delay-window → direct evaluation.
-/// The physical channel has at most `CP` samples of delay spread; by transforming the
-/// P pilot observations to a P-point CIR and zeroing taps beyond that window, noise
-/// energy outside the CP window is discarded before reconstructing H at every SC.
+/// The prior is what lets the basis reach out to [`MAX_CE_DELAY_SAMPLES`] without paying for it in
+/// AWGN: a flat prior ridges every tap equally, so widening the reach simply gives pilot noise more
+/// places to hide (measured: ~6 dB of AWGN frame-success lost going from ±4 to ±10 samples). Weighting
+/// each tap by `exp(-|τ|/τ_rms)` suppresses the far taps unless the data insists on them — at high SNR
+/// the likelihood overrides the prior, so a two-ray channel at ±8 samples is still recovered exactly.
 ///
-/// The reconstruction step evaluates the DFT at each occupied SC position analytically
-/// rather than via zero-padding, which correctly handles the non-zero `first_sc` offset.
+/// It is a regulariser, not a claim about the channel: the value was swept, not derived.
+const CE_PRIOR_TAU_RMS: f64 = 1.5;
+
+/// Signed delay taps, in samples, spanned by the CE basis.
 ///
-/// Returns estimates indexed by `sc - first_sc` (length = `p.total_sc()`).
+/// Symmetric about zero: [`deramp_timing`] removes the channel's mean group delay before estimation,
+/// re-centring the impulse response, so pre-cursor taps are as necessary as post-cursor ones.
 ///
-/// `ce_idft` must be a pre-planned P-point inverse FFT where P = `p.n_pilots`.
-/// Pass a plan created once per demodulation session rather than replanning per symbol.
-pub fn dft_ce_estimate(
-    p: &ScFdmaParams,
-    freq: &[Complex32],
-    ce_idft: &dyn Fft<f32>,
-) -> Vec<Complex32> {
-    let total = p.total_sc();
+/// A pilot comb of `P` observations supports at most `P` taps, so a mode with few pilots gets a
+/// shorter basis at the same [`CE_TAP_STEP_SAMPLES`] resolution.
+fn delay_taps(n_pilots: usize) -> Vec<f64> {
+    let l = n_pilots.clamp(2, CE_MAX_TAPS);
+    let reach = CE_TAP_STEP_SAMPLES * (l - 1) as f64 / 2.0;
+    (0..l)
+        .map(|j| -reach + j as f64 * CE_TAP_STEP_SAMPLES)
+        .collect()
+}
+
+/// Delay, in samples, of comb tap `l` of a `n`-point pilot-comb IDFT (signed; taps past `n/2` are
+/// pre-cursor). The comb samples `H` every `pilot_spacing` subcarriers, so it resolves delays over one
+/// period of `span = n × pilot_spacing` subcarriers with a grid step of `N_FFT / span` samples.
+fn comb_tap_delay(p: &ScFdmaParams, n: usize, l: usize) -> f32 {
+    let signed = if l > n / 2 {
+        l as i32 - n as i32
+    } else {
+        l as i32
+    };
+    signed as f32 * FFT_SIZE as f32 / (n * p.pilot_spacing) as f32
+}
+
+/// Estimate the per-FFT-bin noise variance σ² directly from the pilot comb of one symbol.
+///
+/// The `P`-point IDFT of the pilot least-squares observations is an *orthogonal* transform, so it
+/// splits them into a channel part (taps whose delay is physically reachable) and a noise-only part.
+/// Averaging |h′[l]|² over the unreachable taps gives σ² without reference to any channel estimate —
+/// unlike a fit residual, it cannot be biased by how well (or badly) the estimator fits.
+///
+/// Over-reports σ² on channels with delay spread beyond the guard band (leakage), so callers should
+/// take the smaller of this and [`pilot_diff_noise_var`], which fails the other way.
+///
+/// Returns `None` when no tap falls outside the guarded delay window (too few pilots).
+pub fn pilot_comb_noise_var(p: &ScFdmaParams, freq: &[Complex32]) -> Option<f32> {
     let pilots = pilot_positions(p);
-    let n_pilots = pilots.len();
-
-    if n_pilots < 2 {
-        return ls_estimate(p, freq);
+    let n = pilots.len();
+    if n < 4 {
+        return None;
     }
-
-    debug_assert_eq!(
-        n_pilots,
-        p.n_pilots,
-        "pilot_positions() returned {} pilots but ScFdmaParams.n_pilots={}; params are inconsistent",
-        n_pilots,
-        p.n_pilots,
-    );
-
-    // --- Step 1: LS at pilot SCs ---
-    let mut h_pilot: Vec<Complex32> = pilots
+    let mut h: Vec<Complex32> = pilots
         .iter()
         .enumerate()
         .map(|(k, &sc)| freq[sc] / pilot_value(p, k))
         .collect();
-
-    // --- Step 2: IDFT(P) → P-point warped CIR h'[l] ---
-    // CIR tap l represents physical delay  d_l = l × N_FFT / total_sc  samples.
-    ce_idft.process(&mut h_pilot);
-    let inv_p = 1.0 / n_pilots as f32;
-    for h in &mut h_pilot {
-        *h *= inv_p;
+    FftPlanner::<f32>::new().plan_fft_inverse(n).process(&mut h);
+    let inv_n = 1.0 / n as f32;
+    let grid_step = FFT_SIZE as f32 / (n * p.pilot_spacing) as f32;
+    let cutoff = MAX_CE_DELAY_SAMPLES as f32 + NOISE_GUARD_TAPS * grid_step;
+    let (mut acc, mut cnt) = (0.0f32, 0usize);
+    for (l, tap) in h.iter().enumerate() {
+        if comb_tap_delay(p, n, l).abs() > cutoff {
+            acc += (tap * inv_n).norm_sqr();
+            cnt += 1;
+        }
     }
-
-    // --- Step 3: CP-window — zero taps whose delay exceeds the cyclic prefix ---
-    // d_l ≤ CP  ⟺  l ≤ CP × total_sc / N_FFT.
-    // For SCFDMA52: ceil(32 × 65 / 256) = 9 taps (out of 13) kept.
-    let l_max = (CP * total).div_ceil(FFT_SIZE).clamp(1, n_pilots);
-    for h in h_pilot[l_max..].iter_mut() {
-        *h = Complex32::new(0.0, 0.0);
+    if cnt == 0 {
+        return None;
     }
+    // var(h′[l]) = σ²_h / P, and σ²_bin = σ²_h · |pilot|².
+    let sigma2_h = acc / cnt as f32 * n as f32;
+    Some((sigma2_h * PILOT_AMPLITUDE * PILOT_AMPLITUDE).max(1e-9))
+}
 
-    // --- Step 4: Reconstruct H at all occupied SCs ---
-    // H_est[first_sc + rel] = Σ_{l=0}^{l_max-1} h'[l] × exp(-j2π (rel - offset) l / total)
-    // offset = pilots[0] - first_sc: the position of the first pilot within the occupied band.
-    // Using the actual pilot position decouples the formula from the pilot_spacing heuristic and
-    // handles non-uniform pilot grids (e.g. SCFDMA52-64QAM-P4 where spacing×n_pilots ≠ total_sc).
-    let offset = pilots[0] as isize - p.first_sc as isize;
-    (0..total)
-        .map(|rel| {
-            let freq_idx = rel as isize - offset;
-            let mut sum = Complex32::new(0.0, 0.0);
-            for (l, &tap) in h_pilot.iter().enumerate().take(l_max) {
-                let phase = -std::f32::consts::TAU * freq_idx as f32 * l as f32 / total as f32;
-                sum += tap * Complex32::new(phase.cos(), phase.sin());
-            }
-            sum
+/// Estimate σ² from the pilot-observation difference between two adjacent symbols.
+///
+/// At HF Doppler the channel is essentially static across one 36 ms symbol, so `h_k(s+1) − h_k(s)` is
+/// pure noise of variance `2σ²_h`. Unlike [`pilot_comb_noise_var`] this is immune to delay spread — it
+/// never has to say which part of the channel is "real". It fails the other way (fast fading and any
+/// residual carrier offset inflate it), so callers take the smaller of the two.
+///
+/// The bulk phase rotation between the symbols is removed first: a residual CFO of even 1 Hz turns
+/// into 0.23 rad of common phase per symbol, which would otherwise swamp σ² at high SNR.
+pub fn pilot_diff_noise_var(
+    p: &ScFdmaParams,
+    prev: &[Complex32],
+    cur: &[Complex32],
+) -> Option<f32> {
+    let pilots = pilot_positions(p);
+    let n = pilots.len();
+    if n < 2 {
+        return None;
+    }
+    let (h0, h1): (Vec<Complex32>, Vec<Complex32>) = pilots
+        .iter()
+        .enumerate()
+        .map(|(k, &sc)| {
+            let pv = pilot_value(p, k);
+            (prev[sc] / pv, cur[sc] / pv)
         })
-        .collect()
+        .unzip();
+    let rot = h1
+        .iter()
+        .zip(h0.iter())
+        .fold(Complex32::new(0.0, 0.0), |acc, (&b, &a)| acc + b * a.conj());
+    let derot = if rot.norm_sqr() > 1e-20 {
+        (rot / rot.norm()).conj()
+    } else {
+        Complex32::new(1.0, 0.0)
+    };
+    let sum: f32 = h1
+        .iter()
+        .zip(h0.iter())
+        .map(|(&b, &a)| (b * derot - a).norm_sqr())
+        .sum();
+    // E|h₁ − h₀|² = 2σ²_h; one phase parameter was fitted out, hence n−1 degrees of freedom.
+    let dof = (n - 1).max(1) as f32;
+    let sigma2_h = sum / (2.0 * dof);
+    Some((sigma2_h * PILOT_AMPLITUDE * PILOT_AMPLITUDE).max(1e-9))
+}
+
+/// Pilot-to-subcarrier channel interpolator on a physical delay basis.
+///
+/// Fits the `P` least-squares pilot observations with `L` complex taps at fixed *sample* delays — the
+/// physically meaningful basis — and evaluates the fit at every occupied subcarrier.
+///
+/// This replaced a DFT-CE (IDFT of the pilot comb → keep the first `l_max` taps → re-evaluate).
+/// That estimator's delay grid is `N_FFT / (P × pilot_spacing) ≈ 3.94` samples wide, because the pilot
+/// comb spans only the 65 occupied subcarriers rather than all 256 FFT bins. Any channel whose delays
+/// fall between grid points leaks across every tap, and truncating the tap set then discards that
+/// leakage: measured channel-estimate MSE on a noiseless two-ray channel was **−10 to −17 dB** for
+/// 1–2-sample delays (the post-`deramp_timing` regime) against **−60 dB** here. The dense QAM rungs
+/// could not decode a static, in-cyclic-prefix, *noiseless* two-ray channel at all.
+///
+/// The price of the physical basis is conditioning: over a 65-subcarrier aperture, steering vectors
+/// for adjacent integer delays are nearly collinear (`AᴴA` off-diagonals reach 0.98 of the diagonal),
+/// so an unregularised least-squares fit amplifies pilot noise by several dB. [`DelayCe::solver`]
+/// therefore builds a **Wiener** fit — a ridge scaled by the measured noise-to-channel-power ratio,
+/// which is the MMSE estimator under a flat delay-power prior. The ridge is what keeps the AWGN
+/// channel-estimate MSE at (or below) the old DFT-CE's while the basis fixes the selective channels.
+pub struct DelayCe {
+    total: usize,
+    pilots: Vec<usize>,
+    pilot_values: Vec<Complex32>,
+    taus: Vec<f64>,
+    /// `P × L`, row-major.
+    a: Vec<Complex64>,
+    /// `AᴴA`, `L × L` row-major.
+    ata: Vec<Complex64>,
+    /// Ridge floor: `1e-6 · tr(AᴴA)/L`, keeping the near-collinear normal equations invertible even
+    /// when a short frame under-reports σ². Without it the fit can reach a pilot-noise gain of ~18 dB.
+    lambda_floor: f64,
+    /// `1 / w_j` for the exponential power-delay prior `w_j ∝ exp(-|τ_j|/τ_rms)`, `Σ w_j = 1`.
+    prior_inv: Vec<f64>,
+    /// `total × L`, row-major.
+    b: Vec<Complex64>,
+}
+
+/// A [`DelayCe`] specialised to one frame's noise-to-signal ratio: the reconstruction collapses to a
+/// single `total_sc × P` complex matrix, so per-symbol estimation is one matrix-vector product.
+pub struct CeSolver {
+    total: usize,
+    pilots: Vec<usize>,
+    pilot_values: Vec<Complex32>,
+    /// `total × P`, row-major: `h_est = recon · h_pilot_ls`.
+    recon: Vec<Complex32>,
+    residual_debias: f32,
+}
+
+impl DelayCe {
+    /// Precompute the mode-constant matrices. Independent of the received signal.
+    pub fn new(p: &ScFdmaParams) -> Self {
+        let total = p.total_sc();
+        let pilots = pilot_positions(p);
+        let n_pilots = pilots.len();
+        let pilot_values = (0..n_pilots).map(|k| pilot_value(p, k)).collect();
+
+        let taus = delay_taps(n_pilots);
+        let l = taus.len();
+
+        // A[k][j] = exp(-j2π · sc_k · τ_j / N_FFT): the response of a unit tap at delay τ_j, sampled
+        // at pilot subcarrier sc_k. N_FFT — not the occupied span — is the true period.
+        let a: Vec<Complex64> = pilots
+            .iter()
+            .flat_map(|&sc| taus.iter().map(move |&t| steer(sc as f64, t)))
+            .collect();
+        let b: Vec<Complex64> = (0..total)
+            .flat_map(|rel| {
+                let sc = (p.first_sc + rel) as f64;
+                taus.iter().map(move |&t| steer(sc, t))
+            })
+            .collect();
+
+        let mut ata = vec![Complex64::new(0.0, 0.0); l * l];
+        for i in 0..l {
+            for j in 0..l {
+                let mut acc = Complex64::new(0.0, 0.0);
+                for k in 0..n_pilots {
+                    acc += a[k * l + i].conj() * a[k * l + j];
+                }
+                ata[i * l + j] = acc;
+            }
+        }
+        let trace: f64 = (0..l).map(|i| ata[i * l + i].re).sum();
+        let lambda_floor = 1e-6 * trace / l as f64;
+
+        let w: Vec<f64> = taus
+            .iter()
+            .map(|&t| (-t.abs() / CE_PRIOR_TAU_RMS).exp())
+            .collect();
+        let w_sum: f64 = w.iter().sum();
+        let prior_inv = w.iter().map(|x| w_sum / x).collect();
+
+        Self {
+            total,
+            pilots,
+            pilot_values,
+            taus,
+            a,
+            ata,
+            lambda_floor,
+            prior_inv,
+            b,
+        }
+    }
+
+    /// Number of complex taps the basis fits.
+    pub fn taps(&self) -> usize {
+        self.taus.len()
+    }
+
+    /// Least-squares pilot observations `h_k = Y[sc_k] / pilot_k`.
+    fn pilot_ls(&self, freq: &[Complex32]) -> Vec<Complex32> {
+        self.pilots
+            .iter()
+            .zip(self.pilot_values.iter())
+            .map(|(&sc, &pv)| freq[sc] / pv)
+            .collect()
+    }
+
+    /// Mean pilot power `E|h_k|²` — this still includes the noise; [`DelayCe::solver`] subtracts it.
+    pub fn channel_power(&self, freq: &[Complex32]) -> f32 {
+        let h = self.pilot_ls(freq);
+        (h.iter().map(|c| c.norm_sqr()).sum::<f32>() / h.len() as f32).max(1e-12)
+    }
+
+    /// Build the Wiener solver for a frame with per-bin noise variance `noise_var` and mean channel
+    /// power `chan_power` (both in the same units — see [`DelayCe::channel_power`]).
+    ///
+    /// `c = (AᴴA + σ²_h · R⁻¹)⁻¹ Aᴴ h` with `R = diag(P_ch · w_j)` is the MMSE tap estimate under the
+    /// exponential delay-power prior `w`. It collapses to plain least squares as σ² → 0 and to a
+    /// heavily damped, short-delay fit at low SNR, which is exactly the wanted behaviour.
+    pub fn solver(&self, noise_var: f32, chan_power: f32) -> CeSolver {
+        let n_pilots = self.pilots.len();
+        let l = self.taus.len();
+        let sigma2_h = (noise_var / (PILOT_AMPLITUDE * PILOT_AMPLITUDE)).max(1e-12) as f64;
+        // `chan_power` is E|h_k|² = P_signal + σ²_h; the prior wants the signal part alone.
+        let p_ch = (chan_power as f64 - sigma2_h).max(1e-12);
+        let ridge: Vec<f64> = self
+            .prior_inv
+            .iter()
+            .map(|inv_w| (sigma2_h * inv_w / p_ch).max(self.lambda_floor))
+            .collect();
+
+        let pinv = ridge_pseudo_inverse(&self.a, &self.ata, n_pilots, l, &ridge);
+        let residual_debias = residual_debias(&self.a, &pinv, n_pilots, l);
+
+        // Accumulate each recon entry in f64 and round once: `pinv` entries can reach ~10³ while the
+        // recon they sum to is O(1), so per-term f32 rounding would set the noiseless CE-MSE floor.
+        let mut recon = vec![Complex32::new(0.0, 0.0); self.total * n_pilots];
+        for rel in 0..self.total {
+            for k in 0..n_pilots {
+                let mut acc = Complex64::new(0.0, 0.0);
+                for j in 0..l {
+                    acc += self.b[rel * l + j] * pinv[j * n_pilots + k];
+                }
+                recon[rel * n_pilots + k] = Complex32::new(acc.re as f32, acc.im as f32);
+            }
+        }
+        CeSolver {
+            total: self.total,
+            pilots: self.pilots.clone(),
+            pilot_values: self.pilot_values.clone(),
+            recon,
+            residual_debias,
+        }
+    }
+}
+
+impl CeSolver {
+    /// Estimate the channel at every occupied SC. Returns estimates indexed by `sc - first_sc`.
+    pub fn estimate(&self, freq: &[Complex32]) -> Vec<Complex32> {
+        let n_pilots = self.pilots.len();
+        let h_pilot: Vec<Complex32> = self
+            .pilots
+            .iter()
+            .zip(self.pilot_values.iter())
+            .map(|(&sc, &pv)| freq[sc] / pv)
+            .collect();
+        (0..self.total)
+            .map(|rel| {
+                self.recon[rel * n_pilots..(rel + 1) * n_pilots]
+                    .iter()
+                    .zip(h_pilot.iter())
+                    .fold(Complex32::new(0.0, 0.0), |acc, (&r, &h)| acc + r * h)
+            })
+            .collect()
+    }
+
+    /// Factor that turns this fit's mean pilot residual into an unbiased σ². See [`residual_debias`].
+    pub fn noise_debias(&self) -> f32 {
+        self.residual_debias
+    }
+}
+
+/// Unit-delay steering phasor `exp(-j2π · sc · τ / N_FFT)`.
+fn steer(sc: f64, tau: f64) -> Complex64 {
+    let ph = -std::f64::consts::TAU * sc * tau / FFT_SIZE as f64;
+    Complex64::new(ph.cos(), ph.sin())
+}
+
+/// `P / ‖I − A·pinv‖²_F` — the factor that debiases the mean pilot residual into σ².
+///
+/// The fit is measured against the same pilots it consumes, so the residual only carries the noise
+/// the fit *rejects*. For an orthogonal projection that fraction is exactly `(P−L)/P`, but a
+/// ridge-regularised fit is an oblique, shrinking projection: its rejected fraction is `‖I − S‖²_F / P`
+/// and depends on the ridge, so it must be computed rather than assumed.
+fn residual_debias(a: &[Complex64], pinv: &[Complex64], p: usize, l: usize) -> f32 {
+    let mut frob = 0.0f64;
+    for i in 0..p {
+        for j in 0..p {
+            let mut s = Complex64::new(0.0, 0.0);
+            for m in 0..l {
+                s += a[i * l + m] * pinv[m * p + j];
+            }
+            let d = if i == j {
+                Complex64::new(1.0, 0.0) - s
+            } else {
+                -s
+            };
+            frob += d.norm_sqr();
+        }
+    }
+    if frob < 1e-9 {
+        1.0
+    } else {
+        (p as f64 / frob) as f32
+    }
+}
+
+/// `(AᴴA + diag(ridge))⁻¹ Aᴴ` for a `p × l` row-major complex `A`, returned `l × p` row-major.
+///
+/// Gauss-Jordan on the `l × 2l` augmented system in `f64`; `l ≤ 17` here, and the near-collinear
+/// delay basis loses every significant bit of an `f32` mantissa in the normal equations.
+fn ridge_pseudo_inverse(
+    a: &[Complex64],
+    ata: &[Complex64],
+    p: usize,
+    l: usize,
+    ridge: &[f64],
+) -> Vec<Complex64> {
+    let zero = Complex64::new(0.0, 0.0);
+    let mut m = vec![zero; l * 2 * l];
+    for i in 0..l {
+        for j in 0..l {
+            m[i * 2 * l + j] = if i == j {
+                ata[i * l + j] + Complex64::new(ridge[i], 0.0)
+            } else {
+                ata[i * l + j]
+            };
+        }
+        m[i * 2 * l + l + i] = Complex64::new(1.0, 0.0);
+    }
+    for c in 0..l {
+        let mut piv = c;
+        for r in c + 1..l {
+            if m[r * 2 * l + c].norm() > m[piv * 2 * l + c].norm() {
+                piv = r;
+            }
+        }
+        for j in 0..2 * l {
+            m.swap(c * 2 * l + j, piv * 2 * l + j);
+        }
+        let d = m[c * 2 * l + c];
+        if d.norm() < 1e-30 {
+            continue;
+        }
+        for j in 0..2 * l {
+            m[c * 2 * l + j] /= d;
+        }
+        for r in 0..l {
+            if r == c {
+                continue;
+            }
+            let f = m[r * 2 * l + c];
+            if f.norm() < 1e-30 {
+                continue;
+            }
+            for j in 0..2 * l {
+                let v = m[c * 2 * l + j];
+                m[r * 2 * l + j] -= f * v;
+            }
+        }
+    }
+    let mut out = vec![zero; l * p];
+    for i in 0..l {
+        for k in 0..p {
+            let mut s = zero;
+            for j in 0..l {
+                s += m[i * 2 * l + l + j] * a[k * l + j].conj();
+            }
+            out[i * p + k] = s;
+        }
+    }
+    out
 }
 
 /// Compute the LLR noise variance for soft demodulation after MMSE equalization and IDFT.
@@ -321,12 +689,19 @@ pub fn zf_equalize(p: &ScFdmaParams, freq: &[Complex32], h_est: &[Complex32]) ->
 /// Computes the mean squared error between the received pilots and the channel estimate applied to
 /// the known pilot amplitude, then DEBIASES it. The estimate is fitted to the same pilot
 /// observations it is measured against, so the raw residual is only the noise component the fit
-/// *rejects*, not the full noise power: DFT-CE keeps `l_max` of `P` CIR taps → residual retains
-/// `(P−l_max)/P` of the noise; the localized single-tap (flat) CE keeps 1 → residual retains
-/// `(P−1)/P`. Un-debiased this under-reports σ² by ~5 dB for SCFDMA52 (P=13, l_max=9 → ×3.25),
-/// under-regularising MMSE and over-confidence in the soft LLRs at exactly the low-SNR/flat regime
-/// where soft-FEC and HARQ weighting live. This σ² feeds `mmse_equalize` and `mmse_llr_noise_var`.
-pub fn estimate_noise_var(p: &ScFdmaParams, freq: &[Complex32], h_est: &[Complex32]) -> f32 {
+/// *rejects*, not the full noise power. Un-debiased this under-reports σ² by several dB, which
+/// under-regularises MMSE and over-states confidence in the soft LLRs at exactly the low-SNR regime
+/// where soft-FEC and HARQ weighting live.
+///
+/// Only the localized (block-pilot) layout uses this now — the pilot-comb modes take σ² straight from
+/// the comb, which no channel-estimate error can bias. `debias` is the estimator's own rejected-noise
+/// factor: [`flat_ce_debias`] for the localized single-tap fit, [`CeSolver::noise_debias`] otherwise.
+pub fn estimate_noise_var(
+    p: &ScFdmaParams,
+    freq: &[Complex32],
+    h_est: &[Complex32],
+    debias: f32,
+) -> f32 {
     let pilots = pilot_positions(p);
     if pilots.is_empty() {
         return 1e-3;
@@ -343,21 +718,18 @@ pub fn estimate_noise_var(p: &ScFdmaParams, freq: &[Complex32], h_est: &[Complex
         })
         .sum();
     let raw = sum / pilots.len() as f32;
-    // Debias for the noise degrees of freedom the estimator consumes.
-    let p_n = pilots.len();
-    let dof = if p.localized {
-        p_n.saturating_sub(1) // one averaged gain
+    (raw * debias.max(1.0)).max(1e-6)
+}
+
+/// Debias factor for [`flat_channel_estimate`]: one averaged complex gain fitted to `P` pilots, so
+/// the residual keeps `(P−1)/P` of the noise.
+pub fn flat_ce_debias(p: &ScFdmaParams) -> f32 {
+    let n = pilot_positions(p).len();
+    if n < 2 {
+        1.0
     } else {
-        // DFT-CE keeps l_max = ceil(CP·total / FFT_SIZE) taps (same formula as dft_ce_estimate).
-        let l_max = (CP * p.total_sc()).div_ceil(FFT_SIZE).clamp(1, p_n);
-        p_n.saturating_sub(l_max)
-    };
-    let debias = if dof == 0 {
-        1.0 // no rejected component to scale up from (degenerate); leave the raw residual
-    } else {
-        p_n as f32 / dof as f32
-    };
-    (raw * debias).max(1e-6)
+        n as f32 / (n - 1) as f32
+    }
 }
 
 /// Estimate the Rician K-factor (linear ratio) from per-subcarrier channel taps.
@@ -568,7 +940,7 @@ mod tests {
     use crate::params::{SCFDMA16, SCFDMA52, SCFDMA52_LP};
 
     /// The debiased noise-var estimate recovers the true σ² (flat channel), where the raw pilot
-    /// residual would under-report it by the DFT-CE projection factor (P/(P−l_max) = 13/4 ≈ 3.25×).
+    /// residual would under-report it by the delay-basis projection factor (P/(P−L) = 13/4 ≈ 3.25×).
     #[test]
     fn estimate_noise_var_is_unbiased() {
         // Deterministic Box–Muller complex noise from a small LCG (no rng dep).
@@ -579,10 +951,13 @@ mod tests {
                 .wrapping_add(1442695040888963407);
             ((state >> 33) as f32) / ((1u64 << 31) as f32) // ~U[0,1)
         };
-        for (p, tol) in [(SCFDMA52, 0.18f32), (SCFDMA52_LP, 0.18)] {
+        for (p, tol) in [(SCFDMA52, 0.30f32), (SCFDMA52_LP, 0.18)] {
             let sigma2 = 0.04f32; // true per-bin complex noise power
-            let mut planner = FftPlanner::<f32>::new();
-            let ce_idft = planner.plan_fft_inverse(p.n_pilots);
+                                  // The Wiener solver's rejected-noise fraction depends on its ridge, so build it at the
+                                  // channel/noise ratio the test actually simulates (flat unit channel, this σ²).
+            let ce = (!p.localized).then(|| {
+                DelayCe::new(&p).solver(sigma2, PILOT_AMPLITUDE * PILOT_AMPLITUDE + sigma2)
+            });
             let pilots = pilot_positions(&p);
             let mut acc = 0.0f32;
             let trials = 4000;
@@ -595,12 +970,11 @@ mod tests {
                     let ang = std::f32::consts::TAU * u2;
                     freq[sc] = Complex32::new(PILOT_AMPLITUDE + mag * ang.cos(), mag * ang.sin());
                 }
-                let h_est = if p.localized {
-                    flat_channel_estimate(&p, &freq)
-                } else {
-                    dft_ce_estimate(&p, &freq, ce_idft.as_ref())
+                let (h_est, debias) = match &ce {
+                    Some(s) => (s.estimate(&freq), s.noise_debias()),
+                    None => (flat_channel_estimate(&p, &freq), flat_ce_debias(&p)),
                 };
-                acc += estimate_noise_var(&p, &freq, &h_est);
+                acc += estimate_noise_var(&p, &freq, &h_est, debias);
             }
             let est = acc / trials as f32;
             let rel_err = (est - sigma2).abs() / sigma2;
@@ -664,18 +1038,15 @@ mod tests {
     }
 
     #[test]
-    fn dft_ce_flat_channel_all_ones() {
+    fn delay_ce_flat_channel_all_ones() {
         // Flat channel: H[k]=1 for all occupied SCs.  Pilot observations are
         // exactly PILOT_AMPLITUDE so LS gives h=1.0 at every pilot SC.
-        // DFT-CE must recover h≈1.0 at every total SC position.
         let p = &SCFDMA52;
         let mut freq = vec![Complex32::new(0.0, 0.0); FFT_SIZE];
         for sc in p.first_sc..=p.last_sc {
             freq[sc] = Complex32::new(PILOT_AMPLITUDE, 0.0);
         }
-        let mut planner = FftPlanner::<f32>::new();
-        let ce_idft = planner.plan_fft_inverse(p.n_pilots);
-        let h_est = dft_ce_estimate(p, &freq, &*ce_idft);
+        let h_est = DelayCe::new(p).solver(1e-6, 1.0).estimate(&freq);
         assert_eq!(h_est.len(), p.total_sc());
         for (i, h) in h_est.iter().enumerate() {
             assert!(
@@ -686,9 +1057,9 @@ mod tests {
     }
 
     #[test]
-    fn dft_ce_less_noise_than_ls_under_awgn() {
-        // AWGN on pilot observations: DFT-CE exploits the CP window to average
-        // noise across all pilots, giving lower RMS error than LS interpolation.
+    fn delay_ce_less_noise_than_ls_under_awgn() {
+        // AWGN on pilot observations: the delay basis fits 9 taps to 13 observations, averaging the
+        // noise the raw LS pilot estimates carry — lower RMS error than LS + linear interpolation.
         let p = &SCFDMA52;
         // Deterministic PRNG noise (LCG) at pilot positions.
         let mut state = 0xDEAD_BEEF_u64;
@@ -707,12 +1078,14 @@ mod tests {
             freq[sc] += Complex32::new(ni * noise_std, nq * noise_std);
         }
 
-        let mut planner = FftPlanner::<f32>::new();
-        let ce_idft = planner.plan_fft_inverse(p.n_pilots);
-        let h_dft = dft_ce_estimate(p, &freq, &*ce_idft);
+        // Wiener fit at the simulated pilot-noise level (uniform ±noise_std ⇒ σ² = 2·std²/3).
+        let sigma2 = 2.0 * noise_std * noise_std / 3.0;
+        let h_dft = DelayCe::new(p)
+            .solver(sigma2, PILOT_AMPLITUDE * PILOT_AMPLITUDE + sigma2)
+            .estimate(&freq);
         let h_ls = ls_estimate(p, &freq);
 
-        // RMS error over all total SCs: DFT-CE must beat LS.
+        // RMS error over all total SCs: the delay-basis CE must beat LS.
         let rms = |est: &[Complex32]| {
             let mse: f32 = est
                 .iter()
@@ -725,18 +1098,16 @@ mod tests {
         let rms_ls = rms(&h_ls);
         assert!(
             rms_dft < rms_ls,
-            "DFT-CE RMS {rms_dft:.4} should be less than LS RMS {rms_ls:.4}"
+            "delay-basis CE RMS {rms_dft:.4} should be less than LS RMS {rms_ls:.4}"
         );
     }
 
     #[test]
-    fn dft_ce_output_length_matches_total_sc() {
+    fn delay_ce_output_length_matches_total_sc() {
         // Output slice must cover all occupied SCs regardless of pilot count.
         for p in [&SCFDMA16, &SCFDMA52] {
             let freq = vec![Complex32::new(PILOT_AMPLITUDE, 0.0); FFT_SIZE];
-            let mut planner = FftPlanner::<f32>::new();
-            let ce_idft = planner.plan_fft_inverse(p.n_pilots);
-            let h = dft_ce_estimate(p, &freq, &*ce_idft);
+            let h = DelayCe::new(p).solver(1e-6, 1.0).estimate(&freq);
             assert_eq!(
                 h.len(),
                 p.total_sc(),
