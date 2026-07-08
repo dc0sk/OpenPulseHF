@@ -9,7 +9,9 @@ use num_complex::Complex32;
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
 use openpulse_dsp::acquisition::{estimate_cfo_data_aided, preamble_corr_sq};
-use openpulse_dsp::constellation::{constellation_points, symbol_llrs};
+use openpulse_dsp::constellation::{
+    constellation_points, estimate_decision_noise_var, symbol_llrs,
+};
 use openpulse_dsp::filter::FirFilter;
 use openpulse_dsp::rrc::generate_rrc_coefficients;
 
@@ -555,14 +557,22 @@ pub fn qam64_demodulate_soft(
     let data_end = i_syms.len() - TAIL_SYMS;
     let mut llrs = Vec::with_capacity((data_end - data_start) * 6);
 
-    // Max-log-MAP LLRs via the shared constellation engine. noise_var = 1 keeps
-    // the same σ²=1 scaling as before (positive LLR → bit more likely 0).
+    // Max-log-MAP LLRs via the shared constellation engine (positive LLR → bit more likely 0).
+    //
+    // `noise_var` is measured from the symbols rather than fixed at 1.0, which makes these *true*
+    // log-likelihood ratios: their magnitude scales as 1/σ². Nothing that decodes a single frame
+    // cares (soft Viterbi, min-sum LDPC and max-log turbo are all scale-invariant), but HARQ soft
+    // combining across receive attempts does — an uncalibrated attempt from a deep fade otherwise
+    // votes as loudly as a clean one. See `openpulse_core::fec::combine_llrs_map`.
     let points = constellation_points(6);
-    for (&yi, &yq) in i_syms[data_start..data_end]
+    let data: Vec<Complex32> = i_syms[data_start..data_end]
         .iter()
         .zip(q_syms[data_start..data_end].iter())
-    {
-        llrs.extend(symbol_llrs(Complex32::new(yi, yq), 6, 1.0, &points));
+        .map(|(&yi, &yq)| Complex32::new(yi, yq))
+        .collect();
+    let noise_var = estimate_decision_noise_var(&data, 6);
+    for sym in &data {
+        llrs.extend(symbol_llrs(*sym, 6, noise_var, &points));
     }
     Ok(llrs)
 }

@@ -9,6 +9,54 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-08 — fix(plugins): calibrate BPSK/QPSK/8PSK/64QAM soft LLRs
+
+- **Requirement/change:** follow-up to PR #686, which found that only SC-FDMA and OFDM emit *calibrated*
+  LLRs (magnitude ∝ 1/σ²). BPSK and QPSK emitted raw correlations/projections, 8PSK and 64QAM emitted
+  max-log-MAP distance differences with `noise_var = 1.0`. Their `mean(|LLR|)` was flat in SNR (measured
+  1.00× across 8→24 dB), so `combine_llrs_map` — which sums HARQ attempts — let a deeply-faded attempt
+  vote exactly as loudly as a clean one.
+- **Root cause of the *estimator* choice (measured, not assumed):** a demodulator's residual is not all
+  thermal noise. Pulse-shaping ISI and equalizer misadjustment vary the symbol *amplitude* with no
+  dependence on SNR, so both a moment estimator (M2/M4, tried) and a distance-to-nearest-point estimator
+  (`estimate_decision_noise_var`, tried) stop tracking SNR: BPSK's coefficient of variation of |LLR| was
+  0.443 at 8 dB **and 0.443 at 32 dB**. The component *orthogonal* to the hard decision is immune to
+  radial variation, and for a differential detector the amplitude cancels exactly.
+- **Design decision:** two new `openpulse-dsp::constellation` helpers.
+  `differential_llr_scale(dots, crosses) = 2·mean|dot| / var(cross)` for BPSK — `cross = Im(z_k·conj(z_{k−1}))`
+  is mean-zero, so `2A²/(2A²σ²) = 1/σ²` and the amplitude cancels. `psk_symbol_noise_var(symbols, bits)`
+  for constant-modulus PSK — derotate by the hard decision, `Im(z·conj(ŝ))` carries only noise. 64QAM
+  keeps `estimate_decision_noise_var` (its `normalize_to_constellation` already fixes the scale).
+  All four are per-frame *uniform* scales, so single-frame decoding is bit-identical: soft Viterbi,
+  min-sum LDPC and max-log turbo are scale-invariant. Only HARQ combining changes.
+- **Implementation:** `crates/openpulse-dsp/src/constellation.rs` — `differential_llr_scale`,
+  `psk_symbol_noise_var`, `estimate_decision_noise_var` doc; `plugins/{bpsk,qpsk,psk8,64qam}/src/demodulate.rs`.
+- **Tests:** new `crates/openpulse-modem/tests/llr_calibration.rs` —
+  `every_soft_demodulator_emits_llrs_that_grow_with_snr` (per-plugin floors on the 8→20 dB `mean|LLR|`
+  growth) and `a_deeply_faded_extra_attempt_does_not_hurt` (adding a −14 dB attempt must not raise the
+  BPSK250 threshold). **Both fail on the pristine tree**, by ×1.00 growth and a 9.0 dB penalty
+  respectively. Two `openpulse-dsp` unit tests pin the estimators against amplitude jitter, which is the
+  exact failure mode of the alternatives.
+  `crates/openpulse-modem/tests/window_arq_watterson.rs` — its absent-symbol LLR injection was an
+  absolute `0.6`, which happened to be 22 % of BPSK250's mean |LLR| (2.69) on that channel; with
+  calibrated LLRs an absolute constant is silently negligible. Re-expressed as the same fraction and
+  moved to the post-#686 `combine_llrs_map*` API. Verified the rewritten test passes with *both* the old
+  and the new plugin, i.e. it is a faithful re-expression, not a relaxation.
+- **Test results:** HARQ decode threshold, three attempts, mean over 5 seed triples on a 0.5 dB grid
+  (before → after):
+
+  | attempt SNRs | BPSK250 | QPSK250 | 8PSK500 | 64QAM1000 |
+  |---|---|---|---|---|
+  | `[0, 0, 0]` (equal) | −5.70 → −5.70 | 3.60 → 3.60 | 4.40 → 4.30 | 12.40 → 12.40 |
+  | `[0, −4, −8]` (graded) | −0.10 → **−3.40** | 7.60 → **6.80** | 10.10 → **8.60** | 17.17 → **15.40** |
+  | `[0, 0, −14]` (deep fade) | 4.90 → **−4.10** | 6.90 → **3.50** | 15.10 → **10.10** | 20.83 → **14.00** |
+
+  Equal-SNR sets are unchanged (no regression); graded sets gain 0.8–3.3 dB; deep-fade sets gain
+  3.4–9.0 dB. `mean(|LLR|)` growth over 8→24 dB, ideal ×39.8: BPSK **×36.3**, 64QAM ×16.3, 8PSK ×1.80,
+  QPSK ×1.21 (the last two are limited by a receiver-internal residual, not by the estimator).
+  Full workspace `--exclude pki-tooling --no-default-features`: **1548 passed, 0 failed**. clippy
+  `-D warnings --all-targets` + fmt clean.
+
 ## 2026-07-08 — fix(engine): MAP LLR combining (the HARQ weight applied σ⁻² twice)
 
 - **Requirement/change:** follow-up from PR #685. `receive_with_llr_combining` and

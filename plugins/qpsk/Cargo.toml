@@ -13,6 +13,7 @@ gpu = ["openpulse-gpu"]
 [dependencies]
 openpulse-core = { workspace = true }
 openpulse-dsp  = { workspace = true }
+num-complex = { workspace = true }
 openpulse-gpu  = { workspace = true, optional = true }
 
 [dev-dependencies]
