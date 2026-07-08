@@ -212,10 +212,22 @@ it is **deep-fade outage** over a frame. `moderate_f1` sits at 0.26–0.49 for S
 per-frame receiver technique moves it, because the frames that fail spent the burst in a null. The
 remaining levers are all *diversity* levers, and they live above the plugin:
 
-1. **Memory-ARQ / HARQ soft combining across retransmissions.** Already shipped (`combine_llrs_map`,
-   PR #686) and already calibrated (#687, #690). Independent fade states are the only thing that recovers
-   an outage frame. Measure `receive_with_llr_combining` over `moderate_f1` retransmissions and, if it
-   pays, wire it into the ARQ path as the default for the dense rungs.
+1. ~~**Memory-ARQ / HARQ soft combining across retransmissions.**~~ **Measured and shipped (PR #694).** It
+   pays — but only as the *union* with plain ARQ retry, because neither dominates the other. Frame success
+   over Watterson `moderate_f1`, three attempts (60 trials):
+
+   | rung | SNR | plain retry | combining alone | union |
+   |---|---|---|---|---|
+   | SCFDMA52-16QAM | 20 dB | 0.28 | 0.40 | **0.50** |
+   | SCFDMA52-16QAM | 28 dB | 0.43 | 0.48 | **0.67** |
+   | SCFDMA52 | 12 dB | 0.87 | 0.88 | **0.95** |
+   | SCFDMA52 | 20 dB | 0.97 | 0.95 | **1.00** |
+   | SCFDMA52 | 28 dB | 0.97 | 0.97 | **1.00** |
+
+   Combining wins where every attempt is partially ruined and they carry complementary information; retry
+   wins where one attempt is simply clean and summing it with two ruined ones dilutes it. Each standalone
+   trial is one RS decode, so the union is nearly free — `receive_with_llr_combining` now decodes each
+   attempt on its own before falling back to the MAP sum, and its success is a strict superset of both.
 2. **Ladder downshift**, which `hpx_hf` already does. The `moderate_f1` numbers are what the SNR-floor
    fading margin exists to avoid.
 3. **P5 — second-pass decision-directed CE** (M): the one remaining plugin-side idea, and it shares P7's
