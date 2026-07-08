@@ -9,6 +9,44 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-08 — fix(scfdma): LLR noise variance must include CE error and residual ISI
+
+- **Requirement/change:** research item #8. `mmse_llr_noise_var` modelled only the additive noise through
+  the equalizer, `σ²·|C_k|²`, treating the channel estimate as exact and the DFT de-spread as ISI-free.
+- **Measured defect:** a true LLR `L` predicts `P(bit wrong) = 1/(1 + e^{|L|})`. Binning the emitted LLRs
+  by `|L|` and counting actual bit errors (SCFDMA52-16QAM, 12 dB, **flat** channel): `|L| ≈ 3.1` → 2.0×
+  the promised error rate, `|L| ≈ 6.3` → 9.1×, `|L| ≈ 12.0` → **71.2×**. On a two-ray channel (a=0.9,
+  d=4) the same bins gave 3.0×, 11.0× and 96.1×.
+- **Design decision:** the post-despread error variance has three terms, not one.
+  `σ²_LLR = [ mean(σ²·|C_k|²) + var(α_k) + mean(|C_k|²·ε²_k) ] / ᾱ²`, where `α_k = |Ĥ_k|²/(|Ĥ_k|²+σ²)`.
+  (2) is residual ISI: the DFT de-spread averages the per-SC gains, so only their *spread* survives as
+  self-interference — zero on a flat channel, dominant at a notch. (3) is channel-estimate error, read
+  straight off the estimator: `ε²_k = σ²_h · Σ_j |recon[k][j]|²` with `σ²_h = σ² / PILOT_AMPLITUDE²`,
+  exposed as `CeSolver::ce_error_var_per_sc`. Frame-constant, so it is computed once in `FrameFront` and
+  shared by the hard, soft, constellation and both GPU paths at the single seam.
+- **Implementation:** `plugins/scfdma/src/channel.rs` — `CeSolver::{recon_row_energy, ce_error_var_per_sc}`,
+  `mmse_llr_noise_var` gains the `ce_error_var` argument and the two terms;
+  `plugins/scfdma/src/demodulate.rs` — `ce_error_var()` helper, all five call sites.
+- **Tests:** new `plugins/scfdma/tests/llr_reliability.rs` —
+  `llrs_are_not_wildly_over_confident` bins `|L|` and compares the empirical bit-error rate against
+  `1/(1+e^{|L|})`, bounding the worst bin at 4× (the residue is the max-log-MAP approximation, which no
+  variance term can undo). **Fails on the pristine tree at 68.8×.**
+- **Test results:** worst-bin over-confidence, SCFDMA52-16QAM at 12 dB: flat **9.1× → 2.2×**, two-ray
+  a=0.9 **11.0× → 1.0×**; at `|L| ≈ 12` the 71× and 96× errors vanish entirely.
+  **No measured decode or HARQ gain, and that is expected**: soft Viterbi, min-sum LDPC and max-log turbo
+  are scale-invariant, and the missing terms are close to a per-frame constant. `scfdma_ce_sweep`
+  Watterson `good_f1` sum 31.40 → 31.42 of 42; AWGN unchanged; HARQ thresholds on graded and deep-fade
+  three-attempt sets move by ≤ 0.2 dB, inside the 0.5 dB search grid. Full workspace `--exclude
+  pki-tooling --no-default-features`: **1552 passed, 0 failed**. clippy `-D warnings --all-targets` + fmt
+  clean.
+- **Why ship it anyway:** the LLR contract established in PRs #686/#687 says a soft demodulator emits true
+  log-likelihood ratios. It did not. And P7 (IBDFE) derives its feedback reliability `v̄` as an
+  expectation over the constellation *given the LLRs* — with 71×-over-confident LLRs that expectation
+  drives the equalizer into an error-propagation spiral, which is precisely how IBDFE is known to fail.
+- **Method note:** a 71× calibration error was invisible to every frame-success metric in the repo. The
+  measurement that found it — empirical error rate versus the rate the LLR magnitude promises — is the
+  only direct test of what an LLR *means*, and it is now a permanent gate.
+
 ## 2026-07-08 — fix(scfdma): acquire on the normalised correlation, not the unnormalised score
 
 - **Requirement/change:** after PR #688 the SC-FDMA rungs still lost frames under fading in a way that
