@@ -9,6 +9,47 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-08 — feat(engine): multi-block LDPC (unblocks research item P6)
+
+- **Requirement/change:** research item P6 is "LDPC on the dense rungs". It was blocked: the engine's LDPC
+  path rejected any frame larger than one 128-byte information block
+  (`"LDPC: encoded frame N B exceeds one-block limit"`), so no ladder rung could use it for a realistic
+  payload.
+- **Design decision:** split the wire frame into `codec.info_bytes()`-sized blocks, encode each
+  independently and concatenate the codewords; zero-pad the last block. `Frame::decode` reads its own
+  `payload_len` field and validates a CRC over the prefix, so the padding is discarded on receive. A
+  `Frame`'s payload length is a `u8`, so the wire frame never exceeds 265 bytes — at most **three** blocks,
+  bounded by construction. The receiver derives the block count from the LLR count, which is exact: the
+  soft demodulators trim modulation padding with their own length prefix.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` — `encode_ldpc_blocks`, `decode_ldpc_llrs`
+  (now multi-block), `transmit_with_ldpc_codec`; the single-block guard and its error are gone.
+- **Tests:** `crates/openpulse-modem/tests/ldpc_engine_loopback.rs` — the two tests that asserted the
+  one-block *rejection* (`ldpc_rejects_frame_larger_than_one_block`,
+  `ldpc_high_rate_shares_one_block_limit`) are replaced by
+  `ldpc_round_trips_a_frame_spanning_several_blocks` and its high-rate twin, over payloads 117/118/125/200/255 B
+  (one, two and three blocks). Engine round-trips through AWGN at 30 dB verified for every payload length
+  from 1 to 255 B on both codec presets.
+- **Test results:** full workspace `--exclude pki-tooling --no-default-features`: **1552 passed, 0 failed**.
+  clippy `-D warnings --all-targets` + fmt clean.
+- **Calibration data this unblocks** (AWGN, 90 % frame-success floor, SC-FDMA rungs, 20 frames/point).
+  LDPC's *floors* are 2–5 dB worse than `SoftConcatenated` — but its airtime is 0.37–0.56×, because
+  `SoftConcatenated` pads every frame to a 255-byte RS block before the rate-1/2 convolutional layer. The
+  ladder cares about **throughput at a given SNR**, and on that axis LDPC dominates. At a 213-byte payload
+  the frontier becomes:
+
+  | SNR | throughput | rung |
+  |---|---|---|
+  | 3 dB | 557 bps | SCFDMA52 + SoftConcatenated |
+  | 4 dB | 1052 bps | SCFDMA52 + Ldpc |
+  | 6 dB | 1690 bps | SCFDMA52 + LdpcHighRate |
+  | 10 dB | 2254 bps | SCFDMA52-8PSK + LdpcHighRate |
+  | 12 dB | 2784 bps | SCFDMA52-16QAM + LdpcHighRate |
+  | 14 dB | 3156 bps | SCFDMA52-32QAM + LdpcHighRate |
+  | 18 dB | 3641 bps | SCFDMA52-64QAM-P4 + LdpcHighRate |
+
+  Against the current all-`SoftConcatenated` dense rungs that is **2.0× the throughput at 12 dB** (2784 vs
+  1392) and **2.5× at 18 dB** (3641 vs 1479). The `hpx_hf` retune is a separate change.
+
 ## 2026-07-08 — fix(scfdma): LLR noise variance must include CE error and residual ISI
 
 - **Requirement/change:** research item #8. `mmse_llr_noise_var` modelled only the additive noise through

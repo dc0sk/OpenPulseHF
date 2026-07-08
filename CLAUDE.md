@@ -148,7 +148,7 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 - `plugins/psk8`: max-log-MAP `demodulate_soft()` replacing ±1.0 fallback
 - `openpulse-cli`: `manifest verify` fully wired to `verify_manifest()`
 - `openpulse-core::ldpc`: real rate-1/2 min-sum BP replacing passthrough stub
-- `openpulse-modem`: `transmit_with_ldpc` / `receive_with_ldpc` and `transmit_with_fec_mode` / `receive_with_fec_mode` dispatch (single-block; ≤ `LDPC_MAX_INFO_BYTES` per call)
+- `openpulse-modem`: `transmit_with_ldpc` / `receive_with_ldpc` and `transmit_with_fec_mode` / `receive_with_fec_mode` dispatch (multi-block since PR #691; a `Frame`'s `u8` payload length caps it at three 128-byte blocks)
 - `openpulse-core::trust_store_file`: `load_trust_store_from_file()` — parses CLI JSON trust store format into `InMemoryTrustStore`
 - ARDOP + KISS bridges: trust store loaded at startup; `RelayForwarder` wired into worker receive loop when `relay.enabled`
 
