@@ -9,6 +9,45 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-08 — fix(scfdma): lock sync ahead of the correlation peak, not on it
+
+- **Requirement/change:** after PR #685 the SC-FDMA rungs still decoded a *flat* 12–32 % of Watterson
+  `good_f1` frames from 8 to 32 dB. The research doc attributed the residue to SC-FDE notch smearing
+  (weak spot #4, item P7).
+- **Root cause — the accepted explanation was wrong again.** A factorial experiment
+  ({selective, flat} × {32 dB, 60 dB}, engine path, 60 frames) measured the selective-vs-flat frame-success
+  gap at **0.50 at 32 dB and 0.51 at 60 dB**. Notch smearing is a noise-enhancement mechanism; it cannot
+  survive the removal of noise. The real cause: `find_sync_offset` accepted `IqMatchedFilter::search`'s
+  **argmax**, which on a two-ray channel sits on whichever ray is instantaneously stronger — the delayed
+  one about half the time (matching the 0.50 gap). A late FFT-window start pulls samples of the next
+  symbol in; the cyclic prefix only protects an **early** start, where the window merely begins inside
+  the symbol's own prefix — a circular shift, i.e. the linear phase ramp `deramp_timing` already removes.
+- **Design decision:** back the accepted offset off `SYNC_EARLY_BIAS = 8` samples. Budget is
+  `CP − delay_spread` (32 − ~16); `DelayCe`'s basis is two-sided so its reach is unaffected; and both GPU
+  paths call the same `find_sync_offset`, so they get it by construction. `ofdm::find_first_data_body`
+  already solves this by scanning back for the earliest correlation tap above 0.20 × the peak — SC-FDMA
+  was the outlier. That scan was tried and **rejected**: OFDM brackets it with a Schmidl–Cox coarse
+  detection so its window always contains signal, whereas SC-FDMA searches from the front of a slice that
+  may begin with silence, and a *normalised* correlation against a partially-silent window inflates. The
+  earliest-tap rule then latches onto noise and broke the noiseless clean channel outright (BER 0.68).
+- **Implementation:** `plugins/scfdma/src/demodulate.rs` — `find_sync_offset`.
+- **Tests:** new `crates/openpulse-modem/tests/scfdma_multipath_timing.rs`.
+  `decodes_a_stronger_delayed_ray_inside_the_cyclic_prefix` puts the **stronger** ray on the delay
+  (0.5/1.0, −6 dB notch, d = 4 and 8) — the case the argmax gets wrong; `a_stronger_direct_ray_still_decodes`
+  is the control that passed even with the bug, kept so a future change cannot fix one by breaking the
+  other. This asymmetry is why a symmetric static two-ray test never caught it.
+- **Test results:** the new gate decodes **0.00 of frames on the pristine tree** for every stronger-delayed-ray
+  case (SCFDMA52 d=4/8, 8PSK, 16QAM d=4/8, 32QAM) and 0.95–1.00 after; the control passes both ways.
+  `scfdma_ce_sweep` (60 frames/point, soft-concatenated FEC): Watterson `good_f1` sum **9.19 → 29.57 of
+  42**, per rung at 32 dB — SCFDMA26-32QAM 0.12→0.97, 52-8PSK 0.32→0.93, 52-16QAM 0.27→0.72, 52-32QAM
+  0.30→0.93, 52-64QAM-P4 0.32→0.87, 52-64QAM 0.28→0.83. The AWGN sweep is **bit-for-bit unchanged**, so
+  the flat-channel floors in `profile.rs` are untouched. `scfdma_qam_modes_unsuitable_for_hf_watterson_profiles`
+  still holds (uncoded hard demod: worst-scenario 16QAM 0.000 on `moderate_f1`). Full workspace
+  `--exclude pki-tooling --no-default-features`: **1550 passed, 0 failed**. clippy `-D warnings
+  --all-targets` + fmt clean.
+- **Method note:** the tell was the *flatness*, again. `docs/dev/research/scfdma-improvements.md` now
+  records the 60 dB cell as the one-run falsifier, and the revised P2 → #8 → P6 → P7 order.
+
 ## 2026-07-08 — fix(plugins): calibrate BPSK/QPSK/8PSK/64QAM soft LLRs
 
 - **Requirement/change:** follow-up to PR #686, which found that only SC-FDMA and OFDM emit *calibrated*
