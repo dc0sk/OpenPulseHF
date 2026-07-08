@@ -28,6 +28,7 @@ use std::f32::consts::PI;
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
 use openpulse_dsp::acquisition::goertzel_carrier_scan;
+use openpulse_dsp::constellation::differential_llr_scale;
 use openpulse_dsp::equalizer::LmsEqualizer;
 use openpulse_dsp::farrow::FarrowTimingLoop;
 use openpulse_dsp::filter::FirFilter;
@@ -261,7 +262,7 @@ pub fn bpsk_demodulate_soft(
 
     // dot = Re(z[k] × conj(z[k-1])) = i1*i0 + q1*q0
     // Positive → same phase → NRZI "0" → bit 0 → LLR > 0 ✓
-    let llrs = iq
+    let mut llrs: Vec<f32> = iq
         .windows(2)
         .map(|w| {
             let (i0, q0) = w[0];
@@ -269,6 +270,24 @@ pub fn bpsk_demodulate_soft(
             i1 * i0 + q1 * q0
         })
         .collect();
+    // cross = Im(z[k] × conj(z[k-1])): mean zero, so it carries only noise.
+    let crosses: Vec<f32> = iq
+        .windows(2)
+        .map(|w| {
+            let (i0, q0) = w[0];
+            let (i1, q1) = w[1];
+            q1 * i0 - i1 * q0
+        })
+        .collect();
+
+    // Calibrate the soft values into *true* log-likelihood ratios (magnitude ∝ 1/σ²). Nothing that
+    // decodes a single frame notices — soft Viterbi, min-sum LDPC and max-log turbo are all
+    // scale-invariant — but HARQ soft combining across receive attempts does: uncalibrated, an attempt
+    // from a deep fade votes as loudly as a clean one. See `openpulse_core::fec::combine_llrs_map`.
+    let scale = differential_llr_scale(&llrs, &crosses);
+    for l in llrs.iter_mut() {
+        *l *= scale;
+    }
     Ok(llrs)
 }
 

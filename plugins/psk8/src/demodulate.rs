@@ -2,9 +2,11 @@ use std::collections::HashMap;
 use std::f32::consts::PI;
 use std::sync::{Mutex, OnceLock};
 
+use num_complex::Complex32;
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
 use openpulse_dsp::acquisition::{estimate_cfo_data_aided, preamble_corr_sq};
+use openpulse_dsp::constellation::psk_symbol_noise_var;
 use openpulse_dsp::equalizer::LmsEqualizer;
 use openpulse_dsp::filter::FirFilter;
 use openpulse_dsp::pll::CarrierPll;
@@ -220,7 +222,21 @@ pub fn psk8_demodulate_soft(
     let raw = compute_soft_llrs(&data);
     // symbols_to_bits yields 3 bits/symbol; bits_to_bytes drops the partial final chunk.
     let n_complete_bytes = (data.len() * 3) / 8;
-    Ok(raw[..n_complete_bytes * 8].to_vec())
+    let mut llrs = raw[..n_complete_bytes * 8].to_vec();
+
+    // Calibrate the soft values into *true* log-likelihood ratios (magnitude ∝ 1/σ²). Nothing that
+    // decodes a single frame notices — soft Viterbi, min-sum LDPC and max-log turbo are all
+    // scale-invariant — but HARQ soft combining across receive attempts does: uncalibrated, an attempt
+    // from a deep fade votes as loudly as a clean one. See `openpulse_core::fec::combine_llrs_map`.
+    // `compute_soft_llrs` emits max-log-MAP squared-distance differences; dividing by the 2-D noise
+    // variance is exactly the missing 1/σ².
+    let syms: Vec<Complex32> = data.iter().map(|&(i, q)| Complex32::new(i, q)).collect();
+    let (_, noise_var_per_dim) = psk_symbol_noise_var(&syms, 3);
+    let inv = 1.0 / (2.0 * noise_var_per_dim);
+    for l in llrs.iter_mut() {
+        *l *= inv;
+    }
+    Ok(llrs)
 }
 
 /// Extract Gray-coded IQ data symbols after preamble/tail stripping with LMS equalization.

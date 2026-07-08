@@ -13,8 +13,8 @@ use openpulse_channel::{
     awgn::AwgnChannel, watterson::WattersonChannel, AwgnConfig, ChannelModel, WattersonConfig,
 };
 use openpulse_core::fec::{
-    combine_llrs_weighted, combine_llrs_weighted_in_ranges, encode_window_retransmit, ByteRange,
-    FecCodec, WindowArqFeedback, WINDOW_ARQ_FEEDBACK_SIZE,
+    combine_llrs_map, combine_llrs_map_in_ranges, encode_window_retransmit, ByteRange, FecCodec,
+    WindowArqFeedback, WINDOW_ARQ_FEEDBACK_SIZE,
 };
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
 
@@ -26,14 +26,6 @@ fn llrs_to_hard_bytes(llrs: &[f32]) -> Vec<u8> {
             })
         })
         .collect()
-}
-
-fn noise_var_proxy(llrs: &[f32]) -> f32 {
-    if llrs.is_empty() {
-        return 1.0;
-    }
-    let mean_abs = llrs.iter().map(|v| v.abs()).sum::<f32>() / llrs.len() as f32;
-    1.0 / mean_abs.max(1e-6)
 }
 
 fn inject_absent_symbol_noise_outside_ranges(
@@ -52,14 +44,29 @@ fn inject_absent_symbol_noise_outside_ranges(
         }
     }
 
-    // xorshift64* deterministic PRNG: absent-symbol LLRs are zero-mean noise.
+    // Absent-symbol LLRs are zero-mean noise, at a fixed *fraction* of a real LLR's magnitude.
+    //
+    // This was an absolute `0.6`, which happened to be 22 % of BPSK250's mean |LLR| (2.69) on this
+    // channel. Demodulators now emit calibrated LLRs — magnitude ∝ 1/σ² — so an absolute constant
+    // silently becomes negligible (or dominant) the moment a plugin's noise estimate changes; the
+    // fraction is what the test always meant. It is deliberately pessimistic: a bit position with no
+    // transmitted symbol really produces `|LLR| ≈ σ²/A²`, i.e. 0.3–3 % here.
+    const ABSENT_SYMBOL_LLR_FRACTION: f32 = 0.223;
+    let mean_abs = if llrs.is_empty() {
+        1.0
+    } else {
+        llrs.iter().map(|v| v.abs()).sum::<f32>() / llrs.len() as f32
+    };
+    let amplitude = ABSENT_SYMBOL_LLR_FRACTION * mean_abs;
+
+    // xorshift64* deterministic PRNG.
     let mut next_noise = || {
         seed ^= seed >> 12;
         seed ^= seed << 25;
         seed ^= seed >> 27;
         let z = seed.wrapping_mul(0x2545F4914F6CDD1D);
         let unit = ((z >> 40) as u32) as f32 / ((1u32 << 24) as f32);
-        (unit * 2.0 - 1.0) * 0.6
+        (unit * 2.0 - 1.0) * amplitude
     };
 
     for (i, v) in llrs.iter_mut().enumerate() {
@@ -169,7 +176,7 @@ fn window_arq_watterson_f1_meets_item_55_gates() {
         let mut gain_samples_db = Vec::new();
         let mut any_window_decode_ok = false;
         for snr_db in [15.0_f32, 17.5, 20.0, 22.5, 25.0] {
-            let mut attempts: Vec<(Vec<f32>, f32)> = Vec::with_capacity(3);
+            let mut attempts: Vec<Vec<f32>> = Vec::with_capacity(3);
 
             for (idx, seed) in [0x5101_u64, 0x5102, 0x5103].iter().enumerate() {
                 let retry_boost = if idx == 0 { 0.0 } else { 2.0 };
@@ -188,17 +195,13 @@ fn window_arq_watterson_f1_meets_item_55_gates() {
                     );
                 }
 
-                let nv = noise_var_proxy(&llrs);
-                attempts.push((llrs, nv));
+                attempts.push(llrs);
             }
 
-            let refs: Vec<(&[f32], f32)> = attempts
-                .iter()
-                .map(|(llrs, nv)| (llrs.as_slice(), *nv))
-                .collect();
+            let refs: Vec<&[f32]> = attempts.iter().map(|l| l.as_slice()).collect();
 
-            let full_combined = combine_llrs_weighted(&refs);
-            let window_combined = combine_llrs_weighted_in_ranges(&refs, &feedback);
+            let full_combined = combine_llrs_map(&refs);
+            let window_combined = combine_llrs_map_in_ranges(&refs, &feedback);
 
             any_window_decode_ok |=
                 decode_matches_payload(&window_combined, protected.len(), payload);

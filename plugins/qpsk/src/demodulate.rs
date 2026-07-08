@@ -1,8 +1,10 @@
 use std::f32::consts::PI;
 
+use num_complex::Complex32;
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
 use openpulse_dsp::acquisition::{estimate_cfo_mth_power, preamble_corr_sq};
+use openpulse_dsp::constellation::psk_symbol_noise_var;
 use openpulse_dsp::equalizer::LmsEqualizer;
 use openpulse_dsp::filter::FirFilter;
 use openpulse_dsp::pll::CarrierPll;
@@ -579,7 +581,20 @@ pub fn qpsk_demodulate_soft(
     let data = &syms[PREAMBLE_SYMS..(syms.len() - TAIL_SYMS)];
     // Per symbol: b0 LLR = Q, b1 LLR = I (from the Gray map geometry).
     // Bits are pushed as (b0, b1) in symbols_to_bits, matching [q, i] here.
-    let llrs = data.iter().flat_map(|&(i, q)| [q, i]).collect();
+    let mut llrs: Vec<f32> = data.iter().flat_map(|&(i, q)| [q, i]).collect();
+
+    // Calibrate the soft values into *true* log-likelihood ratios (magnitude ∝ 1/σ²). Nothing that
+    // decodes a single frame notices — soft Viterbi, min-sum LDPC and max-log turbo are all
+    // scale-invariant — but HARQ soft combining across receive attempts does: uncalibrated, an attempt
+    // from a deep fade votes as loudly as a clean one. See `openpulse_core::fec::combine_llrs_map`.
+    // A projection is antipodal with mean ±A/√2 and per-dimension noise variance σ²; its LLR is
+    // 2·(A/√2)·v/σ². I and Q share the statistics, so one scale serves both.
+    let syms: Vec<Complex32> = data.iter().map(|&(i, q)| Complex32::new(i, q)).collect();
+    let (amp, noise_var) = psk_symbol_noise_var(&syms, 2);
+    let scale = std::f32::consts::SQRT_2 * amp / noise_var;
+    for l in llrs.iter_mut() {
+        *l *= scale;
+    }
     Ok(llrs)
 }
 

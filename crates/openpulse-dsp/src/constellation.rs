@@ -291,8 +291,55 @@ pub fn symbol_llrs(
     out
 }
 
+/// Effective symbol amplitude and per-real-dimension noise variance of a **constant-modulus** PSK
+/// block (`bits_per_sc` 2 or 3), measured from the component of each symbol *orthogonal* to its hard
+/// decision.
+///
+/// `e = z · conj(ŝ)` with `|ŝ| = 1`: `Re(e)` carries the amplitude, `Im(e)` carries only noise.
+/// Splitting them this way matters because a demodulator's residual is not all thermal noise —
+/// pulse-shaping ISI and equalizer misadjustment vary the symbol *amplitude* with no dependence on
+/// SNR. A moment estimator (M2/M4) or a distance-to-nearest-point estimator folds that in and its
+/// output stops tracking SNR; the orthogonal component does not.
+///
+/// Returns `(amplitude, noise_var_per_dimension)`. The 2-D noise variance is `2 ×` the second value.
+/// Decision-directed, so it saturates once symbol errors are common — the safe direction.
+pub fn psk_symbol_noise_var(symbols: &[Complex32], bits_per_sc: usize) -> (f32, f32) {
+    if symbols.is_empty() {
+        return (1.0, 1e-6);
+    }
+    let n = symbols.len() as f32;
+    let (mut re_sum, mut im2_sum) = (0.0f32, 0.0f32);
+    for &z in symbols {
+        let s = map_symbol(demap_symbol(z, bits_per_sc), bits_per_sc);
+        let e = z * s.conj();
+        re_sum += e.re;
+        im2_sum += e.im * e.im;
+    }
+    (re_sum / n, (im2_sum / n).max(1e-12))
+}
+
+/// Scale that turns a differential correlation `dot_k = Re(z_k · conj(z_{k−1}))` into a
+/// log-likelihood ratio, given the quadrature companion `cross_k = Im(z_k · conj(z_{k−1}))`.
+///
+/// `dot` is antipodal with mean `±A²`; `cross` has mean 0 and variance `≈ 2A²σ²`. So
+/// `2·mean|dot| / var(cross) → 1/σ²` and the signal amplitude cancels — which is what makes this
+/// immune to the symbol-amplitude variation that defeats a variance-of-`|dot|` estimate.
+///
+/// Multiply the `dot` values by the result. Returns 0 for an empty input.
+pub fn differential_llr_scale(dots: &[f32], crosses: &[f32]) -> f32 {
+    if dots.is_empty() || crosses.is_empty() {
+        return 0.0;
+    }
+    let mu = dots.iter().map(|v| v.abs()).sum::<f32>() / dots.len() as f32;
+    let var_cross = crosses.iter().map(|v| v * v).sum::<f32>() / crosses.len() as f32;
+    2.0 * mu / var_cross.max(1e-12)
+}
+
 /// Estimate decision-directed noise variance from a block of equalised symbols
 /// (mean squared distance to the nearest constellation point).
+///
+/// Symbols must already be on the [`constellation_points`] scale. Divide max-log-MAP distance
+/// differences by this to get true LLRs — see [`symbol_llrs`]'s `noise_var`.
 pub fn estimate_decision_noise_var(symbols: &[Complex32], bits_per_sc: usize) -> f32 {
     if symbols.is_empty() {
         return 1e-6;
@@ -385,6 +432,74 @@ pub fn soft_apsk32(symbol: Complex32, noise_var: f32) -> Vec<f32> {
 
 #[cfg(test)]
 mod tests {
+    /// `differential_llr_scale` must recover 1/σ² independently of the signal amplitude — that
+    /// cancellation is the whole point (a `var(|dot|)` estimate is defeated by amplitude variation).
+    ///
+    /// Only above the ~3 dB where `mean|dot| ≈ A²` holds; below it the estimator is decision-directed
+    /// and saturates, which is the safe direction (under-confident LLRs).
+    #[test]
+    fn differential_llr_scale_recovers_inverse_noise_var_at_any_amplitude() {
+        for amp in [0.2f32, 1.0, 5.0] {
+            for snr_db in [10.0f32, 20.0] {
+                let sigma2 = amp * amp / 10f32.powf(snr_db / 10.0);
+                // dot ~ ±A² with var 2A²σ²; cross ~ 0 with the same variance.
+                let n = 20_000;
+                let mut state = 0x1234u64;
+                let mut g = || {
+                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    let u1 = (((state >> 11) as f64) / ((1u64 << 53) as f64)).clamp(1e-12, 1.0);
+                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    let u2 = ((state >> 11) as f64) / ((1u64 << 53) as f64);
+                    ((-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()) as f32
+                };
+                let sd = (2.0 * amp * amp * sigma2).sqrt();
+                let dots: Vec<f32> = (0..n)
+                    .map(|i| {
+                        let b = if i % 3 == 0 { -1.0 } else { 1.0 };
+                        b * amp * amp + sd * g()
+                    })
+                    .collect();
+                let crosses: Vec<f32> = (0..n).map(|_| sd * g()).collect();
+                let k = differential_llr_scale(&dots, &crosses);
+                let expected = 1.0 / sigma2;
+                assert!(
+                    (k / expected - 1.0).abs() < 0.15,
+                    "amp={amp} snr={snr_db} dB (σ²={sigma2:.5}): scale {k:.2} vs expected {expected:.2}"
+                );
+            }
+        }
+    }
+
+    /// The orthogonal residual must track σ² even when the symbol *amplitude* wanders — the failure
+    /// mode that makes a moment or distance-to-nearest-point estimator stop responding to SNR.
+    #[test]
+    fn psk_symbol_noise_var_is_immune_to_amplitude_jitter() {
+        let mut state = 0xBEEFu64;
+        let mut g = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let u1 = (((state >> 11) as f64) / ((1u64 << 53) as f64)).clamp(1e-12, 1.0);
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let u2 = ((state >> 11) as f64) / ((1u64 << 53) as f64);
+            ((-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()) as f32
+        };
+        for sigma2_per_dim in [1e-3f32, 1e-2] {
+            let sd = sigma2_per_dim.sqrt();
+            let syms: Vec<Complex32> = (0..20_000)
+                .map(|i| {
+                    let s = map_symbol((i % 4) as u8, 2);
+                    // ±30 % deterministic amplitude jitter, plus AWGN.
+                    let a = 1.0 + 0.3 * ((i as f32) * 0.7).sin();
+                    s * a + Complex32::new(sd * g(), sd * g())
+                })
+                .collect();
+            let (_, nv) = psk_symbol_noise_var(&syms, 2);
+            assert!(
+                (nv / sigma2_per_dim - 1.0).abs() < 0.2,
+                "σ²/dim={sigma2_per_dim}: estimated {nv:.5}"
+            );
+        }
+    }
+
     use super::*;
 
     fn order(bits_per_sc: usize) -> u8 {
