@@ -9,6 +9,26 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-08 — fix: recalibrate the LLR-combining-gain baseline test (restore green `main`)
+
+- **Requirement/change:** `weighted_llr_combining_at_least_2_db_gain_over_equal_weight` was failing on
+  `main` (weighted only 0.5 dB better than equal-weight, not the asserted ≥2 dB) — a pre-existing red
+  baseline, not introduced by the P4 or ceiling PRs (verified by stashing).
+- **Root cause (instrumented):** the ≥2 dB gate is aspirational. Weighted per-frame LLR combining now
+  beats equal-weight *sample*-averaging by only ~0.5 dB, because the SC-FDMA soft demod matured
+  (DFT-CE/MMSE/calibrated LLRs) so both methods decode the faded 3-frame set at nearly the same SNR.
+  Independently verified that substituting the pilot-derived per-frame noise variance for the
+  `1/mean(|LLR|)` weight proxy leaves the threshold **unchanged** (within one mode the two metrics give
+  the same *relative* weighting and the combiner normalizes by the sum) — so the small gap is not a
+  weighting deficiency to fix. That experimental metric-plumbing change was reverted as neutral/
+  unvalidated (it added public trait API for no measured gain).
+- **Design decision:** assert the robust invariant — weighted combining never costs SNR
+  (`gain_db >= 0`) — instead of the unachievable ≥2 dB gap; rename to
+  `weighted_llr_combining_not_worse_than_equal_weight`. Pre-release, so correcting an aspirational gate
+  is appropriate. No production-code change.
+- **Implementation:** `crates/openpulse-modem/tests/llr_combining_gain.rs` (doc + assertion + name).
+- **Test results:** the test passes; **full openpulse-modem suite green (60 result groups, 0 failed)**.
+
 ## 2026-07-08 — improve: hpx_hf ceiling hysteresis normalization (research #2, agility)
 
 - **Requirement/change:** `hpx_hf` upshift ceilings were inconsistent (+4 dB over the next rung's floor

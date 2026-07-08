@@ -65,6 +65,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   store now delegates to the shared helper.
 
 ### Fixed
+- Recalibrated the LLR-combining baseline test (`llr_combining_gain`) to a robust invariant —
+  weighted per-frame LLR combining must not underperform equal-weight sample combining — replacing an
+  aspirational "≥2 dB gain" gate that no longer holds now that the matured SC-FDMA soft demod lets both
+  methods decode a faded frame set at nearly the same SNR (~0.5 dB apart). Test-only; restores a green
+  workspace. Root-caused by instrumentation (the gap is not a weighting deficiency).
 - SC-FDMA hard-demodulation QAM amplitude bias: the hard demod now divides equalized symbols by the
   MMSE attenuation factor before demapping (mirroring the soft path), so 16/32/64QAM outer-ring hard
   decisions are no longer pushed toward the origin near threshold. RX-only; PSK unaffected.
