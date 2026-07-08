@@ -374,10 +374,15 @@ fn watterson_f1_p4_dense_pilot_does_not_regress_baseline_by_more_than_5_percent(
     );
 }
 
-// SC-FDMA QAM modes are assigned to hpx_wideband_hd() (VHF/UHF) — NOT hpx_hf() (HF).
-// This test documents the HF-unsuitability: both modes fail Watterson fading because
-// 16QAM/64QAM coherence requirements exceed what ionospheric channels can maintain.
-// The 90% gate below is the HF profile-entry threshold; these modes must stay below it.
+// The dense SC-FDMA QAM modes are the ladder's top rungs for *good* HF conditions; the adaptive
+// ladder downshifts off them on a fading path. This test pins that: an UNCODED hard demod of a
+// single frame must stay below the 90% HF profile-entry gate on every Watterson scenario, because a
+// deep fade over one frame is an irreducible outage no equalizer can undo.
+//
+// It does NOT say fading is hopeless for these modes. Until the delay-basis channel estimator
+// (`channel::DelayCe`) replaced the DFT-CE, they decoded ~3% of good_f1 frames at *any* SNR — a
+// channel-estimator bug, not a coherence limit. With soft FEC they now reach ~30%. Read this gate as
+// "not admissible as an HF entry mode", not as "cannot work on HF".
 #[test]
 fn scfdma_qam_modes_unsuitable_for_hf_watterson_profiles() {
     let plugin = ScFdmaPlugin::new();
@@ -425,8 +430,7 @@ fn scfdma_qam_modes_unsuitable_for_hf_watterson_profiles() {
     }
 
     // HF profile-entry gate: min scenario success across Watterson matrix must be >= 90%.
-    // These modes fail this gate by design — they belong in hpx_wideband_hd() (VHF/UHF),
-    // where AWGN channels at 28–35 dB SNR are achievable, not in hpx_hf() (HF).
+    // Uncoded, single-frame, hard-decision: deep fades alone keep these below the gate.
     const HF_PROFILE_ENTRY_MIN_SUCCESS: f32 = 0.90;
     assert!(
         worst_16 < HF_PROFILE_ENTRY_MIN_SUCCESS,

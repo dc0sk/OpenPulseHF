@@ -274,6 +274,10 @@ fn main() {
             "Deferred pilot variants (registered, not yet in quick matrix): {}",
             cases::PILOT_POST_V1_MODES.join(", ")
         );
+        println!(
+            "PAPR demonstrators (registered, in no profile, not swept): {}",
+            cases::DEMONSTRATOR_MODES.join(", ")
+        );
 
         write_reports(
             &results,
