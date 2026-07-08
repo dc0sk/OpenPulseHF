@@ -59,6 +59,27 @@ All rungs ≤ ~2.7 kHz; `SpeedLevel` already spans SL1–SL20, so there is headr
 | 16 | **SCFDMA52-16QAM** | **LdpcHighRate** | 5137 | ~24 | new MODCOD rung, no new modulation |
 | 17 | **SCFDMA52-64QAM** | **LdpcHighRate** | 7705 | ~27 | doubles peak throughput on excellent channels |
 
+### Measured AWGN floors for the gap-fillers (2026-07-08)
+
+Measured with `calibrate_ladder_gap_fillers` (`crates/openpulse-modem/tests/snr_floor_calibration.rs`,
+≥90% of 16 AWGN round-trips through the real modulate→channel→demodulate path):
+
+| Candidate | FEC | AWGN floor |
+|---|---|---|
+| BPSK31 | Rs | ≤ 0 dB |
+| BPSK100 | — | ≤ 0 dB |
+| QPSK250 | Rs | **4 dB** |
+| SCFDMA26-32QAM | SoftConcatenated | **8 dB** |
+| SCFDMA52-64QAM-P4 | SoftConcatenated | **17 dB** |
+
+These are AWGN **lower bounds**. The existing `hpx_hf` floors carry a fading margin above AWGN (e.g.
+BPSK31 is configured at 3 dB but measures ≈ −2 dB on AWGN), so before these become ladder rungs each
+needs the Watterson `min_decodable_snr` sweep too, and the whole ladder must be re-indexed (inserting a
+mid-ladder rung shifts every SL above it — fine pre-release, but it also touches `session_profile.rs`
+and `cli_mode_advisor.rs` assertions). The data already confirms the highest-value insert: **QPSK250+Rs
+at ~4 dB AWGN** sits squarely in the SL4→SL5 (5→9 dB) dead zone, and **SCFDMA52-64QAM-P4 at 17 dB**
+splits the SL10→SL11 (17→22) gap.
+
 **One genuinely new mode worth adding:** `SCFDMA26-QPSK` (26 SC, QPSK, ~631 net, ~1 kHz, est. floor
 ~7 dB) — a *fading-tolerant* FDE rung in the 7–11 dB band where today only equalizer-less
 single-carrier modes live (which fail moderate_f1 outright). The plugin already has 26-SC plumbing, so
