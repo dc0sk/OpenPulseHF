@@ -9,6 +9,39 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-09 — feat(profile): re-seat the hpx_hf dense HF rungs (SL11–SL19) from SC-FDMA to OFDM
+
+- **Requirement/change:** the Fable audit claimed OFDM decisively beats SC-FDMA on frequency-selective HF
+  fading at equal rate, and the profile itself admitted "the whole single-carrier segment fails moderate_f1
+  fading by design." If true the dense rungs were on the wrong waveform.
+- **Design decision (measurement-driven):** ran a matched-rate, matched-Watterson-draw, coded (SoftConcatenated)
+  bake-off (`tests/ofdm_scfdma_bakeoff.rs`). A Fable-model review confirmed the comparison is *fair* — OFDM52
+  and SCFDMA52 carry the identical 52-SC / 32-sample-CP / 13-pilot geometry (net-rate delta = 0), so OFDM is
+  not buying ISI immunity with rate; SC-FDMA simply cannot represent a >±10-sample delay (its `DelayCe` basis
+  reach), while OFDM's CP rides it. Re-seat the **wideband** rungs to OFDM; keep **SL10** on SC-FDMA (narrowband
+  ~1 kHz fallback — an SNR/interference role, no OFDM 26-SC equivalent); fold the former P4 dense-pilot rungs
+  SL14/SL18 onto plain `OFDM52-64QAM` (OFDM's CP makes the dense-pilot trick unnecessary — they now duplicate
+  SL15/SL19, a redundant step flagged for a later pre-release re-index). In-place mode-string swap only (keeps
+  all SL-index references and floors valid; a full re-index touches 80+ sites). Profile floors kept
+  (SC-FDMA-derived, conservative, safe upper bound — OFDM works on fading); floor tightening to reclaim
+  throughput is a documented follow-up.
+- **Implementation:** `crates/openpulse-core/src/profile.rs` — `hpx_hf` `modes[SL11..=SL19]` → `OFDM52-{8PSK,
+  16QAM,32QAM,64QAM,…}`; comment table + fading note updated. Test updates: `crates/openpulse-core/tests/
+  session_profile.rs` (mode assertions), `crates/openpulse-cli/tests/cli_mode_advisor.rs` (mode strings),
+  `crates/openpulse-modem/tests/ldpc_ladder_rungs.rs` (register OFDM; `MEASURED_AWGN_FLOOR_DB` re-measured for
+  OFDM: SL16–SL19 = 12/16/20/20 dB), `crates/openpulse-modem/tests/symbol_snr_ladder_climb.rs` (register OFDM).
+- **Tests:** `ofdm_scfdma_bakeoff.rs` — `bakeoff` (moderate_f1/f2 × 16QAM/64QAM SNR sweep), `bakeoff_benign`
+  (AWGN + good_f1, no-trade-down check), and a non-ignored `reseated_sl12_decodes_on_moderate_f1` gate reading
+  the mode from the profile.
+- **Test results (actually run):** bake-off (40 paired draws) — moderate_f1 @20 dB 16QAM OFDM **0.88** vs SCFDMA
+  **0.35**, 64QAM 0.52 vs 0.05; moderate_f2 @20 dB 16QAM **0.93** vs **0.03**, 64QAM 0.50 vs 0.00 (SC-FDMA flat
+  across SNR = structural delay-cliff). Benign: AWGN ties (1.00=1.00), good_f1 OFDM ≥ SCFDMA (one −0.04 at
+  64QAM/14 dB, noise). Re-seat gate: SL12 (OFDM52-16QAM) decodes on moderate_f1 @22 dB (≥0.70). Regressions:
+  `session_profile` 30, `cli_mode_advisor` 3, `ldpc_ladder_rungs` 2 (+1 ignored probe), full modem suite —
+  pass; clippy `-D warnings` + fmt clean. NOTE: the OTA ladder still stalls climbing *into* the OFDM rungs
+  until multicarrier `estimate_snr_db` (Item 2 PR-B) lands — the re-seat makes the rungs correct; PR-B makes
+  them reachable over the air.
+
 ## 2026-07-09 — feat(rate): per-plugin symbol-domain RX SNR (PSK) replaces M2M4 for the OTA decision
 
 - **Requirement/change:** the receiver-led OTA ladder was capped ~SL8 because its SNR estimate is M2M4,

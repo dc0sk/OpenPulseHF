@@ -17,11 +17,11 @@ fn mode_advisor_outputs_expected_levels_across_hpx_hf_ladder() {
         (11.5, "SL8", "QPSK500"),
         (12.0, "SL9", "8PSK500"),
         (13.0, "SL10", "SCFDMA26-32QAM"),
-        (14.0, "SL11", "SCFDMA52-8PSK"),
-        (16.0, "SL12", "SCFDMA52-16QAM"),
-        (17.0, "SL13", "SCFDMA52-32QAM"),
-        (19.0, "SL14", "SCFDMA52-64QAM-P4"),
-        (22.0, "SL15", "SCFDMA52-64QAM"),
+        (14.0, "SL11", "OFDM52-8PSK"),
+        (16.0, "SL12", "OFDM52-16QAM"),
+        (17.0, "SL13", "OFDM52-32QAM"),
+        (19.0, "SL14", "OFDM52-64QAM"),
+        (22.0, "SL15", "OFDM52-64QAM"),
     ];
 
     for (snr, level, mode) in cases {
