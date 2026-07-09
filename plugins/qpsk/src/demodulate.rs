@@ -572,10 +572,13 @@ fn bits_to_bytes(bits: &[bool]) -> Vec<u8> {
 /// and codecs in this codebase).
 ///
 /// Both RRC and non-RRC modes return proper matched-filter soft projections.
-pub fn qpsk_demodulate_soft(
+/// Recover the equalized QPSK data symbols (preamble/tail stripped, crossfade-ISI cancelled,
+/// carrier-corrected, LMS-equalized) — the `(I, Q)` points that get sliced to bits. Shared by the
+/// soft demod and the symbol-domain SNR estimator so both measure the exact same symbols.
+pub fn extract_data_symbols(
     samples: &[f32],
     config: &ModulationConfig,
-) -> Result<Vec<f32>, ModemError> {
+) -> Result<Vec<(f32, f32)>, ModemError> {
     let baud = parse_baud_rate(&config.mode)?;
     let fs = config.sample_rate as f32;
     let fc = config.center_frequency;
@@ -626,7 +629,29 @@ pub fn qpsk_demodulate_soft(
     }
 
     let syms = qpsk_lms_equalize(&syms, &config.mode);
-    let data = &syms[PREAMBLE_SYMS..(syms.len() - TAIL_SYMS)];
+    Ok(syms[PREAMBLE_SYMS..(syms.len() - TAIL_SYMS)].to_vec())
+}
+
+/// Symbol-domain RX SNR (dB) from the equalized QPSK data symbols: `10·log10(A²/2σ²)` via the
+/// amplitude-immune orthogonal-component estimator. `None` if the burst is too short to recover
+/// symbols. Waveform-aware, so unlike M2M4 it keeps tracking SNR up to the mode's EVM floor.
+pub fn estimate_snr_db(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+    let data = extract_data_symbols(samples, config).ok()?;
+    if data.is_empty() {
+        return None;
+    }
+    let syms: Vec<Complex32> = data.iter().map(|&(i, q)| Complex32::new(i, q)).collect();
+    let (amp, noise_var) = psk_symbol_noise_var(&syms, 2);
+    Some(openpulse_dsp::constellation::snr_db_from_amp_noise(
+        amp, noise_var,
+    ))
+}
+
+pub fn qpsk_demodulate_soft(
+    samples: &[f32],
+    config: &ModulationConfig,
+) -> Result<Vec<f32>, ModemError> {
+    let data = extract_data_symbols(samples, config)?;
     // Per symbol: b0 LLR = Q, b1 LLR = I (from the Gray map geometry).
     // Bits are pushed as (b0, b1) in symbols_to_bits, matching [q, i] here.
     let mut llrs: Vec<f32> = data.iter().flat_map(|&(i, q)| [q, i]).collect();

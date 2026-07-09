@@ -318,6 +318,19 @@ pub fn psk_symbol_noise_var(symbols: &[Complex32], bits_per_sc: usize) -> (f32, 
     (re_sum / n, (im2_sum / n).max(1e-12))
 }
 
+/// Convert a constant-modulus PSK block's `(amplitude, noise_var_per_dimension)` — as returned by
+/// [`psk_symbol_noise_var`] — into a symbol SNR in dB: `10·log10(A² / 2σ²)`.
+///
+/// `2σ²` is the total two-dimensional noise power (the second return value is per real dimension).
+/// Because the underlying estimator is decision-directed it saturates at the block's residual-EVM
+/// floor, so this reads a large-but-bounded dB when the noise is negligible. Returns a floored value
+/// (never `-inf`/`NaN`) for a degenerate all-zero block.
+pub fn snr_db_from_amp_noise(amp: f32, noise_var_per_dim: f32) -> f32 {
+    let signal = amp * amp;
+    let noise = (2.0 * noise_var_per_dim).max(1e-12);
+    10.0 * (signal / noise).max(1e-12).log10()
+}
+
 /// Scale that turns a differential correlation `dot_k = Re(z_k · conj(z_{k−1}))` into a
 /// log-likelihood ratio, given the quadrature companion `cross_k = Im(z_k · conj(z_{k−1}))`.
 ///

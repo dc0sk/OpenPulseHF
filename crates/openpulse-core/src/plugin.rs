@@ -213,6 +213,22 @@ pub trait ModulationPlugin: Send + Sync {
         None
     }
 
+    /// Estimate the absolute receive SNR in dB from `samples`, using a waveform-aware
+    /// symbol-domain measurement, for the adaptive rate decision.
+    ///
+    /// Returns `None` when the plugin has no symbol-domain estimator — the engine then
+    /// falls back to the waveform-blind M2M4 moment estimator. The default returns `None`.
+    ///
+    /// Why a plugin override beats M2M4: M2M4 assumes a constant-modulus envelope, so on a
+    /// pulse-shaped or multicarrier waveform its output stops tracking SNR and caps the rate
+    /// ladder. A plugin measures noise from the component of each equalized symbol *orthogonal*
+    /// to its decision, so its estimate keeps rising with SNR up to the mode's residual-ISI (EVM)
+    /// floor. It is decision-directed, so it saturates once symbol errors are common — the safe
+    /// direction for a rate decision.
+    fn estimate_snr_db(&self, _samples: &[f32], _config: &ModulationConfig) -> Option<f32> {
+        None
+    }
+
     /// Occupied RF bandwidth (Hz) of `mode`, used to size a receiver notch's protected band
     /// so it never notches this signal.  `None` if the plugin can't report it (the caller then
     /// falls back to a conservative default).  Default implementation returns `None`.
