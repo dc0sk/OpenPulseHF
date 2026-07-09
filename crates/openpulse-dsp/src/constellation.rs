@@ -430,6 +430,30 @@ pub fn soft_apsk32(symbol: Complex32, noise_var: f32) -> Vec<f32> {
     symbol_llrs(symbol, 5, noise_var, &apsk32_points())
 }
 
+/// Scale a symbol stream to unit RMS magnitude so a decision-directed carrier loop has a level-invariant
+/// loop gain.
+///
+/// The Costas/DD phase-error magnitude scales with the symbol amplitude (`q·sgn(i)`, `Im(r·conj(d))`, …),
+/// so a quiet station's small symbols give the loop a proportionally weaker effective bandwidth and it
+/// cannot acquire even a ~1 Hz residual over a short frame (the no-AGC failure). This restores the loop
+/// gain the loop was tuned for. It is a **no-op at nominal amplitude** — unit-energy PSK constellations
+/// already sit at RMS ≈ 1 — and a single uniform scale, so it changes neither phase nor the calibrated
+/// soft-LLR scale (∝ amp/σ², itself invariant to a common scale).
+pub fn normalize_stream_rms(syms: &mut [(f32, f32)]) {
+    if syms.is_empty() {
+        return;
+    }
+    let ms = syms.iter().map(|&(i, q)| i * i + q * q).sum::<f32>() / syms.len() as f32;
+    let rms = ms.sqrt();
+    if rms > 1e-9 {
+        let k = 1.0 / rms;
+        for s in syms.iter_mut() {
+            s.0 *= k;
+            s.1 *= k;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// `differential_llr_scale` must recover 1/σ² independently of the signal amplitude — that

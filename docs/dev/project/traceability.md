@@ -9,6 +9,32 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-09 — fix(dsp): level-normalise before PSK carrier recovery (no-AGC coupling)
+
+- **Requirement/change:** audit found a quiet station with a small sub-deadband carrier offset fails with
+  AGC off, because the PSK Costas loop bandwidth scales with receive amplitude. Reproduced independently
+  (QPSK500 ×0.05 + 1.5 Hz: fails AGC-off, passes AGC-on).
+- **Root cause (verified):** the carrier-loop discriminants are amplitude-dependent — CarrierPll order 1
+  `q·sgn(i)` (BPSK) and order 2 `q·sgn(i)−i·sgn(q)` (QPSK), and 8PSK-plain's `dd_track_seeded`
+  `Im(r·conj(d))` — and no PSK plugin normalised symbol level before the loop. A ×0.05 station gives the
+  loop ~1/20 the gain, so it cannot acquire even a ~1 Hz residual over a short frame. (8PSK-RRC's CarrierPll
+  order 3 is angle-based and already immune; 64QAM already normalises by `denom`.)
+- **Design decision:** normalise the symbol stream to unit RMS before the loop — a **no-op at nominal
+  amplitude** (unit-energy PSK sits at RMS ≈ 1, so the tuned acquisition is untouched), a single uniform
+  scale (phase and the calibrated soft-LLR scale ∝ amp/σ² are invariant), and it restores level-invariant
+  loop gain for weak signals. Preferred over re-deriving the discriminants (which would shift loop dynamics
+  — the most churn-prone area in the repo). Confirmed load-bearing: neutralising the helper reintroduces the
+  QPSK failure.
+- **Implementation:** `crates/openpulse-dsp/src/constellation.rs::normalize_stream_rms`; called in the
+  non-RRC carrier paths of `plugins/qpsk` (hard+soft), `plugins/psk8`, and inline in `plugins/bpsk` before
+  its Costas loop.
+- **Tests:** `crates/openpulse-modem/tests/carrier_level_invariance.rs` — QPSK500/8PSK500/BPSK250 at ×0.05
+  + a sub-deadband offset, AGC off, must decode (with a full-amplitude control).
+- **Test results (actually run):** new gate passes (and fails with the helper neutralised); PSK plugin
+  suites unchanged (`bpsk-plugin` 24, `qpsk-plugin` 39, `psk8-plugin` 25 — nominal acquisition untouched);
+  `cargo test --workspace --exclude pki-tooling --no-default-features` all pass; clippy `-D warnings` clean;
+  fmt clean.
+
 ## 2026-07-09 — fix(engine): carrier-detect before the AGC so its boost can't wedge the squelch
 
 - **Requirement/change:** audit found an AGC/DCD seam-ordering deadlock. Reproduced independently (weak

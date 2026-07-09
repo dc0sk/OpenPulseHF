@@ -280,6 +280,9 @@ fn extract_data_symbols(
         if !cosine_overlap {
             cancel_crossfade_isi(&mut raw, crossfade_isi_beta(n));
         }
+        // Level-normalise before the decision-directed loop so its gain is amplitude-invariant (a quiet
+        // station's small symbols otherwise weaken the loop below what it needs to acquire the residual).
+        openpulse_dsp::constellation::normalize_stream_rms(&mut raw);
         let phase_corrected = carrier_phase_correct(&raw, config.afc_correction_hz);
         carrier_pll_track(&phase_corrected)
     };

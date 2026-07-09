@@ -598,10 +598,22 @@ fn gardner_sample_rrc(
     // stage trains on REAL (±1, 0) targets and cannot follow a rotation, so
     // without the PLL its decision-directed mode collapses mid-frame.  The
     // PLL's 180° ambiguity is harmless: decoding is differential.
+    // Level-normalise before the Costas loop: its BPSK discriminant `q·sgn(i)` scales with the symbol
+    // amplitude, so a quiet station's small symbols weaken the loop until it can't acquire a sub-deadband
+    // residual offset. A no-op at nominal amplitude (RMS ≈ 1); a uniform scale, so decisions are unchanged.
+    let ms = i_out
+        .iter()
+        .zip(q_out.iter())
+        .map(|(&i, &q)| i * i + q * q)
+        .sum::<f32>()
+        / i_out.len().max(1) as f32;
+    let k = if ms > 1e-18 { 1.0 / ms.sqrt() } else { 1.0 };
+
     let mut pll = CarrierPll::new(0.02, 1);
     let mut i_trk = Vec::with_capacity(i_out.len());
     let mut q_trk = Vec::with_capacity(q_out.len());
     for (&s_i, &s_q) in i_out.iter().zip(q_out.iter()) {
+        let (s_i, s_q) = (s_i * k, s_q * k);
         pll.update(s_i, s_q);
         let (ci, cq) = pll.correct(s_i, s_q);
         i_trk.push(ci);
