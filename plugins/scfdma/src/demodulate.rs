@@ -383,13 +383,12 @@ fn demodulate_with_params(samples: &[f32], p: &ScFdmaParams) -> Result<Vec<u8>, 
     Ok(raw[LEN_PREFIX_BYTES..LEN_PREFIX_BYTES + take].to_vec())
 }
 
-/// Equalized, de-spread constellation symbols for display — the real QAM scatter the receiver
-/// recovers (FFT → DFT-CE → MMSE → IDFT), normalized to RMS ≈ 1 and capped in point count. Returns
-/// `None` if the mode is unknown or sync fails. Display-only (mirrors the demod front-end); does not
-/// touch the decode path.
-pub fn scfdma_constellation(samples: &[f32], mode: &str) -> Option<Vec<(f32, f32)>> {
-    let p = params_for_mode(mode)?;
-    let sync = modulate_with_params(&preamble_payload(&p), &p);
+/// Equalized, de-spread data symbols on the [`constellation_points`] scale (FFT → DFT-CE → MMSE →
+/// IDFT, with the `alpha_avg` attenuation undone and the EMA channel smoothing of the decode path).
+/// Shared front-end for the display scatter and the symbol-domain SNR estimate. `None` if the mode is
+/// unknown or sync fails.
+fn equalized_data_symbols(samples: &[f32], p: &ScFdmaParams) -> Option<Vec<Complex32>> {
+    let sync = modulate_with_params(&preamble_payload(p), p);
     if samples.len() < sync.len() + SYM_LEN {
         return None;
     }
@@ -407,22 +406,50 @@ pub fn scfdma_constellation(samples: &[f32], mode: &str) -> Option<Vec<(f32, f32
     let mut planner = FftPlanner::<f32>::new();
     let idft = planner.plan_fft_inverse(p.n_data);
     let idft_scale = 1.0 / (p.n_data as f32).sqrt();
-    let ce = DelayCe::new(&p);
-    let front = FrameFront::new(samples, &p, (!p.localized).then_some(&ce));
+    let ce = DelayCe::new(p);
+    let front = FrameFront::new(samples, p, (!p.localized).then_some(&ce));
     if front.is_empty() {
         return None;
     }
-    let solver = front.solver(&p, &ce);
+    let solver = front.solver(p, &ce);
+    let ce_err = ce_error_var(&front, solver.as_ref());
 
+    let mut ema_h: Option<Vec<Complex32>> = None;
     let mut syms: Vec<Complex32> = Vec::with_capacity(n_syms * p.n_data);
     for freq in &front.spectra {
-        let h_est = front.estimate(&p, solver.as_ref(), freq);
-        let noise_var = front.noise_var_for(&p, solver.as_ref(), freq, &h_est);
-        let mut equalized = mmse_equalize(&p, freq, &h_est, noise_var);
+        let raw_h = front.estimate(p, solver.as_ref(), freq);
+        let noise_var = front.noise_var_for(p, solver.as_ref(), freq, &raw_h);
+        let h_est = smooth_ce(&mut ema_h, &raw_h);
+        let (_, alpha_avg) = mmse_llr_noise_var(p, &h_est, noise_var, &ce_err);
+        let mut equalized = mmse_equalize(p, freq, &h_est, noise_var);
         idft.process(&mut equalized);
-        syms.extend(equalized.iter().map(|c| c * idft_scale));
+        syms.extend(equalized.iter().map(|c| c * idft_scale / alpha_avg));
     }
+    Some(syms)
+}
+
+/// Equalized, de-spread constellation symbols for display — the real QAM scatter the receiver
+/// recovers, normalized to RMS ≈ 1 and capped in point count. Returns `None` if the mode is unknown
+/// or sync fails. Display-only.
+pub fn scfdma_constellation(samples: &[f32], mode: &str) -> Option<Vec<(f32, f32)>> {
+    let p = params_for_mode(mode)?;
+    let syms = equalized_data_symbols(samples, &p)?;
     Some(normalize_constellation_for_display(&syms))
+}
+
+/// Symbol-domain RX SNR (dB) from the equalized SC-FDMA data symbols via [`qam_symbol_snr_db`]. Lets
+/// the narrowband SL10 rung self-measure SNR (M2M4 reads garbage on a multicarrier envelope), so the
+/// receiver-led ladder can climb through it into the OFDM rungs. `None` if sync fails.
+pub fn estimate_snr_db(samples: &[f32], mode: &str) -> Option<f32> {
+    let p = params_for_mode(mode)?;
+    let syms = equalized_data_symbols(samples, &p)?;
+    if syms.is_empty() {
+        return None;
+    }
+    Some(openpulse_dsp::constellation::qam_symbol_snr_db(
+        &syms,
+        p.bits_per_sc,
+    ))
 }
 
 /// Normalize equalized symbols to RMS ≈ 1 and subsample to a bounded point count for plotting.

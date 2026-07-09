@@ -299,6 +299,10 @@ impl ModulationPlugin for ScFdmaPlugin {
         crate::channel::cfo_from_spectra(&spectra, &p)
     }
 
+    fn estimate_snr_db(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+        crate::demodulate::estimate_snr_db(samples, &config.mode)
+    }
+
     fn occupied_bandwidth_hz(&self, mode: &str) -> Option<f32> {
         params_for_mode(mode).map(|p| p.total_sc() as f32 * crate::params::SC_SPACING_HZ)
     }

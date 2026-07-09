@@ -226,12 +226,11 @@ fn demodulate_with_params(samples: &[f32], p: &OfdmParams) -> Result<Vec<u8>, Mo
     Ok(raw[LEN_PREFIX_BYTES..LEN_PREFIX_BYTES + take].to_vec())
 }
 
-/// Equalized data-subcarrier constellation symbols for display — the real QAM scatter the receiver
-/// recovers (FFT → LS-CE → ZF), normalized to RMS ≈ 1 and capped in point count. Returns `None` if
-/// the mode is unknown or no preamble is found. Display-only (mirrors the demod front-end).
-pub fn ofdm_constellation(samples: &[f32], mode: &str) -> Option<Vec<(f32, f32)>> {
-    let p = params_for_mode(mode)?;
-    let data_start = find_first_data_body(samples, &p)?;
+/// Equalized data-subcarrier symbols (FFT → LS-CE → ZF) across every OFDM data symbol in the burst,
+/// on the [`constellation_points`] scale. The shared front-end for the display scatter and the
+/// symbol-domain SNR estimate. `None` if the mode is unknown or no preamble is found.
+fn equalized_data_symbols(samples: &[f32], p: &OfdmParams) -> Option<Vec<Complex32>> {
+    let data_start = find_first_data_body(samples, p)?;
     if data_start >= samples.len() {
         return None;
     }
@@ -255,11 +254,35 @@ pub fn ofdm_constellation(samples: &[f32], mode: &str) -> Option<Vec<(f32, f32)>
             .map(|&s| Complex32::new(s * scale, 0.0))
             .collect();
         fft.process(&mut freq);
-        crate::channel::deramp_timing(&p, &mut freq);
-        let h_est = ls_estimate(&p, &freq);
-        syms.extend(zf_equalize(&p, &freq, &h_est));
+        crate::channel::deramp_timing(p, &mut freq);
+        let h_est = ls_estimate(p, &freq);
+        syms.extend(zf_equalize(p, &freq, &h_est));
     }
+    Some(syms)
+}
+
+/// Equalized data-subcarrier constellation symbols for display — the real QAM scatter the receiver
+/// recovers, normalized to RMS ≈ 1 and capped in point count. Returns `None` if the mode is unknown
+/// or no preamble is found. Display-only.
+pub fn ofdm_constellation(samples: &[f32], mode: &str) -> Option<Vec<(f32, f32)>> {
+    let p = params_for_mode(mode)?;
+    let syms = equalized_data_symbols(samples, &p)?;
     Some(normalize_constellation_for_display(&syms))
+}
+
+/// Symbol-domain RX SNR (dB) from the equalized OFDM data symbols via [`qam_symbol_snr_db`] — the
+/// non-constant-modulus counterpart of the PSK plugins' estimate. `None` if the burst has no
+/// recoverable preamble/symbols. Waveform-aware, so unlike M2M4 it keeps tracking SNR up the ladder.
+pub fn estimate_snr_db(samples: &[f32], mode: &str) -> Option<f32> {
+    let p = params_for_mode(mode)?;
+    let syms = equalized_data_symbols(samples, &p)?;
+    if syms.is_empty() {
+        return None;
+    }
+    Some(openpulse_dsp::constellation::qam_symbol_snr_db(
+        &syms,
+        p.bits_per_sc,
+    ))
 }
 
 /// Normalize equalized symbols to RMS ≈ 1 and subsample to a bounded point count for plotting.

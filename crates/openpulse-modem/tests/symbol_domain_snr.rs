@@ -1,15 +1,18 @@
 //! Per-plugin symbol-domain SNR (`ModulationPlugin::estimate_snr_db`) tracks SNR where M2M4 saturates.
 //!
-//! M2M4 assumes a constant-modulus *envelope*; on a pulse-shaped waveform the crossfade/RRC envelope
-//! variation folds into its "noise" term and its output stops tracking SNR — measured flat ~11 dB on
-//! 8PSK500 from 10 to 30 dB, which is what capped the receiver-led ladder around SL8. The per-plugin
-//! estimate instead measures noise from the component of each equalized symbol *orthogonal* to its
-//! decision (`psk_symbol_noise_var`), so it keeps rising with SNR up to the mode's residual-EVM floor.
+//! M2M4 assumes a constant-modulus *envelope*; on a pulse-shaped or multicarrier waveform the envelope
+//! variation folds into its "noise" term and its output stops tracking SNR (flat ~15 dB on the PSK
+//! rungs, and outright negative on OFDM/SC-FDMA), which capped the receiver-led ladder around SL8. The
+//! per-plugin estimate instead measures noise from the equalized symbols: the constant-modulus PSK
+//! plugins use the orthogonal-to-decision component (`psk_symbol_noise_var`); the multicarrier plugins
+//! (OFDM, SC-FDMA) use decision-directed distance on their equalized QAM subcarriers
+//! (`qam_symbol_snr_db`).
 //!
-//! These gates pin that difference: over an AWGN sweep the plugin estimate must span far more dB than
-//! M2M4 across the low-to-mid range where the promotion decisions live. (It saturates at the EVM floor
-//! at high SNR — expected and safe, since a rate decision only needs "high enough".)
+//! These gates pin that difference over an AWGN sweep: the plugin estimate must rise with SNR and, at
+//! high SNR, read far above M2M4's ceiling. (The PSK estimates saturate at the mode's EVM floor —
+//! expected and safe; the OFDM estimate stays near-ideal well past 32 dB.)
 
+use ofdm_plugin::OfdmPlugin;
 use openpulse_audio::LoopbackBackend;
 use openpulse_channel::{awgn::AwgnChannel, AwgnConfig, ChannelModel};
 use openpulse_core::plugin::ModulationPlugin;
@@ -87,4 +90,25 @@ fn qpsk500_symbol_snr_tracks() {
 #[test]
 fn psk8_500_symbol_snr_tracks() {
     assert_tracks("8PSK500", || Box::new(Psk8Plugin::new()));
+}
+
+// OFDM (multicarrier, non-constant-modulus) — the PR-B rungs the SC-FDMA→OFDM re-seat installed at
+// SL11–SL19. `estimate_snr_db` here uses `qam_symbol_snr_db` on the ZF-equalized subcarriers.
+#[test]
+fn ofdm52_16qam_symbol_snr_tracks() {
+    assert_tracks("OFDM52-16QAM", || Box::new(OfdmPlugin::new()));
+}
+
+#[test]
+fn ofdm52_64qam_symbol_snr_tracks() {
+    assert_tracks("OFDM52-64QAM", || Box::new(OfdmPlugin::new()));
+}
+
+// SC-FDMA (the narrowband SL10 rung kept after the re-seat) must also self-measure SNR, or it walls
+// off the climb into the OFDM rungs above it. Same `qam_symbol_snr_db` on its equalized symbols.
+#[test]
+fn scfdma26_32qam_symbol_snr_tracks() {
+    assert_tracks("SCFDMA26-32QAM", || {
+        Box::new(scfdma_plugin::ScFdmaPlugin::new())
+    });
 }

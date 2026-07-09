@@ -167,6 +167,10 @@ impl ModulationPlugin for OfdmPlugin {
         crate::channel::estimate_cfo_hz(samples, &p)
     }
 
+    fn estimate_snr_db(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+        demodulate::estimate_snr_db(samples, &config.mode)
+    }
+
     fn occupied_bandwidth_hz(&self, mode: &str) -> Option<f32> {
         params_for_mode(mode).map(|p| p.occupied_bw_hz())
     }

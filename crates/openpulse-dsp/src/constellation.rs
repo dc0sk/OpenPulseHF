@@ -370,6 +370,27 @@ pub fn estimate_decision_noise_var(symbols: &[Complex32], bits_per_sc: usize) ->
     (sum_min_dist / symbols.len() as f32).max(1e-6)
 }
 
+/// Symbol SNR in dB of a block of equalised QAM/PSK symbols already on the [`constellation_points`]
+/// scale: `10·log10(P_const / σ²)`, where `P_const` is the constellation's average symbol power and
+/// `σ²` is the decision-directed noise power from [`estimate_decision_noise_var`].
+///
+/// Unlike the constant-modulus [`psk_symbol_noise_var`], this works for non-constant-modulus
+/// constellations (16/32/64QAM), which is what a multicarrier plugin (OFDM) needs. It is
+/// decision-directed, so it saturates once symbol errors are common — the safe direction for a rate
+/// decision — and, being a ratio of powers on the same scale, it is invariant to a uniform gain
+/// (e.g. a ZF-equalizer scale). On a frequency-selective channel the ZF noise-enhancement on faded
+/// subcarriers inflates `σ²`, so it *under*-reads SNR there — conservative, which is again safe.
+pub fn qam_symbol_snr_db(symbols: &[Complex32], bits_per_sc: usize) -> f32 {
+    if symbols.is_empty() {
+        return 0.0;
+    }
+    let points = constellation_points(bits_per_sc);
+    let sig_power =
+        points.iter().map(|(_, p)| p.norm_sqr()).sum::<f32>() / points.len().max(1) as f32;
+    let noise = estimate_decision_noise_var(symbols, bits_per_sc);
+    10.0 * (sig_power / noise).max(1e-12).log10()
+}
+
 // ── 32APSK (DVB-S2 4+12+16 rings) ─────────────────────────────────────────────
 //
 // A 5-bit amplitude/phase constellation: inner 4PSK + mid 12PSK + outer 16PSK at
