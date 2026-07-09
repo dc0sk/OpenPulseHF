@@ -183,6 +183,9 @@ pub fn qpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
         if !cosine_overlap {
             cancel_crossfade_isi(&mut raw);
         }
+        // Level-normalise before the Costas loop so its gain is amplitude-invariant: a quiet station's
+        // small symbols otherwise weaken the loop until it cannot acquire a sub-deadband residual offset.
+        openpulse_dsp::constellation::normalize_stream_rms(&mut raw);
         let phase_corrected = carrier_phase_correct(&raw, config.afc_correction_hz);
         carrier_pll_track(&phase_corrected)
     };
@@ -609,6 +612,9 @@ pub fn qpsk_demodulate_soft(
         if !cosine_overlap {
             cancel_crossfade_isi(&mut raw);
         }
+        // Level-normalise before the Costas loop so its gain is amplitude-invariant: a quiet station's
+        // small symbols otherwise weaken the loop until it cannot acquire a sub-deadband residual offset.
+        openpulse_dsp::constellation::normalize_stream_rms(&mut raw);
         let phase_corrected = carrier_phase_correct(&raw, config.afc_correction_hz);
         carrier_pll_track(&phase_corrected)
     };
