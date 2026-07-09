@@ -35,7 +35,10 @@ fn modulate_with_params(payload: &[u8], p: &OfdmParams) -> Vec<f32> {
     data.extend_from_slice(&len_bytes);
     data.extend_from_slice(payload);
 
-    let bits = bytes_to_bits(&data);
+    // Whiten the bit stream so no payload (zero-runs, RS padding) can produce an all-identical-subcarrier
+    // impulse-train symbol that the engine's CE-SSB peak-stretch would crush. See `crate::scramble`.
+    let mut bits = bytes_to_bits(&data);
+    crate::scramble::scramble_bits(&mut bits);
     let bits_per_sym = p.bits_per_symbol();
     let n_syms = if bits_per_sym == 0 {
         1
