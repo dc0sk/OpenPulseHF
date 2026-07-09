@@ -177,8 +177,12 @@ pub fn qpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
         let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
         let mut raw = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
         // Undo the transmitter's raised-cosine crossfade before any carrier/equalizer stage; the ISI is
-        // on the next (anti-causal) symbol, so the DFE downstream cannot reach it.
-        cancel_crossfade_isi(&mut raw);
+        // on the next (anti-causal) symbol, so the DFE downstream cannot reach it.  Only the plain
+        // (crossfade) pulse leaks the neighbour — the cosine-overlap `sin²` pulse is per-symbol with no
+        // overlap, so cancellation there would inject a third of the next symbol as error.
+        if !cosine_overlap {
+            cancel_crossfade_isi(&mut raw);
+        }
         let phase_corrected = carrier_phase_correct(&raw, config.afc_correction_hz);
         carrier_pll_track(&phase_corrected)
     };
@@ -599,8 +603,12 @@ pub fn qpsk_demodulate_soft(
         let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
         let mut raw = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
         // Undo the transmitter's raised-cosine crossfade before any carrier/equalizer stage; the ISI is
-        // on the next (anti-causal) symbol, so the DFE downstream cannot reach it.
-        cancel_crossfade_isi(&mut raw);
+        // on the next (anti-causal) symbol, so the DFE downstream cannot reach it.  Only the plain
+        // (crossfade) pulse leaks the neighbour — the cosine-overlap `sin²` pulse is per-symbol with no
+        // overlap, so cancellation there would inject a third of the next symbol as error.
+        if !cosine_overlap {
+            cancel_crossfade_isi(&mut raw);
+        }
         let phase_corrected = carrier_phase_correct(&raw, config.afc_correction_hz);
         carrier_pll_track(&phase_corrected)
     };
