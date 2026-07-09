@@ -82,11 +82,13 @@ impl OtaLink {
     }
 }
 
-/// On a strong (35 dB) AWGN channel the ladder must climb above SL8 — the level where the M2M4
-/// saturation ceiling (~15 dB) would otherwise pin it. Reaching SL9 (8PSK500) or beyond means the
-/// receiver read a true SNR above M2M4's ceiling, which only the symbol-domain estimator provides.
+/// On a strong (35 dB) AWGN channel the ladder must climb deep into the dense multicarrier rungs.
+/// This exercises the whole symbol-domain-SNR chain: PSK estimates (PR-A) escape the M2M4 SL8 cap;
+/// SC-FDMA's estimate lets the receiver read through the narrowband SL10 rung (M2M4 reads garbage on
+/// a multicarrier envelope); OFDM's estimate carries it up SL11–SL19. Before the multicarrier
+/// estimates existed the climb stalled at SL10 because SL10 could not self-measure SNR.
 #[test]
-fn strong_channel_climbs_past_the_m2m4_cap() {
+fn strong_channel_climbs_into_the_ofdm_rungs() {
     let mut link = OtaLink::new();
     let mut max_level = SpeedLevel::Sl2;
     for i in 0..24 {
@@ -99,8 +101,7 @@ fn strong_channel_climbs_past_the_m2m4_cap() {
     }
     eprintln!("strong-channel climb reached {max_level:?}");
     assert!(
-        max_level >= SpeedLevel::Sl9,
-        "a 35 dB channel must climb past the M2M4 SL8 cap into the 8PSK/SC-FDMA rungs; \
-         reached only {max_level:?}"
+        max_level >= SpeedLevel::Sl15,
+        "a 35 dB channel must climb through SL10 into the dense OFDM rungs; reached only {max_level:?}"
     );
 }

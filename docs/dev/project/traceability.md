@@ -9,6 +9,34 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-09 — feat(rate): multicarrier symbol-domain RX SNR (OFDM + SC-FDMA) — the ladder climbs to SL19
+
+- **Requirement/change:** PR-A gave the PSK rungs a calibrated SNR (escaping the M2M4 SL8 cap → ladder
+  reached SL10), and the re-seat put OFDM on SL11–SL19. But the OTA ladder still **stalled at SL10**: M2M4
+  reads garbage on a multicarrier envelope (−10 dB on OFDM, −6 on SC-FDMA even at high true SNR), so neither
+  the kept narrowband SC-FDMA rung (SL10) nor the OFDM rungs could self-measure SNR to justify climbing.
+- **Design decision:** add a non-constant-modulus estimator `qam_symbol_snr_db(symbols, bits_per_sc) =
+  10·log10(P_const/σ²)` (mean constellation power over the decision-directed noise var,
+  `estimate_decision_noise_var`) — a ratio on the same scale, so uniform-gain-invariant and, being
+  decision-directed, saturating on errors (safe). Both multicarrier plugins implement `estimate_snr_db` by
+  running their existing front-end to the *equalized* data symbols (OFDM: ZF; SC-FDMA: MMSE + IDFT with the
+  `alpha_avg` attenuation undone) and calling it. SC-FDMA is included specifically because keeping one SC-FDMA
+  rung (SL10) in the middle of the ladder otherwise walls off the climb.
+- **Implementation:** `crates/openpulse-dsp/src/constellation.rs` (`qam_symbol_snr_db`); `plugins/ofdm`
+  (extract `equalized_data_symbols`, refactor `ofdm_constellation` onto it, add `estimate_snr_db` + trait
+  override); `plugins/scfdma` (extract `equalized_data_symbols` with `alpha_avg` + EMA-CE matching the decode
+  path, refactor `scfdma_constellation` onto it, add `estimate_snr_db` + trait override). No engine change —
+  the PR-A `rx_snr_db` seam already dispatches to `estimate_snr_db` then M2M4, so the daemon picks it up.
+- **Tests:** `symbol_domain_snr.rs` extended with OFDM52-16QAM/64QAM and SCFDMA26-32QAM tracking gates;
+  `symbol_snr_ladder_climb.rs` assertion raised from "≥ SL9" to "≥ SL15" (renamed
+  `strong_channel_climbs_into_the_ofdm_rungs`).
+- **Test results (actually run):** AWGN sweep — OFDM52-16QAM plugin **9.4/20.4/32.3** dB at true 8/20/32
+  (near-ideal, no saturation) vs M2M4 **−10.0**; OFDM52-64QAM 12.8/21.0/32.3; SCFDMA26-32QAM 15.0/25.2/36.1 vs
+  M2M4 −6.1. End-to-end: the receiver-led ladder over a 35 dB AWGN link now **climbs to SL19** (was SL10
+  before this change). Regressions: `scfdma-plugin` 35, `ofdm-plugin` 58, `openpulse-dsp` 90, full modem suite
+  — pass; clippy `-D warnings` + fmt clean. This closes the OTA-ladder track: the dense OFDM rungs are now
+  both correct (re-seat) and reachable over the air (this change).
+
 ## 2026-07-09 — feat(profile): re-seat the hpx_hf dense HF rungs (SL11–SL19) from SC-FDMA to OFDM
 
 - **Requirement/change:** the Fable audit claimed OFDM decisively beats SC-FDMA on frequency-selective HF
