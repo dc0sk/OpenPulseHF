@@ -175,7 +175,10 @@ pub fn qpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
         carrier_phase_correct(&rrc_syms, config.afc_correction_hz)
     } else {
         let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
-        let raw = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
+        let mut raw = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
+        // Undo the transmitter's raised-cosine crossfade before any carrier/equalizer stage; the ISI is
+        // on the next (anti-causal) symbol, so the DFE downstream cannot reach it.
+        cancel_crossfade_isi(&mut raw);
         let phase_corrected = carrier_phase_correct(&raw, config.afc_correction_hz);
         carrier_pll_track(&phase_corrected)
     };
@@ -482,6 +485,34 @@ fn lms_profile(mode: &str) -> (usize, usize, f32) {
     }
 }
 
+/// ISI coefficient of the rectangular ("plain") QPSK pulse's raised-cosine crossfade.
+///
+/// The modulator blends adjacent symbols — sample `i` of slot `k` is
+/// `sym_k·w_tail(i) + sym_{k+1}·w_head(i)` with `w_tail = ½(1+cos πi/n)`, `w_head = 1−w_tail`. A
+/// matched integrate-and-dump over one slot (`demodulate_symbols`) therefore recovers
+/// `p_k = sym_k + β·sym_{k+1}`, where `β = Σ w_head·w_tail / Σ w_tail² = 1/3` — a deterministic third
+/// of the *next* symbol leaks in. The value is independent of `n` (both sums scale with `n`).
+const CROSSFADE_ISI_BETA: f32 = 1.0 / 3.0;
+
+/// Remove the crossfade ISI from a rectangular-QPSK symbol projection stream in place.
+///
+/// `p_k = sym_k + β·sym_{k+1}` is bidiagonal, so `sym_k = p_k − β·sym_{k+1}` recovers it exactly by
+/// back-substitution. The recursion is stable — each step scales the running error by `β = 1/3`, so it
+/// *decays* backward — and the terminal is exact: the modulator sets the last data symbol's successor
+/// to zero, and any trailing noise symbols converge to that within a few taps before the payload is
+/// reached. Noise is amplified by only `1/(1−β²) = 1.125` (+0.5 dB).
+///
+/// The ISI is anti-causal (it is the *next* symbol), so the downstream decision-feedback equalizer —
+/// which feeds back *past* decisions — cannot cancel it; left in, it floors the recovered-symbol EVM at
+/// `β² = −9.5 dB` regardless of SNR, which caps every soft consumer (HARQ combining, soft FEC).
+fn cancel_crossfade_isi(symbols: &mut [(f32, f32)]) {
+    let beta = CROSSFADE_ISI_BETA;
+    for k in (0..symbols.len().saturating_sub(1)).rev() {
+        symbols[k].0 -= beta * symbols[k + 1].0;
+        symbols[k].1 -= beta * symbols[k + 1].1;
+    }
+}
+
 fn qpsk_lms_equalize(symbols: &[(f32, f32)], mode: &str) -> Vec<(f32, f32)> {
     if symbols.is_empty() {
         return Vec::new();
@@ -566,7 +597,10 @@ pub fn qpsk_demodulate_soft(
         carrier_phase_correct(&rrc_syms, config.afc_correction_hz)
     } else {
         let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
-        let raw = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
+        let mut raw = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
+        // Undo the transmitter's raised-cosine crossfade before any carrier/equalizer stage; the ISI is
+        // on the next (anti-causal) symbol, so the DFE downstream cannot reach it.
+        cancel_crossfade_isi(&mut raw);
         let phase_corrected = carrier_phase_correct(&raw, config.afc_correction_hz);
         carrier_pll_track(&phase_corrected)
     };
