@@ -115,6 +115,9 @@ impl WattersonChannel {
         let mut out_i = vec![0.0_f32; n];
         let mut out_q = vec![0.0_f32; n];
 
+        // Normalise total path power to 1 (see `apply`): 1/√2 per equal-power ray, else the summed
+        // two-ray signal is +3 dB hot relative to the input-keyed noise.
+        let ray_scale = std::f32::consts::FRAC_1_SQRT_2;
         for idx in 0..n {
             let x0 = Complex32::new(i_in[idx], q_in[idx]);
             let x1 = if idx >= delay_samples {
@@ -123,7 +126,7 @@ impl WattersonChannel {
                 Complex32::new(0.0, 0.0)
             };
 
-            let y = env0[idx] * x0 + env1[idx] * x1;
+            let y = ray_scale * (env0[idx] * x0 + env1[idx] * x1);
             out_i[idx] = y.re + noise_sigma * self.rng.sample::<f32, _>(StandardNormal);
             out_q[idx] = y.im + noise_sigma * self.rng.sample::<f32, _>(StandardNormal);
         }
@@ -160,11 +163,15 @@ impl ChannelModel for WattersonChannel {
         // fade independent of |h| or SNR, with spurious sign inversions. The analytic-signal
         // form preserves |h| and turns a 90° gain into a harmless carrier-phase rotation.
         let analytic = self.analytic(input);
+        // Normalise the TOTAL path power to 1: two independent equal-power rays each with E[|h|²]=1
+        // would sum to power 2, delivering the signal +3 dB hot relative to the input-keyed noise (so
+        // every labelled Watterson SNR read ~3 dB optimistic). Scale each ray by 1/√(#rays)=1/√2.
+        let ray_scale = std::f32::consts::FRAC_1_SQRT_2;
         let mut out = vec![0.0f32; n];
         for i in 0..n {
-            let ray0 = analytic[i] * env0[i];
+            let ray0 = analytic[i] * env0[i] * ray_scale;
             let ray1 = if i >= delay_samples {
-                analytic[i - delay_samples] * env1[i]
+                analytic[i - delay_samples] * env1[i] * ray_scale
             } else {
                 Complex32::new(0.0, 0.0)
             };
@@ -287,6 +294,37 @@ mod tests {
         assert!(
             deep <= seeds as usize / 10,
             "{deep}/{seeds} flat-fade realizations collapsed below 0.2× — phase annihilation regressed"
+        );
+    }
+
+    /// The two-ray channel must deliver the signal at the LABELLED SNR: total path power = 1, not 2.
+    /// Each ray has E[|h|²]=1, so before the 1/√2-per-ray normalisation the summed signal was ~2× the
+    /// input power while the noise was keyed to the input — every Watterson SNR label read ~3 dB hot.
+    /// Measured at high SNR (noise negligible), mean(out²)/mean(in²) must sit near 1.0, not 2.0.
+    #[test]
+    fn total_path_power_normalized_to_unity() {
+        let n = 40_000usize; // 5 s @ 8 kHz — several coherence times so the fading averages out
+        let tone: Vec<f32> = (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * 1500.0 * i as f32 / 8000.0).sin())
+            .collect();
+        let in_pow = tone.iter().map(|s| s * s).sum::<f32>() / n as f32;
+
+        let seeds = 30u64;
+        let mut ratio_sum = 0.0f32;
+        for seed in 0..seeds {
+            let mut cfg = WattersonConfig::moderate_f1(Some(seed));
+            cfg.delay_spread_ms = 1.0; // two resolvable rays
+            cfg.snr_db = 60.0; // noise negligible → out power ≈ signal path power
+            let mut ch = WattersonChannel::new(cfg).unwrap();
+            let out = ch.apply(&tone);
+            let out_pow = out.iter().map(|s| s * s).sum::<f32>() / n as f32;
+            ratio_sum += out_pow / in_pow;
+        }
+        let ratio = ratio_sum / seeds as f32;
+        assert!(
+            (0.75..1.35).contains(&ratio),
+            "delivered/input signal power = {ratio:.2} — expected ≈1.0 (path power normalised); \
+             ≈2.0 means the +3 dB two-ray hot-signal bug regressed"
         );
     }
 
