@@ -9,6 +9,33 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-09 — fix(dsp): correct the inverted LMS DFE feedback-update sign
+
+- **Requirement/change:** an audit (Fable, 5-stream) flagged the LMS decision-feedback section as
+  anti-adaptive. Independently reproduced and fixed here.
+- **Root cause (verified):** `LmsEqualizer::filter()` returns `output = fwd − dfe` (the DFE output is
+  **subtracted**), so `∂output/∂w_dfe = −d` and the steepest-descent step must be `w_dfe −= μ·e·conj(d)`.
+  `lms_update` instead adapted the DFE taps with `+=` — the same sign as the forward taps — so the
+  feedback section climbed the error gradient. On a pure post-cursor ISI channel `h=[1.0, 0.5]` (which a
+  correct DFE cancels perfectly) this drove steady-state MSE from the forward-only **0.0001** up to
+  **16.2 (dfe=1) / 29.0 (dfe=2)** until the `MAX_TAP_ENERGY` guard clamped it. Invisible to any
+  identity-channel loopback (zero error → zero update), so every clean test stayed green; it silently
+  injected noise on every DFE-enabled production profile (BPSK250-RRC, QPSK1000-HF/-RRC, 8PSK1000-HF/-RRC).
+- **Design decision:** flip the DFE update sign only (the forward-tap update is correct — forward-only
+  equalization already worked). The characterization-sweep lore ("DFE=2 sweet spot", "DFE≥3 hurts", "DFE
+  removed as it hurts moderate_f1") was measured against the broken component and is now marked invalid;
+  a post-fix re-run shows a correctly-signed DFE decisively cancels *static* post-cursor ISI but does NOT
+  beat a forward-only equalizer on fast Watterson fading (decision-feedback error propagation), so the
+  fading-profile DFE lengths are left unchanged pending a re-tune against the CODED metric (tracked
+  follow-up). Comment corrected in `plugins/qpsk/src/demodulate.rs`.
+- **Implementation:** `crates/openpulse-dsp/src/equalizer.rs` — `lms_update` DFE tap update `+=` → `−=`.
+- **Tests:** `crates/openpulse-dsp/tests/dfe_postcursor_isi.rs` — new gate: adding DFE taps must not
+  raise steady-state MSE on `h=[1.0,0.5]` (fails pre-fix at 16/29, passes post-fix).
+- **Test results (actually run):** new gate passes; `openpulse-dsp` 90/90; DFE-enabled plugin guards
+  unchanged (`bpsk-plugin` 24, `qpsk-plugin` 39, `psk8-plugin` 25, incl. all Watterson moderate/poor-F1
+  guards); `cargo test --workspace --exclude pki-tooling --no-default-features` all pass; clippy
+  `-D warnings` clean; fmt clean.
+
 ## 2026-07-09 — fix(psk8): cancel the rectangular-pulse crossfade ISI (and gate QPSK's cancellation)
 
 - **Requirement/change:** the PR-#687 calibration probe found QPSK/8PSK `mean(|LLR|)` stops tracking SNR

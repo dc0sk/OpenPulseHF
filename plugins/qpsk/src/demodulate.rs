@@ -812,7 +812,19 @@ mod tests {
     //! - Increase deterministic trials per seed (currently 6 moderate, 4 poor) for better statistics
     //! - Use BER metrics to identify which constraints are active (moderate avg BER vs poor avg BER)
     //!
-    //! ## Key Findings (as of 2026-05-16)
+    //! ## ⚠️ These sweep conclusions predate the DFE sign fix — re-derive before trusting them
+    //!
+    //! The findings below (esp. "DFE order 2 is the sweet spot", "DFE≥3 hurts", "DFE removed as it
+    //! hurts moderate_f1") were all measured while `LmsEqualizer`'s feedback update carried the WRONG
+    //! sign (`+=` instead of `−=`; the DFE output is *subtracted* in `filter()`). That made the DFE
+    //! anti-adaptive — it amplified ISI until the tap-energy clamp — so every "how much DFE" number here
+    //! is really "how much of a broken component is least harmful." The sign is now fixed (see
+    //! `openpulse_dsp::equalizer` + `dfe_postcursor_isi.rs`). Post-fix re-runs show a correctly-signed
+    //! DFE decisively cancels *static* post-cursor ISI but does NOT beat a forward-only equalizer on
+    //! fast Watterson fading (decision-feedback error propagation), so the fading-profile DFE lengths are
+    //! pending a re-tune against the CODED metric. The enforced guards below still pass unchanged.
+    //!
+    //! ## Key Findings (as of 2026-05-16, PRE-DFE-FIX)
     //!
     //! ### HF-RRC (Standard RRC rolloff, mu≈0.010)
     //! - **Binding constraint**: Moderate F1 (10/16 candidates fail here; only 1/16 fail poor)
