@@ -51,7 +51,10 @@ fn trial(payload: &[u8], notch: bool, tone_hz: f32, amp: f32) -> Vec<u8> {
 fn notch_recovers_decode_against_out_of_band_qrm() {
     let payload = b"OpenPulseHF receiver notch loopback gate";
     // A strong CW tone at 2600 Hz — outside QPSK500's protected band (1500 +/- 500 = 1000..2000).
-    let (tone_hz, amp) = (2600.0, 4.0);
+    // Amplitude 8.0: the QPSK crossfade-ISI cancellation (see `qpsk-plugin`'s `crossfade_isi` test)
+    // made the receiver strong enough to decode through amp 4.0, so the "baseline is corrupted"
+    // precondition needs a harsher tone.
+    let (tone_hz, amp) = (2600.0, 8.0);
 
     let off = trial(payload, false, tone_hz, amp);
     let on = trial(payload, true, tone_hz, amp);

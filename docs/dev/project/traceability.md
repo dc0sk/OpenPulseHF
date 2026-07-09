@@ -9,6 +9,40 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-09 — fix(qpsk): cancel the rectangular-pulse crossfade ISI
+
+- **Requirement/change:** the PR-#687 calibration probe found QPSK/8PSK `mean(|LLR|)` stops tracking SNR
+  above ~12 dB — a receiver-internal residual, flagged as unexplained. Traced here for QPSK.
+- **Root cause (measured + derived):** recovered-symbol EVM floors at **−9.7 dB** on every *rectangular*
+  QPSK rung (QPSK250/500/1000) from 16 dB SNR upward, while the RRC rung tracks cleanly to −37 dB. The
+  rectangular ("plain") modulator blends adjacent symbols with a raised-cosine crossfade — sample `i` of
+  slot `k` is `sym_k·w_tail(i) + sym_{k+1}·w_head(i)`, `w_tail = ½(1+cos πi/n)`. A one-slot
+  integrate-and-dump (`demodulate_symbols`) therefore recovers `p_k = sym_k + β·sym_{k+1}` with
+  `β = Σ w_head·w_tail / Σ w_tail² = 1/3` exactly (independent of `n`). `β² = −9.55 dB` — the measured
+  floor. The ISI is on the *next* symbol (anti-causal), so the downstream DFE, which feeds back past
+  decisions, cannot reach it. Hard decisions are unaffected (45° QPSK margin), so no BER test caught it.
+- **Design decision:** `p_k = sym_k + β·sym_{k+1}` is bidiagonal → `sym_k = p_k − β·sym_{k+1}` recovers it
+  exactly by backward substitution. Stable (each step scales the running error by `β = 1/3`, so it decays
+  backward) with an exact terminal (the modulator sets the last symbol's successor to 0). Noise gain is
+  `1/(1−β²) = 1.125` (+0.5 dB), so low-SNR EVM improves too. Applied on the rectangular demod path only,
+  after `demodulate_symbols` and before carrier/equalizer — **not** inside the timing search.
+- **Implementation:** `plugins/qpsk/src/demodulate.rs` — `CROSSFADE_ISI_BETA`, `cancel_crossfade_isi`,
+  called in `qpsk_demodulate` and `qpsk_demodulate_soft`.
+- **Tests:** new `plugins/qpsk/tests/crossfade_isi.rs::evm_clears_the_crossfade_floor_at_high_snr` —
+  EVM at 40 dB must be < −13 dB (past the −9.5 dB floor). **Fails on the pristine tree at −9.7 dB.**
+  `notch_loopback::notch_recovers_decode_against_out_of_band_qrm` tightened (QRM tone amp 4.0 → 8.0): the
+  cancellation made the receiver decode through the old tone, so the test's "baseline is corrupted"
+  precondition needed a harsher one — a *positive* side-effect, recorded in the test.
+- **Test results:** EVM at 40 dB, before → after: QPSK250 −9.7 → **−26.6**, QPSK500 −9.8 → **−20.9**,
+  QPSK1000 −9.5 → **−15.5** (the QPSK1000 residue is a separate 8-sps timing effect). Downstream, this is
+  a real *coded* win, not just EVM. Soft-concatenated FEC floor over AWGN, QPSK250: 4 dB 0.58 → **0.75**,
+  5 dB 0.88 → **1.00**; **QPSK500 was stuck at 0.00 at 5–6 dB and now decodes** (5 dB → 0.04, 6 dB → 0.17).
+  HARQ soft combining over Watterson `good_f1`, QPSK250: 6 dB 0.80 → **0.93**, 8 dB 0.85 → **0.95**;
+  QPSK500 8 dB 0.70 → **0.80**. Full workspace `--exclude pki-tooling --no-default-features`: **1558
+  passed, 0 failed**. clippy `-D warnings` + fmt clean.
+- **Scope:** QPSK only. 8PSK's rectangular path shares the pattern and shows the same `mean(|LLR|)` stall
+  (×1.8 over 8→24 dB in #687); a follow-up applies the same cancellation there.
+
 ## 2026-07-08 — fix(engine): decode each HARQ attempt standalone before combining them
 
 - **Requirement/change:** the P7 rejection (PR #693) concluded that what limits SC-FDMA on HF is deep-fade
