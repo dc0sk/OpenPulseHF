@@ -365,6 +365,10 @@ pub struct ModemEngine {
     /// Count of capture blocks the DC block processed — tripwire for the always-on DC removal
     /// (REQ-PHY-02); stays 0 if a capture path ever skips the InputCapture seam.
     dc_blocks_processed: u64,
+    /// Count of capture blocks DCD processed at the seam — tripwire for the carrier detector, which
+    /// runs on the PRE-AGC level so the AGC's boost can't fool the squelch (stays 0 if a capture path
+    /// skips the InputCapture seam).
+    dcd_blocks_processed: u64,
     /// Monotonic count of frames emitted at the single TX seam (`stage_emit_output`) — every
     /// transmit path (data, FEC, ACK, retransmit, QSY, ID) increments it once. A pollable
     /// TX-activity signal for the daemon's periodic station-ID timer (REQ-REG-10).
@@ -435,6 +439,7 @@ impl ModemEngine {
             agc: openpulse_dsp::agc::Agc::new(0.3, 0.02, 40.0),
             agc_blocks_processed: 0,
             dc_blocks_processed: 0,
+            dcd_blocks_processed: 0,
             frames_transmitted: 0,
         }
     }
@@ -461,6 +466,12 @@ impl ModemEngine {
     /// the daemon runs, the receive path isn't reaching the front-end seam.
     pub fn notch_blocks_processed(&self) -> u64 {
         self.notch_blocks_processed
+    }
+
+    /// Tripwire count of capture blocks the DCD carrier detector processed at the seam. DCD runs on the
+    /// PRE-AGC level, so an enabled AGC's boost can't push sub-squelch noise over the busy threshold.
+    pub fn dcd_blocks_processed(&self) -> u64 {
+        self.dcd_blocks_processed
     }
 
     /// Monotonic count of frames emitted at the TX seam. The daemon polls the delta to detect
@@ -1130,7 +1141,6 @@ impl ModemEngine {
     ) -> Result<Vec<u8>, ModemError> {
         let samples = self.stage_capture_input(None, device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
-        self.ota_update_dcd(&samples);
 
         let (decoded, ack_frame, last_err) = self.ota_decode_and_ack(&samples, session_id)?;
         self.transmit_ack_with_short_fec(&ack_frame, device)?;
@@ -1167,7 +1177,6 @@ impl ModemEngine {
     ) -> Result<Option<OtaRxResult>, ModemError> {
         let samples = self.stage_capture_input(None, device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
-        self.ota_update_dcd(&samples);
 
         if samples.samples.is_empty() || self.dcd.energy() < self.dcd.threshold() {
             return Ok(None);
@@ -1192,10 +1201,14 @@ impl ModemEngine {
         Ok(Some(OtaRxResult { payload, ack, mode }))
     }
 
-    /// Update DCD from a captured window, emitting a `DcdChange` event on a flip.
-    fn ota_update_dcd(&mut self, samples: &AudioSamples) {
+    /// Update DCD from a captured window at the InputCapture seam, emitting a `DcdChange` event on a
+    /// flip. Called on the PRE-AGC (post-notch) samples so the carrier detector measures the true channel
+    /// level: an enabled AGC that has boosted its gain must not push sub-squelch noise over the busy
+    /// threshold (that self-sustaining "held gain × noise → busy forever" deadlock wedged CSMA TX).
+    fn update_dcd_at_seam(&mut self, samples: &[f32]) {
+        self.dcd_blocks_processed = self.dcd_blocks_processed.wrapping_add(1);
         let prev_busy = self.dcd.is_busy();
-        self.dcd.update(&samples.samples);
+        self.dcd.update(samples);
         if self.dcd.is_busy() != prev_busy {
             let _ = self.event_tx.send(EngineEvent::DcdChange {
                 busy: self.dcd.is_busy(),
@@ -1269,17 +1282,14 @@ impl ModemEngine {
         &mut self,
         samples: AudioSamples,
     ) -> Result<Option<AudioSamples>, ModemError> {
+        // DCD is updated inside the seam on the PRE-AGC level; gate burst accumulation on that
+        // true-channel energy, not the AGC-boosted sample RMS (which would latch a boosted noise floor
+        // as a permanent "carrier present").
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
-        self.ota_update_dcd(&samples);
+        let carrier_present =
+            !samples.samples.is_empty() && self.dcd.energy() >= self.dcd.threshold();
 
-        let n = samples.samples.len();
-        let rms = if n == 0 {
-            0.0
-        } else {
-            (samples.samples.iter().map(|s| s * s).sum::<f32>() / n as f32).sqrt()
-        };
-
-        if n > 0 && rms >= self.dcd.threshold() {
+        if carrier_present {
             // Carrier present: keep accumulating this burst.
             self.rx_burst.extend_from_slice(&samples.samples);
             self.rx_capturing = true;
@@ -2278,7 +2288,6 @@ impl ModemEngine {
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
-        self.dcd.update(&samples.samples);
         let now_busy = self.dcd.is_busy();
         if now_busy != prev_busy {
             let _ = self.event_tx.send(EngineEvent::DcdChange {
@@ -2386,7 +2395,6 @@ impl ModemEngine {
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
-        self.dcd.update(&samples.samples);
         if self.dcd.is_busy() != prev_busy {
             let _ = self.event_tx.send(EngineEvent::DcdChange {
                 busy: self.dcd.is_busy(),
@@ -2544,7 +2552,6 @@ impl ModemEngine {
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
-        self.dcd.update(&samples.samples);
         if self.dcd.is_busy() != prev_busy {
             let _ = self.event_tx.send(EngineEvent::DcdChange {
                 busy: self.dcd.is_busy(),
@@ -2881,7 +2888,6 @@ impl ModemEngine {
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
-        self.dcd.update(&samples.samples);
         if self.dcd.is_busy() != prev_busy {
             let _ = self.event_tx.send(EngineEvent::DcdChange {
                 busy: self.dcd.is_busy(),
@@ -2968,7 +2974,6 @@ impl ModemEngine {
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
-        self.dcd.update(&samples.samples);
         if self.dcd.is_busy() != prev_busy {
             let _ = self.event_tx.send(EngineEvent::DcdChange {
                 busy: self.dcd.is_busy(),
@@ -3062,7 +3067,6 @@ impl ModemEngine {
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
-        self.dcd.update(&samples.samples);
         if self.dcd.is_busy() != prev_busy {
             let _ = self.event_tx.send(EngineEvent::DcdChange {
                 busy: self.dcd.is_busy(),
@@ -3153,7 +3157,6 @@ impl ModemEngine {
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
-        self.dcd.update(&samples.samples);
         if self.dcd.is_busy() != prev_busy {
             let _ = self.event_tx.send(EngineEvent::DcdChange {
                 busy: self.dcd.is_busy(),
@@ -3242,7 +3245,6 @@ impl ModemEngine {
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
-        self.dcd.update(&samples.samples);
         if self.dcd.is_busy() != prev_busy {
             let _ = self.event_tx.send(EngineEvent::DcdChange {
                 busy: self.dcd.is_busy(),
@@ -3385,7 +3387,6 @@ impl ModemEngine {
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
-        self.dcd.update(&samples.samples);
         if self.dcd.is_busy() != prev_busy {
             let _ = self.event_tx.send(EngineEvent::DcdChange {
                 busy: self.dcd.is_busy(),
@@ -3488,7 +3489,6 @@ impl ModemEngine {
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
-        self.dcd.update(&samples.samples);
         if self.dcd.is_busy() != prev_busy {
             let _ = self.event_tx.send(EngineEvent::DcdChange {
                 busy: self.dcd.is_busy(),
@@ -3572,15 +3572,6 @@ impl ModemEngine {
             let samples = self.stage_capture_input(Some(mode), device)?;
             let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
-            let prev_busy = self.dcd.is_busy();
-            self.dcd.update(&samples.samples);
-            if self.dcd.is_busy() != prev_busy {
-                let _ = self.event_tx.send(EngineEvent::DcdChange {
-                    busy: self.dcd.is_busy(),
-                    energy: self.dcd.energy(),
-                });
-            }
-
             combiner.push(&samples.samples);
         }
 
@@ -3659,15 +3650,6 @@ impl ModemEngine {
         for i in 0..n_frames {
             let samples = self.stage_capture_input(Some(mode), device)?;
             let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
-
-            let prev_busy = self.dcd.is_busy();
-            self.dcd.update(&samples.samples);
-            if self.dcd.is_busy() != prev_busy {
-                let _ = self.event_tx.send(EngineEvent::DcdChange {
-                    busy: self.dcd.is_busy(),
-                    energy: self.dcd.energy(),
-                });
-            }
 
             // Update AFC from the first captured frame; no extra clone needed.
             if i == 0 {
@@ -3781,15 +3763,6 @@ impl ModemEngine {
             let samples = self.stage_capture_input(Some(mode), device)?;
             let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
-            let prev_busy = self.dcd.is_busy();
-            self.dcd.update(&samples.samples);
-            if self.dcd.is_busy() != prev_busy {
-                let _ = self.event_tx.send(EngineEvent::DcdChange {
-                    busy: self.dcd.is_busy(),
-                    energy: self.dcd.energy(),
-                });
-            }
-
             if i == 0 {
                 self.update_afc_estimate(mode, &samples.samples);
                 if let Some(hz) = self.last_afc_offset_hz {
@@ -3901,7 +3874,6 @@ impl ModemEngine {
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
-        self.dcd.update(&samples.samples);
         if self.dcd.is_busy() != prev_busy {
             let _ = self.event_tx.send(EngineEvent::DcdChange {
                 busy: self.dcd.is_busy(),
@@ -4140,7 +4112,6 @@ impl ModemEngine {
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
-        self.dcd.update(&samples.samples);
         if self.dcd.is_busy() != prev_busy {
             let _ = self.event_tx.send(EngineEvent::DcdChange {
                 busy: self.dcd.is_busy(),
@@ -4253,7 +4224,6 @@ impl ModemEngine {
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         let prev_busy = self.dcd.is_busy();
-        self.dcd.update(&samples.samples);
         if self.dcd.is_busy() != prev_busy {
             let _ = self.event_tx.send(EngineEvent::DcdChange {
                 busy: self.dcd.is_busy(),
@@ -4521,6 +4491,9 @@ impl ModemEngine {
                 let mode = self.rx_mode.clone();
                 samples = self.apply_rx_notch(mode.as_deref(), samples);
             }
+            // Carrier detect BEFORE the AGC, on the true (pre-boost) level. The AGC only normalises the
+            // level for the demodulator; the squelch/CSMA must see the real channel energy.
+            self.update_dcd_at_seam(&samples);
             if self.agc_enabled {
                 self.agc_blocks_processed = self.agc_blocks_processed.wrapping_add(1);
                 samples = self.apply_rx_agc(samples);
