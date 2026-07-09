@@ -16,6 +16,7 @@ pub mod channel;
 pub mod demodulate;
 pub mod modulate;
 pub mod params;
+pub mod scramble;
 
 use openpulse_core::{
     error::ModemError,

@@ -211,6 +211,8 @@ fn demodulate_with_params(samples: &[f32], p: &OfdmParams) -> Result<Vec<u8>, Mo
         }
     }
 
+    // Undo the transmitter's bit-stream whitening (self-inverse) before the length prefix / payload.
+    crate::scramble::scramble_bits(&mut bits);
     let raw = bits_to_bytes(&bits);
 
     // Strip the majority-protected length prefix.
@@ -335,6 +337,9 @@ fn demodulate_soft_with_params(samples: &[f32], p: &OfdmParams) -> Result<Vec<f3
             llrs.extend(symbol_llrs(*sym, p.bits_per_sc, noise_var, &points));
         }
     }
+
+    // Undo the transmitter's bit-stream whitening: a keystream 1 flips the bit, i.e. the LLR sign.
+    crate::scramble::descramble_llrs(&mut llrs);
 
     // Decode the majority-protected length prefix from the first 48 LLRs
     // (soft-combining the three copies) to recover the actual payload bit

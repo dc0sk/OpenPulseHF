@@ -9,6 +9,31 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-09 — fix(ofdm): whiten the bit stream so CE-SSB can't crush low-entropy frames
+
+- **Requirement/change:** audit found default-on CE-SSB breaks OFDM+FEC on a *clean* channel for
+  low-entropy / RS-padded payloads. Independently reproduced (repeated-`0x5A`: fails CE-SSB on, passes off).
+- **Root cause (verified):** a zero-run / repeated-byte payload maps every OFDM data subcarrier to the same
+  constellation point; the IDFT of a constant spectrum is a time-domain impulse train (very high PAPR). The
+  engine's CE-SSB peak-stretch conditioner (`stage_emit_output`, gated to QPSK-OFDM by `cessb_benefits`)
+  then crushes it and the frame fails to decode even at ∞ SNR. RS padding of short frames triggers it in
+  normal operation, so it is not merely a synthetic-payload edge case.
+- **Design decision:** keep CE-SSB (a deliberately-tuned, on-air-validated +1.18 dB conditioner) and fix the
+  *source* — whiten the modulated bit stream, the standard OFDM practice (DVB-T / 802.11). A fixed,
+  position-indexed keystream decorrelates the subcarriers so no payload can produce the impulse train; it
+  needs no negotiation (identical both ends) and is a pre-release wire-format change. Applied at the plugin's
+  own `bytes_to_bits` seam (covers the low-entropy length prefix too), self-inverse on the hard path, LLR
+  sign-flip on the soft path.
+- **Implementation:** `plugins/ofdm/src/scramble.rs` (`scramble_bits`, `descramble_llrs`); wired in
+  `modulate.rs` (after `bytes_to_bits`) and `demodulate.rs` (hard bits before `bits_to_bytes`; soft LLRs
+  before `decode_len_prefix_llrs`).
+- **Tests:** `plugins/ofdm/src/scramble.rs` units (self-inverse, whitens all-zeros, soft/hard agree);
+  `crates/openpulse-modem/tests/cessb_ofdm_lowentropy.rs` — low-entropy OFDM52+Rs (4 payloads incl.
+  all-zero/padded) and OFDM52+SoftConcatenated decode with CE-SSB on; high-entropy unaffected both states.
+- **Test results (actually run):** new gates pass; `ofdm-plugin` 35/35; existing `cessb_engine` 4 and
+  `channel_loopback` 12 unchanged (no OFDM regression); `cargo test --workspace --exclude pki-tooling
+  --no-default-features` all pass; clippy `-D warnings` clean; fmt clean.
+
 ## 2026-07-09 — fix(dsp): correct the inverted LMS DFE feedback-update sign
 
 - **Requirement/change:** an audit (Fable, 5-stream) flagged the LMS decision-feedback section as
