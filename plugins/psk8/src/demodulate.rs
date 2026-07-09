@@ -272,7 +272,14 @@ fn extract_data_symbols(
         carrier_phase_correct(&rrc_syms, config.afc_correction_hz)
     } else {
         let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
-        let raw = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
+        let mut raw = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
+        // Undo the transmitter's raised-cosine crossfade before any carrier/equalizer stage; the ISI is
+        // on the next (anti-causal) symbol, so the downstream DFE cannot reach it.  Only the plain
+        // (crossfade) pulse leaks the neighbour — the cosine-overlap `sin²` pulse is per-symbol and has
+        // no crossfade, so cancellation there would inject error.
+        if !cosine_overlap {
+            cancel_crossfade_isi(&mut raw, crossfade_isi_beta(n));
+        }
         let phase_corrected = carrier_phase_correct(&raw, config.afc_correction_hz);
         carrier_pll_track(&phase_corrected)
     };
@@ -725,6 +732,57 @@ fn carrier_pll_track(syms: &[(f32, f32)]) -> Vec<(f32, f32)> {
     let (_, freq) = dd_track_seeded(syms, ACQUIRE_BW, 0.0);
     let (out, _) = dd_track_seeded(syms, TRACK_BW, freq);
     out
+}
+
+/// ISI coefficient of the rectangular ("plain") 8PSK pulse's raised-cosine crossfade, for the
+/// squared-cosine matched window this plugin's `demodulate_symbols` uses.
+///
+/// The modulator blends adjacent symbols: sample `i` of slot `k` is `sym_k·w_tail(i) + sym_{k+1}·w_head(i)`
+/// with `w_tail = ½(1+cos πi/n)`, `w_head = 1−w_tail`.  The matched one-slot demod integrates against
+/// `w_tail²`, so it recovers `A·(sym_k + β·sym_{k+1})` where `β = Σ w_head·w_tail² / Σ w_tail³` and the
+/// common scale `A = Σ w_tail³ / Σ w_tail⁴` divides out.  Unlike QPSK's un-squared window (β = ⅓,
+/// n-independent), the cubed/quartic weighting makes β vary with the oversampling — 0.182 at n = 16
+/// (8PSK500), 0.167 at n = 8 (8PSK1000) — so it is computed from the actual window rather than a constant.
+fn crossfade_isi_beta(n: usize) -> f32 {
+    let mut sum_head_tail2 = 0.0f32;
+    let mut sum_tail3 = 0.0f32;
+    for i in 0..n {
+        let w_tail = 0.5 * (1.0 + (PI * i as f32 / n as f32).cos());
+        let w_head = 1.0 - w_tail;
+        sum_head_tail2 += w_head * w_tail * w_tail;
+        sum_tail3 += w_tail * w_tail * w_tail;
+    }
+    if sum_tail3 > 1e-9 {
+        sum_head_tail2 / sum_tail3
+    } else {
+        0.0
+    }
+}
+
+/// Remove the crossfade ISI from a rectangular-8PSK symbol projection stream in place.
+///
+/// `p_k = A·(sym_k + β·sym_{k+1})` is bidiagonal, so `s_k = p_k − β·s_{k+1}` recovers the (uniformly
+/// scaled) symbols exactly by back-substitution.  The recursion is stable — each step scales the running
+/// error by `β < 0.2`, so it decays backward — and the terminal is exact: the modulator sets the last
+/// data symbol's successor to zero.  Noise is amplified by only `1/(1−β²) ≈ 1.03`.
+///
+/// The ISI is anti-causal (the *next* symbol), so the downstream decision-feedback equalizer — which
+/// feeds back *past* decisions — cannot cancel it; left in, it floors the recovered-symbol EVM at
+/// `β² ≈ −15 dB` regardless of SNR, which caps every soft consumer (HARQ combining, soft FEC).
+fn cancel_crossfade_isi(symbols: &mut [(f32, f32)], beta: f32) {
+    for k in (0..symbols.len().saturating_sub(1)).rev() {
+        symbols[k].0 -= beta * symbols[k + 1].0;
+        symbols[k].1 -= beta * symbols[k + 1].1;
+    }
+}
+
+/// Test-only accessor: return the equalized, crossfade-cancelled data symbols (preamble/tail stripped).
+#[doc(hidden)]
+pub fn extract_data_symbols_for_test(
+    samples: &[f32],
+    config: &ModulationConfig,
+) -> Result<Vec<(f32, f32)>, ModemError> {
+    extract_data_symbols(samples, config)
 }
 
 fn demodulate_symbols(

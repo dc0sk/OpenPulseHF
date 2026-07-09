@@ -9,6 +9,40 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-09 — fix(psk8): cancel the rectangular-pulse crossfade ISI (and gate QPSK's cancellation)
+
+- **Requirement/change:** the PR-#687 calibration probe found QPSK/8PSK `mean(|LLR|)` stops tracking SNR
+  above ~12 dB. QPSK was traced and fixed in #695; this closes the 8PSK half.
+- **Root cause (measured + derived):** 8PSK's rectangular modulator uses the *identical* raised-cosine
+  crossfade as QPSK (`sym_k·w_tail + sym_{k+1}·w_head`, `w_tail = ½(1+cos πi/n)`), but its matched
+  one-slot demod integrates against the **squared** window `w_tail²` (not QPSK's un-squared `w_tail`). So
+  it recovers `A·(sym_k + β·sym_{k+1})` with `β = Σ w_head·w_tail² / Σ w_tail³` and the common scale
+  `A = Σ w_tail³ / Σ w_tail⁴` dividing out. Unlike QPSK's `β = ⅓` (n-independent), the cubed/quartic
+  weighting makes β **vary with oversampling**: 0.182 at n=16 (8PSK500), 0.167 at n=8 (8PSK1000). Measured
+  recovered-symbol EVM floored at **−13.7 dB (8PSK500) / −12.2 dB (8PSK1000)** from ~16 dB SNR upward. The
+  ISI is anti-causal (next symbol), so the DFE cannot reach it; hard decisions are unaffected (±22.5°
+  8PSK margin), so no BER test caught it.
+- **Design decision:** back-substitution `s_k = p_k − β·s_{k+1}` (bidiagonal, stable — error scales by
+  `β < 0.2` per step, exact terminal since the modulator zeroes the last symbol's successor; noise gain
+  `1/(1−β²) ≈ 1.03`). β is **computed from the actual window per-n** rather than hard-coded, because it is
+  not n-independent for the squared window. Applied on the plain rectangular demod path only, after
+  `demodulate_symbols`, before carrier/equalizer — **gated to `!cosine_overlap`**: the cosine-overlap
+  (`-HF`) pulse is a per-symbol `sin²` bump with no crossfade, so cancelling there injects error. The same
+  gate was added to QPSK #695, which ran the cancellation unconditionally on its non-RRC path (a latent
+  soft-path corruption of the `QPSK1000-HF` cosine-overlap mode that its BER-tolerant round-trip test
+  could not see).
+- **Implementation:** `plugins/psk8/src/demodulate.rs` — `crossfade_isi_beta(n)`, `cancel_crossfade_isi`,
+  called in `extract_data_symbols` under `if !cosine_overlap`; `extract_data_symbols_for_test` accessor.
+  `plugins/qpsk/src/demodulate.rs` — both cancellation call sites now `if !cosine_overlap`.
+- **Tests:** `plugins/psk8/tests/crossfade_isi.rs` — `evm_clears_the_crossfade_floor_at_high_snr`
+  (8PSK500 < −18 dB, 8PSK1000 < −14 dB @40 dB), `cosine_overlap_hf_mode_stays_clean` (8PSK1000-HF < −30 dB).
+- **Test results (actually run):** 8PSK EVM @40 dB: 8PSK500 **−13.7→−20.0 dB** (Δ6.3), 8PSK1000
+  **−12.2→−14.7 dB** (Δ2.5; capped by the separate 8-sps timing residual, same as QPSK1000), 8PSK1000-HF
+  −45.7 dB unchanged (correctly gated). `cargo test -p psk8-plugin --no-default-features` all pass;
+  `cargo test -p qpsk-plugin` 39 pass (QPSK guard did not regress `QPSK1000-HF` round-trips);
+  `openpulse-modem` `llr_calibration` 2/2 pass; `cargo test --workspace --exclude pki-tooling
+  --no-default-features` all pass; clippy `-D warnings` clean; fmt clean.
+
 ## 2026-07-09 — fix(qpsk): cancel the rectangular-pulse crossfade ISI
 
 - **Requirement/change:** the PR-#687 calibration probe found QPSK/8PSK `mean(|LLR|)` stops tracking SNR
