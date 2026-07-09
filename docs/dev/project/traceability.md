@@ -9,6 +9,32 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-09 — fix(engine): carrier-detect before the AGC so its boost can't wedge the squelch
+
+- **Requirement/change:** audit found an AGC/DCD seam-ordering deadlock. Reproduced independently (weak
+  burst → +26.5 dB gain → sub-squelch noise reads busy with AGC on, clear with AGC off).
+- **Root cause (verified):** the AGC lives inside the `route_audio_stage(InputCapture)` seam, but every
+  `dcd.update` ran on the samples the seam *returns* — i.e. POST-AGC. Once a weak burst ramps the gain and
+  the active-span gate freezes it through silence, the held gain multiplies sub-squelch band noise back
+  over the DCD busy threshold, so the channel reads "busy" forever and CSMA never releases TX. Self-
+  sustaining (the same lock-gate that freezes the gain keeps it high). Same seam-gap class as the notch
+  bug (#556/#557), reversed.
+- **Design decision:** DCD is a squelch — it must measure the true channel level, not the AGC-normalised
+  demod level. Move the DCD update into the single seam, positioned after DC-block+notch but **before**
+  AGC, so every capture path gets pre-AGC carrier detect by construction; add a `dcd_blocks_processed`
+  tripwire (per the seam checklist). The daemon burst-gate (`accumulate_routed`) now gates on the seam's
+  pre-AGC `dcd.energy()` instead of recomputing a post-AGC RMS.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` — `update_dcd_at_seam` (pre-AGC, event +
+  tripwire) called in `route_audio_stage(InputCapture)`; removed the 18 redundant post-AGC DCD updates
+  (16 direct + 2 `ota_update_dcd` calls + 3 inline `DcdChange` blocks folded into the seam helper);
+  `accumulate_routed` gate switched to `dcd.energy()`.
+- **Tests:** `crates/openpulse-modem/tests/dcd_pre_agc.rs` — after a weak burst boosts the gain, sub-
+  squelch noise leaves `dcd_energy()` at the true ~0.001 level (< 0.01), not the boosted ~0.02; tripwire
+  increments on the `accumulate_capture` path.
+- **Test results (actually run):** new gate passes; `csma_loopback` 4, `agc_loopback` 4, `engine_events`
+  8, `notch_loopback` 4 all unchanged; `cargo test --workspace --exclude pki-tooling --no-default-features`
+  all pass; clippy `-D warnings` clean; fmt clean.
+
 ## 2026-07-09 — fix(ofdm): whiten the bit stream so CE-SSB can't crush low-entropy frames
 
 - **Requirement/change:** audit found default-on CE-SSB breaks OFDM+FEC on a *clean* channel for
