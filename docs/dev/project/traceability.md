@@ -9,6 +9,27 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-09 — fix(channel): normalise Watterson total path power (drop the +3 dB hot bias)
+
+- **Requirement/change:** audit (measurement layer) found Watterson delivers ~+3 dB more SNR than
+  configured, so every fading SNR label / ladder-floor margin is ~3 dB optimistic. Reproduced (delivered
+  signal power ≈ 2× input).
+- **Root cause (verified):** both `apply` and `apply_complex` sum two rays each with `E[|h|²]=1` →
+  summed signal power 2, while the additive noise is keyed to the *input* RMS (power 1). Delivered
+  SNR = labelled + 3 dB, for delay 0 and delay > 0 alike.
+- **Design decision:** normalise total path power to 1 by scaling each equal-power ray by
+  `1/√(#rays) = 1/√2` (standard Watterson convention). Signal power out = input, so the input-keyed noise
+  yields the labelled SNR.
+- **Implementation:** `crates/openpulse-channel/src/watterson.rs` — `ray_scale = 1/√2` applied to both
+  rays in `apply` and `apply_complex`.
+- **Tests:** `total_path_power_normalized_to_unity` — at 60 dB SNR (noise negligible), mean(out²)/mean(in²)
+  ∈ [0.75, 1.35] (≈1.0), catching the ≈2.0 regression.
+- **Test results (actually run):** new guard passes (ratio ≈ 1.0); **zero cascade** — the full
+  `cargo test --workspace --exclude pki-tooling --no-default-features` still passes (fading tests are
+  outage/threshold-dominated with margin to absorb the 3 dB), so no decode-guard recalibration was needed;
+  channel crate 46 tests pass; clippy `-D warnings` clean; fmt clean. NOTE: fading SNR *labels* in test
+  reports are now ~3 dB harder (i.e. honest); ladder floors calibrated on AWGN are unaffected.
+
 ## 2026-07-09 — fix(dsp): level-normalise before PSK carrier recovery (no-AGC coupling)
 
 - **Requirement/change:** audit found a quiet station with a small sub-deadband carrier offset fails with
