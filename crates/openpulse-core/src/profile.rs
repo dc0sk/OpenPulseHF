@@ -372,16 +372,16 @@ impl SessionProfile {
         // |  7 | QPSK250           | —   |    500  |   9   |                                       |
         // |  8 | QPSK500           | —   |   1000  |  11   |                                       |
         // |  9 | 8PSK500           | Rs  |   1312  |  12   |                                       |
-        // | 10 | SCFDMA26-32QAM    | SC  |   1579  |  13   | ~1 kHz FDE-robust rung                |
-        // | 11 | SCFDMA52-8PSK     | SC  |   1895  |  14   |                                       |
-        // | 12 | SCFDMA52-16QAM    | SC  |   2527  |  16   |                                       |
-        // | 13 | SCFDMA52-32QAM    | SC  |   3159  |  17   |                                       |
-        // | 14 | SCFDMA52-64QAM-P4 | SC  |   3571  |  19   | dense pilots split the 17→22 dB gap   |
-        // | 15 | SCFDMA52-64QAM    | SC  |   3790  |  22   |                                       |
-        // | 16 | SCFDMA52-16QAM    | LHR |   5141  |  23   | LDPC r≈8/9: the only way past 64QAM+SC|
-        // | 17 | SCFDMA52-32QAM    | LHR |   6426  |  24   |                                       |
-        // | 18 | SCFDMA52-64QAM-P4 | LHR |   7265  |  28   |                                       |
-        // | 19 | SCFDMA52-64QAM    | LHR |   7710  |  30   | ladder top                            |
+        // | 10 | SCFDMA26-32QAM    | SC  |   1579  |  13   | ~1 kHz narrowband fallback (kept SC)  |
+        // | 11 | OFDM52-8PSK       | SC  |   1895  |  14   | wideband dense rungs re-seated to OFDM|
+        // | 12 | OFDM52-16QAM      | SC  |   2527  |  16   | (CP rides selective HF fade)          |
+        // | 13 | OFDM52-32QAM      | SC  |   3159  |  17   |                                       |
+        // | 14 | OFDM52-64QAM      | SC  |   3571  |  19   | (was SCFDMA52-64QAM-P4; dup of SL15)  |
+        // | 15 | OFDM52-64QAM      | SC  |   3790  |  22   |                                       |
+        // | 16 | OFDM52-16QAM      | LHR |   5141  |  23   | LDPC r≈8/9 top-of-ladder rate lever   |
+        // | 17 | OFDM52-32QAM      | LHR |   6426  |  24   |                                       |
+        // | 18 | OFDM52-64QAM      | LHR |   7265  |  28   | (was SCFDMA52-64QAM-P4; dup of SL19)  |
+        // | 19 | OFDM52-64QAM      | LHR |   7710  |  30   | ladder top                            |
         //
         // All SC-FDMA rungs are ≤2 kHz occupied, so they belong on the HF ladder rather than a separate
         // "wideband" profile. The narrowband SCFDMA26-* fallbacks also live in `hpx_wideband_hd`.
@@ -411,16 +411,26 @@ impl SessionProfile {
         modes[SpeedLevel::Sl7 as usize] = Some("QPSK250");
         modes[SpeedLevel::Sl8 as usize] = Some("QPSK500");
         modes[SpeedLevel::Sl9 as usize] = Some("8PSK500");
+        // The wideband dense rungs are OFDM, not SC-FDMA: at equal gross rate (identical 52-SC / 32-CP /
+        // 13-pilot geometry) OFDM's cyclic prefix rides through frequency-selective HF fading that
+        // SC-FDMA's ±10-sample CE/sync cannot represent. Measured (coded frame-success, matched Watterson
+        // draws, `tests/ofdm_scfdma_bakeoff.rs`): moderate_f1 @20 dB 16QAM OFDM 0.88 vs SCFDMA 0.35;
+        // moderate_f2 @20 dB 16QAM OFDM 0.93 vs SCFDMA 0.03 (SC-FDMA flat across SNR = a structural
+        // delay-cliff, not a noise limit). Benign channels do not regress (AWGN/good_f1 within ±0.04).
+        // SL10 stays SC-FDMA: it is the narrowband ~1 kHz fallback (26 SCs), an SNR/interference role with
+        // no OFDM equivalent (OFDM has only 16- and 52-SC modes). The former P4 (dense-pilot) rungs SL14/
+        // SL18 fold onto plain OFDM52-64QAM — OFDM's CP makes the dense-pilot delay trick unnecessary — so
+        // they now duplicate SL15/SL19 (a redundant step to be re-indexed out in a later pre-release pass).
         modes[SpeedLevel::Sl10 as usize] = Some("SCFDMA26-32QAM");
-        modes[SpeedLevel::Sl11 as usize] = Some("SCFDMA52-8PSK");
-        modes[SpeedLevel::Sl12 as usize] = Some("SCFDMA52-16QAM");
-        modes[SpeedLevel::Sl13 as usize] = Some("SCFDMA52-32QAM");
-        modes[SpeedLevel::Sl14 as usize] = Some("SCFDMA52-64QAM-P4");
-        modes[SpeedLevel::Sl15 as usize] = Some("SCFDMA52-64QAM");
-        modes[SpeedLevel::Sl16 as usize] = Some("SCFDMA52-16QAM");
-        modes[SpeedLevel::Sl17 as usize] = Some("SCFDMA52-32QAM");
-        modes[SpeedLevel::Sl18 as usize] = Some("SCFDMA52-64QAM-P4");
-        modes[SpeedLevel::Sl19 as usize] = Some("SCFDMA52-64QAM");
+        modes[SpeedLevel::Sl11 as usize] = Some("OFDM52-8PSK");
+        modes[SpeedLevel::Sl12 as usize] = Some("OFDM52-16QAM");
+        modes[SpeedLevel::Sl13 as usize] = Some("OFDM52-32QAM");
+        modes[SpeedLevel::Sl14 as usize] = Some("OFDM52-64QAM");
+        modes[SpeedLevel::Sl15 as usize] = Some("OFDM52-64QAM");
+        modes[SpeedLevel::Sl16 as usize] = Some("OFDM52-16QAM");
+        modes[SpeedLevel::Sl17 as usize] = Some("OFDM52-32QAM");
+        modes[SpeedLevel::Sl18 as usize] = Some("OFDM52-64QAM");
+        modes[SpeedLevel::Sl19 as usize] = Some("OFDM52-64QAM");
         // Per-level FEC (MODCOD). SL6 = coded QPSK250 (Rs) — a robustness rung that trades ~13%
         // throughput for a ~2 dB lower floor than the uncoded SL7. SL9 8PSK500 keeps *light* RS (net
         // ~1312 bps, above QPSK500's 1000, so it stays a faster rung). The dense SC-FDMA rungs get
@@ -445,10 +455,11 @@ impl SessionProfile {
         // ladder. Placed between neighbours from the AWGN sweeps (`calibrate_ladder_gap_fillers` +
         // `calibrate_snr_floors_hpx_hf`, lower bounds in parens) with the low-order rungs' fading
         // margin: SL4 BPSK100 (≤0), SL6 QPSK250+Rs (4), SL9 8PSK500+Rs (9), SL10 SCFDMA26-32QAM+SC (8),
-        // SL11 SCFDMA52-8PSK+SC (8), SL12 SCFDMA52-16QAM+SC (9), SL13 SCFDMA52-32QAM+SC (8 — 2D-Gray
-        // remap #616), SL14 SCFDMA52-64QAM-P4+SC (17), SL15 SCFDMA52-64QAM+SC (15). The whole
-        // single-carrier segment fails moderate_f1 fading by design (the ladder downshifts past it).
-        // Re-run both sweeps if the DSP changes.
+        // SL11 OFDM52-8PSK+SC (8), SL12 OFDM52-16QAM+SC (9), SL13 OFDM52-32QAM+SC (8), SL14/SL15
+        // OFDM52-64QAM+SC (15). Floors are the SC-FDMA AWGN calibration; OFDM is at least as good on AWGN
+        // (bake-off ties) and far better on fading, so these stay conservative. Unlike the retired
+        // single-carrier segment, the OFDM rungs actually hold up under moderate_f1 fading (its cyclic
+        // prefix rides the delay spread). Re-run both sweeps if the DSP changes.
         let mut snr_floors = [None; 21];
         snr_floors[SpeedLevel::Sl2 as usize] = Some(3.0_f32);
         snr_floors[SpeedLevel::Sl3 as usize] = Some(4.0_f32);

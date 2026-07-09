@@ -5,14 +5,16 @@
 //! never fit the daemon's async, per-MODCOD OTA flow — the diversity gain it measured never reached
 //! the air. This wires it in: `ota_decode_and_ack` now retains the soft LLRs of a *failed* burst,
 //! keyed by `(session, mode)`, and MAP-combines them with the next burst of the same mode before
-//! giving up. On `moderate_f1` the dense SC-FDMA rungs fail by deep-fade outage, where independent
-//! retransmissions carry complementary information and only their sum decodes.
+//! giving up. On `moderate_f1` near a rung's threshold each burst is a partially-ruined observation of
+//! the same bits; summing their calibrated LLRs across independent fade realisations decodes frames no
+//! single burst can. Exercised here on SL12 (`OFDM52-16QAM` after the SC-FDMA→OFDM re-seat).
 //!
 //! The gate: over many fade realisations, a single engine that retains and combines across three
 //! sequential bursts must decode more frames than three *independent* engines each decoding one burst
 //! standalone. That gap is the diversity the retention adds; a regression that drops the retained LLRs
 //! (or clears them too eagerly) collapses it back to the standalone baseline.
 
+use ofdm_plugin::OfdmPlugin;
 use openpulse_audio::LoopbackBackend;
 use openpulse_channel::{watterson::WattersonChannel, ChannelModel, WattersonConfig};
 use openpulse_core::fec::FecMode;
@@ -20,24 +22,23 @@ use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::SpeedLevel;
 use openpulse_modem::engine::ModemEngine;
 use openpulse_modem::pipeline::AudioSamples;
-use scfdma_plugin::ScFdmaPlugin;
 
 const PAYLOAD: &[u8] = b"OTA HARQ combining gate payload, sixty-four bytes AAAAAAAAAAA";
-const MODE: &str = "SCFDMA52-16QAM"; // hpx_hf SL12 = SCFDMA52-16QAM + SoftConcatenated
+const MODE: &str = "OFDM52-16QAM"; // hpx_hf SL12 = OFDM52-16QAM + SoftConcatenated (post SC-FDMA→OFDM re-seat)
 const FEC: FecMode = FecMode::SoftConcatenated;
 const SESSION: &str = "harq-sess";
 const TRIALS: u32 = 50;
 const ATTEMPTS: usize = 3;
-const SNR_DB: f32 = 14.0;
+const SNR_DB: f32 = 10.0;
 
 fn make() -> (ModemEngine, LoopbackBackend) {
     let backend = LoopbackBackend::new();
     let mut engine = ModemEngine::new(Box::new(backend.clone_shared()));
     engine
-        .register_plugin(Box::new(ScFdmaPlugin::new()))
+        .register_plugin(Box::new(OfdmPlugin::new()))
         .expect("register");
     // Lock the receiver-led OTA controller to SL12 so `rx_candidates()` is exactly
-    // (SCFDMA52-16QAM, SoftConcatenated) — the soft rung HARQ combining acts on.
+    // (OFDM52-16QAM, SoftConcatenated) — the soft rung HARQ combining acts on.
     engine.start_ota_session(SessionProfile::hpx_hf());
     engine.ota_lock_level(SpeedLevel::Sl12);
     (engine, backend)

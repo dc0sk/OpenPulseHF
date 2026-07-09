@@ -176,20 +176,21 @@ fn hpx_hf_mode_mapping() {
     assert_eq!(p.mode_for(SpeedLevel::Sl7), Some("QPSK250")); // uncoded
     assert_eq!(p.mode_for(SpeedLevel::Sl8), Some("QPSK500"));
     assert_eq!(p.mode_for(SpeedLevel::Sl9), Some("8PSK500"));
-    // SL10–SL15: SC-FDMA rungs, all ≤2 kHz (HF-legal).
+    // SL10 stays SC-FDMA (narrowband ~1 kHz fallback); SL11–SL15 re-seated to OFDM (CP rides selective
+    // HF fade), all ≤2 kHz (HF-legal). SL14 folds the former P4 dense-pilot rung onto plain OFDM52-64QAM.
     assert_eq!(p.mode_for(SpeedLevel::Sl10), Some("SCFDMA26-32QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl11), Some("SCFDMA52-8PSK"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl12), Some("SCFDMA52-16QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl13), Some("SCFDMA52-32QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl14), Some("SCFDMA52-64QAM-P4"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl15), Some("SCFDMA52-64QAM"));
-    // SL16–SL19: the same four dense modes at high-rate LDPC (r≈8/9) — MODCOD pairs of SL12–SL15.
+    assert_eq!(p.mode_for(SpeedLevel::Sl11), Some("OFDM52-8PSK"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl12), Some("OFDM52-16QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl13), Some("OFDM52-32QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl14), Some("OFDM52-64QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl15), Some("OFDM52-64QAM"));
+    // SL16–SL19: the dense OFDM modes at high-rate LDPC (r≈8/9) — MODCOD pairs of SL12–SL15.
     // 64QAM is the densest constellation the plugin has, so above SL15 the only remaining lever on
     // throughput is code rate.
-    assert_eq!(p.mode_for(SpeedLevel::Sl16), Some("SCFDMA52-16QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl17), Some("SCFDMA52-32QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl18), Some("SCFDMA52-64QAM-P4"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl19), Some("SCFDMA52-64QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl16), Some("OFDM52-16QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl17), Some("OFDM52-32QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl18), Some("OFDM52-64QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl19), Some("OFDM52-64QAM"));
     assert_eq!(p.mode_for(SpeedLevel::Sl20), None);
     assert_eq!(
         p.fec_for(SpeedLevel::Sl16),

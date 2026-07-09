@@ -6,6 +6,7 @@
 //! only above SL15, where 64QAM is already the densest constellation the plugin has and code rate is
 //! the last lever left.
 
+use ofdm_plugin::OfdmPlugin;
 use openpulse_audio::LoopbackBackend;
 use openpulse_channel::{awgn::AwgnChannel, AwgnConfig};
 use openpulse_core::fec::FecMode;
@@ -20,7 +21,9 @@ const PAYLOAD: &[u8] = b"OTA SNR floor calibration payload, sixty-four bytes tot
 fn harness() -> ChannelSimHarness {
     let mut h = ChannelSimHarness::new();
     for e in [&mut h.tx_engine, &mut h.rx_engine] {
+        // SL10 stays SC-FDMA (narrowband); SL11+ are OFDM after the dense-rung re-seat.
         e.register_plugin(Box::new(ScFdmaPlugin::new())).unwrap();
+        e.register_plugin(Box::new(OfdmPlugin::new())).unwrap();
     }
     h
 }
@@ -63,6 +66,7 @@ fn airtime(mode: &str, fec: FecMode) -> usize {
     e.register_plugin(Box::new(psk8_plugin::Psk8Plugin::new()))
         .unwrap();
     e.register_plugin(Box::new(ScFdmaPlugin::new())).unwrap();
+    e.register_plugin(Box::new(OfdmPlugin::new())).unwrap();
     let payload: Vec<u8> = (0..213u32)
         .map(|i| (i.wrapping_mul(37) & 0xff) as u8)
         .collect();
@@ -71,14 +75,47 @@ fn airtime(mode: &str, fec: FecMode) -> usize {
     b.drain_samples().len()
 }
 
-/// The measured AWGN floors these rungs were placed from (90 % frame success, 32 frames, 1 dB grid).
-/// The profile adds the same +9 dB fading margin the SL11–SL15 rungs carry.
+/// The measured AWGN floors these rungs decode at (90 % frame success, 32 frames, 1 dB grid), after
+/// the SC-FDMA→OFDM re-seat — re-measured with `measure_ofdm_floors`. The conservative SC-FDMA-derived
+/// profile floors (SL16–SL19 = 23/24/28/30) are retained for now: OFDM works on fading where SC-FDMA
+/// did not, so those floors are a safe upper bound; tightening them to reclaim throughput is a
+/// follow-up calibration. (OFDM52-16QAM+LHR is slightly easier than SC-FDMA's was, 32QAM+LHR slightly
+/// harder — Fable's PAPR-clipping point on dense constellations over a clean channel.)
 const MEASURED_AWGN_FLOOR_DB: [(SpeedLevel, f32); 4] = [
-    (SpeedLevel::Sl16, 14.0),
-    (SpeedLevel::Sl17, 15.0),
-    (SpeedLevel::Sl18, 19.0),
-    (SpeedLevel::Sl19, 21.0),
+    (SpeedLevel::Sl16, 12.0),
+    (SpeedLevel::Sl17, 16.0),
+    (SpeedLevel::Sl18, 20.0),
+    (SpeedLevel::Sl19, 20.0),
 ];
+
+/// Probe: find the AWGN SNR at which each re-seated OFDM rung first clears 0.90 decode (32 frames),
+/// to recalibrate the floors after the SC-FDMA→OFDM re-seat. Run:
+///   cargo test -p openpulse-modem --no-default-features --test ldpc_ladder_rungs measure_ofdm_floors -- --ignored --nocapture
+#[test]
+#[ignore]
+fn measure_ofdm_floors() {
+    let rungs: [(&str, FecMode); 7] = [
+        ("OFDM52-8PSK", FecMode::SoftConcatenated),
+        ("OFDM52-16QAM", FecMode::SoftConcatenated),
+        ("OFDM52-32QAM", FecMode::SoftConcatenated),
+        ("OFDM52-64QAM", FecMode::SoftConcatenated),
+        ("OFDM52-16QAM", FecMode::LdpcHighRate),
+        ("OFDM52-32QAM", FecMode::LdpcHighRate),
+        ("OFDM52-64QAM", FecMode::LdpcHighRate),
+    ];
+    println!("\n=== OFDM rung AWGN floors (first SNR clearing 0.90, 32 frames) ===");
+    for (mode, fec) in rungs {
+        let mut floor = None;
+        for snr in [4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26] {
+            let r = decode_rate(mode, fec, snr as f32, 32);
+            if r >= 0.90 {
+                floor = Some(snr);
+                break;
+            }
+        }
+        println!("{mode:<14} {fec:<18?} floor {:?} dB", floor);
+    }
+}
 
 #[test]
 fn ldpc_top_rungs_decode_at_their_calibrated_awgn_floor() {
@@ -109,10 +146,10 @@ fn ldpc_top_rungs_decode_at_their_calibrated_awgn_floor() {
 /// (That padding is also why `LdpcHighRate` more than doubles throughput here while its code rate is
 /// only 2.03× — LDPC's 128-byte blocks waste far less on a short frame.)
 ///
-/// Adjacent rungs are allowed to *tie*: `SCFDMA52-64QAM-P4` carries 16 pilots to `SCFDMA52-64QAM`'s 13,
-/// so its gross rate is only 6 % lower — below the resolution of a whole number of SC-FDMA symbols at
-/// any frame a `u8` payload length can express. The pair earns two rungs on P4's fading robustness (its
-/// denser pilot comb), exactly as SL14/SL15 do.
+/// Adjacent rungs are allowed to *tie*: after the OFDM re-seat SL14 and SL15 (and SL18/SL19) are both
+/// `OFDM52-64QAM` — the former SC-FDMA P4 dense-pilot rung folded onto plain OFDM64QAM, since OFDM's
+/// cyclic prefix makes the dense-pilot delay trick unnecessary — so those pairs have *identical*
+/// airtime. They are a redundant step pending a pre-release re-index (see `profile.rs`).
 #[test]
 fn scfdma_rungs_never_lengthen_the_air_time_and_ldpc_shortens_it_sharply() {
     let p = SessionProfile::hpx_hf();

@@ -34,6 +34,10 @@ fn make_engine() -> (ModemEngine, LoopbackBackend) {
     engine
         .register_plugin(Box::new(ScFdmaPlugin::new()))
         .unwrap();
+    // hpx_hf SL11+ is OFDM after the dense-rung re-seat; SL10 stays SC-FDMA (narrowband).
+    engine
+        .register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
+        .unwrap();
     engine.register_plugin(Box::new(Fsk4Plugin::new())).unwrap();
     engine.start_ota_session(SessionProfile::hpx_hf());
     (engine, backend)
