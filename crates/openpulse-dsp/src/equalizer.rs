@@ -175,8 +175,13 @@ impl LmsEqualizer {
         {
             let d_re = self.dec_re[i];
             let d_im = self.dec_im[i];
-            *w_re += step * (e_re * d_re + e_im * d_im);
-            *w_im += step * (e_im * d_re - e_re * d_im);
+            // The DFE output is SUBTRACTED in `filter()` (output = fwd − dfe), so ∂output/∂w_dfe = −d and
+            // the steepest-descent step carries the opposite sign to the forward taps: w_dfe −= μ·e·conj(d).
+            // With `+=` (matching the forward taps) the feedback section climbs the error gradient — it is
+            // anti-adaptive, and on a pure post-cursor ISI channel it drives MSE far ABOVE the forward-only
+            // result until the `MAX_TAP_ENERGY` guard clamps it. See `tests/dfe_postcursor_isi.rs`.
+            *w_re -= step * (e_re * d_re + e_im * d_im);
+            *w_im -= step * (e_im * d_re - e_re * d_im);
         }
 
         // Divergence guard: decision-directed adaptation over long frames can
