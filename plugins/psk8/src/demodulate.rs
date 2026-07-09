@@ -239,6 +239,21 @@ pub fn psk8_demodulate_soft(
     Ok(llrs)
 }
 
+/// Symbol-domain RX SNR (dB) from the equalized 8PSK data symbols: `10·log10(A²/2σ²)` via the
+/// amplitude-immune orthogonal-component estimator. `None` if the burst is too short to recover
+/// symbols. Waveform-aware, so unlike M2M4 it keeps tracking SNR up to the mode's EVM floor.
+pub fn estimate_snr_db(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+    let data = extract_data_symbols(samples, config).ok()?;
+    if data.is_empty() {
+        return None;
+    }
+    let syms: Vec<Complex32> = data.iter().map(|&(i, q)| Complex32::new(i, q)).collect();
+    let (amp, noise_var) = psk_symbol_noise_var(&syms, 3);
+    Some(openpulse_dsp::constellation::snr_db_from_amp_noise(
+        amp, noise_var,
+    ))
+}
+
 /// Extract Gray-coded IQ data symbols after preamble/tail stripping with LMS equalization.
 fn extract_data_symbols(
     samples: &[f32],

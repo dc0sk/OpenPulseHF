@@ -1552,14 +1552,28 @@ impl ModemEngine {
             self.ota_retained_llrs.clear();
         }
 
-        // SNR for the receiver decision: prefer an external estimate; else the M2M4
-        // moment estimator on the captured envelope (a real absolute SNR, unlike the
-        // mean-|LLR| proxy), silence-gated to the active burst. Works whether or not
-        // a candidate decoded.
+        // SNR for the receiver decision: prefer an external estimate; else the active mode's
+        // calibrated symbol-domain SNR (falling back to M2M4 inside `rx_snr_db`). Measure it on the
+        // mode actually on air — the decoded candidate, else the top (recommended) candidate — so a
+        // wrong low-order fallback candidate can't understate the SNR. Works whether or not a
+        // candidate decoded.
         let snr = self.rx_snr_estimate.unwrap_or_else(|| {
-            let fc = self.center_frequency + self.afc_correction_hz;
-            let fs = AudioConfig::default().sample_rate as f32;
-            openpulse_core::snr_estimate::m2m4_snr_db_gated_from_real(&samples.samples, fc, fs)
+            let snr_mode = decoded
+                .as_ref()
+                .map(|(_, _, m)| m.as_str())
+                .or_else(|| candidates.first().map(|(_, m, _)| m.as_str()));
+            match snr_mode {
+                Some(m) => self.rx_snr_db(m, &samples.samples),
+                None => {
+                    let fc = self.center_frequency + self.afc_correction_hz;
+                    let fs = AudioConfig::default().sample_rate as f32;
+                    openpulse_core::snr_estimate::m2m4_snr_db_gated_from_real(
+                        &samples.samples,
+                        fc,
+                        fs,
+                    )
+                }
+            }
         });
 
         let ota = self
@@ -2498,15 +2512,11 @@ impl ModemEngine {
             // soft pass failed — both share the same acquisition front end).
             if plugin.supports_soft_demod() {
                 let llrs = plugin.demodulate_soft(&samples.samples, &mod_cfg)?;
-                // Absolute RX SNR for rate adaptation: silence-gated M2M4 on the
-                // captured envelope. The old mean-|LLR| proxy reads ≈ −2 dB on a
-                // clean path (it is only a relative confidence indicator) and so
-                // can't drive the SNR-hint ladder; M2M4 is a real dB estimate.
-                let snr = openpulse_core::snr_estimate::m2m4_snr_db_gated_from_real(
-                    &samples.samples,
-                    self.center_frequency + self.afc_correction_hz,
-                    AudioConfig::default().sample_rate as f32,
-                );
+                // Absolute RX SNR for rate adaptation: the mode's calibrated symbol-domain estimate
+                // (M2M4 fallback inside `rx_snr_db`). The old mean-|LLR| proxy reads ≈ −2 dB on a
+                // clean path (only a relative confidence indicator) and can't drive the SNR-hint
+                // ladder.
+                let snr = self.rx_snr_db(mode, &samples.samples);
                 let wire_bytes: Vec<u8> = llrs
                     .chunks(8)
                     .map(|byte_llrs| {
@@ -2623,11 +2633,7 @@ impl ModemEngine {
         // path (`receive_from_samples`) and `receive_with_ack_hint`. Without this, an adaptive
         // session that uses FEC got no SNR feedback (the FEC receive path skipped it).
         if llrs.is_some() {
-            let snr_db = openpulse_core::snr_estimate::m2m4_snr_db_gated_from_real(
-                &samples.samples,
-                self.center_frequency + self.afc_correction_hz,
-                AudioConfig::default().sample_rate as f32,
-            );
+            let snr_db = self.rx_snr_db(mode, &samples.samples);
             self.rate_policy.record_rx_snr(snr_db);
         }
 
@@ -2762,14 +2768,10 @@ impl ModemEngine {
             .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
 
         let llrs = plugin.demodulate_soft(&samples.samples, &mod_cfg)?;
-        // Absolute SNR for the rate decision: silence-gated M2M4 on the captured
-        // envelope (the mean-|LLR| proxy reads ~-2 dB on a clean path and can't drive
-        // the ladder).
-        let snr_db = openpulse_core::snr_estimate::m2m4_snr_db_gated_from_real(
-            &samples.samples,
-            self.center_frequency + self.afc_correction_hz,
-            AudioConfig::default().sample_rate as f32,
-        );
+        // Absolute SNR for the rate decision: the mode's calibrated symbol-domain estimate (M2M4
+        // fallback inside `rx_snr_db`); the mean-|LLR| proxy reads ~-2 dB on a clean path and can't
+        // drive the ladder.
+        let snr_db = self.rx_snr_db(mode, &samples.samples);
         self.rate_policy.record_rx_snr(snr_db);
 
         let wire_bytes: Vec<u8> = llrs
@@ -4581,6 +4583,27 @@ impl ModemEngine {
             fine: self.afc_correction_hz,
             last_delta,
         }
+    }
+
+    /// Absolute RX SNR (dB) for the rate decision. Prefers the active plugin's calibrated
+    /// symbol-domain estimate ([`ModulationPlugin::estimate_snr_db`]) — waveform-aware, so it keeps
+    /// tracking SNR up the ladder where the constant-modulus M2M4 moment estimator saturates — and
+    /// falls back to silence-gated M2M4 when the plugin has no estimator.
+    fn rx_snr_db(&self, mode: &str, samples: &[f32]) -> f32 {
+        let fc = self.center_frequency + self.afc_correction_hz;
+        let fs = AudioConfig::default().sample_rate as f32;
+        if let Some(plugin) = self.plugins.get(mode) {
+            let mod_cfg = ModulationConfig {
+                mode: mode.to_string(),
+                center_frequency: fc,
+                afc_correction_hz: self.afc_correction_hz,
+                ..ModulationConfig::default()
+            };
+            if let Some(snr) = plugin.estimate_snr_db(samples, &mod_cfg) {
+                return snr;
+            }
+        }
+        openpulse_core::snr_estimate::m2m4_snr_db_gated_from_real(samples, fc, fs)
     }
 
     fn update_afc_estimate(&mut self, mode: &str, samples: &[f32]) {

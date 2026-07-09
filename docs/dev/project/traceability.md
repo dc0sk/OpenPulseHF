@@ -9,6 +9,42 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-09 — feat(rate): per-plugin symbol-domain RX SNR (PSK) replaces M2M4 for the OTA decision
+
+- **Requirement/change:** the receiver-led OTA ladder was capped ~SL8 because its SNR estimate is M2M4,
+  which assumes a constant-modulus envelope. Measured (this session, AWGN sweep on the crossfade-pulse
+  PSK rungs): M2M4 **saturates at ~15.3 dB** — flat from 26 dB up, it can never read higher — so a rung
+  whose SNR ceiling exceeds ~15 dB can never be promoted to. `set_rx_snr_estimate` is test-only, so
+  production ran M2M4 unconditionally.
+- **Design decision:** add `ModulationPlugin::estimate_snr_db` (default `None`, mirroring the
+  `estimate_afc_hz` override pattern) and prefer it over M2M4 in the engine. Per-plugin it measures noise
+  from the component of each equalized symbol *orthogonal* to its decision — the already-calibrated
+  `psk_symbol_noise_var` (reused, not a new estimator) — via `snr_db_from_amp_noise(A,σ²)=10·log10(A²/2σ²)`.
+  Scoped to the two rungs that gate escaping the cap: **QPSK500 + 8PSK500** (SL8/SL9). The promotion into
+  SL10 is decided *while receiving* those PSK modes, so accurate PSK SNR alone lets the ladder reach the
+  SC-FDMA rungs; multicarrier `estimate_snr_db` (which needs demod-internal `h_est`/`noise_var`) is a
+  deliberate follow-up (PR-B), where it falls back to M2M4 with no regression. Known limitation (measured):
+  the symbol estimate **over-reads ~+5 dB at low SNR** (few reference points + decision-error amplitude
+  bias) and **saturates at each mode's EVM floor** (~24 dB) — inherent; the OTA hysteresis/NACK-downshift
+  absorbs the low-SNR optimism.
+- **Implementation:** `crates/openpulse-core/src/plugin.rs` (`estimate_snr_db` trait default);
+  `crates/openpulse-dsp/src/constellation.rs` (`snr_db_from_amp_noise`); `plugins/qpsk/src/demodulate.rs`
+  (extracted shared `extract_data_symbols`, refactored `qpsk_demodulate_soft` onto it, added
+  `estimate_snr_db`) + `plugins/qpsk/src/lib.rs` override; `plugins/psk8/src/demodulate.rs`
+  (`estimate_snr_db` reusing its `extract_data_symbols`) + `plugins/psk8/src/lib.rs` override;
+  `crates/openpulse-modem/src/engine.rs` (new `rx_snr_db(mode,samples)` helper — plugin estimate then
+  M2M4 fallback — replacing all four `m2m4_snr_db_gated_from_real` call sites, the OTA one measuring on
+  the decoded/recommended candidate mode).
+- **Tests:** `crates/openpulse-modem/tests/symbol_domain_snr.rs` — AWGN sweep asserts the plugin estimate
+  rises 8→20 dB and, at 32 dB, reads ≥5 dB above M2M4's saturation ceiling (deterministic, seeded).
+  `crates/openpulse-modem/tests/symbol_snr_ladder_climb.rs` — real two-engine `OtaRateController` bridged
+  through AWGN at the MODCOD FEC; a 35 dB channel must climb past SL8.
+- **Test results (actually run):** measured curves — 8PSK500 plugin 8→13.5 / 20→21.8 / 32→23.8 dB vs
+  M2M4 32→15.3; QPSK500 plugin 8→13.8 / 20→21.0 / 32→22.9 vs M2M4 32→15.2. Ladder-climb **reached SL10**
+  (past the SL8 cap; stalls at SL10 where SC-FDMA hands back to M2M4 — the PR-B boundary). Regressions:
+  qpsk-plugin 39+2, psk8-plugin 25+2+1, openpulse-dsp 90, openpulse-core 258 — all pass; clippy
+  `-D warnings` + fmt clean.
+
 ## 2026-07-09 — feat(engine): HARQ soft-LLR combining across OTA retransmissions
 
 - **Requirement/change:** the #694 union (decode each attempt standalone, then MAP-combine) had **zero
