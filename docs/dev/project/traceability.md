@@ -9,6 +9,37 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-09 — feat(engine): HARQ soft-LLR combining across OTA retransmissions
+
+- **Requirement/change:** the #694 union (decode each attempt standalone, then MAP-combine) had **zero
+  production callers** — `receive_with_llr_combining` is synchronous multi-capture and RS-only, so it never
+  fit the daemon's async, per-MODCOD OTA flow. Its measured deep-fade diversity gain (0.43 → 0.67 on
+  `moderate_f1`) never reached the air; a NACK simply discarded the failed burst's soft information.
+- **Design decision:** build the combining into the **shared OTA decode seam** (`ota_decode_and_ack`), not
+  the daemon, so both `ota_decode_burst` (the daemon rx path) and any test get it, and it persists across the
+  daemon's one long-lived engine by construction. Keep it **additive**: the existing standalone candidate loop
+  is untouched and runs first; combining engages only when every standalone candidate failed (the
+  retransmission path) — the standalone-then-combine union, now stateful. Retain the failed burst's soft LLRs
+  keyed by `(session, mode)`, MAP-combine only same-length retained vectors (a mismatched length is a different
+  frame and must not misalign), clear on any success (a delivered frame's LLRs must not bleed into the next),
+  and cap retention at 3 bursts/mode. Each attempt is demodulated under its own AFC, then soft-combined — the
+  correct HARQ model.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` — new `ota_retained_llrs` /
+  `ota_retained_session` engine state (cleared on `start_ota_session`/`stop_ota_session`); `decode_combined_llrs`
+  (soft-LLR → payload dispatch for SoftConcatenated/Ldpc/LdpcHighRate/Rs/RsInterleaved, running the same
+  `DemodulateDecode` → `HpxStateUpdate` routing + `FrameReceived` emit as the live path, side effects only after
+  a successful frame decode); `ota_demodulate_soft` (front-end-seam soft demod for retention); the additive
+  combining block appended to `ota_decode_and_ack`. No daemon change — `server::run`'s `rx_ticker` already calls
+  `ota_decode_burst` on its persistent engine.
+- **Tests:** `crates/openpulse-modem/tests/ota_harq_combining.rs` — over 50 `moderate_f1` fade realisations at
+  14 dB (SCFDMA52-16QAM + SoftConcatenated, hpx_hf SL12), a single engine retaining+combining across 3
+  sequential `ota_decode_burst` bursts must decode more frames than 3 independent engines each decoding one
+  burst standalone. Paired on identical fade seeds (combining is a superset of standalone), so the gap is
+  deterministic and the gate non-flaky.
+- **Test results (actually run):** standalone (any-of-3) **0.64** vs combining **0.78** — +0.14, clears the
+  +0.08 gate. OTA/HARQ regressions green (`ota_rate_lockstep` 2, `ota_channel_adaptation` 1,
+  `harq_fade_diversity` 3, `harq_retry_watterson_integration` 10); modem clippy `-D warnings` clean.
+
 ## 2026-07-09 — fix(channel): normalise Watterson total path power (drop the +3 dB hot bias)
 
 - **Requirement/change:** audit (measurement layer) found Watterson delivers ~+3 dB more SNR than

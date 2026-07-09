@@ -297,6 +297,13 @@ pub struct ModemEngine {
     /// When `None`, the weak LLR-magnitude proxy is used. A real estimator
     /// (or a channel-sim harness) should feed this for meaningful stepping.
     rx_snr_estimate: Option<f32>,
+    /// Soft LLRs retained from failed OTA bursts, keyed by mode, for HARQ soft-combining
+    /// across retransmissions ([`decode_combined_llrs`](Self::decode_combined_llrs)). Bounded
+    /// to [`OTA_HARQ_MAX_ATTEMPTS`] vectors per mode; cleared on any successful decode and on
+    /// OTA session start/stop.
+    ota_retained_llrs: std::collections::HashMap<String, Vec<Vec<f32>>>,
+    /// Session id the retained LLRs belong to; a burst under a different session clears them.
+    ota_retained_session: Option<String>,
     dcd: DcdState,
     csma_enabled: bool,
     csma_persistence: f32,
@@ -391,6 +398,10 @@ const BURST_MAX_SAMPLES: usize = 240_000;
 /// representative spectrum row and bounds the per-call clone.
 const SPECTRUM_TAP_MAX: usize = 16384;
 
+/// Max soft-LLR bursts retained (and MAP-combined) per OTA mode before the oldest is
+/// dropped. Three matches the HARQ diversity depth measured in `harq_fade_diversity`.
+const OTA_HARQ_MAX_ATTEMPTS: usize = 3;
+
 impl ModemEngine {
     /// Create a new engine backed by the given audio backend.
     pub fn new(audio: Box<dyn AudioBackend>) -> Self {
@@ -411,6 +422,8 @@ impl ModemEngine {
             rate_policy: RateAdaptationPolicy::new(),
             ota: None,
             rx_snr_estimate: None,
+            ota_retained_llrs: std::collections::HashMap::new(),
+            ota_retained_session: None,
             dcd: DcdState::new(0.01, 800), // 100 ms hold at 8 kHz
             csma_enabled: false,
             csma_persistence: 0.3,
@@ -973,11 +986,15 @@ impl ModemEngine {
     /// [`ota_tx_mode`](Self::ota_tx_mode) (data sender, follows the peer).
     pub fn start_ota_session(&mut self, profile: SessionProfile) {
         self.ota = Some(OtaRateController::new(profile));
+        self.ota_retained_llrs.clear();
+        self.ota_retained_session = None;
     }
 
     /// Stop the active OTA session (drops the controller). No-op if none active.
     pub fn stop_ota_session(&mut self) {
         self.ota = None;
+        self.ota_retained_llrs.clear();
+        self.ota_retained_session = None;
     }
 
     /// Whether a receiver-led OTA session is active.
@@ -1469,6 +1486,72 @@ impl ModemEngine {
             }
         }
 
+        // HARQ soft-combining across OTA retransmissions (additive — runs only when every
+        // standalone candidate above failed). For each soft-capable candidate carrying a soft
+        // FEC, demodulate the burst to LLRs, MAP-combine them with LLRs retained from earlier
+        // failed bursts of the same mode, and retry the soft decode. This is the
+        // standalone-then-combine union of #694, now stateful across the daemon's async bursts:
+        // the diversity gain (measured 0.43 → 0.67 on `moderate_f1` SCFDMA52-16QAM) only reaches
+        // the air here. Retain this burst on continued failure; clear all retained LLRs on any
+        // success so a delivered frame's soft info can't bleed into the next one.
+        if decoded.is_none() {
+            if self.ota_retained_session.as_deref() != Some(session_id) {
+                self.ota_retained_llrs.clear();
+                self.ota_retained_session = Some(session_id.to_string());
+            }
+            for (level, mode, fec) in &candidates {
+                if decoded.is_some() {
+                    break;
+                }
+                let soft = self
+                    .plugins
+                    .get(mode)
+                    .map(|p| p.supports_soft_demod())
+                    .unwrap_or(false)
+                    && matches!(
+                        fec,
+                        FecMode::SoftConcatenated | FecMode::Ldpc | FecMode::LdpcHighRate
+                    );
+                if !soft {
+                    continue;
+                }
+                self.afc_correction_hz = afc_before;
+                let Ok(llrs) = self.ota_demodulate_soft(mode, &samples.samples) else {
+                    continue;
+                };
+                // Combine only with retained bursts of the same LLR length (same mode + frame
+                // geometry); a mismatched vector is a different frame and must not align onto this one.
+                let combined: Option<Vec<f32>> = self.ota_retained_llrs.get(mode).and_then(|r| {
+                    let mut set: Vec<&[f32]> = r
+                        .iter()
+                        .filter(|v| v.len() == llrs.len())
+                        .map(|v| v.as_slice())
+                        .collect();
+                    if set.is_empty() {
+                        None
+                    } else {
+                        set.push(llrs.as_slice());
+                        Some(combine_llrs_map(&set))
+                    }
+                });
+                if let Some(combined) = combined {
+                    if let Ok(payload) = self.decode_combined_llrs(mode, &combined, *fec) {
+                        decoded = Some((payload, *level, mode.clone()));
+                        break;
+                    }
+                }
+                let buf = self.ota_retained_llrs.entry(mode.clone()).or_default();
+                buf.push(llrs);
+                if buf.len() > OTA_HARQ_MAX_ATTEMPTS {
+                    let excess = buf.len() - OTA_HARQ_MAX_ATTEMPTS;
+                    buf.drain(0..excess);
+                }
+            }
+        }
+        if decoded.is_some() {
+            self.ota_retained_llrs.clear();
+        }
+
         // SNR for the receiver decision: prefer an external estimate; else the M2M4
         // moment estimator on the captured envelope (a real absolute SNR, unlike the
         // mean-|LLR| proxy), silence-gated to the active burst. Works whether or not
@@ -1496,6 +1579,104 @@ impl ModemEngine {
         let ack_frame = AckFrame::new(rx_ack.ack_type, session_id)
             .with_recommended_level(rx_ack.recommended_level);
         Ok((decoded, ack_frame, last_err))
+    }
+
+    /// Demodulate a burst to soft LLRs through the RX front-end seam, for HARQ retention.
+    ///
+    /// Mirrors the soft branch of [`receive_from_samples_with_fec`](Self::receive_from_samples_with_fec):
+    /// routes the samples through `InputCapture` (notch/AGC/DCD), demodulates soft with the current
+    /// AFC correction, then refines the AFC estimate. Emits no frame/decode events — the caller owns
+    /// the decode.
+    fn ota_demodulate_soft(&mut self, mode: &str, samples: &[f32]) -> Result<Vec<f32>, ModemError> {
+        let routed = self.route_audio_stage(
+            PipelineStage::InputCapture,
+            AudioSamples {
+                samples: samples.to_vec(),
+            },
+        )?;
+        let mod_cfg = ModulationConfig {
+            mode: mode.to_string(),
+            center_frequency: self.center_frequency + self.afc_correction_hz,
+            afc_correction_hz: self.afc_correction_hz,
+            ..ModulationConfig::default()
+        };
+        let llrs = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            plugin.demodulate_soft(&routed.samples, &mod_cfg)?
+        };
+        self.update_afc_estimate(mode, &routed.samples);
+        Ok(llrs)
+    }
+
+    /// Decode already-demodulated (and possibly MAP-combined) soft LLRs under `fec` into a frame
+    /// payload, running the same `DemodulateDecode` → `HpxStateUpdate` routing and `FrameReceived`
+    /// emission as the live receive path.
+    ///
+    /// The soft counterpart of the per-attempt FEC dispatch in
+    /// [`receive_from_samples_with_fec`](Self::receive_from_samples_with_fec), split out so HARQ
+    /// combining can decode a summed-LLR vector without re-capturing audio. Side effects (HPX state,
+    /// `FrameReceived`) fire only after a successful frame decode, so a failed trial never moves state.
+    fn decode_combined_llrs(
+        &mut self,
+        mode: &str,
+        llrs: &[f32],
+        fec: FecMode,
+    ) -> Result<Vec<u8>, ModemError> {
+        let corrected = match fec {
+            FecMode::SoftConcatenated => {
+                let sv = SoftViterbiCodec.decode_soft(llrs)?;
+                let rs = FecCodec::new().decode(&sv)?;
+                self.route_wire_stage(PipelineStage::DemodulateDecode, WirePayload { bytes: rs })?
+            }
+            FecMode::Ldpc => {
+                let info = decode_ldpc_llrs(&LdpcCodec::new(), llrs)?;
+                self.route_wire_stage(PipelineStage::DemodulateDecode, WirePayload { bytes: info })?
+            }
+            FecMode::LdpcHighRate => {
+                let info = decode_ldpc_llrs(&LdpcCodec::high_rate(), llrs)?;
+                self.route_wire_stage(PipelineStage::DemodulateDecode, WirePayload { bytes: info })?
+            }
+            // RS-family: the MAP-combine sharpened per-bit reliability; RS still consumes a hard
+            // decision. Supports combining a plain-RS OTA rung's retransmissions.
+            FecMode::Rs => {
+                let wire = self.route_wire_stage(
+                    PipelineStage::DemodulateDecode,
+                    WirePayload {
+                        bytes: hard_decide(llrs),
+                    },
+                )?;
+                WirePayload {
+                    bytes: FecCodec::new().decode(&wire.bytes)?,
+                }
+            }
+            FecMode::RsInterleaved => {
+                let wire = self.route_wire_stage(
+                    PipelineStage::DemodulateDecode,
+                    WirePayload {
+                        bytes: hard_decide(llrs),
+                    },
+                )?;
+                let deint = Interleaver::new(DEFAULT_INTERLEAVER_DEPTH).deinterleave(&wire.bytes);
+                WirePayload {
+                    bytes: FecCodec::new().decode(&deint)?,
+                }
+            }
+            other => {
+                return Err(ModemError::Demodulation(format!(
+                    "FEC mode {other:?} does not support soft-LLR combining"
+                )))
+            }
+        };
+        let frame = self.stage_decode_frame(&corrected)?;
+        let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
+        let _ = self.event_tx.send(EngineEvent::FrameReceived {
+            mode: mode.to_string(),
+            bytes: frame.payload.len(),
+        });
+        Ok(frame.payload)
     }
 
     /// Select HARQ retry parameters from SNR/fading state.
