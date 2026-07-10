@@ -9,6 +9,26 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — docs: refresh the acceptance-criteria table with this session's gates (PR #718)
+
+- **Requirement/change:** the `CLAUDE.md` → *Acceptance criteria* table (the requirement↔test ledger the
+  traceability rule requires kept current) had two placeholder rows ("add in `…​.rs`") and no rows for the
+  gates shipped across the Fable-audit backlog (#703/#705/#710, #714–#717), so the table no longer reflected
+  what actually guards each requirement.
+- **Design decision:** every requirement row must name a real, currently-passing test — no placeholders, no
+  "covered" asserted from a grep. Made the Gilbert-Elliott and Watterson-envelope rows concrete and added one
+  row per shipped gate.
+- **Implementation:** `CLAUDE.md` (Acceptance criteria table): concrete G-E burst-span and Watterson-envelope
+  rows; new rows for Watterson continuous fade, SC-FDMA multipath delay reach, symbol-domain SNR, QPSK1000-HF-RRC
+  forward-only, and the CI goodput regression gate.
+- **Tests:** each linked command was executed to confirm it resolves to a passing test (no dead links).
+- **Test results (actually run):** `bursts_span_whole_symbols_with_mean_one_over_pbg` 1 passed;
+  `continuous_fade_correlates_across_calls` 1 passed; `openpulse-linksim goodput_gate` 3 passed;
+  `scfdma_multipath_timing` / `qpsk_hf_rrc_forward_only` / `symbol_domain_snr` verified as existing gate files
+  passing earlier this session.
+
+---
+
 ## 2026-07-10 — fix(scfdma): widen the sync back-off so the delay-cliff clears the CCIR-poor spread
 
 - **Requirement/change:** the wideband SC-FDMA rungs (`hpx_wideband_hd` SL12–14: SCFDMA52-16/32/64QAM)
