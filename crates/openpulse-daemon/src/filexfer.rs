@@ -5,10 +5,14 @@
 //! else → here, §6.2). Control frames (segment `0xFFFF`) are reassembled + decoded; block-data frames
 //! (segment `block_index + 1`) feed the receive session's `BlockAssembler`.
 //!
-//! **Send:** the `SendFile` command builds a `SenderSession` and transmits the offer; the receiver's
+//! **Send:** the `SendFile` command builds a `SenderSession` and queues the offer; the receiver's
 //! `FileAccept`/`BlockAck`/`FileComplete` control frames (which arrive on the same seam) drive the next
-//! block out. Delivery is event-reactive, so the loopback/twin path needs no separate tick loop;
-//! real-radio PTT burst sequencing is a `server::run` refinement layered on this.
+//! block out. Delivery is event-reactive, so no separate tick loop is needed.
+//!
+//! **Transmit path:** this module never touches the modem — it queues fragments onto
+//! `RuntimeControlState::filexfer_tx_queue`, and `server::run` drains that queue as one PTT-keyed burst
+//! (`drain_filexfer_tx`) after each command / receive tick, so the half-duplex PTT sequencing lives with
+//! the controller and works on real radio.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -23,7 +27,6 @@ use openpulse_filexfer::{
     FxAction, FxFrame, OfferDecision, OfferPolicy, Outcome, Reason, ReceiverSession, SenderSession,
     Timeouts, TransferResult, DEFAULT_BLOCK_SIZE,
 };
-use openpulse_modem::ModemEngine;
 
 use crate::protocol::ControlEvent;
 use crate::RuntimeControlState;
@@ -117,7 +120,6 @@ pub fn route_inbound_fragment(
     runtime_state: &mut RuntimeControlState,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
     mode: &str,
-    engine: &mut ModemEngine,
 ) {
     runtime_state.filexfer_frames_routed = runtime_state.filexfer_frames_routed.saturating_add(1);
 
@@ -127,7 +129,7 @@ pub fn route_inbound_fragment(
             _ => return,
         };
         match FxFrame::decode(&assembled) {
-            Ok(FxFrame::FileOffer(offer)) => on_offer(offer, runtime_state, event_tx, mode, engine),
+            Ok(FxFrame::FileOffer(offer)) => on_offer(offer, runtime_state, event_tx, mode),
             Ok(FxFrame::FileCancel {
                 transfer_id,
                 reason,
@@ -142,12 +144,12 @@ pub fn route_inbound_fragment(
                 | FxFrame::BlockAck { .. }
                 | FxFrame::FileComplete { .. }
                 | FxFrame::FileReject { .. }),
-            ) => on_tx_frame(frame, runtime_state, event_tx, mode, engine),
+            ) => on_tx_frame(frame, runtime_state, event_tx, mode),
             Ok(_) => {}
             Err(e) => tracing::debug!(error = %e, "filexfer: control frame decode failed"),
         }
     } else {
-        on_block_fragment(bytes, runtime_state, event_tx, mode, engine);
+        on_block_fragment(bytes, runtime_state, event_tx, mode);
     }
 }
 
@@ -158,11 +160,10 @@ fn on_offer(
     rs: &mut RuntimeControlState,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
     mode: &str,
-    engine: &mut ModemEngine,
 ) {
     // One transfer per link: reject a second offer while one is active.
     if rs.file_rx.is_some() {
-        transmit_ctrl(engine, mode, &reject(offer.transfer_id, Reason::Busy));
+        enqueue_ctrl(rs, mode, &reject(offer.transfer_id, Reason::Busy));
         return;
     }
 
@@ -207,7 +208,7 @@ fn on_offer(
         peer_pubkey,
         file_received_emitted: false,
     };
-    drive_rx_actions(&mut fx, actions, rs, event_tx, mode, engine);
+    drive_rx_actions(&mut fx, actions, rs, event_tx, mode);
     if !fx.receiver.is_terminal() {
         rs.file_rx = Some(fx);
     }
@@ -219,12 +220,11 @@ pub fn accept_offer(
     rs: &mut RuntimeControlState,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
     mode: &str,
-    engine: &mut ModemEngine,
 ) {
     if let Some(mut fx) = rs.file_rx.take() {
         if fx.offer.transfer_id == transfer_id {
             let actions = fx.receiver.accept(now_ms());
-            drive_rx_actions(&mut fx, actions, rs, event_tx, mode, engine);
+            drive_rx_actions(&mut fx, actions, rs, event_tx, mode);
         }
         if !fx.receiver.is_terminal() {
             rs.file_rx = Some(fx);
@@ -238,12 +238,11 @@ pub fn reject_offer(
     rs: &mut RuntimeControlState,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
     mode: &str,
-    engine: &mut ModemEngine,
 ) {
     if let Some(mut fx) = rs.file_rx.take() {
         if fx.offer.transfer_id == transfer_id {
             let actions = fx.receiver.reject(Reason::OperatorDeclined);
-            drive_rx_actions(&mut fx, actions, rs, event_tx, mode, engine);
+            drive_rx_actions(&mut fx, actions, rs, event_tx, mode);
         }
         if !fx.receiver.is_terminal() {
             rs.file_rx = Some(fx);
@@ -257,11 +256,10 @@ pub fn cancel_transfer(
     rs: &mut RuntimeControlState,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
     mode: &str,
-    engine: &mut ModemEngine,
 ) {
     if rs.file_rx.as_ref().map(|fx| fx.offer.transfer_id) == Some(transfer_id) {
-        transmit_ctrl(
-            engine,
+        enqueue_ctrl(
+            rs,
             mode,
             &FxFrame::FileCancel {
                 transfer_id,
@@ -304,7 +302,6 @@ pub fn send_file(
     rs: &mut RuntimeControlState,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
     mode: &str,
-    engine: &mut ModemEngine,
 ) {
     let fail = |reason: String| {
         let _ = event_tx.send(ControlEvent::CommandError {
@@ -353,7 +350,7 @@ pub fn send_file(
         offer,
         to: to.to_string(),
     };
-    drive_tx_actions(&mut fx, actions, event_tx, mode, engine);
+    drive_tx_actions(&mut fx, actions, rs, event_tx, mode);
     if !fx.sender.is_terminal() {
         rs.file_tx = Some(fx);
     }
@@ -366,14 +363,13 @@ fn on_tx_frame(
     rs: &mut RuntimeControlState,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
     mode: &str,
-    engine: &mut ModemEngine,
 ) {
     let Some(mut fx) = rs.file_tx.take() else {
         return;
     };
     if frame.transfer_id() == fx.offer.transfer_id {
         let actions = fx.sender.apply(&frame, now_ms());
-        drive_tx_actions(&mut fx, actions, event_tx, mode, engine);
+        drive_tx_actions(&mut fx, actions, rs, event_tx, mode);
     }
     if !fx.sender.is_terminal() {
         rs.file_tx = Some(fx);
@@ -401,13 +397,13 @@ fn on_tx_cancel(
 fn drive_tx_actions(
     fx: &mut FxTxState,
     actions: Vec<FxAction>,
+    rs: &mut RuntimeControlState,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
     mode: &str,
-    engine: &mut ModemEngine,
 ) {
     for action in actions {
         match action {
-            FxAction::Transmit(frame) => transmit_ctrl(engine, mode, &frame),
+            FxAction::Transmit(frame) => enqueue_ctrl(rs, mode, &frame),
             FxAction::SendBlock {
                 block_index,
                 missing,
@@ -415,21 +411,16 @@ fn drive_tx_actions(
                 let bs = fx.offer.block_size as usize;
                 let start = (block_index as usize).saturating_mul(bs).min(fx.file.len());
                 let end = start.saturating_add(bs).min(fx.file.len());
-                match encode_block(
-                    fx.offer.transfer_id,
+                let transfer_id = fx.offer.transfer_id;
+                let block = fx.file[start..end].to_vec();
+                enqueue_block(
+                    rs,
+                    mode,
+                    transfer_id,
                     block_index,
-                    &fx.file[start..end],
+                    &block,
                     missing.as_deref(),
-                ) {
-                    Ok(fragments) => {
-                        for frag in fragments {
-                            if let Err(e) = engine.transmit(&frag, mode, None) {
-                                tracing::warn!(error = %e, "filexfer: block fragment transmit failed");
-                            }
-                        }
-                    }
-                    Err(e) => tracing::warn!(error = %e, "filexfer: block encode failed"),
-                }
+                );
             }
             FxAction::Progress {
                 transfer_id,
@@ -481,14 +472,13 @@ fn on_block_fragment(
     rs: &mut RuntimeControlState,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
     mode: &str,
-    engine: &mut ModemEngine,
 ) {
     let Some(mut fx) = rs.file_rx.take() else {
         return;
     };
     if let BlockEvent::Complete { block_index } = fx.assembler.ingest_fragment(bytes) {
-        transmit_ctrl(
-            engine,
+        enqueue_ctrl(
+            rs,
             mode,
             &FxFrame::BlockAck {
                 transfer_id: fx.offer.transfer_id,
@@ -499,7 +489,7 @@ fn on_block_fragment(
             .encode(),
         );
         let actions = fx.receiver.note_block_complete(block_index, now_ms());
-        drive_rx_actions(&mut fx, actions, rs, event_tx, mode, engine);
+        drive_rx_actions(&mut fx, actions, rs, event_tx, mode);
     }
     if !fx.receiver.is_terminal() {
         rs.file_rx = Some(fx);
@@ -513,11 +503,10 @@ fn drive_rx_actions(
     rs: &mut RuntimeControlState,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
     mode: &str,
-    engine: &mut ModemEngine,
 ) {
     for action in actions {
         match action {
-            FxAction::Transmit(frame) => transmit_ctrl(engine, mode, &frame),
+            FxAction::Transmit(frame) => enqueue_ctrl(rs, mode, &frame),
             FxAction::Progress {
                 transfer_id,
                 blocks_done,
@@ -536,7 +525,7 @@ fn drive_rx_actions(
             FxAction::Verify { .. } => {
                 let (status, countersig) = reassemble_verify_write(fx, rs, event_tx);
                 let more = fx.receiver.set_verify_result(status, countersig);
-                drive_rx_actions(fx, more, rs, event_tx, mode, engine);
+                drive_rx_actions(fx, more, rs, event_tx, mode);
             }
             FxAction::Finished(Outcome {
                 transfer_id,
@@ -635,17 +624,35 @@ fn emit_terminal(
     }
 }
 
-/// SAR-encode a control frame with the reserved control segment-id and transmit its fragments.
-fn transmit_ctrl(engine: &mut ModemEngine, mode: &str, frame: &[u8]) {
+/// SAR-encode a control frame (reserved control segment-id) and queue its fragments for the
+/// PTT-sequenced burst drain in `server::run`.
+fn enqueue_ctrl(rs: &mut RuntimeControlState, mode: &str, frame: &[u8]) {
     match sar_encode(FX_CONTROL_SEGMENT_ID, frame) {
         Ok(fragments) => {
             for frag in fragments {
-                if let Err(e) = engine.transmit(&frag, mode, None) {
-                    tracing::warn!(error = %e, "filexfer: control frame transmit failed");
-                }
+                rs.filexfer_tx_queue.push((frag, mode.to_string()));
             }
         }
         Err(e) => tracing::warn!(error = %e, "filexfer: control frame SAR encode failed"),
+    }
+}
+
+/// Queue a block's fragments (segment-id `block_index + 1`) for the PTT-sequenced burst drain.
+fn enqueue_block(
+    rs: &mut RuntimeControlState,
+    mode: &str,
+    transfer_id: u32,
+    block_index: u16,
+    block: &[u8],
+    missing: Option<&[u8]>,
+) {
+    match encode_block(transfer_id, block_index, block, missing) {
+        Ok(fragments) => {
+            for frag in fragments {
+                rs.filexfer_tx_queue.push((frag, mode.to_string()));
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "filexfer: block encode failed"),
     }
 }
 

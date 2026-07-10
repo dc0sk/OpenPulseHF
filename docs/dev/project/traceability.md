@@ -9,6 +9,32 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — feat(filexfer): real-radio PTT burst sequencing (queue + drain)
+
+- **Requirement/change:** FF-16 §5.3/§6.4 — file-transfer transmits happen inside
+  `apply_command_to_engine` / `process_received_bytes`, which don't hold the PTT controller (it lives in
+  `server::run`). On real half-duplex radio each burst must key PTT so the peer can answer; the previous
+  event-reactive path transmitted inline without keying (fine on the twin, wrong on air).
+- **Design decision:** a **pending-transmit queue**. The `filexfer` module no longer touches the modem — it
+  SAR-encodes control frames (`enqueue_ctrl`) and blocks (`enqueue_block`) onto
+  `RuntimeControlState::filexfer_tx_queue` (`(fragment, mode)`); `server::run` drains the queue via
+  `drain_filexfer_tx` as **one PTT-keyed burst** (assert → transmit all → release → `PttChanged` events)
+  after each command and receive tick. This keeps the module I/O-free, puts the half-duplex sequencing with
+  the controller, and the two-daemon twin round-trip now exercises the real drain path. `engine` was removed
+  from every module transmit function.
+- **Implementation:** `crates/openpulse-daemon/src/filexfer.rs` (`enqueue_ctrl`/`enqueue_block`, engine
+  removed from the transmit fns); `lib.rs` (`RuntimeControlState.filexfer_tx_queue`; call sites drop `engine`);
+  `server.rs` (`drain_filexfer_tx`, drained after the command arm + rx tick).
+- **Tests:** the existing receive/send daemon tests and the **twin round-trip** all pass unchanged — the twin
+  test (`a_file_crosses_the_bridge_between_two_real_daemons`) now transmits through the queue → drain →
+  PTT-keyed path, so it validates the real-radio sequencing.
+- **Test results (actually run):** full `openpulse-daemon` suite 75 passed / 0 failed (incl. twin); clippy
+  `-D warnings` + fmt clean.
+- **Note:** one PTT keying per drain (all queued fragments as a burst); airtime-bounded burst splitting
+  (§5.3 `fragments_per_burst`) is a later refinement.
+
+---
+
 ## 2026-07-10 — feat(panel): Phase D — Files tab (send, offer prompt, progress, verify badge)
 
 - **Requirement/change:** FF-16 Phase D (`docs/dev/design/file-transfer-plan.md` §7): surface file transfer

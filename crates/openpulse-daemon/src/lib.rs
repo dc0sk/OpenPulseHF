@@ -222,6 +222,10 @@ pub struct RuntimeControlState {
     pub file_tx: Option<crate::filexfer::FxTxState>,
     /// Storage + acceptance policy from `[file_transfer]` config.
     pub filexfer_policy: crate::filexfer::FileTransferPolicy,
+    /// Frames the file-transfer sessions want on air, `(sar_fragment, mode)`. `server::run` drains this
+    /// with a single PTT keying per burst; queueing (not transmitting inline) keeps the module I/O-free
+    /// while the PTT controller — which lives in `server::run` — sequences the half-duplex TX.
+    pub filexfer_tx_queue: Vec<(Vec<u8>, String)>,
 }
 
 impl RuntimeControlState {
@@ -303,6 +307,7 @@ impl Default for RuntimeControlState {
             file_rx: None,
             file_tx: None,
             filexfer_policy: crate::filexfer::FileTransferPolicy::default(),
+            filexfer_tx_queue: Vec::new(),
         }
     }
 }
@@ -1182,14 +1187,9 @@ pub async fn process_received_bytes(
             Some(0) | None => {
                 try_reassemble_handshake(bytes, runtime_state, event_tx, &mode, engine)
             }
-            Some(segment_id) => filexfer::route_inbound_fragment(
-                bytes,
-                segment_id,
-                runtime_state,
-                event_tx,
-                &mode,
-                engine,
-            ),
+            Some(segment_id) => {
+                filexfer::route_inbound_fragment(bytes, segment_id, runtime_state, event_tx, &mode)
+            }
         }
         return;
     };
@@ -2063,19 +2063,19 @@ pub async fn apply_command_to_engine(
         // Receive-side file-transfer decisions act on the active session (engine + event_tx are here).
         ControlCommand::AcceptFile { transfer_id } => {
             let mode = active_mode.lock().await.clone();
-            filexfer::accept_offer(*transfer_id, runtime_state, event_tx, &mode, engine);
+            filexfer::accept_offer(*transfer_id, runtime_state, event_tx, &mode);
         }
         ControlCommand::RejectFile { transfer_id } => {
             let mode = active_mode.lock().await.clone();
-            filexfer::reject_offer(*transfer_id, runtime_state, event_tx, &mode, engine);
+            filexfer::reject_offer(*transfer_id, runtime_state, event_tx, &mode);
         }
         ControlCommand::CancelFile { transfer_id } => {
             let mode = active_mode.lock().await.clone();
-            filexfer::cancel_transfer(*transfer_id, runtime_state, event_tx, &mode, engine);
+            filexfer::cancel_transfer(*transfer_id, runtime_state, event_tx, &mode);
         }
         ControlCommand::SendFile { to, path } => {
             let mode = active_mode.lock().await.clone();
-            filexfer::send_file(to, path, runtime_state, event_tx, &mode, engine);
+            filexfer::send_file(to, path, runtime_state, event_tx, &mode);
         }
         // No live-modem side effects for these commands in the engine path.
         ControlCommand::SubscribeSpectrum { .. }

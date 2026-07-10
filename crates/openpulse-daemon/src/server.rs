@@ -650,6 +650,13 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     )
                     .await;
                 }
+                // A `SendFile` / `AcceptFile` queued file-transfer frames — send them PTT-keyed.
+                drain_filexfer_tx(
+                    &mut engine,
+                    &mut ptt_controller,
+                    &handle.event_tx,
+                    &mut runtime_state,
+                );
             }
             _ = rx_ticker.tick() => {
                 // Release PTT hardware if the watchdog deadline has elapsed.
@@ -752,6 +759,14 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         &mut engine,
                     )
                     .await;
+                    // The receive handler may have queued FileAccept/BlockAck/FileComplete, or an
+                    // inbound ACK may have queued the next send burst — send them PTT-keyed.
+                    drain_filexfer_tx(
+                        &mut engine,
+                        &mut ptt_controller,
+                        &handle.event_tx,
+                        &mut runtime_state,
+                    );
                 }
                 // Auto-QSY if the notch persistence tracker confirmed an in-band interferer this
                 // tick (one a notch can't remove). Runs every tick — interference shows during
@@ -876,6 +891,39 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
 /// hear the ACK. PTT is a no-op on the twin rig (NoOpPtt); on a real rig this is
 /// the correct turnaround. The long phases run under `block_in_place` so the
 /// blocking turnaround does not stall the daemon's async runtime.
+/// Drain queued file-transfer fragments to the air as one PTT-keyed burst (assert → transmit all →
+/// release), so the half-duplex peer can answer. Called after every command and receive tick; a no-op
+/// when the queue is empty. On a PTT-assert failure the burst is dropped and the session's stall/retry
+/// path recovers.
+fn drain_filexfer_tx(
+    engine: &mut ModemEngine,
+    ptt_controller: &mut Option<Box<dyn PttController>>,
+    event_tx: &std::sync::Arc<tokio::sync::broadcast::Sender<crate::protocol::ControlEvent>>,
+    runtime_state: &mut RuntimeControlState,
+) {
+    use crate::protocol::ControlEvent;
+    if runtime_state.filexfer_tx_queue.is_empty() {
+        return;
+    }
+    let queue = std::mem::take(&mut runtime_state.filexfer_tx_queue);
+    if let Some(ptt) = ptt_controller.as_mut() {
+        if let Err(e) = ptt.assert_ptt() {
+            tracing::warn!("filexfer PTT assert failed: {e}");
+            return;
+        }
+    }
+    let _ = event_tx.send(ControlEvent::PttChanged { active: true });
+    for (frag, mode) in &queue {
+        let _ = tokio::task::block_in_place(|| engine.transmit(frag, mode, None));
+    }
+    if let Some(ptt) = ptt_controller.as_mut() {
+        if let Err(e) = ptt.release_ptt() {
+            tracing::warn!("filexfer PTT release failed: {e}");
+        }
+    }
+    let _ = event_tx.send(ControlEvent::PttChanged { active: false });
+}
+
 fn ota_send_with_ptt(
     engine: &mut ModemEngine,
     ptt_controller: &mut Option<Box<dyn PttController>>,
