@@ -1378,3 +1378,54 @@ mod tests {
         );
     }
 }
+
+/// Real-modem goodput regression gate — the piece the CI benchmark (which replays HPX state-machine
+/// events with no modem) cannot catch. Each case runs the full ARQ stack (modulate -> channel ->
+/// demodulate -> FEC -> receiver-led rate control) and asserts the effective two-way bps stays well
+/// above half its baseline, so a DSP change that halves throughput fails `cargo test --workspace` (what
+/// CI runs) instead of sailing through green. Deterministic (seeded channels). Floors ~65% of the
+/// measured baseline: catch a halving, tolerate normal variation.
+#[cfg(test)]
+mod goodput_gate {
+    use super::*;
+
+    fn bps(profile: &str, ch: ChannelSpec) -> f64 {
+        run_link(&LinkParams {
+            profile_name: profile.into(),
+            forward: ch,
+            reverse: ChannelSpec::Clean,
+            payload_bytes_per_frame: 200,
+            total_frames: 40,
+            seed: 5,
+            ..LinkParams::default()
+        })
+        .effective_bps
+    }
+
+    #[test]
+    fn psk_ladder_goodput_floor_awgn() {
+        let g = bps("hpx_hf", ChannelSpec::Awgn(20.0));
+        assert!(
+            g >= 250.0,
+            "hpx_hf AWGN 20 dB goodput {g:.0} bps below the floor (baseline ~397)"
+        );
+    }
+
+    #[test]
+    fn ofdm_ladder_goodput_floor_awgn() {
+        let g = bps("hpx_ofdm_hf", ChannelSpec::Awgn(20.0));
+        assert!(
+            g >= 600.0,
+            "hpx_ofdm_hf AWGN 20 dB goodput {g:.0} bps below the floor (baseline ~919)"
+        );
+    }
+
+    #[test]
+    fn ofdm_ladder_goodput_floor_dispersive_fade() {
+        let g = bps("hpx_ofdm_hf", ChannelSpec::WattersonModerateF1(25.0));
+        assert!(
+            g >= 280.0,
+            "hpx_ofdm_hf moderate_f1 25 dB goodput {g:.0} bps below the floor (baseline ~414)"
+        );
+    }
+}

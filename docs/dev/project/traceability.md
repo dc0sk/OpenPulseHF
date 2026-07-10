@@ -9,6 +9,21 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — test(linksim): real-modem goodput regression gate
+
+- **Requirement/change:** the CI "benchmark regression gate" replays HPX state-machine *events* with no
+  modem in the loop, so a DSP change that halves decode throughput sails through green. Add a cheap goodput
+  gate that actually runs the modem.
+- **Design decision:** three `#[test]`s in `openpulse-linksim` (which CI already runs via
+  `cargo test --workspace`), each `run_link`-ing the full ARQ stack (modulate → channel → demodulate → FEC
+  → receiver-led rate control) and asserting effective two-way bps stays above a floor set to ≈65 % of the
+  measured baseline — enough to catch a halving, loose enough to tolerate normal variation. Deterministic
+  (seeded channels), ~4 s total. Covers three DSP surfaces: single-carrier PSK climb (hpx_hf AWGN),
+  the OFDM ladder (hpx_ofdm_hf AWGN), and the dispersive-HF path (hpx_ofdm_hf moderate_f1).
+- **Implementation:** `apps/openpulse-linksim/src/lib.rs` — `mod goodput_gate`.
+- **Test results (actually run):** measured baselines hpx_hf/AWGN-20 = 397 bps, hpx_ofdm_hf/AWGN-20 = 919,
+  hpx_ofdm_hf/moderate_f1-25 = 414; floors 250/600/280. All three pass; clippy `-D warnings` + fmt clean.
+
 ## 2026-07-10 — feat(fec): byte interleaver on the SoftConcatenated wire (burst-fade tolerance)
 
 - **Requirement/change:** `SoftConcatenated` (outer RS + inner K=7 conv) carried no interleaver anywhere, so
