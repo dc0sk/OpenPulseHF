@@ -9,6 +9,25 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — docs: JS8 discovery & rendezvous design plan (decisions D1–D7 locked)
+
+- **Requirement/change:** capture the approved engineering plan for the JS8-based station discovery and
+  rendezvous subsystem (idle auto-QSY to the JS8 calling frequency, in-band `@OPULSE` capability hint,
+  discovered-station cache, JS8-negotiated rendezvous + QSY handoff to a native OpenPulse session).
+- **Design decision:** a Fable-drafted plan (grounded in code investigation + JS8Call-improved source)
+  splits the feature into `plugins/js8` (JS8 waveform `ModulationPlugin`), `crates/openpulse-discovery`
+  (pure state machines), and daemon glue; maintainer decisions D1–D7 are locked (native modem with a
+  Phase-B external-process fallback; `@OPULSE` group + INFO-token hint keeping the preferred-channel field;
+  unauthenticated 2-message rendezvous authenticated by the post-QSY CONREQ/CONACK; off-by-default `rx_only`
+  TX with the §97.221 doc gating Phase E; NTP-required, hard TX refusal beyond ±2 s skew; single-band MVP).
+- **Implementation:** `docs/dev/design/js8-discovery-rendezvous-plan.md` (the plan; status `approved-plan`);
+  `docs/dev/project/roadmap.md` (FF-15 entry); `CLAUDE.md` (key-documents index row).
+- **Tests:** none — planning artifact; per-phase acceptance tests are specified in the plan's §10.5 and §11
+  (e.g. `reference_vectors`, `js8_loopback`, `discovery_sm`, `rendezvous`) for when implementation starts.
+- **Test results (actually run):** N/A (documentation only; no code path changed).
+
+---
+
 ## 2026-07-10 — feat(compression): compress the fixed-mode SendMessage path too
 
 - **Requirement/change:** the prior wiring compressed only the OTA session path; a non-OTA (fixed-mode)
