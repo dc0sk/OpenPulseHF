@@ -12,8 +12,10 @@ pub const TAIL_SYMS: usize = 8;
 
 const INV_SQRT_2: f32 = 0.70710677;
 
-/// Number of symbol spans for the RRC FIR filter (controls stop-band rejection).
-pub(crate) const RRC_SPAN_SYMBOLS: usize = 8;
+/// RRC FIR filter span in symbols. 12 (not 8) drops the residual-ISI floor from ~-36 to ~-50 dB —
+/// it matters for the dense RRC rungs whose tight constellations are ISI-floor-limited. Both ends use
+/// this same constant, so mod and demod stay matched.
+pub(crate) const RRC_SPAN_SYMBOLS: usize = 12;
 
 pub fn qpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
     let baud = parse_baud_rate(&config.mode)?;

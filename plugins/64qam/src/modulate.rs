@@ -11,7 +11,9 @@ use crate::parse_baud_rate;
 
 pub const PREAMBLE_SYMS: usize = 16;
 pub const TAIL_SYMS: usize = 8;
-pub(crate) const RRC_SPAN_SYMBOLS: usize = 8;
+/// RRC FIR filter span in symbols. 12 (not 8) drops the residual-ISI floor ~-36 to ~-50 dB — matters
+/// for the dense RRC rungs. Both ends use this constant, so mod and demod stay matched.
+pub(crate) const RRC_SPAN_SYMBOLS: usize = 12;
 
 /// Normalisation scale for 8-level PAM amplitudes {±1, ±3, ±5, ±7}.
 /// Average power per axis = (1+9+25+49)/4 = 21 → total = 42 → scale = 1/√42.
