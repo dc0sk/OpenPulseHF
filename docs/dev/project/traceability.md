@@ -9,6 +9,33 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — fix(scfdma): widen the sync back-off so the delay-cliff clears the CCIR-poor spread
+
+- **Requirement/change:** the wideband SC-FDMA rungs (`hpx_wideband_hd` SL12–14: SCFDMA52-16/32/64QAM)
+  hard-cliff on multipath. A noiseless static two-ray sweep (`a0·x[n] + a1·x[n−d]`, delayed ray stronger)
+  showed all three decode 1.00 through delay `d = 8` then collapse to **0.00 at `d ≥ 10`** — inside the
+  32-sample CP, so the CP is not the limiter.
+- **Design decision:** the cliff is the sync, not the CE. `find_sync_offset` backs the FFT window off
+  `SYNC_EARLY_BIAS = 8` samples ahead of the matched-filter peak; a stronger delayed ray puts the argmax
+  `d` past the true onset, so for `d >` bias the window starts late and pulls the next symbol in (a hard
+  0.00). Raising the bias to **16** places the window early enough to see a ±16-sample (2 ms) spread, still
+  a pure circular shift inside the CP that `deramp_timing` removes. **The CE basis did NOT need widening**:
+  an attempted widen (step 5/3→8/3, reach 10→16) over-fit pilot noise on flat channels and broke the
+  `llr_reliability` gate (|L|≈11 bits wrong 17× more than promised) — reverted. `deramp_timing` re-centres
+  the impulse response on its power centroid, so the original ±10 basis already covers the *re-centred*
+  relative spread of a 16-sample two-ray channel. One constant, no calibration cost.
+- **Implementation:** `plugins/scfdma/src/demodulate.rs` (`SYNC_EARLY_BIAS` 8 → 16).
+- **Tests:** `scfdma_multipath_timing::decodes_a_stronger_delayed_ray_inside_the_cyclic_prefix` gains a
+  `SCFDMA52` (QPSK) stronger-delayed ray at `d = 12` (0.00 at bias 8 → ≥ 0.90 now; the denser modes lose
+  margin to the −6 dB two-ray null itself at d = 12, not to the sync, so they stay at the shorter cases).
+- **Test results (actually run):** delay sweep now decodes 1.00 through `d = 14–16` (was `d = 8`);
+  `scfdma_multipath_timing` 3 passed (incl. new d=12); `llr_reliability` passes (flat @10 dB calibration
+  intact); scfdma-plugin all binaries (58 lib + integration) pass; Watterson gates `channel_loopback_multimode`
+  (11), `waveform_lock_watterson` (9), `ofdm_scfdma_bakeoff` (1) pass; full `openpulse-modem` suite pass;
+  clippy `-D warnings` + fmt clean.
+
+---
+
 ## 2026-07-10 — feat(channel): opt-in continuous Watterson fade (correlated across apply() calls)
 
 - **Requirement/change:** `WattersonChannel::apply()` synthesises a self-contained FFT fade realization

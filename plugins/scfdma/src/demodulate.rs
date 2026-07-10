@@ -644,7 +644,17 @@ fn find_sync_offset(samples: &[f32], sync: &[f32]) -> Option<usize> {
     // at d = 4, QPSK 0.098 → 0.000 at d = 4 and 0.121 → 0.000 at d = 8. Watterson `good_f1` frame
     // success (60 frames, soft FEC) 0.27 → 0.72 on SCFDMA52-16QAM; the AWGN sweep is bit-for-bit
     // unchanged, so this costs nothing on a flat channel.
-    const SYNC_EARLY_BIAS: usize = 8;
+    //
+    // The bias also bounds the *reach*: a stronger delayed ray at delay `d` lands the argmax `d` past
+    // the true onset, so the window starts late (→ next-symbol ISI, a hard 0.00 cliff) once `d` exceeds
+    // the bias. At bias 8 the wideband SCFDMA52-16/32/64QAM rungs cliffed at d = 10 noiselessly; raising
+    // it to 16 pushes the reach to a ±16-sample (2 ms) delay spread — the CCIR-poor HF profile — still an
+    // early start well inside the 32-sample CP (a pure circular shift `deramp_timing` removes). The CE
+    // basis needs no widening: `deramp_timing` re-centres the impulse response on its power centroid, so
+    // the existing ±10-sample `DelayCe` covers the *re-centred* relative spread of a 16-sample two-ray
+    // channel. (A wider basis was tried and reverted — it over-fit pilot noise on flat channels and broke
+    // the `llr_reliability` calibration gate.)
+    const SYNC_EARLY_BIAS: usize = 16;
     Some(result.offset.saturating_sub(SYNC_EARLY_BIAS))
 }
 
