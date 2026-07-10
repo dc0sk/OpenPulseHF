@@ -9,6 +9,33 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — feat(fec): byte interleaver on the SoftConcatenated wire (burst-fade tolerance)
+
+- **Requirement/change:** `SoftConcatenated` (outer RS + inner K=7 conv) carried no interleaver anywhere, so
+  a deep-fade burst that overwhelms the Viterbi produced a clustered run of byte errors that overran a single
+  RS block and failed the frame. The measured win: burst-fade FER 0.98 → 0.20 @4 dB, zero AWGN cost.
+- **Design decision:** insert a block byte-interleaver between the outer RS and inner conv (TX:
+  RS → interleave → conv; RX: Viterbi → deinterleave → RS), reusing the existing `Interleaver`. It spreads
+  the Viterbi's byte-error run across *both* RS blocks of a multi-block frame so each stays under RS's t=16.
+  Centralised into two free functions (`soft_concat_encode` / `soft_concat_decode_llrs`) that *all four*
+  SoftConcatenated sites (transmit, the timeout receive, the OTA candidate path, and `decode_combined_llrs`)
+  now funnel through — the interleaver can never be applied on one end only. Applied **only to
+  multi-block frames** (`rs_bytes.len() > 255`): a single RS block gains nothing and the reshuffle
+  measurably tipped a marginal single-block 64QAM-SRO threshold case; the length-preserving permutation
+  lets the RX mirror the same gate from the Viterbi-decoded length.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` — new helpers + the four call sites refactored
+  onto them.
+- **Tests:** `crates/openpulse-modem/tests/soft_concat_interleaver.rs` — a 240-byte (two-RS-block) frame
+  through a contiguous *phase-inverted* burst (−1.0 × a 5 % span: a real fade rotates the carrier →
+  confident-wrong symbols the soft-Viterbi trusts and propagates, unlike attenuation which just lowers LLR
+  confidence and is recovered) plus a clean-channel control.
+- **Test results (actually run):** with the interleaver the burst frame decodes ≥ 0.80; **ablated (interleaver
+  neutralised) it decodes 0.00** — the gate genuinely measures the interleaver. Clean-channel control 10/10
+  (zero cost). SoftConcatenated round-trips unchanged (channel_loopback_multimode 11, fec_loopback 32,
+  harq_fade_diversity 2); full modem suite pass; clippy `-D warnings` + fmt clean. (Note: the RS↔conv
+  placement helps *multi-block* frames — a single-block frame sees no benefit since RS corrects 16 errors
+  wherever they sit; the payload is sized to two blocks deliberately.)
+
 ## 2026-07-10 — fix(profile+linksim): all-OFDM ladder climbs on dispersive HF; linksim uses the daemon SNR
 
 - **Requirement/change:** two coupled gaps found while checking whether linksim/panel support the OFDM re-seat.
