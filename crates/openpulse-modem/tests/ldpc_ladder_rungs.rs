@@ -1,4 +1,4 @@
-//! The `hpx_hf` high-rate-LDPC top rungs (SL16–SL19) must decode at the AWGN SNR they were calibrated
+//! The `hpx_hf` high-rate-LDPC top rungs (SL15–SL17) must decode at the AWGN SNR they were calibrated
 //! at, and must deliver the throughput that justifies their higher floors.
 //!
 //! `LdpcHighRate` (r ≈ 8/9) costs +4…+8 dB of floor over `SoftConcatenated` (r ≈ 0.437) and returns
@@ -81,11 +81,10 @@ fn airtime(mode: &str, fec: FecMode) -> usize {
 /// did not, so those floors are a safe upper bound; tightening them to reclaim throughput is a
 /// follow-up calibration. (OFDM52-16QAM+LHR is slightly easier than SC-FDMA's was, 32QAM+LHR slightly
 /// harder — Fable's PAPR-clipping point on dense constellations over a clean channel.)
-const MEASURED_AWGN_FLOOR_DB: [(SpeedLevel, f32); 4] = [
-    (SpeedLevel::Sl16, 12.0),
-    (SpeedLevel::Sl17, 16.0),
-    (SpeedLevel::Sl18, 20.0),
-    (SpeedLevel::Sl19, 20.0),
+const MEASURED_AWGN_FLOOR_DB: [(SpeedLevel, f32); 3] = [
+    (SpeedLevel::Sl15, 12.0), // OFDM52-16QAM + LHR
+    (SpeedLevel::Sl16, 16.0), // OFDM52-32QAM + LHR
+    (SpeedLevel::Sl17, 20.0), // OFDM52-64QAM + LHR
 ];
 
 /// Probe: find the AWGN SNR at which each re-seated OFDM rung first clears 0.90 decode (32 frames),
@@ -138,20 +137,19 @@ fn ldpc_top_rungs_decode_at_their_calibrated_awgn_floor() {
 }
 
 /// Airtime must never *grow* as the ladder climbs, and the LDPC rungs must be decisively faster than
-/// the soft-concatenated rung they sit above. That second clause is the entire claim of SL16–SL19.
+/// the soft-concatenated rung they sit above. That second clause is the entire claim of SL15–SL17.
 ///
-/// Scoped to the SC-FDMA segment (SL10 upward). Below it the ladder's rate column is *gross* modem rate
+/// Scoped to the dense segment (SL10 upward). Below it the ladder's rate column is *gross* modem rate
 /// × code rate, which airtime for a short payload does not reproduce: `Rs` and `SoftConcatenated` pad
 /// every frame to a 255-byte Reed–Solomon block, so a small payload pays for redundancy it never uses.
 /// (That padding is also why `LdpcHighRate` more than doubles throughput here while its code rate is
 /// only 2.03× — LDPC's 128-byte blocks waste far less on a short frame.)
 ///
-/// Adjacent rungs are allowed to *tie*: after the OFDM re-seat SL14 and SL15 (and SL18/SL19) are both
-/// `OFDM52-64QAM` — the former SC-FDMA P4 dense-pilot rung folded onto plain OFDM64QAM, since OFDM's
-/// cyclic prefix makes the dense-pilot delay trick unnecessary — so those pairs have *identical*
-/// airtime. They are a redundant step pending a pre-release re-index (see `profile.rs`).
+/// After the re-index the dense rungs are all distinct (no more P4 duplicates), so airtime is strictly
+/// non-increasing; the `<=` still permits a tie should a future MODCOD pair quantise to the same symbol
+/// count at a short payload.
 #[test]
-fn scfdma_rungs_never_lengthen_the_air_time_and_ldpc_shortens_it_sharply() {
+fn ofdm_rungs_never_lengthen_the_air_time_and_ldpc_shortens_it_sharply() {
     let p = SessionProfile::hpx_hf();
     let rungs: Vec<SpeedLevel> = p
         .defined_levels()
@@ -159,7 +157,7 @@ fn scfdma_rungs_never_lengthen_the_air_time_and_ldpc_shortens_it_sharply() {
         .filter(|l| *l as usize >= SpeedLevel::Sl10 as usize)
         .filter(|l| p.mode_for(*l).is_some())
         .collect();
-    assert_eq!(rungs.len(), 10, "SL10–SL19");
+    assert_eq!(rungs.len(), 8, "SL10–SL17");
 
     let air = |level: SpeedLevel| -> usize {
         airtime(p.mode_for(level).expect("mode"), p.fec_for(level))
@@ -178,18 +176,13 @@ fn scfdma_rungs_never_lengthen_the_air_time_and_ldpc_shortens_it_sharply() {
         prev = Some((level, samples));
     }
 
-    // The LDPC rungs' reason to exist: SL15 is the fastest soft-concatenated rung there is.
-    let sl15 = air(SpeedLevel::Sl15);
-    for level in [
-        SpeedLevel::Sl16,
-        SpeedLevel::Sl17,
-        SpeedLevel::Sl18,
-        SpeedLevel::Sl19,
-    ] {
+    // The LDPC rungs' reason to exist: SL14 is the densest soft-concatenated rung (OFDM52-64QAM+SC).
+    let sl14 = air(SpeedLevel::Sl14);
+    for level in [SpeedLevel::Sl15, SpeedLevel::Sl16, SpeedLevel::Sl17] {
         let samples = air(level);
         assert!(
-            samples * 4 < sl15 * 3,
-            "{level:?} takes {samples} samples against SL15's {sl15} — a high-rate-LDPC rung must be \
+            samples * 4 < sl14 * 3,
+            "{level:?} takes {samples} samples against SL14's {sl14} — a high-rate-LDPC rung must be \
              at least 25 % shorter than the densest soft-concatenated rung, or it is not worth the \
              +4…+8 dB of floor it costs"
         );

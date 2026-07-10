@@ -9,6 +9,29 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — refactor(profile): re-index the hpx_hf dense ladder (drop the P4-duplicate rungs)
+
+- **Requirement/change:** after the OFDM re-seat, the former SC-FDMA P4 dense-pilot rungs (SL14/SL18) had
+  folded onto plain `OFDM52-64QAM`, duplicating SL15/SL19 (a no-op step). Flagged as a follow-up cleanup.
+- **Design decision (measurement-checked first):** verified the floors are **not** overly conservative for
+  OFDM — the SC-FDMA-derived numbers land at a consistent ≈+8 dB margin over OFDM's measured AWGN floors
+  (8PSK 6 / 16QAM 8 / 32QAM 10 / 64QAM 14; LHR 12/16/20), a sensible HF fading margin — so no floor
+  "tightening" was warranted (it would only cut robustness). Removed the two duplicate rungs and re-indexed
+  the dense segment to **SL10–SL17** (8 rungs). Chose the *safe* variant: keep the higher-floor (floor-22/30)
+  64QAM rungs and drop the low-floor (19/28) ones — the low-floor entries were optimistic on fading
+  (OFDM52-64QAM ≈0.52 at 19 dB on moderate_f1). Tradeoff recorded: a small AWGN throughput loss in 17–22 dB
+  (no 64QAM entry between SL13 and SL14), which on real HF fading was never a working rung anyway.
+- **Implementation:** `crates/openpulse-core/src/profile.rs` — `hpx_hf` modes/fec/floors/ceilings rewritten
+  for SL10–SL17; `ack_up_requires_snr_candidate_at` SL19→SL17; comment table + floor rationale updated. Tests:
+  `session_profile.rs` (mappings, top rung SL17), `cli_mode_advisor.rs` + `commands/mode_advisor.rs`
+  (SNR→level cases), `ldpc_ladder_rungs.rs` (`MEASURED_AWGN_FLOOR_DB` → SL15–17; rung count 10→8; densest-SC
+  comparison SL15→SL14). No enum change (SpeedLevel variants untouched; other profiles unaffected);
+  `fingerprint()` already excludes floors, so a floor tweak never desyncs peers.
+- **Test results (actually run):** `session_profile` 30 (floors monotonic + ceiling = floor(L+1)+2 verified
+  across the new ladder; top = SL17, no ceiling), `cli_mode_advisor` 3, `ldpc_ladder_rungs` 2, full modem
+  suite + core — pass; ladder-climb over a 35 dB link now tops out at **SL17** (the new ladder top); clippy
+  `-D warnings` + fmt clean.
+
 ## 2026-07-10 — test(scfdma): ablate the moderate_f1 plateau — it's Doppler, not outage
 
 - **Requirement/change:** the OFDM-vs-SC-FDMA bake-off recorded SC-FDMA's flat ~0.35 `moderate_f1` decode as a

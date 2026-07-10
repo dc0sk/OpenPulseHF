@@ -176,28 +176,33 @@ fn hpx_hf_mode_mapping() {
     assert_eq!(p.mode_for(SpeedLevel::Sl7), Some("QPSK250")); // uncoded
     assert_eq!(p.mode_for(SpeedLevel::Sl8), Some("QPSK500"));
     assert_eq!(p.mode_for(SpeedLevel::Sl9), Some("8PSK500"));
-    // SL10 stays SC-FDMA (narrowband ~1 kHz fallback); SL11–SL15 re-seated to OFDM (CP rides selective
-    // HF fade), all ≤2 kHz (HF-legal). SL14 folds the former P4 dense-pilot rung onto plain OFDM52-64QAM.
+    // SL10 stays SC-FDMA (narrowband ~1 kHz fallback); SL11–SL17 re-seated to OFDM (CP rides selective
+    // HF fade), all ≤2 kHz (HF-legal). The former P4 dense-pilot rungs were re-indexed out, so the dense
+    // ladder is 8 rungs: OFDM52-{8PSK,16QAM,32QAM,64QAM}+SC then 16/32/64QAM at r≈8/9 LDPC.
     assert_eq!(p.mode_for(SpeedLevel::Sl10), Some("SCFDMA26-32QAM"));
     assert_eq!(p.mode_for(SpeedLevel::Sl11), Some("OFDM52-8PSK"));
     assert_eq!(p.mode_for(SpeedLevel::Sl12), Some("OFDM52-16QAM"));
     assert_eq!(p.mode_for(SpeedLevel::Sl13), Some("OFDM52-32QAM"));
     assert_eq!(p.mode_for(SpeedLevel::Sl14), Some("OFDM52-64QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl15), Some("OFDM52-64QAM"));
-    // SL16–SL19: the dense OFDM modes at high-rate LDPC (r≈8/9) — MODCOD pairs of SL12–SL15.
-    // 64QAM is the densest constellation the plugin has, so above SL15 the only remaining lever on
+    // SL15–SL17: the dense OFDM modes at high-rate LDPC (r≈8/9) — MODCOD pairs of SL12–SL14.
+    // 64QAM is the densest constellation the plugin has, so above SL14 the only remaining lever on
     // throughput is code rate.
-    assert_eq!(p.mode_for(SpeedLevel::Sl16), Some("OFDM52-16QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl17), Some("OFDM52-32QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl18), Some("OFDM52-64QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl19), Some("OFDM52-64QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl15), Some("OFDM52-16QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl16), Some("OFDM52-32QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl17), Some("OFDM52-64QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl18), None);
+    assert_eq!(p.mode_for(SpeedLevel::Sl19), None);
     assert_eq!(p.mode_for(SpeedLevel::Sl20), None);
     assert_eq!(
-        p.fec_for(SpeedLevel::Sl16),
+        p.fec_for(SpeedLevel::Sl14),
+        openpulse_core::fec::FecMode::SoftConcatenated
+    );
+    assert_eq!(
+        p.fec_for(SpeedLevel::Sl15),
         openpulse_core::fec::FecMode::LdpcHighRate
     );
     assert_eq!(
-        p.fec_for(SpeedLevel::Sl19),
+        p.fec_for(SpeedLevel::Sl17),
         openpulse_core::fec::FecMode::LdpcHighRate
     );
     // SL6/SL7 are the same mode at different FEC — a proper MODCOD rung, not a duplicate.
@@ -454,7 +459,7 @@ fn hpx_hf_floors_are_monotonic_and_ceilings_follow_the_hysteresis_rule() {
     }
 
     let top = *rungs.last().expect("rungs");
-    assert_eq!(top, SpeedLevel::Sl19);
+    assert_eq!(top, SpeedLevel::Sl17);
     assert!(
         p.snr_ceiling_for_level(top).is_none(),
         "the top rung has no ceiling to climb past"

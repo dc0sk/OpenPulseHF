@@ -376,12 +376,10 @@ impl SessionProfile {
         // | 11 | OFDM52-8PSK       | SC  |   1895  |  14   | wideband dense rungs re-seated to OFDM|
         // | 12 | OFDM52-16QAM      | SC  |   2527  |  16   | (CP rides selective HF fade)          |
         // | 13 | OFDM52-32QAM      | SC  |   3159  |  17   |                                       |
-        // | 14 | OFDM52-64QAM      | SC  |   3571  |  19   | (was SCFDMA52-64QAM-P4; dup of SL15)  |
-        // | 15 | OFDM52-64QAM      | SC  |   3790  |  22   |                                       |
-        // | 16 | OFDM52-16QAM      | LHR |   5141  |  23   | LDPC r≈8/9 top-of-ladder rate lever   |
-        // | 17 | OFDM52-32QAM      | LHR |   6426  |  24   |                                       |
-        // | 18 | OFDM52-64QAM      | LHR |   7265  |  28   | (was SCFDMA52-64QAM-P4; dup of SL19)  |
-        // | 19 | OFDM52-64QAM      | LHR |   7710  |  30   | ladder top                            |
+        // | 14 | OFDM52-64QAM      | SC  |   3790  |  22   |                                       |
+        // | 15 | OFDM52-16QAM      | LHR |   5141  |  23   | LDPC r≈8/9 top-of-ladder rate lever   |
+        // | 16 | OFDM52-32QAM      | LHR |   6426  |  24   |                                       |
+        // | 17 | OFDM52-64QAM      | LHR |   7710  |  30   | ladder top                            |
         //
         // All SC-FDMA rungs are ≤2 kHz occupied, so they belong on the HF ladder rather than a separate
         // "wideband" profile. The narrowband SCFDMA26-* fallbacks also live in `hpx_wideband_hd`.
@@ -418,19 +416,19 @@ impl SessionProfile {
         // moderate_f2 @20 dB 16QAM OFDM 0.93 vs SCFDMA 0.03 (SC-FDMA flat across SNR = a structural
         // delay-cliff, not a noise limit). Benign channels do not regress (AWGN/good_f1 within ±0.04).
         // SL10 stays SC-FDMA: it is the narrowband ~1 kHz fallback (26 SCs), an SNR/interference role with
-        // no OFDM equivalent (OFDM has only 16- and 52-SC modes). The former P4 (dense-pilot) rungs SL14/
-        // SL18 fold onto plain OFDM52-64QAM — OFDM's CP makes the dense-pilot delay trick unnecessary — so
-        // they now duplicate SL15/SL19 (a redundant step to be re-indexed out in a later pre-release pass).
+        // no OFDM equivalent (OFDM has only 16- and 52-SC modes). The former P4 (dense-pilot) rungs folded
+        // onto plain OFDM52-64QAM (OFDM's CP makes the dense-pilot delay trick unnecessary) and were
+        // re-indexed out, since they duplicated the plain 64QAM rungs. The dense ladder is now SL10–SL17:
+        // OFDM52-{8PSK,16QAM,32QAM,64QAM} at soft-concatenated FEC (SL11–SL14), then the same 16/32/64QAM
+        // at r≈8/9 LDPC for the top throughput rungs (SL15–SL17).
         modes[SpeedLevel::Sl10 as usize] = Some("SCFDMA26-32QAM");
         modes[SpeedLevel::Sl11 as usize] = Some("OFDM52-8PSK");
         modes[SpeedLevel::Sl12 as usize] = Some("OFDM52-16QAM");
         modes[SpeedLevel::Sl13 as usize] = Some("OFDM52-32QAM");
         modes[SpeedLevel::Sl14 as usize] = Some("OFDM52-64QAM");
-        modes[SpeedLevel::Sl15 as usize] = Some("OFDM52-64QAM");
-        modes[SpeedLevel::Sl16 as usize] = Some("OFDM52-16QAM");
-        modes[SpeedLevel::Sl17 as usize] = Some("OFDM52-32QAM");
-        modes[SpeedLevel::Sl18 as usize] = Some("OFDM52-64QAM");
-        modes[SpeedLevel::Sl19 as usize] = Some("OFDM52-64QAM");
+        modes[SpeedLevel::Sl15 as usize] = Some("OFDM52-16QAM");
+        modes[SpeedLevel::Sl16 as usize] = Some("OFDM52-32QAM");
+        modes[SpeedLevel::Sl17 as usize] = Some("OFDM52-64QAM");
         // Per-level FEC (MODCOD). SL6 = coded QPSK250 (Rs) — a robustness rung that trades ~13%
         // throughput for a ~2 dB lower floor than the uncoded SL7. SL9 8PSK500 keeps *light* RS (net
         // ~1312 bps, above QPSK500's 1000, so it stays a faster rung). The dense SC-FDMA rungs get
@@ -444,22 +442,18 @@ impl SessionProfile {
         fec_modes[SpeedLevel::Sl12 as usize] = Some(FecMode::SoftConcatenated);
         fec_modes[SpeedLevel::Sl13 as usize] = Some(FecMode::SoftConcatenated);
         fec_modes[SpeedLevel::Sl14 as usize] = Some(FecMode::SoftConcatenated);
-        fec_modes[SpeedLevel::Sl15 as usize] = Some(FecMode::SoftConcatenated);
-        // SL16–SL19 re-use SL12–SL15's modes at r≈8/9 LDPC: MODCOD pairs, exactly as SL6/SL7 are for
+        // SL15–SL17 re-use SL12–SL14's modes at r≈8/9 LDPC: MODCOD pairs, exactly as SL6/SL7 are for
         // QPSK250. Each buys 2.03× the rate for the measured floor delta above.
+        fec_modes[SpeedLevel::Sl15 as usize] = Some(FecMode::LdpcHighRate);
         fec_modes[SpeedLevel::Sl16 as usize] = Some(FecMode::LdpcHighRate);
         fec_modes[SpeedLevel::Sl17 as usize] = Some(FecMode::LdpcHighRate);
-        fec_modes[SpeedLevel::Sl18 as usize] = Some(FecMode::LdpcHighRate);
-        fec_modes[SpeedLevel::Sl19 as usize] = Some(FecMode::LdpcHighRate);
-        // SNR floors — the SNR/step pairs the fast-downshift jumps to; monotonic across the finer
-        // ladder. Placed between neighbours from the AWGN sweeps (`calibrate_ladder_gap_fillers` +
-        // `calibrate_snr_floors_hpx_hf`, lower bounds in parens) with the low-order rungs' fading
-        // margin: SL4 BPSK100 (≤0), SL6 QPSK250+Rs (4), SL9 8PSK500+Rs (9), SL10 SCFDMA26-32QAM+SC (8),
-        // SL11 OFDM52-8PSK+SC (8), SL12 OFDM52-16QAM+SC (9), SL13 OFDM52-32QAM+SC (8), SL14/SL15
-        // OFDM52-64QAM+SC (15). Floors are the SC-FDMA AWGN calibration; OFDM is at least as good on AWGN
-        // (bake-off ties) and far better on fading, so these stay conservative. Unlike the retired
-        // single-carrier segment, the OFDM rungs actually hold up under moderate_f1 fading (its cyclic
-        // prefix rides the delay spread). Re-run both sweeps if the DSP changes.
+        // SNR floors — the SNR/step pairs the fast-downshift jumps to; monotonic across the ladder.
+        // Low-order rungs (SL2–SL13) from the AWGN sweeps with the fading margin. The dense OFDM rungs
+        // (SL11–SL17) carry a consistent ≈+8 dB fading margin over OFDM's measured AWGN floors
+        // (8PSK 6, 16QAM 8, 32QAM 10, 64QAM 14; 16QAM-LHR 12, 32QAM-LHR 16, 64QAM-LHR 20 — see
+        // `ldpc_ladder_rungs::measure_ofdm_floors`), which is what the SC-FDMA-derived numbers happened
+        // to give; OFDM holds up under moderate_f1 fading (its CP rides the delay spread). Re-run the
+        // sweeps if the DSP changes.
         let mut snr_floors = [None; 21];
         snr_floors[SpeedLevel::Sl2 as usize] = Some(3.0_f32);
         snr_floors[SpeedLevel::Sl3 as usize] = Some(4.0_f32);
@@ -469,21 +463,17 @@ impl SessionProfile {
         snr_floors[SpeedLevel::Sl7 as usize] = Some(9.0_f32);
         snr_floors[SpeedLevel::Sl8 as usize] = Some(11.0_f32);
         snr_floors[SpeedLevel::Sl9 as usize] = Some(12.0_f32);
-        snr_floors[SpeedLevel::Sl10 as usize] = Some(13.0_f32);
-        snr_floors[SpeedLevel::Sl11 as usize] = Some(14.0_f32);
-        snr_floors[SpeedLevel::Sl12 as usize] = Some(16.0_f32);
-        snr_floors[SpeedLevel::Sl13 as usize] = Some(17.0_f32);
-        snr_floors[SpeedLevel::Sl14 as usize] = Some(19.0_f32);
-        snr_floors[SpeedLevel::Sl15 as usize] = Some(22.0_f32);
-        // SL16–SL19 carry the same +9 dB fading margin over their measured AWGN floor that SL11–SL13
-        // and SL15 do (14/15/19/21 measured → 23/24/28/30).
-        snr_floors[SpeedLevel::Sl16 as usize] = Some(23.0_f32);
-        snr_floors[SpeedLevel::Sl17 as usize] = Some(24.0_f32);
-        snr_floors[SpeedLevel::Sl18 as usize] = Some(28.0_f32);
-        snr_floors[SpeedLevel::Sl19 as usize] = Some(30.0_f32);
-        // Ceilings gate the cautious one-step upshift: a uniform +2 dB hysteresis over the next rung's
-        // floor — `ceiling(L) = floor(L+1) + 2` — so every rung dwells the same margin before climbing.
-        // Reachability holds (ceiling(L) > floor(L+1)). SL19 is the top rung — no ceiling.
+        snr_floors[SpeedLevel::Sl10 as usize] = Some(13.0_f32); // SCFDMA26-32QAM
+        snr_floors[SpeedLevel::Sl11 as usize] = Some(14.0_f32); // OFDM52-8PSK  +SC
+        snr_floors[SpeedLevel::Sl12 as usize] = Some(16.0_f32); // OFDM52-16QAM +SC
+        snr_floors[SpeedLevel::Sl13 as usize] = Some(17.0_f32); // OFDM52-32QAM +SC
+        snr_floors[SpeedLevel::Sl14 as usize] = Some(22.0_f32); // OFDM52-64QAM +SC
+        snr_floors[SpeedLevel::Sl15 as usize] = Some(23.0_f32); // OFDM52-16QAM +LHR
+        snr_floors[SpeedLevel::Sl16 as usize] = Some(24.0_f32); // OFDM52-32QAM +LHR
+        snr_floors[SpeedLevel::Sl17 as usize] = Some(30.0_f32); // OFDM52-64QAM +LHR (ladder top)
+                                                                // Ceilings gate the cautious one-step upshift: a uniform +2 dB hysteresis over the next rung's
+                                                                // floor — `ceiling(L) = floor(L+1) + 2` — so every rung dwells the same margin before climbing.
+                                                                // Reachability holds (ceiling(L) > floor(L+1)). SL17 is the top rung — no ceiling.
         let mut snr_ceilings = [None; 21];
         snr_ceilings[SpeedLevel::Sl2 as usize] = Some(6.0_f32); // floor(SL3)=4 +2
         snr_ceilings[SpeedLevel::Sl3 as usize] = Some(6.5_f32); // floor(SL4)=4.5 +2
@@ -496,21 +486,19 @@ impl SessionProfile {
         snr_ceilings[SpeedLevel::Sl10 as usize] = Some(16.0_f32); // floor(SL11)=14 +2
         snr_ceilings[SpeedLevel::Sl11 as usize] = Some(18.0_f32); // floor(SL12)=16 +2
         snr_ceilings[SpeedLevel::Sl12 as usize] = Some(19.0_f32); // floor(SL13)=17 +2
-        snr_ceilings[SpeedLevel::Sl13 as usize] = Some(21.0_f32); // floor(SL14)=19 +2
-        snr_ceilings[SpeedLevel::Sl14 as usize] = Some(24.0_f32); // floor(SL15)=22 +2
-        snr_ceilings[SpeedLevel::Sl15 as usize] = Some(25.0_f32); // floor(SL16)=23 +2
-        snr_ceilings[SpeedLevel::Sl16 as usize] = Some(26.0_f32); // floor(SL17)=24 +2
-        snr_ceilings[SpeedLevel::Sl17 as usize] = Some(30.0_f32); // floor(SL18)=28 +2
-        snr_ceilings[SpeedLevel::Sl18 as usize] = Some(32.0_f32); // floor(SL19)=30 +2
+        snr_ceilings[SpeedLevel::Sl13 as usize] = Some(24.0_f32); // floor(SL14)=22 +2
+        snr_ceilings[SpeedLevel::Sl14 as usize] = Some(25.0_f32); // floor(SL15)=23 +2
+        snr_ceilings[SpeedLevel::Sl15 as usize] = Some(26.0_f32); // floor(SL16)=24 +2
+        snr_ceilings[SpeedLevel::Sl16 as usize] = Some(32.0_f32); // floor(SL17)=30 +2
         Self {
             modes,
             initial_level: SpeedLevel::Sl2,
             nack_threshold: 3,
             snr_floors,
             snr_ceilings,
-            // Guard admission to the densest rung (SL19, 64QAM at r≈8/9) behind a prior SNR upgrade
+            // Guard admission to the densest rung (SL17, 64QAM at r≈8/9) behind a prior SNR upgrade
             // candidate, mirroring hpx_wideband_hd.
-            ack_up_requires_snr_candidate_at: Some(SpeedLevel::Sl19),
+            ack_up_requires_snr_candidate_at: Some(SpeedLevel::Sl17),
             fec_modes,
         }
     }
