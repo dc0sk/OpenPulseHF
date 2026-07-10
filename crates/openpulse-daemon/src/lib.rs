@@ -204,6 +204,9 @@ pub struct RuntimeControlState {
     /// Our active OTA rate-ladder identity `(profile_name, fingerprint)`, set at OTA startup. Used to
     /// advertise our ladder in the handshake and to detect a diverged peer ladder. `None` = no OTA.
     pub local_ota_ladder: Option<(String, u64)>,
+    /// Compress fixed-mode `SendMessage` payloads before transmission (`[compression] enabled`). The OTA
+    /// path is packed in `server::run`; this covers the non-OTA transmit inside `apply_command_to_engine`.
+    pub compress_tx: bool,
 }
 
 impl RuntimeControlState {
@@ -275,6 +278,7 @@ impl Default for RuntimeControlState {
             verified_peer: None,
             handshake_sar: SarReassembler::new(HANDSHAKE_TIMEOUT),
             local_ota_ladder: None,
+            compress_tx: false,
         }
     }
 }
@@ -1689,7 +1693,13 @@ pub async fn apply_command_to_engine(
             // receiver-led OTA send with the real-radio PTT turnaround, so this branch
             // only runs for the non-OTA case.
             let mode = active_mode.lock().await.clone();
-            if let Err(err) = engine.transmit(body.as_bytes(), &mode, None) {
+            // Compress on the wire when enabled; the peer's rx tick unpacks the self-describing frame.
+            let payload = if runtime_state.compress_tx {
+                openpulse_core::compression::pack(body.as_bytes())
+            } else {
+                body.as_bytes().to_vec()
+            };
+            if let Err(err) = engine.transmit(&payload, &mode, None) {
                 tracing::warn!(mode = %mode, error = %err, "daemon rf dispatch failed for SendMessage");
                 let _ = event_tx.send(ControlEvent::CommandError {
                     command: "send_message".to_string(),
@@ -2385,6 +2395,46 @@ mod command_apply_tests {
 
         let rx = engine.receive("BPSK250", None).unwrap();
         assert_eq!(rx, b"rf body payload");
+    }
+
+    #[tokio::test]
+    async fn apply_send_message_compresses_the_wire_when_enabled() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, _) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+
+        let body = "status ok ".repeat(20); // compressible
+        let cmd = ControlCommand::SendMessage {
+            to: "W1AW".into(),
+            subject: "status".into(),
+            body: body.clone(),
+        };
+
+        let mut runtime_state = RuntimeControlState::default();
+        runtime_state.compress_tx = true;
+        apply_command_to_engine(
+            &cmd,
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut runtime_state,
+        )
+        .await;
+
+        // The wire carries a packed (smaller) frame; unpack recovers the original body.
+        let rx = engine.receive("BPSK250", None).unwrap();
+        assert!(
+            rx.len() < body.len(),
+            "packed wire frame {} should be smaller than body {}",
+            rx.len(),
+            body.len()
+        );
+        assert_eq!(
+            openpulse_core::compression::unpack(&rx).unwrap(),
+            body.as_bytes()
+        );
     }
 
     #[tokio::test]

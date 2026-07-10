@@ -9,6 +9,27 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — feat(compression): compress the fixed-mode SendMessage path too
+
+- **Requirement/change:** the prior wiring compressed only the OTA session path; a non-OTA (fixed-mode)
+  `SendMessage` still transmitted raw. Close that gap so `[compression] enabled` covers both paths.
+- **Design decision:** thread the flag through `RuntimeControlState.compress_tx` (already passed to
+  `apply_command_to_engine`) rather than change that shared function's signature or duplicate the transmit
+  in `server::run`. The fixed-mode `SendMessage` arm packs the body when the flag is set; `server::run`
+  sets `compress_tx` from `cfg.compression.enabled` at construction. The `body: String` command is
+  unchanged — packing happens at the byte-transmit boundary, so no command-type change is needed. RX is
+  already universal (the rx tick unpacks any self-describing frame), so nothing on the receive side changes.
+- **Implementation:** `crates/openpulse-daemon/src/lib.rs` (`RuntimeControlState.compress_tx` field +
+  Default; pack in the `SendMessage` arm of `apply_command_to_engine`), `crates/openpulse-daemon/src/server.rs`
+  (set `compress_tx` in the `RuntimeControlState` construction).
+- **Tests:** `apply_send_message_compresses_the_wire_when_enabled` — with `compress_tx = true`, a compressible
+  body transmits as a **smaller** frame that `unpack`s back to the original; the existing
+  `apply_send_message_transmits_payload_over_active_mode` (flag off) still sends the raw body.
+- **Test results (actually run):** full `openpulse-daemon` suite 70 passed / 0 failed; clippy `-D warnings`
+  + fmt clean.
+
+---
+
 ## 2026-07-10 — feat(compression): end-to-end session compression on the wire (opt-in)
 
 - **Requirement/change:** compression existed as a codec + handshake negotiation but was never applied to
