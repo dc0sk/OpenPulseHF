@@ -49,6 +49,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     );
     let initial_qsy_enabled = cfg.qsy.enabled;
     let initial_allow_tuner_on_high_swr = cfg.qsy.allow_integrated_tuner_on_high_swr;
+    // Opt-in end-to-end session compression: pack OTA data payloads before TX. The RX side always
+    // unpacks a self-describing frame regardless of this flag (see the rx tick), so it is safe on one end.
+    let compress_tx = cfg.compression.enabled;
     let initial_bandplan_mode = if cfg.qsy.bandplan_awareness_enabled {
         cfg.qsy.bandplan_mode.clone()
     } else {
@@ -619,11 +622,18 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     // differs from ours — a `recommended_level` would otherwise mean different modes.
                     if engine.ota_active() && !runtime_state.ota_suppressed_by_peer() {
                         ota_send_handled = true;
+                        // Compress the session payload on the wire when enabled; the peer's rx tick
+                        // unpacks the self-describing frame. Falls back to raw bytes when disabled.
+                        let payload = if compress_tx {
+                            openpulse_core::compression::pack(body.as_bytes())
+                        } else {
+                            body.as_bytes().to_vec()
+                        };
                         ota_send_with_ptt(
                             &mut engine,
                             &mut ptt_controller,
                             &handle.event_tx,
-                            body.as_bytes(),
+                            &payload,
                         );
                     }
                 }
@@ -725,6 +735,10 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         Vec::new()
                     }
                 };
+                // End-to-end session compression: a peer that packed its payload sent a self-describing
+                // frame; unpack it here so routing, metrics, and message surfacing see the original bytes.
+                // Non-packed frames (control frames, un-packed data) lack the magic and pass through.
+                let bytes = openpulse_core::compression::unpack(&bytes).unwrap_or(bytes);
                 let decode_ms = decode_start.elapsed().as_secs_f32() * 1000.0;
                 if !bytes.is_empty() {
                     process_received_bytes(

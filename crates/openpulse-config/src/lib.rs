@@ -47,6 +47,7 @@ pub struct OpenpulseConfig {
     pub logbook: LogbookConfig,
     pub observability: ObservabilityConfig,
     pub control_security: ControlSecurityConfig,
+    pub compression: CompressionConfig,
 }
 
 /// Control-channel link security (REQ-SEC-CTL-01/02). Auth is always required on a non-loopback
@@ -88,6 +89,16 @@ impl Default for ObservabilityConfig {
             archive_dir: "~/.local/share/openpulse/audit".into(),
         }
     }
+}
+
+/// End-to-end session compression settings (opt-in; changes the on-air payload).
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CompressionConfig {
+    /// Compress OTA session data payloads before transmission (self-describing LZ4/zstd frame).
+    /// Default `false`. The receive side always decompresses a packed frame regardless of this flag,
+    /// so it is safe to enable on one station independently.
+    pub enabled: bool,
 }
 
 /// Automatic ADIF logbook settings (opt-in; one record per completed contact).
@@ -977,6 +988,12 @@ adif_path = "~/.local/share/openpulse/openpulse.adi"
 # Optional callsign → grid lookup to fill the worked station's GRIDSQUARE (case-insensitive).
 # [logbook.peer_grids]
 # "DL1ABC" = "JO31aa"
+
+[compression]
+# Compress OTA session data payloads before transmission (self-describing LZ4/zstd frame).
+# The receiver always decompresses a packed frame regardless of this flag, so it is safe to
+# enable on one station independently. Opt-in (changes the on-air payload).
+enabled = false
 "#
     .to_string()
 }

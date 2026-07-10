@@ -9,6 +9,36 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — feat(compression): end-to-end session compression on the wire (opt-in)
+
+- **Requirement/change:** compression existed as a codec + handshake negotiation but was never applied to
+  the data path — the daemon transmitted OTA payloads uncompressed. Enable real on-air compression.
+- **Design decision:** a **self-describing** compressed frame (`compression::pack` / `unpack`):
+  `PACK_MAGIC "OPZ1"(4) | algo_tag(1) | payload`, where `pack` uses `compress_if_smaller` (best of LZ4/zstd,
+  or `None` tag when incompressible) and `unpack` returns `Some(original)` only for a well-formed packed
+  frame and `None` for anything else. The magic makes it **passthrough-safe**: control frames (relay `OPHF`,
+  QSY, handshake `HSCQ`/`HSAK`) and un-packed data lack the magic and are never touched, so the feature can
+  be enabled on one station independently and never corrupts the other end's frames. Applied at the **OTA
+  session data seam** (the real receiver-led bulk-transfer path) — TX packs the body when `[compression]
+  enabled`, and the RX tick **always** unpacks (self-describing), so a compressing peer is understood
+  regardless of the local flag. `unpack` reuses `decompress`'s `MAX_DECOMPRESSED_SIZE` guard (OOM-safe).
+- **Implementation:** `crates/openpulse-core/src/compression.rs` (`PACK_MAGIC`, `pack`, `unpack`);
+  `crates/openpulse-config/src/lib.rs` (`CompressionConfig { enabled }` default false + template section);
+  `crates/openpulse-daemon/src/server.rs` (pack the OTA body on TX when enabled; unpack the decoded RX
+  bytes at the rx-tick seam before routing/metrics).
+- **Tests:** core `pack_unpack_roundtrips_compressible_data` (packed < raw, non-None tag, restores),
+  `..._incompressible_data` (None tag), `unpack_passes_through_non_packed_frames` (OPHF/HSCQ/QSY/plain/empty
+  → None), `unpack_rejects_unknown_tag_and_corrupt_payload`; modem `compression_wire.rs` — a packed payload
+  survives modem framing + RS FEC over a clean channel and unpacks to the original, and a non-packed payload
+  passes through the rx seam untouched.
+- **Test results (actually run):** core 436 passed / 0 failed; `compression_wire` 2 passed; config 15 passed;
+  daemon 69 passed / 0 failed; ardop/kiss/cli consumers build clean; clippy `-D warnings` + fmt clean.
+- **Note (scope):** wired for the OTA session path; fixed-mode `SendMessage` transmit still sends raw (its
+  `body: String` command seam can't carry the binary packed frame without a command-type change) — a noted
+  follow-up. The RX `unpack` is universal, so it already accepts packed frames from any sender.
+
+---
+
 ## 2026-07-10 — fix(panel): Event-log tab fills the full tab width
 
 - **Requirement/change:** the Event-log tab's column and text used the default `Shrink` width, so lines
