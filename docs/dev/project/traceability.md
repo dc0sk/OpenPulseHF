@@ -9,6 +9,36 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — feat(filexfer): Phase C-2b — the receive session (offer → verify → write) + commands
+
+- **Requirement/change:** FF-16 Phase C-2 (`docs/dev/design/file-transfer-plan.md` §6): the daemon's inbound
+  file-transfer session on the proven C-2a seam — accept an offer, receive blocks, verify the signed
+  manifest, and write the file; plus the `AcceptFile`/`RejectFile`/`CancelFile` command handlers.
+- **Design decision:** `filexfer.rs` grows the full receive handler. `on_offer` verifies the embedded
+  manifest signature against the handshake-proven peer key (`RuntimeControlState::verified_peer.pubkey`),
+  runs the pure `decide` policy plus the allowlist and per-peer quota, emits `FileOffered`, and either
+  transmits `FileAccept` (auto-accept), waits for `AcceptFile` (prompt), or transmits `FileReject`. Block
+  fragments feed the session's `BlockAssembler`; a completed block returns a `BlockAck`, and the last block
+  drives reassemble → `verify_manifest_with_payload` → **write the file** (`sanitize_filename`,
+  `download_dir/<peer>/`, no-overwrite, `.unverified` quarantine on hash mismatch) → `FileComplete`
+  (countersigned receipt) → `FileReceived`. The active session lives in `RuntimeControlState.file_rx`
+  (taken out while driven, so the rest of the state is freely borrowable); `filexfer_policy` is built from
+  `[file_transfer]` config in `server::run`. Everything runs on the production entry
+  (`accumulate_capture` → rx tick → `process_received_bytes`); the send-side PTT loop is C-3.
+- **Implementation:** `crates/openpulse-daemon/src/filexfer.rs` (`FileTransferPolicy`, `FxRxState`,
+  `on_offer`/`on_block_fragment`/`drive_rx_actions`/`reassemble_verify_write`, file I/O, quota, countersign);
+  `lib.rs` (`RuntimeControlState.file_rx` + `filexfer_policy`; `AcceptFile`/`RejectFile`/`CancelFile` arms);
+  `server.rs` (policy from config); daemon dev-dep `ed25519-dalek`.
+- **Tests:** `inbound_offer_and_blocks_write_verified_file` — a signed multi-block offer fed through the real
+  `process_received_bytes` auto-accepts, receives every block's fragments, verifies, **writes the file to
+  disk** (read back byte-for-byte), emits `FileReceived { verified: true }`, and clears the session.
+- **Test results (actually run):** full `openpulse-daemon` suite 73 passed / 0 failed (handshake unchanged);
+  clippy `-D warnings` + fmt clean.
+- **Next:** C-3 — the live `server::run` `SendFile` PTT burst delivery loop + twin-daemon round-trip test
+  (= MVP ship line: both directions over RF).
+
+---
+
 ## 2026-07-10 — feat(filexfer): Phase C-2a — inbound OPFX receive-routing seam (handshake preserved)
 
 - **Requirement/change:** FF-16 Phase C-2 (`docs/dev/design/file-transfer-plan.md` §6.2): route inbound

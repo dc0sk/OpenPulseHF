@@ -216,6 +216,10 @@ pub struct RuntimeControlState {
     /// Tripwire: number of inbound `OPFX` frames routed to the file-transfer path. Stays 0 unless a
     /// file frame actually reaches the seam on the production receive path (seam-gap discipline).
     pub filexfer_frames_routed: u64,
+    /// Active inbound file-transfer session (at most one per link in v1).
+    pub file_rx: Option<crate::filexfer::FxRxState>,
+    /// Storage + acceptance policy from `[file_transfer]` config.
+    pub filexfer_policy: crate::filexfer::FileTransferPolicy,
 }
 
 impl RuntimeControlState {
@@ -294,6 +298,8 @@ impl Default for RuntimeControlState {
             compress_tx: false,
             filexfer_sar: SarReassembler::new(FILEXFER_SAR_TIMEOUT),
             filexfer_frames_routed: 0,
+            file_rx: None,
+            filexfer_policy: crate::filexfer::FileTransferPolicy::default(),
         }
     }
 }
@@ -2051,19 +2057,27 @@ pub async fn apply_command_to_engine(
         ControlCommand::SetLogbook { enabled } => {
             runtime_state.logbook.set_enabled(*enabled);
         }
+        // Receive-side file-transfer decisions act on the active session (engine + event_tx are here).
+        ControlCommand::AcceptFile { transfer_id } => {
+            let mode = active_mode.lock().await.clone();
+            filexfer::accept_offer(*transfer_id, runtime_state, event_tx, &mode, engine);
+        }
+        ControlCommand::RejectFile { transfer_id } => {
+            let mode = active_mode.lock().await.clone();
+            filexfer::reject_offer(*transfer_id, runtime_state, event_tx, &mode, engine);
+        }
+        ControlCommand::CancelFile { transfer_id } => {
+            let mode = active_mode.lock().await.clone();
+            filexfer::cancel_transfer(*transfer_id, runtime_state, event_tx, &mode, engine);
+        }
         // No live-modem side effects for these commands in the engine path.
-        // They are handled by dispatch-only paths or request-response control flow.
-        // File-transfer commands are intercepted in `server::run` (where PTT + the file sessions live),
-        // like the `SendMessage` OTA interception; they are no-ops on the plain engine path.
+        // `SendFile` is intercepted in `server::run` (where PTT + the send loop live, Phase C-3).
         ControlCommand::SubscribeSpectrum { .. }
         | ControlCommand::GetConfig
         | ControlCommand::ListMessages
         | ControlCommand::GetMessage { .. }
         | ControlCommand::DeleteMessage { .. }
         | ControlCommand::SendFile { .. }
-        | ControlCommand::AcceptFile { .. }
-        | ControlCommand::RejectFile { .. }
-        | ControlCommand::CancelFile { .. }
         | ControlCommand::ListFiles => {}
     }
 }
@@ -2454,6 +2468,98 @@ mod command_apply_tests {
             rs.filexfer_frames_routed, 2,
             "OPFX block fragment must reach the file seam"
         );
+    }
+
+    #[tokio::test]
+    async fn inbound_offer_and_blocks_write_verified_file() {
+        use crate::filexfer::{FileTransferPolicy, FX_CONTROL_SEGMENT_ID};
+        use ed25519_dalek::SigningKey;
+        use openpulse_core::manifest::TransferManifest;
+        use openpulse_core::sar::sar_encode;
+        use openpulse_filexfer::{encode_block, split_blocks, FileOffer, FxFrame};
+
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(128);
+        let ev_tx = Arc::new(tx);
+
+        // A signed offer from a known sender.
+        let mut seed = [0u8; 32];
+        seed[0] = 42;
+        let pubkey = SigningKey::from_bytes(&seed).verifying_key().to_bytes();
+        let file = b"file transfer receive test payload. ".repeat(80).to_vec();
+        let manifest = TransferManifest::sign(&file, "W1AW", &seed).unwrap();
+        let transfer_id = 0x0BAD_F00D;
+        let block_size = 1024u32;
+        let offer =
+            FileOffer::from_manifest(transfer_id, &manifest, "recv.txt", "text/plain", block_size)
+                .unwrap();
+        assert!(offer.block_count >= 2, "want a multi-block file");
+
+        let dir = std::env::temp_dir().join(format!("opfx_recv_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let policy = FileTransferPolicy::from_config(&openpulse_config::FileTransferConfig {
+            enabled: true,
+            download_dir: dir.to_string_lossy().into_owned(),
+            auto_accept_max_bytes: u64::MAX,
+            max_file_bytes: 10 * 1024 * 1024,
+            per_peer_quota_bytes: 0,
+            require_verified_peer: true,
+            allowed_peers: vec![],
+            offer_timeout_secs: 120,
+        });
+        let mut rs = RuntimeControlState {
+            verified_peer: Some(VerifiedPeer {
+                callsign: "W1AW".into(),
+                grid: String::new(),
+                pubkey: pubkey.to_vec(),
+                profile_compatible: None,
+            }),
+            filexfer_policy: policy,
+            ..RuntimeControlState::default()
+        };
+
+        // Offer → auto-accepted → receive session started.
+        let offer_frag =
+            sar_encode(FX_CONTROL_SEGMENT_ID, &FxFrame::FileOffer(offer).encode()).unwrap();
+        process_received_bytes(
+            &offer_frag[0],
+            &mut rs,
+            None,
+            &ev_tx,
+            &active_mode,
+            &mut engine,
+        )
+        .await;
+        assert!(
+            rs.file_rx.is_some(),
+            "offer should auto-accept and start a session"
+        );
+
+        // Deliver every block's fragments.
+        for (k, block) in split_blocks(&file, block_size).iter().enumerate() {
+            for frag in encode_block(transfer_id, k as u16, block, None).unwrap() {
+                process_received_bytes(&frag, &mut rs, None, &ev_tx, &active_mode, &mut engine)
+                    .await;
+            }
+        }
+
+        // The file must have been verified and written; find the FileReceived event + read it back.
+        let mut path = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let ControlEvent::FileReceived {
+                verified, path: p, ..
+            } = ev
+            {
+                assert!(verified, "a signed file must verify");
+                path = Some(p);
+            }
+        }
+        let path = path.expect("FileReceived emitted");
+        assert_eq!(std::fs::read(&path).expect("file on disk"), file);
+        assert!(rs.file_rx.is_none(), "session cleared after completion");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

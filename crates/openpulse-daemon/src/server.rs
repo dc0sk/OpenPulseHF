@@ -524,6 +524,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
         dcd_squelch_bands: cfg.modem.dcd_squelch_bands.clone(),
         local_ota_ladder: ota_ladder_identity,
         compress_tx,
+        filexfer_policy: crate::filexfer::FileTransferPolicy::from_config(&cfg.file_transfer),
         logbook: crate::logbook::Logbook::new(
             cfg.logbook.enabled,
             &cfg.logbook.adif_path,
