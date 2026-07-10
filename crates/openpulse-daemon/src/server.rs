@@ -763,6 +763,12 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         } else {
                             m.decode_latency_ms * 0.8 + decode_ms * 0.2
                         };
+                        // Live compressibility of the decoded payload stream: the session compressor's
+                        // best-effort size (never larger than raw) drives the reported compress_ratio.
+                        let (compressed, _algo) =
+                            openpulse_core::compression::compress_if_smaller(&bytes);
+                        m.raw_payload_bytes += bytes.len() as u64;
+                        m.compressed_payload_bytes += compressed.len() as u64;
                     }
                 }
                 // Feed the spectrum/waterfall tap with the engine's most recent audio
