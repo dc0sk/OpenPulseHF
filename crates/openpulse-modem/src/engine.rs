@@ -402,6 +402,10 @@ const SPECTRUM_TAP_MAX: usize = 16384;
 /// dropped. Three matches the HARQ diversity depth measured in `harq_fade_diversity`.
 const OTA_HARQ_MAX_ATTEMPTS: usize = 3;
 
+/// One Reed–Solomon code block, RS(255,223). A SoftConcatenated frame at or below this is a single
+/// block; the burst interleaver only benefits frames larger than one block.
+const RS_BLOCK_BYTES: usize = 255;
+
 impl ModemEngine {
     /// Create a new engine backed by the given audio backend.
     pub fn new(audio: Box<dyn AudioBackend>) -> Self {
@@ -1641,8 +1645,7 @@ impl ModemEngine {
     ) -> Result<Vec<u8>, ModemError> {
         let corrected = match fec {
             FecMode::SoftConcatenated => {
-                let sv = SoftViterbiCodec.decode_soft(llrs)?;
-                let rs = FecCodec::new().decode(&sv)?;
+                let rs = soft_concat_decode_llrs(llrs)?;
                 self.route_wire_stage(PipelineStage::DemodulateDecode, WirePayload { bytes: rs })?
             }
             FecMode::Ldpc => {
@@ -2664,8 +2667,7 @@ impl ModemEngine {
             }
             FecMode::SoftConcatenated => {
                 let llrs = llrs.unwrap();
-                let sv = SoftViterbiCodec.decode_soft(&llrs)?;
-                let rs = FecCodec::new().decode(&sv)?;
+                let rs = soft_concat_decode_llrs(&llrs)?;
                 self.route_wire_stage(PipelineStage::DemodulateDecode, WirePayload { bytes: rs })?
             }
             FecMode::Ldpc => {
@@ -3302,7 +3304,7 @@ impl ModemEngine {
 
         let frame_wire = self.stage_encode_frame(data)?;
         let rs_bytes = FecCodec::new().encode(&frame_wire.bytes);
-        let sv_bytes = SoftViterbiCodec.encode(&rs_bytes);
+        let sv_bytes = soft_concat_encode(&rs_bytes);
         let fec_wire = WirePayload { bytes: sv_bytes };
         let fec_wire = self.route_wire_stage(PipelineStage::EncodeModulate, fec_wire)?;
 
@@ -3369,8 +3371,7 @@ impl ModemEngine {
             });
         }
 
-        let sv_decoded = SoftViterbiCodec.decode_soft(&llrs)?;
-        let rs_decoded = FecCodec::new().decode(&sv_decoded)?;
+        let rs_decoded = soft_concat_decode_llrs(&llrs)?;
         let corrected_wire = WirePayload { bytes: rs_decoded };
         let corrected_wire =
             self.route_wire_stage(PipelineStage::DemodulateDecode, corrected_wire)?;
@@ -4753,6 +4754,40 @@ fn encode_ldpc_blocks(codec: &LdpcCodec, info: &[u8]) -> Vec<u8> {
         out.extend_from_slice(&codec.encode(&block));
     }
     out
+}
+
+/// SoftConcatenated encode: RS-coded bytes → block-interleave → K=7 convolutional inner code.
+///
+/// The byte interleaver between the outer RS and inner conv is what makes this burst-tolerant: a
+/// deep-fade burst that overwhelms the Viterbi produces a run of byte errors, and deinterleaving
+/// spreads that run *across RS blocks* so the outer RS corrects it (measured burst-fade FER 0.98→0.20
+/// @4 dB, zero AWGN cost). It MUST be undone before RS on every decode path — see
+/// [`soft_concat_decode_llrs`].
+///
+/// Applied only to *multi-block* frames: a single RS block gains nothing (RS corrects its t=16 errors
+/// wherever they sit) and interleaving merely reshuffles a threshold frame's SRO/noise errors, which
+/// measurably tipped a marginal single-block SRO case. The permutation is length-preserving, so the
+/// receiver mirrors the same gate from the Viterbi-decoded length alone.
+fn soft_concat_encode(rs_bytes: &[u8]) -> Vec<u8> {
+    let payload = if rs_bytes.len() > RS_BLOCK_BYTES {
+        Interleaver::new(DEFAULT_INTERLEAVER_DEPTH).interleave(rs_bytes)
+    } else {
+        rs_bytes.to_vec()
+    };
+    SoftViterbiCodec.encode(&payload)
+}
+
+/// SoftConcatenated decode from soft LLRs: soft-Viterbi → (block-deinterleave for multi-block frames) →
+/// RS. Returns the RS-decoded frame-wire bytes. The exact counterpart of [`soft_concat_encode`]; every
+/// SoftConcatenated decode site funnels through this so the interleaver can never be applied one-sided.
+fn soft_concat_decode_llrs(llrs: &[f32]) -> Result<Vec<u8>, ModemError> {
+    let sv = SoftViterbiCodec.decode_soft(llrs)?;
+    let deint = if sv.len() > RS_BLOCK_BYTES {
+        Interleaver::new(DEFAULT_INTERLEAVER_DEPTH).deinterleave(&sv)
+    } else {
+        sv
+    };
+    FecCodec::new().decode(&deint)
 }
 
 /// Decode a concatenated LDPC codeword stream back to its information bytes.
