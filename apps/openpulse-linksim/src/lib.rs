@@ -469,15 +469,6 @@ fn frame_chunk_for(fec: FecMode) -> usize {
     }
 }
 
-/// Estimate the additive-noise SNR (dB) from the clean reference and the realized
-/// post-channel signal. Delegates to [`openpulse_channel::estimate_additive_snr_db`], which
-/// removes the multiplicative fading gain first — a naive `|tx|²/|tx-rx|²` counts fading as
-/// noise and collapses to ~-3 dB on any fading channel, which would pin the rate adapter at
-/// the profile floor regardless of the real SNR.
-fn estimate_snr_db(tx: &[f32], rx: &[f32]) -> f32 {
-    openpulse_channel::estimate_additive_snr_db(tx, rx)
-}
-
 /// A frame-distinct, highly compressible payload. The old code repeated one global pattern,
 /// so every frame was near-identical (only a tiny header changed) and the modulated TX
 /// waveform looked frozen (spectrum/waterfall stalled). Instead, build a *frame-specific*
@@ -813,7 +804,12 @@ impl LinkSim {
                     None => self.fwd.route_tapped(self.fwd_ch.as_mut()),
                 };
                 fwd_air += tx_s.len() as f64 / SAMPLE_RATE;
-                snr_acc += estimate_snr_db(&tx_s, &rx_s);
+                // Drive the receiver-led ladder with the SAME waveform-aware symbol-domain SNR the
+                // daemon uses (`ModemEngine::rx_snr_db` → the active plugin's `estimate_snr_db`), so the
+                // simulator mirrors the real software. A tx-vs-rx additive estimate counts delay spread
+                // as noise (OFDM52-16QAM at 25 dB through moderate_f1 reads −8 dB), which pinned the
+                // ladder below the OFDM rungs on exactly the frequency-selective fades they carry.
+                snr_acc += self.fwd.rx_engine.rx_snr_db(&mode, &rx_s);
                 chunk_count += 1;
                 forward_tx = tx_s;
                 forward_rx = rx_s;
@@ -1046,7 +1042,7 @@ mod tests {
             profile_name: "hpx_wideband_hd".into(),
             forward: ChannelSpec::Qrm {
                 snr_floor_db: 20.0,
-                tones: vec![(2900.0, 1.5)],
+                tones: vec![(2650.0, 1.5)],
             },
             reverse: ChannelSpec::Awgn(25.0),
             payload_bytes_per_frame: 200,
@@ -1061,7 +1057,12 @@ mod tests {
     fn out_of_band_notch(auto: bool) -> Option<LinkNotch> {
         Some(LinkNotch {
             auto,
-            oracle_freqs: vec![2900.0],
+            // A band-EDGE interferer (2650 Hz, just past the 2600 Hz protected edge) that leaks into the
+            // signal's outer subcarriers — where notching gives a real decode benefit even to a
+            // band-aware receiver. A far-out-of-band tone (e.g. 2900 Hz) is already rejected by the demod,
+            // so the plugin symbol-domain SNR the ladder now uses correctly sees little benefit from
+            // notching it (the old tx-vs-rx estimator over-penalised any out-of-band energy).
+            oracle_freqs: vec![2650.0],
             max_notches: 10,
             q: 25.0,
             protect: Some((400.0, 2600.0)),
@@ -1344,6 +1345,36 @@ mod tests {
         assert!(
             before.saturating_sub(after) > 1,
             "fast-downshift should drop >1 rung in one frame: SL{before} -> SL{after}"
+        );
+    }
+
+    #[test]
+    fn ofdm_hf_profile_climbs_on_a_dispersive_fade() {
+        // The gap the single-carrier `hpx_hf` ladder cannot cross: on a Doppler/delay-spread HF fade the
+        // BPSK/QPSK/8PSK entry rungs cannot decode (1 Hz Doppler spins their long-frame carrier phase),
+        // so the ladder never reaches the OFDM rungs. The all-OFDM `hpx_ofdm_hf` profile (OFDM16 entry,
+        // per-symbol pilot CE) does decode there, so linksim — now driven by the daemon's symbol-domain
+        // SNR — must climb it well into the dense OFDM rungs on moderate_f1.
+        let mut sim = LinkSim::new(&LinkParams {
+            profile_name: "hpx_ofdm_hf".into(),
+            forward: ChannelSpec::WattersonModerateF1(30.0),
+            reverse: ChannelSpec::Clean,
+            payload_bytes_per_frame: 64,
+            total_frames: 300,
+            seed: 11,
+            ..LinkParams::default()
+        });
+        let mut peak = sim.current_level();
+        for _ in 0..150 {
+            if sim.step().is_none() {
+                break;
+            }
+            peak = peak.max(sim.current_level());
+        }
+        assert!(
+            peak >= SpeedLevel::Sl8 as u8,
+            "hpx_ofdm_hf must climb into the dense OFDM rungs (≥ SL8) on a 30 dB moderate_f1 fade; \
+             peaked at SL{peak}"
         );
     }
 }

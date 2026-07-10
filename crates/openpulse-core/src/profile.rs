@@ -609,34 +609,40 @@ impl SessionProfile {
         modes[SpeedLevel::Sl8 as usize] = Some("OFDM52-16QAM");
         modes[SpeedLevel::Sl9 as usize] = Some("OFDM52-32QAM");
         modes[SpeedLevel::Sl10 as usize] = Some("OFDM52-64QAM");
+        // Floors/ceilings are in the units the receiver-led ladder actually reads: the plugin
+        // symbol-domain SNR (`ModemEngine::rx_snr_db`), which on a moderate_f1 fade is *conservative*
+        // (ZF noise-enhancement on faded subcarriers) and saturates near ~17 dB. Calibrated from the
+        // measured (plugin-SNR, decode) pairs on moderate_f1 (`ldpc_ladder_rungs`-style sweep): each rung
+        // decodes ≥ 0.8 once the plugin reads its floor. The AWGN-scale numbers this profile used before
+        // never cleared on fading, so the ladder stalled at SL6.
         let mut snr_floors = [None; 21];
-        snr_floors[SpeedLevel::Sl5 as usize] = Some(8.0_f32);
-        snr_floors[SpeedLevel::Sl6 as usize] = Some(11.0_f32);
-        snr_floors[SpeedLevel::Sl7 as usize] = Some(14.0_f32);
-        snr_floors[SpeedLevel::Sl8 as usize] = Some(17.0_f32);
-        snr_floors[SpeedLevel::Sl9 as usize] = Some(22.0_f32);
-        snr_floors[SpeedLevel::Sl10 as usize] = Some(26.0_f32);
+        snr_floors[SpeedLevel::Sl5 as usize] = Some(8.0_f32); // OFDM16
+        snr_floors[SpeedLevel::Sl6 as usize] = Some(9.0_f32); // OFDM52
+        snr_floors[SpeedLevel::Sl7 as usize] = Some(10.0_f32); // OFDM52-8PSK
+        snr_floors[SpeedLevel::Sl8 as usize] = Some(12.0_f32); // OFDM52-16QAM
+        snr_floors[SpeedLevel::Sl9 as usize] = Some(14.0_f32); // OFDM52-32QAM
+        snr_floors[SpeedLevel::Sl10 as usize] = Some(16.0_f32); // OFDM52-64QAM
         let mut snr_ceilings = [None; 21];
-        snr_ceilings[SpeedLevel::Sl5 as usize] = Some(14.0_f32);
-        snr_ceilings[SpeedLevel::Sl6 as usize] = Some(18.0_f32);
-        snr_ceilings[SpeedLevel::Sl7 as usize] = Some(20.0_f32);
-        snr_ceilings[SpeedLevel::Sl8 as usize] = Some(24.0_f32);
-        snr_ceilings[SpeedLevel::Sl9 as usize] = Some(28.0_f32);
-        // SL10 (OFDM52-64QAM) is the ceiling; no upgrade above it.
-        // Per-level FEC, measured by clean loopback (see the OFDM-HOM probe in the PR):
-        //   - OFDM16 / OFDM52 (SL5/SL6) decode unprotected and *break* under full RS (a padded
-        //     255-byte block spans too many OFDM symbols to reassemble) → leave them FEC-free.
-        //   - OFDM52-8PSK (SL7) *fails* unprotected even on a clean channel and needs FEC; the
-        //     denser rungs (SL8–SL10) decode either way → protect SL7–SL10 with RS.
-        // Without this the session stalls at SL6 and never reaches the dense rungs.
+        snr_ceilings[SpeedLevel::Sl5 as usize] = Some(11.0_f32); // floor(SL6)=9 +2
+        snr_ceilings[SpeedLevel::Sl6 as usize] = Some(12.0_f32); // floor(SL7)=10 +2
+        snr_ceilings[SpeedLevel::Sl7 as usize] = Some(14.0_f32); // floor(SL8)=12 +2
+        snr_ceilings[SpeedLevel::Sl8 as usize] = Some(16.0_f32); // floor(SL9)=14 +2
+        snr_ceilings[SpeedLevel::Sl9 as usize] = Some(18.0_f32); // floor(SL10)=16 +2
+                                                                 // SL10 (OFDM52-64QAM) is the ceiling; no upgrade above it.
+                                                                 // Every rung carries SoftConcatenated FEC. The unprotected OFDM16/OFDM52 entry rungs failed ~50 %
+                                                                 // of moderate_f1 frames (a single faded subcarrier corrupts a byte with no FEC → the ladder stuck
+                                                                 // on an unreliable rung); SoftConcatenated's soft LLRs (per-subcarrier |H|²-weighted) take them to
+                                                                 // ≥ 0.9. It does NOT hit the padded-RS-block geometry problem plain RS did on OFDM16/OFDM52.
         let mut fec_modes = [None; 21];
         for sl in [
+            SpeedLevel::Sl5,
+            SpeedLevel::Sl6,
             SpeedLevel::Sl7,
             SpeedLevel::Sl8,
             SpeedLevel::Sl9,
             SpeedLevel::Sl10,
         ] {
-            fec_modes[sl as usize] = Some(FecMode::Rs);
+            fec_modes[sl as usize] = Some(FecMode::SoftConcatenated);
         }
         Self {
             modes,

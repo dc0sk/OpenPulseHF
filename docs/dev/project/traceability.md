@@ -9,6 +9,37 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — fix(profile+linksim): all-OFDM ladder climbs on dispersive HF; linksim uses the daemon SNR
+
+- **Requirement/change:** two coupled gaps found while checking whether linksim/panel support the OFDM re-seat.
+  (1) The receiver-led ladder cannot bootstrap into the OFDM rungs on a Doppler/delay-spread fade: `hpx_hf`
+  starts at BPSK31 and the single-carrier PSK rungs (SL2–9) cannot decode moderate_f1 (measured @30 dB:
+  BPSK31 0/10, QPSK250 1/10, 8PSK500 1/10; OFDM52-16QAM 10/10 — 1 Hz Doppler spins their long-frame carrier
+  phase). (2) Linksim drove its ladder from `estimate_additive_snr_db(tx,rx)`, which reads ≈ −8 dB for a 25 dB
+  OFDM signal through moderate_f1 (it counts delay spread as noise), so it did not mirror the daemon and could
+  not exercise the OFDM ladder on fading. Panel supports it already (OFDM modes in its list).
+- **Design decision:** (1) the all-OFDM `hpx_ofdm_hf` profile (OFDM16 entry, per-symbol pilot CE) is the right
+  ladder for dispersive HF, but its entry rungs were unprotected (failed ~50 % on fading — one faded subcarrier
+  corrupts a byte) and its floors were AWGN-scale (never cleared). Protect every rung with SoftConcatenated
+  (its soft LLRs take OFDM16/OFDM52 to ≥0.9; it does not hit the padded-RS-block geometry plain RS did) and
+  recalibrate floors/ceilings into the *plugin-SNR* units the ladder reads — conservative and saturating ~17 dB
+  on moderate_f1 (measured floors 8/9/10/12/14/16). (2) Linksim adopts `ModemEngine::rx_snr_db` (made `pub`) —
+  the daemon's own symbol-domain estimator — removing the `estimate_additive_snr_db` redundancy so the
+  simulator mirrors the real software. Global default left at `hpx_hf` (the OFDM16-floor-8 vs BPSK31-floor-3
+  weak-signal tradeoff is a product call flagged for the user), but `hpx_ofdm_hf` is now the working
+  dispersive-HF ladder.
+- **Implementation:** `crates/openpulse-core/src/profile.rs` (`hpx_ofdm_hf`: SoftConcatenated on SL5–SL10,
+  floors 8/9/10/12/14/16, ceilings +2); `crates/openpulse-modem/src/engine.rs` (`pub fn rx_snr_db`);
+  `apps/openpulse-linksim/src/lib.rs` (drive the ladder from `self.fwd.rx_engine.rx_snr_db`, drop the
+  additive helper). Tests: `session_profile::hpx_ofdm_hf_snr_thresholds` updated; linksim
+  `ofdm_hf_profile_climbs_on_a_dispersive_fade` (new); the notch test's tone moved to the band edge
+  (2650 Hz) — a far tone is rejected by the demod, so a band-aware SNR correctly sees little notch benefit
+  from it (the additive estimator over-penalised out-of-band energy).
+- **Test results (actually run):** linksim `hpx_ofdm_hf` climbs to ≥ SL8 on a 30 dB moderate_f1 fade (was
+  stuck at SL6 with RS + AWGN floors; hpx_hf is stuck at SL2). Notch tests pass with the band-edge tone. Core,
+  cli, linksim suites + full modem suite pass; clippy `-D warnings` + fmt clean. NOTE: fully closing the gap
+  *at the default* means switching the daemon default to `hpx_ofdm_hf` — flagged as a product decision.
+
 ## 2026-07-10 — refactor(profile): re-index the hpx_hf dense ladder (drop the P4-duplicate rungs)
 
 - **Requirement/change:** after the OFDM re-seat, the former SC-FDMA P4 dense-pilot rungs (SL14/SL18) had
