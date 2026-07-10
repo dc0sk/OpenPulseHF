@@ -132,6 +132,11 @@ pub struct GilbertElliottConfig {
     pub snr_good_db: f32,
     /// SNR in the Bad state (dB).
     pub snr_bad_db: f32,
+    /// Samples per symbol: the Markov chain steps **once per symbol** (holding the state for a whole
+    /// symbol) so a Bad run is a burst of contiguous *symbols*, not sub-symbol noise flicker. Set it to
+    /// the transmitted mode's samples-per-symbol; the presets default to 8. Per-sample stepping made the
+    /// "bursts" ≈ elevated-variance AWGN, so interleaver/burst-FEC conclusions drawn from it were vacuous.
+    pub symbol_samples: usize,
     /// RNG seed. `None` draws from thread entropy.
     pub seed: Option<u64>,
 }
@@ -144,6 +149,7 @@ impl GilbertElliottConfig {
             p_bg: 0.1,
             snr_good_db: 20.0,
             snr_bad_db: 3.0,
+            symbol_samples: 8,
             seed,
         }
     }
@@ -154,6 +160,7 @@ impl GilbertElliottConfig {
             p_bg: 0.05,
             snr_good_db: 20.0,
             snr_bad_db: 0.0,
+            symbol_samples: 8,
             seed,
         }
     }
@@ -164,6 +171,7 @@ impl GilbertElliottConfig {
             p_bg: 0.02,
             snr_good_db: 20.0,
             snr_bad_db: -3.0,
+            symbol_samples: 8,
             seed,
         }
     }
@@ -174,6 +182,7 @@ impl GilbertElliottConfig {
             p_bg: 0.01,
             snr_good_db: 20.0,
             snr_bad_db: -6.0,
+            symbol_samples: 8,
             seed,
         }
     }

@@ -15,6 +15,24 @@ pub struct GilbertElliottChannel {
 }
 
 impl GilbertElliottChannel {
+    /// Step the Markov chain **once at the start of each symbol**, holding the state through the symbol.
+    /// `i` is the absolute sample index; a transition fires only when `i` lands on a symbol boundary, so
+    /// a Bad run covers whole contiguous symbols (a real burst) instead of flickering every sample.
+    #[inline]
+    fn step_state(&mut self, i: usize) {
+        if !i.is_multiple_of(self.config.symbol_samples.max(1)) {
+            return;
+        }
+        let u: f32 = self.rng.gen();
+        if self.in_bad {
+            if u < self.config.p_bg {
+                self.in_bad = false;
+            }
+        } else if u < self.config.p_gb {
+            self.in_bad = true;
+        }
+    }
+
     pub fn new(config: GilbertElliottConfig) -> Result<Self, ChannelError> {
         if config.p_gb <= 0.0 || config.p_gb >= 1.0 {
             return Err(ChannelError::InvalidParameter(
@@ -63,21 +81,11 @@ impl ChannelModel for GilbertElliottChannel {
         let sigma_bad = self.noise_sigma_for_snr(self.config.snr_bad_db, rms);
         input
             .iter()
-            .map(|&s| {
-                let u: f32 = self.rng.gen();
-                if self.in_bad {
-                    if u < self.config.p_bg {
-                        self.in_bad = false;
-                    }
-                } else if u < self.config.p_gb {
-                    self.in_bad = true;
-                }
-                let n: f32 = if self.in_bad {
-                    sigma_bad * self.rng.sample::<f32, _>(StandardNormal)
-                } else {
-                    sigma_good * self.rng.sample::<f32, _>(StandardNormal)
-                };
-                s + n
+            .enumerate()
+            .map(|(i, &s)| {
+                self.step_state(i);
+                let sigma = if self.in_bad { sigma_bad } else { sigma_good };
+                s + sigma * self.rng.sample::<f32, _>(StandardNormal)
             })
             .collect()
     }
@@ -86,20 +94,10 @@ impl ChannelModel for GilbertElliottChannel {
         let sigma_good = self.noise_sigma_for_snr(self.config.snr_good_db, 1.0);
         let sigma_bad = self.noise_sigma_for_snr(self.config.snr_bad_db, 1.0);
         (0..length)
-            .map(|_| {
-                let u: f32 = self.rng.gen();
-                if self.in_bad {
-                    if u < self.config.p_bg {
-                        self.in_bad = false;
-                    }
-                } else if u < self.config.p_gb {
-                    self.in_bad = true;
-                }
-                if self.in_bad {
-                    sigma_bad * self.rng.sample::<f32, _>(StandardNormal)
-                } else {
-                    sigma_good * self.rng.sample::<f32, _>(StandardNormal)
-                }
+            .map(|i| {
+                self.step_state(i);
+                let sigma = if self.in_bad { sigma_bad } else { sigma_good };
+                sigma * self.rng.sample::<f32, _>(StandardNormal)
             })
             .collect()
     }
@@ -112,55 +110,54 @@ mod tests {
     use super::*;
     use crate::GilbertElliottConfig;
 
-    /// The expected mean burst length in the Bad state is 1/p_bg.
-    /// Over 100 k samples the observed mean should be within 10 % of theory.
+    /// Drive the *actual* channel and confirm its Bad runs are bursts of whole **symbols** with mean
+    /// length 1/p_bg symbols — the property that makes it a valid burst-error channel. Recovers the
+    /// per-symbol state from the output noise energy (Bad is ~20 dB louder than Good on `moderate`).
     #[test]
-    fn moderate_burst_mean_within_10_percent() {
-        let cfg = GilbertElliottConfig::moderate(Some(42));
-        let expected_mean = 1.0 / cfg.p_bg;
-        let p_gb = cfg.p_gb;
-        let p_bg = cfg.p_bg;
-        let _ch = GilbertElliottChannel::new(cfg).unwrap();
+    fn bursts_span_whole_symbols_with_mean_one_over_pbg() {
+        let sps = 16usize;
+        let mut cfg = GilbertElliottConfig::moderate(Some(42));
+        cfg.symbol_samples = sps;
+        let expected_mean = 1.0 / cfg.p_bg as f64; // symbols
+        let n_syms = 40_000usize;
 
-        let n = 100_000usize;
-        let uniform = rand_distr::Uniform::new(0.0f32, 1.0);
-        use rand::SeedableRng;
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let mut in_bad = false;
-        let mut burst_start: Option<usize> = None;
-        let mut burst_lengths: Vec<usize> = Vec::new();
+        let mut ch = GilbertElliottChannel::new(cfg.clone()).unwrap();
+        let noise = ch.generate_noise(n_syms * sps); // pure noise, state held per symbol
 
-        for i in 0..n {
-            let u = rand_distr::Distribution::sample(&uniform, &mut rng);
-            let was_bad = in_bad;
-            if in_bad {
-                if u < p_bg {
-                    in_bad = false;
-                }
-            } else if u < p_gb {
-                in_bad = true;
-            }
-            match (was_bad, in_bad) {
-                (false, true) => burst_start = Some(i),
-                (true, false) => {
-                    if let Some(start) = burst_start.take() {
-                        burst_lengths.push(i - start);
-                    }
+        // Good σ² ≈ 10^(-20/10) = 0.01, Bad σ² ≈ 10^(0/10) = 1.0 (rms = 1.0); split at 0.1.
+        let bad: Vec<bool> = (0..n_syms)
+            .map(|k| {
+                let e = noise[k * sps..(k + 1) * sps]
+                    .iter()
+                    .map(|v| v * v)
+                    .sum::<f32>()
+                    / sps as f32;
+                e > 0.1
+            })
+            .collect();
+
+        let mut runs: Vec<usize> = Vec::new();
+        let mut start: Option<usize> = None;
+        for (k, &b) in bad.iter().enumerate() {
+            match (b, start) {
+                (true, None) => start = Some(k),
+                (false, Some(s)) => {
+                    runs.push(k - s);
+                    start = None;
                 }
                 _ => {}
             }
         }
-
+        assert!(!runs.is_empty(), "no bursts observed");
+        // A genuine burst spans multiple symbols (not sub-symbol flicker): mean well above 1 symbol.
+        let observed = runs.iter().sum::<usize>() as f64 / runs.len() as f64;
         assert!(
-            !burst_lengths.is_empty(),
-            "no bursts observed in {n} samples — p_gb likely too low"
+            observed > 3.0,
+            "bursts averaged {observed:.1} symbols — a per-sample chain would flicker near 1"
         );
-
-        let observed_mean = burst_lengths.iter().sum::<usize>() as f64 / burst_lengths.len() as f64;
-        let tolerance = expected_mean as f64 * 0.10;
         assert!(
-            (observed_mean - expected_mean as f64).abs() < tolerance,
-            "mean burst {observed_mean:.1} not within 10% of {expected_mean}"
+            (observed - expected_mean).abs() < expected_mean * 0.20,
+            "mean burst {observed:.1} symbols not within 20% of 1/p_bg = {expected_mean:.1}"
         );
     }
 

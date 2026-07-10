@@ -184,6 +184,7 @@ fn gilbert_elliott_moderate_burst_no_fec_degrades() {
         p_bg: 0.05,
         snr_good_db: 20.0,
         snr_bad_db: -30.0,
+        symbol_samples: 8,
         seed: Some(99),
     })
     .unwrap();
