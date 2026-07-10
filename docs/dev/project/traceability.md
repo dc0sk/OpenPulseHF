@@ -9,6 +9,19 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — docs: log the acceptance-table refresh in the ledger (PR #719)
+
+- **Requirement/change:** PR #718 refreshed the `CLAUDE.md` acceptance-criteria table but its own
+  requirement→results chain was not yet recorded in this ledger.
+- **Design decision:** every session PR carries a ledger entry; a ledger-maintenance PR is no exception, so
+  #719 gets this self-describing entry (it closes the 1:1 PR↔ledger coverage rather than leaving #718's entry
+  as the only change without its own row).
+- **Implementation:** `docs/dev/project/traceability.md` (the #718 entry immediately below; and this entry).
+- **Tests:** none — documentation-only.
+- **Test results (actually run):** N/A (no code path changed; ledger prose only).
+
+---
+
 ## 2026-07-10 — docs: refresh the acceptance-criteria table with this session's gates (PR #718)
 
 - **Requirement/change:** the `CLAUDE.md` → *Acceptance criteria* table (the requirement↔test ledger the
