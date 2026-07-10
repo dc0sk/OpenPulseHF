@@ -1355,6 +1355,19 @@ in further.
 throughput for dense pilots (high-Doppler use, not dominated); plain rectangular 2000-baud
 single-carrier modes remain superseded by their `-RRC` variants.
 
+### Candidate features — VarAC gap analysis *(research; not scheduled)*
+
+Ideas OpenPulse is missing vs VarAC, ranked with fit sketches against our architecture, in
+[`docs/dev/research/varac-feature-gap-analysis.md`](../research/varac-feature-gap-analysis.md).
+Top gaps (all application/operator layer — the modem-layer ideas were already mined into our ACK
+taxonomy/rate ladder): **direct P2P file transfer** (≈90% built on SAR + LZ4 + HPX ARQ + signed
+`TransferManifest` — highest value-to-effort, standalone), **native calling-frequency CQ + slots +
+monitoring** (complements FF-15's JS8 discovery), **VMail-style P2P store-and-forward** (peer-hosted
+mailbox between Winlink and mesh relay), **live keyboard-to-keyboard chat** (authenticated, unlike
+VarAC), and **alert tags + canned messages** (small, high daily value; turns the NDJSON control port
+into an extension API). File transfer, alerts, and chat are standalone (no JS8 dependency). Not
+scheduled — pending maintainer selection.
+
 ### FF-15 — JS8-based station discovery and rendezvous *(planned; design approved)*
 
 **Plan approved 2026-07-10** — full design in

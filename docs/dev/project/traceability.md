@@ -9,6 +9,24 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — docs: VarAC feature-gap analysis (competitive research)
+
+- **Requirement/change:** identify application/operator-layer features OpenPulse is missing versus VarAC
+  (the popular keyboard-to-keyboard ARQ HF chat app), to inform the post-JS8 roadmap.
+- **Design decision:** a Fable-authored gap analysis — VarAC feature inventory (cited from its site +
+  V4→V14 release history), de-duplicated against verified OpenPulse capabilities, ranked with concrete fit
+  sketches against real crates/traits. Top genuine gaps: direct P2P file transfer (≈90% built on
+  `sar.rs` + LZ4 + HPX ARQ + `manifest.rs`), native calling-frequency CQ/slots/monitoring (complements the
+  FF-15 JS8 plan), VMail-style P2P store-and-forward, live keyboard chat, and alert tags + canned messages.
+  Explicit "do not copy" list (VARA/VarAC wire formats, AI/internet gateway, unauthenticated remote
+  commands, default content encryption, gamification) to preserve the open/signed/plugin ethos.
+- **Implementation:** `docs/dev/research/varac-feature-gap-analysis.md` (the analysis);
+  `docs/dev/project/roadmap.md` (candidate-features pointer near FF-15); `CLAUDE.md` (doc-index row).
+- **Tests:** none — research artifact; no feature scheduled or implemented.
+- **Test results (actually run):** N/A (documentation only).
+
+---
+
 ## 2026-07-10 — docs: JS8 discovery & rendezvous design plan (decisions D1–D7 locked)
 
 - **Requirement/change:** capture the approved engineering plan for the JS8-based station discovery and

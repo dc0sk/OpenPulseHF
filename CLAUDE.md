@@ -622,6 +622,7 @@ External modem/DSP references (gnuradio FLL band-edge, liquid-dsp framesync, dan
 | Benchmark harness spec | `docs/dev/benchmark-harness.md` |
 | External modem/DSP references (FLL, liquid-dsp, qo100-modem) | `docs/dev/research/references.md` |
 | JS8 discovery & rendezvous plan (decisions D1–D7 locked; not yet implemented) | `docs/dev/design/js8-discovery-rendezvous-plan.md` |
+| VarAC feature-gap analysis (ideas we're missing; research, not scheduled) | `docs/dev/research/varac-feature-gap-analysis.md` |
 | GPU LDPC BP prototype findings | `docs/dev/gpu-ldpc-prototype.md` |
 | OTA adaptive rate-stepping hardware validation | `docs/dev/ota-hardware-validation.md` |
 | On-air twin-OTA scenario (two daemons + twinview over RF) | `docs/dev/onair-twin-ota.md` |
