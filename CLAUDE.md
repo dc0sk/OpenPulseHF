@@ -488,6 +488,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | CI goodput regression gate (linksim effective_bps ≥ 65 % of baseline) | `cargo test -p openpulse-linksim goodput_gate` |
 | File-transfer protocol edges (offer/accept/reject/timeout/cancel/verify/tamper) | `cargo test -p openpulse-filexfer` |
 | File-transfer blocks survive the modem (loopback round-trip + >64 KB + tamper→verify-fail) | `cargo test -p openpulse-modem --test filexfer_loopback` |
+| File transfer crosses two real daemons (twin round-trip) | `cargo test -p openpulse-daemon --test twin_daemon_bridge a_file_crosses` |
 | PTT assert/release ≤ 50 ms | `cargo test -p openpulse-radio` (add timing test in `noop.rs`) |
 | Periodic station ID at interval (REQ-REG-10) | `cargo test -p openpulse-core --lib station_id` + `cargo test -p openpulse-core --lib cw_id` + `cargo test -p openpulse-modem --test station_id_txcount` |
 | CI multi-platform green | ✅ Both jobs pass (PR #67 re-enabled) |
