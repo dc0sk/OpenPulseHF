@@ -99,6 +99,12 @@ fn decodes_a_stronger_delayed_ray_inside_the_cyclic_prefix() {
     for (mode, a0, a1, d) in [
         ("SCFDMA52", 0.5f32, 1.0f32, 4usize),
         ("SCFDMA52", 0.5, 1.0, 8),
+        // Deep-reach case: a stronger delayed ray at d = 12 needs the FFT window backed off 12 samples
+        // ahead of the peak. This decodes 0.00 at the old SYNC_EARLY_BIAS = 8 (the window lands late) and
+        // pins the widened bias — a 2 ms (16-sample) delay spread inside the 32-sample CP. (QPSK holds the
+        // guard through the −6 dB two-ray null; the denser modes lose margin to the null itself at d = 12,
+        // not to the sync, so they stay at the shorter-delay cases below.)
+        ("SCFDMA52", 0.5, 1.0, 12),
         ("SCFDMA52-8PSK", 0.5, 1.0, 4),
         ("SCFDMA52-16QAM", 0.5, 1.0, 4),
         ("SCFDMA52-16QAM", 0.5, 1.0, 8),
