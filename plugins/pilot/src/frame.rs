@@ -237,20 +237,37 @@ fn symbols_to_bytes(syms: &[(f32, f32)], bits_per_sc: usize, apsk32: bool) -> Ve
 /// Soft counterpart of [`symbols_to_bytes`]: per-bit max-log-MAP LLRs (positive =
 /// bit more likely 0), in the same symbol-major, LSB-first-within-symbol order, so
 /// hard-slicing the LLRs (`bit = llr <= 0`) reproduces `symbols_to_bytes`'s bytes.
-/// The scale is raw distance differences (noise variance 1.0), matching the
-/// unnormalised per-plugin convention shared with the 8PSK/64QAM soft demods.
+/// Calibrated so `|LLR|` scales with `1/σ²`: `symbol_llrs` is divided by the decision-directed 2-D
+/// noise variance (mean squared distance to the nearest constellation point, measured against the same
+/// `points`, so it is correct for 32APSK too). Without it the pilot LLRs were flat in SNR
+/// (`mean|LLR| ≈ 2.0`) and HARQ combining could not weight a faded attempt down.
 fn symbols_to_llrs(syms: &[(f32, f32)], bits_per_sc: usize, apsk32: bool) -> Vec<f32> {
     let points = if apsk32 {
         apsk32_points()
     } else {
         constellation_points(bits_per_sc)
     };
+    let noise_var = if syms.is_empty() {
+        1.0
+    } else {
+        let sum: f32 = syms
+            .iter()
+            .map(|&(re, im)| {
+                let z = Complex32::new(re, im);
+                points
+                    .iter()
+                    .map(|(_, p)| (z - *p).norm_sqr())
+                    .fold(f32::INFINITY, f32::min)
+            })
+            .sum();
+        (sum / syms.len() as f32).max(1e-6)
+    };
     let mut llrs: Vec<f32> = Vec::with_capacity(syms.len() * bits_per_sc);
     for &(re, im) in syms {
         llrs.extend(symbol_llrs(
             Complex32::new(re, im),
             bits_per_sc,
-            1.0,
+            noise_var,
             &points,
         ));
     }

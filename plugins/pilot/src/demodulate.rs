@@ -40,7 +40,11 @@ fn find_onset(samples: &[f32], config: &ModulationConfig) -> Option<usize> {
         return None;
     }
     let bound = samples.len() - mf.len();
-    mf.search(samples, bound).map(|r| r.offset)
+    // Acquire on the *normalised* correlation, not the unnormalised score: the latter's argmax favours a
+    // high-energy window and can lock a later data-region window that merely shares the pilot structure
+    // over a faded preamble (the #689 SC-FDMA bug — it never propagated to the pilot plugin). A 1 % energy
+    // floor keeps ρ meaningful (it is undefined on a silent window).
+    mf.search_normalized(samples, bound, 0.01).map(|r| r.offset)
 }
 
 /// Coherently downconvert and integrate-and-dump `count` symbol periods starting
