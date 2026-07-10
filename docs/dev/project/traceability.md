@@ -9,6 +9,18 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — perf(ldpc): PEG graph for the rate-1/2 codec (drop the random xorshift H_s)
+
+- **Requirement/change:** `LdpcCodec::new` (rate-1/2) built its info-part Tanner graph from a random
+  xorshift32 draw, which left short cycles that trap the min-sum decoder. The already-shipped PEG builder
+  (`with_peg`, used by `high_rate`) maximises girth — a measured ~0.2–0.3 dB AWGN gain at zero cost.
+- **Design decision:** `new()` now delegates to `Self::with_peg(1024, 1024, 3)`. Same systematic
+  `[H_s | I_m]` structure, so encoding stays a single XOR pass and the decoder is unchanged; TX and RX both
+  call `new()`, so the graph swap is symmetric. Removed the now-unused `xorshift32`.
+- **Implementation:** `crates/openpulse-core/src/ldpc.rs`.
+- **Test results (actually run):** LDPC lib tests 12, `fec_comparison` 6, `ldpc_ladder_rungs` 2 — pass
+  (round-trip + decode unchanged in structure, better graph); clippy `-D warnings` + fmt clean.
+
 ## 2026-07-10 — test(linksim): real-modem goodput regression gate
 
 - **Requirement/change:** the CI "benchmark regression gate" replays HPX state-machine *events* with no
