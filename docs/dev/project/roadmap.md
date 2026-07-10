@@ -1355,6 +1355,29 @@ in further.
 throughput for dense pilots (high-Doppler use, not dominated); plain rectangular 2000-baud
 single-carrier modes remain superseded by their `-RRC` variants.
 
+### FF-15 — JS8-based station discovery and rendezvous *(planned; design approved)*
+
+**Plan approved 2026-07-10** — full design in
+[`docs/dev/design/js8-discovery-rendezvous-plan.md`](../design/js8-discovery-rendezvous-plan.md)
+(decisions D1–D7 locked; not yet implemented). When idle, an OpenPulse station QSYs to the
+band's JS8 calling frequency, participates as a real, well-behaved JS8 station (heartbeats,
+directed queries, station info), marks itself with an in-band `@OPULSE` capability hint, caches
+other OpenPulse-marked stations in the existing `PeerCache`, and — on user request — negotiates
+a working frequency over JS8, QSYs there, and hands off to a native OpenPulse HPX session
+(authenticated by the post-QSY signed CONREQ/CONACK).
+
+Architecture: **`plugins/js8`** (a genuine `ModulationPlugin` for the JS8 waveform — NORMAL
+submode first: 8-GFSK, 79 symbols, Costas 3×7 sync, LDPC(174,87), tables ported from
+GPL-compatible JS8Call-improved), **`crates/openpulse-discovery`** (pure no-I/O state machines:
+hint codec, station table, wall-clock T/R scheduler, discovery + rendezvous SMs), and a thin
+daemon glue module in `server::run`. Decisions: **native** Rust modem (Phase-B go/no-go fallback
+to an external JS8Call for RX only); `@OPULSE` group beacon + INFO token; unauthenticated
+2-message rendezvous; **off by default, `rx_only` when enabled**; NTP-required with hard TX
+refusal beyond ±2 s skew. Phasing A (JS8 TX core) → B (RX decoder, highest risk, −18 dB gate,
+go/no-go) → C (varicode + hint) → **D (RX-only discovery MVP = ship line, zero TX)** → E
+(beacon/query TX — **gated on the §97.221 automatic-control regulatory doc landing first**) → F
+(rendezvous + HPX handoff) → G (panel `Tab::Discovery`) → H (on-air validation vs stock JS8Call).
+
 ---
 
 ## BL-FEC series — FEC codec improvements
