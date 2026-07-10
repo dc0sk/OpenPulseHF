@@ -394,7 +394,7 @@ fn info_widget(snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
         .push(info_row(
             eff,
             "Compress",
-            &format!("{:.2}×", snap.compress_ratio),
+            &format_compression(snap.compress_ratio),
             ColorRole::RxValue,
         ));
 
@@ -1154,6 +1154,20 @@ fn log_widget(snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
     scrollable(col).height(Length::Fill).into()
 }
 
+/// Format a compression ratio (compressed/raw, e.g. 0.20) as an intuitive reduction factor ("5.0:1").
+///
+/// The daemon reports compressed/raw, so a good compression reads as a small fraction (0.20 = a fifth of
+/// the size). Displaying that fraction with a "×" made "0.20×" look like *expansion*; showing the
+/// reciprocal as an "N:1" ratio matches the gross-vs-effective factor the operator sees. Anything ≥ 1
+/// (no gain, or the not-yet-wired 1.0 default) reads "1.0:1"; a non-positive/NaN value shows "—".
+fn format_compression(ratio: f32) -> String {
+    if !ratio.is_finite() || ratio <= 0.0 {
+        return "—".to_string();
+    }
+    let factor = if ratio < 1.0 { 1.0 / ratio } else { 1.0 };
+    format!("{factor:.1}:1")
+}
+
 // --- small widget helpers ---------------------------------------------------
 
 fn info_row(
@@ -1531,5 +1545,32 @@ impl canvas::Program<Message> for Waterfall {
             }
         }
         vec![frame.into_geometry()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_compression;
+
+    #[test]
+    fn compression_shows_reduction_factor() {
+        // compressed/raw 0.20 → a 5:1 reduction (the operator's "factor 5").
+        assert_eq!(format_compression(0.20), "5.0:1");
+        assert_eq!(format_compression(0.50), "2.0:1");
+        assert_eq!(format_compression(0.25), "4.0:1");
+    }
+
+    #[test]
+    fn compression_no_gain_reads_one_to_one() {
+        // Not-yet-wired default (1.0) and incompressible (>1) both read as no gain, never expansion.
+        assert_eq!(format_compression(1.0), "1.0:1");
+        assert_eq!(format_compression(1.2), "1.0:1");
+    }
+
+    #[test]
+    fn compression_guards_bad_values() {
+        assert_eq!(format_compression(0.0), "—");
+        assert_eq!(format_compression(-0.5), "—");
+        assert_eq!(format_compression(f32::NAN), "—");
     }
 }
