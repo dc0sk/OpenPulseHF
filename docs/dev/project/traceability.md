@@ -9,6 +9,25 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — fix(pilot): calibrate the soft LLRs and acquire on the normalised correlation
+
+- **Requirement/change:** the pilot plugin (a) emitted uncalibrated soft LLRs — `symbols_to_llrs` divided by
+  a fixed `noise_var = 1.0`, so `mean|LLR| ≈ 2.0` flat in SNR and HARQ combining could not weight a faded
+  attempt down (it was also absent from the `llr_calibration` gate); and (b) located the frame onset with
+  `IqMatchedFilter::search` (unnormalised score, argmax-favours-energy) — the #689 SC-FDMA acquisition bug
+  that never propagated here.
+- **Design decision:** (a) divide `symbol_llrs` by the decision-directed 2-D noise variance (mean squared
+  distance to the nearest point, measured against the *same* `points`, so it is correct for 32APSK as well),
+  matching the OFDM/SC-FDMA calibration; (b) switch `find_onset` to `search_normalized(.., 0.01)` with a 1 %
+  energy floor so ρ stays meaningful.
+- **Implementation:** `plugins/pilot/src/frame.rs` (`symbols_to_llrs`), `plugins/pilot/src/demodulate.rs`
+  (`find_onset`).
+- **Tests:** added `PILOT-16QAM500` to `crates/openpulse-modem/tests/llr_calibration.rs` (min ×2.0 from
+  8→20 dB).
+- **Test results (actually run):** the calibration gate now includes pilot and passes (was flat ~×1.0
+  before); pilot plugin suite pass (round-trip + carrier-offset acquisition unchanged with the normalised
+  search); full modem suite pass; clippy `-D warnings` + fmt clean.
+
 ## 2026-07-10 — perf(dsp): RRC filter span 8→12 on the dense-constellation RRC rungs
 
 - **Requirement/change:** the RRC pulse-shaping filter spanned 8 symbols, leaving a residual-ISI floor
