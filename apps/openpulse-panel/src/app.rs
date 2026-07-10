@@ -38,6 +38,7 @@ pub const LADDER_RUNGS: u8 = 20;
 pub enum Tab {
     Info,
     Stats,
+    Files,
     Config,
     #[default]
     Messages,
@@ -76,6 +77,10 @@ pub struct App {
     pub msg_to: String,
     pub msg_subject: String,
     pub msg_body: String,
+
+    // --- file transfer ---
+    pub file_to: String,
+    pub file_path: String,
 
     // --- config editor ---
     pub config_draft: DaemonConfig,
@@ -124,6 +129,13 @@ pub enum Message {
     RefreshInbox,
     OpenMsg(u64),
     DeleteMsg(u64),
+    // file transfer
+    FileTo(String),
+    FilePath(String),
+    SendFile,
+    AcceptFile(u32),
+    RejectFile(u32),
+    CancelFile(u32),
     // config
     FetchConfig,
     ApplyConfig,
@@ -157,6 +169,8 @@ impl App {
             msg_to: String::new(),
             msg_subject: String::new(),
             msg_body: String::new(),
+            file_to: String::new(),
+            file_path: String::new(),
             config_draft: default_config(),
             config_fetch_pending: false,
             active_tab: Tab::default(),
@@ -367,6 +381,36 @@ impl App {
                         st.open_message_id = None;
                         st.open_message_body = None;
                     }
+                }
+            }
+            // --- file transfer ---
+            Message::FileTo(v) => self.file_to = v,
+            Message::FilePath(v) => self.file_path = v,
+            Message::SendFile => {
+                let (to, path) = (
+                    self.file_to.trim().to_uppercase(),
+                    self.file_path.trim().to_string(),
+                );
+                if !path.is_empty() {
+                    self.send(ControlCommand::SendFile { to, path });
+                }
+            }
+            Message::AcceptFile(transfer_id) => {
+                self.send(ControlCommand::AcceptFile { transfer_id });
+                if let Ok(mut st) = self.shared.lock() {
+                    st.incoming_offer = None;
+                }
+            }
+            Message::RejectFile(transfer_id) => {
+                self.send(ControlCommand::RejectFile { transfer_id });
+                if let Ok(mut st) = self.shared.lock() {
+                    st.incoming_offer = None;
+                }
+            }
+            Message::CancelFile(transfer_id) => {
+                self.send(ControlCommand::CancelFile { transfer_id });
+                if let Ok(mut st) = self.shared.lock() {
+                    st.active_transfer = None;
                 }
             }
             // --- config ---

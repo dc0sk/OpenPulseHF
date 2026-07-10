@@ -9,6 +9,30 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — feat(panel): Phase D — Files tab (send, offer prompt, progress, verify badge)
+
+- **Requirement/change:** FF-16 Phase D (`docs/dev/design/file-transfer-plan.md` §7): surface file transfer
+  in the operator panel — send a file, respond to an inbound offer, watch progress, and see received files
+  with the signed-manifest verify badge.
+- **Design decision:** follow the existing panel patterns (Statistics/Messages tabs): a new `Tab::Files`;
+  `PanelState` gains `incoming_offer` / `active_transfer` / `received_files` / `file_status`, populated in
+  `connection::apply_event` from the `FileOffered`/`FileProgress`/`FileReceived`/`FileSent`/`FileFailed`
+  events (replacing the Phase-C catch-all); `App` gains `file_to` / `file_path` inputs and `Message` variants
+  (`SendFile`/`AcceptFile`/`RejectFile`/`CancelFile`) that dispatch the control commands via `self.send`. The
+  `files_widget` renders a send box, an inbound-offer Accept/Reject prompt, a progress line with Cancel, and a
+  verify-badged received-file list (green `✓ verified` / red `UNVERIFIED`).
+- **Implementation:** `apps/openpulse-panel/src/state.rs` (`IncomingOffer`/`ActiveTransfer`/`ReceivedFile`
+  + fields), `connection.rs` (event reducer arms), `app.rs` (`Tab::Files`, inputs, `Message` variants + update
+  arms), `ui.rs` (tab button/dispatch, `Snap` fields, `files_widget`).
+- **Tests:** `connection::file_event_tests` — `FileOffered` prompts unless auto-accepted; `FileReceived`
+  records the file + clears the offer + sets a verified status; `FileProgress` then `FileFailed` clears the
+  active transfer. (First reducer unit tests for the panel.)
+- **Test results (actually run):** `openpulse-panel` 18 passed / 0 failed (3 new); clippy `-D warnings` + fmt
+  clean; panel builds.
+- **Next:** Phase E (resume) + real-radio PTT burst sequencing; Phase F on-air.
+
+---
+
 ## 2026-07-10 — test(filexfer): Phase C acceptance — a file crosses two real daemons (twin round-trip)
 
 - **Requirement/change:** FF-16 Phase C acceptance (`docs/dev/design/file-transfer-plan.md` §11/§12): prove a

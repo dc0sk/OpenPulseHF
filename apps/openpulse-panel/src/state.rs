@@ -109,6 +109,46 @@ pub struct PanelState {
     pub rx_frames_by_level: [u32; LEVEL_BUCKETS],
     /// Per-ladder-step count of successfully **transmitted** frames this session, same indexing.
     pub tx_frames_by_level: [u32; LEVEL_BUCKETS],
+    /// Pending inbound file offer awaiting an operator accept/reject decision (`FileOffered`).
+    pub incoming_offer: Option<IncomingOffer>,
+    /// The in-flight file transfer (either direction) for the progress card.
+    pub active_transfer: Option<ActiveTransfer>,
+    /// Received files this session (newest first), for the Files tab list.
+    pub received_files: Vec<ReceivedFile>,
+    /// Last terminal file-transfer status line (`FileSent`/`FileFailed`).
+    pub file_status: String,
+}
+
+/// A pending inbound file offer (from `ControlEvent::FileOffered`).
+#[derive(Debug, Clone)]
+pub struct IncomingOffer {
+    pub transfer_id: u32,
+    pub from: String,
+    pub name: String,
+    pub size: u64,
+    pub signature_valid: bool,
+}
+
+/// An in-flight transfer's progress (from `ControlEvent::FileProgress`).
+#[derive(Debug, Clone)]
+pub struct ActiveTransfer {
+    pub transfer_id: u32,
+    pub direction: String,
+    pub name: String,
+    pub blocks_done: u16,
+    pub blocks_total: u16,
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+}
+
+/// A received file (from `ControlEvent::FileReceived`).
+#[derive(Debug, Clone)]
+pub struct ReceivedFile {
+    pub name: String,
+    pub from: String,
+    pub size: u64,
+    pub path: String,
+    pub verified: bool,
 }
 
 /// Ladder-step buckets: index 0 (no level yet) plus SL1..=`LADDER_RUNGS`.
@@ -178,6 +218,10 @@ impl Default for PanelState {
             ota_is_locked: false,
             rx_frames_by_level: [0; LEVEL_BUCKETS],
             tx_frames_by_level: [0; LEVEL_BUCKETS],
+            incoming_offer: None,
+            active_transfer: None,
+            received_files: Vec::new(),
+            file_status: String::new(),
         }
     }
 }
