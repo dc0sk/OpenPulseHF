@@ -218,6 +218,8 @@ pub struct RuntimeControlState {
     pub filexfer_frames_routed: u64,
     /// Active inbound file-transfer session (at most one per link in v1).
     pub file_rx: Option<crate::filexfer::FxRxState>,
+    /// Active outbound file-transfer session (at most one per link in v1).
+    pub file_tx: Option<crate::filexfer::FxTxState>,
     /// Storage + acceptance policy from `[file_transfer]` config.
     pub filexfer_policy: crate::filexfer::FileTransferPolicy,
 }
@@ -299,6 +301,7 @@ impl Default for RuntimeControlState {
             filexfer_sar: SarReassembler::new(FILEXFER_SAR_TIMEOUT),
             filexfer_frames_routed: 0,
             file_rx: None,
+            file_tx: None,
             filexfer_policy: crate::filexfer::FileTransferPolicy::default(),
         }
     }
@@ -2070,14 +2073,16 @@ pub async fn apply_command_to_engine(
             let mode = active_mode.lock().await.clone();
             filexfer::cancel_transfer(*transfer_id, runtime_state, event_tx, &mode, engine);
         }
+        ControlCommand::SendFile { to, path } => {
+            let mode = active_mode.lock().await.clone();
+            filexfer::send_file(to, path, runtime_state, event_tx, &mode, engine);
+        }
         // No live-modem side effects for these commands in the engine path.
-        // `SendFile` is intercepted in `server::run` (where PTT + the send loop live, Phase C-3).
         ControlCommand::SubscribeSpectrum { .. }
         | ControlCommand::GetConfig
         | ControlCommand::ListMessages
         | ControlCommand::GetMessage { .. }
         | ControlCommand::DeleteMessage { .. }
-        | ControlCommand::SendFile { .. }
         | ControlCommand::ListFiles => {}
     }
 }
@@ -2559,6 +2564,122 @@ mod command_apply_tests {
         let path = path.expect("FileReceived emitted");
         assert_eq!(std::fs::read(&path).expect("file on disk"), file);
         assert!(rs.file_rx.is_none(), "session cleared after completion");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn send_file_offers_then_completes_on_receiver_frames() {
+        use crate::filexfer::{FileTransferPolicy, FX_CONTROL_SEGMENT_ID};
+        use openpulse_core::sar::sar_encode;
+        use openpulse_filexfer::{CompleteStatus, FxFrame};
+
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(128);
+        let ev_tx = Arc::new(tx);
+
+        let dir = std::env::temp_dir().join(format!("opfx_send_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file_path = dir.join("outbound.txt");
+        let contents = b"send side file transfer test ".repeat(4);
+        std::fs::write(&file_path, &contents).unwrap();
+
+        let policy = FileTransferPolicy::from_config(&openpulse_config::FileTransferConfig {
+            enabled: true,
+            download_dir: dir.to_string_lossy().into_owned(),
+            auto_accept_max_bytes: 0,
+            max_file_bytes: 1 << 20,
+            per_peer_quota_bytes: 0,
+            require_verified_peer: false,
+            allowed_peers: vec![],
+            offer_timeout_secs: 120,
+        });
+        let mut rs = RuntimeControlState {
+            local_callsign: "N0CALL".into(),
+            filexfer_policy: policy,
+            ..RuntimeControlState::default()
+        };
+
+        // SendFile → transmit the offer + open the send session.
+        let cmd = ControlCommand::SendFile {
+            to: "W1AW".into(),
+            path: file_path.to_string_lossy().into_owned(),
+        };
+        apply_command_to_engine(&cmd, &mut engine, &active_mode, &ev_tx, None, &mut rs).await;
+        let fx = rs.file_tx.as_ref().expect("send session started");
+        let transfer_id = fx.transfer_id();
+        assert_eq!(fx.block_count(), 1);
+
+        let feed = |frame: Vec<u8>| sar_encode(FX_CONTROL_SEGMENT_ID, &frame).unwrap()[0].clone();
+        // Receiver accepts → send block 0.
+        process_received_bytes(
+            &feed(
+                FxFrame::FileAccept {
+                    transfer_id,
+                    have_bitmap: vec![],
+                }
+                .encode(),
+            ),
+            &mut rs,
+            None,
+            &ev_tx,
+            &active_mode,
+            &mut engine,
+        )
+        .await;
+        // Receiver acks block 0 → awaiting verify.
+        process_received_bytes(
+            &feed(
+                FxFrame::BlockAck {
+                    transfer_id,
+                    block_index: 0,
+                    complete: true,
+                    missing_frag_bitmap: vec![],
+                }
+                .encode(),
+            ),
+            &mut rs,
+            None,
+            &ev_tx,
+            &active_mode,
+            &mut engine,
+        )
+        .await;
+        // Receiver confirms verified → FileSent.
+        process_received_bytes(
+            &feed(
+                FxFrame::FileComplete {
+                    transfer_id,
+                    status: CompleteStatus::VerifiedOk,
+                    countersignature: [0u8; 64],
+                }
+                .encode(),
+            ),
+            &mut rs,
+            None,
+            &ev_tx,
+            &active_mode,
+            &mut engine,
+        )
+        .await;
+
+        let mut sent = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let ControlEvent::FileSent {
+                receipt_valid, to, ..
+            } = ev
+            {
+                assert_eq!(receipt_valid, Some(true));
+                assert_eq!(to, "W1AW");
+                sent = true;
+            }
+        }
+        assert!(sent, "FileSent emitted");
+        assert!(
+            rs.file_tx.is_none(),
+            "send session cleared after completion"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

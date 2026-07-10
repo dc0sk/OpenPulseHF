@@ -9,6 +9,35 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — feat(filexfer): Phase C-3 — the send session (SendFile → offer → blocks → FileSent)
+
+- **Requirement/change:** FF-16 Phase C-3 (`docs/dev/design/file-transfer-plan.md` §6.3): the daemon's
+  outbound file-transfer session — the operator-usable other half of the MVP.
+- **Design decision:** the send side mirrors the receive side and is **event-reactive**: `SendFile` reads +
+  size-checks the file, signs its manifest with the station key (`local_callsign` + `station_seed`), builds
+  a `SenderSession`, and transmits the offer; the receiver's `FileAccept`/`BlockAck`/`FileComplete` control
+  frames arrive on the **same C-2a seam** and drive the next block out (`drive_tx_actions` materializes each
+  `SendBlock` via `encode_block` over the file's byte range and transmits its fragments). Terminal `Sent`
+  emits `FileSent { receipt_valid }`. Because delivery reacts to inbound ACKs, the loopback/twin path needs
+  no separate tick loop; real-radio PTT burst sequencing is a `server::run` refinement layered on top (the
+  loopback backend keys nothing). `SendFile` is handled in `apply_command_to_engine` beside the receive
+  commands (engine + event_tx are there); one transfer per link (`file_tx`) is enforced.
+- **Implementation:** `crates/openpulse-daemon/src/filexfer.rs` (`FxTxState`, `send_file`, `on_tx_frame`,
+  `on_tx_cancel`, `drive_tx_actions`; the control dispatch now routes receiver→sender frames to the send
+  session); `lib.rs` (`RuntimeControlState.file_tx`; `SendFile` arm).
+- **Tests:** `send_file_offers_then_completes_on_receiver_frames` — `SendFile` transmits the offer and opens
+  the session; synthetic `FileAccept` → block sent; `BlockAck` → awaiting verify; `FileComplete { VerifiedOk }`
+  → `FileSent { receipt_valid: Some(true) }` + session cleared, all through the real
+  `apply_command_to_engine` / `process_received_bytes`.
+- **Test results (actually run):** full `openpulse-daemon` suite 74 passed / 0 failed; clippy `-D warnings` +
+  fmt clean.
+- **Status:** both directions are implemented and daemon-level tested (send #this, receive #C-2b), frames are
+  proven over the real modem (Phase B `filexfer_loopback`), and the protocol/blocks are unit-tested (Phases
+  A/B). The remaining verification is a **two-daemon twin round-trip** integration test (joins the twin-harness
+  / on-air validation, Phase F) and optional real-radio PTT burst sequencing.
+
+---
+
 ## 2026-07-10 — feat(filexfer): Phase C-2b — the receive session (offer → verify → write) + commands
 
 - **Requirement/change:** FF-16 Phase C-2 (`docs/dev/design/file-transfer-plan.md` §6): the daemon's inbound
