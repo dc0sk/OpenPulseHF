@@ -106,6 +106,74 @@ pub(crate) fn doppler_envelope(
         .collect()
 }
 
+/// Number of oscillators in the sum-of-sinusoids fader — enough for a near-Gaussian `h` (CLT).
+const SOS_OSCILLATORS: usize = 48;
+
+/// Phase-continuous Rayleigh fader with a Gaussian Doppler PSD (E[|h|²] = 1).
+///
+/// Unlike [`doppler_envelope`], which synthesises one self-contained realization per call and so
+/// *re-randomises* the fade at every `apply()` boundary, this holds oscillator phase as state:
+/// [`next_block`](Self::next_block) resumes where the previous block ended. A caller that feeds the
+/// channel frame-by-frame therefore sees one temporally-correlated fade — consecutive frames are
+/// correlated at low Doppler (long coherence) and decorrelate at high Doppler — instead of an
+/// independent draw per frame. `h[k] = (1/√M) Σ_m exp(j(2π f_m k/fs + φ_m))` with `f_m ~ N(0, σ_d)`
+/// (a Gaussian spread of Doppler shifts → Gaussian PSD) and `φ_m ~ U(0, 2π)`, drawn once at
+/// construction; the random phases make the cross terms vanish in expectation, so E[|h|²] = 1.
+pub(crate) struct SosFader {
+    /// Per-oscillator angular increment (rad/sample).
+    omega: Vec<f64>,
+    /// Per-oscillator running phase, wrapped to `[0, 2π)` (f64 to avoid drift over long runs).
+    phase: Vec<f64>,
+    /// `1/√M` amplitude normalisation for E[|h|²] = 1.
+    scale: f32,
+}
+
+impl SosFader {
+    /// Draw a fresh fading realization (fixed Doppler shifts + phases) from `rng`.
+    pub(crate) fn new(rng: &mut StdRng, doppler_spread_hz: f32, sample_rate: u32) -> Self {
+        let fs = sample_rate as f64;
+        let sigma = doppler_spread_hz as f64;
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let mut omega = Vec::with_capacity(SOS_OSCILLATORS);
+        let mut phase = Vec::with_capacity(SOS_OSCILLATORS);
+        for _ in 0..SOS_OSCILLATORS {
+            let f_hz: f64 = rng.sample::<f64, _>(StandardNormal) * sigma;
+            omega.push(two_pi * f_hz / fs);
+            phase.push(rng.gen::<f64>() * two_pi);
+        }
+        Self {
+            omega,
+            phase,
+            scale: (SOS_OSCILLATORS as f32).sqrt().recip(),
+        }
+    }
+
+    /// Emit the next `n` fading coefficients, advancing internal phase (continuous across calls).
+    pub(crate) fn next_block(&mut self, n: usize) -> Vec<Complex32> {
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            let mut re = 0.0f64;
+            let mut im = 0.0f64;
+            for (ph, &w) in self.phase.iter_mut().zip(self.omega.iter()) {
+                re += ph.cos();
+                im += ph.sin();
+                *ph += w;
+                if *ph >= two_pi {
+                    *ph -= two_pi;
+                } else if *ph < 0.0 {
+                    *ph += two_pi;
+                }
+            }
+            out.push(Complex32::new(
+                re as f32 * self.scale,
+                im as f32 * self.scale,
+            ));
+        }
+        out
+    }
+}
+
 /// Analytic signal of a real input via the FFT Hilbert method (re = input, im = Hilbert).
 pub(crate) fn analytic_signal(planner: &mut FftPlanner<f32>, x: &[f32]) -> Vec<Complex32> {
     let n = x.len();

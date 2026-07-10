@@ -9,6 +9,35 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — feat(channel): opt-in continuous Watterson fade (correlated across apply() calls)
+
+- **Requirement/change:** `WattersonChannel::apply()` synthesises a self-contained FFT fade realization
+  *per call*, so a streaming caller that feeds the channel one frame per `apply()` (linksim `run_link`,
+  the twin/daemon path) gets an **independent** fade every frame. At low Doppler (F1, ~10 s coherence)
+  consecutive frames should be strongly correlated; instead they fully decorrelate — an unphysical
+  per-frame re-randomisation that makes a link sim's fade dynamics wrong.
+- **Design decision:** add a persistent, phase-continuous **sum-of-sinusoids** fader (`SosFader`,
+  M=48 oscillators, Doppler shifts `f_m ~ N(0, σ_d)` → Gaussian PSD, phases `φ_m ~ U(0,2π)` drawn once;
+  E[|h|²]=1) that carries oscillator phase across calls. Gate it behind a new `WattersonConfig.continuous`
+  flag (default **false**) so the one-shot FFT path — correct within a single call and the basis of every
+  existing threshold test — stays **bit-identical**; only streaming callers opt in. FFT-per-call cannot be
+  made streamable at F1 (bin_width ≤ doppler/2 needs a ~2^18 FFT), which is why a second generator is the
+  right tool rather than a rewrite.
+- **Implementation:** `crates/openpulse-channel/src/fading.rs` (`SosFader`),
+  `crates/openpulse-channel/src/lib.rs` (`continuous` field on `WattersonConfig` + all 8 presets +
+  `.continuous()` builder), `crates/openpulse-channel/src/watterson.rs` (`ray_envelopes` dispatch,
+  faders built at `new()` when continuous), `apps/openpulse-linksim/src/lib.rs` (all 3 Watterson specs
+  opt in). No external raw-literal `WattersonConfig` construction exists, so the added field breaks nothing.
+- **Tests:** new `continuous_fade_correlates_across_calls` (frame-by-frame at F1: continuous lag-1 RMS
+  autocorr > 0.5 and ≥ 0.3 above the per-call-re-randomising default) and `continuous_mode_preserves_unit_power`
+  (seed-averaged E[|h|²] ∈ [0.75, 1.35]).
+- **Test results (actually run):** `openpulse-channel` 48 passed (was 46; the pre-existing FFT-path tests
+  unchanged, confirming default is bit-identical); `openpulse-linksim` 17 + 3 goodput gates still pass with
+  continuous fades on; `openpulse-modem` `channel_loopback` 12 passed (default path untouched);
+  testmatrix/testbench build clean; clippy `-D warnings` + fmt clean.
+
+---
+
 ## 2026-07-10 — perf(dsp): QPSK1000-HF-RRC forward-only LMS (drop the fading-harmful DFE)
 
 - **Requirement/change:** the QPSK1000-HF-RRC demod ran a decision-feedback equalizer (`fwd=11, dfe=2`).
