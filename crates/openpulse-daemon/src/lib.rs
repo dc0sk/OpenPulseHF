@@ -13,6 +13,9 @@ pub mod audit;
 pub mod logbook;
 pub mod protocol;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod filexfer;
+
 /// WebSocket control endpoint — native server builds only.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ws;
@@ -207,6 +210,12 @@ pub struct RuntimeControlState {
     /// Compress fixed-mode `SendMessage` payloads before transmission (`[compression] enabled`). The OTA
     /// path is packed in `server::run`; this covers the non-OTA transmit inside `apply_command_to_engine`.
     pub compress_tx: bool,
+    /// Reassembles inbound `OPFX` file-transfer control frames (segment-id `0xFFFF`); block-data
+    /// fragments (segment-id `block_index + 1`) are reassembled inside the active receive session.
+    pub filexfer_sar: SarReassembler,
+    /// Tripwire: number of inbound `OPFX` frames routed to the file-transfer path. Stays 0 unless a
+    /// file frame actually reaches the seam on the production receive path (seam-gap discipline).
+    pub filexfer_frames_routed: u64,
 }
 
 impl RuntimeControlState {
@@ -248,6 +257,10 @@ pub struct VerifiedPeer {
 #[cfg(not(target_arch = "wasm32"))]
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Reassembly timeout for inbound file-transfer control fragments.
+#[cfg(not(target_arch = "wasm32"))]
+pub const FILEXFER_SAR_TIMEOUT: Duration = Duration::from_secs(300);
+
 #[cfg(not(target_arch = "wasm32"))]
 impl Default for RuntimeControlState {
     fn default() -> Self {
@@ -279,6 +292,8 @@ impl Default for RuntimeControlState {
             handshake_sar: SarReassembler::new(HANDSHAKE_TIMEOUT),
             local_ota_ladder: None,
             compress_tx: false,
+            filexfer_sar: SarReassembler::new(FILEXFER_SAR_TIMEOUT),
+            filexfer_frames_routed: 0,
         }
     }
 }
@@ -1151,7 +1166,22 @@ pub async fn process_received_bytes(
         .ok()
         .and_then(|text| decode_qsy_frame(text.trim()).ok());
     let Some(frame) = qsy_frame else {
-        try_reassemble_handshake(bytes, runtime_state, event_tx, &mode, engine);
+        // Route the reassembly by SAR segment-id (the 4-byte header is public layout): 0 = handshake
+        // (unchanged, bit-for-bit), any other id = file transfer. A malformed sub-header frame stays on
+        // the handshake path, which ignores it exactly as before.
+        match sar_segment_id(bytes) {
+            Some(0) | None => {
+                try_reassemble_handshake(bytes, runtime_state, event_tx, &mode, engine)
+            }
+            Some(segment_id) => filexfer::route_inbound_fragment(
+                bytes,
+                segment_id,
+                runtime_state,
+                event_tx,
+                &mode,
+                engine,
+            ),
+        }
         return;
     };
 
@@ -1220,6 +1250,15 @@ fn transmit_handshake_frame(engine: &mut ModemEngine, mode: &str, frame: &[u8]) 
 /// Feed a non-QSY, non-relay frame into the handshake SAR reassembler; on a completed segment,
 /// dispatch the reassembled CONREQ/CONACK (confirmed by its HSCQ/HSAK magic). Stray frames create
 /// at most a short-lived reassembly slot that the periodic [`expire_pending_handshake`] clears.
+#[cfg(not(target_arch = "wasm32"))]
+/// The SAR `segment_id` (big-endian bytes 0–1) of a fragment, or `None` if it's too short to be a
+/// well-formed SAR fragment. Used to route reassembly (handshake = 0, file transfer ≠ 0).
+#[cfg(not(target_arch = "wasm32"))]
+fn sar_segment_id(bytes: &[u8]) -> Option<u16> {
+    (bytes.len() >= openpulse_core::sar::SAR_HEADER_SIZE)
+        .then(|| ((bytes[0] as u16) << 8) | bytes[1] as u16)
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn try_reassemble_handshake(
     bytes: &[u8],
@@ -2374,6 +2413,47 @@ mod command_apply_tests {
 
         assert_eq!(*active_mode.lock().await, "BPSK250");
         assert!((engine.tx_attenuation_db() - (-6.0)).abs() < 1e-6);
+    }
+
+    #[tokio::test]
+    async fn received_bytes_route_opfx_to_filexfer_and_handshake_stays_untouched() {
+        use openpulse_core::sar::sar_encode;
+        use openpulse_filexfer::{FxFrame, Reason};
+
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, _) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let mut rs = RuntimeControlState::default();
+
+        // A handshake fragment (segment-id 0) must stay on the handshake path — filexfer untouched.
+        let hs = sar_encode(0, b"HSCQ not a real conreq").unwrap();
+        process_received_bytes(&hs[0], &mut rs, None, &ev_tx, &active_mode, &mut engine).await;
+        assert_eq!(
+            rs.filexfer_frames_routed, 0,
+            "handshake must not reach the file seam"
+        );
+
+        // An OPFX control fragment (segment-id 0xFFFF) must route to the file-transfer seam.
+        let frame = FxFrame::FileReject {
+            transfer_id: 1,
+            reason: Reason::Busy,
+        }
+        .encode();
+        let ctrl = sar_encode(filexfer::FX_CONTROL_SEGMENT_ID, &frame).unwrap();
+        process_received_bytes(&ctrl[0], &mut rs, None, &ev_tx, &active_mode, &mut engine).await;
+        assert_eq!(
+            rs.filexfer_frames_routed, 1,
+            "OPFX control frame must reach the file seam"
+        );
+
+        // A block-data fragment (segment-id block_index+1) also routes to the file seam.
+        let block = sar_encode(3, b"OPFX block-ish").unwrap();
+        process_received_bytes(&block[0], &mut rs, None, &ev_tx, &active_mode, &mut engine).await;
+        assert_eq!(
+            rs.filexfer_frames_routed, 2,
+            "OPFX block fragment must reach the file seam"
+        );
     }
 
     #[tokio::test]

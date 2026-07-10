@@ -9,6 +9,32 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — feat(filexfer): Phase C-2a — inbound OPFX receive-routing seam (handshake preserved)
+
+- **Requirement/change:** FF-16 Phase C-2 (`docs/dev/design/file-transfer-plan.md` §6.2): route inbound
+  file-transfer frames off the shared receive path without disturbing the handshake path. Isolated as its own
+  step (C-2a) because the refactor touches load-bearing handshake reassembly — the plan's seam-gap discipline.
+- **Design decision:** `process_received_bytes` now dispatches its non-QSY/non-relay tail by **SAR
+  segment-id** (the 4-byte header is public layout): `0` → `try_reassemble_handshake` (unchanged, so the
+  handshake path is bit-for-bit identical and its tests don't move), any other id → `filexfer::route_inbound_fragment`.
+  Control frames use segment-id `0xFFFF` (reassembled via a new `filexfer_sar` and decoded), block-data frames
+  use `block_index + 1` — three non-overlapping ranges so handshake and file fragments can never share a
+  reassembly slot. A `filexfer_frames_routed` tripwire (per the seam-gap checklist) proves file frames reach
+  the seam on the production entry (`accumulate_capture` → rx tick → `process_received_bytes`), not just a test
+  convenience path. The session handler (offer/data/write/verify) is C-2b; this step lands the proven seam.
+- **Implementation:** `crates/openpulse-daemon/src/filexfer.rs` (`route_inbound_fragment`,
+  `FX_CONTROL_SEGMENT_ID`); `lib.rs` (`sar_segment_id` helper, seam dispatch, `RuntimeControlState.filexfer_sar`
+  + `filexfer_frames_routed`, `FILEXFER_SAR_TIMEOUT`, `mod filexfer`); daemon dep on `openpulse-filexfer`.
+- **Tests:** `received_bytes_route_opfx_to_filexfer_and_handshake_stays_untouched` — a handshake fragment
+  (seg 0) leaves the tripwire at 0; an OPFX control frame (seg 0xFFFF) and a block fragment (seg k+1) each
+  bump it, driven through the real `process_received_bytes`.
+- **Test results (actually run):** full `openpulse-daemon` suite 72 passed / 0 failed (all handshake tests
+  unchanged); clippy `-D warnings` + fmt clean.
+- **Next:** C-2b — the `filexfer.rs` session handler (offer→verify→policy→accept→data→write→verify→
+  `FileComplete` + events) + `AcceptFile`/`RejectFile` wiring; C-3 — the live `server::run` send loop + twin test.
+
+---
+
 ## 2026-07-10 — feat(filexfer): Phase C-1 — daemon control surface + `[file_transfer]` config
 
 - **Requirement/change:** FF-16 Phase C (`docs/dev/design/file-transfer-plan.md` §6) is staged into steps to

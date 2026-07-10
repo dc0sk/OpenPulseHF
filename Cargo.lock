@@ -4927,6 +4927,7 @@ dependencies = [
  "openpulse-channel",
  "openpulse-config",
  "openpulse-core",
+ "openpulse-filexfer",
  "openpulse-gpu",
  "openpulse-linksec",
  "openpulse-modem",
