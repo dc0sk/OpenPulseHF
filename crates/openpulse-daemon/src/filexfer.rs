@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 
 use openpulse_config::FileTransferConfig;
-use openpulse_core::manifest::{verify_manifest_with_payload, ManifestError, TransferManifest};
+use openpulse_core::manifest::{verify_manifest, TransferManifest};
 use openpulse_core::sar::sar_encode;
 use openpulse_filexfer::{
     decide, encode_block, sanitize_filename, BlockAssembler, BlockEvent, CompleteStatus, FileOffer,
@@ -561,33 +561,27 @@ fn reassemble_verify_write(
         return (CompleteStatus::SizeMismatch, [0u8; 64]);
     };
     let manifest = fx.offer.to_manifest();
-    // No verified-peer key ⇒ verification can only fail; the all-zero key never validates a signature.
     let pubkey = fx.peer_pubkey.unwrap_or([0u8; 32]);
 
-    match verify_manifest_with_payload(&manifest, &pubkey, &payload) {
-        Ok(()) => match write_file(rs, &fx.from, &fx.offer.name, &payload, true) {
-            Ok(path) => {
-                fx.file_received_emitted = true;
-                let _ = event_tx.send(ControlEvent::FileReceived {
-                    transfer_id: fx.offer.transfer_id,
-                    from: fx.from.clone(),
-                    name: fx.offer.name.clone(),
-                    size: payload.len() as u64,
-                    path,
-                    verified: true,
-                });
-                let countersig = countersign(&payload, &fx.offer.sender_id, &rs.station_seed);
-                (CompleteStatus::VerifiedOk, countersig)
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "filexfer: verified file write failed");
-                (CompleteStatus::SizeMismatch, [0u8; 64])
-            }
-        },
-        Err(ManifestError::PayloadHashMismatch) => {
-            // Quarantine — never silently drop; the operator sees an UNVERIFIED file.
-            let path =
-                write_file(rs, &fx.from, &fx.offer.name, &payload, false).unwrap_or_default();
+    // Evaluate the two integrity axes independently so the file is always written with an accurate
+    // badge (never silently dropped): the content is intact iff its hash matches the offer's, and it
+    // is *authenticated* iff a verified-peer key also validates the signature over that hash.
+    let hash_ok = {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(&payload).as_slice() == manifest.payload_hash.as_slice()
+    };
+    let sig_ok = fx.peer_pubkey.is_some() && verify_manifest(&manifest, &pubkey).is_ok();
+    let verified = hash_ok && sig_ok;
+    let status = if verified {
+        CompleteStatus::VerifiedOk
+    } else if !hash_ok {
+        CompleteStatus::HashMismatch // corrupted content → quarantine
+    } else {
+        CompleteStatus::SignatureInvalid // intact but unsigned/unknown peer → quarantine
+    };
+
+    match write_file(rs, &fx.from, &fx.offer.name, &payload, verified) {
+        Ok(path) => {
             fx.file_received_emitted = true;
             let _ = event_tx.send(ControlEvent::FileReceived {
                 transfer_id: fx.offer.transfer_id,
@@ -595,12 +589,18 @@ fn reassemble_verify_write(
                 name: fx.offer.name.clone(),
                 size: payload.len() as u64,
                 path,
-                verified: false,
+                verified,
             });
-            (CompleteStatus::HashMismatch, [0u8; 64])
         }
-        Err(_) => (CompleteStatus::SignatureInvalid, [0u8; 64]),
+        Err(e) => tracing::warn!(error = %e, "filexfer: file write failed"),
     }
+
+    let countersig = if verified {
+        countersign(&payload, &fx.offer.sender_id, &rs.station_seed)
+    } else {
+        [0u8; 64]
+    };
+    (status, countersig)
 }
 
 fn emit_terminal(

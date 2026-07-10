@@ -9,6 +9,30 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — test(filexfer): Phase C acceptance — a file crosses two real daemons (twin round-trip)
+
+- **Requirement/change:** FF-16 Phase C acceptance (`docs/dev/design/file-transfer-plan.md` §11/§12): prove a
+  file transfers end-to-end between two real daemons over the modem — the MVP ship-line gate. Also make the
+  receiver always persist a received file with an accurate verify badge (never silently drop).
+- **Design decision:** `reassemble_verify_write` now evaluates the two integrity axes independently — content
+  *intact* iff its SHA-256 matches the offer's `payload_hash`, *authenticated* iff a verified-peer key also
+  validates the signature — and **always writes the file** with `verified = intact && authenticated`
+  (`.unverified` quarantine otherwise), so an unsigned/unknown peer's intact file still lands (badge false)
+  rather than being dropped on the signature check. `FileComplete.status` reflects `VerifiedOk` /
+  `HashMismatch` / `SignatureInvalid`. The twin test drives the whole flow through the real control protocol.
+- **Implementation:** `crates/openpulse-daemon/src/filexfer.rs` (`reassemble_verify_write` rewrite; `sha2` +
+  `verify_manifest` imports); `crates/openpulse-daemon/Cargo.toml` (`sha2` dep).
+- **Tests:** `crates/openpulse-daemon/tests/twin_daemon_bridge.rs::a_file_crosses_the_bridge_between_two_real_daemons`
+  — two bridged real daemons (`spawn_bridged_pair`, clean AWGN), `SendFile` on A via TCP control → B emits
+  `FileReceived` and the written file reads back **byte-for-byte** equal to the sent bytes.
+- **Test results (actually run):** twin round-trip passes (0.75 s); full `openpulse-daemon` suite 75 passed /
+  0 failed (verified-peer receive test still green); clippy `-D warnings` + fmt clean.
+- **MVP ship line reached:** file transfer works both directions, is operator-usable via the control port,
+  and is proven end-to-end across two real daemons. Remaining polish: panel Files tab (Phase D), resume
+  (Phase E), real-radio PTT burst sequencing, and on-air validation (Phase F).
+
+---
+
 ## 2026-07-10 — feat(filexfer): Phase C-3 — the send session (SendFile → offer → blocks → FileSent)
 
 - **Requirement/change:** FF-16 Phase C-3 (`docs/dev/design/file-transfer-plan.md` §6.3): the daemon's

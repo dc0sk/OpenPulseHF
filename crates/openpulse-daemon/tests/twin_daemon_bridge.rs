@@ -175,3 +175,84 @@ async fn ota_ladder_steps_under_traffic_between_two_real_daemons() {
         "OTA rate ladder should step above the SL2 floor under traffic; reached SL{max_level}"
     );
 }
+
+/// Config with direct file transfer enabled (receiver auto-accepts any size; no handshake required).
+fn ft_cfg(
+    callsign: &str,
+    tcp_port: u16,
+    ws_port: u16,
+    download_dir: &std::path::Path,
+) -> OpenpulseConfig {
+    let mut c = cfg(callsign, tcp_port, ws_port);
+    c.file_transfer.enabled = true;
+    c.file_transfer.require_verified_peer = false;
+    c.file_transfer.auto_accept_max_bytes = 10_000_000;
+    c.file_transfer.max_file_bytes = 10_000_000;
+    c.file_transfer.download_dir = download_dir.to_string_lossy().into_owned();
+    c
+}
+
+/// FF-16 Phase C acceptance: a file sent from daemon A lands, reassembled byte-for-byte, on daemon B —
+/// across the real modem + a clean channel, driven entirely through the control protocol.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn a_file_crosses_the_bridge_between_two_real_daemons() {
+    let base = std::env::temp_dir().join(format!("opfx_twin_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let recv_dir = base.join("recv");
+    std::fs::create_dir_all(&base).unwrap();
+
+    // The file A will offer (small — one block over BPSK250 keeps the test quick).
+    let src = base.join("payload.txt");
+    let contents = b"twin file-transfer payload across two real daemons ".repeat(4);
+    std::fs::write(&src, &contents).unwrap();
+
+    let pair = spawn_bridged_pair(
+        ft_cfg("STNA", 19030, 19031, &base.join("dl_a")),
+        ft_cfg("STNB", 19032, 19033, &recv_dir),
+        clean_awgn(1),
+        clean_awgn(2),
+        Duration::from_millis(10),
+    )
+    .await;
+
+    // Watch daemon B for the received file.
+    let b = TcpStream::connect(pair.addr_b).await.unwrap();
+    let (b_read, _b_write) = b.into_split();
+    let mut b_reader = BufReader::new(b_read);
+
+    // Drive SendFile on daemon A.
+    let a = TcpStream::connect(pair.addr_a).await.unwrap();
+    let (_a_read, mut a_write) = a.into_split();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let cmd = serde_json::to_string(&ControlCommand::SendFile {
+        to: "STNB".into(),
+        path: src.to_string_lossy().into_owned(),
+    })
+    .unwrap()
+        + "\n";
+    a_write.write_all(cmd.as_bytes()).await.unwrap();
+
+    // Daemon B must emit FileReceived; capture the path it wrote to.
+    let received = timeout(Duration::from_secs(90), async {
+        loop {
+            let mut buf = String::new();
+            if b_reader.read_line(&mut buf).await.unwrap() == 0 {
+                continue;
+            }
+            if let Ok(ControlEvent::FileReceived { path, name, .. }) =
+                serde_json::from_str::<ControlEvent>(buf.trim())
+            {
+                return (path, name);
+            }
+        }
+    })
+    .await;
+
+    pair.shutdown();
+
+    let (path, name) = received.expect("daemon B never reported the file crossing the bridge");
+    assert!(name.contains("payload"), "unexpected file name {name}");
+    let got = std::fs::read(&path).expect("received file must exist on disk");
+    assert_eq!(got, contents, "reassembled file must match the sent bytes");
+    let _ = std::fs::remove_dir_all(&base);
+}

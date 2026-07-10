@@ -59,6 +59,7 @@ openpulse-config  = { workspace = true }
 openpulse-linksec = { workspace = true, features = ["tokio"] }
 openpulse-channel = { workspace = true }
 openpulse-filexfer = { workspace = true }
+sha2              = { workspace = true }
 rand             = { workspace = true }
 openpulse-qsy     = { workspace = true }
 openpulse-repeater = { workspace = true }
