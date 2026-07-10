@@ -37,6 +37,7 @@ members = [
     "crates/openpulse-dsp",
     "crates/openpulse-qsy",
     "crates/openpulse-freedv-auth",
+    "crates/openpulse-filexfer",
     "tools/openpulse-dict-trainer",
 ]
 
@@ -49,6 +50,7 @@ repository = "https://github.com/dc0sk/OpenPulse"
 
 [workspace.dependencies]
 openpulse-core    = { path = "crates/openpulse-core" }
+openpulse-filexfer = { path = "crates/openpulse-filexfer" }
 openpulse-audio   = { path = "crates/openpulse-audio", default-features = false }
 openpulse-modem   = { path = "crates/openpulse-modem" }
 openpulse-channel = { path = "crates/openpulse-channel" }

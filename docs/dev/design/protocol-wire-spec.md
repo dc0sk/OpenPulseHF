@@ -234,6 +234,46 @@ Signing modes `Normal` / `Psk` / `Pq` / `Hybrid` (increasing strength; PQ=4, Hyb
 
 ---
 
+## 8. Direct file transfer (`OPFX`)
+
+Source: `crates/openpulse-filexfer` · design `docs/dev/design/file-transfer-plan.md` (FF-16). A
+self-describing binary protocol for offering, transferring, and cryptographically verifying a file
+over an RF session. Registered here to satisfy the "determinable emissions" openness requirement.
+
+Every `FxFrame` is **SAR-encoded** before transmission (like handshake frames), so after reassembly a
+frame is:
+
+```
+OPFX (4) │ ver (1) = 0x01 │ type (1) │ body…
+```
+
+`compression::unpack()` passes an `OPFX` frame through untouched (its magic check fails), so the magic
+is safe alongside `OPLS`/`OPHF`/`OPZ1`/`HSCQ`/`HSAK`/`QSY`. Frame types:
+
+| type | name | body |
+|---|---|---|
+| 0x01 | `FileOffer` | `transfer_id u32 \| flags u8 \| file_size u64 \| sha256 [32] \| block_size u32 \| block_count u16 \| sender_id str≤16 \| name str≤48 \| mime str≤24 \| signature [64]` |
+| 0x02 | `FileAccept` | `transfer_id u32 \| have_len u16 \| have_bitmap [have_len]` (resume bitmap; empty in v1) |
+| 0x03 | `FileReject` | `transfer_id u32 \| reason u8` |
+| 0x04 | `FileData` | `transfer_id u32 \| block_index u16 \| packed block bytes…` (one SAR segment, `segment_id = block_index + 1`) |
+| 0x05 | `BlockAck` | `transfer_id u32 \| block_index u16 \| complete u8 \| missing_len u8 \| missing_frag_bitmap [missing_len]` |
+| 0x06 | `FileComplete` | `transfer_id u32 \| status u8 \| countersignature [64]` |
+| 0x07 | `FileCancel` | `transfer_id u32 \| reason u8` |
+
+Strings are `len(u8) \| UTF-8`; integers big-endian. `block_size` is bounded `1024..=49 152` so a
+per-block `pack()` (§7.1) + the 12-byte `FileData` header never exceeds the 64 005-byte SAR-segment /
+`MAX_DECOMPRESSED_SIZE` cap — this is how a file larger than one SAR object is carried (the **block**
+is the multi-object unit; segment-id 0 stays reserved for handshake frames). `reason` codes: `0`
+operator-declined, `1` feature-disabled, `2` too-large, `3` quota-exceeded, `4` busy, `5`
+untrusted-peer, `6` timeout, `7` unsupported-version, `8` operator-cancel, `9` stall.
+`FileComplete.status`: `0` verified-ok, `1` hash-mismatch, `2` signature-invalid, `3` size-mismatch.
+
+**Integrity** reuses §6: `FileOffer` embeds the four `TransferManifest` fields inline; the receiver
+reconstructs the manifest and calls `verify_manifest` at offer time (against the handshake-proven peer
+key) and `verify_manifest_with_payload` after reassembly, then countersigns `FileComplete` on success.
+
+---
+
 ## Cross-references
 
 | Layer | Spec / source |
