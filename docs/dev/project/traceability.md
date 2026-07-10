@@ -9,6 +9,31 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — feat(filexfer): Phase C-1 — daemon control surface + `[file_transfer]` config
+
+- **Requirement/change:** FF-16 Phase C (`docs/dev/design/file-transfer-plan.md` §6) is staged into steps to
+  de-risk the live PTT delivery loop (the plan's own guidance). Step 1: the control-protocol contract and
+  config — the API the module + live loop (next steps) will implement against.
+- **Design decision:** additive `[file_transfer]` config (`FileTransferConfig`: enabled, download_dir,
+  auto_accept/max/quota bytes, require_verified_peer, allowlist, offer timeout — defaults opt-in/off,
+  `require_verified_peer = true`, `auto_accept = 0`), and the `SendFile`/`AcceptFile`/`RejectFile`/
+  `CancelFile`/`ListFiles` commands + `FileOffered`/`FileProgress`/`FileReceived`/`FileSent`/`FileFailed`/
+  `FileList` events + `FileSummary` on `protocol.rs`, mirroring the existing serde-tagged shapes. The
+  commands are no-ops on `apply_command_to_engine` (they are intercepted in `server::run` where PTT lives,
+  like the `SendMessage` OTA interception — wired in the next step). Panel `apply_event` gets a catch-all for
+  the new events (Files tab handling is Phase D).
+- **Implementation:** `crates/openpulse-config/src/lib.rs` (`FileTransferConfig` + `OpenpulseConfig` field +
+  template section); `crates/openpulse-daemon/src/protocol.rs` (5 commands, 6 events, `FileSummary`);
+  `crates/openpulse-daemon/src/lib.rs` (no-op arms); `apps/openpulse-panel/src/connection.rs` (catch-all).
+- **Tests:** `filexfer_commands_and_events_round_trip_via_json` (all 5 commands + 6 events serde round-trip);
+  the existing config template-parse guard covers the new `[file_transfer]` section.
+- **Test results (actually run):** `openpulse-daemon` protocol round-trip passes; `openpulse-config` 15 passed;
+  panel/cli/twinview/linksim build clean; clippy `-D warnings` + fmt clean.
+- **Next:** Phase C-2 — the `filexfer.rs` daemon module (file I/O, policy, quota) + receive-path
+  `try_reassemble_sar` routing; Phase C-3 — the live `server::run` `SendFile` PTT delivery loop + twin test.
+
+---
+
 ## 2026-07-10 — feat(filexfer): Phase B — blocks over SAR + multi-object framing + modem loopback
 
 - **Requirement/change:** FF-16 Phase B (`docs/dev/design/file-transfer-plan.md` §12): the byte-level block

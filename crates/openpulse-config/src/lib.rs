@@ -48,6 +48,7 @@ pub struct OpenpulseConfig {
     pub observability: ObservabilityConfig,
     pub control_security: ControlSecurityConfig,
     pub compression: CompressionConfig,
+    pub file_transfer: FileTransferConfig,
 }
 
 /// Control-channel link security (REQ-SEC-CTL-01/02). Auth is always required on a non-loopback
@@ -99,6 +100,43 @@ pub struct CompressionConfig {
     /// Default `false`. The receive side always decompresses a packed frame regardless of this flag,
     /// so it is safe to enable on one station independently.
     pub enabled: bool,
+}
+
+/// Direct P2P file-transfer settings (opt-in; on-air TX). See `docs/dev/design/file-transfer-plan.md`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct FileTransferConfig {
+    /// Master switch. When `false`, inbound offers are rejected on air with `feature-disabled`.
+    pub enabled: bool,
+    /// Directory received files are written under (per-peer subdirectories are created beneath it).
+    pub download_dir: String,
+    /// Auto-accept inbound offers at or below this many bytes; `0` = always ask the operator.
+    pub auto_accept_max_bytes: u64,
+    /// Hard per-file cap in bytes, both directions (offers above it are refused).
+    pub max_file_bytes: u64,
+    /// Total bytes retained per peer under `download_dir` before new offers are rejected (0 = no limit).
+    pub per_peer_quota_bytes: u64,
+    /// Require a signature-verified peer (CONREQ/CONACK) before accepting offers.
+    pub require_verified_peer: bool,
+    /// Optional callsign allowlist; empty = any peer passing the trust policy above.
+    pub allowed_peers: Vec<String>,
+    /// Seconds an unanswered offer stays pending before automatic rejection.
+    pub offer_timeout_secs: u64,
+}
+
+impl Default for FileTransferConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            download_dir: "~/.local/share/openpulse/downloads".into(),
+            auto_accept_max_bytes: 0,
+            max_file_bytes: 1024 * 1024,
+            per_peer_quota_bytes: 0,
+            require_verified_peer: true,
+            allowed_peers: Vec::new(),
+            offer_timeout_secs: 120,
+        }
+    }
 }
 
 /// Automatic ADIF logbook settings (opt-in; one record per completed contact).
@@ -994,6 +1032,25 @@ adif_path = "~/.local/share/openpulse/openpulse.adi"
 # The receiver always decompresses a packed frame regardless of this flag, so it is safe to
 # enable on one station independently. Opt-in (changes the on-air payload).
 enabled = false
+
+[file_transfer]
+# Direct peer-to-peer file transfer over an RF session (offer/accept + signed-manifest verify).
+# Opt-in (on-air TX). See docs/dev/design/file-transfer-plan.md.
+enabled = false
+# Where received files are written (per-peer subdirectories are created beneath it).
+download_dir = "~/.local/share/openpulse/downloads"
+# Auto-accept inbound offers at or below this many bytes; 0 = always ask the operator.
+auto_accept_max_bytes = 0
+# Hard per-file cap in bytes, both directions.
+max_file_bytes = 1048576
+# Per-peer retained-bytes quota under download_dir before new offers are rejected (0 = no limit).
+per_peer_quota_bytes = 0
+# Require a signature-verified peer (CONREQ/CONACK) before accepting offers.
+require_verified_peer = true
+# Optional callsign allowlist; empty = any peer passing the trust policy above.
+allowed_peers = []
+# Seconds an unanswered offer stays pending before automatic rejection.
+offer_timeout_secs = 120
 "#
     .to_string()
 }

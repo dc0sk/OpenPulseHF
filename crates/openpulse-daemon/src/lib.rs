@@ -2014,11 +2014,18 @@ pub async fn apply_command_to_engine(
         }
         // No live-modem side effects for these commands in the engine path.
         // They are handled by dispatch-only paths or request-response control flow.
+        // File-transfer commands are intercepted in `server::run` (where PTT + the file sessions live),
+        // like the `SendMessage` OTA interception; they are no-ops on the plain engine path.
         ControlCommand::SubscribeSpectrum { .. }
         | ControlCommand::GetConfig
         | ControlCommand::ListMessages
         | ControlCommand::GetMessage { .. }
-        | ControlCommand::DeleteMessage { .. } => {}
+        | ControlCommand::DeleteMessage { .. }
+        | ControlCommand::SendFile { .. }
+        | ControlCommand::AcceptFile { .. }
+        | ControlCommand::RejectFile { .. }
+        | ControlCommand::CancelFile { .. }
+        | ControlCommand::ListFiles => {}
     }
 }
 

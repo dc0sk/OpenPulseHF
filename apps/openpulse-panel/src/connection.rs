@@ -374,5 +374,7 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
             st.ota_rx_confirmed_level = rx_confirmed_level;
             st.ota_is_locked = is_locked;
         }
+        // File-transfer events are surfaced by the Files tab (FF-16 Phase D); ignored here for now.
+        _ => {}
     }
 }

@@ -215,6 +215,63 @@ pub enum ControlEvent {
         /// Whether the session is locked to a fixed level (manual override).
         is_locked: bool,
     },
+    /// An inbound file offer needs (auto-accepted) or awaits an operator decision.
+    FileOffered {
+        transfer_id: u32,
+        from: String,
+        name: String,
+        size: u64,
+        sha256_hex: String,
+        mime: String,
+        auto_accepted: bool,
+        signature_valid: bool,
+    },
+    /// File-transfer progress (both directions), periodic + on block edges.
+    FileProgress {
+        transfer_id: u32,
+        /// `"tx"` or `"rx"`.
+        direction: String,
+        name: String,
+        blocks_done: u16,
+        blocks_total: u16,
+        bytes_done: u64,
+        bytes_total: u64,
+    },
+    /// Terminal: a file landed on disk (receive side).
+    FileReceived {
+        transfer_id: u32,
+        from: String,
+        name: String,
+        size: u64,
+        path: String,
+        verified: bool,
+    },
+    /// Terminal: the peer confirmed the transfer (send side). `receipt_valid` = countersignature ok.
+    FileSent {
+        transfer_id: u32,
+        to: String,
+        name: String,
+        receipt_valid: Option<bool>,
+    },
+    /// Terminal failure/rejection/cancel (both directions).
+    FileFailed {
+        transfer_id: u32,
+        direction: String,
+        reason: String,
+    },
+    /// Response to [`ControlCommand::ListFiles`] (requesting client only).
+    FileList { files: Vec<FileSummary> },
+}
+
+/// Summary of a received file (for [`ControlEvent::FileList`]).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FileSummary {
+    pub name: String,
+    pub from: String,
+    pub size: u64,
+    pub verified: bool,
+    pub path: String,
+    pub timestamp_secs: u64,
 }
 
 /// Command sent from a client to the server.
@@ -308,6 +365,16 @@ pub enum ControlCommand {
     SetAgc { enabled: bool },
     /// Enable/disable the automatic ADIF logbook at runtime (one record per connect→disconnect).
     SetLogbook { enabled: bool },
+    /// Offer a file to the connected peer. `path` is daemon-host-local (see file-transfer-plan §13 D3).
+    SendFile { to: String, path: String },
+    /// Accept a pending inbound file offer.
+    AcceptFile { transfer_id: u32 },
+    /// Reject a pending inbound file offer.
+    RejectFile { transfer_id: u32 },
+    /// Cancel the active transfer (either direction).
+    CancelFile { transfer_id: u32 },
+    /// List received files. Server responds with [`ControlEvent::FileList`] + an `ok` response.
+    ListFiles,
 }
 
 /// Per-command response.
@@ -337,6 +404,81 @@ impl CommandResponse {
 #[cfg(test)]
 mod ota_protocol_tests {
     use super::*;
+
+    #[test]
+    fn filexfer_commands_and_events_round_trip_via_json() {
+        let cmds = vec![
+            ControlCommand::SendFile {
+                to: "W1AW".into(),
+                path: "/tmp/report.pdf".into(),
+            },
+            ControlCommand::AcceptFile { transfer_id: 7 },
+            ControlCommand::RejectFile { transfer_id: 7 },
+            ControlCommand::CancelFile { transfer_id: 7 },
+            ControlCommand::ListFiles,
+        ];
+        for c in cmds {
+            let j = serde_json::to_string(&c).unwrap();
+            let back: ControlCommand = serde_json::from_str(&j).unwrap();
+            assert_eq!(format!("{c:?}"), format!("{back:?}"));
+        }
+
+        let evs = vec![
+            ControlEvent::FileOffered {
+                transfer_id: 7,
+                from: "W1AW".into(),
+                name: "report.pdf".into(),
+                size: 4096,
+                sha256_hex: "ab12".into(),
+                mime: "application/pdf".into(),
+                auto_accepted: false,
+                signature_valid: true,
+            },
+            ControlEvent::FileProgress {
+                transfer_id: 7,
+                direction: "rx".into(),
+                name: "report.pdf".into(),
+                blocks_done: 2,
+                blocks_total: 5,
+                bytes_done: 32768,
+                bytes_total: 81920,
+            },
+            ControlEvent::FileReceived {
+                transfer_id: 7,
+                from: "W1AW".into(),
+                name: "report.pdf".into(),
+                size: 4096,
+                path: "/dl/W1AW/report.pdf".into(),
+                verified: true,
+            },
+            ControlEvent::FileSent {
+                transfer_id: 7,
+                to: "W1AW".into(),
+                name: "report.pdf".into(),
+                receipt_valid: Some(true),
+            },
+            ControlEvent::FileFailed {
+                transfer_id: 7,
+                direction: "tx".into(),
+                reason: "stall".into(),
+            },
+            ControlEvent::FileList {
+                files: vec![FileSummary {
+                    name: "report.pdf".into(),
+                    from: "W1AW".into(),
+                    size: 4096,
+                    verified: true,
+                    path: "/dl/W1AW/report.pdf".into(),
+                    timestamp_secs: 1_700_000_000,
+                }],
+            },
+        ];
+        for e in evs {
+            let j = serde_json::to_string(&e).unwrap();
+            let back: ControlEvent = serde_json::from_str(&j).unwrap();
+            assert_eq!(format!("{e:?}"), format!("{back:?}"));
+        }
+    }
 
     #[test]
     fn ota_commands_round_trip_via_json() {
