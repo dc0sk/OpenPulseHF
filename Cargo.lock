@@ -4966,6 +4966,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "openpulse-filexfer"
+version = "0.3.0"
+dependencies = [
+ "ed25519-dalek",
+ "openpulse-core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "openpulse-freedv-auth"
 version = "0.3.0"
 dependencies = [

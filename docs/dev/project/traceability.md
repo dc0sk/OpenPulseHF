@@ -9,6 +9,32 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — feat(filexfer): Phase A — `openpulse-filexfer` crate (OPFX wire + state machines)
+
+- **Requirement/change:** FF-16 Phase A (`docs/dev/design/file-transfer-plan.md` §12): the pure protocol
+  crate for direct P2P file transfer — wire codec, offer + policy, sender/receiver state machines — with no
+  daemon changes.
+- **Design decision:** a no-I/O, no-tokio crate (the `openpulse-b2f`/`QsySession` pattern): sans-I/O
+  `SenderSession`/`ReceiverSession` driven by decoded `FxFrame`s + an injected ms clock, emitting `FxAction`s
+  the daemon (Phase C) will carry out. New `OPFX` binary frame (7 types, SAR-framed; collision-safe and
+  `compression::unpack`-passthrough). Integrity reuses `manifest.rs` — `FileOffer` embeds the four
+  `TransferManifest` fields inline; `verify_signature` reconstructs the manifest and calls the existing
+  `verify_manifest`. Block/fragment byte-level logic is deferred to Phase B (`blocks.rs`); the receiver
+  exposes `note_block_complete`/`set_verify_result` as the Phase A/B seam. Panic-free codec (bounds-checked
+  `Reader`, no `unwrap`/`expect` in the library).
+- **Implementation:** new `crates/openpulse-filexfer` (`wire.rs`, `offer.rs`, `sender.rs`, `receiver.rs`,
+  `sanitize.rs`, `error.rs`, `lib.rs`); workspace member + `[workspace.dependencies]`; `OPFX` registered in
+  `docs/dev/design/protocol-wire-spec.md` §8; CLAUDE.md crate-map + acceptance-table rows.
+- **Tests:** `crates/openpulse-filexfer/tests/filexfer.rs` — 17 tests: wire round-trips of every frame +
+  malformed-frame rejection; offer signature verify + **tamper caught**; policy `decide` (disabled/too-large/
+  untrusted/prompt/auto-accept); sender happy path (3 blocks) / reject / offer-timeout / NACK-retransmit-then-
+  stall / cancel; receiver auto-accept→verify / verify-failure-unverified / prompt→accept / prompt-timeout /
+  reject-decision / cancel; `block_count` math; filename sanitization (traversal/control-chars/empty).
+- **Test results (actually run):** `cargo test -p openpulse-filexfer` 17 passed / 0 failed; clippy
+  `-D warnings` + fmt clean; crate builds in the workspace.
+
+---
+
 ## 2026-07-10 — docs: direct P2P file-transfer design plan (decisions D1–D5 locked)
 
 - **Requirement/change:** capture the approved engineering plan for direct peer-to-peer file transfer — the
