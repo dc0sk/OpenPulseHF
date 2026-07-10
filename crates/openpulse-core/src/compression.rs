@@ -110,6 +110,48 @@ pub fn compress_if_smaller(data: &[u8]) -> (Vec<u8>, CompressionAlgorithm) {
     }
 }
 
+/// Magic prefix of a self-describing compressed session frame (["OP"]en[P]ulse [Z]ip v1).
+pub const PACK_MAGIC: [u8; 4] = *b"OPZ1";
+
+/// Wrap `data` as a self-describing session frame: `PACK_MAGIC(4) | algo_tag(1) | payload`.
+///
+/// Picks the best of Lz4/Zstd via [`compress_if_smaller`] and records which one in the tag, so the
+/// receiver needs no out-of-band negotiation. When nothing beats the raw size the tag is `None` and the
+/// payload is the original bytes (the 5-byte header is the only overhead). The magic lets [`unpack`]
+/// distinguish a packed frame from any other traffic (control frames, un-packed data) and pass those
+/// through untouched — so enabling compression on one end never corrupts frames from the other.
+pub fn pack(data: &[u8]) -> Vec<u8> {
+    let (payload, algo) = compress_if_smaller(data);
+    let tag: u8 = match algo {
+        CompressionAlgorithm::None => 0,
+        CompressionAlgorithm::Lz4 => 1,
+        CompressionAlgorithm::Zstd(_) => 2,
+    };
+    let mut out = Vec::with_capacity(PACK_MAGIC.len() + 1 + payload.len());
+    out.extend_from_slice(&PACK_MAGIC);
+    out.push(tag);
+    out.extend_from_slice(&payload);
+    out
+}
+
+/// Recover the original bytes from a [`pack`]ed frame.
+///
+/// Returns `Some(original)` only for a well-formed packed frame (magic + known tag + valid payload);
+/// returns `None` for anything else — un-packed data, control frames, a corrupt frame — so the caller
+/// keeps its original bytes. Never panics and never allocates above [`MAX_DECOMPRESSED_SIZE`].
+pub fn unpack(framed: &[u8]) -> Option<Vec<u8>> {
+    if framed.len() < PACK_MAGIC.len() + 1 || framed[..PACK_MAGIC.len()] != PACK_MAGIC {
+        return None;
+    }
+    let algo = match framed[PACK_MAGIC.len()] {
+        0 => CompressionAlgorithm::None,
+        1 => CompressionAlgorithm::Lz4,
+        2 => CompressionAlgorithm::Zstd(ZSTD_DICT_ID),
+        _ => return None,
+    };
+    decompress(&framed[PACK_MAGIC.len() + 1..], algo).ok()
+}
+
 /// Compress `data` with zstd + the embedded HPX dictionary.
 ///
 /// Wire format: 4-byte big-endian original length, then the zstd frame.
@@ -138,6 +180,47 @@ fn zstd_compress(data: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pack_unpack_roundtrips_compressible_data() {
+        let data = vec![0x5Au8; 4096]; // highly compressible
+        let framed = pack(&data);
+        assert!(framed.len() < data.len(), "packed frame should be smaller");
+        assert_eq!(&framed[..4], &PACK_MAGIC);
+        assert_ne!(
+            framed[4], 0,
+            "compressible data should not use the None tag"
+        );
+        assert_eq!(unpack(&framed), Some(data));
+    }
+
+    #[test]
+    fn pack_unpack_roundtrips_incompressible_data() {
+        // Random-ish, incompressible → None tag, payload is the original bytes (+5-byte header).
+        let data: Vec<u8> = (0..97u16)
+            .map(|i| (i.wrapping_mul(37) ^ 0xA3) as u8)
+            .collect();
+        let framed = pack(&data);
+        assert_eq!(framed[4], 0, "incompressible data should use the None tag");
+        assert_eq!(unpack(&framed), Some(data));
+    }
+
+    #[test]
+    fn unpack_passes_through_non_packed_frames() {
+        // Control-frame magics and plain text must not be mistaken for packed frames.
+        assert_eq!(unpack(b"OPHF\x01binary relay envelope"), None);
+        assert_eq!(unpack(b"HSCQ handshake conreq"), None);
+        assert_eq!(unpack(b"QSY REQ token"), None);
+        assert_eq!(unpack(b"plain user message body"), None);
+        assert_eq!(unpack(b""), None);
+        assert_eq!(unpack(b"OPZ"), None); // too short to be a frame
+    }
+
+    #[test]
+    fn unpack_rejects_unknown_tag_and_corrupt_payload() {
+        assert_eq!(unpack(b"OPZ1\x09garbage"), None); // unknown algo tag
+        assert_eq!(unpack(b"OPZ1\x01\x00\x00"), None); // Lz4 tag, truncated/garbage payload
+    }
 
     #[test]
     fn none_roundtrip() {
