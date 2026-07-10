@@ -10,6 +10,7 @@
 //! Byte-level block splitting / SAR mapping / fragment bitmaps land in `blocks.rs` (Phase B); this
 //! crate (Phase A) is the wire codec, the offer + policy, and the control-flow state machines.
 
+mod blocks;
 mod error;
 mod offer;
 mod receiver;
@@ -17,6 +18,7 @@ mod sanitize;
 mod sender;
 mod wire;
 
+pub use blocks::{encode_block, split_blocks, BlockAssembler, BlockEvent};
 pub use error::FxError;
 pub use offer::{decide, FileOffer, OfferDecision, OfferPolicy};
 pub use receiver::ReceiverSession;
