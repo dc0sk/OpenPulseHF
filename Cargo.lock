@@ -4920,6 +4920,7 @@ name = "openpulse-daemon"
 version = "0.3.0"
 dependencies = [
  "bpsk-plugin",
+ "ed25519-dalek",
  "fsk4-plugin",
  "futures-util",
  "ofdm-plugin",
