@@ -103,6 +103,34 @@ pub struct PanelState {
     pub ota_rx_confirmed_level: Option<String>,
     /// Whether OTA is locked to a fixed level (manual override).
     pub ota_is_locked: bool,
+    /// Per-ladder-step count of successfully **received** (decoded) frames this session, indexed by
+    /// speed-level number (0 = before any `RateChange`; 1..=`LADDER_RUNGS` = SL1..SLn). Reset on
+    /// `SessionStarted`.
+    pub rx_frames_by_level: [u32; LEVEL_BUCKETS],
+    /// Per-ladder-step count of successfully **transmitted** frames this session, same indexing.
+    pub tx_frames_by_level: [u32; LEVEL_BUCKETS],
+}
+
+/// Ladder-step buckets: index 0 (no level yet) plus SL1..=`LADDER_RUNGS`.
+pub const LEVEL_BUCKETS: usize = crate::app::LADDER_RUNGS as usize + 1;
+
+impl PanelState {
+    /// Zero the per-session frame-per-level counters (called on a new session).
+    pub fn reset_frame_stats(&mut self) {
+        self.rx_frames_by_level = [0; LEVEL_BUCKETS];
+        self.tx_frames_by_level = [0; LEVEL_BUCKETS];
+    }
+
+    /// Record one successfully transferred frame at the current ladder step. `rx` selects the
+    /// received (decoded) vs transmitted counter. Clamps the level to a valid bucket.
+    pub fn record_frame(&mut self, rx: bool) {
+        let idx = (self.speed_level_num as usize).min(LEVEL_BUCKETS - 1);
+        if rx {
+            self.rx_frames_by_level[idx] = self.rx_frames_by_level[idx].saturating_add(1);
+        } else {
+            self.tx_frames_by_level[idx] = self.tx_frames_by_level[idx].saturating_add(1);
+        }
+    }
 }
 
 impl Default for PanelState {
@@ -148,6 +176,8 @@ impl Default for PanelState {
             ota_rx_recommended_level: None,
             ota_rx_confirmed_level: None,
             ota_is_locked: false,
+            rx_frames_by_level: [0; LEVEL_BUCKETS],
+            tx_frames_by_level: [0; LEVEL_BUCKETS],
         }
     }
 }
@@ -158,5 +188,56 @@ impl PanelState {
         if self.event_log.len() > 100 {
             self.event_log.pop_back();
         }
+    }
+}
+
+#[cfg(test)]
+mod frame_stats_tests {
+    use super::*;
+
+    #[test]
+    fn record_frame_buckets_by_current_level() {
+        let mut st = PanelState {
+            speed_level_num: 6,
+            ..Default::default()
+        };
+        st.record_frame(true); // RX at SL6
+        st.record_frame(true); // RX at SL6
+        st.speed_level_num = 8;
+        st.record_frame(false); // TX at SL8
+        assert_eq!(st.rx_frames_by_level[6], 2);
+        assert_eq!(st.tx_frames_by_level[8], 1);
+        assert_eq!(st.rx_frames_by_level[8], 0);
+    }
+
+    #[test]
+    fn level_zero_is_the_pre_lock_bucket() {
+        let mut st = PanelState::default();
+        assert_eq!(st.speed_level_num, 0);
+        st.record_frame(true);
+        assert_eq!(st.rx_frames_by_level[0], 1);
+    }
+
+    #[test]
+    fn out_of_range_level_clamps_into_the_last_bucket() {
+        let mut st = PanelState {
+            speed_level_num: 250, // absurd; must not panic / index OOB
+            ..Default::default()
+        };
+        st.record_frame(true);
+        assert_eq!(st.rx_frames_by_level[LEVEL_BUCKETS - 1], 1);
+    }
+
+    #[test]
+    fn reset_zeroes_all_buckets() {
+        let mut st = PanelState {
+            speed_level_num: 5,
+            ..Default::default()
+        };
+        st.record_frame(true);
+        st.record_frame(false);
+        st.reset_frame_stats();
+        assert!(st.rx_frames_by_level.iter().all(|&c| c == 0));
+        assert!(st.tx_frames_by_level.iter().all(|&c| c == 0));
     }
 }

@@ -37,6 +37,7 @@ pub const LADDER_RUNGS: u8 = 20;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
     Info,
+    Stats,
     Config,
     #[default]
     Messages,

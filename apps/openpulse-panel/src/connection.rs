@@ -183,9 +183,11 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
             use openpulse_modem::EngineEvent;
             let desc = match &event {
                 EngineEvent::FrameReceived { mode, bytes } => {
+                    st.record_frame(true);
                     format!("RX {bytes}B [{mode}]")
                 }
                 EngineEvent::FrameTransmitted { mode, bytes } => {
+                    st.record_frame(false);
                     format!("TX {bytes}B [{mode}]")
                 }
                 EngineEvent::DcdChange { busy, energy } => {
@@ -210,6 +212,7 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
                     format!("HPX {from:?}→{to:?}")
                 }
                 EngineEvent::SessionStarted { session_id, .. } => {
+                    st.reset_frame_stats();
                     let id = session_id.as_deref().unwrap_or("?");
                     format!("SESSION START {id}")
                 }
