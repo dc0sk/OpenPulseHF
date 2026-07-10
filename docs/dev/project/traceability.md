@@ -9,6 +9,26 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — fix(channel): Gilbert-Elliott steps per-symbol (real bursts, not sub-symbol AWGN)
+
+- **Requirement/change:** the Gilbert-Elliott channel ran its two-state Markov chain **per sample**, so a Bad
+  run averaged `1/p_bg` *samples* — sub-symbol at the tested baud rates — and looked like elevated-variance
+  AWGN rather than a burst. Its own preset docs already *claimed* "mean burst = 1/p_bg symbols", and any
+  interleaver/burst-FEC conclusion drawn from it was vacuous.
+- **Design decision:** add `symbol_samples` to `GilbertElliottConfig` and step the chain **once per symbol**
+  (a boundary-gated `step_state(i)`), holding the state through the symbol, so a Bad run is a contiguous run
+  of whole *symbols*. The caller sets it to the mode's samples-per-symbol; presets default to 8. The code now
+  matches the documented intent.
+- **Implementation:** `crates/openpulse-channel/src/lib.rs` (config field + all four presets),
+  `crates/openpulse-channel/src/gilbert_elliott.rs` (`step_state`, `apply`, `generate_noise`); the one
+  external construction (`channel_loopback.rs`) updated.
+- **Tests:** replaced the standalone Markov re-implementation test with one that drives the *actual* channel:
+  recovers the per-symbol Bad/Good state from the output noise energy (Bad is ~20 dB louder on `moderate`)
+  and asserts runs average > 3 symbols (a per-sample chain flickers near 1) and within 20 % of 1/p_bg.
+- **Test results (actually run):** the new burst-span test passes (was structurally impossible before);
+  `channel_loopback` G-E tests (`moderate_burst_no_fec_degrades`, `light_burst_with_fec`) still pass with the
+  now-longer bursts; channel/modem/testmatrix/linksim suites pass; clippy `-D warnings` + fmt clean.
+
 ## 2026-07-10 — fix(pilot): calibrate the soft LLRs and acquire on the normalised correlation
 
 - **Requirement/change:** the pilot plugin (a) emitted uncalibrated soft LLRs — `symbols_to_llrs` divided by
