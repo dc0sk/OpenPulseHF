@@ -9,6 +9,27 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — perf(dsp): QPSK1000-HF-RRC forward-only LMS (drop the fading-harmful DFE)
+
+- **Requirement/change:** the QPSK1000-HF-RRC demod ran a decision-feedback equalizer (`fwd=11, dfe=2`).
+  The #697 DFE-sign note flagged that decision feedback propagates errors on a fading channel; this closes
+  the loop with a coded measurement and removes the DFE where it hurts.
+- **Design decision:** a coded Watterson sweep (SoftConcatenated FEC, the only way this dense HF mode ever
+  runs) compared `(11,2)` against forward-only `(11,0)`: forward-only **wins** on `good_f1 @20 dB`
+  (0.68 vs 0.60 frame success) and **ties** on AWGN@12 (1.00) and static two-ray ISI@16 (1.00). The forward
+  filter + soft FEC already cover the ISI the DFE was there for; the feedback section only adds error
+  propagation on fades. So QPSK1000-HF-RRC becomes forward-only; the shorter/cleaner profiles are unchanged.
+- **Implementation:** `plugins/qpsk/src/demodulate.rs` (`lms_profile` returns `(11, 0, 0.010)` for
+  `QPSK1000-HF-RRC`; unit test `lms_profile_hf_is_forward_only` updated to assert `dfe==0`).
+- **Tests:** new gate `crates/openpulse-modem/tests/qpsk_hf_rrc_forward_only.rs` pins the forward-only
+  fading floor — 40 `good_f1 @20 dB` coded frames must decode ≥ 0.55 (forward-only measured 0.68; a re-added
+  DFE, which measured 0.60, would trip it). The vestigial self-comparison test in `plugins/qpsk/src/lib.rs`
+  was renamed to `qpsk1000_hf_decodes_some_bits_on_moderate_f1` and its stale `fwd=9,dfe=2` comment removed.
+- **Test results (actually run):** new gate passes (rate 0.68); `qpsk-plugin` suite passes (38 + updated
+  unit test); full `openpulse-modem` suite passes; clippy `-D warnings` + fmt clean.
+
+---
+
 ## 2026-07-10 — fix(channel): Gilbert-Elliott steps per-symbol (real bursts, not sub-symbol AWGN)
 
 - **Requirement/change:** the Gilbert-Elliott channel ran its two-state Markov chain **per sample**, so a Bad

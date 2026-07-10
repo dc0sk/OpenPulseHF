@@ -480,11 +480,14 @@ fn lms_profile(mode: &str) -> (usize, usize, f32) {
         return override_profile;
     }
 
-    // HF 1000-baud paths see stronger multipath/ISI under Watterson Moderate/Poor,
-    // so use a longer forward filter, enable a short DFE section, and reduce
-    // the LMS step size for better decision-directed stability.
+    // HF 1000-baud paths see stronger multipath/ISI, so use a longer forward filter and a smaller LMS
+    // step for decision-directed stability. NO DFE: a coded Watterson sweep showed the (11,2) DFE loses
+    // to forward-only on good_f1 (0.60 vs 0.68) and only ties on AWGN and static two-ray ISI — the
+    // decision-feedback section propagates errors on a fading channel and buys nothing the forward filter
+    // + soft FEC don't already cover. (The old "DFE=2 sweet spot" was measured no-FEC, where it was an
+    // artifact.)
     if mode.contains("-HF") && mode.contains("-RRC") && mode.contains("1000") {
-        (11, 2, 0.010)
+        (11, 0, 0.010)
     } else if mode.contains("-HF") && mode.contains("1000") {
         (15, 0, 0.015)
     } else {
@@ -1214,15 +1217,16 @@ mod tests {
     }
 
     #[test]
-    fn lms_profile_hf_uses_dfe() {
+    fn lms_profile_hf_is_forward_only() {
         let (fwd, dfe, mu) = lms_profile("QPSK1000-HF");
         assert_eq!(fwd, 15);
         assert_eq!(dfe, 0);
         assert!((mu - 0.015).abs() < 1e-6);
 
+        // QPSK1000-HF-RRC is forward-only: DFE lost to it on fading (see qpsk_hf_rrc_forward_only.rs).
         let (fwd, dfe, mu) = lms_profile("QPSK1000-HF-RRC");
         assert_eq!(fwd, 11);
-        assert_eq!(dfe, 2);
+        assert_eq!(dfe, 0);
         assert!((mu - 0.010).abs() < 1e-6);
     }
 
