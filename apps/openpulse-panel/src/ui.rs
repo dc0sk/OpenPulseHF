@@ -1153,15 +1153,21 @@ fn hhmm(ts: u64) -> String {
 }
 
 fn log_widget(snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
-    let mut col = Column::new().spacing(2);
+    let mut col = Column::new().spacing(2).width(Length::Fill);
     for line in &snap.log {
         col = col.push(
+            // Fill the tab width so long event lines wrap at the panel edge instead of being clipped
+            // to their own length and leaving the rest of the tab blank.
             Text::new(line.clone())
                 .size(11)
+                .width(Length::Fill)
                 .color(role(eff, ColorRole::Inactive)),
         );
     }
-    scrollable(col).height(Length::Fill).into()
+    scrollable(col)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
 }
 
 /// Statistics tab: count of successfully transferred frames per ladder step, this session.
