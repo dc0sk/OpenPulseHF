@@ -9,6 +9,30 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — feat(daemon): wire compress_ratio live from the RX data path
+
+- **Requirement/change:** `ControlEvent::Metrics.compress_ratio` was hardcoded `None`, so the panel always
+  showed the `1.0` default. Report a real, live compression figure from the data path.
+- **Design decision:** the daemon transmits payloads uncompressed (no wire compression, no `[compression]`
+  config), so the honest live figure is the **compressibility of the decoded RX payload stream** measured
+  with the actual session compressor (`compress_if_smaller` — LZ4/zstd, best-of, never larger than raw).
+  Accumulate cumulative raw and best-effort-compressed byte totals at the **single RX-decode seam already
+  wired to metrics** (`server.rs`, where `total_rx_bytes` is updated), and emit `compressed / raw` in the 1 Hz
+  metrics loop. Cumulative (not windowed) so the ratio is a stable property of the traffic. This is
+  observability only — it does not change what is transmitted, so there is no interop/RX-decode impact.
+- **Implementation:** `crates/openpulse-daemon/src/lib.rs` (`MetricsSnapshot.raw_payload_bytes` /
+  `compressed_payload_bytes`; pure `compression_ratio(raw, compressed) -> Option<f32>`; metrics loop emits it),
+  `crates/openpulse-daemon/src/server.rs` (measure + accumulate at the RX seam, non-empty frames only),
+  `crates/openpulse-daemon/src/protocol.rs` (doc comment). The panel already renders `Some(ratio)` via the
+  earlier `format_compression` "N:1" display — no panel change.
+- **Tests:** `compression_ratio_is_none_before_any_payload`, `compression_ratio_reports_compressed_over_raw`
+  (1000/200 → 0.20), `compression_ratio_tracks_the_real_compressor_on_compressible_data` (repeated-byte
+  payload compresses to < 0.5 through the real `compress_if_smaller`).
+- **Test results (actually run):** 3 new tests pass; full `openpulse-daemon` suite 69 passed / 0 failed across
+  7 binaries; clippy `-D warnings` + fmt clean.
+
+---
+
 ## 2026-07-10 — feat(panel): Statistics tab — successful frames per ladder step, per session
 
 - **Requirement/change:** the operator had no per-session view of how many frames actually got through at

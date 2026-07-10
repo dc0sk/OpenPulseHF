@@ -119,7 +119,8 @@ pub enum ControlEvent {
         effective_bps: f32,
         /// RS/FEC byte-error correction rate; `None` until wired to engine diagnostics.
         ecc_rate: Option<f32>,
-        /// Session compression ratio (compressed / raw); `None` until wired.
+        /// Live compressibility of the decoded RX payload stream (compressed / raw), measured with the
+        /// session LZ4/zstd compressor; `None` until the first payload is seen.
         compress_ratio: Option<f32>,
         afc_correction_hz: f32,
         signal_strength_dbm: Option<i32>,

@@ -86,6 +86,18 @@ pub struct MetricsSnapshot {
     pub total_rx_bytes: u64,
     /// Smoothed (EWMA) modem receive-path decode latency in milliseconds.
     pub decode_latency_ms: f32,
+    /// Cumulative raw bytes of decoded RX payloads measured for compressibility.
+    pub raw_payload_bytes: u64,
+    /// Cumulative best-effort compressed size of those payloads (the session LZ4/zstd compressor,
+    /// including its framing overhead; never larger than raw). The ratio `compressed / raw` is the
+    /// live compression figure reported in `ControlEvent::Metrics`.
+    pub compressed_payload_bytes: u64,
+}
+
+/// Compression ratio (compressed / raw) of the measured payload stream, or `None` before any payload
+/// has been seen. Matches the `ControlEvent::Metrics.compress_ratio` convention (compressed / raw).
+fn compression_ratio(raw: u64, compressed: u64) -> Option<f32> {
+    (raw > 0).then(|| compressed as f32 / raw as f32)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -495,16 +507,22 @@ impl ControlServer {
             let mut last_gpu_instant = std::time::Instant::now();
             loop {
                 interval.tick().await;
-                let (afc, new_bytes, decode_latency_ms) = {
+                let (afc, new_bytes, decode_latency_ms, raw_bytes, compressed_bytes) = {
                     let m = metrics_snap.lock().await;
-                    (m.afc_correction_hz, m.total_rx_bytes, m.decode_latency_ms)
+                    (
+                        m.afc_correction_hz,
+                        m.total_rx_bytes,
+                        m.decode_latency_ms,
+                        m.raw_payload_bytes,
+                        m.compressed_payload_bytes,
+                    )
                 };
                 let effective_bps = (new_bytes.saturating_sub(last_bytes) * 8) as f32;
                 last_bytes = new_bytes;
                 let _ = ev_metrics.send(ControlEvent::Metrics {
                     effective_bps,
                     ecc_rate: None,
-                    compress_ratio: None,
+                    compress_ratio: compression_ratio(raw_bytes, compressed_bytes),
                     afc_correction_hz: afc,
                     signal_strength_dbm: None,
                 });
@@ -2025,6 +2043,30 @@ mod command_apply_tests {
     use super::*;
     use bpsk_plugin::BpskPlugin;
     use openpulse_audio::LoopbackBackend;
+
+    #[test]
+    fn compression_ratio_is_none_before_any_payload() {
+        assert_eq!(compression_ratio(0, 0), None);
+    }
+
+    #[test]
+    fn compression_ratio_reports_compressed_over_raw() {
+        // 1000 raw → 200 compressed = 0.20 (a 5:1 reduction).
+        let r = compression_ratio(1000, 200).unwrap();
+        assert!((r - 0.20).abs() < 1e-6, "got {r}");
+    }
+
+    #[test]
+    fn compression_ratio_tracks_the_real_compressor_on_compressible_data() {
+        // Highly compressible payload → the session compressor beats raw, so ratio < 1.
+        let payload = vec![0x5Au8; 4096];
+        let (compressed, _algo) = openpulse_core::compression::compress_if_smaller(&payload);
+        let r = compression_ratio(payload.len() as u64, compressed.len() as u64).unwrap();
+        assert!(
+            r < 0.5,
+            "repeated-byte payload should compress well, got {r}"
+        );
+    }
 
     fn test_engine() -> ModemEngine {
         let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
