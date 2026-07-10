@@ -9,6 +9,23 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — fix(panel): show compression as an "N:1" reduction factor, not a bare fraction
+
+- **Requirement/change:** the panel's Additional-info tab rendered the compression metric as
+  `format!("{:.2}×", compress_ratio)`. The daemon reports `compress_ratio` as compressed/raw, so a good
+  5:1 compression showed as **"0.20×"** — which reads as *expansion* and mismatched the ~5× gross-vs-effective
+  factor the operator sees elsewhere.
+- **Design decision:** display the reciprocal as an "N:1" ratio (`5.0:1`), the conventional way to state a
+  compression factor. Ratios ≥ 1 (no gain, or the not-yet-wired 1.0 default) read "1.0:1"; a non-positive/NaN
+  value shows "—". Extracted a pure `format_compression(ratio)` helper so the mapping is unit-tested.
+- **Implementation:** `apps/openpulse-panel/src/ui.rs` (`format_compression` helper; the "Compress" info-row
+  uses it instead of the inline `{:.2}×` format).
+- **Tests:** new `ui::tests` — `compression_shows_reduction_factor` (0.20→5.0:1, 0.50→2.0:1, 0.25→4.0:1),
+  `compression_no_gain_reads_one_to_one` (1.0 and 1.2 → 1.0:1), `compression_guards_bad_values` (0/negative/NaN → "—").
+- **Test results (actually run):** `openpulse-panel` 11 passed (3 new + 8 existing); clippy `-D warnings` + fmt clean.
+
+---
+
 ## 2026-07-10 — docs: record the completed Fable-audit backlog as roadmap Phase 11
 
 - **Requirement/change:** the roadmap had no section for the Fable full-chain audit backlog (#697–#717),
