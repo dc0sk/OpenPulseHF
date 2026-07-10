@@ -20,8 +20,9 @@ const TX_AMPLITUDE: f32 = 0.5;
 
 /// Root-raised-cosine roll-off for the `-RRC` pilot variants.
 pub(crate) const RRC_ALPHA: f32 = 0.35;
-/// RRC filter span in symbols (matches the single-carrier RRC modes).
-pub(crate) const RRC_SPAN_SYMBOLS: usize = 8;
+/// RRC FIR filter span in symbols. 12 (not 8) drops the residual-ISI floor ~-36 to ~-50 dB — matters
+/// for the dense pilot rungs (32APSK). Both ends use this constant, so mod and demod stay matched.
+pub(crate) const RRC_SPAN_SYMBOLS: usize = 12;
 
 /// Whether `mode` is an RRC-pulse variant (`"…-RRC"`).
 pub fn is_rrc_mode(mode: &str) -> bool {

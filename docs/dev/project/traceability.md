@@ -9,6 +9,20 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — perf(dsp): RRC filter span 8→12 on the dense-constellation RRC rungs
+
+- **Requirement/change:** the RRC pulse-shaping filter spanned 8 symbols, leaving a residual-ISI floor
+  ~−36 dB that caps EVM on the dense RRC modes (their tight constellations are ISI-floor-limited, not
+  noise-limited, at high SNR). Widening to 12 symbols drops the floor to ~−50 dB.
+- **Design decision:** bump `RRC_SPAN_SYMBOLS` 8→12 in the dense-mode plugins (qpsk, psk8, 64qam, pilot).
+  BPSK stays at 8: its RRC modes are low-order (the −36 dB floor is already far below the ±90° margin) and
+  low-baud → high `sps`, so a wider span there is expensive filtering for no benefit. The constant is used
+  symmetrically by mod and demod (the demod derives its group delay from `num_taps`), so both ends stay
+  matched; both stations must run the same build (a wire/pulse-shape change, not a ladder-fingerprint one).
+- **Implementation:** `plugins/{qpsk,psk8,64qam,pilot}/src/modulate.rs` — `RRC_SPAN_SYMBOLS = 12`.
+- **Test results (actually run):** `rrc_channel_loopback` 5, qpsk/psk8/qam64/pilot plugin suites — pass
+  (both-ends round-trip unchanged); full modem suite pass; clippy `-D warnings` + fmt clean.
+
 ## 2026-07-10 — perf(ldpc): PEG graph for the rate-1/2 codec (drop the random xorshift H_s)
 
 - **Requirement/change:** `LdpcCodec::new` (rate-1/2) built its info-part Tanner graph from a random

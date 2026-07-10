@@ -9,7 +9,9 @@ use crate::parse_baud_rate;
 
 pub const PREAMBLE_SYMS: usize = 16;
 pub const TAIL_SYMS: usize = 8;
-pub(crate) const RRC_SPAN_SYMBOLS: usize = 8;
+/// RRC FIR filter span in symbols. 12 (not 8) drops the residual-ISI floor ~-36 to ~-50 dB — matters
+/// for the dense RRC rungs. Both ends use this constant, so mod and demod stay matched.
+pub(crate) const RRC_SPAN_SYMBOLS: usize = 12;
 
 const INV_SQRT_2: f32 = 0.70710677;
 
