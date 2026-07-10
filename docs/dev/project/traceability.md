@@ -9,6 +9,22 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — docs: record the completed Fable-audit backlog as roadmap Phase 11
+
+- **Requirement/change:** the roadmap had no section for the Fable full-chain audit backlog (#697–#717),
+  so the largest recent body of shipped work was absent from the phase history.
+- **Design decision:** add a `Phase 11 — Signal-chain audit hardening` section (matching the Phase 10
+  format) grouping the shipped PRs into Tier-1 bugs / OTA-ladder re-seat / measurement fidelity /
+  improvement backlog, and recording the two intentionally-skipped items (QPSK β-port, `freq_acquire`) so
+  they aren't re-opened. Bumped the roadmap `last_updated` to 2026-07-10.
+- **Implementation:** `docs/dev/project/roadmap.md` (Phase 11 section + front-matter date).
+- **Tests:** none — documentation-only.
+- **Test results (actually run):** N/A (roadmap prose; the per-change gates are logged in the individual
+  #697–#717 entries below and were verified green in the full `--workspace --no-default-features` run:
+  1656 passed, 0 failed, 22 ignored across 207 binaries).
+
+---
+
 ## 2026-07-10 — docs: log the acceptance-table refresh in the ledger (PR #719)
 
 - **Requirement/change:** PR #718 refreshed the `CLAUDE.md` acceptance-criteria table but its own
