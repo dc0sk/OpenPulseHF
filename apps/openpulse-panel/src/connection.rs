@@ -18,7 +18,10 @@ use crossbeam_channel::{Receiver, Sender};
 use openpulse_daemon::protocol::ControlCommand;
 use openpulse_daemon::protocol::{ControlEvent, SPECTRUM_MAGIC};
 
-use crate::state::{PanelState, RigSnapshot, ECC_HISTORY_LEN, WATERFALL_ROWS};
+use crate::state::{
+    ActiveTransfer, IncomingOffer, PanelState, ReceivedFile, RigSnapshot, ECC_HISTORY_LEN,
+    WATERFALL_ROWS,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::transport::{RecvMsg, TcpTransport, Transport, WsTransport};
 
@@ -374,7 +377,206 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
             st.ota_rx_confirmed_level = rx_confirmed_level;
             st.ota_is_locked = is_locked;
         }
-        // File-transfer events are surfaced by the Files tab (FF-16 Phase D); ignored here for now.
+        // ── File transfer (FF-16 Phase D) ──
+        ControlEvent::FileOffered {
+            transfer_id,
+            from,
+            name,
+            size,
+            auto_accepted,
+            signature_valid,
+            ..
+        } => {
+            if !auto_accepted {
+                st.incoming_offer = Some(IncomingOffer {
+                    transfer_id,
+                    from: from.clone(),
+                    name: name.clone(),
+                    size,
+                    signature_valid,
+                });
+            }
+            st.push_log(format!(
+                "FILE OFFER {name} ({size} B) from {from}{}",
+                if auto_accepted { " [auto]" } else { "" }
+            ));
+        }
+        ControlEvent::FileProgress {
+            transfer_id,
+            direction,
+            name,
+            blocks_done,
+            blocks_total,
+            bytes_done,
+            bytes_total,
+        } => {
+            st.active_transfer = Some(ActiveTransfer {
+                transfer_id,
+                direction,
+                name,
+                blocks_done,
+                blocks_total,
+                bytes_done,
+                bytes_total,
+            });
+        }
+        ControlEvent::FileReceived {
+            transfer_id,
+            from,
+            name,
+            size,
+            path,
+            verified,
+        } => {
+            if st.incoming_offer.as_ref().map(|o| o.transfer_id) == Some(transfer_id) {
+                st.incoming_offer = None;
+            }
+            if st.active_transfer.as_ref().map(|t| t.transfer_id) == Some(transfer_id) {
+                st.active_transfer = None;
+            }
+            st.received_files.insert(
+                0,
+                ReceivedFile {
+                    name: name.clone(),
+                    from: from.clone(),
+                    size,
+                    path,
+                    verified,
+                },
+            );
+            st.file_status = format!(
+                "Received {name} from {from} — {}",
+                if verified {
+                    "verified ✓"
+                } else {
+                    "UNVERIFIED"
+                }
+            );
+        }
+        ControlEvent::FileSent {
+            name,
+            to,
+            receipt_valid,
+            ..
+        } => {
+            st.active_transfer = None;
+            st.file_status = format!(
+                "Sent {name} to {to} — {}",
+                match receipt_valid {
+                    Some(true) => "receipt ✓",
+                    Some(false) => "receipt UNVERIFIED",
+                    None => "no receipt",
+                }
+            );
+        }
+        ControlEvent::FileFailed {
+            transfer_id,
+            direction,
+            reason,
+        } => {
+            if st.incoming_offer.as_ref().map(|o| o.transfer_id) == Some(transfer_id) {
+                st.incoming_offer = None;
+            }
+            if st.active_transfer.as_ref().map(|t| t.transfer_id) == Some(transfer_id) {
+                st.active_transfer = None;
+            }
+            st.file_status = format!("Transfer {direction} failed: {reason}");
+        }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod file_event_tests {
+    use super::apply_event;
+    use crate::state::PanelState;
+    use openpulse_daemon::protocol::ControlEvent;
+    use std::sync::{Arc, Mutex};
+
+    fn feed(shared: &Arc<Mutex<PanelState>>, ev: ControlEvent) {
+        apply_event(&serde_json::to_string(&ev).unwrap(), shared);
+    }
+
+    fn offered(transfer_id: u32, auto: bool) -> ControlEvent {
+        ControlEvent::FileOffered {
+            transfer_id,
+            from: "W1AW".into(),
+            name: "report.txt".into(),
+            size: 100,
+            sha256_hex: "ab".into(),
+            mime: "text/plain".into(),
+            auto_accepted: auto,
+            signature_valid: true,
+        }
+    }
+
+    #[test]
+    fn file_offered_prompts_unless_auto_accepted() {
+        let s = Arc::new(Mutex::new(PanelState::default()));
+        feed(&s, offered(1, false));
+        assert_eq!(
+            s.lock()
+                .unwrap()
+                .incoming_offer
+                .as_ref()
+                .unwrap()
+                .transfer_id,
+            1
+        );
+
+        let s2 = Arc::new(Mutex::new(PanelState::default()));
+        feed(&s2, offered(2, true));
+        assert!(s2.lock().unwrap().incoming_offer.is_none());
+    }
+
+    #[test]
+    fn file_received_records_and_clears_the_offer() {
+        let s = Arc::new(Mutex::new(PanelState::default()));
+        feed(&s, offered(3, false));
+        feed(
+            &s,
+            ControlEvent::FileReceived {
+                transfer_id: 3,
+                from: "W1AW".into(),
+                name: "report.txt".into(),
+                size: 100,
+                path: "/dl/report.txt".into(),
+                verified: true,
+            },
+        );
+        let st = s.lock().unwrap();
+        assert!(st.incoming_offer.is_none());
+        assert_eq!(st.received_files.len(), 1);
+        assert!(st.received_files[0].verified);
+        assert!(st.file_status.contains("verified"));
+    }
+
+    #[test]
+    fn file_progress_then_failed_clears_active() {
+        let s = Arc::new(Mutex::new(PanelState::default()));
+        feed(
+            &s,
+            ControlEvent::FileProgress {
+                transfer_id: 5,
+                direction: "tx".into(),
+                name: "a".into(),
+                blocks_done: 1,
+                blocks_total: 3,
+                bytes_done: 10,
+                bytes_total: 30,
+            },
+        );
+        assert!(s.lock().unwrap().active_transfer.is_some());
+        feed(
+            &s,
+            ControlEvent::FileFailed {
+                transfer_id: 5,
+                direction: "tx".into(),
+                reason: "stall".into(),
+            },
+        );
+        let st = s.lock().unwrap();
+        assert!(st.active_transfer.is_none());
+        assert!(st.file_status.contains("failed"));
     }
 }

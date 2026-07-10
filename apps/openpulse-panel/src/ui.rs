@@ -211,6 +211,10 @@ struct Snap {
     ecc_history: Vec<f32>,
     rx_frames_by_level: Vec<u32>,
     tx_frames_by_level: Vec<u32>,
+    incoming_offer: Option<crate::state::IncomingOffer>,
+    active_transfer: Option<crate::state::ActiveTransfer>,
+    received_files: Vec<crate::state::ReceivedFile>,
+    file_status: String,
 }
 
 pub fn view(app: &App) -> Element<'_, Message> {
@@ -256,6 +260,10 @@ pub fn view(app: &App) -> Element<'_, Message> {
             ecc_history: st.ecc_history.iter().cloned().collect(),
             rx_frames_by_level: st.rx_frames_by_level.to_vec(),
             tx_frames_by_level: st.tx_frames_by_level.to_vec(),
+            incoming_offer: st.incoming_offer.clone(),
+            active_transfer: st.active_transfer.clone(),
+            received_files: st.received_files.clone(),
+            file_status: st.file_status.clone(),
         }
     };
 
@@ -851,6 +859,11 @@ fn tabbed_lower(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static,
             "Successfully transferred frames per ladder step this session",
         ))
         .push(tab_btn(
+            "Files",
+            Tab::Files,
+            "Send files and view received transfers (signed-manifest verified)",
+        ))
+        .push(tab_btn(
             "Daemon config",
             Tab::Config,
             "View and edit the daemon configuration",
@@ -868,6 +881,7 @@ fn tabbed_lower(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static,
     let content = match app.active_tab {
         Tab::Info => info_widget(snap, eff),
         Tab::Stats => stats_widget(snap, eff),
+        Tab::Files => files_widget(app, snap, eff),
         Tab::Config => config_widget(app, snap, eff),
         Tab::Messages => messages_widget(app, snap, eff),
         Tab::Log => log_widget(snap, eff),
@@ -1168,6 +1182,156 @@ fn log_widget(snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
+}
+
+/// Files tab: send a file, respond to an inbound offer, watch progress, and list received files with
+/// a signed-manifest verify badge.
+fn files_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
+    let mut col = Column::new().spacing(6).width(Length::Fill);
+
+    col = col.push(col_title(eff, "Send a file")).push(
+        Row::new()
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .push(tip(
+                text_input("CALLSIGN", &app.file_to)
+                    .on_input(Message::FileTo)
+                    .size(13)
+                    .width(Length::Fixed(100.0)),
+                "Recipient callsign (label)",
+                eff,
+            ))
+            .push(tip(
+                text_input("/path/to/file", &app.file_path)
+                    .on_input(Message::FilePath)
+                    .size(13)
+                    .width(Length::Fill),
+                "Daemon-host path of the file to send",
+                eff,
+            ))
+            .push(accent_btn(
+                eff,
+                "Send File",
+                Message::SendFile,
+                ColorRole::Locked,
+                "Offer the file to the peer over RF",
+            )),
+    );
+
+    if let Some(o) = &snap.incoming_offer {
+        let badge = if o.signature_valid {
+            "signed ✓"
+        } else {
+            "unsigned"
+        };
+        col = col.push(
+            Row::new()
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .push(
+                    Text::new(format!(
+                        "Offer: {} ({} B) from {} [{badge}]",
+                        o.name, o.size, o.from
+                    ))
+                    .size(13)
+                    .width(Length::Fill)
+                    .color(role(eff, ColorRole::Signal)),
+                )
+                .push(accent_btn(
+                    eff,
+                    "Accept",
+                    Message::AcceptFile(o.transfer_id),
+                    ColorRole::Locked,
+                    "Accept and receive this file",
+                ))
+                .push(accent_btn(
+                    eff,
+                    "Reject",
+                    Message::RejectFile(o.transfer_id),
+                    ColorRole::TxActive,
+                    "Decline this offer",
+                )),
+        );
+    }
+
+    if let Some(t) = &snap.active_transfer {
+        let pct = if t.bytes_total > 0 {
+            (t.bytes_done as f64 / t.bytes_total as f64 * 100.0) as u32
+        } else {
+            0
+        };
+        col = col.push(
+            Row::new()
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .push(
+                    Text::new(format!(
+                        "{} {}: block {}/{} ({pct}%)",
+                        t.direction.to_uppercase(),
+                        t.name,
+                        t.blocks_done,
+                        t.blocks_total
+                    ))
+                    .size(13)
+                    .width(Length::Fill)
+                    .color(role(eff, ColorRole::RxValue)),
+                )
+                .push(link_btn(
+                    eff,
+                    "Cancel",
+                    Message::CancelFile(t.transfer_id),
+                    ColorRole::TxActive,
+                    "Cancel this transfer",
+                )),
+        );
+    }
+
+    if !snap.file_status.is_empty() {
+        col = col.push(
+            Text::new(snap.file_status.clone())
+                .size(12)
+                .color(role(eff, ColorRole::Inactive)),
+        );
+    }
+
+    col = col.push(col_title(eff, "Received files"));
+    if snap.received_files.is_empty() {
+        col = col.push(
+            Text::new("No files received this session.")
+                .size(12)
+                .color(role(eff, ColorRole::Inactive)),
+        );
+    } else {
+        let mut list = Column::new().spacing(3).width(Length::Fill);
+        for f in &snap.received_files {
+            let (badge, badge_role) = if f.verified {
+                ("✓ verified", ColorRole::Locked)
+            } else {
+                ("UNVERIFIED", ColorRole::TxActive)
+            };
+            list = list
+                .push(
+                    Row::new()
+                        .spacing(8)
+                        .push(
+                            Text::new(format!("{} ({} B) from {}", f.name, f.size, f.from))
+                                .size(12)
+                                .width(Length::Fill)
+                                .color(role(eff, ColorRole::RxValue)),
+                        )
+                        .push(Text::new(badge).size(12).color(role(eff, badge_role))),
+                )
+                .push(
+                    Text::new(f.path.clone())
+                        .size(10)
+                        .width(Length::Fill)
+                        .color(role(eff, ColorRole::Inactive)),
+                );
+        }
+        col = col.push(scrollable(list).height(Length::Fill));
+    }
+
+    col.into()
 }
 
 /// Statistics tab: count of successfully transferred frames per ladder step, this session.
