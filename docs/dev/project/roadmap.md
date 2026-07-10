@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/roadmap.md
 status: living
-last_updated: 2026-06-24
+last_updated: 2026-07-10
 ---
 
 # Roadmap
@@ -886,6 +886,62 @@ the long-deferred "adaptive rate-stepping over the air (RX lockstep)" item.
   Notch/CE-SSB toggles, default off) that sends `ControlCommand::SetAgc`.
 - (CE-SSB on-air validation is now complete — average-power gain *and* spectral mask
   both confirmed on real RF; see §10.8.)
+
+---
+
+## Phase 11 — Signal-chain audit hardening (Fable full-chain audit, 2026-07) ✅ Done
+
+A five-stream model-driven audit of the whole signal chain (single-carrier PSK / multicarrier /
+FEC+ladder / DSP primitives / CE-SSB + measurement), each finding **independently reproduced** before
+any fix, in the repo's ablation-first, measure-noiselessly-first culture. Seven Tier-1 correctness bugs,
+the measurement-layer biases that had been flattering past conclusions, and a ranked improvement backlog —
+all shipped. Per-change chains are in `docs/dev/project/traceability.md`; the audit notes live in the
+session memory. Ordered execution: Tier-1 bugs → OTA-ladder re-seat → measurement fidelity → trivial wins.
+
+### 11.1 — Tier-1 correctness bugs ✅ Done
+- **DFE feedback-update sign inverted** — `LmsEqualizer` was anti-adaptive; flipped the sign (PR #697).
+- **HARQ soft-LLR combining wired nowhere** — combining now engages in the daemon OTA path across
+  retransmissions (`decode_combined_llrs`, additive design, superset of standalone) (PR #702).
+- **M2M4 SNR estimator waveform-blind, capping the ladder ~SL8** — replaced by per-plugin symbol-domain
+  SNR: PSK (PR #703), then OFDM + SC-FDMA (PR #705). M2M4 saturates ~15 dB; the plugins track to the EVM
+  floor, so the OTA ladder now climbs into the dense rungs (to SL17).
+- **CE-SSB crushed low-entropy OFDM frames on a clean channel** — TX bit-stream whitening scrambler (PR #698).
+- **AGC/DCD seam-ordering deadlock** — carrier-detect moved before the AGC so its boost can't wedge the
+  squelch (PR #699).
+- **No-AGC × Costas coupling** — level-normalise symbols before PSK carrier recovery (PR #700).
+- **SC-FDMA delay-cliff** — the wideband rungs cliffed at a ~10-sample delay *inside* the 32-sample CP.
+  Root cause was the **sync back-off** (`SYNC_EARLY_BIAS`), not the CE reach the audit had guessed;
+  raising it 8→16 extends the reach to a 2 ms (CCIR-poor) spread. A CE-basis widen was tried and reverted
+  (it over-fit pilot noise and broke `llr_reliability`); `deramp_timing`'s centroid re-centring makes the
+  existing ±10 basis sufficient (PR #717).
+
+### 11.2 — OTA-ladder re-seat (OFDM beats SC-FDMA on selective fading) ✅ Done
+- Bake-off confirmed OFDM ≫ SC-FDMA on selective fading at matched rate/geometry (moderate_f1 @20 dB:
+  0.88 vs 0.35). Re-seated the `hpx_hf` dense rungs SL11–SL19 from SC-FDMA to OFDM (PR #704), re-indexed to
+  drop the P4-duplicate rungs (PR #707), and ablated the residual moderate_f1 plateau to Doppler (not
+  outage or delay-cliff) so it's recorded, not mis-fixed (PR #706). `hpx_ofdm_hf` made a complete robust
+  all-OFDM dispersive-HF ladder; linksim now drives the ladder from the daemon's real `rx_snr_db` (PR #708).
+
+### 11.3 — Measurement fidelity ✅ Done
+- **Watterson +3 dB hot** path power normalised to unity (PR #701).
+- **Gilbert-Elliott** stepped per-sample (sub-symbol "bursts" ≈ elevated-variance AWGN) → now steps
+  per-symbol, so Bad runs span whole symbols with mean 1/p_bg symbols — a valid burst channel (PR #714).
+- **Watterson re-randomised the fade every `apply()`** → opt-in continuous phase-persistent fade
+  (sum-of-sinusoids), default-off so existing thresholds stay bit-identical; linksim opts in (PR #716).
+- **CI goodput regression gate** — real-modem `run_link` gates that catch DSP regressions the HPX
+  event-replay benchmark can't see (PR #710).
+- (`estimate_additive_snr_db` multi-tap was assessed **moot** — zero consumers after linksim adopted
+  `rx_snr_db` in #708 — and intentionally not built.)
+
+### 11.4 — Improvement backlog ✅ Done
+- Byte interleaver on the `SoftConcatenated` wire — burst-fade tolerance, multi-block gated (PR #709).
+- LDPC rate-1/2 PEG graph replacing the random xorshift `H` (PR #711).
+- RRC filter span 8→12 on the dense-constellation RRC rungs (PR #712).
+- Pilot-plugin soft-LLR calibration + normalised-correlation onset (PR #713).
+- QPSK1000-HF-RRC forward-only LMS — a coded Watterson sweep showed the DFE *loses* to forward-only on
+  fading (error propagation), confirming the #697 note (PR #715).
+- (The QPSK "window-derived β" port and wiring `freq_acquire::acquire` were assessed and **skipped** —
+  wrong-premise and risky-for-no-clear-benefit respectively; recorded so they aren't re-opened.)
 
 ---
 
