@@ -1368,6 +1368,32 @@ VarAC), and **alert tags + canned messages** (small, high daily value; turns the
 into an extension API). File transfer, alerts, and chat are standalone (no JS8 dependency). Not
 scheduled — pending maintainer selection.
 
+### FF-16 — Direct P2P file transfer *(planned; design approved)*
+
+**Plan approved 2026-07-10** — full design in
+[`docs/dev/design/file-transfer-plan.md`](../design/file-transfer-plan.md) (decisions D1–D5 locked;
+not yet implemented). The top VarAC-gap item (`docs/dev/research/varac-feature-gap-analysis.md`): send a
+file to a connected peer over an RF session with an offer/accept handshake, progress, size-gated
+auto-accept, and **cryptographic verification VarAC lacks** (inline signed `TransferManifest` + SHA-256,
+verified against the peer's CONREQ/CONACK key; verify-fail → quarantine + UNVERIFIED badge).
+
+Architecture: new pure **`crates/openpulse-filexfer`** (no-I/O wire codecs + sender/receiver state
+machines, the `openpulse-b2f`/`QsySession` pattern) + a daemon `filexfer.rs` glue module (file I/O,
+policy, quota). New **`OPFX`** wire magic (collision-checked; `compression::unpack` passes it through);
+seven frames (FileOffer/Accept/Reject/Data/BlockAck/Complete/Cancel), each SAR-encoded through the shared
+handshake receive seam. Files split into ≤48 KiB **blocks** (default 16 KiB), each `pack()`ed and carried
+as one SAR segment (`segment_id = block_index + 1`; id 0 reserved for handshake) — clears the 64 005 B SAR
+object cap; `block_count: u16` ⇒ ~3 GiB ceiling, config-capped at 1 MiB. Reliable delivery = **hybrid**
+(OTA FSK4 per-burst rate feedback + OPFX `BlockAck` bitmap for selective retransmit); MVP stop-and-wait,
+HARQ soft-combining free. Decisions: hybrid delivery; 1 MiB cap / 16 KiB blocks / auto-accept off;
+daemon-host path for MVP; block-level resume in Phase E; `require_verified_peer = true` + prompt-always.
+
+Phasing A (filexfer crate + offer/accept state machines + manifest wiring) → B (blocks/SAR + loopback
+round-trip incl. >64 KB and tamper tests) → **C daemon SendFile wiring = MVP ship line** (small files,
+stop-and-wait, auto-accept off) → D panel `Tab::Files` → E resume + throughput tuning → F on-air
+validation. Standalone — no JS8 dependency. Highest risk: Phase C half-duplex ACK/PTT timing (de-risked by
+writing the twin-daemon test first).
+
 ### FF-15 — JS8-based station discovery and rendezvous *(planned; design approved)*
 
 **Plan approved 2026-07-10** — full design in

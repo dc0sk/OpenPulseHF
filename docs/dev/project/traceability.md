@@ -9,6 +9,27 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — docs: direct P2P file-transfer design plan (decisions D1–D5 locked)
+
+- **Requirement/change:** capture the approved engineering plan for direct peer-to-peer file transfer — the
+  top VarAC-gap item (`docs/dev/research/varac-feature-gap-analysis.md`): offer/accept a file over an RF
+  session with progress, size-gated auto-accept, and cryptographic verification VarAC lacks.
+- **Design decision:** a Fable-drafted plan grounded in the existing substrate — reuses `sar.rs`
+  (chunking), `manifest.rs` (signed SHA-256 integrity), `compression::pack/unpack` (per-block), and the
+  OTA/HARQ ARQ path; adds a pure `crates/openpulse-filexfer` crate + daemon `filexfer.rs` glue + an `OPFX`
+  wire protocol (7 frames, SAR-encoded through the shared handshake seam). Multi-object framing (≤48 KiB
+  blocks, `segment_id = block_index + 1`, id 0 reserved for handshake) clears the 64 005 B SAR object cap.
+  Decisions D1–D5 locked to the recommendations: hybrid delivery (OTA per-burst rate + OPFX `BlockAck`);
+  1 MiB cap / 16 KiB blocks / auto-accept off; daemon-host path for MVP; block-level resume in Phase E;
+  `require_verified_peer = true` + prompt-always.
+- **Implementation:** `docs/dev/design/file-transfer-plan.md` (status `approved-plan`);
+  `docs/dev/project/roadmap.md` (FF-16 entry); `CLAUDE.md` (key-documents index row).
+- **Tests:** none — planning artifact; per-phase acceptance tests specified in the plan's §11/§12 (pure
+  state-machine tests, `ChannelSimHarness` loopback file round-trip incl. >64 KB, tampered-chunk verify-fail).
+- **Test results (actually run):** N/A (documentation only; no code path changed).
+
+---
+
 ## 2026-07-10 — docs: VarAC feature-gap analysis (competitive research)
 
 - **Requirement/change:** identify application/operator-layer features OpenPulse is missing versus VarAC
