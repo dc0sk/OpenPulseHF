@@ -26,6 +26,8 @@ pub struct SenderSession {
     deadline: u64,
     retries: u8,
     max_block_retries: u8,
+    /// Blocks the receiver already holds (from `FileAccept.have_bitmap`) — skipped when sending (resume).
+    held: Vec<bool>,
 }
 
 impl SenderSession {
@@ -42,9 +44,20 @@ impl SenderSession {
             deadline: now_ms.saturating_add(timeouts.offer_ms),
             retries: 0,
             max_block_retries: DEFAULT_MAX_BLOCK_RETRIES,
+            held: vec![false; block_count as usize],
         };
         let actions = vec![FxAction::Transmit(FxFrame::FileOffer(offer).encode())];
         (session, actions)
+    }
+
+    /// First block index at or after `from` that the receiver doesn't already hold, or `block_count`
+    /// when the rest are all held.
+    fn next_unheld(&self, from: u16) -> u16 {
+        let mut i = from;
+        while (i as usize) < self.held.len() && self.held[i as usize] {
+            i += 1;
+        }
+        i
     }
 
     /// Apply an inbound frame. Frames for another `transfer_id` or unexpected for the current state
@@ -60,10 +73,25 @@ impl SenderSession {
             (State::Offering, FxFrame::FileReject { reason, .. }) => {
                 self.finish(TransferResult::Rejected { reason: *reason })
             }
-            (State::Offering, FxFrame::FileAccept { .. }) => {
-                // Resume bitmap (have_bitmap) is honoured in Phase E; v1 always starts at block 0.
+            (State::Offering, FxFrame::FileAccept { have_bitmap, .. }) => {
+                // Resume: skip blocks the receiver already holds; start at the first it's missing.
+                for i in 0..self.block_count {
+                    if bit_is_set(have_bitmap, i as usize) {
+                        if let Some(slot) = self.held.get_mut(i as usize) {
+                            *slot = true;
+                        }
+                    }
+                }
                 self.retries = 0;
-                self.begin_block(0, None, now_ms)
+                let first = self.next_unheld(0);
+                if first < self.block_count {
+                    self.begin_block(first, None, now_ms)
+                } else {
+                    // The receiver already has every block — go straight to awaiting verification.
+                    self.state = State::AwaitVerify;
+                    self.deadline = now_ms.saturating_add(self.timeouts.verify_ms);
+                    vec![self.progress(self.block_count)]
+                }
             }
             (
                 State::Sending { block },
@@ -79,7 +107,7 @@ impl SenderSession {
                 }
                 if *complete {
                     self.retries = 0;
-                    let next = block + 1;
+                    let next = self.next_unheld(block + 1);
                     if next < self.block_count {
                         self.begin_block(next, None, now_ms)
                     } else {
@@ -181,4 +209,9 @@ impl SenderSession {
             result,
         })]
     }
+}
+
+/// Bit `i` of a little-endian-by-byte bitmap (byte `i/8`, bit `i%8`).
+fn bit_is_set(bitmap: &[u8], i: usize) -> bool {
+    bitmap.get(i / 8).is_some_and(|b| b & (1 << (i % 8)) != 0)
 }

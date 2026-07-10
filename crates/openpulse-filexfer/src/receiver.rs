@@ -25,6 +25,9 @@ pub struct ReceiverSession {
     done_count: u16,
     timeouts: Timeouts,
     deadline: u64,
+    /// Blocks already held from a previous (interrupted) transfer of the same file — announced to the
+    /// sender in `FileAccept.have_bitmap` so it skips them (resume). Empty for a fresh transfer.
+    held: Vec<bool>,
 }
 
 impl ReceiverSession {
@@ -36,14 +39,33 @@ impl ReceiverSession {
         timeouts: Timeouts,
         now_ms: u64,
     ) -> (Self, Vec<FxAction>) {
+        Self::resume(offer, decision, &[], timeouts, now_ms)
+    }
+
+    /// Like [`new`](Self::new) but resuming an interrupted transfer: `held` marks blocks already on
+    /// disk (indexed by block), which are counted done and announced in `FileAccept.have_bitmap` so the
+    /// sender skips them.
+    pub fn resume(
+        offer: &FileOffer,
+        decision: OfferDecision,
+        held: &[bool],
+        timeouts: Timeouts,
+        now_ms: u64,
+    ) -> (Self, Vec<FxAction>) {
+        let bc = offer.block_count as usize;
+        let held_v: Vec<bool> = (0..bc)
+            .map(|i| held.get(i).copied().unwrap_or(false))
+            .collect();
+        let done_count = held_v.iter().filter(|&&h| h).count() as u16;
         let mut session = Self {
             transfer_id: offer.transfer_id,
             block_count: offer.block_count,
             state: State::AwaitingDecision,
-            blocks_done: vec![false; offer.block_count as usize],
-            done_count: 0,
+            blocks_done: held_v.clone(),
+            done_count,
             timeouts,
             deadline: 0,
+            held: held_v,
         };
         let actions = match decision {
             OfferDecision::Reject(reason) => session.reject_now(reason),
@@ -175,9 +197,18 @@ impl ReceiverSession {
         self.deadline = now_ms.saturating_add(self.timeouts.block_stall_ms);
         let accept = FxFrame::FileAccept {
             transfer_id: self.transfer_id,
-            have_bitmap: Vec::new(),
+            have_bitmap: bitmap_from_bools(&self.held),
         };
-        vec![FxAction::Transmit(accept.encode()), self.progress()]
+        let mut actions = vec![FxAction::Transmit(accept.encode()), self.progress()];
+        // Resume edge: every block was already on disk — nothing to receive, go straight to verify.
+        if self.done_count == self.block_count {
+            self.state = State::Verifying;
+            self.deadline = now_ms.saturating_add(self.timeouts.verify_ms);
+            actions.push(FxAction::Verify {
+                transfer_id: self.transfer_id,
+            });
+        }
+        actions
     }
 
     fn reject_now(&mut self, reason: Reason) -> Vec<FxAction> {
@@ -202,4 +233,18 @@ impl ReceiverSession {
             blocks_total: self.block_count,
         }
     }
+}
+
+/// Pack a per-block boolean mask into a little-endian-by-byte bitmap (bit `i` = block `i` held).
+fn bitmap_from_bools(bools: &[bool]) -> Vec<u8> {
+    if bools.iter().all(|&b| !b) {
+        return Vec::new(); // fresh transfer — empty bitmap keeps the wire minimal
+    }
+    let mut out = vec![0u8; bools.len().div_ceil(8)];
+    for (i, &b) in bools.iter().enumerate() {
+        if b {
+            out[i / 8] |= 1 << (i % 8);
+        }
+    }
+    out
 }

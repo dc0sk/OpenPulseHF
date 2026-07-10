@@ -9,6 +9,32 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — feat(filexfer): Phase E-1 — block-level resume state mechanic
+
+- **Requirement/change:** FF-16 Phase E (`docs/dev/design/file-transfer-plan.md` §12): an interrupted
+  transfer must not re-send blocks the receiver already holds. The state machines needed a way to carry a
+  per-block "already have it" set and negotiate it on the wire.
+- **Design decision:** reuse the already-specified `FileAccept.have_bitmap` (a per-block held mask) as the
+  resume channel — no new frame. The receiver constructor gains a sibling `ReceiverSession::resume(offer,
+  decision, held, …)`; `new()` delegates to it with an empty `held`, so every existing call site and test is
+  unchanged. On accept it announces `bitmap_from_bools(held)` and pre-counts those blocks done (an all-held
+  resume goes straight to `Verify`, receiving nothing). The sender records the accepted bitmap into a `held`
+  mask and walks blocks via `next_unheld(from)` on both the initial-accept and per-`BlockAck` advance, so it
+  skips held blocks and never sends one twice; an all-held accept goes straight to `AwaitVerify`. Kept the
+  daemon-side persistence (writing/reading partial blocks) for E-2 so this PR is pure, in-crate, and testable.
+- **Implementation:** `crates/openpulse-filexfer/src/receiver.rs` (`held` field, `resume`, `begin_receiving`
+  emits the held bitmap + all-held→Verify edge, `bitmap_from_bools`); `sender.rs` (`held` field, `next_unheld`,
+  `bit_is_set`, FileAccept/BlockAck arms honor the bitmap).
+- **Tests:** `crates/openpulse-filexfer/tests/resume.rs` (4) — sender skips a held block and advances over it;
+  all-held sender sends nothing then completes on `FileComplete`; receiver announces its held bitmap and counts
+  those done; all-held receiver verifies immediately.
+- **Test results (actually run):** `openpulse-filexfer` 26 passed / 0 failed (4 new + 22 prior); `openpulse-daemon`
+  75 passed / 0 failed (unchanged via `new()` delegation); clippy `-D warnings` + fmt clean.
+- **Next:** Phase E-2 — daemon block persistence (`download_dir/<peer>/.partial/<sha256hex>/`, resume detection
+  on re-offer, seed `BlockAssembler` + `ReceiverSession::resume`, delete on completion, TTL purge).
+
+---
+
 ## 2026-07-10 — feat(filexfer): real-radio PTT burst sequencing (queue + drain)
 
 - **Requirement/change:** FF-16 §5.3/§6.4 — file-transfer transmits happen inside
