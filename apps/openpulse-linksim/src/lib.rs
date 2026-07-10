@@ -90,18 +90,21 @@ impl ChannelSpec {
                 snr_db: *snr,
                 seed: Some(seed),
             }),
+            // linksim feeds the channel one frame per apply() and reuses the box across the whole
+            // run, so use the continuous fader — consecutive frames then fade coherently (correlated
+            // at low Doppler, decorrelating at high) instead of an independent draw per frame.
             ChannelSpec::WattersonGoodF1(snr) => {
-                let mut c = WattersonConfig::good_f1(Some(seed));
+                let mut c = WattersonConfig::good_f1(Some(seed)).continuous();
                 c.snr_db = *snr;
                 ChannelModelConfig::Watterson(c)
             }
             ChannelSpec::WattersonModerateF1(snr) => {
-                let mut c = WattersonConfig::moderate_f1(Some(seed));
+                let mut c = WattersonConfig::moderate_f1(Some(seed)).continuous();
                 c.snr_db = *snr;
                 ChannelModelConfig::Watterson(c)
             }
             ChannelSpec::WattersonPoorF1(snr) => {
-                let mut c = WattersonConfig::poor_f1(Some(seed));
+                let mut c = WattersonConfig::poor_f1(Some(seed)).continuous();
                 c.snr_db = *snr;
                 ChannelModelConfig::Watterson(c)
             }

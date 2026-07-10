@@ -29,6 +29,9 @@ pub struct WattersonChannel {
     config: WattersonConfig,
     rng: rand::rngs::StdRng,
     planner: FftPlanner<f32>,
+    /// Persistent per-ray faders, present only when `config.continuous` — they carry fade phase
+    /// across `apply()` calls so a streaming caller sees one correlated fade, not a per-call draw.
+    faders: Option<(crate::fading::SosFader, crate::fading::SosFader)>,
 }
 
 impl WattersonChannel {
@@ -54,17 +57,46 @@ impl WattersonChannel {
             ));
         }
 
-        let rng = match config.seed {
+        let mut rng = match config.seed {
             Some(s) => rand::rngs::StdRng::seed_from_u64(s),
             None => rand::rngs::StdRng::from_entropy(),
         };
         let planner = FftPlanner::new();
 
+        // In continuous mode, draw both rays' oscillator banks up front so their phase persists
+        // across every apply() call; in one-shot mode the FFT path re-draws per call.
+        let faders = if config.continuous {
+            let f0 = crate::fading::SosFader::new(
+                &mut rng,
+                config.doppler_spread_hz,
+                config.sample_rate,
+            );
+            let f1 = crate::fading::SosFader::new(
+                &mut rng,
+                config.doppler_spread_hz,
+                config.sample_rate,
+            );
+            Some((f0, f1))
+        } else {
+            None
+        };
+
         Ok(Self {
             config,
             rng,
             planner,
+            faders,
         })
+    }
+
+    /// The two per-ray fading envelopes of length `n`: continuous (phase-persistent) faders when
+    /// `config.continuous`, else independent per-call FFT realizations.
+    fn ray_envelopes(&mut self, n: usize) -> (Vec<Complex32>, Vec<Complex32>) {
+        if let Some((f0, f1)) = self.faders.as_mut() {
+            (f0.next_block(n), f1.next_block(n))
+        } else {
+            (self.make_envelope(n), self.make_envelope(n))
+        }
     }
 
     /// Generate `n` Doppler-shaped Rayleigh fading envelope samples (E[|h|²] = 1).
@@ -91,8 +123,7 @@ impl WattersonChannel {
             return (Vec::new(), Vec::new());
         }
 
-        let env0 = self.make_envelope(n);
-        let env1 = self.make_envelope(n);
+        let (env0, env1) = self.ray_envelopes(n);
         let delay_samples =
             (self.config.delay_spread_ms / 1000.0 * self.config.sample_rate as f32) as usize;
 
@@ -144,8 +175,8 @@ impl ChannelModel for WattersonChannel {
 
         // Generate full-length envelopes so the fading is temporally correlated
         // across the entire call — no discontinuous jumps at fixed block boundaries.
-        let env0 = self.make_envelope(n);
-        let env1 = self.make_envelope(n);
+        // In continuous mode these also carry phase across calls (see `ray_envelopes`).
+        let (env0, env1) = self.ray_envelopes(n);
 
         let delay_samples =
             (self.config.delay_spread_ms / 1000.0 * self.config.sample_rate as f32) as usize;
@@ -325,6 +356,89 @@ mod tests {
             (0.75..1.35).contains(&ratio),
             "delivered/input signal power = {ratio:.2} — expected ≈1.0 (path power normalised); \
              ≈2.0 means the +3 dB two-ray hot-signal bug regressed"
+        );
+    }
+
+    /// Lag-1 Pearson autocorrelation of a series (magnitude used for the assertions below).
+    fn lag1_autocorr(x: &[f32]) -> f32 {
+        let n = x.len();
+        let mean = x.iter().sum::<f32>() / n as f32;
+        let var = x.iter().map(|v| (v - mean).powi(2)).sum::<f32>();
+        let cov = (0..n - 1)
+            .map(|i| (x[i] - mean) * (x[i + 1] - mean))
+            .sum::<f32>();
+        if var > 0.0 {
+            cov / var
+        } else {
+            0.0
+        }
+    }
+
+    /// Feed the channel frame-by-frame at low Doppler (F1, ~10 s coherence). In `continuous` mode the
+    /// per-frame RMS must stay strongly correlated call-to-call (one slow fade); the default per-call
+    /// FFT path re-randomises the fade every call, so its frame RMS is ~uncorrelated. This is the whole
+    /// point of the persistent fader.
+    #[test]
+    fn continuous_fade_correlates_across_calls() {
+        let block = 400usize; // 0.05 s frames
+        let n_blocks = 60usize; // 3 s total ≪ F1 coherence → a continuous fade barely moves
+        let tone: Vec<f32> = (0..block)
+            .map(|i| (2.0 * std::f32::consts::PI * 1500.0 * i as f32 / 8000.0).sin())
+            .collect();
+
+        let block_rms = |continuous: bool| -> Vec<f32> {
+            let mut cfg = WattersonConfig::good_f1(Some(11));
+            cfg.delay_spread_ms = 0.0; // flat fade — isolate the per-sample gain
+            cfg.snr_db = 60.0; // negligible additive noise → RMS tracks |h|
+            cfg.continuous = continuous;
+            let mut ch = WattersonChannel::new(cfg).unwrap();
+            (0..n_blocks)
+                .map(|_| {
+                    let out = ch.apply(&tone);
+                    (out.iter().map(|&s| s * s).sum::<f32>() / block as f32).sqrt()
+                })
+                .collect()
+        };
+
+        let cont = lag1_autocorr(&block_rms(true));
+        let oneshot = lag1_autocorr(&block_rms(false));
+        assert!(
+            cont > 0.5,
+            "continuous fade should persist across calls (lag-1 autocorr {cont:.2} ≤ 0.5)"
+        );
+        assert!(
+            cont > oneshot + 0.3,
+            "continuous ({cont:.2}) must be far more call-to-call correlated than the per-call \
+             re-randomising default ({oneshot:.2})"
+        );
+    }
+
+    /// The continuous fader must still deliver unit average path power (E[|h|²] = 1), so a `continuous`
+    /// Watterson channel keeps the same SNR labelling as the one-shot path. Averaged over seeds and a
+    /// several-coherence-time run so the fade averages out.
+    #[test]
+    fn continuous_mode_preserves_unit_power() {
+        let n = 40_000usize; // 5 s @ 8 kHz — many coherence times of moderate_f1 (1 Hz)
+        let tone: Vec<f32> = (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * 1500.0 * i as f32 / 8000.0).sin())
+            .collect();
+        let in_pow = tone.iter().map(|s| s * s).sum::<f32>() / n as f32;
+
+        let seeds = 30u64;
+        let mut ratio_sum = 0.0f32;
+        for seed in 0..seeds {
+            let mut cfg = WattersonConfig::moderate_f1(Some(seed));
+            cfg.delay_spread_ms = 1.0;
+            cfg.snr_db = 60.0;
+            cfg.continuous = true;
+            let mut ch = WattersonChannel::new(cfg).unwrap();
+            let out = ch.apply(&tone);
+            ratio_sum += (out.iter().map(|s| s * s).sum::<f32>() / n as f32) / in_pow;
+        }
+        let ratio = ratio_sum / seeds as f32;
+        assert!(
+            (0.75..1.35).contains(&ratio),
+            "continuous delivered/input power = {ratio:.2} — expected ≈1.0 (E[|h|²]=1 must hold)"
         );
     }
 

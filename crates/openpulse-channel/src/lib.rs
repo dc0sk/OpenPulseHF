@@ -201,6 +201,10 @@ pub struct WattersonConfig {
     pub seed: Option<u64>,
     /// Audio sample rate — must match the modem pipeline.
     pub sample_rate: u32,
+    /// Keep one temporally-correlated fade **across** `apply()` calls instead of an independent draw
+    /// per call. `false` (default) preserves the per-call FFT realization; set `true` for streaming
+    /// callers that feed the channel frame-by-frame and need consecutive frames to fade coherently.
+    pub continuous: bool,
 }
 
 impl WattersonConfig {
@@ -212,6 +216,7 @@ impl WattersonConfig {
             snr_db: 20.0,
             seed,
             sample_rate: 8000,
+            continuous: false,
         }
     }
     /// ITU-R F.1487 Good F2: Doppler 0.5 Hz, delay 1.0 ms.
@@ -222,6 +227,7 @@ impl WattersonConfig {
             snr_db: 15.0,
             seed,
             sample_rate: 8000,
+            continuous: false,
         }
     }
     /// ITU-R F.1487 Moderate F1: Doppler 1.0 Hz, delay 1.0 ms.
@@ -232,6 +238,7 @@ impl WattersonConfig {
             snr_db: 10.0,
             seed,
             sample_rate: 8000,
+            continuous: false,
         }
     }
     /// ITU-R F.1487 Moderate F2: Doppler 1.0 Hz, delay 2.0 ms.
@@ -242,6 +249,7 @@ impl WattersonConfig {
             snr_db: 10.0,
             seed,
             sample_rate: 8000,
+            continuous: false,
         }
     }
     /// ITU-R F.1487 Poor F1: Doppler 2.0 Hz, delay 2.0 ms.
@@ -252,6 +260,7 @@ impl WattersonConfig {
             snr_db: 5.0,
             seed,
             sample_rate: 8000,
+            continuous: false,
         }
     }
     /// ITU-R F.1487 Poor F2: Doppler 2.0 Hz, delay 5.0 ms.
@@ -262,6 +271,7 @@ impl WattersonConfig {
             snr_db: 3.0,
             seed,
             sample_rate: 8000,
+            continuous: false,
         }
     }
     /// Extreme: Doppler 10.0 Hz, delay 10.0 ms.
@@ -272,7 +282,13 @@ impl WattersonConfig {
             snr_db: 0.0,
             seed,
             sample_rate: 8000,
+            continuous: false,
         }
+    }
+    /// Builder: keep one correlated fade across `apply()` calls (for streaming callers).
+    pub fn continuous(mut self) -> Self {
+        self.continuous = true;
+        self
     }
 }
 
