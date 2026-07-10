@@ -33,4 +33,7 @@ pub enum FxError {
     /// `block_size` outside the protocol-legal window.
     #[error("block_size {0} outside {min}..={max}", min = crate::MIN_BLOCK_SIZE, max = crate::MAX_BLOCK_SIZE)]
     BlockSizeOutOfRange(u32),
+    /// A packed block + `FileData` header exceeded the 64 005-byte SAR-segment cap (block_size too big).
+    #[error("block {block_index} too large to SAR-encode")]
+    BlockTooLarge { block_index: u16 },
 }

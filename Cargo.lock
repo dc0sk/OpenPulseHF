@@ -5117,12 +5117,14 @@ name = "openpulse-modem"
 version = "0.3.0"
 dependencies = [
  "bpsk-plugin",
+ "ed25519-dalek",
  "fsk4-plugin",
  "ofdm-plugin",
  "openpulse-audio",
  "openpulse-channel",
  "openpulse-core",
  "openpulse-dsp",
+ "openpulse-filexfer",
  "pilot-plugin",
  "psk8-plugin",
  "qam64-plugin",

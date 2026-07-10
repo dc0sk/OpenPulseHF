@@ -9,6 +9,31 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — feat(filexfer): Phase B — blocks over SAR + multi-object framing + modem loopback
+
+- **Requirement/change:** FF-16 Phase B (`docs/dev/design/file-transfer-plan.md` §12): the byte-level block
+  layer under the Phase-A state machines — split a file into blocks, per-block `pack()`, map each to a SAR
+  segment, track fragment bitmaps — and prove a real file round-trips through the modem and verifies.
+- **Design decision:** the **block is the multi-object unit** that clears the 64 005-byte SAR-segment cap:
+  each block is one SAR segment with `segment_id = block_index + 1` (id 0 stays reserved for handshake
+  frames). `encode_block` packs a block, wraps it in a `FileData` frame, and SAR-fragments it, with an
+  optional missing-bitmap filter for selective retransmission. `BlockAssembler` ingests fragments, peeks the
+  4-byte SAR header (no `SarReassembler` API change) to maintain a per-block arrival bitmap for `BlockAck`,
+  reassembles + unpacks completed blocks, and concatenates them in order. Integrity is enforced end-to-end
+  by `verify_manifest_with_payload` over the reassembled file.
+- **Implementation:** `crates/openpulse-filexfer/src/blocks.rs` (`split_blocks`, `encode_block`,
+  `BlockAssembler`, `BlockEvent`) + `FxError::BlockTooLarge`; `crates/openpulse-modem/Cargo.toml` dev-deps
+  (`openpulse-filexfer`, `ed25519-dalek`).
+- **Tests:** `crates/openpulse-filexfer/tests/blocks.rs` (5) — split math; single-block round-trip + verify;
+  **>64 005 B multi-object** (100 KB → 7 blocks) reassembled out-of-order + verify; **tampered fragment →
+  verify fails**; **missing-bitmap-driven selective retransmit**. `crates/openpulse-modem/tests/filexfer_loopback.rs`
+  (2) — a multi-block file's SAR fragments survive `ChannelSimHarness` QPSK500+RS and reassemble + verify;
+  a fragment corrupted on the wire fails verification.
+- **Test results (actually run):** `openpulse-filexfer` 22 passed (17 Phase-A + 5 blocks); `filexfer_loopback`
+  2 passed; clippy `-D warnings` + fmt clean.
+
+---
+
 ## 2026-07-10 — feat(filexfer): Phase A — `openpulse-filexfer` crate (OPFX wire + state machines)
 
 - **Requirement/change:** FF-16 Phase A (`docs/dev/design/file-transfer-plan.md` §12): the pure protocol
