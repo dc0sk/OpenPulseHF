@@ -9,6 +9,18 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — fix(panel): Event-log tab fills the full tab width
+
+- **Requirement/change:** the Event-log tab's column and text used the default `Shrink` width, so lines
+  occupied only their own length and long events were clipped, leaving the rest of the tab blank.
+- **Design decision:** set `Length::Fill` on the log column, each line's `Text`, and the `scrollable`, so
+  the log spans the full usable tab width and long lines wrap at the panel edge.
+- **Implementation:** `apps/openpulse-panel/src/ui.rs` (`log_widget`).
+- **Tests:** none new — layout-only; existing `openpulse-panel` suite re-run as a regression guard.
+- **Test results (actually run):** `openpulse-panel` 15 passed; clippy `-D warnings` + fmt clean.
+
+---
+
 ## 2026-07-10 — feat(daemon): wire compress_ratio live from the RX data path
 
 - **Requirement/change:** `ControlEvent::Metrics.compress_ratio` was hardcoded `None`, so the panel always
