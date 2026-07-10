@@ -9,6 +9,29 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — feat(panel): Statistics tab — successful frames per ladder step, per session
+
+- **Requirement/change:** the operator had no per-session view of how many frames actually got through at
+  each ladder step. Also traced the sibling question: `compress_ratio` is populated **nowhere** — the daemon
+  emits `ControlEvent::Metrics` at a single site (`crates/openpulse-daemon/src/lib.rs`) with `compress_ratio:
+  None` (and `ecc_rate: None`) hardcoded, and the send path compresses with `CompressionAlgorithm::None`, so
+  there is no ratio to report; the panel's `None`→`1.0` default now renders honestly as "1.0:1".
+- **Design decision:** count frames in the panel from the existing `EngineEvent` stream (no daemon change):
+  `FrameReceived`/`FrameTransmitted` bucketed by the ladder step (`speed_level_num`, set by `RateChange`)
+  current at that moment; cleared on `SessionStarted`. Separate RX (decoded) and TX counters, since either
+  direction is a "successful transfer". Counting logic lives in `PanelState` (pure, unit-tested); the tab
+  renders a per-step RX/TX/Total table with a totals row. Bucket 0 is the pre-first-`RateChange` step.
+- **Implementation:** `apps/openpulse-panel/src/app.rs` (`Tab::Stats`); `state.rs` (`rx_frames_by_level` /
+  `tx_frames_by_level` `[u32; LEVEL_BUCKETS]`, `record_frame`, `reset_frame_stats`); `connection.rs`
+  (increment on frame events, reset on `SessionStarted`); `ui.rs` (`stats_widget`, tab button + dispatch).
+- **Tests:** `state::frame_stats_tests` — `record_frame_buckets_by_current_level`,
+  `level_zero_is_the_pre_lock_bucket`, `out_of_range_level_clamps_into_the_last_bucket` (no OOB panic on an
+  absurd level), `reset_zeroes_all_buckets`.
+- **Test results (actually run):** `openpulse-panel` 15 passed (4 new + 11 existing); clippy `-D warnings` +
+  fmt clean; panel builds clean.
+
+---
+
 ## 2026-07-10 — fix(panel): show compression as an "N:1" reduction factor, not a bare fraction
 
 - **Requirement/change:** the panel's Additional-info tab rendered the compression metric as

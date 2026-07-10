@@ -209,6 +209,8 @@ struct Snap {
     open_msg_id: Option<u64>,
     open_msg_body: Option<String>,
     ecc_history: Vec<f32>,
+    rx_frames_by_level: Vec<u32>,
+    tx_frames_by_level: Vec<u32>,
 }
 
 pub fn view(app: &App) -> Element<'_, Message> {
@@ -252,6 +254,8 @@ pub fn view(app: &App) -> Element<'_, Message> {
             open_msg_id: st.open_message_id,
             open_msg_body: st.open_message_body.clone(),
             ecc_history: st.ecc_history.iter().cloned().collect(),
+            rx_frames_by_level: st.rx_frames_by_level.to_vec(),
+            tx_frames_by_level: st.tx_frames_by_level.to_vec(),
         }
     };
 
@@ -842,6 +846,11 @@ fn tabbed_lower(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static,
             "Live session, signal, and resource readouts",
         ))
         .push(tab_btn(
+            "Statistics",
+            Tab::Stats,
+            "Successfully transferred frames per ladder step this session",
+        ))
+        .push(tab_btn(
             "Daemon config",
             Tab::Config,
             "View and edit the daemon configuration",
@@ -858,6 +867,7 @@ fn tabbed_lower(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static,
         ));
     let content = match app.active_tab {
         Tab::Info => info_widget(snap, eff),
+        Tab::Stats => stats_widget(snap, eff),
         Tab::Config => config_widget(app, snap, eff),
         Tab::Messages => messages_widget(app, snap, eff),
         Tab::Log => log_widget(snap, eff),
@@ -1151,6 +1161,89 @@ fn log_widget(snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
                 .color(role(eff, ColorRole::Inactive)),
         );
     }
+    scrollable(col).height(Length::Fill).into()
+}
+
+/// Statistics tab: count of successfully transferred frames per ladder step, this session.
+///
+/// Buckets are filled by `PanelState::record_frame` on each `FrameReceived` / `FrameTransmitted` event
+/// (keyed on the ladder step current at that moment) and cleared on `SessionStarted`. Rows with no
+/// frames are hidden; step `—` is the pre-first-`RateChange` bucket.
+fn stats_widget(snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
+    let cell = move |s: String, w: f32, r: ColorRole| -> Element<'static, Message> {
+        Text::new(s)
+            .size(12)
+            .width(Length::Fixed(w))
+            .color(role(eff, r))
+            .into()
+    };
+    let stat_row = move |step: String,
+                         rx: String,
+                         tx: String,
+                         total: String,
+                         r: ColorRole|
+          -> Row<'static, Message> {
+        Row::new()
+            .spacing(8)
+            .push(cell(step, 90.0, r))
+            .push(cell(rx, 64.0, r))
+            .push(cell(tx, 64.0, r))
+            .push(cell(total, 64.0, r))
+    };
+
+    let mut col = Column::new()
+        .spacing(3)
+        .push(col_title(eff, "Frames per ladder step (this session)"))
+        .push(stat_row(
+            "Step".into(),
+            "RX".into(),
+            "TX".into(),
+            "Total".into(),
+            ColorRole::Signal,
+        ));
+
+    let (mut total_rx, mut total_tx) = (0u32, 0u32);
+    let mut any = false;
+    let buckets = snap.rx_frames_by_level.len();
+    for i in 0..buckets {
+        let rx = snap.rx_frames_by_level.get(i).copied().unwrap_or(0);
+        let tx = snap.tx_frames_by_level.get(i).copied().unwrap_or(0);
+        total_rx = total_rx.saturating_add(rx);
+        total_tx = total_tx.saturating_add(tx);
+        if rx == 0 && tx == 0 {
+            continue;
+        }
+        any = true;
+        let step = if i == 0 {
+            "—".to_string()
+        } else {
+            format!("SL{i}")
+        };
+        col = col.push(stat_row(
+            step,
+            rx.to_string(),
+            tx.to_string(),
+            rx.saturating_add(tx).to_string(),
+            ColorRole::RxValue,
+        ));
+    }
+
+    col = if any {
+        col.push(stat_row(
+            "Total".into(),
+            total_rx.to_string(),
+            total_tx.to_string(),
+            total_rx.saturating_add(total_tx).to_string(),
+            ColorRole::Locked,
+        ))
+    } else {
+        col.push(
+            Text::new("No frames transferred yet this session.")
+                .size(12)
+                .color(role(eff, ColorRole::Inactive)),
+        )
+    };
+
     scrollable(col).height(Length::Fill).into()
 }
 
