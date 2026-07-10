@@ -290,13 +290,20 @@ fn hpx_ofdm_hf_initial_level() {
 
 #[test]
 fn hpx_ofdm_hf_snr_thresholds() {
+    // Floors are in plugin-SNR units (what the receiver-led ladder reads), calibrated on moderate_f1
+    // where that estimate is conservative and saturates ~17 dB — the AWGN-scale numbers never cleared.
     let p = SessionProfile::hpx_ofdm_hf();
     assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl5), Some(8.0));
-    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl6), Some(11.0));
-    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl10), Some(26.0));
-    assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl5), Some(14.0));
-    assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl6), Some(18.0));
+    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl6), Some(9.0));
+    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl10), Some(16.0));
+    assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl5), Some(11.0));
+    assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl6), Some(12.0));
     assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl10), None);
+    // Every rung is FEC-protected now (SoftConcatenated) — the unprotected entry rungs failed on fading.
+    assert_eq!(
+        p.fec_for(SpeedLevel::Sl5),
+        openpulse_core::fec::FecMode::SoftConcatenated
+    );
 }
 
 #[test]

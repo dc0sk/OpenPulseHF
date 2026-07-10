@@ -4589,7 +4589,11 @@ impl ModemEngine {
     /// symbol-domain estimate ([`ModulationPlugin::estimate_snr_db`]) — waveform-aware, so it keeps
     /// tracking SNR up the ladder where the constant-modulus M2M4 moment estimator saturates — and
     /// falls back to silence-gated M2M4 when the plugin has no estimator.
-    fn rx_snr_db(&self, mode: &str, samples: &[f32]) -> f32 {
+    ///
+    /// Public so an external harness (e.g. `openpulse-linksim`) can drive a receiver-led ladder with
+    /// the *same* SNR the daemon uses, instead of a tx-vs-rx estimator that counts delay spread as
+    /// noise (which reads ≈ −8 dB for a 25 dB OFDM signal through moderate_f1).
+    pub fn rx_snr_db(&self, mode: &str, samples: &[f32]) -> f32 {
         let fc = self.center_frequency + self.afc_correction_hz;
         let fs = AudioConfig::default().sample_rate as f32;
         if let Some(plugin) = self.plugins.get(mode) {
