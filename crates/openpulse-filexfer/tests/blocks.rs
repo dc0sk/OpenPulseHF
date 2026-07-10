@@ -159,3 +159,32 @@ fn missing_bitmap_drives_selective_retransmit() {
 fn bit(bitmap: &[u8], i: usize) -> bool {
     bitmap.get(i / 8).is_some_and(|b| b & (1 << (i % 8)) != 0)
 }
+
+#[test]
+fn seeded_blocks_complete_without_fragments() {
+    // A 3-block transfer where block 0 and block 2 were persisted from an interrupted run.
+    let file: Vec<u8> = (0..2500u32).map(|i| i as u8).collect();
+    let blocks = split_blocks(&file, 1024);
+    assert_eq!(blocks.len(), 3);
+
+    let mut asm = BlockAssembler::new(7, 3);
+    asm.seed_block(0, blocks[0].to_vec());
+    asm.seed_block(2, blocks[2].to_vec());
+    assert_eq!(asm.block(0), Some(blocks[0]));
+    assert_eq!(asm.block(1), None, "block 1 was not seeded");
+    assert!(!asm.is_complete(), "block 1 still missing");
+
+    // Only the middle block needs to arrive over the air.
+    let frags = encode_block(7, 1, blocks[1], None).unwrap();
+    let mut last = BlockEvent::Ignored;
+    for f in &frags {
+        last = asm.ingest_fragment(f);
+    }
+    assert_eq!(last, BlockEvent::Complete { block_index: 1 });
+    assert!(asm.is_complete());
+    assert_eq!(asm.reassemble().unwrap(), file);
+
+    // Seeding an out-of-range index is a no-op.
+    asm.seed_block(9, vec![1, 2, 3]);
+    assert_eq!(asm.block(9), None);
+}

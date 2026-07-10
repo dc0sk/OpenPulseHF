@@ -122,6 +122,9 @@ pub struct FileTransferConfig {
     pub allowed_peers: Vec<String>,
     /// Seconds an unanswered offer stays pending before automatic rejection.
     pub offer_timeout_secs: u64,
+    /// Hours a partially-received transfer's blocks are kept on disk for resume before being purged
+    /// (`0` = keep indefinitely). Partials live under `download_dir/<peer>/.partial/<sha256>/`.
+    pub partial_ttl_hours: u64,
 }
 
 impl Default for FileTransferConfig {
@@ -135,6 +138,7 @@ impl Default for FileTransferConfig {
             require_verified_peer: true,
             allowed_peers: Vec::new(),
             offer_timeout_secs: 120,
+            partial_ttl_hours: 72,
         }
     }
 }
@@ -1051,6 +1055,8 @@ require_verified_peer = true
 allowed_peers = []
 # Seconds an unanswered offer stays pending before automatic rejection.
 offer_timeout_secs = 120
+# Hours a partially-received transfer's blocks are kept for resume before purge (0 = keep forever).
+partial_ttl_hours = 72
 "#
     .to_string()
 }

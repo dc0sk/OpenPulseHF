@@ -9,6 +9,36 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — feat(filexfer): Phase E-2 — daemon partial-block persistence + resume detection
+
+- **Requirement/change:** FF-16 Phase E (`docs/dev/design/file-transfer-plan.md` §12): give the E-1 resume
+  mechanic something to resume *from* — persist completed blocks across an interrupted transfer, detect the
+  resume on a re-offer, and clean up (delete on completion, TTL-purge stragglers).
+- **Design decision:** persist each just-completed block to `download_dir/<peer>/.partial/<sha256hex>/<n>.blk`,
+  **keyed by the offer's content hash** (not the transfer-id, which is fresh per `SendFile`), so a re-offer of
+  the same file finds its earlier blocks. On a new offer the daemon TTL-purges the peer's stale partials, loads
+  the `.blk` files whose length matches the expected block size (a cheap corruption guard — a bad block is just
+  re-fetched; the whole-file manifest hash is still the authority), `seed_block`s them into the `BlockAssembler`,
+  and calls `ReceiverSession::resume(&held)` instead of `new` so the held blocks are announced and skipped. On
+  full reassembly the partial dir is deleted. Persistence is best-effort (a write failure only forfeits
+  resumability, never the live transfer). New crate surface: `BlockAssembler::seed_block` / `block`. New config:
+  `[file_transfer] partial_ttl_hours` (default 72; 0 = keep indefinitely).
+- **Implementation:** `crates/openpulse-filexfer/src/blocks.rs` (`seed_block`, `block`); `openpulse-config`
+  (`FileTransferConfig.partial_ttl_hours` + template); `crates/openpulse-daemon/src/filexfer.rs`
+  (`FxRxState.partial_dir`, `FileTransferPolicy.partial_ttl_hours`, `partial_dir_for`, `expected_block_len`,
+  `persist_block`, `load_partials`, `clear_partials`, `purge_stale_partials`; `on_offer` resumes,
+  `on_block_fragment` persists, `reassemble_verify_write` clears).
+- **Tests:** `crates/openpulse-filexfer/tests/blocks.rs` (`seeded_blocks_complete_without_fragments`);
+  `crates/openpulse-daemon/src/filexfer.rs` `#[cfg(test)]` (persist→reload into held mask + assembler;
+  wrong-length partial skipped; `clear_partials` removes the dir; content-hash keying; fresh partial survives
+  purge + ttl-0 no-op; last-block short length).
+- **Test results (actually run):** `openpulse-filexfer` 27 passed (1 new); `openpulse-daemon` 83 passed (8 new
+  filexfer unit tests); `openpulse-config` unchanged-green; combined 123 passed / 0 failed; clippy `-D warnings`
+  + fmt clean.
+- **Note:** completes FF-16 Phase E. Remaining: Phase F (on-air validation, deferred batch).
+
+---
+
 ## 2026-07-10 — feat(filexfer): Phase E-1 — block-level resume state mechanic
 
 - **Requirement/change:** FF-16 Phase E (`docs/dev/design/file-transfer-plan.md` §12): an interrupted

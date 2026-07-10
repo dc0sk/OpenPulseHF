@@ -49,6 +49,8 @@ pub struct FileTransferPolicy {
     pub per_peer_quota_bytes: u64,
     /// Callsign allowlist (upper-cased); empty = any peer passing the trust gate.
     pub allowed_peers: Vec<String>,
+    /// Hours a resumable partial is kept before purge (0 = keep indefinitely).
+    pub partial_ttl_hours: u64,
     /// Session timeouts.
     pub timeouts: Timeouts,
 }
@@ -66,6 +68,7 @@ impl FileTransferPolicy {
             download_dir: expand_tilde(&cfg.download_dir),
             per_peer_quota_bytes: cfg.per_peer_quota_bytes,
             allowed_peers: cfg.allowed_peers.iter().map(|s| s.to_uppercase()).collect(),
+            partial_ttl_hours: cfg.partial_ttl_hours,
             timeouts: Timeouts {
                 offer_ms: cfg.offer_timeout_secs.saturating_mul(1000),
                 ..Timeouts::default()
@@ -92,6 +95,8 @@ pub struct FxRxState {
     from: String,
     peer_pubkey: Option<[u8; 32]>,
     file_received_emitted: bool,
+    /// Directory holding this transfer's resumable partial blocks (`…/.partial/<sha256>/`).
+    partial_dir: PathBuf,
 }
 
 /// Active send-side session context (one transfer per link in v1).
@@ -197,9 +202,20 @@ fn on_offer(
         signature_valid: sig_valid,
     });
 
-    let (receiver, actions) =
-        ReceiverSession::new(&offer, decision, rs.filexfer_policy.timeouts, now_ms());
-    let assembler = BlockAssembler::new(offer.transfer_id, offer.block_count);
+    // Resume: reclaim any blocks persisted from an earlier interrupted transfer of the *same content*
+    // (keyed by the offer's SHA-256), seed them into the assembler, and announce them via `resume` so
+    // the sender skips them. TTL-purge stale partials for this peer first.
+    purge_stale_partials(&rs.filexfer_policy, &from);
+    let partial_dir = partial_dir_for(&rs.filexfer_policy, &from, &offer.sha256);
+    let mut assembler = BlockAssembler::new(offer.transfer_id, offer.block_count);
+    let held = load_partials(&offer, &partial_dir, &mut assembler);
+    let (receiver, actions) = ReceiverSession::resume(
+        &offer,
+        decision,
+        &held,
+        rs.filexfer_policy.timeouts,
+        now_ms(),
+    );
     let mut fx = FxRxState {
         receiver,
         assembler,
@@ -207,6 +223,7 @@ fn on_offer(
         from,
         peer_pubkey,
         file_received_emitted: false,
+        partial_dir,
     };
     drive_rx_actions(&mut fx, actions, rs, event_tx, mode);
     if !fx.receiver.is_terminal() {
@@ -477,6 +494,11 @@ fn on_block_fragment(
         return;
     };
     if let BlockEvent::Complete { block_index } = fx.assembler.ingest_fragment(bytes) {
+        // Persist the just-completed block so an interrupted transfer can resume (disjoint field
+        // borrows: `assembler` and `partial_dir` are separate fields).
+        if let Some(block) = fx.assembler.block(block_index) {
+            persist_block(&fx.partial_dir, block_index, block);
+        }
         enqueue_ctrl(
             rs,
             mode,
@@ -568,6 +590,10 @@ fn reassemble_verify_write(
     } else {
         CompleteStatus::SignatureInvalid // intact but unsigned/unknown peer → quarantine
     };
+
+    // The file is fully assembled — the resume partials are no longer needed (a re-offer would start
+    // fresh anyway; on a hash mismatch that is the correct outcome).
+    clear_partials(&fx.partial_dir);
 
     match write_file(rs, &fx.from, &fx.offer.name, &payload, verified) {
         Ok(path) => {
@@ -718,6 +744,114 @@ fn dir_size(dir: &Path) -> u64 {
         .sum()
 }
 
+// ── resume: persisted partial blocks ─────────────────────────────────────────
+
+/// Subdirectory under a peer's download dir holding resumable partial blocks, keyed by file hash.
+const PARTIAL_SUBDIR: &str = ".partial";
+
+/// The partial-blocks dir for one transfer: `download_dir/<peer>/.partial/<sha256hex>/`.
+fn partial_dir_for(policy: &FileTransferPolicy, from: &str, sha256: &[u8]) -> PathBuf {
+    let peer = sanitize_filename(if from.is_empty() { "unknown" } else { from });
+    policy
+        .download_dir
+        .join(peer)
+        .join(PARTIAL_SUBDIR)
+        .join(hex(sha256))
+}
+
+/// Bytes block `block_index` should contain (the last block is short): `min(block_size, remaining)`.
+fn expected_block_len(offer: &FileOffer, block_index: u16) -> usize {
+    let bs = offer.block_size as u64;
+    let start = (block_index as u64).saturating_mul(bs);
+    offer.file_size.saturating_sub(start).min(bs) as usize
+}
+
+/// Write one completed block to `<partial_dir>/<block_index>.blk` (best-effort — a persistence
+/// failure only forfeits resumability, never the live transfer).
+fn persist_block(partial_dir: &Path, block_index: u16, block: &[u8]) {
+    if let Err(e) = std::fs::create_dir_all(partial_dir) {
+        tracing::debug!(error = %e, "filexfer: cannot create partial dir");
+        return;
+    }
+    let path = partial_dir.join(format!("{block_index}.blk"));
+    if let Err(e) = std::fs::write(&path, block) {
+        tracing::debug!(error = %e, "filexfer: cannot persist partial block");
+    }
+}
+
+/// Load persisted blocks for a resumed transfer into `assembler`, returning the per-block held mask.
+/// A `.blk` whose length doesn't match the expected block size is skipped (cheap corruption guard).
+fn load_partials(
+    offer: &FileOffer,
+    partial_dir: &Path,
+    assembler: &mut BlockAssembler,
+) -> Vec<bool> {
+    let mut held = vec![false; offer.block_count as usize];
+    let Ok(entries) = std::fs::read_dir(partial_dir) else {
+        return held;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(idx_str) = name
+            .to_string_lossy()
+            .strip_suffix(".blk")
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        let Ok(idx) = idx_str.parse::<u16>() else {
+            continue;
+        };
+        if idx >= offer.block_count {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(entry.path()) else {
+            continue;
+        };
+        if bytes.len() != expected_block_len(offer, idx) {
+            continue; // stale/corrupt partial from a different offer — re-fetch this block
+        }
+        assembler.seed_block(idx, bytes);
+        held[idx as usize] = true;
+    }
+    held
+}
+
+/// Delete a completed transfer's partial-blocks dir.
+fn clear_partials(partial_dir: &Path) {
+    let _ = std::fs::remove_dir_all(partial_dir);
+}
+
+/// Remove partial dirs under `<peer>/.partial` older than the configured TTL (0 = keep indefinitely).
+fn purge_stale_partials(policy: &FileTransferPolicy, from: &str) {
+    if policy.partial_ttl_hours == 0 {
+        return;
+    }
+    let peer = sanitize_filename(if from.is_empty() { "unknown" } else { from });
+    let base = policy.download_dir.join(peer).join(PARTIAL_SUBDIR);
+    let Ok(entries) = std::fs::read_dir(&base) else {
+        return;
+    };
+    let ttl = std::time::Duration::from_secs(policy.partial_ttl_hours.saturating_mul(3600));
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| now.duration_since(t).ok())
+            .map(|age| age > ttl)
+            .unwrap_or(false);
+        if stale {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
+}
+
 /// Countersign the manifest body (proof of verified receipt) with the local station key.
 fn countersign(payload: &[u8], sender_id: &str, seed: &[u8; 32]) -> [u8; 64] {
     TransferManifest::sign(payload, sender_id, seed)
@@ -762,4 +896,123 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openpulse_core::manifest::TransferManifest;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    fn tmp_dir() -> PathBuf {
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let d = std::env::temp_dir().join(format!("ophf-fx-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn policy_with(dir: PathBuf, ttl: u64) -> FileTransferPolicy {
+        FileTransferPolicy {
+            download_dir: dir,
+            partial_ttl_hours: ttl,
+            ..Default::default()
+        }
+    }
+
+    fn offer_for(payload: &[u8], block_size: u32) -> FileOffer {
+        let mut seed = [0u8; 32];
+        seed[0] = 9;
+        let manifest = TransferManifest::sign(payload, "W1AW", &seed).unwrap();
+        FileOffer::from_manifest(
+            1,
+            &manifest,
+            "f.bin",
+            "application/octet-stream",
+            block_size,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn persisted_blocks_reload_into_held_mask_and_assembler() {
+        let root = tmp_dir();
+        let file: Vec<u8> = (0..2500u32).map(|i| i as u8).collect(); // 3 × 1024-byte blocks
+        let offer = offer_for(&file, 1024);
+        assert_eq!(offer.block_count, 3);
+        let dir = partial_dir_for(&policy_with(root, 72), "W1AW", &offer.sha256);
+
+        let blocks = openpulse_filexfer::split_blocks(&file, 1024);
+        persist_block(&dir, 0, blocks[0]);
+        persist_block(&dir, 2, blocks[2]);
+
+        let mut asm = BlockAssembler::new(offer.transfer_id, offer.block_count);
+        let held = load_partials(&offer, &dir, &mut asm);
+        assert_eq!(held, vec![true, false, true]);
+        assert_eq!(asm.block(0), Some(blocks[0]));
+        assert_eq!(asm.block(2), Some(blocks[2]));
+        assert_eq!(asm.block(1), None);
+    }
+
+    #[test]
+    fn wrong_length_partial_is_skipped() {
+        let root = tmp_dir();
+        let file: Vec<u8> = (0..2500u32).map(|i| i as u8).collect();
+        let offer = offer_for(&file, 1024);
+        let dir = partial_dir_for(&policy_with(root, 72), "W1AW", &offer.sha256);
+
+        // A truncated block-0 file (wrong length) must not be trusted.
+        persist_block(&dir, 0, &[1, 2, 3]);
+        let mut asm = BlockAssembler::new(offer.transfer_id, offer.block_count);
+        let held = load_partials(&offer, &dir, &mut asm);
+        assert_eq!(held, vec![false, false, false]);
+        assert_eq!(asm.block(0), None);
+    }
+
+    #[test]
+    fn clear_partials_removes_the_dir() {
+        let root = tmp_dir();
+        let offer = offer_for(b"hello", 1024);
+        let dir = partial_dir_for(&policy_with(root, 72), "W1AW", &offer.sha256);
+        persist_block(&dir, 0, b"hello");
+        assert!(dir.exists());
+        clear_partials(&dir);
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn partial_dir_keyed_by_content_hash() {
+        let pol = policy_with(tmp_dir(), 72);
+        let a = partial_dir_for(&pol, "W1AW", &[0xab; 32]);
+        let a2 = partial_dir_for(&pol, "W1AW", &[0xab; 32]);
+        let b = partial_dir_for(&pol, "W1AW", &[0xcd; 32]);
+        assert_eq!(a, a2, "same content resumes into the same dir");
+        assert_ne!(a, b, "different content keys a different dir");
+    }
+
+    #[test]
+    fn fresh_partial_survives_purge_and_ttl_zero_is_noop() {
+        let root = tmp_dir();
+        let pol = policy_with(root, 72);
+        let offer = offer_for(b"data", 1024);
+        let dir = partial_dir_for(&pol, "W1AW", &offer.sha256);
+        persist_block(&dir, 0, b"data");
+
+        purge_stale_partials(&pol, "W1AW");
+        assert!(dir.exists(), "a just-written partial is not stale");
+
+        let keep_forever = policy_with(pol.download_dir.clone(), 0);
+        purge_stale_partials(&keep_forever, "W1AW");
+        assert!(dir.exists(), "ttl 0 never purges");
+    }
+
+    #[test]
+    fn expected_block_len_last_block_is_short() {
+        let file = vec![0u8; 2500];
+        let offer = offer_for(&file, 1024);
+        assert_eq!(expected_block_len(&offer, 0), 1024);
+        assert_eq!(expected_block_len(&offer, 1), 1024);
+        assert_eq!(expected_block_len(&offer, 2), 452); // 2500 - 2048
+    }
 }
