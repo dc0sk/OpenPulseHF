@@ -2513,6 +2513,7 @@ mod command_apply_tests {
             require_verified_peer: true,
             allowed_peers: vec![],
             offer_timeout_secs: 120,
+            partial_ttl_hours: 72,
         });
         let mut rs = RuntimeControlState {
             verified_peer: Some(VerifiedPeer {
@@ -2594,6 +2595,7 @@ mod command_apply_tests {
             require_verified_peer: false,
             allowed_peers: vec![],
             offer_timeout_secs: 120,
+            partial_ttl_hours: 72,
         });
         let mut rs = RuntimeControlState {
             local_callsign: "N0CALL".into(),

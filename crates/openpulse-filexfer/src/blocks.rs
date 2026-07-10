@@ -146,6 +146,19 @@ impl BlockAssembler {
         }
     }
 
+    /// Seed an already-held block from a resumed transfer's on-disk partial, so it counts complete and
+    /// is included in [`reassemble`](Self::reassemble) without any fragment arriving for it.
+    pub fn seed_block(&mut self, block_index: u16, bytes: Vec<u8>) {
+        if block_index < self.block_count {
+            self.blocks.insert(block_index, bytes);
+        }
+    }
+
+    /// The unpacked bytes of a completed block, for persisting it as a resumable partial.
+    pub fn block(&self, block_index: u16) -> Option<&[u8]> {
+        self.blocks.get(&block_index).map(Vec::as_slice)
+    }
+
     /// Missing-fragment bitmap for `block_index` (bit set = not yet received) for a `BlockAck`. Empty
     /// when nothing has been seen for that block.
     pub fn missing_bitmap(&self, block_index: u16) -> Vec<u8> {
