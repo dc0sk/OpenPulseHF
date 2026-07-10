@@ -9,6 +9,24 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-10 — test(scfdma): ablate the moderate_f1 plateau — it's Doppler, not outage
+
+- **Requirement/change:** the OFDM-vs-SC-FDMA bake-off recorded SC-FDMA's flat ~0.35 `moderate_f1` decode as a
+  "structural delay-cliff / deep-fade outage." Fable flagged that a flat-across-SNR number is this repo's bug
+  signature and merits the ablation *before* it's written up as pure physics.
+- **Design decision:** apply the repo's "delete the mechanism" rule — remove the noise (60 dB) and freeze the
+  channel (0 Hz Doppler), and compare SC-FDMA against OFDM on the same `moderate_f1` fade draws (identical
+  CP/pilot geometry). If OFDM decodes noiselessly where SC-FDMA does not, the gap is the SC-FDE receiver, not an
+  erased-subcarrier information limit that would sink both.
+- **Implementation:** `crates/openpulse-modem/tests/scfdma_plateau_ablation.rs` (ignored; diagnostic).
+- **Test results (actually run, 60 draws, noiseless):** SCFDMA52-16QAM decodes **0.90 frozen** but **0.50 at
+  1 Hz Doppler**; OFDM52-16QAM **1.00** dynamic. SCFDMA52-8PSK 0.93 / 0.68; OFDM52-8PSK 0.95 / 1.00. **Verdict:**
+  the plateau is **intra-frame Doppler that SC-FDMA's per-frame Wiener CE + EMA smoothing cannot track**, not
+  outage — a recoverable SC-FDE *receiver* limit, and a mechanistic reason the OFDM re-seat wins (OFDM
+  re-estimates from pilots every symbol). Distinct from moderate_f2's 0.03 (the ±10-sample CE-reach
+  delay-cliff). SC-FDMA is retired from the ladder, so this is **recorded, not fixed**; it corrects the
+  "delay-cliff/outage" framing for moderate_f1 in the re-seat entry below.
+
 ## 2026-07-09 — feat(rate): multicarrier symbol-domain RX SNR (OFDM + SC-FDMA) — the ladder climbs to SL19
 
 - **Requirement/change:** PR-A gave the PSK rungs a calibrated SNR (escaping the M2M4 SL8 cap → ladder
