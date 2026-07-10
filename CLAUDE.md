@@ -477,9 +477,14 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | Benchmark 100% pass, mean_transitions ≤ 20 | `cargo test -p openpulse-modem --test benchmark_integration` |
 | Session persistence | `cargo test -p openpulse-cli --test local_state_integration` |
 | Block interleaver round-trip | `cargo test -p openpulse-core` (add test in `fec.rs`) |
-| Gilbert-Elliott mean burst length | `cargo test -p openpulse-channel` (add in `gilbert_elliott.rs`) |
-| Watterson fading envelope non-trivial | `cargo test -p openpulse-channel` (add in `watterson.rs`) |
+| Gilbert-Elliott bursts span whole symbols (mean 1/p_bg symbols) | `cargo test -p openpulse-channel --lib bursts_span_whole_symbols_with_mean_one_over_pbg` |
+| Watterson fading envelope non-trivial | `cargo test -p openpulse-channel` (`f1_envelope_has_non_trivial_variation` in `watterson.rs`) |
+| Watterson continuous fade correlates across `apply()` calls | `cargo test -p openpulse-channel --lib continuous_fade_correlates_across_calls` |
 | SC-FDMA channel estimator vs. selective channels | `cargo test -p openpulse-modem --test scfdma_ce_sweep -- --ignored` (before/after harness) |
+| SC-FDMA decodes a stronger delayed ray to a 2 ms (16-sample) spread inside the CP | `cargo test -p openpulse-modem --test scfdma_multipath_timing` |
+| Symbol-domain SNR tracks true SNR past M2M4's ~15 dB saturation | `cargo test -p openpulse-modem --test symbol_domain_snr` + `--test symbol_snr_ladder_climb` |
+| QPSK1000-HF-RRC forward-only LMS holds the good_f1 coded floor | `cargo test -p openpulse-modem --test qpsk_hf_rrc_forward_only` |
+| CI goodput regression gate (linksim effective_bps ≥ 65 % of baseline) | `cargo test -p openpulse-linksim goodput_gate` |
 | PTT assert/release ≤ 50 ms | `cargo test -p openpulse-radio` (add timing test in `noop.rs`) |
 | Periodic station ID at interval (REQ-REG-10) | `cargo test -p openpulse-core --lib station_id` + `cargo test -p openpulse-core --lib cw_id` + `cargo test -p openpulse-modem --test station_id_txcount` |
 | CI multi-platform green | ✅ Both jobs pass (PR #67 re-enabled) |
