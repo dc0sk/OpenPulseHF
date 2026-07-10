@@ -1,10 +1,14 @@
-//! Daemon-side file-transfer glue (FF-16): the receive session — policy, file I/O, quota, and
-//! driving [`openpulse_filexfer::ReceiverSession`] from inbound `OPFX` frames.
+//! Daemon-side file-transfer glue (FF-16): both directions — policy, file I/O, quota, and driving the
+//! [`openpulse_filexfer`] `ReceiverSession`/`SenderSession` state machines from control frames.
 //!
-//! `process_received_bytes` routes a reassembly here by SAR segment-id (0 → handshake, else → here,
-//! §6.2). Control frames (segment `0xFFFF`) are reassembled + decoded; block-data frames (segment
-//! `block_index + 1`) feed the active receive session's `BlockAssembler`. Send-side driving (the live
-//! PTT loop) lands in `server::run` (Phase C-3); this module owns everything that happens on receive.
+//! **Receive:** `process_received_bytes` routes a reassembly here by SAR segment-id (0 → handshake,
+//! else → here, §6.2). Control frames (segment `0xFFFF`) are reassembled + decoded; block-data frames
+//! (segment `block_index + 1`) feed the receive session's `BlockAssembler`.
+//!
+//! **Send:** the `SendFile` command builds a `SenderSession` and transmits the offer; the receiver's
+//! `FileAccept`/`BlockAck`/`FileComplete` control frames (which arrive on the same seam) drive the next
+//! block out. Delivery is event-reactive, so the loopback/twin path needs no separate tick loop;
+//! real-radio PTT burst sequencing is a `server::run` refinement layered on this.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -15,9 +19,9 @@ use openpulse_config::FileTransferConfig;
 use openpulse_core::manifest::{verify_manifest_with_payload, ManifestError, TransferManifest};
 use openpulse_core::sar::sar_encode;
 use openpulse_filexfer::{
-    decide, sanitize_filename, BlockAssembler, BlockEvent, CompleteStatus, FileOffer, FxAction,
-    FxFrame, OfferDecision, OfferPolicy, Outcome, Reason, ReceiverSession, Timeouts,
-    TransferResult,
+    decide, encode_block, sanitize_filename, BlockAssembler, BlockEvent, CompleteStatus, FileOffer,
+    FxAction, FxFrame, OfferDecision, OfferPolicy, Outcome, Reason, ReceiverSession, SenderSession,
+    Timeouts, TransferResult, DEFAULT_BLOCK_SIZE,
 };
 use openpulse_modem::ModemEngine;
 
@@ -87,6 +91,25 @@ pub struct FxRxState {
     file_received_emitted: bool,
 }
 
+/// Active send-side session context (one transfer per link in v1).
+pub struct FxTxState {
+    sender: SenderSession,
+    file: Vec<u8>,
+    offer: FileOffer,
+    to: String,
+}
+
+impl FxTxState {
+    /// The transfer's random id.
+    pub fn transfer_id(&self) -> u32 {
+        self.offer.transfer_id
+    }
+    /// Number of blocks the file splits into.
+    pub fn block_count(&self) -> u16 {
+        self.offer.block_count
+    }
+}
+
 /// Route one inbound SAR fragment on the file-transfer path (segment-id ≠ 0).
 pub fn route_inbound_fragment(
     bytes: &[u8],
@@ -108,8 +131,18 @@ pub fn route_inbound_fragment(
             Ok(FxFrame::FileCancel {
                 transfer_id,
                 reason,
-            }) => on_inbound_cancel(transfer_id, reason, runtime_state, event_tx),
-            // FileAccept / BlockAck / FileComplete are for the SEND side (Phase C-3); ignored here.
+            }) => {
+                // A cancel can target either the inbound (receive) or outbound (send) session.
+                on_inbound_cancel(transfer_id, reason, runtime_state, event_tx);
+                on_tx_cancel(transfer_id, reason, runtime_state, event_tx);
+            }
+            // Receiver → sender control drives the active send session.
+            Ok(
+                frame @ (FxFrame::FileAccept { .. }
+                | FxFrame::BlockAck { .. }
+                | FxFrame::FileComplete { .. }
+                | FxFrame::FileReject { .. }),
+            ) => on_tx_frame(frame, runtime_state, event_tx, mode, engine),
             Ok(_) => {}
             Err(e) => tracing::debug!(error = %e, "filexfer: control frame decode failed"),
         }
@@ -258,6 +291,186 @@ fn on_inbound_cancel(
             direction: "rx".into(),
             reason: format!("{reason:?}"),
         });
+    }
+}
+
+// ── send side ───────────────────────────────────────────────────────────────
+
+/// Start sending a daemon-host-local file to `to` (the `SendFile` command). Reads + size-checks the
+/// file, signs its manifest with the station key, builds the `SenderSession`, and transmits the offer.
+pub fn send_file(
+    to: &str,
+    path: &str,
+    rs: &mut RuntimeControlState,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+    mode: &str,
+    engine: &mut ModemEngine,
+) {
+    let fail = |reason: String| {
+        let _ = event_tx.send(ControlEvent::CommandError {
+            command: "send_file".into(),
+            reason,
+        });
+    };
+    if rs.file_tx.is_some() || rs.file_rx.is_some() {
+        return fail("a file transfer is already active".into());
+    }
+    let file = match std::fs::read(path) {
+        Ok(f) => f,
+        Err(e) => return fail(format!("cannot read '{path}': {e}")),
+    };
+    if file.len() as u64 > rs.filexfer_policy.offer.max_file_bytes {
+        return fail(format!(
+            "file is {} bytes, over max_file_bytes {}",
+            file.len(),
+            rs.filexfer_policy.offer.max_file_bytes
+        ));
+    }
+    let manifest = match TransferManifest::sign(&file, &rs.local_callsign, &rs.station_seed) {
+        Ok(m) => m,
+        Err(_) => return fail("failed to sign the transfer manifest".into()),
+    };
+    let name = std::path::Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file.bin".into());
+    let transfer_id = (now_ms() as u32) ^ 0x5f5f_5f5f;
+    let offer = match FileOffer::from_manifest(
+        transfer_id,
+        &manifest,
+        &name,
+        "application/octet-stream",
+        DEFAULT_BLOCK_SIZE,
+    ) {
+        Some(o) => o,
+        None => return fail("could not build the offer (file too large?)".into()),
+    };
+    let (sender, actions) =
+        SenderSession::new(offer.clone(), rs.filexfer_policy.timeouts, now_ms());
+    let mut fx = FxTxState {
+        sender,
+        file,
+        offer,
+        to: to.to_string(),
+    };
+    drive_tx_actions(&mut fx, actions, event_tx, mode, engine);
+    if !fx.sender.is_terminal() {
+        rs.file_tx = Some(fx);
+    }
+}
+
+/// Drive the active send session with an inbound receiver → sender frame (`FileAccept`/`BlockAck`/
+/// `FileComplete`/`FileReject`).
+fn on_tx_frame(
+    frame: FxFrame,
+    rs: &mut RuntimeControlState,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+    mode: &str,
+    engine: &mut ModemEngine,
+) {
+    let Some(mut fx) = rs.file_tx.take() else {
+        return;
+    };
+    if frame.transfer_id() == fx.offer.transfer_id {
+        let actions = fx.sender.apply(&frame, now_ms());
+        drive_tx_actions(&mut fx, actions, event_tx, mode, engine);
+    }
+    if !fx.sender.is_terminal() {
+        rs.file_tx = Some(fx);
+    }
+}
+
+fn on_tx_cancel(
+    transfer_id: u32,
+    reason: Reason,
+    rs: &mut RuntimeControlState,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+) {
+    if rs.file_tx.as_ref().map(|fx| fx.offer.transfer_id) == Some(transfer_id) {
+        rs.file_tx = None;
+        let _ = event_tx.send(ControlEvent::FileFailed {
+            transfer_id,
+            direction: "tx".into(),
+            reason: format!("{reason:?}"),
+        });
+    }
+}
+
+/// Execute the `FxAction`s a send session emits: transmit control frames and data blocks, report
+/// progress, and emit the terminal `FileSent`/`FileFailed` event.
+fn drive_tx_actions(
+    fx: &mut FxTxState,
+    actions: Vec<FxAction>,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+    mode: &str,
+    engine: &mut ModemEngine,
+) {
+    for action in actions {
+        match action {
+            FxAction::Transmit(frame) => transmit_ctrl(engine, mode, &frame),
+            FxAction::SendBlock {
+                block_index,
+                missing,
+            } => {
+                let bs = fx.offer.block_size as usize;
+                let start = (block_index as usize).saturating_mul(bs).min(fx.file.len());
+                let end = start.saturating_add(bs).min(fx.file.len());
+                match encode_block(
+                    fx.offer.transfer_id,
+                    block_index,
+                    &fx.file[start..end],
+                    missing.as_deref(),
+                ) {
+                    Ok(fragments) => {
+                        for frag in fragments {
+                            if let Err(e) = engine.transmit(&frag, mode, None) {
+                                tracing::warn!(error = %e, "filexfer: block fragment transmit failed");
+                            }
+                        }
+                    }
+                    Err(e) => tracing::warn!(error = %e, "filexfer: block encode failed"),
+                }
+            }
+            FxAction::Progress {
+                transfer_id,
+                blocks_done,
+                blocks_total,
+            } => {
+                let _ = event_tx.send(ControlEvent::FileProgress {
+                    transfer_id,
+                    direction: "tx".into(),
+                    name: fx.offer.name.clone(),
+                    blocks_done,
+                    blocks_total,
+                    bytes_done: block_bytes(&fx.offer, blocks_done),
+                    bytes_total: fx.offer.file_size,
+                });
+            }
+            FxAction::Finished(Outcome {
+                transfer_id,
+                result,
+            }) => match result {
+                TransferResult::Sent { peer_verified } => {
+                    let _ = event_tx.send(ControlEvent::FileSent {
+                        transfer_id,
+                        to: fx.to.clone(),
+                        name: fx.offer.name.clone(),
+                        receipt_valid: Some(peer_verified),
+                    });
+                }
+                TransferResult::Rejected { reason }
+                | TransferResult::Cancelled { reason }
+                | TransferResult::Failed { reason } => {
+                    let _ = event_tx.send(ControlEvent::FileFailed {
+                        transfer_id,
+                        direction: "tx".into(),
+                        reason: format!("{reason:?}"),
+                    });
+                }
+                TransferResult::Received { .. } => {}
+            },
+            FxAction::Verify { .. } | FxAction::Prompt { .. } => {}
+        }
     }
 }
 
