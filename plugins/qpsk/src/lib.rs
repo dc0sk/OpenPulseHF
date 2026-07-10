@@ -584,13 +584,11 @@ mod tests {
         );
     }
 
-    /// Measure BER improvement from HF-optimized profile on moderate-f1 channel.
-    ///
-    /// This test compares the baseline profile (fwd=7, dfe=0) against the
-    /// HF-tuned profile (fwd=9, dfe=2) on QPSK1000-HF under identical Watterson
-    /// Moderate F1 conditions. Used to assess profile tuning effectiveness.
+    /// Smoke test: QPSK1000-HF (forward-only LMS, no DFE) still produces *some* correct bits on a
+    /// Watterson Moderate-F1 realisation. (The DFE-vs-forward-only comparison that motivated the profile
+    /// now lives coded in `openpulse-modem/tests/qpsk_hf_rrc_forward_only.rs`; forward-only won on fading.)
     #[test]
-    fn qpsk1000_hf_profile_comparative_ber_on_moderate_f1() {
+    fn qpsk1000_hf_decodes_some_bits_on_moderate_f1() {
         use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
         let plugin = QpskPlugin::new();
         let cfg = ModulationConfig {
