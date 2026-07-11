@@ -9,6 +9,20 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(config): FF-15 Phase F-2 — rendezvous working-channel table
+
+- **Requirement/change:** a `Propose` carries channel **indices**, not Hz (F-1) — so both stations need
+  a shared per-band index→frequency table. Add it to config with sensible defaults.
+- **Design decision:** `DiscoveryConfig.rendezvous_channels_hz: BTreeMap<String, Vec<u64>>` (band label →
+  ordered working frequencies; the `Vec` position is the on-air channel index). `rendezvous_channel_hz(band,
+  index)` resolves it. Defaults sit in each band's data/ARQ segment, clear of the JS8 calling frequency.
+  Bandplan validation of these entries lands at daemon startup in F-3 (config has no `openpulse-qsy` dep).
+- **Implementation:** `crates/openpulse-config/src/lib.rs` — field, `Default`, template `[discovery.
+  rendezvous_channels_hz]`, `rendezvous_channel_hz()` resolver.
+- **Tests:** `discovery_defaults_are_opt_in_and_rx_only` extended — index-in-range, out-of-range → `None`,
+  unknown-band → `None`, and the template round-trips the table.
+- **Test results:** `cargo test -p openpulse-config --lib --no-default-features` → 16 passed; clippy clean.
+
 ## 2026-07-11 — feat(discovery): FF-15 Phase F-1 — rendezvous protocol (codec + session)
 
 - **Requirement/change:** with discovery + beacon TX done, start Phase F — negotiate a working
