@@ -88,6 +88,22 @@ pub struct DiscoveryConfig {
     /// JS8 calling frequency (Hz) per band label (`"20m"` → 14 078 000). Dwell uses the entry for the
     /// current home band.
     pub calling_freqs_hz: BTreeMap<String, u64>,
+    /// Rendezvous working-channel table (Hz) per band label. A rendezvous `Propose` carries **indices**
+    /// into the current band's list (position `0` = first entry), so both stations resolve the same Hz
+    /// without spelling out frequencies on-air. The daemon validates each entry against the bandplan at
+    /// startup. See `docs/dev/design/js8-discovery-rendezvous-plan.md` §5.3.
+    pub rendezvous_channels_hz: BTreeMap<String, Vec<u64>>,
+}
+
+impl DiscoveryConfig {
+    /// Resolve a rendezvous channel **index** for `band` to its Hz frequency, or `None` if the band is
+    /// absent or the index is out of range.
+    pub fn rendezvous_channel_hz(&self, band: &str, index: u8) -> Option<u64> {
+        self.rendezvous_channels_hz
+            .get(band)
+            .and_then(|chans| chans.get(index as usize))
+            .copied()
+    }
 }
 
 impl Default for DiscoveryConfig {
@@ -106,6 +122,23 @@ impl Default for DiscoveryConfig {
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))
         .collect();
+        // Working channels for the post-rendezvous QSY, in each band's data/ARQ segment and clear of
+        // the JS8 calling frequency. Operators tune these to local usage; the bandplan gate warns on
+        // anything questionable at startup.
+        let rendezvous_channels_hz = [
+            ("160m", vec![1_843_000, 1_844_000, 1_845_000]),
+            ("80m", vec![3_583_000, 3_585_000, 3_587_000]),
+            ("40m", vec![7_101_000, 7_103_000, 7_105_000]),
+            ("30m", vec![10_142_000, 10_143_000, 10_144_000]),
+            ("20m", vec![14_101_000, 14_103_000, 14_105_000]),
+            ("17m", vec![18_106_000, 18_107_000, 18_108_000]),
+            ("15m", vec![21_101_000, 21_103_000, 21_105_000]),
+            ("12m", vec![24_926_000, 24_927_000, 24_928_000]),
+            ("10m", vec![28_121_000, 28_123_000, 28_125_000]),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
         Self {
             enabled: false,
             mode: "rx_only".into(),
@@ -120,6 +153,7 @@ impl Default for DiscoveryConfig {
             max_clock_skew_ms: 2000,
             group: "OPULSE".into(),
             calling_freqs_hz,
+            rendezvous_channels_hz,
         }
     }
 }
@@ -1175,6 +1209,19 @@ group = "OPULSE"
 "15m" = 21078000
 "12m" = 24922000
 "10m" = 28078000
+# Rendezvous working channels (Hz) per band, in the data/ARQ segment and clear of the JS8 calling
+# frequency. A Propose carries INDICES into the current band's list (0 = first), so both stations
+# resolve the same Hz without spelling it on-air. The daemon bandplan-checks these at startup.
+[discovery.rendezvous_channels_hz]
+"160m" = [1843000, 1844000, 1845000]
+"80m" = [3583000, 3585000, 3587000]
+"40m" = [7101000, 7103000, 7105000]
+"30m" = [10142000, 10143000, 10144000]
+"20m" = [14101000, 14103000, 14105000]
+"17m" = [18106000, 18107000, 18108000]
+"15m" = [21101000, 21103000, 21105000]
+"12m" = [24926000, 24927000, 24928000]
+"10m" = [28121000, 28123000, 28125000]
 "#
     .to_string()
 }
@@ -1338,6 +1385,19 @@ mod tests {
         assert_eq!(
             parsed.discovery.calling_freqs_hz.get("40m"),
             Some(&7_078_000)
+        );
+        // Rendezvous channel table: index resolution, and the template carries it too.
+        assert_eq!(d.rendezvous_channel_hz("20m", 0), Some(14_101_000));
+        assert_eq!(d.rendezvous_channel_hz("20m", 2), Some(14_105_000));
+        assert_eq!(
+            d.rendezvous_channel_hz("20m", 9),
+            None,
+            "index out of range"
+        );
+        assert_eq!(d.rendezvous_channel_hz("nosuch", 0), None, "unknown band");
+        assert_eq!(
+            parsed.discovery.rendezvous_channel_hz("40m", 1),
+            Some(7_103_000)
         );
     }
 
