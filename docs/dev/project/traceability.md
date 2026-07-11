@@ -9,6 +9,23 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — test(discovery): FF-15 Phase F-3c-iv — two-runtime end-to-end rendezvous
+
+- **Requirement/change:** an acceptance test that two independent stations actually reach a rendezvous
+  over the air, not just each seam in isolation.
+- **Design decision:** a real-time twin daemon would take minutes (JS8's 15 s UTC slots × the Propose +
+  Accept + switch overs), so `crates/openpulse-discovery/tests/rendezvous_end_to_end.rs` instead shuttles
+  the **actual GFSK audio** each `DiscoveryRuntime` transmits into the other's capture buffer under a
+  manual clock: initiator `Propose` over → responder decodes + agrees → responder `Accept` over →
+  initiator decodes + agrees, on the same channel index. Exercises the full stack (initiator session ↔
+  directed TX framing ↔ GFSK modem ↔ RX reassembler ↔ responder decision) across two instances.
+- **Implementation:** `crates/openpulse-discovery/tests/rendezvous_end_to_end.rs`.
+- **Tests:** happy path (both agree on channel 1; initiator session concludes); no-common-channel path
+  (responder does not agree, sends a Reject over, initiator surfaces `RendezvousRejected`).
+- **Test results:** `cargo test -p openpulse-discovery --no-default-features --test rendezvous_end_to_end`
+  → 2 passed; clippy clean. **Phase F (rendezvous → handoff) is functionally complete**; only on-air
+  validation (Phase H) remains, environment-gated.
+
 ## 2026-07-11 — feat(daemon): FF-15 Phase F-3c-iii — rendezvous QSY + CONREQ handoff
 
 - **Requirement/change:** complete the rendezvous flow — after an agreement, both stations QSY to the
