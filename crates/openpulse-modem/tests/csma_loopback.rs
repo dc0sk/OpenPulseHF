@@ -93,3 +93,22 @@ fn two_station_scenario_second_defers_on_dcd() {
         "station B must defer while channel is busy"
     );
 }
+
+/// Regression (G-1): mesh/beacon broadcast must also defer on a busy channel — it previously
+/// emitted with no CSMA check, keying up over an occupied channel.
+#[test]
+fn csma_blocks_broadcast_when_dcd_busy() {
+    let mut engine = make_engine();
+
+    // Make the channel busy, then enable CSMA.
+    engine.transmit(b"remote", "BPSK250", None).unwrap();
+    let _ = engine.receive("BPSK250", None).unwrap();
+    assert!(engine.is_channel_busy());
+    engine.enable_csma();
+
+    let result = engine.broadcast(b"beacon", "BPSK250", 3, None);
+    assert!(
+        matches!(result, Err(ModemError::ChannelBusy)),
+        "CSMA must block broadcast on a busy channel, got: {result:?}"
+    );
+}

@@ -9,6 +9,22 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — fix(modem): CSMA gate on broadcast() (audit finding G-1)
+
+- **Requirement/change:** the FF-audit found `ModemEngine::broadcast()` emitting with no
+  `csma_check()` — with CSMA enabled, mesh/beacon broadcast frames keyed up on a busy channel
+  (reachable from the CLI `broadcast`/`beacon` commands). A live instance of the "wired at callers,
+  not the shared seam" bug class.
+- **Design decision:** call `csma_check()` at the head of `broadcast()` (pre-encode, before
+  incrementing the broadcast sequence — matching every other TX path's rationale of not burning a
+  sequence number on deferral). Also corrected the stale CLAUDE.md §2.4 claim that the CSMA check
+  lives "in `stage_emit_output()` (all transmit paths)".
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`broadcast()` + comment); `CLAUDE.md`.
+- **Tests:** `crates/openpulse-modem/tests/csma_loopback.rs::csma_blocks_broadcast_when_dcd_busy`
+  (fails without the fix — broadcast would emit).
+- **Test results:** `cargo test -p openpulse-modem --no-default-features --test csma_loopback` →
+  5 passed; mesh 8 passed; fmt + clippy (`-D warnings`) clean.
+
 ## 2026-07-11 — feat(js8): FF-15 — JSC codebook decode (general JS8 free text)
 
 - **Requirement/change:** the free-text decoder handled only Huffman data frames; JSC-compressed

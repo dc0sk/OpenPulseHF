@@ -2998,6 +2998,9 @@ impl ModemEngine {
         ttl: u8,
         device: Option<&str>,
     ) -> Result<(), ModemError> {
+        // Defer on a busy channel before burning a sequence number (matches every other TX path).
+        self.csma_check()?;
+
         let seq = self.broadcast_seq;
         self.broadcast_seq = self.broadcast_seq.wrapping_add(1);
 
