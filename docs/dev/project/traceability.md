@@ -9,6 +9,26 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — test: module coverage — profile/fading/pq/panel + pki honesty (audit H3/H4/H8/H9/H10)
+
+- **Requirement/change:** several sizeable modules had no inline tests: `profile.rs` (ladders),
+  `fading.rs` (Doppler/analytic primitives — the Watterson-bug area), `pq_handshake.rs` (error
+  branches), panel `app.rs` (the Message→ControlCommand action layer); and the pki API tests reported
+  green without a DB (inflated coverage).
+- **Design decision:** add behavioral tests, not smoke tests. Profile: a cross-crate test that
+  registers all plugins and asserts every ladder rung resolves (catches a mode-string typo — the
+  `#444→#445` regression class). Fading: `analytic_signal` holds a constant envelope + recovers the
+  real part (the property the Watterson quadrature fix relies on), and `doppler_envelope` is
+  power-normalised + varies. PQ: decode entry points return `SerializationError` (not panic) on
+  malformed bytes. Panel: inject a command channel, assert UI actions dispatch the right commands.
+  PKI: make the DB-gated skip unmistakable + document that a green run without the DB is not coverage.
+- **Implementation:** `crates/openpulse-modem/tests/profile_modes_resolve.rs`;
+  `crates/openpulse-channel/src/fading.rs` (inline tests); `crates/openpulse-core/src/pq_handshake.rs`
+  (inline tests); `apps/openpulse-panel/src/app.rs` (inline dispatch test);
+  `pki-tooling/tests/api_flow.rs` (module doc + skip message).
+- **Tests:** the 5 new tests above.
+- **Test results:** modem/channel/core/panel suites green; fmt + clippy (`-D warnings`) clean.
+
 ## 2026-07-11 — test(daemon): control-command handler dispatch tests (audit H1)
 
 - **Requirement/change:** ~22 of 39 `ControlCommand` handlers were never dispatched in any test — the

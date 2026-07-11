@@ -193,3 +193,54 @@ pub(crate) fn analytic_signal(planner: &mut FftPlanner<f32>, x: &[f32]) -> Vec<C
     }
     buf
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::SeedableRng;
+
+    /// Audit H8: `analytic_signal` must reproduce the real input and hold a constant envelope for a
+    /// pure tone — the property the Watterson quadrature fix (Re{analytic(s)·h}) depends on.
+    #[test]
+    fn analytic_signal_of_a_cosine_has_constant_envelope_and_recovers_the_real_part() {
+        let n = 512;
+        let f = 8.0; // cycles over the window
+        let x: Vec<f32> = (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * f * i as f32 / n as f32).cos())
+            .collect();
+        let mut planner = FftPlanner::<f32>::new();
+        let a = analytic_signal(&mut planner, &x);
+
+        // Interior samples (avoid FFT edge ringing): Re{analytic} ≈ input, |analytic| ≈ amplitude 1.
+        for i in n / 8..n - n / 8 {
+            assert!((a[i].re - x[i]).abs() < 1e-2, "re mismatch at {i}");
+            assert!((a[i].norm() - 1.0).abs() < 5e-2, "envelope not ~1 at {i}");
+        }
+    }
+
+    /// A generated Doppler envelope must be power-normalised (~unit mean power) and non-trivially
+    /// time-varying — a flat or zero envelope is the "multipath improves decode" model-bug signature.
+    #[test]
+    fn doppler_envelope_is_power_normalised_and_varies() {
+        let mut rng = StdRng::seed_from_u64(1);
+        let mut planner = FftPlanner::<f32>::new();
+        let n = 8192;
+        let env = doppler_envelope(&mut rng, &mut planner, n, 1.0, 8000);
+        assert_eq!(env.len(), n);
+
+        let mean_power: f32 = env.iter().map(|c| c.norm_sqr()).sum::<f32>() / n as f32;
+        assert!(
+            (0.5..2.0).contains(&mean_power),
+            "mean power {mean_power} should be ~1 (normalised)"
+        );
+
+        let mags: Vec<f32> = env.iter().map(|c| c.norm()).collect();
+        let max = mags.iter().cloned().fold(0.0f32, f32::max);
+        let min = mags.iter().cloned().fold(f32::MAX, f32::min);
+        assert!(
+            max - min > 0.05,
+            "envelope is essentially flat (span {})",
+            max - min
+        );
+    }
+}
