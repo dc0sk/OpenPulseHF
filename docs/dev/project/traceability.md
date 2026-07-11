@@ -9,6 +9,25 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — test/fix: PTT-backend tests, 32APSK calibration gate, discovery-mode warning (H2/H7/G-4)
+
+- **Requirement/change:** H2 — the hardware PTT backends (`VoxPtt`, `RigctldPtt`) that key a real
+  transmitter had no test; the ≤50 ms gate only covered `NoOpPtt`. H7 — `PILOT-32APSK` (densest pilot
+  mode, the regression canary) was absent from the LLR-calibration gate. G-4 — `[discovery] mode` was
+  documented but silently ignored (only `rx_only` is honored today).
+- **Design decision:** add a `RigctldPtt` assert/release + error-response test against the existing
+  mock rigctld, and a `VoxPtt` state + ≤50 ms test; add `PILOT-32APSK500` to `llr_calibration` with a
+  conservative ≥1.5× floor; warn at daemon startup when a non-`rx_only` discovery mode is set and mark
+  the config field reserved-for-Phase-E. (`SerialRtsDtrPtt` still needs a pty to test meaningfully —
+  left as a known gap.)
+- **Implementation:** `crates/openpulse-radio/tests/rigctld_integration.rs`,
+  `crates/openpulse-radio/src/vox.rs`; `crates/openpulse-modem/tests/llr_calibration.rs`;
+  `crates/openpulse-daemon/src/server.rs` (`build_discovery_runtime` warn);
+  `crates/openpulse-config/src/lib.rs` (field doc).
+- **Tests:** `rigctld_ptt_backend_asserts_and_releases`, `rigctld_ptt_surfaces_error_response`,
+  `vox::tests::vox_assert_release_tracks_state_under_50ms`, `llr_calibration` now 7 modes.
+- **Test results:** radio + config + modem llr suites green; fmt + clippy (`-D warnings`) clean.
+
 ## 2026-07-11 — feat(daemon/cli): implement ListFiles + file-transfer CLI (audit S4-1/S4-2)
 
 - **Requirement/change:** S4-1 — `ControlCommand::ListFiles` was declared with a documented

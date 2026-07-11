@@ -33,3 +33,24 @@ impl PttController for VoxPtt {
         self.asserted
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    #[test]
+    fn vox_assert_release_tracks_state_under_50ms() {
+        let mut ptt = VoxPtt::new();
+        assert!(!ptt.is_asserted());
+        let t = Instant::now();
+        ptt.assert_ptt().unwrap();
+        assert!(ptt.is_asserted());
+        ptt.release_ptt().unwrap();
+        assert!(!ptt.is_asserted());
+        assert!(
+            t.elapsed().as_millis() <= 50,
+            "VOX PTT toggle must be ≤50 ms"
+        );
+    }
+}

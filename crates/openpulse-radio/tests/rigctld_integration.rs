@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-use openpulse_radio::{PttController, RigMode, RigctldController};
+use openpulse_radio::{PttController, RigMode, RigctldController, RigctldPtt};
 
 fn spawn_mock_rigctld() -> (String, Arc<AtomicU64>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock rigctld");
@@ -149,4 +149,41 @@ fn ptt_via_controller() {
     assert!(ctl.is_asserted());
     ctl.release_ptt().expect("release ptt");
     assert!(!ctl.is_asserted());
+}
+
+/// Coverage (audit H2): the RigctldPtt PTT-only backend — the struct that keys a real rig via
+/// rigctld — drives assert/release against the mock and tracks state.
+#[test]
+fn rigctld_ptt_backend_asserts_and_releases() {
+    let (addr, _store) = spawn_mock_rigctld();
+    let mut ptt = RigctldPtt::connect(&addr).expect("connect rigctld ptt");
+    assert!(!ptt.is_asserted());
+    ptt.assert_ptt().expect("assert (sends T 1)");
+    assert!(ptt.is_asserted());
+    ptt.release_ptt().expect("release (sends T 0)");
+    assert!(!ptt.is_asserted());
+}
+
+/// A rigctld that reports an error response must surface it, not silently key.
+#[test]
+fn rigctld_ptt_surfaces_error_response() {
+    // A listener that answers every command with an error keeps the connect handshake-free.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr").to_string();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let stream = stream.expect("accept");
+            let mut w = stream.try_clone().expect("clone");
+            let r = BufReader::new(stream);
+            for line in r.lines() {
+                if line.is_err() {
+                    break;
+                }
+                writeln!(w, "RPRT -1").ok();
+            }
+        }
+    });
+    let mut ptt = RigctldPtt::connect(&addr).expect("connect");
+    assert!(ptt.assert_ptt().is_err(), "error response must not key");
+    assert!(!ptt.is_asserted());
 }

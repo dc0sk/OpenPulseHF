@@ -65,7 +65,7 @@ fn every_soft_demodulator_emits_llrs_that_grow_with_snr() {
     // separate from noise: BPSK's differential quadrature cancels the symbol amplitude exactly;
     // 64QAM's decision-directed variance saturates; QPSK/8PSK are dominated above ~12 dB by a
     // receiver-internal residual (see `docs/dev/research/scfdma-improvements.md`, item 10).
-    let cases: [(&str, Box<dyn ModulationPlugin>, f32); 6] = [
+    let cases: [(&str, Box<dyn ModulationPlugin>, f32); 7] = [
         ("BPSK250", Box::new(bpsk_plugin::BpskPlugin::new()), 8.0),
         ("QPSK250", Box::new(qpsk_plugin::QpskPlugin::new()), 1.1),
         ("8PSK500", Box::new(psk8_plugin::Psk8Plugin::new()), 1.4),
@@ -79,6 +79,12 @@ fn every_soft_demodulator_emits_llrs_that_grow_with_snr() {
             "PILOT-16QAM500",
             Box::new(pilot_plugin::PilotPlugin::new()),
             2.0,
+        ),
+        // 32APSK (DVB-S2) is the densest pilot mode — the regression canary (audit H7).
+        (
+            "PILOT-32APSK500",
+            Box::new(pilot_plugin::PilotPlugin::new()),
+            1.5,
         ),
     ];
 
