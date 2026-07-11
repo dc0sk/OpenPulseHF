@@ -9,6 +9,23 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — test(daemon): control-command handler dispatch tests (audit H1)
+
+- **Requirement/change:** ~22 of 39 `ControlCommand` handlers were never dispatched in any test — the
+  daemon's operator control surface. Highest-risk were the cross-cutting RX/TX front-end toggles
+  (`SetNotch`/`SetAgc`/`SetCessb`) whose seam-gaps are exactly what the CLAUDE.md warnings target.
+- **Design decision:** add dispatch tests through the real `apply_command_to_engine` that assert the
+  observable effect (engine state / emitted event), not just serde round-trips, for the hot-spot arms.
+- **Implementation:** `crates/openpulse-daemon/src/lib.rs` `command_apply_tests` — `apply` helper +
+  `front_end_toggle_commands_reach_the_engine` (notch/agc/cessb flip engine state),
+  `set_dcd_squelch_rejects_invalid_threshold` (CommandError path), `ptt_commands_track_state_and_emit_changed`,
+  `ota_set_level_bounds_emits_status`. (With the earlier `list_files` + discovery + OTA
+  lock/hysteresis/aggressiveness tests, the handler hot spots are now covered; remaining untested arms
+  — file accept/reject/cancel dispatch, needing an active transfer — are lower value.)
+- **Tests:** the four new tests above.
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features command_apply_tests` →
+  38 passed; fmt + clippy (`-D warnings`) clean.
+
 ## 2026-07-11 — docs: §97.221 automatic-control compliance design (audit G-3 / REQ-REG-04)
 
 - **Requirement/change:** REQ-REG-04 (§97.221 automatic-control documentation) was an open ⚠ gap and

@@ -2337,6 +2337,167 @@ mod command_apply_tests {
         }
     }
 
+    async fn apply(
+        cmd: ControlCommand,
+        engine: &mut ModemEngine,
+        rs: &mut RuntimeControlState,
+        ev: &Arc<broadcast::Sender<ControlEvent>>,
+    ) {
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        apply_command_to_engine(&cmd, engine, &active_mode, ev, None, rs).await;
+    }
+
+    #[tokio::test]
+    async fn front_end_toggle_commands_reach_the_engine() {
+        // SetNotch/SetAgc/SetCessb are the cross-cutting RX/TX front-end toggles (audit H1) — assert
+        // each dispatch actually flips the engine state, not just serde-parses.
+        let mut engine = test_engine();
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+        let mut rs = RuntimeControlState::default();
+
+        apply(
+            ControlCommand::SetNotch { enabled: true },
+            &mut engine,
+            &mut rs,
+            &ev,
+        )
+        .await;
+        assert!(engine.is_notch_enabled());
+        apply(
+            ControlCommand::SetNotch { enabled: false },
+            &mut engine,
+            &mut rs,
+            &ev,
+        )
+        .await;
+        assert!(!engine.is_notch_enabled());
+
+        apply(
+            ControlCommand::SetAgc { enabled: true },
+            &mut engine,
+            &mut rs,
+            &ev,
+        )
+        .await;
+        assert!(engine.is_agc_enabled());
+        apply(
+            ControlCommand::SetAgc { enabled: false },
+            &mut engine,
+            &mut rs,
+            &ev,
+        )
+        .await;
+        assert!(!engine.is_agc_enabled());
+
+        apply(
+            ControlCommand::SetCessb { enabled: true },
+            &mut engine,
+            &mut rs,
+            &ev,
+        )
+        .await;
+        assert!(engine.cessb_enabled());
+        apply(
+            ControlCommand::SetCessb { enabled: false },
+            &mut engine,
+            &mut rs,
+            &ev,
+        )
+        .await;
+        assert!(!engine.cessb_enabled());
+    }
+
+    #[tokio::test]
+    async fn set_dcd_squelch_rejects_invalid_threshold() {
+        let mut engine = test_engine();
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+        let mut rs = RuntimeControlState::default();
+
+        apply(
+            ControlCommand::SetDcdSquelch { threshold: 0.05 },
+            &mut engine,
+            &mut rs,
+            &ev,
+        )
+        .await;
+        apply(
+            ControlCommand::SetDcdSquelch { threshold: -1.0 },
+            &mut engine,
+            &mut rs,
+            &ev,
+        )
+        .await;
+
+        let mut error_for = None;
+        while let Ok(e) = rx.try_recv() {
+            if let ControlEvent::CommandError { command, .. } = e {
+                error_for = Some(command);
+            }
+        }
+        assert_eq!(error_for.as_deref(), Some("set_dcd_squelch"));
+    }
+
+    #[tokio::test]
+    async fn ptt_commands_track_state_and_emit_changed() {
+        let mut engine = test_engine();
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+        let mut rs = RuntimeControlState::default();
+
+        apply(ControlCommand::PttAssert, &mut engine, &mut rs, &ev).await;
+        assert!(rs.ptt_asserted_at.is_some());
+        apply(ControlCommand::PttRelease, &mut engine, &mut rs, &ev).await;
+        assert!(rs.ptt_asserted_at.is_none());
+
+        let mut states = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            if let ControlEvent::PttChanged { active } = e {
+                states.push(active);
+            }
+        }
+        assert_eq!(states, vec![true, false]);
+    }
+
+    #[tokio::test]
+    async fn ota_set_level_bounds_emits_status() {
+        let mut engine = test_engine();
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+        let mut rs = RuntimeControlState::default();
+
+        apply(
+            ControlCommand::StartOtaSession {
+                profile: "hpx500".into(),
+            },
+            &mut engine,
+            &mut rs,
+            &ev,
+        )
+        .await;
+        while rx.try_recv().is_ok() {} // drain the start status
+
+        apply(
+            ControlCommand::OtaSetLevelBounds {
+                min_level: Some("SL3".into()),
+                max_level: Some("SL8".into()),
+            },
+            &mut engine,
+            &mut rs,
+            &ev,
+        )
+        .await;
+
+        let mut got_status = false;
+        while let Ok(e) = rx.try_recv() {
+            if matches!(e, ControlEvent::OtaStatus { .. }) {
+                got_status = true;
+            }
+        }
+        assert!(got_status, "OtaSetLevelBounds must emit an OtaStatus");
+    }
+
     #[tokio::test]
     async fn ota_commands_start_lock_and_report_status() {
         let mut engine = test_engine();
