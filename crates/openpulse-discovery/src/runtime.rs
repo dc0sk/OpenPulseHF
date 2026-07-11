@@ -94,6 +94,13 @@ impl DiscoveryRuntime {
         self.params.calling_freq_hz
     }
 
+    /// Set the JS8 calling frequency to dwell on (Hz). The daemon updates this from the operator's
+    /// current home band before each activation, so discovery tunes to the band-appropriate calling
+    /// channel; it takes effect on the next `Retune` outcome.
+    pub fn set_dial_freq_hz(&mut self, hz: u64) {
+        self.params.calling_freq_hz = hz;
+    }
+
     /// Current UTC clock drift-bias estimate (ms).
     pub fn drift_bias_ms(&self) -> i64 {
         self.clock.drift_bias_ms()
