@@ -9,6 +9,28 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(config): FF-15 Phase D-5a — `[discovery]` config section
+
+- **Requirement/change:** FF-15 Phase D (plan §8): the operator-facing `[discovery]` config that turns JS8
+  discovery on and parameterizes it — the scaffolding the daemon glue reads.
+- **Design decision:** add `DiscoveryConfig` following the `FileTransferConfig`/`LogbookConfig` pattern
+  (struct-level `#[serde(default)]`, manual `Default`, opt-in `enabled = false`, template block in
+  `init_template()` kept parseable under the guard test). Fields: `enabled`, `mode` (`rx_only` default),
+  `submode`, `idle_grace_secs`, `dwell_secs`, `station_ttl_secs`, `max_clock_skew_ms`, `group`, the beacon/
+  query cadence knobs (unused until Phase E), and a `calling_freqs_hz: BTreeMap<band → Hz>` seeded with the
+  published JS8 conventions. Rendezvous-channel config is deferred to Phase F.
+- **Implementation:** `crates/openpulse-config/src/lib.rs` (`DiscoveryConfig` + `OpenpulseConfig.discovery`
+  field + `init_template()` `[discovery]` block).
+- **Tests:** `discovery_defaults_are_opt_in_and_rx_only` (defaults sane + opt-in; the template's `[discovery]`
+  round-trips with the band table); the existing `modem_profile_loads_and_template_parses` guard still passes
+  (the new section keeps the template valid TOML).
+- **Test results (actually run):** `openpulse-config` 16 passed / 0 failed (1 new); workspace builds 0 errors
+  (existing `OpenpulseConfig` literals use `..Default::default()`); clippy `-D warnings` + fmt clean.
+- **Next:** D-5b — the daemon glue: the dwell audio ring + off-thread `decode_window`, the SM/clock/table wired
+  into `server::run`, `DiscoveryStatus`/`StationHeard` control events, and the twin-daemon RX acceptance test.
+
+---
+
 ## 2026-07-11 — feat(discovery): FF-15 Phase D-4 — discovery state machine
 
 - **Requirement/change:** FF-15 Phase D (plan §4.3): the discovery lifecycle — when the station is idle, QSY to
