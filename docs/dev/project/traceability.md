@@ -9,6 +9,30 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(daemon): FF-15 Phase F-3c-ii — rendezvous command, events, bandplan gate
+
+- **Requirement/change:** expose the rendezvous runtime through the daemon control surface — an operator
+  command to initiate, events for the outcome, the responder's per-band channel wiring, and a startup
+  bandplan check of the configured working channels.
+- **Design decision:** `ControlCommand::RendezvousWith { callsign }` → `start_rendezvous_cmd` resolves the
+  current band's channel indices, mints a 2-char base-36 token, and calls `runtime.start_rendezvous`
+  (errors surfaced via `CommandError` when discovery is unconfigured, has no channels for the band, or is
+  not TX-capable). `discovery_tick` sets the responder's available channels from the home band each tick
+  and maps the runtime's `RendezvousAgreed/Rejected/TimedOut` outcomes to new
+  `ControlEvent::RendezvousAgreed { peer, freq_hz }` / `RendezvousFailed { peer, reason }` (resolving the
+  agreed **index**→Hz from the dwelling band's table). `validate_rendezvous_channels` logs a bandplan
+  warning per out-of-segment channel at startup (advisory — honoured, not rejected). The QSY + CONREQ
+  handoff is **F-3c-iii** (coupled to the `switch_in_slots` delay), so this step stops at surfacing the
+  agreement.
+- **Implementation:** `crates/openpulse-daemon/src/{protocol,lib,server}.rs`; `RuntimeControlState`
+  gains `discovery_rendezvous_channels_hz` (populated from config in `server::run`).
+- **Tests:** command JSON round-trips; `start_rendezvous_cmd` happy path + 3 error paths (unconfigured /
+  no-channels / no-callsign); `discovery_tick` responder decodes a Propose over and emits
+  `RendezvousAgreed` at the resolved Hz.
+- **Test results:** `cargo test -p openpulse-daemon -p openpulse-config --no-default-features` → all green
+  (6 new); `cargo build --workspace --no-default-features` clean (shared-enum exhaustive matches);
+  clippy clean.
+
 ## 2026-07-11 — feat(discovery): FF-15 Phase F-3c-i — rendezvous runtime orchestration
 
 - **Requirement/change:** the `DiscoveryRuntime` must drive both rendezvous roles end-to-end (still pure,
