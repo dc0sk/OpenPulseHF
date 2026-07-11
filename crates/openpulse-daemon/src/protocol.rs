@@ -279,6 +279,8 @@ pub enum ControlEvent {
     },
     /// Response to [`ControlCommand::ListStations`] (requesting client only).
     StationList { stations: Vec<StationSummary> },
+    /// Response to [`ControlCommand::ListPeers`] (requesting client only).
+    PeerList { peers: Vec<PeerSummary> },
 }
 
 /// Summary of a received file (for [`ControlEvent::FileList`]).
@@ -302,6 +304,19 @@ pub struct StationSummary {
     pub last_heard_ms: u64,
     /// `true` when the station carries an `@OPULSE` hint (an OpenPulse peer).
     pub is_opulse: bool,
+}
+
+/// Summary of a recognized OpenPulse peer in the shared cache (for [`ControlEvent::PeerList`]).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PeerSummary {
+    /// Peer identity (`js8:<callsign>` for an RF-heard peer, or a key-derived id once handshaken).
+    pub peer_id: String,
+    /// Capability bit-mask (§5.2 registry: HPX / rendezvous / QSY / PQ / relay).
+    pub capability_mask: u32,
+    /// Link-quality score (0–252), higher is better.
+    pub route_quality: u8,
+    /// Trust level label (`unknown` / `reduced` / `psk_verified` / `verified`).
+    pub trust_level: String,
 }
 
 /// Command sent from a client to the server.
@@ -412,6 +427,8 @@ pub enum ControlCommand {
     DisableDiscovery,
     /// List currently-known discovered stations. Server responds with [`ControlEvent::StationList`].
     ListStations,
+    /// List recognized OpenPulse peers from the shared cache. Server responds with [`ControlEvent::PeerList`].
+    ListPeers,
 }
 
 /// Per-command response.
@@ -523,6 +540,7 @@ mod ota_protocol_tests {
             ControlCommand::EnableDiscovery,
             ControlCommand::DisableDiscovery,
             ControlCommand::ListStations,
+            ControlCommand::ListPeers,
         ];
         for c in cmds {
             let j = serde_json::to_string(&c).unwrap();
@@ -549,6 +567,14 @@ mod ota_protocol_tests {
                     heard_count: 3,
                     last_heard_ms: 1_700_000_000_000,
                     is_opulse: true,
+                }],
+            },
+            ControlEvent::PeerList {
+                peers: vec![PeerSummary {
+                    peer_id: "js8:DC0SK".into(),
+                    capability_mask: 0xB105,
+                    route_quality: 180,
+                    trust_level: "unknown".into(),
                 }],
             },
         ];

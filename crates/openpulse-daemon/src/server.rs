@@ -1083,6 +1083,7 @@ fn discovery_tick(
         rt.push_audio(raw_samples);
         rt.tick(now_ms, idle)
     });
+    let mut heard_peer = false;
     for o in outcomes {
         match o {
             O::Retune { dial_freq_hz } => {
@@ -1110,6 +1111,7 @@ fn discovery_tick(
                 grid,
                 is_new,
             } => {
+                heard_peer = true;
                 let _ = event_tx.send(crate::protocol::ControlEvent::StationHeard {
                     callsign,
                     grid: grid.unwrap_or_default(),
@@ -1117,6 +1119,10 @@ fn discovery_tick(
                 });
             }
         }
+    }
+    // Fold any newly-heard OpenPulse-marked stations into the shared peer cache (§5.2).
+    if heard_peer {
+        crate::sync_discovered_peers(runtime_state, now_ms);
     }
 }
 
@@ -1474,6 +1480,80 @@ mod discovery_tick_tests {
             }
         }
         assert!(heard, "a StationHeard event for KN4CRD/EM73 was emitted");
+    }
+
+    /// One NORMAL beacon frame (payload9 + its i3bit flag) modulated at 1500 Hz.
+    fn beacon_frame(hex: &str, i3bit: u8) -> Vec<f32> {
+        use js8_plugin::costas::CostasKind;
+        use js8_plugin::message::js8_info_bits;
+        use js8_plugin::modulate::{modulate_tones, GfskParams};
+        use js8_plugin::submode::params;
+        use js8_plugin::tones::message_to_tones;
+        let mut p = [0u8; 9];
+        for (i, b) in p.iter_mut().enumerate() {
+            *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap();
+        }
+        let info = js8_info_bits(&p, i3bit);
+        let sm = params(js8_plugin::submode::Submode::Normal);
+        modulate_tones(
+            &message_to_tones(&info, CostasKind::Original),
+            1500.0,
+            &GfskParams::from_submode(&sm),
+        )
+    }
+
+    #[test]
+    fn discovery_tick_recognizes_an_opulse_peer_into_the_shared_cache() {
+        // The four Huffman-forced frames of `DC0SK: @OPULSE OPHF1 1FAX3AIT` (Qt5 ground truth).
+        let frames = [
+            ("2694fa766ea662ea58", 1u8),
+            ("531a90d5639ea3f5c8", 0u8),
+            ("bfec6491489275029b", 0u8),
+            ("b9afffffffffffffff", 2u8),
+        ];
+        let engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        let (tx, mut rx) = tokio::sync::broadcast::channel::<ControlEvent>(64);
+        let ev = std::sync::Arc::new(tx);
+        let mut rs = RuntimeControlState {
+            last_freq_hz: Some(14_074_000),
+            discovery: Some(DiscoveryRuntime::new(DiscoveryParams {
+                enabled: true,
+                idle_grace_ms: 0,
+                dwell_ms: 0,
+                station_ttl_ms: 3_600_000,
+                submode: Submode::Normal,
+                calling_freq_hz: 14_078_000,
+            })),
+            ..RuntimeControlState::default()
+        };
+
+        discovery_tick(&mut rs, &engine, None, &ev, &[], 1000); // activate → dwell
+        let mut t = 1000u64;
+        for (hex, i3) in frames {
+            discovery_tick(&mut rs, &engine, None, &ev, &beacon_frame(hex, i3), t);
+            t += 15_000;
+            discovery_tick(&mut rs, &engine, None, &ev, &[], t); // cross boundary → decode
+        }
+
+        // The recognized peer is in the shared cache with its capabilities.
+        let peers = rs
+            .peer_cache
+            .query(0, 0, openpulse_core::peer_cache::TrustFilter::Any, 16, t);
+        let peer = peers
+            .iter()
+            .find(|p| p.peer_id == "js8:DC0SK")
+            .expect("DC0SK cached as an OpenPulse peer");
+        assert_eq!(peer.capability_mask, 0xB105);
+
+        // ListPeers surfaces it.
+        crate::emit_peer_list(&mut rs, &ev, t);
+        let mut listed = false;
+        while let Ok(e) = rx.try_recv() {
+            if let ControlEvent::PeerList { peers } = e {
+                listed = peers.iter().any(|p| p.peer_id == "js8:DC0SK");
+            }
+        }
+        assert!(listed, "ListPeers reported the recognized peer");
     }
 
     #[test]
