@@ -1399,7 +1399,7 @@ persistence) ✅ → **F on-air validation** (deferred field-test batch). Standa
 Highest risk was Phase C half-duplex ACK/PTT timing — de-risked by the twin-daemon round-trip test, which now
 also exercises the real PTT-keyed burst-drain path.
 
-### FF-15 — JS8-based station discovery and rendezvous *(Phase A in progress)*
+### FF-15 — JS8-based station discovery and rendezvous *(Phase A TX core complete)*
 
 **Plan approved 2026-07-10** — full design in
 [`docs/dev/design/js8-discovery-rendezvous-plan.md`](../design/js8-discovery-rendezvous-plan.md)
@@ -1422,17 +1422,24 @@ go/no-go) → C (varicode + hint) → **D (RX-only discovery MVP = ship line, ze
 (beacon/query TX — **gated on the §97.221 automatic-control regulatory doc landing first**) → F
 (rendezvous + HPX handoff) → G (panel `Tab::Discovery`) → H (on-air validation vs stock JS8Call).
 
-**Phase A in progress.** A-1 shipped (PR #744): `plugins/js8` submode table (`submode.rs`) + Costas sync
-arrays (`costas.rs`) — the protocol foundation. A-2 shipped (PR #745): GFSK tone-synthesis modulator
-(`modulate.rs`, FT8/JS8 `gen_ft8wave`+`gfsk_pulse`, BT = 2.0) — continuous-phase Gaussian-smoothed 8-FSK,
-verified structurally (a constant tone lands on `base + tone·spacing` via Goertzel; partition-of-unity
-pulse; phase-continuous transitions). A-3 shipped (PR #746): LDPC(174,87) encoder (`ldpc174.rs`) with the
-generator/`colorder`/parity tables **ported from GPL-3.0 JS8Call** — gated by `H·encode(m) = 0` over 500
-random messages (proves the port is self-consistent without an external codeword vector). Remaining Phase-A
-units: CRC-12 (75-bit message → 87 info bits; boost augmented-CRC + XOR-42), frame packing
-(`packCallsign`/`packGrid`/`packCmd`) + Gray/Costas tone assembly, and the bit/tone-exact
-`reference_vectors` gate — the last needs ground-truth vectors generated from JS8Call (the interop anchor),
-committed alongside the encoder.
+**Phase A TX core complete** — 8 units, PRs #744–#751, every table/algorithm **anchored to real upstream**
+(the dev host has g++/Boost/Qt5+Qt6, so the actual `boost::augmented_crc` and Qt `Varicode` packers were
+compiled to emit ground-truth vectors; LDPC is gated by `H·encode(m)=0`):
+- A-1 (#744) `submode.rs` + `costas.rs` — submode table + Costas sync arrays (protocol foundation).
+- A-2 (#745) `modulate.rs` — GFSK tone synthesis (`gen_ft8wave`+`gfsk_pulse`, BT=2.0); constant-tone Goertzel,
+  partition-of-unity, phase-continuity gates.
+- A-3 (#746) `ldpc174.rs` — LDPC(174,87) encode; tables ported from GPL-3.0 JS8Call, `H·c=0` over 500 msgs.
+- A-4 (#747) `crc.rs` — CRC-12; bit-exact vs the real compiled `boost::augmented_crc<12,0xc06>` (20 vectors).
+- A-5 (#748) `frame.rs` — `pack_callsign`/`pack_grid`; bit-exact vs verbatim upstream on real Qt (11+8 vectors).
+- A-6 (#749) `tones.rs` — codeword→79 tones. **Finding: JS8 is NOT Gray-coded** (source is direct binary;
+  `grep -ri gray lib/` empty) — verified against source, not the plan.
+- A-7 (#750) `message.rs` — payload+flags+CRC → 87 info bits; CRC gated vs a boost-anchored `genjs8`-layout harness.
+- A-8 (#751) `plugin.rs` — `Js8Plugin` `ModulationPlugin`; full TX chain, modulated audio Goertzel-decodes back
+  to the exact 79 tones. `demodulate` errors (Phase B); **not yet daemon-registered** (until the decoder lands).
+
+**Next:** Phase B (native RX decoder — the highest-risk, FT8-class, go/no-go checkpoint), or the end-to-end
+`reference_vectors` gate (a bit-exact WAV/tone compare against JS8Call's Fortran `genjs8`, which needs
+gfortran installed — the one upstream tool absent from the dev host).
 
 ---
 
