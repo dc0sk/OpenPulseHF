@@ -236,6 +236,9 @@ pub struct RuntimeControlState {
     /// JS8 calling frequency (Hz) per band label (from `[discovery]` config). Discovery dwells on the
     /// entry for the operator's current home band; empty when discovery is not configured.
     pub discovery_calling_freqs_hz: std::collections::BTreeMap<String, u64>,
+    /// Shared peer cache (§5.2): recognized OpenPulse peers mapped from discovery's hinted stations,
+    /// queryable by capability/quality/trust for rendezvous, relay routing, and peer queries.
+    pub peer_cache: openpulse_core::peer_cache::PeerCache,
 }
 
 impl RuntimeControlState {
@@ -321,6 +324,7 @@ impl Default for RuntimeControlState {
             discovery: None,
             discovery_home_freq_hz: None,
             discovery_calling_freqs_hz: std::collections::BTreeMap::new(),
+            peer_cache: openpulse_core::peer_cache::PeerCache::new(256, 3_600_000),
         }
     }
 }
@@ -2093,6 +2097,13 @@ pub async fn apply_command_to_engine(
         ControlCommand::EnableDiscovery => set_discovery_enabled(true, runtime_state, event_tx),
         ControlCommand::DisableDiscovery => set_discovery_enabled(false, runtime_state, event_tx),
         ControlCommand::ListStations => emit_station_list(runtime_state, event_tx),
+        ControlCommand::ListPeers => {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            emit_peer_list(runtime_state, event_tx, now_ms);
+        }
         // No live-modem side effects for these commands in the engine path.
         ControlCommand::SubscribeSpectrum { .. }
         | ControlCommand::GetConfig
@@ -2176,6 +2187,52 @@ fn emit_station_list(
         })
         .unwrap_or_default();
     let _ = event_tx.send(ControlEvent::StationList { stations });
+}
+
+/// Upsert discovery's hinted (OpenPulse-marked) stations into the shared [`PeerCache`] via
+/// `station_to_peer_record`. Plain JS8 stations map to `None` and are skipped. Idempotent — safe to
+/// call whenever a station is (re)heard.
+pub(crate) fn sync_discovered_peers(runtime_state: &mut RuntimeControlState, now_ms: u64) {
+    let records: Vec<_> = runtime_state
+        .discovery
+        .as_ref()
+        .map(|rt| {
+            rt.stations()
+                .iter()
+                .filter_map(openpulse_discovery::station_to_peer_record)
+                .collect()
+        })
+        .unwrap_or_default();
+    for r in records {
+        runtime_state.peer_cache.upsert(r, now_ms);
+    }
+}
+
+/// Emit the shared cache's recognized OpenPulse peers (sorted by quality) to the requesting client.
+pub(crate) fn emit_peer_list(
+    runtime_state: &mut RuntimeControlState,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+    now_ms: u64,
+) {
+    use openpulse_core::peer_cache::{TrustFilter, TrustLevel};
+    let peers = runtime_state
+        .peer_cache
+        .query(0, 0, TrustFilter::Any, 256, now_ms)
+        .into_iter()
+        .map(|r| crate::protocol::PeerSummary {
+            peer_id: r.peer_id,
+            capability_mask: r.capability_mask,
+            route_quality: r.route_quality,
+            trust_level: match r.trust_level {
+                TrustLevel::Unknown => "unknown",
+                TrustLevel::Reduced => "reduced",
+                TrustLevel::PskVerified => "psk_verified",
+                TrustLevel::Verified => "verified",
+            }
+            .to_string(),
+        })
+        .collect();
+    let _ = event_tx.send(ControlEvent::PeerList { peers });
 }
 
 /// Resolve the DCD squelch for `freq_hz` (per-band override → default) and apply it.

@@ -9,6 +9,28 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(daemon): FF-15 — recognized peers into the shared PeerCache + ListPeers
+
+- **Requirement/change:** recognized OpenPulse peers were only in discovery's local `StationTable`
+  (surfaced as a bool via `ListStations`). Plan §5.2 wants them in the *shared* `PeerCache` — the
+  substrate rendezvous/relay/query read — with capabilities and quality. `station_to_peer_record`
+  (`peer_map.rs`) existed for this but was dead code.
+- **Design decision:** add a `PeerCache` to the daemon's `RuntimeControlState`; `discovery_tick`
+  folds newly-heard hinted stations into it via `station_to_peer_record` (plain JS8 stations map to
+  `None` and are skipped). To avoid unread infrastructure, expose it with a `ListPeers`/`PeerList`
+  control command (peer_id, capability_mask, route_quality, trust_level) mirroring the existing
+  `ListStations`/`StationList` pattern.
+- **Implementation:** `crates/openpulse-daemon/src/protocol.rs` (`ControlCommand::ListPeers`,
+  `ControlEvent::PeerList`, `PeerSummary`); `lib.rs` (`RuntimeControlState.peer_cache`,
+  `sync_discovered_peers`, `emit_peer_list`, `ListPeers` arm in `apply_command_to_engine`);
+  `server.rs::discovery_tick` calls the sync when a station is heard.
+- **Tests:** `server.rs::discovery_tick_recognizes_an_opulse_peer_into_the_shared_cache` (4-slot
+  beacon through the real `discovery_tick` → `PeerCache` holds `js8:DC0SK` caps `0xB105`, and
+  `emit_peer_list` reports it); `protocol.rs` round-trip extended with `ListPeers`/`PeerList`.
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features` → 70 passed, 0 failed;
+  `cargo build --workspace` clean (app crates' `ControlEvent` catch-alls absorb the new variants);
+  fmt + clippy (`-D warnings`) clean.
+
 ## 2026-07-11 — feat(discovery): FF-15 — @OPULSE HintAssembler + runtime wiring (peer recognition)
 
 - **Requirement/change:** with the free-text/directed unpacker in place, recognise an OpenPulse peer

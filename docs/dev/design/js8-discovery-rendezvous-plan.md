@@ -151,10 +151,14 @@ buys us general third-party free-text (the secondary INFO-token path and reading
   `OphfHint`, so the daemon's existing `ListStations` reports `is_opulse: true`. End-to-end tested
   through the real `decode_window` on a 4-slot beacon.
 
+- Shared `PeerCache` map (§5.2): `openpulse-daemon` `RuntimeControlState.peer_cache` +
+  `sync_discovered_peers` — `discovery_tick` folds every newly-heard hinted station into the shared
+  cache via `station_to_peer_record` (bringing `peer_map` live), and a `ListPeers`/`PeerList` control
+  command exposes the recognized peers (capabilities + quality + trust) to clients. The cache is now
+  the queryable substrate rendezvous (Phase F), relay routing, and peer queries read.
+
 **Still to wire:** JSC decode (the 262k codebook → general third-party free text + the secondary
-INFO-token hint path), and the daemon-level upsert of hinted stations into the *shared* `PeerCache`
-via `station_to_peer_record` (the per-station `OphfHint` is set and surfaced today; the cross-subsystem
-`PeerCache` map is the remaining step).
+INFO-token hint path) — not needed for the hint itself (the beacon is Huffman-framed).
 
 ### 3.3 What the hint can and cannot carry
 
