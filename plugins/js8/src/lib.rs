@@ -28,7 +28,7 @@ pub mod sync;
 pub mod tones;
 pub mod varicode;
 
-pub use beacon::{frame_audio, heartbeat, opulse_hint, BeaconFrame};
+pub use beacon::{directed, frame_audio, heartbeat, opulse_hint, BeaconFrame};
 pub use costas::CostasKind;
 pub use crc::augmented_crc12;
 pub use decoder::{decode_window, DecodeCfg, Js8Decode};
