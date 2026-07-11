@@ -503,3 +503,24 @@ pub fn encode_pq_conack(ack: &PqConAck) -> Result<Vec<u8>, PqHandshakeError> {
 pub fn decode_pq_conack(bytes: &[u8]) -> Result<PqConAck, PqHandshakeError> {
     serde_json::from_slice(bytes).map_err(|e| PqHandshakeError::SerializationError(e.to_string()))
 }
+
+#[cfg(test)]
+mod decode_error_tests {
+    use super::*;
+
+    /// Audit H4: the decode entry points must return `SerializationError` (not panic) on malformed
+    /// SAR-reassembled bytes — the module previously had no inline tests for its error branches.
+    #[test]
+    fn decode_rejects_malformed_bytes() {
+        for bad in [&b""[..], b"not json", b"{", b"{\"x\":1}"] {
+            assert!(matches!(
+                decode_pq_conreq(bad),
+                Err(PqHandshakeError::SerializationError(_))
+            ));
+            assert!(matches!(
+                decode_pq_conack(bad),
+                Err(PqHandshakeError::SerializationError(_))
+            ));
+        }
+    }
+}

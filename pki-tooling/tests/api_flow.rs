@@ -1,3 +1,11 @@
+//! PKI HTTP API integration tests.
+//!
+//! **DB-gated (audit H10):** these tests require a live Postgres via `PKI_TEST_DATABASE_URL`. When it
+//! is unset (e.g. the default `cargo test` and CI without a database service) each test **skips and
+//! still reports `ok`** — a green run here does NOT mean the HTTP/migration/audit paths were
+//! exercised. Run with the env set (and `-- --nocapture` to see the skip notices) to actually cover
+//! them. The in-crate unit tests (`src/`) run unconditionally.
+
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use ed25519_dalek::SigningKey;
@@ -19,7 +27,10 @@ async fn setup_pool() -> Option<sqlx::PgPool> {
     let database_url = match std::env::var("PKI_TEST_DATABASE_URL") {
         Ok(url) => url,
         Err(_) => {
-            eprintln!("skipping integration test: PKI_TEST_DATABASE_URL is not set");
+            eprintln!(
+                "SKIPPED (not exercised): PKI_TEST_DATABASE_URL is not set — this DB-gated test \
+                 reports `ok` without touching the HTTP/migration/audit paths"
+            );
             return None;
         }
     };

@@ -486,3 +486,30 @@ impl App {
         ui::view(self)
     }
 }
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+    use openpulse_daemon::protocol::ControlCommand;
+
+    /// Audit H9: the panel's Message→ControlCommand action layer was untested. Inject a command
+    /// channel and assert a few unconditional UI actions dispatch the right control commands.
+    #[test]
+    fn ui_messages_dispatch_the_expected_control_commands() {
+        let (mut app, _task) = App::new();
+        let (tx, rx) = crossbeam_channel::bounded::<ControlCommand>(16);
+        app.cmd_tx = Some(tx);
+
+        let _ = app.update(Message::EnableDiscovery);
+        let _ = app.update(Message::DisableDiscovery);
+        let _ = app.update(Message::DisconnectPeer);
+        let _ = app.update(Message::RefreshInbox);
+
+        let cmds: Vec<ControlCommand> = rx.try_iter().collect();
+        assert_eq!(cmds.len(), 4, "each action should dispatch one command");
+        assert!(matches!(cmds[0], ControlCommand::EnableDiscovery));
+        assert!(matches!(cmds[1], ControlCommand::DisableDiscovery));
+        assert!(matches!(cmds[2], ControlCommand::DisconnectPeer));
+        assert!(matches!(cmds[3], ControlCommand::ListMessages));
+    }
+}
