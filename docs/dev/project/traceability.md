@@ -9,6 +9,28 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(discovery): FF-15 Phase D-2 — `StationTable` + discovered-station records
+
+- **Requirement/change:** FF-15 Phase D (plan §5.1): the discovered-station data model — a callsign-keyed
+  table each JS8 decode upserts into, with per-station SNR smoothing, sticky grid/hint, and a TTL sweep.
+- **Design decision:** `Js8Station` (callsign, grid, EWMA `snr_db`, freq offset, dial freq, last-heard,
+  heard-count, parsed hint, query backoff) in a `BTreeMap`-backed `StationTable`; `upsert(Observation, now)`
+  creates-or-updates (SNR EWMA α=0.3; grid/hint only *learned*, never cleared; heard-count bumped) and reports
+  new-vs-updated; `sweep(now, ttl)` drops stale stations. `OphfHint::from_payload` maps a decoded hint (raw
+  `pref_channel` 63 → `None`; the §5.4 submode code → `Submode`). `QueryBackoff` is carried but unused until the
+  TX query policy (Phase E). Pure, no I/O.
+- **Implementation:** `crates/openpulse-discovery/src/station.rs` (`Js8Station`, `Observation`, `OphfHint`,
+  `QueryBackoff`, `StationTable`); `lib.rs` module + re-exports.
+- **Tests:** `station.rs` (4) — upsert creates then updates (heard-count, EWMA between old/new, last-heard);
+  grid/hint sticky once learned; TTL sweep drops only the stale station; `OphfHint::from_payload` maps
+  pref-channel/submode.
+- **Test results (actually run):** `openpulse-discovery` 12 passed / 0 failed (4 new); clippy `-D warnings` +
+  fmt clean.
+- **Next:** D-3 the `PeerCache` mapping (+ the capability-bit registry) so OpenPulse-marked stations feed the
+  shared substrate, D-4 the discovery state machine, then D-5 the daemon dwell-ring glue + twin RX test.
+
+---
+
 ## 2026-07-11 — feat(discovery): FF-15 Phase D-1 — `Js8Clock` wall-clock T/R scheduler
 
 - **Requirement/change:** FF-15 Phase D (RX-only discovery MVP, plan §6.3): the wall-clock scheduler — map
