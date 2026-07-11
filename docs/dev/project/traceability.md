@@ -9,6 +9,24 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — fix(modem/daemon): remove dead DCD blocks + stabilize flaky OTA test (audit G-6/S4-3)
+
+- **Requirement/change:** G-6 — 13 vestigial `let prev_busy = self.dcd.is_busy(); … if
+  self.dcd.is_busy() != prev_busy { DcdChange }` blocks in `engine.rs` read the same value twice with
+  no `dcd.update()` between, so the `DcdChange` emission can never fire (dead since DCD moved to
+  `update_dcd_at_seam`). S4-3 — `ota_ladder_steps_under_traffic_between_two_real_daemons` timed out
+  under concurrent suite load (40 s outer budget vs 10×6 s inner rounds; ~18 s isolated).
+- **Design decision:** delete the 13 dead blocks (the single real emitter, `update_dcd_at_seam` with
+  its `dcd.update()`, is preserved). Raise the OTA test's outer/inner timeouts (40→120 s, 6→11 s) —
+  the assertion is on the ladder stepping, not latency, so the timeout is a safety bound that must
+  survive load.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (13 blocks removed);
+  `crates/openpulse-daemon/tests/twin_daemon_bridge.rs` (timeouts).
+- **Tests:** `engine_events` 8/8 (DcdChange still emitted at the seam); `twin_daemon_bridge
+  ota_ladder` passes (18.5 s isolated).
+- **Test results:** modem build + clippy (`-D warnings`) clean; `engine_events` 8 passed; OTA twin 1
+  passed.
+
 ## 2026-07-11 — docs: refresh stale FF-15/FF-16 status + crate map (audit TR-03/04/05/06/08)
 
 - **Requirement/change:** the audit found the living docs lagging shipped code — CLAUDE.md described
