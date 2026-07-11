@@ -10,9 +10,7 @@
 //! `modulate` directly rather than through `engine.transmit()`.
 
 use openpulse_core::error::ModemError;
-use openpulse_core::plugin::{
-    FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo, PLUGIN_TRAIT_VERSION,
-};
+use openpulse_core::plugin::{FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo};
 
 use crate::message::js8_info_bits;
 use crate::modulate::{modulate_tones, GfskParams};
@@ -117,7 +115,7 @@ mod tests {
     use crate::message::js8_info_bits;
     use crate::submode::{params, Submode, NUM_SYMBOLS, NUM_TONES};
     use crate::tones::message_to_tones;
-    use openpulse_core::plugin::PulseShape;
+    use openpulse_core::plugin::{PulseShape, PLUGIN_TRAIT_VERSION};
 
     fn cfg(mode: &str) -> ModulationConfig {
         ModulationConfig {
