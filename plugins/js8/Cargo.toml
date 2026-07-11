@@ -1,0 +1,12 @@
+[package]
+name        = "js8-plugin"
+description = "JS8-compatible 8-GFSK weak-signal modulation plugin (FF-15 station discovery/rendezvous)"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
