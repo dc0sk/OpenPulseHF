@@ -230,6 +230,9 @@ pub struct RuntimeControlState {
     /// gates activity; `server::run` feeds it captured audio + the idle predicate and executes its
     /// retune outcomes. `None` when discovery is not built for this daemon.
     pub discovery: Option<openpulse_discovery::DiscoveryRuntime>,
+    /// Home frequency (Hz) saved when discovery QSYed to the JS8 calling channel, restored on stand-down;
+    /// `None` when not dwelling. The home frequency itself comes from `last_freq_hz`.
+    pub discovery_home_freq_hz: Option<u64>,
 }
 
 impl RuntimeControlState {
@@ -313,6 +316,7 @@ impl Default for RuntimeControlState {
             filexfer_policy: crate::filexfer::FileTransferPolicy::default(),
             filexfer_tx_queue: Vec::new(),
             discovery: None,
+            discovery_home_freq_hz: None,
         }
     }
 }
@@ -2096,12 +2100,27 @@ pub async fn apply_command_to_engine(
 }
 
 /// JS8 discovery lifecycle-state label for [`ControlEvent::DiscoveryStatus`].
-fn discovery_state_label(state: openpulse_discovery::DiscoveryState) -> &'static str {
+pub(crate) fn discovery_state_label(state: openpulse_discovery::DiscoveryState) -> &'static str {
     use openpulse_discovery::DiscoveryState::*;
     match state {
         Inactive => "inactive",
         Activating => "activating",
         Dwelling => "dwelling",
+    }
+}
+
+/// Emit a [`ControlEvent::DiscoveryStatus`] reflecting the runtime's current state (no-op when
+/// discovery is not configured).
+pub(crate) fn emit_discovery_status(
+    runtime_state: &RuntimeControlState,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+) {
+    if let Some(rt) = runtime_state.discovery.as_ref() {
+        let _ = event_tx.send(ControlEvent::DiscoveryStatus {
+            state: discovery_state_label(rt.state()).to_string(),
+            dial_freq_hz: rt.dial_freq_hz(),
+            drift_bias_ms: rt.drift_bias_ms(),
+        });
     }
 }
 
@@ -2112,27 +2131,22 @@ fn set_discovery_enabled(
     runtime_state: &mut RuntimeControlState,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
 ) {
-    match runtime_state.discovery.as_mut() {
-        Some(rt) => {
-            let _ = rt.set_enabled(on); // outcome execution (retune) happens in the rx-tick loop
-            let _ = event_tx.send(ControlEvent::DiscoveryStatus {
-                state: discovery_state_label(rt.state()).to_string(),
-                dial_freq_hz: rt.dial_freq_hz(),
-                drift_bias_ms: rt.drift_bias_ms(),
-            });
-        }
-        None => {
-            let _ = event_tx.send(ControlEvent::CommandError {
-                command: if on {
-                    "enable_discovery"
-                } else {
-                    "disable_discovery"
-                }
-                .to_string(),
-                reason: "JS8 discovery is not configured ([discovery] enabled = false)".to_string(),
-            });
-        }
+    if runtime_state.discovery.is_none() {
+        let _ = event_tx.send(ControlEvent::CommandError {
+            command: if on {
+                "enable_discovery"
+            } else {
+                "disable_discovery"
+            }
+            .to_string(),
+            reason: "JS8 discovery is not configured ([discovery] enabled = false)".to_string(),
+        });
+        return;
     }
+    if let Some(rt) = runtime_state.discovery.as_mut() {
+        let _ = rt.set_enabled(on); // outcome execution (retune) happens in the rx-tick loop
+    }
+    emit_discovery_status(runtime_state, event_tx);
 }
 
 /// Handle `ListStations`: emit a `StationList` from the discovery table (empty when unconfigured).
