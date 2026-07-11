@@ -380,6 +380,8 @@ pub struct ModemEngine {
     /// transmit path (data, FEC, ACK, retransmit, QSY, ID) increments it once. A pollable
     /// TX-activity signal for the daemon's periodic station-ID timer (REQ-REG-10).
     frames_transmitted: u64,
+    /// Tripwire: frames emitted via `transmit_raw_audio` (the JS8 beacon path).
+    raw_audio_frames_transmitted: u64,
 }
 
 /// CE-SSB TX conditioning clip level as a multiple of the RMS envelope. 2.0×
@@ -458,6 +460,7 @@ impl ModemEngine {
             dc_blocks_processed: 0,
             dcd_blocks_processed: 0,
             frames_transmitted: 0,
+            raw_audio_frames_transmitted: 0,
         }
     }
 
@@ -4402,6 +4405,38 @@ impl ModemEngine {
         };
         let samples = plugin.modulate(&wire.bytes, &mod_cfg)?;
         Ok(AudioSamples { samples })
+    }
+
+    /// Transmit pre-built baseband audio (e.g. a JS8 beacon frame) through the OutputEmit seam,
+    /// **without** the HPX `Frame` envelope. Applies the CSMA channel-busy gate, the OutputEmit-stage
+    /// transforms, the regulatory TX-metadata log, and the `frames_transmitted` counter — so a
+    /// raw-audio transmission is recorded and channel-gated exactly like every framed path (audit
+    /// G-2's IQ gap does not apply here). `mode` is an informational label for the regulatory log
+    /// (e.g. `"JS8-NORMAL"`); no plugin lookup is done, so a non-registered waveform is fine.
+    pub fn transmit_raw_audio(
+        &mut self,
+        samples: &[f32],
+        mode: &str,
+        device: Option<&str>,
+    ) -> Result<(), ModemError> {
+        self.csma_check()?;
+        let audio = AudioSamples {
+            samples: samples.to_vec(),
+        };
+        let audio = self.route_audio_stage(PipelineStage::OutputEmit, audio)?;
+        self.stage_emit_output(device, mode, &audio)?;
+        self.raw_audio_frames_transmitted = self.raw_audio_frames_transmitted.wrapping_add(1);
+        let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
+            mode: mode.to_string(),
+            bytes: samples.len(),
+        });
+        Ok(())
+    }
+
+    /// Tripwire: number of raw-audio frames emitted via [`transmit_raw_audio`] (stays 0 if the JS8
+    /// beacon path never runs on a station).
+    pub fn raw_audio_frames_transmitted(&self) -> u64 {
+        self.raw_audio_frames_transmitted
     }
 
     fn stage_emit_output(
