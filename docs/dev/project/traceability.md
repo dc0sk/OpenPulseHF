@@ -9,6 +9,22 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(panel): FF-15 — Discovery tab (stations + OpenPulse peers)
+
+- **Requirement/change:** the panel had no view of JS8 discovery — Phase G's visual operator surface.
+- **Design decision:** add a `Tab::Discovery` rendered from new `PanelState` fields
+  (`discovery_state`, `discovery_dial_freq_hz`, `discovery_drift_ms`, `stations`, `peers`) populated
+  by the reducer from `DiscoveryStatus`/`StationList`/`PeerList` events; the tab requests the lists on
+  open and via a Refresh button, and has Enable/Disable controls. Reducer is unit-tested; the iced
+  view is build-verified (the GUI can't be run-verified in a headless session).
+- **Implementation:** `apps/openpulse-panel/src/state.rs` (5 fields + Default),
+  `connection.rs::apply_event` (3 arms), `app.rs` (`Tab::Discovery`, `Message::{EnableDiscovery,
+  DisableDiscovery, RefreshDiscovery}`, `SelectTab` auto-request), `ui.rs` (`Snap` fields + snapshot,
+  tab button, `discovery_widget`).
+- **Tests:** `connection::discovery_event_tests::station_and_peer_lists_and_status_populate_state`.
+- **Test results:** `cargo test -p openpulse-panel` → 19 passed, 0 failed; `cargo build -p
+  openpulse-panel` clean; fmt + clippy (`-D warnings`) clean.
+
 ## 2026-07-11 — feat(cli): FF-15 — daemon discovery commands (enable/disable, stations, peers)
 
 - **Requirement/change:** discovery had a daemon control surface but no operator client — the only

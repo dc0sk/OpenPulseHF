@@ -1,6 +1,6 @@
 //! The panel view (REQ-UX-04), rendered from the live `PanelState` with the active theme's palette:
 //! a controls band on top, then spectrum → waterfall → ladder, and a tabbed lower panel
-//! (Additional info / Daemon config / Messages / Event log).
+//! (Additional info / Statistics / Files / Daemon config / Messages / Discovery / Event log).
 
 use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path, Stroke};
 use iced::widget::{
@@ -215,6 +215,11 @@ struct Snap {
     active_transfer: Option<crate::state::ActiveTransfer>,
     received_files: Vec<crate::state::ReceivedFile>,
     file_status: String,
+    discovery_state: String,
+    discovery_dial_freq_hz: u64,
+    discovery_drift_ms: i64,
+    stations: Vec<crate::state::StationSummary>,
+    peers: Vec<crate::state::PeerSummary>,
 }
 
 pub fn view(app: &App) -> Element<'_, Message> {
@@ -264,6 +269,11 @@ pub fn view(app: &App) -> Element<'_, Message> {
             active_transfer: st.active_transfer.clone(),
             received_files: st.received_files.clone(),
             file_status: st.file_status.clone(),
+            discovery_state: st.discovery_state.clone(),
+            discovery_dial_freq_hz: st.discovery_dial_freq_hz,
+            discovery_drift_ms: st.discovery_drift_ms,
+            stations: st.stations.clone(),
+            peers: st.peers.clone(),
         }
     };
 
@@ -874,6 +884,11 @@ fn tabbed_lower(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static,
             "Inbox and message composer",
         ))
         .push(tab_btn(
+            "Discovery",
+            Tab::Discovery,
+            "JS8 station discovery: heard stations and recognized OpenPulse peers",
+        ))
+        .push(tab_btn(
             "Event log",
             Tab::Log,
             "Scrolling log of engine and session events",
@@ -884,6 +899,7 @@ fn tabbed_lower(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static,
         Tab::Files => files_widget(app, snap, eff),
         Tab::Config => config_widget(app, snap, eff),
         Tab::Messages => messages_widget(app, snap, eff),
+        Tab::Discovery => discovery_widget(snap, eff),
         Tab::Log => log_widget(snap, eff),
     };
     // The content box fills the panel, so every tab renders at the same height.
@@ -905,6 +921,110 @@ fn tabbed_lower(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'static,
             },
             ..container::Style::default()
         })
+        .into()
+}
+
+fn discovery_widget(snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
+    let state = if snap.discovery_state.is_empty() {
+        "unknown".to_string()
+    } else {
+        snap.discovery_state.clone()
+    };
+    let controls = Row::new()
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .push(col_title(eff, "JS8 discovery"))
+        .push(neutral_btn(
+            eff,
+            "Enable",
+            Message::EnableDiscovery,
+            "Start RX-only JS8 discovery on this band's calling frequency",
+        ))
+        .push(neutral_btn(
+            eff,
+            "Disable",
+            Message::DisableDiscovery,
+            "Stop discovery and return to the home frequency",
+        ))
+        .push(neutral_btn(
+            eff,
+            "Refresh",
+            Message::RefreshDiscovery,
+            "Reload the station and peer tables from the daemon",
+        ));
+
+    let status = Row::new()
+        .spacing(14)
+        .push(info_row(eff, "State", &state, ColorRole::RxValue))
+        .push(info_row(
+            eff,
+            "Dial",
+            &format!("{:.3} kHz", snap.discovery_dial_freq_hz as f64 / 1000.0),
+            ColorRole::Signal,
+        ))
+        .push(info_row(
+            eff,
+            "Drift",
+            &format!("{:+} ms", snap.discovery_drift_ms),
+            ColorRole::Inactive,
+        ));
+
+    let mut stations = Column::new().spacing(3);
+    for s in &snap.stations {
+        let mark = if s.is_opulse { "  ◆ OPULSE" } else { "" };
+        let label = format!(
+            "{:<9} {:<6} {:+.0} dB ×{}{}",
+            s.callsign, s.grid, s.snr_db, s.heard_count, mark
+        );
+        let accent = if s.is_opulse {
+            ColorRole::Signal
+        } else {
+            ColorRole::Inactive
+        };
+        stations = stations.push(Text::new(label).size(12).color(role(eff, accent)));
+    }
+    if snap.stations.is_empty() {
+        stations = stations.push(
+            Text::new("no stations heard")
+                .size(12)
+                .color(role(eff, ColorRole::Inactive)),
+        );
+    }
+
+    let mut peers = Column::new().spacing(3);
+    for p in &snap.peers {
+        let label = format!(
+            "{:<12} caps 0x{:04X}  q{}  {}",
+            p.peer_id, p.capability_mask, p.route_quality, p.trust_level
+        );
+        peers = peers.push(
+            Text::new(label)
+                .size(12)
+                .color(role(eff, ColorRole::RxValue)),
+        );
+    }
+    if snap.peers.is_empty() {
+        peers = peers.push(
+            Text::new("no OpenPulse peers recognized")
+                .size(12)
+                .color(role(eff, ColorRole::Inactive)),
+        );
+    }
+
+    Column::new()
+        .spacing(8)
+        .push(controls)
+        .push(status)
+        .push(col_title(
+            eff,
+            &format!("Stations ({})", snap.stations.len()),
+        ))
+        .push(scrollable(stations).height(Length::Fixed(120.0)))
+        .push(col_title(
+            eff,
+            &format!("OpenPulse peers ({})", snap.peers.len()),
+        ))
+        .push(scrollable(peers).height(Length::Fixed(100.0)))
         .into()
 }
 

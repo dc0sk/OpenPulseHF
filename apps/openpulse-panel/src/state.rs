@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-pub use openpulse_daemon::protocol::{DaemonConfig, MessageSummary};
+pub use openpulse_daemon::protocol::{DaemonConfig, MessageSummary, PeerSummary, StationSummary};
 
 /// Maximum rows kept in the rolling waterfall history.
 pub const WATERFALL_ROWS: usize = 64;
@@ -117,6 +117,16 @@ pub struct PanelState {
     pub received_files: Vec<ReceivedFile>,
     /// Last terminal file-transfer status line (`FileSent`/`FileFailed`).
     pub file_status: String,
+    /// FF-15 discovery lifecycle state label (from `DiscoveryStatus`; empty until known).
+    pub discovery_state: String,
+    /// JS8 dwell/calling frequency (Hz) reported while discovering.
+    pub discovery_dial_freq_hz: u64,
+    /// Estimated UTC clock drift bias (ms) reported by discovery.
+    pub discovery_drift_ms: i64,
+    /// Discovered JS8 stations (from `StationList`).
+    pub stations: Vec<StationSummary>,
+    /// Recognized OpenPulse peers from the shared cache (from `PeerList`).
+    pub peers: Vec<PeerSummary>,
 }
 
 /// A pending inbound file offer (from `ControlEvent::FileOffered`).
@@ -222,6 +232,11 @@ impl Default for PanelState {
             active_transfer: None,
             received_files: Vec::new(),
             file_status: String::new(),
+            discovery_state: String::new(),
+            discovery_dial_freq_hz: 0,
+            discovery_drift_ms: 0,
+            stations: Vec::new(),
+            peers: Vec::new(),
         }
     }
 }

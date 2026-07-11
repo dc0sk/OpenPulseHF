@@ -482,6 +482,17 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
             }
             st.file_status = format!("Transfer {direction} failed: {reason}");
         }
+        ControlEvent::DiscoveryStatus {
+            state,
+            dial_freq_hz,
+            drift_bias_ms,
+        } => {
+            st.discovery_state = state;
+            st.discovery_dial_freq_hz = dial_freq_hz;
+            st.discovery_drift_ms = drift_bias_ms;
+        }
+        ControlEvent::StationList { stations } => st.stations = stations,
+        ControlEvent::PeerList { peers } => st.peers = peers,
         _ => {}
     }
 }
@@ -578,5 +589,62 @@ mod file_event_tests {
         let st = s.lock().unwrap();
         assert!(st.active_transfer.is_none());
         assert!(st.file_status.contains("failed"));
+    }
+}
+
+#[cfg(test)]
+mod discovery_event_tests {
+    use super::apply_event;
+    use crate::state::PanelState;
+    use openpulse_daemon::protocol::{ControlEvent, PeerSummary, StationSummary};
+    use std::sync::{Arc, Mutex};
+
+    fn feed(shared: &Arc<Mutex<PanelState>>, ev: ControlEvent) {
+        apply_event(&serde_json::to_string(&ev).unwrap(), shared);
+    }
+
+    #[test]
+    fn station_and_peer_lists_and_status_populate_state() {
+        let s = Arc::new(Mutex::new(PanelState::default()));
+        feed(
+            &s,
+            ControlEvent::StationList {
+                stations: vec![StationSummary {
+                    callsign: "KN4CRD".into(),
+                    grid: "EM73".into(),
+                    snr_db: -12.0,
+                    heard_count: 2,
+                    last_heard_ms: 1000,
+                    is_opulse: false,
+                }],
+            },
+        );
+        feed(
+            &s,
+            ControlEvent::PeerList {
+                peers: vec![PeerSummary {
+                    peer_id: "js8:DC0SK".into(),
+                    capability_mask: 0xB105,
+                    route_quality: 180,
+                    trust_level: "unknown".into(),
+                }],
+            },
+        );
+        feed(
+            &s,
+            ControlEvent::DiscoveryStatus {
+                state: "dwelling".into(),
+                dial_freq_hz: 14_078_000,
+                drift_bias_ms: -50,
+            },
+        );
+        let st = s.lock().unwrap();
+        assert_eq!(st.stations.len(), 1);
+        assert_eq!(st.stations[0].callsign, "KN4CRD");
+        assert_eq!(st.peers.len(), 1);
+        assert_eq!(st.peers[0].capability_mask, 0xB105);
+        assert_eq!(st.discovery_state, "dwelling");
+        assert_eq!(st.discovery_dial_freq_hz, 14_078_000);
+        assert_eq!(st.discovery_drift_ms, -50);
     }
 }
