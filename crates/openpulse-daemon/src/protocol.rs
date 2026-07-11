@@ -261,6 +261,24 @@ pub enum ControlEvent {
     },
     /// Response to [`ControlCommand::ListFiles`] (requesting client only).
     FileList { files: Vec<FileSummary> },
+    /// JS8 discovery lifecycle/state change (FF-15).
+    DiscoveryStatus {
+        /// `"inactive"` | `"activating"` | `"dwelling"`.
+        state: String,
+        /// JS8 calling frequency being dwelt on (Hz), when active.
+        dial_freq_hz: u64,
+        /// Estimated UTC clock drift bias (ms).
+        drift_bias_ms: i64,
+    },
+    /// A JS8 station was heard on the calling channel (FF-15).
+    StationHeard {
+        callsign: String,
+        grid: String,
+        /// `true` the first time this station is heard this session.
+        is_new: bool,
+    },
+    /// Response to [`ControlCommand::ListStations`] (requesting client only).
+    StationList { stations: Vec<StationSummary> },
 }
 
 /// Summary of a received file (for [`ControlEvent::FileList`]).
@@ -272,6 +290,18 @@ pub struct FileSummary {
     pub verified: bool,
     pub path: String,
     pub timestamp_secs: u64,
+}
+
+/// Summary of a discovered JS8 station (for [`ControlEvent::StationList`]).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StationSummary {
+    pub callsign: String,
+    pub grid: String,
+    pub snr_db: f32,
+    pub heard_count: u32,
+    pub last_heard_ms: u64,
+    /// `true` when the station carries an `@OPULSE` hint (an OpenPulse peer).
+    pub is_opulse: bool,
 }
 
 /// Command sent from a client to the server.
@@ -375,6 +405,13 @@ pub enum ControlCommand {
     CancelFile { transfer_id: u32 },
     /// List received files. Server responds with [`ControlEvent::FileList`] + an `ok` response.
     ListFiles,
+    /// Enable JS8 station discovery (FF-15). When idle the daemon QSYs to the JS8 calling frequency and
+    /// caches stations it hears.
+    EnableDiscovery,
+    /// Disable JS8 discovery and (if dwelling) return to the home frequency.
+    DisableDiscovery,
+    /// List currently-known discovered stations. Server responds with [`ControlEvent::StationList`].
+    ListStations,
 }
 
 /// Per-command response.
@@ -470,6 +507,48 @@ mod ota_protocol_tests {
                     verified: true,
                     path: "/dl/W1AW/report.pdf".into(),
                     timestamp_secs: 1_700_000_000,
+                }],
+            },
+        ];
+        for e in evs {
+            let j = serde_json::to_string(&e).unwrap();
+            let back: ControlEvent = serde_json::from_str(&j).unwrap();
+            assert_eq!(format!("{e:?}"), format!("{back:?}"));
+        }
+    }
+
+    #[test]
+    fn discovery_commands_and_events_round_trip_via_json() {
+        let cmds = vec![
+            ControlCommand::EnableDiscovery,
+            ControlCommand::DisableDiscovery,
+            ControlCommand::ListStations,
+        ];
+        for c in cmds {
+            let j = serde_json::to_string(&c).unwrap();
+            let back: ControlCommand = serde_json::from_str(&j).unwrap();
+            assert_eq!(format!("{c:?}"), format!("{back:?}"));
+        }
+
+        let evs = vec![
+            ControlEvent::DiscoveryStatus {
+                state: "dwelling".into(),
+                dial_freq_hz: 14_078_000,
+                drift_bias_ms: -120,
+            },
+            ControlEvent::StationHeard {
+                callsign: "KN4CRD".into(),
+                grid: "EM73".into(),
+                is_new: true,
+            },
+            ControlEvent::StationList {
+                stations: vec![StationSummary {
+                    callsign: "KN4CRD".into(),
+                    grid: "EM73".into(),
+                    snr_db: -12.0,
+                    heard_count: 3,
+                    last_heard_ms: 1_700_000_000_000,
+                    is_opulse: true,
                 }],
             },
         ];

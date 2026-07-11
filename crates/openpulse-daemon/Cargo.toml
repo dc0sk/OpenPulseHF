@@ -45,6 +45,7 @@ gpu = [
 [dependencies]
 # Protocol types only; compiles for all targets including WASM.
 openpulse-core   = { workspace = true }
+openpulse-discovery = { workspace = true }
 openpulse-modem  = { workspace = true }
 serde            = { workspace = true, features = ["derive"] }
 serde_json       = { workspace = true }

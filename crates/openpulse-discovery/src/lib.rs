@@ -13,6 +13,7 @@ pub mod station;
 
 pub use discovery_sm::{DiscoveryAction, DiscoveryEvent, DiscoverySm, DiscoveryState};
 pub use hint::{decode_hint, encode_hint, HintPayload, HINT_MAGIC, OPULSE_GROUP};
+pub use js8_plugin::submode::Submode;
 pub use peer_map::{station_to_peer_record, CAP_HPX, CAP_PQ, CAP_QSY, CAP_RELAY, CAP_RENDEZVOUS};
 pub use runtime::{DiscoveryOutcome, DiscoveryParams, DiscoveryRuntime};
 pub use scheduler::{Js8Clock, SlotTracker};

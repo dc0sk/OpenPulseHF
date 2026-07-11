@@ -226,6 +226,10 @@ pub struct RuntimeControlState {
     /// with a single PTT keying per burst; queueing (not transmitting inline) keeps the module I/O-free
     /// while the PTT controller — which lives in `server::run` — sequences the half-duplex TX.
     pub filexfer_tx_queue: Vec<(Vec<u8>, String)>,
+    /// JS8 station-discovery runtime (FF-15), present when `[discovery]` is configured. `enabled`
+    /// gates activity; `server::run` feeds it captured audio + the idle predicate and executes its
+    /// retune outcomes. `None` when discovery is not built for this daemon.
+    pub discovery: Option<openpulse_discovery::DiscoveryRuntime>,
 }
 
 impl RuntimeControlState {
@@ -308,6 +312,7 @@ impl Default for RuntimeControlState {
             file_tx: None,
             filexfer_policy: crate::filexfer::FileTransferPolicy::default(),
             filexfer_tx_queue: Vec::new(),
+            discovery: None,
         }
     }
 }
@@ -2077,6 +2082,9 @@ pub async fn apply_command_to_engine(
             let mode = active_mode.lock().await.clone();
             filexfer::send_file(to, path, runtime_state, event_tx, &mode);
         }
+        ControlCommand::EnableDiscovery => set_discovery_enabled(true, runtime_state, event_tx),
+        ControlCommand::DisableDiscovery => set_discovery_enabled(false, runtime_state, event_tx),
+        ControlCommand::ListStations => emit_station_list(runtime_state, event_tx),
         // No live-modem side effects for these commands in the engine path.
         ControlCommand::SubscribeSpectrum { .. }
         | ControlCommand::GetConfig
@@ -2085,6 +2093,71 @@ pub async fn apply_command_to_engine(
         | ControlCommand::DeleteMessage { .. }
         | ControlCommand::ListFiles => {}
     }
+}
+
+/// JS8 discovery lifecycle-state label for [`ControlEvent::DiscoveryStatus`].
+fn discovery_state_label(state: openpulse_discovery::DiscoveryState) -> &'static str {
+    use openpulse_discovery::DiscoveryState::*;
+    match state {
+        Inactive => "inactive",
+        Activating => "activating",
+        Dwelling => "dwelling",
+    }
+}
+
+/// Handle `EnableDiscovery`/`DisableDiscovery`: toggle the runtime and emit a `DiscoveryStatus`, or a
+/// `CommandError` when discovery is not configured for this daemon.
+fn set_discovery_enabled(
+    on: bool,
+    runtime_state: &mut RuntimeControlState,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+) {
+    match runtime_state.discovery.as_mut() {
+        Some(rt) => {
+            let _ = rt.set_enabled(on); // outcome execution (retune) happens in the rx-tick loop
+            let _ = event_tx.send(ControlEvent::DiscoveryStatus {
+                state: discovery_state_label(rt.state()).to_string(),
+                dial_freq_hz: rt.dial_freq_hz(),
+                drift_bias_ms: rt.drift_bias_ms(),
+            });
+        }
+        None => {
+            let _ = event_tx.send(ControlEvent::CommandError {
+                command: if on {
+                    "enable_discovery"
+                } else {
+                    "disable_discovery"
+                }
+                .to_string(),
+                reason: "JS8 discovery is not configured ([discovery] enabled = false)".to_string(),
+            });
+        }
+    }
+}
+
+/// Handle `ListStations`: emit a `StationList` from the discovery table (empty when unconfigured).
+fn emit_station_list(
+    runtime_state: &RuntimeControlState,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+) {
+    let stations = runtime_state
+        .discovery
+        .as_ref()
+        .map(|rt| {
+            rt.stations()
+                .iter()
+                .map(|s| crate::protocol::StationSummary {
+                    callsign: s.callsign.clone(),
+                    grid: s.grid.clone().unwrap_or_default(),
+                    snr_db: s.snr_db,
+                    heard_count: s.heard_count,
+                    last_heard_ms: s.last_heard_ms,
+                    is_opulse: s.hint.is_some(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let _ = event_tx.send(ControlEvent::StationList { stations });
 }
 
 /// Resolve the DCD squelch for `freq_hz` (per-band override → default) and apply it.
@@ -3824,5 +3897,41 @@ mod handshake_rf_tests {
                 if command == "connect_peer"),
             "expiry should emit a connect_peer CommandError"
         );
+    }
+
+    #[test]
+    fn discovery_commands_toggle_the_runtime_and_list_stations() {
+        use openpulse_discovery::{DiscoveryParams, DiscoveryRuntime, Submode};
+
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+
+        // Unconfigured: EnableDiscovery reports an error.
+        let mut rs = RuntimeControlState::default();
+        set_discovery_enabled(true, &mut rs, &ev);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ControlEvent::CommandError { command, .. }) if command == "enable_discovery"
+        ));
+
+        // Configured: EnableDiscovery emits DiscoveryStatus; ListStations emits an (empty) StationList.
+        rs.discovery = Some(DiscoveryRuntime::new(DiscoveryParams {
+            enabled: false,
+            idle_grace_ms: 0,
+            dwell_ms: 0,
+            station_ttl_ms: 3_600_000,
+            submode: Submode::Normal,
+            calling_freq_hz: 14_078_000,
+        }));
+        set_discovery_enabled(true, &mut rs, &ev);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ControlEvent::DiscoveryStatus { dial_freq_hz, .. }) if dial_freq_hz == 14_078_000
+        ));
+        emit_station_list(&rs, &ev);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ControlEvent::StationList { stations }) if stations.is_empty()
+        ));
     }
 }
