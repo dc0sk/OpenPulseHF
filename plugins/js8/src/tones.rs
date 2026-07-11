@@ -11,7 +11,7 @@ use crate::submode::{COSTAS_BLOCK_STARTS, COSTAS_LEN, NUM_DATA_SYMBOLS, NUM_SYMB
 
 /// 0-based symbol positions carrying the 58 data tones: `7..=35` then `43..=71` (the middle Costas
 /// block occupies 36–42).
-fn data_positions() -> [usize; NUM_DATA_SYMBOLS] {
+pub(crate) fn data_positions() -> [usize; NUM_DATA_SYMBOLS] {
     let mut pos = [0usize; NUM_DATA_SYMBOLS];
     let mut p = 7;
     for (j, slot) in pos.iter_mut().enumerate() {

@@ -9,6 +9,29 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 Phase B-2 — soft demodulator (first RX round-trip)
+
+- **Requirement/change:** FF-15 Phase B: the soft demodulator — turn a synced slot's audio into the 174 bit
+  LLRs the BP decoder (B-1) consumes, and prove the RX chain end to end.
+- **Design decision:** non-coherent 8-FSK max-log demod. Per data symbol, measure the eight tone energies by
+  Goertzel (at 6.25 Hz spacing the 1280-sample window resolves exactly one tone bin), then convert to three
+  bit LLRs over the **direct-binary** tone map (A-6): `LLR_i = (max energy over tones with bit i = 1 − max
+  over bit i = 0) / noise`, sign matching the decoder (`> 0` ⇒ bit 1). Estimate the noise scale from each
+  symbol's non-peak tone energies (the seven losers are mostly noise) — a self-calibrating scale per the
+  repo's LLR discipline. Assumes perfect sync for now (audio aligned to symbol 0, base tone known); Costas
+  acquisition is B-3.
+- **Implementation:** `plugins/js8/src/demodulate.rs` (`demodulate_soft`, `symbol_tone_energies`,
+  `tone_energies_to_llrs`, `goertzel_energy`); `tones::data_positions` made `pub(crate)`; `lib.rs` module.
+- **Tests:** `demodulate.rs` (4) — LLR sign vs a known tone (5 = `0b101`); **the first true RX round-trip —
+  `message → tones → GFSK audio → demodulate_soft → bp_decode → message`** over a clean channel (4 seeds);
+  the same **survives moderate additive white noise**; per-symbol energies peak on the transmitted tone.
+- **Test results (actually run):** `js8-plugin` 47 passed / 0 failed (4 new); workspace builds 0 errors; clippy
+  `-D warnings` + fmt clean.
+- **Next:** B-3 Costas sync/acquisition (freq×time correlation to find the slot start + base tone), then B-4
+  the `decode_window` multi-decode pipeline + CRC-12 dedup, then the −18 dB weak-signal go/no-go.
+
+---
+
 ## 2026-07-11 — feat(js8): FF-15 Phase B-1 — LDPC(174,87) belief-propagation decoder
 
 - **Requirement/change:** FF-15 Phase B (the RX decoder — the highest-risk, FT8-class track): the FEC-decode
