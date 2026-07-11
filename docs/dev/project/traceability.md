@@ -9,6 +9,31 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 Phase A-5 — frame field packers (callsign + grid, Qt-exact)
+
+- **Requirement/change:** FF-15 Phase A: pack the two fields a JS8 Heartbeat frame carries — a standard
+  callsign into 28 bits (`packCallsign`) and a Maidenhead grid into 15 bits (`packGrid`) — bit-exactly to
+  JS8Call (`varicode.cpp`).
+- **Design decision:** the sandbox has Qt5, so **compile the verbatim upstream `Varicode::packCallsign`/
+  `packGrid`/`grid2deg` against real Qt** and emit ground-truth (field → integer) vectors, then write an
+  **independent** Rust port (own regex-class scan replacing `QRegularExpression`, own mixed-radix over the
+  `alphanumeric` alphabet, own `grid2deg`) and validate it against those vectors. The two implementations are
+  separate (different language, different string/regex machinery), so a match is a genuine cross-check, not a
+  transcription echoing itself — the strongest validation short of the full `reference_vectors` gate. Ported
+  the `/P` strip and Swaziland/Guinea prefix workarounds verbatim; group/hashed calls (the `basecalls` map,
+  needed for `@OPULSE`) and directed `packCmd` land with the message-grammar unit.
+- **Implementation:** `plugins/js8/src/frame.rs` (`pack_callsign`, `pack_grid`, `grid2deg`, window/alphabet
+  helpers, `GRID_INVALID`); `lib.rs` module + re-exports.
+- **Tests:** `frame.rs` (5) — **11 callsign vectors** (incl. 3-char calls + the `3DA0…` workaround) and **8
+  grid vectors** from verbatim-upstream-on-Qt; case/whitespace insensitivity; unpackable callsign → 0;
+  short grid → `GRID_INVALID`.
+- **Test results (actually run):** `js8-plugin` 27 passed / 0 failed (5 new); workspace builds 0 errors; clippy
+  `-D warnings` + fmt clean.
+- **Next:** the JS8 message assembly (payload+flags → 11-byte CRC buffer → 87 info bits → LDPC → Gray/Costas
+  tone sequence) wiring callsign/grid/CRC/LDPC/modulate together, then the end-to-end `reference_vectors` gate.
+
+---
+
 ## 2026-07-11 — feat(js8): FF-15 Phase A-4 — CRC-12 primitive (boost-exact, vector-gated)
 
 - **Requirement/change:** FF-15 Phase A: the 12-bit CRC that turns JS8's 75-bit message into the 87 info
