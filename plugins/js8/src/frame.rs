@@ -7,7 +7,7 @@
 
 /// Callsign/grid alphabet (JS8Call `varicode.cpp` `alphanumeric`): index 0–9 digits, 10–35 `A`–`Z`,
 /// 36 space, 37 `/`, 38 `@`.
-const ALPHANUMERIC: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ /@";
+pub(crate) const ALPHANUMERIC: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ /@";
 
 /// Value `packGrid` returns for a grid shorter than 4 chars (`(1<<15)-1`).
 pub const GRID_INVALID: u16 = (1 << 15) - 1;
