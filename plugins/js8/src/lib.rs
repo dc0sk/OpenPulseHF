@@ -11,10 +11,12 @@
 //! multi-decode receiver land in the following units.
 
 pub mod costas;
+pub mod crc;
 pub mod ldpc174;
 pub mod modulate;
 pub mod submode;
 
 pub use costas::CostasKind;
+pub use crc::augmented_crc12;
 pub use modulate::{modulate_tones, GfskParams};
 pub use submode::{params_for_mode, Submode, SubmodeParams};
