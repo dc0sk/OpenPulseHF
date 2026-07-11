@@ -7,7 +7,79 @@
 //! fields read straight off the bits, no `alphabet72` char round-trip needed. This is what the
 //! discovery MVP uses to learn who it heard and their grid.
 
-use crate::frame::{unpack_grid, ALPHANUMERIC};
+use crate::frame::{unpack_callsign, unpack_grid, ALPHANUMERIC};
+
+/// Directed-command values → command string (JS8Call `directed_cmds`, reversed as `QMap::key` does:
+/// the lexicographically-smallest key for each value). Index is `packed_cmd % 32`.
+const DIRECTED_CMD_BY_VALUE: [&str; 32] = [
+    " SNR?",          // 0
+    " DIT DIT",       // 1
+    " NACK",          // 2
+    " HEARING?",      // 3
+    " GRID?",         // 4
+    ">",              // 5
+    " STATUS?",       // 6
+    " STATUS",        // 7
+    " HEARING",       // 8
+    " MSG",           // 9
+    " MSG TO:",       // 10
+    " QUERY",         // 11
+    " QUERY MSGS",    // 12
+    " QUERY CALL",    // 13
+    " ACK",           // 14
+    " GRID",          // 15
+    " INFO?",         // 16
+    " INFO",          // 17
+    " FB",            // 18
+    " HW CPY?",       // 19
+    " SK",            // 20
+    " RR",            // 21
+    " QSL?",          // 22
+    " QSL",           // 23
+    " CMD",           // 24
+    " SNR",           // 25
+    " NO",            // 26
+    " YES",           // 27
+    " 73",            // 28
+    " HEARTBEAT SNR", // 29
+    " AGN?",          // 30
+    " ",              // 31
+];
+
+/// `<....>` incomplete-callsign sentinel (JS8Call `basecalls`; `nbasecall + 1`). A compound `to` is
+/// sent as this placeholder in the directed frame and carried for real in a separate compound frame.
+const NBASECALL: u32 = 37 * 36 * 10 * 27 * 27 * 27;
+
+/// Command values whose trailing number is a signed SNR (JS8Call `snr_cmds`).
+fn is_snr_cmd_value(v: u8) -> bool {
+    v == 25 || v == 29
+}
+
+/// Unpack a 28-bit directed from/to callsign, applying the portable `/P` suffix and the `<....>`
+/// placeholder (JS8Call `unpackCallsign(value, portable)`; predefined-group basecalls are a follow-on).
+fn unpack_callsign_ext(value: u32, portable: bool) -> String {
+    if value == NBASECALL + 1 {
+        return "<....>".to_string();
+    }
+    let s = unpack_callsign(value);
+    if portable && !s.is_empty() {
+        format!("{s}/P")
+    } else {
+        s
+    }
+}
+
+/// Format a signed SNR the way JS8Call `formatSNR` does (`+NN` / `-NNN`), or `None` out of ±60.
+fn format_snr(snr: i32) -> Option<String> {
+    if !(-60..=60).contains(&snr) {
+        return None;
+    }
+    Some(if snr >= 0 {
+        format!("+{snr:02}")
+    } else {
+        format!("{snr:03}")
+    })
+}
 
 /// JS8 frame type (leading 3 payload bits; JS8Call `Varicode::FrameType`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,6 +192,55 @@ pub fn parse_heartbeat(frame: &CompoundFrame) -> Option<Heartbeat> {
     })
 }
 
+/// A decoded directed message (JS8Call `FrameDirected`): sender, target, command, optional number.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectedMessage {
+    /// Sender callsign (`<....>` if a compound call sent separately).
+    pub from: String,
+    /// Target callsign (`<....>` if the target is compound — see the paired compound frame).
+    pub to: String,
+    /// Command, including its leading space (e.g. `" SNR?"`, `" ACK"`).
+    pub cmd: String,
+    /// Trailing number: a formatted SNR for SNR commands, else a plain signed integer. `None` if absent.
+    pub num: Option<String>,
+}
+
+/// Unpack a 72-bit directed-message payload (JS8Call `Varicode::unpackDirectedMessage`). Returns
+/// `None` if the frame is not a `FrameDirected` (flag 3). Layout: `[flag:3][from:28][to:28][cmd:5]`
+/// with the trailing byte `[portable_from:1][portable_to:1][num:6]`.
+pub fn unpack_directed_message(payload9: &[u8; 9]) -> Option<DirectedMessage> {
+    let value64 = u64::from_be_bytes(payload9[..8].try_into().ok()?);
+    let extra = payload9[8];
+    let flag = ((value64 >> 61) & 0x7) as u8;
+    if flag != 3 {
+        return None; // not FrameDirected
+    }
+    let packed_from = ((value64 >> 33) & 0x0fff_ffff) as u32;
+    let packed_to = ((value64 >> 5) & 0x0fff_ffff) as u32;
+    let packed_cmd = (value64 & 0x1f) as u8;
+
+    let portable_from = (extra >> 7) & 1 == 1;
+    let portable_to = (extra >> 6) & 1 == 1;
+    let num_field = extra % 64;
+
+    let cmd = DIRECTED_CMD_BY_VALUE[(packed_cmd % 32) as usize].to_string();
+    let num = (num_field != 0).then(|| {
+        let n = num_field as i32 - 31;
+        if is_snr_cmd_value(packed_cmd % 32) {
+            format_snr(n).unwrap_or_default()
+        } else {
+            n.to_string()
+        }
+    });
+
+    Some(DirectedMessage {
+        from: unpack_callsign_ext(packed_from, portable_from),
+        to: unpack_callsign_ext(packed_to, portable_to),
+        cmd,
+        num,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +316,48 @@ mod tests {
             .expect("a heartbeat decoded from the air");
         assert_eq!(hb.callsign, "KN4CRD");
         assert_eq!(hb.grid, "EM73");
+    }
+
+    #[test]
+    fn directed_messages_match_upstream() {
+        // (payload9, from, to, cmd) from verbatim upstream packDirectedMessage/unpackDirectedMessage.
+        for (hex, from, to, cmd) in [
+            ("71717ebdf299dde000", "KN4CRD", "W1AW", " SNR?"),
+            ("71717ebdf299ddee00", "KN4CRD", "W1AW", " ACK"),
+            ("6b43a9551717ebc400", "DC0SK", "KN4CRD", " GRID?"),
+            ("6b43a955f299ddfc00", "DC0SK", "W1AW", " 73"),
+            ("71717ebcb43a955600", "KN4CRD", "DC0SK", " QSL?"),
+            ("7f299ddf1717ebd300", "W1AW", "KN4CRD", " HW CPY?"),
+            ("71717ebdef34ac3000", "KN4CRD", "N0P", " INFO?"),
+            ("6b43a955ec8e3bb400", "DC0SK", "G0ABC", " SK"),
+            ("71717ebdf299ddfb00", "KN4CRD", "W1AW", " YES"),
+            ("71717ebdf299ddfa00", "KN4CRD", "W1AW", " NO"),
+        ] {
+            let dm = unpack_directed_message(&hex9(hex)).expect("directed frame");
+            assert_eq!(dm.from, from, "from {hex}");
+            assert_eq!(dm.to, to, "to {hex}");
+            assert_eq!(dm.cmd, cmd, "cmd {hex}");
+            assert_eq!(dm.num, None, "num {hex}");
+        }
+    }
+
+    #[test]
+    fn directed_snr_numbers_match_upstream() {
+        for (hex, cmd, num) in [
+            ("71717ebdf299ddf915", " SNR", "-10"),
+            ("71717ebdf299ddf924", " SNR", "+05"),
+            ("6b43a955f299ddf91a", " SNR", "-05"),
+            ("71717ebdf299ddfd21", " HEARTBEAT SNR", "+02"),
+        ] {
+            let dm = unpack_directed_message(&hex9(hex)).expect("directed frame");
+            assert_eq!(dm.cmd, cmd, "cmd {hex}");
+            assert_eq!(dm.num.as_deref(), Some(num), "num {hex}");
+        }
+    }
+
+    #[test]
+    fn non_directed_frame_returns_none() {
+        // A heartbeat (flag 0) is not a directed frame.
+        assert_eq!(unpack_directed_message(&hex9("0a2fb3a3ee2ee2ea58")), None);
     }
 }
