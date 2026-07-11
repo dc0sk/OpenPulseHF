@@ -82,6 +82,7 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 | `openpulse-b2f-driver` | `crates/openpulse-b2f-driver` | High-level ISS/IRS session driver over ARDOP TCP; e2e loopback tests |
 | `openpulse-gateway` | `crates/openpulse-gateway` | Direct TCP Winlink CMS gateway; `openpulse-gateway` binary |
 | `openpulse-qsy` | `crates/openpulse-qsy` | QSY frequency-agility protocol: wire frame codec, Ed25519 signing, `QsySession` state machine, `QsyScanner` |
+| `openpulse-discovery` | `crates/openpulse-discovery` | JS8-based station discovery (FF-15): pure no-I/O protocol logic. `hint.rs` = `@OPULSE` OPHF capability-hint codec (base-36, callsign-salted CRC-8). Station table, T/R scheduler, discovery/rendezvous SMs land next |
 | `openpulse-mesh` | `crates/openpulse-mesh` | Mesh broadcast daemon; beacon re-broadcast with TTL, `openpulse-mesh` binary |
 | `openpulse-repeater` | `crates/openpulse-repeater` | Digipeater / relay node; configurable filter and forwarding policy |
 | `openpulse-daemon` | `crates/openpulse-daemon` | Unified background daemon aggregating modem, PTT, and control-protocol services |

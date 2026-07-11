@@ -9,6 +9,34 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(discovery): FF-15 Phase C-3 — `@OPULSE` capability hint codec
+
+- **Requirement/change:** FF-15 Phase C (plan §3.2/§5.4): the in-band `@OPULSE` marker that lets one OpenPulse
+  station recognize another among ordinary JS8 traffic — the last Phase-C piece the RX-only discovery MVP
+  needs.
+- **Design decision:** create the new pure, no-I/O **`crates/openpulse-discovery`** crate (the home for the
+  station table, T/R scheduler, and discovery/rendezvous SMs to come) and seed it with `hint.rs`. The hint is a
+  free-text token `OPHF<version> XXXXXXXX` (8 base-36 chars = 40 bits): `caps:16 | pref_channel:6 |
+  listen_submode:3 | reserved:7 | check:8`, where `check` is a CRC-8/SMBUS over the low 32 bits **salted with
+  the sender callsign**. Detection requires all three of: the exact `OPHF<our-version>` token, a valid 8-char
+  base-36 payload, and a CRC that verifies against the callsign — so organic JS8 text can't be mistaken for a
+  hint and a copy-pasted payload from another station fails to verify. This is a fresh OpenPulse format (not a
+  JS8 port), so it's validated by construction, not upstream vectors. The `@OPULSE` group *addressing* is
+  applied by the JS8 message layer (directed frame); peer authentication is deferred to the post-QSY signed
+  CONREQ/CONACK.
+- **Implementation:** `crates/openpulse-discovery/{Cargo.toml, src/lib.rs, src/hint.rs}` (`encode_hint`,
+  `decode_hint`, `HintPayload`, `crc8_salted`, base-36 codec); `Cargo.toml` workspace member + dep.
+- **Tests:** `hint.rs` (4) — round-trip; **CRC binds to the sender callsign** (a DC0SK hint won't verify as
+  W1AW; callsign salt is case/whitespace-insensitive); rejects non-hint text (wrong token/version/length/char)
+  and a random-but-well-formed payload (CRC); all fields survive at their max bit-widths.
+- **Test results (actually run):** `openpulse-discovery` 4 passed / 0 failed; workspace builds 0 errors; clippy
+  `-D warnings` + fmt clean.
+- **Next:** Phase C is functionally done for the MVP (RX field/grammar/hint decode). **Phase D — the RX-only
+  discovery MVP ship line:** `Js8Clock` (wall-clock T/R slots), `StationTable` + `PeerCache` mapping, the
+  discovery state machine, and the daemon dwell-ring + auto-QSY glue — all zero-TX.
+
+---
+
 ## 2026-07-11 — feat(js8): FF-15 Phase C-2 — compound-frame grammar (RX heartbeat decode)
 
 - **Requirement/change:** FF-15 Phase C: parse a decoded 72-bit payload into a sender callsign + frame type +
