@@ -568,7 +568,7 @@ fn drive_rx_actions(
 /// on a hash mismatch). Returns the `FileComplete` status + the delivery-receipt countersignature.
 fn reassemble_verify_write(
     fx: &mut FxRxState,
-    rs: &RuntimeControlState,
+    rs: &mut RuntimeControlState,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
 ) -> (CompleteStatus, [u8; 64]) {
     let Some(payload) = fx.assembler.reassemble() else {
@@ -601,6 +601,19 @@ fn reassemble_verify_write(
     match write_file(rs, &fx.from, &fx.offer.name, &payload, verified) {
         Ok(path) => {
             fx.file_received_emitted = true;
+            let timestamp_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            // Record it for `ListFiles` so late-connecting clients see completed transfers.
+            rs.received_files.push(crate::protocol::FileSummary {
+                name: fx.offer.name.clone(),
+                from: fx.from.clone(),
+                size: payload.len() as u64,
+                verified,
+                path: path.clone(),
+                timestamp_secs,
+            });
             let _ = event_tx.send(ControlEvent::FileReceived {
                 transfer_id: fx.offer.transfer_id,
                 from: fx.from.clone(),

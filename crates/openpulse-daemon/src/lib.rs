@@ -218,6 +218,9 @@ pub struct RuntimeControlState {
     pub filexfer_frames_routed: u64,
     /// Active inbound file-transfer session (at most one per link in v1).
     pub file_rx: Option<crate::filexfer::FxRxState>,
+    /// Received files this session, newest last — served by `ListFiles` so a late-connecting client
+    /// sees transfers that completed before it attached (not just live `FileReceived` events).
+    pub received_files: Vec<crate::protocol::FileSummary>,
     /// Active outbound file-transfer session (at most one per link in v1).
     pub file_tx: Option<crate::filexfer::FxTxState>,
     /// Storage + acceptance policy from `[file_transfer]` config.
@@ -318,6 +321,7 @@ impl Default for RuntimeControlState {
             filexfer_sar: SarReassembler::new(FILEXFER_SAR_TIMEOUT),
             filexfer_frames_routed: 0,
             file_rx: None,
+            received_files: Vec::new(),
             file_tx: None,
             filexfer_policy: crate::filexfer::FileTransferPolicy::default(),
             filexfer_tx_queue: Vec::new(),
@@ -2104,13 +2108,13 @@ pub async fn apply_command_to_engine(
                 .unwrap_or(0);
             emit_peer_list(runtime_state, event_tx, now_ms);
         }
+        ControlCommand::ListFiles => emit_file_list(runtime_state, event_tx),
         // No live-modem side effects for these commands in the engine path.
         ControlCommand::SubscribeSpectrum { .. }
         | ControlCommand::GetConfig
         | ControlCommand::ListMessages
         | ControlCommand::GetMessage { .. }
-        | ControlCommand::DeleteMessage { .. }
-        | ControlCommand::ListFiles => {}
+        | ControlCommand::DeleteMessage { .. } => {}
     }
 }
 
@@ -2187,6 +2191,16 @@ fn emit_station_list(
         })
         .unwrap_or_default();
     let _ = event_tx.send(ControlEvent::StationList { stations });
+}
+
+/// Emit this session's received-file list to the requesting client (`ListFiles`).
+pub(crate) fn emit_file_list(
+    runtime_state: &RuntimeControlState,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+) {
+    let _ = event_tx.send(ControlEvent::FileList {
+        files: runtime_state.received_files.clone(),
+    });
 }
 
 /// Upsert discovery's hinted (OpenPulse-marked) stations into the shared [`PeerCache`] via
@@ -2295,6 +2309,32 @@ mod command_apply_tests {
         let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
         engine.register_plugin(Box::new(BpskPlugin::new())).unwrap();
         engine
+    }
+
+    #[test]
+    fn list_files_reports_this_sessions_received_files() {
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(8);
+        let ev_tx = Arc::new(tx);
+        let mut rs = RuntimeControlState::default();
+        rs.received_files.push(crate::protocol::FileSummary {
+            name: "report.txt".into(),
+            from: "W1AW".into(),
+            size: 100,
+            verified: true,
+            path: "/tmp/report.txt".into(),
+            timestamp_secs: 1_700_000_000,
+        });
+
+        emit_file_list(&rs, &ev_tx);
+
+        match rx.try_recv().expect("FileList emitted") {
+            ControlEvent::FileList { files } => {
+                assert_eq!(files.len(), 1);
+                assert_eq!(files[0].name, "report.txt");
+                assert!(files[0].verified);
+            }
+            other => panic!("expected FileList, got {other:?}"),
+        }
     }
 
     #[tokio::test]

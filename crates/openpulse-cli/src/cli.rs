@@ -304,6 +304,21 @@ pub enum DaemonCommands {
     Stations,
     /// Print recognized OpenPulse peers (capabilities, quality, trust) from the shared cache as JSON.
     Peers,
+    /// Send a local file to a peer callsign over RF (direct P2P `OPFX` transfer).
+    SendFile {
+        /// Recipient callsign.
+        to: String,
+        /// Path to the local file to send.
+        path: String,
+    },
+    /// Accept a pending inbound file offer by transfer id.
+    AcceptFile { transfer_id: u32 },
+    /// Reject a pending inbound file offer by transfer id.
+    RejectFile { transfer_id: u32 },
+    /// Cancel an in-flight file transfer by transfer id.
+    CancelFile { transfer_id: u32 },
+    /// Print files received this session as JSON.
+    Files,
     /// Stream binary spectrum frames as NDJSON to stdout.
     SubscribeSpectrum {
         /// Frames per second requested from the daemon.

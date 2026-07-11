@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use openpulse_daemon::protocol::{
-    CommandResponse, ControlCommand, ControlEvent, DaemonConfig, MessageSummary, PeerSummary,
-    StationSummary,
+    CommandResponse, ControlCommand, ControlEvent, DaemonConfig, FileSummary, MessageSummary,
+    PeerSummary, StationSummary,
 };
 
 use crate::cli::DaemonCommands;
@@ -83,6 +83,19 @@ pub fn run(addr: &str, cmd: DaemonCommands) -> Result<i32> {
         DaemonCommands::DisableDiscovery => simple(addr, ControlCommand::DisableDiscovery),
         DaemonCommands::Stations => list_stations(addr),
         DaemonCommands::Peers => list_peers(addr),
+        DaemonCommands::SendFile { to, path } => {
+            simple(addr, ControlCommand::SendFile { to, path })
+        }
+        DaemonCommands::AcceptFile { transfer_id } => {
+            simple(addr, ControlCommand::AcceptFile { transfer_id })
+        }
+        DaemonCommands::RejectFile { transfer_id } => {
+            simple(addr, ControlCommand::RejectFile { transfer_id })
+        }
+        DaemonCommands::CancelFile { transfer_id } => {
+            simple(addr, ControlCommand::CancelFile { transfer_id })
+        }
+        DaemonCommands::Files => list_files(addr),
         DaemonCommands::DeleteMessage { id } => simple(addr, ControlCommand::DeleteMessage { id }),
         DaemonCommands::ListMessages => list_messages(addr),
         DaemonCommands::GetMessage { id } => get_message(addr, id),
@@ -256,6 +269,25 @@ fn list_peers(addr: &str) -> Result<i32> {
         }
     }
     println!("{}", serde_json::to_string_pretty(&peers)?);
+    Ok(0)
+}
+
+fn list_files(addr: &str) -> Result<i32> {
+    let (events, resp) = run_command(addr, &ControlCommand::ListFiles)?;
+    if !resp.ok {
+        eprintln!(
+            "error: {}",
+            resp.error.unwrap_or_else(|| "unknown".to_string())
+        );
+        return Ok(1);
+    }
+    let mut files: Vec<FileSummary> = Vec::new();
+    for ev in events {
+        if let ControlEvent::FileList { files: f } = ev {
+            files = f;
+        }
+    }
+    println!("{}", serde_json::to_string_pretty(&files)?);
     Ok(0)
 }
 
@@ -545,6 +577,16 @@ mod tests {
             }
             _ => panic!("expected PeerList event"),
         }
+    }
+
+    #[test]
+    fn files_lists_received_files() {
+        let (addr, _) = mock_daemon(vec![
+            r#"{"type":"file_list","files":[{"name":"report.txt","from":"W1AW","size":100,"verified":true,"path":"/tmp/report.txt","timestamp_secs":1700000000}]}"#
+                .into(),
+            r#"{"ok":true}"#.into(),
+        ]);
+        assert_eq!(list_files(&addr).unwrap(), 0);
     }
 
     #[test]
