@@ -1399,7 +1399,7 @@ persistence) ✅ → **F on-air validation** (deferred field-test batch). Standa
 Highest risk was Phase C half-duplex ACK/PTT timing — de-risked by the twin-daemon round-trip test, which now
 also exercises the real PTT-keyed burst-drain path.
 
-### FF-15 — JS8-based station discovery and rendezvous *(Phases A+B complete; go/no-go PASSED)*
+### FF-15 — JS8-based station discovery and rendezvous *(Phases A+B done, C RX-complete; go/no-go PASSED)*
 
 **Plan approved 2026-07-10** — full design in
 [`docs/dev/design/js8-discovery-rendezvous-plan.md`](../design/js8-discovery-rendezvous-plan.md)
@@ -1450,9 +1450,19 @@ track:
 - B-6 (#758) **−18 dB go/no-go PASS** — calibrated-AWGN sweep: 12/12 to −15 dB, **11/12 at −18 dB**, floor −21 dB.
   Native decode is viable; the D1 external-JS8Call fallback is **not** needed. Acceptance gate: `snr_sweep`.
 
-**Next:** Phase C (message grammar: `packCompoundFrame`/varicode/JSC + the `@OPULSE` capability hint), then
-**D (RX-only discovery MVP = ship line)**. Later hardening: a Pi-class CPU-budget check (`cross`) and the
-bit-exact `reference_vectors` (needs gfortran, the one absent upstream tool).
+**Phase C RX grammar complete** (PRs #760–#762) — the receive path a discovery station needs:
+- C-1 (#760) `frame::unpack_callsign`/`unpack_grid` — inverse field codecs, Qt-exact + round-trip.
+- C-2 (#761) `grammar.rs` — `unpackCompoundFrame`/`unpackAlphaNumeric50` → `FrameType`/`CompoundFrame`/
+  `Heartbeat`; **the full RX pipeline decodes a heartbeat's callsign + grid off the air** (`KN4CRD`/`EM73`).
+  Finding: the 72-bit payload is `value64 ‖ rem8`, so fields read straight off the decoder's bytes.
+- C-3 (#762) new **`crates/openpulse-discovery`** + `hint.rs` — the `@OPULSE` `OPHF` capability hint (base-36,
+  callsign-salted CRC-8; three-way detection so organic JS8 text can't false-positive).
+
+TX-side packing (`packCompoundFrame`/`packAlphaNumeric50`) and varicode/JSC free text are deferred (beacon TX
+= Phase E; the queried-INFO hint path). **Next: Phase D — the RX-only discovery MVP ship line** (`Js8Clock`
+wall-clock T/R slots, `StationTable` + `PeerCache` mapping, discovery state machine, daemon dwell-ring +
+auto-QSY glue — all zero-TX). Later hardening: a Pi-class CPU-budget check (`cross`) and the bit-exact
+`reference_vectors` (needs gfortran, the one absent upstream tool).
 
 ---
 
