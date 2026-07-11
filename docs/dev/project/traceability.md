@@ -9,6 +9,21 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(discovery): FF-15 Phase F-3b — rendezvous RX reassembler
+
+- **Requirement/change:** an inbound rendezvous over must be reassembled from its per-slot JS8 frames and
+  surfaced only when it is addressed to us.
+- **Design decision:** `openpulse-discovery/src/rendezvous_assembler.rs` — `RendezvousAssembler` mirrors
+  `HintAssembler` (per-offset buffering, `First`-reset, stale sweep) but keys the `CompoundDirected`
+  target on **our own callsign** and parses the reassembled Huffman text as a `RendezvousMsg` instead of
+  a capability hint. Returns `RecognizedRendezvous { from, grid, msg, base_freq_hz }`.
+- **Implementation:** `crates/openpulse-discovery/src/rendezvous_assembler.rs`; exports in `lib.rs`.
+- **Tests:** `directed()` (F-3a) builds the frames the assembler consumes — Propose addressed to us
+  recognised; an over to another station ignored; Accept + Reject both decode; non-rendezvous free text
+  to us not recognised.
+- **Test results:** `cargo test -p openpulse-discovery --no-default-features rendezvous_assembler::` →
+  4 passed; clippy clean. F-3c (daemon orchestration + QSY + CONREQ handoff + twin test) next.
+
 ## 2026-07-11 — feat(js8): FF-15 Phase F-3a — directed free-text TX builder
 
 - **Requirement/change:** a rendezvous message rides as a JS8 **directed free-text over** to the peer.
