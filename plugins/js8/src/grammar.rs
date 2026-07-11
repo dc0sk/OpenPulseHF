@@ -159,13 +159,14 @@ pub fn unpack_alphanumeric50(mut packed: u64) -> String {
     word.iter().filter(|&&c| c != ' ').collect()
 }
 
-/// Parse a decoded 72-bit payload (`payload9`) as a compound frame. Returns `None` for a `Directed`
-/// or `Data` flag (those are not compound frames — matches `unpackCompoundFrame`).
+/// Parse a decoded 72-bit payload (`payload9`) as a compound frame. Returns `None` for any non-compound
+/// flag — `Directed` (3) or `Data` (4–7, top bit set) — since only `Heartbeat`/`Compound`/
+/// `CompoundDirected` (0/1/2) are compound frames (matches `unpackCompoundFrame`).
 pub fn unpack_compound_frame(payload9: &[u8; 9]) -> Option<CompoundFrame> {
     let value64 = u64::from_be_bytes(payload9[..8].try_into().ok()?);
     let packed_8 = payload9[8];
     let flag = ((value64 >> 61) & 0x7) as u8;
-    if flag == 3 || flag == 4 {
+    if flag >= 3 {
         return None;
     }
     let callsign50 = (value64 >> 11) & ((1u64 << 50) - 1);
@@ -359,5 +360,14 @@ mod tests {
     fn non_directed_frame_returns_none() {
         // A heartbeat (flag 0) is not a directed frame.
         assert_eq!(unpack_directed_message(&hex9("0a2fb3a3ee2ee2ea58")), None);
+    }
+
+    #[test]
+    fn data_frames_are_not_compound_frames() {
+        // Flag-5/7 Data frames (top bit set) must not be mis-decoded as compound frames.
+        assert!(unpack_compound_frame(&hex9("bfec6491489275029b")).is_none()); // flag 5
+        assert!(unpack_compound_frame(&hex9("b9afffffffffffffff")).is_none()); // flag 5
+                                                                               // A directed frame (flag 3) is likewise not compound.
+        assert!(unpack_compound_frame(&hex9("71717ebdf299dde000")).is_none());
     }
 }

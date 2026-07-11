@@ -9,6 +9,32 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(discovery): FF-15 — @OPULSE HintAssembler + runtime wiring (peer recognition)
+
+- **Requirement/change:** with the free-text/directed unpacker in place, recognise an OpenPulse peer
+  from its `@OPULSE` beacon. On air the beacon is a 4-frame compound-directed *over* (one frame per
+  15 s slot), so recognition needs cross-slot assembly, not a single-frame decode.
+- **Design decision:** a `HintAssembler` buffers decoded frames per audio-offset bucket (a station
+  holds one offset across its over), bracketed by the `First`/`Last` transmission flags, and folds
+  `Compound`(sender) + `CompoundDirected`(`@OPULSE`) + Huffman `Data` frames into `(sender, text)`,
+  then runs the CRC-salted `decode_hint`. The CRC gate makes premature recognition on a partial text
+  simply fail, so it recognises opportunistically after each frame (a fade may drop the `Last` flag).
+  Root-caused and fixed a latent grammar bug: `unpack_compound_frame` only rejected flags 3–4, so
+  flag-5/6/7 data frames were mis-accepted as compound — now rejects all of flag ≥ 3.
+- **Implementation:** `crates/openpulse-discovery/src/hint_assembler.rs`
+  (`HintAssembler`/`RecognizedHint`); `runtime.rs::decode_slot` feeds every decode to the assembler
+  and upserts a recognised sender into the `StationTable` with its `OphfHint`, so the daemon's
+  existing `ListStations` reports `is_opulse: true` (no daemon change). `plugins/js8/src/grammar.rs`
+  guard fix + exports in `lib.rs`.
+- **Tests:** `hint_assembler.rs` (assemble 4-frame beacon; frequency isolation; stale eviction;
+  wrong-callsign CRC rejection; interleaved heartbeats); `grammar.rs::data_frames_are_not_compound_frames`;
+  `runtime.rs::recognizes_an_opulse_peer_from_a_four_slot_beacon` (end-to-end through the real
+  `decode_window`). Assembler vectors from the Qt5 ground-truth harness (`buildMessageFrames` +
+  forced `packHuffMessage`).
+- **Test results:** `cargo test -p openpulse-discovery --no-default-features` → 31 passed, 0 failed;
+  `cargo test -p js8-plugin --lib` → 69 passed; `cargo build -p openpulse-daemon` clean; fmt + clippy
+  (`-D warnings`) clean.
+
 ## 2026-07-11 — feat(js8): FF-15 — JS8 free-text (Huffman) + directed-message unpacker (Phase-C message-layer gap)
 
 - **Requirement/change:** the `@OPULSE` peer-recognition path (G3) was blocked — `runtime.rs`

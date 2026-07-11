@@ -11,8 +11,15 @@ use js8_plugin::grammar::{parse_heartbeat, unpack_compound_frame};
 use js8_plugin::submode::{params, Submode};
 
 use crate::discovery_sm::{DiscoveryAction, DiscoveryEvent, DiscoverySm, DiscoveryState};
+use crate::hint::HINT_VERSION;
+use crate::hint_assembler::HintAssembler;
 use crate::scheduler::{Js8Clock, SlotTracker};
-use crate::station::{Observation, StationTable};
+use crate::station::{Observation, OphfHint, StationTable};
+
+/// Audio-offset tolerance (Hz) for bucketing an over's frames — just under one NORMAL tone spacing.
+const HINT_FREQ_TOL_HZ: f32 = 6.0;
+/// Slots to keep an incomplete over before evicting it (a NORMAL beacon is ~4 frames/slots).
+const HINT_MAX_OVER_SLOTS: u64 = 6;
 
 /// Runtime parameters resolved from `[discovery]` config (plan §8) plus the resolved dwell frequency.
 #[derive(Debug, Clone)]
@@ -58,6 +65,8 @@ pub struct DiscoveryRuntime {
     clock: Js8Clock,
     slots: SlotTracker,
     table: StationTable,
+    /// Cross-slot assembler recognising `@OPULSE` capability beacons.
+    assembler: HintAssembler,
     /// Audio accumulated since the last slot boundary (only while dwelling).
     dwell_buf: Vec<f32>,
 }
@@ -73,6 +82,7 @@ impl DiscoveryRuntime {
             clock,
             slots: SlotTracker::new(),
             table: StationTable::new(),
+            assembler: HintAssembler::new(HINT_FREQ_TOL_HZ, HINT_MAX_OVER_SLOTS),
             dwell_buf: Vec::new(),
         }
     }
@@ -183,8 +193,32 @@ impl DiscoveryRuntime {
         if buf.len() < sm.samples_per_period() {
             return Vec::new();
         }
+        let slot = self.clock.slot_index(now_ms);
         let mut out = Vec::new();
         for d in decode_window(&buf, &sm, &DecodeCfg::default()) {
+            // Feed every frame to the cross-slot hint assembler; a completed `@OPULSE` beacon upserts
+            // the sender as an OpenPulse peer (its hint) and is reported as heard.
+            if let Some(r) = self
+                .assembler
+                .ingest(&d.payload, d.i3bit, d.base_freq_hz, slot)
+            {
+                let is_new = self.table.upsert(
+                    Observation {
+                        callsign: r.callsign.clone(),
+                        grid: r.grid.clone(),
+                        snr_db: d.snr_db,
+                        freq_offset_hz: r.base_freq_hz,
+                        dial_freq_hz: self.params.calling_freq_hz,
+                        hint: Some(OphfHint::from_payload(HINT_VERSION, &r.hint)),
+                    },
+                    now_ms,
+                );
+                out.push(DiscoveryOutcome::StationHeard {
+                    callsign: r.callsign,
+                    grid: r.grid,
+                    is_new,
+                });
+            }
             if let Some(o) = self.ingest_decode(&d, now_ms) {
                 out.push(o);
             }
@@ -272,6 +306,64 @@ mod tests {
         );
         let s = rt.stations().get("KN4CRD").expect("station cached");
         assert_eq!(s.grid.as_deref(), Some("EM73"));
+    }
+
+    fn hex9(s: &str) -> [u8; 9] {
+        let mut p = [0u8; 9];
+        for (i, b) in p.iter_mut().enumerate() {
+            *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).unwrap();
+        }
+        p
+    }
+
+    /// One NORMAL frame of a beacon over, modulated at 1500 Hz (payload9 + its i3bit flag).
+    fn beacon_frame(hex: &str, i3bit: u8) -> Vec<f32> {
+        let sm = js8_plugin::submode::params(Submode::Normal);
+        let info = js8_info_bits(&hex9(hex), i3bit);
+        modulate_tones(
+            &message_to_tones(&info, CostasKind::Original),
+            1500.0,
+            &GfskParams::from_submode(&sm),
+        )
+    }
+
+    #[test]
+    fn recognizes_an_opulse_peer_from_a_four_slot_beacon() {
+        // The four Huffman-forced frames of `DC0SK: @OPULSE OPHF1 1FAX3AIT` (Qt5 ground truth), each
+        // with its transmission flag. A NORMAL over sends one frame per 15 s slot.
+        let frames = [
+            ("2694fa766ea662ea58", 1u8), // Compound: DC0SK EM73 (First)
+            ("531a90d5639ea3f5c8", 0u8), // CompoundDirected: @OPULSE
+            ("bfec6491489275029b", 0u8), // Data: "OPHF1 1FAX3A"
+            ("b9afffffffffffffff", 2u8), // Data (Last): "IT"
+        ];
+
+        let mut rt = DiscoveryRuntime::new(params());
+        rt.tick(1000, true);
+        rt.qsy_complete(true);
+        assert_eq!(rt.state(), DiscoveryState::Dwelling);
+
+        let mut heard = Vec::new();
+        let mut t = 1000u64;
+        for (hex, i3) in frames {
+            rt.push_audio(&beacon_frame(hex, i3));
+            rt.tick(t, true); // establish this slot
+            t += 15_000;
+            heard.extend(rt.tick(t, true)); // cross the slot boundary → decode this frame
+        }
+
+        // The sender is cached as an OpenPulse peer with its decoded capabilities.
+        let s = rt.stations().get("DC0SK").expect("peer cached");
+        let hint = s.hint.expect("carries an @OPULSE hint");
+        assert_eq!(hint.caps, 0xB105);
+        assert_eq!(hint.pref_channel, Some(42));
+        assert_eq!(s.grid.as_deref(), Some("EM73"));
+        assert!(
+            heard
+                .iter()
+                .any(|o| matches!(o, DiscoveryOutcome::StationHeard { callsign, .. } if callsign == "DC0SK")),
+            "emitted StationHeard for the recognized peer: {heard:?}"
+        );
     }
 
     #[test]
