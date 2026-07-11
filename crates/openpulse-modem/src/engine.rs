@@ -1956,6 +1956,29 @@ impl ModemEngine {
         Ok(())
     }
 
+    /// Estimate the on-air duration, in seconds, of a `payload_len`-byte frame sent in `mode`.
+    ///
+    /// Modulates a representative zero buffer through the mode's real modulator and divides the
+    /// produced sample count by the sample rate. This is pure — it does not touch the wire sequence,
+    /// PTT, or the audio backend — so callers (e.g. airtime-bounded TX burst planning) can size bursts
+    /// without side effects. It omits frame + FEC expansion, so it is a slight under-estimate; callers
+    /// that need a safety bound should keep `burst_max_secs` comfortably under any PTT watchdog.
+    /// Returns `None` for an unknown mode or a modulator error.
+    pub fn estimate_air_secs(&self, payload_len: usize, mode: &str) -> Option<f64> {
+        let plugin = self.plugins.get(mode)?;
+        let mod_cfg = ModulationConfig {
+            mode: mode.to_string(),
+            center_frequency: self.center_frequency,
+            ..ModulationConfig::default()
+        };
+        let samples = plugin.modulate(&vec![0u8; payload_len], &mod_cfg).ok()?;
+        let fs = AudioConfig::default().sample_rate as f64;
+        if fs <= 0.0 {
+            return None;
+        }
+        Some(samples.len() as f64 / fs)
+    }
+
     /// Encode `data`, modulate to baseband I/Q, and write to the IQ output stream.
     ///
     /// Requires the audio backend to support [`AudioBackend::open_iq_output`].
