@@ -1399,7 +1399,7 @@ persistence) ✅ → **F on-air validation** (deferred field-test batch). Standa
 Highest risk was Phase C half-duplex ACK/PTT timing — de-risked by the twin-daemon round-trip test, which now
 also exercises the real PTT-keyed burst-drain path.
 
-### FF-15 — JS8-based station discovery and rendezvous *(Phase A TX core complete)*
+### FF-15 — JS8-based station discovery and rendezvous *(Phases A+B complete; go/no-go PASSED)*
 
 **Plan approved 2026-07-10** — full design in
 [`docs/dev/design/js8-discovery-rendezvous-plan.md`](../design/js8-discovery-rendezvous-plan.md)
@@ -1437,9 +1437,22 @@ compiled to emit ground-truth vectors; LDPC is gated by `H·encode(m)=0`):
 - A-8 (#751) `plugin.rs` — `Js8Plugin` `ModulationPlugin`; full TX chain, modulated audio Goertzel-decodes back
   to the exact 79 tones. `demodulate` errors (Phase B); **not yet daemon-registered** (until the decoder lands).
 
-**Next:** Phase B (native RX decoder — the highest-risk, FT8-class, go/no-go checkpoint), or the end-to-end
-`reference_vectors` gate (a bit-exact WAV/tone compare against JS8Call's Fortran `genjs8`, which needs
-gfortran installed — the one upstream tool absent from the dev host).
+**Phase B complete — native RX works and PASSED the go/no-go** (PRs #753–#758). The highest-risk, FT8-class
+track:
+- B-1 (#753) `ldpc174.rs::bp_decode` — sum-product LDPC(174,87) BP decoder (ported `Mn`; corrects flipped/
+  noisy LLRs).
+- B-2 (#754) `demodulate.rs` — non-coherent 8-FSK max-log soft demod; **first RX round-trip** (message→GFSK→
+  demod→decode).
+- B-3 (#755) `sync.rs` — Costas 2-D (time×freq) acquisition on the **normalized** correlation.
+- B-4 (#756) `decoder.rs::decode_window` — multi-decode per slot, **CRC-12 filter**, content dedup (two
+  overlapping stations decode; pure noise → nothing).
+- B-5 (#757) `Js8Plugin::demodulate` wired (trait round-trips); plugin stays discovery-service-owned (Phase D).
+- B-6 (#758) **−18 dB go/no-go PASS** — calibrated-AWGN sweep: 12/12 to −15 dB, **11/12 at −18 dB**, floor −21 dB.
+  Native decode is viable; the D1 external-JS8Call fallback is **not** needed. Acceptance gate: `snr_sweep`.
+
+**Next:** Phase C (message grammar: `packCompoundFrame`/varicode/JSC + the `@OPULSE` capability hint), then
+**D (RX-only discovery MVP = ship line)**. Later hardening: a Pi-class CPU-budget check (`cross`) and the
+bit-exact `reference_vectors` (needs gfortran, the one absent upstream tool).
 
 ---
 
