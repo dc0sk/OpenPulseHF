@@ -9,6 +9,7 @@ pub mod hint;
 pub mod hint_assembler;
 pub mod peer_map;
 pub mod rendezvous;
+pub mod rendezvous_assembler;
 pub mod runtime;
 pub mod scheduler;
 pub mod station;
@@ -22,6 +23,7 @@ pub use rendezvous::{
     respond as rendezvous_respond, RejectReason, RendezvousInitiator, RendezvousMsg,
     RendezvousOutcome, DEFAULT_SWITCH_SLOTS,
 };
+pub use rendezvous_assembler::{RecognizedRendezvous, RendezvousAssembler};
 pub use runtime::{DiscoveryOutcome, DiscoveryParams, DiscoveryRuntime, TxMode};
 pub use scheduler::{Js8Clock, SlotTracker};
 pub use station::{Js8Station, Observation, OphfHint, QueryBackoff, StationTable};
