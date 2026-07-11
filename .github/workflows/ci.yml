@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  pull_request:
   workflow_dispatch:
 
 env:
@@ -120,6 +121,25 @@ jobs:
 
       - name: Full test gate
         run: cargo test --workspace --no-default-features
+
+  macos-build:
+    name: macOS build (compile check, no default features)
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.REQUIRED_RUST }}
+
+      # macOS runners are a 10x cost multiplier, so this is a lean compile-only guard for the
+      # platform (REQ-PLAT-02): the audio backend is off under --no-default-features, so it validates
+      # that the workspace builds on macOS without paying for the full test suite. CPAL audio on macOS
+      # needs real hardware and stays a manual/on-air check.
+      - name: Build workspace on macOS
+        run: cargo build --workspace --no-default-features
 
   gpu-feature-gates:
     name: GPU feature gates (compile + lint)
