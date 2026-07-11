@@ -9,6 +9,24 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — docs/test: low-priority audit closeout (G-2/G-5/G-7 + serial PTT)
+
+- **Requirement/change:** G-2 — `transmit_iq` bypasses the emit seam (no reg-log/frame-count/auto-ID),
+  undocumented. G-5 — the KISS TNC runs no auto-ID timer (undocumented whether intentional). G-7 —
+  guarded `unwrap()`s in the modem soft/hard FEC split, uncommented. H2-serial — `SerialRtsDtrPtt` was
+  never instantiated in a test.
+- **Design decision:** document `transmit_iq` as a seam-bypassing experimental IQ path (test-only, not
+  for on-air); document that the KISS TNC self-identifies via the AX.25 source-callsign address field
+  (§97.119) so it needs no separate ID cycle; add one comment stating the producer↔arm invariant that
+  makes the FEC-split unwraps safe; add a `SerialRtsDtrPtt::open` error-path test (feature-gated to
+  match the backend).
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`transmit_iq` doc + FEC-split comment);
+  `crates/openpulse-kiss/src/lib.rs` (station-ID note); `crates/openpulse-radio/src/serial.rs`
+  (`#[cfg(all(test, feature = "serial"))]` test).
+- **Tests:** `serial::tests::open_on_a_nonexistent_device_errors` (under `--features serial`).
+- **Test results:** modem + kiss clippy clean (`-D warnings`); radio `--features serial` clippy clean +
+  serial test passes. **All audit findings are now addressed** (see the audit artifact).
+
 ## 2026-07-11 — test: module coverage — profile/fading/pq/panel + pki honesty (audit H3/H4/H8/H9/H10)
 
 - **Requirement/change:** several sizeable modules had no inline tests: `profile.rs` (ladders),

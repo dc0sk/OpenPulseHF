@@ -1983,6 +1983,12 @@ impl ModemEngine {
     ///
     /// Requires the audio backend to support [`AudioBackend::open_iq_output`].
     /// Returns `ModemError::Configuration` when the backend has no IQ output.
+    ///
+    /// **Bypasses the `stage_emit_output` seam** (audit G-2): unlike every audio TX path, this writes
+    /// via `write_iq` directly, so it does **not** run the regulatory TX-metadata log, increment
+    /// `frames_transmitted` (which arms the auto-ID timer), or apply CE-SSB / limiter / spectrum tap.
+    /// It is an experimental IQ path with only test callers today; do not use it for on-air TX until it
+    /// is routed through an IQ-aware emit seam that logs + counts the frame.
     pub fn transmit_iq(
         &mut self,
         data: &[u8],
@@ -2655,6 +2661,10 @@ impl ModemEngine {
             });
         }
 
+        // Invariant (audit G-7): the demod above populates exactly one of `raw_wire` / `llrs`, keyed
+        // to the FEC family it will be decoded with — hard-decision modes (Rs*/Concatenated) carry
+        // `raw_wire = Some`, soft-decision modes (SoftConcatenated/Ldpc*) carry `llrs = Some`. Each
+        // per-arm `.unwrap()` below is guarded by that producer↔arm pairing, never operator input.
         let corrected = match fec {
             FecMode::Rs => {
                 let wire =
