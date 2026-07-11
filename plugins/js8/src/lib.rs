@@ -23,13 +23,17 @@ pub mod plugin;
 pub mod submode;
 pub mod sync;
 pub mod tones;
+pub mod varicode;
 
 pub use costas::CostasKind;
 pub use crc::augmented_crc12;
 pub use decoder::{decode_window, DecodeCfg, Js8Decode};
 pub use demodulate::demodulate_soft;
 pub use frame::{pack_callsign, pack_grid, unpack_callsign, unpack_grid};
-pub use grammar::{parse_heartbeat, unpack_compound_frame, CompoundFrame, FrameType, Heartbeat};
+pub use grammar::{
+    parse_heartbeat, unpack_compound_frame, unpack_directed_message, CompoundFrame,
+    DirectedMessage, FrameType, Heartbeat,
+};
 pub use ldpc174::{bp_decode, BpDecode};
 pub use message::{js8_info_bits, js8_message_crc12};
 pub use modulate::{modulate_tones, GfskParams};
@@ -37,3 +41,4 @@ pub use plugin::Js8Plugin;
 pub use submode::{params_for_mode, Submode, SubmodeParams};
 pub use sync::{find_sync, SyncCandidate};
 pub use tones::{codeword_to_tones, message_to_tones};
+pub use varicode::{huff_decode, unpack_data_message, DataText, HUFF_TABLE};

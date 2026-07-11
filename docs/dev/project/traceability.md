@@ -9,6 +9,34 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 — JS8 free-text (Huffman) + directed-message unpacker (Phase-C message-layer gap)
+
+- **Requirement/change:** the `@OPULSE` peer-recognition path (G3) was blocked — `runtime.rs`
+  hard-codes `hint: None // needs varicode free-text decode`, and `grammar.rs` returned `None` for
+  `Directed`/`Data` frames. Nothing turned a decoded JS8 free-text frame into the `(sender, @OPULSE,
+  "OPHF1 …")` triple the existing `openpulse-discovery::hint` codec consumes.
+- **Design decision:** port the JS8 message-layer *leaf* decoders and validate against the verbatim
+  upstream `Varicode` compiled against real Qt5. A ground-truth harness (upstream `varicode.cpp` +
+  `jsc_*.cpp`) measured the on-air reality: the beacon is a **4-frame** compound-directed sequence
+  (not the plan's "1–2 frames"), and `packDataMessage` mixes Huffman and the 262k-entry JSC coder.
+  **Scope decision:** ship the small, fully-portable Huffman + directed unpacker now; defer the JSC
+  codebook (general free-text) and the multi-frame `@OPULSE` correlation + `PeerCache` wiring as
+  follow-ons. The OpenPulse beacon is standardized on Huffman-framed data (its alphabet is entirely
+  in the Huffman table, and stock JS8Call decodes Huffman frames), so Huffman-only RX covers the hint.
+- **Implementation:** `plugins/js8/src/varicode.rs` — `HUFF_TABLE`, `huff_decode`,
+  `unpack_data_message` → `DataText::{Huffman, JscUnsupported}`; `grammar::unpack_directed_message`
+  (`FrameDirected` [flag 3]: `[from:28][to:28][cmd:5]` + portable/num byte → `DirectedMessage`),
+  `DIRECTED_CMD_BY_VALUE` reverse map, `format_snr`, `<....>` placeholder handling; exports in
+  `lib.rs`.
+- **Tests:** `plugins/js8/src/varicode.rs` (`huffman_data_frames_match_upstream`,
+  `jsc_compressed_frames_are_flagged_unsupported`, `non_data_frame_returns_none`,
+  `huff_decode_is_prefix_free_and_stops_cleanly`); `grammar.rs`
+  (`directed_messages_match_upstream`, `directed_snr_numbers_match_upstream`,
+  `non_directed_frame_returns_none`). Vectors emitted by the Qt5 ground-truth harness.
+- **Test results:** `cargo test -p js8-plugin --no-default-features --lib` → 68 passed, 0 failed
+  (7 new); `cargo build -p js8-plugin -p openpulse-discovery -p openpulse-daemon` clean; fmt +
+  clippy (`-D warnings`) clean on `js8-plugin`.
+
 ## 2026-07-11 — feat(js8): FF-15 — real per-decode SNR estimate (2500 Hz ref BW), replacing the sync-score proxy
 
 - **Requirement/change:** post-MVP RX refinement. Discovery cached every station's SNR as

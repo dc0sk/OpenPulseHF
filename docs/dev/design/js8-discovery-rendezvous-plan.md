@@ -1,8 +1,8 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/js8-discovery-rendezvous-plan.md
-status: approved-plan (decisions D1–D7 locked 2026-07-10; not yet implemented)
-last_updated: 2026-07-10
+status: approved-plan (decisions D1–D7 locked 2026-07-10; Phases A–D shipped; C message-layer gap being filled)
+last_updated: 2026-07-11
 ---
 
 # JS8-Based Station Discovery and Rendezvous — Design Plan
@@ -124,6 +124,26 @@ DC0SK: @OPULSE OPHF1 <PAYLOAD>
 - *Unused directed-command codes*: bit-efficient but not forward-safe — stock JS8Call renders unknown command codes oddly or drops them, and we would be squatting on protocol space the upstream project may assign. Violates "remain a valid JS8 station".
 - *Steganographic tricks* (grid low-bits, timing, tone-offset signatures): fragile, undetectable by half the fleet, and arguably a coded transmission obscuring meaning — a regulatory red flag (§9).
 - *Hint inside HEARTBEAT*: impossible; no text field (§2.4).
+
+**Implementation note — on-air frame reality (measured, corrects the "1–2 frames" estimate above).**
+Running the *verbatim upstream* `Varicode::buildMessageFrames("@OPULSE OPHF1 XXXXXXXX")` (compiled
+against real Qt5) shows the beacon is **four** NORMAL frames, not 1–2: `[0]` a `FrameCompound`
+carrying the sender + grid, `[1]` a `FrameCompoundDirected` carrying the group `@OPULSE` (a *custom*
+group is **not** in the upstream `basecalls` map, so it cannot ride the 28-bit directed `to` field —
+it is sent as the `<....>` placeholder in the directed frame and for real in this compound frame),
+and `[2]`/`[3]` `FrameData` frames carrying the free text. The free-text frames **mix coders**:
+`packDataMessage` emits whichever of Huffman or the JSC word-dictionary coder packs more chars per
+frame, so a general beacon needs both decoders. Since the hint alphabet (`0-9 A-Z space OPHF`) is
+entirely in the Huffman table and OpenPulse controls its own hint TX, **the OpenPulse beacon is
+standardized on Huffman-framed data** (still a valid JS8 frame that stock JS8Call decodes), so
+Huffman-only RX fully covers the hint; JSC decode (the 262k-entry codebook) is a follow-on that only
+buys us general third-party free-text (the secondary INFO-token path and reading arbitrary traffic).
+
+**Shipped (this unit — Phase C message-layer gap):** `plugins/js8/src/varicode.rs` (`HUFF_TABLE`,
+`huff_decode`, `unpack_data_message` → `DataText::{Huffman, JscUnsupported}`) and
+`grammar::unpack_directed_message` (`FrameDirected` → from/to/cmd/num) — both validated against
+Qt5-compiled ground-truth vectors. Still to wire: `@OPULSE` compound-directed correlation +
+multi-frame reassembly + `decode_hint` + `PeerCache` upsert (`runtime.rs`), and JSC decode.
 
 ### 3.3 What the hint can and cannot carry
 
