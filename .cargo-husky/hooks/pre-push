@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Keep local pre-push fast; full long-runner moved to PR CI job.
+# Keep local pre-push fast (instant fmt + a compile check); the full clippy/test/audit gate runs in
+# the PR CI job (.github/workflows/ci.yml), which triggers on every pull_request.
+cargo fmt --all -- --check
 cargo check --workspace --no-default-features

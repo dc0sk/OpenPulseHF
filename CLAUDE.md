@@ -499,7 +499,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | File transfer crosses two real daemons (twin round-trip) | `cargo test -p openpulse-daemon --test twin_daemon_bridge a_file_crosses` |
 | PTT assert/release ≤ 50 ms | `cargo test -p openpulse-radio` (add timing test in `noop.rs`) |
 | Periodic station ID at interval (REQ-REG-10) | `cargo test -p openpulse-core --lib station_id` + `cargo test -p openpulse-core --lib cw_id` + `cargo test -p openpulse-modem --test station_id_txcount` |
-| CI multi-platform green | ✅ Both jobs pass (PR #67 re-enabled) |
+| CI auto-runs on every PR (Linux gates + macOS build) | `.github/workflows/ci.yml` `on: pull_request`; Linux core/full/gpu/pi5 gates + a `macos-build` compile check |
 
 For any new Phase 1 feature: write the test first, confirm it fails, implement until it passes. Do not mark a task done if its test does not exist.
 

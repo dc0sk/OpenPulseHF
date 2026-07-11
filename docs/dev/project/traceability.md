@@ -9,6 +9,23 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — ci: restore auto-triggers + macOS build + pre-push fmt (audit TR-01/TR-02)
+
+- **Requirement/change:** the audit found every workflow set to `workflow_dispatch`-only (CI gates
+  never ran on push/PR, set in commit 5c93ca2), macOS silently dropped from CI, and the pre-push hook
+  reduced to `cargo check` — so the "every PR passes `cargo test --workspace`" rule was not
+  machine-enforced.
+- **Design decision:** re-enable `on: pull_request` for `ci.yml` (activates the already-present
+  core/full/gpu/pi5 gates + the pull_request-gated long-runner) and `docs.yml` (frontmatter +
+  version-bump checks). Add a lean `macos-build` job (compile check under `--no-default-features`;
+  macOS runners are a 10× cost multiplier, so no full suite — CPAL audio stays a hardware/on-air
+  check). Strengthen the tracked pre-push to a fast `fmt --check` + `cargo check` (clippy/test/audit
+  stay in CI). `release.yml`/`copilot-review.yml` stay manual by design.
+- **Implementation:** `.github/workflows/{ci,docs}.yml`; `.cargo-husky/hooks/pre-push`; CLAUDE.md
+  acceptance-table row corrected.
+- **Tests:** YAML validated (`yaml.safe_load`); pre-push `bash -n` clean.
+- **Test results:** N/A locally (CI activates on the next PR after this merges).
+
 ## 2026-07-11 — test/fix: PTT-backend tests, 32APSK calibration gate, discovery-mode warning (H2/H7/G-4)
 
 - **Requirement/change:** H2 — the hardware PTT backends (`VoxPtt`, `RigctldPtt`) that key a real
