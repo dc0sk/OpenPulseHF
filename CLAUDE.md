@@ -71,6 +71,8 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 | `openpulse-dsp` | `crates/openpulse-dsp` | DSP primitives: RRC filter, PLL, Gardner timing recovery, LMS/DFE adaptive equalizer |
 | `openpulse-config` | `crates/openpulse-config` | Typed TOML schema; `load()`, `init_template()`, CLI-override pattern |
 | `openpulse-gpu` | `crates/openpulse-gpu` | wgpu-backed BPSK DSP kernels; CPU fallback when GPU unavailable; gated by `gpu` feature in `bpsk-plugin` |
+| `openpulse-keystore` | `crates/openpulse-keystore` | Secret storage (REQ-SEC-CTL-04): `FileKeystore` — named secrets encrypted at rest under an operator master password (Argon2id KDF → ChaCha20-Poly1305 AEAD) |
+| `openpulse-linksec` | `crates/openpulse-linksec` | Control-channel link security (REQ-SEC-CTL-01/02): PSK-authenticated encrypted daemon↔client control link via Noise (`Noise_NNpsk0`, X25519); non-loopback auth gate |
 
 ### Protocol layer
 
@@ -82,12 +84,12 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 | `openpulse-b2f-driver` | `crates/openpulse-b2f-driver` | High-level ISS/IRS session driver over ARDOP TCP; e2e loopback tests |
 | `openpulse-gateway` | `crates/openpulse-gateway` | Direct TCP Winlink CMS gateway; `openpulse-gateway` binary |
 | `openpulse-qsy` | `crates/openpulse-qsy` | QSY frequency-agility protocol: wire frame codec, Ed25519 signing, `QsySession` state machine, `QsyScanner` |
-| `openpulse-discovery` | `crates/openpulse-discovery` | JS8-based station discovery (FF-15): pure no-I/O protocol logic. `hint.rs` = `@OPULSE` OPHF capability-hint codec (base-36, callsign-salted CRC-8). Station table, T/R scheduler, discovery/rendezvous SMs land next |
+| `openpulse-discovery` | `crates/openpulse-discovery` | JS8-based station discovery (FF-15) — RX MVP SHIPPED: pure no-I/O protocol logic. `hint.rs` (`@OPULSE` OPHF codec), `station.rs` (StationTable), `scheduler.rs` (`Js8Clock`), `discovery_sm.rs`, `runtime.rs` (`DiscoveryRuntime`), `peer_map.rs` (→ shared `PeerCache`), `hint_assembler.rs` (cross-slot `@OPULSE` beacon → peer recognition). Rendezvous SM + TX (Phase E+) pending |
 | `openpulse-mesh` | `crates/openpulse-mesh` | Mesh broadcast daemon; beacon re-broadcast with TTL, `openpulse-mesh` binary |
 | `openpulse-repeater` | `crates/openpulse-repeater` | Digipeater / relay node; configurable filter and forwarding policy |
 | `openpulse-daemon` | `crates/openpulse-daemon` | Unified background daemon aggregating modem, PTT, and control-protocol services |
 | `openpulse-freedv-auth` | `crates/openpulse-freedv-auth` | External shim adding Ed25519 frame signing to FreeDV via the codec2 data channel (FF-11) |
-| `openpulse-filexfer` | `crates/openpulse-filexfer` | Direct P2P file-transfer protocol (`OPFX`): pure no-I/O `FxFrame` codec + `SenderSession`/`ReceiverSession` state machines + offer/manifest/policy/sanitize + `blocks.rs` (split/pack/SAR mapping, `BlockAssembler`, fragment bitmaps) (FF-16, Phases A–B) |
+| `openpulse-filexfer` | `crates/openpulse-filexfer` | Direct P2P file-transfer protocol (`OPFX`): pure no-I/O `FxFrame` codec + `SenderSession`/`ReceiverSession` state machines + offer/manifest/policy/sanitize + `blocks.rs` (split/pack/SAR mapping, `BlockAssembler`, fragment bitmaps, block-level resume). FF-16 Phases A–E SHIPPED (crate + modem loopback + daemon SendFile/twin round-trip + panel Files tab + real-radio PTT burst queue/drain + `.partial` resume); on-air (Phase F) deferred |
 
 ### UI and tooling layer
 
@@ -110,7 +112,7 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 | `psk8-plugin` | `plugins/psk8` | 8PSK500/1000 modulation plugin |
 | `qam64-plugin` | `plugins/64qam` | 64QAM500/1000/2000-RRC modulation plugin; Gray-coded 8×8 PAM-8; soft demodulator |
 | `fsk4-plugin` | `plugins/fsk4` | FSK4-ACK modulation plugin (ACK channel) |
-| `js8-plugin` | `plugins/js8` | JS8-compatible 8-GFSK weak-signal waveform (FF-15); Phase A TX core COMPLETE (`Js8Plugin` ModulationPlugin: submode/costas/GFSK/LDPC(174,87)/CRC-12/packCallsign+packGrid/tones/message-bits); tables ported from GPL-3.0 JS8Call, validated vs real boost+Qt; demodulate=Phase B (not yet daemon-registered); B-1 LDPC BP decoder + B-2 soft demod + B-3 Costas sync + B-4 window decoder + B-5 plugin demodulate wired; B-6 -18 dB go/no-go PASSES (12/12 to -15dB, 11/12 at -18dB) — native RX viable, no external-JS8Call fallback |
+| `js8-plugin` | `plugins/js8` | JS8-compatible 8-GFSK weak-signal waveform (FF-15) — full TX+RX SHIPPED. `Js8Plugin` ModulationPlugin (submode/costas/GFSK/LDPC(174,87)/CRC-12/tones); native RX decoder (`decoder.rs` window multi-decode, `demodulate.rs` soft 8-FSK, `sync.rs` Costas, `ldpc174.rs` BP) — B-6 −18 dB go/no-go PASSES. Message layer: `frame.rs`/`grammar.rs` (callsign/grid/compound/directed unpack), `varicode.rs` (Huffman) + `jsc.rs` (full 262k JSC codebook) free-text decode. Tables ported from GPL-3.0 JS8Call, validated vs real boost+Qt5 |
 | `ofdm-plugin` | `plugins/ofdm` | OFDM16/52 + OFDM52-{8PSK,16QAM,32QAM,64QAM} multicarrier; Schmidl-Cox preamble, LS channel est + ZF equalization; soft demod |
 | `scfdma-plugin` | `plugins/scfdma` | SC-FDMA16/52 + SCFDMA52/26-{8PSK,16QAM,32QAM,64QAM} single-carrier-FDM; DFT-CE pilot channel est + MMSE; per-symbol SFO deramp; soft demod |
 | `pilot-plugin` | `plugins/pilot` | Pilot-framed `PILOT-{QPSK,8PSK,16QAM,32APSK}{500,1000}` (+ `-RRC`, + `2000-RRC`); pilot-aided carrier recovery (cycle-slip-immune, SRO-robust); soft demod; 32APSK = DVB-S2 |
@@ -122,7 +124,8 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 **Completed**: Phases 1–9, Phase 7 (7.1–7.5), Phase 8 (8.1–8.3), FF series (FF-1 through FF-13), BL-FEC series (BL-FEC-1 through BL-FEC-6), all code stubs (PR #187–#189). See `docs/dev/project/roadmap.md` for full history.
 
 **Active tracks**:
-- No remaining scheduled implementation tracks.
+- **FF-15 JS8 discovery** — RX side COMPLETE (native TX+RX waveform, full message layer incl. JSC, discovery runtime, `@OPULSE` peer recognition, shared `PeerCache`, CLI + panel operator surfaces; PRs #744–#783). Remaining is TX-side: Phase E beacon TX (HARD-GATED on the §97.221 automatic-control regulatory doc), F rendezvous, H on-air.
+- **FF-16 file transfer** — Phases A–E SHIPPED (PRs #730–#742); on-air (Phase F) deferred.
 
 **Deferred (no target date)**:
 - On-air regulatory validation (Phase 5.5-reg): on-air tests, station ID audit, compliance report
@@ -491,7 +494,8 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | JS8 NORMAL native decode reaches the −18 dB weak-signal gate (FF-15 Phase-B go/no-go) | `cargo test -p js8-plugin --test snr_sweep gate_at_minus_18_db` |
 | JS8 discovery MVP: the daemon rx-tick activates, dwells, decodes an injected heartbeat, caches the station + emits `StationHeard` | `cargo test -p openpulse-daemon --no-default-features discovery_tick` |
 | File-transfer protocol edges (offer/accept/reject/timeout/cancel/verify/tamper) | `cargo test -p openpulse-filexfer` |
-| File-transfer blocks survive the modem (loopback round-trip + >64 KB + tamper→verify-fail) | `cargo test -p openpulse-modem --test filexfer_loopback` |
+| File-transfer blocks survive the modem (loopback round-trip + tamper→verify-fail) | `cargo test -p openpulse-modem --test filexfer_loopback` |
+| File-transfer multi-object >64 KB split/reassemble | `cargo test -p openpulse-filexfer --test blocks multi_object_over_64kb` |
 | File transfer crosses two real daemons (twin round-trip) | `cargo test -p openpulse-daemon --test twin_daemon_bridge a_file_crosses` |
 | PTT assert/release ≤ 50 ms | `cargo test -p openpulse-radio` (add timing test in `noop.rs`) |
 | Periodic station ID at interval (REQ-REG-10) | `cargo test -p openpulse-core --lib station_id` + `cargo test -p openpulse-core --lib cw_id` + `cargo test -p openpulse-modem --test station_id_txcount` |
@@ -629,8 +633,8 @@ External modem/DSP references (gnuradio FLL band-edge, liquid-dsp framesync, dan
 | CLI usage | `docs/cli-guide.md` |
 | Benchmark harness spec | `docs/dev/benchmark-harness.md` |
 | External modem/DSP references (FLL, liquid-dsp, qo100-modem) | `docs/dev/research/references.md` |
-| JS8 discovery & rendezvous plan (decisions D1–D7 locked; not yet implemented) | `docs/dev/design/js8-discovery-rendezvous-plan.md` |
-| Direct P2P file-transfer plan (decisions D1–D5 locked; not yet implemented) | `docs/dev/design/file-transfer-plan.md` |
+| JS8 discovery & rendezvous plan (D1–D7 locked; RX MVP shipped, TX/rendezvous pending) | `docs/dev/design/js8-discovery-rendezvous-plan.md` |
+| Direct P2P file-transfer plan (D1–D5 locked; Phases A–E shipped, on-air deferred) | `docs/dev/design/file-transfer-plan.md` |
 | VarAC feature-gap analysis (ideas we're missing; research, not scheduled) | `docs/dev/research/varac-feature-gap-analysis.md` |
 | GPU LDPC BP prototype findings | `docs/dev/gpu-ldpc-prototype.md` |
 | OTA adaptive rate-stepping hardware validation | `docs/dev/ota-hardware-validation.md` |
