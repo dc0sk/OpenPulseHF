@@ -3599,6 +3599,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "js8-plugin"
+version = "0.3.0"
+dependencies = [
+ "openpulse-core",
+]
+
+[[package]]
 name = "kasuari"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4923,11 +4930,13 @@ dependencies = [
  "ed25519-dalek",
  "fsk4-plugin",
  "futures-util",
+ "js8-plugin",
  "ofdm-plugin",
  "openpulse-audio",
  "openpulse-channel",
  "openpulse-config",
  "openpulse-core",
+ "openpulse-discovery",
  "openpulse-filexfer",
  "openpulse-gpu",
  "openpulse-linksec",
@@ -4957,6 +4966,15 @@ name = "openpulse-dict-trainer"
 version = "0.2.0"
 dependencies = [
  "zstd",
+]
+
+[[package]]
+name = "openpulse-discovery"
+version = "0.3.0"
+dependencies = [
+ "js8-plugin",
+ "openpulse-core",
+ "sha2 0.10.9",
 ]
 
 [[package]]
