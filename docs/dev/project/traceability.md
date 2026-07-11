@@ -9,6 +9,33 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 Phase A-3 — LDPC(174,87) encoder + parity tables
+
+- **Requirement/change:** FF-15 Phase A (`docs/dev/design/js8-discovery-rendezvous-plan.md` §2.1, §4.2,
+  Appendix B): the FEC half of the JS8 TX core — encode 87 info bits (75 message + 12 CRC) into the 174-bit
+  LDPC codeword that becomes the 58 data symbols. This is the *old* FT8 v1 (174,87) code JS8 froze on.
+- **Design decision:** vendor the authoritative tables from JS8Call/js8call (**GPL-3.0**, license-compatible
+  with this repo) rather than reconstruct them — parity generator `g` + `colorder` from
+  `lib/ft8/ldpc_174_87_params.f90`, and the parity-check incidence `Nm`/`nrw` from `lib/ft8/bpdecode174.f90`
+  — extracted programmatically (no hand-transcription) with provenance cited in the module header. Port
+  `encode174` exactly (`pchecks = G·message` over GF(2), `[pchecks|message]` reordered by `COLORDER`) and add
+  a `parity_syndrome` (`H·codeword`). **The acceptance gate is `H·encode174(m) = 0` for many random messages**
+  — a single wrong generator/colorder/Nm entry breaks some check on some message, so a green sweep proves the
+  three tables are correctly ported and mutually consistent, *without* needing an external codeword vector.
+  Belief-propagation decode is Phase B; CRC-12 assembly (boost augmented-CRC + XOR-42) and frame packing are
+  their own later units (each deserves a reference vector).
+- **Implementation:** `plugins/js8/src/ldpc174.rs` (`G_HEX`/`COLORDER`/`NM`/`NRW` tables, `encode174`,
+  `parity_syndrome`, `gen_bit`); `lib.rs` module.
+- **Tests:** `ldpc174.rs` (4) — table sizes + COLORDER is a permutation + `nrw` matches `NM` nonzero counts;
+  **every codeword satisfies all parity checks** (500 pseudo-random messages, deterministic LCG); all-zero
+  message → all-zero codeword (linearity); systematic message bits recoverable at their reordered positions.
+- **Test results (actually run):** `js8-plugin` 19 passed / 0 failed (4 new); workspace builds 0 errors; clippy
+  `-D warnings` + fmt clean.
+- **Next:** CRC-12 (75-bit message → 87 info bits) + frame packing (`packCallsign`/`packGrid`/`packCmd`) +
+  Gray/Costas tone assembly, then the bit/tone-exact `reference_vectors` gate against committed JS8Call vectors.
+
+---
+
 ## 2026-07-11 — feat(js8): FF-15 Phase A-2 — GFSK tone-synthesis modulator
 
 - **Requirement/change:** FF-15 Phase A (`docs/dev/design/js8-discovery-rendezvous-plan.md` §2.1, §4.2): the

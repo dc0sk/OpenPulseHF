@@ -1426,10 +1426,13 @@ go/no-go) → C (varicode + hint) → **D (RX-only discovery MVP = ship line, ze
 arrays (`costas.rs`) — the protocol foundation. A-2 shipped (PR #745): GFSK tone-synthesis modulator
 (`modulate.rs`, FT8/JS8 `gen_ft8wave`+`gfsk_pulse`, BT = 2.0) — continuous-phase Gaussian-smoothed 8-FSK,
 verified structurally (a constant tone lands on `base + tone·spacing` via Goertzel; partition-of-unity
-pulse; phase-continuous transitions). Remaining Phase-A units: frame packing
-(`packCallsign`/`packGrid`/`packCmd`), LDPC(174,87) encode + CRC-12 (produces the tone sequence from a
-message), and the bit/tone-exact `reference_vectors` gate — the last needs ground-truth vectors generated
-from JS8Call-improved (the interop anchor), which must be committed alongside the encoder.
+pulse; phase-continuous transitions). A-3 shipped (PR #746): LDPC(174,87) encoder (`ldpc174.rs`) with the
+generator/`colorder`/parity tables **ported from GPL-3.0 JS8Call** — gated by `H·encode(m) = 0` over 500
+random messages (proves the port is self-consistent without an external codeword vector). Remaining Phase-A
+units: CRC-12 (75-bit message → 87 info bits; boost augmented-CRC + XOR-42), frame packing
+(`packCallsign`/`packGrid`/`packCmd`) + Gray/Costas tone assembly, and the bit/tone-exact
+`reference_vectors` gate — the last needs ground-truth vectors generated from JS8Call (the interop anchor),
+committed alongside the encoder.
 
 ---
 
