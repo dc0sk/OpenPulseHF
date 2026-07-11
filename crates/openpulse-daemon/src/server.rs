@@ -1012,6 +1012,13 @@ fn build_discovery_runtime(
 ) -> Option<openpulse_discovery::DiscoveryRuntime> {
     use openpulse_discovery::{DiscoveryParams, DiscoveryRuntime, Submode};
     let d = &cfg.discovery;
+    // Only rx_only is honored today; beacon/full (TX) are Phase E — warn rather than silently ignore.
+    if !d.mode.trim().is_empty() && !d.mode.trim().eq_ignore_ascii_case("rx_only") {
+        tracing::warn!(
+            mode = %d.mode,
+            "[discovery] mode is RX-only for now — beacon/full (TX) are Phase E and not yet honored"
+        );
+    }
     let calling = d
         .calling_freqs_hz
         .get("20m")
