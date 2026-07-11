@@ -1399,7 +1399,7 @@ persistence) ✅ → **F on-air validation** (deferred field-test batch). Standa
 Highest risk was Phase C half-duplex ACK/PTT timing — de-risked by the twin-daemon round-trip test, which now
 also exercises the real PTT-keyed burst-drain path.
 
-### FF-15 — JS8-based station discovery and rendezvous *(A+B done, C RX-complete, D logic done; go/no-go PASSED)*
+### FF-15 — JS8-based station discovery and rendezvous *(A–D done: RX-only MVP SHIPPED; go/no-go PASSED)*
 
 **Plan approved 2026-07-10** — full design in
 [`docs/dev/design/js8-discovery-rendezvous-plan.md`](../design/js8-discovery-rendezvous-plan.md)
@@ -1473,13 +1473,17 @@ pure/async-free:
 
 - D-5c(i) (#771) daemon **control surface**: `EnableDiscovery`/`DisableDiscovery`/`ListStations` commands +
   `DiscoveryStatus`/`StationHeard`/`StationList` events; `RuntimeControlState.discovery`; command handling.
+- D-5c(ii) (#773) **live rx-tick wiring — RX-only MVP shipped**: `server::run` builds the runtime from config,
+  tees dwell audio, runs `discovery_tick` (idle predicate + slot decode via `block_in_place`), executes
+  retune/home-restore via CAT, forwards events. **Acceptance test:** the daemon rx-tick activates → saves home →
+  tunes to JS8 → dwells → decodes an injected heartbeat → caches `KN4CRD`/`EM73` + emits `StationHeard`.
 
-**Remaining for the MVP ship line = D-5c(ii)** (the live rx-tick wiring): tee `server::run`'s captured samples +
-the assembled idle predicate into `DiscoveryRuntime::tick`, execute `Retune`/`RestoreHome` via the CAT
-controller, forward `StationHeard`, + an injected-audio daemon acceptance test. Its own sub-problems to solve
-carefully (isolated from the merged control surface): home-frequency tracking for the restore; resolving the
-calling frequency from the home band (`band_label_for_hz`); off-thread (`spawn_blocking`) decode so the ~1 s
-slot decode doesn't stall the 50 ms tick.
+**RX-only discovery MVP SHIPPED.** An idle daemon with `[discovery] enabled` QSYs to JS8, hears + caches
+stations, surfaces them via events/`ListStations` — zero TX, zero regulatory exposure. **Next:** refinements
+(varicode → `@OPULSE` hint marking + `PeerCache` upsert; per-home-band calling freq; `spawn_blocking` decode;
+true SNR) then Phase E (beacon TX — **gated on the §97.221 automatic-control reg doc landing first**), F
+(rendezvous + HPX handoff), G (panel `Tab::Discovery`), H (on-air vs stock JS8Call). Later hardening: a Pi-class
+CPU-budget check (`cross`) and the bit-exact `reference_vectors` (needs gfortran, the one absent upstream tool).
 Then Phase E (beacon TX, gated on the §97.221 reg doc), F (rendezvous), G (panel), H (on-air). Later hardening:
 varicode → `@OPULSE` hint marking + `PeerCache` upsert; a true SNR estimate; a Pi-class CPU-budget check
 (`cross`); the bit-exact `reference_vectors` (needs gfortran).
