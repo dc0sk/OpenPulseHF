@@ -812,6 +812,20 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 if let Some((audio, mode)) = due_beacon {
                     transmit_beacon_with_ptt(&mut engine, &mut ptt_controller, &audio, &mode);
                 }
+                // A completed rendezvous QSY hands off to the signed session on the agreed channel: run
+                // the same begin_secure_session + CONREQ path as an operator `ConnectPeer` (needs
+                // `&mut engine` + the CAT rig, both owned here).
+                if let Some((peer, _freq_hz)) = runtime_state.rendezvous_connect_ready.take() {
+                    apply_command_to_engine(
+                        &crate::protocol::ControlCommand::ConnectPeer { callsign: peer },
+                        &mut engine,
+                        &handle.active_mode,
+                        &handle.event_tx,
+                        rig_controller.as_mut().map(|c| c as &mut (dyn CatController + Send)),
+                        &mut runtime_state,
+                    )
+                    .await;
+                }
                 // Refresh live metrics so the periodic metrics task can broadcast real values.
                 {
                     let mut m = handle.shared_metrics.lock().await;
@@ -1092,6 +1106,10 @@ fn discovery_retune(rig: &mut Option<&mut (dyn CatController + Send)>, hz: u64) 
     }
 }
 
+/// One JS8 NORMAL T/R slot in ms (the discovery MVP is NORMAL-only). Used to convert a rendezvous
+/// `switch_in_slots` count into a wall-clock QSY deadline.
+const JS8_NORMAL_SLOT_MS: u64 = 15_000;
+
 /// Feed one rx-tick's raw audio + the idle predicate into the discovery runtime and execute its
 /// outcomes (retune via CAT, home-frequency tracking, event forwarding). No-op when unconfigured.
 fn discovery_tick(
@@ -1104,7 +1122,27 @@ fn discovery_tick(
 ) -> Option<(Vec<f32>, String)> {
     use openpulse_discovery::DiscoveryOutcome as O;
     runtime_state.discovery.as_ref()?; // nothing to do without a discovery runtime
-                                       // Simplified idle predicate (plan §4.3): the modem is free of any session/handshake/transfer.
+
+    // A scheduled post-rendezvous QSY that has come due: both stations retune to the agreed working
+    // frequency and hand off to the signed session. The `switch_in_slots` delay ensured the Accept was
+    // heard first. We drop the discovery home so the stand-down does not tune back — the QSO owns the
+    // dial now — and leave the handoff itself to `server::run` (it holds `&mut engine`).
+    if let Some((peer, freq_hz, due_at_ms)) = runtime_state.rendezvous_qsy_due.clone() {
+        if now_ms >= due_at_ms {
+            runtime_state.rendezvous_qsy_due = None;
+            runtime_state.discovery_home_freq_hz = None;
+            if discovery_retune(&mut rig, freq_hz) {
+                runtime_state.last_freq_hz = Some(freq_hz);
+            }
+            if let Some(rt) = runtime_state.discovery.as_mut() {
+                let _ = rt.preempt(); // stand discovery down; home is cleared so RestoreHome is a no-op
+            }
+            runtime_state.rendezvous_connect_ready = Some((peer, freq_hz));
+            crate::emit_discovery_status(runtime_state, event_tx);
+            return None;
+        }
+    }
+    // Simplified idle predicate (plan §4.3): the modem is free of any session/handshake/transfer.
     let idle = engine.hpx_state() == openpulse_core::hpx::HpxState::Idle
         && runtime_state.pending_handshake.is_none()
         && runtime_state.file_rx.is_none()
@@ -1205,16 +1243,19 @@ fn discovery_tick(
             O::RendezvousAgreed {
                 peer,
                 channel,
-                switch_in_slots: _,
+                switch_in_slots,
             } => {
-                // Resolve the agreed channel index to Hz via the dwelling band's table. The QSY + CONREQ
-                // handoff (after the switch delay) is F-3c-iii; here we surface the agreement.
+                // Resolve the agreed channel index to Hz via the dwelling band's table, surface the
+                // agreement, and schedule the QSY + handoff for after the switch delay (so the Accept is
+                // heard and both stations retune together).
                 match dwell_channels
                     .as_ref()
                     .and_then(|v| v.get(channel as usize))
                     .copied()
                 {
                     Some(freq_hz) => {
+                        let due_at_ms = now_ms + switch_in_slots as u64 * JS8_NORMAL_SLOT_MS;
+                        runtime_state.rendezvous_qsy_due = Some((peer.clone(), freq_hz, due_at_ms));
                         let _ = event_tx.send(crate::protocol::ControlEvent::RendezvousAgreed {
                             peer,
                             freq_hz,
@@ -1895,6 +1936,29 @@ mod discovery_tick_tests {
             }
         }
         assert_eq!(agreed, Some(("KN4CRD".to_string(), 14_103_000)));
+
+        // The QSY was scheduled (not fired yet); after the switch delay it retunes + arms the handoff.
+        assert!(
+            rs.rendezvous_qsy_due.is_some(),
+            "QSY scheduled after agreement"
+        );
+        discovery_tick(&mut rs, &engine, None, &ev, &[], t + 10 * 15_000);
+        assert_eq!(
+            rs.last_freq_hz,
+            Some(14_103_000),
+            "retuned to the agreed working frequency"
+        );
+        assert_eq!(
+            rs.rendezvous_connect_ready,
+            Some(("KN4CRD".to_string(), 14_103_000)),
+            "handoff armed for server::run"
+        );
+        assert!(rs.rendezvous_qsy_due.is_none(), "schedule consumed");
+        assert_eq!(
+            rs.discovery.as_ref().unwrap().state(),
+            DiscoveryState::Inactive,
+            "discovery stood down for the QSO"
+        );
     }
 }
 
