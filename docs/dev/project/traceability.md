@@ -9,6 +9,33 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 Phase A-1 — `plugins/js8` crate (submode table + Costas arrays)
+
+- **Requirement/change:** FF-15 Phase A (`docs/dev/design/js8-discovery-rendezvous-plan.md` §11): begin the
+  JS8-compatible waveform with its self-contained protocol foundation — the submode parameter table and the
+  Costas sync arrays — before the DSP-heavy encode/decode.
+- **Design decision:** a new `plugins/js8` crate (workspace member `js8-plugin`). Transcribe the two
+  interop-critical constant sets from the plan's source-verified sections — submode table (§2.2, `commons.h`/
+  `JS8Submode.cpp`) and Costas arrays (§2.1, `JS8.h:24–36`) — and guard them with **internal-consistency
+  tests** that need no external ground truth: samples/symbol is an exact integer at 8 kHz and matches the
+  table, `bandwidth = 8 × tone_spacing`, tabulated TX durations (`79 × sps / 8000`), NORMAL period = 101 120
+  samples, only NORMAL uses ORIGINAL Costas, each Costas array is 7 distinct valid tones, and the three
+  MODIFIED blocks are pairwise distinct (the anti-false-sync property). The bit/tone-exact `reference_vectors`
+  gate is deferred to a later Phase-A unit because it needs committed JS8Call-improved ground-truth vectors;
+  no `ModulationPlugin` impl yet (it needs `modulate`, which is the GFSK unit), so the crate is not registered
+  in the daemon — pure data + helpers, no half-implemented trait.
+- **Implementation:** `plugins/js8/{Cargo.toml, src/lib.rs, src/submode.rs, src/costas.rs}`;
+  `Cargo.toml` workspace members + `js8-plugin` path dep.
+- **Tests:** `submode.rs` (6 — integer sps, BW, durations, NORMAL period, Costas-kind mapping, case-insensitive
+  `params_for_mode` + unknown rejection); `costas.rs` (4 — distinct valid tones, pairwise-distinct MODIFIED,
+  `block` dispatch, `sync_map` places 21 sync / 58 data at 0–6/36–42/72–78).
+- **Test results (actually run):** `js8-plugin` 10 passed / 0 failed; workspace builds 0 errors; clippy
+  `-D warnings` + fmt clean.
+- **Next:** frame packing (`packCallsign`/`packGrid`/`packCmd`), LDPC(174,87) encode + CRC-12, GFSK `modulate`,
+  then the `reference_vectors` bit/tone-exact gate (needs upstream ground-truth vectors committed).
+
+---
+
 ## 2026-07-11 — feat(filexfer): airtime-bounded TX burst splitting (real-radio PTT sequencing)
 
 - **Requirement/change:** FF-16 §5.3 — the file-transfer TX drain keyed PTT **once** and transmitted the
