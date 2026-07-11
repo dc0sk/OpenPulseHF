@@ -35,6 +35,7 @@ members = [
     "apps/openpulse-twinview",
     "apps/openpulse-linksim",
     "crates/openpulse-daemon",
+    "crates/openpulse-discovery",
     "crates/openpulse-dsp",
     "crates/openpulse-qsy",
     "crates/openpulse-freedv-auth",
@@ -70,6 +71,7 @@ openpulse-mesh       = { path = "crates/openpulse-mesh" }
 # don't pull the daemon's default `gpu`/native code. The daemon binary itself still builds with
 # its own default features (GPU on).
 openpulse-daemon     = { path = "crates/openpulse-daemon", default-features = false }
+openpulse-discovery  = { path = "crates/openpulse-discovery" }
 openpulse-dsp        = { path = "crates/openpulse-dsp" }
 openpulse-qsy        = { path = "crates/openpulse-qsy" }
 bpsk-plugin       = { path = "plugins/bpsk" }

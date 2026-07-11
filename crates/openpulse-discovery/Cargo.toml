@@ -1,0 +1,12 @@
+[package]
+name        = "openpulse-discovery"
+description = "JS8-based station discovery: OPHF hint codec, station table, T/R scheduler, discovery/rendezvous state machines (FF-15)"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
