@@ -9,6 +9,28 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — test(js8): FF-15 Phase B-6 — −18 dB weak-signal go/no-go — **PASS**
+
+- **Requirement/change:** FF-15 Phase B's decisive checkpoint (plan §11): the native JS8 NORMAL decoder must
+  reach the **−18 dB** weak-signal class (SNR in the 2500 Hz reference bandwidth), or the D1 fallback (a
+  headless external JS8Call for RX) is triggered.
+- **Design decision:** a calibrated-AWGN SNR sweep — synthesize a NORMAL frame, add white Gaussian noise at
+  `σ² = Ps·(fs/2)/2500 / 10^(snr/10)` (the standard JS8/FT8 2500 Hz-BW SNR), run the full `decode_window`, and
+  count content-correct decodes. **Result: 12/12 down to −15 dB, 11/12 (~92%) at −18 dB, floor at −21 dB
+  (1/12) — native decode PASSES the gate; no external-process fallback needed.** Committed as
+  `gate_at_minus_18_db` (8 trials, requires ≥ 6/8 with margin; runs in ~0.26 s) plus an `#[ignore]`d
+  `characterize_decode_floor` that prints the full sweep. Added to the CLAUDE.md acceptance table.
+- **Implementation:** `plugins/js8/tests/snr_sweep.rs`; acceptance-table row in `CLAUDE.md`.
+- **Tests / results (actually run):** `gate_at_minus_18_db` passes (decoded ≥ 6/8 at −18 dB); full sweep
+  (ignored) reproduces the 12/12→11/12→1/12 curve; `js8-plugin` 55 lib + 1 gate passed / 0 failed; workspace
+  builds 0 errors; clippy `-D warnings` + fmt clean.
+- **Note:** Phase B (the highest-risk, FT8-class native RX) is functionally complete and **passes its go/no-go**
+  — LDPC BP decode, soft demod, Costas sync, multi-decode window, plugin round-trip, −18 dB floor. Remaining
+  FF-15: Phase C (message grammar + `@OPULSE` hint), D (RX-only discovery MVP), E–H. A Pi-class CPU-budget
+  measurement (`cross`) and the bit-exact `reference_vectors` (gfortran) remain as later hardening.
+
+---
+
 ## 2026-07-11 — feat(js8): FF-15 Phase B-5 — wire `Js8Plugin::demodulate` (trait round-trip)
 
 - **Requirement/change:** FF-15 Phase B: complete the `ModulationPlugin` by wiring `demodulate` to the window

@@ -109,7 +109,7 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 | `psk8-plugin` | `plugins/psk8` | 8PSK500/1000 modulation plugin |
 | `qam64-plugin` | `plugins/64qam` | 64QAM500/1000/2000-RRC modulation plugin; Gray-coded 8×8 PAM-8; soft demodulator |
 | `fsk4-plugin` | `plugins/fsk4` | FSK4-ACK modulation plugin (ACK channel) |
-| `js8-plugin` | `plugins/js8` | JS8-compatible 8-GFSK weak-signal waveform (FF-15); Phase A TX core COMPLETE (`Js8Plugin` ModulationPlugin: submode/costas/GFSK/LDPC(174,87)/CRC-12/packCallsign+packGrid/tones/message-bits); tables ported from GPL-3.0 JS8Call, validated vs real boost+Qt; demodulate=Phase B (not yet daemon-registered); B-1 LDPC BP decoder + B-2 soft demod + B-3 Costas sync + B-4 window decoder + B-5 plugin demodulate wired (modulate<->demodulate round-trips) shipped |
+| `js8-plugin` | `plugins/js8` | JS8-compatible 8-GFSK weak-signal waveform (FF-15); Phase A TX core COMPLETE (`Js8Plugin` ModulationPlugin: submode/costas/GFSK/LDPC(174,87)/CRC-12/packCallsign+packGrid/tones/message-bits); tables ported from GPL-3.0 JS8Call, validated vs real boost+Qt; demodulate=Phase B (not yet daemon-registered); B-1 LDPC BP decoder + B-2 soft demod + B-3 Costas sync + B-4 window decoder + B-5 plugin demodulate wired; B-6 -18 dB go/no-go PASSES (12/12 to -15dB, 11/12 at -18dB) — native RX viable, no external-JS8Call fallback |
 | `ofdm-plugin` | `plugins/ofdm` | OFDM16/52 + OFDM52-{8PSK,16QAM,32QAM,64QAM} multicarrier; Schmidl-Cox preamble, LS channel est + ZF equalization; soft demod |
 | `scfdma-plugin` | `plugins/scfdma` | SC-FDMA16/52 + SCFDMA52/26-{8PSK,16QAM,32QAM,64QAM} single-carrier-FDM; DFT-CE pilot channel est + MMSE; per-symbol SFO deramp; soft demod |
 | `pilot-plugin` | `plugins/pilot` | Pilot-framed `PILOT-{QPSK,8PSK,16QAM,32APSK}{500,1000}` (+ `-RRC`, + `2000-RRC`); pilot-aided carrier recovery (cycle-slip-immune, SRO-robust); soft demod; 32APSK = DVB-S2 |
@@ -487,6 +487,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | Symbol-domain SNR tracks true SNR past M2M4's ~15 dB saturation | `cargo test -p openpulse-modem --test symbol_domain_snr` + `--test symbol_snr_ladder_climb` |
 | QPSK1000-HF-RRC forward-only LMS holds the good_f1 coded floor | `cargo test -p openpulse-modem --test qpsk_hf_rrc_forward_only` |
 | CI goodput regression gate (linksim effective_bps ≥ 65 % of baseline) | `cargo test -p openpulse-linksim goodput_gate` |
+| JS8 NORMAL native decode reaches the −18 dB weak-signal gate (FF-15 Phase-B go/no-go) | `cargo test -p js8-plugin --test snr_sweep gate_at_minus_18_db` |
 | File-transfer protocol edges (offer/accept/reject/timeout/cancel/verify/tamper) | `cargo test -p openpulse-filexfer` |
 | File-transfer blocks survive the modem (loopback round-trip + >64 KB + tamper→verify-fail) | `cargo test -p openpulse-modem --test filexfer_loopback` |
 | File transfer crosses two real daemons (twin round-trip) | `cargo test -p openpulse-daemon --test twin_daemon_bridge a_file_crosses` |
