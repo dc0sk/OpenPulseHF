@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use openpulse_daemon::protocol::{
-    CommandResponse, ControlCommand, ControlEvent, DaemonConfig, MessageSummary,
+    CommandResponse, ControlCommand, ControlEvent, DaemonConfig, MessageSummary, PeerSummary,
+    StationSummary,
 };
 
 use crate::cli::DaemonCommands;
@@ -78,6 +79,10 @@ pub fn run(addr: &str, cmd: DaemonCommands) -> Result<i32> {
         }
         DaemonCommands::EnableRepeater => simple(addr, ControlCommand::EnableRepeater),
         DaemonCommands::DisableRepeater => simple(addr, ControlCommand::DisableRepeater),
+        DaemonCommands::EnableDiscovery => simple(addr, ControlCommand::EnableDiscovery),
+        DaemonCommands::DisableDiscovery => simple(addr, ControlCommand::DisableDiscovery),
+        DaemonCommands::Stations => list_stations(addr),
+        DaemonCommands::Peers => list_peers(addr),
         DaemonCommands::DeleteMessage { id } => simple(addr, ControlCommand::DeleteMessage { id }),
         DaemonCommands::ListMessages => list_messages(addr),
         DaemonCommands::GetMessage { id } => get_message(addr, id),
@@ -213,6 +218,44 @@ fn list_messages(addr: &str) -> Result<i32> {
         }
     }
     println!("{}", serde_json::to_string_pretty(&messages)?);
+    Ok(0)
+}
+
+fn list_stations(addr: &str) -> Result<i32> {
+    let (events, resp) = run_command(addr, &ControlCommand::ListStations)?;
+    if !resp.ok {
+        eprintln!(
+            "error: {}",
+            resp.error.unwrap_or_else(|| "unknown".to_string())
+        );
+        return Ok(1);
+    }
+    let mut stations: Vec<StationSummary> = Vec::new();
+    for ev in events {
+        if let ControlEvent::StationList { stations: s } = ev {
+            stations = s;
+        }
+    }
+    println!("{}", serde_json::to_string_pretty(&stations)?);
+    Ok(0)
+}
+
+fn list_peers(addr: &str) -> Result<i32> {
+    let (events, resp) = run_command(addr, &ControlCommand::ListPeers)?;
+    if !resp.ok {
+        eprintln!(
+            "error: {}",
+            resp.error.unwrap_or_else(|| "unknown".to_string())
+        );
+        return Ok(1);
+    }
+    let mut peers: Vec<PeerSummary> = Vec::new();
+    for ev in events {
+        if let ControlEvent::PeerList { peers: p } = ev {
+            peers = p;
+        }
+    }
+    println!("{}", serde_json::to_string_pretty(&peers)?);
     Ok(0)
 }
 
@@ -473,6 +516,35 @@ mod tests {
         let (_, resp) = run_command(&addr, &ControlCommand::DisconnectPeer).unwrap();
         assert!(!resp.ok);
         assert_eq!(resp.error.as_deref(), Some("no peer"));
+    }
+
+    #[test]
+    fn stations_lists_discovered_stations() {
+        let (addr, _) = mock_daemon(vec![
+            r#"{"type":"station_list","stations":[{"callsign":"KN4CRD","grid":"EM73","snr_db":-12.0,"heard_count":3,"last_heard_ms":1700000000000,"is_opulse":true}]}"#
+                .into(),
+            r#"{"ok":true}"#.into(),
+        ]);
+        assert_eq!(list_stations(&addr).unwrap(), 0);
+    }
+
+    #[test]
+    fn peers_lists_recognized_opulse_peers() {
+        let (addr, _) = mock_daemon(vec![
+            r#"{"type":"peer_list","peers":[{"peer_id":"js8:DC0SK","capability_mask":45317,"route_quality":180,"trust_level":"unknown"}]}"#
+                .into(),
+            r#"{"ok":true}"#.into(),
+        ]);
+        let (events, resp) = run_command(&addr, &ControlCommand::ListPeers).unwrap();
+        assert!(resp.ok);
+        match &events[0] {
+            ControlEvent::PeerList { peers } => {
+                assert_eq!(peers.len(), 1);
+                assert_eq!(peers[0].peer_id, "js8:DC0SK");
+                assert_eq!(peers[0].capability_mask, 0xB105);
+            }
+            _ => panic!("expected PeerList event"),
+        }
     }
 
     #[test]
