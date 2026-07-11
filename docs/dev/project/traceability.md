@@ -9,6 +9,23 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 Phase E-2 — beacon assembly + full TX→RX loopback
+
+- **Requirement/change:** with the TX packers (E-1) in place, build the beacon frame sequences and
+  synthesise their audio, and prove the discovery loop closes OpenPulse-to-OpenPulse.
+- **Design decision:** `plugins/js8/src/beacon.rs` — `heartbeat()` (one self-identifying `@HB` frame),
+  `opulse_hint()` (the `Compound`(sender+grid) + `CompoundDirected`(`@OPULSE`) + Huffman `Data` over,
+  `First`/`Last`-bracketed), and `frame_audio()` (one frame → info bits → tones → GFSK). Added
+  `pack_huff_frame` (E-1's remaining packer) to `encode.rs`. **Still no transmit path is wired** — the
+  scheduler + engine seam (E-3/E-4) come next; this only builds bytes/audio in memory.
+- **Implementation:** `plugins/js8/src/{beacon.rs,encode.rs}`; exports in `lib.rs`.
+- **Tests:** `encode::huff_frame_matches_upstream_and_round_trips` (== Qt5 ground truth);
+  `beacon::heartbeat_beacon_transmits_and_decodes_off_air`; `beacon::opulse_hint_builds_a_first_last_bracketed_over`;
+  and the milestone `openpulse-discovery/tests/beacon_loopback.rs::opulse_beacon_transmits_and_is_recognized_end_to_end`
+  — mint a hint via `encode_hint` → `opulse_hint` → per-frame `frame_audio` → `decode_window` →
+  `HintAssembler` → recognised peer (DC0SK/JN58, caps 0xB105).
+- **Test results:** js8-plugin + discovery suites green; fmt + clippy (`-D warnings`) clean.
+
 ## 2026-07-11 — feat(js8): FF-15 Phase E-1 — JS8 TX packers (beacon foundation)
 
 - **Requirement/change:** Phase E (beacon TX) — the §97.221 doc gate (#790) is cleared. The TX side

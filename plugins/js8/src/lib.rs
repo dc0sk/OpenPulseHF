@@ -10,6 +10,7 @@
 //! JS8Call-improved (plan §2.1/§2.2, Appendix B). Frame packing, LDPC, GFSK modulation, and the
 //! multi-decode receiver land in the following units.
 
+pub mod beacon;
 pub mod costas;
 pub mod crc;
 pub mod decoder;
@@ -27,11 +28,12 @@ pub mod sync;
 pub mod tones;
 pub mod varicode;
 
+pub use beacon::{frame_audio, heartbeat, opulse_hint, BeaconFrame};
 pub use costas::CostasKind;
 pub use crc::augmented_crc12;
 pub use decoder::{decode_window, DecodeCfg, Js8Decode};
 pub use demodulate::demodulate_soft;
-pub use encode::{pack_alphanumeric50, pack_compound_frame, pack_heartbeat_frame};
+pub use encode::{pack_alphanumeric50, pack_compound_frame, pack_heartbeat_frame, pack_huff_frame};
 pub use frame::{pack_callsign, pack_grid, unpack_callsign, unpack_grid};
 pub use grammar::{
     parse_heartbeat, unpack_compound_frame, unpack_directed_message, CompoundFrame,

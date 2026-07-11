@@ -8,6 +8,7 @@
 
 use crate::frame::{pack_grid, ALPHANUMERIC};
 use crate::grammar::FrameType;
+use crate::varicode::HUFF_TABLE;
 
 fn alnum_index(c: u8) -> u64 {
     ALPHANUMERIC.iter().position(|&x| x == c).unwrap_or(0) as u64
@@ -89,10 +90,43 @@ pub fn pack_heartbeat_frame(callsign: &str, grid: &str) -> Option<[u8; 9]> {
     pack_compound_frame(callsign, FrameType::Heartbeat, packed_grid, 0)
 }
 
+/// Huffman-encode as many leading characters of `text` as fit in one 72-bit data frame (JS8Call
+/// `packHuffMessage` with the `[data_flag=1][compressed=0]` prefix). Returns the frame payload and the
+/// number of characters consumed. A character outside the Huffman alphabet ends the frame early.
+pub fn pack_huff_frame(text: &str) -> ([u8; 9], usize) {
+    const FRAME_SIZE: usize = 72;
+    let mut bits: Vec<bool> = vec![true, false]; // data flag, not-compressed (Huffman)
+    let mut consumed = 0usize;
+    for ch in text.chars() {
+        let up = ch.to_ascii_uppercase();
+        let Some((_, code)) = HUFF_TABLE.iter().find(|(c, _)| *c == up) else {
+            break;
+        };
+        if bits.len() + code.len() >= FRAME_SIZE {
+            break;
+        }
+        bits.extend(code.bytes().map(|b| b == b'1'));
+        consumed += 1;
+    }
+    // Pad: a single 0 then all 1s to fill the frame (the decoder trims from the last 0).
+    let pad = FRAME_SIZE - bits.len();
+    for i in 0..pad {
+        bits.push(i != 0);
+    }
+    let mut payload = [0u8; 9];
+    for (i, &bit) in bits.iter().enumerate().take(FRAME_SIZE) {
+        if bit {
+            payload[i / 8] |= 1 << (7 - i % 8);
+        }
+    }
+    (payload, consumed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::grammar::{parse_heartbeat, unpack_alphanumeric50, unpack_compound_frame};
+    use crate::varicode::unpack_data_message;
 
     fn hex9(s: &str) -> [u8; 9] {
         let mut p = [0u8; 9];
@@ -148,5 +182,25 @@ mod tests {
     fn directed_and_data_flags_are_rejected() {
         assert!(pack_compound_frame("KN4CRD", FrameType::Directed, 0, 0).is_none());
         assert!(pack_compound_frame("KN4CRD", FrameType::Data, 0, 0).is_none());
+    }
+
+    #[test]
+    fn huff_frame_matches_upstream_and_round_trips() {
+        // == the first Huffman data frame of `OPHF1 A1B2C3D4` from the Qt5 ground-truth harness.
+        let (frame, n) = pack_huff_frame("OPHF1 A1B2C");
+        assert_eq!(frame, hex9("bfec64914c8f9138bf"));
+        assert_eq!(n, 11);
+        assert_eq!(unpack_data_message(&frame).as_deref(), Some("OPHF1 A1B2C"));
+    }
+
+    #[test]
+    fn huff_frame_splits_long_text_across_frames() {
+        // The full hint text takes two Huffman frames; concatenating the decodes recovers it.
+        let text = "OPHF1 1FAX3AIT";
+        let (f0, n0) = pack_huff_frame(text);
+        let (f1, _n1) = pack_huff_frame(&text[n0..]);
+        let mut out = unpack_data_message(&f0).unwrap();
+        out.push_str(&unpack_data_message(&f1).unwrap());
+        assert_eq!(out, text);
     }
 }
