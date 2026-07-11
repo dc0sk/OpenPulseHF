@@ -9,6 +9,27 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 Phase B-5 — wire `Js8Plugin::demodulate` (trait round-trip)
+
+- **Requirement/change:** FF-15 Phase B: complete the `ModulationPlugin` by wiring `demodulate` to the window
+  decoder, so the plugin round-trips (modulate → demodulate) through the trait.
+- **Design decision:** `demodulate` runs `decode_window` over the captured audio in a narrow band around
+  `config.center_frequency` (offset 0 — the buffer is assumed slot-aligned; the discovery service uses
+  `decode_window` directly for a full-passband, T/R-scheduled window) and returns the strongest CRC-valid
+  frame as its packed 10-byte form (`payload9 ‖ i3bit<<5`), or `Err` if nothing decodes. **The plugin remains
+  out of the engine's plugin registry by design** — not because the decoder was missing, but because JS8 is
+  discovery-service-owned (plan §4.1/§4.2: T/R-slot scheduled, no `Frame` envelope); the daemon glue that owns
+  the instance is Phase D.
+- **Implementation:** `plugins/js8/src/plugin.rs` (`demodulate` body + module doc).
+- **Tests:** `plugin.rs` — `demodulate` on silence → `Err`; **`modulate` → `demodulate` recovers the packed
+  frame** (payload + flags) through the trait.
+- **Test results (actually run):** `js8-plugin` 55 passed / 0 failed (1 new; `demodulate` test updated); clippy
+  `-D warnings` + fmt clean.
+- **Next:** B-6 — the −18 dB weak-signal go/no-go: a calibrated-AWGN SNR sweep measuring the decode floor
+  (the D1 fallback checkpoint), plus a Pi-class CPU-budget check.
+
+---
+
 ## 2026-07-11 — feat(js8): FF-15 Phase B-4 — window decoder (multi-decode + CRC-12 filter)
 
 - **Requirement/change:** FF-15 Phase B: the window decoder — one entry the discovery service drives per

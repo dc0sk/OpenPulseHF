@@ -1,9 +1,10 @@
 //! `Js8Plugin`: the JS8 waveform as a [`ModulationPlugin`].
 //!
 //! `modulate` is the full TX chain — a packed JS8 message (10 bytes: 72-bit payload + 3-bit flags +
-//! 5 pad) → [`js8_info_bits`] → LDPC → [`message_to_tones`] → GFSK audio. `demodulate` is the
-//! FT8-class weak-signal receiver (plan Phase B) and is not implemented yet; the plugin is therefore
-//! not registered in the daemon until the decoder lands.
+//! 5 pad) → [`js8_info_bits`] → LDPC → [`message_to_tones`] → GFSK audio. `demodulate` runs the
+//! window decoder ([`decode_window`]) over the captured audio and returns the strongest CRC-valid
+//! frame; the discovery service uses [`decode_window`] directly for a full-passband, T/R-scheduled
+//! window.
 //!
 //! One deliberate deviation from the other plugins: a JS8 frame must go on the wire **without** the
 //! OpenPulse `Frame` envelope (interop needs byte-exact JS8), so the discovery service calls
@@ -12,6 +13,7 @@
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo};
 
+use crate::decoder::{decode_window, DecodeCfg};
 use crate::message::js8_info_bits;
 use crate::modulate::{modulate_tones, GfskParams};
 use crate::submode::{params_for_mode, SubmodeParams, COSTAS_LEN};
@@ -81,12 +83,30 @@ impl ModulationPlugin for Js8Plugin {
 
     fn demodulate(
         &self,
-        _samples: &[f32],
-        _config: &ModulationConfig,
+        samples: &[f32],
+        config: &ModulationConfig,
     ) -> Result<Vec<u8>, ModemError> {
-        Err(ModemError::Demodulation(
-            "JS8 RX decoder not implemented yet (FF-15 Phase B)".to_string(),
-        ))
+        let params = params_for_mode(&config.mode)
+            .ok_or_else(|| ModemError::Demodulation(format!("unknown JS8 mode {}", config.mode)))?;
+        // Search a narrow band around the configured audio frequency; the slot is assumed aligned to
+        // the buffer start (the discovery service uses `decode_window` directly for a full passband /
+        // T-R-scheduled window). Return the strongest CRC-valid decode as its packed 10-byte frame.
+        let base = config.center_frequency;
+        let cfg = DecodeCfg {
+            base_min: (base - 20.0).max(1.0),
+            base_max: base + 20.0,
+            base_step: params.tone_spacing_hz / 2.0,
+            max_offset: 0,
+            offset_step: 1,
+            ..DecodeCfg::default()
+        };
+        let best = decode_window(samples, &params, &cfg)
+            .into_iter()
+            .max_by(|a, b| a.sync_score.total_cmp(&b.sync_score))
+            .ok_or_else(|| ModemError::Demodulation("no JS8 frame decoded".to_string()))?;
+        let mut frame = best.payload.to_vec();
+        frame.push(best.i3bit << 5);
+        Ok(frame)
     }
 
     fn supports_mode(&self, mode: &str) -> bool {
@@ -174,10 +194,27 @@ mod tests {
     }
 
     #[test]
-    fn demodulate_reports_not_implemented() {
+    fn demodulate_fails_on_silence() {
         assert!(Js8Plugin::new()
-            .demodulate(&[0.0; 100], &cfg("JS8-NORMAL"))
+            .demodulate(&[0.0; 200_000], &cfg("JS8-NORMAL"))
             .is_err());
+    }
+
+    #[test]
+    fn plugin_modulate_demodulate_round_trip() {
+        // The plugin round-trips through the ModulationPlugin trait: modulate → demodulate recovers
+        // the packed frame (payload + flags; the 5 pad bits are not carried).
+        let plugin = Js8Plugin::new();
+        let c = cfg("JS8-NORMAL");
+        let msg: Vec<u8> = (0..10u8)
+            .map(|i| i.wrapping_mul(53).wrapping_add(9))
+            .collect();
+        let audio = plugin.modulate(&msg, &c).unwrap();
+        let frame = plugin.demodulate(&audio, &c).unwrap();
+        assert_eq!(frame.len(), 10);
+        let (payload, i3bit) = split_message(&msg);
+        assert_eq!(&frame[..9], &payload);
+        assert_eq!(frame[9] >> 5, i3bit);
     }
 
     #[test]
