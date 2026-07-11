@@ -157,9 +157,10 @@ buys us general third-party free-text (the secondary INFO-token path and reading
   command exposes the recognized peers (capabilities + quality + trust) to clients. The cache is now
   the queryable substrate rendezvous (Phase F), relay routing, and peer queries read.
 
-- Operator surface (CLI half of Phase G): `openpulse daemon {enable-discovery, disable-discovery,
-  stations, peers}` — the `stations`/`peers` commands print the daemon's `StationList`/`PeerList` as
-  JSON, so discovery is usable from the terminal ahead of the panel tab.
+- Operator surface (Phase G): CLI — `openpulse daemon {enable-discovery, disable-discovery, stations,
+  peers}` prints the daemon's `StationList`/`PeerList` as JSON; panel — a **Discovery tab** in
+  `openpulse-panel` (Enable/Disable/Refresh + live station and OpenPulse-peer tables), driven by the
+  `DiscoveryStatus`/`StationList`/`PeerList` events (reducer unit-tested; view build-verified).
 
 **Still to wire:** JSC decode (the 262k codebook → general third-party free text + the secondary
 INFO-token hint path) — not needed for the hint itself (the beacon is Huffman-framed).

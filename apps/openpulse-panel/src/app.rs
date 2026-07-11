@@ -42,6 +42,7 @@ pub enum Tab {
     Config,
     #[default]
     Messages,
+    Discovery,
     Log,
 }
 
@@ -129,6 +130,10 @@ pub enum Message {
     RefreshInbox,
     OpenMsg(u64),
     DeleteMsg(u64),
+    // discovery (FF-15)
+    EnableDiscovery,
+    DisableDiscovery,
+    RefreshDiscovery,
     // file transfer
     FileTo(String),
     FilePath(String),
@@ -218,7 +223,14 @@ impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::ToggleTheme => self.theme_mode = self.theme_mode.next(),
-            Message::SelectTab(t) => self.active_tab = t,
+            Message::SelectTab(t) => {
+                self.active_tab = t;
+                // Pull the current discovery tables when the operator opens the tab.
+                if t == Tab::Discovery && self.is_connected() {
+                    self.send(ControlCommand::ListStations);
+                    self.send(ControlCommand::ListPeers);
+                }
+            }
             Message::Tick => {
                 self.tick = self.tick.wrapping_add(1);
                 // Config fetch is async: once the daemon's ConfigData arrives, seed the draft.
@@ -372,6 +384,12 @@ impl App {
                 }
             }
             Message::RefreshInbox => self.send(ControlCommand::ListMessages),
+            Message::EnableDiscovery => self.send(ControlCommand::EnableDiscovery),
+            Message::DisableDiscovery => self.send(ControlCommand::DisableDiscovery),
+            Message::RefreshDiscovery => {
+                self.send(ControlCommand::ListStations);
+                self.send(ControlCommand::ListPeers);
+            }
             Message::OpenMsg(id) => self.send(ControlCommand::GetMessage { id }),
             Message::DeleteMsg(id) => {
                 self.send(ControlCommand::DeleteMessage { id });
