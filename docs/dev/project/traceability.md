@@ -9,6 +9,26 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(discovery): FF-15 Phase F-3c-i — rendezvous runtime orchestration
+
+- **Requirement/change:** the `DiscoveryRuntime` must drive both rendezvous roles end-to-end (still pure,
+  no I/O) so the daemon glue stays thin: propose to a peer, respond to inbound proposals, and surface the
+  agreement/reject/timeout the daemon acts on.
+- **Design decision:** embed a `RendezvousAssembler` (fed every decode alongside the hint assembler) and
+  an optional `RendezvousInitiator`. New outcomes `RendezvousAgreed { peer, channel, switch_in_slots }`
+  (channel is a table **index** — the daemon resolves Hz + does the QSY/CONREQ), `RendezvousRejected`,
+  `RendezvousTimedOut`. `start_rendezvous()` queues the Propose over into a **priority** TX queue that
+  `maybe_transmit` drains before beacons and without the cadence gate; the responder role (`respond()`
+  → Accept/Reject over) is gated to `TxMode::Full`; the initiator times out per-slot. Reused
+  `TransmitBeacon` for rendezvous audio (the daemon path is identical). `set_rendezvous_channels()` takes
+  the current band's available indices — no `DiscoveryParams` churn.
+- **Implementation:** `crates/openpulse-discovery/src/runtime.rs`.
+- **Tests:** responder accepts highest-ranked common channel + transmits the Accept; rejects with no
+  common channel; RX-only/Beacon does not answer; initiator proposes → agrees on Accept; initiator
+  reports a reject; initiator times out. (6 new; 50 crate tests total.)
+- **Test results:** `cargo test -p openpulse-discovery --no-default-features` → 50 passed; clippy clean.
+  F-3c-ii (daemon `RendezvousWith` command, QSY, CONREQ handoff, bandplan gate) + F-3c-iii (twin) next.
+
 ## 2026-07-11 — feat(discovery): FF-15 Phase F-3b — rendezvous RX reassembler
 
 - **Requirement/change:** an inbound rendezvous over must be reassembled from its per-slot JS8 frames and

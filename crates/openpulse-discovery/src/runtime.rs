@@ -8,7 +8,7 @@
 
 use std::collections::VecDeque;
 
-use js8_plugin::beacon::{frame_audio, heartbeat, opulse_hint, BeaconFrame};
+use js8_plugin::beacon::{directed, frame_audio, heartbeat, opulse_hint, BeaconFrame};
 use js8_plugin::decoder::{decode_window, DecodeCfg, Js8Decode};
 use js8_plugin::grammar::{parse_heartbeat, unpack_compound_frame};
 use js8_plugin::submode::{params, Submode};
@@ -16,6 +16,11 @@ use js8_plugin::submode::{params, Submode};
 use crate::discovery_sm::{DiscoveryAction, DiscoveryEvent, DiscoverySm, DiscoveryState};
 use crate::hint::{encode_hint, HintPayload, HINT_VERSION};
 use crate::hint_assembler::HintAssembler;
+use crate::rendezvous::{
+    respond, RejectReason, RendezvousInitiator, RendezvousMsg, RendezvousOutcome,
+    DEFAULT_SWITCH_SLOTS,
+};
+use crate::rendezvous_assembler::RendezvousAssembler;
 use crate::scheduler::{Js8Clock, SlotTracker};
 use crate::station::{Observation, OphfHint, StationTable};
 
@@ -101,6 +106,29 @@ pub enum DiscoveryOutcome {
         /// Regulatory-log mode label (e.g. `"JS8-NORMAL"`).
         mode: String,
     },
+    /// A rendezvous exchange with `peer` succeeded: both stations QSY to channel **index** `channel`
+    /// (into the current band's `rendezvous_channels_hz` table) in `switch_in_slots` slots, after which
+    /// the daemon runs the signed CONREQ handshake. The daemon resolves the index to Hz.
+    RendezvousAgreed {
+        /// The peer callsign.
+        peer: String,
+        /// Agreed channel index into the per-band table.
+        channel: u8,
+        /// Slots until both stations retune.
+        switch_in_slots: u8,
+    },
+    /// The peer declined our rendezvous proposal.
+    RendezvousRejected {
+        /// The peer callsign.
+        peer: String,
+        /// Why it declined.
+        reason: RejectReason,
+    },
+    /// Our rendezvous proposal expired with no reply.
+    RendezvousTimedOut {
+        /// The peer callsign.
+        peer: String,
+    },
 }
 
 /// The RX-only discovery runtime.
@@ -112,6 +140,15 @@ pub struct DiscoveryRuntime {
     table: StationTable,
     /// Cross-slot assembler recognising `@OPULSE` capability beacons.
     assembler: HintAssembler,
+    /// Cross-slot assembler recognising rendezvous overs directed at us.
+    rendezvous_assembler: RendezvousAssembler,
+    /// Rendezvous channel indices usable here (responder's `available` set; the daemon supplies them
+    /// from the current band's table). Empty ⇒ every proposal is rejected `NoCommonFreq`.
+    rendezvous_channels: Vec<u8>,
+    /// Active outgoing rendezvous proposal awaiting a reply, if any.
+    initiator: Option<RendezvousInitiator>,
+    /// Directed rendezvous frames pending transmission (priority over beacons, no cadence gate).
+    rendezvous_tx: VecDeque<BeaconFrame>,
     /// Audio accumulated since the last slot boundary (only while dwelling).
     dwell_buf: Vec<f32>,
     /// Frames of the beacon over currently being transmitted, one per slot.
@@ -127,6 +164,8 @@ impl DiscoveryRuntime {
     pub fn new(params: DiscoveryParams) -> Self {
         let sm = DiscoverySm::new(params.enabled, params.idle_grace_ms, params.dwell_ms);
         let clock = Js8Clock::new(params.submode);
+        let rendezvous_assembler =
+            RendezvousAssembler::new(&params.callsign, HINT_FREQ_TOL_HZ, HINT_MAX_OVER_SLOTS);
         Self {
             params,
             sm,
@@ -134,6 +173,10 @@ impl DiscoveryRuntime {
             slots: SlotTracker::new(),
             table: StationTable::new(),
             assembler: HintAssembler::new(HINT_FREQ_TOL_HZ, HINT_MAX_OVER_SLOTS),
+            rendezvous_assembler,
+            rendezvous_channels: Vec::new(),
+            initiator: None,
+            rendezvous_tx: VecDeque::new(),
             dwell_buf: Vec::new(),
             beacon_queue: VecDeque::new(),
             slots_since_beacon: 0,
@@ -163,6 +206,42 @@ impl DiscoveryRuntime {
     /// channel; it takes effect on the next `Retune` outcome.
     pub fn set_dial_freq_hz(&mut self, hz: u64) {
         self.params.calling_freq_hz = hz;
+    }
+
+    /// Set the rendezvous channel indices usable here (the responder's `available` set). The daemon
+    /// supplies `0..n` for the current band's `rendezvous_channels_hz` table; empty rejects proposals.
+    pub fn set_rendezvous_channels(&mut self, channels: Vec<u8>) {
+        self.rendezvous_channels = channels;
+    }
+
+    /// Begin a rendezvous with `peer`: propose `channels` (ranked indices) under session `token`,
+    /// queueing the `Propose` directed over for transmission. `timeout_slots` bounds the wait for a
+    /// reply. Requires a configured callsign (the frames carry it); a no-op otherwise. Replaces any
+    /// in-flight proposal.
+    pub fn start_rendezvous(
+        &mut self,
+        peer: &str,
+        token: &str,
+        channels: Vec<u8>,
+        timeout_slots: u64,
+    ) {
+        if self.params.callsign.trim().is_empty() {
+            return;
+        }
+        let (init, propose) = RendezvousInitiator::start(peer, token, channels, timeout_slots);
+        self.enqueue_directed(init.peer(), &propose);
+        self.initiator = Some(init);
+    }
+
+    /// Whether an outgoing rendezvous proposal is awaiting a reply.
+    pub fn rendezvous_active(&self) -> bool {
+        self.initiator.is_some()
+    }
+
+    /// Queue the frames of `sender: to <msg>` for transmission (priority over beacons).
+    fn enqueue_directed(&mut self, to: &str, msg: &RendezvousMsg) {
+        let frames = directed(&self.params.callsign, &self.params.grid, to, &msg.encode());
+        self.rendezvous_tx.extend(frames);
     }
 
     /// Current UTC clock drift-bias estimate (ms).
@@ -214,6 +293,14 @@ impl DiscoveryRuntime {
         // the slot we just buffered (half-duplex — a TX slot skips RX).
         if self.sm.state() == DiscoveryState::Dwelling {
             if let Some(_completed) = self.slots.advance(self.clock.slot_index(now_ms)) {
+                // Age an in-flight rendezvous proposal; a timeout ends it and stands down.
+                if let Some(init) = self.initiator.as_mut() {
+                    if let Some(RendezvousOutcome::TimedOut) = init.on_slot() {
+                        let peer = init.peer().to_string();
+                        self.initiator = None;
+                        out.push(DiscoveryOutcome::RendezvousTimedOut { peer });
+                    }
+                }
                 if let Some(tx) = self.maybe_transmit(now_ms) {
                     self.dwell_buf.clear(); // don't decode our own transmission
                     out.push(tx);
@@ -230,11 +317,24 @@ impl DiscoveryRuntime {
     /// clock is within skew tolerance. Continues an in-progress over, else starts one on cadence —
     /// every `hint_interval_beacons`-th beacon is an `@OPULSE` hint, the rest are heartbeats.
     fn maybe_transmit(&mut self, now_ms: u64) -> Option<DiscoveryOutcome> {
-        if self.params.tx_mode == TxMode::RxOnly || self.params.callsign.trim().is_empty() {
+        if self.params.callsign.trim().is_empty() {
             return None;
         }
         // Hard TX refusal beyond the clock-skew bound (§D5) — degrade to RX-only for this slot.
         if !self.clock.tx_allowed(self.params.max_clock_skew_ms) {
+            return None;
+        }
+        // Rendezvous frames have priority and no cadence gate: a directed exchange (operator-initiated,
+        // or a responder Accept) transmits every slot until its over is complete.
+        if let Some(frame) = self.rendezvous_tx.pop_front() {
+            let audio = frame_audio(&frame, self.params.tx_offset_hz, self.params.submode);
+            return Some(DiscoveryOutcome::TransmitBeacon {
+                audio,
+                mode: js8_mode_label(self.params.submode),
+            });
+        }
+        // Beacon heartbeats/hints are gated by the TX policy.
+        if self.params.tx_mode == TxMode::RxOnly {
             return None;
         }
 
@@ -321,12 +421,76 @@ impl DiscoveryRuntime {
                     is_new,
                 });
             }
+            // Feed every frame to the rendezvous assembler; a completed over directed at us drives the
+            // initiator reply-handling or the responder decision.
+            if let Some(r) =
+                self.rendezvous_assembler
+                    .ingest(&d.payload, d.i3bit, d.base_freq_hz, slot)
+            {
+                out.extend(self.handle_rendezvous(r.from, r.msg));
+            }
             if let Some(o) = self.ingest_decode(&d, now_ms) {
                 out.push(o);
             }
         }
         self.table.sweep(now_ms, self.params.station_ttl_ms);
         out
+    }
+
+    /// Drive a recognised rendezvous message: if it answers our active proposal, resolve the initiator
+    /// (QSY / reject); otherwise, in `Full` mode, respond to an inbound `Propose` and (on accept) agree.
+    fn handle_rendezvous(&mut self, from: String, msg: RendezvousMsg) -> Vec<DiscoveryOutcome> {
+        // A reply to our own in-flight proposal (same peer + token)?
+        if let Some(init) = self.initiator.as_mut() {
+            if init.peer().eq_ignore_ascii_case(from.trim()) {
+                let outcome = init.on_message(&msg);
+                return match outcome {
+                    Some(RendezvousOutcome::Qsy {
+                        channel,
+                        switch_in_slots,
+                    }) => {
+                        self.initiator = None;
+                        vec![DiscoveryOutcome::RendezvousAgreed {
+                            peer: from,
+                            channel,
+                            switch_in_slots,
+                        }]
+                    }
+                    Some(RendezvousOutcome::Rejected(reason)) => {
+                        self.initiator = None;
+                        vec![DiscoveryOutcome::RendezvousRejected { peer: from, reason }]
+                    }
+                    _ => Vec::new(),
+                };
+            }
+        }
+        // Otherwise a proposal directed at us — respond only when opted into the responder role (Full).
+        if self.params.tx_mode != TxMode::Full {
+            return Vec::new();
+        }
+        if !matches!(msg, RendezvousMsg::Propose { .. }) {
+            return Vec::new();
+        }
+        match respond(&msg, &self.rendezvous_channels, DEFAULT_SWITCH_SLOTS) {
+            RendezvousOutcome::Send(reply) => {
+                self.enqueue_directed(&from, &reply);
+                if let RendezvousMsg::Accept {
+                    channel,
+                    switch_in_slots,
+                    ..
+                } = reply
+                {
+                    vec![DiscoveryOutcome::RendezvousAgreed {
+                        peer: from,
+                        channel,
+                        switch_in_slots,
+                    }]
+                } else {
+                    Vec::new()
+                }
+            }
+            _ => Vec::new(),
+        }
     }
 
     /// Turn one JS8 decode into a station upsert (heartbeats carry callsign + grid).
@@ -543,5 +707,167 @@ mod tests {
                 "rx_only must never transmit"
             );
         }
+    }
+
+    /// A dwelling runtime with a callsign + grid; beacon cadence pushed far out so it never fires during
+    /// a rendezvous test.
+    fn dwelling_rendezvous_runtime(tx_mode: TxMode) -> DiscoveryRuntime {
+        let mut p = params();
+        p.tx_mode = tx_mode;
+        p.callsign = "DC0SK".into();
+        p.grid = "JN58".into();
+        p.heartbeat_interval_slots = 10_000;
+        let mut rt = DiscoveryRuntime::new(p);
+        rt.tick(1000, true);
+        rt.qsy_complete(true);
+        rt
+    }
+
+    /// Modulate `text` as a directed over `sender: to <text>` and clock its frames through the dwelling
+    /// runtime, one per slot from `start_ms`, collecting every outcome. `t` advances by one slot/frame.
+    fn feed_over(
+        rt: &mut DiscoveryRuntime,
+        sender: &str,
+        to: &str,
+        text: &str,
+        t: &mut u64,
+    ) -> Vec<DiscoveryOutcome> {
+        let frames = directed(sender, "JN58", to, text);
+        let mut out = Vec::new();
+        for f in &frames {
+            rt.push_audio(&frame_audio(f, 1500.0, Submode::Normal));
+            rt.tick(*t, true); // establish this slot
+            *t += 15_000;
+            out.extend(rt.tick(*t, true)); // cross the boundary → decode
+        }
+        out
+    }
+
+    #[test]
+    fn responder_accepts_a_proposal_and_agrees() {
+        let mut rt = dwelling_rendezvous_runtime(TxMode::Full);
+        rt.set_rendezvous_channels(vec![3, 9, 2]);
+        let mut t = 1000u64;
+        // KN4CRD proposes channels 9 then 3; we have [3,9,2] so the highest-ranked common is 9.
+        let out = feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF QSY? R7 C9 C3", &mut t);
+        let agreed = out
+            .iter()
+            .find_map(|o| match o {
+                DiscoveryOutcome::RendezvousAgreed {
+                    peer,
+                    channel,
+                    switch_in_slots,
+                } => Some((peer.clone(), *channel, *switch_in_slots)),
+                _ => None,
+            })
+            .expect("agreed on a channel");
+        assert_eq!(agreed, ("KN4CRD".to_string(), 9, DEFAULT_SWITCH_SLOTS));
+        // The Accept over then transmits (queued with priority over beacons).
+        let mut txd = false;
+        for _ in 0..6 {
+            t += 15_000;
+            txd |= rt
+                .tick(t, true)
+                .iter()
+                .any(|o| matches!(o, DiscoveryOutcome::TransmitBeacon { .. }));
+        }
+        assert!(txd, "the Accept over is transmitted");
+    }
+
+    #[test]
+    fn responder_rejects_when_no_common_channel_and_does_not_agree() {
+        let mut rt = dwelling_rendezvous_runtime(TxMode::Full);
+        rt.set_rendezvous_channels(vec![0, 1]); // we don't have 9 or 3
+        let mut t = 1000u64;
+        let out = feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF QSY? R7 C9 C3", &mut t);
+        assert!(
+            !out.iter()
+                .any(|o| matches!(o, DiscoveryOutcome::RendezvousAgreed { .. })),
+            "no agreement without a common channel"
+        );
+    }
+
+    #[test]
+    fn rx_only_does_not_answer_a_proposal() {
+        // Beacon (not Full) → the responder role is off; a proposal directed at us is not answered.
+        let mut rt = dwelling_rendezvous_runtime(TxMode::Beacon);
+        rt.set_rendezvous_channels(vec![3, 9]);
+        let mut t = 1000u64;
+        let out = feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF QSY? R7 C9 C3", &mut t);
+        assert!(
+            !out.iter()
+                .any(|o| matches!(o, DiscoveryOutcome::RendezvousAgreed { .. })),
+            "only Full mode responds to proposals"
+        );
+    }
+
+    #[test]
+    fn initiator_proposes_then_agrees_on_the_accept() {
+        let mut rt = dwelling_rendezvous_runtime(TxMode::Full);
+        rt.start_rendezvous("KN4CRD", "R7", vec![3, 9], 20);
+        assert!(rt.rendezvous_active());
+        // Drain the Propose over (transmits with priority, one frame per slot).
+        let mut t = 1000u64;
+        let mut proposed = false;
+        for _ in 0..8 {
+            t += 15_000;
+            proposed |= rt
+                .tick(t, true)
+                .iter()
+                .any(|o| matches!(o, DiscoveryOutcome::TransmitBeacon { .. }));
+        }
+        assert!(proposed, "the Propose over is transmitted");
+        // KN4CRD accepts channel 9, switch in 4 slots.
+        let out = feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF QSY R7 C9 S4", &mut t);
+        let agreed = out.iter().find_map(|o| match o {
+            DiscoveryOutcome::RendezvousAgreed {
+                peer,
+                channel,
+                switch_in_slots,
+            } => Some((peer.clone(), *channel, *switch_in_slots)),
+            _ => None,
+        });
+        assert_eq!(agreed, Some(("KN4CRD".to_string(), 9, 4)));
+        assert!(!rt.rendezvous_active(), "the session concluded");
+    }
+
+    #[test]
+    fn initiator_reports_a_reject() {
+        let mut rt = dwelling_rendezvous_runtime(TxMode::Full);
+        rt.start_rendezvous("KN4CRD", "R7", vec![3, 9], 20);
+        let mut t = 1000u64;
+        for _ in 0..8 {
+            t += 15_000;
+            rt.tick(t, true); // drain the Propose
+        }
+        let out = feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF NO R7 F", &mut t);
+        assert!(
+            out.iter().any(|o| matches!(
+                o,
+                DiscoveryOutcome::RendezvousRejected {
+                    reason: RejectReason::NoCommonFreq,
+                    ..
+                }
+            )),
+            "peer reject surfaced: {out:?}"
+        );
+        assert!(!rt.rendezvous_active());
+    }
+
+    #[test]
+    fn initiator_times_out_without_a_reply() {
+        let mut rt = dwelling_rendezvous_runtime(TxMode::Full);
+        rt.start_rendezvous("KN4CRD", "R7", vec![3, 9], 3);
+        let mut t = 1000u64;
+        let mut timed_out = false;
+        for _ in 0..6 {
+            t += 15_000;
+            timed_out |= rt
+                .tick(t, true)
+                .iter()
+                .any(|o| matches!(o, DiscoveryOutcome::RendezvousTimedOut { .. }));
+        }
+        assert!(timed_out, "the proposal timed out");
+        assert!(!rt.rendezvous_active());
     }
 }
