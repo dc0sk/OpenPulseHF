@@ -11,6 +11,7 @@
 //! multi-decode receiver land in the following units.
 
 pub mod costas;
+pub mod ldpc174;
 pub mod modulate;
 pub mod submode;
 
