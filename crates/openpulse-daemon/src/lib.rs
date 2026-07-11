@@ -233,6 +233,9 @@ pub struct RuntimeControlState {
     /// Home frequency (Hz) saved when discovery QSYed to the JS8 calling channel, restored on stand-down;
     /// `None` when not dwelling. The home frequency itself comes from `last_freq_hz`.
     pub discovery_home_freq_hz: Option<u64>,
+    /// JS8 calling frequency (Hz) per band label (from `[discovery]` config). Discovery dwells on the
+    /// entry for the operator's current home band; empty when discovery is not configured.
+    pub discovery_calling_freqs_hz: std::collections::BTreeMap<String, u64>,
 }
 
 impl RuntimeControlState {
@@ -317,6 +320,7 @@ impl Default for RuntimeControlState {
             filexfer_tx_queue: Vec::new(),
             discovery: None,
             discovery_home_freq_hz: None,
+            discovery_calling_freqs_hz: std::collections::BTreeMap::new(),
         }
     }
 }

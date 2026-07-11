@@ -9,6 +9,30 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(daemon): FF-15 — discovery dwells on the current home band's JS8 freq (RX refinement)
+
+- **Requirement/change:** post-MVP RX refinement. `build_discovery_runtime` hardcoded the 20 m
+  calling frequency, so discovery would QSY to 14.078 MHz regardless of the operator's home band —
+  contradicting decision **D7** ("single-band dwell = *current* band's JS8 frequency"). The config
+  band table (`[discovery.calling_freqs_hz]`) already existed but was only read for the 20 m entry.
+- **Design decision:** keep the `openpulse-discovery` crate pure (no bandplan dependency). The daemon
+  already resolves band labels for DCD squelch via `openpulse_qsy::bandplan::band_label_for_hz`;
+  reuse it. Store the full band table in `RuntimeControlState`; in `discovery_tick`, **while the
+  runtime is `Inactive`** (so `last_freq_hz` is still the home dial, not the JS8 freq), resolve the
+  home band → calling frequency and push it into the runtime via a new `set_dial_freq_hz` setter.
+  Takes effect on the next `Retune`, and `dial_freq_hz()` (drives `DiscoveryStatus`) stays accurate.
+- **Implementation:** `crates/openpulse-discovery/src/runtime.rs` `DiscoveryRuntime::set_dial_freq_hz`;
+  `crates/openpulse-daemon/src/lib.rs` `RuntimeControlState::discovery_calling_freqs_hz`;
+  `crates/openpulse-daemon/src/server.rs` per-band resolution in `discovery_tick` + table populated
+  in `RuntimeControlState` construction + updated `build_discovery_runtime` doc.
+- **Tests:** `discovery_tick_qsys_to_the_current_home_bands_calling_freq` (home on 40 m → QSYs to
+  7.078 MHz, not the 20 m default; asserts `last_freq_hz`, `discovery_home_freq_hz`, and the runtime
+  `dial_freq_hz()`). Existing `discovery_tick_activates_dwells_and_hears_an_injected_station`
+  (acceptance gate) unchanged.
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features --lib` → 69 passed / 0
+  failed; `cargo test -p openpulse-discovery --no-default-features` → 25 passed; clippy (`-D
+  warnings`) + fmt clean on both crates.
+
 ## 2026-07-11 — feat(daemon): FF-15 Phase D-5c(ii) — live rx-tick wiring — **RX-only MVP complete**
 
 - **Requirement/change:** FF-15 Phase D ship line (plan §6.1/§6.2/§6.3): wire `DiscoveryRuntime` into the

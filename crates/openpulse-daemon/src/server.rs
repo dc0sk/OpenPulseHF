@@ -533,6 +533,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
             &cfg.logbook.peer_grids,
         ),
         discovery: build_discovery_runtime(&cfg),
+        discovery_calling_freqs_hz: cfg.discovery.calling_freqs_hz.clone(),
         ..RuntimeControlState::default()
     };
     if cfg.logbook.enabled {
@@ -1003,8 +1004,9 @@ fn drain_filexfer_tx(
 // ── JS8 discovery (FF-15) ────────────────────────────────────────────────────
 
 /// Build the JS8 discovery runtime from `[discovery]` config. Always built (so Enable/Disable work at
-/// runtime); the config `enabled` flag gates activation. Calling frequency defaults to the 20 m band
-/// (MVP; per-home-band selection is a later refinement). `None` only if the band table is empty.
+/// runtime); the config `enabled` flag gates activation. The initial calling frequency is the 20 m
+/// entry (or the first band in the table); `discovery_tick` re-selects the entry for the operator's
+/// current home band before each activation. `None` only if the band table is empty.
 fn build_discovery_runtime(
     cfg: &openpulse_config::OpenpulseConfig,
 ) -> Option<openpulse_discovery::DiscoveryRuntime> {
@@ -1060,9 +1062,24 @@ fn discovery_tick(
         && runtime_state.file_rx.is_none()
         && runtime_state.file_tx.is_none()
         && !engine.ota_active();
+    // While inactive, target the JS8 calling frequency for the operator's current home band, so
+    // activation QSYs within-band instead of always to 20 m. `last_freq_hz` is the home dial while
+    // inactive (it becomes the JS8 freq once dwelling, so only refresh before activation).
+    let per_band_freq = (runtime_state.discovery.as_ref().map(|d| d.state())
+        == Some(openpulse_discovery::DiscoveryState::Inactive))
+    .then(|| {
+        runtime_state
+            .last_freq_hz
+            .and_then(openpulse_qsy::bandplan::band_label_for_hz)
+            .and_then(|label| runtime_state.discovery_calling_freqs_hz.get(label).copied())
+    })
+    .flatten();
     // Decode (on slot boundaries) runs inside `tick`; `block_in_place` keeps the async loop responsive.
     let outcomes = tokio::task::block_in_place(|| {
         let rt = runtime_state.discovery.as_mut().expect("checked above");
+        if let Some(hz) = per_band_freq {
+            rt.set_dial_freq_hz(hz);
+        }
         rt.push_audio(raw_samples);
         rt.tick(now_ms, idle)
     });
@@ -1457,6 +1474,54 @@ mod discovery_tick_tests {
             }
         }
         assert!(heard, "a StationHeard event for KN4CRD/EM73 was emitted");
+    }
+
+    #[test]
+    fn discovery_tick_qsys_to_the_current_home_bands_calling_freq() {
+        // Home on 40 m; the runtime's initial calling freq is the 20 m default. Activation must
+        // re-select the 40 m entry from the band table and QSY there, not to 20 m.
+        let engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        let (tx, _rx) = tokio::sync::broadcast::channel::<ControlEvent>(64);
+        let ev = std::sync::Arc::new(tx);
+        let calling: std::collections::BTreeMap<String, u64> =
+            [("40m", 7_078_000u64), ("20m", 14_078_000)]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect();
+        let mut rs = RuntimeControlState {
+            last_freq_hz: Some(7_074_000), // home on 40 m
+            discovery_calling_freqs_hz: calling,
+            discovery: Some(DiscoveryRuntime::new(DiscoveryParams {
+                enabled: true,
+                idle_grace_ms: 0,
+                dwell_ms: 0,
+                station_ttl_ms: 3_600_000,
+                submode: Submode::Normal,
+                calling_freq_hz: 14_078_000, // 20 m default, must be overridden
+            })),
+            ..RuntimeControlState::default()
+        };
+
+        discovery_tick(&mut rs, &engine, None, &ev, &[], 1000);
+        assert_eq!(
+            rs.discovery.as_ref().unwrap().state(),
+            DiscoveryState::Dwelling
+        );
+        assert_eq!(
+            rs.discovery_home_freq_hz,
+            Some(7_074_000),
+            "40 m home saved"
+        );
+        assert_eq!(
+            rs.last_freq_hz,
+            Some(7_078_000),
+            "tuned to the 40 m JS8 calling freq, not the 20 m default"
+        );
+        assert_eq!(
+            rs.discovery.as_ref().unwrap().dial_freq_hz(),
+            7_078_000,
+            "runtime dial freq reflects the per-band selection (drives DiscoveryStatus)"
+        );
     }
 
     #[test]
