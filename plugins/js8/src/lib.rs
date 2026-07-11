@@ -14,6 +14,7 @@ pub mod costas;
 pub mod crc;
 pub mod decoder;
 pub mod demodulate;
+pub mod encode;
 pub mod frame;
 pub mod grammar;
 pub mod jsc;
@@ -30,6 +31,7 @@ pub use costas::CostasKind;
 pub use crc::augmented_crc12;
 pub use decoder::{decode_window, DecodeCfg, Js8Decode};
 pub use demodulate::demodulate_soft;
+pub use encode::{pack_alphanumeric50, pack_compound_frame, pack_heartbeat_frame};
 pub use frame::{pack_callsign, pack_grid, unpack_callsign, unpack_grid};
 pub use grammar::{
     parse_heartbeat, unpack_compound_frame, unpack_directed_message, CompoundFrame,

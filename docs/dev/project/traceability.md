@@ -9,6 +9,23 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 Phase E-1 — JS8 TX packers (beacon foundation)
+
+- **Requirement/change:** Phase E (beacon TX) — the §97.221 doc gate (#790) is cleared. The TX side
+  needs the encode counterparts of the RX decoders. This unit is the foundation; it emits nothing.
+- **Design decision:** port `packAlphaNumeric50` (50-bit compound callsign) and `packCompoundFrame`
+  (heartbeat/compound/compound-directed 72-bit payloads) into `plugins/js8/src/encode.rs`, plus a
+  `pack_heartbeat_frame` convenience. Validated against the same Qt5 ground truth as the decoders and
+  round-tripped through them. **Off-path:** these are pure functions; no transmit path is wired, so
+  nothing keys a radio.
+- **Implementation:** `plugins/js8/src/encode.rs`; exports in `lib.rs`.
+- **Tests:** `pack_alphanumeric50_matches_upstream_and_round_trips`,
+  `heartbeat_frame_matches_upstream_ground_truth` (== the RX ground-truth payload),
+  `packed_heartbeat_decodes_back_to_sender_and_grid`, `opulse_group_packs_and_round_trips`,
+  `directed_and_data_flags_are_rejected`.
+- **Test results:** `cargo test -p js8-plugin --no-default-features --lib` → all green (5 new); fmt +
+  clippy (`-D warnings`) clean.
+
 ## 2026-07-11 — docs/test: low-priority audit closeout (G-2/G-5/G-7 + serial PTT)
 
 - **Requirement/change:** G-2 — `transmit_iq` bypasses the emit seam (no reg-log/frame-count/auto-ID),
