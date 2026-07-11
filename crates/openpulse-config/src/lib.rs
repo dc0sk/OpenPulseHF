@@ -5,6 +5,7 @@
 //!
 //! Precedence: CLI flag overrides > config file > built-in defaults.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -49,6 +50,75 @@ pub struct OpenpulseConfig {
     pub control_security: ControlSecurityConfig,
     pub compression: CompressionConfig,
     pub file_transfer: FileTransferConfig,
+    pub discovery: DiscoveryConfig,
+}
+
+/// JS8-based station discovery (FF-15; opt-in, RX-only by default). See
+/// `docs/dev/design/js8-discovery-rendezvous-plan.md`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct DiscoveryConfig {
+    /// Master switch. Default `false`.
+    pub enabled: bool,
+    /// `"rx_only"` (default) | `"beacon"` (HB + hint TX) | `"full"` (adds queries + rendezvous responder).
+    pub mode: String,
+    /// JS8 submode for the calling channel (MVP: `"normal"` only).
+    pub submode: String,
+    /// Seconds the idle predicate must hold before auto-QSY to the JS8 frequency.
+    pub idle_grace_secs: u64,
+    /// Maximum dwell before returning to the home frequency (`0` = until preempted).
+    pub dwell_secs: u64,
+    /// Heartbeat every N slots (`N × 15 s` for NORMAL). TX modes only.
+    pub heartbeat_interval_slots: u32,
+    /// Send the `@OPULSE` hint every Nth beacon. TX modes only.
+    pub hint_interval_beacons: u32,
+    /// Actively query newly-heard stations with `INFO?` (`mode = "full"` only).
+    pub query_new_stations: bool,
+    /// Global query budget per 10 minutes.
+    pub max_queries_per_10min: u32,
+    /// Seconds a heard station is retained in the table before a TTL sweep.
+    pub station_ttl_secs: u64,
+    /// Refuse TX when the estimated `|UTC offset|` exceeds this many ms (RX-only degrade).
+    pub max_clock_skew_ms: u64,
+    /// The JS8 custom group used for the OpenPulse hint.
+    pub group: String,
+    /// JS8 calling frequency (Hz) per band label (`"20m"` → 14 078 000). Dwell uses the entry for the
+    /// current home band.
+    pub calling_freqs_hz: BTreeMap<String, u64>,
+}
+
+impl Default for DiscoveryConfig {
+    fn default() -> Self {
+        let calling_freqs_hz = [
+            ("160m", 1_842_000),
+            ("80m", 3_578_000),
+            ("40m", 7_078_000),
+            ("30m", 10_130_000),
+            ("20m", 14_078_000),
+            ("17m", 18_104_000),
+            ("15m", 21_078_000),
+            ("12m", 24_922_000),
+            ("10m", 28_078_000),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        Self {
+            enabled: false,
+            mode: "rx_only".into(),
+            submode: "normal".into(),
+            idle_grace_secs: 120,
+            dwell_secs: 900,
+            heartbeat_interval_slots: 8,
+            hint_interval_beacons: 3,
+            query_new_stations: false,
+            max_queries_per_10min: 2,
+            station_ttl_secs: 3600,
+            max_clock_skew_ms: 2000,
+            group: "OPULSE".into(),
+            calling_freqs_hz,
+        }
+    }
 }
 
 /// Control-channel link security (REQ-SEC-CTL-01/02). Auth is always required on a non-loopback
@@ -1065,6 +1135,43 @@ partial_ttl_hours = 72
 # Max estimated on-air seconds per keyed TX burst (splits large transfers so PTT never trips the
 # radio watchdog and the channel is yielded between bursts). Keep well under any PTT time-out.
 burst_max_secs = 20.0
+
+[discovery]
+# JS8-based station discovery (FF-15). Opt-in; RX-only by default (no on-air TX).
+# See docs/dev/design/js8-discovery-rendezvous-plan.md.
+enabled = false
+# "rx_only" (default) | "beacon" (HB + hint TX) | "full" (adds queries + rendezvous responder).
+mode = "rx_only"
+# JS8 submode for the calling channel (MVP: normal only).
+submode = "normal"
+# Seconds the idle predicate must hold before auto-QSY to the JS8 frequency.
+idle_grace_secs = 120
+# Maximum dwell before returning to the home frequency (0 = until preempted).
+dwell_secs = 900
+# Heartbeat every N slots (N * 15 s for NORMAL); TX modes only.
+heartbeat_interval_slots = 8
+# Send the @OPULSE hint every Nth beacon; TX modes only.
+hint_interval_beacons = 3
+# Actively query newly-heard stations with INFO? (mode = "full" only).
+query_new_stations = false
+max_queries_per_10min = 2
+# Seconds a heard station is retained before a TTL sweep.
+station_ttl_secs = 3600
+# Refuse TX when the estimated |UTC offset| exceeds this many ms (RX-only degrade).
+max_clock_skew_ms = 2000
+# JS8 custom group used for the OpenPulse hint.
+group = "OPULSE"
+# JS8 calling frequency (Hz) per band; dwell uses the entry for the current home band.
+[discovery.calling_freqs_hz]
+"160m" = 1842000
+"80m" = 3578000
+"40m" = 7078000
+"30m" = 10130000
+"20m" = 14078000
+"17m" = 18104000
+"15m" = 21078000
+"12m" = 24922000
+"10m" = 28078000
 "#
     .to_string()
 }
@@ -1211,6 +1318,24 @@ mod tests {
         // The emitted template must parse and carry the documented default.
         let parsed: OpenpulseConfig = toml::from_str(&init_template()).unwrap();
         assert_eq!(parsed.modem.profile, "hpx_hf");
+    }
+
+    #[test]
+    fn discovery_defaults_are_opt_in_and_rx_only() {
+        let d = DiscoveryConfig::default();
+        assert!(!d.enabled, "discovery is opt-in");
+        assert_eq!(d.mode, "rx_only");
+        assert_eq!(d.idle_grace_secs, 120);
+        assert_eq!(d.max_clock_skew_ms, 2000);
+        assert_eq!(d.group, "OPULSE");
+        assert_eq!(d.calling_freqs_hz.get("20m"), Some(&14_078_000));
+        // The template's [discovery] section round-trips with the band table.
+        let parsed: OpenpulseConfig = toml::from_str(&init_template()).unwrap();
+        assert!(!parsed.discovery.enabled);
+        assert_eq!(
+            parsed.discovery.calling_freqs_hz.get("40m"),
+            Some(&7_078_000)
+        );
     }
 
     #[test]
