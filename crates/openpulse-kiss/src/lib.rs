@@ -2,6 +2,12 @@
 //!
 //! Exposes a single TCP port (default 8100) that APRS clients can connect to.
 //! Uses KISS byte-stuffed framing with AX.25 UI frames as the payload.
+//!
+//! **Station identification (audit G-5):** unlike the daemon and ARDOP TX paths, the KISS TNC runs no
+//! separate periodic auto-ID timer (`StationIdTimer`). This is by design — every AX.25 frame carries
+//! the source callsign in its address field ([`ax25::Ax25Addr`]), so a station transmitting AX.25/APRS
+//! is self-identifying on every transmission and satisfies §97.119 without a distinct ID cycle. The
+//! operator remains responsible for configuring a valid source callsign.
 
 mod bridge;
 mod error;

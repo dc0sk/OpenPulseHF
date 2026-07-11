@@ -78,3 +78,17 @@ impl PttController for SerialRtsDtrPtt {
 pub struct SerialRtsDtrPtt {
     _priv: (),
 }
+
+#[cfg(all(test, feature = "serial"))]
+mod tests {
+    use super::*;
+
+    /// Audit H2: exercise the `SerialRtsDtrPtt` backend's construction/error path (it was previously
+    /// never instantiated in any test). Opening a non-existent serial device must return an error,
+    /// not panic.
+    #[test]
+    fn open_on_a_nonexistent_device_errors() {
+        let r = SerialRtsDtrPtt::open("/dev/nonexistent-openpulse-tty-xyz", SerialPin::Rts);
+        assert!(r.is_err(), "opening a missing serial device must error");
+    }
+}
