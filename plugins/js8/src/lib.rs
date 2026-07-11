@@ -12,6 +12,7 @@
 
 pub mod costas;
 pub mod crc;
+pub mod demodulate;
 pub mod frame;
 pub mod ldpc174;
 pub mod message;
@@ -22,6 +23,7 @@ pub mod tones;
 
 pub use costas::CostasKind;
 pub use crc::augmented_crc12;
+pub use demodulate::demodulate_soft;
 pub use frame::{pack_callsign, pack_grid};
 pub use ldpc174::{bp_decode, BpDecode};
 pub use message::{js8_info_bits, js8_message_crc12};
