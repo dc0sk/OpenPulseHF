@@ -9,6 +9,25 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(daemon/cli): implement ListFiles + file-transfer CLI (audit S4-1/S4-2)
+
+- **Requirement/change:** S4-1 — `ControlCommand::ListFiles` was declared with a documented
+  `FileList` response but had only a no-op handler; clients got a bare `ok` and files received before
+  a client attached were invisible. S4-2 — the entire file-transfer surface (send/accept/reject/
+  cancel/list) was drivable only from the panel, so headless/scripted stations couldn't use it.
+- **Design decision:** give the daemon a session `received_files: Vec<FileSummary>` populated at the
+  single real write site (`filexfer::reassemble_verify_write`, where `rs` and the path are in hand),
+  and serve it from a real `ListFiles` handler (`emit_file_list`). Add five `openpulse daemon`
+  subcommands mirroring the existing client pattern.
+- **Implementation:** `crates/openpulse-daemon/src/lib.rs` (`received_files` field, `emit_file_list`,
+  `ListFiles` arm); `filexfer.rs` (`reassemble_verify_write` takes `&mut rs`, pushes a `FileSummary`);
+  `crates/openpulse-cli/src/cli.rs` (`SendFile`/`AcceptFile`/`RejectFile`/`CancelFile`/`Files`);
+  `commands/daemon.rs` (dispatch + `list_files`).
+- **Tests:** `command_apply_tests::list_files_reports_this_sessions_received_files`;
+  `commands::daemon::tests::files_lists_received_files` (mock_daemon); clap verified via `daemon --help`.
+- **Test results:** `cargo test -p openpulse-daemon` → 71 passed; `-p openpulse-cli` file test green;
+  fmt + clippy (`-D warnings`) clean.
+
 ## 2026-07-11 — fix(modem/daemon): remove dead DCD blocks + stabilize flaky OTA test (audit G-6/S4-3)
 
 - **Requirement/change:** G-6 — 13 vestigial `let prev_busy = self.dcd.is_busy(); … if
