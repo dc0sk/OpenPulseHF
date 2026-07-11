@@ -9,6 +9,19 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 Phase F-3a — directed free-text TX builder
+
+- **Requirement/change:** a rendezvous message rides as a JS8 **directed free-text over** to the peer.
+  The beacon layer only built the `@OPULSE` group hint; add a general directed builder.
+- **Design decision:** generalise `opulse_hint` — extract `build_over(sender, grid, target, text)` and add
+  `beacon::directed(sender, grid, to, text)`, which targets a **callsign** in the `CompoundDirected`
+  frame (`opulse_hint` now just calls `build_over` with `@OPULSE`). Structure is identical: `Compound`
+  (sender+grid) + `CompoundDirected`(to) + Huffman `Data` frames, `First`/`Last`-bracketed.
+- **Implementation:** `plugins/js8/src/beacon.rs` (`directed`, `build_over`); export in `lib.rs`.
+- **Tests:** `directed_over_carries_sender_target_and_free_text` — sender + target callsign decode from
+  the compound frames and the Huffman data frames reassemble to the original OPHF text.
+- **Test results:** `cargo test -p js8-plugin --no-default-features --lib beacon::` → 3 passed; clippy clean.
+
 ## 2026-07-11 — feat(config): FF-15 Phase F-2 — rendezvous working-channel table
 
 - **Requirement/change:** a `Propose` carries channel **indices**, not Hz (F-1) — so both stations need

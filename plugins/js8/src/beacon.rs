@@ -35,16 +35,28 @@ pub fn heartbeat(callsign: &str, grid: &str) -> Vec<BeaconFrame> {
     }
 }
 
-/// An `@OPULSE` capability-hint over: `SENDER: @OPULSE <free_text>` as a `Compound` (sender+grid) +
-/// `CompoundDirected` (`@OPULSE`) + Huffman `Data` frame sequence, `First`/`Last`-bracketed. `free_text`
-/// is the OPHF hint the discovery layer produced. Returns empty if the sender does not pack.
+/// An `@OPULSE` capability-hint over: `SENDER: @OPULSE <free_text>`. `free_text` is the OPHF hint the
+/// discovery layer produced. Returns empty if the sender does not pack.
 pub fn opulse_hint(sender: &str, grid: &str, free_text: &str) -> Vec<BeaconFrame> {
+    build_over(sender, grid, "@OPULSE", free_text)
+}
+
+/// A directed free-text over: `SENDER: TO <free_text>` as a `Compound` (sender+grid) +
+/// `CompoundDirected` (`to`) + Huffman `Data` frame sequence, `First`/`Last`-bracketed. Used for
+/// rendezvous — `to` is the peer callsign and `free_text` the OPHF rendezvous message. Returns empty
+/// if either callsign does not pack.
+pub fn directed(sender: &str, grid: &str, to: &str, free_text: &str) -> Vec<BeaconFrame> {
+    build_over(sender, grid, to, free_text)
+}
+
+/// Build a `Compound(sender+grid) + CompoundDirected(target) + Huffman(free_text)` over, bracketed with
+/// the `First`/`Last` transmission flags. Empty if either callsign fails to pack.
+fn build_over(sender: &str, grid: &str, target: &str, free_text: &str) -> Vec<BeaconFrame> {
     let Some(sender_frame) = pack_compound_frame(sender, FrameType::Compound, pack_grid(grid), 0)
     else {
         return Vec::new();
     };
-    let Some(target_frame) = pack_compound_frame("@OPULSE", FrameType::CompoundDirected, 0, 0)
-    else {
+    let Some(target_frame) = pack_compound_frame(target, FrameType::CompoundDirected, 0, 0) else {
         return Vec::new();
     };
 
@@ -132,5 +144,30 @@ mod tests {
         let target = unpack_compound_frame(&frames[1].payload).unwrap();
         assert_eq!(target.callsign, "@OPULSE");
         assert_eq!(target.frame_type, FrameType::CompoundDirected);
+    }
+
+    #[test]
+    fn directed_over_carries_sender_target_and_free_text() {
+        use crate::varicode::unpack_data_message;
+        let text = "OPHF QSY? R7 C3 C9";
+        let frames = directed("DC0SK", "JN58", "KN4CRD", text);
+        assert!(frames.len() >= 3, "sender + target + ≥1 data frame");
+        assert_eq!(frames.first().unwrap().i3bit, 1, "First");
+        assert_eq!(frames.last().unwrap().i3bit, 2, "Last");
+
+        // Frame 0 = sender, frame 1 = the directed target callsign (not a group).
+        let sender = unpack_compound_frame(&frames[0].payload).unwrap();
+        assert_eq!(sender.callsign, "DC0SK");
+        assert_eq!(sender.frame_type, FrameType::Compound);
+        let target = unpack_compound_frame(&frames[1].payload).unwrap();
+        assert_eq!(target.callsign, "KN4CRD");
+        assert_eq!(target.frame_type, FrameType::CompoundDirected);
+
+        // The Huffman data frames reassemble to the original free text.
+        let recovered: String = frames[2..]
+            .iter()
+            .filter_map(|f| unpack_data_message(&f.payload))
+            .collect();
+        assert_eq!(recovered, text);
     }
 }
