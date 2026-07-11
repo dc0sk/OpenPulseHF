@@ -9,6 +9,38 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(daemon): FF-15 Phase D-5c(ii) — live rx-tick wiring — **RX-only MVP complete**
+
+- **Requirement/change:** FF-15 Phase D ship line (plan §6.1/§6.2/§6.3): wire `DiscoveryRuntime` into the
+  daemon's live receive loop so an idle station actually QSYs to the JS8 calling frequency, dwells, decodes
+  each slot, caches stations, and emits events — the RX-only MVP.
+- **Design decision:** build the runtime from `[discovery]` config in `server::run` (`build_discovery_runtime`;
+  calling freq = the 20 m band for the MVP, per-home-band selection deferred). In the rx-tick, **tee** the raw
+  captured samples to the runtime only while dwelling (the DCD-burst pipeline can't carry −24 dB JS8, §6.2),
+  then run `discovery_tick`: assemble a simplified idle predicate (`hpx_state==Idle` + no pending handshake /
+  file transfer / OTA), run `DiscoveryRuntime::tick` inside `block_in_place` (the ~1 s slot decode off the
+  async workers — `spawn_blocking` split is a later refinement), and execute the outcomes — retune via the CAT
+  controller (no rig = loopback success), save/restore the home frequency (`last_freq_hz` ↔
+  `discovery_home_freq_hz`), report `qsy_complete`, and forward `StationHeard`/`DiscoveryStatus`. Refactored the
+  status emit into a reusable `emit_discovery_status`. Untangled the `Option<&mut dyn CatController>` reborrow by
+  inlining the retune with a fresh short `rig.as_mut()` borrow per outcome.
+- **Implementation:** `crates/openpulse-daemon/src/server.rs` (`build_discovery_runtime`, `discovery_tick`,
+  `discovery_retune`, `epoch_ms`; rx-tick tee + call; runtime built in the state literal);
+  `lib.rs` (`RuntimeControlState.discovery_home_freq_hz`, `emit_discovery_status`); daemon `js8-plugin` dev-dep.
+- **Tests:** `server.rs` `discovery_tick_tests` (2) — **the daemon rx-tick activates → saves home freq → tunes
+  to the JS8 calling freq → dwells → buffers an injected NORMAL heartbeat → decodes on the slot boundary →
+  caches `KN4CRD`/`EM73` + emits `StationHeard`**; and a no-op when discovery is unconfigured. Added to the
+  CLAUDE.md acceptance table.
+- **Test results (actually run):** `openpulse-daemon` 91 passed / 0 failed (2 new); workspace builds 0 errors;
+  clippy `-D warnings` + fmt clean.
+- **RX-only discovery MVP is complete.** An idle daemon with `[discovery] enabled = true` (or after
+  `EnableDiscovery`) QSYs to JS8, hears + caches stations, and surfaces them via events / `ListStations` — zero
+  TX, zero regulatory exposure. **Next:** later refinements (varicode → `@OPULSE` hint marking + `PeerCache`
+  upsert; per-home-band calling freq; `spawn_blocking` decode; true SNR) and then Phase E (beacon TX, gated on
+  the §97.221 automatic-control reg doc), F (rendezvous), G (panel), H (on-air).
+
+---
+
 ## 2026-07-11 — feat(daemon): FF-15 Phase D-5c(i) — discovery control-protocol surface
 
 - **Requirement/change:** FF-15 Phase D (plan §6.1/§6.5): the operator control surface for discovery — enable/

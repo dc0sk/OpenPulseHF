@@ -532,6 +532,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
             &cfg.station.grid_square,
             &cfg.logbook.peer_grids,
         ),
+        discovery: build_discovery_runtime(&cfg),
         ..RuntimeControlState::default()
     };
     if cfg.logbook.enabled {
@@ -675,6 +676,12 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 // one frame spans many tick windows, so decoding a single partial window
                 // can't acquire it. Read the held-open capture stream and accumulate;
                 // accumulate_capture returns Some only when the carrier drops.
+                // Tee this tick's raw audio to the JS8 discovery dwell buffer when parked on the JS8
+                // calling channel (the DCD-burst pipeline can't carry −24 dB signals; §6.2).
+                let disco_dwelling = runtime_state.discovery.as_ref().is_some_and(|d| {
+                    d.state() == openpulse_discovery::DiscoveryState::Dwelling
+                });
+                let mut discovery_raw: Vec<f32> = Vec::new();
                 let burst = tokio::task::block_in_place(|| {
                     if rx_stream.is_none() {
                         rx_stream = Some(engine.open_capture_stream(capture_device.as_deref())?);
@@ -684,7 +691,12 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         None => return Ok(None),
                     };
                     match read {
-                        Ok(samples) => engine.accumulate_capture(Some(&mode), samples),
+                        Ok(samples) => {
+                            if disco_dwelling {
+                                discovery_raw = samples.clone();
+                            }
+                            engine.accumulate_capture(Some(&mode), samples)
+                        }
                         Err(e) => {
                             // Drop the stream so the next tick reopens it.
                             rx_stream = None;
@@ -782,6 +794,16 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 .await;
                 // Abandon a signed handshake whose CONACK never arrived (timeout).
                 expire_pending_handshake(&mut runtime_state, &handle.event_tx);
+                // JS8 discovery (FF-15): feed the idle predicate + dwell audio, run the slot scheduler,
+                // and execute any retune / station-heard outcomes.
+                discovery_tick(
+                    &mut runtime_state,
+                    &engine,
+                    rig_controller.as_mut().map(|c| c as &mut (dyn CatController + Send)),
+                    &handle.event_tx,
+                    &discovery_raw,
+                    epoch_ms(),
+                );
                 // Refresh live metrics so the periodic metrics task can broadcast real values.
                 {
                     let mut m = handle.shared_metrics.lock().await;
@@ -976,6 +998,117 @@ fn drain_filexfer_tx(
         }
         let _ = event_tx.send(ControlEvent::PttChanged { active: false });
     }
+}
+
+// ── JS8 discovery (FF-15) ────────────────────────────────────────────────────
+
+/// Build the JS8 discovery runtime from `[discovery]` config. Always built (so Enable/Disable work at
+/// runtime); the config `enabled` flag gates activation. Calling frequency defaults to the 20 m band
+/// (MVP; per-home-band selection is a later refinement). `None` only if the band table is empty.
+fn build_discovery_runtime(
+    cfg: &openpulse_config::OpenpulseConfig,
+) -> Option<openpulse_discovery::DiscoveryRuntime> {
+    use openpulse_discovery::{DiscoveryParams, DiscoveryRuntime, Submode};
+    let d = &cfg.discovery;
+    let calling = d
+        .calling_freqs_hz
+        .get("20m")
+        .copied()
+        .or_else(|| d.calling_freqs_hz.values().next().copied())?;
+    let submode = match d.submode.to_ascii_lowercase().as_str() {
+        "slow" => Submode::Slow,
+        "fast" => Submode::Fast,
+        "turbo" => Submode::Turbo,
+        "ultra" => Submode::Ultra,
+        _ => Submode::Normal,
+    };
+    Some(DiscoveryRuntime::new(DiscoveryParams {
+        enabled: d.enabled,
+        idle_grace_ms: d.idle_grace_secs.saturating_mul(1000),
+        dwell_ms: d.dwell_secs.saturating_mul(1000),
+        station_ttl_ms: d.station_ttl_secs.saturating_mul(1000),
+        submode,
+        calling_freq_hz: calling,
+    }))
+}
+
+/// Retune the rig to `hz` (no rig / loopback counts as success).
+fn discovery_retune(rig: &mut Option<&mut (dyn CatController + Send)>, hz: u64) -> bool {
+    match rig.as_mut() {
+        Some(c) => c.set_frequency(hz).is_ok(),
+        None => true,
+    }
+}
+
+/// Feed one rx-tick's raw audio + the idle predicate into the discovery runtime and execute its
+/// outcomes (retune via CAT, home-frequency tracking, event forwarding). No-op when unconfigured.
+fn discovery_tick(
+    runtime_state: &mut RuntimeControlState,
+    engine: &ModemEngine,
+    mut rig: Option<&mut (dyn CatController + Send)>,
+    event_tx: &std::sync::Arc<tokio::sync::broadcast::Sender<crate::protocol::ControlEvent>>,
+    raw_samples: &[f32],
+    now_ms: u64,
+) {
+    use openpulse_discovery::DiscoveryOutcome as O;
+    if runtime_state.discovery.is_none() {
+        return;
+    }
+    // Simplified idle predicate (plan §4.3): the modem is free of any session/handshake/transfer.
+    let idle = engine.hpx_state() == openpulse_core::hpx::HpxState::Idle
+        && runtime_state.pending_handshake.is_none()
+        && runtime_state.file_rx.is_none()
+        && runtime_state.file_tx.is_none()
+        && !engine.ota_active();
+    // Decode (on slot boundaries) runs inside `tick`; `block_in_place` keeps the async loop responsive.
+    let outcomes = tokio::task::block_in_place(|| {
+        let rt = runtime_state.discovery.as_mut().expect("checked above");
+        rt.push_audio(raw_samples);
+        rt.tick(now_ms, idle)
+    });
+    for o in outcomes {
+        match o {
+            O::Retune { dial_freq_hz } => {
+                runtime_state.discovery_home_freq_hz = runtime_state.last_freq_hz;
+                let ok = discovery_retune(&mut rig, dial_freq_hz);
+                if ok {
+                    runtime_state.last_freq_hz = Some(dial_freq_hz);
+                }
+                if let Some(rt) = runtime_state.discovery.as_mut() {
+                    let _ = rt.qsy_complete(ok);
+                }
+                crate::emit_discovery_status(runtime_state, event_tx);
+            }
+            O::RestoreHome => {
+                if let Some(home) = runtime_state.discovery_home_freq_hz.take() {
+                    if discovery_retune(&mut rig, home) {
+                        runtime_state.last_freq_hz = Some(home);
+                    }
+                }
+                crate::emit_discovery_status(runtime_state, event_tx);
+            }
+            O::StateChanged(_) => crate::emit_discovery_status(runtime_state, event_tx),
+            O::StationHeard {
+                callsign,
+                grid,
+                is_new,
+            } => {
+                let _ = event_tx.send(crate::protocol::ControlEvent::StationHeard {
+                    callsign,
+                    grid: grid.unwrap_or_default(),
+                    is_new,
+                });
+            }
+        }
+    }
+}
+
+/// UTC epoch milliseconds now.
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn ota_send_with_ptt(
@@ -1243,6 +1376,97 @@ mod burst_planning_tests {
             plan_bursts(3, |i| secs[i], 20.0, MAX_FRAGS_PER_BURST),
             vec![1, 2]
         );
+    }
+}
+
+#[cfg(test)]
+mod discovery_tick_tests {
+    use super::*;
+    use crate::protocol::ControlEvent;
+    use openpulse_audio::LoopbackBackend;
+    use openpulse_discovery::{DiscoveryParams, DiscoveryRuntime, DiscoveryState, Submode};
+
+    /// A NORMAL slot of audio with one heartbeat (KN4CRD EM73) at 1500 Hz (C-2 upstream vector).
+    fn heartbeat_slot() -> Vec<f32> {
+        use js8_plugin::costas::CostasKind;
+        use js8_plugin::message::js8_info_bits;
+        use js8_plugin::modulate::{modulate_tones, GfskParams};
+        use js8_plugin::submode::params;
+        use js8_plugin::tones::message_to_tones;
+        let payload: [u8; 9] = [0x0a, 0x2f, 0xb3, 0xa3, 0xee, 0x2e, 0xe2, 0xea, 0x58];
+        let info = js8_info_bits(&payload, 0);
+        let sm = params(js8_plugin::submode::Submode::Normal);
+        modulate_tones(
+            &message_to_tones(&info, CostasKind::Original),
+            1500.0,
+            &GfskParams::from_submode(&sm),
+        )
+    }
+
+    #[test]
+    fn discovery_tick_activates_dwells_and_hears_an_injected_station() {
+        let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        let _ = &mut engine; // hpx_state() defaults to Idle → idle predicate holds
+        let (tx, mut rx) = tokio::sync::broadcast::channel::<ControlEvent>(64);
+        let ev = std::sync::Arc::new(tx);
+        let mut rs = RuntimeControlState {
+            last_freq_hz: Some(14_074_000), // a home frequency to save/restore
+            discovery: Some(DiscoveryRuntime::new(DiscoveryParams {
+                enabled: true,
+                idle_grace_ms: 0,
+                dwell_ms: 0,
+                station_ttl_ms: 3_600_000,
+                submode: Submode::Normal,
+                calling_freq_hz: 14_078_000,
+            })),
+            ..RuntimeControlState::default()
+        };
+
+        // Tick 1: idle → activate → (no rig) retune ok → dwell.
+        discovery_tick(&mut rs, &engine, None, &ev, &[], 1000);
+        assert_eq!(
+            rs.discovery.as_ref().unwrap().state(),
+            DiscoveryState::Dwelling
+        );
+        assert_eq!(rs.discovery_home_freq_hz, Some(14_074_000), "home saved");
+        assert_eq!(
+            rs.last_freq_hz,
+            Some(14_078_000),
+            "tuned to the JS8 calling freq"
+        );
+
+        // Tick 2 (same slot): buffer the heartbeat audio.
+        discovery_tick(&mut rs, &engine, None, &ev, &heartbeat_slot(), 1000);
+        // Tick 3: next UTC slot → decode → StationHeard.
+        discovery_tick(&mut rs, &engine, None, &ev, &[], 16_000);
+
+        // The station is cached and a StationHeard event was emitted.
+        assert!(rs
+            .discovery
+            .as_ref()
+            .unwrap()
+            .stations()
+            .get("KN4CRD")
+            .is_some());
+        let mut heard = false;
+        while let Ok(e) = rx.try_recv() {
+            if let ControlEvent::StationHeard { callsign, grid, .. } = e {
+                if callsign == "KN4CRD" && grid == "EM73" {
+                    heard = true;
+                }
+            }
+        }
+        assert!(heard, "a StationHeard event for KN4CRD/EM73 was emitted");
+    }
+
+    #[test]
+    fn discovery_tick_is_a_noop_when_unconfigured() {
+        let engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        let (tx, mut rx) = tokio::sync::broadcast::channel::<ControlEvent>(8);
+        let ev = std::sync::Arc::new(tx);
+        let mut rs = RuntimeControlState::default(); // discovery: None
+        discovery_tick(&mut rs, &engine, None, &ev, &[0.0; 1000], 1000);
+        assert!(rx.try_recv().is_err(), "no events without discovery");
     }
 }
 

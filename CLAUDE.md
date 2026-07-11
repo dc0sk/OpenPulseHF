@@ -489,6 +489,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | QPSK1000-HF-RRC forward-only LMS holds the good_f1 coded floor | `cargo test -p openpulse-modem --test qpsk_hf_rrc_forward_only` |
 | CI goodput regression gate (linksim effective_bps ≥ 65 % of baseline) | `cargo test -p openpulse-linksim goodput_gate` |
 | JS8 NORMAL native decode reaches the −18 dB weak-signal gate (FF-15 Phase-B go/no-go) | `cargo test -p js8-plugin --test snr_sweep gate_at_minus_18_db` |
+| JS8 discovery MVP: the daemon rx-tick activates, dwells, decodes an injected heartbeat, caches the station + emits `StationHeard` | `cargo test -p openpulse-daemon --no-default-features discovery_tick` |
 | File-transfer protocol edges (offer/accept/reject/timeout/cancel/verify/tamper) | `cargo test -p openpulse-filexfer` |
 | File-transfer blocks survive the modem (loopback round-trip + >64 KB + tamper→verify-fail) | `cargo test -p openpulse-modem --test filexfer_loopback` |
 | File transfer crosses two real daemons (twin round-trip) | `cargo test -p openpulse-daemon --test twin_daemon_bridge a_file_crosses` |

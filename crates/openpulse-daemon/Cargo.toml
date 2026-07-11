@@ -81,5 +81,6 @@ openpulse-gpu    = { workspace = true, optional = true }
 
 [dev-dependencies]
 openpulse-audio  = { workspace = true }
+js8-plugin       = { workspace = true }
 bpsk-plugin      = { workspace = true }
 ed25519-dalek    = { version = "2.0" }
