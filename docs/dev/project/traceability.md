@@ -9,6 +9,26 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 Phase C-1 — callsign/grid unpackers (RX field decode)
+
+- **Requirement/change:** FF-15 Phase C (message grammar): the RX side of the field codecs — turn a decoded
+  frame's 28-bit callsign and 15-bit grid back into strings, so the discovery MVP can read *who* it heard and
+  *where*. (The RX-only MVP needs unpack more than pack.)
+- **Design decision:** port `unpackCallsign`/`unpackGrid`/`deg2grid` from JS8Call `varicode.cpp` — the exact
+  inverses of A-5's packers (mixed-radix unwind + the Swaziland/Guinea workaround reversals; grid via
+  `deg2grid`). Validate against ground truth from the **verbatim upstream unpackers compiled on real Qt**, and
+  additionally prove `pack∘unpack = id` both directions over the vectors. Group/hashed callsign values (the
+  `basecalls` range) are still deferred to the compound-frame grammar.
+- **Implementation:** `plugins/js8/src/frame.rs` (`unpack_callsign`, `unpack_grid`, `deg2grid`, `NBASEGRID`);
+  `lib.rs` re-exports.
+- **Tests:** `frame.rs` (3 new) — `unpack_callsign` matches upstream on the 11 call vectors (incl. `3DA0XX`);
+  `unpack_grid` matches on the 8 grid vectors; callsign + grid **round-trip** (`unpack(pack(x)) == x`).
+- **Test results (actually run):** `js8-plugin` 58 passed / 0 failed (3 new); clippy `-D warnings` + fmt clean.
+- **Next:** C-2 `packCompoundFrame`/`unpackCompoundFrame` (the heartbeat/directed 72-bit payload layout tying
+  callsign + type + grid/num together), then varicode free text + JSC, then the `@OPULSE` capability hint.
+
+---
+
 ## 2026-07-11 — test(js8): FF-15 Phase B-6 — −18 dB weak-signal go/no-go — **PASS**
 
 - **Requirement/change:** FF-15 Phase B's decisive checkpoint (plan §11): the native JS8 NORMAL decoder must

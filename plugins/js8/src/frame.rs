@@ -146,6 +146,79 @@ pub fn pack_grid(value: &str) -> u16 {
     (((ilong + 180) / 2) * 180 + ilat) as u16
 }
 
+/// Largest valid packed grid value (`180 × 180`); above this is a group/flag range, not a grid.
+pub const NBASEGRID: u16 = 180 * 180;
+
+/// Convert (longitude, latitude) degrees to a 6-char Maidenhead grid (JS8Call `deg2grid`).
+fn deg2grid(mut dlong: f32, dlat: f32) -> [u8; 6] {
+    if dlong < -180.0 {
+        dlong += 360.0;
+    }
+    if dlong > 180.0 {
+        dlong -= 360.0;
+    }
+    let mut g = [b' '; 6];
+    let nlong = (60.0 * (180.0 - dlong) / 5.0) as i32;
+    let (n1, r) = (nlong / 240, nlong % 240);
+    let (n2, n3) = (r / 24, r % 24);
+    g[0] = b'A' + n1 as u8;
+    g[2] = b'0' + n2 as u8;
+    g[4] = b'a' + n3 as u8;
+    let nlat = (60.0 * (dlat + 90.0) / 2.5) as i32;
+    let (m1, r2) = (nlat / 240, nlat % 240);
+    let (m2, m3) = (r2 / 24, r2 % 24);
+    g[1] = b'A' + m1 as u8;
+    g[3] = b'0' + m2 as u8;
+    g[5] = b'a' + m3 as u8;
+    g
+}
+
+/// Unpack a 15-bit grid value to its 4-char Maidenhead locator (JS8Call `unpackGrid`). Values above
+/// [`NBASEGRID`] are not grids and yield an empty string.
+pub fn unpack_grid(value: u16) -> String {
+    if value > NBASEGRID {
+        return String::new();
+    }
+    let dlat = (value % 180) as i32 - 90;
+    let dlong = (value / 180) as i32 * 2 - 180 + 2;
+    let g = deg2grid(dlong as f32, dlat as f32);
+    String::from_utf8_lossy(&g[..4]).into_owned()
+}
+
+/// Unpack a 28-bit standard-callsign value (JS8Call `unpackCallsign`), reversing the mixed-radix
+/// packing and the Swaziland/Guinea workarounds. Group/hashed values (the `basecalls` range) are not
+/// handled here — they belong with the compound-frame grammar.
+pub fn unpack_callsign(value: u32) -> String {
+    let mut v = value;
+    let idx = |t: u32| ALPHANUMERIC[t as usize];
+    let mut word = [b' '; 6];
+    word[5] = idx(v % 27 + 10);
+    v /= 27;
+    word[4] = idx(v % 27 + 10);
+    v /= 27;
+    word[3] = idx(v % 27 + 10);
+    v /= 27;
+    word[2] = idx(v % 10);
+    v /= 10;
+    word[1] = idx(v % 36);
+    v /= 36;
+    word[0] = idx(v);
+    let mut s = String::from_utf8_lossy(&word).into_owned();
+    if let Some(rest) = s.strip_prefix("3D0") {
+        s = format!("3DA0{rest}");
+    }
+    if let Some(rest) = s.strip_prefix('Q') {
+        if rest
+            .as_bytes()
+            .first()
+            .is_some_and(|c| c.is_ascii_uppercase())
+        {
+            s = format!("3X{rest}");
+        }
+    }
+    s.trim().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,5 +281,30 @@ mod tests {
     fn short_grid_is_invalid() {
         assert_eq!(pack_grid("EM"), GRID_INVALID);
         assert_eq!(pack_grid(""), GRID_INVALID);
+    }
+
+    #[test]
+    fn unpack_callsign_matches_upstream() {
+        // Same integers as the pack vectors → verbatim upstream `unpackCallsign` on Qt gives these.
+        for (call, packed) in CALL_VECTORS {
+            assert_eq!(unpack_callsign(*packed), *call, "value {packed}");
+        }
+    }
+
+    #[test]
+    fn unpack_grid_matches_upstream() {
+        for (grid, packed) in GRID_VECTORS {
+            assert_eq!(unpack_grid(*packed), *grid, "value {packed}");
+        }
+    }
+
+    #[test]
+    fn callsign_and_grid_round_trip() {
+        for (call, _) in CALL_VECTORS {
+            assert_eq!(unpack_callsign(pack_callsign(call)), *call);
+        }
+        for (grid, _) in GRID_VECTORS {
+            assert_eq!(unpack_grid(pack_grid(grid)), *grid);
+        }
     }
 }
