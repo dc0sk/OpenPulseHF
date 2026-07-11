@@ -9,6 +9,34 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(daemon): FF-15 Phase D-5c(i) — discovery control-protocol surface
+
+- **Requirement/change:** FF-15 Phase D (plan §6.1/§6.5): the operator control surface for discovery — enable/
+  disable it and list what's been heard — plus the `RuntimeControlState` field the live loop will drive.
+- **Design decision:** add `EnableDiscovery`/`DisableDiscovery`/`ListStations` commands and `DiscoveryStatus`/
+  `StationHeard`/`StationList` events (+ `StationSummary`), and `RuntimeControlState.discovery:
+  Option<DiscoveryRuntime>` (`None` when unconfigured). `apply_command_to_engine` handles the three commands via
+  small helpers: enable/disable toggle the runtime and emit `DiscoveryStatus` (retune-outcome execution happens
+  in the rx-tick loop — the next slice); `ListStations` emits a `StationList` from the table; all degrade to a
+  `CommandError` when discovery isn't configured. Re-exported `Submode` from `openpulse-discovery` so the daemon
+  can build `DiscoveryParams`. Added `openpulse-discovery` as a daemon dependency. **The live rx-tick audio feed
+  + CAT retune + injected-audio daemon test are the next slice (D-5c(ii))** — isolated so the delicate async
+  loop change lands on its own.
+- **Implementation:** `crates/openpulse-daemon/src/protocol.rs` (3 commands + 3 events + `StationSummary`);
+  `lib.rs` (`RuntimeControlState.discovery`, `set_discovery_enabled`, `emit_station_list`,
+  `discovery_state_label`, command arms); `crates/openpulse-discovery/src/runtime.rs` (`set_enabled`,
+  `dial_freq_hz`, `drift_bias_ms` accessors + `Submode` re-export); daemon `Cargo.toml` dep.
+- **Tests:** `protocol.rs` `discovery_commands_and_events_round_trip_via_json`; `lib.rs`
+  `discovery_commands_toggle_the_runtime_and_list_stations` (unconfigured → `CommandError`; configured →
+  `DiscoveryStatus` with the calling freq; `ListStations` → empty `StationList`).
+- **Test results (actually run):** `openpulse-daemon` 66 + suites passed / 0 failed (2 new); `openpulse-discovery`
+  25 passed; workspace builds 0 errors; clippy `-D warnings` + fmt clean.
+- **Next:** D-5c(ii) — wire the rx-tick: tee captured samples + the assembled idle predicate into
+  `DiscoveryRuntime::tick` (decode off-thread), execute `Retune`/`RestoreHome` via the CAT controller, forward
+  `StationHeard`, and the injected-audio daemon acceptance test.
+
+---
+
 ## 2026-07-11 — feat(discovery): FF-15 Phase D-5b — `DiscoveryRuntime` orchestrator (MVP logic)
 
 - **Requirement/change:** FF-15 Phase D: the runtime that ties the pure units together into the working

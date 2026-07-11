@@ -82,6 +82,23 @@ impl DiscoveryRuntime {
         self.sm.state()
     }
 
+    /// Enable/disable discovery at runtime (the operator `EnableDiscovery`/`DisableDiscovery` commands).
+    /// Disabling while dwelling stands the machine down.
+    pub fn set_enabled(&mut self, on: bool) -> Vec<DiscoveryOutcome> {
+        let actions = self.sm.set_enabled(on);
+        self.run_actions(actions, 0)
+    }
+
+    /// JS8 calling frequency this runtime dwells on (Hz).
+    pub fn dial_freq_hz(&self) -> u64 {
+        self.params.calling_freq_hz
+    }
+
+    /// Current UTC clock drift-bias estimate (ms).
+    pub fn drift_bias_ms(&self) -> i64 {
+        self.clock.drift_bias_ms()
+    }
+
     /// The discovered-station table (the panel's source of truth).
     pub fn stations(&self) -> &StationTable {
         &self.table
