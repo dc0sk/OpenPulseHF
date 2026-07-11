@@ -9,6 +9,21 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(cli): FF-15 — daemon discovery commands (enable/disable, stations, peers)
+
+- **Requirement/change:** discovery had a daemon control surface but no operator client — the only
+  way to drive it or read results was raw control-protocol frames.
+- **Design decision:** add four `openpulse daemon` subcommands mirroring the existing client pattern
+  (`simple` for fire-and-forget, `run_command` + JSON print for queries), so discovery is usable from
+  the terminal ahead of the panel tab (Phase G).
+- **Implementation:** `crates/openpulse-cli/src/cli.rs` (`DaemonCommands::{EnableDiscovery,
+  DisableDiscovery, Stations, Peers}`); `commands/daemon.rs` (dispatch arms + `list_stations` /
+  `list_peers` printing `StationList` / `PeerList` as pretty JSON).
+- **Tests:** `stations_lists_discovered_stations`, `peers_lists_recognized_opulse_peers` (via the
+  `mock_daemon` harness); clap registration verified by driving `daemon --help`.
+- **Test results:** `cargo test -p openpulse-cli --no-default-features` → passed (2 new); fmt + clippy
+  (`-D warnings`) clean; `daemon --help` lists all four commands.
+
 ## 2026-07-11 — feat(daemon): FF-15 — recognized peers into the shared PeerCache + ListPeers
 
 - **Requirement/change:** recognized OpenPulse peers were only in discovery's local `StationTable`

@@ -296,6 +296,14 @@ pub enum DaemonCommands {
     EnableRepeater,
     /// Disable the cross-band repeater.
     DisableRepeater,
+    /// Enable JS8 station discovery (RX-only: dwell on the band's JS8 calling frequency).
+    EnableDiscovery,
+    /// Disable JS8 station discovery and (if dwelling) return to the home frequency.
+    DisableDiscovery,
+    /// Print discovered JS8 stations as JSON (`is_opulse` flags OpenPulse peers).
+    Stations,
+    /// Print recognized OpenPulse peers (capabilities, quality, trust) from the shared cache as JSON.
+    Peers,
     /// Stream binary spectrum frames as NDJSON to stdout.
     SubscribeSpectrum {
         /// Frames per second requested from the daemon.
