@@ -4198,6 +4198,14 @@ mod handshake_rf_tests {
             station_ttl_ms: 3_600_000,
             submode: Submode::Normal,
             calling_freq_hz: 14_078_000,
+            tx_mode: openpulse_discovery::TxMode::RxOnly,
+            callsign: String::new(),
+            grid: String::new(),
+            hint: None,
+            heartbeat_interval_slots: 8,
+            hint_interval_beacons: 3,
+            tx_offset_hz: 1500.0,
+            max_clock_skew_ms: 2000,
         }));
         set_discovery_enabled(true, &mut rs, &ev);
         assert!(matches!(

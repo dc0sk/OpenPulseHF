@@ -124,7 +124,7 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 **Completed**: Phases 1–9, Phase 7 (7.1–7.5), Phase 8 (8.1–8.3), FF series (FF-1 through FF-13), BL-FEC series (BL-FEC-1 through BL-FEC-6), all code stubs (PR #187–#189). See `docs/dev/project/roadmap.md` for full history.
 
 **Active tracks**:
-- **FF-15 JS8 discovery** — RX side COMPLETE (native TX+RX waveform, full message layer incl. JSC, discovery runtime, `@OPULSE` peer recognition, shared `PeerCache`, CLI + panel operator surfaces; PRs #744–#783). Remaining is TX-side: Phase E beacon TX (HARD-GATED on the §97.221 automatic-control regulatory doc), F rendezvous, H on-air.
+- **FF-15 JS8 discovery** — RX + **beacon TX (Phase E) COMPLETE** (native TX+RX waveform, full message layer incl. JSC, discovery runtime, `@OPULSE` peer recognition, shared `PeerCache`, CLI + panel surfaces; TX packers/beacon assembly, `transmit_raw_audio` seam, slot scheduler + daemon wiring — off-by-default behind `[discovery] mode = "beacon"` + a callsign + ±2 s clock-skew/DCD/self-ID gates; §97.221 doc in `docs/regulatory.md`; PRs #744–#797). Remaining: F rendezvous, H on-air.
 - **FF-16 file transfer** — Phases A–E SHIPPED (PRs #730–#742); on-air (Phase F) deferred.
 
 **Deferred (no target date)**:

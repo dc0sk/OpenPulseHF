@@ -9,6 +9,28 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(discovery/daemon): FF-15 Phase E-4/5/6 — beacon TX scheduler + daemon wiring
+
+- **Requirement/change:** with the seam (E-3) in place, schedule + emit beacons and honor
+  `[discovery] mode = "beacon"` — completing Phase E. Off by default; TX is gated.
+- **Design decision:** `DiscoveryRuntime` gains a `TxMode` + beacon params and a `maybe_transmit`
+  slot scheduler — on a slot boundary, if opted-in and the clock is within `max_clock_skew_ms`,
+  emit the next beacon frame (heartbeat on cadence; every Nth is an `@OPULSE` hint), half-duplex
+  (a TX slot skips RX). It returns a `TransmitBeacon { audio, mode }` outcome. `discovery_tick`
+  applies the **direct DCD gate** (not the 0.3-persistence CSMA, which would break slot alignment)
+  and returns the due beacon; `server::run` transmits it with `transmit_beacon_with_ptt` (PTT wrap +
+  `engine.transmit_raw_audio`). `build_discovery_runtime` maps `mode`/callsign/grid/hint/intervals
+  from config; the `[discovery] mode` field is now honored (warn removed).
+- **Implementation:** `crates/openpulse-discovery/src/runtime.rs` (`TxMode`, params, scheduler,
+  `TransmitBeacon`); `crates/openpulse-daemon/src/server.rs` (DCD gate, `transmit_beacon_with_ptt`,
+  `build_discovery_runtime`); `crates/openpulse-config/src/lib.rs` (mode doc); CLAUDE.md.
+- **Tests:** `runtime::beacon_mode_transmits_a_heartbeat_on_cadence`, `runtime::rx_only_never_transmits`;
+  `server::discovery_tick_transmits_a_beacon_in_beacon_mode` (drives beacon mode → `transmit_raw_audio`,
+  `raw_audio_frames_transmitted == 1`).
+- **Test results:** discovery + daemon suites green; fmt + clippy (`-D warnings`) clean. **Phase E
+  (beacon TX) complete — off-by-default; on-air TX requires the operator to set `mode = "beacon"`, a
+  callsign, real hardware/PTT, and to meet §97.221 in their jurisdiction.**
+
 ## 2026-07-11 — feat(js8): FF-15 Phase E-2 — beacon assembly + full TX→RX loopback
 
 - **Requirement/change:** with the TX packers (E-1) in place, build the beacon frame sequences and
