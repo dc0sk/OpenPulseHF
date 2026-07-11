@@ -1471,9 +1471,15 @@ pure/async-free:
 - D-5b (#769) `runtime.rs` `DiscoveryRuntime` — ties it together; **the full MVP flow works: idle → retune →
   dwell → decode a slot → cache `KN4CRD`/`EM73` + emit `StationHeard`** (tested on synthesized audio).
 
-**Remaining for the MVP ship line = D-5c** (the daemon async wiring): feed `server::run`'s rx-tick samples +
-idle predicate into `DiscoveryRuntime` (`decode_window` off-thread), execute `Retune`/`RestoreHome` via CAT,
-add `DiscoveryStatus`/`StationHeard`/enable-disable control surface, + the twin-daemon RX acceptance test.
+- D-5c(i) (#771) daemon **control surface**: `EnableDiscovery`/`DisableDiscovery`/`ListStations` commands +
+  `DiscoveryStatus`/`StationHeard`/`StationList` events; `RuntimeControlState.discovery`; command handling.
+
+**Remaining for the MVP ship line = D-5c(ii)** (the live rx-tick wiring): tee `server::run`'s captured samples +
+the assembled idle predicate into `DiscoveryRuntime::tick`, execute `Retune`/`RestoreHome` via the CAT
+controller, forward `StationHeard`, + an injected-audio daemon acceptance test. Its own sub-problems to solve
+carefully (isolated from the merged control surface): home-frequency tracking for the restore; resolving the
+calling frequency from the home band (`band_label_for_hz`); off-thread (`spawn_blocking`) decode so the ~1 s
+slot decode doesn't stall the 50 ms tick.
 Then Phase E (beacon TX, gated on the §97.221 reg doc), F (rendezvous), G (panel), H (on-air). Later hardening:
 varicode → `@OPULSE` hint marking + `PeerCache` upsert; a true SNR estimate; a Pi-class CPU-budget check
 (`cross`); the bit-exact `reference_vectors` (needs gfortran).
