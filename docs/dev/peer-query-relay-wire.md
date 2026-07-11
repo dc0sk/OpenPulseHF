@@ -112,10 +112,22 @@ Notes:
 Required fields:
 
 - query_id (u64)
-- capability_mask (u32)
+- capability_mask (u32) — low bits registered below
 - min_link_quality (u16)
 - trust_filter (enum: trusted_only, trusted_or_unknown, any)
 - max_results (u16)
+
+**Capability-bit registry** (FF-15 §5.2; `openpulse-discovery::peer_map`). The low bits of
+`capability_mask` are claimed as follows (bits 5–15 reserved, carried in the 16-bit OPHF hint `caps`
+field; bits 16–31 remain application-defined):
+
+| Bit | Constant | Meaning |
+|---|---|---|
+| 0 | `CAP_HPX` | speaks OpenPulse HPX sessions |
+| 1 | `CAP_RENDEZVOUS` | accepts JS8 OPHF rendezvous |
+| 2 | `CAP_QSY` | in-session `openpulse-qsy` protocol |
+| 3 | `CAP_PQ` | post-quantum handshake |
+| 4 | `CAP_RELAY` | relay forwarding |
 
 ## peer_query_response payload
 

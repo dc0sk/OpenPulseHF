@@ -9,6 +9,33 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(discovery): FF-15 Phase D-3 — `PeerCache` mapping + capability-bit registry
+
+- **Requirement/change:** FF-15 Phase D (plan §5.2): feed OpenPulse-marked JS8 stations into the shared
+  `PeerCache` so the rest of the stack (`PeerCache::query`, relay routing) can find rendezvous-capable peers,
+  and claim/document the low `capability_mask` bits (none were registered — the wire doc said
+  "application-defined").
+- **Design decision:** `station_to_peer_record` maps a hint-carrying `Js8Station` → `PeerRecord`
+  (`peer_id = js8:<callsign>`, `capability_mask` = hint caps, `route_quality` = `((snr+30).clamp(0,42)·6)` on
+  the 0–252 scale, `TrustLevel::Unknown`, `revision` 0, `callsign_hash` = SHA-256) — and **returns `None` for a
+  plain (hint-less) JS8 station** (those stay only in the `StationTable`; they're not OpenPulse peers). A
+  key-less `Unknown`-trust `revision`-0 record is exactly right: it passes `Any`/`TrustedOrUnknown`, is
+  excluded from `TrustedOnly`, and loses every upsert conflict to an authenticated descriptor record. Added the
+  capability-bit registry (`CAP_HPX`/`CAP_RENDEZVOUS`/`CAP_QSY`/`CAP_PQ`/`CAP_RELAY`) in code + normatively in
+  `docs/dev/peer-query-relay-wire.md`. Used `sha2` directly rather than widen core's `pub(crate) sha256_bytes`.
+- **Implementation:** `crates/openpulse-discovery/src/peer_map.rs` (`station_to_peer_record`, cap constants,
+  `route_quality_from_snr`); `openpulse-core` + `sha2` deps; `lib.rs` re-exports;
+  `docs/dev/peer-query-relay-wire.md` registry table.
+- **Tests:** `peer_map.rs` (4) — a plain station is not a peer; a marked station maps to a key-less
+  `Unknown`-trust peer with the right id/caps/hash; `route_quality` is monotone + bounded (0…252); **the record
+  passes `TrustFilter::Any` but not `TrustedOnly`** through a real `PeerCache::query`.
+- **Test results (actually run):** `openpulse-discovery` 16 passed / 0 failed (4 new); workspace builds 0
+  errors; clippy `-D warnings` + fmt clean.
+- **Next:** D-4 the discovery state machine (`INACTIVE → QSY_TO_HB → DWELL`, idle-predicate-driven), then D-5
+  the daemon dwell-ring glue + config + events + the twin RX acceptance test.
+
+---
+
 ## 2026-07-11 — feat(discovery): FF-15 Phase D-2 — `StationTable` + discovered-station records
 
 - **Requirement/change:** FF-15 Phase D (plan §5.1): the discovered-station data model — a callsign-keyed
