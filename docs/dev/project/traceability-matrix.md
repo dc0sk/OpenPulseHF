@@ -2,10 +2,19 @@
 project: openpulsehf
 doc: docs/dev/project/traceability-matrix.md
 status: living
-last_updated: 2026-07-08
+last_updated: 2026-07-11
 ---
 
 # Traceability matrix
+
+> **Not yet catalogued as CAP rows (shipped after 2026-07-08):** the **FF-15 JS8 discovery** family
+> (`plugins/js8`, `crates/openpulse-discovery`, daemon rx-tick + control surface, CLI + panel;
+> RX MVP + `@OPULSE` peer recognition + shared `PeerCache`, PRs #744–#784) and the **FF-16 file
+> transfer** family (`crates/openpulse-filexfer`, daemon `SendFile`/twin, panel Files tab; Phases
+> A–E, PRs #730–#742). Both carry a full requirement→design→implementation→tests→results chain in the
+> newest-first ledger (`traceability.md`) and their acceptance tests are in the `CLAUDE.md` table;
+> formal CAP-70/71 rows in this matrix are a follow-up. This note exists so the matrix does not read
+> as if that work is absent (audit finding TR-03).
 
 This is the living, end-to-end traceability matrix for OpenPulseHF. It cross-links two
 identifier spaces:

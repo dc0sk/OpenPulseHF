@@ -9,6 +9,20 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — docs: refresh stale FF-15/FF-16 status + crate map (audit TR-03/04/05/06/08)
+
+- **Requirement/change:** the audit found the living docs lagging shipped code — CLAUDE.md described
+  FF-15 (JS8 discovery) and FF-16 (file transfer) as unstarted, the crate map omitted
+  `openpulse-keystore`/`openpulse-linksec`, the traceability matrix had no forward chain for either
+  family, and a `filexfer_loopback` acceptance row promised a `>64 KB` case that lives in another crate.
+- **Design decision:** update the CLAUDE.md crate-map rows (js8/discovery/filexfer to SHIPPED), the
+  "Active tracks" summary, and the key-docs table; add the two security crates; split the imprecise
+  acceptance row; and add a matrix note pointing to this ledger for FF-15/FF-16 (formal CAP-70/71 rows
+  deferred rather than fabricated half-complete).
+- **Implementation:** `CLAUDE.md`; `docs/dev/project/traceability-matrix.md` (date + note).
+- **Tests:** docs-only; no code change. `cargo fmt --all -- --check` unaffected.
+- **Test results:** N/A (documentation).
+
 ## 2026-07-11 — fix(modem): CSMA gate on broadcast() (audit finding G-1)
 
 - **Requirement/change:** the FF-audit found `ModemEngine::broadcast()` emitting with no
