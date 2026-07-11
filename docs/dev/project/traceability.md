@@ -9,6 +9,22 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(discovery): FF-15 Phase F-1 — rendezvous protocol (codec + session)
+
+- **Requirement/change:** with discovery + beacon TX done, start Phase F — negotiate a working
+  frequency with a discovered `@OPULSE` peer over JS8, then hand off to the signed HPX handshake
+  (plan §5.3 / decision D3). This unit is the pure protocol foundation; no I/O.
+- **Design decision:** `openpulse-discovery/src/rendezvous.rs` — a 2-message exchange (`Propose` /
+  `Accept` / `Reject`) carried as JS8 OPHF free text, with channel **indices** into a per-band table
+  (not Hz) so a proposal fits ~2 frames, and **no signature** (the post-QSY signed CONREQ is the
+  auth). `RendezvousMsg` codec + `RendezvousInitiator` (propose → accept/reject/timeout → `Qsy`) +
+  `respond()` (highest-ranked common channel, else `NoCommonFreq`). Timeouts live here.
+- **Implementation:** `crates/openpulse-discovery/src/rendezvous.rs`; exports in `lib.rs`.
+- **Tests:** codec round-trip + non-rendezvous rejection (incl. distinguishing from the `OPHF1`
+  capability hint); responder channel selection / reject; initiator accept→Qsy / timeout / reject.
+- **Test results:** `cargo test -p openpulse-discovery --no-default-features` → all green (7 new); fmt
+  + clippy (`-D warnings`) clean. F-2 (channel table) + F-3 (daemon wiring, QSY, CONREQ handoff) next.
+
 ## 2026-07-11 — feat(discovery/daemon): FF-15 Phase E-4/5/6 — beacon TX scheduler + daemon wiring
 
 - **Requirement/change:** with the seam (E-3) in place, schedule + emit beacons and honor

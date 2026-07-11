@@ -8,6 +8,7 @@ pub mod discovery_sm;
 pub mod hint;
 pub mod hint_assembler;
 pub mod peer_map;
+pub mod rendezvous;
 pub mod runtime;
 pub mod scheduler;
 pub mod station;
@@ -17,6 +18,10 @@ pub use hint::{decode_hint, encode_hint, HintPayload, HINT_MAGIC, OPULSE_GROUP};
 pub use hint_assembler::{HintAssembler, RecognizedHint};
 pub use js8_plugin::submode::Submode;
 pub use peer_map::{station_to_peer_record, CAP_HPX, CAP_PQ, CAP_QSY, CAP_RELAY, CAP_RENDEZVOUS};
+pub use rendezvous::{
+    respond as rendezvous_respond, RejectReason, RendezvousInitiator, RendezvousMsg,
+    RendezvousOutcome, DEFAULT_SWITCH_SLOTS,
+};
 pub use runtime::{DiscoveryOutcome, DiscoveryParams, DiscoveryRuntime, TxMode};
 pub use scheduler::{Js8Clock, SlotTracker};
 pub use station::{Js8Station, Observation, OphfHint, QueryBackoff, StationTable};
