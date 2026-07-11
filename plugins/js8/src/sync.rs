@@ -22,7 +22,12 @@ pub struct SyncCandidate {
 
 /// Normalized Costas correlation of `audio` for a candidate `(offset, base_freq)`. `None` if the slot
 /// would run past the buffer.
-fn sync_score(audio: &[f32], offset: usize, base_freq: f32, params: &SubmodeParams) -> Option<f32> {
+pub(crate) fn sync_score(
+    audio: &[f32],
+    offset: usize,
+    base_freq: f32,
+    params: &SubmodeParams,
+) -> Option<f32> {
     let sps = params.samples_per_symbol;
     let fs = SAMPLE_RATE as f32;
     let mut score = 0.0f32;

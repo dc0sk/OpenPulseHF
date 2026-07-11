@@ -9,6 +9,30 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 Phase B-4 — window decoder (multi-decode + CRC-12 filter)
+
+- **Requirement/change:** FF-15 Phase B: the window decoder — one entry the discovery service drives per
+  received 15 s slot, returning *all* JS8 frames in it (JS8Call decodes dozens of overlapping stations), each
+  guarded by its CRC-12 so a false decode never escapes.
+- **Design decision:** `decode_window` = Costas sync search across the passband → keep above-threshold
+  candidates → greedily separate peaks (≥ half a symbol in time, ≥ half a tone in frequency) so one strong
+  signal isn't decoded many times → soft-demod + BP-decode each → **keep only CRC-12-valid frames** → dedup by
+  content. The CRC is the trust gate (`check_info_crc` added to `message.rs`: re-split the 87 info bits, recompute
+  the CRC-12, accept iff it matches). `DecodeCfg` exposes the passband/step/threshold/iteration knobs (defaults:
+  300–2500 Hz, 3.125 Hz steps, min score 12/21, ≤ 32 candidates). `sync::sync_score` made `pub(crate)`.
+- **Implementation:** `plugins/js8/src/decoder.rs` (`decode_window`, `Js8Decode`, `DecodeCfg`);
+  `message.rs` `check_info_crc`; `lib.rs` module + re-exports.
+- **Tests:** `decoder.rs` (3) — decodes a single frame at an unknown offset (exactly one CRC-valid result, right
+  payload + offset); **decodes two overlapping stations at different base tones** in one window; **pure noise
+  yields zero decodes** (the CRC-12 gate holds). `message.rs` (1) — `check_info_crc` accepts a valid frame and
+  rejects a tampered payload bit.
+- **Test results (actually run):** `js8-plugin` 54 passed / 0 failed (4 new); workspace builds 0 errors; clippy
+  `-D warnings` + fmt clean.
+- **Next:** wire `Js8Plugin::demodulate` to `decode_window` (return the best decode's packed frame) so the
+  plugin round-trips through the engine, then the −18 dB weak-signal go/no-go gate (the D1 fallback checkpoint).
+
+---
+
 ## 2026-07-11 — feat(js8): FF-15 Phase B-3 — Costas sync acquisition (full single-decode RX)
 
 - **Requirement/change:** FF-15 Phase B: acquisition — find a slot's start offset and base tone frequency

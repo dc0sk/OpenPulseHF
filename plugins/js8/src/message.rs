@@ -37,6 +37,22 @@ pub fn js8_info_bits(payload9: &[u8; 9], i3bit: u8) -> [u8; K] {
     bits
 }
 
+/// Verify a decoded 87-bit info field's CRC-12 (receive side). Splits it back into
+/// `[payload(72) | i3bit(3) | crc(12)]`, recomputes the CRC, and returns `(payload9, i3bit)` iff it
+/// matches — the check that separates a real decode from a false one.
+pub fn check_info_crc(info: &[u8; K]) -> Option<([u8; 9], u8)> {
+    let mut payload9 = [0u8; 9];
+    for (i, chunk) in info.iter().enumerate().take(72) {
+        payload9[i / 8] |= (chunk & 1) << (7 - i % 8);
+    }
+    let i3bit = (info[72] << 2) | (info[73] << 1) | info[74];
+    let mut crc = 0u16;
+    for &b in &info[75..87] {
+        crc = (crc << 1) | (b & 1) as u16;
+    }
+    (js8_message_crc12(&payload9, i3bit) == crc).then_some((payload9, i3bit))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,5 +124,17 @@ mod tests {
         let bits = js8_info_bits(&payload9("a40aaa3303fdfcfb8c"), 7);
         let tones = message_to_tones(&bits, CostasKind::Original);
         assert_eq!(parity_syndrome(&tones_to_codeword(&tones)), [0u8; M]);
+    }
+
+    #[test]
+    fn check_info_crc_accepts_a_valid_frame_and_rejects_tampering() {
+        let p = payload9("608cb64bba7fbe359c");
+        let i3bit = 2u8;
+        let bits = js8_info_bits(&p, i3bit);
+        assert_eq!(check_info_crc(&bits), Some((p, i3bit)));
+        // Flip a payload bit without fixing the CRC → rejected.
+        let mut bad = bits;
+        bad[3] ^= 1;
+        assert_eq!(check_info_crc(&bad), None);
     }
 }
