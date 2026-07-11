@@ -9,6 +9,31 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(discovery): FF-15 Phase D-4 — discovery state machine
+
+- **Requirement/change:** FF-15 Phase D (plan §4.3): the discovery lifecycle — when the station is idle, QSY to
+  the JS8 calling frequency, dwell (RX-only) decoding each slot, and return home on budget/preemption.
+- **Design decision:** a pure `DiscoverySm` (`INACTIVE → ACTIVATING → DWELLING`) driven by `step(event) ->
+  Vec<DiscoveryAction>`. The daemon assembles the idle predicate (§4.3) and feeds it as `Tick { idle, clock_ok,
+  now_ms }`; the SM tracks how long idle has continuously held and activates only after `idle_grace_ms`
+  (emitting `SaveHomeAndTune`). `QsyComplete{ok}` → `Dwelling` or stand-down. In `Dwelling`, each `SlotElapsed`
+  emits `DecodeSlot`; the dwell budget (`dwell_ms`, 0 = until preempted) is armed on the first slot and returns
+  home (`RestoreHome`) when spent. `Preempt` (operator command needs the modem) and `set_enabled(false)` stand
+  down from any active state; a disabled SM or a bad clock never activates. **No TX paths** — RENDEZVOUS and
+  slot TX are later phases.
+- **Implementation:** `crates/openpulse-discovery/src/discovery_sm.rs` (`DiscoverySm`, `DiscoveryState`,
+  `DiscoveryEvent`, `DiscoveryAction`); `lib.rs` module + re-exports.
+- **Tests:** `discovery_sm.rs` (6) — activates only after idle holds for the grace period; losing idle resets
+  the timer; QSY success dwells / failure restores; dwelling decodes each slot then returns home at the budget;
+  preempt + disable stand down from dwell; disabled or bad-clock never activates.
+- **Test results (actually run):** `openpulse-discovery` 22 passed / 0 failed (6 new); workspace builds 0
+  errors; clippy `-D warnings` + fmt clean.
+- **Next:** D-5 — the daemon glue: `[js8]` config, the dwell audio ring + off-thread `decode_window`, wiring the
+  SM/clock/table into `server::run`, `DiscoveryStatus`/`StationHeard` events, and the twin-daemon RX acceptance
+  test (hears + caches + events, zero TX). That's the MVP ship line.
+
+---
+
 ## 2026-07-11 — feat(discovery): FF-15 Phase D-3 — `PeerCache` mapping + capability-bit registry
 
 - **Requirement/change:** FF-15 Phase D (plan §5.2): feed OpenPulse-marked JS8 stations into the shared
