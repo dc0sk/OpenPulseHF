@@ -9,6 +9,32 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 Phase A-8 — `Js8Plugin` ModulationPlugin (TX chain complete)
+
+- **Requirement/change:** FF-15 Phase A close: expose the JS8 waveform as a `ModulationPlugin` and wire the
+  full transmit chain end to end — a packed JS8 message → GFSK audio.
+- **Design decision:** `Js8Plugin::modulate` runs packed-message (10 bytes: 72-bit payload + 3-bit flags +
+  5 pad) → `js8_info_bits` → LDPC `encode174` → `message_to_tones` → `modulate_tones`, using the mode's
+  submode params + Costas. `demodulate` is the FT8-class weak-signal receiver (plan Phase B) — it returns a
+  clear `ModemError::Demodulation("…not implemented (Phase B)")` rather than a silent stub, and **the plugin
+  is deliberately not registered in the daemon** until the decoder lands (a modulate-only plugin would break
+  RX routing). `frame_geometry` reports one slot = one frame (`min = max = 79·sps`); `occupied_bandwidth_hz`
+  feeds the bandplan width checks. Added `openpulse-core` as the crate's first dependency. Per plan §4.2 the
+  discovery service will call `modulate` directly (JS8 must not carry the OpenPulse `Frame` envelope).
+- **Implementation:** `plugins/js8/src/plugin.rs` (`Js8Plugin`, `split_message`); `Cargo.toml`
+  `openpulse-core` dep; `lib.rs` module + re-export.
+- **Tests:** `plugin.rs` (4) — info/geometry/bandwidth; unknown mode → `Err`; `demodulate` → `Err`; **the full
+  TX chain: `modulate` output's 79 symbols Goertzel-decode back to exactly `message_to_tones(js8_info_bits(…))`**
+  — an end-to-end validation of packing→CRC→LDPC→tones→GFSK (short of a bit-exact WAV compare vs `genjs8`, which
+  needs gfortran).
+- **Test results (actually run):** `js8-plugin` 39 passed / 0 failed (4 new); workspace builds 0 errors; clippy
+  `-D warnings` + fmt clean.
+- **Phase A TX core is complete** (submode/Costas, GFSK, LDPC, CRC-12, packers, tones, message bits, plugin —
+  8 units, PRs #744–#751, all upstream-anchored). **Next:** Phase B (RX decoder — highest-risk, FT8-class,
+  the go/no-go), or the end-to-end `reference_vectors` gate once `genjs8` ground truth is available (gfortran).
+
+---
+
 ## 2026-07-11 — feat(js8): FF-15 Phase A-7 — message-bit assembly (payload+flags+CRC → 87 info bits)
 
 - **Requirement/change:** FF-15 Phase A: the `genjs8.f90` head — turn a 72-bit payload + 3-bit transmission
