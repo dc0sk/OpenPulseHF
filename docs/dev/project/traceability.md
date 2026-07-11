@@ -9,6 +9,28 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 Phase A-6 — tone assembly (codeword → 79 symbols)
+
+- **Requirement/change:** FF-15 Phase A: bridge the LDPC codeword (A-3) to the GFSK modulator (A-2) — map
+  the 174-bit codeword into the 79-symbol tone sequence, interleaving the three Costas sync blocks.
+- **Design decision + finding:** the plan (§2.1) said "Gray-coded 8-FSK", but **the JS8 source is not
+  Gray-coded** — `genjs8.f90` writes `itone(k) = codeword[i]*4 + codeword[i+1]*2 + codeword[i+2]` (direct
+  binary), and the JS8 lib has *no* gray table anywhere (`grep -ri gray lib/` is empty). Verified against
+  source per the DSP playbook ("verify against source, not the plan"); ported the exact `S7 D29 S7 D29 S7`
+  layout — data at 0-based positions 7–35 and 43–71, sync (Costas) at 0–6/36–42/72–78. Added the inverse
+  `tones_to_codeword` and a `message_to_tones` (encode174 ∘ codeword_to_tones) tying LDPC + tones.
+- **Implementation:** `plugins/js8/src/tones.rs` (`codeword_to_tones`, `tones_to_codeword`,
+  `message_to_tones`, `data_positions`); `lib.rs` module + re-exports.
+- **Tests:** `tones.rs` (4) — `S7 D29 S7 D29 S7` structure (sync = Costas arrays, no data in a sync block,
+  data positions 7/35/43/71, all tones < 8); the direct-binary rule per data symbol; codeword round-trips
+  through tones; `message_to_tones` → `tones_to_codeword` recovers a **parity-valid** codeword (`H·c = 0`).
+- **Test results (actually run):** `js8-plugin` 31 passed / 0 failed (4 new); clippy `-D warnings` + fmt clean.
+- **Next:** the JS8 message-payload assembly (`packHeartbeatMessage` 72-bit layout + i3bit flags + 11-byte
+  CRC buffer → 87 info bits) + the `ModulationPlugin` impl (message bytes → tones → GFSK audio) + daemon
+  registration; then the end-to-end `reference_vectors` gate (needs `genjs8` ground truth — gfortran).
+
+---
+
 ## 2026-07-11 — feat(js8): FF-15 Phase A-5 — frame field packers (callsign + grid, Qt-exact)
 
 - **Requirement/change:** FF-15 Phase A: pack the two fields a JS8 Heartbeat frame carries — a standard

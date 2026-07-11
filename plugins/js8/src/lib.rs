@@ -16,9 +16,11 @@ pub mod frame;
 pub mod ldpc174;
 pub mod modulate;
 pub mod submode;
+pub mod tones;
 
 pub use costas::CostasKind;
 pub use crc::augmented_crc12;
 pub use frame::{pack_callsign, pack_grid};
 pub use modulate::{modulate_tones, GfskParams};
 pub use submode::{params_for_mode, Submode, SubmodeParams};
+pub use tones::{codeword_to_tones, message_to_tones};
