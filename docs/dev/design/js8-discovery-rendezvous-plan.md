@@ -139,11 +139,22 @@ standardized on Huffman-framed data** (still a valid JS8 frame that stock JS8Cal
 Huffman-only RX fully covers the hint; JSC decode (the 262k-entry codebook) is a follow-on that only
 buys us general third-party free-text (the secondary INFO-token path and reading arbitrary traffic).
 
-**Shipped (this unit — Phase C message-layer gap):** `plugins/js8/src/varicode.rs` (`HUFF_TABLE`,
-`huff_decode`, `unpack_data_message` → `DataText::{Huffman, JscUnsupported}`) and
-`grammar::unpack_directed_message` (`FrameDirected` → from/to/cmd/num) — both validated against
-Qt5-compiled ground-truth vectors. Still to wire: `@OPULSE` compound-directed correlation +
-multi-frame reassembly + `decode_hint` + `PeerCache` upsert (`runtime.rs`), and JSC decode.
+**Shipped (Phase C message-layer + peer recognition):**
+- `plugins/js8/src/varicode.rs` (`HUFF_TABLE`, `huff_decode`, `unpack_data_message` →
+  `DataText::{Huffman, JscUnsupported}`) and `grammar::unpack_directed_message` (`FrameDirected` →
+  from/to/cmd/num) — both validated against Qt5-compiled ground-truth vectors. (Also fixed
+  `unpack_compound_frame` to reject all data flags 4–7, not just 4.)
+- `openpulse-discovery::hint_assembler::HintAssembler` — cross-slot, per-frequency-offset buffering
+  of an over's frames (`First`/`Last` bracketed), assembling `Compound`(sender) +
+  `CompoundDirected`(`@OPULSE`) + Huffman `Data` → `decode_hint` → `RecognizedHint`. Wired into
+  `runtime.rs::decode_slot`: a recognised beacon upserts the sender into the `StationTable` with its
+  `OphfHint`, so the daemon's existing `ListStations` reports `is_opulse: true`. End-to-end tested
+  through the real `decode_window` on a 4-slot beacon.
+
+**Still to wire:** JSC decode (the 262k codebook → general third-party free text + the secondary
+INFO-token hint path), and the daemon-level upsert of hinted stations into the *shared* `PeerCache`
+via `station_to_peer_record` (the per-station `OphfHint` is set and surfaced today; the cross-subsystem
+`PeerCache` map is the remaining step).
 
 ### 3.3 What the hint can and cannot carry
 
