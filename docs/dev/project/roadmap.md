@@ -1422,14 +1422,14 @@ go/no-go) → C (varicode + hint) → **D (RX-only discovery MVP = ship line, ze
 (beacon/query TX — **gated on the §97.221 automatic-control regulatory doc landing first**) → F
 (rendezvous + HPX handoff) → G (panel `Tab::Discovery`) → H (on-air validation vs stock JS8Call).
 
-**Phase A in progress.** A-1 shipped (PR #744): new `plugins/js8` crate with the submode table
-(`submode.rs`, all five submodes; samples/symbol exact-integer at 8 kHz) and the Costas sync arrays
-(`costas.rs`, ORIGINAL + the three MODIFIED blocks) — the self-contained protocol foundation, verified
-against the plan's §2.1/§2.2 constants with internal-consistency tests (integer samples/symbol,
-BW = 8×spacing, tabulated TX durations, Costas permutation + anti-false-sync distinctness). Remaining
-Phase-A units: frame packing (`packCallsign`/`packGrid`/`packCmd`), LDPC(174,87) encode + CRC-12, GFSK
-`modulate`, and the bit/tone-exact `reference_vectors` gate — the last needs ground-truth vectors
-generated from JS8Call-improved (the interop anchor), which must be committed alongside the encoder.
+**Phase A in progress.** A-1 shipped (PR #744): `plugins/js8` submode table (`submode.rs`) + Costas sync
+arrays (`costas.rs`) — the protocol foundation. A-2 shipped (PR #745): GFSK tone-synthesis modulator
+(`modulate.rs`, FT8/JS8 `gen_ft8wave`+`gfsk_pulse`, BT = 2.0) — continuous-phase Gaussian-smoothed 8-FSK,
+verified structurally (a constant tone lands on `base + tone·spacing` via Goertzel; partition-of-unity
+pulse; phase-continuous transitions). Remaining Phase-A units: frame packing
+(`packCallsign`/`packGrid`/`packCmd`), LDPC(174,87) encode + CRC-12 (produces the tone sequence from a
+message), and the bit/tone-exact `reference_vectors` gate — the last needs ground-truth vectors generated
+from JS8Call-improved (the interop anchor), which must be committed alongside the encoder.
 
 ---
 

@@ -9,6 +9,33 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 Phase A-2 — GFSK tone-synthesis modulator
+
+- **Requirement/change:** FF-15 Phase A (`docs/dev/design/js8-discovery-rendezvous-plan.md` §2.1, §4.2): the
+  waveform-synthesis half of the JS8 TX core — turn a symbol→tone sequence into continuous-phase,
+  Gaussian-frequency-smoothed 8-FSK audio. Rectangular FSK would decode locally but splatter adjacent JS8
+  users (fails interop goal G1), so GFSK is required.
+- **Design decision:** port the FT8/JS8 `gen_ft8wave` + `gfsk_pulse` synthesis (`modulate.rs`): a 3-symbol
+  Gaussian pulse (BT = 2.0) whose one-symbol-shifted copies form a partition of unity, so a tone run
+  synthesizes to that tone's steady frequency and transitions smooth over ~one symbol; instantaneous
+  frequency `= base + spacing · Σ_j tone[j]·pulse_j` is integrated into continuous phase, with a
+  raised-cosine keying ramp on both ends. Keep it a **pure tone→audio** function (`GfskParams`,
+  `modulate_tones`) — bits→tones (Gray coding, Costas insertion, LDPC) is upstream and lands with the frame/
+  LDPC units. `erf` via Abramowitz-Stegun 7.1.26 (no libm dependency). Verifiable now *without* upstream
+  vectors by structural properties; exact BT/envelope match against JS8Call-improved is the later
+  `reference_vectors` gate.
+- **Implementation:** `plugins/js8/src/modulate.rs` (`GfskParams`, `gfsk_pulse`, `modulate_tones`, `erf`);
+  `lib.rs` re-exports.
+- **Tests:** `modulate.rs` (5) — output length = `79·sps` and amplitude ≤ 1; empty tones → no audio; **a
+  constant tone lands on `base + tone·spacing`** (Goertzel argmax over the 8 candidates, every tone 0–7);
+  `gfsk_pulse` partition-of-unity in the interior; a 0→7 tone jump is phase-continuous (bounded first
+  difference), not a rectangular step.
+- **Test results (actually run):** `js8-plugin` 15 passed / 0 failed (5 new); clippy `-D warnings` + fmt clean.
+- **Next:** frame packing + LDPC(174,87)/CRC-12 (produce the tone sequence from a message), then the
+  `reference_vectors` bit/tone-exact gate against committed JS8Call-improved ground truth.
+
+---
+
 ## 2026-07-11 — feat(js8): FF-15 Phase A-1 — `plugins/js8` crate (submode table + Costas arrays)
 
 - **Requirement/change:** FF-15 Phase A (`docs/dev/design/js8-discovery-rendezvous-plan.md` §11): begin the
