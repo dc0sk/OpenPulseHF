@@ -9,6 +9,28 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(daemon): FF-15 Phase F-3c-iii — rendezvous QSY + CONREQ handoff
+
+- **Requirement/change:** complete the rendezvous flow — after an agreement, both stations QSY to the
+  working frequency and start the signed HPX session. The QSY must wait `switch_in_slots` (so the Accept
+  is heard and both retune together), then reuse the existing signed-connect path.
+- **Design decision:** on `RendezvousAgreed`, `discovery_tick` schedules `rendezvous_qsy_due = (peer,
+  freq_hz, now + switch_in_slots × 15 s)` (NORMAL slot) rather than QSYing immediately — the Accept keeps
+  transmitting via the runtime's priority queue meanwhile. When the deadline passes, `discovery_tick`
+  clears the discovery home (so stand-down does **not** tune back), CAT-retunes to the working frequency,
+  stands discovery down, and arms `rendezvous_connect_ready`. `server::run` takes that and runs
+  `apply_command_to_engine(ConnectPeer { callsign: peer })` — the same `begin_secure_session` + CONREQ-
+  over-RF path an operator connect uses (it owns `&mut engine` + the rig). Gated behind the existing
+  Full-mode/callsign/clock TX guards + an explicit `RendezvousWith` or Full-mode responder — no unbidden
+  transmission.
+- **Implementation:** `crates/openpulse-daemon/src/{lib,server}.rs` (`RuntimeControlState` gains
+  `rendezvous_qsy_due` + `rendezvous_connect_ready`; `JS8_NORMAL_SLOT_MS`).
+- **Tests:** the responder `discovery_tick` test extended — after agreement a QSY is scheduled; once the
+  switch delay elapses the daemon retunes to the working frequency, arms the handoff, consumes the
+  schedule, and stands discovery down.
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features discovery_tick` → 6 passed;
+  clippy clean. F-3c-iv (twin-daemon end-to-end) next.
+
 ## 2026-07-11 — feat(daemon): FF-15 Phase F-3c-ii — rendezvous command, events, bandplan gate
 
 - **Requirement/change:** expose the rendezvous runtime through the daemon control surface — an operator

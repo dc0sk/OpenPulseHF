@@ -242,6 +242,13 @@ pub struct RuntimeControlState {
     /// Rendezvous working channels (Hz) per band label (from `[discovery]` config). A rendezvous agrees
     /// a channel **index** into the current band's list; the daemon resolves it to Hz for the QSY.
     pub discovery_rendezvous_channels_hz: std::collections::BTreeMap<String, Vec<u64>>,
+    /// A scheduled post-rendezvous QSY: `(peer, freq_hz, due_at_ms)`. Set when a rendezvous is agreed; the
+    /// QSY + CONREQ handoff fire once the `switch_in_slots` delay elapses (both stations retune together
+    /// and the Accept has time to be heard first).
+    pub rendezvous_qsy_due: Option<(String, u64, u64)>,
+    /// Set by `discovery_tick` the tick a rendezvous QSY completes: `(peer, freq_hz)`. `server::run`
+    /// takes it and runs the `ConnectPeer` handshake handoff (needs `&mut engine`), then clears it.
+    pub rendezvous_connect_ready: Option<(String, u64)>,
     /// Shared peer cache (§5.2): recognized OpenPulse peers mapped from discovery's hinted stations,
     /// queryable by capability/quality/trust for rendezvous, relay routing, and peer queries.
     pub peer_cache: openpulse_core::peer_cache::PeerCache,
@@ -332,6 +339,8 @@ impl Default for RuntimeControlState {
             discovery_home_freq_hz: None,
             discovery_calling_freqs_hz: std::collections::BTreeMap::new(),
             discovery_rendezvous_channels_hz: std::collections::BTreeMap::new(),
+            rendezvous_qsy_due: None,
+            rendezvous_connect_ready: None,
             peer_cache: openpulse_core::peer_cache::PeerCache::new(256, 3_600_000),
         }
     }
