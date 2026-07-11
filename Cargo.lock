@@ -3602,6 +3602,7 @@ dependencies = [
 name = "js8-plugin"
 version = "0.3.0"
 dependencies = [
+ "flate2",
  "openpulse-core",
 ]
 

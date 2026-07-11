@@ -9,6 +9,30 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 — JSC codebook decode (general JS8 free text)
+
+- **Requirement/change:** the free-text decoder handled only Huffman data frames; JSC-compressed
+  frames (which `packDataMessage` picks when denser) were undecodable — blocking the passive
+  INFO-token hint path and general traffic reading, and making beacon recognition depend on
+  Huffman-forced TX.
+- **Design decision:** embed the full 262 144-entry JSC codebook (ported from GPL-3.0 `jsc_map.cpp`)
+  as a zlib-compressed ~1.1 MB blob (`flate2`, already a workspace dep), expanded once on first use,
+  and port `JSC::decompress`. Unify `unpack_data_message` to return `Option<String>` (Huffman or JSC),
+  dropping the `DataText` marker enum.
+- **Implementation:** `plugins/js8/src/jsc.rs` (`jsc_decompress` + codebook loader),
+  `plugins/js8/data/jsc_codebook.bin.z` (+ README provenance), `varicode.rs` (`unpack_data_message`
+  routes on the `compressed` bit), `Cargo.toml` (`flate2`), exports in `lib.rs`; `hint_assembler.rs`
+  updated to the `Option<String>` API (now also assembles JSC-framed beacons).
+- **Key bug found + fixed:** the codebook extraction regex silently dropped 35 entries (C escapes
+  `\\`/`\n`/`\xNN` and trailing `/* */` comments), which shifted every higher index and corrupted
+  high-index decodes — caught because index-220k `ABCDEFGHIJK` decoded to `ARGENTIERE`. The parser now
+  handles escapes + comments; the codebook is asserted to be exactly 262 144 entries.
+- **Tests:** `jsc::codebook_expands_to_the_expected_size`, `jsc::jsc_data_frames_match_upstream`
+  (11 vectors), `jsc::diverse_data_frames_match_upstream` (15 vectors, multi-word/high-index/punct.);
+  `varicode` huffman tests updated to the `Option<String>` API. Vectors from the Qt5 ground-truth harness.
+- **Test results:** `cargo test -p js8-plugin --no-default-features` → 71 passed, 0 failed;
+  `-p openpulse-discovery` 31, `-p openpulse-daemon` 70; fmt + clippy (`-D warnings`) clean.
+
 ## 2026-07-11 — feat(panel): FF-15 — Discovery tab (stations + OpenPulse peers)
 
 - **Requirement/change:** the panel had no view of JS8 discovery — Phase G's visual operator surface.
