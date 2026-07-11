@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/regulatory.md
 status: living
-last_updated: 2026-05-01
+last_updated: 2026-07-11
 ---
 
 # Regulatory Compliance
@@ -69,6 +69,34 @@ An automatically controlled digital station is one operating without a control o
 
 OpenPulseHF relay node implementations must document the automatic control point interface and must not exceed power limits for automatically controlled operation.
 
+#### OpenPulse automatic-control design (REQ-REG-04)
+
+> **This is engineering documentation of the software's design safeguards, not legal advice or a
+> certification.** The control operator remains responsible for compliance under their own licence
+> class and jurisdiction (in the US, that a station operating automatically is authorised to do so on
+> the intended sub-band, at ≤ 100 W PEP, and identifies correctly). Non-US operators: automatic /
+> unattended operation is separately conditioned (see the CEPT/national sections below).
+
+Two OpenPulse subsystems can transmit without a control operator at the control point and are therefore
+"automatically controlled" under §97.221: the **cross-band repeater / relay node** (`openpulse-repeater`,
+`RelayForwarder`) and the **JS8 discovery beacon** (FF-15 Phase E — not yet enabled; this document is
+its prerequisite gate). The design maps to the rule as follows:
+
+| §97.221 requirement | OpenPulse mechanism | Operator responsibility |
+|---|---|---|
+| Automatic control point can terminate transmissions | The daemon control surface (`DisableDiscovery`, `DisableRepeater`, daemon stop, PTT release) terminates all automatic TX immediately; PTT hardware release is synchronous | Keep a reachable control point (local or the control port) able to stop the daemon |
+| Station can be turned off by the control operator at any time | Every automatic-TX feature is **off by default** and gated behind an explicit enable; discovery defaults to `rx_only` (no TX at all) | Enable automatic TX only when acting as, or in contact with, the control operator |
+| ≤ 100 W PEP output | OpenPulse does not set transmit power; power is the rig's setting via the operator | Configure the rig ≤ 100 W PEP for automatic operation |
+| Third-party retransmission only when authorised | The relay/repeater retransmits third-party traffic; the discovery beacon is **first-party** (the station announcing its own presence/capabilities), not third-party | Ensure relay/repeat operation is authorised for the band/mode in use |
+| Identify per §97.119 | The periodic auto-ID timer (`StationIdTimer`, REQ-REG-10 / CAP-66) keys the configured callsign at the required interval on the daemon and ARDOP TX paths; verified by `station_id_txcount` | Configure a valid callsign; verify ID on the air |
+
+Additional safeguards specific to the JS8 discovery beacon (design decisions D4/D5 in
+`docs/dev/design/js8-discovery-rendezvous-plan.md`): heartbeats are rate-limited (default every 8th
+15 s slot); the `@OPULSE` capability hint is sent at most every Nth beacon; TX is **hard-refused** when
+the UTC clock skew exceeds ±2 s (JS8's published tolerance), degrading to RX-only; and the channel-busy
+CSMA/DCD gate defers TX on an occupied channel. No beacon TX ships until the operator explicitly moves
+discovery off `rx_only` **and** this documentation is reviewed for their jurisdiction.
+
 ### §97.313 — Transmitter power standards
 
 - Stations must use the minimum transmitter power necessary to carry out the desired communication.
@@ -82,7 +110,7 @@ OpenPulseHF relay node implementations must document the automatic control point
 | §97.307(f) | ≤300 baud/carrier below 28 MHz | Current modes compliant; QPSK500 needs per-band verification |
 | §97.309(a)(4) | Unspecified codes: technical info available | Compliant by design (open spec) |
 | §97.119 | ID every 10 min and at end of transmission | Must be implemented in session and relay modes |
-| §97.221 | Automatic control point for unattended relay | Must be addressed in relay node implementation |
+| §97.221 | Automatic control point for unattended relay/beacon | Design safeguards documented above (control-point termination, off-by-default, auto-ID, ≤100 W operator responsibility); operator verifies per jurisdiction |
 | §97.313 | Minimum necessary power | Operational guidance; not a software constraint |
 
 ---

@@ -9,6 +9,23 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — docs: §97.221 automatic-control compliance design (audit G-3 / REQ-REG-04)
+
+- **Requirement/change:** REQ-REG-04 (§97.221 automatic-control documentation) was an open ⚠ gap and
+  the hard prerequisite for JS8 FF-15 Phase E beacon TX. No document mapped OpenPulse's automatic-TX
+  safeguards to the rule.
+- **Design decision:** add an "OpenPulse automatic-control design" subsection to `docs/regulatory.md`
+  §97.221 — a table mapping each rule requirement (control-point termination, off-by-default/operator
+  turn-off, ≤100 W, third-party authorization, §97.119 ID) to the OpenPulse mechanism and the
+  operator's residual responsibility, plus the JS8-beacon-specific safeguards (rate limits, ±2 s
+  clock-skew TX refusal, CSMA deferral). Framed explicitly as engineering documentation, not legal
+  advice — the control operator verifies for their jurisdiction.
+- **Implementation:** `docs/regulatory.md` (subsection + summary-table row + date);
+  `docs/dev/project/traceability-matrix.md` (REQ-REG-04 moved out of the gap list).
+- **Tests:** docs-only.
+- **Test results:** N/A. Note: this document is the *prerequisite* for Phase E; it does not enable any
+  TX by itself.
+
 ## 2026-07-11 — ci: restore auto-triggers + macOS build + pre-push fmt (audit TR-01/TR-02)
 
 - **Requirement/change:** the audit found every workflow set to `workflow_dispatch`-only (CI gates
