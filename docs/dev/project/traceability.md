@@ -9,6 +9,33 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(discovery): FF-15 Phase D-5b — `DiscoveryRuntime` orchestrator (MVP logic)
+
+- **Requirement/change:** FF-15 Phase D: the runtime that ties the pure units together into the working
+  RX-only MVP — idle → QSY to the JS8 frequency → dwell → decode each slot → cache stations → emit events.
+- **Design decision:** keep the orchestrator **pure and async-free** in `openpulse-discovery` so the eventual
+  daemon glue (async loop, CAT retune, event plumbing) stays thin. `DiscoveryRuntime` owns the `DiscoverySm`,
+  `Js8Clock`, `SlotTracker`, `StationTable`, and a dwell audio buffer; `push_audio` accumulates while dwelling;
+  `tick(now_ms, idle)` runs the SM and, on a UTC slot boundary, decodes the buffered slot via `decode_window`,
+  upserts every heartbeat (callsign + grid) and TTL-sweeps; retune is delegated to the daemon via
+  `DiscoveryOutcome::Retune`/`RestoreHome` + `qsy_complete(ok)`. Heartbeats carry callsign+grid; `@OPULSE` hint
+  marking needs varicode free-text decode (a later unit), so stations are cached un-marked for now, and SNR is a
+  documented sync-score proxy pending a true estimate.
+- **Implementation:** `crates/openpulse-discovery/src/runtime.rs` (`DiscoveryRuntime`, `DiscoveryParams`,
+  `DiscoveryOutcome`); `lib.rs` module + re-exports.
+- **Tests:** `runtime.rs` (3) — **the full MVP flow: idle → `Retune` → dwell → buffer a NORMAL slot of
+  synthesized JS8 audio → decode → caches `KN4CRD`/`EM73` + emits `StationHeard`**; a disabled runtime never
+  retunes; `preempt` restores home and clears the buffer.
+- **Test results (actually run):** `openpulse-discovery` 25 passed / 0 failed (3 new); workspace builds 0
+  errors; clippy `-D warnings` + fmt clean.
+- **Next (D-5c, the final MVP integration):** wire `DiscoveryRuntime` into the daemon `server::run` rx-tick
+  (feed captured samples + the assembled idle predicate; run `decode_window` off-thread via `spawn_blocking`),
+  execute `Retune`/`RestoreHome` via the CAT controller, add `DiscoveryStatus`/`StationHeard`/enable-disable
+  control-protocol surface, and the twin-daemon RX acceptance test. Then later: varicode → `@OPULSE` hint
+  marking + `PeerCache` upsert; a true SNR estimate.
+
+---
+
 ## 2026-07-11 — feat(config): FF-15 Phase D-5a — `[discovery]` config section
 
 - **Requirement/change:** FF-15 Phase D (plan §8): the operator-facing `[discovery]` config that turns JS8
