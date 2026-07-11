@@ -9,6 +9,29 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 Phase B-3 — Costas sync acquisition (full single-decode RX)
+
+- **Requirement/change:** FF-15 Phase B: acquisition — find a slot's start offset and base tone frequency
+  from the three Costas sync blocks, so the demod (B-2) can be handed an aligned slot at an unknown timing/
+  frequency. Completes the single-decode RX chain.
+- **Design decision:** the FT8-class 2-D search over `(time offset × base frequency)`. Score each candidate by
+  how much of every sync symbol's energy sits on its expected Costas tone, **normalized by that symbol's total
+  energy** (DSP playbook: "acquire on the normalized correlation, not the unnormalised score" — a high-energy
+  noise window must not win). A perfect lock scores 21 (one per sync symbol). Coarse grid for now (whole-symbol
+  offsets, few-Hz frequency steps); a fine time/frequency refinement is a later unit if the −18 dB gate needs it.
+- **Implementation:** `plugins/js8/src/sync.rs` (`find_sync`, `SyncCandidate`, `sync_score`,
+  `preamble_samples`); `lib.rs` module + re-exports.
+- **Tests:** `sync.rs` (3) — recovers the exact slot offset + base frequency (score > 18/21) from a signal
+  buried in leading silence; **`find_sync` → `demodulate_soft` → `bp_decode` recovers the message** at an
+  unknown offset and base tone (the full single-decode RX pipeline); the true offset scores well above a
+  leading-silence offset.
+- **Test results (actually run):** `js8-plugin` 50 passed / 0 failed (3 new); workspace builds 0 errors; clippy
+  `-D warnings` + fmt clean.
+- **Next:** B-4 — the `decode_window` pipeline (candidate list from the sync search → decode each → CRC-12
+  filter → dedup → multiple decodes per 15 s window), then wire `Js8Plugin::demodulate` + the −18 dB go/no-go.
+
+---
+
 ## 2026-07-11 — feat(js8): FF-15 Phase B-2 — soft demodulator (first RX round-trip)
 
 - **Requirement/change:** FF-15 Phase B: the soft demodulator — turn a synced slot's audio into the 174 bit
