@@ -1399,7 +1399,7 @@ persistence) ✅ → **F on-air validation** (deferred field-test batch). Standa
 Highest risk was Phase C half-duplex ACK/PTT timing — de-risked by the twin-daemon round-trip test, which now
 also exercises the real PTT-keyed burst-drain path.
 
-### FF-15 — JS8-based station discovery and rendezvous *(Phases A+B done, C RX-complete; go/no-go PASSED)*
+### FF-15 — JS8-based station discovery and rendezvous *(A+B done, C RX-complete, D logic done; go/no-go PASSED)*
 
 **Plan approved 2026-07-10** — full design in
 [`docs/dev/design/js8-discovery-rendezvous-plan.md`](../design/js8-discovery-rendezvous-plan.md)
@@ -1459,10 +1459,24 @@ track:
   callsign-salted CRC-8; three-way detection so organic JS8 text can't false-positive).
 
 TX-side packing (`packCompoundFrame`/`packAlphaNumeric50`) and varicode/JSC free text are deferred (beacon TX
-= Phase E; the queried-INFO hint path). **Next: Phase D — the RX-only discovery MVP ship line** (`Js8Clock`
-wall-clock T/R slots, `StationTable` + `PeerCache` mapping, discovery state machine, daemon dwell-ring +
-auto-QSY glue — all zero-TX). Later hardening: a Pi-class CPU-budget check (`cross`) and the bit-exact
-`reference_vectors` (needs gfortran, the one absent upstream tool).
+= Phase E; the queried-INFO hint path).
+
+**Phase D — RX-only discovery MVP logic complete** (PRs #764–#769, new `crates/openpulse-discovery`), all
+pure/async-free:
+- D-1 (#764) `scheduler.rs` `Js8Clock` — UTC-slot mapping, drift bias, ±2 s TX gate; `SlotTracker`.
+- D-2 (#765) `station.rs` `StationTable`/`Js8Station`/`OphfHint` — upsert (SNR EWMA, sticky grid/hint) + TTL sweep.
+- D-3 (#766) `peer_map.rs` — `station_to_peer_record` (key-less `Unknown`-trust) + the capability-bit registry.
+- D-4 (#767) `discovery_sm.rs` `DiscoverySm` — `INACTIVE→ACTIVATING→DWELLING`, idle-predicate + preempt driven.
+- D-5a (#768) `[discovery]` config section.
+- D-5b (#769) `runtime.rs` `DiscoveryRuntime` — ties it together; **the full MVP flow works: idle → retune →
+  dwell → decode a slot → cache `KN4CRD`/`EM73` + emit `StationHeard`** (tested on synthesized audio).
+
+**Remaining for the MVP ship line = D-5c** (the daemon async wiring): feed `server::run`'s rx-tick samples +
+idle predicate into `DiscoveryRuntime` (`decode_window` off-thread), execute `Retune`/`RestoreHome` via CAT,
+add `DiscoveryStatus`/`StationHeard`/enable-disable control surface, + the twin-daemon RX acceptance test.
+Then Phase E (beacon TX, gated on the §97.221 reg doc), F (rendezvous), G (panel), H (on-air). Later hardening:
+varicode → `@OPULSE` hint marking + `PeerCache` upsert; a true SNR estimate; a Pi-class CPU-budget check
+(`cross`); the bit-exact `reference_vectors` (needs gfortran).
 
 ---
 
