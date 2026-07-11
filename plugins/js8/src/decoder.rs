@@ -4,11 +4,22 @@
 //! (soft demod → BP), keeps only those whose **CRC-12 checks** (the guard against false decodes), and
 //! dedups by content. This is the single entry the discovery service drives per received slot.
 
-use crate::demodulate::demodulate_soft;
-use crate::ldpc174::bp_decode;
+use crate::demodulate::{demodulate_soft, goertzel_energy, symbol_tone_energies};
+use crate::ldpc174::{bp_decode, encode174, K};
 use crate::message::check_info_crc;
-use crate::submode::SubmodeParams;
+use crate::submode::{SubmodeParams, SAMPLE_RATE};
 use crate::sync::sync_score;
+use crate::tones::data_positions;
+
+/// Floor for the SNR estimate (dB, 2500 Hz ref); returned when the noise measurement degenerates.
+const SNR_FLOOR_DB: f32 = -30.0;
+/// Calibration offset (dB) folding the Goertzel bin's equivalent-noise-bandwidth and the GFSK
+/// pulse's out-of-bin energy spreading into the estimate. Fitted against the B-6 calibrated-AWGN
+/// harness so the estimate tracks the injected 2500 Hz-referenced SNR; see `snr_estimate.rs`.
+const SNR_CAL_OFFSET_DB: f32 = 0.5;
+/// Guard tone-index offsets (relative to the base tone) for the noise-floor measurement — out of the
+/// 0..=7 signal band and ≥2 bins from either edge so the GFSK pulse tails don't contaminate them.
+const GUARD_TONE_OFFSETS: [i32; 4] = [-3, -2, 9, 10];
 
 /// One decoded JS8 frame from a window.
 #[derive(Debug, Clone)]
@@ -23,6 +34,8 @@ pub struct Js8Decode {
     pub sample_offset: usize,
     /// Costas sync score (0..=21) of the acquisition.
     pub sync_score: f32,
+    /// Estimated SNR (dB) in the 2500 Hz reference bandwidth (WSJT-X/JS8 convention).
+    pub snr_db: f32,
 }
 
 /// Search parameters for [`decode_window`].
@@ -59,6 +72,51 @@ impl Default for DecodeCfg {
             bp_iterations: 50,
         }
     }
+}
+
+/// Estimate a decoded frame's SNR (dB, 2500 Hz ref BW). Matched to the transmitted data tones,
+/// re-encoded from the decoded info bits: per data symbol, the Goertzel energy at the sent tone is
+/// signal+noise and the mean of the other seven is the per-bin noise. The aggregate noise-corrected
+/// signal-to-noise ratio is measured in the Goertzel bin bandwidth (`fs / samples_per_symbol`) and
+/// scaled up to the 2500 Hz reference; `SNR_CAL_OFFSET_DB` absorbs the bin ENBW + pulse spreading.
+fn estimate_snr_db(
+    audio: &[f32],
+    base_freq_hz: f32,
+    off: usize,
+    params: &SubmodeParams,
+    info: &[u8; K],
+) -> f32 {
+    let sps = params.samples_per_symbol;
+    let fs = SAMPLE_RATE as f32;
+    let cw = encode174(info);
+    let mut sum_sig = 0.0f64;
+    let mut sum_noise = 0.0f64;
+    for (j, &pos) in data_positions().iter().enumerate() {
+        let start = off + pos * sps;
+        let Some(win) = audio.get(start..start + sps) else {
+            continue;
+        };
+        let e = symbol_tone_energies(win, base_freq_hz, params.tone_spacing_hz, fs);
+        let tone = ((cw[3 * j] << 2) | (cw[3 * j + 1] << 1) | cw[3 * j + 2]) as usize;
+        let e_sig = e[tone];
+        // Noise floor from fixed out-of-band guard bins (tone indices below 0 / above 7). Only one
+        // tone is active per symbol, and the wide GFSK pulse leaks into its in-band neighbours, so
+        // in-band "noise" grows with signal power and the estimate saturates; guard bins ≥2 away from
+        // the band edges stay decoupled from the signal.
+        let e_noise = GUARD_TONE_OFFSETS
+            .iter()
+            .map(|&g| goertzel_energy(win, base_freq_hz + g as f32 * params.tone_spacing_hz, fs))
+            .sum::<f32>()
+            / GUARD_TONE_OFFSETS.len() as f32;
+        sum_sig += (e_sig - e_noise).max(0.0) as f64;
+        sum_noise += e_noise as f64;
+    }
+    if sum_noise <= 0.0 {
+        return SNR_FLOOR_DB;
+    }
+    let bin_bw = fs / sps as f32;
+    let snr_bin_db = 10.0 * (sum_sig / sum_noise).max(1e-9).log10() as f32;
+    (snr_bin_db + 10.0 * (bin_bw / 2500.0).log10() + SNR_CAL_OFFSET_DB).max(SNR_FLOOR_DB)
 }
 
 /// Decode every JS8 frame found in `audio` (one 15 s slot's worth) under `cfg`. Returns CRC-verified,
@@ -113,12 +171,14 @@ pub fn decode_window(audio: &[f32], params: &SubmodeParams, cfg: &DecodeCfg) -> 
         if out.iter().any(|e| e.payload == payload && e.i3bit == i3bit) {
             continue;
         }
+        let snr_db = estimate_snr_db(audio, freq, off, params, &d.info);
         out.push(Js8Decode {
             payload,
             i3bit,
             base_freq_hz: freq,
             sample_offset: off,
             sync_score: score,
+            snr_db,
         });
     }
     out

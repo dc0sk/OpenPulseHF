@@ -201,8 +201,8 @@ impl DiscoveryRuntime {
         let obs = Observation {
             callsign: hb.callsign.clone(),
             grid: (!hb.grid.is_empty()).then_some(hb.grid.clone()),
-            // Sync-score proxy for SNR (0..21 → −21..0 dB) until a true estimate is wired; monotone.
-            snr_db: d.sync_score - 21.0,
+            // Decoder's matched-filter SNR estimate (dB, 2500 Hz ref BW).
+            snr_db: d.snr_db,
             freq_offset_hz: d.base_freq_hz,
             dial_freq_hz: self.params.calling_freq_hz,
             hint: None, // @OPULSE hint marking needs varicode free-text decode (a later unit)

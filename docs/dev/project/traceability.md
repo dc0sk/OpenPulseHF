@@ -9,6 +9,31 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 — real per-decode SNR estimate (2500 Hz ref BW), replacing the sync-score proxy
+
+- **Requirement/change:** post-MVP RX refinement. Discovery cached every station's SNR as
+  `sync_score − 21` — a monotone proxy, not a real dB value — so `route_quality` scoring and the
+  panel display were uncalibrated.
+- **Design decision:** matched-filter estimator on the transmitted data tones (re-encoded from the
+  decoded info bits, so the signal tone per symbol is known exactly): per data symbol the Goertzel
+  energy at the sent tone is signal+noise; the noise floor comes from **out-of-band guard bins**
+  (tone offsets −3,−2,9,10 — ≥2 bins outside the 0..7 band). Measuring noise in-band saturates the
+  estimate at high SNR because the wide GFSK pulse (BT=2.0) leaks signal energy into the neighbouring
+  bins; guard bins decouple the noise floor from signal power. The aggregate bin-bandwidth SNR is
+  scaled to the 2500 Hz reference; a single fitted `SNR_CAL_OFFSET_DB` (+0.5) folds in the Goertzel
+  ENBW + pulse spreading. Accuracy is gated only on the JS8 weak-signal band (−12…+3 dB); above +3 dB
+  the non-coherent estimate compresses, which is immaterial (`route_quality` saturates there).
+- **Implementation:** `plugins/js8/src/decoder.rs` `estimate_snr_db` + `Js8Decode::snr_db` (set in
+  `decode_window`); `plugins/js8/src/demodulate.rs` `goertzel_energy` made `pub`;
+  `crates/openpulse-discovery/src/runtime.rs` `ingest_decode` now uses `d.snr_db`.
+- **Tests:** `plugins/js8/tests/snr_estimate.rs` — `tracks_injected_snr` (within 2 dB of the injected
+  SNR across −12…+3 dB and strictly monotone across −12…+9 dB, using the B-6 calibrated-AWGN model);
+  `characterize` (ignored) prints the fit. Calibration measured: err ≤ ~0.7 dB over −15…0 dB.
+- **Test results:** `cargo test -p js8-plugin --no-default-features` → 61 lib + gates pass (incl. the
+  B-6 −18 dB `gate_at_minus_18_db`); `snr_estimate::tracks_injected_snr` passes;
+  `openpulse-discovery` 25 / `openpulse-daemon` 69 pass; clippy (`-D warnings`, `--tests`) + fmt clean;
+  `cargo build --workspace --no-default-features` clean.
+
 ## 2026-07-11 — feat(daemon): FF-15 — discovery dwells on the current home band's JS8 freq (RX refinement)
 
 - **Requirement/change:** post-MVP RX refinement. `build_discovery_runtime` hardcoded the 20 m

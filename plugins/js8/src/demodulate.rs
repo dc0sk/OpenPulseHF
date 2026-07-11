@@ -10,7 +10,7 @@ use crate::submode::{SubmodeParams, NUM_TONES};
 use crate::tones::data_positions;
 
 /// Goertzel energy of `win` at `freq` (Hz).
-fn goertzel_energy(win: &[f32], freq: f32, fs: f32) -> f32 {
+pub fn goertzel_energy(win: &[f32], freq: f32, fs: f32) -> f32 {
     let w = std::f32::consts::TAU * freq / fs;
     let coeff = 2.0 * w.cos();
     let (mut s1, mut s2) = (0.0f32, 0.0f32);
