@@ -9,6 +9,33 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 Phase C-2 — compound-frame grammar (RX heartbeat decode)
+
+- **Requirement/change:** FF-15 Phase C: parse a decoded 72-bit payload into a sender callsign + frame type +
+  grid — the receive-side grammar the discovery MVP uses to learn *who* it heard and *where*.
+- **Design decision + finding:** heartbeats pack the callsign with the **50-bit** `packAlphaNumeric50` (not the
+  28-bit packer) and lay the frame out as `[flag:3][callsign50:50][num_hi:11][num_lo:5][bits3:3]`. Key
+  simplification: `pack72bits` serializes exactly `value64 ‖ rem8`, so the decoder's 9-byte payload **is**
+  `value64` (big-endian bytes 0–7) then `rem8` (byte 8) — the fields read straight off the bits, **no
+  `alphabet72` char round-trip needed** (verified by matching upstream). Ported `unpackAlphaNumeric50` (incl.
+  its position-0 modulo-39 quirk and the separator-space strip) and `unpackCompoundFrame`; added `FrameType`,
+  `CompoundFrame`, `Heartbeat`, and `parse_heartbeat` (grid in low 15 bits, `@CQ` alt bit at 0x8000). TX-side
+  `packCompoundFrame`/`packAlphaNumeric50` are deferred to Phase E (beacon TX).
+- **Implementation:** `plugins/js8/src/grammar.rs` (`unpack_alphanumeric50`, `unpack_compound_frame`,
+  `parse_heartbeat`, `FrameType`, `CompoundFrame`, `Heartbeat`); `frame::ALPHANUMERIC` made `pub(crate)`;
+  `lib.rs` module + re-exports.
+- **Tests:** `grammar.rs` (3) — `unpack_alphanumeric50` matches upstream (KN4CRD/DC0SK/W1AW from Qt
+  `packAlphaNumeric50`); **three full heartbeat payloads (assembled by verbatim upstream on Qt) decode to the
+  right callsign + grid**; and **the full RX pipeline** — heartbeat payload → LDPC → GFSK audio →
+  `decode_window` → grammar recovers `KN4CRD` + `EM73` off the air.
+- **Test results (actually run):** `js8-plugin` 61 passed / 0 failed (3 new); workspace builds 0 errors; clippy
+  `-D warnings` + fmt clean.
+- **Next:** C-3 the `@OPULSE` capability hint (OPHF payload codec + detector + CRC-8, plan §3.2/§5.4) — the
+  actual OpenPulse marker, and the last piece the RX-only discovery MVP needs from Phase C. (Varicode/JSC free
+  text is only needed for the queried-INFO hint path and can follow.)
+
+---
+
 ## 2026-07-11 — feat(js8): FF-15 Phase C-1 — callsign/grid unpackers (RX field decode)
 
 - **Requirement/change:** FF-15 Phase C (message grammar): the RX side of the field codecs — turn a decoded
