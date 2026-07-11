@@ -51,6 +51,8 @@ pub struct FileTransferPolicy {
     pub allowed_peers: Vec<String>,
     /// Hours a resumable partial is kept before purge (0 = keep indefinitely).
     pub partial_ttl_hours: u64,
+    /// Max estimated on-air seconds per keyed TX burst (airtime-bounded PTT sequencing).
+    pub burst_max_secs: f64,
     /// Session timeouts.
     pub timeouts: Timeouts,
 }
@@ -69,6 +71,7 @@ impl FileTransferPolicy {
             per_peer_quota_bytes: cfg.per_peer_quota_bytes,
             allowed_peers: cfg.allowed_peers.iter().map(|s| s.to_uppercase()).collect(),
             partial_ttl_hours: cfg.partial_ttl_hours,
+            burst_max_secs: cfg.burst_max_secs,
             timeouts: Timeouts {
                 offer_ms: cfg.offer_timeout_secs.saturating_mul(1000),
                 ..Timeouts::default()

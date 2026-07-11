@@ -9,6 +9,36 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(filexfer): airtime-bounded TX burst splitting (real-radio PTT sequencing)
+
+- **Requirement/change:** FF-16 §5.3 — the file-transfer TX drain keyed PTT **once** and transmitted the
+  entire queue as a single transmission. On real half-duplex radio a large transfer would hold PTT past the
+  ~180 s watchdog and never yield the channel; the drain must split the queue into airtime-bounded bursts.
+- **Design decision:** size bursts by **measured airtime**, not a fragile per-mode bitrate table. New pure
+  `ModemEngine::estimate_air_secs(payload_len, mode)` modulates a throwaway buffer through the mode's *real*
+  modulator (the trait's `modulate` is side-effect-free — it does not bump the wire sequence, key PTT, or emit
+  audio) and returns `samples / sample_rate`. A pure `plan_bursts(n, air_secs, burst_max_secs, max_frags)`
+  greedily packs fragments until the next would exceed `burst_max_secs` (default 20 s, well under the watchdog),
+  clamped to `MAX_FRAGS_PER_BURST = 64` (plan §5.3), always taking ≥1 fragment so a lone oversized fragment
+  still forms its own burst. `drain_filexfer_tx` plans up front (immutable engine borrow), then keys each burst
+  as its own assert → transmit → release cycle (`PttChanged` per burst). Splitting the decision (`plan_bursts`,
+  pure) from the keying makes it unit-testable with **no hardware** — the USB/loopback rig is only for the later
+  Phase-F on-air keying-timing smoke test. `burst_max_secs` is a new `[file_transfer]` config knob.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`estimate_air_secs`); `crates/openpulse-daemon/
+  src/server.rs` (`plan_bursts`, `MAX_FRAGS_PER_BURST`, rewritten `drain_filexfer_tx`); `openpulse-config`
+  (`FileTransferConfig.burst_max_secs` + template); `crates/openpulse-daemon/src/filexfer.rs`
+  (`FileTransferPolicy.burst_max_secs`).
+- **Tests:** `crates/openpulse-modem/tests/estimate_air_secs.rs` (4 — positive + monotonic in size; slower mode
+  takes longer; unknown mode → `None`; emits no audio / no wire-sequence disturbance); `server.rs`
+  `burst_planning_tests` (6 — empty; one burst; airtime split 3+3+3+1; oversized-fragment own burst; fragment
+  clamp 64+64+22; per-fragment airtime respected).
+- **Test results (actually run):** `openpulse-modem` + `openpulse-daemon` + `openpulse-config` 470 passed / 0
+  failed (10 new); workspace builds 0 errors; clippy `-D warnings` + fmt clean.
+- **Note:** the existing twin round-trip still exercises the drain end-to-end (tiny file = 1 burst). Completes
+  the real-radio PTT sequencing refinement flagged after PR #739. Live keying-timing validation is Phase F.
+
+---
+
 ## 2026-07-10 — feat(filexfer): Phase E-2 — daemon partial-block persistence + resume detection
 
 - **Requirement/change:** FF-16 Phase E (`docs/dev/design/file-transfer-plan.md` §12): give the E-1 resume

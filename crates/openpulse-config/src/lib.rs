@@ -125,6 +125,10 @@ pub struct FileTransferConfig {
     /// Hours a partially-received transfer's blocks are kept on disk for resume before being purged
     /// (`0` = keep indefinitely). Partials live under `download_dir/<peer>/.partial/<sha256>/`.
     pub partial_ttl_hours: u64,
+    /// Maximum estimated on-air seconds per keyed TX burst. Queued fragments are split into bursts no
+    /// longer than this so a large transfer never holds PTT past the radio's watchdog and yields the
+    /// channel between bursts. Keep it well under any PTT time-out (typically 180 s).
+    pub burst_max_secs: f64,
 }
 
 impl Default for FileTransferConfig {
@@ -139,6 +143,7 @@ impl Default for FileTransferConfig {
             allowed_peers: Vec::new(),
             offer_timeout_secs: 120,
             partial_ttl_hours: 72,
+            burst_max_secs: 20.0,
         }
     }
 }
@@ -1057,6 +1062,9 @@ allowed_peers = []
 offer_timeout_secs = 120
 # Hours a partially-received transfer's blocks are kept for resume before purge (0 = keep forever).
 partial_ttl_hours = 72
+# Max estimated on-air seconds per keyed TX burst (splits large transfers so PTT never trips the
+# radio watchdog and the channel is yielded between bursts). Keep well under any PTT time-out.
+burst_max_secs = 20.0
 "#
     .to_string()
 }

@@ -895,6 +895,41 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
 /// release), so the half-duplex peer can answer. Called after every command and receive tick; a no-op
 /// when the queue is empty. On a PTT-assert failure the burst is dropped and the session's stall/retry
 /// path recovers.
+/// Upper bound on fragments per keyed burst (the plan §5.3 clamp), independent of the airtime bound.
+const MAX_FRAGS_PER_BURST: usize = 64;
+
+/// Split `n` queued fragments into airtime-bounded bursts, returning the fragment count of each burst
+/// (which sum to `n`). A burst holds at most `max_frags` fragments and, past its first, stops before
+/// its estimated airtime would exceed `burst_max_secs`; the first fragment is always taken, so a lone
+/// oversized fragment still forms its own (never empty) burst. `air_secs(i)` estimates fragment `i`.
+fn plan_bursts(
+    n: usize,
+    air_secs: impl Fn(usize) -> f64,
+    burst_max_secs: f64,
+    max_frags: usize,
+) -> Vec<usize> {
+    let mut bursts = Vec::new();
+    let mut i = 0;
+    while i < n {
+        let mut count = 0;
+        let mut acc = 0.0f64;
+        while i + count < n && count < max_frags {
+            let secs = air_secs(i + count).max(0.0);
+            if count > 0 && acc + secs > burst_max_secs {
+                break; // keep the first fragment even if it alone exceeds the budget
+            }
+            acc += secs;
+            count += 1;
+        }
+        bursts.push(count);
+        i += count;
+    }
+    bursts
+}
+
+/// Drain the file-transfer TX queue as one or more **airtime-bounded** PTT-keyed bursts: each burst is
+/// its own assert → transmit → release cycle, sized by [`plan_bursts`] so no single keying exceeds
+/// `burst_max_secs` (keeps a large transfer under the radio's PTT watchdog and yields between bursts).
 fn drain_filexfer_tx(
     engine: &mut ModemEngine,
     ptt_controller: &mut Option<Box<dyn PttController>>,
@@ -906,22 +941,41 @@ fn drain_filexfer_tx(
         return;
     }
     let queue = std::mem::take(&mut runtime_state.filexfer_tx_queue);
-    if let Some(ptt) = ptt_controller.as_mut() {
-        if let Err(e) = ptt.assert_ptt() {
-            tracing::warn!("filexfer PTT assert failed: {e}");
-            return;
+    let burst_max = runtime_state.filexfer_policy.burst_max_secs;
+
+    // Plan bursts up front (immutable engine borrow) so the keying loop can borrow the engine mutably.
+    let plan = plan_bursts(
+        queue.len(),
+        |idx| {
+            engine
+                .estimate_air_secs(queue[idx].0.len(), &queue[idx].1)
+                .unwrap_or(0.0)
+        },
+        burst_max,
+        MAX_FRAGS_PER_BURST,
+    );
+
+    let mut idx = 0;
+    for count in plan {
+        let burst = &queue[idx..idx + count];
+        idx += count;
+        if let Some(ptt) = ptt_controller.as_mut() {
+            if let Err(e) = ptt.assert_ptt() {
+                tracing::warn!("filexfer PTT assert failed: {e}");
+                return;
+            }
         }
-    }
-    let _ = event_tx.send(ControlEvent::PttChanged { active: true });
-    for (frag, mode) in &queue {
-        let _ = tokio::task::block_in_place(|| engine.transmit(frag, mode, None));
-    }
-    if let Some(ptt) = ptt_controller.as_mut() {
-        if let Err(e) = ptt.release_ptt() {
-            tracing::warn!("filexfer PTT release failed: {e}");
+        let _ = event_tx.send(ControlEvent::PttChanged { active: true });
+        for (frag, mode) in burst {
+            let _ = tokio::task::block_in_place(|| engine.transmit(frag, mode, None));
         }
+        if let Some(ptt) = ptt_controller.as_mut() {
+            if let Err(e) = ptt.release_ptt() {
+                tracing::warn!("filexfer PTT release failed: {e}");
+            }
+        }
+        let _ = event_tx.send(ControlEvent::PttChanged { active: false });
     }
-    let _ = event_tx.send(ControlEvent::PttChanged { active: false });
 }
 
 fn ota_send_with_ptt(
@@ -1136,6 +1190,59 @@ fn build_ptt_controller(backend: &str, rigctld_addr: &str) -> Option<Box<dyn Ptt
             tracing::warn!(backend = %other, "unknown PTT backend; PTT disabled");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod burst_planning_tests {
+    use super::{plan_bursts, MAX_FRAGS_PER_BURST};
+
+    #[test]
+    fn empty_queue_plans_nothing() {
+        assert!(plan_bursts(0, |_| 1.0, 20.0, MAX_FRAGS_PER_BURST).is_empty());
+    }
+
+    #[test]
+    fn small_transfer_fits_one_burst() {
+        // 5 fragments × 2 s = 10 s ≤ 20 s budget → a single burst.
+        assert_eq!(plan_bursts(5, |_| 2.0, 20.0, MAX_FRAGS_PER_BURST), vec![5]);
+    }
+
+    #[test]
+    fn airtime_budget_splits_into_multiple_bursts() {
+        // Each fragment 6 s, budget 20 s → 3 per burst (18 s), 10 fragments → 3+3+3+1.
+        assert_eq!(
+            plan_bursts(10, |_| 6.0, 20.0, MAX_FRAGS_PER_BURST),
+            vec![3, 3, 3, 1]
+        );
+    }
+
+    #[test]
+    fn oversized_fragment_still_forms_its_own_burst() {
+        // A single 50 s fragment exceeds the 20 s budget but must still be sent (never a zero burst).
+        assert_eq!(
+            plan_bursts(3, |_| 50.0, 20.0, MAX_FRAGS_PER_BURST),
+            vec![1, 1, 1]
+        );
+    }
+
+    #[test]
+    fn fragment_count_is_clamped_even_when_airtime_is_tiny() {
+        // Negligible airtime would pack everything, but max_frags caps each burst.
+        assert_eq!(
+            plan_bursts(150, |_| 0.001, 20.0, MAX_FRAGS_PER_BURST),
+            vec![64, 64, 22]
+        );
+    }
+
+    #[test]
+    fn per_fragment_airtime_is_respected() {
+        // Mixed sizes: 15 s, then 10 s (25 > 20 → new burst), then 3 s (13 ≤ 20 packs with the 10 s).
+        let secs = [15.0, 10.0, 3.0];
+        assert_eq!(
+            plan_bursts(3, |i| secs[i], 20.0, MAX_FRAGS_PER_BURST),
+            vec![1, 2]
+        );
     }
 }
 
