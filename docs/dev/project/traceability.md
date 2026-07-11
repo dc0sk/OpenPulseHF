@@ -9,6 +9,30 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(discovery): FF-15 Phase D-1 — `Js8Clock` wall-clock T/R scheduler
+
+- **Requirement/change:** FF-15 Phase D (RX-only discovery MVP, plan §6.3): the wall-clock scheduler — map
+  UTC epoch time to a JS8 slot index/phase, carry a drift bias, and gate TX when the clock is too far off.
+  Nothing in the daemon is UTC-slot-aligned today (the closest, `StationIdTimer`, is interval-based).
+- **Design decision:** keep it **pure** — `Js8Clock` takes `now_ms` (UTC epoch millis), so the daemon owns the
+  `SystemTime` read and the unit stays deterministically testable. Slot geometry comes from the submode params
+  (NORMAL = 15 000 ms, 500 ms start delay); a `drift_bias_ms` (the running median of decode `dt`s, plan §2.3)
+  shifts every reading; `tx_allowed(max_skew_ms)` enforces the ±2 s JS8 tolerance (plan D5 — RX-only degrade
+  beyond it). Added a `SlotTracker` that fires once per slot boundary so the daemon can close out each dwell
+  window. SlotPlan TX cadence is Phase E (this MVP is RX-only).
+- **Implementation:** `crates/openpulse-discovery/src/scheduler.rs` (`Js8Clock`, `SlotTracker`); `js8-plugin`
+  dep added; `lib.rs` module + re-exports.
+- **Tests:** `scheduler.rs` (4) — 15 s slots index UTC (`:00/:15/:45`) + phase; `next_slot_start_ms` /
+  `tx_start_ms` (slot + start delay); drift bias shifts the slot and gates TX at ±2 s; `SlotTracker` fires once
+  per boundary.
+- **Test results (actually run):** `openpulse-discovery` 8 passed / 0 failed (4 new); clippy `-D warnings` +
+  fmt clean.
+- **Next:** D-2 `StationTable` + `Js8Station`/`OphfHint` records (TTL sweep, upsert from decodes), D-3 the
+  `PeerCache` mapping + capability-bit registry, D-4 the discovery state machine, then D-5 the daemon dwell-ring
+  glue + twin RX test.
+
+---
+
 ## 2026-07-11 — feat(discovery): FF-15 Phase C-3 — `@OPULSE` capability hint codec
 
 - **Requirement/change:** FF-15 Phase C (plan §3.2/§5.4): the in-band `@OPULSE` marker that lets one OpenPulse
