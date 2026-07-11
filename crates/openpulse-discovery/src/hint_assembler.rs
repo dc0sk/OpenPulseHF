@@ -13,7 +13,7 @@
 //! Huffman table and stock JS8Call decodes it), so only the Huffman data path is consumed here; a
 //! JSC-compressed data frame is ignored (general free-text decode is a separate follow-on).
 
-use js8_plugin::{unpack_compound_frame, unpack_data_message, unpack_grid, DataText, FrameType};
+use js8_plugin::{unpack_compound_frame, unpack_data_message, unpack_grid, FrameType};
 
 use crate::hint::{decode_hint, HintPayload, OPULSE_GROUP};
 
@@ -138,7 +138,7 @@ impl HintAssembler {
                 FrameType::CompoundDirected => p.target_group = Some(cf.callsign),
                 _ => {}
             }
-        } else if let Some(DataText::Huffman(t)) = unpack_data_message(payload9) {
+        } else if let Some(t) = unpack_data_message(payload9) {
             if p.text.len() + t.len() <= MAX_TEXT_LEN {
                 p.text.push_str(&t);
             }

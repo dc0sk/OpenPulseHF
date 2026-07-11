@@ -5,7 +5,7 @@
 //! plan §2.4). Its 72 bits are `[data_flag:1][compressed:1][content..][0][1..pad]`: the leading `1`
 //! marks a data frame, the next bit picks the coder, the content runs until a single `0` pad marker
 //! followed by all-ones. `compressed = 0` is Huffman (this module); `compressed = 1` is the JSC
-//! word-dictionary coder (262k-entry codebook — a separate follow-on; [`DataText::JscUnsupported`]).
+//! word-dictionary coder ([`crate::jsc`]). Both decode to free text.
 //!
 //! Ported and validated against the verbatim upstream `Varicode::unpackDataMessage` /
 //! `Varicode::huffDecode` compiled against real Qt5 (see the `tests` module ground-truth vectors).
@@ -59,15 +59,6 @@ pub const HUFF_TABLE: &[(char, &str)] = &[
     ('/', "11101010"),
 ];
 
-/// The free text a data frame carries, or the marker that it uses the not-yet-ported JSC coder.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DataText {
-    /// Huffman-decoded free text (`compressed = 0`).
-    Huffman(String),
-    /// A JSC-compressed data frame (`compressed = 1`); the 262k-entry codebook decode is a follow-on.
-    JscUnsupported,
-}
-
 /// Expand a 9-byte payload into its 72 bits, MSB-first within each byte.
 fn bits72(p: &[u8; 9]) -> [bool; 72] {
     let mut bits = [false; 72];
@@ -101,9 +92,10 @@ pub fn huff_decode(bits: &[bool]) -> String {
     out
 }
 
-/// Decode a 72-bit data-frame payload (JS8Call `Varicode::unpackDataMessage`). Returns `None` if the
-/// payload is not a data frame (top bit clear), or the free text / a JSC marker otherwise.
-pub fn unpack_data_message(p: &[u8; 9]) -> Option<DataText> {
+/// Decode a 72-bit data-frame payload to its free text (JS8Call `Varicode::unpackDataMessage`).
+/// Returns `None` if the payload is not a data frame (top bit clear), else the Huffman- or
+/// JSC-decoded text per the `compressed` bit.
+pub fn unpack_data_message(p: &[u8; 9]) -> Option<String> {
     let bits = bits72(p);
     if !bits[0] {
         return None; // not a data frame (the `isData` gate)
@@ -113,12 +105,13 @@ pub fn unpack_data_message(p: &[u8; 9]) -> Option<DataText> {
 
     // `n` = lastIndexOf(0) in b71 — the single `0` pad marker before the all-ones tail.
     let n = (0..71).rev().find(|&k| !bits[1 + k])?;
-    if compressed {
-        return Some(DataText::JscUnsupported);
-    }
     // content = b71.mid(1, n-1) == b71[1..n] == bits[2..=n].
     let content: Vec<bool> = (1..n).map(|k| bits[1 + k]).collect();
-    Some(DataText::Huffman(huff_decode(&content)))
+    Some(if compressed {
+        crate::jsc::jsc_decompress(&content)
+    } else {
+        huff_decode(&content)
+    })
 }
 
 #[cfg(test)]
@@ -145,25 +138,8 @@ mod tests {
         ] {
             assert_eq!(
                 unpack_data_message(&hex9(hex)),
-                Some(DataText::Huffman(want.to_string())),
+                Some(want.to_string()),
                 "huffman decode of {hex}"
-            );
-        }
-    }
-
-    #[test]
-    fn jsc_compressed_frames_are_flagged_unsupported() {
-        // (payload9) from upstream where JSC won the huff/JSC size race (comp=1).
-        for hex in [
-            "e618e081581fffffff", // "OPHF1"
-            "de2e14ffffffffffff", // "HELLO"
-            "ed8e4c13ffffffffff", // "3D4"
-            "eb622448a6491fffff", // "ABCDEFGHIJK"
-        ] {
-            assert_eq!(
-                unpack_data_message(&hex9(hex)),
-                Some(DataText::JscUnsupported),
-                "JSC frame {hex}"
             );
         }
     }

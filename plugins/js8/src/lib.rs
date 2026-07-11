@@ -16,6 +16,7 @@ pub mod decoder;
 pub mod demodulate;
 pub mod frame;
 pub mod grammar;
+pub mod jsc;
 pub mod ldpc174;
 pub mod message;
 pub mod modulate;
@@ -34,6 +35,7 @@ pub use grammar::{
     parse_heartbeat, unpack_compound_frame, unpack_directed_message, CompoundFrame,
     DirectedMessage, FrameType, Heartbeat,
 };
+pub use jsc::jsc_decompress;
 pub use ldpc174::{bp_decode, BpDecode};
 pub use message::{js8_info_bits, js8_message_crc12};
 pub use modulate::{modulate_tones, GfskParams};
@@ -41,4 +43,4 @@ pub use plugin::Js8Plugin;
 pub use submode::{params_for_mode, Submode, SubmodeParams};
 pub use sync::{find_sync, SyncCandidate};
 pub use tones::{codeword_to_tones, message_to_tones};
-pub use varicode::{huff_decode, unpack_data_message, DataText, HUFF_TABLE};
+pub use varicode::{huff_decode, unpack_data_message, HUFF_TABLE};

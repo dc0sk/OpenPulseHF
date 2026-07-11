@@ -162,8 +162,15 @@ buys us general third-party free-text (the secondary INFO-token path and reading
   `openpulse-panel` (Enable/Disable/Refresh + live station and OpenPulse-peer tables), driven by the
   `DiscoveryStatus`/`StationList`/`PeerList` events (reducer unit-tested; view build-verified).
 
-**Still to wire:** JSC decode (the 262k codebook → general third-party free text + the secondary
-INFO-token hint path) — not needed for the hint itself (the beacon is Huffman-framed).
+- JSC decode (`plugins/js8/src/jsc.rs`): the full 262 144-entry JSC codebook (zlib-compressed ~1.1 MB
+  blob, ported from GPL-3.0 `jsc_map.cpp`) + `jsc_decompress`, wired into `unpack_data_message`'s
+  `compressed = 1` branch. Completes the JS8 free-text decoder (Huffman **and** JSC), so recognition
+  no longer depends on Huffman-forced beacons and the passive INFO-token hint path (overheard INFO
+  replies, which stock stations JSC-pack) is decodable. Validated against Qt5 ground-truth vectors
+  across the codebook range (single chars → index-220k words).
+
+**Discovery RX + operator surface is complete.** The forward roadmap (Phase E beacon TX, F rendezvous,
+H on-air) is TX-side and gated on the §97.221 automatic-control regulatory documentation.
 
 ### 3.3 What the hint can and cannot carry
 
