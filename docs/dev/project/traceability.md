@@ -9,6 +9,27 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 Phase A-7 — message-bit assembly (payload+flags+CRC → 87 info bits)
+
+- **Requirement/change:** FF-15 Phase A: the `genjs8.f90` head — turn a 72-bit payload + 3-bit transmission
+  flags into the 87 LDPC info bits, protected by the JS8 message CRC-12.
+- **Design decision:** port the exact `genjs8` layout — CRC-12 over the 11-byte buffer
+  `[payload(72) | i3bit<<5 | 0]`, XORed with 42, then info bits `[payload(72) | i3bit(3) | crc(12)]`.
+  Validate the CRC (the only non-trivial part) **against ground truth from a g++ harness that replicates the
+  `genjs8` byte assembly around the real `boost::augmented_crc<12, 0xc06>`** — so the message CRC is anchored
+  to upstream Boost, not just self-consistency. The *semantic* packing of callsign/grid/command into the
+  72-bit payload (`packCompoundFrame`) is the message-grammar layer (plan Phase C), not the TX waveform core.
+- **Implementation:** `plugins/js8/src/message.rs` (`js8_message_crc12`, `js8_info_bits`); `lib.rs` module +
+  re-exports.
+- **Tests:** `message.rs` (4) — **12 CRC ground-truth vectors**; all-zero payload → the bare XOR (`0x02a` =
+  42); info-bit layout is payload‖flags‖crc; the assembled 87 bits → `message_to_tones` → `tones_to_codeword`
+  is **parity-valid** (`H·c = 0`), exercising the full CRC→LDPC→tones chain end to end.
+- **Test results (actually run):** `js8-plugin` 35 passed / 0 failed (4 new); clippy `-D warnings` + fmt clean.
+- **Next:** the `ModulationPlugin` impl (packed message bytes → `js8_info_bits` → `message_to_tones` →
+  `modulate_tones` audio) + daemon registration, then Phase-C message grammar/hint and Phase-B RX decoder.
+
+---
+
 ## 2026-07-11 — feat(js8): FF-15 Phase A-6 — tone assembly (codeword → 79 symbols)
 
 - **Requirement/change:** FF-15 Phase A: bridge the LDPC codeword (A-3) to the GFSK modulator (A-2) — map
