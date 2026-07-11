@@ -9,6 +9,30 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 Phase A-4 — CRC-12 primitive (boost-exact, vector-gated)
+
+- **Requirement/change:** FF-15 Phase A: the 12-bit CRC that turns JS8's 75-bit message into the 87 info
+  bits the LDPC(174,87) code encodes. Upstream (`lib/crc12.cpp`) uses `boost::augmented_crc<12, 0xc06>`, an
+  unreflected MSB-first modulo-2 division with the check bits augmented in (appending the CRC divides the
+  word to zero). In the prior checkpoint I flagged CRC-12 as needing ground truth (self-consistency alone is
+  weak — two internally-consistent CRCs can disagree on the wire).
+- **Design decision:** the sandbox has g++ + Boost, so **compile the real `boost::augmented_crc<12, 0xc06>`
+  and emit ground-truth (buffer → CRC) vectors**, then port a Rust `augmented_crc12` and validate bit-exactly
+  against those 20 vectors — turning the earlier caveat into a solved, upstream-anchored gate. Also verify the
+  Boost augmented self-check invariant (append the 12-bit CRC into the trailing 12 bits → whole buffer CRCs to
+  zero), independently confirmed with a second g++ harness. The JS8 composite (11-byte `genjs8.f90` assembly +
+  `XOR 42`) is deferred to the frame-assembly unit, where the payload/flag layout it needs lives; constants
+  `CRC12_POLY`/`JS8_CRC12_XOR` are exposed for it.
+- **Implementation:** `plugins/js8/src/crc.rs` (`augmented_crc12`, `CRC12_POLY`, `JS8_CRC12_XOR`); `lib.rs`
+  module + re-export. (Reference generators were throwaway g++ harnesses, not committed.)
+- **Tests:** `crc.rs` (3) — **20 boost ground-truth vectors** (lengths 1–22); empty/all-zero → 0; the
+  append-CRC-divides-to-zero invariant.
+- **Test results (actually run):** `js8-plugin` 22 passed / 0 failed (3 new); clippy `-D warnings` + fmt clean.
+- **Next:** frame packing (`packCallsign` 28-bit EME-2000 / `packGrid` 15-bit / `packCmd`) + the JS8 message
+  assembly (payload+flags+CRC-12 → 87 info bits → LDPC → Gray/Costas tones), then the `reference_vectors` gate.
+
+---
+
 ## 2026-07-11 — feat(js8): FF-15 Phase A-3 — LDPC(174,87) encoder + parity tables
 
 - **Requirement/change:** FF-15 Phase A (`docs/dev/design/js8-discovery-rendezvous-plan.md` §2.1, §4.2,
