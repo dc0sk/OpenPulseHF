@@ -19,6 +19,7 @@ pub mod message;
 pub mod modulate;
 pub mod plugin;
 pub mod submode;
+pub mod sync;
 pub mod tones;
 
 pub use costas::CostasKind;
@@ -30,4 +31,5 @@ pub use message::{js8_info_bits, js8_message_crc12};
 pub use modulate::{modulate_tones, GfskParams};
 pub use plugin::Js8Plugin;
 pub use submode::{params_for_mode, Submode, SubmodeParams};
+pub use sync::{find_sync, SyncCandidate};
 pub use tones::{codeword_to_tones, message_to_tones};
