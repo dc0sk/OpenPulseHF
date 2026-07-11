@@ -239,6 +239,9 @@ pub struct RuntimeControlState {
     /// JS8 calling frequency (Hz) per band label (from `[discovery]` config). Discovery dwells on the
     /// entry for the operator's current home band; empty when discovery is not configured.
     pub discovery_calling_freqs_hz: std::collections::BTreeMap<String, u64>,
+    /// Rendezvous working channels (Hz) per band label (from `[discovery]` config). A rendezvous agrees
+    /// a channel **index** into the current band's list; the daemon resolves it to Hz for the QSY.
+    pub discovery_rendezvous_channels_hz: std::collections::BTreeMap<String, Vec<u64>>,
     /// Shared peer cache (§5.2): recognized OpenPulse peers mapped from discovery's hinted stations,
     /// queryable by capability/quality/trust for rendezvous, relay routing, and peer queries.
     pub peer_cache: openpulse_core::peer_cache::PeerCache,
@@ -328,6 +331,7 @@ impl Default for RuntimeControlState {
             discovery: None,
             discovery_home_freq_hz: None,
             discovery_calling_freqs_hz: std::collections::BTreeMap::new(),
+            discovery_rendezvous_channels_hz: std::collections::BTreeMap::new(),
             peer_cache: openpulse_core::peer_cache::PeerCache::new(256, 3_600_000),
         }
     }
@@ -2100,6 +2104,13 @@ pub async fn apply_command_to_engine(
         }
         ControlCommand::EnableDiscovery => set_discovery_enabled(true, runtime_state, event_tx),
         ControlCommand::DisableDiscovery => set_discovery_enabled(false, runtime_state, event_tx),
+        ControlCommand::RendezvousWith { callsign } => {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            start_rendezvous_cmd(callsign, runtime_state, event_tx, now_ms);
+        }
         ControlCommand::ListStations => emit_station_list(runtime_state, event_tx),
         ControlCommand::ListPeers => {
             let now_ms = std::time::SystemTime::now()
@@ -2166,6 +2177,50 @@ fn set_discovery_enabled(
         let _ = rt.set_enabled(on); // outcome execution (retune) happens in the rx-tick loop
     }
     emit_discovery_status(runtime_state, event_tx);
+}
+
+/// Slots to wait for a rendezvous reply before timing out (`N × 15 s` for NORMAL; 8 ≈ 2 min).
+const RENDEZVOUS_TIMEOUT_SLOTS: u64 = 8;
+
+/// A short (2-char base-36) rendezvous session token derived from the current time.
+fn rendezvous_token(now_ms: u64) -> String {
+    const B36: &[u8; 36] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let v = (now_ms % (36 * 36)) as usize;
+    let bytes = [B36[v / 36], B36[v % 36]];
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// Handle `RendezvousWith`: propose the current band's working channels to `peer` over JS8. Errors when
+/// discovery is not configured, has no channels for the band, or is not in a TX-capable mode.
+fn start_rendezvous_cmd(
+    peer: &str,
+    runtime_state: &mut RuntimeControlState,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+    now_ms: u64,
+) {
+    let err = |reason: &str| {
+        let _ = event_tx.send(ControlEvent::CommandError {
+            command: "rendezvous_with".to_string(),
+            reason: reason.to_string(),
+        });
+    };
+    let Some(dial) = runtime_state.discovery.as_ref().map(|d| d.dial_freq_hz()) else {
+        return err("JS8 discovery is not configured ([discovery] enabled = false)");
+    };
+    let channels: Vec<u8> = openpulse_qsy::bandplan::band_label_for_hz(dial)
+        .and_then(|label| runtime_state.discovery_rendezvous_channels_hz.get(label))
+        .map(|v| (0..v.len().min(u8::MAX as usize) as u8).collect())
+        .unwrap_or_default();
+    if channels.is_empty() {
+        return err("no rendezvous channels configured for the current band");
+    }
+    let token = rendezvous_token(now_ms);
+    if let Some(rt) = runtime_state.discovery.as_mut() {
+        rt.start_rendezvous(peer, &token, channels, RENDEZVOUS_TIMEOUT_SLOTS);
+        if !rt.rendezvous_active() {
+            err("rendezvous requires a configured callsign and beacon/full discovery mode");
+        }
+    }
 }
 
 /// Handle `ListStations`: emit a `StationList` from the discovery table (empty when unconfigured).
@@ -3901,6 +3956,101 @@ mod command_apply_tests {
         let mut state = RuntimeControlState::default();
         let fired = check_ptt_watchdog(&mut state, &ev_tx);
         assert!(!fired, "watchdog must not fire when PTT is not active");
+    }
+
+    #[test]
+    fn rendezvous_token_is_two_base36_chars() {
+        let t = rendezvous_token(1_700_000_123_456);
+        assert_eq!(t.len(), 2);
+        assert!(t
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit()));
+    }
+
+    /// A discovery runtime in `tx_mode` with `callsign`, dwelling on the 20 m calling channel.
+    fn discovery_rs(tx_mode: openpulse_discovery::TxMode, callsign: &str) -> RuntimeControlState {
+        use openpulse_discovery::{DiscoveryParams, DiscoveryRuntime, Submode};
+        RuntimeControlState {
+            discovery_rendezvous_channels_hz: [(
+                "20m".to_string(),
+                vec![14_101_000, 14_103_000, 14_105_000],
+            )]
+            .into_iter()
+            .collect(),
+            discovery: Some(DiscoveryRuntime::new(DiscoveryParams {
+                enabled: true,
+                idle_grace_ms: 0,
+                dwell_ms: 0,
+                station_ttl_ms: 3_600_000,
+                submode: Submode::Normal,
+                calling_freq_hz: 14_078_000, // 20 m
+                tx_mode,
+                callsign: callsign.into(),
+                grid: "JN58".into(),
+                hint: None,
+                heartbeat_interval_slots: 8,
+                hint_interval_beacons: 0,
+                tx_offset_hz: 1500.0,
+                max_clock_skew_ms: 2000,
+            })),
+            ..RuntimeControlState::default()
+        }
+    }
+
+    fn drain_command_errors(rx: &mut broadcast::Receiver<ControlEvent>) -> Vec<String> {
+        let mut errs = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            if let ControlEvent::CommandError { command, .. } = e {
+                errs.push(command);
+            }
+        }
+        errs
+    }
+
+    #[test]
+    fn rendezvous_with_starts_a_proposal_when_configured() {
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+        let mut rs = discovery_rs(openpulse_discovery::TxMode::Full, "DC0SK");
+        start_rendezvous_cmd("KN4CRD", &mut rs, &ev, 1_700_000_000_000);
+        assert!(
+            rs.discovery.as_ref().unwrap().rendezvous_active(),
+            "a proposal is in flight"
+        );
+        assert!(
+            drain_command_errors(&mut rx).is_empty(),
+            "no error on the happy path"
+        );
+    }
+
+    #[test]
+    fn rendezvous_with_errors_when_discovery_is_unconfigured() {
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+        let mut rs = RuntimeControlState::default(); // discovery: None
+        start_rendezvous_cmd("KN4CRD", &mut rs, &ev, 1_700_000_000_000);
+        assert_eq!(drain_command_errors(&mut rx), vec!["rendezvous_with"]);
+    }
+
+    #[test]
+    fn rendezvous_with_errors_without_channels_for_the_band() {
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+        let mut rs = discovery_rs(openpulse_discovery::TxMode::Full, "DC0SK");
+        rs.discovery_rendezvous_channels_hz.clear(); // no table for 20 m
+        start_rendezvous_cmd("KN4CRD", &mut rs, &ev, 1_700_000_000_000);
+        assert_eq!(drain_command_errors(&mut rx), vec!["rendezvous_with"]);
+        assert!(!rs.discovery.as_ref().unwrap().rendezvous_active());
+    }
+
+    #[test]
+    fn rendezvous_with_errors_without_a_callsign() {
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+        let mut rs = discovery_rs(openpulse_discovery::TxMode::Full, ""); // no callsign → TX gated
+        start_rendezvous_cmd("KN4CRD", &mut rs, &ev, 1_700_000_000_000);
+        assert_eq!(drain_command_errors(&mut rx), vec!["rendezvous_with"]);
+        assert!(!rs.discovery.as_ref().unwrap().rendezvous_active());
     }
 }
 

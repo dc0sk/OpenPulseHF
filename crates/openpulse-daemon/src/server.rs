@@ -534,8 +534,10 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
         ),
         discovery: build_discovery_runtime(&cfg),
         discovery_calling_freqs_hz: cfg.discovery.calling_freqs_hz.clone(),
+        discovery_rendezvous_channels_hz: cfg.discovery.rendezvous_channels_hz.clone(),
         ..RuntimeControlState::default()
     };
+    validate_rendezvous_channels(&cfg);
     if cfg.logbook.enabled {
         tracing::info!(path = %cfg.logbook.adif_path, "ADIF logbook enabled");
     }
@@ -1063,6 +1065,25 @@ fn build_discovery_runtime(
     }))
 }
 
+/// Startup bandplan gate for the rendezvous channel table: log a warning for any configured working
+/// frequency the default bandplan flags (out of band / wrong segment). Advisory only — the operator's
+/// channels are honoured; this surfaces a likely misconfiguration before it is used on air.
+fn validate_rendezvous_channels(cfg: &openpulse_config::OpenpulseConfig) {
+    let policy = openpulse_qsy::bandplan::BandplanPolicy::default();
+    for (band, freqs) in &cfg.discovery.rendezvous_channels_hz {
+        for (idx, &hz) in freqs.iter().enumerate() {
+            if let Err(e) = policy.validate_frequency(hz, "DATA") {
+                tracing::warn!(
+                    band = %band,
+                    index = idx,
+                    freq_hz = hz,
+                    "rendezvous channel fails the bandplan check: {e}"
+                );
+            }
+        }
+    }
+}
+
 /// Retune the rig to `hz` (no rig / loopback counts as success).
 fn discovery_retune(rig: &mut Option<&mut (dyn CatController + Send)>, hz: u64) -> bool {
     match rig.as_mut() {
@@ -1083,7 +1104,7 @@ fn discovery_tick(
 ) -> Option<(Vec<f32>, String)> {
     use openpulse_discovery::DiscoveryOutcome as O;
     runtime_state.discovery.as_ref()?; // nothing to do without a discovery runtime
-    // Simplified idle predicate (plan §4.3): the modem is free of any session/handshake/transfer.
+                                       // Simplified idle predicate (plan §4.3): the modem is free of any session/handshake/transfer.
     let idle = engine.hpx_state() == openpulse_core::hpx::HpxState::Idle
         && runtime_state.pending_handshake.is_none()
         && runtime_state.file_rx.is_none()
@@ -1092,20 +1113,46 @@ fn discovery_tick(
     // While inactive, target the JS8 calling frequency for the operator's current home band, so
     // activation QSYs within-band instead of always to 20 m. `last_freq_hz` is the home dial while
     // inactive (it becomes the JS8 freq once dwelling, so only refresh before activation).
-    let per_band_freq = (runtime_state.discovery.as_ref().map(|d| d.state())
-        == Some(openpulse_discovery::DiscoveryState::Inactive))
-    .then(|| {
-        runtime_state
-            .last_freq_hz
-            .and_then(openpulse_qsy::bandplan::band_label_for_hz)
-            .and_then(|label| runtime_state.discovery_calling_freqs_hz.get(label).copied())
-    })
-    .flatten();
+    let inactive = runtime_state.discovery.as_ref().map(|d| d.state())
+        == Some(openpulse_discovery::DiscoveryState::Inactive);
+    let home_band = inactive
+        .then(|| {
+            runtime_state
+                .last_freq_hz
+                .and_then(openpulse_qsy::bandplan::band_label_for_hz)
+        })
+        .flatten();
+    let per_band_freq =
+        home_band.and_then(|label| runtime_state.discovery_calling_freqs_hz.get(label).copied());
+    // The responder's usable rendezvous channels are the indices of the home band's working-channel
+    // table (empty ⇒ any inbound proposal is rejected `NoCommonFreq`).
+    let per_band_channels: Option<Vec<u8>> = home_band.map(|label| {
+        let n = runtime_state
+            .discovery_rendezvous_channels_hz
+            .get(label)
+            .map_or(0, |v| v.len().min(u8::MAX as usize));
+        (0..n as u8).collect()
+    });
+    // The working-channel table for the band we are dwelling on, to resolve an agreed channel index→Hz.
+    let dwell_channels: Option<Vec<u64>> = runtime_state
+        .discovery
+        .as_ref()
+        .map(|d| d.dial_freq_hz())
+        .and_then(openpulse_qsy::bandplan::band_label_for_hz)
+        .and_then(|label| {
+            runtime_state
+                .discovery_rendezvous_channels_hz
+                .get(label)
+                .cloned()
+        });
     // Decode (on slot boundaries) runs inside `tick`; `block_in_place` keeps the async loop responsive.
     let outcomes = tokio::task::block_in_place(|| {
         let rt = runtime_state.discovery.as_mut().expect("checked above");
         if let Some(hz) = per_band_freq {
             rt.set_dial_freq_hz(hz);
+        }
+        if let Some(ch) = per_band_channels {
+            rt.set_rendezvous_channels(ch);
         }
         rt.push_audio(raw_samples);
         rt.tick(now_ms, idle)
@@ -1153,6 +1200,45 @@ fn discovery_tick(
                     callsign,
                     grid: grid.unwrap_or_default(),
                     is_new,
+                });
+            }
+            O::RendezvousAgreed {
+                peer,
+                channel,
+                switch_in_slots: _,
+            } => {
+                // Resolve the agreed channel index to Hz via the dwelling band's table. The QSY + CONREQ
+                // handoff (after the switch delay) is F-3c-iii; here we surface the agreement.
+                match dwell_channels
+                    .as_ref()
+                    .and_then(|v| v.get(channel as usize))
+                    .copied()
+                {
+                    Some(freq_hz) => {
+                        let _ = event_tx.send(crate::protocol::ControlEvent::RendezvousAgreed {
+                            peer,
+                            freq_hz,
+                        });
+                    }
+                    None => {
+                        tracing::warn!(peer = %peer, channel, "rendezvous agreed on an unknown channel index");
+                        let _ = event_tx.send(crate::protocol::ControlEvent::RendezvousFailed {
+                            peer,
+                            reason: "agreed channel index has no configured frequency".to_string(),
+                        });
+                    }
+                }
+            }
+            O::RendezvousRejected { peer, reason } => {
+                let _ = event_tx.send(crate::protocol::ControlEvent::RendezvousFailed {
+                    peer,
+                    reason: format!("peer declined ({reason:?})"),
+                });
+            }
+            O::RendezvousTimedOut { peer } => {
+                let _ = event_tx.send(crate::protocol::ControlEvent::RendezvousFailed {
+                    peer,
+                    reason: "no reply before timeout".to_string(),
                 });
             }
         }
@@ -1746,6 +1832,69 @@ mod discovery_tick_tests {
         let mut rs = RuntimeControlState::default(); // discovery: None
         discovery_tick(&mut rs, &engine, None, &ev, &[0.0; 1000], 1000);
         assert!(rx.try_recv().is_err(), "no events without discovery");
+    }
+
+    /// Audio for one frame of a directed over at 1500 Hz.
+    fn directed_frame_audio(f: &js8_plugin::BeaconFrame) -> Vec<f32> {
+        js8_plugin::beacon::frame_audio(f, 1500.0, js8_plugin::submode::Submode::Normal)
+    }
+
+    #[test]
+    fn discovery_tick_responds_to_a_proposal_and_emits_rendezvous_agreed() {
+        let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        let _ = &mut engine;
+        let (tx, mut rx) = tokio::sync::broadcast::channel::<ControlEvent>(64);
+        let ev = std::sync::Arc::new(tx);
+        let mut rs = RuntimeControlState {
+            last_freq_hz: Some(14_074_000), // 20 m home
+            discovery_rendezvous_channels_hz: [(
+                "20m".to_string(),
+                vec![14_101_000, 14_103_000, 14_105_000],
+            )]
+            .into_iter()
+            .collect(),
+            discovery: Some(DiscoveryRuntime::new(DiscoveryParams {
+                enabled: true,
+                idle_grace_ms: 0,
+                dwell_ms: 0,
+                station_ttl_ms: 3_600_000,
+                submode: Submode::Normal,
+                calling_freq_hz: 14_078_000,
+                tx_mode: TxMode::Full, // responder role on
+                callsign: "DC0SK".into(),
+                grid: "JN58".into(),
+                hint: None,
+                heartbeat_interval_slots: 10_000, // never beacon during the test
+                hint_interval_beacons: 0,
+                tx_offset_hz: 1500.0,
+                max_clock_skew_ms: 2000,
+            })),
+            ..RuntimeControlState::default()
+        };
+
+        // Activate → dwell (sets the responder's available channels from the 20 m table).
+        discovery_tick(&mut rs, &engine, None, &ev, &[], 1000);
+        assert_eq!(
+            rs.discovery.as_ref().unwrap().state(),
+            DiscoveryState::Dwelling
+        );
+
+        // KN4CRD proposes channels 1 then 0; both are available → agree on index 1 = 14_103_000.
+        let frames = js8_plugin::directed("KN4CRD", "JN58", "DC0SK", "OPHF QSY? R7 C1 C0");
+        let mut t = 1000u64;
+        for f in &frames {
+            discovery_tick(&mut rs, &engine, None, &ev, &directed_frame_audio(f), t);
+            t += 15_000;
+            discovery_tick(&mut rs, &engine, None, &ev, &[], t);
+        }
+
+        let mut agreed = None;
+        while let Ok(e) = rx.try_recv() {
+            if let ControlEvent::RendezvousAgreed { peer, freq_hz } = e {
+                agreed = Some((peer, freq_hz));
+            }
+        }
+        assert_eq!(agreed, Some(("KN4CRD".to_string(), 14_103_000)));
     }
 }
 

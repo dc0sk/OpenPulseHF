@@ -281,6 +281,21 @@ pub enum ControlEvent {
     StationList { stations: Vec<StationSummary> },
     /// Response to [`ControlCommand::ListPeers`] (requesting client only).
     PeerList { peers: Vec<PeerSummary> },
+    /// A rendezvous with `peer` succeeded; both stations QSY to `freq_hz` and start the signed session
+    /// (FF-15 Phase F).
+    RendezvousAgreed {
+        /// The peer callsign.
+        peer: String,
+        /// The agreed working frequency (Hz), resolved from the per-band channel table.
+        freq_hz: u64,
+    },
+    /// A rendezvous with `peer` did not complete (peer rejected, or the proposal timed out).
+    RendezvousFailed {
+        /// The peer callsign.
+        peer: String,
+        /// A short human-readable reason.
+        reason: String,
+    },
 }
 
 /// Summary of a received file (for [`ControlEvent::FileList`]).
@@ -429,6 +444,10 @@ pub enum ControlCommand {
     ListStations,
     /// List recognized OpenPulse peers from the shared cache. Server responds with [`ControlEvent::PeerList`].
     ListPeers,
+    /// Begin a rendezvous with a discovered peer (FF-15 Phase F): propose the current band's working
+    /// channels over JS8 and, on the peer's accept, QSY both stations and start the signed session.
+    /// Requires discovery in `beacon`/`full` mode with a configured callsign.
+    RendezvousWith { callsign: String },
 }
 
 /// Per-command response.
@@ -541,6 +560,9 @@ mod ota_protocol_tests {
             ControlCommand::DisableDiscovery,
             ControlCommand::ListStations,
             ControlCommand::ListPeers,
+            ControlCommand::RendezvousWith {
+                callsign: "KN4CRD".into(),
+            },
         ];
         for c in cmds {
             let j = serde_json::to_string(&c).unwrap();
@@ -576,6 +598,14 @@ mod ota_protocol_tests {
                     route_quality: 180,
                     trust_level: "unknown".into(),
                 }],
+            },
+            ControlEvent::RendezvousAgreed {
+                peer: "KN4CRD".into(),
+                freq_hz: 14_101_000,
+            },
+            ControlEvent::RendezvousFailed {
+                peer: "KN4CRD".into(),
+                reason: "no common frequency".into(),
             },
         ];
         for e in evs {
