@@ -241,7 +241,7 @@ Full spec in `docs/dev/design/testbench-design.md` and `docs/dev/benchmark-harne
 **2.4 — DCD and CSMA channel access** ✅ Done
 - `crates/openpulse-core/src/dcd.rs`: `DcdState` struct — RMS energy threshold, configurable hold window (default 100 ms at 8 kHz), `update(samples)`, `is_busy()`, `energy()`, `force_busy()`
 - `crates/openpulse-core/src/error.rs`: added `ModemError::ChannelBusy` variant
-- `crates/openpulse-modem/src/engine.rs`: DCD update wired into `receive()` after sample capture; 0.3-persistence CSMA check in `stage_emit_output()` (applies to all transmit paths); `enable_csma()`, `disable_csma()`, `is_channel_busy()`, `dcd_energy()` public API; `rand 0.8` added to `[dependencies]`
+- `crates/openpulse-modem/src/engine.rs`: DCD update wired into `receive()` after sample capture; 0.3-persistence `csma_check()` called at the head of each transmit path (pre-encode, to avoid burning a sequence number on deferral — including `broadcast()` as of the G-1 fix); `enable_csma()`, `disable_csma()`, `is_channel_busy()`, `dcd_energy()` public API; `rand 0.8` added to `[dependencies]`
 - Integration tests: `crates/openpulse-modem/tests/csma_loopback.rs` (4 tests)
   - DCD detects energy from received signal; CSMA blocks on busy channel; disabled CSMA ignores DCD; two-station deferral scenario
 
