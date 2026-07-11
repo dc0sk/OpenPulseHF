@@ -2508,15 +2508,6 @@ impl ModemEngine {
     ) -> Result<Vec<u8>, ModemError> {
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
-        let prev_busy = self.dcd.is_busy();
-        let now_busy = self.dcd.is_busy();
-        if now_busy != prev_busy {
-            let _ = self.event_tx.send(EngineEvent::DcdChange {
-                busy: now_busy,
-                energy: self.dcd.energy(),
-            });
-        }
-
         info!("received {} audio samples", samples.samples.len());
 
         let (wire, snr_opt) = {
@@ -2610,14 +2601,6 @@ impl ModemEngine {
         fec: FecMode,
     ) -> Result<Vec<u8>, ModemError> {
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
-
-        let prev_busy = self.dcd.is_busy();
-        if self.dcd.is_busy() != prev_busy {
-            let _ = self.event_tx.send(EngineEvent::DcdChange {
-                busy: self.dcd.is_busy(),
-                energy: self.dcd.energy(),
-            });
-        }
 
         let mod_cfg = ModulationConfig {
             mode: mode.to_string(),
@@ -2762,14 +2745,6 @@ impl ModemEngine {
     ) -> Result<(Vec<u8>, AckType), ModemError> {
         let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
-
-        let prev_busy = self.dcd.is_busy();
-        if self.dcd.is_busy() != prev_busy {
-            let _ = self.event_tx.send(EngineEvent::DcdChange {
-                busy: self.dcd.is_busy(),
-                energy: self.dcd.energy(),
-            });
-        }
 
         self.update_afc_estimate(mode, &samples.samples);
         if let Some(hz) = self.last_afc_offset_hz {
@@ -3098,14 +3073,6 @@ impl ModemEngine {
         let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
-        let prev_busy = self.dcd.is_busy();
-        if self.dcd.is_busy() != prev_busy {
-            let _ = self.event_tx.send(EngineEvent::DcdChange {
-                busy: self.dcd.is_busy(),
-                energy: self.dcd.energy(),
-            });
-        }
-
         let raw_wire = {
             let plugin = self
                 .plugins
@@ -3183,14 +3150,6 @@ impl ModemEngine {
     ) -> Result<Vec<u8>, ModemError> {
         let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
-
-        let prev_busy = self.dcd.is_busy();
-        if self.dcd.is_busy() != prev_busy {
-            let _ = self.event_tx.send(EngineEvent::DcdChange {
-                busy: self.dcd.is_busy(),
-                energy: self.dcd.energy(),
-            });
-        }
 
         let raw_wire = {
             let plugin = self
@@ -3277,14 +3236,6 @@ impl ModemEngine {
         let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
-        let prev_busy = self.dcd.is_busy();
-        if self.dcd.is_busy() != prev_busy {
-            let _ = self.event_tx.send(EngineEvent::DcdChange {
-                busy: self.dcd.is_busy(),
-                energy: self.dcd.energy(),
-            });
-        }
-
         let raw_wire = {
             let plugin = self
                 .plugins
@@ -3367,14 +3318,6 @@ impl ModemEngine {
         let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
-        let prev_busy = self.dcd.is_busy();
-        if self.dcd.is_busy() != prev_busy {
-            let _ = self.event_tx.send(EngineEvent::DcdChange {
-                busy: self.dcd.is_busy(),
-                energy: self.dcd.energy(),
-            });
-        }
-
         let llrs = {
             let plugin = self
                 .plugins
@@ -3453,14 +3396,6 @@ impl ModemEngine {
     ) -> Result<Vec<u8>, ModemError> {
         let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
-
-        let prev_busy = self.dcd.is_busy();
-        if self.dcd.is_busy() != prev_busy {
-            let _ = self.event_tx.send(EngineEvent::DcdChange {
-                busy: self.dcd.is_busy(),
-                energy: self.dcd.energy(),
-            });
-        }
 
         let raw_wire = {
             let plugin = self
@@ -3596,14 +3531,6 @@ impl ModemEngine {
         let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
-        let prev_busy = self.dcd.is_busy();
-        if self.dcd.is_busy() != prev_busy {
-            let _ = self.event_tx.send(EngineEvent::DcdChange {
-                busy: self.dcd.is_busy(),
-                energy: self.dcd.energy(),
-            });
-        }
-
         let llrs = {
             let plugin = self
                 .plugins
@@ -3697,14 +3624,6 @@ impl ModemEngine {
     ) -> Result<Vec<u8>, ModemError> {
         let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
-
-        let prev_busy = self.dcd.is_busy();
-        if self.dcd.is_busy() != prev_busy {
-            let _ = self.event_tx.send(EngineEvent::DcdChange {
-                busy: self.dcd.is_busy(),
-                energy: self.dcd.energy(),
-            });
-        }
 
         let llrs = {
             let plugin = self
@@ -4083,14 +4002,6 @@ impl ModemEngine {
         let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
-        let prev_busy = self.dcd.is_busy();
-        if self.dcd.is_busy() != prev_busy {
-            let _ = self.event_tx.send(EngineEvent::DcdChange {
-                busy: self.dcd.is_busy(),
-                energy: self.dcd.energy(),
-            });
-        }
-
         let wire = {
             let plugin = self
                 .plugins
@@ -4321,14 +4232,6 @@ impl ModemEngine {
         let samples = self.stage_capture_input(None, device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
-        let prev_busy = self.dcd.is_busy();
-        if self.dcd.is_busy() != prev_busy {
-            let _ = self.event_tx.send(EngineEvent::DcdChange {
-                busy: self.dcd.is_busy(),
-                energy: self.dcd.energy(),
-            });
-        }
-
         let mode = "FSK4-ACK";
         let wire = {
             let plugin = self
@@ -4432,14 +4335,6 @@ impl ModemEngine {
     ) -> Result<Vec<u8>, ModemError> {
         let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
-
-        let prev_busy = self.dcd.is_busy();
-        if self.dcd.is_busy() != prev_busy {
-            let _ = self.event_tx.send(EngineEvent::DcdChange {
-                busy: self.dcd.is_busy(),
-                energy: self.dcd.energy(),
-            });
-        }
 
         let wire = {
             let plugin = self

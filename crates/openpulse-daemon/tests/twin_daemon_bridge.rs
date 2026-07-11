@@ -138,12 +138,15 @@ async fn ota_ladder_steps_under_traffic_between_two_real_daemons() {
         + "\n";
 
     // Drive ~10 OTA sends and track the highest TX level OtaStatus reports.
-    let max_level = timeout(Duration::from_secs(40), async {
+    // Generous outer budget: this drives 10 real two-daemon OTA sends (~18 s isolated) and must not
+    // spuriously time out when the full suite runs it under concurrent CPU load — the assertion is on
+    // the ladder stepping, not on latency (audit finding S4-3).
+    let max_level = timeout(Duration::from_secs(120), async {
         let mut max_seen = 2u8; // SL2 floor
         for _ in 0..10 {
             a_write.write_all(send.as_bytes()).await.unwrap();
             // Read until the post-send OtaStatus (or any) reports a tx_level.
-            let round = timeout(Duration::from_secs(6), async {
+            let round = timeout(Duration::from_secs(11), async {
                 loop {
                     let mut buf = String::new();
                     if a_reader.read_line(&mut buf).await.unwrap() == 0 {
