@@ -797,7 +797,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 expire_pending_handshake(&mut runtime_state, &handle.event_tx);
                 // JS8 discovery (FF-15): feed the idle predicate + dwell audio, run the slot scheduler,
                 // and execute any retune / station-heard outcomes.
-                discovery_tick(
+                let due_beacon = discovery_tick(
                     &mut runtime_state,
                     &engine,
                     rig_controller.as_mut().map(|c| c as &mut (dyn CatController + Send)),
@@ -805,6 +805,11 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     &discovery_raw,
                     epoch_ms(),
                 );
+                // A due beacon frame is transmitted here, where the PTT controller + `&mut engine`
+                // live (half-duplex: key PTT, emit, release).
+                if let Some((audio, mode)) = due_beacon {
+                    transmit_beacon_with_ptt(&mut engine, &mut ptt_controller, &audio, &mode);
+                }
                 // Refresh live metrics so the periodic metrics task can broadcast real values.
                 {
                     let mut m = handle.shared_metrics.lock().await;
@@ -1010,15 +1015,18 @@ fn drain_filexfer_tx(
 fn build_discovery_runtime(
     cfg: &openpulse_config::OpenpulseConfig,
 ) -> Option<openpulse_discovery::DiscoveryRuntime> {
-    use openpulse_discovery::{DiscoveryParams, DiscoveryRuntime, Submode};
+    use openpulse_discovery::{
+        DiscoveryParams, DiscoveryRuntime, HintPayload, Submode, TxMode, CAP_HPX, CAP_QSY,
+        CAP_RENDEZVOUS,
+    };
     let d = &cfg.discovery;
-    // Only rx_only is honored today; beacon/full (TX) are Phase E — warn rather than silently ignore.
-    if !d.mode.trim().is_empty() && !d.mode.trim().eq_ignore_ascii_case("rx_only") {
-        tracing::warn!(
-            mode = %d.mode,
-            "[discovery] mode is RX-only for now — beacon/full (TX) are Phase E and not yet honored"
-        );
-    }
+    // Beacon/full opt into TX (Phase E, §97.221 doc in place); anything else is RX-only. TX also
+    // requires a callsign — an empty one keeps the station silent regardless of mode.
+    let tx_mode = match d.mode.trim().to_ascii_lowercase().as_str() {
+        "beacon" => TxMode::Beacon,
+        "full" => TxMode::Full,
+        _ => TxMode::RxOnly,
+    };
     let calling = d
         .calling_freqs_hz
         .get("20m")
@@ -1031,6 +1039,12 @@ fn build_discovery_runtime(
         "ultra" => Submode::Ultra,
         _ => Submode::Normal,
     };
+    // Advertise what this station can do; pref-channel none (63), NORMAL listen submode.
+    let hint = Some(HintPayload {
+        caps: CAP_HPX | CAP_RENDEZVOUS | CAP_QSY,
+        pref_channel: 63,
+        listen_submode: 0,
+    });
     Some(DiscoveryRuntime::new(DiscoveryParams {
         enabled: d.enabled,
         idle_grace_ms: d.idle_grace_secs.saturating_mul(1000),
@@ -1038,6 +1052,14 @@ fn build_discovery_runtime(
         station_ttl_ms: d.station_ttl_secs.saturating_mul(1000),
         submode,
         calling_freq_hz: calling,
+        tx_mode,
+        callsign: cfg.station.callsign.clone(),
+        grid: cfg.station.grid_square.clone(),
+        hint,
+        heartbeat_interval_slots: d.heartbeat_interval_slots.max(1) as u64,
+        hint_interval_beacons: d.hint_interval_beacons as u64,
+        tx_offset_hz: 1500.0,
+        max_clock_skew_ms: d.max_clock_skew_ms,
     }))
 }
 
@@ -1058,11 +1080,9 @@ fn discovery_tick(
     event_tx: &std::sync::Arc<tokio::sync::broadcast::Sender<crate::protocol::ControlEvent>>,
     raw_samples: &[f32],
     now_ms: u64,
-) {
+) -> Option<(Vec<f32>, String)> {
     use openpulse_discovery::DiscoveryOutcome as O;
-    if runtime_state.discovery.is_none() {
-        return;
-    }
+    runtime_state.discovery.as_ref()?; // nothing to do without a discovery runtime
     // Simplified idle predicate (plan §4.3): the modem is free of any session/handshake/transfer.
     let idle = engine.hpx_state() == openpulse_core::hpx::HpxState::Idle
         && runtime_state.pending_handshake.is_none()
@@ -1091,8 +1111,18 @@ fn discovery_tick(
         rt.tick(now_ms, idle)
     });
     let mut heard_peer = false;
+    let mut pending_beacon: Option<(Vec<f32>, String)> = None;
     for o in outcomes {
         match o {
+            O::TransmitBeacon { audio, mode } => {
+                // Direct DCD gate at the emit decision (not the 0.3-persistence CSMA, which would
+                // break slot alignment): defer the beacon if the channel is occupied.
+                if engine.is_channel_busy() {
+                    tracing::debug!("discovery: deferring beacon — channel busy");
+                } else {
+                    pending_beacon = Some((audio, mode));
+                }
+            }
             O::Retune { dial_freq_hz } => {
                 runtime_state.discovery_home_freq_hz = runtime_state.last_freq_hz;
                 let ok = discovery_retune(&mut rig, dial_freq_hz);
@@ -1131,6 +1161,9 @@ fn discovery_tick(
     if heard_peer {
         crate::sync_discovered_peers(runtime_state, now_ms);
     }
+    // Hand a due beacon frame back to the caller, which owns the PTT + `&mut engine` needed to key
+    // the transmitter and emit it (see `transmit_beacon_with_ptt`).
+    pending_beacon
 }
 
 /// UTC epoch milliseconds now.
@@ -1139,6 +1172,30 @@ fn epoch_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Key PTT, emit one JS8 beacon frame via the raw-audio seam, and release PTT. Any PTT/transmit error
+/// is logged and the beacon slot is skipped (never leaves the transmitter keyed).
+fn transmit_beacon_with_ptt(
+    engine: &mut ModemEngine,
+    ptt_controller: &mut Option<Box<dyn PttController>>,
+    audio: &[f32],
+    mode: &str,
+) {
+    if let Some(ptt) = ptt_controller {
+        if let Err(e) = ptt.assert_ptt() {
+            tracing::warn!("discovery beacon PTT assert failed: {e}");
+            return;
+        }
+    }
+    if let Err(e) = engine.transmit_raw_audio(audio, mode, None) {
+        tracing::warn!("discovery beacon transmit failed: {e}");
+    }
+    if let Some(ptt) = ptt_controller {
+        if let Err(e) = ptt.release_ptt() {
+            tracing::warn!("discovery beacon PTT release failed: {e}");
+        }
+    }
 }
 
 fn ota_send_with_ptt(
@@ -1414,7 +1471,8 @@ mod discovery_tick_tests {
     use super::*;
     use crate::protocol::ControlEvent;
     use openpulse_audio::LoopbackBackend;
-    use openpulse_discovery::{DiscoveryParams, DiscoveryRuntime, DiscoveryState, Submode};
+    use openpulse_discovery::{DiscoveryParams, DiscoveryRuntime, DiscoveryState, Submode, TxMode};
+    use openpulse_radio::PttController;
 
     /// A NORMAL slot of audio with one heartbeat (KN4CRD EM73) at 1500 Hz (C-2 upstream vector).
     fn heartbeat_slot() -> Vec<f32> {
@@ -1448,6 +1506,14 @@ mod discovery_tick_tests {
                 station_ttl_ms: 3_600_000,
                 submode: Submode::Normal,
                 calling_freq_hz: 14_078_000,
+                tx_mode: openpulse_discovery::TxMode::RxOnly,
+                callsign: String::new(),
+                grid: String::new(),
+                hint: None,
+                heartbeat_interval_slots: 8,
+                hint_interval_beacons: 3,
+                tx_offset_hz: 1500.0,
+                max_clock_skew_ms: 2000,
             })),
             ..RuntimeControlState::default()
         };
@@ -1510,6 +1576,51 @@ mod discovery_tick_tests {
     }
 
     #[test]
+    fn discovery_tick_transmits_a_beacon_in_beacon_mode() {
+        let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        let (tx, _rx) = tokio::sync::broadcast::channel::<ControlEvent>(64);
+        let ev = std::sync::Arc::new(tx);
+        let mut rs = RuntimeControlState {
+            last_freq_hz: Some(14_074_000),
+            discovery: Some(DiscoveryRuntime::new(DiscoveryParams {
+                enabled: true,
+                idle_grace_ms: 0,
+                dwell_ms: 0,
+                station_ttl_ms: 3_600_000,
+                submode: Submode::Normal,
+                calling_freq_hz: 14_078_000,
+                tx_mode: TxMode::Beacon,
+                callsign: "DC0SK".into(),
+                grid: "JN58".into(),
+                hint: None,
+                heartbeat_interval_slots: 2,
+                hint_interval_beacons: 0,
+                tx_offset_hz: 1500.0,
+                max_clock_skew_ms: 2000,
+            })),
+            ..RuntimeControlState::default()
+        };
+
+        discovery_tick(&mut rs, &engine, None, &ev, &[], 1000); // activate → dwell
+        let mut beacon = None;
+        let mut t = 1000u64;
+        for _ in 0..4 {
+            t += 15_000;
+            if let Some(b) = discovery_tick(&mut rs, &engine, None, &ev, &[], t) {
+                beacon = Some(b);
+            }
+        }
+        let (audio, mode) = beacon.expect("a heartbeat beacon is due in beacon mode");
+        assert_eq!(mode, "JS8-NORMAL");
+        assert!(!audio.is_empty());
+
+        // The daemon transmits it via the raw-audio seam (no PTT hardware in the test).
+        let mut ptt: Option<Box<dyn PttController>> = None;
+        transmit_beacon_with_ptt(&mut engine, &mut ptt, &audio, &mode);
+        assert_eq!(engine.raw_audio_frames_transmitted(), 1);
+    }
+
+    #[test]
     fn discovery_tick_recognizes_an_opulse_peer_into_the_shared_cache() {
         // The four Huffman-forced frames of `DC0SK: @OPULSE OPHF1 1FAX3AIT` (Qt5 ground truth).
         let frames = [
@@ -1530,6 +1641,14 @@ mod discovery_tick_tests {
                 station_ttl_ms: 3_600_000,
                 submode: Submode::Normal,
                 calling_freq_hz: 14_078_000,
+                tx_mode: openpulse_discovery::TxMode::RxOnly,
+                callsign: String::new(),
+                grid: String::new(),
+                hint: None,
+                heartbeat_interval_slots: 8,
+                hint_interval_beacons: 3,
+                tx_offset_hz: 1500.0,
+                max_clock_skew_ms: 2000,
             })),
             ..RuntimeControlState::default()
         };
@@ -1585,6 +1704,14 @@ mod discovery_tick_tests {
                 station_ttl_ms: 3_600_000,
                 submode: Submode::Normal,
                 calling_freq_hz: 14_078_000, // 20 m default, must be overridden
+                tx_mode: openpulse_discovery::TxMode::RxOnly,
+                callsign: String::new(),
+                grid: String::new(),
+                hint: None,
+                heartbeat_interval_slots: 8,
+                hint_interval_beacons: 3,
+                tx_offset_hz: 1500.0,
+                max_clock_skew_ms: 2000,
             })),
             ..RuntimeControlState::default()
         };

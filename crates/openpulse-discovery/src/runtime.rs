@@ -6,15 +6,35 @@
 //! slot boundary while dwelling it decodes the buffered slot, upserts every heard station, and emits
 //! `StationHeard`. This keeps the daemon glue (async loop, CAT retune, event plumbing) thin.
 
+use std::collections::VecDeque;
+
+use js8_plugin::beacon::{frame_audio, heartbeat, opulse_hint, BeaconFrame};
 use js8_plugin::decoder::{decode_window, DecodeCfg, Js8Decode};
 use js8_plugin::grammar::{parse_heartbeat, unpack_compound_frame};
 use js8_plugin::submode::{params, Submode};
 
 use crate::discovery_sm::{DiscoveryAction, DiscoveryEvent, DiscoverySm, DiscoveryState};
-use crate::hint::HINT_VERSION;
+use crate::hint::{encode_hint, HintPayload, HINT_VERSION};
 use crate::hint_assembler::HintAssembler;
 use crate::scheduler::{Js8Clock, SlotTracker};
 use crate::station::{Observation, OphfHint, StationTable};
+
+/// Beacon-TX policy (plan §8). `RxOnly` transmits nothing; `Beacon`/`Full` opt into heartbeat + hint TX.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TxMode {
+    /// No transmission at all (the default).
+    #[default]
+    RxOnly,
+    /// Periodic `@HB` heartbeats + `@OPULSE` capability hints.
+    Beacon,
+    /// Beacon plus (future) directed queries + rendezvous responder.
+    Full,
+}
+
+/// The JS8 mode label used for the regulatory TX log.
+fn js8_mode_label(submode: Submode) -> String {
+    format!("JS8-{submode:?}").to_uppercase()
+}
 
 /// Audio-offset tolerance (Hz) for bucketing an over's frames — just under one NORMAL tone spacing.
 const HINT_FREQ_TOL_HZ: f32 = 6.0;
@@ -36,6 +56,22 @@ pub struct DiscoveryParams {
     pub submode: Submode,
     /// JS8 calling frequency for the current band (Hz).
     pub calling_freq_hz: u64,
+    /// Beacon-TX policy (default `RxOnly` — no transmission).
+    pub tx_mode: TxMode,
+    /// Station callsign for beacons (empty disables TX).
+    pub callsign: String,
+    /// Station grid for beacons.
+    pub grid: String,
+    /// Capability hint to advertise; `None` = heartbeat-only.
+    pub hint: Option<HintPayload>,
+    /// Transmit a beacon every N slots (`N × 15 s` for NORMAL; default 8 ≈ 2 min).
+    pub heartbeat_interval_slots: u64,
+    /// Send the `@OPULSE` hint on every Nth beacon (0 = never; else heartbeat between).
+    pub hint_interval_beacons: u64,
+    /// Audio offset (Hz) to transmit beacons at.
+    pub tx_offset_hz: f32,
+    /// Hard TX-refusal clock-skew bound (ms); JS8's published ±2 s.
+    pub max_clock_skew_ms: u64,
 }
 
 /// Side effects the daemon executes / events it forwards.
@@ -56,6 +92,15 @@ pub enum DiscoveryOutcome {
         /// Whether this was the first time we heard it.
         is_new: bool,
     },
+    /// Transmit this pre-built beacon-frame audio (the daemon does the final DCD check + PTT wrap and
+    /// calls `engine.transmit_raw_audio`). Only emitted when `tx_mode != RxOnly` and the clock is in
+    /// skew tolerance.
+    TransmitBeacon {
+        /// Baseband GFSK audio for one 79-symbol JS8 frame.
+        audio: Vec<f32>,
+        /// Regulatory-log mode label (e.g. `"JS8-NORMAL"`).
+        mode: String,
+    },
 }
 
 /// The RX-only discovery runtime.
@@ -69,6 +114,12 @@ pub struct DiscoveryRuntime {
     assembler: HintAssembler,
     /// Audio accumulated since the last slot boundary (only while dwelling).
     dwell_buf: Vec<f32>,
+    /// Frames of the beacon over currently being transmitted, one per slot.
+    beacon_queue: VecDeque<BeaconFrame>,
+    /// Slots elapsed since the last beacon started (heartbeat cadence).
+    slots_since_beacon: u64,
+    /// Beacons started so far (hint cadence).
+    beacons_sent: u64,
 }
 
 impl DiscoveryRuntime {
@@ -84,6 +135,9 @@ impl DiscoveryRuntime {
             table: StationTable::new(),
             assembler: HintAssembler::new(HINT_FREQ_TOL_HZ, HINT_MAX_OVER_SLOTS),
             dwell_buf: Vec::new(),
+            beacon_queue: VecDeque::new(),
+            slots_since_beacon: 0,
+            beacons_sent: 0,
         }
     }
 
@@ -156,14 +210,62 @@ impl DiscoveryRuntime {
         });
         let mut out = self.run_actions(actions, now_ms);
 
-        // On a UTC slot boundary while dwelling, decode the slot we just buffered.
+        // On a UTC slot boundary while dwelling: transmit a beacon frame if it's our slot, else decode
+        // the slot we just buffered (half-duplex — a TX slot skips RX).
         if self.sm.state() == DiscoveryState::Dwelling {
             if let Some(_completed) = self.slots.advance(self.clock.slot_index(now_ms)) {
-                let actions = self.sm.step(DiscoveryEvent::SlotElapsed { now_ms });
-                out.extend(self.run_actions(actions, now_ms));
+                if let Some(tx) = self.maybe_transmit(now_ms) {
+                    self.dwell_buf.clear(); // don't decode our own transmission
+                    out.push(tx);
+                } else {
+                    let actions = self.sm.step(DiscoveryEvent::SlotElapsed { now_ms });
+                    out.extend(self.run_actions(actions, now_ms));
+                }
             }
         }
         out
+    }
+
+    /// Decide whether this slot transmits a beacon frame (plan §8): only when opted into TX and the
+    /// clock is within skew tolerance. Continues an in-progress over, else starts one on cadence —
+    /// every `hint_interval_beacons`-th beacon is an `@OPULSE` hint, the rest are heartbeats.
+    fn maybe_transmit(&mut self, now_ms: u64) -> Option<DiscoveryOutcome> {
+        if self.params.tx_mode == TxMode::RxOnly || self.params.callsign.trim().is_empty() {
+            return None;
+        }
+        // Hard TX refusal beyond the clock-skew bound (§D5) — degrade to RX-only for this slot.
+        if !self.clock.tx_allowed(self.params.max_clock_skew_ms) {
+            return None;
+        }
+
+        if self.beacon_queue.is_empty() {
+            self.slots_since_beacon += 1;
+            if self.slots_since_beacon < self.params.heartbeat_interval_slots {
+                return None;
+            }
+            self.slots_since_beacon = 0;
+            let use_hint = self.params.hint.is_some()
+                && self.params.hint_interval_beacons > 0
+                && self
+                    .beacons_sent
+                    .is_multiple_of(self.params.hint_interval_beacons);
+            let frames = if use_hint {
+                let text = encode_hint(self.params.hint.as_ref().unwrap(), &self.params.callsign);
+                opulse_hint(&self.params.callsign, &self.params.grid, &text)
+            } else {
+                heartbeat(&self.params.callsign, &self.params.grid)
+            };
+            self.beacons_sent = self.beacons_sent.wrapping_add(1);
+            self.beacon_queue = frames.into();
+            let _ = now_ms;
+        }
+
+        let frame = self.beacon_queue.pop_front()?;
+        let audio = frame_audio(&frame, self.params.tx_offset_hz, self.params.submode);
+        Some(DiscoveryOutcome::TransmitBeacon {
+            audio,
+            mode: js8_mode_label(self.params.submode),
+        })
     }
 
     /// Translate SM actions into outcomes, performing the decode for `DecodeSlot`.
@@ -266,6 +368,14 @@ mod tests {
             station_ttl_ms: 3_600_000,
             submode: Submode::Normal,
             calling_freq_hz: 14_078_000,
+            tx_mode: TxMode::RxOnly,
+            callsign: String::new(),
+            grid: String::new(),
+            hint: None,
+            heartbeat_interval_slots: 8,
+            hint_interval_beacons: 3,
+            tx_offset_hz: 1500.0,
+            max_clock_skew_ms: 2000,
         }
     }
 
@@ -386,5 +496,52 @@ mod tests {
         let out = rt.preempt();
         assert!(out.contains(&DiscoveryOutcome::RestoreHome));
         assert_eq!(rt.state(), DiscoveryState::Inactive);
+    }
+
+    fn dwelling_beacon_runtime(tx_mode: TxMode, hb_slots: u64) -> DiscoveryRuntime {
+        let mut p = params();
+        p.tx_mode = tx_mode;
+        p.callsign = "DC0SK".into();
+        p.grid = "JN58".into();
+        p.hint = None; // heartbeat-only
+        p.heartbeat_interval_slots = hb_slots;
+        let mut rt = DiscoveryRuntime::new(p);
+        rt.tick(1000, true); // activate
+        rt.qsy_complete(true); // dwell
+        rt
+    }
+
+    #[test]
+    fn beacon_mode_transmits_a_heartbeat_on_cadence() {
+        let mut rt = dwelling_beacon_runtime(TxMode::Beacon, 2);
+        let mut txs = Vec::new();
+        let mut t = 1000u64;
+        for _ in 0..4 {
+            t += 15_000;
+            txs.extend(rt.tick(t, true));
+        }
+        let beacon = txs
+            .iter()
+            .find(|o| matches!(o, DiscoveryOutcome::TransmitBeacon { .. }))
+            .expect("beacon mode transmits on cadence");
+        if let DiscoveryOutcome::TransmitBeacon { audio, mode } = beacon {
+            assert_eq!(mode, "JS8-NORMAL");
+            assert!(!audio.is_empty());
+        }
+    }
+
+    #[test]
+    fn rx_only_never_transmits() {
+        let mut rt = dwelling_beacon_runtime(TxMode::RxOnly, 1);
+        let mut t = 1000u64;
+        for _ in 0..6 {
+            t += 15_000;
+            let out = rt.tick(t, true);
+            assert!(
+                !out.iter()
+                    .any(|o| matches!(o, DiscoveryOutcome::TransmitBeacon { .. })),
+                "rx_only must never transmit"
+            );
+        }
     }
 }

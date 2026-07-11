@@ -60,9 +60,10 @@ pub struct OpenpulseConfig {
 pub struct DiscoveryConfig {
     /// Master switch. Default `false`.
     pub enabled: bool,
-    /// `"rx_only"` (default) is the only mode honored today. `"beacon"` (HB + hint TX) and `"full"`
-    /// (adds queries + rendezvous responder) are **reserved for Phase E** (TX, gated on the §97.221
-    /// automatic-control doc) and currently behave as `rx_only` with a startup warning.
+    /// `"rx_only"` (default, no TX) | `"beacon"` (periodic `@HB` heartbeats + `@OPULSE` hints) |
+    /// `"full"` (beacon + future directed queries). Beacon/full transmit only with a configured
+    /// callsign and the clock within ±2 s of UTC; the operator is responsible for §97.221
+    /// automatic-control compliance (see `docs/regulatory.md`).
     pub mode: String,
     /// JS8 submode for the calling channel (MVP: `"normal"` only).
     pub submode: String,

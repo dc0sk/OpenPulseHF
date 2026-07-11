@@ -17,6 +17,6 @@ pub use hint::{decode_hint, encode_hint, HintPayload, HINT_MAGIC, OPULSE_GROUP};
 pub use hint_assembler::{HintAssembler, RecognizedHint};
 pub use js8_plugin::submode::Submode;
 pub use peer_map::{station_to_peer_record, CAP_HPX, CAP_PQ, CAP_QSY, CAP_RELAY, CAP_RENDEZVOUS};
-pub use runtime::{DiscoveryOutcome, DiscoveryParams, DiscoveryRuntime};
+pub use runtime::{DiscoveryOutcome, DiscoveryParams, DiscoveryRuntime, TxMode};
 pub use scheduler::{Js8Clock, SlotTracker};
 pub use station::{Js8Station, Observation, OphfHint, QueryBackoff, StationTable};
