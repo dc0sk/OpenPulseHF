@@ -1,10 +1,10 @@
 //! LDPC(174,87) generator + parity tables and systematic encoder.
 //!
 //! Ported verbatim from JS8Call/js8call (GPL-3.0) `lib/ft8/ldpc_174_87_params.f90`
-//! (generator `g`, `colorder`) and `lib/ft8/bpdecode174.f90` (parity incidence `Nm`, weights
-//! `nrw`). This is the FT8 v1 code JS8 froze on. Belief-propagation *decode* is Phase B; this
-//! unit is the encoder + a parity syndrome used to prove the port (a valid codeword has zero
-//! syndrome).
+//! (generator `g`, `colorder`) and `lib/ft8/bpdecode174.f90` (parity incidence `Nm`/`Mn`, weights
+//! `nrw`). This is the FT8 v1 code JS8 froze on. Provides the systematic encoder ([`encode174`]), a
+//! parity syndrome ([`parity_syndrome`]), and the sum-product belief-propagation decoder
+//! ([`bp_decode`]) — the FEC half of the JS8 receiver.
 
 /// Codeword length.
 pub const N: usize = 174;
@@ -269,6 +269,300 @@ pub fn parity_syndrome(codeword: &[u8; N]) -> [u8; M] {
     synd
 }
 
+/// Per-variable check-node incidence (`Mn`, 1-based; column weight 3). From `bpdecode174.f90`.
+const MN: [[u8; 3]; N] = [
+    [1, 25, 69],
+    [2, 5, 73],
+    [3, 32, 68],
+    [4, 51, 61],
+    [6, 63, 70],
+    [7, 33, 79],
+    [8, 50, 86],
+    [9, 37, 43],
+    [10, 41, 65],
+    [11, 14, 64],
+    [12, 75, 77],
+    [13, 23, 81],
+    [15, 16, 82],
+    [17, 56, 66],
+    [18, 53, 60],
+    [19, 31, 52],
+    [20, 67, 84],
+    [21, 29, 72],
+    [22, 24, 44],
+    [26, 35, 76],
+    [27, 36, 38],
+    [28, 40, 42],
+    [30, 54, 55],
+    [34, 49, 87],
+    [39, 57, 58],
+    [45, 74, 83],
+    [46, 62, 80],
+    [47, 48, 85],
+    [59, 71, 78],
+    [1, 50, 53],
+    [2, 47, 84],
+    [3, 25, 79],
+    [4, 6, 14],
+    [5, 7, 80],
+    [8, 34, 55],
+    [9, 36, 69],
+    [10, 43, 83],
+    [11, 23, 74],
+    [12, 17, 44],
+    [13, 57, 76],
+    [15, 27, 56],
+    [16, 28, 29],
+    [18, 19, 59],
+    [20, 40, 63],
+    [21, 35, 52],
+    [22, 54, 64],
+    [24, 62, 78],
+    [26, 32, 77],
+    [30, 72, 85],
+    [31, 65, 87],
+    [33, 39, 51],
+    [37, 48, 75],
+    [38, 70, 71],
+    [41, 42, 68],
+    [45, 67, 86],
+    [46, 81, 82],
+    [49, 66, 73],
+    [58, 60, 66],
+    [61, 65, 85],
+    [1, 14, 21],
+    [2, 13, 59],
+    [3, 67, 82],
+    [4, 32, 73],
+    [5, 36, 54],
+    [6, 43, 46],
+    [7, 28, 75],
+    [8, 33, 71],
+    [9, 49, 76],
+    [10, 58, 64],
+    [11, 48, 68],
+    [12, 19, 45],
+    [15, 50, 61],
+    [16, 22, 26],
+    [17, 72, 80],
+    [18, 40, 55],
+    [20, 35, 51],
+    [23, 25, 34],
+    [24, 63, 87],
+    [27, 39, 74],
+    [29, 78, 83],
+    [30, 70, 77],
+    [31, 69, 84],
+    [22, 37, 86],
+    [38, 41, 81],
+    [42, 44, 57],
+    [47, 53, 62],
+    [52, 56, 79],
+    [60, 75, 81],
+    [1, 39, 77],
+    [2, 16, 41],
+    [3, 31, 54],
+    [4, 36, 78],
+    [5, 45, 65],
+    [6, 57, 85],
+    [7, 14, 49],
+    [8, 21, 46],
+    [9, 15, 72],
+    [10, 20, 62],
+    [11, 17, 71],
+    [12, 34, 47],
+    [13, 68, 86],
+    [18, 23, 43],
+    [19, 64, 73],
+    [24, 48, 79],
+    [25, 70, 83],
+    [26, 80, 87],
+    [27, 32, 40],
+    [28, 56, 69],
+    [29, 63, 66],
+    [30, 42, 50],
+    [33, 37, 82],
+    [35, 60, 74],
+    [38, 55, 84],
+    [44, 52, 61],
+    [51, 53, 72],
+    [58, 59, 67],
+    [47, 56, 76],
+    [1, 19, 37],
+    [2, 61, 75],
+    [3, 8, 66],
+    [4, 60, 84],
+    [5, 34, 39],
+    [6, 26, 53],
+    [7, 32, 57],
+    [9, 52, 67],
+    [10, 12, 15],
+    [11, 51, 69],
+    [13, 14, 65],
+    [16, 31, 43],
+    [17, 20, 36],
+    [18, 80, 86],
+    [21, 48, 59],
+    [22, 40, 46],
+    [23, 33, 62],
+    [24, 30, 74],
+    [25, 42, 64],
+    [27, 49, 85],
+    [28, 38, 73],
+    [29, 44, 81],
+    [35, 68, 70],
+    [41, 63, 76],
+    [45, 49, 71],
+    [50, 58, 87],
+    [48, 54, 83],
+    [13, 55, 79],
+    [77, 78, 82],
+    [1, 2, 24],
+    [3, 6, 75],
+    [4, 56, 87],
+    [5, 44, 53],
+    [7, 50, 83],
+    [8, 10, 28],
+    [9, 55, 62],
+    [11, 29, 67],
+    [12, 33, 40],
+    [14, 16, 20],
+    [15, 35, 73],
+    [17, 31, 39],
+    [18, 36, 57],
+    [19, 46, 76],
+    [21, 42, 84],
+    [22, 34, 59],
+    [23, 26, 61],
+    [25, 60, 65],
+    [27, 64, 80],
+    [30, 37, 66],
+    [32, 45, 72],
+    [38, 51, 86],
+    [41, 77, 79],
+    [43, 56, 68],
+    [47, 74, 82],
+    [40, 52, 78],
+    [54, 61, 71],
+    [46, 58, 69],
+];
+
+/// A successful belief-propagation decode.
+#[derive(Debug, Clone)]
+pub struct BpDecode {
+    /// The 87 recovered info bits (72 payload + 3 flags + 12 CRC), message order.
+    pub info: [u8; K],
+    /// The corrected 174-bit wire codeword.
+    pub codeword: [u8; N],
+    /// Iterations used to converge.
+    pub iterations: u32,
+}
+
+/// `atanh` with clamping to avoid infinities (JS8Call `platanh` is a piecewise-polynomial
+/// approximation of the same function; a clamped exact `atanh` is functionally equivalent).
+fn platanh(x: f32) -> f32 {
+    let z = x.clamp(-0.999_999, 0.999_999);
+    0.5 * ((1.0 + z) / (1.0 - z)).ln()
+}
+
+/// Sum-product belief-propagation decode of 174 soft LLRs in wire/tone order (`llr > 0` => bit 1),
+/// ported from JS8Call `bpdecode174.f90`. Returns the recovered info + corrected codeword when the
+/// parity syndrome clears within `max_iterations`, else `None` (including the early-stop bailout).
+pub fn bp_decode(llr: &[f32; N], max_iterations: u32) -> Option<BpDecode> {
+    let mut tov = vec![[0f32; 3]; N]; // variable->check messages (3 per bit)
+    let mut toc = vec![[0f32; 7]; M]; // check->variable messages (<=7 per check)
+    let mut tanhtoc = vec![[0f32; 7]; M];
+    let mut zn = [0f32; N];
+
+    for j in 0..M {
+        for i in 0..NRW[j] {
+            toc[j][i] = llr[(NM[j][i] as usize) - 1];
+        }
+    }
+
+    let (mut ncnt, mut nclast) = (0i32, 0i32);
+    for iter in 0..=max_iterations {
+        for i in 0..N {
+            zn[i] = llr[i] + tov[i][0] + tov[i][1] + tov[i][2];
+        }
+        let mut cw = [0u8; N];
+        for i in 0..N {
+            if zn[i] > 0.0 {
+                cw[i] = 1;
+            }
+        }
+        // Parity syndrome; count unsatisfied checks.
+        let mut ncheck = 0i32;
+        for i in 0..M {
+            let mut s = 0u8;
+            for k in 0..NRW[i] {
+                s ^= cw[(NM[i][k] as usize) - 1];
+            }
+            if s & 1 != 0 {
+                ncheck += 1;
+            }
+        }
+        if ncheck == 0 {
+            let mut codeword = [0u8; N];
+            for i in 0..N {
+                codeword[i] = cw[COLORDER[i]];
+            }
+            let mut info = [0u8; K];
+            info.copy_from_slice(&codeword[M..N]);
+            return Some(BpDecode {
+                info,
+                codeword: cw,
+                iterations: iter,
+            });
+        }
+        // Early-stop: unsatisfied-check count has stopped falling.
+        if iter > 0 {
+            if ncheck - nclast < 0 {
+                ncnt = 0;
+            } else {
+                ncnt += 1;
+            }
+            if ncnt >= 5 && iter >= 10 && ncheck > 15 {
+                return None;
+            }
+        }
+        nclast = ncheck;
+
+        // Check-node inputs: zn minus the message this bit sent to that check.
+        for j in 0..M {
+            for i in 0..NRW[j] {
+                let ibj = (NM[j][i] as usize) - 1;
+                let mut t = zn[ibj];
+                for kk in 0..3 {
+                    if (MN[ibj][kk] as usize) - 1 == j {
+                        t -= tov[ibj][kk];
+                    }
+                }
+                toc[j][i] = t;
+            }
+        }
+        for j in 0..M {
+            for i in 0..NRW[j] {
+                tanhtoc[j][i] = (-toc[j][i] / 2.0).tanh();
+            }
+        }
+        // Variable-node update: extrinsic product over the other bits in each check.
+        for j in 0..N {
+            for i in 0..3 {
+                let ichk = (MN[j][i] as usize) - 1;
+                let mut tmn = 1.0f32;
+                for slot in 0..NRW[ichk] {
+                    if (NM[ichk][slot] as usize) - 1 != j {
+                        tmn *= tanhtoc[ichk][slot];
+                    }
+                }
+                tov[j][i] = 2.0 * platanh(-tmn);
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,6 +619,91 @@ mod tests {
         let cw = encode174(&msg);
         for (j, &want) in msg.iter().enumerate() {
             assert_eq!(cw[COLORDER[M + j]], want, "message bit {j}");
+        }
+    }
+
+    fn random_message(seed: u64) -> [u8; K] {
+        let mut s = seed;
+        let mut msg = [0u8; K];
+        for m in msg.iter_mut() {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            *m = ((s >> 33) & 1) as u8;
+        }
+        msg
+    }
+
+    /// Confident LLRs (±mag, `+` for bit 1) for a codeword.
+    fn hard_llr(cw: &[u8; N], mag: f32) -> [f32; N] {
+        let mut llr = [0f32; N];
+        for (i, &b) in cw.iter().enumerate() {
+            llr[i] = if b == 1 { mag } else { -mag };
+        }
+        llr
+    }
+
+    #[test]
+    fn bp_decodes_a_clean_codeword() {
+        let msg = random_message(7);
+        let cw = encode174(&msg);
+        let d = bp_decode(&hard_llr(&cw, 4.0), 30).expect("clean decode");
+        assert_eq!(d.info, msg);
+        assert_eq!(d.codeword, cw);
+    }
+
+    #[test]
+    fn bp_corrects_a_handful_of_flipped_bits() {
+        // Flip the sign of a few LLRs (bit errors the LDPC code should still correct).
+        for &nflip in &[1usize, 3, 6, 10] {
+            let msg = random_message(1000 + nflip as u64);
+            let cw = encode174(&msg);
+            let mut llr = hard_llr(&cw, 3.0);
+            let mut s = 0x9e37_79b9_u64.wrapping_add(nflip as u64);
+            for _ in 0..nflip {
+                s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let idx = (s >> 40) as usize % N;
+                llr[idx] = -llr[idx]; // corrupt this bit
+            }
+            let d = bp_decode(&llr, 50).unwrap_or_else(|| panic!("decode with {nflip} flips"));
+            assert_eq!(d.info, msg, "recovered message with {nflip} flips");
+        }
+    }
+
+    #[test]
+    fn bp_recovers_under_soft_noise() {
+        // Add Gaussian-ish noise (Box–Muller from an LCG) to the ±mag LLRs.
+        let msg = random_message(4242);
+        let cw = encode174(&msg);
+        let mut llr = hard_llr(&cw, 2.5);
+        let mut s = 0x1234_5678_9abc_def0_u64;
+        let mut u = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((s >> 11) as f64 / (1u64 << 53) as f64) as f32
+        };
+        for v in llr.iter_mut() {
+            let (u1, u2) = (u().max(1e-6), u());
+            let n = (-2.0 * u1.ln()).sqrt() * (std::f32::consts::TAU * u2).cos();
+            *v += 1.2 * n;
+        }
+        let d = bp_decode(&llr, 50).expect("soft decode");
+        assert_eq!(d.info, msg);
+    }
+
+    #[test]
+    fn bp_rejects_pure_noise() {
+        // Random LLRs almost never form a valid codeword; decode should give up (not panic/hang).
+        let mut s = 0xfeed_face_u64;
+        let mut llr = [0f32; N];
+        for v in llr.iter_mut() {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+            *v = ((s >> 40) as f32 / (1u32 << 24) as f32) - 0.5;
+        }
+        // Either fails, or (astronomically unlikely) returns a genuine codeword.
+        if let Some(d) = bp_decode(&llr, 50) {
+            assert_eq!(parity_syndrome(&d.codeword), [0u8; M]);
         }
     }
 }

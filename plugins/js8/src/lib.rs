@@ -23,6 +23,7 @@ pub mod tones;
 pub use costas::CostasKind;
 pub use crc::augmented_crc12;
 pub use frame::{pack_callsign, pack_grid};
+pub use ldpc174::{bp_decode, BpDecode};
 pub use message::{js8_info_bits, js8_message_crc12};
 pub use modulate::{modulate_tones, GfskParams};
 pub use plugin::Js8Plugin;

@@ -9,6 +9,32 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-11 — feat(js8): FF-15 Phase B-1 — LDPC(174,87) belief-propagation decoder
+
+- **Requirement/change:** FF-15 Phase B (the RX decoder — the highest-risk, FT8-class track): the FEC-decode
+  half — recover the 87 info bits from 174 soft LLRs, correcting errors the channel introduced.
+- **Design decision:** port the sum-product BP decoder from JS8Call `lib/ft8/bpdecode174.f90` — vendoring the
+  remaining table it needs, `Mn` (per-variable check incidence, column weight 3), alongside the already-ported
+  `Nm`/`nrw`/`colorder`/`g`. Standard tanh-domain message passing (init check msgs from the LLRs; per iter:
+  total belief `zn = llr + Σ tov`, hard-decide, check the parity syndrome and return on convergence, else
+  update check inputs, `tanh(-toc/2)`, and variable messages `2·atanh(-Π extrinsic)`), including the upstream
+  early-stop (bail when unsatisfied-check count stops falling). Sign convention matches upstream (`llr > 0` ⇒
+  bit 1); `platanh` is a clamped exact `atanh` (upstream uses a piecewise-poly approximation of the same
+  function — functionally equivalent for decode). Validated **functionally** (encode → corrupt → recover),
+  which is the right gate for a decoder; the −18 dB weak-signal go/no-go is a later end-to-end unit.
+- **Implementation:** `plugins/js8/src/ldpc174.rs` (`MN` table, `bp_decode`, `BpDecode`, `platanh`); `lib.rs`
+  re-exports.
+- **Tests:** `ldpc174.rs` (4 new) — decodes a clean codeword (info == message); **corrects 1/3/6/10 flipped
+  bits**; recovers under additive Gaussian LLR noise (σ ≈ 1.2 on ±2.5 LLRs); rejects pure-noise LLRs without
+  hanging (or returns a genuine zero-syndrome codeword).
+- **Test results (actually run):** `js8-plugin` 43 passed / 0 failed (4 new); lib builds warning-free; clippy
+  `-D warnings` + fmt clean.
+- **Next:** B-2 soft demod (per-symbol 8-tone energies → calibrated LLRs), B-3 Costas sync/acquisition
+  (freq×time correlation search), B-4 the `decode_window` pipeline (multi-decode + CRC-12 dedup), then the
+  −18 dB loopback/reference gate.
+
+---
+
 ## 2026-07-11 — feat(js8): FF-15 Phase A-8 — `Js8Plugin` ModulationPlugin (TX chain complete)
 
 - **Requirement/change:** FF-15 Phase A close: expose the JS8 waveform as a `ModulationPlugin` and wire the
