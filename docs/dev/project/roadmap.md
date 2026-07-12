@@ -1399,11 +1399,11 @@ persistence) ✅ → **F on-air validation** (deferred field-test batch). Standa
 Highest risk was Phase C half-duplex ACK/PTT timing — de-risked by the twin-daemon round-trip test, which now
 also exercises the real PTT-keyed burst-drain path.
 
-### FF-15 — JS8-based station discovery and rendezvous *(A–D done: RX-only MVP SHIPPED; go/no-go PASSED)*
+### FF-15 — JS8-based station discovery and rendezvous *(A–F shipped: full RX + beacon TX + rendezvous → HPX handoff; only H on-air remains)*
 
 **Plan approved 2026-07-10** — full design in
 [`docs/dev/design/js8-discovery-rendezvous-plan.md`](../design/js8-discovery-rendezvous-plan.md)
-(decisions D1–D7 locked; not yet implemented). When idle, an OpenPulse station QSYs to the
+(decisions D1–D7 locked; Phases A–G implemented, only H on-air remains). When idle, an OpenPulse station QSYs to the
 band's JS8 calling frequency, participates as a real, well-behaved JS8 station (heartbeats,
 directed queries, station info), marks itself with an in-band `@OPULSE` capability hint, caches
 other OpenPulse-marked stations in the existing `PeerCache`, and — on user request — negotiates
@@ -1458,8 +1458,8 @@ track:
 - C-3 (#762) new **`crates/openpulse-discovery`** + `hint.rs` — the `@OPULSE` `OPHF` capability hint (base-36,
   callsign-salted CRC-8; three-way detection so organic JS8 text can't false-positive).
 
-TX-side packing (`packCompoundFrame`/`packAlphaNumeric50`) and varicode/JSC free text are deferred (beacon TX
-= Phase E; the queried-INFO hint path).
+(TX-side packing — `packCompoundFrame`/`packAlphaNumeric50` + Huffman free text — and JSC free-text decode
+were subsequently completed in the RX refinements and Phase E beacon TX below.)
 
 **Phase D — RX-only discovery MVP logic complete** (PRs #764–#769, new `crates/openpulse-discovery`), all
 pure/async-free:
@@ -1479,14 +1479,46 @@ pure/async-free:
   tunes to JS8 → dwells → decodes an injected heartbeat → caches `KN4CRD`/`EM73` + emits `StationHeard`.
 
 **RX-only discovery MVP SHIPPED.** An idle daemon with `[discovery] enabled` QSYs to JS8, hears + caches
-stations, surfaces them via events/`ListStations` — zero TX, zero regulatory exposure. **Next:** refinements
-(varicode → `@OPULSE` hint marking + `PeerCache` upsert; per-home-band calling freq; `spawn_blocking` decode;
-true SNR) then Phase E (beacon TX — **gated on the §97.221 automatic-control reg doc landing first**), F
-(rendezvous + HPX handoff), G (panel `Tab::Discovery`), H (on-air vs stock JS8Call). Later hardening: a Pi-class
-CPU-budget check (`cross`) and the bit-exact `reference_vectors` (needs gfortran, the one absent upstream tool).
-Then Phase E (beacon TX, gated on the §97.221 reg doc), F (rendezvous), G (panel), H (on-air). Later hardening:
-varicode → `@OPULSE` hint marking + `PeerCache` upsert; a true SNR estimate; a Pi-class CPU-budget check
-(`cross`); the bit-exact `reference_vectors` (needs gfortran).
+stations, surfaces them via events/`ListStations` — zero TX, zero regulatory exposure.
+
+**RX refinements** (PRs #776–#783) closed the D-phase follow-ups: per-home-band calling frequency (#776),
+a true matched-filter SNR estimate calibrated vs the B-6 gate (#777), the JS8 free-text (Huffman) + directed
+unpacker (#778), `@OPULSE` peer recognition via the cross-slot `HintAssembler` (#779), the shared `PeerCache`
++ `ListPeers` surface bringing `peer_map.rs` live (#780), and the full 262 144-entry JSC free-text codebook
+(#783). `spawn_blocking` was already satisfied by `block_in_place`.
+
+**Phase G — operator surface complete** (PRs #781–#782): CLI `openpulse daemon {enable-discovery,
+disable-discovery, stations, peers}` (#781) and the panel `Tab::Discovery` — station table (◆OPULSE-marked)
++ peer table + Enable/Disable/Refresh + status (#782).
+
+**Phase E — beacon TX complete** (PRs #784–#797). Off by default behind `[discovery] mode = "beacon"`/`"full"`
++ a configured callsign, gated on the §97.221 automatic-control compliance doc (`docs/regulatory.md`) plus
+±2 s clock-skew, DCD, and self-ID gates. TX packers (`pack_compound_frame`/`pack_alphanumeric50`/
+`pack_heartbeat_frame`/`pack_huff_frame`, Qt5-validated), `beacon.rs` (heartbeat + `@OPULSE` hint assembly),
+the `ModemEngine::transmit_raw_audio` seam (no HPX `Frame` envelope) with a `raw_audio_frames_transmitted`
+tripwire, the runtime slot scheduler (`maybe_transmit`), and daemon wiring (`transmit_beacon_with_ptt`, DCD
+defer). OpenPulse-to-OpenPulse validated end-to-end: a beacon builds → transmits → decodes off-air → is
+recognized as a peer.
+
+**Phase F — rendezvous → HPX handoff complete** (PRs #798–#805). Decision D3's 2-message unauthenticated
+exchange over JS8 directed free text, handing off to the existing signed HPX CONREQ/CONACK after QSY:
+- F-1 (#798) `rendezvous.rs` — pure `RendezvousMsg` codec (`Propose`/`Accept`/`Reject` as `OPHF QSY?/QSY/NO`)
+  + `RendezvousInitiator` + `respond()`; channels are **indices** into a per-band table, not Hz; no signature
+  (the post-QSY signed CONREQ is the auth).
+- F-2 (#799) config `rendezvous_channels_hz` per-band working-channel table + resolver.
+- F-3a (#800) `beacon::directed` — directed free-text over targeting a callsign (generalizes `opulse_hint`).
+- F-3b (#801) `rendezvous_assembler.rs` — reassembles overs directed at us into a `RendezvousMsg`.
+- F-3c-i (#802) runtime orchestration — both roles, priority TX queue, `Full`-gated responder, per-slot timeout.
+- F-3c-ii (#803) daemon `RendezvousWith` command + `RendezvousAgreed`/`RendezvousFailed` events + per-band
+  channel wiring + startup bandplan warning gate.
+- F-3c-iii (#804) QSY + CONREQ handoff — schedules the QSY after the `switch_in_slots` delay (so the Accept is
+  heard), retunes, then reuses the operator `ConnectPeer` `begin_secure_session` + CONREQ path.
+- F-3c-iv (#805) two-runtime end-to-end test — real GFSK audio shuttled between two `DiscoveryRuntime`s to a
+  rendezvous under a manual clock (a real-time twin would take minutes per JS8's 15 s slots).
+
+**Only Phase H (on-air validation vs stock JS8Call) remains** — in the deferred field-test batch. Later
+hardening: a Pi-class CPU-budget check (`cross`) and the bit-exact `reference_vectors` (needs gfortran, the
+one absent upstream tool).
 
 ---
 
