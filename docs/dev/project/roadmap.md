@@ -1370,16 +1370,24 @@ scheduled — pending maintainer selection.
 
 ### FF-16 — Direct P2P file transfer *(Phases A–E shipped; F on-air deferred)*
 
-**Plan approved 2026-07-10** — full design in
+**Plan approved 2026-07-10** (#730) — full design in
 [`docs/dev/design/file-transfer-plan.md`](../design/file-transfer-plan.md) (decisions D1–D5 locked).
-**Phases A–E shipped 2026-07-10** (PRs #731–#741): the `openpulse-filexfer` crate + state machines (A),
-blocks/SAR + modem loopback (B), daemon `SendFile` wiring + twin round-trip = MVP (C), panel `Tab::Files`
-(D), real-radio PTT burst sequencing + block-level resume (state mechanic #740 + daemon partial-block
-persistence #741) (E). Only **Phase F (on-air validation)** remains, in the deferred field-test batch.
-The top VarAC-gap item (`docs/dev/research/varac-feature-gap-analysis.md`): send a
+**Phases A–E shipped** (PRs #731–#743); only **Phase F (on-air validation)** remains, in the deferred
+field-test batch. The top VarAC-gap item (`docs/dev/research/varac-feature-gap-analysis.md`): send a
 file to a connected peer over an RF session with an offer/accept handshake, progress, size-gated
 auto-accept, and **cryptographic verification VarAC lacks** (inline signed `TransferManifest` + SHA-256,
 verified against the peer's CONREQ/CONACK key; verify-fail → quarantine + UNVERIFIED badge).
+
+- A (#731) `openpulse-filexfer` crate — `OPFX` wire codec + sender/receiver state machines (no I/O).
+- B (#732) blocks over SAR + multi-object framing + modem loopback (incl. >64 KB split and tamper→verify-fail).
+- C-1 (#733) daemon control surface + `[file_transfer]` config; C-2a (#734) inbound `OPFX` receive-routing
+  seam (handshake preserved); C-2b (#735) receive session (offer → verify → write) + commands; C-3 (#736)
+  send session (`SendFile` → offer → blocks → `FileSent`); **C acceptance (#737) — a file crosses two real
+  daemons** (twin round-trip = MVP ship line).
+- D (#738) panel `Tab::Files` — send, offer prompt, progress, verify badge.
+- E (#739) real-radio PTT burst sequencing (queue + drain); E-1 (#740) block-level resume state mechanic;
+  E-2 (#741) daemon partial-block persistence + resume; airtime-bounded TX burst splitting (#743).
+- Follow-ups: `ListFiles` + file-transfer CLI surface (#787).
 
 Architecture: new pure **`crates/openpulse-filexfer`** (no-I/O wire codecs + sender/receiver state
 machines, the `openpulse-b2f`/`QsySession` pattern) + a daemon `filexfer.rs` glue module (file I/O,
