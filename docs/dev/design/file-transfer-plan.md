@@ -1,7 +1,7 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/file-transfer-plan.md
-status: approved-plan (decisions D1–D5 locked 2026-07-10; not yet implemented)
+status: approved-plan (decisions D1–D5 locked 2026-07-10; Phases A–E shipped — crate + modem loopback + daemon SendFile/twin + panel Files tab + real-radio bursts + resume; only Phase F on-air validation remains, deferred)
 last_updated: 2026-07-10
 ---
 
