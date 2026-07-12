@@ -2,12 +2,36 @@
 project: openpulsehf
 doc: docs/releasenotes.md
 status: living
-last_updated: 2026-06-29
+last_updated: 2026-07-12
 ---
 
 # Release Notes
 
 ## Unreleased
+
+- JS8 station discovery (new, opt-in): when your station is idle you can have it tune to the
+  band's JS8 calling frequency and discover other OpenPulse stations there. It uses a native JS8
+  waveform that interoperates with JS8Call — no separate JS8Call install — marks itself with an
+  `@OPULSE` capability hint, and lists the stations it hears (`openpulse daemon stations` /
+  `openpulse daemon peers`, or a new **Discovery** tab in the panel). Enable it under `[discovery]`.
+  **Off by default, and receive-only until you explicitly opt into transmitting.**
+- JS8 beacon + rendezvous (new, opt-in transmit): with a callsign configured and `[discovery]
+  mode = "beacon"` or `"full"`, your station periodically announces itself (a heartbeat and the
+  `@OPULSE` hint). In `full` mode it can also negotiate a working frequency with a discovered peer
+  over JS8 (the `RendezvousWith` control command), QSY both stations there, and start an
+  authenticated OpenPulse session. Every transmit path is off by default and gated behind an
+  explicit mode + your callsign + a ±2 s clock-sync check; the automatic-control behaviour is
+  documented in `docs/regulatory.md` (FCC §97.221) — you remain the control operator.
+- Direct file transfer (new, opt-in): send a file to a connected peer over the air with an
+  offer/accept prompt, a progress bar, and optional size-gated auto-accept. Every transfer is
+  signed and checksummed and verified against the peer's identity key on the way in — a tampered
+  or wrong-sender file is quarantined and flagged UNVERIFIED. Large files are split into blocks and
+  can resume after a dropped session. Enable it under `[file_transfer]`; drive it from the panel's
+  **Files** tab or `openpulse daemon send-file` / `openpulse daemon files`.
+- Faster, more reliable links on good conditions: the adaptive rate ladder now climbs into the
+  high-throughput dense modes (it was previously capped mid-ladder by a signal-quality estimator
+  that flattened out), the HF ladder switched to OFDM for better performance on fading paths, and
+  repeated retransmissions now combine their soft information instead of being retried cold.
 
 ## v0.3.0 — 2026-06-29
 
