@@ -9,6 +9,8 @@ last_updated: 2026-07-12
 
 ## Unreleased
 
+## v0.4.0 — 2026-07-12
+
 - JS8 station discovery (new, opt-in): when your station is idle you can have it tune to the
   band's JS8 calling frequency and discover other OpenPulse stations there. It uses a native JS8
   waveform that interoperates with JS8Call — no separate JS8Call install — marks itself with an
