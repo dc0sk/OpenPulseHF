@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/changelog.md
 status: living
-last_updated: 2026-06-29
+last_updated: 2026-07-12
 ---
 
 # Changelog
@@ -11,6 +11,10 @@ last_updated: 2026-06-29
 > user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
 
 ## Unreleased
+
+- **JS8 station discovery + rendezvous (FF-15)**: a native JS8-compatible weak-signal waveform (8-GFSK, 79 symbols, Costas 3×7 sync, LDPC(174,87), CRC-12 — ported bit-exact from GPL-3.0 JS8Call, validated against compiled Boost/Qt5, **not** a JS8Call bridge) plus an idle-time discovery service in the new `crates/openpulse-discovery`. When enabled, an idle station QSYs to the current band's JS8 calling frequency, participates as a real JS8 station, marks itself with an in-band `@OPULSE` capability hint, and folds recognized OpenPulse stations into the shared `PeerCache`. Operator surface: `openpulse daemon {enable-discovery, disable-discovery, stations, peers}` + a panel `Tab::Discovery`; `[discovery]` config. **Beacon TX** (heartbeat + `@OPULSE` hint via a new `transmit_raw_audio` seam, Phase E) and **rendezvous → HPX handoff** (a 2-message Propose/Accept/Reject over JS8 directed free text → scheduled QSY → the signed CONREQ/CONACK handshake, Phase F, via the `RendezvousWith` control command) are **off by default**, gated behind `[discovery] mode = "beacon"`/`"full"` + a configured callsign + ±2 s clock-skew/DCD/self-ID gates; §97.221 automatic-control documentation in `docs/regulatory.md`. RX-only until opted in. Only on-air validation (Phase H) is deferred. (PRs #744–#805)
+- **Direct P2P file transfer (FF-16)**: send a file to a connected peer over an RF session with an offer/accept handshake, progress, and size-gated auto-accept — plus an inline signed `TransferManifest` + SHA-256 verified against the peer's handshake key, so a tampered or wrong-key file is quarantined with an UNVERIFIED badge (verification VarAC's file transfer lacks). New `OPFX` wire (`crates/openpulse-filexfer`), files split into ≤48 KiB blocks over SAR (multi-megabyte transfers, config-capped at 1 MiB), hybrid delivery (OTA per-burst rate + block-ack bitmap selective retransmit) with block-level `.partial` resume and airtime-bounded PTT bursts. `[file_transfer]` config; `SendFile`/`AcceptFile`/`RejectFile`/`CancelFile`/`ListFiles` control + CLI; panel `Tab::Files`. On-air validation (Phase F) deferred. (PRs #730–#743, #787)
+- **Adaptive rate ladder + DSP (signal-chain audit, Phase 11)**: the OTA rate ladder now climbs into the dense high-throughput rungs on good links — the M2M4 SNR estimator was waveform-blind and capped it mid-ladder (replaced by a per-plugin symbol-domain estimate that tracks to ~SL17). The dispersive-HF ladder (`hpx_hf`) is re-seated from SC-FDMA to **OFDM**, which measurably beats SC-FDMA on selective fading at matched rate; HARQ soft-LLR combining now engages across retransmissions in the daemon OTA path; and a batch of correctness fixes landed (inverted DFE feedback sign, AGC/DCD seam-ordering, SC-FDMA sync back-off / delay-cliff, CE-SSB whitening on low-entropy frames). Channel-model measurement fidelity was corrected (Watterson unity-power, Gilbert-Elliott per-symbol bursts, opt-in continuous fade) and a real-modem CI goodput-regression gate added. (PRs #697–#717)
 
 ## v0.3.0 — 2026-06-29
 
