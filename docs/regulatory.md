@@ -79,8 +79,11 @@ OpenPulseHF relay node implementations must document the automatic control point
 
 Two OpenPulse subsystems can transmit without a control operator at the control point and are therefore
 "automatically controlled" under §97.221: the **cross-band repeater / relay node** (`openpulse-repeater`,
-`RelayForwarder`) and the **JS8 discovery beacon** (FF-15 Phase E — not yet enabled; this document is
-its prerequisite gate). The design maps to the rule as follows:
+`RelayForwarder`) and the **JS8 discovery beacon** (FF-15 Phase E — implemented, **off by default**, this
+document being its prerequisite gate). The related **JS8 rendezvous** (FF-15 Phase F) also transmits
+(a directed Propose/Accept over, then the CONREQ handoff), but is operator-initiated (`RendezvousWith`) or
+opt-in `full`-mode responder rather than unattended-automatic; it inherits the same off-by-default,
+callsign, and ±2 s clock-skew gates. The design maps to the rule as follows:
 
 | §97.221 requirement | OpenPulse mechanism | Operator responsibility |
 |---|---|---|
