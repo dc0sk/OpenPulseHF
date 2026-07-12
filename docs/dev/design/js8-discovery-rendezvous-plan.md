@@ -1,7 +1,7 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/js8-discovery-rendezvous-plan.md
-status: approved-plan (decisions D1–D7 locked 2026-07-10; Phases A–D shipped; C message-layer gap being filled)
+status: approved-plan (decisions D1–D7 locked 2026-07-10; Phases A–G shipped — full RX + beacon TX + rendezvous → HPX handoff; only Phase H on-air validation remains)
 last_updated: 2026-07-11
 ---
 
@@ -169,8 +169,12 @@ buys us general third-party free-text (the secondary INFO-token path and reading
   replies, which stock stations JSC-pack) is decodable. Validated against Qt5 ground-truth vectors
   across the codebook range (single chars → index-220k words).
 
-**Discovery RX + operator surface is complete.** The forward roadmap (Phase E beacon TX, F rendezvous,
-H on-air) is TX-side and gated on the §97.221 automatic-control regulatory documentation.
+**Discovery RX, operator surface, beacon TX, and rendezvous are all complete** (Phases A–G, PRs
+#744–#805). Phase E beacon TX (heartbeat + `@OPULSE` hint via the `transmit_raw_audio` seam) and Phase F
+rendezvous (2-message Propose/Accept/Reject over JS8 directed free text → scheduled QSY → `ConnectPeer`
+CONREQ handoff) both ship **off by default**, gated on the §97.221 automatic-control documentation
+(`docs/regulatory.md`) plus the callsign / ±2 s clock-skew / DCD / self-ID gates. **Only Phase H (on-air
+validation vs stock JS8Call) remains**, in the deferred field-test batch.
 
 ### 3.3 What the hint can and cannot carry
 
