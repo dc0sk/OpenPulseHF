@@ -240,6 +240,58 @@ decision (REQ-BW-01).
   class-C FM transmitters. This decision governs all of REQ-BW-02..07 and must be recorded before
   implementation. (REQ-BW-01)
 
+## JS8-based station discovery and rendezvous requirements (FF-15)
+
+Idle-time discovery of other OpenPulse stations on the shared JS8 calling frequency, and negotiated
+handoff from JS8 to a native HPX session. Shipped (Phases A–G); only on-air validation (Phase H) is
+deferred. Design and locked decisions D1–D7 in `docs/dev/design/js8-discovery-rendezvous-plan.md`;
+capability rows CAP-70 in the traceability matrix.
+
+- The station shall implement a native JS8-compatible weak-signal waveform (8-GFSK, 79 symbols,
+  Costas 3×7 sync, LDPC(174,87), CRC-12) that interoperates with stock JS8Call, without depending on an
+  external JS8Call process at runtime. (REQ-DISC-01)
+- When discovery is enabled and the station is idle, it shall QSY to the current band's JS8 calling
+  frequency, participate as a well-behaved JS8 station (heartbeats at community-norm cadence), and
+  restore its home frequency when discovery stands down or is preempted. (REQ-DISC-02)
+- The station shall mark itself with an in-band `@OPULSE` capability hint, recognize other OpenPulse
+  stations from that hint, and cache them (identity, capability, link-quality) in the shared peer
+  cache. (REQ-DISC-03)
+- All discovery transmission shall be **off by default**; when enabled the default mode shall be
+  receive-only. Beacon and rendezvous transmission shall each require an explicit opt-in plus a
+  configured callsign. (REQ-DISC-04)
+- The station shall not transmit unless its clock is NTP-disciplined to within ±2 s of UTC (residual
+  bias estimated from decode timing); beyond that bound it shall hard-refuse transmission and degrade
+  to receive-only. (REQ-DISC-05)
+- Unattended beacon transmission shall satisfy §97.221 automatic control — a reachable control point
+  able to terminate transmission, off-by-default gating, periodic identification, and operator-set
+  power — as documented in `docs/regulatory.md` (see REQ-REG-04). (REQ-DISC-06)
+- The station shall negotiate a working frequency with a discovered peer via a compact 2-message
+  rendezvous exchange over JS8, then QSY and hand off to the signed HPX handshake (CONREQ/CONACK),
+  which provides authentication; the rendezvous exchange itself carries no signature. (REQ-DISC-07)
+
+## Direct peer-to-peer file transfer requirements (FF-16)
+
+Sending a file to a connected peer over an RF session, with cryptographic end-to-end verification.
+Shipped (Phases A–E); on-air validation (Phase F) is deferred. Design and locked decisions D1–D5 in
+`docs/dev/design/file-transfer-plan.md`; capability row CAP-71 in the traceability matrix.
+
+- The station shall send a file to a connected peer over an RF session using a dedicated framed
+  protocol (offer / accept / reject / data / block-ack / complete / cancel), carried over the shared
+  SAR segmentation layer. (REQ-FX-01)
+- File objects shall be split into fixed-size blocks (default 16 KiB, ≤48 KiB) each carried as one SAR
+  segment, lifting the single-object SAR size limit so multi-megabyte transfers are supported, with a
+  configurable hard cap (default 1 MiB). (REQ-FX-02)
+- Each transfer shall carry an inline signed `TransferManifest` with a SHA-256 payload hash; the
+  receiver shall verify it against the peer's handshake key before final acceptance and shall
+  quarantine (mark UNVERIFIED) any file that fails verification. (REQ-FX-03)
+- File acceptance shall be operator-controlled: a verified-peer requirement, size-gated auto-accept
+  (default off), an optional per-peer retained-bytes quota, and prompt-on-offer by default. (REQ-FX-04)
+- Reliable delivery shall use a hybrid scheme — over-the-air per-burst rate feedback plus a
+  block-level acknowledgement bitmap for selective retransmission — and shall support resuming an
+  interrupted transfer from the last completed block. (REQ-FX-05)
+- Transmission shall be airtime-bounded into bursts so PTT keying stays within the radio's watchdog
+  limit and the channel is yielded between bursts. (REQ-FX-06)
+
 ## Documentation requirements
 
 - Version bumps require updates to docs/dev/project/changelog.md and docs/releasenotes.md.
