@@ -188,6 +188,11 @@ fn on_offer(
 
     let decision = if !rs.filexfer_policy.peer_allowed(&from) {
         OfferDecision::Reject(Reason::UntrustedPeer)
+    } else if !offer_geometry_ok(&offer) {
+        // Reject a malformed/hostile geometry (block_size out of range, or block_count inconsistent with
+        // file_size) up front — otherwise a crafted `block_count` decouples the size gate/quota (which key
+        // on `file_size`) from the bytes actually reassembled and written. Audit #13.
+        OfferDecision::Reject(Reason::TooLarge)
     } else if quota_would_exceed(&rs.filexfer_policy, &from, offer.file_size) {
         OfferDecision::Reject(Reason::QuotaExceeded)
     } else {
@@ -738,6 +743,18 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(name)
 }
 
+/// Whether an offer's block geometry is internally consistent: `block_size` within the protocol window
+/// and `block_count` exactly the count `file_size` splits into. A mismatch means the declared `file_size`
+/// (which the size gate + quota key on) does not bound the bytes actually reassembled — reject it.
+fn offer_geometry_ok(offer: &openpulse_filexfer::FileOffer) -> bool {
+    if !(openpulse_filexfer::MIN_BLOCK_SIZE..=openpulse_filexfer::MAX_BLOCK_SIZE)
+        .contains(&offer.block_size)
+    {
+        return false;
+    }
+    openpulse_filexfer::block_count(offer.file_size, offer.block_size) == Some(offer.block_count)
+}
+
 /// True if accepting `incoming` bytes for `from` would exceed the per-peer quota (0 = unlimited).
 fn quota_would_exceed(policy: &FileTransferPolicy, from: &str, incoming: u64) -> bool {
     if policy.per_peer_quota_bytes == 0 {
@@ -949,6 +966,31 @@ mod tests {
             block_size,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn offer_geometry_check_rejects_inconsistent_block_count() {
+        // Audit #13: a well-formed offer passes; a tampered one whose block_count decouples from
+        // file_size (the size gate + quota key on file_size) is rejected.
+        let file: Vec<u8> = (0..2500u32).map(|i| i as u8).collect(); // 3 × 1024-byte blocks
+        let good = offer_for(&file, 1024);
+        assert!(offer_geometry_ok(&good), "a well-formed offer is accepted");
+
+        // Inflate block_count far beyond what file_size implies (the finding's gigabytes-bypass shape).
+        let mut evil = good.clone();
+        evil.block_count = 65535;
+        assert!(
+            !offer_geometry_ok(&evil),
+            "an inflated block_count must be rejected"
+        );
+
+        // A block_size outside the protocol window is also rejected.
+        let mut bad_bs = good.clone();
+        bad_bs.block_size = 10; // below MIN_BLOCK_SIZE
+        assert!(
+            !offer_geometry_ok(&bad_bs),
+            "sub-minimum block_size rejected"
+        );
     }
 
     #[test]
