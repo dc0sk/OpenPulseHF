@@ -9,6 +9,27 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-13 — docs: cli-guide daemon/FF-15/FF-16 CLI + README hpx_hf ladder row
+
+- **Requirement/change:** issue #830 docs items #44 and #45. (#44) `docs/cli-guide.md` was frozen at
+  v0.2.0 and documented none of the `openpulse daemon` control CLI — including the FF-15 discovery and
+  FF-16 file-transfer commands — yet the traceability matrix cites it as covering REQ-UX-02. (#45) the
+  README `hpx_hf` adaptive-profile row still named the pre-(SC-FDMA→OFDM re-seat) ladder.
+- **Design decision:** document the daemon CLI grouped by function (connection/PTT/mode, messaging/OTA,
+  runtime toggles) with explicit FF-15 (`enable-discovery`/`disable-discovery`/`stations`/`peers`) and
+  FF-16 (`send-file`/`accept-file`/`reject-file`/`cancel-file`/`files`) sections, plus the six missing
+  top-level subcommands (`monitor`/`broadcast`/`beacon`/`qsy`/`calibrate`/`config`). Args taken from
+  the clap derives in `crates/openpulse-cli/src/cli.rs` (verified: `daemon --addr` default
+  `127.0.0.1:9000`; `broadcast --payload`; `beacon --callsign` required). Also corrected the stale
+  `--pki-url` default (`localhost:8080` → `127.0.0.1:8787`) and bumped the doc's version/date stamp.
+- **Implementation:** `docs/cli-guide.md` (new "Daemon control CLI" section + top-level additions +
+  stamp/URL fixes); `README.md` `hpx_hf` row → `SL2–SL17` / top mode `OFDM52-64QAM` (matching
+  `crates/openpulse-core/src/profile.rs::hpx_hf`, SL2–SL17, SL17 = `OFDM52-64QAM`).
+- **Tests:** `bash scripts/validate-doc-frontmatter.sh` → exit 0. CLI surface cross-checked against the
+  clap `enum Commands`/`enum DaemonCommands` definitions.
+
+---
+
 ## 2026-07-13 — fix(gpu): calibrate the 64QAM + psk8 GPU soft-demod LLRs
 
 - **Requirement/change:** issue #830 DSP-calibration follow-up — the GPU soft-demod paths emitted
