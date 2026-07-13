@@ -2188,8 +2188,10 @@ fn set_discovery_enabled(
     emit_discovery_status(runtime_state, event_tx);
 }
 
-/// Slots to wait for a rendezvous reply before timing out (`N × 15 s` for NORMAL; 8 ≈ 2 min).
-const RENDEZVOUS_TIMEOUT_SLOTS: u64 = 8;
+/// Slots to wait for a rendezvous reply *after* our Propose has fully transmitted, before timing out
+/// (`N × 15 s` for NORMAL; 16 ≈ 4 min). Must exceed the peer's receive + Accept-over round-trip
+/// (~8–10 slots) so a well-behaved exchange never times out.
+const RENDEZVOUS_TIMEOUT_SLOTS: u64 = 16;
 
 /// A short (2-char base-36) rendezvous session token derived from the current time.
 fn rendezvous_token(now_ms: u64) -> String {

@@ -35,9 +35,12 @@ fn station(callsign: &str, channels: Vec<u8>) -> DiscoveryRuntime {
     rt
 }
 
-/// Tick `rt` across slots, collecting every transmitted-frame audio buffer until its TX queue drains.
-fn drain_tx(rt: &mut DiscoveryRuntime, t: &mut u64) -> Vec<Vec<f32>> {
+/// Tick `rt` across slots, collecting every transmitted-frame audio buffer until its TX queue drains,
+/// plus the non-TX outcomes seen along the way (e.g. a responder's `RendezvousAgreed`, which surfaces
+/// only once its Accept over has fully transmitted).
+fn drain_tx(rt: &mut DiscoveryRuntime, t: &mut u64) -> (Vec<Vec<f32>>, Vec<DiscoveryOutcome>) {
     let mut frames = Vec::new();
+    let mut outcomes = Vec::new();
     for _ in 0..16 {
         *t += 15_000;
         let mut got = false;
@@ -45,13 +48,15 @@ fn drain_tx(rt: &mut DiscoveryRuntime, t: &mut u64) -> Vec<Vec<f32>> {
             if let DiscoveryOutcome::TransmitBeacon { audio, .. } = o {
                 frames.push(audio);
                 got = true;
+            } else {
+                outcomes.push(o);
             }
         }
         if !got && !frames.is_empty() {
             break; // queue drained
         }
     }
-    frames
+    (frames, outcomes)
 }
 
 /// Deliver each transmitted-frame audio buffer into `rt`'s capture, crossing a slot boundary per frame
@@ -87,20 +92,27 @@ fn two_runtimes_reach_a_rendezvous_over_the_air() {
 
     // DC0SK proposes channels 1 then 0 to KN4CRD.
     initiator.start_rendezvous("KN4CRD", "R7", vec![1, 0], 50);
-    let propose_audio = drain_tx(&mut initiator, &mut t);
+    let (propose_audio, _) = drain_tx(&mut initiator, &mut t);
     assert!(!propose_audio.is_empty(), "the Propose over transmitted");
 
-    // The responder decodes the Propose and agrees on the highest-ranked common channel (1).
-    let resp_out = deliver(&mut responder, &propose_audio, &mut t);
+    // The responder decodes the Propose and enqueues its Accept, but withholds the agreement until the
+    // Accept is on the air (audit #4b) — so nothing is agreed during receive.
+    let resp_recv = deliver(&mut responder, &propose_audio, &mut t);
+    assert_eq!(
+        agreed_channel(&resp_recv, "DC0SK"),
+        None,
+        "responder defers agreement until its Accept is sent"
+    );
+
+    // The responder's Accept over transmits; the agreement surfaces once it has, on the highest-ranked
+    // common channel (1). The initiator then decodes the Accept and reaches the same agreement.
+    let (accept_audio, resp_out) = drain_tx(&mut responder, &mut t);
+    assert!(!accept_audio.is_empty(), "the Accept over transmitted");
     assert_eq!(
         agreed_channel(&resp_out, "DC0SK"),
         Some(1),
-        "responder agreed on channel 1: {resp_out:?}"
+        "responder agreed on channel 1 after sending the Accept: {resp_out:?}"
     );
-
-    // The responder's Accept over transmits; the initiator decodes it and reaches the same agreement.
-    let accept_audio = drain_tx(&mut responder, &mut t);
-    assert!(!accept_audio.is_empty(), "the Accept over transmitted");
     let init_out = deliver(&mut initiator, &accept_audio, &mut t);
     assert_eq!(
         agreed_channel(&init_out, "KN4CRD"),
@@ -120,7 +132,7 @@ fn two_runtimes_with_no_common_channel_do_not_agree() {
     let mut t = 1000u64;
 
     initiator.start_rendezvous("KN4CRD", "R7", vec![1, 0], 50);
-    let propose_audio = drain_tx(&mut initiator, &mut t);
+    let (propose_audio, _) = drain_tx(&mut initiator, &mut t);
     let resp_out = deliver(&mut responder, &propose_audio, &mut t);
     assert_eq!(
         agreed_channel(&resp_out, "DC0SK"),
@@ -129,7 +141,13 @@ fn two_runtimes_with_no_common_channel_do_not_agree() {
     );
 
     // The responder still sends a Reject over; the initiator surfaces it as rejected, not agreed.
-    let reject_audio = drain_tx(&mut responder, &mut t);
+    let (reject_audio, resp_out) = drain_tx(&mut responder, &mut t);
+    assert!(
+        !resp_out
+            .iter()
+            .any(|o| matches!(o, DiscoveryOutcome::RendezvousAgreed { .. })),
+        "responder never agrees with no common channel"
+    );
     let init_out = deliver(&mut initiator, &reject_audio, &mut t);
     assert!(
         agreed_channel(&init_out, "KN4CRD").is_none(),

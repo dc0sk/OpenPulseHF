@@ -149,6 +149,10 @@ pub struct DiscoveryRuntime {
     initiator: Option<RendezvousInitiator>,
     /// Directed rendezvous frames pending transmission (priority over beacons, no cadence gate).
     rendezvous_tx: VecDeque<BeaconFrame>,
+    /// A responder agreement `(peer, channel, switch_in_slots)` withheld until our Accept over has fully
+    /// transmitted — so the daemon schedules the responder's QSY *after* the Accept is sent (aligned with
+    /// the initiator's decode) instead of preempting and truncating the Accept's last frame.
+    pending_responder_agreement: Option<(String, u8, u8)>,
     /// Audio accumulated since the last slot boundary (only while dwelling).
     dwell_buf: Vec<f32>,
     /// Frames of the beacon over currently being transmitted, one per slot.
@@ -177,6 +181,7 @@ impl DiscoveryRuntime {
             rendezvous_channels: Vec::new(),
             initiator: None,
             rendezvous_tx: VecDeque::new(),
+            pending_responder_agreement: None,
             dwell_buf: Vec::new(),
             beacon_queue: VecDeque::new(),
             slots_since_beacon: 0,
@@ -225,7 +230,9 @@ impl DiscoveryRuntime {
         channels: Vec<u8>,
         timeout_slots: u64,
     ) {
-        if self.params.callsign.trim().is_empty() {
+        // Rendezvous requires transmitting a Propose — refuse in RX-only (the documented zero-TX default),
+        // matching the responder gate, so a stray command can't break the RxOnly invariant.
+        if self.params.callsign.trim().is_empty() || self.params.tx_mode == TxMode::RxOnly {
             return;
         }
         let (init, propose) = RendezvousInitiator::start(peer, token, channels, timeout_slots);
@@ -293,12 +300,29 @@ impl DiscoveryRuntime {
         // the slot we just buffered (half-duplex — a TX slot skips RX).
         if self.sm.state() == DiscoveryState::Dwelling {
             if let Some(_completed) = self.slots.advance(self.clock.slot_index(now_ms)) {
-                // Age an in-flight rendezvous proposal; a timeout ends it and stands down.
-                if let Some(init) = self.initiator.as_mut() {
-                    if let Some(RendezvousOutcome::TimedOut) = init.on_slot() {
-                        let peer = init.peer().to_string();
-                        self.initiator = None;
-                        out.push(DiscoveryOutcome::RendezvousTimedOut { peer });
+                // Our own directed over (Propose or Accept) has fully transmitted once the queue empties.
+                if self.rendezvous_tx.is_empty() {
+                    // Responder: surface the withheld agreement now that the Accept is on the air, so the
+                    // daemon's QSY schedule starts here (aligned with the initiator's Accept decode)
+                    // instead of preempting the Accept's final frame.
+                    if let Some((peer, channel, switch_in_slots)) =
+                        self.pending_responder_agreement.take()
+                    {
+                        out.push(DiscoveryOutcome::RendezvousAgreed {
+                            peer,
+                            channel,
+                            switch_in_slots,
+                        });
+                    }
+                    // Initiator: only age the proposal while genuinely waiting for a reply (the Propose is
+                    // fully sent), never during our own Propose transmission — else it times out before a
+                    // well-behaved reply can possibly arrive.
+                    if let Some(init) = self.initiator.as_mut() {
+                        if let Some(RendezvousOutcome::TimedOut) = init.on_slot() {
+                            let peer = init.peer().to_string();
+                            self.initiator = None;
+                            out.push(DiscoveryOutcome::RendezvousTimedOut { peer });
+                        }
                     }
                 }
                 if let Some(tx) = self.maybe_transmit(now_ms) {
@@ -324,6 +348,11 @@ impl DiscoveryRuntime {
         if !self.clock.tx_allowed(self.params.max_clock_skew_ms) {
             return None;
         }
+        // RX-only transmits nothing at all — check before the rendezvous queue so the documented zero-TX
+        // default can never emit a Propose/Accept frame.
+        if self.params.tx_mode == TxMode::RxOnly {
+            return None;
+        }
         // Rendezvous frames have priority and no cadence gate: a directed exchange (operator-initiated,
         // or a responder Accept) transmits every slot until its over is complete.
         if let Some(frame) = self.rendezvous_tx.pop_front() {
@@ -332,10 +361,6 @@ impl DiscoveryRuntime {
                 audio,
                 mode: js8_mode_label(self.params.submode),
             });
-        }
-        // Beacon heartbeats/hints are gated by the TX policy.
-        if self.params.tx_mode == TxMode::RxOnly {
-            return None;
         }
 
         if self.beacon_queue.is_empty() {
@@ -497,14 +522,11 @@ impl DiscoveryRuntime {
                     ..
                 } = reply
                 {
-                    vec![DiscoveryOutcome::RendezvousAgreed {
-                        peer: from,
-                        channel,
-                        switch_in_slots,
-                    }]
-                } else {
-                    Vec::new()
+                    // Withhold the agreement until the Accept over has fully transmitted (see the slot
+                    // handler in `tick`), so the daemon schedules our QSY after the Accept is sent.
+                    self.pending_responder_agreement = Some((from, channel, switch_in_slots));
                 }
+                Vec::new()
             }
             _ => Vec::new(),
         }
@@ -793,29 +815,60 @@ mod tests {
         rt.set_rendezvous_channels(vec![3, 9, 2]);
         let mut t = 1000u64;
         // KN4CRD proposes channels 9 then 3; we have [3,9,2] so the highest-ranked common is 9.
-        let out = feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF QSY? R7 C9 C3", &mut t);
-        let agreed = out
-            .iter()
-            .find_map(|o| match o {
-                DiscoveryOutcome::RendezvousAgreed {
-                    peer,
-                    channel,
-                    switch_in_slots,
-                } => Some((peer.clone(), *channel, *switch_in_slots)),
-                _ => None,
-            })
-            .expect("agreed on a channel");
-        assert_eq!(agreed, ("KN4CRD".to_string(), 9, DEFAULT_SWITCH_SLOTS));
-        // The Accept over then transmits (queued with priority over beacons).
-        let mut txd = false;
-        for _ in 0..6 {
-            t += 15_000;
-            txd |= rt
-                .tick(t, true)
+        let during = feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF QSY? R7 C9 C3", &mut t);
+        // The agreement is withheld while the Accept is still being sent — emitting it during receive is
+        // what let the daemon preempt and truncate the Accept's final frame (audit #4b).
+        assert!(
+            !during
                 .iter()
-                .any(|o| matches!(o, DiscoveryOutcome::TransmitBeacon { .. }));
+                .any(|o| matches!(o, DiscoveryOutcome::RendezvousAgreed { .. })),
+            "agreement must be deferred until the Accept over is on the air"
+        );
+        // Drain the Accept over; the agreement surfaces only once it has fully transmitted.
+        let mut agreed = None;
+        let mut txd = false;
+        for _ in 0..8 {
+            t += 15_000;
+            for o in rt.tick(t, true) {
+                match o {
+                    DiscoveryOutcome::TransmitBeacon { .. } => txd = true,
+                    DiscoveryOutcome::RendezvousAgreed {
+                        peer,
+                        channel,
+                        switch_in_slots,
+                    } => agreed = Some((peer, channel, switch_in_slots)),
+                    _ => {}
+                }
+            }
         }
         assert!(txd, "the Accept over is transmitted");
+        assert_eq!(
+            agreed,
+            Some(("KN4CRD".to_string(), 9, DEFAULT_SWITCH_SLOTS))
+        );
+    }
+
+    #[test]
+    fn rx_only_start_rendezvous_transmits_nothing() {
+        // Audit #4c: the documented zero-TX default must never emit a Propose, even if a rendezvous is
+        // started against it (the daemon gates this too, but the runtime invariant must hold on its own).
+        let mut rt = dwelling_rendezvous_runtime(TxMode::RxOnly);
+        rt.set_rendezvous_channels(vec![0, 1, 2]);
+        rt.start_rendezvous("KN4CRD", "R7", vec![1, 0], 16);
+        assert!(
+            !rt.rendezvous_active(),
+            "RX-only refuses to start a rendezvous"
+        );
+        let mut t = 1000u64;
+        for _ in 0..8 {
+            t += 15_000;
+            assert!(
+                !rt.tick(t, true)
+                    .iter()
+                    .any(|o| matches!(o, DiscoveryOutcome::TransmitBeacon { .. })),
+                "RX-only must never transmit a rendezvous frame"
+            );
+        }
     }
 
     #[test]
@@ -903,8 +956,10 @@ mod tests {
         let mut rt = dwelling_rendezvous_runtime(TxMode::Full);
         rt.start_rendezvous("KN4CRD", "R7", vec![3, 9], 3);
         let mut t = 1000u64;
+        // The Propose (~4 frames) must transmit first; aging only begins once it has drained, so the
+        // timeout counts genuine reply-wait slots — run enough slots to cover Propose TX + 3 wait slots.
         let mut timed_out = false;
-        for _ in 0..6 {
+        for _ in 0..12 {
             t += 15_000;
             timed_out |= rt
                 .tick(t, true)
