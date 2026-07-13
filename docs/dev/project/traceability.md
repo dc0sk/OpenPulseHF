@@ -4248,3 +4248,16 @@ and the actually-observed results per change.
   (the "front-ends don't drive sessions" area).
 - **Test results:** `cargo build/clippy -p openpulse-mesh --no-default-features` clean (a `main()` startup
   guard, consistent with the daemon's untested guard).
+
+## 2026-07-13 — fix(panel): audit (low tier) — panel mode list omitted 12 PILOT modes
+
+- **Requirement/change:** the audit found the panel's hardcoded `MODES` list carried only the 8 PILOT-500
+  variants while the `pilot` plugin registers 20 (adding the PILOT-{QPSK,8PSK,16QAM,32APSK}1000, -1000-RRC,
+  and -2000-RRC families) — so an operator could not select 12 registered modes. Same drift class as the
+  earlier mode-list fix (PR #321).
+- **Design decision:** add the 12 missing PILOT-1000/2000 mode strings to `apps/openpulse-panel/src/ui.rs`
+  `MODES`, matching the plugin's registration.
+- **Test results:** `cargo build/clippy -p openpulse-panel --no-default-features` clean.
+- **Scope note:** the `SetTxAttenuation { band }` drop is **deferred** — the command carries an optional
+  `band`, but the engine has only a single global `tx_attenuation_db` (no per-band store), so honoring it
+  is a feature, not a fix.
