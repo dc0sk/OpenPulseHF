@@ -4078,3 +4078,24 @@ and the actually-observed results per change.
 - **Tests:** `ws_auth_gate_tests` — disabled when TCP requires auth (even if WS is loopback), disabled when
   the WS bind is non-loopback, enabled only when both are loopback and no auth is configured.
 - **Test results:** `cargo test -p openpulse-daemon --no-default-features` green (86 lib); clippy + fmt clean.
+
+## 2026-07-13 — fix(repeater): audit #6 — station-ID the cross-band repeater's transmitting rig
+
+- **Requirement/change:** the audit (finding #6, confirmed) found the daemon's §97.119 station-ID timer
+  only watches the *main* engine's `frames_transmitted`; `CrossBandRepeater` builds and transmits from a
+  wholly separate `engine_tx`/rig-B pair with **zero ID logic** (PTT held for the whole full-duplex
+  session) — exactly the automatically-controlled-station case (§97.221) the regulatory doc calls out.
+  REQ-REG-04, CAP-70-adjacent regulatory.
+- **Design decision:** give `CrossBandRepeater` its own `StationIdTimer` keyed off rig-B transmits.
+  `RepeaterConfig` gains `callsign` + `id_interval_secs` (wired from `[station] callsign` /
+  `auto_id_interval_secs`); an empty callsign or 0 interval disables auto-ID. After each relayed frame the
+  timer is noted; when the interval elapses, `maybe_identify` transmits `DE <callsign>` on rig-B (keying
+  its own PTT in half-duplex; reusing the held session PTT in full-duplex), then marks identified. Clock is
+  injectable via `relay_one_frame_at(now_ms)` for deterministic tests.
+- **Implementation:** `crates/openpulse-repeater/{src/lib.rs,src/config.rs,Cargo.toml}` (adds
+  `openpulse-core` dep); `crates/openpulse-daemon/src/server.rs` + `lib.rs` build sites.
+- **Tests:** `transmitting_rig_is_station_identified_when_the_interval_elapses` — a plain relay keys once;
+  a relay after the interval keys a second time (the ID's own PTT). Existing repeater tests updated with
+  `..Default::default()` (empty callsign → no ID → behaviour unchanged).
+- **Test results:** `cargo test -p openpulse-repeater --no-default-features` → 7 green;
+  `cargo build --workspace --no-default-features` clean; clippy + fmt clean.

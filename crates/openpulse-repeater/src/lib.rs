@@ -3,7 +3,9 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
+use openpulse_core::station_id::StationIdTimer;
 use openpulse_modem::ModemEngine;
 use openpulse_radio::PttController;
 use thiserror::Error;
@@ -29,6 +31,10 @@ pub struct CrossBandRepeater {
     /// Modem engine used for re-transmitting (drives rig_b audio).
     engine_tx: ModemEngine,
     config: RepeaterConfig,
+    /// §97.119 auto-ID of the transmitting rig (rig_b), independent of the daemon's main-engine timer.
+    id_timer: Option<StationIdTimer>,
+    /// Monotonic clock origin for the ID timer.
+    start: Instant,
 }
 
 impl CrossBandRepeater {
@@ -44,11 +50,17 @@ impl CrossBandRepeater {
         engine_tx: ModemEngine,
         config: RepeaterConfig,
     ) -> Self {
+        // Auto-ID only with a callsign and a positive interval; rig_b is an automatically-controlled
+        // station (§97.221) that must ID per §97.119, and the daemon's main-engine timer never sees it.
+        let id_timer = (!config.callsign.trim().is_empty() && config.id_interval_secs > 0)
+            .then(|| StationIdTimer::new(config.id_interval_secs.saturating_mul(1000), 0));
         Self {
             rig_b,
             engine_rx,
             engine_tx,
             config,
+            id_timer,
+            start: Instant::now(),
         }
     }
 
@@ -57,6 +69,12 @@ impl CrossBandRepeater {
     /// Returns the number of bytes relayed, or `None` if no frame was available.
     /// FEC is not applied on the relay path (raw mode).
     pub fn relay_one_frame(&mut self) -> Result<Option<usize>, RepeaterError> {
+        let now_ms = self.start.elapsed().as_millis() as u64;
+        self.relay_one_frame_at(now_ms)
+    }
+
+    /// [`relay_one_frame`] with an explicit monotonic clock (for deterministic ID-timing tests).
+    pub fn relay_one_frame_at(&mut self, now_ms: u64) -> Result<Option<usize>, RepeaterError> {
         if !self.config.enabled {
             return Ok(None);
         }
@@ -77,6 +95,12 @@ impl CrossBandRepeater {
         self.engine_tx
             .transmit(&bytes, &self.config.mode.clone(), None)
             .map_err(|e| RepeaterError::Modem(e.to_string()))?;
+        if let Some(t) = self.id_timer.as_mut() {
+            t.note_tx(now_ms);
+        }
+        // §97.119: identify the transmitting rig when the interval has elapsed. In half-duplex PTT is
+        // released per-frame, so the ID keys its own PTT; in full-duplex PTT is already held.
+        self.maybe_identify(now_ms)?;
         if !self.config.full_duplex {
             if self.config.tx_hang_ms > 0 {
                 std::thread::sleep(std::time::Duration::from_millis(self.config.tx_hang_ms));
@@ -91,6 +115,33 @@ impl CrossBandRepeater {
         );
 
         Ok(Some(n))
+    }
+
+    /// Transmit `DE <callsign>` on rig_b if the auto-ID interval has elapsed. In half-duplex it keys and
+    /// releases its own PTT; in full-duplex the session PTT is already asserted. No-op without a timer.
+    fn maybe_identify(&mut self, now_ms: u64) -> Result<(), RepeaterError> {
+        let due = self.id_timer.as_ref().is_some_and(|t| t.id_due(now_ms));
+        if !due {
+            return Ok(());
+        }
+        let id_body = format!("DE {}", self.config.callsign);
+        if !self.config.full_duplex {
+            self.rig_b.assert_ptt().map_err(RepeaterError::Ptt)?;
+        }
+        let tx = self
+            .engine_tx
+            .transmit(id_body.as_bytes(), &self.config.mode.clone(), None)
+            .map_err(|e| RepeaterError::Modem(e.to_string()));
+        if !self.config.full_duplex {
+            // Release even if the ID transmit failed, so a failure can't leave rig_b keyed.
+            self.rig_b.release_ptt().map_err(RepeaterError::Ptt)?;
+        }
+        tx?;
+        if let Some(t) = self.id_timer.as_mut() {
+            t.mark_identified(now_ms);
+        }
+        tracing::info!(callsign = %self.config.callsign, "cross-band relay: transmitted station ID");
+        Ok(())
     }
 
     /// Run in full-duplex mode: assert PTT once, relay frames until `stop` is set,

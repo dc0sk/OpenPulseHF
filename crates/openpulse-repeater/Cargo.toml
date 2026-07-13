@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Cross-band repeater for OpenPulseHF: relays decoded frames from rig_a to rig_b"
 
 [dependencies]
+openpulse-core   = { workspace = true }
 openpulse-modem  = { workspace = true }
 openpulse-radio  = { workspace = true }
 thiserror.workspace = true

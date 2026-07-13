@@ -64,6 +64,7 @@ fn relay_disabled_returns_none() {
         mode: "BPSK250".into(),
         tx_hang_ms: 0,
         full_duplex: false,
+        ..Default::default()
     };
     let mut repeater =
         CrossBandRepeater::new(Box::new(NoOpPtt::new()), engine_rx, engine_tx, config);
@@ -100,6 +101,7 @@ fn relay_loopback_cross_band() {
         mode: "BPSK250".into(),
         tx_hang_ms: 0,
         full_duplex: false,
+        ..Default::default()
     };
     let mut repeater = CrossBandRepeater::new(Box::new(rig_b), engine_rx, engine_tx, config);
     let n = repeater.relay_one_frame().expect("relay").expect("Some");
@@ -118,6 +120,82 @@ fn relay_loopback_cross_band() {
     assert_eq!(&received[..payload.len()], payload);
 }
 
+/// A PTT double that records each assert/release, to observe the extra keying the ID performs.
+struct LoggingPtt {
+    log: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    asserted: bool,
+}
+impl openpulse_radio::PttController for LoggingPtt {
+    fn assert_ptt(&mut self) -> Result<(), openpulse_radio::PttError> {
+        self.asserted = true;
+        self.log.lock().unwrap().push("assert");
+        Ok(())
+    }
+    fn release_ptt(&mut self) -> Result<(), openpulse_radio::PttError> {
+        self.asserted = false;
+        self.log.lock().unwrap().push("release");
+        Ok(())
+    }
+    fn is_asserted(&self) -> bool {
+        self.asserted
+    }
+}
+
+#[test]
+fn transmitting_rig_is_station_identified_when_the_interval_elapses() {
+    // Audit #6: rig_b is an automatically-controlled station (§97.221) and must ID per §97.119. In
+    // half-duplex the ID keys its own PTT, so a relay whose interval has elapsed shows an *extra*
+    // assert/release pair (the relayed frame's, plus the ID's) versus a plain relay.
+    fn feed_frame(lb: &LoopbackBackend) {
+        let mut src = ModemEngine::new(Box::new(lb.clone_shared()));
+        src.register_plugin(Box::new(BpskPlugin::new()))
+            .expect("register");
+        src.transmit(b"relay frame", "BPSK250", None).expect("tx");
+    }
+
+    let (engine_rx, lb_rx) = make_engine_with_plugin();
+    let (engine_tx, _lb_tx) = make_engine_with_plugin();
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let rig_b = LoggingPtt {
+        log: log.clone(),
+        asserted: false,
+    };
+    let config = RepeaterConfig {
+        enabled: true,
+        mode: "BPSK250".into(),
+        tx_hang_ms: 0,
+        full_duplex: false,
+        callsign: "N0CALL".into(),
+        id_interval_secs: 600,
+    };
+    let mut repeater = CrossBandRepeater::new(Box::new(rig_b), engine_rx, engine_tx, config);
+
+    // First relay at t=0: one keying pair for the relayed frame, no ID yet.
+    feed_frame(&lb_rx);
+    repeater
+        .relay_one_frame_at(0)
+        .expect("relay")
+        .expect("Some");
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec!["assert", "release"],
+        "a plain relay keys once; no ID before the interval"
+    );
+
+    // Second relay at t = 601 s: the interval has elapsed → the ID keys a second time within the call.
+    log.lock().unwrap().clear();
+    feed_frame(&lb_rx);
+    repeater
+        .relay_one_frame_at(601_000)
+        .expect("relay")
+        .expect("Some");
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec!["assert", "assert", "release", "release"],
+        "the ID keys its own PTT after the interval elapses"
+    );
+}
+
 #[test]
 fn relay_empty_buffer_returns_none() {
     let (engine_rx, _lb_rx) = make_engine_with_plugin();
@@ -127,6 +205,7 @@ fn relay_empty_buffer_returns_none() {
         mode: "BPSK250".into(),
         tx_hang_ms: 0,
         full_duplex: false,
+        ..Default::default()
     };
     // No samples in loopback_rx — receive() should return empty vec or error
     let mut repeater =
@@ -151,6 +230,7 @@ fn full_duplex_ptt_released_on_early_stop() {
         mode: "BPSK250".into(),
         tx_hang_ms: 500, // should be ignored in full-duplex
         full_duplex: true,
+        ..Default::default()
     };
     let mut repeater = CrossBandRepeater::new(Box::new(rig_b), engine_rx, engine_tx, config);
 
@@ -182,6 +262,7 @@ fn full_duplex_disabled_returns_zero_immediately() {
         mode: "BPSK250".into(),
         tx_hang_ms: 0,
         full_duplex: true,
+        ..Default::default()
     };
     let mut repeater = CrossBandRepeater::new(Box::new(rig_b), engine_rx, engine_tx, config);
 
@@ -218,6 +299,7 @@ fn full_duplex_relay_one_frame_skips_ptt() {
         mode: "BPSK250".into(),
         tx_hang_ms: 0,
         full_duplex: true,
+        ..Default::default()
     };
     let mut repeater = CrossBandRepeater::new(Box::new(rig_b), engine_rx, engine_tx, config);
 
