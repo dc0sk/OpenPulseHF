@@ -4043,3 +4043,22 @@ and the actually-observed results per change.
 - **Tests:** `long_high_group_run_does_not_overflow` (256 all-ones bits → one long high-group run; panics
   before the fix). Full JSC + ground-truth decode tests unchanged.
 - **Test results:** `cargo test -p js8-plugin --no-default-features --lib jsc::` green; clippy + fmt clean.
+
+## 2026-07-13 — fix(daemon): audit #5 — arm the PTT watchdog on every automatic TX path
+
+- **Requirement/change:** the audit (finding #5, confirmed) found `ptt_asserted_at` was set only by the
+  manual `PttAssert` command; the five automatic keying paths (station-ID, OTA ACK, OTA send, discovery
+  beacon, filexfer drain) asserted/released directly and only `warn!`ed on release failure — so a transient
+  rigctld/serial fault during any unattended transmission leaves the transmitter keyed with the software
+  watchdog permanently blind to it. Safety backstop; §97.221 automatic-control control-point relevance.
+- **Design decision:** arm `ptt_asserted_at` (the watchdog clock) at every automatic keying, and disarm it
+  only on a **successful** release — a failed release leaves it armed so the next `check_ptt_watchdog` tick
+  force-releases the still-keyed transmitter (the watchdog caller already re-releases hardware on fire). The
+  two keying helpers (`transmit_beacon_with_ptt`, `ota_send_with_ptt`) take the watchdog clock as a param;
+  the three inline sites use `runtime_state.ptt_asserted_at` directly.
+- **Implementation:** `crates/openpulse-daemon/src/server.rs`.
+- **Tests:** `automatic_tx_arms_the_watchdog_and_disarms_only_on_clean_release` with a `FlakyPtt` double
+  (a failing-release PTT — also closes the audit's "no failing-PTT test double" gap): a failed release keeps
+  the watchdog armed, a clean release disarms it.
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features` → 83 lib + integration green;
+  clippy + fmt clean.
