@@ -4179,3 +4179,21 @@ and the actually-observed results per change.
   registers QPSK so it selects a genuinely-registered mode.
 - **Test results:** `cargo test -p openpulse-daemon --no-default-features` → all green (7 groups); clippy
   + fmt clean.
+
+## 2026-07-13 — fix(daemon/filexfer): audit #13 — reject inconsistent offer geometry
+
+- **Requirement/change:** the audit (finding #13, confirmed) found the receive-side size gate + per-peer
+  quota key only on `offer.file_size`, while `offer.block_count` is a raw uncross-checked `u16`. A crafted
+  offer (e.g. `file_size = 100`, `block_count = 65535`) decouples the size/quota check from the bytes
+  actually reassembled and written. Feature is off by default (`require_verified_peer = true`), but the
+  geometry was never validated.
+- **Design decision:** validate the offer's block geometry up front in `on_offer`, before the quota check
+  and `decide()`: reject (`Reason::TooLarge`) unless `block_size` is within the protocol window
+  `[MIN_BLOCK_SIZE, MAX_BLOCK_SIZE]` and `block_count == block_count(file_size, block_size)` (the existing
+  helper). With geometry consistent, the `file_size` gate now also bounds the reassembled/written bytes.
+- **Implementation:** `crates/openpulse-daemon/src/filexfer.rs` (`offer_geometry_ok`, wired into the
+  decision chain).
+- **Tests:** `offer_geometry_check_rejects_inconsistent_block_count` — a well-formed offer passes; an
+  inflated `block_count` and a sub-minimum `block_size` are both rejected.
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features filexfer` → green; twin +
+  filexfer suites unchanged; clippy + fmt clean.
