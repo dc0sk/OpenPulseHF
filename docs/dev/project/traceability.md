@@ -9,6 +9,29 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-13 — feat(mesh): answer route-discovery requests on-air
+
+- **Requirement/change:** issue #830 follow-up to the route-discovery driver — a mesh node must
+  actually *answer* route requests, otherwise an interop partner's request floods but is never
+  answered (the dead-end just moves up a layer). The mesh dispatcher fell `RouteDiscoveryRequest`
+  through to the PeerQuery-only `QueryForwarder`, which now floods it but nobody replied.
+- **Design decision:** give `MeshDaemon` a `RouteResponder` + `RouteTable` (the node already holds the
+  Ed25519 `signing_key_seed` and a `PeerCache`). On `RouteDiscoveryRequest`, try `RouteResponder::answer`
+  first; on `Some`, transmit the signed `RouteDiscoveryResponse` directed back to the originator
+  (`dst = request src`) and emit `MeshEvent::RouteAnswered`; on `None`, flood as before. The responder's
+  peer id is `verifying_key(seed)`, which the mesh binary also uses as `local_peer_id` (main.rs:111), so
+  the answering identity matches; `capability_mask = 0` mirrors the self peer-cache entry. The
+  catch-all propagate body was extracted to `propagate_query` and reused.
+- **Implementation:** `crates/openpulse-mesh/src/lib.rs` — `route_responder`/`route_table` fields,
+  `handle_route_discovery_request`, `propagate_query`, `MeshEvent::RouteAnswered`, dispatch arm.
+- **Tests:** `crates/openpulse-mesh/tests/mesh_loopback.rs::route_discovery_destination_answers` — A
+  originates a request for B's route-identity and transmits it over the loopback; B recognises itself as
+  the destination, emits `RouteAnswered`, and transmits a response.
+- **Test results:** `cargo test -p openpulse-mesh --no-default-features` → 9 pass (was 8); clippy + fmt
+  clean. An interop partner's route request now gets a signed answer from a mesh node.
+
+---
+
 ## 2026-07-13 — feat(core): route-discovery driver (originate / answer / apply)
 
 - **Requirement/change:** issue #830 — the route-discovery wire messages

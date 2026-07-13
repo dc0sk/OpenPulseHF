@@ -9,8 +9,10 @@ use openpulse_core::peer_cache::{PeerCache, PeerRecord, TrustFilter, TrustLevel}
 use openpulse_core::peer_descriptor::PeerDescriptor;
 use openpulse_core::query_propagation::{QueryEvent, QueryForwarder};
 use openpulse_core::relay::{RelayEvent, RelayForwarder, RelayTrustPolicy};
+use openpulse_core::route_discovery::{RouteResponder, RouteTable};
 use openpulse_core::wire_query::{
-    BroadcastFrame, PeerQueryRequest, PeerQueryResponse, PeerQueryResult, WireEnvelope, WireMsgType,
+    BroadcastFrame, PeerQueryRequest, PeerQueryResponse, PeerQueryResult, RouteDiscoveryRequest,
+    WireEnvelope, WireMsgType,
 };
 use openpulse_modem::ModemEngine;
 use thiserror::Error;
@@ -42,6 +44,8 @@ pub enum MeshEvent {
     FrameDelivered { session_id: u64 },
     /// A peer-query request was answered with `result_count` cache entries.
     PeerQueried { query_id: u64, result_count: usize },
+    /// A route-discovery request was answered (this node is the destination or holds a route).
+    RouteAnswered { route_query_id: u64 },
     /// A previously unknown peer was added to the local peer cache.
     PeerDiscovered { peer_id: [u8; 32] },
     /// A broadcast frame was received (and re-broadcast if TTL > 0).
@@ -70,6 +74,10 @@ pub struct MeshDaemon {
     query_forwarder: QueryForwarder,
     beacon: BeaconScheduler,
     peer_cache: PeerCache,
+    /// Answers route-discovery requests this node is the destination of (or already has a route to).
+    route_responder: RouteResponder,
+    /// Routes this node has learned (seeds cached-route answers).
+    route_table: RouteTable,
     /// Minimum trust level a peer must have to have its frames relayed.
     relay_trust_filter: TrustFilter,
     /// Local maximum hop count. Envelopes with hop_limit > this are clamped
@@ -135,6 +143,10 @@ impl MeshDaemon {
             query_forwarder: QueryForwarder::new(ttl_ms, 1024, policy.clone()),
             beacon: BeaconScheduler::new(beacon_interval_s),
             peer_cache,
+            // The responder's peer id is verifying_key(seed); the mesh binary derives local_peer_id
+            // the same way, so it matches. capability_mask 0 mirrors the self peer-cache entry above.
+            route_responder: RouteResponder::new(&signing_key_seed, 0),
+            route_table: RouteTable::new(peer_cache_capacity, peer_cache_ttl_ms),
             relay_trust_filter: policy.min_trust_filter,
             hop_limit: max_hops,
             events: Vec::new(),
@@ -261,35 +273,92 @@ impl MeshDaemon {
                 self.handle_peer_query_response(&envelope, now_ms);
             }
 
-            // All other query / route messages: propagate to neighbours.
-            _ => match self.query_forwarder.propagate(&envelope, now_ms) {
-                Ok(forwarded) => {
-                    let tx_ok = forwarded
-                        .encode()
-                        .ok()
-                        .and_then(|b| self.engine.transmit(&b, &self.mode, None).ok())
-                        .is_some();
-                    let query_events = self.query_forwarder.drain_events();
-                    if tx_ok {
-                        self.events
-                            .extend(query_events.into_iter().map(MeshEvent::Query));
-                    } else {
-                        tracing::warn!(
-                            session_id = envelope.session_id,
-                            "query propagate: encode/transmit failed"
-                        );
-                    }
+            // Route-discovery request: answer if we are the destination or hold a route to it;
+            // otherwise flood it onward like any other query.
+            WireMsgType::RouteDiscoveryRequest => {
+                if !self.handle_route_discovery_request(&envelope, now_ms) {
+                    self.propagate_query(&envelope, now_ms);
                 }
-                Err(_) => {
-                    self.events.extend(
-                        self.query_forwarder
-                            .drain_events()
-                            .into_iter()
-                            .map(MeshEvent::Query),
+            }
+
+            // All other query / route messages: propagate to neighbours.
+            _ => self.propagate_query(&envelope, now_ms),
+        }
+    }
+
+    /// Flood one query/route envelope to neighbours via the [`QueryForwarder`] (hop-limit + dedup).
+    fn propagate_query(&mut self, envelope: &WireEnvelope, now_ms: u64) {
+        match self.query_forwarder.propagate(envelope, now_ms) {
+            Ok(forwarded) => {
+                let tx_ok = forwarded
+                    .encode()
+                    .ok()
+                    .and_then(|b| self.engine.transmit(&b, &self.mode, None).ok())
+                    .is_some();
+                let query_events = self.query_forwarder.drain_events();
+                if tx_ok {
+                    self.events
+                        .extend(query_events.into_iter().map(MeshEvent::Query));
+                } else {
+                    tracing::warn!(
+                        session_id = envelope.session_id,
+                        "query propagate: encode/transmit failed"
                     );
                 }
-            },
+            }
+            Err(_) => {
+                self.events.extend(
+                    self.query_forwarder
+                        .drain_events()
+                        .into_iter()
+                        .map(MeshEvent::Query),
+                );
+            }
         }
+    }
+
+    /// Answer a route-discovery request when this node is the destination (or already holds a route to
+    /// it). Returns `true` when an answer was sent (so the caller does not also flood the request). The
+    /// signed response is directed back to the originator (`dst = request src`).
+    fn handle_route_discovery_request(&mut self, envelope: &WireEnvelope, now_ms: u64) -> bool {
+        let Ok(req) = RouteDiscoveryRequest::decode(&envelope.payload) else {
+            return false;
+        };
+        let Some(resp) = self.route_responder.answer(&req, &self.route_table) else {
+            return false;
+        };
+        let Ok(payload) = resp.encode() else {
+            return false;
+        };
+        let reply = WireEnvelope {
+            msg_type: WireMsgType::RouteDiscoveryResponse,
+            flags: 0,
+            session_id: req.route_query_id,
+            src_peer_id: self.route_responder.peer_id(),
+            dst_peer_id: envelope.src_peer_id, // back to the originator
+            nonce: nonce_from_id(req.route_query_id),
+            timestamp_ms: now_ms,
+            hop_limit: self.hop_limit,
+            hop_index: 0,
+            payload,
+            auth_tag: [0u8; 16],
+        };
+        let sent = reply
+            .encode()
+            .ok()
+            .and_then(|b| self.engine.transmit(&b, &self.mode, None).ok())
+            .is_some();
+        if sent {
+            self.events.push(MeshEvent::RouteAnswered {
+                route_query_id: req.route_query_id,
+            });
+        } else {
+            tracing::warn!(
+                route_query_id = req.route_query_id,
+                "route-discovery response transmit failed"
+            );
+        }
+        sent
     }
 
     /// Deliver a broadcast frame locally and re-broadcast if TTL permits.

@@ -7,6 +7,7 @@ use bpsk_plugin::BpskPlugin;
 use openpulse_audio::LoopbackBackend;
 use openpulse_core::peer_cache::TrustFilter;
 use openpulse_core::relay::{RelayEvent, RelayTrustPolicy};
+use openpulse_core::route_discovery::{RouteOriginator, RouteResponder};
 use openpulse_core::wire_query::{WireEnvelope, WireMsgType};
 use openpulse_mesh::{MeshDaemon, MeshEvent};
 use openpulse_modem::ModemEngine;
@@ -413,4 +414,43 @@ fn broadcast_ttl_zero_not_relayed() {
         "B must not relay a TTL=0 broadcast"
     );
     drop((node_c, lb_c));
+}
+
+/// Route discovery: A floods a `RouteDiscoveryRequest` for B's route-identity; B recognises itself as
+/// the destination and answers with a signed `RouteDiscoveryResponse` (RouteAnswered + reply samples).
+#[test]
+fn route_discovery_destination_answers() {
+    // Every `make_node` uses signing seed [0;32], so a node's route-identity (verifying_key(seed))
+    // is this — that is what a route request must target to reach it.
+    let dst_id = RouteResponder::new(&[0u8; 32], 0).peer_id();
+
+    let lb_a = LoopbackBackend::new();
+    let lb_b = LoopbackBackend::new();
+    let mut node_a = make_node(&lb_a, [1u8; 32]);
+    let mut node_b = make_node(&lb_b, [2u8; 32]);
+
+    // A originates a route request for B (no required capabilities) and transmits it.
+    let mut originator = RouteOriginator::new([1u8; 32], 60_000);
+    let (qid, req_env) = originator
+        .originate(dst_id, 4, 0, 0, [7u8; 12], 1_000)
+        .expect("originate");
+    node_a.send_relay(req_env).expect("transmit route request");
+
+    // A → B.
+    let samples_a = lb_a.drain_samples();
+    assert!(!samples_a.is_empty(), "A must produce request samples");
+    lb_b.fill_samples(&samples_a);
+
+    // B recognises itself as the destination and answers.
+    let events_b = node_b.step(1_010);
+    assert!(
+        events_b.iter().any(
+            |e| matches!(e, MeshEvent::RouteAnswered { route_query_id } if *route_query_id == qid)
+        ),
+        "B must answer the route request; got {events_b:?}"
+    );
+    assert!(
+        !lb_b.drain_samples().is_empty(),
+        "B must transmit a route response"
+    );
 }
