@@ -4213,3 +4213,22 @@ and the actually-observed results per change.
 - **Implementation:** `CLAUDE.md`, `CHANGELOG.md`, `README.md`.
 - **Tests:** docs only — no code change. (#44 cli-guide daemon section + #45 README ladder nuance left as
   lower-value follow-ups; the README feature text already reflects the SC-FDMA→OFDM re-seat.)
+
+## 2026-07-13 — fix(modem): audit #11 — don't re-apply the InputCapture seam per decode_burst slice
+
+- **Requirement/change:** the audit (finding #11, confirmed + A/B-verified) found `accumulate_routed`
+  already routes each captured window through the `InputCapture` front-end seam (DC-block / notch / DCD /
+  AGC) before appending to `rx_burst`; `decode_burst`'s per-offset `decode_attempt` → `receive_from_samples`
+  then routes the *already-processed* burst through the same seam **again per scan slice**. Harmless with
+  AGC/notch off (both default off), but with AGC on the stateful gain loop re-normalises already-normalised
+  audio each slice — distorting the noise-var-calibrated LLR scale QAM/OFDM/SC-FDMA depend on — and the DCD
+  re-latches from mid-burst slices.
+- **Design decision:** add an `input_prerouted` flag; `decode_burst` sets it around its scan (restored on
+  every exit via an inner helper) so the nested `route_audio_stage(InputCapture)` becomes a pass-through
+  (skips the DC/notch/DCD/AGC block). With AGC/notch off the behaviour is bit-identical.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`input_prerouted`, `decode_burst`/
+  `decode_burst_inner`, InputCapture guard).
+- **Tests:** `decode_burst_does_not_reapply_agc_per_scan_slice` (`agc_blocks_processed` stays flat across a
+  `decode_burst` scan on a pre-routed burst) — **A/B-verified: fails with the guard removed**.
+- **Test results:** `cargo test -p openpulse-modem --no-default-features` agc/notch/channel/fec loopbacks
+  green; clippy + fmt clean.

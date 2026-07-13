@@ -122,3 +122,30 @@ fn agc_preserves_decode_on_a_low_level_signal() {
         "the AGC must have run on the receive path"
     );
 }
+
+#[test]
+fn decode_burst_does_not_reapply_agc_per_scan_slice() {
+    // Audit #11: `accumulate_routed` already ran the burst through the InputCapture seam (incl. the
+    // stateful AGC and the DCD latch); `decode_burst` scans the burst per timing offset and must NOT
+    // re-apply that seam per slice (which would distort the LLR-calibrated amplitude the ladder reads).
+    let payload = b"burst agc single-pass";
+    let tx_backend = LoopbackBackend::new();
+    let tx_handle = tx_backend.clone_shared();
+    let mut tx = ModemEngine::new(Box::new(tx_backend));
+    tx.register_plugin(Box::new(QpskPlugin::new())).unwrap();
+    tx.transmit(payload, MODE, None).unwrap();
+    let samples = tx_handle.drain_samples();
+    assert!(!samples.is_empty());
+
+    let mut rx = engine();
+    rx.enable_agc();
+    let before = rx.agc_blocks_processed();
+    let burst = openpulse_modem::pipeline::AudioSamples { samples };
+    // The scan tries several timing offsets; before the fix each attempt re-ran the AGC.
+    let _ = rx.decode_burst(MODE, &burst);
+    assert_eq!(
+        rx.agc_blocks_processed(),
+        before,
+        "decode_burst must not re-run the AGC per scan slice on a pre-routed burst"
+    );
+}

@@ -334,6 +334,11 @@ pub struct ModemEngine {
     /// drops. Lets a tick-based daemon assemble a full frame from a streaming
     /// (cpal) backend instead of decoding one partial tick window.
     rx_burst: Vec<f32>,
+    /// Set while decoding an already-front-end-processed burst (e.g. `decode_burst` scans a burst that
+    /// `accumulate_routed` already ran through the InputCapture seam). Makes the nested
+    /// `route_audio_stage(InputCapture)` in the per-slice decode a pass-through, so the stateful AGC and
+    /// the DCD latch are not applied a second time per scan slice.
+    input_prerouted: bool,
     /// Whether [`capture_burst`](ModemEngine::capture_burst) is mid-burst (carrier
     /// was present on a prior tick and not yet flushed).
     rx_capturing: bool,
@@ -443,6 +448,7 @@ impl ModemEngine {
             default_device: None,
             last_audio: Vec::new(),
             rx_burst: Vec::new(),
+            input_prerouted: false,
             rx_capturing: false,
             cessb_enabled: true,
             notch_enabled: false,
@@ -1384,6 +1390,21 @@ impl ModemEngine {
     /// reusing the same `decode_attempt` + frame geometry as the live timeout
     /// receiver — and return the first frame that validates.
     pub fn decode_burst(
+        &mut self,
+        mode: &str,
+        burst: &AudioSamples,
+    ) -> Result<Vec<u8>, ModemError> {
+        // The burst was already front-end-processed by `accumulate_routed`; suppress the InputCapture
+        // seam for the per-slice decode below so the AGC/DCD are not re-applied per scan slice (audit
+        // #11). Restore the flag on every exit.
+        let was_prerouted = self.input_prerouted;
+        self.input_prerouted = true;
+        let result = self.decode_burst_inner(mode, burst);
+        self.input_prerouted = was_prerouted;
+        result
+    }
+
+    fn decode_burst_inner(
         &mut self,
         mode: &str,
         burst: &AudioSamples,
@@ -4651,7 +4672,7 @@ impl ModemEngine {
         // samples through `route_audio_stage(InputCapture)` exactly once, so placing front-end
         // transforms here (rather than in any one capture entry function) covers them all by
         // construction. Order: notch (remove interference) → AGC (normalise the cleaned level).
-        if stage == PipelineStage::InputCapture {
+        if stage == PipelineStage::InputCapture && !self.input_prerouted {
             let mut samples = routed.samples;
             // REQ-PHY-02: remove DC bias (SSB audio paths / soundcard offset) before demod.
             // Per-burst mean subtraction is a transient-free high-pass at ~1/burst Hz (≪10 Hz for
