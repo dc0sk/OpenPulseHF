@@ -280,6 +280,8 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
             mode: cfg.repeater.mode.clone(),
             tx_hang_ms: cfg.repeater.tx_hang_ms,
             full_duplex: cfg.repeater.full_duplex,
+            callsign: cfg.station.callsign.clone(),
+            id_interval_secs: cfg.station.auto_id_interval_secs,
         };
         CrossBandRepeater::new(rep_ptt, rx, tx, rep_cfg)
     };

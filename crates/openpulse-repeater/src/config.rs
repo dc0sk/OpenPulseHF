@@ -10,6 +10,11 @@ pub struct RepeaterConfig {
     /// When true, PTT is held for the entire relay session by `run_full_duplex()`.
     /// `tx_hang_ms` is ignored in full-duplex mode.
     pub full_duplex: bool,
+    /// Station callsign transmitted for §97.119 identification of the *transmitting* rig (rig_b). Empty
+    /// disables auto-ID (the repeater then never keys an ID — the operator is responsible).
+    pub callsign: String,
+    /// Auto-ID interval in seconds (Part-97 §97.119 = 600 = 10 min). `0` disables auto-ID.
+    pub id_interval_secs: u64,
 }
 
 impl Default for RepeaterConfig {
@@ -19,6 +24,8 @@ impl Default for RepeaterConfig {
             mode: "BPSK250".into(),
             tx_hang_ms: 0,
             full_duplex: false,
+            callsign: String::new(),
+            id_interval_secs: 600,
         }
     }
 }

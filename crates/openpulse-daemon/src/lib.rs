@@ -3723,6 +3723,7 @@ mod command_apply_tests {
             mode: "BPSK250".to_string(),
             tx_hang_ms: 0,
             full_duplex: false,
+            ..Default::default()
         };
         runtime_state.repeater = Some(openpulse_repeater::CrossBandRepeater::new(
             Box::new(openpulse_radio::NoOpPtt::new()),
