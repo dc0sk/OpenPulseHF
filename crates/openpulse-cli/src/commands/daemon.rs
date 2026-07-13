@@ -72,6 +72,7 @@ pub fn run(addr: &str, cmd: DaemonCommands) -> Result<i32> {
         }
         DaemonCommands::PttAssert => simple(addr, ControlCommand::PttAssert),
         DaemonCommands::PttRelease => simple(addr, ControlCommand::PttRelease),
+        DaemonCommands::PttState => ptt_state(addr),
         DaemonCommands::AcceptQsy { token } => simple(addr, ControlCommand::AcceptQsy { token }),
         DaemonCommands::RejectQsy { token } => simple(addr, ControlCommand::RejectQsy { token }),
         DaemonCommands::SendMessage { to, subject, body } => {
@@ -250,6 +251,25 @@ fn list_stations(addr: &str) -> Result<i32> {
         }
     }
     println!("{}", serde_json::to_string_pretty(&stations)?);
+    Ok(0)
+}
+
+fn ptt_state(addr: &str) -> Result<i32> {
+    let (events, resp) = run_command(addr, &ControlCommand::GetPttState)?;
+    if !resp.ok {
+        eprintln!(
+            "error: {}",
+            resp.error.unwrap_or_else(|| "unknown".to_string())
+        );
+        return Ok(1);
+    }
+    let mut active = false;
+    for ev in events {
+        if let ControlEvent::PttChanged { active: a } = ev {
+            active = a;
+        }
+    }
+    println!("{}", serde_json::json!({ "active": active }));
     Ok(0)
 }
 

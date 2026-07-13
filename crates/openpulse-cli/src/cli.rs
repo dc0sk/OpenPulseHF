@@ -273,6 +273,9 @@ pub enum DaemonCommands {
     PttAssert,
     /// Release PTT (unkey the transmitter).
     PttRelease,
+    /// Print the daemon's current PTT state (`{"active": true|false}`) — a resync for a client that
+    /// missed an edge-triggered PttChanged event.
+    PttState,
     /// Accept a pending incoming QSY negotiation by token.
     AcceptQsy { token: String },
     /// Reject a pending incoming QSY negotiation by token.

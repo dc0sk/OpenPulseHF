@@ -9,6 +9,29 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-13 — feat(daemon): GetPttState resync query
+
+- **Requirement/change:** issue #830 — PTT state is delivered only via edge-triggered
+  `ControlEvent::PttChanged`. A client whose broadcast-ring slot lapsed (256-slot lossy channel) can
+  miss a release edge and show a stale "keyed" indicator, with no way to recover the current state.
+- **Design decision:** add a `GetPttState` control command that re-broadcasts the current state as a
+  `PttChanged` event, so a client's existing handler resyncs with no new event type. The current state
+  is `runtime_state.ptt_asserted_at.is_some()` — the watchdog arm, set on every key path (manual +
+  automatic) and cleared on release, so it is the single source of truth for the logical PTT state and
+  is available in `apply_command_to_engine` without the hardware controller. The command is *not* a
+  direct-reply/inline command, so it falls through `handle_command`/`ws.rs` to `dispatch_command` →
+  `apply_command_to_engine` identically on both transports — no inline-set parity change needed.
+- **Implementation:** `crates/openpulse-daemon/src/protocol.rs` (`ControlCommand::GetPttState`),
+  `crates/openpulse-daemon/src/lib.rs` (`apply_command_to_engine` arm re-emits `PttChanged`),
+  `crates/openpulse-cli/src/{cli.rs,commands/daemon.rs}` (`openpulse daemon ptt-state` prints
+  `{"active": …}`), `docs/cli-guide.md`.
+- **Tests:** `get_ptt_state_rebroadcasts_the_current_keyed_state` — keyed → `PttChanged{active:true}`,
+  unkeyed → `PttChanged{active:false}`.
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features` → all pass; CLI + workspace
+  build clean; clippy + fmt clean.
+
+---
+
 ## 2026-07-13 — fix(daemon): count the .partial subtree in the per-peer filexfer quota
 
 - **Requirement/change:** issue #830 — the per-peer file-transfer disk quota under-counted. (The

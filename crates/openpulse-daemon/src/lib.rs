@@ -2165,6 +2165,13 @@ pub async fn apply_command_to_engine(
             emit_peer_list(runtime_state, event_tx, now_ms);
         }
         ControlCommand::ListFiles => emit_file_list(runtime_state, event_tx),
+        ControlCommand::GetPttState => {
+            // Re-emit the current PTT state so a client that missed the edge can resync. PTT is keyed
+            // exactly when the watchdog is armed (`ptt_asserted_at` is set on every key path and cleared
+            // on release), so it is the single source of truth for the logical PTT state.
+            let active = runtime_state.ptt_asserted_at.is_some();
+            let _ = event_tx.send(ControlEvent::PttChanged { active });
+        }
         // No live-modem side effects for these commands in the engine path.
         ControlCommand::SubscribeSpectrum { .. }
         | ControlCommand::GetConfig
@@ -3508,6 +3515,52 @@ mod command_apply_tests {
 
         assert!(runtime_state.qsy_pending_token.is_none());
         assert!(engine.hpx_session_id().is_none());
+    }
+
+    #[tokio::test]
+    async fn get_ptt_state_rebroadcasts_the_current_keyed_state() {
+        // A client that missed a PttChanged edge can resync: GetPttState re-emits the current state,
+        // which is keyed exactly when the watchdog is armed (`ptt_asserted_at`).
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let mut runtime_state = RuntimeControlState::default();
+
+        // Currently keyed → GetPttState reports active: true.
+        runtime_state.ptt_asserted_at = Some(std::time::Instant::now());
+        apply_command_to_engine(
+            &ControlCommand::GetPttState,
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut runtime_state,
+        )
+        .await;
+        assert!(
+            matches!(rx.try_recv(), Ok(ControlEvent::PttChanged { active: true })),
+            "GetPttState must re-broadcast active: true while keyed"
+        );
+
+        // Not keyed → active: false.
+        runtime_state.ptt_asserted_at = None;
+        apply_command_to_engine(
+            &ControlCommand::GetPttState,
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut runtime_state,
+        )
+        .await;
+        assert!(
+            matches!(
+                rx.try_recv(),
+                Ok(ControlEvent::PttChanged { active: false })
+            ),
+            "GetPttState must re-broadcast active: false while unkeyed"
+        );
     }
 
     #[tokio::test]
