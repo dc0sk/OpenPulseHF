@@ -9,6 +9,26 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-13 — test(daemon): cover the filexfer resume→FileAccept.have_bitmap composition
+
+- **Requirement/change:** issue #830 test-coverage gap — the daemon file-transfer *resume* path was only
+  tested at the helper level (`load_partials` / `persist_block` / `partial_dir_for`). No test pre-placed
+  `.blk` partials and drove the whole receive composition to check that the emitted `FileAccept` announces
+  exactly the held blocks (so the sender skips them). The seeding-to-bitmap wiring could be deleted with
+  the suite staying green — the repo's "wired at one seam, tested at another" class on a shipped feature.
+- **Design decision:** exercise the composition through `on_offer` (the production offer entry, reached
+  from `route_inbound_fragment`) rather than a helper: pre-place blocks 0 and 2 into the content-hash-keyed
+  partial dir, feed an auto-accept offer, then SAR-reassemble the queued control frames and decode the
+  `FileAccept`. Asserting `have_bitmap == 0b0000_0101` (bits 0 and 2, block 1 absent) is a genuine guard —
+  if the resume seeding regressed, `bitmap_from_bools` would emit an empty vec and the assertion fails.
+- **Implementation:** `crates/openpulse-daemon/src/filexfer.rs` test module —
+  `resume_offer_announces_held_blocks_in_accept_bitmap` (test-only; no production change).
+- **Tests:** the new test + the 8 existing filexfer helper/state tests.
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features` → 93 lib + integration all pass
+  (lib 92 → 93); fmt + clippy (`--tests -D warnings`) clean.
+
+---
+
 ## 2026-07-13 — feat(daemon): GetPttState resync query
 
 - **Requirement/change:** issue #830 — PTT state is delivered only via edge-triggered

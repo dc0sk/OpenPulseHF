@@ -1102,4 +1102,72 @@ mod tests {
         assert_eq!(expected_block_len(&offer, 1), 1024);
         assert_eq!(expected_block_len(&offer, 2), 452); // 2500 - 2048
     }
+
+    #[test]
+    fn resume_offer_announces_held_blocks_in_accept_bitmap() {
+        // #830 coverage gap: the daemon resume path is only tested at the helper level (load_partials,
+        // persist_block). This drives the whole composition — pre-place `.blk` partials, feed the offer
+        // through `on_offer`, and assert the emitted `FileAccept.have_bitmap` marks exactly those blocks
+        // so the sender skips them.
+        use openpulse_core::sar::SarReassembler;
+        use std::time::Duration;
+
+        let root = tmp_dir();
+        let file: Vec<u8> = (0..2500u32).map(|i| i as u8).collect(); // 3 × 1024-byte blocks (last is 452)
+        let offer = offer_for(&file, 1024);
+        assert_eq!(offer.block_count, 3);
+
+        let policy = FileTransferPolicy::from_config(&FileTransferConfig {
+            enabled: true,
+            download_dir: root.to_string_lossy().into_owned(),
+            auto_accept_max_bytes: u64::MAX, // auto-accept so a FileAccept is emitted
+            max_file_bytes: 10 * 1024 * 1024,
+            per_peer_quota_bytes: 0,
+            require_verified_peer: false, // no verified_peer needed; from = "" → "unknown" peer dir
+            allowed_peers: vec![],
+            offer_timeout_secs: 120,
+            partial_ttl_hours: 72,
+            burst_max_secs: 20.0,
+        });
+
+        // Pre-place blocks 0 and 2 (not 1) into this offer's content-keyed partial dir.
+        let partial_dir = partial_dir_for(&policy, "", &offer.sha256);
+        let blocks = openpulse_filexfer::split_blocks(&file, 1024);
+        persist_block(&partial_dir, 0, blocks[0]);
+        persist_block(&partial_dir, 2, blocks[2]);
+
+        let mut rs = RuntimeControlState {
+            filexfer_policy: policy,
+            ..RuntimeControlState::default()
+        };
+        let ev_tx = Arc::new(broadcast::channel::<ControlEvent>(16).0);
+
+        on_offer(offer.clone(), &mut rs, &ev_tx, "BPSK250");
+
+        // Two of three blocks held → the transfer is not complete, so the session stays live.
+        assert!(
+            rs.file_rx.is_some(),
+            "a partial resume keeps the receive session open"
+        );
+
+        // Reassemble the queued control frames and find the FileAccept the receiver sent back.
+        let mut reasm = SarReassembler::new(Duration::from_secs(60));
+        let mut have_bitmap = None;
+        for (frag, _mode) in &rs.filexfer_tx_queue {
+            if let Ok(Some(full)) = reasm.ingest(FX_CONTROL_SESSION, frag) {
+                if let Ok(FxFrame::FileAccept {
+                    have_bitmap: hb, ..
+                }) = FxFrame::decode(&full)
+                {
+                    have_bitmap = Some(hb);
+                }
+            }
+        }
+        // Bits 0 and 2 set (block 1 absent) → 0b0000_0101.
+        assert_eq!(
+            have_bitmap,
+            Some(vec![0b0000_0101]),
+            "FileAccept must announce exactly the held blocks (0 and 2) so the sender skips them"
+        );
+    }
 }
