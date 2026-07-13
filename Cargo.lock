@@ -5204,6 +5204,7 @@ version = "0.4.0"
 dependencies = [
  "bpsk-plugin",
  "openpulse-audio",
+ "openpulse-core",
  "openpulse-modem",
  "openpulse-radio",
  "qpsk-plugin",
