@@ -1807,6 +1807,61 @@ mod discovery_tick_tests {
         assert_eq!(engine.raw_audio_frames_transmitted(), 1);
     }
 
+    #[test]
+    fn discovery_tick_defers_a_due_beacon_when_the_channel_is_busy() {
+        // The DCD gate at the beacon-emit decision must hold the beacon when the calling channel is
+        // occupied (don't key over an in-progress QSO). Same beacon-mode setup as the emit test, but
+        // with the engine's DCD driven busy first — no beacon frame may be handed back.
+        let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        engine
+            .register_plugin(Box::new(BpskPlugin::new()))
+            .expect("register BPSK plugin");
+
+        // Trip DCD: loopback echoes the TX into the RX capture, so the received energy marks the
+        // channel busy. Nothing in `discovery_tick` feeds the DCD, so the busy state persists.
+        engine
+            .transmit(b"occupying signal", "BPSK250", None)
+            .unwrap();
+        let _ = engine.receive("BPSK250", None).unwrap();
+        assert!(
+            engine.is_channel_busy(),
+            "precondition: channel must read busy"
+        );
+
+        let (tx, _rx) = tokio::sync::broadcast::channel::<ControlEvent>(64);
+        let ev = std::sync::Arc::new(tx);
+        let mut rs = RuntimeControlState {
+            last_freq_hz: Some(14_074_000),
+            discovery: Some(DiscoveryRuntime::new(DiscoveryParams {
+                enabled: true,
+                idle_grace_ms: 0,
+                dwell_ms: 0,
+                station_ttl_ms: 3_600_000,
+                submode: Submode::Normal,
+                calling_freq_hz: 14_078_000,
+                tx_mode: TxMode::Beacon,
+                callsign: "DC0SK".into(),
+                grid: "JN58".into(),
+                hint: None,
+                heartbeat_interval_slots: 2,
+                hint_interval_beacons: 0,
+                tx_offset_hz: 1500.0,
+                max_clock_skew_ms: 2000,
+            })),
+            ..RuntimeControlState::default()
+        };
+
+        discovery_tick(&mut rs, &engine, None, &ev, &[], 1000); // activate → dwell
+        let mut t = 1000u64;
+        for _ in 0..4 {
+            t += 15_000;
+            assert!(
+                discovery_tick(&mut rs, &engine, None, &ev, &[], t).is_none(),
+                "a busy channel must defer the beacon — none may be transmitted"
+            );
+        }
+    }
+
     /// A PTT double whose assert and/or release can be made to fail, standing in for a transient
     /// rigctld/serial fault.
     #[derive(Default)]
