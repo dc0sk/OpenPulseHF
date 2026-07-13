@@ -9,6 +9,27 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-13 — fix(daemon): count the .partial subtree in the per-peer filexfer quota
+
+- **Requirement/change:** issue #830 — the per-peer file-transfer disk quota under-counted. (The
+  paired "block segment-id collides with the control segment at block_count=65535" claim was **verified
+  a false positive**: `block_count` caps at `u16::MAX` via `u16::try_from`, so block indices run
+  `0..=65534` → `segment_id ∈ [1, 65535]`, never 0 — no collision is reachable.)
+- **Design decision:** `dir_size` (which `quota_would_exceed` uses) walked only the top level of a
+  peer's download dir with `read_dir` + `is_file()`, so bytes held in the peer's `.partial/` **subtree**
+  (in-flight resumable blocks) were never counted — a peer could accumulate unbounded data there while
+  the quota reported them under limit. Make `dir_size` recurse into subdirectories (summing files at
+  every depth). `DirEntry::metadata` does not traverse symlinks, so a symlinked directory reports as
+  neither file nor dir and is skipped — no loop risk; `saturating_add` guards the sum.
+- **Implementation:** `crates/openpulse-daemon/src/filexfer.rs` — recursive `dir_size`.
+- **Tests:** `dir_size_counts_the_partial_subtree_for_quota` — a peer dir with a 100-byte top-level file
+  plus a `.partial/<hash>/` subdir holding 250+150-byte blocks must total 500 (pre-fix returned only
+  the 100-byte top-level file).
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features` → all pass; clippy + fmt
+  clean.
+
+---
+
 ## 2026-07-13 — feat(mesh): answer route-discovery requests on-air
 
 - **Requirement/change:** issue #830 follow-up to the route-discovery driver — a mesh node must
