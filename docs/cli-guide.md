@@ -125,6 +125,7 @@ Connection, PTT, mode, and frequency:
 - openpulse daemon set-mode <MODE>
 - openpulse daemon set-freq [--rig <r>] <FREQ_HZ>
 - openpulse daemon ptt-assert / ptt-release
+- openpulse daemon ptt-state — print the current PTT state (`{"active": true|false}`); a resync for a client that missed a `PttChanged` event.
 
 Messaging and OTA rate control:
 

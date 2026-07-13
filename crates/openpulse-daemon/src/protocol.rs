@@ -358,6 +358,11 @@ pub enum ControlCommand {
     PttAssert,
     /// Release PTT (unkey the transmitter).
     PttRelease,
+    /// Ask the daemon to re-broadcast the current PTT state as a [`ControlEvent::PttChanged`].
+    ///
+    /// Lets a client that missed an edge-triggered `PttChanged` (its broadcast-ring slot lapsed)
+    /// recover the current keyed/unkeyed state, since PTT events are edge-triggered with no snapshot.
+    GetPttState,
     /// Initiate an RF connection to a peer callsign via the TNC.
     ConnectPeer { callsign: String },
     /// Disconnect the current RF peer connection.
