@@ -101,6 +101,27 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-13 — test(daemon): cover the command-path PTT hardware-failure guard
+
+- **Requirement/change:** issue #830 test-coverage item — the `ptt_hard_failed` skip-dispatch guard on
+  the daemon command path was unverified. When a manual `PttAssert`/`PttRelease` hits a stuck/absent
+  rig, the daemon must skip the engine dispatch so it does not emit a `PttChanged` claiming a PTT
+  state the hardware never reached. #817 added a failing-PTT double for the beacon helper, but the
+  command-path guard had no test because the logic was inline in `server::run`'s `select!` loop.
+- **Design decision:** extract the inline `PttAssert`/`PttRelease` hardware call + `ptt_hard_failed`
+  computation into `handle_ptt_command(cmd, ptt) -> bool` (behavior-identical; the `select!` arm now
+  calls it), so the guard is unit-testable without standing up the whole async loop. Extend the
+  existing `FlakyPtt` double with a `fail_assert` flag (it only failed release before).
+- **Implementation:** `crates/openpulse-daemon/src/server.rs` — new `handle_ptt_command`; the command
+  arm of the `select!` loop calls it; `FlakyPtt` gains `fail_assert` (and `#[derive(Default)]`).
+- **Tests:** `ptt_command_guard_reports_hardware_failure_to_skip_dispatch` — a failed assert and a
+  failed release each report `true` (caller skips dispatch); a successful assert/release reports
+  `false` (dispatch proceeds); a non-PTT command and the no-controller case report `false`.
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features` → 112 pass (incl. the new
+  test and the unchanged `automatic_tx_arms_the_watchdog…` beacon test); clippy + fmt clean.
+
+---
+
 ## 2026-07-11 — test(discovery): FF-15 Phase F-3c-iv — two-runtime end-to-end rendezvous
 
 - **Requirement/change:** an acceptance test that two independent stations actually reach a rendezvous
