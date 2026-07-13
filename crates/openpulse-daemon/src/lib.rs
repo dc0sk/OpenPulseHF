@@ -373,6 +373,10 @@ impl std::fmt::Debug for RuntimeControlState {
 /// Shared mutable mode string, written by `set_mode` commands.
 #[cfg(not(target_arch = "wasm32"))]
 pub type SharedMode = Arc<Mutex<String>>;
+/// Read-only set of mode names the engine's registered plugins support, captured at startup so the
+/// control-command dispatcher can reject an unknown `SetMode`/`SetConfig` *before* writing shared state.
+#[cfg(not(target_arch = "wasm32"))]
+pub type ValidModes = Arc<std::collections::HashSet<String>>;
 /// Shared mutable TX attenuation (dB), written by `set_tx_attenuation` commands.
 #[cfg(not(target_arch = "wasm32"))]
 pub type SharedAttenuation = Arc<Mutex<f32>>;
@@ -465,6 +469,7 @@ struct ClientCtx {
     spectrum_tap: SpectrumTap,
     station_id: SharedStationId,
     message_store: SharedMessageStore,
+    valid_modes: ValidModes,
 }
 
 /// Handle returned by [`ControlServer::spawn`].
@@ -498,6 +503,9 @@ pub struct ControlServerHandle {
     pub message_store: SharedMessageStore,
     /// Live engine metrics written by the main loop; read by the periodic metrics task.
     pub shared_metrics: SharedMetrics,
+    /// Mode names the registered plugins support (captured at startup), for pre-write validation of
+    /// `SetMode`/`SetConfig` on both the TCP and WebSocket dispatch paths.
+    pub valid_modes: ValidModes,
 }
 
 /// NDJSON-over-TCP control server.
@@ -536,6 +544,15 @@ impl ControlServer {
         let station_id: SharedStationId = Arc::new(Mutex::new(config.initial_station_id));
         let message_store: SharedMessageStore = Arc::new(Mutex::new(MessageStore::new()));
         let shared_metrics: SharedMetrics = Arc::new(Mutex::new(MetricsSnapshot::default()));
+        // Capture the registered mode names once, so a bad SetMode is rejected before it mutates state.
+        let valid_modes: ValidModes = Arc::new(
+            engine
+                .plugins()
+                .list()
+                .iter()
+                .flat_map(|info| info.supported_modes.iter().cloned())
+                .collect(),
+        );
 
         // Background task: forward EngineEvents into the ControlEvent broadcast.
         let mut eng_rx = engine.subscribe();
@@ -642,6 +659,7 @@ impl ControlServer {
         let tap_a = Arc::clone(&spectrum_tap);
         let sid_a = Arc::clone(&station_id);
         let store_a = Arc::clone(&message_store);
+        let modes_a = Arc::clone(&valid_modes);
         let control_psk = config.control_psk;
         tokio::spawn(async move {
             loop {
@@ -659,6 +677,7 @@ impl ControlServer {
                             spectrum_tap: Arc::clone(&tap_a),
                             station_id: Arc::clone(&sid_a),
                             message_store: Arc::clone(&store_a),
+                            valid_modes: Arc::clone(&modes_a),
                         };
                         let rx = ev_tx_a.subscribe();
                         tokio::spawn(handle_client(stream, rx, ctx, control_psk));
@@ -681,6 +700,7 @@ impl ControlServer {
             station_id,
             message_store,
             shared_metrics,
+            valid_modes,
         })
     }
 }
@@ -995,6 +1015,7 @@ async fn handle_command(
                 &ctx.qsy_enabled,
                 &ctx.bandplan_mode,
                 &ctx.allow_tuner_on_high_swr,
+                &ctx.valid_modes,
             )
             .await;
             send_json(write_half, &resp).await.is_err()
@@ -1009,6 +1030,7 @@ async fn send_json<T: serde::Serialize>(writer: &mut ClientWriter, value: &T) ->
 
 /// Apply state-mutating commands and forward all commands to the caller.
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn dispatch_command(
     cmd: &ControlCommand,
     cmd_tx: &mpsc::Sender<ControlCommand>,
@@ -1017,7 +1039,21 @@ pub(crate) async fn dispatch_command(
     qsy_enabled: &SharedQsyEnabled,
     bandplan_mode: &SharedBandplanMode,
     allow_tuner_on_high_swr: &SharedTunerOnHighSWR,
+    valid_modes: &ValidModes,
 ) -> CommandResponse {
+    // Reject an unknown mode BEFORE writing shared state, so a typo can't silently deafen RX +
+    // station-ID while the client is told "ok" (the later engine-side validation only logs). An empty
+    // set means the caller supplied no registry (tests) — skip validation to preserve their behaviour.
+    let requested_mode = match cmd {
+        ControlCommand::SetMode { mode } => Some(mode),
+        ControlCommand::SetConfig { config } => Some(&config.mode),
+        _ => None,
+    };
+    if let Some(mode) = requested_mode {
+        if !valid_modes.is_empty() && !valid_modes.contains(mode) {
+            return CommandResponse::err(format!("unsupported mode '{mode}'"));
+        }
+    }
     if let ControlCommand::SetMode { ref mode } = cmd {
         *active_mode.lock().await = mode.clone();
     }
@@ -4017,6 +4053,53 @@ mod command_apply_tests {
             }
         }
         errs
+    }
+
+    #[tokio::test]
+    async fn dispatch_rejects_unknown_mode_without_mutating_state() {
+        // Audit #14: a bad SetMode must be rejected before it writes active_mode, so a typo can't
+        // silently deafen RX/station-ID while the client is told "ok".
+        let (cmd_tx, _cmd_rx) = mpsc::channel::<ControlCommand>(4);
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".into()));
+        let atten: SharedAttenuation = Arc::new(Mutex::new(0.0));
+        let qsy: SharedQsyEnabled = Arc::new(Mutex::new(false));
+        let bp: SharedBandplanMode = Arc::new(Mutex::new("ham_iaru_region1".into()));
+        let tuner: SharedTunerOnHighSWR = Arc::new(Mutex::new(false));
+        let valid: ValidModes = Arc::new(["BPSK250".to_string(), "QPSK500".to_string()].into());
+
+        // Unknown mode → error response, state untouched, command NOT forwarded.
+        let resp = dispatch_command(
+            &ControlCommand::SetMode {
+                mode: "NONSENSE999".into(),
+            },
+            &cmd_tx,
+            &active_mode,
+            &atten,
+            &qsy,
+            &bp,
+            &tuner,
+            &valid,
+        )
+        .await;
+        assert!(!resp.ok, "unknown mode must be rejected: {resp:?}");
+        assert_eq!(*active_mode.lock().await, "BPSK250", "state unchanged");
+
+        // Valid mode → applied.
+        let resp = dispatch_command(
+            &ControlCommand::SetMode {
+                mode: "QPSK500".into(),
+            },
+            &cmd_tx,
+            &active_mode,
+            &atten,
+            &qsy,
+            &bp,
+            &tuner,
+            &valid,
+        )
+        .await;
+        assert!(resp.ok, "valid mode accepted: {resp:?}");
+        assert_eq!(*active_mode.lock().await, "QPSK500");
     }
 
     #[test]

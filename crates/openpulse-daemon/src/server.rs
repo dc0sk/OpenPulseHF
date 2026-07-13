@@ -362,6 +362,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 spectrum_tap: handle.spectrum_tap.clone(),
                 station_id: handle.station_id.clone(),
                 message_store: handle.message_store.clone(),
+                valid_modes: handle.valid_modes.clone(),
             },
             None,
         )

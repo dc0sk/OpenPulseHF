@@ -4159,3 +4159,23 @@ and the actually-observed results per change.
   a sustained >2 s skew trips the gate); the offset regression test now asserts the drift readout is live
   and ~0 for an on-time station.
 - **Test results:** `cargo test -p openpulse-discovery --no-default-features` → 53 green; clippy + fmt clean.
+
+## 2026-07-13 — fix(daemon): audit #14 — validate SetMode/SetConfig before mutating shared state
+
+- **Requirement/change:** the audit (finding #14, confirmed) found `dispatch_command` (the per-client
+  TCP/WS handler) wrote `active_mode` **unconditionally** for `SetMode`/`SetConfig` and returned
+  `CommandResponse::ok()`; the only validation (`apply_command_to_engine`) ran later and merely logged a
+  `CommandError` without rollback. A typo'd mode string silently deafened RX + station-ID until a valid
+  `SetMode` arrived, with the client told its bad command succeeded.
+- **Design decision:** capture the registered plugin mode names once at `ControlServer::spawn` (from
+  `engine.plugins().list()`) as a read-only `ValidModes` set, thread it to `dispatch_command` (both the
+  TCP and WebSocket paths), and reject an unknown mode with `CommandResponse::err` **before** any shared
+  write and **before** forwarding the command. An empty set (tests with no registry) skips validation.
+- **Implementation:** `crates/openpulse-daemon/src/lib.rs` (`ValidModes`, `ClientCtx`,
+  `ControlServerHandle`, `dispatch_command`), `src/ws.rs` (`WsShared`/`WsClientCtx`), `src/server.rs`
+  (WsShared wiring).
+- **Tests:** `dispatch_rejects_unknown_mode_without_mutating_state` — an unknown mode returns an error and
+  leaves `active_mode` untouched; a registered mode applies. `control_port` mode-switch test's engine now
+  registers QPSK so it selects a genuinely-registered mode.
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features` → all green (7 groups); clippy
+  + fmt clean.
