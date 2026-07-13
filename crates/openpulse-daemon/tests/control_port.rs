@@ -15,6 +15,11 @@ use tokio::time::timeout;
 fn make_engine() -> ModemEngine {
     let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
     engine.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+    // Register QPSK too so mode-switch tests can select a registered non-BPSK mode (the dispatcher now
+    // validates SetMode/SetConfig against the registered modes — audit #14).
+    engine
+        .register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))
+        .unwrap();
     engine
 }
 

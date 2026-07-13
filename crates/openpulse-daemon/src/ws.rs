@@ -37,6 +37,8 @@ pub struct WsShared {
     pub station_id: SharedStationId,
     /// In-memory message store shared with the TCP endpoint.
     pub message_store: SharedMessageStore,
+    /// Registered mode names for pre-write `SetMode`/`SetConfig` validation (shared with the TCP path).
+    pub valid_modes: crate::ValidModes,
 }
 
 /// Spawn the WebSocket control endpoint on `addr`.
@@ -61,6 +63,7 @@ pub async fn spawn_ws(
         spectrum_tap,
         station_id,
         message_store,
+        valid_modes,
     } = shared;
     let listener = TcpListener::bind(addr).await?;
     if let Some(out) = bound_addr {
@@ -84,6 +87,7 @@ pub async fn spawn_ws(
                         spectrum_tap: Arc::clone(&spectrum_tap),
                         station_id: Arc::clone(&station_id),
                         message_store: Arc::clone(&message_store),
+                        valid_modes: Arc::clone(&valid_modes),
                     };
                     tokio::spawn(handle_ws_client(stream, ctx));
                 }
@@ -107,6 +111,7 @@ struct WsClientCtx {
     spectrum_tap: SpectrumTap,
     station_id: SharedStationId,
     message_store: SharedMessageStore,
+    valid_modes: crate::ValidModes,
 }
 
 async fn handle_ws_client(stream: TcpStream, ctx: WsClientCtx) {
@@ -122,6 +127,7 @@ async fn handle_ws_client(stream: TcpStream, ctx: WsClientCtx) {
         spectrum_tap,
         station_id,
         message_store,
+        valid_modes,
     } = ctx;
     let ws = match accept_async(stream).await {
         Ok(w) => w,
@@ -375,6 +381,7 @@ async fn handle_ws_client(stream: TcpStream, ctx: WsClientCtx) {
                                 &qsy_enabled,
                                 &bandplan_mode,
                                 &allow_tuner_on_high_swr,
+                                &valid_modes,
                             )
                             .await;
                             if let Ok(s) = serde_json::to_string(&resp) {
