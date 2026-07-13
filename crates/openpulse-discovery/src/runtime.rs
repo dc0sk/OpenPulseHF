@@ -392,12 +392,29 @@ impl DiscoveryRuntime {
         let buf = std::mem::take(&mut self.dwell_buf);
         let sm = params(self.params.submode);
         // Only decode once a full slot's audio is present.
-        if buf.len() < sm.samples_per_period() {
+        let sig_len = sm.samples_per_period();
+        if buf.len() < sig_len {
             return Vec::new();
         }
         let slot = self.clock.slot_index(now_ms);
+        // A conforming JS8 over does NOT start at buffer sample 0: it begins `start_delay_ms` into the
+        // UTC slot (500 ms ≈ 4000 samples for NORMAL) and clock jitter shifts it further. Search a window
+        // around the expected start rather than offset 0 (which only ever matched a test signal injected
+        // at the buffer start, so real off-air transmissions never decoded at any SNR). NTP is required
+        // (D5), so a ±0.75 s window covers realistic tick/clock jitter; a coarse-then-fine freq grid
+        // keeps the added time search affordable on a Pi.
+        let start_delay = sm.start_delay_ms as usize * 8; // 8 samples/ms at 8 kHz
+        let jitter = 6000; // ±0.75 s
+        let slack = buf.len() - sig_len;
+        let cfg = DecodeCfg {
+            min_offset: start_delay.saturating_sub(jitter),
+            max_offset: (start_delay + jitter).min(slack),
+            offset_step: (sm.samples_per_symbol / 2).max(1),
+            base_step_coarse: sm.tone_spacing_hz * 2.0,
+            ..DecodeCfg::default()
+        };
         let mut out = Vec::new();
-        for d in decode_window(&buf, &sm, &DecodeCfg::default()) {
+        for d in decode_window(&buf, &sm, &cfg) {
             // Feed every frame to the cross-slot hint assembler; a completed `@OPULSE` beacon upserts
             // the sender as an OpenPulse peer (its hint) and is reported as heard.
             if let Some(r) = self
@@ -554,6 +571,33 @@ mod tests {
             1500.0,
             &GfskParams::from_submode(&sm),
         )
+    }
+
+    /// A full NORMAL slot (120 000 samples) with the heartbeat starting `offset` samples in — as a real
+    /// off-air over does (`start_delay_ms` + clock skew), not at buffer sample 0.
+    fn heartbeat_slot_at(offset: usize) -> Vec<f32> {
+        let sm = js8_plugin::submode::params(Submode::Normal);
+        let mut buf = vec![0.0f32; offset];
+        buf.extend_from_slice(&heartbeat_slot());
+        buf.resize((sm.slot_secs as usize) * 8000, 0.0); // pad to a full 15 s slot
+        buf
+    }
+
+    #[test]
+    fn hears_a_station_that_starts_partway_into_the_slot() {
+        // Regression: a conforming JS8 over begins ~500 ms into the slot, so the decoder must search the
+        // timing slack, not only offset 0. Before the fix this failed at every SNR.
+        let mut rt = DiscoveryRuntime::new(params());
+        rt.tick(1000, true);
+        rt.qsy_complete(true);
+        assert_eq!(rt.state(), DiscoveryState::Dwelling);
+        rt.push_audio(&heartbeat_slot_at(4000)); // 500 ms
+        rt.tick(1000, true);
+        let out = rt.tick(16_000, true);
+        assert!(
+            out.iter().any(|o| matches!(o, DiscoveryOutcome::StationHeard { callsign, .. } if callsign == "KN4CRD")),
+            "heard KN4CRD despite a 500 ms slot-start offset: {out:?}"
+        );
     }
 
     #[test]
