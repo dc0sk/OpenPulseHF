@@ -193,7 +193,7 @@ struct Snap {
     dcd_busy: bool,
     dcd_energy: f32,
     effective_bps: f32,
-    ecc_rate: f32,
+    ecc_rate: Option<f32>,
     compress_ratio: f32,
     signal_strength_dbm: Option<i32>,
     cpu_percent: f32,
@@ -422,7 +422,9 @@ fn info_widget(snap: &Snap, eff: EffectiveTheme) -> Element<'static, Message> {
         .push(info_row(
             eff,
             "ECC rate",
-            &format!("{:.2} %", snap.ecc_rate * 100.0),
+            &snap
+                .ecc_rate
+                .map_or_else(|| "—".to_string(), |r| format!("{:.2} %", r * 100.0)),
             ColorRole::RxValue,
         ))
         .push(info_row(

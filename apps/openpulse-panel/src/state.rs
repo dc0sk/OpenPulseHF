@@ -40,8 +40,9 @@ pub struct PanelState {
     pub dcd_energy: f32,
     /// Effective bit-rate from the last `Metrics` event.
     pub effective_bps: f32,
-    /// ECC (FEC) error rate from the last `Metrics` event.
-    pub ecc_rate: f32,
+    /// ECC (FEC) error rate from the last `Metrics` event; `None` until the daemon reports a real value
+    /// (it currently does not compute one — the UI shows "—" rather than a fabricated 0.00 %).
+    pub ecc_rate: Option<f32>,
     /// Compression ratio from the last `Metrics` event.
     pub compress_ratio: f32,
     /// Signal strength in dBm (from `Metrics` or `RigStatus`).
@@ -195,7 +196,7 @@ impl Default for PanelState {
             dcd_busy: false,
             dcd_energy: 0.0,
             effective_bps: 0.0,
-            ecc_rate: 0.0,
+            ecc_rate: None,
             compress_ratio: 1.0,
             signal_strength_dbm: None,
             cpu_percent: 0.0,

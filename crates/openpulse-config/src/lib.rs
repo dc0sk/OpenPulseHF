@@ -934,11 +934,10 @@ device = ""
 # tx_limiter_threshold = 0.0
 
 [modem]
-# Default modulation mode used when no --mode flag is provided.
-# Available: BPSK31, BPSK63, BPSK100, BPSK250, QPSK125, QPSK250, QPSK500,
-#            QPSK1000, 8PSK500, 8PSK1000, 64QAM500, 64QAM1000, 64QAM2000-RRC,
-#            OFDM16, OFDM52, SCFDMA16, SCFDMA52, SCFDMA52-16QAM,
-#            SCFDMA52-64QAM, SCFDMA52-64QAM-P4, FSK4-ACK
+# Default modulation mode used when no --mode flag is provided. The registered set spans BPSK/QPSK/8PSK
+# (incl. -RRC and -HF variants), 64QAM, OFDM16/52 (incl. OFDM52-{8PSK,16QAM,32QAM,64QAM} higher-order),
+# SC-FDMA (incl. SCFDMA52-{16QAM,32QAM,64QAM}), PILOT-{QPSK,8PSK,16QAM,32APSK}{500,1000,2000-RRC}, and
+# FSK4-ACK — see docs/mode-fec-ladder.md for the authoritative list per band/bandwidth class.
 mode = "BPSK250"
 # Adaptive session profile (SpeedLevel ladder) used by the rate controller and
 # `openpulse mode-advisor`. Available: hpx500, hpx_hf, hpx_ofdm_hf, hpx_wideband,
@@ -1189,7 +1188,8 @@ dwell_secs = 900
 heartbeat_interval_slots = 8
 # Send the @OPULSE hint every Nth beacon; TX modes only.
 hint_interval_beacons = 3
-# Actively query newly-heard stations with INFO? (mode = "full" only).
+# Actively query newly-heard stations with INFO? (mode = "full" only). RESERVED: directed INFO queries
+# are not yet implemented, so these two are currently accepted-but-unused (setting them has no effect).
 query_new_stations = false
 max_queries_per_10min = 2
 # Seconds a heard station is retained before a TTL sweep.

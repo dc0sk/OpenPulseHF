@@ -76,12 +76,13 @@ impl B2fSession {
         Ok(())
     }
 
-    /// ISS: queue a message as proposal type C (LZHUF, Winlink-compatible) in the next
-    /// `ProposalExchange`.
+    /// ISS: queue a message as proposal type C (LZHUF) in the next `ProposalExchange`.
     ///
-    /// Uses a 4-byte LE length prefix matching the Winlink Type C convention (RMS Express,
-    /// RMS Gateway).  Use this instead of `queue_message` when interoperating with
-    /// external Winlink gateways that require Type C compression.
+    /// Uses a 4-byte LE length prefix and the LHA `LH5` LZHUF variant. **External Winlink Type C
+    /// compatibility is UNVERIFIED** — this round-trips between two OpenPulseHF stations but has never
+    /// been tested against a captured RMS Express / RMS Gateway Type C blob, and both the length-prefix
+    /// convention and the LZHUF bitstream (LH5 vs FBB's classic Okumura LZHUF) are unconfirmed (see
+    /// `compress.rs`). The CMS gateway path uses Type D (Gzip); this Type C path has no in-tree caller yet.
     pub fn queue_message_type_c(
         &mut self,
         header: WlHeader,
