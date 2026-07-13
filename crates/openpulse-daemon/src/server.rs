@@ -611,26 +611,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 // the borrow of ptt_controller doesn't cross the await point.
                 // If the hardware call fails, skip the engine dispatch to avoid emitting a spurious
                 // PttChanged event that would tell clients PTT is active when it is not.
-                let mut ptt_hard_failed = false;
-                match &cmd {
-                    crate::Command::PttAssert => {
-                        if let Some(ref mut ptt) = ptt_controller {
-                            if let Err(e) = ptt.assert_ptt() {
-                                tracing::warn!("PTT assert failed: {e}");
-                                ptt_hard_failed = true;
-                            }
-                        }
-                    }
-                    crate::Command::PttRelease => {
-                        if let Some(ref mut ptt) = ptt_controller {
-                            if let Err(e) = ptt.release_ptt() {
-                                tracing::warn!("PTT release failed: {e}");
-                                ptt_hard_failed = true;
-                            }
-                        }
-                    }
-                    _ => {}
-                }
+                let ptt_hard_failed = handle_ptt_command(&cmd, &mut ptt_controller);
                 // OTA ISS send with real-radio PTT turnaround: when a session is
                 // active, a SendMessage drives the receiver-led OTA send here (where
                 // the PTT controller lives) — key PTT for the data frame, release it,
@@ -1373,6 +1354,30 @@ fn transmit_beacon_with_ptt(
     *asserted_at = None;
 }
 
+/// Apply a manual `PttAssert`/`PttRelease` command to the PTT hardware, synchronously.
+///
+/// Returns `true` when the hardware call failed (a stuck/absent rig): the caller then skips the
+/// engine dispatch so no spurious `PttChanged` tells clients PTT is active when it is not. Any other
+/// command (or no controller) is a no-op returning `false`.
+fn handle_ptt_command(
+    cmd: &crate::Command,
+    ptt_controller: &mut Option<Box<dyn PttController>>,
+) -> bool {
+    let Some(ptt) = ptt_controller.as_mut() else {
+        return false;
+    };
+    let (result, action) = match cmd {
+        crate::Command::PttAssert => (ptt.assert_ptt(), "assert"),
+        crate::Command::PttRelease => (ptt.release_ptt(), "release"),
+        _ => return false,
+    };
+    if let Err(e) = result {
+        tracing::warn!("PTT {action} failed: {e}");
+        return true;
+    }
+    false
+}
+
 fn ota_send_with_ptt(
     engine: &mut ModemEngine,
     ptt_controller: &mut Option<Box<dyn PttController>>,
@@ -1802,13 +1807,20 @@ mod discovery_tick_tests {
         assert_eq!(engine.raw_audio_frames_transmitted(), 1);
     }
 
-    /// A PTT double whose release can be made to fail, standing in for a transient rigctld/serial fault.
+    /// A PTT double whose assert and/or release can be made to fail, standing in for a transient
+    /// rigctld/serial fault.
+    #[derive(Default)]
     struct FlakyPtt {
+        fail_assert: bool,
         fail_release: bool,
     }
     impl PttController for FlakyPtt {
         fn assert_ptt(&mut self) -> Result<(), openpulse_radio::PttError> {
-            Ok(())
+            if self.fail_assert {
+                Err(openpulse_radio::PttError::Serial("assert failed".into()))
+            } else {
+                Ok(())
+            }
         }
         fn release_ptt(&mut self) -> Result<(), openpulse_radio::PttError> {
             if self.fail_release {
@@ -1823,6 +1835,41 @@ mod discovery_tick_tests {
     }
 
     #[test]
+    fn ptt_command_guard_reports_hardware_failure_to_skip_dispatch() {
+        use crate::Command;
+
+        // A failed assert/release must report `true` so the caller skips the engine dispatch and does
+        // not emit a spurious PttChanged claiming a state the hardware never reached.
+        let mut failing: Option<Box<dyn PttController>> = Some(Box::new(FlakyPtt {
+            fail_assert: true,
+            fail_release: true,
+        }));
+        assert!(
+            handle_ptt_command(&Command::PttAssert, &mut failing),
+            "a failed assert must report hard failure"
+        );
+        assert!(
+            handle_ptt_command(&Command::PttRelease, &mut failing),
+            "a failed release must report hard failure"
+        );
+
+        // A successful call reports `false` so the dispatch proceeds and the PttChanged fires.
+        let mut ok: Option<Box<dyn PttController>> = Some(Box::new(FlakyPtt::default()));
+        assert!(!handle_ptt_command(&Command::PttAssert, &mut ok));
+        assert!(!handle_ptt_command(&Command::PttRelease, &mut ok));
+
+        // Non-PTT commands and the no-controller case are always no-op passes.
+        assert!(!handle_ptt_command(&Command::PttAssert, &mut None));
+        assert!(!handle_ptt_command(
+            &Command::GetConfig,
+            &mut Some(Box::new(FlakyPtt {
+                fail_assert: true,
+                fail_release: true,
+            }))
+        ));
+    }
+
+    #[test]
     fn automatic_tx_arms_the_watchdog_and_disarms_only_on_clean_release() {
         // Audit #5: an automatic keying path must arm the PTT watchdog so a failed release (rig fault)
         // is caught, and disarm it on a clean release so the watchdog never fires spuriously.
@@ -1830,8 +1877,10 @@ mod discovery_tick_tests {
         let audio = vec![0.0f32; 100];
 
         // Release fails → the transmitter may still be keyed, so the watchdog must stay armed.
-        let mut ptt: Option<Box<dyn PttController>> =
-            Some(Box::new(FlakyPtt { fail_release: true }));
+        let mut ptt: Option<Box<dyn PttController>> = Some(Box::new(FlakyPtt {
+            fail_release: true,
+            ..Default::default()
+        }));
         let mut armed = None;
         transmit_beacon_with_ptt(&mut engine, &mut ptt, &mut armed, &audio, "JS8-NORMAL");
         assert!(
@@ -1840,9 +1889,7 @@ mod discovery_tick_tests {
         );
 
         // Clean release → disarmed, so the watchdog can't fire on a stale timestamp.
-        let mut ptt2: Option<Box<dyn PttController>> = Some(Box::new(FlakyPtt {
-            fail_release: false,
-        }));
+        let mut ptt2: Option<Box<dyn PttController>> = Some(Box::new(FlakyPtt::default()));
         let mut armed2 = Some(std::time::Instant::now());
         transmit_beacon_with_ptt(&mut engine, &mut ptt2, &mut armed2, &audio, "JS8-NORMAL");
         assert!(armed2.is_none(), "a clean release disarms the watchdog");
