@@ -4232,3 +4232,19 @@ and the actually-observed results per change.
   `decode_burst` scan on a pre-routed burst) — **A/B-verified: fails with the guard removed**.
 - **Test results:** `cargo test -p openpulse-modem --no-default-features` agc/notch/channel/fec loopbacks
   green; clippy + fmt clean.
+
+## 2026-07-13 — fix(mesh): audit #10 (part) — refuse to run the mesh daemon as N0CALL
+
+- **Requirement/change:** the audit (finding #10, confirmed) found `openpulse-mesh` beacons + relays
+  automatically (60 s cadence) with **no N0CALL startup refusal** — unlike `openpulse-daemon` / `-tui`,
+  which exit if the configured callsign is the `N0CALL` placeholder. §97.119: a station must transmit its
+  own valid call sign.
+- **Design decision:** add the same N0CALL guard the daemon uses, after the `[mesh] enabled` check (only an
+  enabled mesh transmits) — `anyhow::bail!` before building the engine/daemon.
+- **Implementation:** `crates/openpulse-mesh/src/main.rs`.
+- **Scope note:** the finding's ARDOP/KISS half (transmit before `MYID` is set) is **deferred** — those
+  TNCs take their callsign from the host `MYID` command at runtime, so a hard config-time refusal risks
+  breaking legitimate Pat/Winlink workflows; enforcing MYID-before-TX belongs with the TNC session logic
+  (the "front-ends don't drive sessions" area).
+- **Test results:** `cargo build/clippy -p openpulse-mesh --no-default-features` clean (a `main()` startup
+  guard, consistent with the daemon's untested guard).

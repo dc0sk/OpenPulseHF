@@ -69,6 +69,14 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // The mesh daemon beacons + relays automatically on air; refuse to run as the placeholder callsign
+    // (matches openpulse-daemon / -tui). §97.119: a station must transmit its own valid call sign.
+    if cfg.station.callsign.trim().eq_ignore_ascii_case("N0CALL") {
+        anyhow::bail!(
+            "invalid callsign N0CALL in configuration; set [station].callsign before starting the mesh daemon"
+        );
+    }
+
     let mode = cli.mode.unwrap_or_else(|| cfg.modem.mode.clone());
     let max_hops = cli.max_hops.unwrap_or(mesh_cfg.max_hops);
     let ttl_ms = mesh_cfg.store_forward_ttl_s * 1000;
