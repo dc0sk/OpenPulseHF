@@ -233,15 +233,19 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
             signal_strength_dbm,
         } => {
             st.effective_bps = effective_bps;
-            st.ecc_rate = ecc_rate.unwrap_or(0.0);
+            st.ecc_rate = ecc_rate;
             st.compress_ratio = compress_ratio.unwrap_or(1.0);
             if afc_correction_hz != 0.0 {
                 st.afc_hz = afc_correction_hz;
             }
             st.signal_strength_dbm = signal_strength_dbm;
-            st.ecc_history.push_front(ecc_rate.unwrap_or(0.0));
-            if st.ecc_history.len() > ECC_HISTORY_LEN {
-                st.ecc_history.pop_back();
+            // Only record real ECC samples in the trend, so the sparkline reflects reported data rather
+            // than a fabricated flat 0 %.
+            if let Some(r) = ecc_rate {
+                st.ecc_history.push_front(r);
+                if st.ecc_history.len() > ECC_HISTORY_LEN {
+                    st.ecc_history.pop_back();
+                }
             }
         }
         ControlEvent::SystemMetrics {
@@ -519,6 +523,31 @@ mod file_event_tests {
             auto_accepted: auto,
             signature_valid: true,
         }
+    }
+
+    fn metrics(ecc_rate: Option<f32>) -> ControlEvent {
+        ControlEvent::Metrics {
+            effective_bps: 100.0,
+            ecc_rate,
+            compress_ratio: None,
+            afc_correction_hz: 0.0,
+            signal_strength_dbm: None,
+        }
+    }
+
+    #[test]
+    fn ecc_rate_none_is_not_fabricated_and_leaves_the_trend_empty() {
+        // Audit (low tier): the daemon reports ecc_rate = None (it computes no ECC rate), so the panel
+        // must show "—" (ecc_rate stays None) and not push a fabricated 0 into the sparkline.
+        let s = Arc::new(Mutex::new(PanelState::default()));
+        feed(&s, metrics(None));
+        assert_eq!(s.lock().unwrap().ecc_rate, None);
+        assert!(s.lock().unwrap().ecc_history.is_empty());
+
+        // A real value is recorded and trended.
+        feed(&s, metrics(Some(0.03)));
+        assert_eq!(s.lock().unwrap().ecc_rate, Some(0.03));
+        assert_eq!(s.lock().unwrap().ecc_history.len(), 1);
     }
 
     #[test]

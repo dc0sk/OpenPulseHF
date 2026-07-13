@@ -4261,3 +4261,26 @@ and the actually-observed results per change.
 - **Scope note:** the `SetTxAttenuation { band }` drop is **deferred** — the command carries an optional
   `band`, but the engine has only a single global `tx_attenuation_db` (no per-band store), so honoring it
   is a feature, not a fix.
+
+## 2026-07-13 — chore(audit): low-tier cleanup batch (stubs / parity / doc honesty)
+
+- **Requirement/change:** a grouped pass over confirmed low-severity audit findings — dead/misleading APIs,
+  control-surface parity, and doc honesty — each too small for its own PR.
+- **Changes:**
+  - **Panel `ecc_rate` fabricated 0.00 %** — the daemon reports `ecc_rate = None` (computes none), but the
+    panel showed a fabricated `0.00 %`. Made `PanelState.ecc_rate` `Option<f32>`, render `"—"` when `None`,
+    and only push real samples into the trend sparkline. Test
+    `ecc_rate_none_is_not_fabricated_and_leaves_the_trend_empty`.
+  - **`queue_message_type_c` misleading doc** — the pub API's doc claimed "Winlink-compatible" while
+    `compress.rs` states external Type C compat is UNVERIFIED (LH5 vs FBB's Okumura LZHUF). Corrected the
+    doc to match reality and note it has no in-tree caller yet.
+  - **Config template stale mode list** — the `[modem]` "Available:" comment omitted OFDM52-HOM, PILOT-*,
+    RRC, and SC-FDMA-HOM families. Replaced the unmaintainable literal list with the mode families +
+    a pointer to `docs/mode-fec-ladder.md` (authoritative).
+  - **`[discovery]` reserved fields** — `query_new_stations` / `max_queries_per_10min` are accepted-but-
+    unused (directed INFO queries unimplemented); the template now says so.
+- **Test results:** `cargo test -p openpulse-panel -p openpulse-b2f -p openpulse-config
+  --no-default-features` green; clippy + fmt clean.
+- **Still deferred (feature-not-a-fix / substantial):** `SetTxAttenuation { band }` (no per-band engine
+  store); route-discovery wire codecs with no originator; `transmit_iq` seam bypass (test-only); discovery
+  `server::run`-level test (#15); cli-guide daemon section (#44).
