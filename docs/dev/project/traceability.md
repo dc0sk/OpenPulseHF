@@ -4006,3 +4006,26 @@ and the actually-observed results per change.
   every SNR before the fix); the existing offset-0 decoder/discovery/daemon tests still pass unchanged.
 - **Test results:** `cargo test -p js8-plugin -p openpulse-discovery --no-default-features` green (81 + 51);
   daemon discovery tests green; clippy + fmt clean.
+
+## 2026-07-13 — fix(discovery): audit #4 — rendezvous timing/RxOnly cluster (Phase F)
+
+- **Requirement/change:** the audit (finding #4, all three confirmed) found the shipped FF-15 Phase-F
+  rendezvous non-functional: (a) `RENDEZVOUS_TIMEOUT_SLOTS = 8` was shorter than the Propose+Accept
+  round-trip (the initiator aged during its own Propose TX and timed out before any reply could arrive);
+  (b) the responder emitted `RendezvousAgreed` at Propose-recognition while its Accept was still queued,
+  so the daemon's QSY schedule preempted and truncated the Accept's final frame; (c) `TxMode::RxOnly`
+  transmitted a Propose because `maybe_transmit` popped the rendezvous queue before the RxOnly gate.
+  Refs REQ-DISC-04/07, CAP-70.
+- **Design decision:** (a) age the initiator only once its Propose has drained (`rendezvous_tx` empty), so
+  the timeout counts genuine reply-wait slots; raise it to 16. (b) the responder withholds the agreement
+  (`pending_responder_agreement`) until its Accept over has fully transmitted, then emits it — aligning
+  the responder's QSY schedule with the initiator's Accept decode and never preempting the Accept. (c)
+  move the RxOnly gate before the rendezvous-queue pop, and refuse `start_rendezvous` in RxOnly.
+- **Implementation:** `crates/openpulse-discovery/src/runtime.rs`; `crates/openpulse-daemon/src/lib.rs`
+  (`RENDEZVOUS_TIMEOUT_SLOTS`).
+- **Tests:** new `rx_only_start_rendezvous_transmits_nothing` (c); `responder_accepts_a_proposal_and_agrees`
+  rewritten to assert the agreement is deferred until the Accept is sent (b); `initiator_times_out_without_a_reply`
+  now covers Propose-drain-then-wait (a); the two-runtime end-to-end updated for the deferred responder
+  agreement. The prior F-3c-iv test drained TX fully under a manual clock, which is why it missed all three.
+- **Test results:** `cargo test -p openpulse-discovery -p openpulse-daemon --no-default-features` green
+  (52 discovery lib + 2 e2e; daemon discovery/rendezvous suites); clippy + fmt clean.

@@ -1929,10 +1929,19 @@ mod discovery_tick_tests {
             discovery_tick(&mut rs, &engine, None, &ev, &[], t);
         }
 
+        // The responder withholds its agreement until the Accept over has fully transmitted (audit #4b),
+        // so tick through the Accept frames until RendezvousAgreed surfaces.
         let mut agreed = None;
-        while let Ok(e) = rx.try_recv() {
-            if let ControlEvent::RendezvousAgreed { peer, freq_hz } = e {
-                agreed = Some((peer, freq_hz));
+        for _ in 0..10 {
+            t += 15_000;
+            discovery_tick(&mut rs, &engine, None, &ev, &[], t);
+            while let Ok(e) = rx.try_recv() {
+                if let ControlEvent::RendezvousAgreed { peer, freq_hz } = e {
+                    agreed = Some((peer, freq_hz));
+                }
+            }
+            if agreed.is_some() {
+                break;
             }
         }
         assert_eq!(agreed, Some(("KN4CRD".to_string(), 14_103_000)));
