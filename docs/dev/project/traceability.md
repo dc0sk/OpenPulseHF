@@ -9,6 +9,28 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-13 — test(daemon): cover the discovery DCD-busy beacon-defer guard
+
+- **Requirement/change:** issue #830 test-coverage item #15 — the discovery beacon-emit path has a DCD
+  gate (`discovery_tick`: defer the beacon when `engine.is_channel_busy()`, so the station never keys
+  over an in-progress QSO), but only the *idle*-channel emit was tested; the busy-channel defer had no
+  coverage and could be deleted with the suite staying green.
+- **Design decision:** add a busy-channel counterpart to `discovery_tick_transmits_a_beacon_in_beacon_mode`
+  with the identical beacon-mode setup, but drive the engine's DCD busy first (register BPSK, then
+  `transmit` + `receive` on the loopback so the echoed energy trips DCD — nothing in `discovery_tick`
+  feeds the DCD, so the busy state persists across ticks). Assert every beacon-due tick returns `None`.
+  Non-vacuous: the companion emit test proves a beacon *is* due at those slots, so removing the gate
+  would make the tick return `Some` and fail this test.
+- **Implementation:** `crates/openpulse-daemon/src/server.rs` — new
+  `discovery_tick_defers_a_due_beacon_when_the_channel_is_busy`.
+- **Tests:** the new test; `discovery_tick` group → 9 pass (was 8).
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features` → 113 pass; clippy + fmt
+  clean. Remaining #15 handoffs that live in `server::run`'s `select!` loop rather than `discovery_tick`
+  (the dwell-audio tee predicate and the rendezvous-connect handoff) still want a twin-harness,
+  loop-driven test — left open under #830.
+
+---
+
 ## 2026-07-13 — docs: cli-guide daemon/FF-15/FF-16 CLI + README hpx_hf ladder row
 
 - **Requirement/change:** issue #830 docs items #44 and #45. (#44) `docs/cli-guide.md` was frozen at
