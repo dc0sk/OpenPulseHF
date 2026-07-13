@@ -4099,3 +4099,21 @@ and the actually-observed results per change.
   `..Default::default()` (empty callsign → no ID → behaviour unchanged).
 - **Test results:** `cargo test -p openpulse-repeater --no-default-features` → 7 green;
   `cargo build --workspace --no-default-features` clean; clippy + fmt clean.
+
+## 2026-07-13 — fix(ardop): audit #8 — data port frame loss (backpressure + Lagged handling)
+
+- **Requirement/change:** the audit (finding #8, confirmed, both directions) found the ARDOP data port
+  silently dropped frames. **TX:** `try_send` on the 64-deep SyncSender dropped the frame with only a
+  server-side `warn!` (the client never learns), so any >64-frame burst (a normal Winlink message) lost
+  data. **RX:** the `Ok(data) = rx_data.recv()` select arm did not handle `Err(Lagged)`, so a broadcast
+  overflow stalled the receive loop until the client next sent, instead of skipping + warning.
+- **Design decision:** mirror the already-tested `openpulse-kiss` pattern. TX: replace `try_send` with a
+  blocking `SyncSender::send` on `spawn_blocking` — natural backpressure throttles the client's TCP reader
+  so the burst is delivered in full (worker-gone → close the client). RX: match `recv()` explicitly,
+  handling `RecvError::Lagged(n)` (log + continue) and `Closed` (return).
+- **Implementation:** `crates/openpulse-ardop/src/data.rs`.
+- **Tests:** `data_port_backpressure_burst_stays_connected_and_ordered` — a 128-frame burst (> queue depth)
+  produces no client-side write error and the frames that arrive are strictly in-order and intact (no
+  reordering/corruption; broadcast lag may thin the echo, which is by-design). Existing round-trip tests
+  unchanged.
+- **Test results:** `cargo test -p openpulse-ardop --no-default-features` → 23 green; clippy + fmt clean.

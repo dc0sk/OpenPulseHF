@@ -188,6 +188,74 @@ async fn data_port_multiple_frames() {
 }
 
 #[tokio::test]
+async fn data_port_backpressure_burst_stays_connected_and_ordered() {
+    // Audit #8: sending a burst larger than the modem TX queue (64) must not error or disconnect the
+    // client (old `try_send` dropped frame 65+ but kept the socket; backpressure blocks the reader
+    // instead). Read concurrently and assert the frames that DO arrive are a correctly-framed in-order
+    // prefix — i.e. no framing corruption from the backpressure path. (RX broadcast lag can still thin
+    // the echo, which is by-design lossiness, so we don't assert an exact count.)
+    let (_, data_port) = start_server(true).await;
+    let stream = TcpStream::connect(("127.0.0.1", data_port)).await.unwrap();
+    let (read_half, mut write_half) = stream.into_split();
+
+    const N: usize = 128; // > the 64-deep TX queue
+    let reader = tokio::spawn(async move {
+        let mut stream = read_half;
+        let mut seen: Vec<u8> = Vec::new();
+        let mut len_buf = [0u8; 2];
+        loop {
+            let r = tokio::time::timeout(
+                std::time::Duration::from_millis(500),
+                tokio::io::AsyncReadExt::read_exact(&mut stream, &mut len_buf),
+            )
+            .await;
+            match r {
+                Ok(Ok(_)) => {
+                    let len = u16::from_be_bytes(len_buf) as usize;
+                    let mut payload = vec![0u8; len];
+                    if tokio::io::AsyncReadExt::read_exact(&mut stream, &mut payload)
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    assert_eq!(len, 20, "each frame is intact (no framing corruption)");
+                    seen.push(payload[0]);
+                }
+                _ => break, // idle timeout or EOF — burst drained
+            }
+        }
+        seen
+    });
+
+    for i in 0..N {
+        let payload = vec![i as u8; 20];
+        let len = payload.len() as u16;
+        tokio::io::AsyncWriteExt::write_all(&mut write_half, &len.to_be_bytes())
+            .await
+            .unwrap();
+        tokio::io::AsyncWriteExt::write_all(&mut write_half, &payload)
+            .await
+            .expect("no client-side error under a >queue-depth burst");
+    }
+    tokio::io::AsyncWriteExt::flush(&mut write_half)
+        .await
+        .unwrap();
+
+    let seen = tokio::time::timeout(std::time::Duration::from_secs(10), reader)
+        .await
+        .expect("reader did not hang")
+        .unwrap();
+    // Whatever arrived must be strictly increasing in tag order: backpressure + the broadcast preserve
+    // order and framing, so the only permitted loss is dropped frames (broadcast lag) — never reordering,
+    // duplication, or corruption. (Before the fix the client-side write could also error under the burst.)
+    assert!(!seen.is_empty(), "at least some frames round-trip");
+    for w in seen.windows(2) {
+        assert!(w[0] < w[1], "frames arrive strictly in order: {seen:?}");
+    }
+}
+
+#[tokio::test]
 async fn gridsquare_get_set() {
     let (cmd_port, _) = start_server(false).await;
     let stream = TcpStream::connect(("127.0.0.1", cmd_port)).await.unwrap();
