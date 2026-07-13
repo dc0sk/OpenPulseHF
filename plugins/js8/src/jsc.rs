@@ -104,8 +104,14 @@ pub fn jsc_decompress(bits: &[bool]) -> String {
         let mut k = 0usize;
         let mut j = 0u32;
         while start + k < groups.len() && groups[start + k] >= S {
-            j = j * C + (groups[start + k] - S);
+            // Saturate + stop as soon as the running index exceeds any valid codebook entry: the fold is
+            // reached from channel-controlled decoded frames, so a long high-group run must not overflow
+            // (a panic in overflow-checks builds) — `j` past `SIZE` is invalid and handled below.
+            j = j.saturating_mul(C).saturating_add(groups[start + k] - S);
             k += 1;
+            if j >= SIZE {
+                break;
+            }
         }
         if j >= SIZE || start + k >= groups.len() {
             break;
@@ -135,6 +141,15 @@ mod tests {
             *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).unwrap();
         }
         p
+    }
+
+    #[test]
+    fn long_high_group_run_does_not_overflow() {
+        // All-ones bits → every 4-bit group is 15 (≥ S), one long high-group run. Before the saturating
+        // fold this overflowed `j` after ~11 groups and panicked in overflow-checks (debug/CI) builds.
+        // Reachable from any decoded frame, so it must return, not panic.
+        let bits = vec![true; 256];
+        let _ = jsc_decompress(&bits); // no panic, no overflow
     }
 
     #[test]

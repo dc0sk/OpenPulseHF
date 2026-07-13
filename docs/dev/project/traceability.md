@@ -4029,3 +4029,17 @@ and the actually-observed results per change.
   agreement. The prior F-3c-iv test drained TX fully under a manual clock, which is why it missed all three.
 - **Test results:** `cargo test -p openpulse-discovery -p openpulse-daemon --no-default-features` green
   (52 discovery lib + 2 e2e; daemon discovery/rendezvous suites); clippy + fmt clean.
+
+## 2026-07-13 — fix(js8): audit #3 — jsc_decompress u32 overflow on long high-group runs
+
+- **Requirement/change:** the audit (finding #3, confirmed) found `jsc_decompress`'s inner fold
+  (`j = j * C + …`) had no in-loop bound; ~11+ consecutive high JSC groups — reachable from the free-text
+  of any CRC-12-valid decoded frame, on the discovery RX library path — overflow `u32` and panic in
+  overflow-checks (debug/test/CI) builds, violating the no-panic-in-library-production-paths rule.
+- **Design decision:** saturate the multiply/add and break as soon as the running index exceeds `SIZE`
+  (an over-`SIZE` index is invalid and already handled after the loop). Byte-identical output for valid
+  inputs (their `j` stays far below `u32::MAX`); safe termination for crafted/garbage inputs.
+- **Implementation:** `plugins/js8/src/jsc.rs`.
+- **Tests:** `long_high_group_run_does_not_overflow` (256 all-ones bits → one long high-group run; panics
+  before the fix). Full JSC + ground-truth decode tests unchanged.
+- **Test results:** `cargo test -p js8-plugin --no-default-features --lib jsc::` green; clippy + fmt clean.
