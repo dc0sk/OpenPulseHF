@@ -9,6 +9,35 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-13 — fix(64qam): calibrate soft-LLR noise variance from the corner preamble
+
+- **Requirement/change:** issue #830 DSP-calibration item — 64QAM soft LLRs under-report σ² at
+  moderate SNR, so their magnitude is over-confident. Single-frame decode is scale-invariant and
+  unaffected, but MAP HARQ combining (`combine_llrs_map`) over-weights a deep-fade attempt whose LLRs
+  claim a certainty they do not have. Same class as the SC-FDMA `mmse_llr_noise_var` fix (#690).
+- **Design decision:** `qam64_demodulate_soft` measured `noise_var` with `estimate_decision_noise_var`
+  (mean squared distance to the *nearest* constellation point). On the dense 8×8 grid that saturates:
+  once a symbol crosses a decision boundary its distance is taken to the wrong-but-near point, so the
+  estimate reads σ² far too low. The plugin already carries a known, constant-modulus **corner
+  preamble** (16 symbols, level- and carrier-corrected on the constellation scale), so its mean
+  squared deviation from `preamble_symbols()` is an unbiased 2-D noise variance at any SNR — the same
+  unit `symbol_llrs` expects. Fall back to the decision-directed estimate only if no preamble symbols
+  are present. Scoped to the CPU path; the `gpu` soft path emits σ²=1 (uncalibrated) LLRs regardless
+  and is untestable without the (CI-off) `gpu` feature — noted in #830 as a follow-up.
+- **Implementation:** `plugins/64qam/src/demodulate.rs` — new `preamble_noise_var()`; used in
+  `qam64_demodulate_soft`.
+- **Tests:** `plugins/64qam/tests/llr_reliability.rs` (new) — bins emitted `|L|` and compares the
+  empirical bit-error rate against `1/(1+e^{|L|})`, asserting the worst bin is ≤ 4× (the max-log-MAP
+  approximation's own optimism). Mirrors `plugins/scfdma/tests/llr_reliability.rs`.
+- **Test results:** before the fix the gate failed at **24×** over-confident (64QAM500 @10 dB, |L|≈11).
+  After: worst 1.78× (10 dB), 1.35× (12 dB), 1.93× (14 dB) for 64QAM500; 64QAM2000-RRC reads slightly
+  *under*-confident (0.35× / 0.14×), the safe direction. `cargo test -p qam64-plugin
+  --no-default-features` → all pass; `cargo test -p openpulse-modem --no-default-features --test
+  llr_calibration` → 2 passed (mean|LLR| still grows with SNR — real calibration, not suppression);
+  clippy + fmt clean.
+
+---
+
 ## 2026-07-11 — test(discovery): FF-15 Phase F-3c-iv — two-runtime end-to-end rendezvous
 
 - **Requirement/change:** an acceptance test that two independent stations actually reach a rendezvous

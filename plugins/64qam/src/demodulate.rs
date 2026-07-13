@@ -570,11 +570,40 @@ pub fn qam64_demodulate_soft(
         .zip(q_syms[data_start..data_end].iter())
         .map(|(&yi, &yq)| Complex32::new(yi, yq))
         .collect();
-    let noise_var = estimate_decision_noise_var(&data, 6);
+    // Measure σ² from the known corner preamble, not a decision-directed estimate over the data.
+    // On the dense 64QAM grid, distance-to-nearest-point saturates once symbols cross a decision
+    // boundary (the wrong-but-near point is close), so it under-reads σ² 2–5× at 6–14 dB and the
+    // LLRs come out badly over-confident — measured at 24× the promised error rate at 10 dB.
+    // The corner preamble is a known, constant-modulus reference; its residual is an unbiased σ².
+    let noise_var = preamble_noise_var(&i_syms, &q_syms)
+        .unwrap_or_else(|| estimate_decision_noise_var(&data, 6));
     for sym in &data {
         llrs.extend(symbol_llrs(*sym, 6, noise_var, &points));
     }
     Ok(llrs)
+}
+
+/// Data-aided 2-D noise variance `E|n|²` from the recovered corner preamble.
+///
+/// The preamble symbols (already level- and carrier-corrected, on the constellation scale) are a
+/// known reference, so the mean squared deviation from [`preamble_symbols`] measures the additive
+/// noise directly — unbiased at any SNR, unlike the decision-directed estimate that saturates on
+/// the dense grid. Returns `None` if no preamble symbols are available. The unit matches
+/// [`estimate_decision_noise_var`] (2-D, i.e. `2σ²` per dimension), as [`symbol_llrs`] expects.
+fn preamble_noise_var(i_syms: &[f32], q_syms: &[f32]) -> Option<f32> {
+    let expected = preamble_symbols();
+    let n = expected.len().min(i_syms.len()).min(q_syms.len());
+    if n == 0 {
+        return None;
+    }
+    let sum: f32 = (0..n)
+        .map(|k| {
+            let di = i_syms[k] - expected[k].0;
+            let dq = q_syms[k] - expected[k].1;
+            di * di + dq * dq
+        })
+        .sum();
+    Some((sum / n as f32).max(1e-6))
 }
 
 /// GPU-accelerated soft demodulator. Falls back to the CPU path if the GPU
