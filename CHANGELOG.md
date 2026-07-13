@@ -3,9 +3,15 @@
 All notable changes to OpenPulseHF are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+> **Canonical changelog:** the current, per-release changelog is
+> [`docs/dev/project/changelog.md`](docs/dev/project/changelog.md) (technical) and
+> [`docs/releasenotes.md`](docs/releasenotes.md) (user-facing) — those cover **v0.2.1 through v0.4.0**
+> and are updated with every release. This root file is retained for its detailed 0.1.0–0.2.0 history and
+> the pre-0.2.1 unreleased backlog below; do not treat the `[Unreleased]` section here as current.
+
 ---
 
-## [Unreleased]
+## [Unreleased] — superseded (see the canonical changelog above; entries below predate v0.2.1)
 
 ### Added
 - Observability / audit mode (REQ-OBS-01/02/03) — the full opt-in capability: `[observability]
