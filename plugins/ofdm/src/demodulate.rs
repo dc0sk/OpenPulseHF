@@ -12,7 +12,7 @@ use openpulse_core::len_prefix::{
     decode_len_prefix, decode_len_prefix_llrs, LEN_PREFIX_BITS, LEN_PREFIX_BYTES,
 };
 
-use crate::channel::{is_pilot, ls_estimate, zf_equalize};
+use crate::channel::{is_pilot, ls_estimate, pilot_positions, zf_equalize};
 use crate::params::{params_for_mode, OfdmParams, CP, FFT_SIZE, SYM_LEN};
 
 pub fn ofdm_demodulate(samples: &[f32], mode: &str) -> Result<Vec<u8>, ModemError> {
@@ -321,24 +321,46 @@ fn demodulate_soft_with_params(samples: &[f32], p: &OfdmParams) -> Result<Vec<f3
     let fft = planner.plan_fft_forward(FFT_SIZE);
     let scale = 1.0 / (FFT_SIZE as f32).sqrt();
 
-    // bits_per_symbol() = 2 for QPSK; each symbol → 2 LLRs.
-    let mut llrs: Vec<f32> = Vec::with_capacity(n_syms * p.bits_per_symbol());
-
+    // Pass 1: FFT + timing-deramp every symbol and keep the frequency-domain frames. Storing them
+    // lets us estimate the additive noise from the pilots *across* symbols before demapping, and
+    // avoids a second FFT in the LLR pass.
+    let mut freqs: Vec<Vec<Complex32>> = Vec::with_capacity(n_syms);
     for sym_idx in 0..n_syms {
         let start = data_start + sym_idx * SYM_LEN;
         if start + FFT_SIZE > samples.len() {
             break;
         }
-
         let mut freq: Vec<Complex32> = samples[start..start + FFT_SIZE]
             .iter()
             .map(|&s| Complex32::new(s * scale, 0.0))
             .collect();
         fft.process(&mut freq);
         crate::channel::deramp_timing(p, &mut freq);
+        freqs.push(freq);
+    }
 
-        let h_est = ls_estimate(p, &freq);
-        let data_syms = zf_equalize(p, &freq, &h_est);
+    // Frequency-domain per-bin additive noise variance σ²_bin (2-D `E|N_k|²`), the same for every
+    // bin because AWGN is white — only the channel `H_k` varies. Measured from the pilots, which
+    // carry a known BPSK +1: `Y_p[s+1] − Y_p[s]` cancels the (constant) `H_p`, leaving `2σ²_bin`.
+    let sigma2_bin = pilot_noise_var(p, &freqs);
+
+    // Channel-estimate-error term. `Ĥ_k` is interpolated from pilot estimates that each carry noise
+    // σ²_bin (pilots are unit amplitude), so `X_k = Y_k/Ĥ_k ≈ D_k − D_k·δ/H_k + N_k/H_k` picks up a
+    // signal-power-dependent error `|D_k|²·σ²_ce/|H_k|²` on top of the additive `σ²_bin/|H_k|²`.
+    // Averaged over the unit-power constellation `E|D_k|² = P_c`, the equalized noise is
+    // `(σ²_bin + P_c·σ²_ce)/|H_k|²`; taking the conservative `σ²_ce ≈ σ²_bin` gives the `(1+P_c)`
+    // factor below. Omitting it (the old code) left the LLRs ~2× over-confident even on a flat
+    // channel — this is the OFDM analogue of the SC-FDMA `mmse_llr_noise_var` channel-estimate term.
+    let p_c = points_avg_power(&constellation_points(p.bits_per_sc));
+    let sigma2_eff = sigma2_bin.map(|s2| s2 * (1.0 + p_c));
+
+    // bits_per_symbol() = 2 for QPSK; each symbol → 2 LLRs.
+    let mut llrs: Vec<f32> = Vec::with_capacity(n_syms * p.bits_per_symbol());
+    let points = constellation_points(p.bits_per_sc);
+
+    for freq in &freqs {
+        let h_est = ls_estimate(p, freq);
+        let data_syms = zf_equalize(p, freq, &h_est);
 
         // Per-data-subcarrier |H|² weights, in the same order as `data_syms`.
         let mut weights: Vec<f32> = Vec::with_capacity(data_syms.len());
@@ -349,14 +371,25 @@ fn demodulate_soft_with_params(samples: &[f32], p: &OfdmParams) -> Result<Vec<f3
             }
             weights.push(h_est[rel].norm_sqr());
         }
-        let mean_w = (weights.iter().sum::<f32>() / weights.len().max(1) as f32).max(1e-6);
-        let block_noise = estimate_decision_noise_var(&data_syms, p.bits_per_sc);
-        let points = constellation_points(p.bits_per_sc);
+
+        // Fallback for a single-symbol frame (no pilot difference available): the legacy
+        // decision-directed block estimate rescaled per SC. Over-confident on the dense grid, but it
+        // only applies to a frame too short for the pilot estimator, so compute it lazily.
+        let fallback = sigma2_eff.is_none().then(|| {
+            let mean_w = (weights.iter().sum::<f32>() / weights.len().max(1) as f32).max(1e-6);
+            let block_noise = estimate_decision_noise_var(&data_syms, p.bits_per_sc);
+            (block_noise, mean_w)
+        });
 
         for (sym, &w) in data_syms.iter().zip(weights.iter()) {
-            // Faded subcarriers (low |H|²) get higher effective noise → lower-
-            // confidence LLRs.  For QPSK this matches the old |H|²-weighted form.
-            let noise_var = block_noise * mean_w / w.max(1e-6);
+            // Correct per-SC equalized-domain noise: `σ²_eff / |H_k|²`, a single ZF `1/|H|²` (not the
+            // post-ZF block noise rescaled by `1/|H|²` a second time). Faded SCs (low |H|²) get a
+            // higher effective noise → lower-confidence LLRs.
+            let noise_var = match (sigma2_eff, fallback) {
+                (Some(s2), _) => (s2 / w.max(1e-6)).max(1e-9),
+                (None, Some((block_noise, mean_w))) => block_noise * mean_w / w.max(1e-6),
+                (None, None) => 1.0,
+            };
             llrs.extend(symbol_llrs(*sym, p.bits_per_sc, noise_var, &points));
         }
     }
@@ -378,6 +411,43 @@ fn demodulate_soft_with_params(samples: &[f32], p: &OfdmParams) -> Result<Vec<f3
     let bit_llrs = &llrs[LEN_PREFIX_BITS..];
     let take = (payload_len as usize * 8).min(bit_llrs.len());
     Ok(bit_llrs[..take].to_vec())
+}
+
+/// Frequency-domain additive-noise variance `σ²_bin` (2-D `E|N_k|²`) from the pilot subcarriers.
+///
+/// Pilots carry a known BPSK +1, so `Y_p = H_p + N_p`. Across a short burst `H_p` is ~constant, so
+/// the adjacent-symbol difference `Y_p[s+1] − Y_p[s] = N_p[s+1] − N_p[s]` cancels it and has variance
+/// `2σ²_bin`. Averaging over all pilots and symbol pairs gives an unbiased, decision-free estimate —
+/// unlike `estimate_decision_noise_var`, it does not saturate on a dense grid. A residual CFO or
+/// in-burst fade only inflates it (fewer-confident LLRs — the safe direction). `None` when there are
+/// fewer than two symbols or no pilots, leaving the caller its single-symbol fallback.
+fn pilot_noise_var(p: &OfdmParams, freqs: &[Vec<Complex32>]) -> Option<f32> {
+    let pilots = pilot_positions(p);
+    if freqs.len() < 2 || pilots.is_empty() {
+        return None;
+    }
+    let mut sum = 0.0f32;
+    let mut count = 0usize;
+    for w in freqs.windows(2) {
+        for &sc in &pilots {
+            let d = w[1][sc] - w[0][sc];
+            sum += d.norm_sqr();
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return None;
+    }
+    Some((sum / count as f32 / 2.0).max(1e-9))
+}
+
+/// Average symbol power `E|D|²` of a constellation. ≈ 1 for the unit-power maps in `openpulse_dsp`,
+/// computed here so the channel-estimate-error term stays correct if a constellation is rescaled.
+fn points_avg_power(points: &[(u8, Complex32)]) -> f32 {
+    if points.is_empty() {
+        return 1.0;
+    }
+    points.iter().map(|(_, c)| c.norm_sqr()).sum::<f32>() / points.len() as f32
 }
 
 // ── Bit helpers ───────────────────────────────────────────────────────────────
