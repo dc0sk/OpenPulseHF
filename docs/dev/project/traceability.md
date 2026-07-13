@@ -4284,3 +4284,21 @@ and the actually-observed results per change.
 - **Still deferred (feature-not-a-fix / substantial):** `SetTxAttenuation { band }` (no per-band engine
   store); route-discovery wire codecs with no originator; `transmit_iq` seam bypass (test-only); discovery
   `server::run`-level test (#15); cli-guide daemon section (#44).
+
+## 2026-07-13 — fix(bpsk): audit #1 follow-up — keep crossfade cancellation off the soft path
+
+- **Requirement/change:** the full-workspace test gate caught a regression from the #1 crossfade-ISI fix
+  (#821): `llr_calibration::a_deeply_faded_extra_attempt_does_not_hurt` failed (plus_faded −2.0 dB vs
+  two_good −3.0 dB, needs ≤ −2.5). #821 applied `cancel_crossfade_isi` to **both** the hard and the soft
+  BPSK demod. BPSK is *differential*, so on the soft path the backward-substitution recursion **inflates**
+  the noise LLRs of a deeply-faded attempt instead of suppressing them — breaking the 1/σ² LLR calibration
+  HARQ MAP combining depends on (`receive_with_llr_combining`).
+- **Design decision:** apply the cancellation on the **hard differential path only** (`bpsk_demodulate`),
+  where it restores the decision margin (the A/B-verified BER win in #821 uses that path), and **not** on
+  the soft path (`bpsk_demodulate_soft`), preserving the soft-LLR combining scale. (Contrast QPSK/8PSK,
+  which are coherent and correctly cancel on both paths.)
+- **Implementation:** `plugins/bpsk/src/demodulate.rs` (revert the soft-path `cancel_crossfade_isi` call).
+- **Tests:** `llr_calibration` (2/2) now green; the #1 hard-path `crossfade_cancellation_lowers_awgn_ber`
+  still passes; bpsk_hardening (18) / fec_loopback (12) / channel_loopback (32) green.
+- **Test results:** full `cargo test --workspace --no-default-features` now 0 failures (was 1); fmt +
+  clippy clean; benchmark gate `true` (10/10, mean_transitions 5.1).

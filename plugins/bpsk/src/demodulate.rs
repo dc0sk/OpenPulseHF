@@ -247,9 +247,13 @@ pub fn bpsk_demodulate_soft(
         bpsk_demodulate_rrc(samples, n, baud, fc, fs, alpha, &config.mode)
     } else {
         let offset = find_timing_offset(samples, n, fc, fs);
-        let (mut iv, mut qv) = demodulate_iq(samples, n, fc, fs, offset);
-        cancel_crossfade_isi(&mut iv, &mut qv); // remove crossfade ISI before soft detection (see above)
-        (iv, qv)
+        // NOTE: crossfade-ISI cancellation is deliberately NOT applied on the soft path. BPSK is
+        // *differential*, so the backward-substitution recursion inflates the noise LLRs of a deeply
+        // faded attempt instead of suppressing them — that breaks the 1/σ² LLR calibration HARQ MAP
+        // combining relies on (regressed `llr_calibration::a_deeply_faded_extra_attempt_does_not_hurt`).
+        // The cancellation stays on the hard differential path (`bpsk_demodulate`), where it restores the
+        // decision margin without disturbing any soft-combining scale.
+        demodulate_iq(samples, n, fc, fs, offset)
     };
 
     if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
