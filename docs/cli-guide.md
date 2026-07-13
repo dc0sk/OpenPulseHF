@@ -2,10 +2,10 @@
 project: openpulsehf
 doc: docs/cli-guide.md
 status: living
-last_updated: 2026-05-02
+last_updated: 2026-07-13
 ---
 
-# CLI Guide - openpulse (v0.2.0)
+# CLI Guide - openpulse (v0.4.0)
 
 ## Build prerequisites
 
@@ -39,6 +39,12 @@ cargo build --release
 - openpulse arq send --payload <text> [--mode <MODE>] [--profile <name>] [--retries <n>]
 - openpulse arq listen [--mode <MODE>] [--profile <name>] [--frames <n>]
 - openpulse session-metrics --format json
+- openpulse monitor [--mode <MODE>]: stream the engine's structured NDJSON event feed to stdout (default mode BPSK100).
+- openpulse broadcast --payload <text> [--mode <MODE>]: send a one-to-many broadcast frame (no ACK, no session; default mode BPSK250).
+- openpulse beacon --callsign <CALL> [--interval <secs>] [--mode <MODE>] [--max-hops <n>]: send periodic station-ID beacons (default interval 600 s, mode BPSK250).
+- openpulse qsy <SUBCOMMAND>: QSY frequency-agility negotiation (see `openpulse qsy --help`).
+- openpulse calibrate <SUBCOMMAND>: on-device audio/PTT/AFC calibration checks.
+- openpulse config init: print a fully-commented `config.toml` template to stdout.
 
 Notes:
 - `mode-advisor` and `adaptive` select the SpeedLevel ladder via `--profile` (overrides `[modem] profile` in config). Profiles: `hpx500`, `hpx_hf`, `hpx_ofdm_hf`, `hpx_pilot`, `hpx_pilot_rrc`, `hpx_pilot_fast`, `hpx_pilot_fast_rrc`, `hpx_wideband`, `hpx_wideband_hd`, `hpx_narrowband`, `hpx_narrowband_hd`.
@@ -108,6 +114,47 @@ Notes:
 - `trust import` writes to the local trust store (`~/.config/openpulse/trust-store.json`).
 - `trust policy set` persists the active policy profile across invocations.
 
+## Daemon control CLI
+
+`openpulse daemon <SUBCOMMAND>` talks to a running `openpulse-daemon` over its control
+port. All subcommands accept a global `--addr <host:port>` (default `127.0.0.1:9000`).
+
+Connection, PTT, mode, and frequency:
+
+- openpulse daemon connect-peer <CALLSIGN> / disconnect-peer
+- openpulse daemon set-mode <MODE>
+- openpulse daemon set-freq [--rig <r>] <FREQ_HZ>
+- openpulse daemon ptt-assert / ptt-release
+
+Messaging and OTA rate control:
+
+- openpulse daemon send-message --to <CALL> [--subject <s>] --body <text>
+- openpulse daemon list-messages | get-message <ID> | delete-message <ID>
+- openpulse daemon ota-start --profile <name> | ota-stop | ota-status
+- openpulse daemon ota-bounds [--min <L>] [--max <L>] | ota-lock --level <L> | ota-unlock
+
+Runtime toggles (each takes a value): set-dcd-squelch, set-cessb, set-notch, set-agc,
+set-logbook, set-tx-attenuation <db> [--band <b>], set-config, get-config.
+
+JS8 station discovery (FF-15):
+
+- openpulse daemon enable-discovery — dwell on the JS8 calling frequency and decode beacons.
+- openpulse daemon disable-discovery — stop discovery and return to the home frequency.
+- openpulse daemon stations — list decoded JS8 stations as JSON (`is_opulse` marks OpenPulse-capable).
+- openpulse daemon peers — list recognized OpenPulse peers (capabilities, quality, trust) from the shared cache as JSON.
+
+Direct P2P file transfer (FF-16, `OPFX`):
+
+- openpulse daemon send-file <TO_CALLSIGN> <PATH> — offer and send a local file to a peer over RF.
+- openpulse daemon accept-file <TRANSFER_ID> / reject-file <TRANSFER_ID> — respond to an inbound offer.
+- openpulse daemon cancel-file <TRANSFER_ID> — cancel an in-flight transfer.
+- openpulse daemon files — list files received this session as JSON.
+
+Repeater, spectrum, and QSY: enable-repeater / disable-repeater,
+subscribe-spectrum [--fps <n>] [--frames <n>], accept-qsy <TOKEN> / reject-qsy <TOKEN>.
+
+Run `openpulse daemon --help` for the full subcommand and flag reference.
+
 ## Diagnose commands
 
 - openpulse diagnose handshake <STATION_OR_RECORD_ID>
@@ -118,7 +165,7 @@ Notes:
 
 - --backend <BACKEND>: select loopback or hardware backend where supported.
 - --mode <MODE>: select a registered modulation mode.
-- --pki-url <URL>: PKI service base URL (default: http://localhost:8080).
+- --pki-url <URL>: PKI service base URL (default: http://127.0.0.1:8787).
 - --log <LEVEL>: log level (error, warn, info, debug, trace).
 - --ptt <none|rts|dtr|vox|rigctld>: PTT control method (default: none).
   - none: no PTT (loopback, testing)
