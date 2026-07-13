@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::relay::RelayTrustPolicy;
-use crate::wire_query::{PeerQueryRequest, WireEnvelope, WireMsgType};
+use crate::wire_query::{PeerQueryRequest, RouteDiscoveryRequest, WireEnvelope, WireMsgType};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct QueryKey {
@@ -170,16 +170,19 @@ impl QueryForwarder {
         envelope: &WireEnvelope,
         now_ms: u64,
     ) -> Result<WireEnvelope, QueryForwardError> {
-        // 1. Must be a peer query request
-        if envelope.msg_type != WireMsgType::PeerQueryRequest {
-            return Err(QueryForwardError::MsgTypeNotQuery {
-                got: envelope.msg_type as u8,
-            });
-        }
-
-        let query_id = PeerQueryRequest::decode(&envelope.payload)
-            .map(|r| r.query_id)
-            .unwrap_or(0);
+        // 1. Must be a flooded query request — a peer query or a route-discovery request. Both carry
+        //    their query id as a leading `u64`; extract it for dedup keyed on (src_peer_id, query_id).
+        let query_id = match envelope.msg_type {
+            WireMsgType::PeerQueryRequest => PeerQueryRequest::decode(&envelope.payload)
+                .map(|r| r.query_id)
+                .unwrap_or(0),
+            WireMsgType::RouteDiscoveryRequest => RouteDiscoveryRequest::decode(&envelope.payload)
+                .map(|r| r.route_query_id)
+                .unwrap_or(0),
+            other => {
+                return Err(QueryForwardError::MsgTypeNotQuery { got: other as u8 });
+            }
+        };
 
         // 2. Hop-limit enforcement
         if envelope.hop_index >= envelope.hop_limit {

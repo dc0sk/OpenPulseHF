@@ -9,6 +9,38 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-13 — feat(core): route-discovery driver (originate / answer / apply)
+
+- **Requirement/change:** issue #830 — the route-discovery wire messages
+  (`RouteDiscoveryRequest/Response`, msg types 0x03/0x04) were **codec-only**: encode/decode existed
+  but no node originated, answered, or applied them, and nothing stored a discovered route. An interop
+  partner implementing the wire spec dead-ended.
+- **Design decision:** add the missing driver in `openpulse-core` as pure, no-I/O protocol logic.
+  Because a `WireEnvelope` carries no accumulating path trail (only a `hop_index` counter), the
+  answerer builds the response `hops` from what it can vouch for: the **destination** answers with a
+  single hop (itself); a node holding a **cached route** answers with that route. Signatures are
+  **self-authenticating** (as in `PeerDescriptor`) — the responder signs with the Ed25519 key whose
+  public bytes *are* its `peer_id`, so the originator verifies with the responder id off the reply
+  envelope, no external key store. Route-request **propagation** is completed by extending
+  `QueryForwarder::propagate` to accept `RouteDiscoveryRequest` (its `route_query_id` is at the same
+  leading-`u64` offset as a peer query's `query_id`, so hop-limit + `(src, id)` dedup are identical).
+- **Implementation:** `crates/openpulse-core/src/route_discovery.rs` (new) — `RouteTable`/`RouteEntry`
+  (bounded, TTL, best-route = fewer hops then higher bottleneck reliability), `RouteOriginator`
+  (`originate` → request envelope + pending tracking; `apply_response` → verify + record + consume),
+  `RouteResponder` (`answer`), and `sign_route_response`/`verify_route_response`. `query_propagation.rs`
+  extended to flood route requests. Registered + re-exported in `lib.rs`.
+- **Tests:** 8 unit tests in the module (destination-answers, capability-decline, non-destination-none,
+  tamper→BadSignature, unknown/expired-query, route-table shorter-wins + reliability-tiebreak +
+  expiry) + `tests/route_discovery_integration.rs` (3: full originate→propagate→answer→apply round
+  trip incl. dedup + replay rejection, hop-limit drop, intermediate-with-cached-route answers).
+- **Test results:** `cargo test -p openpulse-core --no-default-features` → all pass (0 failures);
+  `cargo test -p openpulse-mesh --no-default-features` → 8 pass (mesh now floods route requests via the
+  extended forwarder, no regression); clippy + fmt clean. **Follow-up:** wire `RouteResponder` into the
+  mesh dispatcher so a mesh node answers route requests on-air (it has the signing key + peer cache);
+  tracked under #830.
+
+---
+
 ## 2026-07-13 — test(daemon): cover the discovery DCD-busy beacon-defer guard
 
 - **Requirement/change:** issue #830 test-coverage item #15 — the discovery beacon-emit path has a DCD
