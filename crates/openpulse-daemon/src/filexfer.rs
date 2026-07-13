@@ -765,16 +765,26 @@ fn quota_would_exceed(policy: &FileTransferPolicy, from: &str, incoming: u64) ->
     used.saturating_add(incoming) > policy.per_peer_quota_bytes
 }
 
+/// Total bytes of all files under `dir`, **recursively**. The quota must count the peer's `.partial/`
+/// subtree (in-flight resumable blocks) too, otherwise a peer can accumulate unbounded bytes there
+/// while `quota_would_exceed` reports them under quota. `DirEntry::metadata` does not traverse
+/// symlinks, so a symlinked directory reports as neither file nor dir and is skipped (no loop risk).
 fn dir_size(dir: &Path) -> u64 {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
     };
-    entries
-        .flatten()
-        .filter_map(|e| e.metadata().ok())
-        .filter(|m| m.is_file())
-        .map(|m| m.len())
-        .sum()
+    let mut total = 0u64;
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if meta.is_file() {
+            total = total.saturating_add(meta.len());
+        } else if meta.is_dir() {
+            total = total.saturating_add(dir_size(&entry.path()));
+        }
+    }
+    total
 }
 
 // ── resume: persisted partial blocks ─────────────────────────────────────────
@@ -990,6 +1000,25 @@ mod tests {
         assert!(
             !offer_geometry_ok(&bad_bs),
             "sub-minimum block_size rejected"
+        );
+    }
+
+    #[test]
+    fn dir_size_counts_the_partial_subtree_for_quota() {
+        // The per-peer quota must include bytes held in the `.partial/` subtree (in-flight resumable
+        // blocks), not just top-level received files — otherwise a peer accumulates unbounded data
+        // there while `quota_would_exceed` reports them under quota.
+        let peer_dir = tmp_dir();
+        std::fs::write(peer_dir.join("received.bin"), vec![0u8; 100]).unwrap();
+        let partial = peer_dir.join(PARTIAL_SUBDIR).join("abc123hex");
+        std::fs::create_dir_all(&partial).unwrap();
+        std::fs::write(partial.join("0.blk"), vec![0u8; 250]).unwrap();
+        std::fs::write(partial.join("1.blk"), vec![0u8; 150]).unwrap();
+
+        assert_eq!(
+            dir_size(&peer_dir),
+            500,
+            "dir_size must count the 100-byte received file plus the 400 bytes of .partial blocks"
         );
     }
 
