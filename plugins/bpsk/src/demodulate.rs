@@ -71,7 +71,12 @@ pub fn bpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
             return Err(ModemError::Demodulation("signal too short".into()));
         }
         let offset = find_timing_offset(samples, n, fc, fs);
-        let (iv, qv) = demodulate_iq(samples, n, fc, fs, offset);
+        let (mut iv, mut qv) = demodulate_iq(samples, n, fc, fs, offset);
+        // The overlapping half-Hann modulator is a crossfade, so the one-slot matched filter recovers
+        // `r_k = a_k + β·a_{k+1}` (β = 1/3). Left in, that `+β` term adds a constant positive bias to the
+        // differential dot product `r_k·r_{k-1}` (a_k²=1), eroding the flip-bit margin by several dB.
+        // Cancel it here (crossfade path only; the -RRC path uses Gardner+LMS and does not crossfade).
+        cancel_crossfade_isi(&mut iv, &mut qv);
         (iv, qv)
     };
 
@@ -242,7 +247,9 @@ pub fn bpsk_demodulate_soft(
         bpsk_demodulate_rrc(samples, n, baud, fc, fs, alpha, &config.mode)
     } else {
         let offset = find_timing_offset(samples, n, fc, fs);
-        demodulate_iq(samples, n, fc, fs, offset)
+        let (mut iv, mut qv) = demodulate_iq(samples, n, fc, fs, offset);
+        cancel_crossfade_isi(&mut iv, &mut qv); // remove crossfade ISI before soft detection (see above)
+        (iv, qv)
     };
 
     if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
@@ -773,6 +780,23 @@ fn demodulate_iq(
     }
 
     (i_out, q_out)
+}
+
+/// Crossfade-ISI coefficient for the overlapping half-Hann pulse: the one-slot matched filter recovers
+/// `r_k = a_k + β·a_{k+1}` where `β = Σ(w_head·w_tail)/Σw_tail² = 1/3` (same integrals as rectangular QPSK).
+const CROSSFADE_ISI_BETA: f32 = 1.0 / 3.0;
+
+/// Remove the crossfade ISI from the recovered symbol stream in place by stable backward substitution:
+/// `r_k = a_k + β·a_{k+1}` is bidiagonal, so `a_k = r_k − β·a_{k+1}`. The tail symbols (successor→0) give
+/// the terminal; noise is amplified by only `1/(1−β²) = 1.125` (+0.5 dB), far less than the several-dB
+/// differential-margin loss the uncancelled `+β` bias costs. Crossfade (non-RRC) path only.
+fn cancel_crossfade_isi(i_syms: &mut [f32], q_syms: &mut [f32]) {
+    let beta = CROSSFADE_ISI_BETA;
+    let n = i_syms.len().min(q_syms.len());
+    for k in (0..n.saturating_sub(1)).rev() {
+        i_syms[k] -= beta * i_syms[k + 1];
+        q_syms[k] -= beta * q_syms[k + 1];
+    }
 }
 
 // ── Differential phase detection (NRZI decode) ───────────────────────────────

@@ -4117,3 +4117,24 @@ and the actually-observed results per change.
   reordering/corruption; broadcast lag may thin the echo, which is by-design). Existing round-trip tests
   unchanged.
 - **Test results:** `cargo test -p openpulse-ardop --no-default-features` → 23 green; clippy + fmt clean.
+
+## 2026-07-13 — fix(bpsk): audit #1 — cancel crossfade ISI on the differential demod
+
+- **Requirement/change:** the audit (finding #1, confirmed by verification here) found BPSK — the primary
+  weak-signal fallback family (SL2–SL4 on every HF ladder) — has the uncancelled crossfade-ISI defect
+  already fixed for QPSK (#695) and 8PSK (#696), never ported. The overlapping half-Hann modulator is a
+  crossfade, so the one-slot matched filter recovers `r_k = a_k + β·a_{k+1}` with β = Σ(w_head·w_tail)/
+  Σw_tail² = **1/3** (same integrals as rectangular QPSK). Because BPSK is NRZI-**differential**, that
+  `+β` term becomes a constant positive bias in the dot product `r_k·r_{k-1}` (a_k²=1), eroding the
+  flip-bit margin by several dB. Refs REQ-DISC-adjacent modem; primary fallback.
+- **Design decision:** port `cancel_crossfade_isi` (stable backward substitution `a_k = r_k − β·a_{k+1}`;
+  +0.5 dB noise enhancement, far less than the margin recovered) to the BPSK IQ stream *before*
+  differential detection, gated to the **crossfade (non-RRC) path only** — the `-RRC` modes use Gardner+LMS
+  and do not crossfade. Applied on both the hard `bpsk_demodulate` and the soft `bpsk_demodulate_soft`.
+- **Implementation:** `plugins/bpsk/src/demodulate.rs`.
+- **Tests:** `crossfade_cancellation_lowers_awgn_ber` — a deterministic fixed-seed AWGN BER measurement;
+  **A/B-verified during development: BER 3.33 % with the cancellation disabled → well under the 2 % guard
+  with it** (a genuine fail-without-fix guard). All existing BPSK plugin (25) + modem bpsk_hardening (18)
+  + fec_loopback (12) + channel_loopback (32) tests pass unchanged.
+- **Test results:** `cargo test -p bpsk-plugin --no-default-features` → 25 green; modem BPSK paths green;
+  clippy + fmt clean.
