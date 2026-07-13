@@ -127,7 +127,7 @@ impl PilotFrame {
     /// Assumes symbol synchronisation (the passband layer provides timing and
     /// onset); `frame` must start at the first preamble symbol.
     pub fn decode(&self, frame: &[(f32, f32)]) -> Vec<u8> {
-        let data_syms = self.recover_data_syms(frame);
+        let (data_syms, _) = self.recover_data_syms(frame);
         symbols_to_bytes(&data_syms, self.bits_per_sc, self.apsk32)
     }
 
@@ -136,8 +136,8 @@ impl PilotFrame {
     /// hard bytes. Hard-slicing the result (`bit = llr <= 0`, LSB-first) reproduces
     /// [`decode`](Self::decode)'s bytes, matching the cross-plugin LLR convention.
     pub fn decode_soft(&self, frame: &[(f32, f32)]) -> Vec<f32> {
-        let data_syms = self.recover_data_syms(frame);
-        symbols_to_llrs(&data_syms, self.bits_per_sc, self.apsk32)
+        let (data_syms, pilot_noise_var) = self.recover_data_syms(frame);
+        symbols_to_llrs(&data_syms, self.bits_per_sc, self.apsk32, pilot_noise_var)
     }
 
     /// Acquire on the fully-known preamble, track the residual through the data
@@ -148,13 +148,30 @@ impl PilotFrame {
     /// Each data symbol is normalised by the pilot-referenced amplitude so the
     /// demapper sees native constellation scale — required for amplitude-bearing
     /// 16QAM/32APSK, harmless for the constant-modulus PSK orders.
-    fn recover_data_syms(&self, frame: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    /// Also returns the additive 2-D noise variance `E|n|²` measured from the known symbols (settled
+    /// preamble + data-region pilots) — the deviation of the amplitude-normalised known symbol from
+    /// its reference. Unlike a decision-directed estimate over the data, this uses no decisions, so it
+    /// does not saturate on the dense 16QAM/32APSK grid; `None` when too few known symbols are
+    /// available (a very short frame), leaving the LLR builder its decision-directed fallback.
+    fn recover_data_syms(&self, frame: &[(f32, f32)]) -> (Vec<(f32, f32)>, Option<f32>) {
         let mut tracker = PilotTracker::new(LOOP_BW);
         let plen = self.preamble.len();
+        let mut noise_sum = 0.0f32;
+        let mut noise_count = 0usize;
+        // Skip the first half of the preamble while the loop is still converging — its residual is
+        // acquisition transient, not noise.
+        let settle = plen / 2;
 
         // Acquire on the fully-known preamble (every symbol is a pilot).
         for (k, &sym) in frame.iter().take(plen).enumerate() {
-            tracker.process(sym, Some(self.preamble[k]));
+            let corrected = tracker.process(sym, Some(self.preamble[k]));
+            if k >= settle {
+                let amp = tracker.amplitude().max(1e-6);
+                let dr = corrected.0 / amp - self.preamble[k].0;
+                let di = corrected.1 / amp - self.preamble[k].1;
+                noise_sum += dr * dr + di * di;
+                noise_count += 1;
+            }
         }
 
         // Track through the data region; pilots sit at every pilot_spacing-th
@@ -163,13 +180,19 @@ impl PilotFrame {
         for (pos, &sym) in frame.iter().skip(plen).enumerate() {
             let is_pilot = pos.is_multiple_of(self.pilot_spacing);
             let corrected = tracker.process(sym, if is_pilot { Some(PILOT) } else { None });
-            if !is_pilot {
-                let amp = tracker.amplitude().max(1e-6);
+            let amp = tracker.amplitude().max(1e-6);
+            if is_pilot {
+                let dr = corrected.0 / amp - PILOT.0;
+                let di = corrected.1 / amp - PILOT.1;
+                noise_sum += dr * dr + di * di;
+                noise_count += 1;
+            } else {
                 data_syms.push((corrected.0 / amp, corrected.1 / amp));
             }
         }
 
-        data_syms
+        let noise_var = (noise_count >= 8).then(|| (noise_sum / noise_count as f32).max(1e-6));
+        (data_syms, noise_var)
     }
 }
 
@@ -237,30 +260,52 @@ fn symbols_to_bytes(syms: &[(f32, f32)], bits_per_sc: usize, apsk32: bool) -> Ve
 /// Soft counterpart of [`symbols_to_bytes`]: per-bit max-log-MAP LLRs (positive =
 /// bit more likely 0), in the same symbol-major, LSB-first-within-symbol order, so
 /// hard-slicing the LLRs (`bit = llr <= 0`) reproduces `symbols_to_bytes`'s bytes.
-/// Calibrated so `|LLR|` scales with `1/σ²`: `symbol_llrs` is divided by the decision-directed 2-D
-/// noise variance (mean squared distance to the nearest constellation point, measured against the same
-/// `points`, so it is correct for 32APSK too). Without it the pilot LLRs were flat in SNR
-/// (`mean|LLR| ≈ 2.0`) and HARQ combining could not weight a faded attempt down.
-fn symbols_to_llrs(syms: &[(f32, f32)], bits_per_sc: usize, apsk32: bool) -> Vec<f32> {
+/// Calibrated so `|LLR|` scales with `1/σ²`: `symbol_llrs` is divided by the 2-D noise variance.
+///
+/// The preferred `noise_var` is the pilot/preamble-residual estimate from [`recover_data_syms`]
+/// (data-aided, so it does not saturate). When it is unavailable the fallback is the decision-directed
+/// estimate (mean squared distance to the nearest constellation point) — correct at high SNR but it
+/// under-reads σ² on the dense 16QAM/32APSK grids at moderate SNR, leaving the LLRs over-confident.
+fn symbols_to_llrs(
+    syms: &[(f32, f32)],
+    bits_per_sc: usize,
+    apsk32: bool,
+    pilot_noise_var: Option<f32>,
+) -> Vec<f32> {
     let points = if apsk32 {
         apsk32_points()
     } else {
         constellation_points(bits_per_sc)
     };
-    let noise_var = if syms.is_empty() {
-        1.0
-    } else {
-        let sum: f32 = syms
-            .iter()
-            .map(|&(re, im)| {
-                let z = Complex32::new(re, im);
-                points
+    let noise_var = match pilot_noise_var {
+        // The pilot residual is the *additive* noise σ². The data symbols are additionally de-rotated
+        // and amplitude-normalised by a phase/amplitude reference estimated from those same noisy
+        // pilots, so each picks up a signal-power-dependent estimation-error term ≈ `P_c·σ²` on top —
+        // the single-carrier analogue of the OFDM channel-estimate-error term. With the conservative
+        // `σ²_est ≈ σ²` this is the `(1+P_c)` factor (`P_c` = average constellation power).
+        Some(sigma2) => {
+            let p_c = points.iter().map(|(_, p)| p.norm_sqr()).sum::<f32>() / points.len() as f32;
+            (sigma2 * (1.0 + p_c)).max(1e-6)
+        }
+        // Fallback (a frame too short for the pilot estimate): the decision-directed noise. Correct at
+        // high SNR but it under-reads σ² on the dense grids at moderate SNR (over-confident LLRs).
+        None => {
+            if syms.is_empty() {
+                1.0
+            } else {
+                let sum: f32 = syms
                     .iter()
-                    .map(|(_, p)| (z - *p).norm_sqr())
-                    .fold(f32::INFINITY, f32::min)
-            })
-            .sum();
-        (sum / syms.len() as f32).max(1e-6)
+                    .map(|&(re, im)| {
+                        let z = Complex32::new(re, im);
+                        points
+                            .iter()
+                            .map(|(_, p)| (z - *p).norm_sqr())
+                            .fold(f32::INFINITY, f32::min)
+                    })
+                    .sum();
+                (sum / syms.len() as f32).max(1e-6)
+            }
+        }
     };
     let mut llrs: Vec<f32> = Vec::with_capacity(syms.len() * bits_per_sc);
     for &(re, im) in syms {

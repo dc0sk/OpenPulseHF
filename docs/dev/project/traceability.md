@@ -70,6 +70,37 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-13 — fix(pilot): calibrate soft-LLR noise from the pilot/preamble residual
+
+- **Requirement/change:** issue #830 DSP-calibration item — the pilot-framed plugin's soft LLRs are
+  over-confident. Same class as SC-FDMA #690 / 64QAM #833 / OFDM #834; matters for MAP HARQ combining.
+- **Design decision:** `symbols_to_llrs` used a decision-directed `noise_var` (distance to the nearest
+  point) over the recovered data symbols, which saturates on the dense 16QAM/32APSK grids — a new
+  gate measured **60–1599×** over-confident at 4–8 dB (the SNRs where errors appear). The waveform
+  already carries a fully-known BPSK preamble and sparse data-region pilots, so measure the additive
+  noise from their residual instead: the amplitude-normalised known symbol minus its reference, over
+  the settled preamble (skip the first half — acquisition transient) + all data pilots. That is
+  decision-free, so it does not saturate. The pilot residual alone still under-read the *data*-symbol
+  scatter ~1.7–1.8×, because the data symbols are additionally de-rotated and amplitude-normalised by
+  a phase/amplitude reference estimated from those same noisy pilots — the single-carrier analogue of
+  the OFDM channel-estimate-error term. With the conservative `σ²_est ≈ σ²` that is a `(1+P_c)` factor
+  (`P_c` = average constellation power). A frame too short for ≥8 known symbols keeps the legacy
+  decision-directed estimate.
+- **Implementation:** `plugins/pilot/src/frame.rs` — `recover_data_syms` now also returns the
+  pilot/preamble-residual noise; `symbols_to_llrs` takes it and applies the `(1+P_c)` factor, with the
+  decision-directed path as fallback. `decode`/`decode_soft` updated for the new tuple return.
+- **Tests:** `plugins/pilot/tests/llr_reliability.rs` (new) — bins `|L|` (wide edges, since the broken
+  demod drives `|L|` into the hundreds) vs the empirical error rate, asserting worst-bin
+  over-confidence ≤ 4×. Mirrors the SC-FDMA/64QAM/OFDM gates.
+- **Test results:** before, **60–1599×** over-confident (errors sat at `|L|≈14` claiming ~1e-7 error).
+  After, every error-bearing bit is at `|L|≈5` with empirical ≈ predicted (ratio 0.3–0.4, slightly
+  under-confident — the safe direction) and the high-`|L|` bits are genuinely near-error-free.
+  `cargo test -p pilot-plugin --no-default-features` → all pass (incl. `soft_fec_loopback`);
+  `openpulse-modem` `llr_calibration` (2) + `llr_convention_conformance` (1) pass — mean|LLR| still
+  grows with SNR. clippy + fmt clean.
+
+---
+
 ## 2026-07-11 — test(discovery): FF-15 Phase F-3c-iv — two-runtime end-to-end rendezvous
 
 - **Requirement/change:** an acceptance test that two independent stations actually reach a rendezvous
