@@ -3987,3 +3987,22 @@ and the actually-observed results per change.
   the counter); auto-QSY daemon test asserts it too.
 - **Test results:** notch + QSY + loopback suites pass; single-application preserved on both paths;
   fmt/clippy clean. Prevention checklist added to `CLAUDE.md` → *Known sharp edges*.
+
+## 2026-07-13 — fix(js8/discovery): audit #2 — decode real off-air overs (time search)
+
+- **Requirement/change:** the Fable loose-ends audit found (finding #2, confirmed) that the JS8 discovery
+  decoder only ever searched slot-start offset 0, but a conforming over starts ~500 ms (`start_delay_ms`)
+  into the slot — so real off-air JS8 could not decode **at any SNR**; the RX-MVP acceptance test passed
+  only because it injected the signal at buffer offset 0. Regression links REQ-DISC-01/02, CAP-70.
+- **Design decision:** add a **two-stage acquisition** to `decode_window` — a coarse time×freq grid then a
+  per-candidate refine to full precision (`base_step_coarse` > `base_step` enables it; `0` keeps the old
+  single-pass behaviour byte-identical, so every other caller is unchanged). `DecodeCfg` gains
+  `base_step_coarse` + `min_offset`. Discovery's `decode_slot` now searches a ±0.75 s window around the
+  expected `start_delay` (NTP is required, D5) at coarse freq — a naive fine full-slack scan measured
+  ~19 s/decode (Pi-fatal); the two-stage version is ~1.4 s release / 3 s debug for the same decode.
+- **Implementation:** `plugins/js8/src/decoder.rs` (`refine_sync`, two-stage `decode_window`, `DecodeCfg`
+  fields), `crates/openpulse-discovery/src/runtime.rs` (`decode_slot` bounded window).
+- **Tests:** `hears_a_station_that_starts_partway_into_the_slot` (heartbeat at 500 ms offset — fails at
+  every SNR before the fix); the existing offset-0 decoder/discovery/daemon tests still pass unchanged.
+- **Test results:** `cargo test -p js8-plugin -p openpulse-discovery --no-default-features` green (81 + 51);
+  daemon discovery tests green; clippy + fmt clean.

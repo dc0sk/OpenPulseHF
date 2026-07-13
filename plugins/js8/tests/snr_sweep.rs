@@ -58,6 +58,8 @@ fn decode_rate(snr_db: f32, trials: u32) -> u32 {
             base_min: base - 15.0,
             base_max: base + 15.0,
             base_step: 3.125,
+            base_step_coarse: 0.0,
+            min_offset: 0,
             max_offset: 0,
             offset_step: 1,
             min_sync_score: 6.0,

@@ -47,6 +47,12 @@ pub struct DecodeCfg {
     pub base_max: f32,
     /// Frequency search step (Hz).
     pub base_step: f32,
+    /// Coarse frequency step (Hz) for two-stage acquisition. When `> base_step`, `decode_window` scans a
+    /// coarse time×freq grid and then refines each candidate to `base_step`; `0` = single-pass at
+    /// `base_step` (the default — byte-identical to the pre-two-stage behaviour).
+    pub base_step_coarse: f32,
+    /// Smallest slot-start offset to search (samples). Lets a caller skip a known-silent slot lead-in.
+    pub min_offset: usize,
     /// Largest slot-start offset to search (samples).
     pub max_offset: usize,
     /// Time search step (samples).
@@ -65,6 +71,8 @@ impl Default for DecodeCfg {
             base_min: 300.0,
             base_max: 2500.0,
             base_step: 3.125,
+            base_step_coarse: 0.0,
+            min_offset: 0,
             max_offset: 0,
             offset_step: 1,
             min_sync_score: 12.0,
@@ -119,16 +127,58 @@ fn estimate_snr_db(
     (snr_bin_db + 10.0 * (bin_bw / 2500.0).log10() + SNR_CAL_OFFSET_DB).max(SNR_FLOOR_DB)
 }
 
+/// Refine a coarse-grid `(offset, freq)` sync peak to full precision: search ±`ostep` in time (at
+/// `sps/8`) and ±`coarse` in frequency (at `cfg.base_step`), returning the best `(score, offset, freq)`.
+fn refine_sync(
+    audio: &[f32],
+    off0: usize,
+    f0: f32,
+    ostep: usize,
+    coarse: f32,
+    cfg: &DecodeCfg,
+    params: &SubmodeParams,
+) -> (f32, usize, f32) {
+    let ostep_fine = (params.samples_per_symbol / 8).max(1);
+    let lo = off0.saturating_sub(ostep).max(cfg.min_offset);
+    let hi = (off0 + ostep).min(cfg.max_offset);
+    let flo = (f0 - coarse).max(cfg.base_min);
+    let fhi = (f0 + coarse).min(cfg.base_max);
+    let mut best = (f32::MIN, off0, f0);
+    let mut off = lo;
+    while off <= hi {
+        let mut f = flo;
+        while f <= fhi {
+            if let Some(s) = sync_score(audio, off, f, params) {
+                if s > best.0 {
+                    best = (s, off, f);
+                }
+            }
+            f += cfg.base_step.max(0.1);
+        }
+        off += ostep_fine;
+    }
+    best
+}
+
 /// Decode every JS8 frame found in `audio` (one 15 s slot's worth) under `cfg`. Returns CRC-verified,
 /// content-deduped decodes, strongest sync first.
 pub fn decode_window(audio: &[f32], params: &SubmodeParams, cfg: &DecodeCfg) -> Vec<Js8Decode> {
     let sps = params.samples_per_symbol;
     let ostep = cfg.offset_step.max(1);
-    let fstep = cfg.base_step.max(0.1);
+    let fine = cfg.base_step.max(0.1);
+    // Two-stage acquisition: a coarse freq grid (cheap over a wide time search) then a per-candidate
+    // refine to `fine`. Keeps a time search (needed for real off-air overs, which start ~0.5 s into the
+    // slot) affordable — an exhaustive fine grid over the timing slack is ~40× the single-offset cost.
+    let coarse = if cfg.base_step_coarse > fine {
+        cfg.base_step_coarse
+    } else {
+        fine
+    };
+    let two_stage = coarse > fine;
 
-    // Gather all above-threshold sync candidates.
+    // Gather all above-threshold sync candidates on the coarse grid.
     let mut cands: Vec<(f32, usize, f32)> = Vec::new();
-    let mut offset = 0;
+    let mut offset = cfg.min_offset;
     while offset <= cfg.max_offset {
         let mut f = cfg.base_min;
         while f <= cfg.base_max {
@@ -137,18 +187,24 @@ pub fn decode_window(audio: &[f32], params: &SubmodeParams, cfg: &DecodeCfg) -> 
                     cands.push((score, offset, f));
                 }
             }
-            f += fstep;
+            f += coarse;
         }
         offset += ostep;
     }
     cands.sort_by(|a, b| b.0.total_cmp(&a.0));
 
-    // Greedily keep well-separated peaks (≥ half a symbol in time, ≥ half a tone in frequency).
+    // Greedily keep well-separated peaks (≥ half a symbol in time; ≥ half a tone, or a coarse cell,
+    // in frequency).
     let half_tone = params.tone_spacing_hz / 2.0;
+    let freq_sep = if two_stage {
+        coarse.max(half_tone)
+    } else {
+        half_tone
+    };
     let mut picked: Vec<(f32, usize, f32)> = Vec::new();
     for c in cands {
         let clash = picked.iter().any(|p| {
-            (c.1 as isize - p.1 as isize).unsigned_abs() < sps / 2 && (c.2 - p.2).abs() < half_tone
+            (c.1 as isize - p.1 as isize).unsigned_abs() < sps / 2 && (c.2 - p.2).abs() < freq_sep
         });
         if !clash {
             picked.push(c);
@@ -161,6 +217,12 @@ pub fn decode_window(audio: &[f32], params: &SubmodeParams, cfg: &DecodeCfg) -> 
     // Decode each candidate; keep CRC-valid, content-deduped frames.
     let mut out: Vec<Js8Decode> = Vec::new();
     for (score, off, freq) in picked {
+        // Refine the coarse (offset, freq) to full precision before demodulating.
+        let (score, off, freq) = if two_stage {
+            refine_sync(audio, off, freq, ostep, coarse, cfg, params)
+        } else {
+            (score, off, freq)
+        };
         let llr = demodulate_soft(&audio[off..], freq, params);
         let Some(d) = bp_decode(&llr, cfg.bp_iterations) else {
             continue;
@@ -215,6 +277,8 @@ mod tests {
             base_min,
             base_max,
             base_step: 3.125,
+            base_step_coarse: 0.0,
+            min_offset: 0,
             max_offset,
             offset_step: step,
             min_sync_score: 12.0,
