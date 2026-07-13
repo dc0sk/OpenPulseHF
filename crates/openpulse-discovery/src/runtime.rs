@@ -440,6 +440,12 @@ impl DiscoveryRuntime {
         };
         let mut out = Vec::new();
         for d in decode_window(&buf, &sm, &cfg) {
+            // Fold this frame's timing error into the clock drift estimate: a conforming station starts
+            // `start_delay` samples into the slot, so `dt = start_delay − observed` (ms) is our clock's
+            // offset (fast ⇒ observed later ⇒ negative). This is what makes the ±2 s TX-skew gate and the
+            // operator drift readout live (previously `set_drift_bias_ms` had no caller → both stuck at 0).
+            let dt_ms = (start_delay as i64 - d.sample_offset as i64) / 8;
+            self.clock.observe_dt_ms(dt_ms);
             // Feed every frame to the cross-slot hint assembler; a completed `@OPULSE` beacon upserts
             // the sender as an OpenPulse peer (its hint) and is reported as heard.
             if let Some(r) = self
@@ -619,6 +625,14 @@ mod tests {
         assert!(
             out.iter().any(|o| matches!(o, DiscoveryOutcome::StationHeard { callsign, .. } if callsign == "KN4CRD")),
             "heard KN4CRD despite a 500 ms slot-start offset: {out:?}"
+        );
+        // A station heard at exactly the expected start delay (500 ms = 4000 samples) contributes a ~0
+        // timing error, so the drift estimate stays near 0 — but the observation path is now live
+        // (audit #9: previously drift was permanently 0 because nothing ever called the clock).
+        assert!(
+            rt.drift_bias_ms().abs() < 100,
+            "drift estimate is live and near zero for an on-time station, got {}",
+            rt.drift_bias_ms()
         );
     }
 

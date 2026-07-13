@@ -4138,3 +4138,24 @@ and the actually-observed results per change.
   + fec_loopback (12) + channel_loopback (32) tests pass unchanged.
 - **Test results:** `cargo test -p bpsk-plugin --no-default-features` → 25 green; modem BPSK paths green;
   clippy + fmt clean.
+
+## 2026-07-13 — fix(discovery): audit #9 — make the clock-skew TX gate live
+
+- **Requirement/change:** the audit (finding #9, confirmed) found `Js8Clock::set_drift_bias_ms` had **no
+  production caller** (the documented `clock_mut()` seam was never used), so `drift_bias_ms` was permanently
+  0 — the advertised "±2 s clock-skew" beacon-TX safety gate (D5) could never trip and the operator-facing
+  `DiscoveryStatus.drift_bias_ms` was always a false 0. Refs REQ-DISC-05.
+- **Design decision:** feed each decoded frame's timing error into an EWMA (`Js8Clock::observe_dt_ms`,
+  α=1/8). `dt = (start_delay − sample_offset)/8` ms: a conforming station starts `start_delay` into the
+  slot, so a decode placed later means our clock is fast (negative bias). Smoothing averages per-station
+  timing error + capture jitter, leaving our systematic offset; the magnitude drives `tx_allowed`. Small
+  values barely affect `corrected()` (15 s slots), so RX slot alignment is unaffected. **Documented
+  coupling:** the observable dt range is bounded by the decoder's ±0.75 s slot-start search window (the
+  #2 fix, Pi-CPU-bounded) — a skew beyond that yields no decodes rather than a reading; full ±2 s
+  detection would need a wider (Pi-costlier) search and is deferred.
+- **Implementation:** `crates/openpulse-discovery/src/scheduler.rs` (`observe_dt_ms`),
+  `crates/openpulse-discovery/src/runtime.rs` (`decode_slot` feeds it).
+- **Tests:** `observe_dt_converges_toward_the_offset_and_can_trip_the_gate` (EWMA converges to −600 ms and
+  a sustained >2 s skew trips the gate); the offset regression test now asserts the drift readout is live
+  and ~0 for an on-time station.
+- **Test results:** `cargo test -p openpulse-discovery --no-default-features` → 53 green; clippy + fmt clean.
