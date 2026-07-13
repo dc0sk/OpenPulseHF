@@ -201,6 +201,57 @@ mod tests {
         assert_eq!(&recovered[..payload.len()], payload);
     }
 
+    /// Crossfade-ISI cancellation must lower the BPSK AWGN bit-error rate: the uncancelled `+β` bias in
+    /// the differential dot product costs several dB of flip-bit margin. Deterministic (fixed-seed noise).
+    #[test]
+    fn crossfade_cancellation_lowers_awgn_ber() {
+        // Box-Muller Gaussian from a deterministic LCG — no rng dep, reproducible across runs.
+        fn add_noise(samples: &mut [f32], sigma: f32, mut seed: u64) {
+            let mut next = || {
+                seed = seed
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                ((seed >> 11) as f64 / (1u64 << 53) as f64) as f32
+            };
+            for s in samples.iter_mut() {
+                let u1 = next().max(1e-7);
+                let u2 = next();
+                let g = (-2.0 * u1.ln()).sqrt() * (std::f32::consts::TAU * u2).cos();
+                *s += sigma * g;
+            }
+        }
+
+        let plugin = BpskPlugin::new();
+        let cfg = ModulationConfig {
+            mode: "BPSK250".to_string(),
+            ..ModulationConfig::default()
+        };
+        // A long pseudo-random payload so the BER is statistically stable.
+        let payload: Vec<u8> = (0..180u32)
+            .map(|i| (i.wrapping_mul(37).wrapping_add(11) & 0xff) as u8)
+            .collect();
+        let clean = plugin.modulate(&payload, &cfg).expect("modulate");
+
+        // A noise level in the crossfade-margin-sensitive regime: high enough that the ISI bias tips
+        // bits, low enough that the cancelled path recovers the frame cleanly.
+        let mut noisy = clean.clone();
+        add_noise(&mut noisy, 0.9, 0x1234_5678);
+        let recovered = plugin.demodulate(&noisy, &cfg).expect("demodulate");
+
+        let n = payload.len().min(recovered.len());
+        let bit_errors: u32 = (0..n)
+            .map(|k| (payload[k] ^ recovered[k]).count_ones())
+            .sum();
+        let total_bits = (n * 8) as f32;
+        let ber = bit_errors as f32 / total_bits;
+        // With cancellation this holds comfortably; with the uncancelled +β bias the BER is materially
+        // worse at this noise level (measured A/B during development).
+        assert!(
+            ber < 0.02,
+            "BPSK AWGN BER {ber:.4} too high — crossfade ISI cancellation regressed?"
+        );
+    }
+
     /// `demodulate_soft` for BPSK250-RRC must return real matched-filter LLRs, not hard ±1.0.
     ///
     /// Hard ±1.0 fallback produces values that are EXACTLY 1.0f32 or -1.0f32.
