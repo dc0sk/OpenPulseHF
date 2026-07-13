@@ -335,26 +335,38 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
 
     tracing::info!("openpulse-server TCP control port listening on {tcp_bind}");
 
-    ws::spawn_ws(
-        ws_bind,
-        ws::WsShared {
-            ev_tx: handle.event_tx.clone(),
-            cmd_tx: handle.command_tx.clone(),
-            active_mode: handle.active_mode.clone(),
-            tx_attenuation_db: handle.tx_attenuation_db.clone(),
-            qsy_enabled: handle.qsy_enabled.clone(),
-            bandplan_mode: handle.bandplan_mode.clone(),
-            allow_tuner_on_high_swr: handle.allow_tuner_on_high_swr.clone(),
-            spectrum_tap: handle.spectrum_tap.clone(),
-            station_id: handle.station_id.clone(),
-            message_store: handle.message_store.clone(),
-        },
-        None,
-    )
-    .await
-    .map_err(|e| format!("failed to bind WebSocket control port {ws_bind}: {e}"))?;
-
-    tracing::info!("openpulse-server WebSocket control port listening on {ws_bind}");
+    // The WebSocket control endpoint carries the *same* command protocol as the TCP port (PttAssert,
+    // SendMessage, EnableRepeater, …) but has no authentication path. Fail closed: if auth is required
+    // for either bind, do NOT spawn the unauthenticated WS listener — otherwise it would bypass the auth
+    // the TCP port enforces (REQ-SEC-CTL-02). WS auth (Noise-over-WS) is a documented follow-up.
+    let ws_auth_required = ws_disabled_for_auth(require_auth, &cfg.daemon.websocket_bind_addr);
+    if ws_auth_required {
+        tracing::warn!(
+            ws_bind = %ws_bind,
+            "WebSocket control port DISABLED: control auth is required but the WS endpoint cannot \
+             authenticate. Use the TCP control port (Noise/PSK), or bind both to loopback."
+        );
+    } else {
+        ws::spawn_ws(
+            ws_bind,
+            ws::WsShared {
+                ev_tx: handle.event_tx.clone(),
+                cmd_tx: handle.command_tx.clone(),
+                active_mode: handle.active_mode.clone(),
+                tx_attenuation_db: handle.tx_attenuation_db.clone(),
+                qsy_enabled: handle.qsy_enabled.clone(),
+                bandplan_mode: handle.bandplan_mode.clone(),
+                allow_tuner_on_high_swr: handle.allow_tuner_on_high_swr.clone(),
+                spectrum_tap: handle.spectrum_tap.clone(),
+                station_id: handle.station_id.clone(),
+                message_store: handle.message_store.clone(),
+            },
+            None,
+        )
+        .await
+        .map_err(|e| format!("failed to bind WebSocket control port {ws_bind}: {e}"))?;
+        tracing::info!("openpulse-server WebSocket control port listening on {ws_bind}");
+    }
 
     // Audit mode (REQ-OBS-01): write a startup snapshot, then record the control-event stream to
     // <archive_dir>/events.ndjson, tapping the same broadcast channel clients subscribe to — no
@@ -1105,6 +1117,12 @@ fn build_discovery_runtime(
 /// Startup bandplan gate for the rendezvous channel table: log a warning for any configured working
 /// frequency the default bandplan flags (out of band / wrong segment). Advisory only — the operator's
 /// channels are honoured; this surfaces a likely misconfiguration before it is used on air.
+/// Whether the WebSocket control port must be disabled because control auth is required but the WS
+/// endpoint cannot authenticate: true if the TCP port needs auth, or the WS bind is itself non-loopback.
+fn ws_disabled_for_auth(tcp_require_auth: bool, ws_bind_addr: &str) -> bool {
+    tcp_require_auth || openpulse_linksec::auth_required(ws_bind_addr, false)
+}
+
 fn validate_rendezvous_channels(cfg: &openpulse_config::OpenpulseConfig) {
     let policy = openpulse_qsy::bandplan::BandplanPolicy::default();
     for (band, freqs) in &cfg.discovery.rendezvous_channels_hz {
@@ -2076,5 +2094,31 @@ mod cat_backend_tests {
             ..RadioConfig::default()
         };
         assert!(build_cat_controller(&radio).is_none());
+    }
+}
+
+#[cfg(test)]
+mod ws_auth_gate_tests {
+    use super::ws_disabled_for_auth;
+
+    #[test]
+    fn ws_disabled_when_tcp_requires_auth() {
+        // TCP auth on (non-loopback TCP bind or require_auth) → WS must be disabled even if WS is loopback.
+        assert!(ws_disabled_for_auth(true, "127.0.0.1"));
+        assert!(ws_disabled_for_auth(true, "0.0.0.0"));
+    }
+
+    #[test]
+    fn ws_disabled_when_ws_bind_is_non_loopback() {
+        // Even if the TCP port is unauthenticated loopback, a publicly-bound WS port is a bypass → disable.
+        assert!(ws_disabled_for_auth(false, "0.0.0.0"));
+        assert!(ws_disabled_for_auth(false, "192.168.1.10"));
+    }
+
+    #[test]
+    fn ws_enabled_only_when_both_are_loopback_and_no_auth() {
+        // The one safe case: no TCP auth required and the WS port is loopback-only.
+        assert!(!ws_disabled_for_auth(false, "127.0.0.1"));
+        assert!(!ws_disabled_for_auth(false, "localhost"));
     }
 }

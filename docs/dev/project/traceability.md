@@ -4062,3 +4062,19 @@ and the actually-observed results per change.
   the watchdog armed, a clean release disarms it.
 - **Test results:** `cargo test -p openpulse-daemon --no-default-features` → 83 lib + integration green;
   clippy + fmt clean.
+
+## 2026-07-13 — fix(daemon): audit #7 — fail-closed WebSocket control port
+
+- **Requirement/change:** the audit (finding #7, confirmed) found the WebSocket control endpoint carries
+  the *same* command protocol as the TCP port (`PttAssert`/`SendMessage`/`EnableRepeater`/…) but with **no
+  authentication path**, and `spawn_ws` was called unconditionally — so with `require_auth = true` (or a
+  non-loopback WS bind) any client reaching the WS port bypassed the Noise/PSK gate the TCP port enforces.
+  The startup fail-closed check only inspected `tcp_bind_addr`. REQ-SEC-CTL-02.
+- **Design decision:** WS has no auth transport, so the fail-closed action is to **not spawn** the
+  unauthenticated WS listener whenever control auth is required for either bind (TCP needs auth, or the WS
+  bind is itself non-loopback), with a clear warning pointing the operator at the Noise/PSK TCP port.
+  Full Noise-over-WebSocket is a documented follow-up. Decision extracted to `ws_disabled_for_auth`.
+- **Implementation:** `crates/openpulse-daemon/src/server.rs`.
+- **Tests:** `ws_auth_gate_tests` — disabled when TCP requires auth (even if WS is loopback), disabled when
+  the WS bind is non-loopback, enabled only when both are loopback and no auth is configured.
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features` green (86 lib); clippy + fmt clean.
