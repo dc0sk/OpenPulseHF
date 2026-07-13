@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::sync::broadcast::error::RecvError;
 
 use crate::bridge::ModemBridge;
 use crate::error::ArdopError;
@@ -48,22 +49,41 @@ async fn handle_client(
                 let mut payload = vec![0u8; len];
                 read_half.read_exact(&mut payload).await?;
                 bridge.tx_pending.fetch_add(len, Ordering::Relaxed);
-                if bridge.tx_data_tx.try_send(payload).is_err() {
-                    tracing::warn!(
-                        len,
-                        "ARDOP data port TX queue full — frame dropped; backpressure needed"
-                    );
+                // Apply backpressure instead of dropping: the SyncSender blocks when the modem worker's
+                // queue is full, throttling this client's TCP reader — so a >64-frame burst (a normal
+                // Winlink message) is delivered in full rather than silently truncated. `spawn_blocking`
+                // keeps the blocking send off the async reactor. `Err` means the worker is gone → close.
+                let tx = bridge.tx_data_tx.clone();
+                if tokio::task::spawn_blocking(move || tx.send(payload))
+                    .await
+                    .map_err(|_| ())
+                    .and_then(|r| r.map_err(|_| ()))
+                    .is_err()
+                {
+                    tracing::warn!("ARDOP data port: modem worker gone — closing data client");
                     bridge.tx_pending.fetch_sub(
                         len.min(bridge.tx_pending.load(Ordering::Relaxed)),
                         Ordering::Relaxed,
                     );
+                    return Ok(());
                 }
             }
-            Ok(data) = rx_data.recv() => {
-                let len = data.len() as u16;
-                write_half.write_all(&len.to_be_bytes()).await?;
-                write_half.write_all(&data).await?;
-                write_half.flush().await?;
+            result = rx_data.recv() => {
+                match result {
+                    Ok(data) => {
+                        let len = data.len() as u16;
+                        write_half.write_all(&len.to_be_bytes()).await?;
+                        write_half.write_all(&data).await?;
+                        write_half.flush().await?;
+                    }
+                    Err(RecvError::Lagged(n)) => {
+                        // Slow client; frames were dropped from the broadcast ring. Log and continue
+                        // rather than stalling the receive loop (the old `Ok(data) =` pattern silently
+                        // disabled this branch on a Lagged error).
+                        tracing::warn!("ARDOP data RX lagged, {n} frame(s) dropped for this client");
+                    }
+                    Err(RecvError::Closed) => return Ok(()),
+                }
             }
         }
     }
