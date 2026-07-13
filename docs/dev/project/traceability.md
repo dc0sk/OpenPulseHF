@@ -9,6 +9,32 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-13 — fix(gpu): calibrate the 64QAM + psk8 GPU soft-demod LLRs
+
+- **Requirement/change:** issue #830 DSP-calibration follow-up — the GPU soft-demod paths emitted
+  σ²=1 (uncalibrated) LLRs, so on a GPU-equipped station HARQ combining over-weighted deep-fade
+  attempts even after the CPU paths were fixed (#833/#835). (OFDM has no `gpu` feature; SC-FDMA's GPU
+  path computes LLRs on CPU — only 64QAM and psk8 use the shared σ²=1 `gpu_soft_demod` kernel.)
+- **Design decision:** `openpulse_gpu::gpu_soft_demod` returns raw max-log-MAP squared-distance
+  differences (`min1 − min0`); the CPU paths turn these into true LLRs by dividing by the noise
+  variance (`symbol_llrs`'s `1/σ²`, and psk8's explicit `1/(2σ²)`). Apply the identical scaling to the
+  GPU output using the *same* estimator each CPU path uses — 64QAM: the corner-preamble residual
+  `preamble_noise_var` (#833), psk8: `psk_symbol_noise_var` — so the GPU result is calibrated by
+  construction and equals the CPU result.
+- **Implementation:** `plugins/64qam/src/demodulate.rs` (`qam64_demodulate_soft_gpu`) and
+  `plugins/psk8/src/demodulate.rs` (`psk8_demodulate_soft_gpu`) — scale the returned LLRs by the
+  shared `1/noise_var` before returning. Both behind `#[cfg(feature = "gpu")]`.
+- **Tests:** `gpu_soft_llrs_match_calibrated_cpu` in each plugin — a `#[cfg(feature = "gpu")]`,
+  `#[ignore = "requires a GPU adapter"]` equivalence test that (when an adapter exists) asserts the GPU
+  soft LLRs match the CPU soft LLRs within f32 tolerance. Follows the repo's existing GPU-test
+  convention (`GpuContext::init()` → skip when absent).
+- **Test results:** `cargo test -p qam64-plugin -p psk8-plugin --no-default-features --features gpu` →
+  compiles and passes (the two equivalence tests report *ignored, requires a GPU adapter* in this
+  headless environment — they run on GPU hardware/CI). clippy clean in both feature states; default
+  (no-`gpu`) suites unaffected. Runtime verification pending a wgpu adapter.
+
+---
+
 ## 2026-07-13 — fix(64qam): calibrate soft-LLR noise variance from the corner preamble
 
 - **Requirement/change:** issue #830 DSP-calibration item — 64QAM soft LLRs under-report σ² at
