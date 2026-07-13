@@ -490,6 +490,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | SC-FDMA decodes a stronger delayed ray to a 2 ms (16-sample) spread inside the CP | `cargo test -p openpulse-modem --test scfdma_multipath_timing` |
 | Symbol-domain SNR tracks true SNR past M2M4's ~15 dB saturation | `cargo test -p openpulse-modem --test symbol_domain_snr` + `--test symbol_snr_ladder_climb` |
 | 64QAM soft LLRs are calibrated (worst-bin error ≤ 4× the promised rate) | `cargo test -p qam64-plugin --test llr_reliability` |
+| OFDM soft LLRs are calibrated (worst-bin error ≤ 4× the promised rate) | `cargo test -p ofdm-plugin --test llr_reliability` |
 | QPSK1000-HF-RRC forward-only LMS holds the good_f1 coded floor | `cargo test -p openpulse-modem --test qpsk_hf_rrc_forward_only` |
 | CI goodput regression gate (linksim effective_bps ≥ 65 % of baseline) | `cargo test -p openpulse-linksim goodput_gate` |
 | JS8 NORMAL native decode reaches the −18 dB weak-signal gate (FF-15 Phase-B go/no-go) | `cargo test -p js8-plugin --test snr_sweep gate_at_minus_18_db` |

@@ -38,6 +38,38 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-13 — fix(ofdm): calibrate soft-LLR noise from pilots + drop the ZF double-count
+
+- **Requirement/change:** issue #830 DSP-calibration items — OFDM soft LLRs are over-confident (σ²
+  under-read at moderate SNR) **and** double-count the ZF noise enhancement. Both corrupt MAP HARQ
+  combining, where an over-confident deep-fade attempt out-votes a clean one. Same class as SC-FDMA
+  #690 / 64QAM #833.
+- **Design decision:** the old per-SC noise was `block_noise · mean|H|²/|H_k|²`, where `block_noise`
+  = `estimate_decision_noise_var` measured on the *post-ZF* data. That estimator saturates on the
+  dense QAM grid (distance to the wrong-but-near point), and being measured after ZF it already
+  carries the `1/|H_k|²` blow-up — which the code then applied a *second* time. Replace it with the
+  physically-correct model: (1) a frequency-domain per-bin additive noise `σ²_bin` (2-D `E|N_k|²`,
+  white so channel-independent) measured from the **pilots across symbols** — `Y_p[s+1]−Y_p[s]`
+  cancels the constant `H_p`, leaving `2σ²_bin`, non-saturating because it uses no decisions; (2) a
+  channel-estimate-error term — `Ĥ_k` is interpolated from one-pilot-each LS estimates, so
+  `X_k = Y_k/Ĥ_k` gains a signal-power term, giving `noise_var_k = σ²_bin·(1+P_c)/|H_k|²` with `P_c`
+  = the (unit) constellation power and the conservative `σ²_ce ≈ σ²_bin`. This is a *single* `1/|H|²`
+  and the OFDM analogue of the SC-FDMA `mmse_llr_noise_var` term. A one-symbol frame (no pilot
+  difference) keeps the legacy estimate.
+- **Implementation:** `plugins/ofdm/src/demodulate.rs` — `demodulate_soft_with_params` restructured
+  into an FFT/deramp pass that keeps the frequency frames, a `pilot_noise_var` estimate, and an LLR
+  pass; new `pilot_noise_var()` + `points_avg_power()` (reusing the already-`pub` `pilot_positions`).
+- **Tests:** `plugins/ofdm/tests/llr_reliability.rs` (new) — bins `|L|` vs the empirical error rate on
+  flat and in-CP two-ray channels, asserting worst-bin over-confidence ≤ 4× (max-log-MAP's own
+  optimism). Mirrors the SC-FDMA / 64QAM gates.
+- **Test results:** before, the gate failed badly — **50.7×** over-confident (OFDM52-16QAM flat @10),
+  36× (64QAM flat @16), and **90–171×** on two-ray. After: every case is *under*-confident
+  (0.09–0.47×), the safe direction. `cargo test -p ofdm-plugin --no-default-features` → 36 pass;
+  `openpulse-modem` `llr_calibration` (2), `llr_combining_gain` (2), `llr_convention_conformance` (1)
+  all pass — mean|LLR| still grows with SNR (real calibration, not suppression). clippy + fmt clean.
+
+---
+
 ## 2026-07-11 — test(discovery): FF-15 Phase F-3c-iv — two-runtime end-to-end rendezvous
 
 - **Requirement/change:** an acceptance test that two independent stations actually reach a rendezvous
