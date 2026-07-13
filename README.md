@@ -404,7 +404,12 @@ on-air test plan in `docs/on-air_testplan.md`.
 | `crates/openpulse-gateway` | Direct TCP Winlink CMS gateway; `openpulse-gateway` binary |
 | `crates/openpulse-qsy` | QSY frequency agility: Ed25519-signed wire codec, `QsySession` (initiator + responder), `QsyScanner` |
 | `crates/openpulse-mesh` | Mesh broadcast daemon with TTL-limited re-broadcast |
-| `crates/openpulse-repeater` | Cross-band repeater / digipeater with trust-policy filtering |
+| `crates/openpulse-repeater` | Cross-band repeater / digipeater with trust-policy filtering + §97.119 auto-ID |
+| `crates/openpulse-discovery` | JS8-based station discovery + rendezvous (FF-15): `@OPULSE` hint, `Js8Clock`, `DiscoveryRuntime`, rendezvous SM |
+| `crates/openpulse-filexfer` | Direct P2P file-transfer protocol (FF-16): `OPFX` wire codec + sender/receiver state machines + blocks/resume |
+| `crates/openpulse-keystore` | `FileKeystore` — named secrets encrypted at rest (Argon2id KDF → ChaCha20-Poly1305) |
+| `crates/openpulse-linksec` | Control-channel link security: PSK-authenticated encrypted daemon↔client link (Noise `Noise_NNpsk0`) |
+| `crates/openpulse-freedv-auth` | External shim adding Ed25519 frame signing to FreeDV via the codec2 data channel (FF-11) |
 | `crates/openpulse-daemon` | Unified background daemon: modem engine, PTT, QSY, repeater, NDJSON+WebSocket control port |
 
 ### UI and tooling
@@ -417,6 +422,7 @@ on-air test plan in `docs/on-air_testplan.md`.
 | `apps/openpulse-twinview` | egui both-directions viewer over two daemons (twin-station rig) |
 | `apps/openpulse-testbench` | egui signal-path testbench: 4-column waterfall/spectrum/scatter, 7 channel models |
 | `apps/openpulse-testmatrix` | Automated mode × channel test matrix runner |
+| `apps/openpulse-linksim` | Two-station bidirectional ARQ link simulator (lib + CLI + GUI): effective two-way transfer rate under simulated SNR |
 | `pki-tooling` | Ed25519 trust-bundle signing service with PostgreSQL persistence |
 
 ### Plugins
@@ -430,6 +436,8 @@ on-air test plan in `docs/on-air_testplan.md`.
 | `plugins/scfdma` | SCFDMA52-8PSK, SCFDMA52-16QAM, SCFDMA52-32QAM, SCFDMA52-64QAM; DFT-CE + MMSE |
 | `plugins/ofdm` | OFDM16, OFDM52; LS channel estimation + ZF equalization |
 | `plugins/fsk4` | FSK4-ACK (100 baud ACK channel; Goertzel demodulator) |
+| `plugins/pilot` | Pilot-framed PILOT-QPSK/8PSK/16QAM/32APSK (up to DVB-S2 32APSK); pilot-aided carrier recovery |
+| `plugins/js8` | JS8-compatible 8-GFSK weak-signal waveform (FF-15); LDPC(174,87), native TX+RX decoder, message layer |
 
 ---
 

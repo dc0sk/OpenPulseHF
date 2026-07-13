@@ -4197,3 +4197,19 @@ and the actually-observed results per change.
   inflated `block_count` and a sub-minimum `block_size` are both rejected.
 - **Test results:** `cargo test -p openpulse-daemon --no-default-features filexfer` → green; twin +
   filexfer suites unchanged; clippy + fmt clean.
+
+## 2026-07-13 — docs: audit #43/#46/#47 — fix documentation drift
+
+- **Requirement/change:** the audit flagged several stale docs. #47: `CLAUDE.md`'s audio-backend note gave
+  a failing flag (`--features cpal`) for `openpulse-cli` and an inverted default — the CLI's feature is
+  `cpal-backend`, **on by default**. #43: the root `CHANGELOG.md` is frozen at 0.2.0 (the v0.4.0 roll only
+  touched `docs/dev/project/changelog.md`), so two changelogs diverged. #46: the README repository-layout
+  table omitted 6 shipped crates (`openpulse-discovery`, `-filexfer`, `-keystore`, `-linksec`,
+  `-freedv-auth`, `apps/openpulse-linksim`) and 2 shipped plugins (`js8`, `pilot`).
+- **Design decision:** #47 correct the CLI exception in the sharp-edge note. #43 add a prominent
+  canonical-changelog pointer at the top of root `CHANGELOG.md` (directing to `docs/dev/project/changelog.md`
+  + `docs/releasenotes.md` for v0.2.1–v0.4.0) and mark its `[Unreleased]` as superseded, rather than
+  hand-reconciling four versions of diverged content. #46 add the missing crate/plugin rows.
+- **Implementation:** `CLAUDE.md`, `CHANGELOG.md`, `README.md`.
+- **Tests:** docs only — no code change. (#44 cli-guide daemon section + #45 README ladder nuance left as
+  lower-value follow-ups; the README feature text already reflects the SC-FDMA→OFDM re-seat.)
