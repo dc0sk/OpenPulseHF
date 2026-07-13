@@ -654,7 +654,20 @@ pub fn qam64_demodulate_soft_gpu(
     let constellation: Vec<(f32, f32)> = (0..64u8).map(crate::modulate::gray_map_64qam).collect();
     let bit_table: Vec<u32> = (0..64u32).collect();
 
-    if let Some(llrs) = openpulse_gpu::gpu_soft_demod(ctx, &syms, &constellation, &bit_table, 6) {
+    if let Some(mut llrs) = openpulse_gpu::gpu_soft_demod(ctx, &syms, &constellation, &bit_table, 6)
+    {
+        // The kernel emits σ²=1 max-log distance differences; the CPU path divides these by the
+        // noise variance (`symbol_llrs`) to make them true LLRs. Apply the identical scaling here —
+        // measured from the same corner-preamble residual — so the GPU path is calibrated too and
+        // HARQ combining weights its attempts correctly.
+        let noise_var = preamble_noise_var(&i_syms, &q_syms).unwrap_or_else(|| {
+            let data: Vec<Complex32> = syms.iter().map(|&(i, q)| Complex32::new(i, q)).collect();
+            estimate_decision_noise_var(&data, 6)
+        });
+        let inv = 1.0 / noise_var.max(1e-6);
+        for l in &mut llrs {
+            *l *= inv;
+        }
         return Ok(llrs);
     }
     // GPU returned None — fall back to CPU.
@@ -770,6 +783,47 @@ mod tests {
                 qam64_decide_bits(i, q),
                 sym,
                 "64QAM round-trip failed for sym={sym:06b}"
+            );
+        }
+    }
+
+    /// The GPU soft path must emit the *same calibrated* LLRs as the CPU path — the kernel produces
+    /// σ²=1 distance differences, so both must apply the identical preamble-residual `1/σ²` scaling.
+    /// Runs only where a wgpu adapter exists; skips otherwise (like the other GPU equivalence tests).
+    #[cfg(feature = "gpu")]
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn gpu_soft_llrs_match_calibrated_cpu() {
+        use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+        let Some(ctx) = openpulse_gpu::GpuContext::init() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let cfg = ModulationConfig {
+            mode: "64QAM500".into(),
+            sample_rate: 8000,
+            center_frequency: 1500.0,
+            ..Default::default()
+        };
+        let payload: Vec<u8> = (0..120u32)
+            .map(|i| (i.wrapping_mul(37) & 0xff) as u8)
+            .collect();
+        let tx = crate::Qam64Plugin::new()
+            .modulate(&payload, &cfg)
+            .expect("modulate");
+        // A little deterministic noise so σ² is nonzero and the scaling is actually exercised.
+        let rx: Vec<f32> = tx
+            .iter()
+            .enumerate()
+            .map(|(i, &s)| s + 0.03 * ((i as f32 * 0.61).sin()))
+            .collect();
+        let cpu = qam64_demodulate_soft(&rx, &cfg).expect("cpu soft");
+        let gpu = qam64_demodulate_soft_gpu(&rx, &cfg, &ctx).expect("gpu soft");
+        assert_eq!(cpu.len(), gpu.len(), "LLR count mismatch");
+        for (c, g) in cpu.iter().zip(gpu.iter()) {
+            assert!(
+                (c - g).abs() <= 1e-2 * (1.0 + c.abs()),
+                "GPU LLR {g} not calibrated to CPU LLR {c}"
             );
         }
     }

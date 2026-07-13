@@ -451,7 +451,16 @@ pub fn psk8_demodulate_soft_gpu(
 
     if let Some(raw) = openpulse_gpu::gpu_soft_demod(ctx, &data, &pts_iq, &bit_table, 3) {
         let n_complete_bytes = (data.len() * 3) / 8;
-        return Ok(raw[..n_complete_bytes * 8].to_vec());
+        let mut llrs = raw[..n_complete_bytes * 8].to_vec();
+        // The kernel emits σ²=1 max-log distance differences; calibrate them into true LLRs with the
+        // identical `1/(2σ²)` scaling the CPU path applies, so the GPU path is calibrated for HARQ.
+        let syms: Vec<Complex32> = data.iter().map(|&(i, q)| Complex32::new(i, q)).collect();
+        let (_, noise_var_per_dim) = psk_symbol_noise_var(&syms, 3);
+        let inv = 1.0 / (2.0 * noise_var_per_dim);
+        for l in llrs.iter_mut() {
+            *l *= inv;
+        }
+        return Ok(llrs);
     }
     // GPU returned None — fall back to CPU.
     psk8_demodulate_soft(samples, config)
@@ -1192,5 +1201,46 @@ mod tests {
         let (_fwd_hf, _dfe_hf, mu_hf) = lms_profile("8PSK1000-HF");
         let (_fwd_rrc, _dfe_rrc, mu_rrc) = lms_profile("8PSK1000-HF-RRC");
         assert!(mu_rrc < mu_hf);
+    }
+
+    /// The GPU soft path must emit the *same calibrated* LLRs as the CPU path — the kernel produces
+    /// σ²=1 distance differences, so both must apply the identical `1/(2σ²)` scaling.
+    /// Runs only where a wgpu adapter exists; skips otherwise (like the other GPU equivalence tests).
+    #[cfg(feature = "gpu")]
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn gpu_soft_llrs_match_calibrated_cpu() {
+        use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+        let Some(ctx) = openpulse_gpu::GpuContext::init() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let cfg = ModulationConfig {
+            mode: "8PSK500".into(),
+            sample_rate: 8000,
+            center_frequency: 1500.0,
+            ..Default::default()
+        };
+        let payload: Vec<u8> = (0..120u32)
+            .map(|i| (i.wrapping_mul(37) & 0xff) as u8)
+            .collect();
+        let tx = crate::Psk8Plugin::new()
+            .modulate(&payload, &cfg)
+            .expect("modulate");
+        // A little deterministic noise so σ² is nonzero and the scaling is actually exercised.
+        let rx: Vec<f32> = tx
+            .iter()
+            .enumerate()
+            .map(|(i, &s)| s + 0.03 * ((i as f32 * 0.61).sin()))
+            .collect();
+        let cpu = psk8_demodulate_soft(&rx, &cfg).expect("cpu soft");
+        let gpu = psk8_demodulate_soft_gpu(&rx, &cfg, &ctx).expect("gpu soft");
+        assert_eq!(cpu.len(), gpu.len(), "LLR count mismatch");
+        for (c, g) in cpu.iter().zip(gpu.iter()) {
+            assert!(
+                (c - g).abs() <= 1e-2 * (1.0 + c.abs()),
+                "GPU LLR {g} not calibrated to CPU LLR {c}"
+            );
+        }
     }
 }
