@@ -63,6 +63,18 @@ impl Js8Clock {
         self.drift_bias_ms = bias_ms;
     }
 
+    /// Fold one decoded frame's timing error into the drift-bias estimate (EWMA, α = 1/8).
+    ///
+    /// `dt_ms` is `start_delay_ms − observed_start_ms`: a conforming station transmits `start_delay_ms`
+    /// into the UTC slot, so if our decode places it *later* than that our clock is fast and the bias
+    /// goes negative (and vice-versa). Smoothing averages out per-station timing error + capture jitter,
+    /// leaving our systematic offset. The magnitude drives the ±2 s TX-skew gate (`tx_allowed`); the
+    /// observable range is bounded by the decoder's slot-start search window (see `runtime::decode_slot`).
+    pub fn observe_dt_ms(&mut self, dt_ms: i64) {
+        // Integer EWMA: bias += (dt − bias) / 8.
+        self.drift_bias_ms += (dt_ms - self.drift_bias_ms) / 8;
+    }
+
     /// Current drift bias (ms).
     pub fn drift_bias_ms(&self) -> i64 {
         self.drift_bias_ms
@@ -146,6 +158,35 @@ mod tests {
         c.set_drift_bias_ms(-2500);
         assert!(!c.tx_allowed(2000));
         assert!(c.tx_allowed(3000));
+    }
+
+    #[test]
+    fn observe_dt_converges_toward_the_offset_and_can_trip_the_gate() {
+        let mut c = Js8Clock::new(Submode::Normal);
+        assert_eq!(c.drift_bias_ms(), 0);
+        assert!(c.tx_allowed(2000), "gate open at zero drift");
+
+        // A steady stream of decodes each showing our clock ~600 ms fast (dt = −600) converges the EWMA
+        // toward −600, staying within the ±2 s tolerance (gate stays open).
+        for _ in 0..40 {
+            c.observe_dt_ms(-600);
+        }
+        assert!(
+            (c.drift_bias_ms() + 600).abs() < 30,
+            "EWMA converged near −600, got {}",
+            c.drift_bias_ms()
+        );
+        assert!(c.tx_allowed(2000), "600 ms skew is within tolerance");
+
+        // A sustained large skew beyond the tolerance trips the gate (RX-only degrade, D5).
+        for _ in 0..80 {
+            c.observe_dt_ms(-2500);
+        }
+        assert!(
+            !c.tx_allowed(2000),
+            "a sustained >2 s skew must refuse TX, got {}",
+            c.drift_bias_ms()
+        );
     }
 
     #[test]
