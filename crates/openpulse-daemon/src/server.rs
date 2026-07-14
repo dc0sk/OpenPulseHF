@@ -730,15 +730,14 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                             engine.ota_decode_burst(&burst, &ota_session_id)
                         }) {
                             Ok(res) => {
-                                // Key PTT (arms the watchdog + emits the edge); on assert failure
-                                // `key` returns Err and we skip the ACK, leaving nothing keyed.
-                                if ptt.key(Some(&handle.event_tx)).is_ok() {
+                                // RAII guard (REQ-PTT-01): releases at block end / on unwind. On assert
+                                // failure `keyed` returns Err and we skip the ACK, leaving nothing keyed.
+                                if let Ok(_guard) = ptt.keyed(Some(&handle.event_tx)) {
                                     if let Err(e) = tokio::task::block_in_place(|| {
                                         engine.transmit_ack_with_short_fec(&res.ack, None)
                                     }) {
                                         tracing::warn!("OTA ACK transmit failed: {e}");
                                     }
-                                    ptt.unkey(Some(&handle.event_tx));
                                 }
                                 res.payload.unwrap_or_default()
                             }
@@ -879,8 +878,8 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     if let Some(reason) = id_reason {
                         let id_mode = handle.active_mode.lock().await.clone();
                         let id_body = format!("DE {id_callsign}");
-                        // Key PTT (arms the watchdog + emits the edge); on assert failure skip the ID.
-                        if ptt.key(Some(&handle.event_tx)).is_ok() {
+                        // RAII guard (REQ-PTT-01): releases at block end / on unwind; skip on assert fail.
+                        if let Ok(_guard) = ptt.keyed(Some(&handle.event_tx)) {
                             match tokio::task::block_in_place(|| {
                                 engine.transmit(id_body.as_bytes(), &id_mode, None)
                             }) {
@@ -894,7 +893,6 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                     error = %e, mode = %id_mode, "station-ID transmit failed"
                                 ),
                             }
-                            ptt.unkey(Some(&handle.event_tx));
                         }
                         // Advance regardless of PTT success (a persistent hardware fault is surfaced by
                         // the warning above, not by per-tick retry spam), and exclude the just-sent ID
@@ -985,16 +983,15 @@ fn drain_filexfer_tx(
     for count in plan {
         let burst = &queue[idx..idx + count];
         idx += count;
-        // Key PTT for this burst (arms the watchdog + emits the edge). On assert failure abort the
-        // drain — the remaining queue was already taken, so those fragments are dropped this pass.
-        if ptt.key(Some(event_tx)).is_err() {
+        // RAII guard (REQ-PTT-01) per burst: releases at block end / on unwind. On assert failure abort
+        // the drain — the remaining queue was already taken, so those fragments are dropped this pass.
+        let Ok(_guard) = ptt.keyed(Some(event_tx)) else {
             tracing::warn!("filexfer PTT assert failed");
             return;
-        }
+        };
         for (frag, mode) in burst {
             let _ = tokio::task::block_in_place(|| engine.transmit(frag, mode, None));
         }
-        ptt.unkey(Some(event_tx));
     }
 }
 
@@ -1313,14 +1310,14 @@ fn transmit_beacon_with_ptt(
     audio: &[f32],
     mode: &str,
 ) {
-    if ptt.key(None).is_err() {
+    // RAII guard (REQ-PTT-01): releases at scope end, and on unwind if `transmit_raw_audio` panics.
+    let Ok(_guard) = ptt.keyed(None) else {
         tracing::warn!("discovery beacon PTT assert failed");
         return;
-    }
+    };
     if let Err(e) = engine.transmit_raw_audio(audio, mode, None) {
         tracing::warn!("discovery beacon transmit failed: {e}");
     }
-    ptt.unkey(None);
 }
 
 /// Apply a manual `PttAssert`/`PttRelease` command to the PTT hardware, synchronously.
@@ -1360,15 +1357,16 @@ fn ota_send_with_ptt(
         };
         let fec = engine.ota_tx_fec();
 
-        // Key PTT for the data frame (arms the watchdog + emits the edge). On assert failure abort.
-        if ptt.key(Some(event_tx)).is_err() {
+        // Key PTT for the data frame via an RAII guard (REQ-PTT-01). On assert failure abort.
+        let Ok(guard) = ptt.keyed(Some(event_tx)) else {
             tracing::warn!("OTA send PTT assert failed");
             return;
-        }
+        };
         let tx =
             tokio::task::block_in_place(|| engine.transmit_with_fec_mode(body, &mode, fec, None));
-        // Release PTT before listening (half-duplex turnaround).
-        ptt.unkey(Some(event_tx));
+        // Release PTT before listening (half-duplex turnaround); if the transmit above panics, the
+        // guard's Drop releases during unwind instead of leaving the rig keyed.
+        guard.release();
 
         if let Err(e) = tx {
             tracing::warn!(error = %e, "OTA data transmit failed");

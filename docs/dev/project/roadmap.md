@@ -2025,9 +2025,9 @@ From studying RFnexus/modem73, chrissnell/omnimodem, and chrissnell/graywolf
 (`docs/dev/research/references.md`). Requirements REQ-AGC-01, REQ-PTT-01/02/03, REQ-WSIG-01, REQ-RX-01,
 REQ-DEV-01 in `requirements.md`. **Re-implemented independently — no code copied.** Priority order:
 
-1. **REQ-PTT-01 — transmitter-release RAII guard (unkey-on-Drop).** Small safety hardening that composes
-   with the #863 `SharedPtt`; bounds an unexpected key-down to the current scope instead of ≤180 s.
-   Tractable, fully unit-testable. **In progress (this session).**
+1. **REQ-PTT-01 — transmitter-release RAII guard (unkey-on-Drop). ✅ Shipped (2026-07-14).**
+   `SharedPtt::keyed` → `PttKeyGuard` (Drop releases, including on panic/unwind); the five automatic-TX
+   sites in `server.rs` converted. Bounds an unexpected key-down to the current scope instead of ≤180 s.
 2. **REQ-AGC-01 — receive AGC / input-level normalization front-end** (hard-limiter correlator + DF-AGC,
    per graywolf/libmodem). The long-standing #1 reference-mining gap (we have no AGC). Must sit at the
    single `InputCapture` seam, keep the soft-LLR calibration gates green, and be proven with a
