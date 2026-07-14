@@ -2083,9 +2083,15 @@ Build order revised per the 2026-07-14 Fable design review (see traceability):
    `estimate_afc_hz = None`); a **frame-level-median noise estimator** (Fable's calibration fix over the
    measurement's per-symbol mean) that passes `llr_reliability` on AWGN + Watterson; registered in the
    CLI/daemon/monitor/panel. Usable now as a **robust broadcast/beacon + explicit `--mode MFSK16`** data
-   mode. **Deferred (PR-C/D, until concrete need):** the MFSK16-ACK channel + mode-aware ACK seam + SL1
-   ladder placement + HARQ-gate widening + airtime-scaled timers — these touch the most regression-
-   sensitive machinery in the repo for a rung with no field demand yet.
+   mode. **ACK CHANNEL MEASURED (PR-C measure-first, 2026-07-14) → confirms broadcast-first:** the plugin
+   gained a short `MFSK16-ACK` mode (40 sym, 1.28 s), but measured it decodes only **~0.6 at the data floor
+   (~0 dB) on moderate_f1** — a 1.28 s ACK can't fade-average like the 17 s data frame, so it is ~3–4 dB
+   more fade-sensitive and is the binding constraint. Naive 3× tone repetition doesn't fix it (energy-
+   summing a faded copy dilutes — the #694 lesson); a robust ACK needs per-copy LLR diversity, a real DSP
+   effort. So the ACK is **not** wired to the ARQ seam. **Deferred (until a robust-ACK design + concrete
+   need):** the ARQ integration — mode-aware ACK seam + SL1 ladder placement + HARQ-gate widening +
+   airtime-scaled timers. The measure-first gate saved wiring a marginal ACK into the repo's most
+   regression-sensitive machinery. Shipped state (`MFSK16` broadcast/beacon + explicit mode) stands.
 
 ### Features shipped (no longer deferred)
 

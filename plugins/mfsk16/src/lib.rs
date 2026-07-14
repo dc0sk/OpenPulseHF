@@ -30,11 +30,40 @@ const BITS_PER_SYM: usize = 4;
 
 /// FT8 legacy Costas `[4,2,5,6,1,3,0]` ×2 (distinct-difference preserved), spanning tones 0..12 of 16.
 const COSTAS16: [u8; 7] = [8, 4, 10, 12, 2, 6, 0];
-/// One fixed RS block: 255 wire bytes → 510 data tones + 3×7 sync = 531 on-air symbols.
-const FRAME_BYTES: usize = 255;
-const DATA_TONES: usize = FRAME_BYTES * 8 / BITS_PER_SYM; // 510
-const SYNC_STARTS: [usize; 3] = [0, 262, 524];
-const ONAIR_TONES: usize = DATA_TONES + 3 * COSTAS16.len(); // 531
+
+/// Per-mode frame geometry. `MFSK16` is one 255-byte RS data block; `MFSK16-ACK` is the short
+/// non-coherent return channel (13-byte ShortFec-encoded ACK, 1.28 s) that survives at the data floor.
+#[derive(Clone, Copy)]
+struct Layout {
+    frame_bytes: usize,
+    sync_starts: &'static [usize],
+    onair_tones: usize,
+}
+
+/// One RS block: 255 wire bytes → 510 data tones + 3×7 Costas = 531 symbols (≈ 17.0 s).
+const DATA_LAYOUT: Layout = Layout {
+    frame_bytes: 255,
+    sync_starts: &[0, 262, 524],
+    onair_tones: 531,
+};
+/// Short ACK: 13 ShortFec bytes → 26 data tones + 2×7 Costas = 40 symbols (≈ 1.28 s). A short variant of
+/// the same waveform. NOTE (REQ-WSIG-01, measured): this decodes only ~0.6 at the data floor — a 1.28 s
+/// frame can't fade-average like the 17 s data frame, and naive tone repetition doesn't fix it
+/// (energy-summing a faded copy dilutes; the #694 soft-combine lesson). A robust ARQ ACK needs proper
+/// per-copy LLR diversity — deferred. See `docs/dev/research/robust-narrowband-measurement.md`.
+const ACK_LAYOUT: Layout = Layout {
+    frame_bytes: 13,
+    sync_starts: &[0, 20],
+    onair_tones: 40,
+};
+
+fn layout_for(mode: &str) -> Layout {
+    if mode.eq_ignore_ascii_case("MFSK16-ACK") {
+        ACK_LAYOUT
+    } else {
+        DATA_LAYOUT
+    }
+}
 
 fn gfsk_params(sample_rate: u32) -> GfskParams {
     GfskParams {
@@ -50,9 +79,9 @@ fn base_freq(fc: f32) -> f32 {
     fc - (N_TONES as f32 - 1.0) / 2.0 * SPACING
 }
 
-fn sync_mask() -> [bool; ONAIR_TONES] {
-    let mut m = [false; ONAIR_TONES];
-    for &s in &SYNC_STARTS {
+fn sync_mask(lay: &Layout) -> Vec<bool> {
+    let mut m = vec![false; lay.onair_tones];
+    for &s in lay.sync_starts {
         for k in 0..COSTAS16.len() {
             m[s + k] = true;
         }
@@ -60,34 +89,32 @@ fn sync_mask() -> [bool; ONAIR_TONES] {
     m
 }
 
-fn data_positions() -> Vec<usize> {
-    let mask = sync_mask();
-    (0..ONAIR_TONES).filter(|&p| !mask[p]).collect()
+fn data_positions(lay: &Layout) -> Vec<usize> {
+    let mask = sync_mask(lay);
+    (0..lay.onair_tones).filter(|&p| !mask[p]).collect()
 }
 
-/// Bytes (padded/truncated to one 255-byte block) → LSB-first 4-bit tones (tone = Σ bit_{4j+b}·2^b).
-fn bytes_to_data_tones(data: &[u8]) -> Vec<u8> {
-    let mut block = [0u8; FRAME_BYTES];
-    let n = data.len().min(FRAME_BYTES);
+/// Bytes (padded/truncated to `lay.frame_bytes`) → LSB-first 4-bit tones (tone = Σ bit_{4j+b}·2^b).
+fn bytes_to_data_tones(data: &[u8], lay: &Layout) -> Vec<u8> {
+    let mut block = vec![0u8; lay.frame_bytes];
+    let n = data.len().min(lay.frame_bytes);
     block[..n].copy_from_slice(&data[..n]);
-    let mut tones = Vec::with_capacity(DATA_TONES);
-    let mut bits = [0u8; FRAME_BYTES * 8];
+    let mut bits = vec![0u8; lay.frame_bytes * 8];
     for (i, &byte) in block.iter().enumerate() {
         for k in 0..8 {
             bits[i * 8 + k] = (byte >> k) & 1;
         }
     }
-    for c in bits.chunks(BITS_PER_SYM) {
-        tones.push(c[0] | (c[1] << 1) | (c[2] << 2) | (c[3] << 3));
-    }
-    tones
+    bits.chunks(BITS_PER_SYM)
+        .map(|c| c[0] | (c[1] << 1) | (c[2] << 2) | (c[3] << 3))
+        .collect()
 }
 
-/// Interleave the 3 Costas sync blocks into the 510 data tones → the 531-symbol on-air sequence.
-fn insert_sync(data_tones: &[u8]) -> Vec<u8> {
-    let mask = sync_mask();
-    let mut out = vec![0u8; ONAIR_TONES];
-    for &s in &SYNC_STARTS {
+/// Interleave the Costas sync blocks into the data tones → the on-air symbol sequence.
+fn insert_sync(data_tones: &[u8], lay: &Layout) -> Vec<u8> {
+    let mask = sync_mask(lay);
+    let mut out = vec![0u8; lay.onair_tones];
+    for &s in lay.sync_starts {
         out[s..s + COSTAS16.len()].copy_from_slice(&COSTAS16);
     }
     let mut di = 0;
@@ -108,10 +135,11 @@ fn sym_energies(win: &[f32], base: f32, fs: f32) -> [f32; N_TONES] {
     e
 }
 
-/// Normalized Costas correlation over the 21 sync symbols at `(offset, base)`; perfect lock ≈ 21.
-fn sync_score(audio: &[f32], offset: usize, base: f32, fs: f32) -> Option<f32> {
+/// Normalized Costas correlation over the sync symbols at `(offset, base)`; a perfect lock scores
+/// `sync_starts.len()·7`, a noise window ≈ that/16.
+fn sync_score(audio: &[f32], offset: usize, base: f32, fs: f32, lay: &Layout) -> Option<f32> {
     let mut score = 0.0f32;
-    for &s in &SYNC_STARTS {
+    for &s in lay.sync_starts {
         for k in 0..COSTAS16.len() {
             let start = offset + (s + k) * SPS;
             let win = audio.get(start..start + SPS)?;
@@ -125,9 +153,9 @@ fn sync_score(audio: &[f32], offset: usize, base: f32, fs: f32) -> Option<f32> {
 
 /// Acquire `(offset, base)` by maximising the normalized Costas score: coarse timing (symbol step) ×
 /// frequency (±46.9 Hz @ 15.625), then refine (timing ±1 sym @ sps/8, frequency ±15.6 Hz @ 3.9). Gates at
-/// 12/21. `nominal_base` is the comb base the receiver believes; the search absorbs the tuning offset.
-fn acquire(audio: &[f32], nominal_base: f32, fs: f32) -> Option<(usize, f32)> {
-    let span = ONAIR_TONES * SPS;
+/// 0.57× the perfect score (JS8's 12/21 fraction). The search absorbs the tuning offset.
+fn acquire(audio: &[f32], nominal_base: f32, fs: f32, lay: &Layout) -> Option<(usize, f32)> {
+    let span = lay.onair_tones * SPS;
     let max_offset = audio.len().saturating_sub(span);
     let coarse_freqs: Vec<f32> = (-3..=3)
         .map(|i| nominal_base + i as f32 * (SPACING / 2.0))
@@ -136,7 +164,7 @@ fn acquire(audio: &[f32], nominal_base: f32, fs: f32) -> Option<(usize, f32)> {
     let mut off = 0;
     loop {
         for &bf in &coarse_freqs {
-            if let Some(sc) = sync_score(audio, off, bf, fs) {
+            if let Some(sc) = sync_score(audio, off, bf, fs, lay) {
                 if best.is_none_or(|(bs, _, _)| sc > bs) {
                     best = Some((sc, off, bf));
                 }
@@ -153,7 +181,7 @@ fn acquire(audio: &[f32], nominal_base: f32, fs: f32) -> Option<(usize, f32)> {
     while t <= (coff + SPS).min(max_offset) {
         for i in -4..=4 {
             let bf = cbf + i as f32 * (SPACING / 8.0);
-            if let Some(sc) = sync_score(audio, t, bf, fs) {
+            if let Some(sc) = sync_score(audio, t, bf, fs, lay) {
                 if refined.is_none_or(|(bs, _, _)| sc > bs) {
                     refined = Some((sc, t, bf));
                 }
@@ -162,14 +190,19 @@ fn acquire(audio: &[f32], nominal_base: f32, fs: f32) -> Option<(usize, f32)> {
         t += SPS / 8;
     }
     let (score, off, bf) = refined?;
-    (score >= 12.0).then_some((off, bf))
+    let gate = 0.57 * (lay.sync_starts.len() * COSTAS16.len()) as f32;
+    (score >= gate).then_some((off, bf))
 }
 
-/// Acquire, then return the 510 data-symbol tone-energy arrays (sync blocks skipped). `None` on a failed
-/// acquisition gate.
-fn acquire_and_energies(audio: &[f32], fc: f32, fs: f32) -> Option<Vec<[f32; N_TONES]>> {
-    let (offset, base) = acquire(audio, base_freq(fc), fs)?;
-    let positions = data_positions();
+/// Acquire, then return the data-symbol tone-energy arrays (sync blocks skipped). `None` on a failed gate.
+fn acquire_and_energies(
+    audio: &[f32],
+    fc: f32,
+    fs: f32,
+    lay: &Layout,
+) -> Option<Vec<[f32; N_TONES]>> {
+    let (offset, base) = acquire(audio, base_freq(fc), fs, lay)?;
+    let positions = data_positions(lay);
     let mut out = Vec::with_capacity(positions.len());
     for &p in &positions {
         let start = offset + p * SPS;
@@ -244,7 +277,7 @@ impl Mfsk16Plugin {
                     "Constant-envelope non-coherent 16-GFSK weak-signal sub-floor rung (REQ-WSIG-01)"
                         .to_string(),
                 author: "OpenPulse Contributors".to_string(),
-                supported_modes: vec!["MFSK16".to_string()],
+                supported_modes: vec!["MFSK16".to_string(), "MFSK16-ACK".to_string()],
                 trait_version_required: "1.0".to_string(),
             },
         }
@@ -257,13 +290,16 @@ impl ModulationPlugin for Mfsk16Plugin {
     }
 
     fn modulate(&self, data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
-        if data.len() > FRAME_BYTES {
+        let lay = layout_for(&config.mode);
+        if data.len() > lay.frame_bytes {
             return Err(ModemError::Modulation(format!(
-                "MFSK16 frame is one {FRAME_BYTES}-byte RS block; got {} bytes",
+                "{} frame carries {} bytes; got {}",
+                config.mode,
+                lay.frame_bytes,
                 data.len()
             )));
         }
-        let onair = insert_sync(&bytes_to_data_tones(data));
+        let onair = insert_sync(&bytes_to_data_tones(data, &lay), &lay);
         Ok(modulate_tones(
             &onair,
             base_freq(config.center_frequency),
@@ -277,7 +313,8 @@ impl ModulationPlugin for Mfsk16Plugin {
         config: &ModulationConfig,
     ) -> Result<Vec<u8>, ModemError> {
         let fs = config.sample_rate as f32;
-        let energies = acquire_and_energies(samples, config.center_frequency, fs)
+        let lay = layout_for(&config.mode);
+        let energies = acquire_and_energies(samples, config.center_frequency, fs, &lay)
             .ok_or_else(|| ModemError::Demodulation("MFSK16 acquisition failed".into()))?;
         // Hard decision = argmax tone per symbol → bits (consistent with the soft path's LLR signs).
         let mut bits = Vec::with_capacity(energies.len() * BITS_PER_SYM);
@@ -308,7 +345,8 @@ impl ModulationPlugin for Mfsk16Plugin {
         config: &ModulationConfig,
     ) -> Result<Vec<f32>, ModemError> {
         let fs = config.sample_rate as f32;
-        let energies = acquire_and_energies(samples, config.center_frequency, fs)
+        let lay = layout_for(&config.mode);
+        let energies = acquire_and_energies(samples, config.center_frequency, fs, &lay)
             .ok_or_else(|| ModemError::Demodulation("MFSK16 acquisition failed".into()))?;
         let inv_noise = 1.0 / frame_noise(&energies);
         let mut out = Vec::with_capacity(energies.len() * BITS_PER_SYM);
@@ -329,17 +367,19 @@ impl ModulationPlugin for Mfsk16Plugin {
     }
 
     fn frame_geometry(&self, config: &ModulationConfig) -> Option<FrameGeometry> {
+        let lay = layout_for(&config.mode);
         let n = (config.sample_rate as f32 / SPACING).round() as usize;
         Some(FrameGeometry {
             symbol_period_samples: n,
             preamble_samples: n * COSTAS16.len(),
-            min_frame_samples: n * ONAIR_TONES,
-            max_frame_samples: n * ONAIR_TONES,
+            min_frame_samples: n * lay.onair_tones,
+            max_frame_samples: n * lay.onair_tones,
         })
     }
 
     fn occupied_bandwidth_hz(&self, mode: &str) -> Option<f32> {
-        mode.eq_ignore_ascii_case("MFSK16").then_some(500.0)
+        (mode.eq_ignore_ascii_case("MFSK16") || mode.eq_ignore_ascii_case("MFSK16-ACK"))
+            .then_some(500.0)
     }
 }
 
@@ -356,8 +396,15 @@ mod tests {
         }
     }
 
+    fn ack_cfg() -> ModulationConfig {
+        ModulationConfig {
+            mode: "MFSK16-ACK".into(),
+            ..cfg()
+        }
+    }
+
     fn block(seed: u8) -> Vec<u8> {
-        (0..FRAME_BYTES as u16)
+        (0..DATA_LAYOUT.frame_bytes as u16)
             .map(|i| (i as u8).wrapping_add(seed))
             .collect()
     }
@@ -367,11 +414,26 @@ mod tests {
         let plugin = Mfsk16Plugin::new();
         let data = block(7);
         let audio = plugin.modulate(&data, &cfg()).expect("modulate");
-        assert_eq!(audio.len(), ONAIR_TONES * SPS);
+        assert_eq!(audio.len(), DATA_LAYOUT.onair_tones * SPS);
         let out = plugin.demodulate(&audio, &cfg()).expect("demodulate");
         assert_eq!(
             out, data,
             "hard demod must recover the 255-byte block clean"
+        );
+    }
+
+    #[test]
+    fn ack_frame_round_trips() {
+        let plugin = Mfsk16Plugin::new();
+        let data: Vec<u8> = (0..ACK_LAYOUT.frame_bytes as u8).collect(); // 13 ShortFec bytes
+        let audio = plugin.modulate(&data, &ack_cfg()).expect("modulate ack");
+        assert_eq!(audio.len(), ACK_LAYOUT.onair_tones * SPS); // 40 symbols ≈ 1.28 s
+        let out = plugin
+            .demodulate(&audio, &ack_cfg())
+            .expect("demodulate ack");
+        assert_eq!(
+            out, data,
+            "MFSK16-ACK must round-trip the 13-byte ACK block"
         );
     }
 
