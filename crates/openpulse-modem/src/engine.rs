@@ -836,6 +836,11 @@ impl ModemEngine {
         self.csma_enabled = false;
     }
 
+    /// Whether CSMA channel-access deferral is currently enabled.
+    pub fn is_csma_enabled(&self) -> bool {
+        self.csma_enabled
+    }
+
     /// Returns `true` if the DCD detector currently sees a busy channel.
     pub fn is_channel_busy(&self) -> bool {
         self.dcd.is_busy()

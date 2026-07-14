@@ -9,6 +9,30 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — feat(kiss): honor the FullDuplex control frame (CSMA); clarify no-profile modes
+
+- **Requirement/change:** roadmap follow-ups D1 (KISS control frames were dropped-and-logged; "real fix if
+  host TX-timing control is wanted") and D2 (plugin modes with no profile home).
+- **Design decision (D1):** this TNC has no PTT-keying layer (data → `engine.transmit`), so TXDELAY/TXtail
+  (PTT keying delays) genuinely don't apply, and P/SlotTime (CSMA persistence/slot) have no public setter;
+  those stay logged-and-ignored (honoring them would be defined-but-unconsumed). But KISS **does** enable
+  engine CSMA, so **FullDuplex (0x05)** maps cleanly: a non-zero value → full duplex → `disable_csma`
+  (no carrier-sense deferral); zero → `enable_csma`. Extracted the control-frame handling into a testable
+  `apply_kiss_control_frame` (per the #836 pattern). Added `ModemEngine::is_csma_enabled` getter and
+  `kiss::KISS_FULLDUPLEX`.
+- **Design decision (D2):** the no-profile modes (BPSK100, 64QAM500/1000, SCFDMA52-64QAM-P4) are
+  **intentionally manual-select-only**, not a gap — documented as such in the roadmap so it stops reading
+  as open work. No code change.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`is_csma_enabled`);
+  `crates/openpulse-kiss/src/kiss.rs` (`KISS_FULLDUPLEX`); `crates/openpulse-kiss/src/bridge.rs`
+  (`apply_kiss_control_frame` + test); `crates/openpulse-kiss/src/server.rs` (call it); `roadmap.md` (D2).
+- **Tests:** `kiss_fullduplex_control_frame_toggles_csma` — FullDuplex 1 → CSMA off, 0 → on, TXDELAY →
+  no-op.
+- **Test results:** `cargo test -p openpulse-kiss --no-default-features` → 3 lib (2 → 3) + 9 integration;
+  fmt + clippy clean.
+
+---
+
 ## 2026-07-14 — feat(core/mesh): source-accumulated multi-hop route discovery (wire-path TLV)
 
 - **Requirement/change:** roadmap 12.3 deferral — a `WireEnvelope` carries no hop trail, so a route

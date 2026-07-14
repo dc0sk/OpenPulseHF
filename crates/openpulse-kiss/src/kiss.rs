@@ -12,6 +12,9 @@ const TFESC: u8 = 0xDD;
 /// Type byte for a data frame on port 0.
 pub const KISS_DATA: u8 = 0x00;
 
+/// Type byte for the FullDuplex control frame (a non-zero value byte selects full duplex).
+pub const KISS_FULLDUPLEX: u8 = 0x05;
+
 #[derive(Debug, thiserror::Error)]
 pub enum KissError {
     #[error("empty frame")]
