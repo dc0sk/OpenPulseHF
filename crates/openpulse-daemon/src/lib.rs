@@ -11,6 +11,7 @@
 
 pub mod audit;
 pub mod logbook;
+pub mod monitor;
 pub mod protocol;
 pub mod ptt;
 
@@ -238,6 +239,8 @@ pub struct RuntimeControlState {
     /// gates activity; `server::run` feeds it captured audio + the idle predicate and executes its
     /// retune outcomes. `None` when discovery is not built for this daemon.
     pub discovery: Option<openpulse_discovery::DiscoveryRuntime>,
+    /// Simultaneous multi-mode receive (REQ-RX-01); `None` when the monitor is off or has no modes.
+    pub monitor: Option<crate::monitor::MonitorRuntime>,
     /// Home frequency (Hz) saved when discovery QSYed to the JS8 calling channel, restored on stand-down;
     /// `None` when not dwelling. The home frequency itself comes from `last_freq_hz`.
     pub discovery_home_freq_hz: Option<u64>,
@@ -342,6 +345,7 @@ impl Default for RuntimeControlState {
             filexfer_policy: crate::filexfer::FileTransferPolicy::default(),
             filexfer_tx_queue: Vec::new(),
             discovery: None,
+            monitor: None,
             discovery_home_freq_hz: None,
             discovery_calling_freqs_hz: std::collections::BTreeMap::new(),
             discovery_rendezvous_channels_hz: std::collections::BTreeMap::new(),

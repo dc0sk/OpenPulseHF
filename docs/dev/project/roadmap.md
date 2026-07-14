@@ -2044,10 +2044,13 @@ Build order revised per the 2026-07-14 Fable design review (see traceability):
    unit-tested in default CI (reorder + rename cases), wired into `CpalBackend::open_input`/`open_output`
    via `select_cpal_device`. The `[audio] device` config field is now a hotplug-safe selector.
    Deferred enhancement: a sysfs vendor/product/serial stable-id (omnimodem-style) as an opt-in later.
-3. **REQ-RX-01 — simultaneous multi-mode receive.** **Contained, not architectural** (Fable): plugins are
-   stateless (`&self`), and the JS8 discovery dwell already tees a raw-capture clone to an independent
-   decoder — the exact pattern. A `MonitorRuntime` sibling of `DiscoveryRuntime` (off by default), no
-   engine-RX changes.
+3. **REQ-RX-01 — simultaneous multi-mode receive. ✅ Shipped.** `openpulse_daemon::monitor::MonitorRuntime`
+   — a throwaway `ModemEngine` (all CPU plugins) that tries each configured mode against every completed
+   capture burst via `decode_burst`, independent of the live RX session; `reset_afc` isolates modes.
+   Off by default (`[monitor] enabled`/`modes`), emits `ControlEvent::MonitorFrame { mode, bytes }` per
+   decode; no engine-RX changes (the rx-tick hands the same burst it already assembled). Note:
+   `decode_burst` only scans the acquisition lead-in, so the contract is one-mode-per-burst decoded
+   correctly across a mixed-mode stream — not two overlapping modes in one buffer.
 4. **REQ-AGC-01 — AGC config gate + acceptance test. ⚠️ Mostly ALREADY SHIPPED** (PRs #583/#699/#700/#826;
    the "we have no AGC" claim was stale). Remaining: a `[modem] agc_enabled` TOML gate + an amplitude-sweep
    acceptance test; the hard-limiter-correlator option is **rejected** (constant-envelope, incompatible

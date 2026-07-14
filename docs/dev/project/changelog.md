@@ -37,6 +37,9 @@ Post-v0.5.0 block-B/D backlog. No breaking changes.
   name → ALSA `CARD=` token → case-insensitive substring, ambiguity is an error), so a device the OS
   renames or reorders (e.g. gains a `(2)` suffix, or its `hw:N` index shifts) still resolves instead of
   failing with `DeviceNotFound`. (REQ-DEV-01)
+- **Simultaneous multi-mode receive** (`[monitor]`, off by default): the daemon can decode a list of extra
+  modes from every capture burst in parallel with the active session, emitting a `MonitorFrame { mode,
+  bytes }` event per decode — a monitor/discovery role for seeing what else is on frequency. (REQ-RX-01)
 - **Mesh route discovery — source-accumulated multi-hop paths**: a `RouteDiscoveryRequest` now accumulates
   the traversed path as it floods (each forwarder appends itself), so the destination answers with the real
   end-to-end route instead of only `destination → [self]`. (#861)

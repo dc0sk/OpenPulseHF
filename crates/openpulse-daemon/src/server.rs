@@ -557,6 +557,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
             &cfg.logbook.peer_grids,
         ),
         discovery: build_discovery_runtime(&cfg),
+        monitor: build_monitor_runtime(&cfg),
         discovery_calling_freqs_hz: cfg.discovery.calling_freqs_hz.clone(),
         discovery_rendezvous_channels_hz: cfg.discovery.rendezvous_channels_hz.clone(),
         ..RuntimeControlState::default()
@@ -752,6 +753,20 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         }
                     }
                     Ok(Some(burst)) => {
+                        // Multi-mode monitor (REQ-RX-01): try the configured extra modes on this burst,
+                        // independent of the active session mode, and emit a MonitorFrame per decode.
+                        if let Some(mon) = runtime_state.monitor.as_mut() {
+                            let decoded =
+                                tokio::task::block_in_place(|| mon.decode_all(&burst.samples));
+                            for (m, payload) in decoded {
+                                let _ = handle.event_tx.send(
+                                    crate::protocol::ControlEvent::MonitorFrame {
+                                        mode: m,
+                                        bytes: payload,
+                                    },
+                                );
+                            }
+                        }
                         tokio::task::block_in_place(|| engine.decode_burst(&mode, &burst))
                             .unwrap_or_default()
                     }
@@ -1054,6 +1069,21 @@ fn build_discovery_runtime(
         tx_offset_hz: 1500.0,
         max_clock_skew_ms: d.max_clock_skew_ms,
     }))
+}
+
+/// Build the simultaneous multi-mode monitor (REQ-RX-01) from `[monitor]` config; `None` when disabled
+/// or no modes are listed.
+fn build_monitor_runtime(
+    cfg: &openpulse_config::OpenpulseConfig,
+) -> Option<crate::monitor::MonitorRuntime> {
+    if !cfg.monitor.enabled {
+        return None;
+    }
+    let rt = crate::monitor::MonitorRuntime::new(cfg.monitor.modes.clone());
+    if let Some(rt) = &rt {
+        tracing::info!(modes = ?rt.modes(), "multi-mode receive monitor enabled");
+    }
+    rt
 }
 
 /// Startup bandplan gate for the rendezvous channel table: log a warning for any configured working
