@@ -85,6 +85,7 @@ const MODES: &[&str] = &[
     "PILOT-8PSK2000-RRC",
     "PILOT-16QAM2000-RRC",
     "PILOT-32APSK2000-RRC",
+    "MFSK16",
 ];
 
 /// OTA adaptive-session profiles (`SessionProfile::by_name`).

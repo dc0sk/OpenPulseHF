@@ -4059,6 +4059,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mfsk16-plugin"
+version = "0.5.0"
+dependencies = [
+ "js8-plugin",
+ "openpulse-channel",
+ "openpulse-core",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4887,6 +4896,7 @@ dependencies = [
  "ed25519-dalek",
  "flate2",
  "fsk4-plugin",
+ "mfsk16-plugin",
  "mockito",
  "ofdm-plugin",
  "openpulse-audio",
@@ -4960,6 +4970,7 @@ dependencies = [
  "fsk4-plugin",
  "futures-util",
  "js8-plugin",
+ "mfsk16-plugin",
  "ofdm-plugin",
  "openpulse-audio",
  "openpulse-channel",
@@ -5170,6 +5181,7 @@ dependencies = [
  "ed25519-dalek",
  "fsk4-plugin",
  "js8-plugin",
+ "mfsk16-plugin",
  "ofdm-plugin",
  "openpulse-audio",
  "openpulse-channel",

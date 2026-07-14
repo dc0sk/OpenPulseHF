@@ -29,6 +29,7 @@ openpulse-daemon = { workspace = true }
 openpulse-qsy    = { workspace = true }
 bpsk-plugin     = { workspace = true }
 fsk4-plugin     = { workspace = true }
+mfsk16-plugin   = { workspace = true }
 ofdm-plugin     = { workspace = true }
 psk8-plugin     = { workspace = true }
 qam64-plugin    = { workspace = true }

@@ -1,0 +1,17 @@
+[package]
+name        = "mfsk16-plugin"
+description = "Constant-envelope non-coherent 16-GFSK weak-signal sub-floor waveform for OpenPulseHF"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+authors.workspace    = true
+repository.workspace = true
+
+[dependencies]
+openpulse-core = { workspace = true }
+# Reuses the validated GFSK tone synth + Goertzel energy detector (the primitives are M-agnostic);
+# could be hoisted to openpulse-dsp later.
+js8-plugin = { workspace = true }
+
+[dev-dependencies]
+openpulse-channel = { workspace = true }
