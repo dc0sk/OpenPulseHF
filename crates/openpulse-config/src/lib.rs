@@ -357,9 +357,12 @@ pub struct AudioConfig {
     /// Audio backend: `cpal` (real hardware), `loopback` (testing), or
     /// `default` (use cpal if compiled in, loopback otherwise).
     pub backend: String,
-    /// Audio device name (cpal backend). Empty = the system default device.
-    /// Pin a specific full-duplex device here to target an `snd-aloop` PCM — the
-    /// real-audio twin-station rig sets station A and B to crossed PCMs.
+    /// Audio device selector (cpal backend). Empty = the system default device.
+    /// Resolved hotplug-safely: an exact name first, then the stable ALSA `CARD=`
+    /// token, then a case-insensitive substring — so a device that the OS renames or
+    /// reorders (e.g. gains a `(2)` suffix) still resolves. Pin a specific full-duplex
+    /// device here to target an `snd-aloop` PCM — the real-audio twin-station rig sets
+    /// station A and B to crossed PCMs.
     pub device: String,
     /// Soft-limiter threshold applied to TX audio before the output backend.
     /// Each sample `s` becomes `threshold * tanh(s / threshold)`.
@@ -939,9 +942,10 @@ tx_power_watts = 0.0
 #   cpal     — always use the real sound card (error if not compiled in)
 #   loopback — software loopback for testing only, no audio hardware required
 backend = "default"
-# Audio device name for the cpal backend. Empty = the system default device.
-# Pin a specific device (e.g. an snd-aloop PCM) to target a fixed full-duplex
-# device — the real-audio twin-station rig sets stations A and B to crossed PCMs.
+# Audio device selector for the cpal backend. Empty = the system default device.
+# Resolved hotplug-safely (exact name → ALSA CARD= token → substring), so a device
+# the OS renames/reorders still resolves. Pin a specific device (e.g. an snd-aloop
+# PCM) to target a fixed full-duplex device.
 device = ""
 # Soft TX limiter threshold (0.0 = disabled). Typical value: 1.5 × RMS of the
 # modulated signal. Prevents ADC clipping and reduces PA non-linearity on peaks.

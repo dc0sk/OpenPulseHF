@@ -9,6 +9,33 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — feat(audio): hotplug-safe device resolution (REQ-DEV-01)
+
+- **Requirement/change:** REQ-DEV-01 — audio device selection must survive OS rename/reorder by keying on
+  a stable identity rather than an ordinal index or exact-name-only match. Today `CpalBackend` did
+  `find(|d| d.name() == Some(name))` and failed with `DeviceNotFound` on any name change. Derived from
+  omnimodem's stable device identity; re-implemented independently (cpal 0.15 exposes only `name()`, so
+  the stable identity is constructed).
+- **Design decision:** a **pure** `resolve_device(selector, &[String]) -> DeviceResolution` in
+  `openpulse-core::audio` (no cpal dep → unit-tested in the default `--no-default-features` CI). Match
+  ladder, refusing to guess on ambiguity: (1) exact name (order-independent → a pure reorder is handled
+  here); (2) ALSA `CARD=` token (survives an index shift `hw:0`→`hw:1`); (3) case-insensitive substring
+  either way (an OS rename like a `(2)` suffix); >1 hit at any tier → `Ambiguous` (error, not a guess).
+  `CpalBackend::open_input`/`open_output` call it via `select_cpal_device`; the config `[audio] device`
+  is now a selector, fully backward compatible (exact match is tier 1). A sysfs vendor/product/serial
+  stable-id is a deferred opt-in enhancement.
+- **Implementation:** `crates/openpulse-core/src/audio.rs` (`DeviceResolution`, `alsa_card_token`,
+  `resolve_device`); `crates/openpulse-audio/src/cpal_backend.rs` (`select_cpal_device`, both `open_*`
+  sites); `crates/openpulse-config/src/lib.rs` (`device` field + template doc).
+- **Tests:** `openpulse-core::audio` — empty-selector, exact-match-survives-reorder (the acceptance case),
+  ALSA `CARD=` index-rename, OS-rename substring (both directions), ambiguous-refuses-to-guess,
+  unrelated-not-found (6).
+- **Test results:** `cargo test -p openpulse-core -p openpulse-audio -p openpulse-config
+  --no-default-features` green; `cargo build -p openpulse-audio --features cpal-backend` clean;
+  `cargo build --workspace --no-default-features` clean; clippy `-D warnings` + fmt clean.
+
+---
+
 ## 2026-07-14 — feat(radio): GPIO-line PTT backend + daemon serial PTT (REQ-PTT-03)
 
 - **Requirement/change:** REQ-PTT-03 — key PTT via a Linux GPIO line (e.g. a Raspberry Pi header pin);
