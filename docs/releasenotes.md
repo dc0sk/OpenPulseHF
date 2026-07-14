@@ -18,6 +18,9 @@ Post-v0.5.0 improvements. **No breaking changes.**
   is busy inside a long operation (a frequency scan, or a message/file send-retry burst) — previously the
   release could be delayed until that operation finished. And if the radio's own release fails (a stuck
   rig), the watchdog keeps retrying rather than telling clients the transmitter is down when it isn't.
+- **Faster fail-safe on unexpected errors.** Every automatic transmit now releases PTT the instant its
+  scope ends — including if the code hits an unexpected error mid-transmit — instead of possibly holding
+  the transmitter keyed until the watchdog timer expires.
 
 **Mesh & TNCs**
 
