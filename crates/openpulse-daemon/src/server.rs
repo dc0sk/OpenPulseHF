@@ -148,6 +148,22 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
         "receiver auto-notch"
     );
 
+    // Receiver-side streaming AGC (opt-in). Off by default: decode is already level-invariant above the
+    // squelch, so this is for QSB level-stabilisation + metering, not decode rescue (REQ-AGC-01).
+    if cfg.modem.agc_enabled {
+        engine.configure_agc(
+            cfg.modem.agc_target_rms,
+            cfg.modem.agc_bandwidth,
+            cfg.modem.agc_max_gain_db,
+        );
+        engine.enable_agc();
+    }
+    tracing::info!(
+        agc = cfg.modem.agc_enabled,
+        target_rms = cfg.modem.agc_target_rms,
+        "receiver AGC"
+    );
+
     // Auto-QSY on a confirmed in-band interferer needs notch persistence to populate the hint.
     let qsy_auto_on_interference = cfg.qsy.auto_qsy_on_interference;
     if qsy_auto_on_interference && !(cfg.modem.notch_enabled && cfg.modem.notch_persistence > 0) {
