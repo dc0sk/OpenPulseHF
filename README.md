@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: README.md
 status: living
-last_updated: 2026-06-29
+last_updated: 2026-07-14
 ---
 
 # OpenPulseHF
@@ -39,7 +39,11 @@ Notfunk Deutschland e.V. for providing space on their booth at HAM RADIO 2026.
 ---
 ## Status
 
-**🎉 v0.3.0 released (29th of June '26)** — [release notes](https://github.com/dc0sk/OpenPulseHF/releases/tag/v0.3.0). Headline: the daemon now runs a **signed handshake over the air on connect** — it exchanges and verifies an Ed25519 `ConReq`/`ConAck`, stores the peer's verified callsign + Maidenhead grid, and writes the verified grid to an **automatic ADIF logbook**. Also new: **opt-in ARDOP adaptive ARQ** (making the host `ARQBW`/`ARQTIMEOUT` hints real), a **generic serial CAT backend** for rigs Hamlib doesn't support, a reworked **operator panel** (right-hand controls, full-width waterfall, AGC toggle) with full daemon/CLI/panel control parity, receiver **auto-notch + auto-QSY** on in-band interference, and linksim I/Q constellation views with a `--serve` mode so the panel can attach with no radio.
+**🎉 v0.5.0 released (14th of July '26)** — [release notes](https://github.com/dc0sk/OpenPulseHF/releases/tag/v0.5.0). A hardening release closing a whole-codebase "what isn't nailed down" audit (issue #830). Headline: **mesh route discovery now works end to end** — a node discovers a route to a peer it can't reach directly, records it, uses it to forward relay traffic, and maintains it (signed route updates + on-path-authorized teardown). Also: **§97.119 transmit-identification gates** on the ARDOP/KISS TNCs (no keying without a valid `MYID` / AX.25 source call), **per-band TX-attenuation memory**, a `GetPttState` resync command, soft-decision calibration for the dense QAM/OFDM/pilot modes, and command-loop robustness — a control-command flood can no longer starve the receiver or the PTT safety watchdog. No breaking changes.
+
+**v0.4.0 (12th of July '26)** — [release notes](https://github.com/dc0sk/OpenPulseHF/releases/tag/v0.4.0). **JS8-based station discovery + rendezvous** (a native JS8Call-interoperable weak-signal waveform — no JS8Call install — off by default and RX-only until you opt into transmitting) and **direct signed P2P file transfer** over the air (offer/accept, progress, tamper-verified against the peer's key). Plus the signal-chain audit that unlocked the dense high-throughput rungs of the adaptive ladder (OFDM re-seat + HARQ soft-combining).
+
+**v0.3.0 (29th of June '26)** — [release notes](https://github.com/dc0sk/OpenPulseHF/releases/tag/v0.3.0). Headline: the daemon now runs a **signed handshake over the air on connect** — it exchanges and verifies an Ed25519 `ConReq`/`ConAck`, stores the peer's verified callsign + Maidenhead grid, and writes the verified grid to an **automatic ADIF logbook**. Also new: **opt-in ARDOP adaptive ARQ** (making the host `ARQBW`/`ARQTIMEOUT` hints real), a **generic serial CAT backend** for rigs Hamlib doesn't support, a reworked **operator panel** (right-hand controls, full-width waterfall, AGC toggle) with full daemon/CLI/panel control parity, receiver **auto-notch + auto-QSY** on in-band interference, and linksim I/Q constellation views with a `--serve` mode so the panel can attach with no radio.
 
 **v0.2.1 (24th of June '26)** — headline feature: CE-SSB transmit envelope conditioning (per-mode, default-on for the high-PAPR OFDM/SC-FDMA modes). The average-power gain at fixed PEP is confirmed on-air (+1.18 dB on 2 m via an FT-991A), matching the channel-sim prediction; software ACPR and an on-air SDR spectral-mask check show no added splatter on QPSK OFDM (dense OFDM-HOM stays clean at normal data-mode drive). The operator panel now carries a CE-SSB toggle and a tabbed Messages/Event-Log pane.
 
