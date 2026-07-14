@@ -5169,6 +5169,7 @@ dependencies = [
  "bpsk-plugin",
  "ed25519-dalek",
  "fsk4-plugin",
+ "js8-plugin",
  "ofdm-plugin",
  "openpulse-audio",
  "openpulse-channel",
