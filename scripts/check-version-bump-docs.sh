@@ -46,7 +46,7 @@ fi
 
 mapfile -t changed_files < <(git diff --name-only "$base_ref" "$head_ref")
 required_files=(
-  "docs/changelog.md"
+  "docs/dev/project/changelog.md"
   "docs/releasenotes.md"
 )
 

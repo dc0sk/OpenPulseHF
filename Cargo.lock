@@ -656,7 +656,7 @@ dependencies = [
 
 [[package]]
 name = "bpsk-plugin"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -2382,7 +2382,7 @@ dependencies = [
 
 [[package]]
 name = "fsk4-plugin"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "openpulse-channel",
  "openpulse-core",
@@ -3600,7 +3600,7 @@ dependencies = [
 
 [[package]]
 name = "js8-plugin"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "flate2",
  "openpulse-core",
@@ -4746,7 +4746,7 @@ dependencies = [
 
 [[package]]
 name = "ofdm-plugin"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "num-complex",
  "openpulse-channel",
@@ -4781,7 +4781,7 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
 name = "openpulse-ardop"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "bpsk-plugin",
@@ -4808,7 +4808,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-audio"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cpal",
  "openpulse-core",
@@ -4817,7 +4817,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-b2f"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "flate2",
  "oxiarc-lzhuf",
@@ -4827,7 +4827,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-b2f-driver"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bpsk-plugin",
  "openpulse-b2f",
@@ -4838,7 +4838,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-channel"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "rand 0.8.6",
  "rand_distr",
@@ -4849,7 +4849,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -4889,7 +4889,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-config"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dirs 5.0.1",
  "ed25519-dalek",
@@ -4904,7 +4904,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cargo-husky",
  "ed25519-dalek",
@@ -4925,7 +4925,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-daemon"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bpsk-plugin",
  "ed25519-dalek",
@@ -4971,7 +4971,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-discovery"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "js8-plugin",
  "openpulse-core",
@@ -4980,7 +4980,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-dsp"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "num-complex",
  "rustfft",
@@ -4989,7 +4989,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-filexfer"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "ed25519-dalek",
  "openpulse-core",
@@ -4998,7 +4998,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-freedv-auth"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "ed25519-dalek",
  "hex",
@@ -5013,7 +5013,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-gateway"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5026,7 +5026,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-gpu"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bytemuck",
  "openpulse-core",
@@ -5039,7 +5039,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-keystore"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -5052,7 +5052,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-kiss"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "bpsk-plugin",
@@ -5078,7 +5078,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-linksec"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "snow",
  "thiserror 2.0.18",
@@ -5087,7 +5087,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-linksim"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bpsk-plugin",
  "clap",
@@ -5116,7 +5116,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-mesh"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "bpsk-plugin",
@@ -5136,7 +5136,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-modem"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bpsk-plugin",
  "ed25519-dalek",
@@ -5162,7 +5162,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-panel"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "crossbeam-channel",
  "ewebsock",
@@ -5176,7 +5176,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-qsy"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -5189,7 +5189,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-radio"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "serde",
  "serialport",
@@ -5200,7 +5200,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-repeater"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bpsk-plugin",
  "openpulse-audio",
@@ -5214,7 +5214,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-testbench"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bpsk-plugin",
  "crossbeam-channel",
@@ -5238,7 +5238,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-testmatrix"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bpsk-plugin",
  "chrono",
@@ -5266,7 +5266,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-tui"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "bpsk-plugin",
@@ -5291,7 +5291,7 @@ dependencies = [
 
 [[package]]
 name = "openpulse-twinview"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "eframe",
  "egui",
@@ -5571,7 +5571,7 @@ dependencies = [
 
 [[package]]
 name = "pilot-plugin"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "num-complex",
  "openpulse-audio",
@@ -5886,7 +5886,7 @@ checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
 name = "psk8-plugin"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "num-complex",
  "openpulse-channel",
@@ -5903,7 +5903,7 @@ checksum = "e0c5ccf5294c6ccd63a74f1565028353830a9c2f5eb0c682c355c471726a6e3f"
 
 [[package]]
 name = "qam64-plugin"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "num-complex",
  "openpulse-core",
@@ -5913,7 +5913,7 @@ dependencies = [
 
 [[package]]
 name = "qpsk-plugin"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "num-complex",
  "openpulse-channel",
@@ -6520,7 +6520,7 @@ dependencies = [
 
 [[package]]
 name = "scfdma-plugin"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "num-complex",
  "openpulse-channel",

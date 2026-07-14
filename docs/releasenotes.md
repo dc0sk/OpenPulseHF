@@ -2,12 +2,52 @@
 project: openpulsehf
 doc: docs/releasenotes.md
 status: living
-last_updated: 2026-07-12
+last_updated: 2026-07-14
 ---
 
 # Release Notes
 
 ## Unreleased
+
+## v0.5.0 — 2026-07-14
+
+A hardening release: the deferred tail of a whole-codebase "what isn't nailed down" audit, worked to
+completion. It's mostly correctness, regulatory-compliance, and robustness fixes, with a few new
+capabilities. **No breaking changes** — existing configs and workflows keep working; the new behaviour is
+either automatic (safer defaults) or opt-in.
+
+**New capabilities**
+
+- **Mesh route discovery, end to end.** Mesh nodes can now discover a route to a destination they can't
+  reach directly, remember it, and use it to forward relay traffic — including keeping routes fresh (signed
+  route updates) and tearing down a route a hop declines to carry (route rejects). Previously only the wire
+  format existed; now the whole request → answer → apply → maintain flow works on air.
+- **Per-band transmit attenuation.** Setting TX attenuation with a band now remembers a per-band value and
+  re-applies it automatically when you retune to that band (like the existing per-band squelch). Setting it
+  without a band still sets the global default.
+- **Declared transmit power** (`[station] tx_power_watts`) and the operator callsign are now recorded in
+  the station's transmit log on every path (daemon, ARDOP/KISS TNCs, mesh) — previously the log showed a
+  blank callsign and 0 W outside two CLI commands.
+- **PTT resync.** A new `openpulse daemon ptt-state` command (and `GetPttState` control command) lets a
+  reconnecting client recover the current transmit state if it missed a change.
+
+**Compliance & safety (§97.119)**
+
+- The **ARDOP** and **KISS** TNCs now refuse to key the transmitter without a valid station identifier —
+  ARDOP needs your `MYID`, and KISS requires a real AX.25 source callsign in the frame (no `N0CALL`). The
+  mesh daemon already refuses to run as `N0CALL`, and the cross-band repeater now identifies its
+  transmitting rig. This prevents an unidentified transmission from a misconfigured station.
+
+**Reliability & robustness**
+
+- A flood of control commands can no longer starve the receiver or the PTT safety watchdog, and a
+  CONNECT/DISCONNECT or a long scan no longer stalls other commands the way it could before.
+- The control WebSocket now fails closed when authentication is required, the ARDOP data port no longer
+  silently drops frames under load, and several signal-processing reliability figures (soft-decision
+  calibration for the dense QAM/OFDM/pilot modes, weak-signal JS8 decoding of real off-air transmissions,
+  rendezvous timing) were corrected.
+
+Full technical detail and PR links are in `docs/dev/project/changelog.md`.
 
 ## v0.4.0 — 2026-07-12
 
