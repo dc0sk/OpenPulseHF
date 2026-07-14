@@ -33,6 +33,34 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — docs(ardop): document the engine-mutex-across-RF-burst invariant (audit #830 close-out)
+
+- **Requirement/change:** #830's ARDOP concurrency item ("worker holds the engine mutex across blocking RF
+  TX/RX while CONNECT/DISCONNECT lock it on the async executor"). The CONNECT/DISCONNECT/MYID half was
+  fixed in #846/#849 (`spawn_blocking`). This entry closes out the *worker-holds-the-lock* half.
+- **Investigation (Fable adversarial concurrency analysis + verified):** ARDOP's concurrency is **host-side
+  only** — a TCP command server (`tokio::spawn` per client) plus a background modem OS thread
+  (`worker_loop`) sharing `Arc<Mutex<ModemEngine>>`; the on-air path is deliberately half-duplex (single
+  frame at a time), and **the engine mutex doubles as the half-duplex channel-access serializer**. Verified
+  facts: `CpalInputStream::read` is a ≤10 ms poll (so the IRS receive→ACK lock scope is ~tens of ms, not a
+  block); the long hold is TX playback (`stream.flush` blocks the driver drain) across `transmit_arq`, which
+  has **no cancellation path**; ABORT is lock-free (`command.rs` "ABORT" arm, regression-tested by
+  `connect_holding_the_engine_lock_does_not_stall_an_abort`, #846). So after #846 the residual is only
+  bounded, off-executor latency on CONNECT/DISCONNECT/MYID (runtime never stalls; STATE/ABORT stay live).
+- **Design decision:** **working-as-intended after #846 — document, don't "fix".** Hoisting the IRS capture
+  read out of the lock would *introduce* bugs (a second input stream drains the shared LoopbackBackend
+  buffer; a CONNECT's `begin_secure_session` could reset session state between capture and ACK — the exact
+  interleave the single scope prevents), and a lock-scope change would only return a host's response line
+  sooner while the RF keeps transmitting. The only real shortening is a future interruptible `transmit_arq`
+  (an `AtomicBool` checked between retransmits) — a separate feature, not this item, not filed absent a
+  bug report.
+- **Implementation:** `crates/openpulse-ardop/src/bridge.rs` — invariant comments at the ISS-TX and IRS-RX
+  lock sites (why the hold is deliberate, why not to hoist the capture read, and the ABORT escape hatch).
+- **Tests:** none new (documentation only); `cargo test -p openpulse-ardop` → 7 lib + 23 integration
+  unchanged; fmt clean. The ABORT-responsiveness guarantee remains enforced by the #846 test.
+
+---
+
 ## 2026-07-14 — feat(core/mesh): source-accumulated multi-hop route discovery (wire-path TLV)
 
 - **Requirement/change:** roadmap 12.3 deferral — a `WireEnvelope` carries no hop trail, so a route
