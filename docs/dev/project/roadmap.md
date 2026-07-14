@@ -983,7 +983,7 @@ signed `RelayRouteUpdate` (0x07, verify + authoritative table refresh) and unsig
 `send_route_update`/`send_route_reject` originators (#856). **Route discovery is now fully driven
 (0x03–0x08).** Deferred: source-accumulated multi-hop paths need a wire-path TLV.
 
-### 12.4 — Robustness / concurrency ✅ Done (one sub-item deferred)
+### 12.4 — Robustness / concurrency ✅ Done
 - **ARDOP engine lock off the async executor** — CONNECT/DISCONNECT locked the engine `std::sync::Mutex`
   inline on the executor while the worker holds it across an RF burst, stalling other clients' commands
   (incl. ABORT); moved to `spawn_blocking` like the PTT handlers (#846).
@@ -994,20 +994,21 @@ signed `RelayRouteUpdate` (0x07, verify + authoritative table refresh) and unsig
   watchdog buried in the rx arm, so a command flood starved the rx tick **and** the watchdog. Gave the
   watchdog its own 100 ms `select!` arm and dropped `biased` → fair scheduling; the transmitter's
   force-release can no longer be starved (#853).
-- *Deferred → scheduled as a dedicated effort (2026-07-14):* the **in-handler** blocking half. A QSY
-  scan / OTA send-retry holds the async command arm for tens of seconds; during that window the `select!`
-  loop never re-enters, so even the #853 watchdog *arm* doesn't run — an `Abort`/`PttRelease` is delayed
-  until the handler returns. It is mostly **command-latency**, not a stuck transmitter (the QSY scan is
-  RX-only, and the OTA/beacon handlers release PTT after each short burst), which is why #853 already
-  covered the dangerous (flood) case. **Chosen fix: approach B — an independent watchdog *task*** (not
-  the current arm) sharing the PTT state. Concrete scope discovered 2026-07-14: it is a ~40-site
-  **safety-critical** refactor because the deadline (`ptt_asserted_at`) and the controller are split
-  across `server.rs` **and** `lib.rs` and accessed synchronously from both — the deadline must become a
-  shared `Arc<Mutex<Option<Instant>>>` (single source of truth) and the controller an
-  `Arc<Mutex<Option<Box<dyn PttController + Send>>>>`, bundled behind a `SharedPtt` and re-threaded through
-  ~6 helpers, with every key/unkey locking briefly (never across a burst) so the task can preempt.
-  Deliberately scheduled rather than rushed at the tail of a session, given the stuck-transmitter failure
-  mode and that it can only be unit-tested here (no radio). Tracking: **#863**.
+- **In-handler blocking half — independent PTT watchdog thread ✅ Done (#863, PR #867).** A QSY scan /
+  OTA send-retry holds the async command arm for tens of seconds; during that window the `select!` loop
+  never re-enters, so even the #853 watchdog *arm* doesn't run. **Approach B** shipped: the PTT controller
+  and its deadline now live behind one `SharedPtt(Arc<Mutex<PttInner>>)` (single source of truth), driven
+  by an **independent OS-thread watchdog** (`spawn_watchdog`) that force-releases on the 180 s deadline
+  every 100 ms regardless of what the async loop is doing — a plain thread (immune to runtime flavor /
+  worker starvation), holding only a `Weak` so it exits when the daemon drops `runtime_state`. The mutex
+  is held only for one hardware call or a deadline read/write, never across an RF burst, so the thread can
+  preempt at any point. `RuntimeControlState` swapped its `ptt_asserted_at`/`ptt_max_duration` fields for
+  `ptt: SharedPtt`; `server.rs` routes every key/unkey site through it (−104 lines of scattered
+  bookkeeping). A Fable adversarial review added two upgrades past parity: a **stuck rig** keeps the
+  watchdog armed + silent and is retried every tick (pre-#863 cleared + falsely reported release), and all
+  `PttChanged` edges are emitted under the lock so a concurrent re-key can't misorder them. 8 `ptt.rs`
+  unit tests incl. the blocked-loop preemption + mid-burst single-fire + stuck-rig-retry cases; can only
+  be unit-tested here (no radio).
 
 ### 12.5 — Feature completions ✅ Done
 - **Per-band `SetTxAttenuation`** — the control command's optional `band` was silently dropped (only the
