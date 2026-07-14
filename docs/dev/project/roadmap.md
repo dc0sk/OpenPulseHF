@@ -2058,14 +2058,19 @@ Build order revised per the 2026-07-14 Fable design review (see traceability):
    level-invariant with AGC on *or* off across ×0.1–×3.0, and that the AGC runs (tripwire) + tracks level
    (metering). The hard-limiter-correlator option is **rejected** (constant-envelope, incompatible with
    soft-LLR; acquisition already amplitude-invariant).
-5. **REQ-WSIG-01 — robust narrowband weak-signal waveform. Measurement-gate first** (per modem73's ROBUST,
-   and the #864 discipline). JS8 does **not** satisfy it (unregistered, 9-byte envelope-less payload,
-   25–250 Hz, ~6 bps) — but a real dead-zone gap exists (~−3 dB BPSK31 floor → −18 dB JS8). A
-   **constant-envelope non-coherent 16-FSK (~600 Hz)** candidate has ΔPAPR≈0 (dodges what killed #864) and
-   non-coherent detection (dodges BPSK31's carrier-tracking limit under fast fade), reusing the JS8
-   GFSK/LDPC primitives. Bake off coded frame-success vs BPSK31 on Watterson first; pre-registered kill:
-   ship only if ≥3 dB gain at the 0.5 crossing on moderate_f1 with ΔPAPR ≤ 0.5 dB and no good_f1
-   regression; else close honestly like #864 (~40–50 % chance of no-ship).
+5. **REQ-WSIG-01 — robust narrowband weak-signal waveform. ✅ Measured — ideal-bound gate PASSED; production
+   build is a scheduled multi-PR effort.** The **constant-envelope non-coherent 16-GFSK** candidate (31.25
+   baud, 500 Hz, reusing the JS8 tone synth + Goertzel detector + engine union decode) was baked off vs
+   BPSK31 on Watterson (`crates/openpulse-modem/tests/mfsk_subfloor_bound.rs`, ideal genie-sync bound). It
+   **cleared the pre-registered ≥5 dB ideal gate**: ~5 dB on moderate_f1, **BPSK31 fails entirely on
+   poor_f1** (fast fade breaks coherent carrier tracking) while 16-GFSK crosses ~0 dB, no good_f1
+   regression, and **ΔPAPR = −1.45 dB (a credit)** — the opposite of #864. AWGN sanity holds (MFSK doesn't
+   win on AWGN). Full analysis: `docs/dev/research/robust-narrowband-measurement.md`. **Two conditions
+   govern the production ship** (a positive waveform number alone doesn't settle it): (a) an **MFSK-class
+   ACK channel** — FSK4-ACK dies far above the candidate's floor, so as an ARQ rung it needs its return
+   link there too, else it's broadcast-only; (b) real-sync erosion (~2–3 dB, budgeted — moderate stays
+   positive, poor is unbounded) + HPX session-timer handling for the 16 s frame. Production stages: real-
+   sync measurement → `mfsk16` plugin + engine registration → SL1 ladder placement → MFSK ACK → timers.
 
 ### Features shipped (no longer deferred)
 

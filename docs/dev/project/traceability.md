@@ -9,6 +9,35 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — research: robust narrowband weak-signal rung measured — ideal gate PASSED (REQ-WSIG-01)
+
+- **Requirement/change:** REQ-WSIG-01 — a robust narrowband weak-signal waveform as a sub-floor rung below
+  BPSK31, measured-first per the #864 discipline. Derived from modem73's ROBUST family; the candidate is a
+  **constant-envelope non-coherent 16-GFSK** (Fable design review, verified).
+- **Design/measurement decision:** 16-GFSK, 31.25 baud (= BPSK31), 31.25 Hz spacing, 500 Hz occupied,
+  4 bits/symbol. **Reuse, not build** for the measurement: `js8_plugin::modulate::modulate_tones` (already
+  M-agnostic) + `goertzel_energy` (tone-count-agnostic, wrapped in a 16-tone/4-bit soft-LLR generalization)
+  + `ModemEngine::combine_and_decode_llrs` (never touches the plugin registry) → both arms run the **same
+  RS(255,223) + Frame/CRC** decode, matched FEC by construction. Trap handled: the engine's `hard_decide`
+  is negative=bit1/LSB-first while JS8's demod is positive=bit1/MSB-first — the 16-tone demod emits
+  engine-convention LLRs, guarded by a non-ignored clean round-trip test. Fair comparison: matched average
+  power (RMS-keyed channel charges the 500 Hz signal correctly — each Goertzel is ~31 Hz, no free
+  noise-bandwidth), an AWGN known-answer sanity, and ΔPAPR measured separately.
+- **Result (ideal genie-sync bound, 40 trials):** cleared the pre-registered ≥5 dB gate — ~5 dB on
+  moderate_f1, **BPSK31 fails entirely on poor_f1** (0.00 through +6 dB; fast fade breaks coherent carrier
+  tracking) while 16-GFSK crosses ~0 dB, no good_f1 regression, **ΔPAPR = −1.45 dB (a credit** — opposite
+  of #864). AWGN sanity holds (16-GFSK ~1 dB *worse* on the label — a fading-only lever must not win on
+  AWGN). Verdict: physics validated, a genuine sub-floor rung. Two ship conditions flagged: an MFSK-class
+  ACK channel (FSK4-ACK dies far above the floor) and real-sync erosion + session timers.
+- **Implementation:** `crates/openpulse-modem/tests/mfsk_subfloor_bound.rs` (measurement; `js8-plugin`
+  added as a modem dev-dep); `docs/dev/research/robust-narrowband-measurement.md`.
+- **Tests:** `both_arms_round_trip_on_a_clean_channel` (non-ignored plumbing/LLR-convention guard);
+  `mfsk_vs_bpsk31_watterson_sweep` + `awgn_known_answer_sanity` (ignored research sweeps).
+- **Test results:** clean guard green; sweeps produced the tables above; `cargo build --workspace
+  --no-default-features` clean; clippy `-D warnings` + fmt clean.
+
+---
+
 ## 2026-07-14 — feat(config): AGC config gate + amplitude-sweep acceptance test (REQ-AGC-01)
 
 - **Requirement/change:** REQ-AGC-01, re-scoped after the design review found the receive AGC already
