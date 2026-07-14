@@ -994,11 +994,20 @@ signed `RelayRouteUpdate` (0x07, verify + authoritative table refresh) and unsig
   watchdog buried in the rx arm, so a command flood starved the rx tick **and** the watchdog. Gave the
   watchdog its own 100 ms `select!` arm and dropped `biased` → fair scheduling; the transmitter's
   force-release can no longer be starved (#853).
-- *Deferred (issue #830, by decision 2026-07-14):* the **in-handler** blocking half — a QSY scan / OTA
-  send-retry holds the command arm for tens of seconds, delaying `Abort`/`PttRelease`. This is
-  command-latency, not a stuck transmitter (the watchdog is now independent). Revisit only if practical
-  use shows it bites; then choose (A) state-machine the long handlers to yield vs (B) an independent
-  `Arc<Mutex>` watchdog task.
+- *Deferred → scheduled as a dedicated effort (2026-07-14):* the **in-handler** blocking half. A QSY
+  scan / OTA send-retry holds the async command arm for tens of seconds; during that window the `select!`
+  loop never re-enters, so even the #853 watchdog *arm* doesn't run — an `Abort`/`PttRelease` is delayed
+  until the handler returns. It is mostly **command-latency**, not a stuck transmitter (the QSY scan is
+  RX-only, and the OTA/beacon handlers release PTT after each short burst), which is why #853 already
+  covered the dangerous (flood) case. **Chosen fix: approach B — an independent watchdog *task*** (not
+  the current arm) sharing the PTT state. Concrete scope discovered 2026-07-14: it is a ~40-site
+  **safety-critical** refactor because the deadline (`ptt_asserted_at`) and the controller are split
+  across `server.rs` **and** `lib.rs` and accessed synchronously from both — the deadline must become a
+  shared `Arc<Mutex<Option<Instant>>>` (single source of truth) and the controller an
+  `Arc<Mutex<Option<Box<dyn PttController + Send>>>>`, bundled behind a `SharedPtt` and re-threaded through
+  ~6 helpers, with every key/unkey locking briefly (never across a burst) so the task can preempt.
+  Deliberately scheduled rather than rushed at the tail of a session, given the stuck-transmitter failure
+  mode and that it can only be unit-tested here (no radio). Tracking: **#863**.
 
 ### 12.5 — Feature completions ✅ Done
 - **Per-band `SetTxAttenuation`** — the control command's optional `band` was silently dropped (only the
@@ -1956,7 +1965,25 @@ import into standard logging software / LoTW / eQSL. Opt-in via a new `[logbook]
 - **Open questions:** ADIF version (3.1.x), how to map HPX modes to ADIF `MODE` / `SUBMODE`
   (a custom `DYNAMIC` vs. per-mode), and whether to also log FreeDV / Winlink sessions.
 
-### Weak-signal symbol-diversity mode (deferred — from SSB reference mining 2026-07-01)
+### Weak-signal symbol-diversity mode (scheduled as a deliberate effort — from SSB reference mining 2026-07-01)
+
+**Implementation-scoping notes (2026-07-14).** Prototyping the plugin surfaced why this is a *measured*
+research task, not a quick add:
+- **The gain is fading-only and must be proven coded.** Splitting power across two carriers then combining
+  is a **wash on AWGN** (diversity buys diversity, not coding gain) — so the deliverable is a **coded
+  frame-success** gain on a **frequency-selective / fading** channel, established with a Watterson bake-off
+  (and a chosen carrier separation Δf ≥ the coherence bandwidth so the two branches decorrelate). Per the
+  repo's rule ("measure the floor delta first / an uncoded-BER win is not a win"), no rung ships without
+  that number.
+- **BPSK's soft path is differential (NRZI).** Summing the two branches' LLRs is valid MRC (LLRs add for
+  independent looks), but the hard-decode byte-packing and the soft-FEC / HARQ-calibration interaction
+  need the same care as the recent `llr_calibration` fixes — this is exactly the area the codebase keeps
+  getting subtly wrong.
+- **A new mode needs a justified ladder rung** (which SL / profile) — a mode-scope decision measured
+  against the neighbour, not asserted.
+- Sketch that works: dual-carrier BPSK at `fc ± baud` (Δ = 2×baud makes the carriers integrate-and-dump
+  orthogonal), soft-LLR-sum combine, reusing `BpskPlugin`. Tracking: **#864**.
+
 
 Flagged from the FreeDV/codec2 reference pass (see `docs/dev/research/references.md` →
 *CE-SSB and polar-SSB transmit conditioning*). FreeDV **700D** transmits each carrier's
