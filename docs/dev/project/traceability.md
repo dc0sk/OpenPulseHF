@@ -9,6 +9,40 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — feat(mesh): route-maintenance drive — RelayRouteUpdate/Reject (0x07/0x08)
+
+- **Requirement/change:** issue #830 — the #830 route-discovery item named four msg types; #840/#841/#850
+  built the request/response drive (0x03/0x04), leaving `RelayRouteUpdate` (0x07) and `RelayRouteReject`
+  (0x08) **codec-only** (route repair/teardown — no node originated/answered/applied them). This closes
+  the last route-discovery gap.
+- **Design decision:** extend `openpulse-core::route_discovery` with the maintenance drive, mirroring the
+  0x03/0x04 model. **Update (0x07)** is *signed* (self-authenticating, as the response is):
+  `sign_route_update`/`verify_route_update` over `(route_id, prev_hop_count, reason, replacement_hops)`;
+  `RouteResponder::build_route_update` emits it; `apply_route_update` verifies against the emitter's
+  `src_peer_id`, derives the destination from the last replacement hop, and refreshes the table
+  (`RouteTable::apply_update` overwrites the entry when the `route_id` matches — an authoritative refresh,
+  even on degradation — else admits via `record`). **Reject (0x08)** is *unsigned* on the wire, so it is
+  authorized structurally: `apply_route_reject` tears down the route only when `reject_hop_peer_id` is
+  actually one of that route's hops (`RouteTable::entry_by_route_id` + `remove`) — an off-path peer cannot
+  invalidate a route it does not carry. `MeshDaemon` gains dispatch arms (0x07 → apply + flood; 0x08 →
+  apply + flood), `RouteUpdated`/`RouteRejected` events, and `send_route_update`/`send_route_reject`
+  originators.
+- **Implementation:** `crates/openpulse-core/src/route_discovery.rs` (sign/verify + `apply_route_update` /
+  `apply_route_reject` + `RouteTable::{entry_by_route_id, remove, apply_update}` +
+  `RouteResponder::build_route_update`); `crates/openpulse-mesh/src/lib.rs` (dispatch + events +
+  originators).
+- **Tests:** core — `route_update_verifies_and_refreshes_the_existing_route`,
+  `route_update_rejects_a_tampered_signature_and_empty_hops`,
+  `route_reject_from_an_on_path_hop_tears_down_the_route` (on-path teardown + off-path `Unauthorized` +
+  `UnknownRoute`); mesh — `route_update_then_reject_over_air` (a signed update is applied through the mesh
+  dispatch → `RouteUpdated`, then an on-path reject tears it down → `RouteRejected`, end-to-end via the
+  loopback tap).
+- **Test results:** `cargo test -p openpulse-core --no-default-features` → route_discovery 11 (8 → 11),
+  lib 275; `cargo test -p openpulse-mesh --no-default-features` → 11 (10 → 11); `cargo build --workspace`
+  green; fmt + clippy (`--tests -D warnings`) clean. **Route discovery is now fully driven (0x03–0x08).**
+
+---
+
 ## 2026-07-14 — fix(daemon): decouple the PTT watchdog + drop `biased` so a command flood can't starve rx
 
 - **Requirement/change:** issue #830 robustness — `server::run`'s single `tokio::select!` was `biased` with
@@ -116,11 +150,9 @@ and the actually-observed results per change.
   pass; `cargo build --workspace` green; fmt + clippy (`--tests -D warnings`) clean.
 - **Remaining (deferred):** `select_best_scored_route` now runs live, but multi-candidate selection only
   bites once several routes to a destination coexist (a candidate-route store); source-accumulated
-  multi-hop paths await the wire-path TLV (#840). Also still **codec-only**: the route-*maintenance*
-  messages `RelayRouteUpdate` (0x07) and `RelayRouteReject` (0x08) — the #830 route-discovery item named
-  these alongside 0x03/0x04, but #840/#841/#850 built only the request/response (0x03/0x04) drive; no node
-  yet originates/answers/applies 0x07/0x08. (Route *discovery* interop works; route *repair/teardown*
-  does not.)
+  multi-hop paths await the wire-path TLV (#840). (The route-*maintenance* messages `RelayRouteUpdate`
+  (0x07) / `RelayRouteReject` (0x08) — codec-only after this PR — got their drive next; see the
+  2026-07-14 route-maintenance entry above.)
 
 ---
 
