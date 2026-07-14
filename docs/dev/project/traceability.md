@@ -9,6 +9,35 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — fix(ardop): refuse on-air TX without a valid MYID (§97.119)
+
+- **Requirement/change:** issue #830 (deferred half of audit #10) — the ARDOP TNC took its callsign from
+  the host `MYID` at runtime but never gated transmission on it: with `MYID` unset (or `N0CALL`) the worker
+  would still key the transmitter for host data, IRS ACK/Nack, the auto-ID frame, and relay forwards —
+  unidentified emissions. §97.119 requires a station to transmit its own valid call sign. (The mesh half
+  was fixed config-side in #827; a TNC can't hard-refuse at config time without breaking Pat/Winlink, so
+  the gate belongs in the TNC session logic.)
+- **Design decision:** add one shared validity predicate `openpulse_core::station_id::callsign_is_valid`
+  (non-empty after trim, not `N0CALL`, case-insensitive) and a bridge-local `tx_callsign(&bridge) ->
+  Option<String>` reading the live MYID through it. Gate every keyed-emission site on it: host data TX
+  refuses + emits a `FAULT` (so the operator sees why nothing went out, instead of a silent illegal
+  emission); the IRS ACK/Nack is suppressed (RX still runs); the auto-ID path now rejects `N0CALL` (was
+  empty-only); relay forwarding is suppressed. Loopback mode is unaffected (no RF).
+- **Implementation:** `crates/openpulse-core/src/station_id.rs` (`callsign_is_valid` + test);
+  `crates/openpulse-ardop/src/bridge.rs` (`tx_callsign` + the four gates).
+- **Tests:** core `callsign_validity_rejects_empty_and_placeholder`; ardop
+  `tx_callsign_gates_on_a_valid_myid`, `worker_refuses_onair_data_without_myid_and_faults` (no MYID → FAULT
+  + `frames_transmitted() == 0`), `worker_transmits_onair_data_once_a_valid_myid_is_set` (valid MYID → frame
+  goes out, no FAULT).
+- **Test results:** `cargo test -p openpulse-ardop -p openpulse-core --no-default-features` → ardop 6 lib
+  (3 → 6) + 23 integration, core 272 lib + suites, all pass; `cargo build --workspace` green; fmt + clippy
+  (`--tests -D warnings`) clean.
+- **Follow-up (separate PR):** KISS has no callsign/MYID surface — its §97.119 identity is the AX.25 source
+  address in each host frame — so its guard (refuse a frame whose source is empty/`N0CALL`) is a distinct
+  change, tracked under the same #830 line.
+
+---
+
 ## 2026-07-14 — fix(ardop): acquire the engine lock off the executor on CONNECT/DISCONNECT
 
 - **Requirement/change:** issue #830 robustness — the ARDOP command dispatcher (`dispatch`, an async task

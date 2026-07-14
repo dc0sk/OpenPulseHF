@@ -1,5 +1,13 @@
 //! Periodic + end-of-exchange station-identification timer (REQ-REG-10).
 
+/// Whether `callsign` is usable as a station identifier for on-air transmission (§97.119): non-empty
+/// after trimming and not the placeholder `N0CALL`. A station must not key the transmitter under an
+/// absent or placeholder call, so TNC / daemon TX paths gate keyed emissions on this.
+pub fn callsign_is_valid(callsign: &str) -> bool {
+    let trimmed = callsign.trim();
+    !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("N0CALL")
+}
+
 /// Decides when a station must next transmit its identification.
 ///
 /// Regulatory rules (e.g. FCC §97.119(a)) require a station to identify **at least
@@ -105,6 +113,27 @@ impl StationIdTimer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn callsign_validity_rejects_empty_and_placeholder() {
+        assert!(callsign_is_valid("DC0SK"));
+        assert!(callsign_is_valid("W1AW"));
+        assert!(
+            callsign_is_valid("  KN4CRD  "),
+            "surrounding space is trimmed"
+        );
+        assert!(!callsign_is_valid(""), "empty is invalid");
+        assert!(!callsign_is_valid("   "), "whitespace-only is invalid");
+        assert!(!callsign_is_valid("N0CALL"), "the placeholder is invalid");
+        assert!(
+            !callsign_is_valid("n0call"),
+            "placeholder check is case-insensitive"
+        );
+        assert!(
+            !callsign_is_valid("  N0CALL "),
+            "placeholder is invalid after trim"
+        );
+    }
 
     const TEN_MIN: u64 = 600_000;
     const SIGNOFF: u64 = 10_000; // 10 s idle

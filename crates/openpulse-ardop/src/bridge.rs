@@ -192,26 +192,28 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
             }
             let one_shot = bridge.id_requested.swap(false, Ordering::Relaxed);
             if one_shot || id_timer.id_due(now_ms) || id_timer.signoff_due(now_ms) {
-                let callsign = bridge
-                    .callsign
-                    .try_read()
-                    .map(|c| c.clone())
-                    .unwrap_or_default();
-                if callsign.is_empty() {
-                    if one_shot {
-                        tracing::debug!("SENDID requested but no MYID callsign set; skipping");
+                // The ID frame *is* the identification, so it needs a real call — the placeholder
+                // `N0CALL` is not one (§97.119). `tx_callsign` returns the valid MYID or None.
+                match tx_callsign(&bridge) {
+                    None => {
+                        if one_shot {
+                            tracing::debug!(
+                                "SENDID requested but no valid MYID callsign set; skipping"
+                            );
+                        }
                     }
-                } else {
-                    let cwid = bridge.cwid_enabled.load(Ordering::Relaxed);
-                    transmit_station_id(&bridge, &mode, &callsign, cwid);
-                    // Advance regardless of TX success (a persistent PTT fault is logged, not retried
-                    // per-tick), and re-baseline so the ID frame(s) don't re-arm the timer.
-                    id_timer.mark_identified(now_ms);
-                    tx_frames_seen = bridge
-                        .engine
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .frames_transmitted();
+                    Some(callsign) => {
+                        let cwid = bridge.cwid_enabled.load(Ordering::Relaxed);
+                        transmit_station_id(&bridge, &mode, &callsign, cwid);
+                        // Advance regardless of TX success (a persistent PTT fault is logged, not
+                        // retried per-tick), and re-baseline so the ID frame(s) don't re-arm the timer.
+                        id_timer.mark_identified(now_ms);
+                        tx_frames_seen = bridge
+                            .engine
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .frames_transmitted();
+                    }
                 }
             }
         }
@@ -258,6 +260,14 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
             let use_fec = bridge.fec_tx.swap(false, Ordering::Relaxed);
             if bridge.loopback {
                 let _ = bridge.rx_data_tx.send(data);
+            } else if tx_callsign(&bridge).is_none() {
+                // §97.119: never key the transmitter without a valid MYID. The host sets it via `MYID`
+                // before transmitting (Pat/ARIM do so at session start); refuse + FAULT otherwise so the
+                // operator sees why nothing went out, rather than emitting an unidentified transmission.
+                tracing::warn!("refusing on-air TX: no valid MYID callsign set (§97.119)");
+                let _ = bridge
+                    .event_tx
+                    .send("FAULT no MYID callsign set; set MYID before transmitting".to_string());
             } else {
                 // Acquire the lock once to read adaptive state and perform TX in the same scope.
                 let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
@@ -303,6 +313,9 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
         }
 
         if !bridge.loopback {
+            // §97.119: the IRS ACK/Nack is a keyed emission too — suppress it without a valid MYID
+            // (RX still runs; only the reply is gated). Read before taking the engine lock (separate lock).
+            let can_tx = tx_callsign(&bridge).is_some();
             // IRS path: acquire the engine lock once for both the adaptive check and
             // the receive+ACK dispatch to avoid lock churn and inconsistent state.
             let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
@@ -313,17 +326,27 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                 // interleave between receive and the ACK transmit.
                 match engine.receive_with_ack_hint(&mode, None) {
                     Ok((payload, ack_type)) => {
-                        let ack_frame = AckFrame::new(ack_type, &mode);
-                        if let Err(e) = engine.transmit_ack_with_short_fec(&ack_frame, None) {
-                            tracing::warn!("IRS ACK transmit failed: {e}");
+                        if can_tx {
+                            let ack_frame = AckFrame::new(ack_type, &mode);
+                            if let Err(e) = engine.transmit_ack_with_short_fec(&ack_frame, None) {
+                                tracing::warn!("IRS ACK transmit failed: {e}");
+                            }
+                        } else {
+                            tracing::warn!("suppressing IRS ACK: no valid MYID callsign (§97.119)");
                         }
                         Some(payload)
                     }
                     Err(e) => {
                         tracing::debug!("IRS receive_with_ack_hint failed ({e}); sending Nack");
-                        let nack = AckFrame::new(AckType::Nack, &mode);
-                        if let Err(e) = engine.transmit_ack_with_short_fec(&nack, None) {
-                            tracing::warn!("IRS Nack transmit failed: {e}");
+                        if can_tx {
+                            let nack = AckFrame::new(AckType::Nack, &mode);
+                            if let Err(e) = engine.transmit_ack_with_short_fec(&nack, None) {
+                                tracing::warn!("IRS Nack transmit failed: {e}");
+                            }
+                        } else {
+                            tracing::warn!(
+                                "suppressing IRS Nack: no valid MYID callsign (§97.119)"
+                            );
                         }
                         None
                     }
@@ -356,6 +379,18 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
 
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+}
+
+/// The station's MYID callsign iff it is valid for on-air TX (§97.119): non-empty and not `N0CALL`.
+/// Returns `None` when unset/placeholder so every keyed-emission site can refuse uniformly. Reads the
+/// callsign non-blockingly (this is a sync worker over a tokio `RwLock`).
+fn tx_callsign(bridge: &ModemBridge) -> Option<String> {
+    let call = bridge
+        .callsign
+        .try_read()
+        .map(|c| c.clone())
+        .unwrap_or_default();
+    openpulse_core::station_id::callsign_is_valid(&call).then_some(call)
 }
 
 /// Transmit a station identification: key PTT (worker-driven, unlike host-keyed data TX), send the
@@ -432,6 +467,13 @@ fn maybe_relay_forward(bridge: &ModemBridge, payload: &[u8], mode: &str) {
         return;
     };
 
+    // A relay re-transmission is a keyed emission under this station's call (§97.119): don't forward
+    // without a valid MYID.
+    if tx_callsign(bridge).is_none() {
+        tracing::warn!("suppressing relay forward: no valid MYID callsign (§97.119)");
+        return;
+    }
+
     let Ok(envelope) = WireEnvelope::decode(payload) else {
         return;
     };
@@ -466,6 +508,116 @@ fn maybe_relay_forward(bridge: &ModemBridge, payload: &[u8], mode: &str) {
         }
         Err(e) => {
             tracing::debug!("relay: envelope not forwarded: {e:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openpulse_audio::LoopbackBackend;
+    use openpulse_core::handshake::InMemoryTrustStore;
+    use openpulse_modem::ModemEngine;
+    use std::time::Duration;
+
+    /// A non-loopback bridge (so TX goes through the modem, exercising the §97.119 gate).
+    fn onair_bridge() -> (Arc<ModemBridge>, std::sync::mpsc::Receiver<Vec<u8>>) {
+        let mut engine = ModemEngine::new(Box::new(LoopbackBackend::default()));
+        engine
+            .register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+            .expect("register BPSK plugin");
+        ModemBridge::new(
+            engine,
+            "BPSK250".into(),
+            false,
+            InMemoryTrustStore::default(),
+            None,
+        )
+    }
+
+    #[test]
+    fn tx_callsign_gates_on_a_valid_myid() {
+        let (bridge, _rx) = onair_bridge();
+        assert!(tx_callsign(&bridge).is_none(), "unset MYID → no TX call");
+        *bridge.callsign.try_write().expect("write callsign") = "N0CALL".into();
+        assert!(
+            tx_callsign(&bridge).is_none(),
+            "placeholder N0CALL → no TX call"
+        );
+        *bridge.callsign.try_write().expect("write callsign") = "DC0SK".into();
+        assert_eq!(
+            tx_callsign(&bridge).as_deref(),
+            Some("DC0SK"),
+            "a valid MYID is usable for TX"
+        );
+    }
+
+    #[test]
+    fn worker_refuses_onair_data_without_myid_and_faults() {
+        let (bridge, tx_data_rx) = onair_bridge(); // MYID never set
+        let mut events = bridge.event_tx.subscribe();
+        let tx = bridge.tx_data_tx.clone();
+        spawn_worker(bridge.clone(), tx_data_rx);
+
+        tx.send(b"unidentified payload".to_vec())
+            .expect("queue TX data");
+
+        // The worker must emit a FAULT and must NOT key the transmitter.
+        let mut faulted = false;
+        for _ in 0..100 {
+            while let Ok(ev) = events.try_recv() {
+                if ev.starts_with("FAULT") && ev.contains("MYID") {
+                    faulted = true;
+                }
+            }
+            if faulted {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(faulted, "no-MYID on-air data must emit a FAULT");
+        let frames = bridge
+            .engine
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .frames_transmitted();
+        assert_eq!(
+            frames, 0,
+            "must not transmit without a valid MYID (§97.119)"
+        );
+    }
+
+    #[test]
+    fn worker_transmits_onair_data_once_a_valid_myid_is_set() {
+        let (bridge, tx_data_rx) = onair_bridge();
+        *bridge.callsign.try_write().expect("write callsign") = "DC0SK".into();
+        let mut events = bridge.event_tx.subscribe();
+        let tx = bridge.tx_data_tx.clone();
+        spawn_worker(bridge.clone(), tx_data_rx);
+
+        tx.send(b"identified payload".to_vec())
+            .expect("queue TX data");
+
+        // With a valid MYID the frame is transmitted and no FAULT is raised.
+        let mut transmitted = false;
+        for _ in 0..100 {
+            let frames = bridge
+                .engine
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .frames_transmitted();
+            if frames > 0 {
+                transmitted = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(transmitted, "a valid MYID must not block on-air data");
+        while let Ok(ev) = events.try_recv() {
+            assert!(
+                !ev.starts_with("FAULT"),
+                "no FAULT expected with a valid MYID, got: {ev}"
+            );
         }
     }
 }
