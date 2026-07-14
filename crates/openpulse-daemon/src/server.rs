@@ -570,6 +570,10 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     // can react to incoming RF frames without operator commands.
     let mut rx_ticker =
         tokio::time::interval(std::time::Duration::from_millis(cfg.daemon.receive_tick_ms));
+    // Safety-critical PTT watchdog on its own fast timer + `select!` arm, so a client command flood can
+    // no longer starve the transmitter's force-release along with the rx tick (audit robustness item):
+    // the watchdog is decoupled from the rx decode, and the loop is no longer `biased` toward commands.
+    let mut watchdog_ticker = tokio::time::interval(std::time::Duration::from_millis(100));
     // Emit OTA status roughly once per second (when an OTA session is active).
     let ota_status_period = (1000 / cfg.daemon.receive_tick_ms.max(1)).max(1);
     let mut ota_status_tick: u64 = 0;
@@ -610,7 +614,10 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     }
     loop {
         tokio::select! {
-            biased;
+            // No `biased`: fair scheduling so a command flood cannot starve the rx tick or the watchdog.
+            _ = watchdog_ticker.tick() => {
+                release_ptt_on_watchdog(&mut runtime_state, &handle.event_tx, &mut ptt_controller);
+            }
             Some(cmd) = handle.commands.recv() => {
                 // PTT hardware calls are synchronous; handle them before the async engine dispatch so
                 // the borrow of ptt_controller doesn't cross the await point.
@@ -665,14 +672,10 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 );
             }
             _ = rx_ticker.tick() => {
-                // Release PTT hardware if the watchdog deadline has elapsed.
-                if check_ptt_watchdog(&mut runtime_state, &handle.event_tx) {
-                    if let Some(ref mut ptt) = ptt_controller {
-                        if let Err(e) = ptt.release_ptt() {
-                            tracing::warn!("PTT watchdog release failed: {e}");
-                        }
-                    }
-                }
+                // Belt-and-suspenders: also check the watchdog on the rx tick (idempotent — it fires
+                // once when the deadline passes). The dedicated `watchdog_ticker` arm is the primary,
+                // flood-proof path.
+                release_ptt_on_watchdog(&mut runtime_state, &handle.event_tx, &mut ptt_controller);
                 let mode = handle.active_mode.lock().await.clone();
                 // block_in_place: engine capture/transmit are synchronous; LoopbackBackend
                 // returns immediately. A real audio backend blocks until samples arrive.
@@ -1347,6 +1350,23 @@ fn epoch_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Force-release the transmitter when the PTT watchdog deadline has elapsed. Idempotent: `check_ptt_watchdog`
+/// fires once when the deadline passes and clears `ptt_asserted_at`. Called from both the dedicated
+/// watchdog `select!` arm (flood-proof) and the rx tick.
+fn release_ptt_on_watchdog(
+    runtime_state: &mut RuntimeControlState,
+    event_tx: &std::sync::Arc<tokio::sync::broadcast::Sender<crate::protocol::ControlEvent>>,
+    ptt_controller: &mut Option<Box<dyn PttController>>,
+) {
+    if check_ptt_watchdog(runtime_state, event_tx) {
+        if let Some(ref mut ptt) = ptt_controller {
+            if let Err(e) = ptt.release_ptt() {
+                tracing::warn!("PTT watchdog release failed: {e}");
+            }
+        }
+    }
 }
 
 /// Key PTT, emit one JS8 beacon frame via the raw-audio seam, and release PTT. Any PTT/transmit error
@@ -2059,6 +2079,65 @@ mod discovery_tick_tests {
         let mut armed2 = Some(std::time::Instant::now());
         transmit_beacon_with_ptt(&mut engine, &mut ptt2, &mut armed2, &audio, "JS8-NORMAL");
         assert!(armed2.is_none(), "a clean release disarms the watchdog");
+    }
+
+    #[test]
+    fn watchdog_releases_the_transmitter_when_the_deadline_passes() {
+        // The decoupled watchdog `select!` arm calls this on its own fast timer, so a client command
+        // flood can no longer starve the force-release. Verify it releases + disarms + notifies once.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CountingPtt(std::sync::Arc<AtomicUsize>);
+        impl PttController for CountingPtt {
+            fn assert_ptt(&mut self) -> Result<(), openpulse_radio::PttError> {
+                Ok(())
+            }
+            fn release_ptt(&mut self) -> Result<(), openpulse_radio::PttError> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            fn is_asserted(&self) -> bool {
+                false
+            }
+        }
+
+        let releases = std::sync::Arc::new(AtomicUsize::new(0));
+        let mut ptt: Option<Box<dyn PttController>> = Some(Box::new(CountingPtt(releases.clone())));
+        let (tx, mut rx) = tokio::sync::broadcast::channel::<ControlEvent>(8);
+        let ev = std::sync::Arc::new(tx);
+
+        // Armed, with a deadline already in the past.
+        let mut rs = RuntimeControlState {
+            ptt_asserted_at: Some(std::time::Instant::now()),
+            ptt_max_duration: std::time::Duration::from_nanos(1),
+            ..RuntimeControlState::default()
+        };
+
+        release_ptt_on_watchdog(&mut rs, &ev, &mut ptt);
+        assert_eq!(
+            releases.load(Ordering::Relaxed),
+            1,
+            "the watchdog must force-release the keyed transmitter"
+        );
+        assert!(
+            rs.ptt_asserted_at.is_none(),
+            "the watchdog disarms after firing"
+        );
+        assert!(
+            matches!(
+                rx.try_recv(),
+                Ok(ControlEvent::PttChanged { active: false })
+            ),
+            "clients are notified the transmitter was released"
+        );
+
+        // Idempotent: nothing armed → no second release.
+        release_ptt_on_watchdog(&mut rs, &ev, &mut ptt);
+        assert_eq!(
+            releases.load(Ordering::Relaxed),
+            1,
+            "no spurious release once disarmed"
+        );
     }
 
     #[test]
