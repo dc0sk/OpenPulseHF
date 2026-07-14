@@ -9,6 +9,29 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — fix(kiss): refuse on-air TX with no valid AX.25 source callsign (§97.119)
+
+- **Requirement/change:** issue #830 — the KISS/AX.25 TNC (the other deferred half of audit #10) modulated
+  whatever frame the host queued, with no station-ID gate. Unlike ARDOP there is no `MYID` command: a
+  packet station identifies via the **AX.25 source address** in each frame, so a host defaulting to
+  `N0CALL` (or a malformed frame) would produce an unidentified emission. §97.119.
+- **Design decision:** gate the worker's on-air TX on the frame's own source address, reusing the shared
+  `openpulse_core::station_id::callsign_is_valid`. Extract the source from the standard 14-byte address
+  header (`Ax25Addr::source_from_frame`, bytes 7..14) — a format common to UI/I/S frames, so the gate does
+  **not** restrict connected-mode traffic. A frame with an absent, `N0CALL`, or undecodable source is
+  dropped with a warning (KISS is a bare frame pipe with no host response channel, so no FAULT surface).
+  Loopback mode is unaffected.
+- **Implementation:** `crates/openpulse-kiss/src/ax25.rs` (`Ax25Addr::source_from_frame`);
+  `crates/openpulse-kiss/src/bridge.rs` (`tx_source_callsign` + the worker TX gate).
+- **Tests:** `tx_source_callsign_gates_on_the_ax25_source` (valid → `Some`, `N0CALL`/empty/too-short →
+  `None`); `worker_refuses_invalid_source_but_passes_a_valid_one` — queues an `N0CALL` frame then a
+  `W1AW-9` frame and asserts exactly one frame is transmitted (proving the placeholder was processed and
+  dropped, in order, not merely not-yet-reached).
+- **Test results:** `cargo test -p openpulse-kiss --no-default-features` → 2 lib (0 → 2) + 9 integration
+  pass; fmt + clippy (`--tests -D warnings`) clean. Completes the ARDOP/KISS MYID-before-TX line of #830.
+
+---
+
 ## 2026-07-14 — fix(ardop): refuse on-air TX without a valid MYID (§97.119)
 
 - **Requirement/change:** issue #830 (deferred half of audit #10) — the ARDOP TNC took its callsign from

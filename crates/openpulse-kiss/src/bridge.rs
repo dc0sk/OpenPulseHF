@@ -95,6 +95,15 @@ impl KissBridge {
     }
 }
 
+/// The AX.25 source callsign of `frame` iff it is valid for on-air TX (§97.119): a decodable address
+/// header whose source is non-empty and not `N0CALL`. Returns `None` otherwise so the worker can refuse
+/// unidentified frames uniformly. The address header format is common to all AX.25 frame types, so this
+/// does not restrict connected-mode traffic.
+fn tx_source_callsign(frame: &[u8]) -> Option<String> {
+    let call = crate::ax25::Ax25Addr::source_from_frame(frame)?.callsign_str();
+    openpulse_core::station_id::callsign_is_valid(&call).then_some(call)
+}
+
 /// Spawn the background worker thread that drives TX/RX via the modem engine.
 pub fn spawn_worker(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiver<Vec<u8>>) {
     std::thread::Builder::new()
@@ -117,6 +126,14 @@ fn worker_loop(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiver<Ve
                 if bridge.rx_data_tx.send(data).is_err() {
                     tracing::debug!("KISS loopback RX: no subscribers, frame dropped");
                 }
+            } else if tx_source_callsign(&data).is_none() {
+                // §97.119: a packet station identifies via the AX.25 *source* address in each frame.
+                // Refuse to key the transmitter for a frame whose source is absent, `N0CALL`, or not a
+                // decodable AX.25 address header — an unidentified emission. (KISS is a bare frame pipe
+                // with no host response channel, so this is logged; the frame is dropped.)
+                tracing::warn!(
+                    "refusing on-air TX: AX.25 source callsign missing or invalid (§97.119)"
+                );
             } else {
                 match bridge
                     .engine
@@ -216,5 +233,84 @@ fn maybe_relay_forward(bridge: &KissBridge, payload: &[u8], mode: &str) {
         Err(e) => {
             tracing::debug!("relay: envelope not forwarded: {e:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ax25::{Ax25Addr, Ax25UiFrame};
+    use openpulse_audio::LoopbackBackend;
+    use std::time::Duration;
+
+    /// An AX.25 UI frame with source callsign `src`.
+    fn frame_from(src: &str) -> Vec<u8> {
+        Ax25UiFrame {
+            dest: Ax25Addr::parse("APRS").unwrap(),
+            src: Ax25Addr::parse(src).unwrap(),
+            info: b"hello".to_vec(),
+        }
+        .encode()
+        .unwrap()
+    }
+
+    /// A non-loopback bridge (so TX goes through the modem, exercising the §97.119 gate).
+    fn onair_bridge() -> (Arc<KissBridge>, std::sync::mpsc::Receiver<Vec<u8>>) {
+        let mut engine = ModemEngine::new(Box::new(LoopbackBackend::default()));
+        engine
+            .register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+            .expect("register BPSK plugin");
+        KissBridge::new(engine, "BPSK250".into(), false)
+    }
+
+    #[test]
+    fn tx_source_callsign_gates_on_the_ax25_source() {
+        assert_eq!(
+            tx_source_callsign(&frame_from("W1AW-9")).as_deref(),
+            Some("W1AW"),
+            "a valid source call is usable for TX"
+        );
+        assert!(
+            tx_source_callsign(&frame_from("N0CALL")).is_none(),
+            "placeholder source is refused"
+        );
+        assert!(
+            tx_source_callsign(&frame_from("")).is_none(),
+            "empty source is refused"
+        );
+        assert!(
+            tx_source_callsign(&[0u8; 8]).is_none(),
+            "a frame too short for an address header is refused"
+        );
+    }
+
+    #[test]
+    fn worker_refuses_invalid_source_but_passes_a_valid_one() {
+        let (bridge, rx) = onair_bridge();
+        let tx = bridge.tx_data_tx.clone();
+        spawn_worker(bridge.clone(), rx);
+
+        // Queued in order: the N0CALL frame must be refused, the valid one transmitted. Waiting for the
+        // valid frame to go out proves *both* were processed (in order), so `frames == 1` shows the
+        // N0CALL frame was dropped rather than merely not-yet-reached.
+        tx.send(frame_from("N0CALL")).expect("queue invalid frame");
+        tx.send(frame_from("W1AW-9")).expect("queue valid frame");
+
+        let mut frames = 0;
+        for _ in 0..200 {
+            frames = bridge
+                .engine
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .frames_transmitted();
+            if frames > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            frames, 1,
+            "exactly the valid-source frame is transmitted; the N0CALL frame is refused (§97.119)"
+        );
     }
 }

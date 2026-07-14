@@ -77,6 +77,13 @@ impl Ax25Addr {
         Self { callsign, ssid }
     }
 
+    /// Decode the **source** address from a raw AX.25 frame's address header (bytes 7..14). The address
+    /// field format is identical across UI/I/S frame types, so this works for any AX.25 frame, not only
+    /// UI. Returns `None` when the frame is too short to carry a full 14-byte address header.
+    pub fn source_from_frame(frame: &[u8]) -> Option<Self> {
+        (frame.len() >= 14).then(|| Self::from_wire(&frame[7..14]))
+    }
+
     /// Return the callsign as a trimmed ASCII string.
     pub fn callsign_str(&self) -> String {
         std::str::from_utf8(&self.callsign)
