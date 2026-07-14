@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/research/references.md
 status: living
-last_updated: 2026-06-17
+last_updated: 2026-07-14
 ---
 
 # External references and inspirations
@@ -124,6 +124,95 @@ modem parameters (CP length, pilot scheme).
 
 ---
 
+## RFnexus/modem73 — multi-mode HF/VHF software modem, simultaneous RX
+
+<https://github.com/RFnexus/modem73> · C++ · (license: see repo)
+
+A KISS-compatible software modem for HF/VHF/UHF in a 2400 Hz channel that runs **three
+modulation families at once** and decodes all of them from a single receiver — no mode
+switching. **OFDM** (derived from the open-source COFDMTV modem: BPSK→QAM4096, code
+rates 1/4–5/6, 790 bps–>13 kbps), **ROBUST** (five modes 1150–149 bps purpose-built for
+fading HF/NVIS, in 2400 Hz *and* narrowband 600 Hz variants), and a non-coherent
+**MFSK** weak-signal fallback. Schmidl–Cox pilot acquisition (`schmidl_cox.hh`), aicodix
+DSP libraries, miniaudio I/O; KISS-over-TCP plus a JSON control API and
+VOX/rigctl/serial/CM108 PTT.
+
+**Inspirations:**
+- **Simultaneous multi-family reception** — decode every registered waveform from one
+  capture stream instead of committing to a mode. We switch modes on the ladder; a
+  parallel-decode RX tap off our single `InputCapture` seam is a different design point
+  worth studying for a discovery/monitor mode.
+- **A dedicated ROBUST *narrowband* (600 Hz) fading family** as the weak-signal tier —
+  the alternative to the frequency-diversity rung we measured-and-rejected (#864): a
+  purpose-built robust low-rate waveform rather than dual-carrier repetition. If a
+  sub-floor rung is ever revisited, ROBUST-style is the direction to compare against.
+- The **COFDMTV OFDM lineage** (Schmidl–Cox + high-order QAM in 2400 Hz) as another
+  HF-OFDM comparison for our OFDM higher-order ladder, alongside Mercury/FreeDV DATAC.
+- A **JSON control API** decoupled from the KISS transport — parallels our daemon control
+  port; a reference for control-surface design.
+
+**Revisit for:** parallel multi-mode RX; a robust narrowband weak-signal waveform (vs.
+the rejected diversity rung); OFDM parameter comparison.
+
+---
+
+## chrissnell/omnimodem — Rust multi-mode modem daemon (architecture mirror)
+
+<https://github.com/chrissnell/omnimodem> · MIT · Rust (daemon + DSP) + Go (TUI)
+
+Not an HF-ARQ modem — a **gRPC-driven orchestration daemon** multiplexing many amateur
+modes (WSJT-X FT8/FT4/JT65/JT9/WSPR/FST4, fldigi PSK/RTTY/Olivia/Contestia/MFSK, AX.25
+1200, image modes) from one process — but its **architecture is almost exactly
+OpenPulseHF's**, arrived at independently, which makes it a valuable convergence
+reference.
+
+**Inspirations (architecture, not waveforms):**
+- **Async control edge / synchronous DSP core — "no async on the sample path."**
+  tonic+tokio gRPC handlers feed an `mpsc` into a plain-`std::thread` DSP core; events
+  flow out on `tokio::broadcast`. This is *our* daemon (tokio control loop + the
+  `worker_loop` OS thread sharing the engine) — independent validation the split is right.
+- **LLR as the universal contract between detector/demapper and FEC decoder**, so
+  "adding a new mode is an assembly job, not a from-scratch DSP project." Directly
+  parallels our calibrated-soft-LLR plugin contract (`demodulate_soft`/`combine_llrs_map`);
+  their framing of it as the *pluggability* boundary cleanly articulates what our
+  `llr_calibration`/`llr_reliability` gates enforce.
+- **Known-answer vectors + cross-decode against reference implementations** for every
+  DSP/FEC block — the same discipline as our JS8 Qt5/boost ground-truth validation.
+- **`unkey-on-Drop` safety + explicit RX/TX interlock** — the exact concern the B1 PTT
+  watchdog (#863) addresses, in an alternative RAII framing.
+- **Pure, daemon-independent DSP crate** — mirrors our `openpulse-core`/`openpulse-dsp`
+  split; **SQLite device identity** surviving hotplug/rename is an idea we don't have.
+
+**Revisit for:** transmitter-release RAII (unkey-on-Drop) as a companion to the PTT
+watchdog; the LLR-contract framing when documenting the plugin API; hotplug-safe device
+identity.
+
+---
+
+## chrissnell/graywolf — Rust AFSK modem + Go APRS stack (efficient-ARM DSP)
+
+<https://github.com/chrissnell/graywolf> · Rust (modem) + Go (AX.25/APRS) + Svelte/Kotlin · (license: see repo)
+
+A complete modern **APRS/packet** station (VHF/UHF AFSK): a Rust software modem + Go
+digipeater/iGate + web UI + Android client, SQLite config. Not HF and not our waveforms,
+but two things transfer.
+
+**Inspirations:**
+- **Benchmark-driven DSP that beats the reference.** Its AFSK demod ports Dire Wolf +
+  Ion Todirel's libmodem (**decision-feedback AGC + hard-limiter correlator**) and
+  reportedly beats Dire Wolf's best mode on every test track at ~19 % of one Pi 5 core.
+  The ethos — a measured per-track benchmark suite as the DSP gate — is exactly our
+  benchmark-harness/testmatrix discipline; the **hard-limiter correlator + DF-AGC** is a
+  concrete technique for the AGC front-end we lack (the reference-mining gap).
+- **A broad multi-interface PTT abstraction** (serial RTS/DTR, CM108 USB-HID, GPIO,
+  rigctld, VOX, tone) — a superset of `openpulse-radio`'s `PttController` backends
+  (CM108-HID and GPIO are ones we don't have).
+
+**Revisit for:** an AGC / hard-limiter-correlator front-end (we have no AGC); CM108-HID
+and GPIO PTT backends.
+
+---
+
 ## CE-SSB and polar-SSB transmit conditioning
 
 Sources studied for the TX signal-conditioning path (`openpulse_dsp::cessb`,
@@ -173,9 +262,14 @@ wholesale — and one was explicitly weighed and **rejected** for a data modem.
     `cessb_benefits` gate into a **principled** one: benefit ⇔ high-PAPR envelope **and**
     loose decision margins. See `ModemEngine::cessb_benefits`.
 
-- **FreeDV 700D symbol diversity** (`drowe67/codec2`) — an idea we do *not* yet use:
-  transmit each carrier's symbol twice across the band for a weak-signal mode below the
-  current SL floor. Distinct lever from FEC; parked for a future weak-signal rung.
+- **FreeDV 700D symbol diversity** (`drowe67/codec2`) — transmit each carrier's symbol
+  twice across the band for a weak-signal mode below the current SL floor. **Measured and
+  rejected for OpenPulseHF (#864, 2026-07-14):** the ρ=0 ideal cleared the kill-gate
+  (~4 dB on slow fade) but the real dual-carrier waveform's ~2.6 dB two-tone PAPR consumes
+  the ~1–2.6 dB matched-power gain → net on-air ≈ break-even at 2× bandwidth, dominated by
+  baud-drop and HARQ. See `docs/dev/research/weak-signal-diversity-measurement.md`. A
+  purpose-built *robust narrowband* waveform (cf. MODEM73's ROBUST family, below) is the
+  better direction if a sub-floor rung is ever revisited.
 
 ---
 
