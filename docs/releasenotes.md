@@ -22,6 +22,13 @@ Post-v0.5.0 improvements. **No breaking changes.**
   scope ends — including if the code hits an unexpected error mid-transmit — instead of possibly holding
   the transmitter keyed until the watchdog timer expires.
 
+**Radio interfaces**
+
+- **CM108 USB-HID PTT.** You can now key transmit through the GPIO on CM108/CM109/CM119 USB sound-card
+  interfaces (DMK URI, RepeaterBuilder RA-series, AIOC, homebrew) — `--ptt cm108` on the CLI or
+  `[modem] ptt_backend = "cm108"` in the daemon config. It auto-detects a C-Media device (or set the
+  `/dev/hidrawN` path and GPIO pin), and needs no extra libraries.
+
 **Mesh & TNCs**
 
 - **Multi-hop mesh routes.** A mesh route discovery now records the full path it traverses, so the
