@@ -9,9 +9,8 @@
 //! comes from `[daemon]` in the config, so two daemons just use distinct ports.
 
 use crate::{
-    apply_command_to_engine, check_ptt_watchdog, expire_pending_handshake,
-    maybe_qsy_on_interference, ota_status_event, process_received_bytes, ws, ControlServer,
-    RuntimeControlState,
+    apply_command_to_engine, expire_pending_handshake, maybe_qsy_on_interference, ota_status_event,
+    process_received_bytes, ws, ControlServer, RuntimeControlState,
 };
 use openpulse_audio::LoopbackBackend;
 use openpulse_config::OpenpulseConfig;
@@ -447,7 +446,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
         }
     }
 
-    let mut ptt_controller: Option<Box<dyn PttController>> =
+    let ptt_controller: Option<Box<dyn PttController + Send>> =
         build_ptt_controller(&cfg.modem.ptt_backend, &cfg.radio.rigctld_addr);
 
     let qsy_policy = match QsyPolicy::from_config(
@@ -508,6 +507,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     let mut runtime_state = RuntimeControlState {
         repeater_enabled: cfg.repeater.enabled,
         repeater: Some(repeater),
+        ptt: crate::ptt::SharedPtt::new(ptt_controller, crate::ptt::DEFAULT_PTT_MAX),
         station_seed,
         local_callsign: cfg.station.callsign.clone(),
         local_grid: cfg.station.grid_square.clone(),
@@ -561,6 +561,16 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     if cfg.logbook.enabled {
         tracing::info!(path = %cfg.logbook.adif_path, "ADIF logbook enabled");
     }
+
+    // Spawn the independent PTT watchdog (issue #863): an OS thread that force-releases the
+    // transmitter on its max-duration deadline even while this async command loop is blocked inside a
+    // long handler (a QSY scan or an OTA send-retry burst), which the cooperative `select!` arm below
+    // cannot do — that arm only runs when the loop re-enters `select!`. The thread holds a `Weak` to
+    // the shared PTT state and exits on its own when the daemon drops `runtime_state`. `ptt` is a
+    // cheap Arc-backed handle to the same state, cloned so the loop's key/unkey sites can borrow it
+    // without conflicting with `&mut runtime_state`.
+    let ptt = runtime_state.ptt.clone();
+    let _ptt_watchdog = runtime_state.ptt.spawn_watchdog(handle.event_tx.clone());
 
     // Apply the default DCD squelch at startup; per-band overrides kick in on retune.
     engine.set_dcd_squelch(cfg.modem.dcd_squelch);
@@ -616,14 +626,16 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
         tokio::select! {
             // No `biased`: fair scheduling so a command flood cannot starve the rx tick or the watchdog.
             _ = watchdog_ticker.tick() => {
-                release_ptt_on_watchdog(&mut runtime_state, &handle.event_tx, &mut ptt_controller);
+                // Cooperative poll: fires the same force-release path the independent watchdog thread
+                // runs, so a keyed burst that ends normally within the loop is disarmed here first.
+                ptt.force_release_if_expired(&handle.event_tx);
             }
             Some(cmd) = handle.commands.recv() => {
                 // PTT hardware calls are synchronous; handle them before the async engine dispatch so
                 // the borrow of ptt_controller doesn't cross the await point.
                 // If the hardware call fails, skip the engine dispatch to avoid emitting a spurious
                 // PttChanged event that would tell clients PTT is active when it is not.
-                let ptt_hard_failed = handle_ptt_command(&cmd, &mut ptt_controller);
+                let ptt_hard_failed = handle_ptt_command(&cmd, &ptt);
                 // OTA ISS send with real-radio PTT turnaround: when a session is
                 // active, a SendMessage drives the receiver-led OTA send here (where
                 // the PTT controller lives) — key PTT for the data frame, release it,
@@ -645,8 +657,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         };
                         ota_send_with_ptt(
                             &mut engine,
-                            &mut ptt_controller,
-                            &mut runtime_state.ptt_asserted_at,
+                            &ptt,
                             &handle.event_tx,
                             &payload,
                         );
@@ -666,16 +677,16 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 // A `SendFile` / `AcceptFile` queued file-transfer frames — send them PTT-keyed.
                 drain_filexfer_tx(
                     &mut engine,
-                    &mut ptt_controller,
+                    &ptt,
                     &handle.event_tx,
                     &mut runtime_state,
                 );
             }
             _ = rx_ticker.tick() => {
                 // Belt-and-suspenders: also check the watchdog on the rx tick (idempotent — it fires
-                // once when the deadline passes). The dedicated `watchdog_ticker` arm is the primary,
-                // flood-proof path.
-                release_ptt_on_watchdog(&mut runtime_state, &handle.event_tx, &mut ptt_controller);
+                // once when the deadline passes). The dedicated `watchdog_ticker` arm and the
+                // independent watchdog thread are the primary, flood-/block-proof paths.
+                ptt.force_release_if_expired(&handle.event_tx);
                 let mode = handle.active_mode.lock().await.clone();
                 // block_in_place: engine capture/transmit are synchronous; LoopbackBackend
                 // returns immediately. A real audio backend blocks until samples arrive.
@@ -719,36 +730,15 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                             engine.ota_decode_burst(&burst, &ota_session_id)
                         }) {
                             Ok(res) => {
-                                let mut keyed = true;
-                                if let Some(ref mut ptt) = ptt_controller {
-                                    if let Err(e) = ptt.assert_ptt() {
-                                        tracing::warn!("OTA ACK PTT assert failed: {e}");
-                                        keyed = false;
-                                    }
-                                }
-                                if keyed {
-                                    runtime_state.ptt_asserted_at =
-                                        Some(std::time::Instant::now()); // arm watchdog
-                                    let _ = handle.event_tx.send(
-                                        crate::protocol::ControlEvent::PttChanged { active: true },
-                                    );
+                                // Key PTT (arms the watchdog + emits the edge); on assert failure
+                                // `key` returns Err and we skip the ACK, leaving nothing keyed.
+                                if ptt.key(Some(&handle.event_tx)).is_ok() {
                                     if let Err(e) = tokio::task::block_in_place(|| {
                                         engine.transmit_ack_with_short_fec(&res.ack, None)
                                     }) {
                                         tracing::warn!("OTA ACK transmit failed: {e}");
                                     }
-                                    if let Some(ref mut ptt) = ptt_controller {
-                                        if let Err(e) = ptt.release_ptt() {
-                                            tracing::warn!("OTA ACK PTT release failed: {e}");
-                                        } else {
-                                            runtime_state.ptt_asserted_at = None;
-                                        }
-                                    } else {
-                                        runtime_state.ptt_asserted_at = None;
-                                    }
-                                    let _ = handle.event_tx.send(
-                                        crate::protocol::ControlEvent::PttChanged { active: false },
-                                    );
+                                    ptt.unkey(Some(&handle.event_tx));
                                 }
                                 res.payload.unwrap_or_default()
                             }
@@ -787,7 +777,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     // inbound ACK may have queued the next send burst — send them PTT-keyed.
                     drain_filexfer_tx(
                         &mut engine,
-                        &mut ptt_controller,
+                        &ptt,
                         &handle.event_tx,
                         &mut runtime_state,
                     );
@@ -819,13 +809,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 // A due beacon frame is transmitted here, where the PTT controller + `&mut engine`
                 // live (half-duplex: key PTT, emit, release).
                 if let Some((audio, mode)) = due_beacon {
-                    transmit_beacon_with_ptt(
-                        &mut engine,
-                        &mut ptt_controller,
-                        &mut runtime_state.ptt_asserted_at,
-                        &audio,
-                        &mode,
-                    );
+                    transmit_beacon_with_ptt(&mut engine, &ptt, &audio, &mode);
                 }
                 // A completed rendezvous QSY hands off to the signed session on the agreed channel: run
                 // the same begin_secure_session + CONREQ path as an operator `ConnectPeer` (needs
@@ -895,18 +879,8 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     if let Some(reason) = id_reason {
                         let id_mode = handle.active_mode.lock().await.clone();
                         let id_body = format!("DE {id_callsign}");
-                        let mut keyed = true;
-                        if let Some(ref mut ptt) = ptt_controller {
-                            if let Err(e) = ptt.assert_ptt() {
-                                tracing::warn!(error = %e, "station-ID PTT assert failed");
-                                keyed = false;
-                            }
-                        }
-                        if keyed {
-                            runtime_state.ptt_asserted_at = Some(std::time::Instant::now()); // arm watchdog
-                            let _ = handle
-                                .event_tx
-                                .send(crate::protocol::ControlEvent::PttChanged { active: true });
+                        // Key PTT (arms the watchdog + emits the edge); on assert failure skip the ID.
+                        if ptt.key(Some(&handle.event_tx)).is_ok() {
                             match tokio::task::block_in_place(|| {
                                 engine.transmit(id_body.as_bytes(), &id_mode, None)
                             }) {
@@ -920,18 +894,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                     error = %e, mode = %id_mode, "station-ID transmit failed"
                                 ),
                             }
-                            if let Some(ref mut ptt) = ptt_controller {
-                                if let Err(e) = ptt.release_ptt() {
-                                    tracing::warn!(error = %e, "station-ID PTT release failed");
-                                } else {
-                                    runtime_state.ptt_asserted_at = None; // released ok → disarm
-                                }
-                            } else {
-                                runtime_state.ptt_asserted_at = None;
-                            }
-                            let _ = handle
-                                .event_tx
-                                .send(crate::protocol::ControlEvent::PttChanged { active: false });
+                            ptt.unkey(Some(&handle.event_tx));
                         }
                         // Advance regardless of PTT success (a persistent hardware fault is surfaced by
                         // the warning above, not by per-tick retry spam), and exclude the just-sent ID
@@ -996,11 +959,10 @@ fn plan_bursts(
 /// `burst_max_secs` (keeps a large transfer under the radio's PTT watchdog and yields between bursts).
 fn drain_filexfer_tx(
     engine: &mut ModemEngine,
-    ptt_controller: &mut Option<Box<dyn PttController>>,
+    ptt: &crate::ptt::SharedPtt,
     event_tx: &std::sync::Arc<tokio::sync::broadcast::Sender<crate::protocol::ControlEvent>>,
     runtime_state: &mut RuntimeControlState,
 ) {
-    use crate::protocol::ControlEvent;
     if runtime_state.filexfer_tx_queue.is_empty() {
         return;
     }
@@ -1023,27 +985,16 @@ fn drain_filexfer_tx(
     for count in plan {
         let burst = &queue[idx..idx + count];
         idx += count;
-        if let Some(ptt) = ptt_controller.as_mut() {
-            if let Err(e) = ptt.assert_ptt() {
-                tracing::warn!("filexfer PTT assert failed: {e}");
-                return;
-            }
+        // Key PTT for this burst (arms the watchdog + emits the edge). On assert failure abort the
+        // drain — the remaining queue was already taken, so those fragments are dropped this pass.
+        if ptt.key(Some(event_tx)).is_err() {
+            tracing::warn!("filexfer PTT assert failed");
+            return;
         }
-        runtime_state.ptt_asserted_at = Some(std::time::Instant::now()); // arm watchdog
-        let _ = event_tx.send(ControlEvent::PttChanged { active: true });
         for (frag, mode) in burst {
             let _ = tokio::task::block_in_place(|| engine.transmit(frag, mode, None));
         }
-        if let Some(ptt) = ptt_controller.as_mut() {
-            if let Err(e) = ptt.release_ptt() {
-                tracing::warn!("filexfer PTT release failed: {e}");
-            } else {
-                runtime_state.ptt_asserted_at = None;
-            }
-        } else {
-            runtime_state.ptt_asserted_at = None;
-        }
-        let _ = event_tx.send(ControlEvent::PttChanged { active: false });
+        ptt.unkey(Some(event_tx));
     }
 }
 
@@ -1352,49 +1303,24 @@ fn epoch_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Force-release the transmitter when the PTT watchdog deadline has elapsed. Idempotent: `check_ptt_watchdog`
-/// fires once when the deadline passes and clears `ptt_asserted_at`. Called from both the dedicated
-/// watchdog `select!` arm (flood-proof) and the rx tick.
-fn release_ptt_on_watchdog(
-    runtime_state: &mut RuntimeControlState,
-    event_tx: &std::sync::Arc<tokio::sync::broadcast::Sender<crate::protocol::ControlEvent>>,
-    ptt_controller: &mut Option<Box<dyn PttController>>,
-) {
-    if check_ptt_watchdog(runtime_state, event_tx) {
-        if let Some(ref mut ptt) = ptt_controller {
-            if let Err(e) = ptt.release_ptt() {
-                tracing::warn!("PTT watchdog release failed: {e}");
-            }
-        }
-    }
-}
-
-/// Key PTT, emit one JS8 beacon frame via the raw-audio seam, and release PTT. Any PTT/transmit error
-/// is logged and the beacon slot is skipped (never leaves the transmitter keyed).
+/// Key PTT, emit one JS8 beacon frame via the raw-audio seam, and release PTT. Silent (no
+/// `PttChanged` events — this is an internal beacon, not an operator key). Any PTT/transmit error is
+/// logged and the beacon slot is skipped; a failed release leaves the watchdog armed so it
+/// force-releases the still-keyed transmitter.
 fn transmit_beacon_with_ptt(
     engine: &mut ModemEngine,
-    ptt_controller: &mut Option<Box<dyn PttController>>,
-    asserted_at: &mut Option<std::time::Instant>,
+    ptt: &crate::ptt::SharedPtt,
     audio: &[f32],
     mode: &str,
 ) {
-    if let Some(ptt) = ptt_controller {
-        if let Err(e) = ptt.assert_ptt() {
-            tracing::warn!("discovery beacon PTT assert failed: {e}");
-            return;
-        }
+    if ptt.key(None).is_err() {
+        tracing::warn!("discovery beacon PTT assert failed");
+        return;
     }
-    *asserted_at = Some(std::time::Instant::now()); // arm the watchdog for this keyed burst
     if let Err(e) = engine.transmit_raw_audio(audio, mode, None) {
         tracing::warn!("discovery beacon transmit failed: {e}");
     }
-    if let Some(ptt) = ptt_controller {
-        if let Err(e) = ptt.release_ptt() {
-            tracing::warn!("discovery beacon PTT release failed: {e}");
-            return; // leave the watchdog armed so it force-releases the still-keyed transmitter
-        }
-    }
-    *asserted_at = None;
+    ptt.unkey(None);
 }
 
 /// Apply a manual `PttAssert`/`PttRelease` command to the PTT hardware, synchronously.
@@ -1402,16 +1328,13 @@ fn transmit_beacon_with_ptt(
 /// Returns `true` when the hardware call failed (a stuck/absent rig): the caller then skips the
 /// engine dispatch so no spurious `PttChanged` tells clients PTT is active when it is not. Any other
 /// command (or no controller) is a no-op returning `false`.
-fn handle_ptt_command(
-    cmd: &crate::Command,
-    ptt_controller: &mut Option<Box<dyn PttController>>,
-) -> bool {
-    let Some(ptt) = ptt_controller.as_mut() else {
-        return false;
-    };
+fn handle_ptt_command(cmd: &crate::Command, ptt: &crate::ptt::SharedPtt) -> bool {
+    // Hardware only: the watchdog arm/disarm and the `PttChanged` edge for a manual command are
+    // applied in `apply_command_to_engine` (the `PttAssert`/`PttRelease` arms). Keeping this
+    // HW-only preserves the #836 contract — a hard failure here skips that dispatch entirely.
     let (result, action) = match cmd {
-        crate::Command::PttAssert => (ptt.assert_ptt(), "assert"),
-        crate::Command::PttRelease => (ptt.release_ptt(), "release"),
+        crate::Command::PttAssert => (ptt.hw_assert(), "assert"),
+        crate::Command::PttRelease => (ptt.hw_release(), "release"),
         _ => return false,
     };
     if let Err(e) = result {
@@ -1423,12 +1346,10 @@ fn handle_ptt_command(
 
 fn ota_send_with_ptt(
     engine: &mut ModemEngine,
-    ptt_controller: &mut Option<Box<dyn PttController>>,
-    asserted_at: &mut Option<std::time::Instant>,
+    ptt: &crate::ptt::SharedPtt,
     event_tx: &std::sync::Arc<tokio::sync::broadcast::Sender<crate::protocol::ControlEvent>>,
     body: &[u8],
 ) {
-    use crate::protocol::ControlEvent;
     use openpulse_core::ack::AckType;
     const MAX_RETRIES: usize = 3;
     const ACK_TIMEOUT_MS: u64 = 4000;
@@ -1439,28 +1360,15 @@ fn ota_send_with_ptt(
         };
         let fec = engine.ota_tx_fec();
 
-        // Key PTT for the data frame.
-        if let Some(ptt) = ptt_controller.as_mut() {
-            if let Err(e) = ptt.assert_ptt() {
-                tracing::warn!("OTA send PTT assert failed: {e}");
-                return;
-            }
+        // Key PTT for the data frame (arms the watchdog + emits the edge). On assert failure abort.
+        if ptt.key(Some(event_tx)).is_err() {
+            tracing::warn!("OTA send PTT assert failed");
+            return;
         }
-        *asserted_at = Some(std::time::Instant::now()); // arm the watchdog for this keyed burst
-        let _ = event_tx.send(ControlEvent::PttChanged { active: true });
         let tx =
             tokio::task::block_in_place(|| engine.transmit_with_fec_mode(body, &mode, fec, None));
         // Release PTT before listening (half-duplex turnaround).
-        if let Some(ptt) = ptt_controller.as_mut() {
-            if let Err(e) = ptt.release_ptt() {
-                tracing::warn!("OTA send PTT release failed: {e}");
-            } else {
-                *asserted_at = None;
-            }
-        } else {
-            *asserted_at = None;
-        }
-        let _ = event_tx.send(ControlEvent::PttChanged { active: false });
+        ptt.unkey(Some(event_tx));
 
         if let Err(e) = tx {
             tracing::warn!(error = %e, "OTA data transmit failed");
@@ -1613,7 +1521,10 @@ pub fn build_cat_controller(radio: &openpulse_config::RadioConfig) -> Option<Cat
     }
 }
 
-fn build_ptt_controller(backend: &str, rigctld_addr: &str) -> Option<Box<dyn PttController>> {
+fn build_ptt_controller(
+    backend: &str,
+    rigctld_addr: &str,
+) -> Option<Box<dyn PttController + Send>> {
     match backend {
         "none" => Some(Box::new(NoOpPtt::new())),
         "vox" => Some(Box::new(VoxPtt::new())),
@@ -1932,9 +1843,8 @@ mod discovery_tick_tests {
         assert!(!audio.is_empty());
 
         // The daemon transmits it via the raw-audio seam (no PTT hardware in the test).
-        let mut ptt: Option<Box<dyn PttController>> = None;
-        let mut asserted_at = None;
-        transmit_beacon_with_ptt(&mut engine, &mut ptt, &mut asserted_at, &audio, &mode);
+        let ptt = crate::ptt::SharedPtt::default();
+        transmit_beacon_with_ptt(&mut engine, &ptt, &audio, &mode);
         assert_eq!(engine.raw_audio_frames_transmitted(), 1);
     }
 
@@ -2026,32 +1936,44 @@ mod discovery_tick_tests {
 
         // A failed assert/release must report `true` so the caller skips the engine dispatch and does
         // not emit a spurious PttChanged claiming a state the hardware never reached.
-        let mut failing: Option<Box<dyn PttController>> = Some(Box::new(FlakyPtt {
-            fail_assert: true,
-            fail_release: true,
-        }));
+        let failing = crate::ptt::SharedPtt::new(
+            Some(Box::new(FlakyPtt {
+                fail_assert: true,
+                fail_release: true,
+            })),
+            crate::ptt::DEFAULT_PTT_MAX,
+        );
         assert!(
-            handle_ptt_command(&Command::PttAssert, &mut failing),
+            handle_ptt_command(&Command::PttAssert, &failing),
             "a failed assert must report hard failure"
         );
         assert!(
-            handle_ptt_command(&Command::PttRelease, &mut failing),
+            handle_ptt_command(&Command::PttRelease, &failing),
             "a failed release must report hard failure"
         );
 
         // A successful call reports `false` so the dispatch proceeds and the PttChanged fires.
-        let mut ok: Option<Box<dyn PttController>> = Some(Box::new(FlakyPtt::default()));
-        assert!(!handle_ptt_command(&Command::PttAssert, &mut ok));
-        assert!(!handle_ptt_command(&Command::PttRelease, &mut ok));
+        let ok = crate::ptt::SharedPtt::new(
+            Some(Box::new(FlakyPtt::default())),
+            crate::ptt::DEFAULT_PTT_MAX,
+        );
+        assert!(!handle_ptt_command(&Command::PttAssert, &ok));
+        assert!(!handle_ptt_command(&Command::PttRelease, &ok));
 
         // Non-PTT commands and the no-controller case are always no-op passes.
-        assert!(!handle_ptt_command(&Command::PttAssert, &mut None));
+        assert!(!handle_ptt_command(
+            &Command::PttAssert,
+            &crate::ptt::SharedPtt::default()
+        ));
         assert!(!handle_ptt_command(
             &Command::GetConfig,
-            &mut Some(Box::new(FlakyPtt {
-                fail_assert: true,
-                fail_release: true,
-            }))
+            &crate::ptt::SharedPtt::new(
+                Some(Box::new(FlakyPtt {
+                    fail_assert: true,
+                    fail_release: true,
+                })),
+                crate::ptt::DEFAULT_PTT_MAX,
+            )
         ));
     }
 
@@ -2063,22 +1985,26 @@ mod discovery_tick_tests {
         let audio = vec![0.0f32; 100];
 
         // Release fails → the transmitter may still be keyed, so the watchdog must stay armed.
-        let mut ptt: Option<Box<dyn PttController>> = Some(Box::new(FlakyPtt {
-            fail_release: true,
-            ..Default::default()
-        }));
-        let mut armed = None;
-        transmit_beacon_with_ptt(&mut engine, &mut ptt, &mut armed, &audio, "JS8-NORMAL");
+        let ptt = crate::ptt::SharedPtt::new(
+            Some(Box::new(FlakyPtt {
+                fail_release: true,
+                ..Default::default()
+            })),
+            crate::ptt::DEFAULT_PTT_MAX,
+        );
+        transmit_beacon_with_ptt(&mut engine, &ptt, &audio, "JS8-NORMAL");
         assert!(
-            armed.is_some(),
+            ptt.is_keyed(),
             "a failed release must leave the watchdog armed"
         );
 
         // Clean release → disarmed, so the watchdog can't fire on a stale timestamp.
-        let mut ptt2: Option<Box<dyn PttController>> = Some(Box::new(FlakyPtt::default()));
-        let mut armed2 = Some(std::time::Instant::now());
-        transmit_beacon_with_ptt(&mut engine, &mut ptt2, &mut armed2, &audio, "JS8-NORMAL");
-        assert!(armed2.is_none(), "a clean release disarms the watchdog");
+        let ptt2 = crate::ptt::SharedPtt::new(
+            Some(Box::new(FlakyPtt::default())),
+            crate::ptt::DEFAULT_PTT_MAX,
+        );
+        transmit_beacon_with_ptt(&mut engine, &ptt2, &audio, "JS8-NORMAL");
+        assert!(!ptt2.is_keyed(), "a clean release disarms the watchdog");
     }
 
     #[test]
@@ -2102,27 +2028,25 @@ mod discovery_tick_tests {
         }
 
         let releases = std::sync::Arc::new(AtomicUsize::new(0));
-        let mut ptt: Option<Box<dyn PttController>> = Some(Box::new(CountingPtt(releases.clone())));
+        // Armed with a zero deadline → immediately expired.
+        let ptt = crate::ptt::SharedPtt::new(
+            Some(Box::new(CountingPtt(releases.clone()))),
+            std::time::Duration::ZERO,
+        );
+        ptt.arm();
         let (tx, mut rx) = tokio::sync::broadcast::channel::<ControlEvent>(8);
         let ev = std::sync::Arc::new(tx);
 
-        // Armed, with a deadline already in the past.
-        let mut rs = RuntimeControlState {
-            ptt_asserted_at: Some(std::time::Instant::now()),
-            ptt_max_duration: std::time::Duration::from_nanos(1),
-            ..RuntimeControlState::default()
-        };
-
-        release_ptt_on_watchdog(&mut rs, &ev, &mut ptt);
+        assert!(
+            ptt.force_release_if_expired(&ev),
+            "the watchdog must fire when the deadline has passed"
+        );
         assert_eq!(
             releases.load(Ordering::Relaxed),
             1,
             "the watchdog must force-release the keyed transmitter"
         );
-        assert!(
-            rs.ptt_asserted_at.is_none(),
-            "the watchdog disarms after firing"
-        );
+        assert!(!ptt.is_keyed(), "the watchdog disarms after firing");
         assert!(
             matches!(
                 rx.try_recv(),
@@ -2132,7 +2056,7 @@ mod discovery_tick_tests {
         );
 
         // Idempotent: nothing armed → no second release.
-        release_ptt_on_watchdog(&mut rs, &ev, &mut ptt);
+        assert!(!ptt.force_release_if_expired(&ev));
         assert_eq!(
             releases.load(Ordering::Relaxed),
             1,

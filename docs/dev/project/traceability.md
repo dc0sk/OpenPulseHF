@@ -9,6 +9,49 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — feat(daemon): independent PTT watchdog thread (B1 / #863)
+
+- **Requirement/change:** the PTT watchdog must force-release the transmitter on its 180 s max-keyed
+  deadline **even while the daemon's single async command loop is blocked inside a long synchronous
+  handler** (a QSY frequency scan or an OTA send-retry burst). The PR #853 `select!`-arm watchdog cannot:
+  the loop never re-enters `select!` during such a handler, so the arm never runs and the transmitter
+  can key past the duty-cycle limit.
+- **Design decision:** approach B — a `SharedPtt(Arc<Mutex<PttInner>>)` holding the PTT controller **and**
+  its deadline behind one lock, driven by an **independent OS thread** (`spawn_watchdog`) that checks the
+  deadline every 100 ms regardless of the async loop. A plain thread (not a tokio task) so it is immune to
+  runtime flavor / worker starvation / a missing `block_in_place`; it holds only a `Weak` so it exits on
+  its own when the daemon drops `runtime_state` (no stop-flag plumbing). `SharedPtt` is the single source
+  of truth (rejected a mirror-atomic variant — split-brain races). Lock discipline: the mutex is only ever
+  held for one hardware call or a deadline read/write, **never across an RF burst**, so the thread can
+  preempt at any point. Beacon keys stay silent (`key(None)`/`unkey(None)`); OTA-ACK / station-ID /
+  OTA-send / filexfer keys emit `PttChanged` edges only on real transitions. The manual `PttAssert`/
+  `PttRelease` split is preserved: HW in `handle_ptt_command` (server), arm+event in
+  `apply_command_to_engine` (lib), so a hard HW failure still skips dispatch (#836 contract). Per a Fable
+  adversarial review, two behaviours were upgraded past bare parity: (1) on a **failed** force-release
+  (stuck rig) the deadline is left **armed** and no `{false}` is emitted (the rig is still keyed — the
+  pre-#863 code cleared + lied), and the 100 ms thread retries until it releases, logging the stuck
+  condition once; (2) all `PttChanged` sends now happen **under the lock** so a concurrent re-key can't
+  misorder the edges.
+- **Implementation:** `crates/openpulse-daemon/src/ptt.rs` (new — `SharedPtt`, `PttInner`, `UnkeyOutcome`,
+  `key`/`unkey`/`hw_assert`/`hw_release`/`arm`/`disarm`/`is_keyed`/`force_release_if_expired`/
+  `spawn_watchdog`); `lib.rs` (`RuntimeControlState.ptt: SharedPtt` replacing the `ptt_asserted_at` +
+  `ptt_max_duration` fields; `check_ptt_watchdog` delegates; `PttAssert`→`arm`, `PttRelease`→`disarm`,
+  `GetPttState`→`is_keyed`); `server.rs` (`build_ptt_controller` → `Box<dyn PttController + Send>`;
+  construct `SharedPtt` + `spawn_watchdog`; loop-local `ptt` clone drives every key/unkey site; helpers
+  `handle_ptt_command`/`ota_send_with_ptt`/`transmit_beacon_with_ptt`/`drain_filexfer_tx` take
+  `&SharedPtt`; `release_ptt_on_watchdog` deleted; two inline rx-tick keying sites rewritten). Net −104
+  lines of scattered PTT bookkeeping in server.rs.
+- **Tests:** `ptt.rs` unit suite (8) — key/unkey single-event arming, failed-release-stays-armed,
+  force-release single-fire + idempotent, not-expired-no-fire, **watchdog thread force-releases a blocked
+  loop** (the #863 guarantee), thread exits when the last `SharedPtt` drops, **stuck-rig retry stays armed
+  + silent until release**, **late unkey after the watchdog fired is a single-fire no-op**. Migrated
+  server.rs tests (beacon-arm, `handle_ptt_command` guard, watchdog release) to the `SharedPtt` API.
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features` → 106 lib + 2 + 13 + 5 + 3
+  integration, 0 failed; `cargo build --workspace --no-default-features` clean; clippy `-D warnings` +
+  fmt clean.
+
+---
+
 ## 2026-07-14 — feat(kiss): honor the FullDuplex control frame (CSMA); clarify no-profile modes
 
 - **Requirement/change:** roadmap follow-ups D1 (KISS control frames were dropped-and-logged; "real fix if
