@@ -80,6 +80,10 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let mut engine = ModemEngine::new(audio);
+    // Record the operator's identity + declared TX power in the §97 regulatory TX-metadata log. Frames
+    // carry their own AX.25 source call, but the log's station_id is the configured operator call.
+    engine.set_callsign(cfg.station.callsign.clone());
+    engine.set_max_power_watts(cfg.station.tx_power_watts);
     engine.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))?;
     engine.register_plugin(Box::new(fsk4_plugin::Fsk4Plugin::new()))?;
     engine.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))?;

@@ -2937,6 +2937,11 @@ impl ModemEngine {
         self.update_tx_session_callsign();
     }
 
+    /// The station callsign stamped into TX frame headers and the regulatory TX-metadata log.
+    pub fn callsign(&self) -> &str {
+        &self.callsign
+    }
+
     /// Set the TX attenuation applied to all transmitted audio (dB; 0.0 = no attenuation).
     ///
     /// Negative values reduce output level; e.g. `-6.0` halves the amplitude.

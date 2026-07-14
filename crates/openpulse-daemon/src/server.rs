@@ -59,6 +59,11 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     };
 
     let mut engine = ModemEngine::new(modem_backend);
+    // Record the operator's identity + declared TX power in the §97 regulatory TX-metadata log; without
+    // this the log stamps an empty callsign / 0 W on every frame (set_callsign is otherwise only wired
+    // from two CLI subcommands).
+    engine.set_callsign(cfg.station.callsign.clone());
+    engine.set_max_power_watts(cfg.station.tx_power_watts);
     // Pin all audio I/O to a named device when configured (e.g. an snd-aloop PCM
     // for the real-audio twin-station rig). Empty = the backend default device.
     if !cfg.audio.device.is_empty() {
