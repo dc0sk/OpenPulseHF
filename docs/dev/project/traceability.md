@@ -116,7 +116,11 @@ and the actually-observed results per change.
   pass; `cargo build --workspace` green; fmt + clippy (`--tests -D warnings`) clean.
 - **Remaining (deferred):** `select_best_scored_route` now runs live, but multi-candidate selection only
   bites once several routes to a destination coexist (a candidate-route store); source-accumulated
-  multi-hop paths await the wire-path TLV (#840).
+  multi-hop paths await the wire-path TLV (#840). Also still **codec-only**: the route-*maintenance*
+  messages `RelayRouteUpdate` (0x07) and `RelayRouteReject` (0x08) — the #830 route-discovery item named
+  these alongside 0x03/0x04, but #840/#841/#850 built only the request/response (0x03/0x04) drive; no node
+  yet originates/answers/applies 0x07/0x08. (Route *discovery* interop works; route *repair/teardown*
+  does not.)
 
 ---
 
