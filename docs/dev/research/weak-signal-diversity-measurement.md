@@ -98,13 +98,59 @@ costs the ideal bound omits:**
    new-waveform cost — and on fast-fading channels a single frame already spans hundreds of coherence
    times, so soft-FEC + interleaver harvest time diversity there regardless.
 
-## Bottom line
+## Real-waveform net measurement
 
-The kill-first gate **passed** (ideal ~4 dB on slow fade), so frequency diversity is not dead on arrival.
-But the structural **~3 dB PAPR cost is comparable to the ideal gain** and the real-world decorrelation is
-partial, so the **net on-air gain is expected to be marginal (≈0–1 dB) or negative** once PAPR is paid —
-and it overlaps levers the ladder already has. The only way to get the *net* number is to build the real
-dual-carrier plugin (S = 750 Hz, common-mode AFC, shared timing, union combine) and run a full bake-off
-that **reports the gain net of the measured PAPR delta**.
+`crates/openpulse-modem/tests/diversity_real_waveform.rs` builds the **real** dual-carrier waveform (same
+FEC-framed bits on `FC ± 375 Hz`, `SEP = 750 Hz`), passes it through **one** Watterson `good_f1` channel
+(so the two carriers see the real, partially-correlated fading + real cross-carrier interference), and
+measures the PAPR delta separately. Decode reuses the engine's audio-free union seam
+`combine_and_decode_llrs`. Frame-success is matched-average-power by construction (the RMS-keyed channel
+normalises the 1/√2 split away); PAPR is scale-invariant, measured on the raw `low + high` sum.
 
-**Recommendation:** this is a decision point, not an automatic build — see the PR/issue discussion.
+**BPSK250 on good_f1 (48 trials) — ΔPAPR = +2.61 dB:**
+
+| snr_db | single | dual (real) |
+|--------|--------|-------------|
+| 0.0    | 0.27   | 0.27 |
+| 3.0    | 0.54   | 0.73 |
+| 6.0    | 0.73   | 0.94 |
+| 9.0    | 0.90   | 0.98 |
+| 12.0   | 0.96   | 1.00 |
+
+**BPSK31 on good_f1 (24 trials) — ΔPAPR = +2.60 dB:**
+
+| snr_db | single | dual (real) |
+|--------|--------|-------------|
+| −6.0   | 0.17   | 0.58 |
+| −3.0   | 0.67   | 0.96 |
+| 0.0    | 0.88   | 1.00 |
+| 3.0    | 1.00   | 1.00 |
+
+**Matched-average-power frequency-diversity gain** (horizontal shift): ~1 dB at the 0.5 crossing for
+BPSK250 (growing to ~3–4 dB at high reliability), ~2.6 dB at the crossing for BPSK31 (to ~4 dB at high
+reliability). The real waveform loses ~2 dB vs the ρ=0 ideal — exactly the partial decorrelation
+(ρ² ≈ 0.15 at S = 750 on good_f1) + cross-carrier ISI predicted.
+
+**PAPR cost:** the two-tone beat raises PAPR from 1.44 dB (single BPSK) to 4.05 dB — **ΔPAPR ≈ +2.6 dB**,
+paid as reduced average power on a PEP-limited HF transmitter.
+
+## Bottom line — measured, do not ship the rung
+
+**Net on-air gain ≈ (matched-power gain) − ΔPAPR ≈ break-even** (−0.5 to +1 dB depending on baud and
+target reliability). The ~2.6 dB PAPR cost consumes almost the entire real matched-power diversity gain.
+
+The kill-first *ideal* cleared the gate, but the real waveform does not survive its own PAPR: the
+frequency-diversity rung buys essentially nothing net on-air that the ladder does not already have more
+cheaply —
+
+- **dropping the baud** (BPSK250 → BPSK31) buys ~6–7 dB of margin at 8× airtime, far more than the
+  diversity rung's ~0–1 dB net at 2× bandwidth;
+- **HARQ time-diversity** (`receive_with_llr_combining` across retransmissions) already harvests
+  independent fade states at no new-waveform cost.
+
+**Recommendation: do not ship a frequency-diversity rung.** Close #864 as *measured — net too marginal to
+justify a new waveform, 2× the occupied bandwidth, and the plugin complexity (common-mode AFC, shared
+per-branch timing, union seam)*. The reproducible measurements (`diversity_upper_bound.rs`,
+`diversity_real_waveform.rs`) and the reusable `combine_and_decode_llrs` engine seam remain; revisit only
+if a use case appears where the ~1 dB high-reliability net and 2× bandwidth are both acceptable and the
+PAPR can be recovered (e.g. a constant-envelope diversity waveform rather than a two-tone sum).
