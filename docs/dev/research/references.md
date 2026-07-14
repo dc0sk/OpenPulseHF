@@ -202,14 +202,17 @@ but two things transfer.
   Ion Todirel's libmodem (**decision-feedback AGC + hard-limiter correlator**) and
   reportedly beats Dire Wolf's best mode on every test track at ~19 % of one Pi 5 core.
   The ethos — a measured per-track benchmark suite as the DSP gate — is exactly our
-  benchmark-harness/testmatrix discipline; the **hard-limiter correlator + DF-AGC** is a
-  concrete technique for the AGC front-end we lack (the reference-mining gap).
+  benchmark-harness/testmatrix discipline. Its **decision-feedback AGC** is a lever we
+  *already* have (`openpulse_dsp::agc::Agc`, seam-wired since PR #583); the **hard-limiter
+  correlator** was evaluated in the 2026-07-14 design review and **rejected** — it is
+  constant-envelope and destroys the amplitude information our calibrated soft-LLR path
+  needs, and our acquisition is already amplitude-invariant (`search_normalized` /
+  relative `refine_onset`), so nothing motivates it.
 - **A broad multi-interface PTT abstraction** (serial RTS/DTR, CM108 USB-HID, GPIO,
   rigctld, VOX, tone) — a superset of `openpulse-radio`'s `PttController` backends
-  (CM108-HID and GPIO are ones we don't have).
+  (CM108-HID and GPIO are ones we don't have; tracked as REQ-PTT-02/03).
 
-**Revisit for:** an AGC / hard-limiter-correlator front-end (we have no AGC); CM108-HID
-and GPIO PTT backends.
+**Revisit for:** CM108-HID and GPIO PTT backends (REQ-PTT-02/03).
 
 ---
 

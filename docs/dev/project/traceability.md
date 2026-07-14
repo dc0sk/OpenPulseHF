@@ -9,6 +9,36 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — docs: Fable design review of the reference-derived requirements (REQ-AGC-01 correction + plan)
+
+- **Requirement/change:** design-review the reference-derived requirements before building. Two Fable
+  read-only analyses (grounded in the code): a deep AGC design review (REQ-AGC-01) and a feasibility +
+  plan pass over REQ-PTT-02/03, REQ-WSIG-01, REQ-RX-01, REQ-DEV-01.
+- **Finding (verified against the code):** **REQ-AGC-01 was stale — the receive AGC already exists**
+  (`crates/openpulse-dsp/src/agc.rs`; engine seam `route_audio_stage(InputCapture)` with DC-block → notch
+  → DCD(pre-AGC) → AGC ordering, `agc_blocks_processed` tripwire, per-burst gain-lock; `SetAgc` daemon/CLI/
+  panel control; tests `agc_loopback.rs`, `dcd_pre_agc.rs`, `carrier_level_invariance.rs`). PRs
+  #583/#699/#700/#826 shipped it; the "we have no AGC" claim dated from the pre-#583 reference-mining note
+  and was copied forward into the new requirement without re-checking. Verified: no `agc` key in
+  `openpulse-config` → the one real gap is the TOML config gate. The calibrated LLR / M2M4 / acquisition
+  estimators are amplitude-ratio-based (scale-invariant), so decode above the squelch is already
+  level-invariant; the hard-limiter-correlator option is **rejected** (constant-envelope, destroys
+  soft-LLR amplitude info; acquisition already amplitude-invariant via `search_normalized`).
+- **Decision:** re-scope REQ-AGC-01 to its true delta (a `[modem] agc_enabled` TOML gate + an
+  amplitude-sweep acceptance test; hard-limiter rejected); correct the stale claims in `requirements.md`,
+  `roadmap.md`, and `references.md`. Revise the roadmap build order per the review: PTT-02/03 first
+  (CM108 = plain `/dev/hidrawN` write, no C dep; GPIO = `gpiocdev` behind a mockable line trait), then
+  REQ-DEV-01 (`resolve_device` match ladder), then REQ-RX-01 (a `MonitorRuntime` on the proven JS8
+  discovery-tee pattern — contained, not architectural), then the AGC delta, then REQ-WSIG-01
+  measurement-gate-first (a constant-envelope non-coherent 16-FSK candidate reusing JS8 GFSK/LDPC; JS8
+  itself does not satisfy the rung — unregistered, 9-byte envelope-less, 25–250 Hz).
+- **Implementation:** docs only — `docs/dev/requirements.md` (REQ-AGC-01 re-scope), `docs/dev/project/
+  roadmap.md` (revised build order + AGC-already-shipped note), `docs/dev/research/references.md` (graywolf
+  AGC/hard-limiter correction).
+- **Test results:** n/a (docs); AGC-existence claims verified by grep against the cited files.
+
+---
+
 ## 2026-07-14 — feat(daemon): transmitter-release RAII guard, unkey-on-Drop (REQ-PTT-01)
 
 - **Requirement/change:** REQ-PTT-01 — every PTT-keyed automatic-TX scope must release the transmitter
