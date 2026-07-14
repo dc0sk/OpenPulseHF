@@ -270,6 +270,17 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                     .send("FAULT no MYID callsign set; set MYID before transmitting".to_string());
             } else {
                 // Acquire the lock once to read adaptive state and perform TX in the same scope.
+                // INVARIANT (audit #830 / #846): the engine mutex is deliberately held across the whole
+                // RF burst — it doubles as the half-duplex channel-access serializer, so nothing else may
+                // touch the engine while a frame plays out. `transmit_arq` has no cancellation path, so a
+                // burst runs to completion regardless; consequently a CONNECT/DISCONNECT/MYID command
+                // (each already off the executor via `spawn_blocking`, so the tokio runtime is never
+                // stalled — PR #846/#849) may *wait* up to one burst for the lock. That is acceptable
+                // bounded latency: ABORT is lock-free (`command.rs` "ABORT" arm, regression-tested by
+                // `connect_holding_the_engine_lock_does_not_stall_an_abort`) and must never grow an
+                // engine-lock dependency. A future interruptible-`transmit_arq` (an `AtomicBool` checked
+                // between retransmits) is the only real way to shorten this — not a lock-scope change,
+                // which would only return the response line sooner while the RF keeps transmitting.
                 let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
                 let adaptive = engine.current_tx_level().is_some();
 
@@ -318,6 +329,15 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
             let can_tx = tx_callsign(&bridge).is_some();
             // IRS path: acquire the engine lock once for both the adaptive check and
             // the receive+ACK dispatch to avoid lock churn and inconsistent state.
+            // INVARIANT (see the ISS-path note above): the receive→ACK pair is held in ONE lock scope
+            // deliberately — no other caller may interleave modem state between capturing a frame and
+            // sending its ACK. The capture read is a short poll here (`CpalInputStream::read` sleeps ≤10 ms
+            // when the buffer is empty; LoopbackBackend is instant), so this hold is ~tens of ms, not the
+            // long one — the multi-second hold is TX playback on the ISS path. Do NOT hoist the capture
+            // read out of the lock to shorten it: `transmit_arq`'s ACK re-capture would then open a second
+            // input stream on the same device (the LoopbackBackend buffer is drained by whoever reads
+            // first), and a CONNECT's `begin_secure_session` could reset session state between capture and
+            // ACK — reintroducing exactly the interleave this scope prevents.
             let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
             let adaptive = engine.current_tx_level().is_some();
             let received = if adaptive {
