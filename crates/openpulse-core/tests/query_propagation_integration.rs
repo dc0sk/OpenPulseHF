@@ -58,8 +58,13 @@ fn route_discovery_request_round_trip() {
         max_hops: 5,
         required_capability_mask: 0x0000_0009,
         policy_flags: 0x0003,
+        accumulated_path: vec![[0x11; 32], [0x22; 32]],
     };
-    assert_eq!(req.encode().len(), RouteDiscoveryRequest::SIZE);
+    // header (47) + path_count (1) + 2 × 32
+    assert_eq!(
+        req.encode().len(),
+        RouteDiscoveryRequest::HEADER_SIZE + 1 + 2 * 32
+    );
     let decoded = RouteDiscoveryRequest::decode(&req.encode()).unwrap();
     assert_eq!(decoded.route_query_id, req.route_query_id);
     assert_eq!(decoded.destination_peer_id, req.destination_peer_id);
