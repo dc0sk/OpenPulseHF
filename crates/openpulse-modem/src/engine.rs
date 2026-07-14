@@ -3863,22 +3863,35 @@ impl ModemEngine {
             attempts.push(llrs);
         }
 
-        // Try each attempt on its own before combining them.
-        //
-        // Combining is not uniformly better than plain ARQ retry, and which one wins depends on the
-        // channel. Under a deep fade the attempts carry complementary information and the sum decodes
-        // where none of them does; when one attempt is simply clean, summing it with two ruined ones can
-        // *lose* a frame that a bare retry would have kept. Measured on Watterson `moderate_f1` with
-        // SCFDMA52 at 20 dB, three attempts: plain retry 0.97, combining alone 0.95, both 1.00.
-        //
-        // The two are cheap and the union is free of the choice — each extra trial is one RS decode, and
-        // success is a strict superset of either strategy. Frame success on SCFDMA52-16QAM over
-        // `moderate_f1`, three attempts: 28 dB 0.43 (retry) / 0.48 (combine) → **0.67**; 20 dB 0.28 /
-        // 0.40 → **0.50**.
-        //
-        // Only the winner runs `HpxStateUpdate` and emits an event — the trials must not move state.
+        self.combine_and_decode_llrs(mode, &attempts)
+    }
+
+    /// Decode a set of soft-LLR "looks" of the *same* frame via the union of decode-each-alone and the
+    /// MAP-combined (summed) LLRs — the audio-free core of [`receive_with_llr_combining`].
+    ///
+    /// Exposed so an external diversity/HARQ combiner that has already demodulated its branches — e.g. a
+    /// frequency-diversity mode that demodulates two band-separated carriers to two calibrated LLR
+    /// vectors — can reuse the exact union decode rather than re-capturing audio.
+    ///
+    /// Combining is not uniformly better than plain retry, and which wins depends on the channel: under a
+    /// deep fade the looks carry complementary information and the sum decodes where none does; when one
+    /// look is simply clean, summing it with a ruined one can *lose* a frame a bare decode would keep. The
+    /// union sidesteps the choice — each look is one RS decode, and success is a strict superset of both.
+    /// Only the winning decode runs `HpxStateUpdate` and emits `FrameReceived`; the trials must not move
+    /// state.
+    pub fn combine_and_decode_llrs(
+        &mut self,
+        mode: &str,
+        attempts: &[Vec<f32>],
+    ) -> Result<Vec<u8>, ModemError> {
+        if attempts.is_empty() {
+            return Err(ModemError::Frame(
+                "llr combining: attempts must be ≥ 1".to_string(),
+            ));
+        }
+
         let mut decoded = None;
-        for llrs in &attempts {
+        for llrs in attempts {
             let Ok(wire) = self.route_wire_stage(
                 PipelineStage::DemodulateDecode,
                 WirePayload {

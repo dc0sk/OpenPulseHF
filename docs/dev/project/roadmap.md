@@ -1966,10 +1966,23 @@ import into standard logging software / LoTW / eQSL. Opt-in via a new `[logbook]
 - **Open questions:** ADIF version (3.1.x), how to map HPX modes to ADIF `MODE` / `SUBMODE`
   (a custom `DYNAMIC` vs. per-mode), and whether to also log FreeDV / Winlink sessions.
 
-### Weak-signal symbol-diversity mode (scheduled as a deliberate effort — from SSB reference mining 2026-07-01)
+### Weak-signal symbol-diversity mode ❌ Measured, not shipped (#864, PR #869)
 
-**Implementation-scoping notes (2026-07-14).** Prototyping the plugin surfaced why this is a *measured*
-research task, not a quick add:
+**Verdict (2026-07-14): do not ship the rung — the diversity gain does not survive its own PAPR.**
+Measured per the "measure the floor first" rule (Fable design review → kill-first ρ=0 ideal bound →
+real-waveform net). The ρ=0 *ideal* (perfect decorrelation, no PAPR) cleared the ≥2 dB kill-gate
+(~4–4.5 dB on good_f1), but the **real** dual-carrier waveform (same bits on FC±375 Hz, S=750 Hz minimax
+spacing, one Watterson channel) gives only ~1 dB (BPSK250) to ~2.6 dB (BPSK31) matched-average-power gain
+at the 0.5 crossing, and the two-tone beat's **ΔPAPR = +2.6 dB** (paid as reduced average power on a
+PEP-limited PA) consumes almost all of it → **net on-air ≈ break-even**, at 2× the occupied bandwidth.
+The ladder's existing levers dominate: dropping the baud (~6–7 dB) and free HARQ time-diversity. Full
+analysis: `docs/dev/research/weak-signal-diversity-measurement.md`; reproducible measurements
+`crates/openpulse-modem/tests/diversity_upper_bound.rs` + `diversity_real_waveform.rs`; the reusable
+`ModemEngine::combine_and_decode_llrs` seam remains. Revisit only for a **constant-envelope** diversity
+waveform (no two-tone PAPR) if the ~1 dB high-reliability net + 2× bandwidth ever become worth it.
+
+**Original implementation-scoping notes (2026-07-14; superseded by the verdict above).** Prototyping the
+plugin surfaced why this is a *measured* research task, not a quick add:
 - **The gain is fading-only and must be proven coded.** Splitting power across two carriers then combining
   is a **wash on AWGN** (diversity buys diversity, not coding gain) — so the deliverable is a **coded
   frame-success** gain on a **frequency-selective / fading** channel, established with a Watterson bake-off
