@@ -9,6 +9,33 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — fix(ardop): acquire the engine lock off the executor on CONNECT/DISCONNECT
+
+- **Requirement/change:** issue #830 robustness — the ARDOP command dispatcher (`dispatch`, an async task
+  per client) locked the engine `std::sync::Mutex` **inline on the async executor** for CONNECT
+  (`begin_secure_session`) and DISCONNECT (`end_secure_session`). The modem worker (`worker_loop`) holds
+  that same lock across a full RF TX/RX burst (`transmit_arq` / `receive_with_ack_hint` / `do_receive`),
+  so an in-flight CONNECT/DISCONNECT would park an executor thread for the burst — stalling other clients'
+  commands, including `ABORT`.
+- **Design decision:** move the blocking lock + session call onto the blocking pool via
+  `tokio::task::spawn_blocking`, exactly as the sibling `PTT TRUE`/`FALSE` handlers already do. The
+  command still awaits completion before responding (ordering preserved: `CONNECTED` only after the
+  handshake attempt), but the executor thread is freed while the lock is contended, so unrelated commands
+  keep flowing. Poisoned-lock recovery switches from silent-skip (`if let Ok`) to
+  `unwrap_or_else(|e| e.into_inner())`, matching the worker and PTT paths.
+- **Implementation:** `crates/openpulse-ardop/src/command.rs` — CONNECT + DISCONNECT engine work wrapped
+  in `spawn_blocking` (clone the `Arc<Mutex<ModemEngine>>` into the closure; keep `peer` for the response
+  by logging a clone).
+- **Tests:** `connect_holding_the_engine_lock_does_not_stall_an_abort` — a std thread holds the engine
+  lock (stand-in for the worker mid-burst); a CONNECT is dispatched on a single-worker runtime, then an
+  `ABORT` must complete within 3 s, observed from the (non-worker) test thread via a std channel so the
+  regression fails as a clean timeout rather than a runtime deadlock. **Verified failing-first:** with the
+  old inline lock the test FAILS at 3.15 s; with the fix it passes in 0.15 s.
+- **Test results:** `cargo test -p openpulse-ardop --no-default-features` → 3 lib (2 → 3) + 23 integration
+  pass; fmt + clippy (`--tests -D warnings`) clean.
+
+---
+
 ## 2026-07-14 — test(daemon): cover the discovery rx-tick dwell-tee + rendezvous-connect handoffs
 
 - **Requirement/change:** issue #830 test-coverage gap (#15) — two discovery handoffs live inline in
