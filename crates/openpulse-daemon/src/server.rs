@@ -678,9 +678,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 // accumulate_capture returns Some only when the carrier drops.
                 // Tee this tick's raw audio to the JS8 discovery dwell buffer when parked on the JS8
                 // calling channel (the DCD-burst pipeline can't carry −24 dB signals; §6.2).
-                let disco_dwelling = runtime_state.discovery.as_ref().is_some_and(|d| {
-                    d.state() == openpulse_discovery::DiscoveryState::Dwelling
-                });
+                let disco_dwelling = discovery_is_dwelling(&runtime_state);
                 let mut discovery_raw: Vec<f32> = Vec::new();
                 let burst = tokio::task::block_in_place(|| {
                     if rx_stream.is_none() {
@@ -824,9 +822,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 // A completed rendezvous QSY hands off to the signed session on the agreed channel: run
                 // the same begin_secure_session + CONREQ path as an operator `ConnectPeer` (needs
                 // `&mut engine` + the CAT rig, both owned here).
-                if let Some((peer, _freq_hz)) = runtime_state.rendezvous_connect_ready.take() {
+                if let Some(cmd) = take_rendezvous_connect(&mut runtime_state) {
                     apply_command_to_engine(
-                        &crate::protocol::ControlCommand::ConnectPeer { callsign: peer },
+                        &cmd,
                         &mut engine,
                         &handle.active_mode,
                         &handle.event_tx,
@@ -1134,6 +1132,26 @@ fn discovery_retune(rig: &mut Option<&mut (dyn CatController + Send)>, hz: u64) 
 /// One JS8 NORMAL T/R slot in ms (the discovery MVP is NORMAL-only). Used to convert a rendezvous
 /// `switch_in_slots` count into a wall-clock QSY deadline.
 const JS8_NORMAL_SLOT_MS: u64 = 15_000;
+
+/// Whether discovery is parked on the JS8 calling channel (Dwelling) — the only state in which the
+/// rx-tick tees its raw capture audio to the weak-signal decoder (the DCD-burst pipeline can't carry
+/// −24 dB JS8; §6.2). Extracted from the rx-tick `select!` arm so the tee predicate is unit-testable.
+fn discovery_is_dwelling(rs: &RuntimeControlState) -> bool {
+    rs.discovery
+        .as_ref()
+        .is_some_and(|d| d.state() == openpulse_discovery::DiscoveryState::Dwelling)
+}
+
+/// Consume a completed-rendezvous QSY readiness into the `ConnectPeer` command that hands off to the
+/// signed session on the agreed working channel, or `None` when no rendezvous is ready. Extracted from
+/// the rx-tick `select!` arm so the peer→command mapping and take-once semantics are unit-testable.
+fn take_rendezvous_connect(
+    rs: &mut RuntimeControlState,
+) -> Option<crate::protocol::ControlCommand> {
+    rs.rendezvous_connect_ready
+        .take()
+        .map(|(peer, _freq_hz)| crate::protocol::ControlCommand::ConnectPeer { callsign: peer })
+}
 
 /// Feed one rx-tick's raw audio + the idle predicate into the discovery runtime and execute its
 /// outcomes (retune via CAT, home-frequency tracking, event forwarding). No-op when unconfigured.
@@ -1739,6 +1757,94 @@ mod discovery_tick_tests {
             }
         }
         assert!(heard, "a StationHeard event for KN4CRD/EM73 was emitted");
+    }
+
+    #[test]
+    fn dwelling_predicate_gates_the_dwell_audio_tee() {
+        // The rx-tick tees raw capture audio to the weak-signal decoder only while dwelling. Guard the
+        // predicate that gates it (deleted/inverted → discovery never sees calling-channel audio, or the
+        // DCD pipeline is fed −24 dB JS8 it can't carry). Companion to the inline tee in `server::run`.
+        let engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        let (tx, _rx) = tokio::sync::broadcast::channel::<ControlEvent>(64);
+        let ev = std::sync::Arc::new(tx);
+
+        // No discovery runtime → never tee.
+        let mut none_rs = RuntimeControlState::default();
+        assert!(
+            !discovery_is_dwelling(&none_rs),
+            "unconfigured never dwells"
+        );
+        let _ = &mut none_rs;
+
+        let mut rs = RuntimeControlState {
+            last_freq_hz: Some(14_074_000),
+            discovery: Some(DiscoveryRuntime::new(DiscoveryParams {
+                enabled: true,
+                idle_grace_ms: 0,
+                dwell_ms: 0,
+                station_ttl_ms: 3_600_000,
+                submode: Submode::Normal,
+                calling_freq_hz: 14_078_000,
+                tx_mode: TxMode::RxOnly,
+                callsign: String::new(),
+                grid: String::new(),
+                hint: None,
+                heartbeat_interval_slots: 8,
+                hint_interval_beacons: 3,
+                tx_offset_hz: 1500.0,
+                max_clock_skew_ms: 2000,
+            })),
+            ..RuntimeControlState::default()
+        };
+
+        // Before the first tick the runtime is Inactive → no tee.
+        assert_ne!(
+            rs.discovery.as_ref().unwrap().state(),
+            DiscoveryState::Dwelling
+        );
+        assert!(
+            !discovery_is_dwelling(&rs),
+            "an inactive runtime does not tee audio"
+        );
+
+        // One tick activates → dwells on the calling freq → the tee opens.
+        discovery_tick(&mut rs, &engine, None, &ev, &[], 1000);
+        assert_eq!(
+            rs.discovery.as_ref().unwrap().state(),
+            DiscoveryState::Dwelling
+        );
+        assert!(
+            discovery_is_dwelling(&rs),
+            "a dwelling runtime tees the tick's raw audio"
+        );
+    }
+
+    #[test]
+    fn take_rendezvous_connect_maps_ready_peer_and_consumes_it() {
+        // The completed-rendezvous QSY hands off to the signed session by mapping the ready (peer, freq)
+        // into a `ConnectPeer` for that peer, consumed once. Guard the mapping + take-once semantics of
+        // the inline `server::run` handoff (which then feeds the command to `apply_command_to_engine`).
+        use crate::protocol::ControlCommand;
+
+        let mut rs = RuntimeControlState::default();
+        assert!(
+            take_rendezvous_connect(&mut rs).is_none(),
+            "no ready rendezvous → no connect"
+        );
+
+        rs.rendezvous_connect_ready = Some(("W1AW".into(), 14_101_000));
+        match take_rendezvous_connect(&mut rs) {
+            Some(ControlCommand::ConnectPeer { callsign }) => assert_eq!(callsign, "W1AW"),
+            other => panic!("expected ConnectPeer for W1AW, got {other:?}"),
+        }
+        assert!(
+            rs.rendezvous_connect_ready.is_none(),
+            "the readiness is consumed (take-once) so the handoff fires exactly once"
+        );
+        assert!(
+            take_rendezvous_connect(&mut rs).is_none(),
+            "a second poll after consumption yields nothing"
+        );
     }
 
     /// One NORMAL beacon frame (payload9 + its i3bit flag) modulated at 1500 Hz.
