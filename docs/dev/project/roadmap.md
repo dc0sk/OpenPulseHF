@@ -977,7 +977,11 @@ The `RouteDiscoveryRequest/Response` codecs were codec-only. Built the driver �
 mesh daemon so a request targeting the node (or a cached route) is answered on-air (#841). Then closed the
 loop: the mesh daemon **originates** (`discover_route`), **applies** responses into the route table, and
 **consumes** a route for relay send (`send_via_route` picks via `select_best_scored_route`, which calls
-`score_route`) (#850). Deferred: source-accumulated multi-hop paths need a wire-path TLV.
+`score_route`) (#850). Finally added the route-**maintenance** drive so all four msg types are driven:
+signed `RelayRouteUpdate` (0x07, verify + authoritative table refresh) and unsigned but on-path-authorized
+`RelayRouteReject` (0x08, teardown only from a hop actually on the route), with `MeshDaemon` dispatch +
+`send_route_update`/`send_route_reject` originators (#856). **Route discovery is now fully driven
+(0x03–0x08).** Deferred: source-accumulated multi-hop paths need a wire-path TLV.
 
 ### 12.4 — Robustness / concurrency ✅ Done (one sub-item deferred)
 - **ARDOP engine lock off the async executor** — CONNECT/DISCONNECT locked the engine `std::sync::Mutex`
