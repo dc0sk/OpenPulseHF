@@ -9,6 +9,29 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — test(daemon): cover the discovery rx-tick dwell-tee + rendezvous-connect handoffs
+
+- **Requirement/change:** issue #830 test-coverage gap (#15) — two discovery handoffs live inline in
+  `server::run`'s rx-tick `select!` arm and could be deleted with the suite green: the **dwell-audio tee
+  predicate** (raw capture audio is fed to the weak-signal decoder only while dwelling) and the
+  **rendezvous-connect handoff** (a completed-rendezvous QSY becomes a `ConnectPeer` for the peer). #839
+  covered the third (DCD-busy beacon-defer, which lives in `discovery_tick`); these two did not.
+- **Design decision:** follow the #836 precedent — extract the inline `select!` logic into small named
+  helpers and unit-test them, rather than stand up a twin-harness loop. `discovery_is_dwelling(&rs)` is
+  the tee predicate; `take_rendezvous_connect(&mut rs)` maps the ready `(peer, freq)` into a
+  `ControlCommand::ConnectPeer` and consumes it (take-once), which the arm then feeds to
+  `apply_command_to_engine`. Behaviour is unchanged — the arm now calls the helpers.
+- **Implementation:** `crates/openpulse-daemon/src/server.rs` — new `discovery_is_dwelling` /
+  `take_rendezvous_connect` helpers wired into the rx-tick arm; tests
+  `dwelling_predicate_gates_the_dwell_audio_tee` (Inactive/None → false, drive to Dwelling → true) and
+  `take_rendezvous_connect_maps_ready_peer_and_consumes_it` (None → None; ready → `ConnectPeer{W1AW}` +
+  field cleared; second poll → None).
+- **Tests:** the 2 new tests + the 9 existing `discovery_tick_tests`.
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features` → 95 lib (93 → 95) +
+  integration all pass; fmt + clippy (`--tests -D warnings`) clean.
+
+---
+
 ## 2026-07-13 — test(daemon): cover the filexfer resume→FileAccept.have_bitmap composition
 
 - **Requirement/change:** issue #830 test-coverage gap — the daemon file-transfer *resume* path was only
