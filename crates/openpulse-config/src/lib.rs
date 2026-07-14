@@ -443,6 +443,17 @@ pub struct ModemConfig {
     /// it counts as a confirmed external interferer. `0` (default) disables persistence tracking.
     /// When on, the notch nulls confirmed externals robustly and logs in-band ones as QSY hints.
     pub notch_persistence: u32,
+    /// Receiver-side streaming AGC (input-level normalisation before demod). Default `false`. Decode is
+    /// already amplitude-ratio-based (level-invariant above the DCD squelch), so the AGC's value is
+    /// stabilising the level through deep QSB and providing a metering readout — not decode rescue. It is
+    /// active-span gated (adapts only on carrier-present blocks) and gain-locked per burst.
+    pub agc_enabled: bool,
+    /// AGC target output RMS (0..1). Default `0.3`.
+    pub agc_target_rms: f32,
+    /// AGC adaptation rate α in (0, 1]; smaller = slower/steadier. Default `0.02`.
+    pub agc_bandwidth: f32,
+    /// AGC symmetric gain clamp in dB. Default `40.0`.
+    pub agc_max_gain_db: f32,
 }
 
 /// Per-rig CAT settings (used in `[radio.rig_a]` / `[radio.rig_b]` sections).
@@ -634,6 +645,10 @@ impl Default for ModemConfig {
             notch_max: 10,
             notch_q: 25.0,
             notch_persistence: 0,
+            agc_enabled: false,
+            agc_target_rms: 0.3,
+            agc_bandwidth: 0.02,
+            agc_max_gain_db: 40.0,
         }
     }
 }
@@ -1025,6 +1040,14 @@ notch_q = 25.0
 # is treated as a confirmed external interferer. 0 = off. When on, externally-confirmed
 # tones are notched robustly and confirmed in-band tones are logged as QSY hints.
 notch_persistence = 0
+# Receiver-side streaming AGC (input-level normalisation before demod). Default off.
+# Decode is already level-invariant above the DCD squelch, so the AGC stabilises the
+# level through deep QSB + provides a metering readout, rather than rescuing a decode.
+# Active-span gated (adapts only on carrier-present blocks) and gain-locked per burst.
+agc_enabled = false
+agc_target_rms = 0.3
+agc_bandwidth = 0.02
+agc_max_gain_db = 40.0
 
 [radio]
 # CAT (frequency/mode) backend: "rigctld" (default) or "none".
@@ -1428,6 +1451,18 @@ mod tests {
         // The emitted template must parse and carry the documented default.
         let parsed: OpenpulseConfig = toml::from_str(&init_template()).unwrap();
         assert_eq!(parsed.modem.profile, "hpx_hf");
+    }
+
+    #[test]
+    fn agc_defaults_are_opt_in() {
+        let m = ModemConfig::default();
+        assert!(!m.agc_enabled, "AGC is opt-in");
+        assert_eq!(m.agc_target_rms, 0.3);
+        assert_eq!(m.agc_max_gain_db, 40.0);
+        // The template's [modem] AGC keys round-trip to the opt-in default.
+        let parsed: OpenpulseConfig = toml::from_str(&init_template()).unwrap();
+        assert!(!parsed.modem.agc_enabled);
+        assert_eq!(parsed.modem.agc_bandwidth, 0.02);
     }
 
     #[test]

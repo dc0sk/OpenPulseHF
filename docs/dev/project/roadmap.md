@@ -2051,10 +2051,13 @@ Build order revised per the 2026-07-14 Fable design review (see traceability):
    decode; no engine-RX changes (the rx-tick hands the same burst it already assembled). Note:
    `decode_burst` only scans the acquisition lead-in, so the contract is one-mode-per-burst decoded
    correctly across a mixed-mode stream — not two overlapping modes in one buffer.
-4. **REQ-AGC-01 — AGC config gate + acceptance test. ⚠️ Mostly ALREADY SHIPPED** (PRs #583/#699/#700/#826;
-   the "we have no AGC" claim was stale). Remaining: a `[modem] agc_enabled` TOML gate + an amplitude-sweep
-   acceptance test; the hard-limiter-correlator option is **rejected** (constant-envelope, incompatible
-   with soft-LLR; acquisition already amplitude-invariant). Small docs+config+test PR, not a DSP build.
+4. **REQ-AGC-01 — AGC config gate + acceptance test. ✅ Shipped** (the AGC itself shipped earlier in PRs
+   #583/#699/#700/#826; the "we have no AGC" claim was stale). Added the `[modem] agc_enabled` (+
+   `agc_target_rms`/`agc_bandwidth`/`agc_max_gain_db`) TOML gate applied at daemon startup like the notch,
+   and the amplitude-sweep acceptance test (`agc_amplitude_sweep.rs`) documenting that decode is
+   level-invariant with AGC on *or* off across ×0.1–×3.0, and that the AGC runs (tripwire) + tracks level
+   (metering). The hard-limiter-correlator option is **rejected** (constant-envelope, incompatible with
+   soft-LLR; acquisition already amplitude-invariant).
 5. **REQ-WSIG-01 — robust narrowband weak-signal waveform. Measurement-gate first** (per modem73's ROBUST,
    and the #864 discipline). JS8 does **not** satisfy it (unregistered, 9-byte envelope-less payload,
    25–250 Hz, ~6 bps) — but a real dead-zone gap exists (~−3 dB BPSK31 floor → −18 dB JS8). A

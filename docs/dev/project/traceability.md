@@ -9,6 +9,34 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — feat(config): AGC config gate + amplitude-sweep acceptance test (REQ-AGC-01)
+
+- **Requirement/change:** REQ-AGC-01, re-scoped after the design review found the receive AGC already
+  exists (seam-wired, `SetAgc`-toggleable). The delta: a TOML config gate (AGC was runtime-only) and the
+  requirement's amplitude-sweep acceptance test.
+- **Design decision:** add `[modem] agc_enabled` (+ `agc_target_rms`/`agc_bandwidth`/`agc_max_gain_db`)
+  applied at daemon startup exactly like the notch (`configure_agc` + `enable_agc`), off by default. The
+  acceptance test documents *what the AGC buys*: because the soft-LLR/SNR/carrier estimators are all
+  amplitude-ratio-based (level-invariant above the DCD squelch — PR #700's `normalize_stream_rms` fixed
+  the one genuine level coupling), decode succeeds across a wide amplitude range with AGC **on or off**;
+  the AGC's real value is QSB level-stabilisation + a metering readout, proven by the gain tracking the
+  input level and the `agc_blocks_processed` tripwire. The hard-limiter-correlator option is **rejected**
+  (constant-envelope → destroys the soft-LLR amplitude info; acquisition already amplitude-invariant via
+  `search_normalized`).
+- **Implementation:** `crates/openpulse-config/src/lib.rs` (`agc_enabled`/`agc_target_rms`/`agc_bandwidth`/
+  `agc_max_gain_db` + template); `crates/openpulse-daemon/src/server.rs` (startup wiring next to the
+  notch). No engine change — the AGC API (`configure_agc`/`enable_agc`/`agc_gain_db`/`agc_blocks_processed`)
+  already existed.
+- **Tests:** `crates/openpulse-modem/tests/agc_amplitude_sweep.rs` —
+  `decode_is_level_invariant_with_agc_on_or_off` (QPSK500 decodes at ×0.1–×3.0, AGC off and on),
+  `agc_runs_on_the_receive_path_and_tracks_the_input_level` (tripwire + quiet-gain > loud-gain); config
+  `agc_defaults_are_opt_in` + template round-trip.
+- **Test results:** `cargo test -p openpulse-modem --test agc_amplitude_sweep -p openpulse-config
+  --no-default-features` green; `cargo build --workspace --no-default-features` clean; clippy `-D warnings`
+  + fmt clean.
+
+---
+
 ## 2026-07-14 — feat(daemon): simultaneous multi-mode receive monitor (REQ-RX-01)
 
 - **Requirement/change:** REQ-RX-01 — optionally decode several registered modes concurrently from the

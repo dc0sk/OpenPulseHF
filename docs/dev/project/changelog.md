@@ -40,6 +40,10 @@ Post-v0.5.0 block-B/D backlog. No breaking changes.
 - **Simultaneous multi-mode receive** (`[monitor]`, off by default): the daemon can decode a list of extra
   modes from every capture burst in parallel with the active session, emitting a `MonitorFrame { mode,
   bytes }` event per decode — a monitor/discovery role for seeing what else is on frequency. (REQ-RX-01)
+- **Receiver AGC config gate** (`[modem] agc_enabled`, off by default): the existing receiver AGC can now
+  be enabled from the config file (with `agc_target_rms`/`agc_bandwidth`/`agc_max_gain_db`). Decode is
+  already level-invariant, so the AGC stabilises the level through deep QSB and provides a metering
+  readout rather than rescuing a decode. (REQ-AGC-01)
 - **Mesh route discovery — source-accumulated multi-hop paths**: a `RouteDiscoveryRequest` now accumulates
   the traversed path as it floods (each forwarder appends itself), so the destination answers with the real
   end-to-end route instead of only `destination → [self]`. (#861)

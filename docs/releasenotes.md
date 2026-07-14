@@ -43,6 +43,9 @@ Post-v0.5.0 improvements. **No breaking changes.**
 - **Multi-mode monitor.** The daemon can now watch for several modes at once: list them under `[monitor]`
   and it decodes each from the received audio alongside your active session, reporting what it hears — handy
   for seeing what else is on the frequency. Off by default.
+- **Receiver AGC from config.** The receiver automatic-gain-control can now be turned on in the config
+  (`[modem] agc_enabled`). It doesn't change whether a signal decodes (that's already level-independent) —
+  it steadies the audio level through deep fading and gives a gain/level readout. Off by default.
 
 **Mesh & TNCs**
 
