@@ -9,6 +9,33 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — fix: record the operator callsign + declared TX power in the regulatory TX log
+
+- **Requirement/change:** issue #830 — the engine's §97 TX-metadata log stamps `self.callsign` /
+  `self.max_power_watts` on every emitted frame, but `set_callsign`/`set_max_power_watts` were only wired
+  from two CLI subcommands. The daemon, ARDOP TNC, KISS TNC, and mesh daemon never set them, so their log
+  recorded an **empty callsign + 0 W** on every frame.
+- **Design decision:** add a `station.tx_power_watts` config field (operator-declared; the modem can't
+  measure PA output; `0.0` = unspecified) and wire both values into each binary's engine at startup:
+  daemon (`server::run`), KISS, and mesh set the callsign from `cfg.station.callsign`; all four set the
+  power from `cfg.station.tx_power_watts`. ARDOP's operating call is the runtime host `MYID`, not config,
+  so its callsign is mirrored into the engine from the `MYID` command handler instead (off the executor
+  via `spawn_blocking`, matching the CONNECT/DISCONNECT rationale) — power still comes from config. Wiring
+  `max_power_watts` is log-only: the audio limiter uses the separate `tx_limiter_threshold`, so no TX
+  behaviour changes.
+- **Implementation:** `crates/openpulse-config/src/lib.rs` (`tx_power_watts` field + default + template);
+  `crates/openpulse-modem/src/engine.rs` (`callsign()` getter); `crates/openpulse-daemon/src/server.rs`,
+  `crates/openpulse-kiss/src/main.rs`, `crates/openpulse-mesh/src/main.rs`,
+  `crates/openpulse-ardop/src/main.rs` (startup wiring); `crates/openpulse-ardop/src/command.rs` (MYID →
+  engine callsign).
+- **Tests:** config `tx_power_watts_parses_for_the_regulatory_log` + default assertion in
+  `missing_fields_get_defaults` (and the template round-trips through `modem_profile_loads_and_template_parses`);
+  ardop `myid_mirrors_the_callsign_into_the_engine_for_the_regulatory_log`.
+- **Test results:** `cargo test` for config / modem (lib) / ardop / kiss / mesh / daemon — all pass (ardop
+  6 → 7 lib, config +2); `cargo fmt --all --check` + clippy (`--tests -D warnings`) clean.
+
+---
+
 ## 2026-07-14 — fix(kiss): refuse on-air TX with no valid AX.25 source callsign (§97.119)
 
 - **Requirement/change:** issue #830 — the KISS/AX.25 TNC (the other deferred half of audit #10) modulated

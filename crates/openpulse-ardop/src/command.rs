@@ -81,6 +81,18 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
         "MYID" => {
             if let Some(call) = parts.get(1).filter(|s| !s.is_empty()) {
                 *bridge.callsign.write().await = call.to_string();
+                // Mirror the operating call into the engine so the §97 regulatory TX-metadata log
+                // stamps it (off the executor per the CONNECT/DISCONNECT rationale: the worker can
+                // hold the engine mutex across an RF burst).
+                let engine = bridge.engine.clone();
+                let call_for_engine = call.to_string();
+                let _ = tokio::task::spawn_blocking(move || {
+                    engine
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .set_callsign(call_for_engine);
+                })
+                .await;
                 vec![format!("MYID {call}")]
             } else {
                 vec![format!("MYID {}", bridge.callsign.read().await)]
@@ -391,6 +403,27 @@ mod tests {
         assert!(
             !bridge.cwid_enabled.load(Ordering::Relaxed),
             "CWID FALSE disables CW ID"
+        );
+    }
+
+    #[tokio::test]
+    async fn myid_mirrors_the_callsign_into_the_engine_for_the_regulatory_log() {
+        let bridge = test_bridge();
+        let resp = dispatch("MYID W1AW", &bridge).await;
+        assert_eq!(
+            resp,
+            vec!["MYID W1AW".to_string()],
+            "host response unchanged"
+        );
+        let engine_call = bridge
+            .engine
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .callsign()
+            .to_string();
+        assert_eq!(
+            engine_call, "W1AW",
+            "MYID must mirror into the engine so the §97 TX-metadata log records it"
         );
     }
 

@@ -96,6 +96,9 @@ async fn main() -> anyhow::Result<()> {
     engine.register_plugin(Box::new(qam64_plugin::Qam64Plugin::new()))?;
     engine.register_plugin(Box::new(scfdma_plugin::ScFdmaPlugin::new()))?;
     engine.register_plugin(Box::new(pilot_plugin::PilotPlugin::new()))?;
+    // Declared TX power for the §97 regulatory TX-metadata log. The operating callsign is the host
+    // `MYID` (set at runtime, mirrored into the engine by the command handler), not config.
+    engine.set_max_power_watts(cfg.station.tx_power_watts);
 
     // Opt-in adaptive ARQ: starting the session activates the worker's adaptive TX/RX path
     // (transmit_arq / receive_with_ack_hint) and makes ARQBW/ARQTIMEOUT effective.

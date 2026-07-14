@@ -100,6 +100,10 @@ fn main() -> Result<()> {
     };
 
     let mut engine = ModemEngine::new(audio);
+    // Record the operator's identity + declared TX power in the §97 regulatory TX-metadata log (the
+    // mesh daemon beacons/relays on air; the callsign is already gated to non-N0CALL above).
+    engine.set_callsign(cfg.station.callsign.clone());
+    engine.set_max_power_watts(cfg.station.tx_power_watts);
     let _ = engine.register_plugin(Box::new(BpskPlugin::default()));
     let _ = engine.register_plugin(Box::new(Fsk4Plugin::default()));
     let _ = engine.register_plugin(Box::new(QpskPlugin::default()));

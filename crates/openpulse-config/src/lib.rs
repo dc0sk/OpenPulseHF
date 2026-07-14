@@ -345,6 +345,9 @@ pub struct StationConfig {
     /// transmission of an exchange; `0` disables the sign-off ID (interval ID only). Only active when
     /// `auto_id_interval_secs > 0`.
     pub auto_id_signoff_idle_secs: u64,
+    /// Transmitter output power in watts, recorded in the §97 regulatory TX-metadata log. The modem
+    /// cannot measure PA output, so this is the operator-declared value; `0.0` = unspecified.
+    pub tx_power_watts: f32,
 }
 
 /// Audio backend selection.
@@ -573,6 +576,7 @@ impl Default for StationConfig {
             identity_key_path: String::new(),
             auto_id_interval_secs: 600,
             auto_id_signoff_idle_secs: 10,
+            tx_power_watts: 0.0,
         }
     }
 }
@@ -918,6 +922,9 @@ auto_id_interval_secs = 600
 # have transmitted (regulatory "identify at the end of a communication"). 10 = ID ~10 s after the
 # last transmission of an exchange; 0 disables the sign-off ID (interval ID only).
 auto_id_signoff_idle_secs = 10
+# Transmitter output power in watts, recorded in the regulatory TX-metadata log (the modem cannot
+# measure PA output — this is your declared value). 0 = unspecified.
+tx_power_watts = 0.0
 
 [audio]
 # Audio backend: default | cpal | loopback
@@ -1350,6 +1357,22 @@ mod tests {
         assert_eq!(cfg.modem.ota_aggressiveness, ""); // empty = use individual A2/A3 knobs
         assert!((cfg.modem.dcd_squelch - 0.01).abs() < 1e-6);
         assert!(cfg.modem.dcd_squelch_bands.is_empty());
+        // tx_power_watts defaults to 0.0 (unspecified) for the regulatory TX log.
+        assert!((cfg.station.tx_power_watts - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tx_power_watts_parses_for_the_regulatory_log() {
+        let path = unique_tmp("txpower");
+        {
+            let mut f = std::fs::File::create(&path).unwrap();
+            writeln!(f, "[station]").unwrap();
+            writeln!(f, r#"callsign = "K1ABC""#).unwrap();
+            writeln!(f, "tx_power_watts = 100.0").unwrap();
+        }
+        let cfg = load_from(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!((cfg.station.tx_power_watts - 100.0).abs() < 1e-6);
     }
 
     #[test]
