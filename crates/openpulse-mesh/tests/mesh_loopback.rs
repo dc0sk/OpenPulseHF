@@ -454,3 +454,67 @@ fn route_discovery_destination_answers() {
         "B must transmit a route response"
     );
 }
+
+/// Full originator loop: A originates a route query for B, B answers as the destination, A records the
+/// route, then A sends relay data along the discovered route and B delivers it. Exercises the daemon's
+/// `discover_route` / route-response application / `send_via_route` (route-table + scored-route
+/// consumption) end to end.
+#[test]
+fn originator_discovers_then_sends_along_the_route() {
+    // Every `make_node` signs with seed [0;32], so the route-identity is verifying_key([0;32]).
+    // Give B that same value as its local_peer_id (as the real binary does) so it is both the route
+    // target and the relay-delivery target.
+    let dst_id = RouteResponder::new(&[0u8; 32], 0).peer_id();
+
+    let lb_a = LoopbackBackend::new();
+    let lb_b = LoopbackBackend::new();
+    let mut node_a = make_node(&lb_a, [1u8; 32]);
+    let mut node_b = make_node(&lb_b, dst_id);
+
+    // No route yet → a send refuses.
+    assert!(matches!(
+        node_a.send_via_route(dst_id, 42, b"payload".to_vec(), 1_000),
+        Err(openpulse_mesh::MeshError::NoRoute)
+    ));
+
+    // A originates a route query for B and transmits it.
+    let qid = node_a
+        .discover_route(dst_id, 1_000)
+        .expect("discover_route");
+
+    // A → B: B recognises itself as the destination and answers.
+    lb_b.fill_samples(&lb_a.drain_samples());
+    let events_b = node_b.step(1_010);
+    assert!(
+        events_b.iter().any(
+            |e| matches!(e, MeshEvent::RouteAnswered { route_query_id } if *route_query_id == qid)
+        ),
+        "B must answer the route request; got {events_b:?}"
+    );
+
+    // B → A: A verifies the response and records the route.
+    lb_a.fill_samples(&lb_b.drain_samples());
+    let events_a = node_a.step(1_020);
+    assert!(
+        events_a
+            .iter()
+            .any(|e| matches!(e, MeshEvent::RouteDiscovered { destination, .. } if *destination == dst_id)),
+        "A must record the discovered route; got {events_a:?}"
+    );
+
+    // A now sends relay data along the discovered route (consuming the route table).
+    let route = node_a
+        .send_via_route(dst_id, 42, b"payload".to_vec(), 1_030)
+        .expect("send_via_route after discovery");
+    assert_eq!(route.len(), 2, "direct destination route is [self, dst]");
+
+    // A → B: B is the relay-data destination and delivers it.
+    lb_b.fill_samples(&lb_a.drain_samples());
+    let events_b = node_b.step(1_040);
+    assert!(
+        events_b
+            .iter()
+            .any(|e| matches!(e, MeshEvent::FrameDelivered { session_id: 42 })),
+        "B must deliver the relay data sent along the route; got {events_b:?}"
+    );
+}
