@@ -2008,11 +2008,12 @@ impl ModemEngine {
     /// Requires the audio backend to support [`AudioBackend::open_iq_output`].
     /// Returns `ModemError::Configuration` when the backend has no IQ output.
     ///
-    /// **Bypasses the `stage_emit_output` seam** (audit G-2): unlike every audio TX path, this writes
-    /// via `write_iq` directly, so it does **not** run the regulatory TX-metadata log, increment
-    /// `frames_transmitted` (which arms the auto-ID timer), or apply CE-SSB / limiter / spectrum tap.
-    /// It is an experimental IQ path with only test callers today; do not use it for on-air TX until it
-    /// is routed through an IQ-aware emit seam that logs + counts the frame.
+    /// Compliance fencing (audit G-2): this IQ path does not share `stage_emit_output`, so it applies
+    /// the regulatory bookkeeping itself — TX attenuation on the baseband IQ, the §97 TX-metadata log,
+    /// and the `frames_transmitted` bump that arms the auto-ID timer (all via `record_tx_frame`). The
+    /// only seam transforms it still omits are the **audio-envelope-domain** CE-SSB conditioner and the
+    /// `tanh` peak limiter, which have no IQ-domain equivalent yet — a hardware/PA limiter or SDR
+    /// headroom is the caller's responsibility on this path.
     pub fn transmit_iq(
         &mut self,
         data: &[u8],
@@ -2024,7 +2025,7 @@ impl ModemEngine {
         let outbound = self.stage_encode_frame(data)?;
         let outbound = self.route_wire_stage(PipelineStage::EncodeModulate, outbound)?;
 
-        let (i_bb, q_bb) = {
+        let (mut i_bb, mut q_bb) = {
             let plugin = self
                 .plugins
                 .get(mode)
@@ -2036,6 +2037,18 @@ impl ModemEngine {
             };
             plugin.modulate_iq(&outbound.bytes, &mod_cfg)?
         };
+
+        // Power control: apply the configured TX attenuation to the baseband IQ (same dB as the audio
+        // seam). Default 0 dB is a no-op.
+        let atten_linear = 10.0f32.powf(self.tx_attenuation_db / 20.0);
+        if (atten_linear - 1.0).abs() >= 1e-6 {
+            for s in i_bb.iter_mut() {
+                *s *= atten_linear;
+            }
+            for s in q_bb.iter_mut() {
+                *s *= atten_linear;
+            }
+        }
 
         let audio_cfg = AudioConfig::default();
         let mut stream = self
@@ -2052,6 +2065,9 @@ impl ModemEngine {
         stream
             .flush()
             .map_err(|e| ModemError::Audio(e.to_string()))?;
+
+        // Route through the same compliance bookkeeping as the audio seam: regulatory log + frame count.
+        self.record_tx_frame(mode)?;
 
         let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
             mode: mode.to_string(),
@@ -4504,8 +4520,16 @@ impl ModemEngine {
             .flush()
             .map_err(|e| ModemError::Audio(e.to_string()))?;
 
-        // Regulatory compliance log lives at this single emit seam, so EVERY transmitted frame
-        // (data, FEC, ACK, retransmit, QSY, …) is recorded — not just the plain `transmit()` path.
+        self.record_tx_frame(mode)?;
+
+        Ok(())
+    }
+
+    /// Record one emitted frame in the §97 regulatory TX-metadata log and bump `frames_transmitted`
+    /// (which arms the auto-ID timer). Called at **every** emit seam — the audio path
+    /// (`stage_emit_output`) and the IQ path (`transmit_iq`) — so no on-air TX escapes the log or the
+    /// station-ID accounting.
+    fn record_tx_frame(&mut self, mode: &str) -> Result<(), ModemError> {
         self.update_tx_session_callsign();
         let tx_seq = self.sequence.wrapping_sub(1);
         let metadata = TxMetadata::new(&self.callsign, mode, self.max_power_watts, tx_seq);
@@ -4514,7 +4538,6 @@ impl ModemEngine {
             .map_err(|err| ModemError::Configuration(err.to_string()))?;
         debug!("logged TX metadata: {}", metadata.to_log_line());
         self.frames_transmitted = self.frames_transmitted.wrapping_add(1);
-
         Ok(())
     }
 
