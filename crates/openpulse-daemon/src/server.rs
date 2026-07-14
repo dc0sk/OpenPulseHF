@@ -27,6 +27,7 @@ use openpulse_repeater::{CrossBandRepeater, RepeaterConfig};
 
 use bpsk_plugin::BpskPlugin;
 use fsk4_plugin::Fsk4Plugin;
+use mfsk16_plugin::Mfsk16Plugin;
 use ofdm_plugin::OfdmPlugin;
 use pilot_plugin::PilotPlugin;
 use psk8_plugin::Psk8Plugin;
@@ -108,6 +109,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     engine
         .register_plugin(Box::new(Fsk4Plugin::new()))
         .expect("failed to register FSK4 plugin");
+    engine
+        .register_plugin(Box::new(Mfsk16Plugin::new()))
+        .expect("failed to register MFSK16 plugin");
     engine
         .register_plugin(Box::new(OfdmPlugin::new()))
         .expect("failed to register OFDM plugin");

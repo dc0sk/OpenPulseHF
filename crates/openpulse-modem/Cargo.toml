@@ -23,6 +23,7 @@ tokio             = { version = "1", default-features = false, features = ["sync
 
 [dev-dependencies]
 js8-plugin = { workspace = true }
+mfsk16-plugin = { workspace = true }
 psk8-plugin = { workspace = true }
 fsk4-plugin = { workspace = true }
 scfdma-plugin = { workspace = true }

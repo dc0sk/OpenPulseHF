@@ -35,6 +35,9 @@ fn register_standard_plugins(engine: &mut ModemEngine) {
         .register_plugin(Box::new(fsk4_plugin::Fsk4Plugin::new()))
         .expect("register FSK4");
     engine
+        .register_plugin(Box::new(mfsk16_plugin::Mfsk16Plugin::new()))
+        .expect("register MFSK16");
+    engine
         .register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
         .expect("register OFDM");
     engine

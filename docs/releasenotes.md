@@ -47,6 +47,14 @@ Post-v0.5.0 improvements. **No breaking changes.**
   (`[modem] agc_enabled`). It doesn't change whether a signal decodes (that's already level-independent) —
   it steadies the audio level through deep fading and gives a gain/level readout. Off by default.
 
+**Weak-signal mode**
+
+- **New `MFSK16` mode for deep-fade / very weak signals.** A robust, narrow 16-tone waveform that keeps
+  decoding on badly-faded HF paths where the coherent BPSK modes drop out — measured to beat BPSK31 by
+  several dB on multipath, and to decode on fast-fading paths where BPSK31 fails entirely. Select it with
+  `--mode MFSK16` (or in the panel) for robust one-way / beacon traffic. It's a sub-floor mode: very robust
+  but slow (~17 s per frame).
+
 **Mesh & TNCs**
 
 - **Multi-hop mesh routes.** A mesh route discovery now records the full path it traverses, so the

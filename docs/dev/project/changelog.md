@@ -44,6 +44,11 @@ Post-v0.5.0 block-B/D backlog. No breaking changes.
   be enabled from the config file (with `agc_target_rms`/`agc_bandwidth`/`agc_max_gain_db`). Decode is
   already level-invariant, so the AGC stabilises the level through deep QSB and provides a metering
   readout rather than rescuing a decode. (REQ-AGC-01)
+- **`MFSK16` weak-signal waveform** (`plugins/mfsk16`, mode `MFSK16`): a constant-envelope non-coherent
+  16-GFSK sub-floor mode that decodes on deep-fade HF where coherent BPSK31 fails — measured ~4 dB better
+  on moderate multipath and decoding on fast fade where BPSK31 fails entirely, at a PAPR credit. Registered
+  in the CLI/daemon; usable now as a robust broadcast/beacon and explicit `--mode MFSK16` data mode. (The
+  ARQ-rung integration — an MFSK16 ACK channel + ladder placement — is deferred.) (REQ-WSIG-01)
 - **Mesh route discovery — source-accumulated multi-hop paths**: a `RouteDiscoveryRequest` now accumulates
   the traversed path as it floods (each forwarder appends itself), so the destination answers with the real
   end-to-end route instead of only `destination → [self]`. (#861)

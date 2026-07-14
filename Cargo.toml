@@ -23,6 +23,7 @@ members = [
     "plugins/bpsk",
     "plugins/fsk4",
     "plugins/js8",
+    "plugins/mfsk16",
     "plugins/ofdm",
     "plugins/pilot",
     "plugins/psk8",
@@ -75,6 +76,7 @@ openpulse-discovery  = { path = "crates/openpulse-discovery" }
 openpulse-dsp        = { path = "crates/openpulse-dsp" }
 openpulse-qsy        = { path = "crates/openpulse-qsy" }
 bpsk-plugin       = { path = "plugins/bpsk" }
+mfsk16-plugin     = { path = "plugins/mfsk16" }
 fsk4-plugin       = { path = "plugins/fsk4" }
 js8-plugin        = { path = "plugins/js8" }
 ofdm-plugin       = { path = "plugins/ofdm" }

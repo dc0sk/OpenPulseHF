@@ -9,6 +9,36 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — feat(plugin): mfsk16 production waveform, broadcast-first (REQ-WSIG-01)
+
+- **Requirement/change:** the production build of the validated 16-GFSK sub-floor rung. Per the Fable
+  production review, **ship broadcast-first**: the plugin as a robust broadcast/beacon + explicit-mode data
+  waveform, deferring the ARQ integration (ACK channel + ladder) that touches the most regression-sensitive
+  machinery in the repo for a rung with no field demand yet.
+- **Design decision:** new `plugins/mfsk16` crate (`Mfsk16Plugin`, mode `MFSK16`) mirroring the FSK4 shape
+  but soft-capable. `modulate`/`demodulate`/`demodulate_soft` reuse the validated logic (bytes→4-bit tones
+  + Costas-16 sync → `modulate_tones`; acquire → per-symbol 16 Goertzel energies → hard argmax / max-log
+  LLRs). Self-acquiring (Costas sync + timing×frequency search), so `estimate_afc_hz = None` (opts out of
+  the coherent AFC chain — a returned estimate would double-correct). Fixed one-255-byte-RS-block frame
+  (531 symbols). **Calibration fix (Fable):** replaced the measurement's per-symbol non-winner mean noise
+  estimate (~26% σ² error, leakage-inflated) with a **frame-level median** (exponential-median corrected,
+  winner-excluded) — noise is stationary, only the signal fades. Reuses the JS8 GFSK/Goertzel primitives
+  (`js8-plugin` dep) rather than the `openpulse-dsp` hoist (deferred — avoids a 7-site `from_submode`
+  refactor).
+- **Implementation:** `plugins/mfsk16/{Cargo.toml,src/lib.rs}`; workspace member + path dep; registered in
+  `crates/openpulse-cli/src/plugins.rs`, `crates/openpulse-daemon/src/server.rs` (startup) +
+  `monitor.rs` (multi-mode monitor), and the `apps/openpulse-panel` mode list.
+- **Tests:** `plugins/mfsk16/src/lib.rs` (clean loopback, soft/hard agreement, acquire-with-lead+offset,
+  oversized-frame reject); `plugins/mfsk16/tests/llr_reliability.rs` (worst-bin ≤ 4× on AWGN **and**
+  moderate Watterson — the frame-median calibration gate); `crates/openpulse-modem/tests/mfsk16_engine.rs`
+  (through the engine `transmit_with_fec`/`receive_with_fec` RS path clean + a moderate-fade smoke gate —
+  the seam-gap lesson: tested through the production entry, not only the plugin API).
+- **Test results:** `cargo test -p mfsk16-plugin` + `-p openpulse-modem --test mfsk16_engine` green;
+  daemon suite 116 lib green; `cargo build --workspace --no-default-features` clean; clippy `-D warnings`
+  + fmt clean.
+
+---
+
 ## 2026-07-14 — research: 16-GFSK rung real-sync measurement — net gain confirmed (REQ-WSIG-01)
 
 - **Requirement/change:** the next scheduled REQ-WSIG-01 stage — add real acquisition to the 16-GFSK arm

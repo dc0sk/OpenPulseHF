@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 
 use bpsk_plugin::BpskPlugin;
 use fsk4_plugin::Fsk4Plugin;
+use mfsk16_plugin::Mfsk16Plugin;
 use ofdm_plugin::OfdmPlugin;
 use openpulse_modem::ModemEngine;
 use pilot_plugin::PilotPlugin;
@@ -20,6 +21,9 @@ pub fn register_all(engine: &mut ModemEngine) -> Result<()> {
     engine
         .register_plugin(Box::new(Fsk4Plugin::new()))
         .context("failed to register FSK4 plugin")?;
+    engine
+        .register_plugin(Box::new(Mfsk16Plugin::new()))
+        .context("failed to register MFSK16 plugin")?;
     engine
         .register_plugin(Box::new(OfdmPlugin::new()))
         .context("failed to register OFDM plugin")?;

@@ -2077,7 +2077,15 @@ Build order revised per the 2026-07-14 Fable design review (see traceability):
    far below #864's 2–3 dB). AWGN sanity holds. **The waveform + acquisition are validated end-to-end; the
    DSP risk is retired.** Remaining ship questions are **operational, not waveform**: the MFSK-class ACK
    channel (the crux) + session timers. Production stages b–e (`mfsk16` plugin + engine + SL1 ladder +
-   ACK + timers) remain a scheduled multi-PR build.
+   ACK + timers) remain a scheduled multi-PR build. **PRODUCTION PLUGIN SHIPPED (broadcast-first, per the
+   Fable production review): `plugins/mfsk16` (`Mfsk16Plugin`, mode `MFSK16`)** — modulate/demodulate/
+   demodulate_soft reuse the validated primitives; self-acquiring (Costas-16 sync + timing×freq search,
+   `estimate_afc_hz = None`); a **frame-level-median noise estimator** (Fable's calibration fix over the
+   measurement's per-symbol mean) that passes `llr_reliability` on AWGN + Watterson; registered in the
+   CLI/daemon/monitor/panel. Usable now as a **robust broadcast/beacon + explicit `--mode MFSK16`** data
+   mode. **Deferred (PR-C/D, until concrete need):** the MFSK16-ACK channel + mode-aware ACK seam + SL1
+   ladder placement + HARQ-gate widening + airtime-scaled timers — these touch the most regression-
+   sensitive machinery in the repo for a rung with no field demand yet.
 
 ### Features shipped (no longer deferred)
 
