@@ -299,13 +299,20 @@ RFnexus/modem73, chrissnell/omnimodem, chrissnell/graywolf). **We re-implement i
 is copied**; these capture techniques worth building from first principles. Scheduling and priority live
 in the roadmap; each is a candidate, not a committed deliverable.
 
-- The receive path shall provide an optional **AGC / input-level normalization** front-end that
-  normalizes captured audio to a stable working level before demodulation, wired at the single
-  `route_audio_stage(InputCapture)` seam so every RX path (including the daemon streaming path) gets it,
-  gated by config and off by default, with a level-robust hard-limiter-correlator acquisition option.
-  It must not degrade calibrated soft-LLR reliability (the `llr_reliability`/`llr_calibration` gates must
-  still pass) and must carry a processed-block tripwire counter. Acceptance: an input-amplitude-sweep
-  test showing demod/DCD robustness with AGC on vs. the level sensitivity without it. (REQ-AGC-01)
+- The receive **AGC / input-level normalization** front-end (`openpulse_dsp::agc::Agc`) — wired at the
+  single `route_audio_stage(InputCapture)` seam (DC-block → notch → DCD → AGC, with DCD read *pre-AGC*),
+  gain-locked per burst so a mid-frame gain change can't corrupt soft-decision scaling, off by default,
+  with an `agc_blocks_processed` tripwire and runtime `SetAgc` control (daemon/CLI/panel) — is **already
+  shipped** (PRs #583/#699/#700/#826; verified by the 2026-07-14 Fable design review). The earlier "we
+  have no AGC" claim was stale (predated PR #583). Remaining delta: (a) a TOML config gate
+  `[modem] agc_enabled` (+ optional target-RMS / bandwidth / max-gain-dB) applied at daemon startup like
+  the notch — currently AGC is runtime-toggleable only; and (b) a systematic input-amplitude-sweep
+  acceptance test documenting that decode is level-invariant above the squelch (AGC on vs. off, because
+  the LLR/SNR/acquisition estimators are amplitude-ratio-based) and that the AGC's value is QSB
+  level-tracking + metering, not sub-squelch rescue. The hard-limiter-correlator option is **rejected**:
+  a hard limiter is constant-envelope and destroys the amplitude information the calibrated soft-LLR path
+  needs (QAM/APSK), and acquisition is already amplitude-invariant (`search_normalized` / relative
+  `refine_onset`), so nothing motivates it. (REQ-AGC-01)
 - Every PTT-keyed transmit scope shall release the transmitter **deterministically on scope exit** —
   including on an early return or a panic/unwind — via an RAII guard, rather than relying solely on the
   max-duration watchdog (REQ-REG-10 / #863). This bounds an unexpected key-down to the current stack

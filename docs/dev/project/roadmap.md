@@ -2028,16 +2028,32 @@ REQ-DEV-01 in `requirements.md`. **Re-implemented independently — no code copi
 1. **REQ-PTT-01 — transmitter-release RAII guard (unkey-on-Drop). ✅ Shipped (2026-07-14).**
    `SharedPtt::keyed` → `PttKeyGuard` (Drop releases, including on panic/unwind); the five automatic-TX
    sites in `server.rs` converted. Bounds an unexpected key-down to the current scope instead of ≤180 s.
-2. **REQ-AGC-01 — receive AGC / input-level normalization front-end** (hard-limiter correlator + DF-AGC,
-   per graywolf/libmodem). The long-standing #1 reference-mining gap (we have no AGC). Must sit at the
-   single `InputCapture` seam, keep the soft-LLR calibration gates green, and be proven with a
-   level-sweep measurement.
-3. **REQ-PTT-02 / REQ-PTT-03 — CM108 USB-HID and GPIO PTT backends** (per graywolf's PTT abstraction).
-4. **REQ-WSIG-01 — robust narrowband weak-signal waveform** (per modem73's ROBUST family) — the
-   measured direction over the rejected frequency-diversity rung (#864).
-5. **REQ-RX-01 — simultaneous multi-mode receive** (per modem73's parallel-family RX) — a discovery/
-   monitor decode tap off the shared `InputCapture` seam. Larger, architectural.
-6. **REQ-DEV-01 — hotplug-safe audio device identity** (per omnimodem's stable device identity).
+Build order revised per the 2026-07-14 Fable design review (see traceability):
+
+1. **REQ-PTT-02 + REQ-PTT-03 — CM108 USB-HID + GPIO PTT backends** (one track: 1 plumbing PR + 2 backend
+   PRs). Both small, zero DSP risk; complete the PTT story (watchdog #867 + RAII #872 + the two graywolf
+   backends). CM108 = a plain 5-byte `/dev/hidrawN` write (**no `hidapi`/C dep** — cross-compile-safe);
+   GPIO = `gpiocdev` (pure Rust) behind a mockable line trait (fully unit-testable). Also fix the daemon's
+   silent `rts`/`dtr` no-support gap in the same plumbing pass.
+2. **REQ-DEV-01 — hotplug-safe audio device identity.** Small, self-contained; today's selection is exact
+   name-match (reorder-tolerant, rename-fragile). A pure `resolve_device` match ladder (exact → ALSA
+   `CARD=` token → substring → error-on-ambiguity) + re-enumerate-on-miss; closes an untested failure mode.
+3. **REQ-RX-01 — simultaneous multi-mode receive.** **Contained, not architectural** (Fable): plugins are
+   stateless (`&self`), and the JS8 discovery dwell already tees a raw-capture clone to an independent
+   decoder — the exact pattern. A `MonitorRuntime` sibling of `DiscoveryRuntime` (off by default), no
+   engine-RX changes.
+4. **REQ-AGC-01 — AGC config gate + acceptance test. ⚠️ Mostly ALREADY SHIPPED** (PRs #583/#699/#700/#826;
+   the "we have no AGC" claim was stale). Remaining: a `[modem] agc_enabled` TOML gate + an amplitude-sweep
+   acceptance test; the hard-limiter-correlator option is **rejected** (constant-envelope, incompatible
+   with soft-LLR; acquisition already amplitude-invariant). Small docs+config+test PR, not a DSP build.
+5. **REQ-WSIG-01 — robust narrowband weak-signal waveform. Measurement-gate first** (per modem73's ROBUST,
+   and the #864 discipline). JS8 does **not** satisfy it (unregistered, 9-byte envelope-less payload,
+   25–250 Hz, ~6 bps) — but a real dead-zone gap exists (~−3 dB BPSK31 floor → −18 dB JS8). A
+   **constant-envelope non-coherent 16-FSK (~600 Hz)** candidate has ΔPAPR≈0 (dodges what killed #864) and
+   non-coherent detection (dodges BPSK31's carrier-tracking limit under fast fade), reusing the JS8
+   GFSK/LDPC primitives. Bake off coded frame-success vs BPSK31 on Watterson first; pre-registered kill:
+   ship only if ≥3 dB gain at the 0.5 crossing on moderate_f1 with ΔPAPR ≤ 0.5 dB and no good_f1
+   regression; else close honestly like #864 (~40–50 % chance of no-ship).
 
 ### Features shipped (no longer deferred)
 
