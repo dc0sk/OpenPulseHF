@@ -188,6 +188,11 @@ pub struct RuntimeControlState {
     pub dcd_squelch_default: f32,
     /// Per-band DCD/squelch overrides (band label → threshold), applied on retune.
     pub dcd_squelch_bands: std::collections::BTreeMap<String, f32>,
+    /// Global TX attenuation (dB) applied when no per-band override matches the current band.
+    pub tx_attenuation_default: f32,
+    /// Per-band TX attenuation overrides (band label → dB), set by `SetTxAttenuation { band }` and
+    /// re-applied on retune.
+    pub tx_attenuation_bands: std::collections::BTreeMap<String, f32>,
     /// Automatic ADIF logbook (opt-in); records one QSO per connect→disconnect.
     pub logbook: crate::logbook::Logbook,
     /// Most recent CAT frequency (Hz) set via `SetFreq`, stamped into the logbook QSO.
@@ -318,6 +323,8 @@ impl Default for RuntimeControlState {
             relay_forwarder: None,
             dcd_squelch_default: 0.01,
             dcd_squelch_bands: std::collections::BTreeMap::new(),
+            tx_attenuation_default: 0.0,
+            tx_attenuation_bands: std::collections::BTreeMap::new(),
             logbook: crate::logbook::Logbook::default(),
             last_freq_hz: None,
             station_seed: [0u8; 32],
@@ -1057,8 +1064,12 @@ pub(crate) async fn dispatch_command(
     if let ControlCommand::SetMode { ref mode } = cmd {
         *active_mode.lock().await = mode.clone();
     }
-    if let ControlCommand::SetTxAttenuation { db, .. } = cmd {
-        *tx_attenuation_db.lock().await = *db;
+    if let ControlCommand::SetTxAttenuation { db, band } = cmd {
+        // The shared value is the reported global default; a per-band override does not change it (its
+        // effect is tracked engine-side and applied on the matching band). See apply_command_to_engine.
+        if band.is_none() {
+            *tx_attenuation_db.lock().await = *db;
+        }
     }
     if let ControlCommand::SetConfig { ref config } = cmd {
         // Hold all locks simultaneously so GetConfig cannot observe a mixed state.
@@ -1676,9 +1687,29 @@ pub async fn apply_command_to_engine(
                 });
             }
         }
-        ControlCommand::SetTxAttenuation { db, .. } => {
-            engine.set_tx_attenuation_db(*db);
-        }
+        ControlCommand::SetTxAttenuation { db, band } => match band {
+            // Per-band override: remember it, and apply immediately only when it is the current band.
+            Some(label) => {
+                runtime_state
+                    .tx_attenuation_bands
+                    .insert(label.clone(), *db);
+                let on_this_band = runtime_state
+                    .last_freq_hz
+                    .and_then(openpulse_qsy::bandplan::band_label_for_hz)
+                    == Some(label.as_str());
+                if on_this_band {
+                    engine.set_tx_attenuation_db(*db);
+                }
+            }
+            // Global default: takes effect now, unless a per-band override matches the current band.
+            None => {
+                runtime_state.tx_attenuation_default = *db;
+                match runtime_state.last_freq_hz {
+                    Some(hz) => apply_band_attenuation(engine, runtime_state, hz),
+                    None => engine.set_tx_attenuation_db(*db),
+                }
+            }
+        },
         ControlCommand::SetConfig { config } => {
             if engine.plugins().get(&config.mode).is_some() {
                 *active_mode.lock().await = config.mode.clone();
@@ -1688,7 +1719,12 @@ pub async fn apply_command_to_engine(
                     reason: format!("unsupported mode '{}'", config.mode),
                 });
             }
-            engine.set_tx_attenuation_db(config.tx_attenuation_db);
+            // Sets the global default; per-band overrides persist and re-apply on retune.
+            runtime_state.tx_attenuation_default = config.tx_attenuation_db;
+            match runtime_state.last_freq_hz {
+                Some(hz) => apply_band_attenuation(engine, runtime_state, hz),
+                None => engine.set_tx_attenuation_db(config.tx_attenuation_db),
+            }
         }
         ControlCommand::PttAssert => {
             runtime_state.ptt_asserted_at = Some(Instant::now());
@@ -1845,8 +1881,9 @@ pub async fn apply_command_to_engine(
             match controller.set_frequency(*freq_hz) {
                 Ok(()) => {
                     runtime_state.last_freq_hz = Some(*freq_hz);
-                    // Restore the per-band DCD squelch for the new frequency.
+                    // Restore the per-band DCD squelch + TX attenuation for the new frequency.
                     apply_band_squelch(engine, runtime_state, *freq_hz);
+                    apply_band_attenuation(engine, runtime_state, *freq_hz);
                     let _ = event_tx.send(ControlEvent::RigStatus {
                         rig: rig.clone(),
                         freq_hz: *freq_hz,
@@ -2370,6 +2407,18 @@ pub fn apply_band_squelch(
     engine.set_dcd_squelch(threshold);
 }
 
+/// Resolve the TX attenuation for `freq_hz` (per-band override → global default) and apply it.
+pub fn apply_band_attenuation(
+    engine: &mut ModemEngine,
+    runtime_state: &RuntimeControlState,
+    freq_hz: u64,
+) {
+    let atten = openpulse_qsy::bandplan::band_label_for_hz(freq_hz)
+        .and_then(|label| runtime_state.tx_attenuation_bands.get(label).copied())
+        .unwrap_or(runtime_state.tx_attenuation_default);
+    engine.set_tx_attenuation_db(atten);
+}
+
 /// Build an [`ControlEvent::OtaStatus`] snapshot from the engine's current OTA state.
 pub fn ota_status_event(engine: &ModemEngine) -> ControlEvent {
     ControlEvent::OtaStatus {
@@ -2810,6 +2859,85 @@ mod command_apply_tests {
         // Out-of-band frequency → default.
         apply_band_squelch(&mut engine, &rs, 5_000_000);
         assert!((engine.dcd_squelch() - 0.01).abs() < 1e-6);
+    }
+
+    #[test]
+    fn apply_band_attenuation_uses_per_band_override_else_default() {
+        let mut engine = test_engine();
+        let mut rs = RuntimeControlState {
+            tx_attenuation_default: -3.0,
+            ..RuntimeControlState::default()
+        };
+        rs.tx_attenuation_bands.insert("40m".into(), -6.0);
+
+        // 40m is in the map → its override applies.
+        apply_band_attenuation(&mut engine, &rs, 7_040_000);
+        assert!((engine.tx_attenuation_db() - (-6.0)).abs() < 1e-6);
+
+        // 20m is not in the map → fall back to the global default.
+        apply_band_attenuation(&mut engine, &rs, 14_070_000);
+        assert!((engine.tx_attenuation_db() - (-3.0)).abs() < 1e-6);
+
+        // Out-of-band frequency → default.
+        apply_band_attenuation(&mut engine, &rs, 5_000_000);
+        assert!((engine.tx_attenuation_db() - (-3.0)).abs() < 1e-6);
+    }
+
+    #[tokio::test]
+    async fn set_tx_attenuation_per_band_stores_and_applies_on_the_matching_band() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, _) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let mut rs = RuntimeControlState::default();
+
+        // Per-band override while not on that band: stored, not applied (engine stays at 0).
+        apply_command_to_engine(
+            &ControlCommand::SetTxAttenuation {
+                db: -6.0,
+                band: Some("20m".into()),
+            },
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut rs,
+        )
+        .await;
+        assert_eq!(rs.tx_attenuation_bands.get("20m").copied(), Some(-6.0));
+        assert!(
+            (engine.tx_attenuation_db() - 0.0).abs() < 1e-6,
+            "override not applied off-band"
+        );
+
+        // Now on 20m: a retune applies the stored override.
+        rs.last_freq_hz = Some(14_070_000);
+        apply_band_attenuation(&mut engine, &rs, 14_070_000);
+        assert!((engine.tx_attenuation_db() - (-6.0)).abs() < 1e-6);
+
+        // A global default set while on 20m: the per-band override still wins.
+        apply_command_to_engine(
+            &ControlCommand::SetTxAttenuation {
+                db: -3.0,
+                band: None,
+            },
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut rs,
+        )
+        .await;
+        assert!((rs.tx_attenuation_default - (-3.0)).abs() < 1e-6);
+        assert!(
+            (engine.tx_attenuation_db() - (-6.0)).abs() < 1e-6,
+            "the 20m override wins over the global default while on 20m"
+        );
+
+        // Move to a band with no override → the global default applies.
+        rs.last_freq_hz = Some(7_040_000);
+        apply_band_attenuation(&mut engine, &rs, 7_040_000);
+        assert!((engine.tx_attenuation_db() - (-3.0)).abs() < 1e-6);
     }
 
     #[tokio::test]
