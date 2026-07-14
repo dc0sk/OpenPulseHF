@@ -9,6 +9,35 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — feat(daemon): honor the per-band `SetTxAttenuation { band }` override
+
+- **Requirement/change:** issue #830 — `SetTxAttenuation { db, band }` carried an optional `band`, but the
+  daemon destructured it away (`{ db, .. }`) and only ever set the single global engine attenuation, so
+  per-band requests were silently dropped. Honoring `band` needs per-band memory + application on retune.
+- **Design decision:** mirror the existing per-band DCD-squelch mechanism exactly. `RuntimeControlState`
+  gains `tx_attenuation_default` + `tx_attenuation_bands` (band label → dB), and a new
+  `apply_band_attenuation(engine, rs, freq_hz)` resolves per-band override → default (twin of
+  `apply_band_squelch`), called alongside it on the `SetFreq` retune. In `apply_command_to_engine`,
+  `band: Some(label)` stores the override and applies it immediately only when `band_label_for_hz(last_freq_hz)`
+  matches; `band: None` sets the global default and applies the effective value (a matching per-band
+  override still wins on the current band). `SetConfig` seeds the default the same way. In
+  `dispatch_command`, the shared/reported global attenuation is updated only for `band: None` (a per-band
+  override is tracked engine-side, not conflated into the reported global).
+- **Implementation:** `crates/openpulse-daemon/src/lib.rs` — struct fields + defaults, `apply_band_attenuation`,
+  the rewritten `SetTxAttenuation`/`SetConfig` apply arms, the `SetFreq` retune call, and the
+  `dispatch_command` guard.
+- **Tests:** `apply_band_attenuation_uses_per_band_override_else_default` (40m override / 20m default /
+  out-of-band default); `set_tx_attenuation_per_band_stores_and_applies_on_the_matching_band` (stored but
+  not applied off-band → applied on retune to that band → global default set while on 20m still yields the
+  20m override → moving to an un-overridden band applies the default). The pre-existing
+  `apply_set_config_updates_mode_and_tx_attenuation` still passes (backward compatible).
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features` → 97 lib (95 → 97) +
+  integration all pass; fmt + clippy (`--tests -D warnings`) clean.
+- **Note:** per-band overrides are runtime-only (no config field / no persistence); `GetConfig`/`GetStatus`
+  report the global default, not the per-band-effective value.
+
+---
+
 ## 2026-07-14 — feat(mesh): drive the route originator + consume discovered routes for relay send
 
 - **Requirement/change:** issue #830 — #841 wired the `RouteResponder` into `MeshDaemon` (a node answers
