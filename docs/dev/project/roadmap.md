@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/roadmap.md
 status: living
-last_updated: 2026-07-10
+last_updated: 2026-07-14
 ---
 
 # Roadmap
@@ -942,6 +942,74 @@ session memory. Ordered execution: Tier-1 bugs → OTA-ladder re-seat → measur
   fading (error propagation), confirming the #697 note (PR #715).
 - (The QPSK "window-derived β" port and wiring `freq_acquire::acquire` were assessed and **skipped** —
   wrong-premise and risky-for-no-clear-benefit respectively; recorded so they aren't re-opened.)
+
+---
+
+## Phase 12 — "Loose-ends" audit fix-down (2026-07-13) ✅ Done (one item deferred by decision)
+
+A 10-dimension model-driven "what isn't nailed down" audit (stubs & unconsumed wiring, panics in library
+paths, seam gaps, test gaps, concurrency, security/safety/regulatory, correctness, docs drift), each
+finding **refuted-by-default** before it reached the report: 52 raised → 47 confirmed. All **high- and
+medium-severity findings were fixed and merged** (PRs #814–#832); the deferred low-severity tail was
+tracked in **issue #830** and worked down to completion. Per-change chains are in
+`docs/dev/project/traceability.md` (2026-07-13/14 entries); the audit method is now a reusable skill.
+
+### 12.1 — DSP soft-LLR calibration completion ✅ Done
+Every shipped plugin's soft demod now emits calibrated 1/σ² LLRs (matters for HARQ combining / iterative
+equalizers; single-frame decode is scale-invariant, so no frame-gain but the reliability gates flip from
+over-confident to safely under-confident). The decision-directed noise estimator saturates on dense grids
+(measured 24×–1599× over-confident); replaced by measuring σ² from a known preamble/pilot residual + a
+`(1+P_c)` channel/pilot-estimation-error term. 64QAM (#833), OFDM incl. the ZF double-count (#834), pilot
+(#835), and the 64QAM/psk8 GPU soft path (#837) — completing the batch SC-FDMA started in #690.
+
+### 12.2 — §97.119 regulatory hardening ✅ Done
+- **MYID-before-TX across both TNCs** — the ARDOP TNC refused to key without a valid host `MYID` (host
+  data → FAULT, IRS ACK suppressed, auto-ID rejects `N0CALL`, relay suppressed) (#847); the KISS TNC, which
+  has no MYID, gates on the AX.25 **source** address per frame (`Ax25Addr::source_from_frame`; common
+  address header, so connected-mode is unaffected) (#848). Shared `station_id::callsign_is_valid`.
+- **Regulatory TX-metadata log identity** — the daemon/ARDOP/KISS/mesh binaries never called
+  `set_callsign`/`set_max_power_watts`, so the §97 log stamped an empty callsign + 0 W. Wired identity +
+  a new `[station] tx_power_watts` into each engine at startup (ARDOP mirrors the runtime MYID) (#849).
+
+### 12.3 — Route-discovery originator + consumption ✅ Done
+The `RouteDiscoveryRequest/Response` codecs were codec-only. Built the driver — `RouteOriginator` /
+`RouteResponder` / `RouteTable`, self-authenticating Ed25519 (#840) — and wired the **responder** into the
+mesh daemon so a request targeting the node (or a cached route) is answered on-air (#841). Then closed the
+loop: the mesh daemon **originates** (`discover_route`), **applies** responses into the route table, and
+**consumes** a route for relay send (`send_via_route` picks via `select_best_scored_route`, which calls
+`score_route`) (#850). Deferred: source-accumulated multi-hop paths need a wire-path TLV.
+
+### 12.4 — Robustness / concurrency ✅ Done (one sub-item deferred)
+- **ARDOP engine lock off the async executor** — CONNECT/DISCONNECT locked the engine `std::sync::Mutex`
+  inline on the executor while the worker holds it across an RF burst, stalling other clients' commands
+  (incl. ABORT); moved to `spawn_blocking` like the PTT handlers (#846).
+- **Lossy-broadcast PTT resync** — a client that missed a `PttChanged` edge (256-slot ring) can recover
+  via a new `GetPttState` query that re-broadcasts the current state (#843).
+- **Filexfer per-peer quota** counted only the top level; now recurses the `.partial/` subtree (#842).
+- **Watchdog fairness** — `server::run`'s single `select!` was `biased` (commands first) with the PTT
+  watchdog buried in the rx arm, so a command flood starved the rx tick **and** the watchdog. Gave the
+  watchdog its own 100 ms `select!` arm and dropped `biased` → fair scheduling; the transmitter's
+  force-release can no longer be starved (#853).
+- *Deferred (issue #830, by decision 2026-07-14):* the **in-handler** blocking half — a QSY scan / OTA
+  send-retry holds the command arm for tens of seconds, delaying `Abort`/`PttRelease`. This is
+  command-latency, not a stuck transmitter (the watchdog is now independent). Revisit only if practical
+  use shows it bites; then choose (A) state-machine the long handlers to yield vs (B) an independent
+  `Arc<Mutex>` watchdog task.
+
+### 12.5 — Feature completions ✅ Done
+- **Per-band `SetTxAttenuation`** — the control command's optional `band` was silently dropped (only the
+  global engine attenuation was set). Added an engine-side per-band store + `apply_band_attenuation`
+  applied on the `SetFreq` retune, mirroring the per-band DCD-squelch mechanism (#851).
+- **`transmit_iq` compliance fence (audit G-2)** — the IQ path bypassed the `stage_emit_output` seam (no
+  §97 log, no auto-ID arming, no attenuation). Extracted the compliance bookkeeping into a shared
+  `record_tx_frame` called by both the audio seam and `transmit_iq`, which also now applies TX attenuation
+  to the baseband IQ; CE-SSB / tanh peak-limit have no IQ-domain equivalent (documented) (#852).
+
+### 12.6 — Test-coverage + docs ✅ Done
+- Command-path PTT hardware-failure guard (#836); discovery DCD-busy beacon-defer (#839) + the two
+  remaining `server::run` handoffs — dwell-audio tee + rendezvous-connect (#845); daemon filexfer resume →
+  `FileAccept.have_bitmap` composition (#844).
+- `docs/cli-guide.md` daemon/FF-15/FF-16 control CLI + the README `hpx_hf` ladder row (#838).
 
 ---
 
