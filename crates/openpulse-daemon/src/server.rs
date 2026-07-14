@@ -446,8 +446,12 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
         }
     }
 
-    let ptt_controller: Option<Box<dyn PttController + Send>> =
-        build_ptt_controller(&cfg.modem.ptt_backend, &cfg.radio.rigctld_addr);
+    let ptt_controller: Option<Box<dyn PttController + Send>> = build_ptt_controller(
+        &cfg.modem.ptt_backend,
+        &cfg.radio.rigctld_addr,
+        &cfg.modem.ptt_device,
+        cfg.modem.ptt_gpio,
+    );
 
     let qsy_policy = match QsyPolicy::from_config(
         cfg.qsy.enabled,
@@ -1522,6 +1526,8 @@ pub fn build_cat_controller(radio: &openpulse_config::RadioConfig) -> Option<Cat
 fn build_ptt_controller(
     backend: &str,
     rigctld_addr: &str,
+    ptt_device: &str,
+    ptt_gpio: u8,
 ) -> Option<Box<dyn PttController + Send>> {
     match backend {
         "none" => Some(Box::new(NoOpPtt::new())),
@@ -1537,6 +1543,18 @@ fn build_ptt_controller(
                 None
             }
         },
+        "cm108" => match openpulse_radio::Cm108Ptt::open(ptt_device, ptt_gpio) {
+            Ok(ctrl) => Some(Box::new(ctrl)),
+            Err(e) => {
+                tracing::warn!(
+                    device = %ptt_device,
+                    gpio = ptt_gpio,
+                    error = %e,
+                    "CM108 PTT open failed; PTT commands will be no-ops"
+                );
+                None
+            }
+        },
         "rts" | "dtr" => {
             tracing::warn!(
                 backend,
@@ -1548,6 +1566,33 @@ fn build_ptt_controller(
             tracing::warn!(backend = %other, "unknown PTT backend; PTT disabled");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod ptt_selector_tests {
+    use super::build_ptt_controller;
+
+    #[test]
+    fn none_and_vox_build_a_controller() {
+        assert!(build_ptt_controller("none", "", "", 3).is_some());
+        assert!(build_ptt_controller("vox", "", "", 3).is_some());
+    }
+
+    #[test]
+    fn cm108_with_a_missing_device_is_a_graceful_noop() {
+        // The daemon selector reaches the cm108 arm and, on open failure, returns None (PTT disabled)
+        // rather than erroring — the daemon must keep running with no PTT.
+        let ctrl = build_ptt_controller("cm108", "", "/dev/nonexistent-openpulse-hidraw-xyz", 3);
+        assert!(
+            ctrl.is_none(),
+            "a missing CM108 device disables PTT, not a crash"
+        );
+    }
+
+    #[test]
+    fn unknown_backend_disables_ptt() {
+        assert!(build_ptt_controller("nonsense", "", "", 3).is_none());
     }
 }
 

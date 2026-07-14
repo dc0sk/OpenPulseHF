@@ -168,12 +168,13 @@ Run `openpulse daemon --help` for the full subcommand and flag reference.
 - --mode <MODE>: select a registered modulation mode.
 - --pki-url <URL>: PKI service base URL (default: http://127.0.0.1:8787).
 - --log <LEVEL>: log level (error, warn, info, debug, trace).
-- --ptt <none|rts|dtr|vox|rigctld>: PTT control method (default: none).
+- --ptt <none|rts|dtr|vox|rigctld|cm108>: PTT control method (default: none).
   - none: no PTT (loopback, testing)
   - rts / dtr: assert serial RTS or DTR line; --rig specifies the serial port (e.g. /dev/ttyUSB0). Requires the `serial` feature.
   - vox: software-state only (no external line driven; useful for VOX-enabled rigs)
   - rigctld: TCP connection to hamlib rigctld; --rig specifies address:port (default: localhost:4532)
-- --rig <path|address:port>: serial port path for rts/dtr PTT, or rigctld address:port.
+  - cm108: CM108/CM109/CM119 sound-chip GPIO over USB-HID (DMK URI, RA-series, AIOC, homebrew); --rig specifies the `/dev/hidrawN` path (empty = auto-detect the first C-Media device). Keys GPIO 3 by default. In the daemon, `[modem] ptt_device` / `ptt_gpio` set the path and pin.
+- --rig <path|address:port>: serial port path for rts/dtr PTT, rigctld address:port, or the /dev/hidrawN path for cm108.
 - --help: show full command and flag reference.
 
 Output format options (available on most commands):

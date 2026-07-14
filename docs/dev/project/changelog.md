@@ -24,6 +24,10 @@ Post-v0.5.0 block-B/D backlog. No breaking changes.
 - **Transmitter-release RAII guard (unkey-on-Drop)**: every automatic transmit scope now releases PTT on
   scope exit — including on an early return or a panic/unwind — so an unexpected key-down is bounded to the
   current scope instead of waiting up to the 180 s watchdog. (REQ-PTT-01, #872)
+- **CM108 USB-HID PTT backend** (`--ptt cm108` / `[modem] ptt_backend = "cm108"`): key PTT via the
+  CM108/CM109/CM119 sound-chip GPIO on cheap USB interfaces (DMK URI, RA-series, AIOC, homebrew). A plain
+  `/dev/hidrawN` write — no extra dependency; `ptt_device` selects the path (empty = auto-detect a C-Media
+  device) and `ptt_gpio` the pin (default 3). (REQ-PTT-02)
 - **Mesh route discovery — source-accumulated multi-hop paths**: a `RouteDiscoveryRequest` now accumulates
   the traversed path as it floods (each forwarder appends itself), so the destination answers with the real
   end-to-end route instead of only `destination → [self]`. (#861)

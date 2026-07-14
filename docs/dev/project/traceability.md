@@ -9,6 +9,33 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — feat(radio): CM108 USB-HID PTT backend (REQ-PTT-02)
+
+- **Requirement/change:** REQ-PTT-02 — key PTT via the CM108/CM109/CM119 sound-chip GPIO over USB-HID (the
+  cheap-USB-interface path: DMK URI, RA-series, AIOC, homebrew). Derived from studying graywolf's PTT
+  abstraction (`docs/dev/research/references.md`); re-implemented independently.
+- **Design decision:** keying is a single 5-byte HID output report to `/dev/hidrawN` — a plain
+  `std::fs::File` write, so the backend needs **no `hidapi`/C dependency** (keeps the `cross`-compile gate
+  clean) and is **always compiled** (its encoding/parsing unit tests run in the default `--no-default-features`
+  CI, unlike the feature-gated serial backend). Report layout is the canonical Dire Wolf one (verified
+  against `cm108.c`: `[0, 0, iodata, iomask, 0]`, GPIO `n`→bit `1<<(n-1)`, GPIO 3 default). Auto-detect
+  scans `/sys/class/hidraw/*/device/uevent` for vendor `0x0d8c` (Linux-gated; the pure uevent parser is
+  always-compiled/tested). Config surface `[modem] ptt_device` + `ptt_gpio` threaded through the daemon +
+  CLI selectors; failure is graceful (daemon → `None`/PTT-disabled, keeps running).
+- **Implementation:** `crates/openpulse-radio/src/cm108.rs` (new: `cm108_ptt_report`, `uevent_is_cm108`,
+  `detect_cm108_hidraw`, `Cm108Ptt` + `PttController` impl) + `lib.rs` export; `crates/openpulse-config/
+  src/lib.rs` (`ptt_device`, `ptt_gpio` + template); `crates/openpulse-daemon/src/server.rs`
+  (`build_ptt_controller` gains device/gpio params + `cm108` arm); `crates/openpulse-cli/src/radio.rs` +
+  `cli.rs` (`cm108` arm + `--ptt` help).
+- **Tests:** `cm108.rs` — report encoding (GPIO 3 + all pins 1–8), uevent match/reject, out-of-range GPIO,
+  missing-device error (6); daemon `ptt_selector_tests` (none/vox build, cm108-missing-device → graceful
+  None, unknown → None); CLI `transmit_with_cm108_missing_device_errors`.
+- **Test results:** `cargo test -p openpulse-radio -p openpulse-config -p openpulse-daemon -p openpulse-cli
+  --no-default-features` green; `cargo build --workspace --no-default-features` clean; clippy `-D warnings`
+  + fmt clean.
+
+---
+
 ## 2026-07-14 — docs: Fable design review of the reference-derived requirements (REQ-AGC-01 correction + plan)
 
 - **Requirement/change:** design-review the reference-derived requirements before building. Two Fable

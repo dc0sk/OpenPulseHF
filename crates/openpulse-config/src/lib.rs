@@ -378,8 +378,13 @@ pub struct ModemConfig {
     /// Selects the SpeedLevel→mode ladder the rate controller and mode advisor use.
     /// See `SessionProfile::PROFILE_NAMES` in `openpulse-core`.
     pub profile: String,
-    /// PTT backend: `none`, `rts`, `dtr`, `vox`, or `rigctld`.
+    /// PTT backend: `none`, `rts`, `dtr`, `vox`, `rigctld`, or `cm108`.
     pub ptt_backend: String,
+    /// PTT device path for device-based backends. For `cm108`, a `/dev/hidrawN` path (empty =
+    /// auto-detect the first CM108-family device); for `rts`/`dtr`, the serial port path.
+    pub ptt_device: String,
+    /// CM108 GPIO pin driving PTT (1..=8); GPIO 3 is the near-universal default.
+    pub ptt_gpio: u8,
     /// Receiver-led OTA adaptive rate-stepping. When `true`, the daemon starts an
     /// OTA session at launch and drives it on the RX path.
     pub ota_enabled: bool,
@@ -597,6 +602,8 @@ impl Default for ModemConfig {
             mode: "BPSK250".into(),
             profile: "hpx_hf".into(),
             ptt_backend: "none".into(),
+            ptt_device: String::new(),
+            ptt_gpio: 3,
             ota_enabled: false,
             ota_profile: String::new(),
             ota_min_level: String::new(),
@@ -951,8 +958,14 @@ mode = "BPSK250"
 # hpx_wideband_hd, hpx_narrowband, hpx_narrowband_hd. hpx_ofdm_hf is the OFDM
 # higher-order (high-throughput/high-reliability) HF ladder.
 profile = "hpx_hf"
-# PTT backend: none | rts | dtr | vox | rigctld
+# PTT backend: none | rts | dtr | vox | rigctld | cm108
 ptt_backend = "none"
+# PTT device path for device-based backends. For cm108, a /dev/hidrawN path
+# (empty = auto-detect the first CM108-family device); for rts/dtr, the serial
+# port path. Ignored by none/vox/rigctld.
+ptt_device = ""
+# CM108 GPIO pin driving PTT (1..8); 3 is the near-universal default.
+ptt_gpio = 3
 # Receiver-led OTA adaptive rate-stepping. When true the daemon starts an OTA
 # session at launch and drives it on the RX path (the data receiver leads the
 # rate per direction; the sender follows an absolute recommendation in the ACK).
