@@ -21,6 +21,9 @@ Post-v0.5.0 block-B/D backlog. No breaking changes.
   inside a long handler (a QSY scan or an OTA send-retry burst) — the previous `select!`-arm watchdog (#853)
   could not, because the loop never re-enters `select!` during such a handler. A stuck rig (release keeps
   failing) is retried every tick and never falsely reported as released. (#863)
+- **Transmitter-release RAII guard (unkey-on-Drop)**: every automatic transmit scope now releases PTT on
+  scope exit — including on an early return or a panic/unwind — so an unexpected key-down is bounded to the
+  current scope instead of waiting up to the 180 s watchdog. (REQ-PTT-01, #872)
 - **Mesh route discovery — source-accumulated multi-hop paths**: a `RouteDiscoveryRequest` now accumulates
   the traversed path as it floods (each forwarder appends itself), so the destination answers with the real
   end-to-end route instead of only `destination → [self]`. (#861)
