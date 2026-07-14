@@ -119,7 +119,14 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
-            if let Ok(mut engine) = bridge.engine.lock() {
+            // Run the blocking engine lock + handshake off the async executor (spawn_blocking): the
+            // modem worker holds this same std Mutex across a full RF TX/RX burst, and locking it
+            // inline here would park an executor thread for the burst — stalling other clients' commands
+            // (including ABORT). Mirrors the PTT handlers below.
+            let engine = bridge.engine.clone();
+            let peer_for_log = peer.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let mut engine = engine.lock().unwrap_or_else(|e| e.into_inner());
                 if let Err(e) = engine.begin_secure_session(
                     SecureSessionParams {
                         local_minimum_mode: SigningMode::Normal,
@@ -130,9 +137,10 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
                     },
                     now_ms,
                 ) {
-                    tracing::warn!(peer = %peer, error = %e, "begin_secure_session failed on CONNECT");
+                    tracing::warn!(peer = %peer_for_log, error = %e, "begin_secure_session failed on CONNECT");
                 }
-            }
+            })
+            .await;
             // Both state transitions returned as direct responses in order.
             vec!["NEWSTATE CONNECTING".into(), format!("CONNECTED {peer}")]
         }
@@ -144,11 +152,16 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
-            if let Ok(mut engine) = bridge.engine.lock() {
+            // Off-executor for the same reason as CONNECT: the worker can hold the engine mutex across
+            // an RF burst, so lock it on the blocking pool rather than parking an executor thread.
+            let engine = bridge.engine.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let mut engine = engine.lock().unwrap_or_else(|e| e.into_inner());
                 if let Err(e) = engine.end_secure_session(now_ms) {
                     tracing::warn!(error = %e, "end_secure_session failed on DISCONNECT");
                 }
-            }
+            })
+            .await;
             vec!["NEWSTATE DISCONNECTING".into(), "DISCONNECTED".into()]
         }
 
@@ -379,5 +392,60 @@ mod tests {
             !bridge.cwid_enabled.load(Ordering::Relaxed),
             "CWID FALSE disables CW ID"
         );
+    }
+
+    // Regression guard for the engine-lock-across-the-executor hazard: the modem worker can hold the
+    // engine std Mutex across a full RF burst. CONNECT/DISCONNECT must acquire that lock off the async
+    // executor (spawn_blocking) so an in-flight CONNECT never parks the executor thread and starves an
+    // unrelated command (here ABORT, which touches no engine lock). Run on a single-worker runtime and
+    // observe from the (non-worker) test thread via a std channel, so the OLD inline-lock code fails
+    // with a clean timeout instead of deadlocking the whole runtime.
+    #[test]
+    fn connect_holding_the_engine_lock_does_not_stall_an_abort() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let bridge = test_bridge();
+
+        // A stand-in for the worker mid-burst: hold the engine lock on a std thread until released.
+        let engine = bridge.engine.clone();
+        let (locked_tx, locked_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _guard = engine.lock().unwrap_or_else(|e| e.into_inner());
+            locked_tx.send(()).expect("signal locked");
+            let _ = release_rx.recv(); // hold across the "burst"
+        });
+        locked_rx.recv().expect("engine lock is held");
+
+        // CONNECT needs the engine lock; kick it off and let the single worker pick it up. With the fix
+        // it parks in the blocking pool (executor free); with the old inline lock it blocks the worker.
+        let b_connect = bridge.clone();
+        rt.spawn(async move {
+            let _ = dispatch("CONNECT 500 K1ABC", &b_connect).await;
+        });
+        std::thread::sleep(Duration::from_millis(150)); // let the worker begin CONNECT
+
+        // ABORT touches no engine lock — it must complete promptly on the freed executor.
+        let (done_tx, done_rx) = mpsc::channel();
+        let b_abort = bridge.clone();
+        rt.spawn(async move {
+            let out = dispatch("ABORT", &b_abort).await;
+            let _ = done_tx.send(out);
+        });
+
+        let out = done_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("ABORT must not be blocked by a CONNECT holding the engine lock");
+        assert_eq!(out, vec!["NEWSTATE DISC".to_string()]);
+
+        release_tx.send(()).expect("release the held lock");
+        holder.join().expect("holder thread");
+        rt.shutdown_timeout(Duration::from_secs(1));
     }
 }
