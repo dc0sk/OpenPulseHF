@@ -9,6 +9,36 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — feat(daemon): simultaneous multi-mode receive monitor (REQ-RX-01)
+
+- **Requirement/change:** REQ-RX-01 — optionally decode several registered modes concurrently from the
+  capture stream (a monitor/discovery role) instead of only the active session mode. Derived from
+  modem73's simultaneous-family RX; re-implemented independently.
+- **Design decision (contained, per the Fable review):** `ModulationPlugin`s are stateless (`&self`) and
+  all conflicting RX state lives in the engine, so a **separate** throwaway `ModemEngine` (all CPU plugins
+  registered) can decode any mode without touching the live RX engine's AFC/DCD/rate state — the same
+  isolation the JS8 discovery dwell uses via a raw-capture tee. The public onset-scanning `decode_burst`
+  is the per-mode decoder; `reset_afc` before each mode isolates acquisition (a prior mode's successful
+  AFC must not bias the next). The daemon rx-tick hands the **same completed burst** it already assembled
+  (`accumulate_capture`) to the monitor — no second accumulator, no engine-RX change. Emits
+  `ControlEvent::MonitorFrame { mode, bytes }` per decode. **Scope honesty:** `decode_burst` scans only
+  the acquisition lead-in (`acq_samples·4`), so the contract is one-mode-per-burst decoded correctly
+  across a mixed-mode *stream*, not two overlapping modes concatenated in one buffer (Fable's sketch);
+  the test reflects the real contract. Off by default (`[monitor] enabled = false` / empty `modes`).
+- **Implementation:** `crates/openpulse-daemon/src/monitor.rs` (new — `MonitorRuntime`,
+  `register_standard_plugins`, `decode_all`); `lib.rs` (`pub mod monitor;`, `RuntimeControlState.monitor`);
+  `protocol.rs` (`ControlEvent::MonitorFrame`); `server.rs` (`build_monitor_runtime`, rx-tick hand-off);
+  `crates/openpulse-config/src/lib.rs` (`MonitorConfig` + template).
+- **Tests:** `monitor.rs` — `new_is_none_without_modes`, `decodes_each_mode_and_does_not_false_positive`
+  (the acceptance case: BPSK250/QPSK500 monitor decodes a burst of either, tags by mode, and the
+  non-matching mode does not false-positive), `silence_decodes_nothing`; config
+  `monitor_defaults_are_opt_in_and_empty` + template round-trip.
+- **Test results:** `cargo test -p openpulse-daemon -p openpulse-config --no-default-features` → 116
+  daemon lib + suites green; `cargo build --workspace --no-default-features` clean; clippy `-D warnings`
+  + fmt clean.
+
+---
+
 ## 2026-07-14 — feat(audio): hotplug-safe device resolution (REQ-DEV-01)
 
 - **Requirement/change:** REQ-DEV-01 — audio device selection must survive OS rename/reorder by keying on

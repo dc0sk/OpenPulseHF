@@ -40,6 +40,9 @@ Post-v0.5.0 improvements. **No breaking changes.**
   sound card a slightly different name (e.g. a `(2)` suffix) or shuffled its index after a reboot/hotplug,
   the daemon would fail to find it. It now matches by a stable identifier and a fuzzy name fallback, so the
   same `[audio] device` setting keeps working — and it refuses to guess when two devices match.
+- **Multi-mode monitor.** The daemon can now watch for several modes at once: list them under `[monitor]`
+  and it decodes each from the received audio alongside your active session, reporting what it hears — handy
+  for seeing what else is on the frequency. Off by default.
 
 **Mesh & TNCs**
 

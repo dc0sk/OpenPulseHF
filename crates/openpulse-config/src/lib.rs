@@ -51,6 +51,18 @@ pub struct OpenpulseConfig {
     pub compression: CompressionConfig,
     pub file_transfer: FileTransferConfig,
     pub discovery: DiscoveryConfig,
+    pub monitor: MonitorConfig,
+}
+
+/// Simultaneous multi-mode receive (REQ-RX-01): decode extra modes from the capture stream for a
+/// monitor/discovery role, independent of the active RX session's single mode.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct MonitorConfig {
+    /// Master switch. Default `false`.
+    pub enabled: bool,
+    /// Modes to decode concurrently (e.g. `["BPSK250", "QPSK500"]`). Empty disables the monitor.
+    pub modes: Vec<String>,
 }
 
 /// JS8-based station discovery (FF-15; opt-in, RX-only by default). See
@@ -1246,6 +1258,14 @@ group = "OPULSE"
 "15m" = [21101000, 21103000, 21105000]
 "12m" = [24926000, 24927000, 24928000]
 "10m" = [28121000, 28123000, 28125000]
+
+# Simultaneous multi-mode receive (REQ-RX-01). When enabled, the daemon decodes
+# each listed mode from every capture burst in parallel with the active session,
+# emitting a MonitorFrame event per decode — a monitor/discovery role. Off by
+# default; an empty `modes` list also disables it.
+[monitor]
+enabled = false
+modes = []
 "#
     .to_string()
 }
@@ -1408,6 +1428,17 @@ mod tests {
         // The emitted template must parse and carry the documented default.
         let parsed: OpenpulseConfig = toml::from_str(&init_template()).unwrap();
         assert_eq!(parsed.modem.profile, "hpx_hf");
+    }
+
+    #[test]
+    fn monitor_defaults_are_opt_in_and_empty() {
+        let m = MonitorConfig::default();
+        assert!(!m.enabled, "monitor is opt-in");
+        assert!(m.modes.is_empty());
+        // The template's [monitor] block round-trips to the opt-in default.
+        let parsed: OpenpulseConfig = toml::from_str(&init_template()).unwrap();
+        assert!(!parsed.monitor.enabled);
+        assert!(parsed.monitor.modes.is_empty());
     }
 
     #[test]

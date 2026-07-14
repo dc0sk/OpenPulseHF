@@ -277,6 +277,8 @@ pub enum ControlEvent {
         /// `true` the first time this station is heard this session.
         is_new: bool,
     },
+    /// The multi-mode monitor (REQ-RX-01) decoded a burst as `mode`. `bytes` is the decoded payload.
+    MonitorFrame { mode: String, bytes: Vec<u8> },
     /// Response to [`ControlCommand::ListStations`] (requesting client only).
     StationList { stations: Vec<StationSummary> },
     /// Response to [`ControlCommand::ListPeers`] (requesting client only).
