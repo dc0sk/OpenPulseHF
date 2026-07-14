@@ -9,6 +9,31 @@ last_updated: 2026-07-14
 
 ## Unreleased
 
+Post-v0.5.0 improvements. **No breaking changes.**
+
+**Reliability & safety**
+
+- **The transmitter watchdog can no longer be blocked.** The safety timer that force-releases PTT after the
+  maximum key-down duration now runs on its own independent thread, so it still fires even while the daemon
+  is busy inside a long operation (a frequency scan, or a message/file send-retry burst) — previously the
+  release could be delayed until that operation finished. And if the radio's own release fails (a stuck
+  rig), the watchdog keeps retrying rather than telling clients the transmitter is down when it isn't.
+
+**Mesh & TNCs**
+
+- **Multi-hop mesh routes.** A mesh route discovery now records the full path it traverses, so the
+  destination replies with the real end-to-end route instead of only the last hop.
+- **KISS full-duplex control.** A KISS host can now toggle carrier-sense (CSMA) with the standard
+  `FullDuplex` control frame.
+
+**Under the hood**
+
+- A proposed weak-signal **frequency-diversity** mode was measured end to end and **deliberately not
+  shipped**: its diversity gain is consumed by the transmit-peak (PAPR) cost of a two-carrier waveform, so
+  the net on-air benefit is ~break-even at twice the bandwidth — the existing options (drop to a slower
+  mode, or retransmit-and-combine) do better. The measurements and analysis are kept in the repo for any
+  future revisit.
+
 ## v0.5.0 — 2026-07-14
 
 A hardening release: the deferred tail of a whole-codebase "what isn't nailed down" audit, worked to

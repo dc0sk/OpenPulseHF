@@ -12,6 +12,37 @@ last_updated: 2026-07-14
 
 ## Unreleased
 
+Post-v0.5.0 block-B/D backlog. No breaking changes.
+
+### Features
+
+- **PTT watchdog preempts a blocked command loop**: the transmitter's max-keyed-duration force-release now
+  runs on an independent watchdog thread, so it fires even while the daemon's async command loop is blocked
+  inside a long handler (a QSY scan or an OTA send-retry burst) — the previous `select!`-arm watchdog (#853)
+  could not, because the loop never re-enters `select!` during such a handler. A stuck rig (release keeps
+  failing) is retried every tick and never falsely reported as released. (#863)
+- **Mesh route discovery — source-accumulated multi-hop paths**: a `RouteDiscoveryRequest` now accumulates
+  the traversed path as it floods (each forwarder appends itself), so the destination answers with the real
+  end-to-end route instead of only `destination → [self]`. (#861)
+- **KISS FullDuplex → CSMA**: the KISS `FullDuplex` control frame now toggles the engine's carrier-sense
+  channel access (non-zero → full duplex → CSMA off; zero → CSMA on). The keying-delay control frames
+  (TXDELAY/TXtail/P/SlotTime) remain no-ops — this TNC has no PTT-keying layer. (#862)
+
+### Library
+
+- **`ModemEngine::combine_and_decode_llrs`**: the audio-free union LLR decode (decode-each-alone, then
+  MAP-combine) extracted from `receive_with_llr_combining` and made public — for an external diversity/HARQ
+  combiner that has already demodulated its branches. Behaviour-preserving refactor. (#869)
+
+### Notes
+
+- **Weak-signal frequency-diversity rung: measured, not shipped.** A dual-carrier frequency-diversity rung
+  (#864) was measured end to end (a ρ=0 ideal upper bound + the real-waveform net). The ideal cleared the
+  kill-gate (~4 dB on slow fade), but the real waveform's ~2.6 dB two-tone PAPR consumes almost all of the
+  ~1–2.6 dB matched-power gain → net on-air ≈ break-even at 2× bandwidth, dominated by the existing
+  baud-drop and HARQ levers. The reproducible measurements and the analysis
+  (`docs/dev/research/weak-signal-diversity-measurement.md`) landed; the rung did not. (#869)
+
 ## v0.5.0 — 2026-07-14
 
 The 2026-07-13 "loose-ends" audit fix-down (issue #830, roadmap Phase 12): a 10-dimension refute-by-default
