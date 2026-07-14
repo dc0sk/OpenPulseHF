@@ -8,11 +8,13 @@ pub mod beacon;
 use openpulse_core::peer_cache::{PeerCache, PeerRecord, TrustFilter, TrustLevel};
 use openpulse_core::peer_descriptor::PeerDescriptor;
 use openpulse_core::query_propagation::{QueryEvent, QueryForwarder};
-use openpulse_core::relay::{RelayEvent, RelayForwarder, RelayTrustPolicy};
-use openpulse_core::route_discovery::{RouteResponder, RouteTable};
+use openpulse_core::relay::{
+    select_best_scored_route, RelayEvent, RelayForwarder, RelayTrustPolicy,
+};
+use openpulse_core::route_discovery::{RouteOriginator, RouteResponder, RouteTable};
 use openpulse_core::wire_query::{
     BroadcastFrame, PeerQueryRequest, PeerQueryResponse, PeerQueryResult, RouteDiscoveryRequest,
-    WireEnvelope, WireMsgType,
+    RouteDiscoveryResponse, WireEnvelope, WireMsgType,
 };
 use openpulse_modem::ModemEngine;
 use thiserror::Error;
@@ -27,6 +29,8 @@ pub enum MeshError {
     Transmit(#[from] openpulse_core::error::ModemError),
     #[error("wire encode error: {0}")]
     Encode(#[from] openpulse_core::wire_query::WireQueryError),
+    #[error("no known route to the destination")]
+    NoRoute,
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -46,6 +50,18 @@ pub enum MeshEvent {
     PeerQueried { query_id: u64, result_count: usize },
     /// A route-discovery request was answered (this node is the destination or holds a route).
     RouteAnswered { route_query_id: u64 },
+    /// A response to one of our own route queries was verified and recorded in the route table.
+    RouteDiscovered {
+        destination: [u8; 32],
+        route_id: u64,
+    },
+    /// Relay data was sent to a destination along a chosen route (consuming the route table).
+    RouteUsed {
+        destination: [u8; 32],
+        session_id: u64,
+        /// Number of hops in the chosen route.
+        hop_count: u8,
+    },
     /// A previously unknown peer was added to the local peer cache.
     PeerDiscovered { peer_id: [u8; 32] },
     /// A broadcast frame was received (and re-broadcast if TTL > 0).
@@ -76,8 +92,14 @@ pub struct MeshDaemon {
     peer_cache: PeerCache,
     /// Answers route-discovery requests this node is the destination of (or already has a route to).
     route_responder: RouteResponder,
-    /// Routes this node has learned (seeds cached-route answers).
+    /// Originates route-discovery requests and applies responses into the route table.
+    route_originator: RouteOriginator,
+    /// Routes this node has learned (seeds cached-route answers + source-routed sends).
     route_table: RouteTable,
+    /// Relay trust/deny policy, used to validate a route before consuming it.
+    relay_policy: RelayTrustPolicy,
+    /// Monotonic counter mixed into originated envelope nonces for replay suppression.
+    route_nonce_counter: u32,
     /// Minimum trust level a peer must have to have its frames relayed.
     relay_trust_filter: TrustFilter,
     /// Local maximum hop count. Envelopes with hop_limit > this are clamped
@@ -133,6 +155,7 @@ impl MeshDaemon {
             0,
         );
 
+        let relay_trust_filter = policy.min_trust_filter;
         Self {
             engine,
             mode: mode.into(),
@@ -146,8 +169,13 @@ impl MeshDaemon {
             // The responder's peer id is verifying_key(seed); the mesh binary derives local_peer_id
             // the same way, so it matches. capability_mask 0 mirrors the self peer-cache entry above.
             route_responder: RouteResponder::new(&signing_key_seed, 0),
+            // Originator peer id == local_peer_id (verifying_key(seed)); outstanding queries expire on
+            // the store-and-forward TTL.
+            route_originator: RouteOriginator::new(local_peer_id, ttl_ms),
             route_table: RouteTable::new(peer_cache_capacity, peer_cache_ttl_ms),
-            relay_trust_filter: policy.min_trust_filter,
+            relay_policy: policy,
+            route_nonce_counter: 0,
+            relay_trust_filter,
             hop_limit: max_hops,
             events: Vec::new(),
         }
@@ -158,6 +186,89 @@ impl MeshDaemon {
         let bytes = envelope.encode()?;
         self.engine.transmit(&bytes, &self.mode, None)?;
         Ok(())
+    }
+
+    /// Originate a route-discovery request for `destination` and transmit it. Drives the
+    /// [`RouteOriginator`]; the matching signed [`RouteDiscoveryResponse`] (applied in `dispatch` when it
+    /// returns to us) records the route in the table. Returns the minted route-query id.
+    pub fn discover_route(&mut self, destination: [u8; 32], now_ms: u64) -> Result<u64, MeshError> {
+        let mut nonce = [0u8; 12];
+        nonce[..8].copy_from_slice(&self.local_peer_id[..8]);
+        nonce[8..].copy_from_slice(&self.route_nonce_counter.to_le_bytes());
+        self.route_nonce_counter = self.route_nonce_counter.wrapping_add(1);
+        let (query_id, envelope) = self.route_originator.originate(
+            destination,
+            self.hop_limit,
+            0, // required_capability_mask
+            0, // policy_flags
+            nonce,
+            now_ms,
+        )?;
+        let bytes = envelope.encode()?;
+        self.engine.transmit(&bytes, &self.mode, None)?;
+        Ok(query_id)
+    }
+
+    /// Send `payload` to `destination` along the best known route, **consuming the route table**. The
+    /// candidate set is the discovered multi-hop route plus a direct link when `destination` is a cached
+    /// neighbour; [`select_best_scored_route`] picks the highest-scored policy-valid one, and a
+    /// `RelayDataChunk` is transmitted with a hop limit set from the chosen route's length. Returns the
+    /// chosen route (peer-id-hex hops); `NoRoute` when nothing is known — call [`discover_route`] first.
+    pub fn send_via_route(
+        &mut self,
+        destination: [u8; 32],
+        session_id: u64,
+        payload: Vec<u8>,
+        now_ms: u64,
+    ) -> Result<Vec<String>, MeshError> {
+        self.route_table.evict_expired(now_ms);
+        let self_hex = peer_id_hex(&self.local_peer_id);
+        let dst_hex = peer_id_hex(&destination);
+        let mut candidates: Vec<Vec<String>> = Vec::new();
+        // A direct link when the destination is a known neighbour (scores u32::MAX → preferred).
+        if self.peer_cache.peek(&dst_hex).is_some() {
+            candidates.push(vec![self_hex.clone(), dst_hex.clone()]);
+        }
+        // A discovered multi-hop route: [self, ..vouched hops ending at destination..].
+        if let Some(entry) = self.route_table.best_route(&destination) {
+            let mut route = Vec::with_capacity(entry.hops.len() + 1);
+            route.push(self_hex.clone());
+            route.extend(entry.hops.iter().map(|h| peer_id_hex(&h.hop_peer_id)));
+            candidates.push(route);
+        }
+        let selected = select_best_scored_route(
+            &candidates,
+            self.hop_limit as usize,
+            &self.relay_policy,
+            &self.peer_cache,
+        )
+        .map_err(|_| MeshError::NoRoute)?;
+
+        let hop_count = selected.len().saturating_sub(1) as u8;
+        let mut nonce = [0u8; 12];
+        nonce[..8].copy_from_slice(&self.local_peer_id[..8]);
+        nonce[8..].copy_from_slice(&(session_id as u32).to_le_bytes());
+        let envelope = WireEnvelope {
+            msg_type: WireMsgType::RelayDataChunk,
+            flags: 0,
+            session_id,
+            src_peer_id: self.local_peer_id,
+            dst_peer_id: destination,
+            nonce,
+            timestamp_ms: now_ms,
+            hop_limit: hop_count.clamp(1, self.hop_limit),
+            hop_index: 0,
+            payload,
+            auth_tag: [0u8; 16],
+        };
+        let bytes = envelope.encode()?;
+        self.engine.transmit(&bytes, &self.mode, None)?;
+        self.events.push(MeshEvent::RouteUsed {
+            destination,
+            session_id,
+            hop_count,
+        });
+        Ok(selected)
     }
 
     /// Number of peers currently in the local cache (including self).
@@ -281,6 +392,16 @@ impl MeshDaemon {
                 }
             }
 
+            // Route-discovery response: if it answers one of our own queries, verify + record the route;
+            // otherwise forward it toward the originator like any other query.
+            WireMsgType::RouteDiscoveryResponse => {
+                if envelope.dst_peer_id == self.local_peer_id {
+                    self.handle_route_discovery_response(&envelope, now_ms);
+                } else {
+                    self.propagate_query(&envelope, now_ms);
+                }
+            }
+
             // All other query / route messages: propagate to neighbours.
             _ => self.propagate_query(&envelope, now_ms),
         }
@@ -359,6 +480,28 @@ impl MeshDaemon {
             );
         }
         sent
+    }
+
+    /// Apply a route-discovery response addressed to us: verify its signature (against the responder's
+    /// `src_peer_id`) and record the route in the table via the [`RouteOriginator`]. A late/duplicate or
+    /// unsolicited response is dropped.
+    fn handle_route_discovery_response(&mut self, envelope: &WireEnvelope, now_ms: u64) {
+        let Ok(resp) = RouteDiscoveryResponse::decode(&envelope.payload) else {
+            return;
+        };
+        let route_id = resp.route_id;
+        match self.route_originator.apply_response(
+            &resp,
+            &envelope.src_peer_id,
+            &mut self.route_table,
+            now_ms,
+        ) {
+            Ok(destination) => self.events.push(MeshEvent::RouteDiscovered {
+                destination,
+                route_id,
+            }),
+            Err(e) => tracing::debug!(error = %e, "route-discovery response not applied"),
+        }
     }
 
     /// Deliver a broadcast frame locally and re-broadcast if TTL permits.

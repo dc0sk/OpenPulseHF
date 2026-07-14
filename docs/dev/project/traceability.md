@@ -9,6 +9,35 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — feat(mesh): drive the route originator + consume discovered routes for relay send
+
+- **Requirement/change:** issue #830 — #841 wired the `RouteResponder` into `MeshDaemon` (a node answers
+  route queries), but nothing **originated** a query, nothing **applied** a response, and no live path
+  **consumed** a discovered route — `score_route`/`select_best_scored_route` were still uncalled outside
+  their unit tests. Route discovery dead-ended at "answer only".
+- **Design decision:** add a `RouteOriginator` to `MeshDaemon` and close the loop. `discover_route(dst)`
+  originates + transmits a `RouteDiscoveryRequest`; the `dispatch` gains a `RouteDiscoveryResponse` arm
+  that, for a response addressed to us, verifies + records the route via `apply_response` (else forwards
+  it toward the originator). `send_via_route(dst, payload)` **consumes** the table: it builds candidate
+  routes (the discovered multi-hop route, plus a direct link when `dst` is a cached neighbour), picks the
+  best with `select_best_scored_route` (which calls `score_route`), and transmits a `RelayDataChunk` whose
+  hop limit is the chosen route's length. `MeshError::NoRoute` when nothing is known. Full
+  source-route-in-the-envelope forwarding still needs the deferred wire-path field (#840); this consumes
+  the route to bound and gate the send, which is what closes the "nothing consumes a route" gap.
+- **Implementation:** `crates/openpulse-mesh/src/lib.rs` — `route_originator`/`relay_policy`/nonce fields;
+  `discover_route`, `send_via_route`, `handle_route_discovery_response`; `MeshEvent::RouteDiscovered` /
+  `RouteUsed`; `MeshError::NoRoute`.
+- **Tests:** `originator_discovers_then_sends_along_the_route` (mesh loopback) — `NoRoute` before
+  discovery; A `discover_route` → B answers (`RouteAnswered`) → A applies (`RouteDiscovered`) → A
+  `send_via_route` (route len 2) → B `FrameDelivered`. End-to-end through the loopback tap.
+- **Test results:** `cargo test -p openpulse-mesh --no-default-features` → 10 loopback (9 → 10) + lib all
+  pass; `cargo build --workspace` green; fmt + clippy (`--tests -D warnings`) clean.
+- **Remaining (deferred):** `select_best_scored_route` now runs live, but multi-candidate selection only
+  bites once several routes to a destination coexist (a candidate-route store); source-accumulated
+  multi-hop paths await the wire-path TLV (#840).
+
+---
+
 ## 2026-07-14 — fix: record the operator callsign + declared TX power in the regulatory TX log
 
 - **Requirement/change:** issue #830 — the engine's §97 TX-metadata log stamps `self.callsign` /
