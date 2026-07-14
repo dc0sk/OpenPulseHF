@@ -16,6 +16,7 @@ default      = ["cpal-backend"]
 cpal-backend = ["openpulse-audio/cpal-backend"]
 serial       = ["openpulse-radio/serial"]
 generic-serial = ["openpulse-radio/generic-serial"]
+gpio         = ["openpulse-radio/gpio"]
 
 [dependencies]
 openpulse-core    = { workspace = true }

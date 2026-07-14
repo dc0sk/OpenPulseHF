@@ -9,6 +9,33 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — feat(radio): GPIO-line PTT backend + daemon serial PTT (REQ-PTT-03)
+
+- **Requirement/change:** REQ-PTT-03 — key PTT via a Linux GPIO line (e.g. a Raspberry Pi header pin);
+  plus close the daemon's silent `rts`/`dtr` gap flagged in the design review. Derived from graywolf's PTT
+  abstraction; re-implemented independently.
+- **Design decision:** the real line request uses **`gpiocdev`** (pure Rust, kernel char-dev uAPI — no
+  libgpiod C linkage, so the `cross`-compile gate stays clean) behind the `gpio` feature; the keying
+  *logic* (active-low inversion, assert/release) sits behind a small `PttLine` trait so a mock makes it
+  **fully unit-testable with zero hardware and no feature**. `PttLine::set` writes the *physical* level;
+  `GpioPtt` applies the active-low inversion, so the polarity is testable via the mock. Config spec
+  `chip:line[:active_low]` in the existing `[modem] ptt_device`. Daemon `rts`/`dtr`: a new daemon `serial`
+  feature enables a real `SerialRtsDtrPtt` arm (Send-safe) using `ptt_device`, replacing the warn-and-None.
+- **Implementation:** `crates/openpulse-radio/src/gpio.rs` (new: `parse_gpio_spec`, `PttLine`, `GpioPtt`
+  + `PttController` impl, feature-gated `CdevLine`) + `lib.rs` export; `Cargo.toml` (`gpio` feature +
+  `gpiocdev` optional linux dep); `crates/openpulse-daemon/src/server.rs` (`gpio` arm + real `rts`/`dtr`
+  arm) + `Cargo.toml` (`serial`, `gpio` features); `crates/openpulse-cli/src/radio.rs` + `cli.rs` +
+  `Cargo.toml` (`gpio` arm, feature, help).
+- **Tests:** `gpio.rs` — spec parse (valid incl. active_low / bad), active-high + active-low physical
+  level via mock, ≤50 ms round-trip, open-errors-without-feature (6); daemon `ptt_selector_tests` gpio
+  graceful-None; CLI `transmit_with_gpio_errors_cleanly`.
+- **Test results:** `cargo test -p openpulse-radio -p openpulse-daemon -p openpulse-cli
+  --no-default-features` green; `cargo build --features gpio` (radio/daemon/cli) + `--features serial`
+  (daemon) clean; `cargo build --workspace --no-default-features` clean; clippy `-D warnings` (default +
+  `--features gpio`) + fmt clean.
+
+---
+
 ## 2026-07-14 — feat(radio): CM108 USB-HID PTT backend (REQ-PTT-02)
 
 - **Requirement/change:** REQ-PTT-02 — key PTT via the CM108/CM109/CM119 sound-chip GPIO over USB-HID (the

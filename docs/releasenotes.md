@@ -28,6 +28,11 @@ Post-v0.5.0 improvements. **No breaking changes.**
   interfaces (DMK URI, RepeaterBuilder RA-series, AIOC, homebrew) — `--ptt cm108` on the CLI or
   `[modem] ptt_backend = "cm108"` in the daemon config. It auto-detects a C-Media device (or set the
   `/dev/hidrawN` path and GPIO pin), and needs no extra libraries.
+- **GPIO-line PTT.** Key transmit directly from a Linux GPIO line — e.g. a Raspberry Pi header pin —
+  with `--ptt gpio` and a `chip:line` spec like `gpiochip0:17` (append `:active_low` for inverting
+  interfaces). Built with `--features gpio`.
+- **Daemon serial PTT.** The background daemon now drives `rts`/`dtr` serial PTT (built with
+  `--features serial`), which previously worked only from the CLI.
 
 **Mesh & TNCs**
 

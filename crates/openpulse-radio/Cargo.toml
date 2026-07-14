@@ -16,7 +16,11 @@ toml = { version = "0.8", default-features = false, features = ["parse"] }
 [target.'cfg(unix)'.dependencies]
 serialport = { version = "4.7", optional = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+gpiocdev = { version = "0.7", optional = true }
+
 [features]
 default = []
 serial = ["dep:serialport"]
 generic-serial = ["serial"]
+gpio = ["dep:gpiocdev"]
