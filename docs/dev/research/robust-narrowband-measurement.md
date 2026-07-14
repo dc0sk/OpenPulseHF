@@ -152,3 +152,29 @@ sub-floor rung is retired. The remaining ship questions are **operational, not w
 rung it needs its return link there too (else broadcast-only); (2) HPX session-timer handling for the 16 s
 frame. Production stages b–e (the `mfsk16` plugin + engine registration + SL1 ladder placement + the ACK +
 timers) remain a scheduled multi-PR build.
+
+## ACK-channel feasibility — measured, the crux confirmed (2026-07-14, PR-C measure-first)
+
+Before wiring the ARQ ACK seam (the most regression-sensitive machinery in the repo), we measured whether
+a short `MFSK16-ACK` return frame survives at the data rung's floor. Path: a 5-byte `AckFrame` →
+`ShortFecCodec::new()` (t=4 → 13 bytes) → `MFSK16-ACK` (40 symbols ≈ 1.28 s) → Watterson (with an injected
+±25 Hz tuning offset + a lead, so acquisition is exercised) → demodulate → ShortFec decode
+(`plugins/mfsk16/tests/ack_feasibility.rs`).
+
+**Result — the ACK is the binding constraint.** `MFSK16-ACK` on moderate_f1: 0.00 / 0.22 / **0.60** / 0.88
+at −6 / −3 / **0** / +3 dB. The data rung crosses ~−0.5 dB, so at the operating point (~0 dB) the ACK
+decodes only ~0.6 while the data decodes ~0.85 — the short **1.28 s ACK is ~3–4 dB more fade-sensitive**
+than the 17 s data frame, because it cannot fade-average over enough coherence times. It functions fine a
+few dB up (≥0.9 at +6 dB).
+
+**Naive tone repetition does not fix it.** A 3× spaced-and-energy-summed ACK (99 symbols, 3.2 s) still
+measured ~0.62 — energy-summing a copy that is in a deep fade *adds that copy's noise* across all tones and
+dilutes the good copies (the #694 soft-combine lesson: summing a ruined look loses). A robust ACK needs
+proper per-copy **LLR** diversity (decode each copy's soft metric, MAP-combine) plus per-copy acquisition —
+real additional DSP.
+
+**Conclusion:** this confirms the production review's verdict decisively — **ship broadcast-first, defer
+the ARQ rung.** The measure-first gate saved us from wiring a marginal ACK into the shared ACK seam. The
+`MFSK16-ACK` mode exists in the plugin (usable, functional above the floor) but is **not** wired as the ARQ
+return channel; the ARQ rung is deferred pending a robust-ACK design (per-copy LLR diversity). The shipped
+state — `MFSK16` as a robust broadcast/beacon + explicit-mode waveform — stands.

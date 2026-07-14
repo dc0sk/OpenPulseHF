@@ -9,6 +9,31 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — research(plugin): MFSK16-ACK feasibility measured — ACK is the binding constraint (REQ-WSIG-01)
+
+- **Requirement/change:** the PR-C measure-first gate for the ARQ rung — measure whether a short
+  `MFSK16-ACK` return frame survives at the data floor *before* wiring the regression-sensitive ACK seam.
+- **Design decision:** parameterize the `mfsk16` plugin by mode (a `Layout`: `MFSK16` = 531-symbol data
+  block, `MFSK16-ACK` = 40-symbol short frame carrying the 13-byte ShortFec-encoded `AckFrame`). Add an ACK
+  feasibility measurement (5-byte `AckFrame` → `ShortFecCodec::new()` → `MFSK16-ACK` → Watterson → decode →
+  ShortFec).
+- **Result — the measure-first gate did its job:** the ACK decodes only **~0.6 at the data floor (~0 dB)
+  on moderate_f1** (0.00/0.22/0.60/0.88 at −6/−3/0/+3), while the data decodes ~0.85 there — the 1.28 s ACK
+  is ~3–4 dB more fade-sensitive because it can't fade-average like the 17 s data frame. **Naive tone
+  repetition doesn't fix it** (a 3× spaced-energy-summed ACK still measured ~0.62 — energy-summing a faded
+  copy dilutes; the #694 soft-combine lesson). A robust ACK needs per-copy LLR diversity — a real DSP
+  effort. So the ACK is **not** wired to the ARQ seam; the ARQ integration is deferred. This confirms the
+  production review's broadcast-first verdict decisively — the gate saved wiring a marginal ACK into the
+  repo's most regression-sensitive machinery.
+- **Implementation:** `plugins/mfsk16/src/lib.rs` (mode-parameterized `Layout`; `MFSK16-ACK` mode);
+  `plugins/mfsk16/tests/ack_feasibility.rs` (functional gate + `#[ignore]` sweep);
+  `docs/dev/research/robust-narrowband-measurement.md` (finding).
+- **Tests:** `ack_frame_round_trips` (plugin), `ack_mode_functions_above_the_floor` (≥0.9 at +6 dB),
+  `ack_feasibility_sweep` (`#[ignore]`, the floor profile).
+- **Test results:** plugin + ACK functional gate green; clippy `-D warnings` + fmt clean.
+
+---
+
 ## 2026-07-14 — feat(plugin): mfsk16 production waveform, broadcast-first (REQ-WSIG-01)
 
 - **Requirement/change:** the production build of the validated 16-GFSK sub-floor rung. Per the Fable
