@@ -1920,9 +1920,8 @@ Consequences:
   "defined-but-not-consumed" gap, so it was deliberately NOT done.
 - Interim for the logbook grid: the `[logbook.peer_grids]` config map (shipped, item A).
 
-Real fix (no target date): wire the over-the-air signed handshake (initiator `ConReq` → responder
-verify + `ConAck` → initiator verify) into the daemon's `ConnectPeer`/RF path, storing the verified
-peer identity (and an optional grid field) on the engine; then the logbook reads the verified grid.
+(This "real fix" — wiring the over-the-air signed `ConReq`/`ConAck` exchange into the daemon connect
+flow — was **delivered in v0.3.0**, PR #584; see the "Resolved" note at the top of this section.)
 
 ### Automatic ADIF logbook (opt-in) ✅ Shipped
 
