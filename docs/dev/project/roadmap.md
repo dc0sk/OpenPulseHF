@@ -1759,13 +1759,20 @@ After the fix, BPSK250 + RS FEC + block interleaver correctly decodes through Go
 | SCFDMA52-64QAM | scfdma-plugin | hpx_wideband_hd SL14 |
 | 64QAM2000-RRC | 64qam-plugin | hpx_wideband_hd SL15 |
 
-### Modes in plugins but not in any profile (no planned home)
+### Modes in plugins but not in any profile (manual-select only — intentional)
+
+These modes are registered and usable via explicit mode selection (CLI `--mode`, daemon `SetMode`,
+linksim/testbench) but are **deliberately not** in any adaptive `SessionProfile` ladder — not an
+oversight. BPSK100 is dominated by QPSK at the same rate; the 64QAM/dense-pilot variants are aggressive
+VHF/UHF or research waveforms without a rung in the HF ladders. Adding any to a profile is a mode-scope
+decision (measure it against the neighbouring rung first — see the "code rate is the last lever" note),
+not a gap to close.
 
 | Mode | Plugin | Note |
 |---|---|---|
 | BPSK100 | bpsk-plugin | Low throughput; not competitive vs QPSK |
 | SCFDMA52-64QAM-P4 | scfdma-plugin | Dense-pilot research variant; no profile slot |
-| 64QAM500 / 64QAM1000 | 64qam-plugin | No profile home |
+| 64QAM500 / 64QAM1000 | 64qam-plugin | Aggressive VHF/UHF; manual-select only |
 
 ### Daemon-level implementation gaps (2026-05-19 — both resolved 2026, PR #321)
 

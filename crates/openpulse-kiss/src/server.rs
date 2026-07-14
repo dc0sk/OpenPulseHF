@@ -60,13 +60,12 @@ async fn handle_client(
                             bridge.tx_pending.fetch_add(len, Ordering::Relaxed);
                         }
                     }
-                    Ok((cmd, _)) => {
+                    Ok((cmd, value)) => {
                         // KISS control frames (TXDELAY 0x01, P 0x02, SlotTime 0x03, TXtail 0x04,
-                        // FullDuplex 0x05, SetHardware 0x06) are advisory PTT/CSMA-timing hints that
-                        // a host MAY send; this TNC manages PTT/channel access itself and does not
-                        // apply them. Log so the no-op is visible rather than silent. (See the
-                        // 2026-06-27 TNC command-surface audit in docs/dev/project/roadmap.md.)
-                        tracing::debug!(kiss_cmd = format!("0x{cmd:02x}"), "ignoring KISS control frame (not applied)");
+                        // FullDuplex 0x05, SetHardware 0x06). Most are advisory PTT/CSMA-timing hints
+                        // this TNC manages itself; FullDuplex maps to engine CSMA. See
+                        // `apply_kiss_control_frame`.
+                        crate::bridge::apply_kiss_control_frame(cmd, &value, &bridge);
                     }
                     Err(e) => {
                         tracing::debug!("KISS decode error: {e}");

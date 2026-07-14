@@ -95,6 +95,29 @@ impl KissBridge {
     }
 }
 
+/// Apply a KISS control frame (any non-`DATA` type byte). This TNC manages PTT and channel access
+/// itself, so most control frames are advisory no-ops here: TXDELAY/TXtail are PTT keying delays with no
+/// PTT-keying layer, P/SlotTime are CSMA-persistence/slot hints, and SetHardware is TNC-specific. The one
+/// that maps to this TNC's real channel access is **FullDuplex** (0x05): a non-zero value selects full
+/// duplex (no carrier-sense deferral → engine CSMA off); a zero value re-enables CSMA.
+pub(crate) fn apply_kiss_control_frame(cmd: u8, value: &[u8], bridge: &KissBridge) {
+    if cmd == crate::kiss::KISS_FULLDUPLEX {
+        let full_duplex = value.first().copied().unwrap_or(0) != 0;
+        let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
+        if full_duplex {
+            engine.disable_csma();
+        } else {
+            engine.enable_csma();
+        }
+        tracing::debug!(full_duplex, "KISS FullDuplex applied to CSMA");
+    } else {
+        tracing::debug!(
+            kiss_cmd = format!("0x{cmd:02x}"),
+            "ignoring KISS control frame (not applied by this TNC)"
+        );
+    }
+}
+
 /// The AX.25 source callsign of `frame` iff it is valid for on-air TX (§97.119): a decodable address
 /// header whose source is non-empty and not `N0CALL`. Returns `None` otherwise so the worker can refuse
 /// unidentified frames uniformly. The address header format is common to all AX.25 frame types, so this
@@ -261,6 +284,39 @@ mod tests {
             .register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
             .expect("register BPSK plugin");
         KissBridge::new(engine, "BPSK250".into(), false)
+    }
+
+    #[test]
+    fn kiss_fullduplex_control_frame_toggles_csma() {
+        let (bridge, _rx) = onair_bridge();
+        // Mirror the running TNC, which enables CSMA at startup.
+        bridge
+            .engine
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .enable_csma();
+        let csma_on = |b: &KissBridge| {
+            b.engine
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_csma_enabled()
+        };
+        assert!(csma_on(&bridge));
+
+        // FullDuplex with a non-zero value → full duplex → CSMA off.
+        apply_kiss_control_frame(crate::kiss::KISS_FULLDUPLEX, &[1], &bridge);
+        assert!(
+            !csma_on(&bridge),
+            "full-duplex disables carrier-sense deferral"
+        );
+
+        // FullDuplex value 0 → half duplex → CSMA back on.
+        apply_kiss_control_frame(crate::kiss::KISS_FULLDUPLEX, &[0], &bridge);
+        assert!(csma_on(&bridge), "half-duplex re-enables CSMA");
+
+        // Other control frames (e.g. TXDELAY 0x01) are no-ops that leave CSMA untouched.
+        apply_kiss_control_frame(0x01, &[50], &bridge);
+        assert!(csma_on(&bridge), "TXDELAY does not affect CSMA");
     }
 
     #[test]
