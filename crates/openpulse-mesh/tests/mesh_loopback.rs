@@ -8,7 +8,9 @@ use openpulse_audio::LoopbackBackend;
 use openpulse_core::peer_cache::TrustFilter;
 use openpulse_core::relay::{RelayEvent, RelayTrustPolicy};
 use openpulse_core::route_discovery::{RouteOriginator, RouteResponder};
-use openpulse_core::wire_query::{WireEnvelope, WireMsgType};
+use openpulse_core::wire_query::{
+    RelayRouteReject, RouteHop, WireEnvelope, WireMsgType, WireTrustState,
+};
 use openpulse_mesh::{MeshDaemon, MeshEvent};
 use openpulse_modem::ModemEngine;
 const MODE: &str = "BPSK250";
@@ -516,5 +518,102 @@ fn originator_discovers_then_sends_along_the_route() {
             .iter()
             .any(|e| matches!(e, MeshEvent::FrameDelivered { session_id: 42 })),
         "B must deliver the relay data sent along the route; got {events_b:?}"
+    );
+}
+
+fn route_hop(id: u8, rel: u16) -> RouteHop {
+    RouteHop {
+        hop_peer_id: [id; 32],
+        hop_trust_state: WireTrustState::Trusted as u8,
+        estimated_latency_ms: 10,
+        estimated_reliability_permille: rel,
+    }
+}
+
+fn maint_envelope(
+    msg_type: WireMsgType,
+    src: [u8; 32],
+    payload: Vec<u8>,
+    nonce: u8,
+) -> WireEnvelope {
+    WireEnvelope {
+        msg_type,
+        flags: 0,
+        session_id: 0,
+        src_peer_id: src,
+        dst_peer_id: [200u8; 32], // the route's destination (a routing tag)
+        nonce: {
+            let mut n = [0u8; 12];
+            n[0] = nonce;
+            n
+        },
+        timestamp_ms: 1000,
+        hop_limit: 3,
+        hop_index: 0,
+        payload,
+        auth_tag: [0u8; 16],
+    }
+}
+
+/// Route maintenance over-air (0x07 + 0x08): a signed update from a route-holder is verified and applied
+/// to the receiver's table (`RouteUpdated`); a reject from an on-path hop then tears that route down
+/// (`RouteRejected`). Exercises `apply_route_update` / `apply_route_reject` through the mesh dispatch.
+#[test]
+fn route_update_then_reject_over_air() {
+    let dst = [200u8; 32];
+    // The emitter's route-identity == verifying_key([0;32]) (same seed every make_node signs with), so a
+    // receiver verifies the update signature against the envelope's src_peer_id.
+    let emitter = RouteResponder::new(&[0u8; 32], 0);
+    let emitter_id = emitter.peer_id();
+
+    let lb_a = LoopbackBackend::new();
+    let lb_e = LoopbackBackend::new();
+    let mut node_a = make_node(&lb_a, [1u8; 32]);
+    let mut node_e = make_node(&lb_e, emitter_id); // just a transmitter for the crafted envelopes
+
+    // A signed update advertising a route to destination 200 for route_id 42.
+    let hops = vec![route_hop(200, 950)];
+    let update = emitter.build_route_update(42, 1, 0x0005, hops);
+    let update_env = maint_envelope(
+        WireMsgType::RelayRouteUpdate,
+        emitter_id,
+        update.encode().expect("encode update"),
+        1,
+    );
+
+    node_e.send_relay(update_env).expect("transmit update");
+    lb_a.fill_samples(&lb_e.drain_samples());
+    let events_a = node_a.step(1_000);
+    assert!(
+        events_a.iter().any(
+            |e| matches!(e, MeshEvent::RouteUpdated { destination, route_id } if *destination == dst && *route_id == 42)
+        ),
+        "A must verify + apply the route update; got {events_a:?}"
+    );
+    lb_a.drain_samples(); // clear A's own onward-propagation
+
+    // A reject from the on-path hop (the destination 200) tears down route_id 42.
+    let reject = RelayRouteReject {
+        route_id: 42,
+        reject_hop_peer_id: [200u8; 32],
+        reason_code: 0x0002,
+        trust_decision: WireTrustState::Untrusted as u8,
+        policy_reference: 0,
+    };
+    let reject_env = maint_envelope(
+        WireMsgType::RelayRouteReject,
+        emitter_id,
+        reject.encode(),
+        2,
+    );
+
+    node_e.send_relay(reject_env).expect("transmit reject");
+    lb_a.fill_samples(&lb_e.drain_samples());
+    let events_a = node_a.step(2_000);
+    assert!(
+        events_a.iter().any(
+            |e| matches!(e, MeshEvent::RouteRejected { destination, route_id } if *destination == dst && *route_id == 42)
+        ),
+        "A must tear down the route on an on-path reject; got {events_a:?}"
     );
 }

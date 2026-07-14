@@ -11,10 +11,13 @@ use openpulse_core::query_propagation::{QueryEvent, QueryForwarder};
 use openpulse_core::relay::{
     select_best_scored_route, RelayEvent, RelayForwarder, RelayTrustPolicy,
 };
-use openpulse_core::route_discovery::{RouteOriginator, RouteResponder, RouteTable};
+use openpulse_core::route_discovery::{
+    apply_route_reject, apply_route_update, RouteOriginator, RouteResponder, RouteTable,
+};
 use openpulse_core::wire_query::{
-    BroadcastFrame, PeerQueryRequest, PeerQueryResponse, PeerQueryResult, RouteDiscoveryRequest,
-    RouteDiscoveryResponse, WireEnvelope, WireMsgType,
+    BroadcastFrame, PeerQueryRequest, PeerQueryResponse, PeerQueryResult, RelayRouteReject,
+    RelayRouteUpdate, RouteDiscoveryRequest, RouteDiscoveryResponse, RouteHop, WireEnvelope,
+    WireMsgType,
 };
 use openpulse_modem::ModemEngine;
 use thiserror::Error;
@@ -61,6 +64,16 @@ pub enum MeshEvent {
         session_id: u64,
         /// Number of hops in the chosen route.
         hop_count: u8,
+    },
+    /// A signed route-update (0x07) was verified and applied to the route table.
+    RouteUpdated {
+        destination: [u8; 32],
+        route_id: u64,
+    },
+    /// A route-reject (0x08) from an on-path hop tore down a held route.
+    RouteRejected {
+        destination: [u8; 32],
+        route_id: u64,
     },
     /// A previously unknown peer was added to the local peer cache.
     PeerDiscovered { peer_id: [u8; 32] },
@@ -271,6 +284,88 @@ impl MeshDaemon {
         Ok(selected)
     }
 
+    /// Originate a signed route **update** (0x07) for the route this node holds to `destination`,
+    /// advertising `replacement_hops` as its new path. Emitted by a route-holder when the path changes;
+    /// receivers verify against this node's peer id and refresh their table. `NoRoute` when we hold none.
+    pub fn send_route_update(
+        &mut self,
+        destination: [u8; 32],
+        route_change_reason: u16,
+        replacement_hops: Vec<RouteHop>,
+        now_ms: u64,
+    ) -> Result<(), MeshError> {
+        let (route_id, previous_hop_count) = self
+            .route_table
+            .best_route(&destination)
+            .map(|e| (e.route_id, e.hops.len() as u8))
+            .ok_or(MeshError::NoRoute)?;
+        let update = self.route_responder.build_route_update(
+            route_id,
+            previous_hop_count,
+            route_change_reason,
+            replacement_hops,
+        );
+        let payload = update.encode()?;
+        self.transmit_route_maintenance(WireMsgType::RelayRouteUpdate, destination, payload, now_ms)
+    }
+
+    /// Originate a route **reject** (0x08) for `route_id` — this node (which must be an on-path hop for
+    /// receivers to honor it) declines to carry the route, so downstream holders tear it down.
+    pub fn send_route_reject(
+        &mut self,
+        route_id: u64,
+        reason_code: u16,
+        trust_decision: u8,
+        policy_reference: u16,
+        destination: [u8; 32],
+        now_ms: u64,
+    ) -> Result<(), MeshError> {
+        let reject = RelayRouteReject {
+            route_id,
+            reject_hop_peer_id: self.local_peer_id,
+            reason_code,
+            trust_decision,
+            policy_reference,
+        };
+        self.transmit_route_maintenance(
+            WireMsgType::RelayRouteReject,
+            destination,
+            reject.encode(),
+            now_ms,
+        )
+    }
+
+    /// Wrap a route-maintenance payload in a `WireEnvelope` (tagged with the route's destination) and
+    /// transmit it. Route-maintenance messages flood like queries; the destination tag is a hint only.
+    fn transmit_route_maintenance(
+        &mut self,
+        msg_type: WireMsgType,
+        destination: [u8; 32],
+        payload: Vec<u8>,
+        now_ms: u64,
+    ) -> Result<(), MeshError> {
+        let mut nonce = [0u8; 12];
+        nonce[..8].copy_from_slice(&self.local_peer_id[..8]);
+        nonce[8..].copy_from_slice(&self.route_nonce_counter.to_le_bytes());
+        self.route_nonce_counter = self.route_nonce_counter.wrapping_add(1);
+        let envelope = WireEnvelope {
+            msg_type,
+            flags: 0,
+            session_id: 0,
+            src_peer_id: self.local_peer_id,
+            dst_peer_id: destination,
+            nonce,
+            timestamp_ms: now_ms,
+            hop_limit: self.hop_limit,
+            hop_index: 0,
+            payload,
+            auth_tag: [0u8; 16],
+        };
+        let bytes = envelope.encode()?;
+        self.engine.transmit(&bytes, &self.mode, None)?;
+        Ok(())
+    }
+
     /// Number of peers currently in the local cache (including self).
     pub fn peer_cache_len(&self) -> usize {
         self.peer_cache.len()
@@ -402,6 +497,17 @@ impl MeshDaemon {
                 }
             }
 
+            // Route maintenance: a signed update refreshes a held route; a reject from an on-path hop
+            // tears one down. Both apply locally then flood onward (other nodes using the route also act).
+            WireMsgType::RelayRouteUpdate => {
+                self.handle_route_update(&envelope, now_ms);
+                self.propagate_query(&envelope, now_ms);
+            }
+            WireMsgType::RelayRouteReject => {
+                self.handle_route_reject(&envelope);
+                self.propagate_query(&envelope, now_ms);
+            }
+
             // All other query / route messages: propagate to neighbours.
             _ => self.propagate_query(&envelope, now_ms),
         }
@@ -501,6 +607,42 @@ impl MeshDaemon {
                 route_id,
             }),
             Err(e) => tracing::debug!(error = %e, "route-discovery response not applied"),
+        }
+    }
+
+    /// Apply a signed route-update (0x07): verify against the emitter's `src_peer_id` and refresh the
+    /// route table.
+    fn handle_route_update(&mut self, envelope: &WireEnvelope, now_ms: u64) {
+        let Ok(update) = RelayRouteUpdate::decode(&envelope.payload) else {
+            return;
+        };
+        let route_id = update.route_id;
+        match apply_route_update(
+            &update,
+            &envelope.src_peer_id,
+            &mut self.route_table,
+            now_ms,
+        ) {
+            Ok(destination) => self.events.push(MeshEvent::RouteUpdated {
+                destination,
+                route_id,
+            }),
+            Err(e) => tracing::debug!(error = %e, "route update not applied"),
+        }
+    }
+
+    /// Apply a route-reject (0x08): tear down the referenced route when the rejecting peer is on it.
+    fn handle_route_reject(&mut self, envelope: &WireEnvelope) {
+        let Ok(reject) = RelayRouteReject::decode(&envelope.payload) else {
+            return;
+        };
+        let route_id = reject.route_id;
+        match apply_route_reject(&reject, &mut self.route_table) {
+            Ok(destination) => self.events.push(MeshEvent::RouteRejected {
+                destination,
+                route_id,
+            }),
+            Err(e) => tracing::debug!(error = %e, "route reject not applied"),
         }
     }
 

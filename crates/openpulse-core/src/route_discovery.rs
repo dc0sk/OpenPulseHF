@@ -24,8 +24,8 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use thiserror::Error;
 
 use crate::wire_query::{
-    RouteDiscoveryRequest, RouteDiscoveryResponse, RouteHop, WireEnvelope, WireMsgType,
-    WireQueryError, WireTrustState,
+    RelayRouteReject, RelayRouteUpdate, RouteDiscoveryRequest, RouteDiscoveryResponse, RouteHop,
+    WireEnvelope, WireMsgType, WireQueryError, WireTrustState,
 };
 
 /// Errors from applying a received route-discovery response.
@@ -40,6 +40,12 @@ pub enum RouteApplyError {
     /// The response carried no hops — an empty route is not a route.
     #[error("route response has no hops")]
     EmptyRoute,
+    /// A route-maintenance message referenced a `route_id` this node holds no route for.
+    #[error("no route with id {0}")]
+    UnknownRoute(u64),
+    /// A route-reject came from a peer that is not one of the route's hops (not authorized to tear it down).
+    #[error("rejecting peer is not on the route")]
+    Unauthorized,
 }
 
 /// A discovered end-to-end route to a destination.
@@ -133,6 +139,36 @@ impl RouteTable {
         self.entries.get(destination)
     }
 
+    /// The stored route with a given `route_id`, if any (route-maintenance messages key on `route_id`,
+    /// not destination).
+    pub fn entry_by_route_id(&self, route_id: u64) -> Option<&RouteEntry> {
+        self.entries.values().find(|e| e.route_id == route_id)
+    }
+
+    /// Drop the route to `destination`, if present. Returns `true` if a route was removed.
+    pub fn remove(&mut self, destination: &[u8; 32]) -> bool {
+        let removed = self.entries.remove(destination).is_some();
+        if removed {
+            self.lru.retain(|k| k != destination);
+        }
+        removed
+    }
+
+    /// Apply an authoritative route **update** for `entry`: when a route to the same destination with the
+    /// **same `route_id`** already exists, overwrite it (the vouching node's current view, even if it is a
+    /// degradation); otherwise admit it as a competing route via [`record`](Self::record). Returns `true`
+    /// if the stored best route for that destination changed.
+    pub fn apply_update(&mut self, entry: RouteEntry, now_ms: u64) -> bool {
+        self.evict_expired(now_ms);
+        let dst = entry.destination_peer_id;
+        if self.entries.get(&dst).map(|e| e.route_id) == Some(entry.route_id) {
+            self.entries.insert(dst, entry);
+            self.touch(dst);
+            return true;
+        }
+        self.record(entry, now_ms)
+    }
+
     /// Drop entries older than the TTL.
     pub fn evict_expired(&mut self, now_ms: u64) {
         if self.ttl_ms == 0 {
@@ -204,6 +240,112 @@ pub fn verify_route_response(
         route_response_canonical(response.route_query_id, response.route_id, &response.hops);
     key.verify(&canonical, &sig)
         .map_err(|_| RouteApplyError::BadSignature)
+}
+
+/// Canonical bytes signed by a route **update**: the route id, hop counts, change reason, and every
+/// replacement hop, in order. Deterministic and independent of the wire framing.
+fn route_update_canonical(
+    route_id: u64,
+    previous_hop_count: u8,
+    route_change_reason: u16,
+    hops: &[RouteHop],
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + 1 + 2 + 1 + hops.len() * 37);
+    out.extend_from_slice(&route_id.to_le_bytes());
+    out.push(previous_hop_count);
+    out.extend_from_slice(&route_change_reason.to_le_bytes());
+    out.push(hops.len() as u8);
+    for h in hops {
+        out.extend_from_slice(&h.hop_peer_id);
+        out.push(h.hop_trust_state);
+        out.extend_from_slice(&h.estimated_latency_ms.to_le_bytes());
+        out.extend_from_slice(&h.estimated_reliability_permille.to_le_bytes());
+    }
+    out
+}
+
+/// Sign the `route_update_signature` field of a `RelayRouteUpdate` with the emitter's Ed25519 key.
+pub fn sign_route_update(
+    route_id: u64,
+    previous_hop_count: u8,
+    route_change_reason: u16,
+    hops: &[RouteHop],
+    signing_key: &SigningKey,
+) -> Vec<u8> {
+    let canonical = route_update_canonical(route_id, previous_hop_count, route_change_reason, hops);
+    let sig: Signature = signing_key.sign(&canonical);
+    sig.to_bytes().to_vec()
+}
+
+/// Verify a `RelayRouteUpdate` signature against `emitter_peer_id` (the update envelope's `src_peer_id`).
+pub fn verify_route_update(
+    update: &RelayRouteUpdate,
+    emitter_peer_id: &[u8; 32],
+) -> Result<(), RouteApplyError> {
+    let key =
+        VerifyingKey::from_bytes(emitter_peer_id).map_err(|_| RouteApplyError::BadSignature)?;
+    let Ok(sig_arr): Result<[u8; 64], _> = update.route_update_signature.as_slice().try_into()
+    else {
+        return Err(RouteApplyError::BadSignature);
+    };
+    let sig = Signature::from_bytes(&sig_arr);
+    let canonical = route_update_canonical(
+        update.route_id,
+        update.previous_hop_count,
+        update.route_change_reason,
+        &update.replacement_hops,
+    );
+    key.verify(&canonical, &sig)
+        .map_err(|_| RouteApplyError::BadSignature)
+}
+
+/// Apply a signed route **update** (0x07): verify it against `emitter_peer_id` (the update envelope's
+/// `src_peer_id`), then refresh/record the replacement route in `table`. The destination is the last
+/// replacement hop. Returns the destination the updated route reaches.
+pub fn apply_route_update(
+    update: &RelayRouteUpdate,
+    emitter_peer_id: &[u8; 32],
+    table: &mut RouteTable,
+    now_ms: u64,
+) -> Result<[u8; 32], RouteApplyError> {
+    let Some(dst_hop) = update.replacement_hops.last() else {
+        return Err(RouteApplyError::EmptyRoute);
+    };
+    let dst = dst_hop.hop_peer_id;
+    verify_route_update(update, emitter_peer_id)?;
+    table.apply_update(
+        RouteEntry {
+            destination_peer_id: dst,
+            route_id: update.route_id,
+            hops: update.replacement_hops.clone(),
+            discovered_at_ms: now_ms,
+        },
+        now_ms,
+    );
+    Ok(dst)
+}
+
+/// Apply a route **reject** (0x08): tear down the route with `reject.route_id` — but only when the
+/// rejecting peer is actually one of that route's hops (an off-path peer cannot invalidate a route it
+/// does not carry; the reject frame is unsigned). Returns the destination whose route was dropped.
+pub fn apply_route_reject(
+    reject: &RelayRouteReject,
+    table: &mut RouteTable,
+) -> Result<[u8; 32], RouteApplyError> {
+    let (dst, authorized) = match table.entry_by_route_id(reject.route_id) {
+        Some(e) => (
+            e.destination_peer_id,
+            e.hops
+                .iter()
+                .any(|h| h.hop_peer_id == reject.reject_hop_peer_id),
+        ),
+        None => return Err(RouteApplyError::UnknownRoute(reject.route_id)),
+    };
+    if !authorized {
+        return Err(RouteApplyError::Unauthorized);
+    }
+    table.remove(&dst);
+    Ok(dst)
 }
 
 /// Answers route-discovery requests: replies when this node is the destination (and meets the
@@ -281,6 +423,32 @@ impl RouteResponder {
             route_id,
             hops,
             route_signature,
+        }
+    }
+
+    /// Build a signed route **update** (0x07) advertising `replacement_hops` as the new path for an
+    /// existing `route_id`. `previous_hop_count` and `reason` are informational (carried on the wire).
+    /// The emitter signs with its own key; a receiver verifies against this node's `peer_id`.
+    pub fn build_route_update(
+        &self,
+        route_id: u64,
+        previous_hop_count: u8,
+        route_change_reason: u16,
+        replacement_hops: Vec<RouteHop>,
+    ) -> RelayRouteUpdate {
+        let route_update_signature = sign_route_update(
+            route_id,
+            previous_hop_count,
+            route_change_reason,
+            &replacement_hops,
+            &self.signing_key,
+        );
+        RelayRouteUpdate {
+            route_id,
+            previous_hop_count,
+            route_change_reason,
+            replacement_hops,
+            route_update_signature,
         }
     }
 }
@@ -585,5 +753,110 @@ mod tests {
         );
         assert!(improved);
         assert_eq!(table.best_route(&dst).unwrap().route_id, 2);
+    }
+
+    // ── route maintenance: update (0x07) + reject (0x08) ─────────────────────────
+
+    fn seed_route(table: &mut RouteTable, dst: [u8; 32], route_id: u64, hops: Vec<RouteHop>) {
+        table.record(
+            RouteEntry {
+                destination_peer_id: dst,
+                route_id,
+                hops,
+                discovered_at_ms: 0,
+            },
+            0,
+        );
+    }
+
+    #[test]
+    fn route_update_verifies_and_refreshes_the_existing_route() {
+        let dst = [200u8; 32];
+        let mut table = RouteTable::new(16, 0);
+        seed_route(&mut table, dst, 42, vec![a_hop(200, 500)]);
+
+        // A better path for the same route_id, signed by the emitter.
+        let emitter = responder(9, 0);
+        let update = emitter.build_route_update(42, 1, 0x0005, vec![a_hop(200, 950)]);
+
+        let updated_dst =
+            apply_route_update(&update, &emitter.peer_id(), &mut table, 100).expect("apply");
+        assert_eq!(updated_dst, dst);
+        assert_eq!(
+            table
+                .best_route(&dst)
+                .unwrap()
+                .hops
+                .last()
+                .unwrap()
+                .estimated_reliability_permille,
+            950,
+            "the route's hops were refreshed from the update"
+        );
+    }
+
+    #[test]
+    fn route_update_rejects_a_tampered_signature_and_empty_hops() {
+        let emitter = responder(9, 0);
+        let mut table = RouteTable::new(16, 0);
+
+        let mut tampered = emitter.build_route_update(7, 0, 0x0001, vec![a_hop(200, 900)]);
+        tampered.route_change_reason ^= 0x00FF; // signed field mutated after signing
+        assert!(matches!(
+            apply_route_update(&tampered, &emitter.peer_id(), &mut table, 1),
+            Err(RouteApplyError::BadSignature)
+        ));
+
+        let empty = emitter.build_route_update(7, 0, 0x0001, vec![]);
+        assert!(matches!(
+            apply_route_update(&empty, &emitter.peer_id(), &mut table, 1),
+            Err(RouteApplyError::EmptyRoute)
+        ));
+    }
+
+    #[test]
+    fn route_reject_from_an_on_path_hop_tears_down_the_route() {
+        let dst = [200u8; 32];
+        let mut table = RouteTable::new(16, 0);
+        seed_route(&mut table, dst, 42, vec![a_hop(50, 500), a_hop(200, 900)]);
+
+        // An off-path peer cannot tear it down.
+        let off_path = RelayRouteReject {
+            route_id: 42,
+            reject_hop_peer_id: [99u8; 32],
+            reason_code: 0x0002,
+            trust_decision: WireTrustState::Untrusted as u8,
+            policy_reference: 0,
+        };
+        assert!(matches!(
+            apply_route_reject(&off_path, &mut table),
+            Err(RouteApplyError::Unauthorized)
+        ));
+        assert!(
+            table.best_route(&dst).is_some(),
+            "route survives an off-path reject"
+        );
+
+        // An unknown route_id errors.
+        let unknown = RelayRouteReject {
+            route_id: 999,
+            ..off_path
+        };
+        assert!(matches!(
+            apply_route_reject(&unknown, &mut table),
+            Err(RouteApplyError::UnknownRoute(999))
+        ));
+
+        // An on-path hop tears it down.
+        let on_path = RelayRouteReject {
+            route_id: 42,
+            reject_hop_peer_id: [50u8; 32],
+            ..off_path
+        };
+        assert_eq!(apply_route_reject(&on_path, &mut table).unwrap(), dst);
+        assert!(
+            table.best_route(&dst).is_none(),
+            "an on-path reject removes the route"
+        );
     }
 }
