@@ -9,6 +9,29 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — fix(modem): compliance-fence the `transmit_iq` TX path (audit G-2)
+
+- **Requirement/change:** issue #830 — `transmit_iq` writes baseband IQ via `write_iq` directly, bypassing
+  the single `stage_emit_output` audio seam, so it ran **no** regulatory TX-metadata log, never incremented
+  `frames_transmitted` (which arms the auto-ID timer), and applied no TX attenuation. Test-only today, but a
+  latent non-compliant on-air path for any future SDR/IQ backend caller.
+- **Design decision:** extract the seam's compliance bookkeeping (regulatory §97 log + `frames_transmitted`
+  bump) into a shared `record_tx_frame(mode)` called by **both** `stage_emit_output` and `transmit_iq`, so
+  no emit path can drift from the log/ID accounting. `transmit_iq` also now applies the configured
+  `tx_attenuation_db` to the baseband IQ (power control; 0 dB is a no-op). The only seam transforms it still
+  omits are the audio-envelope-domain CE-SSB conditioner and the `tanh` peak limiter, which have no
+  IQ-domain equivalent — documented as the caller's (hardware/PA/SDR-headroom) responsibility on this path.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` — new `record_tx_frame`; `stage_emit_output`
+  and `transmit_iq` both call it; IQ attenuation scaling + revised `transmit_iq` doc.
+- **Tests:** `transmit_iq_records_regulatory_log_and_arms_auto_id` (IQ TX → `frames_transmitted() == 1`,
+  one regulatory-log frame with the station id) and `transmit_iq_applies_tx_attenuation` (−20 dB → IQ
+  magnitude RMS scales to ~0.1×). The existing `station_id_txcount` + `station_id` suites still pass (the
+  `record_tx_frame` extraction is behaviour-preserving for the audio seam).
+- **Test results:** `cargo test -p openpulse-modem --no-default-features` → iq_output 7 (5 → 7) + full
+  suite pass; fmt + clippy (`--tests -D warnings`) clean.
+
+---
+
 ## 2026-07-14 — feat(daemon): honor the per-band `SetTxAttenuation { band }` override
 
 - **Requirement/change:** issue #830 — `SetTxAttenuation { db, band }` carried an optional `band`, but the

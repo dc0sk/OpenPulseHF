@@ -85,3 +85,63 @@ fn no_iq_backend_returns_error() {
     assert_eq!(i.len(), q.len());
     assert!(!i.is_empty());
 }
+
+/// The IQ path is compliance-fenced (audit G-2): it records the §97 regulatory TX-metadata log and
+/// arms the auto-ID counter, exactly like the audio emit seam.
+#[test]
+fn transmit_iq_records_regulatory_log_and_arms_auto_id() {
+    let backend = LoopbackBackend::new();
+    let mut engine = make_engine(backend);
+    engine.set_callsign("W1AW");
+    assert_eq!(engine.frames_transmitted(), 0);
+    assert!(engine.tx_session_log().frames.is_empty());
+
+    engine.transmit_iq(b"logged IQ", "BPSK100", None).unwrap();
+
+    assert_eq!(
+        engine.frames_transmitted(),
+        1,
+        "IQ TX must arm the auto-ID counter"
+    );
+    assert_eq!(
+        engine.tx_session_log().frames.len(),
+        1,
+        "IQ TX must be recorded in the regulatory log"
+    );
+    assert_eq!(engine.tx_session_log().frames[0].station_id, "W1AW");
+}
+
+/// The IQ path applies the configured TX attenuation to the baseband IQ (power control).
+#[test]
+fn transmit_iq_applies_tx_attenuation() {
+    // Unattenuated reference.
+    let ref_backend = LoopbackBackend::new();
+    let ref_shared = ref_backend.clone_shared();
+    let mut engine = make_engine(ref_backend);
+    engine
+        .transmit_iq(b"attenuation test", "QPSK250", None)
+        .unwrap();
+    let full_pairs = ref_shared.drain_iq_samples();
+    assert!(!full_pairs.is_empty());
+    let full = mag_rms(&full_pairs);
+
+    // −20 dB → linear 0.1.
+    let att_backend = LoopbackBackend::new();
+    let att_shared = att_backend.clone_shared();
+    let mut engine = make_engine(att_backend);
+    engine.set_tx_attenuation_db(-20.0);
+    engine
+        .transmit_iq(b"attenuation test", "QPSK250", None)
+        .unwrap();
+    let attenuated = mag_rms(&att_shared.drain_iq_samples());
+
+    assert!(
+        (attenuated / full - 0.1).abs() < 0.02,
+        "−20 dB attenuation must scale the IQ magnitude to ~0.1× (got {})",
+        attenuated / full
+    );
+}
+
+fn mag_rms(pairs: &[(f32, f32)]) -> f32 {
+    (pairs.iter().map(|&(i, q)| i * i + q * q).sum::<f32>() / pairs.len() as f32).sqrt()
+}
