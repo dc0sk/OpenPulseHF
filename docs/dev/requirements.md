@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/requirements.md
 status: living
-last_updated: 2026-07-08
+last_updated: 2026-07-14
 ---
 
 # Requirements
@@ -291,6 +291,44 @@ Shipped (Phases A–E); on-air validation (Phase F) is deferred. Design and lock
   interrupted transfer from the last completed block. (REQ-FX-05)
 - Transmission shall be airtime-bounded into bursts so PTT keying stays within the radio's watchdog
   limit and the channel is yielded between bursts. (REQ-FX-06)
+
+## Reference-derived requirements (software-defined modem study, 2026-07-14)
+
+Derived from studying modern open-source modems (`docs/dev/research/references.md`:
+RFnexus/modem73, chrissnell/omnimodem, chrissnell/graywolf). **We re-implement independently — no code
+is copied**; these capture techniques worth building from first principles. Scheduling and priority live
+in the roadmap; each is a candidate, not a committed deliverable.
+
+- The receive path shall provide an optional **AGC / input-level normalization** front-end that
+  normalizes captured audio to a stable working level before demodulation, wired at the single
+  `route_audio_stage(InputCapture)` seam so every RX path (including the daemon streaming path) gets it,
+  gated by config and off by default, with a level-robust hard-limiter-correlator acquisition option.
+  It must not degrade calibrated soft-LLR reliability (the `llr_reliability`/`llr_calibration` gates must
+  still pass) and must carry a processed-block tripwire counter. Acceptance: an input-amplitude-sweep
+  test showing demod/DCD robustness with AGC on vs. the level sensitivity without it. (REQ-AGC-01)
+- Every PTT-keyed transmit scope shall release the transmitter **deterministically on scope exit** —
+  including on an early return or a panic/unwind — via an RAII guard, rather than relying solely on the
+  max-duration watchdog (REQ-REG-10 / #863). This bounds an unexpected key-down to the current stack
+  scope instead of up to `ptt_max_duration`. Acceptance: a test that panics inside a keyed transmit scope
+  and asserts the transmitter was released without waiting for the watchdog timer. (REQ-PTT-01)
+- `openpulse-radio` shall support keying via the **CM108/CM119 sound-chip GPIO over USB-HID** (the common
+  cheap-interface PTT path), selectable from config like the existing backends. Acceptance: unit tests
+  for the HID output-report encoding; documented in the PTT backend list. (REQ-PTT-02)
+- `openpulse-radio` shall support keying via a **Linux GPIO line** (Raspberry Pi header), selectable from
+  config, behind a target/feature gate with a mockable line interface. Acceptance: unit-tested report
+  path; documented. (REQ-PTT-03)
+- A purpose-built **robust narrowband weak-signal waveform** (~500–600 Hz, fading-tolerant) shall be
+  evaluated as the sub-floor rung below the current SL floor — the direction chosen over
+  frequency-diversity repetition (measured net-negative in #864). Acceptance: a coded frame-success
+  bake-off on Watterson good/moderate/poor showing a margin gain over the current floor at matched
+  occupied bandwidth, or an honest no-ship finding. (REQ-WSIG-01)
+- The receiver shall optionally **decode multiple registered waveforms concurrently** from a single
+  capture stream (off the shared `InputCapture` tap) rather than committing to one mode, for a
+  discovery/monitor role. Acceptance: a loopback test injecting two different modes into one capture
+  buffer and decoding both in one tick. (REQ-RX-01)
+- Audio device selection shall be **hotplug-safe**, surviving OS renaming/reorder by keying on a stable
+  device identity rather than an ordinal index or path. Acceptance: a test that a configured device
+  resolves after a simulated reorder. (REQ-DEV-01)
 
 ## Documentation requirements
 

@@ -2019,6 +2019,26 @@ current SL floor for deep-fade / very-weak-signal HF.
   and whether the gain over just dropping to BPSK31 + soft-FEC is worth the complexity.
 - **Status:** unscheduled; no target date. Parked here so the diversity lever isn't lost.
 
+### Reference-derived candidate backlog (software-defined modem study, 2026-07-14)
+
+From studying RFnexus/modem73, chrissnell/omnimodem, and chrissnell/graywolf
+(`docs/dev/research/references.md`). Requirements REQ-AGC-01, REQ-PTT-01/02/03, REQ-WSIG-01, REQ-RX-01,
+REQ-DEV-01 in `requirements.md`. **Re-implemented independently — no code copied.** Priority order:
+
+1. **REQ-PTT-01 — transmitter-release RAII guard (unkey-on-Drop). ✅ Shipped (2026-07-14).**
+   `SharedPtt::keyed` → `PttKeyGuard` (Drop releases, including on panic/unwind); the five automatic-TX
+   sites in `server.rs` converted. Bounds an unexpected key-down to the current scope instead of ≤180 s.
+2. **REQ-AGC-01 — receive AGC / input-level normalization front-end** (hard-limiter correlator + DF-AGC,
+   per graywolf/libmodem). The long-standing #1 reference-mining gap (we have no AGC). Must sit at the
+   single `InputCapture` seam, keep the soft-LLR calibration gates green, and be proven with a
+   level-sweep measurement.
+3. **REQ-PTT-02 / REQ-PTT-03 — CM108 USB-HID and GPIO PTT backends** (per graywolf's PTT abstraction).
+4. **REQ-WSIG-01 — robust narrowband weak-signal waveform** (per modem73's ROBUST family) — the
+   measured direction over the rejected frequency-diversity rung (#864).
+5. **REQ-RX-01 — simultaneous multi-mode receive** (per modem73's parallel-family RX) — a discovery/
+   monitor decode tap off the shared `InputCapture` seam. Larger, architectural.
+6. **REQ-DEV-01 — hotplug-safe audio device identity** (per omnimodem's stable device identity).
+
 ### Features shipped (no longer deferred)
 
 - LDPC: real rate-1/2 min-sum belief propagation shipped in PR #187. The "LDPC stub" entry below is obsolete.

@@ -108,6 +108,23 @@ impl SharedPtt {
         }
     }
 
+    /// Key the transmitter and return an RAII guard that releases it on drop — including on an early
+    /// return or a panic/unwind (REQ-PTT-01). Prefer this over paired `key`/`unkey` in any automatic-TX
+    /// scope that can early-return or panic between them, so an unexpected key-down is bounded to the
+    /// current stack scope instead of up to the 180 s watchdog. `event_tx` is cloned into the guard so
+    /// the release edge is still emitted on unwind; `None` keys silently (the beacon path).
+    pub fn keyed(
+        &self,
+        event_tx: Option<&broadcast::Sender<ControlEvent>>,
+    ) -> Result<PttKeyGuard, PttError> {
+        self.key(event_tx)?;
+        Ok(PttKeyGuard {
+            ptt: self.clone(),
+            event_tx: event_tx.cloned(),
+            released: false,
+        })
+    }
+
     /// Hardware assert only — no deadline change, no event. For the manual `PttAssert` command path,
     /// which arms the deadline + emits its event separately in `apply_command_to_engine`.
     pub fn hw_assert(&self) -> Result<(), PttError> {
@@ -221,6 +238,39 @@ impl SharedPtt {
                 SharedPtt(arc).force_release_if_expired(&event_tx);
             })
             .expect("failed to spawn ptt-watchdog thread")
+    }
+}
+
+/// RAII guard from [`SharedPtt::keyed`] that releases the transmitter (and disarms the watchdog) when it
+/// drops — including on an early return or a panic/unwind (REQ-PTT-01). Under the default `panic=unwind`
+/// profile, `Drop` runs during unwinding, so the release happens *before* the panic reaches the task
+/// boundary or crashes the process — the transmitter never stays keyed waiting for the 180 s watchdog.
+#[must_use = "dropping the guard releases PTT; bind it for the transmit scope"]
+pub struct PttKeyGuard {
+    ptt: SharedPtt,
+    event_tx: Option<broadcast::Sender<ControlEvent>>,
+    released: bool,
+}
+
+impl PttKeyGuard {
+    /// Release now instead of at scope end — for the half-duplex turnaround where PTT must drop before
+    /// listening. Idempotent; after this the `Drop` is a no-op. Returns the underlying unkey outcome.
+    pub fn release(mut self) -> UnkeyOutcome {
+        self.release_inner()
+    }
+
+    fn release_inner(&mut self) -> UnkeyOutcome {
+        if self.released {
+            return UnkeyOutcome::NotKeyed;
+        }
+        self.released = true;
+        self.ptt.unkey(self.event_tx.as_ref())
+    }
+}
+
+impl Drop for PttKeyGuard {
+    fn drop(&mut self) {
+        let _ = self.release_inner();
     }
 }
 
@@ -524,6 +574,86 @@ mod tests {
         assert!(
             rx.try_recv().is_err(),
             "no duplicate PttChanged{{false}} from the late unkey"
+        );
+    }
+
+    #[test]
+    fn key_guard_releases_at_scope_end() {
+        let releases = Arc::new(AtomicUsize::new(0));
+        let ptt = SharedPtt::new(
+            Some(Box::new(FakePtt {
+                releases: releases.clone(),
+                ..Default::default()
+            })),
+            DEFAULT_PTT_MAX,
+        );
+        let tx = ev();
+        let mut rx = tx.subscribe();
+        {
+            let _g = ptt.keyed(Some(&tx)).unwrap();
+            assert!(ptt.is_keyed());
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(ControlEvent::PttChanged { active: true })
+            ));
+        } // guard drops here
+        assert!(!ptt.is_keyed(), "the guard releases at scope end");
+        assert_eq!(releases.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ControlEvent::PttChanged { active: false })
+        ));
+    }
+
+    /// REQ-PTT-01: a panic inside a keyed scope must release the transmitter during unwinding — not leave
+    /// it keyed for the 180 s watchdog.
+    #[test]
+    fn key_guard_releases_on_panic_unwind() {
+        let releases = Arc::new(AtomicUsize::new(0));
+        let ptt = SharedPtt::new(
+            Some(Box::new(FakePtt {
+                releases: releases.clone(),
+                ..Default::default()
+            })),
+            DEFAULT_PTT_MAX,
+        );
+        let tx = ev();
+        let ptt_in = ptt.clone();
+        let tx_in = tx.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _g = ptt_in.keyed(Some(&tx_in)).unwrap();
+            assert!(ptt_in.is_keyed());
+            panic!("boom mid keyed scope");
+        }));
+        assert!(result.is_err(), "the keyed scope panicked");
+        assert!(
+            !ptt.is_keyed(),
+            "the guard released the transmitter on unwind"
+        );
+        assert_eq!(
+            releases.load(Ordering::SeqCst),
+            1,
+            "hardware released exactly once during unwind"
+        );
+    }
+
+    #[test]
+    fn key_guard_explicit_release_is_single_fire() {
+        let releases = Arc::new(AtomicUsize::new(0));
+        let ptt = SharedPtt::new(
+            Some(Box::new(FakePtt {
+                releases: releases.clone(),
+                ..Default::default()
+            })),
+            DEFAULT_PTT_MAX,
+        );
+        let g = ptt.keyed(None).unwrap();
+        assert_eq!(g.release(), UnkeyOutcome::Released); // consumes the guard; its Drop then no-ops
+        assert!(!ptt.is_keyed());
+        assert_eq!(
+            releases.load(Ordering::SeqCst),
+            1,
+            "explicit release + the moved guard's Drop release once total"
         );
     }
 }

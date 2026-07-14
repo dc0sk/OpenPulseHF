@@ -9,6 +9,33 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — feat(daemon): transmitter-release RAII guard, unkey-on-Drop (REQ-PTT-01)
+
+- **Requirement/change:** REQ-PTT-01 — every PTT-keyed automatic-TX scope must release the transmitter
+  deterministically on scope exit, **including on an early return or a panic/unwind**, rather than relying
+  solely on the 180 s max-duration watchdog (#863). Derived from studying omnimodem's unkey-on-Drop safety
+  (`docs/dev/research/references.md`); re-implemented independently.
+- **Design decision:** add `SharedPtt::keyed(event_tx) -> Result<PttKeyGuard, PttError>` — keys via the
+  existing `key()` and returns an RAII guard whose `Drop` calls `unkey()`. The guard owns a cloned
+  `broadcast::Sender` so the release edge is still emitted on unwind. Under the default `panic=unwind`
+  profile `Drop` runs *during* unwinding, so PTT is released before the panic reaches the task boundary or
+  crashes the process — the OS closing a serial/rigctld port on process death does **not** reliably drop a
+  keyed rig, so releasing in-scope is the safe path. A `release()` method releases early (for the
+  half-duplex turnaround where PTT must drop before listening) and makes the later `Drop` a no-op
+  (idempotent via a `released` flag). The manual `PttAssert`/`PttRelease` command path stays HW-only (its
+  key deliberately persists across command invocations — not a scoped guard).
+- **Implementation:** `crates/openpulse-daemon/src/ptt.rs` (`keyed`, `PttKeyGuard` + `Drop`);
+  `crates/openpulse-daemon/src/server.rs` — the five automatic-TX sites converted to the guard:
+  `transmit_beacon_with_ptt` (silent), `drain_filexfer_tx` (per-burst), the rx-tick OTA-ACK and station-ID
+  inline sites (scoped), and `ota_send_with_ptt` (explicit `release()` before the ACK listen).
+- **Tests:** `ptt.rs` — `key_guard_releases_at_scope_end`, `key_guard_releases_on_panic_unwind` (the
+  REQ-PTT-01 guarantee: a `catch_unwind` panic inside a keyed scope releases hardware exactly once and
+  disarms the deadline without waiting for the watchdog), `key_guard_explicit_release_is_single_fire`.
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features` → 109 lib (106 → 109) + 2 + 13
+  + 5 + 3 integration, 0 failed; clippy `-D warnings` + fmt clean.
+
+---
+
 ## 2026-07-14 — feat(daemon): independent PTT watchdog thread (B1 / #863)
 
 - **Requirement/change:** the PTT watchdog must force-release the transmitter on its 180 s max-keyed
