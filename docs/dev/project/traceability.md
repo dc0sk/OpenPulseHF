@@ -9,6 +9,36 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — fix(daemon): decouple the PTT watchdog + drop `biased` so a command flood can't starve rx
+
+- **Requirement/change:** issue #830 robustness — `server::run`'s single `tokio::select!` was `biased` with
+  the command arm first, and the safety-critical PTT watchdog + rx decode both lived **inside** the
+  `rx_ticker` arm. A sustained (default loopback-only) client command flood therefore always won the
+  biased race, starving the rx tick **and** the watchdog with it — the transmitter could stay keyed past
+  its deadline.
+- **Design decision:** give the watchdog its **own** `select!` arm on a fast (100 ms) timer and remove
+  `biased`, so tokio schedules the three arms (watchdog / commands / rx) fairly — no arm can be starved by
+  a flood, and the watchdog's force-release runs on its own cadence regardless of rx load. The watchdog
+  body is extracted into `release_ptt_on_watchdog` and called from both the dedicated arm (primary,
+  flood-proof) and the rx tick (idempotent belt-and-suspenders). The engine is a single-threaded owned
+  resource shared by both arms, so this is fairness within one loop — not a move to separate tasks.
+- **Implementation:** `crates/openpulse-daemon/src/server.rs` — `watchdog_ticker`, the new `select!` arm,
+  the removed `biased`, and the `release_ptt_on_watchdog` helper.
+- **Tests:** `watchdog_releases_the_transmitter_when_the_deadline_passes` (armed + past-deadline → one
+  hardware release via a counting PTT double + disarm + a single `PttChanged{active:false}`; idempotent on
+  a second call). The full daemon suite — incl. `twin_daemon_bridge` which drives `server::run` — stays
+  green, so the restructuring is behaviour-preserving.
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features` → 98 lib (97 → 98) +
+  integration all pass; fmt + clippy (`--tests -D warnings`) clean.
+- **Remaining (deferred, separate change):** the *in-handler* blocking half — a QSY scan or an OTA
+  send/retry burst still holds the command arm (with internal awaits) for tens of seconds, during which no
+  `select!` arm (watchdog included) is evaluated, so an `Abort`/`PttRelease` is delayed until the handler
+  returns. Fixing that needs the long handlers to yield to the loop (a state machine) or a truly
+  independent watchdog task with `Arc<Mutex>`-shared PTT state — a larger, higher-risk refactor than this
+  fairness fix.
+
+---
+
 ## 2026-07-14 — fix(modem): compliance-fence the `transmit_iq` TX path (audit G-2)
 
 - **Requirement/change:** issue #830 — `transmit_iq` writes baseband IQ via `write_iq` directly, bypassing
