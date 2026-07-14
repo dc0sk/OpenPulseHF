@@ -33,6 +33,10 @@ Post-v0.5.0 block-B/D backlog. No breaking changes.
   a `chip:line[:active_low]` spec (e.g. `gpiochip0:17`). (REQ-PTT-03)
 - **Daemon serial PTT**: the daemon now supports `rts`/`dtr` serial PTT (behind its new `serial` feature)
   using `[modem] ptt_device` as the port path, instead of silently disabling it.
+- **Hotplug-safe audio device selection**: `[audio] device` is now resolved with a match ladder (exact
+  name → ALSA `CARD=` token → case-insensitive substring, ambiguity is an error), so a device the OS
+  renames or reorders (e.g. gains a `(2)` suffix, or its `hw:N` index shifts) still resolves instead of
+  failing with `DeviceNotFound`. (REQ-DEV-01)
 - **Mesh route discovery — source-accumulated multi-hop paths**: a `RouteDiscoveryRequest` now accumulates
   the traversed path as it floods (each forwarder appends itself), so the destination answers with the real
   end-to-end route instead of only `destination → [self]`. (#861)

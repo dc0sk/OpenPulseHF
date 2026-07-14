@@ -2039,9 +2039,11 @@ Build order revised per the 2026-07-14 Fable design review (see traceability):
      mock in default CI; `chip:line[:active_low]` spec in `ptt_device`; `gpio` selector arm in daemon+CLI.
    - **Daemon `rts`/`dtr` gap fixed:** the daemon now supports serial PTT (behind its new `serial` feature)
      using `ptt_device` as the port path, instead of silently disabling it.
-2. **REQ-DEV-01 — hotplug-safe audio device identity.** Small, self-contained; today's selection is exact
-   name-match (reorder-tolerant, rename-fragile). A pure `resolve_device` match ladder (exact → ALSA
-   `CARD=` token → substring → error-on-ambiguity) + re-enumerate-on-miss; closes an untested failure mode.
+2. **REQ-DEV-01 — hotplug-safe audio device identity. ✅ Shipped.** `openpulse_core::audio::resolve_device`
+   — a pure match ladder (exact → ALSA `CARD=` token → case-insensitive substring → error-on-ambiguity),
+   unit-tested in default CI (reorder + rename cases), wired into `CpalBackend::open_input`/`open_output`
+   via `select_cpal_device`. The `[audio] device` config field is now a hotplug-safe selector.
+   Deferred enhancement: a sysfs vendor/product/serial stable-id (omnimodem-style) as an opt-in later.
 3. **REQ-RX-01 — simultaneous multi-mode receive.** **Contained, not architectural** (Fable): plugins are
    stateless (`&self`), and the JS8 discovery dwell already tees a raw-capture clone to an independent
    decoder — the exact pattern. A `MonitorRuntime` sibling of `DiscoveryRuntime` (off by default), no

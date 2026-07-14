@@ -15,9 +15,40 @@ use cpal::{Stream, StreamConfig};
 use tracing::{debug, warn};
 
 use openpulse_core::audio::{
-    AudioBackend, AudioConfig, AudioInputStream, AudioOutputStream, DeviceInfo,
+    resolve_device, AudioBackend, AudioConfig, AudioInputStream, AudioOutputStream, DeviceInfo,
+    DeviceResolution,
 };
 use openpulse_core::error::AudioError;
+
+/// Pick a cpal device matching `selector` from `devices` using the hotplug-safe resolver
+/// ([`resolve_device`]): exact name → ALSA `CARD=` token → case-insensitive substring, refusing to
+/// guess on ambiguity. Survives a device reorder/rename that changes the exact system name.
+fn select_cpal_device<I: Iterator<Item = cpal::Device>>(
+    devices: I,
+    selector: &str,
+) -> Result<cpal::Device, AudioError> {
+    let named: Vec<(String, cpal::Device)> = devices
+        .filter_map(|d| d.name().ok().map(|n| (n, d)))
+        .collect();
+    let names: Vec<String> = named.iter().map(|(n, _)| n.clone()).collect();
+    match resolve_device(selector, &names) {
+        DeviceResolution::Resolved(name) => {
+            if name != selector {
+                debug!("audio device '{selector}' resolved to '{name}' (hotplug-safe match)");
+            }
+            named
+                .into_iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, d)| d)
+                .ok_or(AudioError::DeviceNotFound(name))
+        }
+        DeviceResolution::Ambiguous(hits) => Err(AudioError::DeviceNotFound(format!(
+            "'{selector}' matches multiple devices ({}); set an exact name",
+            hits.join(", ")
+        ))),
+        DeviceResolution::NotFound => Err(AudioError::DeviceNotFound(selector.to_string())),
+    }
+}
 
 // ── CpalBackend ───────────────────────────────────────────────────────────────
 
@@ -119,12 +150,11 @@ impl AudioBackend for CpalBackend {
                 .default_input_device()
                 .ok_or_else(|| AudioError::DeviceNotFound("no default input device".into()))?,
             Some(name) => {
-                let mut all = self
+                let all = self
                     .host
                     .input_devices()
                     .map_err(|e| AudioError::Stream(e.to_string()))?;
-                all.find(|d| d.name().ok().as_deref() == Some(name))
-                    .ok_or_else(|| AudioError::DeviceNotFound(name.to_string()))?
+                select_cpal_device(all, name)?
             }
         };
 
@@ -179,12 +209,11 @@ impl AudioBackend for CpalBackend {
                 .default_output_device()
                 .ok_or_else(|| AudioError::DeviceNotFound("no default output device".into()))?,
             Some(name) => {
-                let mut all = self
+                let all = self
                     .host
                     .output_devices()
                     .map_err(|e| AudioError::Stream(e.to_string()))?;
-                all.find(|d| d.name().ok().as_deref() == Some(name))
-                    .ok_or_else(|| AudioError::DeviceNotFound(name.to_string()))?
+                select_cpal_device(all, name)?
             }
         };
 

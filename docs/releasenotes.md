@@ -34,6 +34,13 @@ Post-v0.5.0 improvements. **No breaking changes.**
 - **Daemon serial PTT.** The background daemon now drives `rts`/`dtr` serial PTT (built with
   `--features serial`), which previously worked only from the CLI.
 
+**Audio**
+
+- **Your configured audio device survives being renamed or reordered.** Previously, if the OS gave your
+  sound card a slightly different name (e.g. a `(2)` suffix) or shuffled its index after a reboot/hotplug,
+  the daemon would fail to find it. It now matches by a stable identifier and a fuzzy name fallback, so the
+  same `[audio] device` setting keeps working — and it refuses to guess when two devices match.
+
 **Mesh & TNCs**
 
 - **Multi-hop mesh routes.** A mesh route discovery now records the full path it traverses, so the
