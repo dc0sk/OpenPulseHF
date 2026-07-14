@@ -12,6 +12,7 @@
 pub mod audit;
 pub mod logbook;
 pub mod protocol;
+pub mod ptt;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod filexfer;
@@ -175,11 +176,10 @@ pub struct RuntimeControlState {
     pub repeater_stop: Option<Arc<AtomicBool>>,
     /// Handle for the running repeater thread.
     pub repeater_thread: Option<std::thread::JoinHandle<()>>,
-    /// Timestamp of the most recent PttAssert; `None` when PTT is not active.
-    pub ptt_asserted_at: Option<Instant>,
-    /// Maximum continuous transmit time before the watchdog releases PTT.
-    /// Defaults to 3 minutes (180 s) to stay within Part 97 duty-cycle guidance.
-    pub ptt_max_duration: Duration,
+    /// PTT hardware + watchdog deadline behind a shared lock, so an independent watchdog thread can
+    /// force-release the transmitter even while the async command loop is blocked in a long handler
+    /// (issue #863). Keyed ⇔ the deadline is armed; the default max keyed duration is 180 s (Part 97).
+    pub ptt: crate::ptt::SharedPtt,
     /// Loaded trust store for verifying incoming peer handshakes.
     pub trust_store: InMemoryTrustStore,
     /// Optional relay forwarder; `Some` when `[relay] enabled = true` in config.
@@ -317,8 +317,7 @@ impl Default for RuntimeControlState {
             repeater: None,
             repeater_stop: None,
             repeater_thread: None,
-            ptt_asserted_at: None,
-            ptt_max_duration: Duration::from_secs(180),
+            ptt: crate::ptt::SharedPtt::default(),
             trust_store: InMemoryTrustStore::default(),
             relay_forwarder: None,
             dcd_squelch_default: 0.01,
@@ -366,11 +365,7 @@ impl std::fmt::Debug for RuntimeControlState {
             .field("repeater", &self.repeater.is_some())
             .field("repeater_stop", &self.repeater_stop.is_some())
             .field("repeater_thread", &self.repeater_thread.is_some())
-            .field(
-                "ptt_asserted_at",
-                &self.ptt_asserted_at.map(|t| t.elapsed()),
-            )
-            .field("ptt_max_duration", &self.ptt_max_duration)
+            .field("ptt", &self.ptt)
             .field("trust_store_entries", &"<opaque>")
             .field("relay_forwarder", &self.relay_forwarder.is_some())
             .finish()
@@ -1212,25 +1207,16 @@ async fn execute_qsy_actions(
 
 /// Release PTT if the watchdog deadline has elapsed since `PttAssert`.
 ///
-/// Returns `true` if the watchdog fired (PTT was forcibly released), so the
-/// caller can propagate the hardware release through the PTT controller.
+/// Returns `true` if the watchdog fired (PTT was forcibly released). The hardware release now happens
+/// inside [`ptt::SharedPtt::force_release_if_expired`], so callers no longer need to propagate it —
+/// this is a thin delegate kept for the async command loop's cooperative poll. The independent
+/// watchdog thread ([`ptt::SharedPtt::spawn_watchdog`]) fires the same path when the loop is blocked.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn check_ptt_watchdog(
     runtime_state: &mut RuntimeControlState,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
 ) -> bool {
-    if let Some(asserted_at) = runtime_state.ptt_asserted_at {
-        if asserted_at.elapsed() >= runtime_state.ptt_max_duration {
-            runtime_state.ptt_asserted_at = None;
-            tracing::warn!(
-                max_secs = runtime_state.ptt_max_duration.as_secs(),
-                "PTT watchdog fired — transmitter has been keyed beyond max duration; releasing"
-            );
-            let _ = event_tx.send(ControlEvent::PttChanged { active: false });
-            return true;
-        }
-    }
-    false
+    runtime_state.ptt.force_release_if_expired(event_tx)
 }
 
 /// Process raw bytes received from the modem engine and drive QSY responder logic.
@@ -1727,11 +1713,13 @@ pub async fn apply_command_to_engine(
             }
         }
         ControlCommand::PttAssert => {
-            runtime_state.ptt_asserted_at = Some(Instant::now());
+            // The hardware key happens in the server's `handle_ptt_command`; here we arm the watchdog
+            // deadline and announce the logical edge. The independent watchdog thread reads this arm.
+            runtime_state.ptt.arm();
             let _ = event_tx.send(ControlEvent::PttChanged { active: true });
         }
         ControlCommand::PttRelease => {
-            runtime_state.ptt_asserted_at = None;
+            runtime_state.ptt.disarm();
             let _ = event_tx.send(ControlEvent::PttChanged { active: false });
         }
         ControlCommand::ConnectPeer { callsign } => {
@@ -2204,9 +2192,9 @@ pub async fn apply_command_to_engine(
         ControlCommand::ListFiles => emit_file_list(runtime_state, event_tx),
         ControlCommand::GetPttState => {
             // Re-emit the current PTT state so a client that missed the edge can resync. PTT is keyed
-            // exactly when the watchdog is armed (`ptt_asserted_at` is set on every key path and cleared
-            // on release), so it is the single source of truth for the logical PTT state.
-            let active = runtime_state.ptt_asserted_at.is_some();
+            // exactly when the watchdog deadline is armed (`arm()` on every key path, cleared on
+            // release), so it is the single source of truth for the logical PTT state.
+            let active = runtime_state.ptt.is_keyed();
             let _ = event_tx.send(ControlEvent::PttChanged { active });
         }
         // No live-modem side effects for these commands in the engine path.
@@ -2605,9 +2593,9 @@ mod command_apply_tests {
         let mut rs = RuntimeControlState::default();
 
         apply(ControlCommand::PttAssert, &mut engine, &mut rs, &ev).await;
-        assert!(rs.ptt_asserted_at.is_some());
+        assert!(rs.ptt.is_keyed());
         apply(ControlCommand::PttRelease, &mut engine, &mut rs, &ev).await;
-        assert!(rs.ptt_asserted_at.is_none());
+        assert!(!rs.ptt.is_keyed());
 
         let mut states = Vec::new();
         while let Ok(e) = rx.try_recv() {
@@ -3648,7 +3636,7 @@ mod command_apply_tests {
     #[tokio::test]
     async fn get_ptt_state_rebroadcasts_the_current_keyed_state() {
         // A client that missed a PttChanged edge can resync: GetPttState re-emits the current state,
-        // which is keyed exactly when the watchdog is armed (`ptt_asserted_at`).
+        // which is keyed exactly when the watchdog deadline is armed.
         let mut engine = test_engine();
         let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
         let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
@@ -3656,7 +3644,7 @@ mod command_apply_tests {
         let mut runtime_state = RuntimeControlState::default();
 
         // Currently keyed → GetPttState reports active: true.
-        runtime_state.ptt_asserted_at = Some(std::time::Instant::now());
+        runtime_state.ptt.arm();
         apply_command_to_engine(
             &ControlCommand::GetPttState,
             &mut engine,
@@ -3672,7 +3660,7 @@ mod command_apply_tests {
         );
 
         // Not keyed → active: false.
-        runtime_state.ptt_asserted_at = None;
+        runtime_state.ptt.disarm();
         apply_command_to_engine(
             &ControlCommand::GetPttState,
             &mut engine,
@@ -4136,24 +4124,14 @@ mod command_apply_tests {
     fn ptt_watchdog_fires_after_deadline() {
         let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
         let ev_tx = Arc::new(tx);
-        // Use a small ptt_max_duration so Instant::now() is guaranteed to be past
-        // the deadline without requiring the subtraction to go back farther than the
-        // process uptime (avoids panic on freshly booted CI containers).
-        let mut state = RuntimeControlState {
-            ptt_asserted_at: Some(
-                Instant::now()
-                    .checked_sub(Duration::from_millis(100))
-                    .unwrap_or_else(Instant::now),
-            ),
-            ptt_max_duration: Duration::from_nanos(1),
-            ..RuntimeControlState::default()
-        };
+        // A zero max-duration makes any armed deadline immediately expired — fully deterministic,
+        // and avoids subtracting past the process uptime on freshly booted CI containers.
+        let mut state = RuntimeControlState::default();
+        state.ptt.set_max_duration(Duration::ZERO);
+        state.ptt.arm();
         let fired = check_ptt_watchdog(&mut state, &ev_tx);
         assert!(fired, "watchdog must fire when deadline is exceeded");
-        assert!(
-            state.ptt_asserted_at.is_none(),
-            "ptt_asserted_at must be cleared"
-        );
+        assert!(!state.ptt.is_keyed(), "PTT deadline must be cleared");
         let ev = rx.try_recv().expect("PttChanged event must be emitted");
         assert!(
             matches!(ev, ControlEvent::PttChanged { active: false }),
@@ -4165,17 +4143,11 @@ mod command_apply_tests {
     fn ptt_watchdog_silent_before_deadline() {
         let (tx, _) = broadcast::channel::<ControlEvent>(16);
         let ev_tx = Arc::new(tx);
-        let mut state = RuntimeControlState {
-            ptt_asserted_at: Some(Instant::now()),
-            ptt_max_duration: Duration::from_secs(180),
-            ..RuntimeControlState::default()
-        };
+        let mut state = RuntimeControlState::default();
+        state.ptt.arm();
         let fired = check_ptt_watchdog(&mut state, &ev_tx);
         assert!(!fired, "watchdog must not fire before deadline");
-        assert!(
-            state.ptt_asserted_at.is_some(),
-            "ptt_asserted_at must remain set"
-        );
+        assert!(state.ptt.is_keyed(), "PTT deadline must remain armed");
     }
 
     #[test]
