@@ -1555,12 +1555,53 @@ fn build_ptt_controller(
                 None
             }
         },
+        "gpio" => match openpulse_radio::GpioPtt::open(ptt_device) {
+            Ok(ctrl) => Some(Box::new(ctrl)),
+            Err(e) => {
+                tracing::warn!(
+                    device = %ptt_device,
+                    error = %e,
+                    "GPIO PTT open failed; PTT commands will be no-ops"
+                );
+                None
+            }
+        },
         "rts" | "dtr" => {
-            tracing::warn!(
-                backend,
-                "serial PTT not supported in daemon build (recompile with --features serial); PTT disabled"
-            );
-            None
+            #[cfg(feature = "serial")]
+            {
+                use openpulse_radio::serial::{SerialPin, SerialRtsDtrPtt};
+                if ptt_device.is_empty() {
+                    tracing::warn!(
+                        backend,
+                        "serial PTT requires [modem] ptt_device (serial port path); PTT disabled"
+                    );
+                    return None;
+                }
+                let pin = if backend == "rts" {
+                    SerialPin::Rts
+                } else {
+                    SerialPin::Dtr
+                };
+                match SerialRtsDtrPtt::open(ptt_device, pin) {
+                    Ok(ctrl) => Some(Box::new(ctrl)),
+                    Err(e) => {
+                        tracing::warn!(
+                            device = %ptt_device,
+                            error = %e,
+                            "serial PTT open failed; PTT commands will be no-ops"
+                        );
+                        None
+                    }
+                }
+            }
+            #[cfg(not(feature = "serial"))]
+            {
+                tracing::warn!(
+                    backend,
+                    "serial PTT not compiled in (recompile with --features serial); PTT disabled"
+                );
+                None
+            }
         }
         other => {
             tracing::warn!(backend = %other, "unknown PTT backend; PTT disabled");
@@ -1588,6 +1629,14 @@ mod ptt_selector_tests {
             ctrl.is_none(),
             "a missing CM108 device disables PTT, not a crash"
         );
+    }
+
+    #[test]
+    fn gpio_with_a_bad_spec_or_no_feature_is_a_graceful_noop() {
+        // With the `gpio` feature off, GpioPtt::open reports not-compiled-in; with it on, the bad spec /
+        // missing chip fails. Either way the daemon selector returns None (PTT disabled), never a crash.
+        assert!(build_ptt_controller("gpio", "", "", 3).is_none());
+        assert!(build_ptt_controller("gpio", "", "not-a-valid-spec", 3).is_none());
     }
 
     #[test]

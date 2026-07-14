@@ -60,6 +60,28 @@ fn transmit_with_cm108_missing_device_errors() {
 }
 
 #[test]
+fn transmit_with_gpio_errors_cleanly() {
+    // The `gpio` backend is wired; without --features gpio (or with a bad spec) it must fail cleanly
+    // (not "unknown backend", not a panic) — proving the selector arm reaches GpioPtt::open.
+    let mut cmd = Command::cargo_bin("openpulse").expect("binary should build");
+    cmd.args([
+        "--backend",
+        "loopback",
+        "--ptt",
+        "gpio",
+        "--rig",
+        "gpiochip-nonexistent-openpulse:17",
+        "transmit",
+        "hello",
+        "--mode",
+        "BPSK100",
+    ]);
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("GPIO"));
+}
+
+#[test]
 fn transmit_default_ptt_is_none() {
     // No --ptt flag; should succeed with the default NoOpPtt.
     let mut cmd = Command::cargo_bin("openpulse").expect("binary should build");

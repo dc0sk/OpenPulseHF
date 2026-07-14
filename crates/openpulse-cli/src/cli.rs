@@ -24,11 +24,11 @@ pub struct Cli {
     #[arg(long, global = true, default_value = "http://127.0.0.1:8787")]
     pub pki_url: String,
 
-    /// PTT backend: none | rts | dtr | vox | rigctld | cm108.
+    /// PTT backend: none | rts | dtr | vox | rigctld | cm108 | gpio.
     #[arg(long, global = true, default_value = "none")]
     pub ptt: String,
 
-    /// Serial/rigctld/CM108-hidraw path or address for PTT (e.g. /dev/ttyUSB0, localhost:4532, /dev/hidraw0).
+    /// PTT target for --ptt: serial path (rts/dtr), rigctld addr, /dev/hidrawN (cm108), or chip:line (gpio).
     #[arg(long, global = true, default_value = "")]
     pub rig: String,
 

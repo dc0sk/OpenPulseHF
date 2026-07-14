@@ -28,6 +28,11 @@ Post-v0.5.0 block-B/D backlog. No breaking changes.
   CM108/CM109/CM119 sound-chip GPIO on cheap USB interfaces (DMK URI, RA-series, AIOC, homebrew). A plain
   `/dev/hidrawN` write — no extra dependency; `ptt_device` selects the path (empty = auto-detect a C-Media
   device) and `ptt_gpio` the pin (default 3). (REQ-PTT-02)
+- **GPIO-line PTT backend** (`--ptt gpio` / `[modem] ptt_backend = "gpio"`, `gpio` feature): key PTT via a
+  Linux GPIO line (e.g. a Raspberry Pi header pin) over the `gpiocdev` char-dev uAPI; `ptt_device` carries
+  a `chip:line[:active_low]` spec (e.g. `gpiochip0:17`). (REQ-PTT-03)
+- **Daemon serial PTT**: the daemon now supports `rts`/`dtr` serial PTT (behind its new `serial` feature)
+  using `[modem] ptt_device` as the port path, instead of silently disabling it.
 - **Mesh route discovery — source-accumulated multi-hop paths**: a `RouteDiscoveryRequest` now accumulates
   the traversed path as it floods (each forwarder appends itself), so the destination answers with the real
   end-to-end route instead of only `destination → [self]`. (#861)

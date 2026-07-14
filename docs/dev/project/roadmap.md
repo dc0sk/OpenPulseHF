@@ -2030,12 +2030,15 @@ REQ-DEV-01 in `requirements.md`. **Re-implemented independently — no code copi
    sites in `server.rs` converted. Bounds an unexpected key-down to the current scope instead of ≤180 s.
 Build order revised per the 2026-07-14 Fable design review (see traceability):
 
-1. **REQ-PTT-02 + REQ-PTT-03 — CM108 USB-HID + GPIO PTT backends** (one track).
-   - **REQ-PTT-02 CM108 ✅ Shipped.** `openpulse_radio::Cm108Ptt` — a plain 5-byte `/dev/hidrawN` write
-     (**no `hidapi`/C dep**, always-compiled, unit-tested in default CI), sysfs auto-detect (vendor
+1. **REQ-PTT-02 + REQ-PTT-03 — CM108 USB-HID + GPIO PTT backends ✅ Track complete.**
+   - **REQ-PTT-02 CM108 ✅ Shipped (#875).** `openpulse_radio::Cm108Ptt` — a plain 5-byte `/dev/hidrawN`
+     write (**no `hidapi`/C dep**, always-compiled, unit-tested in default CI), sysfs auto-detect (vendor
      `0x0d8c`), `[modem] ptt_device`/`ptt_gpio` config + `cm108` selector arm in the daemon and CLI.
-   - **REQ-PTT-03 GPIO — next.** `gpiocdev` (pure Rust) behind a mockable line trait (fully unit-testable),
-     reusing the `ptt_device` plumbing. Also fix the daemon's silent `rts`/`dtr` no-support gap.
+   - **REQ-PTT-03 GPIO ✅ Shipped.** `openpulse_radio::GpioPtt` over `gpiocdev` (pure Rust, `gpio` feature)
+     behind a mockable `PttLine` trait — the assert/release/active-low logic is fully unit-tested with a
+     mock in default CI; `chip:line[:active_low]` spec in `ptt_device`; `gpio` selector arm in daemon+CLI.
+   - **Daemon `rts`/`dtr` gap fixed:** the daemon now supports serial PTT (behind its new `serial` feature)
+     using `ptt_device` as the port path, instead of silently disabling it.
 2. **REQ-DEV-01 — hotplug-safe audio device identity.** Small, self-contained; today's selection is exact
    name-match (reorder-tolerant, rename-fragile). A pure `resolve_device` match ladder (exact → ALSA
    `CARD=` token → substring → error-on-ambiguity) + re-enumerate-on-miss; closes an untested failure mode.

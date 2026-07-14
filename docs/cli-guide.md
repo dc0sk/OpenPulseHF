@@ -174,7 +174,8 @@ Run `openpulse daemon --help` for the full subcommand and flag reference.
   - vox: software-state only (no external line driven; useful for VOX-enabled rigs)
   - rigctld: TCP connection to hamlib rigctld; --rig specifies address:port (default: localhost:4532)
   - cm108: CM108/CM109/CM119 sound-chip GPIO over USB-HID (DMK URI, RA-series, AIOC, homebrew); --rig specifies the `/dev/hidrawN` path (empty = auto-detect the first C-Media device). Keys GPIO 3 by default. In the daemon, `[modem] ptt_device` / `ptt_gpio` set the path and pin.
-- --rig <path|address:port>: serial port path for rts/dtr PTT, rigctld address:port, or the /dev/hidrawN path for cm108.
+  - gpio: Linux GPIO line (e.g. a Raspberry Pi header pin); --rig specifies the `chip:line[:active_low]` spec (e.g. `gpiochip0:17`). Requires the `gpio` feature. In the daemon, `[modem] ptt_device` carries the spec.
+- --rig <path|address:port>: serial port path for rts/dtr PTT, rigctld address:port, /dev/hidrawN for cm108, or chip:line for gpio.
 - --help: show full command and flag reference.
 
 Output format options (available on most commands):

@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use openpulse_radio::{Cm108Ptt, NoOpPtt, PttController, RigctldPtt, VoxPtt};
+use openpulse_radio::{Cm108Ptt, GpioPtt, NoOpPtt, PttController, RigctldPtt, VoxPtt};
 
 /// Construct a `PttController` from CLI `--ptt`, `--rig`, and `--rig-file` args.
 pub fn build_ptt_controller(
@@ -23,6 +23,16 @@ pub fn build_ptt_controller(
             // `--rig` doubles as the device path (empty = auto-detect); GPIO 3 default.
             let ctrl = Cm108Ptt::open(rig, openpulse_radio::cm108::CM108_DEFAULT_GPIO)
                 .context("failed to open CM108 HID device for PTT")?;
+            Ok(Box::new(ctrl))
+        }
+        "gpio" => {
+            // `--rig` carries the chip:line[:active_low] spec (e.g. gpiochip0:17). Requires --features gpio.
+            if rig.is_empty() {
+                bail!(
+                    "--rig must specify the GPIO spec (chip:line[:active_low], e.g. gpiochip0:17)"
+                );
+            }
+            let ctrl = GpioPtt::open(rig).context("failed to open GPIO line for PTT")?;
             Ok(Box::new(ctrl))
         }
         "rts" | "dtr" => {
@@ -62,7 +72,7 @@ pub fn build_ptt_controller(
             bail!("generic serial CAT not compiled in; rebuild with --features generic-serial (unix only)")
         }
         other => {
-            bail!("unknown PTT backend '{other}'; valid values: none | rts | dtr | vox | rigctld | cm108 | generic")
+            bail!("unknown PTT backend '{other}'; valid values: none | rts | dtr | vox | rigctld | cm108 | gpio | generic")
         }
     }
 }
