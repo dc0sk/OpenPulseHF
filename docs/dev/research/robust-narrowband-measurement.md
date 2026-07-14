@@ -115,3 +115,40 @@ Costas/base-frequency search to the MFSK arm) to get the net gain; (b) a product
 `ModulationPlugin` + engine registration; (c) ladder placement at the vacant SL1 sub-floor with measured
 floor/ceiling; (d) an MFSK-class ACK; (e) session-timer handling for the longer frame. The reproducible
 measurement (`mfsk_subfloor_bound.rs`) and the reused JS8 primitives remain.
+
+## Real-sync measurement — the erosion, measured directly (2026-07-14)
+
+Stage (a) is done: the harness now adds acquisition to the 16-GFSK arm — three 7-symbol **Costas sync
+blocks** (FT8 array ×2 = `[8,4,10,12,2,6,0]`, positions [0,262,524]), a **normalized per-symbol
+tone-fraction correlation** (the JS8 `sync_score` pattern, immune to the high-energy-noise-window trap), a
+coarse→fine **timing × frequency search**, and an **injected ±25 Hz tuning offset** the searcher must find
+(BPSK31 keeps genie frequency — its ±7.8 Hz AFC can't absorb ±25 Hz without an engine AFC chain the bare
+demod lacks, so the bias runs *against* the candidate). A **genie column is printed alongside the real
+column**, so the erosion is measured directly (`mfsk_real_sync_sweep`, 24 trials). Guarded by a non-ignored
+`real_sync_acquires_a_tuning_offset_and_lead` (finds +18 Hz + a 300-sample lead and decodes).
+
+**Watterson (BPSK31 | 16-GFSK genie | 16-GFSK real):**
+
+| channel | BPSK31 crossing | genie crossing | **real crossing** | **real net gain** |
+|---|---|---|---|---|
+| good_f1 | ~−4 dB | ~−4 dB | ~−4 dB | ~0 (no regression) |
+| moderate_f1 | ~+3.7 dB | ~−1.5 dB | ~−0.5 dB | **~4.2 dB** |
+| poor_f1 | never (0.00 → +6 dB) | ~−0.3 dB | ~−0.3 dB | **unbounded** |
+
+Representative rows — moderate_f1: BPSK31 0.03/0.10/0.40/0.80 vs real 16-GFSK 0.04/0.79/0.96/1.00 at
+−3/0/+3/+6 dB. poor_f1: BPSK31 0.00 everywhere vs real 16-GFSK 0.00/0.67/1.00/1.00 at −3/0/+3/+6 dB.
+
+- **Acquisition erosion (genie→real): ~1 dB on moderate_f1, ~0.3 dB on poor_f1** — well inside the
+  0.5–1.5 dB budget and far below #864's 2–3 dB. Non-coherent acquisition is genuinely easy: there is no
+  carrier phase to track, and "AFC" degenerates to a static ~2 Hz tone-grid alignment on a 31.25 Hz grid.
+- **Net moderate_f1 gain ~4.2 dB clears the ≥3 dB ship bar;** poor_f1 stays unbounded.
+- **AWGN real-vs-genie sanity holds** at −6 dB and up (real ≈ genie); a sync floor appears only at −9 dB
+  (real 0.00 vs genie 1.00), which is *below* the operational fading crossing (~0 dB) and is a tunable
+  score threshold, not the flat-across-SNR bug signature.
+
+**Verdict: the waveform AND its acquisition are validated end-to-end.** The technical (DSP) risk of the
+sub-floor rung is retired. The remaining ship questions are **operational, not waveform**: (1) an
+**MFSK-class ACK channel** — the crux, since FSK4-ACK dies far above the candidate's floor, so as an ARQ
+rung it needs its return link there too (else broadcast-only); (2) HPX session-timer handling for the 16 s
+frame. Production stages b–e (the `mfsk16` plugin + engine registration + SL1 ladder placement + the ACK +
+timers) remain a scheduled multi-PR build.

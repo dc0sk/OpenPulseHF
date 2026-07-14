@@ -9,6 +9,36 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — research: 16-GFSK rung real-sync measurement — net gain confirmed (REQ-WSIG-01)
+
+- **Requirement/change:** the next scheduled REQ-WSIG-01 stage — add real acquisition to the 16-GFSK arm
+  and measure the *net* (non-ideal) gain, closing the ideal→real erosion question (Fable design review of
+  the acquisition, grounded in the CLAUDE.md DSP playbook + JS8 Costas sync).
+- **Design decision:** Costas-style **16-tone sync** (FT8 `[4,2,5,6,1,3,0]`×2 = `[8,4,10,12,2,6,0]`, three
+  7-symbol blocks at [0,262,524]) with a **normalized per-symbol tone-fraction correlation** (the JS8
+  `sync_score` pattern — immune to the high-energy-noise-window trap the playbook warns of), a coarse→fine
+  **timing × frequency search** (timing step = symbol → sps/8; frequency ±50 Hz @ 15.625 → ±15.6 @ 3.9),
+  gated at 12/21. An **injected ±25 Hz tuning offset** models real mistuning; BPSK31 keeps genie frequency
+  (its ±7.8 Hz AFC can't absorb ±25 Hz without an engine AFC chain the bare demod lacks — injecting it
+  there would zero the baseline via a harness artifact, so the bias runs against the candidate). A
+  **genie column is printed alongside the real column** so the erosion is measured directly. Non-coherent
+  FSK dodges the entire coherent carrier-recovery complex the playbook agonises over — acquisition is
+  fundamentally easier here (no phase to track; "AFC" is a static ~2 Hz grid alignment).
+- **Result (24 trials):** **net moderate_f1 gain ~4.2 dB (clears the ≥3 dB ship bar); poor_f1 unbounded**
+  (BPSK31 fails entirely); no good_f1 regression. **Erosion genie→real only ~1 dB on moderate, ~0.3 dB on
+  poor** — far below #864's 2–3 dB. AWGN real-vs-genie sanity holds at −6 dB+ (a sync floor at −9 dB sits
+  below the operational fading crossing; a tunable threshold, not the flat-across-SNR bug signature). The
+  waveform + acquisition are validated end-to-end — the DSP risk is retired; remaining ship questions are
+  operational (MFSK-class ACK channel, session timers).
+- **Implementation:** `crates/openpulse-modem/tests/mfsk_subfloor_bound.rs` (+`COSTAS16`, `insert_sync`,
+  `sync_score16`, `acquire`, `mfsk_llrs_at`, `mfsk_real_trial`, `mfsk_real_sync_sweep`,
+  `mfsk_real_sync_awgn_sanity`, and the non-ignored `real_sync_acquires_a_tuning_offset_and_lead` guard);
+  `docs/dev/research/robust-narrowband-measurement.md`.
+- **Test results:** the non-ignored acquisition guard green; sweeps produced the tables above; clippy
+  `-D warnings` + fmt clean.
+
+---
+
 ## 2026-07-14 — research: robust narrowband weak-signal rung measured — ideal gate PASSED (REQ-WSIG-01)
 
 - **Requirement/change:** REQ-WSIG-01 — a robust narrowband weak-signal waveform as a sub-floor rung below
