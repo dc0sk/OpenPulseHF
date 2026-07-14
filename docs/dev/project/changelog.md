@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/changelog.md
 status: living
-last_updated: 2026-07-12
+last_updated: 2026-07-14
 ---
 
 # Changelog
@@ -11,6 +11,60 @@ last_updated: 2026-07-12
 > user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
 
 ## Unreleased
+
+## v0.5.0 — 2026-07-14
+
+The 2026-07-13 "loose-ends" audit fix-down (issue #830, roadmap Phase 12): a 10-dimension refute-by-default
+audit whose deferred tail was worked to completion. No breaking changes.
+
+### Features
+
+- **Route discovery — fully driven (0x03–0x08)**: the wire codecs had no driver. Added the request/response
+  drive — a node originates a `RouteDiscoveryRequest`, answers when it is the destination or holds a cached
+  route (self-authenticating Ed25519), and applies the `RouteDiscoveryResponse` into a bounded/TTL route
+  table; the mesh daemon originates (`discover_route`), applies, and **consumes** a route for relay send
+  (`send_via_route`, scored via `select_best_scored_route`). Plus the route-**maintenance** drive: signed
+  `RelayRouteUpdate` (0x07, authoritative table refresh) and on-path-authorized `RelayRouteReject` (0x08,
+  teardown only from a hop actually on the route), with `send_route_update`/`send_route_reject`. (#840,
+  #841, #850, #856)
+- **Per-band TX attenuation**: `SetTxAttenuation { band }` now honors the optional band — an engine-side
+  per-band store applied on retune (mirrors per-band DCD squelch); a matching override wins on the current
+  band. (#851)
+- **PTT state resync**: a new `GetPttState` control command (and `openpulse daemon ptt-state`)
+  re-broadcasts the current PTT state so a client that missed an edge can recover. (#843)
+- **Declared TX power**: new `[station] tx_power_watts` config, recorded in the §97 regulatory TX log. (#849)
+
+### Fixes
+
+- **Regulatory (§97.119)**: the ARDOP TNC refuses on-air TX without a valid host `MYID` (host data / IRS
+  ACK / auto-ID / relay), and the KISS TNC gates on the AX.25 source callsign per frame; the mesh daemon
+  refuses to run as `N0CALL`, and the cross-band repeater station-IDs its transmitting rig. The regulatory
+  TX-metadata log now records the operator callsign + declared power on the daemon/ARDOP/KISS/mesh paths
+  (previously empty/0 W). `transmit_iq` is routed through the same compliance bookkeeping as the audio seam.
+  (#847, #848, #827, #819, #849, #852)
+- **DSP soft-LLR calibration**: 64QAM / OFDM / pilot / GPU soft demods emitted over-confident LLRs on dense
+  grids (up to ~1599×); recalibrated from a known preamble/pilot residual plus a channel-estimation-error
+  term — matters for HARQ combining. (#833, #834, #835, #837)
+- **Robustness / concurrency**: the ARDOP CONNECT/DISCONNECT engine lock and the daemon PTT watchdog no
+  longer block on / get starved by the async command loop (`spawn_blocking`; a dedicated watchdog
+  `select!` arm; `biased` removed); the WebSocket control port fails closed when auth is required; the
+  ARDOP data port no longer silently drops frames; the filexfer per-peer quota counts the `.partial`
+  subtree; the InputCapture seam is not re-applied per decode-burst slice. (#846, #853, #817, #818, #820,
+  #842, #826)
+- **Discovery / JS8**: real off-air overs decode via a time search; the rendezvous timing/RxOnly cluster is
+  fixed; `jsc_decompress` is guarded against a u32 overflow; the clock-skew TX gate is now live. (#814,
+  #815, #816, #822)
+- **Validation / correctness**: inconsistent file-offer geometry is rejected; `SetMode`/`SetConfig`
+  validate before mutating shared state; the BPSK crossfade-ISI cancellation is kept off the soft
+  (differential) path so it doesn't break HARQ LLR calibration. (#824, #823, #821, #832)
+
+### Tests & docs
+
+- New coverage for the command-path PTT hardware-failure guard, the discovery `server::run` handoffs
+  (DCD-defer, dwell-tee, rendezvous-connect), and the daemon filexfer resume composition. (#836, #839,
+  #845, #844)
+- `docs/cli-guide.md` gains the daemon / FF-15 / FF-16 control CLI; the README `hpx_hf` ladder row, the
+  panel mode list (12 PILOT modes), and roadmap Phase 12 are brought current. (#838, #828, #854, #857)
 
 ## v0.4.0 — 2026-07-12
 
