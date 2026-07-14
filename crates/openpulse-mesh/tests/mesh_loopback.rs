@@ -9,7 +9,7 @@ use openpulse_core::peer_cache::TrustFilter;
 use openpulse_core::relay::{RelayEvent, RelayTrustPolicy};
 use openpulse_core::route_discovery::{RouteOriginator, RouteResponder};
 use openpulse_core::wire_query::{
-    RelayRouteReject, RouteHop, WireEnvelope, WireMsgType, WireTrustState,
+    RelayRouteReject, RouteDiscoveryRequest, RouteHop, WireEnvelope, WireMsgType, WireTrustState,
 };
 use openpulse_mesh::{MeshDaemon, MeshEvent};
 use openpulse_modem::ModemEngine;
@@ -21,6 +21,17 @@ fn make_node(lb: &LoopbackBackend, peer_id: [u8; 32]) -> MeshDaemon {
     let policy = RelayTrustPolicy::deny_relays([] as [&str; 0]);
     MeshDaemon::new(
         engine, MODE, peer_id, 3, 0, 300_000, policy, 64, 3_600_000, [0u8; 32], "N0CALL",
+    )
+}
+
+/// A node with a caller-chosen signing seed, so distinct nodes have distinct route identities
+/// (`make_node` signs every node with `[0;32]`, which collides for multi-hop route tests).
+fn make_node_seeded(lb: &LoopbackBackend, peer_id: [u8; 32], seed: [u8; 32]) -> MeshDaemon {
+    let mut engine = ModemEngine::new(Box::new(lb.clone_shared()));
+    let _ = engine.register_plugin(Box::new(BpskPlugin::default()));
+    let policy = RelayTrustPolicy::deny_relays([] as [&str; 0]);
+    MeshDaemon::new(
+        engine, MODE, peer_id, 3, 0, 300_000, policy, 64, 3_600_000, seed, "N0CALL",
     )
 }
 
@@ -615,5 +626,57 @@ fn route_update_then_reject_over_air() {
             |e| matches!(e, MeshEvent::RouteRejected { destination, route_id } if *destination == dst && *route_id == 42)
         ),
         "A must tear down the route on an on-path reject; got {events_a:?}"
+    );
+}
+
+/// A forwarder appends itself to a route request's source-accumulated path before re-flooding it, so a
+/// downstream answerer can build the true multi-hop route. A → B (can't answer) → B re-floods; we decode
+/// B's transmitted frame and confirm it carries B on the path, and that a responder for the destination
+/// answers it with the full `[B, destination]` route.
+#[test]
+fn route_request_accumulates_the_forwarder_path() {
+    let seed_dst = [7u8; 32];
+    let dst_id = RouteResponder::new(&seed_dst, 0).peer_id();
+
+    let lb_a = LoopbackBackend::new();
+    let lb_b = LoopbackBackend::new();
+    let mut node_a = make_node_seeded(&lb_a, [1u8; 32], [1u8; 32]);
+    let mut node_b = make_node_seeded(&lb_b, [2u8; 32], [2u8; 32]);
+
+    node_a
+        .discover_route(dst_id, 1_000)
+        .expect("discover_route");
+
+    // A → B: B is not the destination and holds no route → it re-floods with itself appended.
+    lb_b.fill_samples(&lb_a.drain_samples());
+    node_b.step(1_010);
+    let b_out = lb_b.drain_samples();
+    assert!(!b_out.is_empty(), "B must re-flood the request");
+
+    // Decode B's re-flooded frame.
+    let lb_rx = LoopbackBackend::new();
+    let mut rx = ModemEngine::new(Box::new(lb_rx.clone_shared()));
+    rx.register_plugin(Box::new(BpskPlugin::default())).unwrap();
+    lb_rx.fill_samples(&b_out);
+    let bytes = rx.receive(MODE, None).expect("decode B's frame");
+    let env = WireEnvelope::decode(&bytes).expect("wire envelope");
+    assert_eq!(env.msg_type, WireMsgType::RouteDiscoveryRequest);
+    let req = RouteDiscoveryRequest::decode(&env.payload).expect("route request");
+    assert_eq!(
+        req.accumulated_path,
+        vec![[2u8; 32]],
+        "B appended its own id to the source-accumulated path"
+    );
+    assert_eq!(req.destination_peer_id, dst_id, "destination is unchanged");
+
+    // A responder for the destination answers the accumulated request with the full route.
+    let mut responder = RouteResponder::new(&seed_dst, 0);
+    let table = openpulse_core::route_discovery::RouteTable::new(4, 0);
+    let resp = responder.answer(&req, &table).expect("destination answers");
+    let hop_ids: Vec<[u8; 32]> = resp.hops.iter().map(|h| h.hop_peer_id).collect();
+    assert_eq!(
+        hop_ids,
+        vec![[2u8; 32], dst_id],
+        "route is [forwarder B, destination]"
     );
 }

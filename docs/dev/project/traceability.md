@@ -9,6 +9,30 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-14 — feat(core/mesh): source-accumulated multi-hop route discovery (wire-path TLV)
+
+- **Requirement/change:** roadmap 12.3 deferral — a `WireEnvelope` carries no hop trail, so a route
+  answerer could only vouch for a single self-hop (or a cached route); true source-accumulated multi-hop
+  paths were out of scope.
+- **Design decision:** extend `RouteDiscoveryRequest` with an `accumulated_path: Vec<[u8; 32]>` (wire:
+  `path_count(1) | path[count × 32]` after the 47-byte header; a header-only 47-byte frame decodes to an
+  empty path, so old encoders stay compatible). Each forwarding node appends its own id via
+  `accumulate_forwarder` (loop-guarded — refuses a peer already on the path — and bounded by `max_hops`)
+  before re-flooding, so the destination answers with the real route: `path_hops(accumulated_path)` then
+  itself (a cached-route answer prepends the path to its cached hops). The mesh does this in a new
+  `propagate_route_request` (decode → accumulate → re-encode → flood).
+- **Implementation:** `crates/openpulse-core/src/wire_query.rs` (field + `HEADER_SIZE` + encode/decode);
+  `crates/openpulse-core/src/route_discovery.rs` (`accumulate_forwarder`, `path_hops`, `answer` builds
+  from the path); `crates/openpulse-mesh/src/lib.rs` (`propagate_route_request`).
+- **Tests:** core `destination_answers_with_the_source_accumulated_multihop_path` (two forwarders +
+  loop-guard → 3-hop route recorded) and `accumulate_forwarder_is_bounded_by_max_hops`; the request
+  round-trip now carries a 2-element path; mesh `route_request_accumulates_the_forwarder_path` (decode B's
+  re-flooded frame → `accumulated_path == [B]` → a destination responder answers with `[B, dst]`).
+- **Test results:** `cargo test -p openpulse-core --no-default-features` → route_discovery 13 (11 → 13),
+  lib 277; `-p openpulse-mesh` → 12 (11 → 12); `cargo build --workspace` green; fmt + clippy clean.
+
+---
+
 ## 2026-07-14 — feat(mesh): route-maintenance drive — RelayRouteUpdate/Reject (0x07/0x08)
 
 - **Requirement/change:** issue #830 — the #830 route-discovery item named four msg types; #840/#841/#850

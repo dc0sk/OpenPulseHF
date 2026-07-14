@@ -12,7 +12,8 @@ use openpulse_core::relay::{
     select_best_scored_route, RelayEvent, RelayForwarder, RelayTrustPolicy,
 };
 use openpulse_core::route_discovery::{
-    apply_route_reject, apply_route_update, RouteOriginator, RouteResponder, RouteTable,
+    accumulate_forwarder, apply_route_reject, apply_route_update, RouteOriginator, RouteResponder,
+    RouteTable,
 };
 use openpulse_core::wire_query::{
     BroadcastFrame, PeerQueryRequest, PeerQueryResponse, PeerQueryResult, RelayRouteReject,
@@ -483,7 +484,7 @@ impl MeshDaemon {
             // otherwise flood it onward like any other query.
             WireMsgType::RouteDiscoveryRequest => {
                 if !self.handle_route_discovery_request(&envelope, now_ms) {
-                    self.propagate_query(&envelope, now_ms);
+                    self.propagate_route_request(envelope, now_ms);
                 }
             }
 
@@ -511,6 +512,17 @@ impl MeshDaemon {
             // All other query / route messages: propagate to neighbours.
             _ => self.propagate_query(&envelope, now_ms),
         }
+    }
+
+    /// Append this node to a route request's source-accumulated path (loop-guarded, bounded by
+    /// `max_hops`) and flood it onward, so the eventual answerer can reply with the true multi-hop route.
+    fn propagate_route_request(&mut self, mut envelope: WireEnvelope, now_ms: u64) {
+        if let Ok(mut req) = RouteDiscoveryRequest::decode(&envelope.payload) {
+            if accumulate_forwarder(&mut req, self.local_peer_id) {
+                envelope.payload = req.encode();
+            }
+        }
+        self.propagate_query(&envelope, now_ms);
     }
 
     /// Flood one query/route envelope to neighbours via the [`QueryForwarder`] (hop-limit + dedup).

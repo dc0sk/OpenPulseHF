@@ -572,8 +572,10 @@ impl RouteHop {
 
 /// Payload for msg_type 0x03 — route_discovery_request.
 ///
-/// Fixed: route_query_id(8) | destination_peer_id(32) | max_hops(1) |
-///        required_capability_mask(4) | policy_flags(2) = 47 bytes.
+/// Header (47 B): route_query_id(8) | destination_peer_id(32) | max_hops(1) |
+///        required_capability_mask(4) | policy_flags(2), then the source-accumulated path:
+///        path_count(1) | path[path_count × 32]. A header-only (47 B) frame decodes to an empty path
+///        (backward compatible with pre-path encoders).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteDiscoveryRequest {
     pub route_query_id: u64,
@@ -581,27 +583,47 @@ pub struct RouteDiscoveryRequest {
     pub max_hops: u8,
     pub required_capability_mask: u32,
     pub policy_flags: u16,
+    /// Peer ids this request has been forwarded through, in order (originator → …). Empty when
+    /// originated; each forwarding node appends its own id before re-flooding, so the answerer can reply
+    /// with the true multi-hop route instead of only what it can locally vouch for.
+    pub accumulated_path: Vec<[u8; 32]>,
 }
 
 impl RouteDiscoveryRequest {
-    /// Encoded size in bytes.
-    pub const SIZE: usize = 47;
+    /// Fixed-header size in bytes (before the accumulated path).
+    pub const HEADER_SIZE: usize = 47;
 
-    /// Serialize to the 47-byte wire layout.
+    /// Serialize to the wire layout (header + accumulated path).
     pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(Self::SIZE);
+        let n = self.accumulated_path.len().min(u8::MAX as usize);
+        let mut buf = Vec::with_capacity(Self::HEADER_SIZE + 1 + n * 32);
         buf.extend_from_slice(&self.route_query_id.to_be_bytes());
         buf.extend_from_slice(&self.destination_peer_id);
         buf.push(self.max_hops);
         buf.extend_from_slice(&self.required_capability_mask.to_be_bytes());
         buf.extend_from_slice(&self.policy_flags.to_be_bytes());
+        buf.push(n as u8);
+        for id in self.accumulated_path.iter().take(n) {
+            buf.extend_from_slice(id);
+        }
         buf
     }
 
-    /// Deserialize from the 47-byte wire layout.
+    /// Deserialize. A 47-byte (header-only) frame yields an empty accumulated path.
     pub fn decode(bytes: &[u8]) -> Result<Self, WireQueryError> {
-        if bytes.len() < Self::SIZE {
+        if bytes.len() < Self::HEADER_SIZE {
             return Err(WireQueryError::MalformedPayload);
+        }
+        let mut accumulated_path = Vec::new();
+        if bytes.len() > Self::HEADER_SIZE {
+            let count = bytes[Self::HEADER_SIZE] as usize;
+            let start = Self::HEADER_SIZE + 1;
+            if bytes.len() < start + count * 32 {
+                return Err(WireQueryError::MalformedPayload);
+            }
+            for i in 0..count {
+                accumulated_path.push(read_arr32(bytes, start + i * 32)?);
+            }
         }
         Ok(Self {
             route_query_id: read_u64(bytes, 0)?,
@@ -609,6 +631,7 @@ impl RouteDiscoveryRequest {
             max_hops: bytes[40],
             required_capability_mask: read_u32(bytes, 41)?,
             policy_flags: u16::from_be_bytes([bytes[45], bytes[46]]),
+            accumulated_path,
         })
     }
 }

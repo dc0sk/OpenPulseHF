@@ -7,11 +7,11 @@
 //! the flood reuses [`crate::query_propagation::QueryPropagationTracker`] for `route_query_id` dedup;
 //! forwarding itself is done by the existing forwarders.
 //!
-//! **Path model.** A [`WireEnvelope`] carries no accumulating hop trail (only a `hop_index` counter),
-//! so a forwarded request does not reveal the path it took. The answerer therefore builds the
-//! response's `hops` from what *it* can vouch for: the destination answers with a single hop (itself),
-//! and a node holding a cached route answers with that route. Full source-accumulated multi-hop paths
-//! would need a new request field (a future TLV extension) and are out of scope here.
+//! **Path model.** The `WireEnvelope` itself carries no hop trail (only a `hop_index` counter), so the
+//! `RouteDiscoveryRequest` accumulates a **source path**: each forwarding node appends its own id
+//! ([`accumulate_forwarder`]) before re-flooding, so the answerer replies with the true multi-hop route
+//! (originator → forwarders → destination), not just what it can locally vouch for. A node holding a
+//! cached route prepends that accumulated path to its cached route.
 //!
 //! **Signatures are self-authenticating** (as in [`crate::peer_descriptor`]): the responder signs the
 //! response with the Ed25519 key whose public bytes *are* its `peer_id`, so the originator verifies
@@ -348,6 +348,33 @@ pub fn apply_route_reject(
     Ok(dst)
 }
 
+/// Convert an accumulated peer-id path into `RouteHop`s with placeholder metadata. A forwarder does not
+/// measure the link quality it accumulates, so hops carry unknown trust / neutral reliability; the
+/// originator re-scores the route against its own peer cache when it consumes it.
+fn path_hops(path: &[[u8; 32]]) -> Vec<RouteHop> {
+    path.iter()
+        .map(|id| RouteHop {
+            hop_peer_id: *id,
+            hop_trust_state: WireTrustState::Unknown as u8,
+            estimated_latency_ms: 0,
+            estimated_reliability_permille: 500,
+        })
+        .collect()
+}
+
+/// Append `forwarder` to a route request's source-accumulated path before re-flooding it — unless the
+/// forwarder is already on the path (loop guard) or the path has reached `max_hops` (bounded growth).
+/// Returns `true` when the path was extended (the caller should re-encode + forward the modified request).
+pub fn accumulate_forwarder(request: &mut RouteDiscoveryRequest, forwarder: [u8; 32]) -> bool {
+    if request.accumulated_path.len() >= request.max_hops as usize
+        || request.accumulated_path.contains(&forwarder)
+    {
+        return false;
+    }
+    request.accumulated_path.push(forwarder);
+    true
+}
+
 /// Answers route-discovery requests: replies when this node is the destination (and meets the
 /// requested capabilities) or already holds a route to it.
 pub struct RouteResponder {
@@ -389,26 +416,31 @@ impl RouteResponder {
     ) -> Option<RouteDiscoveryResponse> {
         let required = request.required_capability_mask;
 
-        // Case 1: this node IS the destination.
+        // Case 1: this node IS the destination. The route is the source-accumulated forwarder path
+        // (originator → …) followed by this node — a true multi-hop route, not just a single self-hop.
         if request.destination_peer_id == self.my_peer_id {
             if self.my_capability_mask & required != required {
                 return None; // I'm the target but can't meet the requested capabilities.
             }
-            let hops = vec![RouteHop {
+            let mut hops = path_hops(&request.accumulated_path);
+            hops.push(RouteHop {
                 hop_peer_id: self.my_peer_id,
                 hop_trust_state: WireTrustState::Trusted as u8,
                 estimated_latency_ms: 0,
                 estimated_reliability_permille: 1000,
-            }];
+            });
             return Some(self.build_signed(request.route_query_id, hops));
         }
 
-        // Case 2: this node already knows a route to the destination.
+        // Case 2: this node already knows a route to the destination — prepend the forwarder path so the
+        // originator gets the whole route (originator → … → this node → cached route → destination).
         if let Some(entry) = route_table.best_route(&request.destination_peer_id) {
             if entry.hops.is_empty() {
                 return None;
             }
-            return Some(self.build_signed(request.route_query_id, entry.hops.clone()));
+            let mut hops = path_hops(&request.accumulated_path);
+            hops.extend(entry.hops.iter().cloned());
+            return Some(self.build_signed(request.route_query_id, hops));
         }
 
         None
@@ -510,6 +542,7 @@ impl RouteOriginator {
             max_hops,
             required_capability_mask,
             policy_flags,
+            accumulated_path: Vec::new(), // filled by forwarders as the request floods
         };
         let envelope = WireEnvelope {
             msg_type: WireMsgType::RouteDiscoveryRequest,
@@ -616,6 +649,60 @@ mod tests {
     }
 
     #[test]
+    fn destination_answers_with_the_source_accumulated_multihop_path() {
+        let mut dst = responder(7, 0);
+        let dst_id = dst.peer_id();
+        let mut orig = RouteOriginator::new([1u8; 32], 60_000);
+        let (_qid, env) = orig.originate(dst_id, 8, 0, 0, [9u8; 12], 1000).unwrap();
+
+        // Two forwarders append themselves as the request floods; a loop-back append is refused.
+        let mut req = RouteDiscoveryRequest::decode(&env.payload).unwrap();
+        assert!(
+            req.accumulated_path.is_empty(),
+            "originated with an empty path"
+        );
+        assert!(accumulate_forwarder(&mut req, [0xB1; 32]));
+        assert!(accumulate_forwarder(&mut req, [0xB2; 32]));
+        assert!(
+            !accumulate_forwarder(&mut req, [0xB1; 32]),
+            "loop guard: a forwarder already on the path is not re-appended"
+        );
+
+        // The destination answers with the full route: forwarders then itself.
+        let table = RouteTable::new(16, 0);
+        let resp = dst.answer(&req, &table).expect("destination answers");
+        assert_eq!(resp.hops.len(), 3, "two forwarders + the destination");
+        assert_eq!(resp.hops[0].hop_peer_id, [0xB1; 32]);
+        assert_eq!(resp.hops[1].hop_peer_id, [0xB2; 32]);
+        assert_eq!(resp.hops[2].hop_peer_id, dst_id);
+
+        // The originator records the multi-hop route.
+        let mut rt = RouteTable::new(16, 0);
+        let recorded_dst = orig.apply_response(&resp, &dst_id, &mut rt, 1010).unwrap();
+        assert_eq!(recorded_dst, dst_id);
+        assert_eq!(rt.best_route(&dst_id).unwrap().hops.len(), 3);
+    }
+
+    #[test]
+    fn accumulate_forwarder_is_bounded_by_max_hops() {
+        let mut req = RouteDiscoveryRequest {
+            route_query_id: 1,
+            destination_peer_id: [9u8; 32],
+            max_hops: 2,
+            required_capability_mask: 0,
+            policy_flags: 0,
+            accumulated_path: Vec::new(),
+        };
+        assert!(accumulate_forwarder(&mut req, [1u8; 32]));
+        assert!(accumulate_forwarder(&mut req, [2u8; 32]));
+        assert!(
+            !accumulate_forwarder(&mut req, [3u8; 32]),
+            "path is capped at max_hops"
+        );
+        assert_eq!(req.accumulated_path.len(), 2);
+    }
+
+    #[test]
     fn non_destination_without_a_route_does_not_answer() {
         let mut node = responder(3, 0xFF);
         let req = RouteDiscoveryRequest {
@@ -624,6 +711,7 @@ mod tests {
             max_hops: 4,
             required_capability_mask: 0,
             policy_flags: 0,
+            accumulated_path: Vec::new(),
         };
         let table = RouteTable::new(16, 0);
         assert!(node.answer(&req, &table).is_none());
@@ -639,6 +727,7 @@ mod tests {
             max_hops: 4,
             required_capability_mask: 0x02, // requires bit 1, which we lack
             policy_flags: 0,
+            accumulated_path: Vec::new(),
         };
         let table = RouteTable::new(16, 0);
         assert!(dst.answer(&req, &table).is_none());
