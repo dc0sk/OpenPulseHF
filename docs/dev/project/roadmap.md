@@ -2071,6 +2071,13 @@ Build order revised per the 2026-07-14 Fable design review (see traceability):
    link there too, else it's broadcast-only; (b) real-sync erosion (~2–3 dB, budgeted — moderate stays
    positive, poor is unbounded) + HPX session-timer handling for the 16 s frame. Production stages: real-
    sync measurement → `mfsk16` plugin + engine registration → SL1 ladder placement → MFSK ACK → timers.
+   **Real-sync measurement DONE (2026-07-14):** added Costas-16 sync + a timing×frequency search + a
+   ±25 Hz injected tuning offset, genie column alongside. **Net moderate_f1 gain ~4.2 dB (clears the
+   ≥3 dB ship bar); poor_f1 unbounded; erosion genie→real only ~1 dB** (non-coherent acquisition is easy —
+   far below #864's 2–3 dB). AWGN sanity holds. **The waveform + acquisition are validated end-to-end; the
+   DSP risk is retired.** Remaining ship questions are **operational, not waveform**: the MFSK-class ACK
+   channel (the crux) + session timers. Production stages b–e (`mfsk16` plugin + engine + SL1 ladder +
+   ACK + timers) remain a scheduled multi-PR build.
 
 ### Features shipped (no longer deferred)
 

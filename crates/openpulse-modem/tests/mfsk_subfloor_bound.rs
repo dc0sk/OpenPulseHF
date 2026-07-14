@@ -168,6 +168,204 @@ fn mfsk_decodes(faded: &[f32], n_tones: usize) -> bool {
         .unwrap_or(false)
 }
 
+// ── real-sync acquisition (Costas-style 16-tone sync + timing/frequency search) ─
+//
+// Adds acquisition to the 16-GFSK arm so the ideal→real erosion is measured directly (a genie column is
+// printed alongside). Design (Fable review): three 7-symbol Costas sync blocks, a normalized per-symbol
+// tone-fraction correlation (the JS8 `sync_score` pattern, immune to the high-energy-noise-window trap),
+// a two-stage coarse→fine timing+frequency search, and an injected ±25 Hz tuning offset the searcher must
+// find. Frequency (tuning) is the dominant real-world uncertainty; timing is a small lead-in search
+// (a short silence lead barely changes the RMS-keyed SNR, ~0.03 dB for lead ≪ frame).
+
+/// FT8 legacy Costas `[4,2,5,6,1,3,0]` scaled ×2 (distinct-difference property preserved), spanning
+/// tones 0..12 of 16 (~375 Hz) for sync-time frequency diversity.
+const COSTAS16: [u8; 7] = [8, 4, 10, 12, 2, 6, 0];
+const SYNC_STARTS: [usize; 3] = [0, 262, 524];
+const ONAIR_TONES: usize = 531; // 510 data + 3×7 sync
+
+fn sync_mask() -> [bool; ONAIR_TONES] {
+    let mut m = [false; ONAIR_TONES];
+    for &s in &SYNC_STARTS {
+        for k in 0..COSTAS16.len() {
+            m[s + k] = true;
+        }
+    }
+    m
+}
+
+/// Interleave the 3 Costas sync blocks into the data tones → the 531-symbol on-air sequence.
+fn insert_sync(data: &[u8]) -> Vec<u8> {
+    let mask = sync_mask();
+    let mut out = vec![0u8; ONAIR_TONES];
+    for &s in &SYNC_STARTS {
+        out[s..s + COSTAS16.len()].copy_from_slice(&COSTAS16);
+    }
+    let mut di = 0;
+    for (p, &is_sync) in mask.iter().enumerate() {
+        if !is_sync {
+            out[p] = data[di];
+            di += 1;
+        }
+    }
+    out
+}
+
+/// On-air symbol positions carrying data (i.e. not sync), in order.
+fn data_positions() -> Vec<usize> {
+    let mask = sync_mask();
+    (0..ONAIR_TONES).filter(|&p| !mask[p]).collect()
+}
+
+fn mfsk_sync_tx(bytes: &[u8], base: f32) -> Vec<f32> {
+    modulate_tones(&insert_sync(&bytes_to_tones(bytes)), base, &gfsk_params())
+}
+
+fn sym_energies16(win: &[f32], base: f32) -> [f32; 16] {
+    let mut e = [0f32; 16];
+    for (t, slot) in e.iter_mut().enumerate() {
+        *slot = goertzel_energy(win, base + t as f32 * SPACING, FS as f32);
+    }
+    e
+}
+
+/// Engine-convention max-log 4-bit LLRs from one symbol's 16 tone energies (positive = bit 0).
+fn bit_llrs(e: &[f32; 16]) -> [f32; 4] {
+    let max = e.iter().cloned().fold(0.0f32, f32::max);
+    let (mut acc, mut cnt) = (0.0f32, 0u32);
+    for &v in e {
+        if v < max {
+            acc += v;
+            cnt += 1;
+        }
+    }
+    let noise = (acc / cnt.max(1) as f32).max(1e-9);
+    let mut out = [0f32; 4];
+    for (b, slot) in out.iter_mut().enumerate() {
+        let mask = 1usize << b;
+        let mut e0 = f32::NEG_INFINITY;
+        let mut e1 = f32::NEG_INFINITY;
+        for (t, &energy) in e.iter().enumerate() {
+            if t & mask != 0 {
+                e1 = e1.max(energy);
+            } else {
+                e0 = e0.max(energy);
+            }
+        }
+        *slot = (e0 - e1) / noise;
+    }
+    out
+}
+
+/// Normalized Costas correlation over the 21 sync symbols at `(offset, base)`; a perfect lock scores 21,
+/// a noise window ≈ 21/16 ≈ 1.3. `None` if the window runs off the end.
+fn sync_score16(audio: &[f32], offset: usize, base: f32) -> Option<f32> {
+    let mut score = 0.0f32;
+    for &s in &SYNC_STARTS {
+        for k in 0..COSTAS16.len() {
+            let start = offset + (s + k) * SPS;
+            let win = audio.get(start..start + SPS)?;
+            let e = sym_energies16(win, base);
+            let sum: f32 = e.iter().sum::<f32>() + 1e-9;
+            score += e[COSTAS16[k] as usize] / sum;
+        }
+    }
+    Some(score)
+}
+
+/// Acquire `(offset, base)` by maximising the normalized Costas score: coarse timing (step = one symbol,
+/// up to `max_offset`) × coarse frequency (±50 Hz @ 15.625), then refine timing (±1 symbol @ sps/8) ×
+/// frequency (±15.6 Hz @ 3.9 Hz). Gate at 12/21 (JS8's `min_sync_score`). `nominal_base` is what the
+/// receiver believes the base tone is (it does NOT know the injected tuning offset).
+fn acquire(audio: &[f32], nominal_base: f32, max_offset: usize) -> Option<(usize, f32)> {
+    let coarse_freqs: Vec<f32> = (-3..=3)
+        .map(|i| nominal_base + i as f32 * (SPACING / 2.0))
+        .collect();
+    let mut best: Option<(f32, usize, f32)> = None;
+    let mut off = 0;
+    while off <= max_offset {
+        for &bf in &coarse_freqs {
+            if let Some(sc) = sync_score16(audio, off, bf) {
+                if best.is_none_or(|(bs, _, _)| sc > bs) {
+                    best = Some((sc, off, bf));
+                }
+            }
+        }
+        off += SPS;
+    }
+    let (_, coff, cbf) = best?;
+    let mut refined: Option<(f32, usize, f32)> = None;
+    let t_lo = coff.saturating_sub(SPS);
+    let mut t = t_lo;
+    while t <= coff + SPS {
+        for i in -4..=4 {
+            let bf = cbf + i as f32 * (SPACING / 8.0);
+            if let Some(sc) = sync_score16(audio, t, bf) {
+                if refined.is_none_or(|(bs, _, _)| sc > bs) {
+                    refined = Some((sc, t, bf));
+                }
+            }
+        }
+        t += SPS / 8;
+    }
+    let (score, off, bf) = refined?;
+    (score >= 12.0).then_some((off, bf))
+}
+
+/// Demodulate the 510 data symbols at `(offset, base)`, skipping the 3 sync blocks, into LLRs.
+fn mfsk_llrs_at(audio: &[f32], offset: usize, base: f32) -> Vec<f32> {
+    let mut out = Vec::with_capacity(data_positions().len() * 4);
+    for &p in &data_positions() {
+        let start = offset + p * SPS;
+        let win = match audio.get(start..start + SPS) {
+            Some(w) => w,
+            None => break,
+        };
+        out.extend_from_slice(&bit_llrs(&sym_energies16(win, base)));
+    }
+    out
+}
+
+fn decode_llrs(llr: Vec<f32>) -> bool {
+    decode_engine()
+        .combine_and_decode_llrs("MFSK16", &[llr])
+        .map(|d| d == PAYLOAD)
+        .unwrap_or(false)
+}
+
+/// Real-sync decode: acquire, then demod from the lock. `false` on a failed acquisition gate.
+fn mfsk_real_decodes(faded: &[f32], nominal_base: f32, max_offset: usize) -> bool {
+    match acquire(faded, nominal_base, max_offset) {
+        Some((off, base)) => decode_llrs(mfsk_llrs_at(faded, off, base)),
+        None => false,
+    }
+}
+
+/// Genie decode of the same sync-bearing waveform at the known `(offset, base)` — the erosion reference.
+fn mfsk_genie_decodes(faded: &[f32], offset: usize, base: f32) -> bool {
+    decode_llrs(mfsk_llrs_at(faded, offset, base))
+}
+
+/// Acquisition is expensive (a timing×frequency grid search per trial), so the real-sync sweeps use
+/// fewer trials than the genie bound.
+const REAL_TRIALS: u32 = 24;
+const LEAD_MAX: usize = 1024;
+
+/// One real-sync trial through channel `apply`: inject a per-trial ±25 Hz tuning offset and a short
+/// silence lead (≤1024 samples ≪ the 136 k-sample frame → ~0.03 dB RMS effect), then decode both
+/// genie-aligned (known offset/base) and real (searched). Returns `(genie_ok, real_ok)`.
+fn mfsk_real_trial(bytes: &[u8], seed: u64, apply: impl Fn(&[f32]) -> Vec<f32>) -> (bool, bool) {
+    let df = (seed % 51) as f32 - 25.0;
+    let lead = (seed / 51 % (LEAD_MAX as u64 + 1)) as usize;
+    let base = MFSK_BASE + df;
+    let mut sig = vec![0.0f32; lead];
+    sig.extend(mfsk_sync_tx(bytes, base));
+    let faded = apply(&sig);
+    let genie = mfsk_genie_decodes(&faded, lead, base);
+    // The searcher knows neither `df` nor `lead`: it searches around the nominal base, offsets to LEAD_MAX+1 sym.
+    let real = mfsk_real_decodes(&faded, MFSK_BASE, LEAD_MAX + SPS);
+    (genie, real)
+}
+
 // ── channels ──────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy)]
@@ -237,6 +435,23 @@ fn both_arms_round_trip_on_a_clean_channel() {
     assert!(bpsk_decodes(&btx, &btx), "BPSK31 must round-trip clean");
 }
 
+/// Real-sync guard (NOT ignored): with an injected +18 Hz tuning offset and a 300-sample lead, the Costas
+/// acquisition must find `(offset, base)` and decode on a near-clean channel. Guards the whole
+/// acquisition path (sync insertion, the normalized score, the coarse→fine search, the skip-sync demod).
+#[test]
+fn real_sync_acquires_a_tuning_offset_and_lead() {
+    let bytes = fec_bytes();
+    let base = MFSK_BASE + 18.0;
+    let lead = 300;
+    let mut sig = vec![0.0f32; lead];
+    sig.extend(mfsk_sync_tx(&bytes, base));
+    let faded = awgn(&sig, 30.0, 1); // near-clean, but gives the lead real noise
+    assert!(
+        mfsk_real_decodes(&faded, MFSK_BASE, LEAD_MAX + SPS),
+        "real-sync must acquire (+18 Hz, lead 300) and decode on a clean channel"
+    );
+}
+
 // ── the sweeps (ignored research measurements) ────────────────────────────────
 
 fn frame_success<F: Fn(u64) -> bool>(trial_fn: F) -> f32 {
@@ -293,5 +508,69 @@ fn awgn_known_answer_sanity() {
         let b = frame_success(|s| bpsk_decodes(&btx, &awgn(&btx, snr, s)));
         let m = frame_success(|s| mfsk_decodes(&awgn(&mtx, snr, s), n_tones));
         println!("  {snr:6.1}   {b:6.2}   {m:6.2}");
+    }
+}
+
+/// The real-sync sweep: BPSK31 | 16-GFSK genie | 16-GFSK real, per channel. The genie–real gap IS the
+/// acquisition erosion (measured directly). BPSK31 keeps genie frequency (its ±7.8 Hz AFC can't absorb a
+/// ±25 Hz tuning error without an engine AFC chain the bare demod lacks — injecting it there would zero
+/// the baseline via a harness artifact, so the bias is left running against the candidate). Read the real
+/// column's moderate_f1 crossing gain against the ≥3 dB ship bar.
+#[test]
+#[ignore = "research measurement for REQ-WSIG-01 (slow — acquisition search); --ignored --nocapture"]
+fn mfsk_real_sync_sweep() {
+    let bytes = fec_bytes();
+    let btx = bpsk_tx(&bytes);
+    for (preset, snrs) in [
+        (Preset::GoodF1, &[-9.0f32, -6.0, -3.0][..]),
+        (Preset::ModerateF1, &[-3.0, 0.0, 3.0, 6.0][..]),
+        (Preset::PoorF1, &[-3.0, 0.0, 3.0, 6.0][..]),
+    ] {
+        println!(
+            "\n=== {} real-sync ({} trials, +4.1% preamble airtime, ±25 Hz tuning) ===",
+            preset.label(),
+            REAL_TRIALS
+        );
+        println!("  snr_db   bpsk31   mfsk_genie   mfsk_real");
+        for &snr in snrs {
+            let b = frame_success(|s| bpsk_decodes(&btx, &watterson(&btx, preset, snr, s)));
+            let (mut g, mut r) = (0u32, 0u32);
+            for t in 0..REAL_TRIALS {
+                let s = seed(t);
+                let (ge, re) = mfsk_real_trial(&bytes, s, |sig| watterson(sig, preset, snr, s));
+                g += ge as u32;
+                r += re as u32;
+            }
+            println!(
+                "  {snr:6.1}   {b:6.2}   {:10.2}   {:9.2}",
+                g as f32 / REAL_TRIALS as f32,
+                r as f32 / REAL_TRIALS as f32
+            );
+        }
+    }
+}
+
+/// AWGN real-vs-genie sanity: on AWGN (no fading, easy sync) the real column must sit within ~0.5–1 dB of
+/// the genie column — a larger gap means the acquisition itself is buggy ("fails where it has nowhere to
+/// hide"), which must be fixed before trusting the fading numbers.
+#[test]
+#[ignore = "research measurement for REQ-WSIG-01; --ignored --nocapture"]
+fn mfsk_real_sync_awgn_sanity() {
+    let bytes = fec_bytes();
+    println!("\n=== AWGN real-sync ({} trials) ===", REAL_TRIALS);
+    println!("  snr_db   mfsk_genie   mfsk_real");
+    for snr in [-9.0f32, -6.0, -3.0, 0.0, 3.0] {
+        let (mut g, mut r) = (0u32, 0u32);
+        for t in 0..REAL_TRIALS {
+            let s = seed(t);
+            let (ge, re) = mfsk_real_trial(&bytes, s, |sig| awgn(sig, snr, s));
+            g += ge as u32;
+            r += re as u32;
+        }
+        println!(
+            "  {snr:6.1}   {:10.2}   {:9.2}",
+            g as f32 / REAL_TRIALS as f32,
+            r as f32 / REAL_TRIALS as f32
+        );
     }
 }
