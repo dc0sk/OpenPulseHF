@@ -10,6 +10,29 @@ last_updated: 2026-07-15
 > Phase/roadmap history lives in [roadmap.md](roadmap.md); this file tracks
 > user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
 
+## v0.7.2 — 2026-07-15
+
+Hardening patch for the MFSK16 sub-floor ARQ rung — the findings deferred from the v0.7.1 audit. No breaking
+changes.
+
+### Fixes
+
+- **Anti-babble on the weak-signal ACK channel.** The receiver used to answer *every* undecodable burst with
+  an acknowledgement; two adaptive stations (or repetitive co-channel QRM) could keep each other keying
+  those replies. A consecutive-Nack budget now stops the negative acknowledgements after a few in a row (and
+  resets on any real decode), so the station can't become a babbling transmitter — while a genuine
+  retransmission still gets through, since the sender retries on its own timeout. (#892)
+- **Cross-session acknowledgement filtering.** During the (up to 9 s) weak-rung ACK listen, a *different*
+  station pair on the same frequency could have its acknowledgement adopted, silently marking the message
+  delivered when the intended peer never got it. The sender now only accepts an acknowledgement carrying the
+  addressed peer's session hash. (#892)
+- A station whose ARDOP TNC is configured with an adaptive profile that includes the MFSK16 sub-floor rung
+  now warns at startup that the rung is a background-daemon feature, not supported on the ARDOP adaptive
+  path. (#892)
+
+One known limitation (a rare mixed-profile acknowledgement blackout) remains tracked in
+`docs/dev/research/mfsk16-arq-seam-audit.md`.
+
 ## v0.7.1 — 2026-07-15
 
 Correctness patch for the v0.7.0 MFSK16 sub-floor ARQ rung. A 4-finder adversarial audit found the rung was
