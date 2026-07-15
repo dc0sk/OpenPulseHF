@@ -7,6 +7,79 @@ last_updated: 2026-07-15
 
 # Release Notes
 
+## v0.8.0 — 2026-07-15
+
+A **security release**. Three back-to-back adversarial audits — of the signed handshake / trust store, of
+session establishment, and of the direct file-transfer + relay subsystems — found two CRITICAL issues, one
+SEVERE availability issue, and a set of supporting weaknesses. All are fixed here. This is a minor bump
+because several fixes change runtime behaviour (below); there is **no wire-protocol or config-file break**.
+
+Anyone running the daemon or using direct file transfer should upgrade.
+
+### The headline issues
+
+- **Trusted-callsign impersonation (CRITICAL, #896).** The classical signed handshake proved only that the
+  sender held *a* key — it verified the signature against the key carried in the frame, then looked up the
+  claimed callsign in the trust store, but never checked the two matched. So any station could sign with its
+  own key under a trusted operator's callsign and be accepted at full trust. Because the (off-by-default)
+  file-transfer accept path trusts that verified identity, an attacker could have their files auto-accepted
+  under someone else's callsign. The frame key is now bound to the trusted key, exactly as the post-quantum
+  handshake already did.
+- **File-transfer disk amplification (CRITICAL, #898).** The offer size, the per-peer quota, and the
+  block-geometry check are all evaluated once, at offer time, against the *declared* file size. Nothing then
+  constrained the actual bytes each block carried, and each block can decompress to ~64 KB — so a peer could
+  offer a 1 KB file, pass the quota, then deliver blocks totalling gigabytes, all written to disk. Blocks are
+  now rejected unless their decoded length matches the declared geometry, and a completed file whose total
+  size disagrees with the offer is not written.
+- **File-transfer send lock-up (SEVERE, #898).** The transfer state machines have offer/stall/verify
+  timeouts, but the daemon never called them, and a cancel only ever affected the receive side. A `send` to a
+  peer that stayed silent — routine on HF — left the send slot occupied forever, and every subsequent send
+  failed with "a file transfer is already active", recoverable only by restarting the daemon. Timeouts now
+  fire on every receive tick, and cancelling a transfer cancels an outbound send too.
+
+### Also fixed
+
+- A connection initiator now checks that a CONACK came from the callsign it dialled, not just that it echoed
+  the (guessable) session id (#896).
+- Autonomous transmit paths refuse to key up without a valid callsign, so a mis-configured station can't
+  transmit unidentified (§97.119) (#897).
+- The QSY (frequency-move) trust filter now reflects the peer's actual over-air trust instead of a hardcoded
+  "unverified", so an allowlist is enforceable (#897).
+- A signed file offer is verified against *its own sender's* key rather than whoever handshook most recently
+  (#898).
+- A malformed peer-query response can't force a multi-megabyte allocation from a tiny frame (#898).
+- A received file never overwrites an existing one — the write fails instead of clobbering (#898).
+- A trust store that fails to load stops startup rather than silently dropping its revocations (#896).
+- A maximum-block-count transfer no longer stalls on its final block (#898).
+
+### Behaviour changes / migration
+
+Read this if you run the daemon:
+
+1. **Trust store load is now fail-closed.** If you set `[trust] store_path` to a file the daemon can't read
+   or parse, it now **refuses to start** with a clear error, instead of quietly running with an empty store
+   (which silently dropped any revocations). *Action:* ensure the path is correct and readable, or remove the
+   setting. An unset/missing path is unaffected.
+2. **A callsign is required to transmit.** A daemon with no `[station] callsign` (or `N0CALL`) will still
+   receive, but its autonomous responders (handshake reply, QSY, OTA acknowledgement, relay) **no longer key
+   the transmitter** — they would otherwise transmit without a station ID. *Action:* set a real callsign to
+   enable transmit.
+3. **`[discovery] group` is reserved.** It was never wired (the `@OPULSE` group is baked into the beacon
+   frame format). Setting a non-default value now logs a warning and has no effect. *Action:* none; remove
+   the override if you had one.
+4. **Malformed / oversized file offers are now rejected** where some previously produced an oversized or
+   quarantined on-disk file. Legitimate transfers are unaffected.
+
+### Known limitations (tracked, not in this release)
+
+- A signed offer's **filename and geometry are not yet covered by the signature** — only the payload hash
+  and sender id are. Content integrity is protected, but an on-path attacker can replay a signed offer with a
+  spoofed filename while the UI still shows it as signature-valid. Closing this needs a manifest wire-format
+  change and is the next planned work.
+- With their (default-off) features enabled, **relay forwarding and OTA rate adoption act on unauthenticated
+  traffic** — the signed handshake authenticates *identity*, it does not gate those actions. This is
+  documented in `docs/dev/reviews/2026-07-15-handshake-trust-audit.md`.
+
 ## v0.7.3 — 2026-07-15
 
 The final hardening patch for the **MFSK16 weak-signal sub-floor ARQ rung** — the last open finding from the

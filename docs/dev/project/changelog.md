@@ -10,6 +10,70 @@ last_updated: 2026-07-15
 > Phase/roadmap history lives in [roadmap.md](roadmap.md); this file tracks
 > user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
 
+## v0.8.0 — 2026-07-15
+
+Security release folding in three back-to-back adversarial audits of the handshake/trust, session, and
+file-transfer subsystems. Fixes two CRITICAL and one SEVERE issue plus supporting hardening. Several fixes
+deliberately change runtime behaviour (see Behaviour changes / migration in the [release notes](../../releasenotes.md)) —
+hence the minor bump — but no wire-protocol or config break.
+
+### Security fixes
+
+- **A station could impersonate any trusted callsign (CRITICAL).** The classical signed handshake verified a
+  CONREQ/CONACK signature against the frame's *own* public key and then consulted the trust store by
+  callsign — but never checked that the frame key matched the trusted key for that callsign. Any station
+  could therefore present its own key under a trusted callsign and be accepted at full trust, defeating the
+  file-transfer signature gate. The frame key is now bound to the trusted key (mirroring the post-quantum
+  path, which already did this). (#896)
+- **A file offer could land far more data on disk than it declared (CRITICAL).** Received transfer blocks
+  were never checked against the offer's declared size, so a small, quota-approved offer could write blocks
+  that each expand to ~64 KB — up to gigabytes on disk, bypassing the file-size cap and per-peer quota. Each
+  block is now rejected unless its decoded length matches the geometry the offer declared. (#898)
+- **A file send to a silent peer locked up the whole transfer subsystem (SEVERE).** Transfer timeouts were
+  implemented but never actually fired in the daemon, and there was no way to cancel an outbound send. A
+  `send` to a peer that never answered — the norm on HF — pinned the subsystem until a restart, refusing
+  every later send. Timeouts now fire each receive tick, and cancelling a transfer also cancels an outbound
+  send. (#898)
+
+### Fixes
+
+- **A racing station could be recorded as the peer you dialled.** The connection initiator accepted a CONACK
+  that merely echoed the (guessable, time-based) session id; it now also requires the reply to come from the
+  callsign it actually dialled. (#896)
+- **A no-callsign daemon kept the transmitter identified.** Autonomous responders (handshake reply, QSY, OTA
+  acknowledgement, relay forward) no longer key the transmitter when no valid callsign is configured, so the
+  station can never transmit unidentified (§97.119). (#897)
+- **The QSY trust filter now works.** The frequency-move responder was pinned at "unverified", so a trust
+  allowlist either did nothing or rejected everyone; it now reflects the peer's over-air trust. (#897)
+- **A trusted signed offer is verified against its own sender's key**, not whoever completed a handshake most
+  recently, so a legitimate offer is no longer checked against the wrong key on a multi-peer frequency. (#898)
+- **A malformed peer-query response can no longer force a large allocation** from a tiny frame. (#898)
+- **A received file can no longer overwrite an existing one** after a large number of same-name collisions;
+  the write fails instead. (#898)
+- **A trust store that fails to load now stops startup** instead of silently continuing with an empty store
+  (which would have dropped revocations). (#896)
+- **A transfer with the maximum block count no longer stalls** on its last block (a SAR id collided with the
+  control channel). (#898)
+
+### Behaviour changes
+
+- A daemon configured with a trust-store path that can't be read now **refuses to start** (previously it
+  started with an empty store). A *missing/unset* path is still fine.
+- A daemon with no callsign (or `N0CALL`) **will not transmit** autonomous responses.
+- `[discovery] group` is now documented as **reserved** — it was never wired, and setting it now logs a
+  warning. The `@OPULSE` group is used regardless.
+
+### Known limitations (tracked)
+
+- A signed offer's filename/geometry are not yet covered by the signature (content is — the payload hash is
+  signed), so an on-path attacker can spoof the displayed filename under a "verified" badge; closing this
+  needs a manifest wire-format change (next cycle).
+- Relay forwarding and OTA rate adoption still act on unauthenticated traffic when their (default-off)
+  features are enabled — the signed handshake is an identity label, not an access gate.
+
+Full audit write-ups: `docs/dev/reviews/2026-07-15-handshake-trust-audit.md` and
+`docs/dev/reviews/2026-07-15-filexfer-relay-seams-audit.md`.
+
 ## v0.7.3 — 2026-07-15
 
 Final hardening patch for the MFSK16 sub-floor ARQ rung — the last open finding from the audit. No breaking
