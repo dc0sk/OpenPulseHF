@@ -4305,6 +4305,9 @@ impl ModemEngine {
     /// the union decode, and the receive-loop throttle so they can't drift.
     const MFSK16_ACK_SPS: usize = 256;
     const MFSK16_ACK_SYMS: usize = 40;
+    /// How far into a capture the FSK4-ACK trial-decoder searches for the dual-waveform ACK's leading FSK4
+    /// copy — a turnaround-jitter bound (~2 s at 8 kHz); the copy is always near the buffer start.
+    const FSK4_ACK_SEARCH_SAMPLES: usize = 16_000;
 
     /// Transmit the sub-floor ARQ ACK as [`MFSK16_ACK_COPIES`] time-spaced `MFSK16-ACK` copies in a single
     /// PTT keying (0.5 s silence gaps), for the receiver to union-decode with
@@ -4319,25 +4322,37 @@ impl ModemEngine {
         let raw = ack.encode();
         let fec_bytes = ShortFecCodec::new().encode(&raw)?;
         let wire = WirePayload { bytes: fec_bytes };
-        let mode = "MFSK16-ACK";
-        let one = {
+        // A LEADING short FSK4-ACK copy so a mixed-profile peer that listens FSK4-only still hears the
+        // recommendation (else its ACK channel blacks out) and a compatible peer's union-listen returns on
+        // it fast in mild conditions. Sent FIRST so it lands inside the 4 s FSK4 window; the K=3 MFSK16
+        // copies follow for a deep sub-floor fade where FSK4 dies. The receiver acquires the leading copy
+        // via `decode_fsk4_ack_in_stream` (FSK4-ACK has no sync preamble).
+        let fsk4 = {
             let plugin = self
                 .plugins
-                .get(mode)
-                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
-            self.stage_modulate_payload(plugin, mode, &wire)?
+                .get("FSK4-ACK")
+                .ok_or_else(|| ModemError::PluginNotFound("FSK4-ACK".to_string()))?;
+            self.stage_modulate_payload(plugin, "FSK4-ACK", &wire)?
+        };
+        let mfsk = {
+            let plugin = self
+                .plugins
+                .get("MFSK16-ACK")
+                .ok_or_else(|| ModemError::PluginNotFound("MFSK16-ACK".to_string()))?;
+            self.stage_modulate_payload(plugin, "MFSK16-ACK", &wire)?
         };
         let gap = (Self::MFSK16_ACK_GAP_S * AudioConfig::default().sample_rate as f32) as usize;
-        let mut buf = Vec::with_capacity((one.samples.len() + gap) * Self::MFSK16_ACK_COPIES);
-        for i in 0..Self::MFSK16_ACK_COPIES {
-            if i > 0 {
-                buf.extend(std::iter::repeat_n(0.0f32, gap));
-            }
-            buf.extend_from_slice(&one.samples);
+        let mut buf = Vec::with_capacity(
+            fsk4.samples.len() + (mfsk.samples.len() + gap) * Self::MFSK16_ACK_COPIES,
+        );
+        buf.extend_from_slice(&fsk4.samples);
+        for _ in 0..Self::MFSK16_ACK_COPIES {
+            buf.extend(std::iter::repeat_n(0.0f32, gap));
+            buf.extend_from_slice(&mfsk.samples);
         }
         let samples =
             self.route_audio_stage(PipelineStage::OutputEmit, AudioSamples { samples: buf })?;
-        self.stage_emit_output(device, mode, &samples)
+        self.stage_emit_output(device, "MFSK16-ACK", &samples)
     }
 
     /// Demodulate FSK4-ACK, ShortFecCodec decode (13 → 5 bytes), return `AckFrame`.
@@ -4400,6 +4415,67 @@ impl ModemEngine {
             ModemError::Frame(format!("ShortFEC ACK decode: expected 5 bytes, got {n}"))
         })?;
         AckFrame::decode(&arr).map_err(|e| ModemError::Frame(format!("AckFrame decode: {e:?}")))
+    }
+
+    /// Deterministic sample length of a FSK4-ACK frame (13 ShortFec bytes → fixed symbols → fixed samples),
+    /// obtained via the same `stage_modulate_payload` the transmit path uses so it matches exactly.
+    fn fsk4_ack_frame_len(&self) -> Option<usize> {
+        let plugin = self.plugins.get("FSK4-ACK")?;
+        let wire = WirePayload {
+            bytes: vec![0u8; 13],
+        };
+        self.stage_modulate_payload(plugin, "FSK4-ACK", &wire)
+            .ok()
+            .map(|s| s.samples.len())
+    }
+
+    /// Side-effect-free FSK4-ACK decode of exactly one frame-length window (no AFC/event mutation), for the
+    /// trial-decode acquisition — mirrors `decode_fsk4_ack` via `stage_demodulate_payload` so it matches the
+    /// transmit path. The FSK4-ACK plugin demods `window.len()/sps` symbols, so the window must be one frame.
+    fn fsk4_ack_at(&self, window: &[f32]) -> Option<AckFrame> {
+        let plugin = self.plugins.get("FSK4-ACK")?;
+        let samples = AudioSamples {
+            samples: window.to_vec(),
+        };
+        let wire = self
+            .stage_demodulate_payload(plugin, "FSK4-ACK", &samples)
+            .ok()?;
+        let decoded = ShortFecCodec::new().decode(&wire.bytes).ok()?;
+        let arr: [u8; 5] = decoded.as_slice().try_into().ok()?;
+        AckFrame::decode(&arr).ok()
+    }
+
+    /// Acquire a FSK4-ACK frame within a longer capture by trial-decoding a frame-length window at coarse
+    /// offsets (CRC-gated). FSK4-ACK has no sync preamble, so the dual-waveform sub-floor ACK's LEADING FSK4
+    /// copy can't be isolated by the plain whole-buffer demod; a non-MFSK16 peer needs this to hear it.
+    /// Bounded to the first [`FSK4_ACK_SEARCH_SAMPLES`] (turnaround jitter), quarter-symbol step.
+    fn decode_fsk4_ack_in_stream(&self, samples: &[f32]) -> Option<AckFrame> {
+        let fsk4_len = self.fsk4_ack_frame_len()?;
+        if samples.len() < fsk4_len {
+            return None;
+        }
+        let sps = (AudioConfig::default().sample_rate as usize / 100).max(1); // FSK4-ACK is 100 baud
+        let step = (sps / 4).max(1);
+        let search_end = (samples.len() - fsk4_len).min(Self::FSK4_ACK_SEARCH_SAMPLES);
+        // Skip near-silent windows: an all-zero window degenerately mis-decodes past ShortFec+CRC, so gate
+        // on energy relative to the buffer's peak (the constant-envelope FSK4/MFSK16 signal). A real-signal
+        // window that isn't the FSK4 copy still just fails the CRC.
+        let peak = samples.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
+        let floor = 0.3 * peak;
+        let mut off = 0;
+        while off <= search_end {
+            let w = &samples[off..off + fsk4_len];
+            // Full-window RMS gate: only try a window that is MOSTLY the (constant-envelope) FSK4 signal, so
+            // a mostly-silent window with a sliver of a copy can't degenerately mis-decode.
+            let rms = (w.iter().map(|x| x * x).sum::<f32>() / w.len() as f32).sqrt();
+            if rms >= floor {
+                if let Some(ack) = self.fsk4_ack_at(w) {
+                    return Some(ack);
+                }
+            }
+            off += step;
+        }
+        None
     }
 
     /// Does the active OTA profile include the MFSK16 sub-floor rung? Gates the union-listen ACK path so
@@ -4467,6 +4543,10 @@ impl ModemEngine {
         let gap = (Self::MFSK16_ACK_GAP_S * AudioConfig::default().sample_rate as f32) as usize;
         let full_span = Self::MFSK16_ACK_COPIES * copy_len + (Self::MFSK16_ACK_COPIES - 1) * gap;
         let mut next_k3_at = full_span;
+        // The dual-waveform ACK leads with a FSK4 copy; acquire it from the accumulated stream (a non-MFSK16
+        // peer's only route to the recommendation). Same throttle idea — retry per FSK4-frame of growth.
+        let fsk4_len = self.fsk4_ack_frame_len().unwrap_or(4160);
+        let mut next_fsk4_at = fsk4_len;
         let mut accum: Vec<f32> = Vec::new();
         // Hold ONE capture stream open for the whole window so the ~4.84 s K=3 ACK is captured as CONTIGUOUS
         // audio. Re-opening per read (the old `stage_capture_input` path) discards the audio a cpal backend
@@ -4488,6 +4568,14 @@ impl ModemEngine {
                             }
                         }
                         accum.extend_from_slice(&routed.samples);
+                        if accum.len() >= next_fsk4_at {
+                            next_fsk4_at = accum.len() + fsk4_len;
+                            if let Some(ack) = self.decode_fsk4_ack_in_stream(&accum) {
+                                if session_ok(&ack) {
+                                    return Ok(ack);
+                                }
+                            }
+                        }
                         if accum.len() >= next_k3_at {
                             next_k3_at = accum.len() + copy_len;
                             if let Some(ack) = self.decode_mfsk16_k3_ack(&accum) {

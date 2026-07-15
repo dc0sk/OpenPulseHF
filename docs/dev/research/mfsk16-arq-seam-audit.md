@@ -64,17 +64,22 @@ these:
   `transmit_arq` floors at SL2, so the path is degraded-but-safe; a startup warning now fires when
   `adaptive_profile` maps an MFSK16 rung (the sub-floor rung is a daemon-only feature).
 
-### Still deferred
+### Mixed-profile blackout (MEDIUM; D4) — FIXED (2026-07-15)
 
-- **Mixed-profile / mixed-version ACK blackout (MEDIUM; D4).** The clean fix (a **dual-waveform ACK** — a
-  leading FSK4 copy before the K=3 MFSK16 copies, so a FSK4-only peer still hears the recommendation) was
-  attempted and reverted: `decode_fsk4_ack` demods the whole capture and the FSK4-ACK plugin has no frame
-  *acquisition*, so the receiver can't isolate the leading FSK4 copy from the multi-copy buffer/stream. The
-  approach is right but needs FSK4-ACK frame acquisition. The handshake-gating alternative was rejected (it
-  collides with the operator's shared `OtaSetLevelBounds` slot and permanently disables the rung for
-  compatible-but-unhandshaken pairs — the common deep-fade case). Bounded by the fingerprint suppression
-  once a handshake completes; the ISS also clamps an unmapped SL1 to its own floor, so the blackout is the
-  ACK waveform only, in a marginal SNR band.
+The **dual-waveform ACK** now ships: `transmit_ack_mfsk16_k3` leads with a short FSK4-ACK copy before the K=3
+MFSK16 copies (one keying), so a FSK4-only peer still hears the recommendation and a compatible peer's
+union-listen returns on whichever arrives (faster in mild conditions). The blocker from the first pass — the
+FSK4-ACK has no sync preamble, so the receiver couldn't isolate the leading copy from the multi-copy buffer —
+is solved by **acquisition-by-trial-decode**: `decode_fsk4_ack_in_stream` slides a frame-length window at a
+quarter-symbol step over the first ~2 s of the capture, RMS-gated (only mostly-signal windows) and CRC-gated
+(a misaligned or wrong window fails), returning the first valid `AckFrame`. No waveform change, no interop
+break. A full-window RMS gate is essential — an `any()`-energy gate lets a mostly-silent window with a sliver
+of a copy degenerately mis-decode past ShortFec+CRC. Gate:
+`mixed_profile_peer_acquires_the_leading_fsk4_ack` (offset 0 and a turnaround lead). The handshake-gating
+alternative stays rejected (collides with the operator's shared `OtaSetLevelBounds` slot; disables the rung
+for compatible-but-unhandshaken pairs).
+
+**All ARQ-seam audit findings are now addressed.**
 
 ## Method note
 

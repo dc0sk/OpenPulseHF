@@ -9,6 +9,29 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-15 — fix(modem): MFSK16 ARQ D4 mixed-profile blackout — dual-waveform ACK + FSK4 acquisition (REQ-WSIG-01)
+
+- **Requirement/change:** fix the last open ARQ-seam finding (D4) — a mixed-profile pair (one side with the
+  MFSK16 sub-floor rung, one without, no handshake) blacks out its ACK channel when the MFSK16 side
+  recommends SL1 and sends only K=3 MFSK16-ACKs a FSK4-only peer can't decode.
+- **Design decision:** the **dual-waveform ACK** — `transmit_ack_mfsk16_k3` leads with a short FSK4-ACK copy
+  before the K=3 MFSK16 copies (one keying, FSK4 first so it lands in the 4 s FSK4 window). The blocker that
+  made me revert it last pass — the FSK4-ACK has no sync preamble, so the receiver couldn't isolate the
+  leading copy from the multi-copy buffer — is solved by **acquisition-by-trial-decode**
+  (`decode_fsk4_ack_in_stream`): slide a frame-length window at a quarter-symbol step over the first ~2 s,
+  RMS-gated + CRC-gated, first valid `AckFrame` wins. A full-window RMS gate is load-bearing: an
+  `any()`-energy gate let a mostly-silent window (a sliver of a copy) degenerately mis-decode past
+  ShortFec+CRC. No waveform change / interop break. Handshake-gating stays rejected (operator-bounds
+  collision; disables the rung for compatible-but-unhandshaken pairs).
+- **Implementation:** `engine.rs` (`transmit_ack_mfsk16_k3` dual-send; `fsk4_ack_frame_len`, `fsk4_ack_at`
+  via the stage fns so TX/RX match, `decode_fsk4_ack_in_stream`; wired into `receive_ota_ack_within` with a
+  per-FSK4-frame throttle; `FSK4_ACK_SEARCH_SAMPLES`).
+- **Tests:** `mixed_profile_peer_acquires_the_leading_fsk4_ack` (a hpx500/FSK4-only peer recovers the ACK at
+  offset 0 and with a 6000-sample turnaround lead); the full `mfsk16_arq_subfloor` (7) + `twin_daemon_bridge`
+  (4) stay green.
+- **Test results:** mfsk16 7/7, twin 4/4; full workspace + clippy + fmt + benchmark pending pre-PR. **All
+  ARQ-seam audit findings are now addressed.**
+
 ## 2026-07-15 — fix(daemon/modem): MFSK16 ARQ seam — deferred-audit-finding fixes (REQ-WSIG-01)
 
 - **Requirement/change:** fix the findings deferred from the ARQ-seam audit (#890). A second Fable design
