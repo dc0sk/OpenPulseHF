@@ -181,3 +181,33 @@ fn co_channel_ack_with_wrong_session_hash_is_rejected() {
         .expect("our peer's ACK (matching hash) must be adopted");
     assert_eq!(got.recommended_level, Some(SpeedLevel::Sl1));
 }
+
+/// Audit D4 fix (dual-waveform ACK + FSK4 acquisition): a sub-floor K=3 ACK LEADS with a short FSK4 copy,
+/// and the receiver trial-decodes (acquires) it — so a peer on a profile WITHOUT the MFSK16 rung
+/// (FSK4-only) still hears the recommendation, resolving the mixed-profile ACK blackout without gating on a
+/// handshake. Verified both at offset 0 and with a turnaround lead.
+#[test]
+fn mixed_profile_peer_acquires_the_leading_fsk4_ack() {
+    for lead in [0usize, 6000] {
+        let (mut irs, irs_bk) = hf_engine();
+        let ack = AckFrame::new(AckType::AckDown, "peer").with_recommended_level(SpeedLevel::Sl1);
+        irs.transmit_ota_ack(&ack, None)
+            .expect("transmit dual-waveform sub-floor ACK");
+
+        // A peer with NO MFSK16 rung (hpx500, FSK4 only) must recover the ACK from the leading FSK4 copy.
+        let backend = LoopbackBackend::new();
+        let mut peer = ModemEngine::new(Box::new(backend.clone_shared()));
+        peer.register_plugin(Box::new(Fsk4Plugin::new())).unwrap();
+        peer.start_ota_session(SessionProfile::hpx500());
+        let mut sig = vec![0.0f32; lead];
+        sig.extend_from_slice(&irs_bk.drain_samples());
+        backend.fill_samples(&sig);
+
+        let got = peer
+            .receive_ota_ack_within(None, 4000, None)
+            .unwrap_or_else(|_| {
+                panic!("non-MFSK16 peer must acquire the leading FSK4 ACK (lead={lead})")
+            });
+        assert_eq!(got.ack_type, AckType::AckDown);
+    }
+}
