@@ -66,9 +66,19 @@ pub enum RelayEvent {
 // ------------------------------------------------------------------
 
 /// Trust policy applied at relay nodes to filter which originators may be forwarded.
+///
+/// Two operator controls, both keyed on the (hex) originator peer id: a deny-list (block these) and
+/// an optional allow-list (`Some` = forward *only* these; `None` = forward anyone not denied). Note
+/// these operate on the envelope's `src_peer_id`, which is not cryptographically authenticated at the
+/// relay (the envelope `auth_tag` has no key-distribution scheme) — so, like the deny-list, the
+/// allow-list is a defense-in-depth operator control (it raises the bar for casual abuse and scopes a
+/// club/mesh relay to known stations), not strong authentication. Strong relay auth requires
+/// envelope-level authentication, tracked as future work (see the handshake-trust audit, finding E1).
 #[derive(Debug, Clone, Default)]
 pub struct RelayTrustPolicy {
     denied_relays: HashSet<String>,
+    /// When `Some`, only these (hex) originator peer ids are forwarded; `None` allows all non-denied.
+    allowed_relays: Option<HashSet<String>>,
     /// Minimum trust level required to relay a frame.
     pub min_trust_filter: TrustFilter,
 }
@@ -82,6 +92,7 @@ impl RelayTrustPolicy {
     {
         Self {
             denied_relays: denied.into_iter().map(Into::into).collect(),
+            allowed_relays: None,
             min_trust_filter: TrustFilter::default(),
         }
     }
@@ -94,13 +105,31 @@ impl RelayTrustPolicy {
     {
         Self {
             denied_relays: denied.into_iter().map(Into::into).collect(),
+            allowed_relays: None,
             min_trust_filter,
         }
     }
 
-    /// Return `true` if `relay_peer_id` is not on the deny list.
+    /// Restrict forwarding to an explicit allow-list of (hex) originator peer ids, on top of any
+    /// deny-list. An empty iterator leaves the allow-list unset (forward anyone not denied) rather
+    /// than blocking everything — an empty allow-list config means "no restriction", not "deny all".
+    pub fn set_allow_list<I, S>(&mut self, allowed: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let set: HashSet<String> = allowed.into_iter().map(Into::into).collect();
+        self.allowed_relays = if set.is_empty() { None } else { Some(set) };
+    }
+
+    /// Return `true` if `relay_peer_id` may be forwarded: not on the deny-list, and (if an allow-list
+    /// is set) on the allow-list.
     pub fn allows(&self, relay_peer_id: &str) -> bool {
         !self.denied_relays.contains(relay_peer_id)
+            && self
+                .allowed_relays
+                .as_ref()
+                .is_none_or(|a| a.contains(relay_peer_id))
     }
 }
 

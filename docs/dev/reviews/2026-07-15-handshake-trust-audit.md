@@ -83,9 +83,19 @@ are enabled. The enforcement finder's findings and their disposition:
 
 ### Deferred (architectural / protocol change)
 
-- **E1 — [HIGH] The handshake gates nothing except off-by-default filexfer.** Making it an access
-  gate on relay/QSY/OTA is the "front-ends don't drive sessions" refactor, not a per-line fix. The
-  E6 callsign gate and E4 trust wiring narrow the exposure; full enforcement is tracked separately.
+- **E1 — [HIGH] The handshake gates nothing except off-by-default filexfer.** *Partially addressed.*
+  The QSY responder now honours a trust allowlist (E4) and every autonomous responder refuses to key
+  without a valid callsign (E6). For **relay**, a study of the wire format showed the envelope
+  `auth_tag` has no key-distribution scheme, so the originator (`src_peer_id`) is **not
+  cryptographically authenticated** at the relay — a strong access gate is genuinely blocked on
+  envelope-authentication infrastructure (future work; also closes E3's `auth_tag` half). As a
+  proportionate, honest increment, the relay now supports an operator-configured **originator
+  allow-list** (`[relay] allow_list`) alongside the existing deny-list: when set, only listed
+  originators are forwarded. It is documented as **defense-in-depth over an unauthenticated (spoofable)
+  originator id** — it scopes a club/mesh relay to known stations and raises the bar for casual abuse,
+  but is not strong authentication, and gating relay on "verified this session" would be wrong (a mesh
+  originator is many hops away and never handshook with us). Wired via `RelayTrustPolicy::set_allow_list`
+  → `forward()`'s existing `policy.allows(src)` check.
 - **E3 — [MEDIUM] Relay forwards unauthenticated frames.** `RelayTrustPolicy.min_trust_filter` is
   unread in `forward()` and the 16-byte `WireEnvelope.auth_tag` is never verified. Enforcing either
   needs a trust lookup on `src_peer_id` threaded into the forwarder plus auth-tag key material —

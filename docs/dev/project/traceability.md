@@ -5618,3 +5618,23 @@ and the actually-observed results per change.
 - **Tests:** `oversized_command_line_drops_the_connection` (ardop_integration),
   `gzip_decompression_bomb_over_the_cap_is_rejected` + `irs_caps_the_number_of_accepted_proposals` (b2f_integration).
 - **Test results:** ardop 24, b2f 17, kiss 8 green; full workspace gate below.
+
+## 2026-07-15 — feat(relay): E1 — operator originator allow-list for relay forwarding
+
+- **Requirement/change:** audit finding E1 (`docs/dev/reviews/2026-07-15-handshake-trust-audit.md`) — the
+  signed handshake gates no non-filexfer RF action. Study of the wire format showed the relay envelope
+  `auth_tag` has no key-distribution scheme, so `src_peer_id` is not cryptographically authenticated at
+  the relay; a strong cryptographic gate is blocked on envelope-authentication infrastructure (future).
+- **Design decision:** deliver the proportionate, honest increment — an operator-configured originator
+  ALLOW-list complementing the existing deny-list. `RelayForwarder::forward` already calls
+  `policy.allows(src_hex)`, so extending `RelayTrustPolicy::allows` to honour an optional allow-list
+  wires it with no `forward()` change. Empty allow-list = no restriction (backwards compatible).
+  Documented as defense-in-depth over an unauthenticated (spoofable) id, NOT strong auth — and gating on
+  "verified this session" would be wrong for a mesh (originator is many hops away, never handshook).
+- **Implementation:** `crates/openpulse-core/src/relay.rs` (`allowed_relays` field, `set_allow_list`,
+  `allows` honours it); `crates/openpulse-config/src/lib.rs` (`RelayConfig.allow_list` + template);
+  `crates/openpulse-daemon/src/server.rs`, `crates/openpulse-ardop/src/main.rs`,
+  `crates/openpulse-kiss/src/main.rs` (set the allow-list on the built policy).
+- **Tests:** `allow_list_forwards_only_listed_originators` (relay_integration — listed forwards,
+  unlisted rejected, empty unrestricted); config default asserts `allow_list.is_empty()`.
+- **Test results:** relay_integration 13, config 19 green; full workspace gate below.

@@ -568,6 +568,12 @@ pub struct RelayConfig {
     pub store_forward_ttl_s: u64,
     /// Peer IDs (lower-hex, 64 chars each) whose frames are dropped at the first relay hop.
     pub deny_list: Vec<String>,
+    /// Optional allow-list of originator peer IDs (lower-hex, 64 chars each). When non-empty, the relay
+    /// forwards *only* frames from these originators (in addition to the deny-list) — scoping a relay to
+    /// a known set of stations. Empty = no restriction. Note: the originator id is not cryptographically
+    /// authenticated at the relay, so this is a defense-in-depth control, not strong authentication.
+    #[serde(default)]
+    pub allow_list: Vec<String>,
 }
 
 /// Trust store settings.
@@ -729,6 +735,7 @@ impl Default for RelayConfig {
             max_hops: 3,
             store_forward_ttl_s: 300,
             deny_list: Vec::new(),
+            allow_list: Vec::new(),
         }
     }
 }
@@ -1137,6 +1144,13 @@ enabled = false
 max_hops = 3
 # Store-and-forward frame TTL in seconds (read by openpulse-daemon relay forwarder).
 store_forward_ttl_s = 300
+# Originator peer IDs (lower-hex, 64 chars) whose frames are dropped at the first relay hop.
+deny_list = []
+# Optional allow-list of originator peer IDs (lower-hex, 64 chars). When non-empty, the relay forwards
+# ONLY frames from these originators (plus the deny-list still applies) — scoping the relay to known
+# stations. Empty = no restriction. The originator id is not cryptographically authenticated at the
+# relay, so this is a defense-in-depth control, not strong authentication.
+allow_list = []
 
 [mesh]
 # Enable the openpulse-mesh daemon relay stack (used by openpulse-mesh binary).
@@ -1325,6 +1339,9 @@ mod tests {
         assert_eq!(cfg.logging.level, "info");
         assert!(!cfg.relay.enabled);
         assert_eq!(cfg.relay.max_hops, 3);
+        // A config with no [relay] allow_list parses to an unrestricted (empty) list — backwards
+        // compatible with pre-E1 configs.
+        assert!(cfg.relay.allow_list.is_empty());
         // CAT defaults to rigctld for backward compatibility.
         assert_eq!(cfg.radio.cat_backend, "rigctld");
         // Rig meter polling defaults to 2 Hz (500 ms).
