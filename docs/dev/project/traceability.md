@@ -9,6 +9,34 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-15 — fix(modem): MFSK16 sub-floor ARQ seam — adversarial-audit fixes (REQ-WSIG-01)
+
+- **Requirement/change:** a focused 4-finder adversarial audit of the MFSK16 sub-floor ARQ seam (#885–#888)
+  found the rung was **non-functional on real hardware** — three independent critical breaks masked by test
+  artifacts. Fix the confirmed defects.
+- **Design decision / findings:** (C1) `receive_ota_ack_within` re-opened a capture stream per read →
+  discontinuous audio on cpal → the K=3 ACK never aligns → **hold one stream open**. (C2) `energy_onset`
+  (RMS) triggers on noise at ≤7 dB SNR (measured 15/45 phases decode at 0 dB) → **anchor on Costas
+  acquisition** via a new `ModulationPlugin::acquire_copy_offset` hook (45/45). (C3) `estimate_snr_db` was
+  the per-Goertzel-bin SNR, ~21 dB hot → the rung self-ejected off SL1 → **subtract the processing gain
+  10·log10(SPS/2)**. (H1) the payload-capacity bump was futile (bump target not in the peer's candidate set;
+  BPSK31 >209 B exceeds the 30 s burst window) → **replace with an honest capacity guard** (warn + skip).
+  (M1) MFSK16 HARQ combining could pollute across messages (length filter can't tell fixed-size frames
+  apart) → **reverted**. (L1) a bad `ota_lock_level` warns now.
+- **Implementation:** `engine.rs` (held-open stream + Costas-anchored `decode_mfsk16_k3_ack`; `energy_onset`
+  removed; HARQ gate reverted; `ota_tx_for_payload`→`ota_payload_fits_tx_rung`); `plugin.rs`
+  (`acquire_copy_offset` trait hook); `plugins/mfsk16/src/lib.rs` (the hook + processing-gain SNR fix);
+  `ota_rate.rs` (removed the now-dead `level_above`/`fec_for_level`); `server.rs` (capacity guard,
+  lock-parse warn). Docs: `docs/dev/research/mfsk16-arq-seam-audit.md`.
+- **Tests:** new regression gates `k3_ack_decodes_across_turnaround_phases_at_operating_snr` (0 dB AWGN, the
+  phases the RMS onset failed) and `snr_estimate_intercept_is_on_the_channel_scale`; rewrote the capacity
+  test for the guard; removed the (reverted-feature) `mfsk16_harq_diversity` test.
+- **Test results:** new gates pass (phase 5/5, SNR intercept < 5 dB); mfsk16 + arq tests green; full
+  workspace + clippy + fmt + benchmark pending pre-PR.
+- **Deferred (documented in the audit doc):** session_hash cross-validation (needs a shared session id),
+  the unconditional Nack-ACK storm (broader daemon), the ARDOP adaptive path (separate mechanism), the
+  mixed-profile ACK blackout.
+
 ## 2026-07-15 — test(daemon): MFSK16 sub-floor ARQ rung — end-to-end twin validation (REQ-WSIG-01)
 
 - **Requirement/change:** validate the shipped MFSK16 sub-floor ARQ rung end-to-end across two real daemons

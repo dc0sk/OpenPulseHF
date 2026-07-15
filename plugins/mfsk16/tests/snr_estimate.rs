@@ -34,3 +34,17 @@ fn snr_estimate_tracks_true_snr() {
         "MFSK16 estimate_snr_db must rise with true SNR (0 dB → {low:.1}, 15 dB → {high:.1})"
     );
 }
+
+/// Audit DSP#2 regression gate: the estimate must be on the true full-band SNR **scale** the ladder's
+/// floors/ceilings use — not the ~21 dB-hot per-Goertzel-bin scale. Without the processing-gain subtraction
+/// a 0 dB channel reported ~+20 dB, always clearing SL1's 5 dB climb-out ceiling, so the sub-floor rung
+/// self-ejected to dead BPSK31 after every decode. At 0 dB true it must read well below that ceiling.
+#[test]
+fn snr_estimate_intercept_is_on_the_channel_scale() {
+    let at0 = est_at(0.0);
+    assert!(
+        at0 < 5.0,
+        "estimate_snr_db at 0 dB true = {at0:.1}; must be below SL1's 5 dB ceiling (it was ~+20 dB \
+         before the processing-gain fix, which pinned the ladder off the sub-floor rung)"
+    );
+}

@@ -207,8 +207,13 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     engine.ota_set_level_bounds(min, max);
                 }
                 if !cfg.modem.ota_lock_level.is_empty() {
-                    if let Some(l) = parse(&cfg.modem.ota_lock_level) {
-                        engine.ota_lock_level(l);
+                    match parse(&cfg.modem.ota_lock_level) {
+                        Some(l) => engine.ota_lock_level(l),
+                        // Don't silently run adaptive while the operator believes the level is pinned.
+                        None => tracing::warn!(
+                            value = %cfg.modem.ota_lock_level,
+                            "unparseable [modem] ota_lock_level; adaptive OTA stays enabled (expected e.g. \"SL1\")"
+                        ),
                     }
                 }
                 if cfg.modem.ota_min_backlog > 0 {
@@ -1409,13 +1414,26 @@ fn ota_send_with_ptt(
     // It is a maximum — union-listen returns on the first success, so a healthy link is not slowed.
     let ack_timeout_ms = engine.ota_ack_timeout_ms();
 
+    // Payload-capacity guard: a body over one MFSK16 frame can't ride the SL1 sub-floor rung, and bumping
+    // it to a faster rung is futile in a genuine sub-floor fade (that rung won't decode either), so surface
+    // it once and skip rather than burn PTT on doomed retransmissions. The message needs the link to
+    // recover to a higher rung; the sub-floor rung is for short (≤ 209 B) traffic.
+    if !engine.ota_payload_fits_tx_rung(body.len()) {
+        tracing::warn!(
+            bytes = body.len(),
+            "OTA send skipped: body exceeds the MFSK16 sub-floor rung capacity ({} B); \
+             waiting for the link to climb off SL1",
+            openpulse_modem::engine::ModemEngine::MFSK16_OTA_MAX_PAYLOAD
+        );
+        let _ = event_tx.send(ota_status_event(engine));
+        return;
+    }
+
     for _ in 0..=MAX_RETRIES {
-        // Payload-capacity bump: a body over one MFSK16 frame can't ride the SL1 sub-floor rung, so send
-        // it on the next rung that fits (decodable whenever the peer confirms ≥ there) rather than
-        // hard-erroring and silently dropping it.
-        let Some((mode, fec)) = engine.ota_tx_for_payload(body.len()) else {
+        let Some(mode) = engine.ota_tx_mode().map(|m| m.to_owned()) else {
             return; // no OTA session
         };
+        let fec = engine.ota_tx_fec();
 
         // Key PTT for the data frame via an RAII guard (REQ-PTT-01). On assert failure abort.
         let Ok(guard) = ptt.keyed(Some(event_tx)) else {
