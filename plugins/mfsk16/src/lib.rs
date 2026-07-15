@@ -291,6 +291,21 @@ impl ModulationPlugin for Mfsk16Plugin {
         &self.info
     }
 
+    /// The best Costas-lock sample offset of a copy within `samples`, for the engine's K=3 union ACK
+    /// receiver to **anchor** its copy slots on acquisition rather than broadband RMS energy (which triggers
+    /// on noise at the sub-floor's ≤ 7 dB operating SNR). The 3 ACK copies sit at a fixed span apart, so one
+    /// robust anchor locates them all. `None` when no copy locks the Costas gate.
+    fn acquire_copy_offset(&self, samples: &[f32], config: &ModulationConfig) -> Option<usize> {
+        let lay = layout_for(&config.mode);
+        acquire(
+            samples,
+            base_freq(config.center_frequency),
+            config.sample_rate as f32,
+            &lay,
+        )
+        .map(|(offset, _base)| offset)
+    }
+
     fn modulate(&self, data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
         let lay = layout_for(&config.mode);
         if data.len() > lay.frame_bytes {
@@ -368,9 +383,12 @@ impl ModulationPlugin for Mfsk16Plugin {
         None
     }
 
-    /// Non-coherent symbol-domain SNR: mean winner-tone signal power (winner energy − noise floor) over the
-    /// frame-median noise floor, in dB. The M2M4 fallback reads fading as noise and would pin the sub-floor
-    /// rung at SL1 (the ladder can't climb out); this gives the receiver-led ladder a real SNR to gate on.
+    /// Non-coherent SNR on the true **full-band** scale the ladder's per-rung floors/ceilings use (AWGN
+    /// sweeps in `profile.rs`). `sig/noise` is the *per-Goertzel-bin* SNR: a 256-sample bin concentrates the
+    /// signal into one tone while thermal noise spreads across all `SPS/2` bins, so it runs ~10·log10(SPS/2)
+    /// ≈ 21 dB hot. Subtracting that processing gain puts it back on the channel scale — without it the
+    /// estimate can never fall below SL1's climb-out ceiling and the rung self-ejects to dead BPSK31 after
+    /// every sub-floor decode (measured; the M2M4 fallback was the other failure mode this replaced).
     fn estimate_snr_db(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
         let fs = config.sample_rate as f32;
         let lay = layout_for(&config.mode);
@@ -388,10 +406,11 @@ impl ModulationPlugin for Mfsk16Plugin {
             sig += (max - noise).max(0.0);
         }
         let sig = sig / energies.len() as f32;
+        let processing_gain_db = 10.0 * (SPS as f32 / 2.0).log10();
         if sig <= 0.0 {
             return Some(-20.0);
         }
-        Some(10.0 * (sig / noise).log10())
+        Some(10.0 * (sig / noise).log10() - processing_gain_db)
     }
 
     fn frame_geometry(&self, config: &ModulationConfig) -> Option<FrameGeometry> {

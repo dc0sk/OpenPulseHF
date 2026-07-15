@@ -227,19 +227,6 @@ impl OtaRateController {
             .any(|l| self.profile.mode_for(l) == Some(mode))
     }
 
-    /// The lowest defined rung strictly above `level` (for the sub-floor payload-capacity bump).
-    pub fn level_above(&self, level: SpeedLevel) -> Option<SpeedLevel> {
-        self.profile
-            .defined_levels()
-            .into_iter()
-            .find(|&l| l > level)
-    }
-
-    /// FEC scheme mapped to an arbitrary level in this profile.
-    pub fn fec_for_level(&self, level: SpeedLevel) -> FecMode {
-        self.profile.fec_for(level)
-    }
-
     // ── RX side (we lead) ──────────────────────────────────────────────────────
 
     /// Current absolute level we are recommending to the peer.

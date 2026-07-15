@@ -229,6 +229,13 @@ pub trait ModulationPlugin: Send + Sync {
         None
     }
 
+    /// Best acquisition (sync) sample offset of a frame within `samples`, for a multi-copy receiver that
+    /// needs to *anchor* copy slots on acquisition rather than broadband energy. `None` (the default) when
+    /// the plugin exposes no such hook. Used by the MFSK16 K=3 sub-floor ACK union decoder.
+    fn acquire_copy_offset(&self, _samples: &[f32], _config: &ModulationConfig) -> Option<usize> {
+        None
+    }
+
     /// Occupied RF bandwidth (Hz) of `mode`, used to size a receiver notch's protected band
     /// so it never notches this signal.  `None` if the plugin can't report it (the caller then
     /// falls back to a conservative default).  Default implementation returns `None`.

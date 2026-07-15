@@ -9,6 +9,7 @@
 use fsk4_plugin::Fsk4Plugin;
 use mfsk16_plugin::Mfsk16Plugin;
 use openpulse_audio::LoopbackBackend;
+use openpulse_channel::{awgn::AwgnChannel, AwgnConfig, ChannelModel};
 use openpulse_core::ack::{AckFrame, AckType};
 use openpulse_core::fec::FecMode;
 use openpulse_core::profile::SessionProfile;
@@ -77,28 +78,21 @@ fn non_subfloor_profile_uses_the_fast_fsk4_path() {
     assert_eq!(engine.ota_ack_timeout_ms(), 4000);
 }
 
-/// Payload-capacity gate: a body over one MFSK16 RS block can't ride the SL1 sub-floor frame, so the OTA TX
-/// bumps off MFSK16 to the next rung (which carries multi-block) instead of hard-erroring and dropping.
+/// Payload-capacity guard: a body over one MFSK16 RS block can't ride the SL1 sub-floor frame, so the
+/// daemon skips the send (the sub-floor rung is for short traffic; bumping to a faster rung is futile in a
+/// real fade). The engine reports the fit; a non-sub-floor rung always fits.
 #[test]
-fn oversized_body_bumps_off_the_mfsk16_subfloor_rung() {
+fn oversized_body_does_not_fit_the_mfsk16_subfloor_rung() {
+    let max = ModemEngine::MFSK16_OTA_MAX_PAYLOAD;
+
+    // At the MFSK16 sub-floor rung: within one RS block fits, one byte over does not.
     let (mut e, _bk) = hf_engine();
     e.ota_lock_level(SpeedLevel::Sl1);
     assert_eq!(e.ota_tx_level(), Some(SpeedLevel::Sl1));
-
-    // Within one MFSK16 frame → stays on the sub-floor rung.
-    let (small, _) = e
-        .ota_tx_for_payload(ModemEngine::MFSK16_OTA_MAX_PAYLOAD)
-        .expect("tx for small");
-    assert_eq!(small, "MFSK16");
-
-    // Over one RS block → bumped to SL2 (BPSK31 carries multi-block RS).
-    let (large, _) = e
-        .ota_tx_for_payload(ModemEngine::MFSK16_OTA_MAX_PAYLOAD + 1)
-        .expect("tx for large");
-    assert_eq!(large, "BPSK31");
+    assert!(e.ota_payload_fits_tx_rung(max));
+    assert!(!e.ota_payload_fits_tx_rung(max + 1));
 
     // The cap is exact: MFSK16 holds one RS block of MAX bytes; one more overflows the fixed frame.
-    let max = ModemEngine::MFSK16_OTA_MAX_PAYLOAD;
     assert!(
         e.transmit_with_fec_mode(&vec![0u8; max], "MFSK16", FecMode::Rs, None)
             .is_ok(),
@@ -108,5 +102,50 @@ fn oversized_body_bumps_off_the_mfsk16_subfloor_rung() {
         e.transmit_with_fec_mode(&vec![0u8; max + 1], "MFSK16", FecMode::Rs, None)
             .is_err(),
         "one byte over the cap must overflow the single MFSK16 RS block"
+    );
+
+    // A non-sub-floor rung (BPSK31 at SL2) carries multi-block RS → any body fits.
+    let (mut e2, _bk2) = hf_engine();
+    e2.ota_lock_level(SpeedLevel::Sl2);
+    assert!(e2.ota_payload_fits_tx_rung(max + 1000));
+}
+
+/// Audit DSP#1 regression gate: the shipped K=3 ACK receiver must decode across turnaround phases at the
+/// sub-floor's operating SNR. The original RMS-`energy_onset` aligner triggered on noise at ≤7 dB SNR and
+/// decoded only ~28% of turnaround phases at 0 dB (measured 15/45); the Costas-anchored aligner recovers
+/// all phases. Build one clean K=3 ACK, then for a sweep of leads (turnaround phases) + 0 dB AWGN, decode
+/// through the production `receive_ota_ack_within` path (held-open capture stream).
+#[test]
+fn k3_ack_decodes_across_turnaround_phases_at_operating_snr() {
+    let ack = AckFrame::new(AckType::AckOk, "phase").with_recommended_level(SpeedLevel::Sl1);
+    let (mut tx, tx_bk) = hf_engine();
+    tx.transmit_ack_mfsk16_k3(&ack, None)
+        .expect("modulate K3 ACK");
+    let clean = tx_bk.drain_samples();
+
+    // Phases spanning the region the old RMS onset failed on (finder: 0/3 for p ∈ [4064..13208]).
+    let leads = [0usize, 1500, 4064, 8000, 13208];
+    let mut ok = 0;
+    for (i, &lead) in leads.iter().enumerate() {
+        let mut sig = vec![0.0f32; lead];
+        sig.extend_from_slice(&clean);
+        let faded = AwgnChannel::new(AwgnConfig::new(0.0, Some(100 + i as u64)))
+            .expect("awgn")
+            .apply(&sig);
+        let (mut rx, rx_bk) = hf_engine();
+        rx_bk.fill_samples(&faded);
+        if rx
+            .receive_ota_ack_within(None, 800)
+            .map(|a| a.recommended_level == Some(SpeedLevel::Sl1) && a.ack_type == AckType::AckOk)
+            .unwrap_or(false)
+        {
+            ok += 1;
+        }
+    }
+    assert!(
+        ok >= leads.len() - 1,
+        "K=3 ACK must decode across turnaround phases at 0 dB AWGN (got {ok}/{}); the RMS-onset bug \
+         decoded ~28% of phases",
+        leads.len()
     );
 }
