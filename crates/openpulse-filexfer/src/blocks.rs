@@ -67,6 +67,8 @@ pub fn encode_block(
 pub struct BlockAssembler {
     transfer_id: u32,
     block_count: u16,
+    block_size: u32,
+    file_size: u64,
     reasm: SarReassembler,
     seen: HashMap<u16, FragTracker>,
     blocks: HashMap<u16, Vec<u8>>,
@@ -89,15 +91,29 @@ pub enum BlockEvent {
 }
 
 impl BlockAssembler {
-    /// A collector for a `block_count`-block transfer identified by `transfer_id`.
-    pub fn new(transfer_id: u32, block_count: u16) -> Self {
+    /// A collector for a `block_count`-block transfer of `file_size` bytes in `block_size` chunks,
+    /// identified by `transfer_id`. The layout is retained so [`ingest_fragment`](Self::ingest_fragment)
+    /// can reject any block whose decoded length doesn't match its expected size.
+    pub fn new(transfer_id: u32, block_count: u16, block_size: u32, file_size: u64) -> Self {
         Self {
             transfer_id,
             block_count,
+            block_size,
+            file_size,
             reasm: SarReassembler::new(Duration::from_secs(BLOCK_SAR_TIMEOUT_SECS)),
             seen: HashMap::new(),
             blocks: HashMap::new(),
         }
+    }
+
+    /// Expected decoded length of `block_index`: `block_size` for every block but the last, which
+    /// carries the short remainder `file_size - block_size·(block_count-1)`. This binds the bytes a
+    /// block may contribute to the offer's declared geometry, so a peer cannot inflate a small,
+    /// quota-approved transfer into an arbitrarily large on-disk file (audit F-1).
+    fn expected_block_len(&self, block_index: u16) -> usize {
+        let bs = self.block_size as u64;
+        let start = (block_index as u64).saturating_mul(bs);
+        self.file_size.saturating_sub(start).min(bs) as usize
     }
 
     /// Ingest one received SAR fragment: peek its header for the missing-bitmap, then reassemble.
@@ -136,6 +152,12 @@ impl BlockAssembler {
                     packed,
                 }) if transfer_id == self.transfer_id && bi == block_index => {
                     let block = unpack(&packed).unwrap_or(packed);
+                    // Bind the decoded length to the offer geometry: a block that unpacks to more (or
+                    // fewer) bytes than its slot allows would let a small, quota-approved offer write an
+                    // arbitrarily large file to disk (audit F-1). Drop it rather than store it.
+                    if block.len() != self.expected_block_len(block_index) {
+                        return BlockEvent::Ignored;
+                    }
                     self.blocks.insert(block_index, block);
                     BlockEvent::Complete { block_index }
                 }
@@ -149,7 +171,7 @@ impl BlockAssembler {
     /// Seed an already-held block from a resumed transfer's on-disk partial, so it counts complete and
     /// is included in [`reassemble`](Self::reassemble) without any fragment arriving for it.
     pub fn seed_block(&mut self, block_index: u16, bytes: Vec<u8>) {
-        if block_index < self.block_count {
+        if block_index < self.block_count && bytes.len() == self.expected_block_len(block_index) {
             self.blocks.insert(block_index, bytes);
         }
     }

@@ -61,7 +61,7 @@ fn file_blocks_survive_the_modem_and_verify() {
     .unwrap();
 
     let mut h = harness();
-    let mut asm = BlockAssembler::new(transfer_id, count);
+    let mut asm = BlockAssembler::new(transfer_id, count, block_size, file.len() as u64);
     for (k, block) in split_blocks(&file, block_size).iter().enumerate() {
         for fragment in encode_block(transfer_id, k as u16, block, None).unwrap() {
             let decoded = wire(&mut h, &fragment);
@@ -88,7 +88,7 @@ fn a_tampered_block_on_the_wire_fails_verification() {
     let transfer_id = 1;
 
     let mut h = harness();
-    let mut asm = BlockAssembler::new(transfer_id, count);
+    let mut asm = BlockAssembler::new(transfer_id, count, block_size, file.len() as u64);
     let mut tampered_once = false;
     for (k, block) in split_blocks(&file, block_size).iter().enumerate() {
         for fragment in encode_block(transfer_id, k as u16, block, None).unwrap() {

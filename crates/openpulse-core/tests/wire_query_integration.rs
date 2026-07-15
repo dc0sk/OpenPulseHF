@@ -166,6 +166,20 @@ fn response_with_multiple_results_round_trips() {
 }
 
 #[test]
+fn peer_query_response_rejects_oversized_result_count_without_over_allocating() {
+    // Audit F-4: a payload claiming 65535 results but carrying none must fail fast (the loop bails on
+    // the first short record) rather than pre-allocating a multi-MB Vec from the attacker-controlled
+    // count. query_id (8 bytes) + result_count = 0xFFFF, then no result bytes.
+    let mut payload = vec![0u8; 8];
+    payload.extend_from_slice(&0xFFFFu16.to_be_bytes());
+    let err = PeerQueryResponse::decode(&payload);
+    assert!(
+        matches!(err, Err(WireQueryError::MalformedPayload)),
+        "an over-claimed result count must be rejected, got {err:?}"
+    );
+}
+
+#[test]
 fn hop_limit_and_index_preserved() {
     let mut env = make_envelope(WireMsgType::PeerQueryRequest, vec![]);
     env.hop_limit = 5;

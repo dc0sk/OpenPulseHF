@@ -520,6 +520,13 @@ fn block_count_math() {
     assert_eq!(block_count(1025, 1024), Some(2));
     assert_eq!(block_count(2500, 1024), Some(3));
     assert_eq!(block_count(100, 0), None);
+    // Audit F-6: a count of 0xFFFF would map the last block's SAR segment id onto the reserved
+    // control segment id; the count is capped one below it.
+    assert_eq!(
+        block_count(0xFFFE * 1024, 1024),
+        Some(openpulse_filexfer::MAX_BLOCK_COUNT)
+    );
+    assert_eq!(block_count(0xFFFF * 1024, 1024), None);
 }
 
 #[test]

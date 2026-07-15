@@ -857,6 +857,18 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 .await;
                 // Abandon a signed handshake whose CONACK never arrived (timeout).
                 expire_pending_handshake(&mut runtime_state, &handle.event_tx);
+                // Fire file-transfer offer/stall/verify deadlines so a send whose peer never answered
+                // (or a stalled receive) is cleared instead of pinning the subsystem (audit F-5).
+                {
+                    let mode = handle.active_mode.lock().await.clone();
+                    crate::filexfer::poll_timeouts(
+                        &mut runtime_state,
+                        &handle.event_tx,
+                        &mode,
+                        epoch_ms(),
+                    );
+                }
+                drain_filexfer_tx(&mut engine, &ptt, &handle.event_tx, &mut runtime_state);
                 // JS8 discovery (FF-15): feed the idle predicate + dwell audio, run the slot scheduler,
                 // and execute any retune / station-heard outcomes.
                 let due_beacon = discovery_tick(
@@ -1071,6 +1083,19 @@ fn build_discovery_runtime(
         CAP_RENDEZVOUS,
     };
     let d = &cfg.discovery;
+    // The custom `[discovery] group` is not yet wired (the `@OPULSE` group is baked into the beacon
+    // frame packing and RX filter); warn so an operator who sets it isn't misled into thinking it took
+    // effect (audit: dead config field).
+    if !d.group.is_empty()
+        && !d
+            .group
+            .eq_ignore_ascii_case(openpulse_discovery::OPULSE_GROUP)
+    {
+        tracing::warn!(
+            group = %d.group,
+            "[discovery] group is reserved and not yet wired; the @OPULSE group is used regardless"
+        );
+    }
     // Beacon/full opt into TX (Phase E, §97.221 doc in place); anything else is RX-only. TX also
     // requires a callsign — an empty one keeps the station silent regardless of mode.
     let tx_mode = match d.mode.trim().to_ascii_lowercase().as_str() {

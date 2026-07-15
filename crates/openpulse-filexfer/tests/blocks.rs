@@ -47,6 +47,32 @@ fn split_blocks_math() {
 }
 
 #[test]
+fn an_oversized_block_is_rejected() {
+    // Audit F-1: the offer geometry declares one 1024-byte block, but a peer sends a block that
+    // unpacks to 4000 bytes. It must be dropped (not stored), so a small, quota-approved offer can't
+    // be inflated into an arbitrarily large on-disk file.
+    let oversized = incompressible(4000);
+    let mut asm = BlockAssembler::new(1, 1, 1024, 1024);
+    let mut last = BlockEvent::Progress { block_index: 0 };
+    for frag in encode_block(1, 0, &oversized, None).expect("encode") {
+        last = asm.ingest_fragment(&frag);
+    }
+    assert_eq!(
+        last,
+        BlockEvent::Ignored,
+        "an over-length block must be dropped, not completed"
+    );
+    assert!(
+        !asm.is_complete(),
+        "the transfer must not count as complete"
+    );
+    assert!(
+        asm.reassemble().is_none(),
+        "no oversized payload may be reassembled"
+    );
+}
+
+#[test]
 fn single_block_roundtrips_and_verifies() {
     let s = seed(9);
     let file = b"a short compressible file, repeated. ".repeat(3);
@@ -57,7 +83,7 @@ fn single_block_roundtrips_and_verifies() {
         block_count(file.len() as u64, 1024).unwrap()
     );
 
-    let mut asm = BlockAssembler::new(1, offer.block_count);
+    let mut asm = BlockAssembler::new(1, offer.block_count, offer.block_size, offer.file_size);
     for frag in all_fragments(1, &file, 1024) {
         asm.ingest_fragment(&frag);
     }
@@ -78,7 +104,7 @@ fn multi_object_over_64kb_roundtrips_out_of_order() {
     let mut frags = all_fragments(2, &file, block_size);
     frags.reverse(); // deliver everything in reverse — SAR + block map must not care
 
-    let mut asm = BlockAssembler::new(2, count);
+    let mut asm = BlockAssembler::new(2, count, block_size, file.len() as u64);
     let mut completes = 0;
     for frag in &frags {
         if let BlockEvent::Complete { .. } = asm.ingest_fragment(frag) {
@@ -105,7 +131,7 @@ fn tampered_fragment_fails_verification() {
     let victim = frags.len() / 2;
     frags[victim][SAR_HEADER_TAMPER_OFFSET] ^= 0xFF;
 
-    let mut asm = BlockAssembler::new(3, count);
+    let mut asm = BlockAssembler::new(3, count, block_size, file.len() as u64);
     for frag in &frags {
         asm.ingest_fragment(frag);
     }
@@ -131,7 +157,7 @@ fn missing_bitmap_drives_selective_retransmit() {
         all.len()
     );
 
-    let mut asm = BlockAssembler::new(4, 1);
+    let mut asm = BlockAssembler::new(4, 1, 1024, block.len() as u64);
     // Deliver only the first fragment.
     assert_eq!(
         asm.ingest_fragment(&all[0]),
@@ -167,7 +193,7 @@ fn seeded_blocks_complete_without_fragments() {
     let blocks = split_blocks(&file, 1024);
     assert_eq!(blocks.len(), 3);
 
-    let mut asm = BlockAssembler::new(7, 3);
+    let mut asm = BlockAssembler::new(7, 3, 1024, file.len() as u64);
     asm.seed_block(0, blocks[0].to_vec());
     asm.seed_block(2, blocks[2].to_vec());
     assert_eq!(asm.block(0), Some(blocks[0]));
