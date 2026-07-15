@@ -555,6 +555,17 @@ pub fn combine_llrs_map(attempts: &[&[f32]]) -> Vec<f32> {
     out
 }
 
+/// Hard-decide a bit-LLR stream to bytes in the engine convention: LSB-first, a negative LLR is bit 1.
+pub fn hard_decide(llrs: &[f32]) -> Vec<u8> {
+    llrs.chunks(8)
+        .map(|chunk| {
+            chunk.iter().enumerate().fold(0u8, |acc, (i, &llr)| {
+                acc | ((llr.is_sign_negative() as u8) << i)
+            })
+        })
+        .collect()
+}
+
 /// [`combine_llrs_map`] applied only inside `feedback.ranges`; the first attempt is preserved elsewhere.
 ///
 /// The combined ranges are divided by the attempt count so the whole vector stays on the

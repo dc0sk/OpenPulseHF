@@ -168,6 +168,36 @@ impl AckFrame {
     }
 }
 
+// ── Diversity ACK decode ────────────────────────────────────────────────────────
+
+/// Recover a repeated [`AckFrame`] from `k` per-copy soft-LLR observations of the same ShortFec-coded frame
+/// (each `copy` is that copy's bit-LLR stream, engine convention: LSB-first, negative = bit 1).
+///
+/// Uses the #694 **union** rule — decode each copy standalone first, and fall back to the MAP-sum only if
+/// none decodes alone — so success is a strict superset of every single copy and a clean copy is never
+/// diluted by a faded one (which plain LLR-summing would do). Each candidate is ShortFec-corrected then
+/// CRC-validated, so a wrong-lock mis-correction is rejected rather than returned.
+///
+/// Measured (K=3, ~0.5 s inter-copy spacing over the constant-envelope 500 Hz `MFSK16-ACK`): clears ≥ 0.99
+/// at 3 dB **below** the MFSK16 data floor on moderate_f1/poor_f1, where a single 1.28 s ACK holds only
+/// ~0.6 there — see `plugins/mfsk16/src/robust_ack.rs` and `docs/dev/research/robust-narrowband-measurement.md`.
+pub fn decode_ack_from_llr_copies(copies: &[&[f32]]) -> Option<AckFrame> {
+    let fec = crate::fec::ShortFecCodec::new();
+    let one = |llrs: &[f32]| -> Option<AckFrame> {
+        let data = fec.decode(&crate::fec::hard_decide(llrs)).ok()?;
+        let arr: [u8; 5] = data.as_slice().try_into().ok()?;
+        AckFrame::decode(&arr).ok()
+    };
+    for &c in copies {
+        if let Some(f) = one(c) {
+            return Some(f);
+        }
+    }
+    (copies.len() >= 2)
+        .then(|| one(&crate::fec::combine_llrs_map(copies)))
+        .flatten()
+}
+
 // ── CRC-8/SMBUS ───────────────────────────────────────────────────────────────
 
 fn crc8(data: &[u8]) -> u8 {
@@ -310,5 +340,83 @@ mod tests {
         let f = AckFrame::new(AckType::AckUp, "session-xyz");
         assert_eq!(f.session_hash, AckFrame::hash_session_id("session-xyz"));
         assert_eq!(f.reverse_ack, None);
+    }
+
+    // ── diversity ACK decode ──
+
+    fn coded() -> Vec<u8> {
+        crate::fec::ShortFecCodec::new()
+            .encode(&AckFrame::new(AckType::AckOk, "sess").encode())
+            .expect("encode") // 13 bytes
+    }
+
+    /// Coded bytes → clean bit-LLRs (LSB-first, negative = bit 1), magnitude `mag`.
+    fn clean_llrs(mag: f32) -> Vec<f32> {
+        let mut v = Vec::new();
+        for &b in &coded() {
+            for i in 0..8 {
+                v.push(if (b >> i) & 1 == 1 { -mag } else { mag });
+            }
+        }
+        v
+    }
+
+    /// Sign-flip every bit of the given byte range (a fully-wrong byte burst).
+    fn corrupt(clean: &[f32], bytes: std::ops::Range<usize>) -> Vec<f32> {
+        let mut v = clean.to_vec();
+        for byte in bytes {
+            for i in 0..8 {
+                v[byte * 8 + i] = -v[byte * 8 + i];
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn ack_union_recovers_from_one_clean_copy() {
+        let clean = clean_llrs(8.0);
+        let garbage = corrupt(&clean, 0..13); // every byte wrong → fails alone
+        let copies = [garbage.as_slice(), clean.as_slice(), garbage.as_slice()];
+        assert_eq!(
+            decode_ack_from_llr_copies(&copies),
+            Some(AckFrame::new(AckType::AckOk, "sess"))
+        );
+    }
+
+    #[test]
+    fn ack_union_recovers_via_map_sum_when_no_copy_decodes_alone() {
+        let clean = clean_llrs(8.0);
+        // Each copy has 5 wrong bytes (> t=4 → fails alone); the MAP-sum leaves only bytes 4 and 8 wrong
+        // (each corrupted in two of three copies) → 2 ≤ t=4 → RS corrects → decodes.
+        let c0 = corrupt(&clean, 0..5);
+        let c1 = corrupt(&clean, 4..9);
+        let c2 = corrupt(&clean, 8..13);
+        assert!(decode_ack_from_llr_copies(&[c0.as_slice()]).is_none());
+        assert!(decode_ack_from_llr_copies(&[c1.as_slice()]).is_none());
+        assert!(decode_ack_from_llr_copies(&[c2.as_slice()]).is_none());
+        assert_eq!(
+            decode_ack_from_llr_copies(&[c0.as_slice(), c1.as_slice(), c2.as_slice()]),
+            Some(AckFrame::new(AckType::AckOk, "sess"))
+        );
+    }
+
+    #[test]
+    fn ack_union_single_clean_copy_decodes() {
+        let clean = clean_llrs(8.0);
+        assert_eq!(
+            decode_ack_from_llr_copies(&[clean.as_slice()]),
+            Some(AckFrame::new(AckType::AckOk, "sess"))
+        );
+    }
+
+    #[test]
+    fn ack_union_all_garbage_and_empty_return_none() {
+        let clean = clean_llrs(8.0);
+        let g = corrupt(&clean, 0..13);
+        assert_eq!(
+            decode_ack_from_llr_copies(&[g.as_slice(), g.as_slice()]),
+            None
+        );
+        assert_eq!(decode_ack_from_llr_copies(&[]), None);
     }
 }

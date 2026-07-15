@@ -9,6 +9,37 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-15 — research(core/plugin): robust-ACK resolved — K=3 per-copy-LLR union unblocks the ARQ rung (REQ-WSIG-01)
+
+- **Requirement/change:** pick up the robust-ACK DSP the 2026-07-14 measurement deferred (it claimed the
+  short `MFSK16-ACK` decodes only ~0.6 at the data floor — "the binding constraint" — and that a robust ACK
+  needs a large per-copy-LLR-diversity effort). Measure-first, Fable design review VERIFIED before building.
+- **Design decision:** two measured findings overturn the deferral. (1) The "0.60" was a **40-trial
+  small-sample artifact** — at 400 trials the single 40-sym ACK decodes **0.90 (moderate_f1) / 0.92
+  (poor_f1) at 0 dB**, hard-argmax ≡ soft-LLR (decoder is not the variable); mechanism reframed (poor_f1 =
+  2 Hz → the 1.28 s frame spans ~5 coherence times, so the limiter is a fade *burst* exceeding ShortFec's
+  t=4, not a lack of fade-averaging). (2) At matched airtime, the intuitive "longer contiguous + stronger
+  code" (Arm B) is **worse than baseline at −3 dB** (0.26–0.49) — a longer frame accumulates more fade-burst
+  exposure than the extra ECC covers, and interleaving is inert within a single RS block — while **K=3
+  time-spaced copies + a #694 union decode** (Arm C: decode each copy standalone, MAP-sum only as fallback —
+  *not* energy-summing, which pollutes clean copies with a faded copy's noise) clears **0.99–1.00 at 3 dB
+  below the floor** on both channels, `genie ≈ real`, wrong-locks = 0, and needs **no frequency hop** (the
+  0.5 s time gaps already decorrelate; stays 500 Hz).
+- **Implementation:** `crates/openpulse-core/src/fec.rs` (`hard_decide` — LSB-first/neg=bit1, hoisted for
+  reuse); `crates/openpulse-core/src/ack.rs` (`decode_ack_from_llr_copies` — the reusable validated union
+  primitive, CRC-gated against wrong-lock mis-corrections); `plugins/mfsk16/src/robust_ack.rs` (the A/B/C
+  measurement + genie/wrong-lock instrumentation); `plugins/mfsk16/src/lib.rs` (corrected stale `ACK_LAYOUT`
+  comment). Docs: `docs/dev/research/robust-narrowband-measurement.md` (resolution section), roadmap.
+- **Tests:** core `ack::tests::ack_union_*` (4/4 — one-clean-copy, MAP-sum-recovery, single-copy, all-
+  garbage/empty); plugin fast gates `robust_ack::single_ack_is_near_the_floor_bar` (≥0.80 @0 dB, guards the
+  corrected baseline) + `robust_ack::k3_union_holds_below_the_floor` (K=3 union ≥0.9 @−3 dB); ignored
+  research `robust_ack_sweep` + `baseline_reconciliation`.
+- **Test results:** core `ack_union` 4/4 pass; plugin gates 2/2 pass (14.7 s); 400-trial sweep table as
+  above. Full-workspace gate + fmt/clippy pending pre-PR (touches shared `openpulse-core`).
+- **Still greenlight-gated (scoped, not speculative):** the ARQ integration — K-copy TX with airtime-bounded
+  gaps on the ACK path + receive-side buffering + the union primitive + SL1 ladder placement + airtime-
+  scaled timers — engine/daemon wiring into the regression-sensitive ARQ seam.
+
 ## 2026-07-14 — research(plugin): MFSK16-ACK feasibility measured — ACK is the binding constraint (REQ-WSIG-01)
 
 - **Requirement/change:** the PR-C measure-first gate for the ARQ rung — measure whether a short
