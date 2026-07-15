@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/changelog.md
 status: living
-last_updated: 2026-07-14
+last_updated: 2026-07-15
 ---
 
 # Changelog
@@ -10,9 +10,10 @@ last_updated: 2026-07-14
 > Phase/roadmap history lives in [roadmap.md](roadmap.md); this file tracks
 > user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
 
-## Unreleased
+## v0.6.0 — 2026-07-15
 
-Post-v0.5.0 block-B/D backlog. No breaking changes.
+Post-v0.5.0 block-B/D backlog plus the reference-derived requirements track (PTT backends, hotplug device
+resolution, multi-mode monitor, AGC gate, the `MFSK16` weak-signal waveform). No breaking changes.
 
 ### Features
 

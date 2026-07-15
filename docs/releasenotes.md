@@ -2,14 +2,15 @@
 project: openpulsehf
 doc: docs/releasenotes.md
 status: living
-last_updated: 2026-07-14
+last_updated: 2026-07-15
 ---
 
 # Release Notes
 
-## Unreleased
+## v0.6.0 — 2026-07-15
 
-Post-v0.5.0 improvements. **No breaking changes.**
+Post-v0.5.0 improvements: new PTT backends, hotplug-safe audio, a multi-mode monitor, and the `MFSK16`
+weak-signal waveform. **No breaking changes.**
 
 **Reliability & safety**
 
