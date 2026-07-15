@@ -1457,6 +1457,17 @@ fn handle_inbound_conack(
         );
         return;
     }
+    // The CONACK must come from the station we actually dialed (audit F2). The session id is cleartext and
+    // time-based (guessable within the handshake window), so without this an attacker who races a CONACK
+    // echoing it — under their own callsign — would be recorded as the peer the operator meant to reach.
+    if ack.station_id != pending.peer_callsign {
+        tracing::warn!(
+            got = %ack.station_id,
+            dialed = %pending.peer_callsign,
+            "handshake: CONACK from a different station than dialed; ignoring"
+        );
+        return;
+    }
     if let Err(e) = verify_conack(
         &ack,
         &pending.session_id,
@@ -4481,6 +4492,50 @@ mod handshake_rf_tests {
         assert!(
             rs.pending_handshake.is_some(),
             "mismatched CONACK must not clear the pending handshake"
+        );
+    }
+
+    /// Audit F2: a CONACK that echoes the correct (cleartext, guessable) session id but comes from a
+    /// station other than the one we dialed is ignored — an attacker cannot race a self-signed CONACK
+    /// under their own callsign and be recorded as the dialed peer. The pending handshake is preserved.
+    #[tokio::test]
+    async fn conack_from_undialed_station_is_ignored() {
+        let mut rs = RuntimeControlState {
+            local_callsign: "W1AW".into(),
+            station_seed: [1u8; 32],
+            pending_handshake: Some(PendingHandshake {
+                session_id: "W1AW-1".into(),
+                peer_callsign: "K2XYZ".into(),
+                started_at: Instant::now(),
+            }),
+            ..RuntimeControlState::default()
+        };
+        // Attacker "N0EVL" signs a CONACK with its own key, correctly echoing the session id.
+        let conack = ConAck::create(
+            "N0EVL",
+            &[9u8; 32],
+            SigningMode::Normal,
+            "W1AW-1",
+            CompressionAlgorithm::None,
+            FecMode::None,
+        )
+        .unwrap();
+        let frags = sar_encode(0, &conack.encode().unwrap()).unwrap();
+
+        let mut eng = bpsk_engine();
+        let mode = mode();
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+        for frag in &frags {
+            process_received_bytes(frag, &mut rs, None, &ev, &mode, &mut eng).await;
+        }
+        assert!(
+            rs.verified_peer.is_none(),
+            "CONACK from an undialed station must not verify"
+        );
+        assert!(
+            rs.pending_handshake.is_some(),
+            "CONACK from an undialed station must not clear the pending handshake"
         );
     }
 
