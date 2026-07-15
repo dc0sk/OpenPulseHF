@@ -8,7 +8,7 @@ fn mode_advisor_outputs_expected_levels_across_hpx_hf_ladder() {
     // SL15=22. The advisor picks the highest rung whose floor is met, so a probe *at* a floor lands on
     // that rung. SL6/SL7 are QPSK250 at different FEC (coded gap-filler vs uncoded).
     let cases = [
-        (0.0, "SL2", "BPSK31"),
+        (0.0, "SL1", "MFSK16"), // below BPSK31's 3 dB floor → the MFSK16 sub-floor rung (REQ-WSIG-01)
         (3.5, "SL2", "BPSK31"),
         (4.5, "SL4", "BPSK100"),
         (5.5, "SL5", "BPSK250"),

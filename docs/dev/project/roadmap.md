@@ -2092,11 +2092,21 @@ Build order revised per the 2026-07-14 Fable design review (see traceability):
    each alone, MAP-sum only as fallback — *not* energy-summing) clears **0.99–1.00 at 3 dB below the floor**
    on both channels, `genie ≈ real`, wrong-locks = 0, and **needs no frequency hop** (stays 500 Hz).
    **Shipped:** the reusable validated primitive `openpulse_core::ack::decode_ack_from_llr_copies` + the
-   measurement (`plugins/mfsk16/src/robust_ack.rs`: fast gates + ignored sweep/reconciliation). **Remaining
-   ARQ integration (greenlight-gated, now scoped not speculative):** transmit K copies with airtime-bounded
-   gaps on the ACK TX path + receive-side buffering + the union primitive + SL1 ladder placement +
-   airtime-scaled timers — engine/daemon wiring into the regression-sensitive ARQ seam. Shipped waveform
-   state (`MFSK16` broadcast/beacon + explicit mode) stands.
+   measurement (`plugins/mfsk16/src/robust_ack.rs`: fast gates + ignored sweep/reconciliation).
+   **ARQ INTEGRATION — STAGED (greenlit 2026-07-15; Fable design review verified against source).** The naive
+   "each side keys on its own rung" ACK dispatch deterministically **desyncs at every SL1 boundary** (the ISS
+   can't know the IRS's waveform on a failed decode — the "drop to SL1" recommendation rides a waveform the
+   ISS isn't listening for), so the ISS must **union-listen**. **PR-1 (core) SHIPPED:** SL1 = MFSK16/Rs rung
+   in `hpx_hf` (bottom, floor `None`, ceiling 5.0 → climb to SL2); `transmit_ack_mfsk16_k3` (K=3, 0.5 s gaps,
+   one keying) + `transmit_ota_ack` dispatch (K=3 when the ACK recommends SL1, else FSK4) + union-listen
+   `receive_ota_ack_within` (per-read FSK4 + energy-onset K=3 slot-union, first-success) + mode-scaled
+   `ota_ack_timeout_ms` (9 s sub-floor / 4 s else) + MFSK16 `estimate_snr_db` (avoids the M2M4 self-sealing
+   SL1 trapdoor); daemon swaps the 2 ACK call sites. Tests: `mfsk16_arq_subfloor` (K=3 round-trip /
+   union-listen-accepts-FSK4 / non-sub-floor fast path) + `snr_estimate`. **PR-2 (staged):** HARQ-gate
+   admission for MFSK16+Rs (ships only with a measured MFSK16 diversity gate) + payload-capacity gate (a
+   >213 B body can't ride the one-RS-block MFSK16 frame → clamp, don't drop) + climb-out/trapdoor test +
+   twin-daemon SL1 entry+exit boundary test. Shipped waveform state (`MFSK16` broadcast/beacon + explicit
+   mode) stands.
 
 ### Features shipped (no longer deferred)
 

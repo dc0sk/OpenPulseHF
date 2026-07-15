@@ -214,6 +214,19 @@ impl OtaRateController {
         self.profile.fec_for(self.tx_level)
     }
 
+    /// Mode string mapped to an arbitrary level in this profile (for ACK-waveform selection).
+    pub fn mode_for_level(&self, level: SpeedLevel) -> Option<&'static str> {
+        self.profile.mode_for(level)
+    }
+
+    /// Does this profile define a rung with the given mode? Gates the sub-floor union-listen ACK path.
+    pub fn profile_has_mode(&self, mode: &str) -> bool {
+        self.profile
+            .defined_levels()
+            .into_iter()
+            .any(|l| self.profile.mode_for(l) == Some(mode))
+    }
+
     // ── RX side (we lead) ──────────────────────────────────────────────────────
 
     /// Current absolute level we are recommending to the peer.

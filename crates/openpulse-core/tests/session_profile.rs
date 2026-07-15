@@ -166,7 +166,9 @@ fn hpx_wideband_initial_level() {
 #[test]
 fn hpx_hf_mode_mapping() {
     let p = SessionProfile::hpx_hf();
-    assert_eq!(p.mode_for(SpeedLevel::Sl1), None);
+    // SL1 = the MFSK16 non-coherent sub-floor rung (the ChirpFallback deep-fade waveform), one RS block.
+    assert_eq!(p.mode_for(SpeedLevel::Sl1), Some("MFSK16"));
+    assert_eq!(p.fec_for(SpeedLevel::Sl1), openpulse_core::fec::FecMode::Rs);
     // Finer ladder (research #2): BPSK100 + QPSK250+Rs + SCFDMA26-32QAM + SCFDMA52-64QAM-P4 inserts.
     assert_eq!(p.mode_for(SpeedLevel::Sl2), Some("BPSK31"));
     assert_eq!(p.mode_for(SpeedLevel::Sl3), Some("BPSK63"));
@@ -449,14 +451,16 @@ fn hpx_hf_floors_are_monotonic_and_ceilings_follow_the_hysteresis_rule() {
 
     for pair in rungs.windows(2) {
         let (lo, hi) = (pair[0], pair[1]);
-        let (f_lo, f_hi) = (
-            p.snr_floor_for_level(lo).expect("floor"),
-            p.snr_floor_for_level(hi).expect("floor"),
-        );
-        assert!(
-            f_hi > f_lo,
-            "floor({hi:?}) = {f_hi} must exceed floor({lo:?}) = {f_lo}"
-        );
+        let f_hi = p.snr_floor_for_level(hi).expect("floor");
+        // SL1 (the bottom MFSK16 sub-floor rung) intentionally has no floor — it is never abandoned
+        // downward (reached only via ChirpFallback / a sub-3 dB fast-downshift). The floor-ordering
+        // invariant applies only where the lower rung has a floor; the ceiling rule holds for every pair.
+        if let Some(f_lo) = p.snr_floor_for_level(lo) {
+            assert!(
+                f_hi > f_lo,
+                "floor({hi:?}) = {f_hi} must exceed floor({lo:?}) = {f_lo}"
+            );
+        }
         let ceiling = p.snr_ceiling_for_level(lo).expect("ceiling");
         assert!(
             (ceiling - (f_hi + 2.0)).abs() < 1e-6,
