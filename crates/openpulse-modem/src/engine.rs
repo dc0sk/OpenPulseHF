@@ -4450,10 +4450,13 @@ impl ModemEngine {
         &mut self,
         device: Option<&str>,
         timeout_ms: u64,
+        expected_session_hash: Option<u16>,
     ) -> Result<AckFrame, ModemError> {
-        if !self.ota_profile_has_mfsk16() {
-            return self.receive_ack_with_short_fec_within(device, timeout_ms);
-        }
+        // Reject an ACK whose session hash isn't the peer's — a co-channel session's ACK is otherwise a
+        // full-protocol-validity false-accept (adopts a foreign rate + returns success, dropping the message
+        // as delivered). `None` disables the check (in-process tests). Mismatch ⇒ keep listening, not error.
+        let session_ok =
+            move |ack: &AckFrame| expected_session_hash.is_none_or(|h| ack.session_hash == h);
         let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(1));
         // Throttle the (expensive) K=3 union decode: only attempt it once `accum` holds a full 3-copy span,
         // and thereafter only after it has grown by another copy. Otherwise a streaming backend that returns
@@ -4480,13 +4483,17 @@ impl ModemEngine {
                         AudioSamples { samples: chunk },
                     ) {
                         if let Ok(ack) = self.decode_fsk4_ack(&routed) {
-                            return Ok(ack);
+                            if session_ok(&ack) {
+                                return Ok(ack);
+                            }
                         }
                         accum.extend_from_slice(&routed.samples);
                         if accum.len() >= next_k3_at {
                             next_k3_at = accum.len() + copy_len;
                             if let Some(ack) = self.decode_mfsk16_k3_ack(&accum) {
-                                return Ok(ack);
+                                if session_ok(&ack) {
+                                    return Ok(ack);
+                                }
                             }
                         }
                     }

@@ -110,6 +110,20 @@ async fn main() -> anyhow::Result<()> {
         };
         match openpulse_core::profile::SessionProfile::by_name(name) {
             Some(profile) => {
+                // The MFSK16 sub-floor rung's robust ACK (K=3 union) lives only on the daemon's
+                // receiver-led OTA path, not this RateAdapter path — and MFSK16 isn't even registered here.
+                // A profile that maps it (hpx_hf) would fail at deep fade; warn rather than fail silently.
+                if profile
+                    .defined_levels()
+                    .into_iter()
+                    .any(|l| profile.mode_for(l) == Some("MFSK16"))
+                {
+                    tracing::warn!(
+                        profile = %name,
+                        "adaptive_profile maps an MFSK16 sub-floor rung, which the ARDOP adaptive path does \
+                         not support (its ACK isn't the K=3 union); the rung will fail at deep fade"
+                    );
+                }
                 engine.start_adaptive_session(profile);
                 tracing::info!(profile = %name, "adaptive ARQ session enabled");
             }
