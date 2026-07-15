@@ -10,6 +10,36 @@ last_updated: 2026-07-15
 > Phase/roadmap history lives in [roadmap.md](roadmap.md); this file tracks
 > user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
 
+## v0.7.1 — 2026-07-15
+
+Correctness patch for the v0.7.0 MFSK16 sub-floor ARQ rung. A 4-finder adversarial audit found the rung was
+**non-functional on real (sound-card) hardware** — three independent breaks that every v0.7.0 test missed
+because they shared masking artifacts (a buffered loopback, a 40 dB / level-locked twin test, a slope-only
+SNR check). No breaking changes.
+
+### Fixes
+
+- **The weak-signal ACK is now capturable on real audio.** The sender's ACK-listen re-opened a fresh audio
+  capture per read, discarding everything a real sound card buffered between reads — so the ~5 s three-copy
+  ACK arrived as unusable fragments and never decoded off-loopback. It now holds one capture stream open for
+  the whole listen. (#890)
+- **The ACK decodes across turnaround timing at the rung's real SNR.** The copy-alignment step keyed on
+  broadband energy, which at the sub-floor's low SNR just locked onto noise; the ACK then decoded for only
+  ~28% of turnaround timings at the 0 dB design point. It now aligns on the waveform's own sync (Costas)
+  acquisition, which is robust at low SNR. (#890)
+- **The rung no longer immediately abandons itself.** The MFSK16 SNR estimate read ~21 dB too high, so the
+  rate ladder always thought the link had recovered and jumped straight back to a mode that can't decode at
+  that fade — bouncing off the sub-floor rung after every frame. The estimate is now on the true channel
+  scale. (#890)
+- **Oversized messages on the sub-floor rung fail loudly, not silently.** A message too large for the single
+  small MFSK16 frame previously burned transmit airtime on a doomed larger-mode attempt and then dropped
+  without a word; it now logs a clear "waiting for the link to climb off the sub-floor rung" and skips. (#890)
+- **Removed an unsafe HARQ optimisation** for the sub-floor rung that could, in a corner case, combine soft
+  data from an abandoned message into a later one. (#890)
+- A malformed `[modem] ota_lock_level` now warns instead of silently leaving the station adaptive. (#890)
+
+Known limitations tracked but not addressed in this patch are listed in `docs/dev/research/mfsk16-arq-seam-audit.md`.
+
 ## v0.7.0 — 2026-07-15
 
 The `MFSK16` weak-signal waveform (shipped broadcast-only in v0.6.0) becomes a full **adaptive-ARQ sub-floor

@@ -7,6 +7,38 @@ last_updated: 2026-07-15
 
 # Release Notes
 
+## v0.7.1 — 2026-07-15
+
+A correctness patch for the **MFSK16 weak-signal sub-floor ARQ rung** introduced in v0.7.0. **No breaking
+changes.**
+
+A focused adversarial audit of the rung found that — as released in v0.7.0 — it **did not actually work on a
+real sound card**, even though every v0.7.0 test passed. The tests all shared the same blind spots: an
+in-memory loopback that buffers audio perfectly, an end-to-end twin test running at 40 dB with the rung
+pinned by hand, and an SNR check that only looked at the slope. Three independent problems hid behind those:
+
+- **The acknowledgement couldn't be captured on real audio.** The sender re-opened its microphone/soundcard
+  input for every short read while listening for the reply, throwing away the audio a real device buffers in
+  between — so the ~5 second three-copy weak-signal ACK arrived in pieces and never decoded. It now keeps one
+  capture stream open for the whole listen.
+- **The acknowledgement only decoded for a lucky fraction of turnaround timings.** Finding the three ACK
+  copies relied on a loudness test that, at the very weak signal levels this rung exists for, just latched
+  onto noise — so the ACK decoded for only about a quarter of the possible sender/receiver turnaround
+  timings at the design point. It now locks onto the waveform's own sync pattern, which works down at those
+  levels.
+- **The rung ejected itself after every frame.** The signal-quality estimate for MFSK16 read about 21 dB too
+  high, so the automatic rate control always believed the link had recovered and jumped straight back to a
+  faster mode that can't survive the fade — then fell back again on the next frame, over and over. The
+  estimate is now on the true channel scale.
+
+Also: a message too large for the sub-floor rung's single small frame now reports clearly and waits for the
+link to improve instead of silently burning airtime and dropping; an unsafe soft-combining shortcut for the
+rung was removed; and a mistyped `ota_lock_level` warns instead of silently leaving the station adaptive.
+
+If you tried the MFSK16 sub-floor rung on real hardware under v0.7.0, upgrade to v0.7.1. The remaining
+known limitations (co-channel acknowledgement disambiguation, and a few opt-in/edge configurations) are
+documented for follow-up.
+
 ## v0.7.0 — 2026-07-15
 
 The `MFSK16` weak-signal waveform grows from a broadcast/beacon mode (v0.6.0) into a full **adaptive-ARQ
