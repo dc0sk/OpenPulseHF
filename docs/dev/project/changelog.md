@@ -10,6 +10,22 @@ last_updated: 2026-07-15
 > Phase/roadmap history lives in [roadmap.md](roadmap.md); this file tracks
 > user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
 
+## v0.7.3 — 2026-07-15
+
+Final hardening patch for the MFSK16 sub-floor ARQ rung — the last open finding from the audit. No breaking
+changes; **all ARQ-seam audit findings are now addressed.**
+
+### Fixes
+
+- **Weak-rung acknowledgements now reach a peer running a different rate profile.** When a station drops to
+  the MFSK16 sub-floor rung and answers with the robust three-copy acknowledgement, a peer whose profile
+  doesn't include that rung previously couldn't decode it — its return channel went dark. The
+  acknowledgement now leads with a short standard (FSK4) copy that any peer can hear, followed by the
+  three-copy weak-signal version for a deep fade; the receiver acquires the leading copy out of the combined
+  transmission. (#894)
+
+The full audit and its resolutions are recorded in `docs/dev/research/mfsk16-arq-seam-audit.md`.
+
 ## v0.7.2 — 2026-07-15
 
 Hardening patch for the MFSK16 sub-floor ARQ rung — the findings deferred from the v0.7.1 audit. No breaking
