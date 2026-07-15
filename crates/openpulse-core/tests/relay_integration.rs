@@ -256,3 +256,45 @@ fn peer_cache_query_unaffected_by_relay_additions() {
     assert_eq!(results.len(), 2); // relay-1 (80, Verified) and relay-2 (60, Unknown)
     assert!(results[0].route_quality >= results[1].route_quality);
 }
+
+#[test]
+fn allow_list_forwards_only_listed_originators() {
+    // The fixture envelopes all carry src_peer_id [0xaa; 32]; compute its hex.
+    let src_hex: String = [0xaau8; 32].iter().fold(String::new(), |mut s, b| {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+        s
+    });
+
+    // Allow-list containing our originator → forwarded (audit E1: relay originator allow-list).
+    let mut policy = RelayTrustPolicy::default();
+    policy.set_allow_list([src_hex.clone()]);
+    let mut fwd = RelayForwarder::new(60_000, policy);
+    assert!(
+        fwd.forward(&relay_envelope(10, [0x10; 12], 4, 0), 1_000)
+            .is_ok(),
+        "an allow-listed originator must forward"
+    );
+
+    // Allow-list NOT containing our originator → rejected.
+    let mut policy2 = RelayTrustPolicy::default();
+    policy2.set_allow_list(["deadbeef".to_string()]);
+    let mut fwd2 = RelayForwarder::new(60_000, policy2);
+    assert!(
+        matches!(
+            fwd2.forward(&relay_envelope(11, [0x11; 12], 4, 0), 1_000),
+            Err(RelayForwardError::PolicyRejected { .. })
+        ),
+        "an originator not on the allow-list must be rejected"
+    );
+
+    // Empty allow-list → no restriction (backwards compatible with the deny-list-only default).
+    let mut policy3 = RelayTrustPolicy::default();
+    policy3.set_allow_list(Vec::<String>::new());
+    let mut fwd3 = RelayForwarder::new(60_000, policy3);
+    assert!(
+        fwd3.forward(&relay_envelope(12, [0x12; 12], 4, 0), 1_000)
+            .is_ok(),
+        "an empty allow-list must not restrict forwarding"
+    );
+}

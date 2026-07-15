@@ -495,15 +495,17 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     };
 
     let relay_forwarder = if cfg.relay.enabled {
-        let policy = if cfg.relay.deny_list.is_empty() {
+        let mut policy = if cfg.relay.deny_list.is_empty() {
             RelayTrustPolicy::default()
         } else {
             RelayTrustPolicy::deny_relays(cfg.relay.deny_list.iter().map(|s| s.as_str()))
         };
+        policy.set_allow_list(cfg.relay.allow_list.iter().map(|s| s.as_str()));
         let ttl_ms = cfg.relay.store_forward_ttl_s.saturating_mul(1000);
         tracing::info!(
             max_hops = cfg.relay.max_hops,
             deny_count = cfg.relay.deny_list.len(),
+            allow_count = cfg.relay.allow_list.len(),
             "relay forwarding enabled"
         );
         Some(RelayForwarder::new(ttl_ms, policy))

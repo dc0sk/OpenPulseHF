@@ -176,11 +176,12 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let relay_forwarder = if cfg.relay.enabled {
-        let policy = if cfg.relay.deny_list.is_empty() {
+        let mut policy = if cfg.relay.deny_list.is_empty() {
             RelayTrustPolicy::default()
         } else {
             RelayTrustPolicy::deny_relays(cfg.relay.deny_list.iter().map(|s| s.as_str()))
         };
+        policy.set_allow_list(cfg.relay.allow_list.iter().map(|s| s.as_str()));
         let ttl_ms = cfg.relay.store_forward_ttl_s.saturating_mul(1000);
         let fwd = RelayForwarder::new(ttl_ms, policy);
         tracing::info!(
