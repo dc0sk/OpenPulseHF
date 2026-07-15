@@ -43,7 +43,7 @@ fn k3_mfsk16_ack_round_trips_through_union_listen() {
     route(&irs_bk, &iss_bk);
 
     let got = iss
-        .receive_ota_ack_within(None, 9000)
+        .receive_ota_ack_within(None, 9000, None)
         .expect("union-listen recovers the K=3 MFSK16-ACK");
     assert_eq!(got.recommended_level, Some(SpeedLevel::Sl1));
     assert_eq!(got.ack_type, AckType::AckOk);
@@ -61,7 +61,7 @@ fn union_listen_also_accepts_the_fsk4_ack() {
     route(&irs_bk, &iss_bk);
 
     let got = iss
-        .receive_ota_ack_within(None, 9000)
+        .receive_ota_ack_within(None, 9000, None)
         .expect("union-listen recovers the FSK4 ACK");
     assert_eq!(got.recommended_level, Some(SpeedLevel::Sl2));
     assert_eq!(got.ack_type, AckType::AckDown);
@@ -135,7 +135,7 @@ fn k3_ack_decodes_across_turnaround_phases_at_operating_snr() {
         let (mut rx, rx_bk) = hf_engine();
         rx_bk.fill_samples(&faded);
         if rx
-            .receive_ota_ack_within(None, 800)
+            .receive_ota_ack_within(None, 800, None)
             .map(|a| a.recommended_level == Some(SpeedLevel::Sl1) && a.ack_type == AckType::AckOk)
             .unwrap_or(false)
         {
@@ -148,4 +148,36 @@ fn k3_ack_decodes_across_turnaround_phases_at_operating_snr() {
          decoded ~28% of phases",
         leads.len()
     );
+}
+
+/// Audit DSP#3 fix: an ACK carrying a co-channel session's hash must NOT be adopted (else the ISS adopts a
+/// foreign rate and marks the message delivered though the peer never got it). A matching hash IS adopted.
+#[test]
+fn co_channel_ack_with_wrong_session_hash_is_rejected() {
+    let expected = AckFrame::hash_session_id("OURPEER");
+
+    // A co-channel pair's ACK (built with a different session id) → rejected → the window times out.
+    let (mut iss, iss_bk) = hf_engine();
+    let (mut irs, irs_bk) = hf_engine();
+    let foreign =
+        AckFrame::new(AckType::AckOk, "OTHER-PAIR").with_recommended_level(SpeedLevel::Sl1);
+    irs.transmit_ota_ack(&foreign, None)
+        .expect("tx foreign ACK");
+    route(&irs_bk, &iss_bk);
+    assert!(
+        iss.receive_ota_ack_within(None, 300, Some(expected))
+            .is_err(),
+        "a co-channel ACK with a mismatched session hash must not be adopted"
+    );
+
+    // Our peer's ACK (matching session id) → adopted.
+    let (mut iss2, iss2_bk) = hf_engine();
+    let (mut irs2, irs2_bk) = hf_engine();
+    let mine = AckFrame::new(AckType::AckOk, "OURPEER").with_recommended_level(SpeedLevel::Sl1);
+    irs2.transmit_ota_ack(&mine, None).expect("tx our ACK");
+    route(&irs2_bk, &iss2_bk);
+    let got = iss2
+        .receive_ota_ack_within(None, 800, Some(expected))
+        .expect("our peer's ACK (matching hash) must be adopted");
+    assert_eq!(got.recommended_level, Some(SpeedLevel::Sl1));
 }

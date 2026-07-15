@@ -9,6 +9,29 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-15 — fix(daemon/modem): MFSK16 ARQ seam — deferred-audit-finding fixes (REQ-WSIG-01)
+
+- **Requirement/change:** fix the findings deferred from the ARQ-seam audit (#890). A second Fable design
+  review (verified against source) overturned both of my first-cut designs.
+- **Design decision:** (DSP#3) session-hash cross-validation — the ISS passes `hash(peer)` into
+  `receive_ota_ack_within` and rejects a mismatched ACK (co-channel filter); safe because the IRS builds its
+  ACK with its own callsign as the session id, so a correctly-addressed send matches. (Storm) a
+  **consecutive-Nack budget** (`OTA_NACK_BUDGET=3`) in the daemon rx tick — always ACK a decoded frame, but
+  stop keying Nack-ACKs after 3 straight failures until the next decode; terminates the ACK↔Nack echo AND
+  QRM babble, waveform-agnostic, ARQ unharmed. Chosen over waveform-sniffing (a point defense that leaves
+  QRM babble + rate-controller poisoning). (R2) an ARDOP startup warning when `adaptive_profile` maps
+  MFSK16. **D4 (mixed-profile blackout) stays deferred:** the clean dual-waveform-ACK fix needs FSK4-ACK
+  frame acquisition the plugin lacks (the receiver can't isolate a leading FSK4 copy from the buffer); the
+  handshake-gating alternative was rejected (collides with the operator `OtaSetLevelBounds` slot + disables
+  the rung for compatible-but-unhandshaken pairs).
+- **Implementation:** `engine.rs` (`receive_ota_ack_within` session-hash param + unified loop);
+  `server.rs` (thread the peer callsign into `ota_send_with_ptt`; consecutive-Nack budget in the rx tick);
+  `crates/openpulse-ardop/src/main.rs` (MFSK16-profile warning). Docs: the audit-doc follow-up section.
+- **Tests:** `co_channel_ack_with_wrong_session_hash_is_rejected` (mismatched rejected, matching adopted);
+  the full `mfsk16_arq_subfloor` (6) + `twin_daemon_bridge` (4, incl. the real-callsign session-hash path)
+  stay green.
+- **Test results:** mfsk16 6/6, twin 4/4; full workspace + clippy + fmt + benchmark pending pre-PR.
+
 ## 2026-07-15 — fix(modem): MFSK16 sub-floor ARQ seam — adversarial-audit fixes (REQ-WSIG-01)
 
 - **Requirement/change:** a focused 4-finder adversarial audit of the MFSK16 sub-floor ARQ seam (#885–#888)

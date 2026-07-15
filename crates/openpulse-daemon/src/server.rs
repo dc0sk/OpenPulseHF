@@ -631,6 +631,13 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     // stream clones shared buffers, so this is equivalent to per-tick reopen there.
     let capture_device = (!cfg.audio.device.is_empty()).then(|| cfg.audio.device.clone());
     let mut rx_stream: Option<Box<dyn AudioInputStream>> = None;
+    // Consecutive-Nack budget: how many Nack-ACKs the IRS will key in a row with no intervening successful
+    // data decode before going silent (reset on any decode). Caps a keyed Nack storm — two OTA-active ends
+    // answering each other's ACK/QRM bursts forever — and a §97 babbling transmitter on repetitive
+    // co-channel QRM. The sender retries on its own ACK-window timeout and the downshift recommendation
+    // rides the first Nack, so ARQ is unharmed.
+    const OTA_NACK_BUDGET: u32 = 3;
+    let mut consecutive_ota_nack: u32 = 0;
     // Periodic station identification (REQ-REG-10): while transmitting, key up and send the
     // callsign at least every `auto_id_interval_secs`. The pure `StationIdTimer` is fed a
     // monotonic ms clock (`id_start`) and armed by polling the engine's `frames_transmitted`
@@ -673,7 +680,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 // here rather than in apply_command_to_engine so PTT is sequenced
                 // around the half-duplex turnaround.
                 let mut ota_send_handled = false;
-                if let crate::Command::SendMessage { body, .. } = &cmd {
+                if let crate::Command::SendMessage { body, to, .. } = &cmd {
                     // Suppress adaptive OTA (fixed-mode fallback) when a verified peer's rate ladder
                     // differs from ours — a `recommended_level` would otherwise mean different modes.
                     if engine.ota_active() && !runtime_state.ota_suppressed_by_peer() {
@@ -685,12 +692,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         } else {
                             body.as_bytes().to_vec()
                         };
-                        ota_send_with_ptt(
-                            &mut engine,
-                            &ptt,
-                            &handle.event_tx,
-                            &payload,
-                        );
+                        ota_send_with_ptt(&mut engine, &ptt, &handle.event_tx, &payload, to);
                     }
                 }
                 if !ptt_hard_failed && !ota_send_handled {
@@ -760,15 +762,23 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                             engine.ota_decode_burst(&burst, &ota_session_id)
                         }) {
                             Ok(res) => {
-                                // RAII guard (REQ-PTT-01): releases at block end / on unwind. On assert
-                                // failure `keyed` returns Err and we skip the ACK, leaving nothing keyed.
-                                if let Ok(_guard) = ptt.keyed(Some(&handle.event_tx)) {
-                                    // Mode-aware ACK: K=3 union MFSK16-ACK when recommending the sub-floor
-                                    // rung, else FSK4-ACK. The ISS union-listens, so either is heard.
-                                    if let Err(e) = tokio::task::block_in_place(|| {
-                                        engine.transmit_ota_ack(&res.ack, None)
-                                    }) {
-                                        tracing::warn!("OTA ACK transmit failed: {e}");
+                                // A decoded frame resets the budget and is always ACKed; a failed decode is
+                                // a Nack — key it only while within OTA_NACK_BUDGET consecutive failures.
+                                let decoded = res.payload.is_some();
+                                consecutive_ota_nack =
+                                    if decoded { 0 } else { consecutive_ota_nack.saturating_add(1) };
+                                if decoded || consecutive_ota_nack <= OTA_NACK_BUDGET {
+                                    // RAII guard (REQ-PTT-01): releases at block end / on unwind. On assert
+                                    // failure `keyed` returns Err and we skip the ACK, leaving nothing keyed.
+                                    if let Ok(_guard) = ptt.keyed(Some(&handle.event_tx)) {
+                                        // Mode-aware ACK: K=3 union MFSK16-ACK (with a leading FSK4 copy)
+                                        // when recommending the sub-floor rung, else FSK4-ACK. The ISS
+                                        // union-listens, so either is heard.
+                                        if let Err(e) = tokio::task::block_in_place(|| {
+                                            engine.transmit_ota_ack(&res.ack, None)
+                                        }) {
+                                            tracing::warn!("OTA ACK transmit failed: {e}");
+                                        }
                                     }
                                 }
                                 res.payload.unwrap_or_default()
@@ -1407,9 +1417,14 @@ fn ota_send_with_ptt(
     ptt: &crate::ptt::SharedPtt,
     event_tx: &std::sync::Arc<tokio::sync::broadcast::Sender<crate::protocol::ControlEvent>>,
     body: &[u8],
+    peer: &str,
 ) {
-    use openpulse_core::ack::AckType;
+    use openpulse_core::ack::{AckFrame, AckType};
     const MAX_RETRIES: usize = 3;
+    // Only adopt an ACK carrying the addressed peer's session hash — the IRS builds its ACK with its own
+    // callsign as the session id, so a correctly-addressed send matches while a co-channel session's ACK is
+    // filtered (else the ISS could adopt a foreign rate and mark this message delivered).
+    let expected_hash = (!peer.is_empty()).then(|| AckFrame::hash_session_id(peer));
     // Mode-scaled ACK window: the sub-floor K=3 MFSK16-ACK (~5 s) needs longer than a 4 s FSK4 ACK.
     // It is a maximum — union-listen returns on the first success, so a healthy link is not slowed.
     let ack_timeout_ms = engine.ota_ack_timeout_ms();
@@ -1453,7 +1468,9 @@ fn ota_send_with_ptt(
 
         // Listen for the ACK with PTT down; adopt the peer's recommended level. Union-listen (FSK4 +
         // K=3 MFSK16-ACK) when the profile carries the sub-floor rung, so an SL1 boundary can't desync.
-        match tokio::task::block_in_place(|| engine.receive_ota_ack_within(None, ack_timeout_ms)) {
+        match tokio::task::block_in_place(|| {
+            engine.receive_ota_ack_within(None, ack_timeout_ms, expected_hash)
+        }) {
             Ok(ack) => {
                 engine.apply_ota_ack(&ack);
                 let _ = event_tx.send(ota_status_event(engine));

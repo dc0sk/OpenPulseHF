@@ -43,27 +43,38 @@ each confirmed by ≥2 finders and by direct source/numeric verification.
   tagged retained LLRs.
 - **L1 — a bad `ota_lock_level` silently disabled the lock (LOW).** Now warns.
 
-## Deferred (documented, not fixed this pass)
+## Deferred findings — follow-up pass (2026-07-15)
 
-- **session_hash is not cross-validated (MEDIUM; DSP#3).** During the 9 s union-listen the ISS adopts any
-  valid ACK, including a co-channel session's, and returns success (dropping the message as delivered). A
-  strict fix (validate `AckFrame.session_hash` against the peer's) risks rejecting *legitimate* ACKs on any
-  callsign-format mismatch, and the connectionless OTA path has no negotiated shared session id. Needs a
-  shared session identity, not the fragile per-callsign hash. Reachable only with two OpenPulse pairs on one
-  frequency inside the ACK window.
-- **Unconditional keyed Nack-ACK reply → storm (HIGH but pre-existing/broader).** The daemon answers *every*
-  undecodable burst with an ACK; two OTA-active ends can answer each other's ACK bursts forever. Pre-existing
-  with FSK4 (200 ms replies); #885–#888 escalate each cycle to a 5 s K=3 burst and make the seed (a late/
-  replayed ACK landing in the rx tick) more likely. The proper fix (ACK-burst discrimination / Nack rate-
-  limiting) is a broader daemon change beyond this seam.
-- **ARDOP adaptive path not converted (LOW; R2).** The ARDOP RateAdapter path (opt-in `enable_adaptive_arq`
-  + non-default `adaptive_profile = "hpx_hf"`) still uses the FSK4-only ACK, so an ARDOP IRS that reaches SL1
-  answers MFSK16 with an FSK4 ACK that dies at that floor — degraded-but-safe (NACK-retry, not a desync; the
-  ARDOP ISS `transmit_arq` floors at SL2, so only the IRS SNR path reaches SL1). A separate mechanism from
-  the daemon receiver-led OTA; wiring K=3 into it is future work.
-- **Mixed-profile / mixed-version ACK blackout (MEDIUM; D4).** A pair where one side carries MFSK16 and the
-  other doesn't, with no verified handshake (fingerprint fail-open), can black out the ACK channel while one
-  side recommends SL1. Bounded by the fingerprint suppression when a handshake completes.
+A second Fable design review (verified against source; it overturned both of my first-cut designs) informed
+these:
+
+- **DSP#3 — session_hash cross-validated (MEDIUM). FIXED.** The ISS now passes the addressed peer's session
+  hash into `receive_ota_ack_within` and rejects an ACK whose hash isn't the peer's (keep listening, not
+  error), filtering a co-channel session's ACK. The earlier "risks rejecting legitimate ACKs" worry was
+  overcautious: the IRS builds its ACK with its own callsign as the session id, so a correctly-addressed
+  send matches by construction. Gate: `co_channel_ack_with_wrong_session_hash_is_rejected`.
+- **Nack-ACK storm (HIGH). FIXED (primary damper).** A **consecutive-Nack budget** in the daemon rx tick
+  (`OTA_NACK_BUDGET = 3`): the IRS always ACKs a decoded frame (resets the counter) but stops keying
+  Nack-ACKs after 3 consecutive failures until the next decode. This terminates *every* fuel source — the
+  two-station ACK↔Nack echo and a §97-relevant babbling transmitter on repetitive co-channel QRM — without
+  hurting ARQ (the sender retries on its own ACK-window timeout; the downshift recommendation rides the
+  first Nack). Chosen over waveform-sniffing, which is a point defense that doesn't stop QRM babble and
+  (daemon-side) leaves the rate controller poisoned by stray bursts.
+- **ARDOP adaptive path (LOW; R2). ADDRESSED (warn).** MFSK16 isn't registered on the ARDOP TNC and its ISS
+  `transmit_arq` floors at SL2, so the path is degraded-but-safe; a startup warning now fires when
+  `adaptive_profile` maps an MFSK16 rung (the sub-floor rung is a daemon-only feature).
+
+### Still deferred
+
+- **Mixed-profile / mixed-version ACK blackout (MEDIUM; D4).** The clean fix (a **dual-waveform ACK** — a
+  leading FSK4 copy before the K=3 MFSK16 copies, so a FSK4-only peer still hears the recommendation) was
+  attempted and reverted: `decode_fsk4_ack` demods the whole capture and the FSK4-ACK plugin has no frame
+  *acquisition*, so the receiver can't isolate the leading FSK4 copy from the multi-copy buffer/stream. The
+  approach is right but needs FSK4-ACK frame acquisition. The handshake-gating alternative was rejected (it
+  collides with the operator's shared `OtaSetLevelBounds` slot and permanently disables the rung for
+  compatible-but-unhandshaken pairs — the common deep-fade case). Bounded by the fingerprint suppression
+  once a handshake completes; the ISS also clamps an unmapped SL1 to its own floor, so the blackout is the
+  ACK waveform only, in a marginal SNR band.
 
 ## Method note
 
