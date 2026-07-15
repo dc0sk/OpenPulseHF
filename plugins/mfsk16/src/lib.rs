@@ -47,10 +47,12 @@ const DATA_LAYOUT: Layout = Layout {
     onair_tones: 531,
 };
 /// Short ACK: 13 ShortFec bytes → 26 data tones + 2×7 Costas = 40 symbols (≈ 1.28 s). A short variant of
-/// the same waveform. NOTE (REQ-WSIG-01, measured): this decodes only ~0.6 at the data floor — a 1.28 s
-/// frame can't fade-average like the 17 s data frame, and naive tone repetition doesn't fix it
-/// (energy-summing a faded copy dilutes; the #694 soft-combine lesson). A robust ARQ ACK needs proper
-/// per-copy LLR diversity — deferred. See `docs/dev/research/robust-narrowband-measurement.md`.
+/// the same waveform. A single copy decodes ~0.90 at the 0 dB data floor (moderate/poor_f1, 400 trials) —
+/// the earlier "~0.6" was a 40-trial small-sample artifact — but drops to ~0.6 just 3 dB below. For a
+/// fade-margined ARQ return channel, transmit K=3 time-spaced copies and union-decode them with
+/// [`openpulse_core::ack::decode_ack_from_llr_copies`] (≥0.99 at −3 dB, no frequency hop needed —
+/// energy-summing faded copies does NOT work, the #694 lesson). See `robust_ack.rs` and
+/// `docs/dev/research/robust-narrowband-measurement.md`.
 const ACK_LAYOUT: Layout = Layout {
     frame_bytes: 13,
     sync_starts: &[0, 20],
@@ -382,6 +384,9 @@ impl ModulationPlugin for Mfsk16Plugin {
             .then_some(500.0)
     }
 }
+
+#[cfg(test)]
+mod robust_ack;
 
 #[cfg(test)]
 mod tests {

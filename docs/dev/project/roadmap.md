@@ -2083,15 +2083,20 @@ Build order revised per the 2026-07-14 Fable design review (see traceability):
    `estimate_afc_hz = None`); a **frame-level-median noise estimator** (Fable's calibration fix over the
    measurement's per-symbol mean) that passes `llr_reliability` on AWGN + Watterson; registered in the
    CLI/daemon/monitor/panel. Usable now as a **robust broadcast/beacon + explicit `--mode MFSK16`** data
-   mode. **ACK CHANNEL MEASURED (PR-C measure-first, 2026-07-14) → confirms broadcast-first:** the plugin
-   gained a short `MFSK16-ACK` mode (40 sym, 1.28 s), but measured it decodes only **~0.6 at the data floor
-   (~0 dB) on moderate_f1** — a 1.28 s ACK can't fade-average like the 17 s data frame, so it is ~3–4 dB
-   more fade-sensitive and is the binding constraint. Naive 3× tone repetition doesn't fix it (energy-
-   summing a faded copy dilutes — the #694 lesson); a robust ACK needs per-copy LLR diversity, a real DSP
-   effort. So the ACK is **not** wired to the ARQ seam. **Deferred (until a robust-ACK design + concrete
-   need):** the ARQ integration — mode-aware ACK seam + SL1 ladder placement + HARQ-gate widening +
-   airtime-scaled timers. The measure-first gate saved wiring a marginal ACK into the repo's most
-   regression-sensitive machinery. Shipped state (`MFSK16` broadcast/beacon + explicit mode) stands.
+   mode. **ROBUST ACK RESOLVED (PR-C, 2026-07-15) → ARQ rung UNBLOCKED.** Two measured findings overturned
+   the earlier deferral: (1) the "~0.6 at the data floor" was a **40-trial small-sample artifact** — at 400
+   trials the single 40-sym `MFSK16-ACK` decodes **~0.90 (moderate) / ~0.92 (poor) at 0 dB**, argmax ≡
+   soft-LLR, right at the bar (with a steep cliff below); (2) the intuitive "longer contiguous + stronger
+   code" fix **loses** (worse than baseline at −3 dB — a longer frame accumulates more fade-burst exposure
+   than the extra ECC covers), while **K=3 time-spaced copies + a per-copy-LLR union decode** (#694: decode
+   each alone, MAP-sum only as fallback — *not* energy-summing) clears **0.99–1.00 at 3 dB below the floor**
+   on both channels, `genie ≈ real`, wrong-locks = 0, and **needs no frequency hop** (stays 500 Hz).
+   **Shipped:** the reusable validated primitive `openpulse_core::ack::decode_ack_from_llr_copies` + the
+   measurement (`plugins/mfsk16/src/robust_ack.rs`: fast gates + ignored sweep/reconciliation). **Remaining
+   ARQ integration (greenlight-gated, now scoped not speculative):** transmit K copies with airtime-bounded
+   gaps on the ACK TX path + receive-side buffering + the union primitive + SL1 ladder placement +
+   airtime-scaled timers — engine/daemon wiring into the regression-sensitive ARQ seam. Shipped waveform
+   state (`MFSK16` broadcast/beacon + explicit mode) stands.
 
 ### Features shipped (no longer deferred)
 

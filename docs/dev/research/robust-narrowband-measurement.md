@@ -1,6 +1,8 @@
 # Robust narrowband weak-signal rung — kill-first measurement (REQ-WSIG-01)
 
-**Status:** measured 2026-07-14. Ideal (genie-sync) bound; kill-first gate **PASSED**.
+**Status:** measured 2026-07-14 (ideal + real-sync, kill-first gate **PASSED**). Robust-ACK resolved
+2026-07-15 — the deferral's "0.60 binding constraint" was a 40-trial artifact; K=3 per-copy-LLR union
+decode clears ≥0.99 at 3 dB below the floor (see the final section). ARQ rung **unblocked**.
 
 ## The question
 
@@ -178,3 +180,52 @@ the ARQ rung.** The measure-first gate saved us from wiring a marginal ACK into 
 `MFSK16-ACK` mode exists in the plugin (usable, functional above the floor) but is **not** wired as the ARQ
 return channel; the ARQ rung is deferred pending a robust-ACK design (per-copy LLR diversity). The shipped
 state — `MFSK16` as a robust broadcast/beacon + explicit-mode waveform — stands.
+
+## Robust-ACK, resolved — two findings overturn the deferral (2026-07-15, PR-C)
+
+Picking the ACK back up to build the "robust ACK" the section above deferred, the measurement produced two
+findings that reverse its premise. Harness: `plugins/mfsk16/src/robust_ack.rs` (child module, real
+`acquire`/`frame_noise`/`bit_llrs`), 400 trials, one continuous Watterson realization per trial (honest fade
+correlation), genie-sync + wrong-lock instrumentation.
+
+**Finding 1 — the "0.60 binding constraint" was a 40-trial sampling artifact.** At 400 trials the single
+40-sym ACK decodes **0.90 (moderate_f1) / 0.92 (poor_f1) at 0 dB** — right at the bar, not 0.6 — with the
+hard-argmax path and the per-bit soft-LLR path *identical* (so the decoder is not the variable). The
+mechanism reframes too: at poor_f1 (2 Hz Doppler) the 1.28 s ACK spans ~5 coherence times, so it does **not**
+sit inside one fade — the limiter is a fade **burst** exceeding ShortFec's t=4 byte budget, not a lack of
+fade-averaging. The ACK is near-adequate at the nominal floor, with a steep cliff below it (−3 dB → 0.56–0.66).
+
+**Finding 2 — the intuitive fix (longer contiguous, stronger code) LOSES; per-copy-LLR diversity WINS.**
+Two candidates at matched airtime (400 trials, ≥0.9 bar at 0 dB on both channels):
+
+| | single (1×) | Arm B longer+t=24 (3.5×) | **Arm C K=3 union, no hop (3.8×)** |
+|---|---|---|---|
+| moderate_f1 −3 dB | 0.66 | 0.49 | **0.99** |
+| moderate_f1 0 dB | 0.90 | 0.93 | **1.00** |
+| poor_f1 −3 dB | 0.56 | 0.26 | **1.00** |
+| poor_f1 0 dB | 0.92 | 0.91 | **1.00** |
+
+* **Arm B** (one longer frame, stronger single ShortFec block, one acquisition — the predicted winner) is
+  *worse than the short baseline* at −3 dB. A longer frame at fixed baud accumulates more fade-burst
+  exposure than the extra ECC covers, and interleaving is inert within a single RS block (position-agnostic).
+  The "17 s data frame decodes 0.85, so longer-contiguous must win" intuition is falsified by measurement.
+* **Arm C** — K=3 time-spaced copies of the existing 40-sym `MFSK16-ACK`, each demodulated to calibrated
+  soft LLRs, **union-decoded** (each copy standalone first, MAP-sum only as fallback — #694, *not*
+  sum-then-decode) — clears the bar with ~1.0 and holds **0.99–1.00 at 3 dB below the floor**, a large fade
+  margin. `genie ≈ real` and **wrong-locks = 0** everywhere: acquisition is not the bottleneck, the union
+  combining is doing the work honestly. **No frequency hop is needed** (`hop=0 ≡ hop=500 Hz`) — the 0.5 s
+  time gaps already decorrelate the fades, so the ACK stays 500 Hz (no bandwidth cost, and Fable's two-tap
+  hop-overfit concern is sidestepped by not hopping). K=2 is marginal (0.88 at −3 dB); K=3 is the knee.
+
+Why energy-summing failed but LLR-union works: energy-summing combines *before* the per-copy noise
+normalization, so a faded copy's noise pollutes every tone; the union decodes each copy standalone (a clean
+copy is never diluted) and only MAP-sums as a fallback, so success is a strict superset of any single copy.
+
+**Shipped:** the reusable, validated primitive `openpulse_core::ack::decode_ack_from_llr_copies` (the #694
+union over per-copy ACK LLRs → `AckFrame`, CRC-gated against wrong-lock mis-corrections) + the measurement
+(fast gates `single_ack_is_near_the_floor_bar`, `k3_union_holds_below_the_floor`; ignored research
+`robust_ack_sweep`, `baseline_reconciliation`). The robust-ACK design is now **validated and cheap** — 3
+copies + union decode, no new waveform, no hop — so the ARQ rung is **unblocked**. The remaining ARQ
+integration (transmit K copies with airtime-bounded gaps on the ACK TX path, receive-side buffering + the
+union primitive, SL1 ladder placement, airtime-scaled timers) is engine/daemon wiring into the
+regression-sensitive ARQ seam — scoped, not speculative — and is the greenlight-gated next step.
