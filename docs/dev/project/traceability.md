@@ -5513,3 +5513,31 @@ and the actually-observed results per change.
   `crates/openpulse-daemon/src/lib.rs` (`conack_from_undialed_station_is_ignored`).
 - **Test results:** core handshake_integration 22/22; daemon lib 117/117; full
   `cargo test --workspace --no-default-features` pending final gate below.
+
+## 2026-07-15 — fix(daemon): handshake-audit enforcement pass — §97.119 TX-ID gate, QSY trust wiring, TNC store warning
+
+- **Requirement/change:** second (enforcement-lens) finder pass of the handshake/trust audit
+  (`docs/dev/reviews/2026-07-15-handshake-trust-audit.md`). The signed handshake is an identity label,
+  not an access gate; three enforcement findings had tractable fixes.
+- **E6 [MEDIUM, §97.119]:** auto-ID is disabled for an empty/N0CALL callsign, but the always-on
+  CONREQ→CONACK responder and the opt-in OTA-ACK / relay-forward / auto-QSY paths keyed the
+  transmitter with no per-transmission callsign gate → a daemon that merely heard a frame would
+  transmit unidentified. Fix = `RuntimeControlState::local_callsign_valid()`; every autonomous
+  responder refuses to key up without a valid MYID (RX/decode/peer-recording unaffected).
+- **E4 [MEDIUM]:** the RF QSY responder used a hardcoded `Unverified` peer trust, so
+  `qsy.allow_trustlevels` was inert (empty → no gate; non-empty → rejects everyone). Fix =
+  `RuntimeControlState::rf_peer_trust()` via `classify_connection_trust(OverAir)` (Reduced for a
+  trust-store key, Low first-seen, never Verified over RF).
+- **E2 [misleading]:** ARDOP/KISS TNCs load a trust store they never consult. Fix = loud startup warn.
+- **Deferred (architectural/protocol):** E1 (handshake as access gate — "front-ends don't drive
+  sessions" refactor), E3 (relay `min_trust_filter`/`auth_tag` unverified — needs trust threading +
+  key material), E5 (single-slot `verified_peer` — needs per-callsign map), E7 (unsigned OTA ACK).
+- **Implementation:** `crates/openpulse-daemon/src/lib.rs` (`local_callsign_valid`, `rf_peer_trust`,
+  gates in `handle_inbound_conreq` / QSY branch of `process_received_bytes` / `maybe_qsy_on_interference`
+  / `maybe_relay_forward`); `crates/openpulse-daemon/src/server.rs` (OTA-ACK keying gate);
+  `crates/openpulse-ardop/src/main.rs`, `crates/openpulse-kiss/src/main.rs` (unused-store warn).
+- **Tests:** `crates/openpulse-daemon/src/lib.rs` `handshake_rf_tests::{callsign_validity_and_rf_peer_trust,
+  responder_without_callsign_does_not_transmit_conack, responder_without_callsign_ignores_qsy_req}`;
+  4 existing QSY tests updated to set a valid MYID.
+- **Test results:** daemon lib 120/120, all daemon suites green (incl. twin_daemon_bridge 4/4); full
+  workspace gate below.

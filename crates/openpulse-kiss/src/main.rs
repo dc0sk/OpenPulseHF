@@ -108,6 +108,13 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let trust_store = if !cfg.trust.store_path.is_empty() {
+        // Audit F2: the KISS TNC is a dumb AX.25 frame bridge — it runs no signed handshake and does
+        // not authenticate peers — so this trust store is loaded but never consulted. Warn so operators
+        // aren't misled into thinking this bridge gates connections by trust.
+        tracing::warn!(
+            path = %cfg.trust.store_path,
+            "trust store configured but the KISS TNC does not authenticate peers; it is not consulted"
+        );
         match load_trust_store_from_file(std::path::Path::new(&cfg.trust.store_path)) {
             Ok(store) => {
                 tracing::info!(path = %cfg.trust.store_path, "trust store loaded");

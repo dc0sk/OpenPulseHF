@@ -49,33 +49,59 @@ empty store, dropping every revocation it carried. Now fails closed: a load **er
 startup with a clear message; a missing/empty path is still empty-ok (an unconfigured store is
 not a downgrade under the Permissive RF profile).
 
-## Enforcement posture (documented, not a per-line fix)
+## Enforcement posture (second finder pass)
 
 The signed handshake is an **identity label, not an access gate.** `verify_conreq`/`verify_conack`
 have exactly two callers, both in the daemon; the only production data path that consults
 `verified_peer` is file transfer (off by default, `require_verified_peer = true`). Other
-inbound-RF actions are taken on unauthenticated traffic when their (opt-in, default-off)
-features are enabled:
+inbound-RF actions are taken on unauthenticated traffic when their (opt-in, default-off) features
+are enabled. The enforcement finder's findings and their disposition:
 
-- **Relay forward** (`relay.enabled` default false) retransmits envelopes with only a hop-limit,
-  replay-suppression, and deny-list check; `RelayTrustPolicy.min_trust_filter` is not read in
-  `forward()`, and the 16-byte `auth_tag` in `WireEnvelope` is carried but never verified.
-- **QSY responder** (`qsy.enabled` default false) is created with hardcoded `Unverified` peer
-  trust, so no config restricts a forced retune to authenticated peers.
-- **OTA rate adoption** (opt-in) trusts an unsigned FSK4 ACK's recommended level.
-- **ARDOP/KISS TNCs** load a trust store they never consult (write-only field) — misleading.
+### Fixed in the follow-up pass
 
-These match the repo's documented "front-ends don't drive sessions" gap and are architectural
-(wiring the handshake into an access gate on each path), not one-line fixes. They are recorded
-here so the security posture is stated honestly: with these opt-in features enabled, the daemon
-acts on unauthenticated RF. Correctly gated (refuted as non-gaps): the Noise-PSK control-channel
-(fail-closed, loopback-scoped, WS-bypass closed) and the filexfer accept path.
+- **E6 — [MEDIUM, §97.119] No-callsign daemon keyed the transmitter with no station ID.** Auto-ID
+  is disabled for an empty/`N0CALL` callsign, but the always-on CONREQ→CONACK responder and the
+  opt-in OTA-ACK, relay-forward, and auto-QSY paths keyed the transmitter with no per-transmission
+  callsign gate — so a daemon left with no callsign that merely *heard* a frame would transmit
+  unidentified. **Fix:** `RuntimeControlState::local_callsign_valid()`; every autonomous responder
+  (CONACK reply, QSY responder + auto-QSY initiator, relay forward, OTA-ACK) now refuses to key up
+  without a valid MYID. RX (decode, peer recording) is unaffected. Tests:
+  `responder_without_callsign_does_not_transmit_conack`, `responder_without_callsign_ignores_qsy_req`,
+  `callsign_validity_and_rf_peer_trust`.
+- **E4 — [MEDIUM] QSY trust gate was inert.** The RF QSY responder was created with a hardcoded
+  `Unverified` peer trust, so `qsy.allow_trustlevels` either did nothing (empty) or rejected every
+  peer (any non-empty list, since trust never rose above `Unverified`). **Fix:**
+  `RuntimeControlState::rf_peer_trust()` classifies the peer verified this session via
+  `classify_connection_trust(OverAir)` — `Reduced` for a trust-store key, `Low` for first-seen,
+  never `Verified` (which needs an out-of-band cert). `allow_trustlevels = ["reduced"]` is now an
+  enforceable gate. Best-effort: the single global `verified_peer` is not bound to the unauthenticated
+  QSY requester (see E5), so it means "only after such a handshake this session."
+- **E2 — [HIGH-ish, misleading] ARDOP/KISS TNCs load a trust store they never consult.** The field
+  is write-only; these bridges run no signed handshake. **Fix:** a loud startup `warn!` at both load
+  sites so operators aren't misled into thinking the TNC authenticates peers. (Wiring real
+  enforcement is the architectural E1 change below.)
 
-## Deferred (tracked, larger change)
+### Deferred (architectural / protocol change)
+
+- **E1 — [HIGH] The handshake gates nothing except off-by-default filexfer.** Making it an access
+  gate on relay/QSY/OTA is the "front-ends don't drive sessions" refactor, not a per-line fix. The
+  E6 callsign gate and E4 trust wiring narrow the exposure; full enforcement is tracked separately.
+- **E3 — [MEDIUM] Relay forwards unauthenticated frames.** `RelayTrustPolicy.min_trust_filter` is
+  unread in `forward()` and the 16-byte `WireEnvelope.auth_tag` is never verified. Enforcing either
+  needs a trust lookup on `src_peer_id` threaded into the forwarder plus auth-tag key material —
+  larger than this pass. (Config already documents `min_trust_filter` as reserved.)
+- **E5 — [MEDIUM] `verified_peer` is a single global slot.** A later handshake overwrites an
+  earlier peer's verification; filexfer verifies a signed offer against whoever last handshook.
+  Fails *safe* (reject/mis-attribute, not bypass). Needs a per-callsign map + filexfer plumbing.
+- **E7 — [LOW] OTA rate adopted from unsigned FSK4 ACKs.** Rate-ladder manipulation, not an access
+  bypass; ACK signing is a protocol change.
+
+Correctly gated (refuted as non-gaps): the Noise-PSK control-channel (fail-closed, loopback-scoped,
+WS-bypass closed) and the filexfer accept path (`require_verified_peer = true` default).
+
+## Deferred from the first pass (larger change)
 
 - **Replay freshness** — CONREQ/CONACK carry no nonce/timestamp, so a captured valid handshake
   replays. Needs a freshness field in the signed body (protocol change).
-- **Per-peer `verified_peer`** — single global slot; a later handshake overwrites an earlier
-  peer's verification. Fails safe (filexfer rejects rather than mis-accepts) but mis-attributes.
 - **SAR handshake reassembly** uses a single constant key — a poisoned fragment can DoS an
   in-flight handshake reassembly.

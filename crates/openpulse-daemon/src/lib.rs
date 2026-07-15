@@ -49,7 +49,9 @@ use openpulse_core::handshake::{
 use openpulse_core::relay::RelayForwarder;
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_core::sar::{sar_encode, SarReassembler};
-use openpulse_core::trust::{CertificateSource, PolicyProfile, PublicKeyTrustLevel, SigningMode};
+use openpulse_core::trust::{
+    classify_connection_trust, CertificateSource, PolicyProfile, PublicKeyTrustLevel, SigningMode,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_modem::engine::SecureSessionParams;
 #[cfg(not(target_arch = "wasm32"))]
@@ -268,6 +270,31 @@ impl RuntimeControlState {
     /// OTA without a handshake, or with a compatible/undetermined peer, is unaffected.
     pub fn ota_suppressed_by_peer(&self) -> bool {
         matches!(&self.verified_peer, Some(p) if p.profile_compatible == Some(false))
+    }
+
+    /// True when the station has a real callsign to transmit under. §97.119 forbids keying the
+    /// transmitter without a station ID, and periodic auto-ID is disabled for an empty/`N0CALL`
+    /// callsign — so an *autonomous* responder (CONACK, relay, QSY) that merely heard a frame must
+    /// not key up at all without a valid MYID, or it would transmit unidentified.
+    pub fn local_callsign_valid(&self) -> bool {
+        let c = self.local_callsign.trim();
+        !c.is_empty() && !c.eq_ignore_ascii_case("N0CALL")
+    }
+
+    /// Over-air trust level of the last peer we verified this session, for gating the (unauthenticated)
+    /// QSY responder. RF certificates are `OverAir` without PSK, so this tops out at `Reduced` (a
+    /// trust-store key) or `Low` (first-seen) — never `Verified`, which requires an out-of-band cert.
+    /// Best-effort: a single global `verified_peer` slot is not bound to the QSY requester (the QSY
+    /// frame carries no signature), so `allow_trustlevels` means "only after such a handshake this
+    /// session," not a per-requester check.
+    pub fn rf_peer_trust(&self) -> ConnectionTrustLevel {
+        match &self.verified_peer {
+            Some(p) => {
+                let key_trust = self.trust_store.trust_level(&p.callsign);
+                classify_connection_trust(key_trust, CertificateSource::OverAir, false).decision
+            }
+            None => ConnectionTrustLevel::Unverified,
+        }
     }
 }
 
@@ -1265,13 +1292,25 @@ pub async fn process_received_bytes(
         return;
     };
 
+    // Audit F6 (§97.119): the QSY responder keys the transmitter (even a Reject reply is an on-air
+    // frame), so an autonomous responder that merely heard a QSY frame must not engage without a
+    // valid MYID, or it would transmit unidentified.
+    if !runtime_state.local_callsign_valid() {
+        tracing::warn!(
+            "qsy: ignoring inbound frame — no valid station callsign to transmit an identified reply"
+        );
+        return;
+    }
+
+    // Audit F4: classify the QSY requester's trust from the peer we verified this session (over-air,
+    // no PSK → at most `Reduced`) instead of a hardcoded `Unverified`, so `qsy.allow_trustlevels`
+    // is an enforceable gate rather than a control that rejects every peer.
+    let qsy_policy = runtime_state.qsy_policy.clone();
+    let peer_trust = runtime_state.rf_peer_trust();
     let is_new_session = runtime_state.qsy_session.is_none();
-    let session = runtime_state.qsy_session.get_or_insert_with(|| {
-        QsySession::new_responder(
-            runtime_state.qsy_policy.clone(),
-            ConnectionTrustLevel::Unverified,
-        )
-    });
+    let session = runtime_state
+        .qsy_session
+        .get_or_insert_with(|| QsySession::new_responder(qsy_policy, peer_trust));
 
     // Notify connected clients that a remote station initiated QSY.
     if is_new_session {
@@ -1391,6 +1430,17 @@ fn handle_inbound_conreq(
         SigningMode::Normal,
     ) {
         tracing::warn!(peer = %req.station_id, error = %e, "handshake: CONREQ verification rejected");
+        return;
+    }
+
+    // Audit F6 (§97.119): replying with a CONACK keys the transmitter. Auto-ID is disabled without
+    // a valid callsign, so an autonomous responder must not answer a CONREQ unidentified — refuse to
+    // key up (and don't record a half-handshake the peer never sees completed).
+    if !runtime_state.local_callsign_valid() {
+        tracing::warn!(
+            peer = %req.station_id,
+            "handshake: heard a CONREQ but no valid station callsign is set; not transmitting a CONACK"
+        );
         return;
     }
 
@@ -1598,6 +1648,17 @@ pub async fn maybe_qsy_on_interference(
         return;
     }
 
+    // Audit F6 (§97.119): auto-QSY keys the transmitter to send the QSY request; without a valid
+    // MYID the daemon can't auto-ID, so refuse to initiate rather than transmit unidentified.
+    if !runtime_state.local_callsign_valid() {
+        tracing::warn!(
+            ?interferers,
+            "in-band interference confirmed but no valid station callsign is set; not auto-initiating QSY"
+        );
+        engine.clear_in_band_interferers();
+        return;
+    }
+
     tracing::warn!(
         ?interferers,
         "in-band interference confirmed — auto-initiating QSY"
@@ -1635,6 +1696,11 @@ fn maybe_relay_forward(
 ) {
     use openpulse_core::wire_query::WireEnvelope;
 
+    // Audit F6 (§97.119): retransmitting keys the transmitter. Without a valid MYID the daemon can't
+    // auto-ID, so a relay must not forward (transmit) unidentified.
+    if !runtime_state.local_callsign_valid() {
+        return;
+    }
     let Some(ref mut fwd) = runtime_state.relay_forwarder else {
         return;
     };
@@ -3809,6 +3875,7 @@ mod command_apply_tests {
         let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
         let ev_tx = Arc::new(tx);
         let mut runtime_state = RuntimeControlState::default();
+        runtime_state.local_callsign = "W1AW".into(); // valid MYID so auto-QSY may key up (audit F6)
         runtime_state.qsy_candidate_freqs = vec![14_070_000, 14_077_000];
 
         maybe_qsy_on_interference(
@@ -3871,6 +3938,7 @@ mod command_apply_tests {
         let (tx_a, _rx_a) = broadcast::channel::<ControlEvent>(16);
         let ev_a = Arc::new(tx_a);
         let mut rs_a = RuntimeControlState {
+            local_callsign: "W1AW".into(), // valid MYID so auto-QSY may key up (audit F6)
             qsy_candidate_freqs: vec![14_070_000, 14_077_000],
             ..RuntimeControlState::default()
         };
@@ -3890,7 +3958,10 @@ mod command_apply_tests {
         let mode_b: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
         let (tx_b, mut rx_b) = broadcast::channel::<ControlEvent>(16);
         let ev_b = Arc::new(tx_b);
-        let mut rs_b = RuntimeControlState::default();
+        let mut rs_b = RuntimeControlState {
+            local_callsign: "K2XYZ".into(), // valid MYID so the responder may key up (audit F6)
+            ..RuntimeControlState::default()
+        };
         process_received_bytes(&bytes, &mut rs_b, None, &ev_b, &mode_b, &mut h.rx_engine).await;
         assert!(
             rs_b.qsy_session.is_some(),
@@ -4000,7 +4071,10 @@ mod command_apply_tests {
         let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
         let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
         let ev_tx = Arc::new(tx);
-        let mut runtime_state = RuntimeControlState::default();
+        let mut runtime_state = RuntimeControlState {
+            local_callsign: "W1AW".into(), // valid MYID so the responder may key up (audit F6)
+            ..RuntimeControlState::default()
+        };
 
         // QSY_REQ frame: verb, token, n_candidates
         let qsy_req = b"QSY_REQ tok-resp 2";
@@ -4100,7 +4174,10 @@ mod command_apply_tests {
         let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
         let (tx, mut rx) = broadcast::channel::<ControlEvent>(32);
         let ev_tx = Arc::new(tx);
-        let mut runtime_state = RuntimeControlState::default();
+        let mut runtime_state = RuntimeControlState {
+            local_callsign: "W1AW".into(), // valid MYID so the responder may key up (audit F6)
+            ..RuntimeControlState::default()
+        };
 
         process_received_bytes(
             req_text.as_bytes(),
@@ -4384,6 +4461,108 @@ mod handshake_rf_tests {
             matches!(rx.try_recv(), Ok(ControlEvent::PeerVerified { callsign, grid })
                 if callsign == "W1AW" && grid == "FN31pr"),
             "PeerVerified event should be emitted"
+        );
+    }
+
+    /// Audit F6/F4 unit coverage: `local_callsign_valid` rejects the empty/`N0CALL` sentinels, and
+    /// `rf_peer_trust` maps a verified peer to its over-air trust (never `Verified` over RF).
+    #[test]
+    fn callsign_validity_and_rf_peer_trust() {
+        let mut rs = RuntimeControlState::default();
+        rs.local_callsign = String::new();
+        assert!(!rs.local_callsign_valid(), "empty callsign is not valid");
+        rs.local_callsign = "n0call".into();
+        assert!(!rs.local_callsign_valid(), "N0CALL sentinel is not valid");
+        rs.local_callsign = "W1AW".into();
+        assert!(rs.local_callsign_valid(), "a real callsign is valid");
+
+        // No verified peer this session → Unverified.
+        assert_eq!(rs.rf_peer_trust(), ConnectionTrustLevel::Unverified);
+
+        rs.verified_peer = Some(VerifiedPeer {
+            callsign: "K2XYZ".into(),
+            grid: "EM69".into(),
+            pubkey: vec![2u8; 32],
+            profile_compatible: None,
+        });
+        // First-seen (unknown) key over air → Low.
+        assert_eq!(rs.rf_peer_trust(), ConnectionTrustLevel::Low);
+
+        // A trust-store (Full) key, but still over-air without PSK → Reduced, never Verified.
+        rs.trust_store.add_trusted("K2XYZ", [2u8; 32]);
+        assert_eq!(rs.rf_peer_trust(), ConnectionTrustLevel::Reduced);
+    }
+
+    /// Audit F6 (§97.119): a responder with no valid callsign that hears a full CONREQ must not key
+    /// the transmitter to answer with a CONACK, and must not record a half-handshake the peer never
+    /// sees completed.
+    #[tokio::test]
+    async fn responder_without_callsign_does_not_transmit_conack() {
+        let conreq = ConReq::create_with_grid(
+            "W1AW",
+            &[1u8; 32],
+            vec![SigningMode::Normal],
+            "W1AW-1700000000000",
+            vec![],
+            vec![],
+            "FN31pr",
+        )
+        .unwrap();
+        let frags = sar_encode(0, &conreq.encode().unwrap()).unwrap();
+
+        let mut eng = bpsk_engine();
+        let mode = mode();
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+        let mut rs = RuntimeControlState {
+            local_callsign: String::new(), // no MYID
+            station_seed: [2u8; 32],
+            ..RuntimeControlState::default()
+        };
+
+        let before = eng.frames_transmitted();
+        for frag in &frags {
+            process_received_bytes(frag, &mut rs, None, &ev, &mode, &mut eng).await;
+        }
+        assert_eq!(
+            eng.frames_transmitted(),
+            before,
+            "no CONACK may be transmitted without a valid callsign"
+        );
+        assert!(
+            rs.verified_peer.is_none(),
+            "a half-handshake must not be recorded when we cannot reply"
+        );
+    }
+
+    /// Audit F6 (§97.119): a responder with no valid callsign that hears a QSY_REQ must not engage
+    /// the QSY responder (which would key the transmitter for a reply, even a Reject).
+    #[tokio::test]
+    async fn responder_without_callsign_ignores_qsy_req() {
+        let req = encode_qsy_frame(&QsyFrame::Req {
+            token: "TOK123".into(),
+            n_candidates: 3,
+        });
+
+        let mut eng = bpsk_engine();
+        let mode = mode();
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+        let mut rs = RuntimeControlState {
+            local_callsign: "N0CALL".into(),
+            ..RuntimeControlState::default()
+        };
+
+        let before = eng.frames_transmitted();
+        process_received_bytes(req.as_bytes(), &mut rs, None, &ev, &mode, &mut eng).await;
+        assert_eq!(
+            eng.frames_transmitted(),
+            before,
+            "no QSY reply may be transmitted without a valid callsign"
+        );
+        assert!(
+            rs.qsy_session.is_none(),
+            "no QSY responder session may be created without a valid callsign"
         );
     }
 

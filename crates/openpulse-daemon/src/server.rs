@@ -769,7 +769,11 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                 let decoded = res.payload.is_some();
                                 consecutive_ota_nack =
                                     if decoded { 0 } else { consecutive_ota_nack.saturating_add(1) };
-                                if decoded || consecutive_ota_nack <= OTA_NACK_BUDGET {
+                                // Audit F6 (§97.119): the ACK keys the transmitter; without a valid MYID
+                                // the daemon can't auto-ID, so decode the payload but don't send the ACK.
+                                if (decoded || consecutive_ota_nack <= OTA_NACK_BUDGET)
+                                    && runtime_state.local_callsign_valid()
+                                {
                                     // RAII guard (REQ-PTT-01): releases at block end / on unwind. On assert
                                     // failure `keyed` returns Err and we skip the ACK, leaving nothing keyed.
                                     if let Ok(_guard) = ptt.keyed(Some(&handle.event_tx)) {

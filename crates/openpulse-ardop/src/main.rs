@@ -153,6 +153,14 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let trust_store = if !cfg.trust.store_path.is_empty() {
+        // Audit F2: the ARDOP TNC does not run the signed CONREQ/CONACK handshake — CONNECT drives the
+        // local HPX state machine and data-port bytes are an unauthenticated passthrough — so this
+        // trust store is loaded but never consulted to authenticate a peer. Warn so operators aren't
+        // misled into thinking this bridge gates connections by trust.
+        tracing::warn!(
+            path = %cfg.trust.store_path,
+            "trust store configured but the ARDOP TNC does not authenticate peers over RF; it is not consulted"
+        );
         match load_trust_store_from_file(std::path::Path::new(&cfg.trust.store_path)) {
             Ok(store) => {
                 tracing::info!(path = %cfg.trust.store_path, "trust store loaded");
