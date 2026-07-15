@@ -448,3 +448,27 @@ async fn data_port_rejects_oversized_frame() {
         Err(_) => panic!("timeout waiting for server to close connection"),
     }
 }
+
+/// Audit A-1: a command line that exceeds `MAX_CMD_LINE` with no newline must be rejected and the
+/// connection dropped — the read is bounded, so a client can't grow the TNC's buffer without limit.
+#[tokio::test]
+async fn oversized_command_line_drops_the_connection() {
+    let (cmd_port, _data_port) = start_server(true).await;
+    let mut stream = TcpStream::connect(("127.0.0.1", cmd_port)).await.unwrap();
+
+    // Over 4096 bytes with no '\n' — the server caps the read at MAX_CMD_LINE+1 and rejects.
+    let blob = vec![b'A'; 6000];
+    let _ = stream.write_all(&blob).await; // may error once the server closes; ignore
+    let _ = stream.flush().await;
+
+    // The server must close the connection rather than buffer the whole blob.
+    let mut buf = [0u8; 1];
+    let result = timeout(Duration::from_secs(2), stream.read(&mut buf)).await;
+    match result {
+        Ok(Ok(0)) | Ok(Err(_)) => {} // connection closed — expected
+        Ok(Ok(_)) => {
+            panic!("server should have closed the connection after an over-long command line")
+        }
+        Err(_) => panic!("timeout waiting for server to close connection"),
+    }
+}

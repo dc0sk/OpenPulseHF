@@ -30,6 +30,11 @@ struct Proposal {
     answer: Option<FsAnswer>,
 }
 
+/// Most proposals an IRS session will accept before rejecting the rest — bounds how many messages a
+/// remote peer/CMS can make us receive, decompress, and retain in one session (audit B-2). A real
+/// Winlink batch is a handful; 32 is generous headroom.
+const MAX_PROPOSALS: usize = 32;
+
 /// B2F session state machine.
 ///
 /// Feed inbound lines via `handle_line`; call `drain_pending_data` to get
@@ -216,6 +221,13 @@ impl B2fSession {
                     date,
                 },
             ) => {
+                // Accept up to MAX_PROPOSALS; reject the rest so a hostile peer can't make us receive
+                // and retain an unbounded number of (decompressed) messages in one session (audit B-2).
+                let answer = if self.proposals.len() < MAX_PROPOSALS {
+                    FsAnswer::Accept
+                } else {
+                    FsAnswer::Reject
+                };
                 self.proposals.push(Proposal {
                     fc: B2fFrame::Fc {
                         proposal_type,
@@ -224,14 +236,17 @@ impl B2fSession {
                         date,
                     },
                     compressed_data: Vec::new(),
-                    answer: Some(FsAnswer::Accept),
+                    answer: Some(answer),
                 });
                 Ok(vec![])
             }
             (SessionRole::Irs, B2fFrame::Ff) => {
-                // Send FS response accepting all proposals.
-                let answers: Vec<FsAnswer> =
-                    self.proposals.iter().map(|_| FsAnswer::Accept).collect();
+                // Answer each proposal with its recorded decision (Accept within the cap, Reject beyond).
+                let answers: Vec<FsAnswer> = self
+                    .proposals
+                    .iter()
+                    .map(|p| p.answer.clone().unwrap_or(FsAnswer::Reject))
+                    .collect();
                 self.state = SessionState::Transfer;
                 Ok(vec![frame::encode(&B2fFrame::Fs { answers })])
             }
