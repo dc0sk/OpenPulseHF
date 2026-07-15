@@ -2109,10 +2109,14 @@ Build order revised per the 2026-07-14 Fable design review (see traceability):
    gate (`mfsk16_harq_diversity`: combining two moderate_f1 attempts beats a single one); climb-out/trapdoor
    test (`subfloor_sl1_climbs_back_out_when_snr_recovers`: SL1 → SL2 once SNR clears the 5 dB ceiling). The
    daemon ACK-seam swap is regression-checked green by the existing `ota_ladder_steps` twin test (fast path).
-   **Deferred (environment-gated, like the on-air twin scenarios):** the twin-daemon SL1 **entry+exit**
-   boundary test — MFSK16's 17 s frames × the async daemon loop make a real deep-fade→recovery exchange
-   minutes-long and flaky as a CI gate; the components are unit/engine-tested and the daemon wiring is a thin
-   2-call-site swap. Shipped waveform state (`MFSK16` broadcast/beacon + explicit mode) stands.
+   **END-TO-END VALIDATED (CI gate):** `twin_daemon_bridge::subfloor_sl1_message_crosses_with_k3_ack` — two
+   real daemons pinned at SL1, a message crosses via a `mode == "MFSK16"` data frame and B's K=3 MFSK16-ACK
+   that A recovers by union-listening (A's `OtaStatus` reports `tx_mode == "MFSK16"`). The 17 s frame is 17 s
+   of *samples* over the non-real-time loopback bridge, so it runs in ~1 s. The snd-aloop real-audio rig
+   validates the same over a sound card: `OTA=1 OTA_LOCK=SL1 PROFILE=hpx_hf ./scripts/run-twin-station-audio.sh`
+   (new `OTA_LOCK` knob). **Deferred (needs mid-test channel control):** the *dynamic* entry+exit boundary —
+   a live deep fade dropping the ladder to SL1 then recovering. Shipped waveform state (`MFSK16`
+   broadcast/beacon + explicit mode) stands.
 
 ### Features shipped (no longer deferred)
 

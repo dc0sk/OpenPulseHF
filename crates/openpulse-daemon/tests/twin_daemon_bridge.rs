@@ -259,3 +259,99 @@ async fn a_file_crosses_the_bridge_between_two_real_daemons() {
     assert_eq!(got, contents, "reassembled file must match the sent bytes");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// Config for a station pinned at the MFSK16 SL1 sub-floor rung on the `hpx_hf` profile.
+fn subfloor_cfg(callsign: &str, tcp_port: u16, ws_port: u16) -> OpenpulseConfig {
+    let mut c = cfg(callsign, tcp_port, ws_port);
+    c.modem.ota_enabled = true;
+    c.modem.ota_profile = "hpx_hf".into(); // has SL1 = MFSK16
+    c.modem.ota_lock_level = "SL1".into(); // pin at the sub-floor rung
+    c
+}
+
+/// End-to-end validation of the MFSK16 sub-floor ARQ rung across two REAL daemons (REQ-WSIG-01):
+/// both pinned at SL1, daemon A sends a small message; daemon B must decode the MFSK16 data frame
+/// (`FrameReceived` with `mode == "MFSK16"`) and answer with a K=3 MFSK16-ACK that A recovers by
+/// union-listening — A's `OtaStatus` (emitted only after `apply_ota_ack`, reporting `tx_mode == "MFSK16"`)
+/// confirms the ACK completed the exchange on the sub-floor rung, not a fallback.
+///
+/// The 17 s MFSK16 frame is 17 s of *audio samples*, processed at CPU speed over the (non-real-time)
+/// loopback bridge — the whole exchange runs in ~1 s, so this is a routine CI gate. (The *dynamic*
+/// entry+exit boundary — a deep fade dropping the live ladder to SL1 then recovering — needs mid-test
+/// channel control and remains deferred.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn subfloor_sl1_message_crosses_with_k3_ack_between_two_real_daemons() {
+    let pair = spawn_bridged_pair(
+        subfloor_cfg("SUBA", 19040, 19041),
+        subfloor_cfg("SUBB", 19042, 19043),
+        clean_awgn(3),
+        clean_awgn(4),
+        Duration::from_millis(10),
+    )
+    .await;
+
+    let b = TcpStream::connect(pair.addr_b).await.unwrap();
+    let (b_read, _bw) = b.into_split();
+    let mut b_reader = BufReader::new(b_read);
+    let a = TcpStream::connect(pair.addr_a).await.unwrap();
+    let (a_read, mut a_write) = a.into_split();
+    let mut a_reader = BufReader::new(a_read);
+
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    let cmd = serde_json::to_string(&ControlCommand::SendMessage {
+        to: "SUBB".into(),
+        subject: "s".into(),
+        body: "sub-floor arq hello".into(), // ≤ 209 B → fits one MFSK16 frame
+    })
+    .unwrap()
+        + "\n";
+    a_write.write_all(cmd.as_bytes()).await.unwrap();
+
+    // B decodes the MFSK16 data frame (capture its mode); A receives B's K=3 MFSK16-ACK (its OtaStatus
+    // reports tx_mode). Watch both concurrently, and assert the exchange ACTUALLY used the sub-floor rung —
+    // on a clean loopback the ladder could otherwise decode via a different candidate and pass trivially.
+    let (b_mode, a_tx_mode) = tokio::join!(
+        timeout(Duration::from_secs(120), async {
+            loop {
+                let mut buf = String::new();
+                if b_reader.read_line(&mut buf).await.unwrap() == 0 {
+                    continue;
+                }
+                if let Ok(ControlEvent::EngineEvent {
+                    event: openpulse_modem::EngineEvent::FrameReceived { mode, bytes },
+                }) = serde_json::from_str::<ControlEvent>(buf.trim())
+                {
+                    if bytes > 0 {
+                        return mode;
+                    }
+                }
+            }
+        }),
+        timeout(Duration::from_secs(120), async {
+            loop {
+                let mut buf = String::new();
+                if a_reader.read_line(&mut buf).await.unwrap() == 0 {
+                    continue;
+                }
+                if let Ok(ControlEvent::OtaStatus { tx_mode, .. }) =
+                    serde_json::from_str::<ControlEvent>(buf.trim())
+                {
+                    return tx_mode;
+                }
+            }
+        }),
+    );
+
+    pair.shutdown();
+    let b_mode = b_mode.expect("daemon B never decoded the frame daemon A transmitted");
+    let a_tx_mode = a_tx_mode.expect("daemon A never got an OtaStatus (no ACK applied)");
+    assert_eq!(
+        b_mode, "MFSK16",
+        "B must decode the sub-floor frame as MFSK16, not a fallback rung"
+    );
+    assert_eq!(
+        a_tx_mode.as_deref(),
+        Some("MFSK16"),
+        "A must be transmitting at the pinned MFSK16 SL1 rung (lock took effect)"
+    );
+}

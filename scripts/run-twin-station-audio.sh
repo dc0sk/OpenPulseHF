@@ -11,6 +11,9 @@
 #   MODE        modulation mode for both stations (default BPSK250)
 #   PROFILE     adaptive profile (default hpx_hf); set OTA=1 to enable OTA stepping
 #   OTA         1 to start a receiver-led OTA session on both daemons (default 0)
+#   OTA_LOCK    pin both stations to a fixed level, e.g. SL1 (the MFSK16 sub-floor rung) — the way to
+#               validate the weak-signal ARQ rung on the clean snd-aloop rig, which has no channel model to
+#               fade the ladder down to it. Requires OTA=1 and a PROFILE that maps the level (hpx_hf).
 #   A_DEVICE    cpal device for station A (default aloop_a)
 #   B_DEVICE    cpal device for station B (default aloop_b)
 #   A_TCP/A_WS  station A control ports (default 9000 / 9001)
@@ -20,6 +23,7 @@ set -euo pipefail
 MODE="${MODE:-BPSK250}"
 PROFILE="${PROFILE:-hpx_hf}"
 OTA="${OTA:-0}"
+OTA_LOCK="${OTA_LOCK:-}"
 A_DEVICE="${A_DEVICE:-aloop_a}"
 B_DEVICE="${B_DEVICE:-aloop_b}"
 A_TCP="${A_TCP:-9000}"; A_WS="${A_WS:-9001}"
@@ -45,6 +49,7 @@ write_cfg() {
         echo '[audio]';              echo 'backend = "cpal"'; echo "device = \"$3\""
         echo '[modem]';              echo "mode = \"$MODE\""; echo "profile = \"$PROFILE\""
         [[ "$OTA" == 1 ]] && { echo 'ota_enabled = true'; echo "ota_profile = \"$PROFILE\""; }
+        [[ "$OTA" == 1 && -n "$OTA_LOCK" ]] && echo "ota_lock_level = \"$OTA_LOCK\""
         echo '[daemon]';             echo "tcp_port = $4"; echo "websocket_port = $5"
         echo '[radio]';              echo 'cat_backend = "none"'
     } > "$dir/config.toml"
@@ -63,7 +68,7 @@ PID_B=$!
 sleep 1
 cat <<EOF
 
-twin-station real-audio rig running (mode=$MODE, profile=$PROFILE, OTA=$OTA):
+twin-station real-audio rig running (mode=$MODE, profile=$PROFILE, OTA=$OTA${OTA_LOCK:+, locked=$OTA_LOCK}):
   station A  control 127.0.0.1:$A_TCP   audio $A_DEVICE
   station B  control 127.0.0.1:$B_TCP   audio $B_DEVICE
 
@@ -74,6 +79,11 @@ Attach the panels:
 Drive traffic from one station, e.g.:
   openpulse daemon --addr 127.0.0.1:$A_TCP ota-status     # if OTA=1
   # or send a message from a panel; watch B decode it.
+
+Validate the MFSK16 weak-signal sub-floor ARQ rung over real audio:
+  OTA=1 OTA_LOCK=SL1 PROFILE=hpx_hf ./scripts/run-twin-station-audio.sh
+  # then send a short (<=209 B) message A->B; ota-status on both must show tx_mode=MFSK16 (SL1),
+  # B decodes the MFSK16 frame, and A applies B's K=3 MFSK16-ACK (union-listen).
 
 Ctrl+C to stop both daemons.
 EOF
