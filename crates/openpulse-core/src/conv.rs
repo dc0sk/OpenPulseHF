@@ -122,14 +122,19 @@ impl ConvCodec {
             ));
         }
         let orig_len = bits_to_u32(&data_bits[..32]) as usize;
-        let total_data_bits = 32 + orig_len * 8;
-        if data_bits.len() < total_data_bits {
-            return Err(ModemError::Fec(format!(
-                "decoded stream has {} bits, need {}",
-                data_bits.len(),
-                total_data_bits
-            )));
-        }
+        // Checked math (audit RX-3): `orig_len` is attacker-controlled, so `32 + orig_len * 8` can wrap
+        // on a 32-bit/wasm `usize` and make the `<` guard pass, panicking the slice. A wrapped/oversized
+        // count can't fit `data_bits`, so treat it as too-short.
+        let total_data_bits = match orig_len.checked_mul(8).and_then(|b| b.checked_add(32)) {
+            Some(n) if n <= data_bits.len() => n,
+            _ => {
+                return Err(ModemError::Fec(format!(
+                    "decoded stream has {} bits, need {}",
+                    data_bits.len(),
+                    32 + orig_len as u64 * 8
+                )));
+            }
+        };
         let payload_bits = &data_bits[32..total_data_bits];
         Ok(pack_bits(payload_bits))
     }

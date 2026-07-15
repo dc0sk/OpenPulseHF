@@ -232,13 +232,19 @@ impl FecCodec {
             .map_err(|_| ModemError::Fec("length-prefix slice conversion failed".into()))?;
         let orig_len = u32::from_be_bytes(prefix) as usize;
 
-        let end = PREFIX_LEN + orig_len;
-        if decoded.len() < end {
-            return Err(ModemError::Fec(format!(
-                "decoded data shorter than expected: have {} bytes, need {end}",
-                decoded.len()
-            )));
-        }
+        // `checked_add` (audit RX-2): the 4-byte length prefix is systematic (attacker-controlled), and
+        // on a 32-bit/wasm `usize` `PREFIX_LEN + orig_len` can wrap, making the `< end` guard pass and the
+        // slice panic. A wrapped/oversized end simply can't fit the buffer, so treat it as too-short.
+        let end = match PREFIX_LEN.checked_add(orig_len) {
+            Some(end) if end <= decoded.len() => end,
+            _ => {
+                return Err(ModemError::Fec(format!(
+                    "decoded data shorter than expected: have {} bytes, need {}",
+                    decoded.len(),
+                    PREFIX_LEN as u64 + orig_len as u64
+                )));
+            }
+        };
 
         Ok(decoded[PREFIX_LEN..end].to_vec())
     }
@@ -311,6 +317,16 @@ impl ShortFecCodec {
                 "ShortFecCodec: encoded length {} ≤ ecc_len {}",
                 encoded.len(),
                 self.ecc_len
+            )));
+        }
+        // Upper bound (audit RX-1): a valid RS block is at most 255 bytes. The underlying reed-solomon
+        // decoder is backed by a fixed 256-byte polynomial and PANICS on any longer input — and this
+        // decodes attacker-length-controlled demodulator output (ACK-listen / short-FEC receive), so an
+        // unbounded length would be a remote panic DoS. Reject rather than let it reach the decoder.
+        if encoded.len() > 255 {
+            return Err(ModemError::Fec(format!(
+                "ShortFecCodec: encoded length {} exceeds the 255-byte RS block limit",
+                encoded.len()
             )));
         }
         let data_len = encoded.len() - self.ecc_len;
@@ -856,6 +872,26 @@ pub fn combine_llrs_weighted_in_ranges(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Audit RX-1: `ShortFecCodec::decode` must reject an over-255-byte input rather than pass it to
+    /// the underlying reed-solomon decoder, whose fixed 256-byte polynomial buffer panics. The input is
+    /// attacker-length-controlled demodulator output on the ACK-listen / short-FEC receive path.
+    #[test]
+    fn short_fec_decode_rejects_oversized_input_without_panicking() {
+        let codec = ShortFecCodec::with_ecc_len(32);
+        for len in [256usize, 300, 1024, 65_000] {
+            let err = codec.decode(&vec![0u8; len]);
+            assert!(
+                err.is_err(),
+                "an over-255-byte input ({len} B) must be rejected, not decoded"
+            );
+        }
+        // A valid-length block still round-trips.
+        let data = b"short fec payload";
+        let encoded = codec.encode(data).unwrap();
+        assert!(encoded.len() <= 255);
+        assert_eq!(codec.decode(&encoded).unwrap(), data);
+    }
 
     /// Calibrated LLRs already carry `1/σ²`, so summing them IS inverse-noise weighting. Weighting
     /// the sum again by `1/σ²` (the shape `1 / mean(|LLR|)` produces) applies σ⁻² twice and recovers
