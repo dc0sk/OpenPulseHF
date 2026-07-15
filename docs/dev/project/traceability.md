@@ -5599,3 +5599,22 @@ and the actually-observed results per change.
   now fail); filexfer crate 28, modem filexfer_loopback 2, daemon filexfer 13 + twin_daemon_bridge 4
   (`a_file_crosses`) green.
 - **Test results:** full workspace gate below.
+
+## 2026-07-15 — fix: protocol-bridge untrusted-input hardening (ARDOP OOM, gzip bomb, proposal flood)
+
+- **Requirement/change:** three-finder adversarial sweep of the network-facing protocol bridges
+  (`docs/dev/reviews/2026-07-15-protocol-bridge-audit.md`). KISS/AX.25 came back clean; ARDOP + B2F
+  surfaced three findings.
+- **A-1 [HIGH]:** the ARDOP command reader's `MAX_CMD_LINE` guard ran after `read_line` (which has no
+  internal cap), so a client streaming bytes with no newline grew the buffer without limit → OOM. Fix =
+  `read_capped_line` bounds the read with a `Take` at MAX_CMD_LINE+1.
+- **B-1 [HIGH]:** `decompress_gzip` (Type D, the format the real CMS uses) had no output cap, unlike the
+  16 MiB LZHUF path → decompression bomb. Fix = `Take` at MAX_UNCOMPRESSED+1 (constant generalized) +
+  reject over-cap.
+- **B-2 [MEDIUM]:** IRS auto-accepted unlimited FC proposals and the FF handler hardcoded Accept →
+  unbounded messages received/decompressed/retained per session. Fix = cap accepts at MAX_PROPOSALS=32,
+  reject the rest, and honor each proposal's recorded answer in FF.
+- **Implementation:** `crates/openpulse-ardop/src/command.rs`; `crates/openpulse-b2f/src/{compress,session}.rs`.
+- **Tests:** `oversized_command_line_drops_the_connection` (ardop_integration),
+  `gzip_decompression_bomb_over_the_cap_is_rejected` + `irs_caps_the_number_of_accepted_proposals` (b2f_integration).
+- **Test results:** ardop 24, b2f 17, kiss 8 green; full workspace gate below.

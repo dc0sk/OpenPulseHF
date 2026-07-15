@@ -337,3 +337,44 @@ fn session_iss_type_c_irs_roundtrip() {
     assert_eq!(&decompressed[sep + 4..], body.as_slice());
     assert!(irs.is_done());
 }
+
+#[test]
+fn gzip_decompression_bomb_over_the_cap_is_rejected() {
+    // Audit B-1: a tiny gzip stream that expands past the 16 MiB cap must be rejected, not allocated.
+    let bomb = compress_gzip(&vec![0u8; 16 * 1024 * 1024 + 1]).unwrap();
+    assert!(
+        bomb.len() < 65_535,
+        "a run of zeros compresses to a tiny blob"
+    );
+    assert!(
+        decompress_gzip(&bomb).is_err(),
+        "a gzip stream expanding past the cap must be rejected"
+    );
+    // A modest payload still round-trips.
+    let ok = b"hello".repeat(100);
+    assert_eq!(decompress_gzip(&compress_gzip(&ok).unwrap()).unwrap(), ok);
+}
+
+#[test]
+fn irs_caps_the_number_of_accepted_proposals() {
+    // Audit B-2: a hostile peer offering many proposals must not make us accept (and later receive,
+    // decompress, and retain) an unbounded number in one session — accepts are capped at 32.
+    let mut irs = B2fSession::new(SessionRole::Irs);
+    for i in 0..40u32 {
+        let fc = frame::encode(&B2fFrame::Fc {
+            proposal_type: ProposalType::D,
+            mid: format!("MSG{i:05}"),
+            size: 64,
+            date: "20260504120000".into(),
+        });
+        irs.handle_line(&fc).unwrap();
+    }
+    let fs = irs.handle_line(&frame::encode(&B2fFrame::Ff)).unwrap();
+    assert_eq!(fs.len(), 1);
+    assert!(fs[0].starts_with("FS "));
+    assert_eq!(
+        irs.accepted_count(),
+        32,
+        "no more than MAX_PROPOSALS may be accepted regardless of how many were offered"
+    );
+}

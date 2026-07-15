@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
 use openpulse_core::trust::{CertificateSource, PublicKeyTrustLevel, SigningMode};
@@ -12,6 +12,19 @@ use crate::state::TncState;
 
 /// Maximum command line length accepted before dropping the connection.
 const MAX_CMD_LINE: usize = 4096;
+
+/// Read one `\n`-terminated line, but never buffer more than `cap` bytes — `read_line` alone grows its
+/// destination without limit, so a client that never sends a newline could otherwise exhaust memory
+/// (audit A-1). A line at/over the cap yields `cap` bytes with no trailing newline (the `Take` EOFs),
+/// which the caller's `n > MAX_CMD_LINE` check rejects.
+async fn read_capped_line<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: R,
+    line: &mut String,
+    cap: u64,
+) -> std::io::Result<usize> {
+    let mut limited = reader.take(cap);
+    limited.read_line(line).await
+}
 
 pub async fn serve(listener: TcpListener, bridge: Arc<ModemBridge>) -> Result<(), ArdopError> {
     loop {
@@ -38,7 +51,12 @@ async fn handle_client(
     loop {
         line.clear();
         tokio::select! {
-            n = reader.read_line(&mut line) => {
+            // Bound the read to `MAX_CMD_LINE + 1` bytes so a client that never sends a newline can't
+            // grow `line` without limit — `read_line` itself has no cap, so the guard below alone would
+            // apply too late (after the oversized buffer was already allocated). A `Take` that EOFs at
+            // the cap yields an over-limit line with no trailing '\n', which the `n > MAX_CMD_LINE` /
+            // missing-newline check then rejects.
+            n = read_capped_line(&mut reader, &mut line, MAX_CMD_LINE as u64 + 1) => {
                 let n = n?;
                 if n == 0 {
                     break;

@@ -38,17 +38,27 @@ pub fn compress_gzip(data: &[u8]) -> Result<Vec<u8>, B2fError> {
         .map_err(|e| B2fError::Compression(e.to_string()))
 }
 
-/// Decompress Gzip bytes.
+/// Decompress Gzip bytes, bounding the output at [`MAX_UNCOMPRESSED`].
+///
+/// Gzip carries no trustworthy up-front length to check (unlike the LZHUF prefix), so the decoder is
+/// wrapped in a `Take` that stops one byte past the cap; anything larger is a decompression bomb and
+/// is rejected rather than allocated (audit B-1 — Type D is the format a real CMS actually sends).
 pub fn decompress_gzip(data: &[u8]) -> Result<Vec<u8>, B2fError> {
-    let mut dec = GzDecoder::new(data);
+    let dec = GzDecoder::new(data);
     let mut out = Vec::new();
-    dec.read_to_end(&mut out)
+    dec.take(u64::from(MAX_UNCOMPRESSED) + 1)
+        .read_to_end(&mut out)
         .map_err(|e| B2fError::Compression(e.to_string()))?;
+    if out.len() as u64 > u64::from(MAX_UNCOMPRESSED) {
+        return Err(B2fError::Compression(format!(
+            "decompressed gzip exceeds limit ({MAX_UNCOMPRESSED} bytes)"
+        )));
+    }
     Ok(out)
 }
 
-/// Maximum uncompressed payload accepted by `decompress_lzhuf` (16 MiB).
-const LZHUF_MAX_UNCOMPRESSED: u32 = 16 * 1024 * 1024;
+/// Maximum uncompressed payload accepted by the decompression helpers (16 MiB).
+const MAX_UNCOMPRESSED: u32 = 16 * 1024 * 1024;
 
 /// Compress `data` with LZHUF LH5 (proposal type C).
 ///
@@ -75,7 +85,7 @@ pub fn decompress_lzhuf(data: &[u8]) -> Result<Vec<u8>, B2fError> {
         return Err(B2fError::Compression("truncated LZHUF data".into()));
     }
     let orig_len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-    if orig_len > LZHUF_MAX_UNCOMPRESSED {
+    if orig_len > MAX_UNCOMPRESSED {
         return Err(B2fError::Compression(format!(
             "claimed uncompressed length {orig_len} exceeds limit"
         )));
@@ -105,14 +115,14 @@ pub fn compress_lzhuf_winlink(data: &[u8]) -> Result<Vec<u8>, B2fError> {
 /// Decompress Winlink-compatible LZHUF LH5 bytes (4-byte LE length prefix).
 ///
 /// Expects the 4-byte LE uncompressed-size header used by Winlink gateways.
-/// Output is capped at `LZHUF_MAX_UNCOMPRESSED` bytes to prevent OOM from
+/// Output is capped at `MAX_UNCOMPRESSED` bytes to prevent OOM from
 /// malformed streams.
 pub fn decompress_lzhuf_winlink(data: &[u8]) -> Result<Vec<u8>, B2fError> {
     if data.len() < 4 {
         return Err(B2fError::Compression("truncated Winlink LZHUF data".into()));
     }
     let orig_len = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-    if orig_len > LZHUF_MAX_UNCOMPRESSED {
+    if orig_len > MAX_UNCOMPRESSED {
         return Err(B2fError::Compression(format!(
             "claimed uncompressed length {orig_len} exceeds limit"
         )));
@@ -133,8 +143,8 @@ pub fn decompress_lzhuf_compat(data: &[u8]) -> Result<Vec<u8>, B2fError> {
 
     let le_len = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
     let be_len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-    let le_in_range = le_len <= LZHUF_MAX_UNCOMPRESSED;
-    let be_in_range = be_len <= LZHUF_MAX_UNCOMPRESSED;
+    let le_in_range = le_len <= MAX_UNCOMPRESSED;
+    let be_in_range = be_len <= MAX_UNCOMPRESSED;
 
     let try_le_first = match (le_in_range, be_in_range) {
         (true, false) => true,
