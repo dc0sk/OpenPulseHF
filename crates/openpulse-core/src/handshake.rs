@@ -21,6 +21,8 @@ use crate::trust::{
 pub enum HandshakeError {
     #[error("invalid Ed25519 signature")]
     InvalidSignature,
+    #[error("frame public key does not match the trusted key for this station")]
+    PublicKeyMismatch,
     #[error("session ID mismatch: expected {expected}, got {got}")]
     SessionIdMismatch { expected: String, got: String },
     #[error("trust evaluation failed: {0:?}")]
@@ -543,6 +545,11 @@ pub fn verify_conreq(
         return Err(HandshakeError::InvalidSignature);
     }
 
+    // Bind the in-frame key to the trusted key for this station (mirrors `verify_pq_conreq`). The signature
+    // above only proves possession of the *frame's own* key; without this bind, an attacker self-signs a
+    // CONREQ claiming a trusted callsign with their own key and is classified at that callsign's trust level.
+    bind_frame_key(trust_store, &req.station_id, &req.pubkey)?;
+
     let key_trust = trust_store.trust_level(&req.station_id);
     let cert_source = cert_source_for_trust(key_trust);
 
@@ -556,6 +563,25 @@ pub fn verify_conreq(
     )?;
 
     Ok(decision)
+}
+
+/// Require the frame's public key to equal the trust-store key bound to `station_id`, if any. An unknown
+/// station has no stored key, so it proceeds at `Unknown` trust (over-air TOFU) — the bind only rejects a
+/// frame that *claims a trusted callsign* under a key the operator did not trust for it.
+fn bind_frame_key(
+    trust_store: &dyn TrustStore,
+    station_id: &str,
+    frame_pubkey: &[u8],
+) -> Result<(), HandshakeError> {
+    if let Some(stored) = trust_store.pubkey_for(station_id) {
+        let frame_key: [u8; 32] = frame_pubkey
+            .try_into()
+            .map_err(|_| HandshakeError::InvalidSignature)?;
+        if frame_key != stored {
+            return Err(HandshakeError::PublicKeyMismatch);
+        }
+    }
+    Ok(())
 }
 
 /// Verify a received CONACK and evaluate trust.
@@ -598,6 +624,9 @@ pub fn verify_conack(
     if !verify_ed25519(&ack.pubkey, &canonical, &ack.signature) {
         return Err(HandshakeError::InvalidSignature);
     }
+
+    // Bind the in-frame key to the trusted key for this station (see `verify_conreq`).
+    bind_frame_key(trust_store, &ack.station_id, &ack.pubkey)?;
 
     let key_trust = trust_store.trust_level(&ack.station_id);
     let cert_source = cert_source_for_trust(key_trust);

@@ -504,3 +504,60 @@ fn unadvertised_conreq_stays_signature_compatible_with_legacy() {
         "empty-profile frame must sign identically to a legacy frame"
     );
 }
+
+// ------------------------------------------------------------------
+// Impersonation: trusted callsign asserted with an untrusted key (audit F1)
+// ------------------------------------------------------------------
+
+#[test]
+fn conreq_rejects_impersonation_wrong_key_for_trusted_callsign() {
+    // Attacker self-signs with their OWN key (seed 2) but claims the trusted callsign W1AW,
+    // whose trusted key is seed 1. The signature is self-consistent, so only the key-binding
+    // check (audit F1) can catch it.
+    let req = ConReq::create(
+        "W1AW",
+        &make_seed(2),
+        vec![SigningMode::Normal],
+        "sess-imp",
+        vec![],
+        vec![],
+    )
+    .unwrap();
+    let mut store = InMemoryTrustStore::new();
+    store.add_trusted("W1AW", pubkey_for(1));
+
+    let result = verify_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Normal);
+    assert!(
+        matches!(result, Err(HandshakeError::PublicKeyMismatch)),
+        "a self-signed CONREQ claiming a trusted callsign with the wrong key must be rejected, got {result:?}"
+    );
+}
+
+#[test]
+fn conack_rejects_impersonation_wrong_key_for_trusted_callsign() {
+    let ack = ConAck::create(
+        "W1AW",
+        &make_seed(2), // attacker's key
+        SigningMode::Normal,
+        "sess-imp",
+        CompressionAlgorithm::None,
+        FecMode::None,
+    )
+    .unwrap();
+    let mut store = InMemoryTrustStore::new();
+    store.add_trusted("W1AW", pubkey_for(1)); // trusted key differs
+
+    let result = verify_conack(
+        &ack,
+        "sess-imp",
+        &[],
+        &[],
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+    );
+    assert!(
+        matches!(result, Err(HandshakeError::PublicKeyMismatch)),
+        "a self-signed CONACK claiming a trusted callsign with the wrong key must be rejected, got {result:?}"
+    );
+}

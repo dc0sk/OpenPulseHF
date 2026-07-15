@@ -5486,3 +5486,30 @@ and the actually-observed results per change.
   still passes; bpsk_hardening (18) / fec_loopback (12) / channel_loopback (32) green.
 - **Test results:** full `cargo test --workspace --no-default-features` now 0 failures (was 1); fmt +
   clippy clean; benchmark gate `true` (10/10, mean_transitions 5.1).
+
+## 2026-07-15 — fix(handshake): bind frame key to trusted key; dialed-peer CONACK check; fail-closed trust load
+
+- **Requirement/change:** adversarial audit of the signed RF handshake / session / trust subsystem
+  (`docs/dev/reviews/2026-07-15-handshake-trust-audit.md`) found three verified breaks.
+- **F1 [CRITICAL]:** classical `verify_conreq`/`verify_conack` verified the Ed25519 signature against the
+  frame's own `pubkey` and consulted `trust_level(station_id)` but never bound the frame key to the
+  trust store's key for that station → any station could impersonate any trusted callsign at Verified/Full
+  trust with its own key, defeating the file-transfer signature gate. The PQ path already bound the key.
+- **F2 [HIGH]:** the initiator gated an inbound CONACK on the (cleartext, guessable) session id only, not
+  the dialed callsign → an attacker could race a self-signed CONACK and be recorded as the dialed peer.
+- **T4 [LOW-MED]:** a configured trust store that failed to load silently started empty, dropping revocations.
+- **Design decision:** mirror the PQ path's binding in the classical path (`bind_frame_key`, new
+  `HandshakeError::PublicKeyMismatch`); compare `ack.station_id` to `pending.peer_callsign` before
+  recording; fail closed on a trust-store load **error** (missing/empty path stays empty-ok). Broader
+  enforcement gaps (handshake gates no non-filexfer RF action; relay/QSY/OTA act on unauthenticated
+  traffic when opt-in features are enabled) are architectural and documented in the review, not patched here.
+- **Implementation:** `crates/openpulse-core/src/handshake.rs` (`bind_frame_key`, `PublicKeyMismatch`,
+  calls in `verify_conreq`/`verify_conack`); `crates/openpulse-daemon/src/lib.rs`
+  (`handle_inbound_conack` dialed-peer check); `crates/openpulse-daemon/src/server.rs` (trust-store
+  load fails closed on error).
+- **Tests:** `crates/openpulse-core/tests/handshake_integration.rs`
+  (`conreq_rejects_impersonation_wrong_key_for_trusted_callsign`,
+  `conack_rejects_impersonation_wrong_key_for_trusted_callsign`);
+  `crates/openpulse-daemon/src/lib.rs` (`conack_from_undialed_station_is_ignored`).
+- **Test results:** core handshake_integration 22/22; daemon lib 117/117; full
+  `cargo test --workspace --no-default-features` pending final gate below.

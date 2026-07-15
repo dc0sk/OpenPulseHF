@@ -533,6 +533,25 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
         }
     };
 
+    // A configured trust store carries revocations; a load *error* (unreadable/malformed) must fail
+    // closed rather than silently start empty and re-admit revoked keys. A missing path is empty-ok.
+    let trust_store = if !cfg.trust.store_path.is_empty() {
+        match load_trust_store_from_file(std::path::Path::new(&cfg.trust.store_path)) {
+            Ok(store) => {
+                tracing::info!(path = %cfg.trust.store_path, "trust store loaded");
+                store
+            }
+            Err(e) => {
+                return Err(format!(
+                    "trust store at {} failed to load; refusing to start with an empty store that would drop revocations — fix [trust] store_path or the file: {e}",
+                    cfg.trust.store_path
+                ));
+            }
+        }
+    } else {
+        Default::default()
+    };
+
     let mut runtime_state = RuntimeControlState {
         repeater_enabled: cfg.repeater.enabled,
         repeater: Some(repeater),
@@ -551,24 +570,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
         qsy_scan_dwell_ms: cfg.qsy.scan_dwell_ms,
         qsy_policy,
         relay_forwarder,
-        trust_store: if !cfg.trust.store_path.is_empty() {
-            match load_trust_store_from_file(std::path::Path::new(&cfg.trust.store_path)) {
-                Ok(store) => {
-                    tracing::info!(path = %cfg.trust.store_path, "trust store loaded");
-                    store
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        path = %cfg.trust.store_path,
-                        error = %e,
-                        "failed to load trust store; starting with empty store"
-                    );
-                    Default::default()
-                }
-            }
-        } else {
-            Default::default()
-        },
+        trust_store,
         dcd_squelch_default: cfg.modem.dcd_squelch,
         dcd_squelch_bands: cfg.modem.dcd_squelch_bands.clone(),
         local_ota_ladder: ota_ladder_identity,
