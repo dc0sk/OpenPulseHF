@@ -7,6 +7,19 @@ last_updated: 2026-07-15
 
 # Release Notes
 
+## v0.7.3 — 2026-07-15
+
+The final hardening patch for the **MFSK16 weak-signal sub-floor ARQ rung** — the last open finding from the
+adversarial audit. **No breaking changes.** With this release, every finding from the audit is addressed.
+
+- **A weak-rung acknowledgement now reaches a peer that's running a different rate profile.** When a station
+  fades onto the MFSK16 sub-floor rung it answers with a robust three-copy acknowledgement — but a peer
+  whose configured profile doesn't include that rung couldn't decode it, so its acknowledgement channel went
+  silent and its messages stalled. The acknowledgement now **leads with a short standard-waveform copy** that
+  any peer can hear, then sends the three-copy weak-signal version for a genuinely deep fade. The receiver
+  finds and decodes the leading copy out of the combined transmission automatically. This closes the last
+  edge case in the sub-floor rung's acknowledgement path.
+
 ## v0.7.2 — 2026-07-15
 
 A hardening patch for the **MFSK16 weak-signal sub-floor ARQ rung** — the robustness findings that the
