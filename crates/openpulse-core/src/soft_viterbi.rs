@@ -141,12 +141,16 @@ impl SoftViterbiCodec {
             ));
         }
         let orig_len = bits_be_to_u32(&data_bits[..32]) as usize;
-        let want_bits = 32 + orig_len * 8;
-        if data_bits.len() < want_bits {
-            return Err(ModemError::Fec(format!(
-                "decoded length prefix ({orig_len}) exceeds available bits"
-            )));
-        }
+        // Checked math (audit RX-3): `orig_len` is attacker-controlled, so `32 + orig_len * 8` can wrap
+        // on a 32-bit/wasm `usize` and make the `<` guard pass, panicking the slice.
+        let want_bits = match orig_len.checked_mul(8).and_then(|b| b.checked_add(32)) {
+            Some(n) if n <= data_bits.len() => n,
+            _ => {
+                return Err(ModemError::Fec(format!(
+                    "decoded length prefix ({orig_len}) exceeds available bits"
+                )));
+            }
+        };
         Ok(pack_lsb(&data_bits[32..want_bits]))
     }
 }

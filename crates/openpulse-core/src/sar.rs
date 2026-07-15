@@ -32,6 +32,11 @@ pub const SAR_MAX_FRAGMENT_DATA: usize = 255 - SAR_HEADER_SIZE;
 /// Maximum total data bytes encodable in a single SAR segment.
 pub const SAR_MAX_SEGMENT_DATA: usize = (u8::MAX as usize) * SAR_MAX_FRAGMENT_DATA;
 
+/// Maximum number of concurrently-pending (incomplete) reassembly segments a [`SarReassembler`] holds
+/// before rejecting new ones — bounds memory against a sender that floods distinct, never-completed
+/// segment ids (audit RX-4). Well above any legitimate in-flight transfer.
+pub const MAX_PENDING_SLOTS: usize = 4096;
+
 // ── Encoder ───────────────────────────────────────────────────────────────────
 
 /// Encode `data` into SAR fragment payloads ready to be placed into frames.
@@ -135,6 +140,15 @@ impl SarReassembler {
         }
 
         let key = (session_id.to_string(), segment_id);
+        // Bound the number of concurrently-pending (incomplete) reassembly slots (audit RX-4). Completed
+        // slots are removed immediately, so this only limits *incomplete* segments — a hostile sender
+        // rotating segment ids, each one fragment short, would otherwise accumulate memory up to the u16
+        // key space. Far above any legitimate in-flight transfer.
+        if !self.slots.contains_key(&key) && self.slots.len() >= MAX_PENDING_SLOTS {
+            return Err(SarError::TooManyPendingSegments {
+                max: MAX_PENDING_SLOTS,
+            });
+        }
         let slot = self.slots.entry(key).or_insert_with(|| ReassemblySlot {
             total: fragment_total,
             fragments: vec![None; fragment_total as usize],
@@ -211,6 +225,28 @@ mod tests {
         assert_eq!(payloads[0][3], 2); // total
         assert_eq!(payloads[0][4..].len(), SAR_MAX_FRAGMENT_DATA);
         assert_eq!(payloads[1][4..].len(), SAR_MAX_FRAGMENT_DATA);
+    }
+
+    #[test]
+    fn ingest_caps_pending_incomplete_segments() {
+        // Audit RX-4: a sender flooding distinct segment ids, each one fragment short (so the slot never
+        // completes), must be bounded. Each fragment is [seg_hi, seg_lo, index=0, total=2, data].
+        let mut r = SarReassembler::new(Duration::from_secs(60));
+        for seg in 0..MAX_PENDING_SLOTS as u16 {
+            let frag = [(seg >> 8) as u8, seg as u8, 0, 2, 0xAA];
+            assert!(r.ingest("flood", &frag).unwrap().is_none());
+        }
+        assert_eq!(r.pending_count(), MAX_PENDING_SLOTS);
+        // One more distinct, incomplete segment is rejected rather than growing the table further.
+        let over = MAX_PENDING_SLOTS as u16; // a segment id not yet seen
+        let frag = [(over >> 8) as u8, over as u8, 0, 2, 0xAA];
+        assert!(matches!(
+            r.ingest("flood", &frag),
+            Err(SarError::TooManyPendingSegments { .. })
+        ));
+        // A fragment for an *existing* pending slot is still accepted (completes it, freeing the slot).
+        let complete = [0, 0, 1, 2, 0xBB]; // segment 0, fragment index 1 of 2
+        assert!(r.ingest("flood", &complete).unwrap().is_some());
     }
 
     #[test]

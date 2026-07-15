@@ -5638,3 +5638,23 @@ and the actually-observed results per change.
 - **Tests:** `allow_list_forwards_only_listed_originators` (relay_integration — listed forwards,
   unlisted rejected, empty unrestricted); config default asserts `allow_list.is_empty()`.
 - **Test results:** relay_integration 13, config 19 green; full workspace gate below.
+
+## 2026-07-15 — fix: RX decode-path DoS hardening (RS panic, length-prefix overflow, SAR cap)
+
+- **Requirement/change:** two-finder adversarial sweep of the RX decode path
+  (`docs/dev/reviews/2026-07-15-rx-decode-audit.md`) — a panic/OOM on untrusted RF-derived bytes is a
+  remote DoS. Both finders converged on RX-1.
+- **RX-1 [CRITICAL]:** `ShortFecCodec::decode` had no upper-length bound; the pinned reed-solomon 0.2.1
+  decoder (fixed [u8;256] buffer) PANICS on input ≥256 B, reachable from decode_fsk4_ack /
+  receive_with_short_fec_data on attacker-length-controlled demod output. Fix = reject len>255.
+- **RX-2 [HIGH]:** FecCodec::decode `PREFIX_LEN + orig_len` unchecked add → 32-bit/wasm overflow →
+  slice panic (systematic prefix = attacker-controlled). Fix = checked_add.
+- **RX-3 [HIGH]:** ConvCodec + SoftViterbiCodec `32 + orig_len*8` unchecked multiply → 32-bit overflow.
+  Fix = checked_mul/checked_add.
+- **RX-4 [MEDIUM]:** SarReassembler unbounded pending (incomplete) slots. Fix = MAX_PENDING_SLOTS=4096 +
+  SarError::TooManyPendingSegments.
+- **Implementation:** `crates/openpulse-core/src/{fec,conv,soft_viterbi,sar,error}.rs`.
+- **Tests:** `short_fec_decode_rejects_oversized_input_without_panicking`,
+  `ingest_caps_pending_incomplete_segments`. (RX-2/RX-3 are 32-bit-target manifestations; the checked-math
+  guards are verified by inspection and don't change 64-bit behavior.)
+- **Test results:** core suite green (18 groups); full workspace gate below.

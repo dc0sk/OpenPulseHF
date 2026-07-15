@@ -84,6 +84,9 @@ pub enum SarError {
 
     #[error("data too large: {len} bytes exceeds max {max} bytes for SAR segmentation")]
     DataTooLarge { len: usize, max: usize },
+
+    #[error("too many pending reassembly segments (max {max})")]
+    TooManyPendingSegments { max: usize },
 }
 
 /// Errors produced by the audio layer.
