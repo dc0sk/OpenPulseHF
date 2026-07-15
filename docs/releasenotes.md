@@ -7,6 +7,27 @@ last_updated: 2026-07-15
 
 # Release Notes
 
+## v0.7.2 — 2026-07-15
+
+A hardening patch for the **MFSK16 weak-signal sub-floor ARQ rung** — the robustness findings that the
+v0.7.1 adversarial audit had deferred. **No breaking changes.**
+
+- **The station can't get stuck babbling on the acknowledgement channel.** Previously the receiver answered
+  *every* burst it couldn't decode with a negative acknowledgement; two adaptive stations, or repetitive
+  interference on the frequency, could keep each other transmitting those replies indefinitely — a
+  regulatory concern. There's now a budget: after a few consecutive negative acknowledgements with no real
+  frame in between, the station goes quiet (and resumes the moment a frame decodes). A genuine retransmission
+  still gets through, because the sender retries on its own timeout regardless.
+- **An acknowledgement from a different station pair on the same frequency is no longer mistaken for yours.**
+  During the weak-rung acknowledgement listen (up to ~9 seconds) another pair's valid acknowledgement could
+  be adopted, silently marking your message delivered when your peer never received it. The sender now only
+  accepts an acknowledgement addressed to the peer it's talking to.
+- If you run the ARDOP TNC with an adaptive profile that includes the MFSK16 sub-floor rung, it now warns at
+  startup that the rung is a feature of the background daemon and isn't supported on the ARDOP adaptive path.
+
+One rare mixed-profile edge case (a station on a profile *with* the sub-floor rung talking, without a
+completed handshake, to one *without* it) remains documented for a future fix.
+
 ## v0.7.1 — 2026-07-15
 
 A correctness patch for the **MFSK16 weak-signal sub-floor ARQ rung** introduced in v0.7.0. **No breaking
