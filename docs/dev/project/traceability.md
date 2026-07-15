@@ -5658,3 +5658,22 @@ and the actually-observed results per change.
   `ingest_caps_pending_incomplete_segments`. (RX-2/RX-3 are 32-bit-target manifestations; the checked-math
   guards are verified by inspection and don't change 64-bit behavior.)
 - **Test results:** core suite green (18 groups); full workspace gate below.
+
+## 2026-07-15 — feat(mesh): SAR-fragment oversized envelopes (foundation for envelope authentication)
+
+- **Requirement/change:** prerequisite for E3 (envelope authentication). A 64-byte Ed25519 signature
+  grows the `WireEnvelope` overhead from 120 → 168 B, and the mesh sends peer-query / route-discovery
+  responses as a single ≤255-byte modem frame (the `Frame` payload length is a `u8`). A 1-result signed
+  response is 257 B and won't fit — the mesh must fragment/reassemble control responses > one frame.
+- **Design decision:** SAR at the mesh envelope seam, with a single-frame fast path so current (small,
+  unsigned) traffic is unchanged. TX: `MeshDaemon::transmit_bytes` sends envelopes ≤255 B as one frame,
+  else `sar_encode`s them across frames. RX: `step` tries `WireEnvelope::decode` first (the `OPHF`-magic
+  fast path); a frame that isn't a whole envelope is fed to a `SarReassembler` and dispatched once
+  complete. A valid SAR fragment can't collide with `OPHF` magic (it would require `frag_index ≥
+  frag_total`), so the disambiguation is safe.
+- **Implementation:** `crates/openpulse-mesh/src/lib.rs` (`transmit_bytes`, `rx_sar`/`tx_segment_id`
+  fields, `step` reassembly; all 11 `engine.transmit` sites routed through `transmit_bytes`).
+- **Tests:** `oversized_envelope_survives_sar_fragmentation` (a >255 B envelope fragments and B
+  reassembles + delivers it via the loopback frame queue); the 12 existing mesh loopback tests pass
+  unchanged (fast path).
+- **Test results:** mesh 13/13; full workspace gate below. No wire-format change in this PR.

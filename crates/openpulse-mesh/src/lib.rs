@@ -5,6 +5,8 @@
 
 pub mod beacon;
 
+use std::time::Duration;
+
 use openpulse_core::peer_cache::{PeerCache, PeerRecord, TrustFilter, TrustLevel};
 use openpulse_core::peer_descriptor::PeerDescriptor;
 use openpulse_core::query_propagation::{QueryEvent, QueryForwarder};
@@ -15,6 +17,7 @@ use openpulse_core::route_discovery::{
     accumulate_forwarder, apply_route_reject, apply_route_update, RouteOriginator, RouteResponder,
     RouteTable,
 };
+use openpulse_core::sar::{sar_encode, SarReassembler};
 use openpulse_core::wire_query::{
     BroadcastFrame, PeerQueryRequest, PeerQueryResponse, PeerQueryResult, RelayRouteReject,
     RelayRouteUpdate, RouteDiscoveryRequest, RouteDiscoveryResponse, RouteHop, WireEnvelope,
@@ -120,8 +123,17 @@ pub struct MeshDaemon {
     /// before being passed to the forwarders, preventing senders from bypassing
     /// the node's configured relay policy.
     hop_limit: u8,
+    /// Reassembles inbound envelopes that were SAR-fragmented because they exceed one modem frame.
+    rx_sar: SarReassembler,
+    /// Monotonic SAR segment id for the next oversized envelope this node originates/forwards.
+    tx_segment_id: u16,
     events: Vec<MeshEvent>,
 }
+
+/// SAR session key for reassembling fragmented mesh envelopes.
+const MESH_SAR_SESSION: &str = "mesh-env";
+/// Largest single-frame envelope (a `Frame` payload length is a `u8`). Anything larger is SAR-fragmented.
+const MESH_MAX_SINGLE_FRAME: usize = 255;
 
 impl MeshDaemon {
     /// Create a new daemon.
@@ -191,14 +203,35 @@ impl MeshDaemon {
             route_nonce_counter: 0,
             relay_trust_filter,
             hop_limit: max_hops,
+            rx_sar: SarReassembler::new(Duration::from_secs(30)),
+            tx_segment_id: 0,
             events: Vec::new(),
         }
+    }
+
+    /// Transmit an already-encoded envelope. If it fits one modem frame it goes out as-is (the common
+    /// case); otherwise it is SAR-fragmented across frames, which a peer reassembles in [`step`]. A
+    /// signed or multi-result control response exceeds one 255-byte frame, so this keeps such responses
+    /// deliverable rather than silently failing to transmit.
+    fn transmit_bytes(&mut self, bytes: &[u8]) -> Result<(), MeshError> {
+        if bytes.len() <= MESH_MAX_SINGLE_FRAME {
+            self.engine.transmit(bytes, &self.mode, None)?;
+            return Ok(());
+        }
+        let segment_id = self.tx_segment_id;
+        self.tx_segment_id = self.tx_segment_id.wrapping_add(1);
+        for frag in sar_encode(segment_id, bytes)
+            .map_err(|e| openpulse_core::error::ModemError::Fec(format!("mesh SAR encode: {e}")))?
+        {
+            self.engine.transmit(&frag, &self.mode, None)?;
+        }
+        Ok(())
     }
 
     /// Transmit a relay envelope (called by the originating node).
     pub fn send_relay(&mut self, envelope: WireEnvelope) -> Result<(), MeshError> {
         let bytes = envelope.encode()?;
-        self.engine.transmit(&bytes, &self.mode, None)?;
+        self.transmit_bytes(&bytes)?;
         Ok(())
     }
 
@@ -219,7 +252,7 @@ impl MeshDaemon {
             now_ms,
         )?;
         let bytes = envelope.encode()?;
-        self.engine.transmit(&bytes, &self.mode, None)?;
+        self.transmit_bytes(&bytes)?;
         Ok(query_id)
     }
 
@@ -276,7 +309,7 @@ impl MeshDaemon {
             auth_tag: [0u8; 16],
         };
         let bytes = envelope.encode()?;
-        self.engine.transmit(&bytes, &self.mode, None)?;
+        self.transmit_bytes(&bytes)?;
         self.events.push(MeshEvent::RouteUsed {
             destination,
             session_id,
@@ -363,7 +396,7 @@ impl MeshDaemon {
             auth_tag: [0u8; 16],
         };
         let bytes = envelope.encode()?;
-        self.engine.transmit(&bytes, &self.mode, None)?;
+        self.transmit_bytes(&bytes)?;
         Ok(())
     }
 
@@ -380,9 +413,20 @@ impl MeshDaemon {
     pub fn step(&mut self, now_ms: u64) -> Vec<MeshEvent> {
         if let Ok(bytes) = self.engine.receive(&self.mode, None) {
             if !bytes.is_empty() {
-                if let Ok(envelope) = WireEnvelope::decode(&bytes) {
-                    self.dispatch(envelope, now_ms);
+                match WireEnvelope::decode(&bytes) {
+                    // A whole envelope in one frame (the common, small case).
+                    Ok(envelope) => self.dispatch(envelope, now_ms),
+                    // Not a whole envelope (no `OPHF` magic) — treat it as a SAR fragment of an
+                    // oversized envelope and dispatch once every fragment has arrived.
+                    Err(_) => {
+                        if let Ok(Some(full)) = self.rx_sar.ingest(MESH_SAR_SESSION, &bytes) {
+                            if let Ok(envelope) = WireEnvelope::decode(&full) {
+                                self.dispatch(envelope, now_ms);
+                            }
+                        }
+                    }
                 }
+                self.rx_sar.expire();
             }
         }
 
@@ -391,7 +435,7 @@ impl MeshDaemon {
                 self.beacon
                     .next_beacon(now_ms, self.local_peer_id, self.hop_limit);
             if let Ok(bytes) = beacon_env.encode() {
-                if self.engine.transmit(&bytes, &self.mode, None).is_ok() {
+                if self.transmit_bytes(&bytes).is_ok() {
                     self.events.push(MeshEvent::BeaconSent { query_id });
                 } else {
                     tracing::warn!(query_id, "beacon transmit failed");
@@ -445,7 +489,7 @@ impl MeshDaemon {
                         let tx_ok = forwarded
                             .encode()
                             .ok()
-                            .and_then(|b| self.engine.transmit(&b, &self.mode, None).ok())
+                            .and_then(|b| self.transmit_bytes(&b).ok())
                             .is_some();
                         let relay_events = self.relay_forwarder.drain_events();
                         if tx_ok {
@@ -532,7 +576,7 @@ impl MeshDaemon {
                 let tx_ok = forwarded
                     .encode()
                     .ok()
-                    .and_then(|b| self.engine.transmit(&b, &self.mode, None).ok())
+                    .and_then(|b| self.transmit_bytes(&b).ok())
                     .is_some();
                 let query_events = self.query_forwarder.drain_events();
                 if tx_ok {
@@ -585,7 +629,7 @@ impl MeshDaemon {
         let sent = reply
             .encode()
             .ok()
-            .and_then(|b| self.engine.transmit(&b, &self.mode, None).ok())
+            .and_then(|b| self.transmit_bytes(&b).ok())
             .is_some();
         if sent {
             self.events.push(MeshEvent::RouteAnswered {
@@ -686,7 +730,7 @@ impl MeshDaemon {
             ..envelope.clone()
         };
         if let Ok(bytes) = relay_envelope.encode() {
-            if self.engine.transmit(&bytes, &self.mode, None).is_err() {
+            if self.transmit_bytes(&bytes).is_err() {
                 tracing::warn!("broadcast re-transmit failed");
             }
         }
@@ -780,7 +824,7 @@ impl MeshDaemon {
                 auth_tag: [0u8; 16],
             };
             if let Ok(bytes) = resp_env.encode() {
-                if self.engine.transmit(&bytes, &self.mode, None).is_ok() {
+                if self.transmit_bytes(&bytes).is_ok() {
                     self.events.push(MeshEvent::PeerQueried {
                         query_id: req.query_id,
                         result_count,
@@ -800,7 +844,7 @@ impl MeshDaemon {
                 let tx_ok = forwarded
                     .encode()
                     .ok()
-                    .and_then(|b| self.engine.transmit(&b, &self.mode, None).ok())
+                    .and_then(|b| self.transmit_bytes(&b).ok())
                     .is_some();
                 let query_events = self.query_forwarder.drain_events();
                 if tx_ok {
