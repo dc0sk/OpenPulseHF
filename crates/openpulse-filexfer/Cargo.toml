@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 openpulse-core = { workspace = true }
 thiserror = { workspace = true }
+ed25519-dalek = { version = "2.0" }
 
 [dev-dependencies]
 ed25519-dalek = { version = "2.0" }

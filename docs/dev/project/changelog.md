@@ -10,6 +10,17 @@ last_updated: 2026-07-15
 > Phase/roadmap history lives in [roadmap.md](roadmap.md); this file tracks
 > user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
 
+## Unreleased
+
+### Security fixes
+
+- **A signed file offer's metadata is now covered by its signature (audit F-2).** Previously only the
+  content hash, size, and sender were signed; the filename, MIME hint, and block geometry rode along
+  unauthenticated, so an on-path attacker could replay a legitimately-signed offer with a spoofed filename
+  while it still showed as signature-valid. The offer now carries its own signature over the whole offer,
+  so tampering any field invalidates it. (File content was already protected by the signed hash.) This is a
+  wire-format change to what the offer signature covers; direct file transfer is off by default.
+
 ## v0.8.0 — 2026-07-15
 
 Security release folding in three back-to-back adversarial audits of the handshake/trust, session, and
