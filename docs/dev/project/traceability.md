@@ -5576,3 +5576,26 @@ and the actually-observed results per change.
   `peer_query_response_rejects_oversized_result_count_without_over_allocating` (F-4).
 - **Test results:** filexfer 24, modem filexfer_loopback 2, daemon 123 lib + twin_daemon_bridge 4, core
   wire_query 10, config 19 — all green; full workspace gate below.
+
+## 2026-07-15 — fix(filexfer): F-2 — sign the whole file offer, not just the content hash
+
+- **Requirement/change:** audit finding F-2 (`docs/dev/reviews/2026-07-15-filexfer-relay-seams-audit.md`),
+  deferred from PR #898: the offer's Ed25519 signature covered only the three `TransferManifest` fields
+  (payload_hash/payload_size/sender_id), leaving name/mime/block_size/block_count/transfer_id
+  unauthenticated → an on-path attacker could replay a signed offer with a spoofed filename under a
+  `signature_valid: true` badge (content stays protected by the signed hash; metadata did not).
+- **Design decision:** do NOT extend the general core `TransferManifest` (also used by CLI session
+  teardown) with file-transfer fields. Instead `FileOffer` carries its own signature over its whole body
+  — every field except the trailing signature, produced by `encode_signed_fields` which `encode_body`
+  also uses so the signed form and the wire form cannot drift. `from_manifest` now takes the signing seed
+  and signs the full offer; `verify_signature` verifies over the same bytes; `reassemble_verify_write`
+  uses `offer.verify_signature` + the existing payload-hash check. Wire-format change (what the signature
+  covers), acceptable pre-1.0 with file transfer off by default.
+- **Implementation:** `crates/openpulse-filexfer/src/offer.rs` (signing rewrite, `encode_signed_fields`,
+  `signing_bytes`, `verify_signature`; `to_manifest` removed), `crates/openpulse-filexfer/Cargo.toml`
+  (ed25519-dalek dev-dep → dep), `crates/openpulse-daemon/src/filexfer.rs` (send_file seed +
+  reassemble_verify_write), all `from_manifest` call sites (+seed).
+- **Tests:** `offer_signature_verifies_and_tamper_is_caught` extended (spoofed filename + tampered geometry
+  now fail); filexfer crate 28, modem filexfer_loopback 2, daemon filexfer 13 + twin_daemon_bridge 4
+  (`a_file_crosses`) green.
+- **Test results:** full workspace gate below.

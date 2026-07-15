@@ -1,7 +1,8 @@
 //! `FileOffer`: transfer metadata with the sender's signed manifest embedded inline, plus the pure
 //! accept/reject policy the receiver evaluates before a single data byte is accepted.
 
-use openpulse_core::manifest::{verify_manifest, ManifestError, TransferManifest};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use openpulse_core::manifest::{ManifestError, TransferManifest};
 
 use crate::error::FxError;
 use crate::wire::{write_string, Reader, Reason};
@@ -12,9 +13,9 @@ const SENDER_ID_MAX: usize = 16;
 const NAME_MAX: usize = 48;
 const MIME_MAX: usize = 24;
 
-/// A file-transfer offer. `sha256`/`file_size`/`sender_id`/`signature` are exactly the four
-/// [`TransferManifest`] fields, so the receiver reconstructs the manifest and verifies it with the
-/// existing crypto — no new signature code.
+/// A file-transfer offer. The Ed25519 `signature` covers the **whole** offer body (content hash plus
+/// all metadata — name, mime, block geometry, transfer id), so an on-path attacker cannot replay a
+/// signed offer with a spoofed filename or geometry under a valid-signature badge (audit F-2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileOffer {
     pub transfer_id: u32,
@@ -34,29 +35,31 @@ pub struct FileOffer {
     pub name: String,
     /// MIME type hint (advisory).
     pub mime: String,
-    /// Ed25519 signature over the manifest body (= manifest `signature`).
+    /// Ed25519 signature over the full offer body (every field above; see [`signing_bytes`]).
     pub signature: [u8; 64],
 }
 
 impl FileOffer {
-    /// Build a signed offer from a manifest the sender already produced with `TransferManifest::sign`.
+    /// Build an offer from a manifest (source of the content hash / size / sender) plus the transfer
+    /// metadata, and sign the **whole** offer body with `signing_key_seed`. The manifest's own
+    /// signature is not reused — the offer carries its own signature covering the metadata too.
     ///
-    /// Returns `None` if the manifest signature isn't the expected 64 bytes or `block_size` is out of
-    /// range — both caller bugs, surfaced rather than panicked.
+    /// Returns `None` if `block_size` is out of range or the file needs more than [`crate::block_count`]
+    /// permits.
     pub fn from_manifest(
         transfer_id: u32,
         manifest: &TransferManifest,
         name: &str,
         mime: &str,
         block_size: u32,
+        signing_key_seed: &[u8; 32],
     ) -> Option<Self> {
         if !(MIN_BLOCK_SIZE..=MAX_BLOCK_SIZE).contains(&block_size) {
             return None;
         }
         let sha256: [u8; 32] = manifest.payload_hash.as_slice().try_into().ok()?;
-        let signature: [u8; 64] = manifest.signature.as_slice().try_into().ok()?;
         let block_count = crate::block_count(manifest.payload_size, block_size)?;
-        Some(Self {
+        let mut offer = Self {
             transfer_id,
             flags: 0,
             file_size: manifest.payload_size,
@@ -66,26 +69,32 @@ impl FileOffer {
             sender_id: manifest.sender_id.clone(),
             name: name.to_string(),
             mime: mime.to_string(),
-            signature,
-        })
+            signature: [0u8; 64],
+        };
+        let sk = SigningKey::from_bytes(signing_key_seed);
+        offer.signature = sk.sign(&offer.signing_bytes()).to_bytes();
+        Some(offer)
     }
 
-    /// Reconstruct the [`TransferManifest`] the offer fields encode.
-    pub fn to_manifest(&self) -> TransferManifest {
-        TransferManifest {
-            payload_hash: self.sha256.to_vec(),
-            payload_size: self.file_size,
-            sender_id: self.sender_id.clone(),
-            signature: self.signature.to_vec(),
-        }
+    /// The canonical bytes the signature covers: every offer field except the signature itself. Binds
+    /// the sender to the content hash **and** the metadata (name/mime/geometry/transfer id).
+    fn signing_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        self.encode_signed_fields(&mut out);
+        out
     }
 
-    /// Verify the embedded manifest signature against the peer's Ed25519 public key.
+    /// Verify the offer signature (over the full body) against the peer's Ed25519 public key.
     pub fn verify_signature(&self, peer_pubkey: &[u8; 32]) -> Result<(), ManifestError> {
-        verify_manifest(&self.to_manifest(), peer_pubkey)
+        let key = VerifyingKey::from_bytes(peer_pubkey).map_err(|_| ManifestError::InvalidKey)?;
+        let sig = Signature::from_bytes(&self.signature);
+        key.verify(&self.signing_bytes(), &sig)
+            .map_err(|_| ManifestError::InvalidSignature)
     }
 
-    pub(crate) fn encode_body(&self, out: &mut Vec<u8>) {
+    /// Every field except the trailing signature — the exact prefix the signature covers, reused by
+    /// both [`signing_bytes`] and [`encode_body`] so the signed and wire forms can't drift.
+    fn encode_signed_fields(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.transfer_id.to_be_bytes());
         out.push(self.flags);
         out.extend_from_slice(&self.file_size.to_be_bytes());
@@ -95,6 +104,10 @@ impl FileOffer {
         write_string(out, &self.sender_id, SENDER_ID_MAX);
         write_string(out, &self.name, NAME_MAX);
         write_string(out, &self.mime, MIME_MAX);
+    }
+
+    pub(crate) fn encode_body(&self, out: &mut Vec<u8>) {
+        self.encode_signed_fields(out);
         out.extend_from_slice(&self.signature);
     }
 

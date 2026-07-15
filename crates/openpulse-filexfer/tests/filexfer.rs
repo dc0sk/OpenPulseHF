@@ -29,6 +29,7 @@ fn signed_offer(transfer_id: u32, payload: &[u8], block_size: u32, s: &[u8; 32])
         "report.txt",
         "text/plain",
         block_size,
+        s,
     )
     .expect("build offer")
 }
@@ -136,6 +137,21 @@ fn offer_signature_verifies_and_tamper_is_caught() {
     let mut tampered = offer.clone();
     tampered.sha256[0] ^= 0xFF;
     assert!(tampered.verify_signature(&pubkey(&s)).is_err());
+
+    // Audit F-2: the signature now covers the metadata too — a replayed offer with a spoofed filename
+    // (or mime, or block geometry) no longer verifies, so it can't wear a valid-signature badge.
+    let mut renamed = offer.clone();
+    renamed.name = "totally_legit.exe".into();
+    assert!(
+        renamed.verify_signature(&pubkey(&s)).is_err(),
+        "a spoofed filename must invalidate the offer signature"
+    );
+    let mut regeom = offer.clone();
+    regeom.block_count ^= 1;
+    assert!(
+        regeom.verify_signature(&pubkey(&s)).is_err(),
+        "tampered block geometry must invalidate the offer signature"
+    );
 
     // Wrong peer key → rejected.
     assert!(offer.verify_signature(&pubkey(&seed(4))).is_err());

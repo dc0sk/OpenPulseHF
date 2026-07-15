@@ -18,6 +18,7 @@ fn offer(block_count_hint_bytes: usize, block_size: u32) -> FileOffer {
         "f.bin",
         "application/octet-stream",
         block_size,
+        &seed,
     )
     .unwrap()
 }

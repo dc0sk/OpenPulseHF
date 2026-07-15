@@ -77,7 +77,7 @@ fn single_block_roundtrips_and_verifies() {
     let s = seed(9);
     let file = b"a short compressible file, repeated. ".repeat(3);
     let manifest = TransferManifest::sign(&file, "W1AW", &s).unwrap();
-    let offer = FileOffer::from_manifest(1, &manifest, "f.txt", "text/plain", 1024).unwrap();
+    let offer = FileOffer::from_manifest(1, &manifest, "f.txt", "text/plain", 1024, &s).unwrap();
     assert_eq!(
         offer.block_count,
         block_count(file.len() as u64, 1024).unwrap()

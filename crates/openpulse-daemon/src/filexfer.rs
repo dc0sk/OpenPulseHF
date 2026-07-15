@@ -20,7 +20,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 
 use openpulse_config::FileTransferConfig;
-use openpulse_core::manifest::{verify_manifest, TransferManifest};
+use openpulse_core::manifest::TransferManifest;
 use openpulse_core::sar::sar_encode;
 use openpulse_filexfer::{
     decide, encode_block, sanitize_filename, BlockAssembler, BlockEvent, CompleteStatus, FileOffer,
@@ -386,6 +386,7 @@ pub fn send_file(
         &name,
         "application/octet-stream",
         DEFAULT_BLOCK_SIZE,
+        &rs.station_seed,
     ) {
         Some(o) => o,
         None => return fail("could not build the offer (file too large?)".into()),
@@ -635,17 +636,17 @@ fn reassemble_verify_write(
     if payload.len() as u64 != fx.offer.file_size {
         return (CompleteStatus::SizeMismatch, [0u8; 64]);
     }
-    let manifest = fx.offer.to_manifest();
     let pubkey = fx.peer_pubkey.unwrap_or([0u8; 32]);
 
     // Evaluate the two integrity axes independently so the file is always written with an accurate
     // badge (never silently dropped): the content is intact iff its hash matches the offer's, and it
-    // is *authenticated* iff a verified-peer key also validates the signature over that hash.
+    // is *authenticated* iff a verified-peer key also validates the offer signature (which covers the
+    // content hash and the metadata — audit F-2).
     let hash_ok = {
         use sha2::{Digest, Sha256};
-        Sha256::digest(&payload).as_slice() == manifest.payload_hash.as_slice()
+        Sha256::digest(&payload).as_slice() == fx.offer.sha256.as_slice()
     };
-    let sig_ok = fx.peer_pubkey.is_some() && verify_manifest(&manifest, &pubkey).is_ok();
+    let sig_ok = fx.peer_pubkey.is_some() && fx.offer.verify_signature(&pubkey).is_ok();
     let verified = hash_ok && sig_ok;
     let status = if verified {
         CompleteStatus::VerifiedOk
@@ -1033,6 +1034,7 @@ mod tests {
             "f.bin",
             "application/octet-stream",
             block_size,
+            &seed,
         )
         .unwrap()
     }

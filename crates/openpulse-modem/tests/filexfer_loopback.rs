@@ -57,6 +57,7 @@ fn file_blocks_survive_the_modem_and_verify() {
         "traffic.txt",
         "text/plain",
         block_size,
+        &s,
     )
     .unwrap();
 

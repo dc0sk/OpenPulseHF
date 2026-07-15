@@ -3163,9 +3163,15 @@ mod command_apply_tests {
         let manifest = TransferManifest::sign(&file, "W1AW", &seed).unwrap();
         let transfer_id = 0x0BAD_F00D;
         let block_size = 1024u32;
-        let offer =
-            FileOffer::from_manifest(transfer_id, &manifest, "recv.txt", "text/plain", block_size)
-                .unwrap();
+        let offer = FileOffer::from_manifest(
+            transfer_id,
+            &manifest,
+            "recv.txt",
+            "text/plain",
+            block_size,
+            &seed,
+        )
+        .unwrap();
         assert!(offer.block_count >= 2, "want a multi-block file");
 
         let dir = std::env::temp_dir().join(format!("opfx_recv_{}", std::process::id()));
@@ -3263,7 +3269,8 @@ mod command_apply_tests {
         let file = b"e5 sender-binding payload ".repeat(60).to_vec();
         let manifest = TransferManifest::sign(&file, "W1AW", &w1aw_seed).unwrap();
         let offer =
-            FileOffer::from_manifest(0x0E5, &manifest, "e5.txt", "text/plain", 1024).unwrap();
+            FileOffer::from_manifest(0x0E5, &manifest, "e5.txt", "text/plain", 1024, &w1aw_seed)
+                .unwrap();
 
         let dir = std::env::temp_dir().join(format!("opfx_e5_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

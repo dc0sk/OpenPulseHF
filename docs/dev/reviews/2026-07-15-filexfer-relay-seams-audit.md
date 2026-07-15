@@ -110,13 +110,19 @@ on-air feature, not a string swap. **Fix (proportionate to an audit):** the fiel
 the config schema + template (matching its already-reserved neighbours) and a non-default value logs a
 warning at daemon startup, so the config is honest; wiring the custom-group feature is tracked separately.
 
-## Deferred (larger change — documented)
+## Fixed in a follow-up (post-v0.8.0)
 
-- **F-2 — [MEDIUM] offer metadata is unsigned.** The Ed25519 signature covers only
-  `{payload_hash, payload_size, sender_id}`; `name`/`mime`/`block_size`/`block_count` ride unauthenticated,
-  so an on-path attacker can replay a signed offer with a spoofed filename while the UI still shows
-  `signature_valid: true`. Content is protected (the hash is signed); only metadata spoofs. Closing it
-  means widening the signed `ManifestBody` — a wire-format change — tracked as follow-up.
+- **F-2 — [MEDIUM] offer metadata was unsigned → FIXED.** The offer signature used to cover only the
+  three `TransferManifest` fields (`payload_hash`/`payload_size`/`sender_id`); `name`/`mime`/`block_size`/
+  `block_count`/`transfer_id` rode unauthenticated, so an on-path attacker could replay a signed offer with
+  a spoofed filename while the UI still showed `signature_valid: true`. Rather than pollute the general
+  core `TransferManifest` (also used by CLI session teardown) with file-transfer fields, `FileOffer` now
+  carries its **own** Ed25519 signature over its whole body (every field except the signature — the exact
+  wire prefix, so signed and wire forms can't drift). Tampering the filename, mime, or geometry now
+  invalidates the signature. This is a wire-format change (what the signature covers), acceptable for the
+  next cycle since file transfer is off by default. Tests: `offer_signature_verifies_and_tamper_is_caught`.
+
+## Deferred (larger change — documented)
 - **F-7 — [LOW] selective-retransmit (NACK) path is unreachable in the daemon.** The receiver always
   sends `BlockAck { complete: true }` and never calls `missing_bitmap()`, so a single lost fragment can't
   be recovered by partial retransmission (it relies on the stall timeout, now functional via F-5). Feature
