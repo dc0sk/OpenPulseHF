@@ -7,6 +7,45 @@ last_updated: 2026-07-15
 
 # Release Notes
 
+## v0.7.0 — 2026-07-15
+
+The `MFSK16` weak-signal waveform grows from a broadcast/beacon mode (v0.6.0) into a full **adaptive-ARQ
+sub-floor rung**. **No breaking changes.**
+
+**A weak-signal rung below BPSK31**
+
+- On the HF profile (`hpx_hf`), the automatic rate ladder now has a bottom rung — **MFSK16 at SL1** — that
+  the link drops to when it fades below where BPSK31 works (~3 dB). MFSK16 is a slow but very robust
+  constant-envelope 16-tone mode that keeps decoding on deep-fade HF paths where the coherent modes drop
+  out. When the path recovers, the ladder climbs back up on its own.
+- Because the rung is entered only under a genuinely weak link, it is deliberately slow (a data frame is
+  ~17 s) and small (≤ 209 bytes per frame) — it's for getting a short message or acknowledgement through
+  when nothing else will, not for throughput.
+
+**A robust acknowledgement for the weak rung**
+
+- The normal fast FSK4 acknowledgement can't survive at the MFSK16 rung's signal levels, so the receiver
+  now answers a weak-rung frame with **three spaced copies of a robust MFSK16 acknowledgement**, and the
+  sender combines them — recovering the acknowledgement in fade conditions where a single copy would be
+  lost (measured to succeed ~99% of the time 3 dB below where the data itself works). The sender listens for
+  *either* acknowledgement style at once, so moving in or out of the weak rung never gets the two stations
+  out of step.
+
+**Safety and robustness**
+
+- A message too large for the weak rung's single small frame is automatically sent on the next rung that
+  can carry it, rather than being quietly dropped.
+- Repeated weak-rung transmissions are soft-combined (HARQ), so a frame that fails once can still decode
+  once a retransmission arrives.
+
+**Under the hood**
+
+- This shipped as a measured, staged effort. Notably, the belief that the weak-rung acknowledgement was a
+  hard blocker (an earlier ~0.6 decode rate) turned out to be a small-sample measurement artifact — at a
+  proper trial count it's ~0.9, and the real fix (three combined copies, no frequency hopping) is cheap and
+  stays within the same 500 Hz. The whole rung is validated end-to-end across two in-process daemons, and
+  the `run-twin-station-audio.sh` rig gained an `OTA_LOCK` knob to exercise it over a real sound card.
+
 ## v0.6.0 — 2026-07-15
 
 Post-v0.5.0 improvements: new PTT backends, hotplug-safe audio, a multi-mode monitor, and the `MFSK16`

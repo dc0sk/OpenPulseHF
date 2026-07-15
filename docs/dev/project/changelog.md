@@ -10,6 +10,37 @@ last_updated: 2026-07-15
 > Phase/roadmap history lives in [roadmap.md](roadmap.md); this file tracks
 > user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
 
+## v0.7.0 — 2026-07-15
+
+The `MFSK16` weak-signal waveform (shipped broadcast-only in v0.6.0) becomes a full **adaptive-ARQ sub-floor
+rung**: the receiver-led OTA rate ladder now has a robust deep-fade rung *below* BPSK31. No breaking changes.
+
+### Features
+
+- **MFSK16 sub-floor ARQ rung (SL1)**: on the `hpx_hf` HF profile the rate ladder gains a non-coherent
+  constant-envelope MFSK16 rung at **SL1** — the deep-fade rung the ladder drops to when the link falls
+  below BPSK31's 3 dB floor. It carries data with RS FEC (one 255-byte block, ≤ 209 B/frame) and climbs
+  back out to BPSK31 automatically once the SNR recovers past SL1's ceiling. (#886)
+- **Robust K=3 union-decoded ACK**: the sub-floor rung can't be acknowledged over FSK4 (which dies far above
+  the MFSK16 floor), so the receiver answers with **three time-spaced MFSK16-ACK copies** and the sender
+  **union-decodes** them (decode each copy standalone, MAP-combine only as a fallback). Measured to clear
+  ≥ 0.99 at 3 dB below the data floor where a single ACK held only ~0.6. The sender **union-listens** for
+  both the FSK4 and the K=3 ACK on one window, so crossing the SL1 boundary can't desync the link. (#885,
+  #886)
+- **Payload-capacity guard**: a message larger than one MFSK16 frame (209 B) is transmitted on the next rung
+  that fits, instead of hard-erroring and being silently dropped. (#887)
+- **HARQ soft-combining across MFSK16 retransmissions**: failed sub-floor bursts are retained and
+  MAP-combined with later ones, decoding more often than a single attempt on a faded channel. (#887)
+
+### Notes
+
+- The robust ACK was resolved by measurement: the earlier claim that the ACK was the binding constraint
+  (~0.6 decode) was a **40-trial small-sample artifact** — at 400 trials it decodes ~0.9, and the winning
+  fix (K=3 union, no frequency hop, stays 500 Hz) is cheap. The "longer contiguous frame" alternative was
+  measured and *loses*. (#885)
+- End-to-end validated across two real daemons (`twin_daemon_bridge::subfloor_sl1_message_crosses_with_k3_ack`),
+  plus an `OTA_LOCK` knob on the snd-aloop real-audio rig for sound-card validation. (#888)
+
 ## v0.6.0 — 2026-07-15
 
 Post-v0.5.0 block-B/D backlog plus the reference-derived requirements track (PTT backends, hotplug device
