@@ -1410,10 +1410,12 @@ fn ota_send_with_ptt(
     let ack_timeout_ms = engine.ota_ack_timeout_ms();
 
     for _ in 0..=MAX_RETRIES {
-        let Some(mode) = engine.ota_tx_mode().map(|m| m.to_owned()) else {
+        // Payload-capacity bump: a body over one MFSK16 frame can't ride the SL1 sub-floor rung, so send
+        // it on the next rung that fits (decodable whenever the peer confirms ≥ there) rather than
+        // hard-erroring and silently dropping it.
+        let Some((mode, fec)) = engine.ota_tx_for_payload(body.len()) else {
             return; // no OTA session
         };
-        let fec = engine.ota_tx_fec();
 
         // Key PTT for the data frame via an RAII guard (REQ-PTT-01). On assert failure abort.
         let Ok(guard) = ptt.keyed(Some(event_tx)) else {

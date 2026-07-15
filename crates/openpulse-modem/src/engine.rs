@@ -1039,6 +1039,28 @@ impl ModemEngine {
         self.ota.as_ref().map(|o| o.tx_level())
     }
 
+    /// One-RS-block OTA payload cap for the fixed 255-byte MFSK16 sub-floor frame:
+    /// `BLOCK_DATA_STANDARD(223) − 4 B RS length prefix − 10 B Frame envelope`. A larger body needs ≥2 RS
+    /// blocks, which the MFSK16 modulator rejects — so the sub-floor rung is skipped for it.
+    pub const MFSK16_OTA_MAX_PAYLOAD: usize = 223 - 4 - 10;
+
+    /// The `(mode, fec)` to actually transmit a `body_len`-byte OTA frame at: the controller's TX rung,
+    /// **bumped up off the MFSK16 sub-floor rung** when the body exceeds one MFSK16 frame. A large message
+    /// cannot ride SL1's single RS block, so it is sent on the next rung that can (decodable whenever the
+    /// peer's confirmed level is ≥ that rung — the common case) instead of hard-erroring and being dropped.
+    pub fn ota_tx_for_payload(&self, body_len: usize) -> Option<(String, FecMode)> {
+        let o = self.ota.as_ref()?;
+        let level = o.tx_level();
+        if o.mode_for_level(level) == Some("MFSK16") && body_len > Self::MFSK16_OTA_MAX_PAYLOAD {
+            if let Some(up) = o.level_above(level) {
+                if let Some(mode) = o.mode_for_level(up) {
+                    return Some((mode.to_string(), o.fec_for_level(up)));
+                }
+            }
+        }
+        Some((o.mode_for_level(level)?.to_string(), o.fec_for_level(level)))
+    }
+
     /// Absolute level we are currently recommending to the peer (goes in our ACK).
     pub fn ota_rx_recommended_level(&self) -> Option<SpeedLevel> {
         self.ota.as_ref().map(|o| o.rx_recommended_level())
@@ -1541,10 +1563,15 @@ impl ModemEngine {
                     .get(mode)
                     .map(|p| p.supports_soft_demod())
                     .unwrap_or(false)
-                    && matches!(
+                    && (matches!(
                         fec,
                         FecMode::SoftConcatenated | FecMode::Ldpc | FecMode::LdpcHighRate
-                    );
+                    )
+                    // The MFSK16 sub-floor rung is soft-capable but runs plain RS; admit it so its 17 s
+                    // frames HARQ-combine across NACK retransmissions (`decode_combined_llrs` already handles
+                    // `FecMode::Rs`). Narrowed to MFSK16 so no other RS rung's behavior changes. The measured
+                    // diversity gain gate is `mfsk16_harq_diversity`.
+                    || (mode == "MFSK16" && matches!(fec, FecMode::Rs)));
                 if !soft {
                     continue;
                 }

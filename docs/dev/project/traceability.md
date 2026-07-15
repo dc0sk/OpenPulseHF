@@ -9,6 +9,31 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-15 — feat(modem): MFSK16 sub-floor ARQ rung — PR-2 guardrails (REQ-WSIG-01)
+
+- **Requirement/change:** the staged guardrails from the Fable review of the MFSK16 ARQ integration —
+  payload-capacity gate, HARQ-combine admission (+ its measured gate), climb-out/trapdoor coverage.
+- **Design decision:** (1) a body over one MFSK16 RS block (cap = `223 − 4 − 10 = 209` B) can't ride the
+  fixed 255-byte SL1 frame → `ota_tx_for_payload` bumps it off MFSK16 to the next rung (which carries
+  multi-block; decodable whenever the peer confirms ≥ there — `rx_candidates` covers `{recommended,
+  confirmed}`), instead of the previous hard-error → silent drop. (2) Admit MFSK16+Rs to the HARQ-combine
+  gate so its 17 s frames MAP-combine across NACK retransmissions (`decode_combined_llrs` already handles
+  `Rs`; the standalone-first union bounds the downside) — shipped only *with* a measured gain gate per
+  Fable guardrail 4. (3) The SL1 rung is not a trapdoor: with a real SNR (MFSK16 `estimate_snr_db`, PR-1) it
+  climbs back out once SNR clears SL1's 5 dB ceiling.
+- **Implementation:** `crates/openpulse-core/src/ota_rate.rs` (`level_above`, `fec_for_level`);
+  `crates/openpulse-modem/src/engine.rs` (`MFSK16_OTA_MAX_PAYLOAD`, `ota_tx_for_payload`; HARQ gate admits
+  `mode == "MFSK16" && Rs`); `crates/openpulse-daemon/src/server.rs` (`ota_send_with_ptt` uses
+  `ota_tx_for_payload`).
+- **Tests:** `mfsk16_arq_subfloor::oversized_body_bumps_off_the_mfsk16_subfloor_rung` (bump + the exact
+  209-byte boundary: MFSK16 carries MAX, one more overflows); `mfsk16_harq_diversity` (combining two
+  moderate_f1 @−3 dB attempts beats a single one); `ota_rate::subfloor_sl1_climbs_back_out_when_snr_recovers`.
+- **Test results:** new tests pass (harq_diversity ~26 s); existing `twin_daemon_bridge` (incl.
+  `ota_ladder_steps`, the daemon ACK loop) green — the ACK-seam swap is non-regressing; full workspace +
+  clippy + fmt + benchmark pending pre-PR.
+- **Deferred (environment-gated):** the twin-daemon SL1 **entry+exit** boundary test — MFSK16's 17 s frames
+  × the async daemon make a real deep-fade→recovery exchange minutes-long/flaky as a CI gate.
+
 ## 2026-07-15 — feat(modem/daemon): MFSK16 sub-floor ARQ rung — PR-1 core (union-listen ACK) (REQ-WSIG-01)
 
 - **Requirement/change:** wire the validated K=3 union ACK into the OTA adaptive-rate path as an MFSK16

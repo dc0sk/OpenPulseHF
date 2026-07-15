@@ -10,6 +10,7 @@ use fsk4_plugin::Fsk4Plugin;
 use mfsk16_plugin::Mfsk16Plugin;
 use openpulse_audio::LoopbackBackend;
 use openpulse_core::ack::{AckFrame, AckType};
+use openpulse_core::fec::FecMode;
 use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::SpeedLevel;
 use openpulse_modem::engine::ModemEngine;
@@ -74,4 +75,38 @@ fn non_subfloor_profile_uses_the_fast_fsk4_path() {
     engine.start_ota_session(SessionProfile::hpx500()); // no MFSK16 rung
     assert!(!engine.ota_profile_has_mfsk16());
     assert_eq!(engine.ota_ack_timeout_ms(), 4000);
+}
+
+/// Payload-capacity gate: a body over one MFSK16 RS block can't ride the SL1 sub-floor frame, so the OTA TX
+/// bumps off MFSK16 to the next rung (which carries multi-block) instead of hard-erroring and dropping.
+#[test]
+fn oversized_body_bumps_off_the_mfsk16_subfloor_rung() {
+    let (mut e, _bk) = hf_engine();
+    e.ota_lock_level(SpeedLevel::Sl1);
+    assert_eq!(e.ota_tx_level(), Some(SpeedLevel::Sl1));
+
+    // Within one MFSK16 frame → stays on the sub-floor rung.
+    let (small, _) = e
+        .ota_tx_for_payload(ModemEngine::MFSK16_OTA_MAX_PAYLOAD)
+        .expect("tx for small");
+    assert_eq!(small, "MFSK16");
+
+    // Over one RS block → bumped to SL2 (BPSK31 carries multi-block RS).
+    let (large, _) = e
+        .ota_tx_for_payload(ModemEngine::MFSK16_OTA_MAX_PAYLOAD + 1)
+        .expect("tx for large");
+    assert_eq!(large, "BPSK31");
+
+    // The cap is exact: MFSK16 holds one RS block of MAX bytes; one more overflows the fixed frame.
+    let max = ModemEngine::MFSK16_OTA_MAX_PAYLOAD;
+    assert!(
+        e.transmit_with_fec_mode(&vec![0u8; max], "MFSK16", FecMode::Rs, None)
+            .is_ok(),
+        "MFSK16 must carry MFSK16_OTA_MAX_PAYLOAD ({max}) bytes in one RS block"
+    );
+    assert!(
+        e.transmit_with_fec_mode(&vec![0u8; max + 1], "MFSK16", FecMode::Rs, None)
+            .is_err(),
+        "one byte over the cap must overflow the single MFSK16 RS block"
+    );
 }

@@ -227,6 +227,19 @@ impl OtaRateController {
             .any(|l| self.profile.mode_for(l) == Some(mode))
     }
 
+    /// The lowest defined rung strictly above `level` (for the sub-floor payload-capacity bump).
+    pub fn level_above(&self, level: SpeedLevel) -> Option<SpeedLevel> {
+        self.profile
+            .defined_levels()
+            .into_iter()
+            .find(|&l| l > level)
+    }
+
+    /// FEC scheme mapped to an arbitrary level in this profile.
+    pub fn fec_for_level(&self, level: SpeedLevel) -> FecMode {
+        self.profile.fec_for(level)
+    }
+
     // ── RX side (we lead) ──────────────────────────────────────────────────────
 
     /// Current absolute level we are recommending to the peer.
@@ -366,6 +379,21 @@ mod tests {
 
     fn ctrl() -> OtaRateController {
         OtaRateController::new(SessionProfile::hpx_hf())
+    }
+
+    /// The MFSK16 SL1 sub-floor rung is not a trapdoor: once SNR recovers above SL1's ceiling, the
+    /// receiver-led controller climbs the recommendation back out to SL2. (In production the real SNR comes
+    /// from MFSK16's `estimate_snr_db`; the M2M4 fallback would bias it low and pin SL1 — see PR-1.)
+    #[test]
+    fn subfloor_sl1_climbs_back_out_when_snr_recovers() {
+        let mut c = ctrl();
+        // Entry: one low-SNR failed frame fast-downshifts the recommendation to the SL1 sub-floor rung.
+        c.on_rx_frame(RxOutcome::Failed, -5.0);
+        assert_eq!(c.rx_recommended_level(), SpeedLevel::Sl1);
+        // Recovery: a decoded SL1 frame with SNR above SL1's 5 dB ceiling climbs the recommendation to SL2.
+        let ack = c.on_rx_frame(RxOutcome::Decoded(SpeedLevel::Sl1), 6.0);
+        assert_eq!(ack.ack_type, AckType::AckUp);
+        assert_eq!(c.rx_recommended_level(), SpeedLevel::Sl2);
     }
 
     #[test]
