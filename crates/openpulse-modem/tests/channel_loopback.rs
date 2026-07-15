@@ -307,6 +307,8 @@ fn every_profile_rung_decodes_clean_with_its_fec() {
             .ok();
         e.register_plugin(Box::new(pilot_plugin::PilotPlugin::new()))
             .ok();
+        e.register_plugin(Box::new(mfsk16_plugin::Mfsk16Plugin::new()))
+            .ok();
     }
     let payload: Vec<u8> = (0..64u8).collect();
     let mut known_unmodulatable = 0;

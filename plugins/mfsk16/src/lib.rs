@@ -368,6 +368,32 @@ impl ModulationPlugin for Mfsk16Plugin {
         None
     }
 
+    /// Non-coherent symbol-domain SNR: mean winner-tone signal power (winner energy − noise floor) over the
+    /// frame-median noise floor, in dB. The M2M4 fallback reads fading as noise and would pin the sub-floor
+    /// rung at SL1 (the ladder can't climb out); this gives the receiver-led ladder a real SNR to gate on.
+    fn estimate_snr_db(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+        let fs = config.sample_rate as f32;
+        let lay = layout_for(&config.mode);
+        let energies = acquire_and_energies(samples, config.center_frequency, fs, &lay)?;
+        if energies.is_empty() {
+            return None;
+        }
+        let noise = frame_noise(&energies);
+        if noise <= 0.0 {
+            return None;
+        }
+        let mut sig = 0.0f32;
+        for e in &energies {
+            let max = e.iter().cloned().fold(0.0f32, f32::max);
+            sig += (max - noise).max(0.0);
+        }
+        let sig = sig / energies.len() as f32;
+        if sig <= 0.0 {
+            return Some(-20.0);
+        }
+        Some(10.0 * (sig / noise).log10())
+    }
+
     fn frame_geometry(&self, config: &ModulationConfig) -> Option<FrameGeometry> {
         let lay = layout_for(&config.mode);
         let n = (config.sample_rate as f32 / SPACING).round() as usize;

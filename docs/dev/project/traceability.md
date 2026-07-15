@@ -9,6 +9,34 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-15 — feat(modem/daemon): MFSK16 sub-floor ARQ rung — PR-1 core (union-listen ACK) (REQ-WSIG-01)
+
+- **Requirement/change:** wire the validated K=3 union ACK into the OTA adaptive-rate path as an MFSK16
+  SL1 sub-floor rung. Greenlit; staged PR-1 (core) / PR-2 (guardrails) after a Fable design review.
+- **Design decision:** the review (all anchors verified against source) found the obvious "each side keys on
+  its own active rung" ACK-waveform dispatch **deterministically desyncs at every SL1 boundary** — on a
+  failed decode the IRS can't know the frame's mode, so the "drop to SL1" recommendation rides a waveform
+  the ISS isn't listening for → SL1 unreachable in the deep fade it exists for. Fix: the ISS **union-listens**
+  (try FSK4 *and* the K=3 MFSK16-ACK on one captured window, first-success) — the ACK-path analogue of the
+  data path's `rx_candidates` union-demod; the IRS waveform choice then need not be guessed. SL1 = the
+  bottom rung (floor `None`, reached via the OtaRateController fast-downshift below BPSK31's 3 dB floor —
+  verified NOT gated behind 3-NACK ChirpFallback on this seam). MFSK16 `estimate_snr_db` added so the M2M4
+  fallback can't self-seal SL1 (climb-out trapdoor).
+- **Implementation:** `crates/openpulse-core/src/profile.rs` (`hpx_hf` SL1=MFSK16/Rs, ceiling 5.0);
+  `crates/openpulse-core/src/ota_rate.rs` (`mode_for_level`, `profile_has_mode`); `engine.rs`
+  (`transmit_ack_mfsk16_k3`, `transmit_ota_ack`, `receive_ota_ack_within` union-listen, `decode_fsk4_ack`
+  extract, `decode_mfsk16_k3_ack` onset+slot-union, `energy_onset`, `ota_profile_has_mfsk16`,
+  `ota_ack_timeout_ms`); `plugins/mfsk16/src/lib.rs` (`estimate_snr_db`); `crates/openpulse-daemon/src/server.rs`
+  (2 ACK call-site swaps + mode-scaled timeout).
+- **Tests:** `crates/openpulse-modem/tests/mfsk16_arq_subfloor.rs` (3: K=3 round-trip, union-listen accepts
+  FSK4, non-sub-floor fast path); `plugins/mfsk16/tests/snr_estimate.rs` (SNR estimate tracks true SNR);
+  updated `session_profile.rs` (SL1 mapping + floor-`None` handling) and `mode_advisor` (sub-3 dB → SL1).
+- **Test results:** new tests 4/4 pass; existing OTA/HARQ (ota_rate_lockstep/ota_harq_combining/two_way_arq,
+  13) green; full `cargo test --workspace --no-default-features` 0 failures (after the mode_advisor SNR-case
+  updates); clippy `-D warnings` + fmt clean; benchmark gate `true` (10/10, mean_transitions 5.1).
+- **PR-2 (staged, NOT in this change):** HARQ-gate MFSK16+Rs admission (with a measured diversity gate),
+  payload-capacity gate (>213 B can't ride one RS block), climb-out/trapdoor test, twin SL1 boundary test.
+
 ## 2026-07-15 — research(core/plugin): robust-ACK resolved — K=3 per-copy-LLR union unblocks the ARQ rung (REQ-WSIG-01)
 
 - **Requirement/change:** pick up the robust-ACK DSP the 2026-07-14 measurement deferred (it claimed the

@@ -758,8 +758,10 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                 // RAII guard (REQ-PTT-01): releases at block end / on unwind. On assert
                                 // failure `keyed` returns Err and we skip the ACK, leaving nothing keyed.
                                 if let Ok(_guard) = ptt.keyed(Some(&handle.event_tx)) {
+                                    // Mode-aware ACK: K=3 union MFSK16-ACK when recommending the sub-floor
+                                    // rung, else FSK4-ACK. The ISS union-listens, so either is heard.
                                     if let Err(e) = tokio::task::block_in_place(|| {
-                                        engine.transmit_ack_with_short_fec(&res.ack, None)
+                                        engine.transmit_ota_ack(&res.ack, None)
                                     }) {
                                         tracing::warn!("OTA ACK transmit failed: {e}");
                                     }
@@ -1403,7 +1405,9 @@ fn ota_send_with_ptt(
 ) {
     use openpulse_core::ack::AckType;
     const MAX_RETRIES: usize = 3;
-    const ACK_TIMEOUT_MS: u64 = 4000;
+    // Mode-scaled ACK window: the sub-floor K=3 MFSK16-ACK (~5 s) needs longer than a 4 s FSK4 ACK.
+    // It is a maximum — union-listen returns on the first success, so a healthy link is not slowed.
+    let ack_timeout_ms = engine.ota_ack_timeout_ms();
 
     for _ in 0..=MAX_RETRIES {
         let Some(mode) = engine.ota_tx_mode().map(|m| m.to_owned()) else {
@@ -1427,10 +1431,9 @@ fn ota_send_with_ptt(
             continue;
         }
 
-        // Listen for the ACK with PTT down; adopt the peer's recommended level.
-        match tokio::task::block_in_place(|| {
-            engine.receive_ack_with_short_fec_within(None, ACK_TIMEOUT_MS)
-        }) {
+        // Listen for the ACK with PTT down; adopt the peer's recommended level. Union-listen (FSK4 +
+        // K=3 MFSK16-ACK) when the profile carries the sub-floor rung, so an SL1 boundary can't desync.
+        match tokio::task::block_in_place(|| engine.receive_ota_ack_within(None, ack_timeout_ms)) {
             Ok(ack) => {
                 engine.apply_ota_ack(&ack);
                 let _ = event_tx.send(ota_status_event(engine));

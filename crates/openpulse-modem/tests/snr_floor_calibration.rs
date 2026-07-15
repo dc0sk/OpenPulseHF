@@ -51,6 +51,8 @@ fn harness() -> ChannelSimHarness {
         eng.register_plugin(Box::new(Psk8Plugin::new())).unwrap();
         eng.register_plugin(Box::new(ScFdmaPlugin::new())).unwrap();
         eng.register_plugin(Box::new(PilotPlugin::new())).unwrap();
+        eng.register_plugin(Box::new(mfsk16_plugin::Mfsk16Plugin::new()))
+            .unwrap();
     }
     h
 }

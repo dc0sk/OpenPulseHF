@@ -108,8 +108,10 @@ mod tests {
         // SL7=9 SL8=11 SL9=12 SL10=13 SL11=14 SL12=16 SL13=17 SL14=22 SL15=23 SL16=24 SL17=30.
         // recommend_hf_level picks the highest rung whose floor ≤ snr. Keep in sync if the floors change.
         let cases = [
-            (-1.0, SpeedLevel::Sl2),
-            (2.9, SpeedLevel::Sl2),
+            // Below BPSK31's 3 dB floor → the MFSK16 non-coherent sub-floor rung (SL1), the lowest
+            // defined level (REQ-WSIG-01). At/above 3 dB, BPSK31 (SL2) and up.
+            (-1.0, SpeedLevel::Sl1),
+            (2.9, SpeedLevel::Sl1),
             (3.0, SpeedLevel::Sl2),
             (3.9, SpeedLevel::Sl2),
             (4.0, SpeedLevel::Sl3),

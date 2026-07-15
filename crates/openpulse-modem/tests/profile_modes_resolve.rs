@@ -24,6 +24,8 @@ fn engine_with_all_plugins() -> ModemEngine {
         .unwrap();
     e.register_plugin(Box::new(fsk4_plugin::Fsk4Plugin::new()))
         .unwrap();
+    e.register_plugin(Box::new(mfsk16_plugin::Mfsk16Plugin::new()))
+        .unwrap();
     e
 }
 

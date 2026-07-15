@@ -4272,6 +4272,47 @@ impl ModemEngine {
         self.stage_emit_output(device, mode, &samples)
     }
 
+    /// MFSK16-ACK copies for the sub-floor union ACK — the measured knee (REQ-WSIG-01): K=3 clears ≥0.99
+    /// at 3 dB below the MFSK16 data floor; K=2 is marginal (~0.88).
+    const MFSK16_ACK_COPIES: usize = 3;
+    /// Inter-copy silence between MFSK16-ACK copies. Decorrelates the fades enough that no frequency hop is
+    /// needed (measured `hop=0 ≡ hop=500 Hz`), so the ACK stays 500 Hz.
+    const MFSK16_ACK_GAP_S: f32 = 0.5;
+
+    /// Transmit the sub-floor ARQ ACK as [`MFSK16_ACK_COPIES`] time-spaced `MFSK16-ACK` copies in a single
+    /// PTT keying (0.5 s silence gaps), for the receiver to union-decode with
+    /// [`openpulse_core::ack::decode_ack_from_llr_copies`]. The FSK4-ACK waveform dies far above the MFSK16
+    /// data floor, so the sub-floor rung needs this robust return channel (REQ-WSIG-01).
+    pub fn transmit_ack_mfsk16_k3(
+        &mut self,
+        ack: &AckFrame,
+        device: Option<&str>,
+    ) -> Result<(), ModemError> {
+        self.csma_check()?;
+        let raw = ack.encode();
+        let fec_bytes = ShortFecCodec::new().encode(&raw)?;
+        let wire = WirePayload { bytes: fec_bytes };
+        let mode = "MFSK16-ACK";
+        let one = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_modulate_payload(plugin, mode, &wire)?
+        };
+        let gap = (Self::MFSK16_ACK_GAP_S * AudioConfig::default().sample_rate as f32) as usize;
+        let mut buf = Vec::with_capacity((one.samples.len() + gap) * Self::MFSK16_ACK_COPIES);
+        for i in 0..Self::MFSK16_ACK_COPIES {
+            if i > 0 {
+                buf.extend(std::iter::repeat_n(0.0f32, gap));
+            }
+            buf.extend_from_slice(&one.samples);
+        }
+        let samples =
+            self.route_audio_stage(PipelineStage::OutputEmit, AudioSamples { samples: buf })?;
+        self.stage_emit_output(device, mode, &samples)
+    }
+
     /// Demodulate FSK4-ACK, ShortFecCodec decode (13 → 5 bytes), return `AckFrame`.
     /// Receive an FSK4 short-FEC ACK, re-capturing until it decodes or `timeout_ms`
     /// elapses. `0` falls back to a single immediate read
@@ -4304,16 +4345,20 @@ impl ModemEngine {
     ) -> Result<AckFrame, ModemError> {
         let samples = self.stage_capture_input(None, device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+        self.decode_fsk4_ack(&samples)
+    }
 
+    /// FSK4-ACK demod + ShortFec decode + `AckFrame` parse over an already-captured, already-routed
+    /// window. Extracted so the union-listen path can try it on each read without re-capturing.
+    fn decode_fsk4_ack(&mut self, samples: &AudioSamples) -> Result<AckFrame, ModemError> {
         let mode = "FSK4-ACK";
         let wire = {
             let plugin = self
                 .plugins
                 .get(mode)
                 .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
-            self.stage_demodulate_payload(plugin, mode, &samples)?
+            self.stage_demodulate_payload(plugin, mode, samples)?
         };
-
         self.update_afc_estimate(mode, &samples.samples);
         if let Some(hz) = self.last_afc_offset_hz {
             let _ = self.event_tx.send(EngineEvent::AfcUpdate {
@@ -4322,13 +4367,153 @@ impl ModemEngine {
                 mode: mode.to_string(),
             });
         }
-
         let decoded = ShortFecCodec::new().decode(&wire.bytes)?;
         let n = decoded.len();
         let arr: [u8; 5] = decoded.try_into().map_err(|_| {
             ModemError::Frame(format!("ShortFEC ACK decode: expected 5 bytes, got {n}"))
         })?;
         AckFrame::decode(&arr).map_err(|e| ModemError::Frame(format!("AckFrame decode: {e:?}")))
+    }
+
+    /// Does the active OTA profile include the MFSK16 sub-floor rung? Gates the union-listen ACK path so
+    /// profiles without it keep the fast FSK4-only receive (no turnaround regression).
+    pub fn ota_profile_has_mfsk16(&self) -> bool {
+        self.ota
+            .as_ref()
+            .is_some_and(|o| o.profile_has_mode("MFSK16"))
+    }
+
+    /// ACK-listen deadline for the current rung: the sub-floor K=3 MFSK16-ACK (≈5 s + turnaround) needs a
+    /// longer window than a 4 s FSK4 ACK. It is a *maximum* — union-listen returns on the first success, so
+    /// a healthy link still returns in ~one FSK4 frame.
+    pub fn ota_ack_timeout_ms(&self) -> u64 {
+        if self.ota_profile_has_mfsk16() {
+            9000
+        } else {
+            4000
+        }
+    }
+
+    /// Transmit the OTA ACK in the waveform the rung needs: the K=3 union MFSK16-ACK when the ACK
+    /// recommends the MFSK16 sub-floor rung (FSK4 dies there), else the standard FSK4-ACK. Correctness does
+    /// NOT depend on the ISS guessing this — the ISS union-listens for both (`receive_ota_ack_within`).
+    pub fn transmit_ota_ack(
+        &mut self,
+        ack: &AckFrame,
+        device: Option<&str>,
+    ) -> Result<(), ModemError> {
+        let mfsk16 = matches!(
+            (self.ota.as_ref(), ack.recommended_level),
+            (Some(o), Some(level)) if o.mode_for_level(level) == Some("MFSK16")
+        );
+        if mfsk16 {
+            self.transmit_ack_mfsk16_k3(ack, device)
+        } else {
+            self.transmit_ack_with_short_fec(ack, device)
+        }
+    }
+
+    /// ISS-side OTA ACK receive. When the profile carries the MFSK16 sub-floor rung, **union-listen**: on
+    /// each captured read try the fast FSK4 ACK, and accumulate for the ≈5 s K=3 MFSK16-ACK and try that
+    /// too — returning on the first success. This is the ACK-path analogue of `rx_candidates` union-demod:
+    /// the ISS cannot know which waveform the IRS chose (the "drop to SL1" recommendation travels in a
+    /// waveform the ISS isn't yet expecting), so it must accept either, or the rung desyncs at every SL1
+    /// boundary. Without the sub-floor rung the fast FSK4-only path is unchanged (no regression).
+    pub fn receive_ota_ack_within(
+        &mut self,
+        device: Option<&str>,
+        timeout_ms: u64,
+    ) -> Result<AckFrame, ModemError> {
+        if !self.ota_profile_has_mfsk16() {
+            return self.receive_ack_with_short_fec_within(device, timeout_ms);
+        }
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(1));
+        let mut accum: Vec<f32> = Vec::new();
+        loop {
+            if let Ok(samples) = self.stage_capture_input(None, device) {
+                if let Ok(routed) = self.route_audio_stage(PipelineStage::InputCapture, samples) {
+                    if let Ok(ack) = self.decode_fsk4_ack(&routed) {
+                        return Ok(ack);
+                    }
+                    accum.extend_from_slice(&routed.samples);
+                    if let Some(ack) = self.decode_mfsk16_k3_ack(&accum) {
+                        return Ok(ack);
+                    }
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(ModemError::Demodulation(
+                    "OTA ACK not received within window".into(),
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(30));
+        }
+    }
+
+    /// Union-decode a K=3 MFSK16-ACK from a captured window: energy-onset the first copy, demodulate each
+    /// copy slot to soft LLRs (self-acquiring within the slot), then `decode_ack_from_llr_copies`. Slots are
+    /// probed one span before the onset through two after, so a deeply-faded copy 1 (onset lands on copy 2)
+    /// still recovers — the per-copy CRC gate rejects any slot that locks onto silence/a gap.
+    fn decode_mfsk16_k3_ack(&self, samples: &[f32]) -> Option<AckFrame> {
+        const SPS: usize = 256;
+        const COPY_SYMS: usize = 40; // MFSK16-ACK on-air symbols
+        let copy_len = COPY_SYMS * SPS;
+        if samples.len() < copy_len {
+            return None;
+        }
+        let fs = AudioConfig::default().sample_rate;
+        let gap = (Self::MFSK16_ACK_GAP_S * fs as f32) as usize;
+        let span = copy_len + gap;
+        let onset = Self::energy_onset(samples).unwrap_or(0);
+        let cfg = ModulationConfig {
+            mode: "MFSK16-ACK".to_string(),
+            center_frequency: self.center_frequency,
+            sample_rate: fs,
+            ..ModulationConfig::default()
+        };
+        let plugin = self.plugins.get("MFSK16-ACK")?;
+        let mut copies: Vec<Vec<f32>> = Vec::new();
+        for k in 0..4i64 {
+            let start = onset as i64 + (k - 1) * span as i64;
+            if start < 0 {
+                continue;
+            }
+            let start = start as usize;
+            let end = (start + copy_len + gap).min(samples.len());
+            if end.saturating_sub(start) < copy_len {
+                continue;
+            }
+            if let Ok(llrs) = plugin.demodulate_soft(&samples[start..end], &cfg) {
+                copies.push(llrs);
+            }
+        }
+        if copies.is_empty() {
+            return None;
+        }
+        let refs: Vec<&[f32]> = copies.iter().map(|c| c.as_slice()).collect();
+        openpulse_core::ack::decode_ack_from_llr_copies(&refs)
+    }
+
+    /// First sample index whose 256-sample RMS reaches 0.4× the window's peak RMS — the onset of the first
+    /// (constant-envelope) MFSK16-ACK copy after the turnaround silence. `None` on a silent buffer.
+    fn energy_onset(samples: &[f32]) -> Option<usize> {
+        const WIN: usize = 256;
+        if samples.len() < WIN * 2 {
+            return Some(0);
+        }
+        let n = samples.len() / WIN;
+        let rms: Vec<f32> = (0..n)
+            .map(|i| {
+                let w = &samples[i * WIN..(i + 1) * WIN];
+                (w.iter().map(|x| x * x).sum::<f32>() / WIN as f32).sqrt()
+            })
+            .collect();
+        let peak = rms.iter().cloned().fold(0.0f32, f32::max);
+        if peak <= 1e-6 {
+            return None;
+        }
+        let thresh = 0.4 * peak;
+        rms.iter().position(|&r| r >= thresh).map(|i| i * WIN)
     }
 
     /// ECC bytes appended by the ShortRs data-frame codec (t = 16).

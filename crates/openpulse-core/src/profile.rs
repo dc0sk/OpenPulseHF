@@ -364,6 +364,7 @@ impl SessionProfile {
         //
         // | SL | Mode              | FEC | net bps | floor | note                                  |
         // |----|-------------------|-----|---------|-------|---------------------------------------|
+        // |  1 | MFSK16            | Rs  |   ~9    |  None | non-coherent sub-floor deep-fade rung |
         // |  2 | BPSK31            | —   |     31  |   3   |                                       |
         // |  3 | BPSK63            | —   |     62  |   4   |                                       |
         // |  4 | BPSK100           | —   |    100  |  4.5  | breaks the 62→250 bps cliff           |
@@ -401,6 +402,10 @@ impl SessionProfile {
         // exception is the top: 64QAM is the densest constellation the plugin has, so above SL15 the
         // only remaining lever is code rate. Hence LHR appears as SL16–SL19 and nowhere below.
         let mut modes = [None; 21];
+        // SL1 is the non-coherent MFSK16 sub-floor rung — the actual waveform for the deep-fade
+        // ChirpFallback path (3 NACKs at SL2), reached only under sustained failure. Constant-envelope
+        // 16-GFSK, ~17 s/frame, one RS block; robust ACK is K=3 union-decoded MFSK16-ACK (REQ-WSIG-01).
+        modes[SpeedLevel::Sl1 as usize] = Some("MFSK16");
         modes[SpeedLevel::Sl2 as usize] = Some("BPSK31");
         modes[SpeedLevel::Sl3 as usize] = Some("BPSK63");
         modes[SpeedLevel::Sl4 as usize] = Some("BPSK100");
@@ -435,6 +440,7 @@ impl SessionProfile {
         // soft-concatenated FEC (they only ever run FEC-protected). Assigned from the AWGN sweeps in
         // `tests/snr_floor_calibration.rs`.
         let mut fec_modes = [None; 21];
+        fec_modes[SpeedLevel::Sl1 as usize] = Some(FecMode::Rs); // MFSK16 sub-floor: one RS block
         fec_modes[SpeedLevel::Sl6 as usize] = Some(FecMode::Rs);
         fec_modes[SpeedLevel::Sl9 as usize] = Some(FecMode::Rs);
         fec_modes[SpeedLevel::Sl10 as usize] = Some(FecMode::SoftConcatenated);
@@ -475,6 +481,7 @@ impl SessionProfile {
                                                                 // floor — `ceiling(L) = floor(L+1) + 2` — so every rung dwells the same margin before climbing.
                                                                 // Reachability holds (ceiling(L) > floor(L+1)). SL17 is the top rung — no ceiling.
         let mut snr_ceilings = [None; 21];
+        snr_ceilings[SpeedLevel::Sl1 as usize] = Some(5.0_f32); // floor(SL2)=3 +2 → climb out of the sub-floor
         snr_ceilings[SpeedLevel::Sl2 as usize] = Some(6.0_f32); // floor(SL3)=4 +2
         snr_ceilings[SpeedLevel::Sl3 as usize] = Some(6.5_f32); // floor(SL4)=4.5 +2
         snr_ceilings[SpeedLevel::Sl4 as usize] = Some(7.0_f32); // floor(SL5)=5 +2
