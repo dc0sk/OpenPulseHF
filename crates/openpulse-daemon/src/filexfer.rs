@@ -175,16 +175,25 @@ fn on_offer(
         return;
     }
 
-    let (from, peer_pubkey) = match &rs.verified_peer {
-        Some(vp) => (
-            vp.callsign.clone(),
-            <[u8; 32]>::try_from(vp.pubkey.as_slice()).ok(),
-        ),
-        None => (String::new(), None),
-    };
+    // Bind verification to the offer's *claimed* sender (audit E5): look that callsign up in the
+    // per-peer verified set, not the single most-recently-handshook slot, so a signed offer from A is
+    // never checked against B's key just because B handshook later. The signature covers a body that
+    // includes `sender_id`, so it only validates if the holder of that callsign's verified key
+    // produced it. `from` (the quota bucket / display identity) trusts `sender_id` only once the
+    // signature validates; an unverified offer stays in the shared "unknown" bucket as before, so a
+    // spoofed `sender_id` cannot carve out a fresh per-peer quota.
+    let peer_pubkey = rs
+        .verified_peers
+        .get(&offer.sender_id)
+        .and_then(|vp| <[u8; 32]>::try_from(vp.pubkey.as_slice()).ok());
     let sig_valid = peer_pubkey
         .map(|pk| offer.verify_signature(&pk).is_ok())
         .unwrap_or(false);
+    let from = if sig_valid {
+        offer.sender_id.clone()
+    } else {
+        String::new()
+    };
 
     let decision = if !rs.filexfer_policy.peer_allowed(&from) {
         OfferDecision::Reject(Reason::UntrustedPeer)
@@ -215,7 +224,12 @@ fn on_offer(
     // the sender skips them. TTL-purge stale partials for this peer first.
     purge_stale_partials(&rs.filexfer_policy, &from);
     let partial_dir = partial_dir_for(&rs.filexfer_policy, &from, &offer.sha256);
-    let mut assembler = BlockAssembler::new(offer.transfer_id, offer.block_count);
+    let mut assembler = BlockAssembler::new(
+        offer.transfer_id,
+        offer.block_count,
+        offer.block_size,
+        offer.file_size,
+    );
     let held = load_partials(&offer, &partial_dir, &mut assembler);
     let (receiver, actions) = ReceiverSession::resume(
         &offer,
@@ -298,6 +312,15 @@ pub fn cancel_transfer(
             direction: "rx".into(),
             reason: "operator-cancel".into(),
         });
+    }
+    // Also cancel an outbound send (audit F-5): the send side previously had no recovery path at all,
+    // so a stuck `file_tx` could only be cleared by restarting the daemon. Drive the session's cancel
+    // actions (which transmit a `FileCancel` and emit the terminal `FileFailed`), then clear the slot.
+    if rs.file_tx.as_ref().map(|fx| fx.offer.transfer_id) == Some(transfer_id) {
+        if let Some(mut fx) = rs.file_tx.take() {
+            let actions = fx.sender.cancel();
+            drive_tx_actions(&mut fx, actions, rs, event_tx, mode);
+        }
     }
 }
 
@@ -414,6 +437,33 @@ fn on_tx_cancel(
             direction: "tx".into(),
             reason: format!("{reason:?}"),
         });
+    }
+}
+
+/// Fire the offer/stall/verify deadlines on the active send and receive sessions. Called from the
+/// daemon rx tick. A timed-out session emits its terminal actions (a `FileFailed` event) and is
+/// cleared — so a send whose peer never answered (silence is the HF norm) no longer pins `file_tx`
+/// until a daemon restart, and every subsequent `SendFile` is no longer refused as "already active"
+/// (audit F-5).
+pub fn poll_timeouts(
+    rs: &mut RuntimeControlState,
+    event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+    mode: &str,
+    now: u64,
+) {
+    if let Some(mut fx) = rs.file_tx.take() {
+        let actions = fx.sender.poll_timeout(now);
+        drive_tx_actions(&mut fx, actions, rs, event_tx, mode);
+        if !fx.sender.is_terminal() {
+            rs.file_tx = Some(fx);
+        }
+    }
+    if let Some(mut fx) = rs.file_rx.take() {
+        let actions = fx.receiver.poll_timeout(now);
+        drive_rx_actions(&mut fx, actions, rs, event_tx, mode);
+        if !fx.receiver.is_terminal() {
+            rs.file_rx = Some(fx);
+        }
     }
 }
 
@@ -579,6 +629,12 @@ fn reassemble_verify_write(
     let Some(payload) = fx.assembler.reassemble() else {
         return (CompleteStatus::SizeMismatch, [0u8; 64]);
     };
+    // Defense in depth (audit F-1): the per-block length check already bounds the total, but never
+    // write a payload whose size disagrees with the offer's declared `file_size` — the size gate and
+    // per-peer quota were evaluated against that value at accept time.
+    if payload.len() as u64 != fx.offer.file_size {
+        return (CompleteStatus::SizeMismatch, [0u8; 64]);
+    }
     let manifest = fx.offer.to_manifest();
     let pubkey = fx.peer_pubkey.unwrap_or([0u8; 32]);
 
@@ -719,28 +775,31 @@ fn write_file(
     if !verified {
         base.push_str(".unverified");
     }
-    let path = unique_path(&dir, &base);
+    let path = unique_path(&dir, &base).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "no free filename after 10000 collisions; refusing to overwrite",
+        )
+    })?;
     std::fs::write(&path, payload)?;
     Ok(path.to_string_lossy().into_owned())
 }
 
-/// A non-existent path in `dir` for `name`, appending ` (n)` before the extension on collision.
-fn unique_path(dir: &Path, name: &str) -> PathBuf {
+/// A non-existent path in `dir` for `name`, appending ` (n)` before the extension on collision, or
+/// `None` if the base and 9999 suffixed names are all taken — never returns an existing path to
+/// overwrite (audit F-3), upholding the "never overwriting" contract.
+fn unique_path(dir: &Path, name: &str) -> Option<PathBuf> {
     let candidate = dir.join(name);
     if !candidate.exists() {
-        return candidate;
+        return Some(candidate);
     }
     let (stem, ext) = match name.rsplit_once('.') {
         Some((s, e)) => (s.to_string(), format!(".{e}")),
         None => (name.to_string(), String::new()),
     };
-    for n in 1..10_000 {
-        let c = dir.join(format!("{stem} ({n}){ext}"));
-        if !c.exists() {
-            return c;
-        }
-    }
-    dir.join(name)
+    (1..10_000)
+        .map(|n| dir.join(format!("{stem} ({n}){ext}")))
+        .find(|c| !c.exists())
 }
 
 /// Whether an offer's block geometry is internally consistent: `block_size` within the protocol window
@@ -1034,7 +1093,12 @@ mod tests {
         persist_block(&dir, 0, blocks[0]);
         persist_block(&dir, 2, blocks[2]);
 
-        let mut asm = BlockAssembler::new(offer.transfer_id, offer.block_count);
+        let mut asm = BlockAssembler::new(
+            offer.transfer_id,
+            offer.block_count,
+            offer.block_size,
+            offer.file_size,
+        );
         let held = load_partials(&offer, &dir, &mut asm);
         assert_eq!(held, vec![true, false, true]);
         assert_eq!(asm.block(0), Some(blocks[0]));
@@ -1051,7 +1115,12 @@ mod tests {
 
         // A truncated block-0 file (wrong length) must not be trusted.
         persist_block(&dir, 0, &[1, 2, 3]);
-        let mut asm = BlockAssembler::new(offer.transfer_id, offer.block_count);
+        let mut asm = BlockAssembler::new(
+            offer.transfer_id,
+            offer.block_count,
+            offer.block_size,
+            offer.file_size,
+        );
         let held = load_partials(&offer, &dir, &mut asm);
         assert_eq!(held, vec![false, false, false]);
         assert_eq!(asm.block(0), None);

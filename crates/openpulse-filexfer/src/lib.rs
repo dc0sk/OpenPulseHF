@@ -36,14 +36,23 @@ pub const MAX_BLOCK_SIZE: u32 = 49_152;
 /// Default `block_size` when the sender doesn't specify one.
 pub const DEFAULT_BLOCK_SIZE: u32 = 16_384;
 
-/// Number of blocks a `file_size`-byte file splits into at `block_size`, or `None` if it exceeds the
-/// `u16` block-count field (≈3 GiB, never the binding limit under the 1 MiB config cap). Always ≥ 1.
+/// Highest permitted block count. The last block's SAR `segment_id` is `block_index + 1`, so a count
+/// of `0xFFFF` would make the final block's id `0xFFFF` — the reserved file-transfer control segment
+/// id — and route that block into the control channel where it is silently dropped (audit F-6).
+pub const MAX_BLOCK_COUNT: u16 = 0xFFFE;
+
+/// Number of blocks a `file_size`-byte file splits into at `block_size`, or `None` if `block_size` is
+/// 0 or the count would exceed [`MAX_BLOCK_COUNT`] (≈3 GiB, never the binding limit under the 1 MiB
+/// config cap). Always ≥ 1.
 pub fn block_count(file_size: u64, block_size: u32) -> Option<u16> {
     if block_size == 0 {
         return None;
     }
     let n = file_size.div_ceil(block_size as u64).max(1);
-    u16::try_from(n).ok()
+    match u16::try_from(n) {
+        Ok(c) if c <= MAX_BLOCK_COUNT => Some(c),
+        _ => None,
+    }
 }
 
 /// Timeouts driving the session state machines (all milliseconds). Injected so tests are deterministic.

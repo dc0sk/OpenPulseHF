@@ -5541,3 +5541,38 @@ and the actually-observed results per change.
   4 existing QSY tests updated to set a valid MYID.
 - **Test results:** daemon lib 120/120, all daemon suites green (incl. twin_daemon_bridge 4/4); full
   workspace gate below.
+
+## 2026-07-15 — fix: file-transfer / relay / discovery audit hardening (F-1 CRITICAL + F-5 SEVERE + more)
+
+- **Requirement/change:** six-finder adversarial sweep of the file-transfer subsystem, relay/wire-envelope
+  code, RX/TX pipeline seams, and control-surface parity
+  (`docs/dev/reviews/2026-07-15-filexfer-relay-seams-audit.md`). DSP-seam and parity lenses came back clean
+  (shared-seam + tripwire pattern holds); filexfer/relay/wire surfaced the findings below.
+- **F-1 [CRITICAL]:** received blocks were never bounded by the offer's declared size → a 1 KB-declared,
+  quota-approved offer could write up to ~4.2 GiB to disk. Fix = `BlockAssembler` rejects any block whose
+  decoded length ≠ its expected slot length (+ `reassemble_verify_write` refuses a payload ≠ `file_size`).
+- **F-5 [SEVERE]:** `poll_timeout` had zero daemon call sites and `cancel_transfer` only cleared `file_rx`,
+  so a `SendFile` to a silent peer pinned `file_tx` until restart. Fix = `filexfer::poll_timeouts` fired
+  each rx tick + `cancel_transfer` also cancels an outbound send.
+- **F-6 [MEDIUM]:** `block_count == 0xFFFF` collided the last block's SAR id with the control segment id.
+  Fix = cap `block_count` at `MAX_BLOCK_COUNT = 0xFFFE`.
+- **E5 [MEDIUM]:** single global `verified_peer` slot → offers verified against the wrong key. Fix =
+  per-callsign `verified_peers` map; `on_offer` binds to the offer's sender (trusting `sender_id` only
+  once the signature validates).
+- **F-3 [LOW]:** `unique_path` clobbered after 10 000 collisions. Fix = returns `Option`; `write_file`
+  errors instead of overwriting.
+- **F-4 [MEDIUM]:** `PeerQueryResponse::decode` pre-allocated from an unchecked `result_count`. Fix =
+  bound the capacity by bytes present (mirrors sibling decoders).
+- **discovery.group [dead config]:** deserialized but never applied (the `@OPULSE` group is baked into the
+  ground-truth-validated JS8 frame packing). Fix = marked RESERVED in schema + template, warn on a
+  non-default value; wiring the custom-group feature tracked separately.
+- **Deferred:** F-2 (unsigned offer metadata — widen the signed `ManifestBody`, a wire change), F-7 (NACK
+  path unreachable in the daemon), E3 (relay `auth_tag`/`min_trust_filter`). Documented in the review.
+- **Implementation:** `openpulse-filexfer/src/{blocks,lib}.rs`; `openpulse-daemon/src/{filexfer,lib,server}.rs`;
+  `openpulse-core/src/wire_query.rs`; `openpulse-config/src/lib.rs`.
+- **Tests:** `blocks::an_oversized_block_is_rejected`, `filexfer::block_count_math` (F-6),
+  `offer_is_verified_against_its_senders_key_not_the_last_handshook_peer` (E5),
+  `a_stuck_send_clears_on_offer_timeout` + `cancel_clears_an_outbound_send` (F-5),
+  `peer_query_response_rejects_oversized_result_count_without_over_allocating` (F-4).
+- **Test results:** filexfer 24, modem filexfer_loopback 2, daemon 123 lib + twin_daemon_bridge 4, core
+  wire_query 10, config 19 — all green; full workspace gate below.

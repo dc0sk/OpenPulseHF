@@ -255,6 +255,9 @@ pub struct PeerQueryResult {
     pub descriptor_signature: Vec<u8>,
 }
 
+/// Minimum encoded length of a [`PeerQueryResult`]: the 77-byte fixed part + a 2-byte signature length.
+const PEER_QUERY_RESULT_MIN_SIZE: usize = 79;
+
 impl PeerQueryResult {
     fn encode(&self) -> Vec<u8> {
         let sig_len = self.descriptor_signature.len().min(u16::MAX as usize);
@@ -271,7 +274,7 @@ impl PeerQueryResult {
 
     fn decode(bytes: &[u8]) -> Result<(Self, usize), WireQueryError> {
         // fixed part: 32+32+4+8+1 = 77 bytes, then 2 bytes sig_len
-        if bytes.len() < 79 {
+        if bytes.len() < PEER_QUERY_RESULT_MIN_SIZE {
             return Err(WireQueryError::MalformedPayload);
         }
         let peer_id = read_arr32(bytes, 0)?;
@@ -331,7 +334,12 @@ impl PeerQueryResponse {
         let result_count = u16::from_be_bytes([bytes[8], bytes[9]]) as usize;
 
         let mut offset = 10;
-        let mut results = Vec::with_capacity(result_count);
+        // Bound the pre-allocation by the bytes actually present (each result is ≥ 79 B) so an
+        // attacker-controlled count can't drive a multi-MB allocation from a tiny frame (audit F-4);
+        // the loop still bails on the first short record. Mirrors the sibling variable-length decoders.
+        let capacity =
+            result_count.min(bytes.len().saturating_sub(10) / PEER_QUERY_RESULT_MIN_SIZE);
+        let mut results = Vec::with_capacity(capacity);
         for _ in 0..result_count {
             let (result, consumed) = PeerQueryResult::decode(&bytes[offset..])?;
             offset += consumed;

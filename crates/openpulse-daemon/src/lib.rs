@@ -208,8 +208,13 @@ pub struct RuntimeControlState {
     pub local_grid: String,
     /// Outstanding CONREQ awaiting a CONACK (initiator role); `None` when idle.
     pub pending_handshake: Option<PendingHandshake>,
-    /// Most recently verified peer identity from a completed signed handshake.
+    /// Most recently verified peer identity from a completed signed handshake. Session-scoped: used
+    /// by OTA/QSY, which operate on the current link. For per-sender identity binding (file-transfer
+    /// offer verification) use [`verified_peers`](Self::verified_peers) instead.
     pub verified_peer: Option<VerifiedPeer>,
+    /// All peers verified this session, keyed by callsign — so a signed file-transfer offer is checked
+    /// against *its own sender's* key rather than whoever handshook most recently (audit E5).
+    pub verified_peers: std::collections::HashMap<String, VerifiedPeer>,
     /// Reassembles inbound SAR-fragmented handshake frames (CONREQ/CONACK exceed one modem frame).
     pub handshake_sar: SarReassembler,
     /// Our active OTA rate-ladder identity `(profile_name, fingerprint)`, set at OTA startup. Used to
@@ -361,6 +366,7 @@ impl Default for RuntimeControlState {
             local_grid: String::new(),
             pending_handshake: None,
             verified_peer: None,
+            verified_peers: std::collections::HashMap::new(),
             handshake_sar: SarReassembler::new(HANDSHAKE_TIMEOUT),
             local_ota_ladder: None,
             compress_tx: false,
@@ -1577,12 +1583,18 @@ fn record_verified_peer(
             "handshake: peer OTA rate ladder differs from ours; disabling adaptive OTA (fixed mode)"
         );
     }
-    runtime_state.verified_peer = Some(VerifiedPeer {
+    let peer = VerifiedPeer {
         callsign: callsign.to_string(),
         grid: grid.to_string(),
         pubkey: pubkey.to_vec(),
         profile_compatible,
-    });
+    };
+    // Record per-callsign (audit E5) so file-transfer offer verification binds to the true sender,
+    // and keep the single session slot for OTA/QSY which act on the current link.
+    runtime_state
+        .verified_peers
+        .insert(callsign.to_string(), peer.clone());
+    runtime_state.verified_peer = Some(peer);
     // Prefer the on-air verified grid over the config peer_grids fallback for this QSO.
     if !grid.is_empty() {
         runtime_state.logbook.set_pending_peer_grid(grid);
@@ -3171,13 +3183,15 @@ mod command_apply_tests {
             partial_ttl_hours: 72,
             burst_max_secs: 20.0,
         });
+        let vp = VerifiedPeer {
+            callsign: "W1AW".into(),
+            grid: String::new(),
+            pubkey: pubkey.to_vec(),
+            profile_compatible: None,
+        };
         let mut rs = RuntimeControlState {
-            verified_peer: Some(VerifiedPeer {
-                callsign: "W1AW".into(),
-                grid: String::new(),
-                pubkey: pubkey.to_vec(),
-                profile_compatible: None,
-            }),
+            verified_peers: std::iter::once(("W1AW".to_string(), vp.clone())).collect(),
+            verified_peer: Some(vp),
             filexfer_policy: policy,
             ..RuntimeControlState::default()
         };
@@ -3221,6 +3235,107 @@ mod command_apply_tests {
         let path = path.expect("FileReceived emitted");
         assert_eq!(std::fs::read(&path).expect("file on disk"), file);
         assert!(rs.file_rx.is_none(), "session cleared after completion");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Audit E5: a signed offer from W1AW is verified against W1AW's key even though a *different*
+    /// peer (K2XYZ) handshook more recently and holds the single `verified_peer` slot. Before the
+    /// fix, `on_offer` verified against the slot's key, so W1AW's legitimate offer would fail.
+    #[tokio::test]
+    async fn offer_is_verified_against_its_senders_key_not_the_last_handshook_peer() {
+        use crate::filexfer::{FileTransferPolicy, FX_CONTROL_SEGMENT_ID};
+        use ed25519_dalek::SigningKey;
+        use openpulse_core::manifest::TransferManifest;
+        use openpulse_core::sar::sar_encode;
+        use openpulse_filexfer::{FileOffer, FxFrame};
+
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(128);
+        let ev_tx = Arc::new(tx);
+
+        // W1AW signs an offer with its own key.
+        let mut w1aw_seed = [0u8; 32];
+        w1aw_seed[0] = 11;
+        let w1aw_key = SigningKey::from_bytes(&w1aw_seed)
+            .verifying_key()
+            .to_bytes();
+        let file = b"e5 sender-binding payload ".repeat(60).to_vec();
+        let manifest = TransferManifest::sign(&file, "W1AW", &w1aw_seed).unwrap();
+        let offer =
+            FileOffer::from_manifest(0x0E5, &manifest, "e5.txt", "text/plain", 1024).unwrap();
+
+        let dir = std::env::temp_dir().join(format!("opfx_e5_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let policy = FileTransferPolicy::from_config(&openpulse_config::FileTransferConfig {
+            enabled: true,
+            download_dir: dir.to_string_lossy().into_owned(),
+            auto_accept_max_bytes: u64::MAX,
+            max_file_bytes: 10 * 1024 * 1024,
+            per_peer_quota_bytes: 0,
+            require_verified_peer: true,
+            allowed_peers: vec![],
+            offer_timeout_secs: 120,
+            partial_ttl_hours: 72,
+            burst_max_secs: 20.0,
+        });
+
+        // The map holds both W1AW (correct) and K2XYZ; the single slot points at K2XYZ (a different
+        // key) as the most-recently-handshook peer.
+        let w1aw = VerifiedPeer {
+            callsign: "W1AW".into(),
+            grid: String::new(),
+            pubkey: w1aw_key.to_vec(),
+            profile_compatible: None,
+        };
+        let k2xyz = VerifiedPeer {
+            callsign: "K2XYZ".into(),
+            grid: String::new(),
+            pubkey: vec![9u8; 32], // a different key
+            profile_compatible: None,
+        };
+        let mut verified_peers = std::collections::HashMap::new();
+        verified_peers.insert("W1AW".to_string(), w1aw);
+        verified_peers.insert("K2XYZ".to_string(), k2xyz.clone());
+        let mut rs = RuntimeControlState {
+            verified_peers,
+            verified_peer: Some(k2xyz), // the wrong peer holds the slot
+            filexfer_policy: policy,
+            ..RuntimeControlState::default()
+        };
+
+        let offer_frag =
+            sar_encode(FX_CONTROL_SEGMENT_ID, &FxFrame::FileOffer(offer).encode()).unwrap();
+        process_received_bytes(
+            &offer_frag[0],
+            &mut rs,
+            None,
+            &ev_tx,
+            &active_mode,
+            &mut engine,
+        )
+        .await;
+
+        let mut saw_valid_from_w1aw = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let ControlEvent::FileOffered {
+                from,
+                signature_valid,
+                ..
+            } = ev
+            {
+                assert_eq!(
+                    from, "W1AW",
+                    "the offer must be attributed to its true sender"
+                );
+                assert!(
+                    signature_valid,
+                    "the offer must verify against W1AW's key, not the K2XYZ slot"
+                );
+                saw_valid_from_w1aw = true;
+            }
+        }
+        assert!(saw_valid_from_w1aw, "a FileOffered event should be emitted");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3338,6 +3453,100 @@ mod command_apply_tests {
         assert!(
             rs.file_tx.is_none(),
             "send session cleared after completion"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Build a runtime state with an active outbound send session (an offer sent, awaiting a reply).
+    #[cfg(test)]
+    async fn rs_with_active_send(tag: &str) -> (RuntimeControlState, u32, std::path::PathBuf) {
+        use crate::filexfer::FileTransferPolicy;
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(64);
+        let ev_tx = Arc::new(tx);
+        let dir = std::env::temp_dir().join(format!("opfx_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file_path = dir.join("outbound.txt");
+        std::fs::write(&file_path, b"send lifecycle test payload ".repeat(4)).unwrap();
+        let policy = FileTransferPolicy::from_config(&openpulse_config::FileTransferConfig {
+            enabled: true,
+            download_dir: dir.to_string_lossy().into_owned(),
+            auto_accept_max_bytes: 0,
+            max_file_bytes: 1 << 20,
+            per_peer_quota_bytes: 0,
+            require_verified_peer: false,
+            allowed_peers: vec![],
+            offer_timeout_secs: 120,
+            partial_ttl_hours: 72,
+            burst_max_secs: 20.0,
+        });
+        let mut rs = RuntimeControlState {
+            local_callsign: "N0CALL".into(),
+            filexfer_policy: policy,
+            ..RuntimeControlState::default()
+        };
+        let cmd = ControlCommand::SendFile {
+            to: "W1AW".into(),
+            path: file_path.to_string_lossy().into_owned(),
+        };
+        apply_command_to_engine(&cmd, &mut engine, &active_mode, &ev_tx, None, &mut rs).await;
+        let transfer_id = rs
+            .file_tx
+            .as_ref()
+            .expect("send session started")
+            .transfer_id();
+        (rs, transfer_id, dir)
+    }
+
+    /// Audit F-5: a send whose peer never answers times out and clears `file_tx`, so the subsystem
+    /// isn't pinned forever (which would make every later `SendFile` fail "already active").
+    #[tokio::test]
+    async fn a_stuck_send_clears_on_offer_timeout() {
+        let (mut rs, transfer_id, dir) = rs_with_active_send("timeout").await;
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        assert!(rs.file_tx.is_some(), "precondition: a send is active");
+
+        // Poll with a clock far past the offer deadline → the session fails and is cleared.
+        crate::filexfer::poll_timeouts(&mut rs, &ev_tx, "BPSK250", u64::MAX);
+
+        assert!(
+            rs.file_tx.is_none(),
+            "a timed-out send must release file_tx"
+        );
+        let mut failed = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let ControlEvent::FileFailed {
+                transfer_id: t,
+                direction,
+                ..
+            } = ev
+            {
+                if t == transfer_id && direction == "tx" {
+                    failed = true;
+                }
+            }
+        }
+        assert!(failed, "a FileFailed(tx) event must be emitted on timeout");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Audit F-5: `CancelFile` on an outbound transfer clears `file_tx` (previously it only ever
+    /// touched `file_rx`, leaving a send with no manual recovery path).
+    #[tokio::test]
+    async fn cancel_clears_an_outbound_send() {
+        let (mut rs, transfer_id, dir) = rs_with_active_send("cancel").await;
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        assert!(rs.file_tx.is_some(), "precondition: a send is active");
+
+        crate::filexfer::cancel_transfer(transfer_id, &mut rs, &ev_tx, "BPSK250");
+
+        assert!(
+            rs.file_tx.is_none(),
+            "CancelFile must clear an outbound send session"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

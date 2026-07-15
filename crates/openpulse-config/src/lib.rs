@@ -95,7 +95,10 @@ pub struct DiscoveryConfig {
     pub station_ttl_secs: u64,
     /// Refuse TX when the estimated `|UTC offset|` exceeds this many ms (RX-only degrade).
     pub max_clock_skew_ms: u64,
-    /// The JS8 custom group used for the OpenPulse hint.
+    /// RESERVED — accepted but not yet wired. The `@OPULSE` group is currently baked into the beacon
+    /// frame packing (validated against JS8Call ground-truth vectors) and the RX hint filter, so
+    /// setting this has no effect. Making it configurable is a future feature (a custom group changes
+    /// on-air addressing). A non-default value logs a warning at daemon startup.
     pub group: String,
     /// JS8 calling frequency (Hz) per band label (`"20m"` → 14 078 000). Dwell uses the entry for the
     /// current home band.
@@ -1255,7 +1258,8 @@ max_queries_per_10min = 2
 station_ttl_secs = 3600
 # Refuse TX when the estimated |UTC offset| exceeds this many ms (RX-only degrade).
 max_clock_skew_ms = 2000
-# JS8 custom group used for the OpenPulse hint.
+# JS8 custom group for the OpenPulse hint. RESERVED: the @OPULSE group is baked into the beacon frame
+# packing and RX filter, so a non-default value has no effect (and logs a warning at startup).
 group = "OPULSE"
 # JS8 calling frequency (Hz) per band; dwell uses the entry for the current home band.
 [discovery.calling_freqs_hz]
