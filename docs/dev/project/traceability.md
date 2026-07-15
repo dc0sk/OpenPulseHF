@@ -9,6 +9,26 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-15 — test(daemon): MFSK16 sub-floor ARQ rung — end-to-end twin validation (REQ-WSIG-01)
+
+- **Requirement/change:** validate the shipped MFSK16 sub-floor ARQ rung end-to-end across two real daemons
+  (the deferred PR-2 item), and enable the same on the snd-aloop real-audio rig.
+- **Design decision:** pin both daemons at SL1 (`ota_lock_level = "SL1"` on `hpx_hf`) and cross a small
+  message — a deterministic, tractable validation of the full daemon MFSK16 data + K=3-ACK exchange. The
+  17 s MFSK16 frame is 17 s of *samples* processed at CPU speed over the non-real-time loopback bridge, so
+  the exchange runs in ~1 s — fast and stable enough (3/3) to be a routine CI gate, not `#[ignore]`. Assert
+  the exchange actually used the sub-floor rung (B's `FrameReceived.mode == "MFSK16"`, A's
+  `OtaStatus.tx_mode == "MFSK16"`), else a clean loopback could pass via a fallback candidate. The *dynamic*
+  entry+exit boundary (a live fade dropping the ladder to SL1 then recovering) needs mid-test channel
+  control the harness doesn't expose → deferred.
+- **Implementation:** `crates/openpulse-daemon/tests/twin_daemon_bridge.rs`
+  (`subfloor_sl1_message_crosses_with_k3_ack_between_two_real_daemons` + `subfloor_cfg`);
+  `scripts/run-twin-station-audio.sh` (`OTA_LOCK` env knob → `ota_lock_level`, + a documented sub-floor
+  validation recipe).
+- **Tests:** the new twin test; full `twin_daemon_bridge` suite (4: message/file/ota-ladder/sub-floor).
+- **Test results:** sub-floor gate 3/3 stable (~0.8 s); full twin suite 4/4 green (18.3 s); `bash -n` on the
+  script clean.
+
 ## 2026-07-15 — feat(modem): MFSK16 sub-floor ARQ rung — PR-2 guardrails (REQ-WSIG-01)
 
 - **Requirement/change:** the staged guardrails from the Fable review of the MFSK16 ARQ integration —
