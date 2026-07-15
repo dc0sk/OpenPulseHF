@@ -2102,11 +2102,17 @@ Build order revised per the 2026-07-14 Fable design review (see traceability):
    `receive_ota_ack_within` (per-read FSK4 + energy-onset K=3 slot-union, first-success) + mode-scaled
    `ota_ack_timeout_ms` (9 s sub-floor / 4 s else) + MFSK16 `estimate_snr_db` (avoids the M2M4 self-sealing
    SL1 trapdoor); daemon swaps the 2 ACK call sites. Tests: `mfsk16_arq_subfloor` (K=3 round-trip /
-   union-listen-accepts-FSK4 / non-sub-floor fast path) + `snr_estimate`. **PR-2 (staged):** HARQ-gate
-   admission for MFSK16+Rs (ships only with a measured MFSK16 diversity gate) + payload-capacity gate (a
-   >213 B body can't ride the one-RS-block MFSK16 frame → clamp, don't drop) + climb-out/trapdoor test +
-   twin-daemon SL1 entry+exit boundary test. Shipped waveform state (`MFSK16` broadcast/beacon + explicit
-   mode) stands.
+   union-listen-accepts-FSK4 / non-sub-floor fast path) + `snr_estimate`. **PR-2 (guardrails) SHIPPED:**
+   payload-capacity gate — `ota_tx_for_payload` bumps a body over one MFSK16 RS block (cap = 209 B) off SL1
+   to the next rung that carries multi-block (decodable whenever the peer confirms ≥ there), instead of
+   hard-erroring and silently dropping; HARQ-gate admission for MFSK16+Rs **with** its measured diversity
+   gate (`mfsk16_harq_diversity`: combining two moderate_f1 attempts beats a single one); climb-out/trapdoor
+   test (`subfloor_sl1_climbs_back_out_when_snr_recovers`: SL1 → SL2 once SNR clears the 5 dB ceiling). The
+   daemon ACK-seam swap is regression-checked green by the existing `ota_ladder_steps` twin test (fast path).
+   **Deferred (environment-gated, like the on-air twin scenarios):** the twin-daemon SL1 **entry+exit**
+   boundary test — MFSK16's 17 s frames × the async daemon loop make a real deep-fade→recovery exchange
+   minutes-long and flaky as a CI gate; the components are unit/engine-tested and the daemon wiring is a thin
+   2-call-site swap. Shipped waveform state (`MFSK16` broadcast/beacon + explicit mode) stands.
 
 ### Features shipped (no longer deferred)
 
