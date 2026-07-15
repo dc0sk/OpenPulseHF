@@ -680,3 +680,59 @@ fn route_request_accumulates_the_forwarder_path() {
         "route is [forwarder B, destination]"
     );
 }
+
+/// An envelope too large for one 255-byte modem frame is SAR-fragmented and reassembled on receive,
+/// then delivered — the framing that makes signed/large control responses viable. Fragments are
+/// delivered one-per-read via the loopback frame queue, matching real per-tick reception.
+#[test]
+fn oversized_envelope_survives_sar_fragmentation() {
+    let peer_a = [1u8; 32];
+    let peer_b = [2u8; 32];
+    let lb_tx = LoopbackBackend::new();
+    let lb_b = LoopbackBackend::new();
+    let mut node_b = make_node(&lb_b, peer_b);
+
+    // A relay-data envelope addressed to B, large enough that the whole envelope exceeds one frame.
+    let mut env = relay_envelope(peer_a, peer_b, 77, 9);
+    env.payload = vec![0xAB; 400];
+    let bytes = env.encode().unwrap();
+    assert!(
+        bytes.len() > 255,
+        "the test envelope must exceed one modem frame"
+    );
+    let frags = openpulse_core::sar::sar_encode(0, &bytes).unwrap();
+    assert!(
+        frags.len() >= 2,
+        "the envelope must fragment; got {}",
+        frags.len()
+    );
+
+    // Modulate each fragment as its own frame and hand it to B's frame queue (one per read).
+    let mut tx_engine = ModemEngine::new(Box::new(lb_tx.clone_shared()));
+    tx_engine
+        .register_plugin(Box::new(BpskPlugin::default()))
+        .unwrap();
+    for frag in &frags {
+        tx_engine.transmit(frag, MODE, None).unwrap();
+        let samples = lb_tx.drain_samples();
+        assert!(!samples.is_empty());
+        lb_b.push_frame(&samples);
+    }
+
+    // B receives one fragment per step and delivers once the envelope reassembles.
+    let mut delivered = false;
+    for _ in 0..(frags.len() + 2) {
+        let events = node_b.step(1000);
+        if events
+            .iter()
+            .any(|e| matches!(e, MeshEvent::FrameDelivered { session_id: 77 }))
+        {
+            delivered = true;
+            break;
+        }
+    }
+    assert!(
+        delivered,
+        "B must reassemble the SAR-fragmented envelope and deliver it"
+    );
+}
