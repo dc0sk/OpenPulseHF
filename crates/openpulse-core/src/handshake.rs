@@ -33,6 +33,39 @@ pub enum HandshakeError {
     UnsupportedCompression,
     #[error("responder selected a FEC mode not offered by the initiator")]
     UnsupportedFecMode,
+    #[error("handshake timestamp is stale: {skew_ms} ms skew exceeds {max_skew_ms} ms")]
+    StaleTimestamp { skew_ms: u64, max_skew_ms: u64 },
+    #[error("handshake carries no timestamp but freshness is required")]
+    MissingTimestamp,
+}
+
+/// Freshness bound for verifying a handshake's signed timestamp, closing the
+/// capture-replay window. The verifier rejects a frame whose `timestamp_ms`
+/// differs from `now_ms` by more than `max_skew_ms` (in either direction), and
+/// rejects a frame that carries no timestamp at all (`timestamp_ms == 0`).
+#[derive(Debug, Clone, Copy)]
+pub struct Freshness {
+    /// The verifier's current wall-clock time in Unix milliseconds.
+    pub now_ms: u64,
+    /// Maximum tolerated clock skew between the two stations, in milliseconds.
+    pub max_skew_ms: u64,
+}
+
+impl Freshness {
+    /// Reject a stale/future-dated frame, or a frame with no timestamp when freshness is required.
+    fn check(&self, timestamp_ms: u64) -> Result<(), HandshakeError> {
+        if timestamp_ms == 0 {
+            return Err(HandshakeError::MissingTimestamp);
+        }
+        let skew_ms = self.now_ms.abs_diff(timestamp_ms);
+        if skew_ms > self.max_skew_ms {
+            return Err(HandshakeError::StaleTimestamp {
+                skew_ms,
+                max_skew_ms: self.max_skew_ms,
+            });
+        }
+        Ok(())
+    }
 }
 
 impl From<TrustError> for HandshakeError {
@@ -123,6 +156,10 @@ struct ConReqBody {
     profile_name: String,
     #[serde(default, skip_serializing_if = "u64_is_zero")]
     profile_fingerprint: u64,
+    // Unix-ms creation time, signed, for replay-freshness. Skipped when 0 so legacy no-timestamp
+    // frames (and their signatures) stay byte-identical.
+    #[serde(default, skip_serializing_if = "u64_is_zero")]
+    timestamp_ms: u64,
 }
 
 /// Connection request sent by the initiating station during Discovery.
@@ -150,6 +187,9 @@ pub struct ConReq {
     /// Fingerprint of the active OTA ladder mapping (0 = none). See `SessionProfile::fingerprint`.
     #[serde(default)]
     pub profile_fingerprint: u64,
+    /// Unix-ms creation time, signed, for replay-freshness (0 = not advertised / legacy).
+    #[serde(default)]
+    pub timestamp_ms: u64,
     /// Ed25519 signature over canonical JSON of the body fields (64 bytes).
     pub signature: Vec<u8>,
 }
@@ -198,11 +238,13 @@ impl ConReq {
             station_grid,
             "",
             0,
+            0,
         )
     }
 
     /// Create and sign a CONREQ advertising the grid AND the active OTA rate-ladder identity
     /// (`profile_name` + `profile_fingerprint`), so the peer can detect a diverged ladder.
+    /// `timestamp_ms` is the signed Unix-ms creation time for replay-freshness (0 = not advertised).
     #[allow(clippy::too_many_arguments)]
     pub fn create_full(
         station_id: &str,
@@ -214,6 +256,7 @@ impl ConReq {
         station_grid: &str,
         profile_name: &str,
         profile_fingerprint: u64,
+        timestamp_ms: u64,
     ) -> Result<Self, HandshakeError> {
         let signing_key = SigningKey::from_bytes(signing_key_seed);
         let verifying_key = signing_key.verifying_key();
@@ -228,6 +271,7 @@ impl ConReq {
             station_grid: station_grid.to_string(),
             profile_name: profile_name.to_string(),
             profile_fingerprint,
+            timestamp_ms,
         };
         let canonical =
             serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))?;
@@ -243,6 +287,7 @@ impl ConReq {
             station_grid: station_grid.to_string(),
             profile_name: profile_name.to_string(),
             profile_fingerprint,
+            timestamp_ms,
             signature: sig.to_bytes().to_vec(),
         })
     }
@@ -258,6 +303,7 @@ impl ConReq {
             station_grid: self.station_grid.clone(),
             profile_name: self.profile_name.clone(),
             profile_fingerprint: self.profile_fingerprint,
+            timestamp_ms: self.timestamp_ms,
         };
         serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))
     }
@@ -321,6 +367,9 @@ struct ConAckBody {
     profile_name: String,
     #[serde(default, skip_serializing_if = "u64_is_zero")]
     profile_fingerprint: u64,
+    // Unix-ms creation time, signed, for replay-freshness. Skipped when 0 for signature compatibility.
+    #[serde(default, skip_serializing_if = "u64_is_zero")]
+    timestamp_ms: u64,
 }
 
 fn fec_mode_is_none(m: &FecMode) -> bool {
@@ -357,6 +406,9 @@ pub struct ConAck {
     /// Fingerprint of the responder's active OTA ladder mapping (0 = none).
     #[serde(default)]
     pub profile_fingerprint: u64,
+    /// Unix-ms creation time, signed, for replay-freshness (0 = not advertised / legacy).
+    #[serde(default)]
+    pub timestamp_ms: u64,
     /// Ed25519 signature over canonical JSON of the body fields (64 bytes).
     pub signature: Vec<u8>,
 }
@@ -403,11 +455,13 @@ impl ConAck {
             station_grid,
             "",
             0,
+            0,
         )
     }
 
     /// Create and sign a CONACK advertising the grid AND the responder's active OTA rate-ladder
-    /// identity (`profile_name` + `profile_fingerprint`).
+    /// identity (`profile_name` + `profile_fingerprint`). `timestamp_ms` is the signed Unix-ms
+    /// creation time for replay-freshness (0 = not advertised).
     #[allow(clippy::too_many_arguments)]
     pub fn create_full(
         station_id: &str,
@@ -419,6 +473,7 @@ impl ConAck {
         station_grid: &str,
         profile_name: &str,
         profile_fingerprint: u64,
+        timestamp_ms: u64,
     ) -> Result<Self, HandshakeError> {
         let signing_key = SigningKey::from_bytes(signing_key_seed);
         let verifying_key = signing_key.verifying_key();
@@ -433,6 +488,7 @@ impl ConAck {
             station_grid: station_grid.to_string(),
             profile_name: profile_name.to_string(),
             profile_fingerprint,
+            timestamp_ms,
         };
         let canonical =
             serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))?;
@@ -448,6 +504,7 @@ impl ConAck {
             station_grid: station_grid.to_string(),
             profile_name: profile_name.to_string(),
             profile_fingerprint,
+            timestamp_ms,
             signature: sig.to_bytes().to_vec(),
         })
     }
@@ -463,6 +520,7 @@ impl ConAck {
             station_grid: self.station_grid.clone(),
             profile_name: self.profile_name.clone(),
             profile_fingerprint: self.profile_fingerprint,
+            timestamp_ms: self.timestamp_ms,
         };
         serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))
     }
@@ -539,10 +597,17 @@ pub fn verify_conreq(
     trust_store: &dyn TrustStore,
     policy: PolicyProfile,
     local_min_mode: SigningMode,
+    freshness: Option<Freshness>,
 ) -> Result<HandshakeDecision, HandshakeError> {
     let canonical = req.canonical_bytes()?;
     if !verify_ed25519(&req.pubkey, &canonical, &req.signature) {
         return Err(HandshakeError::InvalidSignature);
+    }
+
+    // Replay-freshness: the timestamp is inside the signed body, so this check runs after signature
+    // verification (an attacker cannot alter it without breaking the signature).
+    if let Some(f) = freshness {
+        f.check(req.timestamp_ms)?;
     }
 
     // Bind the in-frame key to the trusted key for this station (mirrors `verify_pq_conreq`). The signature
@@ -592,6 +657,7 @@ fn bind_frame_key(
 /// is similarly checked for `selected_fec_mode`. Fails if the signature is invalid, the
 /// session ID does not match, compression or FEC mode is not mutually supported, or the
 /// trust policy rejects the responder.
+#[allow(clippy::too_many_arguments)]
 pub fn verify_conack(
     ack: &ConAck,
     req_session_id: &str,
@@ -600,6 +666,7 @@ pub fn verify_conack(
     trust_store: &dyn TrustStore,
     policy: PolicyProfile,
     local_min_mode: SigningMode,
+    freshness: Option<Freshness>,
 ) -> Result<HandshakeDecision, HandshakeError> {
     if ack.session_id != req_session_id {
         return Err(HandshakeError::SessionIdMismatch {
@@ -623,6 +690,11 @@ pub fn verify_conack(
     let canonical = ack.canonical_bytes()?;
     if !verify_ed25519(&ack.pubkey, &canonical, &ack.signature) {
         return Err(HandshakeError::InvalidSignature);
+    }
+
+    // Replay-freshness (signed timestamp; checked after signature verification).
+    if let Some(f) = freshness {
+        f.check(ack.timestamp_ms)?;
     }
 
     // Bind the in-frame key to the trusted key for this station (see `verify_conreq`).
@@ -821,7 +893,160 @@ mod tests {
         req.pubkey = pubkey_for_seed(99); // wrong key
 
         let store = InMemoryTrustStore::new();
-        let result = verify_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Normal);
+        let result = verify_conreq(
+            &req,
+            &store,
+            PolicyProfile::Balanced,
+            SigningMode::Normal,
+            None,
+        );
         assert!(matches!(result, Err(HandshakeError::InvalidSignature)));
+    }
+
+    fn conreq_at(timestamp_ms: u64) -> ConReq {
+        ConReq::create_full(
+            "W1AW",
+            &make_key(1),
+            vec![SigningMode::Normal],
+            "s-fresh",
+            vec![],
+            vec![],
+            "",
+            "",
+            0,
+            timestamp_ms,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn fresh_conreq_within_window_is_accepted() {
+        let now = 1_700_000_000_000;
+        let req = conreq_at(now - 5_000); // 5 s old
+        let store = InMemoryTrustStore::new();
+        let f = Freshness {
+            now_ms: now,
+            max_skew_ms: 120_000,
+        };
+        assert!(verify_conreq(
+            &req,
+            &store,
+            PolicyProfile::Balanced,
+            SigningMode::Normal,
+            Some(f)
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn stale_conreq_is_rejected() {
+        let now = 1_700_000_000_000;
+        let req = conreq_at(now - 10 * 60_000); // 10 min old
+        let store = InMemoryTrustStore::new();
+        let f = Freshness {
+            now_ms: now,
+            max_skew_ms: 120_000,
+        };
+        assert!(matches!(
+            verify_conreq(
+                &req,
+                &store,
+                PolicyProfile::Balanced,
+                SigningMode::Normal,
+                Some(f)
+            ),
+            Err(HandshakeError::StaleTimestamp { .. })
+        ));
+    }
+
+    #[test]
+    fn future_dated_conreq_is_rejected() {
+        let now = 1_700_000_000_000;
+        let req = conreq_at(now + 10 * 60_000); // 10 min in the future
+        let store = InMemoryTrustStore::new();
+        let f = Freshness {
+            now_ms: now,
+            max_skew_ms: 120_000,
+        };
+        assert!(matches!(
+            verify_conreq(
+                &req,
+                &store,
+                PolicyProfile::Balanced,
+                SigningMode::Normal,
+                Some(f)
+            ),
+            Err(HandshakeError::StaleTimestamp { .. })
+        ));
+    }
+
+    #[test]
+    fn timestampless_conreq_rejected_when_freshness_required() {
+        let req = conreq_at(0); // legacy / no timestamp
+        let store = InMemoryTrustStore::new();
+        let f = Freshness {
+            now_ms: 1_700_000_000_000,
+            max_skew_ms: 120_000,
+        };
+        assert!(matches!(
+            verify_conreq(
+                &req,
+                &store,
+                PolicyProfile::Balanced,
+                SigningMode::Normal,
+                Some(f)
+            ),
+            Err(HandshakeError::MissingTimestamp)
+        ));
+    }
+
+    #[test]
+    fn none_freshness_skips_the_check() {
+        let req = conreq_at(0); // no timestamp — accepted when freshness is not enforced
+        let store = InMemoryTrustStore::new();
+        assert!(verify_conreq(
+            &req,
+            &store,
+            PolicyProfile::Balanced,
+            SigningMode::Normal,
+            None
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn stale_conack_is_rejected() {
+        let now = 1_700_000_000_000;
+        let ack = ConAck::create_full(
+            "W1AW",
+            &make_key(1),
+            SigningMode::Normal,
+            "s-fresh",
+            CompressionAlgorithm::None,
+            FecMode::None,
+            "",
+            "",
+            0,
+            now - 10 * 60_000,
+        )
+        .unwrap();
+        let store = InMemoryTrustStore::new();
+        let f = Freshness {
+            now_ms: now,
+            max_skew_ms: 120_000,
+        };
+        assert!(matches!(
+            verify_conack(
+                &ack,
+                "s-fresh",
+                &[],
+                &[],
+                &store,
+                PolicyProfile::Balanced,
+                SigningMode::Normal,
+                Some(f)
+            ),
+            Err(HandshakeError::StaleTimestamp { .. })
+        ));
     }
 }

@@ -9,6 +9,34 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-16 — feat(handshake): replay-freshness — signed timestamp bounds the capture-replay window
+
+- **Requirement/change:** deferred handshake-trust audit item — CONREQ/CONACK carried no
+  nonce/timestamp, so a captured valid handshake replays indefinitely (the signature stays valid). The
+  audit scoped the fix as "a freshness field in the signed body."
+- **Design decision:** add a signed `timestamp_ms` (Unix ms) to the CONREQ/CONACK body, `skip_serializing_if`
+  zero so legacy no-timestamp frames stay byte-identical (same back-compat pattern as `station_grid` /
+  `profile_*`). Verification takes an optional `Freshness { now_ms, max_skew_ms }`: when supplied it rejects
+  a frame whose signed timestamp is outside `±max_skew_ms` (stale *or* future-dated) and rejects a frame
+  with no timestamp. The check runs **after** signature verification (the timestamp is inside the signed
+  body, so it can't be altered without breaking the signature). A stateless timestamp bound — not a full
+  seen-nonce tracker — was chosen as the proportionate, audit-scoped fix; it shrinks the replay window from
+  unbounded to the clock-skew tolerance. Within that window an exact replay of a CONACK is already narrowed
+  by the F2 dialed-peer / session-id checks (#896).
+- **Implementation:**
+  - `crates/openpulse-core/src/handshake.rs`: `timestamp_ms` on `ConReq`/`ConAck` (+ bodies + `canonical_bytes`);
+    `create_full` gains a `timestamp_ms` param (convenience builders pass 0); `Freshness` + `HandshakeError::{StaleTimestamp, MissingTimestamp}`; `verify_conreq`/`verify_conack` gain `Option<Freshness>`.
+  - `crates/openpulse-daemon/src/lib.rs`: `HANDSHAKE_MAX_SKEW_MS = 120_000` + `unix_now_ms()`; the responder
+    stamps + freshness-checks CONREQ→CONACK, the initiator stamps CONREQ + freshness-checks CONACK.
+- **Behaviour change:** the daemon now **rejects a handshake with no timestamp or one outside ±120 s**. Both
+  ends stamp a current time, so an upgraded pair interoperates; a legacy (timestampless) peer is rejected by
+  the daemon. Assumes both stations keep roughly correct wall-clock time.
+- **Tests:** `handshake` unit tests — fresh-accept, stale-reject, future-reject, missing-timestamp-reject,
+  `None`-skips-check, stale-CONACK-reject; existing handshake/compression integration tests pass `None`
+  (unchanged); daemon `handshake_rf_tests` build timestamped frames and verify end-to-end.
+- **Test results:** `openpulse-core` lib + integration green; `openpulse-daemon` handshake-RF + full suite
+  green (0 failures); clippy clean. Full workspace gate below.
+
 ## 2026-07-16 — feat(relay): E3 — envelope origin authentication (relay verifies signed src_peer_id)
 
 - **Requirement/change:** handshake-trust audit finding **E3** (also the `auth_tag` half of E1): the relay

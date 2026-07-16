@@ -108,6 +108,7 @@ JSON object — initiator → responder:
 | `supported_compression` | [CompressionAlgorithm] | offered compression (empty = none) |
 | `supported_fec_modes` | [FecMode] | offered FEC (omitted/empty = none) |
 | `station_grid` | string | Maidenhead grid; **omitted when empty** (legacy frames stay byte-identical) |
+| `timestamp_ms` | u64 | signed Unix-ms creation time for replay-freshness; **omitted when 0** (legacy) |
 | `signature` | bytes (64) | Ed25519 signature over the canonical body |
 
 ### 3.2 CONACK body (`HSAK`)
@@ -123,6 +124,7 @@ JSON object — responder → initiator:
 | `selected_compression` | CompressionAlgorithm | chosen algorithm |
 | `selected_fec_mode` | FecMode | chosen FEC (omitted when `None`) |
 | `station_grid` | string | responder grid; omitted when empty |
+| `timestamp_ms` | u64 | signed Unix-ms creation time for replay-freshness; **omitted when 0** (legacy) |
 | `signature` | bytes (64) | Ed25519 signature over the canonical body |
 
 ### 3.3 Signing & canonical form
@@ -130,10 +132,16 @@ JSON object — responder → initiator:
 - The signature covers the **canonical JSON** of the body fields (excluding `signature`), with keys
   sorted recursively, so any post-signing field injection invalidates it.
 - Verification (`verify_conreq` / `verify_conack`): reconstruct canonical JSON → check Ed25519 →
-  evaluate trust via `evaluate_handshake`. CONACK additionally requires the echoed `session_id` to
-  match and the selected compression/FEC to be one the CONREQ offered.
+  **check replay-freshness** (optional; see below) → evaluate trust via `evaluate_handshake`. CONACK
+  additionally requires the echoed `session_id` to match and the selected compression/FEC to be one the
+  CONREQ offered.
 - Empty `station_grid` is `skip_serializing_if`-omitted, so a zero-grid frame and its signature are
-  byte-identical to the pre-grid format.
+  byte-identical to the pre-grid format. The same holds for a zero `timestamp_ms`.
+- **Replay-freshness.** `timestamp_ms` is inside the signed body. A verifier that passes a `Freshness
+  { now_ms, max_skew_ms }` rejects a frame whose timestamp is outside `±max_skew_ms` of its clock, and
+  rejects a frame carrying no timestamp — bounding the capture-replay window to the clock-skew tolerance
+  (the daemon uses ±120 s). Because the timestamp is signed, an attacker cannot refresh a captured frame.
+  The freshness check runs *after* signature verification.
 
 ### 3.4 Daemon RF exchange
 

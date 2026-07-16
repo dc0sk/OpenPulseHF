@@ -89,8 +89,14 @@ fn conreq_carries_supported_compression_in_signature() {
 
     // Verify the signature covers the compression list.
     let store = InMemoryTrustStore::new();
-    verify_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Normal)
-        .expect("request with Lz4 compression should verify");
+    verify_conreq(
+        &req,
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+        None,
+    )
+    .expect("request with Lz4 compression should verify");
 }
 
 #[test]
@@ -116,6 +122,7 @@ fn conack_carries_selected_compression_in_signature() {
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
+        None,
     )
     .expect("ack with Lz4 compression should verify");
 }
@@ -146,6 +153,7 @@ fn full_negotiation_round_trip_with_lz4() {
         &bob_store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
+        None,
     )
     .unwrap();
 
@@ -187,6 +195,7 @@ fn full_negotiation_round_trip_with_lz4() {
         &alice_store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
+        None,
     )
     .expect("Alice should accept Bob's Lz4-enabled CONACK");
 }
@@ -208,7 +217,14 @@ fn compression_field_tampering_invalidates_signature() {
 
     let store = InMemoryTrustStore::new();
     assert!(
-        verify_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Normal).is_err(),
+        verify_conreq(
+            &req,
+            &store,
+            PolicyProfile::Balanced,
+            SigningMode::Normal,
+            None
+        )
+        .is_err(),
         "tampering with compression field must invalidate signature"
     );
 }
@@ -248,6 +264,7 @@ fn conack_rejected_when_compression_not_offered() {
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
+        None,
     );
     assert!(
         matches!(result, Err(HandshakeError::UnsupportedCompression)),
@@ -333,6 +350,7 @@ fn zstd_dict_id_mismatch_rejected_in_negotiation() {
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
+        None,
     );
     assert!(
         matches!(result, Err(HandshakeError::UnsupportedCompression)),
@@ -368,6 +386,7 @@ fn zstd_full_negotiation_round_trip() {
         &bob_store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
+        None,
     )
     .unwrap();
 
@@ -394,6 +413,7 @@ fn zstd_full_negotiation_round_trip() {
         &alice_store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
+        None,
     )
     .expect("Zstd negotiation should succeed");
 }
