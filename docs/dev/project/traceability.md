@@ -9,6 +9,35 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-16 — fix(cli): report the AFC offset in session diagnostics (it was always null)
+
+- **Requirement/change:** the "dead pub surface" cleanup item on issue #917, which listed
+  `SessionDiagnostics.afc_offset_hz` (plus `notch_active_freqs`, `clear_tx_session_log`, `enable_afc`,
+  and the `center_frequency()` / `max_power_watts()` getters) as zero-call-site surface to "remove, or
+  wire".
+- **Design decision — wire one, keep the rest, delete none.** `afc_offset_hz` is `Serialize`d into the
+  `openpulse session` diagnostics JSON but nothing ever wrote it, so the field was initialised to
+  `None` and the output **always carried `"afc_offset_hz": null`** while `ModemEngine` held the value
+  all along. CLAUDE.md records the original intent ("ready for CLI to populate"), and
+  `build_session_diagnostics` already takes `&ModemEngine` — so this is a one-line wiring that
+  delivers a diagnostic that was designed, specified, and never connected. The **other five were
+  deliberately kept**: each is the counterpart of a live accessor (`enable_afc`↔`disable_afc` (3
+  uses), `center_frequency()`↔`set_center_frequency` (26), `max_power_watts()`↔`set_max_power_watts`
+  (5), `clear_tx_session_log()`↔`tx_session_log()` (13)). Deleting them is not cleanup — it would
+  leave `disable_afc` with no way to re-enable and remove getters for heavily-set fields, which is a
+  worse API than a few unused accessors. `notch_active_freqs` is a diagnostic readout on a live notch
+  bank. Recorded on #917 rather than silently skipped.
+- **Behaviour change:** `openpulse session ... --diagnostics` JSON now reports a real `afc_offset_hz`
+  after a demodulation instead of a constant `null`. Same schema, so no consumer breaks.
+- **Implementation:** `crates/openpulse-cli/src/commands/session.rs` — `build_session_diagnostics`
+  sets `diag.afc_offset_hz = engine.last_afc_offset_hz()`.
+- **Tests:** `build_session_diagnostics_reports_the_engine_afc_offset` — asserts `None` before any
+  demodulation (the field must not invent a value), then does a real BPSK250 round-trip and requires
+  the snapshot to match `engine.last_afc_offset_hz()`. It first asserts the engine actually latched an
+  estimate, so it cannot pass by comparing `None` to `None` — the vacuous-gate failure mode.
+- **Test results:** gate verified to **fail with the one-line wiring reverted**. `openpulse-cli` 34
+  passed, 0 failed; workspace clippy (CI form) and `cargo fmt --all --check` clean.
+
 ## 2026-07-16 — test: close the deferred test-coverage gaps from the modem audit (ACK channel + a false acceptance claim)
 
 - **Requirement/change:** the three remaining test-coverage items on issue #917. They share one theme —
