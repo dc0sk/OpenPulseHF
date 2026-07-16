@@ -9,6 +9,37 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-16 — fix(modem): align mismatched-length retained HARQ LLRs instead of discarding them
+
+- **Requirement/change:** follow-up found while measuring #920 (audit #4) and filed on issue #917 — the
+  HARQ combine admitted a retained burst only when its LLR vector was *exactly* the current burst's
+  length. A faded demod recovers a varying symbol count for the **same** frame, so that equality filter
+  was silently discarding genuine retransmissions and throwing away diversity already paid for in
+  airtime.
+- **Mechanism, measured before changing anything:** one OFDM52-16QAM frame over 60 `moderate_f1`
+  realisations @10 dB demodulated to lengths **576, 4096, 4112, 4160, 4168, 4192, 4288, 4320**. The
+  variation is *trailing*, not a shifted start: same-frame pairs of **different** length agree on
+  **0.817** of their bit signs over the overlap versus **0.811** for equal-length pairs — statistically
+  identical, so index *k* means the same bit in both and truncation is correctly aligned.
+- **Design decision — truncate *and* zero-pad, not just truncate:** every retained burst is aligned onto
+  the current burst's LLR grid; longer is truncated, shorter is zero-padded. Truncation alone is unsafe:
+  the observed 576-sample runts would drag `combine_llrs_map`'s min-length output below the frame and
+  destroy an otherwise-decodable combine, and a runt can be the *newest* vector, where the suffix trial
+  from #920 cannot drop it. Zero-padding is the principled complement — an LLR of 0 is P(0)=P(1)=0.5,
+  exactly "this burst never recovered that symbol", and contributes nothing to the MAP sum.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` — `ota_decode_and_ack_inner`: the
+  `.filter(|v| v.len() == llrs.len())` becomes a truncate/zero-pad alignment map.
+- **Tests:** `crates/openpulse-modem/tests/ota_harq_combining.rs` — the diversity gate
+  `ota_retention_combines_across_retransmissions` tightened from `+0.08` to `+0.35`. The original
+  threshold was loose enough to pass both behaviours and could not see this regression; the new one sits
+  between the measured +0.280 (equality filter) and +0.400 (aligned).
+- **Test results:** controlled A/B, same seeds, only the filter differing — clean combining **0.840 →
+  0.957** at 400 realisations (**+0.117**, roughly double the +0.067 that #920 recovered); the HARQ gain
+  over standalone (0.582) grows from 0.258 to 0.375. At the 50-trial CI default the diversity delta is
+  +0.280 → **+0.400**, and the tightened gate **fails on the equality filter** and passes with the fix.
+  #920's pollution gate still measures delta **+0.000**, so the two fixes compose. Full workspace
+  **2011 passed, 0 failed**; workspace clippy (CI form) and `cargo fmt --all --check` clean.
+
 ## 2026-07-16 — fix(modem): #4 — stop an abandoned message's retained LLRs polluting the next one's HARQ combine
 
 - **Requirement/change:** modem loose-ends audit (2026-07-16) finding **#4** — `ota_retained_llrs`
