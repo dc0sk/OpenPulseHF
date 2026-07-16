@@ -160,6 +160,10 @@ struct ConReqBody {
     // frames (and their signatures) stay byte-identical.
     #[serde(default, skip_serializing_if = "u64_is_zero")]
     timestamp_ms: u64,
+    // Ephemeral X25519 public key for OTA-ACK key agreement (E7); signed so a MITM can't substitute it.
+    // Skipped when empty so legacy frames stay byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    kex_pubkey: Vec<u8>,
 }
 
 /// Connection request sent by the initiating station during Discovery.
@@ -190,6 +194,9 @@ pub struct ConReq {
     /// Unix-ms creation time, signed, for replay-freshness (0 = not advertised / legacy).
     #[serde(default)]
     pub timestamp_ms: u64,
+    /// Ephemeral X25519 public key (32 bytes) for OTA-ACK key agreement (E7); empty = not advertised.
+    #[serde(default)]
+    pub kex_pubkey: Vec<u8>,
     /// Ed25519 signature over canonical JSON of the body fields (64 bytes).
     pub signature: Vec<u8>,
 }
@@ -239,12 +246,14 @@ impl ConReq {
             "",
             0,
             0,
+            &[],
         )
     }
 
     /// Create and sign a CONREQ advertising the grid AND the active OTA rate-ladder identity
     /// (`profile_name` + `profile_fingerprint`), so the peer can detect a diverged ladder.
-    /// `timestamp_ms` is the signed Unix-ms creation time for replay-freshness (0 = not advertised).
+    /// `timestamp_ms` is the signed Unix-ms creation time for replay-freshness (0 = not advertised);
+    /// `kex_pubkey` is the ephemeral X25519 public key for OTA-ACK key agreement (empty = none).
     #[allow(clippy::too_many_arguments)]
     pub fn create_full(
         station_id: &str,
@@ -257,6 +266,7 @@ impl ConReq {
         profile_name: &str,
         profile_fingerprint: u64,
         timestamp_ms: u64,
+        kex_pubkey: &[u8],
     ) -> Result<Self, HandshakeError> {
         let signing_key = SigningKey::from_bytes(signing_key_seed);
         let verifying_key = signing_key.verifying_key();
@@ -272,6 +282,7 @@ impl ConReq {
             profile_name: profile_name.to_string(),
             profile_fingerprint,
             timestamp_ms,
+            kex_pubkey: kex_pubkey.to_vec(),
         };
         let canonical =
             serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))?;
@@ -288,6 +299,7 @@ impl ConReq {
             profile_name: profile_name.to_string(),
             profile_fingerprint,
             timestamp_ms,
+            kex_pubkey: kex_pubkey.to_vec(),
             signature: sig.to_bytes().to_vec(),
         })
     }
@@ -304,6 +316,7 @@ impl ConReq {
             profile_name: self.profile_name.clone(),
             profile_fingerprint: self.profile_fingerprint,
             timestamp_ms: self.timestamp_ms,
+            kex_pubkey: self.kex_pubkey.clone(),
         };
         serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))
     }
@@ -370,6 +383,9 @@ struct ConAckBody {
     // Unix-ms creation time, signed, for replay-freshness. Skipped when 0 for signature compatibility.
     #[serde(default, skip_serializing_if = "u64_is_zero")]
     timestamp_ms: u64,
+    // Ephemeral X25519 public key for OTA-ACK key agreement (E7). Skipped when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    kex_pubkey: Vec<u8>,
 }
 
 fn fec_mode_is_none(m: &FecMode) -> bool {
@@ -409,6 +425,9 @@ pub struct ConAck {
     /// Unix-ms creation time, signed, for replay-freshness (0 = not advertised / legacy).
     #[serde(default)]
     pub timestamp_ms: u64,
+    /// Ephemeral X25519 public key (32 bytes) for OTA-ACK key agreement (E7); empty = not advertised.
+    #[serde(default)]
+    pub kex_pubkey: Vec<u8>,
     /// Ed25519 signature over canonical JSON of the body fields (64 bytes).
     pub signature: Vec<u8>,
 }
@@ -456,12 +475,14 @@ impl ConAck {
             "",
             0,
             0,
+            &[],
         )
     }
 
     /// Create and sign a CONACK advertising the grid AND the responder's active OTA rate-ladder
     /// identity (`profile_name` + `profile_fingerprint`). `timestamp_ms` is the signed Unix-ms
-    /// creation time for replay-freshness (0 = not advertised).
+    /// creation time for replay-freshness (0 = not advertised); `kex_pubkey` is the ephemeral X25519
+    /// public key for OTA-ACK key agreement (empty = none).
     #[allow(clippy::too_many_arguments)]
     pub fn create_full(
         station_id: &str,
@@ -474,6 +495,7 @@ impl ConAck {
         profile_name: &str,
         profile_fingerprint: u64,
         timestamp_ms: u64,
+        kex_pubkey: &[u8],
     ) -> Result<Self, HandshakeError> {
         let signing_key = SigningKey::from_bytes(signing_key_seed);
         let verifying_key = signing_key.verifying_key();
@@ -489,6 +511,7 @@ impl ConAck {
             profile_name: profile_name.to_string(),
             profile_fingerprint,
             timestamp_ms,
+            kex_pubkey: kex_pubkey.to_vec(),
         };
         let canonical =
             serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))?;
@@ -505,6 +528,7 @@ impl ConAck {
             profile_name: profile_name.to_string(),
             profile_fingerprint,
             timestamp_ms,
+            kex_pubkey: kex_pubkey.to_vec(),
             signature: sig.to_bytes().to_vec(),
         })
     }
@@ -521,6 +545,7 @@ impl ConAck {
             profile_name: self.profile_name.clone(),
             profile_fingerprint: self.profile_fingerprint,
             timestamp_ms: self.timestamp_ms,
+            kex_pubkey: self.kex_pubkey.clone(),
         };
         serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))
     }
@@ -915,6 +940,7 @@ mod tests {
             "",
             0,
             timestamp_ms,
+            &[],
         )
         .unwrap()
     }
@@ -1028,6 +1054,7 @@ mod tests {
             "",
             0,
             now - 10 * 60_000,
+            &[],
         )
         .unwrap();
         let store = InMemoryTrustStore::new();

@@ -45,6 +45,8 @@ use openpulse_channel::dsp::PowerSpectrum;
 use openpulse_core::handshake::{
     verify_conack, verify_conreq, ConAck, ConReq, Freshness, InMemoryTrustStore, TrustStore,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use openpulse_core::session_key::{derive_ack_key, generate_kex_ephemeral};
 
 /// Maximum clock skew tolerated when verifying a handshake's signed timestamp (replay-freshness).
 /// Generous relative to typical HF turnaround (handshakes complete in seconds) while bounding the
@@ -327,6 +329,9 @@ pub struct PendingHandshake {
     pub peer_callsign: String,
     /// When the CONREQ went out, for timeout expiry.
     pub started_at: Instant,
+    /// Ephemeral X25519 secret for OTA-ACK key agreement (E7); combined with the peer's CONACK
+    /// `kex_pubkey` to derive the session ACK-MAC key. All-zero when key agreement is not in use.
+    pub kex_secret: [u8; 32],
 }
 
 /// A peer identity proven by a verified Ed25519 handshake signature.
@@ -1420,7 +1425,7 @@ fn try_reassemble_handshake(
         if assembled.starts_with(b"HSCQ") {
             handle_inbound_conreq(&assembled, runtime_state, event_tx, mode, engine);
         } else if assembled.starts_with(b"HSAK") {
-            handle_inbound_conack(&assembled, runtime_state, event_tx);
+            handle_inbound_conack(&assembled, runtime_state, event_tx, engine);
         } else {
             tracing::debug!("handshake: reassembled segment has no CONREQ/CONACK magic; dropping");
         }
@@ -1474,6 +1479,17 @@ fn handle_inbound_conreq(
         return;
     }
 
+    // OTA-ACK key agreement (E7): if the peer advertised an ephemeral X25519 key, generate ours,
+    // derive the shared ACK-MAC key, and arm the engine's ACK authentication. We advertise our
+    // ephemeral public key back in the CONACK (signed) so the initiator derives the same key.
+    let kex_public = if let Ok(peer_kex) = <[u8; 32]>::try_from(req.kex_pubkey.as_slice()) {
+        let (kex_secret, kex_public) = generate_kex_ephemeral();
+        engine.set_ack_mac_key(Some(derive_ack_key(&kex_secret, &peer_kex)));
+        kex_public.to_vec()
+    } else {
+        Vec::new()
+    };
+
     // Reply with a signed CONACK echoing the session id and advertising our grid + OTA ladder.
     let (ota_name, ota_fp) = runtime_state
         .local_ota_ladder
@@ -1490,6 +1506,7 @@ fn handle_inbound_conreq(
         &ota_name,
         ota_fp,
         now_ms,
+        &kex_public,
     ) {
         Ok(ack) => match ack.encode() {
             Ok(frame) => transmit_handshake_frame(engine, mode, &frame),
@@ -1516,6 +1533,7 @@ fn handle_inbound_conack(
     bytes: &[u8],
     runtime_state: &mut RuntimeControlState,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+    engine: &mut ModemEngine,
 ) {
     let ack = match ConAck::decode(bytes) {
         Ok(a) => a,
@@ -1565,6 +1583,12 @@ fn handle_inbound_conack(
         tracing::warn!(peer = %ack.station_id, error = %e, "handshake: CONACK verification rejected");
         runtime_state.pending_handshake = None;
         return;
+    }
+    // OTA-ACK key agreement (E7): derive the shared ACK-MAC key from our stored ephemeral secret and the
+    // peer's CONACK ephemeral public key (both were covered by the verified signatures), and arm the
+    // engine. `verify_conack` above bound `ack.pubkey` to the dialed identity, so the ECDH is authenticated.
+    if let Ok(peer_kex) = <[u8; 32]>::try_from(ack.kex_pubkey.as_slice()) {
+        engine.set_ack_mac_key(Some(derive_ack_key(&pending.kex_secret, &peer_kex)));
     }
     record_verified_peer(
         runtime_state,
@@ -1892,6 +1916,9 @@ pub async fn apply_command_to_engine(
                         .local_ota_ladder
                         .clone()
                         .unwrap_or_else(|| (String::new(), 0));
+                    // Ephemeral X25519 for OTA-ACK key agreement (E7): advertise the public key in the
+                    // signed CONREQ, keep the secret to derive the ACK-MAC key from the peer's CONACK.
+                    let (kex_secret, kex_public) = generate_kex_ephemeral();
                     match ConReq::create_full(
                         &runtime_state.local_callsign,
                         &runtime_state.station_seed,
@@ -1903,6 +1930,7 @@ pub async fn apply_command_to_engine(
                         &ota_name,
                         ota_fp,
                         now_ms,
+                        &kex_public,
                     ) {
                         Ok(req) => match req.encode() {
                             Ok(frame) => {
@@ -1911,6 +1939,7 @@ pub async fn apply_command_to_engine(
                                     session_id,
                                     peer_callsign: callsign.clone(),
                                     started_at: Instant::now(),
+                                    kex_secret,
                                 });
                             }
                             Err(e) => tracing::warn!(error = %e, "handshake: CONREQ encode failed"),
@@ -4674,6 +4703,7 @@ mod handshake_rf_tests {
             "",
             0,
             unix_now_ms(),
+            &[],
         )
         .unwrap();
         let frags = sar_encode(0, &conreq.encode().unwrap()).unwrap();
@@ -4729,6 +4759,7 @@ mod handshake_rf_tests {
             "",
             0,
             unix_now_ms(),
+            &[],
         )
         .unwrap();
         let frags = sar_encode(0, &conreq.encode().unwrap()).unwrap();
@@ -4814,6 +4845,7 @@ mod handshake_rf_tests {
             "",
             0,
             unix_now_ms(),
+            &[],
         )
         .unwrap();
         let frags = sar_encode(0, &conreq.encode().unwrap()).unwrap();
@@ -4889,6 +4921,7 @@ mod handshake_rf_tests {
                 session_id: "W1AW-1".into(),
                 peer_callsign: "K2XYZ".into(),
                 started_at: Instant::now(),
+                kex_secret: [0u8; 32],
             }),
             ..RuntimeControlState::default()
         };
@@ -4913,6 +4946,7 @@ mod handshake_rf_tests {
             "",
             0,
             unix_now_ms(),
+            &[],
         )
         .unwrap();
         let frags = sar_encode(0, &conack.encode().unwrap()).unwrap();
@@ -4954,6 +4988,7 @@ mod handshake_rf_tests {
                 session_id: "W1AW-1".into(),
                 peer_callsign: "K2XYZ".into(),
                 started_at: Instant::now(),
+                kex_secret: [0u8; 32],
             }),
             ..RuntimeControlState::default()
         };
@@ -4968,6 +5003,7 @@ mod handshake_rf_tests {
             "",
             0,
             unix_now_ms(),
+            &[],
         )
         .unwrap();
         let frags = sar_encode(0, &conack.encode().unwrap()).unwrap();
@@ -5001,6 +5037,7 @@ mod handshake_rf_tests {
                 session_id: "W1AW-1".into(),
                 peer_callsign: "K2XYZ".into(),
                 started_at: Instant::now(),
+                kex_secret: [0u8; 32],
             }),
             ..RuntimeControlState::default()
         };
@@ -5087,6 +5124,7 @@ mod handshake_rf_tests {
             "",
             0,
             unix_now_ms(),
+            &[],
         )
         .unwrap();
         let frag = sar_encode(0, &conreq.encode().unwrap()).unwrap().remove(0);
@@ -5114,6 +5152,7 @@ mod handshake_rf_tests {
                 session_id: "s".into(),
                 peer_callsign: "K2XYZ".into(),
                 started_at: Instant::now() - HANDSHAKE_TIMEOUT - Duration::from_secs(1),
+                kex_secret: [0u8; 32],
             }),
             ..RuntimeControlState::default()
         };

@@ -32,6 +32,7 @@ pub mod relay;
 pub mod remote_control;
 pub mod route_discovery;
 pub mod sar;
+pub mod session_key;
 pub mod signed_envelope;
 pub mod signing;
 pub mod snr_estimate;

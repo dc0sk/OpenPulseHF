@@ -9,6 +9,42 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-16 — feat(handshake/modem): E7 — authenticated OTA rate ACK via ECDH-derived keyed MAC
+
+- **Requirement/change:** deferred handshake-trust audit item **E7** — the OTA rate-control ACK (a 5-byte
+  FSK4 frame) carried no authentication; its only filter was a 16-bit FNV hash of the `session_id`, which
+  travels in the cleartext CONREQ, so any listener could forge ACKs and manipulate a link's rate ladder.
+- **Design decision (user-selected: full auth over a proportionate mitigation):** establish a shared
+  secret with **ephemeral X25519 ECDH** whose public keys ride in the Ed25519-signed CONREQ/CONACK bodies
+  (a MITM can't substitute them without breaking the identity signature), derive a 32-byte key via
+  HKDF-SHA256, and authenticate the ACK with a **24-bit keyed HMAC-SHA256 tag**. Crucially the tag reuses
+  the existing 5-byte layout — it replaces the public `session_hash` (2 B) + CRC (1 B) — so there is **no
+  wire-size or FSK4/MFSK16 airtime change** and none of the hand-tuned weak-signal ACK-waveform sizing is
+  touched. The tag subsumes both the CRC (a MAC detects corruption) and the anti-collision filter (a
+  co-channel session has a different key). This is **authentication, not encryption** (content stays in
+  the clear) — compatible with amateur-radio rules (documented in `docs/regulatory.md`). Residual: a
+  *replayed* valid ACK carries stale-but-valid content, bounded by the receiver-led absolute rate ladder.
+- **Implementation:**
+  - `crates/openpulse-core/src/session_key.rs` (new): `generate_kex_ephemeral`, `derive_ack_key`
+    (X25519 → HKDF). Added `hmac` dep.
+  - `crates/openpulse-core/src/ack.rs`: `encode_authenticated` / `decode_authenticated` (+ `_maybe_`
+    variants), `decode_ack_from_llr_copies_maybe_auth`, `AckError::MacMismatch`.
+  - `crates/openpulse-core/src/handshake.rs`: signed `kex_pubkey` on ConReq/ConAck (skip-if-empty);
+    `create_full` threads it.
+  - `crates/openpulse-modem/src/engine.rs`: `ack_mac_key` field + `set_ack_mac_key`; all OTA ACK
+    encode/decode sites (`transmit_ack_with_short_fec`/`_mfsk16_k3`, `decode_fsk4_ack`/`_in_stream`, the
+    MFSK16 K=3 union, and the `receive_ota_ack_within` session filter) honour the key when set.
+  - `crates/openpulse-daemon/src/lib.rs`: initiator gens ephemeral, stores the secret in
+    `PendingHandshake`, derives the key on CONACK; responder derives from the CONREQ key and arms the
+    engine; both call `engine.set_ack_mac_key`.
+- **Behaviour change:** none for legacy peers — a session without a `kex_pubkey` derives no key and the
+  ACK stays the legacy CRC form. When both ends advertise a kex key, OTA rate ACKs are authenticated and
+  forged/foreign-key ACKs are dropped.
+- **Tests:** `session_key` (both-sides-agree, distinct-pairs-differ); `ack` (auth round-trip, wrong-key
+  reject, tamper-detect, legacy fallback); modem `ack_exchange_integration::authenticated_ack_round_trips_and_forgery_is_rejected` (engine loopback: shared-key ACK accepted, wrong-key forger rejected). Fragile OTA/ACK
+  suites (`ota_rate_lockstep`, `two_way_arq`, `arq_retry_integration`, `mfsk16_arq_subfloor`) unchanged.
+- **Test results:** core + modem OTA/ACK + daemon green; full gate below; clippy + fmt clean.
+
 ## 2026-07-16 — fix(core): SAR-poison — multi-candidate reassembly isolates conflicting fragment streams
 
 - **Requirement/change:** deferred handshake-trust audit item — the handshake SAR path reassembles every
