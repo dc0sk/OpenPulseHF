@@ -225,12 +225,16 @@ pub struct RuntimeControlState {
     pub local_grid: String,
     /// Outstanding CONREQ awaiting a CONACK (initiator role); `None` when idle.
     pub pending_handshake: Option<PendingHandshake>,
-    /// Most recently verified peer identity from a completed signed handshake. Session-scoped: used
-    /// by OTA/QSY, which operate on the current link. For per-sender identity binding (file-transfer
-    /// offer verification) use [`verified_peers`](Self::verified_peers) instead.
-    pub verified_peer: Option<VerifiedPeer>,
-    /// All peers verified this session, keyed by callsign — so a signed file-transfer offer is checked
-    /// against *its own sender's* key rather than whoever handshook most recently (audit E5).
+    /// Callsign of the most recently verified peer this session — a pointer into
+    /// [`verified_peers`](Self::verified_peers), not a second copy of the identity. Used by the
+    /// OTA-suppress and QSY-trust reads, which operate on the current link (the QSY frame carries no
+    /// callsign or signature, so there is no per-requester identity to bind — this is the best
+    /// available signal). Per-sender identity binding (file-transfer offer verification) looks the
+    /// *offer's own sender* up in the map directly.
+    pub last_verified_callsign: Option<String>,
+    /// All peers verified this session, keyed by callsign — the authoritative verified-identity store,
+    /// so a signed file-transfer offer is checked against *its own sender's* key rather than whoever
+    /// handshook most recently (audit E5).
     pub verified_peers: std::collections::HashMap<String, VerifiedPeer>,
     /// Reassembles inbound SAR-fragmented handshake frames (CONREQ/CONACK exceed one modem frame).
     pub handshake_sar: SarReassembler,
@@ -291,7 +295,14 @@ impl RuntimeControlState {
     /// be suppressed (fixed-mode fallback) so a `recommended_level` can't mean different modes.
     /// OTA without a handshake, or with a compatible/undetermined peer, is unaffected.
     pub fn ota_suppressed_by_peer(&self) -> bool {
-        matches!(&self.verified_peer, Some(p) if p.profile_compatible == Some(false))
+        matches!(self.last_verified_peer(), Some(p) if p.profile_compatible == Some(false))
+    }
+
+    /// The most recently verified peer this session, resolved through the authoritative per-callsign map.
+    pub fn last_verified_peer(&self) -> Option<&VerifiedPeer> {
+        self.last_verified_callsign
+            .as_ref()
+            .and_then(|c| self.verified_peers.get(c))
     }
 
     /// True when the station has a real callsign to transmit under. §97.119 forbids keying the
@@ -310,7 +321,7 @@ impl RuntimeControlState {
     /// frame carries no signature), so `allow_trustlevels` means "only after such a handshake this
     /// session," not a per-requester check.
     pub fn rf_peer_trust(&self) -> ConnectionTrustLevel {
-        match &self.verified_peer {
+        match self.last_verified_peer() {
             Some(p) => {
                 let key_trust = self.trust_store.trust_level(&p.callsign);
                 classify_connection_trust(key_trust, CertificateSource::OverAir, false).decision
@@ -385,7 +396,7 @@ impl Default for RuntimeControlState {
             local_callsign: String::new(),
             local_grid: String::new(),
             pending_handshake: None,
-            verified_peer: None,
+            last_verified_callsign: None,
             verified_peers: std::collections::HashMap::new(),
             handshake_sar: SarReassembler::new(HANDSHAKE_TIMEOUT),
             local_ota_ladder: None,
@@ -1642,12 +1653,13 @@ fn record_verified_peer(
         pubkey: pubkey.to_vec(),
         profile_compatible,
     };
-    // Record per-callsign (audit E5) so file-transfer offer verification binds to the true sender,
-    // and keep the single session slot for OTA/QSY which act on the current link.
+    // The per-callsign map is the authoritative store (audit E5) so file-transfer offer verification
+    // binds to the true sender; `last_verified_callsign` just points at this most-recent entry for the
+    // OTA/QSY reads, which act on the current link.
     runtime_state
         .verified_peers
-        .insert(callsign.to_string(), peer.clone());
-    runtime_state.verified_peer = Some(peer);
+        .insert(callsign.to_string(), peer);
+    runtime_state.last_verified_callsign = Some(callsign.to_string());
     // Prefer the on-air verified grid over the config peer_grids fallback for this QSO.
     if !grid.is_empty() {
         runtime_state.logbook.set_pending_peer_grid(grid);
@@ -2897,7 +2909,7 @@ mod command_apply_tests {
             0xAAAA_AAAA_AAAA_AAAA,
         );
         assert_eq!(
-            rs.verified_peer.as_ref().unwrap().profile_compatible,
+            rs.last_verified_peer().unwrap().profile_compatible,
             Some(true)
         );
         assert!(!rs.ota_suppressed_by_peer());
@@ -2913,7 +2925,7 @@ mod command_apply_tests {
             0xBBBB_BBBB_BBBB_BBBB,
         );
         assert_eq!(
-            rs.verified_peer.as_ref().unwrap().profile_compatible,
+            rs.last_verified_peer().unwrap().profile_compatible,
             Some(false)
         );
         assert!(
@@ -2923,7 +2935,7 @@ mod command_apply_tests {
 
         // Peer advertised no ladder (fp=0) → undetermined, NOT suppressed (OTA-without-handshake case).
         record_verified_peer(&mut rs, &ev_tx, "W1AW", "", &key, "", 0);
-        assert_eq!(rs.verified_peer.as_ref().unwrap().profile_compatible, None);
+        assert_eq!(rs.last_verified_peer().unwrap().profile_compatible, None);
         assert!(!rs.ota_suppressed_by_peer());
 
         // We have no local OTA ladder → undetermined even if the peer advertises one.
@@ -2937,7 +2949,7 @@ mod command_apply_tests {
             "hpx_hf",
             0xAAAA_AAAA_AAAA_AAAA,
         );
-        assert_eq!(rs.verified_peer.as_ref().unwrap().profile_compatible, None);
+        assert_eq!(rs.last_verified_peer().unwrap().profile_compatible, None);
         assert!(!rs.ota_suppressed_by_peer());
     }
 
@@ -3256,7 +3268,6 @@ mod command_apply_tests {
         };
         let mut rs = RuntimeControlState {
             verified_peers: std::iter::once(("W1AW".to_string(), vp.clone())).collect(),
-            verified_peer: Some(vp),
             filexfer_policy: policy,
             ..RuntimeControlState::default()
         };
@@ -3365,7 +3376,6 @@ mod command_apply_tests {
         verified_peers.insert("K2XYZ".to_string(), k2xyz.clone());
         let mut rs = RuntimeControlState {
             verified_peers,
-            verified_peer: Some(k2xyz), // the wrong peer holds the slot
             filexfer_policy: policy,
             ..RuntimeControlState::default()
         };
@@ -4724,14 +4734,15 @@ mod handshake_rf_tests {
             process_received_bytes(frag, &mut rs, None, &ev, &mode, &mut eng).await;
             if i + 1 < frags.len() {
                 assert!(
-                    rs.verified_peer.is_none(),
+                    rs.last_verified_peer().is_none(),
                     "must not verify before all fragments arrive"
                 );
             }
         }
 
         let vp = rs
-            .verified_peer
+            .last_verified_peer()
+            .cloned()
             .expect("peer verified after final fragment");
         assert_eq!(vp.callsign, "W1AW");
         assert_eq!(vp.grid, "FN31pr");
@@ -4785,7 +4796,7 @@ mod handshake_rf_tests {
         process_received_bytes(&poison_solo, &mut rs, None, &ev, &mode, &mut eng).await;
         process_received_bytes(&poison_conflict, &mut rs, None, &ev, &mode, &mut eng).await;
         assert!(
-            rs.verified_peer.is_none(),
+            rs.last_verified_peer().is_none(),
             "poison must not verify a peer on its own"
         );
 
@@ -4794,7 +4805,8 @@ mod handshake_rf_tests {
             process_received_bytes(frag, &mut rs, None, &ev, &mode, &mut eng).await;
         }
         let vp = rs
-            .verified_peer
+            .last_verified_peer()
+            .cloned()
             .expect("peer verified despite the poison fragments");
         assert_eq!(vp.callsign, "W1AW");
         assert_eq!(vp.pubkey, conreq.pubkey);
@@ -4815,12 +4827,16 @@ mod handshake_rf_tests {
         // No verified peer this session → Unverified.
         assert_eq!(rs.rf_peer_trust(), ConnectionTrustLevel::Unverified);
 
-        rs.verified_peer = Some(VerifiedPeer {
-            callsign: "K2XYZ".into(),
-            grid: "EM69".into(),
-            pubkey: vec![2u8; 32],
-            profile_compatible: None,
-        });
+        rs.verified_peers.insert(
+            "K2XYZ".into(),
+            VerifiedPeer {
+                callsign: "K2XYZ".into(),
+                grid: "EM69".into(),
+                pubkey: vec![2u8; 32],
+                profile_compatible: None,
+            },
+        );
+        rs.last_verified_callsign = Some("K2XYZ".into());
         // First-seen (unknown) key over air → Low.
         assert_eq!(rs.rf_peer_trust(), ConnectionTrustLevel::Low);
 
@@ -4870,7 +4886,7 @@ mod handshake_rf_tests {
             "no CONACK may be transmitted without a valid callsign"
         );
         assert!(
-            rs.verified_peer.is_none(),
+            rs.last_verified_peer().is_none(),
             "a half-handshake must not be recorded when we cannot reply"
         );
     }
@@ -4959,7 +4975,7 @@ mod handshake_rf_tests {
             process_received_bytes(frag, &mut rs, None, &ev, &mode, &mut eng).await;
         }
 
-        let vp = rs.verified_peer.clone().expect("verified");
+        let vp = rs.last_verified_peer().cloned().expect("verified");
         assert_eq!(vp.callsign, "K2XYZ");
         assert_eq!(vp.grid, "EM69");
         assert!(
@@ -5016,7 +5032,7 @@ mod handshake_rf_tests {
             process_received_bytes(frag, &mut rs, None, &ev, &mode, &mut eng).await;
         }
         assert!(
-            rs.verified_peer.is_none(),
+            rs.last_verified_peer().is_none(),
             "mismatched session must not verify"
         );
         assert!(
@@ -5061,7 +5077,7 @@ mod handshake_rf_tests {
             process_received_bytes(frag, &mut rs, None, &ev, &mode, &mut eng).await;
         }
         assert!(
-            rs.verified_peer.is_none(),
+            rs.last_verified_peer().is_none(),
             "CONACK from an undialed station must not verify"
         );
         assert!(

@@ -9,6 +9,28 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-16 — refactor(daemon): E5 — single source of truth for verified peers (remove redundant global slot)
+
+- **Requirement/change:** handshake-trust audit finding **E5** — `verified_peer` was a single global slot,
+  so a later handshake overwrote an earlier peer's verification. The *security-critical* half (file-transfer
+  offer verification binding to the true sender) was already fixed in #898 by adding the per-callsign
+  `verified_peers` map and keying offer verification on `offer.sender_id`. This change finishes the
+  migration by removing the now-redundant global slot so the map is the sole verified-identity store.
+- **Design decision:** replace `RuntimeControlState.verified_peer: Option<VerifiedPeer>` with
+  `last_verified_callsign: Option<String>` — a *pointer* into the authoritative `verified_peers` map, not a
+  second copy. The two remaining session-scoped reads (`ota_suppressed_by_peer`, `rf_peer_trust` for the QSY
+  responder) resolve through `last_verified_peer()` (map lookup). These stay "most-recent verified peer this
+  session" by necessity, not slot laziness: the QSY frame (`QsyFrame::Req { token, n_candidates }`) carries
+  **no callsign and no signature**, so there is no per-requester identity to bind — documented as an
+  architectural limit, not a gap a map can close. OTA-suppress acts on the single active OTA session.
+- **Implementation:** `crates/openpulse-daemon/src/lib.rs` — field swap, `last_verified_peer()` helper,
+  `ota_suppressed_by_peer`/`rf_peer_trust` route through it, `record_verified_peer` writes the map + pointer.
+- **Behaviour change:** none — same "most-recent verified peer" semantics, now with one authoritative store.
+- **Tests:** existing `callsign_validity_and_rf_peer_trust`, the file-transfer offer-verification tests
+  (already keyed on the map, including the "wrong peer holds the slot" case), and the handshake-RF tests
+  pass unchanged.
+- **Test results:** daemon suite green (0 failures); clippy + fmt clean; full workspace gate below.
+
 ## 2026-07-16 — feat(handshake/modem): E7 — authenticated OTA rate ACK via ECDH-derived keyed MAC
 
 - **Requirement/change:** deferred handshake-trust audit item **E7** — the OTA rate-control ACK (a 5-byte
