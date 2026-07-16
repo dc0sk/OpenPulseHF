@@ -3081,7 +3081,7 @@ impl ModemEngine {
             hop_limit: ttl,
             hop_index: 0,
             payload: frame.encode(),
-            auth_tag: [0u8; 16],
+            signature: None,
         };
 
         let wire_bytes = envelope

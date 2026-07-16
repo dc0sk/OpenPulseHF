@@ -228,8 +228,27 @@ impl MeshDaemon {
         Ok(())
     }
 
-    /// Transmit a relay envelope (called by the originating node).
-    pub fn send_relay(&mut self, envelope: WireEnvelope) -> Result<(), MeshError> {
+    /// Sign an envelope this node originates so downstream relays can authenticate it. Only the frame
+    /// types that pass through the authenticated relay forwarder (`RelayDataChunk`, `RelayHopAck`) are
+    /// signed at the envelope level; other control frames carry their own payload-level signatures.
+    /// Only signs when `src_peer_id` is this node's peer id (the verifying key of `signing_key_seed`);
+    /// otherwise leaves it unchanged (we do not hold a foreign originator's key).
+    fn sign_envelope(&self, envelope: &mut WireEnvelope) {
+        let relay_data = matches!(
+            envelope.msg_type,
+            WireMsgType::RelayDataChunk | WireMsgType::RelayHopAck
+        );
+        if relay_data && envelope.src_peer_id == self.local_peer_id {
+            if let Err(e) = envelope.sign(&self.signing_key_seed) {
+                tracing::warn!(?e, "failed to sign originated envelope");
+            }
+        }
+    }
+
+    /// Transmit a relay envelope (called by the originating node). Signs it with this node's key when
+    /// this node is the originator, so downstream relays can authenticate `src_peer_id` (E3).
+    pub fn send_relay(&mut self, mut envelope: WireEnvelope) -> Result<(), MeshError> {
+        self.sign_envelope(&mut envelope);
         let bytes = envelope.encode()?;
         self.transmit_bytes(&bytes)?;
         Ok(())
@@ -295,7 +314,7 @@ impl MeshDaemon {
         let mut nonce = [0u8; 12];
         nonce[..8].copy_from_slice(&self.local_peer_id[..8]);
         nonce[8..].copy_from_slice(&(session_id as u32).to_le_bytes());
-        let envelope = WireEnvelope {
+        let mut envelope = WireEnvelope {
             msg_type: WireMsgType::RelayDataChunk,
             flags: 0,
             session_id,
@@ -306,8 +325,9 @@ impl MeshDaemon {
             hop_limit: hop_count.clamp(1, self.hop_limit),
             hop_index: 0,
             payload,
-            auth_tag: [0u8; 16],
+            signature: None,
         };
+        self.sign_envelope(&mut envelope);
         let bytes = envelope.encode()?;
         self.transmit_bytes(&bytes)?;
         self.events.push(MeshEvent::RouteUsed {
@@ -393,7 +413,7 @@ impl MeshDaemon {
             hop_limit: self.hop_limit,
             hop_index: 0,
             payload,
-            auth_tag: [0u8; 16],
+            signature: None,
         };
         let bytes = envelope.encode()?;
         self.transmit_bytes(&bytes)?;
@@ -624,7 +644,7 @@ impl MeshDaemon {
             hop_limit: self.hop_limit,
             hop_index: 0,
             payload,
-            auth_tag: [0u8; 16],
+            signature: None,
         };
         let sent = reply
             .encode()
@@ -758,9 +778,7 @@ impl MeshDaemon {
 
         let trust_filter = wire_trust_filter(req.trust_filter);
         let min_quality = req.min_link_quality.min(255) as u8;
-        // Cap to the number of results that fit in one Frame (255-byte payload limit).
-        // WireEnvelope overhead = 120 B; PeerQueryResponse header = 10 B;
-        // PeerQueryResult (no sig) = 79 B → floor((255-120-10)/79) = 1.
+        // One result per response; the signed 257-byte response is SAR-fragmented across frames.
         let max_results = (req.max_results as usize).min(MAX_RESULTS_PER_RESPONSE);
 
         let records = self.peer_cache.query(
@@ -821,7 +839,7 @@ impl MeshDaemon {
                 hop_limit: self.hop_limit,
                 hop_index: 0,
                 payload,
-                auth_tag: [0u8; 16],
+                signature: None,
             };
             if let Ok(bytes) = resp_env.encode() {
                 if self.transmit_bytes(&bytes).is_ok() {
@@ -905,9 +923,10 @@ impl MeshDaemon {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-// WireEnvelope overhead (104 header + 16 auth_tag) + PeerQueryResponse header (10)
-// leaves 255 - 120 - 10 = 125 bytes; PeerQueryResult without signature = 79 bytes.
-const MAX_RESULTS_PER_RESPONSE: usize = 125 / 79; // = 1
+// One PeerQueryResult per response. A signed envelope (104 header + 64 signature = 168 B) plus the
+// PeerQueryResponse header (10 B) and one result (79 B) is 257 B — just over the 255-byte single-frame
+// limit — so it is SAR-fragmented across two modem frames (the reassembly path added in #904).
+const MAX_RESULTS_PER_RESPONSE: usize = 1;
 
 fn peer_id_hex(bytes: &[u8; 32]) -> String {
     bytes.iter().fold(String::with_capacity(64), |mut s, b| {

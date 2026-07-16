@@ -508,6 +508,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | Simultaneous multi-mode receive monitor (REQ-RX-01) | `cargo test -p openpulse-daemon --no-default-features monitor::` |
 | Hotplug-safe audio device resolution (REQ-DEV-01) | `cargo test -p openpulse-core --no-default-features audio::tests` |
 | CM108 / GPIO PTT backends (REQ-PTT-02/03) | `cargo test -p openpulse-radio --no-default-features cm108 gpio` |
+| Relay authenticates envelope origin — rejects forged/unsigned `src_peer_id` (audit E3) | `cargo test -p openpulse-core --lib relay::` + `cargo test -p openpulse-mesh --test mesh_loopback impersonated_origin_rejected_at_relay authenticated_relay_forwarding` |
 | CI auto-runs on every PR (Linux gates + macOS build) | `.github/workflows/ci.yml` `on: pull_request`; Linux core/full/gpu/pi5 gates + a `macos-build` compile check |
 
 For any new Phase 1 feature: write the test first, confirm it fails, implement until it passes. Do not mark a task done if its test does not exist.

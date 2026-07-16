@@ -56,7 +56,7 @@ impl BeaconScheduler {
             hop_limit,
             hop_index: 0,
             payload: req.encode(),
-            auth_tag: [0u8; 16],
+            signature: None,
         };
 
         (envelope, query_id)

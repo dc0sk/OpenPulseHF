@@ -555,7 +555,7 @@ impl RouteOriginator {
             hop_limit: max_hops,
             hop_index: 0,
             payload: request.encode(),
-            auth_tag: [0u8; 16],
+            signature: None,
         };
         // Validate the envelope encodes before we commit the pending entry.
         envelope.encode()?;

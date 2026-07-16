@@ -33,7 +33,7 @@ fn query_envelope(
         hop_limit,
         hop_index,
         payload,
-        auth_tag: [0; 16],
+        signature: None,
     }
 }
 

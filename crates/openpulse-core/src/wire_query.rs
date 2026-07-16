@@ -1,3 +1,4 @@
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use thiserror::Error;
 
 /// Errors produced by wire envelope and payload codec.
@@ -19,6 +20,10 @@ pub enum WireQueryError {
     HopCountExceeded,
     #[error("signature too large to encode")]
     SignatureTooLarge,
+    #[error("src_peer_id is not a valid ed25519 verifying key")]
+    InvalidSrcKey,
+    #[error("envelope origin signature is invalid")]
+    InvalidSignature,
 }
 
 /// Message type codes for the OPHF wire envelope.
@@ -59,10 +64,16 @@ impl WireMsgType {
 }
 
 const MAGIC: &[u8; 4] = b"OPHF";
-const VERSION: u8 = 1;
-/// Byte count of fixed envelope fields excluding payload and auth_tag.
+/// Wire schema version. v2 replaced the unauthenticated fixed 16-byte `auth_tag` with an *optional*
+/// 64-byte Ed25519 origin `signature` verifiable against `src_peer_id` (E3): signed frames append 64
+/// bytes, unsigned frames append none.
+const VERSION: u8 = 2;
+/// Byte count of fixed envelope fields excluding payload and the optional signature.
 const HEADER_SIZE: usize = 104;
-const AUTH_TAG_SIZE: usize = 16;
+/// Ed25519 signature length; the envelope's origin authenticator when present.
+const SIGNATURE_SIZE: usize = 64;
+/// Offset of the relay-mutated `hop_index` byte, excluded from the signed region.
+const HOP_INDEX_OFFSET: usize = 101;
 
 fn read_u64(bytes: &[u8], off: usize) -> Result<u64, WireQueryError> {
     Ok(u64::from_be_bytes(
@@ -108,17 +119,21 @@ pub struct WireEnvelope {
     pub hop_limit: u8,
     pub hop_index: u8,
     pub payload: Vec<u8>,
-    pub auth_tag: [u8; 16],
+    /// Optional Ed25519 origin signature over every field except `hop_index` (relay-mutated)
+    /// and this field, verifiable against `src_peer_id`. `Some` appends 64 bytes to the wire form;
+    /// `None` (unsigned) appends nothing, keeping control frames that carry their own payload-level
+    /// signatures compact. The relay requires `Some` on frames it forwards (E3).
+    pub signature: Option<[u8; 64]>,
 }
 
 impl WireEnvelope {
-    /// Serialize to `OPHF` wire format: header (104 bytes) + payload + auth_tag (16 bytes).
-    pub fn encode(&self) -> Result<Vec<u8>, WireQueryError> {
+    /// Header (104 bytes) + payload, without the trailing signature.
+    fn header_and_payload(&self) -> Result<Vec<u8>, WireQueryError> {
         let payload_len = self.payload.len();
         if payload_len > u16::MAX as usize {
             return Err(WireQueryError::PayloadTooLong);
         }
-        let mut buf = Vec::with_capacity(HEADER_SIZE + payload_len + AUTH_TAG_SIZE);
+        let mut buf = Vec::with_capacity(HEADER_SIZE + payload_len + SIGNATURE_SIZE);
         buf.extend_from_slice(MAGIC);
         buf.push(VERSION);
         buf.push(self.msg_type as u8);
@@ -132,13 +147,55 @@ impl WireEnvelope {
         buf.push(self.hop_index);
         buf.extend_from_slice(&(payload_len as u16).to_be_bytes());
         buf.extend_from_slice(&self.payload);
-        buf.extend_from_slice(&self.auth_tag);
         Ok(buf)
     }
 
-    /// Deserialize from `OPHF` wire format; checks magic, msg_type, and payload length.
+    /// Canonical byte sequence covered by the origin signature: the full header
+    /// and payload with `hop_index` zeroed, so a relay incrementing `hop_index`
+    /// does not invalidate the originator's signature.
+    fn signing_bytes(&self) -> Result<Vec<u8>, WireQueryError> {
+        let mut buf = self.header_and_payload()?;
+        buf[HOP_INDEX_OFFSET] = 0;
+        Ok(buf)
+    }
+
+    /// Serialize to `OPHF` wire format: header (104 bytes) + payload, plus a 64-byte signature when
+    /// the envelope is signed. Unsigned envelopes carry no trailing signature.
+    pub fn encode(&self) -> Result<Vec<u8>, WireQueryError> {
+        let mut buf = self.header_and_payload()?;
+        if let Some(sig) = &self.signature {
+            buf.extend_from_slice(sig);
+        }
+        Ok(buf)
+    }
+
+    /// Sign the envelope's canonical region with `signing_key_seed`, storing a 64-byte Ed25519
+    /// signature. The seed's verifying key must equal `src_peer_id` for the signature to verify.
+    pub fn sign(&mut self, signing_key_seed: &[u8; 32]) -> Result<(), WireQueryError> {
+        let msg = self.signing_bytes()?;
+        let key = SigningKey::from_bytes(signing_key_seed);
+        let sig: Signature = key.sign(&msg);
+        self.signature = Some(sig.to_bytes());
+        Ok(())
+    }
+
+    /// Verify the origin signature against `src_peer_id` (which is the originator's Ed25519 verifying
+    /// key). Self-authenticating: no external key store is needed. An unsigned envelope fails.
+    pub fn verify_origin(&self) -> Result<(), WireQueryError> {
+        let sig_bytes = self.signature.ok_or(WireQueryError::InvalidSignature)?;
+        let key = VerifyingKey::from_bytes(&self.src_peer_id)
+            .map_err(|_| WireQueryError::InvalidSrcKey)?;
+        let sig = Signature::from_bytes(&sig_bytes);
+        let msg = self.signing_bytes()?;
+        key.verify_strict(&msg, &sig)
+            .map_err(|_| WireQueryError::InvalidSignature)
+    }
+
+    /// Deserialize from `OPHF` wire format; checks magic, msg_type, and payload length. The signature
+    /// is present iff exactly 64 bytes trail the payload (the envelope is length-delimited by its
+    /// carrying `Frame`); no trailing bytes means unsigned.
     pub fn decode(bytes: &[u8]) -> Result<Self, WireQueryError> {
-        if bytes.len() < HEADER_SIZE + AUTH_TAG_SIZE {
+        if bytes.len() < HEADER_SIZE {
             return Err(WireQueryError::BufferTooShort);
         }
         if &bytes[0..4] != MAGIC {
@@ -161,16 +218,22 @@ impl WireEnvelope {
 
         let payload_start = 104;
         let payload_end = payload_start + payload_len;
-        let auth_tag_end = payload_end + AUTH_TAG_SIZE;
-
-        if bytes.len() < auth_tag_end {
+        if bytes.len() < payload_end {
             return Err(WireQueryError::BufferTooShort);
         }
-
         let payload = bytes[payload_start..payload_end].to_vec();
-        let auth_tag: [u8; 16] = bytes[payload_end..auth_tag_end]
-            .try_into()
-            .map_err(|_| WireQueryError::MalformedPayload)?;
+
+        // The signature is present iff exactly 64 bytes trail the payload; any other trailer length
+        // is a truncated or corrupt frame.
+        let signature = match bytes.len() - payload_end {
+            0 => None,
+            SIGNATURE_SIZE => Some(
+                bytes[payload_end..payload_end + SIGNATURE_SIZE]
+                    .try_into()
+                    .map_err(|_| WireQueryError::MalformedPayload)?,
+            ),
+            _ => return Err(WireQueryError::BufferTooShort),
+        };
 
         Ok(Self {
             msg_type,
@@ -183,7 +246,7 @@ impl WireEnvelope {
             hop_limit,
             hop_index,
             payload,
-            auth_tag,
+            signature,
         })
     }
 }
@@ -923,8 +986,83 @@ mod tests {
             hop_limit: 3,
             hop_index: 0,
             payload,
-            auth_tag: [0xcc; 16],
+            signature: Some([0xcc; 64]),
         }
+    }
+
+    /// Build a signed relay envelope whose `src_peer_id` is the verifying key of `seed`.
+    fn signed_envelope(seed: &[u8; 32], payload: Vec<u8>) -> WireEnvelope {
+        let src = SigningKey::from_bytes(seed).verifying_key().to_bytes();
+        let mut env = WireEnvelope {
+            msg_type: WireMsgType::RelayDataChunk,
+            flags: 0,
+            session_id: 7,
+            src_peer_id: src,
+            dst_peer_id: [0xbb; 32],
+            nonce: [0x22; 12],
+            timestamp_ms: 1_700_000_000_000,
+            hop_limit: 4,
+            hop_index: 0,
+            payload,
+            signature: None,
+        };
+        env.sign(seed).unwrap();
+        env
+    }
+
+    #[test]
+    fn unsigned_envelope_omits_signature_bytes_on_wire() {
+        let env = test_envelope(WireMsgType::PeerQueryRequest, vec![0xAB; 4]);
+        let unsigned = WireEnvelope {
+            signature: None,
+            ..env
+        };
+        let bytes = unsigned.encode().unwrap();
+        // 104 header + 4 payload + 0 signature.
+        assert_eq!(bytes.len(), 104 + 4);
+        let decoded = WireEnvelope::decode(&bytes).unwrap();
+        assert_eq!(decoded.signature, None);
+    }
+
+    #[test]
+    fn signed_envelope_verifies_against_src_peer_id() {
+        let env = signed_envelope(&[7u8; 32], b"hello".to_vec());
+        assert!(env.verify_origin().is_ok());
+        // Survives an encode/decode round-trip.
+        let decoded = WireEnvelope::decode(&env.encode().unwrap()).unwrap();
+        assert!(decoded.verify_origin().is_ok());
+    }
+
+    #[test]
+    fn signature_survives_hop_index_increment() {
+        let mut env = signed_envelope(&[9u8; 32], b"relayed".to_vec());
+        // A relay bumps hop_index; the origin signature must still verify.
+        env.hop_index += 1;
+        assert!(env.verify_origin().is_ok());
+    }
+
+    #[test]
+    fn tampered_payload_fails_verification() {
+        let mut env = signed_envelope(&[3u8; 32], b"payload".to_vec());
+        env.payload[0] ^= 0xff;
+        assert_eq!(env.verify_origin(), Err(WireQueryError::InvalidSignature));
+    }
+
+    #[test]
+    fn spoofed_src_peer_id_fails_verification() {
+        let mut env = signed_envelope(&[5u8; 32], b"payload".to_vec());
+        // Claim to be a different (valid) key we do not hold.
+        env.src_peer_id = SigningKey::from_bytes(&[6u8; 32])
+            .verifying_key()
+            .to_bytes();
+        assert_eq!(env.verify_origin(), Err(WireQueryError::InvalidSignature));
+    }
+
+    #[test]
+    fn unsigned_envelope_fails_verification() {
+        let mut env = signed_envelope(&[1u8; 32], b"x".to_vec());
+        env.signature = None;
+        assert_eq!(env.verify_origin(), Err(WireQueryError::InvalidSignature));
     }
 
     #[test]
@@ -947,7 +1085,7 @@ mod tests {
         assert_eq!(decoded_env.session_id, 0x1001);
         assert_eq!(decoded_env.hop_limit, 3);
         assert_eq!(decoded_env.hop_index, 0);
-        assert_eq!(decoded_env.auth_tag, [0xcc; 16]);
+        assert_eq!(decoded_env.signature, Some([0xcc; 64]));
 
         let decoded_req = PeerQueryRequest::decode(&decoded_env.payload).unwrap();
         assert_eq!(decoded_req, req);

@@ -4,6 +4,7 @@
 //! through node B from node A, using clean loopback channels (no channel distortion).
 
 use bpsk_plugin::BpskPlugin;
+use ed25519_dalek::SigningKey;
 use openpulse_audio::LoopbackBackend;
 use openpulse_core::peer_cache::TrustFilter;
 use openpulse_core::relay::{RelayEvent, RelayTrustPolicy};
@@ -18,7 +19,11 @@ const MODE: &str = "BPSK250";
 fn make_node(lb: &LoopbackBackend, peer_id: [u8; 32]) -> MeshDaemon {
     let mut engine = ModemEngine::new(Box::new(lb.clone_shared()));
     let _ = engine.register_plugin(Box::new(BpskPlugin::default()));
-    let policy = RelayTrustPolicy::deny_relays([] as [&str; 0]);
+    let mut policy = RelayTrustPolicy::deny_relays([] as [&str; 0]);
+    // These routing-mechanics tests use synthetic peer ids that are not real Ed25519 verifying
+    // keys, so origin-signature verification is disabled here; the authenticated relay path is
+    // covered by `authenticated_relay_forwarding` with real keypairs.
+    policy.set_require_authentication(false);
     MeshDaemon::new(
         engine, MODE, peer_id, 3, 0, 300_000, policy, 64, 3_600_000, [0u8; 32], "N0CALL",
     )
@@ -29,7 +34,11 @@ fn make_node(lb: &LoopbackBackend, peer_id: [u8; 32]) -> MeshDaemon {
 fn make_node_seeded(lb: &LoopbackBackend, peer_id: [u8; 32], seed: [u8; 32]) -> MeshDaemon {
     let mut engine = ModemEngine::new(Box::new(lb.clone_shared()));
     let _ = engine.register_plugin(Box::new(BpskPlugin::default()));
-    let policy = RelayTrustPolicy::deny_relays([] as [&str; 0]);
+    let mut policy = RelayTrustPolicy::deny_relays([] as [&str; 0]);
+    // These routing-mechanics tests use synthetic peer ids that are not real Ed25519 verifying
+    // keys, so origin-signature verification is disabled here; the authenticated relay path is
+    // covered by `authenticated_relay_forwarding` with real keypairs.
+    policy.set_require_authentication(false);
     MeshDaemon::new(
         engine, MODE, peer_id, 3, 0, 300_000, policy, 64, 3_600_000, seed, "N0CALL",
     )
@@ -39,10 +48,33 @@ fn make_node_seeded(lb: &LoopbackBackend, peer_id: [u8; 32], seed: [u8; 32]) -> 
 fn make_beacon_node(lb: &LoopbackBackend, peer_id: [u8; 32]) -> MeshDaemon {
     let mut engine = ModemEngine::new(Box::new(lb.clone_shared()));
     let _ = engine.register_plugin(Box::new(BpskPlugin::default()));
-    let policy = RelayTrustPolicy::deny_relays([] as [&str; 0]);
+    let mut policy = RelayTrustPolicy::deny_relays([] as [&str; 0]);
+    // These routing-mechanics tests use synthetic peer ids that are not real Ed25519 verifying
+    // keys, so origin-signature verification is disabled here; the authenticated relay path is
+    // covered by `authenticated_relay_forwarding` with real keypairs.
+    policy.set_require_authentication(false);
     MeshDaemon::new(
         engine, MODE, peer_id, 3, 1, 300_000, policy, 64, 3_600_000, [0u8; 32], "N0CALL",
     )
+}
+
+/// Step `node` up to `max` times (all at `now_ms`), accumulating events, stopping once `pred` matches.
+/// A signed control response (e.g. a peer-query or route-discovery reply) now exceeds one modem frame
+/// and is SAR-fragmented, so the receiver needs one `step` per fragment to reassemble it.
+fn step_until(
+    node: &mut MeshDaemon,
+    now_ms: u64,
+    max: usize,
+    pred: impl Fn(&MeshEvent) -> bool,
+) -> Vec<MeshEvent> {
+    let mut all = Vec::new();
+    for _ in 0..max {
+        all.extend(node.step(now_ms));
+        if all.iter().any(&pred) {
+            break;
+        }
+    }
+    all
 }
 
 fn relay_envelope(src: [u8; 32], dst: [u8; 32], session_id: u64, nonce: u8) -> WireEnvelope {
@@ -61,7 +93,7 @@ fn relay_envelope(src: [u8; 32], dst: [u8; 32], session_id: u64, nonce: u8) -> W
         hop_limit: 2,
         hop_index: 0,
         payload: b"hello C".to_vec(),
-        auth_tag: [0u8; 16],
+        signature: None,
     }
 }
 
@@ -238,8 +270,13 @@ fn peer_discovery_via_beacon() {
     );
     lb_a.fill_samples(&samples_b);
 
-    // A processes B's response: caches B.
-    let events_a2 = node_a.step(1001);
+    // A processes B's (SAR-fragmented) response: caches B.
+    let events_a2 = step_until(
+        &mut node_a,
+        1001,
+        4,
+        |e| matches!(e, MeshEvent::PeerDiscovered { peer_id } if *peer_id == peer_b),
+    );
     assert!(
         events_a2
             .iter()
@@ -562,7 +599,7 @@ fn maint_envelope(
         hop_limit: 3,
         hop_index: 0,
         payload,
-        auth_tag: [0u8; 16],
+        signature: None,
     }
 }
 
@@ -734,5 +771,101 @@ fn oversized_envelope_survives_sar_fragmentation() {
     assert!(
         delivered,
         "B must reassemble the SAR-fragmented envelope and deliver it"
+    );
+}
+
+// ── Origin-authentication tests (E3) ────────────────────────────────────────────
+
+/// A real-keypair node whose `peer_id` is the verifying key of `seed`, with origin authentication
+/// enabled (the production default). Returns the derived peer id alongside the daemon.
+fn auth_node(lb: &LoopbackBackend, seed: [u8; 32]) -> ([u8; 32], MeshDaemon) {
+    let peer_id = SigningKey::from_bytes(&seed).verifying_key().to_bytes();
+    let mut engine = ModemEngine::new(Box::new(lb.clone_shared()));
+    engine
+        .register_plugin(Box::new(BpskPlugin::default()))
+        .unwrap();
+    let policy = RelayTrustPolicy::deny_relays([] as [&str; 0]); // require_authentication defaults true
+    let daemon = MeshDaemon::new(
+        engine, MODE, peer_id, 3, 0, 300_000, policy, 64, 3_600_000, seed, "N0CALL",
+    );
+    (peer_id, daemon)
+}
+
+/// A signed relay chunk from A authenticates at B and relays to C: A → B → C with auth enabled.
+#[test]
+fn authenticated_relay_forwarding() {
+    let lb_a = LoopbackBackend::new();
+    let lb_b = LoopbackBackend::new();
+    let lb_c = LoopbackBackend::new();
+    let (peer_a, mut node_a) = auth_node(&lb_a, [0xA1; 32]);
+    let (_peer_b, mut node_b) = auth_node(&lb_b, [0xB2; 32]);
+    let (peer_c, mut node_c) = auth_node(&lb_c, [0xC3; 32]);
+
+    // A originates a relay chunk to C; send_relay signs it because src == A's peer id.
+    let env = relay_envelope(peer_a, peer_c, 71, 1);
+    node_a.send_relay(env).unwrap();
+    let samples_a = lb_a.drain_samples();
+    lb_b.fill_samples(&samples_a);
+
+    let events_b = node_b.step(1000);
+    assert!(
+        events_b
+            .iter()
+            .any(|e| matches!(e, MeshEvent::Relay(RelayEvent::Forwarded { .. }))),
+        "B must authenticate and forward A's signed frame; got {events_b:?}"
+    );
+    assert!(
+        !events_b
+            .iter()
+            .any(|e| matches!(e, MeshEvent::Relay(RelayEvent::AuthenticationFailed { .. }))),
+        "a validly-signed frame must not raise AuthenticationFailed"
+    );
+
+    let samples_b = lb_b.drain_samples();
+    assert!(!samples_b.is_empty(), "B must forward the frame");
+    lb_c.fill_samples(&samples_b);
+    let events_c = node_c.step(1000);
+    assert!(
+        events_c
+            .iter()
+            .any(|e| matches!(e, MeshEvent::FrameDelivered { session_id: 71 })),
+        "C must receive and deliver the authenticated frame; got {events_c:?}"
+    );
+}
+
+/// An impersonator transmits an unsigned envelope claiming to originate from A (whose key it does not
+/// hold). The relay must reject it as `AuthenticationFailed` and not forward it.
+#[test]
+fn impersonated_origin_rejected_at_relay() {
+    let lb_tx = LoopbackBackend::new();
+    let lb_b = LoopbackBackend::new();
+    let (_peer_b, mut node_b) = auth_node(&lb_b, [0xB2; 32]);
+    let peer_a = SigningKey::from_bytes(&[0xA1; 32])
+        .verifying_key()
+        .to_bytes();
+    let peer_c = SigningKey::from_bytes(&[0xC3; 32])
+        .verifying_key()
+        .to_bytes();
+
+    // Unsigned envelope (all-zero signature) claiming src = A, addressed to C so B would forward it.
+    let env = relay_envelope(peer_a, peer_c, 72, 2);
+    let bytes = env.encode().unwrap();
+
+    let mut tx = ModemEngine::new(Box::new(lb_tx.clone_shared()));
+    tx.register_plugin(Box::new(BpskPlugin::default())).unwrap();
+    tx.transmit(&bytes, MODE, None).unwrap();
+    let samples = lb_tx.drain_samples();
+    lb_b.fill_samples(&samples);
+
+    let events_b = node_b.step(1000);
+    assert!(
+        events_b
+            .iter()
+            .any(|e| matches!(e, MeshEvent::Relay(RelayEvent::AuthenticationFailed { .. }))),
+        "B must reject the impersonated (unsigned) frame; got {events_b:?}"
+    );
+    assert!(
+        lb_b.drain_samples().is_empty(),
+        "B must not forward an unauthenticated frame"
     );
 }

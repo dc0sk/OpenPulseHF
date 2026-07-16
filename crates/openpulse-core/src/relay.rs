@@ -33,6 +33,8 @@ pub enum RelayForwardError {
     PolicyRejected { src_peer_id: [u8; 32] },
     /// Replay-suppression table is at capacity; envelope dropped.
     CapacityExceeded,
+    /// The envelope's origin signature did not verify against `src_peer_id`.
+    AuthenticationFailed { src_peer_id: [u8; 32] },
 }
 
 // ------------------------------------------------------------------
@@ -59,6 +61,11 @@ pub enum RelayEvent {
     },
     /// Envelope dropped because the replay-suppression table is full.
     CapacityExceeded { session_id: u64 },
+    /// Envelope dropped because its origin signature failed to verify.
+    AuthenticationFailed {
+        session_id: u64,
+        src_peer_id: [u8; 32],
+    },
 }
 
 // ------------------------------------------------------------------
@@ -68,19 +75,33 @@ pub enum RelayEvent {
 /// Trust policy applied at relay nodes to filter which originators may be forwarded.
 ///
 /// Two operator controls, both keyed on the (hex) originator peer id: a deny-list (block these) and
-/// an optional allow-list (`Some` = forward *only* these; `None` = forward anyone not denied). Note
-/// these operate on the envelope's `src_peer_id`, which is not cryptographically authenticated at the
-/// relay (the envelope `auth_tag` has no key-distribution scheme) — so, like the deny-list, the
-/// allow-list is a defense-in-depth operator control (it raises the bar for casual abuse and scopes a
-/// club/mesh relay to known stations), not strong authentication. Strong relay auth requires
-/// envelope-level authentication, tracked as future work (see the handshake-trust audit, finding E1).
-#[derive(Debug, Clone, Default)]
+/// an optional allow-list (`Some` = forward *only* these; `None` = forward anyone not denied). These
+/// operate on the envelope's `src_peer_id`, which — when `require_authentication` is set (the default)
+/// — is cryptographically authenticated at the relay via the envelope's Ed25519 origin signature
+/// (`src_peer_id` is the originator's verifying key; see [`WireEnvelope::verify_origin`]). A spoofed
+/// `src_peer_id` cannot pass this gate. The deny/allow lists remain operator scoping controls layered
+/// on top of that authentication (E3, closing the handshake-trust audit finding E1's `auth_tag` half).
+#[derive(Debug, Clone)]
 pub struct RelayTrustPolicy {
     denied_relays: HashSet<String>,
     /// When `Some`, only these (hex) originator peer ids are forwarded; `None` allows all non-denied.
     allowed_relays: Option<HashSet<String>>,
     /// Minimum trust level required to relay a frame.
     pub min_trust_filter: TrustFilter,
+    /// When `true` (default), the relay verifies each envelope's origin signature against
+    /// `src_peer_id` and drops it on failure. Disable only for synthetic (non-keyed) test peers.
+    pub require_authentication: bool,
+}
+
+impl Default for RelayTrustPolicy {
+    fn default() -> Self {
+        Self {
+            denied_relays: HashSet::new(),
+            allowed_relays: None,
+            min_trust_filter: TrustFilter::default(),
+            require_authentication: true,
+        }
+    }
 }
 
 impl RelayTrustPolicy {
@@ -92,8 +113,7 @@ impl RelayTrustPolicy {
     {
         Self {
             denied_relays: denied.into_iter().map(Into::into).collect(),
-            allowed_relays: None,
-            min_trust_filter: TrustFilter::default(),
+            ..Self::default()
         }
     }
 
@@ -105,9 +125,15 @@ impl RelayTrustPolicy {
     {
         Self {
             denied_relays: denied.into_iter().map(Into::into).collect(),
-            allowed_relays: None,
             min_trust_filter,
+            ..Self::default()
         }
+    }
+
+    /// Enable or disable origin-signature verification at the relay. Enabled by default; disable only
+    /// for tests using synthetic peer ids that are not real Ed25519 verifying keys.
+    pub fn set_require_authentication(&mut self, require: bool) {
+        self.require_authentication = require;
     }
 
     /// Restrict forwarding to an explicit allow-list of (hex) originator peer ids, on top of any
@@ -287,8 +313,10 @@ const MAX_SEEN_ENTRIES: usize = 4096;
 ///
 /// Each received `WireEnvelope` is checked for:
 /// 1. hop_index < hop_limit — drops the packet if the hop budget is exhausted.
-/// 2. (session_id, nonce) uniqueness — suppresses replays.
-/// 3. src_peer_id trust policy — rejects envelopes from denied originators.
+/// 2. origin authentication — verifies the Ed25519 signature against `src_peer_id`
+///    (when `require_authentication`), rejecting forged or unsigned frames.
+/// 3. (session_id, nonce) uniqueness — suppresses replays.
+/// 4. src_peer_id trust policy — rejects envelopes from denied originators.
 ///
 /// On success the returned envelope has `hop_index` incremented by one, ready
 /// to be forwarded to the next hop.
@@ -335,7 +363,19 @@ impl RelayForwarder {
             });
         }
 
-        // 2. Capacity guard — reject before inserting when the table is full.
+        // 2. Origin authentication — verify the Ed25519 signature against src_peer_id before
+        //    spending any dedup-table capacity on a forged frame.
+        if self.policy.require_authentication && envelope.verify_origin().is_err() {
+            self.events.push(RelayEvent::AuthenticationFailed {
+                session_id: envelope.session_id,
+                src_peer_id: envelope.src_peer_id,
+            });
+            return Err(RelayForwardError::AuthenticationFailed {
+                src_peer_id: envelope.src_peer_id,
+            });
+        }
+
+        // 3. Capacity guard — reject before inserting when the table is full.
         if self.seen.len() >= MAX_SEEN_ENTRIES {
             self.events.push(RelayEvent::CapacityExceeded {
                 session_id: envelope.session_id,
@@ -343,7 +383,7 @@ impl RelayForwarder {
             return Err(RelayForwardError::CapacityExceeded);
         }
 
-        // 3. Duplicate suppression
+        // 4. Duplicate suppression
         let key = (envelope.session_id, envelope.nonce);
         if self.seen.contains_key(&key) {
             self.events.push(RelayEvent::DuplicateSuppressed {
@@ -353,7 +393,7 @@ impl RelayForwarder {
             return Err(RelayForwardError::DuplicateDetected);
         }
 
-        // 4. Trust policy — check originating peer (src_peer_id)
+        // 5. Trust policy — check originating peer (src_peer_id)
         // Convert [u8;32] to a hex string for the policy lookup.
         let src_hex = hex_peer_id(&envelope.src_peer_id);
         if !self.policy.allows(&src_hex) {
@@ -403,25 +443,43 @@ fn hex_peer_id(id: &[u8; 32]) -> String {
 mod tests {
     use super::*;
     use crate::wire_query::{WireEnvelope, WireMsgType};
+    use ed25519_dalek::SigningKey;
+
+    /// Fixed originator seed for test envelopes; `src_peer_id` is its verifying key.
+    const TEST_SEED: [u8; 32] = [0x42; 32];
 
     fn route(peers: &[&str]) -> Vec<String> {
         peers.iter().map(|v| v.to_string()).collect()
     }
 
+    /// Hex of the test originator's peer id (the verifying key of `TEST_SEED`).
+    fn test_src_hex() -> String {
+        hex_peer_id(
+            &SigningKey::from_bytes(&TEST_SEED)
+                .verifying_key()
+                .to_bytes(),
+        )
+    }
+
     fn test_envelope(session_id: u64, hop_limit: u8, hop_index: u8) -> WireEnvelope {
-        WireEnvelope {
+        let src = SigningKey::from_bytes(&TEST_SEED)
+            .verifying_key()
+            .to_bytes();
+        let mut env = WireEnvelope {
             msg_type: WireMsgType::RelayDataChunk,
             flags: 0,
             session_id,
-            src_peer_id: [0xaa; 32],
+            src_peer_id: src,
             dst_peer_id: [0xbb; 32],
             nonce: [0x11; 12],
             timestamp_ms: 1_000,
             hop_limit,
             hop_index,
             payload: vec![],
-            auth_tag: [0; 16],
-        }
+            signature: None,
+        };
+        env.sign(&TEST_SEED).unwrap();
+        env
     }
 
     #[test]
@@ -528,8 +586,7 @@ mod tests {
 
     #[test]
     fn forwarder_rejects_denied_src_peer() {
-        let src_hex = hex_peer_id(&[0xaa; 32]);
-        let policy = RelayTrustPolicy::deny_relays([src_hex]);
+        let policy = RelayTrustPolicy::deny_relays([test_src_hex()]);
         let mut fwd = RelayForwarder::new(60_000, policy);
         let env = test_envelope(1, 3, 0);
         assert!(matches!(
@@ -540,11 +597,57 @@ mod tests {
 
     #[test]
     fn forwarder_allows_non_denied_peer_when_deny_list_active() {
-        // deny 0xbb..bb; the test envelope src is 0xaa..aa — should forward normally
+        // deny a different peer id; the test envelope's signed src is not denied — should forward
         let denied_hex = hex_peer_id(&[0xbb; 32]);
         let policy = RelayTrustPolicy::deny_relays([denied_hex]);
         let mut fwd = RelayForwarder::new(60_000, policy);
-        let env = test_envelope(1, 3, 0); // src = 0xaa..aa
+        let env = test_envelope(1, 3, 0);
+        assert!(fwd.forward(&env, 1_000).is_ok());
+    }
+
+    #[test]
+    fn forwarder_rejects_forged_signature() {
+        let mut fwd = RelayForwarder::new(60_000, RelayTrustPolicy::default());
+        let mut env = test_envelope(1, 3, 0);
+        env.payload = b"tampered".to_vec(); // invalidates the origin signature
+        assert!(matches!(
+            fwd.forward(&env, 1_000),
+            Err(RelayForwardError::AuthenticationFailed { .. })
+        ));
+    }
+
+    #[test]
+    fn forwarder_rejects_unsigned_when_authentication_required() {
+        let mut fwd = RelayForwarder::new(60_000, RelayTrustPolicy::default());
+        let mut env = test_envelope(1, 3, 0);
+        env.signature = None; // strip the signature
+        assert!(matches!(
+            fwd.forward(&env, 1_000),
+            Err(RelayForwardError::AuthenticationFailed { .. })
+        ));
+    }
+
+    #[test]
+    fn forwarder_rejects_spoofed_src_peer_id() {
+        let mut fwd = RelayForwarder::new(60_000, RelayTrustPolicy::default());
+        let mut env = test_envelope(1, 3, 0);
+        // Claim a different (valid) originator without holding its key.
+        env.src_peer_id = SigningKey::from_bytes(&[0x99; 32])
+            .verifying_key()
+            .to_bytes();
+        assert!(matches!(
+            fwd.forward(&env, 1_000),
+            Err(RelayForwardError::AuthenticationFailed { .. })
+        ));
+    }
+
+    #[test]
+    fn forwarder_allows_unsigned_when_authentication_disabled() {
+        let mut policy = RelayTrustPolicy::default();
+        policy.set_require_authentication(false);
+        let mut fwd = RelayForwarder::new(60_000, policy);
+        let mut env = test_envelope(1, 3, 0);
+        env.signature = None;
         assert!(fwd.forward(&env, 1_000).is_ok());
     }
 
