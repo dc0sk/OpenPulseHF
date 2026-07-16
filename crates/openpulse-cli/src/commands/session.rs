@@ -793,6 +793,9 @@ fn build_session_diagnostics(
     );
     diag.current_state = format!("{:?}", engine.hpx_state()).to_lowercase();
     diag.set_pipeline_metrics(engine.pipeline_metrics_snapshot());
+    // The field existed and was serialized, but nothing ever wrote it — so the diagnostics JSON
+    // always carried `"afc_offset_hz": null`. The engine has held the value all along.
+    diag.afc_offset_hz = engine.last_afc_offset_hz();
 
     for transition in engine.hpx_transitions() {
         diag.record_transition(transition);
@@ -862,5 +865,36 @@ mod tests {
         assert_eq!(diag.total_transitions, 1);
         assert_eq!(diag.total_events, 1);
         assert_eq!(diag.events.len(), 1);
+    }
+
+    /// `SessionDiagnostics.afc_offset_hz` is serialized into the diagnostics JSON, but nothing ever
+    /// wrote it — the field was initialised to `None`, so the output always carried
+    /// `"afc_offset_hz": null` while the engine held the value all along. Guard the wiring: a
+    /// demodulated frame must surface its AFC estimate here.
+    #[test]
+    fn build_session_diagnostics_reports_the_engine_afc_offset() {
+        let backend = LoopbackBackend::new();
+        let mut engine = ModemEngine::new(Box::new(backend.clone_shared()));
+        engine
+            .register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+            .expect("register");
+
+        // No demodulation yet → nothing to report, and the field must not invent a value.
+        assert_eq!(build_session_diagnostics(&engine, None).afc_offset_hz, None);
+
+        // A real round-trip makes the engine latch an AFC estimate (BPSK overrides estimate_afc_hz).
+        engine.transmit(b"afc diag", "BPSK250", None).expect("tx");
+        engine.receive("BPSK250", None).expect("rx");
+        let expected = engine.last_afc_offset_hz();
+        assert!(
+            expected.is_some(),
+            "a BPSK250 round-trip must leave an AFC estimate on the engine, else this test cannot \
+             tell a wired field from an unwired one"
+        );
+        assert_eq!(
+            build_session_diagnostics(&engine, None).afc_offset_hz,
+            expected,
+            "the diagnostics snapshot must report the engine's AFC estimate, not a constant null"
+        );
     }
 }
