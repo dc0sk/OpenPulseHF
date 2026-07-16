@@ -2,10 +2,54 @@
 project: openpulsehf
 doc: docs/releasenotes.md
 status: living
-last_updated: 2026-07-15
+last_updated: 2026-07-16
 ---
 
 # Release Notes
+
+## v0.10.0 — 2026-07-16
+
+The follow-through on the security-audit series: this closes the last major deferred finding from the
+handshake-trust audit, **envelope origin authentication for relayed traffic (E3)**. A relay now
+cryptographically verifies who originated every relay-data frame it forwards, so a station can no longer
+impersonate another originator at a relay. The minor bump reflects a control-plane wire-format change
+(envelope v2) and the behaviour change below; there is no config-file break.
+
+### The headline change
+
+**A relay no longer forwards forged or unauthenticated relay traffic (E3).** The `OPHF` control-plane
+envelope carried a 16-byte `auth_tag` that was *never verified* and had no scheme for distributing the keys
+that would make it meaningful. So any station could transmit a relay frame stamped with any originator id
+(`src_peer_id`) and a relay would forward it — impersonation, and the foundation a strong relay-access
+policy would have to stand on. Because a peer id in this system **is** its Ed25519 verifying key (the same
+self-authenticating trick the peer descriptors use), the fix needs no key exchange: the envelope now carries
+an optional Ed25519 signature over its own fields, and the relay verifies it against the `src_peer_id` in the
+frame. A relay drops any relay-data frame whose signature is missing or invalid. The originator allow-list
+shipped in v0.9.0 now scopes a relay *on top of* real cryptographic authentication instead of a spoofable id.
+
+The signature is **optional on the wire** by design. Making it mandatory (a fixed 64-byte field on every
+envelope) would push even a one-result peer-query response past the modem's 255-byte frame limit, forcing
+fragmentation on every control message — and the mesh's receive loop can't reliably reassemble multi-frame
+messages from continuous audio. Instead, only the frames that actually pass through the authenticated relay
+(relay-data and hop-acks) are signed; the query/route responses that already carry their own inner signatures
+stay unsigned at the envelope level and comfortably within one frame.
+
+### Behaviour changes / migration
+
+1. **Relays reject unsigned or forged relay frames.** Enabled by default, with no opt-out. The only software
+   that originates relay frames in this project (the mesh daemon) now signs them, so a normal mesh is
+   unaffected — but a relay will silently drop relay-data frames from anything that does not sign.
+2. **Control-plane wire schema is now v2.** The `OPHF` envelope replaced its fixed 16-byte `auth_tag` with an
+   optional 64-byte signature; **v1 and v2 envelopes are not interoperable.** This touches only the mesh,
+   relay, peer-query, and route-discovery control plane — all off by default. *Action:* upgrade both ends of
+   a mesh/relay link together.
+
+### Resolved from v0.9.0
+
+- The v0.9.0 notes listed **envelope-level authentication of relayed traffic** as future work that would
+  "need a mesh reception-model change (burst reception)." That turned out to be avoidable: making the
+  signature optional keeps authenticated frames inside a single modem frame, so no reception-model change was
+  needed. Resolved in this release.
 
 ## v0.9.0 — 2026-07-16
 
