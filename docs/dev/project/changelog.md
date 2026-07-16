@@ -10,6 +10,35 @@ last_updated: 2026-07-16
 > Phase/roadmap history lives in [roadmap.md](roadmap.md); this file tracks
 > user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
 
+## v0.12.1 — 2026-07-16
+
+Patch release: internal fixes from the first formal loose-ends audit of the `openpulse-modem` crate
+(the core modem engine / ARQ / OTA rate ladder / DSP). The audit found the core broadly solid; these
+are the top confirmed items. No wire-format or config change.
+
+### Fixes
+
+- **The daemon control loop no longer freezes when a peer goes silent mid-send.** An OTA send to a peer
+  that stopped answering retried through its full budget of ACK windows (up to ~36 s on the MFSK16
+  sub-floor) synchronously in the daemon's control loop, blocking `Abort`/`Disconnect` and data RX. It now
+  abandons after two consecutive silent ACK windows (a NACKing — i.e. present — peer still gets the full
+  retry budget). (#918)
+- **The OTA candidate-decode loop no longer re-runs the receiver front-end per candidate.** With the notch
+  or AGC enabled, each rate candidate re-applied the notch/AGC/DCD, which could advance the notch
+  persistence counter and prematurely trigger an auto-QSY. (#914)
+- **The daemon no longer logs "OTA aggressiveness preset applied" for knobs it doesn't use.**
+  `ota_aggressiveness` / `ota_min_backlog` / `ota_upgrade_hold_frames` configure a rate policy the daemon's
+  receiver-led ladder doesn't run; it now warns instead of falsely confirming. Bound the OTA rate with
+  `ota_min_level` / `ota_max_level` / `ota_lock_level`. (#915)
+- **Consistent hard-decision LLR rule** across the decode paths (they disagreed only at exactly +0.0), and
+  a corrected internal DSP note. (#916)
+
+### Known limitations (tracked)
+
+- Deferred modem-audit findings — HARQ cross-message LLR isolation, a cpal-only second-capture-stream
+  buffering, and some test-coverage gaps — are tracked in GitHub issue #917. Full report:
+  `docs/dev/reviews/2026-07-16-modem-loose-ends-audit.md`.
+
 ## v0.12.0 — 2026-07-16
 
 Closes the last two implementable findings from the handshake-trust audit: the OTA rate ACK is now
