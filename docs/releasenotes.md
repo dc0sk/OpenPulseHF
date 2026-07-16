@@ -7,6 +7,56 @@ last_updated: 2026-07-15
 
 # Release Notes
 
+## v0.9.0 — 2026-07-16
+
+The second release in the security-audit series. A fresh adversarial sweep of the **RX decode path** (the
+code that turns untrusted RF-derived bytes into frames) and the **network-facing protocol bridges** (ARDOP
+TNC, KISS/AX.25, B2F/Winlink), plus follow-ups. **Anyone running the daemon or a TNC should upgrade** — this
+fixes a CRITICAL remote crash. The minor bump reflects the file-offer signature wire-format change; there is
+no config break.
+
+### The headline issue
+
+**A crafted transmission could crash the receiver (CRITICAL).** The short-FEC decode path — reached from
+the OTA acknowledgement listener (which runs every receive tick) and the short-FEC receive path — handed
+attacker-length-controlled demodulator output straight to a Reed–Solomon decoder whose internal buffer is a
+fixed 256 bytes. Any input ≥ 256 bytes panics it, killing the receive call. A hostile station could crash any
+receiver on frequency simply by transmitting enough audio. The decoder now rejects over-length input before
+it can reach that buffer. Two related receive-path panics (32-bit/WASM length-prefix overflow) and an
+unbounded SAR reassembly table were fixed in the same pass.
+
+### Also fixed
+
+- The **ARDOP TNC** could be driven out of memory by a client streaming bytes with no newline — the command
+  read is now length-bounded.
+- The **Winlink gzip decompressor** had no output-size cap (the LZHUF path did) — a decompression bomb from a
+  malicious CMS is now rejected.
+- The B2F session could be made to **accept and retain an unbounded number of proposals** — now capped.
+- A **signed file offer's filename and geometry are now covered by its signature** — previously only the
+  content hash was, so an on-path attacker could replay a signed offer with a spoofed filename under a
+  valid-signature badge.
+
+### New
+
+- **Relay originator allow-list** (`[relay] allow_list`): an enabled relay can be restricted to forwarding
+  only frames from listed originator peer IDs — a defense-in-depth control for a club/mesh relay.
+- The mesh can now **carry control responses larger than one modem frame** (SAR fragment/reassemble);
+  transparent to current traffic.
+
+### Behaviour changes / migration
+
+1. **The file-offer signature now covers the whole offer.** A signed offer created by v0.8.0 will not verify
+   on v0.9.0 (the signature covers more fields). Direct file transfer is off by default and experimental, so
+   this only affects operators who enabled it between the two releases. *Action:* none for most; re-send any
+   in-flight offer after both ends upgrade.
+
+### Known limitations (tracked, not in this release)
+
+- **Envelope-level authentication of relayed traffic** (the route/query floods a relay forwards) remains
+  future work. The modem's 255-byte frame cap means a signed envelope must fragment across frames, which
+  needs a mesh reception-model change (burst reception). The allow-list above is the shipped defense-in-depth
+  control; see `docs/dev/reviews/2026-07-15-handshake-trust-audit.md` (E1/E3).
+
 ## v0.8.0 — 2026-07-15
 
 A **security release**. Three back-to-back adversarial audits — of the signed handshake / trust store, of
