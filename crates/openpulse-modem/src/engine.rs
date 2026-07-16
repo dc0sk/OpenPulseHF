@@ -301,8 +301,15 @@ pub struct ModemEngine {
     /// across retransmissions ([`decode_combined_llrs`](Self::decode_combined_llrs)). Bounded
     /// to [`OTA_HARQ_MAX_ATTEMPTS`] vectors per mode; cleared on any successful decode and on
     /// OTA session start/stop.
+    ///
+    /// **Oldest first** — the decoder relies on that order to try suffixes that exclude an
+    /// abandoned message's bursts, which is the only thing separating them from this frame's.
     ota_retained_llrs: std::collections::HashMap<String, Vec<Vec<f32>>>,
     /// Session id the retained LLRs belong to; a burst under a different session clears them.
+    ///
+    /// Note this guard is inert on the daemon, which pins the session id to the local callsign
+    /// (`server.rs`); the suffix trial in `ota_decode_and_ack_inner`, not this, is what keeps a
+    /// stale message's LLRs out of the next one's combine.
     ota_retained_session: Option<String>,
     /// Per-session key (ECDH-derived at the handshake) for authenticating the OTA rate ACK (E7).
     /// When set, ACKs are encoded/verified with a keyed MAC instead of the public FNV hash + CRC,
@@ -1596,12 +1603,15 @@ impl ModemEngine {
                         fec,
                         FecMode::SoftConcatenated | FecMode::Ldpc | FecMode::LdpcHighRate
                     );
-                // NOTE: MFSK16+Rs is deliberately NOT admitted to HARQ combining. `ota_retained_llrs` is
-                // keyed by mode and length-filtered, but every MFSK16 frame is one fixed 255-byte RS block,
-                // so the length filter can't tell two frames apart, and the daemon session guard never fires
-                // (session id = local callsign). A stale abandoned-message LLR set could then pollute — worst
-                // case deliver — a later message. Re-admitting needs frame-identity-tagged retained LLRs
-                // (audit 2026-07-15).
+                // NOTE: MFSK16+Rs is still not admitted to HARQ combining. The FEC gate above — not
+                // any lack of soft LLRs — is what excludes it: MFSK16 is soft-capable and
+                // `decode_combined_llrs` does handle `Rs` by hard-deciding the combined vector. It was
+                // held out because a stale abandoned-message LLR set could pollute a later message and
+                // nothing could tell the two apart (every MFSK16 frame is one fixed 255-byte block, so
+                // the length filter can't). The suffix trial below now contains that hazard, so
+                // re-admitting is a live option — but it is a behaviour change on the weak-signal
+                // sub-floor rung and needs its own measurement, not a one-line gate edit
+                // (audit 2026-07-15 / 2026-07-16 #4).
                 if !soft {
                     continue;
                 }
@@ -1611,24 +1621,50 @@ impl ModemEngine {
                 };
                 // Combine only with retained bursts of the same LLR length (same mode + frame
                 // geometry); a mismatched vector is a different frame and must not align onto this one.
-                let combined: Option<Vec<f32>> = self.ota_retained_llrs.get(mode).and_then(|r| {
-                    let mut set: Vec<&[f32]> = r
-                        .iter()
-                        .filter(|v| v.len() == llrs.len())
-                        .map(|v| v.as_slice())
-                        .collect();
-                    if set.is_empty() {
-                        None
-                    } else {
+                let retained: Vec<Vec<f32>> = self
+                    .ota_retained_llrs
+                    .get(mode)
+                    .map(|r| {
+                        r.iter()
+                            .filter(|v| v.len() == llrs.len())
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                // Try the newest-first suffixes of the retained set, widest first, until one decodes.
+                //
+                // Summing LLRs is the MAP combine only for repeated observations of the *same* bits;
+                // fold in an abandoned message's burst and it corrupts this one. The length filter
+                // above cannot separate them (two same-length messages collide, and every MFSK16
+                // frame is one fixed 255-byte block), and the session guard never fires on the daemon
+                // — it pins `session_id` to the local callsign. No identity test on the LLRs
+                // themselves is dependable either: a short payload pads out to the RS block with bytes
+                // both messages share, which correlates *different* frames strongly enough to close
+                // the margin (measured: sign agreement 0.61-0.73 for different 61-byte messages, vs
+                // 0.68-0.86 for genuine retransmissions — overlapping populations).
+                //
+                // What holds regardless is the *ordering*: a stale message's bursts are always older
+                // than this message's, so some suffix excludes all of them. Widest-first keeps the
+                // common case at one decode and preserves full diversity when every retained burst
+                // really is this frame; a stale vector then costs only the attempts before the suffix
+                // that drops it. Success is a superset of the single whole-set combine this replaces
+                // — the same standalone-then-combine union #694 established (audit 2026-07-16 #4).
+                for take in (1..=retained.len()).rev() {
+                    let combined = {
+                        let mut set: Vec<&[f32]> = retained[retained.len() - take..]
+                            .iter()
+                            .map(|v| v.as_slice())
+                            .collect();
                         set.push(llrs.as_slice());
-                        Some(combine_llrs_map(&set))
-                    }
-                });
-                if let Some(combined) = combined {
+                        combine_llrs_map(&set)
+                    };
                     if let Ok(payload) = self.decode_combined_llrs(mode, &combined, *fec) {
                         decoded = Some((payload, *level, mode.clone()));
                         break;
                     }
+                }
+                if decoded.is_some() {
+                    break;
                 }
                 let buf = self.ota_retained_llrs.entry(mode.clone()).or_default();
                 buf.push(llrs);
