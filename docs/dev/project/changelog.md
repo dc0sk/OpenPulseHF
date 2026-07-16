@@ -2,13 +2,76 @@
 project: openpulsehf
 doc: docs/dev/project/changelog.md
 status: living
-last_updated: 2026-07-16
+last_updated: 2026-07-17
 ---
 
 # Changelog
 
 > Phase/roadmap history lives in [roadmap.md](roadmap.md); this file tracks
 > user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
+
+## v0.12.2 — 2026-07-17
+
+Patch release: the weak-signal receive path. HARQ soft-combining across retransmissions was in place but
+throwing away most of its own gain, and the weak-signal sub-floor rung was excluded from it entirely. All
+receiver-side — no wire-format, config, or API change, and nothing to do to upgrade.
+
+Measured on a Watterson `moderate_f1` fade at 10 dB, SL12 `OFDM52-16QAM`, 400 fade realisations
+(a single burst decodes 0.582 of the time):
+
+| | decode rate |
+|---|---|
+| before | 0.840 |
+| after | **0.957** |
+
+### Fixes
+
+- **HARQ combining no longer discards retransmissions whose soft-data length differs.** The combiner only
+  accepted retained soft-decision data of *exactly* the current burst's length — but a faded demodulator
+  recovers a varying symbol count for the same frame (576–4320 observed on one frame), so genuine
+  retransmissions were being dropped and their diversity thrown away, having already been paid for in
+  airtime. Retained data is now aligned onto the current burst's grid (truncated if longer, zero-padded if
+  shorter, which is the correct "this burst never recovered that symbol"). Worth **+0.117** decode rate.
+  (#921)
+- **An abandoned message's soft data no longer dilutes the next message's combine.** Retained data was
+  isolated by length only, and the intended per-session guard never fired on the daemon (it pins the
+  session id to the local callsign), so two consecutive same-length messages — fixed-size SAR fragments
+  are exactly this — combined a stale message's data into the live one. No false delivery (RS/CRC still
+  gated), but it cost **-0.067** of the diversity gain HARQ exists to provide, about a quarter of it.
+  (#920)
+- **`openpulse session --diagnostics` reports a real `afc_offset_hz`.** The field was serialized but never
+  written, so the JSON always carried `"afc_offset_hz": null` while the engine held the value all along.
+  Same schema; the value is simply no longer a constant null after a demodulation. (#926)
+
+### Features
+
+- **HARQ combining now covers the plain-RS rungs, including the MFSK16 weak-signal sub-floor** — worth
+  about **2.5 dB** there. At -4 dB the sub-floor's decode rate goes 0.117 → 0.750, and at -6 dB it
+  recovers frames that no single transmission ever does. This is the rung a link falls back to under
+  sustained failure, so the gain lands where there is nothing else left. It was held out because every
+  MFSK16 frame is one fixed-size block, so an abandoned message's data could not be told apart from a
+  retransmission — worst case, delivering the wrong message. The fix in #920 contains that hazard by
+  construction; it is gated by tests for both zero dilution and zero false deliveries. (#922)
+
+### Tests
+
+- OTA receive and HARQ are now exercised through the daemon's **production** capture entry
+  (`accumulate_capture`, tick-sized chunks, DCD-decided burst boundaries) rather than only the
+  direct-decode seam — confirming the diversity gain reaches the real receive path (0.633 → 0.967). (#924)
+- Closed the audit's deferred test-coverage gaps: FSK4-ACK now has a **correct-decode-under-noise** gate
+  (its only noise test asserted the ACK *breaks*, and its stated -16 dB rationale was wrong by ~14 dB
+  against measurement); the MFSK16 sub-floor ACK is tested with authentication enabled; and the SC-FDMA
+  acceptance row now cites the test that actually asserts instead of an `#[ignore]`d zero-assertion
+  harness. (#925)
+
+### Known limitations
+
+- The `QPSK250 + RS` rung of the `hpx_hf` ladder does not decode on a Watterson `moderate_f1` fade at any
+  SNR (0.033 even at 40 dB). Diagnosed to carrier phase tracking under fading — not ISI, not noise. The
+  rate ladder steps off the rung, so this costs throughput rather than correctness. Tracked in
+  [#923](https://github.com/dc0sk/OpenPulseHF/issues/923).
+- The OTA ACK-wait opens a second capture stream on the cpal (real-audio) backend; loopback hides it.
+  Parked pending hardware. Tracked in [#917](https://github.com/dc0sk/OpenPulseHF/issues/917).
 
 ## v0.12.1 — 2026-07-16
 

@@ -2,10 +2,66 @@
 project: openpulsehf
 doc: docs/releasenotes.md
 status: living
-last_updated: 2026-07-16
+last_updated: 2026-07-17
 ---
 
 # Release Notes
+
+## v0.12.2 — 2026-07-17
+
+A patch release about one thing: getting more frames out of a fading channel. Everything here is
+receiver-side — there is no wire-format, config-file, or API change, and nothing you need to do to
+upgrade. Two stations running v0.12.1 and v0.12.2 interoperate exactly as before; the newer one just
+decodes more.
+
+**Background.** When a message fails to decode, the sender retransmits it. HARQ soft-combining is the
+technique that adds those attempts together instead of throwing the failed ones away: each burst is a
+partially-ruined observation of the same bits, and on a fading channel they are ruined in *different*
+places, so the sum can decode what no single copy could. OpenPulse has had this since v0.4, but it was
+leaving most of its own gain on the floor.
+
+**What was wrong.** Two things, both invisible without measuring:
+
+- The combiner only accepted a retained burst if its soft-decision data was *exactly* the same length as
+  the current one. That sounds harmless, but a faded demodulator recovers a varying number of symbols from
+  the same frame — we measured 576 to 4320 on a single frame — so most genuine retransmissions were being
+  rejected and their diversity discarded, after the airtime had already been spent sending them.
+- If the sender gave up on a message and moved on, the abandoned message's soft data could be mixed into
+  the *next* message's combine. It never delivered a wrong frame — the error-correcting code and checksum
+  still gated everything — but it diluted the very gain the mechanism exists to provide.
+
+**What it's worth.** On a moderate HF fade (Watterson `moderate_f1`) at 10 dB, over 400 independent fade
+realisations, where a single burst decodes 58.2% of the time:
+
+| | frames decoded |
+|---|---|
+| v0.12.1 | 84.0% |
+| **v0.12.2** | **95.7%** |
+
+**The weak-signal sub-floor gets HARQ too — worth about 2.5 dB.** MFSK16 is the rung the link falls back
+to when everything else has failed: slow, non-coherent, built for deep fades. It was excluded from
+combining because every MFSK16 frame is one fixed-size block, which meant an abandoned message's data
+couldn't be told apart from a retransmission of the live one — and the worst case there is delivering the
+*wrong message*. The fix above removes that hazard structurally (a stale message's bursts are always
+older, so the decoder simply tries the recent ones first), so the rung could finally be let in. At -4 dB
+its decode rate goes from 11.7% to 75.0%, and at -6 dB it recovers frames that no single transmission ever
+does. That gain lands exactly where a link has nothing left to fall back on.
+
+**Also:** `openpulse session --diagnostics` now reports a real `afc_offset_hz`. The field was always in
+the JSON but nothing ever filled it in, so it read `null` no matter what — the carrier-offset estimate was
+sitting in the modem the whole time. Same schema, so nothing that reads that JSON breaks.
+
+### Known limitations
+
+- **`QPSK250` on a moderate fade.** Investigating the above turned up that the `QPSK250 + RS` rung of the
+  `hpx_hf` ladder never decodes on a Watterson `moderate_f1` fade — at *any* signal level, including 40 dB.
+  An ablation points at carrier phase tracking through the fading (removing the multipath changes nothing;
+  removing the fading rescues it), not noise or intersymbol interference. Because the rate ladder simply
+  steps off a rung that isn't working, this costs throughput rather than correctness, and it is not a
+  regression — it predates this release. Tracked in
+  [#923](https://github.com/dc0sk/OpenPulseHF/issues/923).
+- **Second capture stream during the ACK wait (real-audio backend only).** Parked pending hardware to
+  verify against. Tracked in [#917](https://github.com/dc0sk/OpenPulseHF/issues/917).
 
 ## v0.12.1 — 2026-07-16
 
