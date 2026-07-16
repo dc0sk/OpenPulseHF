@@ -487,7 +487,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | Gilbert-Elliott bursts span whole symbols (mean 1/p_bg symbols) | `cargo test -p openpulse-channel --lib bursts_span_whole_symbols_with_mean_one_over_pbg` |
 | Watterson fading envelope non-trivial | `cargo test -p openpulse-channel` (`f1_envelope_has_non_trivial_variation` in `watterson.rs`) |
 | Watterson continuous fade correlates across `apply()` calls | `cargo test -p openpulse-channel --lib continuous_fade_correlates_across_calls` |
-| SC-FDMA channel estimator vs. selective channels | `cargo test -p openpulse-modem --test scfdma_ce_sweep -- --ignored` (before/after harness) |
+| SC-FDMA channel estimator vs. selective channels | `cargo test -p openpulse-modem --test scfdma_multipath_timing` (asserts; `scfdma_ce_sweep` is a **manual research harness**, not a gate — it is `#[ignore]`d and asserts nothing) |
 | SC-FDMA decodes a stronger delayed ray to a 2 ms (16-sample) spread inside the CP | `cargo test -p openpulse-modem --test scfdma_multipath_timing` |
 | Symbol-domain SNR tracks true SNR past M2M4's ~15 dB saturation | `cargo test -p openpulse-modem --test symbol_domain_snr` + `--test symbol_snr_ladder_climb` |
 | 64QAM soft LLRs are calibrated (worst-bin error ≤ 4× the promised rate) | `cargo test -p qam64-plugin --test llr_reliability` |
@@ -514,6 +514,8 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | Handshake replay-freshness — signed timestamp; stale/future/missing rejected | `cargo test -p openpulse-core --lib handshake::tests` (fresh/stale/future/missing/none/stale-conack) |
 | SAR reassembly resists poison — conflicting fragment stream doesn't block the legit one | `cargo test -p openpulse-core --lib sar::tests` (poison/wrong-total/flood) + `cargo test -p openpulse-daemon --lib poison_fragment_does_not_block_conreq_verification` |
 | OTA rate ACK is authenticated — ECDH-derived keyed MAC; forged/foreign-key ACK rejected (audit E7) | `cargo test -p openpulse-core --lib session_key ack::tests` + `cargo test -p openpulse-modem --test ack_exchange_integration authenticated_ack_round_trips_and_forgery_is_rejected` |
+| Authenticated ACK composed with the **sub-floor K=3 union** return channel (E7 × REQ-WSIG-01) | `cargo test -p openpulse-modem --test mfsk16_arq_subfloor authenticated_k3_subfloor_ack_round_trips_and_forgery_is_rejected` |
+| FSK4-ACK decodes **correctly** under noise at its operating point (and degrades below its floor) | `cargo test -p fsk4-plugin --test fsk4_integration` |
 | CI auto-runs on every PR (Linux gates + macOS build) | `.github/workflows/ci.yml` `on: pull_request`; Linux core/full/gpu/pi5 gates + a `macos-build` compile check |
 
 For any new Phase 1 feature: write the test first, confirm it fails, implement until it passes. Do not mark a task done if its test does not exist.

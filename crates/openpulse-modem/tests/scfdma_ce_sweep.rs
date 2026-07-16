@@ -1,6 +1,12 @@
 //! SC-FDMA channel-estimation sweep — the before/after harness for receiver-side CE work
 //! (research doc `docs/dev/research/scfdma-improvements.md`, items P2/P3).
 //!
+//! **This is a measurement harness, not an acceptance gate.** Every test here is `#[ignore]`d and
+//! asserts nothing — it prints curves for a human to compare across a change. The acceptance table in
+//! `CLAUDE.md` once cited it as the gate for "SC-FDMA channel estimator vs. selective channels",
+//! which meant that requirement was enforced by nobody; the gate is `scfdma_multipath_timing`, which
+//! asserts and runs by default. Don't re-link this file as a gate without giving it assertions.
+//!
 //! Prints a decode-rate-vs-SNR curve for every SC-FDMA rung of `hpx_hf`, over AWGN and over
 //! Watterson `good_f1` fading. RX-only changes (CPE removal, non-causal CE smoothing, noise-variance
 //! smoothing) must not move the AWGN curve down and should move the fading curve left.

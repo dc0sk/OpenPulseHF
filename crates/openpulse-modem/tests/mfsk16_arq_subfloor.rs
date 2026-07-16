@@ -211,3 +211,62 @@ fn mixed_profile_peer_acquires_the_leading_fsk4_ack() {
         assert_eq!(got.ack_type, AckType::AckDown);
     }
 }
+
+/// E7 × REQ-WSIG-01: the authenticated ACK composed with the sub-floor **K=3 union** path.
+///
+/// `ack_exchange_integration.rs` proves the keyed MAC on the FSK4 path, but the sub-floor rung
+/// composes it with a different return channel: `transmit_ota_ack` encodes via
+/// `encode_maybe_authenticated`, and the ISS union-listens and verifies through
+/// `decode_ack_from_llr_copies_maybe_auth`. Nothing in this file set `ack_mac_key`, so that
+/// composition was unproven — if the union decode dropped the key, authenticated sub-floor ACKs would
+/// be rejected outright and SL1 would lose its feedback path the moment E7 auth was enabled.
+///
+/// **-8 dB AWGN is load-bearing, not decoration.** The dual-waveform ACK *leads* with an FSK4 copy,
+/// and on a clean channel that copy decodes first through a different path
+/// (`decode_maybe_authenticated`) — so a clean-channel version of this test passes even with the key
+/// removed from the union decode, i.e. it never exercises K=3 at all. At -8 dB the FSK4 frame is dead
+/// (measured 0.005 in `fsk4_integration.rs`'s waterfall) while the K=3 MFSK16 union still decodes
+/// 1.000, which forces the path this test is named for.
+#[test]
+fn authenticated_k3_subfloor_ack_round_trips_and_forgery_is_rejected() {
+    /// Below the FSK4-ACK floor, above the K=3 MFSK16 union floor (which dies by -12 dB).
+    const SUBFLOOR_SNR_DB: f32 = -8.0;
+    let key = [0xA7u8; 32];
+
+    // Recommending SL1 selects the sub-floor K=3 MFSK16 return channel.
+    let (mut irs, irs_bk) = hf_engine();
+    irs.set_ack_mac_key(Some(key));
+    let ack = AckFrame::new(AckType::AckOk, "subfloor-e7").with_recommended_level(SpeedLevel::Sl1);
+    irs.transmit_ota_ack(&ack, None)
+        .expect("transmit authenticated K=3 sub-floor ACK");
+    let noisy = AwgnChannel::new(AwgnConfig::new(SUBFLOOR_SNR_DB, Some(4242)))
+        .expect("awgn")
+        .apply(&irs_bk.drain_samples());
+
+    let (mut iss, iss_bk) = hf_engine();
+    iss.set_ack_mac_key(Some(key));
+    iss_bk.fill_samples(&noisy);
+    let got = iss
+        .receive_ota_ack_within(None, 9000, None)
+        .expect("union-listen must verify and accept the authenticated K=3 MFSK16-ACK");
+    assert_eq!(got.recommended_level, Some(SpeedLevel::Sl1));
+    assert_eq!(got.ack_type, AckType::AckOk);
+
+    // A forger on the same sub-floor waveform, with a different key, must not reach the rate adapter.
+    // With a key set the session-hash filter is deliberately bypassed (the authenticated frame carries
+    // no hash), so the MAC is the only gate standing here.
+    let (mut forger, forger_bk) = hf_engine();
+    forger.set_ack_mac_key(Some([0x11u8; 32]));
+    let forged =
+        AckFrame::new(AckType::Nack, "subfloor-e7").with_recommended_level(SpeedLevel::Sl1);
+    forger
+        .transmit_ota_ack(&forged, None)
+        .expect("forger transmits a well-formed sub-floor ACK");
+    let (mut iss2, iss2_bk) = hf_engine();
+    iss2.set_ack_mac_key(Some(key));
+    iss2_bk.fill_samples(&forger_bk.drain_samples());
+    assert!(
+        iss2.receive_ota_ack_within(None, 800, None).is_err(),
+        "a sub-floor ACK under a different session key must fail keyed verification"
+    );
+}
