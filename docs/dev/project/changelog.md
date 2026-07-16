@@ -10,6 +10,34 @@ last_updated: 2026-07-16
 > Phase/roadmap history lives in [roadmap.md](roadmap.md); this file tracks
 > user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
 
+## v0.12.0 — 2026-07-16
+
+Closes the last two implementable findings from the handshake-trust audit: the OTA rate ACK is now
+cryptographically authenticated, and the verified-peer store is consolidated to a single per-callsign
+source of truth. Minor bump for the new signed handshake field and the ACK behaviour change; no config
+break.
+
+### Security fixes
+
+- **The OTA rate-control ACK is now authenticated (audit E7).** The tiny FSK4 rate ACK carried no
+  authentication — its only filter was a 16-bit hash of the `session_id`, which travels in the cleartext
+  connection request, so any listener could forge ACKs and manipulate a link's rate ladder. The handshake
+  now performs an ephemeral **X25519** key agreement (its public keys ride inside the Ed25519-signed
+  CONREQ/CONACK, so a man-in-the-middle can't substitute them), and the ACK carries a **keyed MAC** derived
+  from the shared secret. The MAC reuses the existing 5-byte ACK layout, so there is **no change to the ACK
+  waveform or airtime**. This is authentication, not encryption — the ACK content stays in the clear
+  (§97.309 compatible; see `docs/regulatory.md`). (#911)
+- **Verified peers are a single per-callsign source of truth (audit E5).** File-transfer offer
+  verification already bound to the offer's true sender (v0.8.0); this removes the redundant global
+  "most-recently-handshook" slot so all verified-identity reads go through the authoritative per-callsign
+  map. (#912)
+
+### Behaviour changes
+
+- When both stations advertise a key-agreement key in the handshake, OTA rate ACKs are authenticated and a
+  forged or foreign-key ACK is dropped. Legacy peers that don't advertise one keep the unauthenticated ACK
+  (no interop break). (#911)
+
 ## v0.11.0 — 2026-07-16
 
 Two more deferred security-audit fixes on the signed-handshake path: replay-freshness and SAR-poison
