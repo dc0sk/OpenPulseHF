@@ -7,6 +7,44 @@ last_updated: 2026-07-16
 
 # Release Notes
 
+## v0.12.0 — 2026-07-16
+
+Closes the last two implementable findings from the handshake-trust audit series. After this release the
+only outstanding audit item is a larger architectural refactor (session-driving front-ends). The minor
+bump reflects a new signed handshake field and the ACK behaviour change below; there is no config break.
+
+### Authenticated rate-control ACK
+
+The link's speed ladder is driven by a tiny 5-byte acknowledgement sent on a robust FSK4 channel between
+data bursts. That ACK proved nothing about who sent it — its only filter was a 16-bit hash of the session
+id, and the session id is sent in the clear in the connection request. So any station listening on the
+frequency could forge ACKs and yank a link's data rate up (into a mode the channel can't hold) or down
+(a slow-motion denial of service).
+
+The fix adds a Diffie-Hellman key agreement to the signed handshake: each side sends an ephemeral X25519
+public key *inside* the Ed25519-signed CONREQ/CONACK, so the exchange is bound to the authenticated
+identity and a man-in-the-middle can't swap the keys. Both stations derive the same secret and the ACK now
+carries a short keyed authentication tag. A forged ACK — or one from a different session — fails the tag
+and is ignored. The tag fits inside the existing 5-byte ACK, so nothing about the ACK's on-air waveform or
+timing changes.
+
+This is **authentication, not encryption**: the ACK content is still fully readable; the key is used only
+to prove authenticity, never to hide meaning — consistent with amateur-radio rules (see the regulatory
+notes). A residual: a captured valid ACK could be replayed within the session, but the rate ladder is
+receiver-led and absolute, which bounds the effect.
+
+### Verified-peer consolidation
+
+An earlier release already made file-transfer offer verification bind to the offer's real sender rather
+than "whoever handshook most recently." This release removes the now-redundant global slot so every
+verified-identity read goes through one authoritative per-callsign store.
+
+### Behaviour changes / migration
+
+1. **Rate ACKs are authenticated when both ends support it.** Two upgraded stations negotiate the ACK key
+   automatically; a forged or wrong-key ACK is dropped. A peer running an older build simply doesn't
+   advertise a key and falls back to the legacy unauthenticated ACK — no interop break. *Action:* none.
+
 ## v0.11.0 — 2026-07-16
 
 Two more deferred fixes from the security-audit series, both on the signed-handshake path. The minor bump
