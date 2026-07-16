@@ -469,6 +469,7 @@ fn conreq_advertises_profile_and_survives_wire_roundtrip() {
         "hpx_hf",
         0xABCD_1234_5678_9F01,
         0,
+        &[],
     )
     .unwrap();
 
@@ -503,6 +504,7 @@ fn tampering_the_advertised_fingerprint_invalidates_the_signature() {
         "hpx_hf",
         0x1111_2222_3333_4444,
         0,
+        &[],
     )
     .unwrap();
 
@@ -549,6 +551,7 @@ fn unadvertised_conreq_stays_signature_compatible_with_legacy() {
         "",
         0,
         0,
+        &[],
     )
     .unwrap();
     assert_eq!(

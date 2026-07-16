@@ -65,6 +65,41 @@ fn receive_with_ack_hint_returns_ack_ok_without_session() {
     );
 }
 
+/// E7: with a shared session ACK-MAC key, an authenticated ACK round-trips; an ACK from a peer with a
+/// different key (a forger) is rejected by the receiver's keyed verification.
+#[test]
+fn authenticated_ack_round_trips_and_forgery_is_rejected() {
+    let key = [0x5Au8; 32];
+    let (mut iss, iss_lb) = make_engine();
+    let (mut irs, irs_lb) = make_engine();
+    iss.set_ack_mac_key(Some(key));
+    irs.set_ack_mac_key(Some(key));
+    assert!(iss.has_ack_mac_key());
+
+    // IRS → ISS: a rate-down recommendation, authenticated with the shared key.
+    let ack = AckFrame::new(AckType::AckDown, "sess-e7");
+    irs.transmit_ack_with_short_fec(&ack, None)
+        .expect("authenticated ACK transmit");
+    route(&irs_lb, &iss_lb);
+    let got = iss
+        .receive_ack_with_short_fec(None)
+        .expect("ISS verifies and accepts the authenticated ACK");
+    assert_eq!(got.ack_type, AckType::AckDown);
+
+    // A forger with the wrong key transmits an ACK; the ISS (real key) must reject it.
+    let (mut forger, forger_lb) = make_engine();
+    forger.set_ack_mac_key(Some([0x11u8; 32]));
+    let forged = AckFrame::new(AckType::Nack, "sess-e7");
+    forger
+        .transmit_ack_with_short_fec(&forged, None)
+        .expect("forger transmit");
+    route(&forger_lb, &iss_lb);
+    assert!(
+        iss.receive_ack_with_short_fec(None).is_err(),
+        "an ACK under a different session key must fail keyed verification"
+    );
+}
+
 /// Full round-trip: ISS transmits data; IRS receives and replies with an ACK
 /// frame; ISS receives and processes the ACK frame without error.
 #[test]

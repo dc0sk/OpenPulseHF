@@ -4947,6 +4947,7 @@ dependencies = [
  "cargo-husky",
  "ed25519-dalek",
  "hkdf 0.12.4",
+ "hmac 0.12.1",
  "lz4_flex",
  "ml-dsa",
  "ml-kem",

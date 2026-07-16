@@ -118,6 +118,7 @@ JSON object — initiator → responder:
 | `supported_fec_modes` | [FecMode] | offered FEC (omitted/empty = none) |
 | `station_grid` | string | Maidenhead grid; **omitted when empty** (legacy frames stay byte-identical) |
 | `timestamp_ms` | u64 | signed Unix-ms creation time for replay-freshness; **omitted when 0** (legacy) |
+| `kex_pubkey` | bytes (32) | ephemeral X25519 public key for OTA-ACK key agreement (E7); **omitted when empty** |
 | `signature` | bytes (64) | Ed25519 signature over the canonical body |
 
 ### 3.2 CONACK body (`HSAK`)
@@ -134,7 +135,22 @@ JSON object — responder → initiator:
 | `selected_fec_mode` | FecMode | chosen FEC (omitted when `None`) |
 | `station_grid` | string | responder grid; omitted when empty |
 | `timestamp_ms` | u64 | signed Unix-ms creation time for replay-freshness; **omitted when 0** (legacy) |
+| `kex_pubkey` | bytes (32) | ephemeral X25519 public key for OTA-ACK key agreement (E7); **omitted when empty** |
 | `signature` | bytes (64) | Ed25519 signature over the canonical body |
+
+### 3.2a OTA-ACK key agreement (E7)
+
+Both frames may carry an ephemeral **X25519** `kex_pubkey` inside the Ed25519-signed body. When both
+peers advertise one, each derives a shared 32-byte key via ECDH → HKDF-SHA256
+(`session_key::derive_ack_key`). Because the ephemeral keys are covered by the identity signature, a
+MITM cannot substitute them. The key authenticates the tiny FSK4 **rate ACK**: the 5-byte ACK's
+`session_hash` (2 B) + CRC (1 B) fields are replaced by a **24-bit keyed HMAC-SHA256 tag** over the ACK
+content (`AckFrame::encode_authenticated`) — so the frame stays exactly 5 bytes (no waveform/airtime
+change) but a listener who read the cleartext `session_id` can no longer forge rate-control ACKs. The
+tag also serves anti-collision (a co-channel session has a different key). This is **authentication, not
+encryption** — the ACK content stays in the clear — so it is compatible with amateur-radio rules that
+forbid obscuring meaning (see `docs/regulatory.md`). A residual: a *replayed* valid ACK carries stale
+but valid content within the session; the rate ladder is receiver-led and absolute, bounding the effect.
 
 ### 3.3 Signing & canonical form
 

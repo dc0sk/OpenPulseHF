@@ -68,6 +68,9 @@ pub enum AckError {
 
     #[error("invalid recommended speed-level code {0}")]
     InvalidSpeedLevel(u8),
+
+    #[error("ACK authentication tag mismatch")]
+    MacMismatch,
 }
 
 /// Errors produced by the SAR sub-layer.

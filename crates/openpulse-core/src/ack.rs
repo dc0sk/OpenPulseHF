@@ -166,6 +166,83 @@ impl AckFrame {
         }
         (hash ^ (hash >> 16)) as u16
     }
+
+    /// Encode to the 5-byte wire representation with a keyed 24-bit authentication tag instead of the
+    /// public FNV `session_hash` + CRC (E7). The frame stays exactly 5 bytes — bytes 1,2 and byte 4 hold
+    /// a truncated HMAC-SHA256 over the content bytes (0 and 3), keyed by the per-session key derived at
+    /// the handshake ([`crate::session_key`]). A listener without the key cannot forge a valid ACK, and
+    /// the tag doubles as the anti-collision filter (a co-channel session has a different key). The tag
+    /// also subsumes the CRC (a MAC detects corruption). `session_hash` is not carried in this mode.
+    pub fn encode_authenticated(&self, key: &[u8; 32]) -> [u8; 5] {
+        let has_rev = self.reverse_ack.is_some() as u8;
+        let has_rec = self.recommended_level.is_some() as u8;
+        let b0 = (self.ack_type as u8) | (has_rev << 3) | (has_rec << 4);
+        let rev = self.reverse_ack.map_or(0, |a| a as u8) & 0x07;
+        let rec = self.recommended_level.map_or(0, |l| l.as_u8()) & 0x1F;
+        let b3 = (rec << 3) | rev;
+        let tag = mac24(key, b0, b3);
+        [b0, tag[0], tag[1], b3, tag[2]]
+    }
+
+    /// Decode a 5-byte ACK carrying a keyed authentication tag (see [`encode_authenticated`]). Verifies
+    /// the 24-bit MAC against `key` before parsing; a wrong key (foreign session) or forged frame fails
+    /// with [`AckError::MacMismatch`]. The returned frame's `session_hash` is 0 (not carried).
+    ///
+    /// [`encode_authenticated`]: AckFrame::encode_authenticated
+    pub fn decode_authenticated(b: &[u8; 5], key: &[u8; 32]) -> Result<Self, AckError> {
+        let expected = mac24(key, b[0], b[3]);
+        if [b[1], b[2], b[4]] != expected {
+            return Err(AckError::MacMismatch);
+        }
+        let ack_type = AckType::from_u8(b[0] & 0x07)?;
+        let has_rev = (b[0] >> 3) & 1 != 0;
+        let has_rec = (b[0] >> 4) & 1 != 0;
+        let reverse_ack = if has_rev {
+            Some(AckType::from_u8(b[3] & 0x07)?)
+        } else {
+            None
+        };
+        let recommended_level = if has_rec {
+            let code = (b[3] >> 3) & 0x1F;
+            Some(SpeedLevel::from_u8(code).ok_or(AckError::InvalidSpeedLevel(code))?)
+        } else {
+            None
+        };
+        Ok(Self {
+            ack_type,
+            session_hash: 0,
+            reverse_ack,
+            recommended_level,
+        })
+    }
+
+    /// Encode with a keyed tag when `key` is `Some`, else the legacy CRC form.
+    pub fn encode_maybe_authenticated(&self, key: Option<&[u8; 32]>) -> [u8; 5] {
+        match key {
+            Some(k) => self.encode_authenticated(k),
+            None => self.encode(),
+        }
+    }
+
+    /// Decode with keyed-tag verification when `key` is `Some`, else the legacy CRC form.
+    pub fn decode_maybe_authenticated(
+        b: &[u8; 5],
+        key: Option<&[u8; 32]>,
+    ) -> Result<Self, AckError> {
+        match key {
+            Some(k) => Self::decode_authenticated(b, k),
+            None => Self::decode(b),
+        }
+    }
+}
+
+/// Truncated (24-bit) HMAC-SHA256 over the two ACK content bytes, keyed by the session key.
+fn mac24(key: &[u8; 32], b0: u8, b3: u8) -> [u8; 3] {
+    use hmac::{Hmac, Mac};
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(&[b0, b3]);
+    let out = mac.finalize().into_bytes();
+    [out[0], out[1], out[2]]
 }
 
 // ── Diversity ACK decode ────────────────────────────────────────────────────────
@@ -187,6 +264,28 @@ pub fn decode_ack_from_llr_copies(copies: &[&[f32]]) -> Option<AckFrame> {
         let data = fec.decode(&crate::fec::hard_decide(llrs)).ok()?;
         let arr: [u8; 5] = data.as_slice().try_into().ok()?;
         AckFrame::decode(&arr).ok()
+    };
+    for &c in copies {
+        if let Some(f) = one(c) {
+            return Some(f);
+        }
+    }
+    (copies.len() >= 2)
+        .then(|| one(&crate::fec::combine_llrs_map(copies)))
+        .flatten()
+}
+
+/// As [`decode_ack_from_llr_copies`], but verifies the keyed authentication tag with `key` when `Some`
+/// (E7) instead of the legacy CRC. With `None` it is identical to [`decode_ack_from_llr_copies`].
+pub fn decode_ack_from_llr_copies_maybe_auth(
+    copies: &[&[f32]],
+    key: Option<&[u8; 32]>,
+) -> Option<AckFrame> {
+    let fec = crate::fec::ShortFecCodec::new();
+    let one = |llrs: &[f32]| -> Option<AckFrame> {
+        let data = fec.decode(&crate::fec::hard_decide(llrs)).ok()?;
+        let arr: [u8; 5] = data.as_slice().try_into().ok()?;
+        AckFrame::decode_maybe_authenticated(&arr, key).ok()
     };
     for &c in copies {
         if let Some(f) = one(c) {
@@ -220,6 +319,61 @@ fn crc8(data: &[u8]) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authenticated_ack_round_trips_and_rejects_wrong_key() {
+        let key = [7u8; 32];
+        let frame = AckFrame {
+            ack_type: AckType::AckDown,
+            session_hash: 0, // not carried in authenticated mode
+            reverse_ack: Some(AckType::AckOk),
+            recommended_level: SpeedLevel::from_u8(6),
+        };
+        let wire = frame.encode_authenticated(&key);
+        let decoded = AckFrame::decode_authenticated(&wire, &key).expect("valid tag");
+        assert_eq!(decoded.ack_type, AckType::AckDown);
+        assert_eq!(decoded.reverse_ack, Some(AckType::AckOk));
+        assert_eq!(decoded.recommended_level, SpeedLevel::from_u8(6));
+
+        // A different session key rejects it (also the anti-collision filter).
+        let wrong = [9u8; 32];
+        assert_eq!(
+            AckFrame::decode_authenticated(&wire, &wrong),
+            Err(AckError::MacMismatch)
+        );
+    }
+
+    #[test]
+    fn tampering_an_authenticated_ack_fails_verification() {
+        let key = [3u8; 32];
+        let frame = AckFrame {
+            ack_type: AckType::AckOk,
+            session_hash: 0,
+            reverse_ack: None,
+            recommended_level: SpeedLevel::from_u8(10),
+        };
+        let mut wire = frame.encode_authenticated(&key);
+        // An attacker flips the recommendation to a much higher rate (byte 3 carries the level).
+        wire[3] ^= 0xF8;
+        assert_eq!(
+            AckFrame::decode_authenticated(&wire, &key),
+            Err(AckError::MacMismatch)
+        );
+        // Flipping the ack_type byte is also caught.
+        let mut wire2 = frame.encode_authenticated(&key);
+        wire2[0] ^= 0x03;
+        assert!(AckFrame::decode_authenticated(&wire2, &key).is_err());
+    }
+
+    #[test]
+    fn maybe_authenticated_falls_back_to_legacy_without_key() {
+        let frame = AckFrame::new(AckType::AckUp, "sess-1");
+        // No key → legacy CRC path, round-trips including session_hash.
+        let wire = frame.encode_maybe_authenticated(None);
+        let decoded = AckFrame::decode_maybe_authenticated(&wire, None).unwrap();
+        assert_eq!(decoded.ack_type, AckType::AckUp);
+        assert_eq!(decoded.session_hash, frame.session_hash);
+    }
 
     #[test]
     fn ack_frame_round_trip_all_types() {

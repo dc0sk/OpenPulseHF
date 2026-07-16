@@ -45,6 +45,8 @@ For OFDM modes (future HPX profiles): the 300-baud limit applies *per carrier*. 
 
 OpenPulseHF transmissions are not encoded to obscure content. The protocol specification is public. This satisfies §97.309(a)(4) by design, provided the technical documentation is kept current and publicly accessible.
 
+**Authentication is not encryption.** The protocol uses cryptography only to *authenticate* — to prove who sent a frame and that it was not altered — never to hide message content. Ed25519 signatures on the handshake, the peer descriptors, and relay envelopes, and the keyed MAC on the OTA rate-control ACK (E7), all leave the underlying message fully readable; they add a verifiable tag, not a cipher. The X25519 key agreement in the handshake derives a key used **only** for that ACK MAC, not to encrypt any content. Because nothing obscures the meaning of the message, these mechanisms are consistent with §97.309(a)(4) and §97.113(a)(4) (no messages encoded to obscure meaning). Operators in jurisdictions that restrict even authentication should verify local rules.
+
 ### §97.119 — Station identification
 
 **§97.119(a):** Every amateur station must transmit its assigned call sign on its operating frequency at the end of each communication and at least every 10 minutes during a communication.

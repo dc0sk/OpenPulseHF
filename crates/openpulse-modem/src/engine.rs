@@ -304,6 +304,10 @@ pub struct ModemEngine {
     ota_retained_llrs: std::collections::HashMap<String, Vec<Vec<f32>>>,
     /// Session id the retained LLRs belong to; a burst under a different session clears them.
     ota_retained_session: Option<String>,
+    /// Per-session key (ECDH-derived at the handshake) for authenticating the OTA rate ACK (E7).
+    /// When set, ACKs are encoded/verified with a keyed MAC instead of the public FNV hash + CRC,
+    /// so a listener can't forge rate-control ACKs. `None` = legacy unauthenticated ACK.
+    ack_mac_key: Option<[u8; 32]>,
     dcd: DcdState,
     csma_enabled: bool,
     csma_persistence: f32,
@@ -435,6 +439,7 @@ impl ModemEngine {
             rx_snr_estimate: None,
             ota_retained_llrs: std::collections::HashMap::new(),
             ota_retained_session: None,
+            ack_mac_key: None,
             dcd: DcdState::new(0.01, 800), // 100 ms hold at 8 kHz
             csma_enabled: false,
             csma_persistence: 0.3,
@@ -1006,6 +1011,17 @@ impl ModemEngine {
         self.ota = Some(OtaRateController::new(profile));
         self.ota_retained_llrs.clear();
         self.ota_retained_session = None;
+    }
+
+    /// Set (or clear) the per-session OTA-ACK MAC key derived from the handshake key agreement (E7).
+    /// When set, OTA rate ACKs are authenticated with a keyed MAC; `None` restores the legacy path.
+    pub fn set_ack_mac_key(&mut self, key: Option<[u8; 32]>) {
+        self.ack_mac_key = key;
+    }
+
+    /// Whether an OTA-ACK MAC key is currently set (test/observability).
+    pub fn has_ack_mac_key(&self) -> bool {
+        self.ack_mac_key.is_some()
     }
 
     /// Stop the active OTA session (drops the controller). No-op if none active.
@@ -4280,7 +4296,7 @@ impl ModemEngine {
         device: Option<&str>,
     ) -> Result<(), ModemError> {
         self.csma_check()?;
-        let raw = ack.encode();
+        let raw = ack.encode_maybe_authenticated(self.ack_mac_key.as_ref());
         let fec_bytes = ShortFecCodec::new().encode(&raw)?;
         let wire = WirePayload { bytes: fec_bytes };
         let mode = "FSK4-ACK";
@@ -4319,7 +4335,7 @@ impl ModemEngine {
         device: Option<&str>,
     ) -> Result<(), ModemError> {
         self.csma_check()?;
-        let raw = ack.encode();
+        let raw = ack.encode_maybe_authenticated(self.ack_mac_key.as_ref());
         let fec_bytes = ShortFecCodec::new().encode(&raw)?;
         let wire = WirePayload { bytes: fec_bytes };
         // A LEADING short FSK4-ACK copy so a mixed-profile peer that listens FSK4-only still hears the
@@ -4414,7 +4430,8 @@ impl ModemEngine {
         let arr: [u8; 5] = decoded.try_into().map_err(|_| {
             ModemError::Frame(format!("ShortFEC ACK decode: expected 5 bytes, got {n}"))
         })?;
-        AckFrame::decode(&arr).map_err(|e| ModemError::Frame(format!("AckFrame decode: {e:?}")))
+        AckFrame::decode_maybe_authenticated(&arr, self.ack_mac_key.as_ref())
+            .map_err(|e| ModemError::Frame(format!("AckFrame decode: {e:?}")))
     }
 
     /// Deterministic sample length of a FSK4-ACK frame (13 ShortFec bytes → fixed symbols → fixed samples),
@@ -4442,7 +4459,7 @@ impl ModemEngine {
             .ok()?;
         let decoded = ShortFecCodec::new().decode(&wire.bytes).ok()?;
         let arr: [u8; 5] = decoded.as_slice().try_into().ok()?;
-        AckFrame::decode(&arr).ok()
+        AckFrame::decode_maybe_authenticated(&arr, self.ack_mac_key.as_ref()).ok()
     }
 
     /// Acquire a FSK4-ACK frame within a longer capture by trial-decoding a frame-length window at coarse
@@ -4531,8 +4548,13 @@ impl ModemEngine {
         // Reject an ACK whose session hash isn't the peer's — a co-channel session's ACK is otherwise a
         // full-protocol-validity false-accept (adopts a foreign rate + returns success, dropping the message
         // as delivered). `None` disables the check (in-process tests). Mismatch ⇒ keep listening, not error.
-        let session_ok =
-            move |ack: &AckFrame| expected_session_hash.is_none_or(|h| ack.session_hash == h);
+        // When a session ACK-MAC key is set (E7), the keyed decode already rejects any ACK not from this
+        // session (a foreign/forged one fails the MAC and never decodes), and the authenticated frame carries
+        // no session hash — so the hash filter is bypassed.
+        let has_key = self.ack_mac_key.is_some();
+        let session_ok = move |ack: &AckFrame| {
+            has_key || expected_session_hash.is_none_or(|h| ack.session_hash == h)
+        };
         let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(1));
         // Throttle the (expensive) K=3 union decode: only attempt it once `accum` holds a full 3-copy span,
         // and thereafter only after it has grown by another copy. Otherwise a streaming backend that returns
@@ -4643,7 +4665,7 @@ impl ModemEngine {
             return None;
         }
         let refs: Vec<&[f32]> = copies.iter().map(|c| c.as_slice()).collect();
-        openpulse_core::ack::decode_ack_from_llr_copies(&refs)
+        openpulse_core::ack::decode_ack_from_llr_copies_maybe_auth(&refs, self.ack_mac_key.as_ref())
     }
 
     /// ECC bytes appended by the ShortRs data-frame codec (t = 16).
