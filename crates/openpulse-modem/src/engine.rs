@@ -1619,25 +1619,44 @@ impl ModemEngine {
                 let Ok(llrs) = self.ota_demodulate_soft(mode, &samples.samples) else {
                     continue;
                 };
-                // Combine only with retained bursts of the same LLR length (same mode + frame
-                // geometry); a mismatched vector is a different frame and must not align onto this one.
+                // Align every retained burst onto this one's LLR grid: truncate if longer, zero-pad
+                // if shorter.
+                //
+                // A faded demod recovers a varying symbol count for the *same* frame — 576, 4096,
+                // 4112, 4160, 4168, 4192, 4288, 4320 all observed on one OFDM52-16QAM frame — so an
+                // equality filter here silently discarded genuine retransmissions and threw away
+                // diversity already paid for in airtime. The variation is *trailing*: same-frame
+                // bursts of different lengths agree on 0.817 of their bit signs over the overlap
+                // versus 0.811 for equal-length ones, i.e. they share a start and a grid, so index k
+                // means the same bit in both.
+                //
+                // Truncation alone is not enough: a short runt would drag `combine_llrs_map`'s
+                // min-length output below the frame and destroy an otherwise-decodable combine, and
+                // a runt can be the *newest* vector, where the suffix trial below cannot drop it.
+                // Zero-padding is the principled complement — an LLR of 0 is P(0)=P(1)=0.5, exactly
+                // "this burst never recovered that symbol", and contributes nothing to the sum.
                 let retained: Vec<Vec<f32>> = self
                     .ota_retained_llrs
                     .get(mode)
                     .map(|r| {
                         r.iter()
-                            .filter(|v| v.len() == llrs.len())
-                            .cloned()
+                            .map(|v| {
+                                let mut aligned = vec![0.0f32; llrs.len()];
+                                let n = v.len().min(llrs.len());
+                                aligned[..n].copy_from_slice(&v[..n]);
+                                aligned
+                            })
                             .collect()
                     })
                     .unwrap_or_default();
                 // Try the newest-first suffixes of the retained set, widest first, until one decodes.
                 //
                 // Summing LLRs is the MAP combine only for repeated observations of the *same* bits;
-                // fold in an abandoned message's burst and it corrupts this one. The length filter
-                // above cannot separate them (two same-length messages collide, and every MFSK16
-                // frame is one fixed 255-byte block), and the session guard never fires on the daemon
-                // — it pins `session_id` to the local callsign. No identity test on the LLRs
+                // fold in an abandoned message's burst and it corrupts this one. Nothing above
+                // separates them: LLR length never did (two same-length messages collide, and every
+                // MFSK16 frame is one fixed 255-byte block) and it no longer filters at all, and the
+                // session guard never fires on the daemon — it pins `session_id` to the local
+                // callsign. No identity test on the LLRs
                 // themselves is dependable either: a short payload pads out to the RS block with bytes
                 // both messages share, which correlates *different* frames strongly enough to close
                 // the margin (measured: sign agreement 0.61-0.73 for different 61-byte messages, vs

@@ -221,14 +221,25 @@ fn stale_message_llrs_do_not_pollute_the_next_message() {
 
 /// Retaining and combining failed-burst LLRs across retransmissions must decode strictly more frames
 /// than deciding each burst independently — the diversity gain HARQ combining exists to capture.
+///
+/// The margin also guards how retained bursts are *aligned* onto the current one. A faded demod
+/// recovers a varying symbol count for the same frame, so the equality filter this replaced silently
+/// dropped most retained vectors and most of the gain with them: it measures +0.280 here against the
+/// +0.400 of truncate/zero-pad alignment. A threshold loose enough to pass both (the original +0.08)
+/// cannot see that regression, so it is set between them.
 #[test]
 fn ota_retention_combines_across_retransmissions() {
     let tx = tx_samples();
     let standalone = standalone_success(&tx);
     let combining = combining_success(&tx);
+    println!(
+        "standalone={standalone:.3} combining={combining:.3} (delta {:+.3})",
+        combining - standalone
+    );
     assert!(
-        combining > standalone + 0.08,
-        "moderate_f1 @{SNR_DB} dB, {ATTEMPTS} bursts: combining {combining:.2} vs standalone \
-         {standalone:.2} — retained-LLR MAP combining across OTA retransmissions must add diversity gain"
+        combining > standalone + 0.35,
+        "moderate_f1 @{SNR_DB} dB, {ATTEMPTS} bursts: combining {combining:.3} vs standalone \
+         {standalone:.3} — retained-LLR MAP combining across OTA retransmissions must add diversity \
+         gain, and must align mismatched-length retained bursts rather than discard them"
     );
 }
