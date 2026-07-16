@@ -43,8 +43,23 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use openpulse_channel::dsp::PowerSpectrum;
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_core::handshake::{
-    verify_conack, verify_conreq, ConAck, ConReq, InMemoryTrustStore, TrustStore,
+    verify_conack, verify_conreq, ConAck, ConReq, Freshness, InMemoryTrustStore, TrustStore,
 };
+
+/// Maximum clock skew tolerated when verifying a handshake's signed timestamp (replay-freshness).
+/// Generous relative to typical HF turnaround (handshakes complete in seconds) while bounding the
+/// capture-replay window; assumes both stations keep roughly correct wall-clock time.
+#[cfg(not(target_arch = "wasm32"))]
+const HANDSHAKE_MAX_SKEW_MS: u64 = 120_000;
+
+/// Current wall-clock time in Unix milliseconds.
+#[cfg(not(target_arch = "wasm32"))]
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_core::relay::RelayForwarder;
 #[cfg(not(target_arch = "wasm32"))]
@@ -1429,11 +1444,17 @@ fn handle_inbound_conreq(
     };
     // Permissive policy: the signature proves key possession; trust classification is recorded
     // but an unknown (first-seen) peer is still allowed to connect, mirroring `ConnectPeer`.
+    // Freshness (replay protection): reject a captured/replayed CONREQ outside the clock-skew window.
+    let now_ms = unix_now_ms();
     if let Err(e) = verify_conreq(
         &req,
         &runtime_state.trust_store,
         PolicyProfile::Permissive,
         SigningMode::Normal,
+        Some(Freshness {
+            now_ms,
+            max_skew_ms: HANDSHAKE_MAX_SKEW_MS,
+        }),
     ) {
         tracing::warn!(peer = %req.station_id, error = %e, "handshake: CONREQ verification rejected");
         return;
@@ -1465,6 +1486,7 @@ fn handle_inbound_conreq(
         &runtime_state.local_grid,
         &ota_name,
         ota_fp,
+        now_ms,
     ) {
         Ok(ack) => match ack.encode() {
             Ok(frame) => transmit_handshake_frame(engine, mode, &frame),
@@ -1532,6 +1554,10 @@ fn handle_inbound_conack(
         &runtime_state.trust_store,
         PolicyProfile::Permissive,
         SigningMode::Normal,
+        Some(Freshness {
+            now_ms: unix_now_ms(),
+            max_skew_ms: HANDSHAKE_MAX_SKEW_MS,
+        }),
     ) {
         tracing::warn!(peer = %ack.station_id, error = %e, "handshake: CONACK verification rejected");
         runtime_state.pending_handshake = None;
@@ -1873,6 +1899,7 @@ pub async fn apply_command_to_engine(
                         &runtime_state.local_grid,
                         &ota_name,
                         ota_fp,
+                        now_ms,
                     ) {
                         Ok(req) => match req.encode() {
                             Ok(frame) => {
@@ -4633,7 +4660,7 @@ mod handshake_rf_tests {
     /// identity (callsign + grid + pubkey), and emits `PeerVerified`.
     #[tokio::test]
     async fn responder_verifies_conreq_fragments_and_records_peer() {
-        let conreq = ConReq::create_with_grid(
+        let conreq = ConReq::create_full(
             "W1AW",
             &[1u8; 32],
             vec![SigningMode::Normal],
@@ -4641,6 +4668,9 @@ mod handshake_rf_tests {
             vec![],
             vec![],
             "FN31pr",
+            "",
+            0,
+            unix_now_ms(),
         )
         .unwrap();
         let frags = sar_encode(0, &conreq.encode().unwrap()).unwrap();
@@ -4714,7 +4744,7 @@ mod handshake_rf_tests {
     /// sees completed.
     #[tokio::test]
     async fn responder_without_callsign_does_not_transmit_conack() {
-        let conreq = ConReq::create_with_grid(
+        let conreq = ConReq::create_full(
             "W1AW",
             &[1u8; 32],
             vec![SigningMode::Normal],
@@ -4722,6 +4752,9 @@ mod handshake_rf_tests {
             vec![],
             vec![],
             "FN31pr",
+            "",
+            0,
+            unix_now_ms(),
         )
         .unwrap();
         let frags = sar_encode(0, &conreq.encode().unwrap()).unwrap();
@@ -4810,7 +4843,7 @@ mod handshake_rf_tests {
         rs.logbook
             .begin_qso("K2XYZ", "BPSK250", Some(14_070_000), 1_700_000_000_000);
 
-        let conack = ConAck::create_with_grid(
+        let conack = ConAck::create_full(
             "K2XYZ",
             &[2u8; 32],
             SigningMode::Normal,
@@ -4818,6 +4851,9 @@ mod handshake_rf_tests {
             CompressionAlgorithm::None,
             FecMode::None,
             "EM69",
+            "",
+            0,
+            unix_now_ms(),
         )
         .unwrap();
         let frags = sar_encode(0, &conack.encode().unwrap()).unwrap();
@@ -4862,13 +4898,17 @@ mod handshake_rf_tests {
             }),
             ..RuntimeControlState::default()
         };
-        let conack = ConAck::create(
+        let conack = ConAck::create_full(
             "K2XYZ",
             &[2u8; 32],
             SigningMode::Normal,
             "SOME-OTHER-SESSION",
             CompressionAlgorithm::None,
             FecMode::None,
+            "",
+            "",
+            0,
+            unix_now_ms(),
         )
         .unwrap();
         let frags = sar_encode(0, &conack.encode().unwrap()).unwrap();
@@ -4977,7 +5017,7 @@ mod handshake_rf_tests {
         h.rx_engine
             .register_plugin(Box::new(BpskPlugin::new()))
             .unwrap();
-        let conreq = ConReq::create_with_grid(
+        let conreq = ConReq::create_full(
             "W1AW",
             &[1u8; 32],
             vec![SigningMode::Normal],
@@ -4985,6 +5025,9 @@ mod handshake_rf_tests {
             vec![],
             vec![],
             "FN31pr",
+            "",
+            0,
+            unix_now_ms(),
         )
         .unwrap();
         let frag = sar_encode(0, &conreq.encode().unwrap()).unwrap().remove(0);

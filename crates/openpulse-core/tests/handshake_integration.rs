@@ -35,8 +35,14 @@ fn valid_conreq_accepted_trusted_peer() {
     let mut store = InMemoryTrustStore::new();
     store.add_trusted("W1AW", pubkey_for(1));
 
-    let decision = verify_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Normal)
-        .expect("should accept trusted peer");
+    let decision = verify_conreq(
+        &req,
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+        None,
+    )
+    .expect("should accept trusted peer");
     assert_eq!(decision.selected_mode, SigningMode::Normal);
 }
 
@@ -59,6 +65,7 @@ fn valid_conreq_accepted_unknown_peer_permissive() {
         &store,
         PolicyProfile::Permissive,
         SigningMode::Relaxed,
+        None,
     )
     .expect("permissive policy allows unknown key");
     assert_eq!(decision.selected_mode, SigningMode::Normal);
@@ -78,7 +85,13 @@ fn conreq_rejected_invalid_signature() {
     req.signature[0] ^= 0xff; // corrupt
 
     let store = InMemoryTrustStore::new();
-    let result = verify_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Normal);
+    let result = verify_conreq(
+        &req,
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+        None,
+    );
     assert!(
         matches!(result, Err(HandshakeError::InvalidSignature)),
         "corrupted signature must be rejected"
@@ -100,7 +113,13 @@ fn conreq_rejected_revoked_key() {
     let mut store = InMemoryTrustStore::new();
     store.add_revoked("W1AW", pubkey_for(1));
 
-    let result = verify_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Normal);
+    let result = verify_conreq(
+        &req,
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+        None,
+    );
     assert!(
         matches!(result, Err(HandshakeError::TrustFailure(_))),
         "revoked key must be rejected"
@@ -121,7 +140,13 @@ fn conreq_rejected_no_mutual_mode_strict() {
 
     let store = InMemoryTrustStore::new();
     // Strict policy only accepts Normal/Paranoid; Relaxed not allowed
-    let result = verify_conreq(&req, &store, PolicyProfile::Strict, SigningMode::Normal);
+    let result = verify_conreq(
+        &req,
+        &store,
+        PolicyProfile::Strict,
+        SigningMode::Normal,
+        None,
+    );
     assert!(
         matches!(result, Err(HandshakeError::TrustFailure(_))),
         "strict policy must reject Relaxed-only peer"
@@ -155,6 +180,7 @@ fn valid_conack_accepted() {
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
+        None,
     )
     .expect("valid CONACK should be accepted");
     assert_eq!(decision.selected_mode, SigningMode::Normal);
@@ -181,6 +207,7 @@ fn conack_rejected_session_id_mismatch() {
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
+        None,
     );
     assert!(
         matches!(result, Err(HandshakeError::SessionIdMismatch { .. })),
@@ -210,6 +237,7 @@ fn conack_rejected_invalid_signature() {
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
+        None,
     );
     assert!(matches!(result, Err(HandshakeError::InvalidSignature)));
 }
@@ -235,8 +263,14 @@ fn full_handshake_round_trip() {
     let mut bob_store = InMemoryTrustStore::new();
     bob_store.add_trusted("W1AW", pubkey_for(1));
 
-    let req_decision = verify_conreq(&req, &bob_store, PolicyProfile::Strict, SigningMode::Normal)
-        .expect("Bob should accept Alice's CONREQ");
+    let req_decision = verify_conreq(
+        &req,
+        &bob_store,
+        PolicyProfile::Strict,
+        SigningMode::Normal,
+        None,
+    )
+    .expect("Bob should accept Alice's CONREQ");
 
     let ack = ConAck::create(
         "KD9XYZ",
@@ -260,6 +294,7 @@ fn full_handshake_round_trip() {
         &alice_store,
         PolicyProfile::Strict,
         SigningMode::Normal,
+        None,
     )
     .expect("Alice should accept Bob's CONACK");
 
@@ -344,8 +379,14 @@ fn conreq_carries_fec_modes_in_signature() {
     );
 
     let store = InMemoryTrustStore::new();
-    verify_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Normal)
-        .expect("ConReq with FEC modes should verify");
+    verify_conreq(
+        &req,
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+        None,
+    )
+    .expect("ConReq with FEC modes should verify");
 }
 
 #[test]
@@ -390,6 +431,7 @@ fn conack_rejected_when_fec_mode_not_offered() {
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
+        None,
     );
     assert!(
         matches!(result, Err(HandshakeError::UnsupportedFecMode)),
@@ -426,6 +468,7 @@ fn conreq_advertises_profile_and_survives_wire_roundtrip() {
         "",
         "hpx_hf",
         0xABCD_1234_5678_9F01,
+        0,
     )
     .unwrap();
 
@@ -442,6 +485,7 @@ fn conreq_advertises_profile_and_survives_wire_roundtrip() {
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
+        None,
     )
     .expect("advertised-profile CONREQ must verify");
 }
@@ -458,6 +502,7 @@ fn tampering_the_advertised_fingerprint_invalidates_the_signature() {
         "",
         "hpx_hf",
         0x1111_2222_3333_4444,
+        0,
     )
     .unwrap();
 
@@ -466,7 +511,13 @@ fn tampering_the_advertised_fingerprint_invalidates_the_signature() {
 
     let mut store = InMemoryTrustStore::new();
     store.add_trusted("W1AW", pubkey_for(1));
-    let result = verify_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Normal);
+    let result = verify_conreq(
+        &req,
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+        None,
+    );
     assert!(
         matches!(result, Err(HandshakeError::InvalidSignature)),
         "tampered profile fingerprint must fail signature verification, got {result:?}"
@@ -497,6 +548,7 @@ fn unadvertised_conreq_stays_signature_compatible_with_legacy() {
         "",
         "",
         0,
+        0,
     )
     .unwrap();
     assert_eq!(
@@ -526,7 +578,13 @@ fn conreq_rejects_impersonation_wrong_key_for_trusted_callsign() {
     let mut store = InMemoryTrustStore::new();
     store.add_trusted("W1AW", pubkey_for(1));
 
-    let result = verify_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Normal);
+    let result = verify_conreq(
+        &req,
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+        None,
+    );
     assert!(
         matches!(result, Err(HandshakeError::PublicKeyMismatch)),
         "a self-signed CONREQ claiming a trusted callsign with the wrong key must be rejected, got {result:?}"
@@ -555,6 +613,7 @@ fn conack_rejects_impersonation_wrong_key_for_trusted_callsign() {
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
+        None,
     );
     assert!(
         matches!(result, Err(HandshakeError::PublicKeyMismatch)),
