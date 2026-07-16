@@ -2645,10 +2645,9 @@ impl ModemEngine {
                 let wire_bytes: Vec<u8> = llrs
                     .chunks(8)
                     .map(|byte_llrs| {
-                        byte_llrs
-                            .iter()
-                            .enumerate()
-                            .fold(0u8, |acc, (i, &llr)| acc | (u8::from(llr <= 0.0) << i))
+                        byte_llrs.iter().enumerate().fold(0u8, |acc, (i, &llr)| {
+                            acc | ((llr.is_sign_negative() as u8) << i)
+                        })
                     })
                     .collect();
                 (WirePayload { bytes: wire_bytes }, Some(snr))
@@ -2889,10 +2888,9 @@ impl ModemEngine {
         let wire_bytes: Vec<u8> = llrs
             .chunks(8)
             .map(|byte_llrs| {
-                byte_llrs
-                    .iter()
-                    .enumerate()
-                    .fold(0u8, |acc, (i, &llr)| acc | (u8::from(llr <= 0.0) << i))
+                byte_llrs.iter().enumerate().fold(0u8, |acc, (i, &llr)| {
+                    acc | ((llr.is_sign_negative() as u8) << i)
+                })
             })
             .collect();
 
