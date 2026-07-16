@@ -7,6 +7,45 @@ last_updated: 2026-07-16
 
 # Release Notes
 
+## v0.11.0 — 2026-07-16
+
+Two more deferred fixes from the security-audit series, both on the signed-handshake path. The minor bump
+reflects the handshake behaviour change below; there is no config-file break, and the only wire change is a
+new (optional, signed) timestamp field.
+
+### Replay-freshness
+
+A signed CONREQ/CONACK proved *who* sent it, but carried nothing to prove *when* — so a captured, valid
+handshake could be replayed later and re-accepted, its signature still good. Both frames now carry a signed
+`timestamp_ms`, and the verifier rejects a frame whose timestamp is stale, future-dated, or missing beyond a
+clock-skew window (the daemon uses ±120 seconds). The timestamp lives inside the signed body, so an attacker
+cannot refresh a captured frame without invalidating the signature. This bounds the replay window from
+"forever" to the clock-skew tolerance.
+
+### SAR-poison resilience
+
+Handshake frames are larger than one modem frame, so they are split and reassembled. The reassembler keyed
+*every* handshake under one constant slot — so a single crafted fragment could poison it: claim a wrong
+fragment count and the legitimate fragments bounced off it, or fill an index with garbage and the real
+fragment was silently dropped as a duplicate. Either way a legitimate handshake was blocked for the whole
+reassembly timeout, cheaply and silently. Two genuine handshakes arriving at once could also poison each
+other by accident. The reassembler now keeps conflicting fragment streams as **separate candidates**: a
+poisoned or interleaved fragment starts its own candidate instead of corrupting the in-flight one, and the
+bogus candidate simply fails signature verification and is discarded while the good one completes.
+
+### Behaviour changes / migration
+
+1. **The daemon rejects a handshake with no timestamp or one more than ±120 s from its clock.** Both ends
+   stamp a current time, so two upgraded stations interoperate — but a station running an older
+   (timestampless) build will be rejected, and stations whose clocks drift more than two minutes apart will
+   fail to connect. *Action:* upgrade both ends together and keep stations roughly time-synced (most HF
+   digital software already assumes this).
+
+### Under the hood
+
+- The SAR reassembler's `ingest` now returns *all* frames a fragment completed (normally one; more only
+  under a deliberate collision). Internal API only; no wire-format change.
+
 ## v0.10.0 — 2026-07-16
 
 The follow-through on the security-audit series: this closes the last major deferred finding from the

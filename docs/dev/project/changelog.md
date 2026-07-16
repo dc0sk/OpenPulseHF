@@ -10,6 +10,33 @@ last_updated: 2026-07-16
 > Phase/roadmap history lives in [roadmap.md](roadmap.md); this file tracks
 > user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
 
+## v0.11.0 — 2026-07-16
+
+Two more deferred security-audit fixes on the signed-handshake path: replay-freshness and SAR-poison
+resilience. Minor bump for the handshake behaviour change (below); no wire-incompatible change beyond a
+new signed timestamp field, and no config break.
+
+### Security fixes
+
+- **Handshake replay-freshness.** CONREQ/CONACK carried no timestamp, so a captured, validly-signed
+  handshake could be replayed indefinitely. Both frames now carry a **signed `timestamp_ms`**, and the
+  verifier rejects a frame that is stale, future-dated, or timestampless beyond a clock-skew window (the
+  daemon uses ±120 s). Because the timestamp is inside the signed body, an attacker cannot refresh a
+  captured frame. (#908)
+- **SAR reassembly poison resilience.** The handshake reassembled every frame under a single constant key,
+  so one crafted fragment could seed a bogus fragment count (legitimate fragments then bounced) or fill an
+  index with garbage (the real fragment was dropped as a duplicate) — blocking a legitimate handshake for
+  the whole reassembly timeout. Two genuine handshakes interleaving on the same key could also poison each
+  other by accident. The reassembler now keeps conflicting fragment streams as **separate candidates**, so
+  a poisoned or interleaved fragment cannot corrupt an in-flight reassembly; the bogus candidate fails
+  verification and is dropped while the good one completes. (#909)
+
+### Behaviour changes
+
+- **The daemon rejects a handshake with no timestamp or one outside ±120 s.** Both ends stamp a current
+  time, so an upgraded pair interoperates; a peer running an older (timestampless) build is rejected.
+  Assumes both stations keep roughly correct wall-clock time. (#908)
+
 ## v0.10.0 — 2026-07-16
 
 Envelope origin authentication for relayed traffic — the last major deferred finding from the
