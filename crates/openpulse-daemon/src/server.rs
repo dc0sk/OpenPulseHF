@@ -1449,6 +1449,63 @@ fn handle_ptt_command(cmd: &crate::Command, ptt: &crate::ptt::SharedPtt) -> bool
     false
 }
 
+/// Classification of one OTA send attempt's outcome, driving the retry policy in [`run_ota_retry`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OtaAttempt {
+    /// The peer ACKed (non-NACK): the message is delivered — stop.
+    Delivered,
+    /// The peer NACKed: it heard us but couldn't decode — retransmit the data frame.
+    Nack,
+    /// No ACK arrived within the window: the peer is silent this round.
+    Timeout,
+}
+
+/// Max data retransmissions after the first send (so up to `MAX_RETRIES + 1` sends) when the peer is
+/// actively NACKing — i.e. present but unable to decode.
+const MAX_RETRIES: usize = 3;
+/// Consecutive full ACK-timeouts (no reply at all) after which the send is abandoned: the peer is
+/// silent, so further data retransmissions are futile and would keep the daemon's single `select!`
+/// control loop blocked for a full ACK window each (up to 9 s on the MFSK16 sub-floor). One retry
+/// covers a lost ACK on a live link; a second silent window means give up. Bounds the silent-peer
+/// stall to `MAX_SILENT_ACK_WINDOWS` windows instead of `MAX_RETRIES + 1` (audit #917 / finding #1).
+const MAX_SILENT_ACK_WINDOWS: usize = 2;
+
+/// Why the OTA send/ACK retry loop stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OtaSendStop {
+    /// The peer ACKed — delivered.
+    Delivered,
+    /// The peer was silent for `MAX_SILENT_ACK_WINDOWS` consecutive windows — abandoned (link down).
+    PeerSilent,
+    /// The peer kept NACKing through `MAX_RETRIES` retransmissions — abandoned (present but undecodable).
+    RetriesExhausted,
+    /// No active OTA session to send under.
+    NoSession,
+}
+
+/// Drive the OTA send/ACK retry loop, invoking `attempt` (transmit + ACK-wait, with its own side
+/// effects) up to the retry budget. Stops on delivery, after `MAX_RETRIES` data retransmissions to a
+/// NACKing peer, or after `MAX_SILENT_ACK_WINDOWS` consecutive silent windows. `attempt` returns `None`
+/// when it cannot send at all (no active OTA session). Pure policy — unit-tested with scripted outcomes
+/// so the silent-peer bound doesn't need real ACK timing.
+fn run_ota_retry(mut attempt: impl FnMut() -> Option<OtaAttempt>) -> OtaSendStop {
+    let mut consecutive_timeouts = 0usize;
+    for _ in 0..=MAX_RETRIES {
+        match attempt() {
+            None => return OtaSendStop::NoSession,
+            Some(OtaAttempt::Delivered) => return OtaSendStop::Delivered,
+            Some(OtaAttempt::Nack) => consecutive_timeouts = 0,
+            Some(OtaAttempt::Timeout) => {
+                consecutive_timeouts += 1;
+                if consecutive_timeouts >= MAX_SILENT_ACK_WINDOWS {
+                    return OtaSendStop::PeerSilent;
+                }
+            }
+        }
+    }
+    OtaSendStop::RetriesExhausted
+}
+
 fn ota_send_with_ptt(
     engine: &mut ModemEngine,
     ptt: &crate::ptt::SharedPtt,
@@ -1457,7 +1514,6 @@ fn ota_send_with_ptt(
     peer: &str,
 ) {
     use openpulse_core::ack::{AckFrame, AckType};
-    const MAX_RETRIES: usize = 3;
     // Only adopt an ACK carrying the addressed peer's session hash — the IRS builds its ACK with its own
     // callsign as the session id, so a correctly-addressed send matches while a co-channel session's ACK is
     // filtered (else the ISS could adopt a foreign rate and mark this message delivered).
@@ -1481,16 +1537,15 @@ fn ota_send_with_ptt(
         return;
     }
 
-    for _ in 0..=MAX_RETRIES {
-        let Some(mode) = engine.ota_tx_mode().map(|m| m.to_owned()) else {
-            return; // no OTA session
-        };
+    let stop = run_ota_retry(|| {
+        let mode = engine.ota_tx_mode().map(|m| m.to_owned())?; // no OTA session → stop
         let fec = engine.ota_tx_fec();
 
-        // Key PTT for the data frame via an RAII guard (REQ-PTT-01). On assert failure abort.
+        // Key PTT for the data frame via an RAII guard (REQ-PTT-01). On assert failure abort (treat as
+        // delivered so the loop stops; the PTT failure is already surfaced as a warn + event).
         let Ok(guard) = ptt.keyed(Some(event_tx)) else {
             tracing::warn!("OTA send PTT assert failed");
-            return;
+            return Some(OtaAttempt::Delivered);
         };
         let tx =
             tokio::task::block_in_place(|| engine.transmit_with_fec_mode(body, &mode, fec, None));
@@ -1500,7 +1555,8 @@ fn ota_send_with_ptt(
 
         if let Err(e) = tx {
             tracing::warn!(error = %e, "OTA data transmit failed");
-            continue;
+            // A local TX failure isn't the peer being silent; retry the data frame.
+            return Some(OtaAttempt::Nack);
         }
 
         // Listen for the ACK with PTT down; adopt the peer's recommended level. Union-listen (FSK4 +
@@ -1511,12 +1567,35 @@ fn ota_send_with_ptt(
             Ok(ack) => {
                 engine.apply_ota_ack(&ack);
                 let _ = event_tx.send(ota_status_event(engine));
-                if ack.ack_type != AckType::Nack {
-                    return;
+                if ack.ack_type == AckType::Nack {
+                    Some(OtaAttempt::Nack)
+                } else {
+                    Some(OtaAttempt::Delivered)
                 }
             }
-            Err(e) => tracing::debug!(error = %e, "OTA ACK not received within window"),
+            Err(e) => {
+                tracing::debug!(error = %e, "OTA ACK not received within window");
+                Some(OtaAttempt::Timeout)
+            }
         }
+    });
+
+    // Surface a give-up once so the operator isn't left thinking the message sent (a silent peer is
+    // the case this bail exists for: it stops the control loop being blocked for further doomed windows).
+    match stop {
+        OtaSendStop::PeerSilent => {
+            tracing::warn!(
+                peer = %peer,
+                "OTA send abandoned: peer silent for {MAX_SILENT_ACK_WINDOWS} consecutive ACK windows; \
+                 the link may be down — not blocking the control loop on further retransmissions"
+            );
+            let _ = event_tx.send(ota_status_event(engine));
+        }
+        OtaSendStop::RetriesExhausted => {
+            tracing::warn!(peer = %peer, "OTA send: retries exhausted (peer kept NACKing)");
+            let _ = event_tx.send(ota_status_event(engine));
+        }
+        OtaSendStop::Delivered | OtaSendStop::NoSession => {}
     }
 }
 
@@ -1734,6 +1813,73 @@ fn build_ptt_controller(
             tracing::warn!(backend = %other, "unknown PTT backend; PTT disabled");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod ota_retry_tests {
+    use super::{run_ota_retry, OtaAttempt, OtaSendStop, MAX_RETRIES, MAX_SILENT_ACK_WINDOWS};
+
+    /// Drive `run_ota_retry` with a scripted sequence of attempt outcomes; asserts the loop makes the
+    /// right number of attempts and stops for the right reason. `None` in the script (or running off the
+    /// end) means "no more attempts scripted".
+    fn drive(script: &[Option<OtaAttempt>]) -> (usize, OtaSendStop) {
+        let mut i = 0;
+        let stop = run_ota_retry(|| {
+            let out = script.get(i).copied().flatten();
+            i += 1;
+            out
+        });
+        (i, stop)
+    }
+
+    #[test]
+    fn silent_peer_bails_after_two_windows_not_the_full_retry_budget() {
+        // A dead peer times out every window. Without the bail this ran MAX_RETRIES+1 (=4) windows
+        // (~36 s on MFSK16); now it stops after MAX_SILENT_ACK_WINDOWS.
+        let (attempts, stop) = drive(&[Some(OtaAttempt::Timeout); 8]);
+        assert_eq!(stop, OtaSendStop::PeerSilent);
+        assert_eq!(attempts, MAX_SILENT_ACK_WINDOWS);
+        assert!(
+            attempts < MAX_RETRIES + 1,
+            "must bail before the full retry budget"
+        );
+    }
+
+    #[test]
+    fn nacking_peer_gets_the_full_retry_budget() {
+        // A present-but-undecodable peer NACKs every window — it is NOT cut off early (it is alive).
+        let (attempts, stop) = drive(&[Some(OtaAttempt::Nack); 8]);
+        assert_eq!(stop, OtaSendStop::RetriesExhausted);
+        assert_eq!(attempts, MAX_RETRIES + 1);
+    }
+
+    #[test]
+    fn a_nack_resets_the_silent_counter() {
+        // Timeout, then a NACK (peer reappears) resets the counter, so a subsequent single timeout does
+        // not immediately abandon — the peer proved it is alive.
+        let (attempts, stop) = drive(&[
+            Some(OtaAttempt::Timeout),
+            Some(OtaAttempt::Nack),
+            Some(OtaAttempt::Timeout),
+            Some(OtaAttempt::Timeout),
+        ]);
+        assert_eq!(stop, OtaSendStop::PeerSilent);
+        assert_eq!(attempts, 4); // not abandoned at the first post-NACK timeout
+    }
+
+    #[test]
+    fn delivered_on_first_ack_stops_immediately() {
+        let (attempts, stop) = drive(&[Some(OtaAttempt::Delivered)]);
+        assert_eq!(stop, OtaSendStop::Delivered);
+        assert_eq!(attempts, 1);
+    }
+
+    #[test]
+    fn no_session_stops_without_sending() {
+        let (attempts, stop) = drive(&[None]);
+        assert_eq!(stop, OtaSendStop::NoSession);
+        assert_eq!(attempts, 1); // the closure was polled once and reported "no session"
     }
 }
 
