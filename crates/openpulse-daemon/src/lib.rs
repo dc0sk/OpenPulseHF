@@ -2275,10 +2275,23 @@ pub async fn apply_command_to_engine(
             if let Some(f) = upgrade_hold_frames {
                 engine.set_upgrade_hold_frames(*f);
             }
+            // These configure RateAdaptationPolicy, which the daemon's receiver-led OTA ladder
+            // (OtaRateController) does not use — so they have no effect here (audit #2).
+            tracing::warn!(
+                "ota_set_hysteresis has no effect on the daemon's receiver-led OTA ladder \
+                 (backlog/hold gating belongs to the sender-led policy the daemon does not run)"
+            );
         }
         ControlCommand::OtaSetAggressiveness { preset } => {
             match openpulse_core::rate::OtaAggressiveness::from_name(preset) {
-                Some(p) => engine.set_ota_aggressiveness(p),
+                Some(p) => {
+                    engine.set_ota_aggressiveness(p);
+                    tracing::warn!(
+                        preset = p.name(),
+                        "ota_set_aggressiveness has no effect on the daemon's receiver-led OTA ladder \
+                         (it configures the sender-led policy the daemon does not run)"
+                    );
+                }
                 None => {
                     let _ = event_tx.send(ControlEvent::CommandError {
                         command: "ota_set_aggressiveness".to_string(),
