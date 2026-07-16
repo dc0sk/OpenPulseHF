@@ -7,6 +7,30 @@ last_updated: 2026-07-16
 
 # Release Notes
 
+## v0.12.1 — 2026-07-16
+
+A patch release of internal fixes from the first formal loose-ends audit of the modem core (the
+engine / ARQ / OTA rate ladder / DSP). The audit's verdict was that the core is broadly solid — no
+memory-safety, no remote-input crash, no happy-path decode bug — with the real gaps clustered in the OTA
+rate-ladder wiring. These are the top confirmed items. There is no wire-format or config-file change.
+
+- **Silent-peer send no longer freezes the daemon.** Sending a message to a peer that has gone quiet used
+  to retry through its full budget of acknowledgement windows — up to ~36 seconds on the weak-signal
+  sub-floor — all synchronously inside the daemon's single control loop, so `Abort`/`Disconnect` and
+  incoming data both stalled for the duration. It now gives up after two consecutive silent windows. A peer
+  that *is* answering (with a negative-ACK asking for a resend) still gets the full retry budget — only a
+  genuinely silent link is cut short.
+- **Receiver front-end no longer re-runs per rate candidate.** When the notch filter or AGC is enabled, the
+  OTA decoder was re-applying them once per candidate rate, which could make the notch's interference
+  detector trip early and hand off to an unnecessary frequency change (QSY).
+- **Honest config warnings.** Three OTA tuning knobs (`ota_aggressiveness`, `ota_min_backlog`,
+  `ota_upgrade_hold_frames`) configure a rate policy the daemon's receiver-led ladder doesn't use — the
+  daemon used to log that it had "applied" them. It now warns that they have no effect and points you at
+  the knobs that do (`ota_min_level` / `ota_max_level` / `ota_lock_level`).
+- Plus a couple of small internal-consistency fixes.
+
+No action required to upgrade.
+
 ## v0.12.0 — 2026-07-16
 
 Closes the last two implementable findings from the handshake-trust audit series. After this release the
