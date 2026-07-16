@@ -28,15 +28,24 @@ All control-plane and relay-plane messages use a shared outer envelope:
 ```text
 magic("OPHF") | version(u8) | msg_type(u8) | flags(u16) | session_id(u64) |
 src_peer_id(32B) | dst_peer_id(32B) | nonce(96b) | timestamp_ms(u64) |
-hop_limit(u8) | hop_index(u8) | payload_len(u16) | payload | auth_tag(16B)
+hop_limit(u8) | hop_index(u8) | payload_len(u16) | payload | [signature(64B)]
 ```
 
 Notes:
 
 - magic: OpenPulseHF discriminator.
-- version: wire schema version, initial value 1.
+- version: wire schema version. **v2** replaced the never-verified fixed 16-byte `auth_tag` with an
+  *optional* 64-byte Ed25519 origin `signature` (E3). v1 and v2 are not interoperable.
 - nonce: unique per src_peer_id and session_id for replay protection.
-- auth_tag: integrity tag for envelope fields and payload.
+- signature: **optional** Ed25519 origin signature. It is present iff exactly 64 bytes trail the
+  payload (the envelope is length-delimited by its carrying `Frame`); no trailing bytes means unsigned.
+  It covers every envelope field **except `hop_index`** (which relays mutate) and the signature itself,
+  and is verified against `src_peer_id` — which *is* the originator's Ed25519 verifying key
+  (self-authenticating, as with peer descriptors), so no external key store is needed. A relay
+  forwarding a `relay_data_chunk` / `relay_hop_ack` **must** verify this signature and drop the frame if
+  it is absent or invalid (`RelayForwarder`, on by default). Control frames that carry their own
+  payload-level signatures (peer-query/route-discovery/route-maintenance responses) are sent unsigned at
+  the envelope level and omit the trailing 64 bytes.
 - All unsigned integer fields use network byte order (big-endian).
 
 ## Message type registry (initial)
@@ -277,6 +286,11 @@ Rules:
 ## Compact binary examples (annotated hex)
 
 These examples use fixed-size values and repeated byte patterns to keep the layout easy to verify in parser tests.
+
+> **Note — these examples predate wire v2.** They show `version = 01` and a fixed 16-byte `auth_tag`
+> trailer. Under v2 the version byte is `02` and the trailer is the *optional* 64-byte Ed25519
+> `signature` (present only on signed frames such as `relay_data_chunk` / `relay_hop_ack`; absent
+> entirely on the unsigned control frames shown here). See the envelope-format notes above.
 
 ### Example A: peer_query_request (msg_type 0x01)
 

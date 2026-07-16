@@ -1,8 +1,27 @@
+use ed25519_dalek::SigningKey;
 use openpulse_core::{
     score_route, select_best_scored_route, AckStatus, PeerCache, PeerRecord, RelayDataChunk,
     RelayEvent, RelayForwardError, RelayForwarder, RelayHopAck, RelayTrustPolicy, TrustFilter,
     TrustLevel, WireEnvelope, WireMsgType,
 };
+
+/// Fixed originator seed for fixture envelopes; `src_peer_id` is its verifying key so the relay's
+/// origin-signature check (enabled by default) passes on validly-signed frames.
+const RELAY_SEED: [u8; 32] = [0x42; 32];
+
+fn relay_src() -> [u8; 32] {
+    SigningKey::from_bytes(&RELAY_SEED)
+        .verifying_key()
+        .to_bytes()
+}
+
+fn relay_src_hex() -> String {
+    relay_src().iter().fold(String::new(), |mut s, b| {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+        s
+    })
+}
 
 // ------------------------------------------------------------------
 // Helpers
@@ -25,19 +44,21 @@ fn route(peers: &[&str]) -> Vec<String> {
 }
 
 fn relay_envelope(session_id: u64, nonce: [u8; 12], hop_limit: u8, hop_index: u8) -> WireEnvelope {
-    WireEnvelope {
+    let mut env = WireEnvelope {
         msg_type: WireMsgType::RelayDataChunk,
         flags: 0,
         session_id,
-        src_peer_id: [0xaa; 32],
+        src_peer_id: relay_src(),
         dst_peer_id: [0xbb; 32],
         nonce,
         timestamp_ms: 1_000,
         hop_limit,
         hop_index,
         payload: vec![0xAB; 8],
-        auth_tag: [0; 16],
-    }
+        signature: None,
+    };
+    env.sign(&RELAY_SEED).unwrap();
+    env
 }
 
 // ------------------------------------------------------------------
@@ -157,13 +178,8 @@ fn duplicate_suppression_prevents_replay_across_hops() {
 
 #[test]
 fn trust_policy_rejects_at_hop() {
-    // Convert src_peer_id [0xaa; 32] to hex for deny list
-    let src_hex: String = [0xaau8; 32].iter().fold(String::new(), |mut s, b| {
-        use std::fmt::Write;
-        let _ = write!(s, "{b:02x}");
-        s
-    });
-    let policy = RelayTrustPolicy::deny_relays([src_hex]);
+    // Deny the (signed) originator's peer id.
+    let policy = RelayTrustPolicy::deny_relays([relay_src_hex()]);
     let mut fwd = RelayForwarder::new(60_000, policy);
     let env = relay_envelope(4, [0x44; 12], 4, 0);
     assert!(matches!(
@@ -259,12 +275,8 @@ fn peer_cache_query_unaffected_by_relay_additions() {
 
 #[test]
 fn allow_list_forwards_only_listed_originators() {
-    // The fixture envelopes all carry src_peer_id [0xaa; 32]; compute its hex.
-    let src_hex: String = [0xaau8; 32].iter().fold(String::new(), |mut s, b| {
-        use std::fmt::Write;
-        let _ = write!(s, "{b:02x}");
-        s
-    });
+    // The fixture envelopes all carry the signed originator's peer id; compute its hex.
+    let src_hex = relay_src_hex();
 
     // Allow-list containing our originator → forwarded (audit E1: relay originator allow-list).
     let mut policy = RelayTrustPolicy::default();

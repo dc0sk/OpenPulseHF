@@ -9,6 +9,44 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-16 — feat(relay): E3 — envelope origin authentication (relay verifies signed src_peer_id)
+
+- **Requirement/change:** handshake-trust audit finding **E3** (also the `auth_tag` half of E1): the relay
+  forwarded any `WireEnvelope` claiming any `src_peer_id` — the 16-byte `auth_tag` was never verified and
+  had no key-distribution scheme, so a station could impersonate any originator at a relay. #904 (mesh SAR)
+  was landed as the foundation for this.
+- **Design decision:** `src_peer_id` *is* the originator's Ed25519 verifying key (the self-authenticating
+  `PeerDescriptor` pattern), so an envelope signature verifiable against `src_peer_id` needs **no external
+  key store**. Wire schema bumped to **v2**: the fixed 16-byte `auth_tag` is replaced by an **optional**
+  64-byte Ed25519 `signature` (`Option<[u8;64]>`). Presence is inferred from the exact trailing length (0
+  or 64 bytes), since the envelope is length-delimited by its carrying `Frame` — no flag bit. The signature
+  covers every field **except `hop_index`** (relays mutate it) and itself. **Only** the frame types that
+  transit the authenticated forwarder (`relay_data_chunk`, `relay_hop_ack`) are signed at the envelope
+  level; control frames that already carry payload-level signatures (peer-query / route-discovery /
+  route-maintenance) stay unsigned and compact. *Optional* (not always-64B) was deliberate: a fixed 64-byte
+  field would push a 1-result peer-query response to 257 B, forcing SAR on every control response — and the
+  mesh/daemon `step` receive path drains the whole capture buffer per call, so multi-frame reassembly from
+  continuous audio is unreliable. Keeping unsigned control frames single-frame avoids that regression.
+- **Implementation:**
+  - `crates/openpulse-core/src/wire_query.rs`: `WireEnvelope.signature: Option<[u8;64]>`, `VERSION=2`,
+    `sign(seed)` / `verify_origin()` (self-authenticating), length-inferred decode, new errors
+    `InvalidSrcKey` / `InvalidSignature`.
+  - `crates/openpulse-core/src/relay.rs`: `RelayTrustPolicy.require_authentication` (**default true**);
+    `RelayForwarder::forward` calls `verify_origin()` before spending dedup capacity, dropping forged /
+    unsigned frames with `RelayForwardError::AuthenticationFailed` + `RelayEvent::AuthenticationFailed`.
+  - `crates/openpulse-mesh/src/lib.rs`: `sign_envelope()` signs originated `relay_data_chunk`/`hop_ack`
+    (only when `src_peer_id == local_peer_id`) in `send_via_route` / `send_relay`.
+  - Daemon / ardop / kiss relay forwarders inherit the auth-on default via `RelayTrustPolicy::default()`.
+- **Behaviour change:** a relay now **rejects unsigned/forged** `relay_data_chunk`/`relay_hop_ack` by
+  default. The only relay-frame originators in-tree are mesh nodes (which now sign), so no in-tree traffic
+  is broken; v1 and v2 envelopes are not interoperable (pre-1.0, acceptable).
+- **Tests:** `wire_query` unit tests (sign/verify, hop-index-survives, tampered/spoofed/unsigned rejected,
+  unsigned omits trailer); `relay` unit tests (accepts signed, rejects forged/unsigned/spoofed, honours the
+  auth-disable toggle); `relay_integration` fixtures signed with a real key; `mesh_loopback`
+  `authenticated_relay_forwarding` (A→B→C signed) + `impersonated_origin_rejected_at_relay`.
+- **Test results:** `openpulse-core` 300 lib + integration groups green; `openpulse-mesh` 15/15;
+  `openpulse-daemon` 123 green; clippy clean on core/mesh/modem. Full workspace gate below.
+
 ## 2026-07-15 — fix(modem): MFSK16 ARQ D4 mixed-profile blackout — dual-waveform ACK + FSK4 acquisition (REQ-WSIG-01)
 
 - **Requirement/change:** fix the last open ARQ-seam finding (D4) — a mixed-profile pair (one side with the

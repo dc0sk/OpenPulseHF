@@ -14,7 +14,7 @@ fn make_envelope(msg_type: WireMsgType, payload: Vec<u8>) -> WireEnvelope {
         hop_limit: 3,
         hop_index: 0,
         payload,
-        auth_tag: [0xcc; 16],
+        signature: Some([0xcc; 64]),
     }
 }
 
@@ -43,7 +43,7 @@ fn envelope_query_request_round_trip() {
     assert_eq!(decoded.nonce, [0x11; 12]);
     assert_eq!(decoded.hop_limit, 3);
     assert_eq!(decoded.hop_index, 0);
-    assert_eq!(decoded.auth_tag, [0xcc; 16]);
+    assert_eq!(decoded.signature, Some([0xcc; 64]));
 
     let decoded_req = PeerQueryRequest::decode(&decoded.payload).unwrap();
     assert_eq!(decoded_req.query_id, 0x22);
@@ -112,10 +112,10 @@ fn envelope_rejects_truncated_header() {
 }
 
 #[test]
-fn envelope_rejects_missing_auth_tag() {
+fn envelope_rejects_missing_signature() {
     let env = make_envelope(WireMsgType::PeerQueryRequest, vec![0xAB; 4]);
     let bytes = env.encode().unwrap();
-    // Strip the last 16 bytes (auth_tag)
+    // Strip the last 16 bytes of the 64-byte signature
     assert!(matches!(
         WireEnvelope::decode(&bytes[..bytes.len() - 16]),
         Err(WireQueryError::BufferTooShort)
