@@ -216,27 +216,31 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         ),
                     }
                 }
+                // `ota_min_backlog` / `ota_upgrade_hold_frames` / `ota_aggressiveness` configure
+                // `RateAdaptationPolicy` (the sender-led, backlog-gated ladder used by the CLI adaptive
+                // demo and the test matrix). The daemon's receiver-led OTA ladder is `OtaRateController`,
+                // which steps purely on measured SNR + NACK count and has no backlog/hold/aggressiveness
+                // concept — so these three knobs have NO effect here. Warn rather than silently apply them
+                // to an inactive policy and log a false "applied". The daemon's OTA rate is bounded by
+                // `ota_min_level` / `ota_max_level` / `ota_lock_level` (applied above). (audit #2)
+                let mut inert = Vec::new();
                 if cfg.modem.ota_min_backlog > 0 {
-                    engine.set_min_backlog_for_upgrade(cfg.modem.ota_min_backlog);
+                    inert.push("ota_min_backlog");
                 }
                 if cfg.modem.ota_upgrade_hold_frames > 0 {
-                    engine.set_upgrade_hold_frames(cfg.modem.ota_upgrade_hold_frames);
+                    inert.push("ota_upgrade_hold_frames");
                 }
-                // The aggressiveness preset, when set, sets both A2/A3 gates and so
-                // takes precedence over the individual knobs above.
                 if !cfg.modem.ota_aggressiveness.is_empty() {
-                    match openpulse_core::rate::OtaAggressiveness::from_name(
-                        &cfg.modem.ota_aggressiveness,
-                    ) {
-                        Some(p) => {
-                            engine.set_ota_aggressiveness(p);
-                            tracing::info!(preset = p.name(), "OTA aggressiveness preset applied");
-                        }
-                        None => tracing::warn!(
-                            value = %cfg.modem.ota_aggressiveness,
-                            "unknown ota_aggressiveness preset; ignored"
-                        ),
-                    }
+                    inert.push("ota_aggressiveness");
+                }
+                if !inert.is_empty() {
+                    tracing::warn!(
+                        keys = inert.join(", "),
+                        "[modem] {} do not affect the daemon's receiver-led OTA ladder \
+                         (they configure the sender-led RateAdaptationPolicy, which the daemon does not \
+                         run); use ota_min_level / ota_max_level / ota_lock_level to bound the OTA rate",
+                        inert.join(" / ")
+                    );
                 }
                 tracing::info!(
                     profile = profile_name,
