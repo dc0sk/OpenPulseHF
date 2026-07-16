@@ -9,6 +9,47 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-16 — test: close the deferred test-coverage gaps from the modem audit (ACK channel + a false acceptance claim)
+
+- **Requirement/change:** the three remaining test-coverage items on issue #917. They share one theme —
+  **tests that don't test** — and all three sit on the ACK channel or its acceptance claims.
+- **(1) FSK4-ACK had no correct-decode-under-noise test.** Its only noise test asserted the ACK
+  *breaks* at -20 dB (`assert_ne`), which a demodulator returning constant garbage would also pass.
+  What matters for the rate ladder is the opposite: that ACKs *get through*, since they are the
+  feedback the adapter steers on. **Measured the waterfall** (real `AckFrame` round-trip, 200
+  seeds/point): `-8 → 0.005, -6 → 0.035, -4 → 0.195, -2 → 0.545, 0 → 0.875, +2 → 0.990, +4 → 1.000`.
+  That **falsifies the old test's stated rationale** ("~19 dB processing gain, so only SNR below about
+  -16 dB reliably causes errors") by ~14 dB — the frame is already dead at -8 dB. The 5-byte ACK is 20
+  symbols, so it needs a very low per-symbol error rate to arrive intact, which puts the *frame* floor
+  well above the point where symbols start slipping. Replaced with a real gate at +4 dB (≥0.98) and
+  re-pinned the degradation gate from -20 dB to -8 dB: -20 dB sat ~18 dB below the floor, so it held
+  even if the plugin were 16 dB better than it is. The two now bracket the measured knee.
+- **(2) The MFSK16 sub-floor ACK was never tested with `ack_mac_key` set.** The E7 keyed MAC is proven
+  on the FSK4 path only; the sub-floor rung composes it with a different return channel
+  (`encode_maybe_authenticated` → union-listen → `decode_ack_from_llr_copies_maybe_auth`), and with a
+  key set the session-hash filter is deliberately bypassed (the authenticated frame carries no hash),
+  so the MAC is the only gate. **The first version of this test was vacuous**: the dual-waveform ACK
+  *leads* with an FSK4 copy, which on a clean channel decodes first via `decode_maybe_authenticated`,
+  so the test passed even with the key removed from the union decode — it never reached K=3. Fixed by
+  measuring where the FSK4 lead dies but the union survives (**-8 dB**: FSK4 frame 0.005, K=3 union
+  1.000; the union itself dies by -12 dB) and pinning the test there. The composition is correct as
+  written — no production bug — but it is now proven rather than assumed.
+- **(3) A false acceptance claim, not a missing test.** `scfdma_ce_sweep` is `#[ignore]`d and asserts
+  nothing — it is a print-only research harness, correctly so. The defect was the acceptance table
+  citing it as the gate for "SC-FDMA channel estimator vs. selective channels", which left that
+  requirement **enforced by nobody**. Forcing a slow research sweep into CI would be the wrong fix;
+  the row now cites `scfdma_multipath_timing` (which asserts `decode_rate ≥ 0.90` and runs by
+  default), and the harness carries a header saying it is not a gate so it cannot be re-linked as one.
+- **Implementation:** `plugins/fsk4/tests/fsk4_integration.rs` (rewritten),
+  `crates/openpulse-modem/tests/mfsk16_arq_subfloor.rs` (+1 test),
+  `crates/openpulse-modem/tests/scfdma_ce_sweep.rs` (header only), `CLAUDE.md` acceptance table.
+  Test/doc only — **no production change**.
+- **Test results:** both new gates were verified to **fail when the thing they guard is broken** —
+  dropping the key from the union decode (`decode_ack_from_llr_copies_maybe_auth(&refs, None)`) fails
+  the K=3 auth test at -8 dB (and, tellingly, *passed* against the clean-channel draft). `fsk4-plugin`
+  6 passed; `mfsk16_arq_subfloor` 8 passed. Full workspace **2017 passed, 0 failed** (2015 + the two
+  net-new tests); workspace clippy (CI form) and `cargo fmt --all --check` clean.
+
 ## 2026-07-16 — test(modem): drive OTA receive + HARQ through the daemon's production capture entry
 
 - **Requirement/change:** deferred test-coverage item on issue #917 — `ota_decode_burst` (which drives
