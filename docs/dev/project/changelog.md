@@ -2,13 +2,52 @@
 project: openpulsehf
 doc: docs/dev/project/changelog.md
 status: living
-last_updated: 2026-07-15
+last_updated: 2026-07-16
 ---
 
 # Changelog
 
 > Phase/roadmap history lives in [roadmap.md](roadmap.md); this file tracks
 > user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
+
+## v0.10.0 — 2026-07-16
+
+Envelope origin authentication for relayed traffic — the last major deferred finding from the
+handshake-trust audit series (E3). A relay now cryptographically authenticates the originator of every
+relay-data frame it forwards, so a station can no longer impersonate another originator at a relay. Minor
+bump for the control-plane wire-format change (envelope v2) and the behaviour change (relays reject
+unsigned/forged relay frames); no config break.
+
+### Security fixes
+
+- **A relay no longer forwards forged or unauthenticated relay traffic (audit E3).** The control-plane
+  envelope's 16-byte `auth_tag` was never verified and had no key-distribution scheme, so any station could
+  forward a frame claiming any originator (`src_peer_id`) — impersonation at the relay. Because a peer id
+  *is* its Ed25519 verifying key, the envelope now carries an optional Ed25519 origin signature verifiable
+  against `src_peer_id` with no external key store, and a relay drops any relay-data / hop-ack frame whose
+  signature is absent or invalid (on by default). The originator allow-list from v0.9.0 now sits on top of
+  real cryptographic authentication rather than a spoofable id. (#906)
+
+### Behaviour changes
+
+- **Relays reject unsigned or forged relay frames by default.** A `relay_data_chunk` / `relay_hop_ack`
+  without a valid origin signature is dropped. The only relay-frame originators in the project (mesh nodes)
+  now sign the frames they originate, so normal traffic is unaffected; there is no opt-out. (#906)
+
+### Breaking changes
+
+- **Control-plane wire schema → v2** (the `OPHF` mesh/relay/peer-query/route-discovery envelope). The fixed
+  16-byte `auth_tag` is replaced by an *optional* 64-byte Ed25519 signature (present only on signed
+  relay-data frames). v1 and v2 envelopes are **not interoperable**. This affects only the mesh / relay /
+  discovery control plane, all of which are off by default. (#906)
+
+### Resolved limitations
+
+- The v0.9.0 "envelope-level authentication of relayed traffic" limitation is **resolved**. It was expected
+  to require a mesh reception-model change (to carry always-signed, therefore fragmented, envelopes);
+  instead the signature was made *optional* — only relay-data frames are signed, so authenticated frames
+  stay within one modem frame and the control responses that carry their own payload-level signatures stay
+  compact and unfragmented. (#906)
 
 ## v0.9.0 — 2026-07-16
 
