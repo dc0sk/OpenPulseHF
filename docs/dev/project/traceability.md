@@ -9,6 +9,54 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-16 — feat(modem): admit plain-RS rungs to HARQ combining (puts HARQ on the MFSK16 sub-floor)
+
+- **Requirement/change:** follow-up unblocked by #920 and filed on issue #917 — MFSK16 (SL1, the
+  non-coherent deep-fade sub-floor rung) was excluded from HARQ soft-combining. The exclusion was the
+  **FEC admission gate**, not any lack of soft LLRs: MFSK16 *is* soft-capable and `decode_combined_llrs`
+  already handles `Rs` by hard-deciding the combined vector. It was held out because every MFSK16 frame
+  is one fixed 255-byte RS block, so nothing could separate an abandoned message's retained LLRs from a
+  retransmission of the live one — worst case, delivering the wrong message. #920's newest-first suffix
+  trial contains that hazard by construction, which is what makes admission safe.
+- **Design decision:** add `FecMode::Rs` to the soft-path admission gate rather than special-casing the
+  MFSK16 mode name. The mechanism is general — a MAP sum across independent fades sharpens per-bit
+  reliability and pulls the hard-decision error count under RS(255,223)'s 16-byte-per-block capacity —
+  and `decode_combined_llrs`'s `Rs` arm was written for exactly this ("Supports combining a plain-RS OTA
+  rung's retransmissions"). This also opens the plain-RS mid-ladder rungs (`hpx_hf` SL6/SL9).
+- **Measured — MFSK16 sub-floor, `moderate_f1`, 60 realisations/arm, 3 bursts:** roughly **+2.5 dB** of
+  sensitivity.
+
+  | SNR (dB) | standalone | combining |
+  |---|---|---|
+  | -6.0 | 0.000 | **0.267** (decodes where no single burst ever does) |
+  | -5.0 | 0.067 | 0.583 |
+  | -4.0 | 0.117 | **0.750** |
+  | -3.0 | 0.417 | 0.933 |
+  | -2.0 | 0.683 | 0.983 |
+
+  Control: with the gate closed, combining equals standalone *exactly* at every SNR (no combining
+  happens), confirming the harness measures the change and nothing else.
+- **Safety — the hazard the audit named:** with three bursts of an abandoned same-length message
+  retained first, dilution is **+0.000** across every (snr, stale_snr) combination tried and
+  **false deliveries = 0**. RS/CRC gates every combine and the suffix trial never hands up a stale frame.
+- **Spot-check beyond the motivating rung (and a separate bug found):** the mid-ladder QPSK250+Rs rung
+  (`hpx_hf` SL6) measures delta +0.000 — the admission neither helps nor hurts, because that rung
+  **never decodes on `moderate_f1` at any SNR** (0.000 at 8 dB, 0.033 at 40 dB), which is the
+  fails-at-every-SNR bug signature. An ablation at 40 dB localises it: removing the 1 ms delay spread
+  changes nothing (0.000), removing the 1 Hz Doppler rescues it (**0.817**) — so it is carrier tracking
+  under fading, not ISI and not noise. MFSK16 scores 1.000 on the identical channel. Pre-existing and
+  unrelated to this change (it is the *standalone* number); filed separately, not fixed here.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` — `FecMode::Rs` added to the
+  `ota_decode_and_ack_inner` soft-admission gate; the stale MFSK16 hold-out note replaced.
+- **Tests:** `crates/openpulse-modem/tests/mfsk16_harq.rs` (new) —
+  `mfsk16_harq_combining_adds_subfloor_diversity` (gate: combining > standalone + 0.30) and
+  `mfsk16_stale_message_does_not_pollute_or_false_deliver` (gate: zero false deliveries, dilution
+  ≥ -0.04; asserts both payloads are equal length or it proves nothing).
+- **Test results:** the diversity gate **fails with the admission reverted** (combining collapses to
+  standalone, 0.117, delta +0.000) and passes with it (0.750, delta **+0.633**). Pollution gate: delta
+  **+0.000**, `wrong=0`. Full workspace **2013 passed, 0 failed**; workspace clippy (CI form) and
+  `cargo fmt --all --check` clean.
+
 ## 2026-07-16 — fix(modem): align mismatched-length retained HARQ LLRs instead of discarding them
 
 - **Requirement/change:** follow-up found while measuring #920 (audit #4) and filed on issue #917 — the

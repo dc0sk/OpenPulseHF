@@ -1601,17 +1601,23 @@ impl ModemEngine {
                     .unwrap_or(false)
                     && matches!(
                         fec,
-                        FecMode::SoftConcatenated | FecMode::Ldpc | FecMode::LdpcHighRate
+                        FecMode::SoftConcatenated
+                            | FecMode::Ldpc
+                            | FecMode::LdpcHighRate
+                            | FecMode::Rs
                     );
-                // NOTE: MFSK16+Rs is still not admitted to HARQ combining. The FEC gate above — not
-                // any lack of soft LLRs — is what excludes it: MFSK16 is soft-capable and
-                // `decode_combined_llrs` does handle `Rs` by hard-deciding the combined vector. It was
-                // held out because a stale abandoned-message LLR set could pollute a later message and
-                // nothing could tell the two apart (every MFSK16 frame is one fixed 255-byte block, so
-                // the length filter can't). The suffix trial below now contains that hazard, so
-                // re-admitting is a live option — but it is a behaviour change on the weak-signal
-                // sub-floor rung and needs its own measurement, not a one-line gate edit
-                // (audit 2026-07-15 / 2026-07-16 #4).
+                // `Rs` is admitted alongside the soft-FEC modes: `decode_combined_llrs` handles it by
+                // hard-deciding the *combined* vector, so a MAP sum across fades pulls the error count
+                // under RS(255,223)'s 16-byte-per-block capacity. This is what puts HARQ on the MFSK16
+                // sub-floor rung (SL1), worth ~2.5 dB there — 0.117 → 0.750 at -4 dB on `moderate_f1`,
+                // and it decodes at -6 dB where no single burst ever does. It also opens the plain-RS
+                // mid-ladder rungs (`hpx_hf` SL6/SL9).
+                //
+                // MFSK16 was held out until now because every one of its frames is one fixed 255-byte
+                // block, so nothing could separate an abandoned message's retained LLRs from a
+                // retransmission — worst case, delivering the wrong message. The suffix trial below
+                // contains that by construction, and `mfsk16_harq.rs` gates both halves: no dilution
+                // and zero false deliveries (audit 2026-07-15 / 2026-07-16 #4).
                 if !soft {
                     continue;
                 }
