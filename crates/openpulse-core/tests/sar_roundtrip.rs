@@ -4,6 +4,13 @@ use openpulse_core::sar::{
 };
 use std::time::Duration;
 
+/// These round-trip tests never mix conflicting streams, so a fragment completes at most one
+/// candidate; unwrap that.
+fn single(v: Vec<Vec<u8>>) -> Option<Vec<u8>> {
+    assert!(v.len() <= 1);
+    v.into_iter().next()
+}
+
 #[test]
 fn sar_round_trip_256_bytes() {
     let data: Vec<u8> = (0..=255).map(|i| i as u8).collect();
@@ -15,7 +22,7 @@ fn sar_round_trip_256_bytes() {
 
     let mut result = None;
     for payload in &payloads {
-        result = r.ingest("session-A", payload).unwrap();
+        result = single(r.ingest("session-A", payload).unwrap());
     }
     assert_eq!(result.unwrap(), data);
 }
@@ -32,7 +39,7 @@ fn sar_round_trip_64kb() {
 
     let mut result = None;
     for payload in &payloads {
-        result = r.ingest("session-B", payload).unwrap();
+        result = single(r.ingest("session-B", payload).unwrap());
     }
     assert_eq!(result.unwrap(), data);
 }
@@ -46,7 +53,7 @@ fn sar_round_trip_maximum_size() {
 
     let mut result = None;
     for payload in &payloads {
-        result = r.ingest("session-C", payload).unwrap();
+        result = single(r.ingest("session-C", payload).unwrap());
     }
     assert_eq!(result.unwrap(), data);
 }
@@ -61,12 +68,12 @@ fn sar_missing_fragment_stays_pending() {
 
     // Deliver first two fragments only.
     for payload in &payloads[..2] {
-        assert!(r.ingest("session-D", payload).unwrap().is_none());
+        assert!(single(r.ingest("session-D", payload).unwrap()).is_none());
     }
     assert_eq!(r.pending_count(), 1);
 
     // Deliver the missing third fragment — now complete.
-    let result = r.ingest("session-D", &payloads[2]).unwrap();
+    let result = single(r.ingest("session-D", &payloads[2]).unwrap());
     assert_eq!(result.unwrap(), data);
     assert_eq!(r.pending_count(), 0);
 }
@@ -78,7 +85,7 @@ fn sar_reassembly_timeout_discards_incomplete_segment() {
     let payloads = sar_encode(3, &data).unwrap();
 
     // Deliver first fragment only — slot opens.
-    r.ingest("session-E", &payloads[0]).unwrap();
+    single(r.ingest("session-E", &payloads[0]).unwrap());
     assert_eq!(r.pending_count(), 1);
 
     // Wait for timeout, then expire.
@@ -87,7 +94,7 @@ fn sar_reassembly_timeout_discards_incomplete_segment() {
     assert_eq!(r.pending_count(), 0);
 
     // After expiry, the second fragment starts a fresh slot.
-    let result = r.ingest("session-E", &payloads[1]).unwrap();
+    let result = single(r.ingest("session-E", &payloads[1]).unwrap());
     assert!(result.is_none()); // only one fragment in the fresh slot
     assert_eq!(r.pending_count(), 1);
 }
@@ -112,10 +119,10 @@ fn sar_independent_sessions_do_not_interfere() {
     let payloads_b = sar_encode(1, &data_b).unwrap(); // same segment_id, different session
 
     // Interleave fragment delivery.
-    r.ingest("sess-A", &payloads_a[0]).unwrap();
-    r.ingest("sess-B", &payloads_b[0]).unwrap();
-    let res_a = r.ingest("sess-A", &payloads_a[1]).unwrap();
-    let res_b = r.ingest("sess-B", &payloads_b[1]).unwrap();
+    single(r.ingest("sess-A", &payloads_a[0]).unwrap());
+    single(r.ingest("sess-B", &payloads_b[0]).unwrap());
+    let res_a = single(r.ingest("sess-A", &payloads_a[1]).unwrap());
+    let res_b = single(r.ingest("sess-B", &payloads_b[1]).unwrap());
 
     assert_eq!(res_a.unwrap(), data_a);
     assert_eq!(res_b.unwrap(), data_b);

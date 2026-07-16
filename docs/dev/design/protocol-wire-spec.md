@@ -74,6 +74,15 @@ frame (the signed handshakes below, multi-block objects).
 - `fragment_index` is 0-based; `fragment_total` is 1–255.
 - Reassembly is keyed on `(session_id, segment_id)` with a timeout; duplicate fragments are
   idempotent. Each SAR fragment is itself carried in one base frame's payload.
+- **Poison-resilience.** A key holds up to `MAX_CANDIDATES_PER_KEY = 8` concurrent *candidate*
+  reassemblies. A fragment joins only candidates it is **consistent** with (same `fragment_total`, and
+  its index empty or already holding identical bytes); an inconsistent fragment starts a new candidate
+  rather than corrupting an in-flight one. This matters where the caller reuses a constant key for every
+  message — the handshake path keys all frames `("handshake", 0)` — so a crafted or stray fragment (or
+  two interleaved handshakes) cannot poison the reassembly: the bad candidate reassembles to a frame
+  that fails signature verification and is dropped while the good one completes. `ingest` therefore
+  returns **all** frames a fragment completed (usually one; more only under such a collision), and the
+  candidate set is capped (oldest evicted) so a flood can't exhaust memory.
 
 ---
 

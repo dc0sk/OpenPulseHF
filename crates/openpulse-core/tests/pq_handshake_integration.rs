@@ -444,7 +444,12 @@ fn sar_roundtrip_of_pq_conreq() {
     let mut reassembler = SarReassembler::new(Duration::from_secs(30));
     let mut result = None;
     for frag in fragments {
-        if let Some(data) = reassembler.ingest("session-sar-rt", &frag).expect("ingest") {
+        if let Some(data) = reassembler
+            .ingest("session-sar-rt", &frag)
+            .expect("ingest")
+            .into_iter()
+            .next()
+        {
             result = Some(data);
             break;
         }
