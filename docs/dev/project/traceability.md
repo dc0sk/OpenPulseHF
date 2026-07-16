@@ -9,6 +9,64 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-16 — fix(modem): #4 — stop an abandoned message's retained LLRs polluting the next one's HARQ combine
+
+- **Requirement/change:** modem loose-ends audit (2026-07-16) finding **#4** — `ota_retained_llrs`
+  isolates retained HARQ LLRs by mode + LLR-vector *length* only. The intended per-session guard never
+  fires on the daemon, which pins `session_id` to the local callsign (`server.rs`). Two consecutive
+  same-length messages — fixed-size SAR fragments are exactly this — therefore MAP-combine an abandoned
+  message's stale LLRs into the next one. No false delivery (RS/CRC still gate), but it dilutes the
+  diversity gain HARQ exists to provide.
+- **Measured first (the defect is real):** on `moderate_f1` @10 dB, SL12 `OFDM52-16QAM` +
+  `SoftConcatenated`, 400 fade realisations per arm — standalone 0.582, clean combining 0.840, and
+  combining after three bursts of an abandoned same-length message **0.773–0.798** depending on the
+  stale message's SNR. Worst case −0.067 at 6 dB: roughly a **quarter of the entire HARQ gain**
+  (0.840 − 0.582 = 0.258). Two facts fell out of the sweep and shaped the fix: a stale burst must
+  *demodulate* before its LLRs are retained (at 0 dB nothing is kept and the delta is 0.000), and far
+  above the rung the stale message decodes and clears the buffer itself — so the damage peaks in the
+  middle, which is exactly where a sender gives up. At the 50-trial default the effect (±0.06 binomial
+  noise) was not resolvable; it needed 400.
+- **Design decision — order, not identity:** the fix trials the **newest-first suffixes** of the retained
+  set, widest first, until one decodes. A stale message's bursts are always *older* than the live
+  message's, so some suffix necessarily excludes all of them — no identity test, no threshold, no
+  dependence on payload size. Widest-first keeps the common case at one decode and preserves full
+  diversity when every retained burst really is this frame. Success is a strict **superset** of the
+  single whole-set combine it replaces, which is the same standalone-then-combine union #694
+  established.
+- **Rejected — an LLR-identity gate (built, measured, reverted):** the obvious fix is to frame-identity-tag
+  retained LLRs by sign correlation (two observations of one frame agree on `p²+(1-p)²` of their bits;
+  different frames should agree on ~0.5). Measured on the real waveform, different 61-byte messages agreed
+  on **0.61–0.73** against 0.68–0.86 for genuine retransmissions — overlapping populations, no usable
+  threshold. Cause, confirmed by prediction and then falsified against a full block: a short payload pads
+  out to the 255-byte RS block with bytes both messages *share* (~72% here), so "different" frames are
+  mostly identical. Filling the RS data field collapsed different-frame agreement to 0.54–0.60 as the model
+  predicted — i.e. the statistic's discriminating power is a function of payload size, which disqualifies it
+  as a gate. Reverted; the ordering argument above needs no statistic.
+- **Also measured (not acted on):** faded bursts of the *same* frame frequently demodulate to *different*
+  LLR lengths (4160/4176/4192/4288/4320 observed), so the length filter both rejects genuine retransmissions
+  and admits different same-length frames. Relaxing it to `combine_llrs_map`'s min-length truncation is a
+  candidate improvement but risks combining misaligned vectors — it needs its own measurement, so the filter
+  is left as-is here.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` — `ota_decode_and_ack_inner` HARQ block:
+  the single `combine_llrs_map(all retained + current)` becomes a widest-first suffix trial; field docs on
+  `ota_retained_llrs` (oldest-first order is now load-bearing) and `ota_retained_session` (records that the
+  guard is inert on the daemon). The MFSK16 hold-out note is corrected: MFSK16 *is* soft-capable and
+  `decode_combined_llrs` does handle `Rs` — the FEC admission gate is what excludes it, and re-admitting is
+  now unblocked but needs its own measurement.
+- **Tests:** `crates/openpulse-modem/tests/ota_harq_combining.rs` —
+  `stale_message_llrs_do_not_pollute_the_next_message` (new): a paired comparison decoding the same real
+  bursts with and without a preceding abandoned same-length message. Asserts the two payloads are equal
+  length (an unequal pair would make the gate vacuous — the length filter would reject the stale LLRs for
+  us, which is how the first draft of this test passed against the unfixed code). `HARQ_TRIALS` raises both
+  gates to 400 realisations for re-measurement.
+- **Test results:** the new gate **fails on unfixed code** (clean 0.800 vs polluted 0.700, delta −0.100 at
+  50 trials) and passes with the fix (delta **+0.000**; exact equality is the expected result — when a clean
+  suffix exists the outcome is identical to no stale LLRs at all). At 400 trials every stale-SNR point moves
+  from −0.042…−0.067 to +0.000, and clean combining is unchanged at 0.840, so the suffix trial costs nothing
+  in the common case. Pre-existing `ota_retention_combines_across_retransmissions` still passes.
+  `openpulse-modem` + `openpulse-core` suites: **887 passed, 0 failed**. Workspace clippy (CI form) and
+  `cargo fmt --all --check` clean.
+
 ## 2026-07-16 — refactor(daemon): E5 — single source of truth for verified peers (remove redundant global slot)
 
 - **Requirement/change:** handshake-trust audit finding **E5** — `verified_peer` was a single global slot,
