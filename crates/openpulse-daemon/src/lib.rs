@@ -1407,20 +1407,23 @@ fn try_reassemble_handshake(
     mode: &str,
     engine: &mut ModemEngine,
 ) {
-    let assembled = match runtime_state
+    // A fragment may complete more than one candidate when a poisoned/interleaved stream shares the
+    // constant handshake key; dispatch every completed frame and let verification drop the bogus ones.
+    let completed = match runtime_state
         .handshake_sar
         .ingest(HANDSHAKE_SAR_SESSION, bytes)
     {
-        Ok(Some(full)) => full,
-        Ok(None) => return,
+        Ok(frames) => frames,
         Err(_) => return, // not a well-formed SAR fragment; ignore
     };
-    if assembled.starts_with(b"HSCQ") {
-        handle_inbound_conreq(&assembled, runtime_state, event_tx, mode, engine);
-    } else if assembled.starts_with(b"HSAK") {
-        handle_inbound_conack(&assembled, runtime_state, event_tx);
-    } else {
-        tracing::debug!("handshake: reassembled segment has no CONREQ/CONACK magic; dropping");
+    for assembled in completed {
+        if assembled.starts_with(b"HSCQ") {
+            handle_inbound_conreq(&assembled, runtime_state, event_tx, mode, engine);
+        } else if assembled.starts_with(b"HSAK") {
+            handle_inbound_conack(&assembled, runtime_state, event_tx);
+        } else {
+            tracing::debug!("handshake: reassembled segment has no CONREQ/CONACK magic; dropping");
+        }
     }
 }
 
@@ -4708,6 +4711,62 @@ mod handshake_rf_tests {
                 if callsign == "W1AW" && grid == "FN31pr"),
             "PeerVerified event should be emitted"
         );
+    }
+
+    /// SAR-poison resilience: a crafted fragment sharing the constant handshake key must not block a
+    /// legitimate CONREQ from reassembling and verifying (the reassembler keeps conflicting streams
+    /// as separate candidates; the poison one fails verification and is dropped).
+    #[tokio::test]
+    async fn poison_fragment_does_not_block_conreq_verification() {
+        let conreq = ConReq::create_full(
+            "W1AW",
+            &[1u8; 32],
+            vec![SigningMode::Normal],
+            "W1AW-1700000000000",
+            vec![],
+            vec![],
+            "FN31pr",
+            "",
+            0,
+            unix_now_ms(),
+        )
+        .unwrap();
+        let frags = sar_encode(0, &conreq.encode().unwrap()).unwrap();
+        assert!(frags.len() > 1, "a CONREQ exceeds one modem frame");
+
+        let mut eng = bpsk_engine();
+        let mode = mode();
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+        let mut rs = RuntimeControlState {
+            local_callsign: "K2XYZ".into(),
+            local_grid: "EM69".into(),
+            station_seed: [2u8; 32],
+            ..RuntimeControlState::default()
+        };
+
+        // A poison fragment on the same handshake key (segment_id 0): a self-contained garbage
+        // "frame" (index 0 of 1) that reassembles immediately but has no HSCQ magic, plus a same-total
+        // index-0 conflict with the real CONREQ.
+        let poison_solo = vec![0u8, 0, 0, 1, 0xDE, 0xAD, 0xBE, 0xEF];
+        let mut poison_conflict = vec![0u8, 0, 0, frags.len() as u8];
+        poison_conflict.extend(vec![0x99u8; 100]);
+        process_received_bytes(&poison_solo, &mut rs, None, &ev, &mode, &mut eng).await;
+        process_received_bytes(&poison_conflict, &mut rs, None, &ev, &mode, &mut eng).await;
+        assert!(
+            rs.verified_peer.is_none(),
+            "poison must not verify a peer on its own"
+        );
+
+        // The legitimate CONREQ fragments still reassemble and verify.
+        for frag in &frags {
+            process_received_bytes(frag, &mut rs, None, &ev, &mode, &mut eng).await;
+        }
+        let vp = rs
+            .verified_peer
+            .expect("peer verified despite the poison fragments");
+        assert_eq!(vp.callsign, "W1AW");
+        assert_eq!(vp.pubkey, conreq.pubkey);
     }
 
     /// Audit F6/F4 unit coverage: `local_callsign_valid` rejects the empty/`N0CALL` sentinels, and

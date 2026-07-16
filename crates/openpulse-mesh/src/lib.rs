@@ -437,9 +437,14 @@ impl MeshDaemon {
                     // A whole envelope in one frame (the common, small case).
                     Ok(envelope) => self.dispatch(envelope, now_ms),
                     // Not a whole envelope (no `OPHF` magic) — treat it as a SAR fragment of an
-                    // oversized envelope and dispatch once every fragment has arrived.
+                    // oversized envelope and dispatch once every fragment has arrived. A fragment can
+                    // complete more than one candidate when streams collide on the reassembly key.
                     Err(_) => {
-                        if let Ok(Some(full)) = self.rx_sar.ingest(MESH_SAR_SESSION, &bytes) {
+                        for full in self
+                            .rx_sar
+                            .ingest(MESH_SAR_SESSION, &bytes)
+                            .unwrap_or_default()
+                        {
                             if let Ok(envelope) = WireEnvelope::decode(&full) {
                                 self.dispatch(envelope, now_ms);
                             }

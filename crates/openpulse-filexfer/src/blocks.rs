@@ -144,28 +144,36 @@ impl BlockAssembler {
             }
         }
 
-        match self.reasm.ingest(SAR_SESSION, fragment) {
-            Ok(Some(frame_bytes)) => match FxFrame::decode(&frame_bytes) {
-                Ok(FxFrame::FileData {
-                    transfer_id,
-                    block_index: bi,
-                    packed,
-                }) if transfer_id == self.transfer_id && bi == block_index => {
+        // A fragment can complete more than one candidate when conflicting streams share the key;
+        // check each and keep the first that decodes to this block with the expected geometry.
+        let completed = match self.reasm.ingest(SAR_SESSION, fragment) {
+            Ok(frames) => frames,
+            Err(_) => return BlockEvent::Ignored,
+        };
+        if completed.is_empty() {
+            return BlockEvent::Progress { block_index };
+        }
+        for frame_bytes in completed {
+            if let Ok(FxFrame::FileData {
+                transfer_id,
+                block_index: bi,
+                packed,
+            }) = FxFrame::decode(&frame_bytes)
+            {
+                if transfer_id == self.transfer_id && bi == block_index {
                     let block = unpack(&packed).unwrap_or(packed);
                     // Bind the decoded length to the offer geometry: a block that unpacks to more (or
                     // fewer) bytes than its slot allows would let a small, quota-approved offer write an
                     // arbitrarily large file to disk (audit F-1). Drop it rather than store it.
-                    if block.len() != self.expected_block_len(block_index) {
-                        return BlockEvent::Ignored;
+                    if block.len() == self.expected_block_len(block_index) {
+                        self.blocks.insert(block_index, block);
+                        return BlockEvent::Complete { block_index };
                     }
-                    self.blocks.insert(block_index, block);
-                    BlockEvent::Complete { block_index }
                 }
-                _ => BlockEvent::Ignored,
-            },
-            Ok(None) => BlockEvent::Progress { block_index },
-            Err(_) => BlockEvent::Ignored,
+            }
         }
+        // Completions arrived but none was a valid block for this slot (garbage / length-mismatch).
+        BlockEvent::Ignored
     }
 
     /// Seed an already-held block from a resumed transfer's on-disk partial, so it counts complete and

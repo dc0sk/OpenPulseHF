@@ -9,6 +9,39 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-16 — fix(core): SAR-poison — multi-candidate reassembly isolates conflicting fragment streams
+
+- **Requirement/change:** deferred handshake-trust audit item — the handshake SAR path reassembles every
+  frame under the single constant key `("handshake", 0)`, so one crafted fragment (seeding a bogus
+  `fragment_total`, or filling an index with garbage) poisoned the single reassembly slot and blocked a
+  legitimate handshake for the whole timeout. It also broke on an *accidental* interleave of two real
+  handshakes on the same key.
+- **Design decision:** make `SarReassembler` hold up to `MAX_CANDIDATES_PER_KEY = 8` concurrent
+  **candidate** reassemblies per `(session_id, segment_id)`. A fragment joins only candidates it is
+  *consistent* with (same total; its index empty or already holding identical bytes); an inconsistent
+  fragment starts a new candidate instead of corrupting an existing one. An **ambiguous** fragment (which
+  could belong to several candidates — e.g. the second fragment of a 2-fragment frame when a poison and a
+  legit candidate both await that index) is added to **all** of them, so `ingest` now returns **all**
+  frames completed by that fragment (usually one). The downstream consumer already verifies each
+  reassembled frame (handshake signature, filexfer decode, mesh envelope magic), so bogus candidates are
+  dropped while the good one completes. The candidate set is capped with oldest-eviction so a flood can't
+  exhaust memory; the global `MAX_PENDING_SLOTS` bound (RX-4) is preserved via a running candidate count.
+  A per-handshake random key was rejected: the receiver routes handshake vs file-transfer by
+  `segment_id == 0`, and an on-air attacker can copy an observed key anyway — multi-candidate is robust
+  against both blind and observing conflicts, up to the (jamming-equivalent) candidate cap.
+- **Implementation:** `crates/openpulse-core/src/sar.rs` (`ingest → Result<Vec<Vec<u8>>>`, candidate
+  vectors, `MAX_CANDIDATES_PER_KEY`, `total_candidates` bound, `expire` updated). Callers updated to loop
+  over completions: `openpulse-daemon` handshake dispatch + filexfer control route, `openpulse-mesh`
+  `step` envelope reassembly, `openpulse-filexfer` `blocks.rs` (keeps the F-1 block-length guard).
+- **Behaviour change:** none observable for a well-behaved single stream (exactly one completion, as
+  before). `SarError::FragmentCountMismatch` is no longer returned (a mismatched total forms a separate
+  candidate); the variant is retained as reserved.
+- **Tests:** `sar` unit tests — poison-index and wrong-total seeds don't block the legit reassembly,
+  mismatched totals form independent candidates, per-key flood is capped with oldest-eviction; daemon
+  `poison_fragment_does_not_block_conreq_verification` proves it end-to-end through the RF handshake path.
+- **Test results:** `openpulse-core`/`-daemon`/`-mesh`/`-filexfer` green; full workspace gate below;
+  clippy + fmt clean.
+
 ## 2026-07-16 — feat(handshake): replay-freshness — signed timestamp bounds the capture-replay window
 
 - **Requirement/change:** deferred handshake-trust audit item — CONREQ/CONACK carried no

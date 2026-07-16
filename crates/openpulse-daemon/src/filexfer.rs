@@ -132,29 +132,33 @@ pub fn route_inbound_fragment(
     runtime_state.filexfer_frames_routed = runtime_state.filexfer_frames_routed.saturating_add(1);
 
     if segment_id == FX_CONTROL_SEGMENT_ID {
-        let assembled = match runtime_state.filexfer_sar.ingest(FX_CONTROL_SESSION, bytes) {
-            Ok(Some(full)) => full,
-            _ => return,
+        // A fragment may complete more than one candidate when conflicting streams share the control
+        // key; decode and dispatch each (a bogus reassembly just fails to decode).
+        let completed = match runtime_state.filexfer_sar.ingest(FX_CONTROL_SESSION, bytes) {
+            Ok(frames) => frames,
+            Err(_) => return,
         };
-        match FxFrame::decode(&assembled) {
-            Ok(FxFrame::FileOffer(offer)) => on_offer(offer, runtime_state, event_tx, mode),
-            Ok(FxFrame::FileCancel {
-                transfer_id,
-                reason,
-            }) => {
-                // A cancel can target either the inbound (receive) or outbound (send) session.
-                on_inbound_cancel(transfer_id, reason, runtime_state, event_tx);
-                on_tx_cancel(transfer_id, reason, runtime_state, event_tx);
+        for assembled in completed {
+            match FxFrame::decode(&assembled) {
+                Ok(FxFrame::FileOffer(offer)) => on_offer(offer, runtime_state, event_tx, mode),
+                Ok(FxFrame::FileCancel {
+                    transfer_id,
+                    reason,
+                }) => {
+                    // A cancel can target either the inbound (receive) or outbound (send) session.
+                    on_inbound_cancel(transfer_id, reason, runtime_state, event_tx);
+                    on_tx_cancel(transfer_id, reason, runtime_state, event_tx);
+                }
+                // Receiver → sender control drives the active send session.
+                Ok(
+                    frame @ (FxFrame::FileAccept { .. }
+                    | FxFrame::BlockAck { .. }
+                    | FxFrame::FileComplete { .. }
+                    | FxFrame::FileReject { .. }),
+                ) => on_tx_frame(frame, runtime_state, event_tx, mode),
+                Ok(_) => {}
+                Err(e) => tracing::debug!(error = %e, "filexfer: control frame decode failed"),
             }
-            // Receiver → sender control drives the active send session.
-            Ok(
-                frame @ (FxFrame::FileAccept { .. }
-                | FxFrame::BlockAck { .. }
-                | FxFrame::FileComplete { .. }
-                | FxFrame::FileReject { .. }),
-            ) => on_tx_frame(frame, runtime_state, event_tx, mode),
-            Ok(_) => {}
-            Err(e) => tracing::debug!(error = %e, "filexfer: control frame decode failed"),
         }
     } else {
         on_block_fragment(bytes, runtime_state, event_tx, mode);
@@ -1225,7 +1229,7 @@ mod tests {
         let mut reasm = SarReassembler::new(Duration::from_secs(60));
         let mut have_bitmap = None;
         for (frag, _mode) in &rs.filexfer_tx_queue {
-            if let Ok(Some(full)) = reasm.ingest(FX_CONTROL_SESSION, frag) {
+            for full in reasm.ingest(FX_CONTROL_SESSION, frag).unwrap_or_default() {
                 if let Ok(FxFrame::FileAccept {
                     have_bitmap: hb, ..
                 }) = FxFrame::decode(&full)
