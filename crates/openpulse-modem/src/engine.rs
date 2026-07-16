@@ -1522,6 +1522,24 @@ impl ModemEngine {
         samples: &AudioSamples,
         session_id: &str,
     ) -> Result<OtaDecodeOutcome, ModemError> {
+        // Every caller (`respond_arq_ota`, `poll_ota_rx`, `ota_decode_burst`) front-ends the burst at the
+        // shared `route_audio_stage(InputCapture)` seam BEFORE calling. Suppress the seam for the
+        // per-candidate + soft-HARQ decode loops below so the stateful notch-persistence counter and the
+        // streaming AGC don't advance once PER candidate — which wastes DSP passes and can prematurely trip
+        // the auto-QSY-on-interference path. This is the same guard `decode_burst` applies to
+        // `decode_burst_inner`. Restore on every exit.
+        let was_prerouted = self.input_prerouted;
+        self.input_prerouted = true;
+        let result = self.ota_decode_and_ack_inner(samples, session_id);
+        self.input_prerouted = was_prerouted;
+        result
+    }
+
+    fn ota_decode_and_ack_inner(
+        &mut self,
+        samples: &AudioSamples,
+        session_id: &str,
+    ) -> Result<OtaDecodeOutcome, ModemError> {
         let candidates: Vec<(SpeedLevel, String, FecMode)> = self
             .ota
             .as_ref()
@@ -5266,6 +5284,32 @@ mod tests {
         assert_eq!(burst.samples.len(), frame.len(), "burst is the whole frame");
         let decoded = rx.decode_burst("BPSK250", &burst).unwrap();
         assert_eq!(&decoded[..b"burst capture".len()], b"burst capture");
+    }
+
+    /// Audit: the OTA candidate/soft-HARQ decode loop must NOT re-run the InputCapture front-end — its
+    /// callers already routed the burst through the seam. With the notch enabled, `ota_decode_burst`
+    /// must not advance the notch-processed tripwire (which would prematurely trip auto-QSY).
+    #[test]
+    fn ota_decode_does_not_rerun_the_input_capture_front_end() {
+        let rx_lb = LoopbackBackend::new();
+        let mut rx = ModemEngine::new(Box::new(rx_lb.clone_shared()));
+        rx.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+        rx.enable_notch();
+        rx.start_ota_session(SessionProfile::hpx500());
+
+        // Any non-empty burst; the decode result is irrelevant — we assert only that the OTA decode
+        // path did not re-apply the front-end (the caller owns that).
+        let burst = AudioSamples {
+            samples: vec![0.01f32; 4000],
+        };
+        let before = rx.notch_blocks_processed();
+        let _ = rx.ota_decode_burst(&burst, "sess-ota-notch");
+        assert_eq!(
+            rx.notch_blocks_processed(),
+            before,
+            "ota_decode_and_ack must suppress the InputCapture seam (input_prerouted); a per-candidate \
+             re-run advances the notch-persistence counter and can prematurely trip auto-QSY"
+        );
     }
 
     #[test]
