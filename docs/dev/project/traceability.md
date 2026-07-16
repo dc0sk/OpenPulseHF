@@ -9,6 +9,36 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-16 — test(modem): drive OTA receive + HARQ through the daemon's production capture entry
+
+- **Requirement/change:** deferred test-coverage item on issue #917 — `ota_decode_burst` (which drives
+  the daemon's receiver-led adaptation) was only ever tested with hand-built synthetic `AudioSamples`,
+  never with a burst from the real `accumulate_capture` entry. That is the gap that let audit finding
+  **#3** (the OTA decode loop re-running the InputCapture front-end) ship unnoticed, and CLAUDE.md's
+  *Cross-cutting RX/TX feature checklist* asks for a test through the production entry for exactly this
+  reason. It also applies to the HARQ work just shipped (#920/#921/#922): all of those gates drive the
+  convenience seam, while the machinery only ever pays off on the daemon's async bursts.
+- **Design decision:** drive the engine the way `server::run`'s `rx_ticker` does rather than asserting
+  on internals — lead-in silence, the signal in **tick-sized chunks** (100 ms = 800 samples at 8 kHz,
+  the daemon's default `receive_tick_ms`), then trailing silence so the carrier drops and the burst
+  flushes. The burst handed back is the exact value the daemon passes to `ota_decode_burst`, with
+  DCD-decided boundaries and the front-end seam applied, rather than a perfectly-trimmed slice.
+  A burst the DCD never flushed counts as a **failed attempt** (the daemon genuinely heard nothing
+  under a deep fade) rather than being skipped, but the count is reported so the test cannot quietly
+  become a test of nothing — the vacuous-gate failure mode hit earlier in #920.
+- **Implementation:** `crates/openpulse-modem/tests/ota_production_capture_path.rs` (new; test-only,
+  no production change).
+- **Tests:** `a_burst_gathered_by_accumulate_capture_decodes` — a clean burst gathered by the daemon's
+  own entry decodes, and the flushed burst still carries the whole frame (guards a DCD that trims
+  signal away). `harq_combining_survives_the_production_capture_entry` — the diversity gain must reach
+  the real receive path.
+- **Test results:** through the production entry on `moderate_f1` @10 dB, SL12 `OFDM52-16QAM`, 30
+  realisations/arm: standalone **0.633** → combining **0.967** (delta **+0.333**), `no_flush=0/0` — the
+  HARQ gain does reach the daemon path, and every burst flushed, so neither arm is measuring skipped
+  attempts. Gate has teeth: with HARQ retention disabled at the admission gate, combining collapses to
+  standalone (0.633, delta **+0.000**) and the test **fails**. Full workspace **2015 passed, 0 failed**;
+  clippy on the new target and `cargo fmt --all --check` clean.
+
 ## 2026-07-16 — feat(modem): admit plain-RS rungs to HARQ combining (puts HARQ on the MFSK16 sub-floor)
 
 - **Requirement/change:** follow-up unblocked by #920 and filed on issue #917 — MFSK16 (SL1, the
