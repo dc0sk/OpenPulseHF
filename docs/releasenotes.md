@@ -7,6 +7,83 @@ last_updated: 2026-07-17
 
 # Release Notes
 
+## v0.13.0 — 2026-07-17
+
+A minor release about one rung of the HF rate ladder that didn't work on a fading channel, and now
+does. It is a **minor** rather than a patch release for one reason: the waveform SL6 transmits has
+changed, so this rung is not backward-compatible on air. See *Interop* below.
+
+**Background.** The `hpx_hf` rate ladder walks a link from the most robust weak-signal mode up to the
+densest high-throughput one, stepping up and down as conditions change. SL6 — `QPSK250 + RS` — sits just
+above the BPSK rungs and is meant to be the first step into QPSK's doubled bit rate.
+
+**What was wrong.** SL6 decoded **0% of frames on Watterson `moderate_f1`** — a standard ITU-R moderate
+HF channel (1 Hz Doppler, 1.0 ms delay spread) — **at every SNR up to 40 dB**. Not "poorly at low SNR":
+zero, at any signal strength. A flat failure across all SNR is the signature of a bug rather than a
+physical limit, because noise is the thing SNR buys off, and this didn't care about noise at all.
+
+**What was actually happening.** QPSK250 is *coherent* and *absolutely* phase-encoded: each symbol's
+meaning is its absolute phase, so the receiver must track the carrier's phase for the whole frame. A 1 Hz
+Doppler fade drives the signal through nulls, and at a null the decision-directed tracking loop loses its
+reference and can slip by 90°. After the slip every remaining symbol is rotated, so the entire tail of the
+frame decodes wrong. With RS padding, an SL6 frame is 4.08 s on air — far more than enough time to meet a
+null.
+
+Ablation pinned it down, and killed the obvious explanation first:
+
+| QPSK250 @ 40 dB | frames decoded |
+|---|---|
+| `moderate_f1` (1 Hz Doppler, 1.0 ms delay) | 0% |
+| **delay spread removed** (1 Hz, 0 ms) | **0%** ← so it is *not* multipath/ISI |
+| **Doppler removed** (0 Hz, 1.0 ms) | **82%** ← the fade is the whole problem |
+
+**Two plausible fixes were measured and rejected.** Both were the natural things to try, and both decode
+0% themselves on this channel:
+
+- Port the 2-pass acquire-then-track carrier loop already used by 8PSK — but **8PSK500 is itself at 0%** here.
+- Route the rung to the pilot-aided waveform, which exists precisely because it is cycle-slip-immune — but
+  **PILOT-QPSK500 is also at 0%**.
+
+The only two modes that survive this channel are **BPSK250 (95%)** and **MFSK16 (100%)** — which are
+exactly the differentially-decoded and the non-coherent modes. That was the tell.
+
+**The fix.** SL6 is now **`QPSK250-D`**, differential QPSK. Each dibit is encoded as a phase *increment*
+from the previous symbol rather than as an absolute phase, and the receiver recovers it from the phase
+*difference* between adjacent symbols. A slow fade rotation is common to both symbols and cancels; a
+carrier slip corrupts one dibit and then the stream re-references itself — it can no longer poison the
+tail. This is the same immunity BPSK has always had.
+
+| SL6 on `moderate_f1` @ 20 dB | frames decoded |
+|---|---|
+| v0.12.2 (`QPSK250`, coherent) | 0% |
+| **v0.13.0 (`QPSK250-D`, differential)** | **65%** |
+
+At 65% of 437 bps, SL6 now delivers ~284 effective bps against BPSK250's ~237 (95% of 250) — so the rung
+finally earns its place in the ladder instead of being a step the adapter always falls off.
+
+**What it costs.** Differential detection trades a little noise performance for fade immunity. On AWGN the
+penalty shows up only at the extreme floor — coherent QPSK250 manages 68% at 2 dB where differential
+manages 0% — but **both reach 100% by 4 dB**, comfortably below SL6's ~7 dB operating point. On the channel
+this rung actually runs on, the trade is lopsided in its favour.
+
+**Interop.** This changes the waveform SL6 transmits, so **both stations must run v0.13.0 to use SL6**;
+the ladder fingerprint changes accordingly. Every other rung is untouched, and there is no config-file or
+API change. New selectable modes `QPSK250-D` and `QPSK500-D` are available directly.
+
+### Known limitations
+
+- **`8PSK500 + RS` (SL9) has the same fade-fragility and is not fixed.** The obvious follow-on — give it
+  the same differential treatment — was prototyped and measured: `8PSK500-D` reaches only 12.5% on
+  `moderate_f1` even at 40 dB, and costs ~4–6 dB of AWGN floor (against QPSK's ~2 dB). Differential
+  detection roughly doubles the effective noise, and 8PSK's ±22.5° decision margin cannot absorb that —
+  it ends up worse on AWGN *and* still unusable on fading. Robustness tracks phase margin (non-coherent
+  MFSK16 > BPSK ±90° > QPSK ±45° > 8PSK ±22.5°), so SL9 needs a different mechanism, not `-D`. In
+  practice the rate adapter steps down to SL6, which now works.
+- The coherent **uncoded** rungs (SL7/SL8) remain high-SNR rungs by design: differential encoding needs
+  FEC to correct the dibit a slip costs, so it cannot rescue a rung that has no FEC.
+- The OTA ACK-wait opens a second capture stream on the cpal (real-audio) backend; loopback hides it.
+  Parked pending hardware. Tracked in [#917](https://github.com/dc0sk/OpenPulseHF/issues/917).
+
 ## v0.12.2 — 2026-07-17
 
 A patch release about one thing: getting more frames out of a fading channel. Everything here is

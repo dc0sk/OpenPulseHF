@@ -2,10 +2,10 @@
 project: openpulsehf
 doc: docs/cli-guide.md
 status: living
-last_updated: 2026-07-15
+last_updated: 2026-07-17
 ---
 
-# CLI Guide - openpulse (v0.12.2)
+# CLI Guide - openpulse (v0.13.0)
 
 ## Build prerequisites
 
