@@ -1539,7 +1539,11 @@ fn ota_send_with_ptt(
 
     let stop = run_ota_retry(|| {
         let mode = engine.ota_tx_mode().map(|m| m.to_owned())?; // no OTA session → stop
-        let fec = engine.ota_tx_fec();
+                                                                // Free Rs → RsStrong strengthening for small frames (see engine transmit path / #934).
+        let fec = openpulse_core::fec::free_rs_strengthening(
+            engine.ota_tx_fec(),
+            body.len() + openpulse_core::frame::Frame::WIRE_OVERHEAD,
+        );
 
         // Key PTT for the data frame via an RAII guard (REQ-PTT-01). On assert failure abort (treat as
         // delivered so the loop stops; the PTT failure is already surfaced as a warn + event).

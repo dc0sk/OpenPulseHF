@@ -127,6 +127,37 @@ const PREFIX_LEN: usize = 4;
 /// Used by unit tests that hard-code exact block boundaries.
 pub const BLOCK_DATA_STANDARD: usize = BLOCK_TOTAL - FEC_ECC_LEN;
 
+/// Number of 255-byte RS blocks [`FecCodec::encode`] produces for a `data`-byte input.
+///
+/// Mirrors `encode`'s blocking exactly: a 4-byte length prefix is prepended, then the result is
+/// split into `data_per_block`-byte chunks (≥ 1 block even for empty input).
+fn rs_block_count(data_len: usize, data_per_block: usize) -> usize {
+    (PREFIX_LEN + data_len).div_ceil(data_per_block).max(1)
+}
+
+/// Upgrade `Rs` (t=16) to `RsStrong` (t=32) **only when the stronger code is free on the wire** — it
+/// needs no more 255-byte blocks than `Rs` would for the same `data`-byte input to [`FecCodec::encode`].
+///
+/// `RsStrong` roughly doubles the weak rungs' fading decode (BPSK31 @3 dB 0.25 → 1.00) at zero airtime
+/// cost wherever both codes fill the same number of blocks — most real HF traffic is small frames. It
+/// is emphatically **not** free in the bands where t=32's larger parity spills into an extra block
+/// (e.g. a 200-byte payload frames to 210 B → RS input 214 B → 1 Rs block but 2 RsStrong blocks →
+/// double the airtime), which is exactly what regressed `hpx_hf`'s AWGN goodput when RsStrong was
+/// applied unconditionally. Anything but `Rs` is returned unchanged.
+///
+/// `encode_input_len` is the length handed to `FecCodec::encode` — i.e. the framed payload
+/// (`Frame::encode()` bytes), before the codec's own 4-byte prefix.
+pub fn free_rs_strengthening(fec: FecMode, encode_input_len: usize) -> FecMode {
+    if fec == FecMode::Rs
+        && rs_block_count(encode_input_len, BLOCK_TOTAL - FEC_ECC_LEN_STRONG)
+            == rs_block_count(encode_input_len, BLOCK_TOTAL - FEC_ECC_LEN)
+    {
+        FecMode::RsStrong
+    } else {
+        fec
+    }
+}
+
 /// Reed-Solomon codec.
 ///
 /// Construct with [`FecCodec::new`] (t=16, standard) or [`FecCodec::strong`]
@@ -872,6 +903,55 @@ pub fn combine_llrs_weighted_in_ranges(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `free_rs_strengthening` must upgrade Rs→RsStrong exactly when RsStrong costs no extra block,
+    /// and its notion of "block" must match `FecCodec::encode` byte-for-byte — a mismatch would
+    /// either miss free upgrades or (worse) upgrade into an airtime regression.
+    #[test]
+    fn free_rs_strengthening_matches_actual_block_counts() {
+        let rs = FecCodec::new();
+        let strong = FecCodec::strong();
+        // Sweep across the first two block boundaries (prefix pushes the transitions off the round
+        // numbers): the helper's verdict must equal "same encoded block count".
+        for len in [
+            0usize, 64, 177, 186, 187, 188, 200, 209, 210, 300, 378, 379, 500,
+        ] {
+            let data = vec![0u8; len];
+            let rs_blocks = rs.encode(&data).len() / BLOCK_TOTAL;
+            let strong_blocks = strong.encode(&data).len() / BLOCK_TOTAL;
+            let free = rs_blocks == strong_blocks;
+            let got = free_rs_strengthening(FecMode::Rs, len);
+            assert_eq!(
+                got == FecMode::RsStrong,
+                free,
+                "len {len}: helper says {got:?}, but Rs={rs_blocks} blocks vs RsStrong={strong_blocks}"
+            );
+        }
+    }
+
+    #[test]
+    fn free_rs_strengthening_only_touches_rs_and_protects_goodput() {
+        // A 200-byte payload frames to 210 B, which needs a 2nd RsStrong block — must stay Rs (this
+        // is the linksim goodput gate's frame size; upgrading it is the v0.14.0 regression).
+        let framed_200 = 200 + crate::frame::Frame::WIRE_OVERHEAD;
+        assert_eq!(free_rs_strengthening(FecMode::Rs, framed_200), FecMode::Rs);
+        // A small frame is free.
+        let framed_64 = 64 + crate::frame::Frame::WIRE_OVERHEAD;
+        assert_eq!(
+            free_rs_strengthening(FecMode::Rs, framed_64),
+            FecMode::RsStrong
+        );
+        // Never touches any other FEC.
+        for fec in [
+            FecMode::None,
+            FecMode::RsInterleaved,
+            FecMode::SoftConcatenated,
+            FecMode::LdpcHighRate,
+            FecMode::RsStrong,
+        ] {
+            assert_eq!(free_rs_strengthening(fec, framed_64), fec);
+        }
+    }
 
     /// Audit RX-1: `ShortFecCodec::decode` must reject an over-255-byte input rather than pass it to
     /// the underlying reed-solomon decoder, whose fixed 256-byte polynomial buffer panics. The input is

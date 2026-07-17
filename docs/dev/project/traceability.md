@@ -9,7 +9,38 @@ and the actually-observed results per change.
 
 ---
 
-## 2026-07-17 — fix(core): the rate ladder climbs on decode-evidence, not only on an SNR estimate (#934)
+## 2026-07-17 — feat(fec): opportunistic free RsStrong on the weak rungs (small frames), dual-decoded
+
+- **Requirement/change:** the deferred half of the RsStrong finding from v0.14.0. `RsStrong` (t=32)
+  roughly doubles the weak BPSK rungs' fading decode (BPSK31 @3 dB 0.25 → 1.00) and is **free on the
+  wire** for small frames — same 255-byte RS block as `Rs` — but a 2nd block at 192–223 B doubled
+  airtime and drove the goodput regression, so v0.14.0 shipped `Rs` ladder-wide. This captures the
+  small-frame win without the regression.
+- **Design decision — size-gated sender + dual-decode receiver, no wire change (user-selected).** The
+  `Frame` carries no FEC field; the receiver knows the FEC purely from the negotiated level
+  (`rx_candidates()` via `fec_for`). So: (1) the sender upgrades `Rs → RsStrong` per frame **only when
+  it costs no extra RS block** (`free_rs_strengthening`, block-count equality — general, not a
+  hardcoded ≤191, so it can never regress airtime; a 200 B frame stays `Rs` and the goodput gate is
+  untouched); (2) the receiver adds an `RsStrong` candidate for every `Rs` rung and tries both, CRC
+  disambiguating. No wire-format change, ladder fingerprint unchanged (still `Rs`-based per level),
+  desync-safe (same multi-candidate pattern the RX already uses).
+- **A measurement that reshaped the test.** A clean-channel round-trip *cannot* prove the dual-decode:
+  with the data intact, a mismatched-code decode recovers it by passthrough (the first RX test passed
+  even with the candidate expansion sabotaged). The dual-decode only bites under **burst errors**,
+  which is the whole point of RsStrong. Retargeted the gate to `moderate_f1` @6 dB, where an
+  RsStrong-sent frame decodes ~0.7 via RsStrong vs ~0.12 via Rs.
+- **Implementation:** `crates/openpulse-core/src/fec.rs` (`free_rs_strengthening` + `rs_block_count`);
+  `crates/openpulse-core/src/frame.rs` (`Frame::WIRE_OVERHEAD`, so the TX sites don't hardcode 10);
+  `crates/openpulse-modem/src/engine.rs` (TX apply at `transmit_arq_ota_within`; RX candidate
+  expansion at `ota_decode_and_ack_inner` — the shared seam both receive entries route through);
+  `crates/openpulse-daemon/src/server.rs` (the daemon's TX path).
+- **Tests:** `fec::free_rs_strengthening_matches_actual_block_counts` (helper verdict == real
+  `FecCodec::encode` block count across the boundaries — a mismatch would miss upgrades or regress
+  airtime) and `..._only_touches_rs_and_protects_goodput` (200 B stays Rs; other FECs untouched);
+  `crates/openpulse-modem/tests/free_rs_strengthening_ota.rs` — sender-strengthens-small-only, the
+  fade dual-decode gate, and Rs backward-compat.
+- **Test results (actually run):** the fade gate **verified to fail with the RX candidate expansion
+  removed** (5/16 vs the ≥8/16 bar; passes at ~11/16 with it). Full workspace + clippy + fmt below.
 
 - **Requirement/change:** the load-bearing half of #934, left open by the estimator fix. `hpx_hf` on a
   routine `moderate_f1` fade sat pinned on its entry rung at ~5 bps **while delivering 20/20 frames** —
