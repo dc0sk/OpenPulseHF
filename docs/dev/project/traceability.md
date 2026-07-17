@@ -9,6 +9,59 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-17 — fix(dsp): BPSK's SNR estimate carries information on a fade; linksim can transmit SL1 (#934)
+
+- **Requirement/change:** the SNR-scale mismatch left as a known limitation by v0.14.0. Investigating it
+  found something worse and filed #934.
+- **Diagnosis — and a correction to my own filing.** I first reported "`hpx_hf` delivers ZERO frames on
+  a routine fade" from a linksim trace. **That headline was a harness artifact**: `openpulse-linksim`
+  never registered `mfsk16-plugin`, so once the ladder demotes to SL1 (`hpx_hf`'s MFSK16 sub-floor
+  rung) the sim cannot transmit at all — `forward_air_s: 0.0`, every frame fails. That line was in the
+  trace I pasted into the issue and I read past it. Corrected numbers with MFSK16 registered:
+  **20/20 delivered, but ~5 bps, pinned at SL1/SL2** where the working rungs support ~300–1200. A
+  60–240× throughput loss, not a link failure. Issue retitled and the correction recorded on it.
+- **Root cause (real, and third occurrence).** `ModulationPlugin::estimate_snr_db` measures a symbol
+  residual; on a fade `z ≈ h·s + n`, so the *multiplicative* `h` is folded into "noise" and the
+  estimate stops tracking SNR. **BPSK has no estimator at all** and fell back to the waveform-blind
+  M2M4 moment estimator, which needs a constant-modulus envelope: on `moderate_f1` it read a **flat
+  ≈ −4 dB from 15 dB of true SNR to 35 dB**. `hpx_hf`'s SL2–SL5 are all BPSK. **PR #484 fixed exactly
+  this defect** in the linksim's tx-vs-rx estimator; the linksim was later migrated onto the plugin
+  estimators, which have it too.
+- **Design decision — remove the multiplicative gain first, in the symbol domain.**
+  `constellation::additive_snr_db_windowed` is the symbol-domain twin of
+  `openpulse_channel::estimate_additive_snr_db`: a per-window least-squares complex gain
+  `g = ⟨z, ŝ*⟩/⟨ŝ, ŝ*⟩` takes out the fade's amplitude *and* rotation before the residual is measured.
+  Unlike the raw-audio estimator it needs **no time alignment** — decisions are aligned with symbols by
+  construction — which is why it can live in a real receiver. Callers pass their own decisions, so it
+  serves constellations `map_symbol` does not model (BPSK) and differential streams (the gain absorbs
+  the arbitrary global sign).
+- **The fix's own scale error, caught by a gate.** The estimate is taken after the matched filter, so
+  it is **Es/N0, not channel SNR** — BPSK31 reads **+16.9 dB** high, BPSK250 **+8.2 dB**. Landed
+  unconverted it made the receiver read a 2 dB AWGN channel as SL5-worthy;
+  `awgn_low_snr_does_not_overclimb` failed with *"a poor channel must not be driven to the top of the
+  ladder"*. **Fixing one scale error by introducing another is not a fix.** The offset is systematic —
+  `10·log10(fs/baud) − 7.1`, holding to ~0.3 dB across BPSK31 and BPSK250, an order of magnitude apart
+  in baud — so it is the pulse's noise-bandwidth loss, not a per-mode fudge, and is applied as such.
+  The constant is fitted to this plugin's Hann/crossfade matched filter and is pinned by a gate.
+- **Scope — what this does NOT do.** It does not free the ladder. The controller's only upward path is
+  `snr_db >= ceiling`, with no success-based climb, and at 31 baud a 1 Hz fade decorrelates in ~6
+  symbols so **no window is both short enough to track `h` and long enough to average `n`** — BPSK31's
+  estimate stays flat *in principle*. Measured A/B on the fade: 8 bps (M2M4) vs 5 bps (fixed
+  estimator) — unchanged within noise, because the climb gate binds. #934 stays open for that.
+- **Implementation:** `crates/openpulse-dsp/src/constellation.rs` (`additive_snr_db_windowed`);
+  `plugins/bpsk/src/demodulate.rs` (`symbol_stream` extracted so the estimate is measured on exactly
+  the decoded symbols; `estimate_snr_db` + the Es/N0→channel-SNR conversion); `plugins/bpsk/src/lib.rs`
+  (trait impl); `apps/openpulse-linksim` (register `mfsk16-plugin`).
+- **Tests:** `constellation::additive_snr_ignores_a_rotating_fading_channel` (recovers true SNR through
+  a rotating deep fade) and `without_windowing_the_fade_is_counted_as_noise` (pins the *mechanism*: a
+  single global gain reads a noiseless rotating channel ≥15 dB worse);
+  `crates/openpulse-modem/tests/bpsk_snr_tracks_a_fade.rs` — `..._still_carries_information_on_a_fade`
+  and `bpsk_snr_awgn_scale_matches_channel_snr`.
+- **Test results (actually run):** both new gates **verified to fail against the code they replace** —
+  removing the estimator (M2M4 fallback) gives *"5 dB → −6.0, 25 dB → −4.2 (spread 1.7 dB)"*, and
+  removing the scale conversion gives *"true 5 dB → 13.3 dB"*. Full workspace 2101 passed / 0 failed;
+  `--all-targets` clippy + fmt clean.
+
 ## 2026-07-17 — feat(core): re-seat `hpx_hf` as a fade-aware ladder (every rung decodes on a fade)
 
 - **Requirement/change:** follow-on from #923. The question started as "can SL9 (`8PSK500+Rs`, dead on
