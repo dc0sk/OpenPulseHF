@@ -1779,59 +1779,67 @@ After the fix, BPSK250 + RS FEC + block interleaver correctly decodes through Go
 
 ## Profile scope decisions — active vs deferred modes (updated 2026-05-19)
 
-### Current SessionProfile table (snapshot; `profile.rs` is authoritative)
+### SessionProfile table
 
-Only `hpx_hf` is kept current here — it is what the RF-6 fade arc changed. The other rows are an
-older snapshot; `SessionProfile` in `profile.rs` is the source of truth, and the `hpx_hf` rung map is
-gated against `docs/mode-fec-ladder.md` by `tests/ladder_doc_matches_profile.rs`.
+Every profile in `SessionProfile::PROFILE_NAMES`, in registry order. `profile.rs` is the source of
+truth and this table is **gated against it** by `tests/roadmap_profile_table.rs` — it cannot drift.
+"Top mode" is the mode at the highest mapped level (its FEC and the full rung map live in
+`profile.rs`; the `hpx_hf` rung map is additionally gated against `docs/mode-fec-ladder.md`). To
+regenerate after a profile change, run the printer named in that test.
 
 | Profile | SL range | Initial | Top mode |
 |---|---|---|---|
 | `hpx500` | SL2–SL6 | SL2 | QPSK500 |
-| `hpx_hf` | SL1–SL14 | SL2 | OFDM52-64QAM + high-rate LDPC (RF-6) |
-| `hpx_ofdm_hf` | SL5–SL10 | SL5 | OFDM52-64QAM |
+| `hpx_modcod` | SL2–SL7 | SL2 | QPSK500 |
 | `hpx_pilot` | SL2–SL5 | SL2 | PILOT-32APSK500 |
 | `hpx_pilot_rrc` | SL2–SL5 | SL2 | PILOT-32APSK500-RRC |
 | `hpx_pilot_fast` | SL2–SL5 | SL2 | PILOT-32APSK1000 |
 | `hpx_pilot_fast_rrc` | SL2–SL5 | SL2 | PILOT-32APSK1000-RRC |
+| `hpx_hf` | SL1–SL14 | SL2 | OFDM52-64QAM |
+| `hpx_ofdm_hf` | SL5–SL10 | SL5 | OFDM52-64QAM |
 | `hpx_wideband` | SL8–SL11 | SL8 | 8PSK1000 |
+| `hpx_wideband_hd` | SL9–SL15 | SL12 | 64QAM2000-RRC |
 | `hpx_narrowband` | SL8–SL11 | SL8 | 8PSK2000-RRC |
 | `hpx_narrowband_hd` | SL8–SL9 | SL8 | 8PSK9600-RRC |
-| `hpx_wideband_hd` | SL9–SL15 | SL12 | 64QAM2000-RRC |
 
 ### Mode-to-plugin mapping
 
-| Mode | Plugin | Profile slot |
+Which plugin owns each profile-reachable mode. The "profile slot" column is an **informational
+snapshot, not gated** — the authoritative per-level mapping is the (gated) SessionProfile table above
+plus `profile.rs`; this column just says roughly where each mode is used. The mode → plugin half is
+stable (a mode's owning plugin does not change).
+
+| Mode | Plugin | Profile slot (informational) |
 |---|---|---|
 | MFSK16 | mfsk16-plugin | hpx_hf SL1 (non-coherent sub-floor) |
-| BPSK31/63/100/250 | bpsk-plugin | hpx_hf SL2–SL5 (all RS-coded — RF-6) |
+| BPSK31/63/100/250 | bpsk-plugin | hpx_hf SL2–SL5 (all RS-coded — RF-6); BPSK250/QPSK250 also `hpx_modcod` SL2–SL5 |
+| QPSK250 | qpsk-plugin | hpx500 SL5, hpx_modcod SL4–SL5 |
 | QPSK250-D | qpsk-plugin | hpx_hf SL6 (differential — RF-6) |
-| OFDM52/OFDM52-{8PSK,16QAM,32QAM,64QAM} | ofdm-plugin | hpx_hf SL7–SL14 (SC then high-rate LDPC — RF-6) |
-| QPSK500/1000 | qpsk-plugin | hpx_narrowband SL8–SL9, hpx_wideband SL8–SL9 |
+| QPSK500/1000 | qpsk-plugin | hpx500 SL6; hpx_modcod SL6–SL7; hpx_narrowband/hpx_wideband SL8–SL9 |
 | QPSK2000-RRC | qpsk-plugin | hpx_narrowband SL10 |
-| 8PSK2000-RRC | psk8-plugin | hpx_narrowband SL11 |
-| 8PSK1000 | psk8-plugin | hpx_wideband SL11 |
-| OFDM16/OFDM52/OFDM52-8PSK/16QAM/32QAM/64QAM | ofdm-plugin | hpx_ofdm_hf SL5–SL10 |
-| PILOT-QPSK/8PSK/16QAM/32APSK500(/1000)(-RRC) | pilot-plugin | hpx_pilot / _rrc / _fast / _fast_rrc SL2–SL5 |
 | QPSK9600-RRC | qpsk-plugin | hpx_narrowband_hd SL8 |
+| 8PSK1000 | psk8-plugin | hpx_wideband SL11 |
+| 8PSK2000-RRC | psk8-plugin | hpx_narrowband SL11 |
 | 8PSK9600-RRC | psk8-plugin | hpx_narrowband_hd SL9 |
-| SCFDMA52-16QAM | scfdma-plugin | hpx_wideband_hd SL12 |
-| SCFDMA52-32QAM | scfdma-plugin | hpx_wideband_hd SL13 |
-| SCFDMA52-64QAM | scfdma-plugin | hpx_wideband_hd SL14 |
+| OFDM52/OFDM52-{8PSK,16QAM,32QAM,64QAM} | ofdm-plugin | hpx_hf SL7–SL14 (SC then high-rate LDPC — RF-6) |
+| OFDM16/OFDM52/OFDM52-{8PSK,16QAM,32QAM,64QAM} | ofdm-plugin | hpx_ofdm_hf SL5–SL10 |
+| PILOT-QPSK/8PSK/16QAM/32APSK500(/1000)(-RRC) | pilot-plugin | hpx_pilot / _rrc / _fast / _fast_rrc SL2–SL5 |
+| SCFDMA26-{8PSK,16QAM,32QAM} | scfdma-plugin | hpx_wideband_hd SL9–SL11 (narrowband fallback) |
+| SCFDMA52-{16QAM,32QAM,64QAM} | scfdma-plugin | hpx_wideband_hd SL12–SL14 |
 | 64QAM2000-RRC | 64qam-plugin | hpx_wideband_hd SL15 |
 
 ### Modes in plugins but not in any profile (manual-select only — intentional)
 
 These modes are registered and usable via explicit mode selection (CLI `--mode`, daemon `SetMode`,
 linksim/testbench) but are **deliberately not** in any adaptive `SessionProfile` ladder — not an
-oversight. BPSK100 is dominated by QPSK at the same rate; the 64QAM/dense-pilot variants are aggressive
-VHF/UHF or research waveforms without a rung in the HF ladders. Adding any to a profile is a mode-scope
-decision (measure it against the neighbouring rung first — see the "code rate is the last lever" note),
-not a gap to close.
+oversight. The 64QAM/dense-pilot variants are aggressive VHF/UHF or research waveforms without a rung
+in the HF ladders. Adding any to a profile is a mode-scope decision (measure it against the
+neighbouring rung first — see the "code rate is the last lever" note), not a gap to close. The claim
+"in no profile" is **gated** by `tests/roadmap_profile_table.rs` — a mode listed here that later joins
+a ladder (as BPSK100 did in the RF-6 re-seat, moving it out of this list) fails the build.
 
 | Mode | Plugin | Note |
 |---|---|---|
-| BPSK100 | bpsk-plugin | Low throughput; not competitive vs QPSK |
 | SCFDMA52-64QAM-P4 | scfdma-plugin | Dense-pilot research variant; no profile slot |
 | 64QAM500 / 64QAM1000 | 64qam-plugin | Aggressive VHF/UHF; manual-select only |
 

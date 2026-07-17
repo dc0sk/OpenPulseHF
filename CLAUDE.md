@@ -497,6 +497,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | QPSK1000-HF-RRC forward-only LMS holds the good_f1 coded floor | `cargo test -p openpulse-modem --test qpsk_hf_rrc_forward_only` |
 | Differential QPSK (`-D`, hpx_hf SL6) survives moderate_f1 where coherent QPSK250 dies (#923) | `cargo test -p openpulse-modem --test qpsk_differential_fading` + `cargo test -p qpsk-plugin differential` |
 | The `hpx_hf` rung table in `docs/mode-fec-ladder.md` matches `SessionProfile::hpx_hf` (mode/FEC/floor/ceiling) | `cargo test -p openpulse-core --test ladder_doc_matches_profile` |
+| The roadmap SessionProfile table matches every profile, and its "manual-select only" modes are in no profile | `cargo test -p openpulse-core --test roadmap_profile_table` |
 | Every `hpx_hf` rung decodes on a Watterson `moderate_f1` fade; no rung is uncoded; the entry rung works AT its floor | `cargo test -p openpulse-modem --test hpx_hf_rungs_survive_fade` |
 | BPSK's SNR estimate still carries channel information on a fade (M2M4 read a flat constant) — #934 | `cargo test -p openpulse-modem --test bpsk_snr_tracks_a_fade` + `cargo test -p openpulse-dsp additive_snr` |
 | The rate ladder climbs on decode-evidence, not only on an SNR estimate, and never demotes below a level that just decoded — #934 | `cargo test -p openpulse-core --test success_based_climb` + `cargo test -p openpulse-linksim psk_ladder_climbs_off` |
