@@ -35,6 +35,12 @@ struct Proposal {
 /// Winlink batch is a handful; 32 is generous headroom.
 const MAX_PROPOSALS: usize = 32;
 
+/// Hard ceiling on inbound lines per session. A well-behaved B2F session is tens of frames; this only
+/// terminates an untrusted peer that streams valid-but-non-terminating frames (the FC-flood that
+/// never sends FF), which the per-frame receive loops in the driver/gateway would otherwise spin on
+/// forever. Generous so no legitimate mailbox trips it.
+const MAX_SESSION_FRAMES: usize = 8192;
+
 /// B2F session state machine.
 ///
 /// Feed inbound lines via `handle_line`; call `drain_pending_data` to get
@@ -42,6 +48,14 @@ const MAX_PROPOSALS: usize = 32;
 pub struct B2fSession {
     pub role: SessionRole,
     proposals: Vec<Proposal>,
+    /// IRS: count of FC proposals seen beyond `MAX_PROPOSALS`. Retained only as a count (not full
+    /// `Proposal`s) so a flood can't grow the heap, while `handle_proposal`'s Ff answer can still
+    /// reply Reject to each — preserving the one-answer-per-proposal correspondence a legit >32 batch
+    /// needs. See the audit follow-up on unbounded proposal accumulation.
+    overflow_rejected: usize,
+    /// Total inbound lines processed this session. Bounds an untrusted peer that streams valid but
+    /// non-terminating frames (e.g. FC forever, never FF): `handle_line` errors past `MAX_SESSION_FRAMES`.
+    frames_seen: usize,
     state: SessionState,
     pending_data: Vec<Vec<u8>>,
     /// IRS: index of the next proposal whose data arrives via `receive_data`.
@@ -53,6 +67,8 @@ impl B2fSession {
         Self {
             role,
             proposals: Vec::new(),
+            overflow_rejected: 0,
+            frames_seen: 0,
             state: SessionState::Handshake,
             pending_data: Vec::new(),
             receive_idx: 0,
@@ -114,6 +130,12 @@ impl B2fSession {
     ///
     /// Returns lines that should be written back to the data channel.
     pub fn handle_line(&mut self, line: &str) -> Result<Vec<String>, B2fError> {
+        self.frames_seen += 1;
+        if self.frames_seen > MAX_SESSION_FRAMES {
+            return Err(B2fError::TooManyFrames {
+                limit: MAX_SESSION_FRAMES,
+            });
+        }
         match self.state {
             SessionState::Handshake => self.handle_handshake(line),
             SessionState::ProposalExchange => self.handle_proposal(line),
@@ -136,6 +158,12 @@ impl B2fSession {
     /// Whether the session has finished.
     pub fn is_done(&self) -> bool {
         self.state == SessionState::Done
+    }
+
+    /// IRS: number of full proposals retained in memory (bounded by `MAX_PROPOSALS`). Distinct from
+    /// the number the peer *sent*, which may be larger — the overflow is answered Reject but not kept.
+    pub fn retained_proposals(&self) -> usize {
+        self.proposals.len()
     }
 
     /// IRS: total number of proposals that were accepted.
@@ -223,30 +251,37 @@ impl B2fSession {
             ) => {
                 // Accept up to MAX_PROPOSALS; reject the rest so a hostile peer can't make us receive
                 // and retain an unbounded number of (decompressed) messages in one session (audit B-2).
-                let answer = if self.proposals.len() < MAX_PROPOSALS {
-                    FsAnswer::Accept
+                // Retain at most MAX_PROPOSALS full proposals; beyond that only COUNT the overflow
+                // (Reject) so the heap is bounded no matter how many FCs a hostile peer streams. The
+                // Ff arm still replies one answer per proposal (recorded Accepts + overflow Rejects).
+                if self.proposals.len() < MAX_PROPOSALS {
+                    self.proposals.push(Proposal {
+                        fc: B2fFrame::Fc {
+                            proposal_type,
+                            mid,
+                            size,
+                            date,
+                        },
+                        compressed_data: Vec::new(),
+                        answer: Some(FsAnswer::Accept),
+                    });
                 } else {
-                    FsAnswer::Reject
-                };
-                self.proposals.push(Proposal {
-                    fc: B2fFrame::Fc {
-                        proposal_type,
-                        mid,
-                        size,
-                        date,
-                    },
-                    compressed_data: Vec::new(),
-                    answer: Some(answer),
-                });
+                    self.overflow_rejected += 1;
+                }
                 Ok(vec![])
             }
             (SessionRole::Irs, B2fFrame::Ff) => {
                 // Answer each proposal with its recorded decision (Accept within the cap, Reject beyond).
-                let answers: Vec<FsAnswer> = self
+                let mut answers: Vec<FsAnswer> = self
                     .proposals
                     .iter()
                     .map(|p| p.answer.clone().unwrap_or(FsAnswer::Reject))
                     .collect();
+                // One answer per proposal the peer sent, including the ones dropped past the cap.
+                answers.extend(std::iter::repeat_n(
+                    FsAnswer::Reject,
+                    self.overflow_rejected,
+                ));
                 self.state = SessionState::Transfer;
                 Ok(vec![frame::encode(&B2fFrame::Fs { answers })])
             }

@@ -356,6 +356,65 @@ fn gzip_decompression_bomb_over_the_cap_is_rejected() {
 }
 
 #[test]
+fn fc_flood_bounds_retained_proposals_and_still_answers_all() {
+    // Audit follow-up: the B-2 cap gated the Accept/Reject *answer* but pushed every proposal
+    // unconditionally, so the `proposals` Vec (holding attacker-sized mid/date strings) grew without
+    // bound. Retention must be bounded at MAX_PROPOSALS while the Ff answer still replies once per
+    // proposal the peer sent (so a legit >32 batch is not desynced).
+    let mut irs = B2fSession::new(SessionRole::Irs);
+    const SENT: usize = 100;
+    for i in 0..SENT as u32 {
+        let fc = frame::encode(&B2fFrame::Fc {
+            proposal_type: ProposalType::D,
+            mid: format!("MSG{i:05}"),
+            size: 64,
+            date: "20260504120000".into(),
+        });
+        irs.handle_line(&fc).unwrap();
+    }
+    assert!(
+        irs.retained_proposals() <= 32,
+        "retained proposals must stay bounded (got {}); an unbounded Vec is the OOM DoS",
+        irs.retained_proposals()
+    );
+    let fs = irs.handle_line(&frame::encode(&B2fFrame::Ff)).unwrap();
+    assert_eq!(fs.len(), 1);
+    // One answer per proposal the peer sent: 32 Accept + 68 Reject.
+    let answers = fs[0].trim_start_matches("FS ").trim();
+    assert_eq!(
+        answers.chars().count(),
+        SENT,
+        "the FS answer must have one char per proposal sent, not just the retained ones"
+    );
+    assert_eq!(irs.accepted_count(), 32);
+}
+
+#[test]
+fn an_unterminated_frame_stream_aborts_instead_of_hanging() {
+    // A hostile/buggy peer that streams valid FC frames and never sends FF keeps the driver/gateway
+    // receive loops (which break only on a non-empty response or is_done()) spinning forever. The
+    // session must abort past a generous frame ceiling so the loop's `?` terminates it.
+    let mut irs = B2fSession::new(SessionRole::Irs);
+    let fc = frame::encode(&B2fFrame::Fc {
+        proposal_type: ProposalType::D,
+        mid: "M".into(),
+        size: 1,
+        date: "20260504120000".into(),
+    });
+    let mut aborted = false;
+    for _ in 0..20_000 {
+        if irs.handle_line(&fc).is_err() {
+            aborted = true;
+            break;
+        }
+    }
+    assert!(
+        aborted,
+        "an endless FC stream must eventually abort the session, not loop forever"
+    );
+}
+
+#[test]
 fn irs_caps_the_number_of_accepted_proposals() {
     // Audit B-2: a hostile peer offering many proposals must not make us accept (and later receive,
     // decompress, and retain) an unbounded number in one session — accepts are capped at 32.
