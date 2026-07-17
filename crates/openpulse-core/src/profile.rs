@@ -369,10 +369,10 @@ impl SessionProfile {
         // |  3 | BPSK63            | —   |     62  |   4   |                                       |
         // |  4 | BPSK100           | —   |    100  |  4.5  | breaks the 62→250 bps cliff           |
         // |  5 | BPSK250           | —   |    250  |   5   |                                       |
-        // |  6 | QPSK250           | Rs  |    437  |   7   | MODCOD rung fills the 5→9 dB dead-zone|
-        // |  7 | QPSK250           | —   |    500  |   9   |                                       |
+        // |  6 | QPSK250-D         | Rs  |    437  |   7   | differential (HF-fade-robust); #923   |
+        // |  7 | QPSK250           | —   |    500  |   9   | coherent, high-SNR only               |
         // |  8 | QPSK500           | —   |   1000  |  11   |                                       |
-        // |  9 | 8PSK500           | Rs  |   1312  |  12   |                                       |
+        // |  9 | 8PSK500           | Rs  |   1312  |  12   | coherent; fade-fragile (see #923)     |
         // | 10 | SCFDMA26-32QAM    | SC  |   1579  |  13   | ~1 kHz narrowband fallback (kept SC)  |
         // | 11 | OFDM52-8PSK       | SC  |   1895  |  14   | wideband dense rungs re-seated to OFDM|
         // | 12 | OFDM52-16QAM      | SC  |   2527  |  16   | (CP rides selective HF fade)          |
@@ -410,7 +410,15 @@ impl SessionProfile {
         modes[SpeedLevel::Sl3 as usize] = Some("BPSK63");
         modes[SpeedLevel::Sl4 as usize] = Some("BPSK100");
         modes[SpeedLevel::Sl5 as usize] = Some("BPSK250");
-        modes[SpeedLevel::Sl6 as usize] = Some("QPSK250");
+        // SL6 is differential QPSK (`-D`), not coherent QPSK250. Coherent QPSK250+Rs decodes 0% on
+        // Watterson moderate_f1 at *every* SNR (issue #923): an absolutely-encoded waveform cannot hold
+        // a carrier-phase reference through a 1 Hz Doppler fade, so a cycle slip at a fade null ruins
+        // the frame tail. Differential encoding makes the fade rotation cancel symbol-to-symbol (the
+        // same immunity BPSK250/SL5 has), recovering the rung from 0.00 → ~0.65 at 20 dB for ~2 dB of
+        // AWGN floor (both decode 100% by 4 dB, well under SL6's operating SNR). Differential needs the
+        // Rs below to correct the one dibit a slip still costs. SL7 stays coherent uncoded QPSK250 — a
+        // high-SNR throughput rung the adapter only reaches on a non-fading channel.
+        modes[SpeedLevel::Sl6 as usize] = Some("QPSK250-D");
         modes[SpeedLevel::Sl7 as usize] = Some("QPSK250");
         modes[SpeedLevel::Sl8 as usize] = Some("QPSK500");
         modes[SpeedLevel::Sl9 as usize] = Some("8PSK500");
@@ -434,8 +442,9 @@ impl SessionProfile {
         modes[SpeedLevel::Sl15 as usize] = Some("OFDM52-16QAM");
         modes[SpeedLevel::Sl16 as usize] = Some("OFDM52-32QAM");
         modes[SpeedLevel::Sl17 as usize] = Some("OFDM52-64QAM");
-        // Per-level FEC (MODCOD). SL6 = coded QPSK250 (Rs) — a robustness rung that trades ~13%
-        // throughput for a ~2 dB lower floor than the uncoded SL7. SL9 8PSK500 keeps *light* RS (net
+        // Per-level FEC (MODCOD). SL6 = differential QPSK250-D + Rs — the HF-fade-robust robustness rung
+        // (issue #923); the Rs corrects the single dibit a carrier slip costs the differential decode.
+        // SL7 is the uncoded coherent QPSK250 above it. SL9 8PSK500 keeps *light* RS (net
         // ~1312 bps, above QPSK500's 1000, so it stays a faster rung). The dense SC-FDMA rungs get
         // soft-concatenated FEC (they only ever run FEC-protected). Assigned from the AWGN sweeps in
         // `tests/snr_floor_calibration.rs`.

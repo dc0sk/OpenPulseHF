@@ -108,7 +108,7 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 | Crate | Path | Role |
 |---|---|---|
 | `bpsk-plugin` | `plugins/bpsk` | BPSK31/63/100/250 modulation plugin; optional GPU path; LMS equalizer on RRC path |
-| `qpsk-plugin` | `plugins/qpsk` | QPSK125/250/500/1000 modulation plugin |
+| `qpsk-plugin` | `plugins/qpsk` | QPSK125/250/500/1000 modulation plugin; `-D` differential (DQPSK) modes for HF fading (hard-only, no soft path) |
 | `psk8-plugin` | `plugins/psk8` | 8PSK500/1000 modulation plugin |
 | `qam64-plugin` | `plugins/64qam` | 64QAM500/1000/2000-RRC modulation plugin; Gray-coded 8×8 PAM-8; soft demodulator |
 | `fsk4-plugin` | `plugins/fsk4` | FSK4-ACK modulation plugin (ACK channel) |
@@ -494,6 +494,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | OFDM soft LLRs are calibrated (worst-bin error ≤ 4× the promised rate) | `cargo test -p ofdm-plugin --test llr_reliability` |
 | Pilot-plugin soft LLRs are calibrated (worst-bin error ≤ 4× the promised rate) | `cargo test -p pilot-plugin --test llr_reliability` |
 | QPSK1000-HF-RRC forward-only LMS holds the good_f1 coded floor | `cargo test -p openpulse-modem --test qpsk_hf_rrc_forward_only` |
+| Differential QPSK (`-D`, hpx_hf SL6) survives moderate_f1 where coherent QPSK250 dies (#923) | `cargo test -p openpulse-modem --test qpsk_differential_fading` + `cargo test -p qpsk-plugin differential` |
 | CI goodput regression gate (linksim effective_bps ≥ 65 % of baseline) | `cargo test -p openpulse-linksim goodput_gate` |
 | JS8 NORMAL native decode reaches the −18 dB weak-signal gate (FF-15 Phase-B go/no-go) | `cargo test -p js8-plugin --test snr_sweep gate_at_minus_18_db` |
 | JS8 discovery MVP: the daemon rx-tick activates, dwells, decodes an injected heartbeat, caches the station + emits `StationHeard` | `cargo test -p openpulse-daemon --no-default-features discovery_tick` |
@@ -568,6 +569,8 @@ Carry the full chain in the commit message and PR body, and append an entry to
 ## Known sharp edges
 
 **QPSK dependency scope mismatch (resolved).** `qpsk-plugin` is now in `[dependencies]` for both `openpulse-modem` and `openpulse-cli`, so production wiring can use QPSK paths without dependency-scope surprises.
+
+**Coherent QPSK/8PSK is fade-fragile on HF; differential (`-D`) is the fix, not a better tracker (#923).** Coherent QPSK250+Rs decodes **0% on Watterson `moderate_f1` at every SNR up to 40 dB** — an absolutely phase-encoded waveform cannot hold a carrier reference through a 1 Hz Doppler fade, so a decision-directed cycle-slip at a fade null ruins the whole frame tail. The ablation is decisive: removing the Doppler rescues it (0.82), removing the delay spread does not (0.00) — it is carrier tracking, not ISI or noise. **Two plausible fixes are dead ends, both measured to 0.00:** porting 8PSK's 2-pass acquire-then-track (`dd_track_seeded`) to QPSK, and routing to the pilot waveform (PILOT-QPSK500). The only survivors on that channel are **BPSK250 (differentially decoded) and MFSK16 (non-coherent)** — which is the tell. `QPSK250-D` encodes each dibit as a phase *increment* so the fade rotation cancels symbol-to-symbol and a slip costs one dibit instead of the tail; it recovers the rung to ~0.65 at 20 dB (`hpx_hf` SL6). Constraints baked in: differential **requires FEC** (no-FEC differential is also 0.00 — the per-slip dibit error must be corrected), it has **no soft-LLR path** (`qpsk_demodulate_soft` errors on `-D` rather than emit miscalibrated coherent LLRs), and it costs ~2 dB of AWGN floor (both decode 100% by 4 dB, well under SL6's operating SNR). Before "improving QPSK carrier tracking for HF", note that the 45°-margin coherent modes are the wrong tool for a fading channel — the margin, not the tracker, is the limit (BPSK250's *longer* frame still beats QPSK250 3×).
 
 **Watterson Doppler envelope resolution (resolved).** `WattersonChannel::make_envelope` now auto-sizes the shaping FFT so `σ_bins ≥ 2.0` even for low-Doppler profiles (e.g. Good F1 at 0.1 Hz), capped at 2^18 samples. The envelope shows meaningful temporal variation across a full call instead of collapsing to the 0.5 floor. Regression test: `f1_envelope_has_non_trivial_variation` in `crates/openpulse-channel/src/watterson.rs`.
 

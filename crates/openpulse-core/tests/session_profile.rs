@@ -174,8 +174,8 @@ fn hpx_hf_mode_mapping() {
     assert_eq!(p.mode_for(SpeedLevel::Sl3), Some("BPSK63"));
     assert_eq!(p.mode_for(SpeedLevel::Sl4), Some("BPSK100"));
     assert_eq!(p.mode_for(SpeedLevel::Sl5), Some("BPSK250"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl6), Some("QPSK250")); // + Rs (MODCOD)
-    assert_eq!(p.mode_for(SpeedLevel::Sl7), Some("QPSK250")); // uncoded
+    assert_eq!(p.mode_for(SpeedLevel::Sl6), Some("QPSK250-D")); // differential + Rs; HF-fade-robust (#923)
+    assert_eq!(p.mode_for(SpeedLevel::Sl7), Some("QPSK250")); // coherent, uncoded
     assert_eq!(p.mode_for(SpeedLevel::Sl8), Some("QPSK500"));
     assert_eq!(p.mode_for(SpeedLevel::Sl9), Some("8PSK500"));
     // SL10 stays SC-FDMA (narrowband ~1 kHz fallback); SL11–SL17 re-seated to OFDM (CP rides selective

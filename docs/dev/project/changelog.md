@@ -10,6 +10,30 @@ last_updated: 2026-07-17
 > Phase/roadmap history lives in [roadmap.md](roadmap.md); this file tracks
 > user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
 
+## Unreleased
+
+### Fixes
+
+- **The `hpx_hf` SL6 rung now decodes on a fading HF channel.** It was `QPSK250 + RS`, which decoded
+  **0% on a Watterson `moderate_f1` fade at every SNR up to 40 dB** — a coherent, absolutely
+  phase-encoded waveform cannot hold a carrier reference through a 1 Hz Doppler fade, so a cycle slip at
+  a fade null ruins the rest of the frame. SL6 is now **`QPSK250-D`**, a differential (DQPSK) waveform
+  that encodes each dibit as a phase *increment*, so the fade rotation cancels between adjacent symbols
+  and a slip costs one dibit instead of the frame tail — the same immunity BPSK has always had. Measured
+  on `moderate_f1` at 20 dB: **0.00 → 0.65**, which makes the rung out-throughput the BPSK250 rung below
+  it (284 vs 237 effective bps) instead of being dead weight. The AWGN cost is ~2 dB at the extreme floor
+  only (both decode 100% by 4 dB, well under SL6's ~7 dB operating point). New selectable modes
+  `QPSK250-D` / `QPSK500-D`. ([#923](https://github.com/dc0sk/OpenPulseHF/issues/923))
+
+  > **On-air interop:** this changes the waveform SL6 transmits. Both ends must run this version to use
+  > SL6; the ladder fingerprint changes accordingly. No config or API change.
+
+### Known limitations
+
+- The sibling coherent rung `8PSK500 + RS` (`hpx_hf` SL9) has the same fade-fragility and is unchanged —
+  differential 8PSK is a follow-up. The coherent uncoded rungs (SL7/SL8) are high-SNR rungs by design:
+  differential encoding requires FEC to correct the dibit a slip costs, so it cannot rescue them.
+
 ## v0.12.2 — 2026-07-17
 
 Patch release: the weak-signal receive path. HARQ soft-combining across retransmissions was in place but

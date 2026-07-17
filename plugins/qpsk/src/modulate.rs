@@ -34,7 +34,11 @@ pub fn qpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
     };
 
     let mut symbols = preamble_symbols();
-    symbols.extend(bits_to_symbols(&bytes_to_bits(data)));
+    if crate::is_differential(&config.mode) {
+        symbols.extend(differential_encode(&bytes_to_bits(data)));
+    } else {
+        symbols.extend(bits_to_symbols(&bytes_to_bits(data)));
+    }
     symbols.extend(std::iter::repeat_n((INV_SQRT_2, INV_SQRT_2), TAIL_SYMS));
 
     let total = symbols.len() * n;
@@ -146,7 +150,11 @@ pub fn qpsk_modulate_rrc_gpu(
     };
 
     let mut symbols = preamble_symbols();
-    symbols.extend(bits_to_symbols(&bytes_to_bits(data)));
+    if crate::is_differential(&config.mode) {
+        symbols.extend(differential_encode(&bytes_to_bits(data)));
+    } else {
+        symbols.extend(bits_to_symbols(&bytes_to_bits(data)));
+    }
     symbols.extend(std::iter::repeat_n((INV_SQRT_2, INV_SQRT_2), TAIL_SYMS));
 
     let total = symbols.len() * n;
@@ -230,7 +238,11 @@ pub fn qpsk_modulate_iq(
     };
 
     let mut symbols = preamble_symbols();
-    symbols.extend(bits_to_symbols(&bytes_to_bits(data)));
+    if crate::is_differential(&config.mode) {
+        symbols.extend(differential_encode(&bytes_to_bits(data)));
+    } else {
+        symbols.extend(bits_to_symbols(&bytes_to_bits(data)));
+    }
     symbols.extend(std::iter::repeat_n((INV_SQRT_2, INV_SQRT_2), TAIL_SYMS));
 
     let total = symbols.len() * n;
@@ -301,6 +313,56 @@ pub(crate) fn bits_to_symbols(bits: &[bool]) -> Vec<(f32, f32)> {
         syms.push(gray_map(b0, b1));
     }
     syms
+}
+
+/// Gray-coded dibit → rotation index (units of 90°): 00→0, 01→1, 11→2, 10→3.
+/// Adjacent rotations differ by one bit, so a ±90° carrier slip corrupts one bit, not two.
+pub(crate) fn rotation_index(b0: bool, b1: bool) -> u8 {
+    match (b0, b1) {
+        (false, false) => 0,
+        (false, true) => 1,
+        (true, true) => 2,
+        (true, false) => 3,
+    }
+}
+
+/// Inverse of [`rotation_index`] — kept adjacent to it so the Gray table cannot drift out of sync
+/// between the encoder and the differential decoder.
+pub(crate) fn dibit_from_rotation_index(r: u8) -> (bool, bool) {
+    match r & 0b11 {
+        0 => (false, false),
+        1 => (false, true),
+        2 => (true, true),
+        _ => (true, false),
+    }
+}
+
+/// Gray-coded dibit → phase rotation (radians).
+pub(crate) fn rotation_rad(b0: bool, b1: bool) -> f32 {
+    rotation_index(b0, b1) as f32 * std::f32::consts::FRAC_PI_2
+}
+
+/// Differential QPSK encode: the dibit selects a phase *increment* from the previous
+/// symbol, so a slow fade-induced rotation cancels in the receiver's symbol-to-symbol
+/// difference (the same immunity BPSK's NRZI decode has). The reference is the last
+/// preamble symbol, so the first data symbol needs no extra pilot.
+pub(crate) fn differential_encode(bits: &[bool]) -> Vec<(f32, f32)> {
+    // Derive the reference from the preamble rather than hardcoding its angle: the decoder
+    // differences against the received preamble's last symbol, so a preamble change must move
+    // both ends together or every `-D` frame silently decodes to noise.
+    let (ref_i, ref_q) = preamble_symbols()
+        .last()
+        .copied()
+        .unwrap_or((INV_SQRT_2, INV_SQRT_2));
+    let mut phase = ref_q.atan2(ref_i);
+    let mut out = Vec::with_capacity(bits.len().div_ceil(2));
+    for pair in bits.chunks(2) {
+        let b0 = pair.first().copied().unwrap_or(false);
+        let b1 = pair.get(1).copied().unwrap_or(false);
+        phase += rotation_rad(b0, b1);
+        out.push((phase.cos(), phase.sin()));
+    }
+    out
 }
 
 pub(crate) fn gray_map(b0: bool, b1: bool) -> (f32, f32) {
