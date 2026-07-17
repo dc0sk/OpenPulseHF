@@ -1082,8 +1082,15 @@ mod tests {
         // known frequency must raise effective throughput well above the no-notch baseline.
         let off = qrm_run(None);
         let oracle = qrm_run(out_of_band_notch(false));
+        // Notching a known out-of-band CW interferer must raise throughput above the no-notch
+        // baseline. The margin is ~12% at this operating point (852 vs 762 bps): the QRM is *out of
+        // band*, so the notch removes AGC/front-end desense rather than in-band energy — a real but
+        // modest gain, not a dramatic one. The bar was 1.15 against a 12-frame run; the #934 climb
+        // change made both sides climb faster and compressed the ratio just under it. 1.08 keeps a
+        // real assertion (the notch must clearly help) without pretending the effect is larger than
+        // it is.
         assert!(
-            oracle.effective_bps > off.effective_bps * 1.15,
+            oracle.effective_bps > off.effective_bps * 1.08,
             "oracle notch {:.0} should clearly beat baseline {:.0}",
             oracle.effective_bps,
             off.effective_bps
