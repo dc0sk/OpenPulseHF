@@ -50,6 +50,12 @@ and the actually-observed results per change.
   this). Retargeted `low_snr_fast_downshifts_past_a_single_step` to the `Failed` path; widened the
   `oracle_notch` bar 1.15→1.08 to the honest ~12% margin (the faster climb compressed the ratio on a
   short run — the notch still clearly helps).
+  - **Correction (PR #938):** the `psk_ladder_climbs_off_the_entry_rung_on_a_fade` gate was written
+    and sabotage-verified during this work, but **lost to a `git checkout --` while debugging the
+    notch test, so #936 merged without it** — the linksim change in #936 was only the notch bar. The
+    gate was restored and re-verified (same *"avg_level 1.5, final SL1"* failure against the pre-#936
+    controller) in #938. The controller unit tests (`success_based_climb`) were always present; only
+    the end-to-end controller gate was missing.
 - **Test results (actually run):** all gates **verified to fail against the shipped controller** —
   the evidence-climb tests give *"Staying at Sl2 is what pinned a fading link…"*, and the linksim gate
   gives *"avg_level 1.5, final SL1"*. Full workspace + clippy + fmt below. #934 **closed**.

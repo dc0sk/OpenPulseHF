@@ -1416,6 +1416,40 @@ mod goodput_gate {
         .effective_bps
     }
 
+    /// The gate whose absence hid #934 for two releases: `hpx_hf` driven through the **real
+    /// receiver-led rate controller** on a fading channel. Every other fade gate calls the
+    /// demodulator directly and so proves only that the rungs *decode* — which they do, 20/20 — while
+    /// the controller kept the link pinned on its entry rung at ~5 bps because the SNR estimate never
+    /// cleared a ceiling. This asserts the ladder *moves*.
+    ///
+    /// A floor on the mean level, not a bps number: bps on a short run is dominated by the slow low
+    /// rungs during the climb, so it understates the steady state and would make a brittle gate.
+    #[test]
+    fn psk_ladder_climbs_off_the_entry_rung_on_a_fade() {
+        let r = run_link(&LinkParams {
+            profile_name: "hpx_hf".into(),
+            forward: ChannelSpec::WattersonModerateF1(20.0),
+            reverse: ChannelSpec::Clean,
+            payload_bytes_per_frame: 64,
+            total_frames: 60,
+            seed: 7,
+            ..LinkParams::default()
+        });
+        assert!(
+            r.delivery_ratio > 0.9,
+            "the fade rungs decode; delivery {:.2} suggests the harness, not the ladder",
+            r.delivery_ratio
+        );
+        assert!(
+            r.avg_level >= 3.0,
+            "hpx_hf must climb off its entry rung on moderate_f1: avg_level {:.1}, final SL{}. \
+             An SNR-only climb pinned it at ~1.5 while delivering every frame (#934) — the ladder \
+             has to advance on decode evidence when the estimate cannot measure the channel.",
+            r.avg_level,
+            r.final_level
+        );
+    }
+
     #[test]
     fn psk_ladder_goodput_floor_awgn() {
         let g = bps("hpx_hf", ChannelSpec::Awgn(20.0));
