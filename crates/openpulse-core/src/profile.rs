@@ -657,11 +657,16 @@ impl SessionProfile {
         modes[SpeedLevel::Sl9 as usize] = Some("OFDM52-32QAM");
         modes[SpeedLevel::Sl10 as usize] = Some("OFDM52-64QAM");
         // Floors/ceilings are in the units the receiver-led ladder actually reads: the plugin
-        // symbol-domain SNR (`ModemEngine::rx_snr_db`), which on a moderate_f1 fade is *conservative*
-        // (ZF noise-enhancement on faded subcarriers) and saturates near ~17 dB. Calibrated from the
-        // measured (plugin-SNR, decode) pairs on moderate_f1 (`ldpc_ladder_rungs`-style sweep): each rung
-        // decodes ≥ 0.8 once the plugin reads its floor. The AWGN-scale numbers this profile used before
-        // never cleared on fading, so the ladder stalled at SL6.
+        // symbol-domain SNR (`ModemEngine::rx_snr_db`), which for OFDM is *conservative* (ZF
+        // noise-enhancement on faded subcarriers) and saturates near ~16 dB — it physically cannot
+        // report the 20–30 dB the dense rungs run at. This is why the OFDM floors are on a DIFFERENT
+        // scale from the single-carrier rungs (which read ~true channel SNR): the two are per-family
+        // by physical necessity, not a wart, and cannot be unified — forcing OFDM onto a true-SNR
+        // scale would put these floors above anything the estimate can read and stall the SNR climb
+        // (the pre-2026-07 bug). The evidence-based climb bridges it; the boundary is pinned by
+        // `openpulse-modem/tests/snr_scale_boundary.rs`. Calibrated from measured (plugin-SNR, decode)
+        // pairs on moderate_f1 (`ldpc_ladder_rungs`-style sweep): each rung decodes ≥ 0.8 once the
+        // plugin reads its floor.
         let mut snr_floors = [None; 21];
         snr_floors[SpeedLevel::Sl5 as usize] = Some(8.0_f32); // OFDM16
         snr_floors[SpeedLevel::Sl6 as usize] = Some(9.0_f32); // OFDM52
