@@ -9,6 +9,38 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-17 — docs+test: pin the rate ladder's per-family SNR-scale boundary (resolve the "wart")
+
+- **Requirement/change:** the SNR-scale mismatch left as a known limitation by v0.14.0 ("SC and OFDM
+  rungs' floors are on different scales"). Investigated whether to unify it.
+- **Finding — measured, and it reframed the task.** `rx_snr_db` dispatches to each plugin's
+  `estimate_snr_db`. Measured reported-vs-true on AWGN: BPSK250 tracks true within ~1–4 dB (the #934
+  additive+conversion fix); OFDM52 **saturates near ~16 dB** (14.5 @ true 20, 15.8 @ true 30) — its
+  ZF equaliser enhances noise on faded subcarriers, so it *physically cannot* report the 20–30 dB the
+  dense rungs run at. QPSK still uses the fade-blind Es/N0 EVM estimator (reads ~+9 high, wrong path
+  for `-D`). So **full unification is impossible**: OFDM can't be put on a true-SNR scale without its
+  top-rung floors becoming unreachable — the exact v0.14.0 stall.
+- **Design decision — document the boundary as principled + gate it; decline the risky re-plumb
+  (user-selected).** Bringing QPSK/8PSK onto BPSK's true-SNR scale is *achievable* but high-risk: it
+  shifts the scale for five profiles (hpx_hf, hpx500, hpx_modcod, hpx_wideband, hpx_narrowband) whose
+  floors may be calibrated to the current estimate, cascading into floor recalibration — for
+  churn-reduction only, since the **evidence-based climb (#934) already self-corrects** the mismatch
+  (it advances on decode success where SNR saturates). So the two scales are per-waveform-family by
+  physical necessity, not a wart. Resolved by making that explicit and drift-proof rather than
+  re-plumbing.
+- **Implementation:** `crates/openpulse-modem/tests/snr_scale_boundary.rs` (new gate);
+  `docs/mode-fec-ladder.md` and `crates/openpulse-core/src/profile.rs` (the principled statement);
+  `CLAUDE.md` (sharp-edge note + acceptance row).
+- **Tests:** `snr_scale_boundary` — `single_carrier_reports_true_channel_snr` (BPSK ~true),
+  `multicarrier_snr_estimate_saturates_and_cannot_report_true` (OFDM ≤ 22 dB at true 30 — **the
+  load-bearing guard: if OFDM starts tracking true SNR the OFDM floors must be re-derived in the same
+  change or this fails**), and `the_two_families_are_on_different_scales_by_necessity` (≥ 6 dB
+  divergence at true 30). Documents the invariant as executable fact so a well-meaning "unify the
+  estimators" change can't silently reintroduce the stall.
+- **Test results (actually run):** `snr_scale_boundary` 3/3; full workspace suite `cargo test
+  --workspace --no-default-features` **2120 passed, 0 failed**; `cargo clippy --workspace
+  --no-default-features --all-targets -- -D warnings` clean; `cargo fmt --all -- --check` clean.
+
 ## 2026-07-17 — fix(b2f): bound IRS proposal retention and abort an FC-flood (Winlink audit top finding)
 
 - **Requirement/change:** the one confirmed live DoS from the Winlink-stack loose-ends audit

@@ -205,12 +205,25 @@ The authoritative rung map is `SessionProfile::hpx_hf` in
 RS(255,223), `SC` = `SoftConcatenated`, `LHR` = `LdpcHighRate`
 (r≈8/9). "Net bps" is the asymptotic gross × code-rate, before retransmit cost.
 
-> **The OFDM rungs' floors are in plugin symbol-domain SNR** (`ModemEngine::rx_snr_db`) — the units the
-> receiver-led ladder actually compares against — not AWGN channel SNR. OFDM's estimate is conservative
-> and saturates near ~17 dB, so an AWGN-scale floor there is simply unreachable and the ladder stalls
-> below it: on a true 20 dB AWGN link the OFDM rungs read ~14.4 dB. These match `hpx_ofdm_hf`'s
-> fade-calibrated numbers. The single-carrier rungs (SL2–SL6) read close to true SNR, so the two
-> families' floors are **not** on the same scale — a wart, but a documented one.
+> **SNR floors are per-waveform-family by physical necessity — the two scales cannot be unified.**
+> The receiver-led ladder compares a single measured SNR (`ModemEngine::rx_snr_db`, which dispatches to
+> each plugin's `estimate_snr_db`) against each rung's floor, but the plugins do not — *cannot* — report
+> the same quantity:
+> - **Single-carrier PSK** (SL2–SL6: BPSK, QPSK250-D) reports ~**true additive channel SNR**. BPSK
+>   removes the multiplicative channel with a per-window gain and converts symbol-domain Es/N0 to the
+>   channel scale (#934), so a true 20 dB link reads ~20 dB and the floors here are true channel SNR.
+> - **Multicarrier** (SL7–SL14: OFDM) reports a **saturation-bounded plugin-domain SNR**. Its
+>   zero-forcing equaliser enhances noise on faded subcarriers, so the estimate flattens near ~16 dB and
+>   *physically cannot* report the 20–30 dB its top rungs operate at (a true 20 dB link reads ~14.4). The
+>   OFDM floors are therefore calibrated in that plugin-domain scale, matching `hpx_ofdm_hf`.
+>
+> This is **not a bug to unify away**. Forcing OFDM onto a true-SNR scale would put the top rungs' floors
+> above anything the estimate can ever read → the SNR path could never climb to them → the exact v0.14.0
+> "AWGN-scale floors never clear" stall. What makes two scales safe is the **evidence-based climb**: the
+> ladder advances on consecutive clean decodes where the SNR estimate saturates, so it reaches the OFDM
+> rungs regardless (see the rate-control notes / #934). The boundary is pinned by
+> `tests/snr_scale_boundary.rs` — **if a change makes OFDM's estimate track true SNR, the OFDM floors
+> must be re-derived in the same change or that gate fails; the two are one decision.**
 
 | SL | Mode | FEC | ~Net bps | SNR floor | SNR ceiling | Notes |
 |---|---|---|---|---|---|---|
