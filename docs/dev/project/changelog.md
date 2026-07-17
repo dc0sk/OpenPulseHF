@@ -10,7 +10,17 @@ last_updated: 2026-07-17
 > Phase/roadmap history lives in [roadmap.md](roadmap.md); this file tracks
 > user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
 
-## Unreleased
+## v0.13.0 — 2026-07-17
+
+Minor release: the HF rate ladder's mid rung now works on a fading channel. Minor rather than patch
+because **SL6's on-air waveform changes** — see the interop note below.
+
+Measured on Watterson `moderate_f1` (1 Hz Doppler, 1.0 ms delay), `hpx_hf` SL6, Rs FEC:
+
+| SL6 @ 20 dB | decode rate |
+|---|---|
+| before (`QPSK250`, coherent) | 0.000 |
+| after (`QPSK250-D`, differential) | **0.650** |
 
 ### Fixes
 
@@ -30,9 +40,14 @@ last_updated: 2026-07-17
 
 ### Known limitations
 
-- The sibling coherent rung `8PSK500 + RS` (`hpx_hf` SL9) has the same fade-fragility and is unchanged —
-  differential 8PSK is a follow-up. The coherent uncoded rungs (SL7/SL8) are high-SNR rungs by design:
-  differential encoding requires FEC to correct the dibit a slip costs, so it cannot rescue them.
+- The sibling coherent rung `8PSK500 + RS` (`hpx_hf` SL9) has the same fade-fragility and is unchanged.
+  Differential 8PSK was prototyped and **measured — it does not rescue it**: `8PSK500-D` reaches only
+  0.125 on `moderate_f1` even at 40 dB, and costs ~4–6 dB of AWGN floor (vs QPSK's ~2 dB), because
+  differential detection roughly doubles the effective noise and 8PSK's ±22.5° margin cannot absorb it.
+  Robustness tracks phase margin; SL9 needs a different mechanism, not `-D`. The rate adapter steps down
+  to SL6, which now works.
+- The coherent uncoded rungs (SL7/SL8) are high-SNR rungs by design: differential encoding requires FEC
+  to correct the dibit a slip costs, so it cannot rescue them.
 
 ## v0.12.2 — 2026-07-17
 
