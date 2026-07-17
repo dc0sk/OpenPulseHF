@@ -82,9 +82,9 @@ fn airtime(mode: &str, fec: FecMode) -> usize {
 /// follow-up calibration. (OFDM52-16QAM+LHR is slightly easier than SC-FDMA's was, 32QAM+LHR slightly
 /// harder — Fable's PAPR-clipping point on dense constellations over a clean channel.)
 const MEASURED_AWGN_FLOOR_DB: [(SpeedLevel, f32); 3] = [
-    (SpeedLevel::Sl15, 12.0), // OFDM52-16QAM + LHR
-    (SpeedLevel::Sl16, 16.0), // OFDM52-32QAM + LHR
-    (SpeedLevel::Sl17, 20.0), // OFDM52-64QAM + LHR
+    (SpeedLevel::Sl12, 12.0), // OFDM52-16QAM + LHR
+    (SpeedLevel::Sl13, 16.0), // OFDM52-32QAM + LHR
+    (SpeedLevel::Sl14, 20.0), // OFDM52-64QAM + LHR
 ];
 
 /// Probe: find the AWGN SNR at which each re-seated OFDM rung first clears 0.90 decode (32 frames),
@@ -137,9 +137,9 @@ fn ldpc_top_rungs_decode_at_their_calibrated_awgn_floor() {
 }
 
 /// Airtime must never *grow* as the ladder climbs, and the LDPC rungs must be decisively faster than
-/// the soft-concatenated rung they sit above. That second clause is the entire claim of SL15–SL17.
+/// the soft-concatenated rung they sit above. That second clause is the entire claim of SL12–SL14.
 ///
-/// Scoped to the dense segment (SL10 upward). Below it the ladder's rate column is *gross* modem rate
+/// Scoped to the OFDM segment (SL7 upward). Below it the ladder's rate column is *gross* modem rate
 /// × code rate, which airtime for a short payload does not reproduce: `Rs` and `SoftConcatenated` pad
 /// every frame to a 255-byte Reed–Solomon block, so a small payload pays for redundancy it never uses.
 /// (That padding is also why `LdpcHighRate` more than doubles throughput here while its code rate is
@@ -154,10 +154,14 @@ fn ofdm_rungs_never_lengthen_the_air_time_and_ldpc_shortens_it_sharply() {
     let rungs: Vec<SpeedLevel> = p
         .defined_levels()
         .into_iter()
-        .filter(|l| *l as usize >= SpeedLevel::Sl10 as usize)
+        .filter(|l| *l as usize >= SpeedLevel::Sl7 as usize)
         .filter(|l| p.mode_for(*l).is_some())
         .collect();
-    assert_eq!(rungs.len(), 8, "SL10–SL17");
+    assert_eq!(
+        rungs.len(),
+        8,
+        "SL7–SL14: the OFDM segment of the fade-aware ladder"
+    );
 
     let air = |level: SpeedLevel| -> usize {
         airtime(p.mode_for(level).expect("mode"), p.fec_for(level))
@@ -176,15 +180,15 @@ fn ofdm_rungs_never_lengthen_the_air_time_and_ldpc_shortens_it_sharply() {
         prev = Some((level, samples));
     }
 
-    // The LDPC rungs' reason to exist: SL14 is the densest soft-concatenated rung (OFDM52-64QAM+SC).
-    let sl14 = air(SpeedLevel::Sl14);
-    for level in [SpeedLevel::Sl15, SpeedLevel::Sl16, SpeedLevel::Sl17] {
+    // The LDPC rungs' reason to exist: SL11 is the densest soft-concatenated rung (OFDM52-64QAM+SC).
+    let densest_sc = air(SpeedLevel::Sl11);
+    for level in [SpeedLevel::Sl12, SpeedLevel::Sl13, SpeedLevel::Sl14] {
         let samples = air(level);
         assert!(
-            samples * 4 < sl14 * 3,
-            "{level:?} takes {samples} samples against SL14's {sl14} — a high-rate-LDPC rung must be \
-             at least 25 % shorter than the densest soft-concatenated rung, or it is not worth the \
-             +4…+8 dB of floor it costs"
+            samples * 4 < densest_sc * 3,
+            "{level:?} takes {samples} samples against SL11's {densest_sc} — a high-rate-LDPC rung \
+             must be at least 25 % shorter than the densest soft-concatenated rung, or it is not \
+             worth the +4…+8 dB of floor it costs"
         );
     }
 }

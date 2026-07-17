@@ -84,9 +84,10 @@ impl OtaLink {
 
 /// On a strong (35 dB) AWGN channel the ladder must climb deep into the dense multicarrier rungs.
 /// This exercises the whole symbol-domain-SNR chain: PSK estimates (PR-A) escape the M2M4 SL8 cap;
-/// SC-FDMA's estimate lets the receiver read through the narrowband SL10 rung (M2M4 reads garbage on
-/// a multicarrier envelope); OFDM's estimate carries it up SL11–SL19. Before the multicarrier
-/// estimates existed the climb stalled at SL10 because SL10 could not self-measure SNR.
+/// and OFDM's estimate carries it up the SL7–SL14 multicarrier segment (M2M4 reads garbage on a
+/// multicarrier envelope). Before the multicarrier estimates existed the climb stalled because those
+/// rungs could not self-measure SNR. SL12 is the first high-rate-LDPC rung — reaching it proves the
+/// OFDM symbol-domain estimate reads high enough to clear a floor above its ~17 dB fade saturation.
 #[test]
 fn strong_channel_climbs_into_the_ofdm_rungs() {
     let mut link = OtaLink::new();
@@ -101,7 +102,8 @@ fn strong_channel_climbs_into_the_ofdm_rungs() {
     }
     eprintln!("strong-channel climb reached {max_level:?}");
     assert!(
-        max_level >= SpeedLevel::Sl15,
-        "a 35 dB channel must climb through SL10 into the dense OFDM rungs; reached only {max_level:?}"
+        max_level >= SpeedLevel::Sl12,
+        "a 35 dB channel must climb the OFDM segment into the high-rate-LDPC rungs (SL12+); \
+         reached only {max_level:?}"
     );
 }

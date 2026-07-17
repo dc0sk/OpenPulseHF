@@ -7,7 +7,7 @@
 //! keyed by `(session, mode)`, and MAP-combines them with the next burst of the same mode before
 //! giving up. On `moderate_f1` near a rung's threshold each burst is a partially-ruined observation of
 //! the same bits; summing their calibrated LLRs across independent fade realisations decodes frames no
-//! single burst can. Exercised here on SL12 (`OFDM52-16QAM` after the SC-FDMA→OFDM re-seat).
+//! single burst can. Exercised here on SL9 (`OFDM52-16QAM` + SoftConcatenated on the fade-aware ladder).
 //!
 //! The gate: over many fade realisations, a single engine that retains and combines across three
 //! sequential bursts must decode more frames than three *independent* engines each decoding one burst
@@ -27,7 +27,7 @@ const PAYLOAD: &[u8] = b"OTA HARQ combining gate payload, sixty-four bytes AAAAA
 /// A *different* message of the same length as `PAYLOAD` — so its LLR vector is the same length
 /// and the length filter alone cannot tell the two frames apart.
 const STALE_PAYLOAD: &[u8] = b"Abandoned message, same length, different bits BBBBBBBBBBBBBB";
-const MODE: &str = "OFDM52-16QAM"; // hpx_hf SL12 = OFDM52-16QAM + SoftConcatenated (post SC-FDMA→OFDM re-seat)
+const MODE: &str = "OFDM52-16QAM"; // hpx_hf SL9 = OFDM52-16QAM + SoftConcatenated (fade-aware re-seat)
 const FEC: FecMode = FecMode::SoftConcatenated;
 const SESSION: &str = "harq-sess";
 /// Fade realisations per arm. 50 keeps CI cheap but leaves ±0.06 of binomial noise — enough to hide
@@ -54,10 +54,10 @@ fn make() -> (ModemEngine, LoopbackBackend) {
     engine
         .register_plugin(Box::new(OfdmPlugin::new()))
         .expect("register");
-    // Lock the receiver-led OTA controller to SL12 so `rx_candidates()` is exactly
+    // Lock the receiver-led OTA controller to SL9 so `rx_candidates()` is exactly
     // (OFDM52-16QAM, SoftConcatenated) — the soft rung HARQ combining acts on.
     engine.start_ota_session(SessionProfile::hpx_hf());
-    engine.ota_lock_level(SpeedLevel::Sl12);
+    engine.ota_lock_level(SpeedLevel::Sl9);
     (engine, backend)
 }
 

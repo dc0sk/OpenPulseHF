@@ -9,6 +9,82 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-17 — feat(core): re-seat `hpx_hf` as a fade-aware ladder (every rung decodes on a fade)
+
+- **Requirement/change:** follow-on from #923. The question started as "can SL9 (`8PSK500+Rs`, dead on
+  `moderate_f1`) be rescued by a mechanism other than differential?" Measuring the ladder instead of
+  the rung showed the problem was not SL9.
+- **Diagnosis — measured, and it killed my own hypothesis first.** `should_equalize()` is
+  `mode.contains("-HF")`, so plain `8PSK500` runs with **no equalizer** while `moderate_f1`'s 1.0 ms
+  delay spread is 50 % of its 2 ms symbol. Tidy story, and false: the ablation leaves it at **0.000
+  with the delay spread entirely removed**, and the *equalized* sibling `8PSK1000-HF` is **also
+  0.000**. SL9 dies of carrier tracking, like QPSK250 — and differential does not scale to ±22.5°
+  (8PSK500-D: 0.125 @40 dB, ~4–6 dB AWGN cost). Unrescuable.
+  Then the ladder-wide survey (`moderate_f1`, effective bps = decode × net bps @20 dB):
+  SL5 **42** → SL6 346 → SL7 **0** → SL8 125 → SL9 **0** → SL10 395 → SL11 **1816**. Two defects:
+  a four-rung dead zone the rung-by-rung adapter must cross to reach the rungs that work, and — the
+  bigger one — **the uncoded rungs decode ~0 % at their own floors**, including **SL2 = BPSK31, the
+  `initial_level` every session starts on: 0.00 at 3, 6 AND 9 dB**. The floors were AWGN-derived; the
+  ladder was calibrated for a channel it does not run on. `fec_for` is live (via `OtaRateController`),
+  so those rungs genuinely transmit uncoded — checked, because it was the one thing that would have
+  invalidated the finding.
+- **Design decision — A: code every rung. B: OFDM above SL6.**
+  - **A.** #923's law ("differential needs FEC") is not a QPSK quirk — BPSK is differential too, so it
+    rides the fade but still needs a code for the symbols a slip costs. FEC chosen **on measurement,
+    against the docs**: §2 of `mode-fec-ladder.md` bills `RsInterleaved` as "best for HF burst/fading",
+    but it is **inert** here (BPSK250 @5/8 dB: 0.17/0.58, identical to `Rs`) — a ≤223-byte payload is
+    ONE RS block and a single block is position-agnostic, so there is nothing to interleave; code
+    **strength** is the lever (as `robust_ack.rs` already recorded).
+    **I then got the code choice wrong and a gate caught it.** I measured `RsStrong` (t=32) as "free"
+    — RS(255,223) and RS(255,191) both emit one 255-byte block, so at 64 B it has identical airtime to
+    `Rs` (8.32 s measured) while nearly doubling the fading decode — and generalised that straight past
+    the boundary that made it true. At **192–223 B `RsStrong` needs a second block and doubles the
+    airtime**; the linksim's 200-byte frames sit exactly in that window, and `hpx_hf`'s AWGN goodput
+    fell **310 → 199 bps**, through the CI goodput floor. The trace was unambiguous — identical climb,
+    identical top rung, 40/40 delivered, +115 s of airtime — so it was overhead, not a decode problem.
+    Shipped `Rs`: goodput gate green, and the fade property that matters still holds (entry rung 0.00 →
+    0.25 at its floor, 0.50 at 6 dB — *usable under ARQ* vs *never*). `RsStrong` stays the right code
+    for a rung whose frames are known to stay ≤191 B; it is not a safe ladder-wide default. Floors
+    deliberately **not** moved: they were always fading-appropriate; the rungs lacked a code.
+  - **B.** The coherent single-carrier mid rungs are not rescuable (FEC does not help — QPSK250+Rs is
+    also 0.00, because the defect is carrier tracking, not errors; differential does not scale to
+    8PSK). OFDM sidesteps it: CP rides the delay, per-SC pilots track the fade — OFDM52 decodes
+    0.58/0.75/0.83 at 8/12/16 dB where 8PSK500 decodes 0.00 at all three. `SCFDMA26-32QAM` dropped
+    (0.00/0.17/0.17); it still lives in `hpx_wideband_hd`. `OFDM16` rejected as a rung despite being
+    the most fade-robust (0.92 @16 dB) and narrowest (625 Hz): its ~401 net bps sits *below* SL6, so
+    it has no monotonic slot. Ladder shrinks 17 → 14 rungs.
+- **Behaviour change (on-air):** SL2–SL5 gain FEC, SL7–SL11 change waveform, SL12–SL14 re-index, the
+  ack-up gate moves SL17 → SL14, and the ladder fingerprint changes. Both ends need the new version.
+- **Implementation:** `crates/openpulse-core/src/profile.rs` — `hpx_hf` modes/fec_modes/snr_floors/
+  snr_ceilings/`ack_up_requires_snr_candidate_at`, and the rung table + rationale comments.
+- **Tests:**
+  - `crates/openpulse-modem/tests/hpx_hf_rungs_survive_fade.rs` (new) — the property the ladder
+    exists for: `entry_rung_decodes_on_a_fade` (SL2 at *its own floor*), `no_hpx_hf_rung_is_uncoded`,
+    `every_rung_decodes_on_moderate_f1` (≥0.25 at floor+4, a deliberately weak dead-rung tripwire —
+    `snr_floor_calibration.rs` is where numbers get tuned).
+  - `snr_floor_calibration.rs` — extended with `calibrate_fade_aware_ladder` (the FEC/rung choice),
+    `measure_net_bps`, `entry_rung_bpsk31_on_fade`, and the OFDM plugin. `measure_net_bps` exists
+    because `estimate_air_secs` modulates the payload with **no FEC** — it reports *gross* bps, so
+    using it for a "net bps" column overstates every coded rung.
+  - Updated `session_profile.rs` (rungs, per-rung FEC, top = SL14), `cli_mode_advisor.rs`,
+    `ladder_doc_matches_profile.rs` (new `RsS` abbreviation), `docs/mode-fec-ladder.md`.
+- **A latent defect surfaced on the way:** the ladder compares floors against `ModemEngine::rx_snr_db`
+  (plugin symbol-domain SNR), which for OFDM is conservative and **saturates ~17 dB** — a true 20 dB
+  AWGN link reads ~14.4. `hpx_hf`'s OFDM floors were inherited AWGN-scale numbers (14/16/17/22/30), so
+  **those rungs were never reachable**; making OFDM the only path up turned that into a hard stall at
+  SL7 (`final=SL7`, ladder never climbed). Re-based on `hpx_ofdm_hf`'s plugin-scale calibration
+  (9/10/12/14/16 + 18/19/20 for the LHR rungs), which restored the climb to SL13. The single-carrier
+  rungs read close to true SNR, so the two families' floors are **still on different scales** — a wart,
+  now documented in `mode-fec-ladder.md` rather than silently load-bearing.
+- **Test results (actually run):** the three fade gates **verified to fail against the shipped
+  ladder** — reverting SL2 to uncoded yields *"the entry rung (BPSK31 + None, SL floor 3 dB) must
+  decode on a moderate_f1 fade AT its floor (got 0.00)"*, so the 0.2 bar still separates
+  usable-from-dead. The doc gate added earlier the same day caught the profile change unprompted and
+  forced the doc into line; the `--all-targets` clippy gate added the same day caught an unused import
+  in the new test; and the **linksim goodput gate caught the RsStrong airtime regression** — three
+  gates from this same session each earning their keep. Full workspace 2101 passed / 0 failed;
+  `--all-targets` clippy + fmt clean; goodput gates 3/3.
+
 ## 2026-07-17 — ci: lint test code too (`--all-targets`), and fix what it had been hiding
 
 - **Requirement/change:** every clippy gate ran without `--all-targets`, so **test, bench and example

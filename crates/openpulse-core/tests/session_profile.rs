@@ -169,49 +169,55 @@ fn hpx_hf_mode_mapping() {
     // SL1 = the MFSK16 non-coherent sub-floor rung (the ChirpFallback deep-fade waveform), one RS block.
     assert_eq!(p.mode_for(SpeedLevel::Sl1), Some("MFSK16"));
     assert_eq!(p.fec_for(SpeedLevel::Sl1), openpulse_core::fec::FecMode::Rs);
-    // Finer ladder (research #2): BPSK100 + QPSK250+Rs + SCFDMA26-32QAM + SCFDMA52-64QAM-P4 inserts.
+    // Fade-aware ladder: every rung decodes on Watterson moderate_f1. The uncoded rungs are gone —
+    // uncoded BPSK decodes ~0 % of fading frames at its own floor (BPSK31 @3 dB: 0.00 uncoded vs 0.25 with Rs), and the coherent single-carrier mid rungs (QPSK250/QPSK500/8PSK500) decode ~0 %
+    // at ANY SNR and are not rescuable, so SL7+ is OFDM.
     assert_eq!(p.mode_for(SpeedLevel::Sl2), Some("BPSK31"));
     assert_eq!(p.mode_for(SpeedLevel::Sl3), Some("BPSK63"));
     assert_eq!(p.mode_for(SpeedLevel::Sl4), Some("BPSK100"));
     assert_eq!(p.mode_for(SpeedLevel::Sl5), Some("BPSK250"));
     assert_eq!(p.mode_for(SpeedLevel::Sl6), Some("QPSK250-D")); // differential + Rs; HF-fade-robust (#923)
-    assert_eq!(p.mode_for(SpeedLevel::Sl7), Some("QPSK250")); // coherent, uncoded
-    assert_eq!(p.mode_for(SpeedLevel::Sl8), Some("QPSK500"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl9), Some("8PSK500"));
-    // SL10 stays SC-FDMA (narrowband ~1 kHz fallback); SL11–SL17 re-seated to OFDM (CP rides selective
-    // HF fade), all ≤2 kHz (HF-legal). The former P4 dense-pilot rungs were re-indexed out, so the dense
-    // ladder is 8 rungs: OFDM52-{8PSK,16QAM,32QAM,64QAM}+SC then 16/32/64QAM at r≈8/9 LDPC.
-    assert_eq!(p.mode_for(SpeedLevel::Sl10), Some("SCFDMA26-32QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl11), Some("OFDM52-8PSK"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl7), Some("OFDM52"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl8), Some("OFDM52-8PSK"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl9), Some("OFDM52-16QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl10), Some("OFDM52-32QAM"));
+    assert_eq!(p.mode_for(SpeedLevel::Sl11), Some("OFDM52-64QAM"));
+    // SL12–SL14: the dense OFDM modes at high-rate LDPC (r≈8/9) — MODCOD pairs of SL9–SL11. 64QAM is
+    // the densest constellation the plugin has, so above SL11 the only lever left is code rate.
     assert_eq!(p.mode_for(SpeedLevel::Sl12), Some("OFDM52-16QAM"));
     assert_eq!(p.mode_for(SpeedLevel::Sl13), Some("OFDM52-32QAM"));
     assert_eq!(p.mode_for(SpeedLevel::Sl14), Some("OFDM52-64QAM"));
-    // SL15–SL17: the dense OFDM modes at high-rate LDPC (r≈8/9) — MODCOD pairs of SL12–SL14.
-    // 64QAM is the densest constellation the plugin has, so above SL14 the only remaining lever on
-    // throughput is code rate.
-    assert_eq!(p.mode_for(SpeedLevel::Sl15), Some("OFDM52-16QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl16), Some("OFDM52-32QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl17), Some("OFDM52-64QAM"));
+    // The ladder ends at SL14 — three rungs shorter than the pre-fade-aware version, which carried
+    // four rungs that could not decode on a fade.
+    assert_eq!(p.mode_for(SpeedLevel::Sl15), None);
+    assert_eq!(p.mode_for(SpeedLevel::Sl17), None);
     assert_eq!(p.mode_for(SpeedLevel::Sl18), None);
     assert_eq!(p.mode_for(SpeedLevel::Sl19), None);
     assert_eq!(p.mode_for(SpeedLevel::Sl20), None);
-    assert_eq!(
-        p.fec_for(SpeedLevel::Sl14),
-        openpulse_core::fec::FecMode::SoftConcatenated
-    );
-    assert_eq!(
-        p.fec_for(SpeedLevel::Sl15),
-        openpulse_core::fec::FecMode::LdpcHighRate
-    );
-    assert_eq!(
-        p.fec_for(SpeedLevel::Sl17),
-        openpulse_core::fec::FecMode::LdpcHighRate
-    );
-    // SL6/SL7 are the same mode at different FEC — a proper MODCOD rung, not a duplicate.
-    assert_eq!(p.fec_for(SpeedLevel::Sl6), openpulse_core::fec::FecMode::Rs);
-    assert_eq!(
-        p.fec_for(SpeedLevel::Sl7),
-        openpulse_core::fec::FecMode::None
+    // Every rung is coded: on a fade there is no useful uncoded rung.
+    for (lvl, fec) in [
+        (SpeedLevel::Sl2, openpulse_core::fec::FecMode::Rs),
+        (SpeedLevel::Sl3, openpulse_core::fec::FecMode::Rs),
+        (SpeedLevel::Sl4, openpulse_core::fec::FecMode::Rs),
+        (SpeedLevel::Sl5, openpulse_core::fec::FecMode::Rs),
+        (SpeedLevel::Sl6, openpulse_core::fec::FecMode::Rs),
+        (
+            SpeedLevel::Sl7,
+            openpulse_core::fec::FecMode::SoftConcatenated,
+        ),
+        (
+            SpeedLevel::Sl11,
+            openpulse_core::fec::FecMode::SoftConcatenated,
+        ),
+        (SpeedLevel::Sl12, openpulse_core::fec::FecMode::LdpcHighRate),
+        (SpeedLevel::Sl14, openpulse_core::fec::FecMode::LdpcHighRate),
+    ] {
+        assert_eq!(p.fec_for(lvl), fec, "FEC for {lvl:?}");
+    }
+    assert_ne!(
+        p.fec_for(SpeedLevel::Sl2),
+        openpulse_core::fec::FecMode::None,
+        "the entry rung must be coded — uncoded BPSK31 decodes 0% of moderate_f1 frames at every SNR"
     );
 }
 
@@ -470,7 +476,7 @@ fn hpx_hf_floors_are_monotonic_and_ceilings_follow_the_hysteresis_rule() {
     }
 
     let top = *rungs.last().expect("rungs");
-    assert_eq!(top, SpeedLevel::Sl17);
+    assert_eq!(top, SpeedLevel::Sl14);
     assert!(
         p.snr_ceiling_for_level(top).is_none(),
         "the top rung has no ceiling to climb past"
