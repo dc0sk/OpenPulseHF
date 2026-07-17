@@ -495,6 +495,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | Pilot-plugin soft LLRs are calibrated (worst-bin error ≤ 4× the promised rate) | `cargo test -p pilot-plugin --test llr_reliability` |
 | QPSK1000-HF-RRC forward-only LMS holds the good_f1 coded floor | `cargo test -p openpulse-modem --test qpsk_hf_rrc_forward_only` |
 | Differential QPSK (`-D`, hpx_hf SL6) survives moderate_f1 where coherent QPSK250 dies (#923) | `cargo test -p openpulse-modem --test qpsk_differential_fading` + `cargo test -p qpsk-plugin differential` |
+| The `hpx_hf` rung table in `docs/mode-fec-ladder.md` matches `SessionProfile::hpx_hf` (mode/FEC/floor/ceiling) | `cargo test -p openpulse-core --test ladder_doc_matches_profile` |
 | CI goodput regression gate (linksim effective_bps ≥ 65 % of baseline) | `cargo test -p openpulse-linksim goodput_gate` |
 | JS8 NORMAL native decode reaches the −18 dB weak-signal gate (FF-15 Phase-B go/no-go) | `cargo test -p js8-plugin --test snr_sweep gate_at_minus_18_db` |
 | JS8 discovery MVP: the daemon rx-tick activates, dwells, decodes an injected heartbeat, caches the station + emits `StationHeard` | `cargo test -p openpulse-daemon --no-default-features discovery_tick` |
