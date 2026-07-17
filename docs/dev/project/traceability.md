@@ -9,6 +9,43 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-17 — fix(b2f): bound IRS proposal retention and abort an FC-flood (Winlink audit top finding)
+
+- **Requirement/change:** the one confirmed live DoS from the Winlink-stack loose-ends audit
+  (`docs/dev/reviews/winlink-stack-audit-2026-07-17.md` — 7 finders → adversarial verify → synth, 33
+  agents, 23 confirmed survivors). Four independent finders converged on it.
+- **Root cause (re-derived from source, per the audit discipline):** in `session.rs` the `(Irs, Fc)`
+  arm computed `answer = if proposals.len() < MAX_PROPOSALS { Accept } else { Reject }` but then
+  `proposals.push(...)` **unconditionally** — `MAX_PROPOSALS` (32) gated only the answer, never the
+  Vec. Each retained `Proposal` holds the FC frame's `mid`/`date`, attacker-controlled strings up to
+  the DataPort u16 frame size. And an `Fc` returns `Ok(vec![])` with no state change, so the driver
+  (`run_irs`) and gateway (`irs_receive`) receive loops — which break only on a non-empty response or
+  `is_done()` — **never terminate on an FC-only stream**. So an untrusted CMS/peer that streams
+  `FC …\r` forever (never an `FF`) both grows the heap without bound (OOM) and hangs the session.
+  Reachable from the internet-facing gateway (`cms.winlink.org:8772`), not just RF-rate. The prior B-2
+  fix capped acceptance but not accumulation — this was the sibling it missed.
+- **Design decision — bound retention *and* the loop, without desyncing legit large batches.** The
+  audit's one-line sketch (gate the push) fixes the OOM but not the hang, and drops the answer for a
+  legit >32 batch. Instead: (1) retain at most `MAX_PROPOSALS` full proposals; count the overflow in a
+  `usize` (`overflow_rejected`) and, on `Ff`, append that many `Reject`s so the FS still answers **one
+  char per proposal the peer sent** — no interop regression for a legitimate large mailbox; (2) a
+  `MAX_SESSION_FRAMES` (8192, generous) ceiling in `handle_line` — the single seam both receive loops
+  call — returns `B2fError::TooManyFrames`, which their `?` propagates to terminate the loop. Memory
+  is bounded by (1) regardless of frame count; (2) kills the CPU-spin hang.
+- **Implementation:** `crates/openpulse-b2f/src/session.rs` (fields `overflow_rejected` /
+  `frames_seen`, the `MAX_SESSION_FRAMES` guard, the gated push, the `Ff` Reject-padding, a
+  `retained_proposals()` accessor); `crates/openpulse-b2f/src/lib.rs` (`B2fError::TooManyFrames`).
+- **Tests:** `crates/openpulse-b2f/tests/b2f_integration.rs` —
+  `fc_flood_bounds_retained_proposals_and_still_answers_all` (100 FCs → `retained_proposals() ≤ 32`
+  AND the FS answer has 100 chars) and `an_unterminated_frame_stream_aborts_instead_of_hanging` (an
+  endless FC stream must error, not loop). **Both sabotage-verified against the pre-fix code**:
+  removing the frame cap fails the second with *"must eventually abort"*; the unconditional push fails
+  the first with *"retained proposals must stay bounded (got 100)"*.
+- **Test results (actually run):** `openpulse-b2f` 19/19; driver+gateway 7/7; full workspace + clippy
+  + fmt below. Remaining audit findings (all confirmed but medium/low: per-syscall vs per-operation
+  timeouts, the `run_irs` timeout-restore, the client `read_line` line cap, the session-aggregate
+  decompress cap, and a test-hardening tail) filed as a tracking issue, not fixed here.
+
 ## 2026-07-17 — feat(fec): opportunistic free RsStrong on the weak rungs (small frames), dual-decoded
 
 - **Requirement/change:** the deferred half of the RsStrong finding from v0.14.0. `RsStrong` (t=32)

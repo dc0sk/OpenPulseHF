@@ -31,4 +31,6 @@ pub enum B2fError {
     InvalidState,
     #[error("proposal/answer count mismatch: expected {expected}, got {got}")]
     ProposalCountMismatch { expected: usize, got: usize },
+    #[error("session exceeded {limit} inbound frames — aborting (possible flood)")]
+    TooManyFrames { limit: usize },
 }
