@@ -348,6 +348,60 @@ pub fn differential_llr_scale(dots: &[f32], crosses: &[f32]) -> f32 {
     2.0 * mu / var_cross.max(1e-12)
 }
 
+/// Additive SNR (dB) of a symbol block, with the *multiplicative* channel removed first.
+///
+/// This is the symbol-domain twin of `openpulse_channel::estimate_additive_snr_db`, and it exists for
+/// the same reason: on a fading channel `z[k] ≈ h[k]·s[k] + n[k]`, and any estimator that measures the
+/// raw residual `z − s` (or its orthogonal component) folds the *multiplicative* `h` into the
+/// "noise". The result stops tracking SNR entirely — measured on Watterson `moderate_f1`, the
+/// M2M4 fallback reads a **flat ≈ −6.6 dB from 15 dB of true SNR upward**, which then drives the rate
+/// controller to the bottom rung on frames that decoded perfectly well (issue #934).
+///
+/// Removing a per-window least-squares complex gain `g_w = ⟨z, ŝ*⟩ / ⟨ŝ, ŝ*⟩` takes out both the fade
+/// amplitude and its phase rotation, leaving the additive residual. Unlike the raw-audio estimator,
+/// no time alignment is needed: `decisions[k]` corresponds to `rx[k]` by construction.
+///
+/// `window` symbols per gain estimate — small enough that `h` is ~constant across it (a 1 Hz Doppler
+/// fade has a coherence time of hundreds of symbols at 250 baud), large enough that the LS gain does
+/// not absorb the noise it is meant to measure (the gain soaks up ≈ 1/window of it, so ≥ 8).
+///
+/// Decision-directed, so it saturates once symbol errors are common — the safe direction for a rate
+/// decision. Callers supply their own decisions, so this works for any constellation, including ones
+/// [`map_symbol`] does not model (BPSK) and differentially-encoded streams (the per-window gain
+/// absorbs the arbitrary global phase/sign).
+pub fn additive_snr_db_windowed(rx: &[Complex32], decisions: &[Complex32], window: usize) -> f32 {
+    let n = rx.len().min(decisions.len());
+    let w = window.max(8);
+    if n == 0 {
+        return 0.0;
+    }
+    let (mut sig, mut noise) = (0.0f64, 0.0f64);
+    let mut start = 0usize;
+    while start < n {
+        let end = (start + w).min(n);
+        let mut num = Complex32::new(0.0, 0.0);
+        let mut den = 0.0f32;
+        for i in start..end {
+            num += rx[i] * decisions[i].conj();
+            den += decisions[i].norm_sqr();
+        }
+        // A window with no signal contributes nothing rather than a spurious gain.
+        if den > 1e-9 {
+            let g = num / den;
+            for i in start..end {
+                let s = g * decisions[i];
+                sig += s.norm_sqr() as f64;
+                noise += (rx[i] - s).norm_sqr() as f64;
+            }
+        }
+        start = end;
+    }
+    if sig <= 0.0 {
+        return 0.0;
+    }
+    10.0 * (sig / noise.max(1e-12)).max(1e-12).log10() as f32
+}
+
 /// Estimate decision-directed noise variance from a block of equalised symbols
 /// (mean squared distance to the nearest constellation point).
 ///
@@ -681,6 +735,90 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The property `additive_snr_db_windowed` exists for: it must read the *additive* SNR even when
+    /// a multiplicative channel is rotating and fading the symbols. Fed a synthetic `h[k]·s[k] + n[k]`
+    /// with a known noise power, it must recover the true SNR — and it must NOT be fooled by `h`.
+    #[test]
+    fn additive_snr_ignores_a_rotating_fading_channel() {
+        let mut seed = 12345u64;
+        let mut rng = move || {
+            // xorshift → uniform in [-1, 1); good enough for a noise power test.
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed as i32 as f32) / (i32::MAX as f32)
+        };
+        for true_snr_db in [5.0f32, 10.0, 20.0] {
+            // Noise std per dimension for a unit-power symbol: SNR = 1 / (2σ²).
+            let sigma = (1.0 / (2.0 * 10f32.powf(true_snr_db / 10.0))).sqrt();
+            let (mut rx, mut dec) = (Vec::new(), Vec::new());
+            for k in 0..2048usize {
+                let s = if rng() > 0.0 {
+                    Complex32::new(1.0, 0.0)
+                } else {
+                    Complex32::new(-1.0, 0.0)
+                };
+                // A slow, deep, rotating fade — exactly what defeats an EVM/M2M4 estimator.
+                let t = k as f32 / 2048.0;
+                let mag = 0.15 + 0.85 * (1.0 + (6.0 * t).sin()) / 2.0;
+                let ph = 9.0 * t;
+                let h = Complex32::new(mag * ph.cos(), mag * ph.sin());
+                // Box-Muller-free: sum of uniforms is close enough to Gaussian for a power check.
+                let n = Complex32::new(
+                    sigma * (rng() + rng() + rng()) * 0.816,
+                    sigma * (rng() + rng() + rng()) * 0.816,
+                );
+                rx.push(h * s + n);
+                dec.push(s);
+            }
+            let est = additive_snr_db_windowed(&rx, &dec, 16);
+            assert!(
+                (est - true_snr_db).abs() < 3.0,
+                "true {true_snr_db} dB through a rotating fade → estimated {est:.1} dB; the windowed \
+                 gain must remove the multiplicative channel, not count it as noise"
+            );
+        }
+    }
+
+    /// The gain removal is the whole mechanism: without it (one global gain over the block, i.e. an
+    /// enormous window) the same fading input must read far too low — that is the bug this guards.
+    #[test]
+    fn without_windowing_the_fade_is_counted_as_noise() {
+        let mut seed = 999u64;
+        let mut rng = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed as i32 as f32) / (i32::MAX as f32)
+        };
+        let (mut rx, mut dec) = (Vec::new(), Vec::new());
+        for k in 0..2048usize {
+            let s = if rng() > 0.0 {
+                Complex32::new(1.0, 0.0)
+            } else {
+                Complex32::new(-1.0, 0.0)
+            };
+            let t = k as f32 / 2048.0;
+            let ph = 9.0 * t;
+            let h = Complex32::new(ph.cos(), ph.sin()); // pure rotation, NO noise at all
+            rx.push(h * s);
+            dec.push(s);
+        }
+        // Windowed: the rotation is tracked out → essentially noiseless → a large SNR.
+        let windowed = additive_snr_db_windowed(&rx, &dec, 16);
+        // One global window: the rotation cannot be tracked and is counted as "noise".
+        let global = additive_snr_db_windowed(&rx, &dec, rx.len());
+        assert!(
+            windowed > 20.0,
+            "a noiseless rotating channel must read as high SNR once the gain is removed, got {windowed:.1}"
+        );
+        assert!(
+            windowed > global + 15.0,
+            "windowing is the mechanism: windowed {windowed:.1} dB vs single-gain {global:.1} dB — \
+             a single gain counts the rotation as noise, which is the #934 defect"
+        );
     }
 
     #[test]

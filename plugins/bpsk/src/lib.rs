@@ -137,6 +137,15 @@ impl ModulationPlugin for BpskPlugin {
         })
     }
 
+    /// Absolute additive SNR (dB) for the rate decision — see `demodulate::estimate_snr_db`.
+    ///
+    /// Without this the engine fell back to the waveform-blind M2M4 moment estimator, which reads a
+    /// flat ≈ -6.6 dB on a fade regardless of the true SNR and drove the rate controller to the
+    /// bottom rung on frames that decoded (issue #934). `hpx_hf`'s SL2-SL5 are all BPSK.
+    fn estimate_snr_db(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+        demodulate::estimate_snr_db(samples, config)
+    }
+
     fn supports_soft_demod(&self) -> bool {
         true
     }

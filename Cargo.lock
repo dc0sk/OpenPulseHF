@@ -660,6 +660,7 @@ version = "0.14.0"
 dependencies = [
  "bytemuck",
  "criterion",
+ "num-complex",
  "openpulse-channel",
  "openpulse-core",
  "openpulse-dsp",
@@ -5135,6 +5136,7 @@ dependencies = [
  "egui",
  "egui_plot",
  "fsk4-plugin",
+ "mfsk16-plugin",
  "ofdm-plugin",
  "openpulse-audio",
  "openpulse-channel",

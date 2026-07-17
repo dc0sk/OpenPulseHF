@@ -371,6 +371,10 @@ fn register_all(engine: &mut ModemEngine) {
     // (dispatch/readback overhead dominates at HF frame sizes).
     let _ = engine.register_plugin(Box::new(ScFdmaPlugin::new()));
     let _ = engine.register_plugin(Box::new(PilotPlugin::new()));
+    // MFSK16 is hpx_hf's SL1 sub-floor rung. Without it the sim cannot transmit at all once the
+    // ladder demotes there, so a fading run reads as a total link failure that is pure harness
+    // artifact (issue #934) rather than modem behaviour.
+    let _ = engine.register_plugin(Box::new(mfsk16_plugin::Mfsk16Plugin::new()));
 }
 
 /// FSK4-ACK is the only profile-reachable mode that can't carry RS FEC; everything else

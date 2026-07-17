@@ -25,10 +25,11 @@
 
 use std::f32::consts::PI;
 
+use num_complex::Complex32;
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
 use openpulse_dsp::acquisition::goertzel_carrier_scan;
-use openpulse_dsp::constellation::differential_llr_scale;
+use openpulse_dsp::constellation::{additive_snr_db_windowed, differential_llr_scale};
 use openpulse_dsp::equalizer::LmsEqualizer;
 use openpulse_dsp::farrow::FarrowTimingLoop;
 use openpulse_dsp::filter::FirFilter;
@@ -43,12 +44,18 @@ use crate::parse_baud_rate;
 // ── Public entry point ────────────────────────────────────────────────────────
 
 /// Demodulate audio `samples` and return the recovered bytes.
-pub fn bpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec<u8>, ModemError> {
+/// The symbol stream the decoder sees: matched-filtered, timing-recovered baseband I/Q.
+///
+/// Shared by `bpsk_demodulate` and `estimate_snr_db` so the SNR is measured on exactly the symbols
+/// that were decoded, not on a separately-derived approximation.
+fn symbol_stream(
+    samples: &[f32],
+    config: &ModulationConfig,
+) -> Result<(Vec<f32>, Vec<f32>), ModemError> {
     let baud = parse_baud_rate(&config.mode)?;
     let fs = config.sample_rate as f32;
     let fc = config.center_frequency;
     let n = samples_per_symbol(fs, baud)?;
-
     let rrc_alpha = if let PulseShape::Rrc { alpha } = config.pulse_shape {
         Some(alpha)
     } else if config.mode.ends_with("-RRC") {
@@ -56,20 +63,24 @@ pub fn bpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
     } else {
         None
     };
-
+    if samples.len() < n * (PREAMBLE_SYMS + 1) {
+        return Err(ModemError::Demodulation("signal too short".into()));
+    }
     // Apply matched RRC RX filter for -RRC modes.
     // For RRC: downmix to baseband I/Q first, then apply the RRC as a low-pass
     // matched filter.  (Applying the baseband RRC to the passband signal would
     // place fc far outside the filter passband and attenuate the signal to ~0.)
-    let (i_syms, q_syms) = if let Some(alpha) = rrc_alpha {
-        if samples.len() < n * (PREAMBLE_SYMS + 1) {
-            return Err(ModemError::Demodulation("signal too short".into()));
-        }
-        bpsk_demodulate_rrc(samples, n, baud, fc, fs, alpha, &config.mode)
+    if let Some(alpha) = rrc_alpha {
+        Ok(bpsk_demodulate_rrc(
+            samples,
+            n,
+            baud,
+            fc,
+            fs,
+            alpha,
+            &config.mode,
+        ))
     } else {
-        if samples.len() < n * (PREAMBLE_SYMS + 1) {
-            return Err(ModemError::Demodulation("signal too short".into()));
-        }
         let offset = find_timing_offset(samples, n, fc, fs);
         let (mut iv, mut qv) = demodulate_iq(samples, n, fc, fs, offset);
         // The overlapping half-Hann modulator is a crossfade, so the one-slot matched filter recovers
@@ -77,8 +88,75 @@ pub fn bpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
         // differential dot product `r_k·r_{k-1}` (a_k²=1), eroding the flip-bit margin by several dB.
         // Cancel it here (crossfade path only; the -RRC path uses Gardner+LMS and does not crossfade).
         cancel_crossfade_isi(&mut iv, &mut qv);
-        (iv, qv)
-    };
+        Ok((iv, qv))
+    }
+}
+
+/// Absolute additive SNR (dB) of a received BPSK frame — the rate controller's input.
+///
+/// BPSK had **no** symbol-domain estimator, so the engine fell back to the waveform-blind M2M4
+/// moment estimator. M2M4 assumes a constant-modulus envelope, which a fade destroys: on Watterson
+/// `moderate_f1` it read a **flat ≈ −6.6 dB from 15 dB of true SNR upward** — no information at any
+/// SNR. `hpx_hf`'s SL2–SL5 are all BPSK (SL2 is the rung every session starts on), so the controller
+/// saw a sub-floor number on frames that decoded perfectly and fast-downshifted the link to the
+/// bottom rung, delivering nothing on a routine HF fade (issue #934).
+///
+/// The fix is the same one `openpulse_channel::estimate_additive_snr_db` applies to raw audio:
+/// remove the *multiplicative* channel with a per-window least-squares gain before measuring the
+/// residual. BPSK is differentially decoded, so the transmitted ±1 sequence is reconstructed from the
+/// decisions the decoder already made; its arbitrary global sign is absorbed by the per-window gain.
+pub fn estimate_snr_db(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+    let (i_syms, q_syms) = symbol_stream(samples, config).ok()?;
+    if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
+        return None;
+    }
+    let range_start = PREAMBLE_SYMS - 1;
+    let end = i_syms.len() - TAIL_SYMS;
+    if range_start >= end {
+        return None;
+    }
+    let rx: Vec<Complex32> = i_syms[range_start..end]
+        .iter()
+        .zip(q_syms[range_start..end].iter())
+        .map(|(&i, &q)| Complex32::new(i, q))
+        .collect();
+    let iq: Vec<(f32, f32)> = rx.iter().map(|z| (z.re, z.im)).collect();
+    let bits = differential_decode(&iq);
+    // Rebuild the transmitted symbols from the differential decisions: each "1" flips the phase.
+    // The starting sign is unknown and does not matter — the per-window LS gain absorbs it.
+    let mut decisions = Vec::with_capacity(rx.len());
+    let mut cur = Complex32::new(1.0, 0.0);
+    decisions.push(cur);
+    for &flip in &bits {
+        if flip {
+            cur = -cur;
+        }
+        decisions.push(cur);
+    }
+    const WINDOW_SYMS: usize = 16;
+    let es_n0 = additive_snr_db_windowed(&rx, &decisions, WINDOW_SYMS);
+
+    // Convert symbol-domain Es/N0 to the *channel* SNR scale the rate ladder's floors are written in.
+    // The estimate is taken after the matched filter, so it carries the mode's processing gain — a
+    // 31-baud rung reads ~17 dB above the channel SNR and a 250-baud rung ~8 dB. Left unconverted the
+    // receiver over-recommends badly (a 2 dB AWGN channel drove the ladder to SL5), which is just the
+    // #934 scale defect wearing a different hat: never compare one scale's number against another's.
+    //
+    // Measured on AWGN, the offset is `10·log10(fs/baud) − MATCHED_FILTER_LOSS_DB` and the constant
+    // holds to ~0.3 dB across BPSK31 and BPSK250 — an order of magnitude apart in baud — so it is the
+    // pulse's noise-bandwidth loss, not a per-mode fudge. It IS pulse-specific: it is fitted to this
+    // plugin's Hann/crossfade matched filter. `bpsk_snr_awgn_scale_matches_channel_snr` pins it.
+    const MATCHED_FILTER_LOSS_DB: f32 = 7.1;
+    let baud = parse_baud_rate(&config.mode).ok()?;
+    let fs = config.sample_rate as f32;
+    let processing_gain_db = 10.0 * (fs / baud).log10();
+    Some(es_n0 - processing_gain_db + MATCHED_FILTER_LOSS_DB)
+}
+
+pub fn bpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec<u8>, ModemError> {
+    // Front-end (matched filter + timing) lives in `symbol_stream`, shared with `estimate_snr_db`
+    // so the SNR is measured on exactly the symbols that get decoded.
+    let (i_syms, q_syms) = symbol_stream(samples, config)?;
 
     if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
         return Err(ModemError::Demodulation(
