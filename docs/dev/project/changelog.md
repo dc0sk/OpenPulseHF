@@ -10,6 +10,48 @@ last_updated: 2026-07-17
 > Phase/roadmap history lives in [roadmap.md](roadmap.md); this file tracks
 > user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
 
+## v0.14.1 — 2026-07-17
+
+Patch release: the fade-aware ladder from v0.14.0 fixed the *rungs*, but the rate controller still
+could not drive them there. On a routine moderate HF fade `hpx_hf` sat pinned on its entry rung at
+**~5 bps while delivering every frame** — now it climbs into the OFDM rungs. Everything here is
+receiver-side rate-control and SNR-estimation; no wire-format, config, or API change, and nothing to
+do to upgrade. Two v0.14.0 stations and a v0.14.1 station interoperate exactly as before.
+
+| `hpx_hf` on Watterson `moderate_f1` @20 dB | v0.14.0 | v0.14.1 |
+|---|---|---|
+| mean speed level reached | 1.5 (pinned near SL1) | **4.9** |
+| final level | SL1 (MFSK16 sub-floor) | **SL11 (OFDM)** |
+
+### Fixes
+
+- **The rate ladder now climbs on decode evidence, not only on an SNR estimate.** The controller had
+  exactly one way up — the measured SNR clearing a rung's ceiling — and on a fade the SNR estimate is
+  uninformative *in principle* (at 31 baud a 1 Hz Doppler fade decorrelates faster than any usable
+  averaging window), so the link stayed on its entry rung even while **every frame decoded**. Worse, a
+  decoded frame with a low SNR reading was answered by dropping *below* the rung that had just
+  decoded. The controller now climbs after three consecutive clean decodes regardless of the SNR
+  reading, and never demotes on a frame that decoded — a decode is direct proof the rung works, so the
+  fast-downshift belongs only on an actual failure, where the SNR estimate genuinely explains
+  something. ([#936](https://github.com/dc0sk/OpenPulseHF/pull/936))
+- **BPSK gained an SNR estimator that works on a fade.** BPSK had none and fell back to a
+  constant-modulus moment estimator that a fade defeats — it read a flat ≈ −4 dB from 15 dB of true
+  SNR to 35 dB, the same number across 20 dB of channel, and `hpx_hf`'s four weak-signal rungs are all
+  BPSK. The new estimate removes the multiplicative fade with a per-window gain before measuring the
+  residual, so it tracks the channel again. ([#935](https://github.com/dc0sk/OpenPulseHF/pull/935))
+- **The link simulator can now transmit the sub-floor rung.** `openpulse-linksim` never registered the
+  MFSK16 plugin, so once a ladder demoted to its SL1 sub-floor the sim could not transmit at all and a
+  fading run read as a total link failure — a harness artifact, not modem behaviour. Every fade
+  measurement the simulator produced for `hpx_hf` before this was suspect. ([#935](https://github.com/dc0sk/OpenPulseHF/pull/935))
+
+### Notes
+
+- The rate controller's policy shifted slightly toward throughput: it will now probe one rung above
+  what a conservative SNR estimate permits, since a rung's advertised floor carries a fading margin
+  and coded rungs decode below it on a clean channel. The climb is self-correcting — a rung that
+  starts failing is dropped on the failure — and cannot run away into the dense high-throughput rungs
+  a poor channel could not carry.
+
 ## v0.14.0 — 2026-07-17
 
 Minor release: the HF rate ladder is now calibrated for a **fading** channel instead of a clean one.

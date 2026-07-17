@@ -7,6 +7,72 @@ last_updated: 2026-07-17
 
 # Release Notes
 
+## v0.14.1 — 2026-07-17
+
+A patch release that finishes what v0.14.0 started. v0.14.0 re-seated the HF rate ladder so every rung
+*decodes* on a fading channel — but the rate controller could not actually **drive** the link up that
+ladder on a fade, so in practice it stayed on the bottom rung. This release fixes the controller and
+the SNR estimate it reads. Everything here is receiver-side; there is no wire-format, config, or API
+change, and a v0.14.1 station interoperates with v0.14.0 exactly as before.
+
+**Background.** On a two-way link the receiver leads the rate: it judges the channel and tells the
+sender which rung to use. It judges partly from a measured SNR and partly from whether frames are
+decoding. v0.14.0 made the rungs work on a fade; this release makes the *judgement* work on a fade.
+
+**What was wrong.** The controller had a single way to climb: the measured SNR had to clear the current
+rung's ceiling. That is fine when the SNR estimate is trustworthy — and on a fading channel it often is
+not, for a fundamental reason. At the lowest baud rates the symbol rate is barely faster than the fade
+itself (at 31 baud, a 1 Hz fade), so no measurement window is both short enough to follow the fade and
+long enough to average out the noise. The estimate flattens into a constant that carries no information
+about the channel. With the climb gated solely on that number, the link sat on its **entry rung** — the
+one every session starts on — **while decoding every single frame**:
+
+| `hpx_hf` on Watterson `moderate_f1` @20 dB | v0.14.0 | v0.14.1 |
+|---|---|---|
+| mean speed level reached | 1.5 (pinned near the bottom) | **4.9** |
+| final level | SL1 (MFSK16 sub-floor, ~9 bps) | **SL11 (OFDM)** |
+| frames delivered | 20/20 | 20/20 |
+
+Delivery was never the problem — throughput was. The rungs that would have carried ~300–1200 bps were
+right there, decoding in tests, and the controller would not use them because a number had not moved.
+
+There was a second, sharper edge: on a frame that *did* decode, if the SNR reading was low the
+controller would recommend a rung **below** the one that had just decoded. On a fade, where the reading
+is flatly wrong, that meant every success was met with a demotion, and the link oscillated on its
+bottom two rungs.
+
+**The fix — a decode is evidence; an SNR estimate is a guess; the evidence wins.**
+
+- **Climb on evidence.** After three consecutive clean decodes at a rung, the controller advances one
+  step, whatever the SNR estimate says. A rung that keeps decoding has proven itself; refusing to move
+  up because a number is stuck is the bug. SNR still climbs *faster* when it is informative — it is now
+  an accelerator, not the only permission.
+- **Never demote on a decode.** A frame that decoded is direct proof its rung works, so demotion moved
+  to the failure path only, where a low SNR reading genuinely explains what went wrong.
+
+Both climbs still advance exactly one rung at a time, which preserves the property that a lost
+acknowledgement can never desync the two ends.
+
+**Also fixed, underneath.** BPSK — which is the entire weak-signal core of the HF ladder — had no SNR
+estimator at all and fell back to one that assumes a steady signal envelope, exactly what a fade
+destroys; it read a flat ≈ −4 dB from 15 dB of true SNR all the way to 35 dB. It now removes the fade's
+multiplicative distortion before measuring the noise, so it tracks the channel again. And the link
+simulator never registered the sub-floor waveform, so once a ladder dropped to it the sim silently
+stopped transmitting — which had made fading runs read as total link failures that were pure harness
+artifact. Both are corrected here.
+
+### Notes
+
+- The controller's policy shifted slightly toward throughput. Because a rung's advertised SNR floor
+  carries a fading margin, coded rungs actually decode below it on a clean channel — so the evidence
+  climb will now probe one rung higher than a conservative SNR estimate would have allowed, and take
+  the extra throughput when the frames keep landing. The climb is self-correcting (a rung that starts
+  failing is dropped immediately) and cannot run away into dense rungs a poor channel could not carry.
+- This is the first release in which the adaptive HF link works end-to-end on a fade *through the rate
+  controller*, not just in per-waveform decode tests. The gate that proves it now drives the real
+  controller on a fading channel — every earlier fade test called the demodulator directly and so could
+  not see that the controller was leaving throughput on the table.
+
 ## v0.14.0 — 2026-07-17
 
 A minor release about one thing: **the HF rate ladder was calibrated for a clean channel, and HF is not
