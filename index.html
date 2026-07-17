@@ -11,6 +11,7 @@
     --bg:#141C23; --panel:#1E2830; --panel2:#26323B; --edge:#5B6C7B; --edge2:#6D7E8D;
     --ink:#F0F6F9; --muted:#B3C3CD; --faint:#8798A4;
     --signal:#3FEAD0; --signal-soft:rgba(63,234,208,.14); --signal-line:rgba(63,234,208,.42);
+    --warn:#FFB454;
     --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
     --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     --maxw:1080px;
@@ -162,6 +163,26 @@
   td{color:var(--muted)}
   td b{color:var(--ink); font-weight:600}
   td code{font-size:.85em; color:#DCE6EC}
+
+  /* ---- modulation table ---- */
+  .modes table{min-width:880px; font-size:.82rem}
+  .modes th,.modes td{padding:9px 14px; white-space:nowrap}
+  .modes td.note{white-space:normal; min-width:230px; font-size:.95em; color:var(--faint)}
+  .modes td.mode{font-family:var(--mono); color:var(--ink); font-weight:600}
+  .modes td.plug{font-family:var(--mono); color:var(--signal); font-size:.9em}
+  .modes td.num{font-family:var(--mono); font-variant-numeric:tabular-nums; text-align:right; color:#DCE6EC}
+  .modes th.num{text-align:right}
+  .modes tbody tr:hover td{background:rgba(63,234,208,.04)}
+  .modes tr.deferred td.mode{font-style:italic; color:var(--faint); font-weight:500}
+  .modes tr.deferred td{color:var(--faint)}
+  .modes tr.deferred td.num{color:var(--faint)}
+  .tag-def{font-family:var(--mono); font-size:.9em; color:var(--warn); border:1px solid currentColor;
+    border-radius:4px; padding:1px 5px; margin-right:6px}
+  .modes .grp td{background:rgba(63,234,208,.06); font-family:var(--mono); font-size:.7rem;
+    letter-spacing:.12em; text-transform:uppercase; color:var(--signal); padding:7px 14px; font-weight:600}
+  .tblnote{color:var(--faint); font-size:.86rem; line-height:1.6; margin:14px 0 0; max-width:78ch}
+  .tblnote code{color:var(--muted); font-size:.9em}
+  .tblnote + .tblnote{margin-top:10px}
 
   /* ---- supporters ---- */
   .thanks{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px}
@@ -384,6 +405,89 @@
   <p class="caveat"><b>Validation status:</b> on-air regulatory validation (spectral mask) has not been
     completed. Except for the CE-SSB average-power confirmation above, all tests use loopback and
     simulated-channel paths only.</p>
+</section>
+
+<section class="wrap modes">
+  <div class="sechead"><p class="eyebrow">Modulation modes</p><h2>The full ladder, 31 bps to 12 kbps</h2></div>
+  <p class="lede">Sorted by occupied bandwidth. The mode-name number is the <b>baud</b> rate for
+    single-carrier modes; SC-FDMA/OFDM modes are named by data-subcarrier count and span
+    <code>total_SCs × 31.25 Hz</code>. The <code>PILOT-*</code> modes are a pilot-framed single-carrier
+    family: known in-band pilot symbols drive carrier recovery (cycle-slip-immune,
+    sample-rate-offset-robust) instead of a decision-directed Costas loop.</p>
+
+  <div class="tblwrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Mode</th><th>Plugin</th><th class="num">Baud</th><th class="num">Bits/sym</th>
+          <th class="num">Gross bps</th><th class="num">Occ. BW</th><th>Waveform</th><th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="grp"><td colspan="8">Narrowband · ≤ 550 Hz</td></tr>
+        <tr><td class="mode">BPSK31</td><td class="plug">bpsk</td><td class="num">31.25</td><td class="num">1</td><td class="num">31</td><td class="num">~50</td><td>Single-carrier</td><td class="note">Weak-signal narrowband HF</td></tr>
+        <tr><td class="mode">BPSK63</td><td class="plug">bpsk</td><td class="num">62.5</td><td class="num">1</td><td class="num">63</td><td class="num">~70</td><td>Single-carrier</td><td class="note"></td></tr>
+        <tr><td class="mode">BPSK100</td><td class="plug">bpsk</td><td class="num">100</td><td class="num">1</td><td class="num">100</td><td class="num">~110</td><td>Single-carrier</td><td class="note"></td></tr>
+        <tr><td class="mode">QPSK125</td><td class="plug">qpsk</td><td class="num">125</td><td class="num">2</td><td class="num">250</td><td class="num">~140</td><td>Single-carrier</td><td class="note"></td></tr>
+        <tr><td class="mode">BPSK250</td><td class="plug">bpsk</td><td class="num">250</td><td class="num">1</td><td class="num">250</td><td class="num">~275</td><td>Single-carrier (+RRC)</td><td class="note"></td></tr>
+        <tr><td class="mode">QPSK250</td><td class="plug">qpsk</td><td class="num">250</td><td class="num">2</td><td class="num">500</td><td class="num">~275</td><td>Single-carrier</td><td class="note"></td></tr>
+        <tr><td class="mode">FSK4-ACK</td><td class="plug">fsk4</td><td class="num">100</td><td class="num">2</td><td class="num">200</td><td class="num">~400</td><td>4-FSK</td><td class="note">ACK control channel only</td></tr>
+        <tr><td class="mode">QPSK500</td><td class="plug">qpsk</td><td class="num">500</td><td class="num">2</td><td class="num">1&nbsp;000</td><td class="num">~550</td><td>Single-carrier (+RRC)</td><td class="note"></td></tr>
+        <tr><td class="mode">8PSK500</td><td class="plug">psk8</td><td class="num">500</td><td class="num">3</td><td class="num">1&nbsp;500</td><td class="num">~550</td><td>Single-carrier (+RRC)</td><td class="note">Gray-coded</td></tr>
+        <tr><td class="mode">64QAM500</td><td class="plug">64qam</td><td class="num">500</td><td class="num">6</td><td class="num">3&nbsp;000</td><td class="num">~550</td><td>Single-carrier</td><td class="note"></td></tr>
+        <tr><td class="mode">PILOT-QPSK500</td><td class="plug">pilot</td><td class="num">500</td><td class="num">2</td><td class="num">1&nbsp;000</td><td class="num">~550</td><td>Single-carrier (pilot-framed)</td><td class="note">In-band pilots → cycle-slip-immune carrier tracking; SRO-robust</td></tr>
+        <tr><td class="mode">PILOT-8PSK500</td><td class="plug">pilot</td><td class="num">500</td><td class="num">3</td><td class="num">1&nbsp;500</td><td class="num">~550</td><td>Single-carrier (pilot-framed)</td><td class="note">Gray-coded; pilot-aided</td></tr>
+        <tr><td class="mode">PILOT-16QAM500</td><td class="plug">pilot</td><td class="num">500</td><td class="num">4</td><td class="num">2&nbsp;000</td><td class="num">~550</td><td>Single-carrier (pilot-framed)</td><td class="note">Pilot-amplitude-referenced demap</td></tr>
+        <tr><td class="mode">PILOT-32APSK500</td><td class="plug">pilot</td><td class="num">500</td><td class="num">5</td><td class="num">2&nbsp;500</td><td class="num">~550</td><td>Single-carrier (pilot-framed)</td><td class="note">DVB-S2 32APSK geometry</td></tr>
+
+        <tr class="grp"><td colspan="8">Mid-band · 625 Hz – 1.1 kHz</td></tr>
+        <tr><td class="mode">OFDM16</td><td class="plug">ofdm</td><td class="num">—</td><td class="num">2</td><td class="num">~889</td><td class="num">~625</td><td>OFDM (16 SCs, QPSK)</td><td class="note">LS + ZF; ≡ SCFDMA16 throughput</td></tr>
+        <tr><td class="mode">SCFDMA16</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">2</td><td class="num">~889</td><td class="num">~625</td><td>SC-FDMA (16 SCs, QPSK)</td><td class="note">DFT-CE + MMSE</td></tr>
+        <tr><td class="mode">SCFDMA26-8PSK</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">3</td><td class="num">~2&nbsp;167</td><td class="num">~1&nbsp;000</td><td>SC-FDMA (26 SCs, 8PSK)</td><td class="note">Narrowband HOM (+3 dB/SC)</td></tr>
+        <tr><td class="mode">SCFDMA26-16QAM</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">4</td><td class="num">~2&nbsp;889</td><td class="num">~1&nbsp;000</td><td>SC-FDMA (26 SCs, 16QAM)</td><td class="note">Narrowband HOM (+3 dB/SC)</td></tr>
+        <tr><td class="mode">SCFDMA26-32QAM</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">5</td><td class="num">~3&nbsp;611</td><td class="num">~1&nbsp;000</td><td>SC-FDMA (26 SCs, cross-32QAM)</td><td class="note">Narrowband HOM (+3 dB/SC)</td></tr>
+        <tr><td class="mode">QPSK1000</td><td class="plug">qpsk</td><td class="num">1&nbsp;000</td><td class="num">2</td><td class="num">2&nbsp;000</td><td class="num">~1&nbsp;100</td><td>Single-carrier (+RRC/HF)</td><td class="note"></td></tr>
+        <tr><td class="mode">8PSK1000</td><td class="plug">psk8</td><td class="num">1&nbsp;000</td><td class="num">3</td><td class="num">3&nbsp;000</td><td class="num">~1&nbsp;100</td><td>Single-carrier (+RRC/HF)</td><td class="note"></td></tr>
+        <tr><td class="mode">64QAM1000</td><td class="plug">64qam</td><td class="num">1&nbsp;000</td><td class="num">6</td><td class="num">6&nbsp;000</td><td class="num">~1&nbsp;100</td><td>Single-carrier</td><td class="note"></td></tr>
+
+        <tr class="grp"><td colspan="8">Wideband · ~2 031 Hz (multicarrier)</td></tr>
+        <tr><td class="mode">OFDM52</td><td class="plug">ofdm</td><td class="num">—</td><td class="num">2</td><td class="num">~2&nbsp;889</td><td class="num">~2&nbsp;031</td><td>OFDM (52 SCs, QPSK)</td><td class="note">≡ SCFDMA52 throughput; OFDM trades PAPR for per-SC EQ</td></tr>
+        <tr><td class="mode">OFDM52-8PSK</td><td class="plug">ofdm</td><td class="num">—</td><td class="num">3</td><td class="num">~4&nbsp;333</td><td class="num">~2&nbsp;031</td><td>OFDM (52 SCs, 8PSK)</td><td class="note">OFDM higher-order ladder — the HF high-throughput path</td></tr>
+        <tr><td class="mode">OFDM52-16QAM</td><td class="plug">ofdm</td><td class="num">—</td><td class="num">4</td><td class="num">~5&nbsp;778</td><td class="num">~2&nbsp;031</td><td>OFDM (52 SCs, 16QAM)</td><td class="note">OFDM higher-order ladder</td></tr>
+        <tr><td class="mode">OFDM52-32QAM</td><td class="plug">ofdm</td><td class="num">—</td><td class="num">5</td><td class="num">~7&nbsp;222</td><td class="num">~2&nbsp;031</td><td>OFDM (52 SCs, cross-32QAM)</td><td class="note">OFDM higher-order ladder</td></tr>
+        <tr><td class="mode">OFDM52-64QAM</td><td class="plug">ofdm</td><td class="num">—</td><td class="num">6</td><td class="num">~8&nbsp;667</td><td class="num">~2&nbsp;031</td><td>OFDM (52 SCs, 64QAM)</td><td class="note">OFDM higher-order ladder</td></tr>
+        <tr><td class="mode">SCFDMA52</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">2</td><td class="num">~2&nbsp;889</td><td class="num">~2&nbsp;031</td><td>SC-FDMA (52 SCs, QPSK)</td><td class="note">Adaptive pilot density</td></tr>
+        <tr><td class="mode">SCFDMA52-P2</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">2</td><td class="num">~2&nbsp;889</td><td class="num">~2&nbsp;031</td><td>SC-FDMA (52 SCs, PN pilots)</td><td class="note"><b>Low-PAPR</b> SCFDMA52: Zadoff-Chu-phase pilots cut envelope-CCDF PAPR ~2.15 dB (8.85→6.70) at the same geometry/rate <b>and keep full DFT-CE</b> (beats the flat-CE SCFDMA52-LP); demonstrator, not in any profile</td></tr>
+        <tr><td class="mode">SCFDMA52-LP</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">2</td><td class="num">~3&nbsp;389</td><td class="num">~2&nbsp;031</td><td>SC-FDMA (61 SCs, localized)</td><td class="note"><b>Low-PAPR</b> demonstrator (~2 dB lower mean PAPR: 11.9→9.7 — mostly from 4 pilots vs 13, only ~0.5 dB from localization); single-tap flat-channel CE ⇒ AWGN/flat/well-timed <b>only</b> (silently mis-decodes on selectivity/tilt/timing error), not in any profile</td></tr>
+        <tr><td class="mode">SCFDMA52-8PSK</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">3</td><td class="num">~4&nbsp;333</td><td class="num">~2&nbsp;031</td><td>SC-FDMA (52 SCs, 8PSK)</td><td class="note"></td></tr>
+        <tr><td class="mode">SCFDMA52-16QAM</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">4</td><td class="num">~5&nbsp;778</td><td class="num">~2&nbsp;031</td><td>SC-FDMA (52 SCs, 16QAM)</td><td class="note"></td></tr>
+        <tr><td class="mode">SCFDMA52-32QAM</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">5</td><td class="num">~7&nbsp;222</td><td class="num">~2&nbsp;031</td><td>SC-FDMA (52 SCs, cross-32QAM)</td><td class="note"></td></tr>
+        <tr><td class="mode">SCFDMA52-64QAM</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">6</td><td class="num">~8&nbsp;667</td><td class="num">~2&nbsp;031</td><td>SC-FDMA (52 SCs, 64QAM)</td><td class="note"></td></tr>
+        <tr><td class="mode">SCFDMA52-64QAM-P4</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">6</td><td class="num">~8&nbsp;167</td><td class="num">~2&nbsp;031</td><td>SC-FDMA (49 SCs, dense pilots)</td><td class="note"></td></tr>
+
+        <tr class="grp"><td colspan="8">Wideband single-carrier · ~2 700 Hz</td></tr>
+        <tr><td class="mode">QPSK2000-RRC</td><td class="plug">qpsk</td><td class="num">2&nbsp;000</td><td class="num">2</td><td class="num">4&nbsp;000</td><td class="num">~2&nbsp;700</td><td>Single-carrier + RRC</td><td class="note"></td></tr>
+        <tr><td class="mode">8PSK2000-RRC</td><td class="plug">psk8</td><td class="num">2&nbsp;000</td><td class="num">3</td><td class="num">6&nbsp;000</td><td class="num">~2&nbsp;700</td><td>Single-carrier + RRC</td><td class="note"></td></tr>
+        <tr><td class="mode">64QAM2000-RRC</td><td class="plug">64qam</td><td class="num">2&nbsp;000</td><td class="num">6</td><td class="num">12&nbsp;000</td><td class="num">~2&nbsp;700</td><td>Single-carrier + RRC</td><td class="note">Requires SNR ≥ 25 dB</td></tr>
+
+        <tr class="grp"><td colspan="8">VHF / UHF · deferred post-1.0</td></tr>
+        <tr class="deferred"><td class="mode">QPSK9600-RRC</td><td class="plug">qpsk</td><td class="num">9&nbsp;600</td><td class="num">2</td><td class="num">19&nbsp;200</td><td class="num">~13&nbsp;000</td><td>Single-carrier + RRC</td><td class="note"><span class="tag-def">deferred</span>VHF/UHF, needs ≥38.4 kHz Fs</td></tr>
+        <tr class="deferred"><td class="mode">8PSK9600-RRC</td><td class="plug">psk8</td><td class="num">9&nbsp;600</td><td class="num">3</td><td class="num">28&nbsp;800</td><td class="num">~13&nbsp;000</td><td>Single-carrier + RRC</td><td class="note"><span class="tag-def">deferred</span>VHF/UHF, needs ≥38.4 kHz Fs</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="tblnote">The single-carrier modes also have <code>-RRC</code> (α = 0.35, ~+35 % bandwidth) and
+    <code>-HF</code> tuning variants not all listed here. The <code>-RRC</code> variants are the
+    operational, carrier-offset-robust ones at 2000 baud: the plain rectangular <code>QPSK2000</code> /
+    <code>8PSK2000</code> are registered but <b>RRC-superseded</b> — their crossfade pulse is ISI-limited
+    at 4 samples/symbol, so use <code>-RRC</code>.</p>
+  <p class="tblnote">Each <code>PILOT-*</code> mode also has a <code>-RRC</code> variant (~half the
+    occupied bandwidth) and <code>1000</code> / <code>2000-RRC</code> baud rungs — e.g.
+    <code>PILOT-16QAM1000-RRC</code> — all selectable by name and surfaced by the
+    <code>hpx_pilot{,_rrc,_fast,_fast_rrc}</code> profiles.</p>
+  <p class="tblnote">The mode/FEC selection ladder and which combinations are usable on HF is documented
+    in <a href="https://github.com/dc0sk/OpenPulseHF/blob/main/docs/mode-fec-ladder.md">docs/mode-fec-ladder.md</a>.</p>
 </section>
 
 <section class="wrap">
