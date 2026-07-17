@@ -3,27 +3,24 @@ use predicates::str::contains;
 
 #[test]
 fn mode_advisor_outputs_expected_levels_across_hpx_hf_ladder() {
-    // Expected (SNR dB → level, mode) against the finer hpx_hf floors in `profile.rs` (research #2):
-    // SL2=3 SL3=4 SL4=4.5 SL5=5 SL6=7 SL7=9 SL8=11 SL9=12 SL10=13 SL11=14 SL12=16 SL13=17 SL14=19
-    // SL15=22. The advisor picks the highest rung whose floor is met, so a probe *at* a floor lands on
-    // that rung. SL6 is differential QPSK250-D+Rs (HF-fade-robust, #923); SL7 is coherent uncoded QPSK250.
+    // Expected (SNR dB → level, mode) against the fade-aware hpx_hf floors in `profile.rs`:
+    // SL2=3 SL3=4 SL4=4.5 SL5=5 SL6=7 SL7=9 SL8=10 SL9=12 SL10=14 SL11=16 SL12=18 SL13=19 SL14=20.
+    // The OFDM rungs' floors are plugin symbol-domain SNR (which saturates ~17 dB), not AWGN channel
+    // SNR — an AWGN-scale floor there is unreachable and the ladder stalls below it. Every rung is
+    // coded and measured to decode on a Watterson moderate_f1 fade.
     let cases = [
         (0.0, "SL1", "MFSK16"), // below BPSK31's 3 dB floor → the MFSK16 sub-floor rung (REQ-WSIG-01)
         (3.5, "SL2", "BPSK31"),
         (4.5, "SL4", "BPSK100"),
         (5.5, "SL5", "BPSK250"),
         (8.5, "SL6", "QPSK250-D"),
-        (9.5, "SL7", "QPSK250"),
-        (11.5, "SL8", "QPSK500"),
-        (12.0, "SL9", "8PSK500"),
-        (13.0, "SL10", "SCFDMA26-32QAM"),
-        (14.0, "SL11", "OFDM52-8PSK"),
-        (16.0, "SL12", "OFDM52-16QAM"),
-        (17.0, "SL13", "OFDM52-32QAM"),
-        (19.0, "SL13", "OFDM52-32QAM"),
-        (22.0, "SL14", "OFDM52-64QAM"),
-        (23.0, "SL15", "OFDM52-16QAM"),
-        (30.0, "SL17", "OFDM52-64QAM"),
+        (9.0, "SL7", "OFDM52"),
+        (10.0, "SL8", "OFDM52-8PSK"),
+        (12.0, "SL9", "OFDM52-16QAM"),
+        (14.0, "SL10", "OFDM52-32QAM"),
+        (16.0, "SL11", "OFDM52-64QAM"),
+        (18.0, "SL12", "OFDM52-16QAM"),
+        (20.0, "SL14", "OFDM52-64QAM"),
     ];
 
     for (snr, level, mode) in cases {

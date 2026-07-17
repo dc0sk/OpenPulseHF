@@ -51,6 +51,7 @@ fn parse_fec(cell: &str) -> FecMode {
     match cell {
         "—" => FecMode::None,
         "Rs" => FecMode::Rs,
+        "RsS" => FecMode::RsStrong,
         "SC" => FecMode::SoftConcatenated,
         "LHR" => FecMode::LdpcHighRate,
         other => panic!("unknown FEC abbreviation {other:?} in the ladder doc table"),

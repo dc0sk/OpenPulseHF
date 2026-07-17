@@ -24,7 +24,7 @@ use openpulse_modem::engine::ModemEngine;
 use openpulse_modem::pipeline::AudioSamples;
 
 const PAYLOAD: &[u8] = b"OTA burst through the real daemon capture entry AAAAAAAAAAAA";
-const MODE: &str = "OFDM52-16QAM"; // hpx_hf SL12 + SoftConcatenated — the soft rung HARQ acts on
+const MODE: &str = "OFDM52-16QAM"; // hpx_hf SL9 + SoftConcatenated — the soft rung HARQ acts on
 const FEC: FecMode = FecMode::SoftConcatenated;
 const SESSION: &str = "prod-path";
 /// The daemon's default receive tick is 100 ms; at 8 kHz that is 800 samples per `accumulate_capture`
@@ -41,7 +41,7 @@ fn make() -> (ModemEngine, LoopbackBackend) {
         .register_plugin(Box::new(OfdmPlugin::new()))
         .expect("register");
     engine.start_ota_session(SessionProfile::hpx_hf());
-    engine.ota_lock_level(SpeedLevel::Sl12);
+    engine.ota_lock_level(SpeedLevel::Sl9);
     (engine, backend)
 }
 

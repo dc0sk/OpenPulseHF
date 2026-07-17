@@ -50,6 +50,8 @@ fn harness() -> ChannelSimHarness {
         eng.register_plugin(Box::new(QpskPlugin::new())).unwrap();
         eng.register_plugin(Box::new(Psk8Plugin::new())).unwrap();
         eng.register_plugin(Box::new(ScFdmaPlugin::new())).unwrap();
+        eng.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
+            .unwrap();
         eng.register_plugin(Box::new(PilotPlugin::new())).unwrap();
         eng.register_plugin(Box::new(mfsk16_plugin::Mfsk16Plugin::new()))
             .unwrap();
@@ -344,5 +346,162 @@ fn calibrate_ladder_gap_fillers() {
     for (mode, fec, lo, hi) in candidates {
         let meas = min_decodable_snr(mode, *fec, *lo, *hi, 16, 0.9);
         print_row("gap", mode, *fec, None, meas);
+    }
+}
+
+/// Fade-aware `hpx_hf` redesign (A+B) — the FEC/rung choice behind the re-seated ladder.
+///
+/// Measured premise: on `moderate_f1` at their own SNR floors the uncoded weak rungs (SL2–SL5)
+/// decode ~0 %, and the coherent single-carrier mid rungs (SL7–SL9) decode ~0 % at *any* SNR.
+/// This picks the replacement for each. Decode rate at a couple of operating points rather than a
+/// full floor grid: RS pads every frame to a 255-byte block, so a 1 dB × 24-frame sweep at BPSK31
+/// is ~66 s of audio per frame and hours per row.
+#[test]
+#[ignore = "calibration for the fade-aware ladder; run with --ignored --nocapture"]
+fn calibrate_fade_aware_ladder() {
+    const F: u32 = 12;
+
+    // A — the FEC choice. NB a 64-byte payload is ONE RS block, and a single block is
+    // position-agnostic, so `RsInterleaved` should be INERT here; the 446-byte column is where
+    // interleaving can actually act (2 blocks). Same code rate (0.875) as `Rs`, so if it is never
+    // worse it is the free choice for a burst channel.
+    println!("\n=== A: FEC choice for the BPSK rungs, moderate_f1 decode ({F} frames) ===");
+    println!("{:<10}{:<16}{:>8}{:>8}", "mode", "fec", "5 dB", "8 dB");
+    for mode in ["BPSK100", "BPSK250"] {
+        for fec in [
+            FecMode::None,
+            FecMode::Rs,
+            FecMode::RsInterleaved,
+            FecMode::RsStrong,
+        ] {
+            println!(
+                "{mode:<10}{:<16}{:>8.2}{:>8.2}",
+                format!("{fec:?}"),
+                decode_rate_watterson(mode, fec, 5.0, F, watterson_moderate_f1),
+                decode_rate_watterson(mode, fec, 8.0, F, watterson_moderate_f1),
+            );
+        }
+    }
+
+    // B — the mid-zone filler. The incumbents are dead at any SNR; OFDM's cyclic prefix + per-SC
+    // pilots are the mechanism that survives the fade.
+    println!("\n=== B: SL7–SL10 dead-zone candidates, moderate_f1 decode ({F} frames) ===");
+    println!(
+        "{:<16}{:<18}{:>8}{:>8}{:>8}",
+        "mode", "fec", "8 dB", "12 dB", "16 dB"
+    );
+    let mid: &[(&str, FecMode)] = &[
+        ("QPSK500", FecMode::None),
+        ("8PSK500", FecMode::Rs),
+        ("SCFDMA26-32QAM", FecMode::SoftConcatenated),
+        ("OFDM16", FecMode::SoftConcatenated),
+        ("OFDM52", FecMode::SoftConcatenated),
+        ("OFDM52-8PSK", FecMode::SoftConcatenated),
+    ];
+    for (mode, fec) in mid {
+        println!(
+            "{mode:<16}{:<18}{:>8.2}{:>8.2}{:>8.2}",
+            format!("{fec:?}"),
+            decode_rate_watterson(mode, *fec, 8.0, F, watterson_moderate_f1),
+            decode_rate_watterson(mode, *fec, 12.0, F, watterson_moderate_f1),
+            decode_rate_watterson(mode, *fec, 16.0, F, watterson_moderate_f1),
+        );
+    }
+
+    // AWGN floors for the rungs whose FEC/mode changes — the profile's floors are AWGN-derived, so
+    // they must be re-derived, not inherited.
+    println!("\n=== AWGN floors (90 % target) for the re-seated rungs ===");
+    println!("{:<16}{:<18}{:>10}", "mode", "fec", "AWGN@90%");
+    let recal: &[(&str, FecMode, f32, f32)] = &[
+        ("BPSK31", FecMode::RsInterleaved, -6.0, 8.0),
+        ("BPSK63", FecMode::RsInterleaved, -6.0, 8.0),
+        ("BPSK100", FecMode::RsInterleaved, -4.0, 10.0),
+        ("BPSK250", FecMode::RsInterleaved, -2.0, 12.0),
+        ("OFDM16", FecMode::SoftConcatenated, -2.0, 14.0),
+        ("OFDM52", FecMode::SoftConcatenated, 0.0, 16.0),
+    ];
+    for (mode, fec, lo, hi) in recal {
+        let awgn = min_decodable_snr(mode, *fec, *lo, *hi, 8, 0.9);
+        println!(
+            "{mode:<16}{:<18}{:>10}",
+            format!("{fec:?}"),
+            awgn.map(|v| format!("{v:.0}")).unwrap_or("none".into())
+        );
+    }
+}
+
+/// True **net** bps per rung: payload bits / airtime of the FEC-encoded frame.
+///
+/// `ModemEngine::estimate_air_secs` modulates the raw payload with NO FEC, so it reports *gross*
+/// bps — using it for a profile's "net bps" column overstates every coded rung. This transmits
+/// through the real `transmit_with_fec_mode` path and measures the emitted audio.
+#[test]
+#[ignore = "calibration; run with --ignored --nocapture"]
+fn measure_net_bps() {
+    let payload = b"OTA SNR floor calibration payload, sixty-four bytes total AAAA";
+    let rungs: &[(&str, FecMode)] = &[
+        ("BPSK31", FecMode::None),
+        ("BPSK31", FecMode::RsStrong),
+        ("BPSK63", FecMode::RsStrong),
+        ("BPSK100", FecMode::RsStrong),
+        ("BPSK250", FecMode::None),
+        ("BPSK250", FecMode::Rs),
+        ("BPSK250", FecMode::RsStrong),
+        ("QPSK250-D", FecMode::Rs),
+        ("OFDM16", FecMode::SoftConcatenated),
+        ("OFDM52", FecMode::SoftConcatenated),
+        ("OFDM52-8PSK", FecMode::SoftConcatenated),
+        ("OFDM52-16QAM", FecMode::SoftConcatenated),
+    ];
+    println!(
+        "\n{:<16}{:<18}{:>9}{:>10}",
+        "mode", "fec", "air s", "net bps"
+    );
+    for (mode, fec) in rungs {
+        let mut h = harness();
+        if h.tx_engine
+            .transmit_with_fec_mode(payload, mode, *fec, None)
+            .is_err()
+        {
+            println!(
+                "{mode:<16}{:<18}{:>9}{:>10}",
+                format!("{fec:?}"),
+                "tx err",
+                "-"
+            );
+            continue;
+        }
+        let (tx, _) = h.route_tapped(
+            &mut openpulse_channel::awgn::AwgnChannel::new(AwgnConfig {
+                snr_db: 60.0,
+                seed: Some(1),
+            })
+            .unwrap(),
+        );
+        let air = tx.len() as f64 / 8000.0;
+        println!(
+            "{mode:<16}{:<18}{air:>9.2}{:>10.0}",
+            format!("{fec:?}"),
+            (payload.len() * 8) as f64 / air
+        );
+    }
+}
+
+/// SL2 is `initial_level` — every session STARTS there. If BPSK31 cannot decode on a fade at its
+/// floor, the ladder never gets going. Uncoded it is 0.00; this checks the coded replacement.
+#[test]
+#[ignore = "calibration; run with --ignored --nocapture"]
+fn entry_rung_bpsk31_on_fade() {
+    const F: u32 = 8;
+    println!("\n=== BPSK31 (SL2, initial_level) on moderate_f1 ({F} frames) ===");
+    println!("{:<16}{:>8}{:>8}{:>8}", "fec", "3 dB", "6 dB", "9 dB");
+    for fec in [FecMode::None, FecMode::Rs, FecMode::RsStrong] {
+        println!(
+            "{:<16}{:>8.2}{:>8.2}{:>8.2}",
+            format!("{fec:?}"),
+            decode_rate_watterson("BPSK31", fec, 3.0, F, watterson_moderate_f1),
+            decode_rate_watterson("BPSK31", fec, 6.0, F, watterson_moderate_f1),
+            decode_rate_watterson("BPSK31", fec, 9.0, F, watterson_moderate_f1),
+        );
     }
 }

@@ -105,7 +105,7 @@ fn wideband_hd_sl12_floor_breach_steps_down_immediately() {
     assert_eq!(
         engine.current_tx_level(),
         Some(SpeedLevel::Sl11),
-        "SL12 floor breach must step down to Sl11 (now SCFDMA26-32QAM, the narrowband fallback rung)"
+        "SL12 floor breach must step down to Sl11 (OFDM52-64QAM + SoftConcatenated)"
     );
 
     let event = rx
