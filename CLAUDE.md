@@ -26,8 +26,9 @@ cargo test --workspace --no-default-features
 # Run a specific test file
 cargo test --package openpulse-modem --no-default-features --test fec_loopback
 
-# Clippy (treat warnings as errors)
-cargo clippy --workspace --no-default-features -- -D warnings
+# Clippy (treat warnings as errors). --all-targets lints tests/benches too — without it,
+# test code is never linted and rots (that is how an unused binding sat in session_key.rs).
+cargo clippy --workspace --no-default-features --all-targets -- -D warnings
 
 # Format check
 cargo fmt --all -- --check
@@ -49,7 +50,7 @@ cargo run -p openpulse-testmatrix --no-default-features
 cargo run -p openpulse-testmatrix --no-default-features -- --full --output docs/test-reports
 
 # Fallback core gates when full workspace checks are blocked by local toolchain constraints
-cargo clippy --workspace --exclude pki-tooling --no-default-features -- -D warnings
+cargo clippy --workspace --exclude pki-tooling --no-default-features --all-targets -- -D warnings
 cargo test --workspace --exclude pki-tooling --no-default-features
 ```
 

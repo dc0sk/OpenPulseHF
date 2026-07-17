@@ -9,6 +9,42 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-17 — ci: lint test code too (`--all-targets`), and fix what it had been hiding
+
+- **Requirement/change:** every clippy gate ran without `--all-targets`, so **test, bench and example
+  code was never linted**. Surfaced while releasing v0.13.0: `cargo clippy --all-targets` failed on an
+  unused `sk_b` in `crates/openpulse-core/src/session_key.rs` that had sat there unnoticed, because no
+  gate in the project ever looked at it.
+- **Design decision — fix the findings, then close the hole permanently.** Silencing the binding
+  (`_sk_b`) would have removed the symptom and left the gap. The gap is the bug: a lint that skips the
+  majority of a test-heavy repo's code is not a lint gate. `--all-targets` added to all four clippy
+  invocations (ci.yml core / full / GPU-feature, release.yml) and to the two documented commands in
+  CLAUDE.md — agents run those, so they matter as much as the workflow. **CI's `disabled_manually`
+  state was deliberately left untouched.**
+- **Scope was small once measured** — `sk_b` was masking the rest (clippy stops at the first failing
+  crate). Whole workspace: **5 findings, all in test code.**
+  - `openpulse-core/src/session_key.rs` — unused `sk_b`, plus a `let _ = pk_a;` discard silencing a
+    second one. **Turned both into an assertion instead of silencing them:** B's own view of the A↔B
+    pair must equal `key_ab` and still differ from `key_ac`, so the pair-separation property is shown
+    to be a property of the *pair*, not an artefact of always deriving from A's side.
+  - `openpulse-daemon/src/lib.rs` — `field_reassign_with_default` → struct-update syntax.
+  - `openpulse-modem/tests/agc_amplitude_sweep.rs` — a paragraph directly after a bullet list read as
+    a lazy continuation (`doc_lazy_continuation`); separated with a blank doc line.
+  - `plugins/mfsk16/src/robust_ack.rs` — `type_complexity` on `fn(Option<u64>) -> WattersonConfig`
+    inside an array-of-tuples; extracted `type ChannelCfgFn`, applied to all 7 occurrences.
+- **Tests / verification:**
+  - **The new gate was proven to catch what the old one missed**: planting an unused binding in test
+    code, the old CI command exits **0** (misses it) and the `--all-targets` command exits **101**
+    (`error: unused variable: sk_planted`). The gap demonstrated, not asserted.
+  - The strengthened ECDH assertion was sabotage-verified: breaking `derive_ack_key`'s symmetry (derive
+    from the local secret, ignore the peer key) fails it with `A↔B and A↔C must not share a key` — so
+    it is a real property check, not a replacement no-op for the unused variable.
+  - All four gate variants verified locally before editing the workflow (CI is disabled and could not
+    have caught a mistake): full workspace, core `--exclude pki-tooling`, and the GPU-feature gate all
+    exit 0 under `--all-targets`.
+- **Test results (actually run):** workspace `--all-targets` clippy **exit 0**; full workspace
+  `--no-default-features` **2094 passed, 0 failed**; `cargo fmt --all --check` clean.
+
 ## 2026-07-17 — fix(modem): differential QPSK (`-D`) for the dead HF-fading ladder rung (#923)
 
 - **Requirement/change:** issue #923 — `hpx_hf` SL6 (`QPSK250+Rs`) decodes **0% on Watterson

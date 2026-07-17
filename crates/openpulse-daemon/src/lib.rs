@@ -4829,8 +4829,10 @@ mod handshake_rf_tests {
     /// `rf_peer_trust` maps a verified peer to its over-air trust (never `Verified` over RF).
     #[test]
     fn callsign_validity_and_rf_peer_trust() {
-        let mut rs = RuntimeControlState::default();
-        rs.local_callsign = String::new();
+        let mut rs = RuntimeControlState {
+            local_callsign: String::new(),
+            ..Default::default()
+        };
         assert!(!rs.local_callsign_valid(), "empty callsign is not valid");
         rs.local_callsign = "n0call".into();
         assert!(!rs.local_callsign_valid(), "N0CALL sentinel is not valid");

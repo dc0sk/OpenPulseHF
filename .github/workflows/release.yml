@@ -25,7 +25,7 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --no-default-features --locked
       - name: Clippy
-        run: cargo clippy --workspace --no-default-features -- -D warnings
+        run: cargo clippy --workspace --no-default-features --all-targets -- -D warnings
       - name: Security audit
         run: |
           cargo install cargo-audit --locked

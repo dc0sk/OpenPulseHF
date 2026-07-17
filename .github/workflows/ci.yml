@@ -95,7 +95,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Core clippy gate
-        run: cargo clippy --workspace --exclude pki-tooling --no-default-features -- -D warnings
+        run: cargo clippy --workspace --exclude pki-tooling --no-default-features --all-targets -- -D warnings
 
       - name: Core test gate
         run: cargo test --workspace --exclude pki-tooling --no-default-features
@@ -117,7 +117,7 @@ jobs:
         run: ./scripts/check-toolchain.sh $REQUIRED_RUST
 
       - name: Full clippy gate
-        run: cargo clippy --workspace --no-default-features -- -D warnings
+        run: cargo clippy --workspace --no-default-features --all-targets -- -D warnings
 
       - name: Full test gate
         run: cargo test --workspace --no-default-features
@@ -169,7 +169,7 @@ jobs:
 
       - name: GPU feature clippy gate
         run: >
-          cargo clippy --no-default-features --features gpu
+          cargo clippy --no-default-features --features gpu --all-targets
           -p bpsk-plugin -p qpsk-plugin -p psk8-plugin -p qam64-plugin -p scfdma-plugin
           -- -D warnings
 
