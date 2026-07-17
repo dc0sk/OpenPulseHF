@@ -9,6 +9,7 @@
 //!   * decode succeeds across a wide amplitude range with AGC **off** and with AGC **on** (no regression);
 //!   * the AGC actually runs on the receive path (tripwire) and its gain **tracks the input level** — the
 //!     metering / QSB-stabilisation role that is its purpose.
+//!
 //! This test is also a guard: a future absolute-level assumption creeping into the RX chain would break
 //! the AGC-off invariance leg.
 

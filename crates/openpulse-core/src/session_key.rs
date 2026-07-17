@@ -61,10 +61,13 @@ mod tests {
         let (_sk_c, pk_c) = generate_kex_ephemeral();
         let key_ab = derive_ack_key(&sk_a, &pk_b);
         let key_ac = derive_ack_key(&sk_a, &pk_c);
-        assert_ne!(key_ab, key_ac);
+        assert_ne!(key_ab, key_ac, "A↔B and A↔C must not share a key");
+        // B's own view of the A↔B pair is the same key, and is still distinct from A↔C — so the
+        // separation above is a property of the *pair*, not an artefact of deriving from A's side.
+        assert_eq!(derive_ack_key(&sk_b, &pk_a), key_ab);
+        assert_ne!(derive_ack_key(&sk_b, &pk_a), key_ac);
         // A third party's key with B does not match A↔B.
         let (sk_x, _pk_x) = generate_kex_ephemeral();
         assert_ne!(derive_ack_key(&sk_x, &pk_b), key_ab);
-        let _ = pk_a;
     }
 }

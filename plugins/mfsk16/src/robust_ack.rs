@@ -25,6 +25,9 @@ use openpulse_channel::{watterson::WattersonChannel, ChannelModel, WattersonConf
 use openpulse_core::ack::{AckFrame, AckType};
 use openpulse_core::fec::{combine_llrs_map, Interleaver, ShortFecCodec};
 
+/// A Watterson profile constructor (`moderate_f1`, `poor_f1`, …) taking an optional seed.
+type ChannelCfgFn = fn(Option<u64>) -> WattersonConfig;
+
 const FS: u32 = 8000;
 const FC: f32 = 1500.0;
 const ACK_DATA_LEN: usize = 5; // AckFrame wire length
@@ -128,7 +131,7 @@ fn union_accept(
     accept(&combine_llrs_map(&refs), fec, il, frame_bytes)
 }
 
-fn faded(cfg_fn: fn(Option<u64>) -> WattersonConfig, snr: f32, seed: u64, sig: &[f32]) -> Vec<f32> {
+fn faded(cfg_fn: ChannelCfgFn, snr: f32, seed: u64, sig: &[f32]) -> Vec<f32> {
     let mut cfg = cfg_fn(Some(seed));
     cfg.snr_db = snr;
     WattersonChannel::new(cfg).expect("watterson").apply(sig)
@@ -136,7 +139,7 @@ fn faded(cfg_fn: fn(Option<u64>) -> WattersonConfig, snr: f32, seed: u64, sig: &
 
 // ── Arm A: baseline single short ACK (frame_bytes=13, t=4, no interleave) ───────────────────────────────
 
-fn arm_a_rate(cfg_fn: fn(Option<u64>) -> WattersonConfig, snr: f32, trials: u32) -> f32 {
+fn arm_a_rate(cfg_fn: ChannelCfgFn, snr: f32, trials: u32) -> f32 {
     let fec = ShortFecCodec::new();
     let il = Interleaver::new(1); // identity
     let coded = fec.encode(&ack_bytes()).expect("encode"); // 13 bytes
@@ -162,7 +165,7 @@ fn arm_a_rate(cfg_fn: fn(Option<u64>) -> WattersonConfig, snr: f32, trials: u32)
 
 /// `ecc` ShortFec ECC bytes (t = ecc/2), `n_sync` Costas blocks, full-depth byte interleave.
 fn arm_b_rate(
-    cfg_fn: fn(Option<u64>) -> WattersonConfig,
+    cfg_fn: ChannelCfgFn,
     snr: f32,
     ecc: usize,
     n_sync: usize,
@@ -201,14 +204,7 @@ struct ArmC {
 /// `k` copies, `hop_hz` per-copy frequency step (0 = ablation), `gap_s` inter-copy silence. Copies pass
 /// through ONE continuous Watterson realization (honest fade correlation), then each is sliced to its own
 /// turnaround window and independently acquired (the ARQ receiver knows the schedule).
-fn arm_c(
-    cfg_fn: fn(Option<u64>) -> WattersonConfig,
-    snr: f32,
-    k: usize,
-    hop_hz: f32,
-    gap_s: f32,
-    trials: u32,
-) -> ArmC {
+fn arm_c(cfg_fn: ChannelCfgFn, snr: f32, k: usize, hop_hz: f32, gap_s: f32, trials: u32) -> ArmC {
     let fec = ShortFecCodec::new();
     let il = Interleaver::new(1);
     let coded = fec.encode(&ack_bytes()).expect("encode");
@@ -273,7 +269,7 @@ fn arm_c(
 
 /// Shipped-path single-ACK decode (hard argmax via the public `demodulate`), to reconcile against the prior
 /// 40-trial ack_feasibility 0.60 and against the LLR-sign decoder used by the diversity arms.
-fn arm_a_argmax(cfg_fn: fn(Option<u64>) -> WattersonConfig, snr: f32, trials: u32) -> f32 {
+fn arm_a_argmax(cfg_fn: ChannelCfgFn, snr: f32, trials: u32) -> f32 {
     let plugin = Mfsk16Plugin::new();
     let fec = ShortFecCodec::new();
     let coded = fec.encode(&ack_bytes()).expect("encode");
@@ -337,10 +333,7 @@ fn k3_union_holds_below_the_floor() {
 fn baseline_reconciliation() {
     let n = 400;
     for (name, cf) in [
-        (
-            "moderate_f1",
-            WattersonConfig::moderate_f1 as fn(Option<u64>) -> WattersonConfig,
-        ),
+        ("moderate_f1", WattersonConfig::moderate_f1 as ChannelCfgFn),
         ("poor_f1", WattersonConfig::poor_f1),
     ] {
         println!("\n── single ACK, {name}, {n} trials ──");
@@ -359,7 +352,7 @@ fn baseline_reconciliation() {
 #[ignore = "REQ-WSIG-01 robust-ACK measurement; cargo test -p mfsk16-plugin robust_ack_sweep -- --ignored --nocapture"]
 fn robust_ack_sweep() {
     let trials = 400;
-    let channels: [(&str, fn(Option<u64>) -> WattersonConfig); 2] = [
+    let channels: [(&str, ChannelCfgFn); 2] = [
         ("moderate_f1", WattersonConfig::moderate_f1),
         ("poor_f1", WattersonConfig::poor_f1),
     ];
