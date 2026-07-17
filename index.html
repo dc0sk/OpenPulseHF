@@ -109,6 +109,82 @@
   .card h3{font-size:1.12rem; font-weight:680; letter-spacing:-.01em}
   .card p{margin:0; color:var(--muted); font-size:.92rem; line-height:1.6}
 
+  /* ---- badges ---- */
+  .badges{display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:22px}
+  .badges img{height:20px; display:block}
+  .badges a{line-height:0}
+
+  /* ---- release status ---- */
+  .release{border:1px solid var(--edge); border-left:3px solid var(--signal); border-radius:10px;
+    padding:20px 22px; background:var(--panel)}
+  .release .ver{font-family:var(--mono); font-size:.78rem; letter-spacing:.1em; text-transform:uppercase; color:var(--signal)}
+  .release h3{font-size:1.1rem; font-weight:680; margin:6px 0 8px}
+  .release p{margin:0; color:var(--muted); font-size:.95rem}
+  .release p + p{margin-top:10px}
+  .release b{color:var(--ink); font-weight:600}
+  .prior{margin-top:14px; font-size:.86rem; color:var(--faint)}
+  .prior b{color:var(--muted)}
+
+  /* ---- stat strip ---- */
+  .stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-top:26px}
+  .stat{border:1px solid var(--edge); border-radius:10px; padding:16px 18px; background:var(--panel); text-align:center}
+  .stat .v{font-family:var(--mono); font-size:1.5rem; font-weight:650; color:var(--signal); line-height:1.1}
+  .stat .k{font-size:.78rem; color:var(--muted); margin-top:6px; line-height:1.35}
+
+  /* ---- feature list ---- */
+  .feats{display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:14px}
+  .feat{border:1px solid var(--edge); border-radius:10px; padding:18px 20px; background:var(--panel);
+    transition:border-color .18s, background .18s}
+  .feat:hover{border-color:var(--signal-line); background:var(--panel2)}
+  .feat h3{font-size:1rem; font-weight:670; margin:0 0 6px; color:var(--ink)}
+  .feat p{margin:0; color:var(--muted); font-size:.9rem; line-height:1.6}
+  .feat code{font-family:var(--mono); font-size:.85em; color:var(--signal)}
+
+  /* ---- caveat ---- */
+  .caveat{margin-top:22px; border:1px dashed var(--edge2); border-radius:10px; padding:16px 20px;
+    background:rgba(38,50,59,.4); color:var(--muted); font-size:.9rem; line-height:1.6}
+  .caveat b{color:var(--ink)}
+
+  /* ---- code ---- */
+  pre{background:#0F161C; border:1px solid var(--edge); border-radius:10px; padding:18px 20px;
+    overflow-x:auto; margin:0 0 14px; font-family:var(--mono); font-size:.83rem; line-height:1.7; color:#DCE6EC}
+  pre .c{color:var(--faint)}
+  pre .p{color:var(--signal)}
+  code{font-family:var(--mono)}
+
+  /* ---- table ---- */
+  .tblwrap{overflow-x:auto; border:1px solid var(--edge); border-radius:10px; background:var(--panel)}
+  table{border-collapse:collapse; width:100%; min-width:520px; font-size:.88rem}
+  th,td{text-align:left; padding:11px 16px; border-bottom:1px solid var(--edge)}
+  th{font-family:var(--mono); font-size:.7rem; letter-spacing:.12em; text-transform:uppercase;
+    color:var(--signal); font-weight:600; background:rgba(63,234,208,.05)}
+  tr:last-child td{border-bottom:none}
+  td{color:var(--muted)}
+  td b{color:var(--ink); font-weight:600}
+  td code{font-size:.85em; color:#DCE6EC}
+
+  /* ---- supporters ---- */
+  .thanks{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px}
+  .thank{border:1px solid var(--edge); border-radius:10px; padding:16px 18px; background:var(--panel)}
+  .thank .n{font-family:var(--mono); font-size:.9rem; font-weight:650; color:var(--signal)}
+  .thank p{margin:6px 0 0; color:var(--muted); font-size:.88rem; line-height:1.55}
+
+  /* ---- support / donate ---- */
+  .support{border:1px solid var(--edge); border-radius:14px; padding:38px 26px; text-align:center;
+    background:var(--panel);
+    background-image:radial-gradient(520px 200px at 50% 0%, rgba(63,234,208,.10), transparent 70%)}
+  .support h2{font-size:1.5rem; margin-bottom:10px}
+  .support p{color:var(--muted); max-width:56ch; margin:0 auto 24px; font-size:.98rem}
+  .btn{display:inline-flex; align-items:center; gap:9px; padding:12px 22px; border-radius:9px;
+    font-weight:650; font-size:.95rem; text-decoration:none; border:1px solid var(--edge2);
+    font-family:var(--sans); transition:border-color .18s, background .18s, transform .18s}
+  .btn:hover{text-decoration:none; transform:translateY(-1px)}
+  .btn.pay{background:var(--signal); color:#0A1014; border-color:transparent}
+  .btn.pay:hover{filter:brightness(1.08)}
+  .btn.gh{background:transparent; color:var(--ink)}
+  .btn.gh:hover{border-color:var(--signal-line); background:var(--signal-soft)}
+  .btnrow{display:flex; flex-wrap:wrap; gap:12px; justify-content:center}
+
   footer{border-top:1px solid var(--edge); padding:34px 0 56px; color:var(--faint)}
   footer .disc{max-width:74ch; font-size:.83rem; line-height:1.6; color:var(--faint)}
   footer .rp{font-family:var(--mono); font-size:.74rem; letter-spacing:.04em; margin-top:18px; color:var(--muted)}
@@ -143,8 +219,21 @@
       <span class="chip">FEC + ARQ</span>
       <span class="chip">Post-quantum ready</span>
       <span class="chip">Raspberry Pi → desktop</span>
-      <a class="chip" href="https://github.com/dc0sk/OpenPulseHF">View on GitHub ↗</a>
+      <span class="chip">GPL v3</span>
     </div>
+    <div class="badges">
+      <a href="https://github.com/dc0sk/OpenPulseHF/actions/workflows/ci.yml"><img src="https://github.com/dc0sk/OpenPulseHF/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+      <a href="https://github.com/dc0sk/OpenPulseHF/releases/latest"><img src="https://img.shields.io/github/v/release/dc0sk/OpenPulseHF?label=release" alt="Latest release"></a>
+      <a href="https://github.com/dc0sk/OpenPulseHF/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3"></a>
+      <a href="https://www.paypal.com/donate/?hosted_button_id=WY9U4MQ3ZAQWC"><img src="https://img.shields.io/badge/Donate-PayPal-blue.svg?logo=paypal" alt="Donate via PayPal"></a>
+    </div>
+    <div class="btnrow" style="justify-content:flex-start; margin-top:24px">
+      <a class="btn gh" href="https://github.com/dc0sk/OpenPulseHF">⌥ View source on GitHub</a>
+      <a class="btn pay" href="https://www.paypal.com/donate/?hosted_button_id=WY9U4MQ3ZAQWC">♥ Donate via PayPal</a>
+    </div>
+    <p style="margin:22px 0 0; font-size:.86rem; color:var(--faint)">
+      Author: <b style="color:var(--muted)">Simon Keimer</b> · <a href="https://github.com/dc0sk">DC0SK</a>
+    </p>
   </div>
 </header>
 
@@ -184,8 +273,232 @@
 </section>
 
 <section class="wrap">
+  <div class="sechead"><p class="eyebrow">Status</p><h2>Where the project is now</h2></div>
+  <p class="lede">A multi-crate Rust workspace: DSP primitives and adaptive rate profiles through
+    ARDOP/KISS TNC interfaces, B2F/Winlink support, QSY frequency agility, mesh networking and
+    post-quantum key exchange. All tests run against a deterministic loopback backend — no audio
+    hardware is required to build or test.</p>
+
+  <div class="release">
+    <span class="ver">🔧 v0.12.2 · released 17 July 2026</span>
+    <h3>Weak-signal receive gets measurably better at pulling frames out of a fading channel</h3>
+    <p><b>HARQ soft-combining across retransmissions was quietly throwing away most of its own
+      gain</b> — it discarded retained soft-decision data whose length varied between bursts (which it
+      does, on every fade), and an abandoned message's data could dilute the next one's. Both fixed:
+      decode rate on a moderate HF fade rises <b>0.840 → 0.957</b> where a single burst manages 0.582.</p>
+    <p><b>The weak-signal sub-floor rung (MFSK16) now gets HARQ too</b>, worth about <b>2.5 dB</b>
+      there — it decodes frames at −6 dB that no single transmission ever recovers, which is exactly
+      where a link has nothing else left. Also: <code>openpulse session --diagnostics</code> now reports
+      a real <code>afc_offset_hz</code> instead of always <code>null</code>. No wire, config or API
+      change; nothing to do to upgrade.</p>
+    <p class="prior"><b>v0.4.0</b> — JS8-based station discovery + rendezvous and direct signed P2P
+      file transfer. &nbsp;·&nbsp; <b>v0.3.0</b> — signed Ed25519 handshake over the air on connect,
+      automatic ADIF logbook, opt-in ARDOP adaptive ARQ, reworked operator panel.
+      &nbsp;·&nbsp; <b>v0.2.1</b> — CE-SSB transmit envelope conditioning (+1.18 dB confirmed on-air).</p>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="v">40+</div><div class="k">registered modulation modes</div></div>
+    <div class="stat"><div class="v">31 → 12k</div><div class="k">gross bps, BPSK31 → 64QAM2000-RRC</div></div>
+    <div class="stat"><div class="v">9</div><div class="k">FEC schemes, RS → LDPC → Turbo</div></div>
+    <div class="stat"><div class="v">12</div><div class="k">adaptive rate profiles</div></div>
+    <div class="stat"><div class="v">6</div><div class="k">wgpu GPU DSP kernels</div></div>
+    <div class="stat"><div class="v">7</div><div class="k">simulated channel models</div></div>
+  </div>
+</section>
+
+<section class="wrap">
+  <div class="sechead"><p class="eyebrow">Why OpenPulseHF</p><h2>Firsts and near-firsts in open-source amateur digital modes</h2></div>
+  <p class="lede">Several capabilities here do not exist elsewhere in open HF software — or exist only
+    as stubs. These are the ones with working implementations behind them.</p>
+
+  <div class="feats">
+    <div class="feat">
+      <h3>Post-quantum link security</h3>
+      <p>ML-DSA-44 signing + ML-KEM-768 key encapsulation negotiated in-band. Hybrid mode signs with
+        both Ed25519 and ML-DSA-44 simultaneously. No other open HF modem does this.</p>
+    </div>
+    <div class="feat">
+      <h3>SC-FDMA waveform on HF</h3>
+      <p>Single-Carrier FDMA — the LTE uplink waveform — brought to HF with DFT-CE pilot-aided channel
+        estimation and MMSE equalization.</p>
+    </div>
+    <div class="feat">
+      <h3>Working LDPC belief propagation</h3>
+      <p>Real rate-1/2 min-sum belief propagation — not a stub. First open-source HF software modem
+        with working LDPC.</p>
+    </div>
+    <div class="feat">
+      <h3>LLR-accumulating ARQ</h3>
+      <p>Soft LLR values accumulate across retransmissions (PACTOR-style Memory-ARQ), turning each
+        retry into a soft combining gain.</p>
+    </div>
+    <div class="feat">
+      <h3>Pilot-framed carrier recovery</h3>
+      <p>A single-carrier family (<code>PILOT-QPSK500</code>…<code>PILOT-32APSK500</code>, up to DVB-S2
+        32APSK) whose known in-band pilots drive carrier tracking instead of a decision-directed Costas
+        loop — cycle-slip-immune on dense constellations and robust to soundcard sample-rate offset.</p>
+    </div>
+    <div class="feat">
+      <h3>64QAM with soft demodulation</h3>
+      <p>Gray-coded 64QAM with a max-log-MAP soft demodulator. An aggressive constellation for VHF/UHF
+        links with proper soft FEC backing.</p>
+    </div>
+    <div class="feat">
+      <h3>GPU-accelerated DSP</h3>
+      <p>Six wgpu compute kernels (BPSK modulate/demodulate, timing search, RRC FIR matched filter,
+        256-pt FFT, soft LLR demod) accelerating BPSK, QPSK, 8PSK, 64QAM and SC-FDMA — all with
+        automatic CPU fallback.</p>
+    </div>
+    <div class="feat">
+      <h3>CE-SSB conditioning for data modes</h3>
+      <p>Controlled-Envelope SSB (Hershberger W9GR, QEX 2014) — a voice-SSB technique — applied as an
+        adaptive per-mode TX conditioner that raises average power at fixed PEP on high-PAPR
+        multicarrier modes. Confirmed <b>+1.18 dB on-air</b>, with no added splatter on QPSK OFDM.
+        Believed to be the first open-source HF <i>data</i> modem to do this.</p>
+    </div>
+    <div class="feat">
+      <h3>JS8-based discovery + rendezvous</h3>
+      <p>When idle, a station QSYs to the band's JS8 calling frequency and participates as a real JS8
+        station (native 8-GFSK / LDPC(174,87) — not a JS8Call bridge), marking itself with an in-band
+        <code>@OPULSE</code> hint. Off by default; RX-only until the operator opts into TX.</p>
+    </div>
+    <div class="feat">
+      <h3>Signed-manifest P2P file transfer</h3>
+      <p>Offer/accept file transfer over an RF session with an inline signed <code>TransferManifest</code>
+        + SHA-256 verified against the peer's handshake key — a tampered or wrong-key file is
+        quarantined with an UNVERIFIED badge. VarAC's file transfer does not do this.</p>
+    </div>
+    <div class="feat">
+      <h3>Ed25519-signed QSY frequency agility</h3>
+      <p>A signed QSY_REQ/LIST/VOTE/ACK wire protocol with initiator and responder roles wired into the
+        daemon; SNR-ranked channel-list negotiation and rig CAT control via rigctld.</p>
+    </div>
+    <div class="feat">
+      <h3>FreeDV authenticated voice</h3>
+      <p>Ed25519-signed authentication beacons transmitted via the FreeDV Qt-GUI UDP data port
+        (<code>openpulse-freedv-auth</code>) — no FreeDV fork required.</p>
+    </div>
+  </div>
+
+  <p class="caveat"><b>Validation status:</b> on-air regulatory validation (spectral mask) has not been
+    completed. Except for the CE-SSB average-power confirmation above, all tests use loopback and
+    simulated-channel paths only.</p>
+</section>
+
+<section class="wrap">
   <div class="sechead"><p class="eyebrow">Who it's for</p><h2>Read it from your side of the screen</h2></div>
   <div class="cards" id="cards"></div>
+</section>
+
+<section class="wrap">
+  <div class="sechead"><p class="eyebrow">Operator interfaces</p><h2>Five ways to drive it</h2></div>
+  <div class="tblwrap">
+    <table>
+      <thead><tr><th>Interface</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><b>Operator panel</b><br><code>openpulse-panel</code></td>
+            <td>Full <b>iced</b> GUI on the daemon control port (TCP/WS): controls band (connection, PTT,
+              mode/frequency, RF peer, toggles, TX-atten/squelch, OTA, QSY), live spectrum + waterfall +
+              rate ladder, tabbed lower panel. Dark/Light/Contrast/System themes.</td></tr>
+        <tr><td><b>Twin-station view</b><br><code>openpulse-twinview</code></td>
+            <td>egui both-directions viewer — one window over two daemons; per-station spectrum/waterfall
+              plus rate/OTA/HPX readouts, so both link directions show at once.</td></tr>
+        <tr><td><b>TUI</b><br><code>openpulse-tui</code></td>
+            <td>ratatui terminal UI — colour-coded HPX state, AFC/rate meters, DCD energy bar,
+              scrollable transitions log.</td></tr>
+        <tr><td><b>CLI</b><br><code>openpulse-cli</code></td>
+            <td>Transmit, receive, benchmark, monitor, config init, calibrate (audio/PTT/AFC).</td></tr>
+        <tr><td><b>Signal testbench</b><br><code>openpulse-testbench</code></td>
+            <td>egui 4-column live view: TX / channel / mixed / RX; waterfall, spectrum, scatter;
+              7 channel models; SNR slider.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="wrap">
+  <div class="sechead"><p class="eyebrow">Quick start</p><h2>Build it, test it — no radio needed</h2></div>
+  <p class="lede">The test suite runs entirely against a deterministic loopback backend. No audio
+    hardware, radio or station is required to build or test.</p>
+
+<pre><span class="c"># Toolchain preflight (required: rustc >= 1.94.0)</span>
+./scripts/check-toolchain.sh
+
+<span class="c"># Build (requires libasound2-dev on Linux for the CPAL audio feature)</span>
+cargo build --workspace
+
+<span class="c"># Test suite — no audio hardware required</span>
+cargo test --workspace --no-default-features
+
+<span class="c"># Lint</span>
+cargo clippy --workspace --no-default-features -- -D warnings
+cargo fmt --all -- --check</pre>
+
+  <h3 style="font-size:1.05rem; font-weight:670; margin:26px 0 8px">Try it without a radio</h3>
+  <p class="lede" style="margin-bottom:16px">A purely rig-less demo to get a first impression of the
+    GUIs and the adaptive modem. None of it transmits on the air.</p>
+
+<pre><span class="c"># Two-station ARQ link simulator GUI — simulates BOTH stations over a virtual
+# HF channel. Tweak SNR / channel model / mode live and watch the ladder adapt.</span>
+cargo run -p openpulse-linksim --features gui --bin openpulse-linksim-gui
+
+<span class="c"># Want the operator panel too? The simulator stands in for the daemon.</span>
+cargo run -p openpulse-linksim --features "gui,serve" --bin openpulse-linksim-gui -- --serve 127.0.0.1:9000
+cargo run -p openpulse-panel   <span class="c"># in another terminal → Connect</span></pre>
+</section>
+
+<section class="wrap">
+  <div class="sechead"><p class="eyebrow">Interoperability</p><h2>Talking to other software</h2></div>
+  <p class="lede">OpenPulseHF is GPL v3, but these interfaces let non-GPL software interoperate without
+    GPL obligations — each sits behind a process or network protocol boundary. Note that plugins which
+    statically link <code>openpulse-core</code> are derivative works and must be GPL-compatible.</p>
+  <div class="tblwrap">
+    <table>
+      <thead><tr><th>Interface</th><th>Transport</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><b>ARDOP TNC</b></td><td><code>TCP 8515/8516</code></td>
+            <td>ARDOP ASCII command protocol; Pat, Winlink Express and JS8Call compatible</td></tr>
+        <tr><td><b>KISS/AX.25 TNC</b></td><td><code>TCP 8100</code></td>
+            <td>Standard KISS framing; works with Xastir, YAAC, APRX, Linux AX.25 tools</td></tr>
+        <tr><td><b>Daemon control port</b></td><td><code>NDJSON / TCP 9000</code></td>
+            <td>Full event stream + control commands; operator panel and scripting</td></tr>
+        <tr><td><b>Daemon WebSocket</b></td><td><code>JSON / WS 9001</code></td>
+            <td>Same protocol as the TCP port; browser and Electron clients</td></tr>
+        <tr><td><b>PKI REST API</b></td><td><code>HTTP/JSON 8080</code></td>
+            <td>Trust-bundle and key-management endpoints; read-only routes unauthenticated</td></tr>
+        <tr><td><b>CLI subprocess</b></td><td><code>stdin / stdout</code></td>
+            <td>NDJSON output; invocation crosses the process boundary</td></tr>
+        <tr><td><b>Winlink CMS gateway</b></td><td><code>B2F / TCP 8772</code></td>
+            <td>Outbound-only client to cms.winlink.org</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="wrap">
+  <div class="sechead"><p class="eyebrow">Supporters</p><h2>Big thanks to</h2></div>
+  <div class="thanks">
+    <div class="thank"><div class="n">DD2ZM</div>
+      <p>For providing access to a remote-controllable station for testing.</p></div>
+    <div class="thank"><div class="n">DB1IUA</div>
+      <p>For helping stuff the budget sink-hole.</p></div>
+    <div class="thank"><div class="n">Notfunk Deutschland e.V.</div>
+      <p>For providing space on their booth at HAM RADIO 2026.</p></div>
+  </div>
+</section>
+
+<section class="wrap">
+  <div class="support">
+    <h2>Support this work</h2>
+    <p>OpenPulseHF is free and open source under GPL v3. If it is useful to you, a donation funds
+      sustained time on the modem, on-air testing, and better documentation — and keeps the whole
+      stack open, auditable and vendor-independent.</p>
+    <div class="btnrow">
+      <a class="btn pay" href="https://www.paypal.com/donate/?hosted_button_id=WY9U4MQ3ZAQWC">♥ Donate via PayPal</a>
+      <a class="btn gh" href="https://github.com/dc0sk/OpenPulseHF">⌥ View source on GitHub</a>
+    </div>
+  </div>
 </section>
 
 <footer class="wrap">
@@ -194,12 +507,16 @@
     bandwidth, encryption restrictions, and station identification. Users are responsible for lawful
     operation. The control-channel encryption secures the local operator link and is independent of any
     restrictions on obscuring the meaning of on-air amateur communications.</p>
+  <p class="disc" style="margin-top:14px">Licensed under the <b style="color:var(--muted)">GNU General
+    Public License v3.0 or later</b>. Author: Simon Keimer · DC0SK.</p>
   <p class="links">
     <a href="https://github.com/dc0sk/OpenPulseHF">Source on GitHub</a>
+    <a href="https://github.com/dc0sk/OpenPulseHF/releases/latest">Releases</a>
+    <a href="https://github.com/dc0sk/OpenPulseHF/blob/main/LICENSE">License</a>
     <a href="https://dc0sk.github.io/">More projects by DC0SK</a>
-    <a href="https://www.paypal.com/donate/?hosted_button_id=WY9U4MQ3ZAQWC">Support this work</a>
+    <a href="https://www.paypal.com/donate/?hosted_button_id=WY9U4MQ3ZAQWC">Donate</a>
   </p>
-  <p class="rp">docs/osi-layer-map.md · docs/openpulse-abstract.md</p>
+  <p class="rp">docs/osi-layer-map.md · docs/openpulse-abstract.md · README.md</p>
 </footer>
 
 <script>
