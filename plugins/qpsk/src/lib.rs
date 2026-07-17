@@ -50,7 +50,9 @@ impl QpskPlugin {
             supported_modes: vec![
                 "QPSK125".to_string(),
                 "QPSK250".to_string(),
+                "QPSK250-D".to_string(),
                 "QPSK500".to_string(),
+                "QPSK500-D".to_string(),
                 "QPSK1000".to_string(),
                 "QPSK1000-HF".to_string(),
                 "QPSK1000-HF-RRC".to_string(),
@@ -144,14 +146,28 @@ impl ModulationPlugin for QpskPlugin {
     }
 }
 
+/// Whether `mode` selects the differential (DQPSK) waveform — the `-D` suffix.
+///
+/// Differential modes encode each dibit as a phase *increment*, so a slow fade-induced
+/// rotation cancels in the receiver's symbol-to-symbol difference and a carrier cycle-slip
+/// corrupts one dibit instead of the whole frame tail — the immunity BPSK's NRZI decode
+/// already has. This is the HF-fading path (see `SessionProfile::hpx_hf` SL6); it trades
+/// ~2 dB of AWGN floor for surviving a 1 Hz Doppler fade, where coherent QPSK decodes 0%.
+pub(crate) fn is_differential(mode: &str) -> bool {
+    mode.ends_with("-D")
+}
+
 /// Parse numeric baud rate from modes such as "QPSK250", "QPSK1000-HF", "QPSK500-RRC", or "QPSK1000-HF-RRC".
 ///
-/// Suffixes "-HF" and "-RRC" are stripped in a loop until neither appears at the end, which
+/// Suffixes "-HF", "-RRC" and "-D" are stripped in a loop until none appears at the end, which
 /// handles composite variants like "QPSK1000-HF-RRC" regardless of ordering.
 pub(crate) fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
     let mut base = mode;
     loop {
-        let stripped = base.trim_end_matches("-HF").trim_end_matches("-RRC");
+        let stripped = base
+            .trim_end_matches("-HF")
+            .trim_end_matches("-RRC")
+            .trim_end_matches("-D");
         if stripped == base {
             break;
         }

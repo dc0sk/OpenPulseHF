@@ -9,6 +9,54 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-17 — fix(modem): differential QPSK (`-D`) for the dead HF-fading ladder rung (#923)
+
+- **Requirement/change:** issue #923 — `hpx_hf` SL6 (`QPSK250+Rs`) decodes **0% on Watterson
+  `moderate_f1`** (1 Hz Doppler, 1.0 ms delay) at *every* SNR up to 40 dB. Matches CLAUDE.md's
+  "a modem that fails at every SNR has a bug, not a limitation" fingerprint. The rung is a shipped
+  ladder step that looks unusable on a routine ITU-R moderate HF channel.
+- **Diagnosis — measured, and it falsified the tidy story.** Ablation at 40 dB: removing the delay
+  spread → **0.00** (ISI is *not* it); removing the Doppler → **0.82** (fading is it). So the
+  mechanism is **carrier-phase tracking through the fade**, not ISI and not noise. A cross-mode probe
+  through `moderate_f1` was decisive: BPSK250 **0.95**, MFSK16 **1.00**, and **every** coherent
+  absolutely-encoded mode dead — QPSK250 **0.00**, QPSK500 0.025, 8PSK500 (with its 2-pass
+  `dd_track_seeded`) **0.00**, PILOT-QPSK500 **0.00**. This kills the two obvious fixes: porting the
+  2-pass acquire-then-track to QPSK, and routing the rung to the pilot waveform — both measured to
+  0.00. The survivors (BPSK, MFSK16) are exactly the differentially-decoded and non-coherent modes.
+- **Design decision — differential encoding (`QPSK250-D`), the same immunity BPSK's NRZI decode has.**
+  Each dibit is a Gray-mapped phase *increment*; the receiver recovers it from `arg(z[k]·conj(z[k-1]))`,
+  so a slow fade rotation is common to both symbols and cancels, and a carrier cycle-slip corrupts one
+  dibit instead of the whole frame tail. No carrier PLL is run on the `-D` path (a coherent cleanup
+  pass was measured to change nothing — 0.650/0.725 with or without it). Prototyped and **measured
+  before committing the scope**: `QPSK250-D+Rs` 0.00 → **0.65 @ 20 dB / 0.72 @ 40 dB**. Trade-offs
+  characterised: differential **requires FEC** (no-FEC `-D` is also 0.00, since a per-slip dibit error
+  must be corrected); AWGN cost is ~2 dB **only at the extreme floor** (coherent 0.675 vs differential
+  0.000 at 2 dB; both 1.00 by 4 dB, well under SL6's ~7 dB operating point); and there is **no
+  differential soft-LLR path**, so `qpsk_demodulate_soft` errors on `-D` rather than emit
+  miscalibrated coherent LLRs. Scope confirmed with the user: **QPSK only, re-seat SL6**; the sibling
+  8PSK500 (SL9) has the same disease and is a documented follow-up (separate plugin).
+- **Implementation:**
+  - `plugins/qpsk/src/lib.rs`: `is_differential(mode)` (`-D` suffix); `-D` added to the
+    `parse_baud_rate` strip loop and to `supported_modes` (`QPSK250-D`, `QPSK500-D`).
+  - `plugins/qpsk/src/modulate.rs`: `differential_encode` + `rotation_rad` (Gray dibit → phase
+    increment); `qpsk_modulate` branches to it on `-D`.
+  - `plugins/qpsk/src/demodulate.rs`: `differential_decode_to_bytes` (symbol-to-symbol phase
+    difference, no PLL/LMS); `qpsk_demodulate` branches to it on `-D`; `qpsk_demodulate_soft` rejects
+    `-D`.
+  - `crates/openpulse-core/src/profile.rs`: `hpx_hf` SL6 mode `QPSK250` → `QPSK250-D` (FEC stays Rs).
+- **Tests:**
+  - `crates/openpulse-modem/tests/qpsk_differential_fading.rs` (new): `differential_qpsk_round_trips_clean`;
+    `differential_qpsk_survives_moderate_f1_where_coherent_dies` — asserts coherent ≤ 0.10, differential
+    ≥ 0.40, and differential ≥ coherent + 0.30 on the same channel.
+  - `plugins/qpsk` unit tests (new): `differential_qpsk_round_trip`,
+    `differential_qpsk_confines_a_cycle_slip_to_two_dibits` (inject a mid-frame 90° slip → ≤ 4 bits
+    corrupted, not the tail), `differential_qpsk_has_no_soft_path`.
+  - Updated `session_profile.rs` (SL6 → `QPSK250-D`) and `cli_mode_advisor.rs` (SL6 advisor mode).
+- **Test results (actually run):** `qpsk_differential_fading` 2/2; `qpsk-plugin` differential unit
+  tests 3/3; `openpulse-core --test session_profile` 30/30; `openpulse-cli --test cli_mode_advisor`
+  3/3; `openpulse-modem --test ota_channel_adaptation` 3/3. Full workspace + clippy + fmt + benchmark
+  gate below.
+
 ## 2026-07-16 — fix(cli): report the AFC offset in session diagnostics (it was always null)
 
 - **Requirement/change:** the "dead pub surface" cleanup item on issue #917, which listed

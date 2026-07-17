@@ -6,13 +6,13 @@ fn mode_advisor_outputs_expected_levels_across_hpx_hf_ladder() {
     // Expected (SNR dB → level, mode) against the finer hpx_hf floors in `profile.rs` (research #2):
     // SL2=3 SL3=4 SL4=4.5 SL5=5 SL6=7 SL7=9 SL8=11 SL9=12 SL10=13 SL11=14 SL12=16 SL13=17 SL14=19
     // SL15=22. The advisor picks the highest rung whose floor is met, so a probe *at* a floor lands on
-    // that rung. SL6/SL7 are QPSK250 at different FEC (coded gap-filler vs uncoded).
+    // that rung. SL6 is differential QPSK250-D+Rs (HF-fade-robust, #923); SL7 is coherent uncoded QPSK250.
     let cases = [
         (0.0, "SL1", "MFSK16"), // below BPSK31's 3 dB floor → the MFSK16 sub-floor rung (REQ-WSIG-01)
         (3.5, "SL2", "BPSK31"),
         (4.5, "SL4", "BPSK100"),
         (5.5, "SL5", "BPSK250"),
-        (8.5, "SL6", "QPSK250"),
+        (8.5, "SL6", "QPSK250-D"),
         (9.5, "SL7", "QPSK250"),
         (11.5, "SL8", "QPSK500"),
         (12.0, "SL9", "8PSK500"),

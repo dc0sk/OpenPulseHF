@@ -165,6 +165,15 @@ pub fn qpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
     // For RRC: downmix to baseband I/Q then apply the matched low-pass RRC
     // filter; applying the baseband RRC directly to the passband signal would
     // place fc outside the filter passband and attenuate the signal to ~0.
+    if crate::is_differential(&config.mode) {
+        let timing = find_timing_offset(samples, n, fc, fs, cosine_overlap);
+        let mut raw = demodulate_symbols(samples, n, fc, fs, timing, cosine_overlap);
+        if !cosine_overlap {
+            cancel_crossfade_isi(&mut raw);
+        }
+        return Ok(differential_decode_to_bytes(&raw));
+    }
+
     let syms = if let Some(alpha) = rrc_alpha {
         // Canonical carrier-recovery order (matches 8PSK): timing + Costas PLL
         // inside the RRC path, then resolve the PLL's 90° rotational ambiguity
@@ -413,6 +422,35 @@ fn demodulate_symbols(
     out
 }
 
+/// Differential QPSK decode: recover dibits from the phase *difference* between
+/// consecutive symbols, `arg(z[k]·conj(z[k-1]))`. A slow fade rotation is common to
+/// both symbols and cancels; a ±90° carrier slip corrupts exactly one dibit instead
+/// of the whole frame tail (the immunity BPSK's NRZI decode already has). No carrier
+/// PLL or LMS is run — the differential is inherently phase-drift-invariant.
+fn differential_decode_to_bytes(raw: &[(f32, f32)]) -> Vec<u8> {
+    use std::f32::consts::FRAC_PI_2;
+    if raw.len() <= PREAMBLE_SYMS + TAIL_SYMS {
+        return Vec::new();
+    }
+    let data_end = raw.len() - TAIL_SYMS;
+    let mut bits = Vec::with_capacity((data_end - PREAMBLE_SYMS) * 2);
+    // Reference for the first data symbol is the last preamble symbol (raw[PREAMBLE_SYMS-1]).
+    for k in PREAMBLE_SYMS..data_end {
+        let (i1, q1) = raw[k];
+        let (i0, q0) = raw[k - 1];
+        // z[k] · conj(z[k-1])
+        let re = i1 * i0 + q1 * q0;
+        let im = q1 * i0 - i1 * q0;
+        let dphi = im.atan2(re);
+        // Nearest rotation index r in {0,1,2,3}.
+        let r = (dphi / FRAC_PI_2).round().rem_euclid(4.0) as u8;
+        let (b0, b1) = crate::modulate::dibit_from_rotation_index(r);
+        bits.push(b0);
+        bits.push(b1);
+    }
+    bits_to_bytes(&bits)
+}
+
 fn symbols_to_bits(symbols: &[(f32, f32)]) -> Vec<bool> {
     let mut bits = Vec::with_capacity(symbols.len() * 2);
     for &(i, q) in symbols {
@@ -654,6 +692,15 @@ pub fn qpsk_demodulate_soft(
     samples: &[f32],
     config: &ModulationConfig,
 ) -> Result<Vec<f32>, ModemError> {
+    if crate::is_differential(&config.mode) {
+        // Differential modes carry data in phase *differences*; the absolute-constellation soft
+        // projections below would be meaningless. A calibrated differential soft path is not yet
+        // implemented, so fail loudly rather than feed garbage LLRs into a soft decoder. The `-D`
+        // rung (hpx_hf SL6) is plain-RS, which takes the hard `qpsk_demodulate` path.
+        return Err(ModemError::Demodulation(
+            "differential QPSK has no soft-LLR path; use hard demodulate".to_string(),
+        ));
+    }
     let data = extract_data_symbols(samples, config)?;
     // Per symbol: b0 LLR = Q, b1 LLR = I (from the Gray map geometry).
     // Bits are pushed as (b0, b1) in symbols_to_bits, matching [q, i] here.
@@ -1043,6 +1090,73 @@ mod tests {
         let samples = crate::modulate::qpsk_modulate(payload, &cfg).expect("modulate");
         let recovered = qpsk_demodulate(&samples, &cfg).expect("demodulate");
         assert_eq!(&recovered[..payload.len()], payload);
+    }
+
+    #[test]
+    fn differential_qpsk_round_trip() {
+        let cfg = ModulationConfig {
+            mode: "QPSK250-D".to_string(),
+            ..ModulationConfig::default()
+        };
+        let payload: Vec<u8> = (0u8..64).collect();
+        let samples = crate::modulate::qpsk_modulate(&payload, &cfg).expect("modulate");
+        let recovered = qpsk_demodulate(&samples, &cfg).expect("demodulate");
+        assert_eq!(&recovered[..payload.len()], &payload[..]);
+    }
+
+    /// The property that fixes #923: a single mid-frame carrier cycle-slip (a spurious 90° rotation
+    /// of the whole tail, exactly what a fade null does to a decision-directed loop) corrupts only the
+    /// two dibits straddling the slip — not the frame tail. On a *coherent* absolutely-encoded stream
+    /// the same slip would flip every subsequent symbol; here differential decoding re-references each
+    /// symbol to its predecessor, so the rotation cancels one symbol later.
+    #[test]
+    fn differential_qpsk_confines_a_cycle_slip_to_two_dibits() {
+        use crate::modulate::{bytes_to_bits, differential_encode, preamble_symbols};
+        let payload: Vec<u8> = (0u8..32).collect();
+        let mut syms = preamble_symbols();
+        syms.extend(differential_encode(&bytes_to_bits(&payload)));
+        syms.extend(std::iter::repeat_n(gray_map(false, false), TAIL_SYMS));
+
+        // Inject a +90° rotation from the middle of the data onward (a cycle slip).
+        let slip_at = PREAMBLE_SYMS + 40;
+        for s in syms.iter_mut().skip(slip_at) {
+            let (i, q) = *s;
+            *s = (-q, i); // rotate by +90°
+        }
+
+        let clean = differential_decode_to_bytes(&{
+            let mut c = preamble_symbols();
+            c.extend(differential_encode(&bytes_to_bits(&payload)));
+            c.extend(std::iter::repeat_n(gray_map(false, false), TAIL_SYMS));
+            c
+        });
+        let slipped = differential_decode_to_bytes(&syms);
+
+        let clean_bits: Vec<bool> = bytes_to_bits(&clean);
+        let slip_bits: Vec<bool> = bytes_to_bits(&slipped);
+        let differing = clean_bits
+            .iter()
+            .zip(slip_bits.iter())
+            .filter(|(a, b)| a != b)
+            .count();
+        // One slip touches the dibit at the boundary (and at most its neighbour) — never the whole tail.
+        assert!(
+            differing <= 4,
+            "a cycle slip should corrupt at most ~2 dibits, corrupted {differing} bits"
+        );
+    }
+
+    #[test]
+    fn differential_qpsk_has_no_soft_path() {
+        let cfg = ModulationConfig {
+            mode: "QPSK250-D".to_string(),
+            ..ModulationConfig::default()
+        };
+        let samples = crate::modulate::qpsk_modulate(&[0u8; 16], &cfg).expect("modulate");
+        assert!(
+            qpsk_demodulate_soft(&samples, &cfg).is_err(),
+            "differential modes must reject the soft path rather than emit miscalibrated LLRs"
+        );
     }
 
     /// Verify QPSK125 decodes correctly even with a 0.6 Hz carrier offset between

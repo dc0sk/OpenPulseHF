@@ -145,7 +145,7 @@ ceiling *and* a positive ACK arrives.
 | Profile | Class | Rungs (low → high) | Use |
 |---|---|---|---|
 | `hpx500` | Narrowband | BPSK31 → BPSK63 → BPSK250 → QPSK250 → QPSK500 | Robust, ≤600 Hz HF |
-| **`hpx_hf`** | **HF (≤2700 Hz)** | **BPSK31/63/250 → QPSK250/500 → 8PSK500 → SCFDMA52-{8PSK,16QAM,32QAM,64QAM}** | **Primary HF profile — the full HF-legal span** |
+| **`hpx_hf`** | **HF (≤2700 Hz)** | **BPSK31/63/100/250 → QPSK250-D/250/500 → 8PSK500 → SCFDMA26 → OFDM52-{8PSK,16QAM,32QAM,64QAM}** | **Primary HF profile — the full HF-legal span** |
 | **`hpx_ofdm_hf`** | **HF multicarrier** | **OFDM16 → OFDM52 → OFDM52-{8PSK,16QAM,32QAM,64QAM} (SL5–10)** | **High-throughput / high-reliability HF — per-SC equalization on fades (§7)** |
 | `hpx_pilot` | HF pilot-aided | PILOT-QPSK500 → PILOT-8PSK500 → PILOT-16QAM500 → PILOT-32APSK500 (SL2–5; SNR floors 6/12/17/23 dB) | Cycle-slip-immune, sample-rate-offset-robust single-carrier ladder; soft-capable (auto-selects high-rate LDPC on the dense rungs) |
 | `hpx_pilot_rrc` | HF pilot, narrowband | same ladder on the `-RRC` variants | ~half the bandwidth (RRC); same per-symbol floors. Prefer `hpx_pilot` when SRO-heavy |
@@ -168,6 +168,16 @@ SC-FDMA PAPR advantage that once motivated those rungs did not materialise (§7)
 This is the profile for a real HF SSB channel. It spans the **entire** mode set that
 fits the 2700 Hz channel — from the most robust BPSK to the densest SC-FDMA — so one
 adaptive session walks from weak-signal to high-throughput without switching profiles:
+
+> **SL6 is differential QPSK (`QPSK250-D`), not coherent QPSK250** (issue #923). Coherent
+> QPSK250+Rs decodes 0% on a Watterson `moderate_f1` fade at *every* SNR — an absolutely-encoded
+> waveform cannot hold a carrier-phase reference through a 1 Hz Doppler fade. Differential encoding
+> makes the fade rotation cancel symbol-to-symbol (the immunity BPSK already has), recovering the rung
+> to ~0.65 decode at 20 dB for ~2 dB of AWGN floor. The coherent QPSK/8PSK rungs above it (SL7–SL9)
+> remain high-SNR / non-fading rungs.
+>
+> *(The SL-numbered table below predates the finer ladder and OFDM re-seat; the authoritative rung
+> map is `SessionProfile::hpx_hf` in `crates/openpulse-core/src/profile.rs`.)*
 
 | SL | Mode | SNR floor | SNR ceiling | Notes |
 |---|---|---|---|---|

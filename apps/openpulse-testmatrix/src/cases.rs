@@ -71,6 +71,11 @@ const HF_FAST_MODES: &[&str] = &[
     "BPSK250-RRC",
     "QPSK125",
     "QPSK250",
+    // Differential (DQPSK) — the HF-fade-robust variants; `hpx_hf` SL6 is QPSK250-D (issue #923).
+    // Coherent QPSK250 decodes 0% on watterson_moderate_f1 at every SNR; these are the rungs that
+    // survive it, so the matrix is exactly where the fading contrast should be visible.
+    "QPSK250-D",
+    "QPSK500-D",
     "QPSK500",
     "QPSK1000-HF",
     "QPSK500-RRC",
