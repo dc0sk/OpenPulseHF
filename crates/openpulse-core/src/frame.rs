@@ -36,6 +36,10 @@ impl Frame {
         Ok(Self { sequence, payload })
     }
 
+    /// Fixed byte overhead [`Frame::encode`] adds to the payload: magic(4) + version(1) +
+    /// sequence(2) + length(1) + CRC(2). So `encode().len() == payload.len() + WIRE_OVERHEAD`.
+    pub const WIRE_OVERHEAD: usize = 4 + 1 + 2 + 1 + 2;
+
     /// Serialise the frame to bytes ready for the modulator.
     pub fn encode(&self) -> Vec<u8> {
         let header_len = MAGIC.len() + 1 + 2 + 1; // magic + ver + seq + len

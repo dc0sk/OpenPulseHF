@@ -1183,7 +1183,13 @@ impl ModemEngine {
                 .ota_tx_mode()
                 .ok_or_else(|| ModemError::Configuration("no OTA session active".into()))?
                 .to_owned();
-            let fec = self.ota_tx_fec();
+            // Opportunistically strengthen Rs → RsStrong when the stronger code costs no extra RS
+            // block for this frame's size (free on the wire; #934 follow-up). Roughly doubles the weak
+            // rungs' fading decode on small frames; a no-op on the sizes that would need a 2nd block.
+            let fec = openpulse_core::fec::free_rs_strengthening(
+                self.ota_tx_fec(),
+                data.len() + openpulse_core::frame::Frame::WIRE_OVERHEAD,
+            );
             self.transmit_with_fec_mode(data, &mode, fec, device)?;
             match self.receive_ack_with_short_fec_within(device, ack_timeout_ms) {
                 Ok(ack) => {
@@ -1547,7 +1553,7 @@ impl ModemEngine {
         samples: &AudioSamples,
         session_id: &str,
     ) -> Result<OtaDecodeOutcome, ModemError> {
-        let candidates: Vec<(SpeedLevel, String, FecMode)> = self
+        let mut candidates: Vec<(SpeedLevel, String, FecMode)> = self
             .ota
             .as_ref()
             .ok_or_else(|| ModemError::Configuration("no OTA session active".into()))?
@@ -1555,6 +1561,16 @@ impl ModemEngine {
             .into_iter()
             .map(|(l, m, f)| (l, m.to_string(), f))
             .collect();
+        // The sender opportunistically strengthens Rs → RsStrong when it costs no extra block
+        // (`free_rs_strengthening`). The receiver can't know the frame size before decoding, so for
+        // every Rs candidate it also tries RsStrong; whichever the sender used passes CRC and the
+        // other fails cleanly. One extra ~µs RS decode on the weak rungs, no wire-format change.
+        let strong: Vec<(SpeedLevel, String, FecMode)> = candidates
+            .iter()
+            .filter(|(_, _, f)| *f == FecMode::Rs)
+            .map(|(l, m, _)| (*l, m.clone(), FecMode::RsStrong))
+            .collect();
+        candidates.extend(strong);
 
         // AFC accumulates across calls, so a failed wrong-mode candidate would
         // poison the correct candidate's correction. Isolate each attempt: reset to

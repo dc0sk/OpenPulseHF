@@ -501,6 +501,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | Every `hpx_hf` rung decodes on a Watterson `moderate_f1` fade; no rung is uncoded; the entry rung works AT its floor | `cargo test -p openpulse-modem --test hpx_hf_rungs_survive_fade` |
 | BPSK's SNR estimate still carries channel information on a fade (M2M4 read a flat constant) — #934 | `cargo test -p openpulse-modem --test bpsk_snr_tracks_a_fade` + `cargo test -p openpulse-dsp additive_snr` |
 | The rate ladder climbs on decode-evidence, not only on an SNR estimate, and never demotes below a level that just decoded — #934 | `cargo test -p openpulse-core --test success_based_climb` + `cargo test -p openpulse-linksim psk_ladder_climbs_off` |
+| Small frames get free RsStrong on the weak rungs (block-count-equal), and the OTA receiver dual-decodes it on a fade | `cargo test -p openpulse-core free_rs_strengthening` + `cargo test -p openpulse-modem --test free_rs_strengthening_ota` |
 | CI goodput regression gate (linksim effective_bps ≥ 65 % of baseline) | `cargo test -p openpulse-linksim goodput_gate` |
 | JS8 NORMAL native decode reaches the −18 dB weak-signal gate (FF-15 Phase-B go/no-go) | `cargo test -p js8-plugin --test snr_sweep gate_at_minus_18_db` |
 | JS8 discovery MVP: the daemon rx-tick activates, dwells, decodes an injected heartbeat, caches the station + emits `StationHeard` | `cargo test -p openpulse-daemon --no-default-features discovery_tick` |
