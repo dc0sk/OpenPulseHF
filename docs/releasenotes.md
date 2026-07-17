@@ -7,6 +7,89 @@ last_updated: 2026-07-17
 
 # Release Notes
 
+## v0.14.0 — 2026-07-17
+
+A minor release about one thing: **the HF rate ladder was calibrated for a clean channel, and HF is not
+a clean channel.** It is a minor rather than a patch release because the rungs, their coding and their
+numbering all change on air — see *Interop*.
+
+**Background.** `hpx_hf` is the profile for a real HF SSB link. It is a ladder of ~17 rungs from the
+most robust weak-signal waveform up to the densest high-throughput one, and an adaptive session walks
+up and down it as conditions change. Its SNR floors — the signal level at which each rung is declared
+usable — were derived from AWGN (clean-noise) sweeps.
+
+**What was wrong.** HF fades. Measured against Watterson `moderate_f1` — 1 Hz Doppler, 1.0 ms delay
+spread, a *routine* ITU-R moderate path, not a worst case — most of the ladder did not work at the
+floors it advertised:
+
+| rung, at its own advertised floor | frames decoded |
+|---|---|
+| **SL2 `BPSK31` @3 dB** | **0 %** |
+| SL3 `BPSK63` @4 dB | 0 % |
+| SL5 `BPSK250` @5 dB | 0 % |
+| SL7 `QPSK250`, SL8 `QPSK500`, SL9 `8PSK500` | **0 % at any SNR up to 40 dB** |
+
+The first line is the serious one. **SL2 is `initial_level` — every session starts there.** On a fading
+path a link could not reliably get started at all; it would fall back to the 9 bps sub-floor rung or
+fail. And the middle of the ladder was a four-rung dead zone that the adapter — which climbs one rung
+per successful exchange — had to cross to reach the rungs that did work.
+
+Nothing caught this because every gate in the project measured AWGN.
+
+**Two independent causes, both measured.**
+
+*The weak rungs shipped uncoded.* BPSK is differentially decoded, so it rides a fade's slow phase
+rotation — but a carrier slip still costs symbols, and without forward error correction there is
+nothing to repair them. This is exactly the law [#923](https://github.com/dc0sk/OpenPulseHF/issues/923)
+established for QPSK ("differential encoding needs FEC"), and it applies to BPSK for the same reason.
+Coding them fixes it:
+
+| at its own floor | uncoded | coded |
+|---|---|---|
+| BPSK31 @3 dB | 0.00 | **0.25** |
+| BPSK63 @4 dB | 0.00 | **0.83** |
+| BPSK63 @7 dB | 0.00 | **1.00** |
+
+The floors did not move — they were always fading-appropriate. The rungs simply lacked a code.
+
+*The coherent mid rungs cannot be saved.* `QPSK250`, `QPSK500` and `8PSK500` carry data in absolute
+carrier phase, and a fade null makes the receiver's phase reference slip — ruining the rest of the
+frame. FEC does not help (the defect is tracking, not errors), and the differential trick that rescued
+SL6 does not scale to 8PSK, whose ±22.5° decision margin cannot absorb differential detection's noise
+penalty. So above SL6 the ladder is now **OFDM**, which sidesteps the problem entirely: its cyclic
+prefix rides the delay spread and its per-subcarrier pilots track the fade.
+
+| on `moderate_f1` | 8 dB | 12 dB | 16 dB |
+|---|---|---|---|
+| `8PSK500` (was SL9) | 0.00 | 0.00 | 0.00 |
+| **`OFDM52`** (now SL7) | **0.58** | **0.75** | **0.83** |
+
+The ladder is **14 rungs instead of 17**, and every rung is measured to decode on a fade.
+
+**A third fix fell out of the second.** The ladder compares its SNR floors against the *receiver's*
+estimate of SNR, which for OFDM is deliberately conservative and saturates near ~17 dB — a true 20 dB
+link reads about 14.4. `hpx_hf`'s OFDM floors were AWGN-scale numbers (up to 30 dB), which the receiver
+could therefore never report, so **those rungs were unreachable** and a strong link stalled below them.
+They now use the same receiver-scale calibration `hpx_ofdm_hf` already used, and a 35 dB channel climbs
+all the way to the top of the ladder.
+
+**Interop.** SL2–SL5 gain FEC, the rungs above SL6 change waveform, the rungs re-index, and the ladder
+fingerprint changes accordingly. **Both stations must run v0.14.0** to share a ladder. There is no
+config-file or API change.
+
+### Known limitations
+
+- **The single-carrier and OFDM rungs' floors are on different scales** — true channel SNR for the
+  former, receiver plugin-domain SNR for the latter. Each is now correct for its own rungs and the
+  split is documented in `docs/mode-fec-ladder.md`, but the underlying mismatch is unresolved.
+- **A stronger code is available but not used ladder-wide.** `RsStrong` roughly doubles the weak rungs'
+  fading decode (BPSK31 @3 dB: 0.25 → 1.00) and costs *nothing* for payloads ≤191 B, because both codes
+  emit the same 255-byte block. At 192–223 B it needs a second block and doubles the airtime, which
+  costs more clean-channel throughput than it is worth as a default. It remains the right choice for a
+  rung whose frames are known to stay under 191 B.
+- The OTA ACK-wait opens a second capture stream on the cpal (real-audio) backend; loopback hides it.
+  Parked pending hardware. Tracked in [#917](https://github.com/dc0sk/OpenPulseHF/issues/917).
+
 ## v0.13.0 — 2026-07-17
 
 A minor release about one rung of the HF rate ladder that didn't work on a fading channel, and now
