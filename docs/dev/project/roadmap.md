@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/roadmap.md
 status: living
-last_updated: 2026-07-14
+last_updated: 2026-07-17
 ---
 
 # Roadmap
@@ -350,7 +350,7 @@ rigctld_addr = "127.0.0.1:4533"   # secondary rig (TX for cross-band repeater)
 - `CrossBandRepeater`: holds two `RigctldController` instances and two `ModemEngine`
   instances (one per audio device); configurable from `[repeater]` TOML section.
 - PTT sequencing: `rig_b.ptt_on()` before TX, `rig_b.ptt_off()` after; configurable
-last_updated: 2026-05-17
+last_updated: 2026-07-17
 - `[repeater] enabled = false` — opt-in; disabled by default.
 - Operator must configure both rigs and TOML explicitly; no auto-activation.
 
@@ -1713,6 +1713,53 @@ These tasks address the failure modes identified in Watterson channel benchmarki
 | RF-3 | Extend SNR sweep to 0–10 dB in benchmark harness (cross-reference BL-TP-1) | Done | #215 |
 | RF-4 | Memory-ARQ end-to-end in SC-FDMA HPX session (cross-reference BL-TP-5) | Done | #213 |
 | RF-5 | Preamble / acquisition sequence for HF channel entry (cross-reference BL-TP-6) | Done | #213 |
+| RF-6 | Make the `hpx_hf` adaptive link actually work on a fade (v0.13.0 → v0.14.1 arc) | Done | #928, #930–#933, #935–#938 |
+
+### RF-6 — the HF-fade arc (v0.13.0 → v0.14.1), 2026-07-17
+
+Three releases that started from "one dead ladder rung" and ended at "the adaptive HF link delivers on
+a routine fade for the first time." Each release fixed a real bug and uncovered the next one beneath
+it, because **every layer passed its own tests in isolation while the composed system delivered ~5 bps
+on a `moderate_f1` fade** — the defect lived in the seams between green tests, which is the arc's
+lesson. Full detail in `docs/dev/project/traceability.md` (newest-first); the authoritative `hpx_hf`
+rung map is `SessionProfile::hpx_hf`, gated by `tests/ladder_doc_matches_profile.rs`.
+
+- **v0.13.0 — one dead rung (#923, #928).** `hpx_hf` SL6 (`QPSK250+Rs`) decoded 0% on `moderate_f1` at
+  *every* SNR: a coherent, absolutely phase-encoded waveform cannot hold a carrier reference through a
+  1 Hz Doppler fade. Fixed with differential QPSK (`QPSK250-D`) — the fade rotation cancels
+  symbol-to-symbol, the immunity BPSK already had. The two obvious alternatives (2-pass carrier
+  tracker, pilot waveform) were **measured to 0%** first and rejected. Differential does **not** scale
+  to 8PSK (built, measured, rejected — ±22.5° cannot absorb the noise doubling).
+- **v0.14.0 — the whole ladder was calibrated for AWGN (#930–#933).** The rungs' SNR floors came from
+  AWGN sweeps and most of the ladder did not work at the floors it advertised: uncoded BPSK31 — the
+  `initial_level` — decoded 0% at 3/6/9 dB, and the coherent single-carrier mid rungs decoded ~0% at
+  any SNR. Re-seat: **every rung coded** (differential needs FEC, and BPSK is differential too — a
+  ladder-wide law, not a QPSK quirk); **OFDM above SL6** (its CP rides the delay, per-SC pilots track
+  the fade); 17→14 rungs. Two measured traps recorded: "`RsStrong` is free" only ≤191 B (a second RS
+  block at 192–223 B doubled airtime through the goodput floor), and the OFDM floors read in
+  plugin-symbol-domain SNR that saturates ~17 dB. Reconciled + **gated** the `mode-fec-ladder.md` doc
+  table (#930) after finding it had drifted across releases.
+- **v0.14.1 — the rungs decoded but the controller wouldn't drive them (#934–#937).** With the rungs
+  fixed, `hpx_hf` on `moderate_f1` still sat pinned on its entry rung at ~5 bps **while delivering
+  20/20 frames**. Two causes, both in the rate controller's *decode* path: its only climb was
+  `snr >= ceiling`, and a decoded frame with a low SNR reading demoted *below* the rung that just
+  decoded. On a fade the SNR estimate is uninformative *in principle* (at 31 baud a 1 Hz fade is
+  faster than any usable averaging window). Fix — **a decode is evidence, an SNR estimate is a guess,
+  the evidence wins**: climb after 3 clean decodes regardless of SNR; never demote on a decode
+  (demotion moved to the failure path). Prerequisite (#935): BPSK had **no** SNR estimator and fell
+  back to a constant-modulus one that read a flat ≈ −4 dB from 15→35 dB; the new one removes the fade's
+  multiplicative gain first. Effect: `moderate_f1` @20 dB avg level 1.5 → 4.9, final SL1 → SL11.
+- **The gate that closes the arc: `psk_ladder_climbs_off_the_entry_rung_on_a_fade`** drives the *real
+  rate controller* on a fading channel. Every earlier fade gate called the demodulator directly, so it
+  could prove the rungs decode but never that the controller drives them — the exact blind spot that
+  let #934 ship in two releases. Same "test the production path, not the convenience seam" lesson the
+  codebase keeps relearning, now enforced.
+- **Still open:** the SC and OFDM rungs' SNR floors are on different scales (a documented wart, now
+  moot for correctness since the evidence climb no longer depends on a single global scale); and
+  `RsStrong` remains the better code for any rung whose frames stay ≤191 B. Neither gates the link.
+  **Not yet validated on air** — three releases of fade behaviour are Watterson-simulator-only, and the
+  linksim harness gap found in v0.14.1 (it could not transmit the sub-floor rung) is a reminder that
+  simulator-green is not hardware-green.
 
 ### RF-1 confirmed root cause (PR #212)
 
@@ -1732,12 +1779,16 @@ After the fix, BPSK250 + RS FEC + block interleaver correctly decodes through Go
 
 ## Profile scope decisions — active vs deferred modes (updated 2026-05-19)
 
-### Current SessionProfile table (profile.rs HEAD)
+### Current SessionProfile table (snapshot; `profile.rs` is authoritative)
+
+Only `hpx_hf` is kept current here — it is what the RF-6 fade arc changed. The other rows are an
+older snapshot; `SessionProfile` in `profile.rs` is the source of truth, and the `hpx_hf` rung map is
+gated against `docs/mode-fec-ladder.md` by `tests/ladder_doc_matches_profile.rs`.
 
 | Profile | SL range | Initial | Top mode |
 |---|---|---|---|
 | `hpx500` | SL2–SL6 | SL2 | QPSK500 |
-| `hpx_hf` | SL2–SL11 | SL2 | SCFDMA52-64QAM |
+| `hpx_hf` | SL1–SL14 | SL2 | OFDM52-64QAM + high-rate LDPC (RF-6) |
 | `hpx_ofdm_hf` | SL5–SL10 | SL5 | OFDM52-64QAM |
 | `hpx_pilot` | SL2–SL5 | SL2 | PILOT-32APSK500 |
 | `hpx_pilot_rrc` | SL2–SL5 | SL2 | PILOT-32APSK500-RRC |
@@ -1752,10 +1803,10 @@ After the fix, BPSK250 + RS FEC + block interleaver correctly decodes through Go
 
 | Mode | Plugin | Profile slot |
 |---|---|---|
-| BPSK31/63/250 | bpsk-plugin | hpx_hf SL2–SL4 |
-| QPSK250/500 | qpsk-plugin | hpx_hf SL5–SL6 |
-| 8PSK500 | psk8-plugin | hpx_hf SL7 |
-| SCFDMA52-8PSK/16QAM/32QAM/64QAM | scfdma-plugin | hpx_hf SL8–SL11 |
+| MFSK16 | mfsk16-plugin | hpx_hf SL1 (non-coherent sub-floor) |
+| BPSK31/63/100/250 | bpsk-plugin | hpx_hf SL2–SL5 (all RS-coded — RF-6) |
+| QPSK250-D | qpsk-plugin | hpx_hf SL6 (differential — RF-6) |
+| OFDM52/OFDM52-{8PSK,16QAM,32QAM,64QAM} | ofdm-plugin | hpx_hf SL7–SL14 (SC then high-rate LDPC — RF-6) |
 | QPSK500/1000 | qpsk-plugin | hpx_narrowband SL8–SL9, hpx_wideband SL8–SL9 |
 | QPSK2000-RRC | qpsk-plugin | hpx_narrowband SL10 |
 | 8PSK2000-RRC | psk8-plugin | hpx_narrowband SL11 |
