@@ -400,7 +400,7 @@ impl SessionProfile {
         // ~6 dB for 2× the rate is a *worse* trade than climbing one modulation order (8PSK→16QAM buys
         // 1.33× for ~2 dB), so wherever a denser mode still exists, `SoftConcatenated` on it wins. The
         // exception is the top: 64QAM is the densest constellation the plugin has, so above SL15 the
-        // only remaining lever is code rate. Hence LHR appears as SL16–SL19 and nowhere below.
+        // only remaining lever is code rate. Hence LHR appears as SL15–SL17 and nowhere below.
         let mut modes = [None; 21];
         // SL1 is the non-coherent MFSK16 sub-floor rung — the actual waveform for the deep-fade
         // ChirpFallback path (3 NACKs at SL2), reached only under sustained failure. Constant-envelope
@@ -457,8 +457,9 @@ impl SessionProfile {
         fec_modes[SpeedLevel::Sl12 as usize] = Some(FecMode::SoftConcatenated);
         fec_modes[SpeedLevel::Sl13 as usize] = Some(FecMode::SoftConcatenated);
         fec_modes[SpeedLevel::Sl14 as usize] = Some(FecMode::SoftConcatenated);
-        // SL15–SL17 re-use SL12–SL14's modes at r≈8/9 LDPC: MODCOD pairs, exactly as SL6/SL7 are for
-        // QPSK250. Each buys 2.03× the rate for the measured floor delta above.
+        // SL15–SL17 re-use SL12–SL14's modes at r≈8/9 LDPC: same modulation, lighter coding — a MODCOD
+        // pair. Each buys 2.03× the rate for the measured floor delta above. (SL6/SL7 are no longer such
+        // a pair: since #923 SL6 is the *differential* QPSK250-D, a different waveform, not QPSK250+Rs.)
         fec_modes[SpeedLevel::Sl15 as usize] = Some(FecMode::LdpcHighRate);
         fec_modes[SpeedLevel::Sl16 as usize] = Some(FecMode::LdpcHighRate);
         fec_modes[SpeedLevel::Sl17 as usize] = Some(FecMode::LdpcHighRate);
