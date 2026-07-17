@@ -19,6 +19,29 @@
 //! Because the node that *decides* the mode is the node that *demodulates* it, a
 //! lost ACK can never desync the two ends — it only delays the climb by one frame.
 //!
+//! ## Two ways up: SNR, and evidence
+//!
+//! The climb has two independent triggers, and the invariant above holds for both because each
+//! advances **exactly one mapped step** above `rx_confirmed`:
+//!
+//! - **SNR** — the measured SNR clears the confirmed rung's ceiling. Fast, but only as trustworthy
+//!   as the estimate.
+//! - **Success** — [`ACK_CLIMB_THRESHOLD`] consecutive clean decodes at the confirmed rung. Slower,
+//!   but it cannot lie: frames decoding *is* the evidence that the rung works.
+//!
+//! The second exists because the first is not always available. An SNR estimator on a fading channel
+//! can be uninformative *in principle* — at 31 baud a 1 Hz Doppler fade decorrelates in ~6 symbols,
+//! so no window is both short enough to track the fade and long enough to average the noise, and the
+//! estimate reads a constant. With SNR as the only permission to climb, such a link sat pinned on its
+//! entry rung **while every single frame decoded** (issue #934): `hpx_hf` on Watterson `moderate_f1`
+//! delivered 20/20 frames at ~5 bps, where the rungs it could have reached carry ~300–1200.
+//! Ignoring a perfect decode record because a number did not move is the bug; SNR is an accelerator,
+//! not the sole permission.
+//!
+//! The SNR *downshift* is deliberately left as the sole fast-down path and is checked first — a rung
+//! that decodes is not evidence that a *higher* rung will, so success may only ever propose the next
+//! step, and only when SNR does not already say we are too high.
+//!
 //! This is pure logic: no I/O, no engine coupling, fully unit-tested. The modem
 //! engine drives it by reporting which candidate decoded and the measured SNR.
 
@@ -26,6 +49,15 @@ use crate::ack::AckType;
 use crate::fec::FecMode;
 use crate::profile::SessionProfile;
 use crate::rate::SpeedLevel;
+
+/// Consecutive clean decodes at the confirmed level that justify a climb with no SNR evidence.
+///
+/// Mirrors the profile's `nack_threshold` (the same hysteresis in the other direction) and is a
+/// constant rather than a profile field for the same reason `nack_threshold` defaults to 3: the
+/// right value is a property of the ARQ loop, not of the waveform ladder. It buys the climb an
+/// airtime cost of at most one failed frame per N successful ones, so it must not be small enough to
+/// thrash nor large enough to make the climb invisible on a short session.
+pub const ACK_CLIMB_THRESHOLD: u8 = 3;
 
 /// Outcome of demodulating a received data frame, fed to [`OtaRateController::on_rx_frame`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +86,9 @@ pub struct OtaRateController {
     rx_recommended: SpeedLevel,
     rx_confirmed: SpeedLevel,
     rx_consecutive_nack: u8,
+    /// Clean decodes in a row at `rx_confirmed`, for the evidence-based climb. Reset by any failure
+    /// and by any level change, so it only ever counts success *at the level being judged*.
+    rx_consecutive_ok: u8,
     // TX direction (we are the data sender and follow the peer):
     tx_level: SpeedLevel,
     // Operator controls:
@@ -82,6 +117,7 @@ impl OtaRateController {
             rx_recommended: initial,
             rx_confirmed: initial,
             rx_consecutive_nack: 0,
+            rx_consecutive_ok: 0,
             tx_level: initial,
             min_level: None,
             max_level: None,
@@ -292,6 +328,9 @@ impl OtaRateController {
         }
         match outcome {
             RxOutcome::Failed => {
+                // A failure is evidence against the rung, so the success streak restarts: the
+                // evidence-based climb must never be reachable by alternating pass/fail.
+                self.rx_consecutive_ok = 0;
                 // Asymmetric fast downshift: if the SNR estimate already explains the failure
                 // (the SNR-adequate level is below what we're recommending), jump the
                 // recommendation straight there instead of crawling down one rung per NACK
@@ -322,23 +361,48 @@ impl OtaRateController {
                 self.rx_consecutive_nack = 0;
                 // Anchor on the level we actually decoded (recommended if the sender
                 // adopted it, else the fallback level).
+                let previous_confirmed = self.rx_confirmed;
                 self.rx_confirmed = self.clamp_mapped(level);
+                // The success streak counts clean decodes *at one level*: a level change makes the
+                // streak evidence about a rung we are no longer on.
+                if self.rx_confirmed == previous_confirmed {
+                    self.rx_consecutive_ok = self.rx_consecutive_ok.saturating_add(1);
+                } else {
+                    self.rx_consecutive_ok = 1;
+                }
 
-                // Asymmetric recommendation from the SNR-adequate level:
-                //  • fast DOWN — if SNR can't support the confirmed level, jump straight to the
-                //    SNR-adequate rung (possibly several steps); the just-decoded `rx_confirmed`
-                //    stays in the candidate set, so this is desync-safe.
-                //  • cautious UP — never trust an optimistic SNR to leap up: climb one proven
-                //    mapped step only, and only once SNR clears the confirmed level's ceiling.
-                let snr_level = self.level_for_snr(snr_db);
-                self.rx_recommended = if snr_level < self.rx_confirmed {
-                    snr_level
-                } else if self
+                // **A decode is an observation; the SNR is a model. The observation wins.**
+                //
+                // This path used to fast-downshift below `rx_confirmed` when the SNR estimate said
+                // the rung was unsupportable — on a frame that had *just decoded at that rung*. That
+                // is preferring a model over direct evidence, and it is the other half of #934: on a
+                // fade BPSK31's estimate reads far below every floor (a flat ≈ −12.6 dB after the
+                // Es/N0→channel conversion, at any true SNR), so every decoded frame was answered
+                // with "drop a rung". The link oscillated on its bottom two rungs at ~5 bps while
+                // delivering 20/20 frames.
+                //
+                // Demotion now lives solely on the `Failed` path, where the SNR genuinely *explains*
+                // something: a frame actually failed. Here there is nothing to explain, so the
+                // recommendation never goes below the level that just decoded — it holds or climbs:
+                //  • UP on SNR — the estimate clears the confirmed rung's ceiling. Fast when the
+                //    estimate is informative.
+                //  • UP on evidence — `ACK_CLIMB_THRESHOLD` clean decodes in a row at this rung.
+                //    Slower, but it cannot lie, and it is the only path that works when the estimate
+                //    is uninformative *in principle* (see the module header).
+                // Both advance exactly one mapped step, preserving the lockstep invariant.
+                let snr_clears_ceiling = self
                     .profile
                     .snr_ceiling_for_level(self.rx_confirmed)
-                    .is_some_and(|c| snr_db >= c)
-                {
-                    self.next_mapped(self.rx_confirmed)
+                    .is_some_and(|c| snr_db >= c);
+                let proven_by_success = self.rx_consecutive_ok >= ACK_CLIMB_THRESHOLD;
+                self.rx_recommended = if snr_clears_ceiling || proven_by_success {
+                    let next = self.next_mapped(self.rx_confirmed);
+                    // Spend the streak on the attempt, so a rung that keeps decoding proposes the
+                    // next step every N frames rather than every frame once the streak is met.
+                    if next != self.rx_confirmed {
+                        self.rx_consecutive_ok = 0;
+                    }
+                    next
                 } else {
                     self.rx_confirmed
                 };
@@ -627,10 +691,18 @@ mod tests {
             conf > c.next_mapped(c.lo()),
             "precondition: climbed ≥2 steps above the floor"
         );
-        // A decoded frame at very low SNR drops the recommendation straight to the SNR-adequate
-        // floor — several steps, not one.
-        let ack = c.on_rx_frame(RxOutcome::Decoded(conf), LOW_SNR);
-        assert_eq!(ack.ack_type, AckType::AckDown);
+        // A FAILED frame at very low SNR drops the recommendation straight to the SNR-adequate
+        // floor — several steps, not one. This is where the SNR estimate earns its keep: it
+        // *explains* the failure, so acting on it saves crawling down one rung per NACK threshold.
+        //
+        // This used to fire on a DECODED frame too. It no longer does, deliberately (#934): a frame
+        // that decoded is direct evidence the rung works, and an estimate can be flatly wrong — on a
+        // fade BPSK31 reads ≈ −12.6 dB at ANY true SNR, so every successful frame was answered with
+        // "drop to the floor" and the link sat pinned at ~5 bps while delivering every frame. The
+        // cost of waiting for the failure is one wasted frame per genuine collapse; the cost of not
+        // waiting was a permanently pinned link. See `tests/success_based_climb.rs`.
+        let ack = c.on_rx_frame(RxOutcome::Failed, LOW_SNR);
+        assert_eq!(ack.ack_type, AckType::Nack);
         assert_eq!(
             ack.recommended_level,
             c.lo(),

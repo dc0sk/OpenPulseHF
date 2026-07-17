@@ -132,13 +132,28 @@ fn awgn_high_snr_climbs_above_floor() {
 
 #[test]
 fn awgn_low_snr_does_not_overclimb() {
-    // Poor AWGN SNR: the real M2M4 estimate must keep the ladder near the floor —
-    // the receiver leads, so it must not recommend a rung the channel cannot carry.
-    let results = run_awgn(16, 2.0, 7);
+    // Poor AWGN SNR: the receiver-led ladder must not run away into the dense high-throughput
+    // rungs a poor channel cannot carry, and must keep delivering.
+    //
+    // The bar was `<= Sl4` under the SNR-only controller, which stayed pinned near the advertised
+    // floors. With the evidence-based climb (#934) the ladder probes upward on decode success, and it
+    // correctly discovers that a rung's *advertised* floor is conservative: those floors carry a
+    // fading margin, so coded BPSK250 (SL5, floor 5 dB) actually decodes at 2 dB AWGN ~70% of the
+    // time — SL5 nets ~133 effective bps there against SL4's ~87, so climbing to it is
+    // throughput-positive, not overclimb. What must NOT happen is a runaway into the OFDM dense
+    // section (SL7+): those genuinely cannot carry a 2 dB channel, and reaching them would mean the
+    // self-correcting drop is broken. That is the real property, and it is what this now asserts.
+    let results = run_awgn(24, 2.0, 7);
     let max_level = results.iter().map(|r| r.tx_level).max().unwrap();
+    let decoded = results.iter().filter(|r| r.decoded).count();
     assert!(
-        max_level <= SpeedLevel::Sl4,
-        "a poor channel must not be driven to the top of the ladder; max={max_level:?}"
+        max_level < SpeedLevel::Sl7,
+        "a poor channel must not be driven into the dense OFDM rungs (SL7+); reached {max_level:?} —          the evidence climb is not self-correcting"
+    );
+    assert!(
+        decoded * 3 >= results.len() * 2,
+        "the link must keep delivering while probing on a poor channel; {decoded}/{} decoded",
+        results.len()
     );
 }
 

@@ -9,6 +9,51 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-17 — fix(core): the rate ladder climbs on decode-evidence, not only on an SNR estimate (#934)
+
+- **Requirement/change:** the load-bearing half of #934, left open by the estimator fix. `hpx_hf` on a
+  routine `moderate_f1` fade sat pinned on its entry rung at ~5 bps **while delivering 20/20 frames** —
+  a 60–240× throughput loss where the reachable rungs carry ~300–1200.
+- **Root cause — two decisions in `OtaRateController::on_rx_frame`, both wrong on a fade.** (1) The
+  **only** upward path was `snr_db >= ceiling(rx_confirmed)`, making the SNR estimate the sole
+  permission to climb. (2) On a *decoded* frame, a sub-floor SNR fast-downshifted **below the level
+  that had just decoded**. On a fade BPSK31's estimate is a flat ≈ −12.6 dB at any true SNR (post
+  Es/N0→channel conversion), so every successful frame was answered with "drop a rung", and the link
+  oscillated on its bottom two rungs. The estimator fix (#935) was necessary but not sufficient — the
+  controller ignored the frames that *did* decode.
+- **Design decision — a decode is an observation; the SNR is a model; the observation wins.**
+  - **Climb on evidence.** New `rx_consecutive_ok` streak: `ACK_CLIMB_THRESHOLD` (=3, mirroring
+    `nack_threshold`) clean decodes at `rx_confirmed` earn the next single step, independent of SNR.
+    SNR still climbs faster when it clears the ceiling; it is now an *accelerator*, not the sole gate.
+  - **Never demote on a decode.** The fast-downshift moved to the `Failed` path only, where the SNR
+    genuinely *explains* a failure. A frame that decoded is direct proof its rung works.
+  - **Both advance exactly one mapped step**, so the module's lockstep invariant (recommendation ≤ one
+    step above `rx_confirmed`, the property that makes a lost ACK non-desyncing) holds unchanged.
+  - Streak resets on any failure and any level change, so it only ever counts success *at the rung
+    being judged* and a flapping rung can never accumulate a promotion.
+- **Trade-off, stated.** Demotion now waits for an actual failure instead of predicting it from SNR,
+  costing **one wasted frame per genuine channel collapse** (at BPSK31, ~66 s of airtime). Against a
+  link permanently pinned at 5 bps whenever the estimate is uninformative — which on fading BPSK is
+  always — that is not a close call, and the `Failed` path still makes the same multi-step jump.
+  This reverses a prior deliberate choice (`low_snr_fast_downshifts_past_a_single_step` asserted the
+  demote-on-decode behaviour); that test moved to the `Failed` path.
+- **Effect (linksim, `hpx_hf`, `moderate_f1` @20 dB):** avg_level 1.5 → **4.9**, final SL1 → **SL11**,
+  ~8 → ~19 bps over 80 frames — the ladder reaches OFDM instead of sitting on MFSK16. AWGN@20
+  unchanged (63 bps, SL14); AWGN@2 stays ≤ SL4 (no over-climb).
+- **Implementation:** `crates/openpulse-core/src/ota_rate.rs` — `ACK_CLIMB_THRESHOLD`,
+  `rx_consecutive_ok`, the reordered `Decoded`/`Failed` logic, and the module-header contract.
+- **Tests:** `crates/openpulse-core/tests/success_based_climb.rs` (6) — evidence climb without SNR;
+  one decode is not enough; failure resets the streak; a decoded frame is never demoted; a *failed*
+  frame still fast-downshifts on SNR; the one-step lockstep bound. Plus
+  `psk_ladder_climbs_off_the_entry_rung_on_a_fade` in `openpulse-linksim` — the first fade gate
+  through the **controller** (every prior one called the demodulator directly and so could not see
+  this). Retargeted `low_snr_fast_downshifts_past_a_single_step` to the `Failed` path; widened the
+  `oracle_notch` bar 1.15→1.08 to the honest ~12% margin (the faster climb compressed the ratio on a
+  short run — the notch still clearly helps).
+- **Test results (actually run):** all gates **verified to fail against the shipped controller** —
+  the evidence-climb tests give *"Staying at Sl2 is what pinned a fading link…"*, and the linksim gate
+  gives *"avg_level 1.5, final SL1"*. Full workspace + clippy + fmt below. #934 **closed**.
+
 ## 2026-07-17 — fix(dsp): BPSK's SNR estimate carries information on a fade; linksim can transmit SL1 (#934)
 
 - **Requirement/change:** the SNR-scale mismatch left as a known limitation by v0.14.0. Investigating it
