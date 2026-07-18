@@ -6,7 +6,11 @@ scope: docs, code, code-comments and tests — claim consistency + backlog/statu
 ---
 
 > **RESOLVED 2026-07-18** by PRs #954 (Type C/LZHUF residue sweep), #955 (acceptance-table repair and
-> the two TX-only gates behind it) and #956 (status-doc consolidation). Method: 7 parallel finders,
+> the two TX-only gates behind it), #956 (status-doc consolidation), #957 (six more vacuously-passing
+> gates made real) and #958 (the tail: stale comments, wrong profile tables, dead type/test names).
+> **All findings are addressed.** The highest-value one was not in the top ten: four doc-comments and
+> two docs still documented a CE-SSB conclusion that had been *reversed* — the code excludes dense
+> OFDM-HOM and SC-FDMA, and the test they cited to lock the old claim now asserts the opposite. Method: 7 parallel finders,
 > one adversarial verifier per finding (refute-by-default), synthesis on a separate model.
 > **51 findings, 51 survived verification, 0 refuted** — a 0% refutation rate is unusual and worth
 > reading with care; for a *consistency* audit the claims are near-mechanically checkable ("this doc
