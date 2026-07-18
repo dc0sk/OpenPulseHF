@@ -9,6 +9,45 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-18 — docs: add the OpenPulseHF book
+
+- **Requirement/change:** a complete technical book for three audiences at once — licensed operators,
+  electronic engineers, and software developers — with an abstract, a full table of contents, and four
+  chapters: showcase, physical layer (maths/physics/DSP/audio) + cryptography, computer science, and
+  use cases with copy-pasteable configuration.
+- **Method — multi-agent, with verification by a different model than the author.** Five units
+  (Ch1, Ch2A, Ch2B, Ch3, Ch4), each pipelined research → draft → adversarial fact-check. Research and
+  verification ran on the reasoning model (grep/read/execute); drafting ran on Fable. An author is a
+  poor checker of its own claims, which is the same reason the loose-ends audit puts synthesis on a
+  separate model.
+- **Constraint that shaped the prompts:** every technical claim must trace to a file, symbol or test
+  the agent has read, and Chapter 4's commands must be *executed*. The July consistency audit had just
+  found the README advertising Winlink Type C wire-compatibility 148 lines below its own retraction —
+  a book is a worse place for that failure, because nobody greps a book against the source. The
+  known traps (Type C removed, ladder is SL1–SL14, `ArqSession` gone, CE-SSB is QPSK-subcarrier OFDM
+  only, fade work is simulator-only) were seeded into every prompt.
+- **Verification results:** the fact-check pass applied **53 corrections** across the five chapters —
+  including an invented symbol name (`configure_agc` misnamed), a false claim about a trust table that
+  the verifier called "the most serious error in the chapter", a retracted measurement quoted as
+  current, and several wrong counts. **My own independent pass before commit:** all **110 cited file
+  paths exist**; all **12 cited `--test` targets exist**; all **10 CLI subcommands used appear in
+  `--help`**; the 14-rung `hpx_hf` table matches `profile.rs` on mode, FEC and floor with **0
+  mismatches**; trap greps clean (the single `ArqSession` mention is an explicit historical note).
+- **Two repo defects found BY the book pass and fixed here:**
+  1. `CLAUDE.md` said the Watterson envelope FFT is "capped at 2^18 samples"; `fading.rs` sets
+     `MAX_FFT = 1 << 16`. The agent contract itself was wrong.
+  2. The handshake-trust audit's E3 reads as though the relay trust filter is nowhere enforced. It is
+     literally true of `forward()` but `MeshNode::step` **does** enforce it via `trust_filter_allows`
+     (`openpulse-mesh/src/lib.rs:499`); the unverified `auth_tag` is the part that remains open.
+     Clarified in place rather than rewritten, since the audit is a dated record.
+- **Honest limits, stated in the book itself** (§ "Provenance and honest limits"): three Chapter 2A
+  figures trace only to `CLAUDE.md`'s engineering notes rather than to a test; Chapter 1's suite total
+  is as-reported; and every fading result is Watterson-simulator, not on-air.
+- **Implementation:** `docs/openpulse-book.md` (new, 4414 lines); `CLAUDE.md` (doc index + the FFT
+  fix); `docs/dev/reviews/2026-07-15-handshake-trust-audit.md` (E3 clarification).
+- **Test results (actually run):** `scripts/validate-doc-frontmatter.sh` exit 0; the citation checks
+  above (110/110 paths, 12/12 test targets, 10/10 subcommands, 14/14 rungs).
+
 ## 2026-07-18 — fix: make `--profile` help self-maintaining; correct the `RsInterleaved` billing
 
 - **Requirement/change:** the two follow-ups spun out of the manual update (PR #962) — the CLI's

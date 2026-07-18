@@ -96,7 +96,10 @@ are enabled. The enforcement finder's findings and their disposition:
   but is not strong authentication, and gating relay on "verified this session" would be wrong (a mesh
   originator is many hops away and never handshook with us). Wired via `RelayTrustPolicy::set_allow_list`
   → `forward()`'s existing `policy.allows(src)` check.
-- **E3 — [MEDIUM] Relay forwards unauthenticated frames.** `RelayTrustPolicy.min_trust_filter` is
+- **E3 — [MEDIUM] Relay forwards unauthenticated frames.** *(Clarified 2026-07-18: literally true of
+  `forward()`, but narrower than it reads — `MeshNode::step` DOES enforce the filter via
+  `trust_filter_allows` at `crates/openpulse-mesh/src/lib.rs:499`. The unverified `auth_tag` below
+  is the part that remains open.)* `RelayTrustPolicy.min_trust_filter` is
   unread in `forward()` and the 16-byte `WireEnvelope.auth_tag` is never verified. Enforcing either
   needs a trust lookup on `src_peer_id` threaded into the forwarder plus auth-tag key material —
   larger than this pass. (Config already documents `min_trust_filter` as reserved.)
