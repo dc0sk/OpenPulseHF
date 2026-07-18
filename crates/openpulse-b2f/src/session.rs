@@ -41,6 +41,12 @@ const MAX_PROPOSALS: usize = 32;
 /// forever. Generous so no legitimate mailbox trips it.
 const MAX_SESSION_FRAMES: usize = 8192;
 
+/// Ceiling on total decompressed bytes across ONE session. The per-message cap (`MAX_UNCOMPRESSED`,
+/// 16 MiB) bounds each message but not their product: `MAX_PROPOSALS` × 16 MiB ≈ 512 MB of transient
+/// allocation from ~2 MB of wire — a plausible OOM on the Pi target. Checked after each decompress,
+/// so peak stays under this plus one message. Generous: a real mailbox batch is a few hundred KB.
+const MAX_SESSION_DECOMPRESSED: u64 = 32 * 1024 * 1024;
+
 /// B2F session state machine.
 ///
 /// Feed inbound lines via `handle_line`; call `drain_pending_data` to get
@@ -60,6 +66,8 @@ pub struct B2fSession {
     pending_data: Vec<Vec<u8>>,
     /// IRS: index of the next proposal whose data arrives via `receive_data`.
     receive_idx: usize,
+    /// IRS: running total of decompressed bytes this session, bounded by `MAX_SESSION_DECOMPRESSED`.
+    decompressed_total: u64,
 }
 
 impl B2fSession {
@@ -72,6 +80,7 @@ impl B2fSession {
             state: SessionState::Handshake,
             pending_data: Vec::new(),
             receive_idx: 0,
+            decompressed_total: 0,
         }
     }
 
@@ -327,9 +336,16 @@ impl B2fSession {
         if self.receive_idx >= self.proposals.len() {
             self.state = SessionState::Done;
         }
-        match proposal_type {
-            ProposalType::D => decompress_gzip(&data),
-            ProposalType::C => decompress_lzhuf_compat(&data),
+        let out = match proposal_type {
+            ProposalType::D => decompress_gzip(&data)?,
+            ProposalType::C => decompress_lzhuf_compat(&data)?,
+        };
+        self.decompressed_total = self.decompressed_total.saturating_add(out.len() as u64);
+        if self.decompressed_total > MAX_SESSION_DECOMPRESSED {
+            return Err(B2fError::SessionTooLarge {
+                limit: MAX_SESSION_DECOMPRESSED,
+            });
         }
+        Ok(out)
     }
 }
