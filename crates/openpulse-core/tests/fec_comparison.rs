@@ -165,8 +165,10 @@ fn rs_vs_conv_ber_random_noise() {
 /// A 2 dB SNR gain corresponds to roughly halving the post-decoding BER in the
 /// Gaussian noise regime. If conv_ber ≤ rs_ber × 0.5 → ACCEPTED; else REJECTED.
 ///
-/// Note: this is an informational test — it does not assert pass/fail since the
-/// decision depends on the measurement results and hardware context.
+/// The decision was ACCEPTED (see `docs/dev/research/vara-research.md`), so the criterion is
+/// asserted here rather than printed: at 1 % channel BER the measured gap is ~3 orders of magnitude
+/// (RS ≈ 0.497 vs Conv ≈ 0.0004), far outside sampling noise. A printout could not catch a
+/// regression that silently reverses the conclusion this project's FEC selection rests on.
 #[test]
 fn fec_decision_gate() {
     const PAYLOAD_LEN: usize = 500;
@@ -204,16 +206,12 @@ fn fec_decision_gate() {
     println!("  RS post-decode BER  : {rs_ber:.6}");
     println!("  Conv post-decode BER: {cv_ber:.6}");
 
-    if cv_ber <= rs_ber * 0.5 {
-        println!("  Decision: ConvCodec ACCEPTED (≥ 2 dB gain achieved)");
-        println!("  Recommendation: add ConvCodec as optional FEC for HPX high-rate profiles.");
-    } else {
-        println!("  Decision: ConvCodec REJECTED — RS+interleaver preferred for HF channels.");
-        println!(
-            "  Reason: Conv BER {cv_ber:.6} > RS BER × 0.5 = {:.6}",
-            rs_ber * 0.5
-        );
-        println!("  Note: K=3 Viterbi is weak against random noise at 1% BER;");
-        println!("        RS byte-error correction is better matched to HF burst-error profiles.");
-    }
+    assert!(
+        cv_ber <= rs_ber * 0.5,
+        "Phase 3.2 decision reversal: ConvCodec was ACCEPTED on the basis that it beats RS by more \
+         than 2 dB at {CHANNEL_BER} channel BER, but measured Conv BER {cv_ber:.6} > RS BER × 0.5 \
+         = {:.6}. Either the codecs regressed or the recorded decision no longer holds — see \
+         docs/dev/research/vara-research.md before changing this bound.",
+        rs_ber * 0.5
+    );
 }

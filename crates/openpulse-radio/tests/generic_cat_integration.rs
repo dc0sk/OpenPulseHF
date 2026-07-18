@@ -1,6 +1,7 @@
 //! Integration tests for `GenericSerialCat` using `MockTransport`.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use openpulse_radio::cat_controller::CatController;
 use openpulse_radio::error::RadioError;
@@ -27,6 +28,33 @@ fn make_ft817_cat(read_bytes: Vec<u8>) -> GenericSerialCat {
     GenericSerialCat::with_transport(Box::new(MockTransport::new(read_bytes)), ft817_def())
 }
 
+/// Build a CAT controller alongside a handle to the bytes it writes.
+///
+/// The `*_sends_correct_bytes` tests below could not previously see those bytes at all — the
+/// transport was boxed into the controller and its log went with it — so they asserted only that
+/// the call returned `Ok`.
+fn ic7300_cat_with_log(read_bytes: Vec<u8>) -> (GenericSerialCat, Arc<Mutex<Vec<u8>>>) {
+    let t = MockTransport::new(read_bytes);
+    let log = t.log_handle();
+    (
+        GenericSerialCat::with_transport(Box::new(t), ic7300_def()),
+        log,
+    )
+}
+
+fn ft817_cat_with_log(read_bytes: Vec<u8>) -> (GenericSerialCat, Arc<Mutex<Vec<u8>>>) {
+    let t = MockTransport::new(read_bytes);
+    let log = t.log_handle();
+    (
+        GenericSerialCat::with_transport(Box::new(t), ft817_def()),
+        log,
+    )
+}
+
+fn written(log: &Arc<Mutex<Vec<u8>>>) -> Vec<u8> {
+    log.lock().expect("write log").clone()
+}
+
 // ── IC-7300 PTT ────────────────────────────────────────────────────────────────
 
 #[test]
@@ -34,17 +62,27 @@ fn icom_ic7300_ptt_on_sends_correct_bytes() {
     // ptt_on: "FE FE {addr} {ctrl} 1C 00 01 FD" with addr=0x94, ctrl=0xE0
     // Response: 6 bytes (any content is fine for mock)
     let response = vec![0xFE, 0xFE, 0xE0, 0x94, 0x1C, 0xFB];
-    let mut cat = make_ic7300_cat(response);
+    let (mut cat, log) = ic7300_cat_with_log(response);
     cat.assert_ptt().unwrap();
     assert!(cat.is_asserted());
+    assert_eq!(
+        written(&log),
+        vec![0xFE, 0xFE, 0x94, 0xE0, 0x1C, 0x00, 0x01, 0xFD],
+        "IC-7300 ptt_on frame"
+    );
 }
 
 #[test]
 fn icom_ic7300_ptt_off_sends_correct_bytes() {
     let response = vec![0xFE, 0xFE, 0xE0, 0x94, 0x1C, 0xFB];
-    let mut cat = make_ic7300_cat(response);
+    let (mut cat, log) = ic7300_cat_with_log(response);
     cat.release_ptt().unwrap();
     assert!(!cat.is_asserted());
+    assert_eq!(
+        written(&log),
+        vec![0xFE, 0xFE, 0x94, 0xE0, 0x1C, 0x00, 0x00, 0xFD],
+        "IC-7300 ptt_off frame"
+    );
 }
 
 // ── IC-7300 set_frequency ──────────────────────────────────────────────────────
@@ -55,8 +93,13 @@ fn icom_ic7300_set_frequency_14074khz() {
     // bcd_le5(14074000) = [0x00, 0x40, 0x07, 0x14, 0x00]
     // Byte correctness is verified in rig_definition unit tests; here we test the round-trip.
     let ack = vec![0xFE, 0xFE, 0xE0, 0x94, 0x00, 0xFB];
-    let mut cat = make_ic7300_cat(ack);
+    let (mut cat, log) = ic7300_cat_with_log(ack);
     cat.set_frequency(14_074_000).unwrap();
+    assert_eq!(
+        written(&log),
+        vec![0xFE, 0xFE, 0x94, 0xE0, 0x00, 0x00, 0x40, 0x07, 0x14, 0x00, 0xFD],
+        "IC-7300 set_frequency(14.074 MHz) frame — bcd_le5(14074000)"
+    );
 }
 
 // ── IC-7300 get_frequency ──────────────────────────────────────────────────────
@@ -79,9 +122,14 @@ fn icom_ic7300_get_frequency_parses_bcd_le() {
 #[test]
 fn yaesu_ft817_ptt_on_sends_correct_bytes() {
     // ptt_on: "00 00 00 00 08", response 1 byte
-    let mut cat = make_ft817_cat(vec![0x00]);
+    let (mut cat, log) = ft817_cat_with_log(vec![0x00]);
     cat.assert_ptt().unwrap();
     assert!(cat.is_asserted());
+    assert_eq!(
+        written(&log),
+        vec![0x00, 0x00, 0x00, 0x00, 0x08],
+        "FT-817 ptt_on frame"
+    );
 }
 
 // ── FT-817 set_frequency ──────────────────────────────────────────────────────
@@ -90,8 +138,13 @@ fn yaesu_ft817_ptt_on_sends_correct_bytes() {
 fn yaesu_ft817_set_frequency_bcd_be() {
     // set_frequency: "{freq_bcd4_be} 01", response 1 byte
     // bcd4_be(14074000) = [0x14, 0x07, 0x40, 0x00]; verified in rig_definition unit tests.
-    let mut cat = make_ft817_cat(vec![0x00]);
+    let (mut cat, log) = ft817_cat_with_log(vec![0x00]);
     cat.set_frequency(14_074_000).unwrap();
+    assert_eq!(
+        written(&log),
+        vec![0x14, 0x07, 0x40, 0x00, 0x01],
+        "FT-817 set_frequency(14.074 MHz) frame"
+    );
 }
 
 // ── Missing command → Unsupported ─────────────────────────────────────────────

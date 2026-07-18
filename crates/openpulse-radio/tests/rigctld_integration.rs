@@ -164,6 +164,25 @@ fn rigctld_ptt_backend_asserts_and_releases() {
     assert!(!ptt.is_asserted());
 }
 
+/// PTT assert/release completes within 50 ms over a real socket round-trip (REQ-PTT timing).
+///
+/// The `NoOpPtt` timing test cannot fail — it flips a bool — so it cannot back a timing
+/// requirement on its own. This exercises an actual TCP command/response with rigctld.
+#[test]
+fn rigctld_ptt_round_trip_under_50ms() {
+    use std::time::Instant;
+    let (addr, _store) = spawn_mock_rigctld();
+    let mut ptt = RigctldPtt::connect(&addr).expect("connect rigctld ptt");
+    let start = Instant::now();
+    ptt.assert_ptt().expect("assert");
+    ptt.release_ptt().expect("release");
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed.as_millis() < 50,
+        "rigctld PTT assert+release took {elapsed:?}, over the 50 ms bound"
+    );
+}
+
 /// A rigctld that reports an error response must surface it, not silently key.
 #[test]
 fn rigctld_ptt_surfaces_error_response() {

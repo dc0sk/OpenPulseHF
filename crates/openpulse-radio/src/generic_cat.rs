@@ -4,6 +4,7 @@
 //! `MockTransport` which is always available.
 
 use std::io;
+use std::sync::{Arc, Mutex};
 
 use crate::cat_controller::CatController;
 use crate::error::{PttError, RadioError};
@@ -39,16 +40,23 @@ impl RigTransport for SerialTransport {
 
 /// In-memory transport for unit and integration tests.
 pub struct MockTransport {
-    /// Bytes written by the CAT controller (inspectable by tests).
-    pub write_log: Vec<u8>,
+    /// Bytes written by the CAT controller. Shared so a test can still inspect it after the
+    /// transport has been boxed into a `GenericSerialCat` — otherwise the log is unreachable and
+    /// "sends correct bytes" tests cannot check the bytes they are named for.
+    pub write_log: Arc<Mutex<Vec<u8>>>,
     /// Bytes returned when the controller calls `read_exact`.
     pub read_data: io::Cursor<Vec<u8>>,
 }
 
 impl MockTransport {
+    /// A handle to the write log that outlives boxing into a controller.
+    pub fn log_handle(&self) -> Arc<Mutex<Vec<u8>>> {
+        Arc::clone(&self.write_log)
+    }
+
     pub fn new(read_data: Vec<u8>) -> Self {
         Self {
-            write_log: Vec::new(),
+            write_log: Arc::new(Mutex::new(Vec::new())),
             read_data: io::Cursor::new(read_data),
         }
     }
@@ -56,7 +64,9 @@ impl MockTransport {
 
 impl RigTransport for MockTransport {
     fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
-        self.write_log.extend_from_slice(buf);
+        if let Ok(mut log) = self.write_log.lock() {
+            log.extend_from_slice(buf);
+        }
         Ok(())
     }
     fn read_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
