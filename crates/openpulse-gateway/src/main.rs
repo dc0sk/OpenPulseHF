@@ -329,6 +329,93 @@ mod tests {
     }
 
     /// Full round-trip: gateway sends one message, mock CMS sends one reply.
+    /// A hostile/broken CMS must not be able to hang or mislead the gateway. The cooperative mock
+    /// in `gateway_round_trip` cannot show any of this (audit 2026-07-17, low tier).
+    #[test]
+    fn iss_send_reports_a_cms_that_rejects_everything() {
+        let (client_stream, server_stream) = tcp_pair();
+        let server = thread::spawn(move || {
+            let mut cms = DataPort::new(server_stream);
+            cms.send_frame(banner::encode("W1AW").as_bytes()).unwrap();
+            let _fc = cms.recv_frame().unwrap();
+            let _ff = cms.recv_frame().unwrap();
+            let fs = frame::encode(&openpulse_b2f::frame::B2fFrame::Fs {
+                answers: vec![openpulse_b2f::frame::FsAnswer::Reject],
+            });
+            cms.send_frame(fs.as_bytes()).unwrap();
+        });
+
+        let mut data = DataPort::new(client_stream);
+        let msgs = vec![(
+            build_header("K1TEST@winlink.org", "W1AW@winlink.org", "Test", 5),
+            b"hello".to_vec(),
+        )];
+        let got = iss_send(&mut data, msgs);
+        assert!(
+            got.is_err(),
+            "a CMS that rejects every proposal must be an error, got {got:?}"
+        );
+        server.join().unwrap();
+    }
+
+    /// Garbage where the banner belongs must be a clean error, not a panic or a hang.
+    #[test]
+    fn iss_send_rejects_a_garbage_banner() {
+        let (client_stream, server_stream) = tcp_pair();
+        let server = thread::spawn(move || {
+            let mut cms = DataPort::new(server_stream);
+            cms.send_frame(b"this is not a WL2K banner").unwrap();
+            thread::sleep(std::time::Duration::from_millis(100));
+        });
+
+        let mut data = DataPort::new(client_stream);
+        let msgs = vec![(
+            build_header("K1TEST@winlink.org", "W1AW@winlink.org", "Test", 5),
+            b"hello".to_vec(),
+        )];
+        assert!(iss_send(&mut data, msgs).is_err());
+        server.join().unwrap();
+    }
+
+    /// A CMS that proposes a message and then never sends its blob must time out rather than block
+    /// the gateway forever.
+    #[test]
+    fn irs_receive_times_out_on_a_promised_blob_that_never_arrives() {
+        let (client_stream, server_stream) = tcp_pair();
+        let server = thread::spawn(move || {
+            let mut cms = DataPort::new(server_stream);
+            let fc = frame::encode(&openpulse_b2f::frame::B2fFrame::Fc {
+                proposal_type: openpulse_b2f::frame::ProposalType::D,
+                mid: "W1AW00000001.1.".into(),
+                size: 64,
+                date: "2026/01/01 00:00".into(),
+            });
+            cms.send_frame(fc.as_bytes()).unwrap();
+            cms.send_frame(b"FF\r").unwrap();
+            let _fs = cms.recv_frame();
+            // Promised a blob; never sends it, and holds the connection open so the gateway cannot
+            // mistake a close for an answer — only a real timeout can end this.
+            thread::sleep(std::time::Duration::from_secs(10));
+        });
+
+        let mut data = DataPort::new(client_stream);
+        data.set_timeout(Some(std::time::Duration::from_millis(400)))
+            .unwrap();
+        let started = std::time::Instant::now();
+        let got = irs_receive(&mut data);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "must fail on the timeout, not by waiting for the peer to go away"
+        );
+        assert!(
+            got.is_err(),
+            "a promised-but-unsent blob must time out, got {got:?}"
+        );
+        // Deliberately not joined: the peer holds the connection for 10 s, and the point of the test
+        // is that we returned long before it let go.
+        drop(server);
+    }
+
     #[test]
     fn gateway_round_trip() {
         let (client_stream, server_stream) = tcp_pair();

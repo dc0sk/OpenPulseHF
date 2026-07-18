@@ -440,3 +440,94 @@ fn header_decode_allows_a_realistic_multi_recipient_message() {
     assert_eq!(h.to.len(), 8);
     assert_eq!(h.attachments.len(), 4);
 }
+
+// ── Malformed input must fail cleanly ─────────────────────────────────────────
+
+/// Every malformed banner shape must produce a typed error, never a panic or a partial decode.
+#[test]
+fn malformed_banners_error_cleanly() {
+    for bad in [
+        "",
+        "[",
+        "]",
+        "[]",
+        "not a banner at all",
+        "[WL2K]",
+        "[WL2K-3.0]",
+        "[XXXX-3.0-B2FWINMOR-4.0-DEADBEEF]",
+        "[WL2K-3.0-B2FWINMOR-4.0",
+        "WL2K-3.0-B2FWINMOR-4.0-DEADBEEF]",
+    ] {
+        assert!(
+            banner::decode(bad).is_err(),
+            "banner {bad:?} should not decode"
+        );
+    }
+}
+
+/// Frame decoding must reject junk rather than mis-classify it as a control frame.
+#[test]
+fn malformed_frames_error_cleanly() {
+    for bad in [
+        "",
+        "X",
+        "F",
+        "FC",
+        "FC ",
+        "FC X",
+        "FC D MID",
+        "ZZ D MID 10 20260718120000",
+    ] {
+        let got = frame::decode(bad);
+        assert!(got.is_err(), "frame {bad:?} should not decode, got {got:?}");
+    }
+}
+
+/// Header decoding must reject a block missing its required fields, and must not panic on a `File:`
+/// line with no size or a non-numeric one.
+#[test]
+fn malformed_headers_error_cleanly() {
+    for bad in [
+        "",
+        "Subject: no mid or from\r\n\r\n",
+        "Mid: M1\r\n\r\n",
+        "Mid: M1\r\nFrom: W1AW\r\n\r\n",
+        "Mid: M1\r\nFrom: W1AW\r\nTo: W2AW\r\nBody: notanumber\r\n\r\n",
+        "Mid: M1\r\nFrom: W1AW\r\nTo: W2AW\r\nFile: notasize name.txt\r\n\r\n",
+        "Mid: M1\r\nFrom: W1AW\r\nTo: W2AW\r\nFile:\r\n\r\n",
+    ] {
+        let got = header::decode(bad.as_bytes());
+        assert!(got.is_err(), "header {bad:?} should not decode");
+    }
+}
+
+/// Non-UTF8 bytes in a header must be a typed error, not a panic.
+#[test]
+fn non_utf8_header_errors_cleanly() {
+    let bad = b"Mid: M1\r\nFrom: \xff\xfe\r\nTo: W2AW\r\n\r\n";
+    assert!(header::decode(bad).is_err());
+}
+
+/// A compressed blob corrupted in transit must fail the decompressor rather than yield garbage that
+/// gets presented as a delivered message.
+#[test]
+fn tampered_accepted_blob_fails_to_decode() {
+    let mut irs = irs_in_transfer(1);
+    let mut blob = compress_gzip(b"the original message body, intact").unwrap();
+    let mid = blob.len() / 2;
+    blob[mid] ^= 0xFF;
+    let got = irs.receive_data(blob);
+    assert!(
+        got.is_err(),
+        "a tampered gzip blob must not decode, got {got:?}"
+    );
+}
+
+/// Truncating an accepted blob is the other half of the tamper case.
+#[test]
+fn truncated_accepted_blob_fails_to_decode() {
+    let mut irs = irs_in_transfer(1);
+    let mut blob = compress_gzip(b"the original message body, intact").unwrap();
+    blob.truncate(blob.len() / 2);
+    assert!(irs.receive_data(blob).is_err());
+}
