@@ -91,6 +91,27 @@ impl CmdPort {
         }
     }
 
+    /// Read lines until one starts with `want`, or one starts with any of `abort_on`.
+    ///
+    /// Without this, a peer that answers CONNECT with a terminal event instead of the expected one
+    /// leaves the caller spinning until the read deadline — a timeout reported for what is really a
+    /// refused session.
+    pub fn wait_for_or_abort(
+        &mut self,
+        want: &str,
+        abort_on: &[&str],
+    ) -> Result<String, DriverError> {
+        loop {
+            let line = self.read_line()?;
+            if line.starts_with(want) {
+                return Ok(line);
+            }
+            if abort_on.iter().any(|p| line.starts_with(p)) {
+                return Err(DriverError::Aborted);
+            }
+        }
+    }
+
     /// The deadline applied to each whole read operation.
     pub fn timeout(&self) -> Option<Duration> {
         self.timeout
