@@ -1,5 +1,11 @@
 # Dual-card hardware loopback — the two-soundcard rung on one host
 
+> **Evidence currency (2026-07-18):** the results recorded below predate the fade-aware ladder
+> arc. No loopback run in the tree is newer than 2026-06-25, and several shipped modes
+> (`QPSK250-D`, `QPSK500-D`, `MFSK16`, JS8) have never been run on real audio at all. See
+> [loopback-revalidation-plan.md](loopback-revalidation-plan.md).
+
+
 This rig runs the modem TX→RX through **two USB soundcards plugged into the same
 PC**, joined by an analog cable. It is the **hardware / dual-clock rung** of the
 loopback ladder (see [virtual-loopback.md](virtual-loopback.md)) made runnable on
