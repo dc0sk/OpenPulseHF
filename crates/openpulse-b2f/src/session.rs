@@ -294,7 +294,7 @@ impl B2fSession {
 
     /// IRS: ingest compressed message data received on the data channel.
     ///
-    /// Selects decompressor based on the accepted proposal type (D=Gzip, C=LZHUF).
+    /// Only Type D (Gzip) is supported; a Type C proposal is answered `Reject` and never reaches here.
     pub fn receive_data(&mut self, data: Vec<u8>) -> Result<Vec<u8>, B2fError> {
         if self.state != SessionState::Transfer {
             return Err(B2fError::InvalidState);

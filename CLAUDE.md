@@ -415,10 +415,8 @@ Full spec in `docs/dev/design/testbench-design.md` and `docs/dev/benchmark-harne
 **Phase 5.2 — LZHUF codec** ✅ Done (PR #98)
 - `crates/openpulse-b2f/src/compress.rs`: real LZHUF LH5 via `oxiarc-lzhuf = "0.2.7"`
   - 4-byte BE original-length prefix makes stream self-contained (known incompatibility with external Winlink Type C — deferred). **REMOVED in PR #948**: the incompatibility was never closed, the code had no production caller, and keeping it implied a capability the crate did not have.
-  - `compress_lzhuf`: validates payload fits `u32` before cast
-  - `decompress_lzhuf`: caps `orig_len` at 16 MiB to prevent OOM from malformed frames
 - `B2fSession::accepted_count()` added to `session.rs` — IRS driver uses this to know how many data frames to read
-- Integration tests: `lzhuf_round_trip`, `lzhuf_bad_input_error`
+- (The `compress_lzhuf`/`decompress_lzhuf` helpers and the `lzhuf_round_trip`/`lzhuf_bad_input_error` tests were removed with the codec in PR #948.)
 
 **Phase 5.3 — TOML configuration management** ✅ Done (PR #102)
 - `crates/openpulse-config/`: new crate with typed TOML schema covering station, modem, ARDOP, KISS, logging, relay, and trust-store settings

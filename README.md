@@ -187,7 +187,6 @@ The mode/FEC selection ladder and which combinations are usable on HF is documen
 | **Zstd + HPX dictionary** | Session (in-band) | Both | Pre-trained dictionary on amateur/Winlink traffic; best compression ratio |
 | **None** | Session (in-band) | Both | Binary payloads that are already compressed |
 | **Gzip** | B2F wire (Type D) | Both | `flate2`; Winlink Type D proposal |
-| **LZHUF / LH5** | B2F wire (Type C) | Both | `oxiarc-lzhuf`; 4-byte LE prefix; Winlink Type C wire-compatible |
 
 Compression algorithm negotiated at session setup via `supported_compression` / `selected_compression` fields in ConReq/ConAck, covered by Ed25519 signature — post-signing injection is detectable.
 
@@ -259,7 +258,7 @@ trading bandwidth (rect vs `-RRC`) against throughput (500 vs 1000 baud).
 - **ARDOP-compatible TCP TNC** (`openpulse-tnc`) — Pat-compatible command set;
   GRIDSQUARE, ARQBW, ARQTIMEOUT, CWID, SENDID, PING
 - **KISS/AX.25 TNC** (`openpulse-kisstnc`) — full byte stuffing, AX.25 UI frames
-- **B2F/Winlink** — ISS and IRS roles, FC/FS/Ff/Fq frames, Gzip and LZHUF compression
+- **B2F/Winlink** — ISS and IRS roles, FC/FS/Ff/Fq frames, Gzip (Type D) compression; Type C/LZHUF is unsupported and inbound proposals are rejected
 - **Direct TCP Winlink CMS gateway** (`openpulse-gateway`) — no TNC bridge needed
 - **QSY frequency agility** — Ed25519-signed wire codec; initiator and responder session
   state machines; SNR-ranked channel selection; rig CAT via rigctld
@@ -403,7 +402,7 @@ on-air test plan in `docs/on-air_testplan.md`.
 |---|---|
 | `crates/openpulse-ardop` | ARDOP-compatible TCP TNC; `openpulse-tnc` binary |
 | `crates/openpulse-kiss` | KISS/AX.25 TNC; `openpulse-kisstnc` binary |
-| `crates/openpulse-b2f` | B2F/Winlink state machine: FC/FS/Ff/Fq frames, Gzip (Type D), LZHUF (Type C) |
+| `crates/openpulse-b2f` | B2F/Winlink state machine: FC/FS/Ff/Fq frames, Gzip (Type D); Type C/LZHUF unsupported |
 | `crates/openpulse-b2f-driver` | High-level ISS/IRS session driver over ARDOP TCP; e2e loopback tests |
 | `crates/openpulse-gateway` | Direct TCP Winlink CMS gateway; `openpulse-gateway` binary |
 | `crates/openpulse-qsy` | QSY frequency agility: Ed25519-signed wire codec, `QsySession` (initiator + responder), `QsyScanner` |
