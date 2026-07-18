@@ -108,7 +108,7 @@ So e.g. `PILOT-16QAM1000-RRC` is 16QAM, 1000 baud, RRC-shaped. See the
 |---|---|---|---|---|---|
 | `None` | — | 1.00 | nothing | — | Clean loopback / very high SNR only |
 | `Rs` | RS(255,223), t=16 | 0.875 | ≤ 6.3 % byte errors/block | hard | Light random errors |
-| `RsInterleaved` | RS + block interleaver | 0.875 | 6.3 %, **burst-tolerant** | hard | HF burst/fading (Gilbert-Elliott) |
+| `RsInterleaved` | RS + block interleaver | 0.875 | 6.3 % — **burst-tolerant only across multiple RS blocks** | hard | Multi-block payloads (> 223 B) on bursty channels; **inert at or below one block** — see §2.1 |
 | `RsStrong` | RS(255,191), t=32 | 0.749 | ≤ 12.5 % byte errors/block | hard | Heavier random errors, hard-decision |
 | `Concatenated` | Conv(½,K=3) + RS | ~0.44 | high (random) | hard | AWGN-dominant, no soft LLRs |
 | `SoftConcatenated` | Soft-Viterbi(K=7) + RS | ~0.44 | **highest practical** | **soft** | Dense modes on real links |
@@ -124,9 +124,15 @@ Two rules of thumb:
   get genuine soft-decision gain on them. The pilot-framed `PILOT-*` family is
   also soft-capable (per-bit max-log-MAP LLRs from the pilot-normalised symbols),
   so the HARQ policy auto-selects high-rate LDPC for its dense rungs too.
-- **Interleaving matters on HF.** Watterson/Gilbert-Elliott channels produce
-  *bursts*; `RsInterleaved` spreads a burst across many RS codewords so it stays
-  within per-block capacity, where bare `Rs` would fail on the same raw rate.
+- **Interleaving matters on HF *only when the payload spans more than one RS block*.**
+  Watterson/Gilbert-Elliott channels produce *bursts*, and `RsInterleaved` spreads a burst across
+  many RS codewords so it stays within per-block capacity — but the interleaver permutes the
+  **encoded** bytes, and RS is position-agnostic *within* a codeword. So on a payload that fits one
+  255-byte block there is nothing to spread and the mode is **inert**: BPSK250 on Watterson
+  `moderate_f1` decodes 0.17 / 0.58 at 5 / 8 dB with `RsInterleaved` — *identical* to plain `Rs`.
+  Code **strength** (`RsStrong`), not interleaving, is the lever at that size. The multi-block case
+  is sound in principle but has not been measured in this repo. This is why `hpx_hf` uses `Rs`
+  ladder-wide; see §7.
 
 ---
 
@@ -141,7 +147,7 @@ Two rules of thumb:
         └─────────────────────────────────────────────────────────┘
   channel type ─────────────────────────────────────────────► FEC family
    • AWGN / high SNR        → None / Rs
-   • HF burst & fading      → RsInterleaved (burst) or SoftConcatenated
+   • HF burst & fading      → SoftConcatenated (or RsInterleaved if > 223 B/frame)
    • dense constellation    → soft code REQUIRED (SoftConcatenated/Ldpc/Turbo)
 ```
 
@@ -151,7 +157,7 @@ Two rules of thumb:
    with a positive ACK → climb).
 2. **Pick the FEC** for the channel character, not just the SNR:
    - flat/AWGN, plenty of margin → `None` or `Rs`;
-   - HF multipath/fading (bursts) → `RsInterleaved`;
+   - HF multipath/fading (bursts) → `SoftConcatenated`; `RsInterleaved` only if frames exceed one RS block (> 223 B);
    - any dense mode (16QAM and up, all SC-FDMA HOM, 64QAM) → a **soft** code.
 3. **Acceptable** = the post-FEC frame CRC passes reliably. The headline number is
    *net* throughput = `gross_bps × code_rate × (1 − retransmit_fraction)`.
@@ -258,8 +264,9 @@ Design points:
   rungs decode ~0 % at their own floors (BPSK31 @3 dB **0.00**, BPSK63 @4 dB 0.00, BPSK250 @5 dB
   0.00); with `RsStrong` they work (BPSK31 @3 dB **1.00**, BPSK63 @4 dB 0.83, BPSK250 @8 dB 1.00).
   The floors did not move — they were always fading-appropriate; the rungs simply lacked the code.
-- **Why `RsStrong` and not `RsInterleaved`**, despite §2's "burst-tolerant / best for HF fading"
-  billing. Measured, `RsInterleaved` is **inert** (BPSK250 on `moderate_f1` @5/8 dB: 0.17/0.58 —
+- **Why `RsStrong` and not `RsInterleaved`.** (§2 used to bill `RsInterleaved` as "best for HF
+  burst/fading" without qualification; it is now corrected there to say the same thing this section
+  measured.) Measured, `RsInterleaved` is **inert** (BPSK250 on `moderate_f1` @5/8 dB: 0.17/0.58 —
   identical to plain `Rs`): a ≤223-byte payload is *one* RS block, and a single block is
   position-agnostic, so there is nothing to interleave. Code **strength** is the lever, and
   `RsStrong` is **free on the wire** for payloads ≤191 B — RS(255,223) and RS(255,191) both emit a
@@ -296,8 +303,8 @@ retransmit cost is on top of that). Recommended HF pairings:
 
 | Operating regime | Mode | FEC | ~Net bps | Why |
 |---|---|---|---|---|
-| Weak signal, NVIS, QRM | BPSK31–250 | `RsInterleaved` | 25–220 | Burst-tolerant; QPSK/BPSK shrug off timing offset |
-| Solid HF, ~2 kHz | QPSK500 / SCFDMA52 | `RsInterleaved` | ~900 / ~2 500 | Workhorse; soft optional |
+| Weak signal, NVIS, QRM | BPSK31–250 | `Rs` (`RsStrong` where frames stay ≤ 191 B) | 25–220 | Interleaving is inert at this frame size — code strength is the lever |
+| Solid HF, ~2 kHz | QPSK500 / SCFDMA52 | `Rs` (or `SoftConcatenated`) | ~900 / ~2 500 | Workhorse; soft optional |
 | Good HF, want more | 8PSK500 / SCFDMA52-8PSK | `SoftConcatenated` | ~660 / ~1 900 | 8PSK needs the soft-coding gain |
 | Marginal-SNR dense (the `hpx_wideband_hd` SL9–11 fallback) | **SCFDMA26-16QAM / -32QAM** | **`SoftConcatenated`** | ~1 270 / ~1 590 | **+3 dB narrowing + soft FEC — hardware-validated reliable** |
 | High SNR, ~2 kHz, max data | SCFDMA52-16QAM/-32QAM | `SoftConcatenated` | ~2 540 / ~3 180 | Soft FEC closes them where hard RS can't |
@@ -314,7 +321,7 @@ Combinations that **don't** make sense:
   clock; below that no FEC rescues it economically. Use it only when the link
   genuinely supports it (then `SoftConcatenated` for margin).
 - **`Turbo`/`Ldpc` on a clean, high-SNR link.** Their low code rate (0.33/0.5)
-  throws away throughput you don't need to spend; prefer `Rs`/`RsInterleaved`
+  throws away throughput you don't need to spend; prefer `Rs`
   there.
 
 ---

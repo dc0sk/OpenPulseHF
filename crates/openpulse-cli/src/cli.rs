@@ -1,5 +1,51 @@
 use clap::{Parser, Subcommand};
 
+/// Clap value parser for `--profile`, seeded from the profile registry.
+///
+/// `PossibleValuesParser` alone would be wrong: `SessionProfile::by_name` is case-insensitive and
+/// treats `-` and `_` as interchangeable, so an exact-match parser rejects `HPX-OFDM-HF`, which is
+/// valid. This validates through `by_name` (preserving that flexibility) while still reporting the
+/// canonical names to clap, so `--help` lists all of them and the list cannot drift.
+#[derive(Clone)]
+struct ProfileNameParser;
+
+impl clap::builder::TypedValueParser for ProfileNameParser {
+    type Value = String;
+
+    fn parse_ref(
+        &self,
+        _cmd: &clap::Command,
+        _arg: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        let raw = value.to_string_lossy();
+        if openpulse_core::profile::SessionProfile::by_name(&raw).is_some() {
+            return Ok(raw.into_owned());
+        }
+        Err(clap::Error::raw(
+            clap::error::ErrorKind::InvalidValue,
+            format!(
+                "unknown session profile '{raw}'\n  expected one of: {}\n",
+                openpulse_core::profile::SessionProfile::PROFILE_NAMES.join(", ")
+            ),
+        ))
+    }
+
+    fn possible_values(
+        &self,
+    ) -> Option<Box<dyn Iterator<Item = clap::builder::PossibleValue> + '_>> {
+        Some(Box::new(
+            openpulse_core::profile::SessionProfile::PROFILE_NAMES
+                .iter()
+                .map(|n| clap::builder::PossibleValue::new(*n)),
+        ))
+    }
+}
+
+fn profile_name_parser() -> ProfileNameParser {
+    ProfileNameParser
+}
+
 use crate::commands;
 use crate::output::DiagnosticOptions;
 
@@ -102,10 +148,11 @@ pub enum Commands {
         /// Estimated signal-to-noise ratio in dB.
         #[arg(long)]
         snr: f32,
-        /// Session profile (overrides config `[modem] profile`). One of: hpx500,
-        /// hpx_hf, hpx_ofdm_hf, hpx_wideband, hpx_wideband_hd, hpx_narrowband,
-        /// hpx_narrowband_hd.
-        #[arg(long)]
+        /// Session profile (overrides config `[modem] profile`).
+        ///
+        /// The accepted values come from `SessionProfile::PROFILE_NAMES`, so this list cannot drift
+        /// from what `by_name` actually accepts — it previously advertised 7 of the 12.
+        #[arg(long, value_parser = profile_name_parser())]
         profile: Option<String>,
     },
     /// Export session performance metrics (throughput, FER, latency, SNR estimate).
@@ -159,10 +206,11 @@ pub enum Commands {
     /// Run an adaptive rate-control session over a simulated channel and report
     /// each speed-level transition (loopback/channel-sim; no hardware required).
     Adaptive {
-        /// Session profile (overrides config `[modem] profile`). One of: hpx500,
-        /// hpx_hf, hpx_ofdm_hf, hpx_wideband, hpx_wideband_hd, hpx_narrowband,
-        /// hpx_narrowband_hd.
-        #[arg(long)]
+        /// Session profile (overrides config `[modem] profile`).
+        ///
+        /// The accepted values come from `SessionProfile::PROFILE_NAMES`, so this list cannot drift
+        /// from what `by_name` actually accepts — it previously advertised 7 of the 12.
+        #[arg(long, value_parser = profile_name_parser())]
         profile: Option<String>,
         /// Channel model: clean, awgn, watterson-good-f1, watterson-poor-f1.
         #[arg(long, default_value = "clean")]
@@ -599,8 +647,8 @@ pub enum ArqCommands {
         /// Modulation mode (start mode when --profile is set).
         #[arg(short, long, default_value = "BPSK250")]
         mode: String,
-        /// Adaptive session profile (enables rate stepping). See PROFILE_NAMES.
-        #[arg(long)]
+        /// Adaptive session profile (enables rate stepping).
+        #[arg(long, value_parser = profile_name_parser())]
         profile: Option<String>,
         /// Maximum retransmissions before giving up.
         #[arg(long, default_value_t = 3)]
@@ -614,8 +662,8 @@ pub enum ArqCommands {
         /// Modulation mode (fallback when no adaptive session is active).
         #[arg(short, long, default_value = "BPSK250")]
         mode: String,
-        /// Adaptive session profile (enables rate stepping). See PROFILE_NAMES.
-        #[arg(long)]
+        /// Adaptive session profile (enables rate stepping).
+        #[arg(long, value_parser = profile_name_parser())]
         profile: Option<String>,
         /// Number of frames to receive before exiting.
         #[arg(long, default_value_t = 1)]

@@ -101,7 +101,8 @@ fn adaptive_rejects_unknown_profile() {
     ]);
     cmd.assert()
         .failure()
-        .stderr(contains("unknown session profile"));
+        .stderr(contains("unknown session profile"))
+        .stderr(contains("hpx_pilot_fast_rrc"));
 }
 
 #[test]
