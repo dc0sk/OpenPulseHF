@@ -5,12 +5,30 @@ mod cmd;
 mod data;
 
 use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use openpulse_b2f::{banner, B2fSession, SessionRole, WlHeader};
 
 pub use cmd::CmdPort;
 pub use data::DataPort;
+
+/// Read timeout installed on a port that the caller never configured one for. A port with no timeout
+/// hangs forever on a silent peer; generous enough that no legitimate ARDOP exchange trips it.
+pub const DEFAULT_IO_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Time left of a `total` budget that began at `started`, or `None` once it has run out.
+///
+/// This is what turns `SO_RCVTIMEO` — which restarts on every partial read, so a one-byte-per-interval
+/// drip never expires — into a deadline for the whole operation.
+fn deadline_slice(started: Instant, total: Duration) -> Option<Duration> {
+    let elapsed = started.elapsed();
+    if elapsed >= total {
+        return None;
+    }
+    let remaining = total - elapsed;
+    // A zero timeout means "block forever" at the socket layer, so never hand one down.
+    Some(remaining.max(Duration::from_millis(1)))
+}
 
 /// A decoded message received during an IRS session.
 pub struct DecodedMessage {
@@ -121,10 +139,13 @@ impl B2fDriver {
         self.cmd.send("LISTEN TRUE")?;
         self.cmd.wait_for("LISTEN")?;
 
-        // Wait for incoming connection (event arrives asynchronously).
+        // Wait for incoming connection (event arrives asynchronously). Restore the previous timeout
+        // afterwards — clearing it outright leaves the closing `wait_for("DISCONNECTED")` able to
+        // hang forever on a peer that holds the command connection open after the data phase.
+        let prior = self.cmd.timeout();
         self.cmd.set_timeout(Some(timeout))?;
         self.cmd.wait_for("CONNECTED")?;
-        self.cmd.set_timeout(None)?;
+        self.cmd.set_timeout(prior.or(Some(DEFAULT_IO_TIMEOUT)))?;
 
         // IRS sends its banner first.
         let my_banner = banner::encode(callsign);

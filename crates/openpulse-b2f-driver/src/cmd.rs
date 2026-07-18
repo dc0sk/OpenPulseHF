@@ -1,29 +1,33 @@
 //! ARDOP command port — sends ASCII commands, reads responses and events.
 
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::net::TcpStream;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crate::DriverError;
+use crate::{deadline_slice, DriverError, DEFAULT_IO_TIMEOUT};
 
 /// Longest command-port line accepted before treating the peer as hostile/broken. Mirrors the
-/// server-side `MAX_CMD_LINE` in `openpulse-ardop` — `read_line` alone grows its destination without
-/// limit, so a TNC that never sends a newline could otherwise exhaust this process's memory.
+/// server-side `MAX_CMD_LINE` in `openpulse-ardop` — reading a line without a cap grows the
+/// destination without limit, so a TNC that never sends a newline could otherwise exhaust memory.
 const MAX_CMD_LINE: usize = 4096;
 
 /// Wraps the ARDOP TNC command port (ASCII line protocol).
 pub struct CmdPort {
     reader: BufReader<TcpStream>,
     writer: TcpStream,
+    timeout: Option<Duration>,
 }
 
 impl CmdPort {
-    pub fn new(stream: TcpStream) -> Result<Self, crate::DriverError> {
-        let writer = stream.try_clone().map_err(crate::DriverError::Io)?;
-        Ok(Self {
+    pub fn new(stream: TcpStream) -> Result<Self, DriverError> {
+        let writer = stream.try_clone().map_err(DriverError::Io)?;
+        let mut port = Self {
             reader: BufReader::new(stream),
             writer,
-        })
+            timeout: None,
+        };
+        port.set_timeout(Some(DEFAULT_IO_TIMEOUT))?;
+        Ok(port)
     }
 
     /// Send an ARDOP command (CR-LF terminated).
@@ -35,31 +39,46 @@ impl CmdPort {
 
     /// Read one line from the command port (strips trailing CR/LF).
     ///
-    /// Maps `TimedOut` / `WouldBlock` I/O errors to `DriverError::Timeout`.
+    /// The configured timeout is a deadline for the WHOLE line, not per syscall: a peer that dribbles
+    /// bytes without ever sending a newline cannot keep the read alive. Lines over `MAX_CMD_LINE` are
+    /// rejected rather than buffered. Maps `TimedOut` / `WouldBlock` to `DriverError::Timeout`.
     pub fn read_line(&mut self) -> Result<String, DriverError> {
-        let mut line = String::new();
-        // Bound the read to `MAX_CMD_LINE + 1` bytes so a newline-starved peer can't grow `line`
-        // without limit — a length check after an unbounded `read_line` would apply too late.
-        let n = (&mut self.reader)
-            .take(MAX_CMD_LINE as u64 + 1)
-            .read_line(&mut line)
-            .map_err(|e| {
-                if e.kind() == io::ErrorKind::TimedOut || e.kind() == io::ErrorKind::WouldBlock {
-                    DriverError::Timeout
-                } else {
-                    DriverError::Io(e)
+        let started = Instant::now();
+        let mut line: Vec<u8> = Vec::new();
+        loop {
+            if let Some(total) = self.timeout {
+                let remaining = deadline_slice(started, total).ok_or(DriverError::Timeout)?;
+                self.reader.get_ref().set_read_timeout(Some(remaining))?;
+            }
+            let available = match self.reader.fill_buf() {
+                Ok(b) => b,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(map_read_err(e)),
+            };
+            if available.is_empty() {
+                if line.is_empty() {
+                    return Err(DriverError::Ardop("command port closed".into()));
                 }
-            })?;
-        if n == 0 {
-            return Err(DriverError::Ardop("command port closed".into()));
+                break;
+            }
+            let (chunk, done) = match available.iter().position(|&b| b == b'\n') {
+                Some(i) => (&available[..=i], true),
+                None => (available, false),
+            };
+            let taken = chunk.len();
+            line.extend_from_slice(chunk);
+            self.reader.consume(taken);
+            if line.len() > MAX_CMD_LINE {
+                return Err(DriverError::Ardop(format!(
+                    "command line too long (>{MAX_CMD_LINE} bytes)"
+                )));
+            }
+            if done {
+                break;
+            }
         }
-        // A line at or over the cap arrives with no trailing newline (the `Take` EOFs first).
-        if n > MAX_CMD_LINE {
-            return Err(DriverError::Ardop(format!(
-                "command line too long (>{MAX_CMD_LINE} bytes)"
-            )));
-        }
-        Ok(line.trim_end_matches(['\r', '\n']).to_string())
+        let text = String::from_utf8_lossy(&line).into_owned();
+        Ok(text.trim_end_matches(['\r', '\n']).to_string())
     }
 
     /// Read lines until one starts with `prefix`, returning that line.
@@ -72,9 +91,23 @@ impl CmdPort {
         }
     }
 
-    /// Set (or clear) the read timeout on the underlying stream.
-    pub fn set_timeout(&self, t: Option<Duration>) -> Result<(), DriverError> {
+    /// The deadline applied to each whole read operation.
+    pub fn timeout(&self) -> Option<Duration> {
+        self.timeout
+    }
+
+    /// Set (or clear) the read timeout. Applies to each whole read operation, not per syscall.
+    pub fn set_timeout(&mut self, t: Option<Duration>) -> Result<(), DriverError> {
         self.reader.get_ref().set_read_timeout(t)?;
+        self.timeout = t;
         Ok(())
+    }
+}
+
+fn map_read_err(e: io::Error) -> DriverError {
+    if e.kind() == io::ErrorKind::TimedOut || e.kind() == io::ErrorKind::WouldBlock {
+        DriverError::Timeout
+    } else {
+        DriverError::Io(e)
     }
 }
