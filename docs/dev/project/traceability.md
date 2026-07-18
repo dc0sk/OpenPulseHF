@@ -9,6 +9,33 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-18 — fix(b2f): bound total decompressed bytes per session (#942 medium tier)
+
+- **Requirement/change:** Winlink stack hardening backlog (#942), medium tier — "no session-aggregate
+  decompression cap" (`docs/dev/reviews/winlink-stack-audit-2026-07-17.md`).
+- **Finding:** `receive_data` bounds each message at `MAX_UNCOMPRESSED` (16 MiB) and the proposal count
+  at `MAX_PROPOSALS` (32), but never their **product**. A peer that stays legally under the per-message
+  cap on every message still drives ≈ 512 MB of transient allocation from ~2 MB of wire — a plausible
+  OOM on the Pi target. The two existing caps each look sufficient in isolation; the gap is that
+  neither one is aggregate.
+- **Design decision:** track a running `decompressed_total` on the session and check it in
+  `receive_data` — the single seam both the driver and the gateway call, so neither I/O front-end can
+  miss it (the seam-gap rule). Checked **after** each decompress, so peak RSS is the cap plus at most
+  one message; checking before would require trusting a peer-supplied length. Limit 32 MiB: two
+  max-size messages, ~100× a realistic mailbox batch, and ~16× below the abuse case.
+- **Implementation:** `crates/openpulse-b2f/src/session.rs` (`MAX_SESSION_DECOMPRESSED`,
+  `decompressed_total` field, aggregate check in `receive_data`); `crates/openpulse-b2f/src/lib.rs`
+  (`B2fError::SessionTooLarge`).
+- **Tests:** `crates/openpulse-b2f/tests/b2f_integration.rs` —
+  `session_bounds_aggregate_decompressed_bytes` (16 × 4 MiB gzip-of-zeros must trip the cap) and
+  `session_aggregate_cap_does_not_trip_on_a_normal_batch` (24 × 64 KiB must all pass, so the cap
+  can't be satisfied by simply breaking legitimate traffic).
+- **Test results (actually run):** `cargo test -p openpulse-b2f --no-default-features` **21 passed,
+  0 failed**. **Sabotage-verified:** with the check forced false, `session_bounds_aggregate_decompressed_bytes`
+  FAILS ("session accepted 16 × 4 MiB decompressed with no aggregate cap"); restored → passes.
+
+---
+
 ## 2026-07-17 — docs+test: pin the rate ladder's per-family SNR-scale boundary (resolve the "wart")
 
 - **Requirement/change:** the SNR-scale mismatch left as a known limitation by v0.14.0 ("SC and OFDM

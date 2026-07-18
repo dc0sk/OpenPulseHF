@@ -33,4 +33,8 @@ pub enum B2fError {
     ProposalCountMismatch { expected: usize, got: usize },
     #[error("session exceeded {limit} inbound frames — aborting (possible flood)")]
     TooManyFrames { limit: usize },
+    #[error(
+        "session decompressed output exceeded {limit} bytes — aborting (possible amplification)"
+    )]
+    SessionTooLarge { limit: u64 },
 }

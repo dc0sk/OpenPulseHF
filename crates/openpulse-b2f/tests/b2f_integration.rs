@@ -437,3 +437,62 @@ fn irs_caps_the_number_of_accepted_proposals() {
         "no more than MAX_PROPOSALS may be accepted regardless of how many were offered"
     );
 }
+
+// ── Session-aggregate decompression cap ───────────────────────────────────────
+
+/// Drive an IRS session into Transfer with `n` accepted Type D proposals.
+fn irs_in_transfer(n: usize) -> B2fSession {
+    let mut irs = B2fSession::new(SessionRole::Irs);
+    for i in 0..n {
+        let fc = frame::encode(&B2fFrame::Fc {
+            proposal_type: ProposalType::D,
+            mid: format!("MSG{i:04}"),
+            size: 64,
+            date: "20260718120000".into(),
+        });
+        irs.handle_line(&fc).unwrap();
+    }
+    let fs = irs.handle_line(&frame::encode(&B2fFrame::Ff)).unwrap();
+    assert_eq!(fs.len(), 1, "IRS should answer FF with one FS");
+    irs
+}
+
+/// A hostile peer can stay under the 16 MiB per-message cap on every message and still make us
+/// decompress hundreds of MB across one session. The session must bound the AGGREGATE, not just
+/// each message (audit 2026-07-17, medium tier).
+#[test]
+fn session_bounds_aggregate_decompressed_bytes() {
+    let mut irs = irs_in_transfer(16);
+    // ~4 MiB of zeros gzips to a few KB — tiny on the wire, large in RAM.
+    let blob = compress_gzip(&vec![0u8; 4 * 1024 * 1024]).unwrap();
+    let mut delivered = 0usize;
+    let mut hit_cap = false;
+    for _ in 0..16 {
+        match irs.receive_data(blob.clone()) {
+            Ok(_) => delivered += 1,
+            Err(e) => {
+                assert!(
+                    matches!(e, openpulse_b2f::B2fError::SessionTooLarge { .. }),
+                    "expected the aggregate cap to fire, got {e:?}"
+                );
+                hit_cap = true;
+                break;
+            }
+        }
+    }
+    assert!(
+        hit_cap,
+        "session accepted {delivered} × 4 MiB decompressed with no aggregate cap"
+    );
+}
+
+/// The cap must not touch a realistic mailbox batch: many small messages stay well under it.
+#[test]
+fn session_aggregate_cap_does_not_trip_on_a_normal_batch() {
+    let mut irs = irs_in_transfer(24);
+    let blob = compress_gzip(&vec![b'x'; 64 * 1024]).unwrap();
+    for i in 0..24 {
+        irs.receive_data(blob.clone())
+            .unwrap_or_else(|e| panic!("normal 64 KiB message {i} rejected: {e:?}"));
+    }
+}
