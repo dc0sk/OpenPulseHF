@@ -283,7 +283,7 @@ Design points:
   buying rate with code rate costs +4…+8 dB of floor — a worse trade than climbing one modulation
   order (~2 dB for 1.33×). 64QAM is the densest constellation available, so above SL11 code rate is
   the only remaining lever.
-- **The densest rung is gated.** SL14 (OFDM52-64QAM at r≈8/9, 30 dB) is admitted only after a prior
+- **The densest rung is gated.** SL14 (OFDM52-64QAM at r≈8/9, 20 dB) is admitted only after a prior
   SNR-upgrade candidate (`ack_up_requires_snr_candidate_at = SL14`), so the controller never jumps
   to the top rung on one lucky ACK.
 

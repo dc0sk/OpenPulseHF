@@ -1,11 +1,23 @@
 ---
 project: openpulsehf
 doc: docs/dev/reviews/winlink-stack-audit-2026-07-17.md
-status: living
+status: resolved
 last_updated: 2026-07-17
 ---
 
 # Winlink network stack loose-ends audit (2026-07-17)
+
+> **RESOLVED 2026-07-18.** Every finding below is closed. The live DoS (finding 1) shipped in
+> [#943](https://github.com/dc0sk/OpenPulseHF/pull/943); the medium tier in
+> [#945](https://github.com/dc0sk/OpenPulseHF/pull/945) (aggregate decompression cap),
+> [#946](https://github.com/dc0sk/OpenPulseHF/pull/946) (command-line cap) and
+> [#947](https://github.com/dc0sk/OpenPulseHF/pull/947) (per-operation read deadlines + the IRS
+> teardown timeout); the low tier in [#948](https://github.com/dc0sk/OpenPulseHF/pull/948) (Type C
+> deleted), [#949](https://github.com/dc0sk/OpenPulseHF/pull/949) (header field caps),
+> [#950](https://github.com/dc0sk/OpenPulseHF/pull/950) (all-proposals-rejected guard +
+> `DriverError::Aborted` wired) and [#951](https://github.com/dc0sk/OpenPulseHF/pull/951)
+> (adversarial coverage). Issue #942 is closed; all of it shipped in **v0.15.0**.
+> The body below is the audit as written on 2026-07-17 and is preserved unedited as a record.
 
 Multi-agent audit (7 finders → per-finding adversarial verification → synthesis), scoped to
 `openpulse-b2f`, `openpulse-b2f-driver`, `openpulse-gateway`. 33 agents, 23 confirmed survivors.

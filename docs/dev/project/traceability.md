@@ -9,6 +9,42 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-18 — docs: consolidate the status/backlog docs and close the stale trackers
+
+- **Requirement/change:** consistency-audit findings 4, 5, 7, 8, 9 and its consolidation plan — several
+  documents functioned as competing open-work registers and disagreed with each other and with the code.
+- **Finding:** `backlog.md` listed **two fully-shipped subsystems as "Open work items"** (Observability
+  REQ-OBS-01..03 / CAP-67, and control-channel security REQ-SEC-CTL-01..05 / CAP-68 — the latter with
+  an "open decision: TLS-PSK vs Noise" that had been decided in favour of Noise), 7 of its 12 numbered
+  items were shipped work duplicated verbatim from its own "Recently completed" digest, and the two
+  items that ARE open (FF-15 Phase H, FF-16 Phase F) were absent entirely. Separately: the Winlink
+  audit was still `status: living` describing an unfixed backlog the day after all ten findings
+  closed; the VARA-parity board had nothing left to track; README's `hpx_hf` range read SL2–SL17
+  against the gated table's SL1–SL14; and `mode-fec-ladder.md`'s prose said SL14's floor is 30 dB
+  where `profile.rs` says 20.0.
+- **Design decision — give each doc one job and make the file say so.** `backlog.md` is now the
+  register of *open* work only, with a scope note at the top stating that completed work lives in
+  `roadmap.md` and per-requirement status in `traceability-matrix.md`. The duplicate "Recently
+  completed" digest is replaced by a pointer, because that digest is precisely the mechanism by which
+  shipped items drifted back into the open list. Shipped-but-partial entries are kept with **only the
+  real residue** (CAP-68's WebSocket transport and keystore-sourced PSK) rather than deleted, so a
+  reader does not conclude more shipped than did. Resolved audit reports are annotated with their
+  fixing PRs and flipped to `status: resolved` — the convention already used by
+  `2026-07-15-protocol-bridge-audit.md` — and their bodies preserved unedited as historical record.
+- **Implementation:** `docs/dev/project/backlog.md` (scope note; items 1–7 removed; 10–11 corrected to
+  shipped + residue; 13–15 added for the genuinely-open FF-15 Phase H, FF-16 Phase F and issue #917;
+  digest replaced by a pointer; 261 → 155 lines);
+  `docs/dev/reviews/winlink-stack-audit-2026-07-17.md` and `docs/dev/vara-parity-execution-board.md`
+  (status + closing annotation); `README.md` (`hpx_hf` SL range); `docs/mode-fec-ladder.md` (SL14
+  floor prose); `docs/dev/reviews/consistency-audit-2026-07-18.md` (the audit report itself, landed
+  per repo convention).
+- **Note on the frontmatter validator:** `scripts/validate-doc-frontmatter.sh` scans only top-level
+  `docs/*.md`, so `status: resolved` is valid for `docs/dev/**` review docs. (The audit claimed the
+  validator rejects any value but `living`; that is true only for the top-level docs it actually scans.)
+- **Test results (actually run):** `cargo test -p openpulse-core --no-default-features --test
+  ladder_doc_matches_profile` **1 passed** (the gate that pins `mode-fec-ladder.md` against
+  `profile.rs`); `bash scripts/validate-doc-frontmatter.sh` exit 0.
+
 ## 2026-07-18 — fix: repair the acceptance-criteria table and the gates behind it
 
 - **Requirement/change:** consistency audit findings 2, 3, 6, 10, 11 — the acceptance table in
