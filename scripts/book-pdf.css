@@ -1,0 +1,209 @@
+/* Print stylesheet for docs/openpulse-book.md -> PDF (WeasyPrint).
+   Design notes that are decisions, not taste:
+   - DejaVu throughout: the book uses Greek, maths operators and box-drawing characters in its ASCII
+     diagrams. A font without box drawing turns every block diagram into tofu.
+   - Tables are the hard case (75 rows exceed 110 characters, the widest 389). They wrap rather than
+     overflow, at a reduced size, with `table-layout: fixed` so one long cell cannot starve the rest.
+   - Code blocks must NOT wrap: a wrapped ASCII diagram is worse than one that runs slightly wide.
+     They shrink instead, and the few genuinely long lines are allowed to scroll off rather than
+     scramble a diagram. */
+
+@page {
+  size: A4;
+  margin: 20mm 18mm 22mm 20mm;
+  @bottom-center {
+    content: counter(page);
+    font-family: "DejaVu Sans", sans-serif;
+    font-size: 8pt;
+    color: #666;
+  }
+  @top-right {
+    content: string(chapter-title);
+    font-family: "DejaVu Sans", sans-serif;
+    font-size: 7.5pt;
+    color: #888;
+  }
+}
+
+/* WeasyPrint 68 does not honour a margin override on the first/named page here, so the title page
+   is designed to sit INSIDE the text column rather than bleed to the paper edge: the rule, the
+   title and the metadata all align to the same measure, which reads as deliberate. */
+@page titlepage {
+  @bottom-center { content: none; }
+  @top-right { content: none; }
+}
+
+html {
+  font-family: "DejaVu Serif", serif;
+  font-size: 9.6pt;
+  line-height: 1.45;
+  color: #16191d;
+  hyphens: auto;
+}
+
+body { margin: 0; }
+
+/* ── Title page ───────────────────────────────────────────────────────── */
+
+.titlepage {
+  page: titlepage;
+  height: 252mm;
+  padding: 58mm 0 0 0;
+  box-sizing: border-box;
+  page-break-after: always;
+  border-top: 15mm solid #1e3c6e;
+}
+.titlepage h1 {
+  font-family: "DejaVu Sans", sans-serif;
+  font-size: 30pt;
+  line-height: 1.12;
+  margin: 0 0 6mm 0;
+  color: #1e3c6e;
+  border: 0;
+}
+.titlepage .subtitle {
+  font-family: "DejaVu Sans", sans-serif;
+  font-size: 12.5pt;
+  color: #3b4654;
+  margin: 0 0 22mm 0;
+  line-height: 1.4;
+}
+.titlepage .meta {
+  text-align: left;
+  font-family: "DejaVu Sans", sans-serif;
+  font-size: 9.5pt;
+  color: #5a6472;
+  border-top: 0.4pt solid #c3ccd6;
+  padding-top: 4mm;
+}
+.titlepage .meta strong { color: #1e3c6e; }
+
+/* ── Headings ─────────────────────────────────────────────────────────── */
+
+h1, h2, h3, h4 {
+  font-family: "DejaVu Sans", sans-serif;
+  color: #14243d;
+  page-break-after: avoid;
+  line-height: 1.25;
+}
+
+h1 {
+  font-size: 19pt;
+  margin: 0 0 7mm 0;
+  padding-bottom: 3mm;
+  border-bottom: 1.6pt solid #1e3c6e;
+  page-break-before: always;
+  string-set: chapter-title content();
+}
+h1.nobreak { page-break-before: avoid; }
+
+h2 { font-size: 13pt; margin: 8mm 0 2.5mm 0; }
+h3 { font-size: 10.8pt; margin: 6mm 0 2mm 0; color: #2b3a51; }
+h4 { font-size: 9.8pt; margin: 5mm 0 1.5mm 0; color: #3b4654; font-style: italic; }
+
+/* Ragged right, not justified. This text is dense with inline code tokens that cannot hyphenate or
+   break, and justifying it opened visible rivers of whitespace on almost every paragraph. */
+p { margin: 0 0 2.6mm 0; text-align: left; }
+li { text-align: left; }
+
+/* Keep a heading with the text it introduces. */
+h2 + p, h3 + p, h4 + p { page-break-before: avoid; }
+
+/* ── Code ─────────────────────────────────────────────────────────────── */
+
+pre {
+  font-family: "DejaVu Sans Mono", monospace;
+  font-size: 7.1pt;
+  line-height: 1.28;
+  background: #f6f8fa;
+  border: 0.4pt solid #dfe4ea;
+  border-left: 2pt solid #1e3c6e;
+  border-radius: 2px;
+  padding: 2.4mm 3mm;
+  margin: 3mm 0;
+  white-space: pre;          /* never wrap: preserves ASCII diagrams */
+  overflow: hidden;
+  page-break-inside: avoid;  /* a split diagram is unreadable */
+}
+/* A very long block cannot be kept whole; allow it to split rather than overflow a page. */
+pre.long { page-break-inside: auto; }
+
+code {
+  font-family: "DejaVu Sans Mono", monospace;
+  font-size: 0.88em;
+  background: #eef1f5;
+  padding: 0.3mm 0.8mm;
+  border-radius: 2px;
+  word-break: break-word;
+}
+pre code { background: none; padding: 0; font-size: inherit; }
+
+/* ── Tables ───────────────────────────────────────────────────────────── */
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  table-layout: fixed;      /* stops one long cell starving the others */
+  font-size: 7.6pt;
+  margin: 3mm 0;
+  page-break-inside: avoid;
+}
+table.wide { font-size: 6.8pt; }
+table.verywide { font-size: 6.2pt; }
+
+th, td {
+  border: 0.4pt solid #ccd3dc;
+  padding: 1.1mm 1.6mm;
+  text-align: left;
+  vertical-align: top;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
+th {
+  background: #eaeef4;
+  font-family: "DejaVu Sans", sans-serif;
+  font-weight: bold;
+  color: #14243d;
+}
+tr:nth-child(even) td { background: #fafbfc; }
+td code, th code { font-size: 0.95em; background: none; padding: 0; }
+
+/* ── Lists, quotes, rules ─────────────────────────────────────────────── */
+
+ul, ol { margin: 0 0 2.6mm 0; padding-left: 5.5mm; }
+li { margin-bottom: 1.1mm; }
+
+blockquote {
+  margin: 3mm 0;
+  padding: 2mm 4mm;
+  border-left: 2.5pt solid #b9c4d2;
+  background: #f7f9fb;
+  color: #33404f;
+}
+blockquote p:last-child { margin-bottom: 0; }
+
+hr { border: 0; border-top: 0.4pt solid #d7dde5; margin: 6mm 0; }
+
+a { color: #1e5aa8; text-decoration: none; }
+
+strong { color: #0f1a2b; }
+
+/* ── Table of contents ────────────────────────────────────────────────── */
+
+#toc { page-break-after: always; }
+#toc h1 { page-break-before: avoid; }
+#toc ul { list-style: none; padding-left: 0; margin: 0; }
+#toc ul ul { padding-left: 5mm; }
+#toc li { margin: 0.5mm 0; font-size: 8.6pt; position: relative; padding-right: 11mm; }
+#toc a { color: #16191d; }
+#toc a::after {
+  content: target-counter(attr(href), page);
+  position: absolute;
+  right: 0;
+  color: #7a8494;
+  font-family: "DejaVu Sans", sans-serif;
+  font-size: 8pt;
+}
+#toc > ul > li { font-family: "DejaVu Sans", sans-serif; font-weight: bold; margin-top: 2.2mm; }
+#toc > ul > li > ul li { font-weight: normal; font-family: "DejaVu Serif", serif; }
