@@ -9,6 +9,31 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-18 — fix(b2f-driver): cap command-port line length (#942 medium tier)
+
+- **Requirement/change:** Winlink stack hardening backlog (#942), medium tier — "`CmdPort::read_line`
+  has no line-length cap".
+- **Finding:** `BufRead::read_line` grows its destination without limit, so a TNC that never sends a
+  newline drives the *client's* memory. This is the client-side twin of an already-closed server-side
+  bug: `openpulse-ardop` fixed the same shape with `read_capped_line` + `MAX_CMD_LINE = 4096`. Half a
+  fix shipped — the server was hardened against clients, the client was not hardened against servers.
+- **Design decision:** mirror the server fix rather than invent a second idiom — bound the read to
+  `MAX_CMD_LINE + 1` via `Read::take` so the buffer can never be over-allocated, then reject on
+  `n > MAX_CMD_LINE`. Checking length *after* an unbounded `read_line` would apply too late (the
+  oversized allocation has already happened), which is the same reasoning the ARDOP fix records.
+- **Implementation:** `crates/openpulse-b2f-driver/src/cmd.rs` (`MAX_CMD_LINE`, capped read, length
+  rejection).
+- **Tests:** `crates/openpulse-b2f-driver/tests/cmd_hardening.rs` —
+  `command_port_rejects_a_newline_starved_drip` (1 MiB of newline-less bytes must be rejected) and
+  `command_port_still_reads_a_normal_line` (ordinary CRLF traffic unaffected).
+- **Test results (actually run):** `cargo test -p openpulse-b2f-driver --no-default-features`
+  **8 passed, 0 failed** (2 new + `driver_integration` 4 + `e2e_loopback` 2 — the e2e pair is what
+  proves the cap doesn't clip real sessions). **Sabotage-verified:** the drip test was written first
+  and FAILED against the unfixed code with "command port buffered 1048576 bytes of newline-less input
+  instead of capping it".
+
+---
+
 ## 2026-07-18 — fix(b2f): bound total decompressed bytes per session (#942 medium tier)
 
 - **Requirement/change:** Winlink stack hardening backlog (#942), medium tier — "no session-aggregate
