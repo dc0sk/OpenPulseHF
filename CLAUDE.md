@@ -688,4 +688,6 @@ External modem/DSP references (gnuradio FLL band-edge, liquid-dsp framesync, dan
 | OTA adaptive rate-stepping hardware validation | `docs/dev/ota-hardware-validation.md` |
 | On-air twin-OTA scenario (two daemons + twinview over RF) | `docs/dev/onair-twin-ota.md` |
 | Loopback transports (virtual → hardware → on-air) | `docs/dev/virtual-loopback.md` |
+| Loopback re-validation at HEAD (why the recorded evidence is stale, and the plan to close it) | `docs/dev/loopback-revalidation-plan.md` |
+| Pre-1.x completeness audit (2026-07-18) — what is claimed done but is not proven | `docs/dev/reviews/pre-1x-completeness-audit-2026-07-18.md` |
 | Agent safety rules | `AGENTS.md`, `docs/dev/AGENTS.md` |
