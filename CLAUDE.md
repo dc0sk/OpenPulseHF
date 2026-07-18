@@ -81,7 +81,7 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 |---|---|---|
 | `openpulse-ardop` | `crates/openpulse-ardop` | ARDOP-compatible TCP TNC interface; `openpulse-tnc` binary; Pat-compatible command set |
 | `openpulse-kiss` | `crates/openpulse-kiss` | KISS/AX.25 TNC interface; `openpulse-kisstnc` binary |
-| `openpulse-b2f` | `crates/openpulse-b2f` | B2F/Winlink protocol state machine (banner, FC/FS/Ff/Fq frames, gzip+LZHUF compression) |
+| `openpulse-b2f` | `crates/openpulse-b2f` | B2F/Winlink protocol state machine (banner, FC/FS/Ff/Fq frames, gzip/Type D compression; Type C/LZHUF unsupported — inbound proposals are rejected) |
 | `openpulse-b2f-driver` | `crates/openpulse-b2f-driver` | High-level ISS/IRS session driver over ARDOP TCP; e2e loopback tests |
 | `openpulse-gateway` | `crates/openpulse-gateway` | Direct TCP Winlink CMS gateway; `openpulse-gateway` binary |
 | `openpulse-qsy` | `crates/openpulse-qsy` | QSY frequency-agility protocol: wire frame codec, Ed25519 signing, `QsySession` state machine, `QsyScanner` |
@@ -143,10 +143,10 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 - `crates/openpulse-daemon/src/main.rs`: PTT controller wired from config; `apply_command_to_engine` skips dispatch on PTT hardware assertion failure (PR #319)
 - `apps/openpulse-testmatrix`: LDPC FEC entries added (PR #319)
 - `crates/openpulse-core/src/profile.rs`: `hpx_wideband_hd()` updated to SL12–SL15 (SCFDMA52-16QAM → SCFDMA52-64QAM → 64QAM2000-RRC); ACK-UP gate at SL14 protecting SL15 admission (PR #320)
-- `crates/openpulse-b2f/src/session.rs`: `queue_message_type_c()` — ISS Type C proposals using `compress_lzhuf_winlink` (LE prefix, Winlink-compatible) (PR #320)
+- `crates/openpulse-b2f/src/session.rs`: `queue_message_type_c()` — ISS Type C proposals (PR #320). **REMOVED (PR #948):** its external-Winlink compatibility was never verified and could not have held (LHA `LH5` vs FBB's Okumura LZHUF are different bitstreams); the path had no production caller. Inbound Type C is now answered `Reject`.
 
 **Previously shipped (PRs #193–#195)**:
-- `crates/openpulse-b2f`: `compress_lzhuf_winlink` / `decompress_lzhuf_winlink` — 4-byte LE prefix matching Winlink Type C convention; IRS receive path switched to Winlink codec (PR #193)
+- `crates/openpulse-b2f`: `compress_lzhuf_winlink` / `decompress_lzhuf_winlink` — 4-byte LE prefix (PR #193). **REMOVED (PR #948)** — "matching Winlink Type C convention" was an unverified claim; see the PR #320 entry above.
 - `crates/openpulse-dsp`: `LmsEqualizer` — complex symbol-rate LMS/DFE, supervised preamble training then decision-directed; wired into BPSK-RRC demodulation path after Gardner TED (PR #194)
 - `plugins/64qam`: full 64QAM plugin — Gray-coded 8×8 PAM-8 constellation, rectangular-windowed and RRC modulator/demodulator, max-log-MAP soft demodulator; modes `64QAM500`, `64QAM1000`, `64QAM2000-RRC` (PR #195)
 - `crates/openpulse-core/src/rate.rs`: `SpeedLevel` extended to SL20 (PR #195)
@@ -414,7 +414,7 @@ Full spec in `docs/dev/design/testbench-design.md` and `docs/dev/benchmark-harne
 
 **Phase 5.2 — LZHUF codec** ✅ Done (PR #98)
 - `crates/openpulse-b2f/src/compress.rs`: real LZHUF LH5 via `oxiarc-lzhuf = "0.2.7"`
-  - 4-byte BE original-length prefix makes stream self-contained (known incompatibility with external Winlink Type C — deferred)
+  - 4-byte BE original-length prefix makes stream self-contained (known incompatibility with external Winlink Type C — deferred). **REMOVED in PR #948**: the incompatibility was never closed, the code had no production caller, and keeping it implied a capability the crate did not have.
   - `compress_lzhuf`: validates payload fits `u32` before cast
   - `decompress_lzhuf`: caps `orig_len` at 16 MiB to prevent OOM from malformed frames
 - `B2fSession::accepted_count()` added to `session.rs` — IRS driver uses this to know how many data frames to read

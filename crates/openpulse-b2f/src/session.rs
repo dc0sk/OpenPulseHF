@@ -1,8 +1,6 @@
 //! B2F session state machine for ISS (sending) and IRS (receiving) roles.
 
-use crate::compress::{
-    compress_gzip, compress_lzhuf_winlink, decompress_gzip, decompress_lzhuf_compat,
-};
+use crate::compress::{compress_gzip, decompress_gzip};
 use crate::frame::{self, B2fFrame, FsAnswer, ProposalType};
 use crate::header::WlHeader;
 use crate::B2fError;
@@ -96,35 +94,6 @@ impl B2fSession {
         self.proposals.push(Proposal {
             fc: B2fFrame::Fc {
                 proposal_type: ProposalType::D,
-                mid: header.mid.clone(),
-                size,
-                date: header.date.clone(),
-            },
-            compressed_data: compressed,
-            answer: None,
-        });
-        Ok(())
-    }
-
-    /// ISS: queue a message as proposal type C (LZHUF) in the next `ProposalExchange`.
-    ///
-    /// Uses a 4-byte LE length prefix and the LHA `LH5` LZHUF variant. **External Winlink Type C
-    /// compatibility is UNVERIFIED** — this round-trips between two OpenPulseHF stations but has never
-    /// been tested against a captured RMS Express / RMS Gateway Type C blob, and both the length-prefix
-    /// convention and the LZHUF bitstream (LH5 vs FBB's classic Okumura LZHUF) are unconfirmed (see
-    /// `compress.rs`). The CMS gateway path uses Type D (Gzip); this Type C path has no in-tree caller yet.
-    pub fn queue_message_type_c(
-        &mut self,
-        header: WlHeader,
-        body: Vec<u8>,
-    ) -> Result<(), B2fError> {
-        let mut full = crate::header::encode(&header);
-        full.extend_from_slice(&body);
-        let compressed = compress_lzhuf_winlink(&full)?;
-        let size = compressed.len() as u32;
-        self.proposals.push(Proposal {
-            fc: B2fFrame::Fc {
-                proposal_type: ProposalType::C,
                 mid: header.mid.clone(),
                 size,
                 date: header.date.clone(),
@@ -263,6 +232,13 @@ impl B2fSession {
                 // Retain at most MAX_PROPOSALS full proposals; beyond that only COUNT the overflow
                 // (Reject) so the heap is bounded no matter how many FCs a hostile peer streams. The
                 // Ff arm still replies one answer per proposal (recorded Accepts + overflow Rejects).
+                // Type C (LZHUF) is not supported — answer Reject rather than accept a message we
+                // cannot decode. Accepting it would mean either a silent corrupt decode or an abort
+                // mid-transfer; a Reject leaves the peer free to re-propose as Type D (Gzip).
+                let answer = match proposal_type {
+                    ProposalType::D => FsAnswer::Accept,
+                    ProposalType::C => FsAnswer::Reject,
+                };
                 if self.proposals.len() < MAX_PROPOSALS {
                     self.proposals.push(Proposal {
                         fc: B2fFrame::Fc {
@@ -272,7 +248,7 @@ impl B2fSession {
                             date,
                         },
                         compressed_data: Vec::new(),
-                        answer: Some(FsAnswer::Accept),
+                        answer: Some(answer),
                     });
                 } else {
                     self.overflow_rejected += 1;
@@ -338,7 +314,13 @@ impl B2fSession {
         }
         let out = match proposal_type {
             ProposalType::D => decompress_gzip(&data)?,
-            ProposalType::C => decompress_lzhuf_compat(&data)?,
+            // Unreachable via the normal path: a Type C proposal is answered Reject, so its data is
+            // never requested. Kept explicit so a future accept-path change fails loudly here.
+            ProposalType::C => {
+                return Err(B2fError::Compression(
+                    "proposal type C (LZHUF) is not supported".into(),
+                ))
+            }
         };
         self.decompressed_total = self.decompressed_total.saturating_add(out.len() as u64);
         if self.decompressed_total > MAX_SESSION_DECOMPRESSED {

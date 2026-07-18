@@ -194,7 +194,7 @@ Remaining on-air items (**in active execution as of 2026-06** — see [onair-sta
 - Banner encode/decode: `[WL2K-3.0-B2FWINMOR-4.0-XXXXXXXX]` format with FNV-1a session key.
 - B2F control frame codec: FC (file check), FS (file select), FF (finished), FQ (quit); CR-terminated ASCII.
 - WL2K message header encode/decode (RFC-5322-like, CRLF-terminated; Mid, Date, From, To, Subject, Body, File, Mbo).
-- Compression: Gzip (type D) via `flate2`; LZHUF LH5 (type C) implemented via `oxiarc-lzhuf`, including OpenPulse and Winlink-compatible length-prefix helpers.
+- Compression: Gzip (type D) via `flate2`. LZHUF LH5 (type C) was implemented via `oxiarc-lzhuf` and **removed in PR #948** — never wired to a production caller, and its external-Winlink compatibility was unverified and implausible (LH5 vs FBB's Okumura LZHUF are different bitstreams). Inbound Type C proposals are answered `Reject`.
 - `B2fSession` state machine: ISS (Information Sending Station) and IRS (Information Receiving Station) roles; Handshake → ProposalExchange → Transfer → Done states; handles ISS-immediate-proposal pattern.
 - Pat-client ARDOP compatibility: added GRIDSQUARE, ARQBW, ARQTIMEOUT, CWID, SENDID, PING commands to `openpulse-ardop`; 3 new integration tests (11 total).
 - 9 integration tests in `crates/openpulse-b2f/tests/b2f_integration.rs`.
@@ -211,8 +211,9 @@ hardware gate blocks further development.
 - `crates/openpulse-b2f-driver`: `B2fDriver`, `DataPort`, `CmdPort`; `run_iss()` / `run_irs()` lifecycle.
 - 4 driver integration tests; shared test helpers in `tests/common/mod.rs`.
 
-### 5.2 — LZHUF codec (Type C) ✅ Done (PR #98)
+### 5.2 — LZHUF codec (Type C) ✅ Done (PR #98) → ❌ REMOVED (PR #948)
 - Real LH5 via `oxiarc-lzhuf 0.2.7`; 4-byte BE length prefix; 16 MiB decompression cap.
+- **Removed:** the codec never had a production caller and its Winlink Type C compatibility was never verified — LHA `LH5` and FBB's Okumura LZHUF are different bitstreams, so it could not have interoperated. Restoring it requires a captured RMS Express / RMS Gateway Type C blob to validate against.
 - `B2fSession::accepted_count()` added to drive IRS data-read loop.
 
 ### 5.3 — TOML configuration management ✅ Done (PR #102)

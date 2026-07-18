@@ -4858,7 +4858,6 @@ name = "openpulse-b2f"
 version = "0.14.1"
 dependencies = [
  "flate2",
- "oxiarc-lzhuf",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -5398,24 +5397,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36820e9051aca1014ddc75770aab4d68bc1e9e632f0f5627c4086bc216fb583b"
 dependencies = [
  "ttf-parser 0.25.1",
-]
-
-[[package]]
-name = "oxiarc-core"
-version = "0.2.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c3a93341d720329f503b2743970f11695ac25dc0661ccc94cb43e077545e23a"
-dependencies = [
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "oxiarc-lzhuf"
-version = "0.2.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf32cdba9d055ad6d0497b502760b9591e370a646758ce5874fc97c4b5738838"
-dependencies = [
- "oxiarc-core",
 ]
 
 [[package]]

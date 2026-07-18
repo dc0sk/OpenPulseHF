@@ -9,6 +9,41 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-18 — refactor(b2f): delete the unverified Type C (LZHUF) path and correct the shipped claim (#942 low tier)
+
+- **Requirement/change:** Winlink stack hardening backlog (#942), low tier — "Type C (LZHUF) send path
+  is dead code with self-documented unverified external-Winlink compatibility: wire + validate against
+  a real RMS Express capture, or delete and correct the 'shipped' claim". User chose delete.
+- **Finding — the claim could not have been true.** `compress.rs` documented its own uncertainty, and
+  the detail in it is decisive: this used LHA **`LH5`**, while FBB/Winlink historically use the classic
+  **Okumura LZHUF** — a *different bitstream*, not merely a different length-prefix convention. So
+  "Winlink-compatible" (CLAUDE.md, PR #320/#193 entries) was never plausible, and no in-tree caller
+  ever exercised it. The receive half was reachable in principle (`receive_data` dispatched
+  `ProposalType::C`), but it decoded with the same unverified codec.
+- **Design decision — delete rather than keep as best-effort, and fail *closed* on inbound.** Keeping
+  a decoder we cannot validate risks the worst outcome: a silent corrupt decode presented as a
+  delivered message. So `handle_proposal` now answers `Reject` to a Type C proposal — an honest
+  "cannot decode this", and it leaves the peer free to re-propose as Type D. `ProposalType::C` is
+  still *parsed* in `frame.rs` (we must understand what a peer sends in order to reject it); only the
+  codec is gone. `receive_data` keeps an explicit Type C error arm — unreachable today, so that a
+  future accept-path change fails loudly instead of silently regressing. The CMS gateway path is
+  unaffected: it uses Type D (Gzip).
+- **Implementation:** `crates/openpulse-b2f/src/compress.rs` (removed `compress_lzhuf`,
+  `decompress_lzhuf`, `compress_lzhuf_winlink`, `decompress_lzhuf_winlink`,
+  `decompress_lzhuf_compat`); `src/session.rs` (removed `queue_message_type_c`; Type C → `Reject`);
+  `src/lib.rs` (exports); `Cargo.toml` + `Cargo.lock` (dropped the `oxiarc-lzhuf` dependency).
+  Docs corrected: `CLAUDE.md` (4 claims incl. the crate-map row), `docs/features.md` (table row + the
+  "LZHUF LH5 frame format" section rewritten as "Type C — not supported"),
+  `docs/dev/project/roadmap.md` (Phase 5.2 marked REMOVED with the reason).
+- **Tests:** `irs_rejects_a_type_c_proposal_and_accepts_type_d` — a mixed C/D/C batch must produce
+  `[Reject, Accept, Reject]`, one answer per proposal, with `accepted_count() == 1`. Seven LZHUF
+  round-trip tests deleted along with the code they covered.
+- **Test results (actually run):** `cargo test -p openpulse-b2f --no-default-features` **15 passed,
+  0 failed**. **Sabotage-verified:** with the Type C arm flipped to `Accept`, the new test FAILS
+  (`left: [Accept, Accept, Accept]`, `right: [Reject, Accept, Reject]`); restored → passes.
+
+---
+
 ## 2026-07-18 — fix(b2f-driver): per-operation read deadlines + restore the IRS teardown timeout (#942 medium tier)
 
 - **Requirement/change:** Winlink stack hardening backlog (#942), medium tier — the last two entries:
