@@ -9,6 +9,34 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-18 — docs: track the rendered book PDF in-tree
+
+- **Requirement/change:** `scripts/build-book-pdf.sh` (PR #966) renders `docs/openpulse-book.md` to a
+  typeset PDF, which shipped as a v0.16.0 release asset and was gitignored. Reversed: the PDF is now
+  tracked, so a reader gets the typeset book from a plain clone rather than only from the releases
+  page.
+- **Design decision:** the argument for ignoring it was churn — ~800 KB of undiffable binary per book
+  edit. The argument for tracking it wins on distribution: the book is a *deliverable*, not a build
+  artefact, the repo is the primary way people get it, and the rebuild needs `pandoc` + `weasyprint`
+  + DejaVu, which not every reader has. Churn is bounded in practice because the book changes on
+  release cadence, not per commit. Both forms are kept in step by making the rebuild part of the same
+  commit as any book edit (release-checklist step), and the release asset is still uploaded so the
+  download link keeps working.
+- **Implementation:** removed the `docs/openpulse-book.pdf` entry from `.gitignore`; added the file
+  (139 pages, 806 373 B, built from the book at `f2a423d` against workspace v0.16.0); rewrote the
+  "Rebuild the book PDF" step in `docs/dev/release-checklist.md` so it reads `git add` + upload
+  instead of "not committed", and states the rebuild-with-the-edit rule.
+- **Tests:** no code change, so no new gate. Verified mechanically instead: the tracked render is not
+  stale (`docs/openpulse-book.pdf` mtime > `docs/openpulse-book.md` mtime), and
+  `git check-ignore docs/openpulse-book.pdf` now exits non-zero.
+- **Test results:** docs/build-script change only; no test target affected. `git check-ignore` →
+  not ignored (was `.gitignore:17`). Full workspace gate not re-run for a docs-only diff.
+- **Known limit:** the build is *not* byte-reproducible — `build-book-pdf.sh` stamps `BUILD_DATE` from
+  `date -u` (honouring `SOURCE_DATE_EPOCH` if set), so rebuilding on a later day yields a different
+  file even from identical Markdown. Diff the page count and the source Markdown, not the bytes.
+
+---
+
 ## 2026-07-18 — docs: add the OpenPulseHF book
 
 - **Requirement/change:** a complete technical book for three audiences at once — licensed operators,
