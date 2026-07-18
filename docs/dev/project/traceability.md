@@ -9,6 +9,44 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-18 — fix(b2f-driver): per-operation read deadlines + restore the IRS teardown timeout (#942 medium tier)
+
+- **Requirement/change:** Winlink stack hardening backlog (#942), medium tier — the last two entries:
+  "read timeout is per-syscall, not per-operation" and "`run_irs` clears the cmd-port timeout and
+  never restores it".
+- **Finding:** `SO_RCVTIMEO` restarts on **every partial read**, so a peer sending one byte per
+  interval keeps a read alive forever — the socket option looks like a timeout but bounds only the
+  gap between bytes, never the operation. Compounding it, `run_irs` sets a timeout to wait for
+  `CONNECTED` and then clears it outright, so the closing `wait_for("DISCONNECTED")` runs with **no**
+  timeout at all: a peer that holds the command connection open after the data phase hangs teardown
+  permanently. `run_iss` is unaffected (it never clears).
+- **Design decision:** make the configured timeout a **deadline for the whole operation**. One shared
+  `deadline_slice(started, total)` computes the time left and hands the socket only that much, so
+  every partial read draws down one budget. `read_exact` had to be replaced with a manual fill loop
+  (it hides its own retries), and `CmdPort::read_line` with a `fill_buf`/`consume` loop — which also
+  subsumes the `MAX_CMD_LINE` cap from the previous PR more directly. Rather than special-case the
+  teardown path, `run_irs` now **restores** the prior timeout, and the ports install
+  `DEFAULT_IO_TIMEOUT` (60 s) at construction — otherwise "restore the previous value" restores
+  `None` and the hang survives the fix. That also closes the low-tier "construction seam has no
+  default timeout" foot-gun, which is the same bug seen from the other end.
+- **Implementation:** `crates/openpulse-b2f-driver/src/lib.rs` (`DEFAULT_IO_TIMEOUT`,
+  `deadline_slice`, `run_irs` restore); `src/data.rs` (`read_exact_by`, timeout field);
+  `src/cmd.rs` (deadline-bounded `read_line`, timeout field). `set_timeout` now takes `&mut self`.
+- **Tests:** `crates/openpulse-b2f-driver/tests/timeout_hardening.rs` —
+  `data_port_read_times_out_against_a_slow_drip` and `command_port_read_times_out_against_a_slow_drip`
+  (a 1-byte-per-50 ms dribbler against a 300 ms timeout must return `Timeout`; the harness fails the
+  test if the call simply never returns), plus `ports_have_a_default_read_timeout`.
+- **Test results (actually run):** `cargo test -p openpulse-b2f-driver --no-default-features`
+  **11 passed, 0 failed** (3 new + `cmd_hardening` 2 + `driver_integration` 4 + `e2e_loopback` 2).
+  **Sabotage-verified:** with `deadline_slice` forced to report zero elapsed (i.e. the old
+  per-syscall reset), both drip tests FAIL with "never returned — the read timeout is per-syscall,
+  so a slow drip resets it forever"; restored → 11/11. Full workspace suite
+  `cargo test --workspace --no-default-features` **2127 passed, 0 failed** (2120 baseline + the 7
+  tests added across the three #942 medium-tier PRs); `cargo clippy --workspace --no-default-features
+  --all-targets -- -D warnings` clean; `cargo fmt --all -- --check` clean.
+
+---
+
 ## 2026-07-18 — fix(b2f-driver): cap command-port line length (#942 medium tier)
 
 - **Requirement/change:** Winlink stack hardening backlog (#942), medium tier — "`CmdPort::read_line`
