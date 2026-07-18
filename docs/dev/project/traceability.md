@@ -9,6 +9,44 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-18 — docs: bring the operator manual to v0.15.0
+
+- **Requirement/change:** `docs/openpulse-manual.md` carried `last_updated: 2026-06-24`, predating the
+  whole v0.13.0→v0.15.0 HF-fade arc, the Winlink hardening PRs and the Type C removal. Updated in
+  place rather than rewritten.
+- **Findings — the manual was wrong in ways a reader would act on, not merely stale.**
+  1. It documented **three CLI commands that do not exist** (`openpulse relay status|routes|policy`);
+     `relay` is not a subcommand at all. Replaced with the real `[relay]` config keys and the
+     event-stream observation path.
+  2. §2.7 "Winlink/B2F" showed `session start` / `diagnose manifest` / `session end` — commands with
+     nothing to do with Winlink. Replaced with real `openpulse-gateway` / `openpulse-tnc` invocations.
+  3. The mode catalogue claimed 8 plugin families; there are **10** (MFSK16 and JS8 were missing), and
+     the mode strings were generalised rather than exact (BPSK has exactly one RRC variant,
+     `BPSK250-RRC`; 8PSK's `-HF` variants are `8PSK1000-HF`/`-HF-RRC` only). Taken verbatim from a
+     live `openpulse modes` run.
+  4. No version was stated anywhere in the document.
+- **Design decision:** put the **v0.15.0 both-ends interop notice at the top** — the opportunistic
+  `Rs`→`RsStrong` upgrade means a v0.15.0 station transmitting to an older one can lose small frames
+  on the weak rungs. It is the one thing an operator must know before updating one end of a link, so
+  it precedes everything else rather than sitting in a release-notes section they may not read.
+- **Implementation:** `docs/openpulse-manual.md` (+260/−29). New: §1.2.1 full SL1–SL14 `hpx_hf` table,
+  the two-SNR-scale boundary, the decode-evidence climb (correctly attributed to `OtaRateController` /
+  `ACK_CLIMB_THRESHOLD`, not `RateAdapter`, which has no such logic), free-`RsStrong`, §4.8 file
+  transfer, §4.9 JS8 discovery, the `InputCapture` seam, the authenticated ACK, all 21 config
+  sections, and the `openpulse audit-bundle` command. Corrected: CE-SSB to QPSK-subcarrier OFDM only
+  (three sites), the ARQ/HARQ module names, the global `--ptt` list (missing `cm108|gpio`), and the
+  B2F section's session limits to their real constants.
+- **Verification (actually run):** every cited command exercised with `--help` (~60 subcommands across
+  `openpulse` + `daemon`); all parse except the removed relay trio. All 27 referenced scripts/config
+  files and 12 referenced doc paths confirmed present. **Independently re-checked by me before
+  commit:** the 14-row `hpx_hf` table matches `profile.rs` on mode, FEC and floor with **0
+  mismatches**; all 14 cited `[section]` config keys exist in the typed schema; the 5 remaining
+  Type C mentions are all retractions; `validate-doc-frontmatter.sh` exit 0.
+- **Spun out of this pass:** PR #961 (the `profile.rs` comment table's OFDM floors were 3–10 dB wrong,
+  now gated) and two code-level items left for follow-up — the CLI `--profile` help lists 7 of 12
+  valid profiles, and `docs/mode-fec-ladder.md` §2 still bills `RsInterleaved` as best for HF
+  burst/fading where the measurement says it is inert on a single-block payload.
+
 ## 2026-07-18 — docs+comments: clear the consistency-audit tail (stale comments, wrong tables, dead names)
 
 - **Requirement/change:** consistency-audit findings 12 and 14 plus the residue of the claims-vs-code
