@@ -1,7 +1,6 @@
 ---
 title: On-Air Test Status
 status: in-progress
-branch: fix/afc-settling-receive-with-timeout
 last_updated: 2026-06-10
 ---
 

@@ -3928,9 +3928,11 @@ impl ModemEngine {
         Ok(frame.payload)
     }
 
-    /// Receive via SNR-weighted LLR combining: demodulate each attempt separately,
-    /// weight the resulting soft LLRs by inverse-noise-variance, combine, then
+    /// Receive via LLR combining: demodulate each attempt separately, sum the soft LLRs, then
     /// RS decode.
+    ///
+    /// Calibrated LLRs already carry `1/σ²`, so the sum IS the inverse-noise weighting; the explicit
+    /// re-weighting this used to do applied σ⁻² twice and cost ~0.75 dB (removed in PR #686).
     ///
     /// Each attempt is first RS-decoded **on its own**; only if every attempt fails are they combined by
     /// [`combine_llrs_map`] — their plain sum, the exact MAP combine for repeated observations of the same

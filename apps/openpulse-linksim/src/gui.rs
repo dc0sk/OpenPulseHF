@@ -1161,7 +1161,7 @@ impl eframe::App for LinkApp {
                 ui.add(egui::Slider::new(&mut self.ui_turnaround, 0.0..=1.0).suffix(" s"));
                 ui.separator();
                 // CE-SSB TX conditioning toggle (live, like SNR). Only acts on the modes
-                // ModemEngine::cessb_benefits enables (OFDM QPSK/8PSK) — a no-op elsewhere.
+                // ModemEngine::cessb_benefits enables (QPSK-subcarrier OFDM only) — a no-op elsewhere.
                 let (cessb_label, cessb_color) = if self.ui_cessb {
                     ("CE-SSB: ON", egui::Color32::from_rgb(0x4c, 0xaf, 0x50))
                 } else {

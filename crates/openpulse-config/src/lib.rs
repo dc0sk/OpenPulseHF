@@ -431,8 +431,9 @@ pub struct ModemConfig {
     /// `dcd_squelch` is used. Empty (default) = always use `dcd_squelch`.
     pub dcd_squelch_bands: std::collections::BTreeMap<String, f32>,
     /// CE-SSB TX envelope conditioning (raises average power at a fixed peak on
-    /// high-PAPR multicarrier modes). Default `true`; it only acts on modes that
-    /// benefit (OFDM/SC-FDMA), so it is a no-op for single-carrier modes.
+    /// high-PAPR multicarrier modes). Default `true`; it acts only on QPSK-subcarrier OFDM
+    /// (`OFDM16`/`OFDM52`) — a no-op for single-carrier modes, dense OFDM-HOM, and all SC-FDMA,
+    /// whose tighter decision regions the clip's EVM breaks. See `ModemEngine::cessb_benefits`.
     pub cessb_enabled: bool,
     /// Receiver-side automatic notch: removes out-of-band CW interference (QRM) before demod.
     /// Default `false`. The protected band tracks the active mode so the signal is never

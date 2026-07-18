@@ -101,6 +101,8 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 | `openpulse-testbench` | `apps/openpulse-testbench` | egui/eframe signal-path testbench: 4-column waterfall/spectrum/scatter, 7 channel models |
 | `openpulse-panel` | `apps/openpulse-panel` | Operator panel GUI (**iced**; connects to openpulse-daemon control port). Controls band + spectrum/waterfall/ladder + tabbed info/config/messages/log; Dark/Light/Contrast/System themes. `theme.rs` has an iced-free, unit-tested theme core. The egui version was retired 2026-07 (REQ-UX-04). |
 | `openpulse-testmatrix` | `apps/openpulse-testmatrix` | Automated mode × channel test matrix runner |
+| `openpulse-twinview` | `apps/openpulse-twinview` | Side-by-side viewer for the twin-daemon validation rig |
+| `openpulse-dict-trainer` | `tools/openpulse-dict-trainer` | Trains the shared HPX Zstd compression dictionary |
 | `openpulse-linksim` | `apps/openpulse-linksim` | Two-station bidirectional ARQ link simulator (lib + CLI): effective two-way transfer rate under simulated SNR/noise, with FSK4 ACKs, turnaround, retransmission, and over-the-air rate adaptation |
 | `pki-tooling` | `pki-tooling` | Key management, trust store, bundle signing, PKI web service |
 
@@ -482,7 +484,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | HPX state machine transitions | `cargo test -p openpulse-modem --test hpx_conformance_integration` |
 | Benchmark 100% pass, mean_transitions ≤ 20 | `cargo test -p openpulse-modem --test benchmark_integration` |
 | Session persistence | `cargo test -p openpulse-cli --test local_state_integration` |
-| Block interleaver round-trip | `cargo test -p openpulse-core` (add test in `fec.rs`) |
+| Block interleaver round-trip | `cargo test -p openpulse-core --no-default-features --lib fec::tests::interleave` |
 | Gilbert-Elliott bursts span whole symbols (mean 1/p_bg symbols) | `cargo test -p openpulse-channel --lib bursts_span_whole_symbols_with_mean_one_over_pbg` |
 | Watterson fading envelope non-trivial | `cargo test -p openpulse-channel` (`f1_envelope_has_non_trivial_variation` in `watterson.rs`) |
 | Watterson continuous fade correlates across `apply()` calls | `cargo test -p openpulse-channel --lib continuous_fade_correlates_across_calls` |
@@ -508,7 +510,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | File-transfer blocks survive the modem (loopback round-trip + tamper→verify-fail) | `cargo test -p openpulse-modem --test filexfer_loopback` |
 | File-transfer multi-object >64 KB split/reassemble | `cargo test -p openpulse-filexfer --test blocks multi_object_over_64kb` |
 | File transfer crosses two real daemons (twin round-trip) | `cargo test -p openpulse-daemon --test twin_daemon_bridge a_file_crosses` |
-| PTT assert/release ≤ 50 ms | `cargo test -p openpulse-radio` (add timing test in `noop.rs`) |
+| PTT assert/release ≤ 50 ms | `cargo test -p openpulse-radio --no-default-features --test rigctld_integration rigctld_ptt_round_trip_under_50ms` (real socket I/O; the `noop.rs` timer flips a bool and cannot fail) |
 | Periodic station ID at interval (REQ-REG-10) | `cargo test -p openpulse-core --lib station_id` + `cargo test -p openpulse-core --lib cw_id` + `cargo test -p openpulse-modem --test station_id_txcount` |
 | MFSK16 sub-floor waveform: loopback + acquisition + calibrated LLRs (REQ-WSIG-01) | `cargo test -p mfsk16-plugin` + `cargo test -p openpulse-modem --test mfsk16_engine` |
 | MFSK16 sub-floor HARQ: combining adds diversity, and a stale message neither dilutes it nor false-delivers | `cargo test -p openpulse-modem --test mfsk16_harq` |

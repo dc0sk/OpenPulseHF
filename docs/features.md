@@ -63,7 +63,7 @@ plus an 8-symbol tail.  Actual throughput also depends on frame length, FEC mode
 channel conditions.  RRC modes use α = 0.35; their bandwidth is ~35% wider than the
 non-RRC equivalent at the same baud rate.
 
-QPSK1000 (used in the HPX2300 adaptive profile) and QPSK1000-HF are distinct registered
+QPSK1000 (used in the `hpx_wideband` adaptive profile, formerly HPX2300) and QPSK1000-HF are distinct registered
 mode names with the same baud rate and similar bandwidth; the same applies to 8PSK1000
 and 8PSK1000-HF.  The -HF suffix variants are tuned for HF path conditions.
 
@@ -169,8 +169,11 @@ engine operating ratio is 2.0×rms.
 recovers **+1.6 / +2.7 / +3.8 dB** average power at 2.5 / 2.0 / 1.5×rms clip, at **zero
 BER cost** (QPSK subcarriers absorb the clip). Single-carrier 64QAM gains ~0 dB and
 pays real EVM; constant-envelope BPSK gains 0 dB — confirming the per-mode gate. The
-dense OFDM-HOM variants (`OFDM52-{8PSK,16QAM,32QAM,64QAM}`) keep the multicarrier gain
-with only a small, FEC-absorbable EVM cost (`cessb_benefits_hold_on_ofdm_hom`).
+dense OFDM-HOM variants (`OFDM52-{8PSK,16QAM,32QAM,64QAM}`) and all SC-FDMA modes are
+**excluded**: an earlier measurement read only raw BER and concluded the EVM cost was
+FEC-absorbable, but the coded path collapses (OFDM52-32QAM 0/20, -64QAM 3/20, SCFDMA52-32/64QAM
+5/30 — versus ≥20/20 with CE-SSB off). Locked by `cessb_benefits_hold_on_low_order_ofdm_hom`,
+which asserts both the benefit for `OFDM52` and the exclusion of the denser modes.
 
 **On-air confirmation.** On a real FT-991A (2 m, 20 W into a 20 dB / 20 W attenuator),
 an interleaved CE-SSB OFF/ON A/B of gapless OFDM52 measured **+1.18 dB** average-power
@@ -389,13 +392,14 @@ list. Examples:
 | SL5 | QPSK250 | ~300 bps |
 | SL6 | QPSK500 | ~600 bps |
 
-**HPX2300** (wideband, ~2300 Hz occupied bandwidth):
+**`hpx_wideband`** (wideband, ~2300 Hz occupied bandwidth; formerly named HPX2300):
 
 | Speed Level | Mode | Eff. throughput |
 |-------------|------|-----------------|
 | SL8 | QPSK500 | ~600 bps |
 | SL9 | QPSK1000 | ~1200 bps |
-| SL11 | 8PSK1000 | ~1800 bps |
+| SL10 | QPSK2000-RRC | ~2400 bps |
+| SL11 | 8PSK2000-RRC | ~3600 bps |
 
 The 8PSK1000 waveform at SL11 was chosen over OFDM for its lower Peak-to-Average
 Power Ratio (PAPR ≈ 0 dB for single-carrier vs ≈ 6–10 dB for OFDM), simpler AFC
@@ -403,10 +407,15 @@ Power Ratio (PAPR ≈ 0 dB for single-carrier vs ≈ 6–10 dB for OFDM), simple
 
 **HPX Wideband HD** (full SSB passband, up to 2700 Hz; 64QAM):
 
-| Speed Level | Mode | Eff. throughput |
-|-------------|------|-----------------|
-| SL12 | 64QAM500 | ~1800 bps |
-| SL13 | 64QAM1000 | ~3600 bps |
+| Speed Level | Mode |
+|-------------|------|
+| SL9 | SCFDMA26-8PSK |
+| SL10 | SCFDMA26-16QAM |
+| SL11 | SCFDMA26-32QAM |
+| SL12 | SCFDMA52-16QAM |
+| SL13 | SCFDMA52-32QAM |
+| SL14 | SCFDMA52-64QAM |
+| SL15 | 64QAM2000-RRC |
 | SL14 | 64QAM2000-RRC | ~7200 bps |
 
 `hpx_wideband_hd` is intended for clear VHF/UHF paths or quiet 10 m conditions; 64QAM
@@ -503,7 +512,7 @@ channel.  The shared secret is available for session key derivation.
 
 The combined PQ CONREQ frame (classical key + ML-DSA-44 key + ML-KEM-768 key + both
 signatures + JSON body) exceeds the 255-byte frame payload limit.  The SAR layer
-(see below) fragments it automatically; the integration test `sar_encode_fragment_reassemble_decode_roundtrip` verifies the full PQ handshake survives SAR fragmentation and reassembly.
+(see below) fragments it automatically; the integration tests `pq_conreq_serialized_size_fits_in_sar_capacity` and `sar_roundtrip_of_pq_conreq` verify the full PQ handshake survives SAR fragmentation and reassembly.
 
 ---
 
@@ -514,6 +523,7 @@ signatures + JSON body) exceeds the 255-byte frame payload limit.  The SAR layer
 | Algorithm | Use case | Implementation |
 |-----------|----------|----------------|
 | LZ4 | Session-layer payload compression | `lz4_flex` (pure Rust) |
+| Zstd + HPX dictionary | Session-layer payload compression; the `u32` is the dictionary ID, carried to catch version skew | `zstd`, `CompressionAlgorithm::Zstd(u32)` |
 | Gzip | B2F Type-D message compression | `flate2` |
 | ~~LZHUF LH5~~ | B2F Type-C — **not supported**, removed in PR #948 | — |
 

@@ -9,6 +9,48 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-18 — docs+comments: clear the consistency-audit tail (stale comments, wrong tables, dead names)
+
+- **Requirement/change:** consistency-audit findings 12 and 14 plus the residue of the claims-vs-code
+  and status-drift areas — the long tail of individually-small drift left after PRs #954–#957.
+- **The one that mattered — a reversed conclusion still documented as current.** Four doc-comments
+  (`linksim` ×3, `openpulse-config`) and two docs (`features.md`, `roadmap.md`) claimed CE-SSB
+  benefits dense OFDM-HOM and SC-FDMA. `ModemEngine::cessb_benefits` **excludes both**, and the
+  roadmap went further: "`cessb_benefits` enabling all OFDM*/SCFDMA* is therefore correct as-is — no
+  narrowing." That judgement rested on a **raw-BER** reading; the coded path collapses (OFDM52-32QAM
+  0/20, -64QAM 3/20, SCFDMA52-32/64QAM 5/30 vs ≥20/20 with CE-SSB off), so the gate was narrowed and
+  the locking test renamed to `cessb_benefits_hold_on_low_order_ofdm_hom` — which now asserts the
+  *opposite* of what the two docs cited it for. This is the repo's own "an uncoded-BER win is not a
+  win" rule, violated in the direction that is hardest to notice: the docs kept the old conclusion
+  while the code moved.
+- **Design decision:** correct present-tense claims; annotate reversed history rather than delete it
+  (the roadmap bullet now records both the original judgement and why it was reversed).
+  `docs/dev/project/changelog.md:778` cites the pre-rename test name and is **left alone** — a dated
+  release entry is accurate for its release and is not stale merely because the world moved on.
+- **Implementation:** CE-SSB claims — `apps/openpulse-linksim/src/{lib.rs,gui.rs,main.rs}`,
+  `crates/openpulse-config/src/lib.rs`, `docs/features.md`, `docs/dev/project/roadmap.md`.
+  Stale comments — `crates/openpulse-core/src/plugin.rs` (named 64QAM/BPSK/QPSK as noise-blind after
+  PR #687 calibrated all three), `crates/openpulse-modem/src/engine.rs`
+  (`receive_with_llr_combining` still described the inverse-noise weighting **removed** in PR #686 for
+  double-applying σ⁻²), `crates/openpulse-gateway/src/main.rs` (my own PR #951 insertion orphaned
+  `gateway_round_trip`'s doc comment onto the hostile-CMS test). Wrong tables/names — `docs/features.md`
+  (HPX2300 → `hpx_wideband` with its real SL8–SL11; `hpx_wideband_hd` regenerated to the real SL9–SL15
+  SCFDMA ladder; the live `Zstd(u32)` + HPX-dictionary algorithm added; a cited SAR test that does not
+  exist replaced by the two that do), `README.md` + `docs/osi-layer-map.md` (deleted `ArqSession` →
+  `harq.rs` + `rate_policy.rs`), `CLAUDE.md` (crate map gained `apps/openpulse-twinview` and
+  `tools/openpulse-dict-trainer`; two acceptance rows phrased as unfulfilled TODOs now name the
+  shipped tests). Status — `roadmap.md` FF-15 heading A–F → A–G, and RF-6's "Still open" list (both
+  items closed by PR #941 and PR #944); `docs/dev/design/js8-discovery-rendezvous-plan.md` (seven
+  planned test targets that never existed, mapped to the shipped names);
+  `docs/dev/archive/backlog-*.md` (pre-move `doc:` paths); `docs/dev/onair-status.md` (a `branch:`
+  field pointing at a deleted branch).
+- **Test results (actually run):** full workspace `cargo test --workspace --no-default-features`
+  **2146 passed, 0 failed**; workspace clippy `--all-targets -- -D warnings` clean; fmt clean;
+  `scripts/validate-doc-frontmatter.sh` exit 0. **Every replacement test name was executed**, not
+  merely substituted: `fec::tests::interleave` 3, `rigctld_ptt_round_trip_under_50ms` 1,
+  `snr_sweep gate_at_minus_18_db` 1, `beacon_loopback` 1, `rendezvous_end_to_end` 2,
+  `openpulse-gateway` 4.
+
 ## 2026-07-18 — test: make six vacuously-passing gates actually test what they are named for
 
 - **Requirement/change:** consistency-audit findings 13 and the test-integrity cluster — a set of tests

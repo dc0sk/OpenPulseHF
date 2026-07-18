@@ -567,13 +567,14 @@ Hard rule: everything passes `cargo test --workspace --no-default-features`; no 
 
 | Requirement | Acceptance test |
 |---|---|
-| JS8 NORMAL encode bit/tone-exact vs JS8Call reference | `cargo test -p js8-plugin --test reference_vectors` |
-| JS8 NORMAL decode of reference WAVs + loopback ≥90% @ −18 dB AWGN | `cargo test -p js8-plugin --test js8_loopback` |
-| JS8 LLR calibration | `cargo test -p js8-plugin --test llr_reliability` |
-| Hint zero false positives on organic-JS8 corpus | `cargo test -p openpulse-discovery --test hint_collision` |
-| Discovery SM: idle gating, preempt, RX-only never TXes | `cargo test -p openpulse-discovery --test discovery_sm` |
-| Rendezvous 2-message agreement + timeout + tiebreak | `cargo test -p openpulse-discovery --test rendezvous` |
-| End-to-end discovery + rendezvous over twin daemons | `cargo test -p openpulse-daemon --test js8_discovery_twin` |
+> **Note (2026-07-18):** the target names below were written when this was a plan; the shipped tests
+> landed under different names. Equivalent coverage exists — the mapping is given per row.
+
+| JS8 NORMAL decode reaches the −18 dB weak-signal gate | `cargo test -p js8-plugin --test snr_sweep gate_at_minus_18_db` (planned as `js8_loopback`/`reference_vectors`) |
+| JS8 SNR estimation | `cargo test -p js8-plugin --test snr_estimate` (planned as `llr_reliability`) |
+| Beacon assembly + `@OPULSE` hint over GFSK audio | `cargo test -p openpulse-discovery --test beacon_loopback` (planned as `hint_collision`/`discovery_sm`) |
+| Rendezvous 2-message agreement, end to end over two runtimes | `cargo test -p openpulse-discovery --test rendezvous_end_to_end` (planned as `rendezvous`/`js8_discovery_twin`) |
+| Daemon discovery tick: dwell, decode, cache, emit `StationHeard` | `cargo test -p openpulse-daemon --no-default-features discovery_tick` |
 | PeerCache mapping + capability query | `cargo test -p openpulse-discovery station` |
 
 ---

@@ -150,7 +150,8 @@ struct Cli {
     /// Payload compression applied before FEC.
     #[arg(long, value_enum, default_value = "none")]
     compression: CompressionArg,
-    /// Disable CE-SSB TX envelope conditioning (on by default; only affects OFDM QPSK/8PSK).
+    /// Disable CE-SSB TX envelope conditioning (on by default; only affects QPSK-subcarrier OFDM —
+    /// `OFDM16`/`OFDM52`. Dense OFDM-HOM and all SC-FDMA are excluded; see `ModemEngine::cessb_benefits`).
     #[arg(long)]
     no_cessb: bool,
     /// Payload bytes per data frame.
