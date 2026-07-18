@@ -148,9 +148,10 @@ pub trait ModulationPlugin: Send + Sync {
     ///   by its estimated σ² (SC-FDMA and OFDM do; `symbol_llrs`' `noise_var` argument).  Repeated
     ///   observations of the same bits in the same mode are then combined by summing —
     ///   `combine_llrs_map` — never by weighting again with `1/σ²`, which would apply σ⁻² twice.
-    ///   Plugins that pass `noise_var = 1.0` (64QAM), emit raw correlations (BPSK/QPSK), or fall back
-    ///   to ±1.0 carry no noise information at all: their `mean(|LLR|)` is flat in SNR, so a weight
-    ///   derived from it conveys nothing.  Calibrating them is worth ~1 dB of HARQ combining gain.
+    ///   Every shipped plugin has been calibrated (PR #687) — 64QAM, BPSK and QPSK included — so a
+    ///   plugin reaching this trait default is the only remaining noise-blind case: it emits ±1.0,
+    ///   its `mean(|LLR|)` is flat in SNR, and a weight derived from it conveys nothing.
+    ///   `crates/openpulse-modem/tests/llr_calibration.rs` fails any plugin that regresses to that.
     ///
     /// Plugins that know their internal soft values (BPSK I-channel
     /// correlation, QPSK I/Q projections) should override this for maximum

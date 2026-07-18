@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/backlog-fec-improvements.md
+doc: docs/dev/archive/backlog-fec-improvements.md
 status: living
 last_updated: 2026-05-09
 ---

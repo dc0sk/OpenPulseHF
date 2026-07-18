@@ -328,7 +328,6 @@ mod tests {
         (client, server)
     }
 
-    /// Full round-trip: gateway sends one message, mock CMS sends one reply.
     /// A hostile/broken CMS must not be able to hang or mislead the gateway. The cooperative mock
     /// in `gateway_round_trip` cannot show any of this (audit 2026-07-17, low tier).
     #[test]
@@ -416,6 +415,7 @@ mod tests {
         drop(server);
     }
 
+    /// Full round-trip: gateway sends one message, mock CMS sends one reply.
     #[test]
     fn gateway_round_trip() {
         let (client_stream, server_stream) = tcp_pair();

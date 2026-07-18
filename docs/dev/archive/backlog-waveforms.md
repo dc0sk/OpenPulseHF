@@ -1,6 +1,6 @@
 ---
 project: openpulsehf
-doc: docs/backlog-waveforms.md
+doc: docs/dev/archive/backlog-waveforms.md
 status: living
 last_updated: 2026-05-09
 ---

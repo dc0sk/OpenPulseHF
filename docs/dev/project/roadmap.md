@@ -836,13 +836,16 @@ the long-deferred "adaptive rate-stepping over the air (RX lockstep)" item.
   `stage_emit_output` after attenuation, before the tanh limiter, with a peak-restore
   rescale. `[modem] cessb_enabled` config, `ControlCommand::SetCessb` + `openpulse
   daemon set-cessb` CLI, panel "CE-SSB: ON/OFF" toolbar toggle (#522, #523).
-- OFDM-HOM gate confirmed: the dense-subcarrier variants
-  `OFDM52-{8PSK,16QAM,32QAM,64QAM}` stay high-PAPR multicarrier, so the
-  average-power gain holds (unlike single-carrier QAM, ~0 dB); they add a small EVM
-  cost pure-QPSK OFDM does not (raw BER ≈ 0.0007–0.0039 at the 2.0×rms operating
-  point) that stays FEC-absorbable. `cessb_benefits` enabling all OFDM*/SCFDMA* is
-  therefore correct as-is — no narrowing. Locked by `cessb_benefits_hold_on_ofdm_hom`
-  in `tests/cessb_power_evm.rs`.
+- OFDM-HOM gate — **this conclusion was later REVERSED; see the note below.** As recorded at the
+  time: the dense-subcarrier variants `OFDM52-{8PSK,16QAM,32QAM,64QAM}` stay high-PAPR multicarrier,
+  so the average-power gain holds (unlike single-carrier QAM, ~0 dB); they add a small EVM cost
+  pure-QPSK OFDM does not (raw BER ≈ 0.0007–0.0039 at the 2.0×rms operating point) that was judged
+  FEC-absorbable, so `cessb_benefits` enabling all OFDM*/SCFDMA* was held correct as-is.
+  **Reversal:** that judgement rested on a *raw BER* reading — the repo's own "an uncoded-BER win is
+  not a win" rule, applied in the wrong direction. The coded path collapses (OFDM52-32QAM 0/20,
+  -64QAM 3/20; SCFDMA52-32/64QAM 5/30, versus ≥20/20 with CE-SSB off), so the gate was narrowed to
+  QPSK-subcarrier OFDM only and the test renamed accordingly:
+  `cessb_benefits_hold_on_low_order_ofdm_hom` in `tests/cessb_power_evm.rs`.
 - Verification note: virtual/channel-sim covers decode integrity. The average-power
   gain at fixed PEP is a PA-domain effect no audio loopback can show — **now confirmed
   on real RF** (rpi53 + FT-991A, 20 W via a 20 dB/20 W attenuator on 144.6 MHz):
@@ -1490,7 +1493,7 @@ persistence) ✅ → **F on-air validation** (deferred field-test batch). Standa
 Highest risk was Phase C half-duplex ACK/PTT timing — de-risked by the twin-daemon round-trip test, which now
 also exercises the real PTT-keyed burst-drain path.
 
-### FF-15 — JS8-based station discovery and rendezvous *(A–F shipped: full RX + beacon TX + rendezvous → HPX handoff; only H on-air remains)*
+### FF-15 — JS8-based station discovery and rendezvous *(A–G shipped: full RX + beacon TX + rendezvous → HPX handoff; only H on-air remains)*
 
 **Plan approved 2026-07-10** — full design in
 [`docs/dev/design/js8-discovery-rendezvous-plan.md`](../design/js8-discovery-rendezvous-plan.md)
@@ -1755,9 +1758,13 @@ rung map is `SessionProfile::hpx_hf`, gated by `tests/ladder_doc_matches_profile
   could prove the rungs decode but never that the controller drives them — the exact blind spot that
   let #934 ship in two releases. Same "test the production path, not the convenience seam" lesson the
   codebase keeps relearning, now enforced.
-- **Still open:** the SC and OFDM rungs' SNR floors are on different scales (a documented wart, now
-  moot for correctness since the evidence climb no longer depends on a single global scale); and
-  `RsStrong` remains the better code for any rung whose frames stay ≤191 B. Neither gates the link.
+- **Both former "still open" items are now closed.** The SC-vs-OFDM SNR-scale split was investigated
+  and found to be **per-waveform-family by physical necessity, not a wart**: OFDM's ZF equaliser
+  enhances noise on faded subcarriers, so its estimate saturates near ~16 dB and cannot report the
+  20–30 dB the top rungs run at. Unifying it would put those floors out of reach — the v0.14.0 stall.
+  Documented and pinned by `snr_scale_boundary` (PR #944). `RsStrong` on small frames shipped in
+  PR #941: the sender upgrades per frame only where it costs no extra RS block, so airtime cannot
+  regress, and the receiver dual-decodes (`free_rs_strengthening_ota`).
   **Not yet validated on air** — three releases of fade behaviour are Watterson-simulator-only, and the
   linksim harness gap found in v0.14.1 (it could not transmit the sub-floor rung) is a reminder that
   simulator-green is not hardware-green.

@@ -173,7 +173,7 @@ The mode/FEC selection ladder and which combinations are usable on HF is documen
 | **0.3-persistence CSMA** | `openpulse-modem` | DCD energy check; transmit deferred when channel busy; configurable per `ModemEngine` |
 | **DCD energy threshold** | `openpulse-core` (dcd.rs) | RMS energy gate with configurable hold window (default 100 ms); forced-busy override for testing |
 | **HPX adaptive session** | `openpulse-core` (hpx.rs) | ACK/NACK-driven speed-ladder state machine; `RateAdapter` with per-level SNR gates and NACK-decrement hysteresis |
-| **ARQ retry loop** | `openpulse-modem` (arq_session.rs) | LLR-accumulating retransmission loop; mode switching on sustained NACK; configurable retry limit |
+| **ARQ retry loop** | `openpulse-modem` (`harq.rs` + `rate_policy.rs`) | LLR-accumulating retransmission loop; mode switching on sustained NACK; configurable retry limit |
 | **QSY frequency agility** | `openpulse-qsy` | SNR-ranked channel-list negotiation; initiator transmits QSY_REQ → LIST → VOTE/ACK; responder role wired into daemon receive path |
 | **Cross-band repeater** | `openpulse-repeater` | Full-duplex digipeater; configurable trust-policy filter; `EnableRepeater`/`DisableRepeater` daemon commands |
 | **Mesh re-broadcast** | `openpulse-mesh` | TTL-limited beacon re-broadcast with (session_id, nonce) duplicate suppression |
@@ -195,7 +195,7 @@ Compression algorithm negotiated at session setup via `supported_compression` / 
 | Type | Crate / module | Description |
 |---|---|---|
 | **Stop-and-wait ARQ** | `openpulse-modem` (engine.rs) | Basic per-frame ACK; NACK triggers retransmit of last frame |
-| **LLR-accumulating ARQ (Memory-ARQ)** | `openpulse-modem` (arq_session.rs) | Soft LLR values accumulated across retransmissions (PACTOR-style); each retry adds soft-combining gain; mode switch on sustained NACK |
+| **LLR-accumulating ARQ (Memory-ARQ)** | `openpulse-modem` (`harq.rs` + `rate_policy.rs`) | Soft LLR values accumulated across retransmissions (PACTOR-style); each retry adds soft-combining gain; mode switch on sustained NACK |
 | **SAR (Segmentation and Reassembly)** | `openpulse-core` (sar.rs) | 4-byte header (segment_id, fragment_index, fragment_total); max 64 005 bytes per segment; configurable reassembly timeout; duplicate-idempotent |
 | **QSY ACK** | `openpulse-qsy` | Ed25519-signed ACK/REJECT frames completing the QSY_REQ → LIST → VOTE → ACK negotiation loop |
 
@@ -389,7 +389,7 @@ on-air test plan in `docs/on-air_testplan.md`.
 |---|---|
 | `crates/openpulse-core` | Frame format, CRC-16, FEC (RS+Conv+LDPC+interleaver), HPX session state machine, plugin registry, trust/signing, SAR, ACK, rate adaptation, relay, query propagation, peer cache, LZ4/Zstd compression, PQ handshake |
 | `crates/openpulse-audio` | `LoopbackBackend` (testing) and `CpalBackend` (hardware, feature-gated) |
-| `crates/openpulse-modem` | `ModemEngine`, `PipelineScheduler`, `ArqSession` (LLR-accumulating retry), benchmark harness, CSMA/DCD, channel sim harness |
+| `crates/openpulse-modem` | `ModemEngine`, `PipelineScheduler`, LLR-accumulating ARQ/HARQ retry (`harq.rs` + `rate_policy.rs`), benchmark harness, CSMA/DCD, channel sim harness |
 | `crates/openpulse-channel` | Channel simulation: Watterson, Gilbert-Elliott, QRN/QRM/QSB/Chirp |
 | `crates/openpulse-radio` | `PttController` trait: NoOp, SerialRtsDtr, Vox, Rigctld; `RigctldController` for CAT |
 | `crates/openpulse-dsp` | RRC filter, PLL, Gardner timing recovery, LMS/DFE adaptive equalizer, CE-SSB envelope conditioner |

@@ -244,7 +244,8 @@ pub struct LinkParams {
     /// RNG seed for reproducible channel realizations.
     pub seed: u64,
     /// CE-SSB TX envelope conditioning (default on, matching the engine). Only acts on the
-    /// modes `ModemEngine::cessb_benefits` enables (OFDM QPSK/8PSK); a no-op elsewhere.
+    /// modes `ModemEngine::cessb_benefits` enables (QPSK-subcarrier OFDM only: `OFDM16`/`OFDM52`);
+    /// a no-op elsewhere, including 8PSK/QAM OFDM and every SC-FDMA mode.
     pub cessb_enabled: bool,
     /// Receiver-side automatic notch on the forward data path. `None` = no notch (baseline).
     pub notch: Option<LinkNotch>,
