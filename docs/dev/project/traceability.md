@@ -9,6 +9,48 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-18 — fix: make `--profile` help self-maintaining; correct the `RsInterleaved` billing
+
+- **Requirement/change:** the two follow-ups spun out of the manual update (PR #962) — the CLI's
+  `--profile` help advertised 7 of the 12 profiles `SessionProfile::by_name` accepts, and
+  `docs/mode-fec-ladder.md` §2 billed `RsInterleaved` as "burst-tolerant / best for HF burst/fading"
+  where the measurement says it is inert.
+- **Finding 1 — the help was hand-maintained in two places and had drifted.** Two identical doc
+  comments in `cli.rs` listed `hpx500, hpx_hf, hpx_ofdm_hf, hpx_wideband, hpx_wideband_hd,
+  hpx_narrowband, hpx_narrowband_hd`, omitting `hpx_modcod` and all four `hpx_pilot*` — every one of
+  which `by_name` accepts and `PROFILE_NAMES` lists.
+- **Design decision:** delete the hand-maintained lists rather than update them, and source the
+  accepted values from `SessionProfile::PROFILE_NAMES` so they cannot drift again. **A first attempt
+  used `PossibleValuesParser` and was wrong** — it is exact-match, but `by_name` is documented
+  case-insensitive with `-`/`_` interchangeable, so `HPX-OFDM-HF` (valid, and covered by an existing
+  test) was rejected. Caught by `cli_mode_advisor`. Replaced with a `TypedValueParser` that validates
+  *through* `by_name` — preserving the flexible input — while reporting the canonical names via
+  `possible_values()` so `--help` still lists all twelve. Invalid input now fails at parse time
+  naming every accepted value, instead of falling through to a runtime error.
+- **Finding 2 — the ladder doc contradicted itself.** §2 billed `RsInterleaved` "burst-tolerant,
+  best for HF burst/fading"; §7 of the SAME document recorded the measurement that it is **inert**
+  (BPSK250 on `moderate_f1` @5/8 dB: 0.17/0.58 — identical to plain `Rs`), and `profile.rs` calls out
+  the contradiction explicitly. Root cause: the interleaver permutes the **encoded** bytes and RS is
+  position-agnostic *within* a codeword, so on a payload that fits one 255-byte block there is
+  nothing to spread.
+- **Design decision:** correct §2 **conditionally rather than flatly.** Interleaving across multiple
+  RS blocks (> 223 B payloads) is sound in principle and unmeasured here; saying "interleaving does
+  not help" would be a second wrong claim replacing the first. §2 now states the block-size condition
+  with the measurement, and §7's back-reference is rewritten so it no longer cites a billing that has
+  been fixed.
+- **Implementation:** `crates/openpulse-cli/src/cli.rs` (`ProfileNameParser`, applied to all four
+  `--profile` args); `apps/openpulse-linksim/src/main.rs` (`parse_profile_name`);
+  `docs/mode-fec-ladder.md` (7 sites in §2 + the §7 back-reference).
+- **Tests:** `cli_adaptive`, `cli_mode_advisor`, `cli_arq` updated — they asserted the old runtime
+  error text; they now assert the parse-time rejection AND that the message names a profile the old
+  help omitted (`hpx_pilot_fast_rrc`), which is the property that was actually broken.
+- **Test results (actually run):** full workspace `cargo test --workspace --no-default-features`
+  **2147 passed, 0 failed**; clippy `--all-targets -- -D warnings` clean; fmt clean. Behaviour
+  verified by hand: `--profile HPX-OFDM-HF` still resolves (SL10/OFDM52-64QAM); `--profile bogus`
+  prints all twelve names; `--help` lists all twelve.
+- **Housekeeping:** removed `crates/openpulse-core/tests/zz_tmp_sizes.rs`, a scratch probe a research
+  agent left in the tree.
+
 ## 2026-07-18 — docs: bring the operator manual to v0.15.0
 
 - **Requirement/change:** `docs/openpulse-manual.md` carried `last_updated: 2026-06-24`, predating the

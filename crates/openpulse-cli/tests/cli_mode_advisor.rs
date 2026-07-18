@@ -70,5 +70,8 @@ fn mode_advisor_rejects_unknown_profile() {
     cmd.assert()
         .failure()
         .stderr(contains("unknown session profile"))
-        .stderr(contains("hpx_ofdm_hf"));
+        // clap now lists every accepted profile, sourced from SessionProfile::PROFILE_NAMES,
+        // so an operator sees the valid set instead of just being told "no".
+        .stderr(contains("hpx_ofdm_hf"))
+        .stderr(contains("hpx_pilot_fast_rrc"));
 }
