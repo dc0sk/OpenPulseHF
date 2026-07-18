@@ -11,3 +11,7 @@ docs/VARA Doc/
 # deliberately-committed records remain tracked; force-add (-f) to keep a new one.
 docs/dev/test-reports/loopback-*.json
 docs/test-reports/loopback-*.json
+
+# Rendered book. Reproducible with scripts/build-book-pdf.sh and published as a release asset;
+# committing it would add ~800 KB of undiffable churn on every book edit.
+docs/openpulse-book.pdf

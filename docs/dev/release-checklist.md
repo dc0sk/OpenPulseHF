@@ -60,6 +60,15 @@ Use this checklist when preparing a new release of OpenPulse. This guide covers 
 
   Attach the SBOM to the GitHub release alongside the notes.
 
+- [ ] **Rebuild the book PDF** and attach it to the release
+  ```bash
+  scripts/build-book-pdf.sh          # writes docs/openpulse-book.pdf (gitignored)
+  gh release upload vX.Y.Z docs/openpulse-book.pdf --clobber
+  ```
+  It is not committed: it is a rendering of `docs/openpulse-book.md`, reproducible in one command,
+  and would otherwise add ~800 KB of undiffable churn per book edit. Needs `pandoc`, `weasyprint`
+  and the DejaVu fonts.
+
 ---
 
 ## Version and Documentation Updates
