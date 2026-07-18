@@ -113,7 +113,7 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 | `psk8-plugin` | `plugins/psk8` | 8PSK500/1000 modulation plugin |
 | `qam64-plugin` | `plugins/64qam` | 64QAM500/1000/2000-RRC modulation plugin; Gray-coded 8×8 PAM-8; soft demodulator |
 | `fsk4-plugin` | `plugins/fsk4` | FSK4-ACK modulation plugin (ACK channel) |
-| `mfsk16-plugin` | `plugins/mfsk16` | Constant-envelope non-coherent 16-GFSK weak-signal sub-floor waveform (REQ-WSIG-01): mode `MFSK16`, 31.25 baud, 500 Hz, 4 bits/sym, one 255-byte RS block; self-acquiring (Costas-16 sync + timing×freq search, `estimate_afc_hz = None`); soft-capable, frame-median-calibrated LLRs. Measured to beat coherent BPSK31 by ~4 dB on moderate fade / decode where BPSK31 fails on fast fade, at a PAPR credit. Broadcast-first; ACK/ladder deferred (PR-C/D) |
+| `mfsk16-plugin` | `plugins/mfsk16` | Constant-envelope non-coherent 16-GFSK weak-signal sub-floor waveform (REQ-WSIG-01): mode `MFSK16`, 31.25 baud, 500 Hz, 4 bits/sym, one 255-byte RS block; self-acquiring (Costas-16 sync + timing×freq search, `estimate_afc_hz = None`); soft-capable, frame-median-calibrated LLRs. Measured to beat coherent BPSK31 by ~4 dB on moderate fade / decode where BPSK31 fails on fast fade, at a PAPR credit. Broadcast-first originally; the ACK path shipped since — MFSK16 is SL1 of `hpx_hf` and its K=3 union-decoded return channel is gated by `mfsk16_arq_subfloor` |
 | `js8-plugin` | `plugins/js8` | JS8-compatible 8-GFSK weak-signal waveform (FF-15) — full TX+RX SHIPPED. `Js8Plugin` ModulationPlugin (submode/costas/GFSK/LDPC(174,87)/CRC-12/tones); native RX decoder (`decoder.rs` window multi-decode, `demodulate.rs` soft 8-FSK, `sync.rs` Costas, `ldpc174.rs` BP) — B-6 −18 dB go/no-go PASSES. Message layer: `frame.rs`/`grammar.rs` (callsign/grid/compound/directed unpack), `varicode.rs` (Huffman) + `jsc.rs` (full 262k JSC codebook) free-text decode. TX packers `encode.rs` (`pack_compound_frame`/`pack_alphanumeric50`/`pack_heartbeat_frame`/`pack_huff_frame`) + `beacon.rs` (`heartbeat`/`opulse_hint`/`directed` over assembly + `frame_audio`). Tables ported from GPL-3.0 JS8Call, validated vs real boost+Qt5 |
 | `ofdm-plugin` | `plugins/ofdm` | OFDM16/52 + OFDM52-{8PSK,16QAM,32QAM,64QAM} multicarrier; Schmidl-Cox preamble, LS channel est + ZF equalization; soft demod |
 | `scfdma-plugin` | `plugins/scfdma` | SC-FDMA16/52 + SCFDMA52/26-{8PSK,16QAM,32QAM,64QAM} single-carrier-FDM; DFT-CE pilot channel est + MMSE; per-symbol SFO deramp; soft demod |
@@ -476,8 +476,8 @@ Each requirement below is done when the linked test passes. Add new links as tes
 
 | Requirement | Acceptance test |
 |---|---|
-| BPSK loopback correctness | `cargo test -p openpulse-modem --test bpsk_hardening` |
-| QPSK loopback correctness | `cargo test -p openpulse-modem --test qpsk_hardening` |
+| BPSK loopback correctness | `cargo test -p openpulse-modem --test bpsk_hardening` (the SNR sweep now round-trips through AWGN) + `--test channel_loopback` + `--test psk31_longframe_acquisition` |
+| QPSK loopback correctness | `cargo test -p openpulse-modem --test channel_loopback_multimode qpsk500_awgn_20db` (real decode) + `--test qpsk500_acquisition`; `--test qpsk_hardening` covers the TX/state-machine paths only |
 | FEC RS encode/decode | `cargo test -p openpulse-modem --test fec_loopback` |
 | HPX state machine transitions | `cargo test -p openpulse-modem --test hpx_conformance_integration` |
 | Benchmark 100% pass, mean_transitions ≤ 20 | `cargo test -p openpulse-modem --test benchmark_integration` |
@@ -516,14 +516,19 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | Receiver AGC: decode level-invariant on/off + AGC tracks level (REQ-AGC-01) | `cargo test -p openpulse-modem --test agc_amplitude_sweep` |
 | Simultaneous multi-mode receive monitor (REQ-RX-01) | `cargo test -p openpulse-daemon --no-default-features monitor::` |
 | Hotplug-safe audio device resolution (REQ-DEV-01) | `cargo test -p openpulse-core --no-default-features audio::tests` |
-| CM108 / GPIO PTT backends (REQ-PTT-02/03) | `cargo test -p openpulse-radio --no-default-features cm108 gpio` |
-| Relay authenticates envelope origin — rejects forged/unsigned `src_peer_id` (audit E3) | `cargo test -p openpulse-core --lib relay::` + `cargo test -p openpulse-mesh --test mesh_loopback impersonated_origin_rejected_at_relay authenticated_relay_forwarding` |
+| CM108 / GPIO PTT backends (REQ-PTT-02/03) | `cargo test -p openpulse-radio --no-default-features -- cm108 gpio` |
+| Relay authenticates envelope origin — rejects forged/unsigned `src_peer_id` (audit E3) | `cargo test -p openpulse-core --lib relay::` + `cargo test -p openpulse-mesh --test mesh_loopback -- impersonated_origin_rejected_at_relay authenticated_relay_forwarding` |
 | Handshake replay-freshness — signed timestamp; stale/future/missing rejected | `cargo test -p openpulse-core --lib handshake::tests` (fresh/stale/future/missing/none/stale-conack) |
 | SAR reassembly resists poison — conflicting fragment stream doesn't block the legit one | `cargo test -p openpulse-core --lib sar::tests` (poison/wrong-total/flood) + `cargo test -p openpulse-daemon --lib poison_fragment_does_not_block_conreq_verification` |
-| OTA rate ACK is authenticated — ECDH-derived keyed MAC; forged/foreign-key ACK rejected (audit E7) | `cargo test -p openpulse-core --lib session_key ack::tests` + `cargo test -p openpulse-modem --test ack_exchange_integration authenticated_ack_round_trips_and_forgery_is_rejected` |
+| OTA rate ACK is authenticated — ECDH-derived keyed MAC; forged/foreign-key ACK rejected (audit E7) | `cargo test -p openpulse-core --lib -- session_key ack::tests` + `cargo test -p openpulse-modem --test ack_exchange_integration authenticated_ack_round_trips_and_forgery_is_rejected` |
 | Authenticated ACK composed with the **sub-floor K=3 union** return channel (E7 × REQ-WSIG-01) | `cargo test -p openpulse-modem --test mfsk16_arq_subfloor authenticated_k3_subfloor_ack_round_trips_and_forgery_is_rejected` |
 | FSK4-ACK decodes **correctly** under noise at its operating point (and degrades below its floor) | `cargo test -p fsk4-plugin --test fsk4_integration` |
-| CI auto-runs on every PR (Linux gates + macOS build) | `.github/workflows/ci.yml` `on: pull_request`; Linux core/full/gpu/pi5 gates + a `macos-build` compile check |
+| Winlink session bounds total decompressed bytes, and a normal batch still passes | `cargo test -p openpulse-b2f --no-default-features -- session_bounds_aggregate session_aggregate_cap_does_not_trip` |
+| Winlink Type C (LZHUF) is unsupported — inbound proposals are rejected, Type D accepted | `cargo test -p openpulse-b2f --no-default-features irs_rejects_a_type_c_proposal_and_accepts_type_d` |
+| Winlink header fields are capped, and a realistic multi-recipient message still decodes | `cargo test -p openpulse-b2f --no-default-features -- header_decode_caps header_decode_allows_a_realistic` |
+| B2F driver survives a hostile peer — line cap, per-operation read deadlines, framing edges | `cargo test -p openpulse-b2f-driver --no-default-features --test cmd_hardening` + `--test timeout_hardening` + `--test data_framing` |
+| B2F driver reports a refused or fully-rejected ISS transfer instead of silent success | `cargo test -p openpulse-b2f-driver --no-default-features --test iss_failure_paths` |
+| CI gates are defined and correct (Linux core/full/gpu/pi5 + `macos-build`) — **but the `CI` workflow is `disabled_manually` by the maintainer, so they do NOT run on a PR; the gates above are run locally before every merge** | `.github/workflows/ci.yml` `on: pull_request` (definition only; check state with `gh api repos/dc0sk/OpenPulseHF/actions/workflows`) |
 
 For any new Phase 1 feature: write the test first, confirm it fails, implement until it passes. Do not mark a task done if its test does not exist.
 

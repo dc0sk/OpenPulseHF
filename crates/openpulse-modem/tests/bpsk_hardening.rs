@@ -1,13 +1,54 @@
 //! BPSK hardening tests with loopback fixtures.
 //!
 //! Tests TX/RX under various signal conditions:
-//! - SNR sweep (6dB, 9dB, 12dB, 15dB)
+//! - SNR sweep (6dB, 9dB, 12dB, 15dB) — real AWGN round-trips through `ChannelSimHarness`
 //! - Multipath profiles (fading, frequency offset, timing error)
 //! - Error recovery (frame loss, timeout, retransmit)
 
 use bpsk_plugin::BpskPlugin;
 use openpulse_audio::LoopbackBackend;
+use openpulse_channel::{awgn::AwgnChannel, AwgnConfig};
+use openpulse_core::fec::FecMode;
+use openpulse_modem::channel_sim::ChannelSimHarness;
 use openpulse_modem::engine::ModemEngine;
+
+const SNR_PAYLOAD: &[u8] = b"bpsk snr sweep payload 0123456789";
+
+/// Transmit `SNR_PAYLOAD` over AWGN at `snr_db` and count how many of `trials` decode back intact.
+///
+/// The SNR-sweep tests used to assert a literal `true`, so the acceptance row they back ("BPSK
+/// loopback correctness") was never exercising a decode at all. This does the round-trip.
+fn bpsk250_awgn_decodes(snr_db: f32, trials: u64) -> u64 {
+    let mut ok = 0;
+    for seed in 0..trials {
+        let mut h = ChannelSimHarness::new();
+        for e in [&mut h.tx_engine, &mut h.rx_engine] {
+            e.register_plugin(Box::new(BpskPlugin::new())).ok();
+        }
+        if h.tx_engine
+            .transmit_with_fec_mode(SNR_PAYLOAD, "BPSK250", FecMode::Rs, None)
+            .is_err()
+        {
+            continue;
+        }
+        let Ok(mut ch) = AwgnChannel::new(AwgnConfig {
+            snr_db,
+            seed: Some(400 + seed),
+        }) else {
+            continue;
+        };
+        let _ = h.route_tapped(&mut ch);
+        if let Ok(out) = h
+            .rx_engine
+            .receive_with_fec_mode("BPSK250", FecMode::Rs, None)
+        {
+            if out.starts_with(SNR_PAYLOAD) {
+                ok += 1;
+            }
+        }
+    }
+    ok
+}
 
 /// Test fixture for BPSK loopback scenarios.
 struct BpskFixture {
@@ -47,35 +88,54 @@ impl BpskFixture {
 
 #[test]
 fn bpsk_snr_6db_loopback() {
-    let _fixture = BpskFixture::new("bpsk-snr-6db", "N0TEST");
-    // At 6dB SNR, BPSK should still demodulate but with higher error rate.
-    // Loopback + no real hardware, so this is a code path test.
-    // In a real scenario, this would verify frame detection at low SNR.
-    let _ok = true; // Baseline: engine initializes
-    assert!(_ok);
+    let ok = bpsk250_awgn_decodes(6.0, 12);
+    assert_eq!(
+        ok, 12,
+        "BPSK250+Rs must decode every frame at 6 dB AWGN, got {ok}/12"
+    );
 }
 
 #[test]
 fn bpsk_snr_9db_loopback() {
-    let _fixture = BpskFixture::new("bpsk-snr-9db", "N0TEST");
-    // At 9dB, we expect cleaner detection.
-    let _ok = true;
-    assert!(_ok);
+    let ok = bpsk250_awgn_decodes(9.0, 12);
+    assert_eq!(
+        ok, 12,
+        "BPSK250+Rs must decode every frame at 9 dB AWGN, got {ok}/12"
+    );
 }
 
 #[test]
 fn bpsk_snr_12db_loopback() {
-    let _fixture = BpskFixture::new("bpsk-snr-12db", "N0TEST");
-    // At 12dB, very good conditions.
-    let _ok = true;
-    assert!(_ok);
+    let ok = bpsk250_awgn_decodes(12.0, 12);
+    assert_eq!(
+        ok, 12,
+        "BPSK250+Rs must decode every frame at 12 dB AWGN, got {ok}/12"
+    );
 }
 
 #[test]
 fn bpsk_snr_15db_loopback() {
-    let _fixture = BpskFixture::new("bpsk-snr-15db", "N0TEST");
-    // At 15dB, excellent conditions.
-    let _ok = true;
+    let ok = bpsk250_awgn_decodes(15.0, 12);
+    assert_eq!(
+        ok, 12,
+        "BPSK250+Rs must decode every frame at 15 dB AWGN, got {ok}/12"
+    );
+}
+
+#[test]
+fn bpsk_snr_below_the_floor_degrades() {
+    // The sweep above only proves decode; without a failing point it could pass on a stub receiver.
+    let ok = bpsk250_awgn_decodes(-12.0, 12);
+    assert!(
+        ok < 12,
+        "at -12 dB the link must NOT decode every frame, got {ok}/12"
+    );
+}
+
+#[test]
+fn bpsk_recovery_state_is_initially_clear() {
+    let fixture = BpskFixture::new("bpsk-recovery-initial", "N0TEST");
+    let _ok = !fixture.check_recovery();
     assert!(_ok);
 }
 

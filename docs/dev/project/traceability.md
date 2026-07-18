@@ -9,6 +9,43 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-18 — fix: repair the acceptance-criteria table and the gates behind it
+
+- **Requirement/change:** consistency audit findings 2, 3, 6, 10, 11 — the acceptance table in
+  `CLAUDE.md` had rows that could not run, rows naming tests that do not test what the row claims, and
+  no rows at all for the Winlink hardening arc.
+- **Finding — three defects, one of them a vacuous gate.**
+  1. **Three commands are not runnable as written.** `cargo test -p openpulse-core --lib session_key
+     ack::tests` fails with a usage error — cargo takes ONE positional TESTNAME. Same for the
+     CM108/GPIO and mesh-relay rows. Gates E7 (ACK auth), REQ-PTT-02/03 and E3 (relay origin auth)
+     were therefore unrunnable as documented.
+  2. **`bpsk_hardening.rs` — the acceptance test for "BPSK loopback correctness" never called
+     `receive()`** (`grep -c receive` = 0). Four of its tests were literally
+     `let _ok = true; assert!(_ok);` under names promising an SNR loopback at 6/9/12/15 dB.
+     `qpsk_hardening.rs` is TX-only for the same reason.
+  3. **The Winlink arc (8 PRs, issue #942) added zero rows**, while every comparable prior security
+     audit did.
+- **Design decision:** fix the *gate*, not just the row, where the gate was the thing that lied. The
+  four SNR tests now do what their names claim — a real AWGN round-trip through `ChannelSimHarness`
+  asserting the payload comes back — because a placeholder under an honest name is worse than no test
+  (it reads as coverage). Added `bpsk_snr_below_the_floor_degrades` so the sweep cannot pass on a stub
+  receiver: without a failing point, "decodes at every SNR" is unfalsifiable. For QPSK the row is
+  re-pointed at tests that genuinely decode, with the TX-only file named for what it does cover,
+  rather than rewriting a second fixture.
+- **Implementation:** `crates/openpulse-modem/tests/bpsk_hardening.rs` (`bpsk250_awgn_decodes` helper;
+  4 SNR tests rewritten; below-floor negative test; a duplicate `bpsk_snr_15db_loopback` removed);
+  `CLAUDE.md` (3 commands corrected to put extra filters after `--`; BPSK/QPSK rows re-pointed;
+  5 Winlink rows added; the MFSK16 crate-map line corrected — its ACK path shipped and is gated; the
+  CI row corrected to state the workflow is `disabled_manually` and the gates run locally).
+- **Tests / results (actually run):** `cargo test -p openpulse-modem --no-default-features --test
+  bpsk_hardening` **20 passed, 0 failed**. **Sabotage-verified:** with the payload comparison pointed
+  at a wrong literal, all four SNR tests FAIL ("must decode every frame at 6/9/12/15 dB AWGN, got
+  0/12"); restored → pass. **Every command written into the table was executed and selects a non-zero
+  test count**: core `-- session_key ack::tests` 19; radio `-- cm108 gpio` 12; mesh `-- impersonated…
+  authenticated…` 2; b2f aggregate-cap 2, Type C 1, header caps 3; driver cmd_hardening 2,
+  timeout_hardening 3, data_framing 7, iss_failure_paths 2; modem qpsk500_awgn_20db 1,
+  qpsk500_acquisition 1, channel_loopback 12, psk31_longframe_acquisition 2.
+
 ## 2026-07-18 — docs: finish the Type C / LZHUF removal sweep
 
 - **Requirement/change:** a consistency audit over docs/code/comments/tests (report:
