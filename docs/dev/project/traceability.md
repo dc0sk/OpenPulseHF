@@ -9,6 +9,31 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-18 — chore: commit a reproducible SBOM
+
+- **Requirement/change:** the release checklist has always listed an SBOM step (`docs/dev/release-checklist.md`,
+  marked "if applicable") and it had been skipped at every release — no SBOM existed in the repo.
+  Added as its own change rather than folded into the v0.15.0 cut, so a first-time artifact was not
+  introduced inside a release.
+- **Finding — the naive command produces a non-reproducible artifact.** `cargo sbom` stamps a fresh
+  `created` timestamp AND a random `documentNamespace` UUID on every run, and emits `packages` /
+  `relationships` in hash order. Two consecutive runs against an unchanged dependency graph differ in
+  all four. Committed as-is, the file would churn on every regeneration and no staleness check would
+  be possible.
+- **Design decision:** normalise the four volatile fields in `scripts/generate-sbom.sh` — `created` to
+  `SOURCE_DATE_EPOCH` (or today) at 00:00:00Z, `documentNamespace` derived from the workspace version
+  (one version = one document, which is closer to SPDX's intent than a random UUID), and both arrays
+  sorted. **A diff in `SBOM.spdx.json` then means the dependency graph actually changed** — the only
+  thing the artifact is for. `--check` mode makes staleness detectable, so the step can become a real
+  gate rather than a checklist item that gets skipped.
+- **Implementation:** `scripts/generate-sbom.sh` (new); `SBOM.spdx.json` (new, SPDX 2.3, 867 packages,
+  workspace v0.15.0); `docs/dev/release-checklist.md` (step rewritten, no longer "if applicable").
+- **Tests/verification (actually run):** generated twice in succession → byte-identical
+  (`DETERMINISTIC across runs`); `--check` on the committed file passes. **Sabotage-verified:** with
+  one package (`flate2`) deleted from the committed SBOM, `--check` FAILS with exit 1 and prints the
+  missing package; regenerated → passes. Independent cross-check: `oxiarc-lzhuf` is absent from the
+  package list, confirming the #948 deletion propagated to the real dependency graph.
+
 ## 2026-07-18 — test: adversarial coverage for the Winlink stack (#942 low tier)
 
 - **Requirement/change:** Winlink stack hardening backlog (#942), low tier — the test-coverage list:

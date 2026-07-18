@@ -46,12 +46,19 @@ Use this checklist when preparing a new release of OpenPulse. This guide covers 
   cargo clippy --all -- -D warnings  # Lint checks
   ```
 
-- [ ] **Generate SBOM** (if applicable)
+- [ ] **Regenerate the SBOM** (on every version bump)
   ```bash
-  # Only when bumping version (not for every patch)
-  cargo sbom --output-format spdx-json > SBOM.spdx.json
+  scripts/generate-sbom.sh          # rewrites SBOM.spdx.json
+  scripts/generate-sbom.sh --check  # fails if the committed SBOM is stale
   git add SBOM.spdx.json
   ```
+  Use the script, not `cargo sbom` directly: raw output stamps a fresh `created` timestamp, a random
+  `documentNamespace` UUID, and hash-ordered package/relationship arrays, so it differs on every run
+  even when no dependency changed. The script normalises all four, so **a diff in `SBOM.spdx.json`
+  means the dependency graph actually changed** — which is the only thing the artifact is for, and
+  what makes `--check` meaningful. Requires `cargo install cargo-sbom` and `jq`.
+
+  Attach the SBOM to the GitHub release alongside the notes.
 
 ---
 
