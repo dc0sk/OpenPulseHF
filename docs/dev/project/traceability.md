@@ -9,6 +9,25 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-18 — fix(b2f): cap repeated header fields (#942 low tier)
+
+- **Requirement/change:** Winlink stack hardening backlog (#942), low tier — "`header::decode`
+  accumulates `To:`/`File:` lines with no per-field count cap (~4–7× amplification within the 16 MiB
+  ceiling)".
+- **Finding:** both fields `push` into a `Vec` with no bound. ~7 bytes of wire per `To:` line becomes
+  a `String` plus its allocation overhead, so a header that is entirely legal under the decompressed
+  ceiling still amplifies several-fold. Same shape for `File:`.
+- **Design decision:** reject rather than truncate. Silently dropping recipients past a cap would
+  deliver a message to fewer addressees than it names — a correctness bug worse than the DoS it
+  prevents. Limits (64 recipients, 128 attachments) sit far above any real Winlink message.
+- **Implementation:** `crates/openpulse-b2f/src/header.rs` (`MAX_TO`, `MAX_ATTACHMENTS`, bounds checks).
+- **Tests:** `header_decode_caps_repeated_to_lines`, `header_decode_caps_repeated_file_lines`, and
+  `header_decode_allows_a_realistic_multi_recipient_message` (8 recipients + 4 attachments must still
+  decode, so the caps can't be met by breaking ordinary mail).
+- **Test results (actually run):** `cargo test -p openpulse-b2f --no-default-features` **18 passed,
+  0 failed**. **Sabotage-verified:** both cap tests were written first and FAILED against the unfixed
+  code ("accepted 10000 recipients with no cap").
+
 ## 2026-07-18 — refactor(b2f): delete the unverified Type C (LZHUF) path and correct the shipped claim (#942 low tier)
 
 - **Requirement/change:** Winlink stack hardening backlog (#942), low tier — "Type C (LZHUF) send path

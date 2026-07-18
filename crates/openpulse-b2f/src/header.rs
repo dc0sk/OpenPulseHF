@@ -44,6 +44,14 @@ pub fn encode(h: &WlHeader) -> Vec<u8> {
     out.into_bytes()
 }
 
+/// Most `To:` recipients accepted in one header. Bounds the amplification from a header that is
+/// legal under the decompressed-size ceiling but repeats a cheap field: ~7 bytes of wire per entry
+/// becomes a `String` plus its allocation overhead. A real Winlink message has a handful.
+const MAX_TO: usize = 64;
+
+/// Most `File:` attachment entries accepted in one header — same amplification shape as `MAX_TO`.
+const MAX_ATTACHMENTS: usize = 128;
+
 /// Decode a header block from bytes.
 pub fn decode(data: &[u8]) -> Result<WlHeader, B2fError> {
     let text = std::str::from_utf8(data).map_err(|_| B2fError::InvalidHeader("non-UTF8".into()))?;
@@ -67,7 +75,14 @@ pub fn decode(data: &[u8]) -> Result<WlHeader, B2fError> {
                 "mid" => mid = val.to_string(),
                 "date" => date = val.to_string(),
                 "from" => from = val.to_string(),
-                "to" => to.push(val.to_string()),
+                "to" => {
+                    if to.len() >= MAX_TO {
+                        return Err(B2fError::InvalidHeader(format!(
+                            "more than {MAX_TO} To: recipients"
+                        )));
+                    }
+                    to.push(val.to_string());
+                }
                 "subject" => subject = val.to_string(),
                 "body" => {
                     body = val
@@ -80,6 +95,11 @@ pub fn decode(data: &[u8]) -> Result<WlHeader, B2fError> {
                         .parse()
                         .map_err(|_| B2fError::InvalidHeader("bad file size".into()))?;
                     if parts.len() == 2 {
+                        if attachments.len() >= MAX_ATTACHMENTS {
+                            return Err(B2fError::InvalidHeader(format!(
+                                "more than {MAX_ATTACHMENTS} File: entries"
+                            )));
+                        }
                         attachments.push(AttachmentInfo {
                             name: parts[1].to_string(),
                             size: s,
