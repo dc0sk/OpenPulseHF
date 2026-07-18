@@ -7,7 +7,8 @@ last_updated: 2026-07-08
 
 # Backlog
 
-**Scope:** this file is the register of *open* work. Completed work lives in
+**Scope:** this file is the register of *open* work. What 1.0 requires (and explicitly does not) is
+proposed in [release-1.0-criteria.md](release-1.0-criteria.md). Completed work lives in
 [roadmap.md](roadmap.md) (phase history with PR numbers) and per-requirement status lives in
 [traceability-matrix.md](traceability-matrix.md) (REQ/CAP coverage). Do not re-list shipped items
 here — an entry in this file should be something somebody could still pick up.

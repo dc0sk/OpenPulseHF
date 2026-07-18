@@ -673,6 +673,7 @@ External modem/DSP references (gnuradio FLL band-edge, liquid-dsp framesync, dan
 | Peer query and relay wire format | `docs/dev/peer-query-relay-wire.md` |
 | Regulatory compliance | `docs/regulatory.md` |
 | Roadmap and phase gates | `docs/dev/project/roadmap.md` |
+| What 1.0 requires (draft criteria + explicit non-goals) | `docs/dev/project/release-1.0-criteria.md` |
 | Requirements | `docs/dev/requirements.md` |
 | Architecture | `docs/dev/design/architecture.md` |
 | PKI tooling | `docs/dev/pki/pki-tooling-architecture.md` |
