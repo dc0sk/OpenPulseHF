@@ -1,9 +1,6 @@
 use openpulse_b2f::{
     banner,
-    compress::{
-        compress_gzip, compress_lzhuf, compress_lzhuf_winlink, decompress_gzip, decompress_lzhuf,
-        decompress_lzhuf_compat, decompress_lzhuf_winlink,
-    },
+    compress::{compress_gzip, decompress_gzip},
     frame::{self, B2fFrame, FsAnswer, ProposalType},
     header::{self, AttachmentInfo, WlHeader},
     B2fSession, SessionRole,
@@ -96,65 +93,6 @@ fn gzip_compress_decompress() {
     );
     let decompressed = decompress_gzip(&compressed).unwrap();
     assert_eq!(decompressed, data);
-}
-
-#[test]
-fn lzhuf_round_trip() {
-    let data: Vec<u8> = b"The quick brown fox jumps over the lazy dog. ".repeat(10);
-    let compressed = compress_lzhuf(&data).unwrap();
-    assert!(
-        compressed.len() < data.len() + 4,
-        "LZHUF should compress repetitive data"
-    );
-    let decompressed = decompress_lzhuf(&compressed).unwrap();
-    assert_eq!(decompressed, data);
-}
-
-#[test]
-fn lzhuf_bad_input_error() {
-    assert!(
-        decompress_lzhuf(b"bad").is_err(),
-        "truncated input must error"
-    );
-}
-
-#[test]
-fn lzhuf_winlink_round_trip() {
-    let data: Vec<u8> = b"The quick brown fox jumps over the lazy dog. ".repeat(10);
-    let compressed = compress_lzhuf_winlink(&data).unwrap();
-    assert!(
-        compressed.len() >= 4,
-        "compressed output should be non-trivial"
-    );
-    let decompressed = decompress_lzhuf_winlink(&compressed).unwrap();
-    assert_eq!(decompressed, data);
-}
-
-#[test]
-fn lzhuf_winlink_format_differs_from_internal() {
-    // Use a payload large enough that the length prefix bytes differ between BE and LE.
-    let data = b"Hello from Winlink! ".repeat(15); // 300 bytes > 255
-    let internal = compress_lzhuf(&data).unwrap();
-    let winlink = compress_lzhuf_winlink(&data).unwrap();
-    // Both have 4-byte length prefixes, but BE vs LE differ for lengths > 255.
-    assert_ne!(
-        &internal[..4],
-        &winlink[..4],
-        "BE and LE prefixes should differ for payload length > 255"
-    );
-    // Both must decompress to the original payload.
-    assert_eq!(decompress_lzhuf(&internal).unwrap(), data.to_vec());
-    assert_eq!(decompress_lzhuf_winlink(&winlink).unwrap(), data.to_vec());
-}
-
-#[test]
-fn lzhuf_compat_accepts_both_length_prefixes() {
-    let data = b"Winlink Type C compatibility payload".repeat(12);
-    let internal = compress_lzhuf(&data).unwrap();
-    let winlink = compress_lzhuf_winlink(&data).unwrap();
-
-    assert_eq!(decompress_lzhuf_compat(&internal).unwrap(), data.to_vec());
-    assert_eq!(decompress_lzhuf_compat(&winlink).unwrap(), data.to_vec());
 }
 
 // ── Session state machine ─────────────────────────────────────────────────────
@@ -253,89 +191,6 @@ fn session_irs_rejects() {
         "ISS should be Done after all proposals rejected"
     );
     assert!(irs_out[0].starts_with("FS"));
-}
-
-#[test]
-fn session_receive_data_type_c_accepts_internal_and_winlink_prefixes() {
-    let mut irs = B2fSession::new(SessionRole::Irs);
-
-    // Drive IRS into Transfer state with one accepted Type C proposal.
-    let fc = frame::encode(&B2fFrame::Fc {
-        proposal_type: ProposalType::C,
-        mid: "MSG003".into(),
-        size: 64,
-        date: "20260504120000".into(),
-    });
-    irs.handle_line(&fc).unwrap();
-    let fs = irs.handle_line(&frame::encode(&B2fFrame::Ff)).unwrap();
-    assert_eq!(fs.len(), 1);
-    assert!(fs[0].starts_with("FS "));
-
-    let payload = b"compat body".repeat(8);
-    let winlink = compress_lzhuf_winlink(&payload).unwrap();
-    let internal = compress_lzhuf(&payload).unwrap();
-
-    // First accepted payload uses Winlink LE format.
-    let out1 = irs.receive_data(winlink).unwrap();
-    assert_eq!(out1, payload);
-
-    // Rebuild IRS for BE-format fallback path.
-    let mut irs2 = B2fSession::new(SessionRole::Irs);
-    irs2.handle_line(&fc).unwrap();
-    irs2.handle_line(&frame::encode(&B2fFrame::Ff)).unwrap();
-    let out2 = irs2.receive_data(internal).unwrap();
-    assert_eq!(out2, payload);
-}
-
-#[test]
-fn session_iss_type_c_irs_roundtrip() {
-    let body = b"Winlink Type C round-trip body".to_vec();
-
-    // ISS proposes with Type C (LZHUF Winlink-compatible).
-    let mut iss = B2fSession::new(SessionRole::Iss);
-    iss.queue_message_type_c(
-        WlHeader {
-            mid: "MSG_TC01".into(),
-            date: "2026/05/19 10:00".into(),
-            from: "W1AW@winlink.org".into(),
-            to: vec!["W2AW@winlink.org".into()],
-            subject: "Type C test".into(),
-            size: body.len() as u32,
-            body: body.len() as u32,
-            attachments: vec![],
-        },
-        body.clone(),
-    )
-    .unwrap();
-
-    let mut irs = B2fSession::new(SessionRole::Irs);
-
-    // Handshake: IRS banner → ISS emits FC (type=C) + FF.
-    let iss_out = iss.handle_line(&banner::encode("W2AW")).unwrap();
-    assert_eq!(iss_out.len(), 2);
-    assert!(iss_out[0].starts_with("FC C"), "FC proposal must be Type C");
-    assert!(iss_out[1].trim_end_matches('\r') == "FF");
-
-    // IRS receives FC + FF → sends FS accept.
-    irs.handle_line(&iss_out[0]).unwrap();
-    let irs_out = irs.handle_line(&iss_out[1]).unwrap();
-    assert_eq!(irs_out.len(), 1);
-    assert!(irs_out[0].starts_with("FS"));
-
-    // ISS receives FS → stages LZHUF-compressed data.
-    iss.handle_line(&irs_out[0]).unwrap();
-    let chunks = iss.drain_pending_data();
-    assert_eq!(chunks.len(), 1);
-    assert!(iss.is_done());
-
-    // IRS decompresses via decompress_lzhuf_compat (accepts Winlink LE prefix).
-    let decompressed = irs.receive_data(chunks[0].clone()).unwrap();
-    let sep = decompressed
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .unwrap();
-    assert_eq!(&decompressed[sep + 4..], body.as_slice());
-    assert!(irs.is_done());
 }
 
 #[test]
@@ -495,4 +350,43 @@ fn session_aggregate_cap_does_not_trip_on_a_normal_batch() {
         irs.receive_data(blob.clone())
             .unwrap_or_else(|e| panic!("normal 64 KiB message {i} rejected: {e:?}"));
     }
+}
+
+// ── Type C (LZHUF) is unsupported, and says so ────────────────────────────────
+
+/// Type C compatibility was never verified against real Winlink (LH5 vs FBB's Okumura LZHUF are
+/// different bitstreams), so the codec was removed. An inbound Type C proposal must be answered
+/// `Reject` — an honest "cannot decode" — rather than accepted and silently mis-decoded.
+#[test]
+fn irs_rejects_a_type_c_proposal_and_accepts_type_d() {
+    let mut irs = B2fSession::new(SessionRole::Irs);
+    for (i, proposal_type) in [ProposalType::C, ProposalType::D, ProposalType::C]
+        .into_iter()
+        .enumerate()
+    {
+        let fc = frame::encode(&B2fFrame::Fc {
+            proposal_type,
+            mid: format!("MSG{i:04}"),
+            size: 64,
+            date: "20260718120000".into(),
+        });
+        irs.handle_line(&fc).unwrap();
+    }
+    let out = irs.handle_line(&frame::encode(&B2fFrame::Ff)).unwrap();
+    assert_eq!(out.len(), 1);
+
+    let decoded = frame::decode(out[0].trim_end_matches('\r')).unwrap();
+    let B2fFrame::Fs { answers } = decoded else {
+        panic!("expected an FS frame, got {decoded:?}");
+    };
+    assert_eq!(
+        answers,
+        vec![FsAnswer::Reject, FsAnswer::Accept, FsAnswer::Reject],
+        "Type C must be rejected and Type D accepted, one answer per proposal"
+    );
+    assert_eq!(
+        irs.accepted_count(),
+        1,
+        "only the Type D proposal should count as accepted"
+    );
 }

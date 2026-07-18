@@ -515,7 +515,7 @@ signatures + JSON body) exceeds the 255-byte frame payload limit.  The SAR layer
 |-----------|----------|----------------|
 | LZ4 | Session-layer payload compression | `lz4_flex` (pure Rust) |
 | Gzip | B2F Type-D message compression | `flate2` |
-| LZHUF LH5 | B2F Type-C legacy Winlink messages | `oxiarc-lzhuf` |
+| ~~LZHUF LH5~~ | B2F Type-C — **not supported**, removed in PR #948 | — |
 
 ### Session-layer LZ4
 
@@ -527,17 +527,18 @@ The compression algorithm selected is negotiated in the Ed25519-signed CONREQ/CO
 handshake — it is part of the signed body, so a man-in-the-middle cannot downgrade the
 compression selection without invalidating the signature.
 
-### LZHUF LH5 frame format
+### Type C (LZHUF) — not supported
 
-The internal helper prepends a 4-byte big-endian original-length field; the
-`compress_lzhuf_winlink` variant uses a 4-byte little-endian prefix (the classic Okumura
-`LZHUF.C` convention).  The decompressor caps the declared length at 16 MiB before
-allocating memory to prevent OOM from malformed frames.  **External Winlink Type C
-compatibility is unverified** — it has never been tested against a captured RMS
-Express / RMS Gateway blob, and two things are uncertain: the length-prefix convention
-*and* the LZHUF variant (this uses LHA `LH5` via `oxiarc-lzhuf`, whereas FBB historically
-used the classic Okumura LZHUF — a different bitstream).  Closing the gap needs a real
-Winlink Type C test vector.  Not a production risk: the CMS gateway sends Type D (Gzip).
+An LHA `LH5` implementation shipped here and was **removed in PR #948**. It never had a production
+caller, and its external Winlink compatibility was never verified — nor could it have held: FBB
+historically uses the classic Okumura LZHUF, a *different bitstream* from `LH5`, and the
+length-prefix convention was also unconfirmed. Keeping it implied a capability the crate did not
+have.
+
+An inbound Type C proposal is now answered `Reject` — an honest "cannot decode this" rather than a
+silent corrupt decode. The CMS gateway path is unaffected: it uses Type D (Gzip). Restoring Type C
+requires a captured RMS Express / RMS Gateway Type C blob to validate the bitstream and the prefix
+against.
 
 ---
 
