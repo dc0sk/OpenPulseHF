@@ -7,14 +7,14 @@
     ]
   },
   "dataLicense": "CC0-1.0",
-  "documentNamespace": "https://spdx.org/spdxdocs/OpenPulseHF-0.15.0",
+  "documentNamespace": "https://spdx.org/spdxdocs/OpenPulseHF-0.16.0",
   "files": [
     {
       "SPDXID": "SPDXRef-File-bpsk_plugin",
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -28,7 +28,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -42,7 +42,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -56,7 +56,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -70,7 +70,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -84,7 +84,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -98,7 +98,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -112,7 +112,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -126,7 +126,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -140,7 +140,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -154,7 +154,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -168,7 +168,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -182,7 +182,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -196,7 +196,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -210,7 +210,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -224,7 +224,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -238,7 +238,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -252,7 +252,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -266,7 +266,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -280,7 +280,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -294,7 +294,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -308,7 +308,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -322,7 +322,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -336,7 +336,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -350,7 +350,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -364,7 +364,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -378,7 +378,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -392,7 +392,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -406,7 +406,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -420,7 +420,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -434,7 +434,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -448,7 +448,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -462,7 +462,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -476,7 +476,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -490,7 +490,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -504,7 +504,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -518,7 +518,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -532,7 +532,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -546,7 +546,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -560,7 +560,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -574,7 +574,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -588,7 +588,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -602,7 +602,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -616,7 +616,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -630,7 +630,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -644,7 +644,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -658,7 +658,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -672,7 +672,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -686,7 +686,7 @@
       "checksums": [
         {
           "algorithm": "SHA1",
-          "checksumValue": "064bec152c023771553782b1df375958d066253a"
+          "checksumValue": "659a9315f3d4f6505a217480a252fd7c81cd96bc"
         }
       ],
       "fileName": "./Cargo.lock",
@@ -1625,13 +1625,13 @@
       "versionInfo": "1.6.2"
     },
     {
-      "SPDXID": "SPDXRef-Package-bpsk-plugin-0.15.0",
+      "SPDXID": "SPDXRef-Package-bpsk-plugin-0.16.0",
       "description": "BPSK modulation/demodulation plugin for OpenPulse",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "bpsk-plugin",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
       "SPDXID": "SPDXRef-Package-bumpalo-3.20.2",
@@ -4196,13 +4196,13 @@
       "versionInfo": "1.2.2"
     },
     {
-      "SPDXID": "SPDXRef-Package-fsk4-plugin-0.15.0",
+      "SPDXID": "SPDXRef-Package-fsk4-plugin-0.16.0",
       "description": "4FSK ACK-frame modulation plugin for OpenPulse HPX control frames",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "fsk4-plugin",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
       "SPDXID": "SPDXRef-Package-futures-0.3.32",
@@ -5935,13 +5935,13 @@
       "versionInfo": "0.3.98"
     },
     {
-      "SPDXID": "SPDXRef-Package-js8-plugin-0.15.0",
+      "SPDXID": "SPDXRef-Package-js8-plugin-0.16.0",
       "description": "JS8-compatible 8-GFSK weak-signal modulation plugin (FF-15 station discovery/rendezvous)",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "js8-plugin",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
       "SPDXID": "SPDXRef-Package-kasuari-0.4.12",
@@ -6707,13 +6707,13 @@
       "versionInfo": "0.28.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-mfsk16-plugin-0.15.0",
+      "SPDXID": "SPDXRef-Package-mfsk16-plugin-0.16.0",
       "description": "Constant-envelope non-coherent 16-GFSK weak-signal sub-floor waveform for OpenPulseHF",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "mfsk16-plugin",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
       "SPDXID": "SPDXRef-Package-mime-0.3.17",
@@ -7713,13 +7713,13 @@
       "versionInfo": "0.6.1"
     },
     {
-      "SPDXID": "SPDXRef-Package-ofdm-plugin-0.15.0",
+      "SPDXID": "SPDXRef-Package-ofdm-plugin-0.16.0",
       "description": "OFDM modulation/demodulation plugin for OpenPulse (FF-4)",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "ofdm-plugin",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
       "SPDXID": "SPDXRef-Package-once--cell--polyfill-1.70.2",
@@ -7770,81 +7770,81 @@
       "versionInfo": "0.3.1"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-ardop-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-ardop-0.16.0",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-ardop",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-audio-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-audio-0.16.0",
       "description": "Audio backend implementations for the OpenPulse software modem",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-audio",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-b2f-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-b2f-0.16.0",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-b2f",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-b2f-driver-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-b2f-driver-0.16.0",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-b2f-driver",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-channel-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-channel-0.16.0",
       "description": "Channel simulation models for OpenPulseHF (AWGN, Gilbert-Elliott, Watterson, QRN/QRM/QSB/Chirp)",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-channel",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-cli-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-cli-0.16.0",
       "description": "Command-line interface for the OpenPulse software modem",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-cli",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-config-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-config-0.16.0",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-config",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-core-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-core-0.16.0",
       "description": "Core traits, types and frame format for the OpenPulse software modem",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-core",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-daemon-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-daemon-0.16.0",
       "description": "NDJSON-over-TCP control port for the OpenPulseHF server daemon",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-daemon",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
       "SPDXID": "SPDXRef-Package-openpulse-dict-trainer-0.2.0",
@@ -7855,179 +7855,179 @@
       "versionInfo": "0.2.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-discovery-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-discovery-0.16.0",
       "description": "JS8-based station discovery: OPHF hint codec, station table, T/R scheduler, discovery/rendezvous state machines (FF-15)",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-discovery",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-dsp-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-dsp-0.16.0",
       "description": "DSP primitives: FIR filter, RRC coefficients, Gardner timing recovery, Costas PLL",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-dsp",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-filexfer-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-filexfer-0.16.0",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-filexfer",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-freedv-auth-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-freedv-auth-0.16.0",
       "description": "FreeDV authenticated voice shim: Ed25519-signed auth beacons over the FreeDV UDP data port",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-freedv-auth",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-gateway-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-gateway-0.16.0",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-gateway",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-gpu-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-gpu-0.16.0",
       "description": "GPU compute acceleration for OpenPulse DSP kernels",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-gpu",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-keystore-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-keystore-0.16.0",
       "description": "Secret storage for OpenPulse: a master-password-encrypted file keystore (Argon2id + ChaCha20-Poly1305), with an OS-keychain backend.",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-keystore",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-kiss-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-kiss-0.16.0",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-kiss",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-linksec-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-linksec-0.16.0",
       "description": "Control-channel link security for OpenPulse: a PSK-authenticated, encrypted Noise channel and the non-loopback auth gate (REQ-SEC-CTL-01/02).",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-linksec",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-linksim-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-linksim-0.16.0",
       "description": "Two-station bidirectional ARQ link simulator: proves effective two-way transfer rates under simulated SNR / noise conditions",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-linksim",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-mesh-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-mesh-0.16.0",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-mesh",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-modem-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-modem-0.16.0",
       "description": "Modem engine for OpenPulse – wires plugins and audio backends together",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-modem",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-panel-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-panel-0.16.0",
       "description": "Operator UI panel for OpenPulseHF (iced): controls band, spectrum, waterfall, ladder, and a tabbed info/config/messages/log panel, with Dark/Light/Contrast/System themes; connects to the openpulse-daemon control port.",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-panel",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-qsy-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-qsy-0.16.0",
       "description": "QSY frequency-agility protocol for OpenPulseHF: frame codec, state machine, and rig scanner",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-qsy",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-radio-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-radio-0.16.0",
       "description": "PTT controller trait and backends for OpenPulseHF (serial RTS/DTR, VOX, rigctld, generic serial CAT)",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-radio",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-repeater-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-repeater-0.16.0",
       "description": "Cross-band repeater for OpenPulseHF: relays decoded frames from rig_a to rig_b",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-repeater",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-testbench-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-testbench-0.16.0",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-testbench",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-testmatrix-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-testmatrix-0.16.0",
       "description": "Comprehensive signal-path test matrix for OpenPulseHF",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-testmatrix",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-tui-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-tui-0.16.0",
       "description": "OpenPulse TUI frontend",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-tui",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-openpulse-twinview-0.15.0",
+      "SPDXID": "SPDXRef-Package-openpulse-twinview-0.16.0",
       "description": "Combined both-directions viewer: one window over two openpulse-server daemons (the twin-station rig)",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "openpulse-twinview",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
       "SPDXID": "SPDXRef-Package-option-ext-0.2.0",
@@ -8421,13 +8421,13 @@
       "versionInfo": "0.11.3"
     },
     {
-      "SPDXID": "SPDXRef-Package-pilot-plugin-0.15.0",
+      "SPDXID": "SPDXRef-Package-pilot-plugin-0.16.0",
       "description": "Pilot-framed waveform plugin for OpenPulse (in-band pilot-aided carrier tracking)",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "pilot-plugin",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
       "SPDXID": "SPDXRef-Package-pin-project-1.1.12",
@@ -8827,13 +8827,13 @@
       "versionInfo": "1.0.18"
     },
     {
-      "SPDXID": "SPDXRef-Package-psk8-plugin-0.15.0",
+      "SPDXID": "SPDXRef-Package-psk8-plugin-0.16.0",
       "description": "8PSK modulation/demodulation plugin for OpenPulse",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "psk8-plugin",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
       "SPDXID": "SPDXRef-Package-pxfm-0.1.29",
@@ -8852,22 +8852,22 @@
       "versionInfo": "0.1.29"
     },
     {
-      "SPDXID": "SPDXRef-Package-qam64-plugin-0.15.0",
+      "SPDXID": "SPDXRef-Package-qam64-plugin-0.16.0",
       "description": "64QAM modulation/demodulation plugin for OpenPulse",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "qam64-plugin",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-qpsk-plugin-0.15.0",
+      "SPDXID": "SPDXRef-Package-qpsk-plugin-0.16.0",
       "description": "QPSK modulation/demodulation plugin for OpenPulse",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "qpsk-plugin",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
       "SPDXID": "SPDXRef-Package-quick-xml-0.39.4",
@@ -9742,13 +9742,13 @@
       "versionInfo": "1.0.23"
     },
     {
-      "SPDXID": "SPDXRef-Package-scfdma-plugin-0.15.0",
+      "SPDXID": "SPDXRef-Package-scfdma-plugin-0.16.0",
       "description": "SC-FDMA (DFT-spread OFDM) modulation plugin for OpenPulse (FF-12)",
       "downloadLocation": "NONE",
       "licenseConcluded": "GPL-3.0-or-later",
       "licenseDeclared": "GPL-3.0-or-later",
       "name": "scfdma-plugin",
-      "versionInfo": "0.15.0"
+      "versionInfo": "0.16.0"
     },
     {
       "SPDXID": "SPDXRef-Package-scoped-tls-1.0.1",
@@ -14794,22 +14794,22 @@
       "spdxElementId": "SPDXRef-DOCUMENT"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-bpsk_plugin"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-fsk4-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-fsk4-plugin-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-fsk4_plugin"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-js8-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-js8-plugin-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-js8_plugin"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-mfsk16-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-mfsk16-plugin-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-mfsk16_plugin"
     },
@@ -14819,12 +14819,12 @@
       "spdxElementId": "SPDXRef-File-migrate"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-ofdm-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-ofdm-plugin-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-ofdm_plugin"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-cli-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-cli-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse"
     },
@@ -14834,177 +14834,177 @@
       "spdxElementId": "SPDXRef-File-openpulse-dict-trainer"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-gateway-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-gateway-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse-gateway"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-kiss-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-kiss-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse-kisstnc"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-linksim-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-linksim-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse-linksim"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-linksim-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-linksim-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse-linksim-gui"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-mesh-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-mesh-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse-mesh"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-panel-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-panel-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse-panel"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-daemon-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-daemon-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse-server"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-testbench-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-testbench-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse-testbench"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-testmatrix-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-testmatrix-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse-testmatrix"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-ardop-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-ardop-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse-tnc"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-tui-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-tui-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse-tui"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-twinview-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-twinview-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse-twinview"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-ardop-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-ardop-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_ardop"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_audio"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-b2f-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-b2f-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_b2f"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-b2f-driver-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-b2f-driver-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_b2f_driver"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-channel-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-channel-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_channel"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-config-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-config-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_config"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_core"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-daemon-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-daemon-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_daemon"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-discovery-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-discovery-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_discovery"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-dsp-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-dsp-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_dsp"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-filexfer-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-filexfer-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_filexfer"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-freedv-auth-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-freedv-auth-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_freedv_auth"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-gpu-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-gpu-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_gpu"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-keystore-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-keystore-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_keystore"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-kiss-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-kiss-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_kiss"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-linksec-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-linksec-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_linksec"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-linksim-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-linksim-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_linksim"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-mesh-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-mesh-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_mesh"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_modem"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-qsy-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-qsy-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_qsy"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-radio-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-radio-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_radio"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-repeater-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-repeater-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-openpulse_repeater"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-pilot-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-pilot-plugin-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-pilot_plugin"
     },
@@ -15019,22 +15019,22 @@
       "spdxElementId": "SPDXRef-File-pki_tooling"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-psk8-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-psk8-plugin-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-psk8_plugin"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-qam64-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-qam64-plugin-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-qam64_plugin"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-qpsk_plugin"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-scfdma-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-scfdma-plugin-0.16.0",
       "relationshipType": "GENERATED_FROM",
       "spdxElementId": "SPDXRef-File-scfdma_plugin"
     },
@@ -15881,22 +15881,22 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-num-complex-0.4.6",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-bpsk-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-bpsk-plugin-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-bpsk-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-bpsk-plugin-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-dsp-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-dsp-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-bpsk-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-bpsk-plugin-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-gpu-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-gpu-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-bpsk-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-bpsk-plugin-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-proc-macro2-1.0.106",
@@ -17794,9 +17794,9 @@
       "spdxElementId": "SPDXRef-Package-form--urlencoded-1.2.2"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-fsk4-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-fsk4-plugin-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-futures-channel-0.3.32",
@@ -19651,12 +19651,12 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-flate2-1.1.9",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-js8-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-js8-plugin-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-js8-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-js8-plugin-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-hashbrown-0.16.1",
@@ -19999,14 +19999,14 @@
       "spdxElementId": "SPDXRef-Package-metal-0.28.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-js8-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-js8-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-mfsk16-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-mfsk16-plugin-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-mfsk16-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-mfsk16-plugin-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-adler2-2.0.1",
@@ -21031,607 +21031,607 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-num-complex-0.4.6",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-ofdm-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-ofdm-plugin-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-ofdm-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-ofdm-plugin-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-dsp-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-dsp-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-ofdm-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-ofdm-plugin-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rustfft-6.4.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-ofdm-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-ofdm-plugin-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-anyhow-1.0.102",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-clap-4.6.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-fsk4-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-fsk4-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-ofdm-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-ofdm-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-config-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-config-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-qsy-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-qsy-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-radio-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-radio-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-pilot-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-pilot-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-psk8-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-psk8-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-qam64-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-qam64-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-scfdma-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-scfdma-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.149",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.18",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-subscriber-0.3.23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-ardop-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-cpal-0.15.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-audio-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-audio-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-audio-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-audio-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-audio-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-audio-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-flate2-1.1.9",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-b2f-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-b2f-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.18",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-b2f-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-b2f-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-b2f-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-b2f-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-b2f-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-b2f-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-b2f-driver-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-b2f-driver-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.18",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-b2f-driver-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-b2f-driver-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rand--distr-0.4.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-channel-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-channel-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rand-0.8.6",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-channel-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-channel-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rustfft-6.4.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-channel-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-channel-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde-1.0.228",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-channel-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-channel-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.18",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-channel-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-channel-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-anyhow-1.0.102",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-clap-4.6.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-flate2-1.1.9",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-fsk4-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-fsk4-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-mfsk16-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-mfsk16-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-ofdm-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-ofdm-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-channel-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-channel-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-config-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-config-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-daemon-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-daemon-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-qsy-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-qsy-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-radio-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-radio-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-pilot-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-pilot-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-psk8-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-psk8-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-qam64-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-qam64-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-reqwest-0.12.28",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-scfdma-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-scfdma-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.149",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde-1.0.228",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tar-0.4.46",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-subscriber-0.3.23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-cli-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-dirs-5.0.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-config-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-config-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-ed25519-dalek-2.2.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-config-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-config-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rand-0.8.6",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-config-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-config-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde-1.0.228",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-config-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-config-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.18",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-config-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-config-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-toml-0.8.23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-config-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-config-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-config-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-config-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-appender-0.2.5",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-config-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-config-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-subscriber-0.3.23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-config-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-config-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-ed25519-dalek-2.2.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-core-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-core-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-hkdf-0.12.4",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-core-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-core-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-hmac-0.12.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-core-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-core-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-lz4--flex-0.11.6",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-core-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-core-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-ml-dsa-0.1.0-rc.11",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-core-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-core-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-ml-kem-0.3.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-core-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-core-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rand-0.8.6",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-core-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-core-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-reed-solomon-0.2.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-core-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-core-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.149",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-core-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-core-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde-1.0.228",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-core-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-core-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-sha2-0.10.9",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-core-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-core-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.18",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-core-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-core-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-core-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-core-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-x25519-dalek-2.0.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-core-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-core-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-zstd-0.13.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-core-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-core-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-fsk4-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-fsk4-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-futures-util-0.3.32",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-mfsk16-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-mfsk16-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-ofdm-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-ofdm-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-channel-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-channel-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-config-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-config-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-discovery-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-discovery-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-filexfer-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-filexfer-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-gpu-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-gpu-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-linksec-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-linksec-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-qsy-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-qsy-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-radio-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-radio-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-repeater-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-repeater-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-pilot-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-pilot-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-psk8-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-psk8-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-qam64-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-qam64-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rand-0.8.6",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-scfdma-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-scfdma-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.149",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde-1.0.228",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-sha2-0.10.9",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-sysinfo-0.30.13",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.18",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tokio-tungstenite-0.23.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-subscriber-0.3.23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-daemon-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-zstd-0.13.3",
@@ -21639,1004 +21639,1004 @@
       "spdxElementId": "SPDXRef-Package-openpulse-dict-trainer-0.2.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-js8-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-js8-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-discovery-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-discovery-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-discovery-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-discovery-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-sha2-0.10.9",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-discovery-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-discovery-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-num-complex-0.4.6",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-dsp-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-dsp-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rustfft-6.4.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-dsp-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-dsp-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-dsp-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-dsp-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-ed25519-dalek-2.2.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-filexfer-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-filexfer-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-filexfer-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-filexfer-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.18",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-filexfer-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-filexfer-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-hex-0.4.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-freedv-auth-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-freedv-auth-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-freedv-auth-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-freedv-auth-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rand-0.8.6",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-freedv-auth-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-freedv-auth-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.149",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-freedv-auth-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-freedv-auth-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde-1.0.228",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-freedv-auth-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-freedv-auth-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.18",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-freedv-auth-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-freedv-auth-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-freedv-auth-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-freedv-auth-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-freedv-auth-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-freedv-auth-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-anyhow-1.0.102",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-gateway-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-gateway-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-clap-4.6.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-gateway-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-gateway-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-b2f-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-b2f-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-gateway-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-gateway-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-b2f-driver-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-b2f-driver-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-gateway-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-gateway-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-config-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-config-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-gateway-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-gateway-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-gateway-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-gateway-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-subscriber-0.3.23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-gateway-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-gateway-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-bytemuck-1.25.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-gpu-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-gpu-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-pollster-0.4.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-gpu-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-gpu-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.18",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-gpu-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-gpu-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-gpu-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-gpu-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-wgpu-0.20.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-gpu-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-gpu-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-argon2-0.5.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-keystore-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-keystore-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-chacha20poly1305-0.10.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-keystore-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-keystore-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-keyring-3.6.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-keystore-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-keystore-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-config-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-config-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-keystore-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-keystore-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rand-0.8.6",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-keystore-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-keystore-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.149",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-keystore-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-keystore-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.18",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-keystore-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-keystore-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-anyhow-1.0.102",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-clap-4.6.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-fsk4-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-fsk4-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-ofdm-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-ofdm-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-config-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-config-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-radio-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-radio-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-pilot-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-pilot-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-psk8-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-psk8-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-qam64-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-qam64-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-scfdma-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-scfdma-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.149",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.18",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-subscriber-0.3.23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-kiss-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-snow-0.9.6",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksec-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksec-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.18",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksec-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksec-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksec-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksec-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-clap-4.6.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-eframe-0.29.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-egui--plot-0.29.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-egui-0.29.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-fsk4-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-fsk4-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-mfsk16-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-mfsk16-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-ofdm-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-ofdm-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-channel-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-channel-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-daemon-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-daemon-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-dsp-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-dsp-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-gpu-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-gpu-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-pilot-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-pilot-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-png-0.18.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-psk8-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-psk8-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-qam64-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-qam64-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-scfdma-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-scfdma-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.149",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde-1.0.228",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-sysinfo-0.30.13",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-linksim-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-anyhow-1.0.102",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-clap-4.6.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-ed25519-dalek-2.2.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-fsk4-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-fsk4-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-config-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-config-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-psk8-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-psk8-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.18",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-subscriber-0.3.23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-mesh-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-channel-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-channel-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-dsp-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-dsp-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rand-0.8.6",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rustfft-6.4.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.149",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde-1.0.228",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-modem-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-crossbeam-channel-0.5.15",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-panel-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-panel-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-ewebsock-0.6.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-panel-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-panel-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-iced-0.13.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-panel-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-panel-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-daemon-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-daemon-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-panel-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-panel-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-linksec-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-linksec-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-panel-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-panel-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-panel-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-panel-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.149",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-panel-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-panel-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-panel-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-panel-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-base64-0.22.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-qsy-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-qsy-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-ed25519-dalek-2.2.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-qsy-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-qsy-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-qsy-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-qsy-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-radio-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-radio-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-qsy-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-qsy-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rand-0.8.6",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-qsy-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-qsy-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.18",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-qsy-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-qsy-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-qsy-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-qsy-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-gpiocdev-0.7.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-radio-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-radio-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde-1.0.228",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-radio-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-radio-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serialport-4.9.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-radio-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-radio-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.18",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-radio-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-radio-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-toml-0.8.23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-radio-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-radio-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-radio-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-radio-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-repeater-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-repeater-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-repeater-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-repeater-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-radio-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-radio-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-repeater-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-repeater-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.18",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-repeater-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-repeater-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-repeater-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-repeater-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-crossbeam-channel-0.5.15",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-eframe-0.29.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-egui--plot-0.29.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-egui-0.29.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-fsk4-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-fsk4-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-ofdm-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-ofdm-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-channel-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-channel-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-pilot-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-pilot-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-psk8-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-psk8-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-qam64-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-qam64-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-scfdma-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-scfdma-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-subscriber-0.3.23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testbench-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-chrono-0.4.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-clap-4.6.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-fsk4-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-fsk4-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-ofdm-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-ofdm-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-ardop-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-ardop-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-b2f-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-b2f-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-b2f-driver-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-b2f-driver-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-channel-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-channel-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-kiss-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-kiss-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-pilot-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-pilot-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-psk8-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-psk8-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-qam64-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-qam64-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rayon-1.12.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-scfdma-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-scfdma-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.149",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde-1.0.228",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-testmatrix-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-anyhow-1.0.102",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-bpsk-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-clap-4.6.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-crossterm-0.28.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-fsk4-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-fsk4-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-ofdm-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-ofdm-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-audio-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-config-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-config-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-psk8-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-psk8-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-qam64-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-qam64-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-qpsk-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-ratatui-0.30.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-scfdma-plugin-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-scfdma-plugin-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.149",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tokio-1.52.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-subscriber-0.3.23",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-tui-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-eframe-0.29.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-twinview-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-twinview-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-egui--plot-0.29.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-twinview-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-twinview-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-egui-0.29.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-twinview-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-twinview-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-daemon-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-daemon-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-twinview-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-twinview-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-modem-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-twinview-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-twinview-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.149",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-openpulse-twinview-0.15.0"
+      "spdxElementId": "SPDXRef-Package-openpulse-twinview-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-libc-0.2.186",
@@ -22916,17 +22916,17 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-num-complex-0.4.6",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-pilot-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-pilot-plugin-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-pilot-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-pilot-plugin-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-dsp-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-dsp-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-pilot-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-pilot-plugin-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-pin-project-internal-1.1.12",
@@ -23211,62 +23211,62 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-num-complex-0.4.6",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-psk8-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-psk8-plugin-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-psk8-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-psk8-plugin-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-dsp-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-dsp-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-psk8-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-psk8-plugin-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-gpu-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-gpu-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-psk8-plugin-0.15.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-num-complex-0.4.6",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-qam64-plugin-0.15.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-qam64-plugin-0.15.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-dsp-0.15.0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-qam64-plugin-0.15.0"
-    },
-    {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-gpu-0.15.0",
-      "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-qam64-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-psk8-plugin-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-num-complex-0.4.6",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-qpsk-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-qam64-plugin-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-qpsk-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-qam64-plugin-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-dsp-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-dsp-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-qpsk-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-qam64-plugin-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-gpu-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-gpu-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-qpsk-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-qam64-plugin-0.16.0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-num-complex-0.4.6",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-qpsk-plugin-0.16.0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-qpsk-plugin-0.16.0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-dsp-0.16.0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-qpsk-plugin-0.16.0"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-gpu-0.16.0",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-qpsk-plugin-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-memchr-2.8.0",
@@ -24166,27 +24166,27 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-num-complex-0.4.6",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-scfdma-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-scfdma-plugin-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-core-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-scfdma-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-scfdma-plugin-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-dsp-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-dsp-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-scfdma-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-scfdma-plugin-0.16.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-openpulse-gpu-0.15.0",
+      "relatedSpdxElement": "SPDXRef-Package-openpulse-gpu-0.16.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-scfdma-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-scfdma-plugin-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-rustfft-6.4.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-scfdma-plugin-0.15.0"
+      "spdxElementId": "SPDXRef-Package-scfdma-plugin-0.16.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-ab--glyph-0.2.32",
