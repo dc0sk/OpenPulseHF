@@ -9,6 +9,34 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-18 — test: adversarial coverage for the Winlink stack (#942 low tier)
+
+- **Requirement/change:** Winlink stack hardening backlog (#942), low tier — the test-coverage list:
+  silent-peer timeouts, `DataPort` framing robustness (truncated / zero-length / oversized), malformed
+  banner/frame/header clean-error tests, a tamper test on an accepted compressed blob, and "the
+  gateway is tested only against a cooperative mock CMS".
+- **Design decision:** no production code changes — this is regression insurance on code the audit
+  already found correct. The value is that each behaviour is now pinned, so a future refactor cannot
+  quietly lose it. Where a cap or a guard already existed, the test asserts the *typed* error, not
+  merely that something failed.
+- **Implementation:** `crates/openpulse-b2f-driver/tests/data_framing.rs` (new, 7 tests);
+  `crates/openpulse-b2f/tests/b2f_integration.rs` (+6: malformed banner/frame/header tables, non-UTF8,
+  tamper, truncation); `crates/openpulse-gateway/src/main.rs` `mod tests` (+3 hostile-CMS cases).
+- **A vacuous gate caught during development, worth recording.** The gateway timeout test first
+  passed in 3.0 s **for the wrong reason**: the mock server closed the connection, so the test proved
+  EOF handling while claiming to prove a timeout. Rewritten so the peer holds the connection for 10 s
+  and the test asserts the call returned in under 2 s (it returns in 0.4 s) — only a real timeout can
+  explain that. This is the third vacuous-gate near-miss in the project's history; watch a new gate
+  fail, and if it passes immediately, ask *which* mechanism made it pass.
+- **Honest scope note:** the malformed-input tests are on already-correct code and therefore have no
+  sabotage story. What keeps them from being vacuous is the pre-existing round-trip tests
+  (`banner_roundtrip`, `fc_frame_roundtrip`, `header_roundtrip`) proving the decoders accept valid
+  input — without those, "everything errors" would pass trivially.
+- **Test results (actually run):** `openpulse-b2f` **24 passed**, `openpulse-b2f-driver` **20 passed**,
+  `openpulse-gateway` **4 passed**; full workspace `cargo test --workspace --no-default-features`
+  **2142 passed, 0 failed** (2121 baseline + 21 new across the three #942 low-tier PRs);
+  clippy `--all-targets` and fmt clean.
+
 ## 2026-07-18 — fix(b2f-driver): report a refused or fully-rejected ISS transfer as a failure (#942 low tier)
 
 - **Requirement/change:** Winlink stack hardening backlog (#942), low tier — "driver `run_iss` lacks
