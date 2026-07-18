@@ -2,10 +2,99 @@
 project: openpulsehf
 doc: docs/releasenotes.md
 status: living
-last_updated: 2026-07-17
+last_updated: 2026-07-18
 ---
 
 # Release Notes
+
+## v0.15.0 — 2026-07-18
+
+A hardening release. Nothing in the modem changed shape; what changed is how the software behaves when
+the thing on the other end of a connection is broken, hostile, or simply gone.
+
+The trigger was a multi-agent audit of the Winlink network stack — the three crates that speak to a
+real Winlink CMS over TCP (`openpulse-b2f`, `openpulse-b2f-driver`, `openpulse-gateway`). The verdict
+was that the stack is broadly solid: no panics, no memory-safety bugs, no authentication bypass, and
+the earlier gzip-bomb and framing fixes all hold. But it found one live denial-of-service and a cluster
+of ways an untrusted peer could hang or balloon the process, plus a piece of code advertising a
+capability it never had. This release closes all of it.
+
+**Do I need to update both ends?** For one change, yes. A v0.15.0 station opportunistically strengthens
+the error-correction code on small frames, and a pre-v0.15.0 receiver does not know to try that code —
+so a v0.15.0 station transmitting to an older one can lose small frames on the weak rungs. Update both
+ends. Everything else here is host-side and has no effect on the air interface.
+
+### The denial of service
+
+The receiving side of a Winlink session accepts up to 32 message proposals. The cap was applied when
+*answering* the proposals rather than when *storing* them, so a peer that streamed proposal frames grew
+an unbounded list in memory — and a peer that never sent the "finished" frame kept the receive loop
+spinning forever. Either one is enough to take down a station remotely. Retention is now bounded by a
+count, and a session-wide frame ceiling terminates a flood.
+
+### Two caps that were each correct, and still left a hole
+
+Every inbound message was capped at 16 MiB of decompressed output, and every session at 32 messages.
+Both limits were right. Nothing enforced their **product**: 32 × 16 MiB is roughly half a gigabyte of
+transient memory conjured from about 2 MB of network traffic — enough to matter on a Raspberry Pi. The
+session now tracks a running total. This is a shape worth remembering: two individually sufficient
+limits can still multiply into an exposure that neither one covers.
+
+### A timeout that was not a timeout
+
+The TCP read timeout used throughout the driver restarts on every *partial* read. It therefore bounds
+the gap between two bytes and never the operation as a whole — a peer sending one byte every few
+seconds could hold a read open indefinitely, and the code looked correct while doing it. Reads now run
+against a single deadline measured from when the operation began. A related bug: the receive path set a
+timeout to wait for a connection and then cleared it outright, leaving session teardown able to hang
+forever on a peer that simply stopped talking.
+
+### Type C (LZHUF) has been removed
+
+The B2F protocol has two compression types: D (gzip) and C (LZHUF). This project shipped a Type C
+implementation, and the documentation described it as Winlink-compatible.
+
+Reading it closely showed that claim could not have been true. The implementation used LHA `LH5`, while
+FBB and Winlink use the classic Okumura LZHUF — a *different bitstream*, not merely a different header
+convention. No amount of testing would have made those interoperate. The code also had no production
+caller: the CMS gateway has always used Type D.
+
+Rather than keep an unverifiable decoder, it is deleted. An inbound Type C proposal is now answered
+`Reject` — an honest "I cannot decode this", which leaves the sender free to re-propose as Type D. The
+alternative, decoding it best-effort, risks the worst outcome available: a silently corrupted message
+presented to the operator as delivered mail.
+
+### Free error-correction on the weak rungs
+
+The one air-interface change. The stronger Reed-Solomon code (`RsStrong`) roughly doubles how often the
+weakest rungs decode on a fading channel — BPSK31 at 3 dB goes from 0.25 to 1.00 — and for small frames
+it is genuinely free, occupying the same 255-byte block as the standard code. v0.14.0 could not adopt
+it ladder-wide because at 192–223 bytes it needs a second block and doubles airtime.
+
+The sender now upgrades per frame, but **only when the upgrade costs no additional block**, so airtime
+can never regress; the receiver tries both codes and lets the CRC decide. This is what requires both
+ends to be on v0.15.0.
+
+### Migration
+
+- **If you use `openpulse-b2f` as a library:** the LZHUF functions (`compress_lzhuf`,
+  `decompress_lzhuf`, `compress_lzhuf_winlink`, `decompress_lzhuf_winlink`, `decompress_lzhuf_compat`)
+  and `B2fSession::queue_message_type_c` are gone. There is no replacement — use Type D (gzip) via
+  `queue_message`, which is what Winlink actually uses.
+- **If you use `openpulse-b2f-driver` as a library:** `set_timeout` now takes `&mut self` on both
+  `CmdPort` and `DataPort`; change your binding to `let mut port = …`. `B2fDriver::run_iss` now returns
+  `Err(DriverError::AllProposalsRejected { count })` where it previously returned `Ok(())` for a
+  transfer in which the peer accepted nothing — if you were treating `Ok` as "sent", that check was
+  wrong before and is now correct. A refused connection surfaces as `DriverError::Aborted` instead of
+  `DriverError::Timeout` after a minute.
+- **Operators:** no configuration changes. Update both ends of a link to keep small frames decoding on
+  the weak rungs.
+
+### Known limitations
+
+The HF-fade work spanning v0.13.0 through this release is validated against the Watterson channel
+simulator only. It has not been flown on the air. That remains the honest next step and needs real
+radios.
 
 ## v0.14.1 — 2026-07-17
 
