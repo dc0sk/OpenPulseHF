@@ -378,16 +378,17 @@ impl SessionProfile {
         // |  4 | BPSK100           | Rs  |     87  |  4.5  | breaks the 54→219 bps cliff           |
         // |  5 | BPSK250           | Rs  |    219  |   5   |                                       |
         // |  6 | QPSK250-D         | Rs  |    437  |   7   | differential (HF-fade-robust); #923   |
-        // |  7 | OFDM52            | SC  |   1264  |  10   | fills the old SL7–SL10 dead zone      |
-        // |  8 | OFDM52-8PSK       | SC  |   1895  |  14   | (CP rides selective HF fade)          |
-        // |  9 | OFDM52-16QAM      | SC  |   2527  |  16   |                                       |
-        // | 10 | OFDM52-32QAM      | SC  |   3159  |  17   |                                       |
-        // | 11 | OFDM52-64QAM      | SC  |   3790  |  22   |                                       |
-        // | 12 | OFDM52-16QAM      | LHR |   5141  |  23   | LDPC r≈8/9 top-of-ladder rate lever   |
-        // | 13 | OFDM52-32QAM      | LHR |   6426  |  24   |                                       |
-        // | 14 | OFDM52-64QAM      | LHR |   7710  |  30   | ladder top                            |
+        // |  7 | OFDM52            | SC  |   1264  |  9    | fills the old SL7–SL10 dead zone      |
+        // |  8 | OFDM52-8PSK       | SC  |   1895  |  10   | (CP rides selective HF fade)          |
+        // |  9 | OFDM52-16QAM      | SC  |   2527  |  12   |                                       |
+        // | 10 | OFDM52-32QAM      | SC  |   3159  |  14   |                                       |
+        // | 11 | OFDM52-64QAM      | SC  |   3790  |  16   |                                       |
+        // | 12 | OFDM52-16QAM      | LHR |   5141  |  18   | LDPC r≈8/9 top-of-ladder rate lever   |
+        // | 13 | OFDM52-32QAM      | LHR |   6426  |  19   |                                       |
+        // | 14 | OFDM52-64QAM      | LHR |   7710  |  20   | ladder top                            |
         //
-        // **Why the BPSK rungs are coded now (`RsS` = `RsStrong`).** BPSK is differentially decoded, so
+        // **Why the BPSK rungs are coded now (they carry `Rs`; v0.15.0 adds an opportunistic
+        // per-frame upgrade to `RsStrong` where it costs no extra RS block — see `free_rs_strengthening`).** BPSK is differentially decoded, so
         // it rides the fade rotation — but #923's law applies: *differential needs FEC*, because the
         // symbol a carrier slip costs still has to be corrected. Uncoded on `moderate_f1` at their own
         // floors these rungs decode ~0 % (BPSK63 @4 dB 0.000, BPSK250 @5 dB 0.000); coded they work

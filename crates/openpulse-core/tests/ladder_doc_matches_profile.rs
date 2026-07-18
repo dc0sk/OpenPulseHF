@@ -151,3 +151,65 @@ fn mode_fec_ladder_doc_table_matches_hpx_hf_profile() {
         );
     }
 }
+
+// ── The in-file comment table ────────────────────────────────────────────────
+
+/// `profile.rs`'s own `hpx_hf` comment table must match the executable floors.
+///
+/// The `.md` gate above did not cover this, and the comment drifted anyway: every OFDM rung's floor
+/// read 3-10 dB high (SL7 10 vs 9, SL14 30 vs 20) while the single-carrier rungs were correct. That
+/// comment is what a maintainer edits the ladder against, so it is the more dangerous of the two to
+/// have wrong — an operator reads the doc, but a maintainer *acts* on the comment.
+#[test]
+fn profile_comment_table_matches_the_executable_floors() {
+    let src = include_str!("../src/profile.rs");
+    let start = src
+        .find("pub fn hpx_hf")
+        .expect("hpx_hf constructor present");
+    let end = src[start + 10..]
+        .find("\n    pub fn ")
+        .map(|o| start + 10 + o)
+        .unwrap_or(src.len());
+    let body = &src[start..end];
+
+    let p = SessionProfile::hpx_hf();
+    let mut checked = 0;
+
+    for line in body.lines() {
+        let t = line.trim();
+        if !t.starts_with("// |") {
+            continue;
+        }
+        let cells: Vec<&str> = t
+            .trim_start_matches("//")
+            .split('|')
+            .map(str::trim)
+            .collect();
+        // | <n> | mode | fec | bps | floor | notes |
+        if cells.len() < 6 {
+            continue;
+        }
+        let Ok(level_num) = cells[1].parse::<usize>() else {
+            continue;
+        };
+        let Some(level) = ALL_LEVELS.get(level_num - 1).copied() else {
+            continue;
+        };
+        let Ok(doc_floor) = cells[5].parse::<f32>() else {
+            continue; // "None" / header rows
+        };
+        let code_floor = p
+            .snr_floor_for_level(level)
+            .unwrap_or_else(|| panic!("SL{level_num} has a comment floor but no code floor"));
+        assert!(
+            (doc_floor - code_floor).abs() < 0.05,
+            "profile.rs comment table SL{level_num} floor {doc_floor} != executable {code_floor}"
+        );
+        checked += 1;
+    }
+
+    assert!(
+        checked >= 10,
+        "parsed only {checked} comment rows — the table format changed and this gate went blind"
+    );
+}
