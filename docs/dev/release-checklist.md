@@ -62,12 +62,13 @@ Use this checklist when preparing a new release of OpenPulse. This guide covers 
 
 - [ ] **Rebuild the book PDF** and attach it to the release
   ```bash
-  scripts/build-book-pdf.sh          # writes docs/openpulse-book.pdf (gitignored)
+  scripts/build-book-pdf.sh          # writes docs/openpulse-book.pdf
+  git add docs/openpulse-book.pdf    # tracked: rebuild and commit whenever the book changes
   gh release upload vX.Y.Z docs/openpulse-book.pdf --clobber
   ```
-  It is not committed: it is a rendering of `docs/openpulse-book.md`, reproducible in one command,
-  and would otherwise add ~800 KB of undiffable churn per book edit. Needs `pandoc`, `weasyprint`
-  and the DejaVu fonts.
+  The PDF is committed in-tree so a reader gets the typeset book straight from a clone, and it is
+  also attached to the release. Rebuild it in the same commit as any edit to
+  `docs/openpulse-book.md`, or the two drift. Needs `pandoc`, `weasyprint` and the DejaVu fonts.
 
 ---
 
