@@ -390,3 +390,53 @@ fn irs_rejects_a_type_c_proposal_and_accepts_type_d() {
         "only the Type D proposal should count as accepted"
     );
 }
+
+// ── Header field-count caps ───────────────────────────────────────────────────
+
+/// `To:` and `File:` lines accumulate into `Vec`s with no per-field cap, so a header that is legal
+/// under the 16 MiB decompressed ceiling can still amplify: ~7 bytes of wire per entry becomes a
+/// `String` plus its allocation overhead (audit 2026-07-17, low tier).
+#[test]
+fn header_decode_caps_repeated_to_lines() {
+    let mut raw = String::from("Mid: MSG001\r\nFrom: W1AW\r\n");
+    for i in 0..10_000 {
+        raw.push_str(&format!("To: W{i}ABC\r\n"));
+    }
+    raw.push_str("\r\n");
+    match header::decode(raw.as_bytes()) {
+        Err(openpulse_b2f::B2fError::InvalidHeader(_)) => {}
+        Err(e) => panic!("expected InvalidHeader, got {e:?}"),
+        Ok(h) => panic!("accepted {} recipients with no cap", h.to.len()),
+    }
+}
+
+/// Same shape via `File:` attachment lines.
+#[test]
+fn header_decode_caps_repeated_file_lines() {
+    let mut raw = String::from("Mid: MSG001\r\nFrom: W1AW\r\nTo: W2AW\r\n");
+    for i in 0..10_000 {
+        raw.push_str(&format!("File: 4 att{i}.txt\r\n"));
+    }
+    raw.push_str("\r\n");
+    match header::decode(raw.as_bytes()) {
+        Err(openpulse_b2f::B2fError::InvalidHeader(_)) => {}
+        Err(e) => panic!("expected InvalidHeader, got {e:?}"),
+        Ok(h) => panic!("accepted {} attachments with no cap", h.attachments.len()),
+    }
+}
+
+/// The caps must not touch a realistic multi-recipient message with attachments.
+#[test]
+fn header_decode_allows_a_realistic_multi_recipient_message() {
+    let mut raw = String::from("Mid: MSG001\r\nFrom: W1AW\r\n");
+    for i in 0..8 {
+        raw.push_str(&format!("To: W{i}ABC\r\n"));
+    }
+    for i in 0..4 {
+        raw.push_str(&format!("File: 12 att{i}.txt\r\n"));
+    }
+    raw.push_str("\r\n");
+    let h = header::decode(raw.as_bytes()).expect("a normal 8-recipient message must decode");
+    assert_eq!(h.to.len(), 8);
+    assert_eq!(h.attachments.len(), 4);
+}
