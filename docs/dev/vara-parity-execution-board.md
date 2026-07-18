@@ -1,11 +1,15 @@
 ---
 project: openpulsehf
 doc: docs/dev/vara-parity-execution-board.md
-status: living
+status: resolved
 last_updated: 2026-05-17
 ---
 
 # VARA-Parity SC-FDMA Execution Board
+
+> **CLOSED 2026-07-18.** Items 1–8 are complete per this board's own footer, and the only residue
+> (the on-air validation campaign) is tracked in [onair-status.md](onair-status.md) and
+> [project/backlog.md](project/backlog.md). Kept as a record of the execution; not a live tracker.
 
 This document tracks the 11-item execution plan to achieve VARA-class performance on 2700 Hz SC-FDMA waveforms within the HF band.
 

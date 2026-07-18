@@ -238,7 +238,7 @@ and per-level SNR floor/ceiling gates:
 |---|---|---|---|---|
 | `hpx500` | SL2–SL6 | SL2 | QPSK500 | Robust narrowband (≤600 Hz) |
 | `hpx_modcod` | SL2–SL7 | SL2 | QPSK500 | MODCOD demo: modulation × FEC (BPSK250/QPSK250/QPSK500 × LDPC/RS/none) |
-| `hpx_hf` | SL2–SL17 | SL2 | OFDM52-64QAM | Primary HF (full ≤2700 Hz span) |
+| `hpx_hf` | SL1–SL14 | SL2 | OFDM52-64QAM | Primary HF (full ≤2700 Hz span) |
 | `hpx_ofdm_hf` | SL5–SL10 | SL5 | OFDM52-64QAM | HF OFDM higher-order ladder |
 | `hpx_pilot` | SL2–SL5 | SL2 | PILOT-32APSK500 | HF pilot-aided (cycle-slip-immune, SRO-robust) |
 | `hpx_pilot_rrc` | SL2–SL5 | SL2 | PILOT-32APSK500-RRC | Pilot, narrowband (RRC, ~half band) |
