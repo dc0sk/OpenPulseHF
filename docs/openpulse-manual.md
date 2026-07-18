@@ -2,13 +2,25 @@
 project: openpulsehf
 doc: docs/openpulse-manual.md
 status: living
-last_updated: 2026-06-24
+last_updated: 2026-07-18
 ---
 
 # OpenPulseHF Complete Manual
 
 This manual is the operator, integrator, and engineering reference for OpenPulseHF.
 It is written as a practical guide first and a technical reference second.
+
+It describes **v0.15.0**. See [docs/releasenotes.md](releasenotes.md) for the per-release history.
+
+> **Interop notice — v0.15.0 requires both ends to be v0.15.0.**
+> From v0.15.0 the transmitter opportunistically upgrades `Rs` to the stronger `RsStrong`
+> (RS(255,191), t=32) on any frame where the stronger code fits the same number of 255-byte RS
+> blocks — free on the wire, and it roughly doubles how often the weak rungs decode on a fade
+> (BPSK31 at 3 dB: 0.25 → 1.00). A v0.15.0 receiver tries both codes and lets the CRC decide; a
+> **pre-v0.15.0 receiver does not**, so a v0.15.0 station transmitting to an older one can lose
+> small frames on the weak rungs. Update both ends of a link.
+> Implementation: `openpulse_core::fec::free_rs_strengthening`, applied in
+> `ModemEngine`'s transmit path and dual-decoded on receive.
 
 Safety and compliance note:
 - OpenPulseHF can run modes and features that are not legal in all jurisdictions or all bands.
@@ -55,18 +67,67 @@ OpenPulseHF is a Rust workspace implementing:
 
 ### 1.2 Mode and Waveform Specification
 
-The modulation catalog spans 8 plugin families:
+The modulation catalog spans 10 plugin families:
 
-- **BPSK** (`bpsk`) — BPSK31/63/100/250 (+`-RRC`); weak-signal to narrowband HF.
-- **QPSK** (`qpsk`) — QPSK125/250/500/1000/2000/9600 with `-RRC` and `-HF` variants.
-- **8PSK** (`psk8`) — 8PSK500/1000/2000/9600 with `-RRC`/`-HF` variants; Gray-coded.
+- **BPSK** (`bpsk`) — BPSK31, BPSK63, BPSK100, BPSK250, BPSK250-RRC; weak-signal to narrowband HF. Differentially (NRZI) decoded, which is why it survives HF fading where coherent PSK does not.
+- **QPSK** (`qpsk`) — QPSK125/250/500/1000/2000/9600 with `-RRC` and `-HF` variants, plus the **differential** `QPSK250-D` / `QPSK500-D`.
+- **8PSK** (`psk8`) — 8PSK500/1000/2000/9600, with `-RRC` variants and the `8PSK1000-HF`/`-HF-RRC` pair; Gray-coded.
 - **64QAM** (`64qam`) — 64QAM500/1000/2000-RRC; max-log-MAP soft demodulator.
 - **FSK4** (`fsk4`) — FSK4-ACK; the ACK control channel only.
+- **MFSK16** (`mfsk16`) — `MFSK16` and `MFSK16-ACK`: constant-envelope non-coherent 16-GFSK weak-signal sub-floor waveform (REQ-WSIG-01). Self-acquiring, needs no carrier phase; it is `hpx_hf`'s deep-fade rung SL1.
 - **OFDM** (`ofdm`) — OFDM16/52 (QPSK) plus the OFDM52 higher-order ladder (8PSK/16QAM/32QAM/64QAM — the HF high-throughput path).
 - **SC-FDMA** (`scfdma`) — SCFDMA16/52 (QPSK), the SCFDMA26/52 higher-order ladders, SCFDMA52-64QAM(-P4).
 - **Pilot** (`pilot`) — `PILOT-{QPSK,8PSK,16QAM,32APSK}{500,1000}` plus their `-RRC` variants and `2000-RRC`; pilot-framed single-carrier with pilot-aided carrier recovery (cycle-slip-immune, sample-rate-offset-robust); soft-capable. Four ladders: `hpx_pilot` (500 rect), `hpx_pilot_rrc` (narrowband), `hpx_pilot_fast` (1000 baud), `hpx_pilot_fast_rrc` (fast + narrowband).
+- **JS8** (`js8`) — JS8-compatible 8-GFSK weak-signal waveform used by the station-discovery and rendezvous subsystem ([§4.9](#49-js8-station-discovery-and-rendezvous)), not by the data ladder. Registered in the daemon, not in the CLI's data-mode registry.
 
 The plain rectangular `QPSK2000`/`8PSK2000` are registered but **RRC-superseded** (use `-RRC`). For the authoritative per-mode table (baud, bits/symbol, gross bps, occupied bandwidth) see the [README modulation-modes table](../README.md#modulation-types); for the HF mode/FEC selection ladder see [mode-fec-ladder.md](mode-fec-ladder.md). `openpulse modes` prints the live registry.
+
+> **`PILOT-*` immunity is to carrier/sample-rate offset, not to fade.** Measured on Watterson
+> `moderate_f1`, `PILOT-QPSK500+Rs` decodes 0 % at 40 dB while being perfect on AWGN down to 10 dB.
+> Use the pilot family for offset-heavy paths, not for a fading HF path.
+
+#### 1.2.1 The `hpx_hf` ladder (primary HF profile)
+
+`hpx_hf` is the profile for a real ≤2700 Hz HF SSB channel; it is `SL1–SL14` and **every rung is
+FEC-coded** (on a fade there is no useful uncoded rung — an uncoded BPSK31 entry rung decoded 0 % of
+fading frames at every SNR tested). Above SL6 the ladder is OFDM: the coherent single-carrier mid
+rungs it replaced decoded ~0 % on `moderate_f1` at any SNR up to 40 dB, and neither FEC nor
+differential encoding rescues them (differential does not scale to 8PSK). Source of truth:
+`SessionProfile::hpx_hf` in `crates/openpulse-core/src/profile.rs`.
+
+| SL | Mode | FEC | SNR floor (dB) | Note |
+|---|---|---|---|---|
+| 1 | `MFSK16` | `Rs` | — | non-coherent sub-floor deep-fade rung |
+| 2 | `BPSK31` | `Rs` | 3 | `initial_level` |
+| 3 | `BPSK63` | `Rs` | 4 | |
+| 4 | `BPSK100` | `Rs` | 4.5 | |
+| 5 | `BPSK250` | `Rs` | 5 | |
+| 6 | `QPSK250-D` | `Rs` | 7 | differential — coherent QPSK250 is 0 % on a fade |
+| 7 | `OFDM52` | `SoftConcatenated` | 9 | first multicarrier rung |
+| 8 | `OFDM52-8PSK` | `SoftConcatenated` | 10 | |
+| 9 | `OFDM52-16QAM` | `SoftConcatenated` | 12 | |
+| 10 | `OFDM52-32QAM` | `SoftConcatenated` | 14 | |
+| 11 | `OFDM52-64QAM` | `SoftConcatenated` | 16 | |
+| 12 | `OFDM52-16QAM` | `LdpcHighRate` | 18 | MODCOD: same modulation, r≈8/9 |
+| 13 | `OFDM52-32QAM` | `LdpcHighRate` | 19 | |
+| 14 | `OFDM52-64QAM` | `LdpcHighRate` | 20 | ladder top |
+
+Two things an operator should know about these numbers:
+
+- **The SNR floors are on two different scales, by physical necessity.** SL2–SL6 are single-carrier
+  and read approximately true channel SNR; SL7–SL14 are OFDM, whose zero-forcing equalizer saturates
+  the estimate near ~16 dB and physically cannot report the 20–30 dB the dense rungs run at. Do not
+  compare a floor on one scale against a reading from the other, and do not try to "unify" the
+  estimators — the gate `cargo test -p openpulse-modem --test snr_scale_boundary` pins this.
+- **The controller climbs on decode evidence, not only on SNR.** At low baud a 1 Hz fade decorrelates
+  in a few symbols, so no measurement window both tracks the fade and averages the noise, and the SNR
+  estimate flattens into a constant. The receiver-led rate controller
+  (`crates/openpulse-core/src/ota_rate.rs`) therefore also climbs after `ACK_CLIMB_THRESHOLD` (3)
+  consecutive clean decodes, and never demotes below a level that just decoded.
+
+> **Validation status.** The whole HF-fade arc (v0.13.0–v0.15.0) is validated against the
+> **Watterson channel simulator only** (`openpulse-channel`), not on the air. Real-RF validation is
+> still an open gate — see [§1.7](#17-current-non-code-gate-status).
 
 ### 1.3 FEC Specification
 
@@ -83,19 +144,31 @@ Available FEC/session protection modes include:
 - Turbo (rate-1/3 PCCC; soft)
 
 Operational guidance:
-- HF bursty channels usually favor RS/RS-Interleaved/concatenated profiles.
+- HF bursty channels usually favor RS/concatenated profiles; the dense modes require a **soft** code.
 - High-quality links can use lighter overhead profiles.
+- **Opportunistic `RsStrong` (v0.15.0).** Where the profile selects `Rs`, the transmitter upgrades to
+  `RsStrong` per frame **only when the stronger code occupies the same number of 255-byte RS blocks**,
+  so airtime can never regress; the receiver tries both. See the interop notice at the top of this
+  manual — both ends must be v0.15.0.
+- **`RsInterleaved` is inert on a single-block payload.** A payload of ≤223 bytes is one RS codeword,
+  and a single codeword is position-agnostic, so there is nothing for the interleaver to spread
+  (measured: identical decode rates to bare `Rs`). Code *strength* is the lever at that size;
+  interleaving earns its keep only on multi-block payloads.
 
 ### 1.4 Compression Specification
 
-Compression algorithms in the core:
+Session-layer compression in `openpulse-core` (`compression.rs`):
 - None
-- LZ4
-- Zstd with embedded HPX dictionary
+- LZ4 (block format, 4-byte LE size prefix)
+- Zstd with an embedded HPX dictionary (dictionary ID carried to catch version skew)
 
 Behavior:
 - Compression can be negotiated in signed handshake context.
-- `compress_if_smaller()` selection behavior chooses best practical result for payload.
+- `compress_if_smaller()` picks the smaller of LZ4/Zstd and falls back to the original bytes.
+
+This is distinct from the B2F/Winlink message compression in [§2.7](#27-winlinkb2f-path): B2F Type D
+is Gzip, and **B2F Type C (LZHUF) is not supported** — the implementation was deleted in v0.15.0 and
+an inbound Type C proposal is answered `Reject`.
 
 ### 1.5 Session, Security, and Trust Specification
 
@@ -113,12 +186,22 @@ Security and trust layers include:
 - Cross-band repeater support with dual-rig model (`rig_a` receive side, `rig_b` transmit side)
 - IQ output mode for SDR workflows
 - FreeDV authenticated voice shim components (signed beacon, UDP data-port transport, verdict socket)
+- Direct P2P file transfer over RF (`OPFX`) — see [§4.8](#48-direct-p2p-file-transfer-opfx)
+- JS8-based station discovery and rendezvous — see [§4.9](#49-js8-station-discovery-and-rendezvous)
+- Simultaneous multi-mode receive monitor (`[monitor]`), receiver AGC and auto-notch
 - Optional GPU acceleration paths in supported plugin flows
 
 ### 1.7 Current Non-Code Gate Status
 
-Code implementation is broad and test-backed.
-The major explicit non-code gate still tracked separately is on-air regulatory validation/reporting workflow.
+Code implementation is broad and test-backed. Two gates remain open, and both need real radios:
+
+- **On-air regulatory validation/reporting workflow** (station-ID audit, compliance report).
+- **On-air validation of the HF-fade work.** Everything in [§1.2.1](#121-the-hpx_hf-ladder-primary-hf-profile)
+  is measured against the Watterson channel simulator only.
+
+Release readiness is tracked in [docs/dev/project/release-1.0-criteria.md](dev/project/release-1.0-criteria.md).
+A reproducible SPDX software bill of materials is committed as `SBOM.spdx.json` and regenerated with
+`scripts/generate-sbom.sh`.
 
 ---
 
@@ -189,11 +272,33 @@ Use this baseline modem check before attaching APRS/AX.25 software through dedic
 
 ### 2.7 Winlink/B2F Path
 
+Winlink traffic does not go through the `openpulse` CLI. Two binaries carry it:
+
 ```bash
-openpulse session start --peer W1AW
-openpulse diagnose manifest --session winlink-smoke --format json
-openpulse session end
+# Direct TCP to a Winlink CMS (no radio) — ISS proposals + IRS reply in one connection
+openpulse-gateway --host cms.winlink.org --port 8772 --callsign N0CALL \
+  send --to K5ABC --subject "Test" --message "Hello over OpenPulse"
+
+# ARDOP-compatible TNC for Pat and other Winlink clients (over RF)
+openpulse-tnc --bind 127.0.0.1 --cmd-port 8515 --data-port 8516 --mode QPSK500
 ```
+
+Protocol notes an operator should know:
+
+- **Only B2F Type D (Gzip) is supported.** Type C (LZHUF) was deleted in v0.15.0 — the shipped
+  implementation used LHA `LH5` where FBB/Winlink use classic Okumura LZHUF, a different bitstream,
+  so it could never have interoperated. An inbound Type C proposal is answered `Reject`, leaving the
+  peer free to re-propose as Type D. The CMS gateway path is unaffected; it has always used Type D.
+- **A fully-rejected transfer is now an error, not a success.** `B2fDriver::run_iss` returns
+  `DriverError::AllProposalsRejected { count }` where it previously returned `Ok(())` for a session
+  in which the peer accepted nothing; a refused connection surfaces as `DriverError::Aborted`.
+  If you drive the library yourself and treated `Ok` as "sent", that check was wrong before.
+- **Session limits** (v0.15.0 hardening, `crates/openpulse-b2f/src/session.rs`): at most 32 retained
+  proposals (the overflow is counted and answered `Reject`, not stored), a session-wide ceiling of
+  8192 frames that terminates a proposal flood, 16 MiB decompressed per message **and** 32 MiB
+  aggregate per session, and caps on repeated `To:` (64) and `File:` (128) header fields. The driver's
+  reads run against a single deadline per operation rather than a per-syscall timeout, and the command
+  port caps a line at 4096 bytes.
 
 ### 2.8 Mesh Daemon Start
 
@@ -412,7 +517,10 @@ openpulse config init > ~/.config/openpulse/config.toml
 ```
 
 Recommended baseline:
-- Conservative HF mode to start (`BPSK250` or `QPSK500`)
+- Conservative fixed HF mode to start (`[modem] mode = "BPSK250"`, the built-in default)
+- Adaptive profile `[modem] profile = "hpx_hf"` (also the default) for HF; `hpx500` for a narrow
+  ≤600 Hz channel. The `hpx_wideband*`/`hpx_narrowband*` profiles exceed the 2700 Hz HF channel and
+  are for FM/VHF/UHF links only.
 - Explicit backend selection
 - Trust policy set to balanced/strict according to operation
 - Logging level set to `info` for field work, `debug` for issue triage
@@ -516,14 +624,22 @@ Key behaviors:
 - Hop-limit enforcement
 - Duplicate suppression
 - Route scoring and best-route selection
+- Envelope-origin authentication (a forged or unsigned `src_peer_id` is rejected at the relay)
 
-Usage examples:
+There is **no `openpulse relay` CLI subcommand**. Relay is configured in `config.toml` and runs
+inside the daemon, the mesh daemon, and the ARDOP/KISS bridges when enabled:
 
-```bash
-openpulse relay status
-openpulse relay routes --format json
-openpulse relay policy --show
+```toml
+[relay]
+enabled = true
+max_hops = 3
+store_forward_ttl_s = 300
+deny_list = []
+allow_list = []
 ```
+
+Observe it through the event stream (`openpulse monitor`, or the daemon's NDJSON control port),
+which is where forwarding, hop-limit, duplicate-suppression, and policy-rejection events surface.
 
 Use with:
 - Mesh daemon for networked propagation
@@ -697,6 +813,83 @@ Cross-reference:
 - FreeDV quick-start use case is in [Chapter 2.10](#210-freedv-authenticated-voice-use-case).
 - Security/trust internals are in [Chapter 5.5](#55-security-and-trust-topics).
 
+### 4.8 Direct P2P File Transfer (`OPFX`)
+
+Purpose:
+- Send a file directly to another OpenPulse station over RF, without a Winlink CMS in the path.
+
+Off by default. Enable and bound it in `config.toml`:
+
+```toml
+[file_transfer]
+enabled = true
+download_dir = "~/.local/share/openpulse/downloads"
+auto_accept_max_bytes = 0        # 0 = always ask the operator
+max_file_bytes = 1048576         # hard per-file cap, both directions
+per_peer_quota_bytes = 0         # retained bytes per peer (0 = no limit)
+require_verified_peer = true     # demand a signature-verified CONREQ/CONACK peer
+allowed_peers = []               # empty = any peer passing the trust policy
+offer_timeout_secs = 120
+partial_ttl_hours = 72           # resume window for `.partial` blocks
+burst_max_secs = 20.0            # max keyed-TX seconds per burst (keep under the PTT watchdog)
+```
+
+Drive it through a running daemon:
+
+```bash
+openpulse daemon send-file --help      # send a local file to a peer callsign
+openpulse daemon files                 # files received this session, as JSON
+openpulse daemon accept-file --help    # accept a pending inbound offer by transfer id
+openpulse daemon reject-file --help
+openpulse daemon cancel-file --help
+```
+
+Operational notes:
+- Transfers are split into bursts bounded by `burst_max_secs` so a large file never holds PTT past the
+  radio's watchdog and yields the channel between bursts.
+- A partially-received transfer resumes from its `.partial` blocks within `partial_ttl_hours`.
+- Payloads are hashed and verified; a tampered transfer fails verification rather than being delivered.
+- **On-air validation is deferred.** The protocol is exercised over loopback, the modem, and the
+  twin-daemon rig, not over RF.
+
+Design note: [docs/dev/design/file-transfer-plan.md](dev/design/file-transfer-plan.md).
+
+### 4.9 JS8 Station Discovery and Rendezvous
+
+Purpose:
+- Find other OpenPulse stations on a shared JS8 calling frequency, then negotiate a move to a working
+  channel and hand off to a signed HPX connection.
+
+Off by default, and TX is gated: beaconing requires an explicit mode, a configured callsign, the host
+clock within ±2 s of UTC, and a clear channel. **The operator remains responsible for §97.221
+automatic-control compliance** — see [docs/regulatory.md](regulatory.md).
+
+```toml
+[discovery]
+enabled = true
+mode = "rx_only"                 # "rx_only" (no TX) | "beacon" | "full"
+submode = "normal"
+dwell_secs = 300                 # 0 = dwell until preempted
+heartbeat_interval_slots = 4     # TX modes only
+hint_interval_beacons = 4        # send the @OPULSE hint every Nth beacon
+max_clock_skew_ms = 2000         # refuse TX beyond this; degrade to RX-only
+station_ttl_secs = 3600
+# calling_freqs_hz and rendezvous_channels_hz are per-band tables with sane defaults;
+# a rendezvous Propose carries an *index* into the current band's list, not a frequency.
+```
+
+```bash
+openpulse daemon enable-discovery
+openpulse daemon stations    # heard JS8 stations as JSON (`is_opulse` flags OpenPulse peers)
+openpulse daemon peers       # recognized OpenPulse peers from the shared cache
+openpulse daemon disable-discovery
+```
+
+**On-air validation is deferred** (Phase H); the waveform, message layer, and rendezvous handoff are
+validated in simulation and against JS8Call ground-truth vectors.
+
+Design note: [docs/dev/design/js8-discovery-rendezvous-plan.md](dev/design/js8-discovery-rendezvous-plan.md).
+
 ---
 
 ## Chapter 5: Technical Manual (Architecture and Implementation)
@@ -732,13 +925,25 @@ Covered in implementation and docs:
 - Timing/coherence handling
 - Equalization and profile-specific tuning
 - OFDM and SC-FDMA profile behavior
+- Receiver front-end transforms (AGC, auto-notch) wired at the single
+  `route_audio_stage(PipelineStage::InputCapture)` seam, so every capture path gets them by
+  construction
+- **CE-SSB transmit envelope conditioning applies to the QPSK-subcarrier OFDM waveforms only**
+  (`OFDM16`, `OFDM52`). Every denser OFDM constellation and **all** SC-FDMA are excluded — measured
+  end-to-end, CE-SSB's in-band EVM collapses their decode. The predicate is
+  `ModemEngine::cessb_benefits`; the master switch is a no-op on every other mode.
 
 ### 5.4 Reliability and Access Control Topics
 
 - DCD/CSMA shared channel access
-- ACK taxonomy and adaptive rate changes
+- ACK taxonomy and adaptive rate changes; the OTA rate ACK is authenticated with an ECDH-derived
+  keyed MAC, so a forged ACK is rejected
 - FEC mode dispatch and comparative behavior
-- HARQ/soft-combining and profile-based adaptation
+- HARQ/soft-combining and profile-based adaptation. The ARQ/HARQ logic lives in
+  `crates/openpulse-modem/src/harq.rs` and `rate_policy.rs`; the receiver-led rate controller is
+  `crates/openpulse-core/src/ota_rate.rs`. (The older `arq_session` module no longer exists.)
+- Soft combining is composed with plain retry, not substituted for it: each attempt is decoded
+  standalone before the MAP sum is tried, so success is a strict superset of both.
 
 ### 5.5 Security and Trust Topics
 
@@ -931,21 +1136,27 @@ Whether you contribute logs, tests, docs, code, or funding, you are helping buil
 - ARQ: Automatic Repeat reQuest reliability strategy.
 - B2F: Winlink message framing/session protocol family.
 - BER: Bit Error Rate.
+- CE-SSB: Controlled-Envelope SSB transmit conditioning; in OpenPulseHF it applies to `OFDM16`/`OFDM52` only.
 - CPAL: Cross-platform audio I/O crate used by OpenPulse audio backend.
 - CSMA: Carrier Sense Multiple Access channel access strategy.
 - DCD: Data Carrier Detect channel busy estimator.
+- Differential (`-D`): a mode encoding each symbol as a phase *increment*, so a fade rotation cancels symbol-to-symbol. Requires FEC.
 - DFE: Decision Feedback Equalizer.
 - FEC: Forward Error Correction.
 - FER: Frame Error Rate.
 - FSK4: Four-tone FSK mode used for ACK/control path.
+- HARQ: Hybrid ARQ — retransmission combined with soft-LLR accumulation across attempts.
 - HPX: OpenPulse adaptive session/profile and state-machine framework.
+- JS8: Weak-signal 8-GFSK waveform, used here for station discovery and rendezvous.
 - I/Q: In-phase and quadrature signal representation.
 - KISS: Keep It Simple Stupid framing for AX.25/TNC transport.
 - LDPC: Low-Density Parity-Check code family.
 - LLR: Log-Likelihood Ratio soft decision value.
 - LMS: Least Mean Squares adaptive filter/equalizer method.
+- MFSK16: Non-coherent 16-GFSK sub-floor waveform; the deep-fade rung of `hpx_hf`.
 - ML-DSA-44: Post-quantum signature scheme used in PQ handshake path.
 - ML-KEM-768: Post-quantum key encapsulation mechanism used in PQ handshake path.
+- MODCOD: A modulation + code-rate pair; two ladder rungs may share a modulation and differ only in FEC rate.
 - NDJSON: Newline-delimited JSON stream format.
 - OFDM: Orthogonal Frequency Division Multiplexing.
 - PAPR: Peak-to-Average Power Ratio.
@@ -958,6 +1169,7 @@ Whether you contribute logs, tests, docs, code, or funding, you are helping buil
 - SNR: Signal-to-Noise Ratio.
 - TNC: Terminal Node Controller interface/service model.
 - TTL: Time-to-live or hop limit field.
+- Watterson: The ITU-R HF ionospheric channel model (Doppler spread + delay spread) used by `openpulse-channel` for all fading validation in this project.
 - Winlink: Message transport ecosystem commonly accessed through B2F/ARDOP paths.
 
 ### 10.2 Public References
@@ -976,6 +1188,9 @@ General protocol and DSP references:
 Project-local references:
 - Architecture: [docs/dev/design/architecture.md](dev/design/architecture.md)
 - Features: [docs/features.md](features.md)
+- Mode and FEC ladder: [docs/mode-fec-ladder.md](mode-fec-ladder.md)
+- Release notes: [docs/releasenotes.md](releasenotes.md)
+- 1.0 release criteria: [docs/dev/project/release-1.0-criteria.md](dev/project/release-1.0-criteria.md)
 - CLI guide: [docs/cli-guide.md](cli-guide.md)
 - Roadmap: [docs/dev/project/roadmap.md](dev/project/roadmap.md)
 - Plugin collaboration: [docs/dev/contributing-plugins.md](dev/contributing-plugins.md)
@@ -1041,6 +1256,15 @@ All examples in this chapter are stored in `docs/config/` for copy/edit workflow
 Purpose:
 - Defines station, modem, relay, mesh, QSY, and daemon settings consumed by OpenPulse binaries.
 
+Sections in the typed schema (`crates/openpulse-config/src/lib.rs`), all optional with defaults:
+`[station]`, `[audio]`, `[modem]`, `[radio]` (+ `[radio.rig_a]`/`[radio.rig_b]`), `[repeater]`,
+`[ardop]`, `[kiss]`, `[logging]`, `[relay]`, `[trust]`, `[mesh]`, `[qsy]`, `[daemon]`, `[logbook]`,
+`[observability]`, `[control_security]`, `[compression]`, `[file_transfer]`, `[discovery]`,
+`[monitor]`.
+
+Precedence: CLI flag > config file > built-in default. `openpulse config init` writes a fully
+commented template.
+
 Default location:
 - `~/.config/openpulse/config.toml`
 
@@ -1101,7 +1325,7 @@ rig. Examples use real flags, subcommands, and environment variables only.
   every other audio binary is loopback-only unless its feature is enabled:
   - `openpulse` (CLI): `cpal-backend` is **on by default** → plain
     `cargo build -p openpulse-cli` has hardware audio; add `--no-default-features`
-    for loopback/CI. Optional `serial` (RTS/DTR PTT) and `generic-serial` (scripted CAT).
+    for loopback/CI. Optional `serial` (RTS/DTR PTT), `generic-serial` (scripted CAT), `gpio`.
   - `openpulse-tui`: feature `cpal-backend` (off by default).
   - `openpulse-tnc`, `openpulse-kisstnc`, `openpulse-mesh`, `openpulse-server`,
     `openpulse-testbench`: feature `cpal` (off by default; `openpulse-server` also has `gpu` on by default).
@@ -1133,7 +1357,10 @@ rig. Examples use real flags, subcommands, and environment variables only.
 
 #### `openpulse` (CLI)
 
-Global flags: `--backend <default|loopback|cpal>`, `--log <level>`, `--ptt <none|rts|dtr|vox|rigctld>`, `--rig <addr|port>`, `--rig-file <toml>`, `--max-power <watts>`, `--pki-url <url>`.
+Global flags: `--backend <default|loopback|cpal>`, `--log <level>`,
+`--ptt <none|rts|dtr|vox|rigctld|cm108|gpio>`,
+`--rig <serial path | rigctld addr | /dev/hidrawN | chip:line>`, `--rig-file <toml>`,
+`--max-power <watts>` (default 100), `--pki-url <url>` (default `http://127.0.0.1:8787`).
 
 ```bash
 # Local loopback transmit / receive (no hardware)
@@ -1160,15 +1387,18 @@ openpulse --backend loopback --log error benchmark run
 
 # On-device calibration (audio level, PTT latency, AFC)
 openpulse --ptt rts --rig /dev/ttyUSB0 calibrate ptt --output ptt.json
-# Guided ALC drive tuning (keys the TX — needs --features cpal + rigctld; use a dummy load).
-# Steps TX attenuation until the rig's ALC sits in a moderate band, so CE-SSB on dense
-# OFDM-HOM doesn't over-drive the PA into splatter. Live ALC also shows in the panel
+# Guided ALC drive tuning (keys the TX — needs --features cpal-backend + rigctld; use a dummy load).
+# Steps TX attenuation until the rig's ALC sits in a moderate band, so a high-PAPR multicarrier
+# waveform doesn't over-drive the PA into splatter. Live ALC also shows in the panel
 # (daemon polls the rig at [radio] meter_poll_ms).
 openpulse --rig 127.0.0.1:4532 calibrate drive --mode OFDM52 --target-alc-lo 0.3 --target-alc-hi 0.5
 
 # Identity / trust / config
 openpulse trust list
 openpulse config init > ~/.config/openpulse/config.toml
+
+# Package audit-mode artifacts (events.ndjson, snapshot.json, logs) into a .tar.gz
+openpulse audit-bundle --help
 
 # Control a running openpulse-server daemon (OTA adaptive rate-stepping)
 openpulse daemon --addr 127.0.0.1:9000 ota-start --profile hpx_modcod
@@ -1184,7 +1414,8 @@ openpulse daemon ota-status   # JSON snapshot
 # Other runtime toggles reachable from the daemon CLI (all also available in the panel):
 openpulse daemon set-agc true        # receiver streaming AGC (normalise level before demod)
 openpulse daemon set-notch true      # receiver auto-notch (out-of-band CW interference)
-openpulse daemon set-cessb true      # CE-SSB TX conditioning (multicarrier modes)
+openpulse daemon set-cessb true      # CE-SSB TX conditioning; acts on OFDM16/OFDM52 only
+                                     # (no-op on dense OFDM-HOM, all SC-FDMA, and single-carrier)
 openpulse daemon set-logbook true    # automatic ADIF logbook (one record per QSO)
 ```
 
