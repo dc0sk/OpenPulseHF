@@ -9,6 +9,38 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-18 — docs: finish the Type C / LZHUF removal sweep
+
+- **Requirement/change:** a consistency audit over docs/code/comments/tests (report:
+  `docs/dev/reviews/consistency-audit-2026-07-18.md`) found the PR #948 Type C removal never fully
+  propagated. PR #948 claimed "docs corrected" and listed CLAUDE.md, features.md and the roadmap —
+  README.md and `docs/osi-layer-map.md` were never grepped.
+- **Finding — one claim was actively misleading, not merely stale.** `README.md:190` advertised
+  "`oxiarc-lzhuf`; 4-byte LE prefix; **Winlink Type C wire-compatible**" — a specific interop claim
+  about a real external system, 148 lines *below* the v0.15.0 banner in the same file retracting that
+  exact claim as "a capability we never had". Also: the root `Cargo.toml` still declared
+  `oxiarc-lzhuf = "0.2.7"` in `[workspace.dependencies]` (only the b2f crate's entry was removed),
+  which made the v0.15.0 changelog line "along with the `oxiarc-lzhuf` dependency" imprecise. The
+  declaration was inert — no member referenced it, and the SBOM's 867 packages contain zero oxiarc —
+  but an orphaned manifest line is exactly the residue that makes a future reader believe the
+  dependency is live.
+- **Design decision:** correct the claims in place rather than delete the history. Where a doc records
+  what a past PR did (CLAUDE.md's Phase 5.2 block), the entry stays and gains a removal note; where a
+  doc states a present-tense capability (README tables, OSI map, CAP-41's design cell), the claim is
+  replaced with the truth — Type C is unsupported and inbound proposals are rejected.
+- **Implementation:** `Cargo.toml` (orphaned workspace dependency); `README.md` (capability-table row
+  deleted, protocol bullet + crate-map row corrected); `docs/osi-layer-map.md` (L6 diagram + table);
+  `docs/dev/project/traceability-matrix.md` (CAP-41 design cell); `CLAUDE.md` (Phase 5.2 sub-bullets
+  naming deleted functions and two deleted tests); `crates/openpulse-b2f/src/session.rs`
+  (`receive_data` doc comment still said it selects a decompressor by proposal type).
+- **Tests:** no behaviour change. Existing gate `irs_rejects_a_type_c_proposal_and_accepts_type_d`
+  already pins the actual behaviour these docs now describe.
+- **Test results (actually run):** `cargo build --workspace --no-default-features` clean;
+  `cargo test -p openpulse-b2f --no-default-features` **24 passed, 0 failed**;
+  `scripts/generate-sbom.sh --check` up to date (confirming the workspace-dependency removal changed
+  no resolved package). Residual grep: the only remaining `LZHUF`/`oxiarc` mentions in README are the
+  release banner and the two corrected lines, both of which describe the removal.
+
 ## 2026-07-18 — chore: commit a reproducible SBOM
 
 - **Requirement/change:** the release checklist has always listed an SBOM step (`docs/dev/release-checklist.md`,

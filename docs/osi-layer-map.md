@@ -17,7 +17,7 @@ from an operator's keyboard down to RF and back.
   L7    │ APPLICATION   CLI · TUI · Panel (iced) · Testbench · Daemon             │
         │               ARDOP TNC · KISS TNC · B2F/Winlink · CMS gateway · FreeDV │
         ├───────────────────────────────────────────────────────────────────────┤
-  L6    │ PRESENTATION  Compression (LZ4/gzip/LZHUF) · Signing + manifests        │
+  L6    │ PRESENTATION  Compression (LZ4 / gzip) · Signing + manifests            │
         │               PQ crypto (ML-DSA/ML-KEM) · Control-channel encryption    │
         ├───────────────────────────────────────────────────────────────────────┤
   L5    │ SESSION       HPX state machine · Signed + PQ handshake · Trust store   │
@@ -42,7 +42,7 @@ from an operator's keyboard down to RF and back.
 | OSI layer | Role | OpenPulseHF components |
 |---|---|---|
 | **7 · Application** | User-facing apps and application protocols | `openpulse-cli`, `openpulse-tui`, `openpulse-panel` (iced operator GUI), `openpulse-testbench`, `openpulse-daemon` (control server); TNC/protocol front-ends `openpulse-ardop` (ARDOP TCP), `openpulse-kiss` (KISS), `openpulse-b2f` + `openpulse-b2f-driver` + `openpulse-gateway` (B2F/Winlink), `openpulse-freedv-auth`; tooling `openpulse-linksim`, `openpulse-twinview`, `openpulse-testmatrix`, `pki-tooling` |
-| **6 · Presentation** | Data representation, compression, encryption | Session compression (LZ4) and Winlink LZHUF/gzip (`openpulse-core::compression`, `openpulse-b2f`); Ed25519 signing + SHA-256 transfer manifests; post-quantum crypto (ML-DSA-44 / ML-KEM-768); **control-channel encryption** (`openpulse-linksec` Noise + `openpulse-keystore`); CE-SSB TX conditioning (`openpulse-dsp::cessb`) |
+| **6 · Presentation** | Data representation, compression, encryption | Session compression (LZ4) and Winlink gzip / B2F Type D (`openpulse-core::compression`, `openpulse-b2f`); Ed25519 signing + SHA-256 transfer manifests; post-quantum crypto (ML-DSA-44 / ML-KEM-768); **control-channel encryption** (`openpulse-linksec` Noise + `openpulse-keystore`); CE-SSB TX conditioning (`openpulse-dsp::cessb`) |
 | **5 · Session** | Session setup, dialogue control, security context | HPX session state machine (`HpxSession`/`HpxReactor`); signed handshake (CONREQ/CONACK) and PQ in-band handshake; trust store + trust policy; adaptive session profiles (the HPX speed-level ladders); secure-session begin/end |
 | **4 · Transport** | Reliable delivery, segmentation, flow/rate control | ARQ/HARQ retransmission with soft-LLR combining (`harq`, `rate_policy`, `arq_session`); SAR segmentation & reassembly (up to 64 KB objects); ACK taxonomy; rate adaptation (`SpeedLevel` / `RateAdapter`) |
 | **3 · Network** | Addressing, routing, multi-hop relay | Peer cache + self-authenticating peer descriptors; multi-hop relay forwarding with trust-weighted route scoring, hop limits, duplicate suppression; query/route-discovery propagation; QSY frequency-agility (`openpulse-qsy`); mesh broadcast (`openpulse-mesh`); digipeater/repeater (`openpulse-repeater`); AX.25 addressing (`openpulse-kiss`) |
