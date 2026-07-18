@@ -2,13 +2,103 @@
 project: openpulsehf
 doc: docs/dev/project/changelog.md
 status: living
-last_updated: 2026-07-17
+last_updated: 2026-07-18
 ---
 
 # Changelog
 
 > Phase/roadmap history lives in [roadmap.md](roadmap.md); this file tracks
 > user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
+
+## v0.15.0 — 2026-07-18
+
+Hardening release. A multi-agent audit of the Winlink network stack (`openpulse-b2f`,
+`openpulse-b2f-driver`, `openpulse-gateway`) found the stack broadly solid — no panics, no
+memory-safety bugs, no auth bypass — but turned up one live denial-of-service and a cluster of ways an
+untrusted or broken peer could hang or balloon the process. All of them are fixed here, along with the
+deletion of a Winlink Type C code path whose advertised compatibility was never real.
+
+**Interop:** one change affects the air interface. A v0.15.0 station opportunistically strengthens the
+FEC on small frames (see below), and a pre-v0.15.0 receiver does not know to try that code — so a
+v0.15.0 → older link can lose small frames on the Rs rungs. **Update both ends.** Everything else in
+this release is host-side (TCP/Winlink) with no wire impact.
+
+### Breaking changes
+
+- **`openpulse-b2f`: the Type C (LZHUF) codec is gone.** `compress_lzhuf`, `decompress_lzhuf`,
+  `compress_lzhuf_winlink`, `decompress_lzhuf_winlink`, `decompress_lzhuf_compat` and
+  `B2fSession::queue_message_type_c` are removed, along with the `oxiarc-lzhuf` dependency. Its
+  external-Winlink compatibility was never verified and could not have held: this used LHA `LH5`,
+  while FBB/Winlink use the classic Okumura LZHUF — a *different bitstream*. An inbound Type C
+  proposal is now answered `Reject`, an honest "cannot decode this" that leaves the peer free to
+  re-propose as Type D (Gzip). The CMS gateway path is unaffected; it has always used Type D.
+  ([#948](https://github.com/dc0sk/OpenPulseHF/pull/948))
+- **`openpulse-b2f-driver`: `CmdPort::set_timeout` / `DataPort::set_timeout` now take `&mut self`**
+  (they record the deadline as well as setting the socket option), and `DriverError` gains
+  `AllProposalsRejected { count }`. `B2fDriver::run_iss` now returns an error instead of `Ok(())` when
+  the peer rejects every proposal. ([#947](https://github.com/dc0sk/OpenPulseHF/pull/947),
+  [#950](https://github.com/dc0sk/OpenPulseHF/pull/950))
+
+### Features
+
+- **Free FEC strengthening on the weak rungs.** `RsStrong` (t=32) roughly doubles the weak BPSK rungs'
+  fading decode (BPSK31 @3 dB: 0.25 → 1.00) and costs nothing on the wire for small frames — the same
+  255-byte RS block as `Rs`. The sender now upgrades `Rs` → `RsStrong` per frame **only when it costs
+  no extra RS block**, so airtime can never regress, and the receiver tries both codes with the CRC
+  disambiguating. ([#941](https://github.com/dc0sk/OpenPulseHF/pull/941))
+
+### Fixes
+
+- **Denial of service: unbounded proposal retention and a non-terminating FC flood.** The IRS proposal
+  cap gated the *answer* rather than the *push*, so a peer streaming FC frames grew a `Vec` without
+  limit, and a flood that never sent FF spun the receive loop forever. Retention is now bounded by an
+  overflow count and a per-session frame ceiling.
+  ([#943](https://github.com/dc0sk/OpenPulseHF/pull/943))
+- **Memory amplification: no aggregate decompression cap.** Each message was capped at 16 MiB and the
+  count at 32, but never their product — ≈ 512 MB of transient allocation from ~2 MB of wire, a
+  plausible OOM on the Pi target. A running total is now enforced at the shared seam both the driver
+  and the gateway call. ([#945](https://github.com/dc0sk/OpenPulseHF/pull/945))
+- **The command port could be grown without limit.** A TNC that never sends a newline drove the
+  client's memory. The server side already had this fix; the client-side twin did not.
+  ([#946](https://github.com/dc0sk/OpenPulseHF/pull/946))
+- **Read timeouts were per-syscall, not per-operation.** `SO_RCVTIMEO` restarts on every partial read,
+  so it bounded the gap between bytes and never the operation — a peer sending one byte per interval
+  held a read open indefinitely. Reads now run against a single deadline. `run_irs` also cleared its
+  command-port timeout and never restored it, leaving session teardown able to hang forever; ports now
+  carry a default timeout and the prior value is restored.
+  ([#947](https://github.com/dc0sk/OpenPulseHF/pull/947))
+- **Header fields could amplify.** `To:` and `File:` accumulated without a per-field cap. They are now
+  bounded — and *rejected* rather than truncated, since silently dropping recipients would deliver a
+  message to fewer addressees than it names. ([#949](https://github.com/dc0sk/OpenPulseHF/pull/949))
+- **A fully-rejected transfer reported success.** `run_iss` returned `Ok(())` when the peer rejected
+  every proposal, reporting "sent" for messages that never left the queue — while the gateway had
+  always treated that as a failure. A refused CONNECT is also now reported immediately as `Aborted`
+  rather than surfacing as a timeout 60 s later.
+  ([#950](https://github.com/dc0sk/OpenPulseHF/pull/950))
+
+### Documentation and tests
+
+- **The rate ladder's per-waveform-family SNR scales are documented as deliberate and gated.** Single-
+  carrier PSK reports ~true channel SNR; OFDM/SC-FDMA report a saturation-bounded plugin-domain SNR
+  (their equaliser enhances noise on faded subcarriers, so the estimate flattens near ~16 dB and
+  cannot report the 20–30 dB the top rungs run at). Unifying the two would put the dense rungs' floors
+  above anything the estimate can read — the v0.14.0 stall. A new gate fails if OFDM starts tracking
+  true SNR without the floors being re-derived in the same change.
+  ([#944](https://github.com/dc0sk/OpenPulseHF/pull/944))
+- **Adversarial coverage for the Winlink stack**: `DataPort` framing edges, malformed
+  banner/frame/header input, non-UTF8, tamper and truncation on an accepted blob, silent-peer
+  timeouts, and hostile-CMS gateway cases. ([#951](https://github.com/dc0sk/OpenPulseHF/pull/951))
+- Roadmap tables reconciled against the code and gated; the HF-fade release arc recorded as RF-6; the
+  missing controller-side fade gate added. ([#938](https://github.com/dc0sk/OpenPulseHF/pull/938),
+  [#939](https://github.com/dc0sk/OpenPulseHF/pull/939),
+  [#940](https://github.com/dc0sk/OpenPulseHF/pull/940))
+
+### Known limitations
+
+- The v0.13.0 → v0.15.0 HF-fade work is validated against the Watterson channel simulator only.
+  On-air validation with real radios remains outstanding.
+- Winlink Type C (LZHUF) is unsupported. Restoring it requires a captured RMS Express / RMS Gateway
+  Type C blob to validate the bitstream and length-prefix convention against.
 
 ## v0.14.1 — 2026-07-17
 
