@@ -11,21 +11,46 @@ fn make_engine() -> ModemEngine {
 }
 
 /// With limiter active, the audio written to the backend stays within threshold.
+///
+/// This inspects the emitted samples. It previously only checked that transmit did not error —
+/// which made it the sole engine-path coverage of FF-7 while proving nothing about the limiter.
 #[test]
 fn limiter_bounds_peak_amplitude() {
     let backend = LoopbackBackend::new();
-    let mut engine = ModemEngine::new(Box::new(backend));
+    let mut engine = ModemEngine::new(Box::new(backend.clone_shared()));
     engine.register_plugin(Box::new(BpskPlugin::new())).unwrap();
     engine.set_tx_limiter_threshold(0.5);
 
     engine.transmit(b"test payload", "BPSK250", None).unwrap();
 
-    // Drain the samples the engine wrote to the loopback backend.
-    let rx = engine.receive("BPSK250", None).unwrap();
-    // We can't directly inspect the written samples via the public API, but
-    // the tanh_limit unit tests cover the bounding property.  Here we verify
-    // the engine doesn't error out and the round-trip still produces output.
-    drop(rx);
+    let samples = backend.drain_samples();
+    assert!(!samples.is_empty(), "engine emitted no samples to inspect");
+    let peak = samples.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    assert!(
+        peak <= 0.5 + 1e-4,
+        "limiter set to 0.5 but emitted peak was {peak}"
+    );
+}
+
+/// The bound above is only meaningful if an unlimited transmit actually exceeds it — otherwise the
+/// assertion would hold on a signal the limiter never touched.
+#[test]
+fn unlimited_transmit_exceeds_the_limiter_threshold() {
+    let backend = LoopbackBackend::new();
+    let mut engine = ModemEngine::new(Box::new(backend.clone_shared()));
+    engine.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+    engine.set_tx_limiter_threshold(0.0); // disabled
+
+    engine.transmit(b"test payload", "BPSK250", None).unwrap();
+
+    let samples = backend.drain_samples();
+    assert!(!samples.is_empty(), "engine emitted no samples to inspect");
+    let peak = samples.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    assert!(
+        peak > 0.5,
+        "with the limiter disabled the peak must exceed 0.5, got {peak} — \
+         if it does not, limiter_bounds_peak_amplitude proves nothing"
+    );
 }
 
 /// With limiter disabled (threshold 0.0), BER on clean loopback is unchanged.

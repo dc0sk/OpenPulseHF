@@ -130,6 +130,18 @@ fn every_rung_decodes_on_moderate_f1() {
         );
         checked += 1;
     }
+    // Pin the count, not a floor: `>= 6` would silently tolerate rungs vanishing from the sweep,
+    // which is exactly how a skip-based exclusion quietly grows to cover the whole ladder.
+    let expected: usize = p
+        .defined_levels()
+        .into_iter()
+        .filter(|&l| p.mode_for(l) != Some("MFSK16"))
+        .filter(|&l| p.fec_for(l) != openpulse_core::fec::FecMode::LdpcHighRate)
+        .count();
+    assert_eq!(
+        checked, expected,
+        "swept {checked} rungs but the profile defines {expected} non-MFSK16, non-LHR rungs"
+    );
     assert!(
         checked >= 6,
         "expected to check the ladder, checked {checked}"

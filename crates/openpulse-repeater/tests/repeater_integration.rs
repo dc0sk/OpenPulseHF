@@ -199,7 +199,7 @@ fn transmitting_rig_is_station_identified_when_the_interval_elapses() {
 #[test]
 fn relay_empty_buffer_returns_none() {
     let (engine_rx, _lb_rx) = make_engine_with_plugin();
-    let (engine_tx, _lb_tx) = make_engine_with_plugin();
+    let (engine_tx, lb_tx) = make_engine_with_plugin();
     let config = RepeaterConfig {
         enabled: true,
         mode: "BPSK250".into(),
@@ -207,11 +207,21 @@ fn relay_empty_buffer_returns_none() {
         full_duplex: false,
         ..Default::default()
     };
-    // No samples in loopback_rx — receive() should return empty vec or error
+    // No samples in loopback_rx. Whether receive() reports empty or errors is an implementation
+    // detail, but the contract that matters is the same either way: nothing may be relayed, and
+    // nothing may be transmitted. Accepting "any outcome" (as this test used to) would also accept
+    // a repeater that keyed up and relayed garbage on an empty buffer.
     let mut repeater =
         CrossBandRepeater::new(Box::new(NoOpPtt::new()), engine_rx, engine_tx, config);
-    // Either returns Ok(None) or Err (if receive fails on empty buffer), both are acceptable
-    let _ = repeater.relay_one_frame();
+    match repeater.relay_one_frame() {
+        Ok(None) => {}
+        Ok(Some(n)) => panic!("relayed {n} bytes from an empty receive buffer"),
+        Err(_) => {} // receive() surfacing an error on an empty buffer is acceptable
+    }
+    assert!(
+        lb_tx.drain_samples().is_empty(),
+        "nothing may be transmitted when there was nothing to relay"
+    );
 }
 
 #[test]

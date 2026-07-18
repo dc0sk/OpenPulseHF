@@ -9,6 +9,50 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-18 — test: make six vacuously-passing gates actually test what they are named for
+
+- **Requirement/change:** consistency-audit findings 13 and the test-integrity cluster — a set of tests
+  whose names claim more than their assertions establish. Same class as the `bpsk_hardening` gate fixed
+  in the previous change; this is the tail of it.
+- **Findings, each verified by reading the body:**
+  1. `tx_limiter.rs` `limiter_bounds_peak_amplitude` never inspected an amplitude — it transmitted,
+     received, and dropped the result, with a comment conceding "we can't directly inspect the written
+     samples via the public API". It was the **only engine-path coverage of FF-7's limiter**.
+  2. `generic_cat_integration.rs` — five `*_sends_correct_bytes` tests never inspected
+     `MockTransport.write_log`, the field declared "inspectable by tests", because the transport was
+     boxed into the controller and the log went with it. They asserted only that the call returned `Ok`.
+  3. `fec_comparison.rs` `fec_decision_gate` had zero assertions: it printed ACCEPTED or REJECTED and
+     passed either way — a "gate" that cannot fail, guarding the Phase 3.2 FEC decision.
+  4. `repeater_integration.rs` `relay_empty_buffer_returns_none` discarded the result with a comment
+     saying "both are acceptable" — it would equally have passed a repeater that keyed up and relayed
+     garbage from an empty buffer.
+  5. `noop.rs`'s "PTT assert/release ≤ 50 ms" backs an acceptance row but times a bool flip on
+     `NoOpPtt`, so it cannot fail.
+  6. `hpx_hf_rungs_survive_fade.rs` is cited as "**Every** `hpx_hf` rung decodes on a fade" while
+     skipping MFSK16 and the LdpcHighRate rungs, and its `checked >= 6` tail would silently tolerate
+     rungs vanishing from the sweep.
+- **Design decision — fix the gate where the gate can be fixed; correct the claim where it cannot.**
+  (1)–(4) became real assertions. For (1) the fix needed `LoopbackBackend::clone_shared()` so the test
+  keeps a handle to the emitted samples, plus a **control test** proving an unlimited transmit exceeds
+  the threshold — otherwise "peak ≤ 0.5" could hold on a signal the limiter never touched. For (2)
+  `MockTransport.write_log` became `Arc<Mutex<Vec<u8>>>` with a `log_handle()` accessor; the byte
+  frames the comments already spelled out are now asserted. For (5) `NoOpPtt` cannot back a timing
+  bound, so a **real-I/O** timing test was added over the mock rigctld TCP path instead. For (6) the
+  skips are legitimate and documented, so the acceptance row was corrected to say what is actually
+  swept, and the loose `>= 6` replaced by an exact count derived from the profile.
+- **Implementation:** `crates/openpulse-modem/tests/tx_limiter.rs`;
+  `crates/openpulse-radio/src/generic_cat.rs` + `tests/generic_cat_integration.rs`;
+  `crates/openpulse-core/tests/fec_comparison.rs`;
+  `crates/openpulse-repeater/tests/repeater_integration.rs`;
+  `crates/openpulse-radio/tests/rigctld_integration.rs`;
+  `crates/openpulse-modem/tests/hpx_hf_rungs_survive_fade.rs`; `CLAUDE.md` (fade row).
+- **Test results (actually run):** `tx_limiter` **5 passed**; `generic_cat_integration` **11 passed**;
+  `fec_comparison` **6 passed**; `repeater_integration` **7 passed**; `rigctld_integration`
+  **10 passed**; `hpx_hf_rungs_survive_fade` **3 passed**. **Sabotage-verified** on the CAT assertion:
+  with one expected frame replaced by `DE AD BE EF` the test FAILS showing the real bytes
+  (`left: [254, 254, 148, 224, 28, 0, 1, 253]`) — proving the log is genuinely populated rather than
+  compared empty-to-empty.
+
 ## 2026-07-18 — docs: consolidate the status/backlog docs and close the stale trackers
 
 - **Requirement/change:** consistency-audit findings 4, 5, 7, 8, 9 and its consolidation plan — several
