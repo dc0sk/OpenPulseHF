@@ -51,6 +51,8 @@ pub enum DriverError {
     Timeout,
     #[error("session aborted by remote")]
     Aborted,
+    #[error("peer rejected all {count} proposed message(s)")]
+    AllProposalsRejected { count: usize },
 }
 
 /// Drives a B2F session over a connected ARDOP TNC.
@@ -96,9 +98,11 @@ impl B2fDriver {
         self.cmd.send(&format!("MYID {callsign}"))?;
         self.cmd.wait_for("MYID")?;
         self.cmd.send(&format!("CONNECT 500 {remote_call}"))?;
-        self.cmd.wait_for("CONNECTED")?;
+        self.cmd
+            .wait_for_or_abort("CONNECTED", &["DISCONNECTED", "FAILURE", "REJECTED"])?;
 
         let mut session = B2fSession::new(SessionRole::Iss);
+        let msg_count = messages.len();
         for (header, body) in messages {
             session.queue_message(header, body)?;
         }
@@ -116,8 +120,14 @@ impl B2fDriver {
         let fs_line = String::from_utf8_lossy(&fs_frame).into_owned();
         session.handle_line(&fs_line)?;
 
-        // Send each accepted compressed blob.
-        for blob in session.drain_pending_data() {
+        // Send each accepted compressed blob. A peer that rejects everything is a failed transfer,
+        // not a successful empty one — the gateway already treats it that way, and a driver that
+        // returned Ok here would report "sent" for messages that never left the queue.
+        let blobs = session.drain_pending_data();
+        if msg_count > 0 && blobs.is_empty() {
+            return Err(DriverError::AllProposalsRejected { count: msg_count });
+        }
+        for blob in blobs {
             self.data.send_frame(&blob)?;
         }
 

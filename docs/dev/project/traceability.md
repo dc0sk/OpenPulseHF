@@ -9,6 +9,31 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-18 — fix(b2f-driver): report a refused or fully-rejected ISS transfer as a failure (#942 low tier)
+
+- **Requirement/change:** Winlink stack hardening backlog (#942), low tier — "driver `run_iss` lacks
+  the gateway's 'all proposals rejected' guard — control-surface divergence", plus "`DriverError::Aborted`
+  never constructed".
+- **Finding:** the gateway bails with "CMS rejected all N proposed message(s)"; the driver's `run_iss`
+  drained an empty `pending_data`, disconnected and returned `Ok(())` — reporting success for messages
+  that never left the queue. Separately, `Aborted` existed as an error variant no code path could
+  produce, while a peer that answers CONNECT with a terminal event left `wait_for("CONNECTED")`
+  spinning until the read deadline.
+- **Design decision:** give the driver the gateway's guard rather than the reverse — a fully-rejected
+  transfer is a failed transfer, and the caller must be able to tell. Wire `Aborted` instead of
+  deleting it: `wait_for_or_abort` treats `DISCONNECTED`/`FAILURE`/`REJECTED` as terminal, so a
+  refused session is reported as refused rather than mislabelled as a timeout 60 s later. Applied to
+  ISS connect only; the IRS listen path legitimately waits for an asynchronous event.
+- **Implementation:** `crates/openpulse-b2f-driver/src/lib.rs` (`DriverError::AllProposalsRejected`,
+  the guard in `run_iss`, `wait_for_or_abort` at the CONNECT wait); `src/cmd.rs` (`wait_for_or_abort`).
+- **Tests:** `crates/openpulse-b2f-driver/tests/iss_failure_paths.rs` —
+  `run_iss_reports_all_proposals_rejected` (mock IRS answers Reject to everything) and
+  `run_iss_reports_a_refused_connect_as_aborted` (mock TNC answers CONNECT with DISCONNECTED).
+- **Test results (actually run):** `cargo test -p openpulse-b2f-driver --no-default-features`
+  **13 passed, 0 failed**. **Sabotage-verified:** with both guards disabled the tests FAIL with
+  `got Ok(())` and `got Err(Timeout)` — and the timeout case took **63 s** to fail, which is the
+  measured value of the `Aborted` wiring.
+
 ## 2026-07-18 — fix(b2f): cap repeated header fields (#942 low tier)
 
 - **Requirement/change:** Winlink stack hardening backlog (#942), low tier — "`header::decode`
