@@ -7,6 +7,85 @@ last_updated: 2026-07-18
 
 # Release Notes
 
+## v0.16.0 — 2026-07-18
+
+Nothing in the modem changed. What changed is how much of what this project says about itself is
+true — and there is now a book.
+
+### Two new documents
+
+**`docs/openpulse-book.md`** is a complete technical account of OpenPulseHF, written for three readers
+at once. A licensed operator can read what the system does, what it needs from a station, and twelve
+copy-pasteable scenarios, without reading any Rust. An electronic engineer gets the modulation,
+channel models, acquisition chain, equalisation, soft-decision demodulation and coding with their
+governing mathematics — each tied to the code that implements it and the measurement that justifies
+it. A software developer gets the architecture: the layered crate graph, the plugin interface, the
+engine's pipeline seams, the daemon's concurrency model, and the testing discipline with its
+documented failures.
+
+**`docs/openpulse-manual.md`** has been brought current. It had drifted badly enough to be actively
+misleading: it documented three CLI commands that do not exist, its Winlink section showed commands
+with nothing to do with Winlink, and it claimed 8 plugin families where there are 10. It now opens
+with the v0.15.0 both-ends interop notice, which is the thing an operator most needs before updating
+one end of a link.
+
+### Why the documentation needed this much work
+
+A multi-agent consistency audit over docs, code, comments and tests produced 51 findings, every one
+of which survived adversarial verification. The verdict was that the documentation was **broadly
+truthful about capability but poorly maintained about status** — completed work still described as
+pending, and a handful of claims that had outrun the code entirely.
+
+The worst was in the README: it advertised "Winlink Type C wire-compatible" **one hundred and
+forty-eight lines below the v0.15.0 banner retracting that exact claim as a capability the project
+never had.** The v0.15.0 release had corrected three files and never grepped the rest of the tree.
+
+The second worst was in the tests. Two acceptance-criteria rows named tests for "BPSK/QPSK **loopback**
+correctness" that never called the receive path at all — four of them were literally
+`let _ok = true; assert!(_ok);` under names promising an SNR loopback at 6, 9, 12 and 15 dB. Those now
+do real AWGN round-trips, with a below-floor control test, because an assertion that cannot fail is
+worse than no test: it reads as coverage.
+
+Six further gates were found in the same class and fixed, including the transmit limiter's only
+engine-path test, which never inspected an amplitude.
+
+### What is now enforced rather than intended
+
+- The acceptance table's commands all run. Three previously did not — cargo takes one positional test
+  filter — so the documented gates for ACK authentication, PTT backends and relay origin auth were
+  unrunnable as written.
+- `profile.rs`'s own ladder comment is gated against the executable floors. It had been 3–10 dB wrong
+  on every OFDM rung, and that comment is what a maintainer edits the ladder against.
+- `--profile` takes its accepted values from the profile registry, so the help cannot drift again. It
+  had been advertising 7 of 12.
+
+### A definition of 1.0
+
+`docs/dev/project/release-1.0-criteria.md` proposes what 1.0 should assert, because "pre-1.x" was
+previously undefinable — the only reference to 1.x anywhere in the repo was a backlog item. It is a
+**draft for review** with four open questions, the first of which moves the release date more than
+everything else combined: is on-air evidence a hard gate, or is "simulator-validated, on-air pending"
+an acceptable 1.0 with the caveat stated?
+
+### Migration
+
+- **Operators: nothing to do.** No wire-format, config or behaviour change. A v0.16.0 station
+  interoperates with v0.15.0 exactly as before. The v0.15.0 both-ends `RsStrong` notice still applies
+  if either end is older than v0.15.0.
+- **If you use `openpulse-radio` as a library:** `MockTransport.write_log` is now
+  `Arc<Mutex<Vec<u8>>>` rather than `Vec<u8>`. Read it with `.lock()`, or take a handle before boxing
+  the transport with the new `MockTransport::log_handle()`. This is the only breaking change in the
+  release and is the reason for the minor bump.
+- **If you script the CLI:** `--profile` now rejects an unknown value at parse time and prints the
+  full list of accepted profiles, instead of failing later at runtime. Valid values are unchanged, and
+  case-insensitive input with interchangeable `-`/`_` still works.
+
+### Known limitations
+
+The HF-fade work spanning v0.13.0 through this release is validated against the Watterson channel
+simulator only. It has not been flown on the air, and the book says so wherever fade performance is
+discussed. That remains the honest next step and it needs real radios.
+
 ## v0.15.0 — 2026-07-18
 
 A hardening release. Nothing in the modem changed shape; what changed is how the software behaves when

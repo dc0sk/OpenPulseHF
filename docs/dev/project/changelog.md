@@ -10,6 +10,78 @@ last_updated: 2026-07-18
 > Phase/roadmap history lives in [roadmap.md](roadmap.md); this file tracks
 > user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
 
+## v0.16.0 — 2026-07-18
+
+A documentation and test-integrity release. Two new documents ship with it — a full technical **book**
+and a rewritten **operator manual** — and a documentation audit corrected a long tail of claims that
+had outrun the code. The modem itself is unchanged: no wire-format change, no config change, and a
+v0.16.0 station interoperates with v0.15.0 exactly as before.
+
+The version is a **minor** bump for one small reason, recorded honestly: `MockTransport.write_log` in
+`openpulse-radio` changed type. Everything else is additive or documentation.
+
+### Breaking changes
+
+- **`openpulse-radio`: `MockTransport.write_log` is now `Arc<Mutex<Vec<u8>>>`** (was `Vec<u8>`), with a
+  new `MockTransport::log_handle()` accessor. The field is documented as "inspectable by tests", but
+  once the transport was boxed into a `GenericSerialCat` the log went with it and no test could reach
+  it — which is why five `*_sends_correct_bytes` tests never checked any bytes. Sharing the log fixes
+  that. ([#957](https://github.com/dc0sk/OpenPulseHF/pull/957))
+
+### Features
+
+- **The OpenPulseHF book** (`docs/openpulse-book.md`, 4414 lines) — a complete technical account for
+  licensed operators, electronic engineers and software developers at once: abstract, per-audience
+  reading routes, the waveform catalogue and rate ladders, the physics and DSP with their governing
+  mathematics, cryptography and trust, the software architecture, and twelve copy-pasteable use-case
+  scenarios. ([#964](https://github.com/dc0sk/OpenPulseHF/pull/964))
+- **1.0 release criteria** (`docs/dev/project/release-1.0-criteria.md`) — a draft definition of what
+  1.0 asserts, with explicit non-goals and four open questions for the maintainer. "Pre-1.x" was
+  previously undefinable. ([#960](https://github.com/dc0sk/OpenPulseHF/pull/960))
+- **`--profile` now validates at parse time** and lists every accepted profile. The help previously
+  advertised 7 of the 12 profiles `SessionProfile::by_name` accepts; the list is now sourced from
+  `PROFILE_NAMES` and cannot drift. Case-insensitive input with interchangeable `-`/`_` still works.
+  ([#963](https://github.com/dc0sk/OpenPulseHF/pull/963))
+
+### Fixes
+
+- **The operator manual is current again** and documented three CLI commands that do not exist
+  (`openpulse relay status|routes|policy`), showed unrelated commands in its Winlink section, and
+  claimed 8 plugin families where there are 10. It now leads with the v0.15.0 both-ends interop
+  notice. ([#962](https://github.com/dc0sk/OpenPulseHF/pull/962))
+- **Six vacuously-passing test gates now test what they are named for** — including the FF-7 TX
+  limiter gate, which never inspected an amplitude, and five CAT tests that never inspected the bytes
+  they were named for. ([#957](https://github.com/dc0sk/OpenPulseHF/pull/957))
+- **The acceptance-criteria table is runnable.** Three rows could not execute as written (cargo takes
+  one positional test filter), and two named tests that never called the receive path they claimed to
+  gate. ([#955](https://github.com/dc0sk/OpenPulseHF/pull/955))
+- **`profile.rs`'s own `hpx_hf` comment table was 3–10 dB wrong on every OFDM rung** and is now gated
+  against the executable floors. ([#961](https://github.com/dc0sk/OpenPulseHF/pull/961))
+- **The Type C/LZHUF removal is complete.** README still advertised "Winlink Type C wire-compatible"
+  148 lines below its own retraction of that claim, and the root manifest still declared the
+  dependency. ([#954](https://github.com/dc0sk/OpenPulseHF/pull/954))
+- **A reversed CE-SSB conclusion was still documented as current** — the gate excludes dense OFDM-HOM
+  and all SC-FDMA, and the test cited to lock the old claim now asserts the opposite.
+  ([#958](https://github.com/dc0sk/OpenPulseHF/pull/958))
+- **`CLAUDE.md` said the Watterson envelope FFT is capped at 2^18**; `fading.rs` sets `1 << 16`.
+  ([#964](https://github.com/dc0sk/OpenPulseHF/pull/964))
+- **`mode-fec-ladder.md` contradicted itself on `RsInterleaved`**, billing it "best for HF
+  burst/fading" in §2 while §7 recorded the measurement that it is inert on a single-block payload.
+  ([#963](https://github.com/dc0sk/OpenPulseHF/pull/963))
+
+### Documentation
+
+- Status trackers consolidated: `backlog.md` listed two shipped subsystems as open work and omitted
+  the only two genuinely open items. ([#956](https://github.com/dc0sk/OpenPulseHF/pull/956))
+- A reproducible SBOM (`SBOM.spdx.json` + `scripts/generate-sbom.sh`).
+  ([#953](https://github.com/dc0sk/OpenPulseHF/pull/953))
+
+### Known limitations
+
+- The v0.13.0 → v0.16.0 HF-fade work remains validated against the Watterson channel simulator only.
+  On-air validation is the first gate in the new 1.0 criteria and has not been passed.
+- Winlink Type C (LZHUF) is unsupported.
+
 ## v0.15.0 — 2026-07-18
 
 Hardening release. A multi-agent audit of the Winlink network stack (`openpulse-b2f`,
