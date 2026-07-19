@@ -33,8 +33,26 @@ RX_DEVICE="${RX_DEVICE:-hwloop_rx}"
 # USB card indices for per-case mixer re-normalisation (the C-Media hardware AGC
 # drifts capture gain down after strong frames). Auto-resolved from the hwloop
 # PCM slaves in ~/.asoundrc; override if needed.
-_slave_card() {  # pcm-name -> card index from ~/.asoundrc "hw:N,0"
-    awk -v p="pcm.$1" '$0 ~ p {f=1} f && /slave.pcm/ {match($0,/hw:([0-9]+)/,m); print m[1]; exit}' "${HOME}/.asoundrc" 2>/dev/null
+# pcm-name -> ALSA card INDEX (amixer needs an index, not a name).
+#
+# Accepts both slave forms: the fragile "hw:N,0" and the stable
+# "hw:CARD=Name,DEV=0". Prefer the name form in ~/.asoundrc: ALSA assigns card
+# indices in enumeration order, so they SHIFT when devices are re-probed — on
+# 2026-07-19 `acp` moved 3 -> 4 mid-session and hwloop_tx silently started
+# pointing at the laptop's internal audio instead of the USB adapter.
+_slave_card() {
+    local spec
+    spec="$(awk -v p="pcm.$1" '$0 ~ p {f=1} f && /slave.pcm/ {print; exit}' "${HOME}/.asoundrc" 2>/dev/null)"
+    # Name form: resolve through /proc/asound/<name> -> cardN
+    local nm
+    nm="$(printf '%s' "$spec" | sed -n 's/.*CARD=\([A-Za-z0-9_]*\).*/\1/p')"
+    if [[ -n "$nm" ]]; then
+        local link
+        link="$(readlink -f "/proc/asound/$nm" 2>/dev/null)"
+        [[ -n "$link" ]] && basename "$link" | sed 's/^card//' && return
+    fi
+    # Index form
+    printf '%s' "$spec" | sed -n 's/.*hw:\([0-9]\+\).*/\1/p'
 }
 TX_CARD="${TX_CARD:-$(_slave_card hwloop_tx)}"
 RX_CARD="${RX_CARD:-$(_slave_card hwloop_rx)}"
