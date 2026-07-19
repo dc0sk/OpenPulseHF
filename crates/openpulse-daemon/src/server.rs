@@ -639,6 +639,11 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     // stream clones shared buffers, so this is equivalent to per-tick reopen there.
     let capture_device = (!cfg.audio.device.is_empty()).then(|| cfg.audio.device.clone());
     let mut rx_stream: Option<Box<dyn AudioInputStream>> = None;
+    // Edge-triggered so a permanently dead capture device logs once, not once per receive tick.
+    // Before the stream-fault latch existed this could never become true: a lost device produced an
+    // unbroken run of successful empty reads, so the reopen path below was unreachable and the
+    // station went deaf in silence (audit 2026-07-19, #19).
+    let mut capture_failed = false;
     // Consecutive-Nack budget: how many Nack-ACKs the IRS will key in a row with no intervening successful
     // data decode before going silent (reset on any decode). Caps a keyed Nack storm — two OTA-active ends
     // answering each other's ACK/QRM bursts forever — and a §97 babbling transmitter on repetitive
@@ -749,6 +754,10 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     };
                     match read {
                         Ok(samples) => {
+                            if capture_failed {
+                                capture_failed = false;
+                                tracing::warn!("audio capture recovered");
+                            }
                             if disco_dwelling {
                                 discovery_raw = samples.clone();
                             }
@@ -757,7 +766,18 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         Err(e) => {
                             // Drop the stream so the next tick reopens it.
                             rx_stream = None;
-                            tracing::debug!(error = %e, "capture read failed; reopening");
+                            if capture_failed {
+                                tracing::debug!(error = %e, "capture still failing; reopening");
+                            } else {
+                                capture_failed = true;
+                                // WARN, not DEBUG: a station that cannot hear is off the air for
+                                // receive, and the operator has to be told once.
+                                tracing::warn!(
+                                    error = %e,
+                                    "audio capture failed — the station is deaf until it recovers; \
+                                     reopening the device each tick"
+                                );
+                            }
                             Ok(None)
                         }
                     }

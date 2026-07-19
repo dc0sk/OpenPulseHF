@@ -20,6 +20,8 @@ use openpulse_core::audio::{
 };
 use openpulse_core::error::AudioError;
 
+use crate::fault::StreamFault;
+
 /// Pick a cpal device matching `selector` from `devices` using the hotplug-safe resolver
 /// ([`resolve_device`]): exact name → ALSA `CARD=` token → case-insensitive substring, refusing to
 /// guess on ambiguity. Survives a device reorder/rename that changes the exact system name.
@@ -169,6 +171,8 @@ impl AudioBackend for CpalBackend {
 
         let buf: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
         let buf_write = Arc::clone(&buf);
+        let fault = StreamFault::new();
+        let fault_write = fault.clone();
 
         let stream = dev
             .build_input_stream(
@@ -179,7 +183,15 @@ impl AudioBackend for CpalBackend {
                     let mut guard = buf_write.lock().unwrap_or_else(|p| p.into_inner());
                     guard.extend(data.iter().copied());
                 },
-                |err| warn!("cpal input error: {err}"),
+                {
+                    let fault = fault_write.clone();
+                    move |err| {
+                        // Latch before logging: the reader needs this, and a log line alone is what
+                        // let a dead capture device look like a quiet band.
+                        fault.record(&err);
+                        warn!("cpal input error: {err}");
+                    }
+                },
                 None,
             )
             .map_err(|e| AudioError::Stream(e.to_string()))?;
@@ -195,6 +207,7 @@ impl AudioBackend for CpalBackend {
         Ok(Box::new(CpalInputStream {
             _stream: stream,
             buf,
+            fault,
         }))
     }
 
@@ -268,6 +281,9 @@ impl AudioBackend for CpalBackend {
 pub struct CpalInputStream {
     _stream: Stream,
     buf: Arc<Mutex<VecDeque<f32>>>,
+    /// Latched device-loss error. Without this, a dead stream is indistinguishable from a quiet
+    /// band: the callback stops firing and `read` returns `Ok(vec![])` forever.
+    fault: StreamFault,
 }
 
 impl AudioInputStream for CpalInputStream {
@@ -281,7 +297,14 @@ impl AudioInputStream for CpalInputStream {
         // Buffer is empty – give the driver a moment to fill it.
         std::thread::sleep(Duration::from_millis(10));
         let mut guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
-        Ok(guard.drain(..).collect())
+        let pending: Vec<f32> = guard.drain(..).collect();
+        drop(guard);
+        // Deliver whatever the driver managed to buffer before it failed, then report the fault.
+        // Checking only when the buffer is empty keeps the fault off the hot path entirely.
+        if pending.is_empty() {
+            self.fault.check()?;
+        }
+        Ok(pending)
     }
 
     fn close(self: Box<Self>) {
