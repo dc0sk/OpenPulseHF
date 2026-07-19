@@ -3262,6 +3262,100 @@ mod command_apply_tests {
         );
     }
 
+    /// Audit 2026-07-19 #11: an un-accepted transfer must not have peer bytes acknowledged on air.
+    /// The state check used to run AFTER `persist_block` and the on-air `BlockAck`, so a peer that
+    /// sent data while the operator was still deciding got both.
+    #[tokio::test]
+    async fn blocks_are_not_acked_while_awaiting_the_operators_decision() {
+        use crate::filexfer::{FileTransferPolicy, FX_CONTROL_SEGMENT_ID};
+        use ed25519_dalek::SigningKey;
+        use openpulse_core::manifest::TransferManifest;
+        use openpulse_core::sar::sar_encode;
+        use openpulse_filexfer::{encode_block, split_blocks, FileOffer, FxFrame};
+
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(128);
+        let ev_tx = Arc::new(tx);
+
+        let mut seed = [0u8; 32];
+        seed[0] = 42;
+        let pubkey = SigningKey::from_bytes(&seed).verifying_key().to_bytes();
+        let file = b"awaiting decision payload. ".repeat(80).to_vec();
+        let manifest = TransferManifest::sign(&file, "W1AW", &seed).unwrap();
+        let transfer_id = 0x0A17_F00Du32;
+        let block_size = 1024u32;
+        let offer = FileOffer::from_manifest(
+            transfer_id,
+            &manifest,
+            "wait.txt",
+            "text/plain",
+            block_size,
+            &seed,
+        )
+        .unwrap();
+
+        let dir = std::env::temp_dir().join(format!("opfx_await_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // auto_accept_max_bytes = 0 → the offer PROMPTS instead of auto-accepting, so the session
+        // sits in AwaitingDecision, which is the state under test.
+        let policy = FileTransferPolicy::from_config(&openpulse_config::FileTransferConfig {
+            enabled: true,
+            download_dir: dir.to_string_lossy().into_owned(),
+            auto_accept_max_bytes: 0,
+            max_file_bytes: 10 * 1024 * 1024,
+            per_peer_quota_bytes: 0,
+            require_verified_peer: true,
+            allowed_peers: vec![],
+            offer_timeout_secs: 120,
+            partial_ttl_hours: 72,
+            burst_max_secs: 20.0,
+        });
+        let vp = VerifiedPeer {
+            callsign: "W1AW".into(),
+            grid: String::new(),
+            pubkey: pubkey.to_vec(),
+            profile_compatible: None,
+        };
+        let mut rs = RuntimeControlState {
+            local_callsign: "W1AW".into(),
+            verified_peers: std::iter::once(("W1AW".to_string(), vp)).collect(),
+            filexfer_policy: policy,
+            ..RuntimeControlState::default()
+        };
+
+        let frame = FxFrame::FileOffer(offer.clone()).encode();
+        for frag in sar_encode(FX_CONTROL_SEGMENT_ID, &frame).expect("sar") {
+            crate::filexfer::route_inbound_fragment(
+                &frag,
+                FX_CONTROL_SEGMENT_ID,
+                &mut rs,
+                &ev_tx,
+                "BPSK250",
+            );
+        }
+        assert!(
+            rs.file_rx.is_some(),
+            "precondition: the offer must create a session awaiting the operator's decision"
+        );
+        rs.filexfer_tx_queue.clear(); // ignore anything the offer handling itself queued
+
+        // The peer sends data anyway, before any accept. `encode_block` already returns SAR
+        // fragments, and its segment id is the transfer's data segment.
+        let seg = (transfer_id as u16) | 0x8000;
+        for (k, block) in split_blocks(&file, block_size).iter().enumerate() {
+            for frag in encode_block(transfer_id, k as u16, block, None).unwrap() {
+                crate::filexfer::route_inbound_fragment(&frag, seg, &mut rs, &ev_tx, "BPSK250");
+            }
+        }
+
+        assert!(
+            rs.filexfer_tx_queue.is_empty(),
+            "an un-accepted transfer must not put a BlockAck on the air — the operator has not \
+             agreed to receive this file yet"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test]
     async fn inbound_offer_and_blocks_write_verified_file() {
         use crate::filexfer::{FileTransferPolicy, FX_CONTROL_SEGMENT_ID};

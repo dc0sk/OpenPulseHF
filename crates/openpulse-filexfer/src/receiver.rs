@@ -188,6 +188,15 @@ impl ReceiverSession {
     }
 
     /// Whether the session has reached a terminal state.
+    /// Whether the transfer has been accepted and is actively receiving blocks.
+    ///
+    /// A caller must consult this **before** persisting peer bytes or acknowledging a block on air:
+    /// in `AwaitingDecision` the operator has not accepted the transfer yet, so neither writing the
+    /// data nor keying the transmitter to ack it is authorised (audit 2026-07-19, #11).
+    pub fn is_receiving(&self) -> bool {
+        self.state == State::Receiving
+    }
+
     pub fn is_terminal(&self) -> bool {
         self.state == State::Terminal
     }
