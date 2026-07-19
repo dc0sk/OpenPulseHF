@@ -37,6 +37,16 @@ Two outcomes the brief asked me to weight most, and where they land:
 
 ---
 
+
+> **Finding #3 disposition (2026-07-19).** Recorded as a deliberate exemption rather than fixed.
+> ARDOP and KISS implement third-party specifications that have no authentication; adding one would
+> break the Pat/Winlink/APRS clients those crates exist to serve. Captured as **REQ-SEC-CTL-06** with
+> its standing controls (loopback default, operator responsibility for network placement,
+> caller-independent transmit-safety limits), and the manual's `--bind 0.0.0.0` recipe — the one this
+> finding cited — was corrected to loopback with an explicit warning and an SSH-tunnel alternative.
+> The exemption covers third-party protocol surfaces ONLY; OpenPulseHF's own control channel remains
+> bound by REQ-SEC-CTL-01/02.
+
 ## 2. Ranked top findings
 
 Ranked by severity × blast-radius; unattended-TX / PTT-asserted / pre-auth reachability weighted up. All are **[confirmed]**.
@@ -45,7 +55,7 @@ Ranked by severity × blast-radius; unattended-TX / PTT-asserted / pre-auth reac
 |---|---|---|---|---|
 | 1 | **HIGH** | ARDOP TNC leaves the transmitter **keyed forever** if the host disconnects after `PTT TRUE` — no watchdog, no release-on-disconnect (`openpulse-ardop/src/command.rs:212`) | desk | Give `ModemBridge` the daemon's `SharedPtt` (watchdog + RAII guard) and release unconditionally on `handle_client` exit. |
 | 2 | **HIGH** | Cross-band repeater asserts PTT for the whole session **even when `full_duplex=false` (the default)**, outside any watchdog — unbounded dead-air carrier on a quiet band (`openpulse-repeater/src/lib.rs:156`) | desk | Guard line 156 (and the matching release at 169) with `if self.config.full_duplex`. |
-| 3 | **HIGH** | ARDOP & KISS TCP ports have **no auth and no non-loopback gate** — a one-line `--bind 0.0.0.0` (a documented recipe) hands transmit control to the LAN; `PTT TRUE`/`MYID` are on the same unauthenticated port (`openpulse-ardop/src/data.rs:32`, `openpulse-kiss/src/server.rs:34`) | desk | Call `openpulse_linksec::auth_required(&bind_addr, false)` in each `main.rs` and bail/require-PSK as the daemon does; gate PTT/MYID arms too. |
+| 3 | **RESOLVED — by requirement, not code (see REQ-SEC-CTL-06)** | ARDOP & KISS TCP ports have **no auth and no non-loopback gate** — a one-line `--bind 0.0.0.0` (a documented recipe) hands transmit control to the LAN; `PTT TRUE`/`MYID` are on the same unauthenticated port (`openpulse-ardop/src/data.rs:32`, `openpulse-kiss/src/server.rs:34`) | desk | Call `openpulse_linksec::auth_required(&bind_addr, false)` in each `main.rs` and bail/require-PSK as the daemon does; gate PTT/MYID arms too. |
 | 4 | **MED** | One spoofed, unsigned 18-byte `QSY_REQ` **permanently disables auto-QSY** (the anti-jam response) for the daemon's lifetime — no TTL, no terminal-state reset (`openpulse-daemon/src/lib.rs:1348`) | desk | Add a terminal-state accessor to `QsySession`, clear `qsy_session` on terminal, add a session TTL; pair the gate with a negative control. |
 | 5 | **MED** | Rendezvous responder transmits a full ~45 s JS8 over for **every inbound Propose** — no dedup, no cooldown, explicit bypass of the cadence gate; drives an unattended rig pre-auth (`openpulse-discovery/src/runtime.rs:522`) | design | Seen-token/per-peer cooldown before `enqueue_directed`; consider silently dropping when `rendezvous_channels` is empty. |
 | 6 | **MED** | Inbound OPFX file-offer keys the transmitter with **no §97.119 callsign gate** — the one air-triggered TX path in the daemon that skips the audit-F6 gate every sibling has; fires while identifying as N0CALL (`openpulse-daemon/src/lib.rs:1325`) | desk | Gate `route_inbound_fragment` on `local_callsign_valid()` (and the offer `enabled` flag) at the single inbound seam. *(De-duped: two findings, one root cause.)* |

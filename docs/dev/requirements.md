@@ -148,6 +148,27 @@ client. See `docs/dev/design/control-channel-security.md` for the design and thr
   read one that is group- or world-accessible, and must set owner-only permissions on write. This
   generalises the existing `validate_trust_store_permissions` / `enforce_trust_store_permissions` in
   `openpulse-cli` to every secret file on both sides. (REQ-SEC-CTL-05)
+- **Third-party protocol surfaces are exempt from REQ-SEC-CTL-01/02 and carry no authentication.**
+  The ARDOP TCP interface (`openpulse-tnc`) and the KISS/AX.25 TCP interface (`openpulse-kisstnc`)
+  implement externally-specified protocols — Pat, Winlink and APRS/AX.25 clients speak them as
+  published. Neither specification has any notion of authentication, so adding one would make the
+  interface non-compliant and defeat the compatibility that is the entire reason those crates exist.
+  These ports are therefore unauthenticated **by design**, not by omission. (REQ-SEC-CTL-06)
+
+  The controls that stand in for authentication here are:
+  1. **Loopback by default** — `bind_addr` defaults to `127.0.0.1` for both TNCs (and for the
+     daemon's TCP and WebSocket ports), so out-of-the-box neither is reachable off-host.
+  2. **Operator responsibility for network placement** — binding a TNC to a routable address is an
+     explicit act that grants transmit control (including `PTT TRUE`) to anything that can reach the
+     port. Documentation that shows a non-loopback bind must say so at the point of instruction.
+  3. **Transmit-safety guarantees that do not depend on the caller** — the shared PTT watchdog and
+     release-on-disconnect (`openpulse-radio::shared_ptt`) bound how long any client, authenticated
+     or not, can hold the transmitter.
+
+  This exemption covers *only* protocol surfaces defined by a third party. It does **not** extend to
+  OpenPulseHF's own control channel, which remains bound by REQ-SEC-CTL-01/02, nor to any new
+  interface of our own design. (Recorded 2026-07-19 in response to audit finding #3, which reported
+  the missing auth as a defect; the compatibility constraint makes it a deliberate trade instead.)
 - SAR must be designed and implemented before in-band PQ handshake requirements can be satisfied.
 - PQ signature transport requirements are therefore sequentially dependent on SAR delivery; planning must reflect this ordering.
 - Out-of-band or application-layer PQ key distribution (for example via the PKI tooling) may proceed independently of SAR.

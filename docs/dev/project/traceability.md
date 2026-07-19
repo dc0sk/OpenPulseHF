@@ -9,6 +9,37 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-19 — docs(req): REQ-SEC-CTL-06 — third-party protocol surfaces are unauthenticated by design (audit #3)
+
+- **Requirement/change:** the audit reported the ARDOP and KISS TCP ports as a HIGH defect: no auth,
+  no non-loopback gate, `PTT TRUE` on the same unauthenticated socket, and a documented
+  `--bind 0.0.0.0` recipe. The proposed fix was to call `openpulse_linksec::auth_required` as the
+  daemon does. **Rejected as a fix, recorded as a requirement instead.**
+- **Design decision:** ARDOP and KISS/AX.25 are *externally specified* protocols. Pat, Winlink and
+  APRS clients speak them as published, and neither specification has any notion of authentication —
+  so adding one would make the interface non-compliant and defeat the compatibility that is the whole
+  reason those crates exist. The interfaces are therefore unauthenticated **by design, not by
+  omission**, which is a materially different claim and has to be written down as one; otherwise
+  every future audit re-reports it as the same HIGH finding.
+  Three standing controls stand in for authentication, and each was **verified present** rather than
+  asserted: (1) `bind_addr` defaults to `127.0.0.1` for both TNCs and for the daemon's TCP/WS ports;
+  (2) operator responsibility for network placement, which requires the docs to say so *at the point
+  of instruction*; (3) transmit-safety limits that do not depend on the caller — release-on-disconnect
+  (#971) and the shared watchdog (#972).
+  The exemption is scoped: it covers third-party protocol surfaces ONLY. OpenPulseHF's own control
+  channel remains bound by REQ-SEC-CTL-01/02, as does any new interface of our own design.
+- **Implementation:** `docs/dev/requirements.md` — REQ-SEC-CTL-06 with its three controls and its
+  scope limit. `docs/openpulse-manual.md` §TNC — control (2) was **not** true when written: the manual
+  showed `openpulse-tnc --bind 0.0.0.0` with no warning, which is the exact recipe the finding cited.
+  Corrected to `127.0.0.1` with an explicit warning that off-loopback binding grants transmit control
+  to the network, plus an SSH port-forward alternative for the genuine remote-client case.
+  `docs/dev/reviews/audit-2026-07-19-...md` — finding #3 re-marked as resolved-by-requirement.
+- **Tests:** none — documentation and requirement text only; no code changed.
+- **Test results:** n/a. The factual claims behind the requirement were verified by inspection:
+  `ArdopConfig::default().bind_addr == "127.0.0.1"` (`openpulse-ardop/src/lib.rs:48`) and the four
+  `bind_addr`/`tcp_bind_addr`/`websocket_bind_addr` defaults in `openpulse-config/src/lib.rs`
+  (:705, :717, :779, :781) all loopback.
+
 ## 2026-07-19 — fix(repeater): honour `full_duplex` before keying for a whole session (audit #2)
 
 - **Requirement/change:** `run_full_duplex` asserted PTT for the entire relay session without checking
