@@ -1,0 +1,47 @@
+# cargo-audit configuration.
+#
+# THIS PATH MATTERS. cargo-audit reads `.cargo/audit.toml`; a file named `audit.toml` at the repo
+# root is silently ignored. The root file this replaces had been inert since it was written — its
+# waivers never applied, and the CI workflows compensated by hand-duplicating the same IDs as
+# `--ignore` flags, which then drifted from it (audit 2026-07-19, finding #17).
+#
+# Verify this file is live rather than assuming: `cargo audit` should report the entries below as
+# "allowed warnings", not as findings. If a waived ID shows up as a finding, the config is not being
+# read.
+
+[advisories]
+# Each entry states WHY it is waived and what would retire it. An unexplained ignore is
+# indistinguishable from an oversight, and gets copied forward forever.
+ignore = [
+    # --- Vulnerabilities, waived on reachability -------------------------------------------------
+    # quick-xml < 0.41: quadratic run time on duplicate attribute names (RUSTSEC-2026-0194) and
+    # unbounded namespace-declaration allocation (RUSTSEC-2026-0195). Both are DoS-on-untrusted-XML.
+    #
+    # Not reachable here: quick-xml enters ONLY via the `wayland-scanner` PROC-MACRO, which runs at
+    # BUILD time and parses Wayland protocol XML shipped in our own source tree — never
+    # attacker-supplied input, and never linked into a shipped binary. Chain:
+    #   quick-xml <- wayland-scanner (proc-macro) <- smithay-client-toolkit <- smithay-clipboard
+    #                <- egui-winit <- eframe 0.29 <- openpulse-linksim / openpulse-testbench
+    # It is pinned there: `cargo update -p quick-xml --precise 0.41.0` is refused because
+    # wayland-scanner 0.31.10 requires ^0.39. Retiring these means upgrading eframe past 0.29, which
+    # is a GUI-app change unrelated to the modem. Re-check when eframe is next bumped.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+
+    # --- Unmaintained-crate warnings -------------------------------------------------------------
+    # All transitive, none with a maintained drop-in replacement available to us today. They are
+    # warnings, not vulnerabilities; listed explicitly so `cargo audit` exits 0 on a clean tree and a
+    # genuinely NEW warning is therefore visible instead of lost in a wall of known noise.
+    "RUSTSEC-2024-0384", # instant — unmaintained; transitive via the GUI stack
+    "RUSTSEC-2024-0436", # paste — unmaintained; transitive via wgpu/metal
+    "RUSTSEC-2026-0206", # rustybuzz — unmaintained; transitive via the text/GUI stack
+    "RUSTSEC-2026-0192", # ttf-parser — unmaintained; transitive via the text/GUI stack
+    "RUSTSEC-2026-0190", # anyhow Error::downcast_mut unsoundness — no fixed release yet
+    "RUSTSEC-2026-0002", # lru IterMut Stacked-Borrows violation — transitive
+    "RUSTSEC-2026-0186", # memmap2 unchecked pointer offset — transitive
+]
+
+# Removed 2026-07-19: RUSTSEC-2023-0071 (rsa Marvin timing attack via sqlx-mysql). It no longer
+# appears in `cargo audit` output for this tree, so the waiver was carrying a finding that had
+# already gone. A stale waiver is a small thing that quietly widens over time — drop them when the
+# finding clears rather than leaving them "just in case".

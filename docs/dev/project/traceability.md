@@ -9,6 +9,46 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-19 — fix(security): make the cargo-audit waiver config live, and clear the audit (audit #16, #17)
+
+- **Requirement/change:** `cargo audit` reported **4 vulnerabilities** (3 × CVSS 7.5) and exited 1,
+  and the repo's waiver file was **inert**: cargo-audit reads `.cargo/audit.toml`, but the file lived
+  at the repo root as `audit.toml`, where it is silently ignored. Proven empirically rather than from
+  documentation — `RUSTSEC-2024-0436` was in the root ignore list and still appeared in the output.
+  The workflows had compensated by hand-duplicating the IDs as `--ignore` flags, which then drifted:
+  **three** `cargo audit` invocations existed with **three different** ignore behaviours
+  (`ci.yml:41` had the flags; `ci.yml:199` and `release.yml:32` ran bare and would have failed on the
+  very advisories the root file claimed to waive).
+- **Design decision:** move the config to the path the tool actually reads, and delete the duplicated
+  flags rather than syncing them — a hand-maintained mirror of a config file is the same
+  "hardcoded list standing in for the real thing" anti-pattern the repo already documents, and it had
+  already drifted. Then **fix what can be fixed and waive only what cannot**, with a stated reason and
+  a retirement condition per entry: an unexplained ignore is indistinguishable from an oversight and
+  gets copied forward forever.
+- **Implementation:** `.cargo/audit.toml` (new, replaces the root `audit.toml`);
+  `.github/workflows/ci.yml` audit step reduced to bare `cargo audit`; `Cargo.lock` — `crossbeam-epoch`
+  0.9.18 → 0.9.20 (fixes RUSTSEC-2026-0204) and `quinn-proto` 0.11.14 → 0.11.16 (fixes
+  RUSTSEC-2026-0185, 7.5).
+  Remaining waived: `quick-xml` RUSTSEC-2026-0194/0195 (7.5 each) — reachable **only** through the
+  `wayland-scanner` proc-macro, which runs at build time over Wayland protocol XML from our own
+  source tree, never attacker input and never linked into a shipped binary; pinned four levels under
+  `eframe 0.29` (`--precise 0.41.0` is refused by `wayland-scanner ^0.39`). Plus 7 unmaintained-crate
+  warnings, listed explicitly so the command exits 0 on a clean tree and a genuinely NEW warning is
+  visible instead of lost in known noise.
+  **Dropped** the stale `RUSTSEC-2023-0071` waiver — it no longer appears for this tree, so it was
+  carrying a finding that had already cleared.
+- **Tests:** no unit test (this is tool configuration). Verified by **sabotage**: deleting the two
+  quick-xml waivers brought both vulnerabilities straight back (exit 1), proving the file is read and
+  the waivers are load-bearing; restoring returned exit 0.
+- **Test results:** `cargo audit` **exit 1 → exit 0** (4 vulnerabilities → 0, 1 allowed warning).
+  Lockfile change verified against the full suite: `cargo test --workspace --no-default-features`
+  **256 suites, 2156 passed, 0 failed** (reconciles with the prior 255/2153 plus #973's one suite of
+  three tests).
+- **Note on method:** the sabotage test's *restore* silently failed — `cp` is interactive in this
+  shell and left the file still sabotaged. It was caught only because the restore step asserted an
+  expected exit code and got the wrong one. Assert the expected result of a restore, not just of the
+  sabotage.
+
 ## 2026-07-19 — docs(req): REQ-SEC-CTL-06 — third-party protocol surfaces are unauthenticated by design (audit #3)
 
 - **Requirement/change:** the audit reported the ARDOP and KISS TCP ports as a HIGH defect: no auth,
