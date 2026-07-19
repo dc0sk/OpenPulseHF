@@ -9,6 +9,40 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-19 — fix: two silent-drop paths — PTT assert failure and ARDOP event lag (audit #8, #12)
+
+- **Requirement/change:** two independent "the failure is handled but nobody is told" defects.
+  **#8:** of five `ptt.keyed()` call sites in the daemon, three log on assert failure and two used
+  `if let Ok(_guard) = …` with **no `else` at all**. The OTA-ACK site skips the ACK — correct — but
+  silently, so receiver-led ARQ stalls with no diagnostic anywhere and the operator sees a link that
+  simply stops. The **station-ID** site does the same, which means a §97.119 identification silently
+  does not go out.
+  **#12:** the ARDOP command loop matched `Ok(event) = event_rx.recv()`. In a `select!` a
+  non-matching result disables that branch, so a `RecvError::Lagged` — what a broadcast channel
+  returns when a slow client falls behind the ring — took the event branch out of contention instead
+  of being handled. Its two sibling loops (`data.rs`, the bridge worker) had already been fixed for
+  exactly this; the command port was never swept. `DISCONNECTED` and the §97 `FAULT no MYID` line both
+  travel that channel.
+- **Design decision:** #8 keeps the skip (skipping is right — nothing is left keyed) and adds the
+  telling. Severity is split deliberately: the OTA ACK is `warn` (a stalled exchange), the station ID
+  is **`error`** (a regulatory obligation not met), because those are different things for an operator
+  to see. #12 is a straight port of `data.rs`'s existing `match { Ok / Lagged→warn / Closed }`, not a
+  new design — the sibling's comment already names the bug, so the fix was to sweep it rather than
+  re-derive it.
+- **Implementation:** `crates/openpulse-daemon/src/server.rs` (both `keyed()` sites);
+  `crates/openpulse-ardop/src/command.rs` (lag handling + `RecvError` import).
+- **Tests:** `crates/openpulse-ardop/tests/event_lag.rs` — overflow the 32-slot ring, then push
+  `DISCONNECTED` and require the client to receive it; two controls prove the gate isn't passing for
+  an unrelated reason (no-lag delivery works, and the command port still answers after a lag rather
+  than wedging). #8 is logging-only on paths whose behaviour is unchanged, so it carries no new test —
+  stated rather than implied.
+- **Test results:** 3/3 pass; `openpulse-ardop` + `openpulse-daemon` 188 passed / 0 failed; clippy
+  `--all-targets -D warnings` clean; fmt clean. **Sabotage-verified**: restoring the `Ok(event) =`
+  pattern made the gate fail with its own diagnostic; restore asserted green.
+- **Note on method:** the control test initially failed because it pushed an event before
+  `handle_client` had subscribed — a race in the test, not the code. Worth recording because a
+  control failing looks exactly like the fix being wrong.
+
 ## 2026-07-19 — fix(daemon): fail closed on an unusable station identity key (audit #7)
 
 - **Requirement/change:** when the station identity key failed to load, the daemon logged a `warn` and

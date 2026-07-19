@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
+use tokio::sync::broadcast::error::RecvError;
 
 use openpulse_core::trust::{CertificateSource, PublicKeyTrustLevel, SigningMode};
 use openpulse_modem::engine::SecureSessionParams;
@@ -118,10 +119,26 @@ async fn handle_client(
                 }
                 write_half.flush().await?;
             }
-            Ok(event) = event_rx.recv() => {
-                write_half.write_all(event.as_bytes()).await?;
-                write_half.write_all(b"\r\n").await?;
-                write_half.flush().await?;
+            result = event_rx.recv() => {
+                match result {
+                    Ok(event) => {
+                        write_half.write_all(event.as_bytes()).await?;
+                        write_half.write_all(b"\r\n").await?;
+                        write_half.flush().await?;
+                    }
+                    Err(RecvError::Lagged(n)) => {
+                        // Slow client; TNC event lines were dropped from the broadcast ring. The old
+                        // `Ok(event) =` pattern silently disabled this branch instead — the same bug
+                        // already fixed in data.rs and the bridge worker, never swept here. What gets
+                        // dropped matters: DISCONNECTED and the §97 `FAULT no MYID` line both travel
+                        // this channel (audit 2026-07-19, #12).
+                        tracing::warn!(
+                            "ARDOP command event stream lagged, {n} TNC event line(s) dropped for \
+                             this client"
+                        );
+                    }
+                    Err(RecvError::Closed) => return Ok(()),
+                }
             }
         }
     }
