@@ -131,6 +131,23 @@ pub fn route_inbound_fragment(
 ) {
     runtime_state.filexfer_frames_routed = runtime_state.filexfer_frames_routed.saturating_add(1);
 
+    // §97.119 (audit F6, extended here by audit 2026-07-19 #6): every branch below can put a frame on
+    // the air in response to something merely *heard* — an offer is answered with `FileAccept` or an
+    // on-air `Reject`, and block fragments are answered with `BlockAck`. The QSY responder already
+    // refuses to engage without a valid MYID for exactly this reason ("even a Reject reply is an
+    // on-air frame"); this path reached its dispatch by an earlier `return` and so skipped that gate,
+    // and would have transmitted while identifying as N0CALL.
+    //
+    // Gated at the seam rather than at the call site: `route_inbound_fragment` is the single entry
+    // for every inbound file-transfer fragment, so a future caller cannot miss it.
+    if !runtime_state.local_callsign_valid() {
+        tracing::warn!(
+            "filexfer: ignoring inbound fragment — no valid station callsign to transmit an \
+             identified reply"
+        );
+        return;
+    }
+
     if segment_id == FX_CONTROL_SEGMENT_ID {
         // A fragment may complete more than one candidate when conflicting streams share the control
         // key; decode and dispatch each (a bogus reassembly just fails to decode).
@@ -1041,6 +1058,60 @@ mod tests {
             &seed,
         )
         .unwrap()
+    }
+
+    /// Audit 2026-07-19 #6 (§97.119): an inbound offer is answered on the air — `FileAccept` when
+    /// accepted, an on-air `Reject` when not. Every sibling air-triggered TX path refuses to engage
+    /// without a valid MYID; this one reached its dispatch via an earlier `return` and skipped the
+    /// gate, so it would have transmitted while identifying as N0CALL.
+    #[test]
+    fn an_inbound_fragment_transmits_nothing_without_a_valid_callsign() {
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+
+        // Default state: `local_callsign` is empty, i.e. not a valid MYID.
+        let mut rs = RuntimeControlState::default();
+        assert!(
+            !rs.local_callsign_valid(),
+            "precondition: the default state must have no valid callsign"
+        );
+
+        let offer = offer_for(b"hello world", 1024);
+        let frame = FxFrame::FileOffer(offer).encode();
+        for frag in sar_encode(FX_CONTROL_SEGMENT_ID, &frame).expect("sar") {
+            route_inbound_fragment(&frag, FX_CONTROL_SEGMENT_ID, &mut rs, &ev, "BPSK250");
+        }
+
+        assert!(
+            rs.filexfer_tx_queue.is_empty(),
+            "an unidentified station must not put a file-transfer reply on the air"
+        );
+    }
+
+    /// Control: with a valid callsign the same offer IS processed, so the gate cannot degenerate into
+    /// disabling inbound file transfer entirely.
+    #[test]
+    fn an_inbound_fragment_is_processed_with_a_valid_callsign() {
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+
+        let mut rs = RuntimeControlState {
+            local_callsign: "W1AW".into(),
+            ..RuntimeControlState::default()
+        };
+        assert!(rs.local_callsign_valid());
+
+        let before = rs.filexfer_frames_routed;
+        let offer = offer_for(b"hello world", 1024);
+        let frame = FxFrame::FileOffer(offer).encode();
+        for frag in sar_encode(FX_CONTROL_SEGMENT_ID, &frame).expect("sar") {
+            route_inbound_fragment(&frag, FX_CONTROL_SEGMENT_ID, &mut rs, &ev, "BPSK250");
+        }
+
+        assert!(
+            rs.filexfer_frames_routed > before,
+            "an identified station must still route inbound fragments"
+        );
     }
 
     #[test]

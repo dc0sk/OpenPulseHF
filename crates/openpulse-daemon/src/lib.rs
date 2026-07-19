@@ -3316,6 +3316,9 @@ mod command_apply_tests {
             profile_compatible: None,
         };
         let mut rs = RuntimeControlState {
+            // §97.119: this station answers an inbound offer on the air, so it needs a valid
+            // MYID. Without one the seam gate refuses to engage (audit 2026-07-19, #6).
+            local_callsign: "W1AW".into(),
             verified_peers: std::iter::once(("W1AW".to_string(), vp.clone())).collect(),
             filexfer_policy: policy,
             ..RuntimeControlState::default()
@@ -3424,6 +3427,9 @@ mod command_apply_tests {
         verified_peers.insert("W1AW".to_string(), w1aw);
         verified_peers.insert("K2XYZ".to_string(), k2xyz.clone());
         let mut rs = RuntimeControlState {
+            // §97.119: this station answers an inbound offer on the air, so it needs a valid
+            // MYID. Without one the seam gate refuses to engage (audit 2026-07-19, #6).
+            local_callsign: "W1AW".into(),
             verified_peers,
             filexfer_policy: policy,
             ..RuntimeControlState::default()
@@ -3495,7 +3501,7 @@ mod command_apply_tests {
             burst_max_secs: 20.0,
         });
         let mut rs = RuntimeControlState {
-            local_callsign: "N0CALL".into(),
+            local_callsign: "W1AW".into(),
             filexfer_policy: policy,
             ..RuntimeControlState::default()
         };

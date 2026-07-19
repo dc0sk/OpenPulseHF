@@ -9,6 +9,40 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-19 — fix(filexfer): gate inbound file-transfer frames on a valid station callsign (audit #6)
+
+- **Requirement/change:** §97.119. Every branch of `route_inbound_fragment` can put a frame on the air
+  in response to something merely *heard*: an offer is answered with `FileAccept` or an on-air
+  `Reject` (`filexfer.rs:178`), and block fragments are answered with `BlockAck`. The QSY responder
+  already refuses to engage without a valid MYID for exactly this reason — its comment reads "even a
+  Reject reply is an on-air frame" — but the filexfer dispatch sits in the `else` branch that
+  `return`s **before** that gate is reached, so it was the one air-triggered TX path in the daemon
+  without it, and would transmit while identifying as N0CALL. Audit 2026-07-19, #6.
+- **Design decision:** gate **inside** `route_inbound_fragment`, not at its call site.
+  `route_inbound_fragment` is the single entry for every inbound file-transfer fragment, so placing
+  the check there means a future caller cannot miss it — the same seam discipline the repo already
+  applies to RX audio. Placing it at the call site would have reproduced the original defect's shape:
+  a guard that protects one route into a subsystem.
+- **Implementation:** `crates/openpulse-daemon/src/filexfer.rs` — `local_callsign_valid()` check at the
+  head of `route_inbound_fragment`, logging at `warn` (an operator whose station silently ignores
+  file transfers needs to know why).
+- **Tests:** `an_inbound_fragment_transmits_nothing_without_a_valid_callsign` (nothing is queued for
+  transmission) plus the control `an_inbound_fragment_is_processed_with_a_valid_callsign`, so the gate
+  cannot degenerate into disabling inbound file transfer outright.
+- **Test results:** `openpulse-daemon` 149 passed / 0 failed; the production-path
+  `twin_daemon_bridge` 4/4 including `a_file_crosses_the_bridge_between_two_real_daemons`, so real
+  transfers are unaffected. Clippy `--all-targets -D warnings` clean; fmt clean.
+  **Sabotage-verified**: disabling the gate reproduced the unidentified transmission and the test
+  failed with its own diagnostic; restore asserted green.
+- **Two things the fix exposed, worth recording:**
+  1. The 11 existing `filexfer` unit tests call `route_inbound_fragment` **zero times** — they drive
+     internals directly, so no amount of passing could ever have caught this. The production-path
+     coverage was the twin-daemon test alone.
+  2. Three daemon tests broke, and all three were driving inbound offers from a station with **no
+     valid callsign** — one of them explicitly set `local_callsign: "N0CALL"`, the invalid sentinel.
+     They were asserting the behaviour of a station that cannot legally transmit. Given a real
+     callsign they pass unchanged; that is the tests becoming realistic, not being weakened.
+
 ## 2026-07-19 — fix(discovery): rate-limit the rendezvous responder per peer (audit #5)
 
 - **Requirement/change:** every inbound `Propose` directed at us, in `TxMode::Full`, produced a full
