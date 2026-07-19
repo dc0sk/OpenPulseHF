@@ -6,7 +6,7 @@
 //! slot boundary while dwelling it decodes the buffered slot, upserts every heard station, and emits
 //! `StationHeard`. This keeps the daemon glue (async loop, CAT retune, event plumbing) thin.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 use js8_plugin::beacon::{directed, frame_audio, heartbeat, opulse_hint, BeaconFrame};
 use js8_plugin::decoder::{decode_window, DecodeCfg, Js8Decode};
@@ -132,6 +132,19 @@ pub enum DiscoveryOutcome {
 }
 
 /// The RX-only discovery runtime.
+/// Minimum gap between rendezvous replies to the *same* peer.
+///
+/// Answering a `Propose` costs a full JS8 over on the air. Without a floor, a peer that repeats its
+/// proposal — malfunctioning, or deliberately — drives an unattended transmitter continuously, and
+/// the rendezvous path is reachable with no authentication (the post-QSY CONREQ is the auth gate, so
+/// it comes *after* this). Two minutes still admits a legitimate retry when our Accept was lost,
+/// while capping what one peer can extract (audit 2026-07-19, #5).
+pub const RESPONDER_COOLDOWN_MS: u64 = 120_000;
+
+/// Cap on tracked peers for the cooldown. The key is a peer-supplied callsign, so an unbounded map is
+/// itself a memory-exhaustion vector — the guard has to bound the thing that actually grows.
+const MAX_TRACKED_RESPONDERS: usize = 512;
+
 pub struct DiscoveryRuntime {
     params: DiscoveryParams,
     sm: DiscoverySm,
@@ -149,6 +162,10 @@ pub struct DiscoveryRuntime {
     initiator: Option<RendezvousInitiator>,
     /// Directed rendezvous frames pending transmission (priority over beacons, no cadence gate).
     rendezvous_tx: VecDeque<BeaconFrame>,
+    /// When we last transmitted a rendezvous reply to each peer, for the responder cooldown.
+    /// Bounded by `MAX_TRACKED_RESPONDERS`: the key is a peer-supplied callsign, so an unbounded map
+    /// would itself be the memory-exhaustion vector this cooldown exists to close.
+    last_response_ms: BTreeMap<String, u64>,
     /// A responder agreement `(peer, channel, switch_in_slots)` withheld until our Accept over has fully
     /// transmitted — so the daemon schedules the responder's QSY *after* the Accept is sent (aligned with
     /// the initiator's decode) instead of preempting and truncating the Accept's last frame.
@@ -181,6 +198,7 @@ impl DiscoveryRuntime {
             rendezvous_channels: Vec::new(),
             initiator: None,
             rendezvous_tx: VecDeque::new(),
+            last_response_ms: BTreeMap::new(),
             pending_responder_agreement: None,
             dwell_buf: Vec::new(),
             beacon_queue: VecDeque::new(),
@@ -243,6 +261,26 @@ impl DiscoveryRuntime {
     /// Whether an outgoing rendezvous proposal is awaiting a reply.
     pub fn rendezvous_active(&self) -> bool {
         self.initiator.is_some()
+    }
+
+    /// Record that we answered `peer` at `now_ms`, evicting the oldest entry when full.
+    ///
+    /// Eviction is by oldest response, so a flood of fresh spoofed callsigns cannot push out the
+    /// entry for a peer we are actively rate-limiting without first ageing past it.
+    fn note_response(&mut self, peer: String, now_ms: u64) {
+        if self.last_response_ms.len() >= MAX_TRACKED_RESPONDERS
+            && !self.last_response_ms.contains_key(&peer)
+        {
+            if let Some(oldest) = self
+                .last_response_ms
+                .iter()
+                .min_by_key(|(_, &t)| t)
+                .map(|(k, _)| k.clone())
+            {
+                self.last_response_ms.remove(&oldest);
+            }
+        }
+        self.last_response_ms.insert(peer, now_ms);
     }
 
     /// Queue the frames of `sender: to <msg>` for transmission (priority over beacons).
@@ -475,7 +513,7 @@ impl DiscoveryRuntime {
                 self.rendezvous_assembler
                     .ingest(&d.payload, d.i3bit, d.base_freq_hz, slot)
             {
-                out.extend(self.handle_rendezvous(r.from, r.msg));
+                out.extend(self.handle_rendezvous(r.from, r.msg, now_ms));
             }
             if let Some(o) = self.ingest_decode(&d, now_ms) {
                 out.push(o);
@@ -487,7 +525,12 @@ impl DiscoveryRuntime {
 
     /// Drive a recognised rendezvous message: if it answers our active proposal, resolve the initiator
     /// (QSY / reject); otherwise, in `Full` mode, respond to an inbound `Propose` and (on accept) agree.
-    fn handle_rendezvous(&mut self, from: String, msg: RendezvousMsg) -> Vec<DiscoveryOutcome> {
+    fn handle_rendezvous(
+        &mut self,
+        from: String,
+        msg: RendezvousMsg,
+        now_ms: u64,
+    ) -> Vec<DiscoveryOutcome> {
         // A reply to our own in-flight proposal (same peer + token)?
         if let Some(init) = self.initiator.as_mut() {
             if init.peer().eq_ignore_ascii_case(from.trim()) {
@@ -519,8 +562,18 @@ impl DiscoveryRuntime {
         if !matches!(msg, RendezvousMsg::Propose { .. }) {
             return Vec::new();
         }
+        // Rate-limit per peer BEFORE deciding to transmit: replying costs a full JS8 over, and this
+        // path is reachable pre-authentication.
+        let key = from.trim().to_ascii_uppercase();
+        if let Some(&last) = self.last_response_ms.get(&key) {
+            if now_ms.saturating_sub(last) < RESPONDER_COOLDOWN_MS {
+                return Vec::new();
+            }
+        }
+
         match respond(&msg, &self.rendezvous_channels, DEFAULT_SWITCH_SLOTS) {
             RendezvousOutcome::Send(reply) => {
+                self.note_response(key, now_ms);
                 self.enqueue_directed(&from, &reply);
                 if let RendezvousMsg::Accept {
                     channel,
@@ -859,6 +912,73 @@ mod tests {
         assert_eq!(
             agreed,
             Some(("KN4CRD".to_string(), 9, DEFAULT_SWITCH_SLOTS))
+        );
+    }
+
+    /// Audit 2026-07-19 #5: answering a `Propose` costs a full JS8 over, and the path is reachable
+    /// with no authentication. Without a per-peer floor, a peer repeating its proposal drives an
+    /// unattended transmitter continuously.
+    #[test]
+    fn a_repeated_proposal_from_one_peer_does_not_transmit_every_time() {
+        let mut rt = dwelling_rendezvous_runtime(TxMode::Full);
+        rt.set_rendezvous_channels(vec![3, 9, 2]);
+        let mut t = 1000u64;
+
+        // First proposal: answered, as it should be.
+        feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF QSY? R7 C9 C3", &mut t);
+        let queued_after_first = rt.rendezvous_tx.len();
+        assert!(
+            queued_after_first > 0,
+            "precondition: the first proposal must be answered, else this test proves nothing"
+        );
+
+        // Drain the queue so the next count is unambiguous.
+        rt.rendezvous_tx.clear();
+
+        // The same peer proposes again immediately — the flood case.
+        feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF QSY? R7 C9 C3", &mut t);
+        assert_eq!(
+            rt.rendezvous_tx.len(),
+            0,
+            "a repeat proposal inside the cooldown must not queue another over — one peer could \
+             otherwise hold the transmitter indefinitely, pre-authentication"
+        );
+    }
+
+    /// Control: the cooldown is per peer, so a different station is still answered. A global lock
+    /// would let one flooder silence rendezvous for everyone.
+    #[test]
+    fn the_responder_cooldown_is_per_peer() {
+        let mut rt = dwelling_rendezvous_runtime(TxMode::Full);
+        rt.set_rendezvous_channels(vec![3, 9, 2]);
+        let mut t = 1000u64;
+
+        feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF QSY? R7 C9 C3", &mut t);
+        rt.rendezvous_tx.clear();
+
+        feed_over(&mut rt, "W1AW", "DC0SK", "OPHF QSY? R7 C9 C3", &mut t);
+        assert!(
+            !rt.rendezvous_tx.is_empty(),
+            "a different peer must still get an answer — the cooldown is per peer, not global"
+        );
+    }
+
+    /// Control: once the cooldown has elapsed, a legitimate retry (our Accept was lost) is answered.
+    #[test]
+    fn a_proposal_after_the_cooldown_is_answered_again() {
+        let mut rt = dwelling_rendezvous_runtime(TxMode::Full);
+        rt.set_rendezvous_channels(vec![3, 9, 2]);
+        let mut t = 1000u64;
+
+        feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF QSY? R7 C9 C3", &mut t);
+        rt.rendezvous_tx.clear();
+
+        t += RESPONDER_COOLDOWN_MS + 1;
+        feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF QSY? R7 C9 C3", &mut t);
+        assert!(
+            !rt.rendezvous_tx.is_empty(),
+            "past the cooldown the same peer must be answered again, or a lost Accept can never be \
+             retried"
         );
     }
 
