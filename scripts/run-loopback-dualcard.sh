@@ -59,22 +59,52 @@ QUICK_CASES=(
     "8PSK500|128"
     "SCFDMA16|64"
 )
-FULL_CASES=(
-    "BPSK31|32"
-    "BPSK63|32"
-    "BPSK100|64"
-    "BPSK250|64"
-    "QPSK125|64"
-    "QPSK250|64"
-    "QPSK500|128"
-    "QPSK1000|128"
-    "8PSK500|128"
-    "8PSK1000|128"
-    "OFDM16|64"
-    "OFDM52|64"
-    "SCFDMA16|64"
-    "SCFDMA52|64"
-)
+# `--full` is derived from the plugin registry at run time, NOT from a hand-maintained list.
+#
+# The previous FULL_CASES array froze 14 cases and silently drifted as the registry grew: MFSK16
+# (hpx_hf's SL1 rung) and the differential QPSK250-D/QPSK500-D modes were never in it, so a --full
+# run reported 14/14 while covering none of them. A hardcoded list standing in for an enumeration
+# reads as coverage; that is the same defect the audit found in CRATES_TESTED and the plugin
+# registrars (audit 2026-07-19, loopback-revalidation-plan task A).
+enumerate_registry_modes() {
+    "$BIN" modes 2>/dev/null \
+        | grep -oE '\(([^)]+)\)$' \
+        | tr -d '()' | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -E '^[A-Z0-9]' | sort -u
+}
+
+# Payload size for a mode, by symbol rate: slow rungs stay short so a case does not run for minutes.
+payload_for() {
+    case "$1" in
+        MFSK16*)                       echo 32 ;;   # 31.25 baud, ~17 s per frame
+        BPSK31|BPSK63)                 echo 32 ;;
+        *9600*|*2000*|*1000*)          echo 128 ;;
+        *500*)                         echo 128 ;;
+        *)                             echo 64 ;;
+    esac
+}
+
+# Some modes cannot decode without FEC, so a no-FEC sweep would report a FALSE failure.
+#
+# Differential (`-D`) encodes each dibit as a phase increment: a fade rotation cancels symbol to
+# symbol, but every slip costs a dibit that only FEC can repair. Uncoded differential measures 0.00
+# BY DESIGN (see CLAUDE.md, #923). Running it with FEC=none and recording "fail" would manufacture a
+# regression that is really a configuration error.
+fec_for() {
+    case "$1" in
+        *-D)      echo "rs" ;;
+        MFSK16*)  echo "rs" ;;   # sub-floor rung is always FEC-protected in the ladder
+        *)        echo "$FEC" ;;
+    esac
+}
+
+# Modes that cannot run on this rig, with the reason. Reported as SKIP, never silently dropped.
+skip_reason_for() {
+    case "$1" in
+        *9600*) echo "needs Fs >= 38.4 kHz (>=4 samples/symbol); this path is 8 kHz" ;;
+        FSK4-ACK|MFSK16-ACK) echo "ACK-channel waveform, exercised by the ARQ tests not a data sweep" ;;
+        *) echo "" ;;
+    esac
+}
 
 TIER="${TIER:-quick}"
 SINGLE_CASE=""
@@ -146,7 +176,25 @@ fi
 if [[ -n "$SINGLE_CASE" ]]; then
     CASES=("$SINGLE_CASE")
 elif [[ "$TIER" == "full" ]]; then
-    CASES=("${FULL_CASES[@]}")
+    CASES=()
+    SKIPPED=()
+    if [[ -n "${MODES:-}" ]]; then
+        read -r -a _reg <<< "$MODES"
+    else
+        mapfile -t _reg < <(enumerate_registry_modes)
+    fi
+    if [[ ${#_reg[@]} -eq 0 ]]; then
+        echo "ERROR: could not enumerate modes from '$BIN modes'" >&2
+        exit 1
+    fi
+    for m in "${_reg[@]}"; do
+        reason="$(skip_reason_for "$m")"
+        if [[ -n "$reason" ]]; then
+            SKIPPED+=("${m}|${reason}")
+        else
+            CASES+=("${m}|$(payload_for "$m")")
+        fi
+    done
 else
     CASES=("${QUICK_CASES[@]}")
 fi
@@ -159,22 +207,30 @@ pass=0; fail=0; total="${#CASES[@]}"; results=()
 echo "==> Dual-card hardware loopback (${ts})  tier=${TIER}  cases=${total}"
 echo "    TX: ${TX_DEVICE} (card ${TX_CARD:-?})   RX: ${RX_DEVICE} (card ${RX_CARD:-?})   FEC=${FEC}"
 echo "    listen=${IRS_LISTEN_MS}ms  report=${report}"
+if [[ ${#SKIPPED[@]:-0} -gt 0 ]]; then
+    echo "    skipped (${#SKIPPED[@]}):"
+    for sk in "${SKIPPED[@]}"; do
+        IFS='|' read -r sm sr <<< "$sk"
+        printf "      %-16s %s\n" "$sm" "$sr"
+    done
+fi
 echo ""
 
 # One TX->RX attempt. Sets REASON (empty on success); returns 0 pass / 1 fail.
 run_once() {  # mode payload-size payload-text
     local MODE="$1" PAYLOAD_SIZE="$2" payload="$3"
     local rxlog="/tmp/openpulse-dualcard-rx-${MODE}.log" txlog="/tmp/openpulse-dualcard-tx-${MODE}.log"
+    local MODE_FEC; MODE_FEC="$(fec_for "$MODE")"
     _normalise
     pkill -x openpulse 2>/dev/null; sleep 0.3
     "$BIN" --backend cpal --log debug --ptt none receive --mode "$MODE" \
-        --fec "$FEC" --listen-ms "$IRS_LISTEN_MS" --device "$RX_DEVICE" --no-afc >"$rxlog" 2>&1 &
+        --fec "$MODE_FEC" --listen-ms "$IRS_LISTEN_MS" --device "$RX_DEVICE" --no-afc >"$rxlog" 2>&1 &
     local rxpid=$!
     sleep "$IRS_STARTUP_WAIT"
     if ! kill -0 $rxpid 2>/dev/null; then REASON="RX not running"; return 1; fi
     local iss_exit=0
     timeout "$TX_TIMEOUT" "$BIN" --backend cpal --log info --ptt none transmit --mode "$MODE" \
-        --fec "$FEC" --device "$TX_DEVICE" "$payload" >"$txlog" 2>&1 || iss_exit=$?
+        --fec "$MODE_FEC" --device "$TX_DEVICE" "$payload" >"$txlog" 2>&1 || iss_exit=$?
     sleep "$KILL_WAIT"
     kill $rxpid 2>/dev/null; wait $rxpid 2>/dev/null
     if [[ $iss_exit -ne 0 ]]; then
@@ -189,7 +245,8 @@ run_once() {  # mode payload-size payload-text
 for case_spec in "${CASES[@]}"; do
     IFS='|' read -r MODE PAYLOAD_SIZE <<< "$case_spec"
     payload="$(python3 -c "import secrets,string;print(''.join(secrets.choice(string.ascii_letters+string.digits) for _ in range(${PAYLOAD_SIZE})))")"
-    printf "  [%-12s payload=%4sB] ... " "$MODE" "$PAYLOAD_SIZE"
+    CASE_FEC="$(fec_for "$MODE")"
+    printf "  [%-14s payload=%4sB fec=%-16s] ... " "$MODE" "$PAYLOAD_SIZE" "$CASE_FEC"
 
     ok=1; REASON=""; attempts=0
     for ((r=1; r<=RETRIES; r++)); do
@@ -200,11 +257,11 @@ for case_spec in "${CASES[@]}"; do
     if [[ $ok -eq 0 ]]; then
         [[ $attempts -gt 1 ]] && echo "PASS (attempt ${attempts})" || echo "PASS"
         pass=$((pass+1))
-        results+=("{\"mode\":\"$MODE\",\"payload_bytes\":$PAYLOAD_SIZE,\"result\":\"pass\",\"attempts\":$attempts,\"fail_reason\":\"\"}")
+        results+=("{\"mode\":\"$MODE\",\"payload_bytes\":$PAYLOAD_SIZE,\"fec\":\"$CASE_FEC\",\"result\":\"pass\",\"attempts\":$attempts,\"fail_reason\":\"\"}")
     else
         echo "FAIL (${REASON}) after ${attempts} attempt(s)"
         fail=$((fail+1))
-        results+=("{\"mode\":\"$MODE\",\"payload_bytes\":$PAYLOAD_SIZE,\"result\":\"fail\",\"attempts\":$attempts,\"fail_reason\":\"$REASON\"}")
+        results+=("{\"mode\":\"$MODE\",\"payload_bytes\":$PAYLOAD_SIZE,\"fec\":\"$CASE_FEC\",\"result\":\"fail\",\"attempts\":$attempts,\"fail_reason\":\"$REASON\"}")
         rxlog="/tmp/openpulse-dualcard-rx-${MODE}.log"
         afc="$(grep -E 'AFC settling|AFC decode|AFC:' "$rxlog" 2>/dev/null | head -3 || true)"
         [[ -n "$afc" ]] && { echo "    RX AFC:"; echo "$afc" | sed 's/^/      /'; }
