@@ -9,10 +9,14 @@
 
 pub mod loopback;
 
+pub mod fault;
+
 #[cfg(feature = "cpal-backend")]
 pub mod cpal_backend;
 
 pub use loopback::{LoopbackBackend, LoopbackIqOutputStream};
+
+pub use fault::StreamFault;
 
 #[cfg(feature = "cpal-backend")]
 pub use cpal_backend::CpalBackend;

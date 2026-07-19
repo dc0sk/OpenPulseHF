@@ -9,6 +9,44 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-19 — fix(audio): report capture-device loss instead of going silently deaf (audit #19)
+
+- **Requirement/change:** a cpal stream reports device loss (USB unplug, card reset, sound-server
+  restart) only through its error callback, which logged and **discarded** the error. `read()` returns
+  `Ok(vec![])` whenever its buffer is empty, so after the device died the caller saw an unbroken run
+  of *successful empty reads*: "quiet band" and "sound card gone" were indistinguishable, and an
+  unattended station went deaf in silence. Audit 2026-07-19, finding #19.
+- **Design decision:** the striking part is that **the recovery already existed** —
+  `server.rs`'s rx tick drops the stream and reopens it on `Err` — and was simply *unreachable*,
+  because nothing ever produced an `Err`. So the fix is not new recovery machinery; it is delivering
+  the fault to the path already waiting for it.
+  `StreamFault` is a first-error-wins latch shared between the driver callback and the reader. First
+  error wins because a dying device repeats the same error every callback period and the first one
+  names the actual cause. `read()` checks the latch **only when the buffer drains empty**, so the
+  fault is off the hot path and buffered samples captured before the failure are still delivered.
+  It lives in an **ungated** module, not inside `cpal_backend`: the workspace suite runs
+  `--no-default-features`, so anything behind `cpal-backend` is untestable in the gate that actually
+  runs — which is how the original defect survived. The daemon's logging is **edge-triggered**
+  (`warn` on the transition into failure and on recovery, `debug` while still failing) because the rx
+  tick fires every `receive_tick_ms`; an un-edged `warn` would bury an unattended log.
+- **Implementation:** `crates/openpulse-audio/src/fault.rs` (new `StreamFault`), exported from
+  `lib.rs`; `crates/openpulse-audio/src/cpal_backend.rs` — input callback latches before logging,
+  `CpalInputStream` carries the latch, `read()` reports it once the buffer is empty;
+  `crates/openpulse-daemon/src/server.rs` — `capture_failed` edge flag, `warn` on failure and
+  recovery.
+- **Tests:** `fault.rs` unit tests (6): fresh latch is Ok; a recorded fault fails **and stays failed**;
+  first error wins; clones share the latch (the callback/reader split that makes it work); clear
+  allows reuse after re-acquisition; and a **poisoned** lock still reports — the panic that poisons it
+  is exactly when the fault most needs reading.
+- **Test results:** `openpulse-audio` 13 passed / 0 failed; `openpulse-audio` + `openpulse-daemon`
+  158 passed / 0 failed. Clippy `--all-targets -D warnings` clean in **both** feature states
+  (`--no-default-features` and `--features cpal-backend`); fmt clean.
+- **Known limit:** the fault is proven at the latch and wired into the cpal callback, but the
+  *end-to-end* path (real device disappears → `read` errors → daemon reopens) is not covered by an
+  automated test — it needs hardware, and the cpal path does not run under `--no-default-features`.
+  Verifying it belongs with the dual-card rig work in `loopback-revalidation-plan.md`: unplug the
+  USB card mid-session and confirm the `warn` fires once and recovery is logged on replug.
+
 ## 2026-07-19 — fix(plugins): restore the drifted registrars and gate their parity (audit #13)
 
 - **Requirement/change:** there is no shared plugin registrar — each front-end hand-lists what it
