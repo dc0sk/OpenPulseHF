@@ -7664,3 +7664,43 @@ and the actually-observed results per change.
   reassembles + delivers it via the loopback frame queue); the 12 existing mesh loopback tests pass
   unchanged (fast path).
 - **Test results:** mesh 13/13; full workspace gate below. No wire-format change in this PR.
+
+## 2026-07-20 — fix(modem): the scanning FEC receive can find a frame inside a long capture
+
+- **Requirement/change:** validating `hpx_hf`'s two load-bearing fade rungs on real audio
+  (loopback-revalidation task A) exposed a live defect: on the dual-card rig `QPSK250 + rs` **passed at a
+  ~7 s capture window and failed at the default 45 s one** — same mode, FEC, rig, level and payload, the
+  only variable being how much audio was captured around the frame. Every long coded frame failed on real
+  hardware, and `QPSK250-D` (SL6) could not complete at all.
+- **Root cause:** `receive_from_samples_with_fec` slices a **fixed-length** window,
+  `end = (start + max_frame_samples).min(accumulated.len())`, so the demodulated byte count is a function
+  of the *window* rather than the frame. `FecCodec::decode` requires an exact multiple of the 255-byte
+  block, so once the capture outlasted the frame the length gate rejected every attempt before
+  Reed–Solomon ever ran. The in-process suite was structurally blind to it: `ChannelSimHarness::route*`
+  fills the RX loopback with a buffer that *is* the frame.
+- **Design decision:** `FecCodec::decode_prefix` tries successively longer block prefixes (1..=N) and
+  returns the first that decodes. Safe without a new length field because `decode` already validates its
+  own 4-byte length prefix against the decoded size, so a wrong block count cannot silently succeed.
+  Wired into the `Rs` and `RsStrong` arms of the scanning receive only — the single-shot
+  `receive_with_fec_mode` and `decode_combined_llrs` keep strict `decode` (their input length is
+  frame-derived, not window-derived), and `RsInterleaved` is untouched because it deinterleaves before
+  decoding and genuinely needs the exact length. No wire-format change.
+- **Implementation:** `crates/openpulse-core/src/fec.rs` (`decode_prefix`);
+  `crates/openpulse-modem/src/engine.rs` (the two arms of `receive_from_samples_with_fec`);
+  `crates/openpulse-modem/src/channel_sim.rs` (`route_embedded(lead, trail)` — pads silence around the
+  frame so a test can exercise frame *location*, which no existing `route*` variant could).
+- **Tests:** `crates/openpulse-modem/tests/fec_scan_long_capture.rs` — 4 tests: the `Rs` and `RsStrong`
+  long-capture gates, a tight-capture control, and an anti-vacuity test asserting the capture really is
+  several times the frame length.
+- **Test results:** **Sabotage-verified** — reverting the two arms to strict `decode` turns the suite red
+  (3 of 4 fail) with the hardware error verbatim: `FEC data length 270 is not a non-zero multiple of 255`.
+  With the fix, 4/4 pass. **On the dual-card hardware rig:** `QPSK250-D + rs` PASS ×3 at the default 45 s
+  window plus PASS on a 200 B multi-block payload; `QPSK250 + rs` PASS. This is the **first real-audio
+  validation of `hpx_hf` SL6**; SL1 (`MFSK16`) was validated the day before. Full workspace gate below.
+- **Falsified along the way** (recorded so they are not re-attempted): sample-rate offset (coded and
+  uncoded tolerate the same 500 ppm — `sro_confirmation`), signal level, RS correction capacity
+  (`rs-strong` fails identically), TX buffer underrun (present in *passing* runs), sub-symbol scan
+  granularity, the LMS equalizer, frame airtime (a 4.16 s *uncoded* frame decodes perfectly), and
+  physical corruption (captured WAV shows a clean 4.20 s burst, zero interior dropouts). A ninth
+  hypothesis — that `QPSK250-D` had a *second*, differential-specific defect because it failed even at the
+  tight window — was also wrong: the tight window was a coin flip that coherent won. One defect, not two.

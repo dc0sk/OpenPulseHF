@@ -115,6 +115,26 @@ impl ChannelSimHarness {
         n
     }
 
+    /// Route TX samples with silence padded around them, so the receiver must LOCATE the frame.
+    ///
+    /// Every other route fills the RX loopback with a buffer that **is** the frame, which is a
+    /// receiver's easiest possible case and not what a real capture looks like: a live receiver
+    /// listens for seconds and the frame sits somewhere inside. That gap is why the whole suite
+    /// missed a defect where the scanning FEC receive could not decode a frame a shorter capture
+    /// decoded fine (measured 2026-07-19 on the dual-card rig, 45 s window vs 7 s).
+    ///
+    /// Returns the number of TX samples routed (excluding the padding).
+    pub fn route_embedded(&mut self, lead_silence: usize, trail_silence: usize) -> usize {
+        let samples = self.tx_loopback.drain_samples();
+        let n = samples.len();
+        let mut buf = Vec::with_capacity(lead_silence + n + trail_silence);
+        buf.extend(std::iter::repeat_n(0.0f32, lead_silence));
+        buf.extend_from_slice(&samples);
+        buf.extend(std::iter::repeat_n(0.0f32, trail_silence));
+        self.rx_loopback.fill_samples(&buf);
+        n
+    }
+
     /// Route TX samples through a pure sample-rate-offset (clock-drift) channel.
     ///
     /// `ppm` is the RX-vs-TX clock offset in parts-per-million (positive = RX

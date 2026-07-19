@@ -2848,7 +2848,13 @@ impl ModemEngine {
                 let wire =
                     self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire.unwrap())?;
                 WirePayload {
-                    bytes: FecCodec::new().decode(&wire.bytes)?,
+                    // decode_prefix, not decode: this is the SCANNING receive, so `wire.bytes` is a
+                    // fixed-length window out of the capture buffer — its length is a function of
+                    // the window, not the frame, so `decode` rejected it on the multiple-of-255
+                    // gate before RS ever ran whenever the capture outlasted the frame
+                    // (audit 2026-07-19). `decode_combined_llrs` and the single-shot
+                    // `receive_with_fec_mode` keep strict `decode` — they know the frame extent.
+                    bytes: FecCodec::new().decode_prefix(&wire.bytes)?,
                 }
             }
             FecMode::RsInterleaved => {
@@ -2886,7 +2892,7 @@ impl ModemEngine {
                 let wire =
                     self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire.unwrap())?;
                 WirePayload {
-                    bytes: FecCodec::strong().decode(&wire.bytes)?,
+                    bytes: FecCodec::strong().decode_prefix(&wire.bytes)?,
                 }
             }
             // ShortRs (byte-exact, no length prefix) and Turbo (fixed QPP block size
