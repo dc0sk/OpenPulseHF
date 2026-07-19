@@ -108,6 +108,20 @@ const SMOKE_ONLY_MODES: &[&str] = &["QPSK2000", "QPSK1000", "8PSK1000", "8PSK200
 /// (see the coverage regression test). Revisit post-v1.0.
 pub const KNOWN_LIMITATION_MODES: &[&str] = &["8PSK2000"];
 
+/// Sub-floor modes excluded from the sweep matrix on runtime grounds, covered by dedicated tests.
+///
+/// MFSK16 is `hpx_hf`'s SL1 weak-signal rung at 31.25 baud: one frame is ~17 s of audio, so a full
+/// channel × payload sweep would dominate the matrix runtime for a single rung. It is covered
+/// instead by `openpulse-modem`'s `mfsk16_engine` (loopback + acquisition + calibrated LLRs) and
+/// `mfsk16_harq` (combining diversity), both named in CLAUDE.md's acceptance table, plus
+/// `mfsk16_arq_subfloor` for the K=3 union ACK path.
+///
+/// Listed explicitly rather than left out: the plugin IS registered by every front-end (as of audit
+/// 2026-07-19 #13, which fixed the test matrix silently omitting it and therefore publishing fade
+/// reports for a ladder missing its weakest rung), so without an entry here the coverage gate below
+/// correctly reports it as unaccounted-for.
+pub const LONG_FRAME_MODES: &[&str] = &["MFSK16", "MFSK16-ACK"];
+
 /// Wideband modes deferred to a post-v1.0 release.
 ///
 /// 9600-baud modes need a channel wider than the 3 kHz HF SSB passband (10 m HF, UHF, VHF)
@@ -742,6 +756,7 @@ mod coverage_tests {
             .chain(KNOWN_LIMITATION_MODES.iter())
             .chain(PILOT_POST_V1_MODES.iter())
             .chain(DEMONSTRATOR_MODES.iter())
+            .chain(LONG_FRAME_MODES.iter())
             .map(|s| s.to_string())
             .collect();
         let missing: Vec<String> = registered_modes()

@@ -9,6 +9,34 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-19 — fix(testmatrix): account for MFSK16 in the mode-coverage gate (regression from #13)
+
+- **Requirement/change:** completing the plugin registrars in #978 (audit #13) made `MFSK16` and
+  `MFSK16-ACK` *registered* modes with no matrix coverage, which the test matrix's own
+  `every_registered_mode_is_covered_or_deferred` gate correctly rejected. **#978 merged with a red
+  workspace gate:** I ran `cargo test -p openpulse-core` for that change but not the test matrix's own
+  tests, so the failure only surfaced on the end-of-batch full-workspace run. Per-package green hid a
+  cross-package regression — precisely what the "run the FULL gate at the end" rule exists to catch.
+  It worked; it was simply run one PR too late.
+- **Design decision:** account for the modes rather than sweep them. MFSK16 is `hpx_hf`'s SL1 rung at
+  31.25 baud — ~17 s of audio per frame — so a full channel × payload sweep would dominate the matrix
+  runtime for one rung; it is covered instead by `mfsk16_engine`, `mfsk16_harq` and
+  `mfsk16_arq_subfloor`, all named in CLAUDE.md's acceptance table.
+  The first attempt added the constant and chained it only into the test, and **clippy rejected it as
+  dead code** — which was informative rather than annoying: every sibling exclusion list is *also*
+  printed in the run output, so an exclusion is visible to whoever runs the matrix instead of merely
+  satisfying a test. That is the repo's "no silent caps" rule expressed in code, and the first version
+  would have quietly failed it.
+- **Implementation:** `apps/openpulse-testmatrix/src/cases.rs` — `LONG_FRAME_MODES` with its rationale,
+  chained into the accounted set; `apps/openpulse-testmatrix/src/main.rs` — reported in the run
+  summary alongside the other four exclusion lists.
+- **Tests:** the existing coverage gate; no new test (this is accounting for an existing one).
+- **Test results:** `openpulse-testmatrix` 18 passed / 0 failed. **Sabotage-verified**: emptying
+  `LONG_FRAME_MODES` makes the gate fire again with the same diagnostic; restore asserted green.
+  Full workspace: **259 suites, 2181 passed, 0 failed, 38 ignored**; clippy `--workspace
+  --all-targets -D warnings` clean; fmt clean. Count reconciles against the 256/2156 baseline plus
+  the seven intervening PRs' additions.
+
 ## 2026-07-19 — fix(filexfer): gate inbound file-transfer frames on a valid station callsign (audit #6)
 
 - **Requirement/change:** §97.119. Every branch of `route_inbound_fragment` can put a frame on the air
