@@ -159,3 +159,27 @@ fn qam64_tolerates_realistic_sro() {
         "64QAM500 @ 100 ppm with soft-concatenated FEC"
     );
 }
+
+/// Does SRO alone reproduce the hardware failure of `QPSK250 + rs`?
+///
+/// The dual-card rig fails `QPSK250 + rs` (and `QPSK250-D + rs`) while passing uncoded `QPSK250` on
+/// the same cable. "Clock offset over a long frame" was the leading hypothesis. This tests it: the
+/// coded frame is a padded 255-byte block (4.08 s at QPSK250), the uncoded one is 74 B (1.18 s).
+///
+/// Arithmetic says the hypothesis is weak — at 100 ppm the drift across the whole 4.08 s frame is
+/// 0.10 symbol periods, and a full symbol slip needs ~980 ppm. Run it rather than argue.
+#[test]
+#[ignore = "diagnostic experiment for the 2026-07-19 hardware failure; run with --ignored --nocapture"]
+fn does_sro_alone_break_a_long_coded_qpsk_frame() {
+    let payload: Vec<u8> = (0..64u8).collect();
+    println!("\nQPSK250 + rs (255 B wire, 4.08 s) vs sample-rate offset:");
+    for ppm in [0.0f32, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0] {
+        let ok = decodes_at_fec("QPSK250", ppm, &payload, FecMode::Rs);
+        println!("  {ppm:7.0} ppm : {}", if ok { "decode" } else { "FAIL" });
+    }
+    println!("\nControl — uncoded QPSK250 (74 B wire, 1.18 s), which PASSES on the rig:");
+    for ppm in [0.0f32, 100.0, 500.0, 1000.0, 2000.0] {
+        let ok = decodes_at("QPSK250", ppm, &payload);
+        println!("  {ppm:7.0} ppm : {}", if ok { "decode" } else { "FAIL" });
+    }
+}
