@@ -144,16 +144,25 @@ impl CrossBandRepeater {
         Ok(())
     }
 
-    /// Run in full-duplex mode: assert PTT once, relay frames until `stop` is set,
-    /// then release PTT.
+    /// Run the relay loop until `stop` is set, returning the total number of frames relayed.
     ///
-    /// Returns the total number of frames relayed. PTT is guaranteed to be released
-    /// even if an error occurs mid-session.
+    /// In **full-duplex** (`config.full_duplex`) PTT is asserted once for the whole session and
+    /// released at the end — that is what the flag means, and the session-long carrier is intended.
+    ///
+    /// In **half-duplex** (the default) PTT is *not* held here: `relay_one_frame` and
+    /// `maybe_identify` key and release per transmission, which is the only correct behaviour on a
+    /// shared simplex channel. Keying for the whole session in this mode put an unbounded dead-air
+    /// carrier on the band and double-keyed against the per-frame assert (audit 2026-07-19, #2).
+    ///
+    /// PTT is guaranteed to be released even if an error occurs mid-session.
     pub fn run_full_duplex(&mut self, stop: Arc<AtomicBool>) -> Result<u64, RepeaterError> {
         if !self.config.enabled {
             return Ok(0);
         }
-        self.rig_b.assert_ptt().map_err(RepeaterError::Ptt)?;
+        let hold_ptt = self.config.full_duplex;
+        if hold_ptt {
+            self.rig_b.assert_ptt().map_err(RepeaterError::Ptt)?;
+        }
         let mut count = 0u64;
         let result = loop {
             if stop.load(Ordering::Relaxed) {
@@ -165,6 +174,10 @@ impl CrossBandRepeater {
                 Err(e) => break Err(e),
             }
         };
+        if !hold_ptt {
+            // Nothing was keyed at this level; the per-transmission paths already released.
+            return result;
+        }
         // Always release PTT before returning, even on error.
         let release_result = self.rig_b.release_ptt().map_err(RepeaterError::Ptt);
         match result {
