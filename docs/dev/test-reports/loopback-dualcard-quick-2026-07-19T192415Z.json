@@ -1,0 +1,1 @@
+{"timestamp":"2026-07-19T192415Z","transport":"hardware-dualcard","tx_device":"hwloop_tx","rx_device":"hwloop_rx","fec":"none","total":1,"pass":1,"fail":0,"cases":[{"mode":"MFSK16","payload_bytes":32,"fec":"rs","result":"pass","attempts":1,"fail_reason":""}]}

@@ -44,6 +44,7 @@ IRS_LISTEN_MS="${IRS_LISTEN_MS:-45000}"
 TX_TIMEOUT="${TX_TIMEOUT:-60}"
 KILL_WAIT="${KILL_WAIT:-12}"
 RETRIES="${RETRIES:-3}"                      # absorb transient wideband acquisition flakiness in long sweeps (matches run-loopback-virtual.sh)
+FEC_EXPLICIT="${FEC+set}"
 FEC="${FEC:-none}"                          # none|rs|rs-interleaved|soft-concatenated|ldpc
 CAPTURE_GAIN="${CAPTURE_GAIN:-16}"          # moderate mic-capture gain; max clips a line->mic cable
 OUTPUT_DIR="${OUTPUT_DIR:-docs/dev/test-reports}"
@@ -90,6 +91,10 @@ payload_for() {
 # BY DESIGN (see CLAUDE.md, #923). Running it with FEC=none and recording "fail" would manufacture a
 # regression that is really a configuration error.
 fec_for() {
+    # An explicitly-set FEC= wins: the per-mode value is a DEFAULT that stops a naive sweep recording
+    # a false failure, not a mandate. Hardcoding it made deliberate experiments (e.g. trying LDPC on a
+    # differential rung) silently run the wrong FEC.
+    if [[ -n "${FEC_EXPLICIT:-}" ]]; then echo "$FEC"; return; fi
     case "$1" in
         *-D)      echo "rs" ;;
         MFSK16*)  echo "rs" ;;   # sub-floor rung is always FEC-protected in the ladder

@@ -1,0 +1,1 @@
+{"timestamp":"2026-07-19T192059Z","transport":"hardware-dualcard","tx_device":"hwloop_tx","rx_device":"hwloop_rx","fec":"ldpc","total":1,"pass":0,"fail":1,"cases":[{"mode":"QPSK250-D","payload_bytes":64,"fec":"rs","result":"fail","attempts":3,"fail_reason":"payload not decoded"}]}
