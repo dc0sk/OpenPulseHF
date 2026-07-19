@@ -11,6 +11,7 @@ pub mod rig_definition;
 pub mod rig_mode;
 pub mod rigctld;
 pub mod serial;
+pub mod shared_ptt;
 pub mod vox;
 
 pub use band_levels::{attenuation_for_hz, freq_hz_to_band};
@@ -24,6 +25,7 @@ pub use rig_controller::RigctldController;
 pub use rig_definition::RigDefinition;
 pub use rig_mode::RigMode;
 pub use rigctld::RigctldPtt;
+pub use shared_ptt::{PttKeyGuard, PttObserver, SharedPtt, UnkeyOutcome, DEFAULT_PTT_MAX};
 pub use vox::VoxPtt;
 
 /// Controls transmitter PTT (push-to-talk) state.
