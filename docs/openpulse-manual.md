@@ -1447,12 +1447,30 @@ openpulse-server          # serves control on 127.0.0.1:9000 (TCP) and :9001 (WS
 CLI flags override `config.toml`; `RUST_LOG` sets verbosity.
 
 ```bash
-# ARDOP TNC for Pat (cmd 8515 / data 8516)
-openpulse-tnc --bind 0.0.0.0 --cmd-port 8515 --data-port 8516 --mode QPSK500 --backend cpal
+# ARDOP TNC for Pat (cmd 8515 / data 8516) — loopback: Pat runs on this host
+openpulse-tnc --bind 127.0.0.1 --cmd-port 8515 --data-port 8516 --mode QPSK500 --backend cpal
 
 # KISS/AX.25 TNC (TCP 8100)
 openpulse-kisstnc --bind 127.0.0.1 --port 8100 --mode BPSK500 --backend cpal
 ```
+
+> **Binding a TNC off-loopback grants transmit control to the network.** Both interfaces implement
+> third-party protocols (ARDOP, KISS/AX.25) that have **no authentication in their specifications**,
+> so OpenPulseHF cannot add one without breaking the Pat/Winlink/APRS clients they exist to serve
+> (REQ-SEC-CTL-06). Anything that can reach the port can key your transmitter — the ARDOP command
+> port accepts `PTT TRUE` and `MYID` from any connection.
+>
+> Both default to `127.0.0.1`. If a client genuinely runs on another machine, put the port on a
+> trusted segment or an SSH tunnel / VPN — do **not** expose it to an untrusted LAN or the internet:
+>
+> ```bash
+> # From the client host: forward the local ports over SSH instead of binding 0.0.0.0
+> ssh -N -L 8515:127.0.0.1:8515 -L 8516:127.0.0.1:8516 operator@radio-host
+> ```
+>
+> The transmit-safety guarantees are independent of the caller: the TNC releases PTT if a keyed
+> client disconnects, and the shared watchdog force-releases past the max keyed duration. Those bound
+> the damage; they are not a substitute for controlling who can reach the port.
 
 #### `openpulse-gateway` (Winlink CMS, no radio)
 
