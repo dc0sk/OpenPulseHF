@@ -9,6 +9,32 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-19 — fix(ci): SHA-pin every GitHub Action (audit #18)
+
+- **Requirement/change:** all 37 action references across the workflows were pinned to **mutable
+  tags** (`@v4`, `@v2`, `@stable`) — 0 SHA-pinned. Whoever controls an action repository can repoint a
+  tag at new code, which then executes with that workflow's permissions and secrets. Two placements
+  make it concrete here: `softprops/action-gh-release@v2` runs in the release job that holds
+  `contents: write`, and `dtolnay/rust-toolchain@stable` tracks a **force-pushed branch**, not even a
+  tag. Audit 2026-07-19, finding #18.
+- **Design decision:** pin to the full 40-hex commit with the tag kept as a trailing comment — the
+  comment is what a human reads, the SHA is what runs. SHAs were resolved from the GitHub API
+  (`gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`), never hand-written: a plausible-but-wrong
+  40-hex string is unverifiable by inspection and is exactly the fabrication class this project has
+  been removing from its own tooling this week.
+- **Implementation:** `.github/workflows/{ci,docs,release}.yml` — 37 replacements across 6 distinct
+  actions. `copilot-review.yml` and `docs-last-updated-pr.yml` were confirmed to contain **no**
+  `uses:` at all rather than assumed to be already-clean. Header comment in `ci.yml` records the
+  update procedure and one non-obvious consequence: pinning `dtolnay/rust-toolchain@<sha> # stable`
+  freezes the *action code*, not the Rust version (the `stable` branch's action.yml hardcodes its own
+  toolchain, so the compiler is still whatever `stable` resolves to at run time). It also warns
+  against "fixing" that with a `toolchain:` input — a SHA from a version branch declares no such
+  input and silently ignores it; upstream's rule is `@master` when passing it explicitly.
+- **Tests:** no unit test (workflow configuration). Verified mechanically: 37 SHA-pinned / 0
+  tag-pinned across every workflow file, and all five files still parse under `yaml.safe_load`.
+- **Test results:** before 0 pinned / 37 tag-pinned; after **37 pinned / 0 tag-pinned**; YAML parse
+  OK for all 5 workflows.
+
 ## 2026-07-19 — fix(security): make the cargo-audit waiver config live, and clear the audit (audit #16, #17)
 
 - **Requirement/change:** `cargo audit` reported **4 vulnerabilities** (3 × CVSS 7.5) and exited 1,

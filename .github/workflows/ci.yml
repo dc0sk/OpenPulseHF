@@ -1,3 +1,16 @@
+# Actions are pinned to a full commit SHA with the tag kept as a trailing comment. A tag is mutable:
+# whoever controls the action repo can repoint `v4` at new code, which then runs with this workflow's
+# permissions and secrets. The comment is what a human reads; the SHA is what actually runs.
+#
+# To update one: resolve the tag to its current commit and replace the SHA, keeping the comment —
+#   gh api repos/<owner>/<repo>/commits/<tag> --jq .sha
+#
+# `dtolnay/rust-toolchain@<sha> # stable` freezes the ACTION CODE, not the Rust version: the `stable`
+# branch's action.yml hardcodes its own toolchain, so the installed compiler is still whatever
+# `stable` means at run time. Do NOT "fix" this by adding a `toolchain:` input — a SHA from a version
+# branch declares no such input, so it is silently ignored. Upstream's rule is to use `@master` when
+# passing `toolchain:` explicitly.
+
 name: CI
 
 on:
@@ -20,10 +33,10 @@ jobs:
     if: github.event_name == 'pull_request'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: ${{ env.REQUIRED_RUST }}
 
@@ -47,16 +60,16 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: ${{ env.REQUIRED_RUST }}
 
       - name: Cache cross binary
         id: cache-cross-bin
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cargo/bin/cross
           key: cross-bin-${{ runner.os }}
@@ -66,7 +79,7 @@ jobs:
         run: cargo install cross
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -82,10 +95,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: ${{ env.REQUIRED_RUST }}
 
@@ -107,10 +120,10 @@ jobs:
     needs: core-workspace-gates
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: ${{ env.REQUIRED_RUST }}
 
@@ -128,10 +141,10 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: ${{ env.REQUIRED_RUST }}
 
@@ -147,10 +160,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: ${{ env.REQUIRED_RUST }}
 
@@ -183,10 +196,10 @@ jobs:
       OPENPULSE_PI_PROFILE: pi5-smoke
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: ${{ env.REQUIRED_RUST }}
 
@@ -237,10 +250,10 @@ jobs:
     continue-on-error: true
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: ${{ env.REQUIRED_RUST }}
 
