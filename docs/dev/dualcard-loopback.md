@@ -113,6 +113,29 @@ backend and would report a "hardware" pass that never touched a sound card.
 | **QPSK250-D** | `rs` | **FAIL** — same framing error (len 123/124) |
 | **QPSK250-D** | `ldpc` | **FAIL** — `differential QPSK has no soft-LLR path` |
 
+### Pin the cards by NAME, not index (2026-07-19)
+
+ALSA assigns card indices in enumeration order, and they **shift**. Mid-session on 2026-07-19 the
+internal `acp` device moved from index 3 to 4, so a `~/.asoundrc` pinning `hwloop_tx` to `hw:4,0`
+silently started pointing at the **laptop's internal audio** instead of the USB adapter. The
+`--level-check` caught it (`device not found`), but a run that happened to find *some* device there
+would have produced meaningless results while looking healthy.
+
+Use the stable name form in `~/.asoundrc`:
+
+```
+pcm.hwloop_tx { type plug; slave.pcm "hw:CARD=Device,DEV=0"   }
+pcm.hwloop_rx { type plug; slave.pcm "hw:CARD=Device_1,DEV=0" }
+```
+
+`amixer` still needs a numeric index, so `run-loopback-dualcard.sh`'s `_slave_card` now resolves a
+`CARD=<name>` slave through `/proc/asound/<name>` to its current index, and still accepts the old
+`hw:N,0` form.
+
+**Always run `--level-check` before believing a sweep.** It is the only step that proves the cable,
+the levels and the card mapping at once. After a re-index the TX mixer setting also lands on the
+wrong card — the level check reported rms 0.033 instead of 0.395, which is what exposed it.
+
 ### The FEC scanning receive cannot find a frame inside a long capture (2026-07-19)
 
 **Reproduction, everything else held constant:**
