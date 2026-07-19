@@ -9,6 +9,46 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-19 — fix(scripts+docs): registry-driven hardware sweep, and an on-air plan that targets hpx_hf
+
+- **Requirement/change:** two items from `loopback-revalidation-plan.md`.
+  **Task A:** `run-loopback-dualcard.sh --full` selected from a frozen 14-entry `FULL_CASES` array, so
+  it reported 14/14 while covering **none** of `MFSK16`, `QPSK250-D` or `QPSK500-D` — the registry now
+  holds **73** modes. A hardcoded list standing in for an enumeration reads as coverage; the same
+  defect as `CRATES_TESTED` and the plugin registrars.
+  **On-air plan:** §6.2 drove `openpulse-tnc --mode BPSK31` expecting `RateChange` events — the TNC
+  has no `--profile`, adaptive ARQ is off by default there, and HPX500 is not the shipped ladder;
+  §6.4 looped `openpulse-gateway --mode $MODE`, and the gateway has **no `--mode` flag, no RF path**,
+  over a mode list matching no rung of any current profile. The plan mentioned `hpx_hf` **zero times**
+  while 1.0 criterion A2 is specifically about that ladder.
+- **Design decision:** `--full` now enumerates `openpulse modes` at run time, exactly as
+  `run-loopback-virtual.sh` already did; `QUICK_CASES` stays an explicit fast subset, which is a
+  legitimate tier rather than a stale mirror. Two per-mode behaviours are derived rather than
+  hardcoded: payload size by symbol rate, and **FEC by mode** — `-D` and `MFSK16` are forced to `rs`
+  because uncoded differential decodes **0.00 by design** (#923), so a `FEC=none` sweep would record
+  a false failure and manufacture a regression that is really a configuration error. Modes that
+  cannot run at 8 kHz are reported as **SKIP with a reason**, never silently dropped.
+  The on-air rewrite targets `openpulse arq send/listen --profile hpx_hf` (the path that actually
+  carries rate stepping) and walks the dense rungs as OFDM, which is what `hpx_hf` SL7–SL14 are.
+  Both replaced sections carry a note saying what was wrong before, so the next reader does not
+  reinstate it.
+- **Implementation:** `scripts/run-loopback-dualcard.sh` (`enumerate_registry_modes`, `payload_for`,
+  `fec_for`, `skip_reason_for`, registry-driven `--full`, per-case FEC in the JSON);
+  `docs/on-air_testplan.md` §6.2 + §6.4, `last_updated` → 2026-07-19.
+- **Tests:** none — shell + docs. Verified mechanically instead: `bash -n` clean; the enumerator
+  returns **73** modes including all three targets; and every command/flag written into the plan was
+  checked against `--help` (`arq send`, `arq listen`, `receive`, `transmit`; `--profile`, `--frames`,
+  `--session`, `--retries`, `--payload`).
+- **Test results:** enumeration verified; `bash -n` clean. **The hardware sweep could NOT be run** —
+  see the note below.
+- **Blocked, not skipped:** the two C-Media USB adapters are physically connected (`lsusb` shows both
+  `0d8c:0014`), but ALSA has enumerated **no** card for them: `snd_usb_audio` is not loaded, and only
+  `usbhid` is bound to their interfaces. Root cause is a kernel/module mismatch — the running kernel
+  is `6.18.33-1-MANJARO` and `/lib/modules/` holds only `6.12.95`, `6.18.38`, `6.6.144`, so the
+  running kernel's module tree was removed by an update to 6.18.38 and it can no longer load any
+  module that is not already resident. **A reboot into 6.18.38 is required before the dual-card rig
+  can run.** `QPSK250-D` and `MFSK16` therefore remain unvalidated on real audio.
+
 ## 2026-07-19 — fix(discovery): make the JS8 clock-skew gate honest about what it can enforce (audit #10)
 
 - **Requirement/change:** the ±2 s TX-skew gate (plan D5) is **structurally unable to fire**.

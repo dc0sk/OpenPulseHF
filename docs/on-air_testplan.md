@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/on-air_testplan.md
 status: living
-last_updated: 2026-05-16
+last_updated: 2026-07-19
 ---
 
 # OpenPulseHF On-Air Test Plan
@@ -313,25 +313,59 @@ at its ARDOP address instead of cms.winlink.org.)*
 - Station A log shows `FS +` (accepted) with no errors
 - No PTT overlap or session abort
 
-### 6.2 Rate adaptation under QRM
+### 6.2 Rate adaptation on `hpx_hf` under QRM
 
-**Goal:** Verify HPX500 adaptive profile climbs and falls with changing propagation.
+**Goal:** Verify the **`hpx_hf`** ladder climbs and demotes against a real fading HF channel — the
+one claim in `release-1.0-criteria.md` group A that a simulator cannot make (criterion A2).
 
-**Station A:**
+> **Why this replaces the old HPX500 procedure.** The previous version drove `openpulse-tnc --mode
+> BPSK31` and expected `RateChange` events. That could not work: the TNC has no `--profile` flag,
+> adaptive ARQ is off by default there, and HPX500 is not the ladder shipped since v0.14.0. It also
+> started on uncoded BPSK31, which the fade-aware re-seat found decodes **0.00 at every SNR** on a
+> Watterson `moderate_f1` fade — the entry rung was the first thing that arc fixed.
+
+The adaptive path is `openpulse arq` (`send` / `listen`), which carries `--profile` and performs the
+ACK-driven rate stepping. Both stations must build with real audio: `cargo build --release -p openpulse-cli
+--features cpal-backend`.
+
+**Station B (receiver, start first):**
 ```bash
-RUST_LOG=debug ./target/release/openpulse-tnc \
-  --mode BPSK31 \
-  --backend cpal
+RUST_LOG=info ./target/release/openpulse --backend cpal --ptt rigctld --rig 127.0.0.1:4532 \
+  arq listen --profile hpx_hf --frames 20 --session onair-hpxhf
 ```
 
-Start at SL2 (BPSK31) and observe `RateChange` events in the log as Station B sends
-NACKs/ACKs. Introduce deliberate QRM (tune a second receiver near the frequency) to
-force rate down; remove it to allow rate recovery.
+**Station A (sender):**
+```bash
+RUST_LOG=info ./target/release/openpulse --backend cpal --ptt rigctld --rig 127.0.0.1:4532 \
+  arq send --profile hpx_hf --retries 5 \
+  --payload "hpx_hf ladder test $(date -u +%H%M%SZ) de K1ABC"
+```
+
+Send repeatedly over a session long enough for propagation to change (30–60 min). To force a
+demotion, introduce QRM (a carrier near the passband) or reduce power; remove it to allow recovery.
+
+**The `hpx_hf` rungs**, so a log line can be read against the ladder:
+
+| SL | Mode | Note |
+|----|------|------|
+| 1 | `MFSK16` | non-coherent sub-floor; ~17 s/frame |
+| 2–5 | `BPSK31` → `BPSK63` → `BPSK100` → `BPSK250` | all **coded**; no uncoded rung survives a fade |
+| 6 | `QPSK250-D` | **differential**; requires FEC, has no soft-LLR path |
+| 7–11 | `OFDM52` → `-8PSK` → `-16QAM` → `-32QAM` → `-64QAM` | |
+| 12–14 | `OFDM52-16QAM/-32QAM/-64QAM` | high-rate LDPC variants |
 
 **Pass criteria:**
-- At least one `RateChange` event logged on each side
-- Session recovers to SL4+ (BPSK250 or better) when channel clears
+- At least one **climb** and one **demotion** logged, with the mode at each step matching the table
+- The ladder reaches **SL6 (`QPSK250-D`) or above** on a workable path — SL6 is the rung the
+  differential work exists for, and it has never been exercised on real audio or on air
+- After a demotion, the session **recovers** rather than pinning at the floor
 - No permanent session abort under moderate QRM
+
+**Record for each transition:** UTC time, from-SL → to-SL, mode, the reported SNR, and whether the
+step followed a decode success or a NACK. The SNR figures are **per-waveform-family**: single-carrier
+rungs read near true channel SNR, OFDM rungs read a plugin-domain value that saturates around 16 dB.
+Do not compare an OFDM reading against a single-carrier floor — that mismatch is by design and is
+pinned by `snr_scale_boundary`.
 
 ### 6.3 Winlink CMS gateway via RF RMS
 
@@ -369,36 +403,45 @@ pat connect ardop:///K1RMS   # replace K1RMS with the RMS callsign
 - `pat` session log shows clean ARDOP connect/disconnect cycle
 - OpenPulseHF TNC log shows no B2F protocol errors
 
-### 6.4 Multi-mode quality ladder (10m only, CEPT or FCC above 28 MHz)
+### 6.4 Dense-rung ladder walk (10 m only, CEPT or FCC above 28 MHz)
 
-**Goal:** Exercise HPX2300 (SL8–SL11) and HPX Wideband HD (SL12–SL14) speed levels in order.
+**Goal:** Confirm each dense `hpx_hf` rung produces a clean decoded frame on a real path, walking up
+in order.
 
-Run from SL8 to SL14 manually to confirm each mode produces a clean demodulated frame:
+> **Why this replaces the old gateway loop.** The previous version ran `openpulse-gateway --mode
+> $MODE`. `openpulse-gateway` has **no `--mode` flag**, no RF path at all (it is a direct TCP client
+> for the Winlink CMS), and produces no TNC log — so the loop could not have run, and its mode list
+> (`QPSK500 QPSK1000 8PSK1000 64QAM500 64QAM1000 64QAM2000-RRC`) matches **no rung of any current
+> profile**. The dense rungs of `hpx_hf` are OFDM, not single-carrier QAM.
+
+Walk the rungs with a fixed mode per step, so a failure identifies one waveform rather than a ladder
+decision:
 
 ```bash
-for MODE in QPSK500 QPSK1000 8PSK1000 64QAM500 64QAM1000 64QAM2000-RRC; do
-  echo "--- Testing $MODE ---"
-  ./target/release/openpulse-gateway \
-    --callsign K1ABC \
-    send \
-    --to K2DEF \
-    --mode $MODE \
-    --subject "Mode test: $MODE" \
-    --message "Signal quality check at $MODE"
-  sleep 10
+# Station B (receiver), one per mode:
+./target/release/openpulse --backend cpal --ptt rigctld --rig 127.0.0.1:4532 \
+  receive --mode "$MODE" --fec soft-concatenated --listen-ms 45000
+
+# Station A (sender):
+for MODE in OFDM52 OFDM52-8PSK OFDM52-16QAM OFDM52-32QAM OFDM52-64QAM; do
+  echo "--- $MODE ---"
+  ./target/release/openpulse --backend cpal --ptt rigctld --rig 127.0.0.1:4532 \
+    transmit --mode "$MODE" --fec soft-concatenated \
+    "dense rung test $MODE de K1ABC"
+  sleep 15
 done
 ```
 
-**Note:** 64QAM modes require approximately 20–25 dB SNR for reliable operation.
-Test 64QAM500 first; proceed to 64QAM1000 and 64QAM2000-RRC only when SNR is adequate.
-64QAM2000-RRC occupies the full 2700 Hz SSB passband — confirm your transceiver's audio
-bandwidth covers this before transmitting.
+**Note:** the dense OFDM rungs need a clean, strong path. Start at `OFDM52` and only proceed upward
+while frames decode; `OFDM52-64QAM` occupies the full SSB passband, so confirm the transceiver's
+audio bandwidth covers it before transmitting. Every rung is FEC-protected — running one uncoded is
+not a valid test of it.
 
 **Pass criteria:**
-- Each mode produces a successful session (no `FS -`)
-- `64QAM2000-RRC` throughput is measurably higher than `8PSK1000` in the TNC log
-- AFC offset reported within ±10 Hz for all modes
-- 64QAM modes degrade gracefully (fall back to lower SL) when SNR drops
+- Each attempted rung decodes at least one frame intact
+- Throughput increases monotonically with rung on a path that carries them all
+- A rung that fails does so by **not decoding**, not by an error or panic — record the RX log tail
+- Report the highest rung that decoded, with the SNR at which it stopped working
 
 ### 6.5 Station identification compliance
 
