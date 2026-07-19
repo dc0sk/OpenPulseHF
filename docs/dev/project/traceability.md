@@ -9,6 +9,36 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-19 — fix(discovery): rate-limit the rendezvous responder per peer (audit #5)
+
+- **Requirement/change:** every inbound `Propose` directed at us, in `TxMode::Full`, produced a full
+  JS8 over (~45 s of transmission) with **no dedup, no cooldown and no per-peer limit** —
+  `rendezvous_tx` is documented "priority over beacons, **no cadence gate**". The rendezvous exchange
+  carries no signature (the post-QSY CONREQ is the auth gate, so it comes *after* this), which makes
+  the path reachable pre-authentication: a peer repeating its proposal — malfunctioning or
+  deliberately — drives an unattended transmitter continuously. Audit 2026-07-19, #5.
+- **Design decision:** a **per-peer** cooldown, not a global one: a global lock would let a single
+  flooder silence rendezvous for every station, converting a TX-amplification bug into a
+  denial-of-service on the feature. `RESPONDER_COOLDOWN_MS = 120 s` is set so a legitimate retry
+  (our Accept was lost) still succeeds, while bounding what one peer can extract.
+  The gate is evaluated **before** `respond()` — the decision not to transmit must precede building
+  the reply, or the cost has already been paid. The cooldown map is keyed on a **peer-supplied
+  callsign**, so it is bounded (`MAX_TRACKED_RESPONDERS = 512`) with oldest-response eviction:
+  an unbounded map would be the memory-exhaustion vector this guard exists to close, i.e. guarding
+  the variable that actually grows. Eviction by oldest response means a flood of fresh spoofed
+  callsigns cannot displace the entry for a peer currently being rate-limited without first ageing
+  past it.
+- **Implementation:** `crates/openpulse-discovery/src/runtime.rs` — `RESPONDER_COOLDOWN_MS`,
+  `MAX_TRACKED_RESPONDERS`, `last_response_ms` field, `note_response()`, `now_ms` threaded into
+  `handle_rendezvous`.
+- **Tests:** three, all driving the real decode path via `feed_over` rather than calling the helper:
+  the flood case (repeat proposal inside the cooldown queues nothing) plus two controls that stop the
+  fix overreaching — a **different** peer is still answered, and the **same** peer is answered again
+  once the cooldown elapses.
+- **Test results:** `openpulse-discovery` 56 passed / 0 failed; with `openpulse-daemon` 206 passed /
+  0 failed; clippy `--all-targets -D warnings` clean; fmt clean. **Sabotage-verified**: disabling the
+  gate reproduced the flood and the test failed with its own diagnostic; restore asserted green.
+
 ## 2026-07-19 — fix(daemon): expire stale QSY sessions so one spoofed frame can't disable auto-QSY (audit #4)
 
 - **Requirement/change:** `maybe_qsy_on_interference` returns early whenever `qsy_session.is_some()`
