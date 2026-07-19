@@ -9,6 +9,40 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-19 — refactor(radio): relocate the PTT watchdog safety core out of the daemon
+
+- **Requirement/change:** the watchdog, deadline bookkeeping and RAII key guard added under #863 lived
+  in `openpulse-daemon`, so the ARDOP TNC, the KISS TNC and the cross-band repeater — which all key
+  real hardware — had **no watchdog at all** (audit 2026-07-19, findings #1–#3). A stuck transmitter
+  is a §97 violation and a PA-damage risk; that guarantee has to sit below every transmit path, not
+  in one of them.
+- **Design decision:** move the core to `openpulse-radio`, beside `PttController`. Layering checked
+  first: `openpulse-ardop` already depends on `openpulse-radio`, and the daemon does **not** depend on
+  the TNC crates, so there is no cycle. The only daemon coupling was `ControlEvent::PttChanged`,
+  replaced by a `PttObserver` trait — chosen over a concrete channel so `openpulse-radio` needs **no
+  async runtime** and each caller maps the edge onto its own event type. The trait documents the
+  constraint that makes it safe: observers are invoked *while the PTT lock is held*, preserving the
+  original ordering guarantee that a concurrent watchdog release cannot interleave its `false` inside
+  another caller's `true`.
+  `crate::ptt` is kept as a **thin adapter** with the daemon's original
+  `Option<&broadcast::Sender<ControlEvent>>` signatures, so all 11 call sites are untouched — a
+  relocation that also rewrote every caller would make a move indistinguishable from a behaviour
+  change. Cost: one `Arc` per keyed transition, at transmit rate, never in a sample loop.
+- **Implementation:** `crates/openpulse-radio/src/shared_ptt.rs` (new; `SharedPtt`, `PttKeyGuard`,
+  `UnkeyOutcome`, `PttObserver`, `DEFAULT_PTT_MAX`), exported from `openpulse-radio/src/lib.rs`;
+  `crates/openpulse-daemon/src/ptt.rs` reduced to the adapter + `ChannelObserver`.
+- **Tests:** all 11 core tests ported to `openpulse-radio` against a spy observer that records edge
+  **order**, not just counts — including the panic-unwind release (REQ-PTT-01), the stuck-rig retry
+  that must stay armed and silent, and the #863 mid-burst race. 3 new adapter tests in the daemon
+  cover the only behaviour unique to it: that edges reach the `ControlEvent` channel with the same
+  single-fire semantics (otherwise the adapter would be an untested seam).
+- **Test results:** `openpulse-radio` shared_ptt 11/11; daemon + radio 203 passed / 0 failed; full
+  workspace `cargo test --workspace --no-default-features` **255 suites, 2153 passed, 0 failed, 38
+  ignored** (baseline 2147 + 3 ARDOP disconnect + 3 adapter; the 11 core tests moved crate rather than
+  being added). `cargo clippy --workspace --all-targets -D warnings` clean; `cargo fmt --all --check`
+  clean.
+- **Follow-up:** wire the repeater (finding #2) and the ARDOP/KISS TNCs (finding #3) onto this core.
+
 ## 2026-07-19 — fix(ardop): release PTT when a keyed client disconnects (audit #1)
 
 - **Requirement/change:** the ARDOP command port exposes `PTT TRUE` on an unauthenticated TCP
