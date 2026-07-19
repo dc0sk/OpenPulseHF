@@ -278,6 +278,10 @@ fn main() {
             "PAPR demonstrators (registered, in no profile, not swept): {}",
             cases::DEMONSTRATOR_MODES.join(", ")
         );
+        println!(
+            "Long-frame sub-floor (registered, covered by mfsk16_engine/mfsk16_harq instead): {}",
+            cases::LONG_FRAME_MODES.join(", ")
+        );
 
         write_reports(
             &results,
