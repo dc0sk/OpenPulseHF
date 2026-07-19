@@ -9,6 +9,41 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-19 — fix(plugins): restore the drifted registrars and gate their parity (audit #13)
+
+- **Requirement/change:** there is no shared plugin registrar — each front-end hand-lists what it
+  registers — and nothing checked that the lists agree. They had drifted: **the test matrix omitted
+  `Mfsk16Plugin`**, which is `hpx_hf`'s SL1 sub-floor rung, so every published fade report described
+  a ladder missing its weakest rung; the TUI had lost `Mfsk16Plugin` **and** `PilotPlugin`. Neither
+  omission carried a comment — MFSK16 arrived later (REQ-WSIG-01) and these sites were never updated.
+  Audit 2026-07-19, finding #13.
+- **Design decision:** fix the harm and gate the recurrence now; defer the single-registrar crate. The
+  daemon registers GPU-capable plugins through a `cfg`-conditional macro (`with_gpu` vs `new`) that a
+  naive shared function would flatten, so the extraction is a real design task rather than a move.
+  The gate does not prevent the duplication — it prevents the duplication from **diverging silently**,
+  which is the part that produced wrong published numbers. Same shape as the #14 allow-list: land the
+  constraint, do the refactor separately.
+  The reference set is the **union** of the full registrars, so adding a plugin to any one of them
+  makes the others fail until they follow — the drift direction that actually occurred.
+- **Implementation:** `apps/openpulse-testmatrix/{Cargo.toml,src/runners/mod.rs}` (+`mfsk16-plugin`);
+  `crates/openpulse-tui/{Cargo.toml,src/main.rs}` (+`mfsk16-plugin`, +`pilot-plugin`);
+  `crates/openpulse-core/tests/plugin_registration_parity.rs` (new).
+- **Tests:** 3 gates — registrar parity, every named path exists (a rename must not silently drop a
+  registrar out of the comparison), and partial registrars must still be partial. Guarded against
+  vacuity by requiring ≥5 plugins per scanned registrar.
+  The scanner handles **both** the `Plugin::new()` and `register_gpu_plugin!(Plugin, ..)` forms; that
+  is load-bearing and commented as such, because a `Plugin::new`-only grep is exactly what made an
+  earlier hand-check conclude the daemon was missing `Qam64Plugin` — it was not.
+- **Test results:** 3/3 pass; `openpulse-core` 514 passed / 0 failed; clippy `--all-targets -D
+  warnings` clean across core/tui/testmatrix; fmt clean. **Sabotage-verified**: re-removing
+  `Mfsk16Plugin` from the test matrix reproduced the original defect and was caught
+  (`runners/mod.rs is missing ["Mfsk16Plugin"]`); restore asserted green.
+  The gate also **corrected its own author** on first run: I had classified
+  `openpulse-daemon/src/monitor.rs` as intentionally partial, and it failed with "now registers 9 of
+  9 plugins", so it was reclassified as a full registrar.
+- **Follow-up:** extract one shared registrar crate that carries the GPU-conditional construction,
+  and reduce these sites to calling it.
+
 ## 2026-07-19 — test(core): enforce the workspace layering mechanically (audit #14)
 
 - **Requirement/change:** nothing checked the crate layering — no `deny.toml`, no xtask, no test — so

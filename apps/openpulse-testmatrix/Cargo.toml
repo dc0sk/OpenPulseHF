@@ -28,6 +28,7 @@ ofdm-plugin          = { workspace = true }
 scfdma-plugin        = { workspace = true }
 qam64-plugin         = { workspace = true }
 pilot-plugin         = { workspace = true }
+mfsk16-plugin        = { workspace = true }
 serde                = { workspace = true }
 serde_json           = { workspace = true }
 clap                 = { workspace = true }

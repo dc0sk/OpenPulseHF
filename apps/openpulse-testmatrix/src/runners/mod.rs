@@ -13,6 +13,7 @@ pub mod raw_modem;
 pub fn register_all(engine: &mut ModemEngine) {
     use bpsk_plugin::BpskPlugin;
     use fsk4_plugin::Fsk4Plugin;
+    use mfsk16_plugin::Mfsk16Plugin;
     use ofdm_plugin::OfdmPlugin;
     use pilot_plugin::PilotPlugin;
     use psk8_plugin::Psk8Plugin;
@@ -43,6 +44,11 @@ pub fn register_all(engine: &mut ModemEngine) {
     engine
         .register_plugin(Box::new(PilotPlugin::new()))
         .expect("register PilotPlugin");
+    // hpx_hf's SL1 sub-floor rung. Omitting it silently produced fade reports for a ladder
+    // missing its weakest rung (audit 2026-07-19, #13).
+    engine
+        .register_plugin(Box::new(Mfsk16Plugin::new()))
+        .expect("register Mfsk16Plugin");
 }
 
 pub fn run_case(case: &TestCase) -> TestResult {

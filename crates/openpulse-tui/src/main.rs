@@ -13,9 +13,11 @@ use tracing::Level;
 
 use bpsk_plugin::BpskPlugin;
 use fsk4_plugin::Fsk4Plugin;
+use mfsk16_plugin::Mfsk16Plugin;
 use ofdm_plugin::OfdmPlugin;
 use openpulse_audio::LoopbackBackend;
 use openpulse_modem::ModemEngine;
+use pilot_plugin::PilotPlugin;
 use psk8_plugin::Psk8Plugin;
 use qam64_plugin::Qam64Plugin;
 use qpsk_plugin::QpskPlugin;
@@ -82,6 +84,8 @@ fn main() -> Result<()> {
     engine.register_plugin(Box::new(Qam64Plugin::new()))?;
     engine.register_plugin(Box::new(QpskPlugin::new()))?;
     engine.register_plugin(Box::new(ScFdmaPlugin::new()))?;
+    engine.register_plugin(Box::new(Mfsk16Plugin::new()))?;
+    engine.register_plugin(Box::new(PilotPlugin::new()))?;
 
     let rx = engine.subscribe();
     let worker = events::spawn_worker(engine, cli.mode.clone(), rx);
