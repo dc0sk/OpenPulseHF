@@ -32,10 +32,49 @@ pub async fn serve(listener: TcpListener, bridge: Arc<ModemBridge>) -> Result<()
         tracing::info!("command client connected: {addr}");
         let b = bridge.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_client(stream, b).await {
+            let result = handle_client(stream, b.clone()).await;
+            if let Err(e) = result {
                 tracing::warn!("command client {addr} disconnected: {e}");
             }
+            // A host that keys the transmitter and then vanishes — crash, kill, dropped network —
+            // would otherwise leave the rig transmitting until a human notices: a §97 violation and
+            // a PA-damage risk. Release unconditionally on every exit path from `handle_client`
+            // (EOF, oversized line, I/O error), not just the clean ones.
+            //
+            // This releases whenever PTT is down-stream asserted, without tracking which connection
+            // keyed it. ARDOP assumes a single controlling host, and an unnecessary unkey is
+            // strictly less harmful than a stuck carrier — but that is the tradeoff being made here.
+            release_ptt_on_disconnect(&b, addr).await;
         });
+    }
+}
+
+/// Drop the transmitter if this connection ended while it was still keyed.
+///
+/// No-op when PTT is already down, so a clean `PTT FALSE` is not followed by a redundant release
+/// and a client that never keyed never touches the hardware.
+async fn release_ptt_on_disconnect(bridge: &Arc<ModemBridge>, addr: std::net::SocketAddr) {
+    let ptt = bridge.ptt.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        let mut guard = ptt.lock().unwrap_or_else(|e| e.into_inner());
+        if !guard.is_asserted() {
+            return None;
+        }
+        Some(guard.release_ptt())
+    })
+    .await;
+
+    match outcome {
+        Ok(None) => {}
+        Ok(Some(Ok(()))) => {
+            tracing::warn!("client {addr} disconnected while keyed — PTT released by the TNC")
+        }
+        Ok(Some(Err(e))) => {
+            tracing::error!(error = %e, "client {addr} disconnected while keyed and PTT release FAILED — transmitter may be stuck")
+        }
+        Err(_) => {
+            tracing::error!("client {addr} disconnected while keyed and the PTT release task panicked — transmitter may be stuck")
+        }
     }
 }
 

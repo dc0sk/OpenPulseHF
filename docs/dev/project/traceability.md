@@ -9,6 +9,36 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-19 — fix(ardop): release PTT when a keyed client disconnects (audit #1)
+
+- **Requirement/change:** the ARDOP command port exposes `PTT TRUE` on an unauthenticated TCP
+  socket, and `handle_client` had three exit paths (EOF `break`, oversized-line `return Err`, `?` on
+  I/O error) none of which released PTT. A host that keys the transmitter and then crashes, is
+  killed, or loses the network left the rig transmitting until a human noticed — a §97 violation and
+  a PA-damage risk, not merely a hang. Found by the 2026-07-19 transmit-safety audit (finding #1).
+- **Design decision:** release at the single point every exit path funnels through — the `tokio::spawn`
+  in `serve()` that awaits `handle_client` — rather than at each `break`/`return`, so a future exit
+  path cannot reintroduce the leak. The release is conditional on `PttController::is_asserted()`, so
+  a clean `PTT FALSE` is not followed by a redundant hardware release and a client that never keyed
+  never touches the rig. Release failure is logged at `error` naming the stuck-transmitter
+  consequence, because that is the case an operator must act on.
+  *Tradeoff recorded in the code:* this releases whenever PTT is asserted without tracking which
+  connection keyed it. ARDOP assumes a single controlling host, and an unnecessary unkey is strictly
+  less harmful than a stuck carrier. The daemon solves the same hazard with `SharedPtt`'s watchdog
+  (#863); relocating that safety core into `openpulse-radio` so the TNC, KISS and repeater all share
+  it is the follow-up — `openpulse-ardop` already depends on `openpulse-radio`, and the daemon does
+  not depend on the TNC, so there is no cycle.
+- **Implementation:** `crates/openpulse-ardop/src/command.rs` — `release_ptt_on_disconnect()` plus its
+  call at the end of the per-client spawned task.
+- **Tests:** `crates/openpulse-ardop/tests/ptt_disconnect_safety.rs` — a `SpyPtt` controller records
+  assert/release where the test can observe it. `dropping_the_connection_while_keyed_releases_ptt` is
+  the gate; two controls guard the fix from overreach
+  (`explicit_ptt_false_releases_once_and_disconnect_does_not_double_release`,
+  `disconnect_without_keying_does_not_touch_ptt`).
+- **Test results:** gate observed RED before the fix (1 failed, 2 passed — "transmitter still keyed
+  after the client disconnected"), GREEN after (3 passed). Full crate: 34 passed, 0 failed. Clippy
+  `--all-targets -D warnings` clean; `cargo fmt --all --check` clean.
+
 ## 2026-07-18 — docs: track the rendered book PDF in-tree
 
 - **Requirement/change:** `scripts/build-book-pdf.sh` (PR #966) renders `docs/openpulse-book.md` to a
